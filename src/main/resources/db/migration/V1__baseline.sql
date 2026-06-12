@@ -444,9 +444,12 @@ CREATE POLICY tenant_isolation ON webhook_events
     );
 
 -- ---- SECURITY DEFINER escape hatches -------------------------
--- These are the ONLY two RLS bypass points. Any future cross-tenant read
--- must go through a named, code-reviewed SECURITY DEFINER function here —
--- no bare BYPASSRLS connections in application code.
+-- The three approved RLS bypass points are:
+--   1. auth_lookup_user        (this file)
+--   2. resolve_tenant_by_shop_domain (this file)
+--   3. lookup_refresh_token    (V3__auth.sql)
+-- Adding a fourth requires explicit approval and a named function here.
+-- No bare BYPASSRLS connections in application code.
 
 -- Auth happens before the tenant GUC is set, so login must read across
 -- tenants. Returns the credentials row for an active user by email.

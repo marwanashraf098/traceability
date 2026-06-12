@@ -26,7 +26,7 @@ Day 2 complete as of 2026-06-13. All 8 integration tests pass (BUILD SUCCESS).
 
 ## Next up
 
-Day 3 per `docs/four-week-pilot-core.md`.
+Day 3: `InventoryLedger.transition()` + ULID generator + state-machine / scan-race tests.
 
 ---
 
@@ -36,7 +36,7 @@ Day 3 per `docs/four-week-pilot-core.md`.
 - **Webhook idempotency via partial unique index + app-side key for Bosta** — `UNIQUE NULLS NOT DISTINCT (source, external_event_id)` in DB handles Shopify (which sends an event ID header); for Bosta (no HMAC, no event ID) we generate a deterministic key app-side and verify authenticity by re-fetching the event from the Bosta API.
 - **`pieces.barcode` = app-generated ULID text** — the scannable piece identifier lives in `barcode TEXT NOT NULL UNIQUE`; the internal PK remains a UUID. ULID is time-sortable, URL-safe, and embeds a millisecond timestamp, which makes piece barcodes readable in sort order without a separate sequence.
 - **Order hold = boolean column not enum value** — a separate `on_hold boolean` column avoids combinatorial enum explosion (every `order_status` value would need a corresponding `_held` twin).
-- **The two SECURITY DEFINER functions are the only RLS escape hatches** — any future query that genuinely needs cross-tenant reads (e.g., internal analytics, super-admin lookup) must go through a named `SECURITY DEFINER` function so the bypass is visible, named, and code-reviewed; bare superuser connections are not an acceptable pattern.
+- **Three SECURITY DEFINER functions are the only RLS escape hatches** — `auth_lookup_user` (V1), `resolve_tenant_by_shop_domain` (V1), `lookup_refresh_token` (V3). Adding a fourth requires explicit approval. Any future cross-tenant read must go through a named, code-reviewed `SECURITY DEFINER` function; bare superuser connections are not an acceptable pattern.
 
 ---
 
@@ -51,6 +51,6 @@ Day 3 per `docs/four-week-pilot-core.md`.
 
 ## Pending human tasks (not code)
 
-- Apply V1 + V2 migrations to Supabase (Frankfurt project) and set `app_user` password out-of-band via Supabase SQL editor or psql — the password cannot go in a migration file.
+- Apply V1 + V2 + V3 migrations to Supabase (Frankfurt project) and set `app_user` password out-of-band via Supabase SQL editor or psql — the password cannot go in a migration file.
 - Open Bosta whitelisting/staging ticket for a static egress IP (needed for webhook delivery in staging and production).
 - Get pilots' label-size answer (40×25 or 50×25) before Day 10 label work begins.
