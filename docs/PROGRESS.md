@@ -4,16 +4,18 @@
 
 ## Current state
 
-Day 1 complete. Review-fix pass completed 2026-06-12 (was claimed done earlier but had not been applied to the files).
+Day 2 complete as of 2026-06-13. All 8 integration tests pass (BUILD SUCCESS).
 
-**What exists:**
-- Spring Boot 3.3.5 / Java 21 Maven project, Vite + React 18 + TypeScript + Tailwind in `/frontend`, built into Spring's static resources via `frontend-maven-plugin`.
-- `V1__baseline.sql`: full schema (17 tenant-scoped tables + 2 global lookup tables), 16 enums, `app_user` role creation (password out-of-band), `ALTER DEFAULT PRIVILEGES` for future tables/sequences, all FK-safe table order, blueprint-mandated indexes, `FORCE ROW LEVEL SECURITY` + `tenant_isolation` policy on all 17 tenant tables, `REVOKE UPDATE, DELETE ON piece_events FROM app_user`. Also contains: `auth_lookup_user` + `resolve_tenant_by_shop_domain` SECURITY DEFINER functions (only two RLS escape hatches); `webhook_events_idem` partial unique index (WHERE external_event_id IS NOT NULL); `orders.on_hold` + `hold_reason` columns + `orders_tenant_hold` partial index; `pieces.id` as `text` (ULID, no default); `piece_events.piece_id` and `allocations.piece_id` as `text` to match.
-- `V2__bosta_seed.sql`: 23 Bosta state mapping rows (code 41 has two rows: SEND + RTO) + 22 NDR codes (11 forward + 11 return; codes 26–30 marked `critical`).
-- `MigrationSmokeTest.java`: 12 assertions, all green — migrations succeed, 17-table RLS coverage, `relrowsecurity` on `piece_events`, INSERT-only enforcement on `app_user`, seed row counts, critical NDR codes, two NULL-external_event_id Bosta webhook rows both insert, `pieces.id` is `text`, `auth_lookup_user` returns seeded user without GUC set.
-- `DockerDesktopMacStrategy.java` + `~/.testcontainers.properties` override for Mac M3 Docker Desktop (see Gotchas).
-- `/api/v1/health` endpoint with DB ping.
-- `docker-compose.yml` for local Postgres dev.
+**What exists (Day 2 additions on top of Day 1):**
+- `V3__auth.sql`: `refresh_tokens` table (SHA-256 hashed opaque tokens, RLS-isolated), `lookup_refresh_token` SECURITY DEFINER function (3rd escape hatch), `pin_fail_count` + `pin_locked_until` columns on `users`.
+- All V1 + V3 RLS policies use `NULLIF(current_setting('app.current_tenant', true), '')::uuid` — PostgreSQL resets `SET LOCAL` GUC to `''` (not NULL) after `ROLLBACK`, and `''::uuid` is a cast error. NULLIF guards against this.
+- `TenantContext` (ThreadLocal holder), `TenantContextFilter`, `TenantAwareDataSource` / `TenantAwareConnection` (java.lang.reflect.Proxy-based wrapper that runs `SET LOCAL app.current_tenant = ?` at transaction start, Spring Framework 6 removed ConnectionWrapper).
+- `JwtService` (nimbus-jose-jwt HS256, 15-min access / 7-day refresh), `JwtAuthenticationFilter` (OncePerRequestFilter).
+- `SecurityConfig`: stateless JWT chain, `HttpStatusEntryPoint(401)`, role matrix via `@PreAuthorize`.
+- `AuthController`: `/signup`, `/login`, `/refresh` (opaque token rotation — used token rejected on second use), `/pin`.
+- `PinService`: argon2id PIN matching, O(n) over tenant users (pilot scale), lockout at 5 failures for 15 min, `@Transactional(noRollbackFor = ResponseStatusException.class)` so fail counter commits even when throwing 401/423.
+- `ApiExceptionHandler` (`@RestControllerAdvice`): intercepts `ResponseStatusException` BEFORE `ResponseStatusExceptionResolver` can call `response.sendError()`. Without this, `sendError(423)` triggers a Servlet error dispatch to `/error`; Spring Security 6 applies `JwtAuthenticationFilter` (OncePerRequestFilter — doesn't re-run on error dispatches) so the security context is empty, and `.anyRequest().authenticated()` returns 401, overriding the original 423. The `@ControllerAdvice` writes `ResponseEntity` directly — no error dispatch, no Spring Security override.
+- `AuthIntegrationTest`: 6 tests — signup+GUC probe, login, cross-tenant RLS isolation (3 fresh JDBC connections; reusing one connection across ROLLBACK resets the GUC to '' causing a cast error), unauthenticated 401, PIN lockout (5-failure → 423), refresh token rotation.
 
 **What has NEVER happened yet:**
 - Migrations applied to Supabase.
@@ -24,12 +26,7 @@ Day 1 complete. Review-fix pass completed 2026-06-12 (was claimed done earlier b
 
 ## Next up
 
-Day 2 per `docs/four-week-pilot-core.md`:
-- Tenant context filter: `TenantContext` holder + `DataSourceWrapper` that runs `SET LOCAL app.current_tenant = ?` inside each transaction.
-- Auth: email + password login, JWT access (15 min) + refresh token, logout-everywhere.
-- Worker PIN switch: `POST /api/v1/auth/pin` swaps the attributed user on the session; 15-min idle reset; lockout after 5 fails + notification.
-- Permission middleware: server-side role matrix (Owner / Manager / Worker) on every endpoint.
-- The four Day-2 tests: RLS isolation (two-tenant cross-read attempt), PIN lockout, JWT expiry, permission matrix.
+Day 3 per `docs/four-week-pilot-core.md`.
 
 ---
 

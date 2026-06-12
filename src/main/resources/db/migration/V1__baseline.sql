@@ -368,79 +368,79 @@ ALTER TABLE webhook_events   FORCE ROW LEVEL SECURITY;
 -- Tenants table has no tenant_id column; it IS the tenant.
 -- Admin flows set app.current_tenant to the target UUID before any DML.
 CREATE POLICY tenant_isolation ON tenants
-    USING (id = current_setting('app.current_tenant', true)::uuid)
-    WITH CHECK (id = current_setting('app.current_tenant', true)::uuid);
+    USING (id = NULLIF(current_setting('app.current_tenant', true), '')::uuid)
+    WITH CHECK (id = NULLIF(current_setting('app.current_tenant', true), '')::uuid);
 
 CREATE POLICY tenant_isolation ON users
-    USING (tenant_id = current_setting('app.current_tenant', true)::uuid)
-    WITH CHECK (tenant_id = current_setting('app.current_tenant', true)::uuid);
+    USING (tenant_id = NULLIF(current_setting('app.current_tenant', true), '')::uuid)
+    WITH CHECK (tenant_id = NULLIF(current_setting('app.current_tenant', true), '')::uuid);
 
 CREATE POLICY tenant_isolation ON stores
-    USING (tenant_id = current_setting('app.current_tenant', true)::uuid)
-    WITH CHECK (tenant_id = current_setting('app.current_tenant', true)::uuid);
+    USING (tenant_id = NULLIF(current_setting('app.current_tenant', true), '')::uuid)
+    WITH CHECK (tenant_id = NULLIF(current_setting('app.current_tenant', true), '')::uuid);
 
 CREATE POLICY tenant_isolation ON courier_accounts
-    USING (tenant_id = current_setting('app.current_tenant', true)::uuid)
-    WITH CHECK (tenant_id = current_setting('app.current_tenant', true)::uuid);
+    USING (tenant_id = NULLIF(current_setting('app.current_tenant', true), '')::uuid)
+    WITH CHECK (tenant_id = NULLIF(current_setting('app.current_tenant', true), '')::uuid);
 
 CREATE POLICY tenant_isolation ON locations
-    USING (tenant_id = current_setting('app.current_tenant', true)::uuid)
-    WITH CHECK (tenant_id = current_setting('app.current_tenant', true)::uuid);
+    USING (tenant_id = NULLIF(current_setting('app.current_tenant', true), '')::uuid)
+    WITH CHECK (tenant_id = NULLIF(current_setting('app.current_tenant', true), '')::uuid);
 
 CREATE POLICY tenant_isolation ON products
-    USING (tenant_id = current_setting('app.current_tenant', true)::uuid)
-    WITH CHECK (tenant_id = current_setting('app.current_tenant', true)::uuid);
+    USING (tenant_id = NULLIF(current_setting('app.current_tenant', true), '')::uuid)
+    WITH CHECK (tenant_id = NULLIF(current_setting('app.current_tenant', true), '')::uuid);
 
 CREATE POLICY tenant_isolation ON variants
-    USING (tenant_id = current_setting('app.current_tenant', true)::uuid)
-    WITH CHECK (tenant_id = current_setting('app.current_tenant', true)::uuid);
+    USING (tenant_id = NULLIF(current_setting('app.current_tenant', true), '')::uuid)
+    WITH CHECK (tenant_id = NULLIF(current_setting('app.current_tenant', true), '')::uuid);
 
 CREATE POLICY tenant_isolation ON receipts
-    USING (tenant_id = current_setting('app.current_tenant', true)::uuid)
-    WITH CHECK (tenant_id = current_setting('app.current_tenant', true)::uuid);
+    USING (tenant_id = NULLIF(current_setting('app.current_tenant', true), '')::uuid)
+    WITH CHECK (tenant_id = NULLIF(current_setting('app.current_tenant', true), '')::uuid);
 
 CREATE POLICY tenant_isolation ON pieces
-    USING (tenant_id = current_setting('app.current_tenant', true)::uuid)
-    WITH CHECK (tenant_id = current_setting('app.current_tenant', true)::uuid);
+    USING (tenant_id = NULLIF(current_setting('app.current_tenant', true), '')::uuid)
+    WITH CHECK (tenant_id = NULLIF(current_setting('app.current_tenant', true), '')::uuid);
 
 CREATE POLICY tenant_isolation ON piece_events
-    USING (tenant_id = current_setting('app.current_tenant', true)::uuid)
-    WITH CHECK (tenant_id = current_setting('app.current_tenant', true)::uuid);
+    USING (tenant_id = NULLIF(current_setting('app.current_tenant', true), '')::uuid)
+    WITH CHECK (tenant_id = NULLIF(current_setting('app.current_tenant', true), '')::uuid);
 
 CREATE POLICY tenant_isolation ON orders
-    USING (tenant_id = current_setting('app.current_tenant', true)::uuid)
-    WITH CHECK (tenant_id = current_setting('app.current_tenant', true)::uuid);
+    USING (tenant_id = NULLIF(current_setting('app.current_tenant', true), '')::uuid)
+    WITH CHECK (tenant_id = NULLIF(current_setting('app.current_tenant', true), '')::uuid);
 
 CREATE POLICY tenant_isolation ON order_items
-    USING (tenant_id = current_setting('app.current_tenant', true)::uuid)
-    WITH CHECK (tenant_id = current_setting('app.current_tenant', true)::uuid);
+    USING (tenant_id = NULLIF(current_setting('app.current_tenant', true), '')::uuid)
+    WITH CHECK (tenant_id = NULLIF(current_setting('app.current_tenant', true), '')::uuid);
 
 CREATE POLICY tenant_isolation ON allocations
-    USING (tenant_id = current_setting('app.current_tenant', true)::uuid)
-    WITH CHECK (tenant_id = current_setting('app.current_tenant', true)::uuid);
+    USING (tenant_id = NULLIF(current_setting('app.current_tenant', true), '')::uuid)
+    WITH CHECK (tenant_id = NULLIF(current_setting('app.current_tenant', true), '')::uuid);
 
 CREATE POLICY tenant_isolation ON shipments
-    USING (tenant_id = current_setting('app.current_tenant', true)::uuid)
-    WITH CHECK (tenant_id = current_setting('app.current_tenant', true)::uuid);
+    USING (tenant_id = NULLIF(current_setting('app.current_tenant', true), '')::uuid)
+    WITH CHECK (tenant_id = NULLIF(current_setting('app.current_tenant', true), '')::uuid);
 
 CREATE POLICY tenant_isolation ON pickups
-    USING (tenant_id = current_setting('app.current_tenant', true)::uuid)
-    WITH CHECK (tenant_id = current_setting('app.current_tenant', true)::uuid);
+    USING (tenant_id = NULLIF(current_setting('app.current_tenant', true), '')::uuid)
+    WITH CHECK (tenant_id = NULLIF(current_setting('app.current_tenant', true), '')::uuid);
 
 CREATE POLICY tenant_isolation ON pickup_shipments
-    USING (tenant_id = current_setting('app.current_tenant', true)::uuid)
-    WITH CHECK (tenant_id = current_setting('app.current_tenant', true)::uuid);
+    USING (tenant_id = NULLIF(current_setting('app.current_tenant', true), '')::uuid)
+    WITH CHECK (tenant_id = NULLIF(current_setting('app.current_tenant', true), '')::uuid);
 
 -- Webhooks arrive before tenant resolution; NULL tenant_id rows
 -- are visible to any connection regardless of GUC state.
 CREATE POLICY tenant_isolation ON webhook_events
     USING (
         tenant_id IS NULL
-        OR tenant_id = current_setting('app.current_tenant', true)::uuid
+        OR tenant_id = NULLIF(current_setting('app.current_tenant', true), '')::uuid
     )
     WITH CHECK (
         tenant_id IS NULL
-        OR tenant_id = current_setting('app.current_tenant', true)::uuid
+        OR tenant_id = NULLIF(current_setting('app.current_tenant', true), '')::uuid
     );
 
 -- ---- SECURITY DEFINER escape hatches -------------------------

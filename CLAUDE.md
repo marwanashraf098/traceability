@@ -256,4 +256,6 @@ At the **end** of every session (without being asked):
 
 ## Environment notes
 
+**TenantContext is a ThreadLocal**: it does NOT propagate across `@Async` methods, executor-submitted tasks, parallel streams, or `CompletableFuture` chains. Any background work that reads or writes tenant data must be wrapped in `TenantContext.runAs(tenantId, ...)` so the context is explicitly set and cleared. Forgetting this causes silent zero-row results under RLS — not an exception, just missing data.
+
 **Docker Desktop Mac M3 + Testcontainers**: `DockerDesktopMacStrategy` in `src/test/java/com/traceability/` forces docker-java API v1.41 — do not delete it; Docker Desktop rejects the default v1.24 negotiation with HTTP 400 and the fix requires overriding `test()`, `getClient()`, AND `getDockerClient()` on the strategy class.

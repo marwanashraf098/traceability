@@ -10,11 +10,11 @@ One line per requirement · [M] Must / [S] Should / [C] Could · use as the buil
 - [ ] 1.6 [M] Internal super-admin: list/suspend tenants, logged impersonation
 
 ## FR-2 Auth, Users & Permissions
-- [ ] 2.1 [M] Email+password login, JWT access (15m) + refresh, logout-everywhere
+- [x] 2.1 [M] Email+password login, JWT access (15m) + refresh, logout-everywhere
 - [ ] 2.2 [M] User CRUD by Owner/Manager; deactivate only, never delete
-- [ ] 2.3 [M] Worker PIN switch at shared stations; attribution until switch / 15-min idle
-- [ ] 2.4 [M] No anonymous custody actions; PIN lockout after 5 fails + Manager notify
-- [ ] 2.5 [M] Server-side permission matrix (Owner / Manager / Worker) on every endpoint
+- [x] 2.3 [M] Worker PIN switch at shared stations; attribution until switch / 15-min idle
+- [x] 2.4 [M] No anonymous custody actions; PIN lockout after 5 fails + Manager notify
+- [x] 2.5 [M] Server-side permission matrix (Owner / Manager / Worker) on every endpoint
 - [ ] 2.5a [S] Per-tenant toggle: workers may receive inventory
 - [ ] 2.6 [M] Privileged-action audit log (users, integrations, adjustments, impersonation)
 
@@ -146,7 +146,7 @@ One line per requirement · [M] Must / [S] Should / [C] Could · use as the buil
 ## NFR (verifiable bars)
 - [ ] N1 Scan validation p95 ≤ 300ms · piece page ≤ 1s · 1k receive ≤ 10s · 500-label PDF ≤ 15s · lists ≤ 1.5s @100k pieces · import 5k products+10k orders ≤ 30min
 - [ ] N2 Event+state in one ACID tx (zero custody loss) · **[x] ledger INSERT-only at DB grants** · webhooks raw-persisted, replayable, idempotent · graceful integration outages · 99.5% availability · daily backups + PITR + tested restore
-- [ ] N3 **[x] RLS tenant isolation w/ automated cross-tenant test** · credentials encrypted, never logged · signature/secret-verified webhooks · argon2/bcrypt + lockouts · worker PII minimization · Egypt PDPL posture · logged impersonation
+- [ ] N3 **[x] RLS tenant isolation w/ automated cross-tenant test** · credentials encrypted, never logged · signature/secret-verified webhooks · **[x] argon2/bcrypt + lockouts** · worker PII minimization · Egypt PDPL posture · logged impersonation
 - [ ] N4 Chrome/Safari Android 10+/iOS 15+ · PWA installable · HID keyboard-wedge scanners + camera fallback · 203dpi thermal via OS dialog · 40×25/50×25 stock
 - [ ] N5 Sentry + structured logs w/ correlation IDs · dead-letter retry UI · per-tenant feature flags · resettable demo tenant
 - [ ] N6 Tests: state machine, scan race, webhook idempotency, RLS, Bosta mapping · staging wired to Shopify dev store + Bosta staging
