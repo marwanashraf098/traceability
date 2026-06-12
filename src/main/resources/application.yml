@@ -1,0 +1,27 @@
+spring:
+  application:
+    name: traceability
+  datasource:
+    # DATABASE_URL must be JDBC format: jdbc:postgresql://host:port/db
+    # If your provider gives postgres://user:pass@host/db, convert it:
+    #   jdbc:postgresql://host/db?user=user&password=pass
+    url: ${DATABASE_URL:jdbc:postgresql://localhost:5432/traceability}
+    username: ${DATABASE_USER:postgres}
+    password: ${DATABASE_PASSWORD:postgres}
+    driver-class-name: org.postgresql.Driver
+    hikari:
+      maximum-pool-size: 10
+      connection-timeout: 5000
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+    # Never baseline an existing schema — every environment starts from V1.
+    baseline-on-migrate: false
+
+server:
+  port: ${PORT:8080}
+
+logging:
+  level:
+    com.traceability: DEBUG
+    org.flywaydb: INFO
