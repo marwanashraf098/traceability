@@ -30,8 +30,10 @@ CREATE TYPE webhook_source AS ENUM ('shopify','bosta');
 CREATE TYPE webhook_status AS ENUM ('pending','processed','failed');
 
 -- ---- application role ----------------------------------------
--- App connects as this role; it has no BYPASSRLS, so RLS is
--- always enforced. Tenant GUC set per-request before any query.
+-- App connects as this role; it has no BYPASSRLS, so RLS is always
+-- enforced. Tenant GUC set per-request before any query.
+-- Password is set out-of-band (Supabase SQL editor or psql) — never
+-- put credentials in a migration file.
 DO $$ BEGIN
     IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_user') THEN
         CREATE ROLE app_user LOGIN;
@@ -139,14 +141,18 @@ CREATE TABLE orders (
     payment_method order_payment_method,
     cod_amount     numeric(10,2),
     status         order_status         NOT NULL DEFAULT 'new',
+    on_hold        boolean              NOT NULL DEFAULT false,
+    hold_reason    text,
     placed_at      timestamptz,
     raw            jsonb,
     created_at     timestamptz          NOT NULL DEFAULT now(),
     UNIQUE (store_id, external_id)
 );
 
+-- pieces.id is an app-generated ULID (text, time-sortable, URL-safe).
+-- barcode = 'PC-' || id; it is the scannable label, stored separately.
 CREATE TABLE pieces (
-    id                  uuid         PRIMARY KEY DEFAULT gen_random_uuid(),
+    id                  text         PRIMARY KEY,
     tenant_id           uuid         NOT NULL REFERENCES tenants(id),
     variant_id          uuid         NOT NULL REFERENCES variants(id),
     receipt_id          uuid         REFERENCES receipts(id),
@@ -163,7 +169,7 @@ CREATE TABLE pieces (
 CREATE TABLE piece_events (
     id            bigserial    PRIMARY KEY,
     tenant_id     uuid         NOT NULL REFERENCES tenants(id),
-    piece_id      uuid         NOT NULL REFERENCES pieces(id),
+    piece_id      text         NOT NULL REFERENCES pieces(id),
     event_type    text         NOT NULL,
     actor_user_id uuid         REFERENCES users(id),
     order_id      uuid         REFERENCES orders(id),
@@ -189,7 +195,7 @@ CREATE TABLE allocations (
     id            uuid              PRIMARY KEY DEFAULT gen_random_uuid(),
     tenant_id     uuid              NOT NULL REFERENCES tenants(id),
     order_item_id uuid              NOT NULL REFERENCES order_items(id),
-    piece_id      uuid              NOT NULL REFERENCES pieces(id),
+    piece_id      text              NOT NULL REFERENCES pieces(id),
     status        allocation_status NOT NULL DEFAULT 'active',
     allocated_by  uuid              REFERENCES users(id),
     allocated_at  timestamptz       NOT NULL DEFAULT now()
@@ -240,8 +246,12 @@ CREATE TABLE pickup_shipments (
     PRIMARY KEY (pickup_id, shipment_id)
 );
 
--- UNIQUE NULLS NOT DISTINCT: two rows with the same source and
--- external_event_id=NULL would otherwise pass the unique check.
+-- Idempotency: Shopify sends an X-Shopify-Webhook-Id header → store in
+-- external_event_id and let the partial unique index below deduplicate.
+-- Bosta has no provider event id → ingestion path must derive an app-side
+-- key (SHA-256 of trackingNumber + state + timeStamp) into external_event_id
+-- before inserting. A UNIQUE NULLS NOT DISTINCT constraint would block the
+-- second Bosta webhook ever received, so a partial index is used instead.
 CREATE TABLE webhook_events (
     id                bigserial      PRIMARY KEY,
     source            webhook_source NOT NULL,
@@ -252,8 +262,7 @@ CREATE TABLE webhook_events (
     status            webhook_status NOT NULL DEFAULT 'pending',
     error             text,
     received_at       timestamptz    NOT NULL DEFAULT now(),
-    processed_at      timestamptz,
-    UNIQUE NULLS NOT DISTINCT (source, external_event_id)
+    processed_at      timestamptz
 );
 
 -- ---- global lookup tables (no tenant isolation needed) ------
@@ -279,7 +288,7 @@ CREATE TABLE ndr_codes (
 -- Blueprint-mandated piece indexes:
 CREATE INDEX pieces_tenant_variant_status  ON pieces (tenant_id, variant_id, status);
 CREATE INDEX pieces_tenant_status          ON pieces (tenant_id, status);
-CREATE INDEX pieces_barcode                ON pieces (barcode);
+-- pieces_barcode omitted: the UNIQUE constraint on pieces.barcode already creates an index.
 -- Blueprint-mandated piece_events indexes:
 CREATE INDEX piece_events_piece_time       ON piece_events (piece_id, occurred_at);
 CREATE INDEX piece_events_tenant_type_time ON piece_events (tenant_id, event_type, occurred_at);
@@ -294,6 +303,7 @@ CREATE INDEX variants_product_idx          ON variants (product_id);
 CREATE INDEX receipts_tenant_idx           ON receipts (tenant_id);
 CREATE INDEX orders_tenant_idx             ON orders (tenant_id);
 CREATE INDEX orders_tenant_status          ON orders (tenant_id, status);
+CREATE INDEX orders_tenant_hold            ON orders (tenant_id) WHERE on_hold;
 CREATE INDEX order_items_order_idx         ON order_items (order_id);
 CREATE INDEX allocations_piece_idx         ON allocations (piece_id);
 CREATE INDEX allocations_order_item_idx    ON allocations (order_item_id);
@@ -303,11 +313,22 @@ CREATE INDEX pickups_tenant_idx            ON pickups (tenant_id);
 CREATE INDEX webhook_events_status_time    ON webhook_events (status, received_at);
 CREATE INDEX webhook_events_tenant_idx     ON webhook_events (tenant_id)
     WHERE tenant_id IS NOT NULL;
+-- Deduplicates webhook rows that carry a real provider event id (e.g. Shopify).
+-- Rows with external_event_id IS NULL (all Bosta rows) are excluded — dedup
+-- for those relies on the app-side key computed before insert.
+CREATE UNIQUE INDEX webhook_events_idem
+    ON webhook_events (source, external_event_id)
+    WHERE external_event_id IS NOT NULL;
 
 -- ---- Row-Level Security -------------------------------------
--- FORCE ROW LEVEL SECURITY: even the table owner is bound by
--- policies. Superusers (including Flyway's postgres user) always
--- bypass RLS regardless of FORCE.
+-- FORCE ROW LEVEL SECURITY: even the table owner is bound by policies.
+-- On Supabase the migration role (postgres) has BYPASSRLS — it is NOT a
+-- full superuser; migrations work because of that attribute, not superuser.
+-- FORCE RLS binds the table owner just like any other role without BYPASSRLS.
+-- ⚠ Any future migration that INSERTs into an RLS-forced table must either
+-- run as a role with BYPASSRLS, or execute inside an explicit transaction:
+--   SET LOCAL app.current_tenant = '<target-tenant-uuid>';
+-- before the INSERT — SET LOCAL is a no-op outside a transaction.
 
 ALTER TABLE tenants          ENABLE ROW LEVEL SECURITY;
 ALTER TABLE tenants          FORCE ROW LEVEL SECURITY;
@@ -422,11 +443,54 @@ CREATE POLICY tenant_isolation ON webhook_events
         OR tenant_id = current_setting('app.current_tenant', true)::uuid
     );
 
+-- ---- SECURITY DEFINER escape hatches -------------------------
+-- These are the ONLY two RLS bypass points. Any future cross-tenant read
+-- must go through a named, code-reviewed SECURITY DEFINER function here —
+-- no bare BYPASSRLS connections in application code.
+
+-- Auth happens before the tenant GUC is set, so login must read across
+-- tenants. Returns the credentials row for an active user by email.
+CREATE OR REPLACE FUNCTION auth_lookup_user(p_email text)
+RETURNS TABLE (
+    user_id       uuid,
+    tenant_id     uuid,
+    password_hash text,
+    role          user_role,
+    active        boolean
+)
+LANGUAGE sql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+    SELECT id, tenant_id, password_hash, role, active
+    FROM users
+    WHERE email = p_email AND active = true;
+$$;
+
+-- Shopify webhook ingestion needs the tenant UUID before the GUC is set.
+CREATE OR REPLACE FUNCTION resolve_tenant_by_shop_domain(p_domain text)
+RETURNS uuid
+LANGUAGE sql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+    SELECT tenant_id FROM stores WHERE shop_domain = p_domain;
+$$;
+
 -- ---- Grants to app_user -------------------------------------
 
 GRANT USAGE ON SCHEMA public TO app_user;
 GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO app_user;
 GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO app_user;
+-- Default privileges ensure tables/sequences added by future migrations are
+-- automatically accessible to app_user without a separate GRANT migration.
+ALTER DEFAULT PRIVILEGES IN SCHEMA public
+    GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO app_user;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public
+    GRANT USAGE, SELECT ON SEQUENCES TO app_user;
+
+GRANT EXECUTE ON FUNCTION auth_lookup_user(text) TO app_user;
+GRANT EXECUTE ON FUNCTION resolve_tenant_by_shop_domain(text) TO app_user;
 
 -- Custody ledger is append-only at the privilege level (Blueprint §5, §16).
 REVOKE UPDATE, DELETE ON piece_events FROM app_user;

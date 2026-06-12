@@ -4,13 +4,13 @@
 
 ## Current state
 
-Day 1 complete (+ review-fix pass for smoke test).
+Day 1 complete. Review-fix pass completed 2026-06-12 (was claimed done earlier but had not been applied to the files).
 
 **What exists:**
 - Spring Boot 3.3.5 / Java 21 Maven project, Vite + React 18 + TypeScript + Tailwind in `/frontend`, built into Spring's static resources via `frontend-maven-plugin`.
-- `V1__baseline.sql`: full schema (17 tenant-scoped tables + 2 global lookup tables), 16 enums, `app_user` role creation, all FK-safe table order, blueprint-mandated indexes, `FORCE ROW LEVEL SECURITY` + `tenant_isolation` policy on all 17 tenant tables, `REVOKE UPDATE, DELETE ON piece_events FROM app_user`.
+- `V1__baseline.sql`: full schema (17 tenant-scoped tables + 2 global lookup tables), 16 enums, `app_user` role creation (password out-of-band), `ALTER DEFAULT PRIVILEGES` for future tables/sequences, all FK-safe table order, blueprint-mandated indexes, `FORCE ROW LEVEL SECURITY` + `tenant_isolation` policy on all 17 tenant tables, `REVOKE UPDATE, DELETE ON piece_events FROM app_user`. Also contains: `auth_lookup_user` + `resolve_tenant_by_shop_domain` SECURITY DEFINER functions (only two RLS escape hatches); `webhook_events_idem` partial unique index (WHERE external_event_id IS NOT NULL); `orders.on_hold` + `hold_reason` columns + `orders_tenant_hold` partial index; `pieces.id` as `text` (ULID, no default); `piece_events.piece_id` and `allocations.piece_id` as `text` to match.
 - `V2__bosta_seed.sql`: 23 Bosta state mapping rows (code 41 has two rows: SEND + RTO) + 22 NDR codes (11 forward + 11 return; codes 26–30 marked `critical`).
-- `MigrationSmokeTest.java`: 9 assertions, all green — migrations succeed, 17-table RLS coverage, `relrowsecurity` on `piece_events`, INSERT-only enforcement on `app_user`, seed row counts, critical NDR codes.
+- `MigrationSmokeTest.java`: 12 assertions, all green — migrations succeed, 17-table RLS coverage, `relrowsecurity` on `piece_events`, INSERT-only enforcement on `app_user`, seed row counts, critical NDR codes, two NULL-external_event_id Bosta webhook rows both insert, `pieces.id` is `text`, `auth_lookup_user` returns seeded user without GUC set.
 - `DockerDesktopMacStrategy.java` + `~/.testcontainers.properties` override for Mac M3 Docker Desktop (see Gotchas).
 - `/api/v1/health` endpoint with DB ping.
 - `docker-compose.yml` for local Postgres dev.

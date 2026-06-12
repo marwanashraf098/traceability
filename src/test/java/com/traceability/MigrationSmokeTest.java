@@ -155,6 +155,57 @@ class MigrationSmokeTest {
                         .as("NDR codes 26–30 must have severity=critical")
                         .isEqualTo(5);
             }
+
+            // 10. Two Bosta webhook rows with NULL external_event_id must both insert.
+            // A UNIQUE NULLS NOT DISTINCT constraint would block the second row; the
+            // partial unique index (WHERE external_event_id IS NOT NULL) must not.
+            conn.prepareStatement("""
+                    INSERT INTO webhook_events (source, topic, payload)
+                    VALUES ('bosta', 'state_change', '{"test":1}'),
+                           ('bosta', 'state_change', '{"test":2}')
+                    """).execute();
+            try (PreparedStatement ps = conn.prepareStatement(
+                    "SELECT COUNT(*) FROM webhook_events WHERE source = 'bosta' AND external_event_id IS NULL");
+                 ResultSet rs = ps.executeQuery()) {
+                rs.next();
+                assertThat(rs.getInt(1))
+                        .as("Two Bosta webhook rows with NULL external_event_id must both be stored")
+                        .isEqualTo(2);
+            }
+
+            // 11. pieces.id column must be type text (ULID), not uuid.
+            try (PreparedStatement ps = conn.prepareStatement(
+                    "SELECT data_type FROM information_schema.columns " +
+                    "WHERE table_schema = 'public' AND table_name = 'pieces' AND column_name = 'id'");
+                 ResultSet rs = ps.executeQuery()) {
+                rs.next();
+                assertThat(rs.getString("data_type"))
+                        .as("pieces.id must be text (app-generated ULID), not uuid")
+                        .isEqualTo("text");
+            }
+
+            // 12. auth_lookup_user returns a seeded user without app.current_tenant GUC set.
+            // SECURITY DEFINER lets the function read across tenants regardless of GUC state.
+            conn.prepareStatement("""
+                    INSERT INTO tenants (id, name) VALUES
+                        ('aaaaaaaa-0000-0000-0000-000000000001', 'SmokeTestTenant')
+                    """).execute();
+            conn.prepareStatement("""
+                    INSERT INTO users (id, tenant_id, name, email, password_hash, role) VALUES
+                        ('bbbbbbbb-0000-0000-0000-000000000001',
+                         'aaaaaaaa-0000-0000-0000-000000000001',
+                         'Smoke User', 'smoke@test.local', '$2a$hash', 'owner')
+                    """).execute();
+            try (PreparedStatement ps = conn.prepareStatement(
+                    "SELECT user_id::text FROM auth_lookup_user('smoke@test.local')");
+                 ResultSet rs = ps.executeQuery()) {
+                assertThat(rs.next())
+                        .as("auth_lookup_user must return a row for a seeded active user")
+                        .isTrue();
+                assertThat(rs.getString("user_id"))
+                        .as("auth_lookup_user must return the correct user_id")
+                        .isEqualTo("bbbbbbbb-0000-0000-0000-000000000001");
+            }
         }
     }
 }
