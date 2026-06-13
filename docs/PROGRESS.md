@@ -38,7 +38,10 @@ Day 3 complete as of 2026-06-13. All 36 integration tests pass (BUILD SUCCESS).
 
 ## Next up
 
-Day 3: `InventoryLedger.transition()` + ULID generator + state-machine / scan-race tests.
+Day 4–5: Shopify connect + product/variant import + 90-day order import.
+- FR-3.1: custom-app credentials endpoint + validation
+- FR-3.2: initial import — products/variants then 90-day orders; resumable, idempotent, progress UI; async via JobRunr
+- Commit target: `73ea0fe` is Day 3 baseline
 
 ---
 
