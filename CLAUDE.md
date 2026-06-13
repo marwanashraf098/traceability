@@ -267,3 +267,10 @@ At the **end** of every session (without being asked):
 **Three approved SECURITY DEFINER escape hatches — adding a fourth requires explicit approval**: `auth_lookup_user` (V1), `resolve_tenant_by_shop_domain` (V1), `lookup_refresh_token` (V3). These are the only points where RLS is bypassed. Any future cross-tenant read must go through a named, code-reviewed `SECURITY DEFINER` function; no bare `BYPASSRLS` connections in application code.
 
 **Test datasources — most integration tests connect as postgres (BYPASSRLS) to test logic without RLS friction. This means a green suite does NOT prove RLS is enforced.** Any test whose PURPOSE is isolation/tenant-scoping must connect as `app_user` via the `appUserTx`/`appUserLedger` harness (see `InventoryLedgerTest` test e) with no GUC set, and assert zero rows. When adding a security-sensitive table or path, add an `app_user`-role test — do not rely on the default postgres-connected tests for isolation coverage.
+
+**Supabase datasource configuration — three tiers, one forbidden:**
+- **Best**: direct host `db.<ref>.supabase.co:5432` — one TCP connection per Hikari slot, no pooler in the path. Unavailable on our current plan (IPv6-only; IPv4 add-on required).
+- **Our configuration (deliberate, not a workaround)**: session-mode pooler `aws-0-eu-west-1.pooler.supabase.com:5432` — Supabase Supavisor in session mode pins one backend connection per client connection for the lifetime of the session, so `SET LOCAL app.current_tenant` survives across the transaction exactly as it would on a direct connection. This is a supported, stable configuration.
+- **FORBIDDEN**: transaction-mode pooler port `6543` — Supavisor reassigns the backend connection between statements; `SET LOCAL` is reset before the first query runs, GUC is empty, RLS policies evaluate to false, and every authenticated query silently returns zero rows. No error is raised. A startup guard in `DataSourceConfig` throws `IllegalStateException` if the configured URL resolves to port 6543.
+
+If RLS mysteriously returns empty results in a new environment, check the JDBC URL port first: 5432 = safe, 6543 = broken.
