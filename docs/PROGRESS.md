@@ -4,7 +4,13 @@
 
 ## Current state
 
-Day 3 complete as of 2026-06-13. All 36 integration tests pass (BUILD SUCCESS).
+Day 4 complete as of 2026-06-14. All 48 integration tests pass (BUILD SUCCESS).
+
+**Day 4 — Shopify connect + import:** V4 migration adds `order_items.external_id` with partial unique index for idempotent upserts. Full Shopify integration implemented: `ShopifyGateway` interface + `ShopifyHttpGateway` (GraphQL client, Resilience4j retry, proactive throttle back-off, api-version pinned to 2026-04). `ShopifySyncService` orchestrates per-row `TransactionTemplate` upserts; COD inference from `displayFinancialStatus` + payment gateway names; unmapped-variant hold flag. `ShopifyController` exposes `POST /api/v1/shopify/connect` (OWNER-only). `EncryptionService` stores access tokens as AES-256-GCM ciphertext (12-byte IV per call).
+
+**Security config hardened:** Custom `AccessDeniedHandler` calls `setStatus(403)` not `sendError()`, avoiding Servlet error dispatch that would override 403 → 401. `ApiExceptionHandler` extended with explicit `AccessDeniedException → 403` handler (catches `@PreAuthorize` rejections that otherwise reach `DispatcherServlet`) and catch-all `Exception → 500` with `log.error`.
+
+**Live import against Supabase:** `traceability-dev.myshopify.com` → 15 products, 24 variants, 0 orders (dev store is empty). All 4 `ShopifyImportTest` scenarios (idempotency, unmapped variant, encrypted token, non-owner 403) pass.
 
 **Supabase first-contact done (2026-06-13):** V1–V3 migrations applied (PostgreSQL 17.6, eu-west-1 pooler, session mode). `app_user` role active with password set out-of-band; `rolbypassrls=false, rolsuper=false` confirmed — RLS genuinely binds it. `postgres` confirmed `rolbypassrls=true, rolsuper=false` (BYPASSRLS, not superuser). App restarts cleanly as `app_user` with Flyway reporting "no migration necessary". Smoke tests against Supabase: health ✓ (200), signup ✓ (201), login ✓ (200, accessToken + refreshToken present).
 
@@ -40,10 +46,11 @@ Day 3 complete as of 2026-06-13. All 36 integration tests pass (BUILD SUCCESS).
 
 ## Next up
 
-Day 4–5: Shopify connect + product/variant import + 90-day order import.
-- FR-3.1: custom-app credentials endpoint + validation
-- FR-3.2: initial import — products/variants then 90-day orders; resumable, idempotent, progress UI; async via JobRunr
-- Commit target: `73ea0fe` is Day 3 baseline
+Day 5: Background job infrastructure + Bosta webhook ingestion.
+- Move Shopify import to a background `JobRunr` job (currently synchronous — blocks HTTP for large catalogs)
+- FR-4.1: Bosta webhook endpoint — receive delivery state changes, map `bosta_state_mappings`, emit `piece_events`
+- FR-4.2: Bosta event re-fetch (deterministic dedup key, no HMAC from Bosta)
+- Day 4 commit: `5ade23b`
 
 ---
 
@@ -59,6 +66,11 @@ Day 4–5: Shopify connect + product/variant import + 90-day order import.
 ---
 
 ## Gotchas / environment quirks
+
+- **Shopify 2026-04 removed `financialStatus` field on Order** — use `displayFinancialStatus` instead. Returns capitalized display values ("Pending", "Paid", "Authorized"). COD inference checks `"pending".equalsIgnoreCase(displayFinancialStatus)` — case-insensitive, so both are safe.
+- **`ApiExceptionHandler.handleGeneral(Exception)` intercepts `AccessDeniedException`** — when `@PreAuthorize` throws `AccessDeniedException`, `DispatcherServlet` resolves it through `ExceptionHandlerExceptionResolver` before `ExceptionTranslationFilter` can invoke the `AccessDeniedHandler`. Must have an explicit `@ExceptionHandler(AccessDeniedException.class) → 403` handler ahead of the catch-all; otherwise the `Exception` handler returns 500. This is a subtlety of adding a catch-all exception handler on top of the Spring Security filter chain.
+- **Supabase session-mode pooler caps at 15 concurrent connections (free plan)** — running two app instances simultaneously exhausts the pool. Testcontainers tests use their own containers and don't count. Kill idle app instances before running load-heavy operations.
+
 
 - **Docker Desktop M3 + Testcontainers API v1.41 override**: Docker Desktop on Mac M3 rejects docker-java's default v1.24 version-negotiation request with HTTP 400. Fix: `DockerDesktopMacStrategy` in `src/test/java/com/traceability/` overrides `test()`, `getClient()`, *and* `getDockerClient()` (all three are required — Testcontainers calls `getDockerClient()` after `test()` passes, and the base implementation re-does version negotiation) to force API v1.41. Strategy is loaded via `~/.testcontainers.properties` AND `src/test/resources/testcontainers.properties`. **Do not delete or "clean up" this class.** On CI (Linux Docker socket) version negotiation works fine; the class is inert there because the built-in `UnixSocketClientProviderStrategy` wins first.
 - **`pg_class` RLS flag column is `relrowsecurity`** — not `rowsecurity`. Fixed in `MigrationSmokeTest.java` line ~90.

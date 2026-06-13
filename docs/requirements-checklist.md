@@ -19,8 +19,8 @@ One line per requirement · [M] Must / [S] Should / [C] Could · use as the buil
 - [ ] 2.6 [M] Privileged-action audit log (users, integrations, adjustments, impersonation)
 
 ## FR-3 Shopify Integration (order source — always)
-- [ ] 3.1 [M] Connect via custom-app credentials + validation ([S] public OAuth app track)
-- [ ] 3.2 [M] Initial import: products/variants + 90-day orders, resumable, idempotent, progress UI
+- [x] 3.1 [M] Connect via custom-app credentials + validation ([S] public OAuth app track)
+- [x] 3.2 [M] Initial import: products/variants + 90-day orders, resumable, idempotent, progress UI
 - [ ] 3.3 [M] Webhooks orders create/updated/cancelled + products create/update: HMAC, raw persist, async, idempotent
 - [ ] 3.4 [M] 15-min reconciliation poll (missed webhook ≠ lost order)
 - [ ] 3.5 [M] Cancel pre-pack → auto-release pieces; cancel post-pack → exception + guided unpack
