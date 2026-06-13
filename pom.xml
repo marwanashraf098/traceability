@@ -67,6 +67,15 @@
             <version>1.78.1</version>
         </dependency>
 
+        <!-- Resilience4j retry for transient Shopify API failures (timeouts, 5xx).
+             THROTTLED backoff is handled manually inside ShopifyHttpGateway because
+             the wait time is dynamic (computed from Shopify's throttle status). -->
+        <dependency>
+            <groupId>io.github.resilience4j</groupId>
+            <artifactId>resilience4j-retry</artifactId>
+            <version>2.2.0</version>
+        </dependency>
+
         <!-- Test -->
         <dependency>
             <groupId>org.springframework.boot</groupId>

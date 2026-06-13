@@ -1,6 +1,7 @@
 package com.traceability.identity;
 
 import com.traceability.tenancy.TenantContextFilter;
+import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.HttpStatus;
@@ -48,7 +49,12 @@ public class SecurityConfig {
             .csrf(AbstractHttpConfigurer::disable)
             .sessionManagement(s -> s.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
             .exceptionHandling(e -> e
-                .authenticationEntryPoint(new HttpStatusEntryPoint(HttpStatus.UNAUTHORIZED)))
+                .authenticationEntryPoint(new HttpStatusEntryPoint(HttpStatus.UNAUTHORIZED))
+                // Use setStatus (not sendError) to avoid Servlet error-dispatch,
+                // which would clear the SecurityContext and return 401 instead of 403.
+                // Same root cause as ApiExceptionHandler (see CLAUDE.md).
+                .accessDeniedHandler((req, res, denied) ->
+                        res.setStatus(HttpServletResponse.SC_FORBIDDEN)))
             .authorizeHttpRequests(auth -> auth
                 .requestMatchers(
                     "/api/v1/auth/signup",
