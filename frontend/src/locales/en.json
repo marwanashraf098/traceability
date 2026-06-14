@@ -1,0 +1,78 @@
+{
+  "nav": {
+    "orders": "Orders",
+    "catalog": "Catalog",
+    "logout": "Logout"
+  },
+  "login": {
+    "title": "Traceability",
+    "subtitle": "Piece-level inventory platform",
+    "email": "Email",
+    "password": "Password",
+    "submit": "Sign in",
+    "error": "Invalid email or password"
+  },
+  "orders": {
+    "title": "Orders",
+    "search": "Search by order #, name, or phone",
+    "searchTracking": "Tracking number",
+    "filterStatus": "All statuses",
+    "columns": {
+      "number": "Order #",
+      "customer": "Customer",
+      "status": "Status",
+      "cod": "COD",
+      "placedAt": "Placed",
+      "tracking": "Tracking"
+    },
+    "empty": "No orders found",
+    "prev": "Previous",
+    "next": "Next",
+    "showing": "Showing {{from}}–{{to}} of {{total}}"
+  },
+  "orderDetail": {
+    "title": "Order",
+    "back": "← Back to Orders",
+    "customer": "Customer",
+    "phone": "Phone",
+    "address": "Address",
+    "payment": "Payment",
+    "cod": "COD",
+    "status": "Status",
+    "onHold": "ON HOLD",
+    "holdReason": "Hold reason",
+    "placedAt": "Placed at",
+    "items": "Items",
+    "shipment": "Shipment",
+    "tracking": "Tracking",
+    "provider": "Provider",
+    "attempts": "Attempts",
+    "awb": "AWB",
+    "pieces": "Allocated pieces",
+    "noPieces": "No pieces allocated"
+  },
+  "catalog": {
+    "title": "Catalog",
+    "empty": "No products found",
+    "pieces": "pieces",
+    "statuses": {
+      "available": "Available",
+      "reserved": "Reserved",
+      "packed": "Packed",
+      "awaiting_pickup": "Awaiting Pickup",
+      "with_courier": "With Courier",
+      "delivered": "Delivered",
+      "return_in_transit": "Return Transit",
+      "return_pending_inspection": "Return Pending",
+      "damaged": "Damaged",
+      "lost": "Lost",
+      "destroyed": "Destroyed",
+      "total": "Total"
+    }
+  },
+  "common": {
+    "loading": "Loading...",
+    "error": "Something went wrong",
+    "na": "—"
+  }
+}

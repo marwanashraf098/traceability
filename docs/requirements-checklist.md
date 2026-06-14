@@ -41,7 +41,7 @@ One line per requirement · [M] Must / [S] Should / [C] Could · use as the buil
 - [ ] 4.9 [M] All Bosta failures: retry w/ backoff → plain-language AR/EN exception, never raw errors
 
 ## FR-5 Catalog
-- [ ] 5.1 [M] Product/variant browse+search with per-status piece counts
+- [x] 5.1 [M] Product/variant browse+search with per-status piece counts
 - [ ] 5.2 [M] Variant detail: piece list by status with last-event time
 - [ ] 5.3 [S] Local (non-Shopify) products, excluded from sync
 - [ ] 5.4 [C] Low-stock indicator per variant
@@ -57,8 +57,8 @@ One line per requirement · [M] Must / [S] Should / [C] Could · use as the buil
 - [ ] 6.8 [M] Barcodes live at finalize — no activation step
 
 ## FR-7 Orders & Confirmation
-- [ ] 7.1 [M] Pipeline list + filters (incl. Self-Pickup Pending); search by number/name/phone/tracking
-- [ ] 7.2 [M] Order detail: customer, lines, COD, status timeline, allocated pieces, shipment, audit
+- [x] 7.1 [M] Pipeline list + filters (incl. Self-Pickup Pending); search by number/name/phone/tracking
+- [x] 7.2 [M] Order detail: customer, lines, COD, status timeline, allocated pieces, shipment, audit
 - [ ] 7.3 [M] Confirmation modes: Auto-flow (default — straight to Ready to Pick after gates) / Gated (button or tag); prepaid auto-confirm toggle
 - [ ] 7.4 [M] Hold/unhold with reason; held orders leave queues
 - [ ] 7.5 [M] COD prominent, editable until packing (logged); ≤ 30,000 EGP validation; frozen after AWB

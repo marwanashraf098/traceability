@@ -1,0 +1,78 @@
+{
+  "nav": {
+    "orders": "الطلبات",
+    "catalog": "الكتالوج",
+    "logout": "تسجيل الخروج"
+  },
+  "login": {
+    "title": "تتبع المخزون",
+    "subtitle": "منصة تتبع القطع",
+    "email": "البريد الإلكتروني",
+    "password": "كلمة المرور",
+    "submit": "تسجيل الدخول",
+    "error": "البريد الإلكتروني أو كلمة المرور غير صحيحة"
+  },
+  "orders": {
+    "title": "الطلبات",
+    "search": "بحث برقم الطلب أو الاسم أو الهاتف",
+    "searchTracking": "رقم التتبع",
+    "filterStatus": "كل الحالات",
+    "columns": {
+      "number": "رقم الطلب",
+      "customer": "العميل",
+      "status": "الحالة",
+      "cod": "الدفع عند الاستلام",
+      "placedAt": "تاريخ الطلب",
+      "tracking": "التتبع"
+    },
+    "empty": "لا توجد طلبات",
+    "prev": "السابق",
+    "next": "التالي",
+    "showing": "عرض {{from}}–{{to}} من {{total}}"
+  },
+  "orderDetail": {
+    "title": "الطلب",
+    "back": "→ العودة للطلبات",
+    "customer": "العميل",
+    "phone": "الهاتف",
+    "address": "العنوان",
+    "payment": "طريقة الدفع",
+    "cod": "مبلغ الاستلام",
+    "status": "الحالة",
+    "onHold": "محجوب",
+    "holdReason": "سبب الحجب",
+    "placedAt": "تاريخ الطلب",
+    "items": "المنتجات",
+    "shipment": "الشحنة",
+    "tracking": "رقم التتبع",
+    "provider": "شركة الشحن",
+    "attempts": "محاولات التسليم",
+    "awb": "وصل الشحن",
+    "pieces": "القطع المخصصة",
+    "noPieces": "لا توجد قطع مخصصة"
+  },
+  "catalog": {
+    "title": "الكتالوج",
+    "empty": "لا توجد منتجات",
+    "pieces": "قطعة",
+    "statuses": {
+      "available": "متاح",
+      "reserved": "محجوز",
+      "packed": "مُعبأ",
+      "awaiting_pickup": "ينتظر الاستلام",
+      "with_courier": "مع المندوب",
+      "delivered": "مُسلَّم",
+      "return_in_transit": "مرتجع في الطريق",
+      "return_pending_inspection": "مرتجع ينتظر الفحص",
+      "damaged": "تالف",
+      "lost": "مفقود",
+      "destroyed": "مُتلف",
+      "total": "الإجمالي"
+    }
+  },
+  "common": {
+    "loading": "جارٍ التحميل...",
+    "error": "حدث خطأ ما",
+    "na": "—"
+  }
+}

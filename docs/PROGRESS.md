@@ -4,7 +4,34 @@
 
 ## Current state
 
-Day 6 complete as of 2026-06-14. All 66 integration tests pass (BUILD SUCCESS).
+Day 7 complete as of 2026-06-15. All 74 integration tests pass (BUILD SUCCESS).
+
+**Day 7 — Read-only UI endpoints + React frontend scaffold:**
+
+*Backend:*
+- **`GET /api/v1/orders`** — Paginated orders list (OWNER/MANAGER). Query params: `status`, `q` (ILIKE search on number/customer_name/customer_phone), `tracking` (ILIKE join to shipments), `page`, `size` (max 100). Explicit `tenant_id = NULLIF(current_setting(...))::uuid` filter on all queries (defense-in-depth on top of RLS — ensures correct scoping even when connecting as BYPASSRLS roles like postgres in tests).
+- **`GET /api/v1/orders/{orderId}`** — Full order detail with line items + allocated pieces (per item) + shipment (if any). Returns 404 for cross-tenant requests (RLS + explicit tenant filter).
+- **`GET /api/v1/catalog`** — All products + variants with piece counts by status (available/reserved/packed/…/total). One GROUP BY query fetches all piece counts for the tenant upfront, then maps to variants.
+- **CORS** — Added to `SecurityConfig`: allows `localhost:5173` (Vite dev) + env-configurable production origins.
+- **`Day7Test`** — 8 new integration tests: orders list RLS scoping (tenant B sees 0 orders from tenant A via explicit filter), pagination (page/size + total), status filter, customer name search, order detail 404 cross-tenant, order detail with items + allocated pieces, catalog piece counts (3 available + 1 packed → correct counts), WORKER role → 403.
+
+*Frontend (`frontend/` — Vite + React 18 + TypeScript + Tailwind):*
+- Added deps: `react-router-dom` 7, `react-i18next` 17, `i18next` 26.
+- `src/i18n.ts` — i18n init with AR + EN JSON locale files. Language persisted in `localStorage`; RTL `dir` applied to `<html>` on switch.
+- `src/api.ts` — typed fetch wrapper (Bearer JWT from localStorage, auto-redirect to `/login` on 401).
+- `src/components/Layout.tsx` — nav with Orders / Catalog links + language toggle + logout.
+- `src/pages/Login.tsx` — email/password form → `POST /api/v1/auth/login` → token stored → redirect to `/orders`.
+- `src/pages/Orders.tsx` — orders table with status filter dropdown, text search, tracking filter, pagination. Status badges color-coded, HOLD badge shown when on_hold.
+- `src/pages/OrderDetail.tsx` — 3-column layout: customer + order info + shipment (left) / items with allocated piece barcodes (right).
+- `src/pages/Catalog.tsx` — product list with variants; only non-zero piece-count statuses shown as colored badges.
+- `src/App.tsx` — BrowserRouter with `RequireAuth` guard. Routes: `/login`, `/orders`, `/orders/:id`, `/catalog`.
+
+*Live demo verified against Supabase dev store (day4dev@example.com):*
+- 15 products, 24 variants returned by `/api/v1/catalog` ✓
+- 3 orders returned by `/api/v1/orders` ✓  
+- customerName null (PCD gate not yet approved — expected; data preserved in `orders.raw`)
+- No pieces yet (receiving starts Day 8)
+- Frontend running at `http://localhost:5173`, proxies `/api` to backend on 8080
 
 **Day 6 — Courier state → custody ledger wiring:**
 
@@ -72,11 +99,11 @@ Day 6 complete as of 2026-06-14. All 66 integration tests pass (BUILD SUCCESS).
 
 ## Next up
 
-Day 7: Orders list + detail (read-only) + catalog list. Demo: pilot's live store in the UI.
-- Read-only order list endpoint: paginated, filterable by status; order detail with line items
-- Catalog list: products + variants with piece counts by status
-- These are the last Week-1 items per the four-week plan; demo against live Shopify dev store
-- Day 6 commit: see `git log`
+Day 8–9: Receiving sessions + piece generation.
+- Receiving session: location, supplier, reference, finalize → bulk ULID piece generation (batched INSERT, 1k pieces ≤ 10s), `received` events per piece.
+- Receiving session API endpoints (OWNER/MANAGER): create session, add lines, finalize.
+- Frontend receiving screen (WORKER): scan SKU/variant, enter qty, finalize → pieces generated.
+- Day 7 commit: see `git log`
 
 **Shopify OAuth design is owned by a separate design thread.** The production Shopify connect path = public OAuth app (decision recorded in "Decisions made" below). The detailed OAuth flow, scopes, callback URL, and state-parameter handling are being designed in a separate chat/thread. Do not re-derive or modify the OAuth design from this build thread. When that design is finalized it will be handed back here as a spec for implementation. The current custom-app endpoint (`POST /api/v1/shopify/connect` with `adminToken`) is DEV-ONLY and stays as-is until the spec arrives.
 
