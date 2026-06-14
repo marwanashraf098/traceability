@@ -36,7 +36,7 @@ One line per requirement · [M] Must / [S] Should / [C] Could · use as the buil
 - [ ] 4.4 [M] Mode B: poll-detect plugin-created deliveries, match by reference (phone+COD fallback), unlinked-shipments screen
 - [ ] 4.5 [M] Per-tenant mode: A / B / Hybrid
 - [ ] 4.6 [M] Delivery cancellation via API where state allows; else exception with instructions
-- [ ] 4.7 [M] Status sync: webhook (secret header, verify-by-fetch, no HMAC exists) + 15–30 min polling; (state, type)-keyed mapping; numberOfAttempts stored; trackingNumber as string; unknown codes → exception+alert
+- [x] 4.7 [M] Status sync: webhook (secret header, verify-by-fetch, no HMAC exists) + 15–30 min polling; (state, type)-keyed mapping; numberOfAttempts stored; trackingNumber as string; unknown codes → exception+alert [Day 6 — webhook→ledger wiring complete; polling not yet built]
 - [ ] 4.8 [M] Pickup creation (see FR-10)
 - [ ] 4.9 [M] All Bosta failures: retry w/ backoff → plain-language AR/EN exception, never raw errors
 
@@ -102,8 +102,8 @@ One line per requirement · [M] Must / [S] Should / [C] Could · use as the buil
 - [ ] 10.4 [S] Skipped parcels (no collection by EOD+1) → exception
 
 ## FR-11 Shipment Lifecycle
-- [ ] 11.1 [M] (state code, order type)-keyed mapping per verified table (§8.3) → order/piece/event updates
-- [ ] 11.2 [M] Terminal handling: 45→Delivered; 100→Lost+exception; 46→Return Pending + order Returned
+- [x] 11.1 [M] (state code, order type)-keyed mapping per verified table (§8.3) → order/piece/event updates [Day 6 complete]
+- [x] 11.2 [M] Terminal handling: 45→Delivered; 100→Lost+exception; 46→Return Pending + order Returned [webhook path done Day 6; exception alerts not yet built]
 - [ ] 11.3 [M] Attempts counter from numberOfAttempts; ≥2 fails → exception (configurable)
 - [ ] 11.4 [M] No end-customer notifications (merchant-facing only)
 - [ ] 11.5 [M] Stuck detector: no provider update 5d (configurable) → exception

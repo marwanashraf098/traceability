@@ -89,6 +89,7 @@ class BostaDay5Test {
 
     @BeforeEach
     void cleanUp() {
+        jdbc.execute("DELETE FROM unlinked_bosta_deliveries");
         jdbc.execute("DELETE FROM webhook_events");
         jdbc.execute("DELETE FROM courier_accounts");
     }

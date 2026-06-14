@@ -2,6 +2,7 @@ package com.traceability.integrations.bosta;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.traceability.inventory.*;
 import com.traceability.security.EncryptionService;
 import com.traceability.tenancy.TenantContext;
 import org.jobrunr.jobs.annotations.Job;
@@ -17,6 +18,7 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.HexFormat;
+import java.util.List;
 import java.util.UUID;
 
 /**
@@ -26,51 +28,73 @@ import java.util.UUID;
  *   1. Dedup check (optimization): if another row already has external_event_id=idemKey
  *      and status='processed', this row is a redelivery — mark as duplicate and return.
  *   2. State-machine guard (backstop): InventoryLedger.transition() rejects re-applying
- *      the same state (StateConflictException = harmless no-op). A crash after fetch
- *      but before the final UPDATE means the next retry re-fetches, re-applies (safe),
- *      and marks processed. The external_event_id is set AFTER successful state application.
+ *      the same state. A crash after the ledger writes but before the final UPDATE leaves
+ *      the event as 'pending' for retry; the re-run hits the already-applied fast-path
+ *      (current==target) and skips cleanly. The external_event_id is set AFTER all state
+ *      changes are applied.
  *
  * Verify-by-fetch: the webhook payload is an untrusted hint. We always re-fetch the
- * delivery from Bosta to get authoritative state before applying any transitions.
- * Mock contract: fetchDelivery(apiKey, trackingNumber) → BostaDelivery where stateCode
- * may differ from the payload — tests must verify we act on the fetched state, not the payload.
+ * delivery from Bosta and act on the FETCHED state, not the payload state.
+ *
+ * Piece transition already-applied handling:
+ *   Fast path — current == target: skip (no DB write).
+ *   StateConflictException where getActual()==target: concurrent worker applied it first,
+ *     treat as no-op.
+ *   StateConflictException where getActual()!=target: piece in unexpected state, log warning,
+ *     continue to next piece (do not fail the whole job).
+ *   IllegalTransitionException: piece has no legal path to target (already terminal or in
+ *     unrelated state machine branch), log warning and continue.
+ *
+ * Unlinked Mode-B deliveries: if no shipment row exists for the tracking_number, the
+ * delivery is recorded in unlinked_bosta_deliveries for the operator to match manually,
+ * and the webhook_event is marked processed (not failed — this is an expected Mode-B case).
  *
  * Failure modes:
  *   BostaTransientException (network/5xx) → rethrown → JobRunr retries
- *   BostaException (404 / permanent) → webhook_events.status='failed'
- *   Mapped to exception state → webhook_events.status='failed' + alert
+ *   BostaException (404 / permanent)      → webhook_events.status='failed'
+ *   Mapped to exception shipment state    → webhook_events.status='failed' + alert
  */
 @Component
 public class BostaWebhookJob {
 
     private static final Logger log = LoggerFactory.getLogger(BostaWebhookJob.class);
 
-    private final JdbcTemplate      jdbc;
+    private final JdbcTemplate       jdbc;
     private final TransactionTemplate tx;
-    private final BostaGateway       bostaGateway;
-    private final BostaStateMapper   stateMapper;
-    private final EncryptionService  encryptionService;
-    private final ObjectMapper       mapper;
+    private final BostaGateway        bostaGateway;
+    private final BostaStateMapper    stateMapper;
+    private final EncryptionService   encryptionService;
+    private final ObjectMapper        mapper;
+    private final InventoryLedger     ledger;
 
     public BostaWebhookJob(JdbcTemplate jdbc,
                             PlatformTransactionManager txm,
                             BostaGateway bostaGateway,
                             BostaStateMapper stateMapper,
                             EncryptionService encryptionService,
-                            ObjectMapper mapper) {
+                            ObjectMapper mapper,
+                            InventoryLedger ledger) {
         this.jdbc              = jdbc;
         this.tx                = new TransactionTemplate(txm);
         this.bostaGateway      = bostaGateway;
         this.stateMapper       = stateMapper;
         this.encryptionService = encryptionService;
         this.mapper            = mapper;
+        this.ledger            = ledger;
     }
+
+    // ---- private row types -------------------------------------------------
+
+    private record ShipmentRow(UUID id, UUID orderId) {}
+    private record PieceRow(String id, String status) {}
+
+    // ---- job ---------------------------------------------------------------
 
     @Job(name = "Bosta webhook — event %0")
     public void process(long webhookEventId, UUID tenantId) {
         TenantContext.runAs(tenantId, (Runnable) () -> {
 
-            // 1. Load payload (transactional so GUC is set and RLS applies in production)
+            // 1. Load payload (pending); transactional so GUC is set and RLS applies.
             JsonNode payload = tx.execute(s -> jdbc.query(
                 "SELECT payload FROM webhook_events WHERE id = ? AND status = 'pending'",
                 rs -> {
@@ -84,19 +108,16 @@ public class BostaWebhookJob {
                 return;
             }
 
-            // 2. Extract payload fields (Bosta §8 camelCase shape)
+            // 2. Extract payload fields (Bosta §8 camelCase shape).
             String trackingNumber = payload.path("trackingNumber").asText();
             int    payloadState   = payload.path("state").asInt(-1);
             String timestamp      = payload.path("updatedAt").asText("unknown");
 
-            // 3. Idempotency key: stable for a given (trackingNumber, state, timestamp) tuple.
-            //    Based on the PAYLOAD (not the fetched state) so it's stable for redeliveries
-            //    of the same logical event, regardless of when Bosta re-sends it.
+            // 3. Idempotency key: stable for a given (trackingNumber, payloadState, timestamp).
+            //    Based on the PAYLOAD (not the fetched state) so it is stable for redeliveries.
             String idemKey = sha256(trackingNumber + ":" + payloadState + ":" + timestamp);
 
-            // 4. Dedup check (optimization): if a sibling row is already processed with the
-            //    same key, this is a redelivery — mark as duplicate without re-fetching.
-            //    The duplicate row does NOT claim external_event_id (that stays with the first row).
+            // 4. Dedup check (optimization): sibling row already processed → mark duplicate.
             Integer alreadyDone = jdbc.queryForObject(
                 "SELECT COUNT(*) FROM webhook_events " +
                 "WHERE external_event_id = ? AND status = 'processed'",
@@ -106,7 +127,7 @@ public class BostaWebhookJob {
                 return;
             }
 
-            // 5. Load this tenant's Bosta API key (under tenant context / RLS)
+            // 5. Load this tenant's Bosta API key (under tenant context / RLS).
             String[] accountInfo = tx.execute(s -> jdbc.query(
                 "SELECT api_key_encrypted FROM courier_accounts " +
                 "WHERE tenant_id = ? AND provider = 'bosta' AND status = 'active' LIMIT 1",
@@ -120,14 +141,14 @@ public class BostaWebhookJob {
 
             String rawApiKey = encryptionService.decrypt(accountInfo[0]);
 
-            // 6. Verify-by-fetch: payload is untrusted; always re-fetch authoritative state
+            // 6. Verify-by-fetch: payload is untrusted; always re-fetch authoritative state.
             BostaDelivery delivery;
             try {
                 delivery = bostaGateway.fetchDelivery(rawApiKey, trackingNumber);
             } catch (BostaTransientException e) {
                 log.warn("Transient Bosta fetch error for tracking {} — will retry: {}",
                     trackingNumber, e.getMessage());
-                throw e;  // propagate → JobRunr retry
+                throw e;
             } catch (BostaException e) {
                 markFailed(webhookEventId, "Bosta fetch error: " + e.getMessage());
                 return;
@@ -138,7 +159,7 @@ public class BostaWebhookJob {
                 return;
             }
 
-            // 7. Map the FETCHED state (not the payload state)
+            // 7. Map the FETCHED state (not the payload state).
             BostaStateMapper.MappedState mapped =
                 stateMapper.map(delivery.stateCode(), delivery.type());
 
@@ -150,17 +171,102 @@ public class BostaWebhookJob {
                 return;
             }
 
-            // 8. Apply ledger transition (deferred: no shipment↔trackingNumber link yet)
-            // When shipments are linked: find shipment by tracking_number under RLS,
-            // call ledger.transition(pieceId, currentStatus, mapped.pieceStatusAfter(), context).
-            // The state machine IS the idempotency backstop: re-applying the same piece status
-            // throws StateConflictException → caught and treated as success.
-            log.debug("Webhook {}: tracking={} fetched state={} mapped={}",
-                webhookEventId, trackingNumber, delivery.stateCode(), mapped.shipmentInternalState());
+            // 8. Find shipment by tracking_number under RLS.
+            //    In Mode-B the shipment row is created when we ingest from Bosta's list API
+            //    and match by businessReference / phone+COD. A webhook may arrive before that
+            //    ingestion has run, so "no shipment found" is a normal case, not an error.
+            ShipmentRow shipment = tx.execute(s -> jdbc.query(
+                "SELECT id, order_id FROM shipments WHERE tracking_number = ?",
+                rs -> rs.next() ? new ShipmentRow(
+                    rs.getObject("id", UUID.class),
+                    rs.getObject("order_id", UUID.class)) : null,
+                trackingNumber));
 
-            // 9. Mark processed + claim external_event_id AFTER state is applied.
-            //    external_event_id is set last so that a crash before step 9 leaves the event
-            //    as 'pending' (retry-safe). Concurrent duplicate → DuplicateKeyException → mark processed.
+            if (shipment == null) {
+                log.info("Webhook {}: tracking_number {} has no matching shipment — recording as unlinked",
+                    webhookEventId, trackingNumber);
+                recordUnlinked(tenantId, trackingNumber, delivery, webhookEventId);
+                markProcessed(webhookEventId, idemKey, "unlinked: " + trackingNumber);
+                return;
+            }
+
+            // 9. Persist updated courier state on the shipment row.
+            tx.execute(s -> {
+                jdbc.update("""
+                    UPDATE shipments
+                    SET internal_state     = ?::shipment_internal_state,
+                        number_of_attempts = ?,
+                        raw                = ?::jsonb,
+                        last_synced_at     = now()
+                    WHERE id = ?
+                    """,
+                    mapped.shipmentInternalState(), delivery.numberOfAttempts(),
+                    delivery.raw().toString(), shipment.id());
+                return null;
+            });
+
+            // 10. Move pieces — only if the mapping carries a piece-status change.
+            //     The ledger's state-machine guard is the idempotency backstop:
+            //       • current==target  → fast skip, no DB write.
+            //       • StateConflictException(actual==target) → concurrent worker already applied, no-op.
+            //       • StateConflictException(actual!=target) → unexpected state, log + skip.
+            //       • IllegalTransitionException → no legal path to target from current, log + skip.
+            String targetDb = mapped.pieceStatusAfter();
+            if (targetDb != null) {
+                PieceStatus targetStatus = PieceStatus.fromDb(targetDb);
+                String metaJson = String.format(
+                    "{\"provider_state\":%d,\"order_type\":\"%s\",\"attempts\":%d}",
+                    delivery.stateCode(), delivery.type(), delivery.numberOfAttempts());
+
+                List<PieceRow> pieces = tx.execute(s -> jdbc.query("""
+                    SELECT p.id, p.status::text AS status
+                    FROM pieces p
+                    JOIN allocations a  ON a.piece_id  = p.id
+                    JOIN order_items oi ON oi.id        = a.order_item_id
+                    WHERE oi.order_id = ?
+                      AND a.status IN ('active', 'packed')
+                    """,
+                    (rs, i) -> new PieceRow(rs.getString("id"), rs.getString("status")),
+                    shipment.orderId()));
+
+                for (PieceRow pr : pieces) {
+                    PieceStatus current = PieceStatus.fromDb(pr.status());
+
+                    if (current == targetStatus) {
+                        // Already at target — idempotent no-op, no DB write.
+                        log.debug("Piece {} already at {}, webhook {} — skipping",
+                            pr.id(), targetStatus, webhookEventId);
+                        continue;
+                    }
+
+                    TransitionContext ctx = new TransitionContext(
+                        shipment.orderId(), shipment.id(), null, shipment.orderId(), metaJson);
+
+                    try {
+                        ledger.transition(pr.id(), current, targetStatus, "courier_update", null, ctx);
+                        log.debug("Piece {} {} → {} via webhook {}",
+                            pr.id(), current, targetStatus, webhookEventId);
+                    } catch (StateConflictException e) {
+                        if (e.getActual() == targetStatus) {
+                            // Concurrent duplicate already applied this transition.
+                            log.debug("Piece {} already at {} (concurrent), webhook {} — no-op",
+                                pr.id(), targetStatus, webhookEventId);
+                        } else {
+                            log.warn("Piece {} in unexpected state {} for target {}, webhook {} — skipping",
+                                pr.id(), e.getActual(), targetStatus, webhookEventId);
+                        }
+                    } catch (IllegalTransitionException e) {
+                        // Piece has no legal path to target from its current state.
+                        // This is expected for pieces already past the target state (e.g.
+                        // a stale 'with_courier' event arriving after 'delivered').
+                        log.warn("Illegal transition {} → {} for piece {}, webhook {} — skipping",
+                            current, targetStatus, pr.id(), webhookEventId);
+                    }
+                }
+            }
+
+            // 11. Mark processed + claim external_event_id AFTER all state is applied.
+            //     A crash before this step leaves the event 'pending' → retry-safe.
             try {
                 tx.execute(s -> {
                     jdbc.update(
@@ -171,8 +277,8 @@ public class BostaWebhookJob {
                     return null;
                 });
             } catch (DuplicateKeyException e) {
-                // Concurrent worker claimed the same key first — mark this row as duplicate
-                log.debug("Concurrent duplicate for webhook event {} — already processed", webhookEventId);
+                // Concurrent worker claimed the same idemKey first.
+                log.debug("Concurrent duplicate for webhook event {} — marking processed", webhookEventId);
                 tx.execute(s -> {
                     jdbc.update(
                         "UPDATE webhook_events " +
@@ -182,6 +288,24 @@ public class BostaWebhookJob {
                     return null;
                 });
             }
+        });
+    }
+
+    // ---- helpers -----------------------------------------------------------
+
+    private void recordUnlinked(UUID tenantId, String trackingNumber,
+                                 BostaDelivery delivery, long webhookEventId) {
+        tx.execute(s -> {
+            jdbc.update("""
+                INSERT INTO unlinked_bosta_deliveries
+                    (tenant_id, tracking_number, business_reference,
+                     bosta_state_code, bosta_order_type, raw, webhook_event_id)
+                VALUES (?, ?, ?, ?, ?, ?::jsonb, ?)
+                """,
+                tenantId, trackingNumber, delivery.businessReference(),
+                delivery.stateCode(), delivery.type(), delivery.raw().toString(),
+                webhookEventId);
+            return null;
         });
     }
 

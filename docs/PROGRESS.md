@@ -4,7 +4,21 @@
 
 ## Current state
 
-Day 5 complete as of 2026-06-14. All 60 integration tests pass (BUILD SUCCESS).
+Day 6 complete as of 2026-06-14. All 66 integration tests pass (BUILD SUCCESS).
+
+**Day 6 — Courier state → custody ledger wiring:**
+
+*Scope: Mode B only — no delivery creation, no pickup API.*
+
+- **V6 migration**: new `unlinked_bosta_deliveries` table. Records Bosta deliveries received via webhook before the matching shipment row exists (Mode-B plugin may create the delivery before ingestion/matching). RLS-isolated (`tenant_id` + NULLIF policy). Partial index on `(tenant_id, tracking_number) WHERE resolved = false` for the operator screen (FR-4.4). No explicit GRANT needed — V1 ALTER DEFAULT PRIVILEGES covers it.
+- **`BostaWebhookJob` fully wired** (was stub at end of Day 5):
+  - Step 8: shipment lookup by `tracking_number`. If no match → `recordUnlinked()` inserts into `unlinked_bosta_deliveries`, webhook marked `processed` with note (expected Mode-B case, not an error).
+  - Step 9: `UPDATE shipments SET internal_state, number_of_attempts, raw, last_synced_at` from the fetched Bosta state.
+  - Step 10: piece transitions via `InventoryLedger.transition("courier_update")`. Queries pieces via `JOIN allocations WHERE a.status IN ('active','packed')`. Three idempotency paths: `current==target` fast skip; `StateConflictException(actual==target)` concurrent duplicate no-op; `StateConflictException(actual!=target)` log+skip; `IllegalTransitionException` log+skip. Step 11 `DuplicateKeyException` handles concurrent workers claiming the same idemKey.
+  - `recordUnlinked()` helper inserts into `unlinked_bosta_deliveries` with raw Bosta payload.
+- **`BostaDay5Test.cleanUp()`** patched to delete from `unlinked_bosta_deliveries` before `webhook_events` (Day 6 job now inserts there for unlinked tracking numbers in test scenarios, and the FK would block cleanup otherwise).
+- **`MigrationSmokeTest`** updated: count 5→6, `unlinked_bosta_deliveries` added to `TENANT_SCOPED_TABLES`.
+- **`BostaDay6Test`**: 6 new tests covering the full wiring — state 45 moves all pieces to `delivered` with one `courier_update` event each; redelivery hits dedup check, no duplicate transitions; unlinked tracking_number recorded + processed; unknown state code → `failed` + pieces untouched; state 41 SEND → no piece transition, shipment to `with_courier`; state 41 RTO → pieces to `return_in_transit`, shipment to `returning`.
 
 **Day 5 — Background jobs + Bosta webhook ingestion:**
 
@@ -58,10 +72,11 @@ Day 5 complete as of 2026-06-14. All 60 integration tests pass (BUILD SUCCESS).
 
 ## Next up
 
-Day 6: Link shipments to tracking_number + wire BostaWebhookJob to InventoryLedger.
-- Link `webhook_events` to `shipments` via `tracking_number`; call `InventoryLedger.transition()` on courier state changes (ledger state machine is the idempotency backstop)
-- Mode A delivery creation and pickup creation are deferred — Mode B only for launch
-- Day 5 commit: see `git log`
+Day 7: Orders list + detail (read-only) + catalog list. Demo: pilot's live store in the UI.
+- Read-only order list endpoint: paginated, filterable by status; order detail with line items
+- Catalog list: products + variants with piece counts by status
+- These are the last Week-1 items per the four-week plan; demo against live Shopify dev store
+- Day 6 commit: see `git log`
 
 **Human tasks remaining:**
 - Open Bosta whitelisting/staging ticket (static egress IP) — needed for webhook delivery + API calls
