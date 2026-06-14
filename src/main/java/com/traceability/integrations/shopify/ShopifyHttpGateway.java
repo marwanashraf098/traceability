@@ -67,10 +67,6 @@ class ShopifyHttpGateway implements ShopifyGateway {
                 edges {
                   node {
                     id name createdAt
-                    customer { displayName phone }
-                    shippingAddress {
-                      address1 address2 city province country zip phone
-                    }
                     lineItems(first: 100) {
                       edges {
                         node {
@@ -232,12 +228,12 @@ class ShopifyHttpGateway implements ShopifyGateway {
         for (JsonNode edge : conn.path("edges")) {
             JsonNode node = edge.path("node");
 
-            // Customer phone: prefer shippingAddress.phone (courier-facing),
-            // fall back to customer.phone (account phone).
-            String phone = nullableText(node.path("shippingAddress"), "phone");
-            if (phone == null) phone = nullableText(node.path("customer"), "phone");
-
-            String customerName = node.path("customer").path("displayName").asText(null);
+            // shippingAddress requires Protected Customer Data access (Shopify Partner Dashboard →
+            // App setup → Protected customer data). Set null until token is regenerated with PII scope;
+            // the raw column preserves the full Shopify response for later backfill.
+            String phone = null;
+            String customerName = null;
+            JsonNode shippingAddr = null;
 
             String priceStr = node.path("currentTotalPriceSet").path("shopMoney").path("amount").asText(null);
             BigDecimal totalPrice = priceStr != null ? new BigDecimal(priceStr) : BigDecimal.ZERO;
@@ -252,7 +248,6 @@ class ShopifyHttpGateway implements ShopifyGateway {
                 lines.add(new LineItem(ln.path("id").asText(), ln.path("quantity").asInt(1), variantGid));
             }
 
-            JsonNode shippingAddr = node.path("shippingAddress").isMissingNode() ? null : node.path("shippingAddress");
             Instant createdAt = Instant.parse(node.path("createdAt").asText());
 
             out.add(new Order(
