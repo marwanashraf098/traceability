@@ -67,13 +67,22 @@
             <version>1.78.1</version>
         </dependency>
 
-        <!-- Resilience4j retry for transient Shopify API failures (timeouts, 5xx).
+        <!-- Resilience4j retry for transient Shopify/Bosta API failures (timeouts, 5xx).
              THROTTLED backoff is handled manually inside ShopifyHttpGateway because
              the wait time is dynamic (computed from Shopify's throttle status). -->
         <dependency>
             <groupId>io.github.resilience4j</groupId>
             <artifactId>resilience4j-retry</artifactId>
             <version>2.2.0</version>
+        </dependency>
+
+        <!-- JobRunr: background job scheduling and processing.
+             StorageProvider uses the Flyway (owner) datasource so it can CREATE TABLE.
+             Background job server disabled in tests via application.properties. -->
+        <dependency>
+            <groupId>org.jobrunr</groupId>
+            <artifactId>jobrunr-spring-boot-3-starter</artifactId>
+            <version>7.3.0</version>
         </dependency>
 
         <!-- Test -->

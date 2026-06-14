@@ -1,47 +1,88 @@
 package com.traceability.integrations.shopify;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.traceability.identity.CustomUserDetails;
+import org.jobrunr.scheduling.JobScheduler;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.server.ResponseStatusException;
+
+import java.util.UUID;
 
 @RestController
 @RequestMapping("/api/v1/shopify")
 public class ShopifyController {
 
     private final ShopifySyncService syncService;
+    private final ShopifyImportJob   importJob;
+    private final JobScheduler       jobScheduler;
+    private final JdbcTemplate       jdbc;
+    private final ObjectMapper       mapper;
+    private final TransactionTemplate tx;
 
-    public ShopifyController(ShopifySyncService syncService) {
-        this.syncService = syncService;
+    public ShopifyController(ShopifySyncService syncService,
+                              ShopifyImportJob importJob,
+                              JobScheduler jobScheduler,
+                              JdbcTemplate jdbc,
+                              ObjectMapper mapper,
+                              PlatformTransactionManager txm) {
+        this.syncService   = syncService;
+        this.importJob     = importJob;
+        this.jobScheduler  = jobScheduler;
+        this.jdbc          = jdbc;
+        this.mapper        = mapper;
+        this.tx            = new TransactionTemplate(txm);
     }
 
     public record ConnectRequest(String shopDomain, String adminToken) {}
+    public record ConnectResponse(String storeId, String importStatus) {}
+    public record StoreStatusResponse(String storeId, String importStatus, Object importSummary) {}
 
-    public record ConnectResponse(
-            String storeId,
-            String shopName,
-            int productsImported,
-            int variantsImported,
-            int ordersImported,
-            int flaggedOrders) {}
-
+    /** Validates credentials + enqueues background import. Returns 202 immediately. */
     @PostMapping("/connect")
-    @ResponseStatus(HttpStatus.CREATED)
     @PreAuthorize("hasRole('OWNER')")
-    public ConnectResponse connect(
+    public ResponseEntity<ConnectResponse> connect(
             @RequestBody ConnectRequest req,
             @AuthenticationPrincipal CustomUserDetails principal) {
 
         ShopifySyncService.ConnectResult result =
-                syncService.connectAndImport(principal.tenantId(), req.shopDomain(), req.adminToken());
+            syncService.connect(principal.tenantId(), req.shopDomain(), req.adminToken());
 
-        return new ConnectResponse(
-                result.storeId().toString(),
-                result.shopName(),
-                result.importResult().products(),
-                result.importResult().variants(),
-                result.importResult().orders(),
-                result.importResult().flaggedOrders());
+        UUID storeId  = result.storeId();
+        UUID tenantId = principal.tenantId();
+        jobScheduler.enqueue(() -> importJob.run(storeId, tenantId));
+
+        return ResponseEntity.accepted()
+            .body(new ConnectResponse(storeId.toString(), "pending"));
+    }
+
+    /** Returns the current import status for a store (owner or manager). */
+    @GetMapping("/stores/{storeId}/status")
+    @PreAuthorize("hasAnyRole('OWNER', 'MANAGER')")
+    public StoreStatusResponse storeStatus(
+            @PathVariable UUID storeId,
+            @AuthenticationPrincipal CustomUserDetails principal) {
+
+        return tx.execute(s -> jdbc.query(
+            "SELECT id, import_status, import_summary FROM stores WHERE id = ?",
+            rs -> {
+                if (!rs.next()) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Store not found");
+                String summaryJson = rs.getString("import_summary");
+                Object summary = null;
+                if (summaryJson != null) {
+                    try { summary = mapper.readValue(summaryJson, Object.class); }
+                    catch (Exception ignored) { summary = summaryJson; }
+                }
+                return new StoreStatusResponse(
+                    rs.getObject("id", UUID.class).toString(),
+                    rs.getString("import_status"),
+                    summary);
+            }, storeId));
     }
 }

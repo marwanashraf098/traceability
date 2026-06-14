@@ -60,7 +60,9 @@ public class SecurityConfig {
                     "/api/v1/auth/signup",
                     "/api/v1/auth/login",
                     "/api/v1/auth/refresh",
-                    "/api/v1/health"
+                    "/api/v1/health",
+                    // Webhook receivers: authenticated by secret header, not JWT
+                    "/api/v1/webhooks/bosta"
                 ).permitAll()
                 .anyRequest().authenticated())
             .addFilterBefore(jwtFilter,   UsernamePasswordAuthenticationFilter.class)

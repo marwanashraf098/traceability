@@ -40,12 +40,12 @@ public class ShopifySyncService {
     // ---- SQL ------------------------------------------------------------
 
     private static final String UPSERT_STORE = """
-            INSERT INTO stores (tenant_id, shop_domain, platform, access_token_encrypted, status, last_sync_at)
-            VALUES (?, ?, 'shopify', ?, 'connected', now())
+            INSERT INTO stores (tenant_id, shop_domain, platform, access_token_encrypted, status, import_status)
+            VALUES (?, ?, 'shopify', ?, 'connected', 'pending')
             ON CONFLICT (shop_domain) DO UPDATE SET
                 access_token_encrypted = EXCLUDED.access_token_encrypted,
                 status                 = 'connected',
-                last_sync_at           = now()
+                import_status          = 'pending'
             WHERE stores.tenant_id = EXCLUDED.tenant_id
             RETURNING id
             """;
@@ -138,14 +138,13 @@ public class ShopifySyncService {
     // ---- public API -----------------------------------------------------
 
     public record ImportResult(int products, int variants, int orders, int flaggedOrders) {}
-    public record ConnectResult(UUID storeId, String shopName, ImportResult importResult) {}
+    public record ConnectResult(UUID storeId, String shopName) {}
 
     /**
-     * Validates credentials, stores the encrypted token, then imports the full
-     * catalog and last 90 days of orders synchronously.
-     * (Day 5 will move the import to a background JobRunr job.)
+     * Validates credentials, stores the encrypted token, sets import_status='pending'.
+     * Returns immediately — the actual import runs as a background JobRunr job.
      */
-    public ConnectResult connectAndImport(UUID tenantId, String shopDomain, String rawToken) {
+    public ConnectResult connect(UUID tenantId, String shopDomain, String rawToken) {
         String shopName = shopifyGateway.validateShop(shopDomain, rawToken);
         String encrypted = encryptionService.encrypt(rawToken);
 
@@ -159,11 +158,10 @@ public class ShopifySyncService {
             return id;
         });
 
-        ImportResult result = runImport(storeId, tenantId, shopDomain, rawToken);
-        return new ConnectResult(storeId, shopName, result);
+        return new ConnectResult(storeId, shopName);
     }
 
-    /** Re-runs catalog + order import for an already-connected store. */
+    /** Runs catalog + order import for an already-connected store. Called by ShopifyImportJob. */
     public ImportResult runImport(UUID storeId, UUID tenantId, String shopDomain, String rawToken) {
         int[] catalogCounts = importCatalog(storeId, tenantId, shopDomain, rawToken);
         int[] orderCounts   = importOrders(storeId, tenantId, shopDomain, rawToken, 90);

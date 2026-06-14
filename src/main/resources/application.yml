@@ -42,6 +42,20 @@ shopify:
   # Pin the API version — never use "latest" in code paths.
   api-version: ${SHOPIFY_API_VERSION:2026-04}
 
+bosta:
+  # Base URL: prod=https://app.bosta.co, staging=https://stg-app.bosta.co
+  base-url: ${BOSTA_BASE_URL:https://app.bosta.co}
+  api-version: v2
+
+org:
+  jobrunr:
+    background-job-server:
+      enabled: true
+    # skip-create=true: JobRunr tables are created by the JobRunrConfig bean
+    # using the Flyway (owner) datasource, not by the runtime app_user.
+    database:
+      skip-create: true
+
 logging:
   level:
     com.traceability: DEBUG

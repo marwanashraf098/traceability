@@ -20,7 +20,7 @@ One line per requirement · [M] Must / [S] Should / [C] Could · use as the buil
 
 ## FR-3 Shopify Integration (order source — always)
 - [x] 3.1 [M] Connect via custom-app credentials + validation ([S] public OAuth app track)
-- [x] 3.2 [M] Initial import: products/variants + 90-day orders, resumable, idempotent, progress UI
+- [x] 3.2 [M] Initial import: products/variants + 90-day orders, resumable, idempotent, progress UI [background job + status endpoint done Day 5]
 - [ ] 3.3 [M] Webhooks orders create/updated/cancelled + products create/update: HMAC, raw persist, async, idempotent
 - [ ] 3.4 [M] 15-min reconciliation poll (missed webhook ≠ lost order)
 - [ ] 3.5 [M] Cancel pre-pack → auto-release pieces; cancel post-pack → exception + guided unpack
@@ -145,11 +145,11 @@ One line per requirement · [M] Must / [S] Should / [C] Could · use as the buil
 
 ## NFR (verifiable bars)
 - [ ] N1 Scan validation p95 ≤ 300ms · piece page ≤ 1s · 1k receive ≤ 10s · 500-label PDF ≤ 15s · lists ≤ 1.5s @100k pieces · import 5k products+10k orders ≤ 30min
-- [ ] N2 **[x] Event+state in one ACID tx (zero custody loss)** · **[x] ledger INSERT-only at DB grants** · webhooks raw-persisted, replayable, idempotent · graceful integration outages · 99.5% availability · daily backups + PITR + tested restore
+- [ ] N2 **[x] Event+state in one ACID tx (zero custody loss)** · **[x] ledger INSERT-only at DB grants** · **[x] webhooks raw-persisted, replayable, idempotent (Bosta Day 5)** · graceful integration outages · 99.5% availability · daily backups + PITR + tested restore
 - [ ] N3 **[x] RLS tenant isolation w/ automated cross-tenant test** · credentials encrypted, never logged · signature/secret-verified webhooks · **[x] argon2/bcrypt + lockouts** · worker PII minimization · Egypt PDPL posture · logged impersonation
 - [ ] N4 Chrome/Safari Android 10+/iOS 15+ · PWA installable · HID keyboard-wedge scanners + camera fallback · 203dpi thermal via OS dialog · 40×25/50×25 stock
 - [ ] N5 Sentry + structured logs w/ correlation IDs · dead-letter retry UI · per-tenant feature flags · resettable demo tenant
-- [ ] N6 **[x] Tests: state machine** · **[x] scan race** · webhook idempotency · **[x] RLS** · Bosta mapping · staging wired to Shopify dev store + Bosta staging
+- [ ] N6 **[x] Tests: state machine** · **[x] scan race** · **[x] webhook idempotency (Bosta Day 5)** · **[x] RLS** · **[x] Bosta mapping (Day 5)** · staging wired to Shopify dev store + Bosta staging
 - [ ] OPS Bosta IP whitelisting ticket (static IP) · staging access (stg-app.bosta.co)
 
 ## Go-live acceptance (30 days, both pilots)
