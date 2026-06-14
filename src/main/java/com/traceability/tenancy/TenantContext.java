@@ -25,6 +25,13 @@ public final class TenantContext {
         return HOLDER.get();
     }
 
+    /** Returns the current tenant or throws if no context is set. */
+    public static UUID require() {
+        UUID id = HOLDER.get();
+        if (id == null) throw new IllegalStateException("No tenant context set on this thread");
+        return id;
+    }
+
     public static void clear() {
         HOLDER.remove();
     }

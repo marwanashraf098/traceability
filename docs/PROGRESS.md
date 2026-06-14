@@ -4,7 +4,59 @@
 
 ## Current state
 
-Day 7 complete as of 2026-06-15. All 74 integration tests pass (BUILD SUCCESS).
+Day 8 complete as of 2026-06-15. All 85 integration tests pass (BUILD SUCCESS).
+
+**Day 8 — Inventory receiving + piece generation + labels (FR-6.1–6.5, FR-6.8):**
+
+*Migration V7 (`V7__receiving_labels.sql`):*
+- `ALTER TABLE receipts ADD status text DEFAULT 'open'` + `finalized_at timestamptz`
+- `ALTER TABLE tenants ADD label_width_mm`, `label_height_mm` (per-tenant label size config), `worker_receiving_enabled boolean DEFAULT false`
+- `CREATE TABLE receipt_lines` (staged lines before finalization; RLS + `tenant_isolation` policy)
+- `CREATE TABLE label_reprints` (audit log for every print/reprint; RLS + `tenant_isolation` policy; INSERT-only semantics for `app_user`)
+
+*Backend:*
+- **`InventoryLedger.batchReceive(List<ReceiveSpec>, UUID actorUserId)`** — the second and only other writer of `piece_events`. Two multi-row INSERTs in one `@Transactional` boundary: Round-trip 1: `INSERT INTO pieces VALUES (p1),(p2),...,(pN)`; Round-trip 2: `INSERT INTO piece_events VALUES (e1),(e2),...,(eN)` with `from_status=NULL`, `to_status='available'`, `event_type='received'`, `actor_user_id` mandatory. All-or-nothing: if any barcode UNIQUE violation or FK fails, both INSERTs roll back together (no partial session). Performance: 1,000 pieces in ~2s (Testcontainers), well within the 10s NFR bar.
+- **`ReceivingService`** — `createSession`, `addLine`, `updateLine`, `deleteLine`, `finalize`, `getSession`, `listSessions`, `searchVariants` (ILIKE search by SKU or title). `finalize()` fetches lines → builds one `ReceiveSpec` per unit → calls `ledger.batchReceive()` → marks session `finalized`.
+- **`ReceivingController`** (`/api/v1/receiving`):
+  - `POST /sessions` — create open session (OWNER/MANAGER)
+  - `GET /sessions`, `GET /sessions/{id}` — list + detail with lines
+  - `POST /sessions/{id}/lines`, `PUT /sessions/{id}/lines/{lineId}`, `DELETE /sessions/{id}/lines/{lineId}` — line management
+  - `POST /sessions/{id}/finalize` — generate pieces + events
+  - `GET /sessions/{id}/labels` — PDF download (application/pdf)
+  - `POST /sessions/{id}/reprint` — log reprint + return PDF
+  - `GET /variants/search?q=` — autocomplete search
+- **`LabelService`** (PDFBox 3.0.3 + ZXing 3.5.3 + ICU4J 74.2):
+  - 50×25mm page (configurable via `widthMm`/`heightMm` params — default per FR-6.4)
+  - Code 128 barcode at 203dpi (ZXing `Code128Writer`)
+  - Two-font approach: Helvetica (built-in PDF Type1) for piece ID + SKU (always ASCII); NotoSansArabic (embedded TTF subset) for variant names that contain Arabic
+  - `shapeForDisplay(text)`: ICU4J `ArabicShaping.LETTERS_SHAPE` → contextual letter forms; ICU4J `Bidi.RTL` → correct visual left-to-right order for PDF stream. Latin text passes through unchanged.
+  - `reprint()` logs to `label_reprints` (tenant_id, receipt_id, reprinted_by, piece_count, note)
+- **Fonts**: `NotoSansArabic-Regular.ttf` (177KB) embedded in `src/main/resources/fonts/` — subsetting active (only used glyphs embedded, ~4KB subset for a short Arabic variant name)
+
+*Tests (`Day8Test` — 11 tests):*
+- **(a)** `finalize()` → exactly N pieces + N received events (from_status=NULL, to_status=available); session marked finalized
+- **(b)** 1,000 pieces in ≤10 seconds (actual: ~2s on Testcontainers Postgres)
+- **(c)** All 50 piece barcodes unique, all prefixed 'PC-'
+- **(d)** All pieces status='available' at session location
+- **(e)** Batch rolls back entirely on duplicate barcode (all-or-nothing invariant)
+- **(f)** Every received event carries non-null actor_user_id = receiving user
+- **(g)** Label PDF generated (valid %PDF header, >500 bytes)
+- **(h)** Reprint logged in `label_reprints` (2 reprints → 2 rows, correct piece_count + reprinted_by)
+- **(i)** RLS isolation: tenant B sees 0 sessions + 0 pieces from tenant A via app_user datasource (no BYPASSRLS)
+- **(i2)** Arabic variant label generates PDF with NotoSansArabic subset embedded + renders to PNG at 203dpi for visual verification
+- **(j)** ICU4J Arabic shaping produces contextual letter forms (shaped ≠ isolated, same length)
+
+*Frontend:*
+- `Receiving.tsx` page: session list, create-session form (location, PO ref, supplier, note), session detail view (add-line with SKU/title autocomplete + quantity, remove line, running total, finalize button with confirm dialog, Print Labels button → PDF in new tab, Reprint → fetch + open PDF).
+- AR/EN translations added (`receiving.*` keys in both locale files).
+- `Layout.tsx` nav: "Receiving" / "الاستلام" link added.
+- `App.tsx` route: `/receiving` wired.
+
+*CLAUDE.md updated:* batchReceive architectural note added to Environment notes — two writers of piece_events, do not refactor batchReceive to call transition().
+
+*MigrationSmokeTest updated:* V7 count (6→7), `receipt_lines` + `label_reprints` added to `TENANT_SCOPED_TABLES`.
+
+**Visual proof of Arabic rendering:** `/tmp/day8-label-arabic-preview.png` (rendered at 203dpi via PDFBox `PDFRenderer`) shows connected Arabic glyphs for 'مسحوق بروتين فانيلا', no boxes or disconnected letters.
 
 **Day 7 — Read-only UI endpoints + React frontend scaffold:**
 
@@ -99,11 +151,14 @@ Day 7 complete as of 2026-06-15. All 74 integration tests pass (BUILD SUCCESS).
 
 ## Next up
 
-Day 8–9: Receiving sessions + piece generation.
-- Receiving session: location, supplier, reference, finalize → bulk ULID piece generation (batched INSERT, 1k pieces ≤ 10s), `received` events per piece.
-- Receiving session API endpoints (OWNER/MANAGER): create session, add lines, finalize.
-- Frontend receiving screen (WORKER): scan SKU/variant, enter qty, finalize → pieces generated.
-- Day 7 commit: see `git log`
+Day 9: Picking queue + scan validation (FR-8.1–8.6).
+- Pick queue: oldest-confirmed orders, lock to worker on open, Manager release.
+- Pick screen: scan piece barcode → validate (Available→Reserved + allocation + event) ≤300ms; full-screen green/red feedback.
+- Rejection codes: PIECE_NOT_FOUND, WRONG_VARIANT, ALREADY_RESERVED, WRONG_STATUS, DUPLICATE_SCAN.
+- Un-scan: release mis-picked piece (Reserved→Available).
+- Pick completes when all lines fully scanned.
+- Race guard: two concurrent scans of the same piece → exactly one winner (existing `transition()` gate).
+- Day 8 commit: see `git log`
 
 **Shopify OAuth design is owned by a separate design thread.** The production Shopify connect path = public OAuth app (decision recorded in "Decisions made" below). The detailed OAuth flow, scopes, callback URL, and state-parameter handling are being designed in a separate chat/thread. Do not re-derive or modify the OAuth design from this build thread. When that design is finalized it will be handed back here as a spec for implementation. The current custom-app endpoint (`POST /api/v1/shopify/connect` with `adminToken`) is DEV-ONLY and stays as-is until the spec arrives.
 

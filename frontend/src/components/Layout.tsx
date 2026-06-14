@@ -31,8 +31,9 @@ export default function Layout({ children }: { children: React.ReactNode }) {
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-14 flex items-center justify-between">
           <div className="flex items-center gap-6">
             <span className="text-white font-semibold text-lg tracking-tight">Traceability</span>
-            <NavLink to="/orders"  className={linkClass}>{t('nav.orders')}</NavLink>
-            <NavLink to="/catalog" className={linkClass}>{t('nav.catalog')}</NavLink>
+            <NavLink to="/orders"    className={linkClass}>{t('nav.orders')}</NavLink>
+            <NavLink to="/catalog"   className={linkClass}>{t('nav.catalog')}</NavLink>
+            <NavLink to="/receiving" className={linkClass}>{t('nav.receiving')}</NavLink>
           </div>
           <div className="flex items-center gap-3">
             <button

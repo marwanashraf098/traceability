@@ -256,6 +256,10 @@ At the **end** of every session (without being asked):
 
 ## Environment notes
 
+**Two writers of piece_events — both in `InventoryLedger`, never anywhere else:**
+- `transition()` — gateway for state changes on **existing** pieces (UPDATE race-guard + diagnostic SELECT + INSERT event; 3 round-trips per piece).
+- `batchReceive()` — piece **CREATION** only: two multi-row INSERTs in one `@Transactional` boundary. `from_status=NULL→available`, one `received` event per piece, `actor_user_id` mandatory. This is NOT a violation of "everything goes through transition()" — piece creation has no prior state to race on. **Do NOT refactor `batchReceive()` to call `transition()`** — that breaks the NULL→available path and destroys the 1,000-piece ≤10s performance guarantee.
+
 **TenantContext is a ThreadLocal**: it does NOT propagate across `@Async` methods, executor-submitted tasks, parallel streams, or `CompletableFuture` chains. Any background work that reads or writes tenant data must be wrapped in `TenantContext.runAs(tenantId, ...)` so the context is explicitly set and cleared. Forgetting this causes silent zero-row results under RLS — not an exception, just missing data.
 
 **Docker Desktop Mac M3 + Testcontainers**: `DockerDesktopMacStrategy` in `src/test/java/com/traceability/` forces docker-java API v1.41 — do not delete it; Docker Desktop rejects the default v1.24 negotiation with HTTP 400 and the fix requires overriding `test()`, `getClient()`, AND `getDockerClient()` on the strategy class.

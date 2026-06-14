@@ -2,6 +2,7 @@
   "nav": {
     "orders": "Orders",
     "catalog": "Catalog",
+    "receiving": "Receiving",
     "logout": "Logout"
   },
   "login": {
@@ -70,9 +71,46 @@
       "total": "Total"
     }
   },
+  "receiving": {
+    "title": "Receiving",
+    "new": "New Session",
+    "newTitle": "New Receiving Session",
+    "empty": "No receiving sessions yet",
+    "back": "Back to Sessions",
+    "untitled": "Untitled Session",
+    "create": "Create Session",
+    "location": "Location",
+    "reference": "Reference (PO #)",
+    "supplier": "Supplier name",
+    "note": "Note",
+    "addLine": "Add item",
+    "searchVariant": "Search by SKU or product name…",
+    "add": "Add",
+    "noLines": "No items added yet",
+    "total": "Total units",
+    "finalize": "Finalize & Generate Pieces",
+    "finalizeConfirm": "This will generate one barcode per unit and lock the session. Continue?",
+    "finalizeSuccess": "Created {{count}} pieces with barcodes.",
+    "printLabels": "Print Labels",
+    "reprint": "Reprint",
+    "piecesCreated": "{{count}} pieces created",
+    "finalizedAt": "Finalized at {{date}}",
+    "col": {
+      "ref": "Reference",
+      "location": "Location",
+      "units": "Units",
+      "pieces": "Pieces",
+      "status": "Status",
+      "date": "Created",
+      "product": "Product / Variant",
+      "sku": "SKU",
+      "qty": "Qty"
+    }
+  },
   "common": {
     "loading": "Loading...",
     "error": "Something went wrong",
-    "na": "—"
+    "na": "—",
+    "cancel": "Cancel"
   }
 }

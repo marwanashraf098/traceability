@@ -4,7 +4,7 @@ One line per requirement · [M] Must / [S] Should / [C] Could · use as the buil
 ## FR-1 Tenant & Account
 - [ ] 1.1 [M] Tenant signup: business name, owner, email, phone, password (verification [S])
 - [ ] 1.2 [M] Guided onboarding checklist: connect Shopify → connect Bosta → import → test label → first receiving
-- [ ] 1.3 [M] Auto-create default "Main Warehouse" location per tenant
+- [x] 1.3 [M] Auto-create default "Main Warehouse" location per tenant
 - [ ] 1.4 [M] Tenant settings: name, pickup address, label size, language AR/EN, timezone
 - [ ] 1.5 [S] Plan display + manual invoicing status (no online payments)
 - [ ] 1.6 [M] Internal super-admin: list/suspend tenants, logged impersonation
@@ -47,14 +47,14 @@ One line per requirement · [M] Must / [S] Should / [C] Could · use as the buil
 - [ ] 5.4 [C] Low-stock indicator per variant
 
 ## FR-6 Receiving & Labeling
-- [ ] 6.1 [M] Receiving session: location, supplier, reference, note
-- [ ] 6.2 [M] Lines: variant × qty; lookup by SKU/title ([S] scan manufacturer UPC); editable until finalize
-- [ ] 6.3 [M] Finalize → ULID piece per unit, status Available, received event; 1,000 pieces ≤ 10s
-- [ ] 6.4 [M] Label PDF: Code 128 + piece ID + SKU + 24-char variant name; 40×25/50×25; Arabic fonts; 203dpi thermal via OS print
-- [ ] 6.5 [M] Reprint any label/session anytime (logged)
+- [x] 6.1 [M] Receiving session: location, supplier, reference, note
+- [x] 6.2 [M] Lines: variant × qty; lookup by SKU/title ([S] scan manufacturer UPC); editable until finalize
+- [x] 6.3 [M] Finalize → ULID piece per unit, status Available, received event; 1,000 pieces ≤ 10s
+- [x] 6.4 [M] Label PDF: Code 128 + piece ID + SKU + 24-char variant name; 40×25/50×25; Arabic fonts; 203dpi thermal via OS print
+- [x] 6.5 [M] Reprint any label/session anytime (logged)
 - [ ] 6.6 [M] Speed budget: 200-piece session ≤ 60s of system interaction
 - [ ] 6.7 [S] Void surplus / append pieces while session untouched (reason: receiving_correction)
-- [ ] 6.8 [M] Barcodes live at finalize — no activation step
+- [x] 6.8 [M] Barcodes live at finalize — no activation step
 
 ## FR-7 Orders & Confirmation
 - [x] 7.1 [M] Pipeline list + filters (incl. Self-Pickup Pending); search by number/name/phone/tracking
