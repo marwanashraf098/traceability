@@ -52,19 +52,15 @@ Day 5 complete as of 2026-06-14. All 60 integration tests pass (BUILD SUCCESS).
 - `ApiExceptionHandler` (`@RestControllerAdvice`): intercepts `ResponseStatusException` BEFORE `ResponseStatusExceptionResolver` can call `response.sendError()`. Without this, `sendError(423)` triggers a Servlet error dispatch to `/error`; Spring Security 6 applies `JwtAuthenticationFilter` (OncePerRequestFilter — doesn't re-run on error dispatches) so the security context is empty, and `.anyRequest().authenticated()` returns 401, overriding the original 423. The `@ControllerAdvice` writes `ResponseEntity` directly — no error dispatch, no Spring Security override.
 - `AuthIntegrationTest`: 6 tests — signup+GUC probe, login, cross-tenant RLS isolation (3 fresh JDBC connections; reusing one connection across ROLLBACK resets the GUC to '' causing a cast error), unauthenticated 401, PIN lockout (5-failure → 423), refresh token rotation.
 
-**What has NEVER happened yet:**
-- Migrations applied to Supabase.
-- App run against Supabase.
-- Hetzner VPS provisioned or deploy pipeline wired.
+**Hetzner VPS not yet provisioned; deploy pipeline not wired.**
 
 ---
 
 ## Next up
 
-Day 6: Bosta connect (Mode B) + link webhook events to shipment state.
-- Link `webhook_events` to `shipments` via `tracking_number`; call `InventoryLedger.transition()` from `BostaWebhookJob` (ledger is already the idempotency backstop)
-- `POST /api/v1/bosta/deliveries` Mode A: create delivery at packing (type 10, COD, address, businessReference)
-- Pickup creation (`POST /api/v1/bosta/pickups`)
+Day 6: Link shipments to tracking_number + wire BostaWebhookJob to InventoryLedger.
+- Link `webhook_events` to `shipments` via `tracking_number`; call `InventoryLedger.transition()` on courier state changes (ledger state machine is the idempotency backstop)
+- Mode A delivery creation and pickup creation are deferred — Mode B only for launch
 - Day 5 commit: see `git log`
 
 **Human tasks remaining:**
