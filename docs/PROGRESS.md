@@ -4,7 +4,63 @@
 
 ## Current state
 
-Day 8 complete + live-tested as of 2026-06-16. All 85 integration tests pass (BUILD SUCCESS).
+Day 9 complete as of 2026-06-16. All 101 integration tests pass (BUILD SUCCESS).
+
+**Day 9 — Scan-driven pick/pack fulfill flow (FR-8 + FR-9 core):**
+
+*Migration V8 (`V8__fulfill_queue.sql`):*
+- `ALTER TABLE orders ADD COLUMN locked_by uuid REFERENCES users(id), locked_at timestamptz`
+- Index `orders_locked_by ON orders (tenant_id, locked_by) WHERE locked_by IS NOT NULL`
+
+*Backend:*
+- **`FulfillService`**:
+  - `getQueue()` — orders with status `new`/`ready_to_pick`, not on hold, oldest-first; includes per-order scan progress (scanned/total units)
+  - `getOrder(orderId)` — order detail with items + allocated pieces per item
+  - `lockOrder()` / `releaseOrder()` — assign order to worker (idempotent for same user); manager can release any
+  - `scan(orderId, barcode, actorUserId)` — the core method:
+    - `@Transactional(isolation = Isolation.READ_COMMITTED)` so transition() joins at the correct isolation level
+    - Validation order: PIECE_NOT_FOUND → DUPLICATE_SCAN → ALREADY_RESERVED → WRONG_VARIANT → capacity check (with lock) → WRONG_STATUS → transition() race catch
+    - **Over-allocation guard**: `SELECT quantity FROM order_items WHERE id = ? FOR UPDATE` acquires a row lock on the order_item, serializing concurrent scans. The allocation count is a SEPARATE SQL statement after the lock — under READ_COMMITTED each statement gets a fresh snapshot, so the second thread re-reads the count AFTER the first thread commits, correctly seeing 1 ≥ 1 → rejected. (A subquery inside the FOR UPDATE would use the statement's start-time snapshot and miss the concurrent INSERT.)
+    - Returns `ScanResult(success, code, pieceId, barcode, variantId, orderItemId, allocatedCount, requiredQuantity, allComplete)`
+  - `unscan(orderId, pieceId, actorUserId)` — transition reserved→available + release allocation
+  - `complete(orderId, actorUserId)` — validates all lines fully scanned; transitions all reserved pieces → packed; marks allocations packed; sets order status → packed
+- **`FulfillController`** (`/api/v1/fulfill`):
+  - `GET /queue` — authenticated (OWNER/MANAGER/WORKER)
+  - `GET /{orderId}` — order with items + allocated pieces
+  - `POST /{orderId}/lock`, `DELETE /{orderId}/lock` — worker lock management
+  - `POST /{orderId}/scan` — returns ScanResult (200 whether accepted or rejected; check `.success`)
+  - `DELETE /{orderId}/scan/{pieceId}` — unscan (204)
+  - `POST /{orderId}/complete` — pack all (200 with `{packedPieces}`)
+
+*Tests (`Day9Test` — 16 tests):*
+- **(a)** Queue shows only `new`/`ready_to_pick` orders, not `packed` or on-hold
+- **(b)** Lock assigns locked_by + locked_at; same user idempotent; different user → 409
+- **(c)** Manager releases any lock; clears locked_by + locked_at
+- **(d)** Scan PIECE_NOT_FOUND for unknown barcode
+- **(e)** Scan success: piece reserved, allocation created, counts correct
+- **(e2)** `allComplete=true` on last scan of a 1-unit order
+- **(f)** Scan DUPLICATE_SCAN: same piece scanned twice to same order
+- **(g)** Scan ALREADY_RESERVED: piece reserved for another order
+- **(h)** Scan WRONG_VARIANT: piece variant not on order
+- **(i)** Scan WRONG_STATUS: damaged piece rejected
+- **(j)** Race — two threads scan same piece: exactly one wins, one ALREADY_RESERVED, exactly one event written
+- **(k)** Over-allocation race — two threads scan two DIFFERENT pieces against a qty=1 line: exactly one allocation (no over-allocation), the SELECT FOR UPDATE + separate COUNT guard proves correct
+- **(l)** Unscan: allocation released → piece back to available, allocation status='released'
+- **(m)** Complete: all reserved→packed, allocations→packed, order→packed; piece_events written for each
+- **(m2)** Complete rejects with 422 when not all items scanned
+- **(n)** Cross-tenant: Tenant B cannot scan Tenant A's piece (PIECE_NOT_FOUND via RLS)
+
+*LabelService bug fix:*
+- `·` (U+00B7, Latin-1 Supplement) is not in NotoSansArabic. When a label's product+variant string contains Arabic, the whole string is rendered with arabicFont, which lacks `·`. Changed separator to ` - ` (ASCII hyphen). This fixed the pre-existing `i2_arabic_variant_label_renders_without_errors` test failure.
+
+*Frontend:*
+- `Fulfill.tsx`: queue view + full-screen pick screen
+  - Queue: list of eligible orders, scan progress bar, lock indicator
+  - Pick screen: auto-focused scan input (HID barcode scanner ready); full-screen green/red flash overlay (`animate-flash` Tailwind keyframe); audio beep (Web Audio API, silent fallback); per-piece unscan button; Complete button shown only when all lines fully scanned
+- AR/EN translations for `fulfill.*` and `nav.fulfill` keys
+- `Layout.tsx` nav: "Pick & Pack" / "التجميع" link added
+- `App.tsx` route: `/fulfill` wired (no Layout wrapper — pick screen is full-screen)
+- `tailwind.config.js`: `flash` keyframe + `animate-flash` class added
 
 **Day 8 — Inventory receiving + piece generation + labels (FR-6.1–6.5, FR-6.8):**
 
@@ -158,14 +214,7 @@ Day 8 complete + live-tested as of 2026-06-16. All 85 integration tests pass (BU
 - `ReceivingService.searchVariants()` filtered on `v.status = 'active'` but `status` lives on `products` not `variants` — SQL error silently returned 0 results; fixed to `p.status = 'active'`
 - Added `dev.sh` convenience script (loads `.env`, kills :8080, runs Maven) to avoid repeated env-var loss between terminal sessions
 
-Day 9: Picking queue + scan validation (FR-8.1–8.6).
-- Pick queue: oldest-confirmed orders, lock to worker on open, Manager release.
-- Pick screen: scan piece barcode → validate (Available→Reserved + allocation + event) ≤300ms; full-screen green/red feedback.
-- Rejection codes: PIECE_NOT_FOUND, WRONG_VARIANT, ALREADY_RESERVED, WRONG_STATUS, DUPLICATE_SCAN.
-- Un-scan: release mis-picked piece (Reserved→Available).
-- Pick completes when all lines fully scanned.
-- Race guard: two concurrent scans of the same piece → exactly one winner (existing `transition()` gate).
-- Day 8 commit: see `git log`
+Day 10: AWB creation + shipment wiring (FR-9 continued: create Bosta shipment, attach to order, advance order to `awaiting_pickup`).
 
 **Shopify OAuth design is owned by a separate design thread.** The production Shopify connect path = public OAuth app (decision recorded in "Decisions made" below). The detailed OAuth flow, scopes, callback URL, and state-parameter handling are being designed in a separate chat/thread. Do not re-derive or modify the OAuth design from this build thread. When that design is finalized it will be handed back here as a spec for implementation. The current custom-app endpoint (`POST /api/v1/shopify/connect` with `adminToken`) is DEV-ONLY and stays as-is until the spec arrives.
 
