@@ -354,9 +354,11 @@ class Day9Test {
 
         CountDownLatch ready    = new CountDownLatch(2);
         CountDownLatch go       = new CountDownLatch(1);
-        AtomicInteger successes = new AtomicInteger();
+        AtomicInteger successes  = new AtomicInteger();
         AtomicInteger rejections = new AtomicInteger();
-        AtomicReference<String> winnerCode = new AtomicReference<>();
+        // Capture the loser's rejection code — must be WRONG_VARIANT (line capacity exhausted),
+        // not ALREADY_RESERVED (piece-level) or an uncaught exception.
+        AtomicReference<String> loserCode = new AtomicReference<>();
 
         // Thread 1 scans piece1, thread 2 scans piece2 — two different pieces, same variant
         Thread t1 = new Thread(() -> {
@@ -365,8 +367,8 @@ class Day9Test {
                 ready.countDown();
                 go.await();
                 FulfillService.ScanResult r = fulfillSvc.scan(orderId, barcode1, actorId);
-                if (r.success()) { successes.incrementAndGet(); winnerCode.set("T1"); }
-                else rejections.incrementAndGet();
+                if (r.success()) successes.incrementAndGet();
+                else { rejections.incrementAndGet(); loserCode.compareAndSet(null, r.code()); }
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
             } finally {
@@ -380,8 +382,8 @@ class Day9Test {
                 ready.countDown();
                 go.await();
                 FulfillService.ScanResult r = fulfillSvc.scan(orderId, barcode2, actorId);
-                if (r.success()) { successes.incrementAndGet(); winnerCode.set("T2"); }
-                else rejections.incrementAndGet();
+                if (r.success()) successes.incrementAndGet();
+                else { rejections.incrementAndGet(); loserCode.compareAndSet(null, r.code()); }
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
             } finally {
@@ -394,14 +396,29 @@ class Day9Test {
         go.countDown();
         t1.join(); t2.join();
 
+        // 1. Thread counts: exactly one winner, exactly one loser (no exception escaped)
         assertThat(successes.get()).as("exactly one scan wins against qty=1 line").isEqualTo(1);
         assertThat(rejections.get()).as("exactly one scan rejected as over-allocation").isEqualTo(1);
 
+        // 2. Rejection code: must be WRONG_VARIANT (the line-capacity guard fired).
+        //    Both pieces are different and available, so ALREADY_RESERVED is wrong here;
+        //    only the capacity check (SELECT FOR UPDATE + count after lock) can produce WRONG_VARIANT.
+        assertThat(loserCode.get())
+            .as("loser must be rejected via line-capacity guard, not piece-level guard")
+            .isEqualTo("WRONG_VARIANT");
+
+        // 3. Database end-state: exactly one active allocation for this order (no over-allocation)
         long totalAlloc = jdbc.queryForObject(
             "SELECT COUNT(*) FROM allocations WHERE status = 'active' " +
             "AND order_item_id IN (SELECT id FROM order_items WHERE order_id = ?)",
             Long.class, orderId);
-        assertThat(totalAlloc).as("exactly one allocation total (no over-allocation)").isEqualTo(1);
+        assertThat(totalAlloc).as("exactly one allocation in DB (no over-allocation)").isEqualTo(1);
+
+        // 4. Both pieces still exist; the loser's piece must remain 'available' (not orphaned)
+        long availableCount = jdbc.queryForObject(
+            "SELECT COUNT(*) FROM pieces WHERE id IN (?, ?) AND status = 'available'",
+            Long.class, piece1, piece2);
+        assertThat(availableCount).as("loser's piece must remain available, not stuck in reserved").isEqualTo(1);
     }
 
     // ── (l) Unscan ────────────────────────────────────────────────────────────
