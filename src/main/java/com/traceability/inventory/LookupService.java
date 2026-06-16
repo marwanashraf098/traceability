@@ -54,7 +54,7 @@ public class LookupService {
                 "       o.id AS order_id, o.number AS order_number, o.status AS order_status, " +
                 "       o.customer_name, o.customer_phone, " +
                 "       s.id AS shipment_id, s.tracking_number, s.internal_state, " +
-                "       r.id AS receipt_id, rl.id AS receipt_location_id, rloc.name AS receipt_location_name " +
+                "       r.id AS receipt_id, rloc.name AS receipt_location_name " +
                 "FROM pieces p " +
                 "JOIN variants v  ON v.id = p.variant_id " +
                 "JOIN products pr ON pr.id = v.product_id " +
@@ -63,7 +63,6 @@ public class LookupService {
                 "LEFT JOIN shipments s   ON s.order_id = o.id " +
                 "LEFT JOIN receipts r    ON r.id = p.receipt_id " +
                 "LEFT JOIN locations rloc ON rloc.id = r.location_id " +
-                "LEFT JOIN receipt_lines rl ON rl.variant_id = v.id AND rl.receipt_id = r.id " +
                 "WHERE p.barcode = ? AND p.tenant_id = ?",
                 barcode, tenantId);
         } catch (EmptyResultDataAccessException e) {
