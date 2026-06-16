@@ -153,3 +153,93 @@ export interface CatalogResponse {
 export function getCatalog() {
   return request<CatalogResponse>('/catalog')
 }
+
+export interface ShopifyStore {
+  id: string
+  shop_domain: string
+  status: string
+  import_status: string
+  last_sync_at: string | null
+}
+
+export function listShopifyStores() {
+  return request<ShopifyStore[]>('/shopify/stores')
+}
+
+export function syncShopifyStore(storeId: string) {
+  return request<void>(`/shopify/stores/${storeId}/sync`, { method: 'POST' })
+}
+
+// ── Lookup (FR-14) ────────────────────────────────────────────────────────────
+
+export interface TimelineEvent {
+  id: number
+  eventType: string
+  phraseKey: string
+  actor: string
+  isSystem: boolean
+  fromStatus: string | null
+  toStatus: string | null
+  orderNumber: string | null
+  orderId: string | null
+  trackingNumber: string | null
+  locationName: string | null
+  metadata: unknown
+  occurredAt: string
+}
+
+export interface LookupVariant {
+  id: string
+  title: string
+  sku: string | null
+  productTitle: string
+}
+
+export interface LookupOrder {
+  id: string
+  number: string | null
+  status: string
+  customerName?: string | null
+  customerPhone?: string | null
+}
+
+export interface LookupShipment {
+  id: string
+  trackingNumber: string
+  internalState: string
+}
+
+export interface LookupSession {
+  id: string
+  locationName: string | null
+}
+
+export interface PieceLookupResult {
+  type: 'piece'
+  id: string
+  barcode: string
+  status: string
+  receivedAt: string
+  variant: LookupVariant
+  currentLocation: { id: string; name: string } | null
+  currentOrder: LookupOrder | null
+  currentShipment: LookupShipment | null
+  receivingSession: LookupSession | null
+  timeline: TimelineEvent[]
+}
+
+export interface TrackingLookupResult {
+  type: 'tracking'
+  trackingNumber: string
+  shipmentId: string
+  orderId: string
+  orderNumber: string | null
+  internalState: string
+  pieces: Array<{ pieceId: string; barcode: string; status: string }>
+}
+
+export type LookupResult = PieceLookupResult | TrackingLookupResult
+
+export function lookup(q: string) {
+  return request<LookupResult>(`/lookup?q=${encodeURIComponent(q)}`)
+}

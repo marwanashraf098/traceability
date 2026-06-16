@@ -164,6 +164,18 @@ public class ReceivingService {
     }
 
     /** Search variants by SKU or title prefix for the add-line autocomplete. */
+    public List<Map<String, Object>> getSessionPieces(UUID sessionId) {
+        UUID tenantId = TenantContext.require();
+        return jdbc.queryForList(
+            "SELECT p.id, p.barcode, p.status, v.title AS variant_title, pr.title AS product_title " +
+            "FROM pieces p " +
+            "JOIN variants v  ON v.id  = p.variant_id " +
+            "JOIN products pr ON pr.id = v.product_id " +
+            "WHERE p.receipt_id = ? AND p.tenant_id = ? " +
+            "ORDER BY p.created_at",
+            sessionId, tenantId);
+    }
+
     public List<Map<String, Object>> searchVariants(String query) {
         UUID tenantId = TenantContext.require();
         String pattern = "%" + query.toLowerCase() + "%";

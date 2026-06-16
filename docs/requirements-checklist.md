@@ -123,11 +123,11 @@ One line per requirement · [M] Must / [S] Should / [C] Could · use as the buil
 - [ ] 13.4 [S] Bulk adjustment by scan session
 
 ## FR-14 Piece Lookup (showcase)
-- [ ] 14.1 [M] Global scan/type lookup → piece page ≤ 1s
-- [ ] 14.2 [M] Piece page: variant, status, location, order/shipment links, receiving origin, full timeline
-- [ ] 14.3 [M] Timeline human-phrased, newest-first, viewer's language
-- [ ] 14.4 [M] AWB barcode in lookup → shipment/order page with its pieces
-- [ ] 14.5 [M] Bidirectional navigation order↔piece↔shipment
+- [x] 14.1 [M] Global scan/type lookup → piece page ≤ 1s
+- [x] 14.2 [M] Piece page: variant, status, location, order/shipment links, receiving origin, full timeline
+- [x] 14.3 [M] Timeline human-phrased, newest-first, viewer's language
+- [x] 14.4 [M] AWB barcode in lookup → shipment/order page with its pieces
+- [x] 14.5 [M] Bidirectional navigation order↔piece↔shipment
 - [ ] 14.6 [S] Timeline PDF export (dispute evidence)
 
 ## FR-15 Dashboards & Exceptions

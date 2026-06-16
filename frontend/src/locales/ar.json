@@ -4,7 +4,8 @@
     "catalog": "الكتالوج",
     "receiving": "الاستلام",
     "fulfill": "التجميع",
-    "logout": "تسجيل الخروج"
+    "logout": "تسجيل الخروج",
+    "lookup": "امسح أو أدخل الباركود…"
   },
   "login": {
     "title": "تتبع المخزون",
@@ -125,6 +126,56 @@
       "WRONG_VARIANT": "هذا الصنف غير موجود في الطلب",
       "LINE_FILLED": "هذا الصنف مكتمل — لا يحتاج لمزيد من القطع",
       "WRONG_STATUS": "القطعة غير متاحة للتجميع"
+    }
+  },
+  "lookup": {
+    "title": "بحث عن قطعة",
+    "placeholder": "امسح أو اكتب باركود قطعة أو رقم تتبع…",
+    "search": "بحث",
+    "notFound": "غير موجود — تحقق من الباركود وأعد المحاولة",
+    "pieceHeader": "القطعة",
+    "status": "الحالة",
+    "variant": "المنتج",
+    "location": "الموقع",
+    "order": "الطلب",
+    "shipment": "الشحنة",
+    "receivedAt": "تاريخ الاستلام",
+    "receivingSession": "جلسة الاستلام",
+    "timeline": "سجل الحضانة",
+    "system": "النظام",
+    "noTimeline": "لا توجد أحداث مسجلة بعد",
+    "trackingResult": "الشحنة",
+    "trackingPieces": "القطع في هذه الشحنة",
+    "noPieces": "لا توجد قطع مرتبطة بعد",
+    "viewPiece": "عرض القطعة",
+    "viewOrder": "عرض الطلب",
+    "phrase": {
+      "received_at": "تم الاستلام في {{location}}",
+      "reserved_for_order": "محجوز للطلب {{orderNumber}}",
+      "returned_to_stock": "تم الإعادة للمخزون",
+      "packed_for_order": "تم التعبئة للطلب {{orderNumber}}",
+      "courier_awaiting_pickup": "في انتظار استلام المندوب",
+      "courier_picked_up": "تم الاستلام من قِبل المندوب",
+      "courier_delivered": "تم التسليم للعميل",
+      "courier_return_transit": "مرتجع في الطريق",
+      "courier_return_received": "تم استلام المرتجع — في انتظار الفحص",
+      "courier_damaged": "مُصنَّف تالف من قِبل المندوب",
+      "courier_lost": "مُصنَّف مفقود من قِبل المندوب",
+      "courier_destroyed": "مُصنَّف مُتلف",
+      "status_changed": "تغيرت الحالة إلى {{toStatus}}"
+    },
+    "pieceStatus": {
+      "available": "متاح",
+      "reserved": "محجوز",
+      "packed": "مُعبأ",
+      "awaiting_pickup": "في انتظار الاستلام",
+      "with_courier": "مع المندوب",
+      "delivered": "مُسلَّم",
+      "return_in_transit": "مرتجع في الطريق",
+      "return_pending_inspection": "مرتجع ينتظر الفحص",
+      "damaged": "تالف",
+      "lost": "مفقود",
+      "destroyed": "مُتلف"
     }
   },
   "common": {

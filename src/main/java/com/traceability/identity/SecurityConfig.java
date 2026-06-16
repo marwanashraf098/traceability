@@ -91,8 +91,7 @@ public class SecurityConfig {
         CorsConfiguration cfg = new CorsConfiguration();
         // Dev: Vite default port. Production origins set via CORS_ALLOWED_ORIGINS env.
         cfg.setAllowedOriginPatterns(List.of(
-            "http://localhost:5173",
-            "http://localhost:3000",
+            "http://localhost:[*]",
             "${CORS_ALLOWED_ORIGINS:}"
         ));
         cfg.setAllowedMethods(List.of("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"));

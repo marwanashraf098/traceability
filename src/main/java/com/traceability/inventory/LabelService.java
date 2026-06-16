@@ -200,9 +200,8 @@ public class LabelService {
         float fontSize1 = 5.5f;
         float fontSize2 = 6.5f;
 
-        // Row 1: abbreviated piece ID centred — always ASCII → Helvetica
-        String shortId = "PC-" + pieceId.substring(pieceId.length() - 10);
-        drawCenteredText(cs, latinFont, fontSize1, shortId, wPt, barcodeY - 1.5f * MM_TO_PT);
+        // Row 1: full scannable barcode as human-readable text — always ASCII → Helvetica
+        drawCenteredText(cs, latinFont, fontSize1, barcode, wPt, barcodeY - 1.5f * MM_TO_PT);
 
         // Row 2: SKU left (ASCII → Helvetica), variant name right (may be Arabic)
         float row2Y = barcodeY - 1.5f * MM_TO_PT - fontSize1 - 2f;

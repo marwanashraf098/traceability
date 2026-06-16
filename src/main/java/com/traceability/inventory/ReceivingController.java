@@ -126,6 +126,14 @@ public class ReceivingController {
         return pdfResponse(pdf, "reprint-" + sessionId + ".pdf");
     }
 
+    // ── Pieces (barcodes) ─────────────────────────────────────────────────────
+
+    @GetMapping("/sessions/{sessionId}/pieces")
+    @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
+    public List<Map<String, Object>> getSessionPieces(@PathVariable UUID sessionId) {
+        return receiving.getSessionPieces(sessionId);
+    }
+
     // ── Variant search ────────────────────────────────────────────────────────
 
     @GetMapping("/variants/search")

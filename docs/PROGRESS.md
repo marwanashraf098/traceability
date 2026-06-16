@@ -4,7 +4,45 @@
 
 ## Current state
 
-Day 9 complete as of 2026-06-16. All 101 integration tests pass (BUILD SUCCESS).
+Day 10 complete as of 2026-06-16. All 111 integration tests pass (BUILD SUCCESS).
+
+**Day 10 — FR-14 Piece-lookup timeline (custody-history showcase screen):**
+
+*Backend:*
+- **`LookupService`** — dual routing: `q.startsWith("PC-")` → piece lookup; else → tracking number lookup.
+  - `lookupPiece(barcode, isWorker)`: single JOIN across pieces/variants/products/locations/orders/shipments/receipts/receipt_lines. Timeline: all piece_events newest-first, LEFT JOIN users/orders/shipments/locations. Worker role (`isWorker=true`) omits `customerName`/`customerPhone` from the order map; keeps `orderNumber`.
+  - `lookupTracking(trackingNumber)`: fetches shipment + order, then pieces via `JOIN allocations → order_items` (allocations has no direct `order_id` column).
+  - `phraseKey(eventType, fromStatus, toStatus)` — static mapping from event type + state pair to a human-phrase key (received_at, reserved_for_order, returned_to_stock, packed_for_order, courier_delivered, courier_picked_up, courier_awaiting_pickup, courier_return_transit, courier_return_received, courier_damaged, courier_lost, courier_destroyed, status_changed).
+- **`LookupController`** — `GET /api/v1/lookup?q=` open to OWNER/MANAGER/WORKER; routes to piece or tracking lookup based on `PC-` prefix.
+- **`Day10Test`** — 9 integration tests:
+  - (a) Full timeline newest-first (3 events: received → reserved → packed)
+  - (b) Actor name populated; null actor_user_id → isSystem=true + actor="System"
+  - (c) phraseKey derivation for all event types
+  - (d) Unknown barcode → 404
+  - (e) Cross-tenant lookup via app_user → 404 (RLS fail-closed)
+  - (f) Worker role: customerName/customerPhone hidden, orderNumber kept
+  - (g) Tracking number → shipment + piece list (via allocations → order_items join)
+  - (h) Bidirectional: piece.currentOrder.id = orderId; order detail has piece in allocatedPieces
+  - (i) receivingSession populated when receipt_id present
+
+*Frontend:*
+- **`Lookup.tsx`**: dual-view lookup page.
+  - `StatusBadge` — color-coded pill for all 11 piece statuses.
+  - `TimelinePhrase` — i18n phrase with `orderNumber`, `location`, `toStatus` interpolation.
+  - `PieceView` — header card (barcode, variant title, status badge, location/order/shipment/receivedAt grid, receivingSession link); vertical timeline with dot indicators (indigo = latest, gray = older).
+  - `TrackingView` — shipment header + pieces list with links to individual piece lookups.
+  - `LookupPage` — auto-focused search bar, URL `?q=` param support for deep linking, 404 error state.
+- **`Layout.tsx`** — global barcode/tracking search input in nav bar; submitting navigates to `/lookup?q=` and clears the field.
+- **`App.tsx`** — `/lookup` route wired (inside `RequireAuth` + `Layout`).
+- AR/EN locale keys: `lookup.*`, `lookup.phrase.*`, `lookup.pieceStatus.*`, `nav.lookup` (placeholder text for global search bar).
+
+**Post-Day-9 live testing fixes (2026-06-16) — all flows manually verified:**
+- **CORS**: `SecurityConfig` was only allowing `localhost:5173` and `localhost:3000`. Vite fell back to port 5174 (5173 in use), causing all browser requests to 403. Fixed by widening to `http://localhost:[*]`.
+- **Label barcode text**: `LabelService` was printing `PC-` + last 10 chars of the piece ID as human-readable text under the barcode. Manually typing that short form caused PIECE_NOT_FOUND. Fixed to print the full `barcode` field (the same value encoded in the Code128 image). A physical scanner always reads correctly; this only matters when typing manually for dev testing.
+- **New endpoint** `GET /api/v1/receiving/sessions/{id}/pieces`: returns piece IDs, barcodes, status, and variant info for a finalized session. Useful for dev testing without a physical scanner.
+- **Shopify re-sync**: Added `GET /api/v1/shopify/stores` (list connected stores) and `POST /api/v1/shopify/stores/{id}/sync` (pull latest orders from Shopify). Sync runs synchronously in the request thread (JobRunr enqueue is broken on Supabase — NPE in JobTable at startup, likely a JobRunr 7.3.0 / PG 17.6 compatibility issue). Frontend: "↻ Sync Shopify" button added to Orders page header; auto-refreshes the list after sync completes.
+- **Dev account**: `day4dev@example.com` / `password99` — connected to `traceability-dev.myshopify.com`, store id `e4297db2-b627-4129-b7fa-03bb1525a65e`. A second empty-tenant account `dev4dev@example.com` was accidentally created (transposed letters) — ignore it.
+- **Manually tested end-to-end**: Receiving → finalize → pieces created → Pick & Pack queue → scan pieces → Complete order → order status → packed. Shopify sync button pulls new orders correctly.
 
 **Day 9 — Scan-driven pick/pack fulfill flow (FR-8 + FR-9 core):**
 
@@ -214,7 +252,7 @@ Day 9 complete as of 2026-06-16. All 101 integration tests pass (BUILD SUCCESS).
 - `ReceivingService.searchVariants()` filtered on `v.status = 'active'` but `status` lives on `products` not `variants` — SQL error silently returned 0 results; fixed to `p.status = 'active'`
 - Added `dev.sh` convenience script (loads `.env`, kills :8080, runs Maven) to avoid repeated env-var loss between terminal sessions
 
-Day 10: AWB creation + shipment wiring (FR-9 continued: create Bosta shipment, attach to order, advance order to `awaiting_pickup`).
+Day 11: AWB creation + shipment wiring (FR-9 continued: Mode A — create Bosta delivery at packing, attach tracking number to order, advance order to `awaiting_pickup`).
 
 **Shopify OAuth design is owned by a separate design thread.** The production Shopify connect path = public OAuth app (decision recorded in "Decisions made" below). The detailed OAuth flow, scopes, callback URL, and state-parameter handling are being designed in a separate chat/thread. Do not re-derive or modify the OAuth design from this build thread. When that design is finalized it will be handed back here as a spec for implementation. The current custom-app endpoint (`POST /api/v1/shopify/connect` with `adminToken`) is DEV-ONLY and stays as-is until the spec arrives.
 

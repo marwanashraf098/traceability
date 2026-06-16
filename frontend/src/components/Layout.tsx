@@ -1,13 +1,25 @@
 import { NavLink, useNavigate } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
+import { useState, useRef } from 'react'
 
 export default function Layout({ children }: { children: React.ReactNode }) {
   const { t, i18n } = useTranslation()
   const navigate = useNavigate()
+  const [searchQ, setSearchQ] = useState('')
+  const searchRef = useRef<HTMLInputElement>(null)
 
   function logout() {
     localStorage.removeItem('token')
     navigate('/login')
+  }
+
+  function handleSearch(e: React.FormEvent) {
+    e.preventDefault()
+    const q = searchQ.trim()
+    if (!q) return
+    navigate(`/lookup?q=${encodeURIComponent(q)}`)
+    setSearchQ('')
+    searchRef.current?.blur()
   }
 
   function toggleLang() {
@@ -37,6 +49,23 @@ export default function Layout({ children }: { children: React.ReactNode }) {
             <NavLink to="/fulfill"   className={linkClass}>{t('nav.fulfill')}</NavLink>
           </div>
           <div className="flex items-center gap-3">
+            {/* Global barcode / tracking lookup */}
+            <form onSubmit={handleSearch} className="flex">
+              <input
+                ref={searchRef}
+                type="text"
+                value={searchQ}
+                onChange={e => setSearchQ(e.target.value)}
+                placeholder={t('nav.lookup')}
+                className="w-44 sm:w-56 text-xs font-mono bg-indigo-700 text-white placeholder-indigo-300 border border-indigo-500 rounded-l px-2 py-1 focus:outline-none focus:border-indigo-300"
+              />
+              <button
+                type="submit"
+                className="text-xs bg-indigo-600 hover:bg-indigo-500 text-white border border-indigo-500 border-l-0 rounded-r px-2 py-1"
+              >
+                ⌕
+              </button>
+            </form>
             <button
               onClick={toggleLang}
               className="text-xs text-indigo-200 hover:text-white border border-indigo-500 rounded px-2 py-1"

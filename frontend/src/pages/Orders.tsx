@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback } from 'react'
 import { Link } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
-import { listOrders, OrderPage } from '../api'
+import { listOrders, OrderPage, listShopifyStores, syncShopifyStore } from '../api'
 
 const ORDER_STATUSES = [
   'new', 'confirmed', 'ready_to_pick', 'picking', 'packed',
@@ -35,6 +35,8 @@ export default function Orders() {
   const [page, setPage]         = useState(0)
   const [loading, setLoading]   = useState(false)
   const [error, setError]       = useState('')
+  const [syncing, setSyncing]   = useState(false)
+  const [syncMsg, setSyncMsg]   = useState('')
 
   const fetch = useCallback(async () => {
     setLoading(true)
@@ -51,6 +53,22 @@ export default function Orders() {
 
   useEffect(() => { fetch() }, [fetch])
 
+  const handleSync = useCallback(async () => {
+    setSyncing(true)
+    setSyncMsg('')
+    try {
+      const stores = await listShopifyStores()
+      if (stores.length === 0) { setSyncMsg('No store connected'); return }
+      await Promise.all(stores.map(s => syncShopifyStore(s.id)))
+      setSyncMsg('Sync complete')
+      fetch()
+    } catch {
+      setSyncMsg('Sync failed')
+    } finally {
+      setSyncing(false)
+    }
+  }, [])
+
   // Reset to page 0 when filters change
   function applyFilter(fn: () => void) {
     fn()
@@ -63,7 +81,19 @@ export default function Orders() {
 
   return (
     <div>
-      <h1 className="text-xl font-semibold text-gray-900 mb-6">{t('orders.title')}</h1>
+      <div className="flex items-center justify-between mb-6">
+        <h1 className="text-xl font-semibold text-gray-900">{t('orders.title')}</h1>
+        <div className="flex items-center gap-3">
+          {syncMsg && <span className="text-sm text-gray-500">{syncMsg}</span>}
+          <button
+            onClick={handleSync}
+            disabled={syncing}
+            className="text-sm px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-300 text-white rounded font-medium transition"
+          >
+            {syncing ? 'Syncing…' : '↻ Sync Shopify'}
+          </button>
+        </div>
+      </div>
 
       {/* Filter bar */}
       <div className="flex flex-wrap gap-3 mb-4">

@@ -62,6 +62,25 @@ public class ShopifyController {
             .body(new ConnectResponse(storeId.toString(), "pending"));
     }
 
+    /** Lists all connected stores for the current tenant. */
+    @GetMapping("/stores")
+    @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
+    public Object listStores(@AuthenticationPrincipal CustomUserDetails principal) {
+        return tx.execute(s -> jdbc.queryForList(
+            "SELECT id, shop_domain, status, import_status, last_sync_at FROM stores WHERE tenant_id = ?",
+            principal.tenantId()));
+    }
+
+    /** Re-runs the Shopify import synchronously for an already-connected store. */
+    @PostMapping("/stores/{storeId}/sync")
+    @PreAuthorize("hasRole('OWNER')")
+    public ResponseEntity<Void> sync(
+            @PathVariable UUID storeId,
+            @AuthenticationPrincipal CustomUserDetails principal) {
+        importJob.run(storeId, principal.tenantId());
+        return ResponseEntity.ok().build();
+    }
+
     /** Returns the current import status for a store (owner or manager). */
     @GetMapping("/stores/{storeId}/status")
     @PreAuthorize("hasAnyRole('OWNER', 'MANAGER')")

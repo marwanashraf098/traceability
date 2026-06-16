@@ -4,7 +4,8 @@
     "catalog": "Catalog",
     "receiving": "Receiving",
     "fulfill": "Pick & Pack",
-    "logout": "Logout"
+    "logout": "Logout",
+    "lookup": "Scan or type barcode…"
   },
   "login": {
     "title": "Traceability",
@@ -125,6 +126,56 @@
       "WRONG_VARIANT": "This item is not on this order",
       "LINE_FILLED": "This line is already complete — no more units needed",
       "WRONG_STATUS": "Item is not available to pick"
+    }
+  },
+  "lookup": {
+    "title": "Piece Lookup",
+    "placeholder": "Scan or type a piece barcode or tracking number…",
+    "search": "Look up",
+    "notFound": "Not found — check the barcode and try again",
+    "pieceHeader": "Piece",
+    "status": "Status",
+    "variant": "Variant",
+    "location": "Location",
+    "order": "Order",
+    "shipment": "Shipment",
+    "receivedAt": "Received",
+    "receivingSession": "Receiving session",
+    "timeline": "Custody history",
+    "system": "System",
+    "noTimeline": "No events recorded yet",
+    "trackingResult": "Shipment",
+    "trackingPieces": "Pieces in this shipment",
+    "noPieces": "No pieces linked yet",
+    "viewPiece": "View piece",
+    "viewOrder": "View order",
+    "phrase": {
+      "received_at": "Received at {{location}}",
+      "reserved_for_order": "Reserved for order {{orderNumber}}",
+      "returned_to_stock": "Returned to stock",
+      "packed_for_order": "Packed for order {{orderNumber}}",
+      "courier_awaiting_pickup": "Awaiting courier pickup",
+      "courier_picked_up": "Picked up by courier",
+      "courier_delivered": "Delivered to customer",
+      "courier_return_transit": "Return in transit",
+      "courier_return_received": "Return received — pending inspection",
+      "courier_damaged": "Marked damaged by courier",
+      "courier_lost": "Marked lost by courier",
+      "courier_destroyed": "Marked destroyed",
+      "status_changed": "Status changed to {{toStatus}}"
+    },
+    "pieceStatus": {
+      "available": "Available",
+      "reserved": "Reserved",
+      "packed": "Packed",
+      "awaiting_pickup": "Awaiting Pickup",
+      "with_courier": "With Courier",
+      "delivered": "Delivered",
+      "return_in_transit": "Return in Transit",
+      "return_pending_inspection": "Return — Pending Inspection",
+      "damaged": "Damaged",
+      "lost": "Lost",
+      "destroyed": "Destroyed"
     }
   },
   "common": {
