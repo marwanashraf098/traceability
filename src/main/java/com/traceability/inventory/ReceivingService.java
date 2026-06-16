@@ -171,7 +171,7 @@ public class ReceivingService {
             "SELECT v.id, v.title, v.sku, p.title AS product_title " +
             "FROM variants v " +
             "JOIN products p ON p.id = v.product_id " +
-            "WHERE v.tenant_id = ? AND v.status = 'active' " +
+            "WHERE v.tenant_id = ? AND p.status = 'active' " +
             "  AND (LOWER(v.sku) LIKE ? OR LOWER(v.title) LIKE ? OR LOWER(p.title) LIKE ?) " +
             "ORDER BY v.sku NULLS LAST, v.title " +
             "LIMIT 20",

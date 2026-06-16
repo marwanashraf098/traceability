@@ -63,6 +63,9 @@ public class SecurityConfig {
                         res.setStatus(HttpServletResponse.SC_FORBIDDEN)))
             .authorizeHttpRequests(auth -> auth
                 .requestMatchers(
+                    // SPA static assets — browser must be able to load the app before login
+                    "/", "/index.html", "/assets/**", "/favicon.ico",
+                    // Auth endpoints
                     "/api/v1/auth/signup",
                     "/api/v1/auth/login",
                     "/api/v1/auth/refresh",

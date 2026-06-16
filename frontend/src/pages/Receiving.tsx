@@ -49,8 +49,7 @@ export default function Receiving() {
 
   async function loadLocations() {
     try {
-      const data = await api<Location[]>('/api/v1/locations').catch(() =>
-        // fallback: locations endpoint may not exist yet — use empty list
+      const data = await api<Location[]>('/locations').catch(() =>
         [] as Location[])
       setLocations(data)
     } catch { setLocations([]) }

@@ -2,6 +2,7 @@ package com.traceability.tenancy;
 
 import com.zaxxer.hikari.HikariDataSource;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.autoconfigure.flyway.FlywayDataSource;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Primary;
@@ -11,13 +12,14 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * Declares the primary application DataSource as a {@link TenantAwareDataSource}.
- *
- * Flyway does NOT use this bean. When {@code spring.flyway.url/user/password}
- * are set, Spring Boot's FlywayAutoConfiguration creates a separate internal
- * datasource from those properties and never touches the primary bean declared
- * here. Flyway therefore runs as the owner role (postgres / DDL privileges)
- * while the app runtime connects as app_user (no BYPASSRLS → RLS enforced).
+ * Declares two datasources:
+ * <ul>
+ *   <li>{@code dataSource} (@Primary) — {@link TenantAwareDataSource} wrapping a HikariPool
+ *       of size 5 connecting as app_user. RLS is always enforced here.</li>
+ *   <li>{@code ownerDataSource} (@FlywayDataSource) — HikariPool of size 2 connecting as the
+ *       Flyway owner (postgres). Flyway migrations and JobRunr share this pool. Size 2 + 5 = 7
+ *       total connections, comfortably within Supabase free plan's 15-connection cap.</li>
+ * </ul>
  */
 @Configuration
 public class DataSourceConfig {
@@ -28,7 +30,8 @@ public class DataSourceConfig {
             @Value("${spring.datasource.url}") String url,
             @Value("${spring.datasource.username}") String username,
             @Value("${spring.datasource.password}") String password,
-            @Value("${spring.datasource.hikari.maximum-pool-size:10}") int poolSize,
+            @Value("${spring.datasource.hikari.maximum-pool-size:5}") int poolSize,
+            @Value("${spring.datasource.hikari.minimum-idle:1}") int minIdle,
             @Value("${spring.datasource.hikari.connection-timeout:5000}") long timeoutMs) {
 
         rejectTransactionPooler(url);
@@ -39,8 +42,33 @@ public class DataSourceConfig {
         raw.setPassword(password);
         raw.setDriverClassName("org.postgresql.Driver");
         raw.setMaximumPoolSize(poolSize);
+        raw.setMinimumIdle(minIdle);
         raw.setConnectionTimeout(timeoutMs);
         return new TenantAwareDataSource(raw);
+    }
+
+    /**
+     * Owner datasource — Flyway (DDL migrations) and JobRunr share this 2-connection pool.
+     * Declared as @FlywayDataSource so Spring Boot uses it instead of auto-creating a
+     * separate HikariPool (default size 10) from spring.flyway.url properties.
+     * Total connection budget with Supabase free plan (15 max):
+     *   owner-pool (2) + app_user pool (5) = 7 — leaves 8 slots for pgAdmin / psql.
+     */
+    @Bean
+    @FlywayDataSource
+    public DataSource ownerDataSource(
+            @Value("${spring.flyway.url}") String url,
+            @Value("${spring.flyway.user}") String user,
+            @Value("${spring.flyway.password}") String password) {
+        HikariDataSource ds = new HikariDataSource();
+        ds.setJdbcUrl(url);
+        ds.setUsername(user);
+        ds.setPassword(password);
+        ds.setDriverClassName("org.postgresql.Driver");
+        ds.setMaximumPoolSize(2);
+        ds.setMinimumIdle(1);
+        ds.setPoolName("owner-pool");
+        return ds;
     }
 
     // Port 6543 = Supabase transaction-mode pooler. SET LOCAL app.current_tenant is

@@ -11,7 +11,8 @@ spring:
     password: ${APP_DB_PASSWORD:postgres}
     driver-class-name: org.postgresql.Driver
     hikari:
-      maximum-pool-size: 10
+      maximum-pool-size: 5
+      minimum-idle: 1
       connection-timeout: 5000
 
   # Flyway uses owner credentials (DDL + role creation requires more than app_user has).
