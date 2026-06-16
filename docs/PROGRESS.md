@@ -4,7 +4,7 @@
 
 ## Current state
 
-Day 8 complete as of 2026-06-15. All 85 integration tests pass (BUILD SUCCESS).
+Day 8 complete + live-tested as of 2026-06-16. All 85 integration tests pass (BUILD SUCCESS).
 
 **Day 8 — Inventory receiving + piece generation + labels (FR-6.1–6.5, FR-6.8):**
 
@@ -151,6 +151,13 @@ Day 8 complete as of 2026-06-15. All 85 integration tests pass (BUILD SUCCESS).
 
 ## Next up
 
+**Live test session (2026-06-16) — bugs found and fixed:**
+- `SecurityConfig` was blocking static assets (`/`, `/index.html`, `/assets/**`) — SPA couldn't load, browser got 401
+- `/api/v1/locations` endpoint missing — receiving form showed text input instead of warehouse dropdown; added `LocationController`
+- `Receiving.tsx` `loadLocations()` called `api('/api/v1/locations')` which double-prepended the `/api/v1` base, resulting in 404; fixed to `/locations`
+- `ReceivingService.searchVariants()` filtered on `v.status = 'active'` but `status` lives on `products` not `variants` — SQL error silently returned 0 results; fixed to `p.status = 'active'`
+- Added `dev.sh` convenience script (loads `.env`, kills :8080, runs Maven) to avoid repeated env-var loss between terminal sessions
+
 Day 9: Picking queue + scan validation (FR-8.1–8.6).
 - Pick queue: oldest-confirmed orders, lock to worker on open, Manager release.
 - Pick screen: scan piece barcode → validate (Available→Reserved + allocation + event) ≤300ms; full-screen green/red feedback.
@@ -187,7 +194,7 @@ Day 9: Picking queue + scan validation (FR-8.1–8.6).
 
 - **Shopify 2026-04 removed `financialStatus` field on Order** — use `displayFinancialStatus` instead. Returns capitalized display values ("Pending", "Paid", "Authorized"). COD inference checks `"pending".equalsIgnoreCase(displayFinancialStatus)` — case-insensitive, so both are safe.
 - **`ApiExceptionHandler.handleGeneral(Exception)` intercepts `AccessDeniedException` from `@PreAuthorize`** — `DispatcherServlet` resolves `AccessDeniedException` through `ExceptionHandlerExceptionResolver` before `ExceptionTranslationFilter` can invoke the `AccessDeniedHandler`. Must have an explicit `@ExceptionHandler(AccessDeniedException.class) → 403` handler above the catch-all; otherwise the `Exception` handler returns 500.
-- **Supabase session-mode pooler caps at 15 concurrent connections (free plan)** — running two app instances simultaneously exhausts the pool. Testcontainers tests use their own containers and don't count. Kill idle app instances before running load-heavy operations.
+- **Supabase 15-connection cap (free plan session-mode pooler)** — solved by sharing one `owner-pool` (max=2, min-idle=1) between Flyway and JobRunr (`@FlywayDataSource` bean in `DataSourceConfig`), and shrinking `HikariPool-1` (app_user) to max=5, min-idle=1. Total at startup: 2 connections. Stale connections from crashed previous runs can fill the 15 slots; kill them in Supabase SQL Editor with `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE application_name = 'Supavisor' AND pid <> pg_backend_pid()` then immediately restart. Use `./dev.sh` to start the app — it loads `.env`, kills :8080, and starts Maven. Running `mvn spring-boot:run` in a new terminal without sourcing `.env` first causes Flyway to try `localhost:5432` (connection refused).
 - **Shopify Protected Customer Data (PCD) is gated separately from `read_customers` scope** — `shippingAddress` and `customer` fields on Order are blocked even with `read_customers` granted until PCD is approved. Currently `customer_name`, `customer_phone`, `address` are null-populated; full data is preserved in `orders.raw` (jsonb) for backfill once approved. See pending human tasks for what to do.
 
 
