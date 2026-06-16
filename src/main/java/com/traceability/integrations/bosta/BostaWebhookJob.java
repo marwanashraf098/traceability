@@ -59,13 +59,14 @@ public class BostaWebhookJob {
 
     private static final Logger log = LoggerFactory.getLogger(BostaWebhookJob.class);
 
-    private final JdbcTemplate       jdbc;
+    private final JdbcTemplate        jdbc;
     private final TransactionTemplate tx;
-    private final BostaGateway        bostaGateway;
-    private final BostaStateMapper    stateMapper;
-    private final EncryptionService   encryptionService;
-    private final ObjectMapper        mapper;
-    private final InventoryLedger     ledger;
+    private final BostaGateway         bostaGateway;
+    private final BostaStateMapper     stateMapper;
+    private final EncryptionService    encryptionService;
+    private final ObjectMapper         mapper;
+    private final InventoryLedger      ledger;
+    private final com.traceability.inventory.ShipmentLinkService shipmentLinkService;
 
     public BostaWebhookJob(JdbcTemplate jdbc,
                             PlatformTransactionManager txm,
@@ -73,14 +74,16 @@ public class BostaWebhookJob {
                             BostaStateMapper stateMapper,
                             EncryptionService encryptionService,
                             ObjectMapper mapper,
-                            InventoryLedger ledger) {
-        this.jdbc              = jdbc;
-        this.tx                = new TransactionTemplate(txm);
-        this.bostaGateway      = bostaGateway;
-        this.stateMapper       = stateMapper;
-        this.encryptionService = encryptionService;
-        this.mapper            = mapper;
-        this.ledger            = ledger;
+                            InventoryLedger ledger,
+                            com.traceability.inventory.ShipmentLinkService shipmentLinkService) {
+        this.jdbc                = jdbc;
+        this.tx                  = new TransactionTemplate(txm);
+        this.bostaGateway        = bostaGateway;
+        this.stateMapper         = stateMapper;
+        this.encryptionService   = encryptionService;
+        this.mapper              = mapper;
+        this.ledger              = ledger;
+        this.shipmentLinkService = shipmentLinkService;
     }
 
     // ---- private row types -------------------------------------------------
@@ -183,12 +186,29 @@ public class BostaWebhookJob {
                 trackingNumber));
 
             if (shipment == null) {
-                log.info("Webhook {}: tracking_number {} has no matching shipment — recording as unlinked",
-                    webhookEventId, trackingNumber);
-                recordUnlinked(tenantId, trackingNumber, delivery, webhookEventId);
-                markProcessed(webhookEventId, idemKey, "unlinked: " + trackingNumber);
-                return;
+                // 8.5 — Try to auto-match by businessReference / phone+COD (Mode B linking).
+                UUID matchedOrderId = shipmentLinkService.tryMatchDelivery(
+                    tenantId, trackingNumber, delivery, mapped);
+
+                if (matchedOrderId != null) {
+                    // Successfully matched — re-fetch shipment for steps 9–10.
+                    shipment = tx.execute(s -> jdbc.query(
+                        "SELECT id, order_id FROM shipments WHERE tracking_number = ? AND tenant_id = ?",
+                        rs -> rs.next() ? new ShipmentRow(
+                            rs.getObject("id", UUID.class),
+                            rs.getObject("order_id", UUID.class)) : null,
+                        trackingNumber, tenantId));
+                } else {
+                    log.info("Webhook {}: tracking {} unmatched — recording as unlinked",
+                        webhookEventId, trackingNumber);
+                    recordUnlinked(tenantId, trackingNumber, delivery, webhookEventId);
+                    markProcessed(webhookEventId, idemKey, "unlinked: " + trackingNumber);
+                    return;
+                }
             }
+
+            // Lambda capture requires effectively-final reference.
+            final ShipmentRow resolvedShipment = shipment;
 
             // 9. Persist updated courier state on the shipment row.
             tx.execute(s -> {
@@ -201,7 +221,7 @@ public class BostaWebhookJob {
                     WHERE id = ?
                     """,
                     mapped.shipmentInternalState(), delivery.numberOfAttempts(),
-                    delivery.raw().toString(), shipment.id());
+                    delivery.raw().toString(), resolvedShipment.id());
                 return null;
             });
 
@@ -227,7 +247,7 @@ public class BostaWebhookJob {
                       AND a.status IN ('active', 'packed')
                     """,
                     (rs, i) -> new PieceRow(rs.getString("id"), rs.getString("status")),
-                    shipment.orderId()));
+                    resolvedShipment.orderId()));
 
                 for (PieceRow pr : pieces) {
                     PieceStatus current = PieceStatus.fromDb(pr.status());

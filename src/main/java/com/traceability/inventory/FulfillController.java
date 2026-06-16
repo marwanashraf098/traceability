@@ -11,20 +11,22 @@ import java.util.Map;
 import java.util.UUID;
 
 /**
- * Pick/pack fulfill flow (FR-8 + FR-9 core).
+ * Pick/pack fulfill flow (FR-8 + FR-9 core + FR-9.6 AWB scan).
  *
  * Access:
  *   OWNER / MANAGER — all operations including lock release of any order
- *   WORKER          — queue, lock own order, scan, unscan, complete
+ *   WORKER          — queue, lock own order, scan, unscan, complete, link AWB
  */
 @RestController
 @RequestMapping("/api/v1/fulfill")
 public class FulfillController {
 
-    private final FulfillService svc;
+    private final FulfillService      svc;
+    private final ShipmentLinkService linkSvc;
 
-    public FulfillController(FulfillService svc) {
-        this.svc = svc;
+    public FulfillController(FulfillService svc, ShipmentLinkService linkSvc) {
+        this.svc     = svc;
+        this.linkSvc = linkSvc;
     }
 
     @GetMapping("/queue")
@@ -85,5 +87,16 @@ public class FulfillController {
         return Map.of("packedPieces", packed);
     }
 
+    /** FR-9.6 — AWB scan at pack: link a plugin-printed tracking number to the packed order. */
+    @PostMapping("/{orderId}/link")
+    @PreAuthorize("isAuthenticated()")
+    public Map<String, Object> linkAwb(
+            @PathVariable UUID orderId,
+            @RequestBody AwbLinkRequest req,
+            @AuthenticationPrincipal CustomUserDetails principal) {
+        return linkSvc.linkByAwbScan(orderId, req.trackingNumber().trim(), principal.userId());
+    }
+
     public record ScanRequest(String barcode) {}
+    public record AwbLinkRequest(String trackingNumber) {}
 }

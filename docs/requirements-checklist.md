@@ -33,7 +33,7 @@ One line per requirement · [M] Must / [S] Should / [C] Could · use as the buil
 - [ ] 4.1 [M] Connect by API key, validate, encrypt at rest, capture pickup locations
 - [ ] 4.2 [M] Mode A: create delivery at packing (type 10, COD, mapped address, businessReference) → tracking + AWB
 - [ ] 4.3 [M] City/zone/district mapping seeded from Bosta zoning sheets; fix-it dropdown; remembered rules
-- [ ] 4.4 [M] Mode B: poll-detect plugin-created deliveries, match by reference (phone+COD fallback), unlinked-shipments screen
+- [x] 4.4 [M] Mode B: poll-detect plugin-created deliveries, match by reference (phone+COD fallback), unlinked-shipments screen
 - [ ] 4.5 [M] Per-tenant mode: A / B / Hybrid
 - [ ] 4.6 [M] Delivery cancellation via API where state allows; else exception with instructions
 - [x] 4.7 [M] Status sync: webhook (secret header, verify-by-fetch, no HMAC exists) + 15–30 min polling; (state, type)-keyed mapping; numberOfAttempts stored; trackingNumber as string; unknown codes → exception+alert [Day 6 — webhook→ledger wiring complete; polling not yet built]
@@ -86,8 +86,8 @@ One line per requirement · [M] Must / [S] Should / [C] Could · use as the buil
 - [ ] 9.3 [M] Confirm → Mode B prompt AWB scan (Mode A delivery creation deferred post-launch); COD cap pre-validated
 - [x] 9.4 [M] Pieces Reserved→Packed + events; allocations packed
 - [ ] 9.5 [M] AWB auto-print; fetch failure → Packed + missing-AWB exception + retry (never silent loss)
-- [ ] 9.6 [M] AWB verification scan binds piece↔order↔tracking; mismatch rejected loudly ([S] optional toggle, default mandatory)
-- [ ] 9.7 [M] After verification → Awaiting Pickup
+- [x] 9.6 [M] AWB verification scan binds piece↔order↔tracking; mismatch rejected loudly ([S] optional toggle, default mandatory)
+- [x] 9.7 [M] After verification → Awaiting Pickup
 - [ ] 9.8 [M] Guided unpack (cancel post-pack): cancel AWB → rescan out → Available → Cancelled; no partial completion
 - [ ] 9.9 [M] Pre-handover cancel with explicit outcome: (a) cancel order → unpack; (b) convert to self-pickup → AWB cancelled, sale stands, Self-Pickup Pending
 - [ ] 9.10 [M] Self-pickup handover: scan pieces, COD cash confirm, customer_pickup event → Delivered (self-pickup)

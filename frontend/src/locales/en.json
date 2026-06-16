@@ -162,7 +162,8 @@
       "courier_damaged": "Marked damaged by courier",
       "courier_lost": "Marked lost by courier",
       "courier_destroyed": "Marked destroyed",
-      "status_changed": "Status changed to {{toStatus}}"
+      "status_changed": "Status changed to {{toStatus}}",
+      "tracking_linked": "AWB scanned — awaiting courier pickup"
     },
     "pieceStatus": {
       "available": "Available",

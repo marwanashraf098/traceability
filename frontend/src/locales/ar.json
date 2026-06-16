@@ -162,7 +162,8 @@
       "courier_damaged": "مُصنَّف تالف من قِبل المندوب",
       "courier_lost": "مُصنَّف مفقود من قِبل المندوب",
       "courier_destroyed": "مُصنَّف مُتلف",
-      "status_changed": "تغيرت الحالة إلى {{toStatus}}"
+      "status_changed": "تغيرت الحالة إلى {{toStatus}}",
+      "tracking_linked": "تم مسح وصل الشحن — في انتظار استلام المندوب"
     },
     "pieceStatus": {
       "available": "متاح",
