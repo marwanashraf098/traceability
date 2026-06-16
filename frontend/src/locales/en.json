@@ -3,6 +3,7 @@
     "orders": "Orders",
     "catalog": "Catalog",
     "receiving": "Receiving",
+    "fulfill": "Pick & Pack",
     "logout": "Logout"
   },
   "login": {
@@ -106,6 +107,17 @@
       "sku": "SKU",
       "qty": "Qty"
     }
+  },
+  "fulfill": {
+    "title": "Pick & Pack",
+    "refresh": "Refresh",
+    "empty": "No orders ready to pick",
+    "units": "units",
+    "locked": "Locked",
+    "backToQueue": "Back to Queue",
+    "scanPlaceholder": "Scan or type barcode, then press Enter",
+    "unscan": "Remove",
+    "complete": "Complete & Pack Order"
   },
   "common": {
     "loading": "Loading...",

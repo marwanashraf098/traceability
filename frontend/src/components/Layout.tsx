@@ -34,6 +34,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
             <NavLink to="/orders"    className={linkClass}>{t('nav.orders')}</NavLink>
             <NavLink to="/catalog"   className={linkClass}>{t('nav.catalog')}</NavLink>
             <NavLink to="/receiving" className={linkClass}>{t('nav.receiving')}</NavLink>
+            <NavLink to="/fulfill"   className={linkClass}>{t('nav.fulfill')}</NavLink>
           </div>
           <div className="flex items-center gap-3">
             <button

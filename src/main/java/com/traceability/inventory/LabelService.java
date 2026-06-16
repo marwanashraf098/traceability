@@ -81,9 +81,10 @@ public class LabelService {
         UUID tenantId = TenantContext.require();
 
         List<Map<String, Object>> pieces = jdbc.queryForList(
-            "SELECT p.id, p.barcode, v.sku, v.title AS variant_title " +
+            "SELECT p.id, p.barcode, v.sku, v.title AS variant_title, pr.title AS product_title " +
             "FROM pieces p " +
             "JOIN variants v ON v.id = p.variant_id " +
+            "JOIN products pr ON pr.id = v.product_id " +
             "WHERE p.receipt_id = ? AND p.tenant_id = ? " +
             "ORDER BY p.created_at",
             sessionId, tenantId);
@@ -104,9 +105,10 @@ public class LabelService {
         UUID tenantId = TenantContext.require();
 
         List<Map<String, Object>> pieces = jdbc.queryForList(
-            "SELECT p.id, p.barcode, v.sku, v.title AS variant_title " +
+            "SELECT p.id, p.barcode, v.sku, v.title AS variant_title, pr.title AS product_title " +
             "FROM pieces p " +
             "JOIN variants v ON v.id = p.variant_id " +
+            "JOIN products pr ON pr.id = v.product_id " +
             "WHERE p.id = ? AND p.tenant_id = ?",
             pieceId, tenantId);
 
@@ -156,14 +158,19 @@ public class LabelService {
                 String pieceId      = (String) piece.get("id");
                 String barcode      = (String) piece.get("barcode");
                 String sku          = nullSafe(piece.get("sku"));
-                String variantTitle = truncate(nullSafe(piece.get("variant_title")), 24);
+                String productTitle = truncate(nullSafe(piece.get("product_title")), 28);
+                String variantTitle = nullSafe(piece.get("variant_title"));
+                // Show variant only when it carries real info (not the Shopify placeholder)
+                String labelName = productTitle.isEmpty() ? variantTitle
+                    : ("Default Title".equalsIgnoreCase(variantTitle) ? productTitle
+                       : truncate(productTitle + " - " + variantTitle, 32));
 
                 PDPage page = new PDPage(pageSize);
                 doc.addPage(page);
 
                 try (PDPageContentStream cs = new PDPageContentStream(doc, page)) {
                     drawLabel(cs, doc, latinFont, arabicFont, barcode, pieceId, sku,
-                              variantTitle, wPt, hPt);
+                              labelName, wPt, hPt);
                 }
             }
 
