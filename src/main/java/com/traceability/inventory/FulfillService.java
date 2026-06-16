@@ -122,7 +122,8 @@ public class FulfillService {
      *   1. PIECE_NOT_FOUND   — no piece with this barcode in this tenant
      *   2. DUPLICATE_SCAN    — piece already allocated to this order
      *   3. ALREADY_RESERVED  — piece has a live allocation to another order
-     *   4. WRONG_VARIANT     — piece variant not on this order (or line full)
+     *   4a. WRONG_VARIANT    — piece variant matches NO line on this order
+     *   4b. LINE_FILLED      — variant matches a line, but it is already fully allocated
      *   5. WRONG_STATUS      — piece is not 'available'
      *   6. transition()      — available→reserved; StateConflictException → ALREADY_RESERVED
      */
@@ -188,7 +189,9 @@ public class FulfillService {
             }
         }
         if (targetItem == null) {
-            return ScanResult.rejected("WRONG_VARIANT", "All units of this variant are already scanned");
+            // Variant is on the order but every line for it is already fully allocated.
+            // Distinct from WRONG_VARIANT (which means no matching line exists at all).
+            return ScanResult.rejected("LINE_FILLED", "This line is already complete");
         }
 
         UUID orderItemId = (UUID) targetItem.get("order_item_id");
@@ -218,7 +221,9 @@ public class FulfillService {
         long lockedAllocated = countResult != null ? countResult : 0L;
 
         if (lockedAllocated >= lockedQuantity) {
-            return ScanResult.rejected("WRONG_VARIANT", "All units of this variant are already scanned");
+            // Post-lock re-read: the winning concurrent thread just filled this line.
+            // The piece is correct-variant, just nothing left to scan for this line.
+            return ScanResult.rejected("LINE_FILLED", "This line is already complete");
         }
 
         // 6. WRONG_STATUS: piece must be available

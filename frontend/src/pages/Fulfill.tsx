@@ -322,7 +322,9 @@ function PickScreen({ orderId, onBack }: { orderId: string; onBack: () => void }
         />
         {lastResult && (
           <div className={`mt-2 text-sm font-medium ${lastResult.success ? 'text-green-600' : 'text-red-600'}`}>
-            {lastResult.success ? `✓ ${lastResult.barcode}` : `✗ ${lastResult.code}: ${lastResult.message}`}
+            {lastResult.success
+              ? `✓ ${lastResult.barcode}`
+              : `✗ ${t(`fulfill.rejection.${lastResult.code}`, { defaultValue: lastResult.message ?? lastResult.code })}`}
           </div>
         )}
       </div>

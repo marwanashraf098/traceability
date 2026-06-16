@@ -284,6 +284,26 @@ class Day9Test {
         assertThat(result.code()).isEqualTo("WRONG_VARIANT");
     }
 
+    // ── (h2) Scan LINE_FILLED — variant is on the order but the line is full ──
+
+    @Test
+    void h2_scan_line_filled_when_correct_variant_but_line_complete() {
+        // Order has qty=1 for variantA. Scan the one valid piece → success.
+        // Then scan a SECOND available variantA piece → LINE_FILLED, not WRONG_VARIANT.
+        UUID orderId = insertOrderWithItem(variantAId, 1);
+        String piece1 = insertAvailablePiece(variantAId);
+        String piece2 = insertAvailablePiece(variantAId);
+
+        FulfillService.ScanResult first = fulfillSvc.scan(orderId, "PC-" + piece1, actorId);
+        assertThat(first.success()).isTrue();
+
+        FulfillService.ScanResult second = fulfillSvc.scan(orderId, "PC-" + piece2, actorId);
+        assertThat(second.success()).isFalse();
+        assertThat(second.code())
+            .as("correct-variant scan against a full line must be LINE_FILLED, not WRONG_VARIANT")
+            .isEqualTo("LINE_FILLED");
+    }
+
     // ── (i) Scan WRONG_STATUS ─────────────────────────────────────────────────
 
     @Test
@@ -400,12 +420,13 @@ class Day9Test {
         assertThat(successes.get()).as("exactly one scan wins against qty=1 line").isEqualTo(1);
         assertThat(rejections.get()).as("exactly one scan rejected as over-allocation").isEqualTo(1);
 
-        // 2. Rejection code: must be WRONG_VARIANT (the line-capacity guard fired).
-        //    Both pieces are different and available, so ALREADY_RESERVED is wrong here;
-        //    only the capacity check (SELECT FOR UPDATE + count after lock) can produce WRONG_VARIANT.
+        // 2. Rejection code: must be LINE_FILLED (the line-capacity guard fired).
+        //    Both pieces are correct-variant and available, so WRONG_VARIANT (no matching line)
+        //    and ALREADY_RESERVED (piece-level) are both wrong here. Only the capacity check
+        //    (SELECT FOR UPDATE + post-lock COUNT) produces LINE_FILLED.
         assertThat(loserCode.get())
-            .as("loser must be rejected via line-capacity guard, not piece-level guard")
-            .isEqualTo("WRONG_VARIANT");
+            .as("loser must be rejected with LINE_FILLED, not WRONG_VARIANT or ALREADY_RESERVED")
+            .isEqualTo("LINE_FILLED");
 
         // 3. Database end-state: exactly one active allocation for this order (no over-allocation)
         long totalAlloc = jdbc.queryForObject(

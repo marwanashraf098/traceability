@@ -117,7 +117,15 @@
     "backToQueue": "Back to Queue",
     "scanPlaceholder": "Scan or type barcode, then press Enter",
     "unscan": "Remove",
-    "complete": "Complete & Pack Order"
+    "complete": "Complete & Pack Order",
+    "rejection": {
+      "PIECE_NOT_FOUND": "Barcode not found in inventory",
+      "DUPLICATE_SCAN": "Already scanned for this order",
+      "ALREADY_RESERVED": "Piece is reserved for another order",
+      "WRONG_VARIANT": "This item is not on this order",
+      "LINE_FILLED": "This line is already complete — no more units needed",
+      "WRONG_STATUS": "Item is not available to pick"
+    }
   },
   "common": {
     "loading": "Loading...",
