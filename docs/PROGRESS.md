@@ -4,13 +4,14 @@
 
 ## Current state
 
-Day 10 complete as of 2026-06-16. All 111 integration tests pass (BUILD SUCCESS).
+Day 10 complete as of 2026-06-16. All 111 integration tests pass (BUILD SUCCESS). Commits: `766136b` (main Day 10), `4eb3692` (live-test fix).
 
 **Day 10 — FR-14 Piece-lookup timeline (custody-history showcase screen):**
 
 *Backend:*
 - **`LookupService`** — dual routing: `q.startsWith("PC-")` → piece lookup; else → tracking number lookup.
-  - `lookupPiece(barcode, isWorker)`: single JOIN across pieces/variants/products/locations/orders/shipments/receipts/receipt_lines. Timeline: all piece_events newest-first, LEFT JOIN users/orders/shipments/locations. Worker role (`isWorker=true`) omits `customerName`/`customerPhone` from the order map; keeps `orderNumber`.
+  - `lookupPiece(barcode, isWorker)`: single JOIN across pieces/variants/products/locations/orders/shipments/receipts. Timeline: all piece_events newest-first, LEFT JOIN users/orders/shipments/locations. Worker role (`isWorker=true`) omits `customerName`/`customerPhone` from the order map; keeps `orderNumber`.
+  - **Bug found in live test**: original query also joined `receipt_lines` (unused — only `receipts.id` and location name are needed). When a receipt had the same variant on 2+ lines, `queryForMap()` threw `IncorrectResultSizeDataAccessException` → 500. Fixed by dropping the join (`4eb3692`).
   - `lookupTracking(trackingNumber)`: fetches shipment + order, then pieces via `JOIN allocations → order_items` (allocations has no direct `order_id` column).
   - `phraseKey(eventType, fromStatus, toStatus)` — static mapping from event type + state pair to a human-phrase key (received_at, reserved_for_order, returned_to_stock, packed_for_order, courier_delivered, courier_picked_up, courier_awaiting_pickup, courier_return_transit, courier_return_received, courier_damaged, courier_lost, courier_destroyed, status_changed).
 - **`LookupController`** — `GET /api/v1/lookup?q=` open to OWNER/MANAGER/WORKER; routes to piece or tracking lookup based on `PC-` prefix.
@@ -35,6 +36,7 @@ Day 10 complete as of 2026-06-16. All 111 integration tests pass (BUILD SUCCESS)
 - **`Layout.tsx`** — global barcode/tracking search input in nav bar; submitting navigates to `/lookup?q=` and clears the field.
 - **`App.tsx`** — `/lookup` route wired (inside `RequireAuth` + `Layout`).
 - AR/EN locale keys: `lookup.*`, `lookup.phrase.*`, `lookup.pieceStatus.*`, `nav.lookup` (placeholder text for global search bar).
+- **Note**: shipment/tracking fields on the piece lookup screen are intentionally empty for all existing pieces — they will populate once Day 11 Mode B linking writes the `tracking_linked` events and binds `current_shipment_id`.
 
 **Post-Day-9 live testing fixes (2026-06-16) — all flows manually verified:**
 - **CORS**: `SecurityConfig` was only allowing `localhost:5173` and `localhost:3000`. Vite fell back to port 5174 (5173 in use), causing all browser requests to 403. Fixed by widening to `http://localhost:[*]`.
@@ -252,7 +254,13 @@ Day 10 complete as of 2026-06-16. All 111 integration tests pass (BUILD SUCCESS)
 - `ReceivingService.searchVariants()` filtered on `v.status = 'active'` but `status` lives on `products` not `variants` — SQL error silently returned 0 results; fixed to `p.status = 'active'`
 - Added `dev.sh` convenience script (loads `.env`, kills :8080, runs Maven) to avoid repeated env-var loss between terminal sessions
 
-Day 11: AWB creation + shipment wiring (FR-9 continued: Mode A — create Bosta delivery at packing, attach tracking number to order, advance order to `awaiting_pickup`).
+**Day 11: Mode B fulfillment linking.** The pilots' Bosta plugin creates deliveries and AWBs; we INGEST and LINK them — we do NOT create deliveries. Scope:
+- AWB-scan at pack time: packer scans the plugin-printed waybill barcode; system creates the `shipments` row, binds pieces↔order↔tracking, writes `tracking_linked` events, advances order to `awaiting_pickup`.
+- Reject swapped/mismatched AWBs (wrong order reference) loudly.
+- Match plugin-created Bosta deliveries to Shopify orders via `businessReference` / order # / phone+COD fallback.
+- Surface unmatched deliveries in `unlinked_bosta_deliveries` for manual linking (screen already exists from Day 6).
+- Built against the mock Bosta gateway; live verification deferred until Bosta IP whitelisting clears.
+- **Do NOT build Mode A delivery creation — deferred post-launch.**
 
 **Shopify OAuth design is owned by a separate design thread.** The production Shopify connect path = public OAuth app (decision recorded in "Decisions made" below). The detailed OAuth flow, scopes, callback URL, and state-parameter handling are being designed in a separate chat/thread. Do not re-derive or modify the OAuth design from this build thread. When that design is finalized it will be handed back here as a spec for implementation. The current custom-app endpoint (`POST /api/v1/shopify/connect` with `adminToken`) is DEV-ONLY and stays as-is until the spec arrives.
 
@@ -296,8 +304,13 @@ Day 11: AWB creation + shipment wiring (FR-9 continued: Mode A — create Bosta 
 ## Pending human tasks (not code)
 
 - ~~Apply V1 + V2 + V3 migrations to Supabase and set `app_user` password out-of-band~~ **Done 2026-06-13.**
-- **Shopify Protected Customer Data (PCD) approval** — blocks customer name, phone, and shipping address in order imports. Two steps required:
-  - *Dev store (unblock testing now):* Shopify Admin → Settings → Apps and sales channels → custom app → API credentials → add `read_customers` scope + regenerate token → update `SHOPIFY_ADMIN_TOKEN` in `.env`. Then in Partner Dashboard → Apps → App setup → Protected customer data → request access and accept the data-handling terms.
-  - *Production / public app (launch dependency — apply early):* PCD requires a Shopify review step with non-trivial lead time. Submit the PCD access request via the Partner Dashboard well before launch. Without approval, all orders import with null customer name/phone/address (data is preserved in `orders.raw` for backfill once approved).
-- Open Bosta whitelisting/staging ticket for a static egress IP (needed for webhook delivery in staging and production).
-- Get pilots' label-size answer (40×25 or 50×25) before Day 10 label work begins.
+- ~~Get pilots' label-size answer~~ — label PDF already ships at 50×25mm (configurable); no blocker.
+
+- **[NEAREST IMPACT] Open Bosta whitelisting / staging ticket** — static egress IP required for webhook delivery and API calls from our server to Bosta. This gates Day 11 live verification: Mode B matching will be built and unit-tested against the mock gateway, but cannot be verified end-to-end until our IP is whitelisted. Also gates any live Bosta delivery lookups. Open the ticket with Bosta support immediately.
+
+- **Shopify app registration + PCD approval** — post-pilot but needs lead time:
+  - Register the public Shopify app in the Partner Dashboard (required before the production OAuth flow can be built).
+  - Submit PCD access request immediately after registration — Shopify review has non-trivial lead time and is a hard launch dependency for customer name/phone/address. Without it, orders import with null PII (data preserved in `orders.raw` for backfill once approved).
+  - Write a privacy policy and data-use statement (required for any Shopify public app, including pre-App-Store pilots).
+
+- **Shopify Protected Customer Data (PCD) — dev store unblock** (optional, for richer testing now): Shopify Admin → Settings → Apps → custom app → API credentials → add `read_customers` scope + regenerate token → update `SHOPIFY_ADMIN_TOKEN` in `.env`. Then Partner Dashboard → Apps → App setup → Protected customer data → request access.

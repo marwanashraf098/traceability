@@ -68,12 +68,12 @@ One line per requirement · [M] Must / [S] Should / [C] Could · use as the buil
 - [ ] 7.9 [M] Blocklist management: add/remove w/ reason+source, logged, ≤50ms lookup ([S] CSV import)
 
 ## FR-8 Picking
-- [ ] 8.1 [M] Pick queue oldest-first; open = lock to worker; Manager can release
-- [ ] 8.2 [M] Pick screen per line; scan validated ≤300ms; full-screen green/red + audio
-- [ ] 8.3 [M] Rejection codes: PIECE_NOT_FOUND / WRONG_VARIANT / ALREADY_RESERVED / WRONG_STATUS / DUPLICATE_SCAN (cross-tenant = NOT_FOUND)
-- [ ] 8.4 [M] Scan atomically: Available→Reserved + allocation + event; concurrent double-scan → exactly one winner
-- [ ] 8.5 [M] Un-scan releases mis-pick
-- [ ] 8.6 [M] Picking completes only when all lines fully scanned
+- [x] 8.1 [M] Pick queue oldest-first; open = lock to worker; Manager can release
+- [x] 8.2 [M] Pick screen per line; scan validated ≤300ms; full-screen green/red + audio
+- [x] 8.3 [M] Rejection codes: PIECE_NOT_FOUND / WRONG_VARIANT / ALREADY_RESERVED / WRONG_STATUS / DUPLICATE_SCAN (cross-tenant = NOT_FOUND)
+- [x] 8.4 [M] Scan atomically: Available→Reserved + allocation + event; concurrent double-scan → exactly one winner
+- [x] 8.5 [M] Un-scan releases mis-pick
+- [x] 8.6 [M] Picking completes only when all lines fully scanned
 - [ ] 8.7 [M] Gather list: consolidated variants×totals for selected wave, live decrement, printable [S]
 - [ ] 8.7a [M] Wave locking (no double-gathering); Manager release
 - [ ] 8.7b [M] Shortage shown on gather list before walking shelves
@@ -81,10 +81,10 @@ One line per requirement · [M] Must / [S] Should / [C] Could · use as the buil
 - [ ] 8.8 [M] No typed barcodes; Manager-only manual entry, flagged in event
 
 ## FR-9 Packing, AWB & Cancellation
-- [ ] 9.1 [M] Single-step (pick+pack one flow, toggle default ON) or split stations
+- [x] 9.1 [M] Single-step (pick+pack one flow, toggle default ON) or split stations
 - [ ] 9.2 [M] Pack re-scan: scanned set ≡ allocated set, blocking mismatch error
-- [ ] 9.3 [M] Confirm → Mode A create delivery + AWB; Mode B prompt AWB scan; COD cap pre-validated
-- [ ] 9.4 [M] Pieces Reserved→Packed + events; allocations packed
+- [ ] 9.3 [M] Confirm → Mode B prompt AWB scan (Mode A delivery creation deferred post-launch); COD cap pre-validated
+- [x] 9.4 [M] Pieces Reserved→Packed + events; allocations packed
 - [ ] 9.5 [M] AWB auto-print; fetch failure → Packed + missing-AWB exception + retry (never silent loss)
 - [ ] 9.6 [M] AWB verification scan binds piece↔order↔tracking; mismatch rejected loudly ([S] optional toggle, default mandatory)
 - [ ] 9.7 [M] After verification → Awaiting Pickup
