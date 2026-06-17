@@ -4,7 +4,7 @@
 
 ## Current state
 
-Day 12 complete as of 2026-06-17. All 124 integration tests pass (BUILD SUCCESS).
+Returns intake + resolution (FR-12) shipped 2026-06-17. 124 integration tests pass (BUILD SUCCESS).
 
 **Day 12 — Returns intake + resolution (FR-12.1–12.5):**
 
@@ -316,31 +316,50 @@ Day 10 complete as of 2026-06-16. All 111 integration tests pass (BUILD SUCCESS)
 
 ---
 
-## Next up
+## Remaining work — pilot-ready MVP
 
-**Live test session (2026-06-16) — bugs found and fixed:**
-- `SecurityConfig` was blocking static assets (`/`, `/index.html`, `/assets/**`) — SPA couldn't load, browser got 401
-- `/api/v1/locations` endpoint missing — receiving form showed text input instead of warehouse dropdown; added `LocationController`
-- `Receiving.tsx` `loadLocations()` called `api('/api/v1/locations')` which double-prepended the `/api/v1` base, resulting in 404; fixed to `/locations`
-- `ReceivingService.searchVariants()` filtered on `v.status = 'active'` but `status` lives on `products` not `variants` — SQL error silently returned 0 results; fixed to `p.status = 'active'`
-- Added `dev.sh` convenience script (loads `.env`, kills :8080, runs Maven) to avoid repeated env-var loss between terminal sessions
+Features in delivery order. Commit history is the source of truth for what is done.
 
-**Day 11: Mode B fulfillment linking.** The pilots' Bosta plugin creates deliveries and AWBs; we INGEST and LINK them — we do NOT create deliveries. Scope:
-- AWB-scan at pack time: packer scans the plugin-printed waybill barcode; system creates the `shipments` row, binds pieces↔order↔tracking, writes `tracking_linked` events, advances order to `awaiting_pickup`.
-- Reject swapped/mismatched AWBs (wrong order reference) loudly.
-- Match plugin-created Bosta deliveries to Shopify orders via `businessReference` / order # / phone+COD fallback.
-- Surface unmatched deliveries in `unlinked_bosta_deliveries` for manual linking (screen already exists from Day 6).
-- Built against the mock Bosta gateway; live verification deferred until Bosta IP whitelisting clears.
-- **Do NOT build Mode A delivery creation — deferred post-launch.**
+### 1. Returns intake + never-received report (FR-12) ✅ shipped 2026-06-17
+Three-tab UI: intake scan, pending-inspection queue, never-received report. See history below.
 
-**Shopify OAuth design is owned by a separate design thread.** The production Shopify connect path = public OAuth app (decision recorded in "Decisions made" below). The detailed OAuth flow, scopes, callback URL, and state-parameter handling are being designed in a separate chat/thread. Do not re-derive or modify the OAuth design from this build thread. When that design is finalized it will be handed back here as a spec for implementation. The current custom-app endpoint (`POST /api/v1/shopify/connect` with `adminToken`) is DEV-ONLY and stays as-is until the spec arrives.
+### 2. Exceptions center (FR-15.3)
+One prioritised list of all open exceptions with resolving actions: never-received · unexpected return · lost · failed delivery attempts · stuck shipment · unlinked Mode-B delivery · missing AWB · address review · blocked customer · short order · NDR limbo. Each exception type links to the relevant action screen. This is the operator's daily starting point — nothing should require hunting across multiple screens.
 
-**Human tasks remaining:**
-- Open Bosta whitelisting/staging ticket (static egress IP) — needed for webhook delivery + API calls
-- Shopify PCD approval (customer name/phone/address unblocked) — submit early, has lead time
-- Register the public Shopify app in the Partner Dashboard (required before OAuth flow can be built)
-- Submit the Shopify PCD access request immediately after registering the app — review has non-trivial lead time and is a hard launch dependency
-- Write a privacy policy and data-use statement (required by Shopify for any public app, including pre-App-Store pilots)
+### 3. Cancellation + self-pickup flows (FR-9.8–9.13)
+- Guided unpack (cancel post-pack): cancel AWB → rescan pieces out → available → cancelled; no partial completion.
+- Pre-handover cancel: (a) full cancel → unpack; (b) convert to self-pickup → AWB cancelled, sale stands, Self-Pickup Pending state.
+- Self-pickup handover: scan pieces + COD cash confirm → delivered (self-pickup).
+- No-show (7-day) → exception: re-ship or cancel.
+- Courier-already-collected guard: cancellation blocked with explanation.
+
+### 4. Mode B live verification against real Bosta account
+businessReference match + phone/COD fallback have been built and tested against the mock gateway. Before pilots: end-to-end verify with real Bosta delivery JSON — confirm consignee phone field path, businessReference format, state code sequence, and that `tryMatchDelivery()` links correctly. **Gated on Bosta IP whitelisting (human task below).**
+
+Also before pilots: tighten `matchByPhoneAndCod()` — change to flag-not-auto-commit; only auto-link when exactly one non-terminal order matches both phone AND COD; route zero-or-multiple-candidate cases to `unlinked_bosta_deliveries` for manual resolution. Current implementation auto-guesses, which risks wrong custody attribution on repeat customers or common COD amounts.
+
+### 5. Public OAuth app (separate design thread)
+Production Shopify connect requires a public OAuth app (custom apps cannot read customer PII on Basic-tier stores; see Decisions). The OAuth flow, scopes, callback URL, and state-parameter handling are being designed in a separate thread. The current custom-app endpoint (`POST /api/v1/shopify/connect`) is DEV-ONLY and must not ship to pilots. When the spec arrives it will be handed to this thread for implementation. **Gated on Shopify Partner Dashboard app registration + PCD review approval (human tasks below).**
+
+### 6. VPS deployment
+Provision Hetzner VPS, set up Docker Compose (app + Postgres or Supabase connection), Nginx reverse proxy, TLS, `systemd` restart policy, deploy pipeline. Currently runs only locally; no production environment exists.
+
+### 7. Pilot onboarding
+- Tenant signup flow (FR-1.1): business name, owner, email, password — currently only manual DB insert.
+- Guided onboarding checklist (FR-1.2): connect Shopify → connect Bosta → import → test label → first receiving.
+- User CRUD by Owner/Manager (FR-2.2).
+- Per-tenant settings UI (FR-1.4): label size, language, timezone, pickup address.
+- Both pilots need to be able to set themselves up without direct DB access.
+
+---
+
+## Human tasks (not code — blocking or long-lead-time)
+
+- **[IMMEDIATE] Bosta IP whitelisting** — give Bosta our server's static egress IP so webhooks are delivered. Without this, all courier state changes are silently dropped. Also required for any live Bosta API calls (delivery lookup, staging verification). Open the support ticket now.
+- **[LEAD TIME] Shopify public app registration** — register in Partner Dashboard before the OAuth build can start. Do this before the spec is handed back.
+- **[LEAD TIME] Shopify PCD approval** — submit Protected Customer Data access request immediately after app registration. Non-trivial Shopify review time; hard launch dependency for customer name/phone/address (currently null in orders; data preserved in `orders.raw` for backfill).
+- **[REQUIRED] GDPR webhooks + privacy policy** — `customers/data_request`, `customers/redact`, `shop/redact` endpoints and a published privacy policy are mandatory for any Shopify public app. Required for PCD approval.
+- **[OPTIONAL NOW] Dev store PCD unblock** — Shopify Admin → Settings → Apps → custom app → add `read_customers` + regenerate token, then Partner Dashboard → App setup → request Protected customer data access. Gives richer test data now without waiting for production PCD review.
 
 ---
 
@@ -370,18 +389,3 @@ Day 10 complete as of 2026-06-16. All 111 integration tests pass (BUILD SUCCESS)
 - **`BostaWebhookJob` piece-transition catches are intentional idempotency guards — do not convert to errors.** A repeat terminal-state webhook (e.g. state 45 delivered arriving twice) hits one of three safe paths: (1) `current == target` fast-path check skips `ledger.transition()` entirely — no DB write; (2) `StateConflictException` where `getActual() == targetStatus` — concurrent worker applied the same transition first, treat as no-op; (3) `IllegalTransitionException` — piece has no legal path to target (e.g. a stale `with_courier` event arriving after `delivered`), log warning and continue. None of these paths fail the webhook. The dedup check (step 4) catches exact payload redeliveries before reaching pieces at all. Do not "fix" any of these catches into error or rethrow paths.
 - **`SET LOCAL` is a silent no-op outside a transaction** — the `SET LOCAL app.current_tenant = ?` call for the tenant context filter must happen inside an explicit transaction (`BEGIN` / `COMMIT`). Called outside a transaction it silently succeeds but resets at the next statement boundary, leaving subsequent queries with no tenant context (empty-string GUC → policy evaluates to false → zero rows or constraint violation).
 
----
-
-## Pending human tasks (not code)
-
-- ~~Apply V1 + V2 + V3 migrations to Supabase and set `app_user` password out-of-band~~ **Done 2026-06-13.**
-- ~~Get pilots' label-size answer~~ — label PDF already ships at 50×25mm (configurable); no blocker.
-
-- **[NEAREST IMPACT] Open Bosta whitelisting / staging ticket** — static egress IP required for webhook delivery and API calls from our server to Bosta. This gates Day 11 live verification: Mode B matching will be built and unit-tested against the mock gateway, but cannot be verified end-to-end until our IP is whitelisted. Also gates any live Bosta delivery lookups. Open the ticket with Bosta support immediately.
-
-- **Shopify app registration + PCD approval** — post-pilot but needs lead time:
-  - Register the public Shopify app in the Partner Dashboard (required before the production OAuth flow can be built).
-  - Submit PCD access request immediately after registration — Shopify review has non-trivial lead time and is a hard launch dependency for customer name/phone/address. Without it, orders import with null PII (data preserved in `orders.raw` for backfill once approved).
-  - Write a privacy policy and data-use statement (required for any Shopify public app, including pre-App-Store pilots).
-
-- **Shopify Protected Customer Data (PCD) — dev store unblock** (optional, for richer testing now): Shopify Admin → Settings → Apps → custom app → API credentials → add `read_customers` scope + regenerate token → update `SHOPIFY_ADMIN_TOKEN` in `.env`. Then Partner Dashboard → Apps → App setup → Protected customer data → request access.
