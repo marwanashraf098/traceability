@@ -7,6 +7,7 @@ import Catalog from './pages/Catalog'
 import Receiving from './pages/Receiving'
 import Fulfill from './pages/Fulfill'
 import LookupPage from './pages/Lookup'
+import Returns from './pages/Returns'
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
   return localStorage.getItem('token') ? <>{children}</> : <Navigate to="/login" replace />
@@ -62,6 +63,14 @@ export default function App() {
           element={
             <RequireAuth>
               <Layout><LookupPage /></Layout>
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="/returns"
+          element={
+            <RequireAuth>
+              <Layout><Returns /></Layout>
             </RequireAuth>
           }
         />

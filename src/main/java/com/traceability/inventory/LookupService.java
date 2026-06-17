@@ -21,11 +21,14 @@ public class LookupService {
     // ── Phrase key derivation ─────────────────────────────────────────────────
 
     static String phraseKey(String eventType, String fromStatus, String toStatus) {
-        if ("received".equals(eventType))         return "received_at";
-        if ("scan".equals(eventType))             return "reserved_for_order";
-        if ("unscan".equals(eventType))           return "returned_to_stock";
-        if ("pack".equals(eventType))             return "packed_for_order";
-        if ("tracking_linked".equals(eventType))  return "tracking_linked";
+        if ("received".equals(eventType))          return "received_at";
+        if ("scan".equals(eventType))              return "reserved_for_order";
+        if ("unscan".equals(eventType))            return "returned_to_stock";
+        if ("pack".equals(eventType))              return "packed_for_order";
+        if ("tracking_linked".equals(eventType))   return "tracking_linked";
+        if ("return_received".equals(eventType))   return "return_received";
+        if ("restocked".equals(eventType))         return "restocked";
+        if ("damaged".equals(eventType))           return "damaged";
         if ("courier_update".equals(eventType)) {
             if ("delivered".equals(toStatus))                       return "courier_delivered";
             if ("with_courier".equals(toStatus))                    return "courier_picked_up";

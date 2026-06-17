@@ -5,7 +5,8 @@
     "receiving": "Receiving",
     "fulfill": "Pick & Pack",
     "logout": "Logout",
-    "lookup": "Scan or type barcode…"
+    "lookup": "Scan or type barcode…",
+    "returns": "Returns"
   },
   "login": {
     "title": "Traceability",
@@ -172,7 +173,10 @@
       "courier_lost": "Marked lost by courier",
       "courier_destroyed": "Marked destroyed",
       "status_changed": "Status changed to {{toStatus}}",
-      "tracking_linked": "AWB scanned — awaiting courier pickup"
+      "tracking_linked": "AWB scanned — awaiting courier pickup",
+      "return_received": "Return received at {{location}} — pending inspection",
+      "restocked": "Restocked to available",
+      "damaged": "Marked as damaged"
     },
     "pieceStatus": {
       "available": "Available",
@@ -186,6 +190,39 @@
       "damaged": "Damaged",
       "lost": "Lost",
       "destroyed": "Destroyed"
+    }
+  },
+  "returns": {
+    "title": "Returns Intake",
+    "scanPlaceholder": "Scan or type piece barcode…",
+    "unexpected": "⚠ Unexpected return — shipment was not in returning state",
+    "notFound": "Piece not found — check the barcode",
+    "intakeSuccess": "Intake recorded",
+    "pending": {
+      "title": "Pending Inspection",
+      "empty": "No pieces pending inspection",
+      "restock": "Restock",
+      "damage": "Mark Damaged",
+      "damageReason": "Reason (required)",
+      "confirm": "Confirm"
+    },
+    "neverReceived": {
+      "title": "Never-Received Report",
+      "subtitle": "Bosta marked these returned, but they were never scanned back in",
+      "empty": "No missing returns — all clear",
+      "piece": "Piece",
+      "order": "Order",
+      "tracking": "AWB",
+      "returnedAt": "Returned",
+      "window": "Window (days)"
+    },
+    "col": {
+      "barcode": "Barcode",
+      "variant": "Product",
+      "status": "Status",
+      "order": "Order",
+      "location": "Location",
+      "intakedAt": "Intaked"
     }
   },
   "common": {

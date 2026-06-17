@@ -47,6 +47,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
             <NavLink to="/catalog"   className={linkClass}>{t('nav.catalog')}</NavLink>
             <NavLink to="/receiving" className={linkClass}>{t('nav.receiving')}</NavLink>
             <NavLink to="/fulfill"   className={linkClass}>{t('nav.fulfill')}</NavLink>
+            <NavLink to="/returns"   className={linkClass}>{t('nav.returns')}</NavLink>
           </div>
           <div className="flex items-center gap-3">
             {/* Global barcode / tracking lookup */}

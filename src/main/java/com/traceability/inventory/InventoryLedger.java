@@ -50,6 +50,9 @@ public class InventoryLedger {
         // courier return path
         "with_courier:return_in_transit",
         "return_in_transit:return_pending_inspection",
+        // Bosta-lag path: piece still at with_courier when intake scan fires
+        // (state 41 RTO never arrived or was skipped). Unexpected flag set by caller.
+        "with_courier:return_pending_inspection",
         "return_pending_inspection:available",
         "return_pending_inspection:damaged",
 
@@ -239,6 +242,29 @@ public class InventoryLedger {
             evtParams.add(s.locationId());
         }
         jdbc.update(evtSql.toString(), evtParams.toArray());
+    }
+
+    /**
+     * Records a return_received event for a piece that is ALREADY at
+     * return_pending_inspection (state-46 webhook fired before intake scan).
+     *
+     * No status change is made — the piece stays at return_pending_inspection.
+     * from_status = to_status = return_pending_inspection so timeline rendering
+     * can use the phraseKey "return_received" without needing a status transition.
+     *
+     * This is the third write path on InventoryLedger (alongside transition() and
+     * batchReceive()). InventoryLedger is still the only class that writes
+     * piece_events — the CLAUDE.md invariant is preserved.
+     */
+    @Transactional(isolation = Isolation.READ_COMMITTED)
+    public void recordReturnReceived(String pieceId, UUID locationId, UUID actorUserId,
+                                     UUID orderId, UUID shipmentId) {
+        jdbc.update(INSERT_EVENT,
+                pieceId, "return_received", actorUserId,
+                orderId, shipmentId, locationId,
+                PieceStatus.RETURN_PENDING_INSPECTION.db,
+                PieceStatus.RETURN_PENDING_INSPECTION.db,
+                null);
     }
 
     /** Specification for one piece to be created via batchReceive. */

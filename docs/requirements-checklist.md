@@ -109,11 +109,11 @@ One line per requirement · [M] Must / [S] Should / [C] Could · use as the buil
 - [ ] 11.5 [M] Stuck detector: no provider update 5d (configurable) → exception
 
 ## FR-12 Returns
-- [ ] 12.1 [M] Intake scan: piece → Return Pending Inspection at scan location + return_received event
-- [ ] 12.2 [M] Unexpected return (shipment not in returning state) → intake proceeds + flag
-- [ ] 12.3 [M] Resolution: Restock (→Available) or Damaged (terminal, reason; [S] photo)
-- [ ] 12.4 [M] Never-received report: RTO'd pieces not intaken in 3d, by exact ID — prominent
-- [ ] 12.5 [M] Restocked piece keeps identity + one continuous timeline; label reprint if peeled
+- [x] 12.1 [M] Intake scan: piece → Return Pending Inspection at scan location + return_received event
+- [x] 12.2 [M] Unexpected return (shipment not in returning state) → intake proceeds + flag
+- [x] 12.3 [M] Resolution: Restock (→Available) or Damaged (terminal, reason; [S] photo)
+- [x] 12.4 [M] Never-received report: RTO'd pieces not intaken in 3d, by exact ID — prominent
+- [x] 12.5 [M] Restocked piece keeps identity + one continuous timeline; label reprint if peeled
 - [ ] 12.6 [C] Customer-initiated returns/exchange workflow — out of MVP (Bosta EXCHANGE/CRP type mapping per §7 Q6 if pilots use it)
 
 ## FR-13 Adjustments

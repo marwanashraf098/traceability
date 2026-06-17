@@ -211,17 +211,21 @@ public class BostaWebhookJob {
             final ShipmentRow resolvedShipment = shipment;
 
             // 9. Persist updated courier state on the shipment row.
+            //    For state 46 (returned_to_business), set returned_at to start the
+            //    never-received detection clock (FR-12.4).
+            boolean isReturnedState = "returned".equals(mapped.shipmentInternalState());
             tx.execute(s -> {
                 jdbc.update("""
                     UPDATE shipments
                     SET internal_state     = ?::shipment_internal_state,
                         number_of_attempts = ?,
                         raw                = ?::jsonb,
-                        last_synced_at     = now()
+                        last_synced_at     = now(),
+                        returned_at        = CASE WHEN ? THEN now() ELSE returned_at END
                     WHERE id = ?
                     """,
                     mapped.shipmentInternalState(), delivery.numberOfAttempts(),
-                    delivery.raw().toString(), resolvedShipment.id());
+                    delivery.raw().toString(), isReturnedState, resolvedShipment.id());
                 return null;
             });
 

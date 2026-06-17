@@ -4,7 +4,34 @@
 
 ## Current state
 
-Day 11 complete as of 2026-06-17. All 117 integration tests pass (BUILD SUCCESS).
+Day 12 complete as of 2026-06-17. All 124 integration tests pass (BUILD SUCCESS).
+
+**Day 12 — Returns intake + resolution (FR-12.1–12.5):**
+
+*Migration V10 (`V10__day12_returns.sql`):*
+- `tenants.never_received_window_days` (int, default 3) — per-tenant configurable never-received window.
+- `shipments.returned_at` (timestamptz) — set by `BostaWebhookJob` on state-46 webhook; starts the FR-12.4 detection clock.
+- Indexes: `shipments_returned_at_idx` (partial, returned + non-null) and `piece_events_return_received_idx` (partial, event_type='return_received').
+
+*Backend:*
+- **`InventoryLedger`** — two additions: `"with_courier:return_pending_inspection"` added to ALLOWED set (Bosta-lag intake); `recordReturnReceived()` third write path for idempotent intake of pieces already at `return_pending_inspection` (state-46 webhook fires before scan).
+- **`ReturnService`** — full returns logic: `intakeScan()` (switch on RETURN_IN_TRANSIT/WITH_COURIER/RETURN_PENDING_INSPECTION), `listPending()`, `restock()`, `markDamaged()` (reason mandatory — 400 if blank), `neverReceived()` (NOT EXISTS gate on return_received events past window).
+- **`ReturnController`** (`/api/v1/returns`): `POST /intake`, `GET /pending`, `POST /pieces/{id}/restock`, `POST /pieces/{id}/damage`, `GET /never-received`.
+- **`LookupService`** — added phraseKey mappings for `return_received`, `restocked`, `damaged`.
+- **`BostaWebhookJob`** — step 9 UPDATE now sets `returned_at = now()` when `isReturnedState` (state 46).
+
+*Tests (`Day12Test` — 7 tests):*
+- **(a)** Intake scan: `return_in_transit` → `return_pending_inspection`, `return_received` event with location+actor, `current_location_id` updated; `isUnexpected=false`.
+- **(b)** Unexpected return: piece at `with_courier`, shipment not in returning state → intake proceeds to `return_pending_inspection`; `isUnexpected=true`, event written.
+- **(c)** Restock: `return_pending_inspection` → `available`, `restocked` event, `current_order_id` cleared, `current_location_id` set.
+- **(d)** Damage: null reason → 400; valid reason → `damaged`, reason in event metadata.
+- **(e)** Never-received detector: shipment `returned_at` 4 days ago; piece A (no `return_received` event) appears in report; piece B (has event) excluded.
+- **(f)** Continuous timeline: intake → restock; lookup shows both `return_received` and `restocked` in correct newest-first order.
+- **(g)** Cross-tenant isolation: different tenant context → 404 on intake scan.
+
+*Frontend (`Returns.tsx`):*
+- Three-tab UI: **Intake** (worker — HID-ready auto-focused scan, full-screen green/red flash + beep, amber warning on unexpected return); **Pending Inspection** (manager — list + Restock/Damage actions); **Never-Received** (manager — configurable window, amber banner, piece/order/tracking table).
+- Route `/returns` added to `App.tsx`; "Returns" nav link added to `Layout.tsx`.
 
 **Pending live verification:**
 - Mode B linking built + tested against mocks — needs live verification against a real Bosta account (real delivery JSON shape, consignee fields, end-to-end match/link) once account/staging is available.
