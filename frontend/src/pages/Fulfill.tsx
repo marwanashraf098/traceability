@@ -81,8 +81,132 @@ interface ScanResult {
   allComplete: boolean
 }
 
+interface AwbLinkResponse {
+  trackingNumber: string
+  linkedPieces: number
+  orderStatus: string
+}
+
 // Flash state for scan feedback
 type FlashState = 'idle' | 'success' | 'error'
+
+// ── AWB-scan dialog ────────────────────────────────────────────────────────────
+
+function AwbLinkDialog({ orderId, onDone }: { orderId: string; onDone: () => void }) {
+  const { t } = useTranslation()
+  const inputRef = useRef<HTMLInputElement>(null)
+  const [flash, setFlash] = useState<FlashState>('idle')
+  const [linking, setLinking] = useState(false)
+  const [linked, setLinked] = useState<string | null>(null)
+  const [conflictError, setConflictError] = useState(false)
+  const [genericError, setGenericError] = useState(false)
+
+  useEffect(() => { inputRef.current?.focus() }, [])
+
+  const triggerFlash = (state: 'success' | 'error') => {
+    setFlash(state)
+    setTimeout(() => setFlash('idle'), 600)
+  }
+
+  const handleLink = async (tracking: string) => {
+    const trimmed = tracking.trim()
+    if (!trimmed || linking) return
+    setLinking(true)
+    setConflictError(false)
+    setGenericError(false)
+    try {
+      const token = localStorage.getItem('token')
+      const res = await fetch(`/api/v1/fulfill/${orderId}/link`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({ trackingNumber: trimmed }),
+      })
+      if (res.ok) {
+        const data: AwbLinkResponse = await res.json()
+        playBeep(true)
+        triggerFlash('success')
+        setLinked(data.trackingNumber)
+        setTimeout(() => onDone(), 1800)
+      } else if (res.status === 409) {
+        playBeep(false)
+        triggerFlash('error')
+        setConflictError(true)
+        if (inputRef.current) { inputRef.current.value = ''; inputRef.current.focus() }
+      } else {
+        playBeep(false)
+        triggerFlash('error')
+        setGenericError(true)
+        if (inputRef.current) { inputRef.current.value = ''; inputRef.current.focus() }
+      }
+    } catch {
+      playBeep(false)
+      triggerFlash('error')
+      setGenericError(true)
+      if (inputRef.current) { inputRef.current.value = ''; inputRef.current.focus() }
+    } finally {
+      setLinking(false)
+    }
+  }
+
+  const flashClass = flash === 'success'
+    ? 'fixed inset-0 bg-green-400 opacity-30 pointer-events-none z-[60] animate-flash'
+    : flash === 'error'
+    ? 'fixed inset-0 bg-red-400 opacity-30 pointer-events-none z-[60] animate-flash'
+    : 'hidden'
+
+  return (
+    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50">
+      <div className={flashClass} />
+      <div className="bg-white rounded-xl shadow-2xl p-8 w-full max-w-md mx-4">
+        <h2 className="text-xl font-bold text-gray-900 mb-1">{t('fulfill.linkAwb.title')}</h2>
+        <p className="text-sm text-gray-500 mb-6">{t('fulfill.linkAwb.subtitle')}</p>
+
+        {linked ? (
+          <div className="text-center py-6">
+            <div className="text-5xl text-green-500 mb-3">✓</div>
+            <p className="text-green-700 font-semibold text-lg">
+              {t('fulfill.linkAwb.success', { tracking: linked })}
+            </p>
+          </div>
+        ) : (
+          <>
+            <input
+              ref={inputRef}
+              type="text"
+              placeholder={t('fulfill.linkAwb.placeholder')}
+              className="w-full border-2 border-indigo-300 rounded-lg px-4 py-3 text-lg font-mono focus:outline-none focus:border-indigo-500 mb-3"
+              disabled={linking}
+              onKeyDown={e => {
+                if (e.key === 'Enter') {
+                  handleLink((e.target as HTMLInputElement).value)
+                }
+              }}
+            />
+            {conflictError && (
+              <p className="text-red-600 text-sm font-medium mb-3">
+                ✗ {t('fulfill.linkAwb.conflict')}
+              </p>
+            )}
+            {genericError && (
+              <p className="text-red-600 text-sm font-medium mb-3">
+                ✗ {t('fulfill.linkAwb.error')}
+              </p>
+            )}
+            <button
+              onClick={onDone}
+              className="w-full text-center text-sm text-gray-400 hover:text-gray-600 mt-2 py-2"
+            >
+              {t('fulfill.linkAwb.skip')}
+            </button>
+          </>
+        )}
+      </div>
+    </div>
+  )
+}
 
 // ── Audio ──────────────────────────────────────────────────────────────────────
 
@@ -203,6 +327,7 @@ function PickScreen({ orderId, onBack }: { orderId: string; onBack: () => void }
   const [lastResult, setLastResult] = useState<ScanResult | null>(null)
   const [scanning, setScanning] = useState(false)
   const [completing, setCompleting] = useState(false)
+  const [showAwbDialog, setShowAwbDialog] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
 
   const loadOrder = useCallback(async () => {
@@ -271,7 +396,7 @@ function PickScreen({ orderId, onBack }: { orderId: string; onBack: () => void }
     setCompleting(true)
     try {
       await api(`/fulfill/${orderId}/complete`, { method: 'POST' })
-      onBack()
+      setShowAwbDialog(true)
     } finally {
       setCompleting(false)
     }
@@ -390,6 +515,11 @@ function PickScreen({ orderId, onBack }: { orderId: string; onBack: () => void }
             {completing ? t('common.loading') : t('fulfill.complete')}
           </button>
         </div>
+      )}
+
+      {/* AWB-scan dialog — shown after pack completes */}
+      {showAwbDialog && (
+        <AwbLinkDialog orderId={orderId} onDone={onBack} />
       )}
     </div>
   )

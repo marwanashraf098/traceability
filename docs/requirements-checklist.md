@@ -83,7 +83,7 @@ One line per requirement · [M] Must / [S] Should / [C] Could · use as the buil
 ## FR-9 Packing, AWB & Cancellation
 - [x] 9.1 [M] Single-step (pick+pack one flow, toggle default ON) or split stations
 - [ ] 9.2 [M] Pack re-scan: scanned set ≡ allocated set, blocking mismatch error
-- [ ] 9.3 [M] Confirm → Mode B prompt AWB scan (Mode A delivery creation deferred post-launch); COD cap pre-validated
+- [x] 9.3 [M] Confirm → Mode B prompt AWB scan (Mode A delivery creation deferred post-launch); COD cap pre-validated
 - [x] 9.4 [M] Pieces Reserved→Packed + events; allocations packed
 - [ ] 9.5 [M] AWB auto-print; fetch failure → Packed + missing-AWB exception + retry (never silent loss)
 - [x] 9.6 [M] AWB verification scan binds piece↔order↔tracking; mismatch rejected loudly ([S] optional toggle, default mandatory)
