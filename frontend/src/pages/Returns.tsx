@@ -105,7 +105,7 @@ function IntakeTab() {
     } catch (e: unknown) {
       playBeep(false); triggerFlash('error')
       const status = (e as { status?: number }).status
-      setError(status === 404 ? t('returns.notFound') : t('common.error'))
+      setError(status === 404 ? t('returns.notFound') : ((e as Error).message || t('common.error')))
     } finally {
       setScanning(false)
       if (inputRef.current) { inputRef.current.value = ''; inputRef.current.focus() }

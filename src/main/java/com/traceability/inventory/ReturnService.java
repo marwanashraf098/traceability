@@ -82,9 +82,15 @@ public class ReturnService {
             }
             case WITH_COURIER -> {
                 // Bosta lag: state 41 RTO never arrived; piece still with_courier.
-                // Direct with_courier→return_pending_inspection (added to ALLOWED).
                 isUnexpected = true;
                 ledger.transition(pieceId, PieceStatus.WITH_COURIER,
+                        PieceStatus.RETURN_PENDING_INSPECTION, "return_received", actorUserId, ctx);
+            }
+            case AWAITING_PICKUP -> {
+                // Webhook lag: courier-pickup event (state 21) never arrived so piece
+                // never advanced to with_courier. Physical piece arrived back at warehouse.
+                isUnexpected = true;
+                ledger.transition(pieceId, PieceStatus.AWAITING_PICKUP,
                         PieceStatus.RETURN_PENDING_INSPECTION, "return_received", actorUserId, ctx);
             }
             case RETURN_PENDING_INSPECTION -> {

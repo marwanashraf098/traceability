@@ -50,9 +50,10 @@ public class InventoryLedger {
         // courier return path
         "with_courier:return_in_transit",
         "return_in_transit:return_pending_inspection",
-        // Bosta-lag path: piece still at with_courier when intake scan fires
-        // (state 41 RTO never arrived or was skipped). Unexpected flag set by caller.
+        // Bosta-lag paths: piece still at with_courier or awaiting_pickup when intake scan
+        // fires (state 41 RTO never arrived / webhooks not yet configured). Unexpected flag set by caller.
         "with_courier:return_pending_inspection",
+        "awaiting_pickup:return_pending_inspection",
         "return_pending_inspection:available",
         "return_pending_inspection:damaged",
 
