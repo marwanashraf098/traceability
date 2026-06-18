@@ -42,6 +42,9 @@ public class InventoryLedger {
         "awaiting_pickup:with_courier",
         "with_courier:delivered",
 
+        // self-pickup handover: pieces go packed→delivered directly (no courier leg)
+        "packed:delivered",
+
         // cancellation / unwind
         "reserved:available",
         "packed:available",

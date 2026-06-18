@@ -218,13 +218,15 @@ public class BostaWebhookJob {
                 jdbc.update("""
                     UPDATE shipments
                     SET internal_state     = ?::shipment_internal_state,
+                        provider_state     = ?,
                         number_of_attempts = ?,
                         raw                = ?::jsonb,
                         last_synced_at     = now(),
                         returned_at        = CASE WHEN ? THEN now() ELSE returned_at END
                     WHERE id = ?
                     """,
-                    mapped.shipmentInternalState(), delivery.numberOfAttempts(),
+                    mapped.shipmentInternalState(), delivery.stateCode(),
+                    delivery.numberOfAttempts(),
                     delivery.raw().toString(), isReturnedState, resolvedShipment.id());
                 return null;
             });

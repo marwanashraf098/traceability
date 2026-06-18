@@ -97,6 +97,48 @@ public class FulfillController {
         return linkSvc.linkByAwbScan(orderId, req.trackingNumber().trim(), principal.userId());
     }
 
+    /** FR-9.10 — Toggle self-pickup flag (manual before or during picking). */
+    @PatchMapping("/{orderId}/self-pickup")
+    @PreAuthorize("isAuthenticated()")
+    @org.springframework.web.bind.annotation.ResponseStatus(HttpStatus.NO_CONTENT)
+    public void setSelfPickup(
+            @PathVariable UUID orderId,
+            @RequestBody SelfPickupRequest req) {
+        svc.setSelfPickup(orderId, req.selfPickup());
+    }
+
+    /** FR-9.11 — Confirm customer collection at the counter (self-pickup handover). */
+    @PostMapping("/{orderId}/handover")
+    @PreAuthorize("isAuthenticated()")
+    public Map<String, Object> handover(
+            @PathVariable UUID orderId,
+            @AuthenticationPrincipal CustomUserDetails principal) {
+        int count = svc.handover(orderId, principal.userId());
+        return Map.of("deliveredPieces", count, "orderStatus", "delivered");
+    }
+
+    /** FR-9.12/9.13 — Cancel order (pre-pack auto-release or post-pack guided unpack). */
+    @PostMapping("/{orderId}/cancel")
+    @PreAuthorize("isAuthenticated()")
+    public org.springframework.http.ResponseEntity<FulfillService.CancelResult> cancelOrder(
+            @PathVariable UUID orderId,
+            @AuthenticationPrincipal CustomUserDetails principal) {
+        FulfillService.CancelResult result = svc.cancelOrder(orderId, principal.userId());
+        int httpStatus = "cancel_requested".equals(result.status()) ? 202 : 200;
+        return org.springframework.http.ResponseEntity.status(httpStatus).body(result);
+    }
+
+    /** Guided unpack: physically remove one packed piece for a post-pack cancellation. */
+    @PostMapping("/{orderId}/unpack/{pieceId}")
+    @PreAuthorize("isAuthenticated()")
+    public FulfillService.UnpackResult unpackPiece(
+            @PathVariable UUID orderId,
+            @PathVariable String pieceId,
+            @AuthenticationPrincipal CustomUserDetails principal) {
+        return svc.unpackPiece(orderId, pieceId, principal.userId());
+    }
+
     public record ScanRequest(String barcode) {}
     public record AwbLinkRequest(String trackingNumber) {}
+    public record SelfPickupRequest(boolean selfPickup) {}
 }

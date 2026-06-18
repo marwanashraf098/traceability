@@ -24,15 +24,16 @@ public class FulfillService {
     // ── Queue ─────────────────────────────────────────────────────────────────
 
     /**
-     * Returns orders eligible for picking: status IN ('new','ready_to_pick'),
-     * not on hold, oldest first. Each row includes per-item scan progress.
+     * Returns orders eligible for action: status IN ('new','ready_to_pick',
+     * 'self_pickup_pending'), not on hold, oldest first.
+     * self_pickup_pending orders are fully packed and awaiting customer handover.
      */
     public List<Map<String, Object>> getQueue() {
         UUID tenantId = TenantContext.require();
         return jdbc.queryForList(
             "SELECT o.id, o.number, o.customer_name, o.customer_phone, " +
             "       o.status, o.payment_method, o.cod_amount, o.placed_at, " +
-            "       o.locked_by, o.locked_at, " +
+            "       o.locked_by, o.locked_at, o.is_self_pickup, " +
             "       COALESCE(SUM(oi.quantity), 0) AS total_units, " +
             "       COALESCE(( " +
             "           SELECT COUNT(*) FROM allocations a " +
@@ -42,7 +43,7 @@ public class FulfillService {
             "FROM orders o " +
             "LEFT JOIN order_items oi ON oi.order_id = o.id " +
             "WHERE o.tenant_id = ? " +
-            "  AND o.status IN ('new','ready_to_pick') " +
+            "  AND o.status IN ('new','ready_to_pick','self_pickup_pending') " +
             "  AND o.on_hold = false " +
             "GROUP BY o.id " +
             "ORDER BY o.created_at ASC",
@@ -57,7 +58,7 @@ public class FulfillService {
         List<Map<String, Object>> rows = jdbc.queryForList(
             "SELECT o.id, o.number, o.customer_name, o.customer_phone, o.address, " +
             "       o.status, o.payment_method, o.cod_amount, o.placed_at, " +
-            "       o.locked_by, o.locked_at " +
+            "       o.locked_by, o.locked_at, o.is_self_pickup, o.cancel_requested_at " +
             "FROM orders o " +
             "WHERE o.id = ? AND o.tenant_id = ?",
             orderId, tenantId);
@@ -336,12 +337,217 @@ public class FulfillService {
             ") AND status = 'active'",
             orderId, tenantId);
 
-        // Advance order to packed
+        // Advance order: self-pickup orders go to self_pickup_pending (no AWB step);
+        // standard orders go to packed (then await AWB-link).
+        Boolean isSelfPickup = jdbc.queryForObject(
+            "SELECT is_self_pickup FROM orders WHERE id = ? AND tenant_id = ?",
+            Boolean.class, orderId, tenantId);
+        String newOrderStatus = Boolean.TRUE.equals(isSelfPickup) ? "self_pickup_pending" : "packed";
         jdbc.update(
-            "UPDATE orders SET status = 'packed' WHERE id = ? AND tenant_id = ?",
+            "UPDATE orders SET status = ?::order_status WHERE id = ? AND tenant_id = ?",
+            newOrderStatus, orderId, tenantId);
+
+        return pieceIds.size();
+    }
+
+    // ── Self-pickup ───────────────────────────────────────────────────────────
+
+    /** Toggles the self-pickup flag on an order (cannot toggle once in a terminal state). */
+    @Transactional
+    public void setSelfPickup(UUID orderId, boolean selfPickup) {
+        UUID tenantId = TenantContext.require();
+        int rows = jdbc.update(
+            "UPDATE orders SET is_self_pickup = ? " +
+            "WHERE id = ? AND tenant_id = ? " +
+            "  AND status NOT IN ('cancelled'::order_status, 'delivered'::order_status)",
+            selfPickup, orderId, tenantId);
+        if (rows == 0) {
+            List<String> check = jdbc.queryForList(
+                "SELECT status FROM orders WHERE id = ? AND tenant_id = ?",
+                String.class, orderId, tenantId);
+            if (check.isEmpty()) {
+                throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Order not found");
+            }
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                "Cannot change self-pickup flag on order in status: " + check.get(0));
+        }
+    }
+
+    /**
+     * Confirms customer collection for a self-pickup order.
+     * Transitions all packed pieces → delivered (event_type='handover').
+     * Order advances to 'delivered'.
+     */
+    @Transactional(isolation = Isolation.READ_COMMITTED)
+    public int handover(UUID orderId, UUID actorUserId) {
+        UUID tenantId = TenantContext.require();
+
+        String status = jdbc.query(
+            "SELECT status FROM orders WHERE id = ? AND tenant_id = ?",
+            rs -> rs.next() ? rs.getString("status") : null,
+            orderId, tenantId);
+        if (status == null) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Order not found");
+        if (!"self_pickup_pending".equals(status)) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                "Order must be in 'self_pickup_pending' to confirm handover (current: " + status + ")");
+        }
+
+        List<String> pieceIds = jdbc.queryForList(
+            "SELECT a.piece_id FROM allocations a " +
+            "JOIN order_items oi ON oi.id = a.order_item_id " +
+            "WHERE oi.order_id = ? AND a.tenant_id = ? AND a.status = 'packed'",
+            String.class, orderId, tenantId);
+
+        for (String pieceId : pieceIds) {
+            ledger.transition(pieceId, PieceStatus.PACKED, PieceStatus.DELIVERED,
+                "handover", actorUserId,
+                new TransitionContext(orderId, null, null, orderId, "{\"self_pickup\":true}"));
+        }
+
+        jdbc.update(
+            "UPDATE orders SET status = 'delivered'::order_status WHERE id = ? AND tenant_id = ?",
             orderId, tenantId);
 
         return pieceIds.size();
+    }
+
+    // ── Cancellation ─────────────────────────────────────────────────────────
+
+    /**
+     * Cancels an order:
+     * - Pre-pack (reserved pieces only): auto-releases → order → cancelled (200).
+     * - Post-pack (packed pieces): sets cancel_requested_at; returns 202 with
+     *   remaining packed count. Worker must unpack each piece via unpackPiece().
+     * - With courier (awaiting_pickup / with_courier): 409 — pieces are at Bosta.
+     */
+    @Transactional(isolation = Isolation.READ_COMMITTED)
+    public CancelResult cancelOrder(UUID orderId, UUID actorUserId) {
+        UUID tenantId = TenantContext.require();
+
+        String status = jdbc.query(
+            "SELECT status FROM orders WHERE id = ? AND tenant_id = ?",
+            rs -> rs.next() ? rs.getString("status") : null,
+            orderId, tenantId);
+        if (status == null) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Order not found");
+
+        if ("cancelled".equals(status) || "delivered".equals(status) ||
+            "returned".equals(status)  || "lost".equals(status)) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                "Order is already in terminal status: " + status);
+        }
+        if ("with_courier".equals(status) || "awaiting_pickup".equals(status) ||
+            "returning".equals(status)) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                "Order has been handed to courier — contact Bosta to arrange cancellation. " +
+                "Pieces will be released once the courier returns them.");
+        }
+
+        // Post-pack: all pieces are physically in a box
+        if ("packed".equals(status) || "self_pickup_pending".equals(status)) {
+            Integer packedCount = jdbc.queryForObject(
+                "SELECT COUNT(*) FROM allocations a " +
+                "JOIN order_items oi ON oi.id = a.order_item_id " +
+                "WHERE oi.order_id = ? AND a.tenant_id = ? AND a.status = 'packed'",
+                Integer.class, orderId, tenantId);
+            int packed = packedCount != null ? packedCount : 0;
+
+            if (packed > 0) {
+                jdbc.update(
+                    "UPDATE orders SET cancel_requested_at = COALESCE(cancel_requested_at, now()) " +
+                    "WHERE id = ? AND tenant_id = ?",
+                    orderId, tenantId);
+                return new CancelResult("cancel_requested",
+                    "Pieces are packed — each piece must be physically unpacked before cancellation completes",
+                    packed);
+            }
+            // packed == 0 fallthrough: shouldn't happen for these statuses, but handle gracefully
+        }
+
+        // Pre-pack auto-release: free all reserved pieces
+        List<String> reservedPieces = jdbc.queryForList(
+            "SELECT a.piece_id FROM allocations a " +
+            "JOIN order_items oi ON oi.id = a.order_item_id " +
+            "WHERE oi.order_id = ? AND a.tenant_id = ? AND a.status = 'active'",
+            String.class, orderId, tenantId);
+
+        for (String pieceId : reservedPieces) {
+            try {
+                ledger.transition(pieceId, PieceStatus.RESERVED, PieceStatus.AVAILABLE,
+                    "unreserved", actorUserId,
+                    new TransitionContext(orderId, null, null, null, null));
+            } catch (StateConflictException | IllegalTransitionException e) {
+                // Piece already moved (concurrent unscan or earlier release) — skip
+            }
+        }
+
+        jdbc.update(
+            "UPDATE allocations SET status = 'released' " +
+            "WHERE order_item_id IN (SELECT id FROM order_items WHERE order_id = ? AND tenant_id = ?) " +
+            "  AND status = 'active'",
+            orderId, tenantId);
+
+        jdbc.update(
+            "UPDATE orders SET status = 'cancelled'::order_status, cancel_requested_at = NULL " +
+            "WHERE id = ? AND tenant_id = ?",
+            orderId, tenantId);
+
+        return new CancelResult("cancelled", "Order cancelled", 0);
+    }
+
+    /**
+     * Physically unpacks one packed piece for a post-pack cancellation.
+     * Transitions packed → available (event_type='unpacked').
+     * When the last packed piece is unpacked, automatically cancels the order.
+     */
+    @Transactional(isolation = Isolation.READ_COMMITTED)
+    public UnpackResult unpackPiece(UUID orderId, String pieceId, UUID actorUserId) {
+        UUID tenantId = TenantContext.require();
+
+        Integer check = jdbc.queryForObject(
+            "SELECT COUNT(*) FROM orders " +
+            "WHERE id = ? AND tenant_id = ? " +
+            "  AND cancel_requested_at IS NOT NULL " +
+            "  AND status IN ('packed'::order_status, 'self_pickup_pending'::order_status)",
+            Integer.class, orderId, tenantId);
+        if (check == null || check == 0) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                "No pending cancellation on this order");
+        }
+
+        List<Map<String, Object>> allocs = jdbc.queryForList(
+            "SELECT a.id FROM allocations a " +
+            "JOIN order_items oi ON oi.id = a.order_item_id " +
+            "WHERE a.piece_id = ? AND oi.order_id = ? AND a.status = 'packed' AND a.tenant_id = ?",
+            pieceId, orderId, tenantId);
+        if (allocs.isEmpty()) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND,
+                "Piece is not in packed state for this order");
+        }
+
+        UUID allocId = (UUID) allocs.get(0).get("id");
+
+        ledger.transition(pieceId, PieceStatus.PACKED, PieceStatus.AVAILABLE,
+            "unpacked", actorUserId,
+            new TransitionContext(orderId, null, null, null, null));
+
+        jdbc.update("UPDATE allocations SET status = 'released' WHERE id = ?", allocId);
+
+        Integer remaining = jdbc.queryForObject(
+            "SELECT COUNT(*) FROM allocations a " +
+            "JOIN order_items oi ON oi.id = a.order_item_id " +
+            "WHERE oi.order_id = ? AND a.tenant_id = ? AND a.status = 'packed'",
+            Integer.class, orderId, tenantId);
+        int remainingCount = remaining != null ? remaining : 0;
+
+        if (remainingCount == 0) {
+            jdbc.update(
+                "UPDATE orders SET status = 'cancelled'::order_status, cancel_requested_at = NULL " +
+                "WHERE id = ? AND tenant_id = ?",
+                orderId, tenantId);
+            return new UnpackResult(true, 0);
+        }
+
+        return new UnpackResult(false, remainingCount);
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────
@@ -401,6 +607,15 @@ public class FulfillService {
     }
 
     // ── Result types ──────────────────────────────────────────────────────────
+
+    public record CancelResult(
+            String status,
+            String message,
+            int    remainingPacked) {}
+
+    public record UnpackResult(
+            boolean cancelled,
+            int     remainingPacked) {}
 
     public record ScanResult(
             boolean  success,
