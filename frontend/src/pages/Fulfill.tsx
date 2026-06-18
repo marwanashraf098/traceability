@@ -8,7 +8,7 @@ function authHeaders(): Record<string, string> {
   return token ? { Authorization: `Bearer ${token}` } : {}
 }
 
-async function api<T = void>(path: string, opts: RequestInit = {}): Promise<T> {
+async function api<T = void>(path: string, opts: RequestInit = {}): Promise<{ data: T; status: number }> {
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
     ...authHeaders(),
@@ -20,9 +20,9 @@ async function api<T = void>(path: string, opts: RequestInit = {}): Promise<T> {
     window.location.href = '/login'
     throw new Error('Unauthenticated')
   }
-  if (!res.ok) throw new Error(`HTTP ${res.status}`)
-  if (res.status === 204) return undefined as T
-  return res.json()
+  if (res.status === 204) return { data: undefined as T, status: 204 }
+  const data = res.status !== 204 ? await res.json().catch(() => null) : null
+  return { data, status: res.status }
 }
 
 // ── Types ──────────────────────────────────────────────────────────────────────
@@ -38,6 +38,7 @@ interface QueueOrder {
   scanned_units: number
   locked_by: string | null
   locked_at: string | null
+  is_self_pickup: boolean
 }
 
 interface AllocatedPiece {
@@ -67,6 +68,8 @@ interface OrderDetail {
   payment_method: string | null
   cod_amount: string | null
   locked_by: string | null
+  is_self_pickup: boolean
+  cancel_requested_at: string | null
   items: OrderItem[]
 }
 
@@ -81,14 +84,39 @@ interface ScanResult {
   allComplete: boolean
 }
 
+interface CancelResult {
+  status: string
+  message: string | null
+  remainingPacked: number
+}
+
 interface AwbLinkResponse {
   trackingNumber: string
   linkedPieces: number
   orderStatus: string
 }
 
-// Flash state for scan feedback
 type FlashState = 'idle' | 'success' | 'error'
+
+// ── Audio ──────────────────────────────────────────────────────────────────────
+
+function playBeep(success: boolean) {
+  try {
+    const ctx = new AudioContext()
+    const osc = ctx.createOscillator()
+    const gain = ctx.createGain()
+    osc.connect(gain)
+    gain.connect(ctx.destination)
+    osc.frequency.setValueAtTime(success ? 880 : 300, ctx.currentTime)
+    osc.type = 'sine'
+    gain.gain.setValueAtTime(0.3, ctx.currentTime)
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + (success ? 0.15 : 0.4))
+    osc.start(ctx.currentTime)
+    osc.stop(ctx.currentTime + (success ? 0.15 : 0.4))
+  } catch {
+    // AudioContext may be blocked — silent fallback
+  }
+}
 
 // ── AWB-scan dialog ────────────────────────────────────────────────────────────
 
@@ -115,22 +143,16 @@ function AwbLinkDialog({ orderId, onDone }: { orderId: string; onDone: () => voi
     setConflictError(false)
     setGenericError(false)
     try {
-      const token = localStorage.getItem('token')
-      const res = await fetch(`/api/v1/fulfill/${orderId}/link`, {
+      const { data, status } = await api<AwbLinkResponse>(`/fulfill/${orderId}/link`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        },
         body: JSON.stringify({ trackingNumber: trimmed }),
       })
-      if (res.ok) {
-        const data: AwbLinkResponse = await res.json()
+      if (status === 200 || status === 201) {
         playBeep(true)
         triggerFlash('success')
         setLinked(data.trackingNumber)
         setTimeout(() => onDone(), 1800)
-      } else if (res.status === 409) {
+      } else if (status === 409) {
         playBeep(false)
         triggerFlash('error')
         setConflictError(true)
@@ -145,7 +167,6 @@ function AwbLinkDialog({ orderId, onDone }: { orderId: string; onDone: () => voi
       playBeep(false)
       triggerFlash('error')
       setGenericError(true)
-      if (inputRef.current) { inputRef.current.value = ''; inputRef.current.focus() }
     } finally {
       setLinking(false)
     }
@@ -180,25 +201,16 @@ function AwbLinkDialog({ orderId, onDone }: { orderId: string; onDone: () => voi
               className="w-full border-2 border-indigo-300 rounded-lg px-4 py-3 text-lg font-mono focus:outline-none focus:border-indigo-500 mb-3"
               disabled={linking}
               onKeyDown={e => {
-                if (e.key === 'Enter') {
-                  handleLink((e.target as HTMLInputElement).value)
-                }
+                if (e.key === 'Enter') handleLink((e.target as HTMLInputElement).value)
               }}
             />
             {conflictError && (
-              <p className="text-red-600 text-sm font-medium mb-3">
-                ✗ {t('fulfill.linkAwb.conflict')}
-              </p>
+              <p className="text-red-600 text-sm font-medium mb-3">✗ {t('fulfill.linkAwb.conflict')}</p>
             )}
             {genericError && (
-              <p className="text-red-600 text-sm font-medium mb-3">
-                ✗ {t('fulfill.linkAwb.error')}
-              </p>
+              <p className="text-red-600 text-sm font-medium mb-3">✗ {t('fulfill.linkAwb.error')}</p>
             )}
-            <button
-              onClick={onDone}
-              className="w-full text-center text-sm text-gray-400 hover:text-gray-600 mt-2 py-2"
-            >
+            <button onClick={onDone} className="w-full text-center text-sm text-gray-400 hover:text-gray-600 mt-2 py-2">
               {t('fulfill.linkAwb.skip')}
             </button>
           </>
@@ -208,36 +220,91 @@ function AwbLinkDialog({ orderId, onDone }: { orderId: string; onDone: () => voi
   )
 }
 
-// ── Audio ──────────────────────────────────────────────────────────────────────
+// ── Handover screen (self_pickup_pending orders) ───────────────────────────────
 
-function playBeep(success: boolean) {
-  try {
-    const ctx = new AudioContext()
-    const osc = ctx.createOscillator()
-    const gain = ctx.createGain()
-    osc.connect(gain)
-    gain.connect(ctx.destination)
-    osc.frequency.setValueAtTime(success ? 880 : 300, ctx.currentTime)
-    osc.type = 'sine'
-    gain.gain.setValueAtTime(0.3, ctx.currentTime)
-    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + (success ? 0.15 : 0.4))
-    osc.start(ctx.currentTime)
-    osc.stop(ctx.currentTime + (success ? 0.15 : 0.4))
-  } catch {
-    // AudioContext may be blocked on some browsers — silent fallback
+function HandoverScreen({ order, onBack }: { order: QueueOrder; onBack: () => void }) {
+  const { i18n } = useTranslation()
+  const isAr = i18n.language === 'ar'
+  const [confirming, setConfirming] = useState(false)
+  const [done, setDone] = useState(false)
+  const [count, setCount] = useState(0)
+
+  async function confirm() {
+    if (confirming) return
+    setConfirming(true)
+    try {
+      const { data } = await api<{ deliveredPieces: number }>(`/fulfill/${order.id}/handover`, { method: 'POST' })
+      setCount(data.deliveredPieces)
+      setDone(true)
+      setTimeout(() => onBack(), 2000)
+    } finally {
+      setConfirming(false)
+    }
   }
+
+  return (
+    <div className="flex flex-col h-screen bg-gray-50">
+      <div className="bg-white border-b border-gray-200 px-6 py-3 flex items-center justify-between">
+        <button onClick={onBack} className="text-indigo-600 hover:text-indigo-800 font-medium text-sm">
+          ← {isAr ? 'العودة' : 'Back'}
+        </button>
+        <div className="text-center">
+          <p className="font-bold text-gray-900">{order.number ?? order.id.slice(-8)}</p>
+          <p className="text-sm text-gray-500">{order.customer_name}</p>
+        </div>
+        <div className="w-24" />
+      </div>
+
+      <div className="flex-1 flex flex-col items-center justify-center p-8">
+        {done ? (
+          <div className="text-center">
+            <div className="text-6xl mb-4">✓</div>
+            <p className="text-xl font-bold text-green-700">
+              {isAr ? `تم التسليم — ${count} قطعة` : `Collected — ${count} piece(s) delivered`}
+            </p>
+          </div>
+        ) : (
+          <>
+            <div className="text-5xl mb-6">🤝</div>
+            <h2 className="text-2xl font-bold text-gray-900 mb-2 text-center">
+              {isAr ? 'تأكيد تسليم العميل' : 'Confirm Customer Collection'}
+            </h2>
+            <p className="text-gray-600 mb-8 text-center">
+              {isAr
+                ? `العميل في المستودع — ${order.total_units} قطعة جاهزة للتسليم`
+                : `Customer is at the counter — ${order.total_units} piece(s) ready`}
+            </p>
+            <button
+              onClick={confirm}
+              disabled={confirming}
+              className="w-full max-w-sm bg-green-600 hover:bg-green-700 disabled:bg-green-300 text-white font-bold py-5 rounded-xl text-lg transition"
+            >
+              {confirming ? '…' : isAr ? 'تأكيد الاستلام' : 'Confirm Handover'}
+            </button>
+          </>
+        )}
+      </div>
+    </div>
+  )
 }
 
 // ── Queue view ─────────────────────────────────────────────────────────────────
 
-function QueueView({ onSelect }: { onSelect: (orderId: string) => void }) {
-  const { t } = useTranslation()
+function QueueView({
+  onSelect,
+  onHandover,
+}: {
+  onSelect: (orderId: string) => void
+  onHandover: (order: QueueOrder) => void
+}) {
+  const { t, i18n } = useTranslation()
+  const isAr = i18n.language === 'ar'
   const [queue, setQueue] = useState<QueueOrder[]>([])
   const [loading, setLoading] = useState(true)
 
   const loadQueue = useCallback(async () => {
     try {
-      const data = await api<QueueOrder[]>('/fulfill/queue')
+      const { data } = await api<QueueOrder[]>('/fulfill/queue')
       setQueue(data)
     } finally {
       setLoading(false)
@@ -248,71 +315,194 @@ function QueueView({ onSelect }: { onSelect: (orderId: string) => void }) {
 
   if (loading) return <p className="p-6 text-gray-500">{t('common.loading')}</p>
 
+  const pickQueue     = queue.filter(o => o.status !== 'self_pickup_pending')
+  const handoverQueue = queue.filter(o => o.status === 'self_pickup_pending')
+
   return (
     <div className="p-6 max-w-4xl mx-auto">
       <div className="flex items-center justify-between mb-6">
         <h1 className="text-2xl font-bold text-gray-900">{t('fulfill.title')}</h1>
-        <button
-          onClick={loadQueue}
-          className="text-sm text-indigo-600 hover:text-indigo-800 font-medium"
-        >
+        <button onClick={loadQueue} className="text-sm text-indigo-600 hover:text-indigo-800 font-medium">
           {t('fulfill.refresh')}
         </button>
       </div>
 
-      {queue.length === 0 ? (
-        <div className="text-center py-20 text-gray-400">{t('fulfill.empty')}</div>
-      ) : (
-        <div className="space-y-3">
-          {queue.map(order => {
-            const progress = order.total_units > 0
-              ? Math.round((order.scanned_units / order.total_units) * 100) : 0
-            return (
+      {/* Self-pickup pending section */}
+      {handoverQueue.length > 0 && (
+        <div className="mb-6">
+          <h2 className="text-sm font-semibold text-gray-500 uppercase tracking-wide mb-3">
+            {isAr ? 'في انتظار الاستلام' : 'Awaiting Collection'}
+          </h2>
+          <div className="space-y-3">
+            {handoverQueue.map(order => (
               <div
                 key={order.id}
-                className="bg-white rounded-lg border border-gray-200 p-4 flex items-center justify-between hover:border-indigo-400 cursor-pointer transition"
-                onClick={() => onSelect(order.id)}
+                className="bg-amber-50 rounded-lg border border-amber-200 p-4 flex items-center justify-between hover:border-amber-400 cursor-pointer transition"
+                onClick={() => onHandover(order)}
               >
                 <div>
-                  <p className="font-semibold text-gray-900">
+                  <p className="font-semibold text-gray-900 flex items-center gap-2">
                     {order.number ?? order.id.slice(-8)}
+                    <span className="text-xs px-2 py-0.5 rounded bg-amber-100 text-amber-700 font-semibold">
+                      {isAr ? 'استلام شخصي' : 'Self-Pickup'}
+                    </span>
                   </p>
-                  <p className="text-sm text-gray-500">
-                    {order.customer_name ?? t('common.na')}
-                    {order.payment_method === 'cod' && order.cod_amount && (
-                      <span className="ml-2 text-amber-600 font-medium">
-                        COD {order.cod_amount}
-                      </span>
-                    )}
-                  </p>
+                  <p className="text-sm text-gray-500">{order.customer_name ?? t('common.na')}</p>
                 </div>
-                <div className="flex items-center gap-4">
-                  <div className="text-right">
-                    <p className="text-sm font-medium text-gray-700">
-                      {order.scanned_units} / {order.total_units} {t('fulfill.units')}
-                    </p>
-                    <div className="w-32 bg-gray-200 rounded-full h-2 mt-1">
-                      <div
-                        className="bg-indigo-500 h-2 rounded-full transition-all"
-                        style={{ width: `${progress}%` }}
-                      />
-                    </div>
-                  </div>
-                  <span className={`
-                    px-2 py-0.5 rounded text-xs font-semibold
-                    ${order.status === 'new' ? 'bg-blue-100 text-blue-700' : 'bg-yellow-100 text-yellow-700'}
-                  `}>
-                    {order.status}
+                <div className="flex items-center gap-3">
+                  <span className="text-sm font-medium text-gray-600">
+                    {order.total_units} {t('fulfill.units')}
                   </span>
-                  {order.locked_by && (
-                    <span className="text-xs text-gray-400 italic">{t('fulfill.locked')}</span>
-                  )}
+                  <button className="text-sm px-4 py-2 bg-amber-500 text-white rounded-lg hover:bg-amber-600 font-medium">
+                    {isAr ? 'تسليم' : 'Handover →'}
+                  </button>
                 </div>
               </div>
-            )
-          })}
+            ))}
+          </div>
         </div>
       )}
+
+      {/* Normal pick queue */}
+      {pickQueue.length === 0 && handoverQueue.length === 0 ? (
+        <div className="text-center py-20 text-gray-400">{t('fulfill.empty')}</div>
+      ) : pickQueue.length === 0 ? null : (
+        <>
+          {handoverQueue.length > 0 && (
+            <h2 className="text-sm font-semibold text-gray-500 uppercase tracking-wide mb-3">
+              {isAr ? 'قائمة التجميع' : 'Pick Queue'}
+            </h2>
+          )}
+          <div className="space-y-3">
+            {pickQueue.map(order => {
+              const progress = order.total_units > 0
+                ? Math.round((order.scanned_units / order.total_units) * 100) : 0
+              return (
+                <div
+                  key={order.id}
+                  className="bg-white rounded-lg border border-gray-200 p-4 flex items-center justify-between hover:border-indigo-400 cursor-pointer transition"
+                  onClick={() => onSelect(order.id)}
+                >
+                  <div>
+                    <p className="font-semibold text-gray-900 flex items-center gap-2">
+                      {order.number ?? order.id.slice(-8)}
+                      {order.is_self_pickup && (
+                        <span className="text-xs px-2 py-0.5 rounded bg-indigo-100 text-indigo-700 font-medium">
+                          {isAr ? 'استلام شخصي' : 'Self-Pickup'}
+                        </span>
+                      )}
+                    </p>
+                    <p className="text-sm text-gray-500">
+                      {order.customer_name ?? t('common.na')}
+                      {order.payment_method === 'cod' && order.cod_amount && (
+                        <span className="ml-2 text-amber-600 font-medium">COD {order.cod_amount}</span>
+                      )}
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-4">
+                    <div className="text-right">
+                      <p className="text-sm font-medium text-gray-700">
+                        {order.scanned_units} / {order.total_units} {t('fulfill.units')}
+                      </p>
+                      <div className="w-32 bg-gray-200 rounded-full h-2 mt-1">
+                        <div
+                          className="bg-indigo-500 h-2 rounded-full transition-all"
+                          style={{ width: `${progress}%` }}
+                        />
+                      </div>
+                    </div>
+                    <span className={`
+                      px-2 py-0.5 rounded text-xs font-semibold
+                      ${order.status === 'new' ? 'bg-blue-100 text-blue-700' : 'bg-yellow-100 text-yellow-700'}
+                    `}>
+                      {order.status}
+                    </span>
+                    {order.locked_by && (
+                      <span className="text-xs text-gray-400 italic">{t('fulfill.locked')}</span>
+                    )}
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        </>
+      )}
+    </div>
+  )
+}
+
+// ── Guided unpack panel ────────────────────────────────────────────────────────
+
+function GuidedUnpackPanel({
+  order,
+  onUnpacked,
+}: {
+  order: OrderDetail
+  onUnpacked: () => void
+}) {
+  const { i18n } = useTranslation()
+  const isAr = i18n.language === 'ar'
+  const [unpacking, setUnpacking] = useState<string | null>(null)
+  const [done, setDone] = useState(false)
+
+  const packedPieces = order.items
+    .flatMap(i => i.allocatedPieces)
+    .filter(p => p.piece_status === 'packed')
+
+  async function unpack(pieceId: string) {
+    if (unpacking) return
+    setUnpacking(pieceId)
+    try {
+      const { data } = await api<{ cancelled: boolean; remainingPacked: number }>(
+        `/fulfill/${order.id}/unpack/${pieceId}`,
+        { method: 'POST' }
+      )
+      if (data.cancelled) {
+        setDone(true)
+        setTimeout(() => onUnpacked(), 1500)
+      } else {
+        onUnpacked() // refresh order
+      }
+    } finally {
+      setUnpacking(null)
+    }
+  }
+
+  if (done) {
+    return (
+      <div className="bg-green-50 border border-green-200 rounded-lg p-6 text-center">
+        <div className="text-3xl mb-2">✓</div>
+        <p className="text-green-700 font-semibold">
+          {isAr ? 'تمت إزالة جميع القطع — الطلب ملغى' : 'All pieces unpacked — order cancelled'}
+        </p>
+      </div>
+    )
+  }
+
+  return (
+    <div className="bg-amber-50 border border-amber-200 rounded-lg p-4">
+      <p className="text-sm font-semibold text-amber-800 mb-3">
+        {isAr
+          ? `طلب الإلغاء — يجب فك تعبئة ${packedPieces.length} قطعة`
+          : `Cancellation requested — unpack ${packedPieces.length} piece(s)`}
+      </p>
+      <div className="space-y-2">
+        {packedPieces.map(p => (
+          <div
+            key={p.piece_id}
+            className="flex items-center justify-between bg-white rounded border border-amber-200 px-3 py-2"
+          >
+            <span className="font-mono text-sm text-gray-700">{p.barcode.slice(-10)}</span>
+            <button
+              onClick={() => unpack(p.piece_id)}
+              disabled={unpacking === p.piece_id}
+              className="text-xs px-3 py-1 bg-amber-500 text-white rounded hover:bg-amber-600 disabled:opacity-50"
+            >
+              {unpacking === p.piece_id ? '…' : isAr ? 'فك التعبئة' : 'Unpack'}
+            </button>
+          </div>
+        ))}
+      </div>
     </div>
   )
 }
@@ -320,30 +510,31 @@ function QueueView({ onSelect }: { onSelect: (orderId: string) => void }) {
 // ── Pick screen ────────────────────────────────────────────────────────────────
 
 function PickScreen({ orderId, onBack }: { orderId: string; onBack: () => void }) {
-  const { t } = useTranslation()
+  const { t, i18n } = useTranslation()
+  const isAr = i18n.language === 'ar'
   const [order, setOrder] = useState<OrderDetail | null>(null)
   const [loading, setLoading] = useState(true)
   const [flash, setFlash] = useState<FlashState>('idle')
   const [lastResult, setLastResult] = useState<ScanResult | null>(null)
   const [scanning, setScanning] = useState(false)
   const [completing, setCompleting] = useState(false)
+  const [cancelling, setCancelling] = useState(false)
   const [showAwbDialog, setShowAwbDialog] = useState(false)
+  const [selfPickupSuccess, setSelfPickupSuccess] = useState(false)
+  const [showCancelConfirm, setShowCancelConfirm] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
 
   const loadOrder = useCallback(async () => {
-    const data = await api<OrderDetail>(`/fulfill/${orderId}`)
+    const { data } = await api<OrderDetail>(`/fulfill/${orderId}`)
     setOrder(data)
     setLoading(false)
   }, [orderId])
 
   useEffect(() => { loadOrder() }, [loadOrder])
 
-  // Keep scan input auto-focused; HID barcode scanners act like keyboard input
   useEffect(() => {
     const refocus = () => {
-      if (document.activeElement !== inputRef.current) {
-        inputRef.current?.focus()
-      }
+      if (document.activeElement !== inputRef.current) inputRef.current?.focus()
     }
     document.addEventListener('click', refocus)
     inputRef.current?.focus()
@@ -359,7 +550,7 @@ function PickScreen({ orderId, onBack }: { orderId: string; onBack: () => void }
     if (!barcode.trim() || scanning) return
     setScanning(true)
     try {
-      const result = await api<ScanResult>(`/fulfill/${orderId}/scan`, {
+      const { data: result } = await api<ScanResult>(`/fulfill/${orderId}/scan`, {
         method: 'POST',
         body: JSON.stringify({ barcode: barcode.trim() }),
       })
@@ -378,11 +569,7 @@ function PickScreen({ orderId, onBack }: { orderId: string; onBack: () => void }
       setLastResult({ success: false, code: 'ERROR', message: t('common.error'), pieceId: null, barcode: null, allocatedCount: 0, requiredQuantity: 0, allComplete: false })
     } finally {
       setScanning(false)
-      // Clear input and refocus
-      if (inputRef.current) {
-        inputRef.current.value = ''
-        inputRef.current.focus()
-      }
+      if (inputRef.current) { inputRef.current.value = ''; inputRef.current.focus() }
     }
   }, [orderId, scanning, loadOrder, t])
 
@@ -396,9 +583,32 @@ function PickScreen({ orderId, onBack }: { orderId: string; onBack: () => void }
     setCompleting(true)
     try {
       await api(`/fulfill/${orderId}/complete`, { method: 'POST' })
-      setShowAwbDialog(true)
+      if (order?.is_self_pickup) {
+        setSelfPickupSuccess(true)
+        setTimeout(() => onBack(), 2000)
+      } else {
+        setShowAwbDialog(true)
+      }
     } finally {
       setCompleting(false)
+    }
+  }
+
+  const handleCancel = async () => {
+    if (cancelling) return
+    setCancelling(true)
+    setShowCancelConfirm(false)
+    try {
+      const { data, status } = await api<CancelResult>(`/fulfill/${orderId}/cancel`, { method: 'POST' })
+      if (status === 200 && data.status === 'cancelled') {
+        // Pre-pack: order is cancelled, go back to queue
+        onBack()
+      } else {
+        // Post-pack: cancel_requested, show guided unpack (order re-fetched)
+        await loadOrder()
+      }
+    } finally {
+      setCancelling(false)
     }
   }
 
@@ -406,6 +616,7 @@ function PickScreen({ orderId, onBack }: { orderId: string; onBack: () => void }
   if (!order) return null
 
   const allComplete = order.items.every(i => i.allocated >= i.quantity)
+  const hasCancelRequest = !!order.cancel_requested_at
 
   const flashClass = flash === 'success'
     ? 'fixed inset-0 bg-green-400 opacity-30 pointer-events-none z-50 animate-flash'
@@ -415,7 +626,6 @@ function PickScreen({ orderId, onBack }: { orderId: string; onBack: () => void }
 
   return (
     <div className="flex flex-col h-screen bg-gray-50">
-      {/* Flash overlay */}
       <div className={flashClass} />
 
       {/* Header */}
@@ -424,35 +634,93 @@ function PickScreen({ orderId, onBack }: { orderId: string; onBack: () => void }
           ← {t('fulfill.backToQueue')}
         </button>
         <div className="text-center">
-          <p className="font-bold text-gray-900">{order.number ?? order.id.slice(-8)}</p>
+          <p className="font-bold text-gray-900 flex items-center gap-2">
+            {order.number ?? order.id.slice(-8)}
+            {order.is_self_pickup && (
+              <span className="text-xs px-2 py-0.5 rounded bg-indigo-100 text-indigo-700 font-medium">
+                {isAr ? 'استلام شخصي' : 'Self-Pickup'}
+              </span>
+            )}
+          </p>
           <p className="text-sm text-gray-500">{order.customer_name ?? t('common.na')}</p>
         </div>
-        <div className="w-24" />
+        {/* Cancel button (top-right) */}
+        {!hasCancelRequest && (
+          <button
+            onClick={() => setShowCancelConfirm(true)}
+            className="text-xs px-3 py-1.5 border border-red-200 text-red-600 rounded hover:bg-red-50"
+          >
+            {isAr ? 'إلغاء الطلب' : 'Cancel'}
+          </button>
+        )}
+        {!showCancelConfirm && hasCancelRequest === false && <div className="w-20" />}
       </div>
 
-      {/* Scan input — always focused for HID scanner */}
-      <div className="bg-white border-b border-gray-200 px-6 py-4">
-        <input
-          ref={inputRef}
-          type="text"
-          placeholder={t('fulfill.scanPlaceholder')}
-          className="w-full border-2 border-indigo-300 rounded-lg px-4 py-3 text-lg font-mono focus:outline-none focus:border-indigo-500"
-          disabled={scanning}
-          onKeyDown={e => {
-            if (e.key === 'Enter') {
-              handleScan((e.target as HTMLInputElement).value)
-            }
-          }}
-          autoFocus
-        />
-        {lastResult && (
-          <div className={`mt-2 text-sm font-medium ${lastResult.success ? 'text-green-600' : 'text-red-600'}`}>
-            {lastResult.success
-              ? `✓ ${lastResult.barcode}`
-              : `✗ ${t(`fulfill.rejection.${lastResult.code}`, { defaultValue: lastResult.message ?? lastResult.code })}`}
+      {/* Cancel confirm dialog */}
+      {showCancelConfirm && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50" onClick={() => setShowCancelConfirm(false)}>
+          <div className="bg-white rounded-lg shadow-xl p-6 w-full max-w-sm mx-4" onClick={e => e.stopPropagation()}>
+            <h3 className="font-semibold text-gray-900 mb-2">{isAr ? 'إلغاء الطلب؟' : 'Cancel this order?'}</h3>
+            <p className="text-sm text-gray-600 mb-4">
+              {order.status === 'packed'
+                ? isAr ? 'الطلب معبَّأ — يحتاج إلى فك التعبئة يدوياً.' : 'Order is packed — pieces must be manually unpacked.'
+                : isAr ? 'سيتم إعادة القطع المحجوزة للمخزون.' : 'Reserved pieces will be returned to stock.'}
+            </p>
+            <div className="flex gap-3 justify-end">
+              <button onClick={() => setShowCancelConfirm(false)} className="px-4 py-2 text-sm border rounded hover:bg-gray-50">
+                {isAr ? 'رجوع' : 'Back'}
+              </button>
+              <button
+                onClick={handleCancel}
+                disabled={cancelling}
+                className="px-4 py-2 text-sm bg-red-600 text-white rounded hover:bg-red-700 disabled:opacity-50"
+              >
+                {cancelling ? '…' : isAr ? 'تأكيد الإلغاء' : 'Confirm Cancel'}
+              </button>
+            </div>
           </div>
-        )}
-      </div>
+        </div>
+      )}
+
+      {/* Self-pickup success banner */}
+      {selfPickupSuccess && (
+        <div className="bg-green-50 border-b border-green-200 px-6 py-3 text-center">
+          <p className="text-green-700 font-semibold">
+            {isAr ? 'تم التعبئة — في انتظار الاستلام' : 'Packed — awaiting customer collection'}
+          </p>
+        </div>
+      )}
+
+      {/* Guided unpack panel (cancel_requested) */}
+      {hasCancelRequest && (
+        <div className="px-6 py-4">
+          <GuidedUnpackPanel order={order} onUnpacked={loadOrder} />
+        </div>
+      )}
+
+      {/* Scan input (hidden when cancel is requested) */}
+      {!hasCancelRequest && (
+        <div className="bg-white border-b border-gray-200 px-6 py-4">
+          <input
+            ref={inputRef}
+            type="text"
+            placeholder={t('fulfill.scanPlaceholder')}
+            className="w-full border-2 border-indigo-300 rounded-lg px-4 py-3 text-lg font-mono focus:outline-none focus:border-indigo-500"
+            disabled={scanning}
+            onKeyDown={e => {
+              if (e.key === 'Enter') handleScan((e.target as HTMLInputElement).value)
+            }}
+            autoFocus
+          />
+          {lastResult && (
+            <div className={`mt-2 text-sm font-medium ${lastResult.success ? 'text-green-600' : 'text-red-600'}`}>
+              {lastResult.success
+                ? `✓ ${lastResult.barcode}`
+                : `✗ ${t(`fulfill.rejection.${lastResult.code}`, { defaultValue: lastResult.message ?? lastResult.code })}`}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Items */}
       <div className="flex-1 overflow-y-auto p-6 space-y-4">
@@ -485,16 +753,16 @@ function PickScreen({ orderId, onBack }: { orderId: string; onBack: () => void }
                       key={p.piece_id}
                       className="flex items-center gap-1 bg-indigo-50 border border-indigo-200 rounded px-2 py-1"
                     >
-                      <span className="text-xs font-mono text-indigo-700">
-                        {p.barcode.slice(-10)}
-                      </span>
-                      <button
-                        onClick={() => handleUnscan(p.piece_id)}
-                        className="text-red-400 hover:text-red-600 text-xs ml-1"
-                        title={t('fulfill.unscan')}
-                      >
-                        ✕
-                      </button>
+                      <span className="text-xs font-mono text-indigo-700">{p.barcode.slice(-10)}</span>
+                      {!hasCancelRequest && p.allocation_status === 'active' && (
+                        <button
+                          onClick={() => handleUnscan(p.piece_id)}
+                          className="text-red-400 hover:text-red-600 text-xs ml-1"
+                          title={t('fulfill.unscan')}
+                        >
+                          ✕
+                        </button>
+                      )}
                     </div>
                   ))}
                 </div>
@@ -505,7 +773,7 @@ function PickScreen({ orderId, onBack }: { orderId: string; onBack: () => void }
       </div>
 
       {/* Complete button */}
-      {allComplete && (
+      {allComplete && !hasCancelRequest && (
         <div className="bg-white border-t border-gray-200 px-6 py-4">
           <button
             onClick={handleComplete}
@@ -517,7 +785,7 @@ function PickScreen({ orderId, onBack }: { orderId: string; onBack: () => void }
         </div>
       )}
 
-      {/* AWB-scan dialog — shown after pack completes */}
+      {/* AWB-scan dialog — for non-self-pickup orders after pack completes */}
       {showAwbDialog && (
         <AwbLinkDialog orderId={orderId} onDone={onBack} />
       )}
@@ -527,11 +795,24 @@ function PickScreen({ orderId, onBack }: { orderId: string; onBack: () => void }
 
 // ── Root ───────────────────────────────────────────────────────────────────────
 
-export default function Fulfill() {
-  const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null)
+type View =
+  | { type: 'queue' }
+  | { type: 'pick'; orderId: string }
+  | { type: 'handover'; order: QueueOrder }
 
-  if (selectedOrderId) {
-    return <PickScreen orderId={selectedOrderId} onBack={() => setSelectedOrderId(null)} />
+export default function Fulfill() {
+  const [view, setView] = useState<View>({ type: 'queue' })
+
+  if (view.type === 'pick') {
+    return <PickScreen orderId={view.orderId} onBack={() => setView({ type: 'queue' })} />
   }
-  return <QueueView onSelect={setSelectedOrderId} />
+  if (view.type === 'handover') {
+    return <HandoverScreen order={view.order} onBack={() => setView({ type: 'queue' })} />
+  }
+  return (
+    <QueueView
+      onSelect={orderId => setView({ type: 'pick', orderId })}
+      onHandover={order => setView({ type: 'handover', order })}
+    />
+  )
 }

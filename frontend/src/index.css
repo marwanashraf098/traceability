@@ -1,3 +1,96 @@
+/* Google Fonts — Inter (Latin) + Cairo (Arabic) */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Cairo:wght@300;400;500;600;700&display=swap');
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+@layer base {
+  /* Dark-first base */
+  html {
+    background-color: #0B1220;
+    color: #F8FAFC;
+    font-family: 'Inter', system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  /* Cairo for RTL / Arabic */
+  [dir="rtl"] {
+    font-family: 'Cairo', system-ui, sans-serif;
+  }
+
+  /* Remove default focus ring; we use shadow-glow on inputs */
+  *:focus-visible {
+    outline: none;
+  }
+
+  /* Scrollbar — dark theme */
+  ::-webkit-scrollbar { width: 6px; height: 6px; }
+  ::-webkit-scrollbar-track { background: #0B1220; }
+  ::-webkit-scrollbar-thumb { background: #2D3F55; border-radius: 9999px; }
+  ::-webkit-scrollbar-thumb:hover { background: #3D5166; }
+}
+
+@layer components {
+  /* ── Card patterns ──────────────────────────────────────────────────── */
+  .card {
+    @apply bg-panel rounded-xl border border-line shadow-card;
+  }
+  .card-compact {
+    @apply bg-panel rounded-lg border border-line shadow-card;
+  }
+
+  /* ── Button primitives ──────────────────────────────────────────────── */
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 font-medium text-body
+           px-4 py-2 rounded transition-colors disabled:opacity-40 disabled:cursor-not-allowed;
+  }
+  .btn-brand {
+    @apply btn bg-brand hover:bg-brand-hover text-white shadow-brand;
+  }
+  .btn-outline {
+    @apply btn border border-line text-primary hover:bg-elevated;
+  }
+  .btn-danger {
+    @apply btn bg-danger/10 border border-danger/30 text-danger hover:bg-danger/20;
+  }
+  .btn-ghost {
+    @apply btn text-muted hover:text-primary hover:bg-elevated;
+  }
+
+  /* ── Input / scan field ─────────────────────────────────────────────── */
+  .input {
+    @apply w-full bg-elevated border border-line rounded text-primary text-body
+           px-3 py-2 placeholder-muted
+           focus:border-brand focus:shadow-glow transition-colors;
+  }
+  .input-scan {
+    @apply input text-lg font-mono border-2 border-brand/40 focus:border-brand py-3;
+  }
+
+  /* ── Status badge ───────────────────────────────────────────────────── */
+  .badge {
+    @apply inline-flex items-center px-2 py-0.5 rounded text-small font-medium;
+  }
+
+  /* ── Table ──────────────────────────────────────────────────────────── */
+  .tbl-header {
+    @apply text-caption text-muted uppercase tracking-wider px-4 py-3 text-start;
+  }
+  .tbl-cell {
+    @apply text-body text-primary px-4 py-3;
+  }
+  .tbl-row {
+    @apply border-b border-line hover:bg-elevated/50 transition-colors;
+  }
+
+  /* ── Nav item ───────────────────────────────────────────────────────── */
+  .nav-item {
+    @apply flex items-center gap-3 px-3 py-2.5 rounded-lg text-body text-muted
+           hover:bg-elevated hover:text-primary transition-colors cursor-pointer;
+  }
+  .nav-item-active {
+    @apply nav-item bg-brand/10 text-primary border-s-2 border-brand;
+  }
+}

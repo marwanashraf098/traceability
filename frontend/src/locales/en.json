@@ -1,16 +1,28 @@
 {
   "nav": {
+    "overview": "Overview",
     "orders": "Orders",
-    "catalog": "Catalog",
+    "catalog": "Inventory",
     "receiving": "Receiving",
     "fulfill": "Pick & Pack",
-    "logout": "Logout",
-    "lookup": "Scan or type barcode…",
-    "returns": "Returns"
+    "logout": "Log out",
+    "lookup": "Search barcode or AWB…",
+    "returns": "Returns",
+    "exceptions": "Exceptions"
+  },
+  "overview": {
+    "title": "Overview",
+    "totalOrders": "Total Orders",
+    "delivered": "Delivered",
+    "inTransit": "In Transit",
+    "returns": "Returns",
+    "recentExceptions": "Recent exceptions",
+    "noExceptions": "No open exceptions — all clear",
+    "viewAll": "View all"
   },
   "login": {
-    "title": "Traceability",
-    "subtitle": "Piece-level inventory platform",
+    "title": "traced",
+    "subtitle": "nothing moves untraced",
     "email": "Email",
     "password": "Password",
     "submit": "Sign in",
@@ -136,7 +148,20 @@
       "conflict": "This waybill is already linked to another order",
       "error": "Could not link — check the barcode and try again",
       "skip": "Skip — link later"
-    }
+    },
+    "selfPickup": "Self-Pickup",
+    "selfPickupBadge": "Self-Pickup",
+    "handoverTitle": "Confirm Customer Collection",
+    "handoverSubtitle": "Customer is at the counter — confirm handover of {{count}} piece(s)",
+    "handoverConfirm": "Confirm Handover",
+    "handoverSuccess": "Collected — {{count}} piece(s) delivered",
+    "cancelOrder": "Cancel Order",
+    "cancelConfirmPre": "Cancel this order? All reserved pieces will be returned to stock.",
+    "cancelConfirmPost": "This order is packed. Worker must physically unpack {{count}} piece(s).",
+    "cancelRequested": "Cancellation requested — {{count}} piece(s) need physical unpacking",
+    "unpackPiece": "Unpack",
+    "unpackDone": "All pieces unpacked — order cancelled",
+    "selfPickupPending": "Awaiting Collection"
   },
   "lookup": {
     "title": "Piece Lookup",
@@ -176,7 +201,10 @@
       "tracking_linked": "AWB scanned — awaiting courier pickup",
       "return_received": "Return received at {{location}} — pending inspection",
       "restocked": "Restocked to available",
-      "damaged": "Marked as damaged"
+      "damaged": "Marked as damaged",
+      "handover": "Handed over to customer (self-pickup)",
+      "unpacked": "Piece unpacked — cancellation in progress",
+      "unreserved": "Returned to stock (order cancelled)"
     },
     "pieceStatus": {
       "available": "Available",
@@ -224,6 +252,9 @@
       "location": "Location",
       "intakedAt": "Intaked"
     }
+  },
+  "exceptions": {
+    "title": "Exceptions"
   },
   "common": {
     "loading": "Loading...",

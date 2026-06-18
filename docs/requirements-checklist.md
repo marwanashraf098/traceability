@@ -23,7 +23,7 @@ One line per requirement · [M] Must / [S] Should / [C] Could · use as the buil
 - [x] 3.2 [M] Initial import: products/variants + 90-day orders, resumable, idempotent, progress UI [background job + status endpoint done Day 5]
 - [ ] 3.3 [M] Webhooks orders create/updated/cancelled + products create/update: HMAC, raw persist, async, idempotent
 - [ ] 3.4 [M] 15-min reconciliation poll (missed webhook ≠ lost order)
-- [ ] 3.5 [M] Cancel pre-pack → auto-release pieces; cancel post-pack → exception + guided unpack
+- [x] 3.5 [M] Cancel pre-pack → auto-release pieces; cancel post-pack → exception + guided unpack [both paths + Shopify orders/cancelled webhook wired Day 14]
 - [ ] 3.6 [M] Line-item edits mid-pick → release affected allocations + exception with diff
 - [ ] 3.7 [M] Confirmation tag rules (for gated mode)
 - [ ] 3.8 [S] Fulfillment write-back with Bosta tracking (toggle, default ON)
@@ -88,11 +88,11 @@ One line per requirement · [M] Must / [S] Should / [C] Could · use as the buil
 - [ ] 9.5 [M] AWB auto-print; fetch failure → Packed + missing-AWB exception + retry (never silent loss)
 - [x] 9.6 [M] AWB verification scan binds piece↔order↔tracking; mismatch rejected loudly ([S] optional toggle, default mandatory)
 - [x] 9.7 [M] After verification → Awaiting Pickup
-- [ ] 9.8 [M] Guided unpack (cancel post-pack): cancel AWB → rescan out → Available → Cancelled; no partial completion
-- [ ] 9.9 [M] Pre-handover cancel with explicit outcome: (a) cancel order → unpack; (b) convert to self-pickup → AWB cancelled, sale stands, Self-Pickup Pending
-- [ ] 9.10 [M] Self-pickup handover: scan pieces, COD cash confirm, customer_pickup event → Delivered (self-pickup)
+- [x] 9.8 [M] Guided unpack (cancel post-pack): cancel_requested_at set → worker unpack per piece (unpacked event, PACKED→AVAILABLE) → all clear → order Cancelled; no partial completion
+- [x] 9.9 [M] Pre-handover cancel: pre-pack → auto-release pieces (unreserved events, allocations released, order Cancelled); post-pack → guided unpack exception
+- [x] 9.10 [M] Self-pickup handover: handover event (packed→delivered), customer_pickup attributed to worker, metadata={"self_pickup":true} → order Delivered
 - [ ] 9.11 [M] Cancellation removes shipment from created pickup; manifest/COD total corrects
-- [ ] 9.12 [M] Courier already collected → cancellation blocked with explanation (must complete or RTO)
+- [x] 9.12 [M] Courier already collected (with_courier/awaiting_pickup/returning) → 409 cancellation blocked
 - [ ] 9.13 [S] Self-pickup no-show (7d) → exception: re-ship fresh AWB or cancel
 
 ## FR-10 Pickup
@@ -106,7 +106,7 @@ One line per requirement · [M] Must / [S] Should / [C] Could · use as the buil
 - [x] 11.2 [M] Terminal handling: 45→Delivered; 100→Lost+exception; 46→Return Pending + order Returned [webhook path done Day 6; exception alerts not yet built]
 - [ ] 11.3 [M] Attempts counter from numberOfAttempts; ≥2 fails → exception (configurable)
 - [ ] 11.4 [M] No end-customer notifications (merchant-facing only)
-- [ ] 11.5 [M] Stuck detector: no provider update 5d (configurable) → exception
+- [x] 11.5 [M] Stuck detector: no provider update 5d (configurable) → exception
 
 ## FR-12 Returns
 - [x] 12.1 [M] Intake scan: piece → Return Pending Inspection at scan location + return_received event
@@ -133,7 +133,7 @@ One line per requirement · [M] Must / [S] Should / [C] Could · use as the buil
 ## FR-15 Dashboards & Exceptions
 - [ ] 15.1 [M] Inventory counts by status with drill-down
 - [ ] 15.2 [M] Fulfillment board with age colors (>24h amber, >48h red)
-- [ ] 15.3 [M] Exceptions center, one prioritized list w/ resolving actions: lost · never-received · unexpected return · failed attempts · stuck · Bosta state 103 limbo · NDR 26–30 evidence · short · blocked customer · address review · pending unpack · self-pickup no-show · missing AWB · unlinked Mode-B · Shopify edit conflict; archived w/ resolver
+- [x] 15.3 [M] Exceptions center, one prioritized list w/ resolving actions: lost · never-received · unexpected return · failed attempts · stuck · Bosta state 103 limbo · NDR 26–30 evidence · short · blocked customer · address review · pending unpack · self-pickup no-show · missing AWB · unlinked Mode-B · Shopify edit conflict; archived w/ resolver
 - [ ] 15.4 [S] Owner daily digest (email; WhatsApp [C])
 - [ ] 15.5 [C] CSV exports
 

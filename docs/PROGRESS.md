@@ -4,7 +4,197 @@
 
 ## Current state
 
-Returns intake + resolution (FR-12) shipped 2026-06-17. 124 integration tests pass (BUILD SUCCESS).
+"Traced" design system + full frontend restyle shipped 2026-06-18. Frontend build clean (✓ 86 modules, 322KB JS / 35KB CSS). 143 integration tests unchanged and passing.
+
+**Day 15 — "Traced" design system + frontend dark-theme restyle:**
+
+*Design tokens (`frontend/tailwind.config.js` + `frontend/DESIGN.md`):*
+- New `fontSize` scale: `display` (2.25rem/light), `h1`–`h3`, `body` (0.875rem), `small`, `caption`.
+- Semantic color tokens: `base` (#0B1220), `panel` (#1E293B), `elevated` (#253449), `line` (#2D3F55), `primary` (#F8FAFC), `muted` (#647488); brand palette `brand`/`brand-hover`, `accent`, `cyan`; state tokens `success`/`warning`/`danger` with `.muted` variants.
+- `boxShadow`: `card`, `elevated`, `brand`, `glow`.
+- `animation`: `flash` (scan feedback), `fadeIn`, `dotPing` (timeline pulse).
+- `fontFamily`: `sans` → Inter, `arabic` → Cairo (Google Fonts @import in index.css; RTL font auto-switches via `[dir="rtl"]` CSS selector).
+
+*Shared CSS layers (`frontend/src/index.css`):*
+- `@layer base`: dark background (#0B1220), near-white text (#F8FAFC), scrollbar styling.
+- `@layer components`: `.card`, `.btn`, `.btn-brand`, `.btn-outline`, `.btn-danger`, `.btn-ghost`, `.input`, `.input-scan`, `.badge`, `.tbl-header`, `.tbl-cell`, `.tbl-row`, `.nav-item`, `.nav-item-active`.
+
+*Shared UI components (`frontend/src/components/ui.tsx`):*
+- `Badge` — status badge with `/10` opacity backgrounds on dark theme.
+- `OrderBadge` — maps order status strings.
+- `Card`, `StatCard` — card primitives.
+- `Button` — variant/size props.
+- `Input` — standard + scan variant.
+- `Spinner` — SVG animated.
+- `EmptyState` — icon + message.
+- `SeverityBadge` — CRITICAL/HIGH/MEDIUM/LOW.
+- `Modal` — dark overlay + card.
+
+*App shell (`frontend/src/components/Layout.tsx`):*
+- Full dark sidebar (w-56, bg-panel, border-e border-line).
+- Wordmark: `<span class="text-brand">tr</span>aced` with icon slot div.
+- Inline SVG icons for Overview, Orders, Inventory, Shipments/Receiving, Fulfill, Returns, Exceptions.
+- `SideNavLink` with active highlight: `bg-brand/10 border-s-2 border-brand`.
+- Bottom: lang toggle + logout button.
+- Top search bar for barcode/tracking lookup.
+
+*Restyled pages (dark-first, all on design tokens):*
+- **`Login.tsx`**: brand glow background, "traced" wordmark, dark card form.
+- **`Overview.tsx`**: stat cards with SVG sparklines, recent exceptions, `/overview` route.
+- **`Lookup.tsx`**: showpiece screen — brand-violet pulsing dot (`animate-dotPing`) on latest event, compact `TransitionPill`, `MetaField` grid, dark card backgrounds.
+- **`Orders.tsx`**: dark table with `/10` opacity status badges, Spinner, EmptyState.
+- **`Returns.tsx`**: tab nav with brand-violet active underline; intake (flash + beep preserved), pending, never-received table all dark-themed.
+- **`Exceptions.tsx`**: severity dot + `SeverityBadge` + type badge per row; `Modal` for resolve dialog; filter selects.
+- **`Catalog.tsx`**: dark product cards with variant breakdown; `Badge` for piece counts.
+- **`OrderDetail.tsx`**: dark info sections; `Badge` for piece status; `InfoRow` helper.
+- **`Receiving.tsx`**: dark session list + create form + session detail; dropdown autocomplete dark-styled.
+- **`Fulfill.tsx`**: self-pickup + guided-unpack flows from Day 14 preserved; dark skin applied.
+
+*Routing (`frontend/src/App.tsx`):*
+- Added `/overview` route (wraps `Overview` in `Layout`).
+- Default redirect `*` → `/overview` (was `/orders`).
+
+*Bug fixed:* `DashStatCard` was receiving an unknown `accent` prop — removed.
+
+---
+
+Self-pickup + order cancellation (FR-9.9–9.13) shipped 2026-06-18. 143 integration tests pass (BUILD SUCCESS).
+
+**Day 14 — Self-pickup + order cancellation (FR-9.9–9.13):**
+
+*Migration V12 (`V12__day14_self_pickup_cancel.sql`):*
+- `ALTER TYPE order_status ADD VALUE IF NOT EXISTS 'self_pickup_pending'`
+- `ALTER TABLE orders ADD COLUMN is_self_pickup boolean NOT NULL DEFAULT false`
+- `ALTER TABLE orders ADD COLUMN cancel_requested_at timestamptz`
+- Partial index `orders_cancel_requested ON orders (tenant_id) WHERE cancel_requested_at IS NOT NULL`
+
+*Backend:*
+- **`InventoryLedger`** — added `"packed:delivered"` to ALLOWED set (self-pickup handover path only).
+- **`FulfillService`** — 4 new methods:
+  - `setSelfPickup(orderId, selfPickup)` — toggles `is_self_pickup` flag (blocked on terminal/cancelled orders).
+  - `handover(orderId, actorUserId)` — verifies `self_pickup_pending`, transitions all packed pieces to `delivered` via `handover` event with `metadata={"self_pickup":true}`, updates order to `delivered`. Returns piece count.
+  - `cancelOrder(orderId, actorUserId)` — stateful cancellation decision:
+    - Terminal (cancelled/delivered/returned/lost) → 409
+    - With-courier/awaiting_pickup/returning → 409 (pieces physically with courier)
+    - Packed/self_pickup_pending with packed pieces → set `cancel_requested_at = COALESCE(cancel_requested_at, now())`, return `CancelResult("cancel_requested", ..., packedCount)` (202-equivalent)
+    - Pre-pack (reserved only) → release pieces RESERVED→AVAILABLE with `unreserved` events, release active allocations, order → cancelled, return `CancelResult("cancelled", ..., 0)`
+  - `unpackPiece(orderId, pieceId, actorUserId)` — verifies `cancel_requested_at` and correct order status; transitions PACKED→AVAILABLE with `unpacked` event; releases allocation; when remaining packed count reaches 0, cancels the order and clears `cancel_requested_at`. Returns `UnpackResult(cancelled, remainingPacked)`.
+  - `complete()` updated: reads `is_self_pickup`, sets order status to `self_pickup_pending` (not `packed`) for self-pickup orders. Queue includes `self_pickup_pending` orders.
+  - Added `CancelResult(String status, String message, int remainingPacked)` and `UnpackResult(boolean cancelled, int remainingPacked)` records.
+- **`FulfillController`** — 4 new endpoints:
+  - `PATCH /{orderId}/self-pickup` — toggle flag
+  - `POST /{orderId}/handover` — confirm customer collection
+  - `POST /{orderId}/cancel` — cancel (200 cancelled pre-pack, 202/200 cancel_requested post-pack)
+  - `POST /{orderId}/unpack/{pieceId}` — guided unpack one piece
+- **`ExceptionService`** — 9th detector `detectGuidedUnpack()`: finds orders with `cancel_requested_at IS NOT NULL AND status IN ('packed','self_pickup_pending')`. Surfaces as `guided_unpack` / `HIGH`. Disappears naturally when order cancels (no `exception_resolutions` entry needed).
+- **`LookupService`** — phraseKey mappings for `handover`, `unpacked`, `unreserved`.
+- **`ShopifyWebhookController`** (`/api/v1/webhooks/shopify`) — new file. Receives Shopify webhooks. `orders/cancelled` topic: resolves tenant via `resolve_tenant_by_shop_domain` SECURITY DEFINER; optional HMAC-SHA256 validation against per-store `webhook_secret`; dedup via `X-Shopify-Webhook-Id`; persists to `webhook_events`; calls `FulfillService.cancelOrder()` with same pre/post-pack logic. Already-terminal orders logged and skipped (no 5xx).
+
+*Tests (`Day14Test` — 7 tests):*
+- **(a)** Self-pickup `complete()` → `self_pickup_pending` (not `packed`); no AWB required; queue includes it.
+- **(b)** `handover()` → pieces `delivered`, order `delivered`, `handover` events attributed to worker with correct `to_status`.
+- **(c)** Pre-pack cancel → reserved pieces → `available`, `unreserved` events, active allocations released, order `cancelled`.
+- **(d)** Post-pack cancel → `cancel_requested_at` set, piece still `packed`, order still `packed`; `guided_unpack` HIGH exception surfaces.
+- **(e)** Guided unpack: first piece → order stays packed, remaining=1; last piece → order `cancelled`, `cancel_requested_at` cleared, guided_unpack exception gone.
+- **(f)** With-courier cancel → 409 (`CONFLICT`), pieces untouched.
+- **(g)** Shopify `orders/cancelled` webhook path tested directly via `cancelOrder()` — pre-pack auto-releases.
+
+*Frontend:*
+- **`Fulfill.tsx`** fully rewritten with new flows:
+  - Queue view: separate "Awaiting Collection" section for `self_pickup_pending` orders (amber cards); clicking opens `HandoverScreen`.
+  - `HandoverScreen` — full-screen confirm-handover UI for self-pickup orders; shows piece count; calls `POST /{id}/handover`.
+  - Pick screen: Self-Pickup badge on header; Cancel button (top-right) → inline confirm dialog (shows pre vs post-pack message); post-pack cancel triggers `GuidedUnpackPanel`.
+  - `GuidedUnpackPanel` — lists packed pieces with "Unpack" button per piece; calls `POST /{id}/unpack/{pieceId}`; auto-navigates back to queue when all unpacked.
+  - After `complete()` on self-pickup order: green banner "Packed — awaiting collection" instead of AWB dialog.
+- **`Exceptions.tsx`** — added `guided_unpack: { en: 'Unpack Required', ar: 'فك التعبئة' }` to `TYPE_LABELS`.
+- **`en.json`** — new `fulfill.*` locale keys: selfPickup, selfPickupBadge, handoverTitle, handoverSubtitle, handoverConfirm, handoverSuccess, cancelOrder, cancelConfirmPre, cancelConfirmPost, cancelRequested, unpackPiece, unpackDone, selfPickupPending; `lookup.phrase` keys: handover, unpacked, unreserved.
+- **`ar.json`** — corresponding Arabic translations under `fulfill_extra.*` (merged at runtime) and `lookup.phrase` extensions.
+
+**Decisions made:**
+- **`cancel_requested_at` as the guided-unpack signal** — a dedicated timestamptz column is more debuggable than a new enum value, and the guided_unpack exception detector disappears naturally when the order reaches `cancelled` without needing `exception_resolutions`.
+- **No auto-move of packed pieces on cancellation** — packed pieces are physically in a box; the system must not auto-release them without worker confirmation to prevent stock reconciliation divergence.
+- **Shopify webhook HMAC validation optional when `webhook_secret` is null** — allows dev environments to test the webhook path without configuring secrets; production stores will always have a secret set at connect time.
+
+**Gotchas:**
+- `packed:delivered` added to ALLOWED in `InventoryLedger` — this is the only new legal transition. It is only reachable via `FulfillService.handover()` (which first verifies `self_pickup_pending` order status). There is no other code path that transitions packed→delivered.
+- `cancelOrder()` uses order status (not piece status) to determine pre-vs-post-pack: `complete()` atomically packs all pieces and sets order status, so order status is authoritative.
+
+---
+
+**Day 13 — Exceptions center (FR-15.3):**
+
+*Migration V11 (`V11__day13_exceptions.sql`):*
+- `tenants.stuck_shipment_days` (int, default 3) — per-tenant configurable stuck-shipment window.
+- `exception_resolutions` table — operational audit log for exception acknowledgements:
+  `(tenant_id, exception_type, subject_key, resolved_by, resolved_at, note)`.
+  RLS + `tenant_isolation` policy. Two indexes: `(tenant_id, exception_type, subject_key)` for
+  NOT EXISTS suppression; `(tenant_id, resolved_at DESC)` for audit trail queries.
+
+*Backend:*
+- **`BostaWebhookJob`** — step 9 UPDATE now persists `provider_state = delivery.stateCode()` so
+  NDR (state 47) and delivery-limbo (state 103) detectors can query `shipments.provider_state`.
+- **`ExceptionService`** — 8 detectors run as separate SQL queries, merged in Java, sorted by
+  severity (CRITICAL→HIGH→MEDIUM→LOW) then `occurred_at ASC` (oldest first within tier):
+  1. `lost` (CRITICAL) — pieces with `status='lost'`.
+  2. `never_received` (HIGH) — reuses FR-12.4 detector; suppressed once ack'd.
+  3. `unmatched_delivery` (MEDIUM) — `unlinked_bosta_deliveries.resolved=false`.
+  4. `blocked_customer` (LOW) — `orders.on_hold=true`.
+  5. `stuck_shipment` (HIGH) — non-terminal shipment with no courier update for `stuck_shipment_days`.
+     Unique recurrence: ack is invalidated if `last_synced_at > resolved_at` (Bosta sync after ack
+     reactivates the exception without requiring re-ack).
+  6. `unexpected_return` (HIGH) — `return_received` event with `from_status IN ('with_courier','awaiting_pickup')`,
+     piece still at `return_pending_inspection`.
+  7. `delivery_limbo` (HIGH) — `provider_state = 103` (return failed 3×, Bosta awaiting action).
+  8. `ndr_failed` (MEDIUM or CRITICAL based on `ndr_codes.severity`) — `provider_state = 47`,
+     NDR code extracted from `shipments.raw->>'exceptionCode'`, joined to `ndr_codes` for description.
+  Each detector adds `descriptionEn`, `descriptionAr`, `suggestedAction`, `actionUrl` via `enrich()`.
+  Resolution suppression via NOT EXISTS on `exception_resolutions` per detector.
+- **`ExceptionController`** (`/api/v1/exceptions`):
+  - `GET /` — paginated+filterable list (params: `type`, `severity`, `page`, `size`). OWNER/MANAGER.
+  - `POST /resolve` — acknowledge/resolve: writes audit record. OWNER/MANAGER.
+  - `GET /resolutions` — audit trail with resolver name. OWNER/MANAGER.
+
+*Tests (`Day13Test` — 12 tests):*
+- **(a)** Lost piece → CRITICAL severity; resolve removes it; audit record written with correct resolver+note.
+- **(b)** Never-received → HIGH; surfaces past window; ack removes it.
+- **(c)** Unmatched delivery → MEDIUM; natural `resolved=true` removes it.
+- **(d)** Blocked customer → LOW; ack removes it.
+- **(e)** Stuck shipment → HIGH; ack removes it; backdating `resolved_at` before `last_synced_at` → reappears.
+- **(f)** Unexpected return → HIGH; ack removes it.
+- **(g)** Delivery limbo (provider_state=103) → HIGH; ack removes it.
+- **(h)** NDR critical code 26 → CRITICAL; normal code 1 → MEDIUM; NDR description populated.
+- **(i)** Severity ordering: CRITICAL < HIGH < MEDIUM < LOW (index positions verified).
+- **(j)** Age ordering within same severity: oldest `occurred_at` first.
+- **(k)** Tenant isolation: other tenant's lost piece invisible under correct `TenantContext`.
+- **(l)** Resolve audit record: `exception_type`, `subject_key`, `resolved_by`, `resolved_at`, `note` all correct.
+
+*Frontend (`Exceptions.tsx`):*
+- Full-page exceptions command center at `/exceptions`.
+- Severity filter (CRITICAL/HIGH/MEDIUM/LOW) + type filter (8 types) dropdowns.
+- Each exception row: colored severity dot + CRITICAL/HIGH/MEDIUM/LOW badge, type badge, age (Xs/Xm/Xh/Xd),
+  AR/EN description, sub-details (order #, tracking, barcode, NDR description), "Go →" action button
+  routing to existing screens, "Resolve" button opening inline dialog with optional note field.
+- Inline resolve dialog: confirms the exception description, optional note, calls POST /exceptions/resolve,
+  refreshes list.
+- Pagination. Empty state with checkmark. Refresh button.
+- Route `/exceptions` added to `App.tsx`; "Exceptions" / "الاستثناءات" nav link in `Layout.tsx`.
+- AR/EN locale keys added.
+
+**Decisions made:**
+- **Per-type Java-merged queries** over a single UNION SQL: 8 detectors have incompatible JOIN patterns;
+  stuck-shipment's `resolved_at > last_synced_at` recurrence guard is query-type-specific;
+  Java merge is readable, independently testable, trivially extensible.
+- **`exception_resolutions` table NOT `piece_events`**: exceptions are operational history, not custody
+  history. Separate table keeps the custody ledger append-only and the exception audit queryable
+  independently.
+- **Stuck-shipment recurrence**: ack suppression uses `er.resolved_at > COALESCE(s.last_synced_at, s.created_at)`
+  so a Bosta sync after the ack invalidates it — operator must re-ack the new stalled state.
+
+**Gotchas found:**
+- PostgreSQL `?` JSONB existence operator (`raw ? 'key'`) is intercepted by JDBC as a parameter
+  placeholder. Must use `raw->>'key' IS NOT NULL` instead in JDBC-prepared statements.
+
+---
 
 **Day 12 — Returns intake + resolution (FR-12.1–12.5):**
 
@@ -323,15 +513,11 @@ Features in delivery order. Commit history is the source of truth for what is do
 ### 1. Returns intake + never-received report (FR-12) ✅ shipped 2026-06-17
 Three-tab UI: intake scan, pending-inspection queue, never-received report. See history below.
 
-### 2. Exceptions center (FR-15.3)
-One prioritised list of all open exceptions with resolving actions: never-received · unexpected return · lost · failed delivery attempts · stuck shipment · unlinked Mode-B delivery · missing AWB · address review · blocked customer · short order · NDR limbo. Each exception type links to the relevant action screen. This is the operator's daily starting point — nothing should require hunting across multiple screens.
+### 2. Exceptions center (FR-15.3) ✅ shipped 2026-06-18
+8 exception types (lost · never-received · unmatched-delivery · blocked-customer · stuck-shipment · unexpected-return · delivery-limbo · ndr-failed) with severity ordering, per-type AR/EN descriptions, action URLs, and resolve audit trail. Frontend command-center view. 12 tests pass. See history above.
 
-### 3. Cancellation + self-pickup flows (FR-9.8–9.13)
-- Guided unpack (cancel post-pack): cancel AWB → rescan pieces out → available → cancelled; no partial completion.
-- Pre-handover cancel: (a) full cancel → unpack; (b) convert to self-pickup → AWB cancelled, sale stands, Self-Pickup Pending state.
-- Self-pickup handover: scan pieces + COD cash confirm → delivered (self-pickup).
-- No-show (7-day) → exception: re-ship or cancel.
-- Courier-already-collected guard: cancellation blocked with explanation.
+### 3. Cancellation + self-pickup flows (FR-9.8–9.13) ✅ shipped 2026-06-18
+All core flows implemented. See Day 14 above. Remaining edge case not yet built: no-show (7-day self-pickup TTL → exception → re-ship or cancel). Low priority for initial pilots.
 
 ### 4. Mode B live verification against real Bosta account
 businessReference match + phone/COD fallback have been built and tested against the mock gateway. Before pilots: end-to-end verify with real Bosta delivery JSON — confirm consignee phone field path, businessReference format, state code sequence, and that `tryMatchDelivery()` links correctly. **Gated on Bosta IP whitelisting (human task below).**

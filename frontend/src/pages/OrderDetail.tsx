@@ -2,14 +2,7 @@ import { useEffect, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { getOrder, OrderDetail as IOrderDetail } from '../api'
-
-const PIECE_STATUS_COLOR: Record<string, string> = {
-  available:  'bg-green-100 text-green-700',
-  reserved:   'bg-yellow-100 text-yellow-700',
-  packed:     'bg-purple-100 text-purple-700',
-  with_courier: 'bg-sky-100 text-sky-700',
-  delivered:  'bg-green-200 text-green-800',
-}
+import { Badge, Spinner } from '../components/ui'
 
 export default function OrderDetail() {
   const { t } = useTranslation()
@@ -26,8 +19,8 @@ export default function OrderDetail() {
       .finally(() => setLoading(false))
   }, [id, t])
 
-  if (loading) return <p className="text-gray-500 text-sm">{t('common.loading')}</p>
-  if (error)   return <p className="text-red-600 text-sm">{error}</p>
+  if (loading) return <div className="flex justify-center pt-16"><Spinner size={28} /></div>
+  if (error)   return <p className="text-small text-danger">{error}</p>
   if (!order)  return null
 
   const addr = order.address
@@ -35,67 +28,72 @@ export default function OrderDetail() {
     : null
 
   return (
-    <div>
-      <div className="mb-6">
-        <Link to="/orders" className="text-sm text-indigo-600 hover:underline">
-          {t('orderDetail.back')}
+    <div className="space-y-6">
+      <div>
+        <Link to="/orders" className="text-small text-brand hover:text-brand-hover transition-colors">
+          ← {t('orderDetail.back')}
         </Link>
-        <h1 className="text-xl font-semibold text-gray-900 mt-2">
+        <h1 className="text-h1 text-primary mt-2">
           {t('orderDetail.title')} {order.number}
         </h1>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
 
-        {/* Left column: customer + order info */}
+        {/* Left: customer + order meta */}
         <div className="lg:col-span-1 space-y-4">
-          <section className="bg-white shadow rounded-lg p-4">
-            <h2 className="text-sm font-semibold text-gray-700 mb-3 uppercase tracking-wide">
+          <section className="card p-4">
+            <h2 className="text-caption text-muted uppercase tracking-widest mb-3">
               {t('orderDetail.customer')}
             </h2>
-            <dl className="space-y-2 text-sm">
-              <Row label={t('orderDetail.customer')} value={order.customerName} />
-              <Row label={t('orderDetail.phone')}    value={order.customerPhone} />
-              <Row label={t('orderDetail.address')}  value={addr} />
+            <dl className="space-y-2">
+              <InfoRow label={t('orderDetail.customer')} value={order.customerName} />
+              <InfoRow label={t('orderDetail.phone')}    value={order.customerPhone} />
+              <InfoRow label={t('orderDetail.address')}  value={addr} />
             </dl>
           </section>
 
-          <section className="bg-white shadow rounded-lg p-4">
-            <h2 className="text-sm font-semibold text-gray-700 mb-3 uppercase tracking-wide">
+          <section className="card p-4">
+            <h2 className="text-caption text-muted uppercase tracking-widest mb-3">
               {t('orderDetail.status')}
             </h2>
-            <dl className="space-y-2 text-sm">
-              <Row label={t('orderDetail.status')}  value={order.status.replace(/_/g, ' ')} />
+            <dl className="space-y-2">
+              <div className="flex items-start gap-2">
+                <dt className="text-small text-muted w-24 shrink-0">{t('orderDetail.status')}</dt>
+                <dd><Badge status={order.status} /></dd>
+              </div>
               {order.onHold && (
                 <div className="flex items-center gap-2">
-                  <span className="text-xs font-bold bg-red-100 text-red-700 px-2 py-0.5 rounded">
+                  <span className="badge border bg-danger/10 text-danger border-danger/20 font-bold">
                     {t('orderDetail.onHold')}
                   </span>
-                  {order.holdReason && <span className="text-xs text-gray-500">{order.holdReason}</span>}
+                  {order.holdReason && (
+                    <span className="text-small text-muted">{order.holdReason}</span>
+                  )}
                 </div>
               )}
-              <Row label={t('orderDetail.payment')} value={order.paymentMethod} />
-              <Row label={t('orderDetail.cod')}     value={order.codAmount != null ? `${order.codAmount.toLocaleString()} EGP` : null} />
-              <Row label={t('orderDetail.placedAt')} value={order.placedAt ? new Date(order.placedAt).toLocaleString() : null} />
+              <InfoRow label={t('orderDetail.payment')} value={order.paymentMethod} />
+              <InfoRow label={t('orderDetail.cod')}     value={order.codAmount != null ? `${order.codAmount.toLocaleString()} EGP` : null} />
+              <InfoRow label={t('orderDetail.placedAt')} value={order.placedAt ? new Date(order.placedAt).toLocaleString() : null} />
             </dl>
           </section>
 
           {order.shipment && (
-            <section className="bg-white shadow rounded-lg p-4">
-              <h2 className="text-sm font-semibold text-gray-700 mb-3 uppercase tracking-wide">
+            <section className="card p-4">
+              <h2 className="text-caption text-muted uppercase tracking-widest mb-3">
                 {t('orderDetail.shipment')}
               </h2>
-              <dl className="space-y-2 text-sm">
-                <Row label={t('orderDetail.tracking')} value={order.shipment.trackingNumber} mono />
-                <Row label={t('orderDetail.provider')} value={order.shipment.provider} />
-                <Row label={t('orderDetail.status')}   value={order.shipment.internalState.replace(/_/g, ' ')} />
-                <Row label={t('orderDetail.attempts')} value={String(order.shipment.numberOfAttempts)} />
+              <dl className="space-y-2">
+                <InfoRow label={t('orderDetail.tracking')} value={order.shipment.trackingNumber} mono />
+                <InfoRow label={t('orderDetail.provider')} value={order.shipment.provider} />
+                <InfoRow label={t('orderDetail.status')}   value={order.shipment.internalState.replace(/_/g, ' ')} />
+                <InfoRow label={t('orderDetail.attempts')} value={String(order.shipment.numberOfAttempts)} />
                 {order.shipment.awbUrl && (
                   <div className="flex gap-2 items-start">
-                    <dt className="text-gray-500 w-24 shrink-0">{t('orderDetail.awb')}</dt>
+                    <dt className="text-small text-muted w-24 shrink-0">{t('orderDetail.awb')}</dt>
                     <dd>
                       <a href={order.shipment.awbUrl} target="_blank" rel="noreferrer"
-                         className="text-indigo-600 hover:underline">Download</a>
+                         className="text-small text-brand hover:text-brand-hover">Download</a>
                     </dd>
                   </div>
                 )}
@@ -104,36 +102,34 @@ export default function OrderDetail() {
           )}
         </div>
 
-        {/* Right column: order items */}
-        <div className="lg:col-span-2 space-y-4">
-          <h2 className="text-sm font-semibold text-gray-700 uppercase tracking-wide">
+        {/* Right: order items */}
+        <div className="lg:col-span-2 space-y-3">
+          <h2 className="text-caption text-muted uppercase tracking-widest">
             {t('orderDetail.items')}
           </h2>
           {order.items.map(item => (
-            <div key={item.id} className="bg-white shadow rounded-lg p-4">
+            <div key={item.id} className="card p-4">
               <div className="flex items-start justify-between mb-3">
                 <div>
-                  <p className="font-medium text-gray-900">{item.productTitle}</p>
-                  <p className="text-sm text-gray-500">{item.variantTitle}</p>
-                  {item.sku && <p className="text-xs font-mono text-gray-400 mt-0.5">{item.sku}</p>}
+                  <p className="text-body font-semibold text-primary">{item.productTitle}</p>
+                  <p className="text-small text-muted">{item.variantTitle}</p>
+                  {item.sku && <p className="font-mono text-caption text-muted mt-0.5">{item.sku}</p>}
                 </div>
-                <span className="text-sm font-medium text-gray-700">×{item.quantity}</span>
+                <span className="badge border bg-muted/10 text-muted border-muted/20">×{item.quantity}</span>
               </div>
 
               <div>
-                <p className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-2">
+                <p className="text-caption text-muted uppercase tracking-widest mb-2">
                   {t('orderDetail.pieces')}
                 </p>
                 {item.allocatedPieces.length === 0 ? (
-                  <p className="text-xs text-gray-400">{t('orderDetail.noPieces')}</p>
+                  <p className="text-small text-muted/50">{t('orderDetail.noPieces')}</p>
                 ) : (
                   <div className="flex flex-wrap gap-2">
                     {item.allocatedPieces.map(p => (
-                      <div key={p.pieceId} className="flex items-center gap-1.5 border border-gray-200 rounded px-2 py-1">
-                        <span className="font-mono text-xs text-gray-700">{p.barcode}</span>
-                        <span className={`text-xs px-1.5 py-0.5 rounded-full font-medium ${PIECE_STATUS_COLOR[p.status] ?? 'bg-gray-100 text-gray-600'}`}>
-                          {p.status}
-                        </span>
+                      <div key={p.pieceId} className="flex items-center gap-1.5 border border-line rounded-md px-2 py-1 bg-elevated">
+                        <span className="font-mono text-caption text-muted">{p.barcode}</span>
+                        <Badge status={p.status} />
                       </div>
                     ))}
                   </div>
@@ -147,13 +143,13 @@ export default function OrderDetail() {
   )
 }
 
-function Row({ label, value, mono }: { label: string; value: string | null | undefined; mono?: boolean }) {
+function InfoRow({ label, value, mono }: { label: string; value: string | null | undefined; mono?: boolean }) {
   const { t } = useTranslation()
   return (
     <div className="flex gap-2 items-start">
-      <dt className="text-gray-500 w-24 shrink-0">{label}</dt>
-      <dd className={`text-gray-900 ${mono ? 'font-mono text-xs' : ''}`}>
-        {value ?? t('common.na')}
+      <dt className="text-small text-muted w-24 shrink-0">{label}</dt>
+      <dd className={`text-small text-primary ${mono ? 'font-mono text-caption' : ''}`}>
+        {value ?? <span className="text-muted">{t('common.na')}</span>}
       </dd>
     </div>
   )

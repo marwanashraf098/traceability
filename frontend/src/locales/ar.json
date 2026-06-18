@@ -1,16 +1,28 @@
 {
   "nav": {
+    "overview": "لوحة التحكم",
     "orders": "الطلبات",
-    "catalog": "الكتالوج",
+    "catalog": "المخزون",
     "receiving": "الاستلام",
     "fulfill": "التجميع",
     "logout": "تسجيل الخروج",
-    "lookup": "امسح أو أدخل الباركود…",
-    "returns": "المرتجعات"
+    "lookup": "بحث باركود أو رقم شحنة…",
+    "returns": "المرتجعات",
+    "exceptions": "الاستثناءات"
+  },
+  "overview": {
+    "title": "لوحة التحكم",
+    "totalOrders": "إجمالي الطلبات",
+    "delivered": "تم التسليم",
+    "inTransit": "قيد التوصيل",
+    "returns": "المرتجعات",
+    "recentExceptions": "الاستثناءات الأخيرة",
+    "noExceptions": "لا توجد استثناءات مفتوحة",
+    "viewAll": "عرض الكل"
   },
   "login": {
-    "title": "تتبع المخزون",
-    "subtitle": "منصة تتبع القطع",
+    "title": "traced",
+    "subtitle": "nothing moves untraced",
     "email": "البريد الإلكتروني",
     "password": "كلمة المرور",
     "submit": "تسجيل الدخول",
@@ -224,6 +236,24 @@
       "location": "الموقع",
       "intakedAt": "تاريخ الاستلام"
     }
+  },
+  "exceptions": {
+    "title": "الاستثناءات"
+  },
+  "fulfill_extra": {
+    "selfPickup": "استلام شخصي",
+    "selfPickupBadge": "استلام شخصي",
+    "handoverTitle": "تأكيد تسليم العميل",
+    "handoverSubtitle": "العميل في المستودع — تأكيد تسليم {{count}} قطعة",
+    "handoverConfirm": "تأكيد التسليم",
+    "handoverSuccess": "تم الاستلام — تم تسليم {{count}} قطعة",
+    "cancelOrder": "إلغاء الطلب",
+    "cancelConfirmPre": "إلغاء هذا الطلب؟ سيتم إرجاع جميع القطع المحجوزة للمخزون.",
+    "cancelConfirmPost": "الطلب معبَّأ. يجب على العامل فك تعبئة {{count}} قطعة يدوياً.",
+    "cancelRequested": "طلب الإلغاء — يحتاج {{count}} قطعة إلى فك التعبئة",
+    "unpackPiece": "فك التعبئة",
+    "unpackDone": "تمت إزالة جميع القطع — الطلب ملغى",
+    "selfPickupPending": "في انتظار الاستلام"
   },
   "common": {
     "loading": "جارٍ التحميل...",
