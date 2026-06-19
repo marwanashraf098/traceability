@@ -1,5 +1,7 @@
 package com.traceability;
 
+import com.fasterxml.jackson.annotation.JsonProperty;
+import com.traceability.integrations.shopify.ShopifyOAuthException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
@@ -22,6 +24,17 @@ import org.springframework.web.server.ResponseStatusException;
 public class ApiExceptionHandler {
 
     private static final Logger log = LoggerFactory.getLogger(ApiExceptionHandler.class);
+
+    record OAuthErrorBody(
+            String code,
+            @JsonProperty("message_en") String messageEn,
+            @JsonProperty("message_ar") String messageAr) {}
+
+    @ExceptionHandler(ShopifyOAuthException.class)
+    ResponseEntity<OAuthErrorBody> handleShopifyOAuth(ShopifyOAuthException ex) {
+        return ResponseEntity.status(ex.httpStatus())
+            .body(new OAuthErrorBody(ex.code().name(), ex.messageEn(), ex.messageAr()));
+    }
 
     @ExceptionHandler(ResponseStatusException.class)
     ResponseEntity<Void> handleResponseStatus(ResponseStatusException ex) {

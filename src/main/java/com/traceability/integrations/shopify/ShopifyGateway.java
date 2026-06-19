@@ -55,4 +55,15 @@ public interface ShopifyGateway {
 
     /** Fetches one page of orders created after createdAfter (ISO-8601). cursor=null for first page. */
     OrderPage fetchOrdersPage(String shopDomain, String token, String cursor, String createdAfter);
+
+    /**
+     * Exchanges an OAuth authorization code for a permanent offline access token.
+     * Called once per install on the OAuth callback.
+     *
+     * @param shopDomain the merchant's shop domain (e.g. "store.myshopify.com")
+     * @param code       the authorization code from the callback query param
+     * @return the plaintext offline access token — caller must encrypt before persisting
+     * @throws ShopifyException on non-200 response or missing access_token field
+     */
+    String exchangeCode(String shopDomain, String code);
 }

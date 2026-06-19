@@ -261,5 +261,23 @@
     "error": "Something went wrong",
     "na": "—",
     "cancel": "Cancel"
+  },
+  "shopify": {
+    "oauth": {
+      "connectTitle": "Connect Shopify",
+      "connectSubtitle": "Link your Shopify store to start syncing orders and inventory.",
+      "shopLabel": "Shop domain",
+      "shopPlaceholder": "your-store.myshopify.com",
+      "connectButton": "Connect",
+      "connecting": "Connecting…",
+      "success": "Shopify connected successfully. Importing orders…",
+      "errors": {
+        "SHOPIFY_HMAC_INVALID": "Security validation failed. Please try again.",
+        "SHOPIFY_STATE_INVALID": "The connection session expired or was already used. Please start again.",
+        "SHOPIFY_TOKEN_EXCHANGE_FAILED": "Could not complete Shopify authorisation. Please try again.",
+        "SHOPIFY_PATH2_NOT_YET": "New-merchant registration is coming soon.",
+        "invalidDomain": "Please enter a valid *.myshopify.com domain."
+      }
+    }
   }
 }

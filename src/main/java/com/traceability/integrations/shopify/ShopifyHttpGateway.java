@@ -87,15 +87,21 @@ class ShopifyHttpGateway implements ShopifyGateway {
     private final RestClient restClient;
     private final ObjectMapper mapper;
     private final String apiVersion;
+    private final String clientId;
+    private final String clientSecret;
     private final Retry retry;
 
     ShopifyHttpGateway(
             RestClient.Builder builder,
             ObjectMapper mapper,
-            @Value("${shopify.api-version}") String apiVersion) {
-        this.restClient = builder.build();
-        this.mapper     = mapper;
-        this.apiVersion = apiVersion;
+            @Value("${shopify.api-version}") String apiVersion,
+            @Value("${shopify.client-id}") String clientId,
+            @Value("${shopify.client-secret}") String clientSecret) {
+        this.restClient   = builder.build();
+        this.mapper       = mapper;
+        this.apiVersion   = apiVersion;
+        this.clientId     = clientId;
+        this.clientSecret = clientSecret;
         this.retry = Retry.of("shopify-http", RetryConfig.custom()
                 .maxAttempts(3)
                 .waitDuration(Duration.ofSeconds(1))
@@ -120,6 +126,23 @@ class ShopifyHttpGateway implements ShopifyGateway {
             throw new ShopifyException("Shopify /shop.json returned unexpected response");
         }
         return body.get("shop").path("name").asText("unknown");
+    }
+
+    @Override
+    public String exchangeCode(String shopDomain, String code) {
+        String url = "https://" + shopDomain + "/admin/oauth/access_token";
+        JsonNode resp = Retry.decorateSupplier(retry, () ->
+            restClient.post()
+                .uri(url)
+                .header("Content-Type", "application/json")
+                .body(Map.of("client_id", clientId, "client_secret", clientSecret, "code", code))
+                .retrieve()
+                .body(JsonNode.class)
+        ).get();
+        if (resp == null || !resp.has("access_token")) {
+            throw new ShopifyException("Token exchange response missing access_token from " + shopDomain);
+        }
+        return resp.get("access_token").asText();
     }
 
     @Override

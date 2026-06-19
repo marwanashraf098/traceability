@@ -260,5 +260,23 @@
     "error": "حدث خطأ ما",
     "na": "—",
     "cancel": "إلغاء"
+  },
+  "shopify": {
+    "oauth": {
+      "connectTitle": "ربط Shopify",
+      "connectSubtitle": "اربط متجرك على Shopify لبدء مزامنة الطلبات والمخزون.",
+      "shopLabel": "نطاق المتجر",
+      "shopPlaceholder": "your-store.myshopify.com",
+      "connectButton": "ربط",
+      "connecting": "جارٍ الربط…",
+      "success": "تم ربط Shopify بنجاح. جارٍ استيراد الطلبات…",
+      "errors": {
+        "SHOPIFY_HMAC_INVALID": "فشل التحقق الأمني. يرجى المحاولة مرة أخرى.",
+        "SHOPIFY_STATE_INVALID": "انتهت صلاحية جلسة الاتصال أو تم استخدامها بالفعل. يرجى البدء من جديد.",
+        "SHOPIFY_TOKEN_EXCHANGE_FAILED": "تعذّر إتمام تفويض Shopify. يرجى المحاولة مرة أخرى.",
+        "SHOPIFY_PATH2_NOT_YET": "تسجيل التجار الجدد قادم قريباً.",
+        "invalidDomain": "يرجى إدخال نطاق *.myshopify.com صالح."
+      }
+    }
   }
 }
