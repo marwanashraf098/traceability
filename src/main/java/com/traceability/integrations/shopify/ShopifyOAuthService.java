@@ -1,10 +1,13 @@
 package com.traceability.integrations.shopify;
 
 import com.traceability.security.EncryptionService;
+import com.traceability.tenancy.TenantContext;
 import org.jobrunr.scheduling.JobScheduler;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.dao.DuplicateKeyException;
+import org.springframework.dao.EmptyResultDataAccessException;
 import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
@@ -19,12 +22,17 @@ import java.util.Map;
 import java.util.UUID;
 
 /**
- * OAuth Day 1 — state lifecycle + callback handling for Path-1 (tenant-linked installs).
+ * OAuth state lifecycle + resolve-or-create decision tree.
  *
- * State table is not under RLS — see V13 migration for the security rationale.
- * Token exchange delegates to ShopifyGateway (mockable in tests).
- * Encryption delegates to EncryptionService (AES-256-GCM).
- * Import job is enqueued via JobScheduler after successful store upsert.
+ * State table (shopify_oauth_state) is not under tenant RLS — see V13 migration.
+ * The provisioning function (provision_tenant_from_shopify) is a SECURITY DEFINER
+ * hatch — see V14 migration and blueprint.md §16.
+ *
+ * Critical ordering in linkOrProvision:
+ *   resolve_tenant_by_shop_domain is called BEFORE any tenant GUC is set.
+ *   A tenant-scoped SELECT under the intended tenant's RLS would hide a store
+ *   owned by a different tenant, causing a confusing 23505 instead of a clean
+ *   SHOPIFY_STORE_ALREADY_CONNECTED redirect. The DEFINER function sees all tenants.
  */
 @Service
 public class ShopifyOAuthService {
@@ -33,14 +41,19 @@ public class ShopifyOAuthService {
 
     private static final int STATE_TTL_SECONDS = 600; // 10 minutes
 
-    private static final String UPSERT_STORE = """
+    private static final String INSERT_STORE = """
             INSERT INTO stores (tenant_id, shop_domain, platform, access_token_encrypted, status, import_status)
             VALUES (?, ?, 'shopify', ?, 'connected', 'pending')
-            ON CONFLICT (shop_domain) DO UPDATE SET
-                access_token_encrypted = EXCLUDED.access_token_encrypted,
-                status                 = 'connected',
-                import_status          = 'pending'
-            WHERE stores.tenant_id = EXCLUDED.tenant_id
+            RETURNING id
+            """;
+
+    private static final String UPDATE_STORE_TOKEN = """
+            UPDATE stores
+               SET access_token_encrypted = ?,
+                   status                 = 'connected',
+                   import_status          = 'pending'
+             WHERE shop_domain = ?
+               AND tenant_id   = ?
             RETURNING id
             """;
 
@@ -83,18 +96,29 @@ public class ShopifyOAuthService {
         this.appUrl            = appUrl;
     }
 
-    // ---- public records -------------------------------------------------
+    // ---- public records -----------------------------------------------
 
     /** Carries the tenant and shop resolved from a consumed state nonce. */
     public record StateRecord(UUID tenantId, String shopDomain) {}
 
-    // ---- state lifecycle ------------------------------------------------
+    /** Outcome of the resolve-or-create decision tree on callback. */
+    public enum LinkOutcome {
+        LINKED_NEW,           // Path-1 or Path-2: first-time link for this shop
+        LINKED_EXISTING,      // idempotent re-install (same tenant owns the shop)
+        PROVISIONED,          // Path-2-new: new tenant + owner + store created
+        REJECTED_CROSS_TENANT // shop already owned by a different tenant
+    }
+
+    /** Result returned by linkOrProvision. */
+    public record LinkResult(UUID tenantId, UUID ownerUserId, LinkOutcome outcome) {}
+
+    // ---- state lifecycle ----------------------------------------------
 
     /**
      * Generates a CSPRNG nonce (≥128 bits, base64url), persists it in
      * shopify_oauth_state, and returns it for inclusion in the consent URL.
      *
-     * @param tenantId  the authenticated owner's tenant (null for Path-2)
+     * @param tenantId   the authenticated owner's tenant (null for Path-2)
      * @param shopDomain the shop domain to bind to this state
      */
     public String initiateOAuth(UUID tenantId, String shopDomain) {
@@ -118,14 +142,9 @@ public class ShopifyOAuthService {
      * All invalid-state sub-conditions (expired, consumed, shop-mismatch, not-found)
      * throw SHOPIFY_STATE_INVALID — the caller must not leak which case triggered.
      *
-     * A SELECT FOR UPDATE inside the transaction prevents concurrent replays:
+     * SELECT FOR UPDATE inside the transaction prevents concurrent replays:
      * the second request waits for the first to commit consumed_at, then sees it
      * non-null and rejects.
-     *
-     * @param nonce       the state parameter from the callback
-     * @param callbackShop the shop parameter from the callback
-     * @return StateRecord with the bound tenant_id (null for Path-2)
-     * @throws ShopifyOAuthException SHOPIFY_STATE_INVALID on any invalid condition
      */
     public StateRecord consumeState(String nonce, String callbackShop) {
         return tx.execute(s -> {
@@ -138,7 +157,7 @@ public class ShopifyOAuthService {
                     m.put("tenant_id",   rs.getObject("tenant_id", UUID.class));
                     m.put("shop_domain", rs.getString("shop_domain"));
                     m.put("created_at",  rs.getTimestamp("created_at").toInstant());
-                    m.put("consumed_at", rs.getTimestamp("consumed_at")); // may be null
+                    m.put("consumed_at", rs.getTimestamp("consumed_at"));
                     return m;
                 }, nonce);
 
@@ -155,60 +174,63 @@ public class ShopifyOAuthService {
             }
 
             jdbc.update("UPDATE shopify_oauth_state SET consumed_at = now() WHERE nonce = ?", nonce);
-
             return new StateRecord((UUID) row.get("tenant_id"), stateShop);
         });
     }
 
-    // ---- callback handling ----------------------------------------------
+    // ---- resolve-or-create decision tree (Day 2) ----------------------
 
     /**
-     * Exchanges the authorization code for an offline access token, encrypts it,
-     * upserts the store row, and enqueues the catalog+order import job.
+     * Exchanges the auth code then runs the resolve-or-create decision tree:
      *
-     * @param tenantId   the tenant to link the store to
-     * @param shopDomain the merchant's shop domain
-     * @param code       the authorization code from the callback
-     * @return the new or existing store UUID
-     * @throws ShopifyOAuthException SHOPIFY_TOKEN_EXCHANGE_FAILED on gateway error
+     * <pre>
+     * owner = resolve_tenant_by_shop_domain(shop)   // DEFINER, sees all tenants, no GUC needed
+     *
+     * Path-1 (state.tenantId != null — logged-in owner):
+     *   owner == null      → INSERT store under intended tenant → LINKED_NEW
+     *   owner == intended  → UPDATE store token (idempotent)   → LINKED_EXISTING
+     *   owner != intended  → no write                          → REJECTED_CROSS_TENANT
+     *
+     * Path-2 (state.tenantId == null — Shopify-first):
+     *   owner != null      → UPDATE store token (idempotent)   → LINKED_EXISTING
+     *   owner == null      → provision_tenant_from_shopify     → PROVISIONED
+     * </pre>
+     *
+     * Race backstop: on DuplicateKeyException (23505) we re-resolve (winner now
+     * committed) and idempotently link to the winner.
+     *
+     * @param state    the consumed state record; tenantId is null for Path-2
+     * @param shop     the shop domain from the callback params
+     * @param authCode the authorization code — exchange happens here
      */
-    public UUID handleCallback(UUID tenantId, String shopDomain, String code) {
+    public LinkResult linkOrProvision(StateRecord state, String shop, String authCode) {
         String rawToken;
         try {
-            rawToken = shopifyGateway.exchangeCode(shopDomain, code);
+            rawToken = shopifyGateway.exchangeCode(shop, authCode);
         } catch (Exception e) {
-            log.error("Token exchange failed for shop {}", shopDomain, e);
+            log.error("Token exchange failed for shop {}", shop, e);
             throw new ShopifyOAuthException(
                 ShopifyOAuthException.Code.SHOPIFY_TOKEN_EXCHANGE_FAILED,
                 "Failed to exchange authorization code for access token",
                 "فشل استبدال رمز التفويض للحصول على رمز الوصول",
                 HttpStatus.BAD_GATEWAY);
         }
+        String encryptedToken = encryptionService.encrypt(rawToken);
 
-        String encrypted = encryptionService.encrypt(rawToken);
+        // Resolve BEFORE setting any GUC — DEFINER function sees all tenants.
+        UUID owner = resolveShopOwner(shop);
 
-        UUID storeId = tx.execute(s ->
-            jdbc.query(UPSERT_STORE, rs -> rs.next() ? rs.getObject("id", UUID.class) : null,
-                       tenantId, shopDomain, encrypted));
-
-        if (storeId == null) {
-            log.warn("Shop {} is already connected to a different tenant — cross-tenant rejected", shopDomain);
-            throw new ShopifyOAuthException(
-                ShopifyOAuthException.Code.SHOPIFY_STATE_INVALID,
-                "This shop is already connected to another account",
-                "هذا المتجر متصل بحساب آخر بالفعل",
-                HttpStatus.CONFLICT);
+        try {
+            return branch(state, shop, rawToken, encryptedToken, owner);
+        } catch (DuplicateKeyException ex) {
+            // Concurrent install won the INSERT between our resolve and our write.
+            UUID winner = resolveShopOwner(shop);
+            return raceRelink(state, shop, encryptedToken, winner);
         }
-
-        final UUID finalStoreId = storeId;
-        jobScheduler.enqueue(() -> importJob.run(finalStoreId, tenantId));
-        log.info("OAuth callback complete: shop={} tenant={} store={}", shopDomain, tenantId, storeId);
-        return storeId;
     }
 
-    // ---- URL building ---------------------------------------------------
+    // ---- URL building -------------------------------------------------
 
-    /** Builds the Shopify consent URL for redirecting the merchant. */
     public String buildConsentUrl(String shopDomain, String nonce) {
         return "https://" + shopDomain + "/admin/oauth/authorize" +
             "?client_id=" + clientId +
@@ -217,10 +239,140 @@ public class ShopifyOAuthService {
             "&state=" + nonce;
     }
 
-    public String getAppUrl()      { return appUrl; }
-    public String getClientSecret() { return clientSecret; }
+    public String getAppUrl()        { return appUrl; }
+    public String getClientSecret()  { return clientSecret; }
 
-    // ---- private --------------------------------------------------------
+    // ---- private: decision tree ---------------------------------------
+
+    private LinkResult branch(StateRecord state, String shop,
+                               String rawToken, String encryptedToken, UUID owner) {
+        if (state.tenantId() != null) {
+            return path1(state.tenantId(), shop, encryptedToken, owner);
+        } else {
+            return path2(shop, rawToken, encryptedToken, owner);
+        }
+    }
+
+    private LinkResult path1(UUID intended, String shop, String encryptedToken, UUID owner) {
+        if (owner == null) {
+            UUID storeId = insertStore(intended, shop, encryptedToken);
+            enqueueImport(storeId, intended);
+            log.info("OAuth Path-1 new link: shop={} tenant={}", shop, intended);
+            return new LinkResult(intended, null, LinkOutcome.LINKED_NEW);
+        } else if (owner.equals(intended)) {
+            UUID storeId = updateStoreToken(intended, shop, encryptedToken);
+            enqueueImport(storeId, intended);
+            log.info("OAuth Path-1 re-link: shop={} tenant={}", shop, intended);
+            return new LinkResult(intended, null, LinkOutcome.LINKED_EXISTING);
+        } else {
+            log.warn("OAuth cross-tenant reject: shop={} intended={} actual={}", shop, intended, owner);
+            return new LinkResult(null, null, LinkOutcome.REJECTED_CROSS_TENANT);
+        }
+    }
+
+    private LinkResult path2(String shop, String rawToken, String encryptedToken, UUID owner) {
+        if (owner != null) {
+            UUID storeId = updateStoreToken(owner, shop, encryptedToken);
+            enqueueImport(storeId, owner);
+            log.info("OAuth Path-2 existing link: shop={} tenant={}", shop, owner);
+            return new LinkResult(owner, null, LinkOutcome.LINKED_EXISTING);
+        } else {
+            return provisionNewTenant(shop, rawToken, encryptedToken);
+        }
+    }
+
+    private LinkResult provisionNewTenant(String shop, String rawToken, String encryptedToken) {
+        ShopifyGateway.ShopInfo shopInfo = shopifyGateway.fetchShop(shop, rawToken);
+        if (shopInfo.email() == null || shopInfo.email().isBlank()) {
+            throw new ShopifyOAuthException(
+                ShopifyOAuthException.Code.SHOPIFY_SHOP_EMAIL_MISSING,
+                "Shopify shop resource returned no owner email address",
+                "لم يُعِد Shopify بريد المالك الإلكتروني",
+                HttpStatus.BAD_GATEWAY);
+        }
+
+        // No TenantContext needed — SECURITY DEFINER bypasses RLS.
+        record ProvRow(UUID tenantId, UUID ownerId, UUID storeId) {}
+        ProvRow row = tx.execute(s ->
+            jdbc.query(
+                "SELECT tenant_id, owner_user_id, store_id " +
+                "FROM provision_tenant_from_shopify(?,?,?,?,?)",
+                rs -> rs.next()
+                    ? new ProvRow(
+                        rs.getObject("tenant_id",     UUID.class),
+                        rs.getObject("owner_user_id", UUID.class),
+                        rs.getObject("store_id",      UUID.class))
+                    : null,
+                shop, shopInfo.email(), shopInfo.name(), shopInfo.timezone(), encryptedToken));
+
+        if (row == null) {
+            throw new ShopifyOAuthException(
+                ShopifyOAuthException.Code.SHOPIFY_TOKEN_EXCHANGE_FAILED,
+                "Tenant provisioning returned no result",
+                "لم تُعِد وظيفة التهيئة أي نتيجة",
+                HttpStatus.INTERNAL_SERVER_ERROR);
+        }
+
+        // TODO Day 4: enqueue magic-link email to row.ownerId() so merchant can log in
+        enqueueImport(row.storeId(), row.tenantId());
+        log.info("OAuth Path-2 provisioned: shop={} tenant={} owner={}", shop, row.tenantId(), row.ownerId());
+        return new LinkResult(row.tenantId(), row.ownerId(), LinkOutcome.PROVISIONED);
+    }
+
+    /** After a 23505 race, re-resolve and idempotently link to the winner. */
+    private LinkResult raceRelink(StateRecord state, String shop, String encryptedToken, UUID winner) {
+        if (winner == null) {
+            throw stateInvalid(); // winner rolled back — treat as generic conflict
+        }
+        if (state.tenantId() != null && !winner.equals(state.tenantId())) {
+            log.warn("OAuth cross-tenant race: shop={} intended={} winner={}", shop, state.tenantId(), winner);
+            return new LinkResult(null, null, LinkOutcome.REJECTED_CROSS_TENANT);
+        }
+        UUID storeId = updateStoreToken(winner, shop, encryptedToken);
+        enqueueImport(storeId, winner);
+        log.info("OAuth race re-link: shop={} winner={}", shop, winner);
+        return new LinkResult(winner, null, LinkOutcome.LINKED_EXISTING);
+    }
+
+    // ---- private: DB helpers ------------------------------------------
+
+    /** Calls DEFINER function — no TenantContext required; GUC is irrelevant to it. */
+    private UUID resolveShopOwner(String shopDomain) {
+        try {
+            return jdbc.queryForObject(
+                "SELECT resolve_tenant_by_shop_domain(?)", UUID.class, shopDomain);
+        } catch (EmptyResultDataAccessException e) {
+            return null;
+        }
+    }
+
+    private UUID insertStore(UUID tenantId, String shop, String encryptedToken) {
+        TenantContext.set(tenantId);
+        try {
+            return tx.execute(s ->
+                jdbc.query(INSERT_STORE,
+                    rs -> rs.next() ? rs.getObject("id", UUID.class) : null,
+                    tenantId, shop, encryptedToken));
+        } finally {
+            TenantContext.clear();
+        }
+    }
+
+    private UUID updateStoreToken(UUID tenantId, String shop, String encryptedToken) {
+        TenantContext.set(tenantId);
+        try {
+            return tx.execute(s ->
+                jdbc.query(UPDATE_STORE_TOKEN,
+                    rs -> rs.next() ? rs.getObject("id", UUID.class) : null,
+                    encryptedToken, shop, tenantId));
+        } finally {
+            TenantContext.clear();
+        }
+    }
+
+    private void enqueueImport(UUID storeId, UUID tenantId) {
+        jobScheduler.enqueue(() -> importJob.run(storeId, tenantId));
+    }
 
     private static ShopifyOAuthException stateInvalid() {
         return new ShopifyOAuthException(

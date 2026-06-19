@@ -4,7 +4,79 @@
 
 ## Current state
 
-OAuth Day 1 (FR-3.1 public OAuth track) shipped 2026-06-19. 151 integration tests pass (143 prior + 8 new). V13 Flyway migration applied (shopify_oauth_state table, intentionally non-RLS-scoped, documented).
+OAuth Day 2 (FR-3.1 resolve-or-create decision tree + Path-2 provisioning) shipped 2026-06-19. 161 integration tests pass (151 prior + 10 new). V14 Flyway migration applied (`provision_tenant_from_shopify`, fifth SECURITY DEFINER hatch, enumerated in `docs/blueprint.md §16.1` and `CLAUDE.md`).
+
+**Day 17 — Shopify OAuth Day 2 (FR-3.1 resolve-or-create, Parts A–D):**
+
+*Migration V14 (`V14__provision_tenant_from_shopify.sql`):*
+- `provision_tenant_from_shopify(p_shop_domain, p_owner_email, p_shop_name, p_timezone, p_access_token_encrypted)` — fifth SECURITY DEFINER escape hatch, approved 2026-06-19.
+- Atomically creates: one `tenants` row + one `users` row (Owner role, no password_hash — magic-link Day 4) + one `stores` row (status connected, import_status pending).
+- A 23505 on the stores INSERT propagates to the caller's transaction → zero orphan tenants/users (verified by test 7).
+- `REVOKE ALL … FROM PUBLIC; GRANT EXECUTE … TO app_user`.
+- Enumerated in `docs/blueprint.md §16.1` (full justification table).
+- `CLAUDE.md` updated: "Four approved" → "Five approved".
+
+*Part A — Carry-over fixes:*
+- **A1 Timestamp freshness**: `checkTimestampFreshness(params)` in controller — rejects requests with `timestamp` older than 300 s on BOTH `GET /auth/shopify/install` and `GET /auth/shopify/callback`. New error code `SHOPIFY_REQUEST_EXPIRED`.
+- **A2 State cleanup job**: `ShopifyStateCleanupJob` — `@Recurring(cron="0 * * * *")` hourly sweep, `DELETE FROM shopify_oauth_state WHERE created_at < now() - interval '1 hour'`. Non-RLS table; runs with no TenantContext set (safe). `@ConditionalOnProperty(name="org.jobrunr.background-job-server.enabled", havingValue="true")` — prevents `RecurringJobPostProcessor` NPE in test contexts.
+- **A3 Upsert rewrite**: `UPSERT_STORE` removed. Replaced with `insertStore(tenantId, shop, encryptedToken)` and `updateStoreToken(tenantId, shop, encryptedToken)` private helpers — each sets/clears TenantContext around their own write transaction.
+
+*Part B — `linkOrProvision()` decision tree:*
+- **`ShopifyOAuthService.linkOrProvision(state, shop, authCode) → LinkResult`** replaces Day-1 `handleCallback()`.
+- `resolveShopOwner(shop)` calls `SELECT resolve_tenant_by_shop_domain(?)` with NO TenantContext — DEFINER function sees all tenants regardless of GUC.
+- Resolve is called BEFORE any TenantContext.set() — cross-tenant row is never hidden by RLS.
+- Path-1 (tenant in state): `owner==null → insertStore → LINKED_NEW`; `owner==intended → updateStoreToken → LINKED_EXISTING`; `owner!=intended → REJECTED_CROSS_TENANT` (no write to existing row).
+- Path-2 (null tenant in state): `owner!=null → updateStoreToken → LINKED_EXISTING`; `owner==null → provisionNewTenant → PROVISIONED`.
+- Race backstop: `DuplicateKeyException (23505)` → re-resolve → idempotent link to winner (or REJECTED_CROSS_TENANT if winner is a different tenant than intended in Path-1).
+- Controller no longer sets TenantContext — fully managed inside service try/finally.
+- `LinkOutcome` enum: `LINKED_NEW, LINKED_EXISTING, PROVISIONED, REJECTED_CROSS_TENANT`.
+
+*Part C — Provisioning:*
+- `provisionNewTenant()` calls `fetchShop` for email+name+timezone, checks email not blank (`SHOPIFY_SHOP_EMAIL_MISSING`), then calls V14 function via `tx.execute(s → jdbc.query("SELECT * FROM provision_tenant_from_shopify(...)"))`.
+- No TenantContext set for provision call — DEFINER handles all inserts.
+- TODO Day 4 seam: magic-link email to owner.
+
+*Part D — Gateway:*
+- `ShopifyGateway.ShopInfo(email, name, timezone)` record.
+- `ShopifyGateway.fetchShop(shopDomain, token) → ShopInfo` interface method.
+- `ShopifyHttpGateway.fetchShop()` — GET `/admin/api/{v}/shop.json`, uses existing retry/nullableText helpers. `email` may be null.
+
+*Controller changes:*
+- `TenantContext` import removed — TenantContext is now managed inside the service only.
+- `checkTimestampFreshness(params)` called after HMAC on both install and callback.
+- Callback switches on `LinkResult.outcome()`:
+  - `LINKED_NEW / LINKED_EXISTING` → 302 `appUrl`
+  - `PROVISIONED` → 302 `appUrl/connect/setup-pending`
+  - `REJECTED_CROSS_TENANT` → 302 `appUrl/connect/error?code=SHOPIFY_STORE_ALREADY_CONNECTED`
+- Day-1 `SHOPIFY_PATH2_NOT_YET` stub removed.
+
+*Error codes added:*
+- `SHOPIFY_REQUEST_EXPIRED` (400 BAD_REQUEST) — stale timestamp.
+- `SHOPIFY_STORE_ALREADY_CONNECTED` (in enum for i18n; redirect not JSON throw) — cross-tenant rejection.
+- `SHOPIFY_SHOP_EMAIL_MISSING` (502 BAD_GATEWAY) — empty shop email from Shopify.
+- i18n keys added to `en.json` and `ar.json` for all three.
+
+*Tests (`ShopifyOAuthDay2Test` — 10 tests):*
+- **(1)** Path-1 new shop → store created under state.tenantId; import enqueued.
+- **(2)** Path-1 same-tenant re-install → token updated; exactly one store; no new owner.
+- **(3)** Path-1 cross-tenant → 302 `/connect/error?code=SHOPIFY_STORE_ALREADY_CONNECTED`; existing row token/tenant byte-for-byte unchanged.
+- **(4)** Path-2 new shop → exactly one tenant + one owner (Owner role, no password_hash) + one store; import enqueued.
+- **(5)** Path-2 existing shop → idempotent link; no new tenant/owner.
+- **(6)** Concurrent double-install race (real threads, CountDownLatch) → exactly one tenant, one owner, one store; loser re-resolves and links.
+- **(7)** Provisioning atomicity — pre-seeded stores conflict → `DuplicateKeyException`; zero orphan tenants, zero orphan users.
+- **(8)** A1 timestamp freshness — stale timestamp on install AND callback → 400 `SHOPIFY_REQUEST_EXPIRED`.
+- **(9)** A2 state sweep — rows >1h deleted; fresh rows retained. (`new ShopifyStateCleanupJob(jdbc).purgeExpiredStates()` called directly — bean is conditional on background-job-server.enabled.)
+- **(10)** Cross-tenant detection works via DEFINER function (`resolve_tenant_by_shop_domain` returns correct tenant with no GUC), not via RLS-scoped SELECT.
+
+**Decisions made:**
+- `ShopifyStateCleanupJob` is `@ConditionalOnProperty(... enabled=true)` — `RecurringJobPostProcessor` crashes with NPE at bean init when background-job-server is disabled (storage layer null), so the bean must not be created in test contexts. Tests call the purge logic via `new ShopifyStateCleanupJob(jdbc)` directly.
+- `SHOPIFY_STORE_ALREADY_CONNECTED` uses redirect (302) not JSON throw — cross-tenant is a user-recoverable condition (contact support), not an unrecoverable API error.
+- Token exchange happens before resolve — resolving first would add latency for the common Path-1-new case. The race backstop handles the rare concurrent collision.
+- Only Path-2-new uses the DEFINER provisioning function. Path-1 and Path-2-existing run under normal RLS with the GUC set — per the spec's "privileged-surface minimization" requirement.
+
+**Next:** OAuth Day 3 — Shopify webhooks (orders/create, orders/updated, orders/cancelled, products/update), GDPR handlers.
+
+---
 
 **Day 16 — Shopify OAuth Day 1 (FR-3.1 public OAuth track, Path-1):**
 

@@ -66,4 +66,25 @@ public interface ShopifyGateway {
      * @throws ShopifyException on non-200 response or missing access_token field
      */
     String exchangeCode(String shopDomain, String code);
+
+    // ---- OAuth Day 2 additions ------------------------------------------
+
+    /** Shop info returned by the Shopify /admin/api/{v}/shop.json resource. */
+    record ShopInfo(
+            String email,    // merchant's shop contact email; may be null if not set
+            String name,     // store display name
+            String timezone  // IANA timezone e.g. "Africa/Cairo"
+    ) {}
+
+    /**
+     * Fetches the Shopify shop resource to retrieve merchant email, name, and timezone.
+     * Called only on the Path-2-new provisioning branch. Shop owner email is merchant
+     * metadata (the Shop resource), not customer PII — no Shopify PCD gate required.
+     *
+     * @param shopDomain the merchant's shop domain
+     * @param token      the raw (plaintext) offline access token
+     * @return ShopInfo — email may be null if absent from the shop resource
+     * @throws ShopifyException on non-200 response or missing shop field
+     */
+    ShopInfo fetchShop(String shopDomain, String token);
 }

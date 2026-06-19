@@ -129,6 +129,26 @@ class ShopifyHttpGateway implements ShopifyGateway {
     }
 
     @Override
+    public ShopInfo fetchShop(String shopDomain, String token) {
+        String url = "https://" + shopDomain + "/admin/api/" + apiVersion + "/shop.json";
+        JsonNode body = Retry.decorateSupplier(retry, () ->
+            restClient.get()
+                .uri(url)
+                .header("X-Shopify-Access-Token", token)
+                .retrieve()
+                .body(JsonNode.class)
+        ).get();
+        if (body == null || !body.has("shop")) {
+            throw new ShopifyException("Shopify /shop.json returned unexpected response for fetchShop");
+        }
+        JsonNode shop = body.get("shop");
+        return new ShopInfo(
+            nullableText(shop, "email"),
+            shop.path("name").asText(""),
+            shop.path("timezone").asText("UTC"));
+    }
+
+    @Override
     public String exchangeCode(String shopDomain, String code) {
         String url = "https://" + shopDomain + "/admin/oauth/access_token";
         JsonNode resp = Retry.decorateSupplier(retry, () ->

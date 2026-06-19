@@ -1,7 +1,6 @@
 package com.traceability.integrations.shopify;
 
 import com.traceability.identity.CustomUserDetails;
-import com.traceability.tenancy.TenantContext;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
@@ -10,28 +9,30 @@ import org.springframework.web.bind.annotation.*;
 
 import java.net.URI;
 import java.util.Map;
-import java.util.UUID;
 
 /**
- * Shopify OAuth Day 1 — install stub + callback (Path-1 happy path).
+ * Shopify OAuth — install stub + callback (Path-1 and Path-2).
  *
- * Path-1: logged-in owner hits POST /api/v1/shopify/oauth/initiate → gets consent URL →
- *   browser goes to Shopify → Shopify redirects back to GET /auth/shopify/callback.
+ * Path-1: authenticated Owner hits POST /api/v1/shopify/oauth/initiate → receives consent URL →
+ *   browser goes to Shopify → Shopify redirects to GET /auth/shopify/callback.
  *
  * Path-2: merchant clicks "Add app" in App Store → Shopify hits GET /auth/shopify/install →
- *   install stub creates null-tenant state, redirects to consent. Callback with null-tenant
- *   state returns SHOPIFY_PATH2_NOT_YET (Day 2 will wire the resolve-or-create decision tree).
+ *   controller creates null-tenant state → redirects to consent.
+ *   Callback with null-tenant state uses the resolve-or-create decision tree in
+ *   ShopifyOAuthService.linkOrProvision (Day 2).
  *
  * Security:
  *   - initiate: JWT-authenticated (Owner only). tenant_id from JWT, never from query param.
  *   - install / callback: unauthenticated. HMAC + state are the only trust anchors.
- *   - callback HMAC is verified before ANY DB read or write.
- *   - TenantContext is set/cleared around the store upsert block (the only RLS-touching write).
+ *   - HMAC is verified before ANY DB read or write.
+ *   - Timestamp freshness (300 s) checked after HMAC on both install and callback.
+ *   - TenantContext is managed inside ShopifyOAuthService — controller does not touch it.
  */
 @RestController
 public class ShopifyOAuthController {
 
     private static final String SHOP_DOMAIN_PATTERN = "[a-zA-Z0-9][a-zA-Z0-9-]*\\.myshopify\\.com";
+    private static final int    TIMESTAMP_WINDOW_SECONDS = 300;
 
     private final ShopifyOAuthService oauthService;
 
@@ -67,9 +68,9 @@ public class ShopifyOAuthController {
     }
 
     /**
-     * Path-2 install stub: Shopify redirects merchants here from the App Store.
-     * Verifies HMAC, generates state with tenant_id=NULL, redirects to Shopify consent.
-     * Callback with null-tenant state returns SHOPIFY_PATH2_NOT_YET until Day 2.
+     * Path-2 install: Shopify redirects merchants here from the App Store.
+     * Verifies HMAC + timestamp freshness, generates state with tenant_id=NULL,
+     * redirects to Shopify consent URL.
      */
     @GetMapping("/auth/shopify/install")
     public ResponseEntity<Void> install(@RequestParam Map<String, String> allParams) {
@@ -88,6 +89,7 @@ public class ShopifyOAuthController {
                 "فشل التحقق من HMAC",
                 HttpStatus.UNAUTHORIZED);
         }
+        checkTimestampFreshness(allParams);
 
         String nonce = oauthService.initiateOAuth(null, shop);
         return ResponseEntity.status(HttpStatus.FOUND)
@@ -96,12 +98,13 @@ public class ShopifyOAuthController {
     }
 
     /**
-     * OAuth callback: verifies HMAC → consumes state → exchanges code → upserts store → enqueues import.
+     * OAuth callback: HMAC → freshness → state → linkOrProvision → redirect.
      *
      * Param trust order:
      *   1. HMAC verified first (before any DB read).
-     *   2. shop is bound from callback params (matched against state.shop_domain).
-     *   3. tenant_id comes from the state record (set at initiate time from the JWT) — NEVER from params.
+     *   2. Timestamp freshness verified (300 s window, inside HMAC so tamper-proof).
+     *   3. State consumed (atomic SELECT FOR UPDATE).
+     *   4. linkOrProvision runs the decision tree and manages TenantContext internally.
      */
     @GetMapping("/auth/shopify/callback")
     public ResponseEntity<Void> callback(@RequestParam Map<String, String> allParams) {
@@ -109,7 +112,6 @@ public class ShopifyOAuthController {
         String state = allParams.getOrDefault("state", "");
         String code  = allParams.getOrDefault("code", "");
 
-        // Step 1: verify HMAC before touching any state
         if (!ShopifyHmacUtil.verifyOAuthParams(allParams, oauthService.getClientSecret())) {
             throw new ShopifyOAuthException(
                 ShopifyOAuthException.Code.SHOPIFY_HMAC_INVALID,
@@ -117,29 +119,60 @@ public class ShopifyOAuthController {
                 "فشل التحقق من HMAC",
                 HttpStatus.UNAUTHORIZED);
         }
+        checkTimestampFreshness(allParams);
 
-        // Step 2: consume state (atomic; throws SHOPIFY_STATE_INVALID on any violation)
         ShopifyOAuthService.StateRecord stateRec = oauthService.consumeState(state, shop);
 
-        // Step 3: Path-2 check — null tenant_id is not handled until Day 2
-        if (stateRec.tenantId() == null) {
-            throw new ShopifyOAuthException(
-                ShopifyOAuthException.Code.SHOPIFY_PATH2_NOT_YET,
-                "New-merchant registration is not yet available — check back soon",
-                "تسجيل التجار الجدد غير متاح بعد — يرجى المحاولة لاحقاً",
-                HttpStatus.SERVICE_UNAVAILABLE);
-        }
+        ShopifyOAuthService.LinkResult result = oauthService.linkOrProvision(stateRec, shop, code);
 
-        // Step 4: exchange code, encrypt token, upsert store, enqueue import
-        TenantContext.set(stateRec.tenantId());
-        try {
-            UUID storeId = oauthService.handleCallback(stateRec.tenantId(), shop, code);
-            return ResponseEntity.status(HttpStatus.FOUND)
+        return switch (result.outcome()) {
+            case LINKED_NEW, LINKED_EXISTING -> ResponseEntity.status(HttpStatus.FOUND)
                 .location(URI.create(oauthService.getAppUrl()))
-                .header("X-Store-Id", storeId.toString())
+                .header("X-Store-Id", result.tenantId() != null ? result.tenantId().toString() : "")
                 .build();
-        } finally {
-            TenantContext.clear();
+            case PROVISIONED -> ResponseEntity.status(HttpStatus.FOUND)
+                .location(URI.create(oauthService.getAppUrl() + "/connect/setup-pending"))
+                .build();
+            case REJECTED_CROSS_TENANT -> ResponseEntity.status(HttpStatus.FOUND)
+                .location(URI.create(oauthService.getAppUrl() +
+                    "/connect/error?code=SHOPIFY_STORE_ALREADY_CONNECTED"))
+                .build();
+        };
+    }
+
+    // ---- private helpers -----------------------------------------------
+
+    /**
+     * Rejects requests with a Shopify timestamp older than 300 seconds.
+     * The timestamp is inside the HMAC (tamper-proof), so freshness is meaningful
+     * only after HMAC verification passes. Call this method AFTER verifyOAuthParams.
+     */
+    private void checkTimestampFreshness(Map<String, String> params) {
+        String ts = params.get("timestamp");
+        if (ts == null) {
+            throw new ShopifyOAuthException(
+                ShopifyOAuthException.Code.SHOPIFY_REQUEST_EXPIRED,
+                "Missing timestamp parameter",
+                "معامل الطابع الزمني مفقود",
+                HttpStatus.BAD_REQUEST);
+        }
+        long epochSeconds;
+        try {
+            epochSeconds = Long.parseLong(ts);
+        } catch (NumberFormatException e) {
+            throw new ShopifyOAuthException(
+                ShopifyOAuthException.Code.SHOPIFY_REQUEST_EXPIRED,
+                "Invalid timestamp parameter",
+                "معامل الطابع الزمني غير صالح",
+                HttpStatus.BAD_REQUEST);
+        }
+        long ageSeconds = System.currentTimeMillis() / 1000 - epochSeconds;
+        if (ageSeconds > TIMESTAMP_WINDOW_SECONDS || ageSeconds < -TIMESTAMP_WINDOW_SECONDS) {
+            throw new ShopifyOAuthException(
+                ShopifyOAuthException.Code.SHOPIFY_REQUEST_EXPIRED,
+                "Request has expired — initiate OAuth again",
+                "انتهت صلاحية الطلب — يرجى بدء OAuth من جديد",
+                HttpStatus.BAD_REQUEST);
         }
     }
 }

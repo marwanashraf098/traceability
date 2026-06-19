@@ -16,7 +16,11 @@ public class ShopifyOAuthException extends RuntimeException {
         SHOPIFY_HMAC_INVALID,
         SHOPIFY_STATE_INVALID,
         SHOPIFY_TOKEN_EXCHANGE_FAILED,
-        SHOPIFY_PATH2_NOT_YET
+        SHOPIFY_PATH2_NOT_YET,
+        // Day 2 codes
+        SHOPIFY_REQUEST_EXPIRED,        // stale timestamp on install/callback
+        SHOPIFY_STORE_ALREADY_CONNECTED, // shop owned by a different tenant (redirect, not JSON)
+        SHOPIFY_SHOP_EMAIL_MISSING       // Shopify shop resource returned no owner email
     }
 
     private final Code       code;

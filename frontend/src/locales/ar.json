@@ -275,6 +275,9 @@
         "SHOPIFY_STATE_INVALID": "انتهت صلاحية جلسة الاتصال أو تم استخدامها بالفعل. يرجى البدء من جديد.",
         "SHOPIFY_TOKEN_EXCHANGE_FAILED": "تعذّر إتمام تفويض Shopify. يرجى المحاولة مرة أخرى.",
         "SHOPIFY_PATH2_NOT_YET": "تسجيل التجار الجدد قادم قريباً.",
+        "SHOPIFY_REQUEST_EXPIRED": "انتهت صلاحية هذا الرابط. يرجى بدء عملية الربط مرة أخرى.",
+        "SHOPIFY_STORE_ALREADY_CONNECTED": "هذا المتجر مرتبط بحساب آخر بالفعل. تواصل مع الدعم إذا كنت تعتقد أن هذا خطأ.",
+        "SHOPIFY_SHOP_EMAIL_MISSING": "لا يوجد بريد إلكتروني للتواصل في متجر Shopify الخاص بك. يرجى إضافة بريد إلكتروني في لوحة تحكم Shopify والمحاولة مرة أخرى.",
         "invalidDomain": "يرجى إدخال نطاق *.myshopify.com صالح."
       }
     }

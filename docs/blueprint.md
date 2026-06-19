@@ -397,6 +397,20 @@ Multi-courier and multi-channel (WooCommerce, Salla) scale horizontally through 
 - **Data protection:** customer PII (names, phones, addresses) minimized on worker screens; TLS everywhere; backups encrypted. Be aware of Egypt's Personal Data Protection Law (No. 151/2020) — practically: data-processing terms in your merchant contract, deletion on request, breach-notification plan.
 - **App hygiene:** input validation at the edge (zod/class-validator), dependency scanning, secrets in a manager not env-committed, least-privilege DB roles, separate prod/staging.
 
+## 16.1 Approved SECURITY DEFINER Escape Hatches
+
+All application writes run under `app_user` + row-level security. The five functions below are the ONLY points where RLS is bypassed. Each has an explicit justification. Any new cross-tenant read or write requires a new named function with the same scrutiny; no bare `BYPASSRLS` connections in application code.
+
+| # | Function | Migration | Justification |
+|---|---|---|---|
+| 1 | `auth_lookup_user(p_email text)` | V1 | Login requires reading a user row by email before the tenant UUID is known — the caller has no GUC to set. Reads exactly one row from `users`; returns `(user_id, tenant_id, password_hash, role, status)`. |
+| 2 | `resolve_tenant_by_shop_domain(p_shop_domain text)` | V1 | OAuth callback and webhook routing must find the tenant that owns a shop domain without prior tenant context. Returns one nullable `uuid`. Read-only. Called before any GUC is set in the OAuth decision tree so RLS cannot blind a cross-tenant collision. |
+| 3 | `lookup_refresh_token(p_token_hash text)` | V3 | Token rotation must locate a refresh-token row by hash before the tenant context is established. Returns `(token_id, user_id, tenant_id, expires_at, revoked)`; read-only. |
+| 4 | `resolve_tenant_by_webhook_secret(p_secret text)` | V5 | Bosta webhook requests arrive with no tenant context; the per-tenant CSPRNG secret IS the authentication mechanism. The function maps secret → tenant before any GUC can be set. Returns one nullable `uuid`; read-only. |
+| 5 | `provision_tenant_from_shopify(p_shop_domain, p_owner_email, p_shop_name, p_timezone, p_access_token_encrypted)` | V14 | Path-2 Shopify-first install creates a new tenant+owner+store atomically. Under `app_user`+RLS this is impossible: `INSERT INTO tenants` requires `GUC = new_tenant_id`, but the UUID is unknown until after the INSERT (chicken-and-egg). DEFINER running as the Flyway owner bootstraps the triple in a single atomic block. A 23505 on the `stores` INSERT rolls back ALL three rows — zero orphan tenants or users. Writes exactly: one `tenants` row, one `users` row (Owner role, no password — magic-link Day 4), one `stores` row (status connected, import_status pending). Nothing else. This is the only writer of the new-tenant bootstrap triple. |
+
+**`EXECUTE` granted to `app_user` only; `REVOKE ALL … FROM PUBLIC` precedes every grant.**
+
 # 17. Competitive Analysis
 
 **Egyptian/MENA landscape:**
