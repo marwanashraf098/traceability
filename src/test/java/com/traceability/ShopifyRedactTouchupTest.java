@@ -3,6 +3,7 @@ package com.traceability;
 import com.traceability.integrations.shopify.ShopifyGateway;
 import com.traceability.integrations.shopify.ShopifyImportJob;
 import com.traceability.integrations.shopify.ShopifyWebhookProcessorJob;
+import com.traceability.notifications.EmailGateway;
 import com.traceability.security.EncryptionService;
 import org.jobrunr.scheduling.JobScheduler;
 import org.junit.jupiter.api.*;
@@ -63,6 +64,7 @@ class ShopifyRedactTouchupTest {
     @MockBean ShopifyGateway  shopifyGateway;
     @MockBean JobScheduler    jobScheduler;
     @MockBean ShopifyImportJob importJob;
+    @MockBean EmailGateway    emailGateway;
 
     @Value("${shopify.client-secret}")
     String clientSecret;

@@ -93,7 +93,7 @@ public class AuthRepository {
         return Base64.getUrlEncoder().withoutPadding().encodeToString(bytes);
     }
 
-    static String sha256(String input) {
+    public static String sha256(String input) {
         try {
             byte[] digest = MessageDigest.getInstance("SHA-256")
                     .digest(input.getBytes(java.nio.charset.StandardCharsets.UTF_8));

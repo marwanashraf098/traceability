@@ -5,6 +5,7 @@ import com.traceability.identity.model.SignupRequest;
 import com.traceability.identity.model.TokenResponse;
 import com.traceability.integrations.shopify.ShopifyGateway;
 import com.traceability.integrations.shopify.ShopifyImportJob;
+import com.traceability.notifications.EmailGateway;
 import org.jobrunr.scheduling.JobScheduler;
 import org.junit.jupiter.api.*;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -78,6 +79,7 @@ class ShopifyOAuthDay1Test {
     @MockBean ShopifyGateway  shopifyGateway;
     @MockBean JobScheduler    jobScheduler;
     @MockBean ShopifyImportJob importJob;  // prevent real job execution
+    @MockBean EmailGateway     emailGateway; // MagicLinkService dependency
 
     @Value("${shopify.client-secret}")
     String clientSecret;
@@ -267,8 +269,8 @@ class ShopifyOAuthDay1Test {
                 Integer.class, SHOP, ownerTenantId);
         assertThat(count).isEqualTo(1);
 
-        // Import job was enqueued (cast to JobLambda to resolve overload ambiguity)
-        verify(jobScheduler, times(1)).enqueue(any(org.jobrunr.jobs.lambdas.JobLambda.class));
+        // Import job + webhook registration job were both enqueued
+        verify(jobScheduler, times(2)).enqueue(any(org.jobrunr.jobs.lambdas.JobLambda.class));
 
         // State was consumed (consumed_at set)
         Timestamp consumed = jdbc.queryForObject(

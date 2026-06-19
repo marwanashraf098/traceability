@@ -70,13 +70,18 @@ public class SecurityConfig {
                     "/api/v1/auth/login",
                     "/api/v1/auth/refresh",
                     "/api/v1/health",
-                    // Webhook receivers: authenticated by secret header, not JWT
+                    // Webhook receivers: authenticated by secret header / HMAC, not JWT
                     "/api/v1/webhooks/bosta",
+                    // Shopify webhooks: authenticated by HMAC-SHA256 over raw body + app client secret.
+                    // Includes orders/*, products/*, app/uninstalled and GDPR compliance endpoints.
+                    "/webhooks/shopify/**",
                     // Shopify OAuth: callback is authenticated by HMAC+state, not JWT.
                     // Install is the Path-2 merchant-initiated entry point (also HMAC-only).
                     // Initiate (/api/v1/shopify/oauth/initiate) stays under anyRequest().authenticated().
                     "/auth/shopify/install",
-                    "/auth/shopify/callback"
+                    "/auth/shopify/callback",
+                    // Magic-link consume: authenticated by the token hash + consume_magic_link DEFINER.
+                    "/auth/magic"
                 ).permitAll()
                 .anyRequest().authenticated())
             .addFilterBefore(jwtFilter,   UsernamePasswordAuthenticationFilter.class)

@@ -1,5 +1,6 @@
 package com.traceability.integrations.shopify;
 
+import com.traceability.identity.MagicLinkService;
 import com.traceability.security.EncryptionService;
 import com.traceability.tenancy.TenantContext;
 import org.jobrunr.scheduling.JobScheduler;
@@ -57,13 +58,15 @@ public class ShopifyOAuthService {
             RETURNING id
             """;
 
-    private final JdbcTemplate       jdbc;
-    private final ShopifyGateway     shopifyGateway;
-    private final EncryptionService  encryptionService;
-    private final JobScheduler       jobScheduler;
-    private final ShopifyImportJob   importJob;
-    private final TransactionTemplate tx;
-    private final SecureRandom       rng = new SecureRandom();
+    private final JdbcTemplate              jdbc;
+    private final ShopifyGateway            shopifyGateway;
+    private final EncryptionService         encryptionService;
+    private final JobScheduler              jobScheduler;
+    private final ShopifyImportJob          importJob;
+    private final RegisterShopifyWebhooksJob webhooksJob;
+    private final MagicLinkService          magicLinkService;
+    private final TransactionTemplate       tx;
+    private final SecureRandom              rng = new SecureRandom();
 
     private final String clientId;
     private final String clientSecret;
@@ -77,6 +80,8 @@ public class ShopifyOAuthService {
             EncryptionService encryptionService,
             JobScheduler jobScheduler,
             ShopifyImportJob importJob,
+            RegisterShopifyWebhooksJob webhooksJob,
+            MagicLinkService magicLinkService,
             PlatformTransactionManager txm,
             @Value("${shopify.client-id}") String clientId,
             @Value("${shopify.client-secret}") String clientSecret,
@@ -88,6 +93,8 @@ public class ShopifyOAuthService {
         this.encryptionService = encryptionService;
         this.jobScheduler      = jobScheduler;
         this.importJob         = importJob;
+        this.webhooksJob       = webhooksJob;
+        this.magicLinkService  = magicLinkService;
         this.tx                = new TransactionTemplate(txm);
         this.clientId          = clientId;
         this.clientSecret      = clientSecret;
@@ -313,7 +320,7 @@ public class ShopifyOAuthService {
                 HttpStatus.INTERNAL_SERVER_ERROR);
         }
 
-        // TODO Day 4: enqueue magic-link email to row.ownerId() so merchant can log in
+        magicLinkService.issueMagicLink(row.ownerId(), row.tenantId());
         enqueueImport(row.storeId(), row.tenantId());
         log.info("OAuth Path-2 provisioned: shop={} tenant={} owner={}", shop, row.tenantId(), row.ownerId());
         return new LinkResult(row.tenantId(), row.ownerId(), LinkOutcome.PROVISIONED);
@@ -372,6 +379,7 @@ public class ShopifyOAuthService {
 
     private void enqueueImport(UUID storeId, UUID tenantId) {
         jobScheduler.enqueue(() -> importJob.run(storeId, tenantId));
+        jobScheduler.enqueue(() -> webhooksJob.run(storeId, tenantId));
     }
 
     private static ShopifyOAuthException stateInvalid() {

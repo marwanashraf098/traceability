@@ -20,7 +20,9 @@ public class ShopifyOAuthException extends RuntimeException {
         // Day 2 codes
         SHOPIFY_REQUEST_EXPIRED,        // stale timestamp on install/callback
         SHOPIFY_STORE_ALREADY_CONNECTED, // shop owned by a different tenant (redirect, not JSON)
-        SHOPIFY_SHOP_EMAIL_MISSING       // Shopify shop resource returned no owner email
+        SHOPIFY_SHOP_EMAIL_MISSING,      // Shopify shop resource returned no owner email
+        // Day 4 codes
+        MAGIC_LINK_INVALID               // not-found / expired / consumed — no oracle (all sub-conditions identical)
     }
 
     private final Code       code;

@@ -279,6 +279,7 @@
         "SHOPIFY_REQUEST_EXPIRED": "This link has expired. Please start the connection process again.",
         "SHOPIFY_STORE_ALREADY_CONNECTED": "This store is already connected to another account. Contact support if you believe this is an error.",
         "SHOPIFY_SHOP_EMAIL_MISSING": "Your Shopify store has no contact email configured. Please add an email in your Shopify admin and try again.",
+        "MAGIC_LINK_INVALID": "This sign-in link is invalid, has expired, or has already been used. Please request a new one.",
         "invalidDomain": "Please enter a valid *.myshopify.com domain."
       }
     }

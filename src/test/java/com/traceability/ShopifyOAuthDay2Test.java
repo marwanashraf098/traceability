@@ -5,6 +5,7 @@ import com.traceability.identity.model.SignupRequest;
 import com.traceability.identity.model.TokenResponse;
 import com.traceability.integrations.shopify.ShopifyGateway;
 import com.traceability.integrations.shopify.ShopifyImportJob;
+import com.traceability.notifications.EmailGateway;
 import com.traceability.integrations.shopify.ShopifyStateCleanupJob; // instantiated directly — not autowired (bean is conditional on background-job-server.enabled)
 import org.jobrunr.scheduling.JobScheduler;
 import org.junit.jupiter.api.*;
@@ -83,6 +84,7 @@ class ShopifyOAuthDay2Test {
     @MockBean ShopifyGateway   shopifyGateway;
     @MockBean JobScheduler     jobScheduler;
     @MockBean ShopifyImportJob importJob;
+    @MockBean EmailGateway     emailGateway; // issueMagicLink called on PROVISIONED path
 
     @Value("${shopify.client-secret}")
     String clientSecret;
@@ -133,6 +135,10 @@ class ShopifyOAuthDay2Test {
         jdbc.execute("DELETE FROM stores WHERE shop_domain IN ('" + SHOP_PATH2 +
             "','" + SHOP_RACE + "','" + SHOP_ATOMIC + "')");
         // Cascade: remove tenants provisioned in prior tests (not the owner's tenant)
+        // magic_link_tokens FK on users must be deleted first
+        jdbc.execute("DELETE FROM magic_link_tokens WHERE user_id IN (" +
+            "SELECT id FROM users WHERE email IN ('owner@" + SHOP_PATH2 +
+            "','owner@" + SHOP_RACE + "','" + SHOP_PROV_EMAIL + "'))");
         jdbc.execute("DELETE FROM users WHERE email IN ('owner@" + SHOP_PATH2 +
             "','owner@" + SHOP_RACE + "','" + SHOP_PROV_EMAIL + "')");
         jdbc.execute("DELETE FROM tenants WHERE name IN ('Path2 New Shop','Race Shop','" + SHOP_PROV_NAME + "')");
@@ -158,7 +164,7 @@ class ShopifyOAuthDay2Test {
             Integer.class, SHOP_PATH1, ownerTenantId);
         assertThat(count).isEqualTo(1);
 
-        verify(jobScheduler, times(1)).enqueue(any(org.jobrunr.jobs.lambdas.JobLambda.class));
+        verify(jobScheduler, times(2)).enqueue(any(org.jobrunr.jobs.lambdas.JobLambda.class));
     }
 
     // -----------------------------------------------------------------------
@@ -277,7 +283,7 @@ class ShopifyOAuthDay2Test {
         assertThat(storeCount).isEqualTo(1);
 
         // Import job enqueued
-        verify(jobScheduler, times(1)).enqueue(any(org.jobrunr.jobs.lambdas.JobLambda.class));
+        verify(jobScheduler, times(2)).enqueue(any(org.jobrunr.jobs.lambdas.JobLambda.class));
     }
 
     // -----------------------------------------------------------------------
