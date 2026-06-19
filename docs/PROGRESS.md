@@ -4,7 +4,120 @@
 
 ## Current state
 
-OAuth Day 2 (FR-3.1 resolve-or-create decision tree + Path-2 provisioning) shipped 2026-06-19. 161 integration tests pass (151 prior + 10 new). V14 Flyway migration applied (`provision_tenant_from_shopify`, fifth SECURITY DEFINER hatch, enumerated in `docs/blueprint.md §16.1` and `CLAUDE.md`).
+**OAuth Phase 1 complete** — Day 4 shipped 2026-06-19. 185 integration tests pass (173 prior + 12 new). V16 Flyway migration applied (`magic_link_tokens` table + `consume_magic_link` SECURITY DEFINER function). Magic-link bridge fully wired: Path-2 new install emits email with single-use hashed token; `GET /auth/magic?token=` consumes atomically and 302-redirects with JWT pair in fragment. All 7 Part B tests pass; no regressions. Part A redact touch-up (commit `ecd4120`) also complete — `customers/redact` scoped to `orders_to_redact` IDs, `client_details`/`note_attributes` stripped.
+
+**Human task:** Email deliverability (SPF/DKIM, sending-domain setup) is an **ops task** — decide on SMTP provider and configure `spring.mail.host` + `app.email.from`. Until configured, `LoggingEmailGateway` logs links at WARN level (functional for dev/staging).
+
+**Human task:** Enter the three GDPR webhook URLs in the Shopify Partner Dashboard app config (these are static URLs, configured once per app, not per-install). The three URLs:
+- `POST https://<your-server>/webhooks/shopify/customers/data_request`
+- `POST https://<your-server>/webhooks/shopify/customers/redact`
+- `POST https://<your-server>/webhooks/shopify/shop/redact`
+
+**Human task:** Enter the three GDPR webhook URLs in the Shopify Partner Dashboard app config (these are static URLs, configured once per app, not per-install). The three URLs:
+- `POST https://<your-server>/webhooks/shopify/customers/data_request`
+- `POST https://<your-server>/webhooks/shopify/customers/redact`
+- `POST https://<your-server>/webhooks/shopify/shop/redact`
+
+---
+
+---
+
+**Day 19 — Shopify OAuth Day 4 (FR-3.1 magic-link bridge + FR-3.3 redact touch-up):**
+
+*Part A — Redact touch-up (commit `ecd4120`, FR-3.3 fix):*
+- `customers/redact` handler rewritten: now scoped to `orders_to_redact[].id` array from payload (converted to GIDs), not a broad `customer.id OR customer_phone` match across all tenant orders. Empty array = no-op. Prevents erasing mid-fulfillment orders that share a phone number.
+- `REDACT_CUSTOMER_ORDERS_BY_IDS`: `external_id = ANY(?)` via `PreparedStatement + con.createArrayOf("text", ids)`. `client_details` and `note_attributes` added to stripped raw keys in BOTH SQL constants (`REDACT_CUSTOMER_ORDERS_BY_IDS` and `REDACT_ALL_CUSTOMERS_FOR_TENANT`).
+- 5 Part A tests (`ShopifyRedactTouchupTest`): regression (two-order customer, only one in `orders_to_redact` → other intact byte-for-byte), empty array no-op, `client_details`/`note_attributes` stripped, `piece_events` unchanged, `shop/redact` still tenant-wide.
+
+*Part B — Magic-link bridge (commit `688ebb0`, FR-3.1):*
+- **V16 migration** (`V16__magic_link_tokens.sql`): `magic_link_tokens(id, tenant_id, user_id, token_hash, created_at, expires_at, consumed_at)`. NOT under RLS — token consumption is pre-session. `consume_magic_link(p_token_hash)` SECURITY DEFINER plpgsql function: `SELECT … FOR UPDATE` → validate (not found / consumed / expired → no rows) → `UPDATE consumed_at = now()` → `RETURN QUERY`. Atomic single-use. `search_path` pinned, REVOKE from PUBLIC, GRANT to app_user. Enumerated as hatch #6 in `blueprint.md §16.1`.
+- **EmailGateway** interface + `SmtpEmailGateway` (`@ConditionalOnProperty("spring.mail.host")` scaffold) + `LoggingEmailGateway` fallback via `@Configuration/@Bean` + `@ConditionalOnMissingBean` (correct Spring Boot pattern — works in all test contexts without `@MockBean`).
+- **MagicLinkService**: `issueMagicLink(userId, tenantId)` — CSPRNG 16 bytes, base64url raw token, SHA-256 hash stored; INSERT (no GUC needed); `TenantContext.runAs` to look up user email; send via `emailGateway`. `consumeMagicLink(rawToken)` — hash, call DEFINER function, `TenantContext.runAs` to look up role and store refresh token, return `TokenResponse`.
+- **MagicLinkController**: `GET /auth/magic?token=` (`permitAll`) → 302 with `#access_token=…&refresh_token=…` in fragment (never reaches server on subsequent requests).
+- **ShopifyOAuthService**: wired `magicLinkService.issueMagicLink(row.ownerId(), row.tenantId())` at PROVISIONED seam (replaces `// TODO Day 4`).
+- **MAGIC_LINK_INVALID** error code added to `ShopifyOAuthException.Code` (AR+EN locales). All invalid sub-conditions (not found, expired, consumed) return identical error — no oracle.
+- **`/auth/magic`** added to `SecurityConfig` `permitAll`.
+- `AuthRepository.sha256` made `public static` (used in tests and `MagicLinkService`).
+- **ShopifyOAuthDay2Test.cleanState** fixed: DELETE `magic_link_tokens` before users to satisfy new FK.
+- 7 Part B tests (`ShopifyMagicLinkTest`): (1) happy path JWT, (2) single-use, (3) expiry, (4) forged, (5) hash at-rest, (6) provision wiring sendMagicLink call, (7) cross-tenant isolation.
+- 185/185 tests pass.
+
+*Decisions made:*
+- `LoggingEmailGateway` not a `@Component` — `@ConditionalOnMissingBean` on `@Component` has evaluation-ordering issues in Spring's component scan; moved to `@Configuration/@Bean` factory (standard Boot auto-config pattern).
+- Tokens delivered in URL fragment (not query param) — fragments are never sent to the server on `<a>` clicks or HTML form submissions; prevents accidental server-side logging of raw tokens.
+- `consume_magic_link` uses `plpgsql` (not `sql`) because it requires `SELECT FOR UPDATE` + `UPDATE` — write path. `lookup_refresh_token` (hatch #4) is read-only `sql` function.
+
+---
+
+**Day 18 — Shopify OAuth Day 3 (FR-3.3 webhooks, GDPR, app/uninstalled, Parts A–E):**
+
+*Migration V15 (`V15__shopify_webhook_events.sql`):*
+- `shopify_webhook_events(id uuid PK, tenant_id uuid NOT NULL, topic text, shop_domain text, webhook_id text, payload_raw jsonb, received_at timestamptz, processed_at timestamptz NULL, process_error text NULL)`.
+- `UNIQUE (webhook_id)` for idempotency on `X-Shopify-Webhook-Id`.
+- RLS in same migration (FORCE ROW LEVEL SECURITY; `NULLIF` pattern). Index on `processed_at IS NULL` for processor sweep.
+- `'disconnected'` store_status value confirmed present from V1.
+
+*Part A — RegisterShopifyWebhooksJob:*
+- `RegisterShopifyWebhooksJob.run(storeId, tenantId)` — registers 6 topics (orders/create, orders/updated, orders/cancelled, products/create, products/update, app/uninstalled) via GraphQL `webhookSubscriptionCreate`. Idempotent ("already taken" = success, logged not thrown). Per-topic failure continues to next topic. Called via `enqueueImport` in `ShopifyOAuthService` — both import and registration enqueued on every successful link/provision.
+- `ShopifyGateway.registerWebhook(shopDomain, token, topic, callbackUrl)` interface method + `ShopifyHttpGateway` implementation via `WEBHOOK_REGISTER_MUTATION` GraphQL. Checks `userErrors` for "already taken" string.
+- `shopify.webhook-base-url` config property (`${SHOPIFY_WEBHOOK_BASE_URL:http://localhost:8080}`).
+
+*Part B — ShopifyWebhookController (complete rewrite):*
+- URL: `POST /webhooks/shopify/{type}/{action}` (covers orders/create, products/update, app/uninstalled, customers/redact, shop/redact, etc.).
+- **`@RequestBody byte[] rawBody`** — raw bytes only, never typed DTO.
+- **HMAC over raw bytes first**: `ShopifyHmacUtil.verifyWebhookBody(rawBody, clientSecret, X-Shopify-Hmac-Sha256)` — base64(HMAC-SHA256). Wrong HMAC → 401, nothing persisted.
+- Resolve tenant via `resolve_tenant_by_shop_domain(X-Shopify-Shop-Domain)` DEFINER hatch (no GUC). Unknown shop → 200 ack, drop.
+- Insert into `shopify_webhook_events` under tenant GUC (TenantContext.set/clear around tx). `ON CONFLICT (webhook_id) DO NOTHING RETURNING id` — null result = duplicate, ack 200 skip.
+- Ack 200 immediately; enqueue `ShopifyWebhookProcessorJob.process(eventId, tenantId)` — tenantId passed so processor can set GUC before loading the RLS-protected event row.
+
+*Part C — ShopifyWebhookProcessorJob (async):*
+- `process(UUID eventId, UUID tenantId)` — `@Job` method; sets TenantContext via `TenantContext.runAs(tenantId, ...)` for ALL reads including the initial event load.
+- Dispatch table (switch on topic): orders/create → ingestOrderWebhook; orders/updated → ingestOrderWebhook; orders/cancelled → FulfillService.cancelOrder; products/create → ingestProductWebhook; products/update → ingestProductWebhook; app/uninstalled → disconnect store; customers/data_request → log GDPR request; customers/redact → erase customer PII; shop/redact → erase all tenant PII. Unknown topic → log error (never silent drop, invariant #8).
+- `MARK_PROCESSED` / `MARK_ERROR` SQL on `shopify_webhook_events` — errors persist in `process_error` column.
+
+*Part C — GDPR handlers:*
+- **customers/redact**: `UPDATE orders SET customer_name=NULL, customer_phone=NULL, address=NULL, raw=raw-'customer'-'shipping_address'-'billing_address'-'email'-'phone' WHERE tenant_id=? AND (raw->'customer'->>'id'=? OR customer_phone=?)`. `piece_events` is INSERT-only (DB grants), holds NO customer PII — never touched.
+- **shop/redact**: Same update across ALL orders for the tenant. Idempotent (re-running nulls already-null fields, harmless).
+- **customers/data_request**: GDPR task logged; event already persisted in shopify_webhook_events as the audit trail. Full automated data export is [S] scope.
+
+*Part D — app/uninstalled:*
+- `UPDATE stores SET status='disconnected' WHERE shop_domain=? AND tenant_id=?`.
+- `ShopifyImportJob.run()` added a disconnected-store early-return check: if `stores.status='disconnected'` → log + return without importing.
+
+*ShopifySyncService additions:*
+- `resolveStore(tenantId, shopDomain) → UUID` — looks up store by shop_domain+tenant_id+status=connected.
+- `ingestOrderWebhook(storeId, tenantId, payload)` — parses Shopify REST order payload (admin_graphql_api_id as external_id, variant_id → GID, financial_status → payment method). Reuses existing `UPSERT_ORDER`, `UPSERT_ORDER_ITEM`, `FLAG_ORDER_UNMAPPED` SQL.
+- `ingestProductWebhook(storeId, tenantId, payload)` — parses REST product payload. Reuses `UPSERT_PRODUCT`, `UPSERT_VARIANT` SQL.
+
+*SecurityConfig:*
+- `/webhooks/shopify/**` added to `permitAll` (authenticated by HMAC, not JWT).
+
+*ShopifyHmacUtil additions:*
+- `verifyWebhookBody(byte[] rawBody, String clientSecret, String providedBase64)` — static method. Base64(HMAC-SHA256(secret, rawBody)), constant-time compare.
+
+*Tests (`ShopifyOAuthDay3Test` — 12 tests):*
+- **(1)** Raw-body HMAC: non-canonical JSON spacing verifies (raw bytes); tampered body → 401.
+- **(2)** Wrong HMAC → 401, nothing persisted.
+- **(3)** Idempotency ×5 → one row; one processing effect.
+- **(4)** Unknown shop → 200 ack, nothing persisted.
+- **(5)** orders/create → order upserted (via REST payload ingestion).
+- **(6)** orders/cancelled → FulfillService.cancelOrder dispatched, order becomes cancelled.
+- **(7)** app/uninstalled → store.status='disconnected'; import job skips disconnected store.
+- **(8)** customers/redact → customer_name/phone/address nulled, raw scrubbed; piece_events count+content unchanged.
+- **(9)** shop/redact → all tenant orders have customer PII nulled.
+- **(10)** customers/data_request → persisted, 200 ack, no exception.
+- **(11)** Registration idempotency: run twice → no crash; "already taken" ShopifyException caught per-topic, job continues.
+- **(12)** RLS proof: webhook insert visible to app_user with correct GUC; invisible with wrong tenant GUC.
+
+*Breaking changes in Day 1/2 tests:*
+- `enqueueImport()` now calls `jobScheduler.enqueue()` twice (import + webhook registration). Tests updated: `times(1)` → `times(2)` in Day 1 and Day 2 happyPath tests.
+
+**Decisions made:**
+- `tenantId` passed alongside `eventId` to processor job — avoids chicken-and-egg: loading event row without GUC would fail under RLS. Controller already resolved tenantId; passing it to the job is cheaper than a DEFINER hatch.
+- GDPR handlers use `orders.address` (not `shipping_address`) — column is named `address` in V1 schema.
+- `RegisterShopifyWebhooksJob` is NOT `@ConditionalOnProperty` — it has no `@Recurring` annotation, so `RecurringJobPostProcessor` never touches it. No NPE risk in tests.
+
+---
 
 **Day 17 — Shopify OAuth Day 2 (FR-3.1 resolve-or-create, Parts A–D):**
 
@@ -74,7 +187,7 @@ OAuth Day 2 (FR-3.1 resolve-or-create decision tree + Path-2 provisioning) shipp
 - Token exchange happens before resolve — resolving first would add latency for the common Path-1-new case. The race backstop handles the rare concurrent collision.
 - Only Path-2-new uses the DEFINER provisioning function. Path-1 and Path-2-existing run under normal RLS with the GUC set — per the spec's "privileged-surface minimization" requirement.
 
-**Next:** OAuth Day 3 — Shopify webhooks (orders/create, orders/updated, orders/cancelled, products/update), GDPR handlers.
+**Next:** OAuth Day 4 — magic-link email send to provisioned owner; session-token filter for embedded Shopify dashboard.
 
 ---
 

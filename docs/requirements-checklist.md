@@ -19,9 +19,9 @@ One line per requirement · [M] Must / [S] Should / [C] Could · use as the buil
 - [ ] 2.6 [M] Privileged-action audit log (users, integrations, adjustments, impersonation)
 
 ## FR-3 Shopify Integration (order source — always)
-- [x] 3.1 [M] Connect via custom-app credentials + validation ([S] public OAuth app track — OAuth Day 1: install+callback+state+HMAC done; OAuth Day 2: resolve-or-create decision tree + Path-2 provisioning + timestamp freshness + state cleanup done)
+- [x] 3.1 [M] Connect via custom-app credentials + validation ([S] public OAuth app track — OAuth Day 1: install+callback+state+HMAC done; OAuth Day 2: resolve-or-create decision tree + Path-2 provisioning + timestamp freshness + state cleanup done; OAuth Day 4: magic-link bridge shipped — V16 magic_link_tokens + consume_magic_link DEFINER + EmailGateway + MagicLinkController + provision wiring; OAuth Phase 1 complete)
 - [x] 3.2 [M] Initial import: products/variants + 90-day orders, resumable, idempotent, progress UI [background job + status endpoint done Day 5]
-- [ ] 3.3 [M] Webhooks orders create/updated/cancelled + products create/update: HMAC, raw persist, async, idempotent
+- [x] 3.3 [M] Webhooks orders create/updated/cancelled + products create/update: HMAC, raw persist, async, idempotent [Day 18: raw-body HMAC, shopify_webhook_events, async processor, GDPR handlers, app/uninstalled, RegisterShopifyWebhooksJob]
 - [ ] 3.4 [M] 15-min reconciliation poll (missed webhook ≠ lost order)
 - [x] 3.5 [M] Cancel pre-pack → auto-release pieces; cancel post-pack → exception + guided unpack [both paths + Shopify orders/cancelled webhook wired Day 14]
 - [ ] 3.6 [M] Line-item edits mid-pick → release affected allocations + exception with diff
