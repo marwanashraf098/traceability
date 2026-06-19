@@ -16,6 +16,7 @@ import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.security.SecureRandom;
+import java.sql.Timestamp;
 import java.time.Instant;
 import java.util.Base64;
 import java.util.HashMap;
@@ -43,19 +44,33 @@ public class ShopifyOAuthService {
     private static final int STATE_TTL_SECONDS = 600; // 10 minutes
 
     private static final String INSERT_STORE = """
-            INSERT INTO stores (tenant_id, shop_domain, platform, access_token_encrypted, status, import_status)
-            VALUES (?, ?, 'shopify', ?, 'connected', 'pending')
+            INSERT INTO stores (tenant_id, shop_domain, platform,
+                                access_token_encrypted, access_token_expires_at,
+                                refresh_token_encrypted, refresh_token_expires_at,
+                                status, import_status)
+            VALUES (?, ?, 'shopify', ?, ?, ?, ?, 'connected', 'pending')
             RETURNING id
             """;
 
     private static final String UPDATE_STORE_TOKEN = """
             UPDATE stores
-               SET access_token_encrypted = ?,
-                   status                 = 'connected',
-                   import_status          = 'pending'
+               SET access_token_encrypted  = ?,
+                   access_token_expires_at  = ?,
+                   refresh_token_encrypted  = ?,
+                   refresh_token_expires_at = ?,
+                   status                   = 'connected',
+                   import_status            = 'pending'
              WHERE shop_domain = ?
                AND tenant_id   = ?
             RETURNING id
+            """;
+
+    private static final String UPDATE_PROVISION_REFRESH_FIELDS = """
+            UPDATE stores
+               SET refresh_token_encrypted  = ?,
+                   access_token_expires_at  = ?,
+                   refresh_token_expires_at = ?
+             WHERE id = ?
             """;
 
     private final JdbcTemplate              jdbc;
@@ -211,9 +226,9 @@ public class ShopifyOAuthService {
      * @param authCode the authorization code — exchange happens here
      */
     public LinkResult linkOrProvision(StateRecord state, String shop, String authCode) {
-        String rawToken;
+        ShopifyGateway.TokenResponse tokens;
         try {
-            rawToken = shopifyGateway.exchangeCode(shop, authCode);
+            tokens = shopifyGateway.exchangeCode(shop, authCode);
         } catch (Exception e) {
             log.error("Token exchange failed for shop {}", shop, e);
             throw new ShopifyOAuthException(
@@ -222,17 +237,16 @@ public class ShopifyOAuthService {
                 "فشل استبدال رمز التفويض للحصول على رمز الوصول",
                 HttpStatus.BAD_GATEWAY);
         }
-        String encryptedToken = encryptionService.encrypt(rawToken);
 
         // Resolve BEFORE setting any GUC — DEFINER function sees all tenants.
         UUID owner = resolveShopOwner(shop);
 
         try {
-            return branch(state, shop, rawToken, encryptedToken, owner);
+            return branch(state, shop, tokens, owner);
         } catch (DuplicateKeyException ex) {
             // Concurrent install won the INSERT between our resolve and our write.
             UUID winner = resolveShopOwner(shop);
-            return raceRelink(state, shop, encryptedToken, winner);
+            return raceRelink(state, shop, tokens, winner);
         }
     }
 
@@ -252,22 +266,23 @@ public class ShopifyOAuthService {
     // ---- private: decision tree ---------------------------------------
 
     private LinkResult branch(StateRecord state, String shop,
-                               String rawToken, String encryptedToken, UUID owner) {
+                               ShopifyGateway.TokenResponse tokens, UUID owner) {
         if (state.tenantId() != null) {
-            return path1(state.tenantId(), shop, encryptedToken, owner);
+            return path1(state.tenantId(), shop, tokens, owner);
         } else {
-            return path2(shop, rawToken, encryptedToken, owner);
+            return path2(shop, tokens, owner);
         }
     }
 
-    private LinkResult path1(UUID intended, String shop, String encryptedToken, UUID owner) {
+    private LinkResult path1(UUID intended, String shop,
+                              ShopifyGateway.TokenResponse tokens, UUID owner) {
         if (owner == null) {
-            UUID storeId = insertStore(intended, shop, encryptedToken);
+            UUID storeId = insertStore(intended, shop, tokens);
             enqueueImport(storeId, intended);
             log.info("OAuth Path-1 new link: shop={} tenant={}", shop, intended);
             return new LinkResult(intended, null, LinkOutcome.LINKED_NEW);
         } else if (owner.equals(intended)) {
-            UUID storeId = updateStoreToken(intended, shop, encryptedToken);
+            UUID storeId = updateStoreToken(intended, shop, tokens);
             enqueueImport(storeId, intended);
             log.info("OAuth Path-1 re-link: shop={} tenant={}", shop, intended);
             return new LinkResult(intended, null, LinkOutcome.LINKED_EXISTING);
@@ -277,18 +292,20 @@ public class ShopifyOAuthService {
         }
     }
 
-    private LinkResult path2(String shop, String rawToken, String encryptedToken, UUID owner) {
+    private LinkResult path2(String shop, ShopifyGateway.TokenResponse tokens, UUID owner) {
         if (owner != null) {
-            UUID storeId = updateStoreToken(owner, shop, encryptedToken);
+            UUID storeId = updateStoreToken(owner, shop, tokens);
             enqueueImport(storeId, owner);
             log.info("OAuth Path-2 existing link: shop={} tenant={}", shop, owner);
             return new LinkResult(owner, null, LinkOutcome.LINKED_EXISTING);
         } else {
-            return provisionNewTenant(shop, rawToken, encryptedToken);
+            return provisionNewTenant(shop, tokens);
         }
     }
 
-    private LinkResult provisionNewTenant(String shop, String rawToken, String encryptedToken) {
+    private LinkResult provisionNewTenant(String shop, ShopifyGateway.TokenResponse tokens) {
+        String rawToken      = tokens.accessToken();
+        String encryptedToken = encryptionService.encrypt(rawToken);
         ShopifyGateway.ShopInfo shopInfo = shopifyGateway.fetchShop(shop, rawToken);
         if (shopInfo.email() == null || shopInfo.email().isBlank()) {
             throw new ShopifyOAuthException(
@@ -320,6 +337,27 @@ public class ShopifyOAuthService {
                 HttpStatus.INTERNAL_SERVER_ERROR);
         }
 
+        // provision_tenant_from_shopify DEFINER receives only the access token — no change to its
+        // signature (would require a new approved DEFINER escape hatch). Write the refresh token
+        // fields via a normal UPDATE under tenant RLS immediately after provisioning.
+        if (tokens.refreshToken() != null) {
+            Timestamp accessExpiresAt  = Timestamp.from(Instant.now().plusSeconds(tokens.expiresIn()));
+            Timestamp refreshExpiresAt = Timestamp.from(Instant.now().plusSeconds(tokens.refreshTokenExpiresIn()));
+            TenantContext.set(row.tenantId());
+            try {
+                tx.execute(s -> {
+                    jdbc.update(UPDATE_PROVISION_REFRESH_FIELDS,
+                        encryptionService.encrypt(tokens.refreshToken()),
+                        accessExpiresAt,
+                        refreshExpiresAt,
+                        row.storeId());
+                    return null;
+                });
+            } finally {
+                TenantContext.clear();
+            }
+        }
+
         magicLinkService.issueMagicLink(row.ownerId(), row.tenantId());
         enqueueImport(row.storeId(), row.tenantId());
         log.info("OAuth Path-2 provisioned: shop={} tenant={} owner={}", shop, row.tenantId(), row.ownerId());
@@ -327,7 +365,8 @@ public class ShopifyOAuthService {
     }
 
     /** After a 23505 race, re-resolve and idempotently link to the winner. */
-    private LinkResult raceRelink(StateRecord state, String shop, String encryptedToken, UUID winner) {
+    private LinkResult raceRelink(StateRecord state, String shop,
+                                   ShopifyGateway.TokenResponse tokens, UUID winner) {
         if (winner == null) {
             throw stateInvalid(); // winner rolled back — treat as generic conflict
         }
@@ -335,7 +374,7 @@ public class ShopifyOAuthService {
             log.warn("OAuth cross-tenant race: shop={} intended={} winner={}", shop, state.tenantId(), winner);
             return new LinkResult(null, null, LinkOutcome.REJECTED_CROSS_TENANT);
         }
-        UUID storeId = updateStoreToken(winner, shop, encryptedToken);
+        UUID storeId = updateStoreToken(winner, shop, tokens);
         enqueueImport(storeId, winner);
         log.info("OAuth race re-link: shop={} winner={}", shop, winner);
         return new LinkResult(winner, null, LinkOutcome.LINKED_EXISTING);
@@ -353,25 +392,39 @@ public class ShopifyOAuthService {
         }
     }
 
-    private UUID insertStore(UUID tenantId, String shop, String encryptedToken) {
+    private UUID insertStore(UUID tenantId, String shop, ShopifyGateway.TokenResponse tokens) {
+        Timestamp accessExpiresAt  = Timestamp.from(Instant.now().plusSeconds(tokens.expiresIn()));
+        Timestamp refreshExpiresAt = tokens.refreshToken() != null
+            ? Timestamp.from(Instant.now().plusSeconds(tokens.refreshTokenExpiresIn())) : null;
         TenantContext.set(tenantId);
         try {
             return tx.execute(s ->
                 jdbc.query(INSERT_STORE,
                     rs -> rs.next() ? rs.getObject("id", UUID.class) : null,
-                    tenantId, shop, encryptedToken));
+                    tenantId, shop,
+                    encryptionService.encrypt(tokens.accessToken()),
+                    accessExpiresAt,
+                    tokens.refreshToken() != null ? encryptionService.encrypt(tokens.refreshToken()) : null,
+                    refreshExpiresAt));
         } finally {
             TenantContext.clear();
         }
     }
 
-    private UUID updateStoreToken(UUID tenantId, String shop, String encryptedToken) {
+    private UUID updateStoreToken(UUID tenantId, String shop, ShopifyGateway.TokenResponse tokens) {
+        Timestamp accessExpiresAt  = Timestamp.from(Instant.now().plusSeconds(tokens.expiresIn()));
+        Timestamp refreshExpiresAt = tokens.refreshToken() != null
+            ? Timestamp.from(Instant.now().plusSeconds(tokens.refreshTokenExpiresIn())) : null;
         TenantContext.set(tenantId);
         try {
             return tx.execute(s ->
                 jdbc.query(UPDATE_STORE_TOKEN,
                     rs -> rs.next() ? rs.getObject("id", UUID.class) : null,
-                    encryptedToken, shop, tenantId));
+                    encryptionService.encrypt(tokens.accessToken()),
+                    accessExpiresAt,
+                    tokens.refreshToken() != null ? encryptionService.encrypt(tokens.refreshToken()) : null,
+                    refreshExpiresAt,
+                    shop, tenantId));
         } finally {
             TenantContext.clear();
         }

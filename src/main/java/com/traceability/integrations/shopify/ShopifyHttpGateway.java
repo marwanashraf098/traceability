@@ -8,7 +8,10 @@ import io.github.resilience4j.retry.RetryConfig;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.stereotype.Service;
+import org.springframework.web.client.HttpClientErrorException;
+import org.springframework.web.client.HttpServerErrorException;
 import org.springframework.web.client.ResourceAccessException;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientException;
@@ -85,6 +88,11 @@ class ShopifyHttpGateway implements ShopifyGateway {
             """;
 
     private final RestClient restClient;
+    // Separate client for token exchange / refresh — bounded 10 s read timeout so a Shopify
+    // hang doesn't hold a Hikari connection (and the SELECT FOR UPDATE row lock) indefinitely.
+    // Hikari pool = 5; pilot stores ≤ 3 → at most 3 connections held ≤ 10 s each during
+    // simultaneous refresh, leaving 2 connections free for other operations.
+    private final RestClient tokenRestClient;
     private final ObjectMapper mapper;
     private final String apiVersion;
     private final String clientId;
@@ -108,6 +116,11 @@ class ShopifyHttpGateway implements ShopifyGateway {
                 .retryExceptions(ResourceAccessException.class)
                 .ignoreExceptions(ShopifyException.class)
                 .build());
+
+        SimpleClientHttpRequestFactory tokenFactory = new SimpleClientHttpRequestFactory();
+        tokenFactory.setConnectTimeout(Duration.ofSeconds(5));
+        tokenFactory.setReadTimeout(Duration.ofSeconds(10));
+        this.tokenRestClient = RestClient.builder().requestFactory(tokenFactory).build();
     }
 
     // ---- public API -----------------------------------------------------
@@ -149,20 +162,75 @@ class ShopifyHttpGateway implements ShopifyGateway {
     }
 
     @Override
-    public String exchangeCode(String shopDomain, String code) {
+    public TokenResponse exchangeCode(String shopDomain, String code) {
         String url = "https://" + shopDomain + "/admin/oauth/access_token";
         JsonNode resp = Retry.decorateSupplier(retry, () ->
-            restClient.post()
+            tokenRestClient.post()
                 .uri(url)
                 .header("Content-Type", "application/json")
-                .body(Map.of("client_id", clientId, "client_secret", clientSecret, "code", code))
+                .body(Map.of(
+                    "client_id",     clientId,
+                    "client_secret", clientSecret,
+                    "code",          code,
+                    "expiring",      "1"))
                 .retrieve()
                 .body(JsonNode.class)
         ).get();
         if (resp == null || !resp.has("access_token")) {
             throw new ShopifyException("Token exchange response missing access_token from " + shopDomain);
         }
-        return resp.get("access_token").asText();
+        return new TokenResponse(
+            resp.get("access_token").asText(),
+            resp.has("refresh_token") ? resp.get("refresh_token").asText() : null,
+            resp.path("expires_in").asLong(3600),
+            resp.path("refresh_token_expires_in").asLong(7776000));
+    }
+
+    @Override
+    public TokenResponse refreshAccessToken(String shopDomain, String refreshToken) {
+        String url = "https://" + shopDomain + "/admin/oauth/access_token";
+        try {
+            JsonNode resp = tokenRestClient.post()
+                .uri(url)
+                .header("Content-Type", "application/json")
+                .body(Map.of(
+                    "client_id",     clientId,
+                    "client_secret", clientSecret,
+                    "grant_type",    "refresh_token",
+                    "refresh_token", refreshToken))
+                .retrieve()
+                .body(JsonNode.class);
+            if (resp == null || !resp.has("access_token") || !resp.has("refresh_token")) {
+                throw new ShopifyException("Refresh response missing required fields from " + shopDomain);
+            }
+            return new TokenResponse(
+                resp.get("access_token").asText(),
+                resp.get("refresh_token").asText(),
+                resp.path("expires_in").asLong(3600),
+                resp.path("refresh_token_expires_in").asLong(7776000));
+        } catch (HttpClientErrorException e) {
+            // 4xx — refresh token invalid, expired, or revoked
+            log.warn("Shopify refresh rejected ({}): shop={}", e.getStatusCode(), shopDomain);
+            throw new ShopifyStoreNeedsReauthException(shopDomain,
+                "Shopify rejected refresh with " + e.getStatusCode());
+        } catch (HttpServerErrorException e) {
+            // 5xx — Shopify-side issue; refresh token still valid
+            log.warn("Shopify refresh 5xx ({}): shop={}", e.getStatusCode(), shopDomain);
+            throw new ShopifyTransientException(
+                "Shopify refresh server error " + e.getStatusCode() + " for " + shopDomain, e);
+        } catch (ResourceAccessException e) {
+            // timeout or connection reset
+            log.warn("Shopify refresh timeout/connection-reset: shop={}", shopDomain);
+            throw new ShopifyTransientException(
+                "Shopify refresh network failure for " + shopDomain, e);
+        } catch (ShopifyStoreNeedsReauthException | ShopifyTransientException e) {
+            throw e; // already classified above or from response-field check
+        } catch (RestClientException e) {
+            // any other HTTP anomaly — treat as transient
+            log.warn("Shopify refresh unexpected error: shop={}", shopDomain, e);
+            throw new ShopifyTransientException(
+                "Shopify refresh unexpected failure for " + shopDomain, e);
+        }
     }
 
     @Override
@@ -184,6 +252,42 @@ class ShopifyHttpGateway implements ShopifyGateway {
         JsonNode conn = data.path("orders");
         return new OrderPage(parseOrders(conn), conn.path("pageInfo").path("hasNextPage").asBoolean(),
                 conn.path("pageInfo").path("endCursor").asText(null));
+    }
+
+    private static final String WEBHOOK_REGISTER_MUTATION = """
+            mutation WebhookSubscriptionCreate($topic: WebhookSubscriptionTopic!, $webhookSubscription: WebhookSubscriptionInput!) {
+              webhookSubscriptionCreate(topic: $topic, webhookSubscription: $webhookSubscription) {
+                userErrors { field message }
+                webhookSubscription { id }
+              }
+            }
+            """;
+
+    @Override
+    public void registerWebhook(String shopDomain, String token, String topic, String callbackUrl) {
+        String gqlTopic = topic.replace("/", "_").toUpperCase();
+        ObjectNode webhookInput = mapper.createObjectNode().put("callbackUrl", callbackUrl);
+        ObjectNode vars = mapper.createObjectNode()
+                .put("topic", gqlTopic)
+                .set("webhookSubscription", webhookInput);
+
+        try {
+            JsonNode data = executeGraphQL(shopDomain, token, WEBHOOK_REGISTER_MUTATION, vars);
+            JsonNode errors = data.path("webhookSubscriptionCreate").path("userErrors");
+            if (errors.isArray() && errors.size() > 0) {
+                String message = errors.get(0).path("message").asText("");
+                // "already taken" means this topic+URL pair is already registered — success
+                if (message.toLowerCase().contains("already taken")) {
+                    log.debug("Webhook already registered for topic={} shop={}", topic, shopDomain);
+                    return;
+                }
+                throw new ShopifyException("Webhook registration error for topic=" + topic + ": " + message);
+            }
+            log.info("Registered Shopify webhook topic={} url={} shop={}", topic, callbackUrl, shopDomain);
+        } catch (ShopifyException e) {
+            // Re-throw registration errors as-is for the job to handle
+            throw e;
+        }
     }
 
     // ---- GraphQL execution + throttle handling --------------------------

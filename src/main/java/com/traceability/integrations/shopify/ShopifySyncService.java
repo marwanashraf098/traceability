@@ -39,13 +39,18 @@ public class ShopifySyncService {
 
     // ---- SQL ------------------------------------------------------------
 
+    // DEV-ONLY connect path: sets access_token_expires_at far in the future so ShopifyTokenProvider
+    // treats the admin token as fresh. In production all stores are installed via OAuth which sets
+    // a real 1-hour expiry + rotating refresh token.
     private static final String UPSERT_STORE = """
-            INSERT INTO stores (tenant_id, shop_domain, platform, access_token_encrypted, status, import_status)
-            VALUES (?, ?, 'shopify', ?, 'connected', 'pending')
+            INSERT INTO stores (tenant_id, shop_domain, platform, access_token_encrypted,
+                                access_token_expires_at, status, import_status)
+            VALUES (?, ?, 'shopify', ?, now() + interval '876000 hours', 'connected', 'pending')
             ON CONFLICT (shop_domain) DO UPDATE SET
-                access_token_encrypted = EXCLUDED.access_token_encrypted,
-                status                 = 'connected',
-                import_status          = 'pending'
+                access_token_encrypted  = EXCLUDED.access_token_encrypted,
+                access_token_expires_at = EXCLUDED.access_token_expires_at,
+                status                  = 'connected',
+                import_status           = 'pending'
             WHERE stores.tenant_id = EXCLUDED.tenant_id
             RETURNING id
             """;
@@ -161,12 +166,142 @@ public class ShopifySyncService {
         return new ConnectResult(storeId, shopName);
     }
 
+    private static final String LOOKUP_STORE =
+        "SELECT id FROM stores WHERE shop_domain = ? AND tenant_id = ? AND status = 'connected'";
+
     /** Runs catalog + order import for an already-connected store. Called by ShopifyImportJob. */
     public ImportResult runImport(UUID storeId, UUID tenantId, String shopDomain, String rawToken) {
         int[] catalogCounts = importCatalog(storeId, tenantId, shopDomain, rawToken);
         int[] orderCounts   = importOrders(storeId, tenantId, shopDomain, rawToken, 90);
         tx.execute(s -> { jdbc.update(UPDATE_STORE_SYNC, storeId); return null; });
         return new ImportResult(catalogCounts[0], catalogCounts[1], orderCounts[0], orderCounts[1]);
+    }
+
+    // ---- webhook ingestion (REST payload format) -----------------------
+
+    /**
+     * Resolves the store for a shop domain under the given tenant. Returns null if not found
+     * or disconnected — callers should log and skip rather than throw.
+     */
+    public UUID resolveStore(UUID tenantId, String shopDomain) {
+        return tx.execute(s ->
+            jdbc.query(LOOKUP_STORE,
+                rs -> rs.next() ? rs.getObject("id", UUID.class) : null,
+                shopDomain, tenantId));
+    }
+
+    /**
+     * Upserts a single order from a Shopify REST webhook payload (orders/create, orders/updated).
+     * Reuses the same SQL and variant-lookup logic as the full import pipeline.
+     * The payload's admin_graphql_api_id is used as the external_id (GID form) for consistency
+     * with the GraphQL import.
+     */
+    public void ingestOrderWebhook(UUID storeId, UUID tenantId, JsonNode payload) {
+        String gid = payload.path("admin_graphql_api_id").asText(null);
+        if (gid == null || gid.isBlank()) {
+            log.warn("orders webhook missing admin_graphql_api_id, store={}", storeId);
+            return;
+        }
+
+        String name = payload.path("name").asText("#?");
+
+        // Customer PII — null until PCD approval; raw column preserves full payload.
+        String customerName  = null;
+        String customerPhone = null;
+        JsonNode shippingAddr = null;
+
+        String displayFinancialStatus = payload.path("financial_status").asText(null);
+        java.util.List<String> gateways = new java.util.ArrayList<>();
+        for (JsonNode gw : payload.path("payment_gateway_names")) gateways.add(gw.asText());
+
+        String priceStr = payload.path("current_total_price").asText(null);
+        BigDecimal totalPrice = priceStr != null ? new BigDecimal(priceStr) : BigDecimal.ZERO;
+
+        Instant createdAt;
+        try {
+            createdAt = Instant.parse(payload.path("created_at").asText());
+        } catch (Exception e) {
+            createdAt = Instant.now();
+        }
+
+        String paymentMethod = inferPaymentMethod(displayFinancialStatus, gateways);
+        BigDecimal codAmount = "cod".equals(paymentMethod) ? totalPrice : null;
+
+        final String finalGid = gid;
+        final Instant finalCreatedAt = createdAt;
+        final String finalPaymentMethod = paymentMethod;
+        final BigDecimal finalCodAmount = codAmount;
+
+        Boolean flagged = tx.execute(s -> {
+            UUID orderId = jdbc.query(UPSERT_ORDER,
+                rs -> rs.next() ? rs.getObject("id", UUID.class) : null,
+                tenantId, storeId, finalGid, name, customerName, customerPhone,
+                toJson(shippingAddr), finalPaymentMethod, finalCodAmount,
+                java.sql.Timestamp.from(finalCreatedAt), toJson(payload));
+            if (orderId == null) return false;
+
+            boolean needsHold = false;
+            for (JsonNode line : payload.path("line_items")) {
+                long variantRestId = line.path("variant_id").asLong(0);
+                if (variantRestId == 0) {
+                    needsHold = true;
+                    continue;
+                }
+                // Variant GID from webhook REST line item
+                String variantGid = "gid://shopify/ProductVariant/" + variantRestId;
+                UUID variantId = jdbc.query(LOOKUP_VARIANT,
+                    rs -> rs.next() ? rs.getObject("id", UUID.class) : null,
+                    storeId, variantGid);
+                if (variantId == null) {
+                    log.warn("Webhook order {} line references unknown variant GID {} — flagging order",
+                        name, variantGid);
+                    needsHold = true;
+                    continue;
+                }
+                int qty = line.path("quantity").asInt(1);
+                String lineGid = line.has("admin_graphql_api_id")
+                    ? line.path("admin_graphql_api_id").asText()
+                    : "gid://shopify/LineItem/" + line.path("id").asLong();
+                jdbc.update(UPSERT_ORDER_ITEM, tenantId, orderId, variantId, qty, lineGid, toJson(line));
+            }
+            if (needsHold) jdbc.update(FLAG_ORDER_UNMAPPED, orderId);
+            return needsHold;
+        });
+        log.debug("Webhook order upsert: gid={} store={} flagged={}", gid, storeId, flagged);
+    }
+
+    /**
+     * Upserts a product + variants from a Shopify REST webhook payload (products/create, products/update).
+     */
+    public void ingestProductWebhook(UUID storeId, UUID tenantId, JsonNode payload) {
+        String gid = payload.path("admin_graphql_api_id").asText(null);
+        if (gid == null || gid.isBlank()) {
+            log.warn("products webhook missing admin_graphql_api_id, store={}", storeId);
+            return;
+        }
+        String title  = payload.path("title").asText("");
+        String status = payload.path("status").asText("active").toLowerCase();
+
+        tx.execute(s -> {
+            UUID productId = jdbc.query(UPSERT_PRODUCT,
+                rs -> rs.next() ? rs.getObject("id", UUID.class) : null,
+                tenantId, storeId, gid, title, status, toJson(payload));
+            if (productId == null) return null;
+
+            for (JsonNode v : payload.path("variants")) {
+                String variantGid = v.path("admin_graphql_api_id").asText(null);
+                if (variantGid == null) {
+                    variantGid = "gid://shopify/ProductVariant/" + v.path("id").asLong();
+                }
+                String sku   = v.path("sku").asText(null);
+                String vTitle = v.path("title").asText("");
+                String priceStr = v.path("price").asText(null);
+                BigDecimal price = priceStr != null ? new BigDecimal(priceStr) : null;
+                jdbc.update(UPSERT_VARIANT, tenantId, productId, variantGid, sku, vTitle, price, toJson(v));
+            }
+            return null;
+        });
+        log.debug("Webhook product upsert: gid={} store={}", gid, storeId);
     }
 
     // ---- catalog import -------------------------------------------------

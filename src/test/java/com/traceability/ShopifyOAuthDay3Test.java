@@ -127,7 +127,8 @@ class ShopifyOAuthDay3Test {
         String encryptedToken = encryptionService.encrypt("test_raw_token_day3");
         jdbc.update(
             "INSERT INTO stores (id, tenant_id, shop_domain, platform, access_token_encrypted, " +
-            "status, import_status) VALUES (?, ?, ?, 'shopify', ?, 'connected', 'pending')",
+            "access_token_expires_at, status, import_status) " +
+            "VALUES (?, ?, ?, 'shopify', ?, now() + interval '876000 hours', 'connected', 'pending')",
             storeId, tenantId, shopDomain, encryptedToken);
         jdbc.update(
             "INSERT INTO products (id, tenant_id, store_id, external_id, title, status) VALUES " +

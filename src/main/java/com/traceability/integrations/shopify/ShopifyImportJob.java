@@ -2,7 +2,6 @@ package com.traceability.integrations.shopify;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.traceability.security.EncryptionService;
 import com.traceability.tenancy.TenantContext;
 import org.jobrunr.jobs.annotations.Job;
 import org.slf4j.Logger;
@@ -37,20 +36,20 @@ public class ShopifyImportJob {
 
     private final JdbcTemplate jdbc;
     private final ShopifySyncService syncService;
-    private final EncryptionService encryptionService;
+    private final ShopifyTokenProvider tokenProvider;
     private final ObjectMapper mapper;
     private final TransactionTemplate tx;
 
     public ShopifyImportJob(JdbcTemplate jdbc,
                              ShopifySyncService syncService,
-                             EncryptionService encryptionService,
+                             ShopifyTokenProvider tokenProvider,
                              ObjectMapper mapper,
                              PlatformTransactionManager txm) {
-        this.jdbc              = jdbc;
-        this.syncService       = syncService;
-        this.encryptionService = encryptionService;
-        this.mapper            = mapper;
-        this.tx                = new TransactionTemplate(txm);
+        this.jdbc          = jdbc;
+        this.syncService   = syncService;
+        this.tokenProvider = tokenProvider;
+        this.mapper        = mapper;
+        this.tx            = new TransactionTemplate(txm);
     }
 
     @Job(name = "Shopify import — store %0")
@@ -60,20 +59,25 @@ public class ShopifyImportJob {
             updateStatus(storeId, "importing", null);
 
             try {
-                // Load store details inside a transaction so the GUC is set
-                // and the store row is visible under RLS in production.
+                // Load store metadata. Token decryption goes through tokenProvider (below)
+                // which handles expiry, refresh, and needs_reauth in one place.
                 String[] storeInfo = tx.execute(s ->
                     jdbc.query(
-                        "SELECT shop_domain, access_token_encrypted FROM stores WHERE id = ?",
+                        "SELECT shop_domain, status FROM stores WHERE id = ?",
                         rs -> rs.next() ? new String[]{rs.getString(1), rs.getString(2)} : null,
                         storeId));
 
                 if (storeInfo == null) {
                     throw new IllegalStateException("Store not found or inaccessible: " + storeId);
                 }
+                String status = storeInfo[1];
+                if ("disconnected".equals(status) || "needs_reauth".equals(status)) {
+                    log.info("Skipping import for store {} with status {}", storeId, status);
+                    return;
+                }
 
-                String shopDomain   = storeInfo[0];
-                String rawToken     = encryptionService.decrypt(storeInfo[1]);
+                String shopDomain = storeInfo[0];
+                String rawToken   = tokenProvider.getValidToken(storeId);
 
                 ShopifySyncService.ImportResult result =
                     syncService.runImport(storeId, tenantId, shopDomain, rawToken);
@@ -87,6 +91,19 @@ public class ShopifyImportJob {
                 log.info("Shopify import completed for store {}: {} products, {} orders",
                     storeId, result.products(), result.orders());
 
+            } catch (ShopifyStoreNeedsReauthException e) {
+                // Permanent: store is already marked needs_reauth by ShopifyTokenProvider.
+                log.warn("Shopify import skipped for store {} — store requires merchant reauth: {}",
+                    storeId, e.getMessage());
+                updateStatus(storeId, "failed", "{\"error\":\"needs_reauth\"}");
+                // Do NOT rethrow — this is a permanent condition, not retryable.
+            } catch (ShopifyTransientException e) {
+                // Transient: Shopify 5xx or timeout during token refresh.
+                // Store status is NOT touched — refresh token is still valid.
+                log.error("Shopify import failed (transient) for store {} — will need manual re-trigger: {}",
+                    storeId, e.getMessage());
+                updateStatus(storeId, "failed", "{\"error\":\"transient_refresh_failure\"}");
+                // Do NOT rethrow — JobRunr is disabled (F1); revisit when F1 is fixed.
             } catch (Exception e) {
                 log.error("Shopify import failed for store {}", storeId, e);
                 String errMsg = e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName();

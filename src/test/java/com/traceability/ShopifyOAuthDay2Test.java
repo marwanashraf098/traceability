@@ -99,6 +99,11 @@ class ShopifyOAuthDay2Test {
     private static final String CODE_B = "auth-code-b";
     private static final String TOKEN_A = "shpat_test_token_day2_a";
     private static final String TOKEN_B = "shpat_test_token_day2_b";
+    // TokenResponse wrappers — exchangeCode() now returns these instead of a plain String.
+    private static final ShopifyGateway.TokenResponse EXCHANGE_A =
+        new ShopifyGateway.TokenResponse(TOKEN_A, "shprt_refresh_a", 3600L, 7776000L);
+    private static final ShopifyGateway.TokenResponse EXCHANGE_B =
+        new ShopifyGateway.TokenResponse(TOKEN_B, "shprt_refresh_b", 3600L, 7776000L);
     private static final String SHOP_PATH1    = "path1.myshopify.com";
     private static final String SHOP_PATH2    = "path2-new.myshopify.com";
     private static final String SHOP_CROSS    = "cross-tenant.myshopify.com";
@@ -150,7 +155,7 @@ class ShopifyOAuthDay2Test {
     // -----------------------------------------------------------------------
     @Test
     void path1_newShop_storeLinkedAndImportEnqueued() {
-        when(shopifyGateway.exchangeCode(eq(SHOP_PATH1), eq(CODE_A))).thenReturn(TOKEN_A);
+        when(shopifyGateway.exchangeCode(eq(SHOP_PATH1), eq(CODE_A))).thenReturn(EXCHANGE_A);
 
         String nonce = insertState(ownerTenantId, SHOP_PATH1, Instant.now());
 
@@ -172,8 +177,8 @@ class ShopifyOAuthDay2Test {
     // -----------------------------------------------------------------------
     @Test
     void path1_sameTenanReinstall_idempotentRelink() {
-        when(shopifyGateway.exchangeCode(eq(SHOP_PATH1), eq(CODE_A))).thenReturn(TOKEN_A);
-        when(shopifyGateway.exchangeCode(eq(SHOP_PATH1), eq(CODE_B))).thenReturn(TOKEN_B);
+        when(shopifyGateway.exchangeCode(eq(SHOP_PATH1), eq(CODE_A))).thenReturn(EXCHANGE_A);
+        when(shopifyGateway.exchangeCode(eq(SHOP_PATH1), eq(CODE_B))).thenReturn(EXCHANGE_B);
 
         // First install
         String nonce1 = insertState(ownerTenantId, SHOP_PATH1, Instant.now());
@@ -208,7 +213,7 @@ class ShopifyOAuthDay2Test {
     @Test
     void path1_crossTenant_redirectToError_existingRowUntouched() {
         // Establish SHOP_CROSS under ownerTenantId
-        when(shopifyGateway.exchangeCode(eq(SHOP_CROSS), eq(CODE_A))).thenReturn(TOKEN_A);
+        when(shopifyGateway.exchangeCode(eq(SHOP_CROSS), eq(CODE_A))).thenReturn(EXCHANGE_A);
         String nonce1 = insertState(ownerTenantId, SHOP_CROSS, Instant.now());
         noRedirectRest.getForEntity(
             base() + "/auth/shopify/callback?" + callbackParams(nonce1, SHOP_CROSS, CODE_A), Void.class);
@@ -228,7 +233,7 @@ class ShopifyOAuthDay2Test {
         UUID intruderTenantId = UUID.fromString(
             (String) jwtService.verify(intruderResp.getBody().accessToken()).getClaim("tenant"));
 
-        when(shopifyGateway.exchangeCode(eq(SHOP_CROSS), eq(CODE_B))).thenReturn(TOKEN_B);
+        when(shopifyGateway.exchangeCode(eq(SHOP_CROSS), eq(CODE_B))).thenReturn(EXCHANGE_B);
         String nonce2 = insertState(intruderTenantId, SHOP_CROSS, Instant.now());
         var resp = noRedirectRest.getForEntity(
             base() + "/auth/shopify/callback?" + callbackParams(nonce2, SHOP_CROSS, CODE_B), Void.class);
@@ -254,7 +259,7 @@ class ShopifyOAuthDay2Test {
     // -----------------------------------------------------------------------
     @Test
     void path2_newShop_provisionsTenantOwnerStore() {
-        when(shopifyGateway.exchangeCode(eq(SHOP_PATH2), eq(CODE_A))).thenReturn(TOKEN_A);
+        when(shopifyGateway.exchangeCode(eq(SHOP_PATH2), eq(CODE_A))).thenReturn(EXCHANGE_A);
         when(shopifyGateway.fetchShop(eq(SHOP_PATH2), eq(TOKEN_A)))
             .thenReturn(new ShopifyGateway.ShopInfo("owner@path2-new.myshopify.com", "Path2 New Shop", "Africa/Cairo"));
 
@@ -292,7 +297,7 @@ class ShopifyOAuthDay2Test {
     @Test
     void path2_existingShop_idempotentLink() {
         // First Path-2 install provisions the tenant
-        when(shopifyGateway.exchangeCode(eq(SHOP_PATH2), eq(CODE_A))).thenReturn(TOKEN_A);
+        when(shopifyGateway.exchangeCode(eq(SHOP_PATH2), eq(CODE_A))).thenReturn(EXCHANGE_A);
         when(shopifyGateway.fetchShop(eq(SHOP_PATH2), eq(TOKEN_A)))
             .thenReturn(new ShopifyGateway.ShopInfo("owner@path2-new.myshopify.com", "Path2 New Shop", "Africa/Cairo"));
 
@@ -306,7 +311,7 @@ class ShopifyOAuthDay2Test {
             "SELECT COUNT(*) FROM users WHERE email = 'owner@path2-new.myshopify.com'", Long.class);
 
         // Second Path-2 install (re-install) — no new tenant or user
-        when(shopifyGateway.exchangeCode(eq(SHOP_PATH2), eq(CODE_B))).thenReturn(TOKEN_B);
+        when(shopifyGateway.exchangeCode(eq(SHOP_PATH2), eq(CODE_B))).thenReturn(EXCHANGE_B);
 
         String nonce2 = insertState(null, SHOP_PATH2, Instant.now());
         var resp = noRedirectRest.getForEntity(
@@ -333,8 +338,8 @@ class ShopifyOAuthDay2Test {
     // -----------------------------------------------------------------------
     @Test
     void concurrentDoubleInstall_race_exactlyOneTenantOwnerStore() throws Exception {
-        when(shopifyGateway.exchangeCode(eq(SHOP_RACE), eq(CODE_A))).thenReturn(TOKEN_A);
-        when(shopifyGateway.exchangeCode(eq(SHOP_RACE), eq(CODE_B))).thenReturn(TOKEN_B);
+        when(shopifyGateway.exchangeCode(eq(SHOP_RACE), eq(CODE_A))).thenReturn(EXCHANGE_A);
+        when(shopifyGateway.exchangeCode(eq(SHOP_RACE), eq(CODE_B))).thenReturn(EXCHANGE_B);
         when(shopifyGateway.fetchShop(eq(SHOP_RACE), anyString()))
             .thenReturn(new ShopifyGateway.ShopInfo("owner@race-shop.myshopify.com", "Race Shop", "Africa/Cairo"));
 
@@ -498,7 +503,7 @@ class ShopifyOAuthDay2Test {
     @Test
     void crossTenantDetect_usesDefinerNotRlsSelect() {
         // Establish SHOP_CROSS under ownerTenantId via the callback (identical to test 3 setup)
-        when(shopifyGateway.exchangeCode(eq(SHOP_CROSS), eq(CODE_A))).thenReturn(TOKEN_A);
+        when(shopifyGateway.exchangeCode(eq(SHOP_CROSS), eq(CODE_A))).thenReturn(EXCHANGE_A);
         String nonce1 = insertState(ownerTenantId, SHOP_CROSS, Instant.now());
         noRedirectRest.getForEntity(
             base() + "/auth/shopify/callback?" + callbackParams(nonce1, SHOP_CROSS, CODE_A), Void.class);
@@ -520,7 +525,7 @@ class ShopifyOAuthDay2Test {
         UUID intruderTenantId = UUID.fromString(
             (String) jwtService.verify(intruderResp.getBody().accessToken()).getClaim("tenant"));
 
-        when(shopifyGateway.exchangeCode(eq(SHOP_CROSS), eq(CODE_B))).thenReturn(TOKEN_B);
+        when(shopifyGateway.exchangeCode(eq(SHOP_CROSS), eq(CODE_B))).thenReturn(EXCHANGE_B);
         String nonce2 = insertState(intruderTenantId, SHOP_CROSS, Instant.now());
         var resp = noRedirectRest.getForEntity(
             base() + "/auth/shopify/callback?" + callbackParams(nonce2, SHOP_CROSS, CODE_B), Void.class);

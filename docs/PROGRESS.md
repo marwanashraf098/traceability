@@ -4,7 +4,10 @@
 
 ## Current state
 
-**OAuth Phase 1 complete** — Day 4 shipped 2026-06-19. 185 integration tests pass (173 prior + 12 new). V16 Flyway migration applied (`magic_link_tokens` table + `consume_magic_link` SECURITY DEFINER function). Magic-link bridge fully wired: Path-2 new install emits email with single-use hashed token; `GET /auth/magic?token=` consumes atomically and 302-redirects with JWT pair in fragment. All 7 Part B tests pass; no regressions. Part A redact touch-up (commit `ecd4120`) also complete — `customers/redact` scoped to `orders_to_redact` IDs, `client_details`/`note_attributes` stripped.
+**FR-3 Expiring Token Migration complete** — 2026-06-20. Shopify's non-expiring tokens (F2) are now replaced with expiring offline tokens. All 185 tests pass. F2 is cleared. F1 (JobRunr tables) remains open.
+
+**Remaining blocking issues:**
+- **[F1]** JobRunr tables missing — enqueue calls NPE. Fix: set `database.skip-create=false` in `application.yml`. Next live re-verification requires F1 to be fixed first.
 
 **Human task:** Email deliverability (SPF/DKIM, sending-domain setup) is an **ops task** — decide on SMTP provider and configure `spring.mail.host` + `app.email.from`. Until configured, `LoggingEmailGateway` logs links at WARN level (functional for dev/staging).
 
@@ -13,10 +16,96 @@
 - `POST https://<your-server>/webhooks/shopify/customers/redact`
 - `POST https://<your-server>/webhooks/shopify/shop/redact`
 
-**Human task:** Enter the three GDPR webhook URLs in the Shopify Partner Dashboard app config (these are static URLs, configured once per app, not per-install). The three URLs:
-- `POST https://<your-server>/webhooks/shopify/customers/data_request`
-- `POST https://<your-server>/webhooks/shopify/customers/redact`
-- `POST https://<your-server>/webhooks/shopify/shop/redact`
+**Human task (live re-verify):** Uninstall + reinstall the app from `traceability-dev.myshopify.com` to get a fresh expiring token pair. After fix of F1, re-run live verification for: (4) import job runs successfully, (5) webhooks registered, (6) webhook processor enqueued.
+
+---
+
+**Day 21 — FR-3 Expiring Token Migration (2026-06-20):**
+
+*Design approved (Phase 1), built (Phase 2–3). F2 cleared.*
+
+*What changed:*
+
+**V17 migration** (`V17__expiring_tokens.sql`): `ALTER TYPE store_status ADD VALUE 'needs_reauth'`; `ALTER TABLE stores ADD COLUMN refresh_token_encrypted text, access_token_expires_at timestamptz, refresh_token_expires_at timestamptz`.
+
+**ShopifyGateway interface**: new `TokenResponse` record (`accessToken`, `refreshToken`, `expiresIn`, `refreshTokenExpiresIn`); `exchangeCode()` return type `String` → `TokenResponse`; new `refreshAccessToken(shopDomain, refreshToken)` method.
+
+**ShopifyHttpGateway**: `exchangeCode()` now sends `expiring=1` in the request body and parses all four response fields. New `refreshAccessToken()`: uses a dedicated `tokenRestClient` with 10 s read timeout (Correction B — pool size 5, pilot ≤ 3 simultaneous refreshes, acceptable headroom). Failure classification: `HttpClientErrorException` (4xx) → `ShopifyStoreNeedsReauthException` (permanent); `HttpServerErrorException` / `ResourceAccessException` → `ShopifyTransientException` (transient, no status change).
+
+**ShopifyTokenProvider** (new `@Service`): single choke point `getValidToken(storeId)`. Two-phase: quick read (no lock) → if fresh (> 5 min from expiry) → return; else `SELECT FOR UPDATE` → re-check → call Shopify refresh API inside lock → write-back all four fields atomically. Permanent failure → mark `needs_reauth` + propagate `ShopifyStoreNeedsReauthException`. Transient failure → propagate `ShopifyTransientException` without touching status.
+
+**ShopifyOAuthService**: `linkOrProvision()` uses `TokenResponse` end-to-end. `insertStore()` and `updateStoreToken()` write all four token/expiry fields. `provisionNewTenant()`: DEFINER function (`provision_tenant_from_shopify`) unchanged (no new approval needed); refresh fields written via post-provision UPDATE under tenant RLS. All `Instant` params converted to `java.sql.Timestamp` (pgjdbc requires explicit type; `Instant` not auto-inferred).
+
+**ShopifyImportJob / RegisterShopifyWebhooksJob**: `EncryptionService` dependency removed; both now call `tokenProvider.getValidToken(storeId)`. `ShopifyStoreNeedsReauthException` → set `import_status='failed'` + warn log (permanent, merchant must reinstall). `ShopifyTransientException` → set `import_status='failed'` + error log (token still valid; re-trigger manually until F1 is fixed).
+
+**ShopifySyncService** (DEV-ONLY connect path): `UPSERT_STORE` now sets `access_token_expires_at = now() + interval '876000 hours'` so `ShopifyTokenProvider` sees the dev-connect token as fresh.
+
+*Decisions / gotchas:*
+- `java.time.Instant` is NOT auto-inferred by pgjdbc — must use `java.sql.Timestamp.from(instant)` for all `TIMESTAMPTZ` JDBC parameters. Passing `Instant` directly silently NPEs the callback with `PSQLException: Can't infer the SQL type`.
+- Store status `needs_reauth` is a plain text value (status column is a PostgreSQL enum `store_status`), so `ALTER TYPE store_status ADD VALUE` is required in V17.
+- F2 is now fixed by this migration. The existing dev store (`traceability-dev.myshopify.com`) has a legacy `shpat_...` token. First import attempt after reinstall will call `tokenProvider.getValidToken()`, see a fresh token (set during OAuth callback), succeed.
+
+*Test changes:*
+- `ShopifyOAuthDay1Test`, `ShopifyOAuthDay2Test`, `ShopifyMagicLinkTest`: `exchangeCode()` stubs updated from `thenReturn(String)` to `thenReturn(TokenResponse)`.
+- `ShopifyOAuthDay3Test`, `ShopifyImportTest`: test store INSERTs updated to include `access_token_expires_at = now() + interval '876000 hours'` so `tokenProvider` sees a fresh token.
+- `MigrationSmokeTest`: migration count updated from 16 → 17.
+- 185/185 tests pass.
+
+*Next up (in priority order):*
+1. Fix F1: set `database.skip-create=false` in `application.yml`, restart, verify enqueue works
+2. Live re-verify with fresh install on dev store: prove F2 cleared (product fetch succeeds), F1 fixed (import + webhook registration enqueued), webhook processor runs
+3. PROVISIONED path (new tenant) live-verify with a second Shopify store
+4. Decide on public OAuth app vs. custom app for production (per CLAUDE.md note)
+
+---
+
+**Day 20 — OAuth Phase 1 live verification (ngrok tunnel, 2026-06-19):**
+
+*Scope: prove the already-built OAuth connector against traceability-dev.myshopify.com. No features added; findings only.*
+
+**What passed:**
+
+| Check | Result | Evidence |
+|---|---|---|
+| Install → consent URL (HMAC + state) | ✓ | 302 to `traceability-dev.myshopify.com/admin/oauth/authorize` with 4 scopes |
+| Callback HMAC verified | ✓ | Flow completed without SHOPIFY_HMAC_INVALID |
+| State single-use (consumed_at set) | ✓ | DB: `consumed_at` non-null after callback |
+| Token stored as ciphertext | ✓ | DB: `access_token_encrypted = Kisac9Rd...` (len 88, not `shpat_...`) |
+| LINKED_EXISTING outcome + 302 redirect | ✓ | Browser landed on SPA login page (not 500) |
+| Webhook raw-body HMAC → 200 | ✓ | Test POST with correct HMAC-SHA256 returned 200 |
+| Webhook bad HMAC → 401 | ✓ | Tampered HMAC returned 401, nothing persisted |
+| Webhook idempotency | ✓ | Replay same `webhook_id` → 200, still 1 row in `shopify_webhook_events` |
+| Tenant resolved from `X-Shopify-Shop-Domain` | ✓ | Event row has correct `tenant_id = dc276c72-...` |
+
+*Note: LINKED_EXISTING path tested (dev store already connected from Day 9). PROVISIONED path (new tenant) covered by 7 integration tests with real DB but not live-verified here — needs a second Shopify store.*
+
+**Blocking infrastructure issues found:**
+
+**[F1] JobRunr tables missing from Supabase — all enqueue calls NPE.**
+`database.skip-create=true` prevents JobRunr from creating its own tables. No Flyway migration creates them either. `PostgresStorageProvider.save(job)` → `new JobTable(…)` → NPE. Affects: `enqueueImport()` in OAuth callback (shop not actually scheduled for import), `RegisterShopifyWebhooksJob` (Shopify webhooks never registered), `ShopifyWebhookProcessorJob` (events stored but processor never enqueued). The `RecurringJobTable` NPE on startup (ShopifyStateCleanupJob's @Recurring) is the same root cause.
+
+Fix options (pick one):
+- (a) Set `database.skip-create=false` — `PostgresStorageProvider` auto-creates its 9 JobRunr tables on startup. No migration needed. This is the simplest fix.
+- (b) Add a Flyway migration that creates the JobRunr schema (gives version control but more maintenance).
+
+After fix: remove `ORG_JOBRUNR_BACKGROUND_JOB_SERVER_ENABLED=false` from `.env` (was added as workaround to avoid startup NPE during this session; reverted at end of session).
+
+**[F2] Shopify non-expiring tokens deprecated — Admin API calls blocked.**
+The OAuth exchange (`POST /admin/oauth/access_token`) still succeeds, but the issued token is the legacy non-expiring format (`shpat_...`). Shopify now rejects ALL Admin API calls with this token format: *"Non-expiring access tokens are no longer accepted for the Admin API."* This blocks `RegisterShopifyWebhooksJob` (GraphQL `webhookSubscriptionCreate`) and `ShopifyImportJob` (products/orders GraphQL queries).
+
+Fix: In Partner Dashboard → app settings → enable **"Use expiring access tokens"** (or equivalent). Uninstall and reinstall the app from the dev store to get a new expiring token. The token exchange code in `ShopifyHttpGateway.exchangeCode()` does not need changes — Shopify switches the format at the platform level. Note: expiring tokens have a 24-hour lifetime; the app will need a token-refresh strategy before pilots (either the merchant re-installs, or the app requests an offline token with `access_mode=offline` if the feature is available).
+
+**Workarounds applied during session (all reverted — working tree clean):**
+- `ORG_JOBRUNR_BACKGROUND_JOB_SERVER_ENABLED=false` in `.env` → prevented startup NPE
+- Temporary try-catch in `ShopifyOAuthService.enqueueImport()` → let callback 302 fire despite F1
+- Temporary try-catch in `ShopifyWebhookController` → let webhook 200 fire despite F1
+- Ngrok env vars (`SHOPIFY_REDIRECT_URI`, `SHOPIFY_WEBHOOK_BASE_URL`, `SHOPIFY_APP_URL`) → removed
+
+**Next (in priority order):**
+1. Fix F1: set `database.skip-create=false`, restart, verify enqueue works
+2. Fix F2: enable expiring tokens in Partner Dashboard, reinstall dev store
+3. After F1+F2 fixed: re-run live verification — points 4 (import enqueued) and webhook processor should pass
+4. Test PROVISIONED path with a second Shopify store
 
 ---
 

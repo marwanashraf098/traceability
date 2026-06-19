@@ -45,6 +45,19 @@ public interface ShopifyGateway {
 
     record LineItem(String gid, int quantity, String variantGid) {}
 
+    // ---- token records --------------------------------------------------
+
+    /**
+     * Returned by exchangeCode and refreshAccessToken.
+     * refreshToken and both expiresIn fields are present only when expiring=1 was sent.
+     */
+    record TokenResponse(
+            String accessToken,
+            String refreshToken,          // plaintext shprt_...; null if non-expiring (shouldn't happen)
+            long   expiresIn,             // seconds until access token expires (typically 3600)
+            long   refreshTokenExpiresIn  // seconds until refresh token expires (typically 7776000)
+    ) {}
+
     // ---- operations -----------------------------------------------------
 
     /** Validates credentials by fetching the shop resource. Returns the shop name. */
@@ -57,15 +70,28 @@ public interface ShopifyGateway {
     OrderPage fetchOrdersPage(String shopDomain, String token, String cursor, String createdAfter);
 
     /**
-     * Exchanges an OAuth authorization code for a permanent offline access token.
-     * Called once per install on the OAuth callback.
+     * Exchanges an OAuth authorization code for an expiring offline access token.
+     * Sends expiring=1 so Shopify returns both an access token (1 h) and a refresh token (90 d).
      *
      * @param shopDomain the merchant's shop domain (e.g. "store.myshopify.com")
      * @param code       the authorization code from the callback query param
-     * @return the plaintext offline access token — caller must encrypt before persisting
+     * @return TokenResponse with access token, refresh token, and both expiry durations
      * @throws ShopifyException on non-200 response or missing access_token field
      */
-    String exchangeCode(String shopDomain, String code);
+    TokenResponse exchangeCode(String shopDomain, String code);
+
+    /**
+     * Obtains a fresh access token using the single-use rotating refresh token.
+     * Shopify issues a new refresh token on each call; the old one is immediately invalidated.
+     * Must be called under a SELECT FOR UPDATE on the stores row to prevent concurrent rotation.
+     *
+     * @param shopDomain   the merchant's shop domain
+     * @param refreshToken the current plaintext refresh token (shprt_...)
+     * @return new TokenResponse — both tokens and expiry durations from Shopify's response
+     * @throws ShopifyStoreNeedsReauthException on permanent failure (4xx / invalid_grant)
+     * @throws ShopifyTransientException        on transient failure (5xx / timeout / connection reset)
+     */
+    TokenResponse refreshAccessToken(String shopDomain, String refreshToken);
 
     // ---- OAuth Day 2 additions ------------------------------------------
 
@@ -87,4 +113,18 @@ public interface ShopifyGateway {
      * @throws ShopifyException on non-200 response or missing shop field
      */
     ShopInfo fetchShop(String shopDomain, String token);
+
+    // ---- OAuth Day 3 additions ------------------------------------------
+
+    /**
+     * Registers a webhook subscription via the webhookSubscriptionCreate GraphQL mutation.
+     * If the topic+callbackUrl combination is "already taken", returns silently (idempotent).
+     *
+     * @param shopDomain  the merchant's myshopify.com domain
+     * @param token       the raw (plaintext) offline access token
+     * @param topic       Shopify topic string e.g. "orders/create"
+     * @param callbackUrl the HTTPS endpoint Shopify will POST to
+     * @throws ShopifyException on non-recoverable errors (auth failure, bad domain, etc.)
+     */
+    void registerWebhook(String shopDomain, String token, String topic, String callbackUrl);
 }

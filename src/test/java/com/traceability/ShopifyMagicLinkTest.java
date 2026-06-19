@@ -276,7 +276,8 @@ class ShopifyMagicLinkTest {
         String ownerEmail = "provision-owner@magic.test";
         String rawToken   = "shpat_provision_token_abc";
 
-        when(shopifyGateway.exchangeCode(eq(newShop), any())).thenReturn(rawToken);
+        when(shopifyGateway.exchangeCode(eq(newShop), any()))
+            .thenReturn(new ShopifyGateway.TokenResponse(rawToken, "shprt_refresh_magic", 3600L, 7776000L));
         when(shopifyGateway.fetchShop(eq(newShop), eq(rawToken)))
             .thenReturn(new ShopifyGateway.ShopInfo(ownerEmail, "Magic Provision Store", "Africa/Cairo"));
 

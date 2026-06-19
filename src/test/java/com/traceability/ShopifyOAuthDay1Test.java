@@ -95,6 +95,8 @@ class ShopifyOAuthDay1Test {
     private static final String SHOP   = "oauth-test.myshopify.com";
     private static final String CODE   = "auth-code-from-shopify";
     private static final String TOKEN  = "shpat_test_offline_token_abc";
+    private static final ShopifyGateway.TokenResponse EXCHANGE_TOKEN =
+        new ShopifyGateway.TokenResponse(TOKEN, "shprt_refresh_day1", 3600L, 7776000L);
 
     @BeforeAll
     void setupOwner() {
@@ -194,7 +196,7 @@ class ShopifyOAuthDay1Test {
     // -------------------------------------------------------------------------
     @Test
     void stateReplay_secondCallbackIsRejected() {
-        when(shopifyGateway.exchangeCode(eq(SHOP), eq(CODE))).thenReturn(TOKEN);
+        when(shopifyGateway.exchangeCode(eq(SHOP), eq(CODE))).thenReturn(EXCHANGE_TOKEN);
 
         String nonce = insertState(ownerTenantId, SHOP, Instant.now());
 
@@ -253,7 +255,7 @@ class ShopifyOAuthDay1Test {
     // -------------------------------------------------------------------------
     @Test
     void happyPath_tokenStoredAndImportEnqueued() {
-        when(shopifyGateway.exchangeCode(eq(SHOP), eq(CODE))).thenReturn(TOKEN);
+        when(shopifyGateway.exchangeCode(eq(SHOP), eq(CODE))).thenReturn(EXCHANGE_TOKEN);
 
         String nonce = insertState(ownerTenantId, SHOP, Instant.now());
 
@@ -284,7 +286,7 @@ class ShopifyOAuthDay1Test {
     // -------------------------------------------------------------------------
     @Test
     void tokenAtRest_isCiphertext() {
-        when(shopifyGateway.exchangeCode(eq(SHOP), eq(CODE))).thenReturn(TOKEN);
+        when(shopifyGateway.exchangeCode(eq(SHOP), eq(CODE))).thenReturn(EXCHANGE_TOKEN);
 
         String nonce = insertState(ownerTenantId, SHOP, Instant.now());
         noRedirectRest.getForEntity(base() + "/auth/shopify/callback?" + callbackParams(nonce), Void.class);
