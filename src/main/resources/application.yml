@@ -48,6 +48,8 @@ shopify:
   scopes: read_products,read_orders,read_fulfillments,read_customers
   redirect-uri: ${SHOPIFY_REDIRECT_URI:http://localhost:8080/auth/shopify/callback}
   app-url: ${SHOPIFY_APP_URL:http://localhost:5173}
+  # Base URL for webhook callback registration (must be the backend server URL, not the SPA).
+  webhook-base-url: ${SHOPIFY_WEBHOOK_BASE_URL:http://localhost:8080}
 
 bosta:
   # Base URL: prod=https://app.bosta.co, staging=https://stg-app.bosta.co
@@ -58,8 +60,10 @@ org:
   jobrunr:
     background-job-server:
       enabled: true
-    # skip-create=true: JobRunr tables are created by the JobRunrConfig bean
-    # using the Flyway (owner) datasource, not by the runtime app_user.
+    # skip-create=true prevents the Spring Boot auto-config StorageProvider from running DDL.
+    # Our custom JobRunrConfig @Bean creates PostgresStorageProvider(ownerDs) directly, which
+    # ignores this property. V18 Flyway migration creates all JobRunr tables and pre-populates
+    # jobrunr_migrations so DatabaseCreator finds them applied and does nothing on startup.
     database:
       skip-create: true
 

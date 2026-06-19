@@ -4,10 +4,19 @@
 
 ## Current state
 
-**FR-3 Expiring Token Migration complete** — 2026-06-20. Shopify's non-expiring tokens (F2) are now replaced with expiring offline tokens. All 185 tests pass. F2 is cleared. F1 (JobRunr tables) remains open.
+**F1 fixed + F2 fixed — pending live re-verify** — 2026-06-20.
+- F1 (JobRunr tables): Fixed via V18 Flyway migration. `JobRunrConfig.java` creates `PostgresStorageProvider(ownerDs)`; V18 creates all JobRunr tables + pre-populates `jobrunr_migrations` so `DatabaseCreator` finds all 15 scripts applied and does nothing. Background job server enabled (`background-job-server.enabled: true` in yml).
+- F2 (expiring tokens): Fixed in commit `7262332`. `ShopifyTokenProvider` is the single choke point; `exchangeCode()` sends `expiring=1` and stores both token+refresh+expiries.
+- **185/185 tests pass.**
 
-**Remaining blocking issues:**
-- **[F1]** JobRunr tables missing — enqueue calls NPE. Fix: set `database.skip-create=false` in `application.yml`. Next live re-verification requires F1 to be fixed first.
+**Next: combined live re-verify (Phase 4 — browser clicks required)**
+1. Start tunnel: `ngrok http 8080` + set `SHOPIFY_REDIRECT_URI`, `SHOPIFY_WEBHOOK_BASE_URL`, `SHOPIFY_APP_URL` env vars to ngrok URL
+2. Start app: `mvn spring-boot:run`
+3. **[You]** Uninstall app from `traceability-dev.myshopify.com`, then reinstall (forces fresh token exchange)
+4. Verify F2: `SELECT access_token_expires_at, refresh_token_encrypted, refresh_token_expires_at FROM stores WHERE shop_domain = 'traceability-dev.myshopify.com'` — all three must be non-null
+5. Verify F1 (import): check `import_status` in stores — should go from `pending` → `completed` within ~30s after reinstall. Check logs for `ShopifyImportJob` output.
+6. Verify F1 (webhooks): check logs for `RegisterShopifyWebhooksJob` — should log `Webhook registration complete for store ...`. Verify in Shopify Partner Dashboard → app → webhooks that 6 topics are registered.
+7. Send a live `orders/create` webhook → verify 200 + `shopify_webhook_events` row inserted + processor job enqueued.
 
 **Human task:** Email deliverability (SPF/DKIM, sending-domain setup) is an **ops task** — decide on SMTP provider and configure `spring.mail.host` + `app.email.from`. Until configured, `LoggingEmailGateway` logs links at WARN level (functional for dev/staging).
 
@@ -15,8 +24,6 @@
 - `POST https://<your-server>/webhooks/shopify/customers/data_request`
 - `POST https://<your-server>/webhooks/shopify/customers/redact`
 - `POST https://<your-server>/webhooks/shopify/shop/redact`
-
-**Human task (live re-verify):** Uninstall + reinstall the app from `traceability-dev.myshopify.com` to get a fresh expiring token pair. After fix of F1, re-run live verification for: (4) import job runs successfully, (5) webhooks registered, (6) webhook processor enqueued.
 
 ---
 
@@ -52,10 +59,33 @@
 - 185/185 tests pass.
 
 *Next up (in priority order):*
-1. Fix F1: set `database.skip-create=false` in `application.yml`, restart, verify enqueue works
-2. Live re-verify with fresh install on dev store: prove F2 cleared (product fetch succeeds), F1 fixed (import + webhook registration enqueued), webhook processor runs
-3. PROVISIONED path (new tenant) live-verify with a second Shopify store
-4. Decide on public OAuth app vs. custom app for production (per CLAUDE.md note)
+1. Combined live re-verify (see "Current state" above) — browser reinstall on dev store
+2. PROVISIONED path (new tenant) live-verify with a second Shopify store
+3. Decide on public OAuth app vs. custom app for production (per CLAUDE.md note)
+
+---
+
+**Day 21 (cont.) — F1 fix: JobRunr Flyway migration V18 (2026-06-20):**
+
+*Problem:* `JobRunrConfig.java` creates `PostgresStorageProvider(ownerDs)` which checks `jobrunr_migrations` to see which internal DDL scripts have been applied. Without any tables, this fails with NPE on first enqueue. `skip-create=true` in application.yml was preventing the Spring Boot auto-config path from creating tables, but our custom `@Bean` bypasses that property — it uses `DatabaseOptions.CREATE` (the default) regardless. The root cause was simply that no Flyway migration had ever created the JobRunr tables.
+
+*Fix:* V18__jobrunr.sql — collapsed final DDL of all 15 JobRunr internal migrations:
+- 4 tables: `jobrunr_jobs`, `jobrunr_recurring_jobs`, `jobrunr_backgroundjobservers`, `jobrunr_metadata` + `jobrunr_migrations` tracker
+- 8 indexes (final set after v014 drops and replaces `updatedAt` index with compound `state_updated`)
+- `jobrunr_jobs_stats` view (Postgres-specific v014 version using `ROLLUP`)
+- `jobrunr_metadata` initial row `('succeeded-jobs-counter-cluster', ..., '0', ...)`
+- Explicit GRANTs to `app_user` on all 5 tables + SELECT on view (belt-and-suspenders; V1 `ALTER DEFAULT PRIVILEGES` also covers these)
+- `jobrunr_migrations` pre-populated with all 15 scripts → `DatabaseCreator` finds them applied → no DDL on startup
+
+*V18 source verification:* DDL extracted directly from `jobrunr-7.3.0.jar` at `org/jobrunr/storage/sql/common/migrations/` and Postgres override at `postgres/migrations/v014`. NOT from a running DB — source of truth is the pinned jar version.
+
+*`application.yml` comment updated* to accurately describe that `skip-create=true` only guards the Spring Boot auto-config path (overridden by our custom `@Bean`); the tables are created by V18, not by the bean.
+
+*`MigrationSmokeTest` updated:* count 17 → 18. 185/185 pass.
+
+*Decisions:*
+- `JobRunrConfig.java` uses `new PostgresStorageProvider(ownerDs)` with default `DatabaseOptions.CREATE` — this is correct; it checks `jobrunr_migrations` and finds all scripts applied, so it's effectively a no-op after V18 runs.
+- Owner pool size 2 is acceptable: JobRunr metadata operations (heartbeat, job state transitions) hold connections for ~1 ms each. The actual job body (`ShopifyImportJob.run()`) uses the `@Primary` app_user pool (size 5), not the owner pool.
 
 ---
 
