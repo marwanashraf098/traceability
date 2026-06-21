@@ -1,5 +1,7 @@
 package com.traceability;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.traceability.account.AuditService;
 import com.traceability.inventory.*;
 import com.traceability.tenancy.TenantAwareDataSource;
 import com.traceability.tenancy.TenantContext;
@@ -71,6 +73,7 @@ class Day9Test {
     @Autowired FulfillService  fulfillSvc;
     @Autowired InventoryLedger ledger;
     @Autowired JdbcTemplate    jdbc;
+    @Autowired ObjectMapper    objectMapper;
 
     // Tenant B datasource (RLS cross-tenant isolation test)
     FulfillService tenantBFulfillSvc;
@@ -125,7 +128,8 @@ class Day9Test {
         JdbcTemplate jdbcB = new JdbcTemplate(appUserDsB);
         DataSourceTransactionManager txmB = new DataSourceTransactionManager(appUserDsB);
         InventoryLedger ledgerB = new InventoryLedger(jdbcB);
-        tenantBFulfillSvc = new FulfillService(jdbcB, ledgerB);
+        AuditService auditSvcB = new AuditService(jdbcB, objectMapper);
+        tenantBFulfillSvc = new FulfillService(jdbcB, ledgerB, auditSvcB);
     }
 
     @BeforeEach

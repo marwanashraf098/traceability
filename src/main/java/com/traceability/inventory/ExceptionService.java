@@ -67,6 +67,7 @@ public class ExceptionService {
         all.addAll(detectGuidedUnpack(tenantId));
         all.addAll(detectMissingAwb(tenantId));
         all.addAll(detectShopifyCancelVsInflight(tenantId));
+        all.addAll(detectMissingProviderId(tenantId));
 
         // Enrich with descriptions and action hints
         all.forEach(this::enrich);
@@ -370,6 +371,32 @@ public class ExceptionService {
             tid, tid);
     }
 
+    private List<Map<String, Object>> detectMissingProviderId(UUID tid) {
+        return jdbc.queryForList(
+            "SELECT 'missing_provider_id' AS type, 'MEDIUM' AS severity, 'shipment' AS subject_type, " +
+            "       s.id AS shipment_id, s.tracking_number, " +
+            "       o.id AS order_id, o.number AS order_number, " +
+            "       s.created_at AS occurred_at, " +
+            "       'missing_provider_id:shipment:' || s.id AS subject_key " +
+            "FROM shipments s " +
+            "JOIN orders o ON o.id = s.order_id " +
+            "WHERE s.tenant_id = ? " +
+            "  AND s.provider_id_fetch_failed = true " +
+            "  AND s.provider_delivery_id IS NULL " +
+            "  AND s.internal_state NOT IN ( " +
+            "      'delivered'::shipment_internal_state, " +
+            "      'returned'::shipment_internal_state, " +
+            "      'lost'::shipment_internal_state, " +
+            "      'terminated'::shipment_internal_state, " +
+            "      'cancelled'::shipment_internal_state) " +
+            "  AND NOT EXISTS ( " +
+            "      SELECT 1 FROM exception_resolutions er " +
+            "      WHERE er.tenant_id = s.tenant_id " +
+            "        AND er.exception_type = 'missing_provider_id' " +
+            "        AND er.subject_key = 'missing_provider_id:shipment:' || s.id) ",
+            tid);
+    }
+
     // ── Enrichment ────────────────────────────────────────────────────────────
 
     private void enrich(Map<String, Object> item) {
@@ -451,6 +478,16 @@ public class ExceptionService {
                 item.put("descriptionEn", "AWB could not be printed for shipment " + t + ": " + r);
                 item.put("descriptionAr", "تعذّر طباعة بوليصة الشحن للشحنة " + t + ": " + r);
                 item.put("suggestedAction", "retry_awb_print");
+                item.put("actionUrl", "/shipments/" + item.get("shipment_id"));
+            }
+            case "missing_provider_id" -> {
+                String t = str(item, "tracking_number");
+                String n = str(item, "order_number");
+                item.put("descriptionEn",
+                    "Bosta internal ID could not be fetched for shipment " + t + " (order " + n + ") — delivery cancellation unavailable");
+                item.put("descriptionAr",
+                    "تعذّر جلب المعرّف الداخلي من بوسطة للشحنة " + t + " (الطلب " + n + ") — إلغاء التوصيل غير متاح");
+                item.put("suggestedAction", "retry_provider_id_fetch");
                 item.put("actionUrl", "/shipments/" + item.get("shipment_id"));
             }
             case "shopify_cancel_vs_inflight" -> {

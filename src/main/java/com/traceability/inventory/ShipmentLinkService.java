@@ -2,7 +2,9 @@ package com.traceability.inventory;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.traceability.integrations.bosta.BostaDelivery;
+import com.traceability.integrations.bosta.BostaGateway;
 import com.traceability.integrations.bosta.BostaStateMapper;
+import com.traceability.security.EncryptionService;
 import com.traceability.tenancy.TenantContext;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -44,16 +46,22 @@ public class ShipmentLinkService {
     public static final String REASON_AMBIGUOUS_MULTI = "AMBIGUOUS_MULTI";
     public static final String REASON_COD_ONLY        = "COD_ONLY_AMBIGUOUS";
 
-    private final JdbcTemplate     jdbc;
-    private final InventoryLedger  ledger;
-    private final BostaStateMapper stateMapper;
+    private final JdbcTemplate      jdbc;
+    private final InventoryLedger   ledger;
+    private final BostaStateMapper  stateMapper;
+    private final BostaGateway      bostaGateway;
+    private final EncryptionService encryptionService;
 
     public ShipmentLinkService(JdbcTemplate jdbc,
                                 InventoryLedger ledger,
-                                BostaStateMapper stateMapper) {
-        this.jdbc        = jdbc;
-        this.ledger      = ledger;
-        this.stateMapper = stateMapper;
+                                BostaStateMapper stateMapper,
+                                BostaGateway bostaGateway,
+                                EncryptionService encryptionService) {
+        this.jdbc              = jdbc;
+        this.ledger            = ledger;
+        this.stateMapper       = stateMapper;
+        this.bostaGateway      = bostaGateway;
+        this.encryptionService = encryptionService;
     }
 
     /**
@@ -88,6 +96,7 @@ public class ShipmentLinkService {
         UUID shipmentId = handleSwappedAwbCheck(trackingNumber, tenantId, orderId, orderNumber);
 
         // 3. Create shipment if not already present
+        boolean isNewShipment = false;
         if (shipmentId == null) {
             try {
                 shipmentId = UUID.randomUUID();
@@ -96,11 +105,19 @@ public class ShipmentLinkService {
                     "(id, tenant_id, order_id, provider, tracking_number, internal_state) " +
                     "VALUES (?, ?, ?, 'bosta', ?, 'created')",
                     shipmentId, tenantId, orderId, trackingNumber);
+                isNewShipment = true;
             } catch (DuplicateKeyException e) {
                 // ux_active_shipment_per_order: order already has an active shipment.
                 throw new ResponseStatusException(HttpStatus.CONFLICT,
                     "Order already has an active shipment — resolve it before linking a new AWB");
             }
+        }
+
+        // FR-4.6 prerequisite: fetch Bosta _id for future cancel capability.
+        // Non-blocking: if the fetch fails, the link still succeeds; flag is set for exception detector.
+        // Only fetch for newly created shipments — re-links that already have provider_delivery_id skip.
+        if (isNewShipment) {
+            fetchAndStoreProviderDeliveryId(shipmentId, trackingNumber, tenantId);
         }
 
         // 4. Transition packed pieces → awaiting_pickup (writes tracking_linked events)
@@ -310,17 +327,68 @@ public class ShipmentLinkService {
             "SELECT id FROM shipments WHERE tracking_number = ? AND tenant_id = ?",
             rs -> rs.next() ? rs.getObject("id", UUID.class) : null,
             trackingNumber, tenantId);
-        if (existing != null) return existing;
+        if (existing != null) {
+            // Idempotent backfill: if a prior link stored raw but not provider_delivery_id, fill it now.
+            if (delivery != null && delivery.raw() != null) {
+                String bostaId = delivery.raw().path("_id").asText(null);
+                if (bostaId != null && !bostaId.isBlank()) {
+                    jdbc.update(
+                        "UPDATE shipments SET provider_delivery_id = ? " +
+                        "WHERE id = ? AND provider_delivery_id IS NULL",
+                        bostaId, existing);
+                }
+            }
+            return existing;
+        }
 
         UUID id = UUID.randomUUID();
         String rawJson = (delivery != null && delivery.raw() != null)
             ? delivery.raw().toString() : null;
+        String bostaId = (delivery != null && delivery.raw() != null)
+            ? delivery.raw().path("_id").asText(null) : null;
+        if (bostaId != null && bostaId.isBlank()) bostaId = null;
         jdbc.update(
             "INSERT INTO shipments " +
-            "(id, tenant_id, order_id, provider, tracking_number, internal_state, raw) " +
-            "VALUES (?, ?, ?, 'bosta', ?, ?::shipment_internal_state, ?::jsonb)",
-            id, tenantId, orderId, trackingNumber, internalState, rawJson);
+            "(id, tenant_id, order_id, provider, tracking_number, internal_state, raw, provider_delivery_id) " +
+            "VALUES (?, ?, ?, 'bosta', ?, ?::shipment_internal_state, ?::jsonb, ?)",
+            id, tenantId, orderId, trackingNumber, internalState, rawJson, bostaId);
         return id;
+    }
+
+    private void fetchAndStoreProviderDeliveryId(UUID shipmentId, String trackingNumber, UUID tenantId) {
+        try {
+            String[] accountInfo = jdbc.query(
+                "SELECT api_key_encrypted FROM courier_accounts " +
+                "WHERE tenant_id = ? AND provider = 'bosta' AND status = 'active' LIMIT 1",
+                rs -> rs.next() ? new String[]{rs.getString(1)} : null,
+                tenantId);
+            if (accountInfo == null) {
+                log.warn("No active Bosta account for tenant {} — cannot fetch provider_delivery_id for {}",
+                    tenantId, trackingNumber);
+                jdbc.update("UPDATE shipments SET provider_id_fetch_failed = true WHERE id = ?", shipmentId);
+                return;
+            }
+            String rawApiKey = encryptionService.decrypt(accountInfo[0]);
+            BostaDelivery delivery = bostaGateway.fetchDelivery(rawApiKey, trackingNumber);
+            if (delivery != null && delivery.raw() != null) {
+                String bostaId = delivery.raw().path("_id").asText(null);
+                if (bostaId != null && !bostaId.isBlank()) {
+                    jdbc.update("UPDATE shipments SET provider_delivery_id = ? WHERE id = ?",
+                        bostaId, shipmentId);
+                    return;
+                }
+            }
+            log.warn("fetchDelivery for {} returned no _id — setting fetch-failed flag", trackingNumber);
+            jdbc.update("UPDATE shipments SET provider_id_fetch_failed = true WHERE id = ?", shipmentId);
+        } catch (Exception e) {
+            log.warn("fetchDelivery for {} failed — provider_delivery_id will be NULL: {}",
+                trackingNumber, e.getMessage());
+            try {
+                jdbc.update("UPDATE shipments SET provider_id_fetch_failed = true WHERE id = ?", shipmentId);
+            } catch (Exception ex) {
+                log.error("Failed to set provider_id_fetch_failed on shipment {}: {}", shipmentId, ex.getMessage());
+            }
+        }
     }
 
     private void resolveUnlinked(UUID tenantId, String trackingNumber) {
