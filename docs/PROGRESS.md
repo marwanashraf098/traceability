@@ -4,6 +4,66 @@
 
 ## Current state
 
+**210/210 green — AWB print + pickup handling shipped** — 2026-06-21.
+
+V20 migration applied. `BostaAwbService` (mass-awb, printable-state filter, missing-AWB exceptions), `BostaPickupService` (BOSTA_MANAGED/TRACED_MANAGED, manifest), `BostaController` (3 new endpoints + settings PUT), `ExceptionService.detectMissingAwb()`. 12 new tests in `AwbPickupTest`. All 198 pre-existing tests still pass.
+
+**LIVE SMOKE TEST PENDING**: Call `POST /api/v1/bosta/awb/print` with a real pilot tracking number. Needs running app + pilot Bosta API key. Steps in Day 24 entry below.
+
+---
+
+**Day 24 — AWB print + pickup handling (FR-9.5, FR-10.1, FR-10.2, FR-4.8):**
+
+*What changed:*
+
+**V20 migration** (`V20__awb_pickup_settings.sql`):
+- `courier_accounts`: `pickup_mode` (BOSTA_MANAGED default), `pickup_business_location_id`, `contact_person` (jsonb), `awb_format` (A4 default), `awb_lang` (ar default).
+- `shipments`: `awb_print_failed_reason text`, `awb_print_failed_at timestamptz` — for exceptions center detection.
+- `pickups`: `total_cod_amount numeric(12,2)` — cached COD total for manifest retrieval.
+
+**`BostaGateway` + `BostaHttpGateway`** — two new methods:
+- `printMassAwb()`: POST `/api/v2/deliveries/mass-awb` with `{trackingNumbers, requestedAwbType, lang}`. Inline path → `AwbPrintResult(pdfBytes)`. Email path → `AwbPrintResult(null, message)`.
+- `createPickup()`: POST `/api/v2/pickups`. Throws `BostaPickupAlreadyExistsException` (1078/2024–2027) or `BostaPickupDateException` (1080/1081/1083/2022).
+
+**`BostaAwbService`**:
+- Pre-filter: `NON_PRINTABLE_STATES` (delivered, returned, returning, lost, terminated, cancelled), `NON_PRINTABLE_TYPES` (CRP, CASH_COLLECTION). Excluded → `awb_print_failed_reason` written → exceptions center picks them up.
+- Batch into ≤50 chunks, call Bosta per chunk. Returns `AwbBatchResult{pdfBase64List, emailMessage, exceptions}`.
+- Format and lang default from `courier_accounts.awb_format/awb_lang` (overridable per request).
+
+**`BostaPickupService`**:
+- Pre-validates: past date → 400; Friday → 400 (Bosta error 1080 pre-empted). Loads orders in `awaiting_pickup` status.
+- `BOSTA_MANAGED`: skips Bosta API, generates manifest. `TRACED_MANAGED`: calls `createPickup()`, `BostaPickupAlreadyExistsException` → non-error message, `BostaPickupDateException` → 400. Both modes insert `pickups` + `pickup_shipments`.
+- Returns `PickupManifest{pickupId, scheduledDate, mode, providerPickupId, alreadyExistsMessage, shipments, totalCod, parcelCount}`.
+
+**`ExceptionService`** — `detectMissingAwb()` added: `shipments WHERE awb_print_failed_reason IS NOT NULL`, suppressed by `exception_resolutions`. Enriched with `retry_awb_print` action.
+
+**New endpoints (BostaController)**:
+- `PUT /api/v1/bosta/settings` — update pickup_mode, locationId, contactPerson, awbFormat, awbLang.
+- `POST /api/v1/bosta/awb/print` — `{shipmentIds, format?, lang?}` → `AwbBatchResult`.
+- `POST /api/v1/bosta/pickup/schedule` — `{scheduledDate}` → `PickupManifest`.
+- `GET /api/v1/bosta/pickup/manifest/{pickupId}` → `PickupManifest`.
+
+*Key decision — awaiting_pickup is order_status not shipment_internal_state:*
+- Shipments remain in `created` internal state until Bosta state 21 fires.
+- Pickup query: `o.status = 'awaiting_pickup'::order_status`.
+- Non-printable state check: `delivered, returned, returning, lost, terminated, cancelled` (all shipment_internal_state values).
+
+*Already-exists (1078/2024–2027) is non-error:* merchant has both Bosta auto-pickup and TRACED_MANAGED enabled. Surface message, keep manifest, don't crash.
+
+*Live smoke test (manual):*
+1. Start app with pilot Bosta API key
+2. `PUT /api/v1/bosta/settings {"awbFormat":"A4","awbLang":"ar"}`
+3. Find a Mode-B shipment in `created` state (order in `awaiting_pickup`) → note its `id`
+4. `POST /api/v1/bosta/awb/print {"shipmentIds":["<id>"]}`
+5. Expect: `pdfBase64List[0]` → decode → valid PDF
+
+*Test changes:*
+- `AwbPickupTest` — 12 new integration tests.
+- `MigrationSmokeTest` — count 19→20.
+- 210/210 tests pass. Zero regressions.
+
+---
+
 **198/198 green — Mode-B phone+COD fallback hardened** — 2026-06-21.
 
 V19 migration applied. `matchByPhoneAndCod()` rewritten: COD flat scalar, ambiguity decision table, partial unique index race guard, phone canonicalization, reason codes. 13 new tests in `ModeBMatcherTest`. All 185 pre-existing tests still pass.

@@ -2,18 +2,23 @@ package com.traceability.integrations.bosta;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import io.github.resilience4j.retry.Retry;
 import io.github.resilience4j.retry.RetryConfig;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatusCode;
+import org.springframework.http.MediaType;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.ResourceAccessException;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientResponseException;
 
 import java.time.Duration;
+import java.util.Base64;
+import java.util.List;
+import java.util.Map;
 
 /**
  * Bosta Admin API client.
@@ -116,6 +121,137 @@ class BostaHttpGateway implements BostaGateway {
                 throw new BostaTransientException("Bosta 5xx fetching delivery " + trackingNumber, e);
             }
             throw new BostaException("Bosta API error (" + e.getStatusCode() + "): " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * POST /api/v2/deliveries/mass-awb
+     * Payload: {trackingNumbers: "comma,separated", requestedAwbType: A4|A6, lang: ar|en}
+     *
+     * Inline response shape: {"success":true,"data":{"pdf":"<base64>"}}
+     * Email path shape: {"success":true,"message":"AWB has been exported to your email"}
+     */
+    @Override
+    public AwbPrintResult printMassAwb(String apiKey, List<String> trackingNumbers,
+                                        String awbFormat, String lang) {
+        String url = baseUrl + "/api/" + apiVersion + "/deliveries/mass-awb";
+        Map<String, String> body = Map.of(
+            "trackingNumbers",  String.join(",", trackingNumbers),
+            "requestedAwbType", awbFormat,
+            "lang",             lang
+        );
+        try {
+            JsonNode resp = Retry.decorateSupplier(retry, () ->
+                restClient.post()
+                    .uri(url)
+                    .header("Authorization", apiKey)
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .body(body)
+                    .retrieve()
+                    .body(JsonNode.class)
+            ).get();
+
+            if (resp == null) throw new BostaException("Empty mass-awb response");
+
+            JsonNode dataNode = resp.path("data");
+            if (!dataNode.isMissingNode() && !dataNode.isNull()) {
+                String pdfBase64 = dataNode.path("pdf").asText(null);
+                if (pdfBase64 != null && !pdfBase64.isBlank()) {
+                    return new AwbPrintResult(Base64.getDecoder().decode(pdfBase64), null);
+                }
+            }
+
+            // Bosta returned without a PDF — email-path or unexpected shape
+            String msg = resp.path("message").asText(
+                dataNode.isMissingNode() ? "AWB exported to email" : dataNode.path("message").asText("AWB exported to email"));
+            log.info("mass-awb email-path response for {} trackings: {}", trackingNumbers.size(), msg);
+            return new AwbPrintResult(null, msg);
+
+        } catch (ResourceAccessException e) {
+            throw new BostaTransientException("Network error on mass-awb", e);
+        } catch (RestClientResponseException e) {
+            if (e.getStatusCode().is5xxServerError()) {
+                throw new BostaTransientException("Bosta 5xx on mass-awb", e);
+            }
+            throw new BostaException("Bosta mass-awb error (" + e.getStatusCode() + "): " +
+                e.getResponseBodyAsString(), e);
+        }
+    }
+
+    /**
+     * POST /api/v2/pickups
+     * Payload: {scheduledDate, businessLocationId, contactPerson, numberOfParcels, packageType:"Normal"}
+     *
+     * Success response: {"success":true,"data":{"_id":"BOSTA_PICKUP_ID",...}}
+     * Error response: {"success":false,"code":1078,"message":"..."}
+     */
+    @Override
+    public String createPickup(String apiKey, String scheduledDate, String businessLocationId,
+                                JsonNode contactPerson, int numberOfParcels) {
+        String url = baseUrl + "/api/" + apiVersion + "/pickups";
+
+        ObjectNode body = mapper.createObjectNode();
+        body.put("scheduledDate", scheduledDate);
+        body.put("businessLocationId", businessLocationId);
+        if (contactPerson != null && !contactPerson.isNull()) {
+            body.set("contactPerson", contactPerson);
+        }
+        body.put("numberOfParcels", numberOfParcels);
+        body.put("packageType", "Normal");
+
+        try {
+            JsonNode resp = restClient.post()
+                .uri(url)
+                .header("Authorization", apiKey)
+                .contentType(MediaType.APPLICATION_JSON)
+                .body(body)
+                .retrieve()
+                .onStatus(HttpStatusCode::is4xxClientError, (req, respObj) -> {
+                    // suppress to handle error body manually
+                })
+                .body(JsonNode.class);
+
+            if (resp == null) throw new BostaException("Empty createPickup response");
+
+            // Check for error code in a 200 success-false body (Bosta sometimes does this)
+            if (!resp.path("success").asBoolean(true)) {
+                handlePickupErrorBody(resp);
+            }
+
+            String pickupId = resp.path("data").path("_id").asText(null);
+            if (pickupId == null || pickupId.isBlank()) {
+                throw new BostaException("No pickup _id in createPickup response: " + resp);
+            }
+            return pickupId;
+
+        } catch (BostaException e) {
+            throw e; // already typed — rethrow as-is
+        } catch (ResourceAccessException e) {
+            throw new BostaTransientException("Network error on createPickup", e);
+        } catch (RestClientResponseException e) {
+            if (e.getStatusCode().is5xxServerError()) {
+                throw new BostaTransientException("Bosta 5xx on createPickup", e);
+            }
+            // Parse error body for Bosta-specific error codes
+            try {
+                JsonNode err = mapper.readTree(e.getResponseBodyAsString());
+                handlePickupErrorBody(err);
+            } catch (BostaException be) {
+                throw be;
+            } catch (Exception ignored) { /* fall through */ }
+            throw new BostaException("Bosta createPickup error (" + e.getStatusCode() + "): " +
+                e.getResponseBodyAsString(), e);
+        }
+    }
+
+    private void handlePickupErrorBody(JsonNode err) {
+        int code    = err.path("code").asInt(-1);
+        String msg  = err.path("message").asText("Unknown Bosta pickup error");
+        if (code == 1078 || (code >= 2024 && code <= 2027)) {
+            throw new BostaPickupAlreadyExistsException(code, msg);
+        }
+        if (code == 1080 || code == 1081 || code == 1083 || code == 2022) {
+            throw new BostaPickupDateException(code, msg);
         }
     }
 }

@@ -65,6 +65,7 @@ public class ExceptionService {
         all.addAll(detectDeliveryLimbo(tenantId));
         all.addAll(detectNdr(tenantId));
         all.addAll(detectGuidedUnpack(tenantId));
+        all.addAll(detectMissingAwb(tenantId));
 
         // Enrich with descriptions and action hints
         all.forEach(this::enrich);
@@ -327,6 +328,27 @@ public class ExceptionService {
             tid);
     }
 
+    private List<Map<String, Object>> detectMissingAwb(UUID tid) {
+        return jdbc.queryForList(
+            "SELECT 'missing_awb' AS type, 'MEDIUM' AS severity, 'shipment' AS subject_type, " +
+            "       s.id AS shipment_id, s.tracking_number, " +
+            "       s.awb_print_failed_reason AS failed_reason, " +
+            "       s.awb_print_failed_at AS occurred_at, " +
+            "       o.id AS order_id, o.number AS order_number, " +
+            "       'missing_awb:shipment:' || s.id AS subject_key " +
+            "FROM shipments s " +
+            "JOIN orders o ON o.id = s.order_id AND o.tenant_id = ? " +
+            "WHERE s.awb_print_failed_reason IS NOT NULL " +
+            "  AND s.tenant_id = ? " +
+            "  AND NOT EXISTS ( " +
+            "      SELECT 1 FROM exception_resolutions er " +
+            "      WHERE er.tenant_id = s.tenant_id " +
+            "        AND er.exception_type = 'missing_awb' " +
+            "        AND er.subject_key = 'missing_awb:shipment:' || s.id " +
+            "        AND er.resolved_at > COALESCE(s.awb_print_failed_at, s.created_at)) ",
+            tid, tid);
+    }
+
     // ── Enrichment ────────────────────────────────────────────────────────────
 
     private void enrich(Map<String, Object> item) {
@@ -401,6 +423,14 @@ public class ExceptionService {
                 item.put("suggestedAction", "unpack_pieces");
                 Object oid = item.get("order_id");
                 item.put("actionUrl", oid != null ? "/fulfill/" + oid : "/fulfill");
+            }
+            case "missing_awb" -> {
+                String t = str(item, "tracking_number");
+                String r = str(item, "failed_reason");
+                item.put("descriptionEn", "AWB could not be printed for shipment " + t + ": " + r);
+                item.put("descriptionAr", "تعذّر طباعة بوليصة الشحن للشحنة " + t + ": " + r);
+                item.put("suggestedAction", "retry_awb_print");
+                item.put("actionUrl", "/shipments/" + item.get("shipment_id"));
             }
         }
     }

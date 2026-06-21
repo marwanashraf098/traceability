@@ -37,7 +37,7 @@ One line per requirement · [M] Must / [S] Should / [C] Could · use as the buil
 - [ ] 4.5 [M] Per-tenant mode: A / B / Hybrid
 - [ ] 4.6 [M] Delivery cancellation via API where state allows; else exception with instructions
 - [x] 4.7 [M] Status sync: webhook (secret header, verify-by-fetch, no HMAC exists) + 15–30 min polling; (state, type)-keyed mapping; numberOfAttempts stored; trackingNumber as string; unknown codes → exception+alert [Day 6 — webhook→ledger wiring complete; polling not yet built]
-- [ ] 4.8 [M] Pickup creation (see FR-10)
+- [x] 4.8 [M] Pickup creation (see FR-10) [Day 24: TRACED_MANAGED calls Bosta createPickup; BOSTA_MANAGED skips it; both generate manifest]
 - [ ] 4.9 [M] All Bosta failures: retry w/ backoff → plain-language AR/EN exception, never raw errors
 
 ## FR-5 Catalog
@@ -85,7 +85,7 @@ One line per requirement · [M] Must / [S] Should / [C] Could · use as the buil
 - [ ] 9.2 [M] Pack re-scan: scanned set ≡ allocated set, blocking mismatch error
 - [x] 9.3 [M] Confirm → Mode B prompt AWB scan (Mode A delivery creation deferred post-launch); COD cap pre-validated
 - [x] 9.4 [M] Pieces Reserved→Packed + events; allocations packed
-- [ ] 9.5 [M] AWB auto-print; fetch failure → Packed + missing-AWB exception + retry (never silent loss)
+- [x] 9.5 [M] AWB auto-print; fetch failure → Packed + missing-AWB exception + retry (never silent loss) [Day 24: mass-awb endpoint, printable-state filter, missing-AWB exception wired to ExceptionService]
 - [x] 9.6 [M] AWB verification scan binds piece↔order↔tracking; mismatch rejected loudly ([S] optional toggle, default mandatory)
 - [x] 9.7 [M] After verification → Awaiting Pickup
 - [x] 9.8 [M] Guided unpack (cancel post-pack): cancel_requested_at set → worker unpack per piece (unpacked event, PACKED→AVAILABLE) → all clear → order Cancelled; no partial completion
@@ -96,8 +96,8 @@ One line per requirement · [M] Must / [S] Should / [C] Could · use as the buil
 - [ ] 9.13 [S] Self-pickup no-show (7d) → exception: re-ship fresh AWB or cancel
 
 ## FR-10 Pickup
-- [ ] 10.1 [M] Batch pickup creation: select Awaiting Pickup orders, date, location → Bosta pickup
-- [ ] 10.2 [M] Printable manifest: order/AWB/COD per parcel + batch COD total
+- [x] 10.1 [M] Batch pickup creation: select Awaiting Pickup orders, date, location → Bosta pickup [Day 24: BOSTA_MANAGED + TRACED_MANAGED, date validation, already-exists handling]
+- [x] 10.2 [M] Printable manifest: order/AWB/COD per parcel + batch COD total [Day 24: manifest generated for both modes, total_cod_amount cached on pickups]
 - [ ] 10.3 [M] State 21 (picked up from business) → With Courier + handed_to_courier event; manual fallback (attributed)
 - [ ] 10.4 [S] Skipped parcels (no collection by EOD+1) → exception
 
