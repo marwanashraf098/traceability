@@ -4,12 +4,57 @@
 
 ## Current state
 
-**F1 fixed + F2 fixed — pending live re-verify** — 2026-06-20.
-- F1 (JobRunr tables): Fixed via V18 Flyway migration. `JobRunrConfig.java` creates `PostgresStorageProvider(ownerDs)`; V18 creates all JobRunr tables + pre-populates `jobrunr_migrations` so `DatabaseCreator` finds all 15 scripts applied and does nothing. Background job server enabled (`background-job-server.enabled: true` in yml).
-- F2 (expiring tokens): Fixed in commit `7262332`. `ShopifyTokenProvider` is the single choke point; `exchangeCode()` sends `expiring=1` and stores both token+refresh+expiries.
-- **185/185 tests pass.**
+**198/198 green — Mode-B phone+COD fallback hardened** — 2026-06-21.
 
-**Next: combined live re-verify (Phase 4 — browser clicks required)**
+V19 migration applied. `matchByPhoneAndCod()` rewritten: COD flat scalar, ambiguity decision table, partial unique index race guard, phone canonicalization, reason codes. 13 new tests in `ModeBMatcherTest`. All 185 pre-existing tests still pass.
+
+**Next: live reinstall on real Shopify store (browser required)** — same checklist as before (see "Next" below).
+
+---
+
+**Day 23 — Mode-B matcher fix (FR-4.4 / matchByPhoneAndCod):**
+
+*What changed:*
+
+**V19 migration** (`V19__mode_b_match_fix.sql`):
+- `ALTER TABLE unlinked_bosta_deliveries ADD COLUMN match_reason text` — records WHY a delivery was unlinked (NO_MATCH / AMBIGUOUS_MULTI / COD_ONLY_AMBIGUOUS). NULL on pre-V19 rows.
+- `CREATE UNIQUE INDEX ux_active_shipment_per_order ON shipments (order_id) WHERE internal_state NOT IN ('terminated','cancelled')` — closes the concurrent-double-link race: the losing INSERT fails with 23505 and is routed to unlinked. Gating question answer: NO, an order cannot legitimately have two simultaneously-active shipments. The only valid multi-shipment case is after Bosta terminates/cancels the first delivery (codes 48/49/104); the partial predicate permits that re-ship.
+- Functional index `orders_customer_phone_canonical` on `'0' || RIGHT(REGEXP_REPLACE(customer_phone, '[^0-9]', '', 'g'), 10)` — empty today (all phones NULL pre-PCD) but makes the phone+COD query index-seekable the moment PCD approval lands. No query change needed when PCD lands.
+
+**`ShipmentLinkService`** — `matchByPhoneAndCod()` fully rewritten:
+- COD bug fixed: reads `raw.path("cod")` (flat scalar) not `raw.path("cod").path("amount")`.
+- COD = 0 (prepaid) treated as valid match value; only absent/JSON-null triggers the "missing" path.
+- `normalizePhone()` extended: handles `+20…`, `0020…`, `0…`, `1XXXXXXXXX` (missing leading zero), and forms with spaces — all → `01XXXXXXXXX`.
+- Phone absent on Bosta side → `COD_ONLY_AMBIGUOUS` immediately (no query).
+- Candidate query: at-query-time canonicalization of `customer_phone` (`'0'||RIGHT(REGEXP_REPLACE(...))`), exact COD match, non-terminal status filter (added `delivered`), `NOT EXISTS (active shipment)`.
+- Decision: 0 → `NO_MATCH`; 1 → auto-link; >1 → `AMBIGUOUS_MULTI`.
+- `DuplicateKeyException` from `ux_active_shipment_per_order` → `NO_MATCH` (race loser).
+- `LinkResult` record replaces `UUID` return type (carries `orderId` + `unlinkedReason`).
+- `linkByAwbScan()` + `manualLink()` also catch `DuplicateKeyException` → 409.
+
+**`BostaWebhookJob`** — `recordUnlinked()` gains `matchReason` parameter; call site updated.
+
+*Decisions:*
+- Partial unique index over `SELECT FOR UPDATE` — no held connections, no transaction restructuring.
+- `NOT EXISTS` in candidate query: secondary guard + semantic correctness (don't double-link in-flight orders).
+- Phone canonicalized at match time (SQL expression) → storage format of `customer_phone` can't break it.
+- Pre-PCD behavior: all `customer_phone` NULL → 0 candidates → all fallback deliveries → `NO_MATCH` → unlinked for manual resolution. Safe and expected.
+
+*Test changes:*
+- `ModeBMatcherTest` — 13 new integration tests covering the full matrix.
+- `MigrationSmokeTest` — count 18 → 19.
+- 198/198 tests pass. Zero regressions.
+
+---
+
+**F1 live-cleared + F2 live-cleared + 185/185 green — OAuth Phase 1 complete** — 2026-06-20.
+
+Phase 4 live re-verify done against docker-compose postgres (localhost:5432):
+- **F1 cleared:** V18 applied, `BackgroundJobServer started successfully using PostgresStorageProvider`, `shopify-state-cleanup` recurring job registered in `jobrunr_recurring_jobs`.
+- **F2 cleared:** `stores.access_token_expires_at` column live, `access_token_expires_at IS NOT NULL AND > now()` = true for stores created via the FR-3 path (876000-hour far-future expiry for DEV-ONLY connect; real OAuth callback stores actual Shopify expiry).
+- **185/185 tests pass.** Zero regressions.
+
+**Next: live reinstall on real Shopify store (browser required)**
 1. Start tunnel: `ngrok http 8080` + set `SHOPIFY_REDIRECT_URI`, `SHOPIFY_WEBHOOK_BASE_URL`, `SHOPIFY_APP_URL` env vars to ngrok URL
 2. Start app: `mvn spring-boot:run`
 3. **[You]** Uninstall app from `traceability-dev.myshopify.com`, then reinstall (forces fresh token exchange)
@@ -86,6 +131,30 @@
 *Decisions:*
 - `JobRunrConfig.java` uses `new PostgresStorageProvider(ownerDs)` with default `DatabaseOptions.CREATE` — this is correct; it checks `jobrunr_migrations` and finds all scripts applied, so it's effectively a no-op after V18 runs.
 - Owner pool size 2 is acceptable: JobRunr metadata operations (heartbeat, job state transitions) hold connections for ~1 ms each. The actual job body (`ShopifyImportJob.run()`) uses the `@Primary` app_user pool (size 5), not the owner pool.
+
+---
+
+**Day 22 — F1+F2 live re-verify + JobRunrConfig NPE fix (2026-06-20):**
+
+*Problem:* After V18 was applied successfully (`Successfully applied 18 migrations`), app crashed with:
+```
+Error creating bean with name 'shopifyStateCleanupJob'
+Caused by: NPE at RecurringJobTable.<init>(RecurringJobTable.java:24)
+```
+Root cause: `RecurringJobPostProcessor` is a `BeanPostProcessor` that fires `saveRecurringJob()` per-bean during context init, potentially BEFORE `BackgroundJobServer` creation (which normally calls `storageProvider.setJobMapper(jobMapper)`). This left `jobMapper = null` on the `StorageProvider` at the time `RecurringJobTable` was first constructed — `Objects.requireNonNull(jobMapper)` threw.
+
+*Fix:* In `JobRunrConfig.storageProvider()`, call `provider.setJobMapper(new JobMapper(new JacksonJsonMapper()))` directly in the `@Bean` factory method. This guarantees the mapper is set before any `@Recurring` bean triggers the post-processor.
+
+*Gotcha:* `JacksonJsonMapper(objectMapper)` (with Spring's shared `ObjectMapper`) BREAKS Spring MVC — `JacksonJsonMapper` calls `objectMapper.activateDefaultTyping()` which adds `@class` type ids to all serialized output, causing `JSON parse error: missing type id property '@class'` for normal REST responses. Must use `new JacksonJsonMapper()` (no-arg) which creates its own isolated `ObjectMapper`.
+
+*Live re-verify results (2026-06-20, docker-compose postgres):*
+- V18: `Successfully validated 18 migrations. Schema "public" is up to date.`
+- F1: `BackgroundJobServer started successfully using PostgresStorageProvider and 128 BackgroundJobPerformers`
+- F1: `shopify-state-cleanup` registered in `jobrunr_recurring_jobs`
+- F2: `stores.access_token_expires_at` column present; stores created via FR-3 path show `token_is_fresh = t`, expiry ~100 years out
+- App: `Started TraceabilityApplication in 1.19 seconds`
+
+*Commit:* `c257f25` — fix: JobRunrConfig — set jobMapper before RecurringJobPostProcessor fires
 
 ---
 

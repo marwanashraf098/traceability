@@ -187,10 +187,10 @@ public class BostaWebhookJob {
 
             if (shipment == null) {
                 // 8.5 — Try to auto-match by businessReference / phone+COD (Mode B linking).
-                UUID matchedOrderId = shipmentLinkService.tryMatchDelivery(
+                ShipmentLinkService.LinkResult linkResult = shipmentLinkService.tryMatchDelivery(
                     tenantId, trackingNumber, delivery, mapped);
 
-                if (matchedOrderId != null) {
+                if (linkResult.orderId() != null) {
                     // Successfully matched — re-fetch shipment for steps 9–10.
                     shipment = tx.execute(s -> jdbc.query(
                         "SELECT id, order_id FROM shipments WHERE tracking_number = ? AND tenant_id = ?",
@@ -199,9 +199,10 @@ public class BostaWebhookJob {
                             rs.getObject("order_id", UUID.class)) : null,
                         trackingNumber, tenantId));
                 } else {
-                    log.info("Webhook {}: tracking {} unmatched — recording as unlinked",
-                        webhookEventId, trackingNumber);
-                    recordUnlinked(tenantId, trackingNumber, delivery, webhookEventId);
+                    log.info("Webhook {}: tracking {} unmatched ({}) — recording as unlinked",
+                        webhookEventId, trackingNumber, linkResult.unlinkedReason());
+                    recordUnlinked(tenantId, trackingNumber, delivery, webhookEventId,
+                                   linkResult.unlinkedReason());
                     markProcessed(webhookEventId, idemKey, "unlinked: " + trackingNumber);
                     return;
                 }
@@ -320,17 +321,17 @@ public class BostaWebhookJob {
     // ---- helpers -----------------------------------------------------------
 
     private void recordUnlinked(UUID tenantId, String trackingNumber,
-                                 BostaDelivery delivery, long webhookEventId) {
+                                 BostaDelivery delivery, long webhookEventId, String matchReason) {
         tx.execute(s -> {
             jdbc.update("""
                 INSERT INTO unlinked_bosta_deliveries
                     (tenant_id, tracking_number, business_reference,
-                     bosta_state_code, bosta_order_type, raw, webhook_event_id)
-                VALUES (?, ?, ?, ?, ?, ?::jsonb, ?)
+                     bosta_state_code, bosta_order_type, raw, webhook_event_id, match_reason)
+                VALUES (?, ?, ?, ?, ?, ?::jsonb, ?, ?)
                 """,
                 tenantId, trackingNumber, delivery.businessReference(),
                 delivery.stateCode(), delivery.type(), delivery.raw().toString(),
-                webhookEventId);
+                webhookEventId, matchReason);
             return null;
         });
     }

@@ -6,6 +6,7 @@ import com.traceability.integrations.bosta.BostaStateMapper;
 import com.traceability.tenancy.TenantContext;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
@@ -38,6 +39,11 @@ public class ShipmentLinkService {
 
     private static final Logger log = LoggerFactory.getLogger(ShipmentLinkService.class);
 
+    // Reason codes written to unlinked_bosta_deliveries.match_reason (V19).
+    public static final String REASON_NO_MATCH        = "NO_MATCH";
+    public static final String REASON_AMBIGUOUS_MULTI = "AMBIGUOUS_MULTI";
+    public static final String REASON_COD_ONLY        = "COD_ONLY_AMBIGUOUS";
+
     private final JdbcTemplate     jdbc;
     private final InventoryLedger  ledger;
     private final BostaStateMapper stateMapper;
@@ -49,6 +55,13 @@ public class ShipmentLinkService {
         this.ledger      = ledger;
         this.stateMapper = stateMapper;
     }
+
+    /**
+     * Result returned by tryMatchDelivery().
+     * orderId != null → successfully linked.
+     * orderId == null → unlinkedReason carries the match_reason for unlinked_bosta_deliveries.
+     */
+    public record LinkResult(UUID orderId, String unlinkedReason) {}
 
     // ── AWB scan at pack (FR-9.6) ─────────────────────────────────────────────
 
@@ -76,12 +89,18 @@ public class ShipmentLinkService {
 
         // 3. Create shipment if not already present
         if (shipmentId == null) {
-            shipmentId = UUID.randomUUID();
-            jdbc.update(
-                "INSERT INTO shipments " +
-                "(id, tenant_id, order_id, provider, tracking_number, internal_state) " +
-                "VALUES (?, ?, ?, 'bosta', ?, 'created')",
-                shipmentId, tenantId, orderId, trackingNumber);
+            try {
+                shipmentId = UUID.randomUUID();
+                jdbc.update(
+                    "INSERT INTO shipments " +
+                    "(id, tenant_id, order_id, provider, tracking_number, internal_state) " +
+                    "VALUES (?, ?, ?, 'bosta', ?, 'created')",
+                    shipmentId, tenantId, orderId, trackingNumber);
+            } catch (DuplicateKeyException e) {
+                // ux_active_shipment_per_order: order already has an active shipment.
+                throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "Order already has an active shipment — resolve it before linking a new AWB");
+            }
         }
 
         // 4. Transition packed pieces → awaiting_pickup (writes tracking_linked events)
@@ -111,28 +130,41 @@ public class ShipmentLinkService {
     /**
      * Tries to match a Bosta delivery to an order.
      * Called by BostaWebhookJob before recordUnlinked().
-     * Returns the matched orderId, or null if unresolvable.
+     * Returns a LinkResult: orderId != null means linked; null means flagged for unlinked
+     * with the reason in unlinkedReason.
      *
      * Not annotated @Transactional — BostaWebhookJob runs its own TransactionTemplate
      * blocks; individual writes inside this method go through ledger.transition()
      * (which is @Transactional) and the direct jdbc.update() calls which each
      * auto-commit in the absence of an outer transaction.
      */
-    public UUID tryMatchDelivery(UUID tenantId, String trackingNumber,
-                                  BostaDelivery delivery, BostaStateMapper.MappedState mapped) {
+    public LinkResult tryMatchDelivery(UUID tenantId, String trackingNumber,
+                                        BostaDelivery delivery, BostaStateMapper.MappedState mapped) {
         // Step 1 — businessReference → order number or external_id
         UUID orderId = matchByBusinessReference(tenantId, delivery.businessReference());
 
         // Step 2 — phone + COD fallback
+        String unlinkedReason = null;
         if (orderId == null) {
-            orderId = matchByPhoneAndCod(tenantId, delivery);
+            MatchResult m = matchByPhoneAndCod(tenantId, delivery);
+            orderId       = m.orderId();
+            unlinkedReason = m.reason();
         }
 
-        if (orderId == null) return null;
+        if (orderId == null) return new LinkResult(null, unlinkedReason);
 
         // Step 3 — create/find shipment and link
-        UUID shipmentId = createOrFindShipment(
-            tenantId, orderId, trackingNumber, mapped.shipmentInternalState(), delivery);
+        UUID shipmentId;
+        try {
+            shipmentId = createOrFindShipment(
+                tenantId, orderId, trackingNumber, mapped.shipmentInternalState(), delivery);
+        } catch (DuplicateKeyException e) {
+            // ux_active_shipment_per_order fired: another delivery already holds the active
+            // shipment slot for this order (concurrent double-link race). Route to unlinked.
+            log.warn("Active-shipment constraint prevented double-link for order {} tracking {}",
+                     orderId, trackingNumber);
+            return new LinkResult(null, REASON_NO_MATCH);
+        }
 
         transitionPackedPieces(orderId, shipmentId, tenantId, null);
 
@@ -143,7 +175,7 @@ public class ShipmentLinkService {
             orderId, tenantId);
 
         log.info("Auto-matched delivery {} to order {}", trackingNumber, orderId);
-        return orderId;
+        return new LinkResult(orderId, null);
     }
 
     // ── Manual link ───────────────────────────────────────────────────────────
@@ -173,8 +205,14 @@ public class ShipmentLinkService {
         // Swapped-AWB check applies to manual link too
         handleSwappedAwbCheck(trackingNumber, tenantId, orderId, null);
 
-        UUID shipmentId = createOrFindShipment(
-            tenantId, orderId, trackingNumber, mapped.shipmentInternalState(), null);
+        UUID shipmentId;
+        try {
+            shipmentId = createOrFindShipment(
+                tenantId, orderId, trackingNumber, mapped.shipmentInternalState(), null);
+        } catch (DuplicateKeyException e) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                "Order already has an active shipment — resolve it before manually linking");
+        }
 
         transitionPackedPieces(orderId, shipmentId, tenantId, actorUserId);
 
@@ -194,7 +232,7 @@ public class ShipmentLinkService {
         UUID tenantId = TenantContext.require();
         return jdbc.queryForList(
             "SELECT id, tracking_number, business_reference, bosta_state_code, " +
-            "       bosta_order_type, first_seen_at, last_seen_at " +
+            "       bosta_order_type, match_reason, first_seen_at, last_seen_at " +
             "FROM unlinked_bosta_deliveries " +
             "WHERE tenant_id = ? AND resolved = false " +
             "ORDER BY first_seen_at DESC LIMIT ? OFFSET ?",
@@ -309,37 +347,108 @@ public class ShipmentLinkService {
             tenantId, businessRef, stripped, hashed, businessRef);
     }
 
-    private UUID matchByPhoneAndCod(UUID tenantId, BostaDelivery delivery) {
-        if (delivery.raw() == null) return null;
+    /**
+     * Phone+COD fallback matcher.
+     *
+     * Phone normalization contract: both sides are canonicalized to 11-digit 01XXXXXXXXX form.
+     *   Bosta side: normalized in Java by normalizePhone() before the query.
+     *   Order side: normalized at query time via the SQL expression
+     *     '0' || RIGHT(REGEXP_REPLACE(customer_phone, '[^0-9]', '', 'g'), 10)
+     *   This means the storage format of orders.customer_phone cannot cause silent mismatches;
+     *   '+20XXXXXXXXXX', '00201XXXXXXXXX', '01XXXXXXXXX', and forms with spaces all canonicalize
+     *   identically. The functional index on this expression (V19) keeps the lookup fast once
+     *   PCD approval lands and customer_phone is populated.
+     *
+     * Pre-PCD state: all orders.customer_phone are NULL. The phone+COD query returns 0 rows
+     * for every delivery (NULL equality is always false), so all fallback deliveries route to
+     * unlinked_bosta_deliveries with reason NO_MATCH. This is safe and expected; the operator
+     * resolves manually. Once PCD is approved, the same code auto-links without change.
+     *
+     * COD = 0 (prepaid): treated as a valid match value, not "missing". Passing cod=0 to
+     * the query is correct. Note that prepaid orders currently store cod_amount=NULL
+     * (not 0) so a Bosta COD=0 will produce NO_MATCH in practice — acceptable because
+     * phone+COD together disambiguate once phones are populated, and a 0-amount match
+     * without phone confirmation would be too ambiguous anyway.
+     */
+    private MatchResult matchByPhoneAndCod(UUID tenantId, BostaDelivery delivery) {
+        if (delivery.raw() == null) return MatchResult.flagged(REASON_NO_MATCH);
         JsonNode raw = delivery.raw();
 
-        String rawPhone = raw.path("consignee").path("phone").asText(null);
-        String normalized = normalizePhone(rawPhone);
-        if (normalized == null) return null;
-
-        JsonNode codNode = raw.path("cod").path("amount");
-        if (codNode.isMissingNode() || codNode.isNull()) return null;
+        // COD: flat scalar at raw.cod (NOT nested raw.cod.amount).
+        // A present value of 0 is valid (prepaid order) — only absent or JSON-null is "missing".
+        JsonNode codNode = raw.path("cod");
+        if (codNode.isMissingNode() || codNode.isNull()) {
+            return MatchResult.flagged(REASON_NO_MATCH);
+        }
         BigDecimal cod;
         try { cod = new BigDecimal(codNode.asText()); }
-        catch (NumberFormatException e) { return null; }
+        catch (NumberFormatException e) { return MatchResult.flagged(REASON_NO_MATCH); }
 
-        return jdbc.query(
+        // Normalize Bosta phone. If absent or invalid → COD-only matching, which is too
+        // ambiguous to auto-link. Flag immediately without running a candidate query.
+        String rawPhone   = raw.path("consignee").path("phone").asText(null);
+        String bostaPhone = normalizePhone(rawPhone);
+        if (bostaPhone == null) {
+            return MatchResult.flagged(REASON_COD_ONLY);
+        }
+
+        // Candidate query: phone+COD+non-terminal+no-active-shipment.
+        // Terminal statuses: delivered, returned, lost, cancelled.
+        // NOT EXISTS sub-select excludes orders already linked to an active shipment,
+        // providing a secondary concurrency guard alongside the ux_active_shipment_per_order
+        // partial unique index (V19).
+        List<UUID> candidates = jdbc.query(
             "SELECT id FROM orders " +
             "WHERE tenant_id = ? " +
-            "  AND customer_phone ILIKE ? " +
+            "  AND '0' || RIGHT(REGEXP_REPLACE(customer_phone, '[^0-9]', '', 'g'), 10) = ? " +
             "  AND cod_amount = ? " +
-            "  AND status NOT IN ('cancelled','returned','lost') " +
-            "ORDER BY placed_at DESC LIMIT 1",
-            rs -> rs.next() ? rs.getObject("id", UUID.class) : null,
-            tenantId, "%" + normalized + "%", cod);
+            "  AND status NOT IN ('delivered','returned','lost','cancelled') " +
+            "  AND NOT EXISTS ( " +
+            "      SELECT 1 FROM shipments s " +
+            "      WHERE s.order_id  = orders.id " +
+            "        AND s.tenant_id = ? " +
+            "        AND s.internal_state NOT IN ('terminated','cancelled') " +
+            "  )",
+            (rs, i) -> rs.getObject("id", UUID.class),
+            tenantId, bostaPhone, cod, tenantId);
+
+        return switch (candidates.size()) {
+            case 0  -> MatchResult.flagged(REASON_NO_MATCH);
+            case 1  -> MatchResult.linked(candidates.get(0));
+            default -> MatchResult.flagged(REASON_AMBIGUOUS_MULTI);
+        };
     }
 
-    static String normalizePhone(String phone) {
+    /**
+     * Normalizes an Egyptian phone number to canonical 11-digit 01XXXXXXXXX form.
+     * Returns null for absent, malformed, or non-Egyptian numbers.
+     *
+     * Handles:
+     *   +201001234567   (E.164, 12 digits after stripping '+')
+     *   00201001234567  (IDD prefix, 14 digits)
+     *   201001234567    (country code without '+', 12 digits)
+     *   01001234567     (local, already canonical, 11 digits)
+     *   1001234567      (local without leading zero, 10 digits)
+     *   +20 100 123 4567 (E.164 with spaces)
+     */
+    public static String normalizePhone(String phone) {
         if (phone == null) return null;
         String digits = phone.replaceAll("[^0-9]", "");
-        // Strip Egyptian country code (20) → convert to local 0-prefixed format
-        if (digits.startsWith("20") && digits.length() == 12) digits = "0" + digits.substring(2);
+        if (digits.startsWith("0020") && digits.length() == 14) {
+            digits = "0" + digits.substring(4);   // 0020XXXXXXXXXX → 0XXXXXXXXXX
+        } else if (digits.startsWith("20") && digits.length() == 12) {
+            digits = "0" + digits.substring(2);   // 20XXXXXXXXXX → 0XXXXXXXXXX
+        } else if (digits.length() == 10) {
+            digits = "0" + digits;                // XXXXXXXXXX → 0XXXXXXXXXX (missing leading zero)
+        }
         if (digits.startsWith("01") && digits.length() == 11) return digits;
         return null;
+    }
+
+    // ---- private record for matchByPhoneAndCod result ----------------------
+
+    private record MatchResult(UUID orderId, String reason) {
+        static MatchResult linked(UUID id)        { return new MatchResult(id, null); }
+        static MatchResult flagged(String reason) { return new MatchResult(null, reason); }
     }
 }
