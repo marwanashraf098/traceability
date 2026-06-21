@@ -225,6 +225,13 @@ public class ShopifyWebhookProcessorJob {
                 log.debug("orders/cancelled for already-terminal orderId={}: {}", orderId, e.getMessage());
             }
         }
+
+        // FR-9.11: Remove from pickup manifest unconditionally — idempotent no-op if not on
+        // any manifest. For awaiting_pickup orders (which 409 out of cancelOrder() above),
+        // this is the only path that actually cleans the pickup_shipments row.
+        // Order status is intentionally NOT changed here — the operator resolves via the
+        // shopify_cancel_vs_inflight exception.
+        fulfillService.removeFromPickupManifest(orderId);
     }
 
     private void handleProductUpsert(UUID tenantId, String shopDomain, JsonNode payload) {

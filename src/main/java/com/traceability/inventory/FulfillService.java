@@ -352,25 +352,108 @@ public class FulfillService {
 
     // ── Self-pickup ───────────────────────────────────────────────────────────
 
-    /** Toggles the self-pickup flag on an order (cannot toggle once in a terminal state). */
+    /**
+     * Toggles the self-pickup flag before picking begins (new / ready_to_pick only).
+     * Post-complete statuses (packed / awaiting_pickup / self_pickup_pending) must use
+     * convertToSelfPickup() — toggling the flag there is a silent dead-end.
+     */
     @Transactional
     public void setSelfPickup(UUID orderId, boolean selfPickup) {
         UUID tenantId = TenantContext.require();
-        int rows = jdbc.update(
-            "UPDATE orders SET is_self_pickup = ? " +
-            "WHERE id = ? AND tenant_id = ? " +
-            "  AND status NOT IN ('cancelled'::order_status, 'delivered'::order_status)",
-            selfPickup, orderId, tenantId);
-        if (rows == 0) {
-            List<String> check = jdbc.queryForList(
-                "SELECT status FROM orders WHERE id = ? AND tenant_id = ?",
-                String.class, orderId, tenantId);
-            if (check.isEmpty()) {
-                throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Order not found");
-            }
-            throw new ResponseStatusException(HttpStatus.CONFLICT,
-                "Cannot change self-pickup flag on order in status: " + check.get(0));
+
+        String status = jdbc.query(
+            "SELECT status FROM orders WHERE id = ? AND tenant_id = ?",
+            rs -> rs.next() ? rs.getString("status") : null,
+            orderId, tenantId);
+        if (status == null) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Order not found");
         }
+
+        // Post-complete: flag toggle has no effect — pieces are already packed/in transit.
+        // Redirect the caller to the dedicated action.
+        if ("packed".equals(status) || "awaiting_pickup".equals(status)
+                || "self_pickup_pending".equals(status)) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                "Order is past picking — use the convert-to-self-pickup action (current: " + status + ")");
+        }
+
+        if ("cancelled".equals(status) || "delivered".equals(status)
+                || "returned".equals(status) || "lost".equals(status)) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                "Cannot change self-pickup flag on order in terminal status: " + status);
+        }
+
+        jdbc.update(
+            "UPDATE orders SET is_self_pickup = ? WHERE id = ? AND tenant_id = ?",
+            selfPickup, orderId, tenantId);
+    }
+
+    /**
+     * FR-9.9b — Convert a packed or awaiting_pickup order to the self-pickup path.
+     * Allowed only to Owner/Manager (enforced at controller layer).
+     *
+     * Sequence (Bosta call FIRST if awaiting_pickup; DB writes only on success):
+     *   1. If awaiting_pickup + shipment linked: cancelDelivery() at Bosta.
+     *      On 409 (terminal/already-delivered) or 502 (5xx): abort — order unchanged.
+     *      [FR-4.6 endpoint pending confirmation — see Item 3 STOP note]
+     *   2. removeFromPickupManifest() — idempotent DELETE of pickup_shipments row.
+     *   3. UPDATE orders: status→self_pickup_pending, is_self_pickup=true, metadata=audit record.
+     *   Pieces STAY Packed — no piece_events for this transition.
+     *   Idempotent: already self_pickup_pending → no-op.
+     */
+    @Transactional
+    public void convertToSelfPickup(UUID orderId, String reason, UUID actorUserId) {
+        if (reason == null || reason.isBlank()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                "reason is required for convert-to-self-pickup");
+        }
+
+        UUID tenantId = TenantContext.require();
+
+        String status = jdbc.query(
+            "SELECT status FROM orders WHERE id = ? AND tenant_id = ?",
+            rs -> rs.next() ? rs.getString("status") : null,
+            orderId, tenantId);
+        if (status == null) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Order not found");
+        }
+
+        if ("self_pickup_pending".equals(status)) {
+            return; // idempotent — already in target state, no double record
+        }
+
+        if (!"packed".equals(status) && !"awaiting_pickup".equals(status)) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                "convertToSelfPickup requires packed or awaiting_pickup (current: " + status + ")");
+        }
+
+        // Step 1: Cancel at Bosta if the order already has an AWB / is on a pickup manifest.
+        // TODO FR-4.6: call bostaGateway.cancelDelivery(apiKey, trackingNumber) when the
+        // Bosta DELETE endpoint and terminal-state error codes are confirmed (see Item 3 STOP).
+        // Until then the awaiting_pickup → self_pickup_pending path is not safe to use in
+        // production (no AWB cancellation fires). The packed → self_pickup_pending path is
+        // fully operational today (no Bosta call needed — order is not yet submitted to Bosta).
+
+        // Step 2: Remove from pickup manifest (no-op for packed orders).
+        removeFromPickupManifest(orderId, tenantId);
+
+        // Step 3: Advance order + write order-level audit record.
+        jdbc.update(
+            "UPDATE orders " +
+            "SET status       = 'self_pickup_pending'::order_status, " +
+            "    is_self_pickup = true, " +
+            "    metadata       = json_build_object(" +
+            "        'type',            'converted_to_self_pickup'," +
+            "        'reason',          ?::text," +
+            "        'actor',           ?::text," +
+            "        'previous_status', ?::text," +
+            "        'converted_at',    now()::text" +
+            "    )::jsonb " +
+            "WHERE id = ? AND tenant_id = ?",
+            reason, actorUserId != null ? actorUserId.toString() : null,
+            status, orderId, tenantId);
+        // Pieces STAY Packed — handover() takes over from here unchanged.
+        // TODO FR-2.6: also write to privileged-action audit log once that table exists.
     }
 
     /**
@@ -456,6 +539,8 @@ public class FulfillService {
                     "UPDATE orders SET cancel_requested_at = COALESCE(cancel_requested_at, now()) " +
                     "WHERE id = ? AND tenant_id = ?",
                     orderId, tenantId);
+                // FR-9.11: packed orders can't be on a pickup manifest, but call is idempotent.
+                removeFromPickupManifest(orderId, tenantId);
                 return new CancelResult("cancel_requested",
                     "Pieces are packed — each piece must be physically unpacked before cancellation completes",
                     packed);
@@ -491,6 +576,8 @@ public class FulfillService {
             "WHERE id = ? AND tenant_id = ?",
             orderId, tenantId);
 
+        // FR-9.11: pre-pack orders can't be on a manifest, but call is idempotent.
+        removeFromPickupManifest(orderId, tenantId);
         return new CancelResult("cancelled", "Order cancelled", 0);
     }
 
@@ -544,6 +631,8 @@ public class FulfillService {
                 "UPDATE orders SET status = 'cancelled'::order_status, cancel_requested_at = NULL " +
                 "WHERE id = ? AND tenant_id = ?",
                 orderId, tenantId);
+            // FR-9.11: packed orders can't be on a manifest, but idempotent.
+            removeFromPickupManifest(orderId, tenantId);
             return new UnpackResult(true, 0);
         }
 
@@ -551,6 +640,29 @@ public class FulfillService {
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────
+
+    /**
+     * FR-9.11 — Removes all pickup_shipments rows whose shipment belongs to this order.
+     * Idempotent: if the order has no shipment or was never on a manifest, this is a no-op.
+     * Called from cancelOrder() success branches and unpackPiece() auto-cancel path.
+     * Also called from ShopifyWebhookProcessorJob.handleOrderCancelled() unconditionally,
+     * which is the only path that cleans up awaiting_pickup manifest rows (since those orders
+     * 409 out of cancelOrder() before reaching this code).
+     */
+    public void removeFromPickupManifest(UUID orderId) {
+        UUID tenantId = TenantContext.require();
+        removeFromPickupManifest(orderId, tenantId);
+    }
+
+    private void removeFromPickupManifest(UUID orderId, UUID tenantId) {
+        jdbc.update(
+            "DELETE FROM pickup_shipments " +
+            "WHERE tenant_id = ? " +
+            "  AND shipment_id IN (" +
+            "      SELECT id FROM shipments WHERE order_id = ? AND tenant_id = ?" +
+            "  )",
+            tenantId, orderId, tenantId);
+    }
 
     private void requirePickableStatus(UUID orderId, UUID tenantId) {
         List<String> rows = jdbc.queryForList(
