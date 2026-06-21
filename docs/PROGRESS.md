@@ -49,9 +49,11 @@ The Bosta cancel endpoint verb/path and terminal-state error codes cannot be con
 
 *V22 also adds `orders.metadata jsonb` for the convert-to-self-pickup audit record.*
 
+*Post-commit audit fix (same day):* `convertToSelfPickup()` `awaiting_pickup` branch was NOT fail-closed — it proceeded past the TODO stub and set status to `self_pickup_pending` without cancelling the Bosta AWB. Fixed: explicit 409 thrown before any DB writes when `status == awaiting_pickup`. t8 updated to assert 409 + verify no DB side-effects (status unchanged, metadata null, manifest row kept). 231/231 green.
+
 *Open items:*
-- **FR-4.6 cancelDelivery()** — Bosta endpoint confirmation needed before `awaiting_pickup → self_pickup_pending` path is safe in production.
-- 9.9b awaiting_pickup path works end-to-end EXCEPT no AWB is cancelled at Bosta.
+- **FR-4.6 cancelDelivery()** — Bosta endpoint + terminal-state error codes must be confirmed before the `awaiting_pickup → self_pickup_pending` path can be wired. `shipments.provider_delivery_id` exists but is never written (always NULL). For Mode-B–matched shipments, the Bosta internal `_id` is at `shipments.raw->>'_id'`. AWB-scan–linked shipments have `raw = NULL` — no stored `_id`.
+- 9.9b `packed → self_pickup_pending` path is fully operational. `awaiting_pickup` path is blocked (409) until FR-4.6.
 
 ---
 

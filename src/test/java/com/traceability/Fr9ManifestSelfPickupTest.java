@@ -320,27 +320,26 @@ class Fr9ManifestSelfPickupTest {
 
         assertThat(pickupShipmentCount(pickupId)).isEqualTo(1);
 
-        // TODO: once FR-4.6 cancelDelivery is confirmed, this call will also cancel at Bosta.
-        // For now convertToSelfPickup from awaiting_pickup cleans the manifest and advances the order.
-        fulfillService.convertToSelfPickup(orderId, "Bosta unreachable, customer collecting", actorId);
+        // FR-4.6 not yet available — awaiting_pickup path must fail closed (no side effects).
+        assertThatThrownBy(() ->
+            fulfillService.convertToSelfPickup(orderId, "customer collecting", actorId))
+            .isInstanceOf(ResponseStatusException.class)
+            .satisfies(e -> assertThat(((ResponseStatusException) e).getStatusCode().value()).isEqualTo(409));
 
-        // Manifest row cleaned
-        assertThat(pickupShipmentCount(pickupId)).isZero();
-
+        // Order status unchanged
         String status = jdbc.queryForObject(
             "SELECT status FROM orders WHERE id = ? AND tenant_id = ?",
             String.class, orderId, tenantId);
-        assertThat(status).isEqualTo("self_pickup_pending");
+        assertThat(status).isEqualTo("awaiting_pickup");
 
-        Boolean isSelf = jdbc.queryForObject(
-            "SELECT is_self_pickup FROM orders WHERE id = ? AND tenant_id = ?",
-            Boolean.class, orderId, tenantId);
-        assertThat(isSelf).isTrue();
-
+        // No metadata audit row written
         String meta = jdbc.queryForObject(
             "SELECT metadata::text FROM orders WHERE id = ? AND tenant_id = ?",
             String.class, orderId, tenantId);
-        assertThat(meta).contains("awaiting_pickup");
+        assertThat(meta).isNull();
+
+        // Manifest row NOT removed
+        assertThat(pickupShipmentCount(pickupId)).isEqualTo(1);
     }
 
     @Test

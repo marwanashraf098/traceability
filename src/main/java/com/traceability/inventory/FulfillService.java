@@ -428,13 +428,16 @@ public class FulfillService {
         }
 
         // Step 1: Cancel at Bosta if the order already has an AWB / is on a pickup manifest.
-        // TODO FR-4.6: call bostaGateway.cancelDelivery(apiKey, trackingNumber) when the
-        // Bosta DELETE endpoint and terminal-state error codes are confirmed (see Item 3 STOP).
-        // Until then the awaiting_pickup → self_pickup_pending path is not safe to use in
-        // production (no AWB cancellation fires). The packed → self_pickup_pending path is
-        // fully operational today (no Bosta call needed — order is not yet submitted to Bosta).
+        // FR-4.6 not yet implemented — block the awaiting_pickup path until cancelDelivery()
+        // is wired. Proceeding without it would leave a live Bosta AWB on a self-pickup order.
+        if ("awaiting_pickup".equals(status)) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                "Self-pickup conversion after AWB link requires Bosta delivery cancellation " +
+                "(FR-4.6) — not yet available. Cancel the Bosta AWB manually first, " +
+                "then contact support to force the transition.");
+        }
 
-        // Step 2: Remove from pickup manifest (no-op for packed orders).
+        // Step 2: Remove from pickup manifest (no-op for packed orders — they can't be on one).
         removeFromPickupManifest(orderId, tenantId);
 
         // Step 3: Advance order + write order-level audit record.
