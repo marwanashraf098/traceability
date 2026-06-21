@@ -91,13 +91,13 @@ One line per requirement · [M] Must / [S] Should / [C] Could · use as the buil
 - [x] 9.8 [M] Guided unpack (cancel post-pack): cancel_requested_at set → worker unpack per piece (unpacked event, PACKED→AVAILABLE) → all clear → order Cancelled; no partial completion
 - [x] 9.9 [M] Pre-handover cancel: pre-pack → auto-release pieces (unreserved events, allocations released, order Cancelled); post-pack → guided unpack exception
 - [x] 9.10 [M] Self-pickup handover: handover event (packed→delivered), customer_pickup attributed to worker, metadata={"self_pickup":true} → order Delivered
-- [ ] 9.11 [M] Cancellation removes shipment from created pickup; manifest/COD total corrects
+- [x] 9.11 [M] Cancellation removes shipment from created pickup; manifest/COD total corrects [Day 26: removeFromPickupManifest() idempotent, hooked into cancelOrder/unpackPiece/handleOrderCancelled; COD derived live (V22 drops stored column)]
 - [x] 9.12 [M] Courier already collected (with_courier/awaiting_pickup/returning) → 409 cancellation blocked
 - [ ] 9.13 [S] Self-pickup no-show (7d) → exception: re-ship fresh AWB or cancel
 
 ## FR-10 Pickup
 - [x] 10.1 [M] Batch pickup creation: select Awaiting Pickup orders, date, location → Bosta pickup [Day 24: BOSTA_MANAGED + TRACED_MANAGED, date validation, already-exists handling]
-- [x] 10.2 [M] Printable manifest: order/AWB/COD per parcel + batch COD total [Day 24: manifest generated for both modes, total_cod_amount cached on pickups]
+- [x] 10.2 [M] Printable manifest: order/AWB/COD per parcel + batch COD total [Day 24: manifest generated for both modes; Day 26: COD total derived live, no stored column]
 - [ ] 10.3 [M] State 21 (picked up from business) → With Courier + handed_to_courier event; manual fallback (attributed)
 - [ ] 10.4 [S] Skipped parcels (no collection by EOD+1) → exception
 

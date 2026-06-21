@@ -97,7 +97,7 @@ public class FulfillController {
         return linkSvc.linkByAwbScan(orderId, req.trackingNumber().trim(), principal.userId());
     }
 
-    /** FR-9.10 — Toggle self-pickup flag (manual before or during picking). */
+    /** FR-9.10 — Toggle self-pickup flag (manual before picking; blocked post-complete). */
     @PatchMapping("/{orderId}/self-pickup")
     @PreAuthorize("isAuthenticated()")
     @org.springframework.web.bind.annotation.ResponseStatus(HttpStatus.NO_CONTENT)
@@ -105,6 +105,21 @@ public class FulfillController {
             @PathVariable UUID orderId,
             @RequestBody SelfPickupRequest req) {
         svc.setSelfPickup(orderId, req.selfPickup());
+    }
+
+    /**
+     * FR-9.9b — Convert a packed or awaiting-pickup order to the self-pickup path.
+     * Reason is mandatory. For awaiting_pickup orders, cancels at Bosta first
+     * (requires FR-4.6 cancelDelivery — see Item 3 STOP note in FR-9 build task).
+     */
+    @PostMapping("/{orderId}/convert-to-self-pickup")
+    @PreAuthorize("hasAnyRole('OWNER', 'MANAGER')")
+    @org.springframework.web.bind.annotation.ResponseStatus(HttpStatus.NO_CONTENT)
+    public void convertToSelfPickup(
+            @PathVariable UUID orderId,
+            @RequestBody ConvertToSelfPickupRequest req,
+            @AuthenticationPrincipal CustomUserDetails principal) {
+        svc.convertToSelfPickup(orderId, req.reason(), principal.userId());
     }
 
     /** FR-9.11 — Confirm customer collection at the counter (self-pickup handover). */
@@ -141,4 +156,5 @@ public class FulfillController {
     public record ScanRequest(String barcode) {}
     public record AwbLinkRequest(String trackingNumber) {}
     public record SelfPickupRequest(boolean selfPickup) {}
+    public record ConvertToSelfPickupRequest(String reason) {}
 }

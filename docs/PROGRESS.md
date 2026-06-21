@@ -4,11 +4,54 @@
 
 ## Current state
 
-**216/216 green — Exceptions center extended** — 2026-06-21.
+**231/231 green — FR-9 cancel/COD/self-pickup build** — 2026-06-21.
 
 V21 migration applied. `detectShopifyCancelVsInflight()` wired in ExceptionService (HIGH, `shopify_cancel_vs_inflight` type). Signal written in `ShopifyWebhookProcessorJob.handleOrderCancelled()` on 409 for in-flight orders. `stuck_shipment_days` default changed 3→5 (V21 UPDATE existing rows). 6 new tests in `ExceptionExtTest`. Day13Test `stuck_shipment_days` corrected to 5.
 
 **LIVE SMOKE TEST PENDING**: Call `POST /api/v1/bosta/awb/print` with a real pilot tracking number. Needs running app + pilot Bosta API key. Steps in Day 24 entry below.
+
+---
+
+**Day 26 — FR-9 manifest/COD/self-pickup build (V22)**
+
+*Items completed:*
+
+**Item 1 — Derive-on-read pickup COD (V22):**
+- `V22__fr9_cod_derive_self_pickup.sql`: `ALTER TABLE pickups DROP COLUMN total_cod_amount`.
+- `BostaPickupService.schedulePickup()`: removed `total_cod_amount` from INSERT (3-arg form).
+- `BostaPickupService.getManifest()`: removed stored column read; derives `totalCod` live from `lines.stream().reduce(...)` (already fetched from the same JOIN). Also fixed pre-existing NPE: `Map.of()` → `HashMap` for nullable `provider_pickup_id`.
+- Tests t1 (column gone, COD correct from live data) and t2 (COD updates after shipment removal) green.
+
+**Item 2 — removeFromPickupManifest() + 9.11 cancel cleanup:**
+- `FulfillService.removeFromPickupManifest(UUID orderId)` — public method. Deletes `pickup_shipments` rows for all shipments belonging to the order. Idempotent (0 rows → no-op, no error).
+- Private overload `removeFromPickupManifest(UUID orderId, UUID tenantId)` for internal callers.
+- Hooked into `cancelOrder()` 202 branch (guided-unpack) and pre-pack auto-release branch.
+- Hooked into `unpackPiece()` auto-cancel path (when last piece unpacked).
+- `ShopifyWebhookProcessorJob.handleOrderCancelled()` — unconditional call after try/catch. This is the ONLY path that cleans manifest rows for `awaiting_pickup` orders (since those 409 out of cancelOrder before reaching its cleanup).
+- Tests t3–t6 green.
+
+**Item 3 — FR-4.6 cancelDelivery() — STOPPED:**
+The Bosta cancel endpoint verb/path and terminal-state error codes cannot be confirmed from code alone. Most likely `DELETE /api/v2/deliveries/{trackingNumber}` but error shape for already-delivered/already-cancelled is unverified. Items 3 and the `awaiting_pickup` branch of item 4 remain pending endpoint confirmation.
+
+**Item 4 — convertToSelfPickup() (9.9b):**
+- `FulfillService.convertToSelfPickup(UUID orderId, String reason, UUID actorUserId)` — `@Transactional`.
+- Allowed from `packed` or `awaiting_pickup`; else 409. Already `self_pickup_pending` → no-op (idempotent).
+- Missing reason → 400.
+- Calls `removeFromPickupManifest()` then advances order to `self_pickup_pending`, `is_self_pickup=true`.
+- Writes audit record to `orders.metadata` via `json_build_object()` (type, reason, actor, previous_status, converted_at). No piece_events.
+- **Bosta cancelDelivery stub:** the `awaiting_pickup` path does NOT yet call Bosta (FR-4.6 pending). Comment in code marks the TODO. packed→self_pickup_pending path is fully operational.
+- `POST /api/v1/fulfill/{orderId}/convert-to-self-pickup` — Owner/Manager only; body `{"reason":"..."}`.
+- Tests t7–t11 green.
+
+**Item 5 — Guard setSelfPickup() dead-end:**
+- `setSelfPickup()` now explicitly reads status and rejects `packed`/`awaiting_pickup`/`self_pickup_pending` with 409 "use convert-to-self-pickup action". Terminal statuses also guarded. Only `new`/`ready_to_pick` accepted.
+- Tests t12–t15 green.
+
+*V22 also adds `orders.metadata jsonb` for the convert-to-self-pickup audit record.*
+
+*Open items:*
+- **FR-4.6 cancelDelivery()** — Bosta endpoint confirmation needed before `awaiting_pickup → self_pickup_pending` path is safe in production.
+- 9.9b awaiting_pickup path works end-to-end EXCEPT no AWB is cancelled at Bosta.
 
 ---
 
