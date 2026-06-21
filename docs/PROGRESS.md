@@ -4,11 +4,41 @@
 
 ## Current state
 
-**210/210 green — AWB print + pickup handling shipped** — 2026-06-21.
+**216/216 green — Exceptions center extended** — 2026-06-21.
 
-V20 migration applied. `BostaAwbService` (mass-awb, printable-state filter, missing-AWB exceptions), `BostaPickupService` (BOSTA_MANAGED/TRACED_MANAGED, manifest), `BostaController` (3 new endpoints + settings PUT), `ExceptionService.detectMissingAwb()`. 12 new tests in `AwbPickupTest`. All 198 pre-existing tests still pass.
+V21 migration applied. `detectShopifyCancelVsInflight()` wired in ExceptionService (HIGH, `shopify_cancel_vs_inflight` type). Signal written in `ShopifyWebhookProcessorJob.handleOrderCancelled()` on 409 for in-flight orders. `stuck_shipment_days` default changed 3→5 (V21 UPDATE existing rows). 6 new tests in `ExceptionExtTest`. Day13Test `stuck_shipment_days` corrected to 5.
 
 **LIVE SMOKE TEST PENDING**: Call `POST /api/v1/bosta/awb/print` with a real pilot tracking number. Needs running app + pilot Bosta API key. Steps in Day 24 entry below.
+
+---
+
+**Day 25 — Exceptions center extensions (FR-15.3 detectors)**
+
+*Audit result:* ExceptionService already has **10 detectors** registered (not 8 as previously documented): lost, never_received, unmatched_delivery, blocked_customer, stuck_shipment, unexpected_return, delivery_limbo, ndr_failed, guided_unpack (Day 14), missing_awb (Day 24). Both guided_unpack and missing_awb were fully wired. detectMissingAwb() was NOT orphaned.
+
+*What changed:*
+
+**V21 migration** (`V21__exceptions_ext.sql`):
+- `orders.shopify_cancel_requested_at timestamptz` — signal column written by `handleOrderCancelled()` when a Shopify cancel arrives for an `awaiting_pickup` order and `cancelOrder()` returns 409.
+- `tenants.stuck_shipment_days` default changed from 3 → 5 (FR-11.5 spec + pilot tracker). Existing rows at 3 updated to 5.
+
+**`ShopifyWebhookProcessorJob.handleOrderCancelled()`** — 409 path now splits:
+- Non-409 (terminal/already-cancelled): swallowed as before.
+- 409: stamps `shopify_cancel_requested_at = COALESCE(..., now())` on the order. The exceptions center then surfaces it as HIGH for the operator to resolve manually (let it RTO, convert to self-pickup, or guide cancellation).
+
+**`ExceptionService`** — 11th detector `detectShopifyCancelVsInflight()`:
+- Queries `orders WHERE status='awaiting_pickup' AND shopify_cancel_requested_at IS NOT NULL`.
+- Joins `shipments` for tracking number context.
+- Suppressed by `exception_resolutions` (standard NOT EXISTS pattern — no stale-sync special case needed).
+- Enriched with AR/EN descriptions and `suggestedAction` text per spec.
+
+*Gap reported — not fabricated:* `short` detector (FR-7.7): no shortage signal (`is_short`, shortage quantity column) exists anywhere in the codebase. FR-7.7 is unimplemented. Detector not wired.
+
+*Tests:*
+- `ExceptionExtTest` — 6 new tests: surfaces with signal, no-surface without signal, no-surface once delivered, stays suppressed after resolve, fires at 5 days not 4, severity ordering correct.
+- `Day13Test` — `stuck_shipment_days` explicit insert corrected to 5.
+- `MigrationSmokeTest` — count 20→21.
+- 216/216 tests pass. Zero regressions.
 
 ---
 

@@ -76,7 +76,7 @@ class Day13Test {
         UUID productId = UUID.randomUUID();
         variantId = UUID.randomUUID();
 
-        jdbc.update("INSERT INTO tenants (id, name, stuck_shipment_days) VALUES (?, 'D13Tenant', 3)",
+        jdbc.update("INSERT INTO tenants (id, name, stuck_shipment_days) VALUES (?, 'D13Tenant', 5)",
                     tenantId);
         jdbc.update("INSERT INTO users (id, tenant_id, name, email, password_hash, role) " +
                     "VALUES (?, ?, 'Ops', 'ops@d13.local', 'h', 'manager')", actorId, tenantId);

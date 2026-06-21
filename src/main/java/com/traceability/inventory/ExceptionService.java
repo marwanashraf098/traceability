@@ -66,6 +66,7 @@ public class ExceptionService {
         all.addAll(detectNdr(tenantId));
         all.addAll(detectGuidedUnpack(tenantId));
         all.addAll(detectMissingAwb(tenantId));
+        all.addAll(detectShopifyCancelVsInflight(tenantId));
 
         // Enrich with descriptions and action hints
         all.forEach(this::enrich);
@@ -328,6 +329,26 @@ public class ExceptionService {
             tid);
     }
 
+    private List<Map<String, Object>> detectShopifyCancelVsInflight(UUID tid) {
+        return jdbc.queryForList(
+            "SELECT 'shopify_cancel_vs_inflight' AS type, 'HIGH' AS severity, 'order' AS subject_type, " +
+            "       o.id AS order_id, o.number AS order_number, " +
+            "       s.tracking_number, " +
+            "       o.shopify_cancel_requested_at AS occurred_at, " +
+            "       'shopify_cancel_vs_inflight:order:' || o.id AS subject_key " +
+            "FROM orders o " +
+            "LEFT JOIN shipments s ON s.order_id = o.id AND s.tenant_id = o.tenant_id " +
+            "WHERE o.tenant_id = ? " +
+            "  AND o.shopify_cancel_requested_at IS NOT NULL " +
+            "  AND o.status = 'awaiting_pickup'::order_status " +
+            "  AND NOT EXISTS ( " +
+            "      SELECT 1 FROM exception_resolutions er " +
+            "      WHERE er.tenant_id = o.tenant_id " +
+            "        AND er.exception_type = 'shopify_cancel_vs_inflight' " +
+            "        AND er.subject_key = 'shopify_cancel_vs_inflight:order:' || o.id) ",
+            tid);
+    }
+
     private List<Map<String, Object>> detectMissingAwb(UUID tid) {
         return jdbc.queryForList(
             "SELECT 'missing_awb' AS type, 'MEDIUM' AS severity, 'shipment' AS subject_type, " +
@@ -431,6 +452,21 @@ public class ExceptionService {
                 item.put("descriptionAr", "تعذّر طباعة بوليصة الشحن للشحنة " + t + ": " + r);
                 item.put("suggestedAction", "retry_awb_print");
                 item.put("actionUrl", "/shipments/" + item.get("shipment_id"));
+            }
+            case "shopify_cancel_vs_inflight" -> {
+                String n = str(item, "order_number");
+                String t = str(item, "tracking_number");
+                String shipSuffix = (t != null) ? " (AWB: " + t + ")" : "";
+                item.put("descriptionEn",
+                    "Shopify cancelled order " + n + shipSuffix +
+                    " but the parcel is still in-flight with the courier");
+                item.put("descriptionAr",
+                    "أُلغي الطلب " + n + shipSuffix +
+                    " في شوبيفاي ولكن الشحنة لا تزال مع مندوب التوصيل");
+                item.put("suggestedAction",
+                    "Shopify cancelled but parcel is in-flight — convert to self-pickup, " +
+                    "cancel via guided flow, or let it RTO.");
+                item.put("actionUrl", ordersUrl(item));
             }
         }
     }

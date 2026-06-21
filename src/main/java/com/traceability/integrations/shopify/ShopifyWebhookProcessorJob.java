@@ -205,8 +205,25 @@ public class ShopifyWebhookProcessorJob {
             log.info("Shopify cancel webhook: orderId={} status={} remainingPacked={}",
                 orderId, result.status(), result.remainingPacked());
         } catch (ResponseStatusException e) {
-            // Terminal/already-cancelled — benign idempotency path.
-            log.debug("orders/cancelled for already-terminal orderId={}: {}", orderId, e.getMessage());
+            if (e.getStatusCode().value() == 409) {
+                // Order is with courier (awaiting_pickup / with_courier / returning) —
+                // cannot auto-cancel. Stamp the signal so the exceptions center surfaces it
+                // as shopify_cancel_vs_inflight for the operator to resolve manually.
+                final UUID oid = orderId;
+                tx.execute(s -> {
+                    jdbc.update(
+                        "UPDATE orders " +
+                        "SET shopify_cancel_requested_at = COALESCE(shopify_cancel_requested_at, now()) " +
+                        "WHERE id = ? AND tenant_id = ?",
+                        oid, tenantId);
+                    return null;
+                });
+                log.warn("Shopify cancel for in-flight order {} ({}): flagged for manual resolution",
+                    orderId, e.getReason());
+            } else {
+                // Terminal/already-cancelled — benign idempotency path.
+                log.debug("orders/cancelled for already-terminal orderId={}: {}", orderId, e.getMessage());
+            }
         }
     }
 
