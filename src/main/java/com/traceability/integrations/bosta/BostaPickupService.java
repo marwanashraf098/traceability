@@ -162,10 +162,10 @@ public class BostaPickupService {
         UUID pickupId = TenantContext.runAs(tenantId, () ->
             tx.execute(s -> {
                 UUID pid = jdbc.query(
-                    "INSERT INTO pickups (tenant_id, courier_account_id, scheduled_date, status, total_cod_amount) " +
-                    "VALUES (?, ?, ?, 'pending', ?) RETURNING id",
+                    "INSERT INTO pickups (tenant_id, courier_account_id, scheduled_date, status) " +
+                    "VALUES (?, ?, ?, 'pending') RETURNING id",
                     rs -> rs.next() ? rs.getObject("id", UUID.class) : null,
-                    tenantId, accountId, java.sql.Date.valueOf(scheduledDate), total);
+                    tenantId, accountId, java.sql.Date.valueOf(scheduledDate));
 
                 if (pid == null) throw new RuntimeException("pickup INSERT returned no id");
 
@@ -248,15 +248,18 @@ public class BostaPickupService {
     public PickupManifest getManifest(UUID tenantId, UUID pickupId) {
         Map<String, Object> pickup = TenantContext.runAs(tenantId, () ->
             tx.execute(s -> jdbc.query(
-                "SELECT id, scheduled_date::text, status, provider_pickup_id, total_cod_amount " +
+                "SELECT id, scheduled_date::text, status, provider_pickup_id " +
                 "FROM pickups WHERE id = ? AND tenant_id = ?",
-                rs -> rs.next() ? Map.<String, Object>of(
-                    "id",                 rs.getObject("id", UUID.class),
-                    "scheduled_date",     rs.getString("scheduled_date"),
-                    "status",             rs.getString("status"),
-                    "provider_pickup_id", rs.getString("provider_pickup_id"),
-                    "total_cod_amount",   rs.getBigDecimal("total_cod_amount")
-                ) : null,
+                rs -> {
+                    if (!rs.next()) return null;
+                    // HashMap (not Map.of) — provider_pickup_id is nullable for BOSTA_MANAGED pickups
+                    Map<String, Object> row = new java.util.HashMap<>();
+                    row.put("id",                 rs.getObject("id", UUID.class));
+                    row.put("scheduled_date",     rs.getString("scheduled_date"));
+                    row.put("status",             rs.getString("status"));
+                    row.put("provider_pickup_id", rs.getString("provider_pickup_id"));
+                    return row;
+                },
                 pickupId, tenantId)));
 
         if (pickup == null) {
@@ -277,10 +280,8 @@ public class BostaPickupService {
                         ? rs.getBigDecimal("cod_amount") : BigDecimal.ZERO),
                 pickupId, tenantId)));
 
-        BigDecimal total = (BigDecimal) pickup.get("total_cod_amount");
-        if (total == null) {
-            total = lines.stream().map(ManifestLine::cod).reduce(BigDecimal.ZERO, BigDecimal::add);
-        }
+        // Derive COD total from live pickup_shipments — no stored value trusted (V22).
+        BigDecimal total = lines.stream().map(ManifestLine::cod).reduce(BigDecimal.ZERO, BigDecimal::add);
 
         return new PickupManifest(
             (UUID) pickup.get("id"),
