@@ -1,5 +1,6 @@
 package com.traceability.inventory;
 
+import com.traceability.account.AuditService;
 import com.traceability.tenancy.TenantContext;
 import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -15,10 +16,12 @@ public class FulfillService {
 
     private final JdbcTemplate    jdbc;
     private final InventoryLedger ledger;
+    private final AuditService    auditService;
 
-    public FulfillService(JdbcTemplate jdbc, InventoryLedger ledger) {
-        this.jdbc   = jdbc;
-        this.ledger = ledger;
+    public FulfillService(JdbcTemplate jdbc, InventoryLedger ledger, AuditService auditService) {
+        this.jdbc         = jdbc;
+        this.ledger       = ledger;
+        this.auditService = auditService;
     }
 
     // ── Queue ─────────────────────────────────────────────────────────────────
@@ -456,7 +459,8 @@ public class FulfillService {
             reason, actorUserId != null ? actorUserId.toString() : null,
             status, orderId, tenantId);
         // Pieces STAY Packed — handover() takes over from here unchanged.
-        // TODO FR-2.6: also write to privileged-action audit log once that table exists.
+        auditService.record(actorUserId, "convert_to_self_pickup", "order", orderId.toString(),
+            Map.of("reason", reason, "previous_status", status));
     }
 
     /**
