@@ -4,7 +4,9 @@
 
 ## Current state
 
-**270/270 green — FR account/onboarding layer complete** — 2026-06-21.
+**270/270 green — Frontend Round 1 shipped: Signup + Connections** — 2026-06-22.
+
+FR-1.1 (Signup) and FR-1.2 (connect screens) are complete. Two new pages built, matching Traced UI conventions. Clean TS compile; backend tests unchanged at 270.
 
 V23–V25 applied. 5 backend items shipped: audit log (FR-2.6), user CRUD (FR-2.2), tenant settings (FR-1.4), connections status (FR-1.2), onboarding checklist (FR-1.2). 34 new tests. All existing 236 still green. Commits still local only (git push blocked by credential mismatch — GitHub rejects stored credential `marwanashraf56` on repo owned by `marwanashraf098`).
 
@@ -61,6 +63,33 @@ V21 migration applied. `detectShopifyCancelVsInflight()` wired in ExceptionServi
 - **FR-4.6 cancelDelivery()** — still blocked on Bosta endpoint verification.
 - **`awaiting_pickup → self_pickup_pending`** — still 409'd until FR-4.6.
 - **git push** — blocked by GitHub credential mismatch. All commits are local. Fix: `gh auth login` or update stored credential for `marwanashraf098`.
+
+---
+
+**Day 28 — Frontend Round 1: Signup + Connections**
+
+*Items shipped:*
+
+**FR-1.1 — Signup screen (`/signup`):**
+- `Signup.tsx` — public route (no RequireAuth). Fields: business name (`tenantName`), owner name (`name`), email, phone (Egyptian validation only — `+20/0201/01XXXXXXXXX`; not sent to backend, which doesn't store it), password (≥8 chars). Calls `POST /api/v1/auth/signup`; on success stores `accessToken` in localStorage and navigates to `/overview`.
+- Error mapping: 409 Conflict → "email already registered" message; other errors → generic.
+- Login page now has "Don't have an account? Sign up" link.
+
+**FR-1.2 connect screens — `Connections.tsx` (`/connections`):**
+- Protected route with Layout sidebar. `ShopifyCard` + `BostaCard` in responsive 2-column grid.
+- Shopify: domain input → `POST /api/v1/shopify/oauth/initiate` → `window.location.href = consentUrl`. Connected state shows domain, import status, last sync.
+- Bosta: API key input (`type=password`, never shown back) → `POST /api/v1/bosta/connect`. Connected state shows business name + pickup mode. Reconnect flow re-shows the form.
+- Both cards: not-connected / loading / error states. `GET /api/v1/connections` polled on mount and after Bosta connect.
+
+*api.ts additions:* `signup()`, `getConnections()` (+ `ConnectionsStatus` interface), `shopifyInitiate()`, `bostaConnect()`.
+
+*i18n:* `signup.*`, `connections.*` (shopify + bosta sub-keys), `login.noAccount/signUp`, `nav.connections` — all in both AR and EN.
+
+*Layout:* New `IconConnections` SVG + `SideNavLink to="/connections"` after Exceptions.
+
+*No frontend tests added* — no test framework exists in the project.
+
+*Convention match:* `useEffect` + `useState` + `request<T>()` (no TanStack Query). Logical CSS props throughout (`ps-`, `pe-`, `text-start`). RTL works without reload via existing `Layout.toggleLang()`. Error display matches Login pattern exactly.
 
 ---
 
