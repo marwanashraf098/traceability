@@ -16,13 +16,31 @@
   },
   "overview": {
     "title": "Overview",
-    "totalOrders": "Total Orders",
-    "delivered": "Delivered",
-    "inTransit": "In Transit",
-    "returns": "Returns",
     "recentExceptions": "Recent exceptions",
     "noExceptions": "No open exceptions — all clear",
     "viewAll": "View all"
+  },
+  "inventory": {
+    "title": "Inventory",
+    "live": "Live inventory",
+    "liveNote": "Current piece counts by status",
+    "window30d": "Last 30 days",
+    "window30dNote": "Pieces that entered this status in the past 30 days and are still in it",
+    "viewAll": "View all →",
+    "drillTitle": "Pieces — {{status}}",
+    "drillTitle30d": "Pieces — {{status}} (last 30 days)",
+    "empty": "No pieces with this status",
+    "back": "← Back to Overview",
+    "col": {
+      "barcode": "Barcode",
+      "variant": "Product / Variant",
+      "sku": "SKU",
+      "location": "Location",
+      "lastEvent": "Last event"
+    },
+    "prev": "Previous",
+    "next": "Next",
+    "showing": "Showing {{from}}–{{to}} of {{total}}"
   },
   "login": {
     "title": "traced",

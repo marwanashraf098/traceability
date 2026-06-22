@@ -16,13 +16,31 @@
   },
   "overview": {
     "title": "لوحة التحكم",
-    "totalOrders": "إجمالي الطلبات",
-    "delivered": "تم التسليم",
-    "inTransit": "قيد التوصيل",
-    "returns": "المرتجعات",
     "recentExceptions": "الاستثناءات الأخيرة",
     "noExceptions": "لا توجد استثناءات مفتوحة",
     "viewAll": "عرض الكل"
+  },
+  "inventory": {
+    "title": "المخزون",
+    "live": "المخزون الحي",
+    "liveNote": "أعداد القطع الحالية حسب الحالة",
+    "window30d": "آخر 30 يومًا",
+    "window30dNote": "القطع التي دخلت هذه الحالة خلال آخر 30 يومًا ولا تزال فيها",
+    "viewAll": "عرض الكل ←",
+    "drillTitle": "القطع — {{status}}",
+    "drillTitle30d": "القطع — {{status}} (آخر 30 يومًا)",
+    "empty": "لا توجد قطع بهذه الحالة",
+    "back": "→ العودة إلى لوحة التحكم",
+    "col": {
+      "barcode": "الباركود",
+      "variant": "المنتج / النوع",
+      "sku": "SKU",
+      "location": "الموقع",
+      "lastEvent": "آخر حدث"
+    },
+    "prev": "السابق",
+    "next": "التالي",
+    "showing": "عرض {{from}}–{{to}} من {{total}}"
   },
   "login": {
     "title": "traced",

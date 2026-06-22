@@ -387,3 +387,51 @@ export function updateUser(id: string, payload: { name?: string; role?: string }
 export function deactivateUser(id: string) {
   return request<void>(`/users/${id}/deactivate`, { method: 'POST' })
 }
+
+// ── Inventory summary (FR-15.1) ───────────────────────────────────────────────
+
+export interface InventoryStatusCount {
+  status: string
+  count: number
+}
+
+export interface InventorySummary {
+  groupA: InventoryStatusCount[]
+  groupB: InventoryStatusCount[]
+}
+
+export function getInventorySummary() {
+  return request<InventorySummary>('/inventory/summary')
+}
+
+export interface PieceSummary {
+  id: string
+  barcode: string
+  status: string
+  variantTitle: string
+  sku: string | null
+  productTitle: string
+  locationName: string | null
+  lastEventAt: string | null
+}
+
+export interface PiecePage {
+  items: PieceSummary[]
+  total: number
+  page: number
+  size: number
+}
+
+export function listPieces(params: {
+  status: string
+  within30d?: boolean
+  page?: number
+  size?: number
+}) {
+  const q = new URLSearchParams()
+  q.set('status', params.status)
+  if (params.within30d) q.set('within30d', 'true')
+  if (params.page  != null) q.set('page',  String(params.page))
+  if (params.size  != null) q.set('size',  String(params.size))
+  return request<PiecePage>(`/pieces?${q}`)
+}

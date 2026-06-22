@@ -1,75 +1,66 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
-import { listOrders, request } from '../api'
+import { getInventorySummary, InventorySummary, request } from '../api'
 import { SeverityBadge, Spinner } from '../components/ui'
 
-// ── Simple SVG sparkline ──────────────────────────────────────────────────────
+// ── Inventory tile ────────────────────────────────────────────────────────────
 
-function Sparkline({ color = '#6366FF' }: { color?: string }) {
-  // Placeholder data — replace with real time-series when endpoint exists
-  const data = [12, 19, 15, 28, 22, 35, 30, 42, 38, 52, 47, 61]
-  const max = Math.max(...data)
-  const W = 200, H = 48
-  const pts = data.map((v, i) => [
-    (i / (data.length - 1)) * W,
-    H - (v / max) * H * 0.85,
-  ])
-  const line  = pts.map(([x, y], i) => `${i === 0 ? 'M' : 'L'} ${x} ${y}`).join(' ')
-  const fill  = `${line} L ${W} ${H} L 0 ${H} Z`
+function InventoryTile({
+  status,
+  count,
+  windowed,
+  loading,
+}: {
+  status: string
+  count: number
+  windowed: boolean
+  loading: boolean
+}) {
+  const { t } = useTranslation()
+  const dest = `/inventory?status=${status}${windowed ? '&within30d=true' : ''}`
 
   return (
-    <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" className="w-full h-12">
-      <defs>
-        <linearGradient id={`grad-${color.slice(1)}`} x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" stopColor={color} stopOpacity="0.25" />
-          <stop offset="100%" stopColor={color} stopOpacity="0" />
-        </linearGradient>
-      </defs>
-      <path d={fill} fill={`url(#grad-${color.slice(1)})`} />
-      <path d={line} fill="none" stroke={color} strokeWidth="1.5" />
-    </svg>
+    <Link
+      to={dest}
+      data-testid={`tile-${status}`}
+      className="card p-4 flex flex-col gap-2 hover:bg-elevated transition-colors group"
+    >
+      <p className="text-caption text-muted uppercase tracking-wider">
+        {t(`catalog.statuses.${status}`, status)}
+      </p>
+      {loading ? (
+        <div className="h-8 w-12 bg-elevated rounded animate-pulse" />
+      ) : (
+        <p className="text-display font-light text-primary group-hover:text-brand transition-colors">
+          {count.toLocaleString()}
+        </p>
+      )}
+    </Link>
   )
 }
 
-// ── StatCard with sparkline ───────────────────────────────────────────────────
+// ── Section header ────────────────────────────────────────────────────────────
 
-function DashStatCard({
-  label,
-  value,
-  loading,
-  color,
-  delta,
-}: {
-  label: string
-  value: number
-  loading: boolean
-  color?: string
-  delta?: { value: number; label: string }
-}) {
+function SectionHeader({ title, note, badge }: { title: string; note: string; badge?: string }) {
   return (
-    <div className="card p-5 flex flex-col gap-3 overflow-hidden">
-      <p className="text-caption text-muted uppercase tracking-wider">{label}</p>
-      <div className="flex items-end justify-between gap-2">
-        <div>
-          {loading ? (
-            <div className="h-10 w-16 bg-elevated rounded animate-pulse" />
-          ) : (
-            <p className="text-display font-light text-primary">{value.toLocaleString()}</p>
+    <div className="flex items-center gap-3 mb-3">
+      <div>
+        <h2 className="text-h3 text-primary inline-flex items-center gap-2">
+          {title}
+          {badge && (
+            <span className="text-caption font-medium text-brand bg-brand/10 border border-brand/20 rounded-full px-2 py-0.5">
+              {badge}
+            </span>
           )}
-          {delta && !loading && (
-            <p className={`text-small font-medium mt-1 flex items-center gap-1 ${delta.value >= 0 ? 'text-success' : 'text-danger'}`}>
-              {delta.value >= 0 ? '↑' : '↓'} {Math.abs(delta.value)} {delta.label}
-            </p>
-          )}
-        </div>
+        </h2>
+        <p className="text-caption text-muted mt-0.5">{note}</p>
       </div>
-      <Sparkline color={color ?? '#6366FF'} />
     </div>
   )
 }
 
-// ── Recent exceptions snippet ─────────────────────────────────────────────────
+// ── Exception snippet ─────────────────────────────────────────────────────────
 
 interface ExceptionItem {
   type: string
@@ -85,34 +76,19 @@ export default function Overview() {
   const { t, i18n } = useTranslation()
   const isAr = i18n.language === 'ar'
 
-  const [stats, setStats] = useState({
-    total: 0, delivered: 0, withCourier: 0, returning: 0,
-  })
-  const [statsLoading, setStatsLoading] = useState(true)
-  const [exceptions, setExceptions]     = useState<ExceptionItem[]>([])
-  const [excLoading, setExcLoading]     = useState(true)
+  const [summary, setSummary]     = useState<InventorySummary | null>(null)
+  const [invLoading, setInvLoading] = useState(true)
+  const [invError,   setInvError]   = useState('')
+
+  const [exceptions, setExceptions]   = useState<ExceptionItem[]>([])
+  const [excLoading, setExcLoading]   = useState(true)
 
   useEffect(() => {
-    async function load() {
-      try {
-        const [all, delivered, withCourier, returning] = await Promise.all([
-          listOrders({ size: 1 }),
-          listOrders({ status: 'delivered',   size: 1 }),
-          listOrders({ status: 'with_courier', size: 1 }),
-          listOrders({ status: 'returning',   size: 1 }),
-        ])
-        setStats({
-          total:       all.total,
-          delivered:   delivered.total,
-          withCourier: withCourier.total,
-          returning:   returning.total,
-        })
-      } finally {
-        setStatsLoading(false)
-      }
-    }
-    load()
-  }, [])
+    getInventorySummary()
+      .then(s => setSummary(s))
+      .catch(() => setInvError(t('common.error')))
+      .finally(() => setInvLoading(false))
+  }, [t])
 
   useEffect(() => {
     request<{ items: ExceptionItem[] }>('/exceptions?size=5')
@@ -121,6 +97,9 @@ export default function Overview() {
       .finally(() => setExcLoading(false))
   }, [])
 
+  const groupA = summary?.groupA ?? []
+  const groupB = summary?.groupB ?? []
+
   return (
     <div className="max-w-5xl mx-auto space-y-6">
       <div>
@@ -128,33 +107,61 @@ export default function Overview() {
         <p className="text-small text-muted mt-0.5">nothing moves untraced</p>
       </div>
 
-      {/* ── Stat cards ── */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <DashStatCard
-          label={t('overview.totalOrders')}
-          value={stats.total}
-          loading={statsLoading}
-          color="#6366FF"
-        />
-        <DashStatCard
-          label={t('overview.delivered')}
-          value={stats.delivered}
-          loading={statsLoading}
-          color="#22C55E"
-        />
-        <DashStatCard
-          label={t('overview.inTransit')}
-          value={stats.withCourier}
-          loading={statsLoading}
-          color="#22D3EE"
-        />
-        <DashStatCard
-          label={t('overview.returns')}
-          value={stats.returning}
-          loading={statsLoading}
-          color="#F59E0B"
-        />
-      </div>
+      {/* ── Inventory error ── */}
+      {invError && (
+        <div
+          role="alert"
+          data-testid="inventory-error"
+          className="text-small text-danger bg-danger/10 border border-danger/25 rounded px-3 py-2"
+        >
+          {invError}
+        </div>
+      )}
+
+      {/* ── Group A: live inventory ── */}
+      {!invError && (
+        <div>
+          <SectionHeader
+            title={t('inventory.live')}
+            note={t('inventory.liveNote')}
+          />
+          <div
+            data-testid="group-a"
+            className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3"
+          >
+            {invLoading
+              ? Array.from({ length: 6 }).map((_, i) => (
+                  <InventoryTile key={i} status="" count={0} windowed={false} loading />
+                ))
+              : groupA.map(({ status, count }) => (
+                  <InventoryTile key={status} status={status} count={count} windowed={false} loading={false} />
+                ))}
+          </div>
+        </div>
+      )}
+
+      {/* ── Group B: last 30 days ── */}
+      {!invError && (
+        <div>
+          <SectionHeader
+            title={t('inventory.window30d')}
+            note={t('inventory.window30dNote')}
+            badge="30d"
+          />
+          <div
+            data-testid="group-b"
+            className="grid grid-cols-2 sm:grid-cols-3 gap-3"
+          >
+            {invLoading
+              ? Array.from({ length: 3 }).map((_, i) => (
+                  <InventoryTile key={i} status="" count={0} windowed={true} loading />
+                ))
+              : groupB.map(({ status, count }) => (
+                  <InventoryTile key={status} status={status} count={count} windowed={true} loading={false} />
+                ))}
+          </div>
+        </div>
+      )}
 
       {/* ── Recent exceptions ── */}
       <div className="card p-5">

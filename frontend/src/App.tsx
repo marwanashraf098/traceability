@@ -15,6 +15,7 @@ import Connections from './pages/Connections'
 import Settings from './pages/Settings'
 import Users from './pages/Users'
 import Onboarding from './pages/Onboarding'
+import Inventory from './pages/Inventory'
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
   return localStorage.getItem('token') ? <>{children}</> : <Navigate to="/login" replace />
@@ -95,6 +96,14 @@ export default function App() {
           element={
             <RequireAuth>
               <Layout><ExceptionsPage /></Layout>
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="/inventory"
+          element={
+            <RequireAuth>
+              <Layout><Inventory /></Layout>
             </RequireAuth>
           }
         />
