@@ -294,4 +294,33 @@ class InventorySummaryTest {
         assertThat(with30d.total()).isEqualTo(1);  // only the 10d-ago one
         assertThat(with30d.items().get(0).id()).isEqualTo("PL-DEL-NEW");
     }
+
+    @Test
+    void i9_lostThenFoundPiece_countsInAvailableNotInLost_andDamagedWindowPositive() {
+        // ── Case (c): Lost 10d ago → Available 2d ago ("found it") ─────────────
+        // Current status = available.  The recent to_status='lost' event must NOT
+        // make it appear in Lost-30d.  The outer p.status IN ('delivered','damaged','lost')
+        // predicate excludes it before EXISTS is ever evaluated.
+        insertPiece("FOUND-01", "available");
+        insertEvent("FOUND-01", "lost",      "10 days");  // the lost transition
+        insertEvent("FOUND-01", "available", "2 days");   // the "found it" transition
+
+        // A piece that is currently lost with a recent event — ensures the lost-30d
+        // bucket is plumbed and the exclusion above is not a side-effect of lost=0.
+        insertPiece("LOST-LIVE", "lost");
+        insertEvent("LOST-LIVE", "lost", "5 days");
+
+        // ── Case (d): Damaged 10d ago, still damaged ─────────────────────────────
+        insertPiece("DMG-01", "damaged");
+        insertEvent("DMG-01", "damaged", "10 days");
+
+        var s = inventoryCtl.summary();
+
+        // Case (c): FOUND-01 in groupA available, NOT in groupB lost.
+        assertThat(groupACount(s, "available")).isEqualTo(1);
+        assertThat(groupBCount(s, "lost")).isEqualTo(1);   // only LOST-LIVE
+
+        // Case (d): DMG-01 in groupB damaged.
+        assertThat(groupBCount(s, "damaged")).isEqualTo(1);
+    }
 }
