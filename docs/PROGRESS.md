@@ -4,11 +4,63 @@
 
 ## Current state
 
-**231/231 green — FR-9 cancel/COD/self-pickup build** — 2026-06-21.
+**270/270 green — FR account/onboarding layer complete** — 2026-06-21.
+
+V23–V25 applied. 5 backend items shipped: audit log (FR-2.6), user CRUD (FR-2.2), tenant settings (FR-1.4), connections status (FR-1.2), onboarding checklist (FR-1.2). 34 new tests. All existing 236 still green. Commits still local only (git push blocked by credential mismatch — GitHub rejects stored credential `marwanashraf56` on repo owned by `marwanashraf098`).
 
 V21 migration applied. `detectShopifyCancelVsInflight()` wired in ExceptionService (HIGH, `shopify_cancel_vs_inflight` type). Signal written in `ShopifyWebhookProcessorJob.handleOrderCancelled()` on 409 for in-flight orders. `stuck_shipment_days` default changed 3→5 (V21 UPDATE existing rows). 6 new tests in `ExceptionExtTest`. Day13Test `stuck_shipment_days` corrected to 5.
 
 **LIVE SMOKE TEST PENDING**: Call `POST /api/v1/bosta/awb/print` with a real pilot tracking number. Needs running app + pilot Bosta API key. Steps in Day 24 entry below.
+
+---
+
+**Day 27 — FR account/onboarding layer (V23–V25)**
+
+*Migrations:*
+- **V23** — `shipments.provider_id_fetch_failed boolean` + Mode-B backfill of `provider_delivery_id` from `raw->>'_id'` (completed in previous session, Day 26 Task D).
+- **V24** — `audit_log` table. Append-only: `REVOKE UPDATE, DELETE FROM app_user` (V1's `ALTER DEFAULT PRIVILEGES` grants all four ops by default; V24 explicitly revokes the two write ops). RLS with `NULLIF(...)::uuid` pattern. Three indexes.
+- **V25** — Adds `default_language text NOT NULL DEFAULT 'ar'`, `timezone text NOT NULL DEFAULT 'Africa/Cairo'`, `pickup_address text` to `tenants`. Language/timezone/pickup_address are tenant-level settings; Bosta-specific fields stay on `courier_accounts`.
+
+*Items shipped:*
+
+**Item 1 — Audit log (FR-2.6):**
+- `AuditService.record()` — single write path; requires `TenantContext` set.
+- `AuditService.list()` — paginated; filters: action, actorUserId, from, to.
+- `AuditController` — `GET /api/v1/audit-log` (Owner/Manager only).
+- `FulfillService.convertToSelfPickup()` — replaced TODO comment with real `auditSvc.record("convert_to_self_pickup", ...)`.
+- 7 tests (a1–a7): write/read round-trip, tenant isolation, append-only privilege check, `convertToSelfPickup` wires audit, filters by action and actor.
+
+**Item 2 — User CRUD (FR-2.2):**
+- `UserService` — create (PIN/password hash, role validation), update (name/role), deactivate (active=false, no hard delete). Every mutation writes audit_log.
+- Role rule: Manager cannot create/modify/deactivate an Owner.
+- `auth_lookup_user` already has `AND active = true` (V1) — deactivated users auto-blocked from auth without code change.
+- `UserController` — GET/POST `/api/v1/users`, PATCH/deactivate `/{id}`. Returns 201/204 per REST conventions.
+- 11 tests (u1–u11): all role rules, hash verification, no-hard-delete, piece_event attribution survives deactivation, audit writes, tenant isolation.
+
+**Item 3 — Tenant settings (FR-1.4):**
+- `TenantController.GET /api/v1/tenant/settings` — returns name, pickupAddress, labelSize (derived from label_width_mm/label_height_mm), defaultLanguage, timezone.
+- `TenantController.PUT /api/v1/tenant/settings` — Owner-only; COALESCE partial update; validates labelSize ∈ {"40x25","50x25"}, language ∈ {"ar","en"}; writes audit.
+- Bosta fields (`awb_format`, `pickup_mode`, `pickup_business_location_id`) stay on `courier_accounts` — NOT duplicated to `tenants`.
+- 7 tests (s1–s7): V25 columns exist, defaults round-trip, PUT writes all fields + audit, bad labelSize → 400, bad language → 400, Bosta fields absent from tenants.
+
+**Item 4 — Connections status:**
+- `ConnectionsController.GET /api/v1/connections` — returns shopify and bosta connection objects derived from live DB signals. No new connect logic.
+- 3 tests (c1–c3).
+
+**Item 5 — Onboarding checklist:**
+- `OnboardingController.GET /api/v1/onboarding/status` — 5 steps (connect_shopify, connect_bosta, initial_import, test_label, first_receiving), all derived from real DB signals, NOT manually toggled.
+- 6 tests (o1–o6): fresh→all pending, each signal individually, allDone=true when all signals present.
+
+*Gotchas logged:*
+- `V1 ALTER DEFAULT PRIVILEGES GRANT SELECT,INSERT,UPDATE,DELETE ON TABLES TO app_user` applies to every new table. V24 must explicitly `REVOKE UPDATE, DELETE ON audit_log FROM app_user` after the broad grant.
+- `TenantContext.runAs()` always clears context in `finally`. Tests that call a controller with `runAs()` internally will lose context after the call; check the DB directly instead of calling `auditSvc.list()` in those cases.
+- `stores` table has no `created_at` — `ConnectionsController` used `ORDER BY created_at DESC`, fixed to `ORDER BY last_sync_at DESC NULLS LAST`.
+- `@PreAuthorize` on controller beans in `WebEnvironment.NONE` tests requires setting `SecurityContextHolder` manually in `@BeforeEach` with a `UsernamePasswordAuthenticationToken` carrying the `CustomUserDetails` principal.
+
+*Open items:*
+- **FR-4.6 cancelDelivery()** — still blocked on Bosta endpoint verification.
+- **`awaiting_pickup → self_pickup_pending`** — still 409'd until FR-4.6.
+- **git push** — blocked by GitHub credential mismatch. All commits are local. Fix: `gh auth login` or update stored credential for `marwanashraf098`.
 
 ---
 

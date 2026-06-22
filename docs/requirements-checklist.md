@@ -3,20 +3,20 @@ One line per requirement · [M] Must / [S] Should / [C] Could · use as the buil
 
 ## FR-1 Tenant & Account
 - [ ] 1.1 [M] Tenant signup: business name, owner, email, phone, password (verification [S])
-- [ ] 1.2 [M] Guided onboarding checklist: connect Shopify → connect Bosta → import → test label → first receiving
+- [x] 1.2 [M] Guided onboarding checklist: connect Shopify → connect Bosta → import → test label → first receiving
 - [x] 1.3 [M] Auto-create default "Main Warehouse" location per tenant
-- [ ] 1.4 [M] Tenant settings: name, pickup address, label size, language AR/EN, timezone
+- [x] 1.4 [M] Tenant settings: name, pickup address, label size, language AR/EN, timezone
 - [ ] 1.5 [S] Plan display + manual invoicing status (no online payments)
 - [ ] 1.6 [M] Internal super-admin: list/suspend tenants, logged impersonation
 
 ## FR-2 Auth, Users & Permissions
 - [x] 2.1 [M] Email+password login, JWT access (15m) + refresh, logout-everywhere
-- [ ] 2.2 [M] User CRUD by Owner/Manager; deactivate only, never delete
+- [x] 2.2 [M] User CRUD by Owner/Manager; deactivate only, never delete
 - [x] 2.3 [M] Worker PIN switch at shared stations; attribution until switch / 15-min idle
 - [x] 2.4 [M] No anonymous custody actions; PIN lockout after 5 fails + Manager notify
 - [x] 2.5 [M] Server-side permission matrix (Owner / Manager / Worker) on every endpoint
 - [ ] 2.5a [S] Per-tenant toggle: workers may receive inventory
-- [ ] 2.6 [M] Privileged-action audit log (users, integrations, adjustments, impersonation)
+- [x] 2.6 [M] Privileged-action audit log (users, integrations, adjustments, impersonation)
 
 ## FR-3 Shopify Integration (order source — always)
 - [x] 3.1 [M] Connect via custom-app credentials + validation ([S] public OAuth app track — OAuth Day 1: install+callback+state+HMAC done; OAuth Day 2: resolve-or-create decision tree + Path-2 provisioning + timestamp freshness + state cleanup done; OAuth Day 4: magic-link bridge shipped — V16 magic_link_tokens + consume_magic_link DEFINER + EmailGateway + MagicLinkController + provision wiring; OAuth Phase 1 complete; Day 21: F1 fixed (V18 JobRunr Flyway migration) + F2 fixed (expiring tokens + ShopifyTokenProvider); Day 22: F1+F2 live-cleared on docker-compose — BackgroundJobServer+recurring job running, token_is_fresh=t; pending browser reinstall on real Shopify store)
