@@ -3,7 +3,7 @@ One line per requirement · [M] Must / [S] Should / [C] Could · use as the buil
 
 ## FR-1 Tenant & Account
 - [x] 1.1 [M] Tenant signup: business name, owner, email, phone, password (verification [S])
-- [x] 1.2 [M] Guided onboarding checklist: connect Shopify → connect Bosta → import → test label → first receiving
+- [x] 1.2 [M] Guided onboarding checklist: connect Shopify → connect Bosta → import → test label → first receiving [wizard + 5 component tests Round 3]
 - [x] 1.3 [M] Auto-create default "Main Warehouse" location per tenant
 - [x] 1.4 [M] Tenant settings: name, pickup address, label size, language AR/EN, timezone [frontend Settings screen Round 2]
 - [ ] 1.5 [S] Plan display + manual invoicing status (no online payments)

@@ -4,9 +4,9 @@
 
 ## Current state
 
-**270 backend + 1 frontend test green — Vitest harness wired** — 2026-06-22.
+**270 backend + 6 frontend tests green — Onboarding wizard shipped** — 2026-06-22.
 
-Frontend test harness is live: `npm test` (from `frontend/`) runs Vitest + React Testing Library. One smoke test passes. `renderWithProviders` helper ready for future component tests.
+FR-1.2 onboarding wizard complete. 5 component tests cover all states (all-pending, partial, all-done, signal-lag hint, API error). `npm test` from `frontend/` runs all 6 in ~650ms.
 
 FR-1.4 (Settings) and FR-2.2 (User Management) are complete. Role-gating added via JWT decode in api.ts. Clean TS compile; backend tests unchanged at 270.
 
@@ -65,6 +65,37 @@ V21 migration applied. `detectShopifyCancelVsInflight()` wired in ExceptionServi
 - **FR-4.6 cancelDelivery()** — still blocked on Bosta endpoint verification.
 - **`awaiting_pickup → self_pickup_pending`** — still 409'd until FR-4.6.
 - **git push** — blocked by GitHub credential mismatch. All commits are local. Fix: `gh auth login` or update stored credential for `marwanashraf098`.
+
+---
+
+**Day 31 — Frontend Round 3: Onboarding wizard + tests**
+
+*Auto-show decision:* Nav item only (`Getting started`, checklist icon). Not forced on login because: (1) the backend endpoint is OWNER/MANAGER only — redirecting workers would 403; (2) the wizard is explicitly a non-blocking checklist, forcing it at login contradicts that; (3) it fits naturally with Connections/Settings/Users in the privileged nav section.
+
+*Onboarding.tsx (`/onboarding`):*
+- `GET /api/v1/onboarding/status` → 5 steps, each `{ key, label, status: done|pending }`.
+- All 5 rendered as a non-blocking checklist — no hard gate (user can jump to any step).
+- Each pending step has a `<Link>` to its completion screen: ①②③ → `/connections`, ④⑤ → `/receiving`.
+- Step ④ (`test_label`) shows a signal-lag hint when pending: "Open a finalized receiving session and press Reprint. The initial print at session close does not register here."
+- All-done state: full card with star icon, "You're all set up!", link to Overview.
+- Inline error on API failure (role="alert"), no crash.
+
+*api.ts:* `OnboardingStep`, `OnboardingStatus` interfaces + `getOnboardingStatus()`.
+
+*Layout:* `IconOnboarding` (checklist SVG) + `SideNavLink to="/onboarding"` — hidden for Workers, placed before `/users` and `/settings`.
+
+*setup.ts fix (important gotcha):* Added `afterEach(cleanup)` from `@testing-library/react`. RTL auto-cleanup only registers itself when `globals: true` is set (it looks for global `afterEach`). Without globals, the DOM was not cleared between tests → all 4 later tests were reading stale DOM from previous renders. Fix: import and wire `cleanup` explicitly in setup.ts.
+
+*Tests (onboarding.test.tsx — 5 tests):*
+1. All-pending → all 5 `data-testid="step-{key}"` present with `data-status="pending"`, action links present.
+2. Partial (①② done, ③④⑤ pending) → correct `data-status` per row, `onboarding-complete` absent.
+3. All-done → `onboarding-complete` present, step rows absent.
+4. `test_label` pending → `step-test_label-hint` present with non-empty text.
+5. API error → `role="alert"` present, no crash, no step rows or completed state.
+
+Mock pattern: `vi.mock('../api', async importOriginal => ({ ...actual, getOnboardingStatus: vi.fn(), getRoleFromToken: vi.fn(() => 'owner') }))` — spreads real exports, overrides only the two used by the component.
+
+*npm test result:* **6/6 passing** (1 smoke + 5 onboarding), ~650ms.
 
 ---
 
