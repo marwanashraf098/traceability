@@ -8,7 +8,8 @@
     "logout": "Log out",
     "lookup": "Search barcode or AWB…",
     "returns": "Returns",
-    "exceptions": "Exceptions"
+    "exceptions": "Exceptions",
+    "connections": "Connections"
   },
   "overview": {
     "title": "Overview",
@@ -26,7 +27,9 @@
     "email": "Email",
     "password": "Password",
     "submit": "Sign in",
-    "error": "Invalid email or password"
+    "error": "Invalid email or password",
+    "noAccount": "Don't have an account?",
+    "signUp": "Sign up"
   },
   "orders": {
     "title": "Orders",
@@ -261,6 +264,60 @@
     "error": "Something went wrong",
     "na": "—",
     "cancel": "Cancel"
+  },
+  "signup": {
+    "title": "Create your account",
+    "subtitle": "Get started with Traced",
+    "businessName": "Business name",
+    "ownerName": "Your name",
+    "email": "Email",
+    "phone": "Phone (optional)",
+    "phonePlaceholder": "01XXXXXXXXX or +20XXXXXXXXX",
+    "password": "Password",
+    "passwordHint": "At least 8 characters",
+    "submit": "Create account",
+    "haveAccount": "Already have an account?",
+    "signIn": "Sign in",
+    "errors": {
+      "emailTaken": "This email is already registered. Sign in instead.",
+      "passwordShort": "Password must be at least 8 characters.",
+      "phoneInvalid": "Enter a valid Egyptian number (01X or +20X).",
+      "generic": "Could not create account. Please try again."
+    }
+  },
+  "connections": {
+    "title": "Connections",
+    "subtitle": "Connect your store and courier to start processing orders.",
+    "shopify": {
+      "title": "Shopify",
+      "connected": "Connected",
+      "disconnected": "Not connected",
+      "shopDomain": "Store",
+      "importStatus": "Import",
+      "lastSync": "Last sync",
+      "connectTitle": "Connect your Shopify store",
+      "shopLabel": "Shop domain",
+      "shopPlaceholder": "your-store.myshopify.com",
+      "connectBtn": "Connect Shopify",
+      "connecting": "Redirecting to Shopify…",
+      "domainInvalid": "Enter a valid *.myshopify.com domain.",
+      "error": "Could not initiate Shopify connection. Try again."
+    },
+    "bosta": {
+      "title": "Bosta",
+      "connected": "Connected",
+      "disconnected": "Not connected",
+      "businessName": "Account",
+      "pickupMode": "Pickup mode",
+      "connectTitle": "Connect your Bosta account",
+      "apiKeyLabel": "API key",
+      "apiKeyPlaceholder": "Paste your Bosta API key",
+      "connectBtn": "Connect Bosta",
+      "connecting": "Verifying…",
+      "error": "Could not connect. Check the API key and try again.",
+      "reconnect": "Reconnect"
+    },
+    "never": "Never"
   },
   "shopify": {
     "oauth": {

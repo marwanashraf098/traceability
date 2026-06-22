@@ -8,7 +8,8 @@
     "logout": "تسجيل الخروج",
     "lookup": "بحث باركود أو رقم شحنة…",
     "returns": "المرتجعات",
-    "exceptions": "الاستثناءات"
+    "exceptions": "الاستثناءات",
+    "connections": "الاتصالات"
   },
   "overview": {
     "title": "لوحة التحكم",
@@ -26,7 +27,9 @@
     "email": "البريد الإلكتروني",
     "password": "كلمة المرور",
     "submit": "تسجيل الدخول",
-    "error": "البريد الإلكتروني أو كلمة المرور غير صحيحة"
+    "error": "البريد الإلكتروني أو كلمة المرور غير صحيحة",
+    "noAccount": "ليس لديك حساب؟",
+    "signUp": "إنشاء حساب"
   },
   "orders": {
     "title": "الطلبات",
@@ -260,6 +263,60 @@
     "error": "حدث خطأ ما",
     "na": "—",
     "cancel": "إلغاء"
+  },
+  "signup": {
+    "title": "إنشاء حساب جديد",
+    "subtitle": "ابدأ مع Traced",
+    "businessName": "اسم النشاط التجاري",
+    "ownerName": "اسمك",
+    "email": "البريد الإلكتروني",
+    "phone": "الهاتف (اختياري)",
+    "phonePlaceholder": "01XXXXXXXXX أو +20XXXXXXXXX",
+    "password": "كلمة المرور",
+    "passwordHint": "8 أحرف على الأقل",
+    "submit": "إنشاء الحساب",
+    "haveAccount": "لديك حساب بالفعل؟",
+    "signIn": "تسجيل الدخول",
+    "errors": {
+      "emailTaken": "هذا البريد الإلكتروني مسجل بالفعل. قم بتسجيل الدخول.",
+      "passwordShort": "يجب أن تتكون كلمة المرور من 8 أحرف على الأقل.",
+      "phoneInvalid": "أدخل رقمًا مصريًا صحيحًا (01X أو +20X).",
+      "generic": "تعذّر إنشاء الحساب. يرجى المحاولة مرة أخرى."
+    }
+  },
+  "connections": {
+    "title": "الاتصالات",
+    "subtitle": "اربط متجرك وشركة الشحن لبدء معالجة الطلبات.",
+    "shopify": {
+      "title": "Shopify",
+      "connected": "متصل",
+      "disconnected": "غير متصل",
+      "shopDomain": "المتجر",
+      "importStatus": "الاستيراد",
+      "lastSync": "آخر مزامنة",
+      "connectTitle": "ربط متجر Shopify",
+      "shopLabel": "نطاق المتجر",
+      "shopPlaceholder": "your-store.myshopify.com",
+      "connectBtn": "ربط Shopify",
+      "connecting": "جارٍ التوجيه إلى Shopify…",
+      "domainInvalid": "أدخل نطاق *.myshopify.com صحيح.",
+      "error": "تعذّر بدء الاتصال بـ Shopify. حاول مرة أخرى."
+    },
+    "bosta": {
+      "title": "بوستا",
+      "connected": "متصل",
+      "disconnected": "غير متصل",
+      "businessName": "الحساب",
+      "pickupMode": "نمط الاستلام",
+      "connectTitle": "ربط حساب بوستا",
+      "apiKeyLabel": "مفتاح API",
+      "apiKeyPlaceholder": "الصق مفتاح بوستا API هنا",
+      "connectBtn": "ربط بوستا",
+      "connecting": "جارٍ التحقق…",
+      "error": "تعذّر الاتصال. تحقق من المفتاح وأعد المحاولة.",
+      "reconnect": "إعادة الربط"
+    },
+    "never": "لم تتم"
   },
   "shopify": {
     "oauth": {

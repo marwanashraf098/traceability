@@ -10,9 +10,10 @@ function IconInventory()  { return <svg width="18" height="18" fill="none" strok
 function IconReceiving()  { return <svg width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.75" viewBox="0 0 24 24"><path d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"/></svg> }
 function IconFulfill()    { return <svg width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.75" viewBox="0 0 24 24"><path d="M4 6h16M4 10h16M4 14h16M4 18h7"/><path d="M15 14l2 2 4-4"/></svg> }
 function IconReturns()    { return <svg width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.75" viewBox="0 0 24 24"><path d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6"/></svg> }
-function IconExceptions() { return <svg width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.75" viewBox="0 0 24 24"><path d="M12 9v4m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/></svg> }
-function IconSearch()     { return <svg width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg> }
-function IconLogout()     { return <svg width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.75" viewBox="0 0 24 24"><path d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"/></svg> }
+function IconExceptions()  { return <svg width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.75" viewBox="0 0 24 24"><path d="M12 9v4m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/></svg> }
+function IconConnections() { return <svg width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.75" viewBox="0 0 24 24"><path d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg> }
+function IconSearch()      { return <svg width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg> }
+function IconLogout()      { return <svg width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.75" viewBox="0 0 24 24"><path d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"/></svg> }
 
 // ── Nav link helper ───────────────────────────────────────────────────────────
 
@@ -82,8 +83,9 @@ export default function Layout({ children }: { children: ReactNode }) {
           <SideNavLink to="/catalog"    icon={<IconInventory />}  label={t('nav.catalog')} />
           <SideNavLink to="/receiving"  icon={<IconReceiving />}  label={t('nav.receiving')} />
           <SideNavLink to="/fulfill"    icon={<IconFulfill />}    label={t('nav.fulfill')} />
-          <SideNavLink to="/returns"    icon={<IconReturns />}    label={t('nav.returns')} />
-          <SideNavLink to="/exceptions" icon={<IconExceptions />} label={t('nav.exceptions')} />
+          <SideNavLink to="/returns"      icon={<IconReturns />}      label={t('nav.returns')} />
+          <SideNavLink to="/exceptions"   icon={<IconExceptions />}   label={t('nav.exceptions')} />
+          <SideNavLink to="/connections"  icon={<IconConnections />}  label={t('nav.connections')} />
         </nav>
 
         {/* Bottom: lang toggle + logout */}

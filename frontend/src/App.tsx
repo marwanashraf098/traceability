@@ -1,6 +1,7 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import Layout from './components/Layout'
 import Login from './pages/Login'
+import Signup from './pages/Signup'
 import Overview from './pages/Overview'
 import Orders from './pages/Orders'
 import OrderDetail from './pages/OrderDetail'
@@ -10,6 +11,7 @@ import Fulfill from './pages/Fulfill'
 import LookupPage from './pages/Lookup'
 import Returns from './pages/Returns'
 import ExceptionsPage from './pages/Exceptions'
+import Connections from './pages/Connections'
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
   return localStorage.getItem('token') ? <>{children}</> : <Navigate to="/login" replace />
@@ -19,7 +21,8 @@ export default function App() {
   return (
     <BrowserRouter>
       <Routes>
-        <Route path="/login" element={<Login />} />
+        <Route path="/login"  element={<Login />} />
+        <Route path="/signup" element={<Signup />} />
         <Route
           path="/overview"
           element={
@@ -89,6 +92,14 @@ export default function App() {
           element={
             <RequireAuth>
               <Layout><ExceptionsPage /></Layout>
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="/connections"
+          element={
+            <RequireAuth>
+              <Layout><Connections /></Layout>
             </RequireAuth>
           }
         />

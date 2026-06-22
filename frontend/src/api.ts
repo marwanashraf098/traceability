@@ -243,3 +243,50 @@ export type LookupResult = PieceLookupResult | TrackingLookupResult
 export function lookup(q: string) {
   return request<LookupResult>(`/lookup?q=${encodeURIComponent(q)}`)
 }
+
+// ── Auth: signup ──────────────────────────────────────────────────────────────
+
+export function signup(tenantName: string, name: string, email: string, password: string) {
+  return request<{ accessToken: string; refreshToken: string }>('/auth/signup', {
+    method: 'POST',
+    body: JSON.stringify({ tenantName, name, email, password }),
+  })
+}
+
+// ── Connections status ────────────────────────────────────────────────────────
+
+export interface ConnectionsStatus {
+  shopify: {
+    connected: boolean
+    shopDomain: string | null
+    importStatus: string | null
+    lastSyncAt: string | null
+  }
+  bosta: {
+    connected: boolean
+    businessName: string | null
+    pickupMode: string | null
+  }
+}
+
+export function getConnections() {
+  return request<ConnectionsStatus>('/connections')
+}
+
+// ── Shopify OAuth: initiate install flow ──────────────────────────────────────
+
+export function shopifyInitiate(shop: string) {
+  return request<{ consentUrl: string }>('/shopify/oauth/initiate', {
+    method: 'POST',
+    body: JSON.stringify({ shop }),
+  })
+}
+
+// ── Bosta connect ─────────────────────────────────────────────────────────────
+
+export function bostaConnect(apiKey: string) {
+  return request<{ accountId: string; webhookSecret: string }>('/bosta/connect', {
+    method: 'POST',
+    body: JSON.stringify({ apiKey }),
+  })
+}

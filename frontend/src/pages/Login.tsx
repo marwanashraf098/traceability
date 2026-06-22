@@ -1,5 +1,5 @@
 import { useState, FormEvent } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { login } from '../api'
 
@@ -92,6 +92,13 @@ export default function Login() {
             {loading ? t('common.loading') : t('login.submit')}
           </button>
         </div>
+
+        <p className="text-center text-small text-muted mt-5">
+          {t('login.noAccount')}{' '}
+          <Link to="/signup" className="text-brand hover:text-brand-hover transition-colors">
+            {t('login.signUp')}
+          </Link>
+        </p>
       </div>
     </div>
   )
