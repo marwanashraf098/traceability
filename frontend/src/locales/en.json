@@ -11,7 +11,8 @@
     "exceptions": "Exceptions",
     "connections": "Connections",
     "users": "Team",
-    "settings": "Settings"
+    "settings": "Settings",
+    "onboarding": "Getting started"
   },
   "overview": {
     "title": "Overview",
@@ -320,6 +321,39 @@
       "reconnect": "Reconnect"
     },
     "never": "Never"
+  },
+  "onboarding": {
+    "title": "Getting started",
+    "subtitle": "Complete these steps to set up your workspace.",
+    "allDone": "You're all set up!",
+    "allDoneSubtitle": "Your workspace is fully configured. Head to Overview to get started.",
+    "goToOverview": "Go to Overview",
+    "done": "Done",
+    "pending": "Pending",
+    "steps": {
+      "connect_shopify": {
+        "label": "Connect your Shopify store",
+        "action": "Connect Shopify"
+      },
+      "connect_bosta": {
+        "label": "Connect Bosta courier",
+        "action": "Connect Bosta"
+      },
+      "initial_import": {
+        "label": "Run product & order import",
+        "action": "Go to Connections",
+        "hint": "After connecting Shopify, the import runs automatically. You can also trigger it manually from the Connections screen."
+      },
+      "test_label": {
+        "label": "Print a test label",
+        "action": "Go to Receiving",
+        "hint": "Open a finalized receiving session and press Reprint on any label. The initial print at session close does not register here."
+      },
+      "first_receiving": {
+        "label": "Complete your first receiving session",
+        "action": "Go to Receiving"
+      }
+    }
   },
   "settings": {
     "title": "Settings",

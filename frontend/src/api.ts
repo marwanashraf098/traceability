@@ -311,6 +311,23 @@ export function bostaConnect(apiKey: string) {
   })
 }
 
+// ── Onboarding checklist (FR-1.2) ────────────────────────────────────────────
+
+export interface OnboardingStep {
+  key: 'connect_shopify' | 'connect_bosta' | 'initial_import' | 'test_label' | 'first_receiving'
+  label: string
+  status: 'done' | 'pending'
+}
+
+export interface OnboardingStatus {
+  steps: OnboardingStep[]
+  allDone: boolean
+}
+
+export function getOnboardingStatus() {
+  return request<OnboardingStatus>('/onboarding/status')
+}
+
 // ── Tenant settings (FR-1.4) ──────────────────────────────────────────────────
 
 export interface TenantSettings {
