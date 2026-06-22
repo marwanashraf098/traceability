@@ -4,9 +4,9 @@
 
 ## Current state
 
-**270/270 green — Frontend Round 1 shipped: Signup + Connections** — 2026-06-22.
+**270/270 green — Frontend Round 2 shipped: Settings + User Management** — 2026-06-22.
 
-FR-1.1 (Signup) and FR-1.2 (connect screens) are complete. Two new pages built, matching Traced UI conventions. Clean TS compile; backend tests unchanged at 270.
+FR-1.4 (Settings) and FR-2.2 (User Management) are complete. Role-gating added via JWT decode in api.ts. Clean TS compile; backend tests unchanged at 270.
 
 V23–V25 applied. 5 backend items shipped: audit log (FR-2.6), user CRUD (FR-2.2), tenant settings (FR-1.4), connections status (FR-1.2), onboarding checklist (FR-1.2). 34 new tests. All existing 236 still green. Commits still local only (git push blocked by credential mismatch — GitHub rejects stored credential `marwanashraf56` on repo owned by `marwanashraf098`).
 
@@ -63,6 +63,37 @@ V21 migration applied. `detectShopifyCancelVsInflight()` wired in ExceptionServi
 - **FR-4.6 cancelDelivery()** — still blocked on Bosta endpoint verification.
 - **`awaiting_pickup → self_pickup_pending`** — still 409'd until FR-4.6.
 - **git push** — blocked by GitHub credential mismatch. All commits are local. Fix: `gh auth login` or update stored credential for `marwanashraf098`.
+
+---
+
+**Day 29 — Frontend Round 2: Settings + User Management**
+
+*Role-gating mechanism (new for this round):*
+- `parseJwtClaims()` + `getRoleFromToken()` in `api.ts` — base64-decodes the JWT payload part, returns `'owner' | 'manager' | 'worker' | null`. No library.
+- Layout.tsx: hides `/users` and `/settings` nav items when `role === 'worker'`.
+- Settings.tsx: disables form and hides Save button for non-owners (backend `@PreAuthorize('OWNER')` is the real gate).
+- Users.tsx: `canEdit(u)` guard — Managers cannot see edit/deactivate for Owner-role users; Owner option in role select hidden from Managers.
+- Server remains the authoritative enforcer on every mutation.
+
+*Nav placement:*
+- `/users` ("Team") after Connections; `/settings` ("Settings") after Team — both hidden for Workers.
+
+**FR-1.4 — Settings (`/settings`):**
+- `Settings.tsx` — GET/PUT `/api/v1/tenant/settings`. Fields: business name, pickup address, label size (segmented control 40×25|50×25), default language (segmented control AR|EN), timezone text input with IANA hint.
+- PUT is Owner-only. Managers see read-only form with notice banner. Save button only shown for Owner.
+- Inline success confirmation (green banner, auto-clears after 4s). Inline danger error on failure.
+- `langNote` explains this is the tenant account default, not the live sidebar toggle.
+
+**FR-2.2 — User Management (`/users`):**
+- `Users.tsx` — table with name, email, role badge (colour-coded: brand/accent/muted), active/inactive status, Edit + Deactivate row actions.
+- `CreateUserModal`: role-aware form. Worker → PIN field (4-digit, numeric). Manager/Owner → password field (≥8). Owner option in role select only appears when `currentRole === 'owner'`.
+- `EditUserModal`: Manager sees no Owner option; cannot open modal for Owner-role users at all (`canEdit()` returns false). Server re-enforces with 403.
+- `DeactivateModal`: explains custody history preserved, action reversible, never hard-delete. No Delete button anywhere in the UI.
+- Uses `Modal` from `ui.tsx` — existing component.
+
+*api.ts additions:* `getRoleFromToken()`, `getTenantSettings()`, `updateTenantSettings()`, `listUsers()`, `createUser()`, `updateUser()`, `deactivateUser()` + `TenantSettings`, `User` interfaces.
+
+*i18n:* `settings.*`, `users.*` (create/edit/deactivate sub-keys), `nav.users`, `nav.settings` — AR+EN in sync.
 
 ---
 

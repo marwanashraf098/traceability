@@ -5,13 +5,13 @@ One line per requirement · [M] Must / [S] Should / [C] Could · use as the buil
 - [x] 1.1 [M] Tenant signup: business name, owner, email, phone, password (verification [S])
 - [x] 1.2 [M] Guided onboarding checklist: connect Shopify → connect Bosta → import → test label → first receiving
 - [x] 1.3 [M] Auto-create default "Main Warehouse" location per tenant
-- [x] 1.4 [M] Tenant settings: name, pickup address, label size, language AR/EN, timezone
+- [x] 1.4 [M] Tenant settings: name, pickup address, label size, language AR/EN, timezone [frontend Settings screen Round 2]
 - [ ] 1.5 [S] Plan display + manual invoicing status (no online payments)
 - [ ] 1.6 [M] Internal super-admin: list/suspend tenants, logged impersonation
 
 ## FR-2 Auth, Users & Permissions
 - [x] 2.1 [M] Email+password login, JWT access (15m) + refresh, logout-everywhere
-- [x] 2.2 [M] User CRUD by Owner/Manager; deactivate only, never delete
+- [x] 2.2 [M] User CRUD by Owner/Manager; deactivate only, never delete [frontend Users screen Round 2]
 - [x] 2.3 [M] Worker PIN switch at shared stations; attribution until switch / 15-min idle
 - [x] 2.4 [M] No anonymous custody actions; PIN lockout after 5 fails + Manager notify
 - [x] 2.5 [M] Server-side permission matrix (Owner / Manager / Worker) on every endpoint
