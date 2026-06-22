@@ -4,7 +4,9 @@
 
 ## Current state
 
-**270/270 green — Frontend Round 2 shipped: Settings + User Management** — 2026-06-22.
+**270 backend + 1 frontend test green — Vitest harness wired** — 2026-06-22.
+
+Frontend test harness is live: `npm test` (from `frontend/`) runs Vitest + React Testing Library. One smoke test passes. `renderWithProviders` helper ready for future component tests.
 
 FR-1.4 (Settings) and FR-2.2 (User Management) are complete. Role-gating added via JWT decode in api.ts. Clean TS compile; backend tests unchanged at 270.
 
@@ -63,6 +65,31 @@ V21 migration applied. `detectShopifyCancelVsInflight()` wired in ExceptionServi
 - **FR-4.6 cancelDelivery()** — still blocked on Bosta endpoint verification.
 - **`awaiting_pickup → self_pickup_pending`** — still 409'd until FR-4.6.
 - **git push** — blocked by GitHub credential mismatch. All commits are local. Fix: `gh auth login` or update stored credential for `marwanashraf098`.
+
+---
+
+**Day 30 — Vitest + React Testing Library harness**
+
+*Packages installed (devDependencies):*
+`vitest@4.1.9`, `@testing-library/react@16`, `@testing-library/jest-dom@6`, `jsdom@29`
+
+*Config changes:*
+- `vite.config.ts`: import changed to `vitest/config`; `test` block: `environment: 'jsdom'`, `setupFiles: ['./src/test/setup.ts']`, explicit `include` pattern for `src/test/**`.
+- `tsconfig.json`: added `"exclude": ["src/test"]` — keeps `tsc && vite build` clean (no test imports in production compile).
+- `package.json`: `"test": "vitest run"`, `"test:watch": "vitest"`.
+
+*Files added:*
+- `src/test/setup.ts` — `import '@testing-library/jest-dom/vitest'` (extends vitest's `expect` with jest-dom matchers without requiring `globals: true`).
+- `src/test/renderWithProviders.tsx` — creates a fresh `i18next.createInstance()` (synchronous, `initImmediate: false`) + wraps in `MemoryRouter` + `I18nextProvider`. Re-exports everything from `@testing-library/react` so test files have a single import.
+- `src/test/smoke.test.tsx` — 1 passing test: renders a `<p>`, asserts `toBeInTheDocument()` + `toHaveTextContent()`.
+
+*App globals handled:*
+- `localStorage` — jsdom provides it; no mock needed.
+- `i18n` — `renderWithProviders` uses a fresh instance, avoiding `src/i18n.ts`'s `localStorage.getItem('lang')` side effect at import time.
+- `react-router` — `MemoryRouter` in `renderWithProviders`.
+- No `window.matchMedia` mock needed yet (none of the current components use it).
+
+*Run:* `npm test` (from `frontend/`)
 
 ---
 
