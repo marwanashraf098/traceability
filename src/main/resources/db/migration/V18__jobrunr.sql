@@ -9,13 +9,17 @@
 -- final collapsed form and pre-populates jobrunr_migrations so that if
 -- skip-create is ever changed to false, JobRunr sees all scripts as already applied.
 --
+-- All statements are idempotent (IF NOT EXISTS / ON CONFLICT DO NOTHING) so the
+-- migration succeeds even if JobRunr previously ran with skip-create=false and
+-- already created its own tables.
+--
 -- app_user gets SELECT/INSERT/UPDATE/DELETE automatically via the
 -- ALTER DEFAULT PRIVILEGES already set in V1 (Flyway runs as postgres = same grantor).
 -- Explicit GRANTs below are belt-and-suspenders — removes any dependency on the
 -- ALTER DEFAULT PRIVILEGES ordering across sessions.
 
 -- ── Internal migration tracker (v000) ────────────────────────────────────────
-CREATE TABLE jobrunr_migrations
+CREATE TABLE IF NOT EXISTS jobrunr_migrations
 (
     id          nchar(36)   PRIMARY KEY,
     script      varchar(64) NOT NULL,
@@ -23,7 +27,7 @@ CREATE TABLE jobrunr_migrations
 );
 
 -- ── Jobs (v001 + v006 + v014 index changes) ──────────────────────────────────
-CREATE TABLE jobrunr_jobs
+CREATE TABLE IF NOT EXISTS jobrunr_jobs
 (
     id             nchar(36)    PRIMARY KEY,
     version        int          NOT NULL,
@@ -36,16 +40,16 @@ CREATE TABLE jobrunr_jobs
     recurringJobId varchar(128)
 );
 
-CREATE INDEX jobrunr_state_idx              ON jobrunr_jobs (state);
-CREATE INDEX jobrunr_job_signature_idx      ON jobrunr_jobs (jobSignature);
-CREATE INDEX jobrunr_job_created_at_idx     ON jobrunr_jobs (createdAt);
-CREATE INDEX jobrunr_job_scheduled_at_idx   ON jobrunr_jobs (scheduledAt);
-CREATE INDEX jobrunr_job_rci_idx            ON jobrunr_jobs (recurringJobId);
+CREATE INDEX IF NOT EXISTS jobrunr_state_idx              ON jobrunr_jobs (state);
+CREATE INDEX IF NOT EXISTS jobrunr_job_signature_idx      ON jobrunr_jobs (jobSignature);
+CREATE INDEX IF NOT EXISTS jobrunr_job_created_at_idx     ON jobrunr_jobs (createdAt);
+CREATE INDEX IF NOT EXISTS jobrunr_job_scheduled_at_idx   ON jobrunr_jobs (scheduledAt);
+CREATE INDEX IF NOT EXISTS jobrunr_job_rci_idx            ON jobrunr_jobs (recurringJobId);
 -- v014 drops updatedAt index and replaces with compound (state, updatedAt):
-CREATE INDEX jobrunr_jobs_state_updated_idx ON jobrunr_jobs (state ASC, updatedAt ASC);
+CREATE INDEX IF NOT EXISTS jobrunr_jobs_state_updated_idx ON jobrunr_jobs (state ASC, updatedAt ASC);
 
 -- ── Recurring jobs (v002 + v013) ─────────────────────────────────────────────
-CREATE TABLE jobrunr_recurring_jobs
+CREATE TABLE IF NOT EXISTS jobrunr_recurring_jobs
 (
     id        nchar(128) PRIMARY KEY,
     version   int        NOT NULL,
@@ -53,10 +57,10 @@ CREATE TABLE jobrunr_recurring_jobs
     createdAt bigint     NOT NULL DEFAULT 0
 );
 
-CREATE INDEX jobrunr_recurring_job_created_at_idx ON jobrunr_recurring_jobs (createdAt);
+CREATE INDEX IF NOT EXISTS jobrunr_recurring_job_created_at_idx ON jobrunr_recurring_jobs (createdAt);
 
 -- ── Background job servers (v003 + v007 + v015) ───────────────────────────────
-CREATE TABLE jobrunr_backgroundjobservers
+CREATE TABLE IF NOT EXISTS jobrunr_backgroundjobservers
 (
     id                       nchar(36)     PRIMARY KEY,
     workerPoolSize           int           NOT NULL,
@@ -76,11 +80,11 @@ CREATE TABLE jobrunr_backgroundjobservers
     name                     varchar(128)
 );
 
-CREATE INDEX jobrunr_bgjobsrvrs_fsthb_idx ON jobrunr_backgroundjobservers (firstHeartbeat);
-CREATE INDEX jobrunr_bgjobsrvrs_lsthb_idx ON jobrunr_backgroundjobservers (lastHeartbeat);
+CREATE INDEX IF NOT EXISTS jobrunr_bgjobsrvrs_fsthb_idx ON jobrunr_backgroundjobservers (firstHeartbeat);
+CREATE INDEX IF NOT EXISTS jobrunr_bgjobsrvrs_lsthb_idx ON jobrunr_backgroundjobservers (lastHeartbeat);
 
 -- ── Metadata (v009) ───────────────────────────────────────────────────────────
-CREATE TABLE jobrunr_metadata
+CREATE TABLE IF NOT EXISTS jobrunr_metadata
 (
     id        varchar(156) PRIMARY KEY,
     name      varchar(92)  NOT NULL,
@@ -92,10 +96,11 @@ CREATE TABLE jobrunr_metadata
 
 INSERT INTO jobrunr_metadata (id, name, owner, value, createdAt, updatedAt)
 VALUES ('succeeded-jobs-counter-cluster', 'succeeded-jobs-counter', 'cluster',
-        '0', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP);
+        '0', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+ON CONFLICT (id) DO NOTHING;
 
 -- ── Job stats view (Postgres-specific v014) ───────────────────────────────────
-CREATE VIEW jobrunr_jobs_stats AS
+CREATE OR REPLACE VIEW jobrunr_jobs_stats AS
 WITH job_stat_results AS (
     SELECT state, count(*) AS count
     FROM jobrunr_jobs
@@ -142,4 +147,5 @@ INSERT INTO jobrunr_migrations (id, script, installedOn) VALUES
     (gen_random_uuid()::text, 'v012__change_oracle_alter_jobrunr_metadata_column_size.sql',  '2026-06-20T00:00:00.000000000'),
     (gen_random_uuid()::text, 'v013__alter_table_recurring_job_add_createdAt.sql',           '2026-06-20T00:00:00.000000000'),
     (gen_random_uuid()::text, 'v014__improve_job_stats.sql',                                 '2026-06-20T00:00:00.000000000'),
-    (gen_random_uuid()::text, 'v015__alter_table_backgroundjobserver_add_name.sql',          '2026-06-20T00:00:00.000000000');
+    (gen_random_uuid()::text, 'v015__alter_table_backgroundjobserver_add_name.sql',          '2026-06-20T00:00:00.000000000')
+ON CONFLICT (id) DO NOTHING;
