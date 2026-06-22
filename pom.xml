@@ -20,10 +20,12 @@
 
     <properties>
         <java.version>21</java.version>
-        <node.version>v20.11.0</node.version>
-        <npm.version>10.2.4</npm.version>
+        <node.version>v22.15.0</node.version>
+        <npm.version>10.9.2</npm.version>
         <!-- Override Spring Boot's managed 1.19.8; 1.20+ fixes authConfig() on Mac Docker Desktop -->
         <testcontainers.version>1.20.4</testcontainers.version>
+        <!-- Set -Dskip.frontend=true to bypass the Vite build during backend-only test runs -->
+        <skip.frontend>false</skip.frontend>
     </properties>
 
     <dependencies>
@@ -167,6 +169,7 @@
                     <workingDirectory>frontend</workingDirectory>
                     <nodeVersion>${node.version}</nodeVersion>
                     <npmVersion>${npm.version}</npmVersion>
+                    <skip>${skip.frontend}</skip>
                 </configuration>
                 <executions>
                     <execution>
