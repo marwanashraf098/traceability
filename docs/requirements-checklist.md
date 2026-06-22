@@ -131,7 +131,7 @@ One line per requirement · [M] Must / [S] Should / [C] Could · use as the buil
 - [ ] 14.6 [S] Timeline PDF export (dispute evidence)
 
 ## FR-15 Dashboards & Exceptions
-- [ ] 15.1 [M] Inventory counts by status with drill-down
+- [x] 15.1 [M] Inventory counts by status with drill-down [summary endpoint + Overview tiles + Inventory drill-down page Day 32]
 - [ ] 15.2 [M] Fulfillment board with age colors (>24h amber, >48h red)
 - [x] 15.3 [M] Exceptions center, one prioritized list w/ resolving actions: lost · never-received · unexpected return · failed attempts · stuck (5-day default, per-tenant) · Bosta state 103 limbo · NDR 26–30 evidence · short (signal missing — FR-7.7 deferred) · blocked customer · address review · pending unpack · self-pickup no-show · missing AWB · unlinked Mode-B · shopify_cancel_vs_inflight (Day 25) · Shopify edit conflict; archived w/ resolver
 - [ ] 15.4 [S] Owner daily digest (email; WhatsApp [C])

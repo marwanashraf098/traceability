@@ -4,9 +4,11 @@
 
 ## Current state
 
-**270 backend + 6 frontend tests green — Onboarding wizard shipped** — 2026-06-22.
+**278 backend + 11 frontend tests green — FR-15.1 inventory summary shipped** — 2026-06-22.
 
-FR-1.2 onboarding wizard complete. 5 component tests cover all states (all-pending, partial, all-done, signal-lag hint, API error). `npm test` from `frontend/` runs all 6 in ~650ms.
+FR-15.1 complete. 8 backend + 5 frontend tests. Overview.tsx replaced order-count placeholders with real piece-level counts. `mvn test -Dskip.frontend=true` for backend-only runs.
+
+FR-1.2 onboarding wizard complete. 5 component tests cover all states (all-pending, partial, all-done, signal-lag hint, API error). `npm test` from `frontend/` runs all 11 in ~900ms.
 
 FR-1.4 (Settings) and FR-2.2 (User Management) are complete. Role-gating added via JWT decode in api.ts. Clean TS compile; backend tests unchanged at 270.
 
@@ -65,6 +67,36 @@ V21 migration applied. `detectShopifyCancelVsInflight()` wired in ExceptionServi
 - **FR-4.6 cancelDelivery()** — still blocked on Bosta endpoint verification.
 - **`awaiting_pickup → self_pickup_pending`** — still 409'd until FR-4.6.
 - **git push** — blocked by GitHub credential mismatch. All commits are local. Fix: `gh auth login` or update stored credential for `marwanashraf098`.
+
+---
+
+**Day 32 — FR-15.1: Piece-level inventory summary**
+
+*Design decisions:*
+- **Group B "entered within 30d AND still in status" query**: single correlated EXISTS — `p.status IN ('delivered','damaged','lost') AND EXISTS (SELECT 1 FROM piece_events pe WHERE pe.piece_id = p.id AND pe.to_status = p.status AND pe.occurred_at >= now() - INTERVAL '30 days')`. If a piece was delivered then returned, its current status is `return_pending_inspection` not `delivered`, so `p.status = 'delivered'` already excludes it — no special de-dup needed.
+- **Per-variant reuse**: CatalogController and InventoryController both query `pieces.status` directly. They are consistent by construction — no shared helper or code duplication needed.
+- **Frontend IA**: Overview gets the inventory summary (replaces 4 order-count stat cards). Drill-down goes to new `/inventory?status=X[&within30d=true]` page (no sidebar entry, accessed only via tile clicks).
+
+*Backend — `InventoryController.java` (`inventory` package):*
+- `GET /api/v1/inventory/summary` — groupA (6 point-in-time) + groupB (3 windowed, 30d)
+- `GET /api/v1/pieces?status=X&within30d=false&page=0&size=20` — paginated flat piece list
+- Both OWNER/MANAGER only.
+- **CRITICAL gotcha**: both handlers must be wrapped in `TransactionTemplate.execute()`. `TenantAwareConnection` fires the GUC (`set_config('app.current_tenant', ...)`) only on `setAutoCommit(false)` — i.e., only when a transaction begins. Without `TransactionTemplate`, `JdbcTemplate` runs in auto-commit mode, the GUC is never set, `NULLIF(current_setting(...))::uuid` returns NULL, and every WHERE clause fails silently with 0 rows. This was found and fixed after 7/8 tests failed all returning 0.
+
+*pom.xml:*
+- `node.version` updated v20.11.0 → v22.15.0 (`styleText` in `node:util` was added in Node 20.12.0; rolldown via Vite 5.4 requires it).
+- Added `skip.frontend` property; use `-Dskip.frontend=true` to bypass Vite build during backend-only test runs.
+
+*Frontend:*
+- **Overview.tsx** rewrote the stat section with 9 inventory tiles (6 group A in a 6-col grid, 3 group B in a 3-col section with "Last 30 days" heading + "30d" badge). Inline error on API failure. Exceptions section unchanged.
+- **Inventory.tsx** new page at `/inventory` — paginated flat piece list (barcode, variant, SKU, location, last event). Reads `?status=X&within30d=true/false` from search params. Back link to Overview. `src/App.tsx`: added `/inventory` route.
+- **api.ts**: `getInventorySummary()` + `listPieces()` + interfaces.
+- **i18n**: `inventory.*` (live/window30d/col/drillTitle/back/prev/next/showing) in AR+EN. Removed unused `overview.totalOrders/delivered/inTransit/returns` keys.
+
+*Tests:*
+- `InventorySummaryTest.java` — 8 tests: i1 available point-in-time; i2 old delivery not in window; i3 recent delivery in window; i4 returned piece excluded from delivered; i5 tenant isolation; i6 catalog consistency; i7 pieces status filter; i8 pieces within30d filter.
+- `inventory.test.tsx` — 5 tests: all tiles render; 30d label on group B; zero-count tile renders; API error degrades gracefully; tile hrefs correct (group A no window, group B with within30d=true).
+- Backend: **278/278** passing. Frontend: **11/11** passing.
 
 ---
 
