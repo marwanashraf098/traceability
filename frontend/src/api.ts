@@ -244,6 +244,26 @@ export function lookup(q: string) {
   return request<LookupResult>(`/lookup?q=${encodeURIComponent(q)}`)
 }
 
+// ── JWT role helper ───────────────────────────────────────────────────────────
+
+function parseJwtPayload(jwtToken: string): Record<string, unknown> {
+  try {
+    const payload = jwtToken.split('.')[1]
+    return JSON.parse(atob(payload.replace(/-/g, '+').replace(/_/g, '/')))
+  } catch {
+    return {}
+  }
+}
+
+export function getRoleFromToken(): 'owner' | 'manager' | 'worker' | null {
+  const t = token()
+  if (!t) return null
+  const claims = parseJwtPayload(t)
+  const role = claims['role']
+  if (role === 'owner' || role === 'manager' || role === 'worker') return role
+  return null
+}
+
 // ── Auth: signup ──────────────────────────────────────────────────────────────
 
 export function signup(tenantName: string, name: string, email: string, password: string) {
@@ -289,4 +309,64 @@ export function bostaConnect(apiKey: string) {
     method: 'POST',
     body: JSON.stringify({ apiKey }),
   })
+}
+
+// ── Tenant settings (FR-1.4) ──────────────────────────────────────────────────
+
+export interface TenantSettings {
+  name: string
+  pickupAddress: string | null
+  labelSize: '40x25' | '50x25'
+  defaultLanguage: 'ar' | 'en'
+  timezone: string
+}
+
+export function getTenantSettings() {
+  return request<TenantSettings>('/tenant/settings')
+}
+
+export function updateTenantSettings(settings: Partial<TenantSettings>) {
+  return request<void>('/tenant/settings', {
+    method: 'PUT',
+    body: JSON.stringify(settings),
+  })
+}
+
+// ── User management (FR-2.2) ──────────────────────────────────────────────────
+
+export interface User {
+  id: string
+  name: string
+  email: string | null
+  role: 'owner' | 'manager' | 'worker'
+  active: boolean
+  created_at: string
+}
+
+export function listUsers() {
+  return request<User[]>('/users')
+}
+
+export function createUser(payload: {
+  name: string
+  email?: string
+  role: string
+  password?: string
+  pin?: string
+}) {
+  return request<{ id: string; name: string; role: string }>('/users', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
+export function updateUser(id: string, payload: { name?: string; role?: string }) {
+  return request<void>(`/users/${id}`, {
+    method: 'PATCH',
+    body: JSON.stringify(payload),
+  })
+}
+
+export function deactivateUser(id: string) {
+  return request<void>(`/users/${id}/deactivate`, { method: 'POST' })
 }

@@ -1,6 +1,7 @@
 import { NavLink, useNavigate } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { useState, useRef, ReactNode } from 'react'
+import { getRoleFromToken } from '../api'
 
 // ── Inline SVG icons ──────────────────────────────────────────────────────────
 
@@ -12,6 +13,8 @@ function IconFulfill()    { return <svg width="18" height="18" fill="none" strok
 function IconReturns()    { return <svg width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.75" viewBox="0 0 24 24"><path d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6"/></svg> }
 function IconExceptions()  { return <svg width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.75" viewBox="0 0 24 24"><path d="M12 9v4m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/></svg> }
 function IconConnections() { return <svg width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.75" viewBox="0 0 24 24"><path d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg> }
+function IconUsers()       { return <svg width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.75" viewBox="0 0 24 24"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87M16 3.13a4 4 0 010 7.75"/></svg> }
+function IconSettings()    { return <svg width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.75" viewBox="0 0 24 24"><path d="M12 15a3 3 0 100-6 3 3 0 000 6z"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg> }
 function IconSearch()      { return <svg width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg> }
 function IconLogout()      { return <svg width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.75" viewBox="0 0 24 24"><path d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"/></svg> }
 
@@ -38,6 +41,7 @@ export default function Layout({ children }: { children: ReactNode }) {
   const navigate = useNavigate()
   const [searchQ, setSearchQ] = useState('')
   const searchRef = useRef<HTMLInputElement>(null)
+  const role = getRoleFromToken()
 
   function logout() {
     localStorage.removeItem('token')
@@ -86,6 +90,12 @@ export default function Layout({ children }: { children: ReactNode }) {
           <SideNavLink to="/returns"      icon={<IconReturns />}      label={t('nav.returns')} />
           <SideNavLink to="/exceptions"   icon={<IconExceptions />}   label={t('nav.exceptions')} />
           <SideNavLink to="/connections"  icon={<IconConnections />}  label={t('nav.connections')} />
+          {role !== 'worker' && (
+            <>
+              <SideNavLink to="/users"    icon={<IconUsers />}        label={t('nav.users')} />
+              <SideNavLink to="/settings" icon={<IconSettings />}     label={t('nav.settings')} />
+            </>
+          )}
         </nav>
 
         {/* Bottom: lang toggle + logout */}

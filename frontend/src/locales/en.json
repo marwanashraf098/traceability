@@ -9,7 +9,9 @@
     "lookup": "Search barcode or AWB…",
     "returns": "Returns",
     "exceptions": "Exceptions",
-    "connections": "Connections"
+    "connections": "Connections",
+    "users": "Team",
+    "settings": "Settings"
   },
   "overview": {
     "title": "Overview",
@@ -318,6 +320,91 @@
       "reconnect": "Reconnect"
     },
     "never": "Never"
+  },
+  "settings": {
+    "title": "Settings",
+    "subtitle": "Business and label configuration for your workspace.",
+    "ownerOnly": "Only the account owner can save changes.",
+    "businessName": "Business name",
+    "pickupAddress": "Pickup address",
+    "pickupAddressHint": "Where Bosta collects your parcels.",
+    "labelSize": "Label size",
+    "defaultLanguage": "Default language",
+    "timezone": "Timezone",
+    "timezoneHint": "IANA timezone, e.g. Africa/Cairo",
+    "save": "Save changes",
+    "saving": "Saving…",
+    "saved": "Settings saved.",
+    "langNote": "This sets the account default only. The live UI language is toggled in the sidebar.",
+    "errors": {
+      "labelSize": "Label size must be 40×25 or 50×25.",
+      "language": "Language must be 'ar' or 'en'.",
+      "generic": "Could not save settings. Please try again."
+    },
+    "roles": {
+      "ar": "Arabic",
+      "en": "English"
+    }
+  },
+  "users": {
+    "title": "Team",
+    "subtitle": "Manage who has access to your workspace.",
+    "addUser": "Add user",
+    "noUsers": "No users yet.",
+    "col": {
+      "name": "Name",
+      "email": "Email",
+      "role": "Role",
+      "status": "Status",
+      "joined": "Joined"
+    },
+    "roles": {
+      "owner": "Owner",
+      "manager": "Manager",
+      "worker": "Worker"
+    },
+    "status": {
+      "active": "Active",
+      "inactive": "Inactive"
+    },
+    "create": {
+      "title": "Add user",
+      "name": "Name",
+      "email": "Email",
+      "role": "Role",
+      "roleHint": "Workers use a PIN at shared stations. Managers and Owners use a password.",
+      "password": "Password",
+      "passwordHint": "At least 8 characters.",
+      "pin": "PIN",
+      "pinHint": "4-digit PIN for shared-station login.",
+      "submit": "Create user",
+      "creating": "Creating…",
+      "ownerRoleHint": "The Owner role can only be assigned by the current Owner.",
+      "errors": {
+        "forbidden": "You don't have permission to create a user with that role.",
+        "emailTaken": "A user with that email already exists.",
+        "generic": "Could not create user. Please try again."
+      }
+    },
+    "edit": {
+      "title": "Edit user",
+      "btn": "Edit",
+      "save": "Save",
+      "saving": "Saving…",
+      "errors": {
+        "forbidden": "You don't have permission to edit this user.",
+        "generic": "Could not update user. Please try again."
+      }
+    },
+    "deactivate": {
+      "title": "Deactivate user",
+      "body": "{{name}} will no longer be able to sign in. Their custody history and audit trail are permanently preserved. A Manager or Owner can reactivate them at any time.",
+      "confirm": "Deactivate",
+      "errors": {
+        "forbidden": "You don't have permission to deactivate this user.",
+        "generic": "Could not deactivate user. Please try again."
+      }
+    }
   },
   "shopify": {
     "oauth": {
