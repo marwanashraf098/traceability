@@ -68,6 +68,7 @@ public class ExceptionService {
         all.addAll(detectMissingAwb(tenantId));
         all.addAll(detectShopifyCancelVsInflight(tenantId));
         all.addAll(detectMissingProviderId(tenantId));
+        all.addAll(detectHighAttempts(tenantId));
 
         // Enrich with descriptions and action hints
         all.forEach(this::enrich);
@@ -371,6 +372,32 @@ public class ExceptionService {
             tid, tid);
     }
 
+    private List<Map<String, Object>> detectHighAttempts(UUID tid) {
+        return jdbc.queryForList(
+            "SELECT 'high_attempts' AS type, 'MEDIUM' AS severity, 'shipment' AS subject_type, " +
+            "       s.id AS shipment_id, s.tracking_number, " +
+            "       s.number_of_attempts, " +
+            "       o.id AS order_id, o.number AS order_number, " +
+            "       COALESCE(s.last_synced_at, s.created_at) AS occurred_at, " +
+            "       'high_attempts:shipment:' || s.id AS subject_key " +
+            "FROM shipments s " +
+            "JOIN orders o ON o.id = s.order_id AND o.tenant_id = ? " +
+            "WHERE s.number_of_attempts >= 2 " +
+            "  AND s.internal_state NOT IN ( " +
+            "      'delivered'::shipment_internal_state," +
+            "      'returned'::shipment_internal_state," +
+            "      'lost'::shipment_internal_state," +
+            "      'terminated'::shipment_internal_state," +
+            "      'cancelled'::shipment_internal_state) " +
+            "  AND s.tenant_id = ? " +
+            "  AND NOT EXISTS ( " +
+            "      SELECT 1 FROM exception_resolutions er " +
+            "      WHERE er.tenant_id = s.tenant_id " +
+            "        AND er.exception_type = 'high_attempts' " +
+            "        AND er.subject_key = 'high_attempts:shipment:' || s.id) ",
+            tid, tid);
+    }
+
     private List<Map<String, Object>> detectMissingProviderId(UUID tid) {
         return jdbc.queryForList(
             "SELECT 'missing_provider_id' AS type, 'MEDIUM' AS severity, 'shipment' AS subject_type, " +
@@ -489,6 +516,16 @@ public class ExceptionService {
                     "تعذّر جلب المعرّف الداخلي من بوسطة للشحنة " + t + " (الطلب " + n + ") — إلغاء التوصيل غير متاح");
                 item.put("suggestedAction", "retry_provider_id_fetch");
                 item.put("actionUrl", "/shipments/" + item.get("shipment_id"));
+            }
+            case "high_attempts" -> {
+                String t = str(item, "tracking_number");
+                Object att = item.get("number_of_attempts");
+                item.put("descriptionEn",
+                    "Shipment " + t + " has had " + att + " delivery attempt(s) — customer may be unreachable");
+                item.put("descriptionAr",
+                    "تمّت " + att + " محاولات توصيل للشحنة " + t + " — قد يتعذّر الوصول للعميل");
+                item.put("suggestedAction", "contact_customer");
+                item.put("actionUrl", ordersUrl(item));
             }
             case "shopify_cancel_vs_inflight" -> {
                 String n = str(item, "order_number");
