@@ -435,3 +435,45 @@ export function listPieces(params: {
   if (params.size  != null) q.set('size',  String(params.size))
   return request<PiecePage>(`/pieces?${q}`)
 }
+
+// ── Manual adjustments (FR-13) ────────────────────────────────────────────────
+
+export type AdjustReason =
+  | 'cycle_count_missing'
+  | 'damaged_in_storage'
+  | 'sample_giveaway'
+  | 'theft_suspected'
+  | 'receiving_correction'
+  | 'other'
+
+export const ADJUST_REASONS: AdjustReason[] = [
+  'cycle_count_missing',
+  'damaged_in_storage',
+  'sample_giveaway',
+  'theft_suspected',
+  'receiving_correction',
+  'other',
+]
+
+export interface PieceCommittedError {
+  error: 'PIECE_COMMITTED'
+  orderId: string
+  orderNumber: string
+}
+
+export function adjustPiece(
+  pieceId: string,
+  toStatus: 'lost' | 'damaged' | 'destroyed' | 'available',
+  reason: AdjustReason,
+  note?: string,
+) {
+  return request<void>(`/pieces/${pieceId}/adjust`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ toStatus, reason, note }),
+  })
+}
+
+export function releasePieceForAdjust(pieceId: string) {
+  return request<void>(`/pieces/${pieceId}/release-for-adjust`, { method: 'POST' })
+}

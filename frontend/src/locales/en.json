@@ -228,7 +228,9 @@
       "damaged": "Marked as damaged",
       "handover": "Handed over to customer (self-pickup)",
       "unpacked": "Piece unpacked — cancellation in progress",
-      "unreserved": "Returned to stock (order cancelled)"
+      "unreserved": "Returned to stock (order cancelled)",
+      "adjusted": "Manually adjusted — {{reason}}",
+      "found_it": "Found it — piece restored to available"
     },
     "pieceStatus": {
       "available": "Available",
@@ -478,6 +480,35 @@
         "MAGIC_LINK_INVALID": "This sign-in link is invalid, has expired, or has already been used. Please request a new one.",
         "invalidDomain": "Please enter a valid *.myshopify.com domain."
       }
+    }
+  },
+  "adjust": {
+    "title": "Adjust Piece",
+    "toStatus": "New status",
+    "reason": "Reason",
+    "note": "Note",
+    "notePlaceholder": "Required when reason is 'Other'",
+    "submit": "Apply Adjustment",
+    "submitting": "Applying…",
+    "foundIt": "Found It",
+    "foundItTitle": "Mark as Found",
+    "foundItDesc": "Restore this lost piece to Available.",
+    "committedTitle": "Piece is committed to an order",
+    "committedBody": "This piece is currently {{status}} for order {{orderNumber}}. Release it from the order before adjusting.",
+    "releaseBtn": "Release from order",
+    "releasing": "Releasing…",
+    "reasonLabel": {
+      "cycle_count_missing": "Cycle count — missing",
+      "damaged_in_storage": "Damaged in storage",
+      "sample_giveaway": "Sample / giveaway",
+      "theft_suspected": "Theft suspected",
+      "receiving_correction": "Receiving correction",
+      "other": "Other"
+    },
+    "statusLabel": {
+      "lost": "Lost",
+      "damaged": "Damaged",
+      "destroyed": "Destroyed"
     }
   }
 }

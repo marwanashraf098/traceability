@@ -1,7 +1,11 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
-import { lookup, LookupResult, PieceLookupResult, TrackingLookupResult, TimelineEvent } from '../api'
+import {
+  lookup, LookupResult, PieceLookupResult, TrackingLookupResult, TimelineEvent,
+  adjustPiece, releasePieceForAdjust, ADJUST_REASONS, AdjustReason, PieceCommittedError,
+  getRoleFromToken,
+} from '../api'
 import { Badge, Spinner } from '../components/ui'
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -48,7 +52,7 @@ function TransitionPill({ from, to }: { from: string | null; to: string | null }
 
 // ── Piece lookup view ─────────────────────────────────────────────────────────
 
-function PieceView({ result }: { result: PieceLookupResult }) {
+function PieceView({ result, onRefresh }: { result: PieceLookupResult; onRefresh: () => void }) {
   const { t } = useTranslation()
 
   return (
@@ -114,6 +118,8 @@ function PieceView({ result }: { result: PieceLookupResult }) {
             </Link>
           </div>
         )}
+
+        <AdjustPanel pieceId={result.id} pieceStatus={result.status} onDone={onRefresh} />
       </div>
 
       {/* ── Timeline ── */}
@@ -182,6 +188,233 @@ function MetaField({ label, children }: { label: string; children: React.ReactNo
     <div>
       <p className="text-caption text-muted uppercase tracking-wider mb-1">{label}</p>
       <p className="text-body text-primary">{children}</p>
+    </div>
+  )
+}
+
+// ── Adjust panel (FR-13) ──────────────────────────────────────────────────────
+
+interface AdjustPanelProps {
+  pieceId: string
+  pieceStatus: string
+  onDone: () => void
+}
+
+function AdjustPanel({ pieceId, pieceStatus, onDone }: AdjustPanelProps) {
+  const { t } = useTranslation()
+  const [open,        setOpen]        = useState(false)
+  const [toStatus,    setToStatus]    = useState<'lost'|'damaged'|'destroyed'>('lost')
+  const [reason,      setReason]      = useState<AdjustReason>('cycle_count_missing')
+  const [note,        setNote]        = useState('')
+  const [submitting,  setSubmitting]  = useState(false)
+  const [error,       setError]       = useState<string | null>(null)
+  const [committed,   setCommitted]   = useState<PieceCommittedError | null>(null)
+  const [releasing,   setReleasing]   = useState(false)
+
+  const isLost      = pieceStatus === 'lost'
+  const isAdjustable = pieceStatus === 'available' || isLost
+  const role = getRoleFromToken()
+  const canAdjust = role === 'owner' || role === 'manager'
+
+  if (!canAdjust) return null
+
+  async function handleFoundIt() {
+    setSubmitting(true)
+    setError(null)
+    try {
+      await adjustPiece(pieceId, 'available', reason, undefined)
+      onDone()
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : 'Error')
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault()
+    if (reason === 'other' && !note.trim()) return
+    setSubmitting(true)
+    setError(null)
+    setCommitted(null)
+    try {
+      await adjustPiece(pieceId, toStatus, reason, note.trim() || undefined)
+      setOpen(false)
+      onDone()
+    } catch (err: unknown) {
+      if (err instanceof Response || (err instanceof Error && err.message.includes('409'))) {
+        try {
+          const body: PieceCommittedError = err instanceof Response
+            ? await err.json()
+            : JSON.parse(err.message.replace(/^409: /, ''))
+          if (body.error === 'PIECE_COMMITTED') { setCommitted(body); return }
+        } catch { /* fall through */ }
+      }
+      setError(err instanceof Error ? err.message : 'Error')
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  async function handleRelease() {
+    if (!committed) return
+    setReleasing(true)
+    setError(null)
+    try {
+      await releasePieceForAdjust(pieceId)
+      setCommitted(null)
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : 'Error')
+    } finally {
+      setReleasing(false)
+    }
+  }
+
+  return (
+    <div className="mt-4 pt-4 border-t border-line space-y-2">
+      {/* ── Found It button (lost pieces only) ── */}
+      {isLost && !open && (
+        <div className="flex flex-wrap gap-2">
+          <button
+            data-testid="found-it-btn"
+            onClick={handleFoundIt}
+            disabled={submitting}
+            className="btn btn-brand px-4 py-2 text-small"
+          >
+            {submitting ? <Spinner size={14} /> : t('adjust.foundIt')}
+          </button>
+          <button
+            data-testid="adjust-open-btn"
+            onClick={() => setOpen(true)}
+            className="btn btn-outline px-4 py-2 text-small"
+          >
+            {t('adjust.title')}
+          </button>
+        </div>
+      )}
+
+      {/* ── Adjust button (available + non-lost) ── */}
+      {!isLost && isAdjustable && !open && (
+        <button
+          data-testid="adjust-open-btn"
+          onClick={() => setOpen(true)}
+          className="btn btn-outline px-4 py-2 text-small"
+        >
+          {t('adjust.title')}
+        </button>
+      )}
+
+      {/* ── Committed guard ── */}
+      {committed && (
+        <div className="rounded-lg border border-warning/30 bg-warning/5 p-4 space-y-3">
+          <p className="text-body font-semibold text-warning">{t('adjust.committedTitle')}</p>
+          <p className="text-small text-muted">
+            {t('adjust.committedBody', {
+              status: pieceStatus,
+              orderNumber: committed.orderNumber,
+            })}
+          </p>
+          <div className="flex gap-2">
+            <button
+              data-testid="release-btn"
+              onClick={handleRelease}
+              disabled={releasing}
+              className="btn btn-brand px-4 py-2 text-small"
+            >
+              {releasing ? <Spinner size={14} /> : t('adjust.releaseBtn')}
+            </button>
+            <Link
+              to={`/orders/${committed.orderId}`}
+              className="btn btn-outline px-4 py-2 text-small"
+            >
+              #{committed.orderNumber}
+            </Link>
+          </div>
+        </div>
+      )}
+
+      {/* ── Adjust form ── */}
+      {open && !committed && (
+        <form onSubmit={handleSubmit} className="space-y-4 rounded-lg border border-line p-4">
+          <p className="text-body font-semibold text-primary">{t('adjust.title')}</p>
+
+          {/* Target status */}
+          <div className="space-y-1">
+            <label className="text-caption text-muted uppercase tracking-wider">{t('adjust.toStatus')}</label>
+            <div className="flex gap-2 flex-wrap">
+              {(['lost','damaged','destroyed'] as const).map(s => (
+                <button
+                  key={s}
+                  type="button"
+                  onClick={() => setToStatus(s)}
+                  className={`px-3 py-1.5 rounded text-small font-medium border transition-colors ${
+                    toStatus === s
+                      ? 'bg-brand text-white border-brand'
+                      : 'border-line text-muted hover:border-brand'
+                  }`}
+                >
+                  {t(`adjust.statusLabel.${s}`)}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Reason */}
+          <div className="space-y-1">
+            <label className="text-caption text-muted uppercase tracking-wider">{t('adjust.reason')}</label>
+            <select
+              value={reason}
+              onChange={e => setReason(e.target.value as AdjustReason)}
+              className="input w-full"
+            >
+              {ADJUST_REASONS.map(r => (
+                <option key={r} value={r}>{t(`adjust.reasonLabel.${r}`)}</option>
+              ))}
+            </select>
+          </div>
+
+          {/* Note (required for other) */}
+          <div className="space-y-1">
+            <label className="text-caption text-muted uppercase tracking-wider">
+              {t('adjust.note')}
+              {reason === 'other' && <span className="text-danger ms-1">*</span>}
+            </label>
+            <textarea
+              data-testid="adjust-note"
+              value={note}
+              onChange={e => setNote(e.target.value)}
+              rows={2}
+              placeholder={t('adjust.notePlaceholder')}
+              required={reason === 'other'}
+              className="input w-full resize-none"
+            />
+          </div>
+
+          {error && <p className="text-small text-danger">{error}</p>}
+
+          <div className="flex gap-2">
+            <button
+              type="submit"
+              disabled={submitting || (reason === 'other' && !note.trim())}
+              data-testid="adjust-submit-btn"
+              className="btn btn-brand px-4 py-2 text-small"
+            >
+              {submitting ? <Spinner size={14} /> : t('adjust.submit')}
+            </button>
+            <button
+              type="button"
+              onClick={() => { setOpen(false); setError(null); setCommitted(null) }}
+              className="btn btn-outline px-4 py-2 text-small"
+            >
+              {t('common.cancel')}
+            </button>
+          </div>
+        </form>
+      )}
+
+      {error && !open && !committed && (
+        <p className="text-small text-danger">{error}</p>
+      )}
     </div>
   )
 }
@@ -311,7 +544,7 @@ export default function LookupPage() {
 
       {result && !loading && (
         result.type === 'piece'
-          ? <PieceView result={result as PieceLookupResult} />
+          ? <PieceView result={result as PieceLookupResult} onRefresh={() => doLookup(query)} />
           : <TrackingView result={result as TrackingLookupResult} />
       )}
     </div>

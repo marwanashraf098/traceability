@@ -212,7 +212,9 @@
       "tracking_linked": "تم مسح وصل الشحن — في انتظار استلام المندوب",
       "return_received": "تم استلام المرتجع في {{location}} — قيد الفحص",
       "restocked": "تمت إعادته للمخزون",
-      "damaged": "تم تصنيفه كتالف"
+      "damaged": "تم تصنيفه كتالف",
+      "adjusted": "تعديل يدوي — {{reason}}",
+      "found_it": "تم العثور عليه — تم إعادة القطعة إلى المتاح"
     },
     "pieceStatus": {
       "available": "متاح",
@@ -477,6 +479,35 @@
         "MAGIC_LINK_INVALID": "رابط تسجيل الدخول غير صالح أو منتهي الصلاحية أو مستخدم مسبقاً. يرجى طلب رابط جديد.",
         "invalidDomain": "يرجى إدخال نطاق *.myshopify.com صالح."
       }
+    }
+  },
+  "adjust": {
+    "title": "تعديل القطعة",
+    "toStatus": "الحالة الجديدة",
+    "reason": "السبب",
+    "note": "ملاحظة",
+    "notePlaceholder": "مطلوبة عند اختيار \"أخرى\"",
+    "submit": "تطبيق التعديل",
+    "submitting": "جاري التطبيق…",
+    "foundIt": "تم العثور عليه",
+    "foundItTitle": "تأكيد العثور على القطعة",
+    "foundItDesc": "إعادة هذه القطعة المفقودة إلى حالة المتاح.",
+    "committedTitle": "القطعة مرتبطة بطلب",
+    "committedBody": "هذه القطعة {{status}} حالياً للطلب {{orderNumber}}. قم بفكّ ارتباطها قبل التعديل.",
+    "releaseBtn": "فكّ الارتباط بالطلب",
+    "releasing": "جاري الفكّ…",
+    "reasonLabel": {
+      "cycle_count_missing": "جرد — مفقودة",
+      "damaged_in_storage": "تلفت في المستودع",
+      "sample_giveaway": "عينة / هدية",
+      "theft_suspected": "سرقة محتملة",
+      "receiving_correction": "تصحيح استلام",
+      "other": "أخرى"
+    },
+    "statusLabel": {
+      "lost": "مفقودة",
+      "damaged": "تالفة",
+      "destroyed": "مُتلَفة"
     }
   }
 }
