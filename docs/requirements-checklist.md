@@ -138,7 +138,7 @@ One line per requirement · [M] Must / [S] Should / [C] Could · use as the buil
 - [ ] 15.5 [C] CSV exports
 
 ## FR-16 Localization & Scan UX
-- [ ] 16.1 [M] Full AR/EN, RTL-correct everywhere incl. labels + manifests
+- [~] 16.1 [M] Full AR/EN, RTL-correct everywhere incl. labels + manifests (dir flip fixed; Fulfill worker strings done; Receiving placeholders/status badge deferred)
 - [ ] 16.2 [M] Worker screens one-handed on 5–6.5" Android; auto-focused scan field
 - [ ] 16.3 [M] Distinct success/failure audio
 - [ ] 16.4 [M] EGP everywhere ([C] Arabic-Indic numerals per user)
