@@ -169,6 +169,15 @@ public class ShopifySyncService {
     private static final String LOOKUP_STORE =
         "SELECT id FROM stores WHERE shop_domain = ? AND tenant_id = ? AND status = 'connected'";
 
+    /**
+     * Ingests an order from the GraphQL import format (ShopifyGateway.Order) without
+     * a prior existence check. Called by ShopifyReconcileJob after the job confirms the
+     * order is absent locally — reuses the exact same SQL path as the initial full import.
+     */
+    public void ingestMissingOrder(UUID storeId, UUID tenantId, ShopifyGateway.Order order) {
+        upsertOrder(storeId, tenantId, order);
+    }
+
     /** Runs catalog + order import for an already-connected store. Called by ShopifyImportJob. */
     public ImportResult runImport(UUID storeId, UUID tenantId, String shopDomain, String rawToken) {
         int[] catalogCounts = importCatalog(storeId, tenantId, shopDomain, rawToken);
