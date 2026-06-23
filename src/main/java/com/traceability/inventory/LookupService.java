@@ -32,6 +32,10 @@ public class LookupService {
         if ("handover".equals(eventType))          return "handover";
         if ("unpacked".equals(eventType))          return "unpacked";
         if ("unreserved".equals(eventType))        return "unreserved";
+        if ("adjusted".equals(eventType)) {
+            if ("available".equals(toStatus))      return "found_it";
+            return "adjusted";
+        }
         if ("courier_update".equals(eventType)) {
             if ("delivered".equals(toStatus))                       return "courier_delivered";
             if ("with_courier".equals(toStatus))                    return "courier_picked_up";

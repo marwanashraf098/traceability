@@ -2,6 +2,7 @@ package com.traceability;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.traceability.integrations.shopify.ShopifyOAuthException;
+import com.traceability.inventory.PieceCommittedException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
@@ -29,6 +30,17 @@ public class ApiExceptionHandler {
             String code,
             @JsonProperty("message_en") String messageEn,
             @JsonProperty("message_ar") String messageAr) {}
+
+    record CommittedErrorBody(String error, String orderId, String orderNumber) {}
+
+    @ExceptionHandler(PieceCommittedException.class)
+    ResponseEntity<CommittedErrorBody> handlePieceCommitted(PieceCommittedException ex) {
+        return ResponseEntity.status(HttpStatus.CONFLICT)
+            .body(new CommittedErrorBody(
+                "PIECE_COMMITTED",
+                ex.getOrderId() != null ? ex.getOrderId().toString() : null,
+                ex.getOrderNumber()));
+    }
 
     @ExceptionHandler(ShopifyOAuthException.class)
     ResponseEntity<OAuthErrorBody> handleShopifyOAuth(ShopifyOAuthException ex) {
