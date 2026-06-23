@@ -4,9 +4,13 @@
 
 ## Current state
 
-**278 backend + 11 frontend tests green — FR-15.1 inventory summary shipped** — 2026-06-22.
+**297 backend + 16 frontend tests green — FR-13.1 + FR-13.2 + FR-13.3 shipped** — 2026-06-23.
 
-FR-15.1 complete. 8 backend + 5 frontend tests. Overview.tsx replaced order-count placeholders with real piece-level counts. `mvn test -Dskip.frontend=true` for backend-only runs.
+FR-13 complete. Manual adjustments: available→lost/damaged/destroyed (13.1), reserved/packed guard with release step (13.2), lost→available found-it (13.3). 8 backend + 5 frontend tests. Two commits: backend + frontend.
+
+FR-11.3 complete (13th ExceptionService detector — `high_attempts` MEDIUM). FR-3.4 complete (Shopify reconcile poll, 15-min recurring, gap-filler only). 5 + 5 new backend tests. MigrationSmokeTest count fixed 25→26 (V26 was missing).
+
+FR-15.1 complete. 8 backend + 5 frontend tests. Overview.tsx replaced order-count placeholders with real piece-level counts.
 
 FR-1.2 onboarding wizard complete. 5 component tests cover all states (all-pending, partial, all-done, signal-lag hint, API error). `npm test` from `frontend/` runs all 11 in ~900ms.
 
@@ -17,6 +21,68 @@ V23–V25 applied. 5 backend items shipped: audit log (FR-2.6), user CRUD (FR-2.
 V21 migration applied. `detectShopifyCancelVsInflight()` wired in ExceptionService (HIGH, `shopify_cancel_vs_inflight` type). Signal written in `ShopifyWebhookProcessorJob.handleOrderCancelled()` on 409 for in-flight orders. `stuck_shipment_days` default changed 3→5 (V21 UPDATE existing rows). 6 new tests in `ExceptionExtTest`. Day13Test `stuck_shipment_days` corrected to 5.
 
 **LIVE SMOKE TEST PENDING**: Call `POST /api/v1/bosta/awb/print` with a real pilot tracking number. Needs running app + pilot Bosta API key. Steps in Day 24 entry below.
+
+---
+
+**Day 34 — FR-13 manual adjustments**
+
+*No migration — ALLOWED transitions (available:lost, available:damaged, available:destroyed, lost:available) already in InventoryLedger.*
+
+**FR-13.1 — adjust endpoint:**
+- `POST /api/v1/pieces/{id}/adjust` (OWNER/MANAGER). Body: `{ toStatus, reason, note? }`.
+- Reason enum: `cycle_count_missing`, `damaged_in_storage`, `sample_giveaway`, `theft_suspected`, `receiving_correction`, `other`. `reason=other` requires non-blank note (400).
+- Writes `adjusted` event via `InventoryLedger.transition()` + audit_log via `AuditService`.
+- `phraseKey("adjusted", from, "available")` → `found_it`; all other `adjusted` → `adjusted`.
+
+**FR-13.2 — committed guard:**
+- Reserved/packed piece → `PieceCommittedException` (409 PIECE_COMMITTED, body: `{ error, orderId, orderNumber }`). Handled in `ApiExceptionHandler`.
+- `POST /api/v1/pieces/{id}/release-for-adjust`: finds `active` allocation → `reserved→available` ("unreserved" event) + release; `packed` allocation → `packed→available` ("unpacked" event) + release. Same two-step ops as `FulfillService.unscan()/unpackPiece()`. Two explicit operator steps design confirmed.
+
+**FR-13.3 — found it:**
+- Same `/adjust` endpoint with `toStatus=available`. `damaged/destroyed→available` → 409 (terminal). `lost→available` → writes `adjusted` event. Original lost event preserved (append-only).
+
+**Frontend:**
+- `AdjustPanel` component embedded in `PieceView` (Lookup.tsx). Available → adjust dialog. Lost → "Found It" + "Adjust" buttons. Damaged/destroyed → no UI (terminal). PIECE_COMMITTED 409 → shows blocking order + "Release from order" button.
+- `api.ts`: `adjustPiece()`, `releasePieceForAdjust()`, `ADJUST_REASONS`, `AdjustReason`, `PieceCommittedError`. i18n keys in `adjust.*` namespace.
+- `@testing-library/user-event` installed for Vitest (was missing).
+
+**Tests:**
+- Backend (AdjustTest, 8): adj1 available→lost event+audit; adj2 other-without-note 400; adj3 reserved→PIECE_COMMITTED; adj4 packed→PIECE_COMMITTED; adj5 release frees allocation; adj6 found-it appends event preserves original; adj7 terminal reverse 409; adj8 tenant isolation.
+- Frontend (adjust.test.tsx, 5): fa1 adjust dialog submit; fa2 other-without-note disabled; fa3 lost shows both buttons; fa4 found-it calls adjustPiece(available); fa5 damaged no adjust button.
+
+**Cleanup applied in @AfterEach:**
+- `pieces.current_order_id = NULL` before `DELETE FROM orders` — FK constraint prevents order delete when piece still references it.
+
+---
+
+**Day 33 — FR-11.3 attempts detector + FR-3.4 reconciliation poll**
+
+*No migration — both FRs use existing schema.*
+
+**Item 1 — FR-11.3: `high_attempts` exception detector (13th detector):**
+- `ExceptionService.detectHighAttempts()` — non-terminal shipments with `number_of_attempts >= 2`, MEDIUM severity.
+- `number_of_attempts` is already stored on `shipments` (written by `BostaWebhookJob` from every webhook payload). Column confirmed at `V1__baseline.sql:221`.
+- Forward vs return attempts not distinguishable in the stored schema without parsing `shipments.raw->>'orderType'`; kept as one unified detector per spec.
+- Enrich: `descriptionEn/Ar` names attempt count + tracking number; `suggestedAction=contact_customer`; `actionUrl=/orders/<id>`.
+- Terminal states excluded: `delivered`, `returned`, `lost`, `terminated`, `cancelled`.
+- Standard NOT EXISTS suppression on `exception_resolutions`.
+- `MigrationSmokeTest` count fixed 25→26 (V26 existed but smoke test was stale).
+- Tests (`AttemptsDetectorTest` — 5): at1 surfaces MEDIUM at 2 attempts; at2 skips 1 attempt; at3 excludes terminal; at4 suppresses after resolve; at5 severity ordering correct.
+
+**Item 2 — FR-3.4: `ShopifyReconcileJob` — 15-min gap-filler:**
+- `@Recurring(id="shopify-reconcile", cron="*/15 * * * *")`. Guarded with `@ConditionalOnProperty(org.jobrunr.background-job-server.enabled=true)` (same as `ShopifyStateCleanupJob`).
+- Uses `@FlywayDataSource`-injected `JdbcTemplate` (owner pool, BYPASSRLS) to list `stores WHERE status='connected' AND import_status='completed'` — cross-tenant without GUC.
+- Per-store: sets `TenantContext`, fetches orders with `created_at:> now()-30min` via `fetchOrdersPage`, checks `SELECT EXISTS(... WHERE tenant_id=? AND store_id=? AND external_id=?)`.
+- Missing → `ShopifySyncService.ingestMissingOrder()` (new thin public wrapper around private `upsertOrder`). Existing → skip, zero writes. `status`/`on_hold` never touched.
+- Concurrent safety: `ON CONFLICT (store_id, external_id) DO UPDATE` on `UPSERT_ORDER` is the backstop for poll+poll and webhook+poll races.
+- Tests (`ShopifyReconcileTest` — 5): r1 missing order ingested; r2 mid-pick order untouched; r3 disconnected store skipped; r4 webhook+poll → single row; r5 tenant isolation.
+
+*Gotchas:*
+- `@MockBean` stubs reset between test methods — `tokenProvider.getValidToken(any()).thenReturn(FAKE_TOKEN)` must be in `@BeforeEach`, not `@BeforeAll`.
+- `ShopifyReconcileJob` needs `properties = "org.jobrunr.background-job-server.enabled=true"` in `@SpringBootTest` to be instantiated in the test context (default test props set it false).
+
+*Open items:*
+- **git push** — still blocked by credential mismatch (`marwanashraf56` vs repo owner `marwanashraf098`). All commits local. Fix: `gh auth login` or `git remote set-url origin https://marwanashraf098@github.com/marwanashraf098/traceability.git`.
 
 ---
 

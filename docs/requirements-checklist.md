@@ -22,7 +22,7 @@ One line per requirement · [M] Must / [S] Should / [C] Could · use as the buil
 - [x] 3.1 [M] Connect via custom-app credentials + validation ([S] public OAuth app track — OAuth Day 1: install+callback+state+HMAC done; OAuth Day 2: resolve-or-create decision tree + Path-2 provisioning + timestamp freshness + state cleanup done; OAuth Day 4: magic-link bridge shipped — V16 magic_link_tokens + consume_magic_link DEFINER + EmailGateway + MagicLinkController + provision wiring; OAuth Phase 1 complete; Day 21: F1 fixed (V18 JobRunr Flyway migration) + F2 fixed (expiring tokens + ShopifyTokenProvider); Day 22: F1+F2 live-cleared on docker-compose — BackgroundJobServer+recurring job running, token_is_fresh=t; pending browser reinstall on real Shopify store)
 - [x] 3.2 [M] Initial import: products/variants + 90-day orders, resumable, idempotent, progress UI [background job + status endpoint done Day 5]
 - [x] 3.3 [M] Webhooks orders create/updated/cancelled + products create/update: HMAC, raw persist, async, idempotent [Day 18: raw-body HMAC, shopify_webhook_events, async processor, GDPR handlers, app/uninstalled, RegisterShopifyWebhooksJob]
-- [ ] 3.4 [M] 15-min reconciliation poll (missed webhook ≠ lost order)
+- [x] 3.4 [M] 15-min reconciliation poll (missed webhook ≠ lost order) [Day 33: ShopifyReconcileJob, gap-filler only, owner-pool cross-tenant listing, EXISTS check before ingest]
 - [x] 3.5 [M] Cancel pre-pack → auto-release pieces; cancel post-pack → exception + guided unpack [both paths + Shopify orders/cancelled webhook wired Day 14]
 - [ ] 3.6 [M] Line-item edits mid-pick → release affected allocations + exception with diff
 - [ ] 3.7 [M] Confirmation tag rules (for gated mode)
@@ -104,7 +104,7 @@ One line per requirement · [M] Must / [S] Should / [C] Could · use as the buil
 ## FR-11 Shipment Lifecycle
 - [x] 11.1 [M] (state code, order type)-keyed mapping per verified table (§8.3) → order/piece/event updates [Day 6 complete]
 - [x] 11.2 [M] Terminal handling: 45→Delivered; 100→Lost+exception; 46→Return Pending + order Returned [webhook path done Day 6; exception alerts not yet built]
-- [ ] 11.3 [M] Attempts counter from numberOfAttempts; ≥2 fails → exception (configurable)
+- [x] 11.3 [M] Attempts counter from numberOfAttempts; ≥2 fails → exception (configurable) [Day 33: high_attempts MEDIUM detector, number_of_attempts already stored from webhook]
 - [ ] 11.4 [M] No end-customer notifications (merchant-facing only)
 - [x] 11.5 [M] Stuck detector: no provider update 5d (configurable) → exception
 
@@ -117,9 +117,9 @@ One line per requirement · [M] Must / [S] Should / [C] Could · use as the buil
 - [ ] 12.6 [C] Customer-initiated returns/exchange workflow — out of MVP (Bosta EXCHANGE/CRP type mapping per §7 Q6 if pilots use it)
 
 ## FR-13 Adjustments
-- [ ] 13.1 [M] Manager/Owner: piece → Lost/Damaged/Destroyed with fixed reason list + adjusted event
-- [ ] 13.2 [M] Reserved/Packed pieces guarded: must release from order first
-- [ ] 13.3 [M] Reverse ("found it"): Lost→Available with reason; history never rewritten
+- [x] 13.1 [M] Manager/Owner: piece → Lost/Damaged/Destroyed with fixed reason list + adjusted event [Day 34: PieceAdjustService.adjustPiece(), reason enum 6 values, note required for other, adjusted event+audit, phraseKey]
+- [x] 13.2 [M] Reserved/Packed pieces guarded: must release from order first [Day 34: PieceCommittedException 409 with orderId+orderNumber; releaseForAdjust reuses unscan/unpackPiece paths; two explicit steps]
+- [x] 13.3 [M] Reverse ("found it"): Lost→Available with reason; history never rewritten [Day 34: same /adjust endpoint toStatus=available; terminal 409; append-only events confirmed in adj6 test]
 - [ ] 13.4 [S] Bulk adjustment by scan session
 
 ## FR-14 Piece Lookup (showcase)
