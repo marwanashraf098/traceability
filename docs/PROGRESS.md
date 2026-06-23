@@ -4,7 +4,9 @@
 
 ## Current state
 
-**297 backend + 16 frontend tests green — FR-13.1 + FR-13.2 + FR-13.3 shipped** — 2026-06-23.
+**306 backend + 16 frontend tests green — FR-3.6 shipped** — 2026-06-23.
+
+FR-3.6 complete. Shopify line-item edits on in-progress orders: state-routed handler extends `orders/updated` webhook. Picking orders release affected allocations via standard unreserved/released path; packed+ orders raise `shopify_edit_conflict` exception (14th detector, HIGH) without touching pieces. V27 adds signal columns. 9 backend tests green. MigrationSmokeTest count bumped 26→27.
 
 FR-13 complete. Manual adjustments: available→lost/damaged/destroyed (13.1), reserved/packed guard with release step (13.2), lost→available found-it (13.3). 8 backend + 5 frontend tests. Two commits: backend + frontend.
 
@@ -21,6 +23,32 @@ V23–V25 applied. 5 backend items shipped: audit log (FR-2.6), user CRUD (FR-2.
 V21 migration applied. `detectShopifyCancelVsInflight()` wired in ExceptionService (HIGH, `shopify_cancel_vs_inflight` type). Signal written in `ShopifyWebhookProcessorJob.handleOrderCancelled()` on 409 for in-flight orders. `stuck_shipment_days` default changed 3→5 (V21 UPDATE existing rows). 6 new tests in `ExceptionExtTest`. Day13Test `stuck_shipment_days` corrected to 5.
 
 **LIVE SMOKE TEST PENDING**: Call `POST /api/v1/bosta/awb/print` with a real pilot tracking number. Needs running app + pilot Bosta API key. Steps in Day 24 entry below.
+
+---
+
+**Day 35 — FR-3.6 Shopify line-item edits**
+
+*V27: `shopify_edit_conflict_at TIMESTAMPTZ` + `shopify_edit_conflict_diff JSONB` on orders.*
+
+**State routing (orders/updated):**
+| Status | Action |
+|---|---|
+| `new`, `confirmed`, `ready_to_pick` | No-op — no allocations yet; line items updated by ingestOrderWebhook |
+| `picking` | Diff computed → removed lines: release all their active allocations; reduced lines: release (old−new) allocations; added/increased: exception only (can't auto-allocate mid-pick) |
+| `packed`, `self_pickup_pending`, `awaiting_pickup`, `with_courier`, `returning` | No touch — box sealed; exception raised only |
+| terminal (`delivered`, `returned`, `lost`, `cancelled`) | No-op |
+
+**Diff computation:** `LineDiff` record (`removed`, `reduced`, `added`, `increased`). Pre-edit local `order_items` keyed by `external_id` (Shopify line item GID, added V4) compared against incoming payload `line_items`. Diff is empty → fall through to normal `ingestOrderWebhook` with no exception.
+
+**Release path reused:** `FulfillService.releaseActiveAllocsForItem()` → same `ledger.transition(RESERVED→AVAILABLE, "unreserved")` + `UPDATE allocations SET status='released'` two-step used by `cancelOrder` / `unscan` / `releaseForAdjust`. SHOPIFY_WEBHOOK_ACTOR = `null` (same as cancel path; `actor_user_id` FK allows NULL).
+
+**14th ExceptionService detector:** `detectShopifyEditConflict()` — HIGH severity, NOT EXISTS suppression via `exception_resolutions`, `diffJson` passthrough in enrich.
+
+**Idempotency:** Second call on already-released pieces: `ledger.transition()` throws `StateConflictException` (caught); allocation already `released` (UPDATE is a no-op). `setEditConflictSignal` uses `COALESCE(shopify_edit_conflict_at, now())` — timestamp frozen on first signal.
+
+**Tests (Day36Test, 9):** picking remove; picking reduce (2 of 3 released); picking add no-auto-alloc; new no-op; packed untouched; with_courier exception-only; null actor sentinel; double-release idempotency; tenant isolation.
+
+**Removed lines policy:** `allocations.order_item_id` FK has no CASCADE — removed order_item rows kept as historical records; only their allocations are released.
 
 ---
 

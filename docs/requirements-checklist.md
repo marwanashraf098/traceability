@@ -24,7 +24,7 @@ One line per requirement · [M] Must / [S] Should / [C] Could · use as the buil
 - [x] 3.3 [M] Webhooks orders create/updated/cancelled + products create/update: HMAC, raw persist, async, idempotent [Day 18: raw-body HMAC, shopify_webhook_events, async processor, GDPR handlers, app/uninstalled, RegisterShopifyWebhooksJob]
 - [x] 3.4 [M] 15-min reconciliation poll (missed webhook ≠ lost order) [Day 33: ShopifyReconcileJob, gap-filler only, owner-pool cross-tenant listing, EXISTS check before ingest]
 - [x] 3.5 [M] Cancel pre-pack → auto-release pieces; cancel post-pack → exception + guided unpack [both paths + Shopify orders/cancelled webhook wired Day 14]
-- [ ] 3.6 [M] Line-item edits mid-pick → release affected allocations + exception with diff
+- [x] 3.6 [M] Line-item edits mid-pick → release affected allocations + exception with diff
 - [ ] 3.7 [M] Confirmation tag rules (for gated mode)
 - [ ] 3.8 [S] Fulfillment write-back with Bosta tracking (toggle, default ON)
 - [ ] 3.9 [M] Variant deleted in Shopify → archived locally, pieces/history intact
