@@ -172,7 +172,26 @@
       "conflict": "هذه البوليصة مرتبطة بطلب آخر",
       "error": "تعذر الربط — تحقق من الباركود وأعد المحاولة",
       "skip": "تخطي — ربط لاحقاً"
-    }
+    },
+    "selfPickup": "استلام شخصي",
+    "selfPickupBadge": "استلام شخصي",
+    "handoverTitle": "تأكيد تسليم العميل",
+    "handoverSubtitle": "العميل في المستودع — تأكيد تسليم {{count}} قطعة",
+    "handoverConfirm": "تأكيد التسليم",
+    "handoverSuccess": "تم الاستلام — تم تسليم {{count}} قطعة",
+    "cancelOrder": "إلغاء الطلب",
+    "cancelRequested": "طلب الإلغاء — يحتاج {{count}} قطعة إلى فك التعبئة",
+    "unpackPiece": "فك التعبئة",
+    "unpackDone": "تمت إزالة جميع القطع — الطلب ملغى",
+    "selfPickupPending": "في انتظار الاستلام",
+    "back": "رجوع",
+    "handoverBtn": "تسليم",
+    "pickQueueHeader": "قائمة التجميع",
+    "cancelDialogTitle": "إلغاء الطلب؟",
+    "cancelPackedHint": "الطلب معبَّأ — يحتاج إلى فك التعبئة يدوياً.",
+    "cancelPreHint": "سيتم إعادة القطع المحجوزة للمخزون.",
+    "cancelConfirmBtn": "تأكيد الإلغاء",
+    "selfPickupPacked": "تم التعبئة — في انتظار الاستلام"
   },
   "lookup": {
     "title": "بحث عن قطعة",
@@ -265,21 +284,6 @@
   },
   "exceptions": {
     "title": "الاستثناءات"
-  },
-  "fulfill_extra": {
-    "selfPickup": "استلام شخصي",
-    "selfPickupBadge": "استلام شخصي",
-    "handoverTitle": "تأكيد تسليم العميل",
-    "handoverSubtitle": "العميل في المستودع — تأكيد تسليم {{count}} قطعة",
-    "handoverConfirm": "تأكيد التسليم",
-    "handoverSuccess": "تم الاستلام — تم تسليم {{count}} قطعة",
-    "cancelOrder": "إلغاء الطلب",
-    "cancelConfirmPre": "إلغاء هذا الطلب؟ سيتم إرجاع جميع القطع المحجوزة للمخزون.",
-    "cancelConfirmPost": "الطلب معبَّأ. يجب على العامل فك تعبئة {{count}} قطعة يدوياً.",
-    "cancelRequested": "طلب الإلغاء — يحتاج {{count}} قطعة إلى فك التعبئة",
-    "unpackPiece": "فك التعبئة",
-    "unpackDone": "تمت إزالة جميع القطع — الطلب ملغى",
-    "selfPickupPending": "في انتظار الاستلام"
   },
   "common": {
     "loading": "جارٍ التحميل...",

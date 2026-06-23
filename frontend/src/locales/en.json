@@ -185,7 +185,15 @@
     "cancelRequested": "Cancellation requested — {{count}} piece(s) need physical unpacking",
     "unpackPiece": "Unpack",
     "unpackDone": "All pieces unpacked — order cancelled",
-    "selfPickupPending": "Awaiting Collection"
+    "selfPickupPending": "Awaiting Collection",
+    "back": "Back",
+    "handoverBtn": "Handover →",
+    "pickQueueHeader": "Pick Queue",
+    "cancelDialogTitle": "Cancel this order?",
+    "cancelPackedHint": "Order is packed — pieces must be manually unpacked.",
+    "cancelPreHint": "Reserved pieces will be returned to stock.",
+    "cancelConfirmBtn": "Confirm Cancel",
+    "selfPickupPacked": "Packed — awaiting customer collection"
   },
   "lookup": {
     "title": "Piece Lookup",

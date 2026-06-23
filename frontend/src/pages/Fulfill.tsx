@@ -223,8 +223,7 @@ function AwbLinkDialog({ orderId, onDone }: { orderId: string; onDone: () => voi
 // ── Handover screen (self_pickup_pending orders) ───────────────────────────────
 
 function HandoverScreen({ order, onBack }: { order: QueueOrder; onBack: () => void }) {
-  const { i18n } = useTranslation()
-  const isAr = i18n.language === 'ar'
+  const { t } = useTranslation()
   const [confirming, setConfirming] = useState(false)
   const [done, setDone] = useState(false)
   const [count, setCount] = useState(0)
@@ -246,7 +245,7 @@ function HandoverScreen({ order, onBack }: { order: QueueOrder; onBack: () => vo
     <div className="flex flex-col h-screen bg-gray-50">
       <div className="bg-white border-b border-gray-200 px-6 py-3 flex items-center justify-between">
         <button onClick={onBack} className="text-indigo-600 hover:text-indigo-800 font-medium text-sm">
-          ← {isAr ? 'العودة' : 'Back'}
+          ← {t('fulfill.back')}
         </button>
         <div className="text-center">
           <p className="font-bold text-gray-900">{order.number ?? order.id.slice(-8)}</p>
@@ -260,26 +259,24 @@ function HandoverScreen({ order, onBack }: { order: QueueOrder; onBack: () => vo
           <div className="text-center">
             <div className="text-6xl mb-4">✓</div>
             <p className="text-xl font-bold text-green-700">
-              {isAr ? `تم التسليم — ${count} قطعة` : `Collected — ${count} piece(s) delivered`}
+              {t('fulfill.handoverSuccess', { count })}
             </p>
           </div>
         ) : (
           <>
             <div className="text-5xl mb-6">🤝</div>
             <h2 className="text-2xl font-bold text-gray-900 mb-2 text-center">
-              {isAr ? 'تأكيد تسليم العميل' : 'Confirm Customer Collection'}
+              {t('fulfill.handoverTitle')}
             </h2>
             <p className="text-gray-600 mb-8 text-center">
-              {isAr
-                ? `العميل في المستودع — ${order.total_units} قطعة جاهزة للتسليم`
-                : `Customer is at the counter — ${order.total_units} piece(s) ready`}
+              {t('fulfill.handoverSubtitle', { count: order.total_units })}
             </p>
             <button
               onClick={confirm}
               disabled={confirming}
               className="w-full max-w-sm bg-green-600 hover:bg-green-700 disabled:bg-green-300 text-white font-bold py-5 rounded-xl text-lg transition"
             >
-              {confirming ? '…' : isAr ? 'تأكيد الاستلام' : 'Confirm Handover'}
+              {confirming ? '…' : t('fulfill.handoverConfirm')}
             </button>
           </>
         )}
@@ -297,8 +294,7 @@ function QueueView({
   onSelect: (orderId: string) => void
   onHandover: (order: QueueOrder) => void
 }) {
-  const { t, i18n } = useTranslation()
-  const isAr = i18n.language === 'ar'
+  const { t } = useTranslation()
   const [queue, setQueue] = useState<QueueOrder[]>([])
   const [loading, setLoading] = useState(true)
 
@@ -331,7 +327,7 @@ function QueueView({
       {handoverQueue.length > 0 && (
         <div className="mb-6">
           <h2 className="text-sm font-semibold text-gray-500 uppercase tracking-wide mb-3">
-            {isAr ? 'في انتظار الاستلام' : 'Awaiting Collection'}
+            {t('fulfill.selfPickupPending')}
           </h2>
           <div className="space-y-3">
             {handoverQueue.map(order => (
@@ -344,7 +340,7 @@ function QueueView({
                   <p className="font-semibold text-gray-900 flex items-center gap-2">
                     {order.number ?? order.id.slice(-8)}
                     <span className="text-xs px-2 py-0.5 rounded bg-amber-100 text-amber-700 font-semibold">
-                      {isAr ? 'استلام شخصي' : 'Self-Pickup'}
+                      {t('fulfill.selfPickup')}
                     </span>
                   </p>
                   <p className="text-sm text-gray-500">{order.customer_name ?? t('common.na')}</p>
@@ -354,7 +350,7 @@ function QueueView({
                     {order.total_units} {t('fulfill.units')}
                   </span>
                   <button className="text-sm px-4 py-2 bg-amber-500 text-white rounded-lg hover:bg-amber-600 font-medium">
-                    {isAr ? 'تسليم' : 'Handover →'}
+                    {t('fulfill.handoverBtn')}
                   </button>
                 </div>
               </div>
@@ -370,7 +366,7 @@ function QueueView({
         <>
           {handoverQueue.length > 0 && (
             <h2 className="text-sm font-semibold text-gray-500 uppercase tracking-wide mb-3">
-              {isAr ? 'قائمة التجميع' : 'Pick Queue'}
+              {t('fulfill.pickQueueHeader')}
             </h2>
           )}
           <div className="space-y-3">
@@ -388,7 +384,7 @@ function QueueView({
                       {order.number ?? order.id.slice(-8)}
                       {order.is_self_pickup && (
                         <span className="text-xs px-2 py-0.5 rounded bg-indigo-100 text-indigo-700 font-medium">
-                          {isAr ? 'استلام شخصي' : 'Self-Pickup'}
+                          {t('fulfill.selfPickup')}
                         </span>
                       )}
                     </p>
@@ -440,8 +436,7 @@ function GuidedUnpackPanel({
   order: OrderDetail
   onUnpacked: () => void
 }) {
-  const { i18n } = useTranslation()
-  const isAr = i18n.language === 'ar'
+  const { t } = useTranslation()
   const [unpacking, setUnpacking] = useState<string | null>(null)
   const [done, setDone] = useState(false)
 
@@ -473,7 +468,7 @@ function GuidedUnpackPanel({
       <div className="bg-green-50 border border-green-200 rounded-lg p-6 text-center">
         <div className="text-3xl mb-2">✓</div>
         <p className="text-green-700 font-semibold">
-          {isAr ? 'تمت إزالة جميع القطع — الطلب ملغى' : 'All pieces unpacked — order cancelled'}
+          {t('fulfill.unpackDone')}
         </p>
       </div>
     )
@@ -482,9 +477,7 @@ function GuidedUnpackPanel({
   return (
     <div className="bg-amber-50 border border-amber-200 rounded-lg p-4">
       <p className="text-sm font-semibold text-amber-800 mb-3">
-        {isAr
-          ? `طلب الإلغاء — يجب فك تعبئة ${packedPieces.length} قطعة`
-          : `Cancellation requested — unpack ${packedPieces.length} piece(s)`}
+        {t('fulfill.cancelRequested', { count: packedPieces.length })}
       </p>
       <div className="space-y-2">
         {packedPieces.map(p => (
@@ -498,7 +491,7 @@ function GuidedUnpackPanel({
               disabled={unpacking === p.piece_id}
               className="text-xs px-3 py-1 bg-amber-500 text-white rounded hover:bg-amber-600 disabled:opacity-50"
             >
-              {unpacking === p.piece_id ? '…' : isAr ? 'فك التعبئة' : 'Unpack'}
+              {unpacking === p.piece_id ? '…' : t('fulfill.unpackPiece')}
             </button>
           </div>
         ))}
@@ -510,8 +503,7 @@ function GuidedUnpackPanel({
 // ── Pick screen ────────────────────────────────────────────────────────────────
 
 function PickScreen({ orderId, onBack }: { orderId: string; onBack: () => void }) {
-  const { t, i18n } = useTranslation()
-  const isAr = i18n.language === 'ar'
+  const { t } = useTranslation()
   const [order, setOrder] = useState<OrderDetail | null>(null)
   const [loading, setLoading] = useState(true)
   const [flash, setFlash] = useState<FlashState>('idle')
@@ -638,7 +630,7 @@ function PickScreen({ orderId, onBack }: { orderId: string; onBack: () => void }
             {order.number ?? order.id.slice(-8)}
             {order.is_self_pickup && (
               <span className="text-xs px-2 py-0.5 rounded bg-indigo-100 text-indigo-700 font-medium">
-                {isAr ? 'استلام شخصي' : 'Self-Pickup'}
+                {t('fulfill.selfPickup')}
               </span>
             )}
           </p>
@@ -650,7 +642,7 @@ function PickScreen({ orderId, onBack }: { orderId: string; onBack: () => void }
             onClick={() => setShowCancelConfirm(true)}
             className="text-xs px-3 py-1.5 border border-red-200 text-red-600 rounded hover:bg-red-50"
           >
-            {isAr ? 'إلغاء الطلب' : 'Cancel'}
+            {t('fulfill.cancelOrder')}
           </button>
         )}
         {!showCancelConfirm && hasCancelRequest === false && <div className="w-20" />}
@@ -660,22 +652,22 @@ function PickScreen({ orderId, onBack }: { orderId: string; onBack: () => void }
       {showCancelConfirm && (
         <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50" onClick={() => setShowCancelConfirm(false)}>
           <div className="bg-white rounded-lg shadow-xl p-6 w-full max-w-sm mx-4" onClick={e => e.stopPropagation()}>
-            <h3 className="font-semibold text-gray-900 mb-2">{isAr ? 'إلغاء الطلب؟' : 'Cancel this order?'}</h3>
+            <h3 className="font-semibold text-gray-900 mb-2">{t('fulfill.cancelDialogTitle')}</h3>
             <p className="text-sm text-gray-600 mb-4">
               {order.status === 'packed'
-                ? isAr ? 'الطلب معبَّأ — يحتاج إلى فك التعبئة يدوياً.' : 'Order is packed — pieces must be manually unpacked.'
-                : isAr ? 'سيتم إعادة القطع المحجوزة للمخزون.' : 'Reserved pieces will be returned to stock.'}
+                ? t('fulfill.cancelPackedHint')
+                : t('fulfill.cancelPreHint')}
             </p>
             <div className="flex gap-3 justify-end">
               <button onClick={() => setShowCancelConfirm(false)} className="px-4 py-2 text-sm border rounded hover:bg-gray-50">
-                {isAr ? 'رجوع' : 'Back'}
+                {t('fulfill.back')}
               </button>
               <button
                 onClick={handleCancel}
                 disabled={cancelling}
                 className="px-4 py-2 text-sm bg-red-600 text-white rounded hover:bg-red-700 disabled:opacity-50"
               >
-                {cancelling ? '…' : isAr ? 'تأكيد الإلغاء' : 'Confirm Cancel'}
+                {cancelling ? '…' : t('fulfill.cancelConfirmBtn')}
               </button>
             </div>
           </div>
@@ -686,7 +678,7 @@ function PickScreen({ orderId, onBack }: { orderId: string; onBack: () => void }
       {selfPickupSuccess && (
         <div className="bg-green-50 border-b border-green-200 px-6 py-3 text-center">
           <p className="text-green-700 font-semibold">
-            {isAr ? 'تم التعبئة — في انتظار الاستلام' : 'Packed — awaiting customer collection'}
+            {t('fulfill.selfPickupPacked')}
           </p>
         </div>
       )}

@@ -62,8 +62,6 @@ export default function Layout({ children }: { children: ReactNode }) {
     const next = i18n.language === 'en' ? 'ar' : 'en'
     i18n.changeLanguage(next)
     localStorage.setItem('lang', next)
-    document.documentElement.dir  = next === 'ar' ? 'rtl' : 'ltr'
-    document.documentElement.lang = next
   }
 
   return (
