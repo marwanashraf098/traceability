@@ -69,6 +69,7 @@ public class ExceptionService {
         all.addAll(detectShopifyCancelVsInflight(tenantId));
         all.addAll(detectMissingProviderId(tenantId));
         all.addAll(detectHighAttempts(tenantId));
+        all.addAll(detectShopifyEditConflict(tenantId));
 
         // Enrich with descriptions and action hints
         all.forEach(this::enrich);
@@ -398,6 +399,25 @@ public class ExceptionService {
             tid, tid);
     }
 
+    private List<Map<String, Object>> detectShopifyEditConflict(UUID tid) {
+        return jdbc.queryForList(
+            "SELECT 'shopify_edit_conflict' AS type, 'HIGH' AS severity, 'order' AS subject_type, " +
+            "       o.id AS order_id, o.number AS order_number, " +
+            "       o.status::text AS order_status, " +
+            "       o.shopify_edit_conflict_diff::text AS diff_json, " +
+            "       o.shopify_edit_conflict_at AS occurred_at, " +
+            "       'shopify_edit_conflict:order:' || o.id AS subject_key " +
+            "FROM orders o " +
+            "WHERE o.tenant_id = ? " +
+            "  AND o.shopify_edit_conflict_at IS NOT NULL " +
+            "  AND NOT EXISTS ( " +
+            "      SELECT 1 FROM exception_resolutions er " +
+            "      WHERE er.tenant_id = o.tenant_id " +
+            "        AND er.exception_type = 'shopify_edit_conflict' " +
+            "        AND er.subject_key = 'shopify_edit_conflict:order:' || o.id) ",
+            tid);
+    }
+
     private List<Map<String, Object>> detectMissingProviderId(UUID tid) {
         return jdbc.queryForList(
             "SELECT 'missing_provider_id' AS type, 'MEDIUM' AS severity, 'shipment' AS subject_type, " +
@@ -541,6 +561,20 @@ public class ExceptionService {
                     "Shopify cancelled but parcel is in-flight — convert to self-pickup, " +
                     "cancel via guided flow, or let it RTO.");
                 item.put("actionUrl", ordersUrl(item));
+            }
+            case "shopify_edit_conflict" -> {
+                String n      = str(item, "order_number");
+                String status = str(item, "order_status");
+                String diff   = str(item, "diff_json");
+                item.put("descriptionEn",
+                    "Shopify edited order " + n + " (" + status + ") after it entered the fulfillment flow — " +
+                    "line items changed");
+                item.put("descriptionAr",
+                    "تعديل Shopify على الطلب " + n + " (" + status + ") بعد دخوله مسار التنفيذ — " +
+                    "تغيّرت بنود الطلب");
+                item.put("suggestedAction", "review_order");
+                item.put("actionUrl", ordersUrl(item));
+                if (diff != null) item.put("diffJson", diff);
             }
         }
     }

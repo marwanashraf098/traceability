@@ -725,6 +725,106 @@ public class FulfillService {
         return items;
     }
 
+    // ── Shopify line-item edit (FR-3.6) ──────────────────────────────────────
+
+    // Sentinel: system/webhook-originated transitions use null actor (same as cancelOrder path).
+    // actor_user_id = null in piece_events means no human is responsible.
+    private static final UUID SHOPIFY_WEBHOOK_ACTOR = null;
+
+    private static final Set<String> NO_TOUCH_STATUSES = Set.of(
+        "packed", "self_pickup_pending", "awaiting_pickup",
+        "with_courier", "returning");
+
+    private static final Set<String> TERMINAL_STATUSES = Set.of(
+        "delivered", "returned", "lost", "cancelled");
+
+    private static final Set<String> PRE_PICK_STATUSES = Set.of(
+        "new", "confirmed", "ready_to_pick");
+
+    /**
+     * Handles the allocation and exception-signalling side of a Shopify line-item edit.
+     * Called by ShopifyWebhookProcessorJob before the order-row upsert so the pre-edit
+     * order_items are still intact for the release queries.
+     *
+     * Routing by status:
+     *   - pre-pick (new/confirmed/ready_to_pick): no-op — caller upserts line items, that's all.
+     *   - picking: release active allocations for removed/reduced lines; raise exception.
+     *   - packed/self_pickup_pending/awaiting_pickup/with_courier/returning: no touch; raise exception.
+     *   - terminal: no-op — no exception, just let caller upsert.
+     *
+     * @param orderId     order whose line items changed
+     * @param orderStatus current order_status string (pre-edit)
+     * @param diffJson    JSON representation of the diff for the exception description
+     * @param removedExternalIds  external_ids of lines removed from Shopify payload
+     * @param releaseCountByExternalId  external_id → how many active allocations to release (reduced qty)
+     */
+    @Transactional(isolation = Isolation.READ_COMMITTED)
+    public void handleShopifyLineItemEdit(
+            UUID orderId,
+            String orderStatus,
+            String diffJson,
+            List<String> removedExternalIds,
+            Map<String, Integer> releaseCountByExternalId) {
+
+        UUID tenantId = TenantContext.require();
+
+        if (TERMINAL_STATUSES.contains(orderStatus) || PRE_PICK_STATUSES.contains(orderStatus)) {
+            return; // no allocation changes, no exception
+        }
+
+        if ("picking".equals(orderStatus)) {
+            // Release active allocations for fully removed lines
+            for (String extId : removedExternalIds) {
+                releaseActiveAllocsForItem(orderId, tenantId, extId, Integer.MAX_VALUE);
+            }
+            // Release excess allocations for reduced-qty lines
+            for (Map.Entry<String, Integer> e : releaseCountByExternalId.entrySet()) {
+                releaseActiveAllocsForItem(orderId, tenantId, e.getKey(), e.getValue());
+            }
+        }
+        // picking AND no-touch statuses both raise the exception
+        setEditConflictSignal(orderId, tenantId, diffJson);
+    }
+
+    private void releaseActiveAllocsForItem(UUID orderId, UUID tenantId,
+                                             String externalId, int maxRelease) {
+        List<Map<String, Object>> allocs = jdbc.queryForList(
+            "SELECT a.id, a.piece_id " +
+            "FROM allocations a " +
+            "JOIN order_items oi ON oi.id = a.order_item_id " +
+            "WHERE oi.order_id = ? AND oi.tenant_id = ? AND oi.external_id = ? " +
+            "  AND a.status = 'active' " +
+            "ORDER BY a.id " +
+            "LIMIT ?",
+            orderId, tenantId, externalId, maxRelease);
+
+        for (Map<String, Object> alloc : allocs) {
+            String pieceId = (String) alloc.get("piece_id");
+            UUID   allocId = (UUID)   alloc.get("id");
+            try {
+                ledger.transition(pieceId, PieceStatus.RESERVED, PieceStatus.AVAILABLE,
+                    "unreserved", SHOPIFY_WEBHOOK_ACTOR,
+                    new TransitionContext(orderId, null, null, null, null));
+            } catch (StateConflictException | IllegalTransitionException ex) {
+                // piece already moved (concurrent unscan / earlier release) — skip
+            }
+            jdbc.update("UPDATE allocations SET status = 'released' WHERE id = ?", allocId);
+        }
+    }
+
+    /**
+     * Stamps the edit-conflict signal on the order (idempotent via COALESCE on timestamp).
+     * diff_json is overwritten on each call so the latest diff is always present.
+     */
+    public void setEditConflictSignal(UUID orderId, UUID tenantId, String diffJson) {
+        jdbc.update(
+            "UPDATE orders " +
+            "SET shopify_edit_conflict_at   = COALESCE(shopify_edit_conflict_at, now()), " +
+            "    shopify_edit_conflict_diff  = ?::jsonb " +
+            "WHERE id = ? AND tenant_id = ?",
+            diffJson, orderId, tenantId);
+    }
+
     // ── Result types ──────────────────────────────────────────────────────────
 
     public record CancelResult(

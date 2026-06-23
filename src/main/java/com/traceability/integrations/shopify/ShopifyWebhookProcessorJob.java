@@ -1,5 +1,6 @@
 package com.traceability.integrations.shopify;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.traceability.inventory.FulfillService;
@@ -13,11 +14,8 @@ import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.sql.PreparedStatement;
-import java.util.ArrayList;
-import java.util.List;
+import java.util.*;
 import org.springframework.web.server.ResponseStatusException;
-
-import java.util.UUID;
 
 /**
  * Async processor for Shopify webhook events.
@@ -152,7 +150,8 @@ public class ShopifyWebhookProcessorJob {
 
     private void dispatch(UUID tenantId, String topic, String shopDomain, JsonNode payload) {
         switch (topic) {
-            case "orders/create", "orders/updated" -> handleOrderUpsert(tenantId, shopDomain, payload);
+            case "orders/create"  -> handleOrderUpsert(tenantId, shopDomain, payload);
+            case "orders/updated" -> handleOrderUpdated(tenantId, shopDomain, payload);
             case "orders/cancelled"                 -> handleOrderCancelled(tenantId, shopDomain, payload);
             case "products/create", "products/update" -> handleProductUpsert(tenantId, shopDomain, payload);
             case "app/uninstalled"                  -> handleAppUninstalled(tenantId, shopDomain);
@@ -176,6 +175,147 @@ public class ShopifyWebhookProcessorJob {
             return;
         }
         syncService.ingestOrderWebhook(storeId, tenantId, payload);
+    }
+
+    /**
+     * FR-3.6: orders/updated — detect line-item edits and route by order status.
+     *
+     * Diff is computed against the pre-edit local order_items (before ingestOrderWebhook
+     * upserts them). Routing:
+     *   new/confirmed/ready_to_pick → line items updated, no release, no exception.
+     *   picking → release allocations for removed/reduced lines; raise exception.
+     *   packed/self_pickup_pending/awaiting_pickup/with_courier/returning → no touch; exception.
+     *   terminal → line items updated, no exception.
+     */
+    private void handleOrderUpdated(UUID tenantId, String shopDomain, JsonNode payload) {
+        UUID storeId = syncService.resolveStore(tenantId, shopDomain);
+        if (storeId == null) {
+            log.warn("orders/updated: store not found or disconnected shop={} tenant={}", shopDomain, tenantId);
+            return;
+        }
+
+        String externalId = payload.path("admin_graphql_api_id").asText(null);
+        if (externalId == null || externalId.isBlank()) {
+            log.warn("orders/updated missing admin_graphql_api_id shop={}", shopDomain);
+            syncService.ingestOrderWebhook(storeId, tenantId, payload);
+            return;
+        }
+
+        // Load pre-edit order state (status + line items)
+        Map<String, Object> preEdit = tx.execute(s ->
+            jdbc.query(
+                "SELECT o.id, o.status::text AS status FROM orders o " +
+                "WHERE o.tenant_id = ? AND o.external_id = ? LIMIT 1",
+                rs -> rs.next()
+                    ? Map.of("id", rs.getObject("id", UUID.class),
+                             "status", rs.getString("status"))
+                    : null,
+                tenantId, externalId));
+
+        if (preEdit == null) {
+            // Order not known locally yet — treat as create
+            syncService.ingestOrderWebhook(storeId, tenantId, payload);
+            return;
+        }
+
+        UUID   orderId     = (UUID)   preEdit.get("id");
+        String orderStatus = (String) preEdit.get("status");
+
+        // Load pre-edit local order_items: externalId → qty
+        Map<String, Integer> localQty = tx.execute(s ->
+            jdbc.query(
+                "SELECT external_id, quantity FROM order_items " +
+                "WHERE order_id = ? AND tenant_id = ? AND external_id IS NOT NULL",
+                rs -> {
+                    Map<String, Integer> m = new LinkedHashMap<>();
+                    while (rs.next()) m.put(rs.getString("external_id"), rs.getInt("quantity"));
+                    return m;
+                },
+                orderId, tenantId));
+
+        // Build incoming line-item map: externalId → qty
+        Map<String, Integer> incomingQty = new LinkedHashMap<>();
+        for (JsonNode line : payload.path("line_items")) {
+            String lineGid = line.has("admin_graphql_api_id")
+                ? line.path("admin_graphql_api_id").asText()
+                : "gid://shopify/LineItem/" + line.path("id").asLong();
+            incomingQty.put(lineGid, line.path("quantity").asInt(1));
+        }
+
+        LineDiff diff = computeLineDiff(localQty != null ? localQty : Map.of(), incomingQty);
+
+        if (!diff.isEmpty()) {
+            String diffJson = serializeDiff(diff);
+            final UUID fOrderId = orderId;
+            final String fStatus = orderStatus;
+            tx.execute(s -> {
+                TenantContext.set(tenantId);
+                fulfillService.handleShopifyLineItemEdit(
+                    fOrderId, fStatus, diffJson,
+                    diff.removed(), diff.releaseCountByExternalId());
+                return null;
+            });
+        }
+
+        // Always upsert the order + line items (metadata, raw JSON etc.)
+        syncService.ingestOrderWebhook(storeId, tenantId, payload);
+    }
+
+    // ── Line-item diff helpers ────────────────────────────────────────────────
+
+    record LineDiff(
+        List<String>         removed,
+        Map<String, int[]>   reduced,    // externalId → [oldQty, newQty]
+        List<String>         added,
+        Map<String, int[]>   increased   // externalId → [oldQty, newQty]
+    ) {
+        boolean isEmpty() {
+            return removed.isEmpty() && reduced.isEmpty() && added.isEmpty() && increased.isEmpty();
+        }
+        /** Returns map: externalId → count to release (old - new) for reduced-qty items. */
+        Map<String, Integer> releaseCountByExternalId() {
+            Map<String, Integer> m = new LinkedHashMap<>();
+            for (Map.Entry<String, int[]> e : reduced.entrySet()) {
+                m.put(e.getKey(), e.getValue()[0] - e.getValue()[1]);
+            }
+            return m;
+        }
+    }
+
+    private LineDiff computeLineDiff(Map<String, Integer> local, Map<String, Integer> incoming) {
+        List<String>         removed   = new ArrayList<>();
+        Map<String, int[]>   reduced   = new LinkedHashMap<>();
+        List<String>         added     = new ArrayList<>();
+        Map<String, int[]>   increased = new LinkedHashMap<>();
+
+        for (Map.Entry<String, Integer> e : local.entrySet()) {
+            String extId  = e.getKey();
+            int    oldQty = e.getValue();
+            if (!incoming.containsKey(extId)) {
+                removed.add(extId);
+            } else {
+                int newQty = incoming.get(extId);
+                if (newQty < oldQty) reduced.put(extId, new int[]{oldQty, newQty});
+                if (newQty > oldQty) increased.put(extId, new int[]{oldQty, newQty});
+            }
+        }
+        for (String extId : incoming.keySet()) {
+            if (!local.containsKey(extId)) added.add(extId);
+        }
+        return new LineDiff(removed, reduced, added, increased);
+    }
+
+    private String serializeDiff(LineDiff diff) {
+        try {
+            Map<String, Object> m = new LinkedHashMap<>();
+            m.put("removed",   diff.removed());
+            m.put("reduced",   diff.reduced());
+            m.put("added",     diff.added());
+            m.put("increased", diff.increased());
+            return mapper.writeValueAsString(m);
+        } catch (JsonProcessingException e) {
+            return "{}";
+        }
     }
 
     private void handleOrderCancelled(UUID tenantId, String shopDomain, JsonNode payload) {
