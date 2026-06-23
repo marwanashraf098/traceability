@@ -4,9 +4,38 @@
 
 ## Current state
 
-**306 backend + 16 frontend tests green — FR-3.6 shipped** — 2026-06-23.
+**315 backend + 21 frontend tests — FR-7.9 + FR-7.8(a) shipped** — 2026-06-24.
 
-FR-3.6 complete. Shopify line-item edits on in-progress orders: state-routed handler extends `orders/updated` webhook. Picking orders release affected allocations via standard unreserved/released path; packed+ orders raise `shopify_edit_conflict` exception (14th detector, HIGH) without touching pieces. V27 adds signal columns. 9 backend tests green. MigrationSmokeTest count bumped 26→27.
+FR-7.9 complete: blocklist table (V28), CRUD endpoints, frontend Blocklist.tsx page, AR+EN i18n. 9 backend + 5 frontend tests. FR-7.8(a) complete: blocked-customer entry gate wired in both import paths (GraphQL + webhook). No-phone-at-entry → gate skipped (pre-PCD handled explicitly). Mode-B deferred re-check in ShipmentLinkService.tryMatchDelivery(). releaseHold() + POST /orders/{id}/release-hold. Release/Cancel actions on blocked_customer exception cards.
+
+Note: AwbPickupTest.t12 fails on Wednesdays (plusDays(2) lands on Friday; pre-existing date-sensitive test).
+
+FR-3.6 complete. Shopify line-item edits on in-progress orders: state-routed handler extends `orders/updated` webhook. Picking orders release affected allocations via standard unreserved/released path; packed+ orders raise `shopify_edit_conflict` exception (14th detector, HIGH) without touching pieces. V27 adds signal columns. 9 backend tests green. MigrationSmokeTest count bumped 26→28.
+
+---
+
+**Day 36 — FR-7.9 Blocklist + FR-7.8(a) Entry Gate**
+
+*V28: `blocklist` table — `(id, tenant_id, phone_canonical, reason, source, created_by, created_at, active)`. RLS. Partial unique index on `(tenant_id, phone_canonical) WHERE active=true`.*
+
+**FR-7.9 — blocklist CRUD:**
+- Phone canonicalized via `ShipmentLinkService.normalizePhone()` (same function as Mode-B matching). `+20` / `0020` / local 10-digit → `01XXXXXXXXX`.
+- `BlocklistService`: add (soft-upsert reactivates inactive entries), remove (soft-delete), list, `isBlocked()` for gate, `checkAndHoldIfBlocked()`.
+- `BlocklistController`: `GET/POST/DELETE /api/v1/blocklist` — Owner/Manager. Audit on add+remove.
+- Frontend: `Blocklist.tsx` — list, add modal, inline remove confirm. AR+EN i18n in `blocklist.*` namespace.
+
+**FR-7.8(a) — entry gate:**
+- Insertion point: `ShopifySyncService.upsertOrder()` (GraphQL/reconcile path) and `ingestOrderWebhook()` (REST webhook), inside the same `tx.execute()` block after line items, same layer as `FLAG_ORDER_UNMAPPED`.
+- **No-phone-at-entry (pre-PCD)**: `customer_phone = null` → gate call is a no-op. NOT a silent pass — explicitly skipped and logged. Order proceeds to `new` normally.
+- **Mode-B deferred re-check (option i)**: `ShipmentLinkService.tryMatchDelivery()` re-runs `checkAndHoldIfBlocked()` after a successful phone+COD link — Bosta consignee phone is the first reliable phone for pre-PCD orders. This is the deferred gate path.
+- `FulfillService.releaseHold()`: clears `on_hold`, writes audit_log. `FulfillController`: `POST /orders/{id}/release-hold` (Owner/Manager).
+- `ExceptionService.detectBlocked()` **unchanged** — still fires on `on_hold=true` with NOT EXISTS suppression. Enrich now adds `releaseUrl` + `cancelUrl` to the exception item.
+- `Exceptions.tsx`: blocked_customer cards show "Release (ship anyway)" + "Cancel order" action buttons wired to `releaseOrderHold()` / `cancelOrder()`.
+- **Gate (c) deferred**: TODO comment in `BostaAwbService.printAwb()` catch block.
+
+**Tests (Day37Test, 9):** add+canonicalize, duplicate-international-local conflict, blocked order held, release+audit, cancel, null-phone graceful, index exists, tenant isolation, soft-delete+unblocks.
+
+**Frontend tests (blocklist.test.tsx, 5):** fb1 empty state, fb2 add submit, fb3 remove, fb4 release action, fb5 cancel action.
 
 FR-13 complete. Manual adjustments: available→lost/damaged/destroyed (13.1), reserved/packed guard with release step (13.2), lost→available found-it (13.3). 8 backend + 5 frontend tests. Two commits: backend + frontend.
 

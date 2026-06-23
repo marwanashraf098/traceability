@@ -64,8 +64,8 @@ One line per requirement · [M] Must / [S] Should / [C] Could · use as the buil
 - [ ] 7.5 [M] COD prominent, editable until packing (logged); ≤ 30,000 EGP validation; frozen after AWB
 - [ ] 7.6 [S] Bulk actions: confirm, hold, batch
 - [ ] 7.7 [M] No partials: ship complete or flag `short` with missing variant/qty
-- [ ] 7.8 [M] Entry gates: (a) blocked-customer phone check (normalized 010/+20/0020) → hold w/ release-or-cancel; (b) address mappability at entry → Address Review w/ remembered fix; (c) Bosta consignee rejection → same exception + offer blocklist add (source bosta_rejected)
-- [ ] 7.9 [M] Blocklist management: add/remove w/ reason+source, logged, ≤50ms lookup ([S] CSV import)
+- [~] 7.8 [M] Entry gates: (a) ✅ blocked-customer phone check (normalized 010/+20/0020) → hold w/ release-or-cancel; (b) address mappability at entry → Address Review w/ remembered fix [deferred: FR-4.3/Mode-A]; (c) Bosta consignee rejection → same exception + offer blocklist add (source bosta_rejected) [deferred: TODO in BostaAwbService]
+- [x] 7.9 [M] Blocklist management: add/remove w/ reason+source, logged, ≤50ms lookup ([S] CSV import)
 
 ## FR-8 Picking
 - [x] 8.1 [M] Pick queue oldest-first; open = lock to worker; Manager can release
