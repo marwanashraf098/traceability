@@ -51,17 +51,20 @@ public class ShipmentLinkService {
     private final BostaStateMapper  stateMapper;
     private final BostaGateway      bostaGateway;
     private final EncryptionService encryptionService;
+    private final BlocklistService  blocklist;
 
     public ShipmentLinkService(JdbcTemplate jdbc,
                                 InventoryLedger ledger,
                                 BostaStateMapper stateMapper,
                                 BostaGateway bostaGateway,
-                                EncryptionService encryptionService) {
+                                EncryptionService encryptionService,
+                                BlocklistService blocklist) {
         this.jdbc              = jdbc;
         this.ledger            = ledger;
         this.stateMapper       = stateMapper;
         this.bostaGateway      = bostaGateway;
         this.encryptionService = encryptionService;
+        this.blocklist         = blocklist;
     }
 
     /**
@@ -190,6 +193,12 @@ public class ShipmentLinkService {
             "UPDATE orders SET status = 'awaiting_pickup' " +
             "WHERE id = ? AND tenant_id = ? AND status = 'packed'",
             orderId, tenantId);
+
+        // FR-7.8a deferred gate: re-check blocklist using Bosta consignee phone.
+        // Pre-PCD orders have customer_phone=null at import — this is the first reliable phone.
+        String bostaRawPhone = delivery.raw() != null
+            ? delivery.raw().path("consignee").path("phone").asText(null) : null;
+        blocklist.checkAndHoldIfBlocked(orderId, bostaRawPhone, tenantId);
 
         log.info("Auto-matched delivery {} to order {}", trackingNumber, orderId);
         return new LinkResult(orderId, null);

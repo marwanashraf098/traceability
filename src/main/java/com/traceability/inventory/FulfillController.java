@@ -143,6 +143,15 @@ public class FulfillController {
         return org.springframework.http.ResponseEntity.status(httpStatus).body(result);
     }
 
+    /** FR-7.8a: Release a blocked-customer hold so the order can proceed to picking. */
+    @PostMapping("/{orderId}/release-hold")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    @PreAuthorize("hasAnyRole('OWNER', 'MANAGER')")
+    public void releaseHold(@PathVariable UUID orderId,
+                            @AuthenticationPrincipal CustomUserDetails principal) {
+        svc.releaseHold(orderId, principal.userId());
+    }
+
     /** Guided unpack: physically remove one packed piece for a post-pack cancellation. */
     @PostMapping("/{orderId}/unpack/{pieceId}")
     @PreAuthorize("isAuthenticated()")

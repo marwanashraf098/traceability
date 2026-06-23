@@ -478,6 +478,9 @@ public class ExceptionService {
                 item.put("descriptionAr", "الطلب " + n + " معلَّق" + suffix);
                 item.put("suggestedAction", "review_and_release");
                 item.put("actionUrl", ordersUrl(item));
+                // FR-7.8a: resolution actions — release hold or cancel
+                item.put("releaseUrl", "/api/v1/orders/" + str(item, "order_id") + "/release-hold");
+                item.put("cancelUrl",  "/api/v1/orders/" + str(item, "order_id") + "/cancel");
             }
             case "stuck_shipment" -> {
                 String t = str(item, "tracking_number");

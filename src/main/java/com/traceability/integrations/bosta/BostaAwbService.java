@@ -177,7 +177,11 @@ public class BostaAwbService {
                     log.info("mass-awb returned email-path for chunk of {} trackings", chunk.size());
                 }
             } catch (BostaException e) {
-                // Bosta rejected the entire chunk — route each to missing-AWB exception
+                // Bosta rejected the entire chunk — route each to missing-AWB exception.
+                // TODO (gate-c FR-7.8): if rejection reason indicates a blocked consignee,
+                //   raise blocked_customer exception + offer to add phone to blocklist
+                //   (source=bosta_rejected). Deferred — wire when Mode-A / AWB-create
+                //   hits Bosta and we can reliably extract the rejection cause code.
                 String rejectedReason = "BOSTA_REJECTED:" + truncate(e.getMessage(), 120);
                 log.warn("mass-awb rejected chunk of {} trackings: {}", chunk.size(), e.getMessage());
                 for (String tn : chunk) {

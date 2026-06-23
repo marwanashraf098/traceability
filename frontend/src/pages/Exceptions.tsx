@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router-dom'
-import { request } from '../api'
+import { request, releaseOrderHold, cancelOrder as apiCancelOrder } from '../api'
 import { SeverityBadge, EmptyState, Spinner, Modal } from '../components/ui'
 
 interface ExceptionItem {
@@ -26,6 +26,9 @@ interface ExceptionItem {
   descriptionAr: string
   suggestedAction: string
   actionUrl: string
+  releaseUrl?: string
+  cancelUrl?: string
+  diffJson?: string
 }
 
 interface ExceptionPage { total: number; page: number; size: number; items: ExceptionItem[] }
@@ -99,8 +102,8 @@ function ResolveDialog({ item, onClose, onResolved }: { item: ExceptionItem; onC
 
 // ── Exception row ─────────────────────────────────────────────────────────────
 
-function ExceptionRow({ item, onAck }: { item: ExceptionItem; onAck: (item: ExceptionItem) => void }) {
-  const { i18n } = useTranslation()
+function ExceptionRow({ item, onAck, onAction }: { item: ExceptionItem; onAck: (item: ExceptionItem) => void; onAction?: () => void }) {
+  const { t, i18n } = useTranslation()
   const isAr = i18n.language === 'ar'
   const navigate = useNavigate()
   const typeLabel = TYPE_LABELS[item.type]
@@ -148,7 +151,29 @@ function ExceptionRow({ item, onAck }: { item: ExceptionItem; onAck: (item: Exce
 
       {/* Actions */}
       <div className="flex flex-col gap-2 flex-shrink-0">
-        {item.actionUrl && (
+        {item.type === 'blocked_customer' && item.order_id && (
+          <>
+            <button
+              data-testid={`exc-release-${item.order_id}`}
+              className="btn-primary btn text-small px-3 py-1.5"
+              onClick={async () => {
+                try { await releaseOrderHold(item.order_id!); onAction?.() } catch { /* noop */ }
+              }}
+            >
+              {t('blocklist.exception.releaseButton', 'Release')}
+            </button>
+            <button
+              data-testid={`exc-cancel-${item.order_id}`}
+              className="btn-outline btn text-small px-3 py-1.5 text-red-500 border-red-200"
+              onClick={async () => {
+                try { await apiCancelOrder(item.order_id!); onAction?.() } catch { /* noop */ }
+              }}
+            >
+              {t('blocklist.exception.cancelButton', 'Cancel')}
+            </button>
+          </>
+        )}
+        {item.actionUrl && item.type !== 'blocked_customer' && (
           <button onClick={() => navigate(item.actionUrl)} className="btn-brand btn text-small px-3 py-1.5">
             {isAr ? 'الإجراء' : 'Go →'}
           </button>
@@ -221,7 +246,7 @@ export default function ExceptionsPage() {
       ) : (
         <div className="space-y-3">
           {data?.items.map((item, i) => (
-            <ExceptionRow key={i} item={item} onAck={setResolvingItem} />
+            <ExceptionRow key={i} item={item} onAck={setResolvingItem} onAction={load} />
           ))}
         </div>
       )}

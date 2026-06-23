@@ -511,6 +511,28 @@ public class FulfillService {
      * - With courier (awaiting_pickup / with_courier): 409 — pieces are at Bosta.
      */
     @Transactional(isolation = Isolation.READ_COMMITTED)
+    public void releaseHold(UUID orderId, UUID actorUserId) {
+        UUID tenantId = TenantContext.require();
+        int updated = jdbc.update(
+            "UPDATE orders SET on_hold = false, hold_reason = NULL " +
+            "WHERE id = ? AND tenant_id = ? AND on_hold = true",
+            orderId, tenantId);
+        if (updated == 0) {
+            // Check if order exists at all
+            Integer count = jdbc.queryForObject(
+                "SELECT COUNT(*) FROM orders WHERE id = ? AND tenant_id = ?",
+                Integer.class, orderId, tenantId);
+            if (count == null || count == 0)
+                throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Order not found");
+            // Exists but not on hold — 409 so the caller knows it is a no-op
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Order is not on hold");
+        }
+        auditService.record(actorUserId, "release_hold", "order", orderId.toString(), null);
+    }
+
+    // ── Cancel ────────────────────────────────────────────────────────────────
+
+    @Transactional(isolation = Isolation.READ_COMMITTED)
     public CancelResult cancelOrder(UUID orderId, UUID actorUserId) {
         UUID tenantId = TenantContext.require();
 

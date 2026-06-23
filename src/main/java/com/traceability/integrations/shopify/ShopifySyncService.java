@@ -3,6 +3,7 @@ package com.traceability.integrations.shopify;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.traceability.inventory.BlocklistService;
 import com.traceability.security.EncryptionService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -127,17 +128,20 @@ public class ShopifySyncService {
     private final EncryptionService encryptionService;
     private final ObjectMapper mapper;
     private final TransactionTemplate tx;
+    private final BlocklistService blocklist;
 
     public ShopifySyncService(JdbcTemplate jdbc,
                                ShopifyGateway shopifyGateway,
                                EncryptionService encryptionService,
                                ObjectMapper mapper,
-                               PlatformTransactionManager txm) {
+                               PlatformTransactionManager txm,
+                               BlocklistService blocklist) {
         this.jdbc              = jdbc;
         this.shopifyGateway    = shopifyGateway;
         this.encryptionService = encryptionService;
         this.mapper            = mapper;
         this.tx                = new TransactionTemplate(txm);
+        this.blocklist         = blocklist;
     }
 
     // ---- public API -----------------------------------------------------
@@ -274,6 +278,10 @@ public class ShopifySyncService {
                 jdbc.update(UPSERT_ORDER_ITEM, tenantId, orderId, variantId, qty, lineGid, toJson(line));
             }
             if (needsHold) jdbc.update(FLAG_ORDER_UNMAPPED, orderId);
+
+            // FR-7.8a: blocklist gate — runs only when phone is available (pre-PCD: null → skipped)
+            blocklist.checkAndHoldIfBlocked(orderId, customerPhone, tenantId);
+
             return needsHold;
         });
         log.debug("Webhook order upsert: gid={} store={} flagged={}", gid, storeId, flagged);
@@ -402,6 +410,10 @@ public class ShopifySyncService {
             if (needsHold) {
                 jdbc.update(FLAG_ORDER_UNMAPPED, orderId);
             }
+
+            // FR-7.8a: blocklist gate — runs only when phone is available (pre-PCD: null → skipped)
+            blocklist.checkAndHoldIfBlocked(orderId, o.customerPhone(), tenantId);
+
             return needsHold;
         }));
     }
