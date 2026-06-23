@@ -17,6 +17,7 @@ import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
 import java.math.BigDecimal;
+import java.time.DayOfWeek;
 import java.time.LocalDate;
 import java.util.Base64;
 import java.util.List;
@@ -249,7 +250,7 @@ class AwbPickupTest {
         createPickupReadyShipment("AWB-P07B", new BigDecimal("200"));
 
         BostaPickupService.PickupManifest manifest =
-            pickupService.schedulePickup(tenantId, LocalDate.now().plusDays(1));
+            pickupService.schedulePickup(tenantId, nextValidPickupDate());
 
         assertThat(manifest.mode()).isEqualTo("BOSTA_MANAGED");
         assertThat(manifest.providerPickupId()).isNull();
@@ -276,7 +277,7 @@ class AwbPickupTest {
             .thenReturn("BOSTA-PID-001");
 
         BostaPickupService.PickupManifest manifest =
-            pickupService.schedulePickup(tenantId, LocalDate.now().plusDays(1));
+            pickupService.schedulePickup(tenantId, nextValidPickupDate());
 
         assertThat(manifest.providerPickupId()).isEqualTo("BOSTA-PID-001");
         assertThat(manifest.mode()).isEqualTo("TRACED_MANAGED");
@@ -304,7 +305,7 @@ class AwbPickupTest {
             .thenThrow(new BostaPickupAlreadyExistsException(1078, "Pickup already exists for today"));
 
         BostaPickupService.PickupManifest manifest =
-            pickupService.schedulePickup(tenantId, LocalDate.now().plusDays(1));
+            pickupService.schedulePickup(tenantId, nextValidPickupDate());
 
         assertThat(manifest.alreadyExistsMessage()).isNotNull();
         assertThat(manifest.alreadyExistsMessage()).contains("already exists");
@@ -354,7 +355,7 @@ class AwbPickupTest {
         createShipmentWithOrder("AWB-P12C", "with_courier", null, new BigDecimal("999.00"));
 
         BostaPickupService.PickupManifest manifest =
-            pickupService.schedulePickup(tenantId, LocalDate.now().plusDays(2));
+            pickupService.schedulePickup(tenantId, nextValidPickupDate());
 
         assertThat(manifest.parcelCount()).isEqualTo(2);
         assertThat(manifest.totalCod()).isEqualByComparingTo("400.00");
@@ -365,6 +366,24 @@ class AwbPickupTest {
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────
+
+    /**
+     * Returns the next pickup-eligible date that is at least {@code minDaysOut} calendar days
+     * from today, skipping Friday (Bosta error 1080).
+     *
+     * Using "today + N" directly causes test failures whenever the computed date lands on a
+     * Friday: Wednesday → plusDays(2) = Friday, Thursday → plusDays(1) = Friday.
+     * Tests should always use this helper instead of a raw plusDays() expression.
+     *
+     * Tech-debt note: BostaPickupService.schedulePickup() calls LocalDate.now() directly
+     * with no injectable Clock. Until a Clock is injected, tests cannot pin the "today"
+     * reference and must use this avoidance approach instead.
+     */
+    private static LocalDate nextValidPickupDate() {
+        LocalDate d = LocalDate.now().plusDays(1);
+        while (d.getDayOfWeek() == DayOfWeek.FRIDAY) d = d.plusDays(1);
+        return d;
+    }
 
     /**
      * Creates an order in 'awaiting_pickup' status + shipment in 'created' state.
