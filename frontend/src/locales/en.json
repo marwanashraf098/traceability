@@ -510,5 +510,39 @@
       "damaged": "Damaged",
       "destroyed": "Destroyed"
     }
+  },
+  "blocklist": {
+    "title": "Blocked Customers",
+    "subtitle": "Phones on this list will put matching orders on hold at import.",
+    "addButton": "Block phone",
+    "empty": "No blocked phones.",
+    "col": {
+      "phone": "Phone",
+      "reason": "Reason",
+      "addedBy": "Added by",
+      "addedAt": "Date"
+    },
+    "add": {
+      "title": "Block a phone number",
+      "phone": "Phone number",
+      "phonePlaceholder": "01XXXXXXXXX or +20XXXXXXXXXX",
+      "reason": "Reason",
+      "reasonPlaceholder": "Why is this customer blocked?",
+      "submit": "Block",
+      "cancel": "Cancel"
+    },
+    "remove": {
+      "confirm": "Unblock this number?",
+      "yes": "Unblock",
+      "no": "Cancel"
+    },
+    "source": {
+      "manual": "Manual",
+      "bosta_rejected": "Bosta"
+    },
+    "exception": {
+      "releaseButton": "Release (ship anyway)",
+      "cancelButton": "Cancel order"
+    }
   }
 }

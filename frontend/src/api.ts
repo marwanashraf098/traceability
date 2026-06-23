@@ -477,3 +477,41 @@ export function adjustPiece(
 export function releasePieceForAdjust(pieceId: string) {
   return request<void>(`/pieces/${pieceId}/release-for-adjust`, { method: 'POST' })
 }
+
+// ── Blocklist (FR-7.9) ────────────────────────────────────────────────────────
+
+export interface BlocklistEntry {
+  id: string
+  phoneCanonical: string
+  reason: string
+  source: 'manual' | 'bosta_rejected'
+  createdBy: string | null
+  createdAt: string
+}
+
+export function listBlocklist() {
+  return request<BlocklistEntry[]>('/blocklist')
+}
+
+export function addToBlocklist(phone: string, reason: string) {
+  return request<BlocklistEntry>('/blocklist', {
+    method: 'POST',
+    body: JSON.stringify({ phone, reason }),
+  })
+}
+
+export function removeFromBlocklist(id: string) {
+  return request<void>(`/blocklist/${id}`, { method: 'DELETE' })
+}
+
+// ── FR-7.8a: hold management ──────────────────────────────────────────────────
+
+export function releaseOrderHold(orderId: string) {
+  return request<void>(`/orders/${orderId}/release-hold`, { method: 'POST' })
+}
+
+export function cancelOrder(orderId: string) {
+  return request<{ status: string; message: string }>(`/orders/${orderId}/cancel`, {
+    method: 'POST',
+  })
+}

@@ -509,5 +509,39 @@
       "damaged": "تالفة",
       "destroyed": "مُتلَفة"
     }
+  },
+  "blocklist": {
+    "title": "العملاء المحظورون",
+    "subtitle": "أرقام الهاتف في هذه القائمة ستوقف الطلبات المطابقة عند الاستيراد.",
+    "addButton": "حظر رقم",
+    "empty": "لا توجد أرقام محظورة.",
+    "col": {
+      "phone": "الهاتف",
+      "reason": "السبب",
+      "addedBy": "أضافه",
+      "addedAt": "التاريخ"
+    },
+    "add": {
+      "title": "حظر رقم هاتف",
+      "phone": "رقم الهاتف",
+      "phonePlaceholder": "01XXXXXXXXX أو ‎+20XXXXXXXXXX",
+      "reason": "السبب",
+      "reasonPlaceholder": "لماذا هذا العميل محظور؟",
+      "submit": "حظر",
+      "cancel": "إلغاء"
+    },
+    "remove": {
+      "confirm": "إلغاء حظر هذا الرقم؟",
+      "yes": "إلغاء الحظر",
+      "no": "إلغاء"
+    },
+    "source": {
+      "manual": "يدوي",
+      "bosta_rejected": "بوسطة"
+    },
+    "exception": {
+      "releaseButton": "تحرير (شحن على أي حال)",
+      "cancelButton": "إلغاء الطلب"
+    }
   }
 }
