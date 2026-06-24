@@ -194,10 +194,11 @@ public class ShipmentLinkService {
             "WHERE id = ? AND tenant_id = ? AND status = 'packed'",
             orderId, tenantId);
 
-        // FR-7.8a deferred gate: re-check blocklist using Bosta consignee phone.
+        // FR-7.8a deferred gate: re-check blocklist using Bosta receiver phone.
         // Pre-PCD orders have customer_phone=null at import — this is the first reliable phone.
+        // Bosta v0 API places the recipient in "receiver", not "consignee".
         String bostaRawPhone = delivery.raw() != null
-            ? delivery.raw().path("consignee").path("phone").asText(null) : null;
+            ? delivery.raw().path("receiver").path("phone").asText(null) : null;
         blocklist.checkAndHoldIfBlocked(orderId, bostaRawPhone, tenantId);
 
         log.info("Auto-matched delivery {} to order {}", trackingNumber, orderId);
@@ -463,7 +464,8 @@ public class ShipmentLinkService {
 
         // Normalize Bosta phone. If absent or invalid → COD-only matching, which is too
         // ambiguous to auto-link. Flag immediately without running a candidate query.
-        String rawPhone   = raw.path("consignee").path("phone").asText(null);
+        // Bosta v0 API places the recipient in "receiver", not "consignee".
+        String rawPhone   = raw.path("receiver").path("phone").asText(null);
         String bostaPhone = normalizePhone(rawPhone);
         if (bostaPhone == null) {
             return MatchResult.flagged(REASON_COD_ONLY);
