@@ -4,7 +4,19 @@
 
 ## Current state
 
-**354 backend + 23 frontend tests — Returns-receiving session complete** — 2026-06-24.
+**354 backend + 29 frontend tests — Fulfill dark restyle + AWB print** — 2026-06-25.
+
+**Fulfill restyle + Print Waybill (Day 42):**
+
+*Part A — Theme restyle:* All five Fulfill.tsx components (QueueView, PickScreen, HandoverScreen, GuidedUnpackPanel, AwbLinkDialog) converted to dark design system. bg-white/gray/indigo/green/amber → bg-base/panel/elevated + `.card`. Scan inputs use `input-scan`. Flash overlays use `bg-success/20`/`bg-danger/20` matching Returns.tsx. All buttons use `btn-brand`/`btn-outline`/`btn-danger`/`btn-ghost`. Logical RTL props (`ms-`/`ps-`/`text-end`). Progress bar: `bg-brand` on `bg-elevated`.
+
+*Part B — Print Waybill (Mode B):* Button in PickScreen bottom bar with 3 states. `FulfillService.getOrder()` LEFT JOINs shipments to expose `shipment_id` and `tracking_number`. PRINTABLE → calls `POST /api/v1/bosta/awb/print` → decodes base64 PDF → `window.open`. NOT-YET-LINKED → disabled + note. ERROR → inline danger note, pack flow unaffected. AWB dialog after linking: shows Print Waybill + Done (replaces 1800ms auto-close); uses shipmentId already returned by `/fulfill/{id}/link`. No delivery creation — Mode B only.
+
+*6 new frontend tests (ft1–ft6). 29 total frontend tests green.*
+
+*Commits:* `a5c1d48` (frontend), `04d0564` (backend).
+
+Next up: Server provisioning runbook (Hetzner, firewall, Docker, first deploy) — Deploy-prep 3.
 
 **Returns-receiving session (Day 41):**
 
