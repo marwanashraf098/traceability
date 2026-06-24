@@ -171,7 +171,8 @@
       "success": "Linked: {{tracking}} — awaiting pickup",
       "conflict": "This waybill is already linked to another order",
       "error": "Could not link — check the barcode and try again",
-      "skip": "Skip — link later"
+      "skip": "Skip — link later",
+      "done": "Done — back to queue"
     },
     "selfPickup": "Self-Pickup",
     "selfPickupBadge": "Self-Pickup",
@@ -193,7 +194,14 @@
     "cancelPackedHint": "Order is packed — pieces must be manually unpacked.",
     "cancelPreHint": "Reserved pieces will be returned to stock.",
     "cancelConfirmBtn": "Confirm Cancel",
-    "selfPickupPacked": "Packed — awaiting customer collection"
+    "selfPickupPacked": "Packed — awaiting customer collection",
+    "printAwb": {
+      "print": "Print Waybill",
+      "opening": "Opening waybill…",
+      "emailed": "Bosta will email the AWB label",
+      "error": "Could not print waybill",
+      "notLinked": "Waybill not linked yet — the Bosta delivery hasn't synced."
+    }
   },
   "lookup": {
     "title": "Piece Lookup",

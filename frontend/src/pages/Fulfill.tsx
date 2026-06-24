@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
+import { EmptyState, Spinner } from '../components/ui'
 
 const BASE = '/api/v1'
 
@@ -70,6 +71,8 @@ interface OrderDetail {
   locked_by: string | null
   is_self_pickup: boolean
   cancel_requested_at: string | null
+  shipment_id: string | null
+  tracking_number: string | null
   items: OrderItem[]
 }
 
@@ -91,12 +94,14 @@ interface CancelResult {
 }
 
 interface AwbLinkResponse {
+  shipmentId: string
   trackingNumber: string
   linkedPieces: number
   orderStatus: string
 }
 
 type FlashState = 'idle' | 'success' | 'error'
+type AwbMsg = { type: 'error' | 'info'; text: string } | null
 
 // ── Audio ──────────────────────────────────────────────────────────────────────
 
@@ -118,6 +123,40 @@ function playBeep(success: boolean) {
   }
 }
 
+// ── AWB PDF helper ─────────────────────────────────────────────────────────────
+
+async function printAwbPdf(shipmentId: string): Promise<'opened' | 'emailed'> {
+  const { data, status } = await api<{
+    pdfBase64List: string[]
+    emailMessage: string | null
+    exceptions: Array<{ trackingNumber: string; reason: string }>
+  }>('/bosta/awb/print', {
+    method: 'POST',
+    body: JSON.stringify({ shipmentIds: [shipmentId] }),
+  })
+
+  if (status < 200 || status >= 300) {
+    throw new Error((data as { message?: string })?.message ?? `HTTP ${status}`)
+  }
+
+  if (data?.pdfBase64List?.length > 0) {
+    const bytes = atob(data.pdfBase64List[0])
+    const arr = new Uint8Array(bytes.length)
+    for (let i = 0; i < bytes.length; i++) arr[i] = bytes.charCodeAt(i)
+    const blob = new Blob([arr], { type: 'application/pdf' })
+    window.open(URL.createObjectURL(blob), '_blank')
+    return 'opened'
+  }
+
+  if (data?.emailMessage) return 'emailed'
+
+  if (data?.exceptions?.length > 0) {
+    throw new Error(data.exceptions[0].reason ?? 'AWB not printable')
+  }
+
+  throw new Error('No PDF returned from print endpoint')
+}
+
 // ── AWB-scan dialog ────────────────────────────────────────────────────────────
 
 function AwbLinkDialog({ orderId, onDone }: { orderId: string; onDone: () => void }) {
@@ -125,9 +164,11 @@ function AwbLinkDialog({ orderId, onDone }: { orderId: string; onDone: () => voi
   const inputRef = useRef<HTMLInputElement>(null)
   const [flash, setFlash] = useState<FlashState>('idle')
   const [linking, setLinking] = useState(false)
-  const [linked, setLinked] = useState<string | null>(null)
+  const [linked, setLinked] = useState<{ tracking: string; shipmentId: string } | null>(null)
   const [conflictError, setConflictError] = useState(false)
   const [genericError, setGenericError] = useState(false)
+  const [printing, setPrinting] = useState(false)
+  const [awbMsg, setAwbMsg] = useState<AwbMsg>(null)
 
   useEffect(() => { inputRef.current?.focus() }, [])
 
@@ -150,8 +191,7 @@ function AwbLinkDialog({ orderId, onDone }: { orderId: string; onDone: () => voi
       if (status === 200 || status === 201) {
         playBeep(true)
         triggerFlash('success')
-        setLinked(data.trackingNumber)
-        setTimeout(() => onDone(), 1800)
+        setLinked({ tracking: data.trackingNumber, shipmentId: data.shipmentId })
       } else if (status === 409) {
         playBeep(false)
         triggerFlash('error')
@@ -172,25 +212,57 @@ function AwbLinkDialog({ orderId, onDone }: { orderId: string; onDone: () => voi
     }
   }
 
-  const flashClass = flash === 'success'
-    ? 'fixed inset-0 bg-green-400 opacity-30 pointer-events-none z-[60] animate-flash'
-    : flash === 'error'
-    ? 'fixed inset-0 bg-red-400 opacity-30 pointer-events-none z-[60] animate-flash'
+  const handlePrint = async () => {
+    if (!linked || printing) return
+    setPrinting(true)
+    setAwbMsg(null)
+    try {
+      const result = await printAwbPdf(linked.shipmentId)
+      if (result === 'emailed') {
+        setAwbMsg({ type: 'info', text: t('fulfill.printAwb.emailed') })
+      }
+    } catch (e: unknown) {
+      setAwbMsg({ type: 'error', text: (e as Error).message || t('fulfill.printAwb.error') })
+    } finally {
+      setPrinting(false)
+    }
+  }
+
+  const flashOverlay =
+    flash === 'success' ? 'fixed inset-0 bg-success/20 pointer-events-none z-[60] animate-flash'
+    : flash === 'error' ? 'fixed inset-0 bg-danger/20 pointer-events-none z-[60] animate-flash'
     : 'hidden'
 
   return (
-    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50">
-      <div className={flashClass} />
-      <div className="bg-white rounded-xl shadow-2xl p-8 w-full max-w-md mx-4">
-        <h2 className="text-xl font-bold text-gray-900 mb-1">{t('fulfill.linkAwb.title')}</h2>
-        <p className="text-sm text-gray-500 mb-6">{t('fulfill.linkAwb.subtitle')}</p>
+    <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50">
+      <div className={flashOverlay} />
+      <div className="bg-panel rounded-xl shadow-2xl p-8 w-full max-w-md mx-4">
+        <h2 className="text-h2 text-primary mb-1">{t('fulfill.linkAwb.title')}</h2>
+        <p className="text-small text-muted mb-6">{t('fulfill.linkAwb.subtitle')}</p>
 
         {linked ? (
-          <div className="text-center py-6">
-            <div className="text-5xl text-green-500 mb-3">✓</div>
-            <p className="text-green-700 font-semibold text-lg">
-              {t('fulfill.linkAwb.success', { tracking: linked })}
+          <div className="text-center space-y-4 py-4">
+            <div className="text-5xl text-success">✓</div>
+            <p className="text-success font-medium text-body">
+              {t('fulfill.linkAwb.success', { tracking: linked.tracking })}
             </p>
+            <div className="space-y-2 pt-2">
+              <button
+                onClick={handlePrint}
+                disabled={printing}
+                className="btn-brand btn text-body w-full"
+              >
+                {printing ? t('fulfill.printAwb.opening') : t('fulfill.printAwb.print')}
+              </button>
+              {awbMsg && (
+                <p className={`text-small text-center ${awbMsg.type === 'error' ? 'text-danger' : 'text-muted'}`}>
+                  {awbMsg.text}
+                </p>
+              )}
+              <button onClick={onDone} className="btn-ghost btn text-small w-full">
+                {t('fulfill.linkAwb.done')}
+              </button>
+            </div>
           </div>
         ) : (
           <>
@@ -198,19 +270,19 @@ function AwbLinkDialog({ orderId, onDone }: { orderId: string; onDone: () => voi
               ref={inputRef}
               type="text"
               placeholder={t('fulfill.linkAwb.placeholder')}
-              className="w-full border-2 border-indigo-300 rounded-lg px-4 py-3 text-lg font-mono focus:outline-none focus:border-indigo-500 mb-3"
+              className="input-scan w-full mb-3"
               disabled={linking}
               onKeyDown={e => {
                 if (e.key === 'Enter') handleLink((e.target as HTMLInputElement).value)
               }}
             />
             {conflictError && (
-              <p className="text-red-600 text-sm font-medium mb-3">✗ {t('fulfill.linkAwb.conflict')}</p>
+              <p className="text-danger text-small font-medium mb-3">✗ {t('fulfill.linkAwb.conflict')}</p>
             )}
             {genericError && (
-              <p className="text-red-600 text-sm font-medium mb-3">✗ {t('fulfill.linkAwb.error')}</p>
+              <p className="text-danger text-small font-medium mb-3">✗ {t('fulfill.linkAwb.error')}</p>
             )}
-            <button onClick={onDone} className="w-full text-center text-sm text-gray-400 hover:text-gray-600 mt-2 py-2">
+            <button onClick={onDone} className="btn-ghost btn text-small w-full mt-2">
               {t('fulfill.linkAwb.skip')}
             </button>
           </>
@@ -242,14 +314,14 @@ function HandoverScreen({ order, onBack }: { order: QueueOrder; onBack: () => vo
   }
 
   return (
-    <div className="flex flex-col h-screen bg-gray-50">
-      <div className="bg-white border-b border-gray-200 px-6 py-3 flex items-center justify-between">
-        <button onClick={onBack} className="text-indigo-600 hover:text-indigo-800 font-medium text-sm">
+    <div className="flex flex-col h-screen bg-base">
+      <div className="bg-panel border-b border-line px-6 py-3 flex items-center justify-between">
+        <button onClick={onBack} className="btn-ghost btn text-small">
           ← {t('fulfill.back')}
         </button>
         <div className="text-center">
-          <p className="font-bold text-gray-900">{order.number ?? order.id.slice(-8)}</p>
-          <p className="text-sm text-gray-500">{order.customer_name}</p>
+          <p className="font-medium text-primary">{order.number ?? order.id.slice(-8)}</p>
+          <p className="text-small text-muted">{order.customer_name}</p>
         </div>
         <div className="w-24" />
       </div>
@@ -258,23 +330,23 @@ function HandoverScreen({ order, onBack }: { order: QueueOrder; onBack: () => vo
         {done ? (
           <div className="text-center">
             <div className="text-6xl mb-4">✓</div>
-            <p className="text-xl font-bold text-green-700">
+            <p className="text-h2 text-success">
               {t('fulfill.handoverSuccess', { count })}
             </p>
           </div>
         ) : (
           <>
             <div className="text-5xl mb-6">🤝</div>
-            <h2 className="text-2xl font-bold text-gray-900 mb-2 text-center">
+            <h2 className="text-h1 text-primary mb-2 text-center">
               {t('fulfill.handoverTitle')}
             </h2>
-            <p className="text-gray-600 mb-8 text-center">
+            <p className="text-body text-muted mb-8 text-center">
               {t('fulfill.handoverSubtitle', { count: order.total_units })}
             </p>
             <button
               onClick={confirm}
               disabled={confirming}
-              className="w-full max-w-sm bg-green-600 hover:bg-green-700 disabled:bg-green-300 text-white font-bold py-5 rounded-xl text-lg transition"
+              className="btn-brand btn text-body w-full max-w-sm py-5"
             >
               {confirming ? '…' : t('fulfill.handoverConfirm')}
             </button>
@@ -299,6 +371,7 @@ function QueueView({
   const [loading, setLoading] = useState(true)
 
   const loadQueue = useCallback(async () => {
+    setLoading(true)
     try {
       const { data } = await api<QueueOrder[]>('/fulfill/queue')
       setQueue(data)
@@ -309,16 +382,16 @@ function QueueView({
 
   useEffect(() => { loadQueue() }, [loadQueue])
 
-  if (loading) return <p className="p-6 text-gray-500">{t('common.loading')}</p>
+  if (loading) return <div className="flex justify-center pt-12"><Spinner size={28} /></div>
 
   const pickQueue     = queue.filter(o => o.status !== 'self_pickup_pending')
   const handoverQueue = queue.filter(o => o.status === 'self_pickup_pending')
 
   return (
-    <div className="p-6 max-w-4xl mx-auto">
+    <div className="p-6 max-w-4xl mx-auto" data-testid="fulfill-queue">
       <div className="flex items-center justify-between mb-6">
-        <h1 className="text-2xl font-bold text-gray-900">{t('fulfill.title')}</h1>
-        <button onClick={loadQueue} className="text-sm text-indigo-600 hover:text-indigo-800 font-medium">
+        <h1 className="text-h1 text-primary">{t('fulfill.title')}</h1>
+        <button onClick={loadQueue} className="btn-ghost btn text-small">
           {t('fulfill.refresh')}
         </button>
       </div>
@@ -326,30 +399,30 @@ function QueueView({
       {/* Self-pickup pending section */}
       {handoverQueue.length > 0 && (
         <div className="mb-6">
-          <h2 className="text-sm font-semibold text-gray-500 uppercase tracking-wide mb-3">
+          <h2 className="text-small text-muted font-medium uppercase tracking-wide mb-3">
             {t('fulfill.selfPickupPending')}
           </h2>
           <div className="space-y-3">
             {handoverQueue.map(order => (
               <div
                 key={order.id}
-                className="bg-amber-50 rounded-lg border border-amber-200 p-4 flex items-center justify-between hover:border-amber-400 cursor-pointer transition"
+                className="card border-warning/30 hover:border-warning/60 p-4 flex items-center justify-between cursor-pointer transition"
                 onClick={() => onHandover(order)}
               >
                 <div>
-                  <p className="font-semibold text-gray-900 flex items-center gap-2">
+                  <p className="text-body font-medium text-primary flex items-center gap-2">
                     {order.number ?? order.id.slice(-8)}
-                    <span className="text-xs px-2 py-0.5 rounded bg-amber-100 text-amber-700 font-semibold">
+                    <span className="text-caption px-2 py-0.5 rounded bg-warning/15 text-warning font-medium">
                       {t('fulfill.selfPickup')}
                     </span>
                   </p>
-                  <p className="text-sm text-gray-500">{order.customer_name ?? t('common.na')}</p>
+                  <p className="text-small text-muted">{order.customer_name ?? t('common.na')}</p>
                 </div>
                 <div className="flex items-center gap-3">
-                  <span className="text-sm font-medium text-gray-600">
+                  <span className="text-small text-muted">
                     {order.total_units} {t('fulfill.units')}
                   </span>
-                  <button className="text-sm px-4 py-2 bg-amber-500 text-white rounded-lg hover:bg-amber-600 font-medium">
+                  <button className="btn-outline btn text-small">
                     {t('fulfill.handoverBtn')}
                   </button>
                 </div>
@@ -361,11 +434,11 @@ function QueueView({
 
       {/* Normal pick queue */}
       {pickQueue.length === 0 && handoverQueue.length === 0 ? (
-        <div className="text-center py-20 text-gray-400">{t('fulfill.empty')}</div>
+        <EmptyState message={t('fulfill.empty')} icon="📦" />
       ) : pickQueue.length === 0 ? null : (
         <>
           {handoverQueue.length > 0 && (
-            <h2 className="text-sm font-semibold text-gray-500 uppercase tracking-wide mb-3">
+            <h2 className="text-small text-muted font-medium uppercase tracking-wide mb-3">
               {t('fulfill.pickQueueHeader')}
             </h2>
           )}
@@ -376,45 +449,46 @@ function QueueView({
               return (
                 <div
                   key={order.id}
-                  className="bg-white rounded-lg border border-gray-200 p-4 flex items-center justify-between hover:border-indigo-400 cursor-pointer transition"
+                  className="card hover:border-brand/50 p-4 flex items-center justify-between cursor-pointer transition"
                   onClick={() => onSelect(order.id)}
                 >
                   <div>
-                    <p className="font-semibold text-gray-900 flex items-center gap-2">
+                    <p className="text-body font-medium text-primary flex items-center gap-2">
                       {order.number ?? order.id.slice(-8)}
                       {order.is_self_pickup && (
-                        <span className="text-xs px-2 py-0.5 rounded bg-indigo-100 text-indigo-700 font-medium">
+                        <span className="text-caption px-2 py-0.5 rounded bg-brand/10 text-brand font-medium">
                           {t('fulfill.selfPickup')}
                         </span>
                       )}
                     </p>
-                    <p className="text-sm text-gray-500">
+                    <p className="text-small text-muted">
                       {order.customer_name ?? t('common.na')}
                       {order.payment_method === 'cod' && order.cod_amount && (
-                        <span className="ml-2 text-amber-600 font-medium">COD {order.cod_amount}</span>
+                        <span className="ms-2 text-warning font-medium">COD {order.cod_amount}</span>
                       )}
                     </p>
                   </div>
                   <div className="flex items-center gap-4">
-                    <div className="text-right">
-                      <p className="text-sm font-medium text-gray-700">
+                    <div className="text-end">
+                      <p className="text-small text-muted">
                         {order.scanned_units} / {order.total_units} {t('fulfill.units')}
                       </p>
-                      <div className="w-32 bg-gray-200 rounded-full h-2 mt-1">
+                      <div className="w-32 bg-elevated h-2 rounded-full mt-1">
                         <div
-                          className="bg-indigo-500 h-2 rounded-full transition-all"
+                          className="bg-brand h-2 rounded-full transition-all"
                           style={{ width: `${progress}%` }}
                         />
                       </div>
                     </div>
-                    <span className={`
-                      px-2 py-0.5 rounded text-xs font-semibold
-                      ${order.status === 'new' ? 'bg-blue-100 text-blue-700' : 'bg-yellow-100 text-yellow-700'}
-                    `}>
+                    <span className={`px-2 py-0.5 rounded text-caption font-medium ${
+                      order.status === 'new'
+                        ? 'bg-cyan/10 text-cyan'
+                        : 'bg-warning/10 text-warning'
+                    }`}>
                       {order.status}
                     </span>
                     {order.locked_by && (
-                      <span className="text-xs text-gray-400 italic">{t('fulfill.locked')}</span>
+                      <span className="text-caption text-muted italic">{t('fulfill.locked')}</span>
                     )}
                   </div>
                 </div>
@@ -456,7 +530,7 @@ function GuidedUnpackPanel({
         setDone(true)
         setTimeout(() => onUnpacked(), 1500)
       } else {
-        onUnpacked() // refresh order
+        onUnpacked()
       }
     } finally {
       setUnpacking(null)
@@ -465,31 +539,29 @@ function GuidedUnpackPanel({
 
   if (done) {
     return (
-      <div className="bg-green-50 border border-green-200 rounded-lg p-6 text-center">
+      <div className="card border-success/40 bg-success/5 p-6 text-center">
         <div className="text-3xl mb-2">✓</div>
-        <p className="text-green-700 font-semibold">
-          {t('fulfill.unpackDone')}
-        </p>
+        <p className="text-success font-medium text-body">{t('fulfill.unpackDone')}</p>
       </div>
     )
   }
 
   return (
-    <div className="bg-amber-50 border border-amber-200 rounded-lg p-4">
-      <p className="text-sm font-semibold text-amber-800 mb-3">
+    <div className="card border-warning/30 bg-warning/5 p-4">
+      <p className="text-small font-medium text-warning mb-3">
         {t('fulfill.cancelRequested', { count: packedPieces.length })}
       </p>
       <div className="space-y-2">
         {packedPieces.map(p => (
           <div
             key={p.piece_id}
-            className="flex items-center justify-between bg-white rounded border border-amber-200 px-3 py-2"
+            className="flex items-center justify-between bg-panel rounded border border-warning/20 px-3 py-2"
           >
-            <span className="font-mono text-sm text-gray-700">{p.barcode.slice(-10)}</span>
+            <span className="font-mono text-small text-primary">{p.barcode.slice(-10)}</span>
             <button
               onClick={() => unpack(p.piece_id)}
               disabled={unpacking === p.piece_id}
-              className="text-xs px-3 py-1 bg-amber-500 text-white rounded hover:bg-amber-600 disabled:opacity-50"
+              className="btn-danger btn text-caption disabled:opacity-50"
             >
               {unpacking === p.piece_id ? '…' : t('fulfill.unpackPiece')}
             </button>
@@ -514,6 +586,8 @@ function PickScreen({ orderId, onBack }: { orderId: string; onBack: () => void }
   const [showAwbDialog, setShowAwbDialog] = useState(false)
   const [selfPickupSuccess, setSelfPickupSuccess] = useState(false)
   const [showCancelConfirm, setShowCancelConfirm] = useState(false)
+  const [awbPrinting, setAwbPrinting] = useState(false)
+  const [awbMsg, setAwbMsg] = useState<AwbMsg>(null)
   const inputRef = useRef<HTMLInputElement>(null)
 
   const loadOrder = useCallback(async () => {
@@ -593,10 +667,8 @@ function PickScreen({ orderId, onBack }: { orderId: string; onBack: () => void }
     try {
       const { data, status } = await api<CancelResult>(`/fulfill/${orderId}/cancel`, { method: 'POST' })
       if (status === 200 && data.status === 'cancelled') {
-        // Pre-pack: order is cancelled, go back to queue
         onBack()
       } else {
-        // Post-pack: cancel_requested, show guided unpack (order re-fetched)
         await loadOrder()
       }
     } finally {
@@ -604,68 +676,83 @@ function PickScreen({ orderId, onBack }: { orderId: string; onBack: () => void }
     }
   }
 
-  if (loading) return <p className="p-6 text-gray-500">{t('common.loading')}</p>
+  const handlePrintAwb = async () => {
+    if (!order?.shipment_id || awbPrinting) return
+    setAwbPrinting(true)
+    setAwbMsg(null)
+    try {
+      const result = await printAwbPdf(order.shipment_id)
+      if (result === 'emailed') {
+        setAwbMsg({ type: 'info', text: t('fulfill.printAwb.emailed') })
+      }
+    } catch (e: unknown) {
+      setAwbMsg({ type: 'error', text: (e as Error).message || t('fulfill.printAwb.error') })
+    } finally {
+      setAwbPrinting(false)
+    }
+  }
+
+  if (loading) return <div className="flex justify-center pt-12"><Spinner size={28} /></div>
   if (!order) return null
 
   const allComplete = order.items.every(i => i.allocated >= i.quantity)
   const hasCancelRequest = !!order.cancel_requested_at
 
-  const flashClass = flash === 'success'
-    ? 'fixed inset-0 bg-green-400 opacity-30 pointer-events-none z-50 animate-flash'
-    : flash === 'error'
-    ? 'fixed inset-0 bg-red-400 opacity-30 pointer-events-none z-50 animate-flash'
+  const flashOverlay =
+    flash === 'success' ? 'fixed inset-0 bg-success/20 pointer-events-none z-50 animate-flash'
+    : flash === 'error' ? 'fixed inset-0 bg-danger/20 pointer-events-none z-50 animate-flash'
     : 'hidden'
 
   return (
-    <div className="flex flex-col h-screen bg-gray-50">
-      <div className={flashClass} />
+    <div className="flex flex-col h-screen bg-base" data-testid="fulfill-pick">
+      <div className={flashOverlay} />
 
       {/* Header */}
-      <div className="bg-white border-b border-gray-200 px-6 py-3 flex items-center justify-between">
-        <button onClick={onBack} className="text-indigo-600 hover:text-indigo-800 font-medium text-sm">
+      <div className="bg-panel border-b border-line px-6 py-3 flex items-center justify-between">
+        <button onClick={onBack} className="btn-ghost btn text-small">
           ← {t('fulfill.backToQueue')}
         </button>
         <div className="text-center">
-          <p className="font-bold text-gray-900 flex items-center gap-2">
+          <p className="font-medium text-primary flex items-center gap-2">
             {order.number ?? order.id.slice(-8)}
             {order.is_self_pickup && (
-              <span className="text-xs px-2 py-0.5 rounded bg-indigo-100 text-indigo-700 font-medium">
+              <span className="text-caption px-2 py-0.5 rounded bg-brand/10 text-brand font-medium">
                 {t('fulfill.selfPickup')}
               </span>
             )}
           </p>
-          <p className="text-sm text-gray-500">{order.customer_name ?? t('common.na')}</p>
+          <p className="text-small text-muted">{order.customer_name ?? t('common.na')}</p>
         </div>
-        {/* Cancel button (top-right) */}
-        {!hasCancelRequest && (
+        {!hasCancelRequest ? (
           <button
             onClick={() => setShowCancelConfirm(true)}
-            className="text-xs px-3 py-1.5 border border-red-200 text-red-600 rounded hover:bg-red-50"
+            className="btn-danger btn text-caption"
           >
             {t('fulfill.cancelOrder')}
           </button>
+        ) : (
+          <div className="w-24" />
         )}
-        {!showCancelConfirm && hasCancelRequest === false && <div className="w-20" />}
       </div>
 
       {/* Cancel confirm dialog */}
       {showCancelConfirm && (
-        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50" onClick={() => setShowCancelConfirm(false)}>
-          <div className="bg-white rounded-lg shadow-xl p-6 w-full max-w-sm mx-4" onClick={e => e.stopPropagation()}>
-            <h3 className="font-semibold text-gray-900 mb-2">{t('fulfill.cancelDialogTitle')}</h3>
-            <p className="text-sm text-gray-600 mb-4">
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50" onClick={() => setShowCancelConfirm(false)}>
+          <div className="bg-panel rounded-xl shadow-2xl p-6 w-full max-w-sm mx-4" onClick={e => e.stopPropagation()}>
+            <h3 className="text-body font-medium text-primary mb-2">{t('fulfill.cancelDialogTitle')}</h3>
+            <p className="text-small text-muted mb-4">
               {order.status === 'packed'
                 ? t('fulfill.cancelPackedHint')
                 : t('fulfill.cancelPreHint')}
             </p>
             <div className="flex gap-3 justify-end">
-              <button onClick={() => setShowCancelConfirm(false)} className="px-4 py-2 text-sm border rounded hover:bg-gray-50">
+              <button onClick={() => setShowCancelConfirm(false)} className="btn-outline btn text-small">
                 {t('fulfill.back')}
               </button>
               <button
                 onClick={handleCancel}
                 disabled={cancelling}
-                className="px-4 py-2 text-sm bg-red-600 text-white rounded hover:bg-red-700 disabled:opacity-50"
+                className="btn-danger btn text-small"
               >
                 {cancelling ? '…' : t('fulfill.cancelConfirmBtn')}
               </button>
@@ -676,10 +763,8 @@ function PickScreen({ orderId, onBack }: { orderId: string; onBack: () => void }
 
       {/* Self-pickup success banner */}
       {selfPickupSuccess && (
-        <div className="bg-green-50 border-b border-green-200 px-6 py-3 text-center">
-          <p className="text-green-700 font-semibold">
-            {t('fulfill.selfPickupPacked')}
-          </p>
+        <div className="bg-success/5 border-b border-success/30 px-6 py-3 text-center">
+          <p className="text-success font-medium text-body">{t('fulfill.selfPickupPacked')}</p>
         </div>
       )}
 
@@ -690,14 +775,14 @@ function PickScreen({ orderId, onBack }: { orderId: string; onBack: () => void }
         </div>
       )}
 
-      {/* Scan input (hidden when cancel is requested) */}
+      {/* Scan input */}
       {!hasCancelRequest && (
-        <div className="bg-white border-b border-gray-200 px-6 py-4">
+        <div className="bg-panel border-b border-line px-6 py-4">
           <input
             ref={inputRef}
             type="text"
             placeholder={t('fulfill.scanPlaceholder')}
-            className="w-full border-2 border-indigo-300 rounded-lg px-4 py-3 text-lg font-mono focus:outline-none focus:border-indigo-500"
+            className="input-scan w-full"
             disabled={scanning}
             onKeyDown={e => {
               if (e.key === 'Enter') handleScan((e.target as HTMLInputElement).value)
@@ -705,7 +790,7 @@ function PickScreen({ orderId, onBack }: { orderId: string; onBack: () => void }
             autoFocus
           />
           {lastResult && (
-            <div className={`mt-2 text-sm font-medium ${lastResult.success ? 'text-green-600' : 'text-red-600'}`}>
+            <div className={`mt-2 text-small font-medium ${lastResult.success ? 'text-success' : 'text-danger'}`}>
               {lastResult.success
                 ? `✓ ${lastResult.barcode}`
                 : `✗ ${t(`fulfill.rejection.${lastResult.code}`, { defaultValue: lastResult.message ?? lastResult.code })}`}
@@ -721,20 +806,19 @@ function PickScreen({ orderId, onBack }: { orderId: string; onBack: () => void }
           return (
             <div
               key={item.id}
-              className={`bg-white rounded-lg border p-4 ${complete ? 'border-green-300' : 'border-gray-200'}`}
+              className={`card p-4 ${complete ? 'border-success/40' : ''}`}
             >
               <div className="flex items-start justify-between mb-3">
                 <div>
-                  <p className="font-semibold text-gray-900">{item.product_title}</p>
+                  <p className="text-body font-medium text-primary">{item.product_title}</p>
                   {item.variant_title && item.variant_title !== 'Default Title' && (
-                    <p className="text-sm text-gray-500">{item.variant_title}</p>
+                    <p className="text-small text-muted">{item.variant_title}</p>
                   )}
-                  {item.sku && <p className="text-xs text-gray-400 font-mono">{item.sku}</p>}
+                  {item.sku && <p className="text-caption text-muted font-mono">{item.sku}</p>}
                 </div>
-                <span className={`
-                  text-lg font-bold px-3 py-1 rounded-full
-                  ${complete ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-700'}
-                `}>
+                <span className={`text-body font-medium px-3 py-1 rounded-full ${
+                  complete ? 'bg-success/10 text-success' : 'bg-elevated text-muted'
+                }`}>
                   {item.allocated}/{item.quantity}
                 </span>
               </div>
@@ -743,13 +827,13 @@ function PickScreen({ orderId, onBack }: { orderId: string; onBack: () => void }
                   {item.allocatedPieces.map(p => (
                     <div
                       key={p.piece_id}
-                      className="flex items-center gap-1 bg-indigo-50 border border-indigo-200 rounded px-2 py-1"
+                      className="flex items-center gap-1 bg-brand/10 border border-brand/20 rounded px-2 py-1"
                     >
-                      <span className="text-xs font-mono text-indigo-700">{p.barcode.slice(-10)}</span>
+                      <span className="text-caption font-mono text-brand">{p.barcode.slice(-10)}</span>
                       {!hasCancelRequest && p.allocation_status === 'active' && (
                         <button
                           onClick={() => handleUnscan(p.piece_id)}
-                          className="text-red-400 hover:text-red-600 text-xs ml-1"
+                          className="text-danger hover:text-danger/80 text-small ms-1"
                           title={t('fulfill.unscan')}
                         >
                           ✕
@@ -764,20 +848,56 @@ function PickScreen({ orderId, onBack }: { orderId: string; onBack: () => void }
         })}
       </div>
 
-      {/* Complete button */}
-      {allComplete && !hasCancelRequest && (
-        <div className="bg-white border-t border-gray-200 px-6 py-4">
-          <button
-            onClick={handleComplete}
-            disabled={completing}
-            className="w-full bg-green-600 hover:bg-green-700 disabled:bg-green-300 text-white font-bold py-4 rounded-lg text-lg transition"
-          >
-            {completing ? t('common.loading') : t('fulfill.complete')}
-          </button>
+      {/* Bottom bar — Print Waybill + Complete (hidden during guided unpack) */}
+      {!hasCancelRequest && (
+        <div className="bg-panel border-t border-line px-6 py-4 space-y-2">
+          {order.tracking_number ? (
+            /* PRINTABLE */
+            <div className="space-y-1">
+              <button
+                onClick={handlePrintAwb}
+                disabled={awbPrinting}
+                className="btn-outline btn text-small w-full"
+                data-testid="btn-print-awb"
+              >
+                {awbPrinting ? t('fulfill.printAwb.opening') : t('fulfill.printAwb.print')}
+              </button>
+              {awbMsg && (
+                <p className={`text-caption text-center ${awbMsg.type === 'error' ? 'text-danger' : 'text-muted'}`}
+                   data-testid="awb-msg">
+                  {awbMsg.text}
+                </p>
+              )}
+            </div>
+          ) : (
+            /* NOT-YET-LINKED */
+            <div className="space-y-1">
+              <button
+                disabled
+                className="btn-outline btn text-small w-full opacity-40 cursor-not-allowed"
+                data-testid="btn-print-awb"
+              >
+                {t('fulfill.printAwb.print')}
+              </button>
+              <p className="text-caption text-muted text-center" data-testid="awb-not-linked-note">
+                {t('fulfill.printAwb.notLinked')}
+              </p>
+            </div>
+          )}
+
+          {allComplete && (
+            <button
+              onClick={handleComplete}
+              disabled={completing}
+              className="btn-brand btn text-body w-full"
+            >
+              {completing ? t('common.loading') : t('fulfill.complete')}
+            </button>
+          )}
         </div>
       )}
 
-      {/* AWB-scan dialog — for non-self-pickup orders after pack completes */}
+      {/* AWB-scan dialog */}
       {showAwbDialog && (
         <AwbLinkDialog orderId={orderId} onDone={onBack} />
       )}
