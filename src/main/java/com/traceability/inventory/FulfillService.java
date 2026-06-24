@@ -61,8 +61,10 @@ public class FulfillService {
         List<Map<String, Object>> rows = jdbc.queryForList(
             "SELECT o.id, o.number, o.customer_name, o.customer_phone, o.address, " +
             "       o.status, o.payment_method, o.cod_amount, o.placed_at, " +
-            "       o.locked_by, o.locked_at, o.is_self_pickup, o.cancel_requested_at " +
+            "       o.locked_by, o.locked_at, o.is_self_pickup, o.cancel_requested_at, " +
+            "       s.id AS shipment_id, s.tracking_number " +
             "FROM orders o " +
+            "LEFT JOIN shipments s ON s.order_id = o.id AND s.tenant_id = o.tenant_id " +
             "WHERE o.id = ? AND o.tenant_id = ?",
             orderId, tenantId);
         if (rows.isEmpty()) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Order not found");
