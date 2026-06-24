@@ -61,6 +61,22 @@ interface FinalizeSummary {
   deliveredKeptCount: number
 }
 
+// ── Piece label reprint (blob PDF, not base64) ───────────────────────────────
+
+async function printPieceLabel(pieceId: string): Promise<void> {
+  const token = localStorage.getItem('token')
+  const headers: Record<string, string> = {}
+  if (token) headers.Authorization = `Bearer ${token}`
+  const res = await fetch(BASE + `/returns/pieces/${pieceId}/label`, { headers })
+  if (res.status === 401) { localStorage.removeItem('token'); window.location.href = '/login'; return }
+  if (!res.ok) {
+    const b = await res.json().catch(() => ({}))
+    throw Object.assign(new Error(b?.message ?? `HTTP ${res.status}`), { status: res.status })
+  }
+  const blob = await res.blob()
+  window.open(URL.createObjectURL(blob), '_blank')
+}
+
 // ── Session tab (PRIMARY — waybill-driven) ────────────────────────────────────
 
 function SessionTab({ onSwitchToIntake }: { onSwitchToIntake: () => void }) {
@@ -78,6 +94,12 @@ function SessionTab({ onSwitchToIntake }: { onSwitchToIntake: () => void }) {
   const [outOfWindowPieceId, setOutOfWindowPieceId] = useState<string | null>(null)
   // finalize result
   const [finalized, setFinalized]   = useState<FinalizeSummary | null>(null)
+  // reprint: piece IDs damaged in this session; piece stays at full opacity so button is clear
+  const [damagedPieceIds, setDamagedPieceIds] = useState<Set<string>>(new Set())
+  const [reprintPieceId, setReprintPieceId]   = useState<string | null>(null)
+  const [reprintErrors, setReprintErrors]     = useState<Record<string, string>>({})
+  // damage-reason validation
+  const [damageReasonError, setDamageReasonError] = useState(false)
 
   useEffect(() => { waybillRef.current?.focus() }, [])
 
@@ -107,6 +129,8 @@ function SessionTab({ onSwitchToIntake }: { onSwitchToIntake: () => void }) {
 
   const recordVerdict = async (pieceId: string, verdict: 'restock' | 'damaged', reason?: string) => {
     if (!session) return
+    if (verdict === 'damaged' && !reason?.trim()) { setDamageReasonError(true); return }
+    setDamageReasonError(false)
     setOutOfWindowPieceId(null)
     try {
       await api(`/returns/sessions/${session.sessionId}/pieces/${pieceId}/verdict`, {
@@ -116,7 +140,8 @@ function SessionTab({ onSwitchToIntake }: { onSwitchToIntake: () => void }) {
       playBeep(true)
       // Mark piece as processed locally for instant feedback
       setPieces(prev => prev.map(p => p.id === pieceId ? { ...p, processed: true } : p))
-      setDamageTarget(null); setDamageReason('')
+      setDamageTarget(null); setDamageReason(''); setDamageReasonError(false)
+      if (verdict === 'damaged') setDamagedPieceIds(prev => new Set([...prev, pieceId]))
     } catch (e: unknown) {
       playBeep(false)
       const status = (e as { status?: number }).status
@@ -145,6 +170,15 @@ function SessionTab({ onSwitchToIntake }: { onSwitchToIntake: () => void }) {
     }
   }
 
+  const handleReprint = async (pieceId: string) => {
+    if (reprintPieceId) return
+    setReprintPieceId(pieceId)
+    setReprintErrors(prev => { const n = { ...prev }; delete n[pieceId]; return n })
+    try { await printPieceLabel(pieceId) }
+    catch (e: unknown) { setReprintErrors(prev => ({ ...prev, [pieceId]: (e as Error).message || t('common.error') })) }
+    finally { setReprintPieceId(null) }
+  }
+
   const flashOverlay =
     flash === 'success' ? 'fixed inset-0 bg-success/20 pointer-events-none z-50 animate-flash' :
     flash === 'error'   ? 'fixed inset-0 bg-danger/20 pointer-events-none z-50 animate-flash' :
@@ -153,7 +187,7 @@ function SessionTab({ onSwitchToIntake }: { onSwitchToIntake: () => void }) {
   // ── Finalized state ────────────────────────────────────────────────────────
   if (finalized) {
     return (
-      <div className="max-w-xl mx-auto pt-4 space-y-4">
+      <div className="max-w-xl mx-auto pt-4 space-y-4" data-testid="session-finalized">
         <div className="card border-success/40 bg-success/5 p-5 space-y-3">
           <p className="text-body text-success font-medium">✓ {t('returns.session.finalized')}</p>
           <Row label={t('returns.session.processed')}><span className="text-primary font-medium">{finalized.processedCount}</span></Row>
@@ -194,7 +228,7 @@ function SessionTab({ onSwitchToIntake }: { onSwitchToIntake: () => void }) {
             autoFocus
           />
           {error && (
-            <div className="card border-danger/30 bg-danger/5 p-4 text-danger text-body">✗ {error}</div>
+            <div className="card border-danger/30 bg-danger/5 p-4 text-danger text-body" data-testid="session-error">✗ {error}</div>
           )}
           {loading && <div className="flex justify-center py-6"><Spinner /></div>}
 
@@ -229,16 +263,16 @@ function SessionTab({ onSwitchToIntake }: { onSwitchToIntake: () => void }) {
           </div>
 
           {error && (
-            <div className="card border-danger/30 bg-danger/5 p-4 text-danger text-body">✗ {error}</div>
+            <div className="card border-danger/30 bg-danger/5 p-4 text-danger text-body" data-testid="session-error">✗ {error}</div>
           )}
 
           {pieces.length === 0 ? (
             <EmptyState message={t('returns.session.noPieces')} icon="📦" />
           ) : (
-            <div className="space-y-2">
+            <div className="space-y-2" data-testid="pieces-list">
               {pieces.map(p => (
                 <div key={p.id}
-                     className={`card p-4 ${p.processed ? 'opacity-60' : ''}`}>
+                     className={`card p-4 ${p.processed && !damagedPieceIds.has(p.id) ? 'opacity-60' : ''}`}>
                   <div className="flex items-start gap-4">
                     <div className="flex-1 min-w-0">
                       <p className="text-body text-primary font-medium truncate">{p.product_title}</p>
@@ -273,12 +307,13 @@ function SessionTab({ onSwitchToIntake }: { onSwitchToIntake: () => void }) {
 
                   {/* Out-of-window nudge for this specific piece */}
                   {outOfWindowPieceId === p.id && (
-                    <div className="mt-3 pt-3 border-t border-warning/30 bg-warning/5 rounded-b-lg px-3 pb-3 -mx-4 -mb-4">
+                    <div className="mt-3 pt-3 border-t border-warning/30 bg-warning/5 rounded-b-lg px-3 pb-3 -mx-4 -mb-4" data-testid="out-of-window-nudge">
                       <p className="text-small text-warning font-medium mb-2">
                         {t('returns.session.outOfWindow')}
                       </p>
                       <button onClick={() => { setOutOfWindowPieceId(null); onSwitchToIntake() }}
-                              className="btn-outline btn text-small border-warning/40 text-warning hover:bg-warning/10">
+                              className="btn-outline btn text-small border-warning/40 text-warning hover:bg-warning/10"
+                              data-testid="switch-to-intake">
                         {t('returns.session.useIntakeFallback')}
                       </button>
                     </div>
@@ -286,24 +321,50 @@ function SessionTab({ onSwitchToIntake }: { onSwitchToIntake: () => void }) {
 
                   {/* Damage reason prompt */}
                   {damageTarget === p.id && (
-                    <div className="mt-3 pt-3 border-t border-line flex gap-2">
-                      <input
-                        type="text"
-                        value={damageReason}
-                        onChange={e => setDamageReason(e.target.value)}
-                        placeholder={t('returns.pending.damageReason')}
-                        className="input flex-1"
-                        autoFocus
-                        onKeyDown={e => { if (e.key === 'Enter') recordVerdict(p.id, 'damaged', damageReason) }}
-                      />
-                      <button onClick={() => recordVerdict(p.id, 'damaged', damageReason)}
-                              className="btn-danger btn text-small">
-                        {t('returns.pending.confirm')}
+                    <div className="mt-3 pt-3 border-t border-line space-y-2">
+                      <div className="flex gap-2">
+                        <input
+                          type="text"
+                          value={damageReason}
+                          onChange={e => { setDamageReason(e.target.value); setDamageReasonError(false) }}
+                          placeholder={t('returns.pending.damageReason')}
+                          className="input flex-1"
+                          autoFocus
+                          onKeyDown={e => { if (e.key === 'Enter') recordVerdict(p.id, 'damaged', damageReason) }}
+                        />
+                        <button onClick={() => recordVerdict(p.id, 'damaged', damageReason)}
+                                className="btn-danger btn text-small">
+                          {t('returns.pending.confirm')}
+                        </button>
+                        <button onClick={() => { setDamageTarget(null); setDamageReason(''); setDamageReasonError(false) }}
+                                className="btn-ghost btn text-small">
+                          {t('common.cancel')}
+                        </button>
+                      </div>
+                      {damageReasonError && (
+                        <p className="text-danger text-caption" data-testid="damage-reason-error">
+                          {t('returns.session.damageReasonRequired')}
+                        </p>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Reprint — offered immediately after a damage verdict in this session */}
+                  {damagedPieceIds.has(p.id) && p.processed && (
+                    <div className="mt-2 pt-2 border-t border-line flex items-center gap-2">
+                      <button
+                        onClick={() => handleReprint(p.id)}
+                        disabled={!!reprintPieceId}
+                        className="btn-outline btn text-caption"
+                        data-testid={`reprint-${p.id}`}
+                      >
+                        {reprintPieceId === p.id
+                          ? t('returns.session.printingLabel')
+                          : t('returns.session.printLabel')}
                       </button>
-                      <button onClick={() => { setDamageTarget(null); setDamageReason('') }}
-                              className="btn-ghost btn text-small">
-                        {t('common.cancel')}
-                      </button>
+                      {reprintErrors[p.id] && (
+                        <span className="text-caption text-danger">{reprintErrors[p.id]}</span>
+                      )}
                     </div>
                   )}
                 </div>

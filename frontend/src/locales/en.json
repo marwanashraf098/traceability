@@ -287,7 +287,10 @@
       "whenToUse": "When to use each mode:",
       "useSession": "Waybill session — for RTO pieces Bosta is sending back, or customer returns you have a waybill for",
       "useIntake": "Waybill-less intake — for unexpected returns, out-of-window returns, or when you have no waybill:",
-      "switchToIntake": "Switch to waybill-less intake"
+      "switchToIntake": "Switch to waybill-less intake",
+      "printLabel": "Print piece label",
+      "printingLabel": "Printing…",
+      "damageReasonRequired": "A reason is required to mark as damaged"
     },
     "intake": {
       "title": "Waybill-less Intake",
