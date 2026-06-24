@@ -4,7 +4,7 @@
 
 ## Current state
 
-**354 backend + 29 frontend tests — Fulfill dark restyle + AWB print** — 2026-06-25.
+**354 backend + 40 frontend tests — Returns session flow complete** — 2026-06-25.
 
 **Fulfill restyle + Print Waybill (Day 42):**
 
@@ -15,6 +15,24 @@
 *6 new frontend tests (ft1–ft6). 29 total frontend tests green.*
 
 *Commits:* `a5c1d48` (frontend), `04d0564` (backend).
+
+**Returns session flow (Day 43):**
+
+Session tab was already built (Day 41 — waybill scan → piece list → verdict → finalize). Added the missing pieces in this session:
+
+*Damage-reason validation:* `recordVerdict` now blocks if reason is empty; shows `data-testid="damage-reason-error"` inline. Reason input's onChange clears the error immediately.
+
+*Reprint after damage:* After a damage verdict, `damagedPieceIds` set is updated. The piece card shows a "Print piece label" button (`data-testid="reprint-{pieceId}"`). `handleReprint` calls `printPieceLabel(pieceId)` → `GET /returns/pieces/{pieceId}/label` → blob PDF → `window.open`. Errors shown inline per piece. Damaged pieces stay at full opacity (not opacity-60) so the button is clearly clickable.
+
+*`data-testid` hooks:* `session-error`, `pieces-list`, `out-of-window-nudge`, `switch-to-intake`, `damage-reason-error`, `reprint-{pieceId}`, `session-finalized`.
+
+*Tab structure:* Session tab is PRIMARY (default). Waybill-less intake is SECONDARY (labeled fallback with explanation of when to use it). Out-of-window nudge routes worker to intake tab via `onSwitchToIntake()` callback.
+
+*Un-scanned delivered pieces:* No danger/warning styling. Optional note: "optional — customer may have kept this". Only RTO unresolved count shown in finalize summary as the actionable metric.
+
+*11 new tests (rt1–rt11):* session start success/404/422; piece list RIT+delivered+processed; un-scanned delivered not alarming; restock verdict; damage without reason blocked; damage with reason + reprint offered; out-of-window nudge + switch button; finalize counts (delivered-kept not in danger color); dark tokens + input-scan.
+
+*Commit:* `333e3b7`.
 
 Next up: Server provisioning runbook (Hetzner, firewall, Docker, first deploy) — Deploy-prep 3.
 
