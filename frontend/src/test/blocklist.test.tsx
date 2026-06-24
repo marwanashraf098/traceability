@@ -123,6 +123,35 @@ describe('Blocklist page', () => {
       expect(mockRemove).toHaveBeenCalledWith('bl-001'),
     )
   })
+
+  // fb6: dark tokens — no bg-surface, btn-brand on add button, text-danger (not text-red-*)
+  test('fb6 dark token spot-check — bg-surface gone, btn-brand present, no text-red-*', async () => {
+    mockList.mockResolvedValue([makeEntry()])
+    const { container } = renderWithProviders(<Blocklist />)
+    await waitFor(() => screen.getByTestId('bl-add-btn'))
+    // bg-surface must be absent (undefined Tailwind class — was a visible transparent bg bug)
+    expect(container.querySelector('[class*="bg-surface"]')).toBeNull()
+    // no raw text-red-* anywhere on the page
+    expect(container.querySelector('[class*="text-red-"]')).toBeNull()
+    // add button uses btn-brand (not the non-existent btn-primary)
+    expect(screen.getByTestId('bl-add-btn').className).toContain('btn-brand')
+  })
+
+  // fb7: modal uses system Modal component (bg-panel, not bg-surface; has ✕ close button)
+  test('fb7 add modal uses system Modal component with dark panel', async () => {
+    const user = userEvent.setup()
+    const { container } = renderWithProviders(<Blocklist />)
+    await waitFor(() => screen.getByTestId('bl-add-btn'))
+    await user.click(screen.getByTestId('bl-add-btn'))
+    await waitFor(() => screen.getByTestId('bl-phone'))
+    // System Modal renders bg-panel on the dialog box
+    expect(container.querySelector('[class*="bg-panel"]')).toBeTruthy()
+    expect(container.querySelector('[class*="bg-surface"]')).toBeNull()
+    // System Modal has a ✕ close button
+    expect(screen.getByText('✕')).toBeTruthy()
+    // heading from Modal title prop is rendered
+    expect(screen.getByText(/Block a phone/i)).toBeTruthy()
+  })
 })
 
 // ── Exceptions page: release/cancel actions ───────────────────────────────────

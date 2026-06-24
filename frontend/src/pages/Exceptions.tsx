@@ -164,7 +164,7 @@ function ExceptionRow({ item, onAck, onAction }: { item: ExceptionItem; onAck: (
             </button>
             <button
               data-testid={`exc-cancel-${item.order_id}`}
-              className="btn-outline btn text-small px-3 py-1.5 text-red-500 border-red-200"
+              className="btn-outline btn text-small px-3 py-1.5 text-danger border-danger/30"
               onClick={async () => {
                 try { await apiCancelOrder(item.order_id!); onAction?.() } catch { /* noop */ }
               }}

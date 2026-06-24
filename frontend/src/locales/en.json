@@ -565,7 +565,8 @@
       "phone": "Phone",
       "reason": "Reason",
       "addedBy": "Added by",
-      "addedAt": "Date"
+      "addedAt": "Date",
+      "source": "Source"
     },
     "add": {
       "title": "Block a phone number",
