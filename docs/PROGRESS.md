@@ -4,7 +4,7 @@
 
 ## Current state
 
-**354 backend + 40 frontend tests — Returns session flow complete** — 2026-06-25.
+**354 backend + 42 frontend tests — Blocklist/Exceptions theme fixes** — 2026-06-25.
 
 **Fulfill restyle + Print Waybill (Day 42):**
 
@@ -33,6 +33,18 @@ Session tab was already built (Day 41 — waybill scan → piece list → verdic
 *11 new tests (rt1–rt11):* session start success/404/422; piece list RIT+delivered+processed; un-scanned delivered not alarming; restock verdict; damage without reason blocked; damage with reason + reprint offered; out-of-window nudge + switch button; finalize counts (delivered-kept not in danger color); dark tokens + input-scan.
 
 *Commit:* `333e3b7`.
+
+**Blocklist + Exceptions theme fixes (Day 43 follow-up):**
+
+*Blocklist:* `bg-surface` was undefined in Tailwind — rendered as transparent (visible bug), now `bg-panel`. `btn-primary` (non-existent) → `btn-brand btn`. All `text-red-500`/`hover:text-red-500` → `text-danger`/`hover:text-danger`. Heading `text-h2 font-bold` → `text-h1 font-light` (brand weight). AddModal converted from raw `fixed inset-0` div stack → system `<Modal>` component (bg-panel, backdrop-blur, ✕ button). Hardcoded "Source" column header → `t('blocklist.col.source')` with EN/AR keys added.
+
+*Exceptions:* Cancel button `text-red-500 border-red-200` → `text-danger border-danger/30` (one-line fix).
+
+*Connections:* Left as-is — hardcoded brand hex colors (#5a31f4 Shopify, #f59e0b Bosta) are intentional third-party brand colors, not token violations.
+
+*Tests:* fb6 (token spot-check: no bg-surface, btn-brand present, no text-red-*) + fb7 (system Modal: bg-panel present, ✕ close button, title rendered). 42 total green.
+
+*Commit:* `5ad84ab`.
 
 Next up: Server provisioning runbook (Hetzner, firewall, Docker, first deploy) — Deploy-prep 3.
 
