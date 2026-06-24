@@ -71,3 +71,13 @@ logging:
   level:
     com.traceability: DEBUG
     org.flywaydb: INFO
+  pattern:
+    console: "%d{HH:mm:ss.SSS} %5p [%X{requestId:--}] %logger{36} : %m%n%wEx"
+
+# Sentry error tracking (NFR-6).
+# Set SENTRY_DSN env var in production; leave unset locally/in tests (disables Sentry).
+sentry:
+  dsn: ${SENTRY_DSN:}
+  traces-sample-rate: 0.0
+  environment: ${SENTRY_ENVIRONMENT:production}
+  send-default-pii: false
