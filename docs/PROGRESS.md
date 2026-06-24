@@ -4,7 +4,21 @@
 
 ## Current state
 
-**330 backend + 23 frontend tests — Injectable Clock + Sentry + Correlation IDs complete** — 2026-06-24.
+**330 backend + 23 frontend tests — Deploy-prep 2 (Dockerfile + nginx + compose) complete** — 2026-06-24.
+
+**Deploy-prep 2 (Day 40) — Dockerfile + Nginx + Compose + .env.example + DEPLOY-NOTES:**
+
+Multi-stage Dockerfile: Stage 1 = Node 22 Vite build (outputs to `src/main/resources/static` — Spring serves SPA, not nginx); Stage 2 = Maven JAR build with `-Dskip.frontend=true`; Stage 3 = `eclipse-temurin:21-jre-alpine`, non-root user, `MaxRAMPercentage=75.0` for CX32 4GB, `-Duser.timezone=Africa/Cairo`. Added `spring-boot-starter-actuator` (was missing) + `management.endpoints.web.exposure.include=health` — needed for Docker HEALTHCHECK and compose `depends_on: service_healthy`.
+
+`deploy/docker-compose.yml`: app + nginx only. No db service — Postgres is Supabase external. nginx depends on app healthcheck.
+
+`deploy/nginx.conf`: HTTP→HTTPS redirect, Let's Encrypt certs (host-mounted), Cloudflare real-IP (`set_real_ip_from` all CF IPv4 ranges + `real_ip_header CF-Connecting-IP`), `X-Request-Id` propagation, HSTS + security headers, gzip (text/json/js/css, not PDF), 10m body limit for AWB labels + webhooks. Bosta + Shopify webhook paths reachable via catch-all `/` location.
+
+`.env.example`: 17 vars documented. `docs/DEPLOY-NOTES.md` stub: cert assumption (certbot on host), compose commands, runbook placeholder, Supabase `ALTER DATABASE SET timezone TO 'Africa/Cairo'` note.
+
+Note: existing `docker-compose.yml` at root is the local-dev compose (Postgres container) — left untouched.
+
+Next up: Prep 3 — server provisioning runbook (Hetzner, firewall, Docker, first deploy).
 
 **Deploy-prep (Day 39) — Clock injection + Sentry + Correlation IDs:**
 
