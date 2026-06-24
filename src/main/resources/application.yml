@@ -76,6 +76,15 @@ logging:
 
 # Sentry error tracking (NFR-6).
 # Set SENTRY_DSN env var in production; leave unset locally/in tests (disables Sentry).
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
+  endpoint:
+    health:
+      show-details: never
+
 sentry:
   dsn: ${SENTRY_DSN:}
   traces-sample-rate: 0.0
