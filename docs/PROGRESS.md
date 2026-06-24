@@ -4,7 +4,17 @@
 
 ## Current state
 
-**320 backend + 23 frontend tests — Bosta shape fixtures + regression guards added** — 2026-06-24.
+**330 backend + 23 frontend tests — Injectable Clock + Sentry + Correlation IDs complete** — 2026-06-24.
+
+**Deploy-prep (Day 39) — Clock injection + Sentry + Correlation IDs:**
+
+PART 1 — Injectable Clock: `AppConfig.java` declares `Clock.system(ZoneId.of("Africa/Cairo"))` as a `@Bean`. Injected into `BostaPickupService` (replaces `LocalDate.now()` → `LocalDate.now(clock)`) and `ExceptionService` (replaces `Instant.now()` → `clock.instant()`). All other 22 `now()` call sites are security/OAuth/sync timestamps — left on wall-clock intentionally. `AwbPickupTest` now `@MockBean Clock` pinned to Wednesday 2026-06-17 10:00 Cairo; named constants `TODAY/YESTERDAY/THURSDAY/FRIDAY` replace the old `nextValidPickupDate()` tech-debt helper. Tests are now deterministic regardless of run day.
+
+PART 2 — Sentry + Correlation IDs (NFR-6): `sentry-spring-boot-starter-jakarta` 7.14.0 added. `SentryConfig` — `BeforeSendCallback` scrubs PII keys (phone/name/address/receiver/email) from extras+tags, attaches `tenant_id` from MDC. `sentry.dsn=${SENTRY_DSN:}` in application.yml — Sentry is a no-op when env var is absent. `CorrelationIdFilter` (HIGHEST_PRECEDENCE `OncePerRequestFilter`) — generates or propagates `X-Request-Id`, sets MDC `requestId` (appears in every log line via pattern `%X{requestId:--}`), echoes header on response, tags Sentry scope. MDC always cleared in `finally`. Test coverage: 4 filter unit tests (cf1–cf4), 6 PII scrubber tests (sp1–sp6). Total test delta: 320→330.
+
+Two commits: `595e1ff` (clock), `06724b3` (sentry).
+
+Next up: push + deploy to Oracle Cloud VM.
 
 **Bosta live verification (Day 38):** Ran read-only Checks 1 & 2 against the pilot's real Bosta account (key confirmed working on API v0).
 
