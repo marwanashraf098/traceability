@@ -70,6 +70,9 @@ public class SecurityConfig {
                     "/api/v1/auth/login",
                     "/api/v1/auth/refresh",
                     "/api/v1/health",
+                    // Actuator health — Docker healthcheck calls this with no token.
+                    // Only /health is exposed (see management config in application.yml).
+                    "/actuator/health",
                     // Webhook receivers: authenticated by secret header / HMAC, not JWT
                     "/api/v1/webhooks/bosta",
                     // Shopify webhooks: authenticated by HMAC-SHA256 over raw body + app client secret.
