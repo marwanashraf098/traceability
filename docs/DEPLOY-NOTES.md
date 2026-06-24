@@ -254,21 +254,34 @@ ALTER DATABASE postgres SET timezone TO 'Africa/Cairo';
 SHOW timezone;
 ```
 
-### 3.2 Enable PITR (NFR-5)
+### 3.2 Confirm daily backups are active (NFR-5)
 
-In Supabase Dashboard → Project Settings → Add-ons → **Point in Time Recovery**.
+**Pilot backup strategy**: Supabase Pro includes **daily backups with 7-day retention** at no
+extra cost. No add-on or manual step is required — they are enabled by default on Pro.
 
-- Enable PITR on the project
-- PITR window: minimum 7 days (select what your plan supports)
-- This is the primary backup strategy — there is no other backup mechanism
+**RPO (Recovery Point Objective)**: up to ~24 hours of data loss in a worst-case scenario
+(the period since the last nightly snapshot). In practice most of this window is partially
+reconstructable: Shopify is the authoritative order source (re-import), Bosta state can be
+re-synced, and physical stock can be rescanned.
+
+Confirm in Supabase Dashboard → **Database → Backups** — you should see a list of daily
+snapshots. No action needed if they are already listed.
 
 **Restore procedure** (if needed):
-1. Supabase Dashboard → Backups → select the recovery point
-2. Restore to a new Supabase project (Supabase does not in-place restore — it creates a new project)
-3. During restore: take the `app` container down (`docker compose -f deploy/docker-compose.yml stop app`) so no writes land during recovery
-4. Update `DATABASE_URL`, `APP_DB_USER/PASSWORD`, `FLYWAY_DB_URL`, `FLYWAY_DB_USER/PASSWORD` in `.env` to point to the restored project
-5. Bring `app` back up — Flyway will detect existing migrations and skip them (idempotent; `baseline-on-migrate: false` is correct for a restored DB that already has the schema)
-6. Re-run §3.1 (ALTER timezone) on the restored project
+1. Supabase Dashboard → Database → Backups → pick the daily snapshot to restore from
+2. Click **Restore** — this replaces the entire project database with the snapshot in-place
+   (unlike PITR, no new project is created)
+3. Before the restore begins, stop the app to prevent writes landing mid-restore:
+   `docker compose -f deploy/docker-compose.yml stop app`
+4. Wait for the restore to complete (Supabase emails when done)
+5. Bring the app back up — it reconnects to the same project URL, no `.env` changes needed:
+   `docker compose -f deploy/docker-compose.yml start app`
+6. Re-run §3.1 (`ALTER DATABASE postgres SET timezone TO 'Africa/Cairo';`) — restoring a
+   backup may reset the GUC to the project default
+
+> **To upgrade to PITR at scale**: requires the Supabase PITR add-on + Small compute
+> (~$110/mo total). Note that enabling PITR **replaces** daily backups — you cannot run both
+> simultaneously. Defer this until pilot has validated the product.
 
 ### 3.3 First-boot Flyway behaviour
 
@@ -499,7 +512,7 @@ Before handing the URL to pilots:
 - [ ] Owner account created and can log in
 - [ ] Bosta API key entered and webhook secret registered in Bosta Seller Lab
 - [ ] At least one Shopify store connected (OAuth flow completes → webhooks registered)
-- [ ] Supabase PITR enabled
+- [ ] Supabase daily backups visible in Dashboard → Database → Backups (included with Pro, no action needed)
 - [ ] `APP_ENCRYPTION_KEY` backed up off-server
 - [ ] `SENTRY_DSN` set and a test event visible in Sentry dashboard
 - [ ] GDPR webhooks (`customers/data_request`, `customers/redact`, `shop/redact`) registered
