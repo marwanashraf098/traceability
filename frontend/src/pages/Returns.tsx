@@ -17,7 +17,10 @@ async function api<T = void>(path: string, opts: RequestInit = {}): Promise<T> {
     },
   })
   if (res.status === 401) { localStorage.removeItem('token'); window.location.href = '/login'; throw new Error('401') }
-  if (!res.ok) { const b = await res.json().catch(() => ({})); throw Object.assign(new Error(b?.message ?? `HTTP ${res.status}`), { status: res.status }) }
+  if (!res.ok) {
+    const b = await res.json().catch(() => ({}))
+    throw Object.assign(new Error(b?.message ?? `HTTP ${res.status}`), { status: res.status })
+  }
   if (res.status === 204) return undefined as T
   return res.json()
 }
@@ -35,19 +38,308 @@ function playBeep(ok: boolean) {
   } catch { /* silent */ }
 }
 
-interface IntakeResult { id: string; barcode?: string; status: string; variantTitle: string; productTitle: string; orderNumber?: string; trackingNumber?: string; isUnexpected: boolean }
-interface PendingPiece { id: string; barcode: string; variant_title: string; product_title: string; order_number?: string; tracking_number?: string; location_name?: string }
-interface NeverReceivedRow { id: string; barcode: string; variant_title: string; product_title: string; order_number?: string; tracking_number?: string; returned_at?: string }
+interface SessionPiece {
+  id: string
+  barcode: string
+  status: string
+  variant_title: string
+  product_title: string
+  sku?: string
+  processed: boolean
+}
 
-// ── Intake tab ────────────────────────────────────────────────────────────────
+interface SessionSummary {
+  sessionId: string
+  waybillNumber: string
+  orderId: string
+  orderNumber: string
+}
+
+interface FinalizeSummary {
+  processedCount: number
+  unresolvedRtoCount: number
+  deliveredKeptCount: number
+}
+
+// ── Session tab (PRIMARY — waybill-driven) ────────────────────────────────────
+
+function SessionTab({ onSwitchToIntake }: { onSwitchToIntake: () => void }) {
+  const { t } = useTranslation()
+  const waybillRef = useRef<HTMLInputElement>(null)
+  const [flash, setFlash]           = useState<FlashState>('idle')
+  const [loading, setLoading]       = useState(false)
+  const [session, setSession]       = useState<SessionSummary | null>(null)
+  const [pieces, setPieces]         = useState<SessionPiece[]>([])
+  const [error, setError]           = useState<string | null>(null)
+  // per-piece damage reason prompt
+  const [damageTarget, setDamageTarget] = useState<string | null>(null)
+  const [damageReason, setDamageReason] = useState('')
+  // out-of-window nudge: pieceId whose verdict was rejected because of the window guard
+  const [outOfWindowPieceId, setOutOfWindowPieceId] = useState<string | null>(null)
+  // finalize result
+  const [finalized, setFinalized]   = useState<FinalizeSummary | null>(null)
+
+  useEffect(() => { waybillRef.current?.focus() }, [])
+
+  const triggerFlash = (s: 'success' | 'error') => {
+    setFlash(s); setTimeout(() => setFlash('idle'), 600)
+  }
+
+  const openSession = async (waybill: string) => {
+    if (!waybill.trim() || loading) return
+    setLoading(true); setError(null); setSession(null); setPieces([]); setFinalized(null)
+    try {
+      const sess = await api<SessionSummary>('/returns/sessions', {
+        method: 'POST',
+        body: JSON.stringify({ waybillNumber: waybill.trim(), locationId: null }),
+      })
+      setSession(sess)
+      const data = await api<{ pieces: SessionPiece[] }>(`/returns/sessions/${sess.sessionId}/pieces`)
+      setPieces(data.pieces)
+      playBeep(true); triggerFlash('success')
+    } catch (e: unknown) {
+      playBeep(false); triggerFlash('error')
+      setError((e as Error).message || t('common.error'))
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const recordVerdict = async (pieceId: string, verdict: 'restock' | 'damaged', reason?: string) => {
+    if (!session) return
+    setOutOfWindowPieceId(null)
+    try {
+      await api(`/returns/sessions/${session.sessionId}/pieces/${pieceId}/verdict`, {
+        method: 'POST',
+        body: JSON.stringify({ verdict, reason: reason ?? null, locationId: null }),
+      })
+      playBeep(true)
+      // Mark piece as processed locally for instant feedback
+      setPieces(prev => prev.map(p => p.id === pieceId ? { ...p, processed: true } : p))
+      setDamageTarget(null); setDamageReason('')
+    } catch (e: unknown) {
+      playBeep(false)
+      const status = (e as { status?: number }).status
+      if (status === 422) {
+        // Out-of-window guard fired — surface the "use waybill-less intake" path
+        setOutOfWindowPieceId(pieceId)
+      } else {
+        setError((e as Error).message || t('common.error'))
+      }
+    }
+  }
+
+  const finalizeSession = async () => {
+    if (!session) return
+    setLoading(true)
+    try {
+      const summary = await api<FinalizeSummary>(`/returns/sessions/${session.sessionId}/finalize`, {
+        method: 'POST',
+      })
+      setFinalized(summary)
+      playBeep(true)
+    } catch (e: unknown) {
+      setError((e as Error).message || t('common.error'))
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const flashOverlay =
+    flash === 'success' ? 'fixed inset-0 bg-success/20 pointer-events-none z-50 animate-flash' :
+    flash === 'error'   ? 'fixed inset-0 bg-danger/20 pointer-events-none z-50 animate-flash' :
+    'hidden'
+
+  // ── Finalized state ────────────────────────────────────────────────────────
+  if (finalized) {
+    return (
+      <div className="max-w-xl mx-auto pt-4 space-y-4">
+        <div className="card border-success/40 bg-success/5 p-5 space-y-3">
+          <p className="text-body text-success font-medium">✓ {t('returns.session.finalized')}</p>
+          <Row label={t('returns.session.processed')}><span className="text-primary font-medium">{finalized.processedCount}</span></Row>
+          {finalized.unresolvedRtoCount > 0 && (
+            <Row label={t('returns.session.unresolvedRto')}>
+              <span className="text-warning font-medium">{finalized.unresolvedRtoCount}</span>
+            </Row>
+          )}
+          {finalized.deliveredKeptCount > 0 && (
+            <Row label={t('returns.session.deliveredKept')}>
+              <span className="text-muted">{finalized.deliveredKeptCount} — {t('returns.session.keptNote')}</span>
+            </Row>
+          )}
+        </div>
+        <button onClick={() => { setSession(null); setPieces([]); setFinalized(null); setTimeout(() => waybillRef.current?.focus(), 50) }}
+                className="btn-outline btn text-body w-full">
+          {t('returns.session.newSession')}
+        </button>
+      </div>
+    )
+  }
+
+  return (
+    <div className="max-w-2xl mx-auto pt-4">
+      <div className={flashOverlay} />
+
+      {/* Step 1: Waybill scan */}
+      {!session && (
+        <div className="space-y-4">
+          <p className="text-body text-muted">{t('returns.session.hint')}</p>
+          <input
+            ref={waybillRef}
+            type="text"
+            placeholder={t('returns.session.waybillPlaceholder')}
+            className="input-scan w-full"
+            disabled={loading}
+            onKeyDown={e => { if (e.key === 'Enter') openSession((e.target as HTMLInputElement).value) }}
+            autoFocus
+          />
+          {error && (
+            <div className="card border-danger/30 bg-danger/5 p-4 text-danger text-body">✗ {error}</div>
+          )}
+          {loading && <div className="flex justify-center py-6"><Spinner /></div>}
+
+          {/* UX split: explain when to use this tab vs the waybill-less intake */}
+          <div className="card border-line bg-elevated p-4 space-y-2">
+            <p className="text-small text-muted font-medium">{t('returns.session.whenToUse')}</p>
+            <ul className="text-small text-muted list-disc list-inside space-y-1">
+              <li>{t('returns.session.useSession')}</li>
+              <li>
+                {t('returns.session.useIntake')}{' '}
+                <button onClick={onSwitchToIntake} className="text-brand underline text-small">
+                  {t('returns.session.switchToIntake')}
+                </button>
+              </li>
+            </ul>
+          </div>
+        </div>
+      )}
+
+      {/* Step 2 + 3: Piece list with verdicts */}
+      {session && !finalized && (
+        <div className="space-y-4">
+          <div className="card bg-elevated border-line p-4 flex items-center justify-between">
+            <div>
+              <p className="text-body text-primary font-medium">{session.waybillNumber}</p>
+              <p className="text-small text-muted">{t('returns.col.order')}: {session.orderNumber}</p>
+            </div>
+            <button onClick={finalizeSession} disabled={loading}
+                    className="btn-brand btn text-small">
+              {loading ? <Spinner size={14} /> : t('returns.session.finalize')}
+            </button>
+          </div>
+
+          {error && (
+            <div className="card border-danger/30 bg-danger/5 p-4 text-danger text-body">✗ {error}</div>
+          )}
+
+          {pieces.length === 0 ? (
+            <EmptyState message={t('returns.session.noPieces')} icon="📦" />
+          ) : (
+            <div className="space-y-2">
+              {pieces.map(p => (
+                <div key={p.id}
+                     className={`card p-4 ${p.processed ? 'opacity-60' : ''}`}>
+                  <div className="flex items-start gap-4">
+                    <div className="flex-1 min-w-0">
+                      <p className="text-body text-primary font-medium truncate">{p.product_title}</p>
+                      <p className="text-small text-muted">{p.variant_title}</p>
+                      <div className="flex items-center gap-2 mt-1">
+                        <span className="font-mono text-caption text-muted">{p.barcode}</span>
+                        <Badge status={p.status} />
+                        {/* Delivered pieces are expected; only flag RTO pieces */}
+                        {p.status === 'delivered' && !p.processed && (
+                          <span className="text-caption text-muted italic">
+                            {t('returns.session.deliveredOptional')}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+
+                    {!p.processed ? (
+                      <div className="flex gap-2 shrink-0">
+                        <button onClick={() => recordVerdict(p.id, 'restock')}
+                                className="btn-outline btn text-small">
+                          {t('returns.pending.restock')}
+                        </button>
+                        <button onClick={() => setDamageTarget(p.id)}
+                                className="btn-danger btn text-small">
+                          {t('returns.pending.damage')}
+                        </button>
+                      </div>
+                    ) : (
+                      <span className="text-success text-small shrink-0">✓ {t('returns.session.done')}</span>
+                    )}
+                  </div>
+
+                  {/* Out-of-window nudge for this specific piece */}
+                  {outOfWindowPieceId === p.id && (
+                    <div className="mt-3 pt-3 border-t border-warning/30 bg-warning/5 rounded-b-lg px-3 pb-3 -mx-4 -mb-4">
+                      <p className="text-small text-warning font-medium mb-2">
+                        {t('returns.session.outOfWindow')}
+                      </p>
+                      <button onClick={() => { setOutOfWindowPieceId(null); onSwitchToIntake() }}
+                              className="btn-outline btn text-small border-warning/40 text-warning hover:bg-warning/10">
+                        {t('returns.session.useIntakeFallback')}
+                      </button>
+                    </div>
+                  )}
+
+                  {/* Damage reason prompt */}
+                  {damageTarget === p.id && (
+                    <div className="mt-3 pt-3 border-t border-line flex gap-2">
+                      <input
+                        type="text"
+                        value={damageReason}
+                        onChange={e => setDamageReason(e.target.value)}
+                        placeholder={t('returns.pending.damageReason')}
+                        className="input flex-1"
+                        autoFocus
+                        onKeyDown={e => { if (e.key === 'Enter') recordVerdict(p.id, 'damaged', damageReason) }}
+                      />
+                      <button onClick={() => recordVerdict(p.id, 'damaged', damageReason)}
+                              className="btn-danger btn text-small">
+                        {t('returns.pending.confirm')}
+                      </button>
+                      <button onClick={() => { setDamageTarget(null); setDamageReason('') }}
+                              className="btn-ghost btn text-small">
+                        {t('common.cancel')}
+                      </button>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function Row({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="flex items-center justify-between">
+      <span className="text-small text-muted">{label}</span>
+      {children}
+    </div>
+  )
+}
+
+// ── Waybill-less intake tab (SECONDARY / FALLBACK) ────────────────────────────
+// Use this when: no waybill, or out-of-window customer returns the session rejected.
+
+interface IntakeResult {
+  id: string; barcode?: string; status: string; variantTitle: string;
+  productTitle: string; orderNumber?: string; trackingNumber?: string; isUnexpected: boolean
+}
 
 function IntakeTab() {
   const { t } = useTranslation()
   const inputRef = useRef<HTMLInputElement>(null)
-  const [flash, setFlash] = useState<FlashState>('idle')
+  const [flash, setFlash]     = useState<FlashState>('idle')
   const [scanning, setScanning] = useState(false)
-  const [result, setResult] = useState<IntakeResult | null>(null)
-  const [error, setError] = useState<string | null>(null)
+  const [result, setResult]   = useState<IntakeResult | null>(null)
+  const [error, setError]     = useState<string | null>(null)
 
   useEffect(() => { inputRef.current?.focus() }, [])
 
@@ -81,6 +373,11 @@ function IntakeTab() {
   return (
     <div className="max-w-xl mx-auto pt-4">
       <div className={flashOverlay} />
+
+      {/* Context: explain when this fallback is appropriate */}
+      <div className="card border-line bg-elevated p-3 mb-4 text-small text-muted">
+        {t('returns.intake.fallbackNote')}
+      </div>
 
       <input
         ref={inputRef}
@@ -120,16 +417,12 @@ function IntakeTab() {
   )
 }
 
-function Row({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <div className="flex items-center justify-between">
-      <span className="text-small text-muted">{label}</span>
-      {children}
-    </div>
-  )
-}
-
 // ── Pending inspection tab ────────────────────────────────────────────────────
+
+interface PendingPiece {
+  id: string; barcode: string; variant_title: string; product_title: string;
+  order_number?: string; tracking_number?: string; location_name?: string
+}
 
 function PendingTab() {
   const { t } = useTranslation()
@@ -206,6 +499,11 @@ function PendingTab() {
 
 // ── Never-received tab ────────────────────────────────────────────────────────
 
+interface NeverReceivedRow {
+  id: string; barcode: string; variant_title: string; product_title: string;
+  order_number?: string; tracking_number?: string; returned_at?: string
+}
+
 function NeverReceivedTab() {
   const { t } = useTranslation()
   const [rows, setRows]       = useState<NeverReceivedRow[]>([])
@@ -225,18 +523,12 @@ function NeverReceivedTab() {
 
   return (
     <div className="pt-4 space-y-4">
-      {/* Alert banner */}
       <div className="card border-warning/30 bg-warning/5 p-4">
         <p className="text-body text-warning font-medium mb-3">{t('returns.neverReceived.subtitle')}</p>
         <div className="flex items-center gap-3">
           <label className="text-small text-muted">{t('returns.neverReceived.window')}:</label>
-          <input
-            type="number"
-            min={1} max={90}
-            value={windowDays}
-            onChange={e => setWindowDays(Number(e.target.value))}
-            className="input w-20"
-          />
+          <input type="number" min={1} max={90} value={windowDays}
+                 onChange={e => setWindowDays(Number(e.target.value))} className="input w-20" />
           <button onClick={load} className="btn-outline btn text-small">↻</button>
         </div>
       </div>
@@ -259,9 +551,7 @@ function NeverReceivedTab() {
                   t('returns.neverReceived.order'),
                   t('returns.neverReceived.tracking'),
                   t('returns.neverReceived.returnedAt'),
-                ].map(h => (
-                  <th key={h} className="tbl-header">{h}</th>
-                ))}
+                ].map(h => <th key={h} className="tbl-header">{h}</th>)}
               </tr>
             </thead>
             <tbody>
@@ -287,14 +577,16 @@ function NeverReceivedTab() {
 
 // ── Root ──────────────────────────────────────────────────────────────────────
 
-type Tab = 'intake' | 'pending' | 'never-received'
+// Tab order: Session (primary, default) → Waybill-less Intake (fallback) → Pending → Never-received
+type Tab = 'session' | 'intake' | 'pending' | 'never-received'
 
 export default function Returns() {
   const { t } = useTranslation()
-  const [tab, setTab] = useState<Tab>('intake')
+  const [tab, setTab] = useState<Tab>('session')
 
   const tabs: { key: Tab; label: string }[] = [
-    { key: 'intake',         label: t('returns.title') },
+    { key: 'session',        label: t('returns.session.title') },
+    { key: 'intake',         label: t('returns.intake.title') },
     { key: 'pending',        label: t('returns.pending.title') },
     { key: 'never-received', label: t('returns.neverReceived.title') },
   ]
@@ -305,7 +597,6 @@ export default function Returns() {
         <h1 className="text-h1 text-primary mb-4">{t('returns.title')}</h1>
       </div>
 
-      {/* Tabs */}
       <div className="flex border-b border-line gap-1">
         {tabs.map(({ key, label }) => (
           <button
@@ -318,11 +609,16 @@ export default function Returns() {
             }`}
           >
             {label}
+            {/* Subtle "fallback" hint on the Intake tab so workers know not to default here */}
+            {key === 'intake' && (
+              <span className="ms-1.5 text-caption text-muted">{t('returns.intake.fallbackBadge')}</span>
+            )}
           </button>
         ))}
       </div>
 
       <div className="pt-2">
+        {tab === 'session'        && <SessionTab onSwitchToIntake={() => setTab('intake')} />}
         {tab === 'intake'         && <IntakeTab />}
         {tab === 'pending'        && <PendingTab />}
         {tab === 'never-received' && <NeverReceivedTab />}

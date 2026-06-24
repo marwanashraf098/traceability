@@ -255,11 +255,37 @@
     }
   },
   "returns": {
-    "title": "Returns Intake",
+    "title": "Returns",
     "scanPlaceholder": "Scan or type piece barcode…",
     "unexpected": "⚠ Unexpected return — shipment was not in returning state",
     "notFound": "Piece not found — check the barcode",
     "intakeSuccess": "Intake recorded",
+    "session": {
+      "title": "Waybill Session",
+      "hint": "Scan the Bosta AWB to open a return session for all pieces in that shipment.",
+      "waybillPlaceholder": "Scan or type waybill number…",
+      "finalize": "Finalize Session",
+      "finalized": "Session finalized",
+      "processed": "Pieces processed",
+      "unresolvedRto": "RTO pieces not scanned",
+      "deliveredKept": "Delivered pieces kept",
+      "keptNote": "customer kept — not an issue",
+      "newSession": "Start new session",
+      "noPieces": "No eligible pieces found for this waybill",
+      "done": "Done",
+      "deliveredOptional": "optional — customer may have kept this",
+      "outOfWindow": "This piece was delivered outside the return window. Use waybill-less intake for out-of-window returns.",
+      "useIntakeFallback": "Switch to waybill-less intake",
+      "whenToUse": "When to use each mode:",
+      "useSession": "Waybill session — for RTO pieces Bosta is sending back, or customer returns you have a waybill for",
+      "useIntake": "Waybill-less intake — for unexpected returns, out-of-window returns, or when you have no waybill:",
+      "switchToIntake": "Switch to waybill-less intake"
+    },
+    "intake": {
+      "title": "Waybill-less Intake",
+      "fallbackBadge": "fallback",
+      "fallbackNote": "Use this only when you have no waybill — for unexpected returns or out-of-window returns the session rejected. For normal returns, use the Waybill Session tab."
+    },
     "pending": {
       "title": "Pending Inspection",
       "empty": "No pieces pending inspection",
