@@ -96,7 +96,7 @@ public class ReturnService {
             case RETURN_PENDING_INSPECTION -> {
                 // State-46 webhook already moved the piece here before the intake scan.
                 // Record physical intake as an event without a status change.
-                ledger.recordReturnReceived(pieceId, locationId, actorUserId, orderId, shipmentId);
+                ledger.recordReturnReceived(pieceId, locationId, actorUserId, orderId, shipmentId, null);
             }
             default -> throw new ResponseStatusException(HttpStatus.CONFLICT,
                     "Cannot intake piece in status '" + status + "' — expected return_in_transit or with_courier");

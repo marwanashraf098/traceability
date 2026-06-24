@@ -52,10 +52,12 @@ public class ExceptionService {
 
         // Per-tenant config
         Map<String, Object> cfg = jdbc.queryForMap(
-            "SELECT never_received_window_days, stuck_shipment_days " +
+            "SELECT never_received_window_days, stuck_shipment_days, " +
+            "       return_in_transit_stuck_days " +
             "FROM tenants WHERE id = ?", tenantId);
-        int neverReceivedDays = ((Number) cfg.get("never_received_window_days")).intValue();
-        int stuckDays         = ((Number) cfg.get("stuck_shipment_days")).intValue();
+        int neverReceivedDays       = ((Number) cfg.get("never_received_window_days")).intValue();
+        int stuckDays               = ((Number) cfg.get("stuck_shipment_days")).intValue();
+        int returnInTransitStuckDays = ((Number) cfg.get("return_in_transit_stuck_days")).intValue();
 
         // Collect all open exceptions
         List<Map<String, Object>> all = new ArrayList<>();
@@ -73,6 +75,7 @@ public class ExceptionService {
         all.addAll(detectMissingProviderId(tenantId));
         all.addAll(detectHighAttempts(tenantId));
         all.addAll(detectShopifyEditConflict(tenantId));
+        all.addAll(detectReturnInTransitStuck(tenantId, returnInTransitStuckDays));
 
         // Enrich with descriptions and action hints
         all.forEach(this::enrich);
@@ -421,6 +424,47 @@ public class ExceptionService {
             tid);
     }
 
+    /**
+     * 15th detector: piece stuck in return_in_transit with no warehouse intake scan.
+     *
+     * Fires when a piece has been at return_in_transit for more than
+     * return_in_transit_stuck_days without receiving a return_received event.
+     *
+     * Does NOT deduplicate with detectStuck (subject=shipment, type=stuck_shipment)
+     * or detectNeverReceived (fires only after shipment reaches 'returned' state).
+     * These are different subjects and exception types — co-firing is correct.
+     */
+    private List<Map<String, Object>> detectReturnInTransitStuck(UUID tid, int stuckDays) {
+        return jdbc.queryForList(
+            "SELECT 'return_in_transit_stuck' AS type, 'HIGH' AS severity, 'piece' AS subject_type, " +
+            "       p.id AS piece_id, p.barcode, " +
+            "       o.id AS order_id, o.number AS order_number, " +
+            "       s.tracking_number, " +
+            "       p.last_event_at AS occurred_at, " +
+            "       'return_in_transit_stuck:piece:' || p.id AS subject_key " +
+            "FROM pieces p " +
+            "JOIN allocations a  ON a.piece_id      = p.id " +
+            "                    AND a.status        IN ('active','packed') " +
+            "JOIN order_items oi ON oi.id            = a.order_item_id " +
+            "JOIN orders o       ON o.id             = oi.order_id " +
+            "JOIN shipments s    ON s.order_id       = o.id " +
+            "WHERE p.status     = 'return_in_transit'::piece_status " +
+            "  AND p.tenant_id  = ? " +
+            "  AND p.last_event_at < now() - (interval '1 day' * ?) " +
+            "  AND s.tenant_id  = ? " +
+            "  AND NOT EXISTS ( " +
+            "      SELECT 1 FROM piece_events pe " +
+            "      WHERE pe.piece_id   = p.id " +
+            "        AND pe.event_type = 'return_received' " +
+            "        AND pe.tenant_id  = ?) " +
+            "  AND NOT EXISTS ( " +
+            "      SELECT 1 FROM exception_resolutions er " +
+            "      WHERE er.tenant_id      = p.tenant_id " +
+            "        AND er.exception_type = 'return_in_transit_stuck' " +
+            "        AND er.subject_key    = 'return_in_transit_stuck:piece:' || p.id) ",
+            tid, stuckDays, tid, tid);
+    }
+
     private List<Map<String, Object>> detectMissingProviderId(UUID tid) {
         return jdbc.queryForList(
             "SELECT 'missing_provider_id' AS type, 'MEDIUM' AS severity, 'shipment' AS subject_type, " +
@@ -567,6 +611,19 @@ public class ExceptionService {
                     "Shopify cancelled but parcel is in-flight — convert to self-pickup, " +
                     "cancel via guided flow, or let it RTO.");
                 item.put("actionUrl", ordersUrl(item));
+            }
+            case "return_in_transit_stuck" -> {
+                String b = str(item, "barcode");
+                String t = str(item, "tracking_number");
+                String shipSuffix = (t != null && !t.isBlank()) ? " (AWB: " + t + ")" : "";
+                item.put("descriptionEn",
+                    "Piece " + b + shipSuffix +
+                    " arrived back per Bosta but was never scanned into the warehouse");
+                item.put("descriptionAr",
+                    "القطعة " + b + shipSuffix +
+                    " أُرجعت وفق بوسطة ولكنها لم تُمسح عند الاستلام في المستودع");
+                item.put("suggestedAction", "intake_piece");
+                item.put("actionUrl", "/returns");
             }
             case "shopify_edit_conflict" -> {
                 String n      = str(item, "order_number");

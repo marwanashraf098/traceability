@@ -57,6 +57,8 @@ public class InventoryLedger {
         // fires (state 41 RTO never arrived / webhooks not yet configured). Unexpected flag set by caller.
         "with_courier:return_pending_inspection",
         "awaiting_pickup:return_pending_inspection",
+        // Customer-initiated return after confirmed delivery (guarded by customer_return_window_days).
+        "delivered:return_pending_inspection",
         "return_pending_inspection:available",
         "return_pending_inspection:damaged",
 
@@ -259,16 +261,41 @@ public class InventoryLedger {
      * This is the third write path on InventoryLedger (alongside transition() and
      * batchReceive()). InventoryLedger is still the only class that writes
      * piece_events — the CLAUDE.md invariant is preserved.
+     *
+     * @param metadata optional JSON written to piece_events.metadata (e.g. session_id + return_kind)
      */
     @Transactional(isolation = Isolation.READ_COMMITTED)
     public void recordReturnReceived(String pieceId, UUID locationId, UUID actorUserId,
-                                     UUID orderId, UUID shipmentId) {
+                                     UUID orderId, UUID shipmentId, String metadata) {
         jdbc.update(INSERT_EVENT,
                 pieceId, "return_received", actorUserId,
                 orderId, shipmentId, locationId,
                 PieceStatus.RETURN_PENDING_INSPECTION.db,
                 PieceStatus.RETURN_PENDING_INSPECTION.db,
-                null);
+                metadata);
+    }
+
+    /**
+     * Records a label_reprinted event without changing piece status (4th write path).
+     *
+     * Writes a piece_events row with from_status = to_status = current piece status.
+     * InventoryLedger remains the sole writer of piece_events — invariant preserved.
+     *
+     * @throws PieceNotFoundException if the piece is not visible under the current RLS context
+     */
+    @Transactional(isolation = Isolation.READ_COMMITTED)
+    public void recordLabelReprinted(String pieceId, UUID actorUserId,
+                                     UUID locationId, UUID orderId, UUID shipmentId) {
+        String statusDb = jdbc.query(FETCH_STATUS,
+                rs -> rs.next() ? rs.getString("status") : null,
+                pieceId);
+        if (statusDb == null) {
+            throw new PieceNotFoundException(pieceId);
+        }
+        jdbc.update(INSERT_EVENT,
+                pieceId, "label_reprinted", actorUserId,
+                orderId, shipmentId, locationId,
+                statusDb, statusDb, null);
     }
 
     /** Specification for one piece to be created via batchReceive. */

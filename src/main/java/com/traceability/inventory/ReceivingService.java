@@ -158,7 +158,7 @@ public class ReceivingService {
             "       (SELECT COUNT(*) FROM pieces p WHERE p.receipt_id = r.id) AS piece_count " +
             "FROM receipts r " +
             "LEFT JOIN locations l ON l.id = r.location_id " +
-            "WHERE r.tenant_id = ? " +
+            "WHERE r.tenant_id = ? AND r.kind = 'inbound' " +
             "ORDER BY r.created_at DESC",
             tenantId);
     }
