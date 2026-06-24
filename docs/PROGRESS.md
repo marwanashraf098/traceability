@@ -4,7 +4,7 @@
 
 ## Current state
 
-**315 backend + 23 frontend tests — Bosta live probe complete, 2 field-path bugs fixed** — 2026-06-24.
+**320 backend + 23 frontend tests — Bosta shape fixtures + regression guards added** — 2026-06-24.
 
 **Bosta live verification (Day 38):** Ran read-only Checks 1 & 2 against the pilot's real Bosta account (key confirmed working on API v0).
 
@@ -13,6 +13,8 @@ CHECK 1 (AWB print via mass-awb): PASSED — `POST /api/v0/deliveries/mass-awb` 
 CHECK 2 (consignee fields): The live Bosta API v0 does NOT use a `consignee` key. Recipient data is in `receiver` (`phone`, `firstName`, `lastName`, `fullName`, `secondPhone`) and the delivery address is in `dropOffAddress` (`city.name`, `zone.name`, `district.name`, `firstLine`). Phone format: `+20XXXXXXXXXX` (E.164). Bug found & fixed: `ShipmentLinkService` was reading `raw.path("consignee").path("phone")` in two places (Mode-B auto-match + deferred FR-7.8a blocklist re-check) — both now read `raw.path("receiver").path("phone")`.
 
 Also confirmed: both v0 and v2 base URL paths work for mass-awb (same response). API v0 is the verified working path for `GET /api/v0/deliveries/{id}` and `GET /api/v0/deliveries`.
+
+**Bosta shape fixtures + regression guards (Day 38 cont.):** `src/test/resources/bosta/delivery-receiver.json` and `mass-awb-response.json` — synthetic PII, real structure. `BostaShapeRegressionTest` (4 tests, no Spring): reg1 guards that `data` is textual (not `data.pdf`), reg2 guards that `receiver.phone` is populated and `consignee` key is absent, reg3 guards `dropOffAddress.*`, reg4 guards COD flat scalar. `ModeBMatcherTest`: `bostaRaw()` helper fixed to `receiver.phone` (not `consignee.phone`), t10 fixed, t14 added (deferred FR-7.8a blocklist re-check extracts `receiver.phone` — would fail if consignee is read again). `@AfterEach` now cleans blocklist entries. Total: 5 new tests (315→320).
 
 RTL fix + worker i18n (Day 37 supplement): RTL dir flip bug fixed — `i18n.on('languageChanged')` in i18n.ts is now the single handler for `document.documentElement.dir` / `.lang`. Fires on startup (covering localStorage-saved AR path) and every toggle. Layout.toggleLang() simplified to just changeLanguage + localStorage write. Fulfill.tsx: 18 hardcoded `isAr ? ... : ...` patterns replaced with `t('fulfill.*')` in HandoverScreen, QueueView, GuidedUnpackPanel, PickScreen. 8 new keys added to en.json + ar.json. Dead `fulfill_extra` AR namespace removed. 2 new frontend RTL tests (rtl1/rtl2). AwbPickupTest date flakiness fixed: `nextValidPickupDate()` helper skips Fridays. Tech-debt noted: BostaPickupService.schedulePickup() uses `LocalDate.now()` directly, no injectable Clock.
 

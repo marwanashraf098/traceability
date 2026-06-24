@@ -1,0 +1,58 @@
+{
+  "_id": "FIXTURE_DELIVERY_001",
+  "trackingNumber": "9999999999",
+  "type": {
+    "code": 10,
+    "value": "Send"
+  },
+  "state": {
+    "value": "Out for Delivery",
+    "code": 41,
+    "deliveryTime": null
+  },
+  "receiver": {
+    "_id": "FIXTURE_RECEIVER_001",
+    "phone": "+201000000000",
+    "firstName": "Test",
+    "lastName": "Receiver",
+    "fullName": "Test Receiver",
+    "secondPhone": null,
+    "ranking": 0
+  },
+  "dropOffAddress": {
+    "country": {
+      "_id": "60e4482c7cb7d4bc4849c4d5",
+      "name": "Egypt",
+      "code": "EG"
+    },
+    "city": {
+      "name": "Cairo"
+    },
+    "zone": {
+      "name": "New Cairo"
+    },
+    "district": {
+      "name": "Test District",
+      "fmCode": "KA-00"
+    },
+    "firstLine": "123 Test Street, New Cairo"
+  },
+  "cod": 150,
+  "specs": {
+    "packageType": "Small",
+    "weight": 1,
+    "packageDetails": {
+      "itemsCount": 1,
+      "description": "Test Item"
+    }
+  },
+  "businessReference": "TEST-REF-001",
+  "sender": {
+    "_id": "FIXTURE_SENDER_001",
+    "name": "Test Business",
+    "type": "BUSINESS_ACCOUNT"
+  },
+  "numberOfAttempts": 0,
+  "createdAt": "2026-06-23T10:00:00.000Z",
+  "updatedAt": "2026-06-23T14:00:00.000Z"
+}

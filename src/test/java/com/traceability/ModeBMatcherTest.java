@@ -3,6 +3,7 @@ package com.traceability;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.traceability.integrations.bosta.*;
+import com.traceability.inventory.BlocklistService;
 import com.traceability.inventory.ShipmentLinkService;
 import com.traceability.inventory.UlidGenerator;
 import com.traceability.security.EncryptionService;
@@ -74,6 +75,7 @@ class ModeBMatcherTest {
 
     @Autowired ShipmentLinkService shipmentLinkSvc;
     @Autowired BostaWebhookJob     bostaWebhookJob;
+    @Autowired BlocklistService    blocklistSvc;
     @Autowired JdbcTemplate        jdbc;
     @Autowired EncryptionService   encryptionService;
     @Autowired ObjectMapper        mapper;
@@ -117,8 +119,10 @@ class ModeBMatcherTest {
         jdbc.update("DELETE FROM pieces        WHERE tenant_id = ?", tenantId);
         jdbc.update("DELETE FROM shipments     WHERE tenant_id = ?", tenantId);
         jdbc.update("DELETE FROM order_items   WHERE tenant_id = ?", tenantId);
+        jdbc.update("UPDATE orders SET on_hold = false, hold_reason = NULL WHERE tenant_id = ?", tenantId);
         jdbc.update("DELETE FROM orders        WHERE tenant_id = ?", tenantId);
         jdbc.update("DELETE FROM webhook_events WHERE tenant_id = ?", tenantId);
+        jdbc.update("UPDATE blocklist SET active = false WHERE tenant_id = ?", tenantId);
     }
 
     // ── 1. Unique phone+COD match → auto-link ────────────────────────────────
@@ -252,7 +256,7 @@ class ModeBMatcherTest {
         createPackedOrderWithPhoneCod("01004567890", new BigDecimal("100"));
         String tracking = "AWB-MB07";
         Long wid = insertWebhookEvent(tracking);
-        // Raw has COD but no consignee phone field at all
+        // Raw has COD but no receiver.phone field at all
         ObjectNode raw = mapper.createObjectNode();
         raw.put("cod", 100);
         mockDelivery(tracking, raw);
@@ -325,9 +329,10 @@ class ModeBMatcherTest {
         String tracking = "AWB-MB10";
         Long wid = insertWebhookEvent(tracking);
 
-        // Build raw with COD as flat scalar (the correct Bosta format)
+        // Build raw with COD as flat scalar (the correct Bosta format).
+        // Phone is under receiver.phone — the live v0 API shape (NOT consignee.phone).
         ObjectNode raw = mapper.createObjectNode();
-        raw.putObject("consignee").put("phone", "01007890123");
+        raw.putObject("receiver").put("phone", "01007890123");
         raw.put("cod", new BigDecimal("175")); // flat scalar, NOT {amount: 175}
 
         mockDelivery(tracking, raw);
@@ -428,6 +433,51 @@ class ModeBMatcherTest {
         assertThat(orderStatus(orderId)).isEqualTo("awaiting_pickup");
     }
 
+    // ── 14. FR-7.8a deferred blocklist re-check uses receiver.phone ────────────
+    //
+    // When a Mode-B delivery is linked, ShipmentLinkService.tryMatchDelivery() extracts
+    // the Bosta receiver.phone and re-checks the blocklist. This is the deferred gate for
+    // pre-PCD orders whose customer_phone was null at import.
+    //
+    // Regression: the old code read consignee.phone (always null in v0 API), so the
+    // blocklist re-check was silently a no-op — blocked phones were never detected on link.
+
+    @Test
+    void t14_deferredBlocklistRecheck_usesReceiverPhone_holdsOrderOnMatch() {
+        // Use a phone that normalizes to a canonical form from both E.164 and local.
+        String canonicalPhone = "01099887766";
+        String bostaPhone     = "+201099887766"; // E.164 form Bosta delivers
+
+        // Order has the phone → phone+COD match will succeed and link the delivery.
+        UUID orderId = createPackedOrderWithPhoneCod(canonicalPhone, new BigDecimal("250"));
+
+        // Block the canonical phone. tryMatchDelivery() will re-check after linking.
+        UUID actorId = jdbc.queryForObject(
+            "SELECT id FROM users WHERE tenant_id = ?", UUID.class, tenantId);
+        blocklistSvc.add(bostaPhone, "test regression t14", actorId);
+
+        // Delivery arrives with receiver.phone in E.164 form (live Bosta shape).
+        String tracking = "AWB-MB14";
+        Long wid = insertWebhookEvent(tracking);
+        mockDelivery(tracking, bostaRaw(bostaPhone, "250", null));
+
+        bostaWebhookJob.process(wid, tenantId);
+
+        // Delivery was linked (shipment created)
+        assertThat(shipmentExists(tracking)).isTrue();
+
+        // Deferred re-check held the order because receiver.phone is on the blocklist.
+        Boolean onHold = jdbc.queryForObject(
+            "SELECT on_hold FROM orders WHERE id = ?", Boolean.class, orderId);
+        assertThat(onHold)
+            .as("order must be on hold after deferred blocklist re-check with receiver.phone")
+            .isTrue();
+
+        // Regression assertion: if the service still read consignee.phone (absent in v0),
+        // bostaRawPhone would be null, checkAndHoldIfBlocked() would be a no-op,
+        // and on_hold would remain false — causing this test to fail.
+    }
+
     // ── Helpers ───────────────────────────────────────────────────────────────
 
     private UUID createPackedOrderWithPhoneCod(String phone, BigDecimal cod) {
@@ -461,15 +511,19 @@ class ModeBMatcherTest {
     }
 
     /**
-     * Builds a Bosta raw JSON node.
-     * phone: placed at consignee.phone (null omits the field entirely)
-     * cod:   placed at the top-level cod as a flat scalar (NOT nested amount)
+     * Builds a Bosta raw JSON node matching the live v0 API shape.
+     * phone: placed at receiver.phone (E.164 or local — both accepted by normalizePhone).
+     *        null omits the field entirely (simulates absent-receiver scenarios).
+     * cod:   placed at the top-level cod as a flat scalar (NOT nested amount).
      * nestedCodAmount: if non-null, places cod as {amount: value} to verify the
-     *                  old (wrong) path is NOT used — only used by negative tests
+     *                  old (wrong) path is NOT used — only used by negative tests.
+     *
+     * NOTE: real Bosta v0 API has NO "consignee" key. Using receiver.* matches the
+     * confirmed live shape (probe 2026-06-23). Any use of consignee here would be wrong.
      */
     private ObjectNode bostaRaw(String phone, String cod, String nestedCodAmount) {
         ObjectNode raw = mapper.createObjectNode();
-        if (phone != null) raw.putObject("consignee").put("phone", phone);
+        if (phone != null) raw.putObject("receiver").put("phone", phone);
         if (cod != null) raw.put("cod", new BigDecimal(cod));
         if (nestedCodAmount != null) raw.putObject("cod").put("amount", new BigDecimal(nestedCodAmount));
         return raw;
