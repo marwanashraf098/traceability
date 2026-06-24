@@ -4,7 +4,33 @@
 
 ## Current state
 
-**330 backend + 23 frontend tests — Deploy-prep 2 (Dockerfile + nginx + compose) complete** — 2026-06-24.
+**354 backend + 23 frontend tests — Returns-receiving session complete** — 2026-06-24.
+
+**Returns-receiving session (Day 41):**
+
+New waybill-driven returns flow replacing the standalone barcode-scan intake as primary UX.
+
+*Schema (V29):* `receipts.kind` discriminator (`inbound`/`returns`); `tenants.customer_return_window_days` (default 30); `tenants.return_in_transit_stuck_days` (default 3).
+
+*Ledger edge:* `delivered:return_pending_inspection` added to `InventoryLedger.ALLOWED`. Guard enforced in `ReturnSessionService.enforceReturnWindow()` — checks `pieces.last_event_at` against `customer_return_window_days` using injected Clock. Hard reject (422) outside the window with a message directing the worker to the waybill-less intake. `recordReturnReceived()` gains optional metadata param (session_id + return_kind). `recordLabelReprinted()` is the 4th write path on `InventoryLedger` — no status change, custody event only.
+
+*`return_kind` metadata:* RTO pieces → `{"return_kind":"rto","session_id":"..."}`. Customer-after-delivery pieces → `{"return_kind":"customer_after_delivery","session_id":"..."}`. Both stored in `piece_events.metadata` (jsonb, PostgreSQL-normalized on read).
+
+*Session flow:* `POST /returns/sessions` validates shipment state (returning/returned/delivered/exception only — rejects with_courier etc.). `GET /sessions/{id}/pieces` queries both `return_in_transit` AND `delivered` pieces linked to the waybill. `POST /sessions/{id}/pieces/{id}/verdict` — atomic two-step: intake transition (DELIVERED→RPI or RIT→RPI) + restock/damage, both within one `@Transactional(READ_COMMITTED)` boundary via Spring REQUIRED propagation. `POST /sessions/{id}/finalize` does NOT block on unresolved pieces.
+
+*Change 2 (finalize summary):* `unresolvedRtoCount` = unscanned `return_in_transit` pieces (actionable). `deliveredKeptCount` = unscanned `delivered` pieces (expected — customer kept them). These are separated so the UI never implies a delivered-but-unscanned piece is a problem.
+
+*Change 3 (reprint scope):* `GET /returns/pieces/{id}/label` rejects pieces not in `return_pending_inspection` or `damaged` — returns 422 with explanation. Validates and records `label_reprinted` custody event; controller then calls `LabelService.generatePieceLabel()` for the PDF.
+
+*15th detector:* `detectReturnInTransitStuck` — fires when `piece.status = return_in_transit` AND `last_event_at < now() - N days` AND no `return_received` event. Subject: piece. Type: `return_in_transit_stuck`. Severity: HIGH. Does not collide with `detectStuck` (subject = shipment, different key) or `detectNeverReceived` (requires `returned` state). `ReceivingService.listSessions()` now adds `AND kind = 'inbound'` filter.
+
+*Frontend (Returns.tsx):* Session tab is primary (leftmost, default). Waybill-less Intake tab is secondary with a "fallback" badge and explanatory note. Out-of-window 422 surfaces inline on the specific piece with a one-click "Switch to waybill-less intake" button. Finalize summary distinguishes `unresolvedRtoCount` from `deliveredKeptCount`. Delivered-but-unscanned pieces show "(optional — customer may have kept this)" — not flagged as errors.
+
+*Tests:* 12 new `ReturnSessionTest` + 1 `MigrationSmokeTest` bump (28→29). Total: 354 backend, 23 frontend. All green.
+
+*Commits:* `f3c467d` (backend), `c040c81` (frontend).
+
+Next up: Server provisioning runbook (Hetzner/Oracle, firewall, Docker, first deploy) — Deploy-prep 3.
 
 **Deploy-prep 2 (Day 40) — Dockerfile + Nginx + Compose + .env.example + DEPLOY-NOTES:**
 
