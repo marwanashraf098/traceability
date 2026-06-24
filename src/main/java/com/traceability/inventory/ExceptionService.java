@@ -5,6 +5,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 
 import java.sql.Timestamp;
+import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.*;
@@ -36,9 +37,11 @@ public class ExceptionService {
     );
 
     private final JdbcTemplate jdbc;
+    private final Clock        clock;
 
-    public ExceptionService(JdbcTemplate jdbc) {
-        this.jdbc = jdbc;
+    public ExceptionService(JdbcTemplate jdbc, Clock clock) {
+        this.jdbc  = jdbc;
+        this.clock = clock;
     }
 
     // ── Public API ────────────────────────────────────────────────────────────
@@ -94,7 +97,7 @@ public class ExceptionService {
             .thenComparing(e -> toInstant(e.get("occurred_at"), epoch)));
 
         // Enrich with ageSeconds
-        Instant now = Instant.now();
+        Instant now = clock.instant();
         all.forEach(e -> e.put("ageSeconds",
             Duration.between(toInstant(e.get("occurred_at"), now), now).getSeconds()));
 

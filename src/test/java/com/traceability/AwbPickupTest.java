@@ -17,8 +17,10 @@ import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
 import java.math.BigDecimal;
-import java.time.DayOfWeek;
+import java.time.Clock;
+import java.time.Instant;
 import java.time.LocalDate;
+import java.time.ZoneId;
 import java.util.Base64;
 import java.util.List;
 import java.util.UUID;
@@ -72,6 +74,18 @@ class AwbPickupTest {
         r.add("spring.flyway.password",     POSTGRES::getPassword);
     }
 
+    // Wednesday 2026-06-17 at 10:00 Africa/Cairo (UTC+2 = 08:00 UTC).
+    // Chosen because Jun 17 = Wednesday in 2026 (Jun 1 = Monday → Jun 15 = Monday → Jun 17 = Wednesday).
+    // Tests use fixed offsets from this date — no run-day dependence.
+    static final ZoneId CAIRO   = ZoneId.of("Africa/Cairo");
+    static final Instant PINNED = LocalDate.of(2026, 6, 17).atTime(10, 0).atZone(CAIRO).toInstant();
+
+    // Dates relative to the pinned Wednesday
+    static final LocalDate TODAY     = LocalDate.of(2026, 6, 17); // Wednesday (today)
+    static final LocalDate YESTERDAY = LocalDate.of(2026, 6, 16); // Tuesday  (past date)
+    static final LocalDate THURSDAY  = LocalDate.of(2026, 6, 18); // Thursday (next valid day)
+    static final LocalDate FRIDAY    = LocalDate.of(2026, 6, 19); // Friday   (rejected by Bosta)
+
     @Autowired BostaAwbService    awbService;
     @Autowired BostaPickupService pickupService;
     @Autowired JdbcTemplate       jdbc;
@@ -79,6 +93,7 @@ class AwbPickupTest {
     @Autowired ObjectMapper       mapper;
     @MockBean  BostaGateway       bostaGateway;
     @MockBean  JobScheduler       jobScheduler;
+    @MockBean  Clock              clock;
 
     UUID tenantId;
     UUID storeId;
@@ -111,7 +126,13 @@ class AwbPickupTest {
                     tenantId, encryptionService.encrypt("awb-api-key"));
     }
 
-    @BeforeEach void setContext() { TenantContext.set(tenantId); }
+    @BeforeEach
+    void setContext() {
+        TenantContext.set(tenantId);
+        // Pin the clock so pickup-date tests are deterministic regardless of run day.
+        lenient().when(clock.instant()).thenReturn(PINNED);
+        lenient().when(clock.getZone()).thenReturn(CAIRO);
+    }
 
     @AfterEach
     void cleanup() {
@@ -250,7 +271,7 @@ class AwbPickupTest {
         createPickupReadyShipment("AWB-P07B", new BigDecimal("200"));
 
         BostaPickupService.PickupManifest manifest =
-            pickupService.schedulePickup(tenantId, nextValidPickupDate());
+            pickupService.schedulePickup(tenantId, THURSDAY);
 
         assertThat(manifest.mode()).isEqualTo("BOSTA_MANAGED");
         assertThat(manifest.providerPickupId()).isNull();
@@ -277,7 +298,7 @@ class AwbPickupTest {
             .thenReturn("BOSTA-PID-001");
 
         BostaPickupService.PickupManifest manifest =
-            pickupService.schedulePickup(tenantId, nextValidPickupDate());
+            pickupService.schedulePickup(tenantId, THURSDAY);
 
         assertThat(manifest.providerPickupId()).isEqualTo("BOSTA-PID-001");
         assertThat(manifest.mode()).isEqualTo("TRACED_MANAGED");
@@ -305,7 +326,7 @@ class AwbPickupTest {
             .thenThrow(new BostaPickupAlreadyExistsException(1078, "Pickup already exists for today"));
 
         BostaPickupService.PickupManifest manifest =
-            pickupService.schedulePickup(tenantId, nextValidPickupDate());
+            pickupService.schedulePickup(tenantId, THURSDAY);
 
         assertThat(manifest.alreadyExistsMessage()).isNotNull();
         assertThat(manifest.alreadyExistsMessage()).contains("already exists");
@@ -322,8 +343,9 @@ class AwbPickupTest {
 
     @Test
     void t10_pickup_pastDate_400() {
+        // Clock pinned to Wednesday 2026-06-17; YESTERDAY = Tuesday 2026-06-16.
         assertThatThrownBy(() ->
-            pickupService.schedulePickup(tenantId, LocalDate.now().minusDays(1)))
+            pickupService.schedulePickup(tenantId, YESTERDAY))
             .hasMessageContaining("past");
 
         verifyNoInteractions(bostaGateway);
@@ -333,13 +355,8 @@ class AwbPickupTest {
 
     @Test
     void t11_pickup_friday_400() {
-        LocalDate friday = LocalDate.now();
-        // Roll forward to the next Friday
-        while (friday.getDayOfWeek() != java.time.DayOfWeek.FRIDAY) {
-            friday = friday.plusDays(1);
-        }
-        final LocalDate f = friday;
-        assertThatThrownBy(() -> pickupService.schedulePickup(tenantId, f))
+        // Clock pinned to Wednesday 2026-06-17; FRIDAY = 2026-06-19.
+        assertThatThrownBy(() -> pickupService.schedulePickup(tenantId, FRIDAY))
             .hasMessageContaining("Friday");
 
         verifyNoInteractions(bostaGateway);
@@ -355,7 +372,7 @@ class AwbPickupTest {
         createShipmentWithOrder("AWB-P12C", "with_courier", null, new BigDecimal("999.00"));
 
         BostaPickupService.PickupManifest manifest =
-            pickupService.schedulePickup(tenantId, nextValidPickupDate());
+            pickupService.schedulePickup(tenantId, THURSDAY);
 
         assertThat(manifest.parcelCount()).isEqualTo(2);
         assertThat(manifest.totalCod()).isEqualByComparingTo("400.00");
@@ -366,24 +383,6 @@ class AwbPickupTest {
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────
-
-    /**
-     * Returns the next pickup-eligible date that is at least {@code minDaysOut} calendar days
-     * from today, skipping Friday (Bosta error 1080).
-     *
-     * Using "today + N" directly causes test failures whenever the computed date lands on a
-     * Friday: Wednesday → plusDays(2) = Friday, Thursday → plusDays(1) = Friday.
-     * Tests should always use this helper instead of a raw plusDays() expression.
-     *
-     * Tech-debt note: BostaPickupService.schedulePickup() calls LocalDate.now() directly
-     * with no injectable Clock. Until a Clock is injected, tests cannot pin the "today"
-     * reference and must use this avoidance approach instead.
-     */
-    private static LocalDate nextValidPickupDate() {
-        LocalDate d = LocalDate.now().plusDays(1);
-        while (d.getDayOfWeek() == DayOfWeek.FRIDAY) d = d.plusDays(1);
-        return d;
-    }
 
     /**
      * Creates an order in 'awaiting_pickup' status + shipment in 'created' state.

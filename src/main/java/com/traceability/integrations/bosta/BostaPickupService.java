@@ -14,6 +14,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.math.BigDecimal;
+import java.time.Clock;
 import java.time.DayOfWeek;
 import java.time.LocalDate;
 import java.util.*;
@@ -45,17 +46,20 @@ public class BostaPickupService {
     private final BostaGateway        bostaGateway;
     private final EncryptionService   encryptionService;
     private final ObjectMapper        mapper;
+    private final Clock               clock;
 
     public BostaPickupService(JdbcTemplate jdbc,
                                PlatformTransactionManager txm,
                                BostaGateway bostaGateway,
                                EncryptionService encryptionService,
-                               ObjectMapper mapper) {
+                               ObjectMapper mapper,
+                               Clock clock) {
         this.jdbc             = jdbc;
         this.tx               = new TransactionTemplate(txm);
         this.bostaGateway     = bostaGateway;
         this.encryptionService = encryptionService;
         this.mapper           = mapper;
+        this.clock            = clock;
     }
 
     // ── Public types ──────────────────────────────────────────────────────────
@@ -86,7 +90,7 @@ public class BostaPickupService {
     public PickupManifest schedulePickup(UUID tenantId, LocalDate scheduledDate) {
 
         // 1. Date validation (pre-API checks)
-        LocalDate today = LocalDate.now();
+        LocalDate today = LocalDate.now(clock);
         if (scheduledDate.isBefore(today)) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                 "Scheduled date is in the past");
