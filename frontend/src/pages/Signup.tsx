@@ -2,6 +2,7 @@ import { useState, FormEvent } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { signup } from '../api'
+import { Logo } from '../components/Logo'
 
 const EGYPT_PHONE = /^(\+20|0020|0)1[0-9]{9}$/
 
@@ -56,9 +57,7 @@ export default function Signup() {
       <div className="w-full max-w-sm relative z-10">
         {/* Wordmark */}
         <div className="text-center mb-10">
-          <div className="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-brand/15 border border-brand/25 mb-5 shadow-brand">
-            <span className="text-brand text-2xl font-bold select-none">T</span>
-          </div>
+          <Logo variant="icon" size={56} className="mb-5" />
           <h1 className="text-display font-light text-primary tracking-tight">
             <span className="text-brand">tr</span>aced
           </h1>

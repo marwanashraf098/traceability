@@ -2,6 +2,7 @@ import { NavLink, useNavigate } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { useState, useRef, ReactNode } from 'react'
 import { getRoleFromToken } from '../api'
+import { Logo } from './Logo'
 
 // ── Inline SVG icons ──────────────────────────────────────────────────────────
 
@@ -70,10 +71,7 @@ export default function Layout({ children }: { children: ReactNode }) {
       <aside className="w-56 flex-shrink-0 bg-panel border-e border-line flex flex-col">
         {/* Wordmark / logo slot */}
         <div className="flex items-center gap-2.5 px-5 py-5 border-b border-line">
-          {/* Icon mark slot — replace this div with the real SVG when ready */}
-          <div className="w-8 h-8 rounded-lg bg-brand/15 border border-brand/25 flex items-center justify-center flex-shrink-0">
-            <span className="text-brand text-xs font-bold">T</span>
-          </div>
+          <Logo variant="icon" size={32} />
           <span className="text-primary font-light text-xl tracking-tight select-none">
             <span className="text-brand">tr</span>aced
           </span>
