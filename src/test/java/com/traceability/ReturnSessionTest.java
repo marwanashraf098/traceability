@@ -36,6 +36,9 @@ import static org.assertj.core.api.Assertions.*;
  * (j) detectReturnInTransitStuck suppressed when piece has return_received event.
  * (k) Tenant isolation: piece from another tenant is not accessible.
  * (l) finalize with unresolved return_in_transit pieces does not block.
+ * (m) Dismiss 2 days ago → still suppressed (within 7-day snooze window).
+ * (n) Dismiss 8 days ago, piece still stuck → re-fires (snooze expired).
+ * (o) Dismissed then processed (return_received + status moved) → never re-fires regardless of dismissal age.
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.NONE)
 @Testcontainers
@@ -393,6 +396,87 @@ class ReturnSessionTest {
             "SELECT status FROM receipts WHERE id = ? AND tenant_id = ?",
             String.class, sessionId, tenantId);
         assertThat(status).isEqualTo("finalized");
+    }
+
+    // ── (m) Dismiss 2 days ago — inside 7-day snooze, not re-fired ──────────────
+
+    @Test
+    void m_dismiss_recent_snoozes_still_suppressed() {
+        UUID orderId = createOrder("returning");
+        createShipment(orderId, "AWB-SNOOZE-M", "returning");
+        String piece = createPiece("return_in_transit", orderId);
+        createAlloc(orderId, piece);
+        jdbc.update("UPDATE pieces SET last_event_at = now() - interval '10 days' WHERE id = ?", piece);
+
+        // Operator dismissed 2 days ago — within the 7-day snooze window.
+        jdbc.update(
+            "INSERT INTO exception_resolutions " +
+            "(tenant_id, exception_type, subject_key, resolved_by, resolved_at) " +
+            "VALUES (?, 'return_in_transit_stuck', " +
+            "    'return_in_transit_stuck:piece:' || ?, ?, now() - interval '2 days')",
+            tenantId, piece, actorId);
+
+        List<Map<String, Object>> exceptions = listExceptionsOfType("return_in_transit_stuck");
+        boolean myPiecePresent = exceptions.stream()
+            .anyMatch(e -> ("PC-" + piece).equals(e.get("barcode")));
+        assertThat(myPiecePresent).isFalse();
+    }
+
+    // ── (n) Dismiss 8 days ago — snooze expired, piece STILL stuck → re-fires ──
+
+    @Test
+    void n_dismiss_expired_stuck_piece_re_fires() {
+        UUID orderId = createOrder("returning");
+        createShipment(orderId, "AWB-RESNOOZE-N", "returning");
+        String piece = createPiece("return_in_transit", orderId);
+        createAlloc(orderId, piece);
+        jdbc.update("UPDATE pieces SET last_event_at = now() - interval '10 days' WHERE id = ?", piece);
+
+        // Operator dismissed 8 days ago — beyond the 7-day snooze.
+        jdbc.update(
+            "INSERT INTO exception_resolutions " +
+            "(tenant_id, exception_type, subject_key, resolved_by, resolved_at) " +
+            "VALUES (?, 'return_in_transit_stuck', " +
+            "    'return_in_transit_stuck:piece:' || ?, ?, now() - interval '8 days')",
+            tenantId, piece, actorId);
+
+        List<Map<String, Object>> exceptions = listExceptionsOfType("return_in_transit_stuck");
+        boolean myPiecePresent = exceptions.stream()
+            .anyMatch(e -> ("PC-" + piece).equals(e.get("barcode")));
+        assertThat(myPiecePresent).isTrue();
+    }
+
+    // ── (o) Dismissed + processed → never re-fires regardless of dismissal age ─
+
+    @Test
+    void o_dismissed_then_processed_never_re_fires() {
+        UUID orderId = createOrder("returning");
+        createShipment(orderId, "AWB-DONE-O", "returning");
+        String piece = createPiece("return_in_transit", orderId);
+        createAlloc(orderId, piece);
+        jdbc.update("UPDATE pieces SET last_event_at = now() - interval '10 days' WHERE id = ?", piece);
+
+        // Dismissed 8 days ago — snooze expired, would re-fire for a still-stuck piece.
+        jdbc.update(
+            "INSERT INTO exception_resolutions " +
+            "(tenant_id, exception_type, subject_key, resolved_by, resolved_at) " +
+            "VALUES (?, 'return_in_transit_stuck', " +
+            "    'return_in_transit_stuck:piece:' || ?, ?, now() - interval '8 days')",
+            tenantId, piece, actorId);
+
+        // Piece was actually processed: return_received event written + status advanced.
+        jdbc.update(
+            "INSERT INTO piece_events (tenant_id, piece_id, event_type, from_status, to_status) " +
+            "VALUES (?, ?, 'return_received', " +
+            "    'return_in_transit'::piece_status, 'return_pending_inspection'::piece_status)",
+            tenantId, piece);
+        jdbc.update(
+            "UPDATE pieces SET status = 'return_pending_inspection'::piece_status WHERE id = ?", piece);
+
+        List<Map<String, Object>> exceptions = listExceptionsOfType("return_in_transit_stuck");
+        boolean myPiecePresent = exceptions.stream()
+            .anyMatch(e -> ("PC-" + piece).equals(e.get("barcode")));
+        assertThat(myPiecePresent).isFalse();
     }
 
     // ── DB helpers ────────────────────────────────────────────────────────────

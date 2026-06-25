@@ -461,7 +461,8 @@ public class ExceptionService {
             "      SELECT 1 FROM exception_resolutions er " +
             "      WHERE er.tenant_id      = p.tenant_id " +
             "        AND er.exception_type = 'return_in_transit_stuck' " +
-            "        AND er.subject_key    = 'return_in_transit_stuck:piece:' || p.id) ",
+            "        AND er.subject_key    = 'return_in_transit_stuck:piece:' || p.id " +
+            "        AND er.resolved_at    > now() - interval '7 days') ",
             tid, stuckDays, tid, tid);
     }
 
