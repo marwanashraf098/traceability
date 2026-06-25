@@ -4,7 +4,7 @@
 
 ## Current state
 
-**357 backend + 47 frontend tests — detectReturnInTransitStuck 7-day snooze** — 2026-06-25.
+**358 backend + 47 frontend tests — all green, deterministic** — 2026-06-25.
 
 **detectReturnInTransitStuck snooze re-fire (Day 44 addendum):**
 
@@ -17,6 +17,10 @@ Column used: `resolved_at` (set by `DEFAULT now()` on INSERT in `exception_resol
 3 new tests in `ReturnSessionTest` (m/n/o): dismiss-2d→suppressed, dismiss-8d→re-fires, dismiss-8d+processed→never re-fires. 15/15 `ReturnSessionTest`. 357 total backend (1 pre-existing flaky: `Fr9ManifestSelfPickupTest` fails on Fridays due to Bosta not scheduling pickups — unrelated).
 
 *Commit:* `82a0230`.
+
+**Fr9ManifestSelfPickupTest clock-pin fix:**
+
+Brittleness (not a regression). `t1` called `LocalDate.now().plusDays(1)` without a `@MockBean Clock`, so running on Thursday → date = Friday → `BostaPickupService` rejected with 400 (error 1080 client-side guard). Same class as the pre-existing fix in `AwbPickupTest`. Fix: `@MockBean Clock` pinned to Wed 2026-06-17 (Cairo) in `@BeforeEach`; hardcoded `THURSDAY = 2026-06-18` replaces the dynamic date. A far-future literal would not have worked — `schedulePickup()` also rejects past dates using `LocalDate.now(clock)`, so the mock is necessary. 345/345 deterministically green on any weekday. *Commit:* `ce813c0`.
 
 **Fulfill restyle + Print Waybill (Day 42):**
 
