@@ -19,7 +19,10 @@ import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
 import java.math.BigDecimal;
+import java.time.Clock;
+import java.time.Instant;
 import java.time.LocalDate;
+import java.time.ZoneId;
 import java.util.Map;
 import java.util.UUID;
 
@@ -80,12 +83,19 @@ class Fr9ManifestSelfPickupTest {
         r.add("spring.flyway.password",     POSTGRES::getPassword);
     }
 
+    // Pin to Wednesday 2026-06-17 so pickup-date tests are run-day-independent.
+    // schedulePickup() rejects Fridays and past dates — both checks use the injected Clock.
+    static final ZoneId  CAIRO    = ZoneId.of("Africa/Cairo");
+    static final Instant PINNED   = LocalDate.of(2026, 6, 17).atTime(10, 0).atZone(CAIRO).toInstant();
+    static final LocalDate THURSDAY = LocalDate.of(2026, 6, 18); // next valid day after pinned Wednesday
+
     @Autowired FulfillService    fulfillService;
     @Autowired BostaPickupService pickupService;
     @Autowired JdbcTemplate      jdbc;
     @Autowired EncryptionService encryptionService;
     @MockBean  BostaGateway      bostaGateway;
     @MockBean  JobScheduler      jobScheduler;
+    @MockBean  Clock             clock;
 
     UUID tenantId, storeId, actorId, variantId;
     UUID courierAccountId;
@@ -116,7 +126,12 @@ class Fr9ManifestSelfPickupTest {
                     courierAccountId, tenantId, encryptionService.encrypt("fr9-api-key"));
     }
 
-    @BeforeEach void ctx()   { TenantContext.set(tenantId); }
+    @BeforeEach
+    void ctx() {
+        TenantContext.set(tenantId);
+        lenient().when(clock.instant()).thenReturn(PINNED);
+        lenient().when(clock.getZone()).thenReturn(CAIRO);
+    }
 
     @AfterEach
     void cleanup() {
@@ -150,7 +165,7 @@ class Fr9ManifestSelfPickupTest {
         shipment(o2, "AWB-COD2");
 
         BostaPickupService.PickupManifest manifest = TenantContext.runAs(tenantId, () ->
-            pickupService.schedulePickup(tenantId, LocalDate.now().plusDays(1)));
+            pickupService.schedulePickup(tenantId, THURSDAY));
 
         assertThat(manifest.totalCod()).isEqualByComparingTo(new BigDecimal("300.00"));
         assertThat(manifest.shipments()).hasSize(2);
