@@ -4,7 +4,7 @@
 
 ## Current state
 
-**354 backend + 42 frontend tests — Blocklist/Exceptions theme fixes** — 2026-06-25.
+**354 backend + 47 frontend tests — Logo + Orders chart** — 2026-06-25. Last frontend work before deploy.
 
 **Fulfill restyle + Print Waybill (Day 42):**
 
@@ -45,6 +45,16 @@ Session tab was already built (Day 41 — waybill scan → piece list → verdic
 *Tests:* fb6 (token spot-check: no bg-surface, btn-brand present, no text-red-*) + fb7 (system Modal: bg-panel present, ✕ close button, title rendered). 42 total green.
 
 *Commit:* `5ad84ab`.
+
+**Logo + Orders chart (Day 44):**
+
+*Logo SVG (Part A):* `<Logo variant="icon"|"wordmark" size={n} />` component in `components/Logo.tsx`. Inline SVG (no file/font dep): center node (r=3.5 in 32×32 viewBox) + 8 outer nodes at r=11 on equidistant spokes. Uses `currentColor` → `text-brand` colors it. Crisp at 24–64px. Three locations replaced: Layout sidebar (size=32), Login (size=56), Signup (size=56). "T" placeholder is gone. No Arabic-specific wordmark needed — icon + Latin wordmark works at both orientations.
+
+*Chart (Part B):* No recharts in the project — installed nothing. Built a plain SVG line chart (OrdersChart component inline in Overview.tsx). Data source: new `GET /api/v1/orders/daily-counts?days=30` backend endpoint in OrderController — `generate_series` fills all 30 days with zero-padding, RLS + explicit tenant_id guard, returns `[{date, count}]`. Frontend fetches via `getOrderDailyCounts()` in api.ts. Chart: brand-colored (#6366FF) line + area gradient, grid lines (#2D3F55), muted (#647488) axis labels. 3 states: loading (Spinner), all-zero (empty message), data (SVG). RTL note: SVG rendering is LTR regardless of dir — x-axis labels (MM-DD) are still readable; this is a known chart limitation accepted for now.
+
+*Tests:* 5 new (ov1–ov5): Logo SVG in Login, chart loading/empty/data/error. inventory.test.tsx updated to mock `getOrderDailyCounts`. 47 total green.
+
+*Commits:* `fc6b145` (logo), `372e92c` (chart + backend).
 
 Next up: Server provisioning runbook (Hetzner, firewall, Docker, first deploy) — Deploy-prep 3.
 
