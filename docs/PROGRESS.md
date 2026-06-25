@@ -4,7 +4,19 @@
 
 ## Current state
 
-**354 backend + 47 frontend tests — Logo + Orders chart** — 2026-06-25. Last frontend work before deploy.
+**357 backend + 47 frontend tests — detectReturnInTransitStuck 7-day snooze** — 2026-06-25.
+
+**detectReturnInTransitStuck snooze re-fire (Day 44 addendum):**
+
+Dismissing a stuck-piece exception previously buried it permanently. Changed the `NOT EXISTS (exception_resolutions ...)` suppression clause to add `AND er.resolved_at > now() - interval '7 days'` — a dismissal now acts as a 7-day snooze. After 7 days, a genuinely still-stuck piece re-surfaces automatically.
+
+Processed pieces (those that have a `return_received` event and/or are no longer in `return_in_transit`) remain permanently excluded by the status predicate and the `NOT EXISTS (piece_events/return_received)` guard — those two guards are independent of dismissal age.
+
+Column used: `resolved_at` (set by `DEFAULT now()` on INSERT in `exception_resolutions`, defined in V11).
+
+3 new tests in `ReturnSessionTest` (m/n/o): dismiss-2d→suppressed, dismiss-8d→re-fires, dismiss-8d+processed→never re-fires. 15/15 `ReturnSessionTest`. 357 total backend (1 pre-existing flaky: `Fr9ManifestSelfPickupTest` fails on Fridays due to Bosta not scheduling pickups — unrelated).
+
+*Commit:* `82a0230`.
 
 **Fulfill restyle + Print Waybill (Day 42):**
 
