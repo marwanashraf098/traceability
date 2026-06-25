@@ -18,7 +18,12 @@
     "title": "Overview",
     "recentExceptions": "Recent exceptions",
     "noExceptions": "No open exceptions — all clear",
-    "viewAll": "View all"
+    "viewAll": "View all",
+    "chart": {
+      "title": "Orders over time",
+      "subtitle": "Daily order volume — last 30 days",
+      "noOrders": "No orders in the last 30 days"
+    }
   },
   "inventory": {
     "title": "Inventory",

@@ -8,8 +8,9 @@ vi.mock('../api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../api')>()
   return {
     ...actual,
-    getInventorySummary: vi.fn(),
-    getRoleFromToken:    vi.fn(() => 'owner' as const),
+    getInventorySummary:  vi.fn(),
+    getOrderDailyCounts:  vi.fn().mockResolvedValue([]),
+    getRoleFromToken:     vi.fn(() => 'owner' as const),
     // Silence the exceptions /api/v1/exceptions call (uses request() directly).
     // It has .catch(() => {}) in Overview so failing silently is fine.
     request: vi.fn().mockResolvedValue({ items: [] }),

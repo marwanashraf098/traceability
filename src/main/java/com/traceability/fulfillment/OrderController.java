@@ -11,6 +11,7 @@ import org.springframework.web.server.ResponseStatusException;
 
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.time.LocalDate;
 import java.util.*;
 
 @RestController
@@ -53,6 +54,34 @@ public class OrderController {
         String status, boolean onHold, String holdReason,
         Instant placedAt, Instant createdAt,
         List<OrderItem> items, ShipmentSummary shipment) {}
+
+    // ── daily order counts (dashboard chart) ────────────────────────────────
+
+    public record DayCount(String date, int count) {}
+
+    @GetMapping("/daily-counts")
+    @PreAuthorize("hasAnyRole('OWNER', 'MANAGER')")
+    public List<DayCount> dailyCounts(@RequestParam(defaultValue = "30") int days) {
+        days = Math.max(7, Math.min(days, 90));
+        String from = LocalDate.now().minusDays(days - 1).toString();
+        return jdbc.query("""
+                WITH gs AS (
+                    SELECT generate_series(?::date, CURRENT_DATE, '1 day'::interval)::date AS day
+                ),
+                oc AS (
+                    SELECT DATE(placed_at) AS day, COUNT(*)::int AS cnt
+                    FROM orders
+                    WHERE tenant_id = NULLIF(current_setting('app.current_tenant', true), '')::uuid
+                      AND placed_at >= ?::date
+                    GROUP BY DATE(placed_at)
+                )
+                SELECT gs.day::text AS date, COALESCE(oc.cnt, 0) AS count
+                FROM gs LEFT JOIN oc ON oc.day = gs.day
+                ORDER BY gs.day
+                """,
+                (rs, row) -> new DayCount(rs.getString("date"), rs.getInt("count")),
+                from, from);
+    }
 
     // ── list ─────────────────────────────────────────────────────────────────
 

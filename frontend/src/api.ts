@@ -116,6 +116,11 @@ export function getOrder(id: string) {
   return request<OrderDetail>(`/orders/${id}`)
 }
 
+export interface DayCount { date: string; count: number }
+export function getOrderDailyCounts(days = 30) {
+  return request<DayCount[]>(`/orders/daily-counts?days=${days}`)
+}
+
 export interface PieceCounts {
   available: number
   reserved: number
