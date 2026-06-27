@@ -11,6 +11,9 @@ COPY frontend/package.json frontend/package-lock.json ./frontend/
 RUN npm ci --prefix frontend
 
 COPY frontend/ ./frontend/
+# Privacy.tsx and Terms.tsx import docs/legal/*.md via Vite ?raw.
+# The import resolves ../../../docs/legal/ from frontend/src/pages/ → /app/docs/legal/.
+COPY docs/legal/ ./docs/legal/
 RUN npm run build --prefix frontend
 # Output now at /app/src/main/resources/static/
 
