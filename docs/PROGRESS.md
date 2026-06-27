@@ -6,6 +6,10 @@
 
 **358 backend + 47 frontend tests — all green, deterministic** — 2026-06-25.
 
+**Landing page (public marketing surface, 2026-06-27):**
+
+`frontend/src/pages/Landing.tsx` built and wired to `/` route (public, no RequireAuth). Sections in order: sticky nav · hero (particle canvas, dashboard mock with animated stat counters + SVG chart, phone timeline mock) · How it works · Why Traced · Positioning + elevator pitch · Pricing (EGP 999/mo, single plan) · Mission/Vision/Brand story · Flow strip (Warehouse→Store→In Transit→Customer→Returns) · Footer. All copy verbatim from `docs/landing-page-build-spec.md §5`. Brand tokens and components reused from existing Tailwind config — no parallel design system. All animations degrade under `prefers-reduced-motion`. Single `SIGNUP_URL` constant (env `VITE_APP_SIGNUP_URL` → `/signup`) used by all CTAs. **TODO(payment)**: replace `SIGNUP_URL` direct redirect with checkout → payment (Instapay/bank transfer per FR-1.5) → provision → redirect. `vite-env.d.ts` added (was missing; now TypeScript resolves `import.meta.env`). TypeScript clean, zero errors.
+
 **detectReturnInTransitStuck snooze re-fire (Day 44 addendum):**
 
 Dismissing a stuck-piece exception previously buried it permanently. Changed the `NOT EXISTS (exception_resolutions ...)` suppression clause to add `AND er.resolved_at > now() - interval '7 days'` — a dismissal now acts as a 7-day snooze. After 7 days, a genuinely still-stuck piece re-surfaces automatically.
