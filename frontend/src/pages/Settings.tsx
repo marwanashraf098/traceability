@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { Link } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { getTenantSettings, updateTenantSettings, getRoleFromToken, TenantSettings } from '../api'
 
@@ -54,6 +55,7 @@ export default function Settings() {
   const [labelSize,       setLabelSize]       = useState<'40x25' | '50x25'>('40x25')
   const [defaultLanguage, setDefaultLanguage] = useState<'ar' | 'en'>('ar')
   const [timezone,        setTimezone]        = useState('Africa/Cairo')
+  const [consentSettings, setConsentSettings] = useState<Pick<TenantSettings, 'consentPrivacyVersion' | 'consentTermsVersion' | 'consentAcceptedAt'> | null>(null)
 
   useEffect(() => {
     async function load() {
@@ -64,6 +66,11 @@ export default function Settings() {
         setLabelSize(s.labelSize)
         setDefaultLanguage(s.defaultLanguage)
         setTimezone(s.timezone)
+        setConsentSettings({
+          consentPrivacyVersion: s.consentPrivacyVersion,
+          consentTermsVersion:   s.consentTermsVersion,
+          consentAcceptedAt:     s.consentAcceptedAt,
+        })
       } catch {
         setError(t('common.error'))
       } finally {
@@ -230,6 +237,43 @@ export default function Settings() {
           </form>
         </div>
       )}
+
+      {/* Legal agreement — read-only */}
+      <div className="card p-6 space-y-4">
+        <h2 className="text-h3 text-primary">{t('settings.consent.title')}</h2>
+        {!consentSettings?.consentAcceptedAt ? (
+          <p className="text-small text-muted">{t('settings.consent.none')}</p>
+        ) : (
+          <dl className="space-y-3">
+            <div className="flex flex-col sm:flex-row sm:items-center gap-1">
+              <dt className="text-small text-muted sm:w-48 shrink-0">{t('settings.consent.privacyVersion')}</dt>
+              <dd className="text-small text-primary font-medium flex items-center gap-2">
+                {consentSettings.consentPrivacyVersion}
+                <Link to="/privacy" target="_blank" rel="noopener noreferrer"
+                  className="text-brand hover:text-brand-hover text-caption underline underline-offset-2 transition-colors">
+                  {t('common.view')}
+                </Link>
+              </dd>
+            </div>
+            <div className="flex flex-col sm:flex-row sm:items-center gap-1">
+              <dt className="text-small text-muted sm:w-48 shrink-0">{t('settings.consent.termsVersion')}</dt>
+              <dd className="text-small text-primary font-medium flex items-center gap-2">
+                {consentSettings.consentTermsVersion}
+                <Link to="/terms" target="_blank" rel="noopener noreferrer"
+                  className="text-brand hover:text-brand-hover text-caption underline underline-offset-2 transition-colors">
+                  {t('common.view')}
+                </Link>
+              </dd>
+            </div>
+            <div className="flex flex-col sm:flex-row sm:items-center gap-1">
+              <dt className="text-small text-muted sm:w-48 shrink-0">{t('settings.consent.acceptedAt')}</dt>
+              <dd className="text-small text-primary">
+                {new Date(consentSettings.consentAcceptedAt!).toLocaleString()}
+              </dd>
+            </div>
+          </dl>
+        )}
+      </div>
     </div>
   )
 }

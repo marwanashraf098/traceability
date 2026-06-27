@@ -271,10 +271,10 @@ export function getRoleFromToken(): 'owner' | 'manager' | 'worker' | null {
 
 // ── Auth: signup ──────────────────────────────────────────────────────────────
 
-export function signup(tenantName: string, name: string, email: string, password: string) {
+export function signup(tenantName: string, name: string, email: string, password: string, consent: boolean) {
   return request<{ accessToken: string; refreshToken: string }>('/auth/signup', {
     method: 'POST',
-    body: JSON.stringify({ tenantName, name, email, password }),
+    body: JSON.stringify({ tenantName, name, email, password, consent }),
   })
 }
 
@@ -341,6 +341,9 @@ export interface TenantSettings {
   labelSize: '40x25' | '50x25'
   defaultLanguage: 'ar' | 'en'
   timezone: string
+  consentPrivacyVersion: string | null
+  consentTermsVersion: string | null
+  consentAcceptedAt: string | null
 }
 
 export function getTenantSettings() {

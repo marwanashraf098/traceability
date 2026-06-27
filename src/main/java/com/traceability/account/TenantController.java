@@ -56,25 +56,42 @@ public class TenantController {
     @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
     public Map<String, Object> get(@AuthenticationPrincipal CustomUserDetails principal) {
         UUID tenantId = principal.tenantId();
+        UUID userId   = principal.userId();
         return TenantContext.runAs(tenantId, () ->
-            tx.execute(s -> jdbc.query(
-                "SELECT name, label_width_mm, label_height_mm, " +
-                "       default_language, timezone, pickup_address " +
-                "FROM tenants WHERE id = ?",
-                rs -> {
-                    if (!rs.next()) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Tenant not found");
-                    double w = rs.getDouble("label_width_mm");
-                    double h = rs.getDouble("label_height_mm");
-                    String labelSize = (w == 40 && h == 25) ? "40x25" : "50x25";
+            tx.execute(s -> {
+                Map<String, Object> m = jdbc.query(
+                    "SELECT name, label_width_mm, label_height_mm, " +
+                    "       default_language, timezone, pickup_address " +
+                    "FROM tenants WHERE id = ?",
+                    rs -> {
+                        if (!rs.next()) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Tenant not found");
+                        double w = rs.getDouble("label_width_mm");
+                        double h = rs.getDouble("label_height_mm");
+                        String labelSize = (w == 40 && h == 25) ? "40x25" : "50x25";
 
-                    Map<String, Object> m = new LinkedHashMap<>();
-                    m.put("name",            rs.getString("name"));
-                    m.put("pickupAddress",   rs.getString("pickup_address"));
-                    m.put("labelSize",       labelSize);
-                    m.put("defaultLanguage", rs.getString("default_language"));
-                    m.put("timezone",        rs.getString("timezone"));
-                    return m;
-                }, tenantId)));
+                        Map<String, Object> result = new LinkedHashMap<>();
+                        result.put("name",            rs.getString("name"));
+                        result.put("pickupAddress",   rs.getString("pickup_address"));
+                        result.put("labelSize",       labelSize);
+                        result.put("defaultLanguage", rs.getString("default_language"));
+                        result.put("timezone",        rs.getString("timezone"));
+                        return result;
+                    }, tenantId);
+
+                // Append consent columns from the requesting user's row (read-only).
+                jdbc.query(
+                    "SELECT accepted_privacy_version, accepted_terms_version, accepted_at " +
+                    "FROM users WHERE id = ?",
+                    rs -> {
+                        if (rs.next()) {
+                            m.put("consentPrivacyVersion", rs.getString("accepted_privacy_version"));
+                            m.put("consentTermsVersion",   rs.getString("accepted_terms_version"));
+                            m.put("consentAcceptedAt",     rs.getTimestamp("accepted_at"));
+                        }
+                    }, userId);
+
+                return m;
+            }));
     }
 
     /** PUT /api/v1/tenant/settings — all fields optional (COALESCE). Owner-only. */

@@ -113,7 +113,7 @@ class ShopifyOAuthDay1Test {
             public boolean hasError(ClientHttpResponse response) { return false; }
         });
 
-        SignupRequest req = new SignupRequest("OAuth Co", "oauth_owner", "oauth@test.com", "password99");
+        SignupRequest req = new SignupRequest("OAuth Co", "oauth_owner", "oauth@test.com", "password99", true);
         ResponseEntity<TokenResponse> resp = rest.postForEntity(
                 base() + "/api/v1/auth/signup", req, TokenResponse.class);
         assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.CREATED);

@@ -12,6 +12,8 @@ import org.springframework.stereotype.Service;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.sql.Timestamp;
+import java.time.Clock;
+import java.time.Instant;
 import java.util.UUID;
 
 /**
@@ -33,13 +35,15 @@ public class AuthService {
     private final AuthRepository repo;
     private final JwtService jwt;
     private final PasswordEncoder encoder;
+    private final Clock clock;
 
     public AuthService(JdbcTemplate jdbc, AuthRepository repo,
-                       JwtService jwt, PasswordEncoder encoder) {
-        this.jdbc  = jdbc;
-        this.repo  = repo;
-        this.jwt   = jwt;
+                       JwtService jwt, PasswordEncoder encoder, Clock clock) {
+        this.jdbc    = jdbc;
+        this.repo    = repo;
+        this.jwt     = jwt;
         this.encoder = encoder;
+        this.clock   = clock;
     }
 
     // ---- signup ----
@@ -51,14 +55,20 @@ public class AuthService {
         if (req.password().length() < 8) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Password must be ≥8 chars");
         }
-        UUID tenantId = UUID.randomUUID();
-        UUID userId   = UUID.randomUUID();
-        String hash   = encoder.encode(req.password());
+        if (!req.consent()) {
+            throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY,
+                    "You must accept the Privacy Policy and Terms of Service to create an account");
+        }
+        UUID tenantId  = UUID.randomUUID();
+        UUID userId    = UUID.randomUUID();
+        String hash    = encoder.encode(req.password());
+        Timestamp acceptedAt = Timestamp.from(Instant.now(clock));
 
         // runAs sets TenantContext so the @Transactional createTenantWithOwner fires GUC.
         return TenantContext.runAs(tenantId, () -> {
             repo.createTenantWithOwner(tenantId, req.tenantName(), userId,
-                    req.name(), req.email(), hash);
+                    req.name(), req.email(), hash,
+                    PolicyVersions.PRIVACY, PolicyVersions.TERMS, acceptedAt);
             String refresh = repo.storeRefreshToken(userId, tenantId);
             return new TokenResponse(jwt.issueAccessToken(userId, tenantId, "owner"), refresh);
         });

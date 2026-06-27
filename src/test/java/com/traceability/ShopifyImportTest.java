@@ -90,7 +90,7 @@ class ShopifyImportTest {
 
     @BeforeAll
     void setupOwner() {
-        SignupRequest req = new SignupRequest("Import Co", "imp_user", "import@test.com", "password99");
+        SignupRequest req = new SignupRequest("Import Co", "imp_user", "import@test.com", "password99", true);
         ResponseEntity<TokenResponse> resp = rest.postForEntity(
                 base() + "/api/v1/auth/signup", req, TokenResponse.class);
         assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.CREATED);

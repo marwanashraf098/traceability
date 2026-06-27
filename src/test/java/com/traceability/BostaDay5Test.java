@@ -78,7 +78,7 @@ class BostaDay5Test {
 
     @BeforeAll
     void setupOwner() {
-        SignupRequest req = new SignupRequest("Bosta Co", "bosta_owner", "bosta@test.com", "password99");
+        SignupRequest req = new SignupRequest("Bosta Co", "bosta_owner", "bosta@test.com", "password99", true);
         ResponseEntity<TokenResponse> resp = rest.postForEntity(
                 base() + "/api/v1/auth/signup", req, TokenResponse.class);
         assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.CREATED);

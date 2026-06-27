@@ -40,14 +40,19 @@ public class AuthRepository {
     @Transactional
     public UUID createTenantWithOwner(UUID tenantId, String tenantName,
                                       UUID userId, String name, String email,
-                                      String passwordHash) {
+                                      String passwordHash,
+                                      String privacyVersion, String termsVersion,
+                                      java.sql.Timestamp acceptedAt) {
         jdbc.update(
                 "INSERT INTO tenants (id, name, plan, status) VALUES (?, ?, 'trial', 'trial')",
                 tenantId, tenantName);
         jdbc.update(
-                "INSERT INTO users (id, tenant_id, name, email, password_hash, role) " +
-                "VALUES (?, ?, ?, ?, ?, 'owner')",
-                userId, tenantId, name, email, passwordHash);
+                "INSERT INTO users " +
+                "(id, tenant_id, name, email, password_hash, role, " +
+                " accepted_privacy_version, accepted_terms_version, accepted_at) " +
+                "VALUES (?, ?, ?, ?, ?, 'owner', ?, ?, ?)",
+                userId, tenantId, name, email, passwordHash,
+                privacyVersion, termsVersion, acceptedAt);
         jdbc.update(
                 "INSERT INTO locations (id, tenant_id, name, type, is_default) " +
                 "VALUES (gen_random_uuid(), ?, 'Main Warehouse', 'warehouse', true)",

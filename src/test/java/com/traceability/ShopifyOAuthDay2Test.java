@@ -123,7 +123,7 @@ class ShopifyOAuthDay2Test {
         });
 
         // Sign up a tenant/owner for Path-1 tests
-        var req = new SignupRequest("Day2 Corp", "day2_owner", "day2@test.com", "password99");
+        var req = new SignupRequest("Day2 Corp", "day2_owner", "day2@test.com", "password99", true);
         var resp = rest.postForEntity(base() + "/api/v1/auth/signup", req, TokenResponse.class);
         assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.CREATED);
         ownerToken    = resp.getBody().accessToken();
@@ -228,7 +228,7 @@ class ShopifyOAuthDay2Test {
         // Sign up a second tenant (the intruder)
         var intruderResp = rest.postForEntity(
             base() + "/api/v1/auth/signup",
-            new SignupRequest("Intruder Corp", "intruder_day2", "intruder_day2@test.com", "password99"),
+            new SignupRequest("Intruder Corp", "intruder_day2", "intruder_day2@test.com", "password99", true),
             TokenResponse.class);
         UUID intruderTenantId = UUID.fromString(
             (String) jwtService.verify(intruderResp.getBody().accessToken()).getClaim("tenant"));
@@ -520,7 +520,7 @@ class ShopifyOAuthDay2Test {
         // Second tenant tries to claim the same shop
         var intruderResp = rest.postForEntity(
             base() + "/api/v1/auth/signup",
-            new SignupRequest("RLS Test Corp", "rls_test_day2", "rls_test@test.com", "password99"),
+            new SignupRequest("RLS Test Corp", "rls_test_day2", "rls_test@test.com", "password99", true),
             TokenResponse.class);
         UUID intruderTenantId = UUID.fromString(
             (String) jwtService.verify(intruderResp.getBody().accessToken()).getClaim("tenant"));

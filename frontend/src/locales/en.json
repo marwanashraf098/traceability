@@ -336,7 +336,8 @@
     "loading": "Loading...",
     "error": "Something went wrong",
     "na": "—",
-    "cancel": "Cancel"
+    "cancel": "Cancel",
+    "view": "View"
   },
   "signup": {
     "title": "Create your account",
@@ -351,11 +352,18 @@
     "submit": "Create account",
     "haveAccount": "Already have an account?",
     "signIn": "Sign in",
+    "consent": {
+      "prefix": "I agree to the",
+      "privacy": "Privacy Policy",
+      "and": "and",
+      "terms": "Terms of Service"
+    },
     "errors": {
       "emailTaken": "This email is already registered. Sign in instead.",
       "passwordShort": "Password must be at least 8 characters.",
       "phoneInvalid": "Enter a valid Egyptian number (01X or +20X).",
-      "generic": "Could not create account. Please try again."
+      "generic": "Could not create account. Please try again.",
+      "consentRequired": "You must accept the Privacy Policy and Terms of Service."
     }
   },
   "connections": {
@@ -448,6 +456,13 @@
     "roles": {
       "ar": "Arabic",
       "en": "English"
+    },
+    "consent": {
+      "title": "Legal agreement",
+      "privacyVersion": "Privacy Policy version",
+      "termsVersion": "Terms of Service version",
+      "acceptedAt": "Accepted on",
+      "none": "No consent record on file."
     }
   },
   "users": {

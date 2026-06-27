@@ -82,7 +82,7 @@ class Day7Test {
         // Tenant A
         ResponseEntity<TokenResponse> ra = rest.postForEntity(
                 base() + "/api/v1/auth/signup",
-                new SignupRequest("TenantA", "owner_a", "ownera@day7.test", "password99"),
+                new SignupRequest("TenantA", "owner_a", "ownera@day7.test", "password99", true),
                 TokenResponse.class);
         assertThat(ra.getStatusCode()).isEqualTo(HttpStatus.CREATED);
         ownerToken = ra.getBody().accessToken();
@@ -91,7 +91,7 @@ class Day7Test {
         // Tenant B
         ResponseEntity<TokenResponse> rb = rest.postForEntity(
                 base() + "/api/v1/auth/signup",
-                new SignupRequest("TenantB", "owner_b", "ownerb@day7.test", "password99"),
+                new SignupRequest("TenantB", "owner_b", "ownerb@day7.test", "password99", true),
                 TokenResponse.class);
         assertThat(rb.getStatusCode()).isEqualTo(HttpStatus.CREATED);
         tokenB    = rb.getBody().accessToken();

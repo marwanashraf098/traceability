@@ -230,11 +230,91 @@ class AuthIntegrationTest {
     }
 
     // -----------------------------------------------------------------------
+    // Consent gate: signup without consent rejected
+    // -----------------------------------------------------------------------
+    @Test
+    @Order(7)
+    void signupWithoutConsentIsRejected() {
+        SignupRequest noConsent = new SignupRequest(
+                "No-Consent Corp", "nc", "noconsent@example.com", "password123", false);
+        ResponseEntity<String> resp = rest.postForEntity(
+                base() + "/api/v1/auth/signup", noConsent, String.class);
+        assertThat(resp.getStatusCode().value())
+                .as("Signup without consent must be rejected (422)")
+                .isEqualTo(422);
+    }
+
+    // -----------------------------------------------------------------------
+    // Consent gate: with consent → versions + timestamp persisted
+    // -----------------------------------------------------------------------
+    @Test
+    @Order(8)
+    void signupWithConsentPersistsVersionsAndTimestamp() {
+        signup("Consent Corp", "consent@corp.example.com", "password123");
+
+        // BYPASSRLS connection — verify columns directly
+        Map<String, Object> row = jdbc.queryForObject(
+                "SELECT accepted_privacy_version, accepted_terms_version, accepted_at " +
+                "FROM users WHERE email = 'consent@corp.example.com'",
+                (rs, rn) -> {
+                    var m = new java.util.LinkedHashMap<String, Object>();
+                    m.put("privacy",  rs.getString("accepted_privacy_version"));
+                    m.put("terms",    rs.getString("accepted_terms_version"));
+                    m.put("acceptedAt", rs.getTimestamp("accepted_at"));
+                    return m;
+                });
+
+        assertThat(row.get("privacy"))
+                .as("accepted_privacy_version must equal PolicyVersions.PRIVACY")
+                .isEqualTo("1.0");
+        assertThat(row.get("terms"))
+                .as("accepted_terms_version must equal PolicyVersions.TERMS")
+                .isEqualTo("1.0");
+        assertThat(row.get("acceptedAt"))
+                .as("accepted_at must be set")
+                .isNotNull();
+    }
+
+    // -----------------------------------------------------------------------
+    // Consent gate: consent columns respect tenant RLS
+    // -----------------------------------------------------------------------
+    @Test
+    @Order(9)
+    void consentColumnsRespectTenantRls() throws Exception {
+        // Find the tenant for the consent user created in test 8
+        UUID consentTenantId = UUID.fromString(jdbc.queryForObject(
+                "SELECT tenant_id::text FROM users WHERE email = 'consent@corp.example.com'",
+                String.class));
+
+        // No GUC → app_user sees 0 rows with accepted_at set
+        try (Connection conn = DriverManager.getConnection(POSTGRES.getJdbcUrl(), "app_user", "testpw")) {
+            conn.setAutoCommit(false);
+            int count = queryCount(conn,
+                    "SELECT COUNT(*) FROM users WHERE accepted_at IS NOT NULL");
+            assertThat(count)
+                    .as("Without GUC, app_user must see 0 rows with consent (RLS)")
+                    .isEqualTo(0);
+        }
+
+        // Correct GUC → app_user sees exactly 1 row
+        try (Connection conn = DriverManager.getConnection(POSTGRES.getJdbcUrl(), "app_user", "testpw")) {
+            conn.setAutoCommit(false);
+            conn.prepareStatement(
+                    "SELECT set_config('app.current_tenant', '" + consentTenantId + "', true)").execute();
+            int count = queryCount(conn,
+                    "SELECT COUNT(*) FROM users WHERE accepted_at IS NOT NULL");
+            assertThat(count)
+                    .as("With correct GUC, app_user must see 1 row with consent")
+                    .isEqualTo(1);
+        }
+    }
+
+    // -----------------------------------------------------------------------
     // helpers
     // -----------------------------------------------------------------------
 
     private TokenResponse signup(String tenantName, String email, String password) {
-        SignupRequest body = new SignupRequest(tenantName, email.split("@")[0], email, password);
+        SignupRequest body = new SignupRequest(tenantName, email.split("@")[0], email, password, true);
         ResponseEntity<TokenResponse> resp = rest.postForEntity(
                 base() + "/api/v1/auth/signup", body, TokenResponse.class);
         assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.CREATED);

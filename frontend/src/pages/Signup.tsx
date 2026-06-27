@@ -15,6 +15,7 @@ export default function Signup() {
   const [email,        setEmail]        = useState('')
   const [phone,        setPhone]        = useState('')
   const [password,     setPassword]     = useState('')
+  const [consent,      setConsent]      = useState(false)
   const [error,        setError]        = useState('')
   const [loading,      setLoading]      = useState(false)
 
@@ -32,7 +33,7 @@ export default function Signup() {
 
     setLoading(true)
     try {
-      const res = await signup(businessName.trim(), ownerName.trim(), email.trim(), password)
+      const res = await signup(businessName.trim(), ownerName.trim(), email.trim(), password, consent)
       localStorage.setItem('token', res.accessToken)
       navigate('/overview')
     } catch (err: unknown) {
@@ -155,9 +156,41 @@ export default function Signup() {
               <p className="text-caption text-muted mt-1">{t('signup.passwordHint')}</p>
             </div>
 
+            {/* Consent checkbox — required; button stays disabled until ticked */}
+            <div className="flex items-start gap-3 pt-1">
+              <input
+                id="consent"
+                type="checkbox"
+                checked={consent}
+                onChange={e => setConsent(e.target.checked)}
+                className="mt-0.5 h-4 w-4 rounded border-line bg-panel accent-brand cursor-pointer shrink-0"
+                aria-required="true"
+              />
+              <label htmlFor="consent" className="text-small text-muted leading-snug cursor-pointer select-none">
+                {t('signup.consent.prefix')}{' '}
+                <a
+                  href="/privacy"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-brand hover:text-brand-hover underline underline-offset-2 transition-colors"
+                >
+                  {t('signup.consent.privacy')}
+                </a>
+                {' '}{t('signup.consent.and')}{' '}
+                <a
+                  href="/terms"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-brand hover:text-brand-hover underline underline-offset-2 transition-colors"
+                >
+                  {t('signup.consent.terms')}
+                </a>
+              </label>
+            </div>
+
             <button
               type="submit"
-              disabled={loading || !businessName.trim() || !ownerName.trim() || !email.trim() || !password}
+              disabled={loading || !businessName.trim() || !ownerName.trim() || !email.trim() || !password || !consent}
               className="btn-brand btn w-full py-2.5"
             >
               {loading ? t('common.loading') : t('signup.submit')}
