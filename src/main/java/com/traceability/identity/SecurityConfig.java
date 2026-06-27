@@ -63,8 +63,15 @@ public class SecurityConfig {
                         res.setStatus(HttpServletResponse.SC_FORBIDDEN)))
             .authorizeHttpRequests(auth -> auth
                 .requestMatchers(
-                    // SPA static assets — browser must be able to load the app before login
+                    // SPA shell — browser must load the app before any login or API call.
+                    // Data is protected at /api/** level; serving the shell is always public.
                     "/", "/index.html", "/assets/**", "/favicon.ico",
+                    // Public marketing + legal pages (Shopify review requires direct access).
+                    // SpaController forwards these to /index.html; Spring Security evaluates
+                    // the original path before forwarding, so they must be listed here.
+                    "/privacy", "/terms",
+                    // App SPA routes that must be reachable on direct navigation / refresh.
+                    "/login", "/signup",
                     // Auth endpoints
                     "/api/v1/auth/signup",
                     "/api/v1/auth/login",
