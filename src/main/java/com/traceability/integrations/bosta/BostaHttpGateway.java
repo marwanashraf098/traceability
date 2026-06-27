@@ -8,12 +8,14 @@ import io.github.resilience4j.retry.RetryConfig;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.HttpStatusCode;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.ResourceAccessException;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientResponseException;
+import org.springframework.web.server.ResponseStatusException;
 
 import java.time.Duration;
 import java.util.Base64;
@@ -64,23 +66,28 @@ class BostaHttpGateway implements BostaGateway {
 
     @Override
     public String fetchBusinessProfile(String apiKey) {
-        String url = baseUrl + "/api/" + apiVersion + "/business-profile";
+        // /api/v0/business-profile and /api/v2/business-profile both return 404 — phantom endpoint.
+        // Use the deliveries list instead: same base path as the confirmed-working fetchDelivery,
+        // page-size=1 to minimise payload. 200 = valid key; 401/403 = bad key → 422 to caller.
+        String url = baseUrl + "/api/" + apiVersion + "/deliveries?pageNumber=1&pageSize=1";
         try {
-            JsonNode body = Retry.decorateSupplier(retry, () ->
+            Retry.decorateSupplier(retry, () ->
                 restClient.get()
                     .uri(url)
                     .header("Authorization", apiKey)
                     .retrieve()
                     .body(JsonNode.class)
             ).get();
-            if (body == null) throw new BostaException("Empty business profile response");
-            JsonNode data = body.path("data");
-            return data.path("businessName").asText(data.path("name").asText("unknown"));
+            return "connected";
         } catch (ResourceAccessException e) {
-            throw new BostaTransientException("Network error fetching Bosta business profile", e);
+            throw new BostaTransientException("Network error validating Bosta API key", e);
         } catch (RestClientResponseException e) {
+            if (e.getStatusCode().value() == 401 || e.getStatusCode().value() == 403) {
+                throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY,
+                    "Invalid Bosta API key");
+            }
             if (e.getStatusCode().is5xxServerError()) {
-                throw new BostaTransientException("Bosta 5xx on business profile", e);
+                throw new BostaTransientException("Bosta 5xx validating API key", e);
             }
             throw new BostaException("Bosta API error (" + e.getStatusCode() + "): " + e.getMessage(), e);
         }

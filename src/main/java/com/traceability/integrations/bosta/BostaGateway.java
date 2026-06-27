@@ -14,9 +14,11 @@ import java.util.List;
 public interface BostaGateway {
 
     /**
-     * Validates an API key by fetching the business profile.
-     * Returns the business name on success.
-     * Throws BostaException on 4xx (invalid key), BostaTransientException on 5xx/network.
+     * Validates an API key against the Bosta v0 deliveries list endpoint.
+     * Returns "connected" on success (callers use this only for logging).
+     * Throws ResponseStatusException(422) for 401/403 (invalid key — caller gets clean UI error).
+     * Throws BostaTransientException on 5xx/network.
+     * NOTE: /api/v0/business-profile is a phantom — it returns 404 on both v0 and v2.
      */
     String fetchBusinessProfile(String apiKey);
 
