@@ -6,6 +6,10 @@
 
 **358 backend + 47 frontend tests — all green, deterministic** — 2026-06-25.
 
+**Privacy & Terms pages (2026-06-28):**
+
+`/privacy` and `/terms` public routes render `docs/legal/privacy-policy.md` and `docs/legal/terms-of-service.md` via `react-markdown` + `remark-gfm`. All `[BRACKET]` placeholders resolved (entity: Traced, address: North Investors Area Cairo, contact: hello@tracedtech.com, effective 1 July 2026). Reviewer blockquote suppressed at render time (`blockquote: () => null`). Shared `LegalPage.tsx` component: scroll-blur nav, styled h1–h3/p/strong/a/ul/li/table, `max-w-prose` body, branded footer with Privacy/Terms/Contact links. Landing page footer updated to include "Privacy Policy" and "Terms of Service" links. Vite `server.fs.allow: ['..']` added for parent-dir `.md` import. TypeScript clean, zero errors. Commits: see below.
+
 **Landing page (public marketing surface, 2026-06-27):**
 
 `frontend/src/pages/Landing.tsx` built and wired to `/` route (public, no RequireAuth). Sections in order: sticky nav · hero (particle canvas, dashboard mock with animated stat counters + SVG chart, phone timeline mock) · How it works · Why Traced · Positioning + elevator pitch · Pricing (EGP 999/mo, single plan) · Mission/Vision/Brand story · Flow strip (Warehouse→Store→In Transit→Customer→Returns) · Footer. All copy verbatim from `docs/landing-page-build-spec.md §5`. Brand tokens and components reused from existing Tailwind config — no parallel design system. All animations degrade under `prefers-reduced-motion`. Single `SIGNUP_URL` constant (env `VITE_APP_SIGNUP_URL` → `/signup`) used by all CTAs. **TODO(payment)**: replace `SIGNUP_URL` direct redirect with checkout → payment (Instapay/bank transfer per FR-1.5) → provision → redirect. `vite-env.d.ts` added (was missing; now TypeScript resolves `import.meta.env`). TypeScript clean, zero errors.

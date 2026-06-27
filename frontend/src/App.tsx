@@ -17,6 +17,8 @@ import Settings from './pages/Settings'
 import Users from './pages/Users'
 import Onboarding from './pages/Onboarding'
 import Inventory from './pages/Inventory'
+import Privacy from './pages/Privacy'
+import Terms from './pages/Terms'
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
   return localStorage.getItem('token') ? <>{children}</> : <Navigate to="/login" replace />
@@ -26,8 +28,10 @@ export default function App() {
   return (
     <BrowserRouter>
       <Routes>
-        <Route path="/"       element={<Landing />} />
-        <Route path="/login"  element={<Login />} />
+        <Route path="/"        element={<Landing />} />
+        <Route path="/privacy" element={<Privacy />} />
+        <Route path="/terms"   element={<Terms />} />
+        <Route path="/login"   element={<Login />} />
         <Route path="/signup" element={<Signup />} />
         <Route
           path="/overview"

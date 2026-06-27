@@ -905,8 +905,16 @@ function Footer() {
           </nav>
         </div>
 
-        <div className="mt-10 pt-6 border-t border-line/30 text-center">
+        <div className="mt-10 pt-6 border-t border-line/30 flex flex-col sm:flex-row items-center justify-between gap-3">
           <p className="text-xs text-muted">© {year} Traced. All rights reserved.</p>
+          <div className="flex gap-5">
+            <Link to="/privacy" className="text-xs text-muted hover:text-primary transition-colors">
+              Privacy Policy
+            </Link>
+            <Link to="/terms" className="text-xs text-muted hover:text-primary transition-colors">
+              Terms of Service
+            </Link>
+          </div>
         </div>
       </div>
     </footer>
