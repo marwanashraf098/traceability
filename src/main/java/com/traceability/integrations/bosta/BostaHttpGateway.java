@@ -24,7 +24,7 @@ import java.util.Map;
  * Bosta Admin API client.
  *
  * Auth: Authorization header set to the raw API key (no "Bearer " prefix).
- * API version is pinned from config (bosta.api-version, currently "v2").
+ * API version is pinned from config (bosta.api-version, currently "v0").
  * Base URL is configurable: prod = https://app.bosta.co, staging = https://stg-app.bosta.co.
  *
  * Retry: Resilience4j, 3 attempts, 1-second wait, retries on network errors (5xx
@@ -125,7 +125,7 @@ class BostaHttpGateway implements BostaGateway {
     }
 
     /**
-     * POST /api/v2/deliveries/mass-awb
+     * POST /api/v0/deliveries/mass-awb
      * Payload: {trackingNumbers: "comma,separated", requestedAwbType: A4|A6, lang: ar|en}
      *
      * Inline response shape (live API v0): {"success":true,"data":"<base64>"}
@@ -188,7 +188,7 @@ class BostaHttpGateway implements BostaGateway {
     }
 
     /**
-     * POST /api/v2/pickups
+     * POST /api/v0/pickups
      * Payload: {scheduledDate, businessLocationId, contactPerson, numberOfParcels, packageType:"Normal"}
      *
      * Success response: {"success":true,"data":{"_id":"BOSTA_PICKUP_ID",...}}

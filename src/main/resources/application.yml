@@ -54,7 +54,7 @@ shopify:
 bosta:
   # Base URL: prod=https://app.bosta.co, staging=https://stg-app.bosta.co
   base-url: ${BOSTA_BASE_URL:https://app.bosta.co}
-  api-version: v2
+  api-version: v0
 
 org:
   jobrunr:
