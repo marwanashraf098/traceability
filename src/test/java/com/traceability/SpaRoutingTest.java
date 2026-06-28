@@ -15,6 +15,7 @@ import org.springframework.test.web.servlet.MockMvc;
 
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.forwardedUrl;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.redirectedUrl;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 import org.junit.jupiter.api.Test;
 
@@ -65,12 +66,18 @@ class SpaRoutingTest {
            .andExpect(forwardedUrl("/embedded.html"));
     }
 
-    /** GET /?shop=... without host (Shopify install flow) → forward to embedded.html. */
+    // shop= without host= means Shopify is initiating an install/OAuth request (no iframe yet).
+    // Forwarding to embedded.html here would load App Bridge in a top-level browser context
+    // where it can't communicate with any parent frame — OAuth never runs, and the merchant
+    // then sees Shopify's own 404 when opening the app (app not installed).
+    // Redirect to /auth/shopify/install so HMAC is verified and OAuth consent starts.
+
+    /** GET /?shop=... without host (Shopify install flow) → redirect to /auth/shopify/install. */
     @Test
-    void rootWithShopParamForwardsToEmbeddedHtml() throws Exception {
-        mvc.perform(get("/?shop=test.myshopify.com"))
-           .andExpect(status().isOk())
-           .andExpect(forwardedUrl("/embedded.html"));
+    void rootWithShopParamOnlyRedirectsToInstall() throws Exception {
+        mvc.perform(get("/?shop=test.myshopify.com&hmac=abc&timestamp=123"))
+           .andExpect(status().is3xxRedirection())
+           .andExpect(redirectedUrl("/auth/shopify/install?shop=test.myshopify.com&hmac=abc&timestamp=123"));
     }
 
     /** /embedded must forward to embedded.html, NOT index.html. */

@@ -1,5 +1,6 @@
 package com.traceability.web;
 
+import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.stereotype.Controller;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -35,24 +36,35 @@ public class SpaController {
 
     private static final String SEG = "[^.]*";
 
-    // Root route: forward to the App Bridge shell when Shopify loads the embedded app.
-    // Shopify sets application_url = https://app.tracedtech.com (root) and adds ?host=&shop=.
+    // Root route — three distinct cases, distinguished by which Shopify params are present:
     //
-    // MUST be a forward (not a redirect). The CDN App Bridge script fires replaceState on init,
-    // which sends navigate('app:{pathname}') to the parent admin frame. A redirect would move
-    // the browser to /embedded, App Bridge would then push 'app:/embedded' to the admin, and
-    // the admin URL would become ...apps/{handle}/embedded — a path Shopify admin does not
-    // recognise → Shopify's own 404. With a forward the URL stays at / (just query params),
-    // App Bridge pushes 'app:/' → admin URL stays at ...apps/{handle} (no extra segment).
+    // 1. host= present  → EMBEDDED OPEN.
+    //    Shopify admin iframe loads https://app.tracedtech.com?shop=X&host=Y&embedded=1.
+    //    Forward (not redirect) to embedded.html so the browser URL stays at / — CDN App
+    //    Bridge fires replaceState('/') which keeps the admin URL at ...apps/{handle} (no
+    //    extra path segment that would cause Shopify to 404).
     //
-    // nginx's `location = /` block carries frame-ancestors CSP and strips X-Frame-Options: DENY
-    // so the admin iframe loads correctly (see nginx.conf).
+    // 2. shop= present, host= absent  → INSTALL / OAUTH INITIATION.
+    //    Shopify sends merchant to application_url with ?shop=X&hmac=...×tamp=... but NO
+    //    host= (the app is not yet in an iframe — OAuth hasn't completed).  Forwarding to
+    //    embedded.html here is wrong: App Bridge would load in a top-level browser context,
+    //    fail to communicate with any parent frame, and OAuth would never run.  The merchant
+    //    would then open the app in admin and get Shopify's own 404 (app not installed).
+    //    Redirect to /auth/shopify/install preserving the full query string so the HMAC and
+    //    shop params reach the install handler.
+    //
+    // 3. Neither → STANDALONE LANDING PAGE.  Direct browser hit, marketing pages, etc.
     @GetMapping("/")
     public String root(
             @RequestParam(name = "host",  required = false) String host,
-            @RequestParam(name = "shop",  required = false) String shop) {
-        if (host != null || shop != null) {
+            @RequestParam(name = "shop",  required = false) String shop,
+            HttpServletRequest request) {
+        if (host != null) {
             return "forward:/embedded.html";
+        }
+        if (shop != null) {
+            String qs = request.getQueryString();
+            return "redirect:/auth/shopify/install" + (qs != null ? "?" + qs : "");
         }
         return "forward:/index.html";
     }

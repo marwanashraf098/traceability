@@ -82,14 +82,19 @@ public class ShopifyOAuthController {
                 "نطاق المتجر غير صالح أو مفقود",
                 HttpStatus.BAD_REQUEST);
         }
-        if (!ShopifyHmacUtil.verifyOAuthParams(allParams, oauthService.getClientSecret())) {
-            throw new ShopifyOAuthException(
-                ShopifyOAuthException.Code.SHOPIFY_HMAC_INVALID,
-                "HMAC validation failed",
-                "فشل التحقق من HMAC",
-                HttpStatus.UNAUTHORIZED);
+        // HMAC is only present when Shopify originates the request (App Store / admin redirect).
+        // Direct browser installs (?shop=... with no hmac) skip this check — the callback
+        // HMAC and single-use state nonce provide sufficient CSRF protection for the full flow.
+        if (allParams.containsKey("hmac")) {
+            if (!ShopifyHmacUtil.verifyOAuthParams(allParams, oauthService.getClientSecret())) {
+                throw new ShopifyOAuthException(
+                    ShopifyOAuthException.Code.SHOPIFY_HMAC_INVALID,
+                    "HMAC validation failed",
+                    "فشل التحقق من HMAC",
+                    HttpStatus.UNAUTHORIZED);
+            }
+            checkTimestampFreshness(allParams);
         }
-        checkTimestampFreshness(allParams);
 
         String nonce = oauthService.initiateOAuth(null, shop);
         return ResponseEntity.status(HttpStatus.FOUND)
@@ -125,9 +130,21 @@ public class ShopifyOAuthController {
 
         ShopifyOAuthService.LinkResult result = oauthService.linkOrProvision(stateRec, shop, code);
 
+        // For embedded apps Shopify includes host= in the callback params (base64-encoded admin
+        // origin).  If present, redirect back to /?shop=X&host=Y — SpaController.root() forwards
+        // to embedded.html, the CDN App Bridge script detects it is running in a top-level
+        // browser (not an iframe), and automatically navigates to the Shopify admin with the app
+        // open.  Without host= (e.g. direct install link, dev store from outside admin) the
+        // fallback is the app root which shows the standalone landing page.
+        String host = allParams.get("host");
+        String appBase = oauthService.getAppUrl();
+        String embeddedReturn = (host != null && !host.isBlank())
+                ? appBase + "?shop=" + shop + "&host=" + host
+                : appBase;
+
         return switch (result.outcome()) {
             case LINKED_NEW, LINKED_EXISTING -> ResponseEntity.status(HttpStatus.FOUND)
-                .location(URI.create(oauthService.getAppUrl()))
+                .location(URI.create(embeddedReturn))
                 .header("X-Store-Id", result.tenantId() != null ? result.tenantId().toString() : "")
                 .build();
             case PROVISIONED -> ResponseEntity.status(HttpStatus.FOUND)
