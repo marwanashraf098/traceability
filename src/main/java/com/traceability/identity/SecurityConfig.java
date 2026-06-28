@@ -1,6 +1,7 @@
 package com.traceability.identity;
 
 import com.traceability.tenancy.TenantContextFilter;
+import jakarta.servlet.DispatcherType;
 import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -62,6 +63,14 @@ public class SecurityConfig {
                 .accessDeniedHandler((req, res, denied) ->
                         res.setStatus(HttpServletResponse.SC_FORBIDDEN)))
             .authorizeHttpRequests(auth -> auth
+                // Spring Security 6.1+ applies the filter chain to FORWARD and ERROR
+                // dispatcher types by default (shouldFilterAllDispatcherTypes = true).
+                // Permit them unconditionally so that:
+                //   FORWARD — SpaController's "forward:/index.html" is never re-checked
+                //   ERROR   — sendError(404) dispatching to /error can't become a 401
+                // This is the correct Spring Security 6 fix for the sendError→ERROR→401
+                // pattern documented in CLAUDE.md (same class of bug as ResponseStatusException).
+                .dispatcherTypeMatchers(DispatcherType.FORWARD, DispatcherType.ERROR).permitAll()
                 .requestMatchers(
                     // SPA shell — browser must load the app before any login or API call.
                     // Data is protected at /api/** level; serving the shell is always public.
