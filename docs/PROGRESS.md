@@ -4,7 +4,43 @@
 
 ## Current state
 
-**358 backend + 47 frontend tests — all green, deterministic** — 2026-06-25.
+**386 backend + 47 frontend tests — all green, deterministic** — 2026-06-28.
+
+**Shopify App Bridge embedded dashboard auth core (2026-06-28):**
+
+`ShopifySessionTokenFilter` + `EmbeddedController` — auth core for the read-only embedded Shopify dashboard.
+
+*Filter (`ShopifySessionTokenFilter.java`):*
+- Path-scoped to `/api/v1/embedded/**` via `shouldNotFilter()`.
+- HS256 session-token validation: `SignedJWT.parse()` (throws on alg=none PlainJWT), explicit `JWSAlgorithm.HS256` header check before `MACVerifier` verify (blocks RS256 alg-confusion), signature verification with Shopify client secret.
+- Claims: exp/nbf/iat (10s clock skew), aud (accepts both string and `List<String>` — Nimbus normalizes both), iss/dest domain cross-check (both must be the same `*.myshopify.com` host).
+- Tenant lookup via `resolve_tenant_by_shop_domain(domain)` SECURITY DEFINER function — fail-closed (null or exception → 401, no default tenant).
+- Synthetic userId: `UUID.nameUUIDFromBytes(sub.getBytes(UTF_8))` — deterministic UUID v3 from Shopify GID, never written to DB.
+- Two-wall model: Wall 1 = `shouldNotFilter()` path scope. Wall 2 = `@PreAuthorize("hasRole('SHOPIFY_EMBEDDED')")` on every endpoint. Traced JWT on embedded path → passes filter → 403 at `@PreAuthorize` (correct).
+- `reject()` uses `response.setStatus(401)` NOT `sendError()` (avoids ERROR-dispatch chain documented in CLAUDE.md).
+- Filter order: `JwtAuthenticationFilter → ShopifySessionTokenFilter → TenantContextFilter`.
+
+*Controller (`EmbeddedController.java`):*
+- 4 read-only `@GetMapping` endpoints: `/inventory/summary`, `/orders/daily-counts`, `/stores/status`, `/exceptions`.
+- All gated by `@PreAuthorize("hasRole('SHOPIFY_EMBEDDED')")` — OWNER/MANAGER tokens cannot pass.
+- All queries wrapped in `TransactionTemplate.execute()` so `TenantAwareConnection` fires the GUC before SQL executes.
+- `RowCallbackHandler` cast resolves `JdbcTemplate.query()` overload ambiguity.
+
+*Tests:*
+- `ShopifySessionTokenFilterTest` — 17 direct filter tests (mock `FilterChain`, NOT standalone MockMvc — standalone dispatches to servlet even when filter doesn't call `chain.doFilter()`, which masks early-termination rejections). Covers: alg=none, alg=RS256, tampered sig, expired, wrong aud (string+array), iss/dest mismatch, null tenant, DB exception, unparseable, no header, non-Bearer prefix, valid string aud, valid array aud, non-embedded path filter skip.
+- `EmbeddedIntegrationTest` — E1–E11 against real Postgres (Testcontainers). Load-bearing: E2/E3 cross-tenant isolation (shop-A token sees only shop-A stores, NOT shop-B), E6 Traced OWNER JWT → 403 on embedded endpoint, E4/E5/E7 Shopify token on non-embedded paths → 401.
+- `EmbeddedReadOnlyGuardTest` — reflection CI guard: fails build if any `@PostMapping/@PutMapping/@DeleteMapping/@PatchMapping` appears anywhere in the `com.traceability.embedded` package.
+- `SpaRoutingTest` — added `@MockBean JdbcTemplate` for updated `SecurityConfig.filterChain()` signature.
+
+*Config changes:*
+- `application.yml` default `shopify.client-secret` bumped to 34 bytes (Nimbus HS256 minimum is 256 bits = 32 bytes).
+- `test/resources/application.properties` `shopify.client-secret` bumped to `test-shopify-secret-32-bytes-abc!!` (34 bytes). All HMAC tests inject the secret via `@Value` and use Java `Mac` which has no minimum key length — no regressions.
+
+3 commits: `154699f` (filter+config), `6493d58` (EmbeddedController), `ba722d9` (tests).
+
+**Next:** App Bridge frontend (Polaris UI) + `shopify.app.toml` — the auth core is complete; the frontend shell and `shopify.app.toml` come next as a separate task.
+
+---
 
 **Signup consent gate — FR-1.1 (2026-06-28):**
 
