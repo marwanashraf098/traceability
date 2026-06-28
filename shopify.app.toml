@@ -7,7 +7,7 @@
 
 name = "Traced"
 client_id = "dev-client-id"
-application_url = "https://app.tracedtech.com/embedded"
+application_url = "https://app.tracedtech.com"
 embedded = true
 
 [access_scopes]

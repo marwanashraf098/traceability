@@ -15,6 +15,7 @@ import org.springframework.test.web.servlet.MockMvc;
 
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.forwardedUrl;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.redirectedUrlPattern;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 import org.junit.jupiter.api.Test;
 
@@ -42,6 +43,30 @@ class SpaRoutingTest {
         mvc.perform(get(path.trim()))
            .andExpect(status().isOk())
            .andExpect(forwardedUrl(expected.trim()));
+    }
+
+    /** GET / with no Shopify params → standalone SPA (forward to index.html). */
+    @Test
+    void rootWithNoParamsForwardsToIndexHtml() throws Exception {
+        mvc.perform(get("/"))
+           .andExpect(status().isOk())
+           .andExpect(forwardedUrl("/index.html"));
+    }
+
+    /** GET /?host=... (Shopify embedded load) → redirect to /embedded?host=... */
+    @Test
+    void rootWithHostParamRedirectsToEmbedded() throws Exception {
+        mvc.perform(get("/?host=YWRtaW4uc2hvcGlmeS5jb20v&shop=test.myshopify.com&embedded=1"))
+           .andExpect(status().is3xxRedirection())
+           .andExpect(redirectedUrlPattern("/embedded?*host=*"));
+    }
+
+    /** GET /?shop=... without host (Shopify install flow) → redirect to /embedded?shop=... */
+    @Test
+    void rootWithShopParamRedirectsToEmbedded() throws Exception {
+        mvc.perform(get("/?shop=test.myshopify.com"))
+           .andExpect(status().is3xxRedirection())
+           .andExpect(redirectedUrlPattern("/embedded?*shop=*"));
     }
 
     /** /embedded must forward to embedded.html, NOT index.html. */
