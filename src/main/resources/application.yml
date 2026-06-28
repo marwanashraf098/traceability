@@ -44,7 +44,7 @@ shopify:
   api-version: ${SHOPIFY_API_VERSION:2026-04}
   # Public OAuth app credentials (set via env in production).
   client-id: ${SHOPIFY_CLIENT_ID:dev-client-id}
-  client-secret: ${SHOPIFY_CLIENT_SECRET:dev-client-secret}
+  client-secret: ${SHOPIFY_CLIENT_SECRET:dev-client-secret-development-ok!!}
   scopes: read_products,read_orders,read_fulfillments,read_customers
   redirect-uri: ${SHOPIFY_REDIRECT_URI:http://localhost:8080/auth/shopify/callback}
   app-url: ${SHOPIFY_APP_URL:http://localhost:5173}

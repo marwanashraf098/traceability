@@ -1,11 +1,14 @@
 package com.traceability.identity;
 
+import com.traceability.integrations.shopify.ShopifySessionTokenFilter;
 import com.traceability.tenancy.TenantContextFilter;
 import jakarta.servlet.DispatcherType;
 import jakarta.servlet.http.HttpServletResponse;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.HttpStatus;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
@@ -47,9 +50,16 @@ public class SecurityConfig {
     }
 
     @Bean
-    public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
-        JwtAuthenticationFilter jwtFilter = new JwtAuthenticationFilter(jwtService);
-        TenantContextFilter tenantFilter  = new TenantContextFilter();
+    public SecurityFilterChain filterChain(
+            HttpSecurity http,
+            JdbcTemplate jdbc,
+            @Value("${shopify.client-secret}") String shopifyClientSecret,
+            @Value("${shopify.client-id}")     String shopifyClientId) throws Exception {
+
+        JwtAuthenticationFilter   jwtFilter     = new JwtAuthenticationFilter(jwtService);
+        ShopifySessionTokenFilter shopifyFilter =
+                new ShopifySessionTokenFilter(shopifyClientSecret, shopifyClientId, jdbc);
+        TenantContextFilter       tenantFilter  = new TenantContextFilter();
 
         http
             .csrf(AbstractHttpConfigurer::disable)
@@ -103,8 +113,10 @@ public class SecurityConfig {
                     "/auth/magic"
                 ).permitAll()
                 .anyRequest().authenticated())
-            .addFilterBefore(jwtFilter,   UsernamePasswordAuthenticationFilter.class)
-            .addFilterAfter(tenantFilter, JwtAuthenticationFilter.class);
+            // Filter order: JWT auth → Shopify session-token auth → tenant GUC setter.
+            .addFilterBefore(jwtFilter,     UsernamePasswordAuthenticationFilter.class)
+            .addFilterAfter(shopifyFilter,  JwtAuthenticationFilter.class)
+            .addFilterAfter(tenantFilter,   ShopifySessionTokenFilter.class);
 
         return http.build();
     }
