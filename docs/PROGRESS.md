@@ -4,7 +4,54 @@
 
 ## Current state
 
-**386 backend + 47 frontend tests — all green, deterministic** — 2026-06-28.
+**387 backend + 47 frontend tests — all green, deterministic** — 2026-06-28.
+
+**Shopify App Bridge embedded shell + shopify.app.toml (2026-06-28):**
+
+Separate Vite entry point + `shopify.app.toml` for the embedded Shopify dashboard shell.
+
+*`shopify.app.toml` (repo root):*
+- `embedded = true`, `application_url = https://app.tracedtech.com/embedded`
+- `scopes` matches `application.yml` (`read_products,read_orders,read_fulfillments,read_customers`)
+- `redirect_urls` includes the OAuth callback
+- GDPR mandatory webhook subscriptions (customers/data_request, customers/redact, shop/redact)
+- `client_id = dev-client-id` placeholder — replace with Partner Dashboard API key before `shopify app deploy`
+
+*Vite dual-entry build (`frontend/vite.config.ts`):*
+- `rollupOptions.input: { main: index.html, embedded: embedded.html }` — two completely separate bundles
+- `main-*.js` — standalone SPA, UNCHANGED; App Bridge/Polaris NOT present (confirmed by bundle sizes)
+- `embedded-*.js` — App Bridge v3 + Polaris v12 + EmbeddedApp (454 KB vs 459 KB standalone; no cross-contamination)
+- Packages added: `@shopify/app-bridge@3.7.x`, `@shopify/app-bridge-react@3.7.x`, `@shopify/polaris@12.x`
+
+*`frontend/src/embedded/main.tsx`:*
+- `Provider` (App Bridge) wraps `AppProvider` (Polaris) — correct nesting order
+- `config = { apiKey: VITE_SHOPIFY_API_KEY, host: URLSearchParams('host'), forceRedirect: false }`
+- `host` is the base64-encoded shop origin Shopify passes as `?host=` on every load
+
+*`frontend/src/embedded/EmbeddedApp.tsx`:*
+- `useAuthenticatedFetch()` — App Bridge hook that auto-attaches session tokens as `Authorization: Bearer`
+- Makes ONE call to `GET /api/v1/embedded/stores/status` on mount
+- Shows stores list via Polaris `Page`, `Card`, `Badge`
+- Loading / error / data states — proves the round trip end-to-end
+
+*Routing (SpaController + SecurityConfig):*
+- `@GetMapping("/embedded")` exact-match → `forward:/embedded.html` (beats catch-all before it forwards to index.html)
+- `/embedded.html` (has `.`) falls through to `ResourceHttpRequestHandler` — no mapping needed
+- SecurityConfig `permitAll`: added `/embedded`, `/embedded.html` (shell is public; API calls authenticate via ShopifySessionTokenFilter)
+
+*Framing headers (nginx.conf):*
+- `location ^~ /embedded` block with own `add_header` — does NOT inherit server-level `X-Frame-Options: DENY`
+- `proxy_hide_header X-Frame-Options` strips Spring Security's DENY from the upstream response
+- `Content-Security-Policy: frame-ancestors https://admin.shopify.com https://*.myshopify.com;` — Shopify admin can frame; all other origins denied
+- Standalone paths: inherit server-level `X-Frame-Options: DENY` unchanged
+
+*Tests:* `SpaRoutingTest` +1 — `GET /embedded → forward:/embedded.html` (not `/index.html`). 387 backend tests, 47 frontend tests, all green.
+
+3 commits: `8efb416` (shopify.app.toml), `80e79f9` (embedded shell), `91a471d` (routing + framing).
+
+**Next:** Polaris dashboard UI — the shell proves the bridge; the full dashboard (inventory summary tiles, orders chart, exceptions list using the 4 EmbeddedController endpoints) is the next step.
+
+---
 
 **Shopify App Bridge embedded dashboard auth core (2026-06-28):**
 
