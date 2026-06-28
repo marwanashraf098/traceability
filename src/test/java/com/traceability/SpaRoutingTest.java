@@ -15,7 +15,6 @@ import org.springframework.test.web.servlet.MockMvc;
 
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.forwardedUrl;
-import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.redirectedUrlPattern;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 import org.junit.jupiter.api.Test;
 
@@ -53,20 +52,25 @@ class SpaRoutingTest {
            .andExpect(forwardedUrl("/index.html"));
     }
 
-    /** GET /?host=... (Shopify embedded load) → redirect to /embedded?host=... */
+    // Forward (not redirect): App Bridge CDN fires replaceState(location.href) on init.
+    // A redirect to /embedded would cause App Bridge to push 'app:/embedded' to the admin
+    // frame, changing the admin URL to ...apps/{handle}/embedded — which Shopify 404s.
+    // With a forward the browser URL stays at / so App Bridge pushes 'app:/' → no extra path.
+
+    /** GET /?host=... (Shopify embedded load) → forward to embedded.html, URL stays at /. */
     @Test
-    void rootWithHostParamRedirectsToEmbedded() throws Exception {
+    void rootWithHostParamForwardsToEmbeddedHtml() throws Exception {
         mvc.perform(get("/?host=YWRtaW4uc2hvcGlmeS5jb20v&shop=test.myshopify.com&embedded=1"))
-           .andExpect(status().is3xxRedirection())
-           .andExpect(redirectedUrlPattern("/embedded?*host=*"));
+           .andExpect(status().isOk())
+           .andExpect(forwardedUrl("/embedded.html"));
     }
 
-    /** GET /?shop=... without host (Shopify install flow) → redirect to /embedded?shop=... */
+    /** GET /?shop=... without host (Shopify install flow) → forward to embedded.html. */
     @Test
-    void rootWithShopParamRedirectsToEmbedded() throws Exception {
+    void rootWithShopParamForwardsToEmbeddedHtml() throws Exception {
         mvc.perform(get("/?shop=test.myshopify.com"))
-           .andExpect(status().is3xxRedirection())
-           .andExpect(redirectedUrlPattern("/embedded?*shop=*"));
+           .andExpect(status().isOk())
+           .andExpect(forwardedUrl("/embedded.html"));
     }
 
     /** /embedded must forward to embedded.html, NOT index.html. */

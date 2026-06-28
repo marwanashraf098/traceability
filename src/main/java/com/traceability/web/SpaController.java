@@ -1,6 +1,5 @@
 package com.traceability.web;
 
-import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.stereotype.Controller;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -36,20 +35,24 @@ public class SpaController {
 
     private static final String SEG = "[^.]*";
 
-    // Root route: redirect to the App Bridge shell when Shopify loads the embedded app.
+    // Root route: forward to the App Bridge shell when Shopify loads the embedded app.
     // Shopify sets application_url = https://app.tracedtech.com (root) and adds ?host=&shop=.
-    // We redirect (not forward) so the final URL is /embedded?... — the nginx location block
-    // for ^~ /embedded carries frame-ancestors CSP and strips X-Frame-Options, which is
-    // required for the iframe to load. A forward from / would inherit the server-level DENY.
-    // Preserves all query params so App Bridge's CDN script can read ?host= from the URL.
+    //
+    // MUST be a forward (not a redirect). The CDN App Bridge script fires replaceState on init,
+    // which sends navigate('app:{pathname}') to the parent admin frame. A redirect would move
+    // the browser to /embedded, App Bridge would then push 'app:/embedded' to the admin, and
+    // the admin URL would become ...apps/{handle}/embedded — a path Shopify admin does not
+    // recognise → Shopify's own 404. With a forward the URL stays at / (just query params),
+    // App Bridge pushes 'app:/' → admin URL stays at ...apps/{handle} (no extra segment).
+    //
+    // nginx's `location = /` block carries frame-ancestors CSP and strips X-Frame-Options: DENY
+    // so the admin iframe loads correctly (see nginx.conf).
     @GetMapping("/")
     public String root(
             @RequestParam(name = "host",  required = false) String host,
-            @RequestParam(name = "shop",  required = false) String shop,
-            HttpServletRequest request) {
+            @RequestParam(name = "shop",  required = false) String shop) {
         if (host != null || shop != null) {
-            String qs = request.getQueryString();
-            return "redirect:/embedded" + (qs != null ? "?" + qs : "");
+            return "forward:/embedded.html";
         }
         return "forward:/index.html";
     }
