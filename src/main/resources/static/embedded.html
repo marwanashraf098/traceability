@@ -4,8 +4,15 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Traced — Shopify</title>
-    <script type="module" crossorigin src="/assets/embedded-CUZ-W65b.js"></script>
-    <link rel="modulepreload" crossorigin href="/assets/client-D202bS6G.js">
+    <!-- Shopify App Bridge (CDN) — MUST be the first script.
+         Reads the shopify-api-key meta tag and establishes the postMessage
+         handshake with the Shopify admin parent frame before React mounts.
+         The meta tag content is substituted by Vite at build time from the
+         VITE_SHOPIFY_API_KEY environment variable. -->
+    <meta name="shopify-api-key" content="%VITE_SHOPIFY_API_KEY%" />
+    <script src="https://cdn.shopify.com/shopifycloud/app-bridge.js"></script>
+    <script type="module" crossorigin src="/assets/embedded-CStOYRrD.js"></script>
+    <link rel="modulepreload" crossorigin href="/assets/client-DlaJEBil.js">
     <link rel="stylesheet" crossorigin href="/assets/embedded-Cg-8NA1P.css">
   </head>
   <body>

@@ -1,6 +1,10 @@
-import { useState, useEffect } from 'react'
-import { useAuthenticatedFetch } from '@shopify/app-bridge-react'
+import { useState, useEffect, useCallback } from 'react'
 import { Page, Card, Text, Spinner, Badge, BlockStack, InlineStack } from '@shopify/polaris'
+
+// CDN App Bridge global — injected by app-bridge.js before this module runs.
+// shopify.idToken() returns a signed Shopify session JWT that our
+// ShopifySessionTokenFilter validates as Authorization: Bearer <token>.
+declare const shopify: { idToken(): Promise<string> }
 
 interface StoreStatus {
   shop_domain: string
@@ -10,19 +14,23 @@ interface StoreStatus {
 }
 
 export default function EmbeddedApp() {
-  const fetch = useAuthenticatedFetch()
   const [stores, setStores] = useState<StoreStatus[]>([])
   const [loadState, setLoadState] = useState<'loading' | 'ok' | 'error'>('loading')
 
+  const authenticatedFetch = useCallback(async (url: string) => {
+    const token = await shopify.idToken()
+    return fetch(url, { headers: { Authorization: `Bearer ${token}` } })
+  }, [])
+
   useEffect(() => {
-    fetch('/api/v1/embedded/stores/status')
+    authenticatedFetch('/api/v1/embedded/stores/status')
       .then(r => {
         if (!r.ok) throw new Error(`HTTP ${r.status}`)
         return r.json() as Promise<StoreStatus[]>
       })
       .then(data => { setStores(data); setLoadState('ok') })
       .catch(() => setLoadState('error'))
-  }, [fetch])
+  }, [authenticatedFetch])
 
   if (loadState === 'loading') {
     return (

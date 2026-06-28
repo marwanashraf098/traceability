@@ -4,6 +4,13 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Traced — Shopify</title>
+    <!-- Shopify App Bridge (CDN) — MUST be the first script.
+         Reads the shopify-api-key meta tag and establishes the postMessage
+         handshake with the Shopify admin parent frame before React mounts.
+         The meta tag content is substituted by Vite at build time from the
+         VITE_SHOPIFY_API_KEY environment variable. -->
+    <meta name="shopify-api-key" content="%VITE_SHOPIFY_API_KEY%" />
+    <script src="https://cdn.shopify.com/shopifycloud/app-bridge.js"></script>
   </head>
   <body>
     <div id="root"></div>
