@@ -85,6 +85,10 @@ public class SecurityConfig {
                     // SPA shell — browser must load the app before any login or API call.
                     // Data is protected at /api/** level; serving the shell is always public.
                     "/", "/index.html", "/assets/**", "/favicon.ico",
+                    // Embedded Shopify App Bridge shell — served in Shopify admin iframe.
+                    // The shell itself is public; API calls from the shell are authenticated
+                    // by ShopifySessionTokenFilter via Authorization: Bearer <session-token>.
+                    "/embedded", "/embedded.html",
                     // Public marketing + legal pages (Shopify review requires direct access).
                     // SpaController forwards these to /index.html; Spring Security evaluates
                     // the original path before forwarding, so they must be listed here.

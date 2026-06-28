@@ -16,6 +16,7 @@ import org.springframework.test.web.servlet.MockMvc;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.forwardedUrl;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+import org.junit.jupiter.api.Test;
 
 /**
  * Verifies SpaController routing in isolation (no DB, no Flyway).
@@ -41,6 +42,14 @@ class SpaRoutingTest {
         mvc.perform(get(path.trim()))
            .andExpect(status().isOk())
            .andExpect(forwardedUrl(expected.trim()));
+    }
+
+    /** /embedded must forward to embedded.html, NOT index.html. */
+    @Test
+    void embeddedRouteForwardsToEmbeddedHtml() throws Exception {
+        mvc.perform(get("/embedded"))
+           .andExpect(status().isOk())
+           .andExpect(forwardedUrl("/embedded.html"));
     }
 
     /**

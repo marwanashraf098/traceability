@@ -23,11 +23,22 @@ import org.springframework.web.bind.annotation.GetMapping;
  *
  * Real API controllers registered in RequestMappingHandlerMapping have higher
  * specificity and match first; this catch-all is only reached for unmatched routes.
+ *
+ * /embedded is served by a separate exact-match method that forwards to embedded.html
+ * (the Shopify App Bridge entry point). Exact-path mappings beat the pattern catch-all,
+ * so this intercepts /embedded before spa() can forward it to index.html.
+ * /embedded.html (with extension) is served directly by ResourceHttpRequestHandler.
  */
 @Controller
 public class SpaController {
 
     private static final String SEG = "[^.]*";
+
+    // Exact match beats the pattern catch-all — /embedded → embedded.html (App Bridge shell).
+    @GetMapping("/embedded")
+    public String embedded() {
+        return "forward:/embedded.html";
+    }
 
     @GetMapping({
         "/{a:" + SEG + "}",
