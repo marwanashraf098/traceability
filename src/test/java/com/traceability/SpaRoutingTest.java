@@ -3,6 +3,7 @@ package com.traceability;
 import com.traceability.identity.JwtService;
 import com.traceability.identity.SecurityConfig;
 import com.traceability.web.SpaController;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
@@ -25,7 +26,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 class SpaRoutingTest {
 
     @Autowired MockMvc mvc;
-    @MockBean JwtService jwtService;
+    @MockBean JwtService    jwtService;
+    @MockBean JdbcTemplate  jdbcTemplate;   // required by SecurityConfig.filterChain()
 
     /** Public SPA routes listed in SecurityConfig permitAll must forward to index.html. */
     @ParameterizedTest(name = "GET {0} -> forward {1}")
