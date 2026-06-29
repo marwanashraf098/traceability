@@ -103,6 +103,24 @@ public class SecurityConfig {
                     "/privacy", "/terms",
                     // App SPA routes that must be reachable on direct navigation / refresh.
                     "/login", "/signup",
+                    // Authenticated app routes — shell serving only; /api/** stays protected.
+                    // Spring Security evaluates before SpaController runs, so without these
+                    // a browser refresh on /overview, /orders/uuid, etc. returns 401 before
+                    // SpaController can forward to index.html. DispatcherType.FORWARD above
+                    // handles the onward forward:/index.html dispatch.
+                    "/overview",
+                    "/orders", "/orders/*",
+                    "/catalog",
+                    "/receiving",
+                    "/fulfill",
+                    "/lookup",
+                    "/returns",
+                    "/exceptions",
+                    "/inventory",
+                    "/connections",
+                    "/onboarding",
+                    "/settings",
+                    "/users",
                     // Auth endpoints
                     "/api/v1/auth/signup",
                     "/api/v1/auth/login",

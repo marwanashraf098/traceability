@@ -46,6 +46,42 @@ class SpaRoutingTest {
            .andExpect(forwardedUrl(expected.trim()));
     }
 
+    /**
+     * Authenticated app routes must serve the SPA shell (forward to index.html) on
+     * browser refresh with NO Authorization header — the page is public, data is not.
+     * Regression guard: these routes were missing from permitAll and returned 401 before
+     * SpaController could run.
+     */
+    @ParameterizedTest(name = "GET {0} unauthenticated -> 200 shell (not 401)")
+    @ValueSource(strings = {
+        "/overview",
+        "/orders",
+        "/orders/a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+        "/catalog",
+        "/receiving",
+        "/fulfill",
+        "/lookup",
+        "/returns",
+        "/exceptions",
+        "/inventory",
+        "/connections",
+        "/onboarding",
+        "/settings",
+        "/users",
+    })
+    void authenticatedAppRoutesBrowserRefreshReturnsShell(String path) throws Exception {
+        mvc.perform(get(path))
+           .andExpect(status().isOk())
+           .andExpect(forwardedUrl("/index.html"));
+    }
+
+    /** API data routes must remain protected: no auth → 401. Shell-serving fix must NOT open /api/**. */
+    @Test
+    void apiDataRouteWithoutAuthIsUnauthorized() throws Exception {
+        mvc.perform(get("/api/v1/orders"))
+           .andExpect(status().isUnauthorized());
+    }
+
     /** GET / with no Shopify params → standalone SPA (forward to index.html). */
     @Test
     void rootWithNoParamsForwardsToIndexHtml() throws Exception {
