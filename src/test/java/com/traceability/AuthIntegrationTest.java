@@ -1,9 +1,9 @@
 package com.traceability;
 
+import com.traceability.identity.model.AccessTokenResponse;
 import com.traceability.identity.model.LoginRequest;
 import com.traceability.identity.model.PinRequest;
 import com.traceability.identity.model.SignupRequest;
-import com.traceability.identity.model.TokenResponse;
 import org.junit.jupiter.api.*;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -63,6 +63,7 @@ class AuthIntegrationTest {
     // Shared across ordered tests
     private static String accessTokenA;
     private static String accessTokenB;
+    private static String refreshCookieB; // used by refreshTokenRotates
     private static UUID   tenantAId;
     private static UUID   tenantBId;
 
@@ -72,9 +73,8 @@ class AuthIntegrationTest {
     @Test
     @Order(1)
     void signupCreatesTokenAndGucIsSetOnProbeRequest() {
-        TokenResponse tokens = signup("Acme Corp", "alice@acme.com", "password123");
+        AccessTokenResponse tokens = signup("Acme Corp", "alice@acme.com", "password123");
         assertThat(tokens.accessToken()).isNotBlank();
-        assertThat(tokens.refreshToken()).isNotBlank();
         accessTokenA = tokens.accessToken();
 
         Map<String, Object> probe = probe(accessTokenA);
@@ -99,7 +99,7 @@ class AuthIntegrationTest {
     @Test
     @Order(2)
     void loginReturnsTokensWithoutGucPreset() {
-        TokenResponse tokens = login("alice@acme.com", "password123");
+        AccessTokenResponse tokens = login("alice@acme.com", "password123");
         assertThat(tokens.accessToken()).isNotBlank();
         Map<String, Object> probe = probe(tokens.accessToken());
         assertThat((String) probe.get("guc")).isEqualTo(tenantAId.toString());
@@ -111,7 +111,7 @@ class AuthIntegrationTest {
     @Test
     @Order(3)
     void crossTenantIsolationViaAppUserConnection() throws Exception {
-        TokenResponse tokensB = signup("Beta LLC", "bob@beta.com", "password456");
+        AccessTokenResponse tokensB = signup("Beta LLC", "bob@beta.com", "password456");
         accessTokenB = tokensB.accessToken();
         Map<String, Object> probeB = probe(accessTokenB);
         tenantBId = UUID.fromString((String) probeB.get("guc"));
@@ -207,25 +207,35 @@ class AuthIntegrationTest {
     }
 
     // -----------------------------------------------------------------------
-    // Refresh token rotation: old token rejected on second use
+    // Refresh token rotation via cookie: old cookie rejected on second use
     // -----------------------------------------------------------------------
     @Test
     @Order(6)
     void refreshTokenRotates() {
-        TokenResponse initial = login("bob@beta.com", "password456");
+        // Login captures the Set-Cookie header that the refresh endpoint will later consume.
+        ResponseEntity<AccessTokenResponse> loginResp = rest.postForEntity(
+                base() + "/api/v1/auth/login",
+                new LoginRequest("bob@beta.com", "password456"),
+                AccessTokenResponse.class);
+        assertThat(loginResp.getStatusCode()).isEqualTo(HttpStatus.OK);
+        String setCookie = loginResp.getHeaders().getFirst(HttpHeaders.SET_COOKIE);
+        assertThat(setCookie).isNotNull().contains("traced_refresh=");
+        // Extract the raw cookie value (before the first ';')
+        String rawCookie = setCookie.split(";")[0]; // "traced_refresh=<value>"
 
+        // Use the cookie on the refresh endpoint.
         HttpHeaders h = new HttpHeaders();
-        h.setContentType(MediaType.TEXT_PLAIN);
-        HttpEntity<String> req = new HttpEntity<>(initial.refreshToken(), h);
-
-        ResponseEntity<TokenResponse> resp = rest.postForEntity(
-                base() + "/api/v1/auth/refresh", req, TokenResponse.class);
+        h.add(HttpHeaders.COOKIE, rawCookie);
+        ResponseEntity<AccessTokenResponse> resp = rest.exchange(
+                base() + "/api/v1/auth/refresh", HttpMethod.POST,
+                new HttpEntity<>(null, h), AccessTokenResponse.class);
         assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.OK);
         assertThat(resp.getBody().accessToken()).isNotBlank();
 
-        // Second use of same refresh token must be rejected
-        ResponseEntity<String> reuse = rest.postForEntity(
-                base() + "/api/v1/auth/refresh", req, String.class);
+        // The rotated response has a new Set-Cookie; verify the OLD cookie is now rejected.
+        ResponseEntity<String> reuse = rest.exchange(
+                base() + "/api/v1/auth/refresh", HttpMethod.POST,
+                new HttpEntity<>(null, h), String.class);
         assertThat(reuse.getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
     }
 
@@ -313,17 +323,17 @@ class AuthIntegrationTest {
     // helpers
     // -----------------------------------------------------------------------
 
-    private TokenResponse signup(String tenantName, String email, String password) {
+    private AccessTokenResponse signup(String tenantName, String email, String password) {
         SignupRequest body = new SignupRequest(tenantName, email.split("@")[0], email, password, true);
-        ResponseEntity<TokenResponse> resp = rest.postForEntity(
-                base() + "/api/v1/auth/signup", body, TokenResponse.class);
+        ResponseEntity<AccessTokenResponse> resp = rest.postForEntity(
+                base() + "/api/v1/auth/signup", body, AccessTokenResponse.class);
         assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.CREATED);
         return resp.getBody();
     }
 
-    private TokenResponse login(String email, String password) {
-        ResponseEntity<TokenResponse> resp = rest.postForEntity(
-                base() + "/api/v1/auth/login", new LoginRequest(email, password), TokenResponse.class);
+    private AccessTokenResponse login(String email, String password) {
+        ResponseEntity<AccessTokenResponse> resp = rest.postForEntity(
+                base() + "/api/v1/auth/login", new LoginRequest(email, password), AccessTokenResponse.class);
         assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.OK);
         return resp.getBody();
     }

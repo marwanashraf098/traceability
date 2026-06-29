@@ -165,9 +165,26 @@ class ShopifyMagicLinkTest {
 
         assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.FOUND);
         String location = resp.getHeaders().getFirst("Location");
-        assertThat(location).isNotNull().contains("#access_token=");
+        // Redirect must go to the app root with NO tokens in the URL or fragment.
+        assertThat(location).isNotNull().doesNotContain("access_token").doesNotContain("refresh_token");
 
-        String accessToken = extractFragment(location, "access_token");
+        // Refresh token delivered as httpOnly cookie — never in the URL.
+        String setCookie = resp.getHeaders().getFirst(HttpHeaders.SET_COOKIE);
+        assertThat(setCookie).isNotNull().contains("traced_refresh=");
+        assertThat(setCookie).containsIgnoringCase("HttpOnly");
+        assertThat(setCookie).containsIgnoringCase("Path=/api/v1/auth/refresh");
+
+        // Use the cookie to call refresh and obtain an access token — proving the cookie is valid.
+        String cookieVal = setCookie.split(";")[0];
+        HttpHeaders refreshHeaders = new HttpHeaders();
+        refreshHeaders.add(HttpHeaders.COOKIE, cookieVal);
+        ResponseEntity<com.traceability.identity.model.AccessTokenResponse> refreshResp =
+                noRedirectRest.exchange(
+                    base() + "/api/v1/auth/refresh", HttpMethod.POST,
+                    new HttpEntity<>(null, refreshHeaders),
+                    com.traceability.identity.model.AccessTokenResponse.class);
+        assertThat(refreshResp.getStatusCode()).isEqualTo(HttpStatus.OK);
+        String accessToken = refreshResp.getBody().accessToken();
         assertThat(accessToken).isNotBlank();
 
         // JWT must encode the correct user and tenant
@@ -175,10 +192,6 @@ class ShopifyMagicLinkTest {
         assertThat(claims.getSubject()).isEqualTo(ownerIdA.toString());
         assertThat(claims.getClaim("tenant")).isEqualTo(tenantIdA.toString());
         assertThat(claims.getClaim("role")).isEqualTo("owner");
-
-        // Refresh token must be in the fragment too
-        String refreshToken = extractFragment(location, "refresh_token");
-        assertThat(refreshToken).isNotBlank();
     }
 
     // -----------------------------------------------------------------------
@@ -327,8 +340,17 @@ class ShopifyMagicLinkTest {
         ResponseEntity<Void> resp = consumeToken(rawToken);
         assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.FOUND);
 
-        String location = resp.getHeaders().getFirst("Location");
-        String accessToken = extractFragment(location, "access_token");
+        // Extract cookie and get access token via refresh
+        String cookieVal = resp.getHeaders().getFirst(HttpHeaders.SET_COOKIE).split(";")[0];
+        HttpHeaders h = new HttpHeaders();
+        h.add(HttpHeaders.COOKIE, cookieVal);
+        ResponseEntity<com.traceability.identity.model.AccessTokenResponse> refreshResp =
+                noRedirectRest.exchange(
+                    base() + "/api/v1/auth/refresh", HttpMethod.POST,
+                    new HttpEntity<>(null, h),
+                    com.traceability.identity.model.AccessTokenResponse.class);
+        assertThat(refreshResp.getStatusCode()).isEqualTo(HttpStatus.OK);
+        String accessToken = refreshResp.getBody().accessToken();
 
         var claims = jwtService.verify(accessToken);
 
