@@ -4,7 +4,47 @@
 
 ## Current state
 
-**387 backend + 47 frontend tests — all green, deterministic** — 2026-06-28.
+**390 backend + 47 frontend tests — all green, deterministic** — 2026-06-29.
+
+**Embedded Polaris dashboard (2026-06-29):**
+
+Full read-only dashboard in `frontend/src/embedded/EmbeddedApp.tsx`. Replaces the placeholder that showed only a stores list.
+
+*Five sections:*
+1. **Connection status** — `GET /api/v1/embedded/stores/status`. Green "Connected" badge when `status='connected'`; Banner (`tone="warning"` for `needs_reauth`, `tone="info"` for disconnected/empty) with "Open Traced to connect →" deep-link.
+2. **Inventory summary** — `GET /api/v1/embedded/inventory/summary`. GroupA (6 in-flight tiles: available/reserved/packed/awaiting_pickup/with_courier/pending_inspection) in responsive `InlineGrid`; GroupB (3 terminal 30d tiles: delivered/damaged/lost) below a Divider. `MetricTile` sub-component (label + large count).
+3. **Order activity** — `GET /api/v1/embedded/orders/daily-counts?days=14`. Last 14 days as a CSS bar chart (Shopify green `#008060` bars). No charting library. Empty message when all zeros.
+4. **Open exceptions** — `GET /api/v1/embedded/exceptions?limit=10`. Badge count + CRITICAL→LOW rows; each row: severity Badge + type label + subjectKey + "View" deep-link to `https://app.tracedtech.com/exceptions`. "View all N →" footer when total exceeds the limit. Empty message when clean.
+5. **Footer CTA** — read-only notice + "Open Traced ↗" `<a target="_blank">` that breaks out of the Shopify iframe.
+
+*Technical:* Four parallel fetch calls in one `useEffect`; each section has independent `{ status: 'loading'|'ok'|'err' }` state. CSS bar chart uses inline `style` width % — no extra dependency. `EmbeddedReadOnlyGuardTest` still passes (no backend changes). Build clean: `embedded-Bocijd-u.js` (272 KB).
+
+*Commit:* `a18614c`.
+
+*Next:* Remove `ShopifyEntryDiagFilter` (temporary diagnostic, still in codebase) after install flow confirmed end-to-end.
+
+---
+
+**Shopify reinstall OAuth routing fix (2026-06-29):**
+
+Root cause of the "Shopify 404 after uninstall + reinstall" bug:
+
+`SpaController.root()` was treating `?shop=` without `?host=` as an embedded open and forwarding to `embedded.html`. On reinstall, Shopify sends the merchant to `https://app.tracedtech.com?shop=X&hmac=...×tamp=...` — no `host=` (the app is not yet in an iframe; OAuth hasn't run). App Bridge CDN loaded in a top-level browser context, found no parent admin frame, `shopify.idToken()` hung, OAuth never ran, and when the merchant went back to admin to open the app Shopify returned 404 (app not installed).
+
+*Fix 1 — `SpaController.root()`:*
+- `host=` present → forward to `embedded.html` (genuine embedded open). UNCHANGED.
+- `shop=` present, `host=` absent → redirect to `/auth/shopify/install?{qs}` (install/OAuth initiation — HMAC and shop params passed through unchanged).
+- Neither → forward to `index.html` (standalone landing page). UNCHANGED.
+
+*Fix 2 — `ShopifyOAuthController.callback()`:*
+- Shopify includes `host=` in callback params for embedded apps.
+- LINKED_NEW/LINKED_EXISTING: if `host=` is present, redirect to `/?shop=X&host=Y` (not bare app root). CDN App Bridge detects top-level context → navigates to Shopify admin → merchant lands in embedded app. PROVISIONED and REJECTED_CROSS_TENANT unchanged.
+
+*Test:* `rootWithShopParamOnlyRedirectsToInstall` asserts 3xx + redirect to `/auth/shopify/install?...`. 390/390 green.
+
+*Commit:* `190511a`.
+
+---
 
 **Shopify App Bridge embedded shell + shopify.app.toml (2026-06-28):**
 
