@@ -3,7 +3,15 @@ package com.traceability.web;
 import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.stereotype.Controller;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestMethod;
 import org.springframework.web.bind.annotation.RequestParam;
+
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
+import java.util.Map;
+import java.util.stream.Collectors;
 
 /**
  * SPA catch-all: forward unmatched GET requests to index.html so React
@@ -36,36 +44,40 @@ public class SpaController {
 
     private static final String SEG = "[^.]*";
 
-    // Root route — three distinct cases, distinguished by which Shopify params are present:
+    // Root route — three distinct cases, distinguished by which Shopify params are present.
+    // Accepts both GET and POST: Shopify sends a POST (form submission) when initiating
+    // install/reinstall from the Partner Dashboard or admin, with shop/hmac/timestamp in
+    // the request body.  GET is used for embedded iframe opens.
     //
     // 1. host= present  → EMBEDDED OPEN.
-    //    Shopify admin iframe loads https://app.tracedtech.com?shop=X&host=Y&embedded=1.
-    //    Forward (not redirect) to embedded.html so the browser URL stays at / — CDN App
-    //    Bridge fires replaceState('/') which keeps the admin URL at ...apps/{handle} (no
-    //    extra path segment that would cause Shopify to 404).
+    //    GET: forward to embedded.html (URL stays at / — App Bridge CDN reads host from
+    //    window.location.search and establishes the parent-frame handshake).
+    //    POST: redirect to GET /? with the same params (Post/Redirect/Get) so App Bridge
+    //    can read host from window.location.search (POST body is invisible to JS).
     //
     // 2. shop= present, host= absent  → INSTALL / OAUTH INITIATION.
-    //    Shopify sends merchant to application_url with ?shop=X&hmac=...×tamp=... but NO
-    //    host= (the app is not yet in an iframe — OAuth hasn't completed).  Forwarding to
-    //    embedded.html here is wrong: App Bridge would load in a top-level browser context,
-    //    fail to communicate with any parent frame, and OAuth would never run.  The merchant
-    //    would then open the app in admin and get Shopify's own 404 (app not installed).
-    //    Redirect to /auth/shopify/install preserving the full query string so the HMAC and
-    //    shop params reach the install handler.
+    //    GET or POST: redirect to /auth/shopify/install with all params in the query
+    //    string.  getParameterMap() covers both URL params and POST form body.
     //
     // 3. Neither → STANDALONE LANDING PAGE.  Direct browser hit, marketing pages, etc.
-    @GetMapping("/")
+    @RequestMapping(value = "/", method = {RequestMethod.GET, RequestMethod.POST})
     public String root(
             @RequestParam(name = "host",  required = false) String host,
             @RequestParam(name = "shop",  required = false) String shop,
             HttpServletRequest request) {
+
         if (host != null) {
+            if ("POST".equalsIgnoreCase(request.getMethod())) {
+                return "redirect:/?" + paramsToQueryString(request.getParameterMap());
+            }
             return "forward:/embedded.html";
         }
+
         if (shop != null) {
-            String qs = request.getQueryString();
-            return "redirect:/auth/shopify/install" + (qs != null ? "?" + qs : "");
+            String qs = paramsToQueryString(request.getParameterMap());
+            return "redirect:/auth/shopify/install" + (qs.isEmpty() ? "" : "?" + qs);
         }
+
         return "forward:/index.html";
     }
 
@@ -82,5 +94,16 @@ public class SpaController {
     })
     public String spa() {
         return "forward:/index.html";
+    }
+
+    // Rebuilds a query string from the full parameter map (URL params + POST form body).
+    // All Shopify OAuth params (shop, hmac, timestamp, host, state) are alphanumeric or
+    // contain only URL-safe chars; URLEncoder is a no-op for them but is correct by default.
+    private static String paramsToQueryString(Map<String, String[]> params) {
+        return params.entrySet().stream()
+            .flatMap(e -> Arrays.stream(e.getValue())
+                .map(v -> URLEncoder.encode(e.getKey(), StandardCharsets.UTF_8)
+                        + "=" + URLEncoder.encode(v, StandardCharsets.UTF_8)))
+            .collect(Collectors.joining("&"));
     }
 }

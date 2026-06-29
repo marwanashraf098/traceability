@@ -14,6 +14,7 @@ import org.springframework.context.annotation.Import;
 import org.springframework.test.web.servlet.MockMvc;
 
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.forwardedUrl;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.redirectedUrl;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -76,6 +77,27 @@ class SpaRoutingTest {
     @Test
     void rootWithShopParamOnlyRedirectsToInstall() throws Exception {
         mvc.perform(get("/?shop=test.myshopify.com&hmac=abc&timestamp=123"))
+           .andExpect(status().is3xxRedirection())
+           .andExpect(redirectedUrl("/auth/shopify/install?shop=test.myshopify.com&hmac=abc&timestamp=123"));
+    }
+
+    // Shopify sends a POST (form submission) to the app URL when initiating install/reinstall
+    // from the Partner Dashboard or admin.  Without a POST handler Spring throws
+    // HttpRequestMethodNotSupportedException → 405, breaking dashboard-initiated installs.
+    // CSRF is globally disabled in SecurityConfig, so Shopify's unauthenticated POST is allowed.
+
+    /** POST /?shop=...&host=... (Shopify admin embedded open via form POST) → PRG redirect to GET /. */
+    @Test
+    void rootPostWithHostRedirectsToGet() throws Exception {
+        mvc.perform(post("/?shop=test.myshopify.com&host=abc123&embedded=1"))
+           .andExpect(status().is3xxRedirection())
+           .andExpect(redirectedUrl("/?shop=test.myshopify.com&host=abc123&embedded=1"));
+    }
+
+    /** POST /?shop=... without host (Shopify install POST) → redirect to /auth/shopify/install. */
+    @Test
+    void rootPostWithShopOnlyRedirectsToInstall() throws Exception {
+        mvc.perform(post("/?shop=test.myshopify.com&hmac=abc&timestamp=123"))
            .andExpect(status().is3xxRedirection())
            .andExpect(redirectedUrl("/auth/shopify/install?shop=test.myshopify.com&hmac=abc&timestamp=123"));
     }
