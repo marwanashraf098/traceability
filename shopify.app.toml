@@ -1,7 +1,7 @@
 # Learn more about configuring your app at https://shopify.dev/docs/apps/tools/cli/configuration
 
 client_id = "dbed84aaa76b5df84ff40c19fb112dfb"
-application_url = "https://app.tracedtech.com/"
+application_url = "https://app.tracedtech.com"
 embedded = true
 name = "Trace"
 
