@@ -329,6 +329,30 @@ class ShopifyTokenExchangeTest {
         assertThat(r.getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
     }
 
+    // ── TE12: connected + pending → exchange → jobs enqueued (stuck-pending regression) ──
+
+    @Test @Order(12)
+    void te12_connectedPending_exchange_jobsEnqueued() throws Exception {
+        // Regression guard for the "stuck pending" bug:
+        // A store left in connected/pending (job was enqueued but never ran — JobRunr was
+        // down, or job crashed before updating import_status) must be treated as needing
+        // re-enqueue, not silently skipped. Previously 'pending' was excluded from the
+        // shouldEnqueue condition, so every token-exchange returned 204 but never fired jobs.
+        setStoreState(storeA, "connected", "pending", null);
+        when(shopifyGateway.exchangeSessionToken(eq(SHOP_A), any()))
+                .thenReturn(freshTokenResponse());
+
+        ResponseEntity<String> r = post("/api/v1/embedded/token-exchange", tokenA());
+
+        assertThat(r.getStatusCode()).isEqualTo(HttpStatus.NO_CONTENT);
+        verify(shopifyGateway).exchangeSessionToken(eq(SHOP_A), any());
+        // import_status stays 'pending' (CASE ELSE — connected/pending stays pending in SQL);
+        // the enqueued job will change it to 'importing' → 'completed'/'failed' when it runs.
+        Map<String, Object> row = getStoreRow(storeA);
+        // access_token_expires_at must be set (exchange ran and updated the token)
+        assertThat(row.get("access_token_expires_at")).isNotNull();
+    }
+
     // ── TE11: Unknown shop → 401 + NOT_PROVISIONED body ─────────────────────────
 
     @Test @Order(11)

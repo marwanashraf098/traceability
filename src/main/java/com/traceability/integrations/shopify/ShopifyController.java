@@ -19,21 +19,24 @@ import java.util.UUID;
 @RequestMapping("/api/v1/shopify")
 public class ShopifyController {
 
-    private final ShopifySyncService syncService;
-    private final ShopifyImportJob   importJob;
-    private final JobScheduler       jobScheduler;
-    private final JdbcTemplate       jdbc;
-    private final ObjectMapper       mapper;
-    private final TransactionTemplate tx;
+    private final ShopifySyncService        syncService;
+    private final ShopifyImportJob          importJob;
+    private final RegisterShopifyWebhooksJob webhooksJob;
+    private final JobScheduler              jobScheduler;
+    private final JdbcTemplate              jdbc;
+    private final ObjectMapper              mapper;
+    private final TransactionTemplate       tx;
 
     public ShopifyController(ShopifySyncService syncService,
                               ShopifyImportJob importJob,
+                              RegisterShopifyWebhooksJob webhooksJob,
                               JobScheduler jobScheduler,
                               JdbcTemplate jdbc,
                               ObjectMapper mapper,
                               PlatformTransactionManager txm) {
         this.syncService   = syncService;
         this.importJob     = importJob;
+        this.webhooksJob   = webhooksJob;
         this.jobScheduler  = jobScheduler;
         this.jdbc          = jdbc;
         this.mapper        = mapper;
@@ -78,6 +81,20 @@ public class ShopifyController {
             @PathVariable UUID storeId,
             @AuthenticationPrincipal CustomUserDetails principal) {
         importJob.run(storeId, principal.tenantId());
+        return ResponseEntity.ok().build();
+    }
+
+    /**
+     * Registers Shopify webhooks synchronously for an already-connected store.
+     * Use this after a needs_reauth recovery where webhooks were dropped — avoids
+     * requiring an uninstall/reinstall to re-register order sync topics.
+     */
+    @PostMapping("/stores/{storeId}/register-webhooks")
+    @PreAuthorize("hasRole('OWNER')")
+    public ResponseEntity<Void> registerWebhooks(
+            @PathVariable UUID storeId,
+            @AuthenticationPrincipal CustomUserDetails principal) {
+        webhooksJob.run(storeId, principal.tenantId());
         return ResponseEntity.ok().build();
     }
 

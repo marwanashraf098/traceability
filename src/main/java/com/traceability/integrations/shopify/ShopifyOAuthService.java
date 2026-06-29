@@ -532,9 +532,17 @@ public class ShopifyOAuthService {
         UUID storeId = applyExchangedToken(tenantId, shopDomain, tokens);
 
         // Step 5: conditional job enqueue
+        // 'pending' is included because it means "job was enqueued but never ran" —
+        // JobRunr may not have been running when the prior enqueue happened, or the job
+        // crashed before updating import_status. Excluding pending caused a permanent
+        // stuck state: every exchange returned 204 success but never re-enqueued.
+        // Both jobs are idempotent (webhooks: Shopify rejects duplicate topics silently;
+        // import: ON CONFLICT DO UPDATE throughout), so duplicate enqueues are safe.
         boolean shouldEnqueue = "needs_reauth".equals(snap.status())
                 || ("connected".equals(snap.status())
-                    && ("idle".equals(snap.importStatus()) || "failed".equals(snap.importStatus())));
+                    && ("idle".equals(snap.importStatus())
+                        || "failed".equals(snap.importStatus())
+                        || "pending".equals(snap.importStatus())));
         if (shouldEnqueue && storeId != null) {
             enqueueImport(storeId, tenantId);
             log.info("Token exchange: enqueued import+webhooks for shop={} tenant={}", shopDomain, tenantId);
