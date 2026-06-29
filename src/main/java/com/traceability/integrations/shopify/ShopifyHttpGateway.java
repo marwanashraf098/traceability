@@ -271,11 +271,15 @@ class ShopifyHttpGateway implements ShopifyGateway {
                 .uri(url)
                 .header("Content-Type", "application/json")
                 .body(Map.of(
-                    "client_id",          clientId,
-                    "client_secret",      clientSecret,
-                    "grant_type",         "urn:ietf:params:oauth:grant-type:token-exchange",
-                    "subject_token",      sessionToken,
-                    "subject_token_type", "urn:ietf:params:oauth:token-type:id_token"))
+                    "client_id",            clientId,
+                    "client_secret",        clientSecret,
+                    "grant_type",           "urn:ietf:params:oauth:grant-type:token-exchange",
+                    "subject_token",        sessionToken,
+                    "subject_token_type",   "urn:ietf:params:oauth:token-type:id_token",
+                    // Request an expiring offline token (with refresh_token) — NOT the permanent
+                    // custom-app token that Shopify returns by default for unauthenticated exchanges.
+                    // Shopify now rejects permanent tokens (403) for all Admin API calls.
+                    "requested_token_type", "urn:shopify:params:oauth:token-type:offline-access-token"))
                 .retrieve()
                 .body(JsonNode.class);
             if (resp == null || !resp.has("access_token")) {
@@ -342,15 +346,32 @@ class ShopifyHttpGateway implements ShopifyGateway {
         ObjectNode body = mapper.createObjectNode().put("query", query).set("variables", variables);
 
         for (int attempt = 0; attempt <= MAX_THROTTLE_RETRIES; attempt++) {
-            JsonNode response = Retry.decorateSupplier(retry, () ->
-                restClient.post()
-                    .uri(url)
-                    .header("X-Shopify-Access-Token", token)
-                    .header("Content-Type", "application/json")
-                    .body(body)
-                    .retrieve()
-                    .body(JsonNode.class)
-            ).get();
+            // HttpClientErrorException (4xx) and HttpServerErrorException (5xx) are NOT in
+            // Resilience4j retryExceptions, so they propagate from .get() on the first attempt.
+            // Translate them to ShopifyException/ShopifyTransientException here so callers
+            // always receive a typed Shopify exception instead of a raw Spring HTTP exception.
+            // Without this translation, 4xx leaks through registerWebhook's catch(ShopifyException)
+            // and reaches JobRunr as an unhandled exception, triggering the retry storm.
+            JsonNode response;
+            try {
+                response = Retry.decorateSupplier(retry, () ->
+                    restClient.post()
+                        .uri(url)
+                        .header("X-Shopify-Access-Token", token)
+                        .header("Content-Type", "application/json")
+                        .body(body)
+                        .retrieve()
+                        .body(JsonNode.class)
+                ).get();
+            } catch (HttpClientErrorException e) {
+                throw new ShopifyException(
+                        "Shopify GraphQL HTTP " + e.getStatusCode().value()
+                        + " for " + shopDomain + ": " + e.getResponseBodyAsString(), e);
+            } catch (HttpServerErrorException e) {
+                throw new ShopifyTransientException(
+                        "Shopify GraphQL HTTP " + e.getStatusCode().value()
+                        + " for " + shopDomain, e);
+            }
 
             if (response == null) throw new ShopifyException("Shopify GraphQL returned null response");
 
