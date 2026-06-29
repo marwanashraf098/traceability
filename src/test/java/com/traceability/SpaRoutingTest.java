@@ -86,15 +86,46 @@ class SpaRoutingTest {
     // HttpRequestMethodNotSupportedException → 405, breaking dashboard-initiated installs.
     // CSRF is globally disabled in SecurityConfig, so Shopify's unauthenticated POST is allowed.
 
-    /** POST /?shop=...&host=... (Shopify admin embedded open via form POST) → PRG redirect to GET /. */
+    /** POST /?shop=...&host=... with params in URL (our curl test) → PRG redirect to GET /. */
     @Test
-    void rootPostWithHostRedirectsToGet() throws Exception {
+    void rootPostWithHostUrlParamsRedirectsToGet() throws Exception {
         mvc.perform(post("/?shop=test.myshopify.com&host=abc123&embedded=1"))
            .andExpect(status().is3xxRedirection())
            .andExpect(redirectedUrl("/?shop=test.myshopify.com&host=abc123&embedded=1"));
     }
 
-    /** POST /?shop=... without host (Shopify install POST) → redirect to /auth/shopify/install. */
+    // These two tests reproduce the REAL Shopify request: form body, not URL params, plus
+    // Origin header from the merchant browser (admin.shopify.com or *.myshopify.com).
+    // Before the CORS fix the CorsFilter rejected both with 403 — the controller was never reached.
+
+    /** POST / form body + Shopify Origin (admin.shopify.com) → PRG redirect to GET /. */
+    @Test
+    void rootPostWithHostFormBodyAndShopifyOriginRedirectsToGet() throws Exception {
+        mvc.perform(post("/")
+                .contentType(org.springframework.http.MediaType.APPLICATION_FORM_URLENCODED)
+                .content("shop=test.myshopify.com&host=abc123&embedded=1")
+                .header("Origin", "https://admin.shopify.com"))
+           .andExpect(status().is3xxRedirection());
+    }
+
+    /** POST / form body + myshopify.com Origin (legacy per-store admin) → redirect to install. */
+    @Test
+    void rootPostInstallFormBodyMyshopifyOriginRedirectsToInstall() throws Exception {
+        mvc.perform(post("/")
+                .contentType(org.springframework.http.MediaType.APPLICATION_FORM_URLENCODED)
+                .content("shop=test.myshopify.com&hmac=abc&timestamp=123")
+                .header("Origin", "https://test.myshopify.com"))
+           .andExpect(status().is3xxRedirection())
+           .andExpect(result -> {
+               String loc = result.getResponse().getHeader("Location");
+               if (loc == null || !loc.contains("/auth/shopify/install"))
+                   throw new AssertionError("Expected redirect to /auth/shopify/install, got: " + loc);
+               if (!loc.contains("shop=test.myshopify.com"))
+                   throw new AssertionError("shop param missing from redirect: " + loc);
+           });
+    }
+
+    /** POST /?shop=... without host with URL params (Shopify install POST) → redirect to /auth/shopify/install. */
     @Test
     void rootPostWithShopOnlyRedirectsToInstall() throws Exception {
         mvc.perform(post("/?shop=test.myshopify.com&hmac=abc&timestamp=123"))

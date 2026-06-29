@@ -23,6 +23,7 @@ import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.cors.CorsConfigurationSource;
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 
+import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -44,9 +45,16 @@ import java.util.List;
 public class SecurityConfig {
 
     private final JwtService jwtService;
+    // Resolved at startup from the CORS_ALLOWED_ORIGINS env var.
+    // The old corsSource() passed the literal "${CORS_ALLOWED_ORIGINS:}" string directly to
+    // setAllowedOriginPatterns() — Spring @Value is not evaluated inside List.of() literals,
+    // so the unresolved placeholder was used as a pattern that never matched any origin.
+    private final String corsAllowedOrigins;
 
-    public SecurityConfig(JwtService jwtService) {
-        this.jwtService = jwtService;
+    public SecurityConfig(JwtService jwtService,
+                          @Value("${CORS_ALLOWED_ORIGINS:}") String corsAllowedOrigins) {
+        this.jwtService         = jwtService;
+        this.corsAllowedOrigins = corsAllowedOrigins;
     }
 
     @Bean
@@ -133,15 +141,30 @@ public class SecurityConfig {
 
     @Bean
     public CorsConfigurationSource corsSource() {
-        CorsConfiguration cfg = new CorsConfiguration();
-        // Dev: Vite default port. Production origins set via CORS_ALLOWED_ORIGINS env.
-        cfg.setAllowedOriginPatterns(List.of(
-            "http://localhost:[*]",
-            "${CORS_ALLOWED_ORIGINS:}"
+        // Shopify admin origin patterns — required for the install/embedded-open flow.
+        // When the merchant's browser navigates to our app from the Shopify admin
+        // (https://admin.shopify.com) or from a store admin (https://{store}.myshopify.com),
+        // the browser sends "Origin: <admin-host>" on the form POST.  Spring Security's
+        // CorsFilter rejects non-matching origins before the request reaches the controller,
+        // returning 403 (which nginx surfaces as 500 after Spring's error dispatch).
+        // Both the new admin URL (admin.shopify.com) and the legacy per-store admin URL
+        // (*.myshopify.com) must be listed — Shopify uses both depending on store age.
+        List<String> patterns = new ArrayList<>(List.of(
+            "http://localhost:[*]",           // dev — Vite dev server
+            "https://admin.shopify.com",      // Shopify admin (new unified URL)
+            "https://*.myshopify.com"         // per-store admin (legacy + dev stores)
         ));
+        // Optional: additional origin from env (e.g. a custom domain fronting the SPA).
+        if (!corsAllowedOrigins.isBlank()) {
+            patterns.add(corsAllowedOrigins);
+        }
+
+        CorsConfiguration cfg = new CorsConfiguration();
+        cfg.setAllowedOriginPatterns(patterns);
         cfg.setAllowedMethods(List.of("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"));
         cfg.setAllowedHeaders(List.of("*"));
         cfg.setAllowCredentials(true);
+
         UrlBasedCorsConfigurationSource src = new UrlBasedCorsConfigurationSource();
         src.registerCorsConfiguration("/**", cfg);
         return src;
