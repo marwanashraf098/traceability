@@ -43,7 +43,7 @@ app:
   jwt:
     # MUST be overridden in production via JWT_SECRET env var (base64, ≥32 bytes).
     secret: ${JWT_SECRET:ZGV2LW9ubHktc2VjcmV0LW5ldmVyLXVzZS1pbi1wcm9kdWN0aW9uLTMyYg==}
-    access-token-minutes: 15
+    access-token-minutes: 30
     refresh-token-days: 30
   # AES-256-GCM envelope key for encrypting store access tokens at rest.
   # MUST be set in production via APP_ENCRYPTION_KEY env var (base64, exactly 32 bytes).

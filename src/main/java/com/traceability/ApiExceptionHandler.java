@@ -10,6 +10,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.AccessDeniedException;
+import org.springframework.web.bind.MissingRequestCookieException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.server.ResponseStatusException;
@@ -63,6 +64,13 @@ public class ApiExceptionHandler {
     ResponseEntity<Void> handleShopifyTransient(ShopifyTransientException ex) {
         log.warn("Shopify transient failure: {}", ex.getMessage());
         return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).build();
+    }
+
+    // Missing traced_refresh cookie on POST /api/v1/auth/refresh → 401 (not 400).
+    // The client has no refresh session; they must re-authenticate via login.
+    @ExceptionHandler(MissingRequestCookieException.class)
+    ResponseEntity<Void> handleMissingCookie(MissingRequestCookieException ex) {
+        return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
     }
 
     @ExceptionHandler(ResponseStatusException.class)

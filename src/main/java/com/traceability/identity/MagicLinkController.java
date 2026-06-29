@@ -1,6 +1,7 @@
 package com.traceability.identity;
 
 import com.traceability.identity.model.TokenResponse;
+import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -11,16 +12,16 @@ import org.springframework.web.bind.annotation.RestController;
 import java.net.URI;
 
 /**
- * Consumes a magic-link token and issues a standalone JWT session.
+ * Consumes a magic-link token and issues a persistent httpOnly cookie session.
  *
  * GET /auth/magic?token=<raw> (permitAll — authenticated by token hash, not JWT).
  *
  * Flow: hash incoming token → consume_magic_link DEFINER (atomic validate+consume)
- * → issue access + refresh → 302 to app with tokens in URL fragment.
+ * → set httpOnly traced_refresh cookie → 302 to app root with NO tokens in the URL.
+ * On load the SPA calls POST /api/v1/auth/refresh (cookie auto-sent) to get an access token.
  *
- * Tokens are delivered in the URL fragment (#) so they are NOT sent to the server
- * on subsequent requests. The SPA reads them from window.location.hash and stores
- * them in memory / localStorage per its existing auth flow.
+ * Previously redirected to /#access_token=...&refresh_token=... — that approach was broken
+ * (the SPA never parsed the fragment) and leaked the refresh token into browser history.
  *
  * Rate limiting per NFR-3: TODO — add Bucket4j or similar once infra is confirmed.
  * The DEFINER's FOR UPDATE guard prevents concurrent double-consume.
@@ -38,13 +39,14 @@ public class MagicLinkController {
     }
 
     @GetMapping("/auth/magic")
-    public ResponseEntity<Void> consume(@RequestParam String token) {
+    public ResponseEntity<Void> consume(@RequestParam String token,
+                                        HttpServletResponse response) {
         TokenResponse tokens = magicLinkService.consumeMagicLink(token);
-        // Deliver tokens via URL fragment — never sent to server in subsequent requests.
-        String destination = appUrl + "/#access_token=" + tokens.accessToken()
-            + "&refresh_token=" + tokens.refreshToken();
+        // Deliver the refresh token as an httpOnly cookie — never in the URL.
+        // The SPA calls POST /api/v1/auth/refresh on load to get the access token.
+        AuthController.setRefreshCookie(response, tokens.refreshToken(), AuthController.COOKIE_MAX_AGE);
         return ResponseEntity.status(HttpStatus.FOUND)
-            .location(URI.create(destination))
-            .build();
+                .location(URI.create(appUrl + "/"))
+                .build();
     }
 }
