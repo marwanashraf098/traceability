@@ -4,7 +4,27 @@
 
 ## Current state
 
-**409 tests — all green, deterministic** — 2026-06-29.
+**411 tests — all green, deterministic** — 2026-06-29.
+
+**Order-intake stuck-pending fix + register-webhooks endpoint (2026-06-29):**
+
+Root cause of "orders not syncing after needs_reauth recovery":
+
+`shouldEnqueue` in `acquireOrRefreshViaSessionToken()` only checked `(idle, failed)` for the connected case. A store left in `connected/pending` — job was enqueued but JobRunr wasn't running, or job crashed before updating `import_status` — became permanently stuck: every token-exchange returned 204 "success" but `shouldEnqueue = false` → no jobs re-enqueued → webhooks never re-registered → orders never synced. Supabase confirmed: `traceability-dev.myshopify.com` had `import_status = pending`, `access_token_expires_at = NULL` (offline legacy token), zero import/webhook jobs in JobRunr.
+
+*Fix:* Added `pending` to the connected-case `shouldEnqueue` condition. Both jobs are idempotent: Shopify rejects duplicate webhook topic+url with "already taken" (treated as success); import uses ON CONFLICT DO UPDATE throughout.
+
+*New endpoint:* `POST /api/v1/shopify/stores/{storeId}/register-webhooks` (OWNER only) — runs webhook registration synchronously. Manual recovery after needs_reauth without requiring uninstall/reinstall.
+
+*Immediate trigger for trace-d9onuxff (`e4297db2-...`):*
+1. `POST /api/v1/shopify/stores/e4297db2-b627-4129-b7fa-03bb1525a65e/register-webhooks` — re-registers orders/create, orders/updated, etc.
+2. `POST /api/v1/shopify/stores/e4297db2-b627-4129-b7fa-03bb1525a65e/sync` — runs import sync.
+
+*Test:* TE12 — `connected/pending` → exchange runs → `access_token_expires_at` set (proves exchange fires and re-enqueues).
+
+*Commit:* `7b721d0`. 411 tests green.
+
+---
 
 **Hybrid session-token exchange — embedded token acquisition (2026-06-29):**
 
