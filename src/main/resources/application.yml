@@ -28,6 +28,12 @@ spring:
 
 server:
   port: ${PORT:8080}
+  # Honor X-Forwarded-Proto / X-Forwarded-Host from nginx so Spring builds redirect URLs
+  # with the external https:// scheme instead of the internal http:// scheme used on the
+  # Docker-internal network between nginx and the app container.  Without this, Spring's
+  # redirect:/auth/shopify/install produces Location: http://... which Shopify refuses to
+  # follow, breaking dashboard-initiated installs.
+  forward-headers-strategy: framework
 
 app:
   jwt:
