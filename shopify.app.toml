@@ -1,31 +1,24 @@
-# Shopify App configuration for Shopify CLI 3.x
-#
-# client_id: Set to the Shopify app's API key from Partner Dashboard.
-# Must match the SHOPIFY_CLIENT_ID env var configured on the backend server.
-# The dev default (dev-client-id) is only used for local development against
-# a dev store; replace before running `shopify app deploy`.
+# Learn more about configuring your app at https://shopify.dev/docs/apps/tools/cli/configuration
 
-name = "Traced"
-client_id = "dev-client-id"
-application_url = "https://app.tracedtech.com"
+client_id = "dbed84aaa76b5df84ff40c19fb112dfb"
+application_url = "https://app.tracedtech.com/"
 embedded = true
+name = "Trace"
 
 [access_scopes]
-# Must match shopify.scopes in application.yml.
-scopes = "read_products,read_orders,read_fulfillments,read_customers"
+# Learn more at https://shopify.dev/docs/apps/tools/cli/configuration#access_scopes
+scopes = "read_customers,read_fulfillments,read_orders,read_products"
+optional_scopes = [ ]
+use_legacy_install_flow = true
 
 [auth]
-redirect_urls = [
-  "https://app.tracedtech.com/auth/shopify/callback",
-  "http://localhost:8080/auth/shopify/callback"
-]
+redirect_urls = [ "https://app.tracedtech.com/auth/shopify/callback" ]
 
 [webhooks]
 api_version = "2026-04"
 
 # GDPR mandatory webhooks — required for Shopify app review.
-# These must be registered BEFORE submission. The URLs below match
-# ShopifyWebhookController endpoints.
+# URLs match ShopifyWebhookController endpoints.
 [[webhooks.subscriptions]]
 topics = ["customers/data_request"]
 uri = "/webhooks/shopify/customers/data_request"
@@ -37,10 +30,3 @@ uri = "/webhooks/shopify/customers/redact"
 [[webhooks.subscriptions]]
 topics = ["shop/redact"]
 uri = "/webhooks/shopify/shop/redact"
-
-[pos]
-embedded = false
-
-[build]
-include_config_on_deploy = true
-automatically_update_urls_on_dev = false
