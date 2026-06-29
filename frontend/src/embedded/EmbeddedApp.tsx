@@ -52,9 +52,12 @@ const loading: AsyncState<never> = { status: 'loading' }
 // ── Authenticated fetch ───────────────────────────────────────────────────
 
 function useAuthFetch() {
-  return useCallback(async (url: string): Promise<Response> => {
+  return useCallback(async (url: string, options?: RequestInit): Promise<Response> => {
     const token = await shopify.idToken()
-    return fetch(url, { headers: { Authorization: `Bearer ${token}` } })
+    return fetch(url, {
+      ...options,
+      headers: { Authorization: `Bearer ${token}`, ...options?.headers },
+    })
   }, [])
 }
 
@@ -355,7 +358,32 @@ export default function EmbeddedApp() {
   const [excState,    setExcState]        = useState<AsyncState<ExceptionsData>>(loading)
 
   useEffect(() => {
-    // All four requests fire in parallel — each section populates independently.
+    // Token exchange: fired in parallel with the data fetches (Q5 decision).
+    // The dashboard renders from session-token auth — it does not wait for this call.
+    // NOT_PROVISIONED (new merchant, no tenant yet) → top-level redirect to legacy install
+    //   flow (consent + callback) which provisions the tenant, then returns to embedded.
+    // Generic 401 (bad session token) → silent; connection-status card shows error.
+    // 502/503 (Shopify rejected or transient) → silent; dashboard still renders.
+    authFetch('/api/v1/embedded/token-exchange', { method: 'POST' })
+      .then(async r => {
+        if (r.status === 401) {
+          const body = await r.json().catch(() => ({})) as { error?: string }
+          if (body?.error === 'NOT_PROVISIONED') {
+            // Break out of the Shopify admin iframe — consent screen cannot run inside
+            // an iframe, so this must be a top-level navigation (window.top).
+            const shop = new URLSearchParams(window.location.search).get('shop')
+            if (shop && window.top) {
+              window.top.location.href = '/auth/shopify/install?shop=' + shop
+            }
+          }
+          // Other 401s (bad session token) → leave dashboard in error/loading state;
+          // the data-fetch calls below will also fail and show their error Banners.
+        }
+        // 204 (success/skip), 502, 503 → no UI action needed; dashboard renders normally.
+      })
+      .catch(() => { /* network error → ignore; dashboard still renders */ })
+
+    // All four data requests fire in parallel — each section populates independently.
     authFetch('/api/v1/embedded/stores/status')
       .then(r => r.ok ? r.json() as Promise<StoreRow[]> : Promise.reject(r.status))
       .then(d  => setStoresState({ status: 'ok', data: d }))

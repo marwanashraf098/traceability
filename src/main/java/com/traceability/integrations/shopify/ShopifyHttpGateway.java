@@ -264,6 +264,51 @@ class ShopifyHttpGateway implements ShopifyGateway {
             """;
 
     @Override
+    public TokenResponse exchangeSessionToken(String shopDomain, String sessionToken) {
+        String url = "https://" + shopDomain + "/admin/oauth/access_token";
+        try {
+            JsonNode resp = tokenRestClient.post()
+                .uri(url)
+                .header("Content-Type", "application/json")
+                .body(Map.of(
+                    "client_id",          clientId,
+                    "client_secret",      clientSecret,
+                    "grant_type",         "urn:ietf:params:oauth:grant-type:token-exchange",
+                    "subject_token",      sessionToken,
+                    "subject_token_type", "urn:ietf:params:oauth:token-type:id_token"))
+                .retrieve()
+                .body(JsonNode.class);
+            if (resp == null || !resp.has("access_token")) {
+                throw new ShopifyException(
+                    "Session token exchange response missing access_token from " + shopDomain);
+            }
+            return new TokenResponse(
+                resp.get("access_token").asText(),
+                resp.has("refresh_token") ? resp.get("refresh_token").asText() : null,
+                resp.path("expires_in").asLong(3600),
+                resp.path("refresh_token_expires_in").asLong(7776000));
+        } catch (HttpClientErrorException e) {
+            log.warn("Shopify session-token exchange rejected ({}): shop={}", e.getStatusCode(), shopDomain);
+            throw new ShopifySessionTokenExchangeException(shopDomain,
+                "Shopify rejected session token exchange with " + e.getStatusCode());
+        } catch (HttpServerErrorException e) {
+            log.warn("Shopify session-token exchange 5xx ({}): shop={}", e.getStatusCode(), shopDomain);
+            throw new ShopifyTransientException(
+                "Shopify session-token exchange server error " + e.getStatusCode() + " for " + shopDomain, e);
+        } catch (ResourceAccessException e) {
+            log.warn("Shopify session-token exchange timeout: shop={}", shopDomain);
+            throw new ShopifyTransientException(
+                "Shopify session-token exchange network failure for " + shopDomain, e);
+        } catch (ShopifySessionTokenExchangeException | ShopifyTransientException e) {
+            throw e;
+        } catch (RestClientException e) {
+            log.warn("Shopify session-token exchange unexpected error: shop={}", shopDomain, e);
+            throw new ShopifyTransientException(
+                "Shopify session-token exchange unexpected failure for " + shopDomain, e);
+        }
+    }
+
+    @Override
     public void registerWebhook(String shopDomain, String token, String topic, String callbackUrl) {
         String gqlTopic = topic.replace("/", "_").toUpperCase();
         ObjectNode webhookInput = mapper.createObjectNode().put("callbackUrl", callbackUrl);

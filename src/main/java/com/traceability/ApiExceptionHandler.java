@@ -2,6 +2,8 @@ package com.traceability;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.traceability.integrations.shopify.ShopifyOAuthException;
+import com.traceability.integrations.shopify.ShopifySessionTokenExchangeException;
+import com.traceability.integrations.shopify.ShopifyTransientException;
 import com.traceability.inventory.PieceCommittedException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -46,6 +48,21 @@ public class ApiExceptionHandler {
     ResponseEntity<OAuthErrorBody> handleShopifyOAuth(ShopifyOAuthException ex) {
         return ResponseEntity.status(ex.httpStatus())
             .body(new OAuthErrorBody(ex.code().name(), ex.messageEn(), ex.messageAr()));
+    }
+
+    // Shopify session-token exchange returned 4xx — the session token was rejected by Shopify.
+    // This does NOT mean the refresh token is invalid; do NOT mark the store needs_reauth.
+    @ExceptionHandler(ShopifySessionTokenExchangeException.class)
+    ResponseEntity<Void> handleSessionTokenExchange(ShopifySessionTokenExchangeException ex) {
+        log.warn("Session token exchange failed: {}", ex.getMessage());
+        return ResponseEntity.status(HttpStatus.BAD_GATEWAY).build();
+    }
+
+    // Shopify 5xx or timeout on any token operation — transient, no state change.
+    @ExceptionHandler(ShopifyTransientException.class)
+    ResponseEntity<Void> handleShopifyTransient(ShopifyTransientException ex) {
+        log.warn("Shopify transient failure: {}", ex.getMessage());
+        return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).build();
     }
 
     @ExceptionHandler(ResponseStatusException.class)

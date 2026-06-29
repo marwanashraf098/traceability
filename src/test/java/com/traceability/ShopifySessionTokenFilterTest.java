@@ -299,6 +299,82 @@ class ShopifySessionTokenFilterTest {
         verify(chain, never()).doFilter(any(), any());
     }
 
+    // ── NOT_PROVISIONED signal ────────────────────────────────────────────────
+
+    /**
+     * When resolve_tenant_by_shop_domain returns null, the filter must return 401
+     * with body {"error":"NOT_PROVISIONED"} — distinct from the generic Unauthorized body.
+     * EmbeddedApp uses this to redirect to /auth/shopify/install (consent + provision).
+     */
+    @Test
+    void unknownShop_returnsNotProvisionedBody() throws Exception {
+        when(mockJdbc.queryForObject(any(String.class), eq(UUID.class), any()))
+                .thenReturn(null);
+        var res   = new MockHttpServletResponse();
+        var chain = mock(FilterChain.class);
+
+        filter.doFilter(embeddedGet(makeToken(SHOP, CLIENT_ID, SECRET, 120, false)), res, chain);
+
+        assertThat(res.getStatus()).isEqualTo(401);
+        assertThat(res.getContentType()).contains("application/json");
+        assertThat(res.getContentAsString()).contains("NOT_PROVISIONED");
+        verify(chain, never()).doFilter(any(), any());
+    }
+
+    /**
+     * Other rejection paths (bad HMAC, expired, wrong aud, etc.) must keep the generic
+     * {"error":"Unauthorized"} body — NOT the NOT_PROVISIONED signal.
+     */
+    @Test
+    void badHmac_returnsGenericUnauthorizedBody() throws Exception {
+        var res   = new MockHttpServletResponse();
+        var chain = mock(FilterChain.class);
+
+        filter.doFilter(embeddedGet(makeToken(SHOP, CLIENT_ID, WRONG_SEC, 120, false)), res, chain);
+
+        assertThat(res.getStatus()).isEqualTo(401);
+        assertThat(res.getContentAsString()).contains("Unauthorized");
+        assertThat(res.getContentAsString()).doesNotContain("NOT_PROVISIONED");
+        verify(chain, never()).doFilter(any(), any());
+    }
+
+    @Test
+    void expiredToken_returnsGenericUnauthorizedBody() throws Exception {
+        var res   = new MockHttpServletResponse();
+        var chain = mock(FilterChain.class);
+
+        filter.doFilter(embeddedGet(makeToken(SHOP, CLIENT_ID, SECRET, -120, false)), res, chain);
+
+        assertThat(res.getStatus()).isEqualTo(401);
+        assertThat(res.getContentAsString()).contains("Unauthorized");
+        assertThat(res.getContentAsString()).doesNotContain("NOT_PROVISIONED");
+        verify(chain, never()).doFilter(any(), any());
+    }
+
+    // ── shopDomain in principal ───────────────────────────────────────────────
+
+    /**
+     * For a valid embedded session token, the SHOPIFY_EMBEDDED principal must carry
+     * the shop domain (extracted from the HMAC-verified dest claim). This is the
+     * structural confinement guarantee for the token-exchange endpoint.
+     */
+    @Test
+    void validToken_principalShopDomainSet() throws Exception {
+        var req   = embeddedGet(makeToken(SHOP, CLIENT_ID, SECRET, 120, false));
+        var res   = new MockHttpServletResponse();
+        var chain = mock(FilterChain.class);
+
+        filter.doFilter(req, res, chain);
+
+        var auth = SecurityContextHolder.getContext().getAuthentication();
+        assertThat(auth).isNotNull();
+        assertThat(auth.getPrincipal())
+                .isInstanceOf(com.traceability.identity.CustomUserDetails.class);
+        com.traceability.identity.CustomUserDetails principal =
+                (com.traceability.identity.CustomUserDetails) auth.getPrincipal();
+        assertThat(principal.shopDomain()).isEqualTo(SHOP);
+    }
+
     @Test
     void unparseable_401() throws Exception {
         var res   = new MockHttpServletResponse();

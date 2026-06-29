@@ -116,7 +116,7 @@ class ConnectionsOnboardingTest {
     }
 
     CustomUserDetails principal() {
-        return new CustomUserDetails(ownerId, tenantId, "owner");
+        return new CustomUserDetails(ownerId, tenantId, "owner", null);
     }
 
     // ── Connections ───────────────────────────────────────────────────────────

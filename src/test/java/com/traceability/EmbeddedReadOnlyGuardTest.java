@@ -21,6 +21,12 @@ import static org.assertj.core.api.Assertions.assertThat;
  * failing build immediately rather than a security review miss.
  *
  * No Spring context — pure reflection against the compiled classes on the classpath.
+ *
+ * Allowlist: TOKEN_EXCHANGE_EXEMPTIONS contains the single permitted POST in the embedded
+ * package — EmbeddedTokenExchangeController.tokenExchange. That endpoint is a
+ * credential-acquisition POST (writes only stores.access_token_* columns), not a data
+ * mutation. Inventory and business data are untouched. Any future data-mutating POST
+ * MUST NOT be added here; add it to a different package (e.g. com.traceability.inventory).
  */
 class EmbeddedReadOnlyGuardTest {
 
@@ -31,6 +37,16 @@ class EmbeddedReadOnlyGuardTest {
             PutMapping.class,
             DeleteMapping.class,
             PatchMapping.class
+    );
+
+    /**
+     * Permitted mutating mappings in the embedded package.
+     * Key format: "ClassName#methodName".
+     * Adding an entry here requires a security review explaining why the embedded
+     * package needs the mutation and confirming it cannot affect another tenant's data.
+     */
+    private static final java.util.Set<String> TOKEN_EXCHANGE_EXEMPTIONS = java.util.Set.of(
+            "EmbeddedTokenExchangeController#tokenExchange"
     );
 
     @Test
@@ -46,10 +62,13 @@ class EmbeddedReadOnlyGuardTest {
             }
             // Method-level annotations
             for (Method m : clazz.getDeclaredMethods()) {
+                String exemptionKey = clazz.getSimpleName() + "#" + m.getName();
                 for (Class<?> ann : MUTATING_ANNOTATIONS) {
                     if (m.isAnnotationPresent(ann.asSubclass(java.lang.annotation.Annotation.class))) {
-                        violations.add(clazz.getSimpleName() + "." + m.getName()
-                                + "() has @" + ann.getSimpleName());
+                        if (!TOKEN_EXCHANGE_EXEMPTIONS.contains(exemptionKey)) {
+                            violations.add(clazz.getSimpleName() + "." + m.getName()
+                                    + "() has @" + ann.getSimpleName());
+                        }
                     }
                 }
                 // Also catch @RequestMapping(method = POST/PUT/DELETE/PATCH)
@@ -58,8 +77,10 @@ class EmbeddedReadOnlyGuardTest {
                     for (RequestMethod method : rm.method()) {
                         if (method == RequestMethod.POST || method == RequestMethod.PUT
                                 || method == RequestMethod.DELETE || method == RequestMethod.PATCH) {
-                            violations.add(clazz.getSimpleName() + "." + m.getName()
-                                    + "() has @RequestMapping(method=" + method + ")");
+                            if (!TOKEN_EXCHANGE_EXEMPTIONS.contains(exemptionKey)) {
+                                violations.add(clazz.getSimpleName() + "." + m.getName()
+                                        + "() has @RequestMapping(method=" + method + ")");
+                            }
                         }
                     }
                 }

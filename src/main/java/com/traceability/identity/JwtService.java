@@ -79,6 +79,7 @@ public class JwtService {
         return new CustomUserDetails(
                 UUID.fromString(claims.getSubject()),
                 UUID.fromString((String) claims.getClaim("tenant")),
-                (String) claims.getClaim("role"));
+                (String) claims.getClaim("role"),
+                null); // shopDomain — only set for SHOPIFY_EMBEDDED principals
     }
 }

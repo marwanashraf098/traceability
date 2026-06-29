@@ -82,7 +82,7 @@ class TenantSettingsTest {
     @BeforeEach
     void ctx() {
         TenantContext.set(tenantId);
-        var principal = new CustomUserDetails(ownerId, tenantId, "owner");
+        var principal = new CustomUserDetails(ownerId, tenantId, "owner", null);
         SecurityContextHolder.getContext().setAuthentication(
             new UsernamePasswordAuthenticationToken(principal, null, principal.getAuthorities()));
     }
@@ -110,7 +110,7 @@ class TenantSettingsTest {
 
     @Test
     void s2_getSettings_returnsDefaults() {
-        var principal = new com.traceability.identity.CustomUserDetails(ownerId, tenantId, "owner");
+        var principal = new com.traceability.identity.CustomUserDetails(ownerId, tenantId, "owner", null);
         Map<String, Object> settings = tenantCtl.get(principal);
         assertThat(settings.get("defaultLanguage")).isEqualTo("ar");
         assertThat(settings.get("timezone")).isEqualTo("Africa/Cairo");
@@ -119,7 +119,7 @@ class TenantSettingsTest {
 
     @Test
     void s3_putSettings_roundTrip() {
-        var principal = new com.traceability.identity.CustomUserDetails(ownerId, tenantId, "owner");
+        var principal = new com.traceability.identity.CustomUserDetails(ownerId, tenantId, "owner", null);
         var req = new TenantController.TenantSettingsRequest(
             "New Name", "123 Nasr City, Cairo", "40x25", "en", "Africa/Cairo");
         tenantCtl.update(req, principal);
@@ -136,7 +136,7 @@ class TenantSettingsTest {
 
     @Test
     void s4_putSettings_writesAuditEntry() {
-        var principal = new com.traceability.identity.CustomUserDetails(ownerId, tenantId, "owner");
+        var principal = new com.traceability.identity.CustomUserDetails(ownerId, tenantId, "owner", null);
         var req = new TenantController.TenantSettingsRequest(
             "Audited Tenant", null, null, null, null);
         tenantCtl.update(req, principal);
@@ -151,7 +151,7 @@ class TenantSettingsTest {
 
     @Test
     void s5_invalidLabelSize_returns400() {
-        var principal = new com.traceability.identity.CustomUserDetails(ownerId, tenantId, "owner");
+        var principal = new com.traceability.identity.CustomUserDetails(ownerId, tenantId, "owner", null);
         var req = new TenantController.TenantSettingsRequest(null, null, "99x99", null, null);
         assertThatThrownBy(() -> tenantCtl.update(req, principal))
             .isInstanceOf(ResponseStatusException.class)
@@ -160,7 +160,7 @@ class TenantSettingsTest {
 
     @Test
     void s6_invalidLanguage_returns400() {
-        var principal = new com.traceability.identity.CustomUserDetails(ownerId, tenantId, "owner");
+        var principal = new com.traceability.identity.CustomUserDetails(ownerId, tenantId, "owner", null);
         var req = new TenantController.TenantSettingsRequest(null, null, null, "fr", null);
         assertThatThrownBy(() -> tenantCtl.update(req, principal))
             .isInstanceOf(ResponseStatusException.class)

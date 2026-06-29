@@ -164,7 +164,9 @@ public class ShopifySessionTokenFilter extends OncePerRequestFilter {
                 return;
             }
             if (tenantId == null) {
-                reject(response);   // unknown shop — no default tenant fallback
+                // Precise signal: shop is syntactically valid but has no provisioned tenant.
+                // EmbeddedApp distinguishes this from other 401s to redirect to /auth/shopify/install.
+                rejectNotProvisioned(response);
                 return;
             }
 
@@ -174,8 +176,11 @@ public class ShopifySessionTokenFilter extends OncePerRequestFilter {
                     .getBytes(StandardCharsets.UTF_8);
             UUID syntheticUserId = UUID.nameUUIDFromBytes(subBytes);
 
+            // destHost is HMAC-verified (extracted from the signed dest claim above).
+            // Carried in the principal so the token-exchange endpoint can resolve the shop
+            // without re-parsing the JWT or accepting an attacker-supplied request param.
             CustomUserDetails principal =
-                    new CustomUserDetails(syntheticUserId, tenantId, "SHOPIFY_EMBEDDED");
+                    new CustomUserDetails(syntheticUserId, tenantId, "SHOPIFY_EMBEDDED", destHost);
             UsernamePasswordAuthenticationToken auth = new UsernamePasswordAuthenticationToken(
                     principal, null, principal.getAuthorities());
             SecurityContextHolder.getContext().setAuthentication(auth);
@@ -222,5 +227,19 @@ public class ShopifySessionTokenFilter extends OncePerRequestFilter {
         response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
         response.setContentType("application/json");
         response.getWriter().write("{\"error\":\"Unauthorized\"}");
+    }
+
+    /**
+     * Variant of reject() used exclusively when resolve_tenant_by_shop_domain returns null —
+     * i.e., the session token is cryptographically valid but the shop has no provisioned tenant.
+     * The EmbeddedApp frontend distinguishes this body from a generic 401 and redirects to
+     * /auth/shopify/install (consent + callback → provision). All other rejection paths
+     * return the generic {"error":"Unauthorized"} to avoid leaking which checks failed.
+     */
+    private void rejectNotProvisioned(HttpServletResponse response) throws IOException {
+        if (response.isCommitted()) return;
+        response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
+        response.setContentType("application/json");
+        response.getWriter().write("{\"error\":\"NOT_PROVISIONED\"}");
     }
 }

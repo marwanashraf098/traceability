@@ -114,6 +114,26 @@ public interface ShopifyGateway {
      */
     ShopInfo fetchShop(String shopDomain, String token);
 
+    // ---- Modern install flow: session-token exchange --------------------
+
+    /**
+     * Exchanges a Shopify App Bridge session token for an offline access token using
+     * Shopify's token-exchange grant type. Used by the modern embedded install flow
+     * (use_legacy_install_flow=false) where no auth-code callback runs.
+     *
+     * POST /admin/oauth/access_token with:
+     *   grant_type         = urn:ietf:params:oauth:grant-type:token-exchange
+     *   subject_token      = sessionToken (the raw HS256 JWT from Authorization: Bearer)
+     *   subject_token_type = urn:ietf:params:oauth:token-type:id_token
+     *
+     * Uses tokenRestClient (5s connect / 10s read) — never the main restClient.
+     *
+     * @throws ShopifySessionTokenExchangeException on 4xx from Shopify (token rejected).
+     *         Does NOT imply the refresh token is invalid — do NOT mark needs_reauth.
+     * @throws ShopifyTransientException            on 5xx or network timeout.
+     */
+    TokenResponse exchangeSessionToken(String shopDomain, String sessionToken);
+
     // ---- OAuth Day 3 additions ------------------------------------------
 
     /**

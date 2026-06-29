@@ -65,6 +65,30 @@ public class ShopifyOAuthService {
             RETURNING id
             """;
 
+    /**
+     * Token-exchange write path: updates token columns + resets status to 'connected'.
+     * Does NOT touch import_status unconditionally — uses a CASE to set it to 'pending'
+     * only when the store was in needs_reauth or idle/failed state (i.e., when jobs will
+     * be enqueued). Leaves import_status unchanged for healthy stores refreshing a near-
+     * expiry token, so a running/completed import is not disrupted.
+     */
+    private static final String EXCHANGE_SESSION_TOKEN_UPDATE = """
+            UPDATE stores
+               SET access_token_encrypted  = ?,
+                   access_token_expires_at  = ?,
+                   refresh_token_encrypted  = ?,
+                   refresh_token_expires_at = ?,
+                   status                   = 'connected',
+                   import_status            = CASE
+                       WHEN status = 'needs_reauth' OR import_status IN ('idle','failed')
+                           THEN 'pending'::store_import_status
+                       ELSE import_status
+                   END
+             WHERE shop_domain = ?
+               AND tenant_id   = ?
+            RETURNING id
+            """;
+
     private static final String UPDATE_PROVISION_REFRESH_FIELDS = """
             UPDATE stores
                SET refresh_token_encrypted  = ?,
@@ -433,6 +457,110 @@ public class ShopifyOAuthService {
     private void enqueueImport(UUID storeId, UUID tenantId) {
         jobScheduler.enqueue(() -> importJob.run(storeId, tenantId));
         jobScheduler.enqueue(() -> webhooksJob.run(storeId, tenantId));
+    }
+
+    // ---- Modern install flow: session-token exchange -------------------------
+
+    /**
+     * Acquires or refreshes the Shopify access token via session-token exchange.
+     * Called by EmbeddedTokenExchangeController on every embedded app load; skips
+     * the network call when the stored token is comfortably fresh (>10 min remaining).
+     *
+     * <pre>
+     * 1. SELECT store snap (id, expires_at, status, import_status) — RLS-guarded.
+     * 2. If access_token_expires_at > now+10min AND status=connected → return (skip).
+     * 3. Call gateway.exchangeSessionToken(shopDomain, rawSessionToken).
+     *    - ShopifySessionTokenExchangeException (4xx) → propagate; caller returns 502.
+     *      Do NOT mark needs_reauth — the refresh token may still be valid.
+     *    - ShopifyTransientException (5xx/timeout) → propagate; caller returns 503.
+     * 4. Write new tokens via EXCHANGE_SESSION_TOKEN_UPDATE (token cols only;
+     *    import_status CASE resets to 'pending' iff jobs will be enqueued).
+     * 5. Enqueue import + webhooks jobs if status was needs_reauth OR
+     *    (connected AND import_status IN (idle, failed)).
+     * </pre>
+     *
+     * Concurrent safety: two calls from two browser tabs will both pass the freshness
+     * check if the token is stale, both call exchangeSessionToken (idempotent — no
+     * single-use restriction like refresh tokens), and both issue UPDATE statements
+     * (atomic at the row level; last write wins with an equally valid token pair).
+     * No SELECT FOR UPDATE is needed here.
+     *
+     * @param tenantId       the authenticated tenant (from the SHOPIFY_EMBEDDED principal)
+     * @param shopDomain     the verified shop domain (from principal.shopDomain(), NOT a request param)
+     * @param rawSessionToken the raw HS256 session token from Authorization: Bearer
+     * @return true if token is fresh or exchange succeeded; false if the store row is missing
+     */
+    public boolean acquireOrRefreshViaSessionToken(UUID tenantId, String shopDomain, String rawSessionToken) {
+        // Step 1: freshness check — needs TenantContext for RLS
+        record StoreSnap(UUID id, Instant expiresAt, String status, String importStatus) {}
+        StoreSnap snap;
+        TenantContext.set(tenantId);
+        try {
+            snap = tx.execute(s ->
+                jdbc.query(
+                    "SELECT id, access_token_expires_at, status::text, import_status::text " +
+                    "FROM stores WHERE tenant_id = ? AND shop_domain = ?",
+                    rs -> rs.next() ? new StoreSnap(
+                        rs.getObject("id", UUID.class),
+                        rs.getTimestamp("access_token_expires_at") != null
+                            ? rs.getTimestamp("access_token_expires_at").toInstant() : null,
+                        rs.getString("status"),
+                        rs.getString("import_status")) : null,
+                    tenantId, shopDomain));
+        } finally {
+            TenantContext.clear();
+        }
+
+        if (snap == null) {
+            log.warn("Token exchange: store not found tenant={} shop={}", tenantId, shopDomain);
+            return false;
+        }
+
+        // Step 2: skip if token is comfortably fresh
+        Instant threshold = Instant.now().plusSeconds(600); // 10 min
+        if (snap.expiresAt() != null && snap.expiresAt().isAfter(threshold)
+                && "connected".equals(snap.status())) {
+            log.debug("Token exchange skipped: token fresh for shop={}", shopDomain);
+            return true;
+        }
+
+        // Step 3: exchange — ShopifySessionTokenExchangeException / ShopifyTransientException propagate
+        ShopifyGateway.TokenResponse tokens =
+            shopifyGateway.exchangeSessionToken(shopDomain, rawSessionToken);
+
+        // Step 4: store — applyExchangedToken manages its own TenantContext
+        UUID storeId = applyExchangedToken(tenantId, shopDomain, tokens);
+
+        // Step 5: conditional job enqueue
+        boolean shouldEnqueue = "needs_reauth".equals(snap.status())
+                || ("connected".equals(snap.status())
+                    && ("idle".equals(snap.importStatus()) || "failed".equals(snap.importStatus())));
+        if (shouldEnqueue && storeId != null) {
+            enqueueImport(storeId, tenantId);
+            log.info("Token exchange: enqueued import+webhooks for shop={} tenant={}", shopDomain, tenantId);
+        }
+
+        log.info("Token exchange: succeeded for shop={} tenant={}", shopDomain, tenantId);
+        return true;
+    }
+
+    private UUID applyExchangedToken(UUID tenantId, String shop, ShopifyGateway.TokenResponse tokens) {
+        Timestamp accessExpiresAt  = Timestamp.from(Instant.now().plusSeconds(tokens.expiresIn()));
+        Timestamp refreshExpiresAt = tokens.refreshToken() != null
+            ? Timestamp.from(Instant.now().plusSeconds(tokens.refreshTokenExpiresIn())) : null;
+        TenantContext.set(tenantId);
+        try {
+            return tx.execute(s ->
+                jdbc.query(EXCHANGE_SESSION_TOKEN_UPDATE,
+                    rs -> rs.next() ? rs.getObject("id", UUID.class) : null,
+                    encryptionService.encrypt(tokens.accessToken()),
+                    accessExpiresAt,
+                    tokens.refreshToken() != null ? encryptionService.encrypt(tokens.refreshToken()) : null,
+                    refreshExpiresAt,
+                    shop, tenantId));
+        } finally {
+            TenantContext.clear();
+        }
     }
 
     private static ShopifyOAuthException stateInvalid() {

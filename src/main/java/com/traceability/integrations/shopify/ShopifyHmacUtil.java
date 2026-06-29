@@ -4,6 +4,7 @@ import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
+import java.util.Base64;
 import java.util.Map;
 import java.util.TreeMap;
 
@@ -55,6 +56,33 @@ public final class ShopifyHmacUtil {
         return MessageDigest.isEqual(
                 computed.getBytes(StandardCharsets.UTF_8),
                 provided.getBytes(StandardCharsets.UTF_8));
+    }
+
+    /**
+     * Verifies the X-Shopify-Hmac-Sha256 header on a Shopify webhook request.
+     *
+     * Webhook HMAC differs from OAuth HMAC:
+     *   - Key: the global app client secret (not per-tenant)
+     *   - Data: the raw request body bytes — NEVER a re-serialized DTO
+     *   - Digest: base64-encoded HMAC-SHA256
+     *
+     * @param rawBody        the raw request body bytes from @RequestBody byte[]
+     * @param clientSecret   the Shopify app client secret (shopify.client-secret)
+     * @param providedBase64 the X-Shopify-Hmac-Sha256 header value
+     * @return true if the HMAC is valid
+     */
+    public static boolean verifyWebhookBody(byte[] rawBody, String clientSecret, String providedBase64) {
+        if (providedBase64 == null || providedBase64.isBlank()) return false;
+        try {
+            Mac mac = Mac.getInstance("HmacSHA256");
+            mac.init(new SecretKeySpec(clientSecret.getBytes(StandardCharsets.UTF_8), "HmacSHA256"));
+            String computed = Base64.getEncoder().encodeToString(mac.doFinal(rawBody));
+            return MessageDigest.isEqual(
+                    computed.getBytes(StandardCharsets.UTF_8),
+                    providedBase64.getBytes(StandardCharsets.UTF_8));
+        } catch (Exception e) {
+            throw new IllegalStateException("HMAC-SHA256 computation failed", e);
+        }
     }
 
     private static String hmacHex(String data, String secret) {
