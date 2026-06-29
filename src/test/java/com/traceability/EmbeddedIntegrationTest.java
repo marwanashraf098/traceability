@@ -44,8 +44,9 @@ import static org.assertj.core.api.Assertions.assertThat;
  *   E7 — Shopify token → GET /api/v1/orders → 401 (filter skips; JwtFilter rejects)
  *   E8 — Unknown shop (not in stores) → GET /embedded/inventory/summary → 401
  *   E9 — Valid token → /embedded/orders/daily-counts → 200
- *  E10 — Valid token → /embedded/exceptions → 200
+ *  E10 — Valid token → /embedded/exceptions → 200 + count:0 + empty list (zero-data guard)
  *  E11 — Valid token → /embedded/stores/status → 200
+ *  E12 — Zero-data store → all four endpoints → 200 + empty/zero, NOT 500
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @Testcontainers
@@ -226,7 +227,41 @@ class EmbeddedIntegrationTest {
     void e10_validToken_exceptions_200() throws Exception {
         ResponseEntity<String> r = get("/api/v1/embedded/exceptions", tokenA());
         assertThat(r.getStatusCode()).isEqualTo(HttpStatus.OK);
-        assertThat(r.getBody()).contains("count", "exceptions");
+        // Fresh store has no exceptions — must return 200 with count=0, not a 500.
+        // (Bug: without tx.execute(), the tenants RLS query returned 0 rows →
+        //  EmptyResultDataAccessException on app_user connections in production.)
+        assertThat(r.getBody()).contains("\"count\":0");
+        assertThat(r.getBody()).contains("\"exceptions\":[]");
+    }
+
+    // ── E12: All four endpoints handle zero-data store gracefully (200, not 500) ─
+
+    @Test @Order(12)
+    void e12_zeroData_allFourEndpoints_200_notError() throws Exception {
+        // inventory/summary: a store with no pieces must return all-zero counts, not blow up.
+        ResponseEntity<String> inv = get("/api/v1/embedded/inventory/summary", tokenA());
+        assertThat(inv.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(inv.getBody()).contains("\"count\":0");
+
+        // orders/daily-counts: no orders → every day count must be 0.
+        ResponseEntity<String> dc = get("/api/v1/embedded/orders/daily-counts?days=7", tokenA());
+        assertThat(dc.getStatusCode()).isEqualTo(HttpStatus.OK);
+        // 7 day-slots present, all with count:0 (generate_series + LEFT JOIN + COALESCE)
+        assertThat(dc.getBody()).contains("\"count\":0");
+        assertThat(dc.getBody()).doesNotContain("\"count\":1");
+
+        // stores/status: list endpoint — always safe (queryForList returns empty list).
+        ResponseEntity<String> ss = get("/api/v1/embedded/stores/status", tokenA());
+        assertThat(ss.getStatusCode()).isEqualTo(HttpStatus.OK);
+
+        // exceptions: zero exceptions → 200 + count=0 + empty list, NOT 500.
+        // This is the regression guard for the EmptyResultDataAccessException bug
+        // (EmbeddedController.exceptions() was missing the tx.execute() wrapper that
+        // the other three endpoints have; without it the tenants RLS query returned 0 rows).
+        ResponseEntity<String> ex = get("/api/v1/embedded/exceptions", tokenA());
+        assertThat(ex.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(ex.getBody()).contains("\"count\":0");
+        assertThat(ex.getBody()).contains("\"exceptions\":[]");
     }
 
     @Test @Order(11)

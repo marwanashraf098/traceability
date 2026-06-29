@@ -136,7 +136,13 @@ public class EmbeddedController {
     @PreAuthorize("hasRole('SHOPIFY_EMBEDDED')")
     public Map<String, Object> exceptions(@RequestParam(defaultValue = "10") int limit) {
         limit = Math.min(limit, 50);
-        Map<String, Object> full = exceptionService.listExceptions(null, null, 0, limit);
+        // tx.execute() is mandatory — TenantAwareConnection sets the GUC (app.current_tenant)
+        // at transaction start; ExceptionService.listExceptions() line 54 queries tenants via
+        // app_user (RLS-enforced), so without the GUC the RLS policy returns 0 rows and
+        // queryForMap throws EmptyResultDataAccessException.
+        final int effectiveLimit = limit;
+        Map<String, Object> full = tx.execute(txs ->
+                exceptionService.listExceptions(null, null, 0, effectiveLimit));
 
         @SuppressWarnings("unchecked")
         List<Map<String, Object>> items =
