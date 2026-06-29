@@ -4,7 +4,46 @@
 
 ## Current state
 
-**411 tests — all green, deterministic** — 2026-06-29.
+**438 tests — all green, deterministic** — 2026-06-30.
+
+---
+
+**httpOnly-cookie persistent sessions — Part 1 + Part 2 (2026-06-30):**
+
+Two-part auth overhaul that fixes browser refresh 401s and keeps users signed in across sessions.
+
+*Part 1 — SPA route 401 on browser refresh (commit `7c921eb`):*
+
+SecurityConfig `requestMatchers(...).permitAll()` was only covering `/login` and `/signup`. All 14 protected SPA routes (e.g. `/overview`, `/orders`, `/orders/*`, `/catalog`, ...) were falling through to `anyRequest().authenticated()`, causing the Spring filter chain to return HTTP 401 when a browser refreshed on those URLs. Fix: add all SPA routes to the permit list (shell serving only — `/api/**` stays auth-gated). `SpaRoutingTest` +15 cases (14 route assertions + 1 API 401 guard).
+
+*Part 2 — httpOnly cookie refresh token (commits `1bfea92`, `7292a8c`, `a2793ae`):*
+
+**Backend:**
+- `AccessTokenResponse` record: structurally removes `refreshToken` from all response bodies.
+- `AuthController`: login + signup set `traced_refresh` httpOnly + Secure + SameSite=Lax cookie (`Path=/api/v1/auth/refresh`, `Max-Age=2592000` = 30 days). Refresh reads `@CookieValue("traced_refresh")` — cookie is rotated on each call. Logout sets `Max-Age=0` to expire the cookie client-side. PIN switch (`pinSwitch`) returns `AccessTokenResponse` without touching the cookie — the worker session keeps the device's original cookie.
+- `MagicLinkController`: stop putting tokens in URL fragment (was broken AND leaked refresh token into browser history). Now sets the httpOnly cookie and redirects to `{appUrl}/` with no tokens in the URL. SPA gets access token via on-load refresh.
+- `ApiExceptionHandler`: `MissingRequestCookieException` → 401 (not 400).
+- Access token lifetime: 15 → 30 min (fewer cycles now that silent refresh is in place).
+
+**Frontend:**
+- `auth.ts`: new module-level `_accessToken` store. Access token lives in JS memory only — never localStorage, never a cookie JS can read. Lost on page reload by design; `RequireAuth` restores it.
+- `api.ts`: reads `getAccessToken()`; adds `doRefresh()` + `refreshPromise` dedup (concurrent 401s share one refresh call); `RETRY_FLAG` Symbol prevents infinite loops on real 401.
+- `RequireAuth` (App.tsx): async loading/authenticated/unauthenticated states. Fast path if token already in memory. On page reload: shows spinner → calls `POST /api/v1/auth/refresh` → success stores token + renders, failure → `/login`. Eliminates forced re-login on browser refresh.
+- `Login.tsx` + `Signup.tsx`: `setAccessToken()` instead of `localStorage.setItem`. Both run `localStorage.removeItem('token')` on mount to clean up the pre-cookie stale key.
+- `Layout.tsx`: logout now calls `POST /api/v1/auth/logout` (server revokes DB refresh token + expires cookie), then `clearAccessToken()` + navigate.
+- `Fulfill.tsx`, `Returns.tsx`, `Receiving.tsx`: inline fetch helpers updated from localStorage to `getAccessToken()` / `clearAccessToken()`.
+
+**Tests:**
+- `CookieAuthTest` — 12 cases (CA1–CA12): login/signup body + cookie; refresh rotation; missing/revoked cookie → 401; logout expires cookie; `refreshToken` absent from every endpoint body; cookie attributes (HttpOnly, Secure, SameSite=Lax, Path, Max-Age=2592000); path scoped to refresh endpoint; CORS rejects unknown origin.
+- `AuthIntegrationTest` — helpers return `AccessTokenResponse`; test 6 (refresh rotation) uses `Cookie:` header.
+- `ShopifyMagicLinkTest` — tests 1 + 7 updated: verify `Set-Cookie: traced_refresh=` + clean redirect URL; use cookie via refresh to get access token for JWT claim assertions.
+
+**Decisions:**
+- SameSite=Lax is sufficient CSRF protection for the refresh endpoint (no cross-site POST delivers the cookie on Lax browsers, and POST is not a "safe" top-level navigation). Defense-in-depth: CORS is restrictive.
+- `Path=/api/v1/auth/refresh` — cookie only ever sent to the one endpoint. Never sent to `/api/v1/embedded/*` or any other route. ShopifySessionTokenFilter is structurally unaffected.
+- No `refreshToken` in any response body. Structural enforcement via `AccessTokenResponse` record (no field to accidentally include).
+
+---
 
 **Order-intake stuck-pending fix + register-webhooks endpoint (2026-06-29):**
 
