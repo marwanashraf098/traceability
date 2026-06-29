@@ -16,17 +16,6 @@ redirect_urls = [ "https://app.tracedtech.com/auth/shopify/callback" ]
 
 [webhooks]
 api_version = "2026-04"
-
-# GDPR mandatory webhooks — required for Shopify app review.
-# URLs match ShopifyWebhookController endpoints.
-[[webhooks.subscriptions]]
-topics = ["customers/data_request"]
-uri = "/webhooks/shopify/customers/data_request"
-
-[[webhooks.subscriptions]]
-topics = ["customers/redact"]
-uri = "/webhooks/shopify/customers/redact"
-
-[[webhooks.subscriptions]]
-topics = ["shop/redact"]
-uri = "/webhooks/shopify/shop/redact"
+# Webhook subscriptions are registered programmatically by RegisterShopifyWebhooksJob
+# on each store install — required by use_legacy_install_flow = true (app-specific
+# toml subscriptions are incompatible with the legacy install flow).
