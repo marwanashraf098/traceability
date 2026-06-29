@@ -7,6 +7,9 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestMethod;
 import org.springframework.web.bind.annotation.RequestParam;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
@@ -42,6 +45,7 @@ import java.util.stream.Collectors;
 @Controller
 public class SpaController {
 
+    private static final Logger log = LoggerFactory.getLogger(SpaController.class);
     private static final String SEG = "[^.]*";
 
     // Root route — three distinct cases, distinguished by which Shopify params are present.
@@ -68,16 +72,22 @@ public class SpaController {
 
         if (host != null) {
             if ("POST".equalsIgnoreCase(request.getMethod())) {
-                return "redirect:/?" + paramsToQueryString(request.getParameterMap());
+                String dest = "/?" + paramsToQueryString(request.getParameterMap());
+                log.debug("[SPA-ROOT] method=POST host={} shop={} → PRG redirect to GET {}", host, shop, dest);
+                return "redirect:" + dest;
             }
+            log.debug("[SPA-ROOT] method=GET host={} shop={} → forward:/embedded.html", host, shop);
             return "forward:/embedded.html";
         }
 
         if (shop != null) {
             String qs = paramsToQueryString(request.getParameterMap());
-            return "redirect:/auth/shopify/install" + (qs.isEmpty() ? "" : "?" + qs);
+            String dest = "/auth/shopify/install" + (qs.isEmpty() ? "" : "?" + qs);
+            log.debug("[SPA-ROOT] method={} host=null shop={} → redirect:{}", request.getMethod(), shop, dest);
+            return "redirect:" + dest;
         }
 
+        log.debug("[SPA-ROOT] method={} host=null shop=null → forward:/index.html (landing)", request.getMethod());
         return "forward:/index.html";
     }
 
