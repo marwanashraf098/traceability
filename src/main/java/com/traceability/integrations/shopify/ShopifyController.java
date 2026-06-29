@@ -80,7 +80,8 @@ public class ShopifyController {
     public ResponseEntity<Void> sync(
             @PathVariable UUID storeId,
             @AuthenticationPrincipal CustomUserDetails principal) {
-        importJob.run(storeId, principal.tenantId());
+        UUID tenantId = resolveStoreTenant(storeId, principal);
+        importJob.run(storeId, tenantId);
         return ResponseEntity.ok().build();
     }
 
@@ -94,8 +95,30 @@ public class ShopifyController {
     public ResponseEntity<Void> registerWebhooks(
             @PathVariable UUID storeId,
             @AuthenticationPrincipal CustomUserDetails principal) {
-        webhooksJob.run(storeId, principal.tenantId());
+        UUID tenantId = resolveStoreTenant(storeId, principal);
+        webhooksJob.run(storeId, tenantId);
         return ResponseEntity.ok().build();
+    }
+
+    /**
+     * Resolves the tenant for a store, confirming it belongs to the caller's tenant.
+     * Throws 404 if the store doesn't exist under the principal's tenant.
+     *
+     * Note on the two-tenant problem: stores installed via Shopify OAuth are provisioned
+     * under a separate tenant from the owner's regular login account. If these don't match,
+     * the caller gets a 404 with a hint to use the embedded app path instead.
+     */
+    private UUID resolveStoreTenant(UUID storeId, CustomUserDetails principal) {
+        UUID found = tx.execute(s -> jdbc.query(
+            "SELECT tenant_id FROM stores WHERE id = ? AND tenant_id = ?",
+            rs -> rs.next() ? rs.getObject("tenant_id", UUID.class) : null,
+            storeId, principal.tenantId()));
+        if (found == null) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND,
+                "Store not found or does not belong to this account. " +
+                "If installed via Shopify OAuth, use the embedded app to authenticate as that tenant.");
+        }
+        return found;
     }
 
     /** Returns the current import status for a store (owner or manager). */
