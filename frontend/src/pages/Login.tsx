@@ -1,7 +1,8 @@
-import { useState, FormEvent } from 'react'
+import { useState, FormEvent, useEffect } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { login } from '../api'
+import { setAccessToken } from '../auth'
 import { Logo } from '../components/Logo'
 
 export default function Login() {
@@ -12,13 +13,16 @@ export default function Login() {
   const [error, setError]       = useState('')
   const [loading, setLoading]   = useState(false)
 
+  // Remove any stale key left from the pre-cookie auth system.
+  useEffect(() => { localStorage.removeItem('token') }, [])
+
   async function handleSubmit(e: FormEvent) {
     e.preventDefault()
     setError('')
     setLoading(true)
     try {
       const res = await login(email, password)
-      localStorage.setItem('token', res.accessToken)
+      setAccessToken(res.accessToken) // cookie set by server; keep access token in memory
       navigate('/overview')
     } catch {
       setError(t('login.error'))

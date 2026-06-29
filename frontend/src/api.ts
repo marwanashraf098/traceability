@@ -1,30 +1,65 @@
+import { clearAccessToken, getAccessToken, setAccessToken } from './auth'
+
 const BASE = '/api/v1'
 
-function token() {
-  return localStorage.getItem('token')
+// De-duplication guard: all concurrent 401s wait on the same refresh call so
+// we never fire more than one refresh at a time.
+let refreshPromise: Promise<string> | null = null
+
+async function doRefresh(): Promise<string> {
+  const res = await fetch(BASE + '/auth/refresh', { method: 'POST' })
+  if (!res.ok) {
+    clearAccessToken()
+    throw new Error('refresh_failed')
+  }
+  const data: { accessToken: string } = await res.json()
+  setAccessToken(data.accessToken)
+  return data.accessToken
 }
 
-export async function request<T>(path: string, opts: RequestInit = {}): Promise<T> {
+// Symbol flag on retried requests so the interceptor never loops.
+const RETRY_FLAG = Symbol('retry')
+type RetryOpts = RequestInit & { [RETRY_FLAG]?: true }
+
+export async function request<T>(path: string, opts: RetryOpts = {}): Promise<T> {
+  const token = getAccessToken()
   const res = await fetch(BASE + path, {
     ...opts,
     headers: {
       'Content-Type': 'application/json',
-      ...(token() ? { Authorization: `Bearer ${token()}` } : {}),
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
       ...opts.headers,
     },
   })
+
   if (res.status === 401) {
-    localStorage.removeItem('token')
-    window.location.href = '/login'
-    throw new Error('Unauthenticated')
+    // If this IS the retry, the refresh itself failed → real logout (no loop).
+    if (opts[RETRY_FLAG]) {
+      clearAccessToken()
+      window.location.href = '/login'
+      throw new Error('Unauthenticated')
+    }
+    // Kick off one shared refresh, or join an already in-flight one.
+    try {
+      if (!refreshPromise) {
+        refreshPromise = doRefresh().finally(() => { refreshPromise = null })
+      }
+      await refreshPromise
+    } catch {
+      clearAccessToken()
+      window.location.href = '/login'
+      throw new Error('Unauthenticated')
+    }
+    // Retry the original request exactly once with the new access token.
+    return request<T>(path, { ...opts, [RETRY_FLAG]: true })
   }
+
   if (!res.ok) throw new Error(`${res.status}: ${res.statusText}`)
   return res.json()
 }
 
 export interface LoginResponse {
   accessToken: string
-  refreshToken: string
 }
 
 export function login(email: string, password: string) {
@@ -261,7 +296,7 @@ function parseJwtPayload(jwtToken: string): Record<string, unknown> {
 }
 
 export function getRoleFromToken(): 'owner' | 'manager' | 'worker' | null {
-  const t = token()
+  const t = getAccessToken()
   if (!t) return null
   const claims = parseJwtPayload(t)
   const role = claims['role']
@@ -272,7 +307,7 @@ export function getRoleFromToken(): 'owner' | 'manager' | 'worker' | null {
 // ── Auth: signup ──────────────────────────────────────────────────────────────
 
 export function signup(tenantName: string, name: string, email: string, password: string, consent: boolean) {
-  return request<{ accessToken: string; refreshToken: string }>('/auth/signup', {
+  return request<{ accessToken: string }>('/auth/signup', {
     method: 'POST',
     body: JSON.stringify({ tenantName, name, email, password, consent }),
   })

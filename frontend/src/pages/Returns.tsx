@@ -2,9 +2,11 @@ import { useEffect, useRef, useState, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Badge, EmptyState, Spinner } from '../components/ui'
 
+import { getAccessToken, clearAccessToken } from '../auth'
+
 const BASE = '/api/v1'
 function authHeaders(): Record<string, string> {
-  const t = localStorage.getItem('token')
+  const t = getAccessToken()
   return t ? { Authorization: `Bearer ${t}` } : {}
 }
 async function api<T = void>(path: string, opts: RequestInit = {}): Promise<T> {
@@ -16,7 +18,7 @@ async function api<T = void>(path: string, opts: RequestInit = {}): Promise<T> {
       ...(opts.headers as Record<string, string> ?? {}),
     },
   })
-  if (res.status === 401) { localStorage.removeItem('token'); window.location.href = '/login'; throw new Error('401') }
+  if (res.status === 401) { clearAccessToken(); window.location.href = '/login'; throw new Error('401') }
   if (!res.ok) {
     const b = await res.json().catch(() => ({}))
     throw Object.assign(new Error(b?.message ?? `HTTP ${res.status}`), { status: res.status })
@@ -64,11 +66,11 @@ interface FinalizeSummary {
 // ── Piece label reprint (blob PDF, not base64) ───────────────────────────────
 
 async function printPieceLabel(pieceId: string): Promise<void> {
-  const token = localStorage.getItem('token')
+  const token = getAccessToken()
   const headers: Record<string, string> = {}
   if (token) headers.Authorization = `Bearer ${token}`
   const res = await fetch(BASE + `/returns/pieces/${pieceId}/label`, { headers })
-  if (res.status === 401) { localStorage.removeItem('token'); window.location.href = '/login'; return }
+  if (res.status === 401) { clearAccessToken(); window.location.href = '/login'; return }
   if (!res.ok) {
     const b = await res.json().catch(() => ({}))
     throw Object.assign(new Error(b?.message ?? `HTTP ${res.status}`), { status: res.status })

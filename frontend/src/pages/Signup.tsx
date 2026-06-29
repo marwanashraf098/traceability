@@ -1,7 +1,8 @@
-import { useState, FormEvent } from 'react'
+import { useState, FormEvent, useEffect } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { signup } from '../api'
+import { setAccessToken } from '../auth'
 import { Logo } from '../components/Logo'
 
 const EGYPT_PHONE = /^(\+20|0020|0)1[0-9]{9}$/
@@ -19,6 +20,8 @@ export default function Signup() {
   const [error,        setError]        = useState('')
   const [loading,      setLoading]      = useState(false)
 
+  useEffect(() => { localStorage.removeItem('token') }, [])
+
   function validate(): string {
     if (password.length < 8) return t('signup.errors.passwordShort')
     if (phone && !EGYPT_PHONE.test(phone.trim())) return t('signup.errors.phoneInvalid')
@@ -34,7 +37,7 @@ export default function Signup() {
     setLoading(true)
     try {
       const res = await signup(businessName.trim(), ownerName.trim(), email.trim(), password, consent)
-      localStorage.setItem('token', res.accessToken)
+      setAccessToken(res.accessToken)
       navigate('/overview')
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : ''

@@ -1,7 +1,8 @@
 import { NavLink, useNavigate } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { useState, useRef, ReactNode } from 'react'
-import { getRoleFromToken } from '../api'
+import { getRoleFromToken, request } from '../api'
+import { clearAccessToken } from '../auth'
 import { Logo } from './Logo'
 
 // ── Inline SVG icons ──────────────────────────────────────────────────────────
@@ -45,8 +46,9 @@ export default function Layout({ children }: { children: ReactNode }) {
   const searchRef = useRef<HTMLInputElement>(null)
   const role = getRoleFromToken()
 
-  function logout() {
-    localStorage.removeItem('token')
+  async function logout() {
+    try { await request<void>('/auth/logout', { method: 'POST' }) } catch { /* ignore */ }
+    clearAccessToken()
     navigate('/login')
   }
 

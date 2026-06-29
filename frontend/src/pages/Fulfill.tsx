@@ -2,10 +2,12 @@ import { useEffect, useRef, useState, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
 import { EmptyState, Spinner } from '../components/ui'
 
+import { getAccessToken, clearAccessToken } from '../auth'
+
 const BASE = '/api/v1'
 
 function authHeaders(): Record<string, string> {
-  const token = localStorage.getItem('token')
+  const token = getAccessToken()
   return token ? { Authorization: `Bearer ${token}` } : {}
 }
 
@@ -17,7 +19,7 @@ async function api<T = void>(path: string, opts: RequestInit = {}): Promise<{ da
   }
   const res = await fetch(BASE + path, { ...opts, headers })
   if (res.status === 401) {
-    localStorage.removeItem('token')
+    clearAccessToken()
     window.location.href = '/login'
     throw new Error('Unauthenticated')
   }

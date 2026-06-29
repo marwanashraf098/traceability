@@ -2,14 +2,16 @@ import { useState, useEffect, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
 import { EmptyState, Spinner } from '../components/ui'
 
+import { getAccessToken, clearAccessToken } from '../auth'
+
 const BASE = '/api/v1'
 function authHeaders() {
-  const t = localStorage.getItem('token')
+  const t = getAccessToken()
   return { 'Content-Type': 'application/json', ...(t ? { Authorization: `Bearer ${t}` } : {}) }
 }
 async function api<T>(path: string, opts: RequestInit = {}): Promise<T> {
   const res = await fetch(BASE + path, { ...opts, headers: { ...authHeaders(), ...opts.headers as Record<string,string> } })
-  if (res.status === 401) { localStorage.removeItem('token'); window.location.href = '/login'; throw new Error('Unauth') }
+  if (res.status === 401) { clearAccessToken(); window.location.href = '/login'; throw new Error('Unauth') }
   if (!res.ok) { const txt = await res.text(); throw new Error(txt || res.statusText) }
   return res.json()
 }

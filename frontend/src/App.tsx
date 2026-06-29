@@ -1,4 +1,6 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
+import { useState, useEffect } from 'react'
+import { getAccessToken, setAccessToken, clearAccessToken } from './auth'
 import Layout from './components/Layout'
 import Landing from './pages/Landing'
 import Login from './pages/Login'
@@ -20,8 +22,45 @@ import Inventory from './pages/Inventory'
 import Privacy from './pages/Privacy'
 import Terms from './pages/Terms'
 
+/**
+ * Async auth gate. On page reload the in-memory access token is gone, so we call
+ * POST /api/v1/auth/refresh — the browser sends the traced_refresh httpOnly cookie
+ * automatically. If the cookie is valid we get a new access token and proceed; if not
+ * (expired, revoked, or absent) we redirect to /login.
+ *
+ * Fast path: if the access token is already in memory (in-session navigation) we skip
+ * the refresh call entirely — no spinner, no extra RTT.
+ */
 function RequireAuth({ children }: { children: React.ReactNode }) {
-  return localStorage.getItem('token') ? <>{children}</> : <Navigate to="/login" replace />
+  const [state, setState] = useState<'loading' | 'authenticated' | 'unauthenticated'>(
+    () => getAccessToken() !== null ? 'authenticated' : 'loading'
+  )
+
+  useEffect(() => {
+    if (state !== 'loading') return
+    fetch('/api/v1/auth/refresh', { method: 'POST' })
+      .then(res => {
+        if (!res.ok) { setState('unauthenticated'); return null }
+        return res.json() as Promise<{ accessToken: string }>
+      })
+      .then(data => {
+        if (data) { setAccessToken(data.accessToken); setState('authenticated') }
+      })
+      .catch(() => setState('unauthenticated'))
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  if (state === 'loading') {
+    return (
+      <div className="min-h-screen bg-base flex items-center justify-center">
+        <div className="w-8 h-8 rounded-full border-2 border-brand/30 border-t-brand animate-spin" />
+      </div>
+    )
+  }
+  if (state === 'unauthenticated') {
+    clearAccessToken()
+    return <Navigate to="/login" replace />
+  }
+  return <>{children}</>
 }
 
 export default function App() {
