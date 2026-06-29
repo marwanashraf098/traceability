@@ -4,7 +4,33 @@
 
 ## Current state
 
-**390 backend + 47 frontend tests — all green, deterministic** — 2026-06-29.
+**409 tests — all green, deterministic** — 2026-06-29.
+
+**Hybrid session-token exchange — embedded token acquisition (2026-06-29):**
+
+`POST /api/v1/embedded/token-exchange` fires in parallel with the four dashboard data fetches on every embedded-app mount. Replaces the need to manually call the legacy OAuth callback to acquire a Shopify access token inside the embedded context.
+
+*Backend:*
+- `ShopifySessionTokenFilter` now populates `shopDomain` on the `CustomUserDetails` principal (4th record field; null for JWT-based principals). The shop domain comes from the filter's verified `dest` claim — cannot be redirected by caller input. Null-tenant → `{"error":"NOT_PROVISIONED"}` 401 (distinct from generic `{"error":"Unauthorized"}`).
+- `EmbeddedTokenExchangeController.tokenExchange()` — `@PostMapping /api/v1/embedded/token-exchange`, `@PreAuthorize("hasRole('SHOPIFY_EMBEDDED')")`, delegates to `ShopifyOAuthService.acquireOrRefreshViaSessionToken()`.
+- `ShopifyOAuthService.acquireOrRefreshViaSessionToken()` — freshness gate (skip if `access_token_expires_at > now+10min AND connected`), exchanges via `ShopifyHttpGateway.exchangeSessionToken()`, persists with `EXCHANGE_SESSION_TOKEN_UPDATE` (CASE expression: only flips `import_status→pending` when `status=needs_reauth OR import_status IN (idle,failed)`; completed/running imports are never disrupted), enqueues import+webhook jobs on recovery.
+- `ShopifySessionTokenExchangeException` (new) — 4xx from Shopify; does NOT trigger `needs_reauth` (refresh token still valid). `ApiExceptionHandler` maps it → 502.
+- `ShopifyTransientException` → 503.
+- `EmbeddedReadOnlyGuardTest` updated with `TOKEN_EXCHANGE_EXEMPTIONS` allowlist — guard still enforces read-only for all other embedded-package methods.
+
+*Frontend (`EmbeddedApp.tsx`):*
+- `useAuthFetch` accepts optional `RequestInit` options (method, headers, body).
+- Token-exchange POST fires in parallel (Q5 decision — not serial before data fetches). NOT_PROVISIONED 401 → `window.top.location.href = /auth/shopify/install?shop=…` (breaks out of iframe for OAuth consent). Generic 401 → no redirect. 502/503 → silent.
+
+*Test matrix — `ShopifyTokenExchangeTest.java` (11 tests):*
+TE01 fresh (>10 min) → 204 no exchange; TE02 stale → exchange → 204; TE03 null expiry → exchange; TE04 needs_reauth recovery → status=connected import_status=pending; TE05 connected+idle → pending; TE06 4xx → 502 status unchanged; TE07 5xx → 503 state unchanged; TE08 cross-shop confinement (gateway called with principal's shop, not SHOP_B); TE09 concurrent two-tabs → both 204; TE10 no auth → 401; TE11 unknown shop → NOT_PROVISIONED body.
+
+*Commit:* `8f4ffa1`.
+
+**Decisions made:**
+- No `SELECT FOR UPDATE` for token exchange (idempotent; not single-use like refresh tokens).
+- CASE-based SQL for import_status — unconditional update would disrupt `completed` stores on every routine token refresh.
+- `shopDomain` from principal only — structural cross-shop confinement, not a validation check.
 
 **Embedded Polaris dashboard (2026-06-29):**
 
@@ -17,7 +43,7 @@ Full read-only dashboard in `frontend/src/embedded/EmbeddedApp.tsx`. Replaces th
 4. **Open exceptions** — `GET /api/v1/embedded/exceptions?limit=10`. Badge count + CRITICAL→LOW rows; each row: severity Badge + type label + subjectKey + "View" deep-link to `https://app.tracedtech.com/exceptions`. "View all N →" footer when total exceeds the limit. Empty message when clean.
 5. **Footer CTA** — read-only notice + "Open Traced ↗" `<a target="_blank">` that breaks out of the Shopify iframe.
 
-*Technical:* Four parallel fetch calls in one `useEffect`; each section has independent `{ status: 'loading'|'ok'|'err' }` state. CSS bar chart uses inline `style` width % — no extra dependency. `EmbeddedReadOnlyGuardTest` still passes (no backend changes). Build clean: `embedded-Bocijd-u.js` (272 KB).
+*Technical:* Four parallel fetch calls in one `useEffect`; each section has independent `{ status: 'loading'|'ok'|'err' }` state. CSS bar chart uses inline `style` width % — no extra dependency.
 
 *Commit:* `a18614c`.
 
