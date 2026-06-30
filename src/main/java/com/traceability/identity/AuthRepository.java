@@ -73,6 +73,17 @@ public class AuthRepository {
         return raw;
     }
 
+    /**
+     * Looks up the role of an active user. Runs @Transactional so TenantAwareConnection
+     * fires the SET LOCAL GUC — caller must have TenantContext set before calling.
+     */
+    @Transactional(readOnly = true)
+    public String findUserRole(UUID userId) {
+        return jdbc.queryForObject(
+                "SELECT role FROM users WHERE id = ? AND active = true",
+                String.class, userId);
+    }
+
     /** Revokes one refresh token by its raw value (called on rotation). */
     @Transactional
     public void revokeRefreshToken(String rawToken) {

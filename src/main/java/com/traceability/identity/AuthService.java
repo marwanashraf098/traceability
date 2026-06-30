@@ -101,14 +101,20 @@ public class AuthService {
         if (row.expiresAt().before(new java.util.Date())) {
             throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Token expired");
         }
-        // Look up the user to get current role.
-        UserCredentials creds = lookupUserById(row.userId(), row.tenantId());
 
+        // All three repo calls run inside TenantContext so TenantAwareConnection fires
+        // SET LOCAL before each @Transactional method — findUserRole needs this for RLS.
         return TenantContext.runAs(row.tenantId(), () -> {
+            String role;
+            try {
+                role = repo.findUserRole(row.userId());
+            } catch (EmptyResultDataAccessException e) {
+                throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "User not found or inactive");
+            }
             repo.revokeRefreshToken(rawToken);
             String newRefresh = repo.storeRefreshToken(row.userId(), row.tenantId());
             return new TokenResponse(
-                    jwt.issueAccessToken(row.userId(), row.tenantId(), creds.role()),
+                    jwt.issueAccessToken(row.userId(), row.tenantId(), role),
                     newRefresh);
         });
     }
@@ -135,20 +141,6 @@ public class AuthService {
         } catch (EmptyResultDataAccessException e) {
             throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Bad credentials");
         }
-    }
-
-    private UserCredentials lookupUserById(UUID userId, UUID tenantId) {
-        // We already know tenantId from the refresh token, so set context for this query.
-        return TenantContext.runAs(tenantId, () ->
-            jdbc.queryForObject(
-                    "SELECT id, tenant_id, password_hash, role FROM users WHERE id = ? AND active = true",
-                    (rs, rn) -> new UserCredentials(
-                            UUID.fromString(rs.getString("id")),
-                            UUID.fromString(rs.getString("tenant_id")),
-                            rs.getString("password_hash"),
-                            rs.getString("role")),
-                    userId)
-        );
     }
 
     private RefreshRow lookupRefreshToken(String hash) {
