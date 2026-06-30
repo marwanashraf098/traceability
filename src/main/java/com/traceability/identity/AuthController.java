@@ -9,6 +9,7 @@ import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseCookie;
+import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
@@ -47,15 +48,18 @@ public class AuthController {
     /**
      * Reads the refresh token from the httpOnly cookie, rotates it (revoke old, issue new),
      * writes the new cookie, and returns the new access token in the body.
-     * Missing cookie → MissingRequestCookieException → 401 via ApiExceptionHandler.
+     * Missing cookie → 401 directly (required=false avoids MissingRequestCookieException path).
      */
     @PostMapping("/refresh")
-    public AccessTokenResponse refresh(
-            @CookieValue(COOKIE_NAME) String rawToken,
+    public ResponseEntity<AccessTokenResponse> refresh(
+            @CookieValue(value = COOKIE_NAME, required = false) String rawToken,
             HttpServletResponse response) {
+        if (rawToken == null || rawToken.isBlank()) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
+        }
         TokenResponse tokens = authService.refresh(rawToken.trim());
         setRefreshCookie(response, tokens.refreshToken(), COOKIE_MAX_AGE);
-        return new AccessTokenResponse(tokens.accessToken());
+        return ResponseEntity.ok(new AccessTokenResponse(tokens.accessToken()));
     }
 
     @PostMapping("/logout")

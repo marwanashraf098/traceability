@@ -11,6 +11,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.web.bind.MissingRequestCookieException;
+import org.springframework.web.bind.MissingRequestHeaderException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.server.ResponseStatusException;
@@ -66,10 +67,16 @@ public class ApiExceptionHandler {
         return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).build();
     }
 
-    // Missing traced_refresh cookie on POST /api/v1/auth/refresh → 401 (not 400).
-    // The client has no refresh session; they must re-authenticate via login.
+    // Missing traced_refresh cookie on POST /api/v1/auth/refresh → 401 (not 400/500).
+    // refresh() uses required=false so this is a safety net for any future @CookieValue endpoint.
     @ExceptionHandler(MissingRequestCookieException.class)
     ResponseEntity<Void> handleMissingCookie(MissingRequestCookieException ex) {
+        return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
+    }
+
+    // Missing required @RequestHeader → 401 instead of 400; same contract as missing cookie.
+    @ExceptionHandler(MissingRequestHeaderException.class)
+    ResponseEntity<Void> handleMissingHeader(MissingRequestHeaderException ex) {
         return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
     }
 
