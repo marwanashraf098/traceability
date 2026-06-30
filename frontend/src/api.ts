@@ -7,7 +7,7 @@ const BASE = '/api/v1'
 let refreshPromise: Promise<string> | null = null
 
 async function doRefresh(): Promise<string> {
-  const res = await fetch(BASE + '/auth/refresh', { method: 'POST' })
+  const res = await fetch(BASE + '/auth/refresh', { method: 'POST', credentials: 'include' })
   if (!res.ok) {
     clearAccessToken()
     throw new Error('refresh_failed')
@@ -25,6 +25,7 @@ export async function request<T>(path: string, opts: RetryOpts = {}): Promise<T>
   const token = getAccessToken()
   const res = await fetch(BASE + path, {
     ...opts,
+    credentials: 'include',
     headers: {
       'Content-Type': 'application/json',
       ...(token ? { Authorization: `Bearer ${token}` } : {}),

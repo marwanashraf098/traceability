@@ -38,7 +38,7 @@ function RequireAuth({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     if (state !== 'loading') return
-    fetch('/api/v1/auth/refresh', { method: 'POST' })
+    fetch('/api/v1/auth/refresh', { method: 'POST', credentials: 'include' })
       .then(res => {
         if (!res.ok) { setState('unauthenticated'); return null }
         return res.json() as Promise<{ accessToken: string }>
