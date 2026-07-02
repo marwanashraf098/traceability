@@ -34,6 +34,7 @@ import java.util.UUID;
 import java.util.EnumMap;
 
 import com.traceability.tenancy.TenantContext;
+import org.springframework.transaction.annotation.Transactional;
 
 /**
  * Generates thermal label PDFs (Code 128 barcode, piece ID, SKU, variant name).
@@ -76,6 +77,7 @@ public class LabelService {
      * @param labelW_mm  label width in mm  (null → DEFAULT_WIDTH_MM)
      * @param labelH_mm  label height in mm (null → DEFAULT_HEIGHT_MM)
      */
+    @Transactional(readOnly = true)
     public byte[] generateSessionLabels(UUID sessionId, Float labelW_mm, Float labelH_mm)
             throws IOException {
         UUID tenantId = TenantContext.require();
@@ -100,6 +102,7 @@ public class LabelService {
     }
 
     /** Generates a PDF for a single piece by its ID (for reprint). */
+    @Transactional(readOnly = true)
     public byte[] generatePieceLabel(String pieceId, Float labelW_mm, Float labelH_mm)
             throws IOException {
         UUID tenantId = TenantContext.require();
@@ -122,6 +125,7 @@ public class LabelService {
     }
 
     /** Logs a reprint event and returns the PDF bytes. */
+    @Transactional
     public byte[] reprint(UUID sessionId, UUID actorUserId, String note,
                           Float labelW_mm, Float labelH_mm) throws IOException {
         UUID tenantId = TenantContext.require();

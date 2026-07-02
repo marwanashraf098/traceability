@@ -236,9 +236,15 @@ function SessionView({ session, onRefresh, onBack }: {
     finally { setFinalizing(false) }
   }
 
-  function printLabels() {
+  async function printLabels() {
     setPrintError(null)
-    window.open(`${BASE}/receiving/sessions/${session.id}/labels`, '_blank')
+    try {
+      const res = await fetch(`${BASE}/receiving/sessions/${session.id}/labels`, {
+        headers: authHeaders(),
+      })
+      if (!res.ok) throw new Error(res.statusText)
+      window.open(URL.createObjectURL(await res.blob()), '_blank')
+    } catch (e: unknown) { setPrintError((e as Error).message) }
   }
 
   async function reprintLabels() {
