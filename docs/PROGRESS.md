@@ -4,7 +4,9 @@
 
 ## Current state
 
-**458 tests — all green, deterministic** — 2026-07-02.
+**458 backend tests + 47 frontend tests — all green** — 2026-07-02.
+
+CC implementation merged, pushed to main. Frontend `setup.ts` polyfills `localStorage` for Node 22 experimental environment (pre-existing `ov1` failure fixed).
 
 ---
 
