@@ -88,6 +88,16 @@ public class ShopifyWebhookController {
         // Step 1: Two-phase HMAC over raw bytes — before ANY JSON parsing.
         // Phase A (hot path): global client-secret — covers all OAuth stores with zero overhead.
         // Phase B (custom-app path): only if Phase A fails; look up per-store api_secret.
+
+        // [HMAC-DEBUG] Temporary diagnostic logging — remove after custom-app HMAC investigation.
+        // Logs computed HMACs (digest output, not secrets) and body length for comparison.
+        if (log.isWarnEnabled()) {
+            String computedA = ShopifyHmacUtil.computeWebhookHmac(rawBody, clientSecret);
+            log.warn("[HMAC-DEBUG] shop={} topic={}/{} body_bytes={} header={} computed_A={} A_match={}",
+                shopDomain, type, action, rawBody.length, hmacHeader, computedA,
+                computedA.equals(hmacHeader));
+        }
+
         if (!ShopifyHmacUtil.verifyWebhookBody(rawBody, clientSecret, hmacHeader)) {
             if (!verifyCustomAppWebhook(shopDomain, rawBody, hmacHeader)) {
                 log.warn("Shopify webhook HMAC mismatch for shop={} topic={}/{}", shopDomain, type, action);
@@ -149,6 +159,10 @@ public class ShopifyWebhookController {
                 shopDomain);
             if (encryptedSecret == null) return false;
             String perStoreSecret = encryptionService.decrypt(encryptedSecret);
+            // [HMAC-DEBUG] Log Phase B computed HMAC (digest output only, not the secret).
+            String computedB = ShopifyHmacUtil.computeWebhookHmac(rawBody, perStoreSecret);
+            log.warn("[HMAC-DEBUG] phase=B source=per-store shop={} body_bytes={} header={} computed_B={} B_match={}",
+                shopDomain, rawBody.length, hmacHeader, computedB, computedB.equals(hmacHeader));
             return ShopifyHmacUtil.verifyWebhookBody(rawBody, perStoreSecret, hmacHeader);
         } catch (Exception e) {
             log.warn("Error verifying custom-app webhook HMAC for shop={}: {}", shopDomain, e.getMessage());

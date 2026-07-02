@@ -339,6 +339,54 @@ class ShopifyHttpGateway implements ShopifyGateway {
         }
     }
 
+    private static final String WEBHOOK_LIST_QUERY = """
+            {
+              webhookSubscriptions(first: 100) {
+                nodes {
+                  id
+                  topic
+                  callbackUrl
+                }
+              }
+            }
+            """;
+
+    private static final String WEBHOOK_DELETE_MUTATION = """
+            mutation WebhookSubscriptionDelete($id: ID!) {
+              webhookSubscriptionDelete(id: $id) {
+                userErrors { field message }
+                deletedWebhookSubscriptionId
+              }
+            }
+            """;
+
+    @Override
+    public List<WebhookSubscription> listWebhookSubscriptions(String shopDomain, String token) {
+        JsonNode data = executeGraphQL(shopDomain, token, WEBHOOK_LIST_QUERY, mapper.createObjectNode());
+        JsonNode nodes = data.path("webhookSubscriptions").path("nodes");
+        List<WebhookSubscription> result = new ArrayList<>();
+        if (nodes.isArray()) {
+            for (JsonNode node : nodes) {
+                result.add(new WebhookSubscription(
+                    node.path("id").asText(),
+                    node.path("topic").asText(),
+                    node.path("callbackUrl").asText()));
+            }
+        }
+        return result;
+    }
+
+    @Override
+    public void deleteWebhookSubscription(String shopDomain, String token, String subscriptionGid) {
+        ObjectNode vars = mapper.createObjectNode().put("id", subscriptionGid);
+        JsonNode data = executeGraphQL(shopDomain, token, WEBHOOK_DELETE_MUTATION, vars);
+        JsonNode errors = data.path("webhookSubscriptionDelete").path("userErrors");
+        if (errors.isArray() && errors.size() > 0) {
+            log.warn("Shopify webhook delete userError: gid={} shop={} message={}",
+                subscriptionGid, shopDomain, errors.get(0).path("message").asText(""));
+        }
+    }
+
     // ---- GraphQL execution + throttle handling --------------------------
 
     private JsonNode executeGraphQL(String shopDomain, String token, String query, JsonNode variables) {

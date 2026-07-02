@@ -147,4 +147,19 @@ public interface ShopifyGateway {
      * @throws ShopifyException on non-recoverable errors (auth failure, bad domain, etc.)
      */
     void registerWebhook(String shopDomain, String token, String topic, String callbackUrl);
+
+    /** A registered Shopify webhook subscription. */
+    record WebhookSubscription(String gid, String topic, String callbackUrl) {}
+
+    /**
+     * Lists all webhook subscriptions for the store (up to 100).
+     * Used to detect stale subscriptions owned by a different app before re-registering.
+     */
+    List<WebhookSubscription> listWebhookSubscriptions(String shopDomain, String token);
+
+    /**
+     * Deletes a webhook subscription by its GID.
+     * Logs but does not throw on userErrors (e.g. already deleted by the time we call this).
+     */
+    void deleteWebhookSubscription(String shopDomain, String token, String subscriptionGid);
 }

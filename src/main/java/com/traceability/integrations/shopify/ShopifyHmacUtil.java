@@ -74,12 +74,24 @@ public final class ShopifyHmacUtil {
     public static boolean verifyWebhookBody(byte[] rawBody, String clientSecret, String providedBase64) {
         if (providedBase64 == null || providedBase64.isBlank()) return false;
         try {
-            Mac mac = Mac.getInstance("HmacSHA256");
-            mac.init(new SecretKeySpec(clientSecret.getBytes(StandardCharsets.UTF_8), "HmacSHA256"));
-            String computed = Base64.getEncoder().encodeToString(mac.doFinal(rawBody));
+            String computed = computeWebhookHmac(rawBody, clientSecret);
             return MessageDigest.isEqual(
                     computed.getBytes(StandardCharsets.UTF_8),
                     providedBase64.getBytes(StandardCharsets.UTF_8));
+        } catch (Exception e) {
+            throw new IllegalStateException("HMAC-SHA256 computation failed", e);
+        }
+    }
+
+    /**
+     * Computes HMAC-SHA256 over rawBody using secret, returns base64-encoded result.
+     * Used by diagnostic logging — never logs the secret itself, only the digest output.
+     */
+    static String computeWebhookHmac(byte[] rawBody, String secret) {
+        try {
+            Mac mac = Mac.getInstance("HmacSHA256");
+            mac.init(new SecretKeySpec(secret.getBytes(StandardCharsets.UTF_8), "HmacSHA256"));
+            return Base64.getEncoder().encodeToString(mac.doFinal(rawBody));
         } catch (Exception e) {
             throw new IllegalStateException("HMAC-SHA256 computation failed", e);
         }

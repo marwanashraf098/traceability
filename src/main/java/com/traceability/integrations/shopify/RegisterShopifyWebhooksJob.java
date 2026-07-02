@@ -82,8 +82,33 @@ public class RegisterShopifyWebhooksJob {
                 return;
             }
 
+            // Delete all existing subscriptions pointing to our callback URL before re-registering.
+            // This evicts stale subscriptions owned by a prior app install (OAuth or an older
+            // custom-app version) that would be signed with a different secret, causing HMAC
+            // mismatches on every delivery. Idempotent: list → delete owned → register fresh.
+            String callbackBase = webhookBaseUrl + "/webhooks/shopify/";
+            try {
+                List<ShopifyGateway.WebhookSubscription> existing =
+                    shopifyGateway.listWebhookSubscriptions(shopDomain, rawToken);
+                for (ShopifyGateway.WebhookSubscription sub : existing) {
+                    if (sub.callbackUrl().startsWith(callbackBase)) {
+                        try {
+                            shopifyGateway.deleteWebhookSubscription(shopDomain, rawToken, sub.gid());
+                            log.info("Deleted stale webhook subscription gid={} topic={} shop={}",
+                                sub.gid(), sub.topic(), shopDomain);
+                        } catch (ShopifyException e) {
+                            log.warn("Failed to delete webhook subscription gid={} shop={}: {}",
+                                sub.gid(), shopDomain, e.getMessage());
+                        }
+                    }
+                }
+            } catch (ShopifyException e) {
+                log.warn("Could not list existing webhook subscriptions for store {} — will attempt registration anyway: {}",
+                    storeId, e.getMessage());
+            }
+
             for (String topic : TOPICS) {
-                String callbackUrl = webhookBaseUrl + "/webhooks/shopify/" + topic;
+                String callbackUrl = callbackBase + topic;
                 try {
                     shopifyGateway.registerWebhook(shopDomain, rawToken, topic, callbackUrl);
                 } catch (ShopifyException e) {
