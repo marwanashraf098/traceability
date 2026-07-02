@@ -119,7 +119,7 @@ class ProviderDeliveryIdTest {
         ObjectNode raw = mapper.createObjectNode();
         raw.put("_id", "BOSTA-ID-001");
         raw.put("trackingNumber", "AWB-MB001");
-        BostaDelivery delivery = new BostaDelivery("AWB-MB001", 41, "SEND", 0, "ORD-PD1", raw);
+        BostaDelivery delivery = new BostaDelivery("AWB-MB001", 41, "SEND", 0, "ORD-PD1", null, raw);
         BostaStateMapper.MappedState mapped = stateMapper.map(41, "SEND");
 
         ShipmentLinkService.LinkResult result = linkSvc.tryMatchDelivery(tenantId, "AWB-MB001", delivery, mapped);
@@ -139,7 +139,7 @@ class ProviderDeliveryIdTest {
         ObjectNode raw = mapper.createObjectNode();
         raw.put("_id", "BOSTA-ID-002");
         when(bostaGateway.fetchDelivery(eq("pd-api-key"), eq("AWB-SC002")))
-            .thenReturn(new BostaDelivery("AWB-SC002", 41, "SEND", 0, null, raw));
+            .thenReturn(new BostaDelivery("AWB-SC002", 41, "SEND", 0, null, null, raw));
 
         linkSvc.linkByAwbScan(orderId, "AWB-SC002", actorId);
 
@@ -189,7 +189,7 @@ class ProviderDeliveryIdTest {
         ObjectNode raw = mapper.createObjectNode();
         raw.put("_id", "BOSTA-ID-004");
         raw.put("trackingNumber", "AWB-MB004");
-        BostaDelivery delivery = new BostaDelivery("AWB-MB004", 41, "SEND", 0, "ORD-PD4", raw);
+        BostaDelivery delivery = new BostaDelivery("AWB-MB004", 41, "SEND", 0, "ORD-PD4", null, raw);
         BostaStateMapper.MappedState mapped = stateMapper.map(41, "SEND");
 
         // Re-link: createOrFindShipment finds existing, backfills _id

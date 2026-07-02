@@ -160,8 +160,8 @@ public class ShipmentLinkService {
      */
     public LinkResult tryMatchDelivery(UUID tenantId, String trackingNumber,
                                         BostaDelivery delivery, BostaStateMapper.MappedState mapped) {
-        // Step 1 — businessReference → order number or external_id
-        UUID orderId = matchByBusinessReference(tenantId, delivery.businessReference());
+        // Step 1 — businessReference → order number or external_id, with shopifyOrderId fallback
+        UUID orderId = matchByBusinessReference(tenantId, delivery.businessReference(), delivery.shopifyOrderId());
 
         // Step 2 — phone + COD fallback
         String unlinkedReason = null;
@@ -410,19 +410,38 @@ public class ShipmentLinkService {
 
     // ---- matching helpers ---------------------------------------------------
 
-    private UUID matchByBusinessReference(UUID tenantId, String businessRef) {
-        if (businessRef == null || businessRef.isBlank()) return null;
-
-        String stripped = businessRef.startsWith("#") ? businessRef.substring(1) : businessRef;
-        String hashed   = "#" + stripped;
-
-        return jdbc.query(
-            "SELECT id FROM orders " +
-            "WHERE tenant_id = ? " +
-            "  AND (number = ? OR number = ? OR number = ? OR external_id = ?) " +
-            "LIMIT 1",
-            rs -> rs.next() ? rs.getObject("id", UUID.class) : null,
-            tenantId, businessRef, stripped, hashed, businessRef);
+    /**
+     * Matches a Bosta delivery to an order by businessReference (order number) or
+     * shopifyOrderId (Shopify numeric order ID from plugin-created deliveries).
+     *
+     * businessReference path: handles merchant-entered order number in Bosta.
+     * shopifyOrderId path: plugin-created deliveries carry Shopify numeric order ID
+     * in raw.shopifyOrderId; match against orders.external_id GID format.
+     */
+    private UUID matchByBusinessReference(UUID tenantId, String businessRef, String shopifyOrderId) {
+        // businessReference path
+        if (businessRef != null && !businessRef.isBlank()) {
+            String stripped = businessRef.startsWith("#") ? businessRef.substring(1) : businessRef;
+            String hashed   = "#" + stripped;
+            UUID id = jdbc.query(
+                "SELECT id FROM orders " +
+                "WHERE tenant_id = ? " +
+                "  AND (number = ? OR number = ? OR number = ? OR external_id = ?) " +
+                "LIMIT 1",
+                rs -> rs.next() ? rs.getObject("id", UUID.class) : null,
+                tenantId, businessRef, stripped, hashed, businessRef);
+            if (id != null) return id;
+        }
+        // shopifyOrderId path: plugin-created deliveries carry Shopify numeric order ID
+        // in raw.shopifyOrderId; match against orders.external_id GID format.
+        if (shopifyOrderId != null && !shopifyOrderId.isBlank()) {
+            String gid = "gid://shopify/Order/" + shopifyOrderId;
+            return jdbc.query(
+                "SELECT id FROM orders WHERE tenant_id = ? AND external_id = ? LIMIT 1",
+                rs -> rs.next() ? rs.getObject("id", UUID.class) : null,
+                tenantId, gid);
+        }
+        return null;
     }
 
     /**

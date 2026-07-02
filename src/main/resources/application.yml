@@ -48,6 +48,9 @@ app:
   # AES-256-GCM envelope key for encrypting store access tokens at rest.
   # MUST be set in production via APP_ENCRYPTION_KEY env var (base64, exactly 32 bytes).
   encryption-key: ${APP_ENCRYPTION_KEY:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=}
+  # Feature flag: enable the temporary custom-app connect path (DEV/pilot only).
+  # Set CUSTOM_APP_CONNECT_ENABLED=true in .env to activate.
+  custom-app-connect-enabled: ${CUSTOM_APP_CONNECT_ENABLED:false}
 
 shopify:
   # Pin the API version — never use "latest" in code paths.

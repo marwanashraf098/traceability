@@ -2,6 +2,7 @@ package com.traceability.integrations.shopify;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.traceability.security.EncryptionService;
 import org.jobrunr.scheduling.JobScheduler;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -56,19 +57,22 @@ public class ShopifyWebhookController {
     private final ShopifyWebhookProcessorJob processorJob;
     private final TransactionTemplate tx;
     private final String clientSecret;
+    private final EncryptionService encryptionService;
 
     public ShopifyWebhookController(JdbcTemplate jdbc,
                                      ObjectMapper mapper,
                                      JobScheduler jobScheduler,
                                      ShopifyWebhookProcessorJob processorJob,
                                      PlatformTransactionManager txm,
-                                     @Value("${shopify.client-secret}") String clientSecret) {
-        this.jdbc         = jdbc;
-        this.mapper       = mapper;
-        this.jobScheduler = jobScheduler;
-        this.processorJob = processorJob;
-        this.tx           = new TransactionTemplate(txm);
-        this.clientSecret = clientSecret;
+                                     @Value("${shopify.client-secret}") String clientSecret,
+                                     EncryptionService encryptionService) {
+        this.jdbc              = jdbc;
+        this.mapper            = mapper;
+        this.jobScheduler      = jobScheduler;
+        this.processorJob      = processorJob;
+        this.tx                = new TransactionTemplate(txm);
+        this.clientSecret      = clientSecret;
+        this.encryptionService = encryptionService;
     }
 
     @PostMapping("/webhooks/shopify/{type}/{action}")
@@ -81,10 +85,14 @@ public class ShopifyWebhookController {
             @RequestHeader(value = "X-Shopify-Webhook-Id",  defaultValue = "") String webhookId,
             @RequestBody byte[] rawBody) {
 
-        // Step 1: HMAC over raw bytes — before ANY JSON parsing.
+        // Step 1: Two-phase HMAC over raw bytes — before ANY JSON parsing.
+        // Phase A (hot path): global client-secret — covers all OAuth stores with zero overhead.
+        // Phase B (custom-app path): only if Phase A fails; look up per-store api_secret.
         if (!ShopifyHmacUtil.verifyWebhookBody(rawBody, clientSecret, hmacHeader)) {
-            log.warn("Shopify webhook HMAC mismatch for shop={} topic={}/{}", shopDomain, type, action);
-            return ResponseEntity.status(401).build();
+            if (!verifyCustomAppWebhook(shopDomain, rawBody, hmacHeader)) {
+                log.warn("Shopify webhook HMAC mismatch for shop={} topic={}/{}", shopDomain, type, action);
+                return ResponseEntity.status(401).build();
+            }
         }
 
         // Step 2: resolve tenant (DEFINER, no GUC needed).
@@ -124,6 +132,29 @@ public class ShopifyWebhookController {
     }
 
     // ---- helpers --------------------------------------------------------
+
+    /**
+     * Phase-B HMAC check for custom-app stores.
+     * Looks up the per-store api_secret_encrypted, decrypts it, and verifies the webhook HMAC.
+     * Returns false (not 401) if the store is unknown or not a custom_app store — allows
+     * the outer caller to decide the final response.
+     */
+    private boolean verifyCustomAppWebhook(String shopDomain, byte[] rawBody, String hmacHeader) {
+        if (shopDomain == null || shopDomain.isBlank()) return false;
+        try {
+            String encryptedSecret = jdbc.query(
+                "SELECT api_secret_encrypted FROM stores " +
+                "WHERE shop_domain = ? AND connection_type = 'custom_app' AND api_secret_encrypted IS NOT NULL",
+                rs -> rs.next() ? rs.getString(1) : null,
+                shopDomain);
+            if (encryptedSecret == null) return false;
+            String perStoreSecret = encryptionService.decrypt(encryptedSecret);
+            return ShopifyHmacUtil.verifyWebhookBody(rawBody, perStoreSecret, hmacHeader);
+        } catch (Exception e) {
+            log.warn("Error verifying custom-app webhook HMAC for shop={}: {}", shopDomain, e.getMessage());
+            return false;
+        }
+    }
 
     private UUID resolveTenant(String shopDomain) {
         if (shopDomain.isBlank()) return null;

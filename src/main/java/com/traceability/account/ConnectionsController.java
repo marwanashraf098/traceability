@@ -2,6 +2,7 @@ package com.traceability.account;
 
 import com.traceability.identity.CustomUserDetails;
 import com.traceability.tenancy.TenantContext;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
@@ -28,6 +29,9 @@ import java.util.*;
 @RestController
 @RequestMapping("/api/v1/connections")
 public class ConnectionsController {
+
+    @Value("${app.custom-app-connect-enabled:false}")
+    private boolean customAppConnectEnabled;
 
     private final JdbcTemplate       jdbc;
     private final TransactionTemplate tx;
@@ -93,9 +97,33 @@ public class ConnectionsController {
                     return m;
                 }, tenantId);
 
+            // shopifyCustomApp status — custom_app connection_type stores only
+            Map<String, Object> shopifyCustomApp = jdbc.query(
+                "SELECT shop_domain, status, import_status::text, last_sync_at " +
+                "FROM stores WHERE tenant_id = ? AND connection_type = 'custom_app' " +
+                "ORDER BY last_sync_at DESC NULLS LAST LIMIT 1",
+                rs -> {
+                    Map<String, Object> m = new LinkedHashMap<>();
+                    if (!rs.next()) {
+                        m.put("connected",    false);
+                        m.put("shopDomain",   null);
+                        m.put("importStatus", null);
+                        m.put("lastSyncAt",   null);
+                    } else {
+                        boolean connected = "connected".equals(rs.getString("status"));
+                        m.put("connected",    connected);
+                        m.put("shopDomain",   rs.getString("shop_domain"));
+                        m.put("importStatus", rs.getString("import_status"));
+                        m.put("lastSyncAt",   rs.getTimestamp("last_sync_at"));
+                    }
+                    return m;
+                }, tenantId);
+
             Map<String, Object> result = new LinkedHashMap<>();
-            result.put("shopify", shopify);
-            result.put("bosta",   bosta);
+            result.put("shopify",          shopify);
+            result.put("bosta",            bosta);
+            result.put("shopifyCustomApp", shopifyCustomApp);
+            result.put("customAppAvailable", customAppConnectEnabled);
             return result;
         }));
     }

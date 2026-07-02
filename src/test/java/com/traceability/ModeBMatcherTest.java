@@ -531,7 +531,7 @@ class ModeBMatcherTest {
 
     private void mockDelivery(String tracking, ObjectNode raw) {
         when(bostaGateway.fetchDelivery(eq("mb-api-key"), eq(tracking)))
-            .thenReturn(new BostaDelivery(tracking, 41, "SEND", 0, null, raw));
+            .thenReturn(new BostaDelivery(tracking, 41, "SEND", 0, null, null, raw));
     }
 
     private Long insertWebhookEvent(String tracking) {

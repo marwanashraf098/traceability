@@ -328,10 +328,26 @@ export interface ConnectionsStatus {
     businessName: string | null
     pickupMode: string | null
   }
+  shopifyCustomApp: {
+    connected: boolean
+    shopDomain: string | null
+    importStatus: string | null
+    lastSyncAt: string | null
+  }
+  customAppAvailable: boolean
 }
 
 export function getConnections() {
   return request<ConnectionsStatus>('/connections')
+}
+
+// ── Shopify custom-app connect (DEV/pilot only) ───────────────────────────────
+
+export function shopifyCustomConnect(shopDomain: string, adminToken: string, apiSecret: string) {
+  return request<{ storeId: string; importStatus: string }>('/shopify/custom-connect', {
+    method: 'POST',
+    body: JSON.stringify({ shopDomain, adminToken, apiSecret }),
+  })
 }
 
 // ── Shopify OAuth: initiate install flow ──────────────────────────────────────

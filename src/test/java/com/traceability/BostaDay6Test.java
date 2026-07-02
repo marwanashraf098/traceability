@@ -135,7 +135,7 @@ class BostaDay6Test {
 
         when(bostaGateway.fetchDelivery(eq("api-key-d6a"), eq(trackingNumber)))
             .thenReturn(new BostaDelivery(
-                trackingNumber, 45, "ALL", 1, "EXT-D6-001", mapper.createObjectNode()));
+                trackingNumber, 45, "ALL", 1, "EXT-D6-001", null, mapper.createObjectNode()));
 
         bostaWebhookJob.process(webhookId, ownerTenantId);
 
@@ -176,7 +176,7 @@ class BostaDay6Test {
 
         when(bostaGateway.fetchDelivery(eq("api-key-d6b"), eq(trackingNumber)))
             .thenReturn(new BostaDelivery(
-                trackingNumber, 45, "ALL", 1, "EXT-D6-002", mapper.createObjectNode()));
+                trackingNumber, 45, "ALL", 1, "EXT-D6-002", null, mapper.createObjectNode()));
 
         bostaWebhookJob.process(id1, ownerTenantId);
         bostaWebhookJob.process(id2, ownerTenantId);
@@ -209,7 +209,7 @@ class BostaDay6Test {
 
         when(bostaGateway.fetchDelivery(eq("api-key-d6c"), eq(trackingNumber)))
             .thenReturn(new BostaDelivery(
-                trackingNumber, 45, "ALL", 1, "ORD-UNLINKED", mapper.createObjectNode()));
+                trackingNumber, 45, "ALL", 1, "ORD-UNLINKED", null, mapper.createObjectNode()));
 
         bostaWebhookJob.process(webhookId, ownerTenantId);
 
@@ -240,7 +240,7 @@ class BostaDay6Test {
 
         when(bostaGateway.fetchDelivery(eq("api-key-d6d"), eq(trackingNumber)))
             .thenReturn(new BostaDelivery(
-                trackingNumber, 999, "SEND", 0, "EXT-D6-004", mapper.createObjectNode()));
+                trackingNumber, 999, "SEND", 0, "EXT-D6-004", null, mapper.createObjectNode()));
 
         bostaWebhookJob.process(webhookId, ownerTenantId);
 
@@ -268,7 +268,7 @@ class BostaDay6Test {
 
         when(bostaGateway.fetchDelivery(eq("api-key-d6e"), eq(trackingNumber)))
             .thenReturn(new BostaDelivery(
-                trackingNumber, 41, "SEND", 1, "EXT-D6-005", mapper.createObjectNode()));
+                trackingNumber, 41, "SEND", 1, "EXT-D6-005", null, mapper.createObjectNode()));
 
         bostaWebhookJob.process(webhookId, ownerTenantId);
 
@@ -301,7 +301,7 @@ class BostaDay6Test {
 
         when(bostaGateway.fetchDelivery(eq("api-key-d6f"), eq(trackingNumber)))
             .thenReturn(new BostaDelivery(
-                trackingNumber, 41, "RTO", 2, "EXT-D6-006", mapper.createObjectNode()));
+                trackingNumber, 41, "RTO", 2, "EXT-D6-006", null, mapper.createObjectNode()));
 
         bostaWebhookJob.process(webhookId, ownerTenantId);
 

@@ -118,8 +118,10 @@ class BostaHttpGateway implements BostaGateway {
             String type = data.path("type").asText("SEND");
             int attempts = data.path("numberOfAttempts").asInt(0);
             String ref   = data.path("businessReference").asText(null);
+            String shopifyOrderId = data.path("shopifyOrderId").asText(null);
+            if (shopifyOrderId != null && shopifyOrderId.isBlank()) shopifyOrderId = null;
 
-            return new BostaDelivery(tn, code, type, attempts, ref, data);
+            return new BostaDelivery(tn, code, type, attempts, ref, shopifyOrderId, data);
         } catch (ResourceAccessException e) {
             throw new BostaTransientException("Network error fetching delivery " + trackingNumber, e);
         } catch (RestClientResponseException e) {

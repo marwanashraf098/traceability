@@ -245,7 +245,7 @@ class BostaDay5Test {
 
         // Mock: fetchDelivery returns state=45 (delivered) — DIFFERENT from payload's 41
         BostaDelivery fetched = new BostaDelivery(
-            "BOS-FETCH-001", 45, "SEND", 1, "ORD-001", mapper.createObjectNode());
+            "BOS-FETCH-001", 45, "SEND", 1, "ORD-001", null, mapper.createObjectNode());
         when(bostaGateway.fetchDelivery(eq("bosta-api-key"), eq("BOS-FETCH-001")))
             .thenReturn(fetched);
 
@@ -290,7 +290,7 @@ class BostaDay5Test {
             Long.class, ownerTenantId, commonPayload);
 
         BostaDelivery fetched = new BostaDelivery(
-            "BOS-DUP-001", 45, "SEND", 1, "ORD-002", mapper.createObjectNode());
+            "BOS-DUP-001", 45, "SEND", 1, "ORD-002", null, mapper.createObjectNode());
         when(bostaGateway.fetchDelivery(anyString(), eq("BOS-DUP-001"))).thenReturn(fetched);
 
         // Process first event

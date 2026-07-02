@@ -3,6 +3,7 @@ package com.traceability.integrations.shopify;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.traceability.identity.CustomUserDetails;
 import org.jobrunr.scheduling.JobScheduler;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -18,6 +19,9 @@ import java.util.UUID;
 @RestController
 @RequestMapping("/api/v1/shopify")
 public class ShopifyController {
+
+    @Value("${app.custom-app-connect-enabled:false}")
+    private boolean customAppConnectEnabled;
 
     private final ShopifySyncService        syncService;
     private final ShopifyImportJob          importJob;
@@ -44,6 +48,7 @@ public class ShopifyController {
     }
 
     public record ConnectRequest(String shopDomain, String adminToken) {}
+    public record CustomConnectRequest(String shopDomain, String adminToken, String apiSecret) {}
     public record ConnectResponse(String storeId, String importStatus) {}
     public record StoreStatusResponse(String storeId, String importStatus, Object importSummary) {}
 
@@ -60,6 +65,48 @@ public class ShopifyController {
         UUID storeId  = result.storeId();
         UUID tenantId = principal.tenantId();
         jobScheduler.enqueue(() -> importJob.run(storeId, tenantId));
+
+        return ResponseEntity.accepted()
+            .body(new ConnectResponse(storeId.toString(), "pending"));
+    }
+
+    /**
+     * POST /api/v1/shopify/custom-connect — DEV/pilot custom-app connection path.
+     *
+     * Guarded by the app.custom-app-connect-enabled feature flag (default: false).
+     * The existing OAuth path (/connect) is NOT modified.
+     *
+     * Required scopes on the custom app: read_orders, read_products, read_fulfillments, write_webhooks.
+     * Admin token MUST be a permanent token starting with "shpat_" (not a rotating/expiring token).
+     */
+    @PostMapping("/custom-connect")
+    @PreAuthorize("hasRole('OWNER')")
+    public ResponseEntity<ConnectResponse> customConnect(
+            @RequestBody CustomConnectRequest req,
+            @AuthenticationPrincipal CustomUserDetails principal) {
+
+        if (!customAppConnectEnabled) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN,
+                "Custom-app connection is not available in this environment");
+        }
+
+        if (req.shopDomain() == null || !req.shopDomain().matches("[a-zA-Z0-9][a-zA-Z0-9\\-]*\\.myshopify\\.com")) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid shop domain format");
+        }
+        if (req.adminToken() == null || req.adminToken().isBlank()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "adminToken is required");
+        }
+        if (req.apiSecret() == null || req.apiSecret().isBlank()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "apiSecret is required");
+        }
+
+        ShopifySyncService.ConnectResult result = syncService.connectCustomApp(
+            principal.tenantId(), req.shopDomain().trim(), req.adminToken().trim(), req.apiSecret().trim());
+
+        UUID storeId  = result.storeId();
+        UUID tenantId = principal.tenantId();
+        jobScheduler.enqueue(() -> importJob.run(storeId, tenantId));
+        jobScheduler.enqueue(() -> webhooksJob.run(storeId, tenantId));
 
         return ResponseEntity.accepted()
             .body(new ConnectResponse(storeId.toString(), "pending"));

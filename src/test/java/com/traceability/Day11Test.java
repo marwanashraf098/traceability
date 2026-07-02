@@ -202,7 +202,7 @@ class Day11Test {
         // Mock: delivery carries businessReference that matches the order number
         ObjectNode raw = mapper.createObjectNode();
         when(bostaGateway.fetchDelivery(eq("d11-api-key"), eq(tracking)))
-            .thenReturn(new BostaDelivery(tracking, 41, "SEND", 0, "ORD-AUTOMATCH", raw));
+            .thenReturn(new BostaDelivery(tracking, 41, "SEND", 0, "ORD-AUTOMATCH", null, raw));
 
         bostaWebhookJob.process(webhookId, tenantId);
 
@@ -243,7 +243,7 @@ class Day11Test {
         // Mock: delivery has a businessReference that matches NO order
         ObjectNode raw = mapper.createObjectNode();
         when(bostaGateway.fetchDelivery(eq("d11-api-key"), eq(tracking)))
-            .thenReturn(new BostaDelivery(tracking, 41, "SEND", 0, "UNKNOWN-999", raw));
+            .thenReturn(new BostaDelivery(tracking, 41, "SEND", 0, "UNKNOWN-999", null, raw));
 
         bostaWebhookJob.process(webhookId, tenantId);
 
@@ -304,7 +304,7 @@ class Day11Test {
 
         ObjectNode raw = mapper.createObjectNode();
         when(bostaGateway.fetchDelivery(eq("d11-api-key"), eq(tracking)))
-            .thenReturn(new BostaDelivery(tracking, 45, "ALL", 1, "ORD-COURIER45", raw));
+            .thenReturn(new BostaDelivery(tracking, 45, "ALL", 1, "ORD-COURIER45", null, raw));
 
         bostaWebhookJob.process(webhookId, tenantId);
 
