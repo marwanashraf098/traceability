@@ -95,15 +95,6 @@ public class ShopifyWebhookController {
         // Phase A (hot path): global client-secret — covers all OAuth stores with zero overhead.
         // Phase B (custom-app path): only if Phase A fails; uses resolved tenantId to set GUC
         //   so the stores query (RLS-gated) can find the per-store api_secret_encrypted row.
-
-        // [HMAC-DEBUG] Temporary diagnostic logging — remove after custom-app HMAC investigation.
-        if (log.isWarnEnabled()) {
-            String computedA = ShopifyHmacUtil.computeWebhookHmac(rawBody, clientSecret);
-            log.warn("[HMAC-DEBUG] shop={} topic={}/{} tenantId={} body_bytes={} header={} computed_A={} A_match={}",
-                shopDomain, type, action, tenantId, rawBody.length, hmacHeader, computedA,
-                computedA.equals(hmacHeader));
-        }
-
         if (!ShopifyHmacUtil.verifyWebhookBody(rawBody, clientSecret, hmacHeader)) {
             if (!verifyCustomAppWebhook(tenantId, shopDomain, rawBody, hmacHeader)) {
                 log.warn("Shopify webhook HMAC mismatch for shop={} topic={}/{}", shopDomain, type, action);
@@ -159,11 +150,7 @@ public class ShopifyWebhookController {
      */
     private boolean verifyCustomAppWebhook(UUID tenantId, String shopDomain, byte[] rawBody, String hmacHeader) {
         if (shopDomain == null || shopDomain.isBlank()) return false;
-        if (tenantId == null) {
-            // [HMAC-DEBUG]
-            log.warn("[HMAC-DEBUG] phase=B shop={} — skipped: tenantId null (store uninstalled or unknown)", shopDomain);
-            return false;
-        }
+        if (tenantId == null) return false;
         try {
             // Run inside TenantContext.runAs + tx.execute so TenantAwareConnection fires
             // SET LOCAL app.current_tenant before the stores query, satisfying RLS.
@@ -175,15 +162,8 @@ public class ShopifyWebhookController {
                         rs -> rs.next() ? rs.getString(1) : null,
                         shopDomain)));
 
-            // [HMAC-DEBUG] Log whether the store row was found — diagnoses RLS / connection_type issues.
-            log.warn("[HMAC-DEBUG] phase=B shop={} store_found={}", shopDomain, encryptedSecret != null);
-
             if (encryptedSecret == null) return false;
             String perStoreSecret = encryptionService.decrypt(encryptedSecret);
-            // [HMAC-DEBUG] Log Phase B computed HMAC (digest output only, not the secret).
-            String computedB = ShopifyHmacUtil.computeWebhookHmac(rawBody, perStoreSecret);
-            log.warn("[HMAC-DEBUG] phase=B source=per-store shop={} body_bytes={} header={} computed_B={} B_match={}",
-                shopDomain, rawBody.length, hmacHeader, computedB, computedB.equals(hmacHeader));
             return ShopifyHmacUtil.verifyWebhookBody(rawBody, perStoreSecret, hmacHeader);
         } catch (Exception e) {
             log.warn("Error verifying custom-app webhook HMAC for shop={}: {}", shopDomain, e.getMessage());
