@@ -4,7 +4,40 @@
 
 ## Current state
 
-**438 tests — all green, deterministic** — 2026-06-30.
+**453 tests — all green, deterministic** — 2026-07-02.
+
+---
+
+**Custom-app pilot connection path + Mode-B shopifyOrderId matching (2026-07-02):**
+
+*New endpoint:* `POST /api/v1/shopify/custom-connect` (OWNER only, gated by `CUSTOM_APP_CONNECT_ENABLED` feature flag, default `false`). Accepts `shopDomain`, `adminToken`, `apiSecret`. Validates shop via `/shop.json`, guards against rotating tokens (rejects any token not starting with `shpat_`), encrypts both credentials and stores `connection_type='custom_app'`. Existing `POST /api/v1/shopify/connect` (OAuth path) is **untouched**.
+
+*Required custom-app scopes:* `read_orders, read_products, read_fulfillments, write_webhooks`.
+
+*V31 migration:*
+- `ALTER TABLE stores ADD COLUMN connection_type text NOT NULL DEFAULT 'oauth'` — all existing rows stay `'oauth'`
+- `ALTER TABLE stores ADD COLUMN api_secret_encrypted text`
+- New SECURITY DEFINER function `upgrade_custom_app_to_oauth(...)` (sixth approved escape hatch) — Option-B upgrade path: atomically creates new tenant+owner, updates store row in-place (same store UUID), re-assigns child data tenant_ids (orders, products, variants, order_items, shipments, locations, shopify_webhook_events, unlinked_bosta_deliveries). Option-A (disconnect + reinstall) is the current operational procedure.
+
+*Two-phase webhook HMAC:* `ShopifyWebhookController` now tries global `client-secret` first (hot path, zero overhead for OAuth stores). On failure, looks up per-store `api_secret_encrypted` for `connection_type='custom_app'` stores, decrypts, and verifies. Both fail → 401.
+
+*Mode-B shopifyOrderId matching:*
+- `BostaDelivery` record: added `shopifyOrderId` field
+- `BostaHttpGateway`: parses `data.path("shopifyOrderId")` from Bosta API response
+- `ShipmentLinkService.matchByBusinessReference`: extended to also check `shopifyOrderId` against `orders.external_id = 'gid://shopify/Order/' + shopifyOrderId`. businessReference tried first; shopifyOrderId is the fallback.
+
+*Connections status:* `GET /api/v1/connections` now returns `shopifyCustomApp` (status of custom_app stores only) and `customAppAvailable` (feature flag value).
+
+*Frontend:*
+- `api.ts`: `ConnectionsStatus` type extended with `shopifyCustomApp` + `customAppAvailable`; new `shopifyCustomConnect()` function
+- `Connections.tsx`: `ShopifyCustomAppCard` component rendered only when `customAppAvailable=true`. Amber border + "PILOT / TEMPORARY" label. Client-side `shpat_` token prefix validation. Amber "will be replaced by OAuth" banner when connected. Existing `ShopifyCard` + `shopifyInitiate` **untouched**.
+
+*Tests:* `CustomAppConnectTest.java` — 16 cases covering: valid connect (202 + encrypted DB row), feature flag off (403), invalid domain (400), rotating token (400), non-owner (403), gateway failure, webhook HMAC Phase A + Phase B + wrong secret (401), null PII import, shopifyOrderId Mode-B match, businessReference-first match priority, connections status keys, RLS tenant isolation, Option-B upgrade path preserves child data.
+
+*Decisions:*
+- Rotating-token detection by `shpat_` prefix (Partner Dashboard permanent tokens always have this prefix; token-exchange flow produces expiring tokens with different prefixes).
+- `connection_type DEFAULT 'oauth'` — zero-touch migration, no backfill needed.
+- `upgrade_custom_app_to_oauth` implemented now to avoid future block; not yet called in production (Option A operationally for pilots).
 
 ---
 
