@@ -31,6 +31,7 @@ public class FulfillService {
      * 'self_pickup_pending'), not on hold, oldest first.
      * self_pickup_pending orders are fully packed and awaiting customer handover.
      */
+    @Transactional(readOnly = true)
     public List<Map<String, Object>> getQueue() {
         UUID tenantId = TenantContext.require();
         return jdbc.queryForList(
@@ -56,6 +57,7 @@ public class FulfillService {
     // ── Order detail ──────────────────────────────────────────────────────────
 
     /** Order + items + allocated pieces for the pick screen. */
+    @Transactional(readOnly = true)
     public Map<String, Object> getOrder(UUID orderId) {
         UUID tenantId = TenantContext.require();
         List<Map<String, Object>> rows = jdbc.queryForList(
@@ -680,6 +682,7 @@ public class FulfillService {
      * which is the only path that cleans up awaiting_pickup manifest rows (since those orders
      * 409 out of cancelOrder() before reaching this code).
      */
+    @Transactional
     public void removeFromPickupManifest(UUID orderId) {
         UUID tenantId = TenantContext.require();
         removeFromPickupManifest(orderId, tenantId);
