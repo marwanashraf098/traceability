@@ -13,6 +13,7 @@ import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.bind.annotation.*;
 
+import com.traceability.tenancy.TenantContext;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.UUID;
@@ -85,31 +86,34 @@ public class ShopifyWebhookController {
             @RequestHeader(value = "X-Shopify-Webhook-Id",  defaultValue = "") String webhookId,
             @RequestBody byte[] rawBody) {
 
-        // Step 1: Two-phase HMAC over raw bytes — before ANY JSON parsing.
+        // Step 1: Resolve tenant early via DEFINER (no GUC required).
+        // Must happen before Phase B so the stores query can run under proper tenant context —
+        // the webhook endpoint is unauthenticated and has no TenantContext on entry.
+        UUID tenantId = resolveTenant(shopDomain);
+
+        // Step 2: Two-phase HMAC over raw bytes — before ANY JSON parsing.
         // Phase A (hot path): global client-secret — covers all OAuth stores with zero overhead.
-        // Phase B (custom-app path): only if Phase A fails; look up per-store api_secret.
+        // Phase B (custom-app path): only if Phase A fails; uses resolved tenantId to set GUC
+        //   so the stores query (RLS-gated) can find the per-store api_secret_encrypted row.
 
         // [HMAC-DEBUG] Temporary diagnostic logging — remove after custom-app HMAC investigation.
-        // Logs computed HMACs (digest output, not secrets) and body length for comparison.
         if (log.isWarnEnabled()) {
             String computedA = ShopifyHmacUtil.computeWebhookHmac(rawBody, clientSecret);
-            log.warn("[HMAC-DEBUG] shop={} topic={}/{} body_bytes={} header={} computed_A={} A_match={}",
-                shopDomain, type, action, rawBody.length, hmacHeader, computedA,
+            log.warn("[HMAC-DEBUG] shop={} topic={}/{} tenantId={} body_bytes={} header={} computed_A={} A_match={}",
+                shopDomain, type, action, tenantId, rawBody.length, hmacHeader, computedA,
                 computedA.equals(hmacHeader));
         }
 
         if (!ShopifyHmacUtil.verifyWebhookBody(rawBody, clientSecret, hmacHeader)) {
-            if (!verifyCustomAppWebhook(shopDomain, rawBody, hmacHeader)) {
+            if (!verifyCustomAppWebhook(tenantId, shopDomain, rawBody, hmacHeader)) {
                 log.warn("Shopify webhook HMAC mismatch for shop={} topic={}/{}", shopDomain, type, action);
                 return ResponseEntity.status(401).build();
             }
         }
 
-        // Step 2: resolve tenant (DEFINER, no GUC needed).
+        // Step 3: unknown shop — ack and drop (prevents infinite Shopify retry storm).
         String topic = type + "/" + action;
-        UUID tenantId = resolveTenant(shopDomain);
         if (tenantId == null) {
-            // Post-uninstall noise — unknown shop. Non-2xx causes infinite Shopify retries.
             log.debug("Shopify webhook from unknown shop={} topic={} — ack and drop", shopDomain, topic);
             return ResponseEntity.ok().build();
         }
@@ -145,18 +149,35 @@ public class ShopifyWebhookController {
 
     /**
      * Phase-B HMAC check for custom-app stores.
-     * Looks up the per-store api_secret_encrypted, decrypts it, and verifies the webhook HMAC.
-     * Returns false (not 401) if the store is unknown or not a custom_app store — allows
-     * the outer caller to decide the final response.
+     *
+     * Requires tenantId (resolved before this call via DEFINER) so the stores query can run
+     * inside a transaction with TenantContext set. Without this, the webhook's unauthenticated
+     * request has no GUC, RLS returns 0 rows from stores, and the lookup silently returns null
+     * — causing Phase B to be skipped even when the store is present.
+     *
+     * Returns false if tenantId is null, the store is not custom_app, or HMAC doesn't match.
      */
-    private boolean verifyCustomAppWebhook(String shopDomain, byte[] rawBody, String hmacHeader) {
+    private boolean verifyCustomAppWebhook(UUID tenantId, String shopDomain, byte[] rawBody, String hmacHeader) {
         if (shopDomain == null || shopDomain.isBlank()) return false;
+        if (tenantId == null) {
+            // [HMAC-DEBUG]
+            log.warn("[HMAC-DEBUG] phase=B shop={} — skipped: tenantId null (store uninstalled or unknown)", shopDomain);
+            return false;
+        }
         try {
-            String encryptedSecret = jdbc.query(
-                "SELECT api_secret_encrypted FROM stores " +
-                "WHERE shop_domain = ? AND connection_type = 'custom_app' AND api_secret_encrypted IS NOT NULL",
-                rs -> rs.next() ? rs.getString(1) : null,
-                shopDomain);
+            // Run inside TenantContext.runAs + tx.execute so TenantAwareConnection fires
+            // SET LOCAL app.current_tenant before the stores query, satisfying RLS.
+            String encryptedSecret = TenantContext.runAs(tenantId, () ->
+                tx.execute(status ->
+                    jdbc.query(
+                        "SELECT api_secret_encrypted FROM stores " +
+                        "WHERE shop_domain = ? AND connection_type = 'custom_app' AND api_secret_encrypted IS NOT NULL",
+                        rs -> rs.next() ? rs.getString(1) : null,
+                        shopDomain)));
+
+            // [HMAC-DEBUG] Log whether the store row was found — diagnoses RLS / connection_type issues.
+            log.warn("[HMAC-DEBUG] phase=B shop={} store_found={}", shopDomain, encryptedSecret != null);
+
             if (encryptedSecret == null) return false;
             String perStoreSecret = encryptionService.decrypt(encryptedSecret);
             // [HMAC-DEBUG] Log Phase B computed HMAC (digest output only, not the secret).
