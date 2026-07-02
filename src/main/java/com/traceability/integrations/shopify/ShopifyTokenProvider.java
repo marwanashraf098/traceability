@@ -22,20 +22,17 @@ import java.util.UUID;
  *      the lock (another thread may have refreshed while we waited), then call Shopify's
  *      refresh endpoint and write back all four token fields in the same transaction.
  *
+ * For connection_type='custom_app_cc': the CC re-exchange path branches BEFORE the
+ * refreshToken null-check because CC stores have null refresh tokens by design. The CC
+ * path uses exchangeClientCredentials (clientId + clientSecret → short-lived access token)
+ * and only writes back access_token_encrypted + access_token_expires_at (no refresh token).
+ *
  * Concurrency guard: SELECT FOR UPDATE ensures only one thread per store enters the
  * Shopify refresh call. Because refresh tokens are single-use rotating (Shopify
  * invalidates the old token and issues a new one), concurrent rotation would produce
  * one valid pair and one permanently-rejected refresh attempt. The row lock collapses
  * concurrent refreshers into a single network call; the second thread, after acquiring
  * the lock, re-checks expiry and returns the fresh token written by the first.
- *
- * The Shopify refresh call happens inside the held transaction (= held row lock). The
- * call is bounded to 10 s via ShopifyHttpGateway's tokenRestClient. Hikari pool = 5;
- * pilot stores ≤ 3, so at most 3 connections are occupied ≤ 10 s simultaneously.
- * Crash-mid-refresh: if the JVM dies after Shopify responds but before COMMIT, the
- * old refresh token may have been consumed; on restart the store is marked needs_reauth
- * on the next attempt. This edge case is acceptable at current scale (F1 means JobRunr
- * is disabled anyway, so concurrent refresh barely exists yet).
  *
  * TenantContext must be set by the caller (both job types use TenantContext.runAs,
  * which keeps the ThreadLocal active for the duration of the job body). This service
@@ -46,18 +43,20 @@ public class ShopifyTokenProvider {
 
     private static final Logger log = LoggerFactory.getLogger(ShopifyTokenProvider.class);
 
-    // Refresh when the access token has ≤ 5 minutes remaining.
+    // Refresh when the access token has <= 5 minutes remaining.
     private static final long REFRESH_BUFFER_SECONDS = 300;
 
     private static final String SELECT_QUICK = """
             SELECT shop_domain, access_token_encrypted, access_token_expires_at,
-                   refresh_token_encrypted, refresh_token_expires_at, status
+                   refresh_token_encrypted, refresh_token_expires_at, status,
+                   connection_type, client_id_encrypted, api_secret_encrypted
             FROM stores WHERE id = ?
             """;
 
     private static final String SELECT_FOR_UPDATE = """
             SELECT shop_domain, access_token_encrypted, access_token_expires_at,
-                   refresh_token_encrypted, refresh_token_expires_at, status
+                   refresh_token_encrypted, refresh_token_expires_at, status,
+                   connection_type, client_id_encrypted, api_secret_encrypted
             FROM stores WHERE id = ? FOR UPDATE
             """;
 
@@ -67,6 +66,13 @@ public class ShopifyTokenProvider {
                 access_token_expires_at = ?,
                 refresh_token_encrypted = ?,
                 refresh_token_expires_at = ?
+            WHERE id = ?
+            """;
+
+    private static final String UPDATE_ACCESS_ONLY = """
+            UPDATE stores SET
+                access_token_encrypted  = ?,
+                access_token_expires_at = ?
             WHERE id = ?
             """;
 
@@ -90,14 +96,16 @@ public class ShopifyTokenProvider {
 
     /**
      * Returns a valid plaintext Shopify access token for the given store,
-     * refreshing via the Shopify token endpoint if the current token is near-expiry.
+     * refreshing (or re-exchanging for CC stores) via Shopify's token endpoint
+     * if the current token is near-expiry.
      *
      * TenantContext must be active (set by caller via TenantContext.runAs or TenantContext.set).
      *
-     * @throws ShopifyStoreNeedsReauthException if the store has no refresh token (legacy install),
-     *         the refresh token is expired, or Shopify permanently rejected the refresh.
+     * @throws ShopifyStoreNeedsReauthException if the store needs to be reconnected:
+     *         legacy install with no refresh token, expired refresh token, or
+     *         Shopify permanently rejected the refresh/CC exchange (4xx).
      * @throws ShopifyTransientException if Shopify returned 5xx or the connection timed out —
-     *         the refresh token is still valid and the caller may retry later.
+     *         the credentials are still valid and the caller may retry later.
      */
     public String getValidToken(UUID storeId) {
         StoreTokenRow row = quickRead(storeId);
@@ -108,7 +116,7 @@ public class ShopifyTokenProvider {
         }
         if ("needs_reauth".equals(row.status())) {
             throw new ShopifyStoreNeedsReauthException(row.shopDomain(),
-                "Store is marked needs_reauth — merchant must reinstall");
+                "Store is marked needs_reauth — merchant must reconnect");
         }
 
         // Fresh token: has an expiry set and it's > 5 min away.
@@ -116,7 +124,19 @@ public class ShopifyTokenProvider {
             return encryptionService.decrypt(row.accessTokenEncrypted());
         }
 
-        // Legacy non-expiring token (expiresAt null) OR expired with no refresh token.
+        // Branch on connection type BEFORE the refreshToken null check.
+        // CC stores have null refresh tokens by design, not as an error condition.
+        String connType = row.connectionType() != null ? row.connectionType() : "oauth";
+        if ("custom_app_cc".equals(connType)) {
+            if (row.clientIdEncrypted() == null || row.apiSecretEncrypted() == null) {
+                markNeedsReauth(storeId);
+                throw new ShopifyStoreNeedsReauthException(row.shopDomain(),
+                    "CC credentials missing — reconnect via the custom-app card");
+            }
+            return reExchangeWithLock(storeId, row.shopDomain());
+        }
+
+        // OAuth path: refresh token required.
         if (row.refreshTokenEncrypted() == null) {
             markNeedsReauth(storeId);
             throw new ShopifyStoreNeedsReauthException(row.shopDomain(),
@@ -128,7 +148,7 @@ public class ShopifyTokenProvider {
                 "Refresh token expired (90-day limit) — merchant must reinstall");
         }
 
-        // Refresh path — acquire row lock.
+        // OAuth refresh path — acquire row lock.
         return refreshWithLock(storeId, row.shopDomain());
     }
 
@@ -139,7 +159,105 @@ public class ShopifyTokenProvider {
             jdbc.query(SELECT_QUICK, rs -> rs.next() ? mapRow(rs) : null, storeId));
     }
 
-    // ---- private: lock + refresh + write-back ---------------------------
+    // ---- private: CC re-exchange under row lock -------------------------
+
+    /**
+     * Re-exchanges the CC token under a row lock.
+     *
+     * When the gateway returns 4xx (credentials invalid), we need to commit a
+     * needs_reauth flag AND propagate the exception. We can't do both inside a
+     * single tx.execute — throwing causes the transaction to roll back, which
+     * would lose any UPDATE within the same tx.
+     *
+     * Solution: use a holder to carry the exchange result (new token OR the
+     * "needs_reauth required" signal) out of the lambda; commit the tx cleanly;
+     * then mark needs_reauth or rethrow as appropriate after the tx commits.
+     */
+    private String reExchangeWithLock(UUID storeId, String shopDomain) {
+        // Holder: either the new token string, or null if reauth is needed.
+        // ShopifyTransientException is rethrown directly (inside tx) since
+        // we don't need to mark reauth — the outer caller will handle it.
+        final String[] tokenHolder = {null};
+        final boolean[] needsReauth = {false};
+        final ShopifyStoreNeedsReauthException[] reauthEx = {null};
+        final ShopifyTransientException[] transientEx = {null};
+
+        tx.execute(s -> {
+            // Acquire row lock — blocks concurrent re-exchangers on the same store.
+            StoreTokenRow row = jdbc.query(SELECT_FOR_UPDATE,
+                rs -> rs.next() ? mapRow(rs) : null, storeId);
+
+            if (row == null) {
+                reauthEx[0] = new ShopifyStoreNeedsReauthException(shopDomain,
+                    "Store not found under lock");
+                return null;
+            }
+
+            // Double-checked locking: another thread may have re-exchanged while we waited.
+            if (isFresh(row.accessTokenExpiresAt())) {
+                tokenHolder[0] = encryptionService.decrypt(row.accessTokenEncrypted());
+                return null;
+            }
+
+            // Re-check guard conditions inside the lock.
+            if ("needs_reauth".equals(row.status())) {
+                reauthEx[0] = new ShopifyStoreNeedsReauthException(row.shopDomain(),
+                    "Store marked needs_reauth under lock");
+                return null;
+            }
+            if (row.clientIdEncrypted() == null || row.apiSecretEncrypted() == null) {
+                needsReauth[0] = true;
+                reauthEx[0] = new ShopifyStoreNeedsReauthException(row.shopDomain(),
+                    "CC credentials missing under lock — reconnect via the custom-app card");
+                return null;
+            }
+
+            String clientId     = encryptionService.decrypt(row.clientIdEncrypted());
+            String clientSecret = encryptionService.decrypt(row.apiSecretEncrypted());
+
+            // Call Shopify CC exchange while holding the row lock.
+            // Bounded to 10 s by tokenRestClient in ShopifyHttpGateway.
+            ShopifyGateway.TokenResponse tokens;
+            try {
+                tokens = shopifyGateway.exchangeClientCredentials(row.shopDomain(), clientId, clientSecret);
+            } catch (ShopifyStoreNeedsReauthException e) {
+                // 4xx — credentials revoked or app removed from store.
+                // We must mark needs_reauth, but cannot do it here inside this tx (the tx commits
+                // cleanly, then we call markNeedsReauth separately after the tx returns).
+                needsReauth[0] = true;
+                reauthEx[0] = e;
+                return null;
+            } catch (ShopifyTransientException e) {
+                // 5xx / network — do NOT mark needs_reauth; rethrow after tx.
+                transientEx[0] = e;
+                return null;
+            }
+
+            Timestamp newExpiresAt = Timestamp.from(Instant.now().plusSeconds(tokens.expiresIn()));
+            jdbc.update(UPDATE_ACCESS_ONLY,
+                encryptionService.encrypt(tokens.accessToken()),
+                newExpiresAt,
+                storeId);
+
+            log.info("Shopify CC token re-exchanged for store {} ({})", storeId, row.shopDomain());
+            tokenHolder[0] = tokens.accessToken();
+            return null;
+        });
+
+        // After tx committed: handle outcomes.
+        if (transientEx[0] != null) {
+            throw transientEx[0];
+        }
+        if (needsReauth[0]) {
+            markNeedsReauth(storeId);  // separate committed tx
+        }
+        if (reauthEx[0] != null) {
+            throw reauthEx[0];
+        }
+        return tokenHolder[0];
+    }
+
+    // ---- private: OAuth lock + refresh + write-back ---------------------
 
     private String refreshWithLock(UUID storeId, String shopDomain) {
         return tx.execute(s -> {
@@ -225,7 +343,10 @@ public class ShopifyTokenProvider {
             accessExp  != null ? accessExp.toInstant()  : null,
             rs.getString("refresh_token_encrypted"),
             refreshExp != null ? refreshExp.toInstant() : null,
-            rs.getString("status"));
+            rs.getString("status"),
+            rs.getString("connection_type"),
+            rs.getString("client_id_encrypted"),
+            rs.getString("api_secret_encrypted"));
     }
 
     private record StoreTokenRow(
@@ -234,5 +355,8 @@ public class ShopifyTokenProvider {
             Instant accessTokenExpiresAt,
             String  refreshTokenEncrypted,
             Instant refreshTokenExpiresAt,
-            String  status) {}
+            String  status,
+            String  connectionType,
+            String  clientIdEncrypted,
+            String  apiSecretEncrypted) {}
 }

@@ -24,6 +24,7 @@ public class ShopifyController {
     private boolean customAppConnectEnabled;
 
     private final ShopifySyncService        syncService;
+    private final ShopifyGateway            shopifyGateway;
     private final ShopifyImportJob          importJob;
     private final RegisterShopifyWebhooksJob webhooksJob;
     private final JobScheduler              jobScheduler;
@@ -32,23 +33,25 @@ public class ShopifyController {
     private final TransactionTemplate       tx;
 
     public ShopifyController(ShopifySyncService syncService,
+                              ShopifyGateway shopifyGateway,
                               ShopifyImportJob importJob,
                               RegisterShopifyWebhooksJob webhooksJob,
                               JobScheduler jobScheduler,
                               JdbcTemplate jdbc,
                               ObjectMapper mapper,
                               PlatformTransactionManager txm) {
-        this.syncService   = syncService;
-        this.importJob     = importJob;
-        this.webhooksJob   = webhooksJob;
-        this.jobScheduler  = jobScheduler;
-        this.jdbc          = jdbc;
-        this.mapper        = mapper;
-        this.tx            = new TransactionTemplate(txm);
+        this.syncService     = syncService;
+        this.shopifyGateway  = shopifyGateway;
+        this.importJob       = importJob;
+        this.webhooksJob     = webhooksJob;
+        this.jobScheduler    = jobScheduler;
+        this.jdbc            = jdbc;
+        this.mapper          = mapper;
+        this.tx              = new TransactionTemplate(txm);
     }
 
     public record ConnectRequest(String shopDomain, String adminToken) {}
-    public record CustomConnectRequest(String shopDomain, String adminToken, String apiSecret) {}
+    public record CustomConnectRequest(String shopDomain, String clientId, String clientSecret) {}
     public record ConnectResponse(String storeId, String importStatus) {}
     public record StoreStatusResponse(String storeId, String importStatus, Object importSummary) {}
 
@@ -71,13 +74,18 @@ public class ShopifyController {
     }
 
     /**
-     * POST /api/v1/shopify/custom-connect — DEV/pilot custom-app connection path.
+     * POST /api/v1/shopify/custom-connect — DEV/pilot custom-app CC connection path.
      *
      * Guarded by the app.custom-app-connect-enabled feature flag (default: false).
      * The existing OAuth path (/connect) is NOT modified.
      *
-     * Required scopes on the custom app: read_orders, read_products, read_fulfillments, write_webhooks.
-     * Admin token MUST be a permanent token starting with "shpat_" (not a rotating/expiring token).
+     * Uses Shopify's client-credentials grant: POST /admin/oauth/access_token with
+     * grant_type=client_credentials. Token lifetime ~24h; re-exchanged on expiry by
+     * ShopifyTokenProvider using the stored clientId + clientSecret.
+     *
+     * Required scopes on the Dev Dashboard custom app:
+     *   read_orders, read_products, read_fulfillments, write_webhooks.
+     * The app MUST be installed on the store (Install in Dev Dashboard) before connecting.
      */
     @PostMapping("/custom-connect")
     @PreAuthorize("hasRole('OWNER')")
@@ -93,15 +101,47 @@ public class ShopifyController {
         if (req.shopDomain() == null || !req.shopDomain().matches("[a-zA-Z0-9][a-zA-Z0-9\\-]*\\.myshopify\\.com")) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid shop domain format");
         }
-        if (req.adminToken() == null || req.adminToken().isBlank()) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "adminToken is required");
+        if (req.clientId() == null || req.clientId().isBlank()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "clientId is required");
         }
-        if (req.apiSecret() == null || req.apiSecret().isBlank()) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "apiSecret is required");
+        if (req.clientSecret() == null || req.clientSecret().isBlank()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "clientSecret is required");
         }
 
-        ShopifySyncService.ConnectResult result = syncService.connectCustomApp(
-            principal.tenantId(), req.shopDomain().trim(), req.adminToken().trim(), req.apiSecret().trim());
+        String shopDomain    = req.shopDomain().trim();
+        String clientId      = req.clientId().trim();
+        String clientSecret  = req.clientSecret().trim();
+
+        // Exchange Client ID + Client Secret for a short-lived access token.
+        ShopifyGateway.TokenResponse tokens;
+        try {
+            tokens = shopifyGateway.exchangeClientCredentials(shopDomain, clientId, clientSecret);
+        } catch (ShopifyStoreNeedsReauthException e) {
+            String msg = e.getMessage() != null ? e.getMessage() : "";
+            if (msg.contains("shop_not_permitted")) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "This app and store are not in the same Shopify organization. " +
+                    "Create the custom app from your store's own Dev Dashboard.");
+            }
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                "Invalid Client ID or Client Secret — check your Dev Dashboard API credentials.");
+        } catch (ShopifyTransientException e) {
+            throw new ResponseStatusException(HttpStatus.BAD_GATEWAY,
+                "Could not reach Shopify — try again shortly.");
+        }
+
+        // Validate the token by fetching the shop resource.
+        try {
+            shopifyGateway.fetchShop(shopDomain, tokens.accessToken());
+        } catch (Exception e) {
+            throw new ResponseStatusException(HttpStatus.BAD_GATEWAY,
+                "Could not verify store access with the obtained token");
+        }
+
+        // Persist CC store row.
+        ShopifySyncService.ConnectResult result = syncService.connectCustomAppCC(
+            principal.tenantId(), shopDomain, clientId, clientSecret,
+            tokens.accessToken(), tokens.expiresIn());
 
         UUID storeId  = result.storeId();
         UUID tenantId = principal.tenantId();

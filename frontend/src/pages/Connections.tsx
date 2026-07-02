@@ -266,12 +266,12 @@ function ShopifyCustomAppCard({
   shopifyCustomApp: ConnectionsStatus['shopifyCustomApp']
   onConnected: () => void
 }) {
-  const [shopDomain,  setShopDomain]  = useState('')
-  const [adminToken,  setAdminToken]  = useState('')
-  const [apiSecret,   setApiSecret]   = useState('')
-  const [loading,     setLoading]     = useState(false)
-  const [error,       setError]       = useState('')
-  const [showForm,    setShowForm]    = useState(false)
+  const [shopDomain,   setShopDomain]   = useState('')
+  const [clientId,     setClientId]     = useState('')
+  const [clientSecret, setClientSecret] = useState('')
+  const [loading,      setLoading]      = useState(false)
+  const [error,        setError]        = useState('')
+  const [showForm,     setShowForm]     = useState(false)
 
   const SHOP_RE = /^[a-zA-Z0-9][a-zA-Z0-9-]*\.myshopify\.com$/
 
@@ -282,26 +282,26 @@ function ShopifyCustomAppCard({
       setError('Invalid shop domain — must end with .myshopify.com')
       return
     }
-    if (!adminToken.trim().startsWith('shpat_')) {
-      setError('Admin token must start with shpat_ (permanent token). Rotating tokens are not supported.')
+    if (!clientId.trim()) {
+      setError('Client ID is required')
       return
     }
-    if (!apiSecret.trim()) {
-      setError('API secret is required')
+    if (!clientSecret.trim()) {
+      setError('Client Secret is required')
       return
     }
     setLoading(true)
     try {
-      await shopifyCustomConnect(shopDomain.trim(), adminToken.trim(), apiSecret.trim())
+      await shopifyCustomConnect(shopDomain.trim(), clientId.trim(), clientSecret.trim())
       setShopDomain('')
-      setAdminToken('')
-      setApiSecret('')
+      setClientId('')
+      setClientSecret('')
       setShowForm(false)
       onConnected()
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : ''
       if (msg.includes('400')) {
-        setError('Invalid credentials or rotating token detected. Use a permanent shpat_ admin token.')
+        setError('Invalid credentials. Check your Client ID and Client Secret in Dev Dashboard. If you see "shop_not_permitted", the app must be created from THIS store\'s Dev Dashboard.')
       } else if (msg.includes('403')) {
         setError('Custom-app connection is not enabled in this environment.')
       } else if (msg.includes('409')) {
@@ -329,7 +329,7 @@ function ShopifyCustomAppCard({
             </svg>
           </div>
           <div>
-            <h2 className="text-h3 text-primary">Shopify (Custom App)</h2>
+            <h2 className="text-h3 text-primary">Custom App (Client Credentials)</h2>
             <span className="text-xs text-amber-700 font-medium">PILOT / TEMPORARY</span>
           </div>
         </div>
@@ -339,12 +339,12 @@ function ShopifyCustomAppCard({
         }
       </div>
 
-      {/* Amber banner when connected */}
-      {shopifyCustomApp.connected && !showForm && (
-        <div className="text-xs text-amber-800 bg-amber-100 border border-amber-300 rounded px-3 py-2">
-          Warning: This is a temporary custom-app connection. It will be replaced by the full OAuth integration before production launch.
-        </div>
-      )}
+      {/* Amber banner — always shown to set expectations */}
+      <div className="text-xs text-amber-800 bg-amber-100 border border-amber-300 rounded px-3 py-2">
+        Temporary pilot connection while App Store review is pending. Will be replaced by the public
+        app once approved. Customer name/phone/address are not available on this path — order
+        matching uses the Bosta delivery reference.
+      </div>
 
       {/* Connected state */}
       {shopifyCustomApp.connected && !showForm && (
@@ -352,6 +352,10 @@ function ShopifyCustomAppCard({
           <div className="flex gap-2">
             <span className="text-muted w-28 flex-shrink-0">Shop domain</span>
             <span className="text-primary font-medium">{shopifyCustomApp.shopDomain}</span>
+          </div>
+          <div className="flex gap-2">
+            <span className="text-muted w-28 flex-shrink-0">Connection</span>
+            <span className="text-amber-700 font-medium">Custom App (Pilot)</span>
           </div>
           {shopifyCustomApp.importStatus && (
             <div className="flex gap-2">
@@ -379,13 +383,21 @@ function ShopifyCustomAppCard({
       {/* Connect form */}
       {showConnect && (
         <div className="space-y-3">
-          <p className="text-small text-muted">
-            Connect using a custom app from Shopify Partner Dashboard.
-            Required scopes: <code className="text-xs bg-line/20 px-1 rounded">read_orders, read_products, read_fulfillments, write_webhooks</code>
-          </p>
-          <p className="text-xs text-amber-700">
-            Admin token must start with <code className="bg-amber-100 px-1 rounded">shpat_</code> (permanent, non-rotating).
-          </p>
+          <div className="text-small text-muted space-y-1">
+            <p className="font-medium">Setup instructions:</p>
+            <ol className="list-decimal list-inside space-y-0.5 text-xs">
+              <li>In your Shopify admin: Settings → Apps and sales channels → Develop apps → build in Dev Dashboard</li>
+              <li>Create an app</li>
+              <li>Set API scopes: <code className="bg-line/20 px-1 rounded">read_orders, read_products, read_fulfillments, write_webhooks</code></li>
+              <li>Install the app on your store (required)</li>
+              <li>Open API credentials → copy the Client ID and Client Secret</li>
+              <li>Paste both below</li>
+            </ol>
+            <p className="text-xs text-amber-700 mt-1">
+              The app and store must be in the same Shopify organization (create the app from THIS
+              store's Dev Dashboard), or you will get a "shop_not_permitted" error.
+            </p>
+          </div>
 
           {error && (
             <div role="alert" className="text-small text-danger bg-danger/10 border border-danger/25 rounded px-3 py-2">
@@ -411,32 +423,32 @@ function ShopifyCustomAppCard({
               />
             </div>
             <div>
-              <label className="block text-small text-muted mb-1.5" htmlFor="customAdminToken">
-                Admin API access token (shpat_...)
+              <label className="block text-small text-muted mb-1.5" htmlFor="customClientId">
+                Client ID
               </label>
               <input
-                id="customAdminToken"
-                type="password"
-                value={adminToken}
-                onChange={e => setAdminToken(e.target.value)}
+                id="customClientId"
+                type="text"
+                value={clientId}
+                onChange={e => setClientId(e.target.value)}
                 className="input"
-                placeholder="shpat_..."
+                placeholder="Client ID from Dev Dashboard"
                 dir="ltr"
                 disabled={loading}
                 autoComplete="off"
               />
             </div>
             <div>
-              <label className="block text-small text-muted mb-1.5" htmlFor="customApiSecret">
-                API secret key
+              <label className="block text-small text-muted mb-1.5" htmlFor="customClientSecret">
+                Client Secret
               </label>
               <input
-                id="customApiSecret"
+                id="customClientSecret"
                 type="password"
-                value={apiSecret}
-                onChange={e => setApiSecret(e.target.value)}
+                value={clientSecret}
+                onChange={e => setClientSecret(e.target.value)}
                 className="input"
-                placeholder="API secret from Partner Dashboard"
+                placeholder="Client Secret from Dev Dashboard"
                 dir="ltr"
                 disabled={loading}
                 autoComplete="off"
@@ -445,7 +457,7 @@ function ShopifyCustomAppCard({
             <div className="flex gap-2">
               <button
                 type="submit"
-                disabled={loading || !shopDomain.trim() || !adminToken.trim() || !apiSecret.trim()}
+                disabled={loading || !shopDomain.trim() || !clientId.trim() || !clientSecret.trim()}
                 className="btn btn-brand"
               >
                 {loading ? 'Connecting...' : 'Connect custom app'}

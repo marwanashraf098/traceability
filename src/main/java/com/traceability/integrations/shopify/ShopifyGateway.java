@@ -162,4 +162,14 @@ public interface ShopifyGateway {
      * Logs but does not throw on userErrors (e.g. already deleted by the time we call this).
      */
     void deleteWebhookSubscription(String shopDomain, String token, String subscriptionGid);
+
+    /**
+     * Exchanges Client ID + Client Secret for a short-lived access token via
+     * Shopify's client-credentials grant (Dev Dashboard custom apps, post-Jan 2026).
+     * Token lifetime is always 86399 seconds (~24 hours). No refresh_token is issued.
+     *
+     * @throws ShopifyStoreNeedsReauthException on 4xx (shop_not_permitted, application_cannot_be_found, etc.)
+     * @throws ShopifyTransientException on 5xx or network failure
+     */
+    TokenResponse exchangeClientCredentials(String shopDomain, String clientId, String clientSecret);
 }

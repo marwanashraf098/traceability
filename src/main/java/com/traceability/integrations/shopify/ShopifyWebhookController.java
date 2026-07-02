@@ -158,7 +158,7 @@ public class ShopifyWebhookController {
                 tx.execute(status ->
                     jdbc.query(
                         "SELECT api_secret_encrypted FROM stores " +
-                        "WHERE shop_domain = ? AND connection_type = 'custom_app' AND api_secret_encrypted IS NOT NULL",
+                        "WHERE shop_domain = ? AND connection_type IN ('custom_app', 'custom_app_cc') AND api_secret_encrypted IS NOT NULL",
                         rs -> rs.next() ? rs.getString(1) : null,
                         shopDomain)));
 

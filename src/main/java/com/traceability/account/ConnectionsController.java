@@ -97,10 +97,10 @@ public class ConnectionsController {
                     return m;
                 }, tenantId);
 
-            // shopifyCustomApp status — custom_app connection_type stores only
+            // shopifyCustomApp status — custom_app and custom_app_cc connection_type stores
             Map<String, Object> shopifyCustomApp = jdbc.query(
                 "SELECT shop_domain, status, import_status::text, last_sync_at " +
-                "FROM stores WHERE tenant_id = ? AND connection_type = 'custom_app' " +
+                "FROM stores WHERE tenant_id = ? AND connection_type IN ('custom_app', 'custom_app_cc') " +
                 "ORDER BY last_sync_at DESC NULLS LAST LIMIT 1",
                 rs -> {
                     Map<String, Object> m = new LinkedHashMap<>();

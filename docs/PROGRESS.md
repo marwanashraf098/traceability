@@ -4,7 +4,40 @@
 
 ## Current state
 
-**453 tests — all green, deterministic** — 2026-07-02.
+**458 tests — all green, deterministic** — 2026-07-02.
+
+---
+
+**Shopify Client Credentials (CC) grant — custom_app_cc pilot path (2026-07-02):**
+
+*Overview:* Replaces the `custom_app` (admin token) path with a proper Shopify Client Credentials OAuth grant. Token lifetime ~24h; re-exchanged automatically on expiry by `ShopifyTokenProvider`. Stored under `connection_type='custom_app_cc'`. The original `custom_app` path and the OAuth path are **untouched**.
+
+*V32 migration:*
+- `ALTER TABLE stores ADD COLUMN IF NOT EXISTS client_id_encrypted text`
+- `CREATE OR REPLACE FUNCTION upgrade_custom_app_to_oauth` — amended `WHERE` clause now covers both `'custom_app'` and `'custom_app_cc'`; `client_id_encrypted` is cleared on upgrade
+
+*New interface method:* `ShopifyGateway.exchangeClientCredentials(shopDomain, clientId, clientSecret)` → implemented in `ShopifyHttpGateway`. POSTs `grant_type=client_credentials` to Shopify. Catches 4xx → `ShopifyStoreNeedsReauthException`, 5xx → `ShopifyTransientException`. No plaintext credentials in logs.
+
+*New service method:* `ShopifySyncService.connectCustomAppCC(...)` — UPSERTs store with `connection_type='custom_app_cc'`, encrypts access token + client ID + secret, stores real expiry (not 100-year trick), clears refresh_token fields.
+
+*Endpoint:* `POST /api/v1/shopify/custom-connect` now accepts `{shopDomain, clientId, clientSecret}` (replaces `adminToken`/`apiSecret`). Performs: CC exchange → `fetchShop` validation → `connectCustomAppCC` → enqueue import + webhooks jobs → 202.
+
+*Token re-exchange:* `ShopifyTokenProvider` extended with `reExchangeWithLock()`. The CC branch is checked BEFORE the `refreshTokenEncrypted == null` check (CC stores have null refresh tokens by design). Uses holder-pattern to commit the `SET_NEEDS_REAUTH` update in a separate transaction before throwing (avoids rollback losing the reauth mark). `isFresh()` hot path unchanged.
+
+*Phase B webhook HMAC:* `ShopifyWebhookController` query updated to `IN ('custom_app', 'custom_app_cc')` — both types use `api_secret_encrypted` as the webhook signing key.
+
+*Connections status:* `ConnectionsController` query similarly updated to `IN ('custom_app', 'custom_app_cc')`.
+
+*Frontend:*
+- `api.ts`: `shopifyCustomConnect(shopDomain, clientId, clientSecret)` — body now `{shopDomain, clientId, clientSecret}`
+- `Connections.tsx`: `ShopifyCustomAppCard` rewritten. State: `shopDomain`, `clientId`, `clientSecret` (removed `adminToken`/`apiSecret`). Title: "Custom App (Client Credentials)". Setup instructions panel added. Form fields: Shop domain, Client ID, Client Secret (password type). Amber warning banner always shown.
+
+*Tests:* `CustomAppConnectTest.java` — 20 cases (CC1–CC15 plus 5 preserved). Key fixes discovered: `@MockBean` is auto-reset by `MockitoTestExecutionListener` after `@AfterEach`, so stubs must be established in `@BeforeEach`. The holder-pattern in `reExchangeWithLock` needed to avoid the transaction rollback losing the `needs_reauth` update.
+
+*Decisions:*
+- `grant_type=client_credentials` is the Shopify CC endpoint; no refresh_token is issued; token lifetime 86399s (~24h).
+- `client_id_encrypted` stored alongside `api_secret_encrypted`; both required for re-exchange.
+- `needs_reauth` commit outside the row-lock transaction (separate `tx.execute`) — transient 5xx does NOT mark `needs_reauth`, only 4xx does.
 
 ---
 

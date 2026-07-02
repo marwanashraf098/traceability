@@ -387,6 +387,54 @@ class ShopifyHttpGateway implements ShopifyGateway {
         }
     }
 
+    @Override
+    public TokenResponse exchangeClientCredentials(String shopDomain, String clientId, String clientSecret) {
+        String url = "https://" + shopDomain + "/admin/oauth/access_token";
+        try {
+            JsonNode resp = tokenRestClient.post()
+                .uri(url)
+                .header("Content-Type", "application/json")
+                .body(Map.of(
+                    "grant_type",    "client_credentials",
+                    "client_id",     clientId,
+                    "client_secret", clientSecret))
+                .retrieve()
+                .body(JsonNode.class);
+            if (resp == null || !resp.has("access_token")) {
+                throw new ShopifyException(
+                    "Client-credentials exchange response missing access_token from " + shopDomain);
+            }
+            return new TokenResponse(
+                resp.get("access_token").asText(),
+                null,  // no refresh_token issued for client-credentials grant
+                resp.path("expires_in").asLong(86399),
+                0);    // no refresh_token_expires_in
+        } catch (HttpClientErrorException e) {
+            // 4xx — app/store not permitted, wrong credentials, app not installed, etc.
+            log.warn("Shopify CC exchange rejected ({}): shop={}", e.getStatusCode(), shopDomain);
+            throw new ShopifyStoreNeedsReauthException(shopDomain,
+                "Shopify rejected client-credentials exchange with " + e.getStatusCode()
+                + ": " + e.getResponseBodyAsString());
+        } catch (HttpServerErrorException e) {
+            // 5xx — Shopify-side issue
+            log.warn("Shopify CC exchange 5xx ({}): shop={}", e.getStatusCode(), shopDomain);
+            throw new ShopifyTransientException(
+                "Shopify CC exchange server error " + e.getStatusCode() + " for " + shopDomain, e);
+        } catch (ResourceAccessException e) {
+            // timeout or connection reset
+            log.warn("Shopify CC exchange timeout/connection-reset: shop={}", shopDomain);
+            throw new ShopifyTransientException(
+                "Shopify CC exchange network failure for " + shopDomain, e);
+        } catch (ShopifyStoreNeedsReauthException | ShopifyTransientException e) {
+            throw e; // already classified above
+        } catch (RestClientException e) {
+            // any other HTTP anomaly — treat as transient
+            log.warn("Shopify CC exchange unexpected error: shop={}", shopDomain, e);
+            throw new ShopifyTransientException(
+                "Shopify CC exchange unexpected failure for " + shopDomain, e);
+        }
+    }
+
     // ---- GraphQL execution + throttle handling --------------------------
 
     private JsonNode executeGraphQL(String shopDomain, String token, String query, JsonNode variables) {

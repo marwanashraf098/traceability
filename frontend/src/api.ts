@@ -343,10 +343,10 @@ export function getConnections() {
 
 // ── Shopify custom-app connect (DEV/pilot only) ───────────────────────────────
 
-export function shopifyCustomConnect(shopDomain: string, adminToken: string, apiSecret: string) {
+export function shopifyCustomConnect(shopDomain: string, clientId: string, clientSecret: string) {
   return request<{ storeId: string; importStatus: string }>('/shopify/custom-connect', {
     method: 'POST',
-    body: JSON.stringify({ shopDomain, adminToken, apiSecret }),
+    body: JSON.stringify({ shopDomain, clientId, clientSecret }),
   })
 }
 

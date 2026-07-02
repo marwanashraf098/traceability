@@ -75,6 +75,31 @@ public class ShopifySyncService {
             RETURNING id
             """;
 
+    // CC connect path: stores connection_type='custom_app_cc', encrypts clientId (for re-exchange)
+    // and clientSecret (also used as webhook signing key = api_secret_encrypted).
+    // access_token_expires_at is set to now() + expiresInSeconds (not the 100-year trick)
+    // so ShopifyTokenProvider knows it needs to re-exchange when expired.
+    private static final String UPSERT_STORE_CUSTOM_APP_CC = """
+            INSERT INTO stores (tenant_id, shop_domain, platform, access_token_encrypted,
+                                access_token_expires_at, status, import_status,
+                                connection_type, api_secret_encrypted, client_id_encrypted,
+                                refresh_token_encrypted, refresh_token_expires_at)
+            VALUES (?, ?, 'shopify', ?, ?, 'connected', 'pending',
+                    'custom_app_cc', ?, ?, NULL, NULL)
+            ON CONFLICT (shop_domain) DO UPDATE SET
+                access_token_encrypted   = EXCLUDED.access_token_encrypted,
+                access_token_expires_at  = EXCLUDED.access_token_expires_at,
+                api_secret_encrypted     = EXCLUDED.api_secret_encrypted,
+                client_id_encrypted      = EXCLUDED.client_id_encrypted,
+                refresh_token_encrypted  = NULL,
+                refresh_token_expires_at = NULL,
+                status                   = 'connected',
+                import_status            = 'pending',
+                connection_type          = 'custom_app_cc'
+            WHERE stores.tenant_id = EXCLUDED.tenant_id
+            RETURNING id
+            """;
+
     private static final String UPSERT_PRODUCT = """
             INSERT INTO products (tenant_id, store_id, external_id, title, status, raw)
             VALUES (?, ?, ?, ?, ?, ?::jsonb)
@@ -222,6 +247,43 @@ public class ShopifySyncService {
         });
 
         return new ConnectResult(storeId, shopName);
+    }
+
+    /**
+     * Stores a client-credentials custom-app connection (connection_type='custom_app_cc').
+     * Unlike the legacy custom_app path, the access token has a real expiry (~24h) and
+     * will be re-exchanged by ShopifyTokenProvider when it expires.
+     *
+     * @param tenantId        the tenant to associate the store with
+     * @param shopDomain      the myshopify.com domain
+     * @param clientId        the Dev Dashboard Client ID (for re-exchange)
+     * @param clientSecret    the Dev Dashboard Client Secret (also the webhook signing key)
+     * @param accessToken     the plaintext access token from the CC exchange
+     * @param expiresInSeconds token lifetime reported by Shopify (typically 86399)
+     */
+    public ConnectResult connectCustomAppCC(UUID tenantId, String shopDomain,
+                                            String clientId, String clientSecret,
+                                            String accessToken, long expiresInSeconds) {
+        String encryptedToken    = encryptionService.encrypt(accessToken);
+        String encryptedClientId = encryptionService.encrypt(clientId);
+        String encryptedSecret   = encryptionService.encrypt(clientSecret);
+
+        java.sql.Timestamp expiresAt = java.sql.Timestamp.from(
+            java.time.Instant.now().plusSeconds(expiresInSeconds));
+
+        UUID storeId = tx.execute(status -> {
+            UUID id = jdbc.query(UPSERT_STORE_CUSTOM_APP_CC,
+                rs -> rs.next() ? rs.getObject("id", UUID.class) : null,
+                tenantId, shopDomain, encryptedToken, expiresAt,
+                encryptedSecret, encryptedClientId);
+            if (id == null) {
+                throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "Shop domain is already connected to a different account");
+            }
+            return id;
+        });
+
+        return new ConnectResult(storeId, shopDomain);
     }
 
     private static final String LOOKUP_STORE =
