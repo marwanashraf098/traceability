@@ -132,6 +132,7 @@ public class ReceivingService {
 
     // ── Queries ───────────────────────────────────────────────────────────────
 
+    @Transactional(readOnly = true)
     public Map<String, Object> getSession(UUID sessionId) {
         UUID tenantId = TenantContext.require();
         List<Map<String, Object>> rows = jdbc.queryForList(
@@ -149,6 +150,7 @@ public class ReceivingService {
         return session;
     }
 
+    @Transactional(readOnly = true)
     public List<Map<String, Object>> listSessions() {
         UUID tenantId = TenantContext.require();
         return jdbc.queryForList(
@@ -163,7 +165,7 @@ public class ReceivingService {
             tenantId);
     }
 
-    /** Search variants by SKU or title prefix for the add-line autocomplete. */
+    @Transactional(readOnly = true)
     public List<Map<String, Object>> getSessionPieces(UUID sessionId) {
         UUID tenantId = TenantContext.require();
         return jdbc.queryForList(
@@ -176,6 +178,7 @@ public class ReceivingService {
             sessionId, tenantId);
     }
 
+    @Transactional(readOnly = true)
     public List<Map<String, Object>> searchVariants(String query) {
         UUID tenantId = TenantContext.require();
         String pattern = "%" + query.toLowerCase() + "%";
