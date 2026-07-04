@@ -396,7 +396,13 @@
       "connectBtn": "Connect Bosta",
       "connecting": "Verifying…",
       "error": "Could not connect. Check the API key and try again.",
-      "reconnect": "Reconnect"
+      "reconnect": "Reconnect",
+      "syncBtn": "Sync Bosta deliveries",
+      "syncing": "Syncing…",
+      "syncError": "Sync failed. Try again.",
+      "syncTooltip": "Fetches existing deliveries from Bosta and links them to orders. Safe to re-run.",
+      "lastSync": "Last sync",
+      "syncQueued": "{{count}} deliveries queued"
     },
     "never": "Never"
   },

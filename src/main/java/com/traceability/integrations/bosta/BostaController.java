@@ -5,9 +5,11 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.traceability.identity.CustomUserDetails;
 import com.traceability.security.EncryptionService;
 import com.traceability.tenancy.TenantContext;
+import org.jobrunr.jobs.JobId;
 import org.jobrunr.scheduling.JobScheduler;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -24,7 +26,9 @@ import java.security.NoSuchAlgorithmException;
 import java.security.SecureRandom;
 import java.time.LocalDate;
 import java.util.HexFormat;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 @RestController
@@ -33,15 +37,17 @@ public class BostaController {
 
     private static final Logger log = LoggerFactory.getLogger(BostaController.class);
 
-    private final BostaGateway       bostaGateway;
-    private final EncryptionService  encryptionService;
-    private final JdbcTemplate       jdbc;
-    private final ObjectMapper       mapper;
-    private final JobScheduler       jobScheduler;
-    private final BostaWebhookJob    webhookJob;
+    private final BostaGateway        bostaGateway;
+    private final EncryptionService   encryptionService;
+    private final JdbcTemplate        jdbc;
+    private final ObjectMapper        mapper;
+    private final JobScheduler        jobScheduler;
+    private final BostaWebhookJob     webhookJob;
+    private final BostaBackfillJob    backfillJob;
     private final TransactionTemplate tx;
-    private final BostaAwbService    awbService;
-    private final BostaPickupService pickupService;
+    private final BostaAwbService     awbService;
+    private final BostaPickupService  pickupService;
+    private final int                 defaultBackfillMaxPages;
 
     public BostaController(BostaGateway bostaGateway,
                             EncryptionService encryptionService,
@@ -49,23 +55,28 @@ public class BostaController {
                             ObjectMapper mapper,
                             JobScheduler jobScheduler,
                             BostaWebhookJob webhookJob,
+                            BostaBackfillJob backfillJob,
                             PlatformTransactionManager txm,
                             BostaAwbService awbService,
-                            BostaPickupService pickupService) {
-        this.bostaGateway      = bostaGateway;
-        this.encryptionService = encryptionService;
-        this.jdbc              = jdbc;
-        this.mapper            = mapper;
-        this.jobScheduler      = jobScheduler;
-        this.webhookJob        = webhookJob;
-        this.tx                = new TransactionTemplate(txm);
-        this.awbService        = awbService;
-        this.pickupService     = pickupService;
+                            BostaPickupService pickupService,
+                            @Value("${bosta.backfill.max-pages:20}") int defaultBackfillMaxPages) {
+        this.bostaGateway           = bostaGateway;
+        this.encryptionService      = encryptionService;
+        this.jdbc                   = jdbc;
+        this.mapper                 = mapper;
+        this.jobScheduler           = jobScheduler;
+        this.webhookJob             = webhookJob;
+        this.backfillJob            = backfillJob;
+        this.tx                     = new TransactionTemplate(txm);
+        this.awbService             = awbService;
+        this.pickupService          = pickupService;
+        this.defaultBackfillMaxPages = defaultBackfillMaxPages;
     }
 
     // ---- Request / response records ----------------------------------------
 
     public record BostaConnectRequest(String apiKey) {}
+    public record SyncRequest(@Nullable Integer maxPages) {}
     public record BostaSettingsRequest(
         @Nullable String pickupMode,
         @Nullable String pickupBusinessLocationId,
@@ -137,7 +148,68 @@ public class BostaController {
                 return id;
             }));
 
+        // Trigger one-time backfill for historical deliveries (async, fire-and-forget).
+        // Runs after the account is persisted so the job can find the api_key_encrypted row.
+        final UUID backfillTenantId = tenantId;
+        jobScheduler.enqueue(() -> backfillJob.run(backfillTenantId, defaultBackfillMaxPages));
+
         return new BostaConnectResponse(accountId.toString(), rawHex);
+    }
+
+    // ---- POST /api/v1/bosta/sync (OWNER — manual re-sync) -------------------
+
+    /**
+     * Enqueues a backfill job on demand. Safe to re-run — backfill is idempotent
+     * because the idem key dedup in BostaWebhookJob deduplicates repeated events for
+     * the same (trackingNumber, state, updatedAt) tuple.
+     */
+    @PostMapping("/bosta/sync")
+    @ResponseStatus(HttpStatus.ACCEPTED)
+    @PreAuthorize("hasRole('OWNER')")
+    public Map<String, String> syncDeliveries(
+            @RequestBody(required = false) SyncRequest req,
+            @AuthenticationPrincipal CustomUserDetails principal) {
+
+        UUID tenantId = principal.tenantId();
+        int maxPages = (req != null && req.maxPages() != null && req.maxPages() > 0)
+            ? req.maxPages() : defaultBackfillMaxPages;
+        JobId jobId = jobScheduler.enqueue(() -> backfillJob.run(tenantId, maxPages));
+        Map<String, String> resp = new LinkedHashMap<>();
+        resp.put("jobId",   jobId != null ? jobId.asUUID().toString() : "enqueued");
+        resp.put("message", "Backfill enqueued — " + maxPages + " pages max");
+        return resp;
+    }
+
+    // ---- GET /api/v1/bosta/sync/status (OWNER) ------------------------------
+
+    /**
+     * Returns the last backfill run metadata: when it ran, how many deliveries were
+     * seen and how many webhook_events rows were created.
+     */
+    @GetMapping("/bosta/sync/status")
+    @PreAuthorize("hasRole('OWNER')")
+    public Map<String, Object> syncStatus(@AuthenticationPrincipal CustomUserDetails principal) {
+        UUID tenantId = principal.tenantId();
+        return TenantContext.runAs(tenantId, () ->
+            tx.execute(s -> jdbc.query(
+                "SELECT last_backfill_at, last_backfill_total, last_backfill_enqueued " +
+                "FROM courier_accounts " +
+                "WHERE tenant_id = ? AND provider = 'bosta' AND status = 'active' LIMIT 1",
+                rs -> {
+                    Map<String, Object> result = new LinkedHashMap<>();
+                    if (!rs.next()) {
+                        result.put("lastBackfillAt",       null);
+                        result.put("lastBackfillTotal",    0);
+                        result.put("lastBackfillEnqueued", 0);
+                        return result;
+                    }
+                    var ts = rs.getTimestamp("last_backfill_at");
+                    result.put("lastBackfillAt",       ts != null ? ts.toInstant().toString() : null);
+                    result.put("lastBackfillTotal",    rs.getInt("last_backfill_total"));
+                    result.put("lastBackfillEnqueued", rs.getInt("last_backfill_enqueued"));
+                    return result;
+                },
+                tenantId)));
     }
 
     // ---- POST /api/v1/webhooks/bosta (public — no JWT) ----------------------

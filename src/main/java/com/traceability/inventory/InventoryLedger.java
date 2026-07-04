@@ -44,6 +44,9 @@ public class InventoryLedger {
 
         // self-pickup handover: pieces go packed→delivered directly (no courier leg)
         "packed:delivered",
+        // Bosta backfill / courier lag: delivery confirmed while piece is still at awaiting_pickup
+        // (Bosta never fired the pickup state update — e.g. same-day delivery, or missed webhook).
+        "awaiting_pickup:delivered",
 
         // cancellation / unwind
         "reserved:available",

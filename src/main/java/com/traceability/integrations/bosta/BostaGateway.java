@@ -14,6 +14,29 @@ import java.util.List;
 public interface BostaGateway {
 
     /**
+     * A slim delivery item as returned by GET /api/v0/deliveries (list endpoint).
+     *
+     * List items are SLIM — businessReference is absent. Callers MUST use
+     * fetchDelivery(apiKey, trackingNumber) to obtain the full delivery shape
+     * (businessReference, shopifyOrderId, numberOfAttempts, raw JSON, etc.).
+     */
+    record SlimDelivery(String trackingNumber, int stateCode, String type) {}
+
+    /**
+     * Returns one page of slim delivery items from GET /api/v0/deliveries.
+     *
+     * Pagination: pageNumber (1-based) + pageSize (items per page).
+     * Returns empty list when the page is past the end or the data array is absent/empty.
+     * Defensive envelope handling: accepts both {data:[...]} and {data:{data:[...]}} shapes.
+     *
+     * state and type in each item may be plain scalars or nested objects — both are handled.
+     *
+     * Throws BostaTransientException on 5xx / network errors.
+     * Throws BostaException on other non-retryable errors.
+     */
+    List<SlimDelivery> listDeliveriesPage(String apiKey, int pageNumber, int pageSize);
+
+    /**
      * Validates an API key against the Bosta v0 deliveries list endpoint.
      * Returns "connected" on success (callers use this only for logging).
      * Throws ResponseStatusException(422) for 401/403 (invalid key — caller gets clean UI error).

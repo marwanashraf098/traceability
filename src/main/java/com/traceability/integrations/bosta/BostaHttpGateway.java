@@ -18,6 +18,7 @@ import org.springframework.web.client.RestClientResponseException;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.Base64;
 import java.util.List;
 import java.util.Map;
@@ -62,6 +63,58 @@ class BostaHttpGateway implements BostaGateway {
             .retryExceptions(ResourceAccessException.class)
             .ignoreExceptions(BostaException.class)
             .build());
+    }
+
+    @Override
+    public List<SlimDelivery> listDeliveriesPage(String apiKey, int pageNumber, int pageSize) {
+        String url = baseUrl + "/api/" + apiVersion + "/deliveries?pageNumber=" + pageNumber + "&pageSize=" + pageSize;
+        try {
+            JsonNode body = Retry.decorateSupplier(retry, () ->
+                restClient.get()
+                    .uri(url)
+                    .header("Authorization", apiKey)
+                    .retrieve()
+                    .body(JsonNode.class)
+            ).get();
+
+            if (body == null) return List.of();
+
+            // Defensive envelope: {data:[...]} or {data:{data:[...]}}
+            JsonNode dataNode = body.path("data");
+            if (dataNode.isObject()) {
+                dataNode = dataNode.path("data");
+            }
+            if (!dataNode.isArray() || dataNode.isEmpty()) return List.of();
+
+            List<SlimDelivery> result = new ArrayList<>();
+            for (JsonNode item : dataNode) {
+                String tn = item.path("trackingNumber").asText(null);
+                if (tn == null || tn.isBlank()) continue;
+
+                // state may be plain int or object {code:N, value:"..."}
+                JsonNode stateNode = item.path("state");
+                int stateCode = stateNode.isObject()
+                    ? stateNode.path("code").asInt(-1)
+                    : stateNode.asInt(-1);
+
+                // type may be plain string or object {code:N, value:"SEND"/"RTO"}
+                JsonNode typeNode = item.path("type");
+                String type = typeNode.isObject()
+                    ? typeNode.path("value").asText("SEND")
+                    : typeNode.asText("SEND");
+
+                result.add(new SlimDelivery(tn, stateCode, type));
+            }
+            return result;
+        } catch (ResourceAccessException e) {
+            throw new BostaTransientException("Network error listing deliveries page " + pageNumber, e);
+        } catch (RestClientResponseException e) {
+            if (e.getStatusCode().is5xxServerError()) {
+                throw new BostaTransientException("Bosta 5xx listing deliveries page " + pageNumber, e);
+            }
+            throw new BostaException(
+                "Bosta list deliveries error (" + e.getStatusCode() + "): " + e.getMessage(), e);
+        }
     }
 
     @Override

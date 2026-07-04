@@ -1,0 +1,19 @@
+{
+  "success": true,
+  "data": [
+    {
+      "trackingNumber": "BOS-BACK-004",
+      "state": {
+        "value": "Delivered",
+        "code": 45,
+        "deliveryTime": null
+      },
+      "type": {
+        "code": 10,
+        "value": "Send"
+      },
+      "numberOfAttempts": 1
+    }
+  ],
+  "count": 1
+}

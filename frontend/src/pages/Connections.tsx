@@ -1,6 +1,10 @@
 import { useState, useEffect, FormEvent } from 'react'
 import { useTranslation } from 'react-i18next'
-import { getConnections, shopifyInitiate, shopifyCustomConnect, bostaConnect, ConnectionsStatus } from '../api'
+import {
+  getConnections, shopifyInitiate, shopifyCustomConnect,
+  bostaConnect, bostaSync, bostaGetSyncStatus,
+  ConnectionsStatus, BostaBackfillStatus,
+} from '../api'
 
 // ── Status badge helpers ──────────────────────────────────────────────────────
 
@@ -141,10 +145,19 @@ function ShopifyCard({ shopify }: { shopify: ConnectionsStatus['shopify'] }) {
 
 function BostaCard({ bosta, onConnected }: { bosta: ConnectionsStatus['bosta']; onConnected: () => void }) {
   const { t } = useTranslation()
-  const [apiKey,    setApiKey]    = useState('')
-  const [loading,   setLoading]   = useState(false)
-  const [error,     setError]     = useState('')
-  const [showForm,  setShowForm]  = useState(false)
+  const [apiKey,      setApiKey]      = useState('')
+  const [loading,     setLoading]     = useState(false)
+  const [error,       setError]       = useState('')
+  const [showForm,    setShowForm]    = useState(false)
+  const [syncing,     setSyncing]     = useState(false)
+  const [syncError,   setSyncError]   = useState('')
+  const [syncStatus,  setSyncStatus]  = useState<BostaBackfillStatus | null>(null)
+
+  useEffect(() => {
+    if (bosta.connected) {
+      bostaGetSyncStatus().then(setSyncStatus).catch(() => {/* non-critical */})
+    }
+  }, [bosta.connected])
 
   async function handleConnect(e: FormEvent) {
     e.preventDefault()
@@ -160,6 +173,22 @@ function BostaCard({ bosta, onConnected }: { bosta: ConnectionsStatus['bosta']; 
       setError(t('connections.bosta.error'))
     } finally {
       setLoading(false)
+    }
+  }
+
+  async function handleSync() {
+    setSyncError('')
+    setSyncing(true)
+    try {
+      await bostaSync()
+      // Refresh status after a short delay so the counter has time to update
+      setTimeout(() => {
+        bostaGetSyncStatus().then(setSyncStatus).catch(() => {/* non-critical */})
+      }, 1500)
+    } catch {
+      setSyncError(t('connections.bosta.syncError'))
+    } finally {
+      setSyncing(false)
     }
   }
 
@@ -196,12 +225,40 @@ function BostaCard({ bosta, onConnected }: { bosta: ConnectionsStatus['bosta']; 
               <span className="text-primary">{bosta.pickupMode}</span>
             </div>
           )}
-          <button
-            onClick={() => setShowForm(true)}
-            className="btn btn-outline text-small mt-2"
-          >
-            {t('connections.bosta.reconnect')}
-          </button>
+
+          {/* Sync section */}
+          <div className="pt-2 border-t border-line/40 space-y-2">
+            <div className="flex items-center gap-2">
+              <button
+                onClick={handleSync}
+                disabled={syncing}
+                title={t('connections.bosta.syncTooltip')}
+                className="btn btn-outline text-small"
+              >
+                {syncing ? t('connections.bosta.syncing') : t('connections.bosta.syncBtn')}
+              </button>
+              <button
+                onClick={() => setShowForm(true)}
+                className="btn btn-ghost text-small"
+              >
+                {t('connections.bosta.reconnect')}
+              </button>
+            </div>
+            {syncError && (
+              <p className="text-xs text-danger">{syncError}</p>
+            )}
+            {syncStatus && (
+              <p className="text-xs text-muted">
+                {t('connections.bosta.lastSync')}:{' '}
+                {syncStatus.lastBackfillAt
+                  ? new Date(syncStatus.lastBackfillAt).toLocaleString()
+                  : t('connections.never')}
+                {syncStatus.lastBackfillEnqueued > 0 && (
+                  <> &middot; {t('connections.bosta.syncQueued', { count: syncStatus.lastBackfillEnqueued })}</>
+                )}
+              </p>
+            )}
+          </div>
         </div>
       )}
 

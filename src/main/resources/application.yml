@@ -68,6 +68,11 @@ bosta:
   # Base URL: prod=https://app.bosta.co, staging=https://stg-app.bosta.co
   base-url: ${BOSTA_BASE_URL:https://app.bosta.co}
   api-version: v0
+  backfill:
+    max-pages: 20           # page cap per run (20 × page-size deliveries max)
+    page-size: 50
+    inter-fetch-delay-ms: 100   # throttle between per-delivery fetches (no documented rate limit)
+    default-lookback-days: 90   # reserved; not used for filtering in v1
 
 org:
   jobrunr:

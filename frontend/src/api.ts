@@ -368,6 +368,25 @@ export function bostaConnect(apiKey: string) {
   })
 }
 
+// ── Bosta backfill sync ───────────────────────────────────────────────────────
+
+export interface BostaBackfillStatus {
+  lastBackfillAt: string | null
+  lastBackfillTotal: number
+  lastBackfillEnqueued: number
+}
+
+export function bostaSync(maxPages?: number) {
+  return request<{ jobId: string; message: string }>('/bosta/sync', {
+    method: 'POST',
+    body: JSON.stringify({ maxPages: maxPages ?? null }),
+  })
+}
+
+export function bostaGetSyncStatus() {
+  return request<BostaBackfillStatus>('/bosta/sync/status')
+}
+
 // ── Onboarding checklist (FR-1.2) ────────────────────────────────────────────
 
 export interface OnboardingStep {

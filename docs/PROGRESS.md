@@ -4,9 +4,53 @@
 
 ## Current state
 
-**458 backend tests + 47 frontend tests — all green** — 2026-07-02.
+**480 backend tests + 47 frontend tests — all green** — 2026-07-04.
+
+Bosta delivery backfill (V33) fully implemented and tested.
 
 CC implementation merged, pushed to main. Frontend `setup.ts` polyfills `localStorage` for Node 22 experimental environment (pre-existing `ov1` failure fixed).
+
+---
+
+**Bosta delivery backfill — V33 (2026-07-04):**
+
+*Problem:* Deliveries created on Bosta BEFORE the webhook was configured (or missed while it was down) were never ingested. No historical state in the system.
+
+*Design principle:* Single ingestion code path. Backfill synthesizes a webhook-compatible `{trackingNumber, state, updatedAt}` payload, inserts into `webhook_events` as source='bosta_backfill', and enqueues `BostaWebhookJob`. All matching, state-mapping, and piece-transition logic is unchanged.
+
+*V33 migration:*
+- `ALTER TABLE courier_accounts ADD COLUMN last_backfill_at timestamptz, last_backfill_total int, last_backfill_enqueued int`
+- `ALTER TYPE webhook_source ADD VALUE 'bosta_backfill'`
+
+*Gateway:* `BostaGateway.listDeliveriesPage(apiKey, pageNumber, pageSize)` — fetches slim delivery items. Defensive envelope: handles both `{data:[...]}` and `{data:{data:[...]}}`. State/type handle both plain scalars and `{code:N, value:...}` object forms.
+
+*Backfill job:* `BostaBackfillJob.run(tenantId, maxPages)` — entire job wrapped in `TenantContext.runAs` (RLS-safe). Paginates up to `maxPages` (default 20 × 50 = 1000 deliveries). Per-item: `fetchDelivery` for full shape + `updatedAt`, synthesize payload, insert `webhook_events`, enqueue. Counter update at end. 100ms inter-fetch throttle (configurable, disabled in tests).
+
+*Triggers:* On `POST /bosta/connect` (fire-and-forget after account persisted) and on-demand via `POST /api/v1/bosta/sync` (OWNER). `GET /api/v1/bosta/sync/status` returns `{lastBackfillAt, lastBackfillTotal, lastBackfillEnqueued}`.
+
+*Frontend:* `Connections.tsx` — `BostaCard` shows "Sync Bosta deliveries" button when connected, last-sync timestamp, and count. `api.ts`: `bostaSync()` and `bostaGetSyncStatus()`.
+
+*Idempotency:* Synthesized payload uses `updatedAt` from the fetched delivery so `sha256(trackingNumber:stateCode:updatedAt)` matches the key a live webhook would produce. Re-running backfill or a subsequent live webhook for the same (tracking, state, updatedAt) deduplicates via existing `BostaWebhookJob` step 4.
+
+*Piece state machine fix:* Added `awaiting_pickup → delivered` to `InventoryLedger.ALLOWED`. Required for backfill path where a delivery at state=45 was never seen at state=41 — `tryMatchDelivery` transitions pieces `packed → awaiting_pickup`, then step 10 goes `awaiting_pickup → delivered`. Also valid for live same-day delivery where Bosta skips the pickup update.
+
+*Tests (BostaBackfillTest.java — 15 cases):*
+- Routes through webhook pipeline (same outcome as live webhook)
+- Idempotency: backfill + same-state webhook dedup; run twice dedup; state change processed normally
+- Mid-lifecycle state=45: two ledger events (tracking_linked + courier_update)
+- Order status NOT advanced (documented pilot limitation)
+- Counter update on courier_accounts
+- Mode B: only listDeliveriesPage + fetchDelivery called (no write endpoints)
+- Owner-only: 403 on /sync and /sync/status for managers
+- Page cap stops at maxPages
+- 404 delivery skipped, counter reflects seen count
+- Connect endpoint triggers backfill job
+
+*Also:* `BostaListShapeTest.java` (7 cases) — pure JSON parsing regressions for both envelope shapes and object/scalar state/type.
+
+*Decisions:*
+- Page cap only (no date filter) in v1. Idempotency makes re-runs safe.
+- Order status non-reconciliation accepted for pilot — shipments and pieces are correct, orders.status is not.
 
 ---
 

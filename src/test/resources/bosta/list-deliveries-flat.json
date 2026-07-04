@@ -1,0 +1,18 @@
+{
+  "success": true,
+  "data": [
+    {
+      "trackingNumber": "BOS-BACK-001",
+      "state": 45,
+      "type": "SEND",
+      "numberOfAttempts": 1
+    },
+    {
+      "trackingNumber": "BOS-BACK-002",
+      "state": 41,
+      "type": "RTO",
+      "numberOfAttempts": 2
+    }
+  ],
+  "count": 2
+}
