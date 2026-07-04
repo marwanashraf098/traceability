@@ -15,23 +15,60 @@ import static org.assertj.core.api.Assertions.*;
  * No Spring context — verifies the parsing rules implemented in
  * BostaHttpGateway.listDeliveriesPage() against fixture files.
  *
- * Three shapes are tested:
- *   flat:          {data:[{trackingNumber, state:int, type:string, ...}]}
- *   nested:        {data:{data:[...], count:N}}
- *   object-state:  state and type are objects ({code:N,value:"..."}) instead of scalars
+ * Shapes tested:
+ *   real:          {deliveries:[...], count:N}   ← live Bosta v0 API (primary)
+ *   flat:          {data:[...]}                  ← defensive fallback
+ *   nested:        {data:{data:[...]}}            ← defensive fallback
+ *   object-state:  state/type are objects         ← live v0 per-item shape
  *
- * The parsing rules verified here match the implementation in BostaHttpGateway:
- *   1. Defensive envelope: if data is an object, descend into data.data.
+ * Parsing rules mirrored from BostaHttpGateway:
+ *   1. Try "deliveries" key first (real v0); fall back to "data" / "data.data".
  *   2. trackingNumber is always asText() (handles both string and number JSON types).
- *   3. state: plain int → asInt(); object → path("code").asInt().
- *   4. type:  plain string → asText(); object → path("value").asText().
+ *   3. state: object {code:N} → path("code").asInt(); flat int → asInt().
+ *   4. type:  object {value:"..."} → path("value").asText().toUpperCase(); flat → asText().toUpperCase().
  *   5. Empty or absent array → empty list.
  */
 class BostaListShapeTest {
 
     private final ObjectMapper mapper = new ObjectMapper();
 
-    // ── 1. Flat envelope {data:[...]} ────────────────────────────────────────
+    // ── 0. Real Bosta v0 envelope {deliveries:[...], count:N} ───────────────
+
+    @Test
+    void listShape_realEnvelope_parsesTwoItems() throws Exception {
+        JsonNode body = mapper.readTree(fixture("list-deliveries-real.json"));
+
+        List<ParsedItem> items = parseItems(body);
+
+        assertThat(items).hasSize(2);
+
+        // Item 0: state code 24 (Processing), type "Send" → normalized "SEND"
+        assertThat(items.get(0).trackingNumber()).isEqualTo("8958142126");
+        assertThat(items.get(0).stateCode()).isEqualTo(24);
+        assertThat(items.get(0).type()).isEqualTo("SEND");
+
+        // Item 1: state code 45 (Delivered), type "Send" → normalized "SEND"
+        assertThat(items.get(1).trackingNumber()).isEqualTo("8958142127");
+        assertThat(items.get(1).stateCode()).isEqualTo(45);
+        assertThat(items.get(1).type()).isEqualTo("SEND");
+    }
+
+    @Test
+    void listShape_realEnvelope_countFieldPresent() throws Exception {
+        // Pagination stop condition: stop when seen >= count
+        JsonNode body = mapper.readTree(fixture("list-deliveries-real.json"));
+        assertThat(body.path("count").asInt(-1))
+            .as("real envelope must carry a count field for pagination")
+            .isEqualTo(3535);
+    }
+
+    @Test
+    void listShape_emptyDeliveriesArray_returnsEmptyList() throws Exception {
+        JsonNode body = mapper.readTree("{\"deliveries\":[],\"count\":0}");
+        assertThat(parseItems(body)).isEmpty();
+    }
+
+    // ── 1. Flat envelope {data:[...]} (defensive fallback) ───────────────────
 
     @Test
     void listShape_flatEnvelope_parsesTwoItems() throws Exception {
@@ -76,8 +113,8 @@ class BostaListShapeTest {
         assertThat(items.get(0).trackingNumber()).isEqualTo("BOS-BACK-004");
         // state is {code:45, value:"Delivered"} — must extract code
         assertThat(items.get(0).stateCode()).isEqualTo(45);
-        // type is {code:10, value:"Send"} — must extract value
-        assertThat(items.get(0).type()).isEqualTo("Send");
+        // type is {code:10, value:"Send"} — must extract value AND normalize to uppercase
+        assertThat(items.get(0).type()).isEqualTo("SEND");
     }
 
     // ── 4. Empty array → empty list ──────────────────────────────────────────
@@ -124,9 +161,11 @@ class BostaListShapeTest {
     private record ParsedItem(String trackingNumber, int stateCode, String type) {}
 
     private List<ParsedItem> parseItems(JsonNode body) {
-        JsonNode dataNode = body.path("data");
-        if (dataNode.isObject()) {
-            dataNode = dataNode.path("data");
+        // mirrors BostaHttpGateway.listDeliveriesPage()
+        JsonNode dataNode = body.path("deliveries");
+        if (!dataNode.isArray()) {
+            dataNode = body.path("data");
+            if (dataNode.isObject()) dataNode = dataNode.path("data");
         }
         if (!dataNode.isArray() || dataNode.isEmpty()) return List.of();
 
@@ -142,8 +181,8 @@ class BostaListShapeTest {
 
             JsonNode typeNode = item.path("type");
             String type = typeNode.isObject()
-                ? typeNode.path("value").asText("SEND")
-                : typeNode.asText("SEND");
+                ? typeNode.path("value").asText("SEND").toUpperCase()
+                : typeNode.asText("SEND").toUpperCase();
 
             result.add(new ParsedItem(tn, stateCode, type));
         }

@@ -1,0 +1,34 @@
+{
+  "success": true,
+  "deliveries": [
+    {
+      "trackingNumber": "8958142126",
+      "state": { "value": "Processing", "code": 24, "childState": 5 },
+      "type": { "code": 10, "value": "Send" },
+      "businessReference": "#385328009470",
+      "shopifyInfo": {
+        "orderId": "6839477469253",
+        "orderNumber": "#385328009470",
+        "storeName": "acme.myshopify.com"
+      },
+      "numberOfAttempts": 0,
+      "updatedAt": "2026-06-23T14:00:00.000Z",
+      "createdAt": "2026-06-23T10:00:00.000Z"
+    },
+    {
+      "trackingNumber": "8958142127",
+      "state": { "value": "Delivered", "code": 45 },
+      "type": { "code": 10, "value": "Send" },
+      "businessReference": "#385328009471",
+      "shopifyInfo": {
+        "orderId": "6839477469254",
+        "orderNumber": "#385328009471",
+        "storeName": "acme.myshopify.com"
+      },
+      "numberOfAttempts": 1,
+      "updatedAt": "2026-06-24T10:00:00.000Z",
+      "createdAt": "2026-06-23T10:00:00.000Z"
+    }
+  ],
+  "count": 3535
+}

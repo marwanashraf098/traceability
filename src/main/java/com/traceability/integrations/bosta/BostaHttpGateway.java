@@ -21,6 +21,7 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 
 /**
@@ -79,10 +80,12 @@ class BostaHttpGateway implements BostaGateway {
 
             if (body == null) return List.of();
 
-            // Defensive envelope: {data:[...]} or {data:{data:[...]}}
-            JsonNode dataNode = body.path("data");
-            if (dataNode.isObject()) {
-                dataNode = dataNode.path("data");
+            // Real Bosta v0 list envelope: {deliveries:[...], count:N}
+            // Defensive fallback: {data:[...]} or {data:{data:[...]}}
+            JsonNode dataNode = body.path("deliveries");
+            if (!dataNode.isArray()) {
+                dataNode = body.path("data");
+                if (dataNode.isObject()) dataNode = dataNode.path("data");
             }
             if (!dataNode.isArray() || dataNode.isEmpty()) return List.of();
 
@@ -91,17 +94,18 @@ class BostaHttpGateway implements BostaGateway {
                 String tn = item.path("trackingNumber").asText(null);
                 if (tn == null || tn.isBlank()) continue;
 
-                // state may be plain int or object {code:N, value:"..."}
+                // state is object {code:N, value:"..."} in live v0 — handles flat int defensively
                 JsonNode stateNode = item.path("state");
                 int stateCode = stateNode.isObject()
                     ? stateNode.path("code").asInt(-1)
                     : stateNode.asInt(-1);
 
-                // type may be plain string or object {code:N, value:"SEND"/"RTO"}
+                // type is object {code:N, value:"Send"/"RTO"} in live v0
+                // normalize to uppercase so BostaStateMapper key lookup (e.g. "41:SEND") works
                 JsonNode typeNode = item.path("type");
                 String type = typeNode.isObject()
-                    ? typeNode.path("value").asText("SEND")
-                    : typeNode.asText("SEND");
+                    ? typeNode.path("value").asText("SEND").toUpperCase(Locale.ROOT)
+                    : typeNode.asText("SEND").toUpperCase(Locale.ROOT);
 
                 result.add(new SlimDelivery(tn, stateCode, type));
             }
@@ -166,12 +170,27 @@ class BostaHttpGateway implements BostaGateway {
             JsonNode data = body.has("data") ? body.get("data") : body;
 
             // trackingNumber may arrive as number or string — always use asText()
-            String tn   = data.path("trackingNumber").asText(trackingNumber);
-            int code    = data.path("state").asInt(-1);
-            String type = data.path("type").asText("SEND");
+            String tn = data.path("trackingNumber").asText(trackingNumber);
+
+            // state is object {code:N, value:"..."} in live v0 — handles legacy flat int defensively
+            JsonNode stateNode = data.path("state");
+            int code = stateNode.isObject() ? stateNode.path("code").asInt(-1) : stateNode.asInt(-1);
+
+            // type is object {code:N, value:"Send"/"RTO"} in live v0
+            // normalize to uppercase so BostaStateMapper key lookup (e.g. "41:SEND") works
+            JsonNode typeNode = data.path("type");
+            String type = typeNode.isObject()
+                ? typeNode.path("value").asText("SEND").toUpperCase(Locale.ROOT)
+                : typeNode.asText("SEND").toUpperCase(Locale.ROOT);
+
             int attempts = data.path("numberOfAttempts").asInt(0);
             String ref   = data.path("businessReference").asText(null);
-            String shopifyOrderId = data.path("shopifyOrderId").asText(null);
+
+            // shopifyInfo.orderId (real v0 shape) — fall back to legacy top-level shopifyOrderId
+            String shopifyOrderId = data.path("shopifyInfo").path("orderId").asText(null);
+            if (shopifyOrderId == null || shopifyOrderId.isBlank()) {
+                shopifyOrderId = data.path("shopifyOrderId").asText(null);
+            }
             if (shopifyOrderId != null && shopifyOrderId.isBlank()) shopifyOrderId = null;
 
             return new BostaDelivery(tn, code, type, attempts, ref, shopifyOrderId, data);

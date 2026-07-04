@@ -127,6 +127,94 @@ class BostaShapeRegressionTest {
             .isTrue();
     }
 
+    // ── reg5: fetchDelivery — state is an object, code extracted ─────────────
+
+    @Test
+    void reg5_fetchDelivery_stateIsObject_codeExtracted() throws Exception {
+        // Live Bosta v0: state is {"value":"Out for Delivery","code":41,...}, NOT a flat int.
+        // Bug: old code read data.path("state").asInt(-1) which returns -1 for an ObjectNode.
+        // Fix: read stateNode.isObject() ? stateNode.path("code").asInt(-1) : stateNode.asInt(-1).
+        JsonNode raw = mapper.readTree(fixture("delivery-receiver.json"));
+
+        JsonNode stateNode = raw.path("state");
+
+        // Gate 5a: state must be an object (guards the fixture shape itself).
+        assertThat(stateNode.isObject())
+            .as("state must be an object in live Bosta v0 — flat int shape would regress parsing")
+            .isTrue();
+
+        // Gate 5b: old broken read returns -1 for an ObjectNode.
+        assertThat(stateNode.asInt(-1))
+            .as("data.path(\"state\").asInt(-1) on an ObjectNode must return -1 — " +
+                "proves the old path was silently wrong and why fetchDelivery always returned code=-1")
+            .isEqualTo(-1);
+
+        // Gate 5c: correct extraction yields the actual code.
+        int code = stateNode.isObject() ? stateNode.path("code").asInt(-1) : stateNode.asInt(-1);
+        assertThat(code)
+            .as("state.code must be the numeric state code")
+            .isEqualTo(41);
+    }
+
+    // ── reg6: fetchDelivery — type is an object, value extracted + uppercased ─
+
+    @Test
+    void reg6_fetchDelivery_typeIsObject_valueExtractedAndUppercased() throws Exception {
+        // Live Bosta v0: type is {"code":10,"value":"Send"}, NOT a flat string.
+        // Bug: data.path("type").asText("SEND") returns the default "SEND" for ObjectNode —
+        //      RTO deliveries silently returned "SEND" and were mapped to the wrong state.
+        // Fix: isObject() ? path("value").asText("SEND").toUpperCase() : asText("SEND").toUpperCase()
+        JsonNode raw = mapper.readTree(fixture("delivery-receiver.json"));
+
+        JsonNode typeNode = raw.path("type");
+
+        // Gate 6a: type must be an object.
+        assertThat(typeNode.isObject())
+            .as("type must be an object {code:N, value:\"...\"} in live Bosta v0")
+            .isTrue();
+
+        // Gate 6b: old broken read returns "" for ObjectNode (asText(default) ignores default for ContainerNodes).
+        // The BostaStateMapper lookup key becomes "41:" which matches neither "41:SEND" nor "41:ALL"
+        // for code 41, so every SEND/RTO delivery silently became an exception state.
+        assertThat(typeNode.asText("SEND"))
+            .as("data.path(\"type\").asText(\"SEND\") on ObjectNode returns empty string, not the type name — " +
+                "BostaStateMapper gets \"\" and cannot find the mapping")
+            .isEqualTo("");
+
+        // Gate 6c: correct extraction + normalization.
+        String type = typeNode.isObject()
+            ? typeNode.path("value").asText("SEND").toUpperCase()
+            : typeNode.asText("SEND").toUpperCase();
+        assertThat(type)
+            .as("type.value must be extracted and uppercased for BostaStateMapper key lookup")
+            .isEqualTo("SEND");
+    }
+
+    // ── reg7: fetchDelivery — shopifyInfo.orderId preferred over top-level shopifyOrderId
+
+    @Test
+    void reg7_fetchDelivery_shopifyInfoOrderId_preferred() throws Exception {
+        // Live Bosta v0: Shopify linkage lives under shopifyInfo.orderId (numeric string).
+        // Old code read top-level shopifyOrderId which is absent in the real API.
+        JsonNode raw = mapper.readTree(fixture("delivery-receiver.json"));
+
+        // Gate 7a: shopifyInfo.orderId present.
+        String shopifyOrderId = raw.path("shopifyInfo").path("orderId").asText(null);
+        assertThat(shopifyOrderId)
+            .as("shopifyInfo.orderId must be present for order matching")
+            .isNotNull().isNotBlank();
+
+        // Gate 7b: top-level shopifyOrderId must be absent (old path was wrong).
+        assertThat(raw.path("shopifyOrderId").isMissingNode())
+            .as("top-level shopifyOrderId must be absent — correct path is shopifyInfo.orderId")
+            .isTrue();
+
+        // Gate 7c: shopifyInfo.orderNumber holds the #-prefixed reference.
+        assertThat(raw.path("shopifyInfo").path("orderNumber").asText(null))
+            .as("shopifyInfo.orderNumber must be present")
+            .isNotNull();
+    }
+
     // ── Helper ────────────────────────────────────────────────────────────────
 
     private String fixture(String name) throws Exception {

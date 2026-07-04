@@ -46,7 +46,12 @@
       "description": "Test Item"
     }
   },
-  "businessReference": "TEST-REF-001",
+  "businessReference": "#TEST-REF-001",
+  "shopifyInfo": {
+    "orderId": "5001000000001",
+    "orderNumber": "#TEST-REF-001",
+    "storeName": "fixture.myshopify.com"
+  },
   "sender": {
     "_id": "FIXTURE_SENDER_001",
     "name": "Test Business",
