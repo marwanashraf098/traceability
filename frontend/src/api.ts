@@ -56,6 +56,9 @@ export async function request<T>(path: string, opts: RetryOpts = {}): Promise<T>
   }
 
   if (!res.ok) throw new Error(`${res.status}: ${res.statusText}`)
+  if (res.status === 204 || res.headers.get('content-length') === '0') return null as T
+  const ct = res.headers.get('content-type') ?? ''
+  if (!ct.includes('application/json')) return null as T
   return res.json()
 }
 
