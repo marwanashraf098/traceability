@@ -29,6 +29,7 @@ import java.time.LocalDate;
 import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
 
@@ -243,11 +244,21 @@ public class BostaController {
             request.getMethod(), request.getRequestURI(), authHeader != null,
             request.getRemoteAddr(), request.getHeader("User-Agent"));
 
-        // 1. Extract secret from Authorization header
-        if (authHeader == null || !authHeader.startsWith("Bearer ")) {
+        // 1. Extract secret from Authorization header.
+        // Bosta may send "Bearer {secret}" or the raw secret depending on how the
+        // webhook "Authorization header" field was configured in the Bosta dashboard.
+        // Strip one "Bearer " prefix if present (case-insensitive, tolerates extra
+        // whitespace); accept the raw secret without any prefix so either form works.
+        if (authHeader == null || authHeader.isBlank()) {
             return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
         }
-        String rawSecret = authHeader.substring(7);
+        String rawSecret = authHeader.trim();
+        if (rawSecret.toLowerCase(Locale.ROOT).startsWith("bearer ")) {
+            rawSecret = rawSecret.substring(7).stripLeading();
+        }
+        if (rawSecret.isBlank()) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
+        }
 
         // 2. Resolve tenant via SECURITY DEFINER function (no GUC set yet — that's the point)
         UUID tenantId = jdbc.query(

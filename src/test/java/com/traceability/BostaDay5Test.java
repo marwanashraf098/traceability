@@ -225,6 +225,81 @@ class BostaDay5Test {
     }
 
     // -------------------------------------------------------------------------
+    // (5b) Webhook: valid secret WITHOUT "Bearer " prefix → still returns 200.
+    //      Reproduces the production scenario where Bosta sends the raw secret
+    //      without a Bearer prefix (or the operator did not add "Bearer " in the
+    //      Bosta dashboard's Authorization header field).
+    // -------------------------------------------------------------------------
+    @Test
+    void webhook_validSecret_rawWithoutBearer_returns200() {
+        String rawSecret = setupBostaAccount();
+
+        HttpHeaders headers = new HttpHeaders();
+        headers.set("Authorization", rawSecret);  // raw — no "Bearer " prefix
+        headers.setContentType(MediaType.APPLICATION_JSON);
+        ObjectNode payload = mapper.createObjectNode()
+            .put("trackingNumber", "BOS-001-RAW")
+            .put("state", 45)
+            .put("updatedAt", "2026-06-14T11:00:00Z");
+
+        ResponseEntity<String> resp = rest.exchange(
+            base() + "/api/v1/webhooks/bosta", HttpMethod.POST,
+            new HttpEntity<>(payload, headers), String.class);
+
+        assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.OK);
+        int count = jdbc.queryForObject(
+            "SELECT COUNT(*) FROM webhook_events WHERE source = 'bosta' AND status = 'pending'",
+            Integer.class);
+        assertThat(count).isEqualTo(1);
+    }
+
+    // -------------------------------------------------------------------------
+    // (5c) Webhook: "Bearer Bearer {secret}" (double-prefix — operator pasted the
+    //      full header value into Bosta's secret field) → correctly handled as 401
+    //      because after stripping one "Bearer " the remainder ("Bearer {secret}")
+    //      doesn't match the stored hash of the raw secret.
+    //      This documents the exact bug that was confirmed in production: the stored
+    //      hash is sha256(rawSecret), not sha256("Bearer " + rawSecret).
+    // -------------------------------------------------------------------------
+    @Test
+    void webhook_doubleBearerPrefix_returns401() {
+        String rawSecret = setupBostaAccount();
+
+        HttpHeaders headers = new HttpHeaders();
+        headers.set("Authorization", "Bearer Bearer " + rawSecret);  // double prefix
+        headers.setContentType(MediaType.APPLICATION_JSON);
+        ObjectNode payload = mapper.createObjectNode().put("trackingNumber", "BOS-001-DOUBLE");
+
+        ResponseEntity<String> resp = rest.exchange(
+            base() + "/api/v1/webhooks/bosta", HttpMethod.POST,
+            new HttpEntity<>(payload, headers), String.class);
+
+        assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
+    }
+
+    // -------------------------------------------------------------------------
+    // (5d) Webhook: case-insensitive "bearer " prefix stripped correctly.
+    // -------------------------------------------------------------------------
+    @Test
+    void webhook_lowercaseBearerPrefix_returns200() {
+        String rawSecret = setupBostaAccount();
+
+        HttpHeaders headers = new HttpHeaders();
+        headers.set("Authorization", "bearer " + rawSecret);  // lowercase bearer
+        headers.setContentType(MediaType.APPLICATION_JSON);
+        ObjectNode payload = mapper.createObjectNode()
+            .put("trackingNumber", "BOS-001-LOWER")
+            .put("state", 45)
+            .put("updatedAt", "2026-06-14T12:00:00Z");
+
+        ResponseEntity<String> resp = rest.exchange(
+            base() + "/api/v1/webhooks/bosta", HttpMethod.POST,
+            new HttpEntity<>(payload, headers), String.class);
+
+        assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.OK);
+    }
+
+    // -------------------------------------------------------------------------
     // (6) Webhook job: fetches from Bosta (not just uses payload) — verify-by-fetch proof
     //     Payload says state=41, fetchDelivery returns state=45 (different).
     //     Job must call fetchDelivery and process based on the fetched state 45.
