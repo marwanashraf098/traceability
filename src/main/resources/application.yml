@@ -73,6 +73,22 @@ bosta:
     page-size: 50
     inter-fetch-delay-ms: 100   # throttle between per-delivery fetches (no documented rate limit)
     default-lookback-days: 90   # reserved; not used for filtering in v1
+  poll:
+    # Tier 1 — Status poll: fetches every known in-flight shipment by tracking number.
+    # Keeps current state without relying on the Bosta list order.
+    status-enabled: true
+    status-interval-minutes: 3   # cron hardcoded as */3 * * * * in BostaStatusPollJob
+    status-max-per-cycle: 200    # cap; rotation via last_polled_at ensures no starvation
+    # Tier 2 — Discovery poll: pages Bosta list for new deliveries not yet ingested.
+    discovery-enabled: true
+    discovery-interval-minutes: 20   # cron hardcoded as */20 * * * * in BostaDiscoveryPollJob
+    discovery-pages: 3               # first 3 pages (~150 newest-created deliveries)
+    # Shared throttle (reused from backfill — same Bosta rate-limit concern).
+    inter-fetch-delay-ms: 100
+    # Rate-limit math (per tenant per hour):
+    #   Tier 1: 20 cycles/hr × ~tens of fetches = ~100–400 API calls/hr (pilot scale)
+    #   Tier 2: 3 cycles/hr × (3 list calls + ~50 fetch calls) = ~159 API calls/hr
+    #   Total: ~260–560 API calls/hr/tenant — well within Bosta's undocumented limits
 
 org:
   jobrunr:
