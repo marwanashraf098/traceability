@@ -121,6 +121,19 @@ public class TenantController {
         }
 
         final Double finalW = labelW, finalH = labelH;
+
+        // Build audit metadata before the transaction — depends only on request fields.
+        Map<String, Object> meta = new LinkedHashMap<>();
+        if (req.name()            != null) meta.put("name",            req.name());
+        if (req.pickupAddress()   != null) meta.put("pickupAddress",   req.pickupAddress());
+        if (req.labelSize()       != null) meta.put("labelSize",       req.labelSize());
+        if (req.defaultLanguage() != null) meta.put("defaultLanguage", req.defaultLanguage());
+        if (req.timezone()        != null) meta.put("timezone",        req.timezone());
+
+        // audit.record() MUST be inside tx.execute(). The GUC (app.current_tenant) is set by
+        // TenantAwareConnection.setAutoCommit(false) and only remains active for the transaction.
+        // Outside tx.execute() the GUC resets to '' after commit, causing the audit_log
+        // INSERT to violate the RLS WITH CHECK (tenant_id = NULLIF(GUC,'')::uuid) policy.
         TenantContext.runAs(tenantId, () -> tx.execute(s -> {
             jdbc.update("""
                 UPDATE tenants SET
@@ -134,20 +147,11 @@ public class TenantController {
                 """,
                 req.name(), req.pickupAddress(), finalW, finalH,
                 req.defaultLanguage(), req.timezone(), tenantId);
+            if (!meta.isEmpty()) {
+                audit.record(principal.userId(), "tenant_settings_update", "tenant",
+                    tenantId.toString(), meta);
+            }
             return null;
         }));
-
-        Map<String, Object> meta = new LinkedHashMap<>();
-        if (req.name()            != null) meta.put("name",            req.name());
-        if (req.pickupAddress()   != null) meta.put("pickupAddress",   req.pickupAddress());
-        if (req.labelSize()       != null) meta.put("labelSize",       req.labelSize());
-        if (req.defaultLanguage() != null) meta.put("defaultLanguage", req.defaultLanguage());
-        if (req.timezone()        != null) meta.put("timezone",        req.timezone());
-
-        TenantContext.runAs(tenantId, () -> {
-            audit.record(principal.userId(), "tenant_settings_update", "tenant",
-                tenantId.toString(), meta);
-            return null;
-        });
     }
 }

@@ -4,6 +4,7 @@ import com.traceability.account.AuditService;
 import com.traceability.account.TenantController;
 import com.traceability.identity.CustomUserDetails;
 import com.traceability.integrations.bosta.BostaGateway;
+import com.traceability.tenancy.TenantAwareDataSource;
 import com.traceability.tenancy.TenantContext;
 import org.jobrunr.scheduling.JobScheduler;
 import org.junit.jupiter.api.*;
@@ -13,8 +14,11 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.datasource.DataSourceTransactionManager;
+import org.springframework.jdbc.datasource.DriverManagerDataSource;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.server.ResponseStatusException;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
@@ -70,6 +74,20 @@ class TenantSettingsTest {
 
     UUID tenantId, ownerId;
 
+    // app_user infrastructure — RLS enforced, no BYPASSRLS
+    private JdbcTemplate      appUserJdbc;
+    private TransactionTemplate appUserTx;
+
+    @BeforeAll
+    void setupAppUser() {
+        // TestSetup (ApplicationReadyEvent) fires before @BeforeAll and sets 'testpw'.
+        DriverManagerDataSource rawDs = new DriverManagerDataSource(
+                POSTGRES.getJdbcUrl(), "app_user", "testpw");
+        TenantAwareDataSource appUserDs = new TenantAwareDataSource(rawDs);
+        appUserJdbc = new JdbcTemplate(appUserDs);
+        appUserTx   = new TransactionTemplate(new DataSourceTransactionManager(appUserDs));
+    }
+
     @BeforeAll
     void setup() {
         tenantId = UUID.randomUUID();
@@ -91,7 +109,7 @@ class TenantSettingsTest {
     void cleanup() {
         TenantContext.clear();
         SecurityContextHolder.clearContext();
-        jdbc.update("DELETE FROM audit_log WHERE tenant_id = ?", tenantId);
+        jdbc.update("DELETE FROM audit_log WHERE tenant_id = ?", tenantId); // covers all rls_test_* rows too
         // Reset tenant to known state
         jdbc.update("UPDATE tenants SET name='SettingsTenant', pickup_address=NULL, " +
                     "default_language='ar', timezone='Africa/Cairo' WHERE id = ?", tenantId);
@@ -147,6 +165,55 @@ class TenantSettingsTest {
             "SELECT COUNT(*) FROM audit_log WHERE tenant_id = ? AND action = 'tenant_settings_update'",
             Integer.class, tenantId);
         assertThat(count).isOne();
+    }
+
+    /**
+     * s4b: audit_log INSERT via app_user (RLS enforced) SUCCEEDS when the GUC is set.
+     *
+     * TenantAwareDataSource calls SET LOCAL app.current_tenant = ? on setAutoCommit(false),
+     * which happens at the start of every tx.execute() block.  The audit_log RLS policy
+     * WITH CHECK (tenant_id = NULLIF(current_setting('app.current_tenant',true),'')::uuid)
+     * is satisfied → INSERT accepted.
+     *
+     * This is the path TenantController.update() now takes: audit.record() inside tx.execute().
+     */
+    @Test
+    void s4b_auditLogRls_insertWithGuc_appUser_succeeds() {
+        assertThatCode(() ->
+            TenantContext.runAs(tenantId, () -> appUserTx.execute(s -> {
+                appUserJdbc.update(
+                    "INSERT INTO audit_log (tenant_id, actor_user_id, action) " +
+                    "VALUES (?, ?, 'rls_test_with_guc')",
+                    tenantId, ownerId);
+                return null;
+            }))
+        ).doesNotThrowAnyException();
+
+        Integer count = jdbc.queryForObject(
+            "SELECT COUNT(*) FROM audit_log WHERE tenant_id = ? AND action = 'rls_test_with_guc'",
+            Integer.class, tenantId);
+        assertThat(count).isOne();
+    }
+
+    /**
+     * s4c: audit_log INSERT via app_user (RLS enforced) FAILS when the GUC is NOT set.
+     *
+     * This is the broken path that existed in TenantController before the fix:
+     * audit.record() was called OUTSIDE tx.execute(), so the GUC had already reset to ''
+     * after the UPDATE transaction committed.  app_user has no BYPASSRLS → INSERT rejected.
+     *
+     * The fix: audit.record() now runs INSIDE the same tx.execute() as the UPDATE.
+     */
+    @Test
+    void s4c_auditLogRls_insertWithoutGuc_appUser_fails() {
+        // No TenantContext.runAs() + tx.execute() → GUC is '' → WITH CHECK fails.
+        // Spring wraps PSQLException in BadSqlGrammarException, so check the full cause chain.
+        assertThatThrownBy(() ->
+            appUserJdbc.update(
+                "INSERT INTO audit_log (tenant_id, actor_user_id, action) " +
+                "VALUES (?, ?, 'rls_test_no_guc')",
+                tenantId, ownerId)
+        ).hasStackTraceContaining("row-level security");
     }
 
     @Test

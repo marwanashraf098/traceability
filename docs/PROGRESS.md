@@ -4,11 +4,31 @@
 
 ## Current state
 
-**480 backend tests + 47 frontend tests — all green** — 2026-07-04.
+**495 backend tests + 47 frontend tests — all green** — 2026-07-05.
 
-Bosta delivery backfill (V33) fully implemented and tested.
+AWB size setting (A4/A6 per-tenant, Bosta v2 mass-awb endpoint) + audit_log RLS fix shipped.
 
-CC implementation merged, pushed to main. Frontend `setup.ts` polyfills `localStorage` for Node 22 experimental environment (pre-existing `ov1` failure fixed).
+---
+
+**Bosta AWB size setting + audit_log RLS fix (2026-07-05):**
+
+*Feature:* Per-tenant AWB label size (A4 vs A6) stored in `courier_accounts.awb_format` (existed from V20). Bosta endpoint switched from v0 to v2 mass-awb with `Authorization: Bearer {apiKey}` and `requestedAwbType: "A4"|"A6"`. Settings page now shows AWB size + language selectors (disabled when Bosta not connected). `GET /connections` exposes `awbFormat`/`awbLang`. Tests: `BostaAwbSettingTest` (6 cases, `@MockBean BostaGateway`).
+
+*Bug fixed — audit_log RLS violation (500 on Settings save):*
+
+**Root cause:** `TenantController.update()` (PUT /tenant/settings) called `audit.record()` in a separate `TenantContext.runAs()` block OUTSIDE `tx.execute()`. After the UPDATE transaction committed, `SET LOCAL app.current_tenant` reset to `''`. The audit INSERT ran in autocommit with GUC = '' → `WITH CHECK (tenant_id = NULLIF('','')::uuid = NULL)` is always false → PSQLException "new row violates row-level security policy for table audit_log" → 500.
+
+**Fix:** Moved `audit.record()` INSIDE the same `tx.execute()` block as the UPDATE. Both now share one transaction where the GUC is set by `TenantAwareConnection.setAutoCommit(false)`.
+
+*Tests added to `TenantSettingsTest` (s4b + s4c — app_user RLS tests):*
+- `s4b`: proves INSERT INTO audit_log via `app_user` WITH GUC set (inside `TenantContext.runAs + tx.execute()`) succeeds.
+- `s4c`: proves INSERT INTO audit_log via `app_user` WITHOUT GUC set (autocommit, no tx) fails with RLS violation — documents the pre-fix bug.
+
+*Match precedence fix (same session):* `ShipmentLinkService.matchByBusinessReference()` now returns `StrongMatch` record (found/ambiguous/notFound) with LIMIT 2 guard. Ambiguous strong-key match (>1 order with same business reference) is flagged immediately instead of falling through to phone+COD. Regression test: businessRef match is not vetoed by ambiguous phone+COD decoys.
+
+---
+
+**Bosta delivery backfill — V33 (2026-07-04):**
 
 ---
 
