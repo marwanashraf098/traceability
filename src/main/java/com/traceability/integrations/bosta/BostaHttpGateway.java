@@ -27,7 +27,7 @@ import java.util.Map;
 /**
  * Bosta Admin API client.
  *
- * Auth: Authorization header set to the raw API key (no "Bearer " prefix).
+ * Auth: raw API key in the Authorization header (no "Bearer " prefix) for all endpoints.
  * API version is pinned from config (bosta.api-version, currently "v0").
  * Base URL is configurable: prod = https://app.bosta.co, staging = https://stg-app.bosta.co.
  *
@@ -206,11 +206,14 @@ class BostaHttpGateway implements BostaGateway {
     }
 
     /**
-     * POST /api/v2/deliveries/mass-awb
+     * POST /api/v0/deliveries/mass-awb
      * Payload: {trackingNumbers: "comma,separated", requestedAwbType: A4|A6, lang: ar|en}
      *
      * Accepted requestedAwbType values: "A4" (regular printer) | "A6" (4×6 thermal).
-     * Auth: "Bearer {api_key}" — v2 requires the Bearer prefix (v0 did not).
+     * Auth: raw api_key header (same as all other Bosta v0 calls — Day 38 live-verified).
+     *
+     * Note: v2/Bearer was tried but returned 401 — the API key format used in this
+     * integration is v0-style; v2 appears to require OAuth tokens, not API keys.
      *
      * Inline response shape: {"success":true,"data":"<base64>"}
      * Legacy/documented shape: {"success":true,"data":{"pdf":"<base64>"}}
@@ -219,8 +222,14 @@ class BostaHttpGateway implements BostaGateway {
     @Override
     public AwbPrintResult printMassAwb(String apiKey, List<String> trackingNumbers,
                                         String awbFormat, String lang) {
-        // v2 endpoint — hardcoded, not from apiVersion (other calls stay at v0)
-        String url = baseUrl + "/api/v2/deliveries/mass-awb";
+        // v0 endpoint — same version as list/fetch, confirmed working with raw apiKey auth.
+        // requestedAwbType (A4|A6) is accepted on v0 (live-verified Day 38).
+        String url = baseUrl + "/api/" + apiVersion + "/deliveries/mass-awb";
+        if (apiKey == null || apiKey.isBlank()) {
+            throw new BostaException("mass-awb: API key is missing — check courier_accounts.api_key_encrypted");
+        }
+        log.info("mass-awb: url={} keyPresent=true awbFormat={} lang={} trackingCount={}",
+            url, awbFormat, lang, trackingNumbers.size());
         Map<String, String> body = Map.of(
             "trackingNumbers",  String.join(",", trackingNumbers),
             "requestedAwbType", awbFormat,
@@ -230,7 +239,7 @@ class BostaHttpGateway implements BostaGateway {
             JsonNode resp = Retry.decorateSupplier(retry, () ->
                 restClient.post()
                     .uri(url)
-                    .header("Authorization", "Bearer " + apiKey)
+                    .header("Authorization", apiKey)
                     .contentType(MediaType.APPLICATION_JSON)
                     .body(body)
                     .retrieve()
