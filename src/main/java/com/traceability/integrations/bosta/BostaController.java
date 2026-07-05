@@ -20,6 +20,7 @@ import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.bind.annotation.*;
 
+import jakarta.servlet.http.HttpServletRequest;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
@@ -232,7 +233,15 @@ public class BostaController {
     @PostMapping("/webhooks/bosta")
     public ResponseEntity<Void> bostaWebhook(
             @RequestBody(required = false) JsonNode payload,
-            @RequestHeader(value = "Authorization", required = false) String authHeader) {
+            @RequestHeader(value = "Authorization", required = false) String authHeader,
+            HttpServletRequest request) {
+
+        // TEMPORARY diagnostic — log every hit before any auth so we can tell if Bosta
+        // is reaching the app at all (vs. being blocked at Cloudflare/nginx).
+        // Remove once the webhook delivery path is confirmed working end-to-end.
+        log.warn("[BOSTA-WH-HIT] method={} path={} hasAuth={} remoteAddr={} userAgent={}",
+            request.getMethod(), request.getRequestURI(), authHeader != null,
+            request.getRemoteAddr(), request.getHeader("User-Agent"));
 
         // 1. Extract secret from Authorization header
         if (authHeader == null || !authHeader.startsWith("Bearer ")) {
