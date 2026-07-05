@@ -327,6 +327,8 @@ export interface ConnectionsStatus {
     connected: boolean
     businessName: string | null
     pickupMode: string | null
+    awbFormat: 'A4' | 'A6' | null
+    awbLang: string | null
   }
   shopifyCustomApp: {
     connected: boolean
@@ -339,6 +341,13 @@ export interface ConnectionsStatus {
 
 export function getConnections() {
   return request<ConnectionsStatus>('/connections')
+}
+
+export function bostaUpdateSettings(settings: { awbFormat?: 'A4' | 'A6'; awbLang?: string }) {
+  return request<void>('/bosta/settings', {
+    method: 'PUT',
+    body: JSON.stringify(settings),
+  })
 }
 
 // ── Shopify custom-app connect (DEV/pilot only) ───────────────────────────────

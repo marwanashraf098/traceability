@@ -206,17 +206,21 @@ class BostaHttpGateway implements BostaGateway {
     }
 
     /**
-     * POST /api/v0/deliveries/mass-awb
+     * POST /api/v2/deliveries/mass-awb
      * Payload: {trackingNumbers: "comma,separated", requestedAwbType: A4|A6, lang: ar|en}
      *
-     * Inline response shape (live API v0): {"success":true,"data":"<base64>"}
-     * Inline response shape (legacy/documented): {"success":true,"data":{"pdf":"<base64>"}}
+     * Accepted requestedAwbType values: "A4" (regular printer) | "A6" (4×6 thermal).
+     * Auth: "Bearer {api_key}" — v2 requires the Bearer prefix (v0 did not).
+     *
+     * Inline response shape: {"success":true,"data":"<base64>"}
+     * Legacy/documented shape: {"success":true,"data":{"pdf":"<base64>"}}
      * Email path shape: {"success":true,"message":"AWB has been exported to your email"}
      */
     @Override
     public AwbPrintResult printMassAwb(String apiKey, List<String> trackingNumbers,
                                         String awbFormat, String lang) {
-        String url = baseUrl + "/api/" + apiVersion + "/deliveries/mass-awb";
+        // v2 endpoint — hardcoded, not from apiVersion (other calls stay at v0)
+        String url = baseUrl + "/api/v2/deliveries/mass-awb";
         Map<String, String> body = Map.of(
             "trackingNumbers",  String.join(",", trackingNumbers),
             "requestedAwbType", awbFormat,
@@ -226,7 +230,7 @@ class BostaHttpGateway implements BostaGateway {
             JsonNode resp = Retry.decorateSupplier(retry, () ->
                 restClient.post()
                     .uri(url)
-                    .header("Authorization", apiKey)
+                    .header("Authorization", "Bearer " + apiKey)
                     .contentType(MediaType.APPLICATION_JSON)
                     .body(body)
                     .retrieve()

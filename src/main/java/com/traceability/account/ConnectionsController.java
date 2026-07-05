@@ -80,7 +80,7 @@ public class ConnectionsController {
 
             // Bosta — active courier account
             Map<String, Object> bosta = jdbc.query(
-                "SELECT business_ref, pickup_mode, status " +
+                "SELECT business_ref, pickup_mode, awb_format, awb_lang, status " +
                 "FROM courier_accounts " +
                 "WHERE tenant_id = ? AND provider = 'bosta' AND status = 'active' LIMIT 1",
                 rs -> {
@@ -89,10 +89,14 @@ public class ConnectionsController {
                         m.put("connected",    false);
                         m.put("businessName", null);
                         m.put("pickupMode",   null);
+                        m.put("awbFormat",    null);
+                        m.put("awbLang",      null);
                     } else {
                         m.put("connected",    true);
                         m.put("businessName", rs.getString("business_ref"));
                         m.put("pickupMode",   rs.getString("pickup_mode"));
+                        m.put("awbFormat",    rs.getString("awb_format"));
+                        m.put("awbLang",      rs.getString("awb_lang"));
                     }
                     return m;
                 }, tenantId);

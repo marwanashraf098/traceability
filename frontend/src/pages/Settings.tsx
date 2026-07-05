@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { Link } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
-import { getTenantSettings, updateTenantSettings, getRoleFromToken, TenantSettings } from '../api'
+import { getTenantSettings, updateTenantSettings, getConnections, bostaUpdateSettings, getRoleFromToken, TenantSettings } from '../api'
 
 // ── Segmented control ─────────────────────────────────────────────────────────
 
@@ -57,10 +57,15 @@ export default function Settings() {
   const [timezone,        setTimezone]        = useState('Africa/Cairo')
   const [consentSettings, setConsentSettings] = useState<Pick<TenantSettings, 'consentPrivacyVersion' | 'consentTermsVersion' | 'consentAcceptedAt'> | null>(null)
 
+  // Bosta AWB settings — stored in courier_accounts, loaded separately
+  const [bostaConnected, setBostaConnected] = useState(false)
+  const [awbFormat,      setAwbFormat]      = useState<'A4' | 'A6'>('A4')
+  const [awbLang,        setAwbLang]        = useState<'ar' | 'en'>('ar')
+
   useEffect(() => {
     async function load() {
       try {
-        const s = await getTenantSettings()
+        const [s, conn] = await Promise.all([getTenantSettings(), getConnections()])
         setName(s.name ?? '')
         setPickupAddress(s.pickupAddress ?? '')
         setLabelSize(s.labelSize)
@@ -71,6 +76,9 @@ export default function Settings() {
           consentTermsVersion:   s.consentTermsVersion,
           consentAcceptedAt:     s.consentAcceptedAt,
         })
+        setBostaConnected(conn.bosta.connected)
+        if (conn.bosta.awbFormat) setAwbFormat(conn.bosta.awbFormat)
+        if (conn.bosta.awbLang === 'en') setAwbLang('en')
       } catch {
         setError(t('common.error'))
       } finally {
@@ -93,7 +101,11 @@ export default function Settings() {
       payload.defaultLanguage = defaultLanguage
       if (timezone.trim())      payload.timezone        = timezone.trim()
 
-      await updateTenantSettings(payload)
+      const saves: Promise<unknown>[] = [updateTenantSettings(payload)]
+      if (bostaConnected) {
+        saves.push(bostaUpdateSettings({ awbFormat, awbLang }))
+      }
+      await Promise.all(saves)
       setSaved(true)
       setTimeout(() => setSaved(false), 4000)
     } catch (err: unknown) {
@@ -114,6 +126,16 @@ export default function Settings() {
   ]
 
   const langOptions: { value: 'ar' | 'en'; label: string }[] = [
+    { value: 'ar', label: t('settings.roles.ar') },
+    { value: 'en', label: t('settings.roles.en') },
+  ]
+
+  const awbFormatOptions: { value: 'A4' | 'A6'; label: string }[] = [
+    { value: 'A4', label: 'A4' },
+    { value: 'A6', label: 'A6' },
+  ]
+
+  const awbLangOptions: { value: 'ar' | 'en'; label: string }[] = [
     { value: 'ar', label: t('settings.roles.ar') },
     { value: 'en', label: t('settings.roles.en') },
   ]
@@ -193,6 +215,37 @@ export default function Settings() {
                 onChange={setLabelSize}
                 disabled={!isOwner || saving}
               />
+            </div>
+
+            {/* AWB label size — Bosta courier only */}
+            <div>
+              <span className="block text-small text-muted mb-2">{t('settings.awbFormat')}</span>
+              <SegmentedControl
+                value={awbFormat}
+                options={awbFormatOptions}
+                onChange={setAwbFormat}
+                disabled={!isOwner || saving || !bostaConnected}
+              />
+              <p className="text-caption text-muted mt-1">
+                {awbFormat === 'A6'
+                  ? t('settings.awbFormatA6')
+                  : t('settings.awbFormatA4')}
+              </p>
+              {!bostaConnected && (
+                <p className="text-caption text-muted mt-0.5 opacity-60">{t('settings.awbFormatNotConnected')}</p>
+              )}
+            </div>
+
+            {/* AWB language (printed on the waybill) */}
+            <div>
+              <span className="block text-small text-muted mb-2">{t('settings.awbLang')}</span>
+              <SegmentedControl
+                value={awbLang}
+                options={awbLangOptions}
+                onChange={setAwbLang}
+                disabled={!isOwner || saving || !bostaConnected}
+              />
+              <p className="text-caption text-muted mt-1">{t('settings.awbLangHint')}</p>
             </div>
 
             {/* Default language */}
