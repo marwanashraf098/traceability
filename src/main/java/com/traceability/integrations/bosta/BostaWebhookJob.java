@@ -121,11 +121,15 @@ public class BostaWebhookJob {
             String idemKey = sha256(trackingNumber + ":" + payloadState + ":" + timestamp);
 
             // 4. Dedup check (optimization): sibling row already processed → mark duplicate.
-            Integer alreadyDone = jdbc.queryForObject(
-                "SELECT COUNT(*) FROM webhook_events " +
-                "WHERE external_event_id = ? AND status = 'processed'",
-                Integer.class, idemKey);
-            if (alreadyDone != null && alreadyDone > 0) {
+            //    MUST run inside tx.execute() so TenantAwareConnection fires the GUC — webhook_events
+            //    has RLS; without the GUC a plain jdbc.queryForObject() always sees COUNT=0 (RLS
+            //    filters every row), making the dedup check a no-op and allowing re-processing.
+            boolean alreadyDone = Boolean.TRUE.equals(tx.execute(s ->
+                jdbc.queryForObject(
+                    "SELECT COUNT(*) FROM webhook_events " +
+                    "WHERE external_event_id = ? AND status = 'processed'",
+                    Integer.class, idemKey) > 0));
+            if (alreadyDone) {
                 markDuplicate(webhookEventId, "duplicate: already processed");
                 return;
             }
@@ -187,8 +191,14 @@ public class BostaWebhookJob {
 
             if (shipment == null) {
                 // 8.5 — Try to auto-match by businessReference / phone+COD (Mode B linking).
-                ShipmentLinkService.LinkResult linkResult = shipmentLinkService.tryMatchDelivery(
-                    tenantId, trackingNumber, delivery, mapped);
+                //
+                // MUST run inside tx.execute() so TenantAwareConnection fires the GUC before
+                // matchByBusinessReference() queries orders. Without a transaction GUC='', RLS
+                // filters every orders row, and even an exact string match returns NO_MATCH.
+                // This is the 6th occurrence of the pattern — see TenantAwareConnection javadoc.
+                ShipmentLinkService.LinkResult linkResult = tx.execute(s ->
+                    shipmentLinkService.tryMatchDelivery(
+                        tenantId, trackingNumber, delivery, mapped));
 
                 if (linkResult.orderId() != null) {
                     // Successfully matched — re-fetch shipment for steps 9–10.
@@ -322,12 +332,24 @@ public class BostaWebhookJob {
 
     private void recordUnlinked(UUID tenantId, String trackingNumber,
                                  BostaDelivery delivery, long webhookEventId, String matchReason) {
+        // ON CONFLICT upsert against uix_unlinked_active_per_tracking (V34).
+        // Re-running backfill or redelivering a webhook for the same unmatched tracking
+        // updates the existing row instead of inserting a duplicate.
+        // first_seen_at and webhook_event_id are intentionally preserved from the first insert.
         tx.execute(s -> {
             jdbc.update("""
                 INSERT INTO unlinked_bosta_deliveries
                     (tenant_id, tracking_number, business_reference,
                      bosta_state_code, bosta_order_type, raw, webhook_event_id, match_reason)
                 VALUES (?, ?, ?, ?, ?, ?::jsonb, ?, ?)
+                ON CONFLICT (tenant_id, tracking_number) WHERE resolved = false
+                DO UPDATE SET
+                    bosta_state_code   = EXCLUDED.bosta_state_code,
+                    bosta_order_type   = EXCLUDED.bosta_order_type,
+                    business_reference = EXCLUDED.business_reference,
+                    raw                = EXCLUDED.raw,
+                    match_reason       = EXCLUDED.match_reason,
+                    last_seen_at       = now()
                 """,
                 tenantId, trackingNumber, delivery.businessReference(),
                 delivery.stateCode(), delivery.type(), delivery.raw().toString(),

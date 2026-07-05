@@ -423,6 +423,8 @@ public class ShipmentLinkService {
         if (businessRef != null && !businessRef.isBlank()) {
             String stripped = businessRef.startsWith("#") ? businessRef.substring(1) : businessRef;
             String hashed   = "#" + stripped;
+            log.debug("matchByBusinessReference: tenant={} ref='{}' stripped='{}' hashed='{}'",
+                tenantId, businessRef, stripped, hashed);
             UUID id = jdbc.query(
                 "SELECT id FROM orders " +
                 "WHERE tenant_id = ? " +
@@ -430,16 +432,22 @@ public class ShipmentLinkService {
                 "LIMIT 1",
                 rs -> rs.next() ? rs.getObject("id", UUID.class) : null,
                 tenantId, businessRef, stripped, hashed, businessRef);
+            log.debug("matchByBusinessReference: ref='{}' → {}", businessRef,
+                id != null ? "MATCHED order " + id : "no row (check GUC/RLS if orders exist)");
             if (id != null) return id;
         }
         // shopifyOrderId path: plugin-created deliveries carry Shopify numeric order ID
         // in raw.shopifyOrderId; match against orders.external_id GID format.
         if (shopifyOrderId != null && !shopifyOrderId.isBlank()) {
             String gid = "gid://shopify/Order/" + shopifyOrderId;
-            return jdbc.query(
+            log.debug("matchByBusinessReference: shopifyOrderId='{}' gid='{}'", shopifyOrderId, gid);
+            UUID id = jdbc.query(
                 "SELECT id FROM orders WHERE tenant_id = ? AND external_id = ? LIMIT 1",
                 rs -> rs.next() ? rs.getObject("id", UUID.class) : null,
                 tenantId, gid);
+            log.debug("matchByBusinessReference: gid='{}' → {}", gid,
+                id != null ? "MATCHED order " + id : "no row");
+            return id;
         }
         return null;
     }
