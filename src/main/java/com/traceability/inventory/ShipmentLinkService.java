@@ -74,6 +74,21 @@ public class ShipmentLinkService {
      */
     public record LinkResult(UUID orderId, String unlinkedReason) {}
 
+    // ---- private record for strong-key matching result ----------------------
+
+    /**
+     * Carries the result of the strong-key (businessReference / shopifyOrderId) lookup.
+     * Three states:
+     *   found(id)    — exactly one order matched; id is non-null.
+     *   ambiguous()  — >1 order matched the same key (shouldn't happen; flag for manual resolution).
+     *   notFound()   — no match; fall through to phone+COD.
+     */
+    private record StrongMatch(UUID orderId, boolean isAmbiguous) {
+        static StrongMatch found(UUID id) { return new StrongMatch(id, false); }
+        static StrongMatch ambiguous()    { return new StrongMatch(null, true); }
+        static StrongMatch notFound()     { return new StrongMatch(null, false); }
+    }
+
     // ── AWB scan at pack (FR-9.6) ─────────────────────────────────────────────
 
     @Transactional(isolation = Isolation.READ_COMMITTED)
@@ -160,18 +175,40 @@ public class ShipmentLinkService {
      */
     public LinkResult tryMatchDelivery(UUID tenantId, String trackingNumber,
                                         BostaDelivery delivery, BostaStateMapper.MappedState mapped) {
-        // Step 1 — businessReference → order number or external_id, with shopifyOrderId fallback
-        UUID orderId = matchByBusinessReference(tenantId, delivery.businessReference(), delivery.shopifyOrderId());
+        // Step 1 — strong-key matching: businessReference (Shopify order number embedded
+        // by the plugin) and shopifyInfo.orderId (numeric Shopify ID → gid: URI). These are
+        // authoritative, unique identifiers. A single match here is definitive — phone+COD
+        // is NEVER consulted. Ambiguity in phone+COD cannot veto a confident strong-key match.
+        //
+        // Guard: if >1 order somehow matches the same strong key (shouldn't happen for Shopify
+        // order numbers), flag immediately for manual resolution rather than picking arbitrarily.
+        StrongMatch strong = matchByBusinessReference(
+            tenantId, delivery.businessReference(), delivery.shopifyOrderId());
 
-        // Step 2 — phone + COD fallback
+        if (strong.isAmbiguous()) {
+            log.warn("tryMatchDelivery: AMBIGUOUS strong-key match tracking={} ref='{}' — manual resolution required",
+                trackingNumber, delivery.businessReference());
+            return new LinkResult(null, REASON_AMBIGUOUS_MULTI);
+        }
+
+        UUID orderId = strong.orderId();
+
+        // Step 2 — phone+COD fallback: ONLY if both strong-key paths produced no match.
+        // Ambiguity within this strategy (AMBIGUOUS_MULTI) is independent of step 1 —
+        // we are here because step 1 found nothing, so the guard applies only to this strategy.
         String unlinkedReason = null;
         if (orderId == null) {
+            log.debug("tryMatchDelivery: tracking={} no strong-key match, trying phone+COD fallback", trackingNumber);
             MatchResult m = matchByPhoneAndCod(tenantId, delivery);
             orderId       = m.orderId();
             unlinkedReason = m.reason();
         }
 
-        if (orderId == null) return new LinkResult(null, unlinkedReason);
+        if (orderId == null) {
+            log.info("tryMatchDelivery: tracking={} → unlinked ({}) ref='{}' shopifyId='{}'",
+                trackingNumber, unlinkedReason, delivery.businessReference(), delivery.shopifyOrderId());
+            return new LinkResult(null, unlinkedReason);
+        }
 
         // Step 3 — create/find shipment and link
         UUID shipmentId;
@@ -414,42 +451,52 @@ public class ShipmentLinkService {
      * Matches a Bosta delivery to an order by businessReference (order number) or
      * shopifyOrderId (Shopify numeric order ID from plugin-created deliveries).
      *
-     * businessReference path: handles merchant-entered order number in Bosta.
-     * shopifyOrderId path: plugin-created deliveries carry Shopify numeric order ID
-     * in raw.shopifyOrderId; match against orders.external_id GID format.
+     * LIMIT 2 is intentional: if the DB returns 2 rows the strong key is ambiguous
+     * (same order number stored twice — shouldn't happen, but guard anyway).
+     * Ambiguous → StrongMatch.ambiguous() so tryMatchDelivery routes to unlinked
+     * immediately without falling through to phone+COD.
      */
-    private UUID matchByBusinessReference(UUID tenantId, String businessRef, String shopifyOrderId) {
-        // businessReference path
+    private StrongMatch matchByBusinessReference(UUID tenantId, String businessRef, String shopifyOrderId) {
+        // businessReference path: covers #-prefixed, stripped, and hashed variants plus external_id.
         if (businessRef != null && !businessRef.isBlank()) {
             String stripped = businessRef.startsWith("#") ? businessRef.substring(1) : businessRef;
             String hashed   = "#" + stripped;
             log.debug("matchByBusinessReference: tenant={} ref='{}' stripped='{}' hashed='{}'",
                 tenantId, businessRef, stripped, hashed);
-            UUID id = jdbc.query(
+            List<UUID> ids = jdbc.query(
                 "SELECT id FROM orders " +
                 "WHERE tenant_id = ? " +
                 "  AND (number = ? OR number = ? OR number = ? OR external_id = ?) " +
-                "LIMIT 1",
-                rs -> rs.next() ? rs.getObject("id", UUID.class) : null,
+                "LIMIT 2",
+                (rs, i) -> rs.getObject("id", UUID.class),
                 tenantId, businessRef, stripped, hashed, businessRef);
-            log.debug("matchByBusinessReference: ref='{}' → {}", businessRef,
-                id != null ? "MATCHED order " + id : "no row (check GUC/RLS if orders exist)");
-            if (id != null) return id;
+            log.debug("matchByBusinessReference: ref='{}' → {} row(s)", businessRef, ids.size());
+            if (ids.size() == 1) return StrongMatch.found(ids.get(0));
+            if (ids.size() > 1) {
+                log.warn("matchByBusinessReference: AMBIGUOUS — ref='{}' matched {} orders for tenant={}",
+                    businessRef, ids.size(), tenantId);
+                return StrongMatch.ambiguous();
+            }
+            // no match on businessRef — fall through to shopifyOrderId
         }
         // shopifyOrderId path: plugin-created deliveries carry Shopify numeric order ID
-        // in raw.shopifyOrderId; match against orders.external_id GID format.
+        // in shopifyInfo.orderId; match against orders.external_id in GID format.
         if (shopifyOrderId != null && !shopifyOrderId.isBlank()) {
             String gid = "gid://shopify/Order/" + shopifyOrderId;
             log.debug("matchByBusinessReference: shopifyOrderId='{}' gid='{}'", shopifyOrderId, gid);
-            UUID id = jdbc.query(
-                "SELECT id FROM orders WHERE tenant_id = ? AND external_id = ? LIMIT 1",
-                rs -> rs.next() ? rs.getObject("id", UUID.class) : null,
+            List<UUID> ids = jdbc.query(
+                "SELECT id FROM orders WHERE tenant_id = ? AND external_id = ? LIMIT 2",
+                (rs, i) -> rs.getObject("id", UUID.class),
                 tenantId, gid);
-            log.debug("matchByBusinessReference: gid='{}' → {}", gid,
-                id != null ? "MATCHED order " + id : "no row");
-            return id;
+            log.debug("matchByBusinessReference: gid='{}' → {} row(s)", gid, ids.size());
+            if (ids.size() == 1) return StrongMatch.found(ids.get(0));
+            if (ids.size() > 1) {
+                log.warn("matchByBusinessReference: AMBIGUOUS — shopifyOrderId='{}' matched {} orders for tenant={}",
+                    shopifyOrderId, ids.size(), tenantId);
+                return StrongMatch.ambiguous();
+            }
         }
-        return null;
+        return StrongMatch.notFound();
     }
 
     /**

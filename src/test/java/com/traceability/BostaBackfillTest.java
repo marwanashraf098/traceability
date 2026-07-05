@@ -590,6 +590,87 @@ class BostaBackfillTest {
         verify(jobScheduler, atLeastOnce()).enqueue(any(JobLambda.class));
     }
 
+    // ── (13) Match precedence: strong businessRef not vetoed by ambiguous phone+COD ──
+
+    /**
+     * Verifies that a confident businessReference match is definitive:
+     * even when multiple orders share the same phone+COD (which would
+     * produce AMBIGUOUS_MULTI if phone+COD ran), the delivery is matched
+     * to the correct order and no unlinked row is created.
+     *
+     * Setup:
+     *   Order A — number='#PREC-STRONG-001', phone='+201555444333', cod=500 (target)
+     *   Order B — different number, same phone+COD as A              (decoy)
+     *   Delivery — businessRef='#PREC-STRONG-001', phone='+201555444333', cod=500
+     *
+     * If phone+COD ran, it would see both A and B → AMBIGUOUS_MULTI → unlinked.
+     * Since businessRef matches A first, phone+COD is never consulted.
+     */
+    @Test
+    void matchPrecedence_strongBusinessRef_notVetoedByAmbiguousPhoneCod() {
+        String tracking  = "BOS-PREC-001";
+        String updatedAt = "2026-07-05T10:00:00.000Z";
+        String ref       = "#PREC-STRONG-001";
+        String phone     = "+201555444333";
+        int    cod       = 500;
+
+        setupCourierAccount("prec-api-key");
+
+        // Target order — matched by businessReference
+        UUID orderA = jdbc.queryForObject(
+            "INSERT INTO orders " +
+            "  (tenant_id, store_id, external_id, number, customer_phone, cod_amount, status) " +
+            "VALUES (?, ?, 'EXT-PREC-A', ?, ?, ?, 'new'::order_status) RETURNING id",
+            UUID.class, ownerTenantId, storeId, ref, phone, cod);
+
+        // Decoy order — same phone+COD as the delivery; would cause AMBIGUOUS_MULTI if phone+COD ran
+        jdbc.update(
+            "INSERT INTO orders " +
+            "  (tenant_id, store_id, external_id, number, customer_phone, cod_amount, status) " +
+            "VALUES (?, ?, 'EXT-PREC-B', '#PREC-DECOY-001', ?, ?, 'new'::order_status)",
+            ownerTenantId, storeId, phone, cod);
+
+        // Build raw JSON: updatedAt for backfill, plus cod + receiver.phone for phone+COD path
+        // (the phone+COD path is never reached — these fields prove it wouldn't matter if it were)
+        ObjectNode raw = mapper.createObjectNode();
+        raw.put("updatedAt", updatedAt);
+        raw.put("cod", cod);
+        raw.putObject("receiver").put("phone", phone);
+
+        when(bostaGateway.listDeliveriesPage(eq("prec-api-key"), eq(1), anyInt()))
+            .thenReturn(List.of(new BostaGateway.SlimDelivery(tracking, 45, "SEND")));
+        when(bostaGateway.listDeliveriesPage(eq("prec-api-key"), eq(2), anyInt()))
+            .thenReturn(List.of());
+        when(bostaGateway.fetchDelivery(eq("prec-api-key"), eq(tracking)))
+            .thenReturn(new BostaDelivery(tracking, 45, "SEND", 1, ref, null, raw));
+
+        backfillJob.run(ownerTenantId, 2);
+
+        Long eventId = webhookEventId(tracking);
+        assertThat(eventId).as("webhook_event must be inserted by backfill").isNotNull();
+
+        webhookJob.process(eventId, ownerTenantId);
+
+        // businessRef matched → shipment created
+        assertThat(shipmentExists(tracking))
+            .as("shipment must be created — businessRef match is definitive").isTrue();
+
+        // no unlinked row — delivery was matched, not routed to manual resolution
+        Integer unlinkedCount = jdbc.queryForObject(
+            "SELECT COUNT(*) FROM unlinked_bosta_deliveries WHERE tracking_number = ?",
+            Integer.class, tracking);
+        assertThat(unlinkedCount)
+            .as("no unlinked_bosta_deliveries row — delivery matched via strong key").isZero();
+
+        // shipment is linked to order A specifically, not the decoy
+        UUID linkedOrderId = jdbc.queryForObject(
+            "SELECT order_id FROM shipments WHERE tracking_number = ?",
+            UUID.class, tracking);
+        assertThat(linkedOrderId)
+            .as("shipment must be linked to order A (businessRef target), not the decoy")
+            .isEqualTo(orderA);
+    }
+
     // ── helpers ───────────────────────────────────────────────────────────────
 
     private String base() { return "http://localhost:" + port; }
