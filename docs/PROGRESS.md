@@ -4,9 +4,25 @@
 
 ## Current state
 
-**505 backend tests + 47 frontend tests — all green** — 2026-07-05.
+**508 backend tests + 47 frontend tests — all green** — 2026-07-06.
 
-Two-tier Bosta polling live. Webhook diagnostic log deployed. Settings save false-error fixed.
+Bosta webhook auth fixed (Bearer-prefix normalization). Webhook should now pass. Keep `[BOSTA-WH-HIT]` log until a real webhook produces a `source='bosta'` row in `webhook_events`, then remove it.
+
+---
+
+**Bosta webhook 401 fix — Bearer prefix normalization (2026-07-06):**
+
+*Root cause:* Handler hard-required `startsWith("Bearer ")`. Two failure modes:
+- Mode A (confirmed): operator configured Bosta dashboard with the raw secret (no prefix). Bosta sends `Authorization: {secret}`. Handler → 401 before DB comparison.
+- Mode B (guarded against): operator pasted `Bearer {secret}` into the dashboard field. Bosta constructs `Authorization: Bearer Bearer {secret}`. After stripping one prefix the remainder is `Bearer {secret}` → sha256 mismatch → 401.
+
+*Fix:* Strip one `Bearer ` prefix if present (case-insensitive, whitespace-tolerant), accept raw secret without prefix. Both forms resolve to the same hash.
+
+*Storage:* Already correct — `sha256(rawHex)` with no Bearer baked in. Existing stored secrets are compatible; no reconnect needed.
+
+*After deploying:* Test with `curl -H "Authorization: {rawSecret}" POST /webhooks/bosta`. Should return 200 and produce a `source='bosta'` row in `webhook_events`. Then remove the `[BOSTA-WH-HIT]` diagnostic log from `BostaController`.
+
+*3 new tests (5b–5d in `BostaDay5Test`):* raw-no-Bearer → 200; double-Bearer → 401 (documents exact bug); lowercase-bearer → 200.
 
 ---
 
