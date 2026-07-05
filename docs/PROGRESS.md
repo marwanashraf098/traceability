@@ -4,9 +4,44 @@
 
 ## Current state
 
-**495 backend tests + 47 frontend tests — all green** — 2026-07-05.
+**505 backend tests + 47 frontend tests — all green** — 2026-07-05.
 
-AWB size setting (A4/A6 per-tenant, Bosta v2 mass-awb endpoint) + audit_log RLS fix shipped.
+Two-tier Bosta polling live. Webhook diagnostic log deployed. Settings save false-error fixed.
+
+---
+
+**Two-tier Bosta delivery polling — V35 (2026-07-05):**
+
+*Problem:* Bosta List API is creation-ordered with no update filter → page-polling would miss status changes on older deliveries. Webhook never arrives (entry-point log deployed to diagnose why).
+
+*Tier 1 — Status Poll (every 3 min, `bosta-status-poll` JobRunr recurring):*
+- Queries non-terminal shipments (`created`, `with_courier`, `returning`, `exception`) per tenant, ordered by `last_polled_at ASC NULLS FIRST` (round-robin so no shipment starves).
+- `fetchDelivery()` per shipment → `BostaIngestionHelper` → `BostaWebhookJob`. Unchanged state = same idem key = dedup'd no-op. Changed state = new idem key = processed (shipment + pieces + ledger updated).
+- Cap: `bosta.poll.status-max-per-cycle=200` (pilot: never hit).
+
+*Tier 2 — Discovery Poll (every 20 min, `bosta-discovery-poll` JobRunr recurring):*
+- Pages first 3 Bosta list pages (~150 newest-created deliveries).
+- New deliveries ingested + matched via `ShipmentLinkService`; already-seen ones dedup'd.
+- After discovery, Tier 1 keeps their status current.
+
+*Shared pipeline:* `BostaIngestionHelper` extracted from `BostaBackfillJob` (eliminates duplication). All three callers (backfill/status-poll/discovery-poll) use: fetch → synthesize payload → insert `webhook_events` → enqueue `BostaWebhookJob`. Source tags: `bosta_backfill` / `bosta_poll` / `bosta_poll_discovery`.
+
+*V35 migration:* `shipments.last_polled_at` column, partial index on non-terminal shipments, two new `webhook_source` enum values.
+
+*Rate-limit estimate per tenant/hour:*
+- Tier 1: 20 cycles × ~tens of fetches = 100–400 API calls/hr (pilot scale)
+- Tier 2: 3 cycles × (3 list + ~50 fetches) = ~159 API calls/hr
+- Total: ~260–560 API calls/hr/tenant
+
+*10 new tests in `BostaPollJobTest`*: changed state → full pipeline; unchanged → dedup; terminal excluded; cap + rotation; TenantContext/RLS as app_user; Tier 1 + Tier 2 coexistence; discovery new delivery; discovery dedup; terminal set completeness; multi-tenant isolation.
+
+*Webhook diagnostic log:* `[BOSTA-WH-HIT]` entry-point `log.warn` at first line of `bostaWebhook()` handler (before auth). Deploy, trigger a state change, check: if nothing logs → Cloudflare or nginx blocking; if logs appear → auth/secret issue. Remove once webhook delivery confirmed.
+
+*Other fixes same session:*
+- `api.ts request()`: skip `res.json()` on 204/empty responses → Settings save no longer shows false error.
+- `BostaHttpGateway.printMassAwb()`: reverted from v2+Bearer to v0+raw apiKey (confirmed working; v2 appears to require OAuth tokens, not the stored API key format). Null-guard + INFO log added.
+
+---
 
 ---
 
