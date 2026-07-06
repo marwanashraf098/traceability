@@ -4,11 +4,28 @@
 
 ## Current state
 
-**532 backend tests (521 green + 1 pre-existing Shopify flake) + 47 frontend tests** — 2026-07-06.
+**544 backend tests (543 green + 1 pre-existing Shopify flake) + 47 frontend tests** — 2026-07-07.
+
+Bosta HTTP 429 rate-limit handling complete (V38). Poll cycle aborts on first 429, per-tenant backoff prevents hammering. `inter-fetch-delay-ms` increased to 2 seconds. Root cause of the -1 warnings confirmed as: runaway poll loop hammered the API key until Bosta returned `{success:false, errorCode:429}`, which the old `onStatus(is4xxClientError, noOp)` suppressed to a 200-with-body → state extraction found no state → -1.
 
 Bosta state handling fully fixed (V37). Poll path no longer produces state code -1. State 47 (NDR exception) now stored correctly instead of aborting. State 60 is terminal. 12 new `BostaStateMappingTest` tests cover both state shapes, exception code storage, unknown code abort, and terminal-state poll exclusion.
 
 Bosta consignee PII population complete (V36). When a Bosta delivery auto-links to an order, `customer_name` / `customer_phone` / `address` are filled from Bosta receiver data (fill-only-if-null, GDPR guard, phone normalized to 01XXXXXXXXX). Backfill endpoint fills already-linked orders from `shipments.raw`. Pack page scan (`/api/v1/lookup`) already returns these fields. Fulfill.tsx shows "Pending Bosta link" when `customer_name` is null.
+
+---
+
+**Bosta HTTP 429 rate-limit handling — V38 (2026-07-07):**
+
+*Root cause:* The runaway poll loop (now fixed in V37+bed889d) had already hammered Bosta's API, resulting in a 429 rate-limit response. The old `.onStatus(is4xxClientError, noOp)` suppressed the 429 HTTP status and returned the body as a JsonNode — `{success:false, errorCode:429, retryAfter:285}`. State extraction found no `state` field → extracted -1. The -1 was NOT a parsing bug; it was a suppressed rate-limit error.
+
+*Changes:*
+- **`BostaRateLimitException`** — new typed exception extending `BostaException` (not `BostaTransientException`). NOT retried by JobRunr; the poll manages backoff manually.
+- **`BostaHttpGateway.fetchDelivery()`** — `.onStatus(is4xxClientError, noOp)` changed to `.onStatus(status -> status.value() == 404, ...)` (only 404 suppressed). HTTP 429 now reaches `catch (RestClientResponseException)` → throws `BostaRateLimitException(retryAfter)`. Body-level 429 guard (`detectRateLimit()`) handles the case where Bosta returns a 200 with `{success:false, errorCode:429}` body.
+- **`BostaHttpGateway.listDeliveriesPage()`** — same 429 handling in catch block.
+- **`BostaStatusPollJob`** — `ConcurrentHashMap<UUID, Long> rateLimitRetryUntilByTenant`: set to `now + (retryAfter + 10)s` on 429; checked at top of tenant loop to skip tenants still in backoff. `catch (BostaRateLimitException e)` in shipment loop: sets backoff + `return`s immediately from the Runnable (no more fetches for this tenant, does NOT update `last_polled_at` for the rate-limited shipment).
+- **`application.yml`** — `inter-fetch-delay-ms: 100` → `2000`. With 16 shipments × 2s = 32s per cycle. Reduces burst rate from ~10 calls/3s to ~1 call/2s.
+
+*Tests (p11 in `BostaPollJobTest`):* 429 on fetch → cycle aborts (fetchDelivery called exactly 1 time); `last_polled_at` not set; 0 `webhook_events`; second immediate `pollAll()` call skipped by backoff (still 1 total fetch). Separate tenant used to isolate backoff state. 544 tests green.
 
 ---
 
