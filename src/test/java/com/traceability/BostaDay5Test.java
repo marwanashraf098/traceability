@@ -389,6 +389,73 @@ class BostaDay5Test {
         assertThat(secondError).contains("duplicate");
     }
 
+    // -------------------------------------------------------------------------
+    // (8) Regenerate-secret: rotates hash, returns new 64-hex secret once
+    // -------------------------------------------------------------------------
+    @Test
+    void regenerateSecret_rotatesHashAndReturnsNewSecretOnce() {
+        // Connect to establish an active courier_account
+        String originalSecret = setupBostaAccount();
+        String originalHash = jdbc.queryForObject(
+            "SELECT webhook_secret FROM courier_accounts WHERE tenant_id = ? AND provider = 'bosta'",
+            String.class, ownerTenantId);
+
+        // Regenerate
+        HttpHeaders headers = new HttpHeaders();
+        headers.setBearerAuth(ownerToken);
+        ResponseEntity<Map> resp = rest.exchange(
+            base() + "/api/v1/bosta/regenerate-secret", HttpMethod.POST,
+            new HttpEntity<>(null, headers), Map.class);
+
+        assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.OK);
+        String newSecret = (String) resp.getBody().get("webhookSecret");
+        assertThat(newSecret)
+            .isNotNull()
+            .hasSize(64)
+            .isNotEqualTo(originalSecret);  // new secret is different
+
+        // Stored hash must have changed
+        String newHash = jdbc.queryForObject(
+            "SELECT webhook_secret FROM courier_accounts WHERE tenant_id = ? AND provider = 'bosta'",
+            String.class, ownerTenantId);
+        assertThat(newHash)
+            .isNotEqualTo(originalHash)   // hash rotated
+            .isNotEqualTo(newSecret);     // hash is not the raw secret
+
+        // New secret authenticates on the webhook endpoint
+        HttpHeaders wHeaders = new HttpHeaders();
+        wHeaders.set("Authorization", "Bearer " + newSecret);
+        wHeaders.setContentType(MediaType.APPLICATION_JSON);
+        ResponseEntity<String> wResp = rest.exchange(
+            base() + "/api/v1/webhooks/bosta", HttpMethod.POST,
+            new HttpEntity<>(mapper.createObjectNode().put("trackingNumber", "BOS-REGEN"), wHeaders),
+            String.class);
+        assertThat(wResp.getStatusCode()).isEqualTo(HttpStatus.OK);
+
+        // Old secret must no longer authenticate
+        HttpHeaders oldHeaders = new HttpHeaders();
+        oldHeaders.set("Authorization", "Bearer " + originalSecret);
+        oldHeaders.setContentType(MediaType.APPLICATION_JSON);
+        ResponseEntity<String> oldResp = rest.exchange(
+            base() + "/api/v1/webhooks/bosta", HttpMethod.POST,
+            new HttpEntity<>(mapper.createObjectNode().put("trackingNumber", "BOS-OLD"), oldHeaders),
+            String.class);
+        assertThat(oldResp.getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
+    }
+
+    // -------------------------------------------------------------------------
+    // (9) Regenerate-secret: 404 when no active Bosta account exists
+    // -------------------------------------------------------------------------
+    @Test
+    void regenerateSecret_noAccount_returns404() {
+        HttpHeaders headers = new HttpHeaders();
+        headers.setBearerAuth(ownerToken);
+        ResponseEntity<String> resp = rest.exchange(
+            base() + "/api/v1/bosta/regenerate-secret", HttpMethod.POST,
+            new HttpEntity<>(null, headers), String.class);
+        assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
+    }
+
     // ---- helpers ------------------------------------------------------------
 
     private String base() { return "http://localhost:" + port; }

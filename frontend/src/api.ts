@@ -380,6 +380,12 @@ export function bostaConnect(apiKey: string) {
   })
 }
 
+export function bostaRegenerateSecret() {
+  return request<{ accountId: string | null; webhookSecret: string }>('/bosta/regenerate-secret', {
+    method: 'POST',
+  })
+}
+
 // ── Bosta backfill sync ───────────────────────────────────────────────────────
 
 export interface BostaBackfillStatus {

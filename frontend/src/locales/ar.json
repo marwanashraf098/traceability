@@ -397,7 +397,22 @@
       "syncError": "فشلت المزامنة. أعد المحاولة.",
       "syncTooltip": "يجلب الشحنات الموجودة في بوستا ويربطها بالطلبات. آمن للتشغيل مجدداً.",
       "lastSync": "آخر مزامنة",
-      "syncQueued": "{{count}} شحنة في قائمة الانتظار"
+      "syncQueued": "{{count}} شحنة في قائمة الانتظار",
+      "webhookSetup": "إعداد الـ Webhook",
+      "secretWarning": "احفظ هذا الآن — لن يُعرض مجدداً.",
+      "secretWarningDetail": "الصق مفتاح التفويض في إعدادات Webhook في بوستا. إذا فقدته، استخدم خيار التجديد للحصول على مفتاح جديد.",
+      "webhookUrlLabel": "رابط Webhook",
+      "authKeyLabel": "مفتاح التفويض",
+      "authKeyHint": "الصق هذه القيمة بالضبط في حقل «Authorization Key» في بوستا",
+      "rawSecretLabel": "الرمز الخام (للمرجع)",
+      "copy": "نسخ",
+      "copied": "تم النسخ!",
+      "doneBtn": "تم، لقد حفظته",
+      "regenerateBtn": "تجديد رمز Webhook",
+      "regenerating": "جارٍ التجديد…",
+      "regenerateError": "تعذّر التجديد. أعد المحاولة.",
+      "regenerateConfirmTitle": "تجديد رمز Webhook؟",
+      "regenerateConfirmMsg": "سيتم إلغاء الرمز الحالي. يجب تحديث مفتاح التفويض في إعدادات Webhook في بوستا فوراً."
     },
     "never": "لم تتم"
   },

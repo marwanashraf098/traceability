@@ -158,6 +158,40 @@ public class BostaController {
         return new BostaConnectResponse(accountId.toString(), rawHex);
     }
 
+    // ---- POST /api/v1/bosta/regenerate-secret (OWNER) ----------------------
+
+    /**
+     * Rotates the webhook secret WITHOUT requiring the API key again.
+     * Use when the previous secret is lost (avoids a full reconnect).
+     * The new raw secret is returned once and never stored.
+     * After calling this, the Bosta dashboard Authorization Key must be updated.
+     */
+    @PostMapping("/bosta/regenerate-secret")
+    @PreAuthorize("hasRole('OWNER')")
+    public ResponseEntity<BostaConnectResponse> regenerateSecret(
+            @AuthenticationPrincipal CustomUserDetails principal) {
+
+        UUID tenantId = principal.tenantId();
+
+        byte[] rawBytes = new byte[32];
+        new SecureRandom().nextBytes(rawBytes);
+        String rawHex     = HexFormat.of().formatHex(rawBytes);
+        String storedHash = sha256Hex(rawHex);
+
+        Integer updated = TenantContext.runAs(tenantId, () ->
+            tx.execute(s -> jdbc.update(
+                "UPDATE courier_accounts SET webhook_secret = ? " +
+                "WHERE tenant_id = ? AND provider = 'bosta' AND status = 'active'",
+                storedHash, tenantId)));
+
+        if (updated == null || updated == 0) {
+            return ResponseEntity.notFound().build();
+        }
+
+        log.info("Bosta regenerate-secret: tenant={}", tenantId);
+        return ResponseEntity.ok(new BostaConnectResponse(null, rawHex));
+    }
+
     // ---- POST /api/v1/bosta/sync (OWNER — manual re-sync) -------------------
 
     /**

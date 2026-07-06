@@ -402,7 +402,22 @@
       "syncError": "Sync failed. Try again.",
       "syncTooltip": "Fetches existing deliveries from Bosta and links them to orders. Safe to re-run.",
       "lastSync": "Last sync",
-      "syncQueued": "{{count}} deliveries queued"
+      "syncQueued": "{{count}} deliveries queued",
+      "webhookSetup": "Webhook configuration",
+      "secretWarning": "Save this now — it won't be shown again.",
+      "secretWarningDetail": "Paste the Authorization Key into Bosta's webhook settings. If you lose it, use Regenerate to get a new one.",
+      "webhookUrlLabel": "Webhook URL",
+      "authKeyLabel": "Authorization Key",
+      "authKeyHint": "Paste this exact value into Bosta's \"Authorization Key\" field",
+      "rawSecretLabel": "Raw secret (for reference)",
+      "copy": "Copy",
+      "copied": "Copied!",
+      "doneBtn": "Done, I've saved it",
+      "regenerateBtn": "Regenerate webhook secret",
+      "regenerating": "Regenerating…",
+      "regenerateError": "Could not regenerate. Try again.",
+      "regenerateConfirmTitle": "Regenerate webhook secret?",
+      "regenerateConfirmMsg": "The current secret will be invalidated. You must update the Authorization Key in Bosta's webhook settings immediately after."
     },
     "never": "Never"
   },

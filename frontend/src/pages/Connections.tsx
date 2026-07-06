@@ -1,8 +1,8 @@
-import { useState, useEffect, FormEvent } from 'react'
+import { useState, useEffect, useCallback, FormEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 import {
   getConnections, shopifyInitiate, shopifyCustomConnect,
-  bostaConnect, bostaSync, bostaGetSyncStatus,
+  bostaConnect, bostaRegenerateSecret, bostaSync, bostaGetSyncStatus,
   ConnectionsStatus, BostaBackfillStatus,
 } from '../api'
 
@@ -141,17 +141,149 @@ function ShopifyCard({ shopify }: { shopify: ConnectionsStatus['shopify'] }) {
   )
 }
 
+// ── Copy-to-clipboard button ──────────────────────────────────────────────────
+
+async function writeToClipboard(text: string): Promise<void> {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text)
+    return
+  }
+  // Fallback for HTTP contexts / older browsers
+  const el = document.createElement('textarea')
+  el.value = text
+  el.style.cssText = 'position:fixed;opacity:0;pointer-events:none'
+  document.body.appendChild(el)
+  el.select()
+  document.execCommand('copy')
+  document.body.removeChild(el)
+}
+
+function CopyButton({ value, label, copiedLabel }: { value: string; label: string; copiedLabel: string }) {
+  const [copied, setCopied] = useState(false)
+
+  async function handleCopy() {
+    try {
+      await writeToClipboard(value)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
+    } catch {/* ignore — user can select-copy manually */}
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={handleCopy}
+      className={`flex-shrink-0 px-3 py-1.5 rounded text-xs font-medium border transition-colors ${
+        copied
+          ? 'bg-success/10 border-success/30 text-success'
+          : 'bg-surface border-line text-muted hover:text-primary hover:border-brand/40'
+      }`}
+    >
+      {copied ? copiedLabel : label}
+    </button>
+  )
+}
+
+// ── Copyable row (label + read-only value + copy button) ──────────────────────
+
+function CopyRow({ label, value, hint, copyLabel, copiedLabel }: {
+  label: string
+  value: string
+  hint?: string
+  copyLabel: string
+  copiedLabel: string
+}) {
+  return (
+    <div className="space-y-1">
+      <div className="flex items-center justify-between gap-1">
+        <span className="text-xs font-medium text-muted">{label}</span>
+        {hint && <span className="text-xs text-muted/60 italic">{hint}</span>}
+      </div>
+      <div className="flex gap-2 items-center">
+        <input
+          type="text"
+          readOnly
+          value={value}
+          className="input flex-1 font-mono text-xs bg-surface/60 text-primary select-all"
+          dir="ltr"
+          onFocus={e => e.currentTarget.select()}
+        />
+        <CopyButton value={value} label={copyLabel} copiedLabel={copiedLabel} />
+      </div>
+    </div>
+  )
+}
+
+// ── Webhook secret reveal panel (shown once after connect or regenerate) ──────
+
+function WebhookSecretReveal({ secret, onDone }: { secret: string; onDone: () => void }) {
+  const { t } = useTranslation()
+  const webhookUrl = `${window.location.origin}/api/v1/webhooks/bosta`
+  const authKeyValue = `Bearer ${secret}`
+
+  return (
+    <div className="rounded-lg border-2 border-warning/40 bg-warning/5 p-4 space-y-4">
+      {/* Warning banner */}
+      <div className="flex gap-2">
+        <span className="text-warning text-base flex-shrink-0">⚠</span>
+        <div>
+          <p className="text-small font-semibold text-warning">
+            {t('connections.bosta.secretWarning')}
+          </p>
+          <p className="text-xs text-muted mt-0.5">
+            {t('connections.bosta.secretWarningDetail')}
+          </p>
+        </div>
+      </div>
+
+      {/* Copyable rows */}
+      <div className="space-y-3">
+        <CopyRow
+          label={t('connections.bosta.webhookUrlLabel')}
+          value={webhookUrl}
+          copyLabel={t('connections.bosta.copy')}
+          copiedLabel={t('connections.bosta.copied')}
+        />
+        <CopyRow
+          label={t('connections.bosta.authKeyLabel')}
+          value={authKeyValue}
+          hint={t('connections.bosta.authKeyHint')}
+          copyLabel={t('connections.bosta.copy')}
+          copiedLabel={t('connections.bosta.copied')}
+        />
+        <CopyRow
+          label={t('connections.bosta.rawSecretLabel')}
+          value={secret}
+          copyLabel={t('connections.bosta.copy')}
+          copiedLabel={t('connections.bosta.copied')}
+        />
+      </div>
+
+      <button
+        type="button"
+        onClick={onDone}
+        className="btn btn-brand w-full"
+      >
+        {t('connections.bosta.doneBtn')}
+      </button>
+    </div>
+  )
+}
+
 // ── Bosta card ────────────────────────────────────────────────────────────────
 
 function BostaCard({ bosta, onConnected }: { bosta: ConnectionsStatus['bosta']; onConnected: () => void }) {
   const { t } = useTranslation()
-  const [apiKey,      setApiKey]      = useState('')
-  const [loading,     setLoading]     = useState(false)
-  const [error,       setError]       = useState('')
-  const [showForm,    setShowForm]    = useState(false)
-  const [syncing,     setSyncing]     = useState(false)
-  const [syncError,   setSyncError]   = useState('')
-  const [syncStatus,  setSyncStatus]  = useState<BostaBackfillStatus | null>(null)
+  const [apiKey,         setApiKey]        = useState('')
+  const [loading,        setLoading]       = useState(false)
+  const [error,          setError]         = useState('')
+  const [showForm,       setShowForm]      = useState(false)
+  const [syncing,        setSyncing]       = useState(false)
+  const [syncError,      setSyncError]     = useState('')
+  const [syncStatus,     setSyncStatus]    = useState<BostaBackfillStatus | null>(null)
+  const [revealSecret,   setRevealSecret]  = useState<string | null>(null)
+  const [regenerating,   setRegenerating]  = useState(false)
+  const [regenerateErr,  setRegenerateErr] = useState('')
 
   useEffect(() => {
     if (bosta.connected) {
@@ -165,10 +297,11 @@ function BostaCard({ bosta, onConnected }: { bosta: ConnectionsStatus['bosta']; 
     if (!apiKey.trim()) return
     setLoading(true)
     try {
-      await bostaConnect(apiKey.trim())
+      const result = await bostaConnect(apiKey.trim())
       setApiKey('')
       setShowForm(false)
       onConnected()
+      setRevealSecret(result.webhookSecret)  // show-once reveal panel
     } catch {
       setError(t('connections.bosta.error'))
     } finally {
@@ -181,7 +314,6 @@ function BostaCard({ bosta, onConnected }: { bosta: ConnectionsStatus['bosta']; 
     setSyncing(true)
     try {
       await bostaSync()
-      // Refresh status after a short delay so the counter has time to update
       setTimeout(() => {
         bostaGetSyncStatus().then(setSyncStatus).catch(() => {/* non-critical */})
       }, 1500)
@@ -191,6 +323,22 @@ function BostaCard({ bosta, onConnected }: { bosta: ConnectionsStatus['bosta']; 
       setSyncing(false)
     }
   }
+
+  const handleRegenerate = useCallback(async () => {
+    if (!window.confirm(
+      `${t('connections.bosta.regenerateConfirmTitle')}\n\n${t('connections.bosta.regenerateConfirmMsg')}`
+    )) return
+    setRegenerateErr('')
+    setRegenerating(true)
+    try {
+      const result = await bostaRegenerateSecret()
+      setRevealSecret(result.webhookSecret)
+    } catch {
+      setRegenerateErr(t('connections.bosta.regenerateError'))
+    } finally {
+      setRegenerating(false)
+    }
+  }, [t])
 
   const showConnect = !bosta.connected || showForm
 
@@ -211,7 +359,15 @@ function BostaCard({ bosta, onConnected }: { bosta: ConnectionsStatus['bosta']; 
         }
       </div>
 
-      {bosta.connected && !showForm && (
+      {/* One-time secret reveal panel — shown after connect or regenerate */}
+      {revealSecret && (
+        <WebhookSecretReveal
+          secret={revealSecret}
+          onDone={() => setRevealSecret(null)}
+        />
+      )}
+
+      {bosta.connected && !showForm && !revealSecret && (
         <div className="space-y-2 text-small">
           {bosta.businessName && (
             <div className="flex gap-2">
@@ -226,9 +382,9 @@ function BostaCard({ bosta, onConnected }: { bosta: ConnectionsStatus['bosta']; 
             </div>
           )}
 
-          {/* Sync section */}
+          {/* Sync + management section */}
           <div className="pt-2 border-t border-line/40 space-y-2">
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <button
                 onClick={handleSync}
                 disabled={syncing}
@@ -238,15 +394,21 @@ function BostaCard({ bosta, onConnected }: { bosta: ConnectionsStatus['bosta']; 
                 {syncing ? t('connections.bosta.syncing') : t('connections.bosta.syncBtn')}
               </button>
               <button
-                onClick={() => setShowForm(true)}
+                onClick={() => { setShowForm(true); setRevealSecret(null) }}
                 className="btn btn-ghost text-small"
               >
                 {t('connections.bosta.reconnect')}
               </button>
+              <button
+                onClick={handleRegenerate}
+                disabled={regenerating}
+                className="btn btn-ghost text-small text-muted"
+              >
+                {regenerating ? t('connections.bosta.regenerating') : t('connections.bosta.regenerateBtn')}
+              </button>
             </div>
-            {syncError && (
-              <p className="text-xs text-danger">{syncError}</p>
-            )}
+            {syncError && <p className="text-xs text-danger">{syncError}</p>}
+            {regenerateErr && <p className="text-xs text-danger">{regenerateErr}</p>}
             {syncStatus && (
               <p className="text-xs text-muted">
                 {t('connections.bosta.lastSync')}:{' '}
