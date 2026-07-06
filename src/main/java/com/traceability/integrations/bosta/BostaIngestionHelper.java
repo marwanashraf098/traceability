@@ -83,6 +83,12 @@ public class BostaIngestionHelper {
         ObjectNode payload = mapper.createObjectNode();
         payload.put("trackingNumber", delivery.trackingNumber());
         payload.put("state",          delivery.stateCode());
+        // Include type so the synthesized payload matches real webhook shape (flat string).
+        // BostaWebhookJob re-fetches the delivery and uses delivery.type() for mapping,
+        // but storing type here keeps the payload consistent and aids debugging.
+        String type = (delivery.type() != null && !delivery.type().isBlank())
+            ? delivery.type() : "SEND";
+        payload.put("type",           type);
         payload.put("updatedAt",      updatedAt);
 
         String payloadJson;

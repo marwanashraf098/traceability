@@ -58,8 +58,8 @@ class MigrationSmokeTest {
                 .as("Flyway migrations must succeed")
                 .isTrue();
         assertThat(result.migrationsExecuted)
-                .as("V1–V36 must execute")
-                .isEqualTo(36);
+                .as("V1–V37 must execute")
+                .isEqualTo(37);
 
         try (Connection conn = DriverManager.getConnection(
                 POSTGRES.getJdbcUrl(),
@@ -137,7 +137,7 @@ class MigrationSmokeTest {
                 rs.next();
                 assertThat(rs.getInt(1))
                         .as("bosta_state_mappings must be seeded")
-                        .isEqualTo(23);
+                        .isEqualTo(27);
             }
 
             // 8. Seed data: all 22 NDR code rows present (11 forward + 11 return)
@@ -147,7 +147,7 @@ class MigrationSmokeTest {
                 rs.next();
                 assertThat(rs.getInt(1))
                         .as("ndr_codes must be seeded")
-                        .isEqualTo(22);
+                        .isEqualTo(26);
             }
 
             // 9. Critical NDR codes (26-30) must be marked critical

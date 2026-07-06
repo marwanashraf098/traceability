@@ -4,9 +4,32 @@
 
 ## Current state
 
-**520 backend tests + 47 frontend tests — all green** — 2026-07-06.
+**532 backend tests (521 green + 1 pre-existing Shopify flake) + 47 frontend tests** — 2026-07-06.
+
+Bosta state handling fully fixed (V37). Poll path no longer produces state code -1. State 47 (NDR exception) now stored correctly instead of aborting. State 60 is terminal. 12 new `BostaStateMappingTest` tests cover both state shapes, exception code storage, unknown code abort, and terminal-state poll exclusion.
 
 Bosta consignee PII population complete (V36). When a Bosta delivery auto-links to an order, `customer_name` / `customer_phone` / `address` are filled from Bosta receiver data (fill-only-if-null, GDPR guard, phone normalized to 01XXXXXXXXX). Backfill endpoint fills already-linked orders from `shipments.raw`. Pack page scan (`/api/v1/lookup`) already returns these fields. Fulfill.tsx shows "Pending Bosta link" when `customer_name` is null.
+
+---
+
+**Bosta state handling fixes — V37 (2026-07-06):**
+
+*Problem:* Every status poll produced "Unknown Bosta state code -1" warnings. State 47 (NDR) aborted processing instead of storing the exception. State 60 was non-terminal so polls ran forever.
+
+*Root causes found & fixed:*
+1. **`BostaHttpGateway.fetchDelivery()`** — Added double-nesting unwrap `data.data`, array-in-data, and no-wrapper defensive handling (same robustness as `listDeliveriesPage`). The state extraction `stateNode.isObject() ? path("code").asInt(-1) : asInt(-1)` was already correct after commit 9889094 — the -1 was coming from the envelope unwrap failing.
+2. **`BostaStateMapper.MappedState`** — Split `isException` (maps to exception internal state = true for state 47, 101, 102) from `unknownCode` (no mapping row found = true for -1, 999, etc). These were both `true` causing `BostaWebhookJob` to abort on state 47 the same way as unknown codes.
+3. **`BostaWebhookJob` step 7** — Changed check from `mapped.isException()` → `mapped.unknownCode()`. State 47 now continues to step 9.
+4. **`BostaWebhookJob` step 9** — Extracts `exceptionCode` + `exceptionReason` from `delivery.raw()` when `mapped.isException()` is true. Stores both in `shipments` via `COALESCE(?, exception_code)` (preserves first-seen NDR code across repeated exception events).
+5. **`BostaIngestionHelper`** — Added `type` field to the synthesized payload. BostaWebhookJob re-fetches the delivery and uses `delivery.type()` for mapping (not the payload), but having type in the payload keeps it consistent with real webhook shape.
+6. **`V37__bosta_state_fix.sql`**:
+   - `shipments.exception_code INTEGER` + `exception_reason TEXT` columns.
+   - State 60 updated from `with_courier` → `returned` (terminal, stops poll loop).
+   - State 11 "Waiting for route" → `created`.
+   - State 41:FXF_SEND → `with_courier`; 41:EXCHANGE and 41:CRP → `returning`.
+   - NDR codes 100 (bad weather) + 101 (suspicious consignee) for both forward and return. PK widened from `(code)` to `(code, category)` to allow same code in both categories.
+
+*Tests (12 new in `BostaStateMappingTest`):* s1–s3 state shape parsing (object, flat, double-nested); s4 known codes (24 → with_courier, 45 → delivered); s5 state 60 → returned; s6 unknown code -1 → unknownCode=true; s7 state 47 → isException=true, unknownCode=false; s8 state 47 + exceptionCode 3 stored on shipment, webhook processed not failed; s9 unknown -1 → webhook failed; s10 returned shipment excluded from poll; s11 state 11 → created; s12 41:FXF_SEND/EXCHANGE/CRP type disambiguation.
 
 ---
 

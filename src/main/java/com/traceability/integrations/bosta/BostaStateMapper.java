@@ -30,14 +30,19 @@ public class BostaStateMapper {
     public record MappedState(
             String shipmentInternalState,
             String pieceStatusAfter,      // nullable — some transitions don't change piece status
-            boolean isException) {
+            boolean isException,          // true = state maps to "exception" internal state (e.g. 47, 101)
+            boolean unknownCode           // true = state code NOT found in the mapper → job must fail
+    ) {
 
         static MappedState of(String shipmentState, String pieceStatus) {
-            return new MappedState(shipmentState, pieceStatus, "exception".equals(shipmentState));
+            return new MappedState(shipmentState, pieceStatus,
+                "exception".equals(shipmentState), false);
         }
 
         static MappedState unknown(int code) {
-            return new MappedState("exception", null, true);
+            // No mapping row found for this (stateCode, type) — treat as exception internally
+            // but flag as unknownCode so the job can distinguish this from a known state-47.
+            return new MappedState("exception", null, true, true);
         }
     }
 

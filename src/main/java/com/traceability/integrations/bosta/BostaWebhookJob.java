@@ -170,7 +170,7 @@ public class BostaWebhookJob {
             BostaStateMapper.MappedState mapped =
                 stateMapper.map(delivery.stateCode(), delivery.type());
 
-            if (mapped.isException()) {
+            if (mapped.unknownCode()) {
                 log.warn("Unknown Bosta state code {} type '{}' for tracking {} — alerting",
                     delivery.stateCode(), delivery.type(), trackingNumber);
                 markFailed(webhookEventId,
@@ -222,9 +222,27 @@ public class BostaWebhookJob {
             final ShipmentRow resolvedShipment = shipment;
 
             // 9. Persist updated courier state on the shipment row.
-            //    For state 46 (returned_to_business), set returned_at to start the
+            //    For state 46/60 (returned), set returned_at to start the
             //    never-received detection clock (FR-12.4).
+            //    For state 47 (exception), extract NDR code/reason from raw.
             boolean isReturnedState = "returned".equals(mapped.shipmentInternalState());
+            Integer exceptionCode   = null;
+            String  exceptionReason = null;
+            if (mapped.isException() && delivery.raw() != null) {
+                JsonNode raw = delivery.raw();
+                JsonNode codeNode = raw.path("exceptionCode");
+                if (codeNode.isNumber()) exceptionCode = codeNode.asInt();
+                exceptionReason = raw.path("exceptionReason").asText(null);
+                if (exceptionReason == null || exceptionReason.isBlank()) {
+                    exceptionReason = raw.path("exceptionDetails").asText(null);
+                }
+                if (exceptionCode != null) {
+                    log.info("Tracking {} exception: code={} reason={}",
+                        trackingNumber, exceptionCode, exceptionReason);
+                }
+            }
+            final Integer fExceptionCode   = exceptionCode;
+            final String  fExceptionReason = exceptionReason;
             tx.execute(s -> {
                 jdbc.update("""
                     UPDATE shipments
@@ -233,12 +251,16 @@ public class BostaWebhookJob {
                         number_of_attempts = ?,
                         raw                = ?::jsonb,
                         last_synced_at     = now(),
-                        returned_at        = CASE WHEN ? THEN now() ELSE returned_at END
+                        returned_at        = CASE WHEN ? THEN now() ELSE returned_at END,
+                        exception_code     = COALESCE(?, exception_code),
+                        exception_reason   = COALESCE(?, exception_reason)
                     WHERE id = ?
                     """,
                     mapped.shipmentInternalState(), delivery.stateCode(),
                     delivery.numberOfAttempts(),
-                    delivery.raw().toString(), isReturnedState, resolvedShipment.id());
+                    delivery.raw().toString(), isReturnedState,
+                    fExceptionCode, fExceptionReason,
+                    resolvedShipment.id());
                 return null;
             });
 

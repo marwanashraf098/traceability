@@ -1,0 +1,29 @@
+{
+  "success": true,
+  "data": {
+    "_id": "676abc123456789012345678",
+    "trackingNumber": "8012985727",
+    "state": { "code": 24, "value": "Processing", "childState": 5 },
+    "type": { "code": 10, "value": "Send" },
+    "businessReference": "#385328009470",
+    "numberOfAttempts": 0,
+    "exceptionCode": null,
+    "exceptionReason": null,
+    "shopifyInfo": {
+      "orderId": "6839477469253"
+    },
+    "receiver": {
+      "fullName": "Ahmad Ali",
+      "firstName": "Ahmad",
+      "lastName": "Ali",
+      "phone": "+201234567890"
+    },
+    "dropOffAddress": {
+      "firstLine": "15 Tahrir Square",
+      "city": { "name": "Cairo" },
+      "zone": { "name": "Kasr El Nile" },
+      "district": { "name": "Downtown" }
+    },
+    "updatedAt": "2026-07-06T12:00:00.000Z"
+  }
+}

@@ -167,7 +167,23 @@ class BostaHttpGateway implements BostaGateway {
 
             if (body == null) return null;
 
-            JsonNode data = body.has("data") ? body.get("data") : body;
+            // Unwrap the delivery object from the response envelope.
+            // Bosta v0 variants confirmed in the wild:
+            //   {data: {<delivery>}}           — most common
+            //   {data: {data: {<delivery>}}}   — double-nested (same as list endpoint)
+            //   {data: [<delivery>]}            — single-element array (defensive)
+            //   {<delivery>}                    — no wrapper (flat response)
+            JsonNode data;
+            JsonNode outer = body.path("data");
+            if (outer.isObject()) {
+                // Check for double-nesting (same pattern as listDeliveriesPage)
+                JsonNode inner = outer.path("data");
+                data = (inner.isObject() || inner.isArray()) ? inner : outer;
+            } else if (outer.isArray()) {
+                data = outer.isEmpty() ? body : outer.get(0);
+            } else {
+                data = body; // no wrapper
+            }
 
             // trackingNumber may arrive as number or string — always use asText()
             String tn = data.path("trackingNumber").asText(trackingNumber);
