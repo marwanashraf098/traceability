@@ -1,6 +1,8 @@
 package com.traceability.inventory;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.traceability.integrations.bosta.BostaDelivery;
 import com.traceability.integrations.bosta.BostaGateway;
 import com.traceability.integrations.bosta.BostaStateMapper;
@@ -52,19 +54,22 @@ public class ShipmentLinkService {
     private final BostaGateway      bostaGateway;
     private final EncryptionService encryptionService;
     private final BlocklistService  blocklist;
+    private final ObjectMapper      mapper;
 
     public ShipmentLinkService(JdbcTemplate jdbc,
                                 InventoryLedger ledger,
                                 BostaStateMapper stateMapper,
                                 BostaGateway bostaGateway,
                                 EncryptionService encryptionService,
-                                BlocklistService blocklist) {
+                                BlocklistService blocklist,
+                                ObjectMapper mapper) {
         this.jdbc              = jdbc;
         this.ledger            = ledger;
         this.stateMapper       = stateMapper;
         this.bostaGateway      = bostaGateway;
         this.encryptionService = encryptionService;
         this.blocklist         = blocklist;
+        this.mapper            = mapper;
     }
 
     /**
@@ -230,6 +235,10 @@ public class ShipmentLinkService {
             "UPDATE orders SET status = 'awaiting_pickup' " +
             "WHERE id = ? AND tenant_id = ? AND status = 'packed'",
             orderId, tenantId);
+
+        // Populate consignee PII from Bosta receiver data (fill-only-if-null).
+        // GDPR guard: pii_redacted_at IS NULL check prevents re-populating redacted orders.
+        populateConsigneePii(orderId, tenantId, delivery);
 
         // FR-7.8a deferred gate: re-check blocklist using Bosta receiver phone.
         // Pre-PCD orders have customer_phone=null at import — this is the first reliable phone.
@@ -443,6 +452,69 @@ public class ShipmentLinkService {
             "UPDATE unlinked_bosta_deliveries SET resolved = true, last_seen_at = now() " +
             "WHERE tenant_id = ? AND tracking_number = ? AND resolved = false",
             tenantId, trackingNumber);
+    }
+
+    // ---- PII helpers --------------------------------------------------------
+
+    /**
+     * Populates orders.customer_name / customer_phone / address from Bosta receiver data.
+     *
+     * Fill-only-if-null: COALESCE keeps any existing Shopify-sourced value untouched.
+     * GDPR guard: skips the UPDATE entirely if pii_redacted_at IS NOT NULL.
+     *
+     * Verified Bosta v0 field paths (delivery-receiver.json + BostaShapeRegressionTest):
+     *   name  ← receiver.fullName (fallback: firstName + " " + lastName)
+     *   phone ← receiver.phone (E.164, normalized to canonical 01XXXXXXXXX)
+     *   addr  ← dropOffAddress.{firstLine, city.name, zone.name, district.name}
+     */
+    private void populateConsigneePii(UUID orderId, UUID tenantId, BostaDelivery delivery) {
+        if (delivery == null || delivery.raw() == null) return;
+        JsonNode raw = delivery.raw();
+
+        // Name: prefer fullName, fall back to firstName + lastName
+        String fullName = raw.path("receiver").path("fullName").asText(null);
+        if (fullName == null || fullName.isBlank()) {
+            String first = raw.path("receiver").path("firstName").asText(null);
+            String last  = raw.path("receiver").path("lastName").asText(null);
+            if (first != null || last != null) {
+                fullName = ((first != null ? first : "") + " " + (last != null ? last : "")).strip();
+                if (fullName.isBlank()) fullName = null;
+            }
+        }
+
+        // Phone: normalize to canonical 01XXXXXXXXX
+        String phone = normalizePhone(raw.path("receiver").path("phone").asText(null));
+
+        // Address: build JSON only when at least one field is present
+        JsonNode drop     = raw.path("dropOffAddress");
+        String firstLine  = drop.path("firstLine").asText(null);
+        String city       = drop.path("city").path("name").asText(null);
+        String zone       = drop.path("zone").path("name").asText(null);
+        String district   = drop.path("district").path("name").asText(null);
+
+        String addressJson = null;
+        if (firstLine != null || city != null || zone != null || district != null) {
+            ObjectNode addr = mapper.createObjectNode();
+            if (firstLine != null) addr.put("firstLine", firstLine);
+            if (city     != null) addr.put("city",      city);
+            if (zone     != null) addr.put("zone",      zone);
+            if (district != null) addr.put("district",  district);
+            addressJson = addr.toString();
+        }
+
+        if (fullName == null && phone == null && addressJson == null) return;
+
+        jdbc.update(
+            "UPDATE orders " +
+            "SET customer_name  = COALESCE(customer_name,  ?), " +
+            "    customer_phone = COALESCE(customer_phone, ?), " +
+            "    address        = COALESCE(address,        ?::jsonb), " +
+            "    pii_source     = COALESCE(pii_source, 'bosta') " +
+            "WHERE id = ? AND tenant_id = ? " +
+            "  AND pii_redacted_at IS NULL",
+            fullName, phone, addressJson, orderId, tenantId);
+
+        log.debug("Populated consignee PII for order {} from Bosta receiver", orderId);
     }
 
     // ---- matching helpers ---------------------------------------------------

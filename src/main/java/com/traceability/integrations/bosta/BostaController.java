@@ -441,6 +441,73 @@ public class BostaController {
         return pickupService.getManifest(principal.tenantId(), pickupId);
     }
 
+    // ---- POST /api/v1/bosta/backfill-pii -----------------------------------
+
+    /**
+     * One-time backfill: fills customer_name/phone/address on orders already linked to
+     * Bosta deliveries (before populate-on-link existed) from shipments.raw receiver data.
+     *
+     * GDPR guard: skips orders where pii_redacted_at IS NOT NULL.
+     * Fill-only-if-null: COALESCE keeps existing values.
+     * Phone normalization mirrors ShipmentLinkService.normalizePhone() in pure SQL.
+     */
+    @PostMapping("/bosta/backfill-pii")
+    @PreAuthorize("hasRole('OWNER')")
+    public ResponseEntity<Map<String, Object>> backfillPii(
+            @AuthenticationPrincipal CustomUserDetails principal) {
+
+        UUID tenantId = principal.tenantId();
+
+        Integer updated = TenantContext.runAs(tenantId, () ->
+            tx.execute(s -> jdbc.update("""
+                UPDATE orders o
+                SET
+                  customer_name  = COALESCE(o.customer_name,
+                                   NULLIF(TRIM(s.raw#>>'{receiver,fullName}'), '')),
+                  customer_phone = COALESCE(o.customer_phone,
+                                   CASE
+                                     WHEN REGEXP_REPLACE(COALESCE(s.raw#>>'{receiver,phone}',''),'[^0-9]','','g') ~ '^0020[0-9]{10}$'
+                                     THEN '0' || RIGHT(REGEXP_REPLACE(s.raw#>>'{receiver,phone}','[^0-9]','','g'), 10)
+                                     WHEN REGEXP_REPLACE(COALESCE(s.raw#>>'{receiver,phone}',''),'[^0-9]','','g') ~ '^20[0-9]{10}$'
+                                     THEN '0' || RIGHT(REGEXP_REPLACE(s.raw#>>'{receiver,phone}','[^0-9]','','g'), 10)
+                                     WHEN REGEXP_REPLACE(COALESCE(s.raw#>>'{receiver,phone}',''),'[^0-9]','','g') ~ '^01[0-9]{9}$'
+                                     THEN REGEXP_REPLACE(s.raw#>>'{receiver,phone}','[^0-9]','','g')
+                                     WHEN REGEXP_REPLACE(COALESCE(s.raw#>>'{receiver,phone}',''),'[^0-9]','','g') ~ '^1[0-9]{9}$'
+                                     THEN '0' || REGEXP_REPLACE(s.raw#>>'{receiver,phone}','[^0-9]','','g')
+                                     ELSE NULL
+                                   END),
+                  address        = COALESCE(o.address,
+                                   CASE
+                                     WHEN NULLIF(TRIM(s.raw#>>'{dropOffAddress,firstLine}'), '') IS NOT NULL
+                                       OR NULLIF(TRIM(s.raw#>>'{dropOffAddress,city,name}'),  '') IS NOT NULL
+                                     THEN jsonb_build_object(
+                                       'firstLine', NULLIF(TRIM(s.raw#>>'{dropOffAddress,firstLine}'),  ''),
+                                       'city',      NULLIF(TRIM(s.raw#>>'{dropOffAddress,city,name}'),  ''),
+                                       'zone',      NULLIF(TRIM(s.raw#>>'{dropOffAddress,zone,name}'),  ''),
+                                       'district',  NULLIF(TRIM(s.raw#>>'{dropOffAddress,district,name}'), '')
+                                     )
+                                     ELSE NULL
+                                   END),
+                  pii_source     = COALESCE(o.pii_source, 'bosta')
+                FROM shipments s
+                WHERE s.order_id  = o.id
+                  AND s.tenant_id = o.tenant_id
+                  AND o.tenant_id = ?
+                  AND o.pii_redacted_at IS NULL
+                  AND o.pii_source IS NULL
+                  AND s.raw IS NOT NULL
+                  AND (
+                    NULLIF(TRIM(s.raw#>>'{receiver,fullName}'), '') IS NOT NULL
+                    OR s.raw#>>'{receiver,phone}' IS NOT NULL
+                  )
+                """,
+                tenantId)));
+
+        int count = updated != null ? updated : 0;
+        log.info("bosta/backfill-pii: tenant={} → {} order(s) updated", tenantId, count);
+        return ResponseEntity.ok(Map.of("updatedOrders", count));
+    }
+
     private static String sha256Hex(String input) {
         try {
             MessageDigest md = MessageDigest.getInstance("SHA-256");

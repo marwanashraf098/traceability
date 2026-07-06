@@ -331,6 +331,7 @@
     "loading": "جارٍ التحميل...",
     "error": "حدث خطأ ما",
     "na": "—",
+    "pendingConsignee": "في انتظار ربط Bosta",
     "cancel": "إلغاء",
     "view": "عرض"
   },

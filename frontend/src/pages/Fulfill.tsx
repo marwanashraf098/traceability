@@ -323,7 +323,7 @@ function HandoverScreen({ order, onBack }: { order: QueueOrder; onBack: () => vo
         </button>
         <div className="text-center">
           <p className="font-medium text-primary">{order.number ?? order.id.slice(-8)}</p>
-          <p className="text-small text-muted">{order.customer_name}</p>
+          <p className="text-small text-muted">{order.customer_name ?? t('common.pendingConsignee')}</p>
         </div>
         <div className="w-24" />
       </div>
@@ -418,7 +418,7 @@ function QueueView({
                       {t('fulfill.selfPickup')}
                     </span>
                   </p>
-                  <p className="text-small text-muted">{order.customer_name ?? t('common.na')}</p>
+                  <p className="text-small text-muted">{order.customer_name ?? t('common.pendingConsignee')}</p>
                 </div>
                 <div className="flex items-center gap-3">
                   <span className="text-small text-muted">
@@ -464,7 +464,7 @@ function QueueView({
                       )}
                     </p>
                     <p className="text-small text-muted">
-                      {order.customer_name ?? t('common.na')}
+                      {order.customer_name ?? t('common.pendingConsignee')}
                       {order.payment_method === 'cod' && order.cod_amount && (
                         <span className="ms-2 text-warning font-medium">COD {order.cod_amount}</span>
                       )}
@@ -723,7 +723,7 @@ function PickScreen({ orderId, onBack }: { orderId: string; onBack: () => void }
               </span>
             )}
           </p>
-          <p className="text-small text-muted">{order.customer_name ?? t('common.na')}</p>
+          <p className="text-small text-muted">{order.customer_name ?? t('common.pendingConsignee')}</p>
         </div>
         {!hasCancelRequest ? (
           <button

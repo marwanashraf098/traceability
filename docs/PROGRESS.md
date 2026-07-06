@@ -4,7 +4,25 @@
 
 ## Current state
 
-**510 backend tests + 47 frontend tests — all green** — 2026-07-06.
+**520 backend tests + 47 frontend tests — all green** — 2026-07-06.
+
+Bosta consignee PII population complete (V36). When a Bosta delivery auto-links to an order, `customer_name` / `customer_phone` / `address` are filled from Bosta receiver data (fill-only-if-null, GDPR guard, phone normalized to 01XXXXXXXXX). Backfill endpoint fills already-linked orders from `shipments.raw`. Pack page scan (`/api/v1/lookup`) already returns these fields. Fulfill.tsx shows "Pending Bosta link" when `customer_name` is null.
+
+---
+
+**Bosta consignee PII population — V36 (2026-07-06):**
+
+*Problem:* Shopify Basic plan blocks customer PII via custom app — `customer_name`, `customer_phone`, `address` were always null until PCD review approved. Bosta already has verified consignee data in `receiver.*` for every linked delivery.
+
+*Changes:*
+- `V36__bosta_pii_columns.sql` — adds `pii_source TEXT` and `pii_redacted_at TIMESTAMPTZ` to `orders`.
+- `ShipmentLinkService.populateConsigneePii()` — called after auto-link; COALESCE per field (never overwrites existing Shopify PII); checks `pii_redacted_at IS NULL` (GDPR guard).
+- Phone normalization: `receiver.phone` is `+20XXXXXXXXXX`; stripped to `01XXXXXXXXX` via `normalizePhone()`.
+- `ShopifyWebhookProcessorJob` GDPR redact handlers (both `customers/redact` and `shop/redact`) now also set `pii_source = NULL`, `pii_redacted_at = now()` — once set, populate-on-link permanently skips the order.
+- `POST /api/v1/bosta/backfill-pii` (OWNER-only) — fills orders already linked before this deploy using JSONB `#>>` operators on `shipments.raw`. Pure SQL, no extra API calls.
+- `Fulfill.tsx` — `customer_name ?? t('common.pendingConsignee')` (was `?? t('common.na')`) in 4 places.
+
+*Tests (10):* p1 link fills PII; p2 fill-only-if-null; p3 GDPR guard; p4 pii_source; p5 pack scan shows name/phone; p6 unlinked scan returns null; p7 backfill; p8 backfill skips redacted; p9 app_user RLS; p10 phone normalization.
 
 Bosta webhook auth fixed (Bearer-prefix normalization). Copyable secret reveal panel + regenerate-secret endpoint added. Webhook should now pass. Keep `[BOSTA-WH-HIT]` log until a real webhook produces a `source='bosta'` row in `webhook_events`, then remove it.
 

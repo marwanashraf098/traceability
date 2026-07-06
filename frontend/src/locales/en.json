@@ -336,6 +336,7 @@
     "loading": "Loading...",
     "error": "Something went wrong",
     "na": "—",
+    "pendingConsignee": "Pending Bosta link",
     "cancel": "Cancel",
     "view": "View"
   },

@@ -59,6 +59,8 @@ public class ShopifyWebhookProcessorJob {
             SET customer_name  = NULL,
                 customer_phone = NULL,
                 address        = NULL,
+                pii_source     = NULL,
+                pii_redacted_at = now(),
                 raw = raw
                     - 'customer'
                     - 'shipping_address'
@@ -78,6 +80,8 @@ public class ShopifyWebhookProcessorJob {
             SET customer_name  = NULL,
                 customer_phone = NULL,
                 address        = NULL,
+                pii_source     = NULL,
+                pii_redacted_at = now(),
                 raw = raw
                     - 'customer'
                     - 'shipping_address'
