@@ -4,9 +4,9 @@
 
 ## Current state
 
-**508 backend tests + 47 frontend tests — all green** — 2026-07-06.
+**510 backend tests + 47 frontend tests — all green** — 2026-07-06.
 
-Bosta webhook auth fixed (Bearer-prefix normalization). Webhook should now pass. Keep `[BOSTA-WH-HIT]` log until a real webhook produces a `source='bosta'` row in `webhook_events`, then remove it.
+Bosta webhook auth fixed (Bearer-prefix normalization). Copyable secret reveal panel + regenerate-secret endpoint added. Webhook should now pass. Keep `[BOSTA-WH-HIT]` log until a real webhook produces a `source='bosta'` row in `webhook_events`, then remove it.
 
 ---
 
@@ -23,6 +23,22 @@ Bosta webhook auth fixed (Bearer-prefix normalization). Webhook should now pass.
 *After deploying:* Test with `curl -H "Authorization: {rawSecret}" POST /webhooks/bosta`. Should return 200 and produce a `source='bosta'` row in `webhook_events`. Then remove the `[BOSTA-WH-HIT]` diagnostic log from `BostaController`.
 
 *3 new tests (5b–5d in `BostaDay5Test`):* raw-no-Bearer → 200; double-Bearer → 401 (documents exact bug); lowercase-bearer → 200.
+
+---
+
+**Bosta: copyable webhook secret reveal + regenerate-secret (2026-07-06):**
+
+*Problem:* Webhook secret shown once as plain text → easy to lose → forced full reconnect (re-enter API key) to recover.
+
+*Changes:*
+- `POST /api/v1/bosta/regenerate-secret` (OWNER-only): rotates only the webhook secret — no API key needed. Returns new 64-hex secret once, stores SHA-256 hash. Old secret immediately invalidated. Returns 404 if no active account.
+- `WebhookSecretReveal` panel (frontend): shown once after connect OR regenerate. Three copyable rows — **Webhook URL**, **Authorization Key** (`Bearer {secret}`, the exact value for Bosta's field), **Raw secret**. Each row has Copy button + "Copied!" transient feedback. Warning banner: "Save this now — it won't be shown again." Done button dismisses the panel.
+- "Regenerate webhook secret" button in the connected Bosta card (with confirm dialog).
+- `navigator.clipboard` with `execCommand` fallback. No secret logged to console.
+
+*Security model:* unchanged (Option A). Secret only in component state for that session; not retrievable on reload.
+
+*Tests:* 2 new in `BostaDay5Test` — rotation + old-secret-invalid, 404 on no-account.
 
 ---
 
