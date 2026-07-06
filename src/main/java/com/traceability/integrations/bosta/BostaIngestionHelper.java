@@ -6,6 +6,7 @@ import org.jobrunr.scheduling.JobScheduler;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.lang.Nullable;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
@@ -39,6 +40,7 @@ public class BostaIngestionHelper {
     private final JdbcTemplate       jdbc;
     private final TransactionTemplate tx;
     private final BostaGateway        bostaGateway;
+    private final BostaStateMapper    stateMapper;
     private final ObjectMapper        mapper;
     private final JobScheduler        jobScheduler;
     private final BostaWebhookJob     webhookJob;
@@ -46,30 +48,73 @@ public class BostaIngestionHelper {
     public BostaIngestionHelper(JdbcTemplate jdbc,
                                  PlatformTransactionManager txm,
                                  BostaGateway bostaGateway,
+                                 BostaStateMapper stateMapper,
                                  ObjectMapper mapper,
                                  JobScheduler jobScheduler,
                                  BostaWebhookJob webhookJob) {
-        this.jdbc        = jdbc;
-        this.tx          = new TransactionTemplate(txm);
+        this.jdbc         = jdbc;
+        this.tx           = new TransactionTemplate(txm);
         this.bostaGateway = bostaGateway;
-        this.mapper      = mapper;
+        this.stateMapper  = stateMapper;
+        this.mapper       = mapper;
         this.jobScheduler = jobScheduler;
-        this.webhookJob  = webhookJob;
+        this.webhookJob   = webhookJob;
+    }
+
+    /**
+     * Convenience overload for callers (backfill, discovery) that don't have a stored
+     * provider_state to compare against — state-change detection is skipped.
+     */
+    public boolean ingestDelivery(UUID tenantId, String apiKey,
+                                   String trackingNumber, String source) {
+        return ingestDelivery(tenantId, apiKey, trackingNumber, source, null);
     }
 
     /**
      * Fetches one delivery, synthesizes a payload, inserts into webhook_events, and
      * enqueues BostaWebhookJob. The source tag distinguishes the origin in webhook_events.
      *
-     * Must be called inside TenantContext.runAs(tenantId) — the caller owns the context.
+     * Callers MUST call this inside TenantContext.runAs(tenantId).
      *
-     * @return true if enqueued; false if delivery not found (404)
+     * @param currentProviderState the stored Bosta numeric state code already on the shipment
+     *                             row, or null if unknown/not yet stored. When non-null,
+     *                             ingest is skipped if the fetched state equals this value
+     *                             (no change → no enqueue). Pass null from backfill/discovery
+     *                             paths that don't have the stored state readily available.
+     * @return true if enqueued; false if skipped (404, unmappable state, or no state change)
      */
     public boolean ingestDelivery(UUID tenantId, String apiKey,
-                                   String trackingNumber, String source) {
+                                   String trackingNumber, String source,
+                                   @Nullable Integer currentProviderState) {
         BostaDelivery delivery = bostaGateway.fetchDelivery(apiKey, trackingNumber);
         if (delivery == null) {
             log.debug("{}: {} not found (404) — skipping", source, trackingNumber);
+            return false;
+        }
+
+        int fetchedState = delivery.stateCode();
+
+        // Guard 1: never enqueue on an unmappable / extraction-failed state.
+        // -1 means the state.code extraction failed (unexpected response shape); any other
+        // code that has no mapping row in bosta_state_mappings is equally unusable.
+        // An unmappable fetch is a fetch ERROR, not a state change — skip and warn.
+        // Without this guard, every cycle would re-enqueue the same shipment, the
+        // BostaWebhookJob would mark the event 'failed', and the loop would never end.
+        BostaStateMapper.MappedState mapped = stateMapper.map(fetchedState, delivery.type());
+        if (mapped.unknownCode()) {
+            log.warn("{}: {} fetched unmappable state={} type='{}' — not enqueuing " +
+                     "(extraction error, not a real state change)",
+                source, trackingNumber, fetchedState, delivery.type());
+            return false;
+        }
+
+        // Guard 2: skip if the state hasn't changed since the last processed cycle.
+        // Avoids creating a webhook_event row + JobRunr job when Bosta confirms the
+        // same state the shipment already has. The dedup key in BostaWebhookJob is a
+        // second backstop, but catching it here is cheaper.
+        if (currentProviderState != null && fetchedState == currentProviderState) {
+            log.debug("{}: {} state unchanged ({}={}) — skipping",
+                source, trackingNumber, fetchedState, currentProviderState);
             return false;
         }
 

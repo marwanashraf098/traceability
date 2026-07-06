@@ -191,6 +191,17 @@ class BostaHttpGateway implements BostaGateway {
             // state is object {code:N, value:"..."} in live v0 — handles legacy flat int defensively
             JsonNode stateNode = data.path("state");
             int code = stateNode.isObject() ? stateNode.path("code").asInt(-1) : stateNode.asInt(-1);
+            if (code == -1) {
+                // -1 means extraction failed (unexpected shape). Dump the raw body so operators
+                // can see exactly where state.code sits in the actual Bosta response.
+                log.warn("fetchDelivery: stateCode=-1 for tracking={} — envelope: data.isObject={} " +
+                    "data.has(data)={} stateNode.isObject={} stateNode.isNumber={} | " +
+                    "raw body = {}",
+                    trackingNumber,
+                    outer.isObject(), outer.isObject() && outer.has("data"),
+                    stateNode.isObject(), stateNode.isNumber(),
+                    body);
+            }
 
             // type is object {code:N, value:"Send"/"RTO"} in live v0
             // normalize to uppercase so BostaStateMapper key lookup (e.g. "41:SEND") works

@@ -189,10 +189,16 @@ class BostaPollJobTest {
         assertThat(polledAtSet).isTrue();
     }
 
-    // ── p2: Tier 1 — unchanged state → idempotent (second poll deduplicates) ──
+    // ── p2: Tier 1 — unchanged state → state-change detection skips re-enqueue ──
+    //
+    // After first poll+process, shipment.provider_state is set to the last fetched
+    // state code. The second poll reads it, fetches the same code again, and Guard 2
+    // in BostaIngestionHelper returns false without creating a webhook_events row.
+    // fetchDelivery IS still called (we always fetch to get the authoritative state
+    // before deciding) — but no job is enqueued.
 
     @Test
-    void p2_statusPoll_unchangedState_idempotent() {
+    void p2_statusPoll_unchangedState_skipsReenqueue() {
         String tracking  = "BOS-POLL-P2";
         String updatedAt = "2026-07-05T11:00:00.000Z";
 
@@ -203,25 +209,32 @@ class BostaPollJobTest {
             .thenReturn(new BostaDelivery(tracking, 41, "SEND", 0, "REF-P2", null,
                 rawWithUpdatedAt(updatedAt)));
 
-        // First poll — creates and processes the event
+        // First poll — creates webhook_event and processes it (sets provider_state=41)
         statusPollJob.pollAll();
         Long firstEventId = pollWebhookEventId(tracking);
         assertThat(firstEventId).isNotNull();
         webhookJob.process(firstEventId, tenantId);
         assertThat(webhookStatus(firstEventId)).isEqualTo("processed");
 
-        // Second poll — same state+updatedAt → same idem key → duplicate
+        // After processing, provider_state must be set to the fetched code (41).
+        // JDBC here runs as postgres (BYPASSRLS) — no TenantContext needed.
+        Integer storedState = jdbc.queryForObject(
+            "SELECT provider_state FROM shipments WHERE tracking_number = ?",
+            Integer.class, tracking);
+        assertThat(storedState).as("provider_state set by webhookJob").isEqualTo(41);
+
+        // Second poll — same state (41) fetched again.
+        // Guard 2 in BostaIngestionHelper sees fetchedState==provider_state → skips.
+        // No new webhook_events row should be created.
         statusPollJob.pollAll();
-        Long secondEventId = newestWebhookEventId(tracking, "bosta_poll");
-        assertThat(secondEventId).isNotEqualTo(firstEventId);  // new row created
-        webhookJob.process(secondEventId, tenantId);
+        Long newestId = newestWebhookEventId(tracking, "bosta_poll");
+        assertThat(newestId)
+            .as("state-change detection must prevent re-enqueue when state is unchanged")
+            .isEqualTo(firstEventId);
 
-        String secondError = jdbc.queryForObject(
-            "SELECT error FROM webhook_events WHERE id = ?", String.class, secondEventId);
-        assertThat(secondError).as("second poll event must be flagged duplicate").contains("duplicate");
-
-        // fetchDelivery called 3 times: once per poll cycle + once inside webhookJob.process()
-        // (step 6: verify-by-fetch — the webhook job always re-fetches the delivery from Bosta).
+        // fetchDelivery called 3 times:
+        //   poll 1: once by ingestDelivery + once by webhookJob re-fetch = 2
+        //   poll 2: once by ingestDelivery (detects no change, returns early) = 1
         verify(bostaGateway, times(3)).fetchDelivery(eq("poll-key-p2"), eq(tracking));
     }
 

@@ -366,6 +366,39 @@ class BostaStateMappingTest {
         assertThat(crp.unknownCode()).isFalse();
     }
 
+    // ── s13: poll path with unmappable -1 → NOT enqueued (Guard 1) ───────────
+
+    @Test
+    void s13_statusPoll_unmappableState_notEnqueued() {
+        setupCourierAccount("sm-key-g1");
+        createShipmentWithInternalState("BOS-SM-G1", "with_courier");
+
+        // Simulate the -1 bug: fetchDelivery returns unmappable stateCode
+        ObjectNode raw = mapper.createObjectNode();
+        raw.put("trackingNumber", "BOS-SM-G1");
+        raw.put("updatedAt", "2026-07-06T12:00:00.000Z");
+        raw.putObject("state").put("code", -1);  // extraction failed sentinel
+        raw.putObject("type").put("value", "SEND");
+
+        BostaDelivery badDelivery = new BostaDelivery("BOS-SM-G1", -1, "SEND", 0, null, null, raw);
+        when(bostaGateway.fetchDelivery(anyString(), eq("BOS-SM-G1"))).thenReturn(badDelivery);
+
+        statusPollJob.pollAll();
+
+        // Guard 1: ingestDelivery must NOT create a webhook_events row for an unmappable state.
+        // Without this guard, every poll cycle would create a 'failed' event, creating a
+        // permanent re-enqueue loop that can never self-heal.
+        Integer eventCount = jdbc.queryForObject(
+            "SELECT COUNT(*) FROM webhook_events WHERE source = 'bosta_poll'",
+            Integer.class);
+        assertThat(eventCount)
+            .as("unmappable state -1 must not produce a webhook_events row (Guard 1)")
+            .isEqualTo(0);
+
+        // fetchDelivery MUST still be called (we fetch before we decide not to enqueue)
+        verify(bostaGateway, times(1)).fetchDelivery(anyString(), eq("BOS-SM-G1"));
+    }
+
     // ── helpers ───────────────────────────────────────────────────────────────
 
     private void setupCourierAccount(String rawApiKey) {

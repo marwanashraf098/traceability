@@ -7,7 +7,6 @@ import org.jobrunr.jobs.annotations.Recurring;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.autoconfigure.flyway.FlywayDataSource;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
@@ -44,7 +43,6 @@ import java.util.UUID;
  * the same idempotent pipeline — no double-processing regardless of source.
  */
 @Service
-@ConditionalOnProperty(name = "bosta.poll.status-enabled", havingValue = "true", matchIfMissing = true)
 public class BostaStatusPollJob {
 
     private static final Logger log = LoggerFactory.getLogger(BostaStatusPollJob.class);
@@ -66,6 +64,7 @@ public class BostaStatusPollJob {
     private final BostaIngestionHelper ingestionHelper;
     private final int                  maxPerCycle;
     private final long                 interFetchDelayMs;
+    private final boolean              statusEnabled;
 
     public BostaStatusPollJob(
             @FlywayDataSource DataSource ownerDs,
@@ -74,19 +73,29 @@ public class BostaStatusPollJob {
             EncryptionService encryptionService,
             BostaIngestionHelper ingestionHelper,
             @Value("${bosta.poll.status-max-per-cycle:200}") int maxPerCycle,
-            @Value("${bosta.poll.inter-fetch-delay-ms:100}") long interFetchDelayMs) {
-        this.ownerJdbc         = new JdbcTemplate(ownerDs);
-        this.jdbc              = jdbc;
-        this.tx                = new TransactionTemplate(txm);
+            @Value("${bosta.poll.inter-fetch-delay-ms:100}") long interFetchDelayMs,
+            @Value("${bosta.poll.status-enabled:true}") boolean statusEnabled) {
+        this.ownerJdbc      = new JdbcTemplate(ownerDs);
+        this.jdbc           = jdbc;
+        this.tx             = new TransactionTemplate(txm);
         this.encryptionService = encryptionService;
-        this.ingestionHelper   = ingestionHelper;
-        this.maxPerCycle       = maxPerCycle;
+        this.ingestionHelper = ingestionHelper;
+        this.maxPerCycle    = maxPerCycle;
         this.interFetchDelayMs = interFetchDelayMs;
+        this.statusEnabled  = statusEnabled;
     }
 
+    // Cron: every 3 minutes (5-field standard cron: minute hour dom month dow).
+    // Setting bosta.poll.status-enabled=false makes pollAll() a no-op WITHOUT removing the
+    // bean — keeping the bean present ensures JobRunr's recurring-job registry stays up-to-date
+    // and doesn't re-fire stale entries from its own database with a different cron.
     @Recurring(id = "bosta-status-poll", cron = "*/3 * * * *")
     @Job(name = "Bosta status poll")
     public void pollAll() {
+        if (!statusEnabled) {
+            log.info("Status poll disabled via bosta.poll.status-enabled=false — skipping");
+            return;
+        }
         List<Map<String, Object>> accounts = ownerJdbc.queryForList(ACTIVE_BOSTA_TENANTS);
         if (accounts.isEmpty()) {
             log.debug("Status poll: no active Bosta accounts");
@@ -109,9 +118,11 @@ public class BostaStatusPollJob {
         TenantContext.runAs(tenantId, (Runnable) () -> {
 
             // Load non-terminal shipments, oldest-checked first (rotation).
+            // provider_state is the last known numeric Bosta code — used to skip re-enqueuing
+            // if the fetched state hasn't changed (prevents unnecessary webhook_events rows).
             // Runs inside tx.execute() so TenantAwareConnection fires the GUC → RLS applies.
             List<Map<String, Object>> shipments = tx.execute(s -> jdbc.queryForList(
-                "SELECT id, tracking_number " +
+                "SELECT id, tracking_number, provider_state " +
                 "FROM shipments " +
                 "WHERE tenant_id = ? " +
                 "  AND provider = 'bosta' " +
@@ -128,13 +139,16 @@ public class BostaStatusPollJob {
 
             int seen = 0, enqueued = 0;
             for (Map<String, Object> row : shipments) {
-                UUID   shipmentId     = (UUID) row.get("id");
-                String trackingNumber = (String) row.get("tracking_number");
+                UUID    shipmentId          = (UUID)    row.get("id");
+                String  trackingNumber      = (String)  row.get("tracking_number");
+                // provider_state is nullable (NULL = never polled successfully before)
+                Integer currentProviderState = (Integer) row.get("provider_state");
                 seen++;
 
                 try {
                     if (ingestionHelper.ingestDelivery(
-                            tenantId, apiKey, trackingNumber, "bosta_poll")) {
+                            tenantId, apiKey, trackingNumber, "bosta_poll",
+                            currentProviderState)) {
                         enqueued++;
                     }
                 } catch (BostaTransientException e) {
