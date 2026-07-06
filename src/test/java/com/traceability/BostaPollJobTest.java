@@ -44,6 +44,7 @@ import static org.mockito.Mockito.*;
  *   p8  — Tier 2: already-ingested delivery → second discovery deduplicates
  *   p9  — terminal state set is correct (all 5 terminal values excluded)
  *   p10 — multi-tenant: tenant A's poll does not touch tenant B's shipments
+ *   p11 — 429 rate limit: cycle aborts + per-tenant backoff prevents immediate retry
  *
  * BostaGateway and JobScheduler are @MockBean. BostaStatusPollJob, BostaDiscoveryPollJob,
  * and BostaWebhookJob are exercised directly (JobRunr scheduling is not involved).
@@ -569,6 +570,69 @@ class BostaPollJobTest {
         jdbc.execute("DELETE FROM courier_accounts WHERE tenant_id = '" + tenant2Id + "'");
         jdbc.execute("DELETE FROM users WHERE tenant_id = '" + tenant2Id + "'");
         jdbc.execute("DELETE FROM tenants WHERE id = '" + tenant2Id + "'");
+    }
+
+    // ── p11: 429 rate limit → cycle aborts + per-tenant backoff prevents next cycle ──
+    //
+    // When fetchDelivery throws BostaRateLimitException, the status poll must:
+    //   1. Abort the shipment loop immediately (no more fetches for this tenant)
+    //   2. NOT update last_polled_at for the rate-limited shipment
+    //   3. NOT enqueue any webhook_events
+    //   4. Set per-tenant backoff so the next cycle is also skipped
+    //
+    // Uses a separate tenant to avoid backoff state bleeding into other tests.
+
+    @Test
+    void p11_statusPoll_rateLimited_abortsCurrentCycleAndBacksOff() {
+        UUID rlTenantId = UUID.randomUUID();
+        UUID rlStoreId  = UUID.randomUUID();
+
+        jdbc.update("INSERT INTO tenants (id, name) VALUES (?, 'RL-Tenant-P11')", rlTenantId);
+        jdbc.update("INSERT INTO users (id, tenant_id, name, email, password_hash, role) " +
+                    "VALUES (?, ?, 'Owner', 'rl-p11@test.local', 'h', 'owner')",
+                    UUID.randomUUID(), rlTenantId);
+        jdbc.update("INSERT INTO stores (id, tenant_id, platform, shop_domain, status) " +
+                    "VALUES (?, ?, 'shopify', 'rl-p11.myshopify.com', 'disconnected')",
+                    rlStoreId, rlTenantId);
+        jdbc.update("INSERT INTO courier_accounts " +
+                    "(tenant_id, provider, api_key_encrypted, webhook_secret, status) " +
+                    "VALUES (?, 'bosta', ?, 'rl-hash', 'active')",
+                    rlTenantId, encryptionService.encrypt("rl-key-p11"));
+
+        UUID rlOrderId = jdbc.queryForObject(
+            "INSERT INTO orders (tenant_id, store_id, external_id, status) " +
+            "VALUES (?, ?, 'EXT-RL-P11', 'new'::order_status) RETURNING id",
+            UUID.class, rlTenantId, rlStoreId);
+        String tracking = "BOS-RL-P11";
+        jdbc.update("INSERT INTO shipments " +
+                    "(tenant_id, order_id, provider, tracking_number, internal_state) " +
+                    "VALUES (?, ?, 'bosta', ?, 'with_courier'::shipment_internal_state)",
+                    rlTenantId, rlOrderId, tracking);
+
+        when(bostaGateway.fetchDelivery(anyString(), eq(tracking)))
+            .thenThrow(new BostaRateLimitException(285L));
+
+        // First cycle: hits 429 on the first (only) shipment
+        statusPollJob.pollAll();
+
+        // fetchDelivery called exactly once (abort prevents any retry)
+        verify(bostaGateway, times(1)).fetchDelivery(anyString(), eq(tracking));
+
+        // last_polled_at NOT set (we abort BEFORE the update)
+        Boolean polledAtSet = jdbc.queryForObject(
+            "SELECT last_polled_at IS NOT NULL FROM shipments WHERE tracking_number = ?",
+            Boolean.class, tracking);
+        assertThat(polledAtSet).as("last_polled_at must not be set when cycle aborts on 429").isFalse();
+
+        // No webhook_events created
+        Long eventCount = jdbc.queryForObject(
+            "SELECT COUNT(*) FROM webhook_events WHERE payload->>'trackingNumber' = ?",
+            Long.class, tracking);
+        assertThat(eventCount).as("no webhook_events on 429").isZero();
+
+        // Second cycle immediately after — backoff is active, fetchDelivery is NOT called again
+        statusPollJob.pollAll();
+        verify(bostaGateway, times(1)).fetchDelivery(anyString(), eq(tracking)); // still 1
     }
 
     // ── helpers ───────────────────────────────────────────────────────────────

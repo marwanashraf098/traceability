@@ -17,6 +17,7 @@ import javax.sql.DataSource;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Tier 1 — Status Poll: keeps known in-flight Bosta shipments current.
@@ -66,6 +67,11 @@ public class BostaStatusPollJob {
     private final long                 interFetchDelayMs;
     private final boolean              statusEnabled;
 
+    // Per-tenant rate-limit backoff: epoch-ms after which the tenant's poll resumes.
+    // Rate limits are per API key, so each tenant has its own backoff timer.
+    // Reset to empty on app restart (acceptable — the 429 window is short).
+    private final Map<UUID, Long> rateLimitRetryUntilByTenant = new ConcurrentHashMap<>();
+
     public BostaStatusPollJob(
             @FlywayDataSource DataSource ownerDs,
             JdbcTemplate jdbc,
@@ -105,6 +111,15 @@ public class BostaStatusPollJob {
         for (Map<String, Object> row : accounts) {
             UUID tenantId       = (UUID) row.get("tenant_id");
             String encryptedKey = (String) row.get("api_key_encrypted");
+
+            // Per-tenant rate-limit backoff: skip this tenant until the window clears.
+            Long retryUntil = rateLimitRetryUntilByTenant.get(tenantId);
+            if (retryUntil != null && System.currentTimeMillis() < retryUntil) {
+                long waitSecs = (retryUntil - System.currentTimeMillis()) / 1000;
+                log.info("Status poll tenant {}: rate-limited — backing off {}s more", tenantId, waitSecs);
+                continue;
+            }
+
             try {
                 String apiKey = encryptionService.decrypt(encryptedKey);
                 pollTenant(tenantId, apiKey);
@@ -139,8 +154,8 @@ public class BostaStatusPollJob {
 
             int seen = 0, enqueued = 0;
             for (Map<String, Object> row : shipments) {
-                UUID    shipmentId          = (UUID)    row.get("id");
-                String  trackingNumber      = (String)  row.get("tracking_number");
+                UUID    shipmentId           = (UUID)    row.get("id");
+                String  trackingNumber       = (String)  row.get("tracking_number");
                 // provider_state is nullable (NULL = never polled successfully before)
                 Integer currentProviderState = (Integer) row.get("provider_state");
                 seen++;
@@ -151,6 +166,21 @@ public class BostaStatusPollJob {
                             currentProviderState)) {
                         enqueued++;
                     }
+                } catch (BostaRateLimitException e) {
+                    // Rate-limited: stop fetching ALL remaining shipments for this tenant
+                    // (more calls would extend the blackout window). Record the backoff
+                    // and return immediately — do NOT update last_polled_at for this
+                    // shipment (it will be retried first-in-rotation on the next cycle).
+                    long resumeAt = System.currentTimeMillis() + (e.getRetryAfterSeconds() + 10) * 1000L;
+                    rateLimitRetryUntilByTenant.put(tenantId, resumeAt);
+                    log.warn("Status poll tenant {}: rate-limited by Bosta (retryAfter={}s) — " +
+                             "aborting cycle, next attempt after {}s",
+                        tenantId, e.getRetryAfterSeconds(), e.getRetryAfterSeconds() + 10);
+                    if (seen > 1) {
+                        log.info("Status poll tenant {}: {} of {} shipments checked before rate limit",
+                            tenantId, seen - 1, shipments.size());
+                    }
+                    return; // exit the TenantContext.runAs Runnable — breaks out of shipment loop
                 } catch (BostaTransientException e) {
                     log.warn("Status poll tenant {}: transient error on {} — skipping: {}",
                         tenantId, trackingNumber, e.getMessage());

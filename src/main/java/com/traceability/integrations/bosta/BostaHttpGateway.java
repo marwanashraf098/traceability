@@ -80,6 +80,9 @@ class BostaHttpGateway implements BostaGateway {
 
             if (body == null) return List.of();
 
+            // Detect rate-limiting before parsing deliveries
+            detectRateLimit(body, "listPage=" + pageNumber);
+
             // Real Bosta v0 list envelope: {deliveries:[...], count:N}
             // Defensive fallback: {data:[...]} or {data:{data:[...]}}
             JsonNode dataNode = body.path("deliveries");
@@ -110,9 +113,16 @@ class BostaHttpGateway implements BostaGateway {
                 result.add(new SlimDelivery(tn, stateCode, type));
             }
             return result;
+        } catch (BostaRateLimitException e) {
+            throw e;
         } catch (ResourceAccessException e) {
             throw new BostaTransientException("Network error listing deliveries page " + pageNumber, e);
         } catch (RestClientResponseException e) {
+            if (e.getStatusCode().value() == 429) {
+                long retryAfter = parseRetryAfter(e.getResponseBodyAsString(), 120L);
+                log.warn("listDeliveriesPage: HTTP 429 on page={} retryAfter={}s", pageNumber, retryAfter);
+                throw new BostaRateLimitException(retryAfter);
+            }
             if (e.getStatusCode().is5xxServerError()) {
                 throw new BostaTransientException("Bosta 5xx listing deliveries page " + pageNumber, e);
             }
@@ -159,13 +169,20 @@ class BostaHttpGateway implements BostaGateway {
                     .uri(url)
                     .header("Authorization", apiKey)
                     .retrieve()
-                    .onStatus(HttpStatusCode::is4xxClientError, (req, resp) -> {
-                        // 404 and other 4xx should not be retried
-                    })
+                    // Only suppress 404 — let all other 4xx (incl. 429) throw
+                    // RestClientResponseException so we can handle them specifically.
+                    .onStatus(status -> status.value() == 404, (req, resp) -> { })
                     .body(JsonNode.class)
             ).get();
 
             if (body == null) return null;
+
+            // Detect rate-limiting BEFORE attempting delivery parsing.
+            // Bosta sends HTTP 429 with body {success:false, errorCode:429, retryAfter:N}.
+            // The .onStatus(404) handler above no longer suppresses 429, so it reaches
+            // RestClientResponseException — but guard here defensively for any variant where
+            // Bosta wraps the rate-limit error in a 200 response body.
+            detectRateLimit(body, trackingNumber);
 
             // Unwrap the delivery object from the response envelope.
             // Bosta v0 variants confirmed in the wild:
@@ -221,14 +238,43 @@ class BostaHttpGateway implements BostaGateway {
             if (shopifyOrderId != null && shopifyOrderId.isBlank()) shopifyOrderId = null;
 
             return new BostaDelivery(tn, code, type, attempts, ref, shopifyOrderId, data);
+        } catch (BostaRateLimitException e) {
+            throw e;  // already typed — let it propagate
         } catch (ResourceAccessException e) {
             throw new BostaTransientException("Network error fetching delivery " + trackingNumber, e);
         } catch (RestClientResponseException e) {
             if (e.getStatusCode().value() == 404) return null;
+            if (e.getStatusCode().value() == 429) {
+                long retryAfter = parseRetryAfter(e.getResponseBodyAsString(), 120L);
+                log.warn("fetchDelivery: HTTP 429 for tracking={} retryAfter={}s", trackingNumber, retryAfter);
+                throw new BostaRateLimitException(retryAfter);
+            }
             if (e.getStatusCode().is5xxServerError()) {
                 throw new BostaTransientException("Bosta 5xx fetching delivery " + trackingNumber, e);
             }
             throw new BostaException("Bosta API error (" + e.getStatusCode() + "): " + e.getMessage(), e);
+        }
+    }
+
+    /** Throws BostaRateLimitException if the body signals a 429 rate-limit response. */
+    private void detectRateLimit(JsonNode body, String context) {
+        if (!body.path("success").asBoolean(true)) {
+            int errCode = body.path("errorCode").asInt(-1);
+            if (errCode == 429) {
+                long retryAfter = body.path("retryAfter").asLong(120L);
+                log.warn("detectRateLimit: Bosta rate limit (body errorCode=429) context={} retryAfter={}s",
+                    context, retryAfter);
+                throw new BostaRateLimitException(retryAfter);
+            }
+        }
+    }
+
+    private long parseRetryAfter(String responseBody, long defaultSeconds) {
+        if (responseBody == null || responseBody.isBlank()) return defaultSeconds;
+        try {
+            return mapper.readTree(responseBody).path("retryAfter").asLong(defaultSeconds);
+        } catch (Exception ignored) {
+            return defaultSeconds;
         }
     }
 

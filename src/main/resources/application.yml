@@ -71,7 +71,7 @@ bosta:
   backfill:
     max-pages: 20           # page cap per run (20 × page-size deliveries max)
     page-size: 50
-    inter-fetch-delay-ms: 100   # throttle between per-delivery fetches (no documented rate limit)
+    inter-fetch-delay-ms: 2000  # throttle between per-delivery fetches — increased after 429 incident
     default-lookback-days: 90   # reserved; not used for filtering in v1
   poll:
     # Tier 1 — Status poll: fetches every known in-flight shipment by tracking number.
@@ -83,12 +83,14 @@ bosta:
     discovery-enabled: true
     discovery-interval-minutes: 20   # cron hardcoded as */20 * * * * in BostaDiscoveryPollJob
     discovery-pages: 3               # first 3 pages (~150 newest-created deliveries)
-    # Shared throttle (reused from backfill — same Bosta rate-limit concern).
-    inter-fetch-delay-ms: 100
-    # Rate-limit math (per tenant per hour):
-    #   Tier 1: 20 cycles/hr × ~tens of fetches = ~100–400 API calls/hr (pilot scale)
-    #   Tier 2: 3 cycles/hr × (3 list calls + ~50 fetch calls) = ~159 API calls/hr
-    #   Total: ~260–560 API calls/hr/tenant — well within Bosta's undocumented limits
+    # Shared throttle — 2s between individual fetchDelivery calls (increased after 429 incident).
+    # With 16 shipments × 2s = 32s per cycle. Webhook re-fetch adds ~16 parallel calls.
+    # If Bosta rate-limits again, BostaRateLimitException sets per-tenant backoff in ConcurrentHashMap.
+    inter-fetch-delay-ms: 2000
+    # Rate-limit math (per tenant per hour, ~16 in-flight shipments):
+    #   Tier 1: 20 cycles/hr × 16 fetches × 1 webhook re-fetch = ~640 API calls/hr (sequential)
+    #   Tier 2: 3 cycles/hr × (3 list calls + ~50 per-shipment) = ~159 API calls/hr
+    #   Total: ~800 API calls/hr/tenant at current scale
 
 org:
   jobrunr:
