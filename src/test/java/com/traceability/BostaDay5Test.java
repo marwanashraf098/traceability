@@ -456,6 +456,49 @@ class BostaDay5Test {
         assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
     }
 
+    // -------------------------------------------------------------------------
+    // (10) Reconnect is idempotent — no duplicate rows created
+    // -------------------------------------------------------------------------
+    @Test
+    @SuppressWarnings("unchecked")
+    void connect_reconnect_upserts_noDuplicate() {
+        when(bostaGateway.fetchBusinessProfile(anyString())).thenReturn("Test Biz");
+
+        HttpHeaders headers = new HttpHeaders();
+        headers.setBearerAuth(ownerToken); headers.setContentType(MediaType.APPLICATION_JSON);
+
+        // First connect
+        ResponseEntity<Map> r1 = rest.exchange(
+            base() + "/api/v1/bosta/connect", HttpMethod.POST,
+            new HttpEntity<>(Map.of("apiKey", "key-v1"), headers), Map.class);
+        assertThat(r1.getStatusCode()).isEqualTo(HttpStatus.CREATED);
+        String accountId1 = (String) r1.getBody().get("accountId");
+
+        // Second connect (re-connect with a new key)
+        ResponseEntity<Map> r2 = rest.exchange(
+            base() + "/api/v1/bosta/connect", HttpMethod.POST,
+            new HttpEntity<>(Map.of("apiKey", "key-v2"), headers), Map.class);
+        assertThat(r2.getStatusCode()).isEqualTo(HttpStatus.CREATED);
+        String accountId2 = (String) r2.getBody().get("accountId");
+
+        // Same row — not a new INSERT
+        assertThat(accountId2).isEqualTo(accountId1);
+
+        // Exactly one courier_account row for this tenant
+        int count = jdbc.queryForObject(
+            "SELECT COUNT(*) FROM courier_accounts WHERE tenant_id = ? AND provider = 'bosta'",
+            Integer.class, ownerTenantId);
+        assertThat(count).isEqualTo(1);
+
+        // The row now carries the new webhook secret (from r2)
+        String newWebhookSecret = (String) r2.getBody().get("webhookSecret");
+        String storedHash = jdbc.queryForObject(
+            "SELECT webhook_secret FROM courier_accounts WHERE tenant_id = ? AND provider = 'bosta'",
+            String.class, ownerTenantId);
+        assertThat(storedHash).isNotEqualTo(newWebhookSecret); // stored as hash, not raw
+        assertThat(storedHash).hasSize(64);
+    }
+
     // ---- helpers ------------------------------------------------------------
 
     private String base() { return "http://localhost:" + port; }
@@ -482,7 +525,8 @@ class BostaDay5Test {
         jdbc.update(
             "INSERT INTO courier_accounts(tenant_id, provider, api_key_encrypted, webhook_secret, status) " +
             "VALUES(?, 'bosta', ?, 'test-hash', 'active') " +
-            "ON CONFLICT DO NOTHING",
+            "ON CONFLICT (tenant_id, provider) DO UPDATE " +
+            "  SET api_key_encrypted = EXCLUDED.api_key_encrypted, status = 'active'",
             ownerTenantId, encryptedKey);
     }
 }

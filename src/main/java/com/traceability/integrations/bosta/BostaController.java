@@ -124,31 +124,18 @@ public class BostaController {
         UUID tenantId = principal.tenantId();
 
         UUID accountId = TenantContext.runAs(tenantId, () ->
-            tx.execute(s -> {
-                // UPSERT: re-connecting replaces the API key and regenerates the webhook secret
-                UUID id = jdbc.query("""
-                    INSERT INTO courier_accounts
-                        (tenant_id, provider, api_key_encrypted, webhook_secret, status)
-                    VALUES (?, 'bosta', ?, ?, 'active')
-                    ON CONFLICT DO NOTHING
-                    RETURNING id
-                    """,
-                    rs -> rs.next() ? rs.getObject("id", UUID.class) : null,
-                    tenantId, encryptedApiKey, storedHash);
-
-                if (id == null) {
-                    // Row existed (ON CONFLICT DO NOTHING returned nothing) — update it
-                    id = jdbc.query("""
-                        UPDATE courier_accounts
-                        SET api_key_encrypted = ?, webhook_secret = ?, status = 'active'
-                        WHERE tenant_id = ? AND provider = 'bosta'
-                        RETURNING id
-                        """,
-                        rs -> rs.next() ? rs.getObject("id", UUID.class) : null,
-                        encryptedApiKey, storedHash, tenantId);
-                }
-                return id;
-            }));
+            tx.execute(s -> jdbc.query("""
+                INSERT INTO courier_accounts
+                    (tenant_id, provider, api_key_encrypted, webhook_secret, status)
+                VALUES (?, 'bosta', ?, ?, 'active')
+                ON CONFLICT (tenant_id, provider) DO UPDATE
+                    SET api_key_encrypted = EXCLUDED.api_key_encrypted,
+                        webhook_secret    = EXCLUDED.webhook_secret,
+                        status            = 'active'
+                RETURNING id
+                """,
+                rs -> rs.next() ? rs.getObject("id", UUID.class) : null,
+                tenantId, encryptedApiKey, storedHash)));
 
         // Trigger one-time backfill for historical deliveries (async, fire-and-forget).
         // Runs after the account is persisted so the job can find the api_key_encrypted row.

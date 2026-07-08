@@ -3,6 +3,7 @@ package com.traceability.inventory;
 import com.traceability.tenancy.TenantContext;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.sql.Timestamp;
 import java.time.Clock;
@@ -46,6 +47,7 @@ public class ExceptionService {
 
     // ── Public API ────────────────────────────────────────────────────────────
 
+    @Transactional(readOnly = true)
     public Map<String, Object> listExceptions(String typeFilter, String severityFilter,
                                                int page, int size) {
         UUID tenantId = TenantContext.require();
@@ -117,6 +119,7 @@ public class ExceptionService {
         return result;
     }
 
+    @Transactional
     public void resolve(String exceptionType, String subjectKey, UUID resolvedBy, String note) {
         UUID tenantId = TenantContext.require();
         jdbc.update(
@@ -126,6 +129,7 @@ public class ExceptionService {
             tenantId, exceptionType, subjectKey, resolvedBy, note);
     }
 
+    @Transactional(readOnly = true)
     public List<Map<String, Object>> listResolutions(int page, int size) {
         UUID tenantId = TenantContext.require();
         return jdbc.queryForList(
