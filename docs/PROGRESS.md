@@ -4,9 +4,21 @@
 
 ## Current state
 
-**~551 backend tests (550 green + 1 pre-existing Shopify flake) + 47 frontend tests** — 2026-07-09.
+**~553 backend tests (552 green + 1 pre-existing Shopify flake) + 47 frontend tests** — 2026-07-09.
 
-Pick-queue recency filter + bounded import (V40 work). 516 historical 'new' orders no longer flood the pick queue. Queue now shows only orders with `placed_at > now() - 30 days`. Old orders stay in DB, visible in orders-list, linkable for Bosta. Import bounded to same window via `ShopifySyncService`. Both driven by `shopify.import.lookback-days` (default 30, override via `SHOPIFY_IMPORT_LOOKBACK_DAYS`). 7 new tests in `PickQueueRecencyTest`.
+`webhook_events` idempotency — graceful duplicate handling. `DuplicateKeyException` at `BostaWebhookJob.markProcessed()` (line 405) on `webhook_events_idem` partial unique index — now fixed via two-layer defence: (1) `BostaIngestionHelper` pre-computes idem key and inserts it at `webhook_events` creation time with `ON CONFLICT DO NOTHING` — second concurrent poll cycle's enqueue returns `null` and skips; (2) `markProcessed()` catches `DuplicateKeyException` as backstop and marks the event as `concurrent duplicate`. Tests p12 + p13 added.
+
+Bosta delivery tenant-routing fix + Guard 3. Root cause: test tenant 2522cd56 and pilot 07fc572c share the same Bosta API key → both polled the same deliveries → wrong-tenant RLS → NO_MATCH → `unlinked_bosta_deliveries` → retry loop every ~30s. Immediate fix: production SQL to `SET status='disconnected'` on 2522cd56's courier_account + delete its wrong-tenant unlinked rows. Guard 3 in `BostaIngestionHelper`: if delivery is already in `unlinked_bosta_deliveries` at the same state code, skip re-enqueue (only retry on state change). Test p14 added.
+
+**Pending production SQL (must run to stop the 2522cd56 retry loop):**
+```sql
+UPDATE courier_accounts SET status = 'disconnected'
+WHERE tenant_id::text LIKE '2522cd56-%' AND provider = 'bosta';
+DELETE FROM unlinked_bosta_deliveries
+WHERE tenant_id::text LIKE '2522cd56-%';
+```
+
+Pick-queue recency filter + bounded import. 516 historical 'new' orders no longer flood the pick queue. Queue now shows only orders with `placed_at > now() - 30 days`. Old orders stay in DB, visible in orders-list, linkable for Bosta. Import bounded to same window via `ShopifySyncService`. Both driven by `shopify.import.lookback-days` (default 30, override via `SHOPIFY_IMPORT_LOOKBACK_DAYS`). 7 new tests in `PickQueueRecencyTest`.
 
 `ExceptionService` RLS fix (8th occurrence pattern). `listExceptions()` / `listResolutions()` lacked `@Transactional` → GUC never fired → `queryForMap("...FROM tenants")` returned 0 rows → 500. Fixed with `@Transactional(readOnly=true)` on both read methods, `@Transactional` on `resolve()`. `ExceptionRlsTest` added (app_user coverage).
 
@@ -39,6 +51,33 @@ Pick-queue recency filter + bounded import (V40 work). 516 historical 'new' orde
 *Day9Test:* Updated `new FulfillService(...)` call (direct construction for app_user RLS test) to pass `lookbackDays=30`.
 
 *Expected result after deploy:* Tenant 07fc572c pick queue drops from 516 to just the recent (<30 day) `new` orders. Old orders remain in DB + orders-list + Bosta-linkable.
+
+---
+
+**webhook_events idempotency — graceful DuplicateKeyException handling (2026-07-09):**
+
+*Root cause:* Two overlapping `bosta-status-poll` cycles both fetched the same delivery in the same 3-min window. Both passed step-4 dedup check (which queries `WHERE status='processed'` — both events still `pending`). Both hit the NO_MATCH unlinked path. Second worker's `markProcessed()` threw `DuplicateKeyException` on `webhook_events_idem` (partial unique index `(source, external_event_id) WHERE external_event_id IS NOT NULL`). Unhandled → JobRunr marked the job failed → 30s retry → repeated collision.
+
+*Fix — two-layer defence:*
+1. **Dedup-at-creation** (`BostaIngestionHelper`): pre-compute idem key as `sha256(trackingNumber:stateCode:updatedAt)`. Add `external_event_id = ?` to the INSERT with `ON CONFLICT (source, external_event_id) WHERE external_event_id IS NOT NULL DO NOTHING RETURNING id`. If the idem key is already in the table, INSERT returns no row → `webhookEventId == null` → return false, skip enqueue entirely. The second poll cycle never creates a competing event row.
+2. **`markProcessed()` backstop** (`BostaWebhookJob`): `try { UPDATE ... SET external_event_id=? ... } catch (DuplicateKeyException) { UPDATE ... SET error='concurrent duplicate' }`. Handles any residual race that slips through layer 1 (e.g., events created before this deploy with null external_event_id).
+
+*Tests (p12 + p13 in `BostaPollJobTest`):* p12 — two `ingestDelivery()` calls same idem key: second returns false, 1 event row (not 2), processing succeeds no exception. p13 — two events same payload both in DB (simulating pre-deploy rows), sequential processing: both end as `processed`, no exception.
+
+---
+
+**Bosta delivery tenant-routing fix + retry-loop Guard 3 (2026-07-09):**
+
+*Root cause:* Test tenant `2522cd56-*` and pilot tenant `07fc572c-*` share the same Bosta API key / same Bosta business. `BostaStatusPollJob` queries active tenants — both were active. Delivery 2499538591 (belonging to 07fc572c's order `#385328359470`) was fetched by whichever tenant polled first — often 2522cd56. Under 2522cd56's RLS context, `matchByBusinessReference()` found no order (order belongs to 07fc572c) → NO_MATCH → inserted into `unlinked_bosta_deliveries` with wrong tenant_id. The unlinked row + Guard 3 missing meant every subsequent poll cycle re-enqueued the same delivery → JobRunr processed it again → same NO_MATCH → retry in ~30s forever.
+
+*Fix — three parts:*
+1. **Production SQL** (must be run manually): `UPDATE courier_accounts SET status='disconnected' WHERE tenant_id LIKE '2522cd56-%'` + `DELETE FROM unlinked_bosta_deliveries WHERE tenant_id LIKE '2522cd56-%'`. Status `disconnected` is excluded by `ACTIVE_BOSTA_TENANTS` query (no restart needed).
+2. **Guard 3 in `BostaIngestionHelper`** (before INSERT): check `SELECT bosta_state_code FROM unlinked_bosta_deliveries WHERE tracking_number=? AND resolved=false LIMIT 1` inside `tx.execute()` (GUC must fire → RLS scopes to current tenant). If existing row has same state code → `return false`. Only re-try when state changes — a new state may be matchable.
+3. **Code-level defence against future shared-key scenarios**: Guard 3 ensures that even if two tenants share a key again, a permanently-unmatched delivery at a given state won't loop; it needs a state change to retry.
+
+*Tests (p14 in `BostaPollJobTest`):* unlinked at state 41 → `ingestDelivery()` returns false, 0 event rows, no exception. State change to 45 → returns true, 1 event row created.
+
+*Future design note:* If two tenants LEGITIMATELY share a Bosta business (e.g., two warehouses under one Bosta account), the system needs to match delivery→order to determine the correct tenant, not rely on whichever tenant polls first. This is flagged as a known limitation; not building now.
 
 ---
 
