@@ -143,6 +143,29 @@ public class BostaIngestionHelper {
             throw new RuntimeException("Failed to serialize payload for " + trackingNumber, e);
         }
 
+        // Guard 3: skip if this delivery is already in unlinked_bosta_deliveries at the same
+        // Bosta state. A NO_MATCH result at state X will remain NO_MATCH until the state changes
+        // (a new attempt or transit update) or an operator manually links it. Re-enqueueing every
+        // discovery-poll cycle causes wasteful API calls and (before markProcessed() was hardened)
+        // fed a JobRunr retry loop. Only proceed when the state has changed — a new state may
+        // produce a new businessReference match or be worth a fresh attempt.
+        // Runs inside tx.execute() so TenantAwareConnection fires SET LOCAL app.current_tenant
+        // and the RLS policy on unlinked_bosta_deliveries scopes the lookup to this tenant.
+        Boolean alreadyUnlinkedAtSameState = tx.execute(s ->
+            jdbc.query(
+                "SELECT bosta_state_code FROM unlinked_bosta_deliveries " +
+                "WHERE tracking_number = ? AND resolved = false LIMIT 1",
+                rs -> {
+                    if (!rs.next()) return false;
+                    return rs.getInt("bosta_state_code") == fetchedState;
+                },
+                trackingNumber));
+        if (Boolean.TRUE.equals(alreadyUnlinkedAtSameState)) {
+            log.debug("{}: {} already unlinked at state {} — skipping re-enqueue (state unchanged)",
+                source, trackingNumber, fetchedState);
+            return false;
+        }
+
         // Pre-compute the same idem key that BostaWebhookJob derives from the payload.
         // Setting external_event_id at INSERT time (instead of after processing) lets us use
         // ON CONFLICT DO NOTHING to dedup at creation: a second overlapping poll cycle that

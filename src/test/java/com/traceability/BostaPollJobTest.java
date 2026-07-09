@@ -743,6 +743,74 @@ class BostaPollJobTest {
         assertThat(event2Error).as("second event marked as duplicate").contains("duplicate");
     }
 
+    // ── p14: Guard 3 — already-unlinked at same state is skipped ─────────────
+
+    /**
+     * A delivery that previously couldn't be matched (already in unlinked_bosta_deliveries
+     * at stateCode=41) must NOT be re-enqueued when discovered again at the same state.
+     * ingestDelivery() returns false, no new webhook_events row is created.
+     *
+     * If the state later changes (e.g. 41 → 45), re-enqueue IS allowed — a new state
+     * may produce a successful businessReference match.
+     */
+    @Test
+    void p14_alreadyUnlinkedAtSameState_skipsReEnqueue() {
+        String tracking  = "BOS-GUARD3-P14";
+        String updatedAt = "2026-07-09T12:00:00.000Z";
+
+        setupCourierAccount("poll-key-p14");
+
+        // Seed an existing unlinked_bosta_deliveries row at state=41 for this tenant.
+        jdbc.update(
+            "INSERT INTO unlinked_bosta_deliveries " +
+            "    (tenant_id, tracking_number, bosta_state_code, bosta_order_type, match_reason) " +
+            "VALUES (?, ?, 41, 'SEND', 'NO_MATCH')",
+            tenantId, tracking);
+
+        // Mock fetchDelivery to return the same delivery at state=41 (state unchanged).
+        BostaDelivery sameState = new BostaDelivery(tracking, 41, "SEND", 1, null, null,
+            rawWithUpdatedAt(updatedAt));
+        when(bostaGateway.fetchDelivery(anyString(), eq(tracking))).thenReturn(sameState);
+
+        String apiKey = "poll-key-p14";
+
+        // Guard 3: ingestDelivery sees existing unlinked row at same state → skips.
+        boolean result;
+        try {
+            result = TenantContext.runAs(tenantId,
+                () -> ingestionHelper.ingestDelivery(tenantId, apiKey, tracking, "bosta_poll_discovery"));
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+
+        assertThat(result).as("Guard 3: same-state unlinked delivery skipped").isFalse();
+
+        Long eventCount = jdbc.queryForObject(
+            "SELECT COUNT(*) FROM webhook_events WHERE payload->>'trackingNumber' = ?",
+            Long.class, tracking);
+        assertThat(eventCount).as("no webhook_events row created for already-unlinked same-state delivery").isZero();
+
+        // When state CHANGES (41 → 45), ingestDelivery must proceed — new state worth re-trying.
+        BostaDelivery newState = new BostaDelivery(tracking, 45, "SEND", 1, null, null,
+            rawWithUpdatedAt("2026-07-09T13:00:00.000Z"));
+        when(bostaGateway.fetchDelivery(anyString(), eq(tracking))).thenReturn(newState);
+
+        boolean reEnqueued;
+        try {
+            reEnqueued = TenantContext.runAs(tenantId,
+                () -> ingestionHelper.ingestDelivery(tenantId, apiKey, tracking, "bosta_poll_discovery"));
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+
+        assertThat(reEnqueued).as("Guard 3 passes when state changes: 41→45 re-enqueues").isTrue();
+
+        Long newEventCount = jdbc.queryForObject(
+            "SELECT COUNT(*) FROM webhook_events WHERE payload->>'trackingNumber' = ?",
+            Long.class, tracking);
+        assertThat(newEventCount).as("one event row created for state-changed delivery").isEqualTo(1L);
+    }
+
     // ── helpers ───────────────────────────────────────────────────────────────
 
     private void setupCourierAccount(String rawApiKey) {
