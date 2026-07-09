@@ -7,6 +7,7 @@ import com.traceability.inventory.BlocklistService;
 import com.traceability.security.EncryptionService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
@@ -173,19 +174,22 @@ public class ShopifySyncService {
     private final ObjectMapper mapper;
     private final TransactionTemplate tx;
     private final BlocklistService blocklist;
+    private final int importLookbackDays;
 
     public ShopifySyncService(JdbcTemplate jdbc,
                                ShopifyGateway shopifyGateway,
                                EncryptionService encryptionService,
                                ObjectMapper mapper,
                                PlatformTransactionManager txm,
-                               BlocklistService blocklist) {
-        this.jdbc              = jdbc;
-        this.shopifyGateway    = shopifyGateway;
-        this.encryptionService = encryptionService;
-        this.mapper            = mapper;
-        this.tx                = new TransactionTemplate(txm);
-        this.blocklist         = blocklist;
+                               BlocklistService blocklist,
+                               @Value("${shopify.import.lookback-days:30}") int importLookbackDays) {
+        this.jdbc                = jdbc;
+        this.shopifyGateway      = shopifyGateway;
+        this.encryptionService   = encryptionService;
+        this.mapper              = mapper;
+        this.tx                  = new TransactionTemplate(txm);
+        this.blocklist           = blocklist;
+        this.importLookbackDays  = importLookbackDays;
     }
 
     // ---- public API -----------------------------------------------------
@@ -301,7 +305,7 @@ public class ShopifySyncService {
     /** Runs catalog + order import for an already-connected store. Called by ShopifyImportJob. */
     public ImportResult runImport(UUID storeId, UUID tenantId, String shopDomain, String rawToken) {
         int[] catalogCounts = importCatalog(storeId, tenantId, shopDomain, rawToken);
-        int[] orderCounts   = importOrders(storeId, tenantId, shopDomain, rawToken, 90);
+        int[] orderCounts   = importOrders(storeId, tenantId, shopDomain, rawToken, importLookbackDays);
         tx.execute(s -> { jdbc.update(UPDATE_STORE_SYNC, storeId); return null; });
         return new ImportResult(catalogCounts[0], catalogCounts[1], orderCounts[0], orderCounts[1]);
     }

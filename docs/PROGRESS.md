@@ -4,7 +4,43 @@
 
 ## Current state
 
-**544 backend tests (543 green + 1 pre-existing Shopify flake) + 47 frontend tests** — 2026-07-07.
+**~551 backend tests (550 green + 1 pre-existing Shopify flake) + 47 frontend tests** — 2026-07-09.
+
+Pick-queue recency filter + bounded import (V40 work). 516 historical 'new' orders no longer flood the pick queue. Queue now shows only orders with `placed_at > now() - 30 days`. Old orders stay in DB, visible in orders-list, linkable for Bosta. Import bounded to same window via `ShopifySyncService`. Both driven by `shopify.import.lookback-days` (default 30, override via `SHOPIFY_IMPORT_LOOKBACK_DAYS`). 7 new tests in `PickQueueRecencyTest`.
+
+`ExceptionService` RLS fix (8th occurrence pattern). `listExceptions()` / `listResolutions()` lacked `@Transactional` → GUC never fired → `queryForMap("...FROM tenants")` returned 0 rows → 500. Fixed with `@Transactional(readOnly=true)` on both read methods, `@Transactional` on `resolve()`. `ExceptionRlsTest` added (app_user coverage).
+
+`courier_accounts` dedup + unique constraint. Tenant 07fc572c had 4 bosta rows (reconnect was INSERT-without-conflict-target). V39 migration: FK-safe dedup, `UNIQUE(tenant_id, provider)`. `BostaController.connect()` now atomic upsert. No more N× polling per reconnect.
+
+---
+
+**Pick-queue recency filter + bounded import (2026-07-09):**
+
+*Problem:* 516 `status='new'` orders accumulated over ~2 months in the pick queue. Merchants don't advance Shopify order status, and nothing in the system auto-advances `new`. Every historical import order piled up, making the queue unusable.
+
+*Root cause:* `FulfillService.getQueue()` had no date bound on `placed_at` — matched every `status IN ('new','ready_to_pick','self_pickup_pending')` order since first import.
+
+*Fix (soft-exclude, NOT hard-delete):*
+- `FulfillService.getQueue()` — added `AND o.placed_at > now() - (? * INTERVAL '1 day')` using a new `lookbackDays` field injected via `@Value("${shopify.import.lookback-days:30}")`.
+- `ShopifySyncService.runImport()` — replaced hardcoded `90` with `importLookbackDays` from same config key. Prevents pulling ancient history on big stores on first connect.
+- `application.yml` — added `shopify.import.lookback-days: ${SHOPIFY_IMPORT_LOOKBACK_DAYS:30}` under `shopify:` section.
+- Orders-list (`OrderController`), order-detail, and Bosta linking are **unaffected** — no `placed_at` filter there. Old orders remain in DB, visible in full orders list, linkable to Bosta deliveries.
+- Live webhooks (`ingestOrderWebhook`) and `ShopifyReconcileJob` (30-min window) are untouched.
+
+*Tests (`PickQueueRecencyTest`, 7 cases):*
+- (a) in-window 'new' → appears in queue
+- (b) out-of-window 'new' → absent from queue, present in DB
+- (c) direct orders query returns all dates regardless (orders-list not filtered)
+- (d) out-of-window order still linkable as Bosta FK target
+- (e) `ready_to_pick` + `self_pickup_pending` within window also appear
+- (f) `on_hold=true` excluded regardless of recency
+- (g) boundary test: 31-day-old hidden, 29-day-old visible
+
+*Day9Test:* Updated `new FulfillService(...)` call (direct construction for app_user RLS test) to pass `lookbackDays=30`.
+
+*Expected result after deploy:* Tenant 07fc572c pick queue drops from 516 to just the recent (<30 day) `new` orders. Old orders remain in DB + orders-list + Bosta-linkable.
+
+---
 
 Bosta HTTP 429 rate-limit handling complete (V38). Poll cycle aborts on first 429, per-tenant backoff prevents hammering. `inter-fetch-delay-ms` increased to 2 seconds. Root cause of the -1 warnings confirmed as: runaway poll loop hammered the API key until Bosta returned `{success:false, errorCode:429}`, which the old `onStatus(is4xxClientError, noOp)` suppressed to a 200-with-body → state extraction found no state → -1.
 

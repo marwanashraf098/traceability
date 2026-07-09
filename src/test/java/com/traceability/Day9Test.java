@@ -129,7 +129,7 @@ class Day9Test {
         DataSourceTransactionManager txmB = new DataSourceTransactionManager(appUserDsB);
         InventoryLedger ledgerB = new InventoryLedger(jdbcB);
         AuditService auditSvcB = new AuditService(jdbcB, objectMapper);
-        tenantBFulfillSvc = new FulfillService(jdbcB, ledgerB, auditSvcB);
+        tenantBFulfillSvc = new FulfillService(jdbcB, ledgerB, auditSvcB, 30);
     }
 
     @BeforeEach

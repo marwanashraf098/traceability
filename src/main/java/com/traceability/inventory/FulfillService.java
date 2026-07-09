@@ -2,6 +2,7 @@ package com.traceability.inventory;
 
 import com.traceability.account.AuditService;
 import com.traceability.tenancy.TenantContext;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
@@ -17,11 +18,16 @@ public class FulfillService {
     private final JdbcTemplate    jdbc;
     private final InventoryLedger ledger;
     private final AuditService    auditService;
+    private final int             lookbackDays;
 
-    public FulfillService(JdbcTemplate jdbc, InventoryLedger ledger, AuditService auditService) {
+    public FulfillService(JdbcTemplate jdbc,
+                          InventoryLedger ledger,
+                          AuditService auditService,
+                          @Value("${shopify.import.lookback-days:30}") int lookbackDays) {
         this.jdbc         = jdbc;
         this.ledger       = ledger;
         this.auditService = auditService;
+        this.lookbackDays = lookbackDays;
     }
 
     // ── Queue ─────────────────────────────────────────────────────────────────
@@ -49,9 +55,10 @@ public class FulfillService {
             "WHERE o.tenant_id = ? " +
             "  AND o.status IN ('new','ready_to_pick','self_pickup_pending') " +
             "  AND o.on_hold = false " +
+            "  AND o.placed_at > now() - (? * INTERVAL '1 day') " +
             "GROUP BY o.id " +
             "ORDER BY o.created_at ASC",
-            tenantId);
+            tenantId, lookbackDays);
     }
 
     // ── Order detail ──────────────────────────────────────────────────────────

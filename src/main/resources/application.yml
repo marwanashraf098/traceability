@@ -55,6 +55,9 @@ app:
 shopify:
   # Pin the API version — never use "latest" in code paths.
   api-version: ${SHOPIFY_API_VERSION:2026-04}
+  # Orders older than this are excluded from the pick queue and the initial import.
+  # Override via SHOPIFY_IMPORT_LOOKBACK_DAYS env var.
+  import-lookback-days: ${SHOPIFY_IMPORT_LOOKBACK_DAYS:30}
   # Public OAuth app credentials (set via env in production).
   client-id: ${SHOPIFY_CLIENT_ID:dev-client-id}
   client-secret: ${SHOPIFY_CLIENT_SECRET:dev-client-secret-development-ok!!}
