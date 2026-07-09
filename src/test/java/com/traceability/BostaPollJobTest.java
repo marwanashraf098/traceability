@@ -27,6 +27,7 @@ import java.util.Map;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
@@ -79,14 +80,15 @@ class BostaPollJobTest {
         r.add("bosta.poll.status-max-per-cycle",     () -> "3");
     }
 
-    @Autowired JdbcTemplate        jdbc;
-    @Autowired ObjectMapper        mapper;
-    @Autowired EncryptionService   encryptionService;
-    @Autowired BostaStatusPollJob  statusPollJob;
+    @Autowired JdbcTemplate          jdbc;
+    @Autowired ObjectMapper          mapper;
+    @Autowired EncryptionService     encryptionService;
+    @Autowired BostaStatusPollJob    statusPollJob;
     @Autowired BostaDiscoveryPollJob discoveryPollJob;
-    @Autowired BostaWebhookJob     webhookJob;
-    @MockBean  BostaGateway        bostaGateway;
-    @MockBean  JobScheduler        jobScheduler;
+    @Autowired BostaWebhookJob       webhookJob;
+    @Autowired BostaIngestionHelper  ingestionHelper;
+    @MockBean  BostaGateway          bostaGateway;
+    @MockBean  JobScheduler          jobScheduler;
 
     // app_user datasource — RLS enforced (no BYPASSRLS), used to prove GUC is active
     private JdbcTemplate       appUserJdbc;
@@ -633,6 +635,112 @@ class BostaPollJobTest {
         // Second cycle immediately after — backoff is active, fetchDelivery is NOT called again
         statusPollJob.pollAll();
         verify(bostaGateway, times(1)).fetchDelivery(anyString(), eq(tracking)); // still 1
+    }
+
+    // ── p12: dedup-at-creation — second ingestDelivery with same idem key is NO-OP ──
+
+    /**
+     * Two overlapping poll cycles both call ingestDelivery for the same
+     * (trackingNumber, stateCode, updatedAt). The second INSERT hits
+     * ON CONFLICT (source, external_event_id) DO NOTHING → returns false → no second
+     * enqueue. Exactly ONE webhook_events row is created. Processing it raises no
+     * DuplicateKeyException.
+     *
+     * This is the primary fix for the DuplicateKeyException at markProcessed().
+     */
+    @Test
+    void p12_overlappingPollCycles_deduplicatedAtCreation_noException() {
+        String tracking  = "BOS-IDEM-P12";
+        String updatedAt = "2026-07-09T10:00:00.000Z";
+
+        setupCourierAccount("poll-key-p12");
+        createShipment(tracking, "with_courier");
+
+        BostaDelivery delivery = new BostaDelivery(tracking, 45, "SEND", 1, null, null,
+            rawWithUpdatedAt(updatedAt));
+        when(bostaGateway.fetchDelivery(anyString(), eq(tracking))).thenReturn(delivery);
+
+        String apiKey = "poll-key-p12";
+
+        // Simulate two overlapping poll cycles calling ingestDelivery for the same delivery.
+        // TenantContext.runAs(Callable) throws checked Exception; wrap for test clarity.
+        boolean first, second;
+        try {
+            first  = TenantContext.runAs(tenantId,
+                () -> ingestionHelper.ingestDelivery(tenantId, apiKey, tracking, "bosta_poll"));
+            second = TenantContext.runAs(tenantId,
+                () -> ingestionHelper.ingestDelivery(tenantId, apiKey, tracking, "bosta_poll"));
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+
+        assertThat(first).as("first call inserts event").isTrue();
+        assertThat(second).as("second call hits ON CONFLICT DO NOTHING").isFalse();
+
+        Long eventCount = jdbc.queryForObject(
+            "SELECT COUNT(*) FROM webhook_events " +
+            "WHERE payload->>'trackingNumber' = ? AND source::text = 'bosta_poll'",
+            Long.class, tracking);
+        assertThat(eventCount).as("exactly one event row (deduped at creation)").isEqualTo(1L);
+
+        // Processing the single event raises no exception.
+        Long eventId = newestWebhookEventId(tracking, "bosta_poll");
+        assertThat(eventId).isNotNull();
+        assertThatCode(() -> webhookJob.process(eventId, tenantId)).doesNotThrowAnyException();
+        assertThat(webhookStatus(eventId)).isEqualTo("processed");
+    }
+
+    // ── p13: end-to-end dedup — two events same idem key, both resolve as processed ──
+
+    /**
+     * Two webhook_events rows for the same (tracking, state, updatedAt) reach
+     * BostaWebhookJob (simulating the window before the ON CONFLICT fix would have
+     * caught them). Processing them sequentially:
+     *   event 1 → unlinked path → markProcessed sets external_event_id
+     *   event 2 → step-4 dedup detects the already-processed idem key → markDuplicate
+     * Both end up status='processed'. No DuplicateKeyException propagates.
+     *
+     * This confirms the full graceful-dedup chain (step 4 + markProcessed fallback)
+     * without requiring real thread concurrency.
+     */
+    @Test
+    void p13_twoEventsForSameIdemKey_bothResolveGracefully_noException() {
+        String tracking  = "BOS-IDEM-P13";
+        String updatedAt = "2026-07-09T11:00:00.000Z";
+        String payload   = "{\"trackingNumber\":\"" + tracking + "\",\"state\":41," +
+                           "\"type\":\"SEND\",\"updatedAt\":\"" + updatedAt + "\"}";
+
+        setupCourierAccount("poll-key-p13");
+        // No matching shipment → unlinked path → markProcessed is used by event 1
+
+        // Manually insert two events with the same payload and external_event_id=NULL.
+        // This simulates two overlapping poll cycles that both got past the old INSERT
+        // before the ON CONFLICT fix was in place.
+        long id1 = jdbc.queryForObject(
+            "INSERT INTO webhook_events (source, tenant_id, topic, payload, status) " +
+            "VALUES ('bosta_poll'::webhook_source, ?, 'delivery_update', ?::jsonb, 'pending') RETURNING id",
+            Long.class, tenantId, payload);
+        long id2 = jdbc.queryForObject(
+            "INSERT INTO webhook_events (source, tenant_id, topic, payload, status) " +
+            "VALUES ('bosta_poll'::webhook_source, ?, 'delivery_update', ?::jsonb, 'pending') RETURNING id",
+            Long.class, tenantId, payload);
+
+        BostaDelivery delivery = new BostaDelivery(tracking, 41, "SEND", 0, null, null,
+            rawWithUpdatedAt(updatedAt));
+        when(bostaGateway.fetchDelivery(anyString(), eq(tracking))).thenReturn(delivery);
+
+        // Process event 1: goes through unlinked path, markProcessed sets external_event_id.
+        assertThatCode(() -> webhookJob.process(id1, tenantId)).doesNotThrowAnyException();
+        assertThat(webhookStatus(id1)).isEqualTo("processed");
+
+        // Process event 2: step-4 dedup sees the already-processed idem key → markDuplicate.
+        // No DuplicateKeyException, no failed job.
+        assertThatCode(() -> webhookJob.process(id2, tenantId)).doesNotThrowAnyException();
+        assertThat(webhookStatus(id2)).isEqualTo("processed");
+
+        String event2Error = jdbc.queryForObject(
+            "SELECT error FROM webhook_events WHERE id = ?", String.class, id2);
+        assertThat(event2Error).as("second event marked as duplicate").contains("duplicate");
     }
 
     // ── helpers ───────────────────────────────────────────────────────────────

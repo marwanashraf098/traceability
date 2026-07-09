@@ -143,17 +143,34 @@ public class BostaIngestionHelper {
             throw new RuntimeException("Failed to serialize payload for " + trackingNumber, e);
         }
 
+        // Pre-compute the same idem key that BostaWebhookJob derives from the payload.
+        // Setting external_event_id at INSERT time (instead of after processing) lets us use
+        // ON CONFLICT DO NOTHING to dedup at creation: a second overlapping poll cycle that
+        // fetches the same (tracking, state, updatedAt) hits the partial unique index
+        // webhook_events_idem — (source, external_event_id) WHERE external_event_id IS NOT NULL —
+        // and returns no row, so we skip enqueueing entirely. This prevents the race where both
+        // events reach BostaWebhookJob concurrently and the second one's markProcessed() throws
+        // DuplicateKeyException.
+        String idemKey = BostaWebhookJob.sha256(
+            delivery.trackingNumber() + ":" + fetchedState + ":" + updatedAt);
+
         final String fPayload = payloadJson;
+        final String fIdemKey = idemKey;
         Long webhookEventId = tx.execute(s -> jdbc.query(
             "INSERT INTO webhook_events " +
-            "    (source, tenant_id, topic, payload, status, received_at) " +
-            "VALUES (?::webhook_source, ?, 'delivery_update', ?::jsonb, 'pending', now()) " +
+            "    (source, tenant_id, topic, payload, status, received_at, external_event_id) " +
+            "VALUES (?::webhook_source, ?, 'delivery_update', ?::jsonb, 'pending', now(), ?) " +
+            "ON CONFLICT (source, external_event_id) WHERE external_event_id IS NOT NULL " +
+            "DO NOTHING " +
             "RETURNING id",
             rs -> rs.next() ? rs.getLong("id") : null,
-            source, tenantId, fPayload));
+            source, tenantId, fPayload, fIdemKey));
 
         if (webhookEventId == null) {
-            log.error("{}: webhook_events INSERT returned no id for {}", source, trackingNumber);
+            // ON CONFLICT DO NOTHING: a sibling event for this (source, idem key) is already
+            // in flight or processed. The delivery will be (or already was) handled by that event.
+            log.debug("{}: {} idem key already in flight or processed — skipping enqueue",
+                source, trackingNumber);
             return false;
         }
 

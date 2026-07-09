@@ -401,14 +401,29 @@ public class BostaWebhookJob {
     }
 
     private void markProcessed(long id, String idemKey, String note) {
-        tx.execute(s -> {
-            jdbc.update(
-                "UPDATE webhook_events " +
-                "SET status = 'processed', external_event_id = ?, processed_at = now(), error = ? " +
-                "WHERE id = ?",
-                idemKey, note, id);
-            return null;
-        });
+        try {
+            tx.execute(s -> {
+                jdbc.update(
+                    "UPDATE webhook_events " +
+                    "SET status = 'processed', external_event_id = ?, processed_at = now(), error = ? " +
+                    "WHERE id = ?",
+                    idemKey, note, id);
+                return null;
+            });
+        } catch (DuplicateKeyException e) {
+            // Another concurrent worker already claimed this idem key (same race as step 11).
+            // The delivery was processed by that worker — mark this event processed without
+            // setting external_event_id a second time.
+            log.debug("markProcessed: idem key already claimed for event {} — concurrent duplicate", id);
+            tx.execute(s -> {
+                jdbc.update(
+                    "UPDATE webhook_events " +
+                    "SET status = 'processed', processed_at = now(), error = 'concurrent duplicate' " +
+                    "WHERE id = ?",
+                    id);
+                return null;
+            });
+        }
     }
 
     public static String sha256(String input) {
