@@ -4,7 +4,9 @@
 
 ## Current state
 
-**~553 backend tests (552 green + 1 pre-existing Shopify flake) + 47 frontend tests** — 2026-07-09.
+**554 backend tests green + 47 frontend tests** — 2026-07-10.
+
+Bosta delivery status display (V40). Orders list shows a delivery status badge per order. Order detail shows current status badge + expandable timestamped history timeline. State 47 (exception) displays `exception_reason` as a caption below the badge. 9 Bosta state codes mapped to friendly labels in EN + AR (react-i18next, RTL). New `shipment_status_history` table (V40) — one row per webhook-driven state transition, RLS-safe, idempotent via `ON CONFLICT (webhook_event_id) WHERE NOT NULL DO NOTHING`. `BostaWebhookJob` writes the history row atomically with the shipment UPDATE. 7 new tests in `DeliveryStatusTest` (list JOIN, exception+reason, no-shipment, N transitions, idempotent replay, tenant RLS via app_user, terminal states). Fixed Day9Test `insertOrder` helpers to supply `placed_at=now()` (recency filter was silently excluding NULL-placed_at orders), fixed ExceptionRlsTest.b to use valid `'new'::order_status`, updated BostaPollJobTest p8 + BostaBackfillTest dedup assertions to reflect ON CONFLICT DO NOTHING moving dedup to creation layer.
 
 `webhook_events` idempotency — graceful duplicate handling. `DuplicateKeyException` at `BostaWebhookJob.markProcessed()` (line 405) on `webhook_events_idem` partial unique index — now fixed via two-layer defence: (1) `BostaIngestionHelper` pre-computes idem key and inserts it at `webhook_events` creation time with `ON CONFLICT DO NOTHING` — second concurrent poll cycle's enqueue returns `null` and skips; (2) `markProcessed()` catches `DuplicateKeyException` as backstop and marks the event as `concurrent duplicate`. Tests p12 + p13 added.
 
