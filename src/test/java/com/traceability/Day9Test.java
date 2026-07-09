@@ -569,8 +569,8 @@ class Day9Test {
     private UUID insertOrder(String status) {
         UUID id = UUID.randomUUID();
         jdbc.update(
-            "INSERT INTO orders (id, tenant_id, store_id, external_id, status, on_hold) " +
-            "VALUES (?, ?, ?, ?, ?::order_status, false)",
+            "INSERT INTO orders (id, tenant_id, store_id, external_id, status, on_hold, placed_at) " +
+            "VALUES (?, ?, ?, ?, ?::order_status, false, now())",
             id, tenantAId, storeAId, id.toString(), status);
         return id;
     }
@@ -578,8 +578,8 @@ class Day9Test {
     private UUID insertOrderOnHold() {
         UUID id = UUID.randomUUID();
         jdbc.update(
-            "INSERT INTO orders (id, tenant_id, store_id, external_id, status, on_hold) " +
-            "VALUES (?, ?, ?, ?, 'new'::order_status, true)",
+            "INSERT INTO orders (id, tenant_id, store_id, external_id, status, on_hold, placed_at) " +
+            "VALUES (?, ?, ?, ?, 'new'::order_status, true, now())",
             id, tenantAId, storeAId, id.toString());
         return id;
     }
@@ -587,8 +587,8 @@ class Day9Test {
     private UUID insertOrderWithItem(UUID variantId, int qty) {
         UUID orderId = UUID.randomUUID();
         jdbc.update(
-            "INSERT INTO orders (id, tenant_id, store_id, external_id, status, on_hold) " +
-            "VALUES (?, ?, ?, ?, 'new'::order_status, false)",
+            "INSERT INTO orders (id, tenant_id, store_id, external_id, status, on_hold, placed_at) " +
+            "VALUES (?, ?, ?, ?, 'new'::order_status, false, now())",
             orderId, tenantAId, storeAId, orderId.toString());
         jdbc.update(
             "INSERT INTO order_items (id, tenant_id, order_id, variant_id, quantity) VALUES (gen_random_uuid(), ?, ?, ?, ?)",

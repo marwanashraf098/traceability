@@ -482,17 +482,14 @@ class BostaPollJobTest {
         webhookJob.process(firstId, tenantId);
         assertThat(webhookStatus(firstId)).isEqualTo("processed");
 
-        // Second discovery run — same idem key → dedup
+        // Second discovery run — same idem key (same tracking + state + updatedAt) → ON CONFLICT DO NOTHING
+        // at creation time means no second event row is ever inserted. Only the original event exists.
         discoveryPollJob.discoverAll();
         List<Long> allIds = jdbc.queryForList(
             "SELECT id FROM webhook_events WHERE payload->>'trackingNumber' = ? AND source::text = 'bosta_poll_discovery' ORDER BY id",
             Long.class, tracking);
-        assertThat(allIds).hasSize(2);
-
-        webhookJob.process(allIds.get(1), tenantId);
-        String secondError = jdbc.queryForObject(
-            "SELECT error FROM webhook_events WHERE id = ?", String.class, allIds.get(1));
-        assertThat(secondError).as("second discovery event deduplicated").contains("duplicate");
+        assertThat(allIds).as("dedup-at-creation: second discovery run inserts 0 new event rows").hasSize(1);
+        assertThat(webhookStatus(allIds.get(0))).as("original event still processed").isEqualTo("processed");
     }
 
     // ── p9: terminal state set is complete and correct ────────────────────────

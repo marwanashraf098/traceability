@@ -66,6 +66,7 @@
       "number": "رقم الطلب",
       "customer": "العميل",
       "status": "الحالة",
+      "delivery": "بوسطة",
       "cod": "الدفع عند الاستلام",
       "placedAt": "تاريخ الطلب",
       "tracking": "التتبع"
@@ -94,7 +95,25 @@
     "attempts": "محاولات التسليم",
     "awb": "وصل الشحن",
     "pieces": "القطع المخصصة",
-    "noPieces": "لا توجد قطع مخصصة"
+    "noPieces": "لا توجد قطع مخصصة",
+    "deliveryHistory": "سجل التوصيل",
+    "noDeliveryHistory": "لا يوجد سجل بعد — ستظهر التحديثات هنا عند وصولها.",
+    "historyToggleShow": "عرض السجل",
+    "historyToggleHide": "إخفاء السجل"
+  },
+  "delivery": {
+    "state": {
+      "created": "جاري التحضير",
+      "with_courier": "في الطريق",
+      "delivered": "تم التسليم",
+      "returning": "جاري الإرجاع",
+      "returned": "تم الإرجاع",
+      "exception": "استثناء",
+      "terminated": "إنهاء الشحنة",
+      "cancelled": "ملغي",
+      "lost": "مفقود",
+      "awaiting": "في انتظار الشحن"
+    }
   },
   "catalog": {
     "title": "الكتالوج",

@@ -68,6 +68,51 @@ export function OrderBadge({ status }: { status: string }) {
   )
 }
 
+// ── DeliveryBadge — maps shipment internal_state → friendly label + colour ────
+
+const DELIVERY_STATE_STYLE: Record<string, string> = {
+  created:    'bg-brand/10 text-brand border-brand/20',
+  with_courier: 'bg-cyan/10 text-cyan border-cyan/20',
+  delivered:  'bg-success/10 text-success border-success/20',
+  returning:  'bg-warning/10 text-warning border-warning/20',
+  returned:   'bg-muted/10 text-muted border-muted/20',
+  exception:  'bg-danger/10 text-danger border-danger/20',
+  terminated: 'bg-danger/10 text-danger border-danger/20',
+  cancelled:  'bg-muted/10 text-muted border-muted/20',
+  lost:       'bg-danger/10 text-danger border-danger/20',
+}
+
+export function DeliveryBadge({
+  state,
+  exceptionReason,
+  className = '',
+}: {
+  state?: string | null
+  exceptionReason?: string | null
+  className?: string
+}) {
+  const { t } = useTranslation()
+  if (!state) {
+    return (
+      <span className={`badge border bg-muted/10 text-muted border-muted/20 ${className}`}>
+        {t('delivery.state.awaiting')}
+      </span>
+    )
+  }
+  const style  = DELIVERY_STATE_STYLE[state] ?? 'bg-muted/10 text-muted border-muted/20'
+  const label  = t(`delivery.state.${state}`, { defaultValue: state.replace(/_/g, ' ') })
+  const reason = state === 'exception' && exceptionReason ? exceptionReason : null
+
+  return (
+    <span className={`inline-flex flex-col items-start gap-0.5 ${className}`}>
+      <span className={`badge border ${style}`}>{label}</span>
+      {reason && (
+        <span className="text-caption text-muted leading-tight">{reason}</span>
+      )}
+    </span>
+  )
+}
+
 // ── Card ──────────────────────────────────────────────────────────────────────
 
 export function Card({ children, className = '' }: { children: ReactNode; className?: string }) {

@@ -239,19 +239,12 @@ class BostaBackfillTest {
         webhookJob.process(firstEventId, ownerTenantId);
         assertThat(webhookStatus(firstEventId)).isEqualTo("processed");
 
-        // Second run — same delivery, same state, same updatedAt → same idem key
+        // Second run — same delivery, same state, same updatedAt → same idem key.
+        // ON CONFLICT DO NOTHING at creation time prevents a second event row being inserted.
         backfillJob.run(ownerTenantId, 5);
         List<Long> allEventIds = allWebhookEventIds(tracking);
-        assertThat(allEventIds).hasSize(2);
-
-        Long secondEventId = allEventIds.stream()
-            .filter(id -> !id.equals(firstEventId)).findFirst().orElseThrow();
-        webhookJob.process(secondEventId, ownerTenantId);
-        assertThat(webhookStatus(secondEventId)).isEqualTo("processed");
-
-        String secondError = jdbc.queryForObject(
-            "SELECT error FROM webhook_events WHERE id = ?", String.class, secondEventId);
-        assertThat(secondError).as("second-run event must be flagged as duplicate").contains("duplicate");
+        assertThat(allEventIds).as("dedup-at-creation: second backfill run creates 0 new event rows").hasSize(1);
+        assertThat(webhookStatus(firstEventId)).as("original event still processed").isEqualTo("processed");
     }
 
     // ── (4) State change after backfill → new idem key → processed normally ───

@@ -34,7 +34,8 @@ public class OrderController {
     public record OrderSummary(
         String id, String number, String customerName, String customerPhone,
         String status, boolean onHold, BigDecimal codAmount,
-        Instant placedAt, String trackingNumber) {}
+        Instant placedAt, String trackingNumber,
+        String deliveryState, String exceptionReason) {}
 
     public record OrderPage(List<OrderSummary> items, int page, int size, long total) {}
 
@@ -46,14 +47,21 @@ public class OrderController {
 
     public record ShipmentSummary(
         String id, String trackingNumber, String provider,
-        String internalState, int numberOfAttempts, String awbUrl) {}
+        String internalState, int numberOfAttempts, String awbUrl,
+        Integer exceptionCode, String exceptionReason) {}
+
+    public record DeliveryHistoryEntry(
+        String state, Integer providerState,
+        Integer exceptionCode, String exceptionReason,
+        Instant occurredAt) {}
 
     public record OrderDetail(
         String id, String number, String customerName, String customerPhone,
         Object address, String paymentMethod, BigDecimal codAmount,
         String status, boolean onHold, String holdReason,
         Instant placedAt, Instant createdAt,
-        List<OrderItem> items, ShipmentSummary shipment) {}
+        List<OrderItem> items, ShipmentSummary shipment,
+        List<DeliveryHistoryEntry> deliveryHistory) {}
 
     // ── daily order counts (dashboard chart) ────────────────────────────────
 
@@ -134,7 +142,9 @@ public class OrderController {
             """
             SELECT o.id, o.number, o.customer_name, o.customer_phone,
                    o.status, o.on_hold, o.cod_amount, o.placed_at,
-                   s.tracking_number
+                   s.tracking_number,
+                   s.internal_state AS delivery_state,
+                   s.exception_reason AS exception_reason
             """ + baseJoin + """
              ORDER BY o.placed_at DESC NULLS LAST, o.created_at DESC
              LIMIT ? OFFSET ?
@@ -148,7 +158,9 @@ public class OrderController {
                 rs.getBoolean("on_hold"),
                 rs.getBigDecimal("cod_amount"),
                 rs.getTimestamp("placed_at") != null ? rs.getTimestamp("placed_at").toInstant() : null,
-                rs.getString("tracking_number")
+                rs.getString("tracking_number"),
+                rs.getString("delivery_state"),
+                rs.getString("exception_reason")
             ),
             pageParams.toArray()));
 
@@ -193,7 +205,7 @@ public class OrderController {
                         rs.getString("hold_reason"),
                         rs.getTimestamp("placed_at") != null ? rs.getTimestamp("placed_at").toInstant() : null,
                         rs.getTimestamp("created_at").toInstant(),
-                        null, null  // items + shipment filled below
+                        null, null, null  // items + shipment + deliveryHistory filled below
                     );
                 }, orderId);
 
@@ -204,7 +216,7 @@ public class OrderController {
             ShipmentSummary shipment = jdbc.query(
                 """
                 SELECT id, tracking_number, provider, internal_state,
-                       number_of_attempts, awb_url
+                       number_of_attempts, awb_url, exception_code, exception_reason
                 FROM shipments WHERE order_id = ?
                 ORDER BY created_at DESC LIMIT 1
                 """,
@@ -216,16 +228,40 @@ public class OrderController {
                         rs.getString("provider"),
                         rs.getString("internal_state"),
                         rs.getInt("number_of_attempts"),
-                        rs.getString("awb_url")
+                        rs.getString("awb_url"),
+                        rs.getObject("exception_code", Integer.class),
+                        rs.getString("exception_reason")
                     );
                 }, orderId);
+
+            // Fetch delivery history from shipment_status_history (if shipment exists).
+            List<DeliveryHistoryEntry> deliveryHistory = List.of();
+            if (shipment != null) {
+                UUID shipmentId = UUID.fromString(shipment.id());
+                deliveryHistory = jdbc.query(
+                    """
+                    SELECT internal_state, provider_state, exception_code,
+                           exception_reason, occurred_at
+                    FROM shipment_status_history
+                    WHERE shipment_id = ?
+                    ORDER BY occurred_at ASC
+                    """,
+                    (rs, i) -> new DeliveryHistoryEntry(
+                        rs.getString("internal_state"),
+                        rs.getObject("provider_state", Integer.class),
+                        rs.getObject("exception_code", Integer.class),
+                        rs.getString("exception_reason"),
+                        rs.getTimestamp("occurred_at").toInstant()
+                    ),
+                    shipmentId);
+            }
 
             return new OrderDetail(
                 order.id(), order.number(), order.customerName(), order.customerPhone(),
                 order.address(), order.paymentMethod(), order.codAmount(),
                 order.status(), order.onHold(), order.holdReason(),
                 order.placedAt(), order.createdAt(),
-                items, shipment);
+                items, shipment, deliveryHistory);
         });
     }
 

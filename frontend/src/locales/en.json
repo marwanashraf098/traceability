@@ -66,6 +66,7 @@
       "number": "Order #",
       "customer": "Customer",
       "status": "Status",
+      "delivery": "Bosta",
       "cod": "COD",
       "placedAt": "Placed",
       "tracking": "Tracking"
@@ -94,7 +95,25 @@
     "attempts": "Attempts",
     "awb": "AWB",
     "pieces": "Allocated pieces",
-    "noPieces": "No pieces allocated"
+    "noPieces": "No pieces allocated",
+    "deliveryHistory": "Delivery history",
+    "noDeliveryHistory": "No history recorded yet — transitions will appear here as they occur.",
+    "historyToggleShow": "Show history",
+    "historyToggleHide": "Hide history"
+  },
+  "delivery": {
+    "state": {
+      "created": "Preparing",
+      "with_courier": "In Transit",
+      "delivered": "Delivered",
+      "returning": "Returning",
+      "returned": "Returned",
+      "exception": "Exception",
+      "terminated": "Terminated",
+      "cancelled": "Cancelled",
+      "lost": "Lost",
+      "awaiting": "Awaiting shipment"
+    }
   },
   "catalog": {
     "title": "Catalog",

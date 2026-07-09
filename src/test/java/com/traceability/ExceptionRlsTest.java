@@ -126,7 +126,7 @@ class ExceptionRlsTest {
         jdbc.update(
             "INSERT INTO orders (tenant_id, store_id, external_id, number, status, " +
             "    payment_method, placed_at, on_hold, hold_reason) " +
-            "VALUES (?, ?, 'RLS-HOLD-001', '#RLS-001', 'processing'::order_status, " +
+            "VALUES (?, ?, 'RLS-HOLD-001', '#RLS-001', 'new'::order_status, " +
             "    'cod', now(), true, 'Blocked customer')",
             tenantId, storeId);
 

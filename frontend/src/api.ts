@@ -83,6 +83,8 @@ export interface OrderSummary {
   codAmount: number | null
   placedAt: string | null
   trackingNumber: string | null
+  deliveryState: string | null
+  exceptionReason: string | null
 }
 
 export interface OrderPage {
@@ -114,6 +116,16 @@ export interface ShipmentSummary {
   internalState: string
   numberOfAttempts: number
   awbUrl: string | null
+  exceptionCode: number | null
+  exceptionReason: string | null
+}
+
+export interface DeliveryHistoryEntry {
+  state: string
+  providerState: number | null
+  exceptionCode: number | null
+  exceptionReason: string | null
+  occurredAt: string
 }
 
 export interface OrderDetail {
@@ -131,6 +143,7 @@ export interface OrderDetail {
   createdAt: string
   items: OrderItem[]
   shipment: ShipmentSummary | null
+  deliveryHistory: DeliveryHistoryEntry[]
 }
 
 export interface OrderListParams {

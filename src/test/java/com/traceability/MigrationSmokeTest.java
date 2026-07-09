@@ -40,7 +40,8 @@ class MigrationSmokeTest {
             "unlinked_bosta_deliveries",
             "receipt_lines", "label_reprints",
             "exception_resolutions",
-            "shopify_webhook_events"
+            "shopify_webhook_events",
+            "shipment_status_history"
     );
 
     @Test
@@ -58,8 +59,8 @@ class MigrationSmokeTest {
                 .as("Flyway migrations must succeed")
                 .isTrue();
         assertThat(result.migrationsExecuted)
-                .as("V1–V37 must execute")
-                .isEqualTo(37);
+                .as("all migrations V1–V40 must execute")
+                .isEqualTo(39);
 
         try (Connection conn = DriverManager.getConnection(
                 POSTGRES.getJdbcUrl(),

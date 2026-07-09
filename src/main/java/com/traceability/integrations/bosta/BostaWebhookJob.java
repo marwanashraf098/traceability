@@ -261,6 +261,21 @@ public class BostaWebhookJob {
                     delivery.raw().toString(), isReturnedState,
                     fExceptionCode, fExceptionReason,
                     resolvedShipment.id());
+
+                // 9.5 — History row for the delivery timeline (idempotent).
+                jdbc.update("""
+                    INSERT INTO shipment_status_history
+                        (tenant_id, shipment_id, internal_state, provider_state,
+                         exception_code, exception_reason, webhook_event_id)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT (webhook_event_id)
+                        WHERE webhook_event_id IS NOT NULL
+                    DO NOTHING
+                    """,
+                    tenantId, resolvedShipment.id(),
+                    mapped.shipmentInternalState(), delivery.stateCode(),
+                    fExceptionCode, fExceptionReason,
+                    webhookEventId);
                 return null;
             });
 

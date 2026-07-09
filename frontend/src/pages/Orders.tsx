@@ -2,7 +2,7 @@ import { useEffect, useState, useCallback } from 'react'
 import { Link } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { listOrders, OrderPage, listShopifyStores, syncShopifyStore } from '../api'
-import { EmptyState, Spinner } from '../components/ui'
+import { DeliveryBadge, EmptyState, Spinner } from '../components/ui'
 
 const ORDER_STATUSES = [
   'new', 'confirmed', 'ready_to_pick', 'picking', 'packed',
@@ -134,8 +134,8 @@ export default function Orders() {
         <table className="min-w-full">
           <thead>
             <tr className="border-b border-line">
-              {(['number','customer','status','cod','placedAt','tracking'] as const).map(col => (
-                <th key={col} className="tbl-header">{t(`orders.columns.${col}`)}</th>
+              {(['number','customer','status','delivery','cod','placedAt','tracking'] as const).map(col => (
+                <th key={col} className="tbl-header">{t(`orders.columns.${col}`, { defaultValue: col })}</th>
               ))}
             </tr>
           </thead>
@@ -178,13 +178,23 @@ export default function Orders() {
                       )}
                     </div>
                   </td>
+                  <td className="tbl-cell">
+                    {order.trackingNumber ? (
+                      <DeliveryBadge
+                        state={order.deliveryState}
+                        exceptionReason={order.exceptionReason}
+                      />
+                    ) : (
+                      <span className="text-muted text-small">{t('common.na')}</span>
+                    )}
+                  </td>
                   <td className="tbl-cell text-warning">
                     {order.codAmount != null ? `${order.codAmount.toLocaleString()} EGP` : <span className="text-muted">{t('common.na')}</span>}
                   </td>
                   <td className="tbl-cell text-muted text-small">
                     {order.placedAt ? new Date(order.placedAt).toLocaleDateString() : t('common.na')}
                   </td>
-                  <td className="tbl-cell font-mono text-small text-muted">
+                  <td className="tbl-cell font-mono text-caption text-muted">
                     {order.trackingNumber ?? t('common.na')}
                   </td>
                 </tr>

@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
-import { getOrder, OrderDetail as IOrderDetail } from '../api'
-import { Badge, Spinner } from '../components/ui'
+import { getOrder, OrderDetail as IOrderDetail, DeliveryHistoryEntry } from '../api'
+import { Badge, DeliveryBadge, Spinner } from '../components/ui'
 
 export default function OrderDetail() {
   const { t } = useTranslation()
@@ -10,6 +10,7 @@ export default function OrderDetail() {
   const [order, setOrder] = useState<IOrderDetail | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+  const [historyOpen, setHistoryOpen] = useState(false)
 
   useEffect(() => {
     if (!id) return
@@ -78,15 +79,26 @@ export default function OrderDetail() {
             </dl>
           </section>
 
-          {order.shipment && (
-            <section className="card p-4">
-              <h2 className="text-caption text-muted uppercase tracking-widest mb-3">
+          {order.shipment ? (
+            <section className="card p-4 space-y-3">
+              <h2 className="text-caption text-muted uppercase tracking-widest">
                 {t('orderDetail.shipment')}
               </h2>
+
+              {/* Delivery status — prominent */}
+              <div className="flex items-start gap-2">
+                <dt className="text-small text-muted w-24 shrink-0">{t('orderDetail.status')}</dt>
+                <dd>
+                  <DeliveryBadge
+                    state={order.shipment.internalState}
+                    exceptionReason={order.shipment.exceptionReason}
+                  />
+                </dd>
+              </div>
+
               <dl className="space-y-2">
                 <InfoRow label={t('orderDetail.tracking')} value={order.shipment.trackingNumber} mono />
                 <InfoRow label={t('orderDetail.provider')} value={order.shipment.provider} />
-                <InfoRow label={t('orderDetail.status')}   value={order.shipment.internalState.replace(/_/g, ' ')} />
                 <InfoRow label={t('orderDetail.attempts')} value={String(order.shipment.numberOfAttempts)} />
                 {order.shipment.awbUrl && (
                   <div className="flex gap-2 items-start">
@@ -98,6 +110,32 @@ export default function OrderDetail() {
                   </div>
                 )}
               </dl>
+
+              {/* Expandable delivery history */}
+              <div className="border-t border-line pt-3">
+                <button
+                  onClick={() => setHistoryOpen(o => !o)}
+                  className="text-small text-brand hover:text-brand-hover transition-colors flex items-center gap-1"
+                >
+                  <span>{historyOpen ? '▾' : '▸'}</span>
+                  <span>{historyOpen ? t('orderDetail.historyToggleHide') : t('orderDetail.historyToggleShow')}</span>
+                </button>
+
+                {historyOpen && (
+                  <DeliveryTimeline
+                    entries={order.deliveryHistory}
+                    noHistoryText={t('orderDetail.noDeliveryHistory')}
+                    title={t('orderDetail.deliveryHistory')}
+                  />
+                )}
+              </div>
+            </section>
+          ) : (
+            <section className="card p-4">
+              <h2 className="text-caption text-muted uppercase tracking-widest mb-3">
+                {t('orderDetail.shipment')}
+              </h2>
+              <DeliveryBadge state={null} />
             </section>
           )}
         </div>
@@ -151,6 +189,50 @@ function InfoRow({ label, value, mono }: { label: string; value: string | null |
       <dd className={`text-small text-primary ${mono ? 'font-mono text-caption' : ''}`}>
         {value ?? <span className="text-muted">{t('common.na')}</span>}
       </dd>
+    </div>
+  )
+}
+
+function DeliveryTimeline({
+  entries,
+  noHistoryText,
+  title,
+}: {
+  entries: DeliveryHistoryEntry[]
+  noHistoryText: string
+  title: string
+}) {
+  const { t } = useTranslation()
+  if (entries.length === 0) {
+    return <p className="text-small text-muted mt-3">{noHistoryText}</p>
+  }
+  return (
+    <div className="mt-3">
+      <p className="text-caption text-muted uppercase tracking-widest mb-2">{title}</p>
+      <ol className="relative border-l border-line ml-2 space-y-3">
+        {entries.map((e, i) => {
+          const label = t(`delivery.state.${e.state}`, { defaultValue: e.state.replace(/_/g, ' ') })
+          const isLast = i === entries.length - 1
+          return (
+            <li key={i} className="ml-4">
+              <span className={`absolute -left-1.5 mt-0.5 h-3 w-3 rounded-full border-2 border-base
+                ${isLast ? 'bg-brand' : 'bg-line'}`}
+              />
+              <div className="flex items-baseline gap-2">
+                <span className={`text-small font-medium ${isLast ? 'text-primary' : 'text-muted'}`}>
+                  {label}
+                </span>
+                <span className="text-caption text-muted">
+                  {new Date(e.occurredAt).toLocaleString()}
+                </span>
+              </div>
+              {e.exceptionReason && (
+                <p className="text-caption text-danger mt-0.5">{e.exceptionReason}</p>
+              )}
+            </li>
+          )
+        })}
+      </ol>
     </div>
   )
 }
