@@ -252,6 +252,12 @@ public class ShipmentLinkService {
             ? delivery.raw().path("receiver").path("phone").asText(null) : null;
         blocklist.checkAndHoldIfBlocked(orderId, bostaRawPhone, tenantId);
 
+        // FR-4.4: resolve the unlinked row that was written when a prior ingest attempt
+        // failed to match this tracking number. Idempotent — no-op if no unlinked row exists.
+        // Runs in the same tx.execute() block the caller (BostaWebhookJob) wraps around us,
+        // so the resolve is atomic with createOrFindShipment(): either both commit or neither does.
+        resolveUnlinked(tenantId, trackingNumber);
+
         log.info("Auto-matched delivery {} to order {}", trackingNumber, orderId);
         return new LinkResult(orderId, null);
     }
