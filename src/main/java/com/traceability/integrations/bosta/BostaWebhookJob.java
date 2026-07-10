@@ -367,13 +367,25 @@ public class BostaWebhookJob {
 
     // ---- helpers -----------------------------------------------------------
 
-    private void recordUnlinked(UUID tenantId, String trackingNumber,
-                                 BostaDelivery delivery, long webhookEventId, String matchReason) {
+    // Package-private so NotCreatedFlagRecoveryTest can call it directly.
+    void recordUnlinked(UUID tenantId, String trackingNumber,
+                        BostaDelivery delivery, long webhookEventId, String matchReason) {
         // ON CONFLICT upsert against uix_unlinked_active_per_tracking (V34).
         // Re-running backfill or redelivering a webhook for the same unmatched tracking
         // updates the existing row instead of inserting a duplicate.
         // first_seen_at and webhook_event_id are intentionally preserved from the first insert.
         tx.execute(s -> {
+            // Count before the upsert to distinguish first arrival from a state update.
+            // xmax is NOT safe for this: RETURNING xmax = 0 on both INSERT and ON CONFLICT
+            // DO UPDATE, because both create a new tuple version with xmax = 0. A count-before
+            // read is deterministic under READ COMMITTED and safe under the session-mode pooler
+            // (:5432) — all three statements share one backend connection per transaction.
+            Integer existing = jdbc.queryForObject(
+                "SELECT COUNT(*) FROM unlinked_bosta_deliveries " +
+                "WHERE tenant_id = ? AND tracking_number = ? AND resolved = false",
+                Integer.class, tenantId, trackingNumber);
+            boolean isFirstArrival = (existing == null || existing == 0);
+
             jdbc.update("""
                 INSERT INTO unlinked_bosta_deliveries
                     (tenant_id, tracking_number, business_reference,
@@ -391,6 +403,32 @@ public class BostaWebhookJob {
                 tenantId, trackingNumber, delivery.businessReference(),
                 delivery.stateCode(), delivery.type(), delivery.raw().toString(),
                 webhookEventId, matchReason);
+
+            // FR-4.4: on first arrival only, clear the 'not_created' flag on any order
+            // whose number matches this delivery's businessReference. This lets the reconcile
+            // job retry linking on the next 5-minute cycle via its normal manualLink() path.
+            // Guard: isFirstArrival=false for ON CONFLICT DO UPDATE (state changes on the same
+            // tracking number) — prevents flag oscillation where every Bosta state update
+            // re-clears the flag and the order ping-pongs between not_created and null.
+            if (isFirstArrival
+                    && delivery.businessReference() != null
+                    && !delivery.businessReference().isBlank()) {
+                String ref     = delivery.businessReference();
+                String stripped = ref.startsWith("#") ? ref.substring(1) : ref;
+                String hashed   = "#" + stripped;
+                int cleared = jdbc.update(
+                    "UPDATE orders " +
+                    "SET bosta_link_status = NULL, bosta_link_attempts = 0, bosta_link_last_check = NULL " +
+                    "WHERE tenant_id = ? " +
+                    "  AND bosta_link_status = 'not_created' " +
+                    "  AND (number = ? OR number = ? OR number = ? OR external_id = ?)",
+                    tenantId, ref, stripped, hashed, ref);
+                if (cleared > 0) {
+                    log.info("recordUnlinked: cleared not_created flag on {} order(s) for " +
+                        "businessRef='{}' — first arrival of tracking {}",
+                        cleared, ref, trackingNumber);
+                }
+            }
             return null;
         });
     }
