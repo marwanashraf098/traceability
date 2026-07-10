@@ -126,9 +126,17 @@ public class OrderController {
             params.add("%" + tracking.trim() + "%");
         }
 
+        // LATERAL picks the latest shipment per order (by id DESC) so re-shipped orders
+        // (terminated + new active) don't produce duplicate rows or inflate COUNT(*).
         String baseJoin = """
             FROM orders o
-            LEFT JOIN shipments s ON s.order_id = o.id AND s.tenant_id = o.tenant_id
+            LEFT JOIN LATERAL (
+                SELECT tracking_number, internal_state, exception_reason
+                FROM shipments
+                WHERE order_id = o.id AND tenant_id = o.tenant_id
+                ORDER BY id DESC
+                LIMIT 1
+            ) s ON true
             """ + where;
 
         long total = tx.execute(txs -> jdbc.queryForObject(
