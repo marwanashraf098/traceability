@@ -134,7 +134,7 @@ export default function Orders() {
         <table className="min-w-full">
           <thead>
             <tr className="border-b border-line">
-              {(['number','customer','status','delivery','cod','placedAt','tracking'] as const).map(col => (
+              {(['number','customer','status','cod','placedAt','tracking'] as const).map(col => (
                 <th key={col} className="tbl-header">{t(`orders.columns.${col}`, { defaultValue: col })}</th>
               ))}
             </tr>
@@ -167,26 +167,23 @@ export default function Orders() {
                     )}
                   </td>
                   <td className="tbl-cell">
-                    <div className="flex items-center gap-1.5">
-                      <span className={`badge border ${STATUS_STYLE[order.status] ?? 'bg-muted/10 text-muted border-muted/20'}`}>
-                        {order.status.replace(/_/g, ' ')}
-                      </span>
+                    <div className="flex flex-wrap items-start gap-1.5">
+                      {order.deliveryState ? (
+                        <DeliveryBadge
+                          state={order.deliveryState}
+                          exceptionReason={order.exceptionReason}
+                        />
+                      ) : (
+                        <span className={`badge border ${STATUS_STYLE[order.status] ?? 'bg-muted/10 text-muted border-muted/20'}`}>
+                          {t(`orders.pipeline.${order.status}`, { defaultValue: order.status.replace(/_/g, ' ') })}
+                        </span>
+                      )}
                       {order.onHold && (
                         <span className="badge border bg-danger/10 text-danger border-danger/20 font-bold">
-                          HOLD
+                          {t('orderDetail.onHold')}
                         </span>
                       )}
                     </div>
-                  </td>
-                  <td className="tbl-cell">
-                    {order.trackingNumber ? (
-                      <DeliveryBadge
-                        state={order.deliveryState}
-                        exceptionReason={order.exceptionReason}
-                      />
-                    ) : (
-                      <span className="text-muted text-small">{t('common.na')}</span>
-                    )}
                   </td>
                   <td className="tbl-cell text-warning">
                     {order.codAmount != null ? `${order.codAmount.toLocaleString()} EGP` : <span className="text-muted">{t('common.na')}</span>}
