@@ -135,7 +135,13 @@ export default function OrderDetail() {
               <h2 className="text-caption text-muted uppercase tracking-widest mb-3">
                 {t('orderDetail.shipment')}
               </h2>
-              <DeliveryBadge state={null} />
+              {order.bostaLinkStatus === 'not_created' ? (
+                <span className="badge border bg-danger/10 text-danger border-danger/20">
+                  {t('delivery.state.not_created')}
+                </span>
+              ) : (
+                <DeliveryBadge state={null} />
+              )}
             </section>
           )}
         </div>

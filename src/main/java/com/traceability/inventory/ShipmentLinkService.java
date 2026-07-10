@@ -152,7 +152,12 @@ public class ShipmentLinkService {
             "WHERE id = ? AND tenant_id = ? AND status = 'packed'",
             orderId, tenantId);
 
-        // 6. Resolve any previously-unlinked entry for this tracking number
+        // 6. Clear the reconcile 'not_created' flag if it was set.
+        // This covers the case where the merchant packed and scanned an AWB after
+        // the reconcile job had already flagged the order as not_created.
+        clearReconcileFlag(orderId, tenantId);
+
+        // 7. Resolve any previously-unlinked entry for this tracking number
         resolveUnlinked(tenantId, trackingNumber);
 
         log.info("Order {} AWB-linked to {} ({} pieces)", orderNumber, trackingNumber, linked);
@@ -394,6 +399,7 @@ public class ShipmentLinkService {
                         bostaId, existing);
                 }
             }
+            clearReconcileFlag(orderId, tenantId);
             return existing;
         }
 
@@ -408,7 +414,18 @@ public class ShipmentLinkService {
             "(id, tenant_id, order_id, provider, tracking_number, internal_state, raw, provider_delivery_id) " +
             "VALUES (?, ?, ?, 'bosta', ?, ?::shipment_internal_state, ?::jsonb, ?)",
             id, tenantId, orderId, trackingNumber, internalState, rawJson, bostaId);
+        clearReconcileFlag(orderId, tenantId);
         return id;
+    }
+
+    private void clearReconcileFlag(UUID orderId, UUID tenantId) {
+        // Idempotent: WHERE bosta_link_status IS NOT NULL makes this a no-op for
+        // orders that were never flagged (the common case).
+        jdbc.update(
+            "UPDATE orders SET bosta_link_status = NULL, bosta_link_attempts = 0, " +
+            "    bosta_link_last_check = NULL " +
+            "WHERE id = ? AND tenant_id = ? AND bosta_link_status IS NOT NULL",
+            orderId, tenantId);
     }
 
     private void fetchAndStoreProviderDeliveryId(UUID shipmentId, String trackingNumber, UUID tenantId) {

@@ -94,6 +94,13 @@ bosta:
     #   Tier 1: 20 cycles/hr × 16 fetches × 1 webhook re-fetch = ~640 API calls/hr (sequential)
     #   Tier 2: 3 cycles/hr × (3 list calls + ~50 per-shipment) = ~159 API calls/hr
     #   Total: ~800 API calls/hr/tenant at current scale
+  reconcile:
+    # Tier 3 — Order Reconcile: detects orders with no linked Bosta delivery.
+    # Works purely against local unlinked_bosta_deliveries — no Bosta API calls.
+    enabled: true
+    max-attempts: 10       # cycles without a match before flagging as not_created
+    lookback-days: 30      # only reconcile orders placed within this window
+    batch-size: 50         # max orders checked per tenant per run
 
 org:
   jobrunr:

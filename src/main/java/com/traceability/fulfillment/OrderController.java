@@ -35,7 +35,7 @@ public class OrderController {
         String id, String number, String customerName, String customerPhone,
         String status, boolean onHold, BigDecimal codAmount,
         Instant placedAt, String trackingNumber,
-        String deliveryState, String exceptionReason) {}
+        String deliveryState, String exceptionReason, String bostaLinkStatus) {}
 
     public record OrderPage(List<OrderSummary> items, int page, int size, long total) {}
 
@@ -61,7 +61,7 @@ public class OrderController {
         String status, boolean onHold, String holdReason,
         Instant placedAt, Instant createdAt,
         List<OrderItem> items, ShipmentSummary shipment,
-        List<DeliveryHistoryEntry> deliveryHistory) {}
+        List<DeliveryHistoryEntry> deliveryHistory, String bostaLinkStatus) {}
 
     // ── daily order counts (dashboard chart) ────────────────────────────────
 
@@ -152,7 +152,8 @@ public class OrderController {
                    o.status, o.on_hold, o.cod_amount, o.placed_at,
                    s.tracking_number,
                    s.internal_state AS delivery_state,
-                   s.exception_reason AS exception_reason
+                   s.exception_reason AS exception_reason,
+                   o.bosta_link_status
             """ + baseJoin + """
              ORDER BY o.placed_at DESC NULLS LAST, o.created_at DESC
              LIMIT ? OFFSET ?
@@ -168,7 +169,8 @@ public class OrderController {
                 rs.getTimestamp("placed_at") != null ? rs.getTimestamp("placed_at").toInstant() : null,
                 rs.getString("tracking_number"),
                 rs.getString("delivery_state"),
-                rs.getString("exception_reason")
+                rs.getString("exception_reason"),
+                rs.getString("bosta_link_status")
             ),
             pageParams.toArray()));
 
@@ -188,7 +190,7 @@ public class OrderController {
                 SELECT o.id, o.number, o.customer_name, o.customer_phone,
                        o.address, o.payment_method, o.cod_amount,
                        o.status, o.on_hold, o.hold_reason,
-                       o.placed_at, o.created_at
+                       o.placed_at, o.created_at, o.bosta_link_status
                 FROM orders o
                 WHERE o.id = ?
                   AND o.tenant_id = NULLIF(current_setting('app.current_tenant', true), '')::uuid
@@ -213,7 +215,8 @@ public class OrderController {
                         rs.getString("hold_reason"),
                         rs.getTimestamp("placed_at") != null ? rs.getTimestamp("placed_at").toInstant() : null,
                         rs.getTimestamp("created_at").toInstant(),
-                        null, null, null  // items + shipment + deliveryHistory filled below
+                        null, null, null,  // items + shipment + deliveryHistory filled below
+                        rs.getString("bosta_link_status")
                     );
                 }, orderId);
 
@@ -269,7 +272,7 @@ public class OrderController {
                 order.address(), order.paymentMethod(), order.codAmount(),
                 order.status(), order.onHold(), order.holdReason(),
                 order.placedAt(), order.createdAt(),
-                items, shipment, deliveryHistory);
+                items, shipment, deliveryHistory, order.bostaLinkStatus());
         });
     }
 

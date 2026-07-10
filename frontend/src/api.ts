@@ -85,6 +85,7 @@ export interface OrderSummary {
   trackingNumber: string | null
   deliveryState: string | null
   exceptionReason: string | null
+  bostaLinkStatus: string | null
 }
 
 export interface OrderPage {
@@ -144,6 +145,7 @@ export interface OrderDetail {
   items: OrderItem[]
   shipment: ShipmentSummary | null
   deliveryHistory: DeliveryHistoryEntry[]
+  bostaLinkStatus: string | null
 }
 
 export interface OrderListParams {

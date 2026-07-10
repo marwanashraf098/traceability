@@ -173,6 +173,10 @@ export default function Orders() {
                           state={order.deliveryState}
                           exceptionReason={order.exceptionReason}
                         />
+                      ) : order.bostaLinkStatus === 'not_created' ? (
+                        <span className="badge border bg-danger/10 text-danger border-danger/20">
+                          {t('delivery.state.not_created')}
+                        </span>
                       ) : (
                         <span className={`badge border ${STATUS_STYLE[order.status] ?? 'bg-muted/10 text-muted border-muted/20'}`}>
                           {t(`orders.pipeline.${order.status}`, { defaultValue: order.status.replace(/_/g, ' ') })}

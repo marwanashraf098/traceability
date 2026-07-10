@@ -125,7 +125,8 @@
       "terminated": "إنهاء الشحنة",
       "cancelled": "ملغي",
       "lost": "مفقود",
-      "awaiting": "في انتظار الشحن"
+      "awaiting": "في انتظار الشحن",
+      "not_created": "لم تُنشأ شحنة"
     }
   },
   "catalog": {
