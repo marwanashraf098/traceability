@@ -97,6 +97,11 @@ public class ShopifyOAuthService {
              WHERE id = ?
             """;
 
+    // Constraint name defined in V42__users_email_unique.sql — must stay in sync.
+    // Used to distinguish a users.email 23505 from a stores.shop_domain 23505 in the
+    // DuplicateKeyException handler inside provisionNewTenant().
+    static final String USERS_EMAIL_CONSTRAINT = "users_email_unique";
+
     private final JdbcTemplate              jdbc;
     private final ShopifyGateway            shopifyGateway;
     private final EncryptionService         encryptionService;
@@ -340,18 +345,39 @@ public class ShopifyOAuthService {
         }
 
         // No TenantContext needed — SECURITY DEFINER bypasses RLS.
+        // DuplicateKeyException handling: provision_tenant_from_shopify does three INSERTs
+        // (tenants → users → stores). Two distinct 23505 paths exist:
+        //   • users.email (USERS_EMAIL_CONSTRAINT): fires on the second INSERT; all three
+        //     INSERTs roll back cleanly (no orphan tenant/store). The store was never written,
+        //     so resolveShopOwner(shop) returns null — raceRelink(null) would misfire as
+        //     SHOPIFY_STATE_INVALID. Catch here and throw a specific 409 instead.
+        //   • stores.shop_domain: fires on the third INSERT; all three INSERTs roll back.
+        //     resolveShopOwner(shop) returns the winning tenant — re-throw for linkOrProvision()
+        //     to handle via raceRelink().
         record ProvRow(UUID tenantId, UUID ownerId, UUID storeId) {}
-        ProvRow row = tx.execute(s ->
-            jdbc.query(
-                "SELECT tenant_id, owner_user_id, store_id " +
-                "FROM provision_tenant_from_shopify(?,?,?,?,?)",
-                rs -> rs.next()
-                    ? new ProvRow(
-                        rs.getObject("tenant_id",     UUID.class),
-                        rs.getObject("owner_user_id", UUID.class),
-                        rs.getObject("store_id",      UUID.class))
-                    : null,
-                shop, shopInfo.email(), shopInfo.name(), shopInfo.timezone(), encryptedToken));
+        ProvRow row;
+        try {
+            row = tx.execute(s ->
+                jdbc.query(
+                    "SELECT tenant_id, owner_user_id, store_id " +
+                    "FROM provision_tenant_from_shopify(?,?,?,?,?)",
+                    rs -> rs.next()
+                        ? new ProvRow(
+                            rs.getObject("tenant_id",     UUID.class),
+                            rs.getObject("owner_user_id", UUID.class),
+                            rs.getObject("store_id",      UUID.class))
+                        : null,
+                    shop, shopInfo.email(), shopInfo.name(), shopInfo.timezone(), encryptedToken));
+        } catch (DuplicateKeyException e) {
+            if (e.getMessage() != null && e.getMessage().contains(USERS_EMAIL_CONSTRAINT)) {
+                throw new ShopifyOAuthException(
+                    ShopifyOAuthException.Code.SHOPIFY_EMAIL_ALREADY_REGISTERED,
+                    "An account already exists for this email address — please log in instead",
+                    "يوجد بالفعل حساب لهذا البريد الإلكتروني — يرجى تسجيل الدخول",
+                    HttpStatus.CONFLICT);
+            }
+            throw e; // stores.shop_domain collision — raceRelink() in linkOrProvision() handles it
+        }
 
         if (row == null) {
             throw new ShopifyOAuthException(

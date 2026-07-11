@@ -22,7 +22,9 @@ public class ShopifyOAuthException extends RuntimeException {
         SHOPIFY_STORE_ALREADY_CONNECTED, // shop owned by a different tenant (redirect, not JSON)
         SHOPIFY_SHOP_EMAIL_MISSING,      // Shopify shop resource returned no owner email
         // Day 4 codes
-        MAGIC_LINK_INVALID               // not-found / expired / consumed — no oracle (all sub-conditions identical)
+        MAGIC_LINK_INVALID,              // not-found / expired / consumed — no oracle (all sub-conditions identical)
+        // V42 codes
+        SHOPIFY_EMAIL_ALREADY_REGISTERED // provision_tenant_from_shopify 23505 on users_email_unique
     }
 
     private final Code       code;

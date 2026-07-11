@@ -1,0 +1,31 @@
+-- V42 — UNIQUE constraint on users.email
+--
+-- Login is global-email: auth_lookup_user(p_email) does a full-table scan across all
+-- tenants with no tenant_id filter (SECURITY DEFINER, RLS bypassed). Two active users
+-- sharing the same email cause jdbc.queryForObject() in AuthService.lookupUser() to
+-- throw IncorrectResultSizeDataAccessException, which propagates as HTTP 500 (not 401)
+-- because only EmptyResultDataAccessException is caught there.
+--
+-- The gap this closes: provision_tenant_from_shopify accepts p_owner_email from the
+-- Shopify shop resource. A store owner whose Shopify email matches an existing user in
+-- our system would insert a duplicate, silently breaking that user's password login.
+--
+-- Prod verified clean: zero duplicate emails as of 2026-07-11.
+--
+-- Constraint name "users_email_unique" is referenced by name in:
+--   ShopifyOAuthService.USERS_EMAIL_CONSTRAINT (provisionNewTenant 23505 handler)
+-- Keep the two in sync if the constraint is ever renamed.
+--
+-- Dev/test databases with duplicate emails: this migration fails with
+--   "ERROR: could not create unique index "users_email_unique""
+-- No partial state is written. Clean duplicates before applying:
+--   DELETE FROM users WHERE id NOT IN (
+--       SELECT MIN(id) FROM users WHERE email IS NOT NULL GROUP BY email);
+--
+-- NULL semantics: PostgreSQL UNIQUE allows multiple NULLs — staff and non-owner
+-- users created without an email column value are unaffected.
+--
+-- RLS unaffected: UNIQUE is a storage-layer constraint, not a policy change.
+
+ALTER TABLE users
+    ADD CONSTRAINT users_email_unique UNIQUE (email);
