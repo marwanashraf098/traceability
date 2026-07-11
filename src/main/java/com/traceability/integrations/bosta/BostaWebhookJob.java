@@ -67,6 +67,7 @@ public class BostaWebhookJob {
     private final ObjectMapper         mapper;
     private final InventoryLedger      ledger;
     private final com.traceability.inventory.ShipmentLinkService shipmentLinkService;
+    private final MatcherVersionHolder matcherVersionHolder;
 
     public BostaWebhookJob(JdbcTemplate jdbc,
                             PlatformTransactionManager txm,
@@ -75,7 +76,8 @@ public class BostaWebhookJob {
                             EncryptionService encryptionService,
                             ObjectMapper mapper,
                             InventoryLedger ledger,
-                            com.traceability.inventory.ShipmentLinkService shipmentLinkService) {
+                            com.traceability.inventory.ShipmentLinkService shipmentLinkService,
+                            MatcherVersionHolder matcherVersionHolder) {
         this.jdbc                = jdbc;
         this.tx                  = new TransactionTemplate(txm);
         this.bostaGateway        = bostaGateway;
@@ -84,6 +86,7 @@ public class BostaWebhookJob {
         this.mapper              = mapper;
         this.ledger              = ledger;
         this.shipmentLinkService = shipmentLinkService;
+        this.matcherVersionHolder = matcherVersionHolder;
     }
 
     // ---- private row types -------------------------------------------------
@@ -120,15 +123,27 @@ public class BostaWebhookJob {
             //    Based on the PAYLOAD (not the fetched state) so it is stable for redeliveries.
             String idemKey = sha256(trackingNumber + ":" + payloadState + ":" + timestamp);
 
-            // 4. Dedup check (optimization): sibling row already processed → mark duplicate.
+            // 4. Dedup check (version-aware): block if a prior processed event covers this idem key.
+            //    Block when:
+            //      (a) linked outcome (error IS NULL or NOT LIKE 'unlinked:%') — always block, any version
+            //      (b) unlinked at CURRENT matcher version — already retried with this logic; block
+            //    Allow retry when only unlinked outcomes with old/null version exist:
+            //      matcher_version IS NULL → pre-V44 legacy row; NULL = ? evaluates to NULL (not true)
+            //      matcher_version <> current → different deploy stamped this row; strict inequality,
+            //        no lexical ordering, safe for Flyway version strings like "9" vs "44"
             //    MUST run inside tx.execute() so TenantAwareConnection fires the GUC — webhook_events
-            //    has RLS; without the GUC a plain jdbc.queryForObject() always sees COUNT=0 (RLS
-            //    filters every row), making the dedup check a no-op and allowing re-processing.
+            //    has RLS; without the GUC the query always sees no rows, making dedup a no-op.
             boolean alreadyDone = Boolean.TRUE.equals(tx.execute(s ->
                 jdbc.queryForObject(
-                    "SELECT COUNT(*) FROM webhook_events " +
-                    "WHERE external_event_id = ? AND status = 'processed'",
-                    Integer.class, idemKey) > 0));
+                    "SELECT EXISTS (" +
+                    "  SELECT 1 FROM webhook_events " +
+                    "  WHERE external_event_id = ? AND status = 'processed'" +
+                    "    AND (" +
+                    "      error IS NULL OR error NOT LIKE 'unlinked:%' " +  // linked → always block
+                    "      OR matcher_version = ?" +                         // unlinked at current → already retried; block
+                    "    )" +                           // unlinked with NULL or different version: retry eligible → NOT matched
+                    ")",
+                    Boolean.class, idemKey, matcherVersionHolder.get())));
             if (alreadyDone) {
                 markDuplicate(webhookEventId, "duplicate: already processed");
                 return;
@@ -386,11 +401,16 @@ public class BostaWebhookJob {
                 Integer.class, tenantId, trackingNumber);
             boolean isFirstArrival = (existing == null || existing == 0);
 
+            // matcher_version stamps the current matching-logic deploy. Guard 3 in
+            // BostaIngestionHelper blocks re-enqueue when version = current (already retried).
+            // On upsert (state update, same tracking), matcher_version is refreshed to current
+            // so the steady-state guard re-arms after the retry fires.
             jdbc.update("""
                 INSERT INTO unlinked_bosta_deliveries
                     (tenant_id, tracking_number, business_reference,
-                     bosta_state_code, bosta_order_type, raw, webhook_event_id, match_reason)
-                VALUES (?, ?, ?, ?, ?, ?::jsonb, ?, ?)
+                     bosta_state_code, bosta_order_type, raw, webhook_event_id, match_reason,
+                     matcher_version)
+                VALUES (?, ?, ?, ?, ?, ?::jsonb, ?, ?, ?)
                 ON CONFLICT (tenant_id, tracking_number) WHERE resolved = false
                 DO UPDATE SET
                     bosta_state_code   = EXCLUDED.bosta_state_code,
@@ -398,11 +418,12 @@ public class BostaWebhookJob {
                     business_reference = EXCLUDED.business_reference,
                     raw                = EXCLUDED.raw,
                     match_reason       = EXCLUDED.match_reason,
+                    matcher_version    = EXCLUDED.matcher_version,
                     last_seen_at       = now()
                 """,
                 tenantId, trackingNumber, delivery.businessReference(),
                 delivery.stateCode(), delivery.type(), delivery.raw().toString(),
-                webhookEventId, matchReason);
+                webhookEventId, matchReason, matcherVersionHolder.get());
 
             // FR-4.4: on first arrival only, clear the 'not_created' flag on any order
             // whose number matches this delivery's businessReference. This lets the reconcile
@@ -454,13 +475,17 @@ public class BostaWebhookJob {
     }
 
     private void markProcessed(long id, String idemKey, String note) {
+        // matcher_version stamps the current deploy on unlinked outcomes so step 4
+        // can distinguish "already retried with this logic" (block) from "old logic
+        // produced this unlinked result" (allow one retry after deploy).
         try {
             tx.execute(s -> {
                 jdbc.update(
                     "UPDATE webhook_events " +
-                    "SET status = 'processed', external_event_id = ?, processed_at = now(), error = ? " +
+                    "SET status = 'processed', external_event_id = ?, processed_at = now(), " +
+                    "  error = ?, matcher_version = ? " +
                     "WHERE id = ?",
-                    idemKey, note, id);
+                    idemKey, note, matcherVersionHolder.get(), id);
                 return null;
             });
         } catch (DuplicateKeyException e) {

@@ -44,6 +44,7 @@ public class BostaIngestionHelper {
     private final ObjectMapper        mapper;
     private final JobScheduler        jobScheduler;
     private final BostaWebhookJob     webhookJob;
+    private final MatcherVersionHolder matcherVersionHolder;
 
     public BostaIngestionHelper(JdbcTemplate jdbc,
                                  PlatformTransactionManager txm,
@@ -51,14 +52,16 @@ public class BostaIngestionHelper {
                                  BostaStateMapper stateMapper,
                                  ObjectMapper mapper,
                                  JobScheduler jobScheduler,
-                                 BostaWebhookJob webhookJob) {
-        this.jdbc         = jdbc;
-        this.tx           = new TransactionTemplate(txm);
-        this.bostaGateway = bostaGateway;
-        this.stateMapper  = stateMapper;
-        this.mapper       = mapper;
-        this.jobScheduler = jobScheduler;
-        this.webhookJob   = webhookJob;
+                                 BostaWebhookJob webhookJob,
+                                 MatcherVersionHolder matcherVersionHolder) {
+        this.jdbc                = jdbc;
+        this.tx                  = new TransactionTemplate(txm);
+        this.bostaGateway        = bostaGateway;
+        this.stateMapper         = stateMapper;
+        this.mapper              = mapper;
+        this.jobScheduler        = jobScheduler;
+        this.webhookJob          = webhookJob;
+        this.matcherVersionHolder = matcherVersionHolder;
     }
 
     /**
@@ -143,26 +146,27 @@ public class BostaIngestionHelper {
             throw new RuntimeException("Failed to serialize payload for " + trackingNumber, e);
         }
 
-        // Guard 3: skip if this delivery is already in unlinked_bosta_deliveries at the same
-        // Bosta state. A NO_MATCH result at state X will remain NO_MATCH until the state changes
-        // (a new attempt or transit update) or an operator manually links it. Re-enqueueing every
-        // discovery-poll cycle causes wasteful API calls and (before markProcessed() was hardened)
-        // fed a JobRunr retry loop. Only proceed when the state has changed — a new state may
-        // produce a new businessReference match or be worth a fresh attempt.
+        // Guard 3 (version-aware): skip re-enqueue when an unlinked row exists at this state
+        // AND the current matcher version. Two cases allow re-enqueue (Guard 3 passes):
+        //   (a) matcher_version IS NULL — pre-V44 legacy row; NULL = ? evaluates to NULL (not true)
+        //       so the COUNT predicate is not satisfied → Guard 3 passes → one retry on first V44 cycle.
+        //   (b) matcher_version <> current — a different deploy stamped this row; retry eligible.
+        // Both cases are handled by the strict equality predicate (AND matcher_version = ?):
+        // NULL and any different value both fail to match, so COUNT = 0 → Guard 3 passes.
+        // Strict = / <> avoids lexical ordering issues with Flyway version strings (e.g. "9" vs "44").
+        //
         // Runs inside tx.execute() so TenantAwareConnection fires SET LOCAL app.current_tenant
         // and the RLS policy on unlinked_bosta_deliveries scopes the lookup to this tenant.
-        Boolean alreadyUnlinkedAtSameState = tx.execute(s ->
-            jdbc.query(
-                "SELECT bosta_state_code FROM unlinked_bosta_deliveries " +
-                "WHERE tracking_number = ? AND resolved = false LIMIT 1",
-                rs -> {
-                    if (!rs.next()) return false;
-                    return rs.getInt("bosta_state_code") == fetchedState;
-                },
-                trackingNumber));
-        if (Boolean.TRUE.equals(alreadyUnlinkedAtSameState)) {
-            log.debug("{}: {} already unlinked at state {} — skipping re-enqueue (state unchanged)",
-                source, trackingNumber, fetchedState);
+        Boolean blockedByGuard3 = tx.execute(s ->
+            jdbc.queryForObject(
+                "SELECT COUNT(*) > 0 FROM unlinked_bosta_deliveries " +
+                "WHERE tracking_number = ? AND resolved = false " +
+                "  AND bosta_state_code = ? " +
+                "  AND matcher_version = ?",  // NULL or different version → not matched → Guard 3 passes
+                Boolean.class, trackingNumber, fetchedState, matcherVersionHolder.get()));
+        if (Boolean.TRUE.equals(blockedByGuard3)) {
+            log.debug("{}: {} already unlinked at state {} (version={}) — skipping re-enqueue",
+                source, trackingNumber, fetchedState, matcherVersionHolder.get());
             return false;
         }
 

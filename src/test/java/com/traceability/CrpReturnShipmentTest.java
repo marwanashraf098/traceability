@@ -77,6 +77,9 @@ class CrpReturnShipmentTest {
     @Autowired BostaAwbService       awbService;
     @Autowired EncryptionService     encryptionService;
     @Autowired ObjectMapper          mapper;
+    @Autowired BostaWebhookJob       webhookJob;
+    @Autowired BostaIngestionHelper  ingestionHelper;
+    @Autowired MatcherVersionHolder  matcherVersionHolder;
 
     @MockBean  BostaGateway   bostaGateway;
     @MockBean  JobScheduler   jobScheduler;
@@ -334,6 +337,86 @@ class CrpReturnShipmentTest {
                 Integer.class, crpTracking, tenantId))
             .as("no shipment row must be created for an unmatched CRP delivery")
             .isZero();
+    }
+
+    // ── crp6: full-pipeline — backfill → event → BostaWebhookJob → return-leg linked ────
+
+    /**
+     * Regression test for delivery 9730639058: a CRP delivery is processed through
+     * the full ingest pipeline (BostaIngestionHelper → webhook_events INSERT →
+     * BostaWebhookJob.process()) against a tenant that already has a delivered forward
+     * shipment for the same order. V43 must allow the return-leg INSERT without
+     * conflict, and V44 must stamp matcher_version on the processed event.
+     *
+     * This covers the path that crp1-5 miss: Guard 1, Guard 3, idem-key generation,
+     * step-4 dedup (first event → passes), fetchDelivery re-fetch, and the full
+     * tryMatchDelivery → createOrFindReturnShipment pipeline.
+     */
+    @Test
+    @Order(6)
+    void crp6_fullPipeline_backfill_linksReturnLeg_againstDeliveredForward() throws Exception {
+        String orderNum    = "#CRP-006";
+        String fwdTracking = "BOS-FWD-006";
+        String crpTracking = "BOS-CRP-006";
+        String rawApiKey   = "crp-test-api-key";  // matches encApiKey from setupFixture
+
+        UUID orderId = createOrder(orderNum);
+        insertShipmentWithState(orderId, fwdTracking, "delivered", "forward", null);
+
+        // Mock gateway for both ingestDelivery fetch (Guard 1 + payload build) and
+        // BostaWebhookJob step-6 re-fetch (verify-by-fetch). Both calls return the same CRP delivery.
+        BostaDelivery crp = crpDelivery(crpTracking, 22, orderNum);
+        when(bostaGateway.fetchDelivery(anyString(), eq(crpTracking))).thenReturn(crp);
+
+        // Run ingest — creates webhook_event with status='pending', enqueue mocked (no-op)
+        boolean enqueued = TenantContext.runAs(tenantId,
+            () -> ingestionHelper.ingestDelivery(tenantId, rawApiKey, crpTracking, "bosta_backfill"));
+        assertThat(enqueued).as("ingestDelivery must create a pending event").isTrue();
+
+        Long eventId = jdbc.queryForObject(
+            "SELECT id FROM webhook_events WHERE tenant_id = ? AND payload->>'trackingNumber' = ? ORDER BY id DESC LIMIT 1",
+            Long.class, tenantId, crpTracking);
+        assertThat(eventId).as("webhook event must exist after ingestDelivery").isNotNull();
+
+        // Process the event directly (simulating JobRunr dispatch)
+        webhookJob.process(eventId, tenantId);
+
+        // Return shipment created with correct leg
+        String returnLeg = jdbc.queryForObject(
+            "SELECT shipment_leg FROM shipments WHERE tracking_number = ? AND tenant_id = ?",
+            String.class, crpTracking, tenantId);
+        assertThat(returnLeg)
+            .as("CRP must be linked as return leg after full-pipeline processing")
+            .isEqualTo("return");
+
+        // Forward shipment still delivered, untouched by CRP processing
+        String fwdState = jdbc.queryForObject(
+            "SELECT internal_state::text FROM shipments WHERE tracking_number = ? AND tenant_id = ?",
+            String.class, fwdTracking, tenantId);
+        assertThat(fwdState)
+            .as("forward shipment must remain delivered")
+            .isEqualTo("delivered");
+
+        // Event processed, matcher_version stamped (linked outcome — step 11)
+        String status = jdbc.queryForObject(
+            "SELECT status FROM webhook_events WHERE id = ?", String.class, eventId);
+        assertThat(status).as("event must be processed").isEqualTo("processed");
+
+        // No unlinked row — the delivery was matched, not stranded
+        Integer unlinkedCount = jdbc.queryForObject(
+            "SELECT COUNT(*) FROM unlinked_bosta_deliveries WHERE tracking_number = ? AND tenant_id = ?",
+            Integer.class, crpTracking, tenantId);
+        assertThat(unlinkedCount).as("no unlinked row for a successfully linked CRP delivery").isZero();
+
+        // RLS: return shipment visible to app_user
+        int visible = TenantContext.runAs(tenantId, () ->
+            appUserTx.execute(s ->
+                appUserJdbc.queryForObject(
+                    "SELECT COUNT(*) FROM shipments WHERE tracking_number = ? AND tenant_id = ?",
+                    Integer.class, crpTracking, tenantId)));
+        assertThat(visible)
+            .as("return shipment must be visible to app_user under RLS")
+            .isEqualTo(1);
     }
 
     // ── Helpers ──────────────────────────────────────────────────────────────────────────

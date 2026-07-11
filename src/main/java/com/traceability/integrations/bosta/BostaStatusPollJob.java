@@ -143,6 +143,7 @@ public class BostaStatusPollJob {
                 "  AND provider = 'bosta' " +
                 "  AND tracking_number IS NOT NULL " +
                 "  AND internal_state NOT IN (" + TERMINAL_IN_CLAUSE + ") " +
+                "  AND provider_not_found_at IS NULL " +   // FR-14: exclude permanently-unknown deliveries
                 "ORDER BY last_polled_at ASC NULLS FIRST " +
                 "LIMIT ?",
                 tenantId, maxPerCycle));
@@ -166,6 +167,19 @@ public class BostaStatusPollJob {
                             currentProviderState)) {
                         enqueued++;
                     }
+                } catch (DeliveryNotFoundException e) {
+                    // FR-14: Bosta says this tracking number does not exist (HTTP 400 "Delivery not found").
+                    // Stamp provider_not_found_at so the shipment drops out of the poll set permanently.
+                    // The shipment row is preserved for audit; internal_state is unchanged.
+                    log.warn("Status poll tenant {}: tracking {} not found in Bosta — stamping provider_not_found_at (drops from poll set)",
+                        tenantId, trackingNumber);
+                    final UUID fShipId = shipmentId;
+                    tx.execute(s -> {
+                        jdbc.update(
+                            "UPDATE shipments SET provider_not_found_at = now() WHERE id = ? AND tenant_id = ?",
+                            fShipId, tenantId);
+                        return null;
+                    });
                 } catch (BostaRateLimitException e) {
                     // Rate-limited: stop fetching ALL remaining shipments for this tenant
                     // (more calls would extend the blackout window). Record the backoff

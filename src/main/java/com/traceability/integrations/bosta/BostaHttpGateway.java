@@ -249,6 +249,15 @@ class BostaHttpGateway implements BostaGateway {
                 log.warn("fetchDelivery: HTTP 429 for tracking={} retryAfter={}s", trackingNumber, retryAfter);
                 throw new BostaRateLimitException(retryAfter);
             }
+            if (e.getStatusCode().value() == 400) {
+                // Bosta returns 400 (not 404) for unknown tracking numbers. Detect the specific
+                // message so callers can handle permanently-missing deliveries without infinite retries.
+                String body = e.getResponseBodyAsString();
+                if (body != null && body.toLowerCase().contains("delivery not found")) {
+                    log.warn("fetchDelivery: Bosta 400 'Delivery not found' for tracking={}", trackingNumber);
+                    throw new DeliveryNotFoundException(trackingNumber);
+                }
+            }
             if (e.getStatusCode().is5xxServerError()) {
                 throw new BostaTransientException("Bosta 5xx fetching delivery " + trackingNumber, e);
             }

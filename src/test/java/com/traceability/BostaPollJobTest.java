@@ -87,6 +87,7 @@ class BostaPollJobTest {
     @Autowired BostaDiscoveryPollJob discoveryPollJob;
     @Autowired BostaWebhookJob       webhookJob;
     @Autowired BostaIngestionHelper  ingestionHelper;
+    @Autowired MatcherVersionHolder  matcherVersionHolder;
     @MockBean  BostaGateway          bostaGateway;
     @MockBean  JobScheduler          jobScheduler;
 
@@ -758,11 +759,12 @@ class BostaPollJobTest {
         setupCourierAccount("poll-key-p14");
 
         // Seed an existing unlinked_bosta_deliveries row at state=41 for this tenant.
+        // matcher_version = current so Guard 3 fires (same version = already retried with this logic).
         jdbc.update(
             "INSERT INTO unlinked_bosta_deliveries " +
-            "    (tenant_id, tracking_number, bosta_state_code, bosta_order_type, match_reason) " +
-            "VALUES (?, ?, 41, 'SEND', 'NO_MATCH')",
-            tenantId, tracking);
+            "    (tenant_id, tracking_number, bosta_state_code, bosta_order_type, match_reason, matcher_version) " +
+            "VALUES (?, ?, 41, 'SEND', 'NO_MATCH', ?)",
+            tenantId, tracking, matcherVersionHolder.get());
 
         // Mock fetchDelivery to return the same delivery at state=41 (state unchanged).
         BostaDelivery sameState = new BostaDelivery(tracking, 41, "SEND", 1, null, null,
