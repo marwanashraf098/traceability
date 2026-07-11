@@ -406,7 +406,8 @@ class AwbPickupTest {
 
     /**
      * Creates an order + shipment in the given shipment internal_state (for AWB filter tests).
-     * deliveryType stored in shipments.raw->>type if non-null (for CRP/CASH_COLLECTION tests).
+     * For CRP: raw stores the actual Bosta v0 object shape {type:{code:25,value:"..."}} so
+     * BostaAwbService's (raw->'type'->>'code')::int extraction returns 25.
      */
     private UUID createShipmentWithOrder(String trackingNumber, String state,
                                           String deliveryType, BigDecimal cod) {
@@ -418,9 +419,15 @@ class AwbPickupTest {
             UUID.class, tenantId, storeId,
             "EXT-" + UUID.randomUUID(), "ORD-" + UUID.randomUUID(), cod);
 
-        String rawJson = deliveryType != null
-            ? "{\"type\":\"" + deliveryType + "\"}"
-            : "{}";
+        // CRP: use the Bosta v0 object form so (raw->'type'->>'code')::int = 25 is extractable.
+        String rawJson;
+        if ("CRP".equals(deliveryType)) {
+            rawJson = "{\"type\":{\"code\":25,\"value\":\"Customer Return Pickup\"}}";
+        } else if (deliveryType != null) {
+            rawJson = "{\"type\":\"" + deliveryType + "\"}";
+        } else {
+            rawJson = "{}";
+        }
 
         return jdbc.queryForObject(
             "INSERT INTO shipments " +

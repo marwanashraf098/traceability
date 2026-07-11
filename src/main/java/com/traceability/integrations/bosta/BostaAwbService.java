@@ -42,7 +42,11 @@ public class BostaAwbService {
     private static final Set<String> NON_PRINTABLE_STATES = Set.of(
         "delivered", "returned", "returning", "lost", "terminated", "cancelled");
 
-    private static final Set<String> NON_PRINTABLE_TYPES = Set.of("CRP", "CASH_COLLECTION");
+    // CRP (type.code=25) is excluded from AWB printing — it is a customer-return pickup,
+    // not a forward delivery, and has no printable label.
+    // TODO: CASH_COLLECTION exclusion is also broken (same raw->>'type' SQL bug) — defer,
+    //       not in FR-12.6 scope. The code field for CASH_COLLECTION is not yet confirmed.
+    private static final int CRP_TYPE_CODE = 25;
 
     private final JdbcTemplate      jdbc;
     private final TransactionTemplate tx;
@@ -118,8 +122,10 @@ public class BostaAwbService {
 
         List<Map<String, Object>> rows = TenantContext.runAs(tenantId, () ->
             tx.execute(s -> jdbc.queryForList(
+                // raw->>'type' would return the JSON object as text — never "CRP".
+                // Extract the numeric code instead: (raw->'type'->>'code')::int
                 "SELECT id, tracking_number, internal_state::text AS internal_state, " +
-                "       order_id, raw->>'type' AS delivery_type " +
+                "       order_id, (raw -> 'type' ->> 'code')::int AS delivery_type_code " +
                 "FROM shipments WHERE id IN (" + placeholders + ") AND tenant_id = ?",
                 params)));
 
@@ -131,11 +137,12 @@ public class BostaAwbService {
         Map<String, UUID> trackingToId = new HashMap<>();
 
         for (Map<String, Object> row : rows) {
-            UUID   id       = (UUID)   row.get("id");
-            String tracking = (String) row.get("tracking_number");
-            String state    = (String) row.get("internal_state");
-            String type     = (String) row.get("delivery_type");
-            Object orderId  =          row.get("order_id");
+            UUID   id             = (UUID)    row.get("id");
+            String tracking       = (String)  row.get("tracking_number");
+            String state          = (String)  row.get("internal_state");
+            Number typeCodeNum    = (Number)  row.get("delivery_type_code");
+            int    delivTypeCode  = typeCodeNum != null ? typeCodeNum.intValue() : -1;
+            Object orderId        =            row.get("order_id");
 
             String exclusionReason = null;
 
@@ -143,8 +150,8 @@ public class BostaAwbService {
                 exclusionReason = "UNLINKED";
             } else if (state != null && NON_PRINTABLE_STATES.contains(state)) {
                 exclusionReason = "NON_PRINTABLE_STATE:" + state;
-            } else if (type != null && NON_PRINTABLE_TYPES.contains(type)) {
-                exclusionReason = "NON_PRINTABLE_TYPE:" + type;
+            } else if (delivTypeCode == CRP_TYPE_CODE) {
+                exclusionReason = "NON_PRINTABLE_TYPE:CRP";
             }
 
             if (exclusionReason != null) {

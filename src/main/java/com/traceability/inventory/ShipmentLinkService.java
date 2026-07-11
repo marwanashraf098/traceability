@@ -220,17 +220,32 @@ public class ShipmentLinkService {
             return new LinkResult(null, unlinkedReason);
         }
 
-        // Step 3 — create/find shipment and link
+        // Step 3 — create/find shipment and link.
+        // CRP (type.code=25) is a separate Bosta delivery (new tracking number) created
+        // by the customer initiating a return. It gets shipment_leg='return' so it can
+        // coexist with the forward shipment under ux_active_shipment_per_order_leg (V43).
         UUID shipmentId;
-        try {
-            shipmentId = createOrFindShipment(
-                tenantId, orderId, trackingNumber, mapped.shipmentInternalState(), delivery);
-        } catch (DuplicateKeyException e) {
-            // ux_active_shipment_per_order fired: another delivery already holds the active
-            // shipment slot for this order (concurrent double-link race). Route to unlinked.
-            log.warn("Active-shipment constraint prevented double-link for order {} tracking {}",
-                     orderId, trackingNumber);
-            return new LinkResult(null, REASON_NO_MATCH);
+        if (isCrpDelivery(delivery)) {
+            try {
+                shipmentId = createOrFindReturnShipment(
+                    tenantId, orderId, trackingNumber, mapped.shipmentInternalState(), delivery);
+            } catch (DuplicateKeyException e) {
+                // Race: concurrent CRP webhook delivered twice. Winner already linked it.
+                log.warn("CRP return-leg constraint prevented double-link for order {} tracking {}",
+                         orderId, trackingNumber);
+                return new LinkResult(null, REASON_NO_MATCH);
+            }
+        } else {
+            try {
+                shipmentId = createOrFindShipment(
+                    tenantId, orderId, trackingNumber, mapped.shipmentInternalState(), delivery);
+            } catch (DuplicateKeyException e) {
+                // ux_active_shipment_per_order_leg fired: order already has an active forward
+                // shipment (concurrent double-link race). Route to unlinked.
+                log.warn("Active-forward-shipment constraint prevented double-link for order {} tracking {}",
+                         orderId, trackingNumber);
+                return new LinkResult(null, REASON_NO_MATCH);
+            }
         }
 
         transitionPackedPieces(orderId, shipmentId, tenantId, null);
@@ -468,6 +483,58 @@ public class ShipmentLinkService {
                 log.error("Failed to set provider_id_fetch_failed on shipment {}: {}", shipmentId, ex.getMessage());
             }
         }
+    }
+
+    /**
+     * Primary check: type.code==25 (CRP, Customer Return Pickup) from raw Bosta payload.
+     * The normalized type() string is "CUSTOMER RETURN PICKUP" not "CRP" — never use
+     * "CRP".equals(delivery.type()); that string exists only in the pre-V43 seed row.
+     */
+    private static boolean isCrpDelivery(BostaDelivery delivery) {
+        if (delivery == null) return false;
+        if (delivery.typeCode() == 25) return true;
+        // Secondary: catch flat-string API variants or future normalization changes
+        return "CUSTOMER RETURN PICKUP".equals(delivery.type()) || "CRP".equals(delivery.type());
+    }
+
+    /**
+     * Creates a return-leg shipment row for a CRP delivery, or finds the existing one
+     * (idempotent on tracking_number). Inserts with shipment_leg='return' so it can
+     * coexist with an active forward shipment under ux_active_shipment_per_order_leg (V43).
+     */
+    private UUID createOrFindReturnShipment(UUID tenantId, UUID orderId, String trackingNumber,
+                                             String internalState, BostaDelivery delivery) {
+        UUID existing = jdbc.query(
+            "SELECT id FROM shipments WHERE tracking_number = ? AND tenant_id = ?",
+            rs -> rs.next() ? rs.getObject("id", UUID.class) : null,
+            trackingNumber, tenantId);
+        if (existing != null) {
+            if (delivery != null && delivery.raw() != null) {
+                String bostaId = delivery.raw().path("_id").asText(null);
+                if (bostaId != null && !bostaId.isBlank()) {
+                    jdbc.update(
+                        "UPDATE shipments SET provider_delivery_id = ? " +
+                        "WHERE id = ? AND provider_delivery_id IS NULL",
+                        bostaId, existing);
+                }
+            }
+            clearReconcileFlag(orderId, tenantId);
+            return existing;
+        }
+
+        UUID id = UUID.randomUUID();
+        String rawJson = (delivery != null && delivery.raw() != null)
+            ? delivery.raw().toString() : null;
+        String bostaId = (delivery != null && delivery.raw() != null)
+            ? delivery.raw().path("_id").asText(null) : null;
+        if (bostaId != null && bostaId.isBlank()) bostaId = null;
+        jdbc.update(
+            "INSERT INTO shipments " +
+            "(id, tenant_id, order_id, provider, tracking_number, internal_state, shipment_leg, raw, provider_delivery_id) " +
+            "VALUES (?, ?, ?, 'bosta', ?, ?::shipment_internal_state, 'return', ?::jsonb, ?)",
+            id, tenantId, orderId, trackingNumber, internalState, rawJson, bostaId);
+        clearReconcileFlag(orderId, tenantId);
+        return id;
     }
 
     private void resolveUnlinked(UUID tenantId, String trackingNumber) {

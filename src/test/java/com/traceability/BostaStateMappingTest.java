@@ -349,7 +349,7 @@ class BostaStateMappingTest {
         assertThat(s11.pieceStatusAfter()).isNull();
     }
 
-    // ── s12: state 41:FXF_SEND → with_courier; 41:EXCHANGE → returning ───────
+    // ── s12: state 41 type variants — FXF_SEND/EXCHANGE/CRP (V43: 'CUSTOMER RETURN PICKUP') ───────
 
     @Test
     void s12_stateMapper_state41Variants_disambiguated() {
@@ -361,9 +361,19 @@ class BostaStateMappingTest {
         assertThat(exchange.shipmentInternalState()).isEqualTo("returning");
         assertThat(exchange.unknownCode()).isFalse();
 
-        BostaStateMapper.MappedState crp = stateMapper.map(41, "CRP");
+        // V43 fix: V37 seeded applies_to_order_type='CRP'; Bosta API sends type.value
+        // 'Customer Return Pickup' which normalizes to 'CUSTOMER RETURN PICKUP' (not 'CRP').
+        // The old key '41:CRP' was never reached. V43 renames it to the actual string.
+        BostaStateMapper.MappedState crp = stateMapper.map(41, "CUSTOMER RETURN PICKUP");
         assertThat(crp.shipmentInternalState()).isEqualTo("returning");
+        assertThat(crp.pieceStatusAfter()).isEqualTo("return_in_transit");
         assertThat(crp.unknownCode()).isFalse();
+
+        // Confirm old key is gone — no :ALL fallback for state 41.
+        BostaStateMapper.MappedState deadKey = stateMapper.map(41, "CRP");
+        assertThat(deadKey.unknownCode())
+            .as("'41:CRP' key no longer exists after V43 rename — must be unknownCode")
+            .isTrue();
     }
 
     // ── s13: poll path with unmappable -1 → NOT enqueued (Guard 1) ───────────
