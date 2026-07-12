@@ -103,9 +103,18 @@
     "placedAt": "تاريخ الطلب",
     "items": "المنتجات",
     "shipment": "الشحنة",
+    "returnShipment": "شحنة المرتجع",
     "tracking": "رقم التتبع",
     "provider": "شركة الشحن",
     "attempts": "محاولات التسليم",
+    "failedAttempts": "{{count}} محاولة فاشلة",
+    "delayed": "متأخر",
+    "scheduledAt": "موعد التسليم",
+    "courier": "المندوب",
+    "lastFailureReason": "آخر سبب فشل",
+    "attemptHistory": "محاولات التوصيل",
+    "attemptSucceeded": "ناجحة",
+    "attemptFailed": "فاشلة",
     "awb": "وصل الشحن",
     "pieces": "القطع المخصصة",
     "noPieces": "لا توجد قطع مخصصة",
@@ -126,7 +135,18 @@
       "cancelled": "ملغي",
       "lost": "مفقود",
       "awaiting": "في انتظار الشحن",
-      "not_created": "لم تُنشأ شحنة"
+      "not_created": "لم تُنشأ شحنة",
+      "return": {
+        "created": "موعد استلام المرتجع",
+        "with_courier": "المرتجع في الطريق",
+        "delivered": "عاد إلى المستودع",
+        "returning": "جاري الإرجاع",
+        "returned": "تم استلام المرتجع",
+        "exception": "استثناء مرتجع",
+        "terminated": "إنهاء المرتجع",
+        "cancelled": "ملغي",
+        "lost": "مفقود"
+      }
     }
   },
   "catalog": {

@@ -86,6 +86,9 @@ export interface OrderSummary {
   deliveryState: string | null
   exceptionReason: string | null
   bostaLinkStatus: string | null
+  failedDeliveryAttempts: number
+  isDelayed: boolean | null
+  slaBreached: boolean | null
 }
 
 export interface OrderPage {
@@ -110,23 +113,42 @@ export interface OrderItem {
   allocatedPieces: AllocatedPiece[]
 }
 
-export interface ShipmentSummary {
-  id: string
-  trackingNumber: string | null
-  provider: string
-  internalState: string
-  numberOfAttempts: number
-  awbUrl: string | null
-  exceptionCode: number | null
-  exceptionReason: string | null
-}
-
 export interface DeliveryHistoryEntry {
   state: string
   providerState: number | null
   exceptionCode: number | null
   exceptionReason: string | null
   occurredAt: string
+}
+
+export interface AttemptEntry {
+  attemptDate: string | null
+  type: string | null
+  succeeded: boolean
+  courierName: string | null
+  courierPhone: string | null
+  failureReason: string | null
+}
+
+export interface ShipmentDetail {
+  id: string
+  trackingNumber: string | null
+  provider: string
+  internalState: string
+  shipmentLeg: string
+  numberOfAttempts: number
+  failedDeliveryAttempts: number
+  awbUrl: string | null
+  exceptionCode: number | null
+  exceptionReason: string | null
+  isDelayed: boolean | null
+  slaBreached: boolean | null
+  scheduledAt: string | null
+  courierName: string | null
+  courierPhone: string | null
+  lastFailureReason: string | null
+  attempts: AttemptEntry[]
+  deliveryHistory: DeliveryHistoryEntry[]
 }
 
 export interface OrderDetail {
@@ -143,8 +165,7 @@ export interface OrderDetail {
   placedAt: string | null
   createdAt: string
   items: OrderItem[]
-  shipment: ShipmentSummary | null
-  deliveryHistory: DeliveryHistoryEntry[]
+  shipments: ShipmentDetail[]
   bostaLinkStatus: string | null
 }
 

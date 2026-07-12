@@ -1,5 +1,6 @@
 package com.traceability.fulfillment;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -35,7 +36,8 @@ public class OrderController {
         String id, String number, String customerName, String customerPhone,
         String status, boolean onHold, BigDecimal codAmount,
         Instant placedAt, String trackingNumber,
-        String deliveryState, String exceptionReason, String bostaLinkStatus) {}
+        String deliveryState, String exceptionReason, String bostaLinkStatus,
+        int failedDeliveryAttempts, Boolean isDelayed, Boolean slaBreached) {}
 
     public record OrderPage(List<OrderSummary> items, int page, int size, long total) {}
 
@@ -45,23 +47,33 @@ public class OrderController {
         String id, String productTitle, String variantTitle,
         String sku, int quantity, List<AllocatedPiece> allocatedPieces) {}
 
-    public record ShipmentSummary(
-        String id, String trackingNumber, String provider,
-        String internalState, int numberOfAttempts, String awbUrl,
-        Integer exceptionCode, String exceptionReason) {}
+    public record AttemptEntry(
+        String attemptDate, String type, boolean succeeded,
+        String courierName, String courierPhone, String failureReason) {}
 
     public record DeliveryHistoryEntry(
         String state, Integer providerState,
         Integer exceptionCode, String exceptionReason,
         Instant occurredAt) {}
 
+    public record ShipmentDetail(
+        String id, String trackingNumber, String provider,
+        String internalState, String shipmentLeg,
+        int numberOfAttempts, int failedDeliveryAttempts,
+        String awbUrl, Integer exceptionCode, String exceptionReason,
+        Boolean isDelayed, Boolean slaBreached,
+        Instant scheduledAt, String courierName, String courierPhone,
+        String lastFailureReason,
+        List<AttemptEntry> attempts,
+        List<DeliveryHistoryEntry> deliveryHistory) {}
+
     public record OrderDetail(
         String id, String number, String customerName, String customerPhone,
         Object address, String paymentMethod, BigDecimal codAmount,
         String status, boolean onHold, String holdReason,
         Instant placedAt, Instant createdAt,
-        List<OrderItem> items, ShipmentSummary shipment,
-        List<DeliveryHistoryEntry> deliveryHistory, String bostaLinkStatus) {}
+        List<OrderItem> items, List<ShipmentDetail> shipments,
+        String bostaLinkStatus) {}
 
     // ── daily order counts (dashboard chart) ────────────────────────────────
 
@@ -126,12 +138,13 @@ public class OrderController {
             params.add("%" + tracking.trim() + "%");
         }
 
-        // LATERAL picks the latest shipment per order (by id DESC) so re-shipped orders
+        // LATERAL picks the latest forward shipment per order (by id DESC) so re-shipped orders
         // (terminated + new active) don't produce duplicate rows or inflate COUNT(*).
         String baseJoin = """
             FROM orders o
             LEFT JOIN LATERAL (
-                SELECT tracking_number, internal_state, exception_reason
+                SELECT tracking_number, internal_state, exception_reason,
+                       failed_delivery_attempts, is_delayed, sla_breached
                 FROM shipments
                 WHERE order_id = o.id AND tenant_id = o.tenant_id
                   AND shipment_leg = 'forward'
@@ -152,9 +165,12 @@ public class OrderController {
             SELECT o.id, o.number, o.customer_name, o.customer_phone,
                    o.status, o.on_hold, o.cod_amount, o.placed_at,
                    s.tracking_number,
-                   s.internal_state AS delivery_state,
-                   s.exception_reason AS exception_reason,
-                   o.bosta_link_status
+                   s.internal_state            AS delivery_state,
+                   s.exception_reason          AS exception_reason,
+                   o.bosta_link_status,
+                   COALESCE(s.failed_delivery_attempts, 0) AS failed_delivery_attempts,
+                   s.is_delayed,
+                   s.sla_breached
             """ + baseJoin + """
              ORDER BY o.placed_at DESC NULLS LAST, o.created_at DESC
              LIMIT ? OFFSET ?
@@ -171,7 +187,10 @@ public class OrderController {
                 rs.getString("tracking_number"),
                 rs.getString("delivery_state"),
                 rs.getString("exception_reason"),
-                rs.getString("bosta_link_status")
+                rs.getString("bosta_link_status"),
+                rs.getInt("failed_delivery_attempts"),
+                rs.getObject("is_delayed", Boolean.class),
+                rs.getObject("sla_breached", Boolean.class)
             ),
             pageParams.toArray()));
 
@@ -216,7 +235,7 @@ public class OrderController {
                         rs.getString("hold_reason"),
                         rs.getTimestamp("placed_at") != null ? rs.getTimestamp("placed_at").toInstant() : null,
                         rs.getTimestamp("created_at").toInstant(),
-                        null, null, null,  // items + shipment + deliveryHistory filled below
+                        null, null,  // items + shipments filled below
                         rs.getString("bosta_link_status")
                     );
                 }, orderId);
@@ -224,58 +243,103 @@ public class OrderController {
             // Fetch order items + variants + product titles
             List<OrderItem> items = fetchItems(orderId);
 
-            // Fetch shipment (if any)
-            ShipmentSummary shipment = jdbc.query(
+            // Fetch all shipments (both legs) with raw for attempt history.
+            // ORDER BY: forward before return, newest first within each leg.
+            List<ShipmentDetail> shipments = jdbc.query(
                 """
-                SELECT id, tracking_number, provider, internal_state,
-                       number_of_attempts, awb_url, exception_code, exception_reason
-                FROM shipments WHERE order_id = ?
-                  AND shipment_leg = 'forward'
-                ORDER BY created_at DESC LIMIT 1
+                SELECT id, tracking_number, provider,
+                       internal_state, shipment_leg::text AS shipment_leg,
+                       number_of_attempts, failed_delivery_attempts,
+                       awb_url, exception_code, exception_reason,
+                       is_delayed, sla_breached, scheduled_at,
+                       courier_name, courier_phone, last_failure_reason,
+                       raw::text AS raw_json
+                FROM shipments
+                WHERE order_id = ?
+                ORDER BY shipment_leg ASC, created_at DESC
                 """,
-                rs -> {
-                    if (!rs.next()) return null;
-                    return new ShipmentSummary(
-                        rs.getObject("id", UUID.class).toString(),
+                (rs, i) -> {
+                    UUID shipmentId = rs.getObject("id", UUID.class);
+
+                    // Extract per-attempt history from raw.
+                    List<AttemptEntry> attempts = List.of();
+                    String rawJson = rs.getString("raw_json");
+                    if (rawJson != null) {
+                        try {
+                            JsonNode raw = mapper.readTree(rawJson);
+                            JsonNode attArr = raw.path("attempts");
+                            if (attArr.isArray()) {
+                                List<AttemptEntry> list = new ArrayList<>();
+                                for (JsonNode a : attArr) {
+                                    String succeededAt = a.path("succeededAt").asText(null);
+                                    boolean succeeded = (succeededAt != null && !succeededAt.isBlank())
+                                        || a.path("state").asInt(-1) == 3;
+                                    JsonNode aStar = a.path("star");
+                                    String aCourierName  = nullIfBlank(aStar.path("name").asText(null));
+                                    String aCourierPhone = nullIfBlank(aStar.path("phone").asText(null));
+                                    String reason = nullIfBlank(a.path("exception").path("reason").asText(null));
+                                    list.add(new AttemptEntry(
+                                        a.path("attemptDate").asText(null),
+                                        a.path("type").asText(null),
+                                        succeeded, aCourierName, aCourierPhone, reason));
+                                }
+                                attempts = List.copyOf(list);
+                            }
+                        } catch (Exception ignored) {}
+                    }
+
+                    // Fetch delivery history for this specific shipment leg.
+                    List<DeliveryHistoryEntry> history = jdbc.query(
+                        """
+                        SELECT internal_state, provider_state, exception_code,
+                               exception_reason, occurred_at
+                        FROM shipment_status_history
+                        WHERE shipment_id = ?
+                        ORDER BY occurred_at ASC
+                        """,
+                        (hrs, j) -> new DeliveryHistoryEntry(
+                            hrs.getString("internal_state"),
+                            hrs.getObject("provider_state", Integer.class),
+                            hrs.getObject("exception_code", Integer.class),
+                            hrs.getString("exception_reason"),
+                            hrs.getTimestamp("occurred_at").toInstant()
+                        ), shipmentId);
+
+                    Instant scheduledAt = rs.getTimestamp("scheduled_at") != null
+                        ? rs.getTimestamp("scheduled_at").toInstant() : null;
+
+                    return new ShipmentDetail(
+                        shipmentId.toString(),
                         rs.getString("tracking_number"),
                         rs.getString("provider"),
                         rs.getString("internal_state"),
+                        rs.getString("shipment_leg"),
                         rs.getInt("number_of_attempts"),
+                        rs.getInt("failed_delivery_attempts"),
                         rs.getString("awb_url"),
                         rs.getObject("exception_code", Integer.class),
-                        rs.getString("exception_reason")
-                    );
-                }, orderId);
-
-            // Fetch delivery history from shipment_status_history (if shipment exists).
-            List<DeliveryHistoryEntry> deliveryHistory = List.of();
-            if (shipment != null) {
-                UUID shipmentId = UUID.fromString(shipment.id());
-                deliveryHistory = jdbc.query(
-                    """
-                    SELECT internal_state, provider_state, exception_code,
-                           exception_reason, occurred_at
-                    FROM shipment_status_history
-                    WHERE shipment_id = ?
-                    ORDER BY occurred_at ASC
-                    """,
-                    (rs, i) -> new DeliveryHistoryEntry(
-                        rs.getString("internal_state"),
-                        rs.getObject("provider_state", Integer.class),
-                        rs.getObject("exception_code", Integer.class),
                         rs.getString("exception_reason"),
-                        rs.getTimestamp("occurred_at").toInstant()
-                    ),
-                    shipmentId);
-            }
+                        rs.getObject("is_delayed", Boolean.class),
+                        rs.getObject("sla_breached", Boolean.class),
+                        scheduledAt,
+                        rs.getString("courier_name"),
+                        rs.getString("courier_phone"),
+                        rs.getString("last_failure_reason"),
+                        attempts,
+                        history);
+                }, orderId);
 
             return new OrderDetail(
                 order.id(), order.number(), order.customerName(), order.customerPhone(),
                 order.address(), order.paymentMethod(), order.codAmount(),
                 order.status(), order.onHold(), order.holdReason(),
                 order.placedAt(), order.createdAt(),
-                items, shipment, deliveryHistory, order.bostaLinkStatus());
+                items, shipments, order.bostaLinkStatus());
         });
+    }
+
+    private static String nullIfBlank(String s) {
+        return (s == null || s.isBlank()) ? null : s;
     }
 
     private List<OrderItem> fetchItems(UUID orderId) {

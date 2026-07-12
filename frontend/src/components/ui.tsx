@@ -85,10 +85,12 @@ const DELIVERY_STATE_STYLE: Record<string, string> = {
 export function DeliveryBadge({
   state,
   exceptionReason,
+  shipmentLeg,
   className = '',
 }: {
   state?: string | null
   exceptionReason?: string | null
+  shipmentLeg?: string | null
   className?: string
 }) {
   const { t } = useTranslation()
@@ -99,8 +101,11 @@ export function DeliveryBadge({
       </span>
     )
   }
-  const style  = DELIVERY_STATE_STYLE[state] ?? 'bg-muted/10 text-muted border-muted/20'
-  const label  = t(`delivery.state.${state}`, { defaultValue: state.replace(/_/g, ' ') })
+  const style = DELIVERY_STATE_STYLE[state] ?? 'bg-muted/10 text-muted border-muted/20'
+  // Direction-aware label: return leg overrides take precedence, with fallback to base label.
+  const label = shipmentLeg === 'return'
+    ? t(`delivery.state.return.${state}`, { defaultValue: t(`delivery.state.${state}`, { defaultValue: state.replace(/_/g, ' ') }) })
+    : t(`delivery.state.${state}`, { defaultValue: state.replace(/_/g, ' ') })
   const reason = state === 'exception' && exceptionReason ? exceptionReason : null
 
   return (

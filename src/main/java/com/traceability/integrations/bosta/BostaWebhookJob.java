@@ -258,21 +258,37 @@ public class BostaWebhookJob {
             }
             final Integer fExceptionCode   = exceptionCode;
             final String  fExceptionReason = exceptionReason;
+            final BostaAttentionExtractor.AttentionFields af =
+                BostaAttentionExtractor.extract(delivery.raw());
             tx.execute(s -> {
                 jdbc.update("""
                     UPDATE shipments
-                    SET internal_state     = ?::shipment_internal_state,
-                        provider_state     = ?,
-                        number_of_attempts = ?,
-                        raw                = ?::jsonb,
-                        last_synced_at     = now(),
-                        returned_at        = CASE WHEN ? THEN now() ELSE returned_at END,
-                        exception_code     = COALESCE(?, exception_code),
-                        exception_reason   = COALESCE(?, exception_reason)
+                    SET internal_state           = ?::shipment_internal_state,
+                        provider_state           = ?,
+                        number_of_attempts       = ?,
+                        failed_delivery_attempts = ?,
+                        last_attempt_at          = ?::timestamptz,
+                        last_failure_reason      = ?,
+                        is_delayed               = ?,
+                        sla_breached             = ?,
+                        scheduled_at             = ?::timestamptz,
+                        courier_name             = ?,
+                        courier_phone            = ?,
+                        raw                      = ?::jsonb,
+                        last_synced_at           = now(),
+                        returned_at              = CASE WHEN ? THEN now() ELSE returned_at END,
+                        exception_code           = COALESCE(?, exception_code),
+                        exception_reason         = COALESCE(?, exception_reason)
                     WHERE id = ?
                     """,
                     mapped.shipmentInternalState(), delivery.stateCode(),
-                    delivery.numberOfAttempts(),
+                    af.totalAttempts(),
+                    af.failedDeliveryAttempts(),
+                    af.lastAttemptAt() != null ? af.lastAttemptAt().toString() : null,
+                    af.lastFailureReason(),
+                    af.isDelayed(), af.slaBreached(),
+                    af.scheduledAt(),
+                    af.courierName(), af.courierPhone(),
                     delivery.raw().toString(), isReturnedState,
                     fExceptionCode, fExceptionReason,
                     resolvedShipment.id());

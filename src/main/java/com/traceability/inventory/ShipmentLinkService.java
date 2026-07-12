@@ -446,11 +446,24 @@ public class ShipmentLinkService {
         String bostaId = (delivery != null && delivery.raw() != null)
             ? delivery.raw().path("_id").asText(null) : null;
         if (bostaId != null && bostaId.isBlank()) bostaId = null;
+        com.traceability.integrations.bosta.BostaAttentionExtractor.AttentionFields af =
+            com.traceability.integrations.bosta.BostaAttentionExtractor.extract(
+                delivery != null ? delivery.raw() : null);
         jdbc.update(
             "INSERT INTO shipments " +
-            "(id, tenant_id, order_id, provider, tracking_number, internal_state, raw, provider_delivery_id) " +
-            "VALUES (?, ?, ?, 'bosta', ?, ?::shipment_internal_state, ?::jsonb, ?)",
-            id, tenantId, orderId, trackingNumber, internalState, rawJson, bostaId);
+            "(id, tenant_id, order_id, provider, tracking_number, internal_state, " +
+            " number_of_attempts, failed_delivery_attempts, last_attempt_at, last_failure_reason, " +
+            " is_delayed, sla_breached, scheduled_at, courier_name, courier_phone, " +
+            " raw, provider_delivery_id) " +
+            "VALUES (?, ?, ?, 'bosta', ?, ?::shipment_internal_state, ?, ?, ?::timestamptz, ?, " +
+            "        ?, ?, ?::timestamptz, ?, ?, ?::jsonb, ?)",
+            id, tenantId, orderId, trackingNumber, internalState,
+            af.totalAttempts(), af.failedDeliveryAttempts(),
+            af.lastAttemptAt() != null ? af.lastAttemptAt().toString() : null,
+            af.lastFailureReason(),
+            af.isDelayed(), af.slaBreached(), af.scheduledAt(),
+            af.courierName(), af.courierPhone(),
+            rawJson, bostaId);
         clearReconcileFlag(orderId, tenantId);
         return id;
     }
@@ -544,11 +557,24 @@ public class ShipmentLinkService {
         String bostaId = (delivery != null && delivery.raw() != null)
             ? delivery.raw().path("_id").asText(null) : null;
         if (bostaId != null && bostaId.isBlank()) bostaId = null;
+        com.traceability.integrations.bosta.BostaAttentionExtractor.AttentionFields afr =
+            com.traceability.integrations.bosta.BostaAttentionExtractor.extract(
+                delivery != null ? delivery.raw() : null);
         jdbc.update(
             "INSERT INTO shipments " +
-            "(id, tenant_id, order_id, provider, tracking_number, internal_state, shipment_leg, raw, provider_delivery_id) " +
-            "VALUES (?, ?, ?, 'bosta', ?, ?::shipment_internal_state, 'return', ?::jsonb, ?)",
-            id, tenantId, orderId, trackingNumber, internalState, rawJson, bostaId);
+            "(id, tenant_id, order_id, provider, tracking_number, internal_state, shipment_leg, " +
+            " number_of_attempts, failed_delivery_attempts, last_attempt_at, last_failure_reason, " +
+            " is_delayed, sla_breached, scheduled_at, courier_name, courier_phone, " +
+            " raw, provider_delivery_id) " +
+            "VALUES (?, ?, ?, 'bosta', ?, ?::shipment_internal_state, 'return', ?, ?, ?::timestamptz, ?, " +
+            "        ?, ?, ?::timestamptz, ?, ?, ?::jsonb, ?)",
+            id, tenantId, orderId, trackingNumber, internalState,
+            afr.totalAttempts(), afr.failedDeliveryAttempts(),
+            afr.lastAttemptAt() != null ? afr.lastAttemptAt().toString() : null,
+            afr.lastFailureReason(),
+            afr.isDelayed(), afr.slaBreached(), afr.scheduledAt(),
+            afr.courierName(), afr.courierPhone(),
+            rawJson, bostaId);
         clearReconcileFlag(orderId, tenantId);
         return id;
     }

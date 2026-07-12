@@ -103,9 +103,18 @@
     "placedAt": "Placed at",
     "items": "Items",
     "shipment": "Shipment",
+    "returnShipment": "Return Shipment",
     "tracking": "Tracking",
     "provider": "Provider",
     "attempts": "Attempts",
+    "failedAttempts": "{{count}} failed attempt",
+    "delayed": "Delayed",
+    "scheduledAt": "Scheduled",
+    "courier": "Courier",
+    "lastFailureReason": "Last failure",
+    "attemptHistory": "Delivery attempts",
+    "attemptSucceeded": "Succeeded",
+    "attemptFailed": "Failed",
     "awb": "AWB",
     "pieces": "Allocated pieces",
     "noPieces": "No pieces allocated",
@@ -126,7 +135,18 @@
       "cancelled": "Cancelled",
       "lost": "Lost",
       "awaiting": "Awaiting shipment",
-      "not_created": "Shipment not created"
+      "not_created": "Shipment not created",
+      "return": {
+        "created": "Return Pickup Scheduled",
+        "with_courier": "Return in Progress",
+        "delivered": "Returned to Warehouse",
+        "returning": "Returning",
+        "returned": "Return Received",
+        "exception": "Return Exception",
+        "terminated": "Return Terminated",
+        "cancelled": "Return Cancelled",
+        "lost": "Return Lost"
+      }
     }
   },
   "catalog": {

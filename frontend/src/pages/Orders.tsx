@@ -187,6 +187,16 @@ export default function Orders() {
                           {t('orderDetail.onHold')}
                         </span>
                       )}
+                      {order.failedDeliveryAttempts > 0 && (
+                        <span className="badge border bg-danger/10 text-danger border-danger/20">
+                          {t('orderDetail.failedAttempts', { count: order.failedDeliveryAttempts })}
+                        </span>
+                      )}
+                      {(order.isDelayed || order.slaBreached) && (
+                        <span className="badge border bg-warning/10 text-warning border-warning/20">
+                          {t('orderDetail.delayed')}
+                        </span>
+                      )}
                     </div>
                   </td>
                   <td className="tbl-cell text-warning">
