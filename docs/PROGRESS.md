@@ -4,7 +4,26 @@
 
 ## Current state
 
-**583 backend tests green** — 2026-07-12 (V45 — PII fixes, leg audit). Deploy to Hetzner: `git pull && docker compose build --no-cache && docker compose up -d`.
+**589 backend tests green** — 2026-07-12 (V46 — direction-aware delivery status + attempt/delay visibility). Deploy to Hetzner: `git pull && docker compose -f deploy/docker-compose.yml build --no-cache && docker compose -f deploy/docker-compose.yml up -d`.
+
+V46 — FR-15 direction-aware delivery status + attention fields.
+
+**`BostaAttentionExtractor`** — single extraction point for all attention-field values from a Bosta raw payload's `attempts[]` array. Never uses Bosta's unreliable flat `numberOfAttempts`/`deliveryAttemptsLength`/`pickupAttemptsLength`. Fields extracted: `totalAttempts` (supersedes old flat counter), `failedDeliveryAttempts`, `lastAttemptAt`, `lastFailureReason`, `isDelayed`, `slaBreached`, `scheduledAt`, `courierName`, `courierPhone`, per-attempt `AttemptEntry` list. Called at all three raw-write sites: BostaWebhookJob step 9 UPDATE, `createOrFindShipment` INSERT, `createOrFindReturnShipment` INSERT.
+
+**V46 migration** — 8 new columns on `shipments` (`failed_delivery_attempts INT NOT NULL DEFAULT 0`, `last_attempt_at TIMESTAMPTZ`, `last_failure_reason TEXT`, `is_delayed BOOLEAN`, `sla_breached BOOLEAN`, `scheduled_at TIMESTAMPTZ`, `courier_name TEXT`, `courier_phone TEXT`). Step 1: supersede `number_of_attempts` → `jsonb_array_length(raw->'attempts')` (reliable). Step 2: backfill all new columns from existing `raw`. PostgreSQL lateral subqueries over `jsonb_array_elements()`. Handles missing `attempts[]`, invalid state strings, JSON null vs SQL null for sla/isDelayed.
+
+**API changes** — `OrderController.ShipmentSummary` replaced by `ShipmentDetail` with all new fields + `shipmentLeg` + per-attempt history. `OrderDetail.shipment: ShipmentSummary` → `shipments: List<ShipmentDetail>` (both legs). List LATERAL adds `failed_delivery_attempts`, `is_delayed`, `sla_breached`. Attempt history is parsed from raw JSON in the row mapper — one raw-parse per shipment in the detail endpoint.
+
+**Frontend** — `DeliveryBadge` adds `shipmentLeg` prop; return leg uses `delivery.state.return.*` i18n sub-namespace with fallback to base. Orders list: failed-attempts pill (red, when `failedDeliveryAttempts > 0`) + Delayed flag (orange, when `isDelayed || slaBreached`). OrderDetail: loops `order.shipments[]` → per-leg `ShipmentCard` with courier, scheduled date, attention pills, per-attempt history list, expandable status timeline (leg-aware labels). `en.json`/`ar.json`: 9 return-leg state overrides.
+
+**Tests** — `BostaAttentionFieldsTest`: 6 tests (af1–af5 unit, af6 DB integration). af6 verifies `failed_delivery_attempts=2`, `last_failure_reason="Customer refused"`, `is_delayed=true`, `sla_breached=true`, `courier_name="Khaled"`, `number_of_attempts=2` (from array); RLS check via `app_user` (skipped if app_user not configured in Testcontainer). MigrationSmokeTest: V1–V46 = 45.
+
+**Decisions made:**
+- `state == 3` (SUCCEEDED) is secondary signal; `succeededAt IS NOT NULL` is primary. Both checked.
+- `slaBreached` = `NULL` when no `sla` key present (not false) — preserves data-availability signal.
+- `number_of_attempts` now stores array-derived total, NOT Bosta's flat counter. No two columns with different semantics.
+- Attempt history NOT stored as separate DB column — derived from `raw` at read time in `OrderController.detail()`. Reason: raw is the authoritative source; attempt history is rarely needed and varies per shipment; storing a separate JSONB column would duplicate data.
+- `failed_delivery_attempts > 0` (not `> 1`) triggers the pill per user spec.
 
 V45 — PII flicker fix + leg-awareness audit across 14 locations.
 
