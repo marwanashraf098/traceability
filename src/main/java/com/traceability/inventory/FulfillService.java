@@ -73,7 +73,7 @@ public class FulfillService {
             "       o.locked_by, o.locked_at, o.is_self_pickup, o.cancel_requested_at, " +
             "       s.id AS shipment_id, s.tracking_number " +
             "FROM orders o " +
-            "LEFT JOIN shipments s ON s.order_id = o.id AND s.tenant_id = o.tenant_id " +
+            "LEFT JOIN shipments s ON s.order_id = o.id AND s.tenant_id = o.tenant_id AND s.shipment_leg = 'forward' " +
             "WHERE o.id = ? AND o.tenant_id = ?",
             orderId, tenantId);
         if (rows.isEmpty()) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Order not found");

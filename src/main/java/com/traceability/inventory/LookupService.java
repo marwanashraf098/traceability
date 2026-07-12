@@ -71,7 +71,7 @@ public class LookupService {
                 "JOIN products pr ON pr.id = v.product_id " +
                 "LEFT JOIN locations loc ON loc.id = p.current_location_id " +
                 "LEFT JOIN orders o      ON o.id  = p.current_order_id " +
-                "LEFT JOIN shipments s   ON s.order_id = o.id " +
+                "LEFT JOIN shipments s   ON s.order_id = o.id AND s.shipment_leg = 'forward' " +
                 "LEFT JOIN receipts r    ON r.id = p.receipt_id " +
                 "LEFT JOIN locations rloc ON rloc.id = r.location_id " +
                 "WHERE p.barcode = ? AND p.tenant_id = ?",

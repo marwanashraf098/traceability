@@ -294,6 +294,17 @@ public class BostaWebhookJob {
                 return null;
             });
 
+            // 9.6 — Populate consignee PII from Bosta receiver on every event that
+            //       reaches this path (shipment already existed — tryMatchDelivery was
+            //       called for the FIRST arrival only, so PII was never written for
+            //       subsequent webhooks on pre-existing shipments, or for
+            //       reconcile/manualLink-created shipments). COALESCE in the SQL means
+            //       this is idempotent — existing values are never overwritten.
+            if (resolvedShipment.orderId() != null) {
+                shipmentLinkService.populateConsigneePii(
+                    resolvedShipment.orderId(), tenantId, delivery);
+            }
+
             // 10. Move pieces — only if the mapping carries a piece-status change.
             //     The ledger's state-machine guard is the idempotency backstop:
             //       • current==target  → fast skip, no DB write.

@@ -234,6 +234,45 @@ class BostaOrderReconcileTest {
         assertThat(attempts).as("cancelled order not processed by reconcile").isZero();
     }
 
+    // ── r7: manualLink populates customer PII from unlinked_bosta_deliveries.raw ─
+
+    @Test
+    void r7_manualLink_populatesConsigneePiiFromRaw() {
+        setupCourierAccount();
+        UUID orderId = insertOrder("#R-007");
+
+        String rawJson = """
+            {
+              "receiver": {
+                "fullName": "Manual Link Customer",
+                "phone": "01055556666"
+              },
+              "dropOffAddress": {
+                "firstLine": "12 Tahrir Sq",
+                "city": {"name": "Cairo"},
+                "zone": {"name": "Zamalek"},
+                "district": {"name": "D1"}
+              }
+            }""";
+
+        Long unlinkedId = jdbc.queryForObject(
+            "INSERT INTO unlinked_bosta_deliveries " +
+            "  (tenant_id, tracking_number, business_reference, bosta_state_code, " +
+            "   bosta_order_type, match_reason, resolved, raw) " +
+            "VALUES (?, 'RECONCILE-TN-007', '#R-007', 45, 'SEND', 'NO_MATCH', false, ?::jsonb) RETURNING id",
+            Long.class, tenantId, rawJson);
+
+        TenantContext.runAs(tenantId, () ->
+            shipmentLinkService.manualLink(unlinkedId, orderId, null));
+
+        String name  = jdbc.queryForObject(
+            "SELECT customer_name  FROM orders WHERE id = ?", String.class, orderId);
+        String phone = jdbc.queryForObject(
+            "SELECT customer_phone FROM orders WHERE id = ?", String.class, orderId);
+        assertThat(name) .as("manualLink must populate customer_name from Bosta raw").isEqualTo("Manual Link Customer");
+        assertThat(phone).as("manualLink must populate customer_phone from Bosta raw").isEqualTo("01055556666");
+    }
+
     // ── helpers ───────────────────────────────────────────────────────────────
 
     private void setupCourierAccount() {

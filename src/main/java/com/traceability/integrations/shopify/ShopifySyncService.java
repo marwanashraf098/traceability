@@ -134,9 +134,15 @@ public class ShopifySyncService {
                  address, payment_method, cod_amount, placed_at, raw)
             VALUES (?, ?, ?, ?, ?, ?, ?::jsonb, ?::order_payment_method, ?, ?, ?::jsonb)
             ON CONFLICT (store_id, external_id) DO UPDATE SET
-                customer_name  = EXCLUDED.customer_name,
-                customer_phone = EXCLUDED.customer_phone,
-                address        = EXCLUDED.address,
+                -- COALESCE for PCD-blocked fields: on Shopify Basic plan without PCD approval,
+                -- Shopify returns NULL for customer_name, customer_phone, and address.
+                -- Without COALESCE, every Shopify sync cycle (30-min reconcile + live webhooks)
+                -- would overwrite a Bosta-sourced value back to NULL ("flicker" bug).
+                -- COALESCE keeps any non-null value already present (from Shopify if PCD approved,
+                -- from Bosta receiver if populated by populateConsigneePii).
+                customer_name  = COALESCE(EXCLUDED.customer_name,  orders.customer_name),
+                customer_phone = COALESCE(EXCLUDED.customer_phone, orders.customer_phone),
+                address        = COALESCE(EXCLUDED.address,        orders.address),
                 payment_method = EXCLUDED.payment_method,
                 cod_amount     = EXCLUDED.cod_amount,
                 placed_at      = EXCLUDED.placed_at,

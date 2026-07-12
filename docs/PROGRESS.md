@@ -4,7 +4,45 @@
 
 ## Current state
 
-**581 backend tests green** — 2026-07-11 (V44 + FR-13/FR-14). Pushed to origin/main (commit `990f07c`). Deploy to Hetzner: `git pull && docker compose build --no-cache && docker compose up -d`. After deploy, check Flyway RAISE NOTICE output to confirm sentinel path taken (≤20 unlinked rows → no sentinel, all retry; >20 → stamped, throttled).
+**583 backend tests green** — 2026-07-12 (V45 — PII fixes, leg audit). Deploy to Hetzner: `git pull && docker compose build --no-cache && docker compose up -d`.
+
+V45 — PII flicker fix + leg-awareness audit across 14 locations.
+
+Three root causes diagnosed and fixed:
+
+**Fix 1 — ShopifySync null-overwrite (active PII erasure every 30 min).**
+`ShopifySyncService.UPSERT_ORDER` previously wrote `customer_name = EXCLUDED.customer_name` unconditionally. On Shopify Basic with PCD review pending, Shopify returns NULL for name/phone/address — erasing any Bosta-sourced value every reconcile cycle and every order webhook. Fixed: `customer_name = COALESCE(EXCLUDED.customer_name, orders.customer_name)` (same for phone/address). Other fields (`payment_method`, `cod_amount`, `placed_at`, `raw`) are always non-null from Shopify → no COALESCE needed.
+
+**Fix 2 — Three paths never called `populateConsigneePii()`.**
+(a) `manualLink()` — reconcile-linked orders never got PII. Fixed: fetch `raw::text` from `unlinked_bosta_deliveries`, parse as JsonNode, call new `populateConsigneePiiFromRaw()`. (b) Subsequent Bosta webhooks on already-linked shipments — `tryMatchDelivery()` is only called on first arrival; step 9+ path in `BostaWebhookJob` never wrote PII. Fixed: added step 9.6 call to `shipmentLinkService.populateConsigneePii()` after shipment UPDATE commits. (c) `backfill-pii` endpoint had no forward-leg filter — could pick return-leg raw (CRP receiver is not the consignee). Fixed: `AND s.shipment_leg = 'forward'`.
+
+`populateConsigneePii(UUID, UUID, BostaDelivery)` made public (was private); delegates to new package-private `populateConsigneePiiFromRaw(UUID, UUID, JsonNode)` so both `BostaWebhookJob` and `manualLink()` share one implementation.
+
+**Fix 3 — V43 leg-awareness regression at 14 locations (+ 1 crash).**
+V43 added `shipment_leg` ('forward'/'return') and changed orders→shipments from one-active-per-order to two-active-per-order (one per leg). Every unfiltered `JOIN shipments ON order_id = o.id` became wrong:
+- `LookupService:74` barcode lookup — `queryForMap()` crashed with `IncorrectResultSizeDataAccessException` on two-leg orders. **Critical fix.**
+- `OrderController:133` list LATERAL — arbitrary UUID ordering picked either leg. Fixed: `AND shipment_leg = 'forward'`.
+- `OrderController:232` detail shipment — `ORDER BY created_at DESC LIMIT 1` picked return leg if newer. Fixed.
+- `ExceptionService:157` detectLost — duplicate shipment rows per piece. Fixed.
+- `ExceptionService:175` detectNeverReceived — return leg 'returned' state matched as never-received. Fixed.
+- `ExceptionService:238` detectStuck — return leg generated false stuck alarms. Fixed.
+- `ExceptionService:353` detectShopifyCancelVsInflight — duplicate rows per order. Fixed.
+- `ExceptionService:454` detectReturnInTransitStuck — duplicate rows per piece. Fixed.
+- `FulfillService:76` pack-screen order detail — ambiguous `rows.get(0)`. Fixed.
+- `ReturnService:53` receiveReturn — ambiguous shipment row on barcode scan. Fixed.
+- `ReturnService:136` listPending — duplicate piece rows. Fixed.
+- `ReturnService:212` neverReceived — return leg matched as never-received. Fixed.
+- `ReturnSessionService:378` fetchPieceContext — ambiguous shipment_id picked for piece events. Fixed.
+- `BostaPickupService:138` schedule — return-leg shipments incorrectly included in pickup manifest. Fixed.
+
+**V45 migration** — forward-leg filtered, idempotent one-time backfill (`COALESCE` keeps any existing value; `pii_source IS NULL` guard prevents re-processing already-sourced PII).
+
+**Tests added:**
+- `ShopifyReconcileTest.r6` — Shopify sync with null PCD-blocked name/phone must NOT overwrite Bosta-sourced `customer_name`. Regression guard for the flicker bug.
+- `BostaOrderReconcileTest.r7` — `manualLink()` with raw JSON in `unlinked_bosta_deliveries` must populate `customer_name` and `customer_phone` on the order.
+- `MigrationSmokeTest` count updated: 43 → 44 (V45).
+
+**583 tests green** (was 581). No flaky failures.
 
 FR-13/FR-14 — version-stamp dedup + poll-exit on 400 (V44, commit `990f07c`). Root cause of production incident (9730639058 stranded): content-derived idem key `sha256(tracking:state:updatedAt)` meant deleting `unlinked_bosta_deliveries` row didn't invalidate the `webhook_events.external_event_id` slot — step 4 still found E1's processed event and no-op'd. Fix: `MatcherVersionHolder` reads Flyway current version at startup. Guard 3 (BostaIngestionHelper) blocks re-enqueue only when unlinked row's `matcher_version = current`; NULL or different version → passes → one retry per deploy. Step-4 dedup mirrors this: unlinked outcomes at old/null version are retry-eligible; linked outcomes block unconditionally. V44 migration adds `matcher_version TEXT` on `webhook_events` + `unlinked_bosta_deliveries`, `provider_not_found_at TIMESTAMP` on `shipments`. DO-block sentinel auto-decides at migration time: if unresolved unlinked count > 20, stamps existing rows with current version (prevents post-deploy retry storm at Bosta); if ≤ 20, no stamp (all retry on first cycle). Strict `=` / `<>` predicates only — no ordering comparison (Flyway version strings sort lexically wrong, e.g. "9" > "44"). FR-14: `DeliveryNotFoundException` thrown when Bosta returns HTTP 400 "Delivery not found"; `BostaStatusPollJob` catches it, stamps `provider_not_found_at = now()`, and the poll query excludes those rows permanently. Operational note in CLAUDE.md: NEVER force-retry by DELETE of unlinked row. Correct paths: deploy (version bump) or manual `UPDATE unlinked_bosta_deliveries SET matcher_version = NULL`. Tests: idem1–idem5 (step-4 and Guard-3 version paths), crp6 (full ingest→job→return-shipment pipeline), BostaPollJobTest p14 updated. 581 tests green.
 

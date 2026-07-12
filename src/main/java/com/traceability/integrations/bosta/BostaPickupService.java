@@ -137,8 +137,9 @@ public class BostaPickupService {
                 "       o.number AS order_number " +
                 "FROM shipments s " +
                 "JOIN orders o ON o.id = s.order_id " +
-                "WHERE s.tenant_id = ? " +
-                "  AND o.status = 'awaiting_pickup'::order_status " +
+                "WHERE s.tenant_id    = ? " +
+                "  AND s.shipment_leg = 'forward' " +
+                "  AND o.status       = 'awaiting_pickup'::order_status " +
                 "  AND NOT EXISTS ( " +
                 "      SELECT 1 FROM pickup_shipments ps " +
                 "      JOIN pickups p ON p.id = ps.pickup_id " +

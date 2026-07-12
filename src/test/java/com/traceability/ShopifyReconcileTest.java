@@ -239,6 +239,47 @@ class ShopifyReconcileTest {
         assertThat(crossB).isZero();
     }
 
+    // r6: Shopify sync must NOT null-out a customer_name already written by Bosta.
+    //     Regression for the PII-flicker bug: on Shopify Basic with PCD pending,
+    //     Shopify returns null for customer name; previous UPSERT would write
+    //     customer_name = NULL and erase the Bosta-sourced value every 30 minutes.
+    @Test
+    void r6_shopifySyncDoesNotOverwriteBostaSourcedPii() {
+        // 1. Insert an order whose customer_name was populated from Bosta (pii_source='bosta').
+        String gid = "gid://shopify/Order/R6";
+        UUID orderId = jdbc.queryForObject(
+            "INSERT INTO orders (tenant_id, store_id, external_id, number, status, " +
+            "    payment_method, placed_at, customer_name, customer_phone, pii_source) " +
+            "VALUES (?, ?, ?, '#R6001', 'new'::order_status, 'cod', now(), " +
+            "    'Bosta Customer', '01099999999', 'bosta') RETURNING id",
+            UUID.class, tenantA, storeA, gid);
+
+        // 2. Shopify returns the same order but with null customer name/phone
+        //    (simulating PCD-gated Shopify Basic response).
+        ShopifyGateway.Order pcdBlocked = new ShopifyGateway.Order(
+            gid, "#R6001",
+            null, null,                 // ← null name / null phone (PCD-blocked)
+            null, "pending", List.of(),
+            new BigDecimal("50.00"), List.of(),
+            Instant.now(), new ObjectMapper().createObjectNode());
+
+        TenantContext.set(tenantA);
+        try {
+            // Directly call the UPSERT path (same path used by reconcile + webhook sync).
+            syncService.ingestMissingOrder(storeA, tenantA, pcdBlocked);
+        } finally {
+            TenantContext.clear();
+        }
+
+        // 3. Bosta-sourced PII must be preserved — COALESCE keeps existing non-null value.
+        String name  = jdbc.queryForObject(
+            "SELECT customer_name  FROM orders WHERE id = ?", String.class, orderId);
+        String phone = jdbc.queryForObject(
+            "SELECT customer_phone FROM orders WHERE id = ?", String.class, orderId);
+        assertThat(name) .as("customer_name must not be overwritten by Shopify null").isEqualTo("Bosta Customer");
+        assertThat(phone).as("customer_phone must not be overwritten by Shopify null").isEqualTo("01099999999");
+    }
+
     // ── helpers ───────────────────────────────────────────────────────────────
 
     private void stubGateway(UUID storeId, String domain, List<ShopifyGateway.Order> orders) {

@@ -134,6 +134,7 @@ public class OrderController {
                 SELECT tracking_number, internal_state, exception_reason
                 FROM shipments
                 WHERE order_id = o.id AND tenant_id = o.tenant_id
+                  AND shipment_leg = 'forward'
                 ORDER BY id DESC
                 LIMIT 1
             ) s ON true
@@ -229,6 +230,7 @@ public class OrderController {
                 SELECT id, tracking_number, provider, internal_state,
                        number_of_attempts, awb_url, exception_code, exception_reason
                 FROM shipments WHERE order_id = ?
+                  AND shipment_leg = 'forward'
                 ORDER BY created_at DESC LIMIT 1
                 """,
                 rs -> {

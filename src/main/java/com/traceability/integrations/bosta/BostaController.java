@@ -477,12 +477,13 @@ public class BostaController {
                                    END),
                   pii_source     = COALESCE(o.pii_source, 'bosta')
                 FROM shipments s
-                WHERE s.order_id  = o.id
-                  AND s.tenant_id = o.tenant_id
-                  AND o.tenant_id = ?
+                WHERE s.order_id      = o.id
+                  AND s.tenant_id     = o.tenant_id
+                  AND s.shipment_leg  = 'forward'
+                  AND o.tenant_id     = ?
                   AND o.pii_redacted_at IS NULL
-                  AND o.pii_source IS NULL
-                  AND s.raw IS NOT NULL
+                  AND o.pii_source    IS NULL
+                  AND s.raw           IS NOT NULL
                   AND (
                     NULLIF(TRIM(s.raw#>>'{receiver,fullName}'), '') IS NOT NULL
                     OR s.raw#>>'{receiver,phone}' IS NOT NULL

@@ -50,7 +50,7 @@ public class ReturnService {
             "JOIN variants v   ON v.id  = p.variant_id " +
             "JOIN products pr  ON pr.id = v.product_id " +
             "LEFT JOIN orders o     ON o.id  = p.current_order_id " +
-            "LEFT JOIN shipments s  ON s.order_id = o.id " +
+            "LEFT JOIN shipments s  ON s.order_id = o.id AND s.shipment_leg = 'forward' " +
             "WHERE p.barcode = ? AND p.tenant_id = ?",
             rs -> rs.next() ? mapRow(rs) : null,
             barcode, tenantId);
@@ -133,7 +133,7 @@ public class ReturnService {
             "JOIN variants v  ON v.id  = p.variant_id " +
             "JOIN products pr ON pr.id = v.product_id " +
             "LEFT JOIN orders o      ON o.id  = p.current_order_id " +
-            "LEFT JOIN shipments s   ON s.order_id = o.id " +
+            "LEFT JOIN shipments s   ON s.order_id = o.id AND s.shipment_leg = 'forward' " +
             "LEFT JOIN locations loc ON loc.id = p.current_location_id " +
             "WHERE p.status = 'return_pending_inspection'::piece_status " +
             "  AND p.tenant_id = ? " +
@@ -217,7 +217,8 @@ public class ReturnService {
             "JOIN pieces p ON p.id = a.piece_id AND p.tenant_id = ? " +
             "JOIN variants v  ON v.id  = p.variant_id " +
             "JOIN products pr ON pr.id = v.product_id " +
-            "WHERE s.internal_state = 'returned' " +
+            "WHERE s.shipment_leg = 'forward' " +
+            "  AND s.internal_state = 'returned' " +
             "  AND s.returned_at IS NOT NULL " +
             "  AND s.returned_at < now() - (interval '1 day' * ?) " +
             "  AND s.tenant_id = ? " +

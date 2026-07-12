@@ -284,13 +284,16 @@ public class ShipmentLinkService {
         UUID tenantId = TenantContext.require();
 
         Object[] row = jdbc.query(
-            "SELECT tracking_number, bosta_state_code, bosta_order_type " +
+            // raw is fetched alongside state columns so populateConsigneePii can run
+            // without an extra Bosta API call — the receiver payload is already stored.
+            "SELECT tracking_number, bosta_state_code, bosta_order_type, raw::text " +
             "FROM unlinked_bosta_deliveries " +
             "WHERE id = ? AND tenant_id = ? AND resolved = false",
             rs -> rs.next() ? new Object[]{
                 rs.getString("tracking_number"),
                 rs.getInt("bosta_state_code"),
-                rs.getString("bosta_order_type")} : null,
+                rs.getString("bosta_order_type"),
+                rs.getString("raw")} : null,
             unlinkedId, tenantId);
 
         if (row == null) {
@@ -300,6 +303,7 @@ public class ShipmentLinkService {
 
         String trackingNumber = (String) row[0];
         BostaStateMapper.MappedState mapped = stateMapper.map((Integer) row[1], (String) row[2]);
+        String rawJson = (String) row[3];
 
         // Swapped-AWB check applies to manual link too
         handleSwappedAwbCheck(trackingNumber, tenantId, orderId, null);
@@ -319,6 +323,18 @@ public class ShipmentLinkService {
             "UPDATE orders SET status = 'awaiting_pickup' " +
             "WHERE id = ? AND tenant_id = ? AND status = 'packed'",
             orderId, tenantId);
+
+        // Populate PII from the stored raw payload (receiver.fullName / receiver.phone /
+        // dropOffAddress). Uses the same COALESCE-on-null logic as tryMatchDelivery's
+        // populateConsigneePii() path — fill-only-if-null, GDPR guard included.
+        if (rawJson != null) {
+            try {
+                JsonNode rawNode = mapper.readTree(rawJson);
+                populateConsigneePiiFromRaw(orderId, tenantId, rawNode);
+            } catch (Exception e) {
+                log.warn("manualLink: could not parse raw for PII backfill on order {}: {}", orderId, e.getMessage());
+            }
+        }
 
         jdbc.update(
             "UPDATE unlinked_bosta_deliveries SET resolved = true WHERE id = ?",
@@ -547,7 +563,21 @@ public class ShipmentLinkService {
     // ---- PII helpers --------------------------------------------------------
 
     /**
-     * Populates orders.customer_name / customer_phone / address from Bosta receiver data.
+     * Public entry point for BostaWebhookJob (linked path — shipment already existed,
+     * so tryMatchDelivery was never called and PII was never written on first arrival).
+     * Also called by tryMatchDelivery itself for the first-match path.
+     */
+    public void populateConsigneePii(UUID orderId, UUID tenantId, BostaDelivery delivery) {
+        if (delivery == null || delivery.raw() == null) return;
+        populateConsigneePiiFromRaw(orderId, tenantId, delivery.raw());
+    }
+
+    /**
+     * Populates orders.customer_name / customer_phone / address from a raw Bosta JsonNode.
+     *
+     * Called by:
+     *   • populateConsigneePii(delivery) above — first-match and subsequent-event paths
+     *   • manualLink() — uses the raw stored in unlinked_bosta_deliveries, no API call needed
      *
      * Fill-only-if-null: COALESCE keeps any existing Shopify-sourced value untouched.
      * GDPR guard: skips the UPDATE entirely if pii_redacted_at IS NOT NULL.
@@ -557,9 +587,8 @@ public class ShipmentLinkService {
      *   phone ← receiver.phone (E.164, normalized to canonical 01XXXXXXXXX)
      *   addr  ← dropOffAddress.{firstLine, city.name, zone.name, district.name}
      */
-    private void populateConsigneePii(UUID orderId, UUID tenantId, BostaDelivery delivery) {
-        if (delivery == null || delivery.raw() == null) return;
-        JsonNode raw = delivery.raw();
+    void populateConsigneePiiFromRaw(UUID orderId, UUID tenantId, JsonNode raw) {
+        if (raw == null) return;
 
         // Name: prefer fullName, fall back to firstName + lastName
         String fullName = raw.path("receiver").path("fullName").asText(null);

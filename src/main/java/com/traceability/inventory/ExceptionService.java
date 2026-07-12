@@ -154,7 +154,7 @@ public class ExceptionService {
             "       'lost:piece:' || p.id AS subject_key " +
             "FROM pieces p " +
             "LEFT JOIN orders o ON o.id = p.current_order_id " +
-            "LEFT JOIN shipments s ON s.order_id = o.id " +
+            "LEFT JOIN shipments s ON s.order_id = o.id AND s.shipment_leg = 'forward' " +
             "WHERE p.status = 'lost'::piece_status " +
             "  AND p.tenant_id = ? " +
             "  AND NOT EXISTS ( " +
@@ -178,7 +178,8 @@ public class ExceptionService {
             "JOIN allocations a  ON a.order_item_id = oi.id " +
             "                    AND a.status IN ('packed','active') " +
             "JOIN pieces p ON p.id = a.piece_id AND p.tenant_id = ? " +
-            "WHERE s.internal_state = 'returned' " +
+            "WHERE s.shipment_leg = 'forward' " +
+            "  AND s.internal_state = 'returned' " +
             "  AND s.returned_at IS NOT NULL " +
             "  AND s.returned_at < now() - (interval '1 day' * ?) " +
             "  AND s.tenant_id = ? " +
@@ -237,7 +238,8 @@ public class ExceptionService {
             "       'stuck:shipment:' || s.id AS subject_key " +
             "FROM shipments s " +
             "JOIN orders o ON o.id = s.order_id AND o.tenant_id = ? " +
-            "WHERE s.internal_state NOT IN (" +
+            "WHERE s.shipment_leg = 'forward' " +
+            "  AND s.internal_state NOT IN (" +
             "      'delivered'::shipment_internal_state," +
             "      'returned'::shipment_internal_state," +
             "      'lost'::shipment_internal_state," +
@@ -350,7 +352,7 @@ public class ExceptionService {
             "       o.shopify_cancel_requested_at AS occurred_at, " +
             "       'shopify_cancel_vs_inflight:order:' || o.id AS subject_key " +
             "FROM orders o " +
-            "LEFT JOIN shipments s ON s.order_id = o.id AND s.tenant_id = o.tenant_id " +
+            "LEFT JOIN shipments s ON s.order_id = o.id AND s.tenant_id = o.tenant_id AND s.shipment_leg = 'forward' " +
             "WHERE o.tenant_id = ? " +
             "  AND o.shopify_cancel_requested_at IS NOT NULL " +
             "  AND o.status = 'awaiting_pickup'::order_status " +
@@ -451,7 +453,7 @@ public class ExceptionService {
             "                    AND a.status        IN ('active','packed') " +
             "JOIN order_items oi ON oi.id            = a.order_item_id " +
             "JOIN orders o       ON o.id             = oi.order_id " +
-            "JOIN shipments s    ON s.order_id       = o.id " +
+            "JOIN shipments s    ON s.order_id       = o.id AND s.shipment_leg = 'forward' " +
             "WHERE p.status     = 'return_in_transit'::piece_status " +
             "  AND p.tenant_id  = ? " +
             "  AND p.last_event_at < now() - (interval '1 day' * ?) " +

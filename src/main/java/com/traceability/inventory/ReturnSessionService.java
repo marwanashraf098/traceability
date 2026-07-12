@@ -375,7 +375,7 @@ public class ReturnSessionService {
             "       s.id AS shipment_id " +
             "FROM pieces p " +
             "LEFT JOIN orders o      ON o.id  = p.current_order_id AND o.tenant_id = ? " +
-            "LEFT JOIN shipments s   ON s.order_id = o.id AND s.tenant_id = ? " +
+            "LEFT JOIN shipments s   ON s.order_id = o.id AND s.tenant_id = ? AND s.shipment_leg = 'forward' " +
             "WHERE p.id = ? AND p.tenant_id = ?",
             rs -> {
                 if (!rs.next()) return null;
