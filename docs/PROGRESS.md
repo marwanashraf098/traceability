@@ -4,7 +4,25 @@
 
 ## Current state
 
-**589 backend tests green** — 2026-07-12 (V46 — direction-aware delivery status + attempt/delay visibility). Deploy to Hetzner: `git pull && docker compose -f deploy/docker-compose.yml build --no-cache && docker compose -f deploy/docker-compose.yml up -d`.
+**596 backend tests green** — 2026-07-13 (V47 — FR-16 Phase 1 pickup sessions, scan-first custody model). Deploy to Hetzner: `git pull && docker compose -f deploy/docker-compose.yml build --no-cache && docker compose -f deploy/docker-compose.yml up -d`.
+
+V47 — FR-16 Phase 1: Pickup sessions (scan-first, Traced-owned custody).
+
+**Migration V47** — `pickups.status → session_status`; new session columns: `scheduled_time_slot`, `business_location_id`, `contact_person` (jsonb), `notes`, `no_of_packages`, `opened_by_user_id`, `closed_by_user_id`, `closed_at`, `submitted_at`, `bosta_error`. `pickup_shipments.scanned_at` + `scanned_by_user_id`. `shipments.custody_locked_by_scan BOOLEAN NOT NULL DEFAULT false`.
+
+**`PickupSessionService`** — open/scan/close/manifest. Scan validates: session open, forward leg, not duplicate, not in another open session, pieces in packed/awaiting_pickup state. Close: unconditionally sets `internal_state='with_courier'` + `custody_locked_by_scan=true` on all scanned shipments; transitions pieces packed→with_courier (or awaiting_pickup→with_courier) via InventoryLedger with `handed_to_courier` event; pieces in unexpected state get `exception_resolutions` record (type: `pickup_piece_custody_gap`). Session remains scannable until explicitly closed.
+
+**InventoryLedger** — `packed:with_courier` added as approved bypass. Session close is the authoritative physical handover; blocking because Bosta state-20 hasn't arrived produces a false custody state. Parallel precedent: `awaiting_pickup:delivered`.
+
+**BostaWebhookJob custody guard** — step-9 UPDATE now enforces two CASE branches: HOLD branch (locks on `custody_locked_by_scan=true AND shipment_leg='forward' AND incoming='created'`) prevents Bosta pre-transit state from demoting with_courier. RELEASE branch clears the lock only on genuine downstream progression (`with_courier`, `returning`, `delivered`, `returned`); exception/cancelled/terminated/lost do NOT release. Both branches filter `shipment_leg='forward'`.
+
+**PickupSessionController** — `POST /api/v1/pickup-sessions`, `GET /`, `GET /{id}`, `POST /{id}/scans`, `DELETE /{id}/scans/{shipmentId}`, `POST /{id}/close`, `GET /{id}/manifest`.
+
+**Frontend** — `PickupSessions.tsx`: session list, create-session form (date + time slot + notes), scan screen (always-focused barcode input, Enter capture, 6-outcome feedback banner at 2xl size, optimistic UI with rollback, removable scan list, running count), close-confirmation modal (explicit irreversible copy), closed manifest view. `/pickups` route added to `App.tsx`. `IconPickups` + nav link in `Layout.tsx`. Full en.json + ar.json translations.
+
+**Tests** — 7 new tests (ps1–ps7): ps1 full happy path (open→scan→close: shipment with_courier, custody_locked=true, piece with_courier, handed_to_courier event), ps2 duplicate scan, ps3 return-leg rejection, ps4 other-session conflict, ps5 custody guard holds Bosta 'created', ps6 custody guard releases on Bosta 'with_courier', ps7 RLS wrong-tenant isolation. Fr9ManifestSelfPickupTest updated for status→session_status rename.
+
+**Phase 2 (not built)**: Bosta pickup creation API call, pending_bosta deadlock handling, two-way reconcile (scanned-not-in-Bosta → possible lost package; in-Bosta-not-scanned → custody gap), divergence poll job.
 
 V46 — FR-15 direction-aware delivery status + attention fields.
 

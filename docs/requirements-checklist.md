@@ -98,7 +98,7 @@ One line per requirement · [M] Must / [S] Should / [C] Could · use as the buil
 ## FR-10 Pickup
 - [x] 10.1 [M] Batch pickup creation: select Awaiting Pickup orders, date, location → Bosta pickup [Day 24: BOSTA_MANAGED + TRACED_MANAGED, date validation, already-exists handling]
 - [x] 10.2 [M] Printable manifest: order/AWB/COD per parcel + batch COD total [Day 24: manifest generated for both modes; Day 26: COD total derived live, no stored column]
-- [ ] 10.3 [M] State 21 (picked up from business) → With Courier + handed_to_courier event; manual fallback (attributed)
+- [~] 10.3 [M] State 21 (picked up from business) → With Courier + handed_to_courier event; manual fallback (attributed) [V47 FR-16 Phase 1: scan-session close is the attributed manual fallback → with_courier + handed_to_courier event; Bosta state-21 webhook path is Phase 2]
 - [ ] 10.4 [S] Skipped parcels (no collection by EOD+1) → exception
 
 ## FR-11 Shipment Lifecycle
@@ -139,7 +139,7 @@ One line per requirement · [M] Must / [S] Should / [C] Could · use as the buil
 
 ## FR-16 Localization & Scan UX
 - [~] 16.1 [M] Full AR/EN, RTL-correct everywhere incl. labels + manifests (dir flip fixed; Fulfill worker strings done; Receiving placeholders/status badge deferred)
-- [ ] 16.2 [M] Worker screens one-handed on 5–6.5" Android; auto-focused scan field
+- [~] 16.2 [M] Worker screens one-handed on 5–6.5" Android; auto-focused scan field [V47: pickup scan screen has always-focused input, Enter capture, arm's-length feedback banner; one-handed Android sizing not validated]
 - [ ] 16.3 [M] Distinct success/failure audio
 - [ ] 16.4 [M] EGP everywhere ([C] Arabic-Indic numerals per user)
 
