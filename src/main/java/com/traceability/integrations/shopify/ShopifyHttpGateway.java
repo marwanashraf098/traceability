@@ -446,13 +446,62 @@ class ShopifyHttpGateway implements ShopifyGateway {
                   }
                 }
                 """;
+        String endpointUrl = "https://" + shopDomain + "/admin/api/" + apiVersion + "/graphql.json";
         ObjectNode vars = mapper.createObjectNode().put("id", variantGid);
         JsonNode response = executeGraphQL(shopDomain, token, query, vars);
-        JsonNode itemId = response.path("data").path("productVariant").path("inventoryItem").path("id");
-        if (itemId.isMissingNode() || itemId.isNull()) {
-            throw new ShopifyException("inventoryItem GID not found for variant " + variantGid);
+
+        JsonNode productVariantNode = response.path("data").path("productVariant");
+
+        if (productVariantNode.isMissingNode() || productVariantNode.isNull()) {
+            String scopes = fetchTokenScopesQuiet(shopDomain, token);
+            log.warn("Shopify resolveInventoryItemId: productVariant=null | variant={} | url={} | scopes={} | query={} | response={}",
+                     variantGid, endpointUrl, scopes, query, response);
+            throw new ShopifyException(
+                "productVariant not found for " + variantGid
+                + " (wrong GID, store mismatch, or missing read_products scope)"
+                + (scopes != null ? " | token scopes: " + scopes : ""));
         }
+
+        JsonNode itemId = productVariantNode.path("inventoryItem").path("id");
+        if (itemId.isMissingNode() || itemId.isNull()) {
+            String scopes = fetchTokenScopesQuiet(shopDomain, token);
+            log.warn("Shopify resolveInventoryItemId: inventoryItem=null | variant={} | url={} | scopes={} | query={} | response={}",
+                     variantGid, endpointUrl, scopes, query, response);
+            throw new ShopifyException(
+                "productVariant.inventoryItem is null for " + variantGid
+                + " — token predates read_inventory/write_inventory scope; store must reinstall app to issue a new token"
+                + (scopes != null ? " | token scopes: " + scopes : ""));
+        }
+
         return itemId.asText();
+    }
+
+    /**
+     * Fetches the actual granted scopes for the given token via the REST access_scopes endpoint.
+     * Returns a comma-separated scope string, or null if the call fails for any reason.
+     * Used only in the resolution-failure diagnostic path — never called on the happy path.
+     */
+    private String fetchTokenScopesQuiet(String shopDomain, String token) {
+        try {
+            String url = "https://" + shopDomain + "/admin/oauth/access_scopes.json";
+            JsonNode body = restClient.get()
+                .uri(url)
+                .header("X-Shopify-Access-Token", token)
+                .retrieve()
+                .body(JsonNode.class);
+            if (body == null) return null;
+            JsonNode scopes = body.path("access_scopes");
+            if (!scopes.isArray()) return null;
+            List<String> handles = new ArrayList<>();
+            for (JsonNode scope : scopes) {
+                String handle = scope.path("handle").asText(null);
+                if (handle != null) handles.add(handle);
+            }
+            return String.join(",", handles);
+        } catch (Exception e) {
+            log.debug("Could not fetch token scopes for diagnostic on {}: {}", shopDomain, e.getMessage());
+            return null;
+        }
     }
 
     // ---- GraphQL execution + throttle handling --------------------------
