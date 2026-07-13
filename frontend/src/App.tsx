@@ -19,6 +19,7 @@ import Settings from './pages/Settings'
 import Users from './pages/Users'
 import Onboarding from './pages/Onboarding'
 import Inventory from './pages/Inventory'
+import PickupSessions from './pages/PickupSessions'
 import Privacy from './pages/Privacy'
 import Terms from './pages/Terms'
 
@@ -149,6 +150,14 @@ export default function App() {
           element={
             <RequireAuth>
               <Layout><Inventory /></Layout>
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="/pickups"
+          element={
+            <RequireAuth>
+              <Layout><PickupSessions /></Layout>
             </RequireAuth>
           }
         />

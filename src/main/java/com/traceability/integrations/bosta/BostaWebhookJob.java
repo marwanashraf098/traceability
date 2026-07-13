@@ -261,9 +261,30 @@ public class BostaWebhookJob {
             final BostaAttentionExtractor.AttentionFields af =
                 BostaAttentionExtractor.extract(delivery.raw());
             tx.execute(s -> {
+                // Custody-lock guard (FR-16):
+                //   - HOLD: shipment_leg='forward', custody_locked_by_scan=true, incoming='created'
+                //     (Bosta pre-transit codes 10/11/20 arriving after physical handover)
+                //   - RELEASE: incoming is with_courier/returning/delivered/returned
+                //     (genuine downstream progression — Bosta caught up)
+                //   - HOLD through: exception/cancelled/terminated/lost (not "caught up")
+                //   - Both branches require shipment_leg='forward' (C2/C3 correction)
                 jdbc.update("""
                     UPDATE shipments
-                    SET internal_state           = ?::shipment_internal_state,
+                    SET internal_state = CASE
+                            WHEN custody_locked_by_scan = true
+                             AND shipment_leg = 'forward'
+                             AND ?::shipment_internal_state = 'created'
+                            THEN internal_state
+                            ELSE ?::shipment_internal_state
+                        END,
+                        custody_locked_by_scan = CASE
+                            WHEN custody_locked_by_scan = true
+                             AND shipment_leg = 'forward'
+                             AND ?::shipment_internal_state IN
+                                 ('with_courier','returning','delivered','returned')
+                            THEN false
+                            ELSE custody_locked_by_scan
+                        END,
                         provider_state           = ?,
                         number_of_attempts       = ?,
                         failed_delivery_attempts = ?,
@@ -281,7 +302,13 @@ public class BostaWebhookJob {
                         exception_reason         = COALESCE(?, exception_reason)
                     WHERE id = ?
                     """,
-                    mapped.shipmentInternalState(), delivery.stateCode(),
+                    // hold branch param (internal_state CASE arg 1)
+                    mapped.shipmentInternalState(),
+                    // else branch param (internal_state CASE arg 2)
+                    mapped.shipmentInternalState(),
+                    // release branch param (custody_locked_by_scan CASE)
+                    mapped.shipmentInternalState(),
+                    delivery.stateCode(),
                     af.totalAttempts(),
                     af.failedDeliveryAttempts(),
                     af.lastAttemptAt() != null ? af.lastAttemptAt().toString() : null,

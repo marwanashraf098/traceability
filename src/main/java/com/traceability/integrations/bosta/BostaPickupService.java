@@ -145,7 +145,7 @@ public class BostaPickupService {
                 "      JOIN pickups p ON p.id = ps.pickup_id " +
                 "      WHERE ps.shipment_id = s.id " +
                 "        AND ps.tenant_id   = ? " +
-                "        AND p.status NOT IN ('cancelled') " +
+                "        AND p.session_status NOT IN ('cancelled') " +
                 "  )",
                 tenantId, tenantId)));
 
@@ -167,8 +167,8 @@ public class BostaPickupService {
         UUID pickupId = TenantContext.runAs(tenantId, () ->
             tx.execute(s -> {
                 UUID pid = jdbc.query(
-                    "INSERT INTO pickups (tenant_id, courier_account_id, scheduled_date, status) " +
-                    "VALUES (?, ?, ?, 'pending') RETURNING id",
+                    "INSERT INTO pickups (tenant_id, courier_account_id, scheduled_date, session_status) " +
+                    "VALUES (?, ?, ?, 'closed') RETURNING id",
                     rs -> rs.next() ? rs.getObject("id", UUID.class) : null,
                     tenantId, accountId, java.sql.Date.valueOf(scheduledDate));
 
@@ -253,7 +253,7 @@ public class BostaPickupService {
     public PickupManifest getManifest(UUID tenantId, UUID pickupId) {
         Map<String, Object> pickup = TenantContext.runAs(tenantId, () ->
             tx.execute(s -> jdbc.query(
-                "SELECT id, scheduled_date::text, status, provider_pickup_id " +
+                "SELECT id, scheduled_date::text, session_status, provider_pickup_id " +
                 "FROM pickups WHERE id = ? AND tenant_id = ?",
                 rs -> {
                     if (!rs.next()) return null;
@@ -261,7 +261,7 @@ public class BostaPickupService {
                     Map<String, Object> row = new java.util.HashMap<>();
                     row.put("id",                 rs.getObject("id", UUID.class));
                     row.put("scheduled_date",     rs.getString("scheduled_date"));
-                    row.put("status",             rs.getString("status"));
+                    row.put("status",             rs.getString("session_status"));
                     row.put("provider_pickup_id", rs.getString("provider_pickup_id"));
                     return row;
                 },

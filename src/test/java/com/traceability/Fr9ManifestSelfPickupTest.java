@@ -180,8 +180,8 @@ class Fr9ManifestSelfPickupTest {
 
         // Manually create a pickup and link both shipments
         UUID pickupId = jdbc.queryForObject(
-            "INSERT INTO pickups (tenant_id, courier_account_id, scheduled_date, status) " +
-            "VALUES (?, ?, CURRENT_DATE + 1, 'pending') RETURNING id",
+            "INSERT INTO pickups (tenant_id, courier_account_id, scheduled_date, session_status) " +
+            "VALUES (?, ?, CURRENT_DATE + 1, 'open') RETURNING id",
             UUID.class, tenantId, courierAccountId);
         jdbc.update("INSERT INTO pickup_shipments (pickup_id, shipment_id, tenant_id) VALUES (?, ?, ?)",
                     pickupId, s1, tenantId);
@@ -210,8 +210,8 @@ class Fr9ManifestSelfPickupTest {
         UUID orderId = awaitingPickupOrder(new BigDecimal("100.00"));
         UUID shipId  = shipmentId(orderId, "AWB-RMFM1");
         UUID pickupId = jdbc.queryForObject(
-            "INSERT INTO pickups (tenant_id, courier_account_id, scheduled_date, status) " +
-            "VALUES (?, ?, CURRENT_DATE + 1, 'pending') RETURNING id",
+            "INSERT INTO pickups (tenant_id, courier_account_id, scheduled_date, session_status) " +
+            "VALUES (?, ?, CURRENT_DATE + 1, 'open') RETURNING id",
             UUID.class, tenantId, courierAccountId);
         jdbc.update("INSERT INTO pickup_shipments (pickup_id, shipment_id, tenant_id) VALUES (?, ?, ?)",
                     pickupId, shipId, tenantId);
@@ -249,8 +249,8 @@ class Fr9ManifestSelfPickupTest {
         UUID orderId = awaitingPickupOrder(new BigDecimal("80.00"));
         UUID shipId  = shipmentId(orderId, "AWB-SCV6");
         UUID pickupId = jdbc.queryForObject(
-            "INSERT INTO pickups (tenant_id, courier_account_id, scheduled_date, status) " +
-            "VALUES (?, ?, CURRENT_DATE + 1, 'pending') RETURNING id",
+            "INSERT INTO pickups (tenant_id, courier_account_id, scheduled_date, session_status) " +
+            "VALUES (?, ?, CURRENT_DATE + 1, 'open') RETURNING id",
             UUID.class, tenantId, courierAccountId);
         jdbc.update("INSERT INTO pickup_shipments (pickup_id, shipment_id, tenant_id) VALUES (?, ?, ?)",
                     pickupId, shipId, tenantId);
@@ -327,8 +327,8 @@ class Fr9ManifestSelfPickupTest {
         UUID orderId = awaitingPickupOrder(new BigDecimal("120.00"));
         UUID shipId  = shipmentId(orderId, "AWB-SPC8");
         UUID pickupId = jdbc.queryForObject(
-            "INSERT INTO pickups (tenant_id, courier_account_id, scheduled_date, status) " +
-            "VALUES (?, ?, CURRENT_DATE + 1, 'pending') RETURNING id",
+            "INSERT INTO pickups (tenant_id, courier_account_id, scheduled_date, session_status) " +
+            "VALUES (?, ?, CURRENT_DATE + 1, 'open') RETURNING id",
             UUID.class, tenantId, courierAccountId);
         jdbc.update("INSERT INTO pickup_shipments (pickup_id, shipment_id, tenant_id) VALUES (?, ?, ?)",
                     pickupId, shipId, tenantId);

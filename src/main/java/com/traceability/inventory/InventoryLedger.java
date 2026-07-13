@@ -44,6 +44,12 @@ public class InventoryLedger {
 
         // self-pickup handover: pieces go packed→delivered directly (no courier leg)
         "packed:delivered",
+        // pickup session close: Bosta state-20 (route-assigned) webhook never fired before the
+        // merchant closed the scan session and physically handed packages to the courier.
+        // Blocking the close because Bosta hasn't caught up would produce a false custody state
+        // (Traced says 'packed', package is in the courier's van). The session close is the
+        // authoritative handover event.
+        "packed:with_courier",
         // Bosta backfill / courier lag: delivery confirmed while piece is still at awaiting_pickup
         // (Bosta never fired the pickup state update — e.g. same-day delivery, or missed webhook).
         "awaiting_pickup:delivered",

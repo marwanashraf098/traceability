@@ -12,6 +12,7 @@ function IconOrders()     { return <svg width="18" height="18" fill="none" strok
 function IconInventory()  { return <svg width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.75" viewBox="0 0 24 24"><path d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4"/></svg> }
 function IconReceiving()  { return <svg width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.75" viewBox="0 0 24 24"><path d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"/></svg> }
 function IconFulfill()    { return <svg width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.75" viewBox="0 0 24 24"><path d="M4 6h16M4 10h16M4 14h16M4 18h7"/><path d="M15 14l2 2 4-4"/></svg> }
+function IconPickups()    { return <svg width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.75" viewBox="0 0 24 24"><rect x="1" y="3" width="15" height="13" rx="1"/><path d="M16 8h4l3 4v4h-7V8z"/><circle cx="5.5" cy="18.5" r="2.5"/><circle cx="18.5" cy="18.5" r="2.5"/></svg> }
 function IconReturns()    { return <svg width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.75" viewBox="0 0 24 24"><path d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6"/></svg> }
 function IconExceptions()  { return <svg width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.75" viewBox="0 0 24 24"><path d="M12 9v4m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/></svg> }
 function IconConnections() { return <svg width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.75" viewBox="0 0 24 24"><path d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg> }
@@ -86,6 +87,7 @@ export default function Layout({ children }: { children: ReactNode }) {
           <SideNavLink to="/catalog"    icon={<IconInventory />}  label={t('nav.catalog')} />
           <SideNavLink to="/receiving"  icon={<IconReceiving />}  label={t('nav.receiving')} />
           <SideNavLink to="/fulfill"    icon={<IconFulfill />}    label={t('nav.fulfill')} />
+          <SideNavLink to="/pickups"    icon={<IconPickups />}    label={t('nav.pickups')} />
           <SideNavLink to="/returns"      icon={<IconReturns />}      label={t('nav.returns')} />
           <SideNavLink to="/exceptions"   icon={<IconExceptions />}   label={t('nav.exceptions')} />
           <SideNavLink to="/connections"  icon={<IconConnections />}  label={t('nav.connections')} />

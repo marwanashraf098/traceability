@@ -12,7 +12,8 @@
     "connections": "الاتصالات",
     "users": "الفريق",
     "settings": "الإعدادات",
-    "onboarding": "البدء"
+    "onboarding": "البدء",
+    "pickups": "جلسات الاستلام"
   },
   "overview": {
     "title": "لوحة التحكم",
@@ -686,5 +687,57 @@
       "releaseButton": "تحرير (شحن على أي حال)",
       "cancelButton": "إلغاء الطلب"
     }
+  },
+  "pickups": {
+    "title": "جلسات الاستلام",
+    "new": "جلسة جديدة",
+    "empty": "لا توجد جلسات استلام بعد",
+    "back": "→ العودة إلى الجلسات",
+    "col": {
+      "date": "التاريخ",
+      "timeSlot": "الفترة الزمنية",
+      "scanned": "المسح",
+      "openedBy": "بواسطة",
+      "status": "الحالة"
+    },
+    "status": {
+      "open": "مفتوحة",
+      "closed": "مغلقة"
+    },
+    "newTitle": "جلسة استلام جديدة",
+    "date": "تاريخ الاستلام",
+    "timeSlot": "الفترة الزمنية",
+    "slot1013": "10:00 – 13:00",
+    "slot1316": "13:00 – 16:00",
+    "notes": "ملاحظات (اختياري)",
+    "create": "بدء المسح",
+    "scanTitle": "مسح باركودات بوليصات الشحن",
+    "scanCount": "{{count}} مسح",
+    "scanPlaceholder": "امسح أو اكتب رقم التتبع…",
+    "removeItem": "حذف",
+    "closeSession": "إغلاق الجلسة",
+    "closeConfirmTitle": "تأكيد التسليم",
+    "closeConfirmBody": "أنت على وشك تأكيد تسليم {{count}} طرد للمندوب. سيتم تحديث حالة جميع الشحنات الممسوحة إلى 'مع المندوب' فوراً. لا يمكن التراجع عن هذا الإجراء.",
+    "closeConfirm": "تأكيد التسليم — {{count}} طرد",
+    "closeCancel": "إلغاء",
+    "closedAt": "أُغلقت {{date}}",
+    "by": "بواسطة {{name}}",
+    "scanOutcome": {
+      "ACCEPTED": "✓ تم القبول",
+      "DUPLICATE": "تم مسحه مسبقاً في هذه الجلسة",
+      "OTHER_SESSION": "في جلسة أخرى نشطة — يُرجى إزالته أولاً",
+      "NOT_FORWARD_LEG": "شحنة إرجاع — غير مؤهلة للاستلام",
+      "NOT_PACKED": "الشحنة ليست في حالة التعبئة",
+      "UNKNOWN_AWB": "رقم التتبع غير موجود"
+    },
+    "manifestTitle": "قائمة الاستلام",
+    "manifestPackages": "إجمالي الطرود",
+    "manifestSignature": "توقيع المندوب",
+    "printManifest": "طباعة / تحميل القائمة",
+    "sessionOpenRequired": "الجلسة مفتوحة — امسح الطرود",
+    "orderNumber": "الطلب",
+    "cod": "الدفع عند الاستلام",
+    "pieceExceptions": "{{count}} قطعة بها فجوات في سلسلة الحيازة — تحقق من الاستثناءات",
+    "noScans": "لم يتم مسح أي طرود بعد"
   }
 }

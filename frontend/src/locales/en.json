@@ -12,7 +12,8 @@
     "connections": "Connections",
     "users": "Team",
     "settings": "Settings",
-    "onboarding": "Getting started"
+    "onboarding": "Getting started",
+    "pickups": "Pickups"
   },
   "overview": {
     "title": "Overview",
@@ -691,5 +692,57 @@
       "releaseButton": "Release (ship anyway)",
       "cancelButton": "Cancel order"
     }
+  },
+  "pickups": {
+    "title": "Pickup Sessions",
+    "new": "New session",
+    "empty": "No pickup sessions yet",
+    "back": "← Back to sessions",
+    "col": {
+      "date": "Date",
+      "timeSlot": "Time slot",
+      "scanned": "Scanned",
+      "openedBy": "Opened by",
+      "status": "Status"
+    },
+    "status": {
+      "open": "Open",
+      "closed": "Closed"
+    },
+    "newTitle": "New Pickup Session",
+    "date": "Pickup date",
+    "timeSlot": "Time slot",
+    "slot1013": "10:00 – 13:00",
+    "slot1316": "13:00 – 16:00",
+    "notes": "Notes (optional)",
+    "create": "Start scanning",
+    "scanTitle": "Scan AWB Barcodes",
+    "scanCount": "{{count}} scanned",
+    "scanPlaceholder": "Scan or type AWB…",
+    "removeItem": "Remove",
+    "closeSession": "Close session",
+    "closeConfirmTitle": "Confirm handover",
+    "closeConfirmBody": "You are about to confirm handover of {{count}} packages to the courier. This will immediately mark all scanned shipments as WITH COURIER. There is no undo.",
+    "closeConfirm": "Confirm handover — {{count}} packages",
+    "closeCancel": "Cancel",
+    "closedAt": "Closed {{date}}",
+    "by": "by {{name}}",
+    "scanOutcome": {
+      "ACCEPTED": "✓ Accepted",
+      "DUPLICATE": "Already scanned in this session",
+      "OTHER_SESSION": "In another active session — remove it first",
+      "NOT_FORWARD_LEG": "Return-leg shipment — not eligible for pickup",
+      "NOT_PACKED": "Shipment not in packed state",
+      "UNKNOWN_AWB": "AWB not found"
+    },
+    "manifestTitle": "Handover Manifest",
+    "manifestPackages": "Total packages",
+    "manifestSignature": "Courier signature",
+    "printManifest": "Print / Download manifest",
+    "sessionOpenRequired": "Session is open — scan packages",
+    "orderNumber": "Order",
+    "cod": "COD",
+    "pieceExceptions": "{{count}} piece(s) had custody gaps — check Exceptions",
+    "noScans": "No packages scanned yet"
   }
 }
