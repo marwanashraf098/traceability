@@ -107,6 +107,7 @@ public class ApiExceptionHandler {
     // ExceptionTranslationFilter can invoke the AccessDeniedHandler.
     @ExceptionHandler(AccessDeniedException.class)
     ResponseEntity<Void> handleAccessDenied(AccessDeniedException ex) {
+        log.warn("Access denied: {}", ex.getMessage());
         return ResponseEntity.status(HttpStatus.FORBIDDEN).build();
     }
 

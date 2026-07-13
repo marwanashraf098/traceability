@@ -524,14 +524,14 @@ public class ShopifyOAuthService {
     public boolean acquireOrRefreshViaSessionToken(UUID tenantId, String shopDomain, String rawSessionToken) {
         // Step 1: freshness check — needs TenantContext for RLS
         record StoreSnap(UUID id, Instant expiresAt, String status, String importStatus,
-                         String accessTokenScopes) {}
+                         String accessTokenScopes, String connectionType) {}
         StoreSnap snap;
         TenantContext.set(tenantId);
         try {
             snap = tx.execute(s ->
                 jdbc.query(
                     "SELECT id, access_token_expires_at, status::text, import_status::text, " +
-                    "       access_token_scopes " +
+                    "       access_token_scopes, connection_type " +
                     "FROM stores WHERE tenant_id = ? AND shop_domain = ?",
                     rs -> rs.next() ? new StoreSnap(
                         rs.getObject("id", UUID.class),
@@ -539,7 +539,8 @@ public class ShopifyOAuthService {
                             ? rs.getTimestamp("access_token_expires_at").toInstant() : null,
                         rs.getString("status"),
                         rs.getString("import_status"),
-                        rs.getString("access_token_scopes")) : null,
+                        rs.getString("access_token_scopes"),
+                        rs.getString("connection_type")) : null,
                     tenantId, shopDomain));
         } finally {
             TenantContext.clear();
@@ -548,6 +549,20 @@ public class ShopifyOAuthService {
         if (snap == null) {
             log.warn("Token exchange: store not found tenant={} shop={}", tenantId, shopDomain);
             return false;
+        }
+
+        // Guard: session-token exchange is only valid for OAuth stores. custom_app and
+        // custom_app_cc stores manage their tokens via ShopifyTokenProvider (CC re-exchange
+        // or legacy API-secret path). If the session-token exchange ran on a CC store it would
+        // silently overwrite the CC token with an OAuth token, leaving connection_type stale
+        // and the token in an unknown state (this is exactly how tracedlocations ended up with
+        // a non-expiring OAuth token that Shopify now rejects). Skip and return true — the
+        // CC token is valid and managed independently.
+        String connType = snap.connectionType() != null ? snap.connectionType() : "oauth";
+        if (!"oauth".equals(connType)) {
+            log.info("Token exchange skipped: shop={} uses connection_type={} (CC-managed token)",
+                     shopDomain, connType);
+            return true;
         }
 
         // Step 2: skip if token is comfortably fresh AND scopes already cover the app's declared list.
