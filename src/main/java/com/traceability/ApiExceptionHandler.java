@@ -6,16 +6,22 @@ import com.traceability.integrations.shopify.ShopifySessionTokenExchangeExceptio
 import com.traceability.integrations.shopify.ShopifyStoreNeedsReauthException;
 import com.traceability.integrations.shopify.ShopifyTransientException;
 import com.traceability.inventory.PieceCommittedException;
+import jakarta.servlet.http.HttpServletRequest;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.AccessDeniedException;
+import org.springframework.security.core.Authentication;
+import org.springframework.security.core.GrantedAuthority;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.web.bind.MissingRequestCookieException;
 import org.springframework.web.bind.MissingRequestHeaderException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.server.ResponseStatusException;
+
+import java.util.stream.Collectors;
 
 /**
  * Handles exceptions before any resolver can call response.sendError(), which triggers
@@ -102,13 +108,28 @@ public class ApiExceptionHandler {
         return ResponseEntity.status(ex.getStatusCode()).build();
     }
 
+    record AccessDeniedBody(String error, String path, String authorities) {}
+
     // Must be caught explicitly: @PreAuthorize throws AccessDeniedException through Spring MVC,
     // which DispatcherServlet would otherwise pass to ExceptionHandlerExceptionResolver before
     // ExceptionTranslationFilter can invoke the AccessDeniedHandler.
+    // Logs user + granted authorities + method + URI so role-name mismatches are immediately
+    // visible without enabling Spring Security DEBUG. Returns a JSON body so the frontend can
+    // distinguish a 403 from a network error and display a useful message.
     @ExceptionHandler(AccessDeniedException.class)
-    ResponseEntity<Void> handleAccessDenied(AccessDeniedException ex) {
-        log.warn("Access denied: {}", ex.getMessage());
-        return ResponseEntity.status(HttpStatus.FORBIDDEN).build();
+    ResponseEntity<AccessDeniedBody> handleAccessDenied(AccessDeniedException ex,
+                                                        HttpServletRequest request) {
+        Authentication auth = SecurityContextHolder.getContext().getAuthentication();
+        String user        = auth != null ? auth.getName() : "anonymous";
+        String authorities = auth != null
+            ? auth.getAuthorities().stream()
+                  .map(GrantedAuthority::getAuthority)
+                  .collect(Collectors.joining(","))
+            : "none";
+        log.warn("Access denied: user={} authorities=[{}] {}", user, authorities,
+                 request.getMethod() + " " + request.getRequestURI());
+        return ResponseEntity.status(HttpStatus.FORBIDDEN)
+            .body(new AccessDeniedBody("ACCESS_DENIED", request.getRequestURI(), authorities));
     }
 
     @ExceptionHandler(Exception.class)
