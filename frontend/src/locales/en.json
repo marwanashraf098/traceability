@@ -13,7 +13,9 @@
     "users": "Team",
     "settings": "Settings",
     "onboarding": "Getting started",
-    "pickups": "Pickups"
+    "pickups": "Pickups",
+    "locations": "Locations",
+    "shopifyInventory": "Inventory Sync"
   },
   "overview": {
     "title": "Overview",
@@ -691,6 +693,61 @@
     "exception": {
       "releaseButton": "Release (ship anyway)",
       "cancelButton": "Cancel order"
+    }
+  },
+  "locations": {
+    "title": "Locations",
+    "addLocation": "Add location",
+    "newTitle": "New Location",
+    "namePlaceholder": "e.g. Main Warehouse",
+    "create": "Create",
+    "empty": "No locations yet",
+    "default": "Default",
+    "shopifySyncNote": "Shopify location sync requires write_locations scope — will be linked once scope is granted.",
+    "col": {
+      "name": "Name",
+      "type": "Type",
+      "shopifySync": "Shopify sync",
+      "shopifyId": "Shopify location ID",
+      "syncedAt": "Synced at"
+    },
+    "syncStatus": {
+      "unsynced": "Not synced",
+      "pending": "Pending",
+      "linked": "Linked",
+      "error": "Error"
+    }
+  },
+  "shopifyInventory": {
+    "title": "Shopify Inventory Sync",
+    "subtitle": "Shadow mode — adjustments are queued but not yet sent to Shopify.",
+    "export": "Export CSV",
+    "empty": "No adjustments recorded yet",
+    "allStatuses": "All statuses",
+    "allTriggers": "All triggers",
+    "from": "From date",
+    "to": "To date",
+    "apply": "Apply",
+    "prev": "Previous",
+    "next": "Next",
+    "showing": "Showing {{from}}–{{to}} of {{total}}",
+    "status": {
+      "shadow": "Shadow",
+      "pending": "Pending",
+      "applied": "Applied",
+      "failed": "Failed"
+    },
+    "trigger": {
+      "receiving_session": "Receiving",
+      "return_inspection": "Return"
+    },
+    "col": {
+      "product": "Product / Variant",
+      "location": "Location",
+      "trigger": "Trigger",
+      "delta": "Delta",
+      "status": "Status",
+      "createdAt": "Created"
     }
   },
   "pickups": {

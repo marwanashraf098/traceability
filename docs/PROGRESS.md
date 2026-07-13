@@ -4,7 +4,29 @@
 
 ## Current state
 
-**596 backend tests green** — 2026-07-13 (V47 — FR-16 Phase 1 pickup sessions, scan-first custody model). Deploy to Hetzner: `git pull && docker compose -f deploy/docker-compose.yml build --no-cache && docker compose -f deploy/docker-compose.yml up -d`.
+**601 backend tests green** — 2026-07-13 (V48 — FR-17 Phase 1 Shopify inventory shadow sync). Deploy to Hetzner: `ssh <user>@167.233.46.223 "cd /opt/traced && git pull && docker compose -f deploy/docker-compose.yml build --no-cache && docker compose -f deploy/docker-compose.yml up -d"`.
+
+V48 — FR-17 Phase 1: Shopify inventory shadow sync (no mutation until scope + flag enabled).
+
+**Migration V48** — `shopify_inventory_adjustments` table (batch_id, variant_id, location_id, shopify_inventory_item_id, shopify_location_id, delta, trigger_type, trigger_id, payload jsonb, status shadow/pending/applied/failed, shopify_response jsonb, error, applied_at) + RLS + app_user grants. `stores.shopify_inventory_sync_enabled BOOLEAN DEFAULT FALSE`. `locations` sync columns: shopify_location_id, shopify_sync_status (unsynced/pending/linked/error), shopify_sync_error, shopify_synced_at. UNIQUE index on (tenant_id, shopify_location_id) WHERE NOT NULL.
+
+**Invariant (never relax without explicit approval):** Traced only INCREMENTS Shopify inventory. Shopify owns decrements. Two trigger points: (1) `ReceivingService.finalize()` after session commit; (2) `ReturnService.restock()` after RETURN_PENDING_INSPECTION → AVAILABLE. Damaged pieces are explicitly excluded — no sync call in `markDamaged()`.
+
+**`ShopifyInventoryService`** — `@Async` + `TenantContext.runAs()` outer wrapper. Per-trigger: resolve store, shopify_location_id (must be `linked`), variant GID → inventoryItem GID (via `resolveInventoryItemId`, uses already-granted `read_products`). Inserts rows with `ON CONFLICT (trigger_type, trigger_id, variant_id, location_id) DO NOTHING` for idempotency. Resolution failures → `status='failed'` with `error` column. Shadow mode: all rows created as `status='shadow'`, no Shopify mutation called. Returns `CompletableFuture<Void>` for testability.
+
+**`ShopifyGateway` + `ShopifyHttpGateway`** — added `resolveInventoryItemId(shopDomain, token, variantGid)`: `productVariant(id:$gid) { inventoryItem { id } }` query, returns inventoryItem GID. Also `executeGraphQLPublic()` package-private method for future `ShopifyLocationGatewayImpl` use.
+
+**`ShopifyLocationGateway`** — interface with `findByName()` + `create(LocationInput)`. `StubShopifyLocationGateway` is `@Primary` and throws "scope not yet granted" on every call. `ShopifyLocationGatewayImpl` is a POJO (no `@Service`) — written with real `locationAdd` mutation but not in the Spring context. To activate: add `@Service @Primary` to impl, remove `@Primary` from stub.
+
+**`ShopifyInventoryController`** — `GET /api/v1/shopify-inventory/adjustments` (filterable: status, triggerType, from, to; paginated). `GET /api/v1/shopify-inventory/adjustments/export.csv`.
+
+**`LocationController`** — GET now includes shopify sync columns. `POST /api/v1/locations` (owner/manager only) creates location + attempts Shopify sync (caught, recorded as error since stub always throws).
+
+**Frontend** — `Locations.tsx`: location list with sync badges (unsynced/pending/linked/error), create form, error message inline. `ShopifyInventory.tsx`: adjustments table with filter bar (status, triggerType, date range), failed rows in red, CSV export button. Both added as routes in `App.tsx`. `Layout.tsx`: `IconLocations` + `IconShopifyInv` + nav links (manager/owner only). `en.json` + `ar.json` translated.
+
+**Tests** — 5 new tests (si1–si5): si1 receiving session inserts shadow rows with resolved inventoryItemId, si2 duplicate trigger blocked by UNIQUE (ON CONFLICT DO NOTHING), si3 unlinked location records failed row, si4 return inspection inserts shadow row for variant, si5 RLS wrong-tenant isolation with app_user. `MigrationSmokeTest` updated V1–V48 = 47, `shopify_inventory_adjustments` in tenant-scoped table list.
+
+**Phase 2 (not built):** flip `shopify_inventory_sync_enabled=true`, change status to `pending`, call `inventoryAdjustQuantities` mutation, use `batch_id` as `@idempotent(key:)`, parse `changes[]` set for partial-failure mapping. Scope change (write_inventory): Marawan to test on dev store first; DO NOT touch shopify.app.toml until confirmed.
 
 V47 — FR-16 Phase 1: Pickup sessions (scan-first, Traced-owned custody).
 

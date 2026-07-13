@@ -172,4 +172,18 @@ public interface ShopifyGateway {
      * @throws ShopifyTransientException on 5xx or network failure
      */
     TokenResponse exchangeClientCredentials(String shopDomain, String clientId, String clientSecret);
+
+    // ---- FR-17: inventory sync ------------------------------------------
+
+    /**
+     * Resolves the Shopify inventoryItem GID for a product variant GID.
+     * Uses the already-granted read_products scope — no new scope required.
+     *
+     * @param shopDomain the merchant's myshopify.com domain
+     * @param token      plaintext offline access token
+     * @param variantGid Shopify variant GID e.g. "gid://shopify/ProductVariant/12345"
+     * @return inventoryItem GID e.g. "gid://shopify/InventoryItem/67890"
+     * @throws ShopifyException if the variant is not found or the field is missing
+     */
+    String resolveInventoryItemId(String shopDomain, String token, String variantGid);
 }

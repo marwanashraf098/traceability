@@ -13,7 +13,9 @@
     "users": "الفريق",
     "settings": "الإعدادات",
     "onboarding": "البدء",
-    "pickups": "جلسات الاستلام"
+    "pickups": "جلسات الاستلام",
+    "locations": "المواقع",
+    "shopifyInventory": "مزامنة المخزون"
   },
   "overview": {
     "title": "لوحة التحكم",
@@ -739,5 +741,60 @@
     "cod": "الدفع عند الاستلام",
     "pieceExceptions": "{{count}} قطعة بها فجوات في سلسلة الحيازة — تحقق من الاستثناءات",
     "noScans": "لم يتم مسح أي طرود بعد"
+  },
+  "locations": {
+    "title": "المواقع",
+    "addLocation": "إضافة موقع",
+    "newTitle": "موقع جديد",
+    "namePlaceholder": "مثال: المستودع الرئيسي",
+    "create": "إنشاء",
+    "empty": "لا توجد مواقع بعد",
+    "default": "افتراضي",
+    "shopifySyncNote": "تزامن الموقع مع Shopify يتطلب صلاحية write_locations — سيتم الربط فور منح الصلاحية.",
+    "col": {
+      "name": "الاسم",
+      "type": "النوع",
+      "shopifySync": "تزامن Shopify",
+      "shopifyId": "معرّف موقع Shopify",
+      "syncedAt": "تاريخ التزامن"
+    },
+    "syncStatus": {
+      "unsynced": "غير متزامن",
+      "pending": "قيد الانتظار",
+      "linked": "مرتبط",
+      "error": "خطأ"
+    }
+  },
+  "shopifyInventory": {
+    "title": "مزامنة مخزون Shopify",
+    "subtitle": "الوضع التجريبي — التسويات مسجّلة ولم تُرسل إلى Shopify بعد.",
+    "export": "تصدير CSV",
+    "empty": "لا توجد تسويات بعد",
+    "allStatuses": "جميع الحالات",
+    "allTriggers": "جميع المحفّزات",
+    "from": "من تاريخ",
+    "to": "إلى تاريخ",
+    "apply": "تطبيق",
+    "prev": "السابق",
+    "next": "التالي",
+    "showing": "عرض {{from}}–{{to}} من {{total}}",
+    "status": {
+      "shadow": "تجريبي",
+      "pending": "قيد الانتظار",
+      "applied": "مُطبَّق",
+      "failed": "فشل"
+    },
+    "trigger": {
+      "receiving_session": "استلام",
+      "return_inspection": "مرتجع"
+    },
+    "col": {
+      "product": "المنتج / النوع",
+      "location": "الموقع",
+      "trigger": "المحفّز",
+      "delta": "التغيير",
+      "status": "الحالة",
+      "createdAt": "التاريخ"
+    }
   }
 }

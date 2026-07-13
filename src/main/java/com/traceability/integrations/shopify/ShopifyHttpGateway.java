@@ -435,7 +435,32 @@ class ShopifyHttpGateway implements ShopifyGateway {
         }
     }
 
+    // ---- FR-17: inventory sync -------------------------------------------
+
+    @Override
+    public String resolveInventoryItemId(String shopDomain, String token, String variantGid) {
+        String query = """
+                query VariantInventoryItem($id: ID!) {
+                  productVariant(id: $id) {
+                    inventoryItem { id }
+                  }
+                }
+                """;
+        ObjectNode vars = mapper.createObjectNode().put("id", variantGid);
+        JsonNode response = executeGraphQL(shopDomain, token, query, vars);
+        JsonNode itemId = response.path("data").path("productVariant").path("inventoryItem").path("id");
+        if (itemId.isMissingNode() || itemId.isNull()) {
+            throw new ShopifyException("inventoryItem GID not found for variant " + variantGid);
+        }
+        return itemId.asText();
+    }
+
     // ---- GraphQL execution + throttle handling --------------------------
+
+    /** Package-private so ShopifyLocationGatewayImpl can share the same transport. */
+    JsonNode executeGraphQLPublic(String shopDomain, String token, String query, JsonNode variables) {
+        return executeGraphQL(shopDomain, token, query, variables);
+    }
 
     private JsonNode executeGraphQL(String shopDomain, String token, String query, JsonNode variables) {
         String url = "https://" + shopDomain + "/admin/api/" + apiVersion + "/graphql.json";

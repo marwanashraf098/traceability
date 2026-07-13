@@ -117,7 +117,7 @@ class Day8Test {
         DataSourceTransactionManager appUserTxm = new DataSourceTransactionManager(appUserDs);
         appUserTx = new TransactionTemplate(appUserTxm);
         InventoryLedger appUserLedger = new InventoryLedger(appUserJdbc);
-        appUserReceiving = new ReceivingService(appUserJdbc, appUserLedger);
+        appUserReceiving = new ReceivingService(appUserJdbc, appUserLedger, null);
         appUserLabelSvc  = new LabelService(appUserJdbc);
     }
 

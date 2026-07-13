@@ -20,6 +20,8 @@ import Users from './pages/Users'
 import Onboarding from './pages/Onboarding'
 import Inventory from './pages/Inventory'
 import PickupSessions from './pages/PickupSessions'
+import ShopifyInventory from './pages/ShopifyInventory'
+import Locations from './pages/Locations'
 import Privacy from './pages/Privacy'
 import Terms from './pages/Terms'
 
@@ -190,6 +192,22 @@ export default function App() {
           element={
             <RequireAuth>
               <Layout><Users /></Layout>
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="/shopify-inventory"
+          element={
+            <RequireAuth>
+              <Layout><ShopifyInventory /></Layout>
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="/locations"
+          element={
+            <RequireAuth>
+              <Layout><Locations /></Layout>
             </RequireAuth>
           }
         />

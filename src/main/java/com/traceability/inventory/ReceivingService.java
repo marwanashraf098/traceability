@@ -12,12 +12,15 @@ import java.util.*;
 @Service
 public class ReceivingService {
 
-    private final JdbcTemplate    jdbc;
-    private final InventoryLedger ledger;
+    private final JdbcTemplate           jdbc;
+    private final InventoryLedger        ledger;
+    private final ShopifyInventoryService shopifyInventory;
 
-    public ReceivingService(JdbcTemplate jdbc, InventoryLedger ledger) {
-        this.jdbc   = jdbc;
-        this.ledger = ledger;
+    public ReceivingService(JdbcTemplate jdbc, InventoryLedger ledger,
+                            ShopifyInventoryService shopifyInventory) {
+        this.jdbc             = jdbc;
+        this.ledger           = ledger;
+        this.shopifyInventory = shopifyInventory;
     }
 
     // ── Create ──────────────────────────────────────────────────────────────
@@ -126,6 +129,19 @@ public class ReceivingService {
             "UPDATE receipts SET status = 'finalized', finalized_at = now() " +
             "WHERE id = ? AND tenant_id = ?",
             sessionId, tenantId);
+
+        // Build variant→qty delta map and kick off async Shopify shadow sync (Trigger 1).
+        // Runs on a new thread after this method returns; TenantContext.runAs() is the
+        // outer wrapper inside onReceivingSessionClose — ThreadLocal does not propagate.
+        Map<UUID, Integer> variantDeltaMap = new java.util.LinkedHashMap<>();
+        for (Map<String, Object> line : lines) {
+            UUID variantId = (UUID) line.get("variant_id");
+            int  qty       = (Integer) line.get("quantity");
+            variantDeltaMap.merge(variantId, qty, Integer::sum);
+        }
+        if (shopifyInventory != null) {
+            shopifyInventory.onReceivingSessionClose(tenantId, sessionId, locationId, variantDeltaMap);
+        }
 
         return specs.size();
     }

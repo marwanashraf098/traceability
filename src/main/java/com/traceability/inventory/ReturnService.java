@@ -25,12 +25,15 @@ public class ReturnService {
     private static final Set<String> RETURNING_SHIPMENT_STATES =
             Set.of("returning", "returned");
 
-    private final JdbcTemplate    jdbc;
-    private final InventoryLedger ledger;
+    private final JdbcTemplate            jdbc;
+    private final InventoryLedger         ledger;
+    private final ShopifyInventoryService shopifyInventory;
 
-    public ReturnService(JdbcTemplate jdbc, InventoryLedger ledger) {
-        this.jdbc   = jdbc;
-        this.ledger = ledger;
+    public ReturnService(JdbcTemplate jdbc, InventoryLedger ledger,
+                         ShopifyInventoryService shopifyInventory) {
+        this.jdbc             = jdbc;
+        this.ledger           = ledger;
+        this.shopifyInventory = shopifyInventory;
     }
 
     // ── Intake scan (FR-12.1 + FR-12.2) ──────────────────────────────────────
@@ -168,6 +171,10 @@ public class ReturnService {
         jdbc.update(
             "UPDATE pieces SET current_order_id = NULL, current_location_id = ? WHERE id = ?",
             locationId, pieceId);
+
+        // Async Shopify shadow sync — Trigger 2 (return_inspection → AVAILABLE).
+        // Damaged pieces are NOT routed here; markDamaged() has no sync call — invariant preserved.
+        shopifyInventory.onReturnInspectionAvailable(tenantId, pieceId, locationId);
     }
 
     // ── Mark damaged (FR-12.3) ────────────────────────────────────────────────
