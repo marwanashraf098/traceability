@@ -60,6 +60,7 @@ public class ShopifyOAuthService {
                    refresh_token_encrypted  = ?,
                    refresh_token_expires_at = ?,
                    access_token_scopes      = ?,
+                   connection_type          = 'oauth',
                    status                   = 'connected',
                    import_status            = 'pending'
              WHERE shop_domain = ?
@@ -81,6 +82,7 @@ public class ShopifyOAuthService {
                    refresh_token_encrypted  = ?,
                    refresh_token_expires_at = ?,
                    access_token_scopes      = ?,
+                   connection_type          = 'oauth',
                    status                   = 'connected',
                    import_status            = CASE
                        WHEN status = 'needs_reauth' OR import_status IN ('idle','failed')
