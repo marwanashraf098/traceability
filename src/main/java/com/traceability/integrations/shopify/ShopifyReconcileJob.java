@@ -88,11 +88,13 @@ public class ShopifyReconcileJob {
     }
 
     private void reconcileStore(UUID storeId, UUID tenantId, String shopDomain) {
-        String rawToken    = tokenProvider.getValidToken(storeId);
-        String createdAfter = Instant.now().minus(LOOKBACK_MINUTES, ChronoUnit.MINUTES).toString();
-
+        // TenantContext must be set BEFORE getValidToken — ShopifyTokenProvider uses the
+        // app_user datasource (RLS-gated). Without the GUC, the store SELECT returns zero
+        // rows and getValidToken throws "Store not found or not visible under current tenant".
         TenantContext.set(tenantId);
         try {
+            String rawToken    = tokenProvider.getValidToken(storeId);
+            String createdAfter = Instant.now().minus(LOOKBACK_MINUTES, ChronoUnit.MINUTES).toString();
             String cursor = null;
             int ingested = 0;
             do {

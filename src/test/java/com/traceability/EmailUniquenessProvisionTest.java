@@ -295,7 +295,7 @@ class EmailUniquenessProvisionTest {
         // shopC has never been seen — resolveShopOwner returns null → Path-2 → provisionNewTenant().
         String shopC = "eu-shop-c.myshopify.com";
         ShopifyGateway.TokenResponse fakeTokens =
-            new ShopifyGateway.TokenResponse("shpat_fake_c", "shprt_fake_c", 3600L, 7776000L);
+            new ShopifyGateway.TokenResponse("shpat_fake_c", "shprt_fake_c", 3600L, 7776000L, null);
 
         when(shopifyGateway.exchangeCode(eq(shopC), eq("fake-code-c"))).thenReturn(fakeTokens);
         // fetchShop returns the SAME email as the already-provisioned shop-a tenant.

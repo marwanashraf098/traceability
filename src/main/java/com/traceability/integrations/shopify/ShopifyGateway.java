@@ -55,7 +55,8 @@ public interface ShopifyGateway {
             String accessToken,
             String refreshToken,          // plaintext shprt_...; null if non-expiring (shouldn't happen)
             long   expiresIn,             // seconds until access token expires (typically 3600)
-            long   refreshTokenExpiresIn  // seconds until refresh token expires (typically 7776000)
+            long   refreshTokenExpiresIn, // seconds until refresh token expires (typically 7776000)
+            String grantedScopes          // comma-separated scope list from Shopify's response; null for CC
     ) {}
 
     // ---- operations -----------------------------------------------------

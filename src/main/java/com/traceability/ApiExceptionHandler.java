@@ -3,6 +3,7 @@ package com.traceability;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.traceability.integrations.shopify.ShopifyOAuthException;
 import com.traceability.integrations.shopify.ShopifySessionTokenExchangeException;
+import com.traceability.integrations.shopify.ShopifyStoreNeedsReauthException;
 import com.traceability.integrations.shopify.ShopifyTransientException;
 import com.traceability.inventory.PieceCommittedException;
 import org.slf4j.Logger;
@@ -37,6 +38,8 @@ public class ApiExceptionHandler {
 
     record CommittedErrorBody(String error, String orderId, String orderNumber) {}
 
+    record ReauthErrorBody(String error, String message, String shop) {}
+
     @ExceptionHandler(PieceCommittedException.class)
     ResponseEntity<CommittedErrorBody> handlePieceCommitted(PieceCommittedException ex) {
         return ResponseEntity.status(HttpStatus.CONFLICT)
@@ -50,6 +53,18 @@ public class ApiExceptionHandler {
     ResponseEntity<OAuthErrorBody> handleShopifyOAuth(ShopifyOAuthException ex) {
         return ResponseEntity.status(ex.httpStatus())
             .body(new OAuthErrorBody(ex.code().name(), ex.messageEn(), ex.messageAr()));
+    }
+
+    // Shopify token is stale or lacks required scopes. Returning 403 with JSON so the UI can
+    // display a reconnect prompt instead of a generic error screen.
+    @ExceptionHandler(ShopifyStoreNeedsReauthException.class)
+    ResponseEntity<ReauthErrorBody> handleShopifyNeedsReauth(ShopifyStoreNeedsReauthException ex) {
+        log.warn("Shopify store needs reauth: {}", ex.getMessage());
+        return ResponseEntity.status(HttpStatus.FORBIDDEN)
+            .body(new ReauthErrorBody(
+                "SHOPIFY_NEEDS_REAUTH",
+                "Shopify token is stale or lacks required scopes — reconnect the store in Settings",
+                ex.getShopDomain()));
     }
 
     // Shopify session-token exchange returned 4xx — the session token was rejected by Shopify.

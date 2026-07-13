@@ -290,7 +290,7 @@ class ShopifyMagicLinkTest {
         String rawToken   = "shpat_provision_token_abc";
 
         when(shopifyGateway.exchangeCode(eq(newShop), any()))
-            .thenReturn(new ShopifyGateway.TokenResponse(rawToken, "shprt_refresh_magic", 3600L, 7776000L));
+            .thenReturn(new ShopifyGateway.TokenResponse(rawToken, "shprt_refresh_magic", 3600L, 7776000L, null));
         when(shopifyGateway.fetchShop(eq(newShop), eq(rawToken)))
             .thenReturn(new ShopifyGateway.ShopInfo(ownerEmail, "Magic Provision Store", "Africa/Cairo"));
 

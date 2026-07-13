@@ -151,7 +151,7 @@ class CustomAppConnectTest {
 
     private void defaultMocks() {
         when(shopifyGateway.exchangeClientCredentials(anyString(), anyString(), anyString()))
-            .thenReturn(new ShopifyGateway.TokenResponse(ACCESS_TOKEN, null, EXPIRES_IN, 0));
+            .thenReturn(new ShopifyGateway.TokenResponse(ACCESS_TOKEN, null, EXPIRES_IN, 0, null));
         when(shopifyGateway.fetchShop(anyString(), anyString()))
             .thenReturn(new ShopifyGateway.ShopInfo("owner@store.com", "CC Store", "Africa/Cairo"));
         when(shopifyGateway.validateShop(anyString(), anyString())).thenReturn("CC Store");
@@ -295,7 +295,7 @@ class CustomAppConnectTest {
 
         String newToken = "shpat_new_cc_token_xyz";
         when(shopifyGateway.exchangeClientCredentials(eq(SHOP_DOMAIN), eq(CLIENT_ID), eq(CLIENT_SECRET)))
-            .thenReturn(new ShopifyGateway.TokenResponse(newToken, null, 86399L, 0));
+            .thenReturn(new ShopifyGateway.TokenResponse(newToken, null, 86399L, 0, null));
 
         // Call tokenProvider under tenant context
         String result = TenantContext.runAs(ownerTenantId, () -> tokenProvider.getValidToken(storeId));

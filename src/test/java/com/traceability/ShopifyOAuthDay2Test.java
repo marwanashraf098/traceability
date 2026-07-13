@@ -101,9 +101,9 @@ class ShopifyOAuthDay2Test {
     private static final String TOKEN_B = "shpat_test_token_day2_b";
     // TokenResponse wrappers — exchangeCode() now returns these instead of a plain String.
     private static final ShopifyGateway.TokenResponse EXCHANGE_A =
-        new ShopifyGateway.TokenResponse(TOKEN_A, "shprt_refresh_a", 3600L, 7776000L);
+        new ShopifyGateway.TokenResponse(TOKEN_A, "shprt_refresh_a", 3600L, 7776000L, null);
     private static final ShopifyGateway.TokenResponse EXCHANGE_B =
-        new ShopifyGateway.TokenResponse(TOKEN_B, "shprt_refresh_b", 3600L, 7776000L);
+        new ShopifyGateway.TokenResponse(TOKEN_B, "shprt_refresh_b", 3600L, 7776000L, null);
     private static final String SHOP_PATH1    = "path1.myshopify.com";
     private static final String SHOP_PATH2    = "path2-new.myshopify.com";
     private static final String SHOP_CROSS    = "cross-tenant.myshopify.com";

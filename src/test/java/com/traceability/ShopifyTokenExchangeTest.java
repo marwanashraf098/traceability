@@ -85,6 +85,7 @@ class ShopifyTokenExchangeTest {
 
     @Value("${shopify.client-secret}") String clientSecret;
     @Value("${shopify.client-id}")     String clientId;
+    @Value("${shopify.scopes}")        String appScopes;
 
     UUID tenantA;
     UUID storeA;
@@ -142,8 +143,9 @@ class ShopifyTokenExchangeTest {
     @Test @Order(1)
     void te01_freshToken_204_noExchangeCalled() throws Exception {
         // Token expires 20 minutes from now — well past the 10-min threshold.
+        // Scopes must match the app's declared scopes so the scope check also passes.
         setStoreState(storeA, "connected", "completed",
-                Timestamp.from(Instant.now().plusSeconds(1200)));
+                Timestamp.from(Instant.now().plusSeconds(1200)), appScopes);
 
         ResponseEntity<String> r = post("/api/v1/embedded/token-exchange", tokenA());
 
@@ -373,10 +375,15 @@ class ShopifyTokenExchangeTest {
 
     private void setStoreState(UUID storeId, String status, String importStatus,
                                 Timestamp accessTokenExpiresAt) {
+        setStoreState(storeId, status, importStatus, accessTokenExpiresAt, null);
+    }
+
+    private void setStoreState(UUID storeId, String status, String importStatus,
+                                Timestamp accessTokenExpiresAt, String accessTokenScopes) {
         jdbc.update(
             "UPDATE stores SET status = ?::store_status, import_status = ?::store_import_status, " +
-            "access_token_expires_at = ? WHERE id = ?",
-            status, importStatus, accessTokenExpiresAt, storeId);
+            "access_token_expires_at = ?, access_token_scopes = ? WHERE id = ?",
+            status, importStatus, accessTokenExpiresAt, accessTokenScopes, storeId);
     }
 
     private Map<String, Object> getStoreRow(UUID storeId) {
@@ -389,7 +396,9 @@ class ShopifyTokenExchangeTest {
             "shpat_test_access_token",
             "shprt_test_refresh_token",
             3600L,
-            7776000L);
+            7776000L,
+            "read_orders,write_inventory,read_inventory,read_products,read_fulfillments," +
+            "write_locations,read_locations,read_customers");
     }
 
     private ResponseEntity<String> post(String path, String bearerToken) {

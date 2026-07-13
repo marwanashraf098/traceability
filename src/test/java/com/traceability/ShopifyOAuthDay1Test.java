@@ -96,7 +96,7 @@ class ShopifyOAuthDay1Test {
     private static final String CODE   = "auth-code-from-shopify";
     private static final String TOKEN  = "shpat_test_offline_token_abc";
     private static final ShopifyGateway.TokenResponse EXCHANGE_TOKEN =
-        new ShopifyGateway.TokenResponse(TOKEN, "shprt_refresh_day1", 3600L, 7776000L);
+        new ShopifyGateway.TokenResponse(TOKEN, "shprt_refresh_day1", 3600L, 7776000L, null);
 
     @BeforeAll
     void setupOwner() {

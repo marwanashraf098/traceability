@@ -18,9 +18,12 @@ import org.springframework.transaction.support.TransactionTemplate;
 import java.security.SecureRandom;
 import java.sql.Timestamp;
 import java.time.Instant;
+import java.util.Arrays;
 import java.util.Base64;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 
 /**
@@ -47,8 +50,9 @@ public class ShopifyOAuthService {
             INSERT INTO stores (tenant_id, shop_domain, platform,
                                 access_token_encrypted, access_token_expires_at,
                                 refresh_token_encrypted, refresh_token_expires_at,
+                                access_token_scopes,
                                 status, import_status)
-            VALUES (?, ?, 'shopify', ?, ?, ?, ?, 'connected', 'pending')
+            VALUES (?, ?, 'shopify', ?, ?, ?, ?, ?, 'connected', 'pending')
             RETURNING id
             """;
 
@@ -58,6 +62,7 @@ public class ShopifyOAuthService {
                    access_token_expires_at  = ?,
                    refresh_token_encrypted  = ?,
                    refresh_token_expires_at = ?,
+                   access_token_scopes      = ?,
                    status                   = 'connected',
                    import_status            = 'pending'
              WHERE shop_domain = ?
@@ -78,6 +83,7 @@ public class ShopifyOAuthService {
                    access_token_expires_at  = ?,
                    refresh_token_encrypted  = ?,
                    refresh_token_expires_at = ?,
+                   access_token_scopes      = ?,
                    status                   = 'connected',
                    import_status            = CASE
                        WHEN status = 'needs_reauth' OR import_status IN ('idle','failed')
@@ -455,7 +461,8 @@ public class ShopifyOAuthService {
                     encryptionService.encrypt(tokens.accessToken()),
                     accessExpiresAt,
                     tokens.refreshToken() != null ? encryptionService.encrypt(tokens.refreshToken()) : null,
-                    refreshExpiresAt));
+                    refreshExpiresAt,
+                    tokens.grantedScopes()));
         } finally {
             TenantContext.clear();
         }
@@ -474,6 +481,7 @@ public class ShopifyOAuthService {
                     accessExpiresAt,
                     tokens.refreshToken() != null ? encryptionService.encrypt(tokens.refreshToken()) : null,
                     refreshExpiresAt,
+                    tokens.grantedScopes(),
                     shop, tenantId));
         } finally {
             TenantContext.clear();
@@ -518,20 +526,23 @@ public class ShopifyOAuthService {
      */
     public boolean acquireOrRefreshViaSessionToken(UUID tenantId, String shopDomain, String rawSessionToken) {
         // Step 1: freshness check — needs TenantContext for RLS
-        record StoreSnap(UUID id, Instant expiresAt, String status, String importStatus) {}
+        record StoreSnap(UUID id, Instant expiresAt, String status, String importStatus,
+                         String accessTokenScopes) {}
         StoreSnap snap;
         TenantContext.set(tenantId);
         try {
             snap = tx.execute(s ->
                 jdbc.query(
-                    "SELECT id, access_token_expires_at, status::text, import_status::text " +
+                    "SELECT id, access_token_expires_at, status::text, import_status::text, " +
+                    "       access_token_scopes " +
                     "FROM stores WHERE tenant_id = ? AND shop_domain = ?",
                     rs -> rs.next() ? new StoreSnap(
                         rs.getObject("id", UUID.class),
                         rs.getTimestamp("access_token_expires_at") != null
                             ? rs.getTimestamp("access_token_expires_at").toInstant() : null,
                         rs.getString("status"),
-                        rs.getString("import_status")) : null,
+                        rs.getString("import_status"),
+                        rs.getString("access_token_scopes")) : null,
                     tenantId, shopDomain));
         } finally {
             TenantContext.clear();
@@ -542,12 +553,20 @@ public class ShopifyOAuthService {
             return false;
         }
 
-        // Step 2: skip if token is comfortably fresh
+        // Step 2: skip if token is comfortably fresh AND scopes already cover the app's declared list.
+        // A fresh token issued BEFORE a scope was added to the app will pass the time check but fail
+        // the scope check, forcing a re-exchange so the new token carries the full scope.
+        // null stored scopes means pre-migration or unknown — always re-exchange.
         Instant threshold = Instant.now().plusSeconds(600); // 10 min
-        if (snap.expiresAt() != null && snap.expiresAt().isAfter(threshold)
-                && "connected".equals(snap.status())) {
-            log.debug("Token exchange skipped: token fresh for shop={}", shopDomain);
+        boolean timeFresh  = snap.expiresAt() != null && snap.expiresAt().isAfter(threshold);
+        boolean scopesFresh = scopesMatch(snap.accessTokenScopes(), this.scopes);
+        if (timeFresh && scopesFresh && "connected".equals(snap.status())) {
+            log.debug("Token exchange skipped: token fresh and scopes match for shop={}", shopDomain);
             return true;
+        }
+        if (timeFresh && !scopesFresh) {
+            log.info("Token exchange forced: scope mismatch for shop={} stored=[{}] declared=[{}]",
+                     shopDomain, snap.accessTokenScopes(), this.scopes);
         }
 
         // Step 3: exchange — ShopifySessionTokenExchangeException / ShopifyTransientException propagate
@@ -591,10 +610,26 @@ public class ShopifyOAuthService {
                     accessExpiresAt,
                     tokens.refreshToken() != null ? encryptionService.encrypt(tokens.refreshToken()) : null,
                     refreshExpiresAt,
+                    tokens.grantedScopes(),
                     shop, tenantId));
         } finally {
             TenantContext.clear();
         }
+    }
+
+    // ---- private: scope comparison ------------------------------------
+
+    /**
+     * Returns true if all scopes declared in the app config are present in the
+     * stored token's granted-scope list. Order-insensitive.
+     * null storedScopes means "issued before scope tracking" → always return false
+     * to force a re-exchange.
+     */
+    private static boolean scopesMatch(String storedScopes, String declaredScopes) {
+        if (storedScopes == null) return false;
+        Set<String> stored   = new HashSet<>(Arrays.asList(storedScopes.split(",")));
+        Set<String> declared = new HashSet<>(Arrays.asList(declaredScopes.split(",")));
+        return stored.containsAll(declared);
     }
 
     private static ShopifyOAuthException stateInvalid() {

@@ -183,7 +183,8 @@ class ShopifyHttpGateway implements ShopifyGateway {
             resp.get("access_token").asText(),
             resp.has("refresh_token") ? resp.get("refresh_token").asText() : null,
             resp.path("expires_in").asLong(3600),
-            resp.path("refresh_token_expires_in").asLong(7776000));
+            resp.path("refresh_token_expires_in").asLong(7776000),
+            resp.path("scope").asText(null));
     }
 
     @Override
@@ -207,7 +208,8 @@ class ShopifyHttpGateway implements ShopifyGateway {
                 resp.get("access_token").asText(),
                 resp.get("refresh_token").asText(),
                 resp.path("expires_in").asLong(3600),
-                resp.path("refresh_token_expires_in").asLong(7776000));
+                resp.path("refresh_token_expires_in").asLong(7776000),
+                resp.path("scope").asText(null));
         } catch (HttpClientErrorException e) {
             // 4xx — refresh token invalid, expired, or revoked
             log.warn("Shopify refresh rejected ({}): shop={}", e.getStatusCode(), shopDomain);
@@ -290,7 +292,8 @@ class ShopifyHttpGateway implements ShopifyGateway {
                 resp.get("access_token").asText(),
                 resp.has("refresh_token") ? resp.get("refresh_token").asText() : null,
                 resp.path("expires_in").asLong(3600),
-                resp.path("refresh_token_expires_in").asLong(7776000));
+                resp.path("refresh_token_expires_in").asLong(7776000),
+                resp.path("scope").asText(null));
         } catch (HttpClientErrorException e) {
             log.warn("Shopify session-token exchange rejected ({}): shop={}", e.getStatusCode(), shopDomain);
             throw new ShopifySessionTokenExchangeException(shopDomain,
@@ -408,7 +411,8 @@ class ShopifyHttpGateway implements ShopifyGateway {
                 resp.get("access_token").asText(),
                 null,  // no refresh_token issued for client-credentials grant
                 resp.path("expires_in").asLong(86399),
-                0);    // no refresh_token_expires_in
+                0,     // no refresh_token_expires_in
+                null); // CC doesn't return scope; app scopes are fixed per install
         } catch (HttpClientErrorException e) {
             // 4xx — app/store not permitted, wrong credentials, app not installed, etc.
             log.warn("Shopify CC exchange rejected ({}): shop={}", e.getStatusCode(), shopDomain);
