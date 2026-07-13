@@ -225,10 +225,16 @@ class ShopifyInventoryTest {
             .isEqualTo(countAfterFirst);
     }
 
-    // ── si3: unlinked location records a failed row ───────────────────────────
+    // ── si3: unlinked location — failed row, but inventoryItemId still resolved ─
 
     @Test @Order(3)
-    void si3_unlinkedLocation_recordsFailedRow() throws Exception {
+    void si3_unlinkedLocation_failedRowWithInventoryItemIdResolved() throws Exception {
+        // Both preconditions evaluated independently: location fails, variant still resolves.
+        when(tokenProvider.getValidToken(storeId)).thenReturn("test-token");
+        when(shopifyGateway.resolveInventoryItemId(anyString(), anyString(),
+                eq("gid://shopify/ProductVariant/101")))
+            .thenReturn("gid://shopify/InventoryItem/201");
+
         UUID sessionId = UUID.randomUUID();
         TenantContext.set(tenantId);
         try {
@@ -237,12 +243,15 @@ class ShopifyInventoryTest {
         } finally { TenantContext.clear(); }
 
         Map<String, Object> row = jdbc.queryForMap(
-            "SELECT status, error FROM shopify_inventory_adjustments " +
+            "SELECT status, error, shopify_inventory_item_id FROM shopify_inventory_adjustments " +
             "WHERE trigger_type = 'receiving_session' AND trigger_id = ? AND tenant_id = ?",
             sessionId.toString(), tenantId);
 
-        assertThat(row.get("status")).as("si3: unlinked location produces failed row").isEqualTo("failed");
-        assertThat(row.get("error").toString()).contains("not linked");
+        assertThat(row.get("status")).as("si3: unlinked location → failed row").isEqualTo("failed");
+        assertThat(row.get("error").toString()).as("si3: error mentions location").contains("not linked");
+        assertThat(row.get("shopify_inventory_item_id"))
+            .as("si3: inventoryItemId resolved even though location failed")
+            .isEqualTo("gid://shopify/InventoryItem/201");
     }
 
     // ── si4: return inspection → AVAILABLE inserts shadow row ────────────────

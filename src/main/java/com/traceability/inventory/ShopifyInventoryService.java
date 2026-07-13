@@ -137,13 +137,16 @@ public class ShopifyInventoryService {
                                      String reason) {
         UUID tenantId = TenantContext.require();
 
-        // Resolve Shopify IDs — failures recorded as status='failed'.
+        // Evaluate BOTH preconditions independently so all resolved IDs are recorded
+        // even when one precondition fails. This lets shadow rows validate resolution
+        // while the location/scope question is still open.
         String shopifyInventoryItemId = null;
         String shopifyLocationId      = null;
-        String errorMsg               = null;
+        String locationError          = null;
+        String variantError           = null;
 
+        // ── Precondition 1: location must be linked ───────────────────────────
         try {
-            // Resolve shopify_location_id from locations table.
             Map<String, Object> locRow = tx.execute(status ->
                 jdbc.query(
                     "SELECT shopify_location_id, shopify_sync_status " +
@@ -155,50 +158,63 @@ public class ShopifyInventoryService {
                     locationId, tenantId));
 
             if (locRow == null) {
-                errorMsg = "Location not found: " + locationId;
+                locationError = "Location not found: " + locationId;
             } else if (!"linked".equals(locRow.get("shopify_sync_status"))) {
-                errorMsg = "Location not linked to Shopify (status=" + locRow.get("shopify_sync_status") + ")";
+                locationError = "Location not linked to Shopify (status=" + locRow.get("shopify_sync_status") + ")";
             } else {
                 shopifyLocationId = (String) locRow.get("shopify_location_id");
             }
+        } catch (Exception e) {
+            locationError = "Location lookup error: " + e.getMessage();
+            log.warn("Shopify inventory: location lookup failed location={}", locationId, e);
+        }
 
-            if (errorMsg == null) {
-                // Resolve variant's Shopify GID and then its inventoryItem GID.
-                String variantGid = tx.execute(status ->
+        // ── Precondition 2: variant must resolve to an inventoryItem GID ──────
+        // Always attempted — a location failure must not mask a variant failure.
+        try {
+            String variantGid = tx.execute(status ->
+                jdbc.query(
+                    "SELECT external_id FROM variants WHERE id = ? AND tenant_id = ?",
+                    rs -> rs.next() ? rs.getString(1) : null,
+                    variantId, tenantId));
+
+            if (variantGid == null || variantGid.isBlank()) {
+                variantError = "Variant has no Shopify GID: " + variantId;
+            } else {
+                UUID storeId = tx.execute(status ->
                     jdbc.query(
-                        "SELECT external_id FROM variants WHERE id = ? AND tenant_id = ?",
-                        rs -> rs.next() ? rs.getString(1) : null,
-                        variantId, tenantId));
+                        "SELECT id FROM stores WHERE tenant_id = ? LIMIT 1",
+                        rs -> rs.next() ? rs.getObject(1, UUID.class) : null,
+                        tenantId));
 
-                if (variantGid == null || variantGid.isBlank()) {
-                    errorMsg = "Variant has no Shopify GID: " + variantId;
+                if (storeId == null) {
+                    variantError = "No store found for tenant";
                 } else {
-                    // Get store token for this tenant.
-                    UUID storeId = tx.execute(status ->
+                    String shopDomain = tx.execute(status ->
                         jdbc.query(
-                            "SELECT id FROM stores WHERE tenant_id = ? LIMIT 1",
-                            rs -> rs.next() ? rs.getObject(1, UUID.class) : null,
-                            tenantId));
-
-                    if (storeId == null) {
-                        errorMsg = "No store found for tenant";
-                    } else {
-                        String shopDomain = tx.execute(status ->
-                            jdbc.query(
-                                "SELECT shop_domain FROM stores WHERE id = ? AND tenant_id = ?",
-                                rs -> rs.next() ? rs.getString(1) : null,
-                                storeId, tenantId));
-                        String token = tokenProvider.getValidToken(storeId);
-                        shopifyInventoryItemId = shopify.resolveInventoryItemId(shopDomain, token, variantGid);
-                    }
+                            "SELECT shop_domain FROM stores WHERE id = ? AND tenant_id = ?",
+                            rs -> rs.next() ? rs.getString(1) : null,
+                            storeId, tenantId));
+                    String token = tokenProvider.getValidToken(storeId);
+                    shopifyInventoryItemId = shopify.resolveInventoryItemId(shopDomain, token, variantGid);
                 }
             }
         } catch (ShopifyException e) {
-            errorMsg = "Shopify API error: " + e.getMessage();
-            log.warn("Shopify inventory item resolution failed: variant={} error={}", variantId, e.getMessage());
+            variantError = "Shopify API error resolving inventoryItem: " + e.getMessage();
+            log.warn("Shopify inventory: inventoryItem resolution failed variant={} error={}", variantId, e.getMessage());
         } catch (Exception e) {
-            errorMsg = "Resolution error: " + e.getMessage();
-            log.warn("Shopify inventory resolution error: variant={}", variantId, e);
+            variantError = "Variant resolution error: " + e.getMessage();
+            log.warn("Shopify inventory: variant resolution error variant={}", variantId, e);
+        }
+
+        // Combine errors — both failures reported together so one doesn't mask the other.
+        String errorMsg = null;
+        if (locationError != null && variantError != null) {
+            errorMsg = locationError + "; " + variantError;
+        } else if (locationError != null) {
+            errorMsg = locationError;
+        } else if (variantError != null) {
+            errorMsg = variantError;
         }
 
         String status = (errorMsg != null) ? "failed" : "shadow";
