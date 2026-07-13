@@ -99,10 +99,11 @@ class ShopifyInventoryTest {
 
         jdbc.update("INSERT INTO tenants (id, name) VALUES (?, 'ShopifyInventoryTenant')", tenantId);
 
-        // Store with shop_domain (needed by service to get token).
+        // Store with shop_domain and access_token_scopes (needed by service to pass scope pre-check).
         jdbc.update(
-            "INSERT INTO stores (id, tenant_id, shop_domain, import_status) " +
-            "VALUES (?, ?, 'test.myshopify.com', 'idle')",
+            "INSERT INTO stores (id, tenant_id, shop_domain, import_status, access_token_scopes) " +
+            "VALUES (?, ?, 'test.myshopify.com', 'idle', " +
+            "'read_orders,write_inventory,read_products,write_locations,read_locations,read_customers')",
             storeId, tenantId);
 
         productId = UUID.randomUUID();

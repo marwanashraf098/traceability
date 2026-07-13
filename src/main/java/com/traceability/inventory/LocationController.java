@@ -1,8 +1,11 @@
 package com.traceability.inventory;
 
+import com.traceability.integrations.shopify.ShopifyGateway;
 import com.traceability.integrations.shopify.ShopifyLocationGateway;
 import com.traceability.integrations.shopify.ShopifyTokenProvider;
 import com.traceability.tenancy.TenantContext;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.security.access.prepost.PreAuthorize;
@@ -24,6 +27,8 @@ import java.util.UUID;
 @RequestMapping("/api/v1/locations")
 @PreAuthorize("isAuthenticated()")
 public class LocationController {
+
+    private static final Logger log = LoggerFactory.getLogger(LocationController.class);
 
     private final JdbcTemplate           jdbc;
     private final TransactionTemplate    tx;
@@ -71,19 +76,35 @@ public class LocationController {
             return null;
         });
 
-        // Attempt Shopify location sync. The stub throws immediately (scope not yet granted).
-        // All exceptions are caught here — location is always created even if sync fails.
+        // Attempt Shopify location sync. All exceptions are caught — location is always created.
         String syncStatus = "unsynced";
         String syncError  = null;
         try {
-            UUID   storeId    = resolveStoreId(tenantId);
-            String shopDomain = resolveShopDomain(tenantId);
-            String token      = tokenProvider.getValidToken(storeId);
+            record StoreSnap(UUID id, String shopDomain, String grantedScopes) {}
+            StoreSnap store = jdbc.query(
+                "SELECT id, shop_domain, access_token_scopes FROM stores WHERE tenant_id = ? LIMIT 1",
+                rs -> rs.next() ? new StoreSnap(
+                    rs.getObject(1, UUID.class),
+                    rs.getString(2),
+                    rs.getString(3)) : null,
+                tenantId);
 
+            if (store == null) {
+                throw new IllegalStateException("No Shopify store connected");
+            }
+            if (!ShopifyGateway.isScopeGranted("write_locations", store.grantedScopes())) {
+                String granted = store.grantedScopes() != null ? store.grantedScopes() : "none";
+                log.warn("Location sync skipped: token lacks write_locations scope granted={}", granted);
+                throw new IllegalStateException(
+                    "Token lacks write_locations scope (granted: " + granted
+                    + ") — store must reconnect to grant the current scope list");
+            }
+
+            String token = tokenProvider.getValidToken(store.id());
             ShopifyLocationGateway.LocationInput input =
                 new ShopifyLocationGateway.LocationInput(name.trim(), null, null, "EG");
             ShopifyLocationGateway.LocationResult result =
-                shopifyLocations.create(shopDomain, token, input);
+                shopifyLocations.create(store.shopDomain(), token, input);
 
             String shopifyLocId = result.shopifyLocationId();
             tx.execute(status -> {
@@ -117,23 +138,4 @@ public class LocationController {
         );
     }
 
-    private UUID resolveStoreId(UUID tenantId) {
-        UUID storeId = jdbc.query(
-            "SELECT id FROM stores WHERE tenant_id = ? LIMIT 1",
-            rs -> rs.next() ? rs.getObject(1, UUID.class) : null,
-            tenantId);
-        if (storeId == null) throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY,
-            "No Shopify store connected");
-        return storeId;
-    }
-
-    private String resolveShopDomain(UUID tenantId) {
-        String domain = jdbc.query(
-            "SELECT shop_domain FROM stores WHERE tenant_id = ? LIMIT 1",
-            rs -> rs.next() ? rs.getString(1) : null,
-            tenantId);
-        if (domain == null) throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY,
-            "No Shopify store connected");
-        return domain;
-    }
 }

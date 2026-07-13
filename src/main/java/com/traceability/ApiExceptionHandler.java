@@ -56,14 +56,16 @@ public class ApiExceptionHandler {
     }
 
     // Shopify token is stale or lacks required scopes. Returning 403 with JSON so the UI can
-    // display a reconnect prompt instead of a generic error screen.
+    // display a reconnect prompt instead of a generic error screen. The message field forwards
+    // the exception detail (e.g. which scope was missing or why Shopify rejected the token)
+    // so the root cause is visible in the response without digging through server logs.
     @ExceptionHandler(ShopifyStoreNeedsReauthException.class)
     ResponseEntity<ReauthErrorBody> handleShopifyNeedsReauth(ShopifyStoreNeedsReauthException ex) {
         log.warn("Shopify store needs reauth: {}", ex.getMessage());
         return ResponseEntity.status(HttpStatus.FORBIDDEN)
             .body(new ReauthErrorBody(
                 "SHOPIFY_NEEDS_REAUTH",
-                "Shopify token is stale or lacks required scopes — reconnect the store in Settings",
+                ex.getMessage(),
                 ex.getShopDomain()));
     }
 

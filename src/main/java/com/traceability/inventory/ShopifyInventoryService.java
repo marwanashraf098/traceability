@@ -181,22 +181,27 @@ public class ShopifyInventoryService {
             if (variantGid == null || variantGid.isBlank()) {
                 variantError = "Variant has no Shopify GID: " + variantId;
             } else {
-                UUID storeId = tx.execute(status ->
+                record StoreSnap(UUID id, String shopDomain, String grantedScopes) {}
+                StoreSnap store = tx.execute(status ->
                     jdbc.query(
-                        "SELECT id FROM stores WHERE tenant_id = ? LIMIT 1",
-                        rs -> rs.next() ? rs.getObject(1, UUID.class) : null,
+                        "SELECT id, shop_domain, access_token_scopes FROM stores WHERE tenant_id = ? LIMIT 1",
+                        rs -> rs.next() ? new StoreSnap(
+                            rs.getObject(1, UUID.class),
+                            rs.getString(2),
+                            rs.getString(3)) : null,
                         tenantId));
 
-                if (storeId == null) {
+                if (store == null) {
                     variantError = "No store found for tenant";
+                } else if (!ShopifyGateway.isScopeGranted("read_products", store.grantedScopes())) {
+                    variantError = "Token lacks read_products scope (granted: "
+                        + (store.grantedScopes() != null ? store.grantedScopes() : "none")
+                        + ") — store must reconnect to grant the current scope list";
+                    log.warn("Shopify inventory: scope check failed variant={} required=read_products granted={}",
+                        variantId, store.grantedScopes());
                 } else {
-                    String shopDomain = tx.execute(status ->
-                        jdbc.query(
-                            "SELECT shop_domain FROM stores WHERE id = ? AND tenant_id = ?",
-                            rs -> rs.next() ? rs.getString(1) : null,
-                            storeId, tenantId));
-                    String token = tokenProvider.getValidToken(storeId);
-                    shopifyInventoryItemId = shopify.resolveInventoryItemId(shopDomain, token, variantGid);
+                    String token = tokenProvider.getValidToken(store.id());
+                    shopifyInventoryItemId = shopify.resolveInventoryItemId(store.shopDomain(), token, variantGid);
                 }
             }
         } catch (ShopifyException e) {

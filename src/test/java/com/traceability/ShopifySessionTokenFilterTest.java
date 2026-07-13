@@ -136,8 +136,15 @@ class ShopifySessionTokenFilterTest {
         String token   = makeToken(SHOP, CLIENT_ID, SECRET, 120, false);
         int lastDot    = token.lastIndexOf('.');
         String sig     = token.substring(lastDot + 1);
-        String flipped = sig.substring(0, sig.length() - 1)
-                + (sig.charAt(sig.length() - 1) == 'A' ? 'B' : 'A');
+        // Flip a character in the middle of the signature, not at the end.
+        // The last base64url char of a 32-byte HMAC-SHA256 output encodes only 4 bits
+        // of data and 2 zero-padding bits; flipping 'A'↔'B' there changes only a
+        // padding bit → decoded bytes are identical → verification passes. A mid-string
+        // flip always changes a full 6-bit group of real signature data.
+        int mid = sig.length() / 2;
+        String flipped = sig.substring(0, mid)
+                + (sig.charAt(mid) == 'A' ? 'B' : 'A')
+                + sig.substring(mid + 1);
         String tampered = token.substring(0, lastDot + 1) + flipped;
 
         var res   = new MockHttpServletResponse();

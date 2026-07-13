@@ -18,12 +18,9 @@ import org.springframework.transaction.support.TransactionTemplate;
 import java.security.SecureRandom;
 import java.sql.Timestamp;
 import java.time.Instant;
-import java.util.Arrays;
 import java.util.Base64;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.Map;
-import java.util.Set;
 import java.util.UUID;
 
 /**
@@ -624,12 +621,18 @@ public class ShopifyOAuthService {
      * stored token's granted-scope list. Order-insensitive.
      * null storedScopes means "issued before scope tracking" → always return false
      * to force a re-exchange.
+     *
+     * Uses ShopifyGateway.isScopeGranted per element to respect Shopify's implied-scope
+     * rule: write_X implicitly satisfies read_X (Shopify never echoes read_X explicitly
+     * when write_X is present). A plain containsAll would be permanently unsatisfiable.
      */
     private static boolean scopesMatch(String storedScopes, String declaredScopes) {
         if (storedScopes == null) return false;
-        Set<String> stored   = new HashSet<>(Arrays.asList(storedScopes.split(",")));
-        Set<String> declared = new HashSet<>(Arrays.asList(declaredScopes.split(",")));
-        return stored.containsAll(declared);
+        for (String req : declaredScopes.split(",")) {
+            String r = req.strip();
+            if (!r.isEmpty() && !ShopifyGateway.isScopeGranted(r, storedScopes)) return false;
+        }
+        return true;
     }
 
     private static ShopifyOAuthException stateInvalid() {

@@ -187,4 +187,31 @@ public interface ShopifyGateway {
      * @throws ShopifyException if the variant is not found or the field is missing
      */
     String resolveInventoryItemId(String shopDomain, String token, String variantGid);
+
+    // ---- scope utilities -----------------------------------------------
+
+    /**
+     * Returns true if the comma-separated grantedScopeCsv satisfies the required scope.
+     *
+     * Shopify's implied-scope rule: write_X is issued alone and implicitly covers read_X.
+     * Shopify never echoes the redundant read_X in the access_scopes response. A plain
+     * containsAll check therefore treats write_inventory as NOT satisfying read_inventory,
+     * making the check permanently fail once write_inventory is in the scope list.
+     *
+     * Rule: required is satisfied if granted contains it directly, OR if required starts
+     * with "read_" and granted contains the corresponding "write_" variant.
+     */
+    static boolean isScopeGranted(String required, String grantedScopeCsv) {
+        if (grantedScopeCsv == null || grantedScopeCsv.isBlank()) return false;
+        for (String s : grantedScopeCsv.split(",")) {
+            if (required.equals(s.strip())) return true;
+        }
+        if (required.startsWith("read_")) {
+            String writeVariant = "write_" + required.substring(5);
+            for (String s : grantedScopeCsv.split(",")) {
+                if (writeVariant.equals(s.strip())) return true;
+            }
+        }
+        return false;
+    }
 }
