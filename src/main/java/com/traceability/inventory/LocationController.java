@@ -56,7 +56,7 @@ public class LocationController {
     }
 
     @PostMapping
-    @PreAuthorize("hasAnyRole('ROLE_owner','ROLE_manager')")
+    @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
     @ResponseStatus(HttpStatus.CREATED)
     public Map<String, Object> create(@RequestBody Map<String, Object> body) {
         UUID tenantId = TenantContext.require();
