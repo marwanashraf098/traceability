@@ -56,7 +56,8 @@ class ShopifyLocationGatewayImpl implements ShopifyLocationGateway {
     public Optional<LocationResult> findByName(String shopDomain, String token, String name) {
         ObjectNode vars = mapper.createObjectNode().put("name", "name:\"" + name + "\"");
         JsonNode response = http.executeGraphQLPublic(shopDomain, token, FIND_BY_NAME_QUERY, vars);
-        JsonNode edges = response.path("data").path("locations").path("edges");
+        // executeGraphQL already strips the outer "data" envelope
+        JsonNode edges = response.path("locations").path("edges");
         for (JsonNode edge : edges) {
             String nodeName = edge.path("node").path("name").asText("");
             if (name.equals(nodeName)) {
@@ -78,7 +79,8 @@ class ShopifyLocationGatewayImpl implements ShopifyLocationGateway {
         ObjectNode vars = mapper.createObjectNode().set("input", locationInput);
 
         JsonNode response = http.executeGraphQLPublic(shopDomain, token, LOCATION_ADD_MUTATION, vars);
-        JsonNode locationAdd = response.path("data").path("locationAdd");
+        // executeGraphQL already strips the outer "data" envelope
+        JsonNode locationAdd = response.path("locationAdd");
 
         JsonNode userErrors = locationAdd.path("userErrors");
         if (userErrors.isArray() && !userErrors.isEmpty()) {

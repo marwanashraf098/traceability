@@ -448,14 +448,15 @@ class ShopifyHttpGateway implements ShopifyGateway {
                 """;
         String endpointUrl = "https://" + shopDomain + "/admin/api/" + apiVersion + "/graphql.json";
         ObjectNode vars = mapper.createObjectNode().put("id", variantGid);
-        JsonNode response = executeGraphQL(shopDomain, token, query, vars);
+        // executeGraphQL already strips the outer "data" envelope — result is {"productVariant":{...}}
+        JsonNode data = executeGraphQL(shopDomain, token, query, vars);
 
-        JsonNode productVariantNode = response.path("data").path("productVariant");
+        JsonNode productVariantNode = data.path("productVariant");
 
         if (productVariantNode.isMissingNode() || productVariantNode.isNull()) {
             String scopes = fetchTokenScopesQuiet(shopDomain, token);
-            log.warn("Shopify resolveInventoryItemId: productVariant=null | variant={} | url={} | scopes={} | query={} | response={}",
-                     variantGid, endpointUrl, scopes, query, response);
+            log.warn("Shopify resolveInventoryItemId: productVariant=null | variant={} | url={} | scopes={} | query={} | data={}",
+                     variantGid, endpointUrl, scopes, query, data);
             throw new ShopifyException(
                 "productVariant not found for " + variantGid
                 + " (wrong GID, store mismatch, or missing read_products scope)"
@@ -465,8 +466,8 @@ class ShopifyHttpGateway implements ShopifyGateway {
         JsonNode itemId = productVariantNode.path("inventoryItem").path("id");
         if (itemId.isMissingNode() || itemId.isNull()) {
             String scopes = fetchTokenScopesQuiet(shopDomain, token);
-            log.warn("Shopify resolveInventoryItemId: inventoryItem=null | variant={} | url={} | scopes={} | query={} | response={}",
-                     variantGid, endpointUrl, scopes, query, response);
+            log.warn("Shopify resolveInventoryItemId: inventoryItem=null | variant={} | url={} | scopes={} | query={} | data={}",
+                     variantGid, endpointUrl, scopes, query, data);
             throw new ShopifyException(
                 "productVariant.inventoryItem is null for " + variantGid
                 + " — token predates read_inventory/write_inventory scope; store must reinstall app to issue a new token"
