@@ -81,7 +81,7 @@ class Day14Test {
                     "VALUES (?, ?, 'Worker', 'w@d14.local', 'h', 'worker')", actorId, tenantId);
         jdbc.update("INSERT INTO stores (id, tenant_id, platform, shop_domain, status) " +
                     "VALUES (?, ?, 'shopify', 'd14.myshopify.com', 'connected')", storeId, tenantId);
-        jdbc.update("INSERT INTO locations (id, tenant_id, name, is_default) VALUES (?, ?, 'WH', true)",
+        jdbc.update("INSERT INTO locations (id, tenant_id, name, is_default) VALUES (?, ?, 'Main WH', true)",
                     locationId, tenantId);
         jdbc.update("INSERT INTO products (id, tenant_id, store_id, external_id, title) " +
                     "VALUES (?, ?, ?, 'P-D14', 'Widget')", productId, tenantId, storeId);

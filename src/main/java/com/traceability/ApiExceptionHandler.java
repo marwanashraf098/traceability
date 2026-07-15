@@ -9,6 +9,7 @@ import com.traceability.inventory.PieceCommittedException;
 import jakarta.servlet.http.HttpServletRequest;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.AccessDeniedException;
@@ -106,6 +107,28 @@ public class ApiExceptionHandler {
     @ExceptionHandler(ResponseStatusException.class)
     ResponseEntity<Void> handleResponseStatus(ResponseStatusException ex) {
         return ResponseEntity.status(ex.getStatusCode()).build();
+    }
+
+    record ConstraintBody(String error, String message) {}
+
+    // DataIntegrityViolationException from a DB CHECK or UNIQUE constraint that fires before the
+    // Shopify try-catch in a controller (e.g. INSERT with a short name, or ON CONFLICT path).
+    // Without this handler the exception reaches handleGeneral and returns a bodyless 500.
+    @ExceptionHandler(DataIntegrityViolationException.class)
+    ResponseEntity<ConstraintBody> handleConstraintViolation(DataIntegrityViolationException ex) {
+        String detail = ex.getMostSpecificCause().getMessage();
+        log.warn("Data integrity violation: {}", detail);
+        return ResponseEntity.badRequest()
+            .body(new ConstraintBody("CONSTRAINT_VIOLATION", mapConstraintMessage(detail)));
+    }
+
+    private static String mapConstraintMessage(String detail) {
+        if (detail == null) return "A data constraint was violated";
+        if (detail.contains("locations_name_length"))
+            return "Location name must be at least 3 characters";
+        if (detail.contains("stores_cc_requires_credentials"))
+            return "Store credentials are incomplete — reconnect the store via the custom-app card";
+        return "A data constraint was violated";
     }
 
     record AccessDeniedBody(String error, String path, String authorities) {}

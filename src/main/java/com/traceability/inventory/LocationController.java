@@ -65,16 +65,42 @@ public class LocationController {
         if (name == null || name.isBlank()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "name is required");
         }
+        if (name.trim().length() < 3) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                "Location name must be at least 3 characters");
+        }
         String  type      = body.getOrDefault("type", "warehouse").toString();
         boolean isDefault = Boolean.parseBoolean(body.getOrDefault("isDefault", "false").toString());
 
-        UUID id = UUID.randomUUID();
+        // UPSERT: if a row with the same name already exists in error/unsynced state, reuse it
+        // (reset sync fields and re-attempt Shopify). If the existing row is already 'linked',
+        // the WHERE condition in DO UPDATE fails → DO NOTHING → RETURNING returns no row → 409.
+        // This prevents orphan duplicates when Shopify sync fails and the user retries.
+        UUID proposedId = UUID.randomUUID();
+        final UUID[] effectiveId = {null};
         tx.execute(status -> {
-            jdbc.update(
-                "INSERT INTO locations (id, tenant_id, name, type, is_default) VALUES (?, ?, ?, ?, ?)",
-                id, tenantId, name.trim(), type, isDefault);
+            effectiveId[0] = jdbc.query("""
+                    INSERT INTO locations (id, tenant_id, name, type, is_default)
+                    VALUES (?, ?, ?, ?, ?)
+                    ON CONFLICT (tenant_id, lower(trim(name))) DO UPDATE
+                      SET type                = EXCLUDED.type,
+                          is_default          = EXCLUDED.is_default,
+                          shopify_sync_status = 'unsynced',
+                          shopify_sync_error  = NULL,
+                          shopify_location_id = NULL,
+                          shopify_synced_at   = NULL
+                      WHERE locations.shopify_sync_status IN ('error', 'unsynced')
+                    RETURNING id
+                    """,
+                rs -> rs.next() ? rs.getObject("id", UUID.class) : null,
+                proposedId, tenantId, name.trim(), type, isDefault);
             return null;
         });
+        if (effectiveId[0] == null) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                "A location with this name is already linked to Shopify");
+        }
+        UUID id = effectiveId[0];
 
         // Attempt Shopify location sync. All exceptions are caught — location is always created.
         String syncStatus = "unsynced";
