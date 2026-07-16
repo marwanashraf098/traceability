@@ -68,6 +68,9 @@ class SpaRoutingTest {
         "/onboarding",
         "/settings",
         "/users",
+        "/locations",
+        "/pickups",
+        "/any-future-route",
     })
     void authenticatedAppRoutesBrowserRefreshReturnsShell(String path) throws Exception {
         mvc.perform(get(path))

@@ -89,59 +89,36 @@ public class SecurityConfig {
                 // This is the correct Spring Security 6 fix for the sendError→ERROR→401
                 // pattern documented in CLAUDE.md (same class of bug as ResponseStatusException).
                 .dispatcherTypeMatchers(DispatcherType.FORWARD, DispatcherType.ERROR).permitAll()
+                // Fixed API + webhook paths that use non-JWT auth or are always public.
                 .requestMatchers(
-                    // SPA shell — browser must load the app before any login or API call.
-                    // Data is protected at /api/** level; serving the shell is always public.
-                    "/", "/index.html", "/assets/**", "/favicon.ico",
-                    // Embedded Shopify App Bridge shell — served in Shopify admin iframe.
-                    // The shell itself is public; API calls from the shell are authenticated
-                    // by ShopifySessionTokenFilter via Authorization: Bearer <session-token>.
-                    "/embedded", "/embedded.html",
-                    // Public marketing + legal pages (Shopify review requires direct access).
-                    // SpaController forwards these to /index.html; Spring Security evaluates
-                    // the original path before forwarding, so they must be listed here.
-                    "/privacy", "/terms",
-                    // App SPA routes that must be reachable on direct navigation / refresh.
-                    "/login", "/signup",
-                    // Authenticated app routes — shell serving only; /api/** stays protected.
-                    // Spring Security evaluates before SpaController runs, so without these
-                    // a browser refresh on /overview, /orders/uuid, etc. returns 401 before
-                    // SpaController can forward to index.html. DispatcherType.FORWARD above
-                    // handles the onward forward:/index.html dispatch.
-                    "/overview",
-                    "/orders", "/orders/*",
-                    "/catalog",
-                    "/receiving",
-                    "/fulfill",
-                    "/lookup",
-                    "/returns",
-                    "/exceptions",
-                    "/inventory",
-                    "/connections",
-                    "/onboarding",
-                    "/settings",
-                    "/users",
-                    // Auth endpoints
                     "/api/v1/auth/signup",
                     "/api/v1/auth/login",
                     "/api/v1/auth/refresh",
                     "/api/v1/health",
-                    // Actuator health — Docker healthcheck calls this with no token.
-                    // Only /health is exposed (see management config in application.yml).
                     "/actuator/health",
-                    // Webhook receivers: authenticated by secret header / HMAC, not JWT
                     "/api/v1/webhooks/bosta",
-                    // Shopify webhooks: authenticated by HMAC-SHA256 over raw body + app client secret.
-                    // Includes orders/*, products/*, app/uninstalled and GDPR compliance endpoints.
                     "/webhooks/shopify/**",
-                    // Shopify OAuth: callback is authenticated by HMAC+state, not JWT.
-                    // Install is the Path-2 merchant-initiated entry point (also HMAC-only).
-                    // Initiate (/api/v1/shopify/oauth/initiate) stays under anyRequest().authenticated().
                     "/auth/shopify/install",
                     "/auth/shopify/callback",
-                    // Magic-link consume: authenticated by the token hash + consume_magic_link DEFINER.
                     "/auth/magic"
                 ).permitAll()
+                // SPA shell fallback: any path without a dot (not a static file) that doesn't
+                // start with /api/, /auth/, /webhooks/, or /actuator/ is a client-side route.
+                // Spring Security must permit these so SpaController can forward to index.html.
+                // Data is NEVER exposed here — protection is at the /api/** level. Adding a new
+                // frontend route never requires a SecurityConfig change.
+                .requestMatchers(req -> {
+                    // getRequestURI() is populated by MockMvc and by real servlet containers.
+                    // getServletPath() is NOT set by MockMvc (defaults to ""), so we avoid it.
+                    String p = req.getRequestURI();
+                    String ctx = req.getContextPath();
+                    if (!ctx.isEmpty()) p = p.substring(ctx.length());
+                    return !p.startsWith("/api/")
+                        && !p.startsWith("/auth/")
+                        && !p.startsWith("/webhooks/")
+                        && !p.startsWith("/actuator/")
+                        && !p.contains(".");
+                }).permitAll()
                 .anyRequest().authenticated())
             // Filter order: JWT auth → Shopify session-token auth → tenant GUC setter.
             .addFilterBefore(jwtFilter,     UsernamePasswordAuthenticationFilter.class)
