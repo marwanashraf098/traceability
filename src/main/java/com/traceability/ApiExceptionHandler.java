@@ -9,7 +9,9 @@ import com.traceability.inventory.PieceCommittedException;
 import jakarta.servlet.http.HttpServletRequest;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.dao.DataAccessException;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.jdbc.BadSqlGrammarException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.AccessDeniedException;
@@ -153,6 +155,28 @@ public class ApiExceptionHandler {
                  request.getMethod() + " " + request.getRequestURI());
         return ResponseEntity.status(HttpStatus.FORBIDDEN)
             .body(new AccessDeniedBody("ACCESS_DENIED", request.getRequestURI(), authorities));
+    }
+
+    record DbErrorBody(String error, String detail) {}
+
+    // Bad SQL grammar = code bug (wrong types, bad cast, typo in column name). Log at ERROR so
+    // it surfaces in alerting; return 500 with a JSON body so the frontend isn't left with a blank.
+    @ExceptionHandler(BadSqlGrammarException.class)
+    ResponseEntity<DbErrorBody> handleBadSqlGrammar(BadSqlGrammarException ex) {
+        log.error("Bad SQL grammar (type/cast bug) — fix the SQL: {}",
+                  ex.getMostSpecificCause().getMessage());
+        return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+            .body(new DbErrorBody("DATABASE_ERROR", "SQL type error — contact support"));
+    }
+
+    // Generic DataAccessException fallback: catches any remaining Spring DAO exception
+    // (connection errors, lock timeouts, etc.) that no more-specific handler claimed.
+    // DataIntegrityViolationException and BadSqlGrammarException have their own handlers above.
+    @ExceptionHandler(DataAccessException.class)
+    ResponseEntity<DbErrorBody> handleDataAccess(DataAccessException ex) {
+        log.error("Unexpected database error: {}", ex.getMostSpecificCause().getMessage());
+        return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+            .body(new DbErrorBody("DATABASE_ERROR", "Unexpected database error — contact support"));
     }
 
     @ExceptionHandler(Exception.class)

@@ -81,7 +81,7 @@ public class LocationController {
         tx.execute(status -> {
             effectiveId[0] = jdbc.query("""
                     INSERT INTO locations (id, tenant_id, name, type, is_default)
-                    VALUES (?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?::location_type, ?)
                     ON CONFLICT (tenant_id, lower(trim(name))) DO UPDATE
                       SET type                = EXCLUDED.type,
                           is_default          = EXCLUDED.is_default,
