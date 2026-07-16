@@ -70,11 +70,19 @@ class ShopifyLocationGatewayImpl implements ShopifyLocationGateway {
 
     @Override
     public LocationResult create(String shopDomain, String token, LocationInput input) {
+        // TODO(deferred): countryCode is hardcoded 'EG' — must become tenant/location-configurable
+        //   before onboarding a non-Egyptian merchant.
+        String countryCode = (input.countryCode() != null && !input.countryCode().isBlank())
+            ? input.countryCode() : "EG";
+        ObjectNode address = mapper.createObjectNode().put("countryCode", countryCode);
+        if (input.address1() != null && !input.address1().isBlank())
+            address.put("address1", input.address1());
+        if (input.city() != null && !input.city().isBlank())
+            address.put("city", input.city());
+
         ObjectNode locationInput = mapper.createObjectNode()
-            .put("name", input.name())
-            .put("address1", input.address1())
-            .put("city", input.city())
-            .put("countryCode", input.countryCode());
+            .put("name", input.name());
+        locationInput.set("address", address);
         ObjectNode vars = mapper.createObjectNode().set("input", locationInput);
 
         JsonNode response = shopify.executeGraphQLPublic(shopDomain, token, LOCATION_ADD_MUTATION, vars);
