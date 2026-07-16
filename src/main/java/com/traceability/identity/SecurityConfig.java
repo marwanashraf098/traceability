@@ -89,6 +89,15 @@ public class SecurityConfig {
                 // This is the correct Spring Security 6 fix for the sendError→ERROR→401
                 // pattern documented in CLAUDE.md (same class of bug as ResponseStatusException).
                 .dispatcherTypeMatchers(DispatcherType.FORWARD, DispatcherType.ERROR).permitAll()
+                // Static assets + SPA entry points — always public, no auth.
+                // /assets/** covers all Vite-hashed bundles (.js, .css).
+                // These have dots in their names so the SPA fallback matcher below
+                // (which excludes dotted paths) would NOT permit them — they must be
+                // listed here explicitly.
+                .requestMatchers(
+                    "/", "/index.html", "/embedded.html", "/embedded",
+                    "/assets/**", "/favicon.ico"
+                ).permitAll()
                 // Fixed API + webhook paths that use non-JWT auth or are always public.
                 .requestMatchers(
                     "/api/v1/auth/signup",
