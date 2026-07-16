@@ -107,13 +107,14 @@ public class LocationController {
         String syncError  = null;
         try {
             record StoreSnap(UUID id, String shopDomain, String grantedScopes) {}
-            StoreSnap store = jdbc.query(
-                "SELECT id, shop_domain, access_token_scopes FROM stores WHERE tenant_id = ? LIMIT 1",
-                rs -> rs.next() ? new StoreSnap(
-                    rs.getObject(1, UUID.class),
-                    rs.getString(2),
-                    rs.getString(3)) : null,
-                tenantId);
+            StoreSnap store = tx.execute(status ->
+                jdbc.query(
+                    "SELECT id, shop_domain, access_token_scopes FROM stores WHERE tenant_id = ? LIMIT 1",
+                    rs -> rs.next() ? new StoreSnap(
+                        rs.getObject(1, UUID.class),
+                        rs.getString(2),
+                        rs.getString(3)) : null,
+                    tenantId));
 
             if (store == null) {
                 throw new IllegalStateException("No Shopify store connected");
