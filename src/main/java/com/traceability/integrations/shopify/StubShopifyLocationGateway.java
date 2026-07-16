@@ -1,19 +1,14 @@
 package com.traceability.integrations.shopify;
 
-import org.springframework.context.annotation.Primary;
 import org.springframework.stereotype.Service;
 
 import java.util.Optional;
 
 /**
- * Stub that blocks all Shopify location operations until write_locations scope is granted.
- *
- * This is @Primary so it wins over ShopifyLocationGatewayImpl. To activate the real
- * implementation: (1) confirm write_locations scope works on the dev store, (2) add
- * @Primary to ShopifyLocationGatewayImpl, (3) remove @Primary from this class.
+ * Stub retained for reference. ShopifyLocationGatewayImpl is now @Primary (write_locations
+ * scope confirmed on tracedlocations dev store 2026-07-16).
  */
 @Service
-@Primary
 class StubShopifyLocationGateway implements ShopifyLocationGateway {
 
     private static final String MSG =

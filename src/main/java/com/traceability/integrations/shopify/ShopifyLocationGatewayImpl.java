@@ -3,17 +3,16 @@ package com.traceability.integrations.shopify;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import org.springframework.context.annotation.Primary;
+import org.springframework.stereotype.Service;
 import java.util.Optional;
 
 /**
  * Real Shopify location gateway using the locationAdd mutation (FR-17).
- *
- * NOT a Spring component — not in the application context until explicitly activated.
- * To activate: add @Service + @Primary here and remove @Primary from StubShopifyLocationGateway.
- *
- * Requires write_locations scope. The locationAdd mutation is preferred over
- * locationCreate (deprecated) per Shopify API 2024-10+.
+ * Activated 2026-07-16: write_locations scope confirmed on tracedlocations dev store.
  */
+@Service
+@Primary
 class ShopifyLocationGatewayImpl implements ShopifyLocationGateway {
 
     private static final String FIND_BY_NAME_QUERY = """
@@ -44,18 +43,18 @@ class ShopifyLocationGatewayImpl implements ShopifyLocationGateway {
             }
             """;
 
-    private final ShopifyHttpGateway http;
-    private final ObjectMapper mapper;
+    private final ShopifyGateway shopify;
+    private final ObjectMapper  mapper;
 
-    ShopifyLocationGatewayImpl(ShopifyHttpGateway http, ObjectMapper mapper) {
-        this.http   = http;
-        this.mapper = mapper;
+    ShopifyLocationGatewayImpl(ShopifyGateway shopify, ObjectMapper mapper) {
+        this.shopify = shopify;
+        this.mapper  = mapper;
     }
 
     @Override
     public Optional<LocationResult> findByName(String shopDomain, String token, String name) {
         ObjectNode vars = mapper.createObjectNode().put("name", "name:\"" + name + "\"");
-        JsonNode response = http.executeGraphQLPublic(shopDomain, token, FIND_BY_NAME_QUERY, vars);
+        JsonNode response = shopify.executeGraphQLPublic(shopDomain, token, FIND_BY_NAME_QUERY, vars);
         // executeGraphQL already strips the outer "data" envelope
         JsonNode edges = response.path("locations").path("edges");
         for (JsonNode edge : edges) {
@@ -78,7 +77,7 @@ class ShopifyLocationGatewayImpl implements ShopifyLocationGateway {
             .put("countryCode", input.countryCode());
         ObjectNode vars = mapper.createObjectNode().set("input", locationInput);
 
-        JsonNode response = http.executeGraphQLPublic(shopDomain, token, LOCATION_ADD_MUTATION, vars);
+        JsonNode response = shopify.executeGraphQLPublic(shopDomain, token, LOCATION_ADD_MUTATION, vars);
         // executeGraphQL already strips the outer "data" envelope
         JsonNode locationAdd = response.path("locationAdd");
 

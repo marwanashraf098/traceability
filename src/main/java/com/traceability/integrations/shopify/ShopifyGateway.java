@@ -201,6 +201,10 @@ public interface ShopifyGateway {
      * Rule: required is satisfied if granted contains it directly, OR if required starts
      * with "read_" and granted contains the corresponding "write_" variant.
      */
+    // Exposes the internal GraphQL transport for ShopifyLocationGatewayImpl.
+    // Strips the outer "data" envelope — callers must NOT path into ".data" on the result.
+    JsonNode executeGraphQLPublic(String shopDomain, String token, String query, JsonNode variables);
+
     static boolean isScopeGranted(String required, String grantedScopeCsv) {
         if (grantedScopeCsv == null || grantedScopeCsv.isBlank()) return false;
         for (String s : grantedScopeCsv.split(",")) {

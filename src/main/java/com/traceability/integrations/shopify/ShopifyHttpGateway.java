@@ -511,8 +511,8 @@ class ShopifyHttpGateway implements ShopifyGateway {
 
     // ---- GraphQL execution + throttle handling --------------------------
 
-    /** Package-private so ShopifyLocationGatewayImpl can share the same transport. */
-    JsonNode executeGraphQLPublic(String shopDomain, String token, String query, JsonNode variables) {
+    @Override
+    public JsonNode executeGraphQLPublic(String shopDomain, String token, String query, JsonNode variables) {
         return executeGraphQL(shopDomain, token, query, variables);
     }
 
