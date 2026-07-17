@@ -264,7 +264,12 @@ At the **end** of every session (without being asked):
 
 **Docker Desktop Mac M3 + Testcontainers**: `DockerDesktopMacStrategy` in `src/test/java/com/traceability/` forces docker-java API v1.41 — do not delete it; Docker Desktop rejects the default v1.24 negotiation with HTTP 400 and the fix requires overriding `test()`, `getClient()`, AND `getDockerClient()` on the strategy class.
 
-**`frontend/package-lock.json` MUST be committed whenever `frontend/package.json` changes — omitting it breaks every `npm ci` Docker build.** The Dockerfile runs `npm ci --prefix frontend` (strict, reproducible). npm 10 in `node:22-alpine` is stricter than npm 11+ on the dev machine about optional peer-dep resolution: it requires nested esbuild binaries for `vitest/node_modules/vite` to appear in the lock file even though `esbuild` is marked `optional` in vite's peerDependenciesMeta. npm 11 locally dedupes them away; npm 10 in Docker flags "Missing: esbuild@0.28.1 from lock file" and aborts. Fix: after any `package.json` edit, run `cd frontend && rm -rf node_modules package-lock.json && npm install` then verify with `npm ci --prefix frontend` before committing. Never commit a package.json change without the regenerated lock file in the same commit.
+**`frontend/package-lock.json` MUST be committed whenever `frontend/package.json` changes — omitting it breaks every `npm ci` Docker build.** The Dockerfile runs `npm ci --prefix frontend` (strict, reproducible). npm 10 in `node:22-alpine` is stricter than npm 11+ on the dev machine about optional peer-dep resolution: it requires nested esbuild binaries for `vitest/node_modules/vite` to appear in the lock file even though `esbuild` is marked `optional` in vite's peerDependenciesMeta. npm 11 locally dedupes them away; npm 10 in Docker flags "Missing: esbuild@0.28.1 from lock file" and aborts. Fix: after any `package.json` edit, regenerate the lock file INSIDE the build image so platform-binary optionality matches:
+```
+docker run --rm --platform linux/amd64 -v "$PWD/frontend":/app -w /app node:22-alpine npm install
+docker run --rm --platform linux/amd64 -v "$PWD/frontend":/app -w /app node:22-alpine npm ci
+```
+Then commit the updated `frontend/package-lock.json` in the same commit as `package.json`. Never regenerate with the local npm (11+ on macOS) — it marks esbuild cross-platform binaries as required instead of optional, causing `EBADPLATFORM` in the linux/x64 Docker build.
 
 **PostgreSQL resets SET LOCAL GUC to `''` (empty string, not NULL) after ROLLBACK**: `''::uuid` is a cast error. Every RLS policy — on every table, past and future — must use `NULLIF(current_setting('app.current_tenant', true), '')::uuid` not a bare cast. Never simplify this pattern.
 
