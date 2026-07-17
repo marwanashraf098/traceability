@@ -6,7 +6,7 @@ import {
   adjustPiece, releasePieceForAdjust, ADJUST_REASONS, AdjustReason, PieceCommittedError,
   getRoleFromToken,
 } from '../api'
-import { Badge, Spinner } from '../components/ui'
+import { Badge, Button, EmptyState, Spinner } from '../components/ui'
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -50,6 +50,17 @@ function TransitionPill({ from, to }: { from: string | null; to: string | null }
   )
 }
 
+// ── Meta field ────────────────────────────────────────────────────────────────
+
+function MetaField({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div>
+      <p className="text-caption text-muted uppercase tracking-wider mb-1">{label}</p>
+      <p className="text-body text-primary">{children}</p>
+    </div>
+  )
+}
+
 // ── Piece lookup view ─────────────────────────────────────────────────────────
 
 function PieceView({ result, onRefresh }: { result: PieceLookupResult; onRefresh: () => void }) {
@@ -61,6 +72,7 @@ function PieceView({ result, onRefresh }: { result: PieceLookupResult; onRefresh
       <div className="card p-6">
         <div className="flex items-start justify-between gap-4 mb-5">
           <div className="min-w-0">
+            {/* Barcode — mono as spec requires for IDs */}
             <p className="text-caption text-muted font-mono uppercase tracking-widest mb-1">
               {result.barcode}
             </p>
@@ -70,6 +82,7 @@ function PieceView({ result, onRefresh }: { result: PieceLookupResult; onRefresh
                 <span className="text-muted font-normal"> / {result.variant.title}</span>
               )}
             </h2>
+            {/* SKU — mono */}
             {result.variant.sku && (
               <p className="text-small text-muted font-mono mt-1">{result.variant.sku}</p>
             )}
@@ -86,7 +99,7 @@ function PieceView({ result, onRefresh }: { result: PieceLookupResult; onRefresh
             {result.currentOrder ? (
               <Link
                 to={`/orders/${result.currentOrder.id}`}
-                className="text-brand hover:text-brand-hover font-medium transition-colors"
+                className="text-trace-blue hover:text-trace-blue-hover font-medium transition-colors"
               >
                 {result.currentOrder.number ?? result.currentOrder.id.slice(-8)}
               </Link>
@@ -96,6 +109,7 @@ function PieceView({ result, onRefresh }: { result: PieceLookupResult; onRefresh
           </MetaField>
           <MetaField label={t('lookup.shipment')}>
             {result.currentShipment ? (
+              // Tracking number — mono
               <span className="font-mono text-cyan text-small">
                 {result.currentShipment.trackingNumber}
               </span>
@@ -113,7 +127,7 @@ function PieceView({ result, onRefresh }: { result: PieceLookupResult; onRefresh
             <p className="text-caption text-muted uppercase tracking-wider mb-1">
               {t('lookup.receivingSession')}
             </p>
-            <Link to="/receiving" className="text-small text-brand hover:text-brand-hover transition-colors">
+            <Link to="/receiving" className="text-small text-trace-blue hover:text-trace-blue-hover transition-colors">
               {result.receivingSession.locationName ?? result.receivingSession.id.slice(-8)}
             </Link>
           </div>
@@ -122,7 +136,7 @@ function PieceView({ result, onRefresh }: { result: PieceLookupResult; onRefresh
         <AdjustPanel pieceId={result.id} pieceStatus={result.status} onDone={onRefresh} />
       </div>
 
-      {/* ── Timeline ── */}
+      {/* ── Chain-of-custody timeline ── */}
       <div className="card p-6">
         <h3 className="text-h3 text-primary mb-5">{t('lookup.timeline')}</h3>
 
@@ -130,17 +144,18 @@ function PieceView({ result, onRefresh }: { result: PieceLookupResult; onRefresh
           <p className="text-body text-muted">{t('lookup.noTimeline')}</p>
         ) : (
           <ol className="relative">
-            {/* Vertical line */}
+            {/* Timeline spine — start-[7px] = inset-inline-start; mirrors to start side in RTL */}
             <div className="absolute start-[7px] top-4 bottom-4 w-px bg-line" aria-hidden />
 
             {result.timeline.map((event, idx) => (
               <li key={event.id} className="relative ps-8 pb-6 last:pb-0">
-                {/* Dot */}
+                {/* Node dot — absolute start-0 = inset-inline-start: 0 */}
                 <div className="absolute start-0 top-1">
                   {idx === 0 ? (
+                    // Live node: animate-dotPing pulse, trace-blue per DS
                     <span className="relative flex h-4 w-4">
-                      <span className="animate-dotPing absolute inline-flex h-full w-full rounded-full bg-brand opacity-75" />
-                      <span className="relative inline-flex rounded-full h-4 w-4 bg-brand" />
+                      <span className="animate-dotPing absolute inline-flex h-full w-full rounded-full bg-trace-blue opacity-75" />
+                      <span className="relative inline-flex rounded-full h-4 w-4 bg-trace-blue" />
                     </span>
                   ) : (
                     <span className="inline-flex h-4 w-4 rounded-full border-2 border-line bg-elevated" />
@@ -179,15 +194,6 @@ function PieceView({ result, onRefresh }: { result: PieceLookupResult; onRefresh
           </ol>
         )}
       </div>
-    </div>
-  )
-}
-
-function MetaField({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <div>
-      <p className="text-caption text-muted uppercase tracking-wider mb-1">{label}</p>
-      <p className="text-body text-primary">{children}</p>
     </div>
   )
 }
@@ -279,14 +285,14 @@ function AdjustPanel({ pieceId, pieceStatus, onDone }: AdjustPanelProps) {
             data-testid="found-it-btn"
             onClick={handleFoundIt}
             disabled={submitting}
-            className="btn btn-brand px-4 py-2 text-small"
+            className="btn-brand text-small"
           >
             {submitting ? <Spinner size={14} /> : t('adjust.foundIt')}
           </button>
           <button
             data-testid="adjust-open-btn"
             onClick={() => setOpen(true)}
-            className="btn btn-outline px-4 py-2 text-small"
+            className="btn-outline text-small"
           >
             {t('adjust.title')}
           </button>
@@ -298,7 +304,7 @@ function AdjustPanel({ pieceId, pieceStatus, onDone }: AdjustPanelProps) {
         <button
           data-testid="adjust-open-btn"
           onClick={() => setOpen(true)}
-          className="btn btn-outline px-4 py-2 text-small"
+          className="btn-outline text-small"
         >
           {t('adjust.title')}
         </button>
@@ -319,13 +325,14 @@ function AdjustPanel({ pieceId, pieceStatus, onDone }: AdjustPanelProps) {
               data-testid="release-btn"
               onClick={handleRelease}
               disabled={releasing}
-              className="btn btn-brand px-4 py-2 text-small"
+              className="btn-brand text-small"
             >
               {releasing ? <Spinner size={14} /> : t('adjust.releaseBtn')}
             </button>
+            {/* Order number — mono */}
             <Link
               to={`/orders/${committed.orderId}`}
-              className="btn btn-outline px-4 py-2 text-small"
+              className="btn-outline text-small font-mono"
             >
               #{committed.orderNumber}
             </Link>
@@ -347,10 +354,10 @@ function AdjustPanel({ pieceId, pieceStatus, onDone }: AdjustPanelProps) {
                   key={s}
                   type="button"
                   onClick={() => setToStatus(s)}
-                  className={`px-3 py-1.5 rounded text-small font-medium border transition-colors ${
+                  className={`px-3 py-1.5 rounded-lg text-small font-medium border transition-colors ${
                     toStatus === s
-                      ? 'bg-brand text-white border-brand'
-                      : 'border-line text-muted hover:border-brand'
+                      ? 'bg-trace-blue text-white border-trace-blue'
+                      : 'border-line text-muted hover:border-trace-blue'
                   }`}
                 >
                   {t(`adjust.statusLabel.${s}`)}
@@ -397,14 +404,14 @@ function AdjustPanel({ pieceId, pieceStatus, onDone }: AdjustPanelProps) {
               type="submit"
               disabled={submitting || (reason === 'other' && !note.trim())}
               data-testid="adjust-submit-btn"
-              className="btn btn-brand px-4 py-2 text-small"
+              className="btn-brand text-small"
             >
               {submitting ? <Spinner size={14} /> : t('adjust.submit')}
             </button>
             <button
               type="button"
               onClick={() => { setOpen(false); setError(null); setCommitted(null) }}
-              className="btn btn-outline px-4 py-2 text-small"
+              className="btn-outline text-small"
             >
               {t('common.cancel')}
             </button>
@@ -428,17 +435,19 @@ function TrackingView({ result }: { result: TrackingLookupResult }) {
     <div className="space-y-4 animate-fadeIn">
       <div className="card p-6">
         <p className="text-caption text-muted uppercase tracking-wider mb-1">{t('lookup.trackingResult')}</p>
+        {/* Tracking number — mono */}
         <h2 className="text-h1 text-primary font-mono mt-1">{result.trackingNumber}</h2>
         <div className="grid grid-cols-2 gap-4 mt-5 pt-5 border-t border-line">
           <MetaField label={t('lookup.order')}>
-            <Link to={`/orders/${result.orderId}`} className="text-brand hover:text-brand-hover transition-colors">
+            <Link
+              to={`/orders/${result.orderId}`}
+              className="text-trace-blue hover:text-trace-blue-hover transition-colors"
+            >
               {result.orderNumber ?? result.orderId.slice(-8)}
             </Link>
           </MetaField>
           <MetaField label={t('lookup.status')}>
-            <span className="badge border bg-cyan/10 text-cyan border-cyan/20">
-              {result.internalState.replace(/_/g, ' ')}
-            </span>
+            <Badge status={result.internalState} />
           </MetaField>
         </div>
       </div>
@@ -453,11 +462,12 @@ function TrackingView({ result }: { result: TrackingLookupResult }) {
               <div key={p.pieceId} className="flex items-center justify-between py-3">
                 <div className="flex items-center gap-3">
                   <Badge status={p.status} />
+                  {/* Piece barcode — mono */}
                   <span className="text-small font-mono text-muted">{p.barcode}</span>
                 </div>
                 <Link
                   to={`/lookup?q=${encodeURIComponent(p.barcode)}`}
-                  className="text-small text-brand hover:text-brand-hover font-medium transition-colors"
+                  className="text-small text-trace-blue hover:text-trace-blue-hover font-medium transition-colors"
                 >
                   {t('lookup.viewPiece')} →
                 </Link>
@@ -479,6 +489,7 @@ export default function LookupPage() {
   const [result, setResult] = useState<LookupResult | null>(null)
   const [loading, setLoading] = useState(false)
   const [notFound, setNotFound] = useState(false)
+  // Raw ref kept here (same pattern as Layout search) — Input wraps in div, no forwardRef
   const inputRef = useRef<HTMLInputElement>(null)
 
   const doLookup = useCallback(async (q: string) => {
@@ -509,7 +520,7 @@ export default function LookupPage() {
     <div className="max-w-2xl mx-auto">
       <h1 className="text-h1 text-primary mb-6">{t('lookup.title')}</h1>
 
-      {/* Search bar */}
+      {/* Search bar — raw input keeps ref for .select() after lookup */}
       <div className="flex gap-2 mb-6">
         <input
           ref={inputRef}
@@ -521,18 +532,19 @@ export default function LookupPage() {
           className="input-scan flex-1"
           autoFocus
         />
-        <button
+        <Button
+          variant="primary"
+          size="lg"
+          loading={loading}
           onClick={() => doLookup(query)}
-          disabled={loading}
-          className="btn-brand btn px-5 py-3"
         >
-          {loading ? <Spinner size={16} /> : t('lookup.search')}
-        </button>
+          {t('lookup.search')}
+        </Button>
       </div>
 
       {notFound && (
-        <div className="card p-4 border-danger/30 bg-danger/5 text-danger text-body mb-4">
-          {t('lookup.notFound')}
+        <div className="mb-4">
+          <EmptyState message={t('lookup.notFound')} />
         </div>
       )}
 

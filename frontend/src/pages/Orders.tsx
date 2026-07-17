@@ -2,7 +2,10 @@ import { useEffect, useState, useCallback } from 'react'
 import { Link } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { listOrders, OrderPage, listShopifyStores, syncShopifyStore } from '../api'
-import { DeliveryBadge, EmptyState, Spinner } from '../components/ui'
+import {
+  Badge, Button, DataTable, type DataTableColumn,
+  DeliveryBadge, EmptyState, TableSkeleton,
+} from '../components/ui'
 
 const ORDER_STATUSES = [
   'new', 'confirmed', 'ready_to_pick', 'picking', 'packed',
@@ -10,34 +13,22 @@ const ORDER_STATUSES = [
   'returning', 'returned', 'lost', 'cancelled',
 ]
 
-const STATUS_STYLE: Record<string, string> = {
-  new:             'bg-muted/10 text-muted border-muted/20',
-  confirmed:       'bg-accent/10 text-accent border-accent/20',
-  ready_to_pick:   'bg-warning/10 text-warning border-warning/20',
-  picking:         'bg-warning/10 text-warning border-warning/20',
-  packed:          'bg-brand/10 text-brand border-brand/20',
-  awaiting_pickup: 'bg-brand/10 text-brand border-brand/20',
-  with_courier:    'bg-cyan/10 text-cyan border-cyan/20',
-  delivered:       'bg-success/10 text-success border-success/20',
-  returning:       'bg-warning/10 text-warning border-warning/20',
-  returned:        'bg-muted/10 text-muted border-muted/20',
-  lost:            'bg-danger/10 text-danger border-danger/20',
-  cancelled:       'bg-muted/10 text-muted border-muted/20',
-}
-
 const PAGE_SIZE = 20
+
+// Infer item type from the API's OrderPage shape
+type OrderItem = NonNullable<OrderPage['items']>[number]
 
 export default function Orders() {
   const { t } = useTranslation()
-  const [data, setData]         = useState<OrderPage | null>(null)
-  const [status, setStatus]     = useState('')
-  const [q, setQ]               = useState('')
+  const [data,     setData]     = useState<OrderPage | null>(null)
+  const [status,   setStatus]   = useState('')
+  const [q,        setQ]        = useState('')
   const [tracking, setTracking] = useState('')
-  const [page, setPage]         = useState(0)
-  const [loading, setLoading]   = useState(false)
-  const [error, setError]       = useState('')
-  const [syncing, setSyncing]   = useState(false)
-  const [syncMsg, setSyncMsg]   = useState('')
+  const [page,     setPage]     = useState(0)
+  const [loading,  setLoading]  = useState(false)
+  const [error,    setError]    = useState('')
+  const [syncing,  setSyncing]  = useState(false)
+  const [syncMsg,  setSyncMsg]  = useState('')
 
   const fetchOrders = useCallback(async () => {
     setLoading(true)
@@ -81,6 +72,94 @@ export default function Orders() {
   const total = data?.total ?? 0
   const from  = total === 0 ? 0 : page * PAGE_SIZE + 1
   const to    = Math.min((page + 1) * PAGE_SIZE, total)
+  const rows  = data?.items ?? []
+
+  // ── Status cell ───────────────────────────────────────────────────────────────
+  function renderStatus(order: OrderItem) {
+    return (
+      <div className="flex flex-wrap items-start gap-1.5">
+        {order.deliveryState ? (
+          <DeliveryBadge state={order.deliveryState} exceptionReason={order.exceptionReason} />
+        ) : order.bostaLinkStatus === 'not_created' ? (
+          <Badge tone="critical" label={t('delivery.state.not_created')} />
+        ) : (
+          <Badge
+            status={order.status}
+            label={t(`orders.pipeline.${order.status}`, { defaultValue: order.status.replace(/_/g, ' ') })}
+          />
+        )}
+        {order.onHold && (
+          <Badge tone="critical" label={t('orderDetail.onHold')} />
+        )}
+        {order.failedDeliveryAttempts > 0 && (
+          <Badge tone="critical" label={t('orderDetail.failedAttempts', { count: order.failedDeliveryAttempts })} />
+        )}
+        {(order.isDelayed || order.slaBreached) && (
+          <Badge tone="warning" label={t('orderDetail.delayed')} />
+        )}
+      </div>
+    )
+  }
+
+  // ── Column definitions ─────────────────────────────────────────────────────
+  const columns: DataTableColumn<OrderItem>[] = [
+    {
+      key: 'number',
+      header: t('orders.columns.number', { defaultValue: 'Order' }),
+      mono: true,
+      render: row => (
+        // Order number — mono, links to detail
+        <Link
+          to={`/orders/${row.id}`}
+          className="text-trace-blue hover:text-trace-blue-hover font-medium transition-colors"
+        >
+          {row.number ?? t('common.na')}
+        </Link>
+      ),
+    },
+    {
+      key: 'customer',
+      header: t('orders.columns.customer', { defaultValue: 'Customer' }),
+      render: row => (
+        <div>
+          <div className="text-primary">{row.customerName ?? t('common.na')}</div>
+          {row.customerPhone && (
+            <div className="text-small text-muted mt-0.5">{row.customerPhone}</div>
+          )}
+        </div>
+      ),
+    },
+    {
+      key: 'status',
+      header: t('orders.columns.status', { defaultValue: 'Status' }),
+      render: renderStatus,
+    },
+    {
+      key: 'cod',
+      header: t('orders.columns.cod', { defaultValue: 'COD' }),
+      render: row => row.codAmount != null
+        ? <span className="text-warning">{row.codAmount.toLocaleString()} EGP</span>
+        : <span className="text-muted">{t('common.na')}</span>,
+    },
+    {
+      key: 'placedAt',
+      header: t('orders.columns.placedAt', { defaultValue: 'Placed' }),
+      render: row => (
+        <span className="text-small text-muted">
+          {row.placedAt ? new Date(row.placedAt).toLocaleDateString() : t('common.na')}
+        </span>
+      ),
+    },
+    {
+      key: 'tracking',
+      header: t('orders.columns.tracking', { defaultValue: 'Tracking' }),
+      mono: true,
+      render: row => (
+        // Tracking number — mono per spec
+        <span className="text-caption text-muted">{row.trackingNumber ?? t('common.na')}</span>
+      ),
+    },
+  ]
 
   return (
     <div className="space-y-4">
@@ -89,17 +168,18 @@ export default function Orders() {
         <h1 className="text-h1 text-primary">{t('orders.title')}</h1>
         <div className="flex items-center gap-3">
           {syncMsg && <span className="text-small text-muted">{syncMsg}</span>}
-          <button
+          <Button
+            variant="secondary"
+            size="sm"
+            loading={syncing}
             onClick={handleSync}
-            disabled={syncing}
-            className="btn-outline btn text-small gap-2"
           >
-            {syncing ? <Spinner size={14} /> : '↻'} Shopify
-          </button>
+            {syncing ? 'Shopify' : '↻ Shopify'}
+          </Button>
         </div>
       </div>
 
-      {/* Filter bar */}
+      {/* Filter bar — raw inputs keep .input class; Input component can't hold fixed width without wrapper */}
       <div className="flex flex-wrap gap-2">
         <input
           type="text"
@@ -129,90 +209,19 @@ export default function Orders() {
 
       {error && <p className="text-small text-danger">{error}</p>}
 
-      {/* Table */}
+      {/* Table — loading/empty/data handled here so EmptyState can carry an action */}
       <div className="card overflow-hidden">
-        <table className="min-w-full">
-          <thead>
-            <tr className="border-b border-line">
-              {(['number','customer','status','cod','placedAt','tracking'] as const).map(col => (
-                <th key={col} className="tbl-header">{t(`orders.columns.${col}`, { defaultValue: col })}</th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {loading ? (
-              <tr>
-                <td colSpan={6} className="px-4 py-12 text-center">
-                  <Spinner />
-                </td>
-              </tr>
-            ) : data?.items.length === 0 ? (
-              <tr>
-                <td colSpan={6}>
-                  <EmptyState message={t('orders.empty')} icon="📦" />
-                </td>
-              </tr>
-            ) : (
-              data?.items.map(order => (
-                <tr key={order.id} className="tbl-row">
-                  <td className="tbl-cell font-medium">
-                    <Link to={`/orders/${order.id}`} className="text-brand hover:text-brand-hover transition-colors">
-                      {order.number ?? t('common.na')}
-                    </Link>
-                  </td>
-                  <td className="tbl-cell">
-                    <div className="text-primary">{order.customerName ?? t('common.na')}</div>
-                    {order.customerPhone && (
-                      <div className="text-small text-muted mt-0.5">{order.customerPhone}</div>
-                    )}
-                  </td>
-                  <td className="tbl-cell">
-                    <div className="flex flex-wrap items-start gap-1.5">
-                      {order.deliveryState ? (
-                        <DeliveryBadge
-                          state={order.deliveryState}
-                          exceptionReason={order.exceptionReason}
-                        />
-                      ) : order.bostaLinkStatus === 'not_created' ? (
-                        <span className="badge border bg-danger/10 text-danger border-danger/20">
-                          {t('delivery.state.not_created')}
-                        </span>
-                      ) : (
-                        <span className={`badge border ${STATUS_STYLE[order.status] ?? 'bg-muted/10 text-muted border-muted/20'}`}>
-                          {t(`orders.pipeline.${order.status}`, { defaultValue: order.status.replace(/_/g, ' ') })}
-                        </span>
-                      )}
-                      {order.onHold && (
-                        <span className="badge border bg-danger/10 text-danger border-danger/20 font-bold">
-                          {t('orderDetail.onHold')}
-                        </span>
-                      )}
-                      {order.failedDeliveryAttempts > 0 && (
-                        <span className="badge border bg-danger/10 text-danger border-danger/20">
-                          {t('orderDetail.failedAttempts', { count: order.failedDeliveryAttempts })}
-                        </span>
-                      )}
-                      {(order.isDelayed || order.slaBreached) && (
-                        <span className="badge border bg-warning/10 text-warning border-warning/20">
-                          {t('orderDetail.delayed')}
-                        </span>
-                      )}
-                    </div>
-                  </td>
-                  <td className="tbl-cell text-warning">
-                    {order.codAmount != null ? `${order.codAmount.toLocaleString()} EGP` : <span className="text-muted">{t('common.na')}</span>}
-                  </td>
-                  <td className="tbl-cell text-muted text-small">
-                    {order.placedAt ? new Date(order.placedAt).toLocaleDateString() : t('common.na')}
-                  </td>
-                  <td className="tbl-cell font-mono text-caption text-muted">
-                    {order.trackingNumber ?? t('common.na')}
-                  </td>
-                </tr>
-              ))
-            )}
-          </tbody>
-        </table>
+        {loading ? (
+          <TableSkeleton rows={5} cols={columns.length} />
+        ) : rows.length === 0 ? (
+          <EmptyState
+            message={t('orders.empty')}
+            icon="📦"
+            action={{ label: '↻ Sync from Shopify', onClick: handleSync }}
+          />
+        ) : (
+          <DataTable columns={columns} rows={rows} />
+        )}
       </div>
 
       {/* Pagination */}
@@ -220,20 +229,22 @@ export default function Orders() {
         <div className="flex items-center justify-between text-small text-muted">
           <span>{t('orders.showing', { from, to, total })}</span>
           <div className="flex gap-2">
-            <button
+            <Button
+              variant="secondary"
+              size="sm"
               disabled={page === 0}
               onClick={() => setPage(p => p - 1)}
-              className="btn-outline btn text-small disabled:opacity-30"
             >
               {t('orders.prev')}
-            </button>
-            <button
+            </Button>
+            <Button
+              variant="secondary"
+              size="sm"
               disabled={to >= total}
               onClick={() => setPage(p => p + 1)}
-              className="btn-outline btn text-small disabled:opacity-30"
             >
               {t('orders.next')}
-            </button>
+            </Button>
           </div>
         </div>
       )}

@@ -2,43 +2,7 @@ import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { getInventorySummary, getOrderDailyCounts, DayCount, InventorySummary, request } from '../api'
-import { SeverityBadge, Spinner } from '../components/ui'
-
-// ── Inventory tile ────────────────────────────────────────────────────────────
-
-function InventoryTile({
-  status,
-  count,
-  windowed,
-  loading,
-}: {
-  status: string
-  count: number
-  windowed: boolean
-  loading: boolean
-}) {
-  const { t } = useTranslation()
-  const dest = `/inventory?status=${status}${windowed ? '&within30d=true' : ''}`
-
-  return (
-    <Link
-      to={dest}
-      data-testid={`tile-${status}`}
-      className="card p-4 flex flex-col gap-2 hover:bg-elevated transition-colors group"
-    >
-      <p className="text-caption text-muted uppercase tracking-wider">
-        {t(`catalog.statuses.${status}`, status)}
-      </p>
-      {loading ? (
-        <div className="h-8 w-12 bg-elevated rounded animate-pulse" />
-      ) : (
-        <p className="text-display font-light text-primary group-hover:text-brand transition-colors">
-          {count.toLocaleString()}
-        </p>
-      )}
-    </Link>
-  )
-}
+import { Alert, Badge, EmptyState, Skeleton, SeverityBadge, Spinner, StatCard } from '../components/ui'
 
 // ── Section header ────────────────────────────────────────────────────────────
 
@@ -48,11 +12,7 @@ function SectionHeader({ title, note, badge }: { title: string; note: string; ba
       <div>
         <h2 className="text-h3 text-primary inline-flex items-center gap-2">
           {title}
-          {badge && (
-            <span className="text-caption font-medium text-brand bg-brand/10 border border-brand/20 rounded-full px-2 py-0.5">
-              {badge}
-            </span>
-          )}
+          {badge && <Badge tone="info" label={badge} />}
         </h2>
         <p className="text-caption text-muted mt-0.5">{note}</p>
       </div>
@@ -72,9 +32,10 @@ interface ExceptionItem {
 
 // ── Orders chart ─────────────────────────────────────────────────────────────
 
-const BRAND = '#6366FF'
-const GRID  = '#2D3F55'
-const CMUTED = '#647488'
+// DS token hex values — SVG presentation attrs can't use Tailwind classes
+const CHART_LINE  = '#2563EB' // trace-blue
+const CHART_GRID  = '#262C36' // line token
+const CHART_TEXT  = '#828B99' // muted token
 
 function OrdersChart({ data, loading }: { data: DayCount[]; loading: boolean }) {
   const { t } = useTranslation()
@@ -107,7 +68,6 @@ function OrdersChart({ data, loading }: { data: DayCount[]; loading: boolean }) 
   ).join(' ')
   const areaPts = `${linePts} L ${xOf(len - 1).toFixed(1)} ${(padT + cH).toFixed(1)} L ${xOf(0).toFixed(1)} ${(padT + cH).toFixed(1)} Z`
 
-  // Show 3 x-axis labels: first, middle, last
   const lblIdx = Array.from(new Set([0, Math.floor(len / 2), len - 1]))
 
   return (
@@ -115,37 +75,31 @@ function OrdersChart({ data, loading }: { data: DayCount[]; loading: boolean }) 
          data-testid="orders-chart" role="img" aria-label={t('overview.chart.title')}>
       <defs>
         <linearGradient id="ocGrad" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%"   stopColor={BRAND} stopOpacity="0.22" />
-          <stop offset="100%" stopColor={BRAND} stopOpacity="0" />
+          <stop offset="0%"   stopColor={CHART_LINE} stopOpacity="0.22" />
+          <stop offset="100%" stopColor={CHART_LINE} stopOpacity="0" />
         </linearGradient>
       </defs>
-      {/* Gridlines at 25 / 50 / 75 / 100% */}
       {[0.25, 0.5, 0.75, 1].map(f => (
         <line key={f}
               x1={padL} y1={(padT + (1 - f) * cH).toFixed(1)}
               x2={W - padR} y2={(padT + (1 - f) * cH).toFixed(1)}
-              stroke={GRID} strokeWidth="1" />
+              stroke={CHART_GRID} strokeWidth="1" />
       ))}
-      {/* Area fill */}
       <path d={areaPts} fill="url(#ocGrad)" />
-      {/* Line */}
-      <path d={linePts} fill="none" stroke={BRAND} strokeWidth="2"
+      <path d={linePts} fill="none" stroke={CHART_LINE} strokeWidth="2"
             strokeLinecap="round" strokeLinejoin="round" />
-      {/* Dots at each data point */}
       {data.map((d, i) => (
         <circle key={d.date} cx={xOf(i).toFixed(1)} cy={yOf(d.count).toFixed(1)}
-                r="3" fill={BRAND} />
+                r="3" fill={CHART_LINE} />
       ))}
-      {/* X-axis date labels (MM-DD) */}
       {lblIdx.map(i => (
         <text key={i} x={xOf(i).toFixed(1)} y={H - padB + 14}
-              textAnchor="middle" fontSize="9" fill={CMUTED}>
+              textAnchor="middle" fontSize="9" fill={CHART_TEXT}>
           {data[i]?.date?.slice(5)}
         </text>
       ))}
-      {/* Y-axis max and 0 labels */}
-      <text x={padL - 4} y={padT + 4}        textAnchor="end" fontSize="9" fill={CMUTED}>{max}</text>
-      <text x={padL - 4} y={padT + cH + 4}   textAnchor="end" fontSize="9" fill={CMUTED}>0</text>
+      <text x={padL - 4} y={padT + 4}        textAnchor="end" fontSize="9" fill={CHART_TEXT}>{max}</text>
+      <text x={padL - 4} y={padT + cH + 4}   textAnchor="end" fontSize="9" fill={CHART_TEXT}>0</text>
     </svg>
   )
 }
@@ -156,12 +110,12 @@ export default function Overview() {
   const { t, i18n } = useTranslation()
   const isAr = i18n.language === 'ar'
 
-  const [summary, setSummary]     = useState<InventorySummary | null>(null)
-  const [invLoading, setInvLoading] = useState(true)
-  const [invError,   setInvError]   = useState('')
+  const [summary,     setSummary]     = useState<InventorySummary | null>(null)
+  const [invLoading,  setInvLoading]  = useState(true)
+  const [invError,    setInvError]    = useState('')
 
-  const [exceptions, setExceptions]   = useState<ExceptionItem[]>([])
-  const [excLoading, setExcLoading]   = useState(true)
+  const [exceptions,  setExceptions]  = useState<ExceptionItem[]>([])
+  const [excLoading,  setExcLoading]  = useState(true)
 
   const [chartData,    setChartData]    = useState<DayCount[]>([])
   const [chartLoading, setChartLoading] = useState(true)
@@ -199,12 +153,8 @@ export default function Overview() {
 
       {/* ── Inventory error ── */}
       {invError && (
-        <div
-          role="alert"
-          data-testid="inventory-error"
-          className="text-small text-danger bg-danger/10 border border-danger/25 rounded px-3 py-2"
-        >
-          {invError}
+        <div data-testid="inventory-error">
+          <Alert tone="critical" title={invError} />
         </div>
       )}
 
@@ -215,17 +165,27 @@ export default function Overview() {
             title={t('inventory.live')}
             note={t('inventory.liveNote')}
           />
-          <div
-            data-testid="group-a"
-            className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3"
-          >
+          <div data-testid="group-a" className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
             {invLoading
               ? Array.from({ length: 6 }).map((_, i) => (
-                  <InventoryTile key={i} status="" count={0} windowed={false} loading />
+                  <Skeleton key={i} className="h-28 rounded-2xl" />
                 ))
-              : groupA.map(({ status, count }) => (
-                  <InventoryTile key={status} status={status} count={count} windowed={false} loading={false} />
-                ))}
+              : groupA.map(({ status, count }) => {
+                  const dest = `/inventory?status=${status}`
+                  return (
+                    <Link
+                      key={status}
+                      to={dest}
+                      data-testid={`tile-${status}`}
+                      className="block rounded-2xl hover:opacity-90 transition-opacity"
+                    >
+                      <StatCard
+                        label={t(`catalog.statuses.${status}`, status)}
+                        value={count}
+                      />
+                    </Link>
+                  )
+                })}
           </div>
         </div>
       )}
@@ -238,17 +198,27 @@ export default function Overview() {
             note={t('inventory.window30dNote')}
             badge="30d"
           />
-          <div
-            data-testid="group-b"
-            className="grid grid-cols-2 sm:grid-cols-3 gap-3"
-          >
+          <div data-testid="group-b" className="grid grid-cols-2 sm:grid-cols-3 gap-3">
             {invLoading
               ? Array.from({ length: 3 }).map((_, i) => (
-                  <InventoryTile key={i} status="" count={0} windowed={true} loading />
+                  <Skeleton key={i} className="h-28 rounded-2xl" />
                 ))
-              : groupB.map(({ status, count }) => (
-                  <InventoryTile key={status} status={status} count={count} windowed={true} loading={false} />
-                ))}
+              : groupB.map(({ status, count }) => {
+                  const dest = `/inventory?status=${status}&within30d=true`
+                  return (
+                    <Link
+                      key={status}
+                      to={dest}
+                      data-testid={`tile-${status}`}
+                      className="block rounded-2xl hover:opacity-90 transition-opacity"
+                    >
+                      <StatCard
+                        label={t(`catalog.statuses.${status}`, status)}
+                        value={count}
+                      />
+                    </Link>
+                  )
+                })}
           </div>
         </div>
       )}
@@ -264,7 +234,10 @@ export default function Overview() {
       <div className="card p-5">
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-h3 text-primary">{t('overview.recentExceptions')}</h2>
-          <Link to="/exceptions" className="text-small text-brand hover:text-brand-hover transition-colors">
+          <Link
+            to="/exceptions"
+            className="text-small text-trace-blue hover:text-trace-blue-hover transition-colors"
+          >
             {t('overview.viewAll')} →
           </Link>
         </div>
@@ -272,10 +245,7 @@ export default function Overview() {
         {excLoading ? (
           <div className="flex justify-center py-8"><Spinner /></div>
         ) : exceptions.length === 0 ? (
-          <div className="flex flex-col items-center py-8 gap-2 text-muted">
-            <span className="text-2xl opacity-40">✓</span>
-            <p className="text-body">{t('overview.noExceptions')}</p>
-          </div>
+          <EmptyState icon="✓" message={t('overview.noExceptions')} />
         ) : (
           <div className="divide-y divide-line">
             {exceptions.map((exc, i) => (
@@ -288,7 +258,7 @@ export default function Overview() {
                 </div>
                 <Link
                   to={exc.actionUrl}
-                  className="text-small text-brand hover:text-brand-hover whitespace-nowrap shrink-0 transition-colors"
+                  className="text-small text-trace-blue hover:text-trace-blue-hover whitespace-nowrap shrink-0 transition-colors"
                 >
                   View →
                 </Link>

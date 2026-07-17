@@ -2,14 +2,14 @@ import { useEffect, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { getOrder, OrderDetail as IOrderDetail, ShipmentDetail, AttemptEntry, DeliveryHistoryEntry } from '../api'
-import { Badge, DeliveryBadge, Spinner } from '../components/ui'
+import { Alert, Badge, Button, DeliveryBadge, Skeleton } from '../components/ui'
 
 export default function OrderDetail() {
   const { t } = useTranslation()
   const { id } = useParams<{ id: string }>()
-  const [order, setOrder] = useState<IOrderDetail | null>(null)
+  const [order,   setOrder]   = useState<IOrderDetail | null>(null)
   const [loading, setLoading] = useState(true)
-  const [error, setError] = useState('')
+  const [error,   setError]   = useState('')
 
   useEffect(() => {
     if (!id) return
@@ -19,9 +19,25 @@ export default function OrderDetail() {
       .finally(() => setLoading(false))
   }, [id, t])
 
-  if (loading) return <div className="flex justify-center pt-16"><Spinner size={28} /></div>
-  if (error)   return <p className="text-small text-danger">{error}</p>
-  if (!order)  return null
+  if (loading) return (
+    <div className="space-y-6">
+      <Skeleton className="h-8 w-48 rounded-xl" />
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+        <div className="lg:col-span-1 space-y-4">
+          <Skeleton className="h-36 rounded-2xl" />
+          <Skeleton className="h-36 rounded-2xl" />
+          <Skeleton className="h-28 rounded-2xl" />
+        </div>
+        <div className="lg:col-span-2 space-y-3">
+          <Skeleton className="h-40 rounded-2xl" />
+          <Skeleton className="h-40 rounded-2xl" />
+        </div>
+      </div>
+    </div>
+  )
+
+  if (error) return <Alert tone="critical" title={error} />
+  if (!order) return null
 
   const addr = order.address
     ? Object.values(order.address).filter(Boolean).join(', ')
@@ -30,11 +46,11 @@ export default function OrderDetail() {
   return (
     <div className="space-y-6">
       <div>
-        <Link to="/orders" className="text-small text-brand hover:text-brand-hover transition-colors">
+        <Link to="/orders" className="text-small text-trace-blue hover:text-trace-blue-hover transition-colors">
           ← {t('orderDetail.back')}
         </Link>
         <h1 className="text-h1 text-primary mt-2">
-          {t('orderDetail.title')} {order.number}
+          {t('orderDetail.title')} <span className="font-mono">{order.number}</span>
         </h1>
       </div>
 
@@ -64,16 +80,14 @@ export default function OrderDetail() {
               </div>
               {order.onHold && (
                 <div className="flex items-center gap-2">
-                  <span className="badge border bg-danger/10 text-danger border-danger/20 font-bold">
-                    {t('orderDetail.onHold')}
-                  </span>
+                  <Badge tone="critical" label={t('orderDetail.onHold')} />
                   {order.holdReason && (
                     <span className="text-small text-muted">{order.holdReason}</span>
                   )}
                 </div>
               )}
-              <InfoRow label={t('orderDetail.payment')} value={order.paymentMethod} />
-              <InfoRow label={t('orderDetail.cod')}     value={order.codAmount != null ? `${order.codAmount.toLocaleString()} EGP` : null} />
+              <InfoRow label={t('orderDetail.payment')}  value={order.paymentMethod} />
+              <InfoRow label={t('orderDetail.cod')}      value={order.codAmount != null ? `${order.codAmount.toLocaleString()} EGP` : null} />
               <InfoRow label={t('orderDetail.placedAt')} value={order.placedAt ? new Date(order.placedAt).toLocaleString() : null} />
             </dl>
           </section>
@@ -84,9 +98,7 @@ export default function OrderDetail() {
                 {t('orderDetail.shipment')}
               </h2>
               {order.bostaLinkStatus === 'not_created' ? (
-                <span className="badge border bg-danger/10 text-danger border-danger/20">
-                  {t('delivery.state.not_created')}
-                </span>
+                <Badge tone="critical" label={t('delivery.state.not_created')} />
               ) : (
                 <DeliveryBadge state={null} />
               )}
@@ -109,9 +121,10 @@ export default function OrderDetail() {
                 <div>
                   <p className="text-body font-semibold text-primary">{item.productTitle}</p>
                   <p className="text-small text-muted">{item.variantTitle}</p>
+                  {/* SKU — font-mono per spec */}
                   {item.sku && <p className="font-mono text-caption text-muted mt-0.5">{item.sku}</p>}
                 </div>
-                <span className="badge border bg-muted/10 text-muted border-muted/20">×{item.quantity}</span>
+                <Badge tone="neutral" label={`×${item.quantity}`} />
               </div>
 
               <div>
@@ -124,6 +137,7 @@ export default function OrderDetail() {
                   <div className="flex flex-wrap gap-2">
                     {item.allocatedPieces.map(p => (
                       <div key={p.pieceId} className="flex items-center gap-1.5 border border-line rounded-md px-2 py-1 bg-elevated">
+                        {/* Piece barcode — font-mono per spec */}
                         <span className="font-mono text-caption text-muted">{p.barcode}</span>
                         <Badge status={p.status} />
                       </div>
@@ -138,6 +152,8 @@ export default function OrderDetail() {
     </div>
   )
 }
+
+// ── Sub-components ────────────────────────────────────────────────────────────
 
 function ShipmentCard({ shipment }: { shipment: ShipmentDetail }) {
   const { t } = useTranslation()
@@ -163,6 +179,7 @@ function ShipmentCard({ shipment }: { shipment: ShipmentDetail }) {
       </div>
 
       <dl className="space-y-2">
+        {/* Tracking number — font-mono */}
         <InfoRow label={t('orderDetail.tracking')} value={shipment.trackingNumber} mono />
         <InfoRow label={t('orderDetail.provider')} value={shipment.provider} />
         {shipment.courierName && (
@@ -181,8 +198,15 @@ function ShipmentCard({ shipment }: { shipment: ShipmentDetail }) {
           <div className="flex gap-2 items-start">
             <dt className="text-small text-muted w-24 shrink-0">{t('orderDetail.awb')}</dt>
             <dd>
-              <a href={shipment.awbUrl} target="_blank" rel="noreferrer"
-                 className="text-small text-brand hover:text-brand-hover">Download</a>
+              {/* AWB link — kept as <a>; Button renders <button> not <a> */}
+              <a
+                href={shipment.awbUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="text-small text-trace-blue hover:text-trace-blue-hover transition-colors"
+              >
+                Download
+              </a>
             </dd>
           </div>
         )}
@@ -191,14 +215,10 @@ function ShipmentCard({ shipment }: { shipment: ShipmentDetail }) {
       {/* Attention pills */}
       <div className="flex flex-wrap gap-1.5">
         {shipment.failedDeliveryAttempts > 0 && (
-          <span className="badge border bg-danger/10 text-danger border-danger/20">
-            {t('orderDetail.failedAttempts', { count: shipment.failedDeliveryAttempts })}
-          </span>
+          <Badge tone="critical" label={t('orderDetail.failedAttempts', { count: shipment.failedDeliveryAttempts })} />
         )}
         {(shipment.isDelayed || shipment.slaBreached) && (
-          <span className="badge border bg-warning/10 text-warning border-warning/20">
-            {t('orderDetail.delayed')}
-          </span>
+          <Badge tone="warning" label={t('orderDetail.delayed')} />
         )}
       </div>
 
@@ -209,13 +229,14 @@ function ShipmentCard({ shipment }: { shipment: ShipmentDetail }) {
 
       {/* Expandable delivery status timeline */}
       <div className="border-t border-line pt-3">
-        <button
+        <Button
+          variant="tertiary"
+          size="sm"
           onClick={() => setHistoryOpen(o => !o)}
-          className="text-small text-brand hover:text-brand-hover transition-colors flex items-center gap-1"
         >
           <span>{historyOpen ? '▾' : '▸'}</span>
           <span>{historyOpen ? t('orderDetail.historyToggleHide') : t('orderDetail.historyToggleShow')}</span>
-        </button>
+        </Button>
 
         {historyOpen && (
           <DeliveryTimeline
@@ -239,7 +260,8 @@ function AttemptHistory({ attempts }: { attempts: AttemptEntry[] }) {
       </p>
       <ol className="space-y-2">
         {attempts.map((a, i) => (
-          <li key={i} className="border-l-2 border-line pl-3 space-y-0.5">
+          // border-s-2 = border-inline-start (logical); ps-3 = padding-inline-start
+          <li key={i} className="border-s-2 border-line ps-3 space-y-0.5">
             <div className="flex flex-wrap items-baseline gap-2">
               <span className={`text-small font-medium ${a.succeeded ? 'text-success' : 'text-danger'}`}>
                 {a.succeeded ? t('orderDetail.attemptSucceeded') : t('orderDetail.attemptFailed')}
@@ -298,16 +320,26 @@ function DeliveryTimeline({
   return (
     <div className="mt-3">
       <p className="text-caption text-muted uppercase tracking-widest mb-2">{title}</p>
-      <ol className="relative border-l border-line ml-2 space-y-3">
+      {/*
+        border-s = border-inline-start (logical rail, flips to right in RTL)
+        ms-2     = margin-inline-start (offsets rail from the start edge)
+      */}
+      <ol className="relative border-s border-line ms-2 space-y-3">
         {entries.map((e, i) => {
           const label = shipmentLeg === 'return'
             ? t(`delivery.state.return.${e.state}`, { defaultValue: t(`delivery.state.${e.state}`, { defaultValue: e.state.replace(/_/g, ' ') }) })
             : t(`delivery.state.${e.state}`, { defaultValue: e.state.replace(/_/g, ' ') })
           const isLast = i === entries.length - 1
           return (
-            <li key={i} className="ml-4">
-              <span className={`absolute -left-1.5 mt-0.5 h-3 w-3 rounded-full border-2 border-base
-                ${isLast ? 'bg-brand' : 'bg-line'}`}
+            // ps-4 = padding-inline-start (indents content from the rail)
+            <li key={i} className="ps-4">
+              {/*
+                -start-1.5 = negative inset-inline-start (centers dot on the inline-start rail)
+                border-base = background-color ring that masks the rail behind the dot
+                bg-trace-blue for the live/latest entry; bg-line for older entries
+              */}
+              <span className={`absolute -start-1.5 mt-0.5 h-3 w-3 rounded-full border-2 border-base
+                ${isLast ? 'bg-trace-blue' : 'bg-line'}`}
               />
               <div className="flex items-baseline gap-2">
                 <span className={`text-small font-medium ${isLast ? 'text-primary' : 'text-muted'}`}>
