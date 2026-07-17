@@ -1,7 +1,9 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { useState, useEffect } from 'react'
 import { getAccessToken, setAccessToken, clearAccessToken } from './auth'
+import { ToastProvider } from './components/ui'
 import Layout from './components/Layout'
+import StyleGuide from './pages/StyleGuide'
 import Landing from './pages/Landing'
 import Login from './pages/Login'
 import Signup from './pages/Signup'
@@ -69,6 +71,7 @@ function RequireAuth({ children }: { children: React.ReactNode }) {
 export default function App() {
   return (
     <BrowserRouter>
+      <ToastProvider>
       <Routes>
         <Route path="/"        element={<Landing />} />
         <Route path="/privacy" element={<Privacy />} />
@@ -211,8 +214,10 @@ export default function App() {
             </RequireAuth>
           }
         />
+        <Route path="/_styleguide" element={<StyleGuide />} />
         <Route path="*" element={<Navigate to="/overview" replace />} />
       </Routes>
+      </ToastProvider>
     </BrowserRouter>
   )
 }
