@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
-import { EmptyState, Spinner } from '../components/ui'
+import { Badge, Button, Skeleton } from '../components/ui'
 
+import { EmptyState } from '../components/ui'
 import { getAccessToken, clearAccessToken } from '../auth'
 
 const BASE = '/api/v1'
@@ -107,6 +108,7 @@ type AwbMsg = { type: 'error' | 'info'; text: string } | null
 
 // ── Audio ──────────────────────────────────────────────────────────────────────
 
+// SAFETY-CRITICAL — do not modify
 function playBeep(success: boolean) {
   try {
     const ctx = new AudioContext()
@@ -174,6 +176,7 @@ function AwbLinkDialog({ orderId, onDone }: { orderId: string; onDone: () => voi
 
   useEffect(() => { inputRef.current?.focus() }, [])
 
+  // SAFETY-CRITICAL — do not modify
   const triggerFlash = (state: 'success' | 'error') => {
     setFlash(state)
     setTimeout(() => setFlash('idle'), 600)
@@ -230,6 +233,7 @@ function AwbLinkDialog({ orderId, onDone }: { orderId: string; onDone: () => voi
     }
   }
 
+  // SAFETY-CRITICAL — flash overlay: do not modify
   const flashOverlay =
     flash === 'success' ? 'fixed inset-0 bg-success/20 pointer-events-none z-[60] animate-flash'
     : flash === 'error' ? 'fixed inset-0 bg-danger/20 pointer-events-none z-[60] animate-flash'
@@ -237,6 +241,7 @@ function AwbLinkDialog({ orderId, onDone }: { orderId: string; onDone: () => voi
 
   return (
     <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50">
+      {/* SAFETY-CRITICAL flash overlay — do not modify */}
       <div className={flashOverlay} />
       <div className="bg-panel rounded-xl shadow-2xl p-8 w-full max-w-md mx-4">
         <h2 className="text-h2 text-primary mb-1">{t('fulfill.linkAwb.title')}</h2>
@@ -249,25 +254,26 @@ function AwbLinkDialog({ orderId, onDone }: { orderId: string; onDone: () => voi
               {t('fulfill.linkAwb.success', { tracking: linked.tracking })}
             </p>
             <div className="space-y-2 pt-2">
-              <button
+              <Button
+                loading={printing}
                 onClick={handlePrint}
-                disabled={printing}
-                className="btn-brand btn text-body w-full"
+                className="w-full"
               >
                 {printing ? t('fulfill.printAwb.opening') : t('fulfill.printAwb.print')}
-              </button>
+              </Button>
               {awbMsg && (
                 <p className={`text-small text-center ${awbMsg.type === 'error' ? 'text-danger' : 'text-muted'}`}>
                   {awbMsg.text}
                 </p>
               )}
-              <button onClick={onDone} className="btn-ghost btn text-small w-full">
+              <Button variant="tertiary" onClick={onDone} className="w-full">
                 {t('fulfill.linkAwb.done')}
-              </button>
+              </Button>
             </div>
           </div>
         ) : (
           <>
+            {/* SAFETY-CRITICAL scan input — ref, onKeyDown, disabled behavior untouched */}
             <input
               ref={inputRef}
               type="text"
@@ -284,9 +290,9 @@ function AwbLinkDialog({ orderId, onDone }: { orderId: string; onDone: () => voi
             {genericError && (
               <p className="text-danger text-small font-medium mb-3">✗ {t('fulfill.linkAwb.error')}</p>
             )}
-            <button onClick={onDone} className="btn-ghost btn text-small w-full mt-2">
+            <Button variant="tertiary" onClick={onDone} className="w-full mt-2">
               {t('fulfill.linkAwb.skip')}
-            </button>
+            </Button>
           </>
         )}
       </div>
@@ -318,11 +324,12 @@ function HandoverScreen({ order, onBack }: { order: QueueOrder; onBack: () => vo
   return (
     <div className="flex flex-col h-screen bg-base">
       <div className="bg-panel border-b border-line px-6 py-3 flex items-center justify-between">
-        <button onClick={onBack} className="btn-ghost btn text-small">
+        <Button variant="tertiary" size="sm" onClick={onBack}>
           ← {t('fulfill.back')}
-        </button>
+        </Button>
         <div className="text-center">
-          <p className="font-medium text-primary">{order.number ?? order.id.slice(-8)}</p>
+          {/* Order number — font-mono per spec */}
+          <p className="font-mono font-medium text-primary">{order.number ?? order.id.slice(-8)}</p>
           <p className="text-small text-muted">{order.customer_name ?? t('common.pendingConsignee')}</p>
         </div>
         <div className="w-24" />
@@ -345,6 +352,11 @@ function HandoverScreen({ order, onBack }: { order: QueueOrder; onBack: () => vo
             <p className="text-body text-muted mb-8 text-center">
               {t('fulfill.handoverSubtitle', { count: order.total_units })}
             </p>
+            {/*
+              py-5 is intentional: large tap target for warehouse handover.
+              Kept as raw <button> so py-5 is not overridden by the Button component's
+              size-based padding. btn-brand is a DS class (no hardcoded hex).
+            */}
             <button
               onClick={confirm}
               disabled={confirming}
@@ -384,7 +396,14 @@ function QueueView({
 
   useEffect(() => { loadQueue() }, [loadQueue])
 
-  if (loading) return <div className="flex justify-center pt-12"><Spinner size={28} /></div>
+  if (loading) return (
+    <div className="p-6 max-w-4xl mx-auto space-y-3">
+      <Skeleton className="h-8 w-48 rounded-xl" />
+      {Array.from({ length: 3 }).map((_, i) => (
+        <Skeleton key={i} className="h-20 rounded-2xl" />
+      ))}
+    </div>
+  )
 
   const pickQueue     = queue.filter(o => o.status !== 'self_pickup_pending')
   const handoverQueue = queue.filter(o => o.status === 'self_pickup_pending')
@@ -393,9 +412,9 @@ function QueueView({
     <div className="p-6 max-w-4xl mx-auto" data-testid="fulfill-queue">
       <div className="flex items-center justify-between mb-6">
         <h1 className="text-h1 text-primary">{t('fulfill.title')}</h1>
-        <button onClick={loadQueue} className="btn-ghost btn text-small">
+        <Button variant="tertiary" size="sm" onClick={loadQueue}>
           {t('fulfill.refresh')}
-        </button>
+        </Button>
       </div>
 
       {/* Self-pickup pending section */}
@@ -413,10 +432,9 @@ function QueueView({
               >
                 <div>
                   <p className="text-body font-medium text-primary flex items-center gap-2">
-                    {order.number ?? order.id.slice(-8)}
-                    <span className="text-caption px-2 py-0.5 rounded bg-warning/15 text-warning font-medium">
-                      {t('fulfill.selfPickup')}
-                    </span>
+                    {/* Order number — font-mono per spec */}
+                    <span className="font-mono">{order.number ?? order.id.slice(-8)}</span>
+                    <Badge tone="warning" label={t('fulfill.selfPickup')} />
                   </p>
                   <p className="text-small text-muted">{order.customer_name ?? t('common.pendingConsignee')}</p>
                 </div>
@@ -424,9 +442,9 @@ function QueueView({
                   <span className="text-small text-muted">
                     {order.total_units} {t('fulfill.units')}
                   </span>
-                  <button className="btn-outline btn text-small">
+                  <Button variant="secondary" size="sm">
                     {t('fulfill.handoverBtn')}
-                  </button>
+                  </Button>
                 </div>
               </div>
             ))}
@@ -451,16 +469,15 @@ function QueueView({
               return (
                 <div
                   key={order.id}
-                  className="card hover:border-brand/50 p-4 flex items-center justify-between cursor-pointer transition"
+                  className="card hover:border-trace-blue/50 p-4 flex items-center justify-between cursor-pointer transition"
                   onClick={() => onSelect(order.id)}
                 >
                   <div>
                     <p className="text-body font-medium text-primary flex items-center gap-2">
-                      {order.number ?? order.id.slice(-8)}
+                      {/* Order number — font-mono per spec */}
+                      <span className="font-mono">{order.number ?? order.id.slice(-8)}</span>
                       {order.is_self_pickup && (
-                        <span className="text-caption px-2 py-0.5 rounded bg-brand/10 text-brand font-medium">
-                          {t('fulfill.selfPickup')}
-                        </span>
+                        <Badge tone="info" label={t('fulfill.selfPickup')} />
                       )}
                     </p>
                     <p className="text-small text-muted">
@@ -477,18 +494,12 @@ function QueueView({
                       </p>
                       <div className="w-32 bg-elevated h-2 rounded-full mt-1">
                         <div
-                          className="bg-brand h-2 rounded-full transition-all"
+                          className="bg-trace-blue h-2 rounded-full transition-all"
                           style={{ width: `${progress}%` }}
                         />
                       </div>
                     </div>
-                    <span className={`px-2 py-0.5 rounded text-caption font-medium ${
-                      order.status === 'new'
-                        ? 'bg-cyan/10 text-cyan'
-                        : 'bg-warning/10 text-warning'
-                    }`}>
-                      {order.status}
-                    </span>
+                    <Badge status={order.status} />
                     {order.locked_by && (
                       <span className="text-caption text-muted italic">{t('fulfill.locked')}</span>
                     )}
@@ -559,14 +570,16 @@ function GuidedUnpackPanel({
             key={p.piece_id}
             className="flex items-center justify-between bg-panel rounded border border-warning/20 px-3 py-2"
           >
+            {/* Barcode — font-mono per spec */}
             <span className="font-mono text-small text-primary">{p.barcode.slice(-10)}</span>
-            <button
+            <Button
+              variant="destructive"
+              size="sm"
+              loading={unpacking === p.piece_id}
               onClick={() => unpack(p.piece_id)}
-              disabled={unpacking === p.piece_id}
-              className="btn-danger btn text-caption disabled:opacity-50"
             >
-              {unpacking === p.piece_id ? '…' : t('fulfill.unpackPiece')}
-            </button>
+              {t('fulfill.unpackPiece')}
+            </Button>
           </div>
         ))}
       </div>
@@ -600,6 +613,7 @@ function PickScreen({ orderId, onBack }: { orderId: string; onBack: () => void }
 
   useEffect(() => { loadOrder() }, [loadOrder])
 
+  // SAFETY-CRITICAL — HID refocus: re-focuses scan input on any click; do not modify
   useEffect(() => {
     const refocus = () => {
       if (document.activeElement !== inputRef.current) inputRef.current?.focus()
@@ -609,11 +623,13 @@ function PickScreen({ orderId, onBack }: { orderId: string; onBack: () => void }
     return () => document.removeEventListener('click', refocus)
   }, [order])
 
+  // SAFETY-CRITICAL — flash trigger: do not modify
   const triggerFlash = (state: 'success' | 'error') => {
     setFlash(state)
     setTimeout(() => setFlash('idle'), 600)
   }
 
+  // SAFETY-CRITICAL — scan handler: do not modify
   const handleScan = useCallback(async (barcode: string) => {
     if (!barcode.trim() || scanning) return
     setScanning(true)
@@ -694,12 +710,22 @@ function PickScreen({ orderId, onBack }: { orderId: string; onBack: () => void }
     }
   }
 
-  if (loading) return <div className="flex justify-center pt-12"><Spinner size={28} /></div>
+  if (loading) return (
+    <div className="flex flex-col h-screen bg-base">
+      <Skeleton className="h-12 rounded-none" />
+      <div className="p-6 space-y-4">
+        <Skeleton className="h-16 rounded-2xl" />
+        <Skeleton className="h-40 rounded-2xl" />
+        <Skeleton className="h-40 rounded-2xl" />
+      </div>
+    </div>
+  )
   if (!order) return null
 
   const allComplete = order.items.every(i => i.allocated >= i.quantity)
   const hasCancelRequest = !!order.cancel_requested_at
 
+  // SAFETY-CRITICAL — flash overlay computation: do not modify
   const flashOverlay =
     flash === 'success' ? 'fixed inset-0 bg-success/20 pointer-events-none z-50 animate-flash'
     : flash === 'error' ? 'fixed inset-0 bg-danger/20 pointer-events-none z-50 animate-flash'
@@ -707,31 +733,28 @@ function PickScreen({ orderId, onBack }: { orderId: string; onBack: () => void }
 
   return (
     <div className="flex flex-col h-screen bg-base" data-testid="fulfill-pick">
+      {/* SAFETY-CRITICAL flash overlay — do not modify */}
       <div className={flashOverlay} />
 
       {/* Header */}
       <div className="bg-panel border-b border-line px-6 py-3 flex items-center justify-between">
-        <button onClick={onBack} className="btn-ghost btn text-small">
+        <Button variant="tertiary" size="sm" onClick={onBack}>
           ← {t('fulfill.backToQueue')}
-        </button>
+        </Button>
         <div className="text-center">
           <p className="font-medium text-primary flex items-center gap-2">
-            {order.number ?? order.id.slice(-8)}
+            {/* Order number — font-mono per spec */}
+            <span className="font-mono">{order.number ?? order.id.slice(-8)}</span>
             {order.is_self_pickup && (
-              <span className="text-caption px-2 py-0.5 rounded bg-brand/10 text-brand font-medium">
-                {t('fulfill.selfPickup')}
-              </span>
+              <Badge tone="info" label={t('fulfill.selfPickup')} />
             )}
           </p>
           <p className="text-small text-muted">{order.customer_name ?? t('common.pendingConsignee')}</p>
         </div>
         {!hasCancelRequest ? (
-          <button
-            onClick={() => setShowCancelConfirm(true)}
-            className="btn-danger btn text-caption"
-          >
+          <Button variant="destructive" size="sm" onClick={() => setShowCancelConfirm(true)}>
             {t('fulfill.cancelOrder')}
-          </button>
+          </Button>
         ) : (
           <div className="w-24" />
         )}
@@ -748,16 +771,17 @@ function PickScreen({ orderId, onBack }: { orderId: string; onBack: () => void }
                 : t('fulfill.cancelPreHint')}
             </p>
             <div className="flex gap-3 justify-end">
-              <button onClick={() => setShowCancelConfirm(false)} className="btn-outline btn text-small">
+              <Button variant="secondary" size="sm" onClick={() => setShowCancelConfirm(false)}>
                 {t('fulfill.back')}
-              </button>
-              <button
+              </Button>
+              <Button
+                variant="destructive"
+                size="sm"
+                loading={cancelling}
                 onClick={handleCancel}
-                disabled={cancelling}
-                className="btn-danger btn text-small"
               >
-                {cancelling ? '…' : t('fulfill.cancelConfirmBtn')}
-              </button>
+                {t('fulfill.cancelConfirmBtn')}
+              </Button>
             </div>
           </div>
         </div>
@@ -777,7 +801,7 @@ function PickScreen({ orderId, onBack }: { orderId: string; onBack: () => void }
         </div>
       )}
 
-      {/* Scan input */}
+      {/* SAFETY-CRITICAL scan input — autoFocus, ref, onKeyDown, disabled=scanning: do not modify */}
       {!hasCancelRequest && (
         <div className="bg-panel border-b border-line px-6 py-4">
           <input
@@ -794,7 +818,7 @@ function PickScreen({ orderId, onBack }: { orderId: string; onBack: () => void }
           {lastResult && (
             <div className={`mt-2 text-small font-medium ${lastResult.success ? 'text-success' : 'text-danger'}`}>
               {lastResult.success
-                ? `✓ ${lastResult.barcode}`
+                ? <><span>✓ </span><span className="font-mono">{lastResult.barcode}</span></>
                 : `✗ ${t(`fulfill.rejection.${lastResult.code}`, { defaultValue: lastResult.message ?? lastResult.code })}`}
             </div>
           )}
@@ -816,6 +840,7 @@ function PickScreen({ orderId, onBack }: { orderId: string; onBack: () => void }
                   {item.variant_title && item.variant_title !== 'Default Title' && (
                     <p className="text-small text-muted">{item.variant_title}</p>
                   )}
+                  {/* SKU — font-mono per spec */}
                   {item.sku && <p className="text-caption text-muted font-mono">{item.sku}</p>}
                 </div>
                 <span className={`text-body font-medium px-3 py-1 rounded-full ${
@@ -829,9 +854,10 @@ function PickScreen({ orderId, onBack }: { orderId: string; onBack: () => void }
                   {item.allocatedPieces.map(p => (
                     <div
                       key={p.piece_id}
-                      className="flex items-center gap-1 bg-brand/10 border border-brand/20 rounded px-2 py-1"
+                      className="flex items-center gap-1 bg-trace-blue/10 border border-trace-blue/20 rounded px-2 py-1"
                     >
-                      <span className="text-caption font-mono text-brand">{p.barcode.slice(-10)}</span>
+                      {/* Barcode — font-mono per spec */}
+                      <span className="text-caption font-mono text-trace-blue">{p.barcode.slice(-10)}</span>
                       {!hasCancelRequest && p.allocation_status === 'active' && (
                         <button
                           onClick={() => handleUnscan(p.piece_id)}
@@ -854,7 +880,7 @@ function PickScreen({ orderId, onBack }: { orderId: string; onBack: () => void }
       {!hasCancelRequest && (
         <div className="bg-panel border-t border-line px-6 py-4 space-y-2">
           {order.tracking_number ? (
-            /* PRINTABLE */
+            /* PRINTABLE — kept as raw <button> to preserve data-testid (Button doesn't spread it) */
             <div className="space-y-1">
               <button
                 onClick={handlePrintAwb}
@@ -872,7 +898,7 @@ function PickScreen({ orderId, onBack }: { orderId: string; onBack: () => void }
               )}
             </div>
           ) : (
-            /* NOT-YET-LINKED */
+            /* NOT-YET-LINKED — kept as raw <button> to preserve data-testid */
             <div className="space-y-1">
               <button
                 disabled
@@ -888,13 +914,13 @@ function PickScreen({ orderId, onBack }: { orderId: string; onBack: () => void }
           )}
 
           {allComplete && (
-            <button
+            <Button
+              loading={completing}
               onClick={handleComplete}
-              disabled={completing}
-              className="btn-brand btn text-body w-full"
+              className="w-full"
             >
               {completing ? t('common.loading') : t('fulfill.complete')}
-            </button>
+            </Button>
           )}
         </div>
       )}

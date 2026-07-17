@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
-import { EmptyState, Spinner } from '../components/ui'
+import { Alert, Badge, Button, EmptyState, Input, TableSkeleton } from '../components/ui'
 
 import { getAccessToken, clearAccessToken } from '../auth'
 
@@ -29,6 +29,13 @@ interface SessionDetail extends Session { lines: Line[] }
 interface VariantMatch { id: string; title: string; sku: string | null; product_title: string }
 interface Location { id: string; name: string }
 
+// open → warning, finalized → success, unknown → neutral
+function sessionTone(status: string): 'warning' | 'success' | 'neutral' {
+  if (status === 'open') return 'warning'
+  if (status === 'finalized') return 'success'
+  return 'neutral'
+}
+
 export default function Receiving() {
   const { t } = useTranslation()
   const [sessions, setSessions] = useState<Session[]>([])
@@ -56,9 +63,6 @@ export default function Receiving() {
     catch (e: unknown) { setError((e as Error).message) }
   }
 
-  if (loading) return <div className="flex justify-center pt-16"><Spinner size={28} /></div>
-  if (error)   return <p className="text-small text-danger">{error}</p>
-
   if (view === 'create') {
     return (
       <CreateSessionForm
@@ -83,13 +87,23 @@ export default function Receiving() {
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <h1 className="text-h1 text-primary">{t('receiving.title')}</h1>
-        <button onClick={() => setView('create')} className="btn-brand btn text-small">
+        <Button size="sm" onClick={() => setView('create')}>
           + {t('receiving.new')}
-        </button>
+        </Button>
       </div>
 
-      {sessions.length === 0 ? (
-        <EmptyState message={t('receiving.empty')} icon="📥" />
+      {error && <Alert tone="critical" title={error} />}
+
+      {loading ? (
+        <div className="card overflow-hidden">
+          <TableSkeleton rows={3} cols={6} />
+        </div>
+      ) : sessions.length === 0 ? (
+        <EmptyState
+          message={t('receiving.empty')}
+          icon="📥"
+          action={{ label: '+ ' + t('receiving.new'), onClick: () => setView('create') }}
+        />
       ) : (
         <div className="card overflow-hidden">
           <table className="min-w-full">
@@ -103,14 +117,15 @@ export default function Receiving() {
             <tbody>
               {sessions.map(s => (
                 <tr key={s.id} className="tbl-row cursor-pointer" onClick={() => openSession(s.id)}>
-                  <td className="tbl-cell font-medium text-brand">
-                    {s.reference ?? <span className="text-muted">{t('common.na')}</span>}
+                  {/* Reference — font-mono, trace-blue like other identifiers */}
+                  <td className="tbl-cell font-mono font-medium text-trace-blue">
+                    {s.reference ?? <span className="text-muted font-sans font-normal">{t('common.na')}</span>}
                   </td>
                   <td className="tbl-cell text-muted">{s.location_name ?? '—'}</td>
                   <td className="tbl-cell text-primary">{s.line_units}</td>
                   <td className="tbl-cell text-primary">{s.piece_count}</td>
                   <td className="tbl-cell">
-                    <SessionStatusBadge status={s.status} />
+                    <Badge tone={sessionTone(s.status)} label={s.status} />
                   </td>
                   <td className="tbl-cell text-muted text-small">
                     {new Date(s.created_at).toLocaleDateString()}
@@ -154,29 +169,29 @@ function CreateSessionForm({ locations, onCreated, onCancel }: {
   return (
     <div className="max-w-lg space-y-4">
       <h1 className="text-h1 text-primary">{t('receiving.newTitle')}</h1>
-      {error && <p className="text-small text-danger">{error}</p>}
+      {error && <Alert tone="critical" title={error} />}
       <form onSubmit={submit} className="card p-5 space-y-4">
-        <div>
-          <label className="block text-small text-muted mb-1.5">{t('receiving.location')}</label>
+        <div className="space-y-1.5">
+          <label className="text-small text-muted">{t('receiving.location')}</label>
           {locations.length > 0 ? (
             <select value={locationId} onChange={e => setLocationId(e.target.value)} className="input w-full">
               {locations.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
             </select>
           ) : (
-            <input value={locationId} onChange={e => setLocationId(e.target.value)}
-              placeholder="Location UUID" className="input w-full" />
+            <Input value={locationId} onChange={e => setLocationId(e.target.value)}
+              placeholder="Location UUID" />
           )}
         </div>
         <FormField label={t('receiving.reference')} value={reference} onChange={setReference} placeholder="PO-123" />
         <FormField label={t('receiving.supplier')}  value={supplier}  onChange={setSupplier}  placeholder="Supplier name" />
         <FormField label={t('receiving.note')}      value={note}      onChange={setNote}      placeholder="Optional note" />
         <div className="flex gap-3 pt-1">
-          <button type="submit" disabled={saving} className="btn-brand btn text-small disabled:opacity-50">
-            {saving ? t('common.loading') : t('receiving.create')}
-          </button>
-          <button type="button" onClick={onCancel} className="btn-outline btn text-small">
+          <Button type="submit" loading={saving}>
+            {t('receiving.create')}
+          </Button>
+          <Button type="button" variant="secondary" onClick={onCancel}>
             {t('common.cancel')}
-          </button>
+          </Button>
         </div>
       </form>
     </div>
@@ -260,7 +275,8 @@ function SessionView({ session, onRefresh, onBack }: {
 
   return (
     <div className="space-y-4">
-      <button onClick={onBack} className="text-small text-brand hover:text-brand-hover transition-colors">
+      {/* Back link — matches OrderDetail pattern */}
+      <button onClick={onBack} className="text-small text-trace-blue hover:text-trace-blue-hover transition-colors">
         ← {t('receiving.back')}
       </button>
 
@@ -270,43 +286,47 @@ function SessionView({ session, onRefresh, onBack }: {
             {session.reference ?? t('receiving.untitled')}
           </h1>
           <p className="text-small text-muted mt-0.5 flex items-center gap-2">
-            {session.location_name} · <SessionStatusBadge status={session.status} />
+            {session.location_name} · <Badge tone={sessionTone(session.status)} label={session.status} />
           </p>
         </div>
         <div className="flex gap-2">
           {session.status === 'finalized' && (
             <>
-              <button onClick={printLabels} className="btn-brand btn text-small">
+              <Button size="sm" onClick={printLabels}>
                 {t('receiving.printLabels')} ({session.piece_count})
-              </button>
-              <button onClick={reprintLabels} className="btn-outline btn text-small">
+              </Button>
+              <Button size="sm" variant="secondary" onClick={reprintLabels}>
                 {t('receiving.reprint')}
-              </button>
+              </Button>
             </>
           )}
           {isOpen && (
-            <button onClick={finalize} disabled={finalizing || session.lines.length === 0}
-              className="btn-brand btn text-small disabled:opacity-50">
-              {finalizing ? t('common.loading') : t('receiving.finalize')}
-            </button>
+            <Button
+              size="sm"
+              loading={finalizing}
+              disabled={session.lines.length === 0}
+              onClick={finalize}
+            >
+              {t('receiving.finalize')}
+            </Button>
           )}
         </div>
       </div>
 
-      {printError && <p className="text-small text-danger">{printError}</p>}
+      {printError && <Alert tone="critical" title={printError} />}
 
       {/* Add line (open only) */}
       {isOpen && (
         <div className="card p-4">
           <h2 className="text-caption text-muted uppercase tracking-widest mb-3">{t('receiving.addLine')}</h2>
-          {addError && <p className="mb-2 text-small text-danger">{addError}</p>}
-          <div className="flex gap-3 items-start">
+          {addError && <Alert tone="critical" title={addError} />}
+          <div className="flex gap-3 items-start mt-2">
             <div className="flex-1 relative">
-              <input
+              {/* Standard type-ahead search — NOT a HID/scan input; Input component is safe */}
+              <Input
                 value={query}
                 onChange={e => doSearch(e.target.value)}
                 placeholder={t('receiving.searchVariant')}
-                className="input w-full"
               />
               {variants.length > 0 && !selectedVariant && (
                 <ul className="absolute z-10 start-0 end-0 mt-1 bg-panel border border-line rounded-lg shadow-elevated max-h-48 overflow-y-auto">
@@ -316,6 +336,7 @@ function SessionView({ session, onRefresh, onBack }: {
                       onClick={() => { setSelectedVariant(v); setQuery(`${v.product_title} · ${v.title}`); setVariants([]) }}>
                       <span className="font-medium text-primary">{v.product_title}</span>
                       <span className="text-muted"> · {v.title}</span>
+                      {/* SKU — font-mono per spec */}
                       {v.sku && <span className="font-mono text-caption text-muted ms-2">{v.sku}</span>}
                     </li>
                   ))}
@@ -324,9 +345,9 @@ function SessionView({ session, onRefresh, onBack }: {
             </div>
             <input type="number" min={1} value={qty} onChange={e => setQty(Number(e.target.value))}
               className="input w-20 text-center" />
-            <button onClick={addLine} disabled={!selectedVariant} className="btn-brand btn text-small disabled:opacity-50">
+            <Button size="sm" disabled={!selectedVariant} onClick={addLine}>
               {t('receiving.add')}
-            </button>
+            </Button>
           </div>
         </div>
       )}
@@ -355,6 +376,7 @@ function SessionView({ session, onRefresh, onBack }: {
                   <div className="text-body font-medium text-primary">{l.product_title}</div>
                   <div className="text-small text-muted">{l.variant_title}</div>
                 </td>
+                {/* SKU — font-mono per spec */}
                 <td className="tbl-cell font-mono text-small text-muted">{l.sku ?? '—'}</td>
                 <td className="tbl-cell text-end font-semibold text-primary">{l.quantity}</td>
                 {isOpen && (
@@ -396,22 +418,9 @@ function FormField({ label, value, onChange, placeholder }: {
   label: string; value: string; onChange: (v: string) => void; placeholder?: string
 }) {
   return (
-    <div>
-      <label className="block text-small text-muted mb-1.5">{label}</label>
-      <input value={value} onChange={e => onChange(e.target.value)} placeholder={placeholder}
-        className="input w-full" />
+    <div className="space-y-1.5">
+      <label className="text-small text-muted">{label}</label>
+      <Input value={value} onChange={e => onChange(e.target.value)} placeholder={placeholder} />
     </div>
-  )
-}
-
-function SessionStatusBadge({ status }: { status: string }) {
-  const styles: Record<string, string> = {
-    open:      'bg-warning/10 text-warning border-warning/20',
-    finalized: 'bg-success/10 text-success border-success/20',
-  }
-  return (
-    <span className={`badge border ${styles[status] ?? 'bg-muted/10 text-muted border-muted/20'}`}>
-      {status}
-    </span>
   )
 }
