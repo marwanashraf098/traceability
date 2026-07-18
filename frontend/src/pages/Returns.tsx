@@ -1,6 +1,9 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Badge, EmptyState, Spinner } from '../components/ui'
+import {
+  Alert, Badge, Button, DataTable, type DataTableColumn,
+  EmptyState, Skeleton, TableSkeleton, Tabs,
+} from '../components/ui'
 
 import { getAccessToken, clearAccessToken } from '../auth'
 
@@ -29,6 +32,7 @@ async function api<T = void>(path: string, opts: RequestInit = {}): Promise<T> {
 
 type FlashState = 'idle' | 'success' | 'error'
 
+// SAFETY-CRITICAL — do not modify
 function playBeep(ok: boolean) {
   try {
     const ctx = new AudioContext(), osc = ctx.createOscillator(), g = ctx.createGain()
@@ -79,6 +83,17 @@ async function printPieceLabel(pieceId: string): Promise<void> {
   window.open(URL.createObjectURL(blob), '_blank')
 }
 
+// ── Row helper ────────────────────────────────────────────────────────────────
+
+function Row({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="flex items-center justify-between">
+      <span className="text-small text-muted">{label}</span>
+      {children}
+    </div>
+  )
+}
+
 // ── Session tab (PRIMARY — waybill-driven) ────────────────────────────────────
 
 function SessionTab({ onSwitchToIntake }: { onSwitchToIntake: () => void }) {
@@ -89,22 +104,18 @@ function SessionTab({ onSwitchToIntake }: { onSwitchToIntake: () => void }) {
   const [session, setSession]       = useState<SessionSummary | null>(null)
   const [pieces, setPieces]         = useState<SessionPiece[]>([])
   const [error, setError]           = useState<string | null>(null)
-  // per-piece damage reason prompt
   const [damageTarget, setDamageTarget] = useState<string | null>(null)
   const [damageReason, setDamageReason] = useState('')
-  // out-of-window nudge: pieceId whose verdict was rejected because of the window guard
   const [outOfWindowPieceId, setOutOfWindowPieceId] = useState<string | null>(null)
-  // finalize result
   const [finalized, setFinalized]   = useState<FinalizeSummary | null>(null)
-  // reprint: piece IDs damaged in this session; piece stays at full opacity so button is clear
   const [damagedPieceIds, setDamagedPieceIds] = useState<Set<string>>(new Set())
   const [reprintPieceId, setReprintPieceId]   = useState<string | null>(null)
   const [reprintErrors, setReprintErrors]     = useState<Record<string, string>>({})
-  // damage-reason validation
   const [damageReasonError, setDamageReasonError] = useState(false)
 
   useEffect(() => { waybillRef.current?.focus() }, [])
 
+  // SAFETY-CRITICAL — do not modify
   const triggerFlash = (s: 'success' | 'error') => {
     setFlash(s); setTimeout(() => setFlash('idle'), 600)
   }
@@ -140,7 +151,6 @@ function SessionTab({ onSwitchToIntake }: { onSwitchToIntake: () => void }) {
         body: JSON.stringify({ verdict, reason: reason ?? null, locationId: null }),
       })
       playBeep(true)
-      // Mark piece as processed locally for instant feedback
       setPieces(prev => prev.map(p => p.id === pieceId ? { ...p, processed: true } : p))
       setDamageTarget(null); setDamageReason(''); setDamageReasonError(false)
       if (verdict === 'damaged') setDamagedPieceIds(prev => new Set([...prev, pieceId]))
@@ -148,7 +158,6 @@ function SessionTab({ onSwitchToIntake }: { onSwitchToIntake: () => void }) {
       playBeep(false)
       const status = (e as { status?: number }).status
       if (status === 422) {
-        // Out-of-window guard fired — surface the "use waybill-less intake" path
         setOutOfWindowPieceId(pieceId)
       } else {
         setError((e as Error).message || t('common.error'))
@@ -181,6 +190,7 @@ function SessionTab({ onSwitchToIntake }: { onSwitchToIntake: () => void }) {
     finally { setReprintPieceId(null) }
   }
 
+  // SAFETY-CRITICAL — flash overlay computation: do not modify
   const flashOverlay =
     flash === 'success' ? 'fixed inset-0 bg-success/20 pointer-events-none z-50 animate-flash' :
     flash === 'error'   ? 'fixed inset-0 bg-danger/20 pointer-events-none z-50 animate-flash' :
@@ -192,7 +202,9 @@ function SessionTab({ onSwitchToIntake }: { onSwitchToIntake: () => void }) {
       <div className="max-w-xl mx-auto pt-4 space-y-4" data-testid="session-finalized">
         <div className="card border-success/40 bg-success/5 p-5 space-y-3">
           <p className="text-body text-success font-medium">✓ {t('returns.session.finalized')}</p>
-          <Row label={t('returns.session.processed')}><span className="text-primary font-medium">{finalized.processedCount}</span></Row>
+          <Row label={t('returns.session.processed')}>
+            <span className="text-primary font-medium">{finalized.processedCount}</span>
+          </Row>
           {finalized.unresolvedRtoCount > 0 && (
             <Row label={t('returns.session.unresolvedRto')}>
               <span className="text-warning font-medium">{finalized.unresolvedRtoCount}</span>
@@ -204,22 +216,30 @@ function SessionTab({ onSwitchToIntake }: { onSwitchToIntake: () => void }) {
             </Row>
           )}
         </div>
-        <button onClick={() => { setSession(null); setPieces([]); setFinalized(null); setTimeout(() => waybillRef.current?.focus(), 50) }}
-                className="btn-outline btn text-body w-full">
+        <Button
+          variant="secondary"
+          className="w-full"
+          onClick={() => {
+            setSession(null); setPieces([]); setFinalized(null)
+            setTimeout(() => waybillRef.current?.focus(), 50)
+          }}
+        >
           {t('returns.session.newSession')}
-        </button>
+        </Button>
       </div>
     )
   }
 
   return (
     <div className="max-w-2xl mx-auto pt-4">
+      {/* SAFETY-CRITICAL flash overlay — do not modify */}
       <div className={flashOverlay} />
 
       {/* Step 1: Waybill scan */}
       {!session && (
         <div className="space-y-4">
           <p className="text-body text-muted">{t('returns.session.hint')}</p>
+          {/* SAFETY-CRITICAL scan input — ref, autoFocus, onKeyDown, disabled: do not modify */}
           <input
             ref={waybillRef}
             type="text"
@@ -230,18 +250,22 @@ function SessionTab({ onSwitchToIntake }: { onSwitchToIntake: () => void }) {
             autoFocus
           />
           {error && (
-            <div className="card border-danger/30 bg-danger/5 p-4 text-danger text-body" data-testid="session-error">✗ {error}</div>
+            <div data-testid="session-error">
+              <Alert tone="critical" title={error} />
+            </div>
           )}
-          {loading && <div className="flex justify-center py-6"><Spinner /></div>}
+          {loading && <Skeleton className="h-10 rounded-xl" />}
 
-          {/* UX split: explain when to use this tab vs the waybill-less intake */}
           <div className="card border-line bg-elevated p-4 space-y-2">
             <p className="text-small text-muted font-medium">{t('returns.session.whenToUse')}</p>
             <ul className="text-small text-muted list-disc list-inside space-y-1">
               <li>{t('returns.session.useSession')}</li>
               <li>
                 {t('returns.session.useIntake')}{' '}
-                <button onClick={onSwitchToIntake} className="text-brand underline text-small">
+                <button
+                  onClick={onSwitchToIntake}
+                  className="text-trace-blue hover:text-trace-blue-hover underline text-small transition-colors"
+                >
                   {t('returns.session.switchToIntake')}
                 </button>
               </li>
@@ -255,17 +279,22 @@ function SessionTab({ onSwitchToIntake }: { onSwitchToIntake: () => void }) {
         <div className="space-y-4">
           <div className="card bg-elevated border-line p-4 flex items-center justify-between">
             <div>
-              <p className="text-body text-primary font-medium">{session.waybillNumber}</p>
-              <p className="text-small text-muted">{t('returns.col.order')}: {session.orderNumber}</p>
+              {/* Waybill number — font-mono (identifier) */}
+              <p className="font-mono text-body text-primary font-medium">{session.waybillNumber}</p>
+              {/* Order number — font-mono (identifier) */}
+              <p className="text-small text-muted">
+                {t('returns.col.order')}: <span className="font-mono">{session.orderNumber}</span>
+              </p>
             </div>
-            <button onClick={finalizeSession} disabled={loading}
-                    className="btn-brand btn text-small">
-              {loading ? <Spinner size={14} /> : t('returns.session.finalize')}
-            </button>
+            <Button size="sm" loading={loading} onClick={finalizeSession}>
+              {t('returns.session.finalize')}
+            </Button>
           </div>
 
           {error && (
-            <div className="card border-danger/30 bg-danger/5 p-4 text-danger text-body" data-testid="session-error">✗ {error}</div>
+            <div data-testid="session-error">
+              <Alert tone="critical" title={error} />
+            </div>
           )}
 
           {pieces.length === 0 ? (
@@ -273,16 +302,18 @@ function SessionTab({ onSwitchToIntake }: { onSwitchToIntake: () => void }) {
           ) : (
             <div className="space-y-2" data-testid="pieces-list">
               {pieces.map(p => (
-                <div key={p.id}
-                     className={`card p-4 ${p.processed && !damagedPieceIds.has(p.id) ? 'opacity-60' : ''}`}>
+                <div
+                  key={p.id}
+                  className={`card p-4 ${p.processed && !damagedPieceIds.has(p.id) ? 'opacity-60' : ''}`}
+                >
                   <div className="flex items-start gap-4">
                     <div className="flex-1 min-w-0">
                       <p className="text-body text-primary font-medium truncate">{p.product_title}</p>
                       <p className="text-small text-muted">{p.variant_title}</p>
                       <div className="flex items-center gap-2 mt-1">
+                        {/* Barcode — font-mono (identifier) */}
                         <span className="font-mono text-caption text-muted">{p.barcode}</span>
                         <Badge status={p.status} />
-                        {/* Delivered pieces are expected; only flag RTO pieces */}
                         {p.status === 'delivered' && !p.processed && (
                           <span className="text-caption text-muted italic">
                             {t('returns.session.deliveredOptional')}
@@ -293,29 +324,40 @@ function SessionTab({ onSwitchToIntake }: { onSwitchToIntake: () => void }) {
 
                     {!p.processed ? (
                       <div className="flex gap-2 shrink-0">
-                        <button onClick={() => recordVerdict(p.id, 'restock')}
-                                className="btn-outline btn text-small">
+                        <Button
+                          variant="secondary"
+                          size="sm"
+                          onClick={() => recordVerdict(p.id, 'restock')}
+                        >
                           {t('returns.pending.restock')}
-                        </button>
-                        <button onClick={() => setDamageTarget(p.id)}
-                                className="btn-danger btn text-small">
+                        </Button>
+                        <Button
+                          variant="destructive"
+                          size="sm"
+                          onClick={() => setDamageTarget(p.id)}
+                        >
                           {t('returns.pending.damage')}
-                        </button>
+                        </Button>
                       </div>
                     ) : (
                       <span className="text-success text-small shrink-0">✓ {t('returns.session.done')}</span>
                     )}
                   </div>
 
-                  {/* Out-of-window nudge for this specific piece */}
+                  {/* Out-of-window nudge — data-testid kept on raw <button> (Button doesn't spread it) */}
                   {outOfWindowPieceId === p.id && (
-                    <div className="mt-3 pt-3 border-t border-warning/30 bg-warning/5 rounded-b-lg px-3 pb-3 -mx-4 -mb-4" data-testid="out-of-window-nudge">
+                    <div
+                      className="mt-3 pt-3 border-t border-warning/30 bg-warning/5 rounded-b-lg px-3 pb-3 -mx-4 -mb-4"
+                      data-testid="out-of-window-nudge"
+                    >
                       <p className="text-small text-warning font-medium mb-2">
                         {t('returns.session.outOfWindow')}
                       </p>
-                      <button onClick={() => { setOutOfWindowPieceId(null); onSwitchToIntake() }}
-                              className="btn-outline btn text-small border-warning/40 text-warning hover:bg-warning/10"
-                              data-testid="switch-to-intake">
+                      <button
+                        onClick={() => { setOutOfWindowPieceId(null); onSwitchToIntake() }}
+                        className="btn-outline btn text-small border-warning/40 text-warning hover:bg-warning/10"
+                        data-testid="switch-to-intake"
+                      >
                         {t('returns.session.useIntakeFallback')}
                       </button>
                     </div>
@@ -325,6 +367,10 @@ function SessionTab({ onSwitchToIntake }: { onSwitchToIntake: () => void }) {
                   {damageTarget === p.id && (
                     <div className="mt-3 pt-3 border-t border-line space-y-2">
                       <div className="flex gap-2">
+                        {/*
+                          flex-1 must sit directly on the flex child.
+                          Input wraps in w-full div, so raw <input> is used here.
+                        */}
                         <input
                           type="text"
                           value={damageReason}
@@ -334,14 +380,20 @@ function SessionTab({ onSwitchToIntake }: { onSwitchToIntake: () => void }) {
                           autoFocus
                           onKeyDown={e => { if (e.key === 'Enter') recordVerdict(p.id, 'damaged', damageReason) }}
                         />
-                        <button onClick={() => recordVerdict(p.id, 'damaged', damageReason)}
-                                className="btn-danger btn text-small">
+                        <Button
+                          variant="destructive"
+                          size="sm"
+                          onClick={() => recordVerdict(p.id, 'damaged', damageReason)}
+                        >
                           {t('returns.pending.confirm')}
-                        </button>
-                        <button onClick={() => { setDamageTarget(null); setDamageReason(''); setDamageReasonError(false) }}
-                                className="btn-ghost btn text-small">
+                        </Button>
+                        <Button
+                          variant="tertiary"
+                          size="sm"
+                          onClick={() => { setDamageTarget(null); setDamageReason(''); setDamageReasonError(false) }}
+                        >
                           {t('common.cancel')}
-                        </button>
+                        </Button>
                       </div>
                       {damageReasonError && (
                         <p className="text-danger text-caption" data-testid="damage-reason-error">
@@ -351,7 +403,7 @@ function SessionTab({ onSwitchToIntake }: { onSwitchToIntake: () => void }) {
                     </div>
                   )}
 
-                  {/* Reprint — offered immediately after a damage verdict in this session */}
+                  {/* Reprint — data-testid kept on raw <button> (Button doesn't spread it) */}
                   {damagedPieceIds.has(p.id) && p.processed && (
                     <div className="mt-2 pt-2 border-t border-line flex items-center gap-2">
                       <button
@@ -379,15 +431,6 @@ function SessionTab({ onSwitchToIntake }: { onSwitchToIntake: () => void }) {
   )
 }
 
-function Row({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <div className="flex items-center justify-between">
-      <span className="text-small text-muted">{label}</span>
-      {children}
-    </div>
-  )
-}
-
 // ── Waybill-less intake tab (SECONDARY / FALLBACK) ────────────────────────────
 // Use this when: no waybill, or out-of-window customer returns the session rejected.
 
@@ -406,10 +449,12 @@ function IntakeTab() {
 
   useEffect(() => { inputRef.current?.focus() }, [])
 
+  // SAFETY-CRITICAL — do not modify
   const triggerFlash = (s: 'success' | 'error') => {
     setFlash(s); setTimeout(() => setFlash('idle'), 600)
   }
 
+  // SAFETY-CRITICAL — scan handler: do not modify
   const handleScan = useCallback(async (barcode: string) => {
     if (!barcode.trim() || scanning) return
     setScanning(true); setResult(null); setError(null)
@@ -428,6 +473,7 @@ function IntakeTab() {
     }
   }, [scanning, t])
 
+  // SAFETY-CRITICAL — flash overlay computation: do not modify
   const flashOverlay =
     flash === 'success' ? 'fixed inset-0 bg-success/20 pointer-events-none z-50 animate-flash' :
     flash === 'error'   ? 'fixed inset-0 bg-danger/20 pointer-events-none z-50 animate-flash' :
@@ -435,13 +481,14 @@ function IntakeTab() {
 
   return (
     <div className="max-w-xl mx-auto pt-4">
+      {/* SAFETY-CRITICAL flash overlay — do not modify */}
       <div className={flashOverlay} />
 
-      {/* Context: explain when this fallback is appropriate */}
       <div className="card border-line bg-elevated p-3 mb-4 text-small text-muted">
         {t('returns.intake.fallbackNote')}
       </div>
 
+      {/* SAFETY-CRITICAL scan input — ref, autoFocus, onKeyDown, disabled, .value=''/.focus(): do not modify */}
       <input
         ref={inputRef}
         type="text"
@@ -452,15 +499,12 @@ function IntakeTab() {
         autoFocus
       />
 
-      {error && (
-        <div className="card border-danger/30 bg-danger/5 p-4 mb-4 text-danger text-body">
-          ✗ {error}
-        </div>
-      )}
+      {error && <div className="mb-4"><Alert tone="critical" title={error} /></div>}
 
       {result && (
         <div className={`card p-5 space-y-3 ${result.isUnexpected ? 'border-warning/40 bg-warning/5' : 'border-success/40 bg-success/5'}`}>
           <Row label={t('returns.col.barcode')}>
+            {/* Barcode — font-mono (identifier) */}
             <span className="font-mono text-small text-primary">{result.barcode ?? result.id}</span>
           </Row>
           <Row label={t('returns.col.variant')}>
@@ -469,8 +513,17 @@ function IntakeTab() {
           <Row label={t('returns.col.status')}>
             <Badge status={result.status} />
           </Row>
-          {result.orderNumber && <Row label={t('returns.col.order')}><span className="text-primary">{result.orderNumber}</span></Row>}
-          {result.trackingNumber && <Row label={t('lookup.shipment')}><span className="font-mono text-small text-cyan">{result.trackingNumber}</span></Row>}
+          {result.orderNumber && (
+            <Row label={t('returns.col.order')}>
+              <span className="text-primary">{result.orderNumber}</span>
+            </Row>
+          )}
+          {result.trackingNumber && (
+            <Row label={t('lookup.shipment')}>
+              {/* Tracking number — font-mono (identifier) */}
+              <span className="font-mono text-small text-muted">{result.trackingNumber}</span>
+            </Row>
+          )}
           <div className={`pt-3 border-t ${result.isUnexpected ? 'border-warning/30 text-warning' : 'border-success/30 text-success'} text-body font-medium`}>
             {result.isUnexpected ? t('returns.unexpected') : `✓ ${t('returns.intakeSuccess')}`}
           </div>
@@ -511,7 +564,13 @@ function PendingTab() {
     setDamageTarget(null); setDamageReason(''); load()
   }
 
-  if (loading) return <div className="flex justify-center pt-12"><Spinner size={28} /></div>
+  if (loading) return (
+    <div className="space-y-3 pt-4">
+      {Array.from({ length: 3 }).map((_, i) => (
+        <Skeleton key={i} className="h-24 rounded-2xl" />
+      ))}
+    </div>
+  )
   if (pieces.length === 0) return <EmptyState message={t('returns.pending.empty')} icon="📭" />
 
   return (
@@ -522,21 +581,30 @@ function PendingTab() {
             <div>
               <p className="text-body text-primary font-medium">{p.product_title}</p>
               <p className="text-small text-muted">{p.variant_title}</p>
+              {/* Barcode — font-mono (identifier) */}
               <p className="text-caption text-muted font-mono mt-1">{p.barcode}</p>
-              {p.order_number && <p className="text-small text-muted mt-0.5">{t('returns.col.order')}: {p.order_number}</p>}
-              {p.location_name && <p className="text-small text-muted">{t('returns.col.location')}: {p.location_name}</p>}
+              {p.order_number && (
+                <p className="text-small text-muted mt-0.5">{t('returns.col.order')}: {p.order_number}</p>
+              )}
+              {p.location_name && (
+                <p className="text-small text-muted">{t('returns.col.location')}: {p.location_name}</p>
+              )}
             </div>
             <div className="flex gap-2 shrink-0">
-              <button onClick={() => restock(p.id)} className="btn-outline btn text-small">
+              <Button variant="secondary" size="sm" onClick={() => restock(p.id)}>
                 {t('returns.pending.restock')}
-              </button>
-              <button onClick={() => setDamageTarget(p.id)} className="btn-danger btn text-small">
+              </Button>
+              <Button variant="destructive" size="sm" onClick={() => setDamageTarget(p.id)}>
                 {t('returns.pending.damage')}
-              </button>
+              </Button>
             </div>
           </div>
           {damageTarget === p.id && (
             <div className="mt-3 pt-3 border-t border-line flex gap-2">
+              {/*
+                flex-1 must sit directly on the flex child.
+                Input wraps in w-full div, so raw <input> is used here.
+              */}
               <input
                 type="text"
                 value={damageReason}
@@ -546,12 +614,16 @@ function PendingTab() {
                 autoFocus
                 onKeyDown={e => { if (e.key === 'Enter') damage(p.id) }}
               />
-              <button onClick={() => damage(p.id)} className="btn-danger btn text-small">
+              <Button variant="destructive" size="sm" onClick={() => damage(p.id)}>
                 {t('returns.pending.confirm')}
-              </button>
-              <button onClick={() => { setDamageTarget(null); setDamageReason('') }} className="btn-ghost btn text-small">
+              </Button>
+              <Button
+                variant="tertiary"
+                size="sm"
+                onClick={() => { setDamageTarget(null); setDamageReason('') }}
+              >
                 {t('common.cancel')}
-              </button>
+              </Button>
             </div>
           )}
         </div>
@@ -584,54 +656,78 @@ function NeverReceivedTab() {
     ? new Date(iso).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' })
     : '—'
 
+  const columns: DataTableColumn<NeverReceivedRow>[] = [
+    {
+      key: 'barcode',
+      header: t('returns.neverReceived.piece'),
+      mono: true,
+      render: row => (
+        <span className="font-mono text-small text-muted">{row.barcode}</span>
+      ),
+    },
+    {
+      key: 'variant',
+      header: t('returns.col.variant'),
+      render: row => (
+        <div>
+          <p className="text-primary">{row.product_title}</p>
+          <p className="text-small text-muted">{row.variant_title}</p>
+        </div>
+      ),
+    },
+    {
+      key: 'order_number',
+      header: t('returns.neverReceived.order'),
+      render: row => <span className="text-primary">{row.order_number ?? '—'}</span>,
+    },
+    {
+      key: 'tracking_number',
+      header: t('returns.neverReceived.tracking'),
+      mono: true,
+      render: row => (
+        <span className="font-mono text-small text-muted">{row.tracking_number ?? '—'}</span>
+      ),
+    },
+    {
+      key: 'returned_at',
+      header: t('returns.neverReceived.returnedAt'),
+      render: row => (
+        <span className="text-danger font-medium">{fmtDate(row.returned_at?.toString())}</span>
+      ),
+    },
+  ]
+
   return (
     <div className="pt-4 space-y-4">
       <div className="card border-warning/30 bg-warning/5 p-4">
         <p className="text-body text-warning font-medium mb-3">{t('returns.neverReceived.subtitle')}</p>
         <div className="flex items-center gap-3">
           <label className="text-small text-muted">{t('returns.neverReceived.window')}:</label>
-          <input type="number" min={1} max={90} value={windowDays}
-                 onChange={e => setWindowDays(Number(e.target.value))} className="input w-20" />
-          <button onClick={load} className="btn-outline btn text-small">↻</button>
+          <input
+            type="number"
+            min={1}
+            max={90}
+            value={windowDays}
+            onChange={e => setWindowDays(Number(e.target.value))}
+            className="input w-20"
+          />
+          <Button variant="secondary" size="sm" onClick={load}>↻</Button>
         </div>
       </div>
 
       {loading ? (
-        <div className="flex justify-center py-8"><Spinner /></div>
+        <div className="card overflow-hidden">
+          <TableSkeleton rows={4} cols={5} />
+        </div>
       ) : rows.length === 0 ? (
+        /* Success empty state — text-success color communicates "all clear", not replaced with EmptyState */
         <div className="flex flex-col items-center py-12 gap-2 text-success">
           <span className="text-3xl">✓</span>
           <p className="text-body">{t('returns.neverReceived.empty')}</p>
         </div>
       ) : (
-        <div className="card overflow-x-auto">
-          <table className="min-w-full">
-            <thead>
-              <tr className="border-b border-line">
-                {[
-                  t('returns.neverReceived.piece'),
-                  t('returns.col.variant'),
-                  t('returns.neverReceived.order'),
-                  t('returns.neverReceived.tracking'),
-                  t('returns.neverReceived.returnedAt'),
-                ].map(h => <th key={h} className="tbl-header">{h}</th>)}
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map(r => (
-                <tr key={r.id} className="tbl-row">
-                  <td className="tbl-cell font-mono text-small text-muted">{r.barcode}</td>
-                  <td className="tbl-cell">
-                    <p className="text-primary">{r.product_title}</p>
-                    <p className="text-small text-muted">{r.variant_title}</p>
-                  </td>
-                  <td className="tbl-cell text-primary">{r.order_number ?? '—'}</td>
-                  <td className="tbl-cell font-mono text-small text-cyan">{r.tracking_number ?? '—'}</td>
-                  <td className="tbl-cell text-danger font-medium">{fmtDate(r.returned_at?.toString())}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+        <div className="card overflow-hidden">
+          <DataTable columns={columns} rows={rows} />
         </div>
       )}
     </div>
@@ -647,40 +743,22 @@ export default function Returns() {
   const { t } = useTranslation()
   const [tab, setTab] = useState<Tab>('session')
 
-  const tabs: { key: Tab; label: string }[] = [
+  const tabDefs = [
     { key: 'session',        label: t('returns.session.title') },
-    { key: 'intake',         label: t('returns.intake.title') },
+    // Intake fallback badge text embedded in label — DS Tabs accepts label: string only
+    { key: 'intake',         label: `${t('returns.intake.title')} · ${t('returns.intake.fallbackBadge')}` },
     { key: 'pending',        label: t('returns.pending.title') },
     { key: 'never-received', label: t('returns.neverReceived.title') },
   ]
 
   return (
     <div className="space-y-0">
-      <div className="flex items-end justify-between mb-0">
-        <h1 className="text-h1 text-primary mb-4">{t('returns.title')}</h1>
-      </div>
+      <h1 className="text-h1 text-primary mb-4">{t('returns.title')}</h1>
 
-      <div className="flex border-b border-line gap-1">
-        {tabs.map(({ key, label }) => (
-          <button
-            key={key}
-            onClick={() => setTab(key)}
-            className={`px-4 py-2.5 text-body font-medium border-b-2 -mb-px transition-colors ${
-              tab === key
-                ? 'border-brand text-primary'
-                : 'border-transparent text-muted hover:text-primary'
-            }`}
-          >
-            {label}
-            {/* Subtle "fallback" hint on the Intake tab so workers know not to default here */}
-            {key === 'intake' && (
-              <span className="ms-1.5 text-caption text-muted">{t('returns.intake.fallbackBadge')}</span>
-            )}
-          </button>
-        ))}
-      </div>
+      <Tabs tabs={tabDefs} activeKey={tab} onChange={key => setTab(key as Tab)} />
 
       <div className="pt-2">
+        {/* Tab-to-component mapping: order and filter logic unchanged */}
         {tab === 'session'        && <SessionTab onSwitchToIntake={() => setTab('intake')} />}
         {tab === 'intake'         && <IntakeTab />}
         {tab === 'pending'        && <PendingTab />}
