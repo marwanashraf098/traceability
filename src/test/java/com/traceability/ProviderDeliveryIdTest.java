@@ -138,14 +138,14 @@ class ProviderDeliveryIdTest {
 
         ObjectNode raw = mapper.createObjectNode();
         raw.put("_id", "BOSTA-ID-002");
-        when(bostaGateway.fetchDelivery(eq("pd-api-key"), eq("AWB-SC002")))
-            .thenReturn(new BostaDelivery("AWB-SC002", 41, "SEND", 0, null, null, raw));
+        when(bostaGateway.fetchDelivery(eq("pd-api-key"), eq("5000000002")))
+            .thenReturn(new BostaDelivery("5000000002", 41, "SEND", 0, null, null, raw));
 
-        linkSvc.linkByAwbScan(orderId, "AWB-SC002", actorId);
+        linkSvc.linkByAwbScan(orderId, "5000000002", actorId);
 
-        verify(bostaGateway, times(1)).fetchDelivery("pd-api-key", "AWB-SC002");
-        assertThat(providerDeliveryId("AWB-SC002")).isEqualTo("BOSTA-ID-002");
-        assertThat(providerIdFetchFailed("AWB-SC002")).isFalse();
+        verify(bostaGateway, times(1)).fetchDelivery("pd-api-key", "5000000002");
+        assertThat(providerDeliveryId("5000000002")).isEqualTo("BOSTA-ID-002");
+        assertThat(providerIdFetchFailed("5000000002")).isFalse();
     }
 
     // ── t3: fetch throws → link succeeds; _id NULL; flag set; exception detected ─
@@ -154,15 +154,15 @@ class ProviderDeliveryIdTest {
     void t3_awbScan_fetchFailure_linkSucceeds_flagSet_exceptionDetected() {
         UUID orderId = packedOrder("ORD-PD3");
 
-        when(bostaGateway.fetchDelivery(eq("pd-api-key"), eq("AWB-SC003")))
+        when(bostaGateway.fetchDelivery(eq("pd-api-key"), eq("5000000003")))
             .thenThrow(new BostaTransientException("network timeout"));
 
-        Map<String, Object> result = linkSvc.linkByAwbScan(orderId, "AWB-SC003", actorId);
+        Map<String, Object> result = linkSvc.linkByAwbScan(orderId, "5000000003", actorId);
 
         // Link is the primary action — it must succeed regardless of fetch outcome
         assertThat(result.get("orderStatus")).isEqualTo("awaiting_pickup");
-        assertThat(providerDeliveryId("AWB-SC003")).isNull();
-        assertThat(providerIdFetchFailed("AWB-SC003")).isTrue();
+        assertThat(providerDeliveryId("5000000003")).isNull();
+        assertThat(providerIdFetchFailed("5000000003")).isTrue();
 
         // Exception detector surfaces this for operator retry
         @SuppressWarnings("unchecked")
@@ -170,7 +170,7 @@ class ProviderDeliveryIdTest {
             exceptionSvc.listExceptions("missing_provider_id", null, 0, 10).get("items");
         assertThat(items).hasSize(1);
         assertThat(items.get(0).get("type")).isEqualTo("missing_provider_id");
-        assertThat(items.get(0).get("tracking_number")).isEqualTo("AWB-SC003");
+        assertThat(items.get(0).get("tracking_number")).isEqualTo("5000000003");
     }
 
     // ── t4: Mode-B re-link backfills NULL provider_delivery_id on existing shipment ─

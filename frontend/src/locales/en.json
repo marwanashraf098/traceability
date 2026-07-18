@@ -231,6 +231,7 @@
       "placeholder": "Scan or type tracking number…",
       "success": "Linked: {{tracking}} — awaiting pickup",
       "conflict": "This waybill is already linked to another order",
+      "awbMismatch": "Scanned AWB {{scanned}} does not match this order's AWB {{existing}}",
       "error": "Could not link — check the barcode and try again",
       "skip": "Skip — link later",
       "done": "Done — back to queue"

@@ -126,13 +126,13 @@ class Day11Test {
         createAllocation(itemId, p1, "packed");
         createAllocation(itemId, p2, "packed");
 
-        Map<String, Object> result = shipmentLinkSvc.linkByAwbScan(orderId, "AWB-A001", actorId);
+        Map<String, Object> result = shipmentLinkSvc.linkByAwbScan(orderId, "2944282510", actorId);
 
         assertThat(result.get("linkedPieces")).isEqualTo(2);
         assertThat(result.get("orderStatus")).isEqualTo("awaiting_pickup");
 
         // Shipment created at 'created' state
-        assertThat(shipmentState("AWB-A001")).isEqualTo("created");
+        assertThat(shipmentState("2944282510")).isEqualTo("created");
 
         // Both pieces advanced to awaiting_pickup
         assertThat(pieceStatus(p1)).isEqualTo("awaiting_pickup");
@@ -167,22 +167,22 @@ class Day11Test {
         // Link AWB to order 1 first
         jdbc.update(
             "INSERT INTO shipments (id, tenant_id, order_id, tracking_number, internal_state) " +
-            "VALUES (gen_random_uuid(), ?, ?, 'AWB-SWAPPED', 'created')",
+            "VALUES (gen_random_uuid(), ?, ?, '3000000001', 'created')",
             tenantId, order1);
 
         // Attempting to link the same AWB to order 2 must be rejected
         ResponseStatusException ex = catchThrowableOfType(
-            () -> shipmentLinkSvc.linkByAwbScan(order2, "AWB-SWAPPED", actorId),
+            () -> shipmentLinkSvc.linkByAwbScan(order2, "3000000001", actorId),
             ResponseStatusException.class);
 
         assertThat(ex.getStatusCode().value()).isEqualTo(409);
-        assertThat(ex.getReason()).contains("AWB-SWAPPED");
+        assertThat(ex.getReason()).contains("3000000001");
         assertThat(ex.getReason()).contains("ORD-SWAP-1");
 
         // Shipment must still belong to order1 (unchanged)
         UUID owningOrder = jdbc.queryForObject(
             "SELECT order_id FROM shipments WHERE tracking_number = ?",
-            UUID.class, "AWB-SWAPPED");
+            UUID.class, "3000000001");
         assertThat(owningOrder).isEqualTo(order1);
     }
 

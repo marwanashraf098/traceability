@@ -265,7 +265,7 @@ class Day10Test {
     @Test
     void g_tracking_number_lookup_returns_shipment_and_pieces() {
         UUID orderId   = insertOrderWithItem(variantAId, 1);
-        UUID shipmentId = insertShipment(orderId, "BOS-12345");
+        UUID shipmentId = insertShipment(orderId, "5678901234");
         String pieceId  = insertPiece(variantAId);
         // Insert allocation so the piece appears in the shipment piece list
         UUID orderItemId = jdbc.queryForObject(
@@ -275,10 +275,10 @@ class Day10Test {
             "VALUES (gen_random_uuid(), ?, ?, ?, 'packed'::allocation_status)",
             tenantAId, orderItemId, pieceId);
 
-        Map<String, Object> result = lookupSvc.lookupTracking("BOS-12345");
+        Map<String, Object> result = lookupSvc.lookupTracking("5678901234");
 
         assertThat(result.get("type")).isEqualTo("tracking");
-        assertThat(result.get("trackingNumber")).isEqualTo("BOS-12345");
+        assertThat(result.get("trackingNumber")).isEqualTo("5678901234");
         assertThat(result.get("shipmentId")).isEqualTo(shipmentId.toString());
         assertThat(result.get("orderId")).isEqualTo(orderId.toString());
 

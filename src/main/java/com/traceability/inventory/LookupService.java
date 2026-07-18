@@ -180,8 +180,15 @@ public class LookupService {
 
     // ── Tracking lookup ───────────────────────────────────────────────────────
 
-    public Map<String, Object> lookupTracking(String trackingNumber) {
+    public Map<String, Object> lookupTracking(String query) {
         UUID tenantId = TenantContext.require();
+
+        // Normalize the search query so scanning or pasting a prefixed label
+        // (e.g. "D-07-2944282510") resolves to the bare numeric form stored in the DB.
+        // If normalization yields a non-null value use it; otherwise try the raw query
+        // unchanged so that any edge-case tracking format still has a chance to match.
+        String normalized = TrackingNumberNormalizer.normalize(query);
+        String trackingNumber = normalized != null ? normalized : query;
 
         Map<String, Object> shipment;
         try {

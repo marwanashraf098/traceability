@@ -170,6 +170,7 @@ function AwbLinkDialog({ orderId, onDone }: { orderId: string; onDone: () => voi
   const [linking, setLinking] = useState(false)
   const [linked, setLinked] = useState<{ tracking: string; shipmentId: string } | null>(null)
   const [conflictError, setConflictError] = useState(false)
+  const [mismatchError, setMismatchError] = useState<{ scanned: string; existing: string } | null>(null)
   const [genericError, setGenericError] = useState(false)
   const [printing, setPrinting] = useState(false)
   const [awbMsg, setAwbMsg] = useState<AwbMsg>(null)
@@ -187,6 +188,7 @@ function AwbLinkDialog({ orderId, onDone }: { orderId: string; onDone: () => voi
     if (!trimmed || linking) return
     setLinking(true)
     setConflictError(false)
+    setMismatchError(null)
     setGenericError(false)
     try {
       const { data, status } = await api<AwbLinkResponse>(`/fulfill/${orderId}/link`, {
@@ -200,7 +202,12 @@ function AwbLinkDialog({ orderId, onDone }: { orderId: string; onDone: () => voi
       } else if (status === 409) {
         playBeep(false)
         triggerFlash('error')
-        setConflictError(true)
+        const errBody = data as unknown as { code?: string; scannedAwb?: string; existingAwb?: string }
+        if (errBody?.code === 'AWB_MISMATCH') {
+          setMismatchError({ scanned: errBody.scannedAwb ?? '', existing: errBody.existingAwb ?? '' })
+        } else {
+          setConflictError(true)
+        }
         if (inputRef.current) { inputRef.current.value = ''; inputRef.current.focus() }
       } else {
         playBeep(false)
@@ -286,6 +293,11 @@ function AwbLinkDialog({ orderId, onDone }: { orderId: string; onDone: () => voi
             />
             {conflictError && (
               <p className="text-danger text-small font-medium mb-3">✗ {t('fulfill.linkAwb.conflict')}</p>
+            )}
+            {mismatchError && (
+              <p className="text-danger text-small font-medium mb-3">
+                ✗ {t('fulfill.linkAwb.awbMismatch', { scanned: mismatchError.scanned, existing: mismatchError.existing })}
+              </p>
             )}
             {genericError && (
               <p className="text-danger text-small font-medium mb-3">✗ {t('fulfill.linkAwb.error')}</p>
@@ -374,27 +386,19 @@ function HandoverScreen({ order, onBack }: { order: QueueOrder; onBack: () => vo
 // ── Queue view ─────────────────────────────────────────────────────────────────
 
 function QueueView({
+  queue,
+  loading,
+  loadQueue,
   onSelect,
   onHandover,
 }: {
+  queue: QueueOrder[]
+  loading: boolean
+  loadQueue: () => void
   onSelect: (orderId: string) => void
   onHandover: (order: QueueOrder) => void
 }) {
   const { t } = useTranslation()
-  const [queue, setQueue] = useState<QueueOrder[]>([])
-  const [loading, setLoading] = useState(true)
-
-  const loadQueue = useCallback(async () => {
-    setLoading(true)
-    try {
-      const { data } = await api<QueueOrder[]>('/fulfill/queue')
-      setQueue(data)
-    } finally {
-      setLoading(false)
-    }
-  }, [])
-
-  useEffect(() => { loadQueue() }, [loadQueue])
 
   if (loading) return (
     <div className="p-6 max-w-4xl mx-auto space-y-3">
@@ -942,15 +946,39 @@ type View =
 
 export default function Fulfill() {
   const [view, setView] = useState<View>({ type: 'queue' })
+  const [queue, setQueue] = useState<QueueOrder[]>([])
+  const [queueLoading, setQueueLoading] = useState(true)
+
+  const loadQueue = useCallback(async () => {
+    setQueueLoading(true)
+    try {
+      const { data } = await api<QueueOrder[]>('/fulfill/queue')
+      setQueue(data)
+    } finally {
+      setQueueLoading(false)
+    }
+  }, [])
+
+  useEffect(() => { loadQueue() }, [loadQueue])
+
+  // Returning from PickScreen triggers an explicit refetch so the just-packed
+  // order reflects its new status before the queue re-renders.
+  const backFromPick = useCallback(() => {
+    loadQueue()
+    setView({ type: 'queue' })
+  }, [loadQueue])
 
   if (view.type === 'pick') {
-    return <PickScreen orderId={view.orderId} onBack={() => setView({ type: 'queue' })} />
+    return <PickScreen orderId={view.orderId} onBack={backFromPick} />
   }
   if (view.type === 'handover') {
-    return <HandoverScreen order={view.order} onBack={() => setView({ type: 'queue' })} />
+    return <HandoverScreen order={view.order} onBack={backFromPick} />
   }
   return (
     <QueueView
+      queue={queue}
+      loading={queueLoading}
+      loadQueue={loadQueue}
       onSelect={orderId => setView({ type: 'pick', orderId })}
       onHandover={order => setView({ type: 'handover', order })}
     />

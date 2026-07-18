@@ -5,6 +5,7 @@ import com.traceability.integrations.shopify.ShopifyOAuthException;
 import com.traceability.integrations.shopify.ShopifySessionTokenExchangeException;
 import com.traceability.integrations.shopify.ShopifyStoreNeedsReauthException;
 import com.traceability.integrations.shopify.ShopifyTransientException;
+import com.traceability.inventory.AwbMismatchException;
 import com.traceability.inventory.PieceCommittedException;
 import jakarta.servlet.http.HttpServletRequest;
 import org.slf4j.Logger;
@@ -48,6 +49,23 @@ public class ApiExceptionHandler {
     record CommittedErrorBody(String error, String orderId, String orderNumber) {}
 
     record ReauthErrorBody(String error, String message, String shop) {}
+
+    record AwbMismatchBody(
+            String code,
+            @JsonProperty("scannedAwb")  String scannedAwb,
+            @JsonProperty("existingAwb") String existingAwb,
+            @JsonProperty("message_en")  String messageEn,
+            @JsonProperty("message_ar")  String messageAr) {}
+
+    @ExceptionHandler(AwbMismatchException.class)
+    ResponseEntity<AwbMismatchBody> handleAwbMismatch(AwbMismatchException ex) {
+        String en = "Scanned AWB " + ex.getScannedAwb()
+                  + " does not match this order's AWB " + ex.getExistingAwb() + ".";
+        String ar = "رقم الشحن الممسوح " + ex.getScannedAwb()
+                  + " لا يطابق رقم شحن الطلب " + ex.getExistingAwb() + ".";
+        return ResponseEntity.status(HttpStatus.CONFLICT)
+            .body(new AwbMismatchBody("AWB_MISMATCH", ex.getScannedAwb(), ex.getExistingAwb(), en, ar));
+    }
 
     @ExceptionHandler(PieceCommittedException.class)
     ResponseEntity<CommittedErrorBody> handlePieceCommitted(PieceCommittedException ex) {

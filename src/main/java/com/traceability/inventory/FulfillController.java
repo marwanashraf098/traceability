@@ -94,7 +94,7 @@ public class FulfillController {
             @PathVariable UUID orderId,
             @RequestBody AwbLinkRequest req,
             @AuthenticationPrincipal CustomUserDetails principal) {
-        return linkSvc.linkByAwbScan(orderId, req.trackingNumber().trim(), principal.userId());
+        return linkSvc.linkByAwbScan(orderId, req.trackingNumber(), principal.userId());
     }
 
     /** FR-9.10 — Toggle self-pickup flag (manual before picking; blocked post-complete). */

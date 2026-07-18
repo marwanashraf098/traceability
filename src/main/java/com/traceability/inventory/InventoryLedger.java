@@ -108,12 +108,12 @@ public class InventoryLedger {
             INSERT INTO piece_events (
                 tenant_id, piece_id, event_type, actor_user_id,
                 order_id, shipment_id, location_id,
-                from_status, to_status, metadata
+                from_status, to_status, metadata, raw_scan
             ) VALUES (
                 NULLIF(current_setting('app.current_tenant', true), '')::uuid,
                 ?, ?, ?,
                 ?, ?, ?,
-                ?::piece_status, ?::piece_status, ?::jsonb
+                ?::piece_status, ?::piece_status, ?::jsonb, ?
             )
             """;
 
@@ -189,7 +189,7 @@ public class InventoryLedger {
         jdbc.update(INSERT_EVENT,
                 pieceId, eventType, actorUserId,
                 ctx.orderId(), ctx.shipmentId(), ctx.locationId(),
-                expectedStatus.db, newStatus.db, ctx.metadata());
+                expectedStatus.db, newStatus.db, ctx.metadata(), ctx.rawScan());
     }
 
     // ---- batchReceive ------------------------------------------------------
@@ -281,7 +281,7 @@ public class InventoryLedger {
                 orderId, shipmentId, locationId,
                 PieceStatus.RETURN_PENDING_INSPECTION.db,
                 PieceStatus.RETURN_PENDING_INSPECTION.db,
-                metadata);
+                metadata, null);
     }
 
     /**
@@ -304,7 +304,7 @@ public class InventoryLedger {
         jdbc.update(INSERT_EVENT,
                 pieceId, "label_reprinted", actorUserId,
                 orderId, shipmentId, locationId,
-                statusDb, statusDb, null);
+                statusDb, statusDb, null, null);
     }
 
     /** Specification for one piece to be created via batchReceive. */

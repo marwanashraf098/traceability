@@ -97,10 +97,10 @@ public class ShipmentLinkService {
     // ── AWB scan at pack (FR-9.6) ─────────────────────────────────────────────
 
     @Transactional(isolation = Isolation.READ_COMMITTED)
-    public Map<String, Object> linkByAwbScan(UUID orderId, String trackingNumber, UUID actorUserId) {
+    public Map<String, Object> linkByAwbScan(UUID orderId, String rawScan, UUID actorUserId) {
         UUID tenantId = TenantContext.require();
 
-        // 1. Verify order exists and is in a linkable state
+        // 1. Verify order exists and is in a linkable state (unchanged gate)
         String[] orderInfo = jdbc.query(
             "SELECT status, number FROM orders WHERE id = ? AND tenant_id = ?",
             rs -> rs.next() ? new String[]{rs.getString("status"), rs.getString("number")} : null,
@@ -115,10 +115,45 @@ public class ShipmentLinkService {
                 "Order must be in 'packed' state to link an AWB (current: " + orderStatus + ")");
         }
 
-        // 2. Swapped-AWB check: does this tracking_number already belong to a DIFFERENT order?
+        // Normalize the raw scan — single source of truth, used everywhere below.
+        String trackingNumber = TrackingNumberNormalizer.normalize(rawScan);
+        if (trackingNumber == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                "Unreadable AWB scan: " + rawScan);
+        }
+
+        // 2. Mode B verify path — must run BEFORE the swapped check and INSERT.
+        //    V43 made shipments two-active (forward + return); filter shipment_leg='forward'
+        //    explicitly so a return-pickup leg cannot produce a false AWB_MISMATCH.
+        Object[] existingFwd = jdbc.query(
+            "SELECT id::text, tracking_number FROM shipments " +
+            "WHERE order_id = ? AND tenant_id = ? " +
+            "  AND shipment_leg = 'forward' " +
+            "  AND internal_state NOT IN ('terminated', 'cancelled') " +
+            "LIMIT 1",
+            rs -> rs.next()
+                ? new Object[]{rs.getString("id"), rs.getString("tracking_number")}
+                : null,
+            orderId, tenantId);
+
+        if (existingFwd != null) {
+            String existingTracking = (String) existingFwd[1];
+            if (trackingNumber.equals(existingTracking)) {
+                // VERIFIED: scan matches the ingested forward shipment — no INSERT.
+                UUID shipmentId = UUID.fromString((String) existingFwd[0]);
+                return completeLink(orderId, orderNumber, shipmentId, trackingNumber, tenantId, actorUserId, rawScan);
+            }
+            // AWB_MISMATCH: the scan is a valid tracking number but it isn't this order's.
+            // Throw immediately — no INSERT is reachable from this branch.
+            throw new AwbMismatchException(trackingNumber, existingTracking);
+        }
+
+        // 3. No existing forward shipment — fall through to original swapped-AWB check.
+        //    Both the check and the INSERT receive the normalized value so a formatting
+        //    difference can never again trigger ux_active_shipment_per_order_leg.
         UUID shipmentId = handleSwappedAwbCheck(trackingNumber, tenantId, orderId, orderNumber);
 
-        // 3. Create shipment if not already present
+        // 4. Create shipment if not already present
         boolean isNewShipment = false;
         if (shipmentId == null) {
             try {
@@ -130,7 +165,7 @@ public class ShipmentLinkService {
                     shipmentId, tenantId, orderId, trackingNumber);
                 isNewShipment = true;
             } catch (DuplicateKeyException e) {
-                // ux_active_shipment_per_order: order already has an active shipment.
+                // ux_active_shipment_per_order_leg: should now be unreachable via scan.
                 throw new ResponseStatusException(HttpStatus.CONFLICT,
                     "Order already has an active shipment — resolve it before linking a new AWB");
             }
@@ -143,21 +178,21 @@ public class ShipmentLinkService {
             fetchAndStoreProviderDeliveryId(shipmentId, trackingNumber, tenantId);
         }
 
-        // 4. Transition packed pieces → awaiting_pickup (writes tracking_linked events)
-        int linked = transitionPackedPieces(orderId, shipmentId, tenantId, actorUserId);
+        return completeLink(orderId, orderNumber, shipmentId, trackingNumber, tenantId, actorUserId, rawScan);
+    }
 
-        // 5. Advance order to awaiting_pickup (idempotent WHERE clause)
+    /** Shared tail of the link path: piece transitions, order advance, cleanup, response. */
+    private Map<String, Object> completeLink(UUID orderId, String orderNumber, UUID shipmentId,
+                                              String trackingNumber, UUID tenantId, UUID actorUserId,
+                                              String rawScan) {
+        int linked = transitionPackedPieces(orderId, shipmentId, tenantId, actorUserId, rawScan);
+
         jdbc.update(
             "UPDATE orders SET status = 'awaiting_pickup' " +
             "WHERE id = ? AND tenant_id = ? AND status = 'packed'",
             orderId, tenantId);
 
-        // 6. Clear the reconcile 'not_created' flag if it was set.
-        // This covers the case where the merchant packed and scanned an AWB after
-        // the reconcile job had already flagged the order as not_created.
         clearReconcileFlag(orderId, tenantId);
-
-        // 7. Resolve any previously-unlinked entry for this tracking number
         resolveUnlinked(tenantId, trackingNumber);
 
         log.info("Order {} AWB-linked to {} ({} pieces)", orderNumber, trackingNumber, linked);
@@ -248,7 +283,7 @@ public class ShipmentLinkService {
             }
         }
 
-        transitionPackedPieces(orderId, shipmentId, tenantId, null);
+        transitionPackedPieces(orderId, shipmentId, tenantId, null, null);
 
         // Advance order if it is currently packed
         jdbc.update(
@@ -317,7 +352,7 @@ public class ShipmentLinkService {
                 "Order already has an active shipment — resolve it before manually linking");
         }
 
-        transitionPackedPieces(orderId, shipmentId, tenantId, actorUserId);
+        transitionPackedPieces(orderId, shipmentId, tenantId, actorUserId, null);
 
         jdbc.update(
             "UPDATE orders SET status = 'awaiting_pickup' " +
@@ -387,13 +422,25 @@ public class ShipmentLinkService {
      * Transitions all 'packed' pieces for an order to 'awaiting_pickup'
      * with event_type='tracking_linked' and the shipmentId in context.
      * Idempotent: pieces already at awaiting_pickup are skipped.
+     *
+     * @param rawScan the verbatim scanner output (e.g. "D-07-2944282510") written to
+     *                piece_events.raw_scan as custody evidence; null for non-scan paths
      */
     private int transitionPackedPieces(UUID orderId, UUID shipmentId,
-                                        UUID tenantId, UUID actorUserId) {
+                                        UUID tenantId, UUID actorUserId, String rawScan) {
+        // Also filter by pieces.status = 'packed' so that idempotent re-scans (where
+        // the allocation still says 'packed' but the piece is already at 'awaiting_pickup')
+        // don't call ledger.transition unnecessarily. The StateConflictException catch
+        // below remains for the concurrent-race case (another thread transitions the piece
+        // between this SELECT and the UPDATE inside transition()), but calling transition()
+        // for an already-advanced piece would mark the outer @Transactional as rollback-only
+        // even though the catch block handles it.
         List<String> pieceIds = jdbc.queryForList(
             "SELECT a.piece_id FROM allocations a " +
             "JOIN order_items oi ON oi.id = a.order_item_id " +
-            "WHERE oi.order_id = ? AND a.tenant_id = ? AND a.status = 'packed'",
+            "JOIN pieces p ON p.id = a.piece_id " +
+            "WHERE oi.order_id = ? AND a.tenant_id = ? " +
+            "  AND a.status = 'packed' AND p.status = 'packed'::piece_status",
             String.class, orderId, tenantId);
 
         int count = 0;
@@ -402,7 +449,8 @@ public class ShipmentLinkService {
                 ledger.transition(pieceId,
                     PieceStatus.PACKED, PieceStatus.AWAITING_PICKUP,
                     "tracking_linked", actorUserId,
-                    new TransitionContext(orderId, shipmentId, null, orderId, null));
+                    new TransitionContext(orderId, shipmentId, null, orderId, null)
+                        .withRawScan(rawScan));
                 count++;
             } catch (StateConflictException e) {
                 if (e.getActual() == PieceStatus.AWAITING_PICKUP) {

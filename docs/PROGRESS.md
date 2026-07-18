@@ -4,7 +4,15 @@
 
 ## Current state
 
-**601 backend tests green** — 2026-07-13 (V48 — FR-17 Phase 1 Shopify inventory shadow sync). Deploy to Hetzner: `ssh <user>@167.233.46.223 "cd /opt/traced && git pull && docker compose -f deploy/docker-compose.yml build --no-cache && docker compose -f deploy/docker-compose.yml up -d"`.
+**634 backend tests green** — 2026-07-18 (V53 — AWB scan normalization complete). Deploy to Hetzner: `ssh <user>@167.233.46.223 "cd /opt/traced && git pull && docker compose -f deploy/docker-compose.yml build --no-cache && docker compose -f deploy/docker-compose.yml up -d"`.
+
+**AWB scan normalization (V53) — COMPLETE.** Four-part implementation:
+1. `TrackingNumberNormalizer` — strips zero-width chars, trims, takes substring after last `-` if present, requires `^[0-9]+$`. 22 unit tests in `TrackingNumberNormalizationTest`.
+2. Mode B verify path in `ShipmentLinkService.linkByAwbScan`: if an active forward shipment exists → check tracking match → verify (no INSERT) or throw `AwbMismatchException` (409). No INSERT reachable on mismatch. Verify path uses `shipment_leg='forward'` filter explicitly.
+3. V53 migration: `piece_events.raw_scan TEXT` (nullable, no index, no backfill). Raw scan stored verbatim on `tracking_linked` events. LookupService.lookupTracking normalizes search query.
+4. 8 integration tests in `AwbScanNormalizationTest` — ALL assertions via `appUserJdbc`/`appUserTx` (RLS-scoped).
+
+**Side fix during Part 4:** `transitionPackedPieces` query now also filters `pieces.status = 'packed'` to prevent calling `ledger.transition` on pieces already at `awaiting_pickup` (idempotent re-scan case). Without this, a second scan marked the outer `@Transactional` as rollback-only via `StateConflictException` even though the catch block handled it.
 
 V48 — FR-17 Phase 1: Shopify inventory shadow sync (no mutation until scope + flag enabled).
 
