@@ -1,9 +1,13 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
-import { useState, useEffect } from 'react'
+import { useState, useEffect, lazy, Suspense } from 'react'
 import { getAccessToken, setAccessToken, clearAccessToken } from './auth'
 import { ToastProvider } from './components/ui'
 import Layout from './components/Layout'
-import StyleGuide from './pages/StyleGuide'
+// StyleGuide is DEV-only — lazy import ensures Rollup dead-code-eliminates
+// the entire module when import.meta.env.DEV === false (production build).
+const StyleGuide = import.meta.env.DEV
+  ? lazy(() => import('./pages/StyleGuide'))
+  : null
 import Landing from './pages/Landing'
 import Login from './pages/Login'
 import Signup from './pages/Signup'
@@ -214,7 +218,9 @@ export default function App() {
             </RequireAuth>
           }
         />
-        <Route path="/_styleguide" element={<StyleGuide />} />
+        {import.meta.env.DEV && StyleGuide && (
+          <Route path="/_styleguide" element={<Suspense fallback={null}><StyleGuide /></Suspense>} />
+        )}
         <Route path="*" element={<Navigate to="/overview" replace />} />
       </Routes>
       </ToastProvider>
