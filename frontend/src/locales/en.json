@@ -124,7 +124,24 @@
     "deliveryHistory": "Delivery history",
     "noDeliveryHistory": "No history recorded yet — transitions will appear here as they occur.",
     "historyToggleShow": "Show history",
-    "historyToggleHide": "Hide history"
+    "historyToggleHide": "Hide history",
+    "holdBtn": "Hold order",
+    "unholdBtn": "Release hold",
+    "holdDialog": {
+      "title": "Hold order",
+      "reasonLabel": "Reason (required)",
+      "reasonPlaceholder": "e.g. Address issue, awaiting customer confirmation…",
+      "confirm": "Hold order",
+      "cancel": "Cancel"
+    },
+    "holdSuccess": "Order placed on hold",
+    "unholdSuccess": "Hold released",
+    "codEdit": "Edit COD",
+    "codSave": "Save",
+    "codCancel": "Cancel",
+    "codFrozen": "COD is frozen after packing",
+    "codValidation": "COD must be between 1 and 30,000 EGP",
+    "codSuccess": "COD updated"
   },
   "delivery": {
     "state": {

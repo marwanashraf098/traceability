@@ -143,13 +143,33 @@ public class FulfillController {
         return org.springframework.http.ResponseEntity.status(httpStatus).body(result);
     }
 
-    /** FR-7.8a: Release a blocked-customer hold so the order can proceed to picking. */
+    /** FR-7.4 — Manually hold an order with a required reason. */
+    @PostMapping("/{orderId}/hold")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    @PreAuthorize("hasAnyRole('OWNER', 'MANAGER')")
+    public void holdOrder(@PathVariable UUID orderId,
+                          @RequestBody HoldRequest req,
+                          @AuthenticationPrincipal CustomUserDetails principal) {
+        svc.holdOrder(orderId, principal.userId(), req.reason());
+    }
+
+    /** FR-7.4 / FR-7.8a — Release a hold (manual or blocked-customer). */
     @PostMapping("/{orderId}/release-hold")
     @ResponseStatus(HttpStatus.NO_CONTENT)
     @PreAuthorize("hasAnyRole('OWNER', 'MANAGER')")
     public void releaseHold(@PathVariable UUID orderId,
                             @AuthenticationPrincipal CustomUserDetails principal) {
         svc.releaseHold(orderId, principal.userId());
+    }
+
+    /** FR-7.5 — Update COD amount (only while order is new / ready_to_pick). */
+    @PatchMapping("/{orderId}/cod")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    @PreAuthorize("hasAnyRole('OWNER', 'MANAGER')")
+    public void updateCod(@PathVariable UUID orderId,
+                          @RequestBody CodUpdateRequest req,
+                          @AuthenticationPrincipal CustomUserDetails principal) {
+        svc.updateCod(orderId, principal.userId(), req.amount());
     }
 
     /** Guided unpack: physically remove one packed piece for a post-pack cancellation. */
@@ -166,4 +186,6 @@ public class FulfillController {
     public record AwbLinkRequest(String trackingNumber) {}
     public record SelfPickupRequest(boolean selfPickup) {}
     public record ConvertToSelfPickupRequest(String reason) {}
+    public record HoldRequest(String reason) {}
+    public record CodUpdateRequest(java.math.BigDecimal amount) {}
 }

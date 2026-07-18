@@ -60,7 +60,7 @@ function makeExceptionPage(extraItem?: object) {
         descriptionAr: 'الطلب #1001 معلَّق',
         suggestedAction: 'review_and_release',
         actionUrl: '/orders/order-1',
-        releaseUrl: '/api/v1/orders/order-1/release-hold',
+        releaseUrl: '/api/v1/fulfill/order-1/release-hold',
         cancelUrl: '/api/v1/orders/order-1/cancel',
         ...extraItem,
       },

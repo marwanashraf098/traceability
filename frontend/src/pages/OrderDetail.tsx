@@ -1,8 +1,8 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
-import { getOrder, OrderDetail as IOrderDetail, ShipmentDetail, AttemptEntry, DeliveryHistoryEntry } from '../api'
-import { Alert, Badge, Button, DeliveryBadge, Skeleton } from '../components/ui'
+import { getOrder, OrderDetail as IOrderDetail, ShipmentDetail, AttemptEntry, DeliveryHistoryEntry, holdOrder, releaseOrderHold, updateOrderCod } from '../api'
+import { Alert, Badge, Button, DeliveryBadge, Modal, Skeleton } from '../components/ui'
 
 export default function OrderDetail() {
   const { t } = useTranslation()
@@ -11,6 +11,24 @@ export default function OrderDetail() {
   const [loading, setLoading] = useState(true)
   const [error,   setError]   = useState('')
 
+  // Hold dialog state
+  const [holdOpen,    setHoldOpen]    = useState(false)
+  const [holdReason,  setHoldReason]  = useState('')
+  const [holdBusy,    setHoldBusy]    = useState(false)
+  const [holdErr,     setHoldErr]     = useState('')
+
+  // COD inline edit state
+  const [codEditing,  setCodEditing]  = useState(false)
+  const [codValue,    setCodValue]    = useState('')
+  const [codBusy,     setCodBusy]     = useState(false)
+  const [codErr,      setCodErr]      = useState('')
+  const codInputRef = useRef<HTMLInputElement>(null)
+
+  const reload = () => {
+    if (!id) return
+    getOrder(id).then(setOrder).catch(() => {})
+  }
+
   useEffect(() => {
     if (!id) return
     getOrder(id)
@@ -18,6 +36,41 @@ export default function OrderDetail() {
       .catch(() => setError(t('common.error')))
       .finally(() => setLoading(false))
   }, [id, t])
+
+  const handleHold = async () => {
+    if (!id || !holdReason.trim()) return
+    setHoldBusy(true); setHoldErr('')
+    try {
+      await holdOrder(id, holdReason.trim())
+      setHoldOpen(false); setHoldReason(''); reload()
+    } catch { setHoldErr(t('common.error')) }
+    finally { setHoldBusy(false) }
+  }
+
+  const handleUnhold = async () => {
+    if (!id) return
+    try { await releaseOrderHold(id); reload() }
+    catch { /* noop — reload regardless */ }
+  }
+
+  const startCodEdit = () => {
+    setCodValue(order?.codAmount?.toString() ?? '')
+    setCodEditing(true); setCodErr('')
+    setTimeout(() => codInputRef.current?.select(), 0)
+  }
+
+  const saveCod = async () => {
+    if (!id) return
+    const v = parseFloat(codValue)
+    if (isNaN(v) || v <= 0 || v > 30000) { setCodErr(t('orderDetail.codValidation')); return }
+    setCodBusy(true); setCodErr('')
+    try { await updateOrderCod(id, v); setCodEditing(false); reload() }
+    catch (e: unknown) {
+      const msg = (e as { message?: string }).message
+      setCodErr(msg ?? t('common.error'))
+    }
+    finally { setCodBusy(false) }
+  }
 
   if (loading) return (
     <div className="space-y-6">
@@ -69,8 +122,8 @@ export default function OrderDetail() {
             </dl>
           </section>
 
-          <section className="card p-4">
-            <h2 className="text-caption text-muted uppercase tracking-widest mb-3">
+          <section className="card p-4 space-y-3">
+            <h2 className="text-caption text-muted uppercase tracking-widest">
               {t('orderDetail.status')}
             </h2>
             <dl className="space-y-2">
@@ -79,17 +132,69 @@ export default function OrderDetail() {
                 <dd><Badge status={order.status} /></dd>
               </div>
               {order.onHold && (
-                <div className="flex items-center gap-2">
+                <div className="flex items-start gap-2 flex-wrap">
                   <Badge tone="critical" label={t('orderDetail.onHold')} />
                   {order.holdReason && (
                     <span className="text-small text-muted">{order.holdReason}</span>
                   )}
                 </div>
               )}
-              <InfoRow label={t('orderDetail.payment')}  value={order.paymentMethod} />
-              <InfoRow label={t('orderDetail.cod')}      value={order.codAmount != null ? `${order.codAmount.toLocaleString()} EGP` : null} />
+              <InfoRow label={t('orderDetail.payment')} value={order.paymentMethod} />
+
+              {/* FR-7.5 COD inline edit */}
+              <div className="flex items-center gap-2">
+                <dt className="text-small text-muted w-24 shrink-0">{t('orderDetail.cod')}</dt>
+                {codEditing ? (
+                  <dd className="flex items-center gap-1.5 flex-wrap">
+                    <input
+                      ref={codInputRef}
+                      type="number"
+                      min={1} max={30000} step={1}
+                      value={codValue}
+                      onChange={e => setCodValue(e.target.value)}
+                      onKeyDown={e => { if (e.key === 'Enter') saveCod(); if (e.key === 'Escape') setCodEditing(false) }}
+                      className="input w-28 text-sm py-0.5 px-2"
+                    />
+                    <span className="text-small text-muted">EGP</span>
+                    <Button size="sm" onClick={saveCod} loading={codBusy}>{t('orderDetail.codSave')}</Button>
+                    <Button size="sm" variant="secondary" onClick={() => { setCodEditing(false); setCodErr('') }}>{t('orderDetail.codCancel')}</Button>
+                    {codErr && <p className="text-critical text-small w-full">{codErr}</p>}
+                  </dd>
+                ) : (
+                  <dd className="flex items-center gap-2">
+                    <span className="text-small text-primary">
+                      {order.codAmount != null ? `${order.codAmount.toLocaleString()} EGP` : '—'}
+                    </span>
+                    {(order.status === 'new' || order.status === 'ready_to_pick') && (
+                      <button
+                        onClick={startCodEdit}
+                        className="text-trace-blue text-small hover:underline leading-none"
+                        title={t('orderDetail.codEdit')}
+                      >
+                        ✎
+                      </button>
+                    )}
+                  </dd>
+                )}
+              </div>
+
               <InfoRow label={t('orderDetail.placedAt')} value={order.placedAt ? new Date(order.placedAt).toLocaleString() : null} />
             </dl>
+
+            {/* FR-7.4 Hold / Unhold */}
+            <div className="pt-2 flex gap-2">
+              {order.onHold ? (
+                <Button size="sm" variant="secondary" onClick={handleUnhold}>
+                  {t('orderDetail.unholdBtn')}
+                </Button>
+              ) : (
+                !['delivered','cancelled','returned','lost'].includes(order.status) && (
+                  <Button size="sm" variant="secondary" onClick={() => { setHoldErr(''); setHoldReason(''); setHoldOpen(true) }}>
+                    {t('orderDetail.holdBtn')}
+                  </Button>
+                )
+              )}
+            </div>
           </section>
 
           {order.shipments.length === 0 ? (
@@ -149,6 +254,44 @@ export default function OrderDetail() {
           ))}
         </div>
       </div>
+
+      {/* FR-7.4 Hold dialog */}
+      {holdOpen && <Modal
+        title={t('orderDetail.holdDialog.title')}
+        onClose={() => setHoldOpen(false)}
+      >
+        <div className="space-y-4">
+          <div>
+            <label className="text-small text-muted block mb-1">
+              {t('orderDetail.holdDialog.reasonLabel')}
+            </label>
+            <input
+              autoFocus
+              type="text"
+              className="input w-full"
+              placeholder={t('orderDetail.holdDialog.reasonPlaceholder')}
+              value={holdReason}
+              onChange={e => setHoldReason(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter') handleHold() }}
+              maxLength={200}
+            />
+          </div>
+          {holdErr && <p className="text-critical text-small">{holdErr}</p>}
+          <div className="flex justify-end gap-2">
+            <Button variant="secondary" onClick={() => setHoldOpen(false)}>
+              {t('orderDetail.holdDialog.cancel')}
+            </Button>
+            <Button
+              variant="destructive"
+              loading={holdBusy}
+              disabled={!holdReason.trim()}
+              onClick={handleHold}
+            >
+              {t('orderDetail.holdDialog.confirm')}
+            </Button>
+          </div>
+        </div>
+      </Modal>}
     </div>
   )
 }

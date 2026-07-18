@@ -637,10 +637,29 @@ export function removeFromBlocklist(id: string) {
   return request<void>(`/blocklist/${id}`, { method: 'DELETE' })
 }
 
-// ── FR-7.8a: hold management ──────────────────────────────────────────────────
+// ── FR-7.4 / FR-7.8a: hold management ────────────────────────────────────────
 
+/** FR-7.4 — Manually hold an order with a required reason (OWNER/MANAGER). */
+export function holdOrder(orderId: string, reason: string) {
+  return request<void>(`/fulfill/${orderId}/hold`, {
+    method: 'POST',
+    body: JSON.stringify({ reason }),
+  })
+}
+
+/** FR-7.4 / FR-7.8a — Release any hold (manual or blocked-customer) (OWNER/MANAGER). */
 export function releaseOrderHold(orderId: string) {
-  return request<void>(`/orders/${orderId}/release-hold`, { method: 'POST' })
+  return request<void>(`/fulfill/${orderId}/release-hold`, { method: 'POST' })
+}
+
+// ── FR-7.5: COD editing ───────────────────────────────────────────────────────
+
+/** FR-7.5 — Update COD amount while order is new/ready_to_pick (OWNER/MANAGER). */
+export function updateOrderCod(orderId: string, amount: number) {
+  return request<void>(`/fulfill/${orderId}/cod`, {
+    method: 'PATCH',
+    body: JSON.stringify({ amount }),
+  })
 }
 
 export function cancelOrder(orderId: string) {

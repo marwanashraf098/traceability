@@ -541,6 +541,53 @@ public class FulfillService {
         auditService.record(actorUserId, "release_hold", "order", orderId.toString(), null);
     }
 
+    /** FR-7.4 — Manually hold an order with a required reason. */
+    @Transactional(isolation = Isolation.READ_COMMITTED)
+    public void holdOrder(UUID orderId, UUID actorUserId, String reason) {
+        if (reason == null || reason.isBlank())
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Hold reason is required");
+        UUID tenantId = TenantContext.require();
+        int updated = jdbc.update(
+            "UPDATE orders SET on_hold = true, hold_reason = ? " +
+            "WHERE id = ? AND tenant_id = ? AND on_hold = false",
+            reason.strip(), orderId, tenantId);
+        if (updated == 0) {
+            Integer count = jdbc.queryForObject(
+                "SELECT COUNT(*) FROM orders WHERE id = ? AND tenant_id = ?",
+                Integer.class, orderId, tenantId);
+            if (count == null || count == 0)
+                throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Order not found");
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Order is already on hold");
+        }
+        auditService.record(actorUserId, "hold_order", "order", orderId.toString(), Map.of("reason", reason.strip()));
+    }
+
+    /** FR-7.5 — Update COD amount; allowed only while order is pre-pack (new / ready_to_pick). */
+    @Transactional(isolation = Isolation.READ_COMMITTED)
+    public void updateCod(UUID orderId, UUID actorUserId, java.math.BigDecimal amount) {
+        if (amount == null || amount.compareTo(java.math.BigDecimal.ZERO) <= 0)
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "COD amount must be greater than 0");
+        if (amount.compareTo(java.math.BigDecimal.valueOf(30_000)) > 0)
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "COD amount cannot exceed 30,000 EGP");
+        UUID tenantId = TenantContext.require();
+        int updated = jdbc.update(
+            "UPDATE orders SET cod_amount = ? " +
+            "WHERE id = ? AND tenant_id = ? AND status IN ('new', 'ready_to_pick')",
+            amount, orderId, tenantId);
+        if (updated == 0) {
+            String status = jdbc.query(
+                "SELECT status FROM orders WHERE id = ? AND tenant_id = ?",
+                rs -> rs.next() ? rs.getString("status") : null,
+                orderId, tenantId);
+            if (status == null)
+                throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Order not found");
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                "COD is frozen — order is already " + status);
+        }
+        auditService.record(actorUserId, "update_cod", "order", orderId.toString(),
+            Map.of("amount", amount));
+    }
+
     // ── Cancel ────────────────────────────────────────────────────────────────
 
     @Transactional(isolation = Isolation.READ_COMMITTED)

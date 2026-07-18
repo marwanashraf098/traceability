@@ -124,7 +124,24 @@
     "deliveryHistory": "سجل التوصيل",
     "noDeliveryHistory": "لا يوجد سجل بعد — ستظهر التحديثات هنا عند وصولها.",
     "historyToggleShow": "عرض السجل",
-    "historyToggleHide": "إخفاء السجل"
+    "historyToggleHide": "إخفاء السجل",
+    "holdBtn": "تعليق الطلب",
+    "unholdBtn": "رفع التعليق",
+    "holdDialog": {
+      "title": "تعليق الطلب",
+      "reasonLabel": "السبب (مطلوب)",
+      "reasonPlaceholder": "مثال: مشكلة في العنوان، انتظار تأكيد العميل…",
+      "confirm": "تعليق الطلب",
+      "cancel": "إلغاء"
+    },
+    "holdSuccess": "تم تعليق الطلب",
+    "unholdSuccess": "تم رفع التعليق",
+    "codEdit": "تعديل الدفع عند الاستلام",
+    "codSave": "حفظ",
+    "codCancel": "إلغاء",
+    "codFrozen": "مبلغ الاستلام مجمَّد بعد التعبئة",
+    "codValidation": "يجب أن يكون المبلغ بين 1 و30,000 جنيه",
+    "codSuccess": "تم تحديث مبلغ الاستلام"
   },
   "delivery": {
     "state": {
