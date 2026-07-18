@@ -2,7 +2,10 @@ import { useEffect, useState, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router-dom'
 import { request, releaseOrderHold, cancelOrder as apiCancelOrder } from '../api'
-import { SeverityBadge, EmptyState, Spinner, Modal } from '../components/ui'
+import {
+  Badge, Button, EmptyState, Modal, Select, type SelectOption,
+  SeverityBadge, Skeleton, useToast,
+} from '../components/ui'
 
 interface ExceptionItem {
   type: string
@@ -59,10 +62,12 @@ function formatAge(secs: number) {
 
 function ResolveDialog({ item, onClose, onResolved }: { item: ExceptionItem; onClose: () => void; onResolved: () => void }) {
   const { i18n } = useTranslation()
+  const { toast } = useToast()
   const isAr = i18n.language === 'ar'
-  const [note, setNote]     = useState('')
+  const [note, setNote]       = useState('')
   const [loading, setLoading] = useState(false)
 
+  // Resolve API call — logic untouched, toast added on success
   async function submit() {
     setLoading(true)
     try {
@@ -70,6 +75,7 @@ function ResolveDialog({ item, onClose, onResolved }: { item: ExceptionItem; onC
         method: 'POST',
         body: JSON.stringify({ exceptionType: item.type, subjectKey: item.subjectKey, note }),
       })
+      toast({ tone: 'success', message: isAr ? 'تم معالجة الاستثناء' : 'Exception resolved' })
       onResolved()
     } finally {
       setLoading(false)
@@ -89,12 +95,12 @@ function ResolveDialog({ item, onClose, onResolved }: { item: ExceptionItem; onC
         onChange={e => setNote(e.target.value)}
       />
       <div className="flex gap-3 justify-end">
-        <button onClick={onClose} className="btn-outline btn text-small">
+        <Button variant="secondary" size="sm" onClick={onClose}>
           {isAr ? 'إلغاء' : 'Cancel'}
-        </button>
-        <button onClick={submit} disabled={loading} className="btn-brand btn text-small">
-          {loading ? '…' : isAr ? 'تأكيد المعالجة' : 'Mark resolved'}
-        </button>
+        </Button>
+        <Button loading={loading} size="sm" onClick={submit}>
+          {isAr ? 'تأكيد المعالجة' : 'Mark resolved'}
+        </Button>
       </div>
     </Modal>
   )
@@ -110,12 +116,16 @@ function ExceptionRow({ item, onAck, onAction }: { item: ExceptionItem; onAck: (
 
   return (
     <div className="card p-4 flex items-start gap-4">
-      {/* Severity dot */}
-      <div className="mt-1.5 flex-shrink-0 relative">
+      {/*
+        Severity dot — colours aligned with SEV_TONE in ui.tsx:
+        CRITICAL→bg-danger, HIGH→bg-warning, MEDIUM→bg-info, LOW→bg-muted
+        (was bg-brand for MEDIUM, bg-accent for LOW — neither is a DS token)
+      */}
+      <div className="mt-1.5 flex-shrink-0">
         <span className={`w-2.5 h-2.5 rounded-full block ${
           item.severity === 'CRITICAL' ? 'bg-danger' :
           item.severity === 'HIGH'     ? 'bg-warning' :
-          item.severity === 'MEDIUM'   ? 'bg-brand' : 'bg-accent'
+          item.severity === 'MEDIUM'   ? 'bg-info' : 'bg-muted'
         }`} />
       </div>
 
@@ -123,9 +133,10 @@ function ExceptionRow({ item, onAck, onAction }: { item: ExceptionItem; onAck: (
       <div className="flex-1 min-w-0">
         <div className="flex flex-wrap items-center gap-2 mb-1.5">
           <SeverityBadge severity={item.severity} />
-          <span className="badge border bg-muted/10 text-muted border-muted/20">
-            {isAr ? typeLabel?.ar : typeLabel?.en}
-          </span>
+          <Badge
+            tone="neutral"
+            label={isAr ? (typeLabel?.ar ?? item.type) : (typeLabel?.en ?? item.type)}
+          />
           <span className="text-caption text-muted font-mono">{formatAge(item.ageSeconds)}</span>
         </div>
         <p className="text-body text-primary leading-snug">
@@ -137,6 +148,7 @@ function ExceptionRow({ item, onAck, onAction }: { item: ExceptionItem; onAck: (
               {isAr ? 'طلب' : 'Order'}: <span className="font-mono text-muted">{item.order_number}</span>
             </span>
           )}
+          {/* Tracking and barcode — font-mono per spec */}
           {item.tracking_number && (
             <span className="text-small text-muted font-mono">{item.tracking_number}</span>
           )}
@@ -153,6 +165,10 @@ function ExceptionRow({ item, onAck, onAction }: { item: ExceptionItem; onAck: (
       <div className="flex flex-col gap-2 flex-shrink-0">
         {item.type === 'blocked_customer' && item.order_id && (
           <>
+            {/*
+              Release/Cancel kept as raw <button> — both carry data-testid and
+              Button does not spread arbitrary props.
+            */}
             <button
               data-testid={`exc-release-${item.order_id}`}
               className="btn-primary btn text-small px-3 py-1.5"
@@ -174,13 +190,13 @@ function ExceptionRow({ item, onAck, onAction }: { item: ExceptionItem; onAck: (
           </>
         )}
         {item.actionUrl && item.type !== 'blocked_customer' && (
-          <button onClick={() => navigate(item.actionUrl)} className="btn-brand btn text-small px-3 py-1.5">
+          <Button size="sm" onClick={() => navigate(item.actionUrl)}>
             {isAr ? 'الإجراء' : 'Go →'}
-          </button>
+          </Button>
         )}
-        <button onClick={() => onAck(item)} className="btn-outline btn text-small px-3 py-1.5">
+        <Button variant="secondary" size="sm" onClick={() => onAck(item)}>
           {isAr ? 'معالجة' : 'Resolve'}
-        </button>
+        </Button>
       </div>
     </div>
   )
@@ -192,13 +208,14 @@ export default function ExceptionsPage() {
   const { t, i18n } = useTranslation()
   const isAr = i18n.language === 'ar'
 
-  const [data,         setData]         = useState<ExceptionPage | null>(null)
-  const [typeFilter,   setTypeFilter]   = useState('')
-  const [sevFilter,    setSevFilter]    = useState('')
-  const [page,         setPage]         = useState(0)
-  const [loading,      setLoading]      = useState(false)
+  const [data,          setData]          = useState<ExceptionPage | null>(null)
+  const [typeFilter,    setTypeFilter]    = useState('')
+  const [sevFilter,     setSevFilter]     = useState('')
+  const [page,          setPage]          = useState(0)
+  const [loading,       setLoading]       = useState(false)
   const [resolvingItem, setResolvingItem] = useState<ExceptionItem | null>(null)
 
+  // Filter state and query params — unchanged
   const load = useCallback(async () => {
     setLoading(true)
     try {
@@ -216,31 +233,48 @@ export default function ExceptionsPage() {
 
   const handleResolved = () => { setResolvingItem(null); load() }
 
+  // DS Select options — empty-string value = "All" (no filter applied)
+  const severityOptions: SelectOption[] = [
+    { value: '', label: isAr ? 'كل الأولويات' : 'All severities' },
+    ...ALL_SEVERITIES.map(s => ({ value: s, label: s })),
+  ]
+  const typeOptions: SelectOption[] = [
+    { value: '', label: isAr ? 'كل الأنواع' : 'All types' },
+    ...ALL_TYPES.map(type => ({
+      value: type,
+      label: isAr ? (TYPE_LABELS[type]?.ar ?? type) : (TYPE_LABELS[type]?.en ?? type),
+    })),
+  ]
+
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <h1 className="text-h1 text-primary">{t('exceptions.title')}</h1>
-        <button onClick={load} className="btn-outline btn text-small">↻ {isAr ? 'تحديث' : 'Refresh'}</button>
+        <Button variant="secondary" size="sm" onClick={load}>
+          ↻ {isAr ? 'تحديث' : 'Refresh'}
+        </Button>
       </div>
 
-      {/* Filters */}
+      {/* Filters — Select components; filter state and query params unchanged */}
       <div className="flex flex-wrap gap-2">
-        <select value={sevFilter} onChange={e => { setSevFilter(e.target.value); setPage(0) }} className="input w-auto">
-          <option value="">{isAr ? 'كل الأولويات' : 'All severities'}</option>
-          {ALL_SEVERITIES.map(s => <option key={s} value={s}>{s}</option>)}
-        </select>
-        <select value={typeFilter} onChange={e => { setTypeFilter(e.target.value); setPage(0) }} className="input w-auto">
-          <option value="">{isAr ? 'كل الأنواع' : 'All types'}</option>
-          {ALL_TYPES.map(type => (
-            <option key={type} value={type}>
-              {isAr ? TYPE_LABELS[type]?.ar : TYPE_LABELS[type]?.en}
-            </option>
-          ))}
-        </select>
+        <Select
+          value={sevFilter}
+          onChange={value => { setSevFilter(value); setPage(0) }}
+          options={severityOptions}
+        />
+        <Select
+          value={typeFilter}
+          onChange={value => { setTypeFilter(value); setPage(0) }}
+          options={typeOptions}
+        />
       </div>
 
       {loading ? (
-        <div className="flex justify-center py-12"><Spinner size={28} /></div>
+        <div className="space-y-3">
+          {Array.from({ length: 5 }).map((_, i) => (
+            <Skeleton key={i} className="h-24 rounded-2xl" />
+          ))}
+        </div>
       ) : data?.items.length === 0 ? (
         <EmptyState message={isAr ? 'لا توجد استثناءات' : 'No exceptions — all clear'} icon="✓" />
       ) : (
@@ -251,15 +285,25 @@ export default function ExceptionsPage() {
         </div>
       )}
 
-      {/* Pagination */}
+      {/* Pagination — unchanged logic */}
       {data && data.total > data.size && (
         <div className="flex gap-2 justify-end">
-          <button disabled={page === 0} onClick={() => setPage(p => p - 1)} className="btn-outline btn text-small disabled:opacity-30">
+          <Button
+            variant="secondary"
+            size="sm"
+            disabled={page === 0}
+            onClick={() => setPage(p => p - 1)}
+          >
             {isAr ? 'السابق' : 'Prev'}
-          </button>
-          <button disabled={(page + 1) * data.size >= data.total} onClick={() => setPage(p => p + 1)} className="btn-outline btn text-small disabled:opacity-30">
+          </Button>
+          <Button
+            variant="secondary"
+            size="sm"
+            disabled={(page + 1) * data.size >= data.total}
+            onClick={() => setPage(p => p + 1)}
+          >
             {isAr ? 'التالي' : 'Next'}
-          </button>
+          </Button>
         </div>
       )}
 
