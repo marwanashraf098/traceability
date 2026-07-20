@@ -535,11 +535,23 @@ public class ShopifySyncService {
         Instant effectiveFloor = cutoff.map(c -> c.isAfter(rollingFloor) ? c : rollingFloor)
                                        .orElse(rollingFloor);
         String createdAfter = effectiveFloor.toString();
-        int orders = 0, flagged = 0;
+        log.info("Order import: store={} effectiveCreatedAfter={} (rollingFloor={} cutoff={})",
+            storeId, createdAfter, rollingFloor, cutoff.orElse(null));
+        int orders = 0, flagged = 0, skipped = 0;
         String cursor = null;
+        final Instant javaFloor = effectiveFloor; // effectively-final for lambda
         do {
             ShopifyGateway.OrderPage page = shopifyGateway.fetchOrdersPage(shopDomain, rawToken, cursor, createdAfter);
             for (ShopifyGateway.Order o : page.orders()) {
+                // Java-side guarantee: the Shopify API filter (created_at:>) is an optimisation that
+                // reduces network traffic, but Shopify's query filter may not honour sub-day precision.
+                // We re-check every returned order against the hard floor before writing to the DB.
+                if (o.createdAt().isBefore(javaFloor)) {
+                    log.info("Order import: skipping pre-cutoff order {} (placed_at={}) for store {} — before {}",
+                        o.name(), o.createdAt(), storeId, javaFloor);
+                    skipped++;
+                    continue;
+                }
                 boolean wasFlagged = upsertOrder(storeId, tenantId, o);
                 orders++;
                 if (wasFlagged) flagged++;
@@ -547,7 +559,8 @@ public class ShopifySyncService {
             cursor = page.hasNextPage() ? page.endCursor() : null;
         } while (cursor != null);
 
-        log.info("Order import complete: {} orders ({} flagged) for store {}", orders, flagged, storeId);
+        log.info("Order import complete: {} orders ({} flagged, {} pre-cutoff skipped) for store {}",
+            orders, flagged, skipped, storeId);
         return new int[]{orders, flagged};
     }
 

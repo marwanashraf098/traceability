@@ -255,6 +255,62 @@ class ShopifyIngestCutoffTest {
         assertThat(count).as("NULL-cutoff store must ingest orders of any age").isEqualTo(1);
     }
 
+    // ── ic6: import path blocks pre-cutoff order even when Shopify API leaks it ──
+
+    @Test
+    void ic6_importPath_preCutoffOrderReturnedByApi_isSkipped() {
+        // Exercises the production bug: Shopify's created_at:> filter uses date granularity,
+        // not datetime. An order placed 100 seconds before the cutoff on the same calendar day
+        // passes Shopify's filter and is returned in the API response.
+        // The Java-side guard in importOrders() is the only thing standing between that order
+        // and the DB — this test ensures it actually fires.
+        UUID tenantId = insert("IC6-Tenant");
+        // Cutoff 2 minutes ago so the rolling window (now-30d) doesn't interfere.
+        Instant cutoff = Instant.now().minus(2, ChronoUnit.MINUTES);
+        UUID storeId = storeWithCutoff(tenantId, "ic6.myshopify.com", cutoff);
+
+        // Order placed exactly 100 seconds before the cutoff — matches the production incident.
+        Instant preCutoffPlaced = cutoff.minus(100, ChronoUnit.SECONDS);
+        String preCutoffGid   = "gid://shopify/Order/IC6001";
+        String postCutoffGid  = "gid://shopify/Order/IC6002";
+        Instant postCutoffPlaced = cutoff.plus(5, ChronoUnit.MINUTES);
+
+        ShopifyGateway.Order preCutoffOrder = new ShopifyGateway.Order(
+            preCutoffGid, "#IC6001", null, null, null,
+            "pending", List.of(), new BigDecimal("50.00"), List.of(),
+            preCutoffPlaced, mapper.createObjectNode());
+
+        ShopifyGateway.Order postCutoffOrder = new ShopifyGateway.Order(
+            postCutoffGid, "#IC6002", null, null, null,
+            "pending", List.of(), new BigDecimal("75.00"), List.of(),
+            postCutoffPlaced, mapper.createObjectNode());
+
+        // Shopify API "leaks" both orders — simulating the date-filter granularity bug.
+        when(shopifyGateway.fetchProductsPage(eq("ic6.myshopify.com"), any(), any()))
+            .thenReturn(new ShopifyGateway.ProductPage(List.of(), false, null));
+        when(shopifyGateway.fetchOrdersPage(eq("ic6.myshopify.com"), any(), isNull(), any()))
+            .thenReturn(new ShopifyGateway.OrderPage(List.of(preCutoffOrder, postCutoffOrder), false, null));
+
+        TenantContext.set(tenantId);
+        try {
+            syncService.runImport(storeId, tenantId, "ic6.myshopify.com", "fake_token");
+        } finally {
+            TenantContext.clear();
+        }
+
+        Integer preCutoffCount = jdbc.queryForObject(
+            "SELECT COUNT(*) FROM orders WHERE external_id = ?", Integer.class, preCutoffGid);
+        Integer postCutoffCount = jdbc.queryForObject(
+            "SELECT COUNT(*) FROM orders WHERE external_id = ?", Integer.class, postCutoffGid);
+
+        assertThat(preCutoffCount)
+            .as("pre-cutoff order (100s before cutoff) must NOT be written even if Shopify API returns it")
+            .isZero();
+        assertThat(postCutoffCount)
+            .as("post-cutoff order must still be ingested normally")
+            .isEqualTo(1);
+    }
+
     // ── helpers ───────────────────────────────────────────────────────────
 
     private UUID insert(String tenantName) {
