@@ -477,9 +477,9 @@ class BostaPiiTest {
     private String createPiece(String status, String barcode, UUID orderId) {
         String id = UlidGenerator.generate();
         jdbc.update(
-            "INSERT INTO pieces (id, tenant_id, variant_id, barcode, status, current_order_id) " +
-            "VALUES (?, ?, ?, ?, ?::piece_status, ?)",
-            id, ownerTenantId, variantId, barcode, status, orderId);
+            "INSERT INTO pieces (id, tenant_id, variant_id, barcode, short_code, status, current_order_id) " +
+            "VALUES (?, ?, ?, ?, 'P' || LPAD((abs(hashtext(?)) % 999999 + 1)::text, 6, '0'), ?::piece_status, ?)",
+            id, ownerTenantId, variantId, barcode, id, status, orderId);
         return id;
     }
 

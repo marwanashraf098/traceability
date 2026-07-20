@@ -4,6 +4,20 @@
 
 ## Current state
 
+**656 backend tests green (expected)** — 2026-07-21 (FR-19: short piece codes + 6 new tests; 2 pre-existing ShopifyImportTest failures unrelated to FR-19).
+
+**FR-19 — Short piece codes for scannable thermal labels — COMPLETE.**
+- **Problem confirmed:** 26-char ULID barcode rendered at ~0.129mm/module on a 44mm label. Decoded fine on screen (lb2 passed); unscannable on paper from thermal printer — ink bleed closes sub-0.191mm gaps.
+- **Solution:** `P` + 6-digit sequential short code per tenant (e.g. `P000001`). 7 chars → 132 modules → 0.333mm/module = 1.75× GS1 general-use minimum.
+- **V55 migration:** `piece_counters (tenant_id PK, last_value BIGINT)` with RLS + `GRANT SELECT, INSERT, UPDATE TO app_user`. `pieces.short_code TEXT NOT NULL UNIQUE (tenant_id, short_code)`. Backfill existing pieces via `ROW_NUMBER() OVER (PARTITION BY tenant_id ORDER BY created_at, id)`.
+- **`InventoryLedger.batchReceive()`:** Round-trip 0 added — atomic counter claim via `ON CONFLICT DO UPDATE RETURNING last_value`. Claims N codes in one SQL; firstCode = lastValue - N + 1. Counter rolls back with transaction on failure — no leaked codes, but gaps allowed (C3). Now 3 SQL statements (was 2).
+- **`LabelService`:** Both queries add `p.short_code`. `drawLabel()` signature simplified (barcode/pieceId params removed). Barcode encodes `shortCode`, human-readable caption shows `shortCode` (C1 fix: was wrongly showing PC-ULID).
+- **`LookupController.isPieceQuery()`:** Third case added: `P` + exactly 6 digits (length 7). Namespace clean — no collision with Bosta AWBs (pure digits) or hub-prefixed AWBs (contain dashes, longer). All three formats (short code / PC-ULID / bare ULID) route correctly.
+- **Scan lookup:** All 3 services (`FulfillService`, `LookupService`, `ReturnService`) add `OR p.short_code = ?`. `LookupService.lookupPiece()` also selects `p.short_code` and includes `shortCode` in response.
+- **Tests:** lb1 (LabelRoundTripTest) updated to encode `P000001`, adds module-width assertion (≥ 0.191mm). lb2 (Day8Test k) asserts decoded == shortCode, format check. r9-r11 (LookupRoutingTest) cover short-code routing. sc1-sc3 (ShortCodeTest): sc1 non-overlapping ranges, sc2 P\d{6} format + uniqueness, sc3 lookupPiece resolves by short_code. MigrationSmokeTest: `piece_counters` added to RLS list, count 53→54.
+- **All test fixture INSERTs into pieces** (30+ locations across 25 test files) updated to include `short_code = 'P' || LPAD((abs(hashtext(?)) % 999999 + 1)::text, 6, '0')` derived from piece ID.
+- **Next: PRINT one label and scan it physically.** lb2 passing on screen is necessary but not sufficient — last 26-char ULID decoded fine on screen and failed on paper.
+
 **650 backend tests green (expected)** — 2026-07-21 (label barcode fix + search-box routing fix + 9 new tests).
 
 **LABEL BARCODE BUG — FIXED.** Piece barcodes were unscannable on both handheld and phone:

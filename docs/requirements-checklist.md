@@ -49,8 +49,8 @@ One line per requirement · [M] Must / [S] Should / [C] Could · use as the buil
 ## FR-6 Receiving & Labeling
 - [x] 6.1 [M] Receiving session: location, supplier, reference, note
 - [x] 6.2 [M] Lines: variant × qty; lookup by SKU/title ([S] scan manufacturer UPC); editable until finalize
-- [x] 6.3 [M] Finalize → ULID piece per unit, status Available, received event; 1,000 pieces ≤ 10s
-- [x] 6.4 [M] Label PDF: Code 128 + piece ID + SKU + 24-char variant name; 40×25/50×25; Arabic fonts; 203dpi thermal via OS print
+- [x] 6.3 [M] Finalize → ULID piece per unit, status Available, received event; 1,000 pieces ≤ 10s; each piece gets a sequential short code (P000001...) at 0.333mm/module [FR-19 complete]
+- [x] 6.4 [M] Label PDF: Code 128 + short code (P000001) + SKU + 24-char variant name; 40×25/50×25; Arabic fonts; 203dpi thermal via OS print [FR-19: short code replaces 26-char ULID, 1.75× GS1 minimum module width]
 - [x] 6.5 [M] Reprint any label/session anytime (logged)
 - [ ] 6.6 [M] Speed budget: 200-piece session ≤ 60s of system interaction
 - [ ] 6.7 [S] Void surplus / append pieces while session untouched (reason: receiving_correction)

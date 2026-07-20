@@ -325,9 +325,9 @@ class Day10Test {
 
         String pieceId = UlidGenerator.generate();
         jdbc.update(
-            "INSERT INTO pieces (id, tenant_id, variant_id, barcode, status, receipt_id, current_location_id) " +
-            "VALUES (?, ?, ?, ?, 'available'::piece_status, ?, ?)",
-            pieceId, tenantAId, variantAId, "PC-" + pieceId, receiptId, locationAId);
+            "INSERT INTO pieces (id, tenant_id, variant_id, barcode, short_code, status, receipt_id, current_location_id) " +
+            "VALUES (?, ?, ?, ?, 'P' || LPAD((abs(hashtext(?)) % 999999 + 1)::text, 6, '0'), 'available'::piece_status, ?, ?)",
+            pieceId, tenantAId, variantAId, "PC-" + pieceId, pieceId, receiptId, locationAId);
 
         Map<String, Object> result = lookupSvc.lookupPiece("PC-" + pieceId, false);
 
@@ -343,18 +343,18 @@ class Day10Test {
     private String insertPiece(UUID variantId) {
         String id = UlidGenerator.generate();
         jdbc.update(
-            "INSERT INTO pieces (id, tenant_id, variant_id, barcode, status, current_location_id) " +
-            "VALUES (?, ?, ?, ?, 'available'::piece_status, ?)",
-            id, tenantAId, variantId, "PC-" + id, locationAId);
+            "INSERT INTO pieces (id, tenant_id, variant_id, barcode, short_code, status, current_location_id) " +
+            "VALUES (?, ?, ?, ?, 'P' || LPAD((abs(hashtext(?)) % 999999 + 1)::text, 6, '0'), 'available'::piece_status, ?)",
+            id, tenantAId, variantId, "PC-" + id, id, locationAId);
         return id;
     }
 
     private String insertPieceLinkedToOrder(UUID variantId, UUID orderId) {
         String id = UlidGenerator.generate();
         jdbc.update(
-            "INSERT INTO pieces (id, tenant_id, variant_id, barcode, status, current_order_id, current_location_id) " +
-            "VALUES (?, ?, ?, ?, 'reserved'::piece_status, ?, ?)",
-            id, tenantAId, variantId, "PC-" + id, orderId, locationAId);
+            "INSERT INTO pieces (id, tenant_id, variant_id, barcode, short_code, status, current_order_id, current_location_id) " +
+            "VALUES (?, ?, ?, ?, 'P' || LPAD((abs(hashtext(?)) % 999999 + 1)::text, 6, '0'), 'reserved'::piece_status, ?, ?)",
+            id, tenantAId, variantId, "PC-" + id, id, orderId, locationAId);
         return id;
     }
 

@@ -83,7 +83,7 @@ public class LabelService {
         UUID tenantId = TenantContext.require();
 
         List<Map<String, Object>> pieces = jdbc.queryForList(
-            "SELECT p.id, p.barcode, v.sku, v.title AS variant_title, pr.title AS product_title " +
+            "SELECT p.id, p.barcode, p.short_code, v.sku, v.title AS variant_title, pr.title AS product_title " +
             "FROM pieces p " +
             "JOIN variants v ON v.id = p.variant_id " +
             "JOIN products pr ON pr.id = v.product_id " +
@@ -108,7 +108,7 @@ public class LabelService {
         UUID tenantId = TenantContext.require();
 
         List<Map<String, Object>> pieces = jdbc.queryForList(
-            "SELECT p.id, p.barcode, v.sku, v.title AS variant_title, pr.title AS product_title " +
+            "SELECT p.id, p.barcode, p.short_code, v.sku, v.title AS variant_title, pr.title AS product_title " +
             "FROM pieces p " +
             "JOIN variants v ON v.id = p.variant_id " +
             "JOIN products pr ON pr.id = v.product_id " +
@@ -159,8 +159,7 @@ public class LabelService {
             PDType0Font arabicFont = PDType0Font.load(doc, fontStream, true);
 
             for (Map<String, Object> piece : pieces) {
-                String pieceId      = (String) piece.get("id");
-                String barcode      = (String) piece.get("barcode");
+                String shortCode    = (String) piece.get("short_code");
                 String sku          = nullSafe(piece.get("sku"));
                 String productTitle = truncate(nullSafe(piece.get("product_title")), 28);
                 String variantTitle = nullSafe(piece.get("variant_title"));
@@ -173,7 +172,7 @@ public class LabelService {
                 doc.addPage(page);
 
                 try (PDPageContentStream cs = new PDPageContentStream(doc, page)) {
-                    drawLabel(cs, doc, latinFont, arabicFont, barcode, pieceId, sku,
+                    drawLabel(cs, doc, latinFont, arabicFont, shortCode, sku,
                               labelName, wPt, hPt);
                 }
             }
@@ -186,7 +185,7 @@ public class LabelService {
 
     private void drawLabel(PDPageContentStream cs, PDDocument doc,
                            PDFont latinFont, PDType0Font arabicFont,
-                           String barcode, String pieceId, String sku, String variantTitle,
+                           String shortCode, String sku, String variantTitle,
                            float wPt, float hPt) throws IOException {
 
         // ── Barcode image ────────────────────────────────────────────────────
@@ -196,10 +195,9 @@ public class LabelService {
         float barcodeH = BARCODE_H_MM * MM_TO_PT;
         float barcodeY = hPt - MARGIN - barcodeH;
 
-        // Encode the ULID (piece.id, 26 chars) not the PC-prefixed barcode (29 chars).
-        // 26 chars → 341 total modules at MARGIN=10 → fits cleanly in the 44mm draw width.
-        // The human-readable text below still shows the full barcode value.
-        BufferedImage barcodeImg = renderBarcode(pieceId, barcodeW, barcodeH);
+        // Encode the short code (e.g. "P000001", 7 chars) — 132 total modules at MARGIN=10
+        // → 0.333mm/module on a 44mm label, well above the 0.191mm GS1 general-use minimum.
+        BufferedImage barcodeImg = renderBarcode(shortCode, barcodeW, barcodeH);
         PDImageXObject barcodeXObj = PDImageXObject.createFromByteArray(
             doc, toPngBytes(barcodeImg), "barcode");
 
@@ -209,8 +207,8 @@ public class LabelService {
         float fontSize1 = 5.5f;
         float fontSize2 = 6.5f;
 
-        // Row 1: full scannable barcode as human-readable text — always ASCII → Helvetica
-        drawCenteredText(cs, latinFont, fontSize1, barcode, wPt, barcodeY - 1.5f * MM_TO_PT);
+        // Row 1: short code as human-readable caption — matches what is encoded in the barcode.
+        drawCenteredText(cs, latinFont, fontSize1, shortCode, wPt, barcodeY - 1.5f * MM_TO_PT);
 
         // Row 2: SKU left (ASCII → Helvetica), variant name right (may be Arabic)
         float row2Y = barcodeY - 1.5f * MM_TO_PT - fontSize1 - 2f;

@@ -58,7 +58,7 @@ public class LookupService {
         Map<String, Object> piece;
         try {
             piece = jdbc.queryForMap(
-                "SELECT p.id, p.barcode, p.status, p.created_at AS received_at, " +
+                "SELECT p.id, p.barcode, p.short_code, p.status, p.created_at AS received_at, " +
                 "       v.id AS variant_id, v.title AS variant_title, v.sku, " +
                 "       pr.title AS product_title, " +
                 "       loc.id AS location_id, loc.name AS location_name, " +
@@ -74,8 +74,8 @@ public class LookupService {
                 "LEFT JOIN shipments s   ON s.order_id = o.id AND s.shipment_leg = 'forward' " +
                 "LEFT JOIN receipts r    ON r.id = p.receipt_id " +
                 "LEFT JOIN locations rloc ON rloc.id = r.location_id " +
-                "WHERE (p.barcode = ? OR p.id = ?) AND p.tenant_id = ?",
-                barcode, barcode, tenantId);
+                "WHERE (p.barcode = ? OR p.id = ? OR p.short_code = ?) AND p.tenant_id = ?",
+                barcode, barcode, barcode, tenantId);
         } catch (EmptyResultDataAccessException e) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Piece not found");
         }
@@ -167,6 +167,7 @@ public class LookupService {
         result.put("type",            "piece");
         result.put("id",              piece.get("id").toString());
         result.put("barcode",         piece.get("barcode"));
+        result.put("shortCode",       piece.get("short_code"));
         result.put("status",          piece.get("status"));
         result.put("receivedAt",      piece.get("received_at"));
         result.put("variant",         variantMap);

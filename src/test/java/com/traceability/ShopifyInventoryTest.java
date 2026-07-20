@@ -141,9 +141,9 @@ class ShopifyInventoryTest {
         // Piece for si4 (return inspection trigger).
         pieceId = "01HTEST0000000000000000001";
         jdbc.update(
-            "INSERT INTO pieces (id, tenant_id, variant_id, status, barcode, current_location_id) " +
-            "VALUES (?, ?, ?, 'return_pending_inspection'::piece_status, 'BC-SI4-001', ?)",
-            pieceId, tenantId, variantA, locationId);
+            "INSERT INTO pieces (id, tenant_id, variant_id, status, barcode, short_code, current_location_id) " +
+            "VALUES (?, ?, ?, 'return_pending_inspection'::piece_status, 'BC-SI4-001', 'P' || LPAD((abs(hashtext(?)) % 999999 + 1)::text, 6, '0'), ?)",
+            pieceId, tenantId, variantA, pieceId, locationId);
     }
 
     // ── si1: receiving session close inserts shadow rows ─────────────────────

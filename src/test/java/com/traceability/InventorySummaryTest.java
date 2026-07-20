@@ -125,9 +125,9 @@ class InventorySummaryTest {
     /** Insert a piece with the given status directly (bypassing the service). */
     private void insertPiece(String id, String status) {
         jdbc.update(
-            "INSERT INTO pieces (id, tenant_id, variant_id, barcode, status) " +
-            "VALUES (?, ?, ?, ?, ?::piece_status)",
-            id, tenantId, variantId, "BC-" + id, status);
+            "INSERT INTO pieces (id, tenant_id, variant_id, barcode, short_code, status) " +
+            "VALUES (?, ?, ?, ?, 'P' || LPAD((abs(hashtext(?)) % 999999 + 1)::text, 6, '0'), ?::piece_status)",
+            id, tenantId, variantId, "BC-" + id, id, status);
     }
 
     /** Insert a piece_events row with an explicit occurred_at offset. */
@@ -230,9 +230,9 @@ class InventorySummaryTest {
         // Insert 5 available pieces for tenant2
         for (int i = 1; i <= 5; i++) {
             jdbc.update(
-                "INSERT INTO pieces (id, tenant_id, variant_id, barcode, status) " +
-                "VALUES (?, ?, ?, ?, 'available'::piece_status)",
-                "T2-PC-" + i, tenant2Id, v2, "BC-T2-" + i);
+                "INSERT INTO pieces (id, tenant_id, variant_id, barcode, short_code, status) " +
+                "VALUES (?, ?, ?, ?, 'P' || LPAD((abs(hashtext(?)) % 999999 + 1)::text, 6, '0'), 'available'::piece_status)",
+                "T2-PC-" + i, tenant2Id, v2, "BC-T2-" + i, "T2-PC-" + i);
         }
 
         // Insert 1 available piece for tenant1

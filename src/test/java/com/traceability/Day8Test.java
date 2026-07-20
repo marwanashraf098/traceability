@@ -223,8 +223,8 @@ class Day8Test {
         // Pre-insert a piece with a known barcode that will collide
         String collisionId = UlidGenerator.generate();
         jdbc.update(
-            "INSERT INTO pieces (id, tenant_id, variant_id, barcode, status, current_location_id) " +
-            "VALUES (?, ?, ?, 'PC-' || ?, 'available'::piece_status, ?)",
+            "INSERT INTO pieces (id, tenant_id, variant_id, barcode, short_code, status, current_location_id) " +
+            "VALUES (?, ?, ?, 'PC-' || ?, 'P099999', 'available'::piece_status, ?)",
             collisionId, tenantAId, variantAId, collisionId, locationAId);
 
         // Build specs: one valid + one that will collide
@@ -443,11 +443,12 @@ class Day8Test {
         receivingSvc.addLine(sessionId, variantAId, 1);
         receivingSvc.finalize(sessionId, actorId);
 
-        // Retrieve the piece's ULID — this is what must be encoded in the barcode image.
-        String pieceId = jdbc.queryForObject(
-            "SELECT id FROM pieces WHERE receipt_id = ? LIMIT 1",
+        // Retrieve the piece's short code — this is what FR-19 encodes in the barcode.
+        String shortCode = jdbc.queryForObject(
+            "SELECT short_code FROM pieces WHERE receipt_id = ? LIMIT 1",
             String.class, sessionId);
-        assertThat(pieceId).isNotNull();
+        assertThat(shortCode).isNotNull();
+        assertThat(shortCode).matches("P\\d{6}");
 
         byte[] pdf = labelSvc.generateSessionLabels(sessionId, null, null);
         assertThat(new String(pdf, 0, 4)).isEqualTo("%PDF");
@@ -469,8 +470,8 @@ class Day8Test {
         com.google.zxing.Result decoded = new com.google.zxing.MultiFormatReader().decode(bitmap);
 
         assertThat(decoded.getText())
-            .as("barcode decoded from rasterized PDF page must equal the piece ULID")
-            .isEqualTo(pieceId);
+            .as("barcode decoded from rasterized PDF page must equal the short code")
+            .isEqualTo(shortCode);
         assertThat(decoded.getBarcodeFormat())
             .as("format must be CODE_128")
             .isEqualTo(com.google.zxing.BarcodeFormat.CODE_128);

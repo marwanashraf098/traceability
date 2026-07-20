@@ -603,9 +603,9 @@ class Day9Test {
     private String insertPieceWithStatus(UUID variantId, String status) {
         String id = UlidGenerator.generate();
         jdbc.update(
-            "INSERT INTO pieces (id, tenant_id, variant_id, barcode, status, current_location_id) " +
-            "VALUES (?, ?, ?, ?, ?::piece_status, ?)",
-            id, tenantAId, variantId, "PC-" + id, status, locationAId);
+            "INSERT INTO pieces (id, tenant_id, variant_id, barcode, short_code, status, current_location_id) " +
+            "VALUES (?, ?, ?, ?, 'P' || LPAD((abs(hashtext(?)) % 999999 + 1)::text, 6, '0'), ?::piece_status, ?)",
+            id, tenantAId, variantId, "PC-" + id, id, status, locationAId);
         return id;
     }
 }

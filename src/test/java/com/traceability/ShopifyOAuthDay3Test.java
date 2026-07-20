@@ -384,8 +384,8 @@ class ShopifyOAuthDay3Test {
         // Insert a piece_event row — must survive redaction unchanged
         String pieceId = "01HPIECEDAY3TEST00001";
         jdbc.update(
-            "INSERT INTO pieces (id, tenant_id, variant_id, barcode, status) VALUES (?, ?, ?, ?, 'available')",
-            pieceId, tenantId, variantId, "BAR-DAY3-001");
+            "INSERT INTO pieces (id, tenant_id, variant_id, barcode, short_code, status) VALUES (?, ?, ?, ?, 'P' || LPAD((abs(hashtext(?)) % 999999 + 1)::text, 6, '0'), 'available')",
+            pieceId, tenantId, variantId, "BAR-DAY3-001", pieceId);
         UUID locationId = UUID.randomUUID();
         jdbc.update(
             "INSERT INTO locations (id, tenant_id, name, type, is_default) VALUES " +

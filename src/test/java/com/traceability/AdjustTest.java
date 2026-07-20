@@ -295,9 +295,9 @@ class AdjustTest {
     private String receivePiece() {
         String id = UlidGenerator.generate();
         jdbc.update(
-            "INSERT INTO pieces (id, tenant_id, variant_id, barcode, status, current_location_id, last_event_at, last_user_id) " +
-            "VALUES (?, ?, ?, ?, 'available'::piece_status, ?, now(), ?)",
-            id, tenantId, variantId, "ADJ-" + id.substring(id.length() - 8), locationId, actorId);
+            "INSERT INTO pieces (id, tenant_id, variant_id, barcode, short_code, status, current_location_id, last_event_at, last_user_id) " +
+            "VALUES (?, ?, ?, ?, 'P' || LPAD((abs(hashtext(?)) % 999999 + 1)::text, 6, '0'), 'available'::piece_status, ?, now(), ?)",
+            id, tenantId, variantId, "ADJ-" + id.substring(id.length() - 8), id, locationId, actorId);
         jdbc.update(
             "INSERT INTO piece_events (tenant_id, piece_id, event_type, actor_user_id, location_id, from_status, to_status) " +
             "VALUES (?, ?, 'received', ?, ?, NULL, 'available'::piece_status)",

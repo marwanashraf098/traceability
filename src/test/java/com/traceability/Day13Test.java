@@ -384,9 +384,9 @@ class Day13Test {
         jdbc.update("INSERT INTO products (id,tenant_id,store_id,external_id,title) VALUES (?,?,?,'OP','OtherProd')", otherProd, other, otherStore);
         jdbc.update("INSERT INTO variants (id,tenant_id,product_id,external_id,title,sku) VALUES (?,?,?,'OV','OtherVar','OV-SKU')", otherVar, other, otherProd);
         jdbc.update(
-            "INSERT INTO pieces (id,tenant_id,variant_id,barcode,status) " +
-            "VALUES (?,?,?,?,'lost'::piece_status)",
-            otherId, other, otherVar, "PC-" + otherId);
+            "INSERT INTO pieces (id,tenant_id,variant_id,barcode,short_code,status) " +
+            "VALUES (?,?,?,?,'P' || LPAD((abs(hashtext(?)) % 999999 + 1)::text, 6, '0'),'lost'::piece_status)",
+            otherId, other, otherVar, "PC-" + otherId, otherId);
 
         // TenantContext is set to our tenant — should see zero lost exceptions from other tenant
         assertThat(exceptionsOfType("lost")).isEmpty();
@@ -436,9 +436,9 @@ class Day13Test {
     private String piece(String status, UUID orderId) {
         String id = UlidGenerator.generate();
         jdbc.update(
-            "INSERT INTO pieces (id, tenant_id, variant_id, barcode, status, current_order_id) " +
-            "VALUES (?, ?, ?, ?, ?::piece_status, ?)",
-            id, tenantId, variantId, "PC-" + id, status, orderId);
+            "INSERT INTO pieces (id, tenant_id, variant_id, barcode, short_code, status, current_order_id) " +
+            "VALUES (?, ?, ?, ?, 'P' || LPAD((abs(hashtext(?)) % 999999 + 1)::text, 6, '0'), ?::piece_status, ?)",
+            id, tenantId, variantId, "PC-" + id, id, status, orderId);
         return id;
     }
 

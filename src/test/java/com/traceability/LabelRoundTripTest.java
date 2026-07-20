@@ -31,13 +31,14 @@ class LabelRoundTripTest {
 
     @Test
     void lb1_code128_with_correct_settings_is_decodable() throws Exception {
-        // Representative 26-char Crockford ULID — the content now encoded in piece labels.
-        String pieceId = "01HRTZP7DAQF8D3PD1XZH1T17W";
+        // FR-19 short code — "P" + 6 digits, 7 chars total.
+        // This is what is now encoded in piece labels; the 26-char ULID is no longer used.
+        String shortCode = "P000001";
 
         // Mirror LabelService constants exactly so this test locks the settings.
-        float labelW_mm  = 50f;
-        float margin_mm  = 3f;
-        float barcodeW_mm = labelW_mm - 2 * margin_mm;           // 44mm
+        float labelW_mm   = 50f;
+        float margin_mm   = 3f;
+        float barcodeW_mm = labelW_mm - 2 * margin_mm;           // 44mm draw area
         float barcodeH_mm = 12f;
         float barcodeW_pt = barcodeW_mm * MM_TO_PT;
         float barcodeH_pt = barcodeH_mm * MM_TO_PT;
@@ -49,7 +50,7 @@ class LabelRoundTripTest {
         hints.put(EncodeHintType.MARGIN, 10);                     // quiet zone: 10 modules each side
 
         BitMatrix matrix = new Code128Writer().encode(
-                pieceId, BarcodeFormat.CODE_128, pixelW, pixelH, hints);
+                shortCode, BarcodeFormat.CODE_128, pixelW, pixelH, hints);
         BufferedImage img = MatrixToImageWriter.toBufferedImage(matrix);
 
         // Decode via the same reader path a real scanner uses.
@@ -58,8 +59,8 @@ class LabelRoundTripTest {
         Result decoded = new MultiFormatReader().decode(bmp);
 
         assertThat(decoded.getText())
-                .as("decoded barcode must equal the original pieceId")
-                .isEqualTo(pieceId);
+                .as("decoded barcode must equal the short code")
+                .isEqualTo(shortCode);
         assertThat(decoded.getBarcodeFormat())
                 .as("format must be CODE_128")
                 .isEqualTo(BarcodeFormat.CODE_128);
@@ -74,5 +75,14 @@ class LabelRoundTripTest {
         assertThat(matrix.get(matrix.getWidth() - 1, midRow))
                 .as("rightmost column must be white (quiet zone)")
                 .isFalse();
+
+        // Module width verification — 7-char content → 132 total modules (7×11 + 55).
+        // At 44mm draw width: 44/132 = 0.333mm per module, well above the 0.191mm
+        // GS1 general-use minimum that the previous 26-char ULID (0.129mm) violated.
+        int totalModules = shortCode.length() * 11 + 55; // 132
+        float moduleWidthMm = barcodeW_mm / totalModules;
+        assertThat(moduleWidthMm)
+                .as("module width must clear GS1 general-use minimum (0.191mm)")
+                .isGreaterThanOrEqualTo(0.191f);
     }
 }

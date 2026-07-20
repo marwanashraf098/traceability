@@ -195,19 +195,23 @@ public class InventoryLedger {
     // ---- batchReceive ------------------------------------------------------
 
     /**
-     * Creates N pieces and their received events in two multi-row INSERTs inside
-     * one @Transactional boundary.
+     * Creates N pieces and their received events inside one @Transactional boundary.
      *
      * Design contract (do NOT modify without re-reading the invariant note in
      * the class Javadoc):
+     *   - Round-trip 0: atomic counter claim in piece_counters — claims N sequential
+     *                   short codes for this batch; rolls back with the transaction on failure
      *   - Round-trip 1: INSERT INTO pieces  VALUES (r1),(r2),...,(rN)
      *   - Round-trip 2: INSERT INTO piece_events VALUES (e1),(e2),...,(eN)
      *   - from_status = NULL  (piece did not exist before; column is nullable in V1)
      *   - to_status   = 'available'
-     *   - Total: 2 SQL statements regardless of N → ≤10s for 1,000 pieces
+     *   - Total: 3 SQL statements regardless of N → ≤10s for 1,000 pieces
      *
      * If any row fails (barcode UNIQUE violation, FK violation, RLS WITH CHECK)
      * the entire transaction rolls back — no partial/half-received session.
+     * Counter gaps can appear when a concurrent transaction rolls back after claiming
+     * a range but before committing. This is harmless — codes are not required to be
+     * gapless, only non-overlapping.
      *
      * @param specs       one entry per piece to create; all must share the same tenant
      * @param actorUserId the receiving user — written to actor_user_id on every event
@@ -216,22 +220,35 @@ public class InventoryLedger {
     public void batchReceive(List<ReceiveSpec> specs, UUID actorUserId) {
         if (specs.isEmpty()) return;
         int n = specs.size();
+        UUID tenantId = specs.get(0).tenantId();
+
+        // ── Round-trip 0: claim N sequential short codes atomically ──────────
+        // ON CONFLICT DO UPDATE increments by N; RETURNING gives the new last_value.
+        // Codes for this batch: [lastValue-N+1 .. lastValue].
+        Long lastValue = jdbc.queryForObject(
+            "INSERT INTO piece_counters (tenant_id, last_value) VALUES (?, ?) " +
+            "ON CONFLICT (tenant_id) DO UPDATE " +
+            "SET last_value = piece_counters.last_value + EXCLUDED.last_value " +
+            "RETURNING last_value",
+            Long.class, tenantId, (long) n);
+        long firstCode = lastValue - n + 1;
 
         // ── Round-trip 1: insert all pieces ──────────────────────────────────
         StringBuilder pieceSql = new StringBuilder(
             "INSERT INTO pieces " +
-            "(id, tenant_id, variant_id, receipt_id, barcode, status, current_location_id, last_event_at, last_user_id) " +
+            "(id, tenant_id, variant_id, receipt_id, barcode, short_code, status, current_location_id, last_event_at, last_user_id) " +
             "VALUES ");
-        List<Object> pieceParams = new ArrayList<>(n * 9);
+        List<Object> pieceParams = new ArrayList<>(n * 10);
         for (int i = 0; i < n; i++) {
             if (i > 0) pieceSql.append(',');
-            pieceSql.append("(?,?,?,?,?,'available'::piece_status,?,now(),?)");
+            pieceSql.append("(?,?,?,?,?,?,'available'::piece_status,?,now(),?)");
             ReceiveSpec s = specs.get(i);
             pieceParams.add(s.pieceId());
             pieceParams.add(s.tenantId());
             pieceParams.add(s.variantId());
             pieceParams.add(s.receiptId());
             pieceParams.add("PC-" + s.pieceId());
+            pieceParams.add("P" + String.format("%06d", firstCode + i));
             pieceParams.add(s.locationId());
             pieceParams.add(actorUserId);
         }

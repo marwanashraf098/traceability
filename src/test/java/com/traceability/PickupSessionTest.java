@@ -125,9 +125,9 @@ class PickupSessionTest {
         // Create a piece in packed status
         String pieceId = "PC-PS-" + UUID.randomUUID().toString().replace("-", "").substring(0, 20);
         jdbc.update(
-            "INSERT INTO pieces (id, tenant_id, variant_id, barcode, status) " +
-            "VALUES (?, ?, ?, ?, 'packed'::piece_status)",
-            pieceId, tenantId, variantId, "BC-" + pieceId);
+            "INSERT INTO pieces (id, tenant_id, variant_id, barcode, short_code, status) " +
+            "VALUES (?, ?, ?, ?, 'P' || LPAD((abs(hashtext(?)) % 999999 + 1)::text, 6, '0'), 'packed'::piece_status)",
+            pieceId, tenantId, variantId, "BC-" + pieceId, pieceId);
         jdbc.update(
             "INSERT INTO allocations (piece_id, order_item_id, tenant_id, status) " +
             "VALUES (?, ?, ?, 'packed'::allocation_status)",

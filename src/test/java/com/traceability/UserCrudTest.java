@@ -173,9 +173,9 @@ class UserCrudTest {
 
         // Write a piece_event attributed to this user (simulate picking)
         String pieceId = "01" + UUID.randomUUID().toString().replace("-", "").substring(0, 24);
-        jdbc.update("INSERT INTO pieces (id, tenant_id, variant_id, barcode, status) " +
-                    "VALUES (?, ?, ?, ?, 'available')",
-                    pieceId, tenantId, variantId, "BC-" + pieceId);
+        jdbc.update("INSERT INTO pieces (id, tenant_id, variant_id, barcode, short_code, status) " +
+                    "VALUES (?, ?, ?, ?, 'P' || LPAD((abs(hashtext(?)) % 999999 + 1)::text, 6, '0'), 'available')",
+                    pieceId, tenantId, variantId, "BC-" + pieceId, pieceId);
         jdbc.update("INSERT INTO piece_events (tenant_id, piece_id, event_type, actor_user_id, " +
                     "from_status, to_status, occurred_at) " +
                     "VALUES (?, ?, 'picked', ?, 'available', 'reserved', now())",

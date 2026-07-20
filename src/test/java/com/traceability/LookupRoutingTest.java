@@ -80,4 +80,27 @@ class LookupRoutingTest {
         assertThat(LookupController.isPieceQuery("01HRTZP7DAQF8D3PD1XZH1T1")).isFalse();  // 25
         assertThat(LookupController.isPieceQuery("01HRTZP7DAQF8D3PD1XZH1T17WX")).isFalse(); // 27
     }
+
+    // ── FR-19 short codes (P + 6 digits) ─────────────────────────────────────
+
+    @Test
+    void r9_short_code_P_plus_six_digits_routes_to_piece() {
+        assertThat(LookupController.isPieceQuery("P000001")).isTrue();
+        assertThat(LookupController.isPieceQuery("P999999")).isTrue();
+        assertThat(LookupController.isPieceQuery("P000000")).isTrue();
+    }
+
+    @Test
+    void r10_short_code_wrong_length_does_not_route_to_piece() {
+        assertThat(LookupController.isPieceQuery("P00001")).isFalse();   // 5 digits — too short
+        assertThat(LookupController.isPieceQuery("P0000001")).isFalse(); // 7 digits — too long
+        assertThat(LookupController.isPieceQuery("P")).isFalse();        // no digits
+    }
+
+    @Test
+    void r11_short_code_P_prefix_with_letter_does_not_match() {
+        // Position 1–6 must be digits; any letter disqualifies the short-code path.
+        assertThat(LookupController.isPieceQuery("P00000A")).isFalse();
+        assertThat(LookupController.isPieceQuery("PA00001")).isFalse();
+    }
 }

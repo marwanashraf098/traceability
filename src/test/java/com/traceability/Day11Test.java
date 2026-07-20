@@ -373,9 +373,9 @@ class Day11Test {
     private String createPiece(String status) {
         String id = UlidGenerator.generate();
         jdbc.update(
-            "INSERT INTO pieces (id, tenant_id, variant_id, barcode, status) " +
-            "VALUES (?, ?, ?, ?, ?::piece_status)",
-            id, tenantId, variantId, "PC-" + id, status);
+            "INSERT INTO pieces (id, tenant_id, variant_id, barcode, short_code, status) " +
+            "VALUES (?, ?, ?, ?, 'P' || LPAD((abs(hashtext(?)) % 999999 + 1)::text, 6, '0'), ?::piece_status)",
+            id, tenantId, variantId, "PC-" + id, id, status);
         return id;
     }
 

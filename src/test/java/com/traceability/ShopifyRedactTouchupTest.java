@@ -249,8 +249,8 @@ class ShopifyRedactTouchupTest {
             "INSERT INTO receipts (id, tenant_id, location_id, reference) " +
             "VALUES (?, ?, ?, 'REF-REDACT')", receiptId, tenantId, locationId);
         jdbc.update(
-            "INSERT INTO pieces (id, tenant_id, variant_id, barcode, status) VALUES (?, ?, ?, ?, 'available')",
-            pieceId, tenantId, variantId, "BAR-REDACT-001");
+            "INSERT INTO pieces (id, tenant_id, variant_id, barcode, short_code, status) VALUES (?, ?, ?, ?, 'P' || LPAD((abs(hashtext(?)) % 999999 + 1)::text, 6, '0'), 'available')",
+            pieceId, tenantId, variantId, "BAR-REDACT-001", pieceId);
         jdbc.update(
             "INSERT INTO piece_events (piece_id, tenant_id, from_status, to_status, event_type, " +
             "actor_user_id, location_id) VALUES (?, ?, NULL, 'available', 'received', NULL, ?)",

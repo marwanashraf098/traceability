@@ -503,9 +503,9 @@ class ReturnSessionTest {
         String id = UlidGenerator.generate();
         jdbc.update(
             "INSERT INTO pieces " +
-            "(id, tenant_id, variant_id, barcode, status, current_order_id, last_event_at) " +
-            "VALUES (?, ?, ?, ?, ?::piece_status, ?, now())",
-            id, tenantId, variantId, "PC-" + id, status, orderId);
+            "(id, tenant_id, variant_id, barcode, short_code, status, current_order_id, last_event_at) " +
+            "VALUES (?, ?, ?, ?, 'P' || LPAD((abs(hashtext(?)) % 999999 + 1)::text, 6, '0'), ?::piece_status, ?, now())",
+            id, tenantId, variantId, "PC-" + id, id, status, orderId);
         return id;
     }
 

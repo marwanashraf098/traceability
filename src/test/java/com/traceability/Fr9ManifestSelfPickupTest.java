@@ -463,9 +463,9 @@ class Fr9ManifestSelfPickupTest {
     private String piece(UUID orderId) {
         String pieceId = "01" + UUID.randomUUID().toString().replace("-", "").substring(0, 24);
         jdbc.update(
-            "INSERT INTO pieces (id, tenant_id, variant_id, barcode, status, current_order_id) " +
-            "VALUES (?, ?, ?, ?, 'packed'::piece_status, ?)",
-            pieceId, tenantId, variantId, "BC-" + pieceId, orderId);
+            "INSERT INTO pieces (id, tenant_id, variant_id, barcode, short_code, status, current_order_id) " +
+            "VALUES (?, ?, ?, ?, 'P' || LPAD((abs(hashtext(?)) % 999999 + 1)::text, 6, '0'), 'packed'::piece_status, ?)",
+            pieceId, tenantId, variantId, "BC-" + pieceId, pieceId, orderId);
         return pieceId;
     }
 

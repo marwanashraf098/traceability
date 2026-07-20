@@ -202,8 +202,8 @@ class Day7Test {
         // Create piece + allocation
         String pieceId = "01TEST" + UUID.randomUUID().toString().replace("-","").substring(0,14);
         jdbc.update(
-            "INSERT INTO pieces (id, tenant_id, variant_id, barcode, status) VALUES (?, ?, ?, ?, 'reserved'::piece_status)",
-            pieceId, tenantAId, variantId, "PC-" + pieceId);
+            "INSERT INTO pieces (id, tenant_id, variant_id, barcode, short_code, status) VALUES (?, ?, ?, ?, 'P' || LPAD((abs(hashtext(?)) % 999999 + 1)::text, 6, '0'), 'reserved'::piece_status)",
+            pieceId, tenantAId, variantId, "PC-" + pieceId, pieceId);
         UUID allocId = UUID.randomUUID();
         jdbc.update(
             "INSERT INTO allocations (id, tenant_id, order_item_id, piece_id, status) VALUES (?, ?, ?, ?, 'active'::allocation_status)",
@@ -334,8 +334,8 @@ class Day7Test {
     private void insertPiece(UUID variantId, String status) {
         String id = "PC" + UUID.randomUUID().toString().replace("-", "").substring(0, 18);
         jdbc.update(
-            "INSERT INTO pieces (id, tenant_id, variant_id, barcode, status) VALUES (?, ?, ?, ?, ?::piece_status)",
-            id, tenantAId, variantId, "PC-" + id, status);
+            "INSERT INTO pieces (id, tenant_id, variant_id, barcode, short_code, status) VALUES (?, ?, ?, ?, 'P' || LPAD((abs(hashtext(?)) % 999999 + 1)::text, 6, '0'), ?::piece_status)",
+            id, tenantAId, variantId, "PC-" + id, id, status);
     }
 
     private long getOrdersTotal(String token) {

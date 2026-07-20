@@ -314,9 +314,9 @@ class Day12Test {
     private String createPiece(String status, UUID orderId) {
         String id = com.traceability.inventory.UlidGenerator.generate();
         jdbc.update(
-            "INSERT INTO pieces (id, tenant_id, variant_id, barcode, status, current_order_id) " +
-            "VALUES (?, ?, ?, ?, ?::piece_status, ?)",
-            id, tenantId, variantId, "PC-" + id, status, orderId);
+            "INSERT INTO pieces (id, tenant_id, variant_id, barcode, short_code, status, current_order_id) " +
+            "VALUES (?, ?, ?, ?, 'P' || LPAD((abs(hashtext(?)) % 999999 + 1)::text, 6, '0'), ?::piece_status, ?)",
+            id, tenantId, variantId, "PC-" + id, id, status, orderId);
         return id;
     }
 

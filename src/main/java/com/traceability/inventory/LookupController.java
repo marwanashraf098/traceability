@@ -33,16 +33,24 @@ public class LookupController {
     /**
      * Returns true when the scanned string is a piece barcode rather than an AWB or order number.
      *
-     * Two formats are recognised:
-     *   • Legacy:  "PC-<ULID>" — the PC- prefix written by old label batches still in the field.
-     *   • Current: bare 26-char Crockford base-32 ULID — encoded by labels after the barcode fix.
+     * Three formats are recognised:
+     *   • Short code: "P" + exactly 6 digits (e.g. "P000001") — FR-19 labels, 0.333mm/module.
+     *   • Legacy PC-: "PC-<ULID>" — old label batches still in field use.
+     *   • Bare ULID:  26-char Crockford base-32 string — labels after the MARGIN=0 fix, pre-FR-19.
      *
-     * Bosta AWBs are pure digits (≤13 chars); order numbers are short numeric strings.
-     * Neither can collide with a 26-char Crockford string, so the length+alphabet check is
-     * unambiguous without touching the database.
+     * Bosta AWBs are pure digits or hub-prefixed strings with dashes (e.g. "D-07-2944282510").
+     * Neither can collide with any of the three piece formats above — the routing table is clean.
      */
     public static boolean isPieceQuery(String q) {
         if (q.startsWith("PC-")) return true;
+        // Short code: exactly "P" followed by 6 digits (length 7)
+        if (q.length() == 7 && q.charAt(0) == 'P') {
+            boolean allDigits = true;
+            for (int i = 1; i < 7; i++) {
+                if (q.charAt(i) < '0' || q.charAt(i) > '9') { allDigits = false; break; }
+            }
+            if (allDigits) return true;
+        }
         if (q.length() != 26) return false;
         for (int i = 0; i < 26; i++) {
             char c = q.charAt(i);
