@@ -190,13 +190,18 @@ public class LabelService {
                            float wPt, float hPt) throws IOException {
 
         // ── Barcode image ────────────────────────────────────────────────────
-        BufferedImage barcodeImg = renderBarcode(barcode, wPt, hPt);
-        PDImageXObject barcodeXObj = PDImageXObject.createFromByteArray(
-            doc, toPngBytes(barcodeImg), "barcode");
-
+        // Compute draw dimensions first so renderBarcode gets the exact target width —
+        // the bitmap pixel count must match the drawn pt width at DPI, not the full label.
         float barcodeW = wPt - 2 * MARGIN;
         float barcodeH = BARCODE_H_MM * MM_TO_PT;
         float barcodeY = hPt - MARGIN - barcodeH;
+
+        // Encode the ULID (piece.id, 26 chars) not the PC-prefixed barcode (29 chars).
+        // 26 chars → 341 total modules at MARGIN=10 → fits cleanly in the 44mm draw width.
+        // The human-readable text below still shows the full barcode value.
+        BufferedImage barcodeImg = renderBarcode(pieceId, barcodeW, barcodeH);
+        PDImageXObject barcodeXObj = PDImageXObject.createFromByteArray(
+            doc, toPngBytes(barcodeImg), "barcode");
 
         cs.drawImage(barcodeXObj, MARGIN, barcodeY, barcodeW, barcodeH);
 
@@ -297,11 +302,14 @@ public class LabelService {
 
     // ── Barcode rendering ─────────────────────────────────────────────────────
 
-    private BufferedImage renderBarcode(String content, float wPt, float hPt) {
-        int pixelW = Math.round(wPt * DPI / 72f);
-        int pixelH = Math.round(BARCODE_H_MM * MM_TO_PT * DPI / 72f);
+    private BufferedImage renderBarcode(String content, float drawWidthPt, float drawHeightPt) {
+        // Generate bitmap at the exact draw-area size so PDFBox draws it 1:1 (no scale).
+        int pixelW = Math.round(drawWidthPt  * DPI / 72f);
+        int pixelH = Math.round(drawHeightPt * DPI / 72f);
         EnumMap<EncodeHintType, Object> hints = new EnumMap<>(EncodeHintType.class);
-        hints.put(EncodeHintType.MARGIN, 0);
+        // 10 quiet-zone modules each side — ISO/IEC 15417 minimum; without this scanners
+        // cannot locate the start/stop guard bars and the symbol is undecodable.
+        hints.put(EncodeHintType.MARGIN, 10);
         BitMatrix matrix = new Code128Writer().encode(content, BarcodeFormat.CODE_128,
             pixelW, pixelH, hints);
         return MatrixToImageWriter.toBufferedImage(matrix);

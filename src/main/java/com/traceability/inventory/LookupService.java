@@ -74,8 +74,8 @@ public class LookupService {
                 "LEFT JOIN shipments s   ON s.order_id = o.id AND s.shipment_leg = 'forward' " +
                 "LEFT JOIN receipts r    ON r.id = p.receipt_id " +
                 "LEFT JOIN locations rloc ON rloc.id = r.location_id " +
-                "WHERE p.barcode = ? AND p.tenant_id = ?",
-                barcode, tenantId);
+                "WHERE (p.barcode = ? OR p.id = ?) AND p.tenant_id = ?",
+                barcode, barcode, tenantId);
         } catch (EmptyResultDataAccessException e) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Piece not found");
         }

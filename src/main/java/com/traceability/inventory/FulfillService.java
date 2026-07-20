@@ -146,11 +146,13 @@ public class FulfillService {
     public ScanResult scan(UUID orderId, String barcode, UUID actorUserId) {
         UUID tenantId = TenantContext.require();
 
-        // 1. Look up piece by barcode
+        // 1. Look up piece by barcode — accept both:
+        //    • new label format: scanner returns the raw ULID (matches p.id)
+        //    • old label format: scanner returns "PC-<ULID>" (matches p.barcode)
         List<Map<String, Object>> pieceRows = jdbc.queryForList(
             "SELECT p.id, p.variant_id, p.status FROM pieces p " +
-            "WHERE p.barcode = ? AND p.tenant_id = ?",
-            barcode, tenantId);
+            "WHERE (p.barcode = ? OR p.id = ?) AND p.tenant_id = ?",
+            barcode, barcode, tenantId);
         if (pieceRows.isEmpty()) {
             return ScanResult.rejected("PIECE_NOT_FOUND", "Barcode not found in inventory");
         }

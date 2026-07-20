@@ -4,6 +4,17 @@
 
 ## Current state
 
+**650 backend tests green (expected)** — 2026-07-21 (label barcode fix + search-box routing fix + 9 new tests).
+
+**LABEL BARCODE BUG — FIXED.** Piece barcodes were unscannable on both handheld and phone:
+- **Bug #1 (root cause):** `EncodeHintType.MARGIN = 0` — zero quiet-zone modules. Code 128 requires ≥10 modules of white space each side of the bars so scanners can locate START/STOP patterns. Without it, 100% decode failure regardless of scanner quality.
+- **Bug #2:** bitmap generated at full label width (400px, 50mm) but drawn at 44mm — 0.88× scale mismatch.
+- **Bug #3:** encoding 29-char `PC-`+ULID string produces 374 total modules for a 352px draw area; ZXing overflows, bars get compressed below 0.191mm GS1 minimum.
+- **Fix:** `MARGIN=10`; bitmap sized to draw area (`barcodeW = label - 2×margin`); encode the 26-char ULID (pieceId) not the 29-char barcode → 341 modules fit cleanly in 352px at 0.129mm/module.
+- **Scan backward-compat:** all 3 lookup sites (`FulfillService`, `LookupService`, `ReturnService`) now accept `(barcode = ? OR id = ?)` — old labels (PC-ULID) and new labels (bare ULID) both resolve.
+- **Tests:** lb1 (pure unit: ZXing encode→decode, locks MARGIN=10 and quiet-zone pixel assertions) + lb2 (Day8Test: full PDF→PDFRenderer rasterize→ZXing decode, catches any regression).
+- **Search-box routing bug (also fixed):** `LookupController` branched on `startsWith("PC-")` to decide piece vs AWB. Bare ULID scans failed this check and fell through to `lookupTracking()` → 404. Fixed: `isPieceQuery()` accepts both `PC-<ULID>` (old labels) and bare 26-char Crockford ULID (new labels). Bosta AWBs are pure digits ≤13 chars — no character-set collision. 8 routing unit tests (r1–r8) covering both formats, excluded Crockford chars (I/L/O/U), wrong lengths, AWB formats, hub-prefixed AWBs.
+
 **639 backend tests green (expected)** — 2026-07-20 (V54 — FR-18 connection-anchored ingest cutoff). Deploy with `--no-cache`. Deploy to Hetzner: `ssh <user>@167.233.46.223 "cd /opt/traced && git pull && docker compose -f deploy/docker-compose.yml build --no-cache && docker compose -f deploy/docker-compose.yml up -d"`.
 
 **FR-18 — Connection-anchored order ingest cutoff — COMPLETE.**
@@ -20,6 +31,13 @@
 - Every future store will have a non-null cutoff. This is intentional and correct — not a bug.
 - Do not backfill Jumi's cutoff (would hide existing data). Do not "fix" the NULL.
 - If a Jumi order/create webhook arrives for a historical order (unlikely), it will be ingested.
+
+**⚠ DEFERRED — Shopify `created_at:>` filter is DATE-granular, not timestamp-granular:**
+- Passing `2026-07-20T13:32:20Z` to Shopify's GraphQL filter behaves as `2026-07-20` (day boundary only).
+- This is what caused the production incident: order placed 100s before the cutoff on the same calendar day passed Shopify's filter and was returned in the API response.
+- The Java-side check in `importOrders()` loop and `ingestMissingOrder()` is the actual enforcement guarantee — the API filter is a bandwidth optimisation only.
+- Applies to reconcile too: `now()-30min` as `createdAfter` actually fetches the entire calendar day from Shopify; pre-cutoff orders are discarded in Java. Correct but wasteful on a rate-limited API.
+- Revisit if reconcile volume grows — options: switch to `updated_at:>` filter (timestamp-precise on Shopify) or use REST `updated_at_min` parameter which also has timestamp precision.
 
 **634 backend tests green** — 2026-07-19 (V53 — AWB normalization + FR-7.4 hold/unhold + FR-7.5 COD editing).
 

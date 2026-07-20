@@ -54,9 +54,9 @@ public class ReturnService {
             "JOIN products pr  ON pr.id = v.product_id " +
             "LEFT JOIN orders o     ON o.id  = p.current_order_id " +
             "LEFT JOIN shipments s  ON s.order_id = o.id AND s.shipment_leg = 'forward' " +
-            "WHERE p.barcode = ? AND p.tenant_id = ?",
+            "WHERE (p.barcode = ? OR p.id = ?) AND p.tenant_id = ?",
             rs -> rs.next() ? mapRow(rs) : null,
-            barcode, tenantId);
+            barcode, barcode, tenantId);
 
         if (row == null) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Piece not found: " + barcode);

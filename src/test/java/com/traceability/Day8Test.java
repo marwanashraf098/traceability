@@ -432,6 +432,50 @@ class Day8Test {
         assertThat(shaped.length()).isEqualTo(arabic.length());
     }
 
+    // ── (k) Full PDF round-trip: encode → render → rasterize → decode ────────
+
+    @Test
+    void k_label_barcode_survives_pdf_render_rasterize_decode() throws Exception {
+        // Exercises the complete label pipeline: LabelService generates PDF, PDFBox
+        // rasterizes a page, ZXing decodes the barcode image.  Fails if MARGIN, pixelW,
+        // or the encoded content regresses in a way that makes the symbol undecodable.
+        UUID sessionId = receivingSvc.createSession(actorId, locationAId, "LB2", null, null);
+        receivingSvc.addLine(sessionId, variantAId, 1);
+        receivingSvc.finalize(sessionId, actorId);
+
+        // Retrieve the piece's ULID — this is what must be encoded in the barcode image.
+        String pieceId = jdbc.queryForObject(
+            "SELECT id FROM pieces WHERE receipt_id = ? LIMIT 1",
+            String.class, sessionId);
+        assertThat(pieceId).isNotNull();
+
+        byte[] pdf = labelSvc.generateSessionLabels(sessionId, null, null);
+        assertThat(new String(pdf, 0, 4)).isEqualTo("%PDF");
+
+        // Rasterize page 0 at 300 DPI via PDFBox.
+        var readBuf = org.apache.pdfbox.io.RandomAccessReadBuffer.createBufferFromStream(
+            new java.io.ByteArrayInputStream(pdf));
+        java.awt.image.BufferedImage page;
+        try (org.apache.pdfbox.pdmodel.PDDocument doc =
+                 org.apache.pdfbox.Loader.loadPDF(readBuf)) {
+            page = new org.apache.pdfbox.rendering.PDFRenderer(doc)
+                       .renderImageWithDPI(0, 300);
+        }
+
+        // Decode via ZXing — MultiFormatReader scans the entire rasterized page.
+        var luminance = new com.google.zxing.client.j2se.BufferedImageLuminanceSource(page);
+        var bitmap    = new com.google.zxing.BinaryBitmap(
+                            new com.google.zxing.common.HybridBinarizer(luminance));
+        com.google.zxing.Result decoded = new com.google.zxing.MultiFormatReader().decode(bitmap);
+
+        assertThat(decoded.getText())
+            .as("barcode decoded from rasterized PDF page must equal the piece ULID")
+            .isEqualTo(pieceId);
+        assertThat(decoded.getBarcodeFormat())
+            .as("format must be CODE_128")
+            .isEqualTo(com.google.zxing.BarcodeFormat.CODE_128);
+    }
+
     // ── Helpers ───────────────────────────────────────────────────────────────
 
     private int countPieces(UUID sessionId) {
