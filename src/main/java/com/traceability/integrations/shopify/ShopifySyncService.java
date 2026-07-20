@@ -18,7 +18,9 @@ import org.springframework.web.server.ResponseStatusException;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
+import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Orchestrates Shopify store connect, catalog import (products + variants),
@@ -46,8 +48,8 @@ public class ShopifySyncService {
     // a real 1-hour expiry + rotating refresh token.
     private static final String UPSERT_STORE = """
             INSERT INTO stores (tenant_id, shop_domain, platform, access_token_encrypted,
-                                access_token_expires_at, status, import_status)
-            VALUES (?, ?, 'shopify', ?, now() + interval '876000 hours', 'connected', 'pending')
+                                access_token_expires_at, status, import_status, orders_ingest_from)
+            VALUES (?, ?, 'shopify', ?, now() + interval '876000 hours', 'connected', 'pending', now())
             ON CONFLICT (shop_domain) DO UPDATE SET
                 access_token_encrypted  = EXCLUDED.access_token_encrypted,
                 access_token_expires_at = EXCLUDED.access_token_expires_at,
@@ -62,9 +64,9 @@ public class ShopifySyncService {
     private static final String UPSERT_STORE_CUSTOM_APP = """
             INSERT INTO stores (tenant_id, shop_domain, platform, access_token_encrypted,
                                 access_token_expires_at, status, import_status,
-                                connection_type, api_secret_encrypted)
+                                connection_type, api_secret_encrypted, orders_ingest_from)
             VALUES (?, ?, 'shopify', ?, now() + interval '876000 hours', 'connected', 'pending',
-                    'custom_app', ?)
+                    'custom_app', ?, now())
             ON CONFLICT (shop_domain) DO UPDATE SET
                 access_token_encrypted  = EXCLUDED.access_token_encrypted,
                 access_token_expires_at = EXCLUDED.access_token_expires_at,
@@ -84,9 +86,10 @@ public class ShopifySyncService {
             INSERT INTO stores (tenant_id, shop_domain, platform, access_token_encrypted,
                                 access_token_expires_at, status, import_status,
                                 connection_type, api_secret_encrypted, client_id_encrypted,
-                                refresh_token_encrypted, refresh_token_expires_at)
+                                refresh_token_encrypted, refresh_token_expires_at,
+                                orders_ingest_from)
             VALUES (?, ?, 'shopify', ?, ?, 'connected', 'pending',
-                    'custom_app_cc', ?, ?, NULL, NULL)
+                    'custom_app_cc', ?, ?, NULL, NULL, now())
             ON CONFLICT (shop_domain) DO UPDATE SET
                 access_token_encrypted   = EXCLUDED.access_token_encrypted,
                 access_token_expires_at  = EXCLUDED.access_token_expires_at,
@@ -172,6 +175,13 @@ public class ShopifySyncService {
     private static final String UPDATE_STORE_SYNC =
             "UPDATE stores SET last_sync_at = now() WHERE id = ?";
 
+    private static final String LOAD_CUTOFF =
+            "SELECT orders_ingest_from FROM stores WHERE id = ?";
+
+    // Exists check used by the webhook cutoff guard to distinguish new vs. already-ingested orders.
+    private static final String ORDER_EXISTS_BY_STORE =
+            "SELECT EXISTS(SELECT 1 FROM orders WHERE tenant_id = ? AND store_id = ? AND external_id = ?)";
+
     // ---- constructor ----------------------------------------------------
 
     private final JdbcTemplate jdbc;
@@ -181,6 +191,10 @@ public class ShopifySyncService {
     private final TransactionTemplate tx;
     private final BlocklistService blocklist;
     private final int importLookbackDays;
+
+    // FR-18: per-store connection cutoff cache. orders_ingest_from is set once at first connect
+    // and never mutated — no invalidation needed. Optional.empty() = NULL = no cutoff (Jumi).
+    private final ConcurrentHashMap<UUID, Optional<Instant>> cutoffCache = new ConcurrentHashMap<>();
 
     public ShopifySyncService(JdbcTemplate jdbc,
                                ShopifyGateway shopifyGateway,
@@ -303,15 +317,26 @@ public class ShopifySyncService {
      * Ingests an order from the GraphQL import format (ShopifyGateway.Order) without
      * a prior existence check. Called by ShopifyReconcileJob after the job confirms the
      * order is absent locally — reuses the exact same SQL path as the initial full import.
+     *
+     * FR-18 safety net: the reconcile job already filters createdAfter = max(30min, cutoff),
+     * so pre-cutoff orders should never arrive here. This check is belt-and-suspenders.
      */
     public void ingestMissingOrder(UUID storeId, UUID tenantId, ShopifyGateway.Order order) {
+        Optional<Instant> cutoff = loadCutoff(storeId);
+        if (cutoff.isPresent() && order.createdAt().isBefore(cutoff.get())) {
+            log.debug("ingestMissing: skipping pre-connection order {} (placed_at={}) for store {}",
+                order.name(), order.createdAt(), storeId);
+            return;
+        }
         upsertOrder(storeId, tenantId, order);
     }
 
     /** Runs catalog + order import for an already-connected store. Called by ShopifyImportJob. */
     public ImportResult runImport(UUID storeId, UUID tenantId, String shopDomain, String rawToken) {
         int[] catalogCounts = importCatalog(storeId, tenantId, shopDomain, rawToken);
-        int[] orderCounts   = importOrders(storeId, tenantId, shopDomain, rawToken, importLookbackDays);
+        // FR-18: load the connection cutoff once and use it as a floor for createdAfter.
+        Optional<Instant> cutoff = loadCutoff(storeId);
+        int[] orderCounts   = importOrders(storeId, tenantId, shopDomain, rawToken, importLookbackDays, cutoff);
         tx.execute(s -> { jdbc.update(UPDATE_STORE_SYNC, storeId); return null; });
         return new ImportResult(catalogCounts[0], catalogCounts[1], orderCounts[0], orderCounts[1]);
     }
@@ -340,6 +365,25 @@ public class ShopifySyncService {
         if (gid == null || gid.isBlank()) {
             log.warn("orders webhook missing admin_graphql_api_id, store={}", storeId);
             return;
+        }
+
+        // FR-18: skip orders placed before the connection cutoff.
+        // Exception: if the order already exists in DB (prior ingest), allow updates through.
+        Optional<Instant> cutoff = loadCutoff(storeId);
+        if (cutoff.isPresent()) {
+            Instant placedAt = null;
+            try { placedAt = Instant.parse(payload.path("created_at").asText()); }
+            catch (Exception ignored) {}
+            if (placedAt != null && placedAt.isBefore(cutoff.get())) {
+                final String fGid = gid;
+                Boolean exists = tx.execute(s ->
+                    jdbc.queryForObject(ORDER_EXISTS_BY_STORE, Boolean.class, tenantId, storeId, fGid));
+                if (!Boolean.TRUE.equals(exists)) {
+                    log.info("Skipping pre-connection order {} (placed_at={}) for store {} — before cutoff {}",
+                        payload.path("name").asText("#?"), placedAt, storeId, cutoff.get());
+                    return;
+                }
+            }
         }
 
         String name = payload.path("name").asText("#?");
@@ -484,8 +528,13 @@ public class ShopifySyncService {
 
     // ---- order import ---------------------------------------------------
 
-    private int[] importOrders(UUID storeId, UUID tenantId, String shopDomain, String rawToken, int daysBack) {
-        String createdAfter = Instant.now().minus(daysBack, ChronoUnit.DAYS).toString();
+    private int[] importOrders(UUID storeId, UUID tenantId, String shopDomain, String rawToken,
+                                int daysBack, Optional<Instant> cutoff) {
+        // FR-18: effective floor is the later of the rolling lookback and the connection cutoff.
+        Instant rollingFloor = Instant.now().minus(daysBack, ChronoUnit.DAYS);
+        Instant effectiveFloor = cutoff.map(c -> c.isAfter(rollingFloor) ? c : rollingFloor)
+                                       .orElse(rollingFloor);
+        String createdAfter = effectiveFloor.toString();
         int orders = 0, flagged = 0;
         String cursor = null;
         do {
@@ -545,6 +594,23 @@ public class ShopifySyncService {
     }
 
     // ---- helpers --------------------------------------------------------
+
+    /**
+     * FR-18: Loads the connection cutoff for a store, with in-process caching.
+     * orders_ingest_from is set once at first connect and never mutated, so caching
+     * indefinitely is correct — no invalidation path exists.
+     * Returns Optional.empty() for stores with NULL cutoff (e.g. Jumi): callers must
+     * treat empty as "no cutoff" and skip the check entirely, not use a sentinel value.
+     */
+    public Optional<Instant> loadCutoff(UUID storeId) {
+        return cutoffCache.computeIfAbsent(storeId, id ->
+            tx.execute(s ->
+                jdbc.query(LOAD_CUTOFF, rs -> {
+                    if (!rs.next()) return Optional.<Instant>empty();
+                    java.sql.Timestamp ts = rs.getTimestamp("orders_ingest_from");
+                    return ts != null ? Optional.of(ts.toInstant()) : Optional.<Instant>empty();
+                }, id)));
+    }
 
     /**
      * COD detection mapping (documented per requirements):

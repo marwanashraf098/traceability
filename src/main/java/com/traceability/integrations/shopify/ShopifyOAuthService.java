@@ -47,9 +47,9 @@ public class ShopifyOAuthService {
             INSERT INTO stores (tenant_id, shop_domain, platform,
                                 access_token_encrypted, access_token_expires_at,
                                 refresh_token_encrypted, refresh_token_expires_at,
-                                access_token_scopes,
+                                access_token_scopes, orders_ingest_from,
                                 status, import_status)
-            VALUES (?, ?, 'shopify', ?, ?, ?, ?, ?, 'connected', 'pending')
+            VALUES (?, ?, 'shopify', ?, ?, ?, ?, ?, now(), 'connected', 'pending')
             RETURNING id
             """;
 

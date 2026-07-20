@@ -94,7 +94,13 @@ public class ShopifyReconcileJob {
         TenantContext.set(tenantId);
         try {
             String rawToken    = tokenProvider.getValidToken(storeId);
-            String createdAfter = Instant.now().minus(LOOKBACK_MINUTES, ChronoUnit.MINUTES).toString();
+            // FR-18: effective floor = max(30-min rolling window, connection cutoff).
+            // For stores with NULL cutoff (Jumi), loadCutoff() returns empty and rollingFloor wins.
+            Instant rollingFloor = Instant.now().minus(LOOKBACK_MINUTES, ChronoUnit.MINUTES);
+            Instant effectiveFloor = syncService.loadCutoff(storeId)
+                    .map(c -> c.isAfter(rollingFloor) ? c : rollingFloor)
+                    .orElse(rollingFloor);
+            String createdAfter = effectiveFloor.toString();
             String cursor = null;
             int ingested = 0;
             do {

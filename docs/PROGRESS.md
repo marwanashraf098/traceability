@@ -4,7 +4,38 @@
 
 ## Current state
 
-**634 backend tests green** — 2026-07-18 (V53 — AWB scan normalization complete). Deploy to Hetzner: `ssh <user>@167.233.46.223 "cd /opt/traced && git pull && docker compose -f deploy/docker-compose.yml build --no-cache && docker compose -f deploy/docker-compose.yml up -d"`.
+**639 backend tests green (expected)** — 2026-07-20 (V54 — FR-18 connection-anchored ingest cutoff). Deploy with `--no-cache`. Deploy to Hetzner: `ssh <user>@167.233.46.223 "cd /opt/traced && git pull && docker compose -f deploy/docker-compose.yml build --no-cache && docker compose -f deploy/docker-compose.yml up -d"`.
+
+**FR-18 — Connection-anchored order ingest cutoff — COMPLETE.**
+- `stores.orders_ingest_from TIMESTAMPTZ DEFAULT NULL` (V54). Set once at first connect via INSERT; never written in DO UPDATE / UPDATE_STORE_TOKEN reconnect branches. NULL = no cutoff (Jumi + all pre-FR-18 stores).
+- All 5 ingest paths covered: (1) ShopifyImportJob → `max(now()-30d, cutoff)` as Shopify API `createdAfter`; (2) manual `/sync` endpoint (same job); (3) `orders/create` webhook; (4) `orders/updated` webhook; (5) ShopifyReconcileJob → same max() pattern. Paths 3+4 check via `ShopifySyncService.ingestOrderWebhook()` — if `placed_at < cutoff` and order not yet in DB → log INFO + skip. Existing DB orders always receive updates.
+- Cache: `cutoffCache ConcurrentHashMap<UUID, Optional<Instant>>` in `ShopifySyncService` — loaded once per store per JVM lifetime (value is immutable after connect).
+- `Optional<Instant>` — never a sentinel. Empty = no cutoff, explicit branch, safe.
+- Merchant banner (todo frontend): "From now on, every new order will be tracked in Traced." EN+AR in Connections.tsx after connect success.
+- 5 new tests (ic1–ic5): reconnect preserves cutoff; pre-cutoff skipped; post-cutoff ingested; existing order updated; NULL cutoff ingests all.
+
+**⚠ PERMANENT DIVERGENCE — Jumi (mmi24e-fx) has `orders_ingest_from = NULL`:**
+- Jumi connected 2026-07-02, before FR-18. Their ~50 existing orders are fully preserved.
+- NULL means no cutoff forever. Jumi will always ingest all orders regardless of age.
+- Every future store will have a non-null cutoff. This is intentional and correct — not a bug.
+- Do not backfill Jumi's cutoff (would hide existing data). Do not "fix" the NULL.
+- If a Jumi order/create webhook arrives for a historical order (unlikely), it will be ingested.
+
+**634 backend tests green** — 2026-07-19 (V53 — AWB normalization + FR-7.4 hold/unhold + FR-7.5 COD editing).
+
+**FR-7.4 Hold/Unhold with reason — COMPLETE (commit 936cf4a).**
+- `POST /api/v1/fulfill/{id}/hold` — sets `on_hold=true`, requires `reason` string (400 if blank), 409 if already held, `hold_reason` column written.
+- `POST /api/v1/fulfill/{id}/release-hold` — existed for FR-7.8a (blocked-customer); now also serves manual FR-7.4 release.
+- Fulfill queue already excluded `on_hold=true` orders (gate was in place). No schema change needed.
+- Frontend: Hold/Unhold button on OrderDetail status card; Modal with reason text input for hold; unhold is one-click. Localized en+ar.
+
+**FR-7.5 COD editable until packing — COMPLETE (commit 936cf4a).**
+- `PATCH /api/v1/fulfill/{id}/cod` — updates `cod_amount` when status IN ('new','ready_to_pick'). Frozen (409) at ≥ packed. 0 or negative → 400. > 30,000 → 400. Audit-logged.
+- Frontend: COD row in OrderDetail shows pencil icon when editable; inline input with Save/Cancel; frozen label when status ≥ packed. Localized en+ar.
+
+**Gotcha (coding):** `AuditService.record()` 5th param is `Map<String, Object>`, NOT a plain `String`. Passing a bare string causes compilation failure. Always use `Map.of("key", value)`.
+
+**Bug fixed:** `releaseOrderHold` in `frontend/src/api.ts` was hitting `/api/v1/orders/{id}/release-hold` (→ 404). Correct path is `/api/v1/fulfill/{id}/release-hold`. `blocklist.test.tsx` fixture URL updated accordingly.
 
 **AWB scan normalization (V53) — COMPLETE.** Four-part implementation:
 1. `TrackingNumberNormalizer` — strips zero-width chars, trims, takes substring after last `-` if present, requires `^[0-9]+$`. 22 unit tests in `TrackingNumberNormalizationTest`.
