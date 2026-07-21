@@ -125,6 +125,7 @@ public class ReturnService {
 
     // ── List pending inspection (FR-12.3 queue) ───────────────────────────────
 
+    @Transactional(readOnly = true)
     public List<Map<String, Object>> listPending(int page, int size) {
         UUID tenantId = TenantContext.require();
         return jdbc.queryForList(
@@ -208,6 +209,7 @@ public class ReturnService {
 
     // ── Never-received report (FR-12.4) ──────────────────────────────────────
 
+    @Transactional(readOnly = true)
     public List<Map<String, Object>> neverReceived(int windowDays) {
         UUID tenantId = TenantContext.require();
 

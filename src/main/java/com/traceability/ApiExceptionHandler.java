@@ -6,6 +6,7 @@ import com.traceability.integrations.shopify.ShopifySessionTokenExchangeExceptio
 import com.traceability.integrations.shopify.ShopifyStoreNeedsReauthException;
 import com.traceability.integrations.shopify.ShopifyTransientException;
 import com.traceability.inventory.AwbMismatchException;
+import com.traceability.inventory.LookupNotFoundException;
 import com.traceability.inventory.PieceCommittedException;
 import jakarta.servlet.http.HttpServletRequest;
 import org.slf4j.Logger;
@@ -122,6 +123,16 @@ public class ApiExceptionHandler {
     @ExceptionHandler(MissingRequestHeaderException.class)
     ResponseEntity<Void> handleMissingHeader(MissingRequestHeaderException ex) {
         return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
+    }
+
+    record LookupNotFoundBody(String code, String query) {}
+
+    // Distinguishes genuine lookup misses (PIECE_NOT_FOUND, TRACKING_NOT_FOUND) from
+    // DATABASE_ERROR 500s so worker apps can tell the user to re-scan vs. call support.
+    @ExceptionHandler(LookupNotFoundException.class)
+    ResponseEntity<LookupNotFoundBody> handleLookupNotFound(LookupNotFoundException ex) {
+        return ResponseEntity.status(HttpStatus.NOT_FOUND)
+            .body(new LookupNotFoundBody(ex.getCode(), ex.getQuery()));
     }
 
     @ExceptionHandler(ResponseStatusException.class)

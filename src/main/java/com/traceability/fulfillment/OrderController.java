@@ -6,6 +6,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.server.ResponseStatusException;
@@ -81,6 +82,7 @@ public class OrderController {
 
     @GetMapping("/daily-counts")
     @PreAuthorize("hasAnyRole('OWNER', 'MANAGER')")
+    @Transactional(readOnly = true)
     public List<DayCount> dailyCounts(@RequestParam(defaultValue = "30") int days) {
         days = Math.max(7, Math.min(days, 90));
         String from = LocalDate.now().minusDays(days - 1).toString();

@@ -378,6 +378,7 @@ public class ShipmentLinkService {
 
     // ── List unlinked ─────────────────────────────────────────────────────────
 
+    @Transactional(readOnly = true)
     public List<Map<String, Object>> listUnlinked(int page, int size) {
         UUID tenantId = TenantContext.require();
         return jdbc.queryForList(

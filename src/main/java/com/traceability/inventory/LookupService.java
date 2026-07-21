@@ -2,10 +2,9 @@ package com.traceability.inventory;
 
 import com.traceability.tenancy.TenantContext;
 import org.springframework.dao.EmptyResultDataAccessException;
-import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
-import org.springframework.web.server.ResponseStatusException;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.util.*;
 
@@ -51,6 +50,7 @@ public class LookupService {
 
     // ── Piece lookup ──────────────────────────────────────────────────────────
 
+    @Transactional(readOnly = true)
     public Map<String, Object> lookupPiece(String barcode, boolean isWorker) {
         UUID tenantId = TenantContext.require();
 
@@ -77,7 +77,7 @@ public class LookupService {
                 "WHERE (p.barcode = ? OR p.id = ? OR p.short_code = ?) AND p.tenant_id = ?",
                 barcode, barcode, barcode, tenantId);
         } catch (EmptyResultDataAccessException e) {
-            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Piece not found");
+            throw new LookupNotFoundException("PIECE_NOT_FOUND", barcode);
         }
 
         // 2. Timeline — all events newest-first, with actor name, order number, tracking.
@@ -181,6 +181,7 @@ public class LookupService {
 
     // ── Tracking lookup ───────────────────────────────────────────────────────
 
+    @Transactional(readOnly = true)
     public Map<String, Object> lookupTracking(String query) {
         UUID tenantId = TenantContext.require();
 
@@ -201,7 +202,7 @@ public class LookupService {
                 "WHERE s.tracking_number = ? AND s.tenant_id = ?",
                 trackingNumber, tenantId);
         } catch (EmptyResultDataAccessException e) {
-            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Tracking number not found");
+            throw new LookupNotFoundException("TRACKING_NOT_FOUND", query);
         }
 
         // Pieces linked via allocations on this order (join through order_items).

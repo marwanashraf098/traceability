@@ -58,6 +58,11 @@ Grouped summary:
 > `SET LOCAL app.current_tenant` is reset between statements, RLS returns zero rows silently.
 > `DataSourceConfig` throws `IllegalStateException` at startup if port 6543 is detected.
 
+> **Local .env warning**: `APP_DB_USER` in `.env` **must** include the Supabase project-ref suffix
+> (e.g. `app_user.jtkzpjaangjtkrepkqdz`) — omitting the suffix causes the Supabase pooler to reject
+> the connection and silently fall back to `postgres`, bypassing RLS in local dev.
+> Local `.env` must mirror prod so the `app_user` / RLS path is exercised locally.
+
 **JWT + Encryption** (both secrets)
 | Variable | What to put |
 |---|---|

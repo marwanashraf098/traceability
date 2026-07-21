@@ -6,6 +6,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.sql.Timestamp;
 import java.time.Instant;
@@ -65,6 +66,7 @@ public class AuditService {
      * Filters: action, actorUserId, from (inclusive), to (exclusive). All optional.
      * Returns {total, page, size, items[]}.
      */
+    @Transactional(readOnly = true)
     public Map<String, Object> list(String actionFilter, UUID actorFilter,
                                     Instant from, Instant to,
                                     int page, int size) {

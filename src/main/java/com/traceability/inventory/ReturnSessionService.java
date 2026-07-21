@@ -101,6 +101,7 @@ public class ReturnSessionService {
 
     // ── List sessions ─────────────────────────────────────────────────────────
 
+    @Transactional(readOnly = true)
     public List<Map<String, Object>> listSessions() {
         UUID tenantId = TenantContext.require();
         return jdbc.queryForList(
@@ -125,6 +126,7 @@ public class ReturnSessionService {
      * must NOT treat them as a problem — only un-scanned return_in_transit pieces
      * are actionable.
      */
+    @Transactional(readOnly = true)
     public Map<String, Object> getSessionPieces(UUID sessionId) {
         UUID tenantId = TenantContext.require();
         requireOpen(sessionId, tenantId);

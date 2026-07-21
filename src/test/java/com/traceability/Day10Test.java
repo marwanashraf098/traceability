@@ -7,9 +7,11 @@ import org.junit.jupiter.api.*;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.datasource.DataSourceTransactionManager;
 import org.springframework.jdbc.datasource.DriverManagerDataSource;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.server.ResponseStatusException;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
@@ -61,8 +63,9 @@ class Day10Test {
     @Autowired InventoryLedger ledger;
     @Autowired JdbcTemplate   jdbc;
 
-    // app_user-connected LookupService for RLS isolation tests
-    LookupService appUserLookupSvc;
+    // app_user-connected service + tx wrapper for RLS isolation tests
+    LookupService      appUserLookupSvc;
+    TransactionTemplate appUserTx;
 
     UUID tenantAId, tenantBId;
     UUID ownerActorId, workerActorId;
@@ -106,6 +109,10 @@ class Day10Test {
         DriverManagerDataSource raw = new DriverManagerDataSource(POSTGRES.getJdbcUrl(), "app_user", "testpw");
         TenantAwareDataSource appUserDs = new TenantAwareDataSource(raw);
         appUserLookupSvc = new LookupService(new JdbcTemplate(appUserDs));
+        // TransactionTemplate drives setAutoCommit(false) → TenantAwareDataSource sets the GUC.
+        // @Transactional on appUserLookupSvc has no effect (no Spring proxy on new-constructed beans).
+        appUserTx = new TransactionTemplate(new DataSourceTransactionManager(appUserDs));
+        appUserTx.setReadOnly(true);
     }
 
     @BeforeEach
@@ -221,10 +228,11 @@ class Day10Test {
         String pieceId = insertPiece(variantAId);
         String barcode = "PC-" + pieceId;
 
-        // Tenant B attempts to look up Tenant A's piece via app_user (RLS enforced)
+        // Tenant B tries to look up Tenant A's piece; appUserTx sets GUC to tenantBId
+        // so RLS filters out tenantA's row → LookupNotFoundException.
         TenantContext.set(tenantBId);
         try {
-            assertThatThrownBy(() -> appUserLookupSvc.lookupPiece(barcode, false))
+            assertThatThrownBy(() -> appUserTx.execute(s -> appUserLookupSvc.lookupPiece(barcode, false)))
                 .isInstanceOf(ResponseStatusException.class)
                 .hasMessageContaining("404");
         } finally {
@@ -336,6 +344,44 @@ class Day10Test {
         assertThat(session).isNotNull();
         assertThat(session.get("id")).isEqualTo(receiptId.toString());
         assertThat(session.get("locationName")).isEqualTo("Main Warehouse");
+    }
+
+    // ── (e-pos) Same-tenant PC-barcode visible via app_user RLS ──────────────
+
+    @Test
+    void e_pos_same_tenant_barcode_found_via_rls() {
+        String pieceId = insertPiece(variantAId);
+        // appUserTx sets GUC to tenantAId (TenantContext set by @BeforeEach);
+        // RLS passes → piece from tenantA is visible.
+        Map<String, Object> result = appUserTx.execute(
+                s -> appUserLookupSvc.lookupPiece("PC-" + pieceId, false));
+        assertThat(result).isNotNull();
+        assertThat(result.get("type")).isEqualTo("piece");
+    }
+
+    // ── (e-pos2) Same-tenant short code visible via app_user RLS ─────────────
+
+    @Test
+    void e_pos2_same_tenant_short_code_found_via_rls() {
+        String pieceId = insertPiece(variantAId);
+        String shortCode = jdbc.queryForObject(
+            "SELECT short_code FROM pieces WHERE id = ?", String.class, pieceId);
+        Map<String, Object> result = appUserTx.execute(
+                s -> appUserLookupSvc.lookupPiece(shortCode, false));
+        assertThat(result).isNotNull();
+        assertThat(result.get("type")).isEqualTo("piece");
+    }
+
+    // ── (e-pos3) Same-tenant tracking number visible via app_user RLS ─────────
+
+    @Test
+    void e_pos3_same_tenant_tracking_found_via_rls() {
+        UUID orderId = insertOrderWithItem(variantAId, 1);
+        insertShipment(orderId, "TN-RLS-POS3");
+        Map<String, Object> result = appUserTx.execute(
+                s -> appUserLookupSvc.lookupTracking("TN-RLS-POS3"));
+        assertThat(result).isNotNull();
+        assertThat(result.get("type")).isEqualTo("tracking");
     }
 
     // ── Fixtures ──────────────────────────────────────────────────────────────

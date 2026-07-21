@@ -35,6 +35,7 @@ public class UserService {
 
     // ── List ──────────────────────────────────────────────────────────────────
 
+    @Transactional(readOnly = true)
     public List<Map<String, Object>> list() {
         UUID tenantId = TenantContext.require();
         return jdbc.queryForList(
