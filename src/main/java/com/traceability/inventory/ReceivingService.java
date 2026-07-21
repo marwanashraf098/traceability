@@ -214,7 +214,11 @@ public class ReceivingService {
     private List<Map<String, Object>> getLines(UUID sessionId, UUID tenantId) {
         return jdbc.queryForList(
             "SELECT rl.id, rl.variant_id, v.title AS variant_title, v.sku, " +
-            "       p.title AS product_title, rl.quantity " +
+            "       p.title AS product_title, rl.quantity, " +
+            "       (SELECT COUNT(*) FROM pieces pc " +
+            "        WHERE pc.receipt_id = rl.receipt_id " +
+            "          AND pc.variant_id = rl.variant_id " +
+            "          AND pc.tenant_id  = rl.tenant_id) AS piece_count " +
             "FROM receipt_lines rl " +
             "JOIN variants v ON v.id = rl.variant_id " +
             "JOIN products p ON p.id = v.product_id " +

@@ -210,6 +210,7 @@
     "finalizeSuccess": "تم إنشاء {{count}} قطعة بباركود.",
     "printLabels": "طباعة الملصقات",
     "reprint": "إعادة الطباعة",
+    "printBarcodes": "طباعة الباركود",
     "piecesCreated": "{{count}} قطعة تم إنشاؤها",
     "finalizedAt": "تم الإنهاء في {{date}}",
     "col": {

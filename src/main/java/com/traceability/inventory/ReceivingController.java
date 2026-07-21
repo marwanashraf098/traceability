@@ -126,6 +126,38 @@ public class ReceivingController {
         return pdfResponse(pdf, "reprint-" + sessionId + ".pdf");
     }
 
+    // ── Per-variant labels ────────────────────────────────────────────────────
+
+    @GetMapping(value = "/sessions/{sessionId}/variants/{variantId}/labels", produces = "application/pdf")
+    @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
+    public ResponseEntity<byte[]> getVariantLabels(
+            @PathVariable UUID sessionId,
+            @PathVariable UUID variantId,
+            @RequestParam(required = false) Float widthMm,
+            @RequestParam(required = false) Float heightMm) throws IOException {
+        LabelService.VariantPdf result = labels.generateVariantLabels(sessionId, variantId, widthMm, heightMm);
+        String rawSku = result.sku() != null ? result.sku() : "";
+        String safeSku = rawSku.replaceAll("[^a-zA-Z0-9._-]", "_");
+        String filename = safeSku.isEmpty()
+            ? "labels-" + variantId.toString().substring(0, 8) + ".pdf"
+            : "labels-" + safeSku + ".pdf";
+        return pdfResponse(result.pdf(), filename);
+    }
+
+    @PostMapping(value = "/sessions/{sessionId}/variants/{variantId}/reprint", produces = "application/pdf")
+    @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
+    public ResponseEntity<byte[]> reprintVariant(
+            @PathVariable UUID sessionId,
+            @PathVariable UUID variantId,
+            @RequestBody(required = false) ReprintRequest req,
+            @AuthenticationPrincipal CustomUserDetails principal) throws IOException {
+        String note = req != null ? req.note() : null;
+        Float wMm   = req != null ? req.widthMm()  : null;
+        Float hMm   = req != null ? req.heightMm() : null;
+        byte[] pdf  = labels.reprintVariant(sessionId, variantId, principal.userId(), note, wMm, hMm);
+        return pdfResponse(pdf, "reprint-" + variantId + ".pdf");
+    }
+
     // ── Pieces (barcodes) ─────────────────────────────────────────────────────
 
     @GetMapping("/sessions/{sessionId}/pieces")

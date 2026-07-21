@@ -140,6 +140,81 @@ public class LabelService {
         return pdf;
     }
 
+    // ── Per-variant labels ────────────────────────────────────────────────────
+
+    /** Returned by generateVariantLabels so the controller can build a SKU-based filename. */
+    public record VariantPdf(byte[] pdf, String sku) {}
+
+    /**
+     * Generates a PDF containing one label per piece for a specific variant
+     * in the given session.  Session must be finalized (404 if not found,
+     * 422 if open).  Zero matching pieces → 422.
+     * Ordering: barcode ASC (ULID is time-sortable = generation order).
+     */
+    @Transactional(readOnly = true)
+    public VariantPdf generateVariantLabels(UUID sessionId, UUID variantId,
+                                            Float labelW_mm, Float labelH_mm) throws IOException {
+        UUID tenantId = TenantContext.require();
+        requireFinalized(sessionId, tenantId);
+
+        List<Map<String, Object>> pieces = jdbc.queryForList(
+            "SELECT p.id, p.barcode, p.short_code, v.sku, v.title AS variant_title, pr.title AS product_title " +
+            "FROM pieces p " +
+            "JOIN variants v  ON v.id  = p.variant_id " +
+            "JOIN products pr ON pr.id = v.product_id " +
+            "WHERE p.receipt_id = ? AND p.variant_id = ? AND p.tenant_id = ? " +
+            "ORDER BY p.barcode ASC",
+            sessionId, variantId, tenantId);
+
+        if (pieces.isEmpty()) {
+            throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY,
+                "No pieces found for this variant in this session");
+        }
+
+        String sku = (String) pieces.get(0).get("sku");
+        byte[] pdf = renderPdf(pieces,
+            labelW_mm != null ? labelW_mm : DEFAULT_WIDTH_MM,
+            labelH_mm != null ? labelH_mm : DEFAULT_HEIGHT_MM);
+        return new VariantPdf(pdf, sku);
+    }
+
+    /**
+     * Logs a variant-level reprint event and returns the PDF bytes.
+     * Writes a label_reprints row with variant_id set.
+     */
+    @Transactional
+    public byte[] reprintVariant(UUID sessionId, UUID variantId, UUID actorUserId, String note,
+                                 Float labelW_mm, Float labelH_mm) throws IOException {
+        UUID tenantId = TenantContext.require();
+        VariantPdf result = generateVariantLabels(sessionId, variantId, labelW_mm, labelH_mm);
+        int count = countVariantPieces(sessionId, variantId, tenantId);
+        jdbc.update(
+            "INSERT INTO label_reprints (tenant_id, receipt_id, variant_id, reprinted_by, piece_count, note) " +
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            tenantId, sessionId, variantId, actorUserId, count, note);
+        return result.pdf();
+    }
+
+    private void requireFinalized(UUID sessionId, UUID tenantId) {
+        List<String> rows = jdbc.queryForList(
+            "SELECT status FROM receipts WHERE id = ? AND tenant_id = ?",
+            String.class, sessionId, tenantId);
+        if (rows.isEmpty()) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Session not found");
+        }
+        if (!"finalized".equals(rows.get(0))) {
+            throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY,
+                "Session is not finalized — finalize the session first");
+        }
+    }
+
+    private int countVariantPieces(UUID sessionId, UUID variantId, UUID tenantId) {
+        Integer n = jdbc.queryForObject(
+            "SELECT COUNT(*) FROM pieces WHERE receipt_id = ? AND variant_id = ? AND tenant_id = ?",
+            Integer.class, sessionId, variantId, tenantId);
+        return n != null ? n : 0;
+    }
+
     // ── Rendering ─────────────────────────────────────────────────────────────
 
     private byte[] renderPdf(List<Map<String, Object>> pieces,

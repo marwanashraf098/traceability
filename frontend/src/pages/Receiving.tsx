@@ -23,7 +23,7 @@ interface Session {
 }
 interface Line {
   id: string; variant_id: string; variant_title: string; sku: string | null
-  product_title: string; quantity: number
+  product_title: string; quantity: number; piece_count: number
 }
 interface SessionDetail extends Session { lines: Line[] }
 interface VariantMatch { id: string; title: string; sku: string | null; product_title: string }
@@ -211,6 +211,7 @@ function SessionView({ session, onRefresh, onBack }: {
   const [addError, setAddError]         = useState<string | null>(null)
   const [finalizing, setFinalizing]     = useState(false)
   const [printError, setPrintError]     = useState<string | null>(null)
+  const [printingVariant, setPrintingVariant] = useState<string | null>(null)
   const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const isOpen = session.status === 'open'
 
@@ -271,6 +272,20 @@ function SessionView({ session, onRefresh, onBack }: {
       if (!res.ok) throw new Error(res.statusText)
       window.open(URL.createObjectURL(await res.blob()), '_blank')
     } catch (e: unknown) { setPrintError((e as Error).message) }
+  }
+
+  async function printVariantLabels(variantId: string) {
+    setPrintError(null)
+    setPrintingVariant(variantId)
+    try {
+      const res = await fetch(
+        `${BASE}/receiving/sessions/${session.id}/variants/${variantId}/labels`,
+        { headers: authHeaders() }
+      )
+      if (!res.ok) throw new Error(res.statusText)
+      window.open(URL.createObjectURL(await res.blob()), '_blank')
+    } catch (e: unknown) { setPrintError((e as Error).message) }
+    finally { setPrintingVariant(null) }
   }
 
   return (
@@ -360,7 +375,7 @@ function SessionView({ session, onRefresh, onBack }: {
               <th className="tbl-header">{t('receiving.col.product')}</th>
               <th className="tbl-header">{t('receiving.col.sku')}</th>
               <th className="tbl-header text-end">{t('receiving.col.qty')}</th>
-              {isOpen && <th className="tbl-header w-8" />}
+              <th className="tbl-header w-8" />
             </tr>
           </thead>
           <tbody>
@@ -370,23 +385,40 @@ function SessionView({ session, onRefresh, onBack }: {
                   {t('receiving.noLines')}
                 </td>
               </tr>
-            ) : session.lines.map(l => (
-              <tr key={l.id} className="tbl-row">
-                <td className="tbl-cell">
-                  <div className="text-body font-medium text-primary">{l.product_title}</div>
-                  <div className="text-small text-muted">{l.variant_title}</div>
-                </td>
-                {/* SKU — font-mono per spec */}
-                <td className="tbl-cell font-mono text-small text-muted">{l.sku ?? '—'}</td>
-                <td className="tbl-cell text-end font-semibold text-primary">{l.quantity}</td>
-                {isOpen && (
-                  <td className="tbl-cell text-end">
-                    <button onClick={() => removeLine(l.id)}
-                      className="text-caption text-danger hover:text-danger/70 transition-colors">✕</button>
-                  </td>
-                )}
-              </tr>
-            ))}
+            ) : (() => {
+              // Track first occurrence of each variant_id — Print Barcodes button
+              // appears once per unique variant so nothing double-prints.
+              const firstVariantIdx = new Map<string, number>()
+              session.lines.forEach((l, i) => {
+                if (!firstVariantIdx.has(l.variant_id)) firstVariantIdx.set(l.variant_id, i)
+              })
+              return session.lines.map((l, idx) => {
+                const isFirstOccurrence = firstVariantIdx.get(l.variant_id) === idx
+                return (
+                  <tr key={l.id} className="tbl-row">
+                    <td className="tbl-cell">
+                      <div className="text-body font-medium text-primary">{l.product_title}</div>
+                      <div className="text-small text-muted">{l.variant_title}</div>
+                    </td>
+                    {/* SKU — font-mono per spec */}
+                    <td className="tbl-cell font-mono text-small text-muted">{l.sku ?? '—'}</td>
+                    <td className="tbl-cell text-end font-semibold text-primary">{l.quantity}</td>
+                    <td className="tbl-cell text-end">
+                      {isOpen ? (
+                        <button onClick={() => removeLine(l.id)}
+                          className="text-caption text-danger hover:text-danger/70 transition-colors">✕</button>
+                      ) : isFirstOccurrence && l.piece_count > 0 ? (
+                        <Button size="sm"
+                          loading={printingVariant === l.variant_id}
+                          onClick={() => printVariantLabels(l.variant_id)}>
+                          {t('receiving.printBarcodes')} ({l.piece_count})
+                        </Button>
+                      ) : null}
+                    </td>
+                  </tr>
+                )
+              })
+            })()}
           </tbody>
           {session.lines.length > 0 && (
             <tfoot className="border-t border-line bg-elevated">
@@ -395,7 +427,7 @@ function SessionView({ session, onRefresh, onBack }: {
                 <td className="px-4 py-2 text-end text-body font-bold text-primary">
                   {session.lines.reduce((s, l) => s + l.quantity, 0)}
                 </td>
-                {isOpen && <td />}
+                <td />
               </tr>
             </tfoot>
           )}

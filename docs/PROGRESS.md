@@ -4,6 +4,21 @@
 
 ## Current state
 
+**666 backend tests green (expected)** — 2026-07-21 (FR-20: per-variant barcode label printing, 10 new VariantLabelTest tests; 2 pre-existing ShopifyImportTest failures unrelated to FR-20).
+
+**FR-20 — Per-variant barcode label printing inside a receiving session — COMPLETE.**
+- **Feature:** "Print Barcodes (N)" button per variant line in finalized sessions. Returns a PDF with one label per piece for that variant only; cross-variant deduplication if same variant appears on two lines.
+- **V56 migration:** `ALTER TABLE label_reprints ADD COLUMN variant_id uuid NULL REFERENCES variants(id)`. Existing whole-session reprint rows stay NULL. Sparse index `WHERE variant_id IS NOT NULL`.
+- **`LabelService`:** Added `VariantPdf record(byte[] pdf, String sku)`. `generateVariantLabels()` queries pieces filtered by `receipt_id + variant_id`, reuses `renderPdf()`. `reprintVariant()` inserts a `label_reprints` row with `variant_id` set. `requireFinalized()` helper shared by both session-wide and variant paths. `countVariantPieces()` helper for reprint row.
+- **`ReceivingController`:** `GET /sessions/{sessionId}/variants/{variantId}/labels` (preview) and `POST /sessions/{sessionId}/variants/{variantId}/reprint` (audit-logged). SKU sanitized via `[^a-zA-Z0-9._-]→_`; falls back to `labels-{first8ofVariantId}.pdf` if SKU empty/null after sanitizing.
+- **`ReceivingService.getLines()`:** Added `piece_count` subquery to the lines SQL so the frontend knows how many pieces each variant row has.
+- **Frontend (`Receiving.tsx`):** `piece_count: number` on `Line` interface. `printingVariant` state + `printVariantLabels()` function. Table column unconditional (open: delete button, finalized + first occurrence + piece_count>0: "Print Barcodes (N)" button with loading state). IIFE with `Map<string, number>` deduplicates same variant across multiple receipt lines.
+- **Locales:** `"printBarcodes": "Print Barcodes"` (en) / `"طباعة الباركود"` (ar).
+- **10 new integration tests (VariantLabelTest a–j):** (a) page counts 26/20; (b) barcodes match DB pieces, no cross-variant leakage; (c) open session → 422; (d) variant not in session → 422; (e) label_reprints row fields correct (BYPASSRLS assertion; RLS covered by g); (f) double-line same variant → merged 15-page PDF, piece_count=15; (g) cross-tenant RLS → 404 via app_user datasource; (h) WORKER role → 403; (i) Arabic variant title renders without font error (pure Arabic product title so NotoSansArabic isn't asked to render Latin glyphs); (j) session-wide generateSessionLabels/reprint still work (regression guard).
+- **MigrationSmokeTest:** Updated V1–V55 count 54 → 55 (V56 migration).
+- **Gotcha (test e):** Creating a `new JdbcTemplate(new TenantAwareDataSource(...))` inside an `appUserTx.execute()` lambda creates a second unrelated connection — its GUC is never set by the transaction manager, so RLS returns 0 rows. Use the class-level `appUserJdbc` field (same `DataSource` as `appUserTx`) or postgres BYPASSRLS for field-value assertions.
+- **Gotcha (test i):** Mixed Latin+Arabic `labelName` (e.g. `"Widget VLT - مسحوق بروتين"`) triggers `containsArabic()=true` → entire string rendered with NotoSansArabic → crash on Latin 'W' (no glyph). Test fixture must use a product with a pure Arabic title so `labelName` is all-Arabic. The existing LabelService limitation is documented; the Day8Test i2 pattern already worked because its fixture used all-Arabic product+variant titles.
+
 **656 backend tests green (expected)** — 2026-07-21 (FR-19: short piece codes + 6 new tests; 2 pre-existing ShopifyImportTest failures unrelated to FR-19).
 
 **FR-19 — Short piece codes for scannable thermal labels — COMPLETE.**
