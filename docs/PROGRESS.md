@@ -4,6 +4,33 @@
 
 ## Current state
 
+**682 backend tests green** — 2026-07-21 (C3/C4/C5: RLS @Transactional fixes, lookup error codes, coverage guard).
+
+**C3/C4/C5 RLS audit — COMPLETE.**
+
+**C3 — 8 @Transactional(readOnly = true) fixes:**
+- `UserService.list()`, `AuditService.list()`, `ShipmentLinkService.listUnlinked()`, `ReturnService.listPending()`, `ReturnService.neverReceived()`, `ReturnSessionService.listSessions()`, `ReturnSessionService.getSessionPieces()`, `OrderController.dailyCounts()`.
+- Root cause: without `@Transactional`, `TenantAwareDataSource` never calls `setAutoCommit(false)`, GUC never set, RLS evaluates `tenant_id = NULL` → silent 0 rows on prod (app_user connection).
+- `AuditService` and `OrderController` also needed the `import org.springframework.transaction.annotation.Transactional` added.
+
+**C4 — Day10Test positive RLS assertions (e-pos/e-pos2/e-pos3):**
+- Same-tenant PC-barcode, short-code, and tracking-number lookups via `appUserLookupSvc` now use `appUserTx.execute()` (a `TransactionTemplate` backed by `TenantAwareDataSource`).
+- Key insight: `@Transactional` on a directly-instantiated bean (via `new`) has no effect — no Spring proxy. `TransactionTemplate` is the correct way to drive the GUC for test-constructed service instances.
+- Test (e) upgraded from "GUC-never-set proxy" to actual cross-tenant RLS verification.
+
+**C5 — Machine-readable lookup error codes:**
+- `LookupNotFoundException` (extends `ResponseStatusException`) carries `code` and `query` fields.
+- `ApiExceptionHandler` returns `{"code": "PIECE_NOT_FOUND", "query": "PC-xxx"}` for 404s.
+- `DATABASE_ERROR` 500 remains the signal for system failures — workers see different UX.
+
+**C3c — RlsCoverageTest (permanent build guard):**
+- Reflectively discovers all GET /api/ handlers via `RequestMappingHandlerMapping`.
+- Fails the build when a new GET endpoint is added without being in COVERED (has a test here) or EXEMPT (written reason).
+- 9 COVERED patterns with seeded non-empty assertions; 36 EXEMPT patterns with reasons.
+- `/api/v1/test/probe` (test-only `TenantProbeController`) added to EXEMPT.
+
+**Local .env fix:** `APP_DB_USER=app_user.jtkzpjaangjtkrepkqdz` (Supabase project-ref suffix). Without this, local dev connected as `postgres` (BYPASSRLS) instead of `app_user`.
+
 **669 backend tests green** — 2026-07-21 (FR-20 follow-ups B1/B2/B3 complete; ShopifyImportTest fixed).
 
 **FR-20 follow-ups B1/B2/B3 — COMPLETE.**
