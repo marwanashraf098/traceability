@@ -28,6 +28,7 @@ import java.awt.image.BufferedImage;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -325,23 +326,32 @@ public class LabelService {
             cs.endText();
         }
 
-        // Right text (variant name — pick font based on content)
-        boolean isArabic = containsArabic(right);
-        PDFont  rightFont = isArabic ? arabicFont : latinFont;
-        String  displayRight = isArabic ? shapeForDisplay(right) : right;
-
-        float tw;
-        try {
-            tw = rightFont.getStringWidth(displayRight) / 1000f * size;
-        } catch (Exception e) {
-            tw = 0;
+        // Right text: per-run rendering — Helvetica for Latin runs, NotoSansArabic for Arabic runs.
+        // shapeForDisplay reorders the whole string to visual LTR first, then segmentRuns splits
+        // into contiguous font-homogeneous spans. This handles pure-Latin, pure-Arabic, and mixed
+        // strings like "Vanilla Whey 1KG - بروتين واي" without a missing-glyph exception.
+        if (!right.isEmpty()) {
+            String displayRight = containsArabic(right) ? shapeForDisplay(right) : right;
+            List<TextRun> runs = segmentRuns(displayRight);
+            float totalWidth = 0f;
+            float[] runWidths = new float[runs.size()];
+            for (int i = 0; i < runs.size(); i++) {
+                PDFont f = runs.get(i).arabic() ? arabicFont : latinFont;
+                try { runWidths[i] = f.getStringWidth(runs.get(i).text()) / 1000f * size; }
+                catch (Exception ignored) { runWidths[i] = 0f; }
+                totalWidth += runWidths[i];
+            }
+            float rx = pageWidth - MARGIN - totalWidth;
+            for (int i = 0; i < runs.size(); i++) {
+                PDFont f = runs.get(i).arabic() ? arabicFont : latinFont;
+                cs.beginText();
+                cs.setFont(f, size);
+                cs.newLineAtOffset(rx, y);
+                cs.showText(runs.get(i).text());
+                cs.endText();
+                rx += runWidths[i];
+            }
         }
-        float rx = pageWidth - MARGIN - tw;
-        cs.beginText();
-        cs.setFont(rightFont, size);
-        cs.newLineAtOffset(rx, y);
-        cs.showText(displayRight);
-        cs.endText();
     }
 
     /**
@@ -368,9 +378,70 @@ public class LabelService {
 
     private static boolean containsArabic(String text) {
         for (char c : text.toCharArray()) {
-            if (Character.UnicodeBlock.of(c) == Character.UnicodeBlock.ARABIC) return true;
+            if (isArabicChar(c)) return true;
         }
         return false;
+    }
+
+    /**
+     * Returns true for any character that belongs to an Arabic Unicode block.
+     * Covers the main Arabic block (U+0600–U+06FF) AND the Presentation Forms blocks
+     * (U+FB50–U+FDFF, U+FE70–U+FEFF) because ICU4J ArabicShaping.LETTERS_SHAPE outputs
+     * Presentation Forms — the shaped string no longer has chars in the main Arabic block.
+     */
+    private static boolean isArabicChar(char c) {
+        Character.UnicodeBlock b = Character.UnicodeBlock.of(c);
+        return b == Character.UnicodeBlock.ARABIC
+            || b == Character.UnicodeBlock.ARABIC_PRESENTATION_FORMS_A
+            || b == Character.UnicodeBlock.ARABIC_PRESENTATION_FORMS_B
+            || b == Character.UnicodeBlock.ARABIC_SUPPLEMENT
+            || b == Character.UnicodeBlock.ARABIC_EXTENDED_A;
+    }
+
+    private record TextRun(String text, boolean arabic) {}
+
+    /**
+     * Segments {@code text} into contiguous runs by Unicode script.
+     * Arabic chars (including ICU4J-shaped Presentation Forms) → arabic=true (NotoSansArabic);
+     * everything else → arabic=false (Helvetica).
+     * Neutral chars (space, hyphen, digits, punctuation) attach to the preceding run.
+     * NotoSansArabic-Regular covers space/hyphen/digits, so they are safe in an Arabic run.
+     */
+    private List<TextRun> segmentRuns(String text) {
+        if (text == null || text.isEmpty()) return List.of();
+        List<TextRun> runs = new ArrayList<>();
+        StringBuilder current = new StringBuilder();
+        Boolean prevArabic = null;
+
+        for (char c : text.toCharArray()) {
+            boolean arabic;
+            if (isArabicChar(c)) {
+                arabic = true;
+            } else if (isNeutral(c)) {
+                arabic = prevArabic != null ? prevArabic : false;
+            } else {
+                arabic = false;
+            }
+
+            if (prevArabic == null) prevArabic = arabic;
+
+            if (arabic == prevArabic) {
+                current.append(c);
+            } else {
+                runs.add(new TextRun(current.toString(), prevArabic));
+                current = new StringBuilder(String.valueOf(c));
+                prevArabic = arabic;
+            }
+        }
+        if (current.length() > 0) runs.add(new TextRun(current.toString(), prevArabic));
+        return runs;
+    }
+
+    private static boolean isNeutral(char c) {
+        return c == ' ' || c == '-' || Character.isDigit(c)
+            || Character.getType(c) == Character.CONNECTOR_PUNCTUATION
+            || Character.getType(c) == Character.DASH_PUNCTUATION
+            || Character.getType(c) == Character.OTHER_PUNCTUATION;
     }
 
     // ── Barcode rendering ─────────────────────────────────────────────────────

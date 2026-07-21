@@ -104,13 +104,17 @@ class VariantLabelTest {
     UUID variantYId;   // 20 pieces in mainSession
     UUID variantDoubleId; // on 2 lines in doubleLineSession (10 + 5 = 15 pieces)
     UUID arabicVariantId; // Arabic title
-    UUID variantDummyId;  // exists in DB but NOT in any session
+    UUID variantDummyId;       // exists in DB but NOT in any session
+    UUID mixedVariantId;       // Arabic title + Latin product → "Widget VLT - مسحوق بروتين"
+    UUID mixedDigitsVariantId; // Arabic+digits+Latin title → worst-case mixed rendering
     UUID locationId;
 
-    UUID mainSessionId;       // finalized: 26 of X + 20 of Y
-    UUID doubleLineSessionId; // finalized: variantDouble on 2 lines (10+5)
-    UUID arabicSessionId;     // finalized: 1 of arabicVariant
-    UUID openSessionId;       // open (not finalized)
+    UUID mainSessionId;         // finalized: 26 of X + 20 of Y
+    UUID doubleLineSessionId;   // finalized: variantDouble on 2 lines (10+5)
+    UUID arabicSessionId;       // finalized: 1 of arabicVariant (pure-Arabic product title)
+    UUID openSessionId;         // open (not finalized)
+    UUID mixedSessionId;        // finalized: 1 of mixedVariant — mixed Latin+Arabic label
+    UUID mixedDigitsSessionId;  // finalized: 1 of mixedDigitsVariant — Arabic + digits + Latin 'g'
 
     @BeforeAll
     void setup() {
@@ -123,7 +127,9 @@ class VariantLabelTest {
         variantYId      = UUID.randomUUID();
         variantDoubleId = UUID.randomUUID();
         arabicVariantId = UUID.randomUUID();
-        variantDummyId  = UUID.randomUUID();
+        variantDummyId      = UUID.randomUUID();
+        mixedVariantId      = UUID.randomUUID();
+        mixedDigitsVariantId = UUID.randomUUID();
         locationId      = UUID.randomUUID();
 
         // ── Tenant A fixtures ────────────────────────────────────────────────
@@ -168,6 +174,22 @@ class VariantLabelTest {
             "INSERT INTO variants (id, tenant_id, product_id, external_id, title, sku) " +
             "VALUES (?, ?, ?, 'V-DUMMY', 'Dummy', 'VLT-DUMMY')",
             variantDummyId, tenantAId, productId);
+        // Mixed-script fixture: Arabic variant title + Latin product ("Widget VLT")
+        // → labelName = "Widget VLT - مسحوق بروتين" — triggers per-run rendering
+        jdbc.update(
+            "INSERT INTO variants (id, tenant_id, product_id, external_id, title, sku) " +
+            "VALUES (?, ?, ?, 'VAR-MIXED', 'مسحوق بروتين', 'PROT-MIXED')",
+            mixedVariantId, tenantAId, productId);
+        // Worst-case fixture: Arabic text + embedded digits + trailing Latin 'g'
+        UUID mixedDigitsProdId = UUID.randomUUID();
+        jdbc.update(
+            "INSERT INTO products (id, tenant_id, store_id, external_id, title, status) " +
+            "VALUES (?, ?, ?, 'P-VW', 'Vanilla Whey 1KG', 'active')",
+            mixedDigitsProdId, tenantAId, storeId);
+        jdbc.update(
+            "INSERT INTO variants (id, tenant_id, product_id, external_id, title, sku) " +
+            "VALUES (?, ?, ?, 'VAR-VW', 'بروتين واي 1000g', 'WHEY-VW')",
+            mixedDigitsVariantId, tenantAId, mixedDigitsProdId);
         jdbc.update(
             "INSERT INTO locations (id, tenant_id, name, type, is_default) " +
             "VALUES (?, ?, 'VLT Warehouse', 'warehouse', true)",
@@ -200,6 +222,16 @@ class VariantLabelTest {
             openSessionId = receivingSvc.createSession(actorId, locationId, "OPEN-VLT", null, null);
             receivingSvc.addLine(openSessionId, variantXId, 3);
             // intentionally NOT finalized
+
+            // Mixed Latin+Arabic session (i2)
+            mixedSessionId = receivingSvc.createSession(actorId, locationId, "MIXED-VLT", null, null);
+            receivingSvc.addLine(mixedSessionId, mixedVariantId, 1);
+            receivingSvc.finalize(mixedSessionId, actorId);
+
+            // Worst-case mixed+digits session (i4)
+            mixedDigitsSessionId = receivingSvc.createSession(actorId, locationId, "MIXDIG-VLT", null, null);
+            receivingSvc.addLine(mixedDigitsSessionId, mixedDigitsVariantId, 1);
+            receivingSvc.finalize(mixedDigitsSessionId, actorId);
         } finally {
             TenantContext.clear();
         }
@@ -305,17 +337,27 @@ class VariantLabelTest {
         byte[] pdf = labelSvc.reprintVariant(mainSessionId, variantXId, actorId, "test reprint", null, null);
         assertThat(pdf).isNotEmpty();
 
-        // Assert row contents via postgres BYPASSRLS — cross-tenant RLS isolation is
-        // covered separately by test (g); this test focuses on field correctness only.
-        List<Map<String, Object>> rows = jdbc.queryForList(
-            "SELECT receipt_id, variant_id, piece_count, reprinted_by " +
-            "FROM label_reprints WHERE receipt_id = ? AND variant_id = ? " +
-            "ORDER BY reprinted_at DESC LIMIT 1",
-            mainSessionId, variantXId);
+        // Query via app_user with the acting tenant's GUC — proves both that the row
+        // was written and that RLS allows the acting tenant to read it.
+        // TenantContext.runAs sets the ThreadLocal; appUserTx.execute fires
+        // setAutoCommit(false) which causes TenantAwareDataSource to SET LOCAL the GUC;
+        // appUserJdbc (same DataSource) reuses the transaction-bound connection.
+        // runAs clears TenantContext on exit — must be last operation in this test.
+        List<Map<String, Object>> rows = TenantContext.runAs(tenantAId, () ->
+            appUserTx.execute(s -> appUserJdbc.queryForList(
+                "SELECT receipt_id, variant_id, tenant_id, piece_count, reprinted_by " +
+                "FROM label_reprints WHERE receipt_id = ? AND variant_id = ? " +
+                "ORDER BY reprinted_at DESC LIMIT 1",
+                mainSessionId, variantXId)));
         assertThat(rows).hasSize(1);
         Map<String, Object> row = rows.get(0);
         assertThat(row.get("receipt_id")).isEqualTo(mainSessionId);
         assertThat(row.get("variant_id")).isEqualTo(variantXId);
+        // (e2) tenant_id must equal the acting tenant — this assertion is meaningless under
+        // BYPASSRLS (all rows visible regardless of tenant); app_user + GUC makes it real.
+        assertThat(row.get("tenant_id"))
+            .as("e2: reprint row must carry the acting tenant's id")
+            .isEqualTo(tenantAId);
         assertThat(((Number) row.get("piece_count")).intValue()).isEqualTo(26);
         assertThat(row.get("reprinted_by")).isEqualTo(actorId);
     }
@@ -421,6 +463,64 @@ class VariantLabelTest {
         try (PDDocument doc = loadPdf(result.pdf())) {
             BufferedImage img = new PDFRenderer(doc).renderImageWithDPI(0, 203);
             assertThat(img).isNotNull();
+            assertThat(img.getWidth()).isGreaterThan(0);
+        }
+    }
+
+    // ── (i2) Mixed Latin+Arabic label renders without font errors ────────────
+
+    @Test
+    void i2_mixed_latin_arabic_label_renders_without_font_errors() throws Exception {
+        // labelName = "Widget VLT - مسحوق بروتين" — Latin prefix, Arabic suffix.
+        // Per-run rendering uses Helvetica for "Widget VLT - " and NotoSansArabic
+        // for "مسحوق بروتين" after Bidi reordering.  NotoSansArabic covers space and
+        // hyphen (U+0020/U+002D), so neutral chars that attach to the Arabic run are safe.
+        LabelService.VariantPdf result =
+            labelSvc.generateVariantLabels(mixedSessionId, mixedVariantId, null, null);
+
+        assertThat(result.pdf()).isNotEmpty();
+        assertThat(new String(result.pdf(), 0, 4)).isEqualTo("%PDF");
+        try (PDDocument doc = loadPdf(result.pdf())) {
+            assertThat(doc.getNumberOfPages()).isEqualTo(1);
+            // Rasterize — if a glyph is missing, PDFBox throws during content-stream
+            // generation (inside generateVariantLabels), not here; but render confirms
+            // the full content stream is valid and produces visible output.
+            BufferedImage img = new PDFRenderer(doc).renderImageWithDPI(0, 203);
+            assertThat(img.getWidth()).isGreaterThan(0);
+        }
+    }
+
+    // ── (i3) Pure Latin label — regression guard ──────────────────────────────
+
+    @Test
+    void i3_pure_latin_label_renders_without_regression() throws Exception {
+        // labelName = "Widget VLT - Widget Red" — pure Latin.
+        // Verifies the per-run refactor did not break the common case (most labels are Latin).
+        LabelService.VariantPdf result =
+            labelSvc.generateVariantLabels(mainSessionId, variantXId, null, null);
+
+        assertThat(result.pdf()).isNotEmpty();
+        try (PDDocument doc = loadPdf(result.pdf())) {
+            assertThat(doc.getNumberOfPages()).isEqualTo(26);
+            new PDFRenderer(doc).renderImageWithDPI(0, 203); // throws on render error
+        }
+    }
+
+    // ── (i4) Latin + Arabic + digits + trailing Latin — realistic worst case ──
+
+    @Test
+    void i4_latin_arabic_digits_label_renders() throws Exception {
+        // labelName = truncate("Vanilla Whey 1KG - بروتين واي 1000g", 32)
+        // Exercises: Latin prefix with digits ("Vanilla Whey 1KG"), Arabic text ("بروتين واي"),
+        // digits ("1000") attaching to Arabic run, trailing Latin char ('g') forming its own run.
+        LabelService.VariantPdf result =
+            labelSvc.generateVariantLabels(mixedDigitsSessionId, mixedDigitsVariantId, null, null);
+
+        assertThat(result.pdf()).isNotEmpty();
+        assertThat(new String(result.pdf(), 0, 4)).isEqualTo("%PDF");
+        try (PDDocument doc = loadPdf(result.pdf())) {
+            assertThat(doc.getNumberOfPages()).isEqualTo(1);
+            BufferedImage img = new PDFRenderer(doc).renderImageWithDPI(0, 203);
             assertThat(img.getWidth()).isGreaterThan(0);
         }
     }

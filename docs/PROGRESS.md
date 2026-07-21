@@ -4,7 +4,24 @@
 
 ## Current state
 
-**666 backend tests green (expected)** — 2026-07-21 (FR-20: per-variant barcode label printing, 10 new VariantLabelTest tests; 2 pre-existing ShopifyImportTest failures unrelated to FR-20).
+**669 backend tests green** — 2026-07-21 (FR-20 follow-ups B1/B2/B3 complete; ShopifyImportTest fixed).
+
+**FR-20 follow-ups B1/B2/B3 — COMPLETE.**
+
+**B1 — Mixed-script label rendering (production defect fixed):**
+- **Root cause:** `containsArabic(labelName)=true` → entire string rendered with NotoSansArabic → Latin glyphs (A–Z) have no glyph → crash. Real pilot data contains mixed names like "Vanilla Whey - بروتين واي" constantly.
+- **Fix — per-run font segmentation in `LabelService.drawTextRow()`:** `segmentRuns(displayRight)` splits shaped text into contiguous runs by script. Arabic runs → NotoSansArabic; Latin/neutral → Helvetica. Each run measured + positioned independently.
+- **Critical gotcha — ICU4J Presentation Forms:** `ArabicShaping.LETTERS_SHAPE` converts Arabic from U+0600–U+06FF (main `ARABIC` block) to Presentation Forms (U+FE70–U+FEFF and U+FB50–U+FDFF). `Character.UnicodeBlock.ARABIC` does NOT cover Presentation Forms. A narrowly-scoped check then misclassifies all shaped Arabic chars as Latin → Helvetica → `IllegalArgumentException`. Fix: `isArabicChar(c)` covers `ARABIC` + `ARABIC_PRESENTATION_FORMS_A` + `ARABIC_PRESENTATION_FORMS_B` + `ARABIC_SUPPLEMENT` + `ARABIC_EXTENDED_A`.
+- **4 font-rendering tests (i, i2, i3, i4):** pure Arabic → no exception; mixed "Widget VLT - مسحوق بروتين" → per-run, no .notdef; pure Latin → unchanged; Arabic+digits+Latin "بروتين واي 1000g" → renders at 203dpi.
+
+**B2 — Test (e) restored to app_user:**
+- **Fix:** `TenantContext.runAs(tenantAId, () → appUserTx.execute(s → appUserJdbc.queryForList(...)))` using the class-level `appUserJdbc` field (same `TenantAwareDataSource` as `appUserTx`). Spring's transaction manager binds to the datasource instance — the field is already bound when `execute()` runs.
+- **Gotcha:** `JdbcTemplate appUserJdbc = ...` in the initializer creates a local variable that shadows the class field → field stays null → NullPointerException at use time. Must be `appUserJdbc = ...` (assigns to field).
+- **`(e2)` added:** asserts `tenant_id == tenantAId` read as app_user — assertion meaningless under BYPASSRLS, which is exactly why it belongs in app_user context.
+
+**B3 — ShopifyImportTest failures diagnosed and fixed:**
+- **Cause:** `order()` helper used `Instant.now()` BEFORE `connect()` set `orders_ingest_from = now()`. The ms gap made `createdAt < cutoff` → 0 orders imported.
+- **Fix:** `Instant.now().plusSeconds(60)` in `order()` helper. Unrelated to B1 (no variant/title involvement).
 
 **FR-20 — Per-variant barcode label printing inside a receiving session — COMPLETE.**
 - **Feature:** "Print Barcodes (N)" button per variant line in finalized sessions. Returns a PDF with one label per piece for that variant only; cross-variant deduplication if same variant appears on two lines.
@@ -14,10 +31,8 @@
 - **`ReceivingService.getLines()`:** Added `piece_count` subquery to the lines SQL so the frontend knows how many pieces each variant row has.
 - **Frontend (`Receiving.tsx`):** `piece_count: number` on `Line` interface. `printingVariant` state + `printVariantLabels()` function. Table column unconditional (open: delete button, finalized + first occurrence + piece_count>0: "Print Barcodes (N)" button with loading state). IIFE with `Map<string, number>` deduplicates same variant across multiple receipt lines.
 - **Locales:** `"printBarcodes": "Print Barcodes"` (en) / `"طباعة الباركود"` (ar).
-- **10 new integration tests (VariantLabelTest a–j):** (a) page counts 26/20; (b) barcodes match DB pieces, no cross-variant leakage; (c) open session → 422; (d) variant not in session → 422; (e) label_reprints row fields correct (BYPASSRLS assertion; RLS covered by g); (f) double-line same variant → merged 15-page PDF, piece_count=15; (g) cross-tenant RLS → 404 via app_user datasource; (h) WORKER role → 403; (i) Arabic variant title renders without font error (pure Arabic product title so NotoSansArabic isn't asked to render Latin glyphs); (j) session-wide generateSessionLabels/reprint still work (regression guard).
+- **13 integration tests (VariantLabelTest a–j + i2/i3/i4):** (a) page counts 26/20; (b) barcodes match DB pieces, no cross-variant leakage; (c) open session → 422; (d) variant not in session → 422; (e) label_reprints row correct via app_user + (e2) tenant_id == acting tenant; (f) double-line same variant → merged 15-page PDF; (g) cross-tenant RLS → 404; (h) WORKER → 403; (i–i4) Arabic/mixed/Latin/worst-case font rendering; (j) session-wide regression guard.
 - **MigrationSmokeTest:** Updated V1–V55 count 54 → 55 (V56 migration).
-- **Gotcha (test e):** Creating a `new JdbcTemplate(new TenantAwareDataSource(...))` inside an `appUserTx.execute()` lambda creates a second unrelated connection — its GUC is never set by the transaction manager, so RLS returns 0 rows. Use the class-level `appUserJdbc` field (same `DataSource` as `appUserTx`) or postgres BYPASSRLS for field-value assertions.
-- **Gotcha (test i):** Mixed Latin+Arabic `labelName` (e.g. `"Widget VLT - مسحوق بروتين"`) triggers `containsArabic()=true` → entire string rendered with NotoSansArabic → crash on Latin 'W' (no glyph). Test fixture must use a product with a pure Arabic title so `labelName` is all-Arabic. The existing LabelService limitation is documented; the Day8Test i2 pattern already worked because its fixture used all-Arabic product+variant titles.
 
 **656 backend tests green (expected)** — 2026-07-21 (FR-19: short piece codes + 6 new tests; 2 pre-existing ShopifyImportTest failures unrelated to FR-19).
 

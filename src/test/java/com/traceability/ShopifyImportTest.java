@@ -298,11 +298,13 @@ class ShopifyImportTest {
     private static ShopifyGateway.Order order(String gid, String name, List<ShopifyGateway.LineItem> lines) {
         ObjectNode addr = new ObjectMapper().createObjectNode()
                 .put("address1", "123 Test St").put("city", "Cairo");
+        // FR-18: stubGateway() is called before connect(), which sets orders_ingest_from = now().
+        // +60s ensures placed_at is always after the cutoff regardless of execution timing.
         return new ShopifyGateway.Order(
                 gid, name, "Test Customer", "+201001234567",
                 addr, "pending", List.of(),
                 new BigDecimal("100.00"), lines,
-                Instant.now(), new ObjectMapper().createObjectNode());
+                Instant.now().plusSeconds(60), new ObjectMapper().createObjectNode());
     }
 
     private static ShopifyGateway.LineItem line(String gid, String variantGid) {
