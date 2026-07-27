@@ -433,6 +433,59 @@ class ReturnSessionTest {
         assertThat(ex.getReason()).contains("Unreadable waybill scan");
     }
 
+    // ── (r) getSessionPieces — return_pending_inspection appears (prod case) ───
+
+    @Test
+    void r_getSessionPieces_returnPendingInspection_appears() {
+        // Prod repro shape: state-46 (returned) shipment, piece already advanced to
+        // return_pending_inspection by the time the returns-desk session is opened —
+        // tenant e785e5e4 / order c31d5a80. The old filter (return_in_transit, delivered)
+        // never matched this status, so the session always showed zero pieces.
+        UUID orderId = createOrder("returned");
+        createShipment(orderId, "9100016", "returned");
+        String piece = createPiece("return_pending_inspection", orderId);
+        createAlloc(orderId, piece);
+
+        Map<String, Object> session = sessionSvc.createSession("9100016", locationId, null, actorId);
+        UUID sessionId = (UUID) session.get("sessionId");
+
+        Map<String, Object> result = sessionSvc.getSessionPieces(sessionId);
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> pieces = (List<Map<String, Object>>) result.get("pieces");
+
+        assertThat(pieces).hasSize(1);
+        assertThat(pieces.get(0).get("id")).isEqualTo(piece);
+        assertThat(pieces.get(0).get("status")).isEqualTo("return_pending_inspection");
+        assertThat(pieces.get(0).get("processed")).isEqualTo(false);
+    }
+
+    // ── (s) getSessionPieces — restocked piece still appears, processed=true ───
+
+    @Test
+    void s_getSessionPieces_restockedPiece_stillAppearsProcessedTrue() {
+        UUID orderId = createOrder("returned");
+        createShipment(orderId, "9100017", "returned");
+        String piece = createPiece("return_pending_inspection", orderId);
+        createAlloc(orderId, piece);
+
+        Map<String, Object> session = sessionSvc.createSession("9100017", locationId, null, actorId);
+        UUID sessionId = (UUID) session.get("sessionId");
+
+        sessionSvc.recordVerdict(sessionId, piece, "restock", null, locationId, actorId);
+        assertThat(pieceStatus(piece)).isEqualTo("available");
+
+        // Re-opening/re-viewing the session (e.g. worker navigates back) must still show
+        // the resolved piece — an empty list here would look like the verdict was lost.
+        Map<String, Object> result = sessionSvc.getSessionPieces(sessionId);
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> pieces = (List<Map<String, Object>>) result.get("pieces");
+
+        assertThat(pieces).hasSize(1);
+        assertThat(pieces.get(0).get("id")).isEqualTo(piece);
+        assertThat(pieces.get(0).get("status")).isEqualTo("available");
+        assertThat(pieces.get(0).get("processed")).isEqualTo(true);
+    }
+
     // ── (m) Dismiss 2 days ago — inside 7-day snooze, not re-fired ──────────────
 
     @Test

@@ -4,6 +4,57 @@
 
 ## Current state
 
+**Production bug fixed — Waybill Session always showing "no pieces allocated" (2026-07-27).**
+`ReturnSessionService.getSessionPieces()` (`ReturnSessionService.java:139-`, now ~185 lines)
+filtered pieces to `p.status IN ('return_in_transit', 'delivered')` only. A returns-desk
+session is opened AFTER the parcel has physically arrived — by which point state-46 intake
+(or the session's own `recordVerdict`) has already advanced the piece to
+`return_pending_inspection`, a status the old filter never included. Confirmed from prod
+(tenant `e785e5e4`, order `c31d5a80`): zero rows, every time, not an RLS/GUC issue (method was
+already correctly `@Transactional(readOnly = true)` with `TenantContext.require()`) and not the
+`allocations` join (confirmed allocations stay `'packed'` in prod — nothing in the codebase
+ever releases them on delivery/return, verified by grep across all 6
+`UPDATE allocations SET status` call sites).
+
+- **Fix**: widened the status filter to the full return lifecycle a piece can be in when this
+  is called: `return_in_transit`, `delivered`, `return_pending_inspection`, `available`,
+  `damaged`. The last two matter because a re-opened/re-viewed session (worker navigates back)
+  must still show already-resolved pieces (restocked → available, or damaged) — the `processed`
+  `EXISTS` flag already existed in the SELECT specifically to distinguish resolved from
+  pending, but was dead code until now because nothing ever passed the old filter to reach it.
+  Verified `ReturnService.restock()`/`markDamaged()` never touch `allocations` (only
+  `pieces.current_order_id`, cleared to NULL on restock) — the allocations→order_items→orders
+  join this method is built on still resolves correctly post-verdict, so already-resolved
+  pieces really do reappear rather than silently vanishing from the list.
+- Added `s.shipment_leg = 'forward'` to the shipments join (`ReturnSessionService.java`),
+  matching `intakeScan`/`fetchPieceContext` in the same file — prevents wrong-leg fan-out once
+  CRP return-leg shipments exist for an order. Forward-only is correct for RTO (RTO never
+  creates a second shipment row; only CRP does).
+- Did NOT touch `pieces.current_shipment_id` — confirmed that column does not exist. The
+  piece→shipment link here is `current_order_id`-independent: `allocations.order_item_id →
+  order_items.order_id → orders.id → shipments.order_id`.
+- **`ORDER BY p.status DESC, p.last_event_at ASC` — verified, left unchanged (not asked to
+  redesign it), but the resulting order with the widened set is worth knowing**: Postgres
+  enum `DESC` sorts by the type's declared literal order (`V1__baseline.sql`:
+  `available, reserved, packed, awaiting_pickup, with_courier, delivered, return_in_transit,
+  return_pending_inspection, damaged, lost, destroyed`). Restricted to our 5 statuses, DESC
+  produces: **damaged → return_pending_inspection → return_in_transit → delivered →
+  available.** `damaged` sorting first (ahead of the still-actionable
+  `return_pending_inspection`/`return_in_transit` rows) is a byproduct of enum declaration
+  order, not a deliberate priority choice — flagged for a UX call, not changed here since it
+  wasn't part of this fix's scope.
+- **Tests — this method had ZERO coverage before this fix** (confirmed: none of the prior 17
+  `ReturnSessionTest` tests ever called `getSessionPieces`), which is exactly how the bug
+  shipped unnoticed. Added 2 new tests, both using real bare-numeric tracking numbers:
+  - `r_getSessionPieces_returnPendingInspection_appears` — the exact prod repro shape: a
+    `returned`-state shipment with a `return_pending_inspection` piece must appear
+    (`processed=false`).
+  - `s_getSessionPieces_restockedPiece_stillAppearsProcessedTrue` — after `recordVerdict`
+    restocks a piece to `available`, re-calling `getSessionPieces` must still return it, now
+    with `processed=true`.
+  19/19 `ReturnSessionTest` pass. Full backend suite: 702 tests, 0 failures, 0 errors.
+- Not deployed — pending your review and manual deploy approval.
+
 **Production bug fixed — Pickup Session scan (2026-07-27).** Same bug class, second and last
 of the two paths flagged in the previous entry as unfixed: `PickupSessionService.scan()`
 (`PickupSessionService.java:187-221`, backing `POST /api/v1/pickup-sessions/{id}/scans` — the

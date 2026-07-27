@@ -128,8 +128,19 @@ public class ReturnSessionService {
     // ── Pieces eligible for return ────────────────────────────────────────────
 
     /**
-     * Returns all pieces eligible for intake in this session (return_in_transit OR
-     * delivered), annotated with whether they've already been processed.
+     * Returns all pieces relevant to this session — both still-actionable arrivals and
+     * already-resolved ones — annotated with whether they've already been processed.
+     *
+     * Status set covers the full return lifecycle a piece may be in when this is called:
+     *   - return_in_transit          — RTO in transit, not yet arrived
+     *   - delivered                  — customer-after-delivery scenario, not yet returned
+     *   - return_pending_inspection  — arrived and awaiting a verdict (the common case: a
+     *                                  session is opened AFTER physical arrival, by which
+     *                                  point state-46/intake has already moved the piece here)
+     *   - available / damaged        — verdict already recorded (restock / damaged); a
+     *                                  re-opened session must still show these so the list
+     *                                  isn't empty on a second view. `processed` (below)
+     *                                  is what actually distinguishes resolved from pending.
      *
      * Change 2 note: delivered pieces that were NOT scanned are the NORMAL case
      * (customer kept the item). They are returned with processed=false but the UI
@@ -162,11 +173,15 @@ public class ReturnSessionService {
             "JOIN order_items oi ON oi.id            = a.order_item_id " +
             "JOIN orders o       ON o.id             = oi.order_id " +
             "JOIN shipments s    ON s.order_id       = o.id " +
+            "                    AND s.shipment_leg   = 'forward' " +
             "JOIN variants v     ON v.id             = p.variant_id " +
             "JOIN products pr    ON pr.id            = v.product_id " +
             "WHERE s.tracking_number = ? " +
             "  AND s.tenant_id       = ? " +
-            "  AND p.status IN ('return_in_transit'::piece_status, 'delivered'::piece_status) " +
+            "  AND p.status IN ( " +
+            "      'return_in_transit'::piece_status, 'delivered'::piece_status, " +
+            "      'return_pending_inspection'::piece_status, " +
+            "      'available'::piece_status, 'damaged'::piece_status) " +
             "ORDER BY p.status DESC, p.last_event_at ASC",
             sessionId, tenantId, waybill, tenantId);
 
