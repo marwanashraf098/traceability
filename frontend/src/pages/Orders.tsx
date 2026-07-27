@@ -97,6 +97,9 @@ export default function Orders() {
         {(order.isDelayed || order.slaBreached) && (
           <Badge tone="warning" label={t('orderDetail.delayed')} />
         )}
+        {order.notTracedAt && (
+          <Badge tone="neutral" label={t('orders.badge.notTraced')} />
+        )}
       </div>
     )
   }

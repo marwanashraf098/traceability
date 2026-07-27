@@ -89,6 +89,7 @@ export interface OrderSummary {
   failedDeliveryAttempts: number
   isDelayed: boolean | null
   slaBreached: boolean | null
+  notTracedAt: string | null
 }
 
 export interface OrderPage {
@@ -167,6 +168,7 @@ export interface OrderDetail {
   items: OrderItem[]
   shipments: ShipmentDetail[]
   bostaLinkStatus: string | null
+  notTracedAt: string | null
 }
 
 export interface OrderListParams {

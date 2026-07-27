@@ -87,6 +87,9 @@
       "lost": "Lost",
       "cancelled": "Cancelled"
     },
+    "badge": {
+      "notTraced": "Not Traced"
+    },
     "empty": "No orders found",
     "prev": "Previous",
     "next": "Next",

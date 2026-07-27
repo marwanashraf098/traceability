@@ -4,6 +4,60 @@
 
 ## Current state
 
+**696 backend tests green** — 2026-07-27 (V57: Pick & Fulfill queue gating by Bosta send-state + "Not Traced" tag).
+
+**Queue-gating-not-traced — COMPLETE.**
+
+Production evidence (Jumi, `07fc572c-2158-412d-ae31-ec61e22378b7`): 58 orders stuck in the
+Pick & Fulfill queue at `status='new'` whose Bosta shipment was already `delivered`/`returned`
+— merchant fulfilled them directly via the Bosta app, never picked in Traced. All 58 are
+terminal, so a go-forward detector alone would never touch them — the backfill is what
+actually clears the queue.
+
+- **V57 migration** (`orders.not_traced_at timestamptz`, partial index, backfill UPDATE).
+  Flyway runs as `postgres` (BYPASSRLS, confirmed via `spring.flyway.*` / `DataSourceConfig
+  .ownerDataSource()`), so the backfill UPDATE runs directly in the migration and spans all
+  tenants in one pass — no fallback job needed.
+- **`NotTracedTagger`** (new, `com.traceability.inventory`) — the one shared predicate. Tags
+  an order when its latest `shipment_leg='forward'` shipment is sent to Bosta
+  (`internal_state <> 'created'`) AND it has zero `active`/`packed` allocations. Self-contained:
+  re-derives the latest forward shipment from the DB rather than trusting whatever shipment
+  the caller just touched — this is what makes a CRP return-leg update structurally unable to
+  mis-fire the tag. The exact same "latest forward shipment via `id DESC LIMIT 1`" shape is
+  used in the V57 backfill SQL and in `FulfillService.getQueue()`'s new `LEFT JOIN LATERAL` —
+  one shape, three call sites, cannot drift.
+- **Two call sites for the tagger** (build-spec finding A — the real gap): `BostaWebhookJob
+  .process()`, unconditionally after the piece-transition step (the not-traced case IS zero
+  pieces, so gating on "pieces found" would make it never fire for the orders it exists to
+  catch); and `ShipmentLinkService.manualLink()`. The second call site is required because a
+  shipment can be **born already in a terminal state** — `manualLink()` (called by the
+  operator's manual-link action, and by `BostaOrderReconcileJob`'s 5-minute automated
+  reconcile) creates the shipment row from the `bosta_state_code` stored on
+  `unlinked_bosta_deliveries` at discovery time, which may already be `delivered`/`returned`.
+  That path never calls `process()`, and a terminal shipment is never polled again, so without
+  this second call site the tag would silently never fire going forward for exactly this
+  shape of order. `linkByAwbScan()`/`completeLink()` were checked and ruled out — they
+  hardcode `internal_state = 'created'` at creation, so they cannot birth a terminal shipment.
+- **Queue gate** — `FulfillService.getQueue()` excludes an order when its latest forward
+  shipment state is anything other than `NULL`/`created`. Deliberately NOT also filtered on
+  `not_traced_at` — the two mechanisms are independent (a `created`-state order that was
+  wrongly tagged still shows up in the queue). `self_pickup_pending` orders never have a
+  shipment row, so they're unaffected (regression-tested).
+- **Frontend** — `orders.notTracedAt` threaded through `OrderSummary`/`OrderDetail`, neutral
+  "Not Traced" badge in `Orders.tsx`, i18n `orders.badge.notTraced` (en/ar).
+- Migration is **V57** (repo had moved to V56 since the spec was written — `MigrationSmokeTest`
+  now asserts `migrationsExecuted == 56`, confirmed by an actual Testcontainers run, not
+  hand-computed).
+- Mode B held: zero Bosta API writes anywhere in this change — read/filter/tag only.
+- New tests: `QueueSendStateGateTest` (queue filter incl. self-pickup + on-hold regressions),
+  `NotTracedDetectorTest` (detector via `process()`, same-tenant positive control, idempotent
+  re-run, `manualLink()` born-terminal path, RLS positive + cross-tenant via `app_user`),
+  `NotTracedBackfillTest` (two-phase Flyway run: migrate to V56, seed the stuck population
+  directly, migrate to V57, assert exactly the stuck order is tagged and a traced sibling
+  isn't). Full suite: 696 tests / 0 failures / 0 errors.
+- Not deployed — pending manual `--no-cache` deploy + post-deploy verification on Jumi per
+  the build spec (`docs/queue-gating-not-traced-build-spec.md`).
+
 **682 backend tests green** — 2026-07-21 (C3/C4/C5: RLS @Transactional fixes, lookup error codes, coverage guard).
 
 **C3/C4/C5 RLS audit — COMPLETE.**
