@@ -173,6 +173,18 @@ public class ReturnService {
             "UPDATE pieces SET current_order_id = NULL, current_location_id = ? WHERE id = ?",
             locationId, pieceId);
 
+        // Release the piece's stale allocation from its OLD order — without this, the row
+        // stays 'packed' forever and FulfillService.scan()'s ALREADY_RESERVED guard (which
+        // reads allocations.status by piece_id alone, no order filter) permanently blocks
+        // re-allocating this piece to any new order, even though pieces.status/current_order_id
+        // both correctly show it as free. Restock is the only return verdict that frees a piece
+        // back to available for re-allocation — damaged/lost are terminal, their stale
+        // allocations are inert and intentionally left alone.
+        jdbc.update(
+            "UPDATE allocations SET status = 'released' " +
+            "WHERE piece_id = ? AND status IN ('active','packed')",
+            pieceId);
+
         // Async Shopify shadow sync — Trigger 2 (return_inspection → AVAILABLE).
         // Damaged pieces are NOT routed here; markDamaged() has no sync call — invariant preserved.
         shopifyInventory.onReturnInspectionAvailable(tenantId, pieceId, locationId);

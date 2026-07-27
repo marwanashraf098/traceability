@@ -36,6 +36,9 @@ import static org.assertj.core.api.Assertions.*;
  *     return_received event appears in report; piece WITH event is excluded
  * (f) Continuous timeline (FR-12.5): shipped → returned → restocked all on lookup timeline
  * (g) Cross-tenant intake: different tenant context → 404 (tenant isolation enforced)
+ * (h) Restocked piece re-allocation (root cause B fix): a piece picked/packed for order A,
+ *     shipped, returned, and restocked must be re-allocatable to a NEW order B — the old
+ *     allocation row must be 'released', not left 'packed' blocking ALREADY_RESERVED.
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.NONE)
 @Testcontainers
@@ -63,6 +66,7 @@ class Day12Test {
 
     @Autowired ReturnService  returnSvc;
     @Autowired LookupService  lookupSvc;
+    @Autowired FulfillService fulfillSvc;
     @Autowired JdbcTemplate   jdbc;
     @MockBean  JobScheduler   jobScheduler;
 
@@ -289,6 +293,43 @@ class Day12Test {
             TenantContext.set(tenantId);
             jdbc.update("DELETE FROM tenants WHERE id = ?", otherTenant);
         }
+    }
+
+    // ── (h) Restocked piece re-allocation — root cause B fix ─────────────────
+
+    @Test
+    void h_restockedPiece_reAllocatesToNewOrder_oldAllocationReleased() {
+        // Order A: piece picked/packed, shipped, RTO'd back.
+        UUID orderA = createOrder("returning");
+        String piece = createPiece("return_in_transit", orderA);
+        createAllocationPacked(orderA, piece);
+
+        UUID oldAllocId = jdbc.queryForObject(
+            "SELECT id FROM allocations WHERE piece_id = ?", UUID.class, piece);
+
+        // Intake + restock — piece frees back to available.
+        returnSvc.intakeScan("PC-" + piece, locationId, actorId);
+        returnSvc.restock(piece, locationId, actorId);
+        assertThat(pieceStatus(piece)).isEqualTo("available");
+
+        // The OLD allocation must be released, not left 'packed' — this is the fix.
+        String oldAllocStatus = jdbc.queryForObject(
+            "SELECT status::text FROM allocations WHERE id = ?", String.class, oldAllocId);
+        assertThat(oldAllocStatus).isEqualTo("released");
+
+        // Re-allocate the SAME physical piece to a brand-new order B.
+        UUID orderB = createOrder("new");
+        jdbc.update(
+            "INSERT INTO order_items (id, tenant_id, order_id, variant_id, quantity) " +
+            "VALUES (gen_random_uuid(), ?, ?, ?, 1)",
+            tenantId, orderB, variantId);
+
+        FulfillService.ScanResult result = fulfillSvc.scan(orderB, "PC-" + piece, actorId);
+
+        assertThat(result.success())
+            .as("restocked piece must be re-allocatable to a new order — code: " + result.code())
+            .isTrue();
+        assertThat(result.code()).isEqualTo("SCANNED");
     }
 
     // ── DB helpers ────────────────────────────────────────────────────────────

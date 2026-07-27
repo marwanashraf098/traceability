@@ -169,7 +169,19 @@ public class ReturnSessionService {
             "    ) AS processed " +
             "FROM pieces p " +
             "JOIN allocations a  ON a.piece_id      = p.id " +
-            "                    AND a.status        IN ('active','packed') " +
+            // 'released' included (as of the restock() fix, root-cause-B) so an
+            // already-restocked piece — whose allocation is now correctly released,
+            // not left dangling 'packed' — still resolves to the order/shipment it
+            // came from. Pinned to the single LATEST allocation row per piece so a
+            // piece with prior unscan/rescan history doesn't fan out into duplicate
+            // rows; safe because ALREADY_RESERVED blocks a second live allocation
+            // from ever being created while the shipped one is still active.
+            "                    AND a.status        IN ('active','packed','released') " +
+            "                    AND a.id = ( " +
+            "                        SELECT a2.id FROM allocations a2 " +
+            "                        WHERE a2.piece_id = p.id " +
+            "                        ORDER BY a2.allocated_at DESC LIMIT 1 " +
+            "                    ) " +
             "JOIN order_items oi ON oi.id            = a.order_item_id " +
             "JOIN orders o       ON o.id             = oi.order_id " +
             "JOIN shipments s    ON s.order_id       = o.id " +

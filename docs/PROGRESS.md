@@ -19,31 +19,46 @@ added. Tests: `rt2` rewritten for the new 404 behavior (previously asserted a `m
 the real backend never sends), `rt2b` confirms the switch-to-intake action works, `rt2c`
 confirms a 500 still shows the generic banner. 13/13 `returns.test.tsx` pass.
 
-**Diagnosed, NOT fixed — restocked piece can't be re-allocated (2026-07-27).** Repro: a piece
-is returned then restocked (`ReturnService.restock()`, status → `available`), then fails to
-scan into a new order with `ALREADY_RESERVED` / "already reserved for another order."
-Root cause **B**: `restock()` (`ReturnService.java:172-174`) correctly clears
-`pieces.current_order_id` to `NULL` —
-```sql
-UPDATE pieces SET current_order_id = NULL, current_location_id = ? WHERE id = ?
-```
-— but never touches `allocations`. The guard that rejects re-allocation is
-`FulfillService.scan()`'s ALREADY_RESERVED check (`FulfillService.java:192-198`):
-```sql
-SELECT COUNT(*) FROM allocations WHERE piece_id = ? AND status IN ('active','packed')
-```
-— it reads `allocations.status` only, with no order filter, keyed purely on `piece_id`. The
-piece's *original* allocation row (from the order it was picked/packed for before shipping)
-still carries `status='packed'` — nothing in the codebase's 6 `UPDATE allocations SET status`
-call sites is invoked by `restock()` or by anything in the return flow. So the stale allocation
-row survives indefinitely and permanently blocks re-allocation, even though `pieces.status`
-and `current_order_id` both correctly show the piece as free. Not root cause A (current_order_id
-IS cleared, confirmed by direct quote) and not "something else" (C) — this is squarely B.
-**Production impact**: every piece ever restocked through this path is very likely stuck this
-way today (not diagnosed by count — no read-only query has been run against prod yet; the
-query to run is documented, not yet executed). No code changed for this — needs a design
-decision (release the old allocation inside `restock()`? on which trigger exactly?) before a
-fix is written.
+**Production bug fixed — restocked piece couldn't be re-allocated (2026-07-27).** Root cause
+**B**, confirmed against prod (6 stuck pieces across both tenants, all identical shape:
+`available`, `current_order_id NULL`, allocation still `'packed'`): `ReturnService.restock()`
+(`ReturnService.java:172-174`) cleared `pieces.current_order_id` correctly but never released
+the piece's old `allocations` row, and `FulfillService.scan()`'s ALREADY_RESERVED guard
+(`FulfillService.java:192-198`) reads `allocations.status IN ('active','packed')` by
+`piece_id` alone — the stale row blocked re-allocation forever.
+
+- **Fix**: `restock()` now releases the piece's old allocation(s) in the same transaction,
+  right after clearing `current_order_id`:
+  ```sql
+  UPDATE allocations SET status = 'released'
+  WHERE piece_id = ? AND status IN ('active','packed')
+  ```
+  `'released'` reused verbatim — it's the existing value at all 6 `UPDATE allocations SET
+  status` call sites in `FulfillService`/`PieceAdjustService` (unscan, cancel, unpack); no new
+  enum value invented. Scoped to `restock()` only — damaged/lost are terminal, their stale
+  allocations are inert, not touched (per the confirmed narrow-fix direction).
+- **Second-order fix, required by the first**: releasing the allocation broke
+  `ReturnSessionService.getSessionPieces()` (the fix two entries below) — its JOIN required a
+  *live* `active`/`packed` allocation to resolve a piece's shipment, so a freshly-restocked
+  piece stopped appearing in its own session's piece list the instant this fix landed. Widened
+  the join to `IN ('active','packed','released')`, pinned to the single latest allocation row
+  per piece (`ORDER BY allocated_at DESC LIMIT 1`) so a piece with unscan/rescan history
+  doesn't fan out into duplicate rows — safe because ALREADY_RESERVED structurally prevents a
+  second live allocation from ever coexisting with the shipped one.
+- **Test** (`Day12Test.h_restockedPiece_reAllocatesToNewOrder_oldAllocationReleased`, the
+  coverage gap that let this ship — `c_restock_...` never exercised an allocation at all):
+  receive/pick/pack a piece to order A → ship → return → restock → assert the OLD allocation
+  row is `'released'` (not `'packed'`) → scan the SAME piece into a brand-new order B via
+  `FulfillService.scan()` → assert success (`SCANNED`, not `ALREADY_RESERVED`).
+- **Backfill — V58** (`V58__release_stale_restocked_allocations.sql`), tenant-agnostic
+  (Flyway runs as `postgres`/BYPASSRLS): releases every already-stuck allocation, gated on
+  `pieces.status = 'available' AND current_order_id IS NULL` — a combination only reachable via
+  `restock()` (or an equivalent legitimate free-and-release path), so it can never touch a live
+  allocation for a genuinely in-flight order.
+- 703/703 backend tests green (Day12Test +1, MigrationSmokeTest count → 57 for V1–V58,
+  `NotTracedBackfillTest`'s "migrate past V56" assertion updated from 1→2 pending migrations
+  now that V58 exists — confirmed harmless to that test's fixtures, which use `'packed'`
+  pieces, not `'available'`).
 
 **Production bug fixed — Waybill Session always showing "no pieces allocated" (2026-07-27).**
 `ReturnSessionService.getSessionPieces()` (`ReturnSessionService.java:139-`, now ~185 lines)

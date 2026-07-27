@@ -100,14 +100,17 @@ class NotTracedBackfillTest {
                        tenantId, tracedItemId, tracedPieceId);
         }
 
-        // 2. Apply the rest of the migrations — only V57 is pending.
+        // 2. Apply the rest of the migrations — V57 (this test's subject) and whatever
+        //    has landed since (currently V58, an unrelated allocations backfill that only
+        //    touches 'available' pieces — the 'packed' traced-piece fixture above is
+        //    untouched by it, so its presence here doesn't affect this test's assertions).
         Flyway toLatest = Flyway.configure()
                 .dataSource(POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword())
                 .locations("classpath:db/migration")
                 .load();
         MigrateResult r2 = toLatest.migrate();
-        assertThat(r2.success).as("V57 migration must succeed").isTrue();
-        assertThat(r2.migrationsExecuted).as("only V57 should be pending after V56").isEqualTo(1);
+        assertThat(r2.success).as("migrations after V56 must succeed").isTrue();
+        assertThat(r2.migrationsExecuted).as("V57 + V58 pending after V56").isEqualTo(2);
 
         try (Connection conn = DriverManager.getConnection(
                 POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword())) {
