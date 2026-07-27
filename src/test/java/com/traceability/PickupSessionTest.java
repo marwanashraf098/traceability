@@ -91,10 +91,15 @@ class PickupSessionTest {
 
     // ── Helpers ───────────────────────────────────────────────────────────────
 
+    // Bare-numeric — real Bosta tracking numbers are digits-only; shipments.tracking_number
+    // is globally UNIQUE so a monotonic counter guarantees no collisions across tests.
+    private static final java.util.concurrent.atomic.AtomicLong TN_COUNTER =
+        new java.util.concurrent.atomic.AtomicLong(9_500_000_000L);
+
     private UUID createPackedShipment(String leg) {
         UUID variantId = UUID.randomUUID();
         UUID productId = UUID.randomUUID();
-        String tn = "TN-PS-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase();
+        String tn = String.valueOf(TN_COUNTER.incrementAndGet());
 
         jdbc.update(
             "INSERT INTO products (id, tenant_id, store_id, external_id, title, status) " +
@@ -390,5 +395,42 @@ class PickupSessionTest {
             org.junit.jupiter.api.Assumptions.assumeTrue(false,
                 "app_user not available in test container — RLS assertion skipped: " + e.getMessage());
         }
+    }
+
+    // ── ps8: hub-prefixed scan matches the bare stored tracking_number ─────────
+
+    @Test
+    @Order(8)
+    void ps8_hubPrefixedScan_matchesNormalizedStoredTrackingNumber() {
+        UUID shipmentId = createPackedShipment("forward");
+        String tn = jdbc.queryForObject(
+            "SELECT tracking_number FROM shipments WHERE id = ?", String.class, shipmentId);
+
+        UUID sessionId = service.openSession(tenantId, actorId, LocalDate.now().plusDays(4), "10:00 to 13:00", null);
+
+        // Physical label top barcode carries the D-07 hub-routing prefix; the DB stores
+        // (and the Bosta system of record uses) the bare digits only.
+        PickupSessionService.ScanResult result = service.scan(tenantId, sessionId, actorId, "D-07-" + tn);
+
+        assertThat(result.outcome()).isEqualTo(PickupSessionService.ScanOutcome.ACCEPTED);
+        assertThat(result.entry()).isNotNull();
+        // Canonical everywhere from here on — normalized, not the raw scan.
+        assertThat(result.entry().trackingNumber()).isEqualTo(tn);
+    }
+
+    // ── ps9: unreadable scan is rejected, not silently mismatched ──────────────
+
+    @Test
+    @Order(9)
+    void ps9_unreadableScan_rejectedWith400() {
+        UUID sessionId = service.openSession(tenantId, actorId, LocalDate.now().plusDays(5), "10:00 to 13:00", null);
+
+        assertThatThrownBy(() -> service.scan(tenantId, sessionId, actorId, "###garbage###"))
+            .isInstanceOf(org.springframework.web.server.ResponseStatusException.class)
+            .satisfies(ex -> {
+                var rse = (org.springframework.web.server.ResponseStatusException) ex;
+                assertThat(rse.getStatusCode()).isEqualTo(org.springframework.http.HttpStatus.BAD_REQUEST);
+                assertThat(rse.getReason()).contains("Unreadable waybill scan");
+            });
     }
 }

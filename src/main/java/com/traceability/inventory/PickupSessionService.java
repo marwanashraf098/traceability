@@ -188,6 +188,16 @@ public class PickupSessionService {
         record ShipmentRow(UUID id, UUID orderId, String leg, String internalState,
                            String orderNumber, BigDecimal cod) {}
 
+        // Normalize before matching — the physical Bosta label's top barcode carries a hub
+        // routing prefix (e.g. D-07-2944282510) that shipments.tracking_number never stores.
+        // Canonical everywhere from here on: the normalized value is what gets matched and
+        // echoed back — never the raw scan (mirrors ReturnSessionService.createSession).
+        String normalizedTracking = TrackingNumberNormalizer.normalize(trackingNumber);
+        if (normalizedTracking == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                "Unreadable waybill scan: " + trackingNumber);
+        }
+
         return TenantContext.runAs(tenantId, () ->
             tx.execute(s -> {
                 // 1. Verify session is open.
@@ -218,7 +228,7 @@ public class PickupSessionService {
                         rs.getString("internal_state"),
                         rs.getString("order_number"),
                         rs.getBigDecimal("cod_amount")) : null,
-                    trackingNumber, tenantId);
+                    normalizedTracking, tenantId);
 
                 if (shipment == null) return new ScanResult(ScanOutcome.UNKNOWN_AWB, null);
 
@@ -279,7 +289,7 @@ public class PickupSessionService {
                     rs -> rs.next() ? rs.getString("name") : null, actorUserId);
 
                 return new ScanResult(ScanOutcome.ACCEPTED,
-                    new ScanEntry(shipment.id(), trackingNumber, shipment.orderNumber(),
+                    new ScanEntry(shipment.id(), normalizedTracking, shipment.orderNumber(),
                                   shipment.cod(), scannedAt, actorName));
             }));
     }

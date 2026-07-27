@@ -4,6 +4,37 @@
 
 ## Current state
 
+**Production bug fixed — Pickup Session scan (2026-07-27).** Same bug class, second and last
+of the two paths flagged in the previous entry as unfixed: `PickupSessionService.scan()`
+(`PickupSessionService.java:187-221`, backing `POST /api/v1/pickup-sessions/{id}/scans` — the
+pickup-manifest scan a worker does to confirm courier handover) did the same raw exact-match
+`WHERE s.tracking_number = ?` with no normalization. Fixed identically to `createSession` in
+`3390752`: normalize via `TrackingNumberNormalizer.normalize()` before the lookup, null → `400
+Unreadable waybill scan`. Persistence: `pickup_shipments` has no `tracking_number` column at
+all (it only stores the `shipment_id` FK), so there was no canonical-column decision to make —
+the normalized value is used for the match and echoed in the `ScanEntry` response, the raw
+scan is simply not retained anywhere. No schema change.
+
+- All 9 `PickupSessionTest` fixtures generated fictional tracking numbers
+  (`"TN-PS-" + random hex`, non-numeric) — the same "why the bug shipped invisibly" pattern as
+  `ReturnSessionTest`. Replaced with a monotonic numeric counter (`shipments.tracking_number`
+  is globally UNIQUE, not per-tenant, so a counter guarantees no cross-test collisions).
+  Added 2 new tests (ps8, ps9): a hub-prefixed scan (`D-07-<n>`) against a bare-stored
+  shipment now returns `ACCEPTED` with the normalized number echoed back; an unreadable scan
+  is rejected with 400. 9/9 `PickupSessionTest` pass. Full backend suite: 700 tests, 0
+  failures, 0 errors.
+- `OrderController.list()`'s orders-list tracking search filter
+  (`OrderController.java:139-141`, `GET /api/v1/orders?tracking=`) is **known and accepted
+  as unnormalized — not a bug, not gated for a future fix.** It's a soft `ILIKE '%...%'`
+  substring search box, not an exact-match gate blocking a workflow. A bare-digit tracking
+  number substring-matches correctly regardless of what the merchant types around it; a
+  prefixed paste just narrows/misses results, which degrades gracefully into "no results" —
+  never a silent-data-loss or blocked-workflow failure the way the two fixed paths were.
+  Deliberately left alone.
+- Every scanned-waybill / tracking-number read path in the app now normalizes before matching,
+  except the one above (intentional). Audit closed.
+- Not deployed — pending manual deploy per usual process.
+
 **Production bug fixed — Waybill Session 404 (2026-07-27).** `POST /api/v1/returns/sessions`
 was returning an empty-body 404 for real, existing Bosta waybills. Root-caused across three
 diagnose-only passes before touching code:

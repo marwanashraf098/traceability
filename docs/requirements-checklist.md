@@ -99,7 +99,7 @@ One line per requirement · [M] Must / [S] Should / [C] Could · use as the buil
 ## FR-10 Pickup
 - [x] 10.1 [M] Batch pickup creation: select Awaiting Pickup orders, date, location → Bosta pickup [Day 24: BOSTA_MANAGED + TRACED_MANAGED, date validation, already-exists handling]
 - [x] 10.2 [M] Printable manifest: order/AWB/COD per parcel + batch COD total [Day 24: manifest generated for both modes; Day 26: COD total derived live, no stored column]
-- [~] 10.3 [M] State 21 (picked up from business) → With Courier + handed_to_courier event; manual fallback (attributed) [V47 FR-16 Phase 1: scan-session close is the attributed manual fallback → with_courier + handed_to_courier event; Bosta state-21 webhook path is Phase 2]
+- [~] 10.3 [M] State 21 (picked up from business) → With Courier + handed_to_courier event; manual fallback (attributed) [V47 FR-16 Phase 1: scan-session close is the attributed manual fallback → with_courier + handed_to_courier event; Bosta state-21 webhook path is Phase 2] [fix: PickupSessionService.scan() now normalizes the scanned AWB via TrackingNumberNormalizer before matching shipments.tracking_number — same hub-prefix mismatch bug as 3390752, second of two known-unnormalized paths, now closed]
 - [ ] 10.4 [S] Skipped parcels (no collection by EOD+1) → exception
 
 ## FR-11 Shipment Lifecycle
