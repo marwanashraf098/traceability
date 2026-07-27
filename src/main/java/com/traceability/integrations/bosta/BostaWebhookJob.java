@@ -67,6 +67,7 @@ public class BostaWebhookJob {
     private final ObjectMapper         mapper;
     private final InventoryLedger      ledger;
     private final com.traceability.inventory.ShipmentLinkService shipmentLinkService;
+    private final com.traceability.inventory.NotTracedTagger notTracedTagger;
     private final MatcherVersionHolder matcherVersionHolder;
 
     public BostaWebhookJob(JdbcTemplate jdbc,
@@ -77,6 +78,7 @@ public class BostaWebhookJob {
                             ObjectMapper mapper,
                             InventoryLedger ledger,
                             com.traceability.inventory.ShipmentLinkService shipmentLinkService,
+                            com.traceability.inventory.NotTracedTagger notTracedTagger,
                             MatcherVersionHolder matcherVersionHolder) {
         this.jdbc                = jdbc;
         this.tx                  = new TransactionTemplate(txm);
@@ -86,6 +88,7 @@ public class BostaWebhookJob {
         this.mapper              = mapper;
         this.ledger              = ledger;
         this.shipmentLinkService = shipmentLinkService;
+        this.notTracedTagger     = notTracedTagger;
         this.matcherVersionHolder = matcherVersionHolder;
     }
 
@@ -406,6 +409,15 @@ public class BostaWebhookJob {
                             current, targetStatus, pr.id(), webhookEventId);
                     }
                 }
+            }
+
+            // 10.5 — Queue-gating-not-traced: runs UNCONDITIONALLY, regardless of whether
+            // step 10 found any pieces. The not-traced case IS zero allocations/pieces, so
+            // gating this on "pieces found" would make it never fire for exactly the orders
+            // it exists to catch. Self-contained (re-derives the latest forward shipment
+            // itself) — see NotTracedTagger javadoc.
+            if (resolvedShipment.orderId() != null) {
+                notTracedTagger.maybeTagNotTraced(resolvedShipment.orderId(), tenantId);
             }
 
             // 11. Mark processed + claim external_event_id AFTER all state is applied.

@@ -55,6 +55,7 @@ public class ShipmentLinkService {
     private final EncryptionService encryptionService;
     private final BlocklistService  blocklist;
     private final ObjectMapper      mapper;
+    private final NotTracedTagger   notTracedTagger;
 
     public ShipmentLinkService(JdbcTemplate jdbc,
                                 InventoryLedger ledger,
@@ -62,7 +63,8 @@ public class ShipmentLinkService {
                                 BostaGateway bostaGateway,
                                 EncryptionService encryptionService,
                                 BlocklistService blocklist,
-                                ObjectMapper mapper) {
+                                ObjectMapper mapper,
+                                NotTracedTagger notTracedTagger) {
         this.jdbc              = jdbc;
         this.ledger            = ledger;
         this.stateMapper       = stateMapper;
@@ -70,6 +72,7 @@ public class ShipmentLinkService {
         this.encryptionService = encryptionService;
         this.blocklist         = blocklist;
         this.mapper            = mapper;
+        this.notTracedTagger   = notTracedTagger;
     }
 
     /**
@@ -353,6 +356,15 @@ public class ShipmentLinkService {
         }
 
         transitionPackedPieces(orderId, shipmentId, tenantId, actorUserId, null);
+
+        // Queue-gating-not-traced (build spec finding A): a shipment linked here can be
+        // born already in a terminal state (mapped from the bosta_state_code stored on the
+        // unlinked_bosta_deliveries row at discovery time) without ever passing through
+        // BostaWebhookJob.process() — terminal shipments are never polled again, so without
+        // this call the order would never be tagged going forward. Both callers of
+        // manualLink() (operator manual-link, BostaOrderReconcileJob) are covered by this
+        // one call site.
+        notTracedTagger.maybeTagNotTraced(orderId, tenantId);
 
         jdbc.update(
             "UPDATE orders SET status = 'awaiting_pickup' " +

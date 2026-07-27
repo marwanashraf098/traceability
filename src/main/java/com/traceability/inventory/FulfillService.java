@@ -36,6 +36,15 @@ public class FulfillService {
      * Returns orders eligible for action: status IN ('new','ready_to_pick',
      * 'self_pickup_pending'), not on hold, oldest first.
      * self_pickup_pending orders are fully packed and awaiting customer handover.
+     *
+     * Queue-gating-not-traced spec: also excludes orders whose latest shipment_leg='forward'
+     * shipment is already sent to Bosta (internal_state <> 'created') — the merchant
+     * fulfilled it directly via Bosta, so there is nothing left to pick in Traced. Orders
+     * with no forward shipment, or one still 'created', stay in the queue (self_pickup_pending
+     * orders never have a shipment, so they are unaffected). This is the state-gate filter
+     * alone — deliberately NOT also filtered on not_traced_at (see NotTracedTagger): the two
+     * mechanisms are independent so a 'created'-state order that was wrongly tagged still
+     * shows up here.
      */
     @Transactional(readOnly = true)
     public List<Map<String, Object>> getQueue() {
@@ -52,10 +61,19 @@ public class FulfillService {
             "       ), 0) AS scanned_units " +
             "FROM orders o " +
             "LEFT JOIN order_items oi ON oi.order_id = o.id " +
+            "LEFT JOIN LATERAL ( " +
+            "    SELECT internal_state " +
+            "    FROM shipments " +
+            "    WHERE order_id = o.id AND tenant_id = o.tenant_id " +
+            "      AND shipment_leg = 'forward' " +
+            "    ORDER BY id DESC " +
+            "    LIMIT 1 " +
+            ") latest_shipment ON true " +
             "WHERE o.tenant_id = ? " +
             "  AND o.status IN ('new','ready_to_pick','self_pickup_pending') " +
             "  AND o.on_hold = false " +
             "  AND o.placed_at > now() - (? * INTERVAL '1 day') " +
+            "  AND (latest_shipment.internal_state IS NULL OR latest_shipment.internal_state = 'created') " +
             "GROUP BY o.id " +
             "ORDER BY o.created_at ASC",
             tenantId, lookbackDays);

@@ -38,7 +38,8 @@ public class OrderController {
         String status, boolean onHold, BigDecimal codAmount,
         Instant placedAt, String trackingNumber,
         String deliveryState, String exceptionReason, String bostaLinkStatus,
-        int failedDeliveryAttempts, Boolean isDelayed, Boolean slaBreached) {}
+        int failedDeliveryAttempts, Boolean isDelayed, Boolean slaBreached,
+        Instant notTracedAt) {}
 
     public record OrderPage(List<OrderSummary> items, int page, int size, long total) {}
 
@@ -74,7 +75,7 @@ public class OrderController {
         String status, boolean onHold, String holdReason,
         Instant placedAt, Instant createdAt,
         List<OrderItem> items, List<ShipmentDetail> shipments,
-        String bostaLinkStatus) {}
+        String bostaLinkStatus, Instant notTracedAt) {}
 
     // ── daily order counts (dashboard chart) ────────────────────────────────
 
@@ -172,7 +173,8 @@ public class OrderController {
                    o.bosta_link_status,
                    COALESCE(s.failed_delivery_attempts, 0) AS failed_delivery_attempts,
                    s.is_delayed,
-                   s.sla_breached
+                   s.sla_breached,
+                   o.not_traced_at
             """ + baseJoin + """
              ORDER BY o.placed_at DESC NULLS LAST, o.created_at DESC
              LIMIT ? OFFSET ?
@@ -192,7 +194,8 @@ public class OrderController {
                 rs.getString("bosta_link_status"),
                 rs.getInt("failed_delivery_attempts"),
                 rs.getObject("is_delayed", Boolean.class),
-                rs.getObject("sla_breached", Boolean.class)
+                rs.getObject("sla_breached", Boolean.class),
+                rs.getTimestamp("not_traced_at") != null ? rs.getTimestamp("not_traced_at").toInstant() : null
             ),
             pageParams.toArray()));
 
@@ -212,7 +215,7 @@ public class OrderController {
                 SELECT o.id, o.number, o.customer_name, o.customer_phone,
                        o.address, o.payment_method, o.cod_amount,
                        o.status, o.on_hold, o.hold_reason,
-                       o.placed_at, o.created_at, o.bosta_link_status
+                       o.placed_at, o.created_at, o.bosta_link_status, o.not_traced_at
                 FROM orders o
                 WHERE o.id = ?
                   AND o.tenant_id = NULLIF(current_setting('app.current_tenant', true), '')::uuid
@@ -238,7 +241,8 @@ public class OrderController {
                         rs.getTimestamp("placed_at") != null ? rs.getTimestamp("placed_at").toInstant() : null,
                         rs.getTimestamp("created_at").toInstant(),
                         null, null,  // items + shipments filled below
-                        rs.getString("bosta_link_status")
+                        rs.getString("bosta_link_status"),
+                        rs.getTimestamp("not_traced_at") != null ? rs.getTimestamp("not_traced_at").toInstant() : null
                     );
                 }, orderId);
 
@@ -336,7 +340,7 @@ public class OrderController {
                 order.address(), order.paymentMethod(), order.codAmount(),
                 order.status(), order.onHold(), order.holdReason(),
                 order.placedAt(), order.createdAt(),
-                items, shipments, order.bostaLinkStatus());
+                items, shipments, order.bostaLinkStatus(), order.notTracedAt());
         });
     }
 
