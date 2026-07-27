@@ -33,16 +33,16 @@ ever releases them on delivery/return, verified by grep across all 6
 - Did NOT touch `pieces.current_shipment_id` — confirmed that column does not exist. The
   piece→shipment link here is `current_order_id`-independent: `allocations.order_item_id →
   order_items.order_id → orders.id → shipments.order_id`.
-- **`ORDER BY p.status DESC, p.last_event_at ASC` — verified, left unchanged (not asked to
-  redesign it), but the resulting order with the widened set is worth knowing**: Postgres
-  enum `DESC` sorts by the type's declared literal order (`V1__baseline.sql`:
-  `available, reserved, packed, awaiting_pickup, with_courier, delivered, return_in_transit,
-  return_pending_inspection, damaged, lost, destroyed`). Restricted to our 5 statuses, DESC
-  produces: **damaged → return_pending_inspection → return_in_transit → delivered →
-  available.** `damaged` sorting first (ahead of the still-actionable
-  `return_pending_inspection`/`return_in_transit` rows) is a byproduct of enum declaration
-  order, not a deliberate priority choice — flagged for a UX call, not changed here since it
-  wasn't part of this fix's scope.
+- **Follow-up (same day): `ORDER BY` fixed.** The plain `p.status DESC` flagged above sorted
+  by Postgres enum declaration order, putting terminal `damaged` ahead of the still-actionable
+  `return_pending_inspection`/`return_in_transit` rows. Replaced with an explicit
+  actionable-first `CASE p.status WHEN 'return_pending_inspection' THEN 0 WHEN
+  'return_in_transit' THEN 1 WHEN 'delivered' THEN 2 WHEN 'available' THEN 3 WHEN 'damaged'
+  THEN 4 ELSE 5 END, p.last_event_at ASC` — intent no longer depends on enum declaration
+  order, so a future enum addition can't silently reshuffle this list again. Both
+  `getSessionPieces` tests now include a sibling `damaged` piece and assert
+  `return_pending_inspection` sorts above it, locking the ordering intent in the test suite
+  instead of leaving it as a comment.
 - **Tests — this method had ZERO coverage before this fix** (confirmed: none of the prior 17
   `ReturnSessionTest` tests ever called `getSessionPieces`), which is exactly how the bug
   shipped unnoticed. Added 2 new tests, both using real bare-numeric tracking numbers:

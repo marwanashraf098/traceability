@@ -182,7 +182,14 @@ public class ReturnSessionService {
             "      'return_in_transit'::piece_status, 'delivered'::piece_status, " +
             "      'return_pending_inspection'::piece_status, " +
             "      'available'::piece_status, 'damaged'::piece_status) " +
-            "ORDER BY p.status DESC, p.last_event_at ASC",
+            "ORDER BY CASE p.status " +
+            "             WHEN 'return_pending_inspection' THEN 0 " +
+            "             WHEN 'return_in_transit'         THEN 1 " +
+            "             WHEN 'delivered'                 THEN 2 " +
+            "             WHEN 'available'                 THEN 3 " +
+            "             WHEN 'damaged'                   THEN 4 " +
+            "             ELSE 5 " +
+            "         END, p.last_event_at ASC",
             sessionId, tenantId, waybill, tenantId);
 
         Map<String, Object> result = new LinkedHashMap<>();

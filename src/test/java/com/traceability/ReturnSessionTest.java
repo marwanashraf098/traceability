@@ -446,6 +446,11 @@ class ReturnSessionTest {
         String piece = createPiece("return_pending_inspection", orderId);
         createAlloc(orderId, piece);
 
+        // A second, already-resolved piece on the same shipment — a terminal 'damaged'
+        // status must not outrank the still-actionable return_pending_inspection one.
+        String damagedPiece = createPiece("damaged", orderId);
+        createAlloc(orderId, damagedPiece);
+
         Map<String, Object> session = sessionSvc.createSession("9100016", locationId, null, actorId);
         UUID sessionId = (UUID) session.get("sessionId");
 
@@ -453,10 +458,16 @@ class ReturnSessionTest {
         @SuppressWarnings("unchecked")
         List<Map<String, Object>> pieces = (List<Map<String, Object>>) result.get("pieces");
 
-        assertThat(pieces).hasSize(1);
-        assertThat(pieces.get(0).get("id")).isEqualTo(piece);
-        assertThat(pieces.get(0).get("status")).isEqualTo("return_pending_inspection");
-        assertThat(pieces.get(0).get("processed")).isEqualTo(false);
+        assertThat(pieces).hasSize(2);
+        List<String> statuses = pieces.stream().map(p -> (String) p.get("status")).toList();
+        assertThat(statuses.indexOf("return_pending_inspection"))
+            .as("actionable return_pending_inspection must sort above terminal damaged")
+            .isLessThan(statuses.indexOf("damaged"));
+
+        Map<String, Object> rpiEntry = pieces.stream()
+            .filter(p -> piece.equals(p.get("id"))).findFirst().orElseThrow();
+        assertThat(rpiEntry.get("status")).isEqualTo("return_pending_inspection");
+        assertThat(rpiEntry.get("processed")).isEqualTo(false);
     }
 
     // ── (s) getSessionPieces — restocked piece still appears, processed=true ───
@@ -467,6 +478,14 @@ class ReturnSessionTest {
         createShipment(orderId, "9100017", "returned");
         String piece = createPiece("return_pending_inspection", orderId);
         createAlloc(orderId, piece);
+
+        // A sibling still-actionable piece and an already-terminal one on the same
+        // shipment — locks the actionable-first ordering intent alongside the
+        // processed=true assertion below, so an enum reorder can't silently regress it.
+        String stillPending = createPiece("return_pending_inspection", orderId);
+        createAlloc(orderId, stillPending);
+        String damagedPiece = createPiece("damaged", orderId);
+        createAlloc(orderId, damagedPiece);
 
         Map<String, Object> session = sessionSvc.createSession("9100017", locationId, null, actorId);
         UUID sessionId = (UUID) session.get("sessionId");
@@ -480,10 +499,16 @@ class ReturnSessionTest {
         @SuppressWarnings("unchecked")
         List<Map<String, Object>> pieces = (List<Map<String, Object>>) result.get("pieces");
 
-        assertThat(pieces).hasSize(1);
-        assertThat(pieces.get(0).get("id")).isEqualTo(piece);
-        assertThat(pieces.get(0).get("status")).isEqualTo("available");
-        assertThat(pieces.get(0).get("processed")).isEqualTo(true);
+        assertThat(pieces).hasSize(3);
+        List<String> statuses = pieces.stream().map(p -> (String) p.get("status")).toList();
+        assertThat(statuses.indexOf("return_pending_inspection"))
+            .as("actionable return_pending_inspection must sort above terminal damaged")
+            .isLessThan(statuses.indexOf("damaged"));
+
+        Map<String, Object> restockedEntry = pieces.stream()
+            .filter(p -> piece.equals(p.get("id"))).findFirst().orElseThrow();
+        assertThat(restockedEntry.get("status")).isEqualTo("available");
+        assertThat(restockedEntry.get("processed")).isEqualTo(true);
     }
 
     // ── (m) Dismiss 2 days ago — inside 7-day snooze, not re-fired ──────────────
