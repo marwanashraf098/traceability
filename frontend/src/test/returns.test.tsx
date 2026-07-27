@@ -1,6 +1,6 @@
 import { test, expect, describe, vi, beforeEach, afterEach } from 'vitest'
 import userEvent from '@testing-library/user-event'
-import { renderWithProviders, screen, waitFor } from './renderWithProviders'
+import { renderWithProviders, screen, waitFor, within } from './renderWithProviders'
 import Returns from '../pages/Returns'
 
 // ── Fixtures ──────────────────────────────────────────────────────────────────
@@ -72,16 +72,45 @@ describe('Returns — session flow', () => {
     expect(screen.getByText('Blue Widget')).toBeTruthy()
   })
 
-  // rt2: session start 404 → inline error, no crash
-  test('rt2 session start 404 shows inline error', async () => {
-    mockFetch.mockReturnValueOnce(jsonErr({ message: 'Waybill not found' }, 404))
+  // rt2: session start 404 → friendly "not in Traced" empty state, not a raw HTTP 404
+  // banner. The real backend returns a bodyless 404 for this case (ApiExceptionHandler's
+  // ResponseStatusException handler returns ResponseEntity<Void>), so this mocks that
+  // faithfully — no `message` field to fall back on.
+  test('rt2 session start 404 shows friendly not-in-Traced empty state', async () => {
+    mockFetch.mockReturnValueOnce(jsonErr({}, 404))
     const user = userEvent.setup()
     renderWithProviders(<Returns />)
     const input = screen.getByPlaceholderText(/Scan or type waybill/i)
     await user.type(input, 'BAD-AWB')
     await user.keyboard('{Enter}')
+    await waitFor(() => screen.getByTestId('session-not-in-traced'))
+    expect(screen.getByTestId('session-not-in-traced').textContent).toMatch(/isn't in Traced/i)
+    expect(screen.queryByTestId('session-error')).toBeNull()
+  })
+
+  // rt2b: the empty state's action switches to the waybill-less intake tab
+  test('rt2b not-in-Traced empty state offers a switch-to-intake action', async () => {
+    mockFetch.mockReturnValueOnce(jsonErr({}, 404))
+    const user = userEvent.setup()
+    renderWithProviders(<Returns />)
+    await user.type(screen.getByPlaceholderText(/Scan or type waybill/i), 'BAD-AWB')
+    await user.keyboard('{Enter}')
+    const emptyState = await waitFor(() => screen.getByTestId('session-not-in-traced'))
+    await user.click(within(emptyState).getByText(/Switch to waybill-less intake/i))
+    await waitFor(() => screen.getByPlaceholderText(/Scan or type piece barcode/i))
+  })
+
+  // rt2c: a non-404 failure (network/500) still shows the generic error banner, not
+  // the friendly empty state — only a real "order not found" gets the friendly copy.
+  test('rt2c session start 500 still shows the generic error banner', async () => {
+    mockFetch.mockReturnValueOnce(jsonErr({ message: 'Internal error' }, 500))
+    const user = userEvent.setup()
+    renderWithProviders(<Returns />)
+    await user.type(screen.getByPlaceholderText(/Scan or type waybill/i), 'AWB-001')
+    await user.keyboard('{Enter}')
     await waitFor(() => screen.getByTestId('session-error'))
-    expect(screen.getByTestId('session-error').textContent).toMatch(/Waybill not found/i)
+    expect(screen.getByTestId('session-error').textContent).toMatch(/Internal error/i)
+    expect(screen.queryByTestId('session-not-in-traced')).toBeNull()
   })
 
   // rt3: session start 422 (invalid shipment state) → inline error

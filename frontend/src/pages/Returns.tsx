@@ -104,6 +104,7 @@ function SessionTab({ onSwitchToIntake }: { onSwitchToIntake: () => void }) {
   const [session, setSession]       = useState<SessionSummary | null>(null)
   const [pieces, setPieces]         = useState<SessionPiece[]>([])
   const [error, setError]           = useState<string | null>(null)
+  const [notInTraced, setNotInTraced] = useState(false)
   const [damageTarget, setDamageTarget] = useState<string | null>(null)
   const [damageReason, setDamageReason] = useState('')
   const [outOfWindowPieceId, setOutOfWindowPieceId] = useState<string | null>(null)
@@ -122,7 +123,7 @@ function SessionTab({ onSwitchToIntake }: { onSwitchToIntake: () => void }) {
 
   const openSession = async (waybill: string) => {
     if (!waybill.trim() || loading) return
-    setLoading(true); setError(null); setSession(null); setPieces([]); setFinalized(null)
+    setLoading(true); setError(null); setNotInTraced(false); setSession(null); setPieces([]); setFinalized(null)
     try {
       const sess = await api<SessionSummary>('/returns/sessions', {
         method: 'POST',
@@ -134,7 +135,14 @@ function SessionTab({ onSwitchToIntake }: { onSwitchToIntake: () => void }) {
       playBeep(true); triggerFlash('success')
     } catch (e: unknown) {
       playBeep(false); triggerFlash('error')
-      setError((e as Error).message || t('common.error'))
+      const status = (e as { status?: number }).status
+      if (status === 404) {
+        // Backend correctly 404s when no shipment matches this waybill for the tenant —
+        // that's not a network/server error, so show a friendly empty state, not "HTTP 404".
+        setNotInTraced(true)
+      } else {
+        setError((e as Error).message || t('common.error'))
+      }
     } finally {
       setLoading(false)
     }
@@ -249,6 +257,15 @@ function SessionTab({ onSwitchToIntake }: { onSwitchToIntake: () => void }) {
             onKeyDown={e => { if (e.key === 'Enter') openSession((e.target as HTMLInputElement).value) }}
             autoFocus
           />
+          {notInTraced && (
+            <div data-testid="session-not-in-traced">
+              <EmptyState
+                message={t('returns.session.notInTraced')}
+                icon="📭"
+                action={{ label: t('returns.session.switchToIntake'), onClick: onSwitchToIntake }}
+              />
+            </div>
+          )}
           {error && (
             <div data-testid="session-error">
               <Alert tone="critical" title={error} />

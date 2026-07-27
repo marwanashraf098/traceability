@@ -4,6 +4,47 @@
 
 ## Current state
 
+**UX fix — Waybill Session 404 now shows a friendly empty state (2026-07-27).**
+`SessionTab.openSession()` in `Returns.tsx` caught every `POST /returns/sessions` failure the
+same way, falling back to the literal `HTTP 404` string whenever the backend response had no
+JSON body — which it never does for this case: `ApiExceptionHandler`'s
+`ResponseStatusException` handler (`ApiExceptionHandler.java:138-141`) intentionally returns a
+bodyless `ResponseEntity<Void>`, by design, for every plain `ResponseStatusException` in the
+app (not touched — the backend 404 is correct). Fixed frontend-only: `openSession`'s catch
+block now checks `status === 404` and renders a styled `EmptyState` (`returns.session.notInTraced`
+= "This order isn't in Traced", with a "Switch to waybill-less intake" action reusing the
+existing `onSwitchToIntake` prop) instead of the `Alert` error banner; any other status
+(network/500/etc.) still falls through to the generic error banner unchanged. i18n en/ar
+added. Tests: `rt2` rewritten for the new 404 behavior (previously asserted a `message` field
+the real backend never sends), `rt2b` confirms the switch-to-intake action works, `rt2c`
+confirms a 500 still shows the generic banner. 13/13 `returns.test.tsx` pass.
+
+**Diagnosed, NOT fixed — restocked piece can't be re-allocated (2026-07-27).** Repro: a piece
+is returned then restocked (`ReturnService.restock()`, status → `available`), then fails to
+scan into a new order with `ALREADY_RESERVED` / "already reserved for another order."
+Root cause **B**: `restock()` (`ReturnService.java:172-174`) correctly clears
+`pieces.current_order_id` to `NULL` —
+```sql
+UPDATE pieces SET current_order_id = NULL, current_location_id = ? WHERE id = ?
+```
+— but never touches `allocations`. The guard that rejects re-allocation is
+`FulfillService.scan()`'s ALREADY_RESERVED check (`FulfillService.java:192-198`):
+```sql
+SELECT COUNT(*) FROM allocations WHERE piece_id = ? AND status IN ('active','packed')
+```
+— it reads `allocations.status` only, with no order filter, keyed purely on `piece_id`. The
+piece's *original* allocation row (from the order it was picked/packed for before shipping)
+still carries `status='packed'` — nothing in the codebase's 6 `UPDATE allocations SET status`
+call sites is invoked by `restock()` or by anything in the return flow. So the stale allocation
+row survives indefinitely and permanently blocks re-allocation, even though `pieces.status`
+and `current_order_id` both correctly show the piece as free. Not root cause A (current_order_id
+IS cleared, confirmed by direct quote) and not "something else" (C) — this is squarely B.
+**Production impact**: every piece ever restocked through this path is very likely stuck this
+way today (not diagnosed by count — no read-only query has been run against prod yet; the
+query to run is documented, not yet executed). No code changed for this — needs a design
+decision (release the old allocation inside `restock()`? on which trigger exactly?) before a
+fix is written.
+
 **Production bug fixed — Waybill Session always showing "no pieces allocated" (2026-07-27).**
 `ReturnSessionService.getSessionPieces()` (`ReturnSessionService.java:139-`, now ~185 lines)
 filtered pieces to `p.status IN ('return_in_transit', 'delivered')` only. A returns-desk

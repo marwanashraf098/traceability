@@ -363,6 +363,7 @@
       "keptNote": "customer kept — not an issue",
       "newSession": "Start new session",
       "noPieces": "No eligible pieces found for this waybill",
+      "notInTraced": "This order isn't in Traced",
       "done": "Done",
       "deliveredOptional": "optional — customer may have kept this",
       "outOfWindow": "This piece was delivered outside the return window. Use waybill-less intake for out-of-window returns.",
