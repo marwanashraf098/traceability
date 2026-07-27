@@ -57,6 +57,16 @@ public class ReturnSessionService {
                                               String note, UUID actorUserId) {
         UUID tenantId = TenantContext.require();
 
+        // Normalize before matching — the physical Bosta label's top barcode carries a hub
+        // routing prefix (e.g. D-07-2944282510) that shipments.tracking_number never stores
+        // (see TrackingNumberNormalizer javadoc). Canonical everywhere from here on: the
+        // normalized value is what gets matched, stored, and echoed back — never the raw scan.
+        String trackingNumber = TrackingNumberNormalizer.normalize(waybillNumber);
+        if (trackingNumber == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                "Unreadable waybill scan: " + waybillNumber);
+        }
+
         // Validate shipment exists and is in a state where returns make sense.
         Map<String, Object> shipment = jdbc.query(
             "SELECT s.id, s.internal_state::text AS state, " +
@@ -70,11 +80,11 @@ public class ReturnSessionService {
                 "orderId",      rs.getObject("order_id", UUID.class),
                 "orderNumber",  rs.getString("order_number")
             ) : null,
-            tenantId, waybillNumber, tenantId);
+            tenantId, trackingNumber, tenantId);
 
         if (shipment == null) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND,
-                "Shipment not found: " + waybillNumber);
+                "Shipment not found: " + trackingNumber);
         }
 
         String state = (String) shipment.get("state");
@@ -89,11 +99,11 @@ public class ReturnSessionService {
             "INSERT INTO receipts " +
             "(id, tenant_id, kind, reference, received_by, location_id, note, status) " +
             "VALUES (?, ?, 'returns', ?, ?, ?, ?, 'open')",
-            sessionId, tenantId, waybillNumber, actorUserId, locationId, note);
+            sessionId, tenantId, trackingNumber, actorUserId, locationId, note);
 
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("sessionId",   sessionId);
-        result.put("waybillNumber", waybillNumber);
+        result.put("waybillNumber", trackingNumber);
         result.put("orderId",     shipment.get("orderId"));
         result.put("orderNumber", shipment.get("orderNumber"));
         return result;

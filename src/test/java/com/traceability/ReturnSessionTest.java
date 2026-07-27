@@ -114,11 +114,11 @@ class ReturnSessionTest {
     @Test
     void a_rto_verdict_restock_transitions_and_writes_return_kind_rto() {
         UUID orderId    = createOrder("returning");
-        UUID shipmentId = createShipment(orderId, "AWB-RTO-A", "returning");
+        UUID shipmentId = createShipment(orderId, "9100001", "returning");
         String piece    = createPiece("return_in_transit", orderId);
         createAlloc(orderId, piece);
 
-        Map<String, Object> session = sessionSvc.createSession("AWB-RTO-A", locationId, null, actorId);
+        Map<String, Object> session = sessionSvc.createSession("9100001", locationId, null, actorId);
         UUID sessionId = (UUID) session.get("sessionId");
 
         Map<String, Object> result = sessionSvc.recordVerdict(sessionId, piece,
@@ -150,12 +150,12 @@ class ReturnSessionTest {
     @Test
     void b_delivered_inside_window_restock_writes_customer_after_delivery_kind() {
         UUID orderId = createOrder("delivered");
-        createShipment(orderId, "AWB-CUST-B", "delivered");
+        createShipment(orderId, "9100002", "delivered");
         String piece = createPiece("delivered", orderId);
         createAlloc(orderId, piece);
         // last_event_at defaults to now() — well inside the 30-day window
 
-        Map<String, Object> session = sessionSvc.createSession("AWB-CUST-B", locationId, null, actorId);
+        Map<String, Object> session = sessionSvc.createSession("9100002", locationId, null, actorId);
         UUID sessionId = (UUID) session.get("sessionId");
 
         Map<String, Object> result = sessionSvc.recordVerdict(sessionId, piece,
@@ -179,13 +179,13 @@ class ReturnSessionTest {
     @Test
     void c_delivered_outside_window_rejects_with_422() {
         UUID orderId = createOrder("delivered");
-        createShipment(orderId, "AWB-CUST-C", "delivered");
+        createShipment(orderId, "9100003", "delivered");
         String piece = createPiece("delivered", orderId);
         createAlloc(orderId, piece);
         // Push last_event_at back 45 days — outside the 30-day default window
         jdbc.update("UPDATE pieces SET last_event_at = now() - interval '45 days' WHERE id = ?", piece);
 
-        Map<String, Object> session = sessionSvc.createSession("AWB-CUST-C", locationId, null, actorId);
+        Map<String, Object> session = sessionSvc.createSession("9100003", locationId, null, actorId);
         UUID sessionId = (UUID) session.get("sessionId");
 
         ResponseStatusException ex = catchThrowableOfType(
@@ -204,11 +204,11 @@ class ReturnSessionTest {
     @Test
     void d_damaged_verdict_and_reprint_writes_event_with_actor() {
         UUID orderId = createOrder("returning");
-        createShipment(orderId, "AWB-DMG-D", "returning");
+        createShipment(orderId, "9100004", "returning");
         String piece = createPiece("return_in_transit", orderId);
         createAlloc(orderId, piece);
 
-        Map<String, Object> session = sessionSvc.createSession("AWB-DMG-D", locationId, null, actorId);
+        Map<String, Object> session = sessionSvc.createSession("9100004", locationId, null, actorId);
         UUID sessionId = (UUID) session.get("sessionId");
 
         sessionSvc.recordVerdict(sessionId, piece, "damaged", "scratched lens", locationId, actorId);
@@ -257,11 +257,11 @@ class ReturnSessionTest {
     @Test
     void f_unscanned_delivered_piece_not_counted_as_unresolved() {
         UUID orderId = createOrder("delivered");
-        createShipment(orderId, "AWB-KEPT-F", "delivered");
+        createShipment(orderId, "9100006", "delivered");
         String deliveredPiece = createPiece("delivered", orderId);
         createAlloc(orderId, deliveredPiece);
 
-        Map<String, Object> session = sessionSvc.createSession("AWB-KEPT-F", locationId, null, actorId);
+        Map<String, Object> session = sessionSvc.createSession("9100006", locationId, null, actorId);
         UUID sessionId = (UUID) session.get("sessionId");
 
         // Finalize WITHOUT scanning the delivered piece — customer kept it
@@ -277,11 +277,11 @@ class ReturnSessionTest {
     @Test
     void g_unscanned_rto_piece_counted_in_unresolvedRtoCount() {
         UUID orderId = createOrder("returning");
-        createShipment(orderId, "AWB-STUCK-G", "returning");
+        createShipment(orderId, "9100007", "returning");
         String rtoPiece = createPiece("return_in_transit", orderId);
         createAlloc(orderId, rtoPiece);
 
-        Map<String, Object> session = sessionSvc.createSession("AWB-STUCK-G", locationId, null, actorId);
+        Map<String, Object> session = sessionSvc.createSession("9100007", locationId, null, actorId);
         UUID sessionId = (UUID) session.get("sessionId");
 
         // Finalize WITHOUT scanning the RTO piece
@@ -296,10 +296,10 @@ class ReturnSessionTest {
     @Test
     void h_session_open_on_with_courier_shipment_rejected() {
         UUID orderId = createOrder("with_courier");
-        createShipment(orderId, "AWB-INFLIGHT-H", "with_courier");
+        createShipment(orderId, "9100008", "with_courier");
 
         ResponseStatusException ex = catchThrowableOfType(
-            () -> sessionSvc.createSession("AWB-INFLIGHT-H", locationId, null, actorId),
+            () -> sessionSvc.createSession("9100008", locationId, null, actorId),
             ResponseStatusException.class);
 
         assertThat(ex.getStatusCode()).isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY);
@@ -356,7 +356,7 @@ class ReturnSessionTest {
     @Test
     void k_tenant_isolation_piece_not_visible_under_different_tenant() {
         UUID orderId = createOrder("returning");
-        createShipment(orderId, "AWB-ISO-K", "returning");
+        createShipment(orderId, "9100011", "returning");
         String piece = createPiece("return_in_transit", orderId);
         createAlloc(orderId, piece);
 
@@ -367,7 +367,7 @@ class ReturnSessionTest {
         try {
             // createSession under other tenant — waybill not visible
             ResponseStatusException ex = catchThrowableOfType(
-                () -> sessionSvc.createSession("AWB-ISO-K", locationId, null, actorId),
+                () -> sessionSvc.createSession("9100011", locationId, null, actorId),
                 ResponseStatusException.class);
             assertThat(ex.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
         } finally {
@@ -381,11 +381,11 @@ class ReturnSessionTest {
     @Test
     void l_finalize_with_unresolved_rto_pieces_does_not_block() {
         UUID orderId = createOrder("returning");
-        createShipment(orderId, "AWB-PARTIAL-L", "returning");
+        createShipment(orderId, "9100012", "returning");
         String rtoPiece = createPiece("return_in_transit", orderId);
         createAlloc(orderId, rtoPiece);
 
-        Map<String, Object> session = sessionSvc.createSession("AWB-PARTIAL-L", locationId, null, actorId);
+        Map<String, Object> session = sessionSvc.createSession("9100012", locationId, null, actorId);
         UUID sessionId = (UUID) session.get("sessionId");
 
         // Finalize without scanning any pieces — must not throw
@@ -396,6 +396,41 @@ class ReturnSessionTest {
             "SELECT status FROM receipts WHERE id = ? AND tenant_id = ?",
             String.class, sessionId, tenantId);
         assertThat(status).isEqualTo("finalized");
+    }
+
+    // ── (p) Hub-prefixed scan matches the bare stored tracking_number ──────────
+
+    @Test
+    void p_hubPrefixedScan_matchesNormalizedStoredTrackingNumber() {
+        UUID orderId = createOrder("returning");
+        createShipment(orderId, "2944282510", "returning");
+        String piece = createPiece("return_in_transit", orderId);
+        createAlloc(orderId, piece);
+
+        // Physical label top barcode carries the D-07 hub-routing prefix; the DB stores
+        // (and the Bosta system of record uses) the bare digits only.
+        Map<String, Object> session = sessionSvc.createSession("D-07-2944282510", locationId, null, actorId);
+
+        // Canonical everywhere from here on — normalized, not the raw scan.
+        assertThat(session.get("waybillNumber")).isEqualTo("2944282510");
+
+        UUID sessionId = (UUID) session.get("sessionId");
+        String reference = jdbc.queryForObject(
+            "SELECT reference FROM receipts WHERE id = ? AND tenant_id = ?",
+            String.class, sessionId, tenantId);
+        assertThat(reference).isEqualTo("2944282510");
+    }
+
+    // ── (q) Unreadable scan is rejected, not silently mismatched ────────────────
+
+    @Test
+    void q_unreadableScan_rejectedWith400() {
+        ResponseStatusException ex = catchThrowableOfType(
+            () -> sessionSvc.createSession("###garbage###", locationId, null, actorId),
+            ResponseStatusException.class);
+
+        assertThat(ex.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        assertThat(ex.getReason()).contains("Unreadable waybill scan");
     }
 
     // ── (m) Dismiss 2 days ago — inside 7-day snooze, not re-fired ──────────────

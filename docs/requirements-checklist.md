@@ -110,7 +110,7 @@ One line per requirement · [M] Must / [S] Should / [C] Could · use as the buil
 - [x] 11.5 [M] Stuck detector: no provider update 5d (configurable) → exception
 
 ## FR-12 Returns
-- [x] 12.1 [M] Intake scan: piece → Return Pending Inspection at scan location + return_received event
+- [x] 12.1 [M] Intake scan: piece → Return Pending Inspection at scan location + return_received event [fix: waybill-session open (ReturnSessionService.createSession) now normalizes the scanned AWB via TrackingNumberNormalizer before matching shipments.tracking_number — prod bug, hub-prefixed physical label never matched the bare-digit stored value, silent 404]
 - [x] 12.2 [M] Unexpected return (shipment not in returning state) → intake proceeds + flag
 - [x] 12.3 [M] Resolution: Restock (→Available) or Damaged (terminal, reason; [S] photo)
 - [x] 12.4 [M] Never-received report: RTO'd pieces not intaken in 3d, by exact ID — prominent

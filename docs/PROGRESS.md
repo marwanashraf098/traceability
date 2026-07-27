@@ -4,6 +4,52 @@
 
 ## Current state
 
+**Production bug fixed — Waybill Session 404 (2026-07-27).** `POST /api/v1/returns/sessions`
+was returning an empty-body 404 for real, existing Bosta waybills. Root-caused across three
+diagnose-only passes before touching code:
+
+1. Confirmed the endpoint IS deployed/routed (`ReturnSessionController.java:28`, present since
+   `f3c467d`, carried through every commit since) — not a deploy gap.
+2. Confirmed `ReturnSessionService.createSession()` (`ReturnSessionService.java:55`) does the
+   exact-match lookup `WHERE s.tracking_number = ?` against the RAW request body value, with
+   no normalization — a write-normalized/read-raw mismatch. Same bug class as the AWB-link fix
+   from `01e406b`: the physical Bosta label's top barcode carries a hub-routing prefix
+   (`D-07-2944282510`) that `shipments.tracking_number` never stores (bare digits only), so a
+   worker scanning the "Waybill Session" tab's physical label could never match, no matter how
+   real the waybill was.
+3. Fixed: `createSession()` now normalizes via `TrackingNumberNormalizer.normalize()` before
+   the lookup — null → `400 Unreadable waybill scan`. **Persistence decision**: the normalized
+   value is canonical everywhere downstream — `receipts.reference` and the response's
+   `waybillNumber` field both store/echo the normalized tracking number, never the raw scan
+   (matches `ShipmentLinkService`'s own precedent: `shipments.tracking_number` is
+   normalized-only, no parallel raw-scan column at that level — raw-scan preservation only
+   exists at the `piece_events.raw_scan` layer for piece transitions, which `createSession()`
+   doesn't touch). No new migration — no schema change needed.
+- 15 existing `ReturnSessionTest` fixtures used fictional labels like `"AWB-RTO-A"` (not
+  numeric — this is *why the bug shipped invisibly*: no test ever exercised a real
+  Bosta-shaped tracking number through this path). Updated the 9 that call `createSession()`
+  to bare-numeric tracking numbers so normalization is a no-op for them, same as before.
+  Added 2 new tests: a hub-prefixed scan (`D-07-2944282510`) against a bare-stored shipment
+  now opens the session (not 404); an unreadable scan (`###garbage###`) is rejected with 400.
+  17/17 `ReturnSessionTest` pass. Full backend suite: 698 tests, 0 failures, 0 errors.
+- **Audit of every other scanned-waybill read path** (grep for `trackingNumber`/`tracking_number`
+  across all controllers/services touching a request body or query param):
+  - `ShipmentLinkService.linkByAwbScan()` (`ShipmentLinkService.java:122`) — normalizes. OK.
+  - `LookupService` global scan lookup (`LookupService.java:192-203`) — normalizes
+    (falls back to the raw query only if normalization fails). OK.
+  - `PickupSessionService.scan()` (`PickupSessionService.java:187-221`, backing
+    `POST /api/v1/pickup-sessions/{id}/scans`) — **does NOT normalize.** Same exact-match
+    `WHERE s.tracking_number = ?` pattern against a raw scanned value. This is the pickup
+    manifest scan (worker scans a physical AWB to confirm courier handover) — same physical
+    label, same hub-prefix exposure. **Not fixed this session — flagged for a gate decision.**
+  - `OrderController.list()` tracking search filter (`OrderController.java:139-141`,
+    `GET /api/v1/orders?tracking=`) — **does NOT normalize.** Soft `ILIKE '%...%'` search box,
+    lower severity (a UX miss, not a hard-blocking 404) but a prefixed scan pasted into the
+    search box won't substring-match a bare-stored value either. **Not fixed — flagged.**
+  - `ReturnController.intake()` takes a piece `barcode`, not a tracking number — not
+    applicable to this audit.
+- Not deployed — pending manual deploy per usual process.
+
 **Fulfill AWB gating — COMPLETE (2026-07-27).** Frontend-only change to `Fulfill.tsx` — no
 backend touched (confirmed: `linkByAwbScan`, `TrackingNumberNormalizer`, and the swapped-AWB
 check are unchanged; that normalization bug was already fixed in an earlier session,
