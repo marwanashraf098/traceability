@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { Badge, Button, Skeleton } from '../components/ui'
 
@@ -441,6 +442,7 @@ function QueueView({
   onHandover: (order: QueueOrder) => void
 }) {
   const { t } = useTranslation()
+  const navigate = useNavigate()
 
   if (loading) return (
     <div className="p-6 max-w-4xl mx-auto space-y-3">
@@ -458,9 +460,14 @@ function QueueView({
     <div className="p-6 max-w-4xl mx-auto" data-testid="fulfill-queue">
       <div className="flex items-center justify-between mb-6">
         <h1 className="text-h1 text-primary">{t('fulfill.title')}</h1>
-        <Button variant="tertiary" size="sm" onClick={loadQueue}>
-          {t('fulfill.refresh')}
-        </Button>
+        <div className="flex gap-2">
+          <Button variant="tertiary" size="sm" onClick={() => navigate('/fulfill/gather')}>
+            {t('fulfill.gatherBtn')}
+          </Button>
+          <Button variant="tertiary" size="sm" onClick={loadQueue}>
+            {t('fulfill.refresh')}
+          </Button>
+        </div>
       </div>
 
       {/* Self-pickup pending section */}

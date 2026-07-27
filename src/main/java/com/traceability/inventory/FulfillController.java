@@ -35,6 +35,14 @@ public class FulfillController {
         return svc.getQueue();
     }
 
+    /** FR-8.7 — read-only consolidated gather list across all ready_to_pick orders. */
+    @GetMapping("/gather")
+    @PreAuthorize("isAuthenticated()")
+    public FulfillService.GatherListResponse gather(
+            @RequestParam(required = false) Integer limit) {
+        return svc.getGatherList(limit);
+    }
+
     @GetMapping("/{orderId}")
     @PreAuthorize("isAuthenticated()")
     public Map<String, Object> getOrder(@PathVariable UUID orderId) {

@@ -75,9 +75,9 @@ One line per requirement · [M] Must / [S] Should / [C] Could · use as the buil
 - [x] 8.4 [M] Scan atomically: Available→Reserved + allocation + event; concurrent double-scan → exactly one winner
 - [x] 8.5 [M] Un-scan releases mis-pick
 - [x] 8.6 [M] Picking completes only when all lines fully scanned
-- [ ] 8.7 [M] Gather list: consolidated variants×totals for selected wave, live decrement, printable [S]
+- [x] 8.7 [M] Gather list: consolidated variants×totals for selected wave, live decrement, printable [S]
 - [ ] 8.7a [M] Wave locking (no double-gathering); Manager release
-- [ ] 8.7b [M] Shortage shown on gather list before walking shelves
+- [x] 8.7b [M] Shortage shown on gather list before walking shelves
 - [ ] 8.7c [C] FIFO piece suggestion (no bins until Phase 2)
 - [ ] 8.8 [M] No typed barcodes; Manager-only manual entry, flagged in event
 

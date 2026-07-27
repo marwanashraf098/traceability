@@ -17,6 +17,7 @@ import OrderDetail from './pages/OrderDetail'
 import Catalog from './pages/Catalog'
 import Receiving from './pages/Receiving'
 import Fulfill from './pages/Fulfill'
+import GatherList from './pages/GatherList'
 import LookupPage from './pages/Lookup'
 import Returns from './pages/Returns'
 import ExceptionsPage from './pages/Exceptions'
@@ -127,6 +128,14 @@ export default function App() {
           element={
             <RequireAuth>
               <Fulfill />
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="/fulfill/gather"
+          element={
+            <RequireAuth>
+              <GatherList />
             </RequireAuth>
           }
         />

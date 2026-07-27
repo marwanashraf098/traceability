@@ -10,6 +10,8 @@ import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
+import java.sql.PreparedStatement;
+import java.time.Instant;
 import java.util.*;
 
 @Service
@@ -77,6 +79,83 @@ public class FulfillService {
             "GROUP BY o.id " +
             "ORDER BY o.created_at ASC",
             tenantId, lookbackDays);
+    }
+
+    // ── Gather list (FR-8.7) ─────────────────────────────────────────────────
+
+    /**
+     * FR-8.7 Option A — read-only pick-wave aggregation across all ready_to_pick,
+     * not-on-hold orders, one row per variant. Stateless: recomputed on every call,
+     * no wave locking, no allocation-subtraction join. on_hold=false mirrors getQueue()'s
+     * own convention — the build spec's aggregation section omits it, but its own test
+     * list requires on-hold orders excluded, so this resolves that inconsistency the
+     * same way the queue already does.
+     *
+     * needed intentionally uses the full order_item quantity, not remaining-after-
+     * partial-scan: 'picking' is a defined order_status value but nothing in this
+     * codebase ever assigns it (confirmed absent from every migration and service) —
+     * an order stays 'ready_to_pick' for its entire scan lifecycle, so it CAN already
+     * carry active allocations when this runs. Approved by Marawan 2026-07-28 to follow
+     * the build spec literally despite that; do not silently add an allocation join.
+     */
+    @Transactional(readOnly = true)
+    public GatherListResponse getGatherList(Integer limit) {
+        UUID tenantId = TenantContext.require();
+
+        List<Map<String, Object>> eligibleOrders = limit != null
+            ? jdbc.queryForList(
+                "SELECT id FROM orders WHERE tenant_id = ? AND status = 'ready_to_pick' AND on_hold = false " +
+                "ORDER BY created_at ASC LIMIT ?",
+                tenantId, limit)
+            : jdbc.queryForList(
+                "SELECT id FROM orders WHERE tenant_id = ? AND status = 'ready_to_pick' AND on_hold = false " +
+                "ORDER BY created_at ASC",
+                tenantId);
+
+        if (eligibleOrders.isEmpty()) {
+            return new GatherListResponse(Instant.now(), 0, List.of());
+        }
+
+        UUID[] orderIds = eligibleOrders.stream()
+            .map(r -> (UUID) r.get("id"))
+            .toArray(UUID[]::new);
+
+        List<GatherRow> rows = jdbc.query(con -> {
+            PreparedStatement ps = con.prepareStatement(
+                "SELECT v.id AS variant_id, v.title AS name, v.sku AS sku, " +
+                "       SUM(oi.quantity) AS needed, " +
+                "       array_agg(DISTINCT o.number) AS order_numbers, " +
+                "       (SELECT COUNT(*) FROM pieces p " +
+                "        WHERE p.tenant_id = ? AND p.variant_id = v.id AND p.status = 'available'" +
+                "       ) AS available_count " +
+                "FROM orders o " +
+                "JOIN order_items oi ON oi.order_id = o.id " +
+                "JOIN variants v ON v.id = oi.variant_id " +
+                "WHERE o.tenant_id = ? AND o.id = ANY(?) " +
+                "GROUP BY v.id, v.title, v.sku " +
+                "ORDER BY v.title ASC");
+            ps.setObject(1, tenantId);
+            ps.setObject(2, tenantId);
+            ps.setArray(3, con.createArrayOf("uuid", orderIds));
+            return ps;
+        }, (rs, rowNum) -> {
+            long needed    = rs.getLong("needed");
+            long available = rs.getLong("available_count");
+            java.sql.Array arr = rs.getArray("order_numbers");
+            List<String> orderNumbers = arr != null
+                ? Arrays.asList((String[]) arr.getArray())
+                : List.of();
+            return new GatherRow(
+                (UUID) rs.getObject("variant_id"),
+                rs.getString("name"),
+                rs.getString("sku"),
+                (int) needed,
+                (int) available,
+                available < needed,
+                orderNumbers);
+        });
+
+        return new GatherListResponse(Instant.now(), eligibleOrders.size(), rows);
     }
 
     // ── Order detail ──────────────────────────────────────────────────────────
@@ -927,6 +1006,20 @@ public class FulfillService {
     }
 
     // ── Result types ──────────────────────────────────────────────────────────
+
+    public record GatherListResponse(
+            Instant          generatedAt,
+            int              orderCount,
+            List<GatherRow>  rows) {}
+
+    public record GatherRow(
+            UUID         variantId,
+            String       name,
+            String       sku,
+            int          needed,
+            int          availableCount,
+            boolean      shortage,
+            List<String> orderNumbers) {}
 
     public record CancelResult(
             String status,

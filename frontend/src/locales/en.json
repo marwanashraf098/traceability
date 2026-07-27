@@ -238,6 +238,23 @@
     "scanPlaceholder": "Scan or type barcode, then press Enter",
     "unscan": "Remove",
     "complete": "Complete & Pack Order",
+    "gatherBtn": "Gather",
+    "gather": {
+      "title": "Gather List",
+      "subtitle": "{{count}} order(s) ready to pick",
+      "generatedAt": "Generated {{time}}",
+      "refresh": "Refresh",
+      "print": "Print",
+      "back": "Back to Queue",
+      "colItem": "Item",
+      "colSku": "SKU",
+      "colNeeded": "Needed",
+      "colAvailable": "Available",
+      "colOrders": "Orders",
+      "shortageNote": "Short {{shortfall}} — need {{needed}}, have {{available}}",
+      "empty": "No orders ready to pick",
+      "loading": "Loading gather list…"
+    },
     "rejection": {
       "PIECE_NOT_FOUND": "Barcode not found in inventory",
       "DUPLICATE_SCAN": "Already scanned for this order",

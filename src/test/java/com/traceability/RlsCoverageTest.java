@@ -78,7 +78,8 @@ class RlsCoverageTest {
             "/api/v1/returns/sessions",
             "/api/v1/returns/sessions/{sessionId}/pieces",
             "/api/v1/orders/daily-counts",
-            "/api/v1/lookup"
+            "/api/v1/lookup",
+            "/api/v1/fulfill/gather"
     );
 
     // ── Patterns consciously excluded, with reasons ────────────────────────────
@@ -386,6 +387,23 @@ class RlsCoverageTest {
         ResponseEntity<Map> resp = get("/api/v1/lookup?q=PC-" + pieceId, Map.class);
         assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.OK);
         assertThat(resp.getBody().get("type")).isEqualTo("piece");
+    }
+
+    @Test
+    void fulfillGather_returnsSeededDemand() {
+        UUID orderId     = UUID.randomUUID();
+        UUID orderItemId = UUID.randomUUID();
+        jdbc.update("INSERT INTO orders (id, tenant_id, store_id, external_id, number, status, on_hold) " +
+                    "VALUES (?, ?, ?, 'EXT-CVG-GATHER', '#CVG-GATHER', 'ready_to_pick'::order_status, false)",
+                    orderId, tenantId, storeId);
+        jdbc.update("INSERT INTO order_items (id, tenant_id, order_id, variant_id, quantity) " +
+                    "VALUES (?, ?, ?, ?, 3)", orderItemId, tenantId, orderId, variantId);
+
+        ResponseEntity<Map> resp = get("/api/v1/fulfill/gather", Map.class);
+        assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.OK);
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> rows = (List<Map<String, Object>>) resp.getBody().get("rows");
+        assertThat(rows).isNotEmpty();
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────

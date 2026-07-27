@@ -198,6 +198,28 @@ export function getOrderDailyCounts(days = 30) {
   return request<DayCount[]>(`/orders/daily-counts?days=${days}`)
 }
 
+// ── Gather list (FR-8.7) ────────────────────────────────────────────────────
+
+export interface GatherRow {
+  variantId: string
+  name: string
+  sku: string | null
+  needed: number
+  availableCount: number
+  shortage: boolean
+  orderNumbers: string[]
+}
+
+export interface GatherListResponse {
+  generatedAt: string
+  orderCount: number
+  rows: GatherRow[]
+}
+
+export function getGatherList(limit?: number) {
+  return request<GatherListResponse>(`/fulfill/gather${limit ? `?limit=${limit}` : ''}`)
+}
+
 export interface PieceCounts {
   available: number
   reserved: number

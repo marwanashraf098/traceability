@@ -4,6 +4,59 @@
 
 ## Current state
 
+**FR-8.7 Gather List shipped (2026-07-28) — read-only pick-wave view, Option A only.**
+`FulfillService.getGatherList(Integer limit)` aggregates all `ready_to_pick`, not-on-hold
+orders into one row per variant (needed/availableCount/shortage/orderNumbers), exposed at
+`GET /api/v1/fulfill/gather`. Pure read: zero Bosta calls, zero writes, scan/unscan/complete/
+lock path untouched. No Flyway migration — read-only, zero schema change.
+
+Grounding surfaced three divergences from the build spec, resolved with Marawan before
+building:
+- **Order number column is `orders.number`, not `order_number`** — trivial, just used the
+  real name.
+- **No image field exists anywhere** — not on `variants`, not on `products`, not in either
+  table's `raw` jsonb. Confirmed structurally impossible to populate: `ShopifyHttpGateway`'s
+  variant GraphQL query is `node { id sku title price }` (no image requested), and
+  `ShopifySyncService` serializes only `{id,sku,title,price}` into `variants.raw` — never the
+  real Shopify payload. Decision: dropped `imageUrl` from `GatherListResponse` entirely rather
+  than wiring a jsonb read that can never return non-null.
+- **The spec's core assumption — "ready_to_pick has no active allocations, so remaining =
+  needed" — is false against this codebase.** `order_status` has a `'picking'` enum value but
+  it is never assigned anywhere (zero hits in any `.java` file or migration); `FulfillService.
+  requirePickableStatus()` allows locking/scanning while status is `'new'` OR `'ready_to_pick'`,
+  and only `complete()` advances status (to `packed`/`self_pickup_pending`). So a `ready_to_pick`
+  order can carry active allocations mid-pick the whole time. Decision (explicit, Marawan):
+  follow the spec literally anyway — `needed = SUM(oi.quantity)`, no allocation-subtraction
+  join. Documented inline in `FulfillService.getGatherList()` javadoc so a future session
+  doesn't "fix" this into matching `requirements-checklist.md`'s "live decrement" line without
+  re-confirming intent.
+
+One more inconsistency resolved without a stop (not a real-name divergence, just spec-internal):
+the aggregation section's filter text is `status = 'ready_to_pick'` alone, but the spec's own
+test list requires "on-hold orders excluded" — added `AND on_hold = false`, mirroring
+`getQueue()`'s existing convention.
+
+Frontend: new `GatherList.tsx` at `/fulfill/gather` (no `Layout` wrapper, matching `/fulfill`
+itself), reachable via a "Gather" button added to the pick queue header in `Fulfill.tsx`.
+Refresh/Print/Back affordances, shortage rows highlighted with a "need X, have Y" note, RTL via
+existing `text-start`/`text-end` logical classes (no extra RTL code needed — `dir` flips
+app-wide off `i18n.ts`). i18n keys added under `fulfill.gather.*` + `fulfill.gatherBtn` in both
+`en.json`/`ar.json`.
+
+Tests: new `GatherListTest` (7 tests: positive control w/ overlapping variants, shortage
+true/false, status filter incl. on-hold exclusion, empty, limit, cross-tenant isolation paired
+with the positive control) — all pass. `RlsCoverageTest` updated: `/api/v1/fulfill/gather`
+added to `COVERED` with a seeded non-empty-response test (`fulfillGather_returnsSeededDemand`)
+rather than `EXEMPT`, since this aggregation spanning orders+order_items+variants+pieces is
+exactly the C3 silent-zero-row class the build spec called out. Full suite: 711/711 backend
+tests green, frontend `fulfill.test.tsx` 11/11 green (2 pre-existing, unrelated failures in
+`overview.test.tsx`/`inventory.test.tsx` confirmed present on `main` before this change too —
+chart-rendering flakiness, not touched by this slice).
+
+Requirements checklist: 8.7 done; 8.7b partial (shortage *shown*, drop-into-exceptions still
+deferred); 8.7a (wave locking) and 8.7c (FIFO suggestion) remain unchecked — out of scope for
+this slice by design.
+
 **UX fix — Waybill Session 404 now shows a friendly empty state (2026-07-27).**
 `SessionTab.openSession()` in `Returns.tsx` caught every `POST /returns/sessions` failure the
 same way, falling back to the literal `HTTP 404` string whenever the backend response had no
