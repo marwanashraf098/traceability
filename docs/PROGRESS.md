@@ -4,6 +4,51 @@
 
 ## Current state
 
+**Fulfill AWB gating — COMPLETE (2026-07-27).** Frontend-only change to `Fulfill.tsx` — no
+backend touched (confirmed: `linkByAwbScan`, `TrackingNumberNormalizer`, and the swapped-AWB
+check are unchanged; that normalization bug was already fixed in an earlier session,
+commit `01e406b`).
+
+- **Precondition to Complete = linked AND printed.** The pack-Complete button
+  (`POST /fulfill/{orderId}/complete`, unchanged API/condition) is now hidden until the
+  order's Bosta AWB is linked (`tracking_number` set) and Print Waybill has been pressed at
+  least once this session (`awbPrintedOnce`, client-side only — no new backend field).
+  - Already-linked-when-picking-finishes (Mode-B pre-match raced ahead of the packer): the
+    existing Print Waybill button — already wired, already gated on `tracking_number` — is
+    what the packer presses; Complete appears right after.
+  - Not-yet-linked (the mainline case): a new "Scan Waybill to Link" button opens
+    `AwbLinkDialog` inline (not a blocking modal — unscanning a piece flips `allComplete`
+    back to false and this section disappears with it) at the bottom of `PickScreen`,
+    reusing the exact same `POST /fulfill/{orderId}/link` call unchanged. On success the
+    dialog closes and the order refetches, at which point the same Print Waybill path above
+    takes over.
+  - Either path converges: linked → printed → Complete → the existing post-Complete
+    `AwbLinkDialog` mandatory verify-scan (re-links/verifies the same tracking number via
+    the unchanged Mode-B verify branch in `linkByAwbScan` — no duplicate shipment created).
+- **"Skip — link later" removed entirely** (`fulfill.linkAwb.skip` key deleted from both
+  locales) — the post-Complete verify-scan can no longer be bypassed, and the new pre-Complete
+  step never had a bypass to begin with.
+- **`AwbLinkDialog` generalized, not duplicated**: two new optional props, `onLinked`
+  (pre-Complete usage calls this immediately on a successful scan instead of showing the
+  print+done sub-view) and `variant: 'modal' | 'inline'` (pre-Complete usage skips the
+  `fixed inset-0` backdrop — it's not a blocking dialog). All scan/error/flash/beep logic is
+  shared, not copy-pasted.
+- **Self-pickup untouched** — `order.is_self_pickup` bypasses the entire link/print gate,
+  exactly as before; Complete still appears immediately once `allComplete`.
+- Test gotcha worth remembering: `PickScreen`'s SAFETY-CRITICAL global click-refocus effect
+  (keeps the top piece-scan input focused on any click) fights `userEvent.type()`'s synthetic
+  click when typing into the AwbLinkDialog's own input — mirrors a real risk (a worker tapping
+  to type manually would hit the same refocus), but a real HID scanner never clicks. Tests
+  that need to type into that input use `input.focus(); user.keyboard(...)` instead of
+  `user.type(input, ...)` to avoid the synthetic click, matching how a scanner actually behaves.
+- New tests in `fulfill.test.tsx` (ft7–ft11): Complete hidden until Print Waybill pressed
+  (linked path); unlinked order cannot Complete without scanning to link first; no skip
+  button in either the pre- or post-Complete dialog; self-pickup unaffected. 11/11 pass.
+- Pre-existing, unrelated frontend test failures noted but NOT touched (not caused by this
+  change, confirmed against the pre-change tree): `blocklist.test.tsx` (fb7 Modal styling),
+  `inventory.test.tsx` (api-error case), `overview.test.tsx` (ov4 chart SVG assertion).
+- Not deployed — pending manual deploy per usual process.
+
 **696 backend tests green** — 2026-07-27 (V57: Pick & Fulfill queue gating by Bosta send-state + "Not Traced" tag).
 
 **Queue-gating-not-traced — COMPLETE.**

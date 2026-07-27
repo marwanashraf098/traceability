@@ -14,7 +14,7 @@ function jsonErr(data: unknown, status = 500) {
 }
 
 function makeQueueOrder(overrides: Partial<{
-  id: string; number: string; status: string; customer_name: string
+  id: string; number: string; status: string; customer_name: string; is_self_pickup: boolean
 }> = {}) {
   return {
     id: 'order-1',
@@ -36,6 +36,7 @@ function makeOrderDetail(overrides: Partial<{
   shipment_id: string | null
   tracking_number: string | null
   allocated: number
+  is_self_pickup: boolean
 }> = {}) {
   const { allocated = 0, ...rest } = overrides
   return {
@@ -178,5 +179,119 @@ describe('Fulfill — dark theme + AWB print', () => {
     // Scan input still renders — pack flow unaffected
     expect(screen.getByPlaceholderText(/Scan or type barcode/i)).toBeTruthy()
     vi.restoreAllMocks()
+  })
+
+  // ft7: linked order — Complete stays hidden until Print Waybill has been pressed
+  test('ft7 Complete is hidden until Print Waybill is pressed (linked path)', async () => {
+    vi.spyOn(window, 'open').mockImplementation(() => null)
+    vi.stubGlobal('URL', { createObjectURL: vi.fn().mockReturnValue('blob:fake') })
+    mockFetch
+      .mockReturnValueOnce(jsonOk([makeQueueOrder()]))
+      .mockReturnValueOnce(jsonOk(makeOrderDetail({
+        shipment_id: 'ship-1', tracking_number: 'TRK-123', allocated: 1,
+      })))
+      .mockReturnValueOnce(jsonOk({ pdfBase64List: [btoa('%PDF-1.4 fake')], emailMessage: null, exceptions: [] }))
+    const user = userEvent.setup()
+    renderWithProviders(<Fulfill />)
+    await waitFor(() => screen.getByText('#101'))
+    await user.click(screen.getByText('#101'))
+    await waitFor(() => screen.getByTestId('btn-print-awb'))
+
+    // All pieces already allocated (allComplete=true) but not yet printed — Complete absent.
+    expect(screen.queryByText('Complete & Pack Order')).toBeNull()
+
+    await user.click(screen.getByTestId('btn-print-awb'))
+    await waitFor(() => screen.getByText('Complete & Pack Order'))
+    vi.restoreAllMocks()
+  })
+
+  // ft8: unlinked order — must scan-to-link before Print Waybill/Complete can appear
+  test('ft8 unlinked order cannot Complete without scanning to link first', async () => {
+    mockFetch
+      .mockReturnValueOnce(jsonOk([makeQueueOrder()]))
+      .mockReturnValueOnce(jsonOk(makeOrderDetail({ tracking_number: null, allocated: 1 })))
+    const user = userEvent.setup()
+    renderWithProviders(<Fulfill />)
+    await waitFor(() => screen.getByText('#101'))
+    await user.click(screen.getByText('#101'))
+    await waitFor(() => screen.getByTestId('btn-scan-to-link'))
+
+    expect(screen.queryByTestId('btn-print-awb')).toBeNull()
+    expect(screen.queryByText('Complete & Pack Order')).toBeNull()
+
+    await user.click(screen.getByTestId('btn-scan-to-link'))
+    await waitFor(() => screen.getByPlaceholderText(/Scan or type tracking number/i))
+
+    mockFetch
+      .mockReturnValueOnce(jsonOk({ shipmentId: 'ship-2', trackingNumber: '2944282510', linkedPieces: 1, orderStatus: 'awaiting_pickup' }))
+      .mockReturnValueOnce(jsonOk(makeOrderDetail({ tracking_number: '2944282510', shipment_id: 'ship-2', allocated: 1 })))
+
+    // PickScreen's global click-refocus effect (SAFETY-CRITICAL, keeps the top piece-scan
+    // input focused on any click) would steal focus back if we clicked into this input first
+    // (as user.type() does) — a real HID scanner never clicks, it just emits keystrokes into
+    // whatever is already focused, so focus() + keyboard() is the faithful simulation here.
+    const trackingInput = screen.getByPlaceholderText(/Scan or type tracking number/i)
+    trackingInput.focus()
+    await user.keyboard('2944282510')
+    await user.keyboard('{Enter}')
+
+    // Linked, but not yet printed — Print Waybill appears, Complete still absent.
+    await waitFor(() => screen.getByTestId('btn-print-awb'))
+    expect(screen.queryByTestId('btn-scan-to-link')).toBeNull()
+    expect(screen.queryByText('Complete & Pack Order')).toBeNull()
+  })
+
+  // ft9: no skip button in the pre-Complete inline link step
+  test('ft9 no skip button in the pre-Complete scan-to-link step', async () => {
+    mockFetch
+      .mockReturnValueOnce(jsonOk([makeQueueOrder()]))
+      .mockReturnValueOnce(jsonOk(makeOrderDetail({ tracking_number: null, allocated: 1 })))
+    const user = userEvent.setup()
+    renderWithProviders(<Fulfill />)
+    await waitFor(() => screen.getByText('#101'))
+    await user.click(screen.getByText('#101'))
+    await waitFor(() => screen.getByTestId('btn-scan-to-link'))
+    await user.click(screen.getByTestId('btn-scan-to-link'))
+    await waitFor(() => screen.getByPlaceholderText(/Scan or type tracking number/i))
+    expect(screen.queryByText(/skip/i)).toBeNull()
+  })
+
+  // ft10: no skip button in the post-Complete mandatory verify-scan dialog
+  test('ft10 no skip button in the post-Complete verify-scan dialog', async () => {
+    vi.spyOn(window, 'open').mockImplementation(() => null)
+    vi.stubGlobal('URL', { createObjectURL: vi.fn().mockReturnValue('blob:fake') })
+    mockFetch
+      .mockReturnValueOnce(jsonOk([makeQueueOrder()]))
+      .mockReturnValueOnce(jsonOk(makeOrderDetail({
+        shipment_id: 'ship-1', tracking_number: 'TRK-123', allocated: 1,
+      })))
+      .mockReturnValueOnce(jsonOk({ pdfBase64List: [btoa('x')], emailMessage: null, exceptions: [] }))
+      .mockReturnValueOnce(jsonOk({ packedPieces: 1 }))
+    const user = userEvent.setup()
+    renderWithProviders(<Fulfill />)
+    await waitFor(() => screen.getByText('#101'))
+    await user.click(screen.getByText('#101'))
+    await waitFor(() => screen.getByTestId('btn-print-awb'))
+    await user.click(screen.getByTestId('btn-print-awb'))
+    await waitFor(() => screen.getByText('Complete & Pack Order'))
+    await user.click(screen.getByText('Complete & Pack Order'))
+    await waitFor(() => screen.getByText(/Scan the Bosta waybill/i))
+    expect(screen.queryByText(/skip/i)).toBeNull()
+    vi.restoreAllMocks()
+  })
+
+  // ft11: self-pickup path is untouched — Complete appears immediately, no AWB gating
+  test('ft11 self-pickup order — Complete appears immediately, no link/print gate', async () => {
+    mockFetch
+      .mockReturnValueOnce(jsonOk([makeQueueOrder({ is_self_pickup: true })]))
+      .mockReturnValueOnce(jsonOk(makeOrderDetail({
+        tracking_number: null, allocated: 1, is_self_pickup: true,
+      })))
+    const user = userEvent.setup()
+    renderWithProviders(<Fulfill />)
+    await waitFor(() => screen.getByText('#101'))
+    await user.click(screen.getByText('#101'))
+    await waitFor(() => screen.getByText('Complete & Pack Order'))
+    expect(screen.queryByTestId('btn-scan-to-link')).toBeNull()
   })
 })

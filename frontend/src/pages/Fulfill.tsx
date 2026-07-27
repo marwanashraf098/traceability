@@ -162,8 +162,29 @@ async function printAwbPdf(shipmentId: string): Promise<'opened' | 'emailed'> {
 }
 
 // ── AWB-scan dialog ────────────────────────────────────────────────────────────
+//
+// Two call sites, same scan/link/error-handling logic:
+//   - pre-Complete (variant='inline', onLinked set): the packer must link an unlinked order
+//     before Complete can appear at all. On a successful scan, onLinked() fires immediately —
+//     there is no "linked" success sub-view here, no backdrop, and no way to bypass linking.
+//     PickScreen closes this and re-fetches the order; the existing Print Waybill button
+//     (now enabled) takes over from there.
+//   - post-Complete (variant='modal' default, onLinked unset): the mandatory verify-scan.
+//     Shows the "linked" success view (Print Waybill + Done) exactly as before. The
+//     "Skip — link later" escape hatch has been removed entirely — this step cannot be
+//     bypassed, in either call site.
 
-function AwbLinkDialog({ orderId, onDone }: { orderId: string; onDone: () => void }) {
+function AwbLinkDialog({
+  orderId,
+  onDone,
+  onLinked,
+  variant = 'modal',
+}: {
+  orderId: string
+  onDone?: () => void
+  onLinked?: (result: { tracking: string; shipmentId: string }) => void
+  variant?: 'modal' | 'inline'
+}) {
   const { t } = useTranslation()
   const inputRef = useRef<HTMLInputElement>(null)
   const [flash, setFlash] = useState<FlashState>('idle')
@@ -198,7 +219,11 @@ function AwbLinkDialog({ orderId, onDone }: { orderId: string; onDone: () => voi
       if (status === 200 || status === 201) {
         playBeep(true)
         triggerFlash('success')
-        setLinked({ tracking: data.trackingNumber, shipmentId: data.shipmentId })
+        if (onLinked) {
+          onLinked({ tracking: data.trackingNumber, shipmentId: data.shipmentId })
+        } else {
+          setLinked({ tracking: data.trackingNumber, shipmentId: data.shipmentId })
+        }
       } else if (status === 409) {
         playBeep(false)
         triggerFlash('error')
@@ -246,68 +271,85 @@ function AwbLinkDialog({ orderId, onDone }: { orderId: string; onDone: () => voi
     : flash === 'error' ? 'fixed inset-0 bg-danger/20 pointer-events-none z-[60] animate-flash'
     : 'hidden'
 
+  // linked/print/done sub-view only ever renders in modal (post-Complete) usage — the
+  // inline (pre-Complete) usage calls onLinked() the moment a scan succeeds and is closed
+  // by the caller before this branch would ever be reached.
+  const card = (
+    <div className={variant === 'modal' ? 'bg-panel rounded-xl shadow-2xl p-8 w-full max-w-md mx-4' : 'bg-panel rounded-xl border border-line p-4 w-full'}>
+      <h2 className="text-h2 text-primary mb-1">{t('fulfill.linkAwb.title')}</h2>
+      <p className="text-small text-muted mb-6">{t('fulfill.linkAwb.subtitle')}</p>
+
+      {linked ? (
+        <div className="text-center space-y-4 py-4">
+          <div className="text-5xl text-success">✓</div>
+          <p className="text-success font-medium text-body">
+            {t('fulfill.linkAwb.success', { tracking: linked.tracking })}
+          </p>
+          <div className="space-y-2 pt-2">
+            <Button
+              loading={printing}
+              onClick={handlePrint}
+              className="w-full"
+            >
+              {printing ? t('fulfill.printAwb.opening') : t('fulfill.printAwb.print')}
+            </Button>
+            {awbMsg && (
+              <p className={`text-small text-center ${awbMsg.type === 'error' ? 'text-danger' : 'text-muted'}`}>
+                {awbMsg.text}
+              </p>
+            )}
+            {onDone && (
+              <Button variant="tertiary" onClick={onDone} className="w-full">
+                {t('fulfill.linkAwb.done')}
+              </Button>
+            )}
+          </div>
+        </div>
+      ) : (
+        <>
+          {/* SAFETY-CRITICAL scan input — ref, onKeyDown, disabled behavior untouched */}
+          <input
+            ref={inputRef}
+            type="text"
+            placeholder={t('fulfill.linkAwb.placeholder')}
+            className="input-scan w-full mb-3"
+            disabled={linking}
+            onKeyDown={e => {
+              if (e.key === 'Enter') handleLink((e.target as HTMLInputElement).value)
+            }}
+          />
+          {conflictError && (
+            <p className="text-danger text-small font-medium mb-3">✗ {t('fulfill.linkAwb.conflict')}</p>
+          )}
+          {mismatchError && (
+            <p className="text-danger text-small font-medium mb-3">
+              ✗ {t('fulfill.linkAwb.awbMismatch', { scanned: mismatchError.scanned, existing: mismatchError.existing })}
+            </p>
+          )}
+          {genericError && (
+            <p className="text-danger text-small font-medium mb-3">✗ {t('fulfill.linkAwb.error')}</p>
+          )}
+          {/* No skip/bypass — the verify-scan is mandatory in every call site. */}
+        </>
+      )}
+    </div>
+  )
+
+  if (variant === 'inline') {
+    return (
+      <>
+        {/* SAFETY-CRITICAL flash overlay — do not modify */}
+        <div className={flashOverlay} />
+        {card}
+      </>
+    )
+  }
+
   return (
     <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50">
       {/* SAFETY-CRITICAL flash overlay — do not modify */}
       <div className={flashOverlay} />
-      <div className="bg-panel rounded-xl shadow-2xl p-8 w-full max-w-md mx-4">
-        <h2 className="text-h2 text-primary mb-1">{t('fulfill.linkAwb.title')}</h2>
-        <p className="text-small text-muted mb-6">{t('fulfill.linkAwb.subtitle')}</p>
-
-        {linked ? (
-          <div className="text-center space-y-4 py-4">
-            <div className="text-5xl text-success">✓</div>
-            <p className="text-success font-medium text-body">
-              {t('fulfill.linkAwb.success', { tracking: linked.tracking })}
-            </p>
-            <div className="space-y-2 pt-2">
-              <Button
-                loading={printing}
-                onClick={handlePrint}
-                className="w-full"
-              >
-                {printing ? t('fulfill.printAwb.opening') : t('fulfill.printAwb.print')}
-              </Button>
-              {awbMsg && (
-                <p className={`text-small text-center ${awbMsg.type === 'error' ? 'text-danger' : 'text-muted'}`}>
-                  {awbMsg.text}
-                </p>
-              )}
-              <Button variant="tertiary" onClick={onDone} className="w-full">
-                {t('fulfill.linkAwb.done')}
-              </Button>
-            </div>
-          </div>
-        ) : (
-          <>
-            {/* SAFETY-CRITICAL scan input — ref, onKeyDown, disabled behavior untouched */}
-            <input
-              ref={inputRef}
-              type="text"
-              placeholder={t('fulfill.linkAwb.placeholder')}
-              className="input-scan w-full mb-3"
-              disabled={linking}
-              onKeyDown={e => {
-                if (e.key === 'Enter') handleLink((e.target as HTMLInputElement).value)
-              }}
-            />
-            {conflictError && (
-              <p className="text-danger text-small font-medium mb-3">✗ {t('fulfill.linkAwb.conflict')}</p>
-            )}
-            {mismatchError && (
-              <p className="text-danger text-small font-medium mb-3">
-                ✗ {t('fulfill.linkAwb.awbMismatch', { scanned: mismatchError.scanned, existing: mismatchError.existing })}
-              </p>
-            )}
-            {genericError && (
-              <p className="text-danger text-small font-medium mb-3">✗ {t('fulfill.linkAwb.error')}</p>
-            )}
-            <Button variant="tertiary" onClick={onDone} className="w-full mt-2">
-              {t('fulfill.linkAwb.skip')}
-            </Button>
-          </>
-        )}
-      </div>
+      {card}
     </div>
   )
 }
@@ -603,6 +645,8 @@ function PickScreen({ orderId, onBack }: { orderId: string; onBack: () => void }
   const [completing, setCompleting] = useState(false)
   const [cancelling, setCancelling] = useState(false)
   const [showAwbDialog, setShowAwbDialog] = useState(false)
+  const [showPreCompleteLink, setShowPreCompleteLink] = useState(false)
+  const [awbPrintedOnce, setAwbPrintedOnce] = useState(false)
   const [selfPickupSuccess, setSelfPickupSuccess] = useState(false)
   const [showCancelConfirm, setShowCancelConfirm] = useState(false)
   const [awbPrinting, setAwbPrinting] = useState(false)
@@ -707,6 +751,9 @@ function PickScreen({ orderId, onBack }: { orderId: string; onBack: () => void }
       if (result === 'emailed') {
         setAwbMsg({ type: 'info', text: t('fulfill.printAwb.emailed') })
       }
+      // Precondition to Complete: linked AND printed. A successful print — opened or
+      // emailed — satisfies this; only a thrown error (caught below) does not.
+      setAwbPrintedOnce(true)
     } catch (e: unknown) {
       setAwbMsg({ type: 'error', text: (e as Error).message || t('fulfill.printAwb.error') })
     } finally {
@@ -901,8 +948,19 @@ function PickScreen({ orderId, onBack }: { orderId: string; onBack: () => void }
                 </p>
               )}
             </div>
+          ) : allComplete && !order.is_self_pickup ? (
+            /* Precondition to Complete: unlinked order, picking finished — the packer must
+               scan the physical AWB before Print Waybill (and Complete) can appear at all. */
+            <button
+              onClick={() => setShowPreCompleteLink(true)}
+              className="btn-brand btn text-small w-full"
+              data-testid="btn-scan-to-link"
+            >
+              {t('fulfill.linkAwb.scanPrompt')}
+            </button>
           ) : (
-            /* NOT-YET-LINKED — kept as raw <button> to preserve data-testid */
+            /* NOT-YET-LINKED (still picking, or self-pickup) — kept as raw <button> to
+               preserve data-testid */
             <div className="space-y-1">
               <button
                 disabled
@@ -917,7 +975,9 @@ function PickScreen({ orderId, onBack }: { orderId: string; onBack: () => void }
             </div>
           )}
 
-          {allComplete && (
+          {/* Complete: self-pickup never needs a Bosta AWB (unchanged, unaffected by the
+              link/print gate below). Non-self-pickup orders must be linked AND printed first. */}
+          {allComplete && (order.is_self_pickup || (!!order.tracking_number && awbPrintedOnce)) && (
             <Button
               loading={completing}
               onClick={handleComplete}
@@ -926,10 +986,20 @@ function PickScreen({ orderId, onBack }: { orderId: string; onBack: () => void }
               {completing ? t('common.loading') : t('fulfill.complete')}
             </Button>
           )}
+
+          {/* Pre-Complete link step — inline, not a blocking modal, so unscanning an item
+              (which flips allComplete back to false) simply removes this section again. */}
+          {showPreCompleteLink && (
+            <AwbLinkDialog
+              orderId={orderId}
+              variant="inline"
+              onLinked={() => { setShowPreCompleteLink(false); loadOrder() }}
+            />
+          )}
         </div>
       )}
 
-      {/* AWB-scan dialog */}
+      {/* Post-Complete AWB-scan dialog — mandatory verify-scan, no skip. */}
       {showAwbDialog && (
         <AwbLinkDialog orderId={orderId} onDone={onBack} />
       )}

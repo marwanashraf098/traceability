@@ -87,7 +87,7 @@ One line per requirement · [M] Must / [S] Should / [C] Could · use as the buil
 - [x] 9.3 [M] Confirm → Mode B prompt AWB scan (Mode A delivery creation deferred post-launch); COD cap pre-validated
 - [x] 9.4 [M] Pieces Reserved→Packed + events; allocations packed
 - [x] 9.5 [M] AWB auto-print; fetch failure → Packed + missing-AWB exception + retry (never silent loss) [Day 24: mass-awb endpoint, printable-state filter, missing-AWB exception wired to ExceptionService]
-- [x] 9.6 [M] AWB verification scan binds piece↔order↔tracking; mismatch rejected loudly ([S] optional toggle, default mandatory)
+- [x] 9.6 [M] AWB verification scan binds piece↔order↔tracking; mismatch rejected loudly — mandatory, no toggle: "Skip — link later" removed entirely; Complete is hidden until the order is linked AND its waybill has been printed, and the post-Complete verify-scan can no longer be bypassed [Fulfill.tsx: pre-Complete inline scan-to-link for unlinked orders, existing Print Waybill button gates Complete when already pre-matched, AwbLinkDialog skip button removed]
 - [x] 9.7 [M] After verification → Awaiting Pickup
 - [x] 9.8 [M] Guided unpack (cancel post-pack): cancel_requested_at set → worker unpack per piece (unpacked event, PACKED→AVAILABLE) → all clear → order Cancelled; no partial completion
 - [x] 9.9 [M] Pre-handover cancel: pre-pack → auto-release pieces (unreserved events, allocations released, order Cancelled); post-pack → guided unpack exception
