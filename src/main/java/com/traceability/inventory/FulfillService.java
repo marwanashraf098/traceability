@@ -104,6 +104,25 @@ public class FulfillService {
      * allocations can have; complete() is what flips them to 'packed', and that
      * happens in the same transaction as the order leaving ready_to_pick). Do not
      * revert to the raw-quantity sum.
+     *
+     * Two follow-up corrections to that same fix (2026-07-28, Marawan review):
+     *   1. Each order_item's (quantity - active_count) is wrapped in GREATEST(..., 0)
+     *      BEFORE the SUM, not after. Without per-line flooring, one corrupted/stray-
+     *      over-allocated line (active_count > quantity — should never happen given
+     *      scan()'s FOR-UPDATE guard, but the aggregate must not trust that silently)
+     *      would go negative and cannibalize a healthy line's demand in the same
+     *      variant's SUM. Floor per line, not on the total.
+     *   2. The allocations/pieces correlated subqueries do NOT bind a fresh tenantId
+     *      parameter — that would be a second, hand-rolled tenancy mechanism parallel
+     *      to (not derived from) the RLS GUC the rest of this method relies on, and
+     *      inconsistent with getQueue()'s own correlated subqueries in this same file
+     *      (no explicit tenant_id filter at all — trust RLS). Instead they correlate
+     *      tenant_id to the already-RLS-scoped outer row (a.tenant_id = oi.tenant_id,
+     *      p.tenant_id = v.tenant_id), the same style as getOrder()'s
+     *      "s.tenant_id = o.tenant_id" join. RLS (FORCE ROW LEVEL SECURITY + the
+     *      app.current_tenant GUC fired automatically by TenantAwareConnection) is the
+     *      only tenancy enforcement in this query; the join equality is schema
+     *      consistency, not a second boundary.
      */
     @Transactional(readOnly = true)
     public GatherListResponse getGatherList(Integer limit) {
@@ -130,13 +149,13 @@ public class FulfillService {
         List<GatherRow> rows = jdbc.query(con -> {
             PreparedStatement ps = con.prepareStatement(
                 "SELECT v.id AS variant_id, v.title AS name, v.sku AS sku, " +
-                "       SUM(oi.quantity - COALESCE(( " +
+                "       SUM(GREATEST(oi.quantity - COALESCE(( " +
                 "           SELECT COUNT(*) FROM allocations a " +
-                "           WHERE a.tenant_id = ? AND a.order_item_id = oi.id AND a.status = 'active' " +
-                "       ), 0)) AS needed, " +
+                "           WHERE a.order_item_id = oi.id AND a.tenant_id = oi.tenant_id AND a.status = 'active' " +
+                "       ), 0), 0)) AS needed, " +
                 "       array_agg(DISTINCT o.number) AS order_numbers, " +
                 "       (SELECT COUNT(*) FROM pieces p " +
-                "        WHERE p.tenant_id = ? AND p.variant_id = v.id AND p.status = 'available'" +
+                "        WHERE p.variant_id = v.id AND p.tenant_id = v.tenant_id AND p.status = 'available'" +
                 "       ) AS available_count " +
                 "FROM orders o " +
                 "JOIN order_items oi ON oi.order_id = o.id " +
@@ -145,9 +164,7 @@ public class FulfillService {
                 "GROUP BY v.id, v.title, v.sku " +
                 "ORDER BY v.title ASC");
             ps.setObject(1, tenantId);
-            ps.setObject(2, tenantId);
-            ps.setObject(3, tenantId);
-            ps.setArray(4, con.createArrayOf("uuid", orderIds));
+            ps.setArray(2, con.createArrayOf("uuid", orderIds));
             return ps;
         }, (rs, rowNum) -> {
             long needed    = rs.getLong("needed");

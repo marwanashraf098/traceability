@@ -4,6 +4,34 @@
 
 ## Current state
 
+**FR-8.7 review round 2 (2026-07-28) — per-line flooring + tenancy cleanup on the
+allocation-subtraction fix.** Marawan's review of the prior fix (below) caught two real
+issues before accepting it:
+1. **Missing per-line floor.** `SUM(oi.quantity - active_count)` had no `GREATEST(..., 0)`
+   per order_item. One corrupted/stray-over-allocated line (active_count > quantity — should
+   never happen given `scan()`'s FOR-UPDATE guard, but the aggregate must not silently trust
+   that) would go negative and cannibalize a different, healthy order_item's demand within
+   the same variant's SUM — the floor must apply per line, before the SUM, not after. Fixed:
+   `SUM(GREATEST(oi.quantity - COALESCE(active_count, 0), 0))`.
+2. **Two tenancy mechanisms in one statement.** The allocations/pieces correlated subqueries
+   bound a fresh `tenantId` Java parameter (`a.tenant_id = ?`) — correct in value (it was the
+   session tenant), but a second, hand-rolled tenancy check running parallel to the RLS GUC
+   the rest of the method relies on, and inconsistent with this same file's own convention:
+   `getQueue()`'s correlated subqueries never bind an explicit tenant_id at all (trust RLS
+   alone). Fixed: dropped the bound parameters; subqueries now correlate tenant_id to the
+   already-RLS-scoped outer row (`a.tenant_id = oi.tenant_id`, `p.tenant_id = v.tenant_id`),
+   matching `getOrder()`'s existing `s.tenant_id = o.tenant_id` join style. RLS is the only
+   tenancy enforcement in this query; the join equality is schema consistency, not a second
+   boundary.
+
+Verified the flooring fix is a real regression guard, not a trivially-passing assertion: ran
+the new test with `GREATEST` temporarily reverted — it failed (`expected 4, got 3`) — then
+restored the fix and confirmed green. Added
+`GatherListTest.h_perLineFlooring_overAllocatedLineDoesNotCannibalizeOtherLinesDemand`
+(variant with 2 order_items: one at quantity=2 with 3 stray active allocations, one healthy
+at quantity=4 with zero → asserts total needed=4, not the un-floored 3). Test list is now
+a–i (i = cross-tenant isolation, renumbered). 9/9 `GatherListTest`, 713/713 backend suite.
+
 **FR-8.7 follow-up fix (2026-07-28) — needed now subtracts active allocations.** The
 gather list's `needed` field summed the raw `order_item.quantity` per the original build
 spec's assumption that `ready_to_pick` orders carry no allocations yet. That assumption was

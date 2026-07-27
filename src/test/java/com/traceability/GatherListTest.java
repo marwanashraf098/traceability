@@ -36,7 +36,11 @@ import static org.assertj.core.api.Assertions.assertThat;
  *       allocated (this codebase never transitions orders to 'picking' — see
  *       getGatherList() javadoc) — needed must subtract those active allocations, and
  *       shortage must recalculate against the reduced remaining, not the raw quantity
- *   h — cross-tenant isolation (paired with the positive control in `a`): tenant B's
+ *   h — per-line flooring: one order_item with active_count > quantity (stray/corrupt
+ *       over-allocation) must floor at 0 for that line, not let the negative leak into
+ *       the SUM and cannibalize a different, healthy order_item's demand on the same
+ *       variant
+ *   i — cross-tenant isolation (paired with the positive control in `a`): tenant B's
  *       gather never sees tenant A's orders or demand
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.NONE)
@@ -299,7 +303,35 @@ class GatherListTest {
     }
 
     @Test
-    void h_crossTenantIsolation_tenantBNeverSeesTenantADemand() {
+    void h_perLineFlooring_overAllocatedLineDoesNotCannibalizeOtherLinesDemand() {
+        UUID productId = insertProduct(tenantA, storeA, "GL-P7", "Flooring Product");
+        UUID variant   = insertVariant(tenantA, productId, "GL-V7", "SKU-FLOOR", "Flooring Variant");
+
+        // Line A: quantity 2, but 3 active allocations — a stray/corrupt over-allocation
+        // that scan()'s FOR-UPDATE guard should prevent in normal operation, but the
+        // aggregate must not trust that blindly. Un-floored, (2 - 3) = -1 leaks into the
+        // variant's SUM and silently eats into line B's demand below.
+        UUID orderCorrupt = insertOrder(tenantA, storeA, "GL-OCORRUPT", "#GL-CORRUPT", "ready_to_pick", false, Instant.now());
+        UUID itemCorrupt  = insertOrderItem(tenantA, orderCorrupt, variant, 2);
+        for (int i = 0; i < 3; i++) {
+            String pieceId = insertPiece(tenantA, variant, "reserved");
+            insertAllocation(tenantA, itemCorrupt, pieceId, "active");
+        }
+
+        // Line B: healthy, quantity 4, zero allocations — remaining should stay 4.
+        UUID orderHealthy = insertOrder(tenantA, storeA, "GL-OHEALTHY", "#GL-HEALTHY", "ready_to_pick", false, Instant.now());
+        insertOrderItem(tenantA, orderHealthy, variant, 4);
+
+        FulfillService.GatherRow row = fulfillSvc.getGatherList(null).rows().get(0);
+
+        // Floored: line A contributes 0 (not -1), line B contributes 4 → total 4.
+        // Un-floored, the SUM would wrongly read 3 (-1 + 4), silently understating
+        // line B's real demand because of line A's corrupt state.
+        assertThat(row.needed()).isEqualTo(4);
+    }
+
+    @Test
+    void i_crossTenantIsolation_tenantBNeverSeesTenantADemand() {
         // Tenant A: seed the same positive-control shape as test `a`.
         UUID productA = insertProduct(tenantA, storeA, "GL-XP1", "Tenant A Product");
         UUID variantA = insertVariant(tenantA, productA, "GL-XVA", "SKU-XA", "Tenant A Variant");
