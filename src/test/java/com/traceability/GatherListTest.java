@@ -32,7 +32,11 @@ import static org.assertj.core.api.Assertions.assertThat;
  *   d — status filter: new/packed/on-hold excluded, only ready_to_pick+not-on-hold included
  *   e — empty: no ready_to_pick orders → empty rows, orderCount = 0
  *   f — limit: limit=N returns only the oldest N orders' demand
- *   g — cross-tenant isolation (paired with the positive control in `a`): tenant B's
+ *   g — mid-pick: order stays ready_to_pick with a SUBSET of pieces already actively
+ *       allocated (this codebase never transitions orders to 'picking' — see
+ *       getGatherList() javadoc) — needed must subtract those active allocations, and
+ *       shortage must recalculate against the reduced remaining, not the raw quantity
+ *   h — cross-tenant isolation (paired with the positive control in `a`): tenant B's
  *       gather never sees tenant A's orders or demand
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.NONE)
@@ -88,6 +92,7 @@ class GatherListTest {
     @AfterEach void clean() {
         TenantContext.clear();
         for (UUID t : new UUID[]{tenantA, tenantB}) {
+            jdbc.update("DELETE FROM allocations WHERE tenant_id = ?", t);
             jdbc.update("DELETE FROM pieces      WHERE tenant_id = ?", t);
             jdbc.update("DELETE FROM order_items WHERE tenant_id = ?", t);
             jdbc.update("DELETE FROM orders      WHERE tenant_id = ?", t);
@@ -120,18 +125,27 @@ class GatherListTest {
             UUID.class, tenantId, storeId, externalId, number, status, onHold, Timestamp.from(createdAt));
     }
 
-    private void insertOrderItem(UUID tenantId, UUID orderId, UUID variantId, int quantity) {
-        jdbc.update(
-            "INSERT INTO order_items (tenant_id, order_id, variant_id, quantity) VALUES (?, ?, ?, ?)",
-            tenantId, orderId, variantId, quantity);
+    private UUID insertOrderItem(UUID tenantId, UUID orderId, UUID variantId, int quantity) {
+        return jdbc.queryForObject(
+            "INSERT INTO order_items (tenant_id, order_id, variant_id, quantity) VALUES (?, ?, ?, ?) " +
+            "RETURNING id",
+            UUID.class, tenantId, orderId, variantId, quantity);
     }
 
-    private void insertPiece(UUID tenantId, UUID variantId, String status) {
+    private String insertPiece(UUID tenantId, UUID variantId, String status) {
         String pieceId = UlidGenerator.generate();
         jdbc.update(
             "INSERT INTO pieces (id, tenant_id, variant_id, barcode, short_code, status) " +
             "VALUES (?, ?, ?, ?, 'P' || LPAD((abs(hashtext(?)) % 999999 + 1)::text, 6, '0'), ?::piece_status)",
             pieceId, tenantId, variantId, "PC-" + pieceId, pieceId, status);
+        return pieceId;
+    }
+
+    private void insertAllocation(UUID tenantId, UUID orderItemId, String pieceId, String status) {
+        jdbc.update(
+            "INSERT INTO allocations (tenant_id, order_item_id, piece_id, status) " +
+            "VALUES (?, ?, ?, ?::allocation_status)",
+            tenantId, orderItemId, pieceId, status);
     }
 
     // ── tests ─────────────────────────────────────────────────────────────────
@@ -257,7 +271,35 @@ class GatherListTest {
     }
 
     @Test
-    void g_crossTenantIsolation_tenantBNeverSeesTenantADemand() {
+    void g_midPick_activeAllocationsReduceRemaining_andRecalculateShortage() {
+        UUID productId = insertProduct(tenantA, storeA, "GL-P6", "Mid-Pick Product");
+        UUID variant   = insertVariant(tenantA, productId, "GL-V6", "SKU-MIDPICK", "Mid-Pick Variant");
+        UUID order     = insertOrder(tenantA, storeA, "GL-O6", "#GL-6", "ready_to_pick", false, Instant.now());
+        UUID orderItemId = insertOrderItem(tenantA, order, variant, 5);
+
+        // 3 of the 5 units already scanned/reserved for THIS order — order stays
+        // 'ready_to_pick' the whole time (no 'picking' transition in this codebase).
+        for (int i = 0; i < 3; i++) {
+            String pieceId = insertPiece(tenantA, variant, "reserved");
+            insertAllocation(tenantA, orderItemId, pieceId, "active");
+        }
+        // 2 more pieces still sitting on the shelf, unreserved.
+        insertPiece(tenantA, variant, "available");
+        insertPiece(tenantA, variant, "available");
+
+        FulfillService.GatherRow row = fulfillSvc.getGatherList(null).rows().get(0);
+
+        // remaining = 5 needed - 3 already-active-allocated = 2
+        assertThat(row.needed()).isEqualTo(2);
+        // only the 2 unreserved shelf pieces count as available
+        assertThat(row.availableCount()).isEqualTo(2);
+        // 2 available >= 2 remaining → no shortage. The pre-fix bug (raw needed=5,
+        // available=2) would have wrongly flagged this as a shortage.
+        assertThat(row.shortage()).isFalse();
+    }
+
+    @Test
+    void h_crossTenantIsolation_tenantBNeverSeesTenantADemand() {
         // Tenant A: seed the same positive-control shape as test `a`.
         UUID productA = insertProduct(tenantA, storeA, "GL-XP1", "Tenant A Product");
         UUID variantA = insertVariant(tenantA, productA, "GL-XVA", "SKU-XA", "Tenant A Variant");

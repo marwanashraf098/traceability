@@ -4,6 +4,29 @@
 
 ## Current state
 
+**FR-8.7 follow-up fix (2026-07-28) — needed now subtracts active allocations.** The
+gather list's `needed` field summed the raw `order_item.quantity` per the original build
+spec's assumption that `ready_to_pick` orders carry no allocations yet. That assumption was
+already flagged false during the initial build (see entry below) — orders in this codebase
+never transition to `'picking'`, so a `ready_to_pick` order can be mid-scan with active
+allocations the whole time. Left as spec-literal at first per explicit direction; this
+follow-up corrects it. `FulfillService.getGatherList()`'s aggregation query now computes
+`needed = SUM(oi.quantity - active_allocation_count_for_that_order_item)` via a correlated
+subquery on `allocations` filtered to `status = 'active'` (confirmed literal against
+`allocation_status` enum in `V1__baseline.sql`: `'active'`/`'packed'`/`'released'` — a
+`ready_to_pick` order's allocations can only ever be `'active'`, since `complete()` is what
+flips them to `'packed'`, in the same transaction that moves the order off `ready_to_pick`).
+`shortage = availableCount < needed` unchanged, but now correctly compares shelf stock
+against remaining-to-gather instead of raw demand — this is also what makes the list
+decrement across reloads as required by FR-8.7. Response field name kept as `needed`
+(meaning changed, not the wire shape) to avoid a frontend/API churn for a field rename.
+
+Added `GatherListTest.g_midPick_activeAllocationsReduceRemaining_andRecalculateShortage`
+— the gap that let the original bug through: order quantity 5, 3 pieces already
+actively allocated (reserved) + 2 unreserved on the shelf → asserts `needed` = 2 (not 5)
+and `shortage` = false (the pre-fix code would have wrongly flagged shortage: raw needed=5
+vs. available=2). 8/8 `GatherListTest` green, 712/712 backend suite green.
+
 **FR-8.7 Gather List shipped (2026-07-28) — read-only pick-wave view, Option A only.**
 `FulfillService.getGatherList(Integer limit)` aggregates all `ready_to_pick`, not-on-hold
 orders into one row per variant (needed/availableCount/shortage/orderNumbers), exposed at

@@ -86,17 +86,24 @@ public class FulfillService {
     /**
      * FR-8.7 Option A — read-only pick-wave aggregation across all ready_to_pick,
      * not-on-hold orders, one row per variant. Stateless: recomputed on every call,
-     * no wave locking, no allocation-subtraction join. on_hold=false mirrors getQueue()'s
-     * own convention — the build spec's aggregation section omits it, but its own test
-     * list requires on-hold orders excluded, so this resolves that inconsistency the
-     * same way the queue already does.
+     * no wave locking. on_hold=false mirrors getQueue()'s own convention — the build
+     * spec's aggregation section omits it, but its own test list requires on-hold
+     * orders excluded, so this resolves that inconsistency the same way the queue
+     * already does.
      *
-     * needed intentionally uses the full order_item quantity, not remaining-after-
-     * partial-scan: 'picking' is a defined order_status value but nothing in this
-     * codebase ever assigns it (confirmed absent from every migration and service) —
-     * an order stays 'ready_to_pick' for its entire scan lifecycle, so it CAN already
-     * carry active allocations when this runs. Approved by Marawan 2026-07-28 to follow
-     * the build spec literally despite that; do not silently add an allocation join.
+     * needed = remaining-to-gather, NOT the raw order_item quantity. 'picking' is a
+     * defined order_status value but nothing in this codebase ever assigns it
+     * (confirmed absent from every migration and service) — an order stays
+     * 'ready_to_pick' for its ENTIRE scan lifecycle, so it can already carry active
+     * allocations (partially scanned) when this runs. An earlier version of this
+     * method summed the raw order_item quantity per the build spec's assumption that
+     * ready_to_pick orders have no allocations yet — that assumption is false here,
+     * so it over-counted demand and never decremented across reloads. Fixed
+     * 2026-07-28 (Marawan): needed now subtracts each order_item's active allocation
+     * count (allocations.status = 'active' — the only status a ready_to_pick order's
+     * allocations can have; complete() is what flips them to 'packed', and that
+     * happens in the same transaction as the order leaving ready_to_pick). Do not
+     * revert to the raw-quantity sum.
      */
     @Transactional(readOnly = true)
     public GatherListResponse getGatherList(Integer limit) {
@@ -123,7 +130,10 @@ public class FulfillService {
         List<GatherRow> rows = jdbc.query(con -> {
             PreparedStatement ps = con.prepareStatement(
                 "SELECT v.id AS variant_id, v.title AS name, v.sku AS sku, " +
-                "       SUM(oi.quantity) AS needed, " +
+                "       SUM(oi.quantity - COALESCE(( " +
+                "           SELECT COUNT(*) FROM allocations a " +
+                "           WHERE a.tenant_id = ? AND a.order_item_id = oi.id AND a.status = 'active' " +
+                "       ), 0)) AS needed, " +
                 "       array_agg(DISTINCT o.number) AS order_numbers, " +
                 "       (SELECT COUNT(*) FROM pieces p " +
                 "        WHERE p.tenant_id = ? AND p.variant_id = v.id AND p.status = 'available'" +
@@ -136,7 +146,8 @@ public class FulfillService {
                 "ORDER BY v.title ASC");
             ps.setObject(1, tenantId);
             ps.setObject(2, tenantId);
-            ps.setArray(3, con.createArrayOf("uuid", orderIds));
+            ps.setObject(3, tenantId);
+            ps.setArray(4, con.createArrayOf("uuid", orderIds));
             return ps;
         }, (rs, rowNum) -> {
             long needed    = rs.getLong("needed");
@@ -1012,6 +1023,8 @@ public class FulfillService {
             int              orderCount,
             List<GatherRow>  rows) {}
 
+    /** needed = remaining-to-gather (order_item quantity minus active allocations already
+     *  scanned for it), not the raw order quantity — see getGatherList() javadoc. */
     public record GatherRow(
             UUID         variantId,
             String       name,
