@@ -54,8 +54,8 @@ public class AuthRepository {
                 userId, tenantId, name, email, passwordHash,
                 privacyVersion, termsVersion, acceptedAt);
         jdbc.update(
-                "INSERT INTO locations (id, tenant_id, name, type, is_default) " +
-                "VALUES (gen_random_uuid(), ?, 'Main Warehouse', 'warehouse', true)",
+                "INSERT INTO locations (id, tenant_id, name, type, is_default, is_fulfillment) " +
+                "VALUES (gen_random_uuid(), ?, 'Main Warehouse', 'warehouse', true, true)",
                 tenantId);
         return userId;
     }

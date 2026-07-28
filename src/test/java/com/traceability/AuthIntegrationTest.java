@@ -91,6 +91,15 @@ class AuthIntegrationTest {
                 .isEqualTo(1);
 
         tenantAId = UUID.fromString(guc);
+
+        // Standalone-signup seed path: the one location must be flagged is_fulfillment=true
+        // (not left to the column default) so the shadow computation reads it.
+        Boolean isFulfillment = jdbc.queryForObject(
+                "SELECT is_fulfillment FROM locations WHERE tenant_id = ? AND is_default = true",
+                Boolean.class, tenantAId);
+        assertThat(isFulfillment)
+                .as("standalone-signup Main Warehouse must be seeded with is_fulfillment=true")
+                .isTrue();
     }
 
     // -----------------------------------------------------------------------

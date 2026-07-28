@@ -12,6 +12,7 @@ import java.sql.DriverManager;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.util.List;
+import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -61,8 +62,8 @@ class MigrationSmokeTest {
                 .as("Flyway migrations must succeed")
                 .isTrue();
         assertThat(result.migrationsExecuted)
-                .as("all migrations V1–V58 must execute")
-                .isEqualTo(57);
+                .as("all migrations V1–V59 must execute")
+                .isEqualTo(58);
 
         try (Connection conn = DriverManager.getConnection(
                 POSTGRES.getJdbcUrl(),
@@ -212,6 +213,87 @@ class MigrationSmokeTest {
                 assertThat(rs.getString("user_id"))
                         .as("auth_lookup_user must return the correct user_id")
                         .isEqualTo("bbbbbbbb-0000-0000-0000-000000000001");
+            }
+        }
+    }
+
+    /**
+     * V59 backfill must set is_fulfillment=true for exactly the is_default=true
+     * rows that existed before the migration ran, and leave others false.
+     * Uses its own container (rather than the shared POSTGRES) so pre-existing
+     * data can be seeded at V58 before V59's backfill fires.
+     */
+    @Test
+    void v59Backfill_setsIsFulfillmentForDefaultLocationsOnly() throws Exception {
+        try (PostgreSQLContainer<?> pg = new PostgreSQLContainer<>("postgres:16-alpine")
+                .withDatabaseName("traceability_backfill_test")
+                .withUsername("postgres")
+                .withPassword("postgres")) {
+            pg.start();
+
+            Flyway.configure()
+                    .dataSource(pg.getJdbcUrl(), pg.getUsername(), pg.getPassword())
+                    .locations("classpath:db/migration")
+                    .target(org.flywaydb.core.api.MigrationVersion.fromVersion("58"))
+                    .load()
+                    .migrate();
+
+            UUID tenantId      = UUID.randomUUID();
+            UUID defaultLocId  = UUID.randomUUID();
+            UUID otherLocId    = UUID.randomUUID();
+
+            try (Connection conn = DriverManager.getConnection(
+                    pg.getJdbcUrl(), pg.getUsername(), pg.getPassword())) {
+                try (PreparedStatement ps = conn.prepareStatement(
+                        "INSERT INTO tenants (id, name) VALUES (?, 'BackfillTestTenant')")) {
+                    ps.setObject(1, tenantId);
+                    ps.executeUpdate();
+                }
+                try (PreparedStatement ps = conn.prepareStatement(
+                        "INSERT INTO locations (id, tenant_id, name, type, is_default) " +
+                        "VALUES (?, ?, 'Main Warehouse', 'warehouse', true)")) {
+                    ps.setObject(1, defaultLocId);
+                    ps.setObject(2, tenantId);
+                    ps.executeUpdate();
+                }
+                try (PreparedStatement ps = conn.prepareStatement(
+                        "INSERT INTO locations (id, tenant_id, name, type, is_default) " +
+                        "VALUES (?, ?, 'Showroom', 'showroom', false)")) {
+                    ps.setObject(1, otherLocId);
+                    ps.setObject(2, tenantId);
+                    ps.executeUpdate();
+                }
+            }
+
+            MigrateResult result = Flyway.configure()
+                    .dataSource(pg.getJdbcUrl(), pg.getUsername(), pg.getPassword())
+                    .locations("classpath:db/migration")
+                    .load()
+                    .migrate();
+            assertThat(result.success).as("remaining migrations through V59 must succeed").isTrue();
+
+            try (Connection conn = DriverManager.getConnection(
+                    pg.getJdbcUrl(), pg.getUsername(), pg.getPassword())) {
+                try (PreparedStatement ps = conn.prepareStatement(
+                        "SELECT is_fulfillment FROM locations WHERE id = ?")) {
+                    ps.setObject(1, defaultLocId);
+                    try (ResultSet rs = ps.executeQuery()) {
+                        rs.next();
+                        assertThat(rs.getBoolean(1))
+                                .as("is_default=true location must be backfilled to is_fulfillment=true")
+                                .isTrue();
+                    }
+                }
+                try (PreparedStatement ps = conn.prepareStatement(
+                        "SELECT is_fulfillment FROM locations WHERE id = ?")) {
+                    ps.setObject(1, otherLocId);
+                    try (ResultSet rs = ps.executeQuery()) {
+                        rs.next();
+                        assertThat(rs.getBoolean(1))
+                                .as("is_default=false location must NOT be backfilled")
+                                .isFalse();
+                    }
+                }
             }
         }
     }
