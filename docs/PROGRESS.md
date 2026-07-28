@@ -4,6 +4,84 @@
 
 ## Current state
 
+**FR-17 v2 — Traced-owned Shopify location + increment-only live inventory sync (2026-07-29) —
+built and tested against LOCAL/Testcontainers only; not run against production or any real
+Shopify store.** Built exactly `docs/traced-shopify-location-and-onhand-sync-spec.md` (the
+updated FR-17 v2 revision — increment-only + damage-move model, replacing the earlier
+`inventorySetOnHandQuantities` draft after a spec-mismatch was caught and the user re-issued
+the correct version). Production Step-0 items (current Shopify locations per pilot, the
+junk-location audit, which onboarding path each pilot used) are explicitly OPERATOR-RUN by
+Marawan against prod — out of this slice's scope, not blocked on.
+
+**Part A — provisioning:** `ShopifyLocationProvisioningService.ensureTracedWarehouse()`
+handles both onboarding cases without needing to know which occurred: links an existing
+`is_fulfillment=true` location (standalone signup, seeded by `AuthRepository`) or creates one
+first (Shopify-first gap recorded 2026-07-28 in `requirements-checklist.md` 5.5 — `V14`'s
+`provision_tenant_from_shopify` comment claiming "the import job" creates it was stale; it
+creates none). Wired into `ShopifyImportJob.run()`, non-fatal on failure. Does **not** touch
+the `provision_tenant_from_shopify` SECURITY DEFINER function — follows the existing
+post-DEFINER-INSERT pattern already used for refresh-token fields in `ShopifyOAuthService`.
+`LocationController.create()` gated to `is_fulfillment=true` only (previously unconditional
+for any location); `fulfillsOnlineOrders=true` set on every location Traced creates. Junk-
+location report (`GET /api/v1/locations/shopify-junk-report`) + guarded per-location cleanup
+(`POST .../{id}/shopify-cleanup`, deactivates one Shopify location at a time) — nothing
+deleted/deactivated automatically, list surfaced for Marawan first.
+
+**Part B — activation:** `ShopifyCatalogActivationService.activateAll()` bulk-`inventoryActivate`s
+every catalog variant at the Traced GID (required before any on_hand write lands — new
+Shopify locations start with zero active inventory items); one bad variant doesn't abort the
+batch.
+
+**Part C — reconcile + guarded seed:** `ShopifyInventoryReconcileService.reconcile()` computes
+Traced on_hand per variant (same formula as `CatalogController`'s `on_hand(V)`) and diffs
+against Shopify's current "available" at the Traced GID — read-only, writes nothing. `apply()`
+recomputes the same diff live (never trusts a stale client-held report) and seeds ONLY
+variants where Shopify shows zero — a strictly-positive delta from 0. Any variant already
+non-zero in Shopify is skipped and flagged for manual reconcile, never corrected up or down;
+because the check is live, a re-run after a successful seed naturally no-ops instead of
+double-adding. Every `apply()` call is audit-logged (`shopify_inventory_initial_seed`) and
+recorded per-variant in `shopify_inventory_adjustments` (`trigger_type='initial_seed'`).
+
+**Part D — live trigger wiring:** `ShopifyInventoryService` flipped from shadow rows to real
+Shopify mutations, gated by a pre-Shopify-call idempotency check (a prior `'applied'` row for
+the exact `(trigger_type, trigger_id, variant_id, location_id)` skips the call entirely — the
+`ON CONFLICT` on INSERT alone isn't enough once the mutation happens before that insert) and
+by `is_fulfillment=true` + `shopify_sync_status='linked'` on the triggering location, which is
+also the *only* source of the `locationGid` ever passed to Shopify (structurally impossible to
+target a different location's GID). Exactly three triggers: (1) receiving session close → `+N`
+per variant; (2) return inspection → AVAILABLE → `+1` per piece (`return_pending_inspection →
+damaged` still does nothing, unchanged); (3) a currently-**sellable** piece damaged in the
+warehouse → `inventoryMoveQuantities` available→damaged, wired into
+`PieceAdjustService.adjustPiece()` right after a successful `available→damaged` ledger
+transition — the pre-existing RESERVED/PACKED 409 guard in that method is what keeps this to
+the truly-sellable case; `ReturnService.markDamaged()` (the `return_pending_inspection→damaged`
+verdict) is a separate method with no Shopify call at all. `inventorySetOnHandQuantities` does
+not exist anywhere in `ShopifyGateway`/`ShopifyHttpGateway` — proven by a reflection-based test,
+not a text scan (a text scan would also flag the doc comments naming the forbidden method).
+
+**KNOWN GAP (recorded, not patched this round):** destroying/losing a currently-sellable piece
+overstates Shopify's sellable stock — no trigger closes this; closing it needs an approved
+narrow decrement or move-to-unavailable, a separate decision.
+
+**Accepted consequence (documented, not implemented):** Shopify sums storefront availability
+across all online-order-fulfilling locations; because Traced never touches the store's old
+default location, the storefront shows the sum of both until the merchant empties/de-lists the
+old one — added to the go-live acceptance checklist as a merchant-performed step, not a code task.
+
+Tests: `ShopifyLocationProvisioningTest` (fulfillment gate, idempotent re-provisioning, both
+onboarding cases, junk report + guarded cleanup), `ShopifyCatalogActivationTest`,
+`ShopifyInventoryReconcileTest` (first-pass-writes-nothing, positive-delta-only seed, non-zero-
+skip-never-correct, re-run-is-noop), rewritten `ShopifyInventoryTest` (live-call assertions,
+location-target guard, full damage-trigger matrix), new package-scoped
+`ShopifyHttpGatewayInventoryTest` (positive-delta/quantity validation pre-network-call,
+`@idempotent` present on all three mutation documents). `RlsCoverageTest` gains the two new GET
+endpoints. V60 migration widens `shopify_inventory_adjustments.trigger_type`
+(`damage_move`, `initial_seed`); fixed two pre-existing tests that hardcoded the total
+migration count. Full backend suite green (`mvn test`). **Not deployed, not run against
+production** — Marawan runs Parts B/C/D-activation against real stores himself, later.
+
+---
+
 **Location `is_fulfillment` flag + Committed/Available inventory columns (2026-07-28) —
 shadow mode only, no Shopify write anywhere in this slice.** Built exactly the approved
 `docs/location-sync-flag-and-committed-column-spec.md`, with two corrections after Step-0
