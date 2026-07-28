@@ -137,6 +137,21 @@ public class ShopifyInventoryService {
                                      String reason) {
         UUID tenantId = TenantContext.require();
 
+        // ── Shadow scope guard ────────────────────────────────────────────────
+        // Only fulfillment locations (is_fulfillment=true) contribute to the
+        // shadow-synced number. A showroom/branch scan must not leak in.
+        Boolean isFulfillment = tx.execute(status ->
+            jdbc.query(
+                "SELECT is_fulfillment FROM locations WHERE id = ? AND tenant_id = ?",
+                rs -> rs.next() ? rs.getBoolean(1) : null,
+                locationId, tenantId));
+
+        if (isFulfillment == null || !isFulfillment) {
+            log.info("Shopify inventory sync skipped: location is not a fulfillment location " +
+                      "trigger={} triggerId={} location={}", triggerType, triggerId, locationId);
+            return;
+        }
+
         // Evaluate BOTH preconditions independently so all resolved IDs are recorded
         // even when one precondition fails. This lets shadow rows validate resolution
         // while the location/scope question is still open.

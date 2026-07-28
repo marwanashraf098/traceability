@@ -39,6 +39,8 @@ import static org.mockito.Mockito.when;
  *   si3 — unlinked location records a failed row instead of throwing
  *   si4 — return inspection → AVAILABLE inserts shadow row for the piece's variant
  *   si5 — app_user with wrong tenant cannot see adjustment rows (RLS)
+ *   si6 — shadow scope guard: is_fulfillment=false location inserts NO row;
+ *         is_fulfillment=true location does (same-tenant positive control)
  *
  * ShopifyGateway and ShopifyTokenProvider are mocked — no real Shopify API calls.
  * Tests run as postgres (BYPASSRLS) for setup; si5 uses app_user for isolation.
@@ -85,8 +87,9 @@ class ShopifyInventoryTest {
 
     UUID tenantId;
     UUID storeId;
-    UUID locationId;       // linked location
-    UUID locationUnsynced; // unsynced location (for si3)
+    UUID locationId;             // linked, is_fulfillment=true
+    UUID locationUnsynced;       // unsynced, is_fulfillment=true (for si3)
+    UUID locationNotFulfillment; // linked, is_fulfillment=false (for si6 guard)
     UUID variantA;
     UUID variantB;
     UUID productId;
@@ -124,19 +127,29 @@ class ShopifyInventoryTest {
             "VALUES (?, ?, ?, 'gid://shopify/ProductVariant/102', 'Variant B', 'SKU-B')",
             variantB, tenantId, productId);
 
-        // Linked location — shopify_sync_status = 'linked'.
+        // Linked location — shopify_sync_status = 'linked', is_fulfillment=true.
         locationId = UUID.randomUUID();
         jdbc.update(
-            "INSERT INTO locations (id, tenant_id, name, shopify_location_id, shopify_sync_status) " +
-            "VALUES (?, ?, 'Main Warehouse', 'gid://shopify/Location/999', 'linked')",
+            "INSERT INTO locations (id, tenant_id, name, shopify_location_id, shopify_sync_status, is_fulfillment) " +
+            "VALUES (?, ?, 'Main Warehouse', 'gid://shopify/Location/999', 'linked', true)",
             locationId, tenantId);
 
-        // Unsynced location — used to test si3.
+        // Unsynced location — used to test si3. is_fulfillment=true (technical link status
+        // and business fulfillment scoping are independent — a fulfillment location can still
+        // be pending its Shopify link).
         locationUnsynced = UUID.randomUUID();
         jdbc.update(
-            "INSERT INTO locations (id, tenant_id, name, shopify_sync_status) " +
-            "VALUES (?, ?, 'Unsynced WH', 'unsynced')",
+            "INSERT INTO locations (id, tenant_id, name, shopify_sync_status, is_fulfillment) " +
+            "VALUES (?, ?, 'Unsynced WH', 'unsynced', true)",
             locationUnsynced, tenantId);
+
+        // Linked but is_fulfillment=false — a showroom/branch whose stock must NOT
+        // contribute to the shadow number. Used by si6.
+        locationNotFulfillment = UUID.randomUUID();
+        jdbc.update(
+            "INSERT INTO locations (id, tenant_id, name, shopify_location_id, shopify_sync_status, is_fulfillment) " +
+            "VALUES (?, ?, 'Showroom', 'gid://shopify/Location/888', 'linked', false)",
+            locationNotFulfillment, tenantId);
 
         // Piece for si4 (return inspection trigger).
         pieceId = "01HTEST0000000000000000001";
@@ -329,5 +342,46 @@ class ShopifyInventoryTest {
             org.junit.jupiter.api.Assumptions.assumeTrue(false,
                 "app_user not available in test container — RLS assertion skipped: " + e.getMessage());
         }
+    }
+
+    // ── si6: shadow scope guard — is_fulfillment gates shadow row insertion ──
+
+    @Test @Order(6)
+    void si6_shadowScopeGuard_nonFulfillmentLocationInsertsNoRow_fulfillmentLocationDoes() throws Exception {
+        when(tokenProvider.getValidToken(storeId)).thenReturn("test-token");
+        when(shopifyGateway.resolveInventoryItemId(anyString(), anyString(), anyString()))
+            .thenReturn("gid://shopify/InventoryItem/201");
+
+        // Negative case: is_fulfillment=false location — no row at all, not even 'failed'.
+        UUID negSessionId = UUID.randomUUID();
+        TenantContext.set(tenantId);
+        try {
+            service.onReceivingSessionClose(tenantId, negSessionId, locationNotFulfillment, Map.of(variantA, 4))
+                   .get(5, TimeUnit.SECONDS);
+        } finally { TenantContext.clear(); }
+
+        Long negCount = jdbc.queryForObject(
+            "SELECT COUNT(*) FROM shopify_inventory_adjustments " +
+            "WHERE trigger_type = 'receiving_session' AND trigger_id = ? AND tenant_id = ?",
+            Long.class, negSessionId.toString(), tenantId);
+        assertThat(negCount)
+            .as("si6: is_fulfillment=false location must NOT contribute a shadow row")
+            .isZero();
+
+        // Positive control: same tenant, is_fulfillment=true location — row IS inserted.
+        UUID posSessionId = UUID.randomUUID();
+        TenantContext.set(tenantId);
+        try {
+            service.onReceivingSessionClose(tenantId, posSessionId, locationId, Map.of(variantA, 4))
+                   .get(5, TimeUnit.SECONDS);
+        } finally { TenantContext.clear(); }
+
+        Long posCount = jdbc.queryForObject(
+            "SELECT COUNT(*) FROM shopify_inventory_adjustments " +
+            "WHERE trigger_type = 'receiving_session' AND trigger_id = ? AND tenant_id = ?",
+            Long.class, posSessionId.toString(), tenantId);
+        assertThat(posCount)
+            .as("si6 positive control: is_fulfillment=true location does contribute a shadow row")
+            .isEqualTo(1L);
     }
 }
