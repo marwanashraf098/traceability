@@ -30,7 +30,7 @@ public class CatalogController {
 
     public record VariantRow(
         String id, String title, String sku, BigDecimal price,
-        Map<String, Long> pieceCounts) {}
+        Map<String, Long> pieceCounts, long committed, long available) {}
 
     public record ProductRow(
         String id, String title, String status,
@@ -48,7 +48,8 @@ public class CatalogController {
                 "WHERE tenant_id = NULLIF(current_setting('app.current_tenant', true), '')::uuid " +
                 "ORDER BY title");
 
-            // All variant piece counts for this tenant in one query.
+            // All variant piece counts for this tenant in one query. Tenant-wide,
+            // unscoped by location — the existing Total / Stock breakdown display.
             Map<UUID, Map<String, Long>> counts = new HashMap<>();
             jdbc.query(
                 """
@@ -62,6 +63,46 @@ public class CatalogController {
                     counts.computeIfAbsent(varId, k -> new HashMap<>())
                           .put(rs.getString("status_text"), rs.getLong("cnt"));
                 });
+
+            // committed(V): order_items.quantity summed over orders in the
+            // pre-courier, non-cancelled window (ordered -> handed to courier,
+            // inclusive — packed/awaiting_pickup are still in our custody and
+            // still owed). Derived on read, no stored counter. order_items
+            // carries no location column — inherently tenant+variant scoped.
+            Map<UUID, Long> committedByVariant = new HashMap<>();
+            jdbc.query(
+                """
+                SELECT oi.variant_id, SUM(oi.quantity) AS committed
+                FROM order_items oi
+                JOIN orders o ON o.id = oi.order_id
+                WHERE oi.tenant_id = NULLIF(current_setting('app.current_tenant', true), '')::uuid
+                  AND o.status IN ('new','confirmed','ready_to_pick',
+                                    'picking','packed','awaiting_pickup')
+                GROUP BY oi.variant_id
+                """,
+                (org.springframework.jdbc.core.RowCallbackHandler) rs -> committedByVariant.put(
+                    rs.getObject("variant_id", UUID.class), rs.getLong("committed")));
+
+            // on_hand(V): pieces physically present at a fulfillment location
+            // (is_fulfillment=true). Scoped by location, unlike the Total/breakdown
+            // counts above — will diverge from the tenant-wide badges once a
+            // second, non-fulfillment location exists.
+            Map<UUID, Long> onHandByVariant = new HashMap<>();
+            jdbc.query(
+                """
+                SELECT p.variant_id, COUNT(*) AS on_hand
+                FROM pieces p
+                WHERE p.tenant_id = NULLIF(current_setting('app.current_tenant', true), '')::uuid
+                  AND p.status IN ('available','reserved','packed','awaiting_pickup')
+                  AND p.current_location_id IN (
+                      SELECT id FROM locations
+                      WHERE tenant_id = NULLIF(current_setting('app.current_tenant', true), '')::uuid
+                        AND is_fulfillment = true
+                  )
+                GROUP BY p.variant_id
+                """,
+                (org.springframework.jdbc.core.RowCallbackHandler) rs -> onHandByVariant.put(
+                    rs.getObject("variant_id", UUID.class), rs.getLong("on_hand")));
 
             List<ProductRow> products = new ArrayList<>();
             for (Map<String, Object> pr : productRows) {
@@ -90,12 +131,18 @@ public class CatalogController {
                     }
                     pieceCounts.put("total", total);
 
+                    long committed = committedByVariant.getOrDefault(varId, 0L);
+                    long onHand    = onHandByVariant.getOrDefault(varId, 0L);
+                    long available = onHand - committed;
+
                     variants.add(new VariantRow(
                         varId.toString(),
                         (String) vr.get("title"),
                         (String) vr.get("sku"),
                         (BigDecimal) vr.get("price"),
-                        pieceCounts
+                        pieceCounts,
+                        committed,
+                        available
                     ));
                 }
 

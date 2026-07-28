@@ -79,7 +79,8 @@ class RlsCoverageTest {
             "/api/v1/returns/sessions/{sessionId}/pieces",
             "/api/v1/orders/daily-counts",
             "/api/v1/lookup",
-            "/api/v1/fulfill/gather"
+            "/api/v1/fulfill/gather",
+            "/api/v1/catalog"
     );
 
     // ── Patterns consciously excluded, with reasons ────────────────────────────
@@ -133,8 +134,6 @@ class RlsCoverageTest {
                     "uses tx.execute(); empty valid for no syncs"),
             entry("/api/v1/shopify-inventory/adjustments/export.csv",
                     "CSV download, not a JSON list"),
-            entry("/api/v1/catalog",
-                    "uses tx.execute(); empty valid for new tenant; covered by CatalogTest"),
             entry("/api/v1/embedded/inventory/summary",
                     "uses embedded token auth; delegates to covered services"),
             entry("/api/v1/embedded/orders/daily-counts",
@@ -205,8 +204,8 @@ class RlsCoverageTest {
         jdbc.update("INSERT INTO variants (id, tenant_id, product_id, external_id, title, sku) " +
                     "VALUES (?, ?, ?, 'V-CVG', 'Default', 'CVG-001')",
                     variantId, tenantId, productId);
-        jdbc.update("INSERT INTO locations (id, tenant_id, name, type, is_default) " +
-                    "VALUES (?, ?, 'CVG Warehouse', 'warehouse', false)",
+        jdbc.update("INSERT INTO locations (id, tenant_id, name, type, is_default, is_fulfillment) " +
+                    "VALUES (?, ?, 'CVG Warehouse', 'warehouse', false, true)",
                     locationId, tenantId);
     }
 
@@ -409,6 +408,43 @@ class RlsCoverageTest {
         @SuppressWarnings("unchecked")
         List<Map<String, Object>> rows = (List<Map<String, Object>>) resp.getBody().get("rows");
         assertThat(rows).isNotEmpty();
+    }
+
+    @Test
+    void catalog_committedAndAvailable_reflectSeededOrder() {
+        // Positive control: an in-window order (status=ready_to_pick) contributes to
+        // committed; a piece at the (is_fulfillment=true) location contributes to on_hand.
+        UUID orderId     = UUID.randomUUID();
+        UUID orderItemId = UUID.randomUUID();
+        String pieceId   = UlidGenerator.generate();
+
+        jdbc.update("INSERT INTO orders (id, tenant_id, store_id, external_id, status, on_hold) " +
+                    "VALUES (?, ?, ?, 'EXT-CVG-CATALOG', 'ready_to_pick'::order_status, false)",
+                    orderId, tenantId, storeId);
+        jdbc.update("INSERT INTO order_items (id, tenant_id, order_id, variant_id, quantity) " +
+                    "VALUES (?, ?, ?, ?, 2)", orderItemId, tenantId, orderId, variantId);
+        jdbc.update("INSERT INTO pieces (id, tenant_id, variant_id, barcode, short_code, status, current_location_id) " +
+                    "VALUES (?, ?, ?, ?, 'P' || LPAD((abs(hashtext(?)) % 999999 + 1)::text, 6, '0'), " +
+                    "        'available'::piece_status, ?)",
+                    pieceId, tenantId, variantId, "PC-" + pieceId, pieceId, locationId);
+
+        ResponseEntity<Map> resp = get("/api/v1/catalog", Map.class);
+        assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.OK);
+
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> products = (List<Map<String, Object>>) resp.getBody().get("products");
+        Map<String, Object> variant = products.stream()
+            .flatMap(p -> ((List<Map<String, Object>>) p.get("variants")).stream())
+            .filter(v -> variantId.toString().equals(v.get("id")))
+            .findFirst()
+            .orElseThrow(() -> new AssertionError("seeded variant not found in catalog response"));
+
+        assertThat(((Number) variant.get("committed")).longValue())
+            .as("committed must reflect the seeded in-window order")
+            .isEqualTo(2L);
+        assertThat(((Number) variant.get("available")).longValue())
+            .as("available = on_hand(1) - committed(2)")
+            .isEqualTo(-1L);
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────
