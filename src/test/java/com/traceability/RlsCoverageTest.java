@@ -3,11 +3,14 @@ package com.traceability;
 import com.traceability.identity.JwtService;
 import com.traceability.identity.model.SignupRequest;
 import com.traceability.identity.model.TokenResponse;
+import com.traceability.integrations.shopify.ShopifyGateway;
+import com.traceability.integrations.shopify.ShopifyTokenProvider;
 import com.traceability.inventory.UlidGenerator;
 import org.junit.jupiter.api.*;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.boot.test.web.client.TestRestTemplate;
 import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.http.*;
@@ -25,6 +28,8 @@ import java.util.stream.Collectors;
 
 import static java.util.Map.entry;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.when;
 
 /**
  * C3c: Coverage enforcement for GET /api/ endpoints.
@@ -81,7 +86,8 @@ class RlsCoverageTest {
             "/api/v1/lookup",
             "/api/v1/fulfill/gather",
             "/api/v1/catalog",
-            "/api/v1/locations/shopify-junk-report"
+            "/api/v1/locations/shopify-junk-report",
+            "/api/v1/shopify/inventory/reconcile"
     );
 
     // ── Patterns consciously excluded, with reasons ────────────────────────────
@@ -167,6 +173,8 @@ class RlsCoverageTest {
     @Autowired JwtService jwtService;
     @Autowired @Qualifier("requestMappingHandlerMapping")
     RequestMappingHandlerMapping handlerMapping;
+    @MockBean ShopifyGateway shopifyGateway;
+    @MockBean ShopifyTokenProvider tokenProvider;
 
     // ── Per-class shared state ────────────────────────────────────────────────
 
@@ -446,6 +454,33 @@ class RlsCoverageTest {
         assertThat(((Number) variant.get("available")).longValue())
             .as("available = on_hand(1) - committed(2)")
             .isEqualTo(-1L);
+    }
+
+    @Test
+    void shopifyInventoryReconcile_returnsComputedReportForSeededVariant() {
+        UUID tracedLoc = UUID.randomUUID();
+        jdbc.update(
+            "INSERT INTO locations (id, tenant_id, name, type, is_default, is_fulfillment, " +
+            "    shopify_location_id, shopify_sync_status) " +
+            "VALUES (?, ?, 'CVG Traced WH', 'warehouse', false, true, " +
+            "    'gid://shopify/Location/cvg-traced', 'linked')",
+            tracedLoc, tenantId);
+
+        when(tokenProvider.getValidToken(any())).thenReturn("test-token");
+        when(shopifyGateway.resolveInventoryItemId(any(), any(), any()))
+            .thenReturn("gid://shopify/InventoryItem/cvg");
+        when(shopifyGateway.fetchAvailableQuantities(any(), any(), any(), any()))
+            .thenReturn(List.of());
+
+        ResponseEntity<Map> resp = get("/api/v1/shopify/inventory/reconcile", Map.class);
+        assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.OK);
+
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> rows = (List<Map<String, Object>>) resp.getBody().get("rows");
+        assertThat(rows).isNotEmpty();
+        assertThat(rows).anyMatch(r -> variantId.toString().equals(r.get("variantId")));
+
+        jdbc.update("DELETE FROM locations WHERE id = ?", tracedLoc);
     }
 
     @Test
