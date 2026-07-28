@@ -176,6 +176,14 @@
     "title": "Catalog",
     "empty": "No products found",
     "pieces": "pieces",
+    "columns": {
+      "product": "Product",
+      "variant": "Variant / SKU",
+      "total": "Total",
+      "stock": "Stock breakdown",
+      "committed": "Committed",
+      "available": "Available"
+    },
     "statuses": {
       "available": "Available",
       "reserved": "Reserved",

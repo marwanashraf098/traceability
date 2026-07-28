@@ -242,6 +242,8 @@ export interface CatalogVariant {
   sku: string | null
   price: number | null
   pieceCounts: PieceCounts
+  committed: number
+  available: number
 }
 
 export interface CatalogProduct {

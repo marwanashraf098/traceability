@@ -176,6 +176,14 @@
     "title": "الكتالوج",
     "empty": "لا توجد منتجات",
     "pieces": "قطعة",
+    "columns": {
+      "product": "المنتج",
+      "variant": "المتغير / SKU",
+      "total": "الإجمالي",
+      "stock": "تفاصيل المخزون",
+      "committed": "ملتزم به",
+      "available": "متاح"
+    },
     "statuses": {
       "available": "متاح",
       "reserved": "محجوز",

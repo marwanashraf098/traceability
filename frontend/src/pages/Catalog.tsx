@@ -36,6 +36,8 @@ export default function Catalog() {
       sku:           v.sku,
       price:         v.price,
       pieceCounts:   v.pieceCounts,
+      committed:     v.committed,
+      available:     v.available,
     }))
   )
   type Row = typeof rows[number]
@@ -77,6 +79,24 @@ export default function Catalog() {
           <span className="text-body font-semibold text-primary">{row.pieceCounts.total}</span>
           <span className="text-small text-muted ms-1">{t('catalog.pieces')}</span>
         </>
+      ),
+    },
+    {
+      key: 'committed',
+      header: t('catalog.columns.committed', { defaultValue: 'Committed' }),
+      align: 'end',
+      render: row => (
+        <span className="text-body text-primary">{row.committed}</span>
+      ),
+    },
+    {
+      key: 'available',
+      header: t('catalog.columns.available', { defaultValue: 'Available' }),
+      align: 'end',
+      render: row => (
+        <span className={row.available < 0 ? 'text-body font-semibold text-danger' : 'text-body font-semibold text-primary'}>
+          {row.available}
+        </span>
       ),
     },
     {
