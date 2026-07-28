@@ -24,4 +24,9 @@ class StubShopifyLocationGateway implements ShopifyLocationGateway {
     public LocationResult create(String shopDomain, String token, LocationInput input) {
         throw new ShopifyException(MSG);
     }
+
+    @Override
+    public void deactivate(String shopDomain, String token, String shopifyLocationGid) {
+        throw new ShopifyException(MSG);
+    }
 }

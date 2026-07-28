@@ -12,6 +12,7 @@ import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -69,8 +70,9 @@ public class LocationController {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                 "Location name must be at least 3 characters");
         }
-        String  type      = body.getOrDefault("type", "warehouse").toString();
-        boolean isDefault = Boolean.parseBoolean(body.getOrDefault("isDefault", "false").toString());
+        String  type          = body.getOrDefault("type", "warehouse").toString();
+        boolean isDefault     = Boolean.parseBoolean(body.getOrDefault("isDefault", "false").toString());
+        boolean isFulfillment = Boolean.parseBoolean(body.getOrDefault("isFulfillment", "false").toString());
 
         // UPSERT: if a row with the same name already exists in error/unsynced state, reuse it
         // (reset sync fields and re-attempt Shopify). If the existing row is already 'linked',
@@ -80,11 +82,12 @@ public class LocationController {
         final UUID[] effectiveId = {null};
         tx.execute(status -> {
             effectiveId[0] = jdbc.query("""
-                    INSERT INTO locations (id, tenant_id, name, type, is_default)
-                    VALUES (?, ?, ?, ?::location_type, ?)
+                    INSERT INTO locations (id, tenant_id, name, type, is_default, is_fulfillment)
+                    VALUES (?, ?, ?, ?::location_type, ?, ?)
                     ON CONFLICT (tenant_id, lower(trim(name))) DO UPDATE
                       SET type                = EXCLUDED.type,
                           is_default          = EXCLUDED.is_default,
+                          is_fulfillment      = EXCLUDED.is_fulfillment,
                           shopify_sync_status = 'unsynced',
                           shopify_sync_error  = NULL,
                           shopify_location_id = NULL,
@@ -93,7 +96,7 @@ public class LocationController {
                     RETURNING id
                     """,
                 rs -> rs.next() ? rs.getObject("id", UUID.class) : null,
-                proposedId, tenantId, name.trim(), type, isDefault);
+                proposedId, tenantId, name.trim(), type, isDefault, isFulfillment);
             return null;
         });
         if (effectiveId[0] == null) {
@@ -101,6 +104,20 @@ public class LocationController {
                 "A location with this name is already linked to Shopify");
         }
         UUID id = effectiveId[0];
+
+        // FR-17 v2 gate: only a fulfillment location may ever create a Shopify location.
+        // Showroom/branch/junk locations stay unsynced permanently — no Shopify call at all.
+        if (!isFulfillment) {
+            return Map.of(
+                "id",                id.toString(),
+                "name",              name.trim(),
+                "type",              type,
+                "isDefault",         isDefault,
+                "isFulfillment",     false,
+                "shopifySyncStatus", "unsynced",
+                "shopifySyncError",  ""
+            );
+        }
 
         // Attempt Shopify location sync. All exceptions are caught — location is always created.
         String syncStatus = "unsynced";
@@ -128,8 +145,10 @@ public class LocationController {
             }
 
             String token = tokenProvider.getValidToken(store.id());
+            // fulfillsOnlineOrders=true unconditionally — every location Traced creates is,
+            // by the gate above, a fulfillment location; its stock must gate storefront sales.
             ShopifyLocationGateway.LocationInput input =
-                new ShopifyLocationGateway.LocationInput(name.trim(), null, null, "EG");
+                new ShopifyLocationGateway.LocationInput(name.trim(), null, null, "EG", true);
             ShopifyLocationGateway.LocationResult result =
                 shopifyLocations.create(store.shopDomain(), token, input);
 
@@ -160,9 +179,84 @@ public class LocationController {
             "name",              name.trim(),
             "type",              type,
             "isDefault",         isDefault,
+            "isFulfillment",     true,
             "shopifySyncStatus", syncStatus,
             "shopifySyncError",  syncError != null ? syncError : ""
         );
+    }
+
+    // ── Part A step 5: junk-location cleanup (report + guarded removal) ─────
+
+    /**
+     * Reports locations that hold a live Shopify link but are NOT the fulfillment
+     * location — i.e. locations pushed to Shopify before the is_fulfillment gate existed
+     * (junk test locations, showrooms someone manually synced, etc). Read-only; surfaces
+     * the list for a human decision. Nothing is deleted or deactivated by this endpoint.
+     */
+    @GetMapping("/shopify-junk-report")
+    @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
+    public List<Map<String, Object>> shopifyJunkReport() {
+        UUID tenantId = TenantContext.require();
+        return tx.execute(status -> jdbc.queryForList(
+            "SELECT id, name, type, shopify_location_id, shopify_sync_status, shopify_synced_at " +
+            "FROM locations " +
+            "WHERE tenant_id = ? AND is_fulfillment = false AND shopify_location_id IS NOT NULL " +
+            "ORDER BY name",
+            tenantId));
+    }
+
+    /**
+     * Guarded, per-location, operator-triggered cleanup: deactivates ONE junk location in
+     * Shopify (never deletes — Shopify doesn't allow deleting a location with inventory
+     * history) and clears the local Shopify link so the row goes back to 'unsynced'.
+     * Only ever acts on a row already surfaced by shopifyJunkReport() (is_fulfillment=false
+     * AND currently linked) — never automatic, never bulk.
+     */
+    @PostMapping("/{id}/shopify-cleanup")
+    @PreAuthorize("hasRole('OWNER')")
+    public Map<String, Object> shopifyCleanup(@PathVariable UUID id) {
+        UUID tenantId = TenantContext.require();
+
+        record JunkRow(String shopifyLocationId, boolean isFulfillment) {}
+        JunkRow row = tx.execute(status -> jdbc.query(
+            "SELECT shopify_location_id, is_fulfillment FROM locations WHERE id = ? AND tenant_id = ?",
+            rs -> rs.next() ? new JunkRow(rs.getString(1), rs.getBoolean(2)) : null,
+            id, tenantId));
+
+        if (row == null) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Location not found");
+        }
+        if (row.isFulfillment()) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                "Refusing to deactivate the fulfillment location");
+        }
+        if (row.shopifyLocationId() == null) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                "Location has no Shopify link to clean up");
+        }
+
+        record StoreSnap(UUID id, String shopDomain) {}
+        StoreSnap store = tx.execute(status ->
+            jdbc.query(
+                "SELECT id, shop_domain FROM stores WHERE tenant_id = ? LIMIT 1",
+                rs -> rs.next() ? new StoreSnap(rs.getObject(1, UUID.class), rs.getString(2)) : null,
+                tenantId));
+        if (store == null) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "No Shopify store connected");
+        }
+
+        String token = tokenProvider.getValidToken(store.id());
+        shopifyLocations.deactivate(store.shopDomain(), token, row.shopifyLocationId());
+
+        tx.execute(status -> {
+            jdbc.update(
+                "UPDATE locations SET shopify_location_id = NULL, shopify_sync_status = 'unsynced', " +
+                "shopify_synced_at = NULL, shopify_sync_error = NULL WHERE id = ? AND tenant_id = ?",
+                id, tenantId);
+            return null;
+        });
+
+        return Map.of("id", id.toString(), "shopifySyncStatus", "unsynced");
     }
 
 }

@@ -80,7 +80,8 @@ class RlsCoverageTest {
             "/api/v1/orders/daily-counts",
             "/api/v1/lookup",
             "/api/v1/fulfill/gather",
-            "/api/v1/catalog"
+            "/api/v1/catalog",
+            "/api/v1/locations/shopify-junk-report"
     );
 
     // ── Patterns consciously excluded, with reasons ────────────────────────────
@@ -445,6 +446,23 @@ class RlsCoverageTest {
         assertThat(((Number) variant.get("available")).longValue())
             .as("available = on_hand(1) - committed(2)")
             .isEqualTo(-1L);
+    }
+
+    @Test
+    void locationsShopifyJunkReport_returnsSeededNonFulfillmentLinkedLocation() {
+        UUID junkId = UUID.randomUUID();
+        jdbc.update(
+            "INSERT INTO locations (id, tenant_id, name, type, is_default, is_fulfillment, " +
+            "    shopify_location_id, shopify_sync_status) " +
+            "VALUES (?, ?, 'CVG Junk Showroom', 'warehouse', false, false, " +
+            "    'gid://shopify/Location/junk-cvg', 'linked')",
+            junkId, tenantId);
+
+        ResponseEntity<List> resp = get("/api/v1/locations/shopify-junk-report", List.class);
+        assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(resp.getBody()).isNotEmpty();
+
+        jdbc.update("DELETE FROM locations WHERE id = ?", junkId);
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────

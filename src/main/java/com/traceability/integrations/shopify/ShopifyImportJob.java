@@ -2,6 +2,7 @@ package com.traceability.integrations.shopify;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.traceability.inventory.ShopifyLocationProvisioningService;
 import com.traceability.tenancy.TenantContext;
 import org.jobrunr.jobs.annotations.Job;
 import org.slf4j.Logger;
@@ -39,17 +40,20 @@ public class ShopifyImportJob {
     private final ShopifyTokenProvider tokenProvider;
     private final ObjectMapper mapper;
     private final TransactionTemplate tx;
+    private final ShopifyLocationProvisioningService locationProvisioningService;
 
     public ShopifyImportJob(JdbcTemplate jdbc,
                              ShopifySyncService syncService,
                              ShopifyTokenProvider tokenProvider,
                              ObjectMapper mapper,
-                             PlatformTransactionManager txm) {
+                             PlatformTransactionManager txm,
+                             ShopifyLocationProvisioningService locationProvisioningService) {
         this.jdbc          = jdbc;
         this.syncService   = syncService;
         this.tokenProvider = tokenProvider;
         this.mapper        = mapper;
         this.tx            = new TransactionTemplate(txm);
+        this.locationProvisioningService = locationProvisioningService;
     }
 
     @Job(name = "Shopify import — store %0")
@@ -78,6 +82,17 @@ public class ShopifyImportJob {
 
                 String shopDomain = storeInfo[0];
                 String rawToken   = tokenProvider.getValidToken(storeId);
+
+                // Part A (FR-17 v2): ensure the Traced Main Warehouse exists and is linked
+                // before catalog/order import. Non-fatal — a location provisioning failure
+                // (e.g. missing write_locations scope) must not block product/order import,
+                // which doesn't depend on it. Runs on every connect/reconnect; idempotent.
+                try {
+                    locationProvisioningService.ensureTracedWarehouse(tenantId, storeId, shopDomain);
+                } catch (Exception e) {
+                    log.warn("Traced Main Warehouse provisioning failed for store {} — " +
+                        "will retry on next import/reconnect", storeId, e);
+                }
 
                 ShopifySyncService.ImportResult result =
                     syncService.runImport(storeId, tenantId, shopDomain, rawToken);

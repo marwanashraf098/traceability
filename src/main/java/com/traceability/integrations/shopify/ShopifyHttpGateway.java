@@ -481,6 +481,153 @@ class ShopifyHttpGateway implements ShopifyGateway {
         return itemId.asText();
     }
 
+    // ---- FR-17 v2: increment-only inventory sync -------------------------
+
+    private static final String INVENTORY_ACTIVATE_MUTATION = """
+            mutation InventoryActivate($inventoryItemId: ID!, $locationId: ID!) @idempotent {
+              inventoryActivate(inventoryItemId: $inventoryItemId, locationId: $locationId) {
+                inventoryLevel { id }
+                userErrors { field message }
+              }
+            }
+            """;
+
+    @Override
+    public void activateInventoryItem(String shopDomain, String token, String inventoryItemGid, String locationGid) {
+        ObjectNode vars = mapper.createObjectNode()
+            .put("inventoryItemId", inventoryItemGid)
+            .put("locationId", locationGid);
+        JsonNode data = executeGraphQL(shopDomain, token, INVENTORY_ACTIVATE_MUTATION, vars);
+        JsonNode userErrors = data.path("inventoryActivate").path("userErrors");
+        if (userErrors.isArray() && !userErrors.isEmpty()) {
+            String msg = userErrors.get(0).path("message").asText("unknown error");
+            // Idempotent: tolerate "already active" — the whole point of calling this
+            // before every on_hand write is that repeats must be harmless.
+            if (msg.toLowerCase().contains("already")) {
+                log.debug("inventoryActivate already-active for item={} location={}", inventoryItemGid, locationGid);
+                return;
+            }
+            throw new ShopifyException("inventoryActivate failed: " + msg);
+        }
+    }
+
+    private static final String INVENTORY_ADJUST_QUANTITIES_MUTATION = """
+            mutation InventoryAdjustQuantities($input: InventoryAdjustQuantitiesInput!) @idempotent {
+              inventoryAdjustQuantities(input: $input) {
+                inventoryAdjustmentGroup { createdAt }
+                userErrors { field message code }
+              }
+            }
+            """;
+
+    @Override
+    public void adjustInventoryQuantities(String shopDomain, String token, String inventoryItemGid,
+                                           String locationGid, int positiveDelta, String reason) {
+        // FR-17 v2 hard rule: increment-only. This check runs BEFORE any network call —
+        // no code path may ever send a non-positive delta to Shopify.
+        if (positiveDelta <= 0) {
+            throw new IllegalArgumentException(
+                "adjustInventoryQuantities requires a positive delta (FR-17 v2 increment-only); got " + positiveDelta);
+        }
+        ObjectNode change = mapper.createObjectNode()
+            .put("delta", positiveDelta)
+            .put("inventoryItemId", inventoryItemGid)
+            .put("locationId", locationGid);
+        ObjectNode input = mapper.createObjectNode()
+            .put("reason", reason)
+            .put("name", "available");
+        input.set("changes", mapper.createArrayNode().add(change));
+        ObjectNode vars = mapper.createObjectNode().set("input", input);
+
+        JsonNode data = executeGraphQL(shopDomain, token, INVENTORY_ADJUST_QUANTITIES_MUTATION, vars);
+        JsonNode userErrors = data.path("inventoryAdjustQuantities").path("userErrors");
+        if (userErrors.isArray() && !userErrors.isEmpty()) {
+            String msg = userErrors.get(0).path("message").asText("unknown error");
+            throw new ShopifyException("inventoryAdjustQuantities failed: " + msg);
+        }
+    }
+
+    private static final String INVENTORY_MOVE_QUANTITIES_MUTATION = """
+            mutation InventoryMoveQuantities($input: InventoryMoveQuantitiesInput!) @idempotent {
+              inventoryMoveQuantities(input: $input) {
+                inventoryAdjustmentGroup { createdAt }
+                userErrors { field message code }
+              }
+            }
+            """;
+
+    @Override
+    public void moveAvailableToDamaged(String shopDomain, String token, String inventoryItemGid,
+                                        String locationGid, int quantity, String reason) {
+        if (quantity <= 0) {
+            throw new IllegalArgumentException(
+                "moveAvailableToDamaged requires a positive quantity; got " + quantity);
+        }
+        ObjectNode from = mapper.createObjectNode().put("name", "available").put("locationId", locationGid);
+        ObjectNode to   = mapper.createObjectNode().put("name", "damaged").put("locationId", locationGid);
+        ObjectNode change = mapper.createObjectNode()
+            .put("inventoryItemId", inventoryItemGid)
+            .put("quantity", quantity);
+        change.set("from", from);
+        change.set("to", to);
+        ObjectNode input = mapper.createObjectNode().put("reason", reason);
+        input.set("changes", mapper.createArrayNode().add(change));
+        ObjectNode vars = mapper.createObjectNode().set("input", input);
+
+        JsonNode data = executeGraphQL(shopDomain, token, INVENTORY_MOVE_QUANTITIES_MUTATION, vars);
+        JsonNode userErrors = data.path("inventoryMoveQuantities").path("userErrors");
+        if (userErrors.isArray() && !userErrors.isEmpty()) {
+            String msg = userErrors.get(0).path("message").asText("unknown error");
+            // Insufficient-available and any other userError must fail cleanly here —
+            // caller (ShopifyInventoryService) records it as a failed row, never retries forced.
+            throw new ShopifyException("inventoryMoveQuantities failed: " + msg);
+        }
+    }
+
+    private static final String INVENTORY_LEVELS_QUERY = """
+            query InventoryLevelsAtLocation($ids: [ID!]!, $locationId: ID!) {
+              nodes(ids: $ids) {
+                ... on InventoryItem {
+                  id
+                  inventoryLevel(locationId: $locationId) {
+                    quantities(names: ["available"]) { name quantity }
+                  }
+                }
+              }
+            }
+            """;
+
+    @Override
+    public List<InventoryLevel> fetchAvailableQuantities(String shopDomain, String token,
+                                                          String locationGid, List<String> inventoryItemGids) {
+        List<InventoryLevel> out = new ArrayList<>();
+        if (inventoryItemGids.isEmpty()) return out;
+
+        ObjectNode vars = mapper.createObjectNode();
+        vars.set("ids", mapper.valueToTree(inventoryItemGids));
+        vars.put("locationId", locationGid);
+
+        JsonNode data = executeGraphQL(shopDomain, token, INVENTORY_LEVELS_QUERY, vars);
+        JsonNode nodes = data.path("nodes");
+        if (!nodes.isArray()) return out;
+        for (JsonNode node : nodes) {
+            if (node.isNull() || node.isMissingNode()) continue;
+            String itemGid = node.path("id").asText(null);
+            if (itemGid == null) continue;
+            int available = 0;
+            JsonNode level = node.path("inventoryLevel");
+            if (!level.isMissingNode() && !level.isNull()) {
+                for (JsonNode q : level.path("quantities")) {
+                    if ("available".equals(q.path("name").asText(""))) {
+                        available = q.path("quantity").asInt(0);
+                    }
+                }
+            }
+            out.add(new InventoryLevel(itemGid, available));
+        }
+        return out;
+    }
+
     /**
      * Fetches the actual granted scopes for the given token via the REST access_scopes endpoint.
      * Returns a comma-separated scope string, or null if the call fails for any reason.

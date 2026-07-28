@@ -13,7 +13,13 @@ import java.util.Optional;
  */
 public interface ShopifyLocationGateway {
 
-    record LocationInput(String name, String address1, String city, String countryCode) {}
+    /**
+     * fulfillsOnlineOrders gates storefront sales at this location — FR-17 v2's locked
+     * decision is that every location Traced creates has this set true (it's always a
+     * fulfillment-flagged location; see the is_fulfillment gate on LocationController).
+     */
+    record LocationInput(String name, String address1, String city, String countryCode,
+                          boolean fulfillsOnlineOrders) {}
 
     record LocationResult(String shopifyLocationId, String name) {}
 
@@ -31,4 +37,15 @@ public interface ShopifyLocationGateway {
      * @throws ShopifyException on Shopify userErrors or missing write_locations scope
      */
     LocationResult create(String shopDomain, String token, LocationInput input);
+
+    /**
+     * Deactivates a Shopify location via locationDeactivate — used only by the guarded,
+     * operator-triggered junk-location cleanup path (Part A step 5). Never called
+     * automatically; never moves inventory to another location (destinationLocationId
+     * omitted — junk locations pushed before the fulfillment gate never had inventory
+     * activated on them).
+     *
+     * @throws ShopifyException on Shopify userErrors
+     */
+    void deactivate(String shopDomain, String token, String shopifyLocationGid);
 }

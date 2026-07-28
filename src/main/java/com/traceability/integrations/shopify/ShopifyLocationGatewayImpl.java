@@ -81,7 +81,8 @@ class ShopifyLocationGatewayImpl implements ShopifyLocationGateway {
             address.put("city", input.city());
 
         ObjectNode locationInput = mapper.createObjectNode()
-            .put("name", input.name());
+            .put("name", input.name())
+            .put("fulfillsOnlineOrders", input.fulfillsOnlineOrders());
         locationInput.set("address", address);
         ObjectNode vars = mapper.createObjectNode().set("input", locationInput);
 
@@ -97,5 +98,27 @@ class ShopifyLocationGatewayImpl implements ShopifyLocationGateway {
 
         JsonNode loc = locationAdd.path("location");
         return new LocationResult(loc.path("id").asText(), loc.path("name").asText());
+    }
+
+    private static final String LOCATION_DEACTIVATE_MUTATION = """
+            mutation LocationDeactivate($locationId: ID!) {
+              locationDeactivate(locationId: $locationId) {
+                locationDeactivateUserErrors {
+                  field
+                  message
+                }
+              }
+            }
+            """;
+
+    @Override
+    public void deactivate(String shopDomain, String token, String shopifyLocationGid) {
+        ObjectNode vars = mapper.createObjectNode().put("locationId", shopifyLocationGid);
+        JsonNode response = shopify.executeGraphQLPublic(shopDomain, token, LOCATION_DEACTIVATE_MUTATION, vars);
+        JsonNode userErrors = response.path("locationDeactivate").path("locationDeactivateUserErrors");
+        if (userErrors.isArray() && !userErrors.isEmpty()) {
+            String msg = userErrors.get(0).path("message").asText("unknown error");
+            throw new ShopifyException("locationDeactivate failed: " + msg);
+        }
     }
 }

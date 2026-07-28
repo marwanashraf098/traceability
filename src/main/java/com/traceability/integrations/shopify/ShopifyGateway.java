@@ -188,6 +188,56 @@ public interface ShopifyGateway {
      */
     String resolveInventoryItemId(String shopDomain, String token, String variantGid);
 
+    // ---- FR-17 v2: increment-only inventory sync ------------------------
+
+    /**
+     * Activates an inventoryItem at a location via inventoryActivate. New Shopify
+     * locations start with no active inventory items — this must run before any
+     * quantity write lands there. Idempotent: an "already active" userError is
+     * swallowed, not thrown.
+     *
+     * @throws ShopifyException on any other userError
+     */
+    void activateInventoryItem(String shopDomain, String token, String inventoryItemGid, String locationGid);
+
+    /**
+     * Adjusts on_hand at a location by a POSITIVE delta only, via inventoryAdjustQuantities.
+     * This is the ONLY quantity-increasing write shape in FR-17 v2 — inventorySetOnHandQuantities
+     * is forbidden everywhere (it can decrement) and must never be called.
+     *
+     * @param positiveDelta must be > 0
+     * @param reason        Shopify inventory adjustment reason (e.g. "received", "restock")
+     * @throws IllegalArgumentException if positiveDelta <= 0 — checked BEFORE any network call
+     * @throws ShopifyException         on Shopify userErrors
+     */
+    void adjustInventoryQuantities(String shopDomain, String token, String inventoryItemGid,
+                                    String locationGid, int positiveDelta, String reason);
+
+    /**
+     * Moves quantity units from the "available" state to "damaged" at a location, via
+     * inventoryMoveQuantities. on_hand is unchanged — the unit leaves the sellable pool.
+     * Location stays fixed (from and to are the same locationGid); only the state name changes.
+     *
+     * @param quantity must be > 0
+     * @throws IllegalArgumentException if quantity <= 0 — checked BEFORE any network call
+     * @throws ShopifyException         on Shopify userErrors, including insufficient-available
+     *                                  (caller must treat this as a clean failure, never retry-forced)
+     */
+    void moveAvailableToDamaged(String shopDomain, String token, String inventoryItemGid,
+                                 String locationGid, int quantity, String reason);
+
+    /** One inventoryItem's current "available" quantity at a location (Part C reconcile read). */
+    record InventoryLevel(String inventoryItemGid, int available) {}
+
+    /**
+     * Reads current "available" quantities for a batch of inventory items at a single
+     * location. Used only for the Part C reconcile report/guard — never for a write decision
+     * that would decrement (FR-17 v2 forbids that regardless of what this read shows).
+     * An item with no InventoryLevel at the location yet (never activated) is reported as 0.
+     */
+    List<InventoryLevel> fetchAvailableQuantities(String shopDomain, String token,
+                                                    String locationGid, List<String> inventoryItemGids);
+
     // ---- scope utilities -----------------------------------------------
 
     /**
