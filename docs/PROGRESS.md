@@ -4,6 +4,49 @@
 
 ## Current state
 
+**FR-8.7 gather list: Item column shows product + variant, print in A6 (2026-07-28).**
+Two changes, everything else from prior FR-8.7 fixes kept intact (shared
+`PICKABLE_ORDERS_FILTER`, `GREATEST`-floored per-line remaining, active+packed allocation
+subtraction, RLS via the GUC, no migration).
+
+1. **Item column composition.** Confirmed before writing: `products` table, FK column
+   `variants.product_id → products(id)`, product name column is `products.title` (not
+   `name`). Confirmed `LabelService.renderPdf()`'s exact composition (was inline, not a
+   method): `productTitle.isEmpty() ? variantTitle : ("Default Title".equalsIgnoreCase(
+   variantTitle) ? productTitle : truncate(productTitle + " - " + variantTitle, 32))` —
+   separator is `" - "`. Extracted the composition logic (not the label's 32-char
+   truncation, which is a physical-label-width constraint, not part of the shared
+   naming format) into a new `ProductDisplayName.compose()` helper in
+   `com.traceability.inventory`, package-private, used by both `LabelService` and
+   `FulfillService.getGatherList()`. Verified zero behavior change in `LabelService`:
+   `Day8Test` 12/12, `VariantLabelTest` 13/13, `LabelRoundTripTest` 1/1, all green.
+   Gather's aggregation query now joins `products pr ON pr.id = v.product_id` and adds
+   `pr.title` to `GROUP BY` — required explicitly since Postgres only infers functional
+   dependency within one table's own primary key, not across a join to a different
+   table. New `GatherRow.displayName` field carries the composed string; frontend Item
+   column renders it instead of the bare variant title. Added
+   `GatherListTest.j_displayName_composesProductAndVariant_matchingLabelServiceFormat`
+   (distinct product/variant titles → asserts the composed string).
+
+2. **A6 print stylesheet — CSS/JSX-class only, no backend, no migration.** The app is
+   dark-theme-only (`index.css`: `html, body { background: #0D1117; color: #F2F4F7; }`,
+   no light variant), so printing needed an explicit light override, not a theme toggle.
+   Added `@media print { @page { size: A6; margin: 6mm } ... }` in `GatherList.tsx`
+   forcing white background / dark text on `.card`/`.bg-elevated`/text utility classes.
+   Caught one real bug via Tailwind's `content:` build inspection: `hidden sm:table-cell`
+   / `hidden md:table-cell` (SKU/Orders columns) evaluate their breakpoint against the
+   print page's rendered width — A6 (~105mm) is well under the `sm:` 640px breakpoint,
+   so those columns would have stayed hidden on paper. Fixed with Tailwind's built-in
+   `print:table-cell` variant on both columns; confirmed present in the built CSS
+   (`grep` on the compiled bundle: `@media print{...print\:table-cell{display:table-cell}}`).
+   Shortage color accents (`text-danger`, `bg-danger/10`) intentionally left unoverridden
+   — red-flagging a shortage on the printed sheet is the point, not a dark-theme leftover.
+
+10/10 → 11/11 `GatherListTest` (new displayName test), 715/715 backend suite. Frontend
+`npx tsc --noEmit` clean, `vitest run` 51/54 (3 pre-existing unrelated chart-rendering
+failures in `overview.test.tsx`/`inventory.test.tsx`, confirmed present on `main` before
+any FR-8.7 work, same baseline as every prior FR-8.7 commit this session).
+
 **FR-8.7 production bug fixed (2026-07-28) — gather list was filtering on
 `status = 'ready_to_pick'` only, missing every order still in 'new'.** The
 new→ready_to_pick confirmation flow was never built, so real orders sit in `'new'` for

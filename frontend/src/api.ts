@@ -204,6 +204,7 @@ export interface GatherRow {
   variantId: string
   name: string
   sku: string | null
+  displayName: string
   needed: number
   availableCount: number
   shortage: boolean

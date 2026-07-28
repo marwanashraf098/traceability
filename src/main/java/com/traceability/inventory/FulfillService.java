@@ -165,7 +165,7 @@ public class FulfillService {
 
         List<GatherRow> rows = jdbc.query(con -> {
             PreparedStatement ps = con.prepareStatement(
-                "SELECT v.id AS variant_id, v.title AS name, v.sku AS sku, " +
+                "SELECT v.id AS variant_id, v.title AS name, v.sku AS sku, pr.title AS product_title, " +
                 "       SUM(GREATEST(oi.quantity - COALESCE(( " +
                 "           SELECT COUNT(*) FROM allocations a " +
                 "           WHERE a.order_item_id = oi.id AND a.tenant_id = oi.tenant_id " +
@@ -178,9 +178,13 @@ public class FulfillService {
                 "FROM orders o " +
                 "JOIN order_items oi ON oi.order_id = o.id " +
                 "JOIN variants v ON v.id = oi.variant_id " +
+                "JOIN products pr ON pr.id = v.product_id " +
                 "WHERE o.tenant_id = ? AND o.id = ANY(?) " +
-                "GROUP BY v.id, v.title, v.sku " +
-                "ORDER BY v.title ASC");
+                // pr.title is NOT functionally dependent on v.id across the products/variants
+                // FK — Postgres only infers that within one table's own primary key — so it
+                // must be listed explicitly or the GROUP BY is rejected.
+                "GROUP BY v.id, v.title, v.sku, pr.title " +
+                "ORDER BY pr.title ASC, v.title ASC");
             ps.setObject(1, tenantId);
             ps.setArray(2, con.createArrayOf("uuid", orderIds));
             return ps;
@@ -191,10 +195,16 @@ public class FulfillService {
             List<String> orderNumbers = arr != null
                 ? Arrays.asList((String[]) arr.getArray())
                 : List.of();
+            // Same composition LabelService uses for the physical piece label — see
+            // ProductDisplayName; the gather Item column must read identically to what's
+            // printed under the barcode.
+            String displayName = ProductDisplayName.compose(
+                rs.getString("product_title"), rs.getString("name"));
             return new GatherRow(
                 (UUID) rs.getObject("variant_id"),
                 rs.getString("name"),
                 rs.getString("sku"),
+                displayName,
                 (int) needed,
                 (int) available,
                 available < needed,
@@ -1058,12 +1068,16 @@ public class FulfillService {
             int              orderCount,
             List<GatherRow>  rows) {}
 
-    /** needed = remaining-to-gather (order_item quantity minus active allocations already
-     *  scanned for it), not the raw order quantity — see getGatherList() javadoc. */
+    /** needed = remaining-to-gather (order_item quantity minus active+packed allocations
+     *  already scanned for it), not the raw order quantity — see getGatherList() javadoc.
+     *  displayName = ProductDisplayName.compose(product, variant) — the same "product -
+     *  variant" string LabelService prints under the physical piece barcode; name/sku are
+     *  kept as the raw variant fields alongside it. */
     public record GatherRow(
             UUID         variantId,
             String       name,
             String       sku,
+            String       displayName,
             int          needed,
             int          availableCount,
             boolean      shortage,

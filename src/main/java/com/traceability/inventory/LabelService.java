@@ -239,10 +239,14 @@ public class LabelService {
                 String sku          = nullSafe(piece.get("sku"));
                 String productTitle = truncate(nullSafe(piece.get("product_title")), 28);
                 String variantTitle = nullSafe(piece.get("variant_title"));
-                // Show variant only when it carries real info (not the Shopify placeholder)
-                String labelName = productTitle.isEmpty() ? variantTitle
-                    : ("Default Title".equalsIgnoreCase(variantTitle) ? productTitle
-                       : truncate(productTitle + " - " + variantTitle, 32));
+                // Show variant only when it carries real info (not the Shopify placeholder).
+                // Composition delegated to ProductDisplayName (shared with the FR-8.7 gather
+                // list) — the 32-char truncation stays here since it's a physical label-width
+                // constraint, not part of the shared naming format.
+                String composedName = ProductDisplayName.compose(productTitle, variantTitle);
+                String labelName = (productTitle.isEmpty() || "Default Title".equalsIgnoreCase(variantTitle))
+                    ? composedName
+                    : truncate(composedName, 32);
 
                 PDPage page = new PDPage(pageSize);
                 doc.addPage(page);

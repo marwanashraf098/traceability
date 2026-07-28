@@ -46,7 +46,10 @@ import static org.assertj.core.api.Assertions.assertThat;
  *       over-allocation) must floor at 0 for that line, not let the negative leak into
  *       the SUM and cannibalize a different, healthy order_item's demand on the same
  *       variant
- *   j — cross-tenant isolation (paired with the positive control in `a`): tenant B's
+ *   j — displayName: product title distinct from variant title composes as
+ *       "product - variant" via ProductDisplayName, the same helper LabelService uses
+ *       under the physical piece barcode
+ *   k — cross-tenant isolation (paired with the positive control in `a`): tenant B's
  *       gather never sees tenant A's orders or demand
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.NONE)
@@ -367,7 +370,24 @@ class GatherListTest {
     }
 
     @Test
-    void j_crossTenantIsolation_tenantBNeverSeesTenantADemand() {
+    void j_displayName_composesProductAndVariant_matchingLabelServiceFormat() {
+        // Product title is DISTINCT from variant title — must compose as
+        // "product - variant" via ProductDisplayName, the exact same helper
+        // LabelService uses under the physical piece barcode.
+        UUID productId = insertProduct(tenantA, storeA, "GL-P9", "Wireless Mouse");
+        UUID variant   = insertVariant(tenantA, productId, "GL-V9", "SKU-MOUSE", "Black");
+        UUID order     = insertOrder(tenantA, storeA, "GL-O9", "#GL-9", "ready_to_pick", false, Instant.now());
+        insertOrderItem(tenantA, order, variant, 2);
+        insertPiece(tenantA, variant, "available");
+        insertPiece(tenantA, variant, "available");
+
+        FulfillService.GatherRow row = fulfillSvc.getGatherList(null).rows().get(0);
+
+        assertThat(row.displayName()).isEqualTo("Wireless Mouse - Black");
+    }
+
+    @Test
+    void k_crossTenantIsolation_tenantBNeverSeesTenantADemand() {
         // Tenant A: seed the same positive-control shape as test `a`.
         UUID productA = insertProduct(tenantA, storeA, "GL-XP1", "Tenant A Product");
         UUID variantA = insertVariant(tenantA, productA, "GL-XVA", "SKU-XA", "Tenant A Variant");
