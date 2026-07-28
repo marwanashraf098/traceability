@@ -4,6 +4,66 @@
 
 ## Current state
 
+**Location `is_fulfillment` flag + Committed/Available inventory columns (2026-07-28) —
+shadow mode only, no Shopify write anywhere in this slice.** Built exactly the approved
+`docs/location-sync-flag-and-committed-column-spec.md`, with two corrections after Step-0
+verification surfaced real divergences (flagged and resolved with Marawan before writing
+code):
+
+1. **Column named `is_fulfillment`, not `syncs_to_shopify`.** V48 already added
+   `shopify_location_id` / `shopify_sync_status` (`unsynced/pending/linked/error`) /
+   `shopify_sync_error` / `shopify_synced_at` to `locations` — `LocationController.create()`
+   already performs a **live** Shopify location-creation write today (pre-existing, untouched,
+   out of scope here). Those track technical link state; `is_fulfillment` is a separate
+   business flag ("does this location's stock count toward the shadow number"), independent
+   of link state — reusing `shopify_sync_status='linked'` would have made the shadow
+   computation empty until a location is actually linked, breaking "no-op today." V59
+   migration: `ALTER TABLE locations ADD COLUMN is_fulfillment boolean NOT NULL DEFAULT false`
+   + backfill `WHERE is_default = true`.
+
+2. **Only the standalone-signup seed path was touched.** Checked all three assumed seed
+   paths per Step 0: `AuthRepository.createTenantWithOwner` (standalone) does seed a Main
+   Warehouse — now sets `is_fulfillment=true` explicitly, not relying on the column default.
+   `provision_tenant_from_shopify` (V14 DEFINER function) and `ShopifyImportJob` — checked in
+   full — create **zero locations** for Shopify-first tenants; the V14 comment's claim that
+   "the import job" creates it is stale. **Gap recorded, not fixed in this slice** (see
+   `requirements-checklist.md` 5.5): Shopify-first / App Store onboarding needs a Main
+   Warehouse seed added to that path before go-live.
+
+Part 1c shadow guard: `ShopifyInventoryService.insertAdjustmentRow` now looks up
+`locations.is_fulfillment` for the triggering `locationId` and skips inserting the shadow
+row entirely (not even a `'failed'` row) when false — no aggregate query existed to add a
+WHERE clause to; the real shadow path is delta/event-based (`onReceivingSessionClose` /
+`onReturnInspectionAvailable`), so the guard lives at the row-insertion point instead.
+
+Part 2 Committed/Available: extended `CatalogController.list()` (`GET /api/v1/catalog`) —
+**derived on read every request, no stored counter, by design** (a maintained counter needs
+correct upkeep on create/pack/cancel/edit/restock, the "forgotten parallel path" bug class).
+`committed(V)` = `sum(order_items.quantity)` for orders in `{new, confirmed, ready_to_pick,
+picking, packed, awaiting_pickup}` (order_items carries no location column — inherently
+tenant+variant scoped, not location-scoped). `on_hand(V)` = pieces at `is_fulfillment=true`
+locations in `{available, reserved, packed, awaiting_pickup}` — **this is location-scoped,
+unlike the existing tenant-wide Total/Stock-breakdown counts, and will intentionally diverge
+from those badges once a second (non-fulfillment) location exists.** `available = on_hand -
+committed`, not floored at zero (a negative number is a real oversold signal). Frontend:
+Catalog page gets new Committed/Available columns between Total and the existing Stock
+breakdown badges (Reserved stays one of those badges, untouched); proper `catalog.columns.*`
+en/ar i18n keys added (previously only `defaultValue` fallbacks — Arabic was silently
+showing English column headers for Product/Variant/Total/Stock breakdown; fixed as part of
+this pass).
+
+Tests: V59 migration/backfill (own Testcontainers instance, seeds pre-V59 data to prove the
+backfill fires correctly, not just that the column exists); standalone-signup provisioning
+assertion (no Shopify-first equivalent — the gap above); shadow-guard positive/negative
+control in `ShopifyInventoryTest` (si6); `CommittedInventoryTest` — exact-sum positive
+control across all 12 order statuses (proves both inclusion and exclusion, not a trivial
+always-zero pass) + full order-lifecycle identity test (`available` constant until courier
+handoff, then `on_hand`/`committed` drop together); `RlsCoverageTest` promotes
+`/api/v1/catalog` from EXEMPT to COVERED with a seeded positive-control assertion. Full
+backend suite green. Frontend `tsc --noEmit` clean, `vitest run` 51/54 (3 pre-existing
+unrelated chart-rendering failures, confirmed present before this work via `git stash`).
+**Not deployed** — merged-to-main code only, per instruction.
+
 **Pick & Pack queue gate tightened (2026-07-28) — no-shipment orders no longer stay in
 the queue by default.** Confirmed before writing anything: `getQueue()`'s committed WHERE
 clause was
