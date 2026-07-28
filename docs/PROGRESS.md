@@ -4,6 +4,48 @@
 
 ## Current state
 
+**Pick & Pack queue gate tightened (2026-07-28) — no-shipment orders no longer stay in
+the queue by default.** Confirmed before writing anything: `getQueue()`'s committed WHERE
+clause was
+```sql
+WHERE o.tenant_id = ?
+  AND o.status IN ('new','ready_to_pick','self_pickup_pending')
+  AND o.on_hold = false
+  AND o.placed_at > now() - (? * INTERVAL '1 day')
+  AND (latest_shipment.internal_state IS NULL OR latest_shipment.internal_state = 'created')
+```
+plus the `LEFT JOIN LATERAL` on `shipments` the last condition depends on. The `IS NULL`
+branch meant an order with **no linked Bosta shipment at all** stayed in the queue right
+alongside a legitimate 'created'-state order — wrong for a normal Bosta order ("Shipment
+not created" means the Shopify plugin hasn't handed it to Bosta yet, nothing to physically
+pick). Self-pickup signal confirmed: `orders.is_self_pickup` boolean column (also selected
+in `getQueue()`'s output). Confirmed reliable regardless of shipment state — self-pickup
+orders never get a forward shipment by design: `complete()` routes `is_self_pickup=true`
+orders straight to `self_pickup_pending`, skipping the AWB-link step entirely, and
+`convertToSelfPickup()` sets `is_self_pickup=true` in the same UPDATE as the status flip.
+
+Fix: `(latest_shipment.internal_state IS NULL OR ... = 'created')` →
+`(o.is_self_pickup = true OR latest_shipment.internal_state = 'created')`. Since
+`PICKABLE_ORDERS_FILTER` is the single shared predicate used by both `getQueue()` and
+`getGatherList()` (FR-8.7's own fix, same day), this tightening applies to gather too —
+correct and intended, same "Shipment not created ⇒ nothing to pick" logic applies to the
+consolidated gather view exactly as it does to the per-order queue.
+
+Collateral from tightening a shared predicate: every existing test fixture that seeds a
+non-self-pickup order with no shipment row now needs one (a forward shipment in 'created'
+state) to stay gatherable/queueable — this touched `GatherListTest`'s `insertOrder()`
+helper, one `RlsCoverageTest` gather fixture, `PickQueueRecencyTest`'s `insertOrder()`
+helper (gained a `selfPickup` param + companion shipment insert), and one test in
+`Day9Test` (`a_queue_shows_new_and_ready_orders_oldest_first`, added shipments only for
+the two orders expected in-queue). `QueueSendStateGateTest.e` was the flipped assertion
+itself, renamed to `e_noLinkedShipment_notSelfPickup_excluded`; verified as a real
+regression guard (reverted the gate locally, confirmed it fails, restored, confirmed
+green) — same for `PICKABLE_ORDERS_FILTER`'s own diff.
+
+`not_traced` tagger, backfill, and detector untouched — this was one clause in
+`getQueue()`/`PICKABLE_ORDERS_FILTER`. 715/715 backend suite green. **Not deployed** —
+this is a merged-to-main code change only, per instruction.
+
 **FR-8.7 gather list: Item column shows product + variant, print in A6 (2026-07-28).**
 Two changes, everything else from prior FR-8.7 fixes kept intact (shared
 `PICKABLE_ORDERS_FILTER`, `GREATEST`-floored per-line remaining, active+packed allocation

@@ -398,6 +398,11 @@ class RlsCoverageTest {
                     orderId, tenantId, storeId);
         jdbc.update("INSERT INTO order_items (id, tenant_id, order_id, variant_id, quantity) " +
                     "VALUES (?, ?, ?, ?, 3)", orderItemId, tenantId, orderId, variantId);
+        // PICKABLE_ORDERS_FILTER (2026-07-28): non-self-pickup orders now require a
+        // forward shipment in 'created' state to be gatherable/queueable at all.
+        jdbc.update("INSERT INTO shipments (tenant_id, order_id, provider, internal_state, shipment_leg) " +
+                    "VALUES (?, ?, 'bosta', 'created'::shipment_internal_state, 'forward')",
+                    tenantId, orderId);
 
         ResponseEntity<Map> resp = get("/api/v1/fulfill/gather", Map.class);
         assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.OK);

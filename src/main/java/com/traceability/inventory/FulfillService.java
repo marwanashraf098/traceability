@@ -49,14 +49,28 @@ public class FulfillService {
      * fully packed and only awaiting customer handover (not gatherable, but still
      * "in the queue").
      *
-     * Queue-gating-not-traced spec: also excludes orders whose latest shipment_leg='forward'
-     * shipment is already sent to Bosta (internal_state <> 'created') — the merchant
-     * fulfilled it directly via Bosta, so there is nothing left to pick in Traced. Orders
-     * with no forward shipment, or one still 'created', stay eligible (self_pickup_pending
-     * orders never have a shipment, so they are unaffected). This is the state-gate filter
-     * alone — deliberately NOT also filtered on not_traced_at (see NotTracedTagger): the two
-     * mechanisms are independent so a 'created'-state order that was wrongly tagged still
-     * shows up here.
+     * Shipment-state gate, tightened 2026-07-28 (Marawan): an order qualifies iff it is
+     * self-pickup, OR its latest shipment_leg='forward' shipment has internal_state =
+     * 'created'. No forward shipment AND not self-pickup ⇒ excluded — "Shipment not
+     * created" means the Shopify plugin hasn't handed this order to Bosta yet, so there
+     * is nothing to physically pick in Traced for it (Mode B: the plugin owns delivery
+     * creation, Traced only ingests/links). Previously this read
+     * "internal_state IS NULL OR = 'created'", which wrongly kept EVERY no-shipment
+     * order in the queue regardless of self-pickup status.
+     *
+     * Self-pickup exemption keys on o.is_self_pickup (boolean column on orders), not on
+     * shipment absence: self-pickup orders never get a forward shipment created by
+     * design (complete() routes them straight to 'self_pickup_pending', skipping the
+     * AWB-link step entirely — see complete()'s isSelfPickup branch), and
+     * convertToSelfPickup() sets is_self_pickup=true in the same UPDATE as the status
+     * flip, so every self_pickup_pending order already satisfies this. Confirmed
+     * reliable regardless of shipment state — the exemption doesn't depend on
+     * latest_shipment being NULL, so it would still hold even if a stale shipment row
+     * somehow existed.
+     *
+     * This is the state-gate filter alone — deliberately NOT also filtered on
+     * not_traced_at (see NotTracedTagger): the two mechanisms are independent so a
+     * 'created'-state order that was wrongly tagged still shows up here.
      */
     private static final String PICKABLE_ORDERS_FILTER =
         "LEFT JOIN LATERAL ( " +
@@ -71,7 +85,7 @@ public class FulfillService {
         "  AND o.status IN ('new','ready_to_pick','self_pickup_pending') " +
         "  AND o.on_hold = false " +
         "  AND o.placed_at > now() - (? * INTERVAL '1 day') " +
-        "  AND (latest_shipment.internal_state IS NULL OR latest_shipment.internal_state = 'created') ";
+        "  AND (o.is_self_pickup = true OR latest_shipment.internal_state = 'created') ";
 
     /**
      * Returns orders eligible for action — see {@link #PICKABLE_ORDERS_FILTER} for the

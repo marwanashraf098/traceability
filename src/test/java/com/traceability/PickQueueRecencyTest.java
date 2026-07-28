@@ -82,18 +82,34 @@ class PickQueueRecencyTest {
     @BeforeEach void ctx()   { TenantContext.set(tenantId); }
     @AfterEach  void clean() {
         TenantContext.clear();
+        jdbc.update("DELETE FROM shipments   WHERE tenant_id = ?", tenantId);
         jdbc.update("DELETE FROM order_items WHERE tenant_id = ?", tenantId);
         jdbc.update("DELETE FROM orders WHERE tenant_id = ?", tenantId);
     }
 
     // ── helpers ──────────────────────────────────────────────────────────────
 
-    private UUID insertOrder(String externalId, String status, String placedAtExpr, boolean onHold) {
-        return jdbc.queryForObject(
+    /**
+     * selfPickup=false orders get a matching forward shipment in 'created' state —
+     * PICKABLE_ORDERS_FILTER (2026-07-28) requires one for any non-self-pickup order to
+     * be queueable at all; this test file is about the recency window, not the
+     * shipment-state gate itself (see QueueSendStateGateTest), so every non-self-pickup
+     * fixture here needs one to stay unaffected by that separate, orthogonal gate.
+     */
+    private UUID insertOrder(String externalId, String status, String placedAtExpr,
+                              boolean onHold, boolean selfPickup) {
+        UUID orderId = jdbc.queryForObject(
             "INSERT INTO orders (tenant_id, store_id, external_id, number, status, " +
-            "    payment_method, placed_at, on_hold) " +
-            "VALUES (?, ?, ?, ?, ?::order_status, 'cod', " + placedAtExpr + ", ?) RETURNING id",
-            UUID.class, tenantId, storeId, externalId, "#" + externalId, status, onHold);
+            "    payment_method, placed_at, on_hold, is_self_pickup) " +
+            "VALUES (?, ?, ?, ?, ?::order_status, 'cod', " + placedAtExpr + ", ?, ?) RETURNING id",
+            UUID.class, tenantId, storeId, externalId, "#" + externalId, status, onHold, selfPickup);
+        if (!selfPickup) {
+            jdbc.update(
+                "INSERT INTO shipments (tenant_id, order_id, provider, internal_state, shipment_leg) " +
+                "VALUES (?, ?, 'bosta', 'created'::shipment_internal_state, 'forward')",
+                tenantId, orderId);
+        }
+        return orderId;
     }
 
     // ── tests ─────────────────────────────────────────────────────────────────
@@ -103,7 +119,7 @@ class PickQueueRecencyTest {
      */
     @Test
     void a_inWindow_new_appearsInQueue() {
-        UUID orderId = insertOrder("IN-WINDOW-001", "new", "now() - interval '5 days'", false);
+        UUID orderId = insertOrder("IN-WINDOW-001", "new", "now() - interval '5 days'", false, false);
 
         List<Map<String, Object>> queue = fulfillSvc.getQueue();
 
@@ -116,7 +132,7 @@ class PickQueueRecencyTest {
      */
     @Test
     void b_outOfWindow_new_hiddenFromQueue_butExistsInDb() {
-        UUID orderId = insertOrder("OUT-OF-WINDOW-001", "new", "now() - interval '45 days'", false);
+        UUID orderId = insertOrder("OUT-OF-WINDOW-001", "new", "now() - interval '45 days'", false, false);
 
         List<Map<String, Object>> queue = fulfillSvc.getQueue();
         assertThat(queue).noneMatch(o -> orderId.equals(o.get("id")));
@@ -133,8 +149,8 @@ class PickQueueRecencyTest {
      */
     @Test
     void c_ordersTable_notFiltered_allDatesVisible() {
-        UUID recentId = insertOrder("ALL-RECENT", "new", "now() - interval '5 days'",  false);
-        UUID oldId    = insertOrder("ALL-OLD",    "new", "now() - interval '90 days'", false);
+        UUID recentId = insertOrder("ALL-RECENT", "new", "now() - interval '5 days'",  false, false);
+        UUID oldId    = insertOrder("ALL-OLD",    "new", "now() - interval '90 days'", false, false);
 
         // Direct DB query — no recency filter (what the orders-list endpoint does)
         List<Map<String, Object>> all = jdbc.queryForList(
@@ -156,7 +172,7 @@ class PickQueueRecencyTest {
      */
     @Test
     void d_outOfWindow_stillLinkableAsBostaTarget() {
-        UUID oldOrderId = insertOrder("BOSTA-LINK-001", "new", "now() - interval '60 days'", false);
+        UUID oldOrderId = insertOrder("BOSTA-LINK-001", "new", "now() - interval '60 days'", false, false);
 
         // Would fail if the row didn't exist — proves data is preserved for Bosta FK
         UUID found = jdbc.queryForObject(
@@ -170,8 +186,8 @@ class PickQueueRecencyTest {
      */
     @Test
     void e_inWindow_otherEligibleStatuses_appearInQueue() {
-        UUID readyId   = insertOrder("RTP-001", "ready_to_pick",      "now() - interval '2 days'", false);
-        UUID selfPickId = insertOrder("SP-001",  "self_pickup_pending", "now() - interval '1 day'",  false);
+        UUID readyId   = insertOrder("RTP-001", "ready_to_pick",      "now() - interval '2 days'", false, false);
+        UUID selfPickId = insertOrder("SP-001",  "self_pickup_pending", "now() - interval '1 day'",  false, true);
 
         List<Map<String, Object>> queue = fulfillSvc.getQueue();
 
@@ -184,8 +200,8 @@ class PickQueueRecencyTest {
      */
     @Test
     void f_onHold_excludedRegardlessOfRecency() {
-        UUID heldRecent = insertOrder("HELD-RECENT", "new", "now() - interval '1 day'",  true);
-        UUID heldOld    = insertOrder("HELD-OLD",    "new", "now() - interval '5 days'", true);
+        UUID heldRecent = insertOrder("HELD-RECENT", "new", "now() - interval '1 day'",  true, false);
+        UUID heldOld    = insertOrder("HELD-OLD",    "new", "now() - interval '5 days'", true, false);
 
         List<Map<String, Object>> queue = fulfillSvc.getQueue();
 
@@ -199,8 +215,8 @@ class PickQueueRecencyTest {
      */
     @Test
     void g_lookbackBoundary_31DaysOldHidden_29DaysOldVisible() {
-        UUID justOutside = insertOrder("BOUNDARY-OUT", "new", "now() - interval '31 days'", false);
-        UUID justInside  = insertOrder("BOUNDARY-IN",  "new", "now() - interval '29 days'", false);
+        UUID justOutside = insertOrder("BOUNDARY-OUT", "new", "now() - interval '31 days'", false, false);
+        UUID justInside  = insertOrder("BOUNDARY-IN",  "new", "now() - interval '29 days'", false, false);
 
         List<Map<String, Object>> queue = fulfillSvc.getQueue();
 

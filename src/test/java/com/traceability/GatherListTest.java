@@ -107,6 +107,7 @@ class GatherListTest {
         for (UUID t : new UUID[]{tenantA, tenantB}) {
             jdbc.update("DELETE FROM allocations WHERE tenant_id = ?", t);
             jdbc.update("DELETE FROM pieces      WHERE tenant_id = ?", t);
+            jdbc.update("DELETE FROM shipments   WHERE tenant_id = ?", t);
             jdbc.update("DELETE FROM order_items WHERE tenant_id = ?", t);
             jdbc.update("DELETE FROM orders      WHERE tenant_id = ?", t);
             jdbc.update("DELETE FROM variants     WHERE tenant_id = ?", t);
@@ -135,12 +136,21 @@ class GatherListTest {
         // placed_at set equal to createdAt: PICKABLE_ORDERS_FILTER (shared with getQueue())
         // requires placed_at within the lookback window — NULL placed_at (the column
         // default) would silently exclude every fixture from both screens.
-        return jdbc.queryForObject(
+        UUID orderId = jdbc.queryForObject(
             "INSERT INTO orders (tenant_id, store_id, external_id, number, status, on_hold, " +
             "                    created_at, placed_at) " +
             "VALUES (?, ?, ?, ?, ?::order_status, ?, ?, ?) RETURNING id",
             UUID.class, tenantId, storeId, externalId, number, status, onHold,
             Timestamp.from(createdAt), Timestamp.from(createdAt));
+        // PICKABLE_ORDERS_FILTER (2026-07-28): a non-self-pickup order with no forward
+        // shipment is no longer gatherable at all — every order here gets a matching
+        // 'created' forward shipment, since none of these fixtures test the self-pickup
+        // exemption (that's QueueSendStateGateTest's concern).
+        jdbc.update(
+            "INSERT INTO shipments (tenant_id, order_id, provider, internal_state, shipment_leg) " +
+            "VALUES (?, ?, 'bosta', 'created'::shipment_internal_state, 'forward')",
+            tenantId, orderId);
+        return orderId;
     }
 
     private UUID insertOrderItem(UUID tenantId, UUID orderId, UUID variantId, int quantity) {

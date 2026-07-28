@@ -69,7 +69,7 @@ One line per requirement · [M] Must / [S] Should / [C] Could · use as the buil
 
 ## FR-8 Picking
 - [x] 8.1 [M] Pick queue oldest-first; open = lock to worker; Manager can release
-- [x] 8.1a [M] Queue gated by Bosta send-state: orders sent to Bosta without being picked in Traced (merchant fulfilled directly via Bosta app) drop from the queue and show a "Not Traced" badge on the Orders list; one-time backfill for pre-existing stuck orders [V57: FulfillService.getQueue() LATERAL join on latest forward shipment; NotTracedTagger shared predicate called from BostaWebhookJob.process() and ShipmentLinkService.manualLink()]
+- [x] 8.1a [M] Queue gated by Bosta send-state: orders sent to Bosta without being picked in Traced (merchant fulfilled directly via Bosta app) drop from the queue and show a "Not Traced" badge on the Orders list; one-time backfill for pre-existing stuck orders [V57: FulfillService.getQueue() LATERAL join on latest forward shipment; NotTracedTagger shared predicate called from BostaWebhookJob.process() and ShipmentLinkService.manualLink(); tightened 2026-07-28 — orders with NO forward shipment at all are now also excluded unless is_self_pickup=true (previously any no-shipment order stayed in queue regardless of self-pickup)]
 - [x] 8.2 [M] Pick screen per line; scan validated ≤300ms; full-screen green/red + audio
 - [x] 8.3 [M] Rejection codes: PIECE_NOT_FOUND / WRONG_VARIANT / ALREADY_RESERVED / WRONG_STATUS / DUPLICATE_SCAN (cross-tenant = NOT_FOUND)
 - [x] 8.4 [M] Scan atomically: Available→Reserved + allocation + event; concurrent double-scan → exactly one winner

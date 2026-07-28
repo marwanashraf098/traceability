@@ -141,6 +141,7 @@ class Day9Test {
         jdbc.update("DELETE FROM allocations WHERE tenant_id IN (?, ?)", tenantAId, tenantBId);
         jdbc.update("DELETE FROM piece_events WHERE tenant_id IN (?, ?)", tenantAId, tenantBId);
         jdbc.update("DELETE FROM pieces WHERE tenant_id IN (?, ?)", tenantAId, tenantBId);
+        jdbc.update("DELETE FROM shipments WHERE tenant_id IN (?, ?)", tenantAId, tenantBId);
         jdbc.update("DELETE FROM order_items WHERE tenant_id IN (?, ?)", tenantAId, tenantBId);
         jdbc.update("DELETE FROM orders WHERE tenant_id IN (?, ?)", tenantAId, tenantBId);
     }
@@ -153,6 +154,11 @@ class Day9Test {
         UUID ordReady = insertOrder("ready_to_pick");
         UUID ordPacked = insertOrder("packed");
         UUID ordHeld  = insertOrderOnHold();
+        // PICKABLE_ORDERS_FILTER (2026-07-28): a non-self-pickup order needs a forward
+        // shipment in 'created' state to be queueable at all — ordPacked/ordHeld don't
+        // need one, they're already excluded by status/on_hold.
+        insertForwardShipmentCreated(ordNew);
+        insertForwardShipmentCreated(ordReady);
 
         List<Map<String, Object>> queue = fulfillSvc.getQueue();
 
@@ -573,6 +579,13 @@ class Day9Test {
             "VALUES (?, ?, ?, ?, ?::order_status, false, now())",
             id, tenantAId, storeAId, id.toString(), status);
         return id;
+    }
+
+    private void insertForwardShipmentCreated(UUID orderId) {
+        jdbc.update(
+            "INSERT INTO shipments (tenant_id, order_id, provider, internal_state, shipment_leg) " +
+            "VALUES (?, ?, 'bosta', 'created'::shipment_internal_state, 'forward')",
+            tenantAId, orderId);
     }
 
     private UUID insertOrderOnHold() {
