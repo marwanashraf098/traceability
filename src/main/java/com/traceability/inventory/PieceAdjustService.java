@@ -38,7 +38,7 @@ public class PieceAdjustService {
     );
 
     private static final String FIND_PIECE_STATUS =
-        "SELECT status::text FROM pieces WHERE id = ? AND tenant_id = ?";
+        "SELECT status::text, current_location_id FROM pieces WHERE id = ? AND tenant_id = ?";
 
     private static final String FIND_COMMITTED_ORDER =
         "SELECT o.id AS order_id, o.number AS order_number " +
@@ -59,13 +59,16 @@ public class PieceAdjustService {
     private final InventoryLedger ledger;
     private final AuditService   auditService;
     private final ObjectMapper   mapper;
+    private final ShopifyInventoryService shopifyInventory;
 
     public PieceAdjustService(JdbcTemplate jdbc, InventoryLedger ledger,
-                               AuditService auditService, ObjectMapper mapper) {
+                               AuditService auditService, ObjectMapper mapper,
+                               ShopifyInventoryService shopifyInventory) {
         this.jdbc         = jdbc;
         this.ledger       = ledger;
         this.auditService = auditService;
         this.mapper       = mapper;
+        this.shopifyInventory = shopifyInventory;
     }
 
     /**
@@ -94,12 +97,15 @@ public class PieceAdjustService {
                 "note is required when reason is 'other'");
         }
 
-        String currentDb = jdbc.query(FIND_PIECE_STATUS,
-            rs -> rs.next() ? rs.getString(1) : null, pieceId, tenantId);
-        if (currentDb == null) {
+        record PieceRow(String status, UUID currentLocationId) {}
+        PieceRow pieceRow = jdbc.query(FIND_PIECE_STATUS,
+            rs -> rs.next() ? new PieceRow(rs.getString(1), rs.getObject(2, UUID.class)) : null,
+            pieceId, tenantId);
+        if (pieceRow == null) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Piece not found");
         }
-        PieceStatus current = PieceStatus.fromDb(currentDb);
+        PieceStatus current = PieceStatus.fromDb(pieceRow.status());
+        UUID currentLocationId = pieceRow.currentLocationId();
 
         if (current == PieceStatus.RESERVED || current == PieceStatus.PACKED) {
             Map<String, Object> order = jdbc.query(FIND_COMMITTED_ORDER,
@@ -118,7 +124,7 @@ public class PieceAdjustService {
         if (toStatus == PieceStatus.AVAILABLE
                 && (current == PieceStatus.DAMAGED || current == PieceStatus.DESTROYED)) {
             throw new ResponseStatusException(HttpStatus.CONFLICT,
-                "Piece is in terminal status '" + currentDb + "' — cannot reverse to available");
+                "Piece is in terminal status '" + current.db + "' — cannot reverse to available");
         }
 
         String metadata = buildMeta(reason, note);
@@ -126,8 +132,18 @@ public class PieceAdjustService {
         ledger.transition(pieceId, current, toStatus, "adjusted", actorUserId,
             new TransitionContext(null, null, null, null, metadata));
 
+        // FR-17 v2 trigger 3: a currently-sellable piece damaged in the warehouse.
+        // Guards already satisfied by this point — RESERVED/PACKED (allocated to an open
+        // order) was rejected above with 409, so reaching here with toStatus=DAMAGED means
+        // current was AVAILABLE (the only other legal source per InventoryLedger.ALLOWED).
+        // Damaged pieces reaching DAMAGED via return_pending_inspection go through
+        // ReturnService.markDamaged() instead — a separate method with no call here.
+        if (current == PieceStatus.AVAILABLE && toStatus == PieceStatus.DAMAGED) {
+            shopifyInventory.onSellablePieceDamaged(tenantId, pieceId, currentLocationId);
+        }
+
         Map<String, Object> auditMeta = new LinkedHashMap<>();
-        auditMeta.put("from",   currentDb);
+        auditMeta.put("from",   current.db);
         auditMeta.put("to",     toStatusStr);
         auditMeta.put("reason", reason);
         if (note != null && !note.isBlank()) auditMeta.put("note", note);
