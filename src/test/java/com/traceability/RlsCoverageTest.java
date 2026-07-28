@@ -393,8 +393,8 @@ class RlsCoverageTest {
     void fulfillGather_returnsSeededDemand() {
         UUID orderId     = UUID.randomUUID();
         UUID orderItemId = UUID.randomUUID();
-        jdbc.update("INSERT INTO orders (id, tenant_id, store_id, external_id, number, status, on_hold) " +
-                    "VALUES (?, ?, ?, 'EXT-CVG-GATHER', '#CVG-GATHER', 'ready_to_pick'::order_status, false)",
+        jdbc.update("INSERT INTO orders (id, tenant_id, store_id, external_id, number, status, on_hold, placed_at) " +
+                    "VALUES (?, ?, ?, 'EXT-CVG-GATHER', '#CVG-GATHER', 'ready_to_pick'::order_status, false, now())",
                     orderId, tenantId, storeId);
         jdbc.update("INSERT INTO order_items (id, tenant_id, order_id, variant_id, quantity) " +
                     "VALUES (?, ?, ?, ?, 3)", orderItemId, tenantId, orderId, variantId);

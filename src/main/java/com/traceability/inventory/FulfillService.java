@@ -35,18 +35,47 @@ public class FulfillService {
     // ── Queue ─────────────────────────────────────────────────────────────────
 
     /**
-     * Returns orders eligible for action: status IN ('new','ready_to_pick',
-     * 'self_pickup_pending'), not on hold, oldest first.
-     * self_pickup_pending orders are fully packed and awaiting customer handover.
+     * Shared eligibility predicate for "is this order still actionable in the pick
+     * flow" — the SAME set of orders getQueue() and getGatherList() must show,
+     * extracted here so the two screens can never silently drift apart again.
+     *
+     * Requires the query to alias the orders table as {@code o} and to bind exactly
+     * two params, in order, immediately before any additional params the caller's
+     * own query needs: (1) tenantId, (2) lookbackDays.
+     *
+     * status IN ('new','ready_to_pick','self_pickup_pending') — 'new' is included
+     * because the new→ready_to_pick confirmation flow isn't built yet, so real orders
+     * sit in 'new' the whole time they're pickable; self_pickup_pending orders are
+     * fully packed and only awaiting customer handover (not gatherable, but still
+     * "in the queue").
      *
      * Queue-gating-not-traced spec: also excludes orders whose latest shipment_leg='forward'
      * shipment is already sent to Bosta (internal_state <> 'created') — the merchant
      * fulfilled it directly via Bosta, so there is nothing left to pick in Traced. Orders
-     * with no forward shipment, or one still 'created', stay in the queue (self_pickup_pending
+     * with no forward shipment, or one still 'created', stay eligible (self_pickup_pending
      * orders never have a shipment, so they are unaffected). This is the state-gate filter
      * alone — deliberately NOT also filtered on not_traced_at (see NotTracedTagger): the two
      * mechanisms are independent so a 'created'-state order that was wrongly tagged still
      * shows up here.
+     */
+    private static final String PICKABLE_ORDERS_FILTER =
+        "LEFT JOIN LATERAL ( " +
+        "    SELECT internal_state " +
+        "    FROM shipments " +
+        "    WHERE order_id = o.id AND tenant_id = o.tenant_id " +
+        "      AND shipment_leg = 'forward' " +
+        "    ORDER BY id DESC " +
+        "    LIMIT 1 " +
+        ") latest_shipment ON true " +
+        "WHERE o.tenant_id = ? " +
+        "  AND o.status IN ('new','ready_to_pick','self_pickup_pending') " +
+        "  AND o.on_hold = false " +
+        "  AND o.placed_at > now() - (? * INTERVAL '1 day') " +
+        "  AND (latest_shipment.internal_state IS NULL OR latest_shipment.internal_state = 'created') ";
+
+    /**
+     * Returns orders eligible for action — see {@link #PICKABLE_ORDERS_FILTER} for the
+     * exact predicate, shared verbatim with {@link #getGatherList(Integer)}.
      */
     @Transactional(readOnly = true)
     public List<Map<String, Object>> getQueue() {
@@ -63,19 +92,7 @@ public class FulfillService {
             "       ), 0) AS scanned_units " +
             "FROM orders o " +
             "LEFT JOIN order_items oi ON oi.order_id = o.id " +
-            "LEFT JOIN LATERAL ( " +
-            "    SELECT internal_state " +
-            "    FROM shipments " +
-            "    WHERE order_id = o.id AND tenant_id = o.tenant_id " +
-            "      AND shipment_leg = 'forward' " +
-            "    ORDER BY id DESC " +
-            "    LIMIT 1 " +
-            ") latest_shipment ON true " +
-            "WHERE o.tenant_id = ? " +
-            "  AND o.status IN ('new','ready_to_pick','self_pickup_pending') " +
-            "  AND o.on_hold = false " +
-            "  AND o.placed_at > now() - (? * INTERVAL '1 day') " +
-            "  AND (latest_shipment.internal_state IS NULL OR latest_shipment.internal_state = 'created') " +
+            PICKABLE_ORDERS_FILTER +
             "GROUP BY o.id " +
             "ORDER BY o.created_at ASC",
             tenantId, lookbackDays);
@@ -84,45 +101,45 @@ public class FulfillService {
     // ── Gather list (FR-8.7) ─────────────────────────────────────────────────
 
     /**
-     * FR-8.7 Option A — read-only pick-wave aggregation across all ready_to_pick,
-     * not-on-hold orders, one row per variant. Stateless: recomputed on every call,
-     * no wave locking. on_hold=false mirrors getQueue()'s own convention — the build
-     * spec's aggregation section omits it, but its own test list requires on-hold
-     * orders excluded, so this resolves that inconsistency the same way the queue
-     * already does.
+     * FR-8.7 Option A — read-only pick-wave aggregation over the SAME order set as
+     * getQueue() (see {@link #PICKABLE_ORDERS_FILTER} — both use it verbatim, so they
+     * can never drift apart). Bug fixed 2026-07-28 (Marawan): this previously filtered
+     * on {@code status = 'ready_to_pick'} only, but the new→ready_to_pick confirmation
+     * flow isn't built, so real orders sit in 'new' the whole time they're pickable —
+     * the queue showed them and gather silently didn't. One row per variant.
+     * Stateless: recomputed on every call, no wave locking.
      *
      * needed = remaining-to-gather, NOT the raw order_item quantity. 'picking' is a
      * defined order_status value but nothing in this codebase ever assigns it
-     * (confirmed absent from every migration and service) — an order stays
+     * (confirmed absent from every migration and service) — an order stays 'new' or
      * 'ready_to_pick' for its ENTIRE scan lifecycle, so it can already carry active
-     * allocations (partially scanned) when this runs. An earlier version of this
-     * method summed the raw order_item quantity per the build spec's assumption that
-     * ready_to_pick orders have no allocations yet — that assumption is false here,
-     * so it over-counted demand and never decremented across reloads. Fixed
-     * 2026-07-28 (Marawan): needed now subtracts each order_item's active allocation
-     * count (allocations.status = 'active' — the only status a ready_to_pick order's
-     * allocations can have; complete() is what flips them to 'packed', and that
-     * happens in the same transaction as the order leaving ready_to_pick). Do not
-     * revert to the raw-quantity sum.
+     * allocations (partially scanned) when this runs. needed subtracts each
+     * order_item's allocation count where status IN ('active','packed') — 'packed' is
+     * included (not just 'active') because self_pickup_pending orders are now part of
+     * this same order set (matching getQueue()) and are fully packed already:
+     * complete() flips their allocations to 'packed' in the very transaction that
+     * moves them off 'new'/'ready_to_pick', so for those orders this correctly nets
+     * out to needed=0 — nothing left to gather. For 'new'/'ready_to_pick' orders this
+     * is equivalent to the old 'active'-only check, since their allocations are never
+     * 'packed' while in those statuses. Do not revert to the raw-quantity sum, and do
+     * not narrow this back to 'active' only.
      *
-     * Two follow-up corrections to that same fix (2026-07-28, Marawan review):
-     *   1. Each order_item's (quantity - active_count) is wrapped in GREATEST(..., 0)
-     *      BEFORE the SUM, not after. Without per-line flooring, one corrupted/stray-
-     *      over-allocated line (active_count > quantity — should never happen given
-     *      scan()'s FOR-UPDATE guard, but the aggregate must not trust that silently)
-     *      would go negative and cannibalize a healthy line's demand in the same
-     *      variant's SUM. Floor per line, not on the total.
+     * Two further corrections (2026-07-28, Marawan review) that still apply:
+     *   1. Each order_item's (quantity - allocation_count) is wrapped in
+     *      GREATEST(..., 0) BEFORE the SUM, not after. Without per-line flooring, one
+     *      corrupted/stray-over-allocated line (allocation_count > quantity — should
+     *      never happen given scan()'s FOR-UPDATE guard, but the aggregate must not
+     *      trust that silently) would go negative and cannibalize a healthy line's
+     *      demand in the same variant's SUM. Floor per line, not on the total.
      *   2. The allocations/pieces correlated subqueries do NOT bind a fresh tenantId
      *      parameter — that would be a second, hand-rolled tenancy mechanism parallel
-     *      to (not derived from) the RLS GUC the rest of this method relies on, and
-     *      inconsistent with getQueue()'s own correlated subqueries in this same file
-     *      (no explicit tenant_id filter at all — trust RLS). Instead they correlate
-     *      tenant_id to the already-RLS-scoped outer row (a.tenant_id = oi.tenant_id,
-     *      p.tenant_id = v.tenant_id), the same style as getOrder()'s
-     *      "s.tenant_id = o.tenant_id" join. RLS (FORCE ROW LEVEL SECURITY + the
-     *      app.current_tenant GUC fired automatically by TenantAwareConnection) is the
-     *      only tenancy enforcement in this query; the join equality is schema
-     *      consistency, not a second boundary.
+     *      to (not derived from) the RLS GUC the rest of this method relies on.
+     *      Instead they correlate tenant_id to the already-RLS-scoped outer row
+     *      (a.tenant_id = oi.tenant_id, p.tenant_id = v.tenant_id), the same style as
+     *      getOrder()'s "s.tenant_id = o.tenant_id" join. RLS (FORCE ROW LEVEL
+     *      SECURITY + the app.current_tenant GUC fired automatically by
+     *      TenantAwareConnection) is the only tenancy enforcement in this query; the
+     *      join equality is schema consistency, not a second boundary.
      */
     @Transactional(readOnly = true)
     public GatherListResponse getGatherList(Integer limit) {
@@ -130,13 +147,13 @@ public class FulfillService {
 
         List<Map<String, Object>> eligibleOrders = limit != null
             ? jdbc.queryForList(
-                "SELECT id FROM orders WHERE tenant_id = ? AND status = 'ready_to_pick' AND on_hold = false " +
-                "ORDER BY created_at ASC LIMIT ?",
-                tenantId, limit)
+                "SELECT o.id FROM orders o " + PICKABLE_ORDERS_FILTER +
+                "ORDER BY o.created_at ASC LIMIT ?",
+                tenantId, lookbackDays, limit)
             : jdbc.queryForList(
-                "SELECT id FROM orders WHERE tenant_id = ? AND status = 'ready_to_pick' AND on_hold = false " +
-                "ORDER BY created_at ASC",
-                tenantId);
+                "SELECT o.id FROM orders o " + PICKABLE_ORDERS_FILTER +
+                "ORDER BY o.created_at ASC",
+                tenantId, lookbackDays);
 
         if (eligibleOrders.isEmpty()) {
             return new GatherListResponse(Instant.now(), 0, List.of());
@@ -151,7 +168,8 @@ public class FulfillService {
                 "SELECT v.id AS variant_id, v.title AS name, v.sku AS sku, " +
                 "       SUM(GREATEST(oi.quantity - COALESCE(( " +
                 "           SELECT COUNT(*) FROM allocations a " +
-                "           WHERE a.order_item_id = oi.id AND a.tenant_id = oi.tenant_id AND a.status = 'active' " +
+                "           WHERE a.order_item_id = oi.id AND a.tenant_id = oi.tenant_id " +
+                "                 AND a.status IN ('active','packed') " +
                 "       ), 0), 0)) AS needed, " +
                 "       array_agg(DISTINCT o.number) AS order_numbers, " +
                 "       (SELECT COUNT(*) FROM pieces p " +

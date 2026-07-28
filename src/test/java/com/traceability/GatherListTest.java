@@ -29,18 +29,24 @@ import static org.assertj.core.api.Assertions.assertThat;
  *       SUM per variant and correct orderNumbers sets
  *   b — availability: available < needed → shortage = true
  *   c — availability: available >= needed → shortage = false
- *   d — status filter: new/packed/on-hold excluded, only ready_to_pick+not-on-hold included
- *   e — empty: no ready_to_pick orders → empty rows, orderCount = 0
- *   f — limit: limit=N returns only the oldest N orders' demand
- *   g — mid-pick: order stays ready_to_pick with a SUBSET of pieces already actively
+ *   d — status filter: 'new' and 'ready_to_pick' both included (matching getQueue()'s
+ *       PICKABLE_ORDERS_FILTER), 'packed' and on-hold excluded
+ *   e — the production bug fixed 2026-07-28: a FRESH 'new' order with zero allocations
+ *       (the new→ready_to_pick confirmation flow isn't built, so real orders sit in
+ *       'new' the whole time they're pickable) must appear in gather with needed equal
+ *       to the full order_item quantity — this is the fixture gap that let the original
+ *       ready_to_pick-only filter ship undetected
+ *   f — empty: no eligible orders at all → empty rows, orderCount = 0
+ *   g — limit: limit=N returns only the oldest N orders' demand
+ *   h — mid-pick: order stays ready_to_pick with a SUBSET of pieces already actively
  *       allocated (this codebase never transitions orders to 'picking' — see
  *       getGatherList() javadoc) — needed must subtract those active allocations, and
  *       shortage must recalculate against the reduced remaining, not the raw quantity
- *   h — per-line flooring: one order_item with active_count > quantity (stray/corrupt
+ *   i — per-line flooring: one order_item with active_count > quantity (stray/corrupt
  *       over-allocation) must floor at 0 for that line, not let the negative leak into
  *       the SUM and cannibalize a different, healthy order_item's demand on the same
  *       variant
- *   i — cross-tenant isolation (paired with the positive control in `a`): tenant B's
+ *   j — cross-tenant isolation (paired with the positive control in `a`): tenant B's
  *       gather never sees tenant A's orders or demand
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.NONE)
@@ -123,10 +129,15 @@ class GatherListTest {
 
     private UUID insertOrder(UUID tenantId, UUID storeId, String externalId, String number,
                               String status, boolean onHold, Instant createdAt) {
+        // placed_at set equal to createdAt: PICKABLE_ORDERS_FILTER (shared with getQueue())
+        // requires placed_at within the lookback window — NULL placed_at (the column
+        // default) would silently exclude every fixture from both screens.
         return jdbc.queryForObject(
-            "INSERT INTO orders (tenant_id, store_id, external_id, number, status, on_hold, created_at) " +
-            "VALUES (?, ?, ?, ?, ?::order_status, ?, ?) RETURNING id",
-            UUID.class, tenantId, storeId, externalId, number, status, onHold, Timestamp.from(createdAt));
+            "INSERT INTO orders (tenant_id, store_id, external_id, number, status, on_hold, " +
+            "                    created_at, placed_at) " +
+            "VALUES (?, ?, ?, ?, ?::order_status, ?, ?, ?) RETURNING id",
+            UUID.class, tenantId, storeId, externalId, number, status, onHold,
+            Timestamp.from(createdAt), Timestamp.from(createdAt));
     }
 
     private UUID insertOrderItem(UUID tenantId, UUID orderId, UUID variantId, int quantity) {
@@ -224,7 +235,12 @@ class GatherListTest {
     }
 
     @Test
-    void d_statusFilter_excludesNewPackedAndOnHold_onlyReadyToPickIncluded() {
+    void d_statusFilter_excludesPackedAndOnHold_includesNewAndReadyToPick() {
+        // Mirrors getQueue()'s PICKABLE_ORDERS_FILTER exactly: 'new' IS included (the
+        // new→ready_to_pick confirmation flow isn't built, so real orders sit in 'new'
+        // the whole time they're pickable — this is the bug fixed 2026-07-28: gather
+        // used to filter status = 'ready_to_pick' only and silently miss these).
+        // 'packed' and on-hold orders are excluded, same as the queue.
         UUID productId = insertProduct(tenantA, storeA, "GL-P4", "Filter Product");
         UUID variant   = insertVariant(tenantA, productId, "GL-V4", "SKU-FILT", "Filter Variant");
 
@@ -238,24 +254,44 @@ class GatherListTest {
         insertOrderItem(tenantA, onHoldOrder, variant, 1);
         insertOrderItem(tenantA, readyOrder,  variant, 1);
         insertPiece(tenantA, variant, "available");
+        insertPiece(tenantA, variant, "available");
+
+        FulfillService.GatherListResponse resp = fulfillSvc.getGatherList(null);
+
+        assertThat(resp.orderCount()).isEqualTo(2);
+        assertThat(resp.rows()).hasSize(1);
+        assertThat(resp.rows().get(0).needed()).isEqualTo(2);
+        assertThat(resp.rows().get(0).orderNumbers()).containsExactlyInAnyOrder("#GL-NEW", "#GL-READY");
+    }
+
+    @Test
+    void e_freshNewOrder_zeroAllocations_appearsWithNeededEqualToFullQuantity() {
+        // The production case this whole fix is for: the new→ready_to_pick confirmation
+        // flow isn't built, so a freshly-imported order just sits in 'new' — it never
+        // becomes 'ready_to_pick'. getQueue() has always shown it; gather must too.
+        UUID productId = insertProduct(tenantA, storeA, "GL-P8", "Fresh New Product");
+        UUID variant   = insertVariant(tenantA, productId, "GL-V8", "SKU-NEWORD", "Fresh New Variant");
+        UUID order     = insertOrder(tenantA, storeA, "GL-O8", "#GL-8", "new", false, Instant.now());
+        insertOrderItem(tenantA, order, variant, 3);
+        // zero allocations — nothing scanned yet, this order hasn't been touched at all
 
         FulfillService.GatherListResponse resp = fulfillSvc.getGatherList(null);
 
         assertThat(resp.orderCount()).isEqualTo(1);
         assertThat(resp.rows()).hasSize(1);
-        assertThat(resp.rows().get(0).needed()).isEqualTo(1);
-        assertThat(resp.rows().get(0).orderNumbers()).containsExactly("#GL-READY");
+        assertThat(resp.rows().get(0).needed()).isEqualTo(3);
+        assertThat(resp.rows().get(0).orderNumbers()).containsExactly("#GL-8");
     }
 
     @Test
-    void e_empty_noReadyToPickOrders_emptyRowsZeroCount() {
+    void f_empty_noEligibleOrders_emptyRowsZeroCount() {
         FulfillService.GatherListResponse resp = fulfillSvc.getGatherList(null);
         assertThat(resp.orderCount()).isZero();
         assertThat(resp.rows()).isEmpty();
     }
 
     @Test
-    void f_limit_returnsOldestNOrdersDemandOnly() {
+    void g_limit_returnsOldestNOrdersDemandOnly() {
         UUID productId = insertProduct(tenantA, storeA, "GL-P5", "Limit Product");
         UUID variantOld = insertVariant(tenantA, productId, "GL-VOLD", "SKU-OLD", "Old Variant");
         UUID variantNew = insertVariant(tenantA, productId, "GL-VNEW", "SKU-NEW", "New Variant");
@@ -275,7 +311,7 @@ class GatherListTest {
     }
 
     @Test
-    void g_midPick_activeAllocationsReduceRemaining_andRecalculateShortage() {
+    void h_midPick_activeAllocationsReduceRemaining_andRecalculateShortage() {
         UUID productId = insertProduct(tenantA, storeA, "GL-P6", "Mid-Pick Product");
         UUID variant   = insertVariant(tenantA, productId, "GL-V6", "SKU-MIDPICK", "Mid-Pick Variant");
         UUID order     = insertOrder(tenantA, storeA, "GL-O6", "#GL-6", "ready_to_pick", false, Instant.now());
@@ -303,7 +339,7 @@ class GatherListTest {
     }
 
     @Test
-    void h_perLineFlooring_overAllocatedLineDoesNotCannibalizeOtherLinesDemand() {
+    void i_perLineFlooring_overAllocatedLineDoesNotCannibalizeOtherLinesDemand() {
         UUID productId = insertProduct(tenantA, storeA, "GL-P7", "Flooring Product");
         UUID variant   = insertVariant(tenantA, productId, "GL-V7", "SKU-FLOOR", "Flooring Variant");
 
@@ -331,7 +367,7 @@ class GatherListTest {
     }
 
     @Test
-    void i_crossTenantIsolation_tenantBNeverSeesTenantADemand() {
+    void j_crossTenantIsolation_tenantBNeverSeesTenantADemand() {
         // Tenant A: seed the same positive-control shape as test `a`.
         UUID productA = insertProduct(tenantA, storeA, "GL-XP1", "Tenant A Product");
         UUID variantA = insertVariant(tenantA, productA, "GL-XVA", "SKU-XA", "Tenant A Variant");

@@ -4,6 +4,56 @@
 
 ## Current state
 
+**FR-8.7 production bug fixed (2026-07-28) — gather list was filtering on
+`status = 'ready_to_pick'` only, missing every order still in 'new'.** The
+new→ready_to_pick confirmation flow was never built, so real orders sit in `'new'` for
+their entire pickable lifetime — `getQueue()` has always shown them (confirmed verbatim
+predicate below); gather silently didn't, understating demand for anything not yet
+manually confirmed to ready_to_pick.
+
+**Confirmed `getQueue()`'s exact predicate before changing anything** (per instruction —
+no hardcoded literal, no guessing):
+```sql
+WHERE o.tenant_id = ?
+  AND o.status IN ('new','ready_to_pick','self_pickup_pending')
+  AND o.on_hold = false
+  AND o.placed_at > now() - (? * INTERVAL '1 day')   -- lookbackDays, default 30
+  AND (latest_shipment.internal_state IS NULL OR latest_shipment.internal_state = 'created')
+```
+plus a `LEFT JOIN LATERAL` on `shipments` (latest `shipment_leg='forward'` row) that the
+last condition depends on. Two details the original gather implementation missed
+entirely: `'new'` and `'self_pickup_pending'` in the status set, and the `placed_at`
+lookback window (gather had no lookback filter at all, and ordered/filtered on
+`created_at` instead — a different column).
+
+**Extracted a single shared SQL fragment** — `FulfillService.PICKABLE_ORDERS_FILTER`
+(private static final String) — containing the LATERAL join + the full WHERE clause
+verbatim. Both `getQueue()` and `getGatherList()` now use this same constant (requires
+aliasing the orders table as `o` and binding `tenantId, lookbackDays` first); there is
+now exactly one place this predicate is written, so the two screens cannot drift apart
+again. `getQueue()`'s own behavior is unchanged by the refactor — confirmed via
+`QueueSendStateGateTest` (7/7) and `PickQueueRecencyTest` (7/7), both green.
+
+One consequence of including `self_pickup_pending` in gather's order set: those orders
+are fully packed (`complete()` already flipped their allocations to `'packed'`), so the
+allocation-subtraction subquery was widened from `status = 'active'` to
+`status IN ('active','packed')` — matching `getQueue()`'s own `scanned_units` subquery
+convention exactly. For `'new'`/`'ready_to_pick'` orders this is equivalent to the old
+`'active'`-only check (their allocations are never `'packed'` while in those statuses);
+for `self_pickup_pending` orders it correctly nets `needed` to 0 (nothing left to gather).
+
+Test fixture gap that let the original bug ship 9/9 green: no test ever seeded a `'new'`
+order. Added `GatherListTest.e_freshNewOrder_zeroAllocations_appearsWithNeededEqualToFullQuantity`
+— verified as a real regression guard (temporarily reverted the predicate to
+`ready_to_pick`-only, confirmed the test fails `expected 1, got 0`, restored, confirmed
+green). Rewrote `d_statusFilter...` (now `includesNewAndReadyToPick`) since it previously
+asserted `'new'` was excluded, which was the bug, not a spec. All fixtures needed a
+`placed_at` column addition too (the shared predicate's lookback filter — NULL
+`placed_at`, the column default, silently excludes a row); fixed the shared
+`insertOrder()` test helper and one `RlsCoverageTest` fixture that was still NULL.
+Test list renumbered a–j (was a–i). 10/10 `GatherListTest`, 11/11 `RlsCoverageTest`,
+714/714 backend suite.
+
 **FR-8.7 review round 2 (2026-07-28) — per-line flooring + tenancy cleanup on the
 allocation-subtraction fix.** Marawan's review of the prior fix (below) caught two real
 issues before accepting it:
