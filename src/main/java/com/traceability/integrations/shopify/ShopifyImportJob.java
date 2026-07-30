@@ -141,7 +141,14 @@ public class ShopifyImportJob {
                 // a correction). actorUserId=null: a system-triggered action, not an operator
                 // action — AuditService.record() accepts null for exactly this case.
                 try {
-                    activationService.activateAll();
+                    ShopifyCatalogActivationService.ActivationOutcome activationResult = activationService.activateAll();
+                    log.info("Catalog activation for store {}: total={} succeeded={} failed={}",
+                        storeId, activationResult.total(), activationResult.succeeded(), activationResult.failed());
+                    if (activationResult.failed() > 0) {
+                        log.warn("Catalog activation had {} failing variant(s) for store {} — " +
+                            "will retry on next import/reconnect: {}",
+                            activationResult.failed(), storeId, activationResult.failures());
+                    }
                 } catch (Exception e) {
                     log.warn("Catalog activation at Traced GID failed for store {} — " +
                         "will retry on next import/reconnect", storeId, e);
