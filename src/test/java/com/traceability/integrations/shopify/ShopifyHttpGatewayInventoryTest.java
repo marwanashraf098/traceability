@@ -17,8 +17,11 @@ import static org.assertj.core.api.Assertions.assertThat;
  * Matrix:
  *   g1 — adjustInventoryQuantities rejects delta <= 0
  *   g2 — moveAvailableToDamaged rejects quantity <= 0
- *   g3 — @idempotent is present on the inventoryAdjustQuantities and inventoryMoveQuantities
- *        mutation documents (required on every call per api-version 2026-04)
+ *   g3 — no bare "@idempotent" token on any FR-17 v2 mutation (regression guard — a
+ *        keyless directive was removed 2026-07-30 as decorative/misleading; the real
+ *        concurrency guard is the DB claim-row in ShopifyInventoryService.claim(). If a
+ *        real idempotency key mechanism is added later, it belongs alongside a derived
+ *        key, not as a bare token — see the comment above these mutation constants)
  */
 class ShopifyHttpGatewayInventoryTest {
 
@@ -42,10 +45,10 @@ class ShopifyHttpGatewayInventoryTest {
     }
 
     @Test
-    void g3_idempotentDirectivePresentOnBothMutations() throws Exception {
-        assertThat(mutationText("INVENTORY_ADJUST_QUANTITIES_MUTATION")).contains("@idempotent");
-        assertThat(mutationText("INVENTORY_MOVE_QUANTITIES_MUTATION")).contains("@idempotent");
-        assertThat(mutationText("INVENTORY_ACTIVATE_MUTATION")).contains("@idempotent");
+    void g3_noBareIdempotentDirectiveOnAnyMutation() throws Exception {
+        assertThat(mutationText("INVENTORY_ADJUST_QUANTITIES_MUTATION")).doesNotContain("@idempotent");
+        assertThat(mutationText("INVENTORY_MOVE_QUANTITIES_MUTATION")).doesNotContain("@idempotent");
+        assertThat(mutationText("INVENTORY_ACTIVATE_MUTATION")).doesNotContain("@idempotent");
     }
 
     private static String mutationText(String fieldName) throws Exception {

@@ -482,9 +482,20 @@ class ShopifyHttpGateway implements ShopifyGateway {
     }
 
     // ---- FR-17 v2: increment-only inventory sync -------------------------
+    //
+    // No @idempotent directive / idempotency key on these mutations. An earlier revision
+    // added a bare "@idempotent" token with no accompanying key — decorative only, since
+    // this targets a forward Shopify API version with no schema to verify against, and a
+    // keyless directive can't dedupe anything server-side. Removed rather than kept as
+    // false reassurance (2026-07-30). The real concurrency guard is the DB claim-row in
+    // ShopifyInventoryService (INSERT ... ON CONFLICT on the (trigger_type, trigger_id,
+    // variant_id, location_id) unique key, committed BEFORE the call below) — see its
+    // claim()/markResult() methods. If Shopify's real API later documents an idempotency
+    // key mechanism, wire a key derived from that same tuple through here as defense in
+    // depth on top of the DB guard, not instead of it.
 
     private static final String INVENTORY_ACTIVATE_MUTATION = """
-            mutation InventoryActivate($inventoryItemId: ID!, $locationId: ID!) @idempotent {
+            mutation InventoryActivate($inventoryItemId: ID!, $locationId: ID!) {
               inventoryActivate(inventoryItemId: $inventoryItemId, locationId: $locationId) {
                 inventoryLevel { id }
                 userErrors { field message }
@@ -512,7 +523,7 @@ class ShopifyHttpGateway implements ShopifyGateway {
     }
 
     private static final String INVENTORY_ADJUST_QUANTITIES_MUTATION = """
-            mutation InventoryAdjustQuantities($input: InventoryAdjustQuantitiesInput!) @idempotent {
+            mutation InventoryAdjustQuantities($input: InventoryAdjustQuantitiesInput!) {
               inventoryAdjustQuantities(input: $input) {
                 inventoryAdjustmentGroup { createdAt }
                 userErrors { field message code }
@@ -548,7 +559,7 @@ class ShopifyHttpGateway implements ShopifyGateway {
     }
 
     private static final String INVENTORY_MOVE_QUANTITIES_MUTATION = """
-            mutation InventoryMoveQuantities($input: InventoryMoveQuantitiesInput!) @idempotent {
+            mutation InventoryMoveQuantities($input: InventoryMoveQuantitiesInput!) {
               inventoryMoveQuantities(input: $input) {
                 inventoryAdjustmentGroup { createdAt }
                 userErrors { field message code }

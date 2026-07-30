@@ -27,10 +27,13 @@ import java.util.concurrent.CompletableFuture;
  * explicitly on the new thread.
  *
  * LIVE MODE: every call here issues a real Shopify mutation. There is no shadow mode
- * anymore — rows are inserted with status='applied' (mutation succeeded) or 'failed'
- * (mutation attempted or preconditions unmet; never thrown further, never retried
- * forced). shopify_inventory_adjustments remains the append-only per-trigger audit log
- * and idempotency guard (UNIQUE(trigger_type, trigger_id, variant_id, location_id)).
+ * anymore. shopify_inventory_adjustments is now a CLAIM-before-call table, not a
+ * check-then-insert audit log: a row is INSERTed with status='pending' (or reclaimed from
+ * 'failed') BEFORE Shopify is ever called, gated by the UNIQUE(trigger_type, trigger_id,
+ * variant_id, location_id) constraint from V48 — that INSERT, not a prior SELECT, is the
+ * actual concurrency guard (see claim()). The row is then updated to 'applied' or 'failed'
+ * after the Shopify call returns (see markResult()), in its own transaction so no DB
+ * transaction is ever held open across the HTTP call.
  *
  * INVARIANT (never relax without explicit approval — FR-17 v2, CLAUDE.md):
  *   Traced NEVER decrements Shopify on_hand and NEVER writes absolute on_hand.
@@ -280,24 +283,24 @@ public class ShopifyInventoryService {
                                           int delta, String triggerType, String triggerId, String reason) {
         UUID tenantId = TenantContext.require();
 
-        // Idempotency: a prior SUCCESSFUL call for this exact (trigger, variant, location)
-        // must never be repeated — retry/redeploy/duplicate-call must not double-apply a
-        // positive delta twice. A prior failure is retried (nothing was actually applied).
-        if (alreadyApplied(tenantId, triggerType, triggerId, variantId, locationId)) {
-            log.debug("Shopify inventory: trigger already applied, skipping duplicate call " +
-                      "trigger={} triggerId={} variant={}", triggerType, triggerId, variantId);
+        if (!isFulfillmentLocation(tenantId, locationId, triggerType, triggerId)) {
             return;
         }
 
-        if (!isFulfillmentLocation(tenantId, locationId, triggerType, triggerId)) {
+        // Claim BEFORE resolving preconditions or calling Shopify — see claim() for why a
+        // prior SELECT check is not sufficient under concurrency.
+        ObjectNode initialPayload = mapper.createObjectNode().put("reason", reason).put("delta", delta);
+        if (!claim(tenantId, batchId, variantId, locationId, delta, triggerType, triggerId, initialPayload)) {
+            log.debug("Shopify inventory: trigger already claimed, skipping duplicate call " +
+                      "trigger={} triggerId={} variant={}", triggerType, triggerId, variantId);
             return;
         }
 
         Preconditions p = resolvePreconditions(tenantId, variantId, locationId);
 
         if (p.error() != null) {
-            recordAdjustment(tenantId, batchId, variantId, locationId, delta, triggerType, triggerId,
-                              reason, null, p.shopifyInventoryItemId(), p.shopifyLocationId(), "failed", p.error());
+            markResult(tenantId, triggerType, triggerId, variantId, locationId,
+                       p.shopifyInventoryItemId(), p.shopifyLocationId(), "failed", p.error());
             return;
         }
 
@@ -314,8 +317,8 @@ public class ShopifyInventoryService {
                      triggerType, triggerId, variantId, error);
         }
 
-        recordAdjustment(tenantId, batchId, variantId, locationId, delta, triggerType, triggerId,
-                          reason, null, p.shopifyInventoryItemId(), p.shopifyLocationId(), status, error);
+        markResult(tenantId, triggerType, triggerId, variantId, locationId,
+                   p.shopifyInventoryItemId(), p.shopifyLocationId(), status, error);
     }
 
     // ── Trigger 3 core: available→damaged move ───────────────────────────────
@@ -323,23 +326,22 @@ public class ShopifyInventoryService {
     private void applyDamageMove(UUID batchId, UUID variantId, UUID locationId, String pieceId) {
         UUID tenantId = TenantContext.require();
 
-        // Idempotent per piece: a piece can only ever go available->damaged once (the
-        // ledger's state machine makes damaged terminal), but guard the Shopify call
-        // explicitly too — never move the same piece's unit twice.
-        if (alreadyApplied(tenantId, "damage_move", pieceId, variantId, locationId)) {
-            log.debug("Shopify inventory: damage move already applied, skipping duplicate call piece={}", pieceId);
+        if (!isFulfillmentLocation(tenantId, locationId, "damage_move", pieceId)) {
             return;
         }
 
-        if (!isFulfillmentLocation(tenantId, locationId, "damage_move", pieceId)) {
+        ObjectNode initialPayload = mapper.createObjectNode()
+            .put("reason", "damaged").put("delta", 0).put("moveQuantity", 1);
+        if (!claim(tenantId, batchId, variantId, locationId, 0, "damage_move", pieceId, initialPayload)) {
+            log.debug("Shopify inventory: damage move already claimed, skipping duplicate call piece={}", pieceId);
             return;
         }
 
         Preconditions p = resolvePreconditions(tenantId, variantId, locationId);
 
         if (p.error() != null) {
-            recordAdjustment(tenantId, batchId, variantId, locationId, 0, "damage_move", pieceId,
-                              "damaged", 1, p.shopifyInventoryItemId(), p.shopifyLocationId(), "failed", p.error());
+            markResult(tenantId, "damage_move", pieceId, variantId, locationId,
+                       p.shopifyInventoryItemId(), p.shopifyLocationId(), "failed", p.error());
             return;
         }
 
@@ -359,25 +361,11 @@ public class ShopifyInventoryService {
                      pieceId, variantId, error);
         }
 
-        recordAdjustment(tenantId, batchId, variantId, locationId, 0, "damage_move", pieceId,
-                          "damaged", 1, p.shopifyInventoryItemId(), p.shopifyLocationId(), status, error);
+        markResult(tenantId, "damage_move", pieceId, variantId, locationId,
+                   p.shopifyInventoryItemId(), p.shopifyLocationId(), status, error);
     }
 
     // ── Shared guards / persistence ──────────────────────────────────────────
-
-    /** True if this exact (trigger, variant, location) already has a successfully-applied
-     *  audit row — the pre-Shopify-call idempotency guard (the ON CONFLICT on INSERT alone
-     *  is not enough since the mutation call happens before that INSERT). */
-    private boolean alreadyApplied(UUID tenantId, String triggerType, String triggerId,
-                                    UUID variantId, UUID locationId) {
-        Boolean exists = tx.execute(status -> jdbc.query(
-            "SELECT 1 FROM shopify_inventory_adjustments " +
-            "WHERE tenant_id = ? AND trigger_type = ? AND trigger_id = ? " +
-            "  AND variant_id = ? AND location_id = ? AND status = 'applied' LIMIT 1",
-            java.sql.ResultSet::next,
-            tenantId, triggerType, triggerId, variantId, locationId));
-        return Boolean.TRUE.equals(exists);
-    }
 
     /** Only is_fulfillment=true locations ever reach a Shopify call — any other location
      *  (showroom/branch/junk) is skipped entirely, not even a 'failed' row. */
@@ -396,33 +384,70 @@ public class ShopifyInventoryService {
         return true;
     }
 
-    private void recordAdjustment(UUID tenantId, UUID batchId, UUID variantId, UUID locationId,
-                                  int delta, String triggerType, String triggerId, String reason,
-                                  Integer moveQuantity, String shopifyInventoryItemId,
-                                  String shopifyLocationId, String status, String error) {
-        ObjectNode payload = mapper.createObjectNode()
-            .put("reason", reason)
-            .put("delta",  delta);
-        if (moveQuantity != null) payload.put("moveQuantity", moveQuantity);
-        if (shopifyInventoryItemId != null) payload.put("inventoryItemId", shopifyInventoryItemId);
-        if (shopifyLocationId      != null) payload.put("locationId",      shopifyLocationId);
-
+    /**
+     * Atomically claims the right to call Shopify for this exact (trigger, variant, location) —
+     * claim-before-call, not check-before-call. A prior plain SELECT-then-INSERT has a race
+     * window: two concurrent callers (a JobRunr retry overlapping the original, a duplicate
+     * webhook) can both pass a SELECT before either has written a row, and both would then
+     * call Shopify. Here the INSERT itself, gated by the V48 UNIQUE(trigger_type, trigger_id,
+     * variant_id, location_id) constraint, IS the guard: only one of two concurrent INSERTs
+     * for the same key can create the row (the loser blocks on the unique index until the
+     * winner's transaction commits, then re-evaluates its own ON CONFLICT clause against the
+     * now-committed row).
+     *
+     * ON CONFLICT DO UPDATE ... WHERE status = 'failed' — a prior FAILURE is reclaimable
+     * (nothing was actually applied by it), but a prior 'pending' (in-flight, possibly on
+     * another node right now) or 'applied' (already succeeded) row is not: the WHERE clause
+     * fails to match, the DO UPDATE doesn't fire, and jdbc.update() reports 0 affected rows —
+     * exactly the signal the caller needs to skip without ever touching Shopify.
+     *
+     * The claim is committed in its own short transaction (does not span the Shopify HTTP
+     * call that follows) — see markResult() for the corresponding follow-up write.
+     *
+     * Known limitation: if the process crashes after a successful claim but before
+     * markResult() runs, the row is stuck at 'pending' forever (the WHERE clause only
+     * reclaims 'failed'). These triggers are fire-and-forget calls from a single synchronous
+     * call site each (receiving close, restock, damage) with no external retry mechanism
+     * today, so this is an accepted, documented edge case rather than a silent bug — it needs
+     * a stale-pending sweep only if/when these triggers grow a retry path.
+     */
+    private boolean claim(UUID tenantId, UUID batchId, UUID variantId, UUID locationId, int delta,
+                          String triggerType, String triggerId, ObjectNode initialPayload) {
         String payloadJsonTmp;
-        try { payloadJsonTmp = mapper.writeValueAsString(payload); }
+        try { payloadJsonTmp = mapper.writeValueAsString(initialPayload); }
         catch (Exception e) { payloadJsonTmp = "{}"; }
         final String finalPayloadJson = payloadJsonTmp;
 
+        Integer rows = tx.execute(status -> jdbc.update(
+            "INSERT INTO shopify_inventory_adjustments " +
+            "(tenant_id, batch_id, variant_id, location_id, delta, trigger_type, trigger_id, payload, status) " +
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?::jsonb, 'pending') " +
+            "ON CONFLICT (trigger_type, trigger_id, variant_id, location_id) DO UPDATE " +
+            "  SET status = 'pending', batch_id = EXCLUDED.batch_id, payload = EXCLUDED.payload " +
+            "  WHERE shopify_inventory_adjustments.status = 'failed'",
+            tenantId, batchId, variantId, locationId, delta, triggerType, triggerId, finalPayloadJson));
+
+        return rows != null && rows > 0;
+    }
+
+    /** Follow-up write after the Shopify call (or after a precondition failure) — a plain
+     *  UPDATE by the same unique key the claim used, run in its own short transaction after
+     *  the HTTP call has already returned. shopifyInventoryItemId/shopifyLocationId are
+     *  COALESCEd so a later call never blanks out a value a concurrent/prior call resolved. */
+    private void markResult(UUID tenantId, String triggerType, String triggerId,
+                            UUID variantId, UUID locationId,
+                            String shopifyInventoryItemId, String shopifyLocationId,
+                            String status, String error) {
         tx.execute(txStatus -> {
             jdbc.update(
-                "INSERT INTO shopify_inventory_adjustments " +
-                "(tenant_id, batch_id, variant_id, location_id, " +
-                " shopify_inventory_item_id, shopify_location_id, " +
-                " delta, trigger_type, trigger_id, payload, status, error) " +
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?::jsonb, ?, ?) " +
-                "ON CONFLICT (trigger_type, trigger_id, variant_id, location_id) DO NOTHING",
-                tenantId, batchId, variantId, locationId,
-                shopifyInventoryItemId, shopifyLocationId,
-                delta, triggerType, triggerId, finalPayloadJson, status, error);
+                "UPDATE shopify_inventory_adjustments SET " +
+                "  status = ?, error = ?, " +
+                "  shopify_inventory_item_id = COALESCE(?, shopify_inventory_item_id), " +
+                "  shopify_location_id = COALESCE(?, shopify_location_id) " +
+                "WHERE tenant_id = ? AND trigger_type = ? AND trigger_id = ? " +
+                "  AND variant_id = ? AND location_id = ?",
+                status, error, shopifyInventoryItemId, shopifyLocationId,
+                tenantId, triggerType, triggerId, variantId, locationId);
             return null;
         });
 

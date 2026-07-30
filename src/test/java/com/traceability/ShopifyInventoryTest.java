@@ -24,6 +24,7 @@ import java.sql.DriverManager;
 import java.sql.SQLException;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -97,12 +98,20 @@ class ShopifyInventoryTest {
     UUID tenantId;
     UUID storeId;
     UUID locationId;             // linked, is_fulfillment=true — the Traced GID
-    UUID locationUnsynced;       // unsynced, is_fulfillment=true (for si3)
     UUID locationNotFulfillment; // linked, is_fulfillment=false (for si6 guard)
     UUID variantA;
     UUID variantB;
     UUID productId;
     String pieceId; // for si4
+
+    // Separate tenant for si3 — V61 enforces one is_fulfillment=true location per tenant,
+    // so "unsynced fulfillment location" (a temporal state of THE fulfillment location
+    // before it's linked) can't coexist with tenantId's already-linked locationId above.
+    UUID tenantUnsynced;
+    UUID storeUnsynced;
+    UUID productUnsynced;
+    UUID variantUnsynced;
+    UUID locationUnsynced;       // unsynced, is_fulfillment=true (for si3)
 
     static final String SHOP_DOMAIN = "test.myshopify.com";
     static final String TRACED_GID  = "gid://shopify/Location/999";
@@ -146,14 +155,34 @@ class ShopifyInventoryTest {
             "VALUES (?, ?, 'Main Warehouse', ?, 'linked', true)",
             locationId, tenantId, TRACED_GID);
 
-        // Unsynced location — used to test si3. is_fulfillment=true (technical link status
-        // and business fulfillment scoping are independent — a fulfillment location can still
-        // be pending its Shopify link).
+        // Separate tenant for si3: an unsynced fulfillment location + its own product/variant/
+        // store, so resolvePreconditions' variant/store lookups (RLS-equivalent tenant_id
+        // filter) resolve correctly under a different TenantContext than the rest of the class.
+        tenantUnsynced = UUID.randomUUID();
+        storeUnsynced  = UUID.randomUUID();
+        jdbc.update("INSERT INTO tenants (id, name) VALUES (?, 'ShopifyInventoryUnsyncedTenant')", tenantUnsynced);
+        jdbc.update(
+            "INSERT INTO stores (id, tenant_id, shop_domain, import_status, access_token_scopes) " +
+            "VALUES (?, ?, 'unsynced-test.myshopify.com', 'idle', " +
+            "'read_orders,write_inventory,read_products,write_locations,read_locations,read_customers')",
+            storeUnsynced, tenantUnsynced);
+        productUnsynced = UUID.randomUUID();
+        jdbc.update(
+            "INSERT INTO products (id, tenant_id, store_id, external_id, title, status) " +
+            "VALUES (?, ?, ?, 'gid://shopify/Product/unsynced', 'Unsynced Product', 'active')",
+            productUnsynced, tenantUnsynced, storeUnsynced);
+        variantUnsynced = UUID.randomUUID();
+        jdbc.update(
+            "INSERT INTO variants (id, tenant_id, product_id, external_id, title, sku) " +
+            "VALUES (?, ?, ?, 'gid://shopify/ProductVariant/201', 'Variant Unsynced', 'SKU-U')",
+            variantUnsynced, tenantUnsynced, productUnsynced);
+        // is_fulfillment=true (technical link status and business fulfillment scoping are
+        // independent — a fulfillment location can still be pending its Shopify link).
         locationUnsynced = UUID.randomUUID();
         jdbc.update(
             "INSERT INTO locations (id, tenant_id, name, shopify_sync_status, is_fulfillment) " +
             "VALUES (?, ?, 'Unsynced WH', 'unsynced', true)",
-            locationUnsynced, tenantId);
+            locationUnsynced, tenantUnsynced);
 
         // Linked but is_fulfillment=false — a showroom/branch whose stock must NOT
         // contribute at all. Its own Shopify GID (OTHER_GID) must NEVER be used. Used by si6.
@@ -174,6 +203,7 @@ class ShopifyInventoryTest {
     @BeforeEach
     void resetTokenStub() {
         when(tokenProvider.getValidToken(storeId)).thenReturn("test-token");
+        when(tokenProvider.getValidToken(storeUnsynced)).thenReturn("test-token-unsynced");
     }
 
     // ── si1: receiving session close — live positive-delta call ──────────────
@@ -243,20 +273,20 @@ class ShopifyInventoryTest {
     @Test @Order(3)
     void si3_unlinkedLocation_noShopifyCallFailedRow() throws Exception {
         when(shopifyGateway.resolveInventoryItemId(anyString(), anyString(),
-                eq("gid://shopify/ProductVariant/101")))
+                eq("gid://shopify/ProductVariant/201")))
             .thenReturn("gid://shopify/InventoryItem/201");
 
         UUID sessionId = UUID.randomUUID();
-        TenantContext.set(tenantId);
+        TenantContext.set(tenantUnsynced);
         try {
-            service.onReceivingSessionClose(tenantId, sessionId, locationUnsynced, Map.of(variantA, 1))
+            service.onReceivingSessionClose(tenantUnsynced, sessionId, locationUnsynced, Map.of(variantUnsynced, 1))
                    .get(5, TimeUnit.SECONDS);
         } finally { TenantContext.clear(); }
 
         Map<String, Object> row = jdbc.queryForMap(
             "SELECT status, error, shopify_inventory_item_id FROM shopify_inventory_adjustments " +
             "WHERE trigger_type = 'receiving_session' AND trigger_id = ? AND tenant_id = ?",
-            sessionId.toString(), tenantId);
+            sessionId.toString(), tenantUnsynced);
 
         assertThat(row.get("status")).as("si3: unlinked location → failed row").isEqualTo("failed");
         assertThat(row.get("error").toString()).as("si3: error mentions location").contains("not linked");
@@ -531,6 +561,137 @@ class ShopifyInventoryTest {
         assertThat(onImpl)
             .as("si11: inventorySetOnHandQuantities must not exist on ShopifyHttpGateway either")
             .isFalse();
+    }
+
+    // ── si12/si13: GENUINE concurrency (not sequential call-then-call) ───────
+    //
+    // Deterministic, not timing-dependent: the "winner" thread is deliberately blocked
+    // INSIDE resolvePreconditions (via a blocking tokenProvider.getValidToken stub) AFTER
+    // its claim() INSERT has already committed as 'pending' — verified by reading the row
+    // back before proceeding — and BEFORE it ever calls Shopify. A second, identical trigger
+    // fired at that exact moment must hit the claim conflict and return without ever calling
+    // Shopify. This reproduces "a JobRunr retry overlapping the original" / "a duplicate
+    // webhook" without relying on two threads happening to race within a few milliseconds.
+
+    @Test @Order(12)
+    void si12_concurrentDuplicateIncrementTrigger_shopifyCalledExactlyOnce() throws Exception {
+        when(shopifyGateway.resolveInventoryItemId(anyString(), anyString(), anyString()))
+            .thenReturn("gid://shopify/InventoryItem/CONC12");
+
+        UUID sessionId = UUID.randomUUID();
+        CountDownLatch winnerInsidePreconditions = new CountDownLatch(1);
+        CountDownLatch releaseWinner = new CountDownLatch(1);
+
+        // getValidToken(storeId) is called inside resolvePreconditions, AFTER claim() has
+        // already committed — blocking here simulates "the winner is still mid-flight".
+        when(tokenProvider.getValidToken(storeId)).thenAnswer(invocation -> {
+            winnerInsidePreconditions.countDown();
+            releaseWinner.await(5, TimeUnit.SECONDS);
+            return "test-token";
+        });
+
+        Thread winner = new Thread(() -> {
+            TenantContext.set(tenantId);
+            try {
+                service.onReceivingSessionClose(tenantId, sessionId, locationId, Map.of(variantA, 2))
+                       .get(10, TimeUnit.SECONDS);
+            } catch (Exception ignored) {
+                // interruption/timeout on this thread is asserted via the outer join below
+            } finally {
+                TenantContext.clear();
+            }
+        });
+        winner.start();
+
+        assertThat(winnerInsidePreconditions.await(5, TimeUnit.SECONDS))
+            .as("si12: winner must reach resolvePreconditions before the duplicate fires")
+            .isTrue();
+
+        String statusWhilePending = jdbc.queryForObject(
+            "SELECT status FROM shopify_inventory_adjustments " +
+            "WHERE trigger_type = 'receiving_session' AND trigger_id = ? AND tenant_id = ? AND variant_id = ?",
+            String.class, sessionId.toString(), tenantId, variantA);
+        assertThat(statusWhilePending)
+            .as("si12: claim already committed as pending BEFORE Shopify is ever called")
+            .isEqualTo("pending");
+
+        // Duplicate trigger for the EXACT same (trigger_type, trigger_id, variant, location) —
+        // fired while the winner is still pending, still holds no Shopify call yet.
+        TenantContext.set(tenantId);
+        try {
+            service.onReceivingSessionClose(tenantId, sessionId, locationId, Map.of(variantA, 2))
+                   .get(5, TimeUnit.SECONDS);
+        } finally {
+            TenantContext.clear();
+        }
+
+        releaseWinner.countDown();
+        winner.join(10_000);
+
+        verify(shopifyGateway, times(1)).adjustInventoryQuantities(
+            anyString(), anyString(), anyString(), anyString(), eq(2), anyString());
+        Long count = jdbc.queryForObject(
+            "SELECT COUNT(*) FROM shopify_inventory_adjustments " +
+            "WHERE trigger_type = 'receiving_session' AND trigger_id = ? AND tenant_id = ? AND variant_id = ?",
+            Long.class, sessionId.toString(), tenantId, variantA);
+        assertThat(count).as("si12: exactly one row — the duplicate never claimed").isEqualTo(1L);
+    }
+
+    @Test @Order(13)
+    void si13_concurrentDuplicateDamageMove_shopifyCalledExactlyOnce() throws Exception {
+        when(shopifyGateway.resolveInventoryItemId(anyString(), anyString(), anyString()))
+            .thenReturn("gid://shopify/InventoryItem/CONC13");
+
+        String dmgPieceId = seedAvailablePiece("BC-SI13-001", locationId);
+
+        CountDownLatch winnerInsidePreconditions = new CountDownLatch(1);
+        CountDownLatch releaseWinner = new CountDownLatch(1);
+        when(tokenProvider.getValidToken(storeId)).thenAnswer(invocation -> {
+            winnerInsidePreconditions.countDown();
+            releaseWinner.await(5, TimeUnit.SECONDS);
+            return "test-token";
+        });
+
+        Thread winner = new Thread(() -> {
+            TenantContext.set(tenantId);
+            try {
+                service.onSellablePieceDamaged(tenantId, dmgPieceId, locationId).get(10, TimeUnit.SECONDS);
+            } catch (Exception ignored) {
+            } finally {
+                TenantContext.clear();
+            }
+        });
+        winner.start();
+
+        assertThat(winnerInsidePreconditions.await(5, TimeUnit.SECONDS))
+            .as("si13: winner must reach resolvePreconditions before the duplicate fires")
+            .isTrue();
+
+        String statusWhilePending = jdbc.queryForObject(
+            "SELECT status FROM shopify_inventory_adjustments " +
+            "WHERE trigger_type = 'damage_move' AND trigger_id = ? AND tenant_id = ?",
+            String.class, dmgPieceId, tenantId);
+        assertThat(statusWhilePending)
+            .as("si13: claim already committed as pending BEFORE Shopify is ever called")
+            .isEqualTo("pending");
+
+        TenantContext.set(tenantId);
+        try {
+            service.onSellablePieceDamaged(tenantId, dmgPieceId, locationId).get(5, TimeUnit.SECONDS);
+        } finally {
+            TenantContext.clear();
+        }
+
+        releaseWinner.countDown();
+        winner.join(10_000);
+
+        verify(shopifyGateway, times(1)).moveAvailableToDamaged(
+            anyString(), anyString(), anyString(), anyString(), eq(1), anyString());
+        Long count = jdbc.queryForObject(
+            "SELECT COUNT(*) FROM shopify_inventory_adjustments " +
+            "WHERE trigger_type = 'damage_move' AND trigger_id = ? AND tenant_id = ?",
+            Long.class, dmgPieceId, tenantId);
+        assertThat(count).as("si13: exactly one row — the duplicate never claimed").isEqualTo(1L);
     }
 
 }
