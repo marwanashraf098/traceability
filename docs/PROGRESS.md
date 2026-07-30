@@ -73,12 +73,55 @@ onboarding cases, junk report + guarded cleanup), `ShopifyCatalogActivationTest`
 `ShopifyInventoryReconcileTest` (first-pass-writes-nothing, positive-delta-only seed, non-zero-
 skip-never-correct, re-run-is-noop), rewritten `ShopifyInventoryTest` (live-call assertions,
 location-target guard, full damage-trigger matrix), new package-scoped
-`ShopifyHttpGatewayInventoryTest` (positive-delta/quantity validation pre-network-call,
-`@idempotent` present on all three mutation documents). `RlsCoverageTest` gains the two new GET
-endpoints. V60 migration widens `shopify_inventory_adjustments.trigger_type`
-(`damage_move`, `initial_seed`); fixed two pre-existing tests that hardcoded the total
-migration count. Full backend suite green (`mvn test`). **Not deployed, not run against
-production** — Marawan runs Parts B/C/D-activation against real stores himself, later.
+`ShopifyHttpGatewayInventoryTest` (positive-delta/quantity validation pre-network-call).
+`RlsCoverageTest` gains the two new GET endpoints. V60 migration widens
+`shopify_inventory_adjustments.trigger_type` (`damage_move`, `initial_seed`); fixed two
+pre-existing tests that hardcoded the total migration count. Full backend suite green
+(`mvn test`). **Not deployed, not run against production.**
+
+**Concurrency hardening (2026-07-30) — three check-then-act races found and fixed, all with
+genuinely-concurrent tests (not sequential call-then-call), each verified to fail against the
+pre-fix code and pass against the fix.** The original Parts A/C/D used SELECT-then-act guards
+with a race window: two concurrent identical triggers (a retry overlapping the original, a
+duplicate webhook, two operators clicking the same button) could both pass the check before
+either wrote anything.
+- **Part D**: `ShopifyInventoryService.claim()`/`markResult()` replace the SELECT with
+  `INSERT ... ON CONFLICT (trigger_type, trigger_id, variant_id, location_id) DO UPDATE ...
+  WHERE status='failed'` — the INSERT itself (gated by the V48 unique constraint) is the
+  guard; a `'pending'`/`'applied'` row already there means 0 affected rows, no Shopify call.
+  A `'failed'` row IS reclaimed for retry (case c, covered by `si14`).
+- **Part A**: `ShopifyLocationProvisioningService.linkShopifyLocationIfNeeded()` uses the
+  analogous conditional UPDATE (`unsynced`/`error` → `pending`). V61 adds
+  `UNIQUE(tenant_id) WHERE is_fulfillment=true` as an independent, complementary invariant —
+  surfaced a real fixture bug (standalone signup already seeds one `is_fulfillment=true`
+  location; several tests were inserting a second one for the same tenant).
+- **Part C**: `apply()` takes a per-tenant `pg_advisory_xact_lock` (transaction-scoped,
+  confirmed NOT the session-scoped form — no leak-on-throw failure mode) held for the WHOLE
+  operation including the Shopify calls — deliberate, since `apply()` is a manual,
+  one-tenant-at-a-time action, not a hot path like Parts A/D.
+- Removed the bare `@idempotent` directive from all three mutations — it carried no key and
+  was decorative; a test now guards against reintroducing it without a real key.
+
+CLAUDE.md's FR-17 gated replacement (verbatim v2 wording + location-target sentence + a new
+claim-before-call paragraph) went in as the last, approved step.
+
+**Connect flow made fully automatic (2026-07-30) — Parts B/C no longer require manual
+approval.** `ShopifyImportJob.run()` now chains provisioning → catalog import → activation →
+on_hand seed as ONE flow on every connect/reconnect. Previously Parts B (`activateAll()`) and
+C (`apply()`) were operator-triggered only, via the reconcile-report-then-approve-then-apply
+sequence on `ShopifyInventorySyncController`. Now both run automatically right after catalog
+import (they need variants to exist first), each in its own try/catch (non-fatal, retried on
+next reconnect since each is independently idempotent). `apply()` is called with
+`actorUserId=null` (a system action, not an operator one — `AuditService.record()` already
+supports null for this). All of Part C's guards are unchanged: the per-tenant advisory lock,
+live-recompute-then-skip-nonzero, structurally-enforced positive-delta-only. The manual
+endpoints on `ShopifyInventorySyncController` are unchanged and still available — `GET
+/reconcile` remains a standalone read-only report; all three remain usable for manual
+re-trigger if an automatic attempt fails. Test: `ShopifyImportTest.
+connectFlowIdempotency_oneLocationEverCreated_onHandSeededOnceNotTwice` runs the full path
+across three `importJob.run()` calls (simulating repeated reconnects) and asserts exactly one
+Shopify location is ever created and the on_hand seed fires exactly once, not on a later
+reconnect once Shopify already reflects it. Still not deployed — Marawan deploys manually.
 
 ---
 
