@@ -2,6 +2,8 @@ package com.traceability.integrations.shopify;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.traceability.inventory.ShopifyCatalogActivationService;
+import com.traceability.inventory.ShopifyInventoryReconcileService;
 import com.traceability.inventory.ShopifyLocationProvisioningService;
 import com.traceability.tenancy.TenantContext;
 import org.jobrunr.jobs.annotations.Job;
@@ -16,7 +18,21 @@ import java.util.Map;
 import java.util.UUID;
 
 /**
- * Background job that imports a Shopify store's catalog and orders.
+ * Background job that imports a Shopify store's catalog and orders, and — as of the
+ * FR-17 v2 go-live — also runs the full Traced-owned-location inventory sync bootstrap as
+ * ONE automatic flow on every connect/reconnect, with no manual approval gate:
+ *   Part A: ensure + link the Traced Main Warehouse (ShopifyLocationProvisioningService).
+ *   Part B: inventoryActivate the catalog at that GID (ShopifyCatalogActivationService),
+ *           run AFTER catalog import since it needs variants to already exist.
+ *   Part C: seed on_hand — a positive-delta-only write from 0, computed live, skipping
+ *           any variant already non-zero in Shopify (ShopifyInventoryReconcileService.apply(),
+ *           actorUserId=null for this system-triggered call). Its own per-tenant
+ *           pg_advisory_xact_lock and claim/guard logic are unchanged — this job doesn't add
+ *           any new synchronization, it just calls the same guarded method automatically.
+ * The manual endpoints on ShopifyInventorySyncController (activate / reconcile / reconcile/apply)
+ * remain available as standalone tools (read-only report, or manual re-trigger after a
+ * failure here) — this job's automatic calls don't replace them, just remove the need to use
+ * them for the ordinary connect path.
  *
  * TenantContext: JobRunr workers do not go through the HTTP filter chain.
  * TenantContext.runAs(tenantId, ...) is called explicitly so TenantAwareDataSource
@@ -26,6 +42,8 @@ import java.util.UUID;
  * the exception is NOT rethrown. JobRunr would otherwise retry indefinitely on
  * generic failures (bad data, permanent Shopify error). Transient network errors
  * inside the gateway are handled by Resilience4j retry before reaching this layer.
+ * Parts A/B/C failures are caught independently and are non-fatal to the import itself —
+ * each is retried on the next reconnect/import since each is independently idempotent.
  *
  * Idempotency: ShopifySyncService uses ON CONFLICT DO UPDATE throughout, so
  * re-running the job is safe and produces the same result.
@@ -41,19 +59,25 @@ public class ShopifyImportJob {
     private final ObjectMapper mapper;
     private final TransactionTemplate tx;
     private final ShopifyLocationProvisioningService locationProvisioningService;
+    private final ShopifyCatalogActivationService activationService;
+    private final ShopifyInventoryReconcileService reconcileService;
 
     public ShopifyImportJob(JdbcTemplate jdbc,
                              ShopifySyncService syncService,
                              ShopifyTokenProvider tokenProvider,
                              ObjectMapper mapper,
                              PlatformTransactionManager txm,
-                             ShopifyLocationProvisioningService locationProvisioningService) {
+                             ShopifyLocationProvisioningService locationProvisioningService,
+                             ShopifyCatalogActivationService activationService,
+                             ShopifyInventoryReconcileService reconcileService) {
         this.jdbc          = jdbc;
         this.syncService   = syncService;
         this.tokenProvider = tokenProvider;
         this.mapper        = mapper;
         this.tx            = new TransactionTemplate(txm);
         this.locationProvisioningService = locationProvisioningService;
+        this.activationService = activationService;
+        this.reconcileService  = reconcileService;
     }
 
     @Job(name = "Shopify import — store %0")
@@ -105,6 +129,33 @@ public class ShopifyImportJob {
 
                 log.info("Shopify import completed for store {}: {} products, {} orders",
                     storeId, result.products(), result.orders());
+
+                // Parts B+C (FR-17 v2): activate the catalog at the Traced GID, then seed
+                // on_hand — fully automatic, no manual approval gate. Must run AFTER
+                // syncService.runImport() above, since both need variants to already exist.
+                // Both are non-fatal here (a failure just means the next reconnect/import
+                // retries) and both are idempotent/re-runnable — activateInventoryItem
+                // tolerates already-active; apply() recomputes Shopify's live state and only
+                // ever writes a strictly-positive delta from a variant currently at zero,
+                // skipping and flagging anything already non-zero (never a double-seed, never
+                // a correction). actorUserId=null: a system-triggered action, not an operator
+                // action — AuditService.record() accepts null for exactly this case.
+                try {
+                    activationService.activateAll();
+                } catch (Exception e) {
+                    log.warn("Catalog activation at Traced GID failed for store {} — " +
+                        "will retry on next import/reconnect", storeId, e);
+                }
+
+                try {
+                    ShopifyInventoryReconcileService.ApplyResult seedResult = reconcileService.apply(null);
+                    log.info("Automatic on_hand seed for store {}: seeded={} skippedNonZero={} noop={} failed={}",
+                        storeId, seedResult.seeded(), seedResult.skippedNonZero(),
+                        seedResult.noop(), seedResult.failed());
+                } catch (Exception e) {
+                    log.warn("Automatic on_hand seed failed for store {} — " +
+                        "will retry on next import/reconnect", storeId, e);
+                }
 
             } catch (ShopifyStoreNeedsReauthException e) {
                 // Permanent: store is already marked needs_reauth by ShopifyTokenProvider.

@@ -7,6 +7,8 @@ import com.traceability.identity.model.SignupRequest;
 import com.traceability.identity.model.TokenResponse;
 import com.traceability.integrations.shopify.ShopifyGateway;
 import com.traceability.integrations.shopify.ShopifyImportJob;
+import com.traceability.integrations.shopify.ShopifyLocationGateway;
+import com.traceability.inventory.UlidGenerator;
 import org.jobrunr.scheduling.JobScheduler;
 import org.junit.jupiter.api.*;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -27,6 +29,7 @@ import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -73,6 +76,7 @@ class ShopifyImportTest {
     @Autowired ShopifyImportJob importJob;
     @MockBean  ShopifyGateway shopifyGateway;
     @MockBean  JobScheduler   jobScheduler;   // prevents real job scheduling
+    @MockBean  ShopifyLocationGateway shopifyLocations;
 
     private String ownerToken;
     private UUID   ownerTenantId;
@@ -101,6 +105,10 @@ class ShopifyImportTest {
 
     @BeforeEach
     void cleanUp() {
+        jdbc.execute("DELETE FROM shopify_inventory_adjustments");
+        jdbc.execute("DELETE FROM piece_events");
+        jdbc.execute("DELETE FROM allocations");
+        jdbc.execute("DELETE FROM pieces");
         jdbc.execute("DELETE FROM order_items");
         jdbc.execute("DELETE FROM orders");
         jdbc.execute("DELETE FROM variants");
@@ -129,6 +137,88 @@ class ShopifyImportTest {
         assertThat(countInTenant("variants")).isEqualTo(2);
         assertThat(countInTenant("orders")).isEqualTo(2);
         assertThat(countInTenant("order_items")).isEqualTo(2);
+    }
+
+    // -------------------------------------------------------------------------
+    // (a2) FR-17 v2 go-live is now automatic on connect (Parts A+B+C, no manual
+    //      approval gate). Confirm end-to-end across TWO full job runs:
+    //        - exactly one Shopify location ever created (Part A claim-before-call)
+    //        - the on_hand seed writes exactly once, not twice, once a variant has
+    //          real stock (Part C's live-recompute skip-nonzero guard)
+    //        - every write (activate, seed) targets ONLY the Traced GID, never any
+    //          other locationId
+    // -------------------------------------------------------------------------
+    @Test
+    void connectFlowIdempotency_oneLocationEverCreated_onHandSeededOnceNotTwice() throws Exception {
+        String shopDomain = "golive-shop.myshopify.com";
+        String tracedGid  = "gid://shopify/Location/golive";
+
+        stubGateway(shopDomain, PRODUCT_1, List.of());
+
+        when(shopifyLocations.findByName(eq(shopDomain), eq(RAW_TOKEN), anyString()))
+                .thenReturn(Optional.empty());
+        when(shopifyLocations.create(eq(shopDomain), eq(RAW_TOKEN), any()))
+                .thenReturn(new ShopifyLocationGateway.LocationResult(tracedGid, "Traced Main Warehouse"));
+        when(shopifyGateway.resolveInventoryItemId(eq(shopDomain), eq(RAW_TOKEN), eq("gid://shopify/ProductVariant/10")))
+                .thenReturn("gid://shopify/InventoryItem/red");
+        when(shopifyGateway.resolveInventoryItemId(eq(shopDomain), eq(RAW_TOKEN), eq("gid://shopify/ProductVariant/11")))
+                .thenReturn("gid://shopify/InventoryItem/blue");
+        // apply() runs on EVERY importJob.run() call, including run 1 (before any pieces
+        // exist) — so the FIRST invocation of fetchAvailableQuantities happens during run 1
+        // (everything on_hand=0, reads as empty regardless). The SECOND invocation is run 2
+        // (after pieces are inserted, still empty on Shopify's side -> triggers the seed).
+        // The THIRD invocation (run 3) must see the now-seeded value -> skip, never double-add.
+        when(shopifyGateway.fetchAvailableQuantities(eq(shopDomain), eq(RAW_TOKEN), eq(tracedGid), anyList()))
+                .thenReturn(List.of())
+                .thenReturn(List.of())
+                .thenReturn(List.of(new ShopifyGateway.InventoryLevel("gid://shopify/InventoryItem/red", 3)));
+
+        UUID storeId = connect(shopDomain);
+
+        // Run 1: imports the catalog (variants don't exist before this), provisions +
+        // links the Traced location, activates the (still-zero-stock) catalog. No pieces
+        // exist yet, so Part C computes on_hand=0 for both variants -> ACTION_NOOP, nothing
+        // seeded — there is nothing to double-seed FROM yet.
+        importJob.run(storeId, ownerTenantId);
+
+        UUID variantRedId = jdbc.queryForObject(
+                "SELECT id FROM variants WHERE tenant_id = ? AND external_id = ?",
+                UUID.class, ownerTenantId, "gid://shopify/ProductVariant/10");
+        UUID fulfillmentLocationId = jdbc.queryForObject(
+                "SELECT id FROM locations WHERE tenant_id = ? AND is_fulfillment = true",
+                UUID.class, ownerTenantId);
+
+        // Now give the Red variant real stock at the fulfillment location.
+        for (int i = 0; i < 3; i++) {
+            String pieceId = UlidGenerator.generate();
+            jdbc.update(
+                    "INSERT INTO pieces (id, tenant_id, variant_id, status, barcode, short_code, current_location_id) " +
+                    "VALUES (?, ?, ?, 'available'::piece_status, ?, " +
+                    "    'P' || LPAD((abs(hashtext(?)) % 999999 + 1)::text, 6, '0'), ?)",
+                    pieceId, ownerTenantId, variantRedId, "PC-" + pieceId, pieceId, fulfillmentLocationId);
+        }
+
+        // Run 2 ("reconnect"): Part A/B no-op (already linked/active); Part C now sees
+        // on_hand=3 for Red, Shopify shows 0 (first fetchAvailableQuantities answer) -> seeds +3.
+        importJob.run(storeId, ownerTenantId);
+
+        // Run 3 ("reconnect again"): Part C recomputes live and sees Shopify's SECOND stubbed
+        // answer (already 3) -> must skip, never double-add to 6.
+        importJob.run(storeId, ownerTenantId);
+
+        verify(shopifyLocations, times(1)).create(any(), any(), any());
+        verify(shopifyGateway, times(1)).adjustInventoryQuantities(
+                eq(shopDomain), eq(RAW_TOKEN), eq("gid://shopify/InventoryItem/red"), eq(tracedGid), eq(3), anyString());
+        // The blue variant never had stock -> never seeded, in any run.
+        verify(shopifyGateway, never()).adjustInventoryQuantities(
+                any(), any(), eq("gid://shopify/InventoryItem/blue"), any(), anyInt(), any());
+        // No write of any kind (activate, adjust) ever targets a locationId other than the Traced GID.
+        verify(shopifyGateway, never()).activateInventoryItem(any(), any(), any(), argThat(loc -> !tracedGid.equals(loc)));
+        verify(shopifyGateway, never()).adjustInventoryQuantities(any(), any(), any(), argThat(loc -> !tracedGid.equals(loc)), anyInt(), any());
+
+        String locationStatus = jdbc.queryForObject(
+                "SELECT shopify_sync_status FROM locations WHERE id = ?", String.class, fulfillmentLocationId);
+        assertThat(locationStatus).isEqualTo("linked");
     }
 
     // -------------------------------------------------------------------------
