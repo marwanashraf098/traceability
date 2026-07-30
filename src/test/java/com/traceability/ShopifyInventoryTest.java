@@ -694,4 +694,71 @@ class ShopifyInventoryTest {
         assertThat(count).as("si13: exactly one row — the duplicate never claimed").isEqualTo(1L);
     }
 
+    // ── si14: claim() case (c) — a 'failed' row IS reclaimed for retry ───────
+    //
+    // claim()'s ON CONFLICT ... DO UPDATE ... WHERE status='failed' has three outcomes:
+    //   (a) fresh INSERT (no existing row)              -> claimed, proceed to Shopify
+    //   (b) existing 'pending'/'applied' row             -> WHERE doesn't match, 0 rows, back off
+    //   (c) existing 'failed' row                        -> WHERE matches, DO UPDATE fires, claimed
+    // si12/si13 already prove (b). This proves (c): a failed attempt must not permanently
+    // block the same (trigger_type, trigger_id, variant_id, location_id) key from ever being
+    // retried — Shopify succeeding on a later attempt must still land.
+
+    @Test @Order(14)
+    void si14_failedRowIsReclaimed_retrySucceedsAndCallsShopify() throws Exception {
+        when(shopifyGateway.resolveInventoryItemId(anyString(), anyString(), anyString()))
+            .thenReturn("gid://shopify/InventoryItem/CONC14");
+
+        UUID sessionId = UUID.randomUUID();
+
+        // First attempt: Shopify rejects it -> claim() case (a), then markResult('failed').
+        doThrow(new ShopifyException("simulated transient failure"))
+            .when(shopifyGateway).adjustInventoryQuantities(any(), any(), any(), any(), anyInt(), any());
+
+        TenantContext.set(tenantId);
+        try {
+            service.onReceivingSessionClose(tenantId, sessionId, locationId, Map.of(variantA, 2))
+                   .get(5, TimeUnit.SECONDS);
+        } finally {
+            TenantContext.clear();
+        }
+
+        String statusAfterFirst = jdbc.queryForObject(
+            "SELECT status FROM shopify_inventory_adjustments " +
+            "WHERE trigger_type = 'receiving_session' AND trigger_id = ? AND tenant_id = ? AND variant_id = ?",
+            String.class, sessionId.toString(), tenantId, variantA);
+        assertThat(statusAfterFirst).as("si14: first attempt recorded as failed").isEqualTo("failed");
+
+        // Second attempt, the EXACT SAME (trigger_type, trigger_id, variant_id, location_id) key:
+        // Shopify now succeeds. claim() must hit case (c) — WHERE status='failed' matches the
+        // existing row, DO UPDATE re-arms it to 'pending', rows=1 — and proceed to call Shopify.
+        reset(shopifyGateway);
+        when(shopifyGateway.resolveInventoryItemId(anyString(), anyString(), anyString()))
+            .thenReturn("gid://shopify/InventoryItem/CONC14");
+        // adjustInventoryQuantities left unstubbed on the reset mock -> succeeds (no-op) by default.
+
+        TenantContext.set(tenantId);
+        try {
+            service.onReceivingSessionClose(tenantId, sessionId, locationId, Map.of(variantA, 2))
+                   .get(5, TimeUnit.SECONDS);
+        } finally {
+            TenantContext.clear();
+        }
+
+        verify(shopifyGateway, times(1)).adjustInventoryQuantities(
+            anyString(), anyString(), anyString(), anyString(), eq(2), anyString());
+
+        String statusAfterRetry = jdbc.queryForObject(
+            "SELECT status FROM shopify_inventory_adjustments " +
+            "WHERE trigger_type = 'receiving_session' AND trigger_id = ? AND tenant_id = ? AND variant_id = ?",
+            String.class, sessionId.toString(), tenantId, variantA);
+        assertThat(statusAfterRetry).as("si14: retry reclaims the failed row and succeeds").isEqualTo("applied");
+
+        Long count = jdbc.queryForObject(
+            "SELECT COUNT(*) FROM shopify_inventory_adjustments " +
+            "WHERE trigger_type = 'receiving_session' AND trigger_id = ? AND tenant_id = ? AND variant_id = ?",
+            Long.class, sessionId.toString(), tenantId, variantA);
+        assertThat(count).as("si14: reclaim updates the SAME row, never inserts a second one").isEqualTo(1L);
+    }
+
 }
