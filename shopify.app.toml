@@ -7,7 +7,7 @@ name = "Trace"
 
 [access_scopes]
 # Learn more at https://shopify.dev/docs/apps/tools/cli/configuration#access_scopes
-scopes = "read_customers,read_fulfillments,read_orders,read_products"
+scopes = "read_customers,read_fulfillments,read_orders,read_products,read_inventory,write_inventory,write_products,read_locations,write_locations"
 optional_scopes = [ ]
 use_legacy_install_flow = true
 
