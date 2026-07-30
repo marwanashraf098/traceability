@@ -266,6 +266,21 @@ public class ShopifyInventoryReconcileService {
         });
     }
 
+    /**
+     * Records the outcome of one variant's seed attempt. Two-phase-consistent with Part D's
+     * claim()/markResult() pattern: ON CONFLICT DO UPDATE ... WHERE status='failed' means a
+     * prior failure IS overwritten by a later outcome (including a successful retry moving
+     * failed -> applied), but an already-'applied' row is never touched again — which matches
+     * reality anyway, since a variant that's already applied shows non-zero in Shopify and
+     * buildReport() will never re-classify it as ACTION_SEED, so recordAudit() is never called
+     * again for that key once it reaches 'applied'.
+     *
+     * The prior version was a plain INSERT ... ON CONFLICT DO NOTHING: a variant that failed
+     * once and then succeeded on a later reconnect would silently stay recorded as 'failed'
+     * forever — the underlying Shopify write and Traced on_hand were correct (buildReport()'s
+     * live-state check already prevents any double-add), but the audit trail lied. Fixed
+     * 2026-07-30; no change to the seed decision logic itself.
+     */
     private void recordAudit(UUID tenantId, UUID variantId, UUID locationId, long delta,
                               String status, String error) {
         ObjectNode payload = mapper.createObjectNode().put("reason", "initial_seed").put("delta", delta);
@@ -273,6 +288,7 @@ public class ShopifyInventoryReconcileService {
         try { payloadJson = mapper.writeValueAsString(payload); }
         catch (Exception e) { payloadJson = "{}"; }
         final String finalPayload = payloadJson;
+        final UUID batchId = UUID.randomUUID();
 
         tx.execute(s -> {
             jdbc.update(
@@ -280,8 +296,11 @@ public class ShopifyInventoryReconcileService {
                 "(tenant_id, batch_id, variant_id, location_id, delta, trigger_type, trigger_id, " +
                 " payload, status, error) " +
                 "VALUES (?, ?, ?, ?, ?, 'initial_seed', ?, ?::jsonb, ?, ?) " +
-                "ON CONFLICT (trigger_type, trigger_id, variant_id, location_id) DO NOTHING",
-                tenantId, UUID.randomUUID(), variantId, locationId, delta,
+                "ON CONFLICT (trigger_type, trigger_id, variant_id, location_id) DO UPDATE " +
+                "  SET status = EXCLUDED.status, error = EXCLUDED.error, " +
+                "      batch_id = EXCLUDED.batch_id, payload = EXCLUDED.payload " +
+                "  WHERE shopify_inventory_adjustments.status = 'failed'",
+                tenantId, batchId, variantId, locationId, delta,
                 variantId.toString(), finalPayload, status, error);
             return null;
         });

@@ -1,5 +1,6 @@
 package com.traceability;
 
+import com.traceability.integrations.shopify.ShopifyException;
 import com.traceability.integrations.shopify.ShopifyGateway;
 import com.traceability.integrations.shopify.ShopifyTokenProvider;
 import com.traceability.inventory.ShopifyInventoryReconcileService;
@@ -36,6 +37,10 @@ import static org.mockito.Mockito.*;
  *         downward (or upward) — regardless of whether target > or < current
  *   pc4 — idempotency: after a successful seed, a re-run sees the now-non-zero Shopify
  *         value and performs a zero/positive-only no-op, never a double-add
+ *   pc6 — partial-seed-then-reconnect-completes-it: a variant whose seed fails is recorded
+ *         'failed'; Shopify still shows it at zero, so the next apply() retries it, and on
+ *         success the SAME audit row moves 'failed' -> 'applied' (not left stuck, not
+ *         duplicated) — the fix for recordAudit()'s prior ON CONFLICT DO NOTHING
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.NONE)
 @Testcontainers
@@ -324,5 +329,71 @@ class ShopifyInventoryReconcileTest {
         assertThat(loserResult.get().skippedNonZero()).isEqualTo(1);
 
         verify(shopifyGateway, times(1)).adjustInventoryQuantities(any(), any(), any(), any(), anyInt(), any());
+    }
+
+    // ── pc6: a failed seed is retried on the next reconnect and the SAME audit ──
+    //         row moves failed -> applied — the "partial seed then reconnect completes
+    //         it" case pc1-pc5 never covered.
+
+    @Test
+    void pc6_failedSeed_reconnectRetrySucceeds_auditRowMovesFailedToApplied() throws Exception {
+        UUID variantId = seedVariantWithOnHand("gid://shopify/ProductVariant/pc6", "gid://shopify/InventoryItem/pc6", 5);
+
+        // Shopify shows nothing throughout — the failed attempt below never actually writes.
+        when(shopifyGateway.fetchAvailableQuantities(eq(SHOP_DOMAIN), eq("test-token"), eq(TRACED_GID), anyList()))
+            .thenReturn(List.of());
+
+        // First apply(): Shopify rejects the write.
+        doThrow(new ShopifyException("simulated rejection"))
+            .when(shopifyGateway).adjustInventoryQuantities(any(), any(), any(), any(), anyInt(), any());
+
+        TenantContext.set(tenantId);
+        try {
+            var first = reconcileService.apply(actorUserId);
+            assertThat(first.seeded()).isZero();
+            assertThat(first.failed()).isEqualTo(1);
+        } finally {
+            TenantContext.clear();
+        }
+
+        String statusAfterFirst = jdbc.queryForObject(
+            "SELECT status FROM shopify_inventory_adjustments " +
+            "WHERE tenant_id = ? AND trigger_type = 'initial_seed' AND variant_id = ?",
+            String.class, tenantId, variantId);
+        assertThat(statusAfterFirst).as("pc6: first attempt recorded as failed").isEqualTo("failed");
+
+        // Second apply() ("reconnect"): Shopify still shows 0 for this variant (nothing was
+        // actually written) -> buildReport() recomputes ACTION_SEED again. This time the
+        // write succeeds.
+        reset(shopifyGateway);
+        when(shopifyGateway.resolveInventoryItemId(eq(SHOP_DOMAIN), eq("test-token"), eq("gid://shopify/ProductVariant/pc6")))
+            .thenReturn("gid://shopify/InventoryItem/pc6");
+        when(shopifyGateway.fetchAvailableQuantities(eq(SHOP_DOMAIN), eq("test-token"), eq(TRACED_GID), anyList()))
+            .thenReturn(List.of());
+        // adjustInventoryQuantities left unstubbed on the reset mock -> succeeds (no-op) by default.
+
+        TenantContext.set(tenantId);
+        try {
+            var second = reconcileService.apply(actorUserId);
+            assertThat(second.seeded()).as("pc6: retry succeeds").isEqualTo(1);
+            assertThat(second.failed()).isZero();
+        } finally {
+            TenantContext.clear();
+        }
+
+        verify(shopifyGateway, times(1)).adjustInventoryQuantities(
+            eq(SHOP_DOMAIN), eq("test-token"), eq("gid://shopify/InventoryItem/pc6"), eq(TRACED_GID), eq(5), anyString());
+
+        String statusAfterRetry = jdbc.queryForObject(
+            "SELECT status FROM shopify_inventory_adjustments " +
+            "WHERE tenant_id = ? AND trigger_type = 'initial_seed' AND variant_id = ?",
+            String.class, tenantId, variantId);
+        assertThat(statusAfterRetry).as("pc6: retry moves the SAME row from failed to applied").isEqualTo("applied");
+
+        Long count = jdbc.queryForObject(
+            "SELECT COUNT(*) FROM shopify_inventory_adjustments " +
+            "WHERE tenant_id = ? AND trigger_type = 'initial_seed' AND variant_id = ?",
+            Long.class, tenantId, variantId);
+        assertThat(count).as("pc6: the retry updates the same row, never inserts a second one").isEqualTo(1L);
     }
 }
