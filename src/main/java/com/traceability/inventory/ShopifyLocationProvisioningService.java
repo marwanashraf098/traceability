@@ -10,7 +10,6 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
-import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -28,9 +27,11 @@ import java.util.UUID;
  *     TenantContext after the DEFINER call returns, same pattern already used in
  *     ShopifyOAuthService.provisionNewTenant() for the refresh-token fields.
  *
- * Idempotent and re-runnable: guarded on is_fulfillment existing at all, then on
- * shopify_location_id IS NULL — reconnect/retry never creates a duplicate internal row
- * or a duplicate Shopify location.
+ * Idempotent and re-runnable: guarded on is_fulfillment existing at all, then on a
+ * claim-before-call conditional UPDATE (not a SELECT-then-act check) — see
+ * linkShopifyLocationIfNeeded() — so two overlapping calls (e.g. two concurrent
+ * reconnects) can't both create a Shopify location. V61 additionally enforces one
+ * is_fulfillment=true location per tenant at the DB level.
  */
 @Service
 public class ShopifyLocationProvisioningService {
@@ -117,15 +118,28 @@ public class ShopifyLocationProvisioningService {
 
     // ---- step 2: link to a real Shopify location ---------------------------
 
+    /**
+     * Claim-before-call, not check-before-call: a prior SELECT-then-create()-then-UPDATE has
+     * a race window where two concurrent callers (e.g. two overlapping ShopifyImportJob runs
+     * on reconnect) can both pass the SELECT before either writes anything, and both would
+     * then call Shopify's locationAdd — two "Traced Main Warehouse" locations. The conditional
+     * UPDATE below is the actual guard: only one caller can flip the row from
+     * unsynced/error to pending; the loser sees 0 affected rows and returns without ever
+     * calling Shopify. V61's UNIQUE(tenant_id) WHERE is_fulfillment=true is a separate,
+     * complementary invariant (at most one such row can ever exist per tenant at all) — it
+     * doesn't by itself serialize the create() call, which is what this claim does.
+     */
     private void linkShopifyLocationIfNeeded(UUID tenantId, UUID storeId, String shopDomain, UUID locationId) {
-        Map<String, Object> row = tx.execute(s -> jdbc.query(
-            "SELECT shopify_location_id FROM locations WHERE id = ? AND tenant_id = ?",
-            rs -> rs.next() ? Map.of("shopify_location_id",
-                    rs.getString(1) != null ? rs.getString(1) : "") : null,
+        Integer claimed = tx.execute(s -> jdbc.update(
+            "UPDATE locations SET shopify_sync_status = 'pending' " +
+            "WHERE id = ? AND tenant_id = ? AND shopify_location_id IS NULL " +
+            "  AND shopify_sync_status IN ('unsynced', 'error')",
             locationId, tenantId));
 
-        if (row != null && !((String) row.get("shopify_location_id")).isBlank()) {
-            return; // already linked — idempotent no-op
+        if (claimed == null || claimed == 0) {
+            // Already linked, already pending (another caller has it in flight right now),
+            // or not found — either way, never call Shopify.
+            return;
         }
 
         try {

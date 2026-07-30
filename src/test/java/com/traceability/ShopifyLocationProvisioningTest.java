@@ -23,6 +23,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.*;
@@ -298,5 +300,63 @@ class ShopifyLocationProvisioningTest {
             TenantContext.clear();
         }
         verify(shopifyLocations, never()).deactivate(any(), any(), any());
+    }
+
+    // ── lp7: GENUINE concurrency — two overlapping ensureTracedWarehouse calls ──
+    //
+    // Deterministic, not timing-dependent: the winner is deliberately blocked inside
+    // linkShopifyLocationIfNeeded (via a blocking tokenProvider stub) AFTER its claim UPDATE
+    // has already committed the row to shopify_sync_status='pending' — verified by reading
+    // it back — and BEFORE it ever calls Shopify. A second, concurrent ensureTracedWarehouse
+    // call for the SAME tenant at that exact moment must hit the claim conflict (status not
+    // in unsynced/error) and return without ever calling Shopify.
+
+    @Test
+    void lp7_concurrentEnsureTracedWarehouse_shopifyCreateCalledExactlyOnce() throws Exception {
+        CountDownLatch winnerInsideLink = new CountDownLatch(1);
+        CountDownLatch releaseWinner = new CountDownLatch(1);
+
+        when(tokenProvider.getValidToken(storeId)).thenAnswer(invocation -> {
+            winnerInsideLink.countDown();
+            releaseWinner.await(5, TimeUnit.SECONDS);
+            return "test-token";
+        });
+        when(shopifyLocations.findByName(eq(SHOP_DOMAIN), eq("test-token"), anyString()))
+            .thenReturn(Optional.empty());
+        when(shopifyLocations.create(eq(SHOP_DOMAIN), eq("test-token"), any()))
+            .thenReturn(new ShopifyLocationGateway.LocationResult("gid://shopify/Location/lp7", "Traced Main Warehouse"));
+
+        Thread winner = new Thread(() ->
+            provisioningService.ensureTracedWarehouse(tenantId, storeId, SHOP_DOMAIN));
+        winner.start();
+
+        assertThat(winnerInsideLink.await(5, TimeUnit.SECONDS))
+            .as("lp7: winner must reach the token call before the duplicate fires")
+            .isTrue();
+
+        String statusWhilePending = jdbc.queryForObject(
+            "SELECT shopify_sync_status FROM locations WHERE tenant_id = ? AND is_fulfillment = true",
+            String.class, tenantId);
+        assertThat(statusWhilePending)
+            .as("lp7: claim already committed as pending BEFORE Shopify is ever called")
+            .isEqualTo("pending");
+
+        // Concurrent duplicate call for the SAME tenant, fired while the winner is pending.
+        provisioningService.ensureTracedWarehouse(tenantId, storeId, SHOP_DOMAIN);
+
+        releaseWinner.countDown();
+        winner.join(10_000);
+
+        verify(shopifyLocations, times(1)).create(any(), any(), any());
+        verify(shopifyLocations, times(1)).findByName(any(), any(), any());
+
+        Long count = jdbc.queryForObject(
+            "SELECT COUNT(*) FROM locations WHERE tenant_id = ? AND is_fulfillment = true",
+            Long.class, tenantId);
+        assertThat(count).as("lp7: still exactly one fulfillment location").isEqualTo(1L);
+        String finalStatus = jdbc.queryForObject(
+            "SELECT shopify_sync_status FROM locations WHERE tenant_id = ? AND is_fulfillment = true",
+            String.class, tenantId);
+        assertThat(finalStatus).isEqualTo("linked");
     }
 }

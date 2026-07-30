@@ -203,7 +203,6 @@ class RlsCoverageTest {
         storeId    = UUID.randomUUID();
         productId  = UUID.randomUUID();
         variantId  = UUID.randomUUID();
-        locationId = UUID.randomUUID();
         jdbc.update("INSERT INTO stores (id, tenant_id, platform, shop_domain, status) " +
                     "VALUES (?, ?, 'shopify', 'cov-test.myshopify.com', 'disconnected')",
                     storeId, tenantId);
@@ -213,9 +212,12 @@ class RlsCoverageTest {
         jdbc.update("INSERT INTO variants (id, tenant_id, product_id, external_id, title, sku) " +
                     "VALUES (?, ?, ?, 'V-CVG', 'Default', 'CVG-001')",
                     variantId, tenantId, productId);
-        jdbc.update("INSERT INTO locations (id, tenant_id, name, type, is_default, is_fulfillment) " +
-                    "VALUES (?, ?, 'CVG Warehouse', 'warehouse', false, true)",
-                    locationId, tenantId);
+        // Reuse the fulfillment location signup already seeded (AuthRepository.
+        // createTenantWithOwner sets is_fulfillment=true on it) rather than inserting a
+        // second one — V61 enforces exactly one is_fulfillment=true location per tenant.
+        locationId = jdbc.queryForObject(
+                "SELECT id FROM locations WHERE tenant_id = ? AND is_fulfillment = true LIMIT 1",
+                UUID.class, tenantId);
     }
 
     @BeforeEach
@@ -458,13 +460,12 @@ class RlsCoverageTest {
 
     @Test
     void shopifyInventoryReconcile_returnsComputedReportForSeededVariant() {
-        UUID tracedLoc = UUID.randomUUID();
+        // Reuse the shared is_fulfillment=true fixture location (V61: one per tenant) —
+        // link it to Shopify for the duration of this test, then unlink it again.
         jdbc.update(
-            "INSERT INTO locations (id, tenant_id, name, type, is_default, is_fulfillment, " +
-            "    shopify_location_id, shopify_sync_status) " +
-            "VALUES (?, ?, 'CVG Traced WH', 'warehouse', false, true, " +
-            "    'gid://shopify/Location/cvg-traced', 'linked')",
-            tracedLoc, tenantId);
+            "UPDATE locations SET shopify_location_id = 'gid://shopify/Location/cvg-traced', " +
+            "    shopify_sync_status = 'linked' WHERE id = ?",
+            locationId);
 
         when(tokenProvider.getValidToken(any())).thenReturn("test-token");
         when(shopifyGateway.resolveInventoryItemId(any(), any(), any()))
@@ -472,15 +473,20 @@ class RlsCoverageTest {
         when(shopifyGateway.fetchAvailableQuantities(any(), any(), any(), any()))
             .thenReturn(List.of());
 
-        ResponseEntity<Map> resp = get("/api/v1/shopify/inventory/reconcile", Map.class);
-        assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.OK);
+        try {
+            ResponseEntity<Map> resp = get("/api/v1/shopify/inventory/reconcile", Map.class);
+            assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.OK);
 
-        @SuppressWarnings("unchecked")
-        List<Map<String, Object>> rows = (List<Map<String, Object>>) resp.getBody().get("rows");
-        assertThat(rows).isNotEmpty();
-        assertThat(rows).anyMatch(r -> variantId.toString().equals(r.get("variantId")));
-
-        jdbc.update("DELETE FROM locations WHERE id = ?", tracedLoc);
+            @SuppressWarnings("unchecked")
+            List<Map<String, Object>> rows = (List<Map<String, Object>>) resp.getBody().get("rows");
+            assertThat(rows).isNotEmpty();
+            assertThat(rows).anyMatch(r -> variantId.toString().equals(r.get("variantId")));
+        } finally {
+            jdbc.update(
+                "UPDATE locations SET shopify_location_id = NULL, shopify_sync_status = 'unsynced' " +
+                "WHERE id = ?",
+                locationId);
+        }
     }
 
     @Test
