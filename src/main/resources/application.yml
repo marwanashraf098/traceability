@@ -61,7 +61,12 @@ shopify:
   # Public OAuth app credentials (set via env in production).
   client-id: ${SHOPIFY_CLIENT_ID:dev-client-id}
   client-secret: ${SHOPIFY_CLIENT_SECRET:dev-client-secret-development-ok!!}
-  scopes: read_products,read_orders,read_fulfillments,read_customers
+  # ShopifyOAuthService.buildConsentUrl() sends this verbatim as the &scope= param — this is
+  # the list Shopify actually requests/grants (use_legacy_install_flow=true in shopify.app.toml
+  # means the toml's [access_scopes] does not itself drive the consent screen; keep both lists
+  # in sync manually). write_X implies read_X (see ShopifyGateway.isScopeGranted) so the
+  # corresponding read_inventory/read_locations aren't listed separately.
+  scopes: ${SHOPIFY_SCOPES:read_products,read_orders,read_fulfillments,read_customers,write_inventory,write_locations}
   redirect-uri: ${SHOPIFY_REDIRECT_URI:http://localhost:8080/auth/shopify/callback}
   app-url: ${SHOPIFY_APP_URL:http://localhost:5173}
   # Base URL for webhook callback registration (must be the backend server URL, not the SPA).
