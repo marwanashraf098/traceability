@@ -176,61 +176,94 @@ public class ShopifyInventoryReconcileService {
 
     // ---- guarded write ---------------------------------------------------
 
+    /**
+     * Serialized per tenant via pg_advisory_xact_lock, held for the ENTIRE operation
+     * (recompute + every per-variant Shopify write) — deliberately different from Part D's
+     * triggers, which release their DB transaction before the Shopify HTTP call. apply() is
+     * a manual, one-shot, one-tenant-at-a-time operator action (never a hot path), so tying
+     * up one connection for its duration is the right trade to make two operators calling
+     * apply() for the same tenant at the same moment impossible rather than merely unlikely.
+     * A second concurrent apply() blocks on the lock until the first's transaction commits,
+     * then recomputes and sees the now-non-zero Shopify values via the existing
+     * ACTION_SKIP_NONZERO guard — never a double-add.
+     *
+     * Trade-off, stated explicitly: wrapping the whole batch in one transaction means an
+     * unexpected exception escaping the per-variant try/catch below (not an ordinary Shopify
+     * failure — those are caught and recorded per-variant without aborting) rolls back the
+     * WHOLE transaction, including audit rows for variants that already succeeded earlier in
+     * the same batch. This does NOT create a double-add risk: a subsequent apply() re-reads
+     * Shopify's actual live state, which is unaffected by our rolled-back local transaction,
+     * and correctly skips those variants via ACTION_SKIP_NONZERO. It only means the local
+     * audit trail could be incomplete for that one crashed run — a smaller, more localized
+     * concession than the double-add bug this whole fix removes.
+     */
     public ApplyResult apply(UUID actorUserId) {
         UUID tenantId = TenantContext.require();
-        Context ctx = resolveContext(tenantId);
-        // Recompute live — never trust a stale client-held report for a write decision.
-        ReconcileReport report = buildReport(tenantId, ctx);
+        return tx.execute(outerStatus -> {
+            acquireTenantLock(tenantId);
 
-        int seeded = 0, skippedNonZero = 0, noop = 0, failed = 0;
-        List<Map<String, String>> failures = new ArrayList<>();
+            Context ctx = resolveContext(tenantId);
+            // Recompute live — never trust a stale client-held report for a write decision.
+            ReconcileReport report = buildReport(tenantId, ctx);
 
-        for (VariantReconcileRow row : report.rows()) {
-            switch (row.action()) {
-                case ACTION_SKIP_NONZERO -> skippedNonZero++;
-                case ACTION_NOOP -> noop++;
-                case ACTION_SEED -> {
-                    try {
-                        // action=seed implies shopifyAvailable==0, so this call is always a
-                        // strictly-positive delta from 0 — never a decrement.
-                        String variantGid = tx.execute(s -> jdbc.query(
-                            "SELECT external_id FROM variants WHERE id = ? AND tenant_id = ?",
-                            rs -> rs.next() ? rs.getString(1) : null,
-                            row.variantId(), tenantId));
-                        String itemGid = shopify.resolveInventoryItemId(ctx.shopDomain(), ctx.token(), variantGid);
-                        shopify.adjustInventoryQuantities(ctx.shopDomain(), ctx.token(), itemGid,
-                            ctx.tracedGid(), (int) row.tracedOnHand(), "correction");
-                        recordAudit(tenantId, row.variantId(), ctx.tracedLocationId(), row.tracedOnHand(),
-                            "applied", null);
-                        seeded++;
-                    } catch (Exception e) {
-                        String msg = e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName();
-                        recordAudit(tenantId, row.variantId(), ctx.tracedLocationId(), row.tracedOnHand(),
-                            "failed", msg);
-                        Map<String, String> failure = new LinkedHashMap<>();
-                        failure.put("variantId", row.variantId().toString());
-                        failure.put("error", msg);
-                        failures.add(failure);
-                        failed++;
-                        log.warn("Initial seed failed: tenant={} variant={} error={}", tenantId, row.variantId(), msg);
+            int seeded = 0, skippedNonZero = 0, noop = 0, failed = 0;
+            List<Map<String, String>> failures = new ArrayList<>();
+
+            for (VariantReconcileRow row : report.rows()) {
+                switch (row.action()) {
+                    case ACTION_SKIP_NONZERO -> skippedNonZero++;
+                    case ACTION_NOOP -> noop++;
+                    case ACTION_SEED -> {
+                        try {
+                            // action=seed implies shopifyAvailable==0, so this call is always a
+                            // strictly-positive delta from 0 — never a decrement.
+                            String variantGid = jdbc.query(
+                                "SELECT external_id FROM variants WHERE id = ? AND tenant_id = ?",
+                                rs -> rs.next() ? rs.getString(1) : null,
+                                row.variantId(), tenantId);
+                            String itemGid = shopify.resolveInventoryItemId(ctx.shopDomain(), ctx.token(), variantGid);
+                            shopify.adjustInventoryQuantities(ctx.shopDomain(), ctx.token(), itemGid,
+                                ctx.tracedGid(), (int) row.tracedOnHand(), "correction");
+                            recordAudit(tenantId, row.variantId(), ctx.tracedLocationId(), row.tracedOnHand(),
+                                "applied", null);
+                            seeded++;
+                        } catch (Exception e) {
+                            String msg = e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName();
+                            recordAudit(tenantId, row.variantId(), ctx.tracedLocationId(), row.tracedOnHand(),
+                                "failed", msg);
+                            Map<String, String> failure = new LinkedHashMap<>();
+                            failure.put("variantId", row.variantId().toString());
+                            failure.put("error", msg);
+                            failures.add(failure);
+                            failed++;
+                            log.warn("Initial seed failed: tenant={} variant={} error={}", tenantId, row.variantId(), msg);
+                        }
                     }
+                    default -> throw new IllegalStateException("Unknown reconcile action: " + row.action());
                 }
-                default -> throw new IllegalStateException("Unknown reconcile action: " + row.action());
             }
-        }
 
-        log.info("Initial seed applied: tenant={} seeded={} skippedNonZero={} noop={} failed={}",
-            tenantId, seeded, skippedNonZero, noop, failed);
+            log.info("Initial seed applied: tenant={} seeded={} skippedNonZero={} noop={} failed={}",
+                tenantId, seeded, skippedNonZero, noop, failed);
 
-        final int finalSeeded = seeded, finalSkipped = skippedNonZero, finalNoop = noop, finalFailed = failed;
-        tx.execute(s -> {
             auditService.record(actorUserId, "shopify_inventory_initial_seed", "location",
                 ctx.tracedLocationId().toString(),
-                Map.of("seeded", finalSeeded, "skippedNonZero", finalSkipped, "noop", finalNoop, "failed", finalFailed));
+                Map.of("seeded", seeded, "skippedNonZero", skippedNonZero, "noop", noop, "failed", failed));
+
+            return new ApplyResult(seeded, skippedNonZero, noop, failed, failures);
+        });
+    }
+
+    /** pg_advisory_xact_lock is transaction-scoped — automatically released when the
+     *  surrounding tx.execute(...) transaction commits or rolls back, no explicit unlock. */
+    private void acquireTenantLock(UUID tenantId) {
+        jdbc.execute((org.springframework.jdbc.core.ConnectionCallback<Void>) con -> {
+            try (var ps = con.prepareStatement("SELECT pg_advisory_xact_lock(hashtext(?)::bigint)")) {
+                ps.setString(1, tenantId.toString());
+                ps.execute();
+            }
             return null;
         });
-
-        return new ApplyResult(seeded, skippedNonZero, noop, failed, failures);
     }
 
     private void recordAudit(UUID tenantId, UUID variantId, UUID locationId, long delta,

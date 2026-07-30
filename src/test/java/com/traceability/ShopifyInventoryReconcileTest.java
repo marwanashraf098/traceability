@@ -18,6 +18,9 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.*;
@@ -239,6 +242,86 @@ class ShopifyInventoryReconcileTest {
         } finally {
             TenantContext.clear();
         }
+
+        verify(shopifyGateway, times(1)).adjustInventoryQuantities(any(), any(), any(), any(), anyInt(), any());
+    }
+
+    // ── pc5: GENUINE concurrency — two overlapping apply() calls for one tenant ──
+    //
+    // Deterministic, not timing-dependent: the winner is deliberately blocked INSIDE its
+    // adjustInventoryQuantities call (still holding the per-tenant pg_advisory_xact_lock,
+    // transaction not yet committed) while a second, concurrent apply() call is fired. That
+    // second call must BLOCK on the advisory lock (proven by it still being alive after a
+    // short wait) until the winner's transaction commits, then recompute live — seeing
+    // Shopify's now-non-zero value via the second stubbed fetchAvailableQuantities answer —
+    // and no-op rather than double-add.
+
+    @Test
+    void pc5_concurrentApply_secondCallBlocksThenNoOps() throws Exception {
+        seedVariantWithOnHand("gid://shopify/ProductVariant/pc5", "gid://shopify/InventoryItem/pc5", 4);
+
+        CountDownLatch winnerInsideAdjust = new CountDownLatch(1);
+        CountDownLatch releaseWinner = new CountDownLatch(1);
+
+        // First invocation (winner, inside the lock): Shopify shows nothing yet.
+        // Second invocation (loser, only reachable after the winner commits and releases
+        // the lock): Shopify now reflects the winner's write.
+        when(shopifyGateway.fetchAvailableQuantities(eq(SHOP_DOMAIN), eq("test-token"), eq(TRACED_GID), anyList()))
+            .thenReturn(List.of())
+            .thenReturn(List.of(new ShopifyGateway.InventoryLevel("gid://shopify/InventoryItem/pc5", 4)));
+
+        doAnswer(invocation -> {
+            winnerInsideAdjust.countDown();
+            releaseWinner.await(5, TimeUnit.SECONDS);
+            return null;
+        }).when(shopifyGateway).adjustInventoryQuantities(any(), any(), any(), any(), anyInt(), any());
+
+        AtomicReference<ShopifyInventoryReconcileService.ApplyResult> winnerResult = new AtomicReference<>();
+        Thread winner = new Thread(() -> {
+            TenantContext.set(tenantId);
+            try {
+                winnerResult.set(reconcileService.apply(actorUserId));
+            } finally {
+                TenantContext.clear();
+            }
+        });
+        winner.start();
+
+        assertThat(winnerInsideAdjust.await(5, TimeUnit.SECONDS))
+            .as("pc5: winner must reach the Shopify call (still holding the tenant lock) " +
+                "before the concurrent apply() fires")
+            .isTrue();
+
+        AtomicReference<ShopifyInventoryReconcileService.ApplyResult> loserResult = new AtomicReference<>();
+        Thread loser = new Thread(() -> {
+            TenantContext.set(tenantId);
+            try {
+                loserResult.set(reconcileService.apply(actorUserId));
+            } finally {
+                TenantContext.clear();
+            }
+        });
+        loser.start();
+
+        // The loser must be blocked on pg_advisory_xact_lock — the winner hasn't committed
+        // (hasn't even returned from the mocked Shopify call yet).
+        Thread.sleep(300);
+        assertThat(loser.isAlive())
+            .as("pc5: concurrent apply() must block on the tenant advisory lock, not race ahead")
+            .isTrue();
+
+        releaseWinner.countDown();
+        winner.join(10_000);
+        loser.join(10_000);
+
+        assertThat(winnerResult.get().seeded()).as("pc5: winner seeds").isEqualTo(1);
+        assertThat(loserResult.get())
+            .as("pc5: loser must have run (not still blocked) after the winner released the lock")
+            .isNotNull();
+        assertThat(loserResult.get().seeded())
+            .as("pc5: loser sees Shopify's now-non-zero value live — never a double-add")
+            .isZero();
+        assertThat(loserResult.get().skippedNonZero()).isEqualTo(1);
 
         verify(shopifyGateway, times(1)).adjustInventoryQuantities(any(), any(), any(), any(), anyInt(), any());
     }
