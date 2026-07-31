@@ -540,10 +540,22 @@ class ShopifyHttpGateway implements ShopifyGateway {
             throw new IllegalArgumentException(
                 "adjustInventoryQuantities requires a positive delta (FR-17 v2 increment-only); got " + positiveDelta);
         }
-        ObjectNode change = mapper.createObjectNode()
-            .put("delta", positiveDelta)
-            .put("inventoryItemId", inventoryItemGid)
-            .put("locationId", locationGid);
+
+        // changeFromQuantity (Shopify API 2026-01+, InventoryChangeInput): the field is
+        // nullable in the schema, but Shopify's resolver requires the argument KEY to be
+        // present regardless of value — omitting it entirely fails with "InventoryChangeInput
+        // must include the following argument: changeFromQuantity" (confirmed against
+        // production 2026-07-31; the earlier spec's assumption that this argument had been
+        // REMOVED in 2026-04 was backwards — it was ADDED in 2026-01 and is mandatory to at
+        // least acknowledge). We read the CURRENT "available" quantity right before the write
+        // and pass it as the compare-and-swap baseline — Shopify's own guidance is "avoid
+        // opting out unless justified" — so a merchant editing stock in the admin UI between
+        // our read and this write causes a clean CHANGE_FROM_QUANTITY_STALE userError (handled
+        // by the existing generic error path below, recorded 'failed', retried next reconnect)
+        // instead of silently layering our delta on a number we never actually observed.
+        Integer changeFromQuantity = currentAvailableQuantityOrNull(shopDomain, token, locationGid, inventoryItemGid);
+
+        ObjectNode change = buildInventoryChange(inventoryItemGid, locationGid, positiveDelta, changeFromQuantity);
         ObjectNode input = mapper.createObjectNode()
             .put("reason", reason)
             .put("name", "available");
@@ -556,6 +568,40 @@ class ShopifyHttpGateway implements ShopifyGateway {
             String msg = userErrors.get(0).path("message").asText("unknown error");
             throw new ShopifyException("inventoryAdjustQuantities failed: " + msg);
         }
+    }
+
+    /** Pure, network-free: builds one InventoryChangeInput entry. Package-private so
+     *  ShopifyHttpGatewayInventoryTest can assert the exact JSON shape sent to Shopify without
+     *  needing to fake an HTTP round trip for this part of the payload. */
+    ObjectNode buildInventoryChange(String inventoryItemGid, String locationGid,
+                                     int positiveDelta, Integer changeFromQuantity) {
+        ObjectNode change = mapper.createObjectNode()
+            .put("delta", positiveDelta)
+            .put("inventoryItemId", inventoryItemGid)
+            .put("locationId", locationGid);
+        if (changeFromQuantity != null) {
+            change.put("changeFromQuantity", changeFromQuantity);
+        } else {
+            change.putNull("changeFromQuantity");
+        }
+        return change;
+    }
+
+    /** Reads the current "available" quantity for one inventory item at one location,
+     *  immediately before a compare-and-swap write. Returns null if no matching level is
+     *  found (e.g. never activated there) — the caller then explicitly opts out of the
+     *  compare-and-swap check for that one call (Shopify's documented null-opt-out) rather
+     *  than guessing a baseline. */
+    private Integer currentAvailableQuantityOrNull(String shopDomain, String token,
+                                                     String locationGid, String inventoryItemGid) {
+        List<InventoryLevel> levels = fetchAvailableQuantities(shopDomain, token, locationGid,
+            List.of(inventoryItemGid));
+        for (InventoryLevel level : levels) {
+            if (inventoryItemGid.equals(level.inventoryItemGid())) {
+                return level.available();
+            }
+        }
+        return null;
     }
 
     private static final String INVENTORY_MOVE_QUANTITIES_MUTATION = """
@@ -574,8 +620,26 @@ class ShopifyHttpGateway implements ShopifyGateway {
             throw new IllegalArgumentException(
                 "moveAvailableToDamaged requires a positive quantity; got " + quantity);
         }
+
+        // Same changeFromQuantity argument-presence requirement as adjustInventoryQuantities
+        // (see its comment) — InventoryMoveQuantityChange's "from"/"to" sub-objects each carry
+        // their own optional changeFromQuantity. Proactive fix: not yet confirmed via a
+        // production error for THIS mutation specifically, but Shopify's own changelog groups
+        // inventoryAdjustQuantities and inventoryMoveQuantities under the same compare-and-swap
+        // feature, so the same argument-presence requirement is expected here too. "from"
+        // (available) gets the real current baseline, read fresh; "to" (damaged) has no
+        // meaningful baseline to assert, so it explicitly opts out with null.
+        Integer fromBaseline = currentAvailableQuantityOrNull(shopDomain, token, locationGid, inventoryItemGid);
+
         ObjectNode from = mapper.createObjectNode().put("name", "available").put("locationId", locationGid);
-        ObjectNode to   = mapper.createObjectNode().put("name", "damaged").put("locationId", locationGid);
+        if (fromBaseline != null) {
+            from.put("changeFromQuantity", fromBaseline);
+        } else {
+            from.putNull("changeFromQuantity");
+        }
+        ObjectNode to = mapper.createObjectNode().put("name", "damaged").put("locationId", locationGid);
+        to.putNull("changeFromQuantity");
+
         ObjectNode change = mapper.createObjectNode()
             .put("inventoryItemId", inventoryItemGid)
             .put("quantity", quantity);
