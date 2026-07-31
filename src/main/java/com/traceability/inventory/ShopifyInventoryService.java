@@ -14,6 +14,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
+import java.time.Instant;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
@@ -189,7 +190,8 @@ public class ShopifyInventoryService {
         String shopDomain, String token, String shopifyInventoryItemId,
         String shopifyLocationId, String error) {}
 
-    private Preconditions resolvePreconditions(UUID tenantId, UUID variantId, UUID locationId) {
+    private Preconditions resolvePreconditions(UUID tenantId, UUID variantId, UUID locationId,
+                                                String triggerType, String triggerId) {
         String locationError = null;
         String shopifyLocationId = null;
 
@@ -244,6 +246,30 @@ public class ShopifyInventoryService {
                 if (store == null) {
                     variantError = "No store found for tenant";
                 } else if (!ShopifyGateway.isScopeGranted("read_products", store.grantedScopes())) {
+                    // TEMPORARY DIAGNOSTIC (2026-07-31) — tracing a live bug where the DB
+                    // confirms correct scopes for tenant ab9af168 but this check still fails.
+                    // Logs the ThreadLocal tenant alongside the tenantId parameter used for the
+                    // query above (a divergence here would mean the wrong tenant is active on
+                    // this thread despite the caller believing it's ab9af168), the exact store
+                    // row read (id/shop_domain/raw scopes string, not just the parsed boolean),
+                    // and the claim row's created_at to distinguish a fresh trigger from a
+                    // retry of an older, possibly pre-reconnect claim. Remove once root-caused.
+                    UUID threadLocalTenantId = TenantContext.get();
+                    Instant claimRowCreatedAt = tx.execute(status ->
+                        jdbc.query(
+                            "SELECT created_at FROM shopify_inventory_adjustments " +
+                            "WHERE tenant_id = ? AND trigger_type = ? AND trigger_id = ? " +
+                            "  AND variant_id = ? AND location_id = ?",
+                            rs -> rs.next() ? rs.getObject(1, java.time.OffsetDateTime.class).toInstant() : null,
+                            tenantId, triggerType, triggerId, variantId, locationId));
+                    log.warn("SCOPE-CHECK-DIAG read_products denied: paramTenantId={} " +
+                             "threadLocalTenantId={} (MATCH={}) resolvedStore[id={}, shopDomain={}, " +
+                             "rawAccessTokenScopes='{}'] claimRow[triggerType={}, triggerId={}, " +
+                             "createdAt={}] now={}",
+                        tenantId, threadLocalTenantId, tenantId.equals(threadLocalTenantId),
+                        store.id(), store.shopDomain(), store.grantedScopes(),
+                        triggerType, triggerId, claimRowCreatedAt, Instant.now());
+
                     variantError = "Token lacks read_products scope (granted: "
                         + (store.grantedScopes() != null ? store.grantedScopes() : "none")
                         + ") — store must reconnect to grant the current scope list";
@@ -296,7 +322,7 @@ public class ShopifyInventoryService {
             return;
         }
 
-        Preconditions p = resolvePreconditions(tenantId, variantId, locationId);
+        Preconditions p = resolvePreconditions(tenantId, variantId, locationId, triggerType, triggerId);
 
         if (p.error() != null) {
             markResult(tenantId, triggerType, triggerId, variantId, locationId,
@@ -337,7 +363,7 @@ public class ShopifyInventoryService {
             return;
         }
 
-        Preconditions p = resolvePreconditions(tenantId, variantId, locationId);
+        Preconditions p = resolvePreconditions(tenantId, variantId, locationId, "damage_move", pieceId);
 
         if (p.error() != null) {
             markResult(tenantId, "damage_move", pieceId, variantId, locationId,
