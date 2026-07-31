@@ -45,7 +45,10 @@ public interface ShopifyLocationGateway {
      * omitted — junk locations pushed before the fulfillment gate never had inventory
      * activated on them).
      *
+     * @param idempotencyKey the mutation-level @idempotent key (mandatory as of API 2026-04) —
+     *                       see {@link ShopifyGateway#idempotencyKey}. Must be STABLE across
+     *                       retries of the same logical operation.
      * @throws ShopifyException on Shopify userErrors
      */
-    void deactivate(String shopDomain, String token, String shopifyLocationGid);
+    void deactivate(String shopDomain, String token, String shopifyLocationGid, String idempotencyKey);
 }

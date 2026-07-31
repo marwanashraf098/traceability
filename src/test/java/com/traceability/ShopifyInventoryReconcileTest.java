@@ -161,8 +161,8 @@ class ShopifyInventoryReconcileTest {
             TenantContext.clear();
         }
 
-        verify(shopifyGateway, never()).adjustInventoryQuantities(any(), any(), any(), any(), anyInt(), any());
-        verify(shopifyGateway, never()).moveAvailableToDamaged(any(), any(), any(), any(), anyInt(), any());
+        verify(shopifyGateway, never()).adjustInventoryQuantities(any(), any(), any(), any(), anyInt(), any(), any());
+        verify(shopifyGateway, never()).moveAvailableToDamaged(any(), any(), any(), any(), anyInt(), any(), any());
         Long auditRows = jdbc.queryForObject(
             "SELECT COUNT(*) FROM shopify_inventory_adjustments WHERE tenant_id = ?", Long.class, tenantId);
         assertThat(auditRows).as("pc1: first pass writes nothing at all").isZero();
@@ -186,9 +186,9 @@ class ShopifyInventoryReconcileTest {
         }
 
         verify(shopifyGateway).adjustInventoryQuantities(
-            eq(SHOP_DOMAIN), eq("test-token"), eq("gid://shopify/InventoryItem/pc2"), eq(TRACED_GID), eq(5), anyString());
+            eq(SHOP_DOMAIN), eq("test-token"), eq("gid://shopify/InventoryItem/pc2"), eq(TRACED_GID), eq(5), anyString(), any());
         verify(shopifyGateway, never()).adjustInventoryQuantities(any(), any(), any(),
-            argThat(loc -> !TRACED_GID.equals(loc)), anyInt(), any());
+            argThat(loc -> !TRACED_GID.equals(loc)), anyInt(), any(), any());
 
         String status = jdbc.queryForObject(
             "SELECT status FROM shopify_inventory_adjustments " +
@@ -220,7 +220,7 @@ class ShopifyInventoryReconcileTest {
             TenantContext.clear();
         }
 
-        verify(shopifyGateway, never()).adjustInventoryQuantities(any(), any(), any(), any(), anyInt(), any());
+        verify(shopifyGateway, never()).adjustInventoryQuantities(any(), any(), any(), any(), anyInt(), any(), any());
     }
 
     // ── pc4: idempotency — re-run after successful seed is a no-op ──────────
@@ -248,7 +248,7 @@ class ShopifyInventoryReconcileTest {
             TenantContext.clear();
         }
 
-        verify(shopifyGateway, times(1)).adjustInventoryQuantities(any(), any(), any(), any(), anyInt(), any());
+        verify(shopifyGateway, times(1)).adjustInventoryQuantities(any(), any(), any(), any(), anyInt(), any(), any());
     }
 
     // ── pc5: GENUINE concurrency — two overlapping apply() calls for one tenant ──
@@ -279,7 +279,7 @@ class ShopifyInventoryReconcileTest {
             winnerInsideAdjust.countDown();
             releaseWinner.await(5, TimeUnit.SECONDS);
             return null;
-        }).when(shopifyGateway).adjustInventoryQuantities(any(), any(), any(), any(), anyInt(), any());
+        }).when(shopifyGateway).adjustInventoryQuantities(any(), any(), any(), any(), anyInt(), any(), any());
 
         AtomicReference<ShopifyInventoryReconcileService.ApplyResult> winnerResult = new AtomicReference<>();
         Thread winner = new Thread(() -> {
@@ -328,7 +328,7 @@ class ShopifyInventoryReconcileTest {
             .isZero();
         assertThat(loserResult.get().skippedNonZero()).isEqualTo(1);
 
-        verify(shopifyGateway, times(1)).adjustInventoryQuantities(any(), any(), any(), any(), anyInt(), any());
+        verify(shopifyGateway, times(1)).adjustInventoryQuantities(any(), any(), any(), any(), anyInt(), any(), any());
     }
 
     // ── pc6: a failed seed is retried on the next reconnect and the SAME audit ──
@@ -345,7 +345,7 @@ class ShopifyInventoryReconcileTest {
 
         // First apply(): Shopify rejects the write.
         doThrow(new ShopifyException("simulated rejection"))
-            .when(shopifyGateway).adjustInventoryQuantities(any(), any(), any(), any(), anyInt(), any());
+            .when(shopifyGateway).adjustInventoryQuantities(any(), any(), any(), any(), anyInt(), any(), any());
 
         TenantContext.set(tenantId);
         try {
@@ -382,7 +382,7 @@ class ShopifyInventoryReconcileTest {
         }
 
         verify(shopifyGateway, times(1)).adjustInventoryQuantities(
-            eq(SHOP_DOMAIN), eq("test-token"), eq("gid://shopify/InventoryItem/pc6"), eq(TRACED_GID), eq(5), anyString());
+            eq(SHOP_DOMAIN), eq("test-token"), eq("gid://shopify/InventoryItem/pc6"), eq(TRACED_GID), eq(5), anyString(), any());
 
         String statusAfterRetry = jdbc.queryForObject(
             "SELECT status FROM shopify_inventory_adjustments " +

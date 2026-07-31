@@ -768,7 +768,7 @@
   },
   "shopifyInventory": {
     "title": "Shopify Inventory Sync",
-    "subtitle": "Shadow mode — adjustments are queued but not yet sent to Shopify.",
+    "subtitle": "Live sync — inventory adjustments are sent to Shopify in real time.",
     "export": "Export CSV",
     "empty": "No adjustments recorded yet",
     "allStatuses": "All statuses",

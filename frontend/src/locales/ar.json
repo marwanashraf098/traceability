@@ -815,7 +815,7 @@
   },
   "shopifyInventory": {
     "title": "مزامنة مخزون Shopify",
-    "subtitle": "الوضع التجريبي — التسويات مسجّلة ولم تُرسل إلى Shopify بعد.",
+    "subtitle": "مزامنة مباشرة — تُرسل تسويات المخزون إلى Shopify فور حدوثها.",
     "export": "تصدير CSV",
     "empty": "لا توجد تسويات بعد",
     "allStatuses": "جميع الحالات",

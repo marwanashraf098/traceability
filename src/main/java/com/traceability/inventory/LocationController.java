@@ -246,7 +246,14 @@ public class LocationController {
         }
 
         String token = tokenProvider.getValidToken(store.id());
-        shopifyLocations.deactivate(store.shopDomain(), token, row.shopifyLocationId());
+        // No claim-row/trigger tuple exists for this manual one-shot cleanup path (unlike the
+        // three FR-17 v2 write triggers) — keyed by (tenantId, shopifyLocationGid) instead, which
+        // is a safe, permanent 1:1: a deactivated GID is never reused (a location needed again
+        // later would be a fresh locationAdd with a new GID), so this key never collides across
+        // two genuinely different logical deactivations.
+        String idempotencyKey = ShopifyGateway.idempotencyKey(
+            tenantId, "location_cleanup", row.shopifyLocationId(), id, row.shopifyLocationId());
+        shopifyLocations.deactivate(store.shopDomain(), token, row.shopifyLocationId(), idempotencyKey);
 
         tx.execute(status -> {
             jdbc.update(

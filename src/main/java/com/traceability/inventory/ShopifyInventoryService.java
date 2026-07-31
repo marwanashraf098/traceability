@@ -332,8 +332,10 @@ public class ShopifyInventoryService {
         String status;
         String error = null;
         try {
+            String idempotencyKey = ShopifyGateway.idempotencyKey(
+                tenantId, triggerType, triggerId, variantId, locationId);
             shopify.adjustInventoryQuantities(p.shopDomain(), p.token(), p.shopifyInventoryItemId(),
-                                              p.shopifyLocationId(), delta, reason);
+                                              p.shopifyLocationId(), delta, reason, idempotencyKey);
             status = "applied";
         } catch (Exception e) {
             status = "failed";
@@ -376,8 +378,10 @@ public class ShopifyInventoryService {
             // on_hand unchanged — the unit leaves the sellable pool (available -> damaged).
             // Insufficient-available or any other Shopify userError fails cleanly here —
             // never forced, never retried automatically. See ShopifyGateway.moveAvailableToDamaged.
+            String idempotencyKey = ShopifyGateway.idempotencyKey(
+                tenantId, "damage_move", pieceId, variantId, locationId);
             shopify.moveAvailableToDamaged(p.shopDomain(), p.token(), p.shopifyInventoryItemId(),
-                                            p.shopifyLocationId(), 1, "damaged");
+                                            p.shopifyLocationId(), 1, "damaged", idempotencyKey);
             status = "applied";
         } catch (Exception e) {
             status = "failed";

@@ -101,8 +101,8 @@ class ShopifyLocationGatewayImpl implements ShopifyLocationGateway {
     }
 
     private static final String LOCATION_DEACTIVATE_MUTATION = """
-            mutation LocationDeactivate($locationId: ID!) {
-              locationDeactivate(locationId: $locationId) {
+            mutation LocationDeactivate($locationId: ID!, $idempotencyKey: String!) {
+              locationDeactivate(locationId: $locationId) @idempotent(key: $idempotencyKey) {
                 locationDeactivateUserErrors {
                   field
                   message
@@ -112,8 +112,10 @@ class ShopifyLocationGatewayImpl implements ShopifyLocationGateway {
             """;
 
     @Override
-    public void deactivate(String shopDomain, String token, String shopifyLocationGid) {
-        ObjectNode vars = mapper.createObjectNode().put("locationId", shopifyLocationGid);
+    public void deactivate(String shopDomain, String token, String shopifyLocationGid, String idempotencyKey) {
+        ObjectNode vars = mapper.createObjectNode()
+            .put("locationId", shopifyLocationGid)
+            .put("idempotencyKey", idempotencyKey);
         JsonNode response = shopify.executeGraphQLPublic(shopDomain, token, LOCATION_DEACTIVATE_MUTATION, vars);
         JsonNode userErrors = response.path("locationDeactivate").path("locationDeactivateUserErrors");
         if (userErrors.isArray() && !userErrors.isEmpty()) {

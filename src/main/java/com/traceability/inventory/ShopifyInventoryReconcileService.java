@@ -222,8 +222,10 @@ public class ShopifyInventoryReconcileService {
                                 rs -> rs.next() ? rs.getString(1) : null,
                                 row.variantId(), tenantId);
                             String itemGid = shopify.resolveInventoryItemId(ctx.shopDomain(), ctx.token(), variantGid);
+                            String idempotencyKey = ShopifyGateway.idempotencyKey(tenantId, "initial_seed",
+                                row.variantId().toString(), row.variantId(), ctx.tracedLocationId());
                             shopify.adjustInventoryQuantities(ctx.shopDomain(), ctx.token(), itemGid,
-                                ctx.tracedGid(), (int) row.tracedOnHand(), "correction");
+                                ctx.tracedGid(), (int) row.tracedOnHand(), "correction", idempotencyKey);
                             recordAudit(tenantId, row.variantId(), ctx.tracedLocationId(), row.tracedOnHand(),
                                 "applied", null);
                             seeded++;

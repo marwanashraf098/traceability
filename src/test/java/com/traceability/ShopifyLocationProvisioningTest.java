@@ -273,7 +273,7 @@ class ShopifyLocationProvisioningTest {
             TenantContext.clear();
         }
 
-        verify(shopifyLocations).deactivate(eq(SHOP_DOMAIN), eq("test-token"), eq("gid://shopify/Location/junk"));
+        verify(shopifyLocations).deactivate(eq(SHOP_DOMAIN), eq("test-token"), eq("gid://shopify/Location/junk"), any());
 
         Map<String, Object> row = jdbc.queryForMap(
             "SELECT shopify_location_id, shopify_sync_status FROM locations WHERE id = ?", junkId);
@@ -299,7 +299,7 @@ class ShopifyLocationProvisioningTest {
         } finally {
             TenantContext.clear();
         }
-        verify(shopifyLocations, never()).deactivate(any(), any(), any());
+        verify(shopifyLocations, never()).deactivate(any(), any(), any(), any());
     }
 
     // ── lp7: GENUINE concurrency — two overlapping ensureTracedWarehouse calls ──

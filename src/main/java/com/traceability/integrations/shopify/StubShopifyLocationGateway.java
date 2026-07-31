@@ -26,7 +26,7 @@ class StubShopifyLocationGateway implements ShopifyLocationGateway {
     }
 
     @Override
-    public void deactivate(String shopDomain, String token, String shopifyLocationGid) {
+    public void deactivate(String shopDomain, String token, String shopifyLocationGid, String idempotencyKey) {
         throw new ShopifyException(MSG);
     }
 }

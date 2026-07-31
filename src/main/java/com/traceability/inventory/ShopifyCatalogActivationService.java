@@ -81,7 +81,9 @@ public class ShopifyCatalogActivationService {
             String variantGid = (String) v.get("external_id");
             try {
                 String itemGid = shopify.resolveInventoryItemId(store.shopDomain(), token, variantGid);
-                shopify.activateInventoryItem(store.shopDomain(), token, itemGid, tracedGid);
+                String idempotencyKey = ShopifyGateway.idempotencyKey(
+                    tenantId, "catalog_activation", variantId.toString(), variantId, tracedGid);
+                shopify.activateInventoryItem(store.shopDomain(), token, itemGid, tracedGid, idempotencyKey);
                 succeeded++;
             } catch (Exception e) {
                 failed++;

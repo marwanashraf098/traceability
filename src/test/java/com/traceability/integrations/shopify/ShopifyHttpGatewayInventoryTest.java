@@ -26,19 +26,21 @@ import static org.assertj.core.api.Assertions.assertThat;
  * Matrix:
  *   g1 — adjustInventoryQuantities rejects delta <= 0
  *   g2 — moveAvailableToDamaged rejects quantity <= 0
- *   g3 — no bare "@idempotent" token on any FR-17 v2 mutation (regression guard — a
- *        keyless directive was removed 2026-07-30 as decorative/misleading; the real
- *        concurrency guard is the DB claim-row in ShopifyInventoryService.claim(). If a
- *        real idempotency key mechanism is added later, it belongs alongside a derived
- *        key, not as a bare token — see the comment above these mutation constants)
+ *   g3 — every FR-17 v2 mutation declares @idempotent(key: $idempotencyKey) — i.e. present AND
+ *        keyed by a real variable, not the bare/keyless token an earlier revision had (removed
+ *        2026-07-30 as decorative, then reinstated correctly here after Shopify's API 2026-04
+ *        made the directive mandatory — production error confirmed 2026-08-01: "The @idempotent
+ *        directive is required for this mutation but was not provided")
  *   g4 — buildInventoryChange() always includes the changeFromQuantity key (present, not
  *        omitted) regardless of whether a real baseline was resolved
  *   g5 — end-to-end through the REAL executeGraphQL/RestClient plumbing (a fake
  *        ClientHttpRequestInterceptor stands in for the network, so no real HTTP call is
  *        made): the actual second request body sent for adjustInventoryQuantities contains
  *        "changeFromQuantity" with the value read from the first (fetchAvailableQuantities)
- *        call. This is the exact gap that let the production bug through — every other test
- *        in this codebase mocks ShopifyGateway and never inspects the real wire payload.
+ *        call, AND the idempotencyKey variable exactly as passed in — proving the caller-
+ *        supplied key reaches the wire unmodified. This is the exact gap that let both the
+ *        changeFromQuantity and @idempotent production bugs through — every other test in
+ *        this codebase mocks ShopifyGateway and never inspects the real wire payload.
  */
 class ShopifyHttpGatewayInventoryTest {
 
@@ -48,24 +50,33 @@ class ShopifyHttpGatewayInventoryTest {
     @Test
     void g1_adjustInventoryQuantities_rejectsNonPositiveDelta() {
         Assertions.assertThrows(IllegalArgumentException.class, () ->
-            gateway.adjustInventoryQuantities("shop.myshopify.com", "tok", "item", "loc", 0, "received"));
+            gateway.adjustInventoryQuantities("shop.myshopify.com", "tok", "item", "loc", 0, "received", "key-1"));
         Assertions.assertThrows(IllegalArgumentException.class, () ->
-            gateway.adjustInventoryQuantities("shop.myshopify.com", "tok", "item", "loc", -1, "received"));
+            gateway.adjustInventoryQuantities("shop.myshopify.com", "tok", "item", "loc", -1, "received", "key-1"));
     }
 
     @Test
     void g2_moveAvailableToDamaged_rejectsNonPositiveQuantity() {
         Assertions.assertThrows(IllegalArgumentException.class, () ->
-            gateway.moveAvailableToDamaged("shop.myshopify.com", "tok", "item", "loc", 0, "damaged"));
+            gateway.moveAvailableToDamaged("shop.myshopify.com", "tok", "item", "loc", 0, "damaged", "key-1"));
         Assertions.assertThrows(IllegalArgumentException.class, () ->
-            gateway.moveAvailableToDamaged("shop.myshopify.com", "tok", "item", "loc", -1, "damaged"));
+            gateway.moveAvailableToDamaged("shop.myshopify.com", "tok", "item", "loc", -1, "damaged", "key-1"));
     }
 
     @Test
-    void g3_noBareIdempotentDirectiveOnAnyMutation() throws Exception {
-        assertThat(mutationText("INVENTORY_ADJUST_QUANTITIES_MUTATION")).doesNotContain("@idempotent");
-        assertThat(mutationText("INVENTORY_MOVE_QUANTITIES_MUTATION")).doesNotContain("@idempotent");
-        assertThat(mutationText("INVENTORY_ACTIVATE_MUTATION")).doesNotContain("@idempotent");
+    void g3_idempotentDirectiveIsPresentAndKeyed() throws Exception {
+        for (String fieldName : List.of(
+                "INVENTORY_ADJUST_QUANTITIES_MUTATION",
+                "INVENTORY_MOVE_QUANTITIES_MUTATION",
+                "INVENTORY_ACTIVATE_MUTATION")) {
+            String text = mutationText(fieldName);
+            assertThat(text)
+                .as(fieldName + ": must declare @idempotent(key: $idempotencyKey), not a bare token")
+                .contains("@idempotent(key: $idempotencyKey)");
+            assertThat(text)
+                .as(fieldName + ": must declare the $idempotencyKey variable as a required String")
+                .contains("$idempotencyKey: String!");
+        }
     }
 
     @Test
@@ -85,10 +96,11 @@ class ShopifyHttpGatewayInventoryTest {
     }
 
     @Test
-    void g5_adjustInventoryQuantities_realWirePayloadIncludesChangeFromQuantity() throws Exception {
+    void g5_adjustInventoryQuantities_realWirePayloadIncludesChangeFromQuantityAndIdempotencyKey() throws Exception {
         ObjectMapper mapper = new ObjectMapper();
         List<String> capturedBodies = new ArrayList<>();
         AtomicInteger callCount = new AtomicInteger(0);
+        String expectedKey = "b8f0b172-1ffc-41ff-90c5-14c254e3c202";
 
         // Stands in for the network: no real HTTP call is made. First call = the
         // fetchAvailableQuantities read inside adjustInventoryQuantities (returns available=7);
@@ -100,7 +112,7 @@ class ShopifyHttpGatewayInventoryTest {
                 ? "{\"data\":{\"nodes\":[{\"id\":\"gid://shopify/InventoryItem/item1\"," +
                   "\"inventoryLevel\":{\"quantities\":[{\"name\":\"available\",\"quantity\":7}]}}]}}"
                 : "{\"data\":{\"inventoryAdjustQuantities\":{" +
-                  "\"inventoryAdjustmentGroup\":{\"createdAt\":\"2026-07-31T00:00:00Z\"},\"userErrors\":[]}}}";
+                  "\"inventoryAdjustmentGroup\":{\"createdAt\":\"2026-08-01T00:00:00Z\"},\"userErrors\":[]}}}";
             MockClientHttpResponse response = new MockClientHttpResponse(
                 responseJson.getBytes(StandardCharsets.UTF_8), HttpStatus.OK);
             response.getHeaders().setContentType(MediaType.APPLICATION_JSON);
@@ -112,12 +124,13 @@ class ShopifyHttpGatewayInventoryTest {
             builder, mapper, "2026-04", "test-client-id", "test-client-secret");
 
         realGateway.adjustInventoryQuantities("shop.myshopify.com", "tok",
-            "gid://shopify/InventoryItem/item1", "gid://shopify/Location/loc1", 5, "received");
+            "gid://shopify/InventoryItem/item1", "gid://shopify/Location/loc1", 5, "received", expectedKey);
 
         assertThat(capturedBodies).as("g5: exactly one read call + one write call").hasSize(2);
 
         JsonNode writeRequest = mapper.readTree(capturedBodies.get(1));
-        JsonNode changes = writeRequest.path("variables").path("input").path("changes");
+        JsonNode variables = writeRequest.path("variables");
+        JsonNode changes = variables.path("input").path("changes");
         assertThat(changes.isArray()).isTrue();
         JsonNode change0 = changes.get(0);
 
@@ -131,6 +144,16 @@ class ShopifyHttpGatewayInventoryTest {
             .as("g5: the baseline is the value read from the first call, not guessed")
             .isEqualTo(7);
         assertThat(change0.path("delta").asInt()).isEqualTo(5);
+
+        assertThat(variables.has("idempotencyKey"))
+            .as("g5: the REAL request body must carry the idempotencyKey variable — this is the " +
+                "second production bug (\"The @idempotent directive is required for this " +
+                "mutation but was not provided\"), which likewise no mocked-gateway test could " +
+                "have caught")
+            .isTrue();
+        assertThat(variables.path("idempotencyKey").asText())
+            .as("g5: the caller-supplied key must reach the wire unmodified")
+            .isEqualTo(expectedKey);
     }
 
     private static String mutationText(String fieldName) throws Exception {

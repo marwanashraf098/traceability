@@ -9,6 +9,7 @@ import com.traceability.inventory.ShopifyInventoryService;
 import com.traceability.tenancy.TenantContext;
 import org.jobrunr.scheduling.JobScheduler;
 import org.junit.jupiter.api.*;
+import org.mockito.ArgumentCaptor;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.mock.mockito.MockBean;
@@ -229,9 +230,9 @@ class ShopifyInventoryTest {
         }
 
         verify(shopifyGateway).adjustInventoryQuantities(
-            eq(SHOP_DOMAIN), eq("test-token"), eq("gid://shopify/InventoryItem/201"), eq(TRACED_GID), eq(3), eq("received"));
+            eq(SHOP_DOMAIN), eq("test-token"), eq("gid://shopify/InventoryItem/201"), eq(TRACED_GID), eq(3), eq("received"), any());
         verify(shopifyGateway).adjustInventoryQuantities(
-            eq(SHOP_DOMAIN), eq("test-token"), eq("gid://shopify/InventoryItem/202"), eq(TRACED_GID), eq(5), eq("received"));
+            eq(SHOP_DOMAIN), eq("test-token"), eq("gid://shopify/InventoryItem/202"), eq(TRACED_GID), eq(5), eq("received"), any());
 
         Map<String, Object> rowA = jdbc.queryForMap(
             "SELECT delta, status FROM shopify_inventory_adjustments " +
@@ -259,7 +260,7 @@ class ShopifyInventoryTest {
         } finally { TenantContext.clear(); }
 
         verify(shopifyGateway, times(1)).adjustInventoryQuantities(
-            anyString(), anyString(), anyString(), anyString(), eq(2), anyString());
+            anyString(), anyString(), anyString(), anyString(), eq(2), anyString(), any());
 
         Long count = jdbc.queryForObject(
             "SELECT COUNT(*) FROM shopify_inventory_adjustments " +
@@ -294,7 +295,7 @@ class ShopifyInventoryTest {
             .as("si3: inventoryItemId resolved even though location failed")
             .isEqualTo("gid://shopify/InventoryItem/201");
 
-        verify(shopifyGateway, never()).adjustInventoryQuantities(any(), any(), any(), any(), anyInt(), any());
+        verify(shopifyGateway, never()).adjustInventoryQuantities(any(), any(), any(), any(), anyInt(), any(), any());
     }
 
     // ── si4: return inspection → AVAILABLE — live +1 call ────────────────────
@@ -312,7 +313,7 @@ class ShopifyInventoryTest {
         } finally { TenantContext.clear(); }
 
         verify(shopifyGateway).adjustInventoryQuantities(
-            eq(SHOP_DOMAIN), eq("test-token"), eq("gid://shopify/InventoryItem/201"), eq(TRACED_GID), eq(1), eq("restock"));
+            eq(SHOP_DOMAIN), eq("test-token"), eq("gid://shopify/InventoryItem/201"), eq(TRACED_GID), eq(1), eq("restock"), any());
 
         Map<String, Object> row = jdbc.queryForMap(
             "SELECT delta, status, trigger_type FROM shopify_inventory_adjustments " +
@@ -387,7 +388,7 @@ class ShopifyInventoryTest {
                    .get(5, TimeUnit.SECONDS);
         } finally { TenantContext.clear(); }
 
-        verify(shopifyGateway, never()).adjustInventoryQuantities(any(), any(), any(), eq(OTHER_GID), anyInt(), any());
+        verify(shopifyGateway, never()).adjustInventoryQuantities(any(), any(), any(), eq(OTHER_GID), anyInt(), any(), any());
         Long negCount = jdbc.queryForObject(
             "SELECT COUNT(*) FROM shopify_inventory_adjustments " +
             "WHERE trigger_type = 'receiving_session' AND trigger_id = ? AND tenant_id = ?",
@@ -402,9 +403,9 @@ class ShopifyInventoryTest {
                    .get(5, TimeUnit.SECONDS);
         } finally { TenantContext.clear(); }
 
-        verify(shopifyGateway).adjustInventoryQuantities(any(), any(), any(), eq(TRACED_GID), eq(4), any());
+        verify(shopifyGateway).adjustInventoryQuantities(any(), any(), any(), eq(TRACED_GID), eq(4), any(), any());
         verify(shopifyGateway, never()).adjustInventoryQuantities(any(), any(), any(),
-            argThat(loc -> !TRACED_GID.equals(loc)), anyInt(), any());
+            argThat(loc -> !TRACED_GID.equals(loc)), anyInt(), any(), any());
     }
 
     // ── si7-si10: damage trigger (FR-17 v2 trigger 3) ────────────────────────
@@ -437,7 +438,7 @@ class ShopifyInventoryTest {
         }
 
         verify(shopifyGateway).moveAvailableToDamaged(
-            eq(SHOP_DOMAIN), eq("test-token"), eq("gid://shopify/InventoryItem/201"), eq(TRACED_GID), eq(1), eq("damaged"));
+            eq(SHOP_DOMAIN), eq("test-token"), eq("gid://shopify/InventoryItem/201"), eq(TRACED_GID), eq(1), eq("damaged"), any());
 
         Map<String, Object> row = jdbc.queryForMap(
             "SELECT status, trigger_type FROM shopify_inventory_adjustments " +
@@ -474,7 +475,7 @@ class ShopifyInventoryTest {
             TenantContext.clear();
         }
 
-        verify(shopifyGateway, never()).moveAvailableToDamaged(any(), any(), any(), any(), anyInt(), any());
+        verify(shopifyGateway, never()).moveAvailableToDamaged(any(), any(), any(), any(), anyInt(), any(), any());
         Long count = jdbc.queryForObject(
             "SELECT COUNT(*) FROM shopify_inventory_adjustments " +
             "WHERE trigger_type = 'damage_move' AND trigger_id = ? AND tenant_id = ?",
@@ -488,7 +489,7 @@ class ShopifyInventoryTest {
                 eq("gid://shopify/ProductVariant/101")))
             .thenReturn("gid://shopify/InventoryItem/201");
         doThrow(new ShopifyException("inventoryMoveQuantities failed: insufficient available quantity"))
-            .when(shopifyGateway).moveAvailableToDamaged(any(), any(), any(), any(), anyInt(), any());
+            .when(shopifyGateway).moveAvailableToDamaged(any(), any(), any(), any(), anyInt(), any(), any());
 
         String dmgPieceId = seedAvailablePiece("BC-SI9-001", locationId);
 
@@ -536,7 +537,7 @@ class ShopifyInventoryTest {
             "WHERE trigger_type = 'damage_move' AND trigger_id = ? AND tenant_id = ?",
             Long.class, rpiPieceId, tenantId);
         assertThat(count).as("si10: return_pending_inspection->damaged never produces a damage_move row").isZero();
-        verify(shopifyGateway, never()).moveAvailableToDamaged(any(), any(), any(), any(), anyInt(), any());
+        verify(shopifyGateway, never()).moveAvailableToDamaged(any(), any(), any(), any(), anyInt(), any(), any());
     }
 
     // ── si11: increment-only guard (core, source-level) ──────────────────────
@@ -629,7 +630,7 @@ class ShopifyInventoryTest {
         winner.join(10_000);
 
         verify(shopifyGateway, times(1)).adjustInventoryQuantities(
-            anyString(), anyString(), anyString(), anyString(), eq(2), anyString());
+            anyString(), anyString(), anyString(), anyString(), eq(2), anyString(), any());
         Long count = jdbc.queryForObject(
             "SELECT COUNT(*) FROM shopify_inventory_adjustments " +
             "WHERE trigger_type = 'receiving_session' AND trigger_id = ? AND tenant_id = ? AND variant_id = ?",
@@ -686,7 +687,7 @@ class ShopifyInventoryTest {
         winner.join(10_000);
 
         verify(shopifyGateway, times(1)).moveAvailableToDamaged(
-            anyString(), anyString(), anyString(), anyString(), eq(1), anyString());
+            anyString(), anyString(), anyString(), anyString(), eq(1), anyString(), any());
         Long count = jdbc.queryForObject(
             "SELECT COUNT(*) FROM shopify_inventory_adjustments " +
             "WHERE trigger_type = 'damage_move' AND trigger_id = ? AND tenant_id = ?",
@@ -713,7 +714,7 @@ class ShopifyInventoryTest {
 
         // First attempt: Shopify rejects it -> claim() case (a), then markResult('failed').
         doThrow(new ShopifyException("simulated transient failure"))
-            .when(shopifyGateway).adjustInventoryQuantities(any(), any(), any(), any(), anyInt(), any());
+            .when(shopifyGateway).adjustInventoryQuantities(any(), any(), any(), any(), anyInt(), any(), any());
 
         TenantContext.set(tenantId);
         try {
@@ -746,7 +747,7 @@ class ShopifyInventoryTest {
         }
 
         verify(shopifyGateway, times(1)).adjustInventoryQuantities(
-            anyString(), anyString(), anyString(), anyString(), eq(2), anyString());
+            anyString(), anyString(), anyString(), anyString(), eq(2), anyString(), any());
 
         String statusAfterRetry = jdbc.queryForObject(
             "SELECT status FROM shopify_inventory_adjustments " +
@@ -812,7 +813,85 @@ class ShopifyInventoryTest {
         assertThat(error).as("si15: must point at updating the custom app's Admin API scopes instead")
             .contains("Admin API access scopes");
 
-        verify(shopifyGateway, never()).adjustInventoryQuantities(any(), any(), any(), any(), anyInt(), any());
+        verify(shopifyGateway, never()).adjustInventoryQuantities(any(), any(), any(), any(), anyInt(), any(), any());
+    }
+
+    // ── si16: @idempotent key — same trigger reuses the key, different trigger differs ──
+    //
+    // Mirrors si14's exact retry setup (first attempt fails, retry with the SAME trigger_id
+    // succeeds) but captures the idempotencyKey argument actually passed to the gateway on
+    // each real call, at the caller layer (ShopifyInventoryService), not just the pure
+    // derivation function (see ShopifyGatewayIdempotencyKeyTest for that).
+
+    @Test @Order(16)
+    void si16_idempotencyKey_sameTriggerReusesKey_differentTriggerGetsDifferentKey() throws Exception {
+        when(shopifyGateway.resolveInventoryItemId(anyString(), anyString(), anyString()))
+            .thenReturn("gid://shopify/InventoryItem/SI16");
+
+        UUID sessionA = UUID.randomUUID();
+
+        // First attempt: Shopify rejects it -> claim() case (a), then markResult('failed').
+        doThrow(new ShopifyException("simulated transient failure"))
+            .when(shopifyGateway).adjustInventoryQuantities(any(), any(), any(), any(), anyInt(), any(), any());
+
+        TenantContext.set(tenantId);
+        try {
+            service.onReceivingSessionClose(tenantId, sessionA, locationId, Map.of(variantA, 3))
+                   .get(5, TimeUnit.SECONDS);
+        } finally {
+            TenantContext.clear();
+        }
+
+        ArgumentCaptor<String> firstKeyCaptor = ArgumentCaptor.forClass(String.class);
+        verify(shopifyGateway).adjustInventoryQuantities(
+            anyString(), anyString(), anyString(), anyString(), anyInt(), anyString(), firstKeyCaptor.capture());
+        String firstAttemptKey = firstKeyCaptor.getValue();
+
+        // Second attempt, the EXACT SAME trigger_id (sessionA): claim() reclaims the failed row.
+        reset(shopifyGateway);
+        when(shopifyGateway.resolveInventoryItemId(anyString(), anyString(), anyString()))
+            .thenReturn("gid://shopify/InventoryItem/SI16");
+        // adjustInventoryQuantities left unstubbed on the reset mock -> succeeds (no-op) by default.
+
+        TenantContext.set(tenantId);
+        try {
+            service.onReceivingSessionClose(tenantId, sessionA, locationId, Map.of(variantA, 3))
+                   .get(5, TimeUnit.SECONDS);
+        } finally {
+            TenantContext.clear();
+        }
+
+        ArgumentCaptor<String> retryKeyCaptor = ArgumentCaptor.forClass(String.class);
+        verify(shopifyGateway).adjustInventoryQuantities(
+            anyString(), anyString(), anyString(), anyString(), anyInt(), anyString(), retryKeyCaptor.capture());
+        String retryAttemptKey = retryKeyCaptor.getValue();
+
+        assertThat(retryAttemptKey)
+            .as("si16: a retry of the SAME operation (same trigger_id) must reuse the SAME idempotency key")
+            .isEqualTo(firstAttemptKey);
+
+        // Third call, a DIFFERENT trigger_id (sessionB) -> must get a DIFFERENT key.
+        reset(shopifyGateway);
+        when(shopifyGateway.resolveInventoryItemId(anyString(), anyString(), anyString()))
+            .thenReturn("gid://shopify/InventoryItem/SI16");
+
+        UUID sessionB = UUID.randomUUID();
+        TenantContext.set(tenantId);
+        try {
+            service.onReceivingSessionClose(tenantId, sessionB, locationId, Map.of(variantA, 3))
+                   .get(5, TimeUnit.SECONDS);
+        } finally {
+            TenantContext.clear();
+        }
+
+        ArgumentCaptor<String> differentOpKeyCaptor = ArgumentCaptor.forClass(String.class);
+        verify(shopifyGateway).adjustInventoryQuantities(
+            anyString(), anyString(), anyString(), anyString(), anyInt(), anyString(), differentOpKeyCaptor.capture());
+        String differentOpKey = differentOpKeyCaptor.getValue();
+
+        assertThat(differentOpKey)
+            .as("si16: a genuinely different operation (different trigger_id) must get a DIFFERENT idempotency key")
+            .isNotEqualTo(firstAttemptKey);
     }
 
 }

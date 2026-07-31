@@ -208,13 +208,13 @@ class ShopifyImportTest {
 
         verify(shopifyLocations, times(1)).create(any(), any(), any());
         verify(shopifyGateway, times(1)).adjustInventoryQuantities(
-                eq(shopDomain), eq(RAW_TOKEN), eq("gid://shopify/InventoryItem/red"), eq(tracedGid), eq(3), anyString());
+                eq(shopDomain), eq(RAW_TOKEN), eq("gid://shopify/InventoryItem/red"), eq(tracedGid), eq(3), anyString(), any());
         // The blue variant never had stock -> never seeded, in any run.
         verify(shopifyGateway, never()).adjustInventoryQuantities(
-                any(), any(), eq("gid://shopify/InventoryItem/blue"), any(), anyInt(), any());
+                any(), any(), eq("gid://shopify/InventoryItem/blue"), any(), anyInt(), any(), any());
         // No write of any kind (activate, adjust) ever targets a locationId other than the Traced GID.
-        verify(shopifyGateway, never()).activateInventoryItem(any(), any(), any(), argThat(loc -> !tracedGid.equals(loc)));
-        verify(shopifyGateway, never()).adjustInventoryQuantities(any(), any(), any(), argThat(loc -> !tracedGid.equals(loc)), anyInt(), any());
+        verify(shopifyGateway, never()).activateInventoryItem(any(), any(), any(), argThat(loc -> !tracedGid.equals(loc)), any());
+        verify(shopifyGateway, never()).adjustInventoryQuantities(any(), any(), any(), argThat(loc -> !tracedGid.equals(loc)), anyInt(), any(), any());
 
         String locationStatus = jdbc.queryForObject(
                 "SELECT shopify_sync_status FROM locations WHERE id = ?", String.class, fulfillmentLocationId);

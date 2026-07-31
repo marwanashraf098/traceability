@@ -3,8 +3,10 @@ package com.traceability.integrations.shopify;
 import com.fasterxml.jackson.databind.JsonNode;
 
 import java.math.BigDecimal;
+import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.List;
+import java.util.UUID;
 
 /**
  * Abstraction over the Shopify Admin API. Implementations handle HTTP,
@@ -209,9 +211,13 @@ public interface ShopifyGateway {
      * quantity write lands there. Idempotent: an "already active" userError is
      * swallowed, not thrown.
      *
+     * @param idempotencyKey the mutation-level @idempotent key (mandatory as of API 2026-04) —
+     *                       see {@link #idempotencyKey}. Must be STABLE across retries of the
+     *                       same logical operation (Shopify dedupes server-side on this key).
      * @throws ShopifyException on any other userError
      */
-    void activateInventoryItem(String shopDomain, String token, String inventoryItemGid, String locationGid);
+    void activateInventoryItem(String shopDomain, String token, String inventoryItemGid,
+                                String locationGid, String idempotencyKey);
 
     /**
      * Adjusts on_hand at a location by a POSITIVE delta only, via inventoryAdjustQuantities.
@@ -220,11 +226,15 @@ public interface ShopifyGateway {
      *
      * @param positiveDelta must be > 0
      * @param reason        Shopify inventory adjustment reason (e.g. "received", "restock")
+     * @param idempotencyKey the mutation-level @idempotent key (mandatory as of API 2026-04) —
+     *                       see {@link #idempotencyKey}. Must be STABLE across retries of the
+     *                       same logical operation (Shopify dedupes server-side on this key).
      * @throws IllegalArgumentException if positiveDelta <= 0 — checked BEFORE any network call
      * @throws ShopifyException         on Shopify userErrors
      */
     void adjustInventoryQuantities(String shopDomain, String token, String inventoryItemGid,
-                                    String locationGid, int positiveDelta, String reason);
+                                    String locationGid, int positiveDelta, String reason,
+                                    String idempotencyKey);
 
     /**
      * Moves quantity units from the "available" state to "damaged" at a location, via
@@ -232,12 +242,16 @@ public interface ShopifyGateway {
      * Location stays fixed (from and to are the same locationGid); only the state name changes.
      *
      * @param quantity must be > 0
+     * @param idempotencyKey the mutation-level @idempotent key (mandatory as of API 2026-04) —
+     *                       see {@link #idempotencyKey}. Must be STABLE across retries of the
+     *                       same logical operation (Shopify dedupes server-side on this key).
      * @throws IllegalArgumentException if quantity <= 0 — checked BEFORE any network call
      * @throws ShopifyException         on Shopify userErrors, including insufficient-available
      *                                  (caller must treat this as a clean failure, never retry-forced)
      */
     void moveAvailableToDamaged(String shopDomain, String token, String inventoryItemGid,
-                                 String locationGid, int quantity, String reason);
+                                 String locationGid, int quantity, String reason,
+                                 String idempotencyKey);
 
     /** One inventoryItem's current "available" quantity at a location (Part C reconcile read). */
     record InventoryLevel(String inventoryItemGid, int available) {}
@@ -298,5 +312,26 @@ public interface ShopifyGateway {
               "(Settings > Apps > Develop apps) and reissue the token"
             : "store must reconnect to grant the current scope list";
         return "Token lacks " + scopeName + " scope (granted: " + granted + ") — " + howToFix;
+    }
+
+    /**
+     * Derives a STABLE @idempotent key (mandatory as of API 2026-04 on inventoryAdjustQuantities,
+     * inventoryMoveQuantities, inventoryActivate, locationDeactivate — see the changelog "Making
+     * idempotency mandatory for inventory adjustments and refund mutations") from the same
+     * logical-operation tuple as the DB claim row in ShopifyInventoryService/
+     * ShopifyInventoryReconcileService: (tenantId, triggerType, triggerId, variantId, locationId).
+     *
+     * Deterministic, not random: UUID.nameUUIDFromBytes produces the SAME UUID for the SAME
+     * input every time (a name-based/v3 UUID, not a random v4) — a retry of the exact same
+     * operation (same trigger row) reuses the same key, so Shopify's own idempotency dedupe and
+     * our DB claim-row agree on what counts as "the same operation." A genuinely different
+     * operation (different trigger_id, variant, or location) produces a different key. The
+     * result is formatted as a UUID string, satisfying Shopify's collision-avoidance guidance,
+     * without needing per-call randomness or a stored key column.
+     */
+    static String idempotencyKey(Object tenantId, String triggerType, String triggerId,
+                                  Object variantId, Object locationId) {
+        String joined = tenantId + "|" + triggerType + "|" + triggerId + "|" + variantId + "|" + locationId;
+        return UUID.nameUUIDFromBytes(joined.getBytes(StandardCharsets.UTF_8)).toString();
     }
 }

@@ -133,10 +133,13 @@ class ShopifyCatalogActivationTest {
             TenantContext.clear();
         }
 
-        verify(shopifyGateway).activateInventoryItem(SHOP_DOMAIN, "test-token", "gid://shopify/InventoryItem/pb1", TRACED_GID);
-        verify(shopifyGateway).activateInventoryItem(SHOP_DOMAIN, "test-token", "gid://shopify/InventoryItem/pb2", TRACED_GID);
+        verify(shopifyGateway).activateInventoryItem(
+            eq(SHOP_DOMAIN), eq("test-token"), eq("gid://shopify/InventoryItem/pb1"), eq(TRACED_GID), any());
+        verify(shopifyGateway).activateInventoryItem(
+            eq(SHOP_DOMAIN), eq("test-token"), eq("gid://shopify/InventoryItem/pb2"), eq(TRACED_GID), any());
         // Never any other locationId.
-        verify(shopifyGateway, never()).activateInventoryItem(any(), any(), any(), argThat(loc -> !TRACED_GID.equals(loc)));
+        verify(shopifyGateway, never())
+            .activateInventoryItem(any(), any(), any(), argThat(loc -> !TRACED_GID.equals(loc)), any());
     }
 
     @Test
@@ -156,8 +159,8 @@ class ShopifyCatalogActivationTest {
         } finally {
             TenantContext.clear();
         }
-        verify(shopifyGateway, times(2))
-            .activateInventoryItem(SHOP_DOMAIN, "test-token", "gid://shopify/InventoryItem/pb3", TRACED_GID);
+        verify(shopifyGateway, times(2)).activateInventoryItem(
+            eq(SHOP_DOMAIN), eq("test-token"), eq("gid://shopify/InventoryItem/pb3"), eq(TRACED_GID), any());
     }
 
     @Test
@@ -180,7 +183,8 @@ class ShopifyCatalogActivationTest {
         } finally {
             TenantContext.clear();
         }
-        verify(shopifyGateway).activateInventoryItem(SHOP_DOMAIN, "test-token", "gid://shopify/InventoryItem/pb-good", TRACED_GID);
+        verify(shopifyGateway).activateInventoryItem(
+            eq(SHOP_DOMAIN), eq("test-token"), eq("gid://shopify/InventoryItem/pb-good"), eq(TRACED_GID), any());
     }
 
     @Test
