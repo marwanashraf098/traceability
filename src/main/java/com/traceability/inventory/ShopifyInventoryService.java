@@ -233,14 +233,15 @@ public class ShopifyInventoryService {
             if (variantGid == null || variantGid.isBlank()) {
                 variantError = "Variant has no Shopify GID: " + variantId;
             } else {
-                record StoreSnap(UUID id, String shopDomain, String grantedScopes) {}
+                record StoreSnap(UUID id, String shopDomain, String grantedScopes, String connectionType) {}
                 StoreSnap store = tx.execute(status ->
                     jdbc.query(
-                        "SELECT id, shop_domain, access_token_scopes FROM stores WHERE tenant_id = ? LIMIT 1",
+                        "SELECT id, shop_domain, access_token_scopes, connection_type FROM stores WHERE tenant_id = ? LIMIT 1",
                         rs -> rs.next() ? new StoreSnap(
                             rs.getObject(1, UUID.class),
                             rs.getString(2),
-                            rs.getString(3)) : null,
+                            rs.getString(3),
+                            rs.getString(4)) : null,
                         tenantId));
 
                 if (store == null) {
@@ -270,13 +271,11 @@ public class ShopifyInventoryService {
                         store.id(), store.shopDomain(), store.grantedScopes(),
                         triggerType, triggerId, claimRowCreatedAt, Instant.now());
 
-                    variantError = "Token lacks read_products scope (granted: "
-                        + (store.grantedScopes() != null ? store.grantedScopes() : "none")
-                        + ") — store must reconnect to grant the current scope list";
+                    variantError = ShopifyGateway.scopeGrantMessage(
+                        store.connectionType(), "read_products", store.grantedScopes());
                 } else if (!ShopifyGateway.isScopeGranted("write_inventory", store.grantedScopes())) {
-                    variantError = "Token lacks write_inventory scope (granted: "
-                        + (store.grantedScopes() != null ? store.grantedScopes() : "none")
-                        + ") — store must reconnect to grant the current scope list";
+                    variantError = ShopifyGateway.scopeGrantMessage(
+                        store.connectionType(), "write_inventory", store.grantedScopes());
                 } else {
                     shopDomain = store.shopDomain();
                     token = tokenProvider.getValidToken(store.id());

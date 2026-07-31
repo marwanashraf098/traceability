@@ -123,25 +123,25 @@ public class LocationController {
         String syncStatus = "unsynced";
         String syncError  = null;
         try {
-            record StoreSnap(UUID id, String shopDomain, String grantedScopes) {}
+            record StoreSnap(UUID id, String shopDomain, String grantedScopes, String connectionType) {}
             StoreSnap store = tx.execute(status ->
                 jdbc.query(
-                    "SELECT id, shop_domain, access_token_scopes FROM stores WHERE tenant_id = ? LIMIT 1",
+                    "SELECT id, shop_domain, access_token_scopes, connection_type FROM stores WHERE tenant_id = ? LIMIT 1",
                     rs -> rs.next() ? new StoreSnap(
                         rs.getObject(1, UUID.class),
                         rs.getString(2),
-                        rs.getString(3)) : null,
+                        rs.getString(3),
+                        rs.getString(4)) : null,
                     tenantId));
 
             if (store == null) {
                 throw new IllegalStateException("No Shopify store connected");
             }
             if (!ShopifyGateway.isScopeGranted("write_locations", store.grantedScopes())) {
-                String granted = store.grantedScopes() != null ? store.grantedScopes() : "none";
-                log.warn("Location sync skipped: token lacks write_locations scope granted={}", granted);
-                throw new IllegalStateException(
-                    "Token lacks write_locations scope (granted: " + granted
-                    + ") — store must reconnect to grant the current scope list");
+                String message = ShopifyGateway.scopeGrantMessage(
+                    store.connectionType(), "write_locations", store.grantedScopes());
+                log.warn("Location sync skipped: {}", message);
+                throw new IllegalStateException(message);
             }
 
             String token = tokenProvider.getValidToken(store.id());

@@ -174,6 +174,19 @@ public interface ShopifyGateway {
      */
     TokenResponse exchangeClientCredentials(String shopDomain, String clientId, String clientSecret);
 
+    /**
+     * Reads the real granted access scopes for a token via GET /admin/oauth/access_scopes.json.
+     * This endpoint introspects the TOKEN itself, not how it was issued — it works identically
+     * for OAuth-issued and client-credentials-issued (custom_app_cc) tokens. This is the only
+     * way to know a CC token's granted scopes, since the client-credentials exchange response
+     * body has no scope field (unlike the OAuth code exchange).
+     *
+     * @return comma-separated scope handles (e.g. "read_products,write_inventory"), or null if
+     *         the call fails for any reason (network, invalid token). Callers must treat null as
+     *         "unknown" — never persist null over a previously-known-good scope string.
+     */
+    String fetchGrantedScopes(String shopDomain, String token);
+
     // ---- FR-17: inventory sync ------------------------------------------
 
     /**
@@ -267,5 +280,23 @@ public interface ShopifyGateway {
             }
         }
         return false;
+    }
+
+    /**
+     * Builds the "Token lacks X scope" error message, phrased for how the store must actually
+     * fix it — which differs by connection_type. OAuth stores fix a missing scope by
+     * reconnecting through the consent screen (Shopify re-prompts for the updated scope list).
+     * custom_app_cc stores have no consent screen: their scopes are configured directly on the
+     * Dev Dashboard custom app (Settings > Apps > Develop apps > [app] > Configuration), and a
+     * fresh client-credentials exchange picks up whatever is currently configured there — saying
+     * "reconnect" for CC is actively wrong and sends the merchant down the wrong fix.
+     */
+    static String scopeGrantMessage(String connectionType, String scopeName, String grantedScopesCsv) {
+        String granted = grantedScopesCsv != null ? grantedScopesCsv : "none";
+        String howToFix = "custom_app_cc".equals(connectionType)
+            ? "update the custom app's Admin API access scopes in the store admin " +
+              "(Settings > Apps > Develop apps) and reissue the token"
+            : "store must reconnect to grant the current scope list";
+        return "Token lacks " + scopeName + " scope (granted: " + granted + ") — " + howToFix;
     }
 }

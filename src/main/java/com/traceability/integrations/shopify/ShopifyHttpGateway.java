@@ -412,7 +412,8 @@ class ShopifyHttpGateway implements ShopifyGateway {
                 null,  // no refresh_token issued for client-credentials grant
                 resp.path("expires_in").asLong(86399),
                 0,     // no refresh_token_expires_in
-                null); // CC doesn't return scope; app scopes are fixed per install
+                null); // CC exchange response has no scope field — callers must read the real
+                       // granted scopes separately via fetchGrantedScopes(shopDomain, accessToken)
         } catch (HttpClientErrorException e) {
             // 4xx — app/store not permitted, wrong credentials, app not installed, etc.
             log.warn("Shopify CC exchange rejected ({}): shop={}", e.getStatusCode(), shopDomain);
@@ -458,7 +459,7 @@ class ShopifyHttpGateway implements ShopifyGateway {
         JsonNode productVariantNode = data.path("productVariant");
 
         if (productVariantNode.isMissingNode() || productVariantNode.isNull()) {
-            String scopes = fetchTokenScopesQuiet(shopDomain, token);
+            String scopes = fetchGrantedScopes(shopDomain, token);
             log.warn("Shopify resolveInventoryItemId: productVariant=null | variant={} | url={} | scopes={} | query={} | data={}",
                      variantGid, endpointUrl, scopes, query, data);
             throw new ShopifyException(
@@ -469,7 +470,7 @@ class ShopifyHttpGateway implements ShopifyGateway {
 
         JsonNode itemId = productVariantNode.path("inventoryItem").path("id");
         if (itemId.isMissingNode() || itemId.isNull()) {
-            String scopes = fetchTokenScopesQuiet(shopDomain, token);
+            String scopes = fetchGrantedScopes(shopDomain, token);
             log.warn("Shopify resolveInventoryItemId: inventoryItem=null | variant={} | url={} | scopes={} | query={} | data={}",
                      variantGid, endpointUrl, scopes, query, data);
             throw new ShopifyException(
@@ -703,12 +704,8 @@ class ShopifyHttpGateway implements ShopifyGateway {
         return out;
     }
 
-    /**
-     * Fetches the actual granted scopes for the given token via the REST access_scopes endpoint.
-     * Returns a comma-separated scope string, or null if the call fails for any reason.
-     * Used only in the resolution-failure diagnostic path — never called on the happy path.
-     */
-    private String fetchTokenScopesQuiet(String shopDomain, String token) {
+    @Override
+    public String fetchGrantedScopes(String shopDomain, String token) {
         try {
             String url = "https://" + shopDomain + "/admin/oauth/access_scopes.json";
             JsonNode body = restClient.get()
@@ -726,7 +723,9 @@ class ShopifyHttpGateway implements ShopifyGateway {
             }
             return String.join(",", handles);
         } catch (Exception e) {
-            log.debug("Could not fetch token scopes for diagnostic on {}: {}", shopDomain, e.getMessage());
+            log.warn("Could not fetch granted scopes for {}: {} — caller must not overwrite a " +
+                      "previously-known-good access_token_scopes value with this null result",
+                      shopDomain, e.getMessage());
             return null;
         }
     }

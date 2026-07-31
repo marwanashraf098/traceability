@@ -54,7 +54,16 @@ import static org.mockito.Mockito.*;
  * CC13: upgrade_custom_app_to_oauth handles 'custom_app_cc'
  * CC14: OAuth path unaffected
  * CC15: RLS tenant isolation for CC store
+ * CC16: CC connect persists REAL granted scopes read via fetchGrantedScopes (not null,
+ *        not a static assumption) — the fix for the production bug where custom_app_cc
+ *        stores never got access_token_scopes populated at all
+ * CC17: CC re-exchange (on expiry) also refreshes access_token_scopes from a fresh read —
+ *        not just at initial connect; this is how a merchant's Dev Dashboard scope update
+ *        gets picked up without re-entering Client ID/Secret
+ * CC18: fetchGrantedScopes returning null on re-exchange must NOT wipe a previously-known
+ *        scope string — COALESCE keeps the old value until the next successful read
  *
+
  * Plus preserved tests from original custom_app path (webhook Phase A/B, connections status, etc.)
  */
 @SpringBootTest(
@@ -107,6 +116,8 @@ class CustomAppConnectTest {
     private static final String CLIENT_SECRET  = "test_client_secret_xyz789";
     private static final String ACCESS_TOKEN   = "shpat_cc_access_token_abc";
     private static final long   EXPIRES_IN     = 86399L;
+    private static final String DEFAULT_GRANTED_SCOPES =
+        "read_products,read_orders,read_fulfillments,write_inventory,write_locations";
 
     @BeforeAll
     void setup() {
@@ -155,6 +166,8 @@ class CustomAppConnectTest {
         when(shopifyGateway.fetchShop(anyString(), anyString()))
             .thenReturn(new ShopifyGateway.ShopInfo("owner@store.com", "CC Store", "Africa/Cairo"));
         when(shopifyGateway.validateShop(anyString(), anyString())).thenReturn("CC Store");
+        when(shopifyGateway.fetchGrantedScopes(anyString(), anyString()))
+            .thenReturn(DEFAULT_GRANTED_SCOPES);
     }
 
     // -----------------------------------------------------------------------
@@ -171,11 +184,17 @@ class CustomAppConnectTest {
 
         Map<String, Object> row = jdbc.queryForMap(
             "SELECT connection_type, access_token_encrypted, api_secret_encrypted, " +
-            "client_id_encrypted, refresh_token_encrypted, access_token_expires_at " +
+            "client_id_encrypted, refresh_token_encrypted, access_token_expires_at, " +
+            "access_token_scopes " +
             "FROM stores WHERE tenant_id = ? AND shop_domain = ?",
             ownerTenantId, SHOP_DOMAIN);
 
         assertThat(row.get("connection_type")).isEqualTo("custom_app_cc");
+
+        // Real granted scopes read via fetchGrantedScopes at connect time — not null,
+        // not a static assumption. This is the fix: previously this column was never
+        // populated at all for custom_app_cc stores.
+        assertThat(row.get("access_token_scopes")).isEqualTo(DEFAULT_GRANTED_SCOPES);
 
         String encToken    = (String) row.get("access_token_encrypted");
         String encSecret   = (String) row.get("api_secret_encrypted");
@@ -394,9 +413,115 @@ class CustomAppConnectTest {
     }
 
     // -----------------------------------------------------------------------
-    // CC11 — Phase B HMAC for CC store → 200 (correct secret), 401 (wrong secret)
+    // CC16 — re-exchange refreshes access_token_scopes from a fresh read, not just at
+    //        initial connect. Store starts with a narrow (stale) scope string; the mocked
+    //        re-exchange returns a wider set — proves the merchant's Dev Dashboard scope
+    //        update is picked up without re-entering Client ID/Secret.
     // -----------------------------------------------------------------------
     @Test @Order(11)
+    void cc16_reExchange_refreshesGrantedScopes() {
+        UUID storeId  = UUID.randomUUID();
+        String encOld = encryptionService.encrypt(ACCESS_TOKEN);
+        String encId  = encryptionService.encrypt(CLIENT_ID);
+        String encSec = encryptionService.encrypt(CLIENT_SECRET);
+        Timestamp nearExpiry = Timestamp.from(Instant.now().plusSeconds(5));
+
+        jdbc.update("INSERT INTO stores (id, tenant_id, shop_domain, platform, access_token_encrypted, " +
+            "access_token_expires_at, status, import_status, connection_type, client_id_encrypted, " +
+            "api_secret_encrypted, access_token_scopes) " +
+            "VALUES (?, ?, ?, 'shopify', ?, ?, 'connected', 'pending', 'custom_app_cc', ?, ?, ?)",
+            storeId, ownerTenantId, SHOP_DOMAIN, encOld, nearExpiry, encId, encSec, "read_products");
+
+        String newToken = "shpat_new_cc_token_scopes_test";
+        String widerScopes = "read_products,read_orders,write_inventory,write_locations";
+        when(shopifyGateway.exchangeClientCredentials(eq(SHOP_DOMAIN), eq(CLIENT_ID), eq(CLIENT_SECRET)))
+            .thenReturn(new ShopifyGateway.TokenResponse(newToken, null, 86399L, 0, null));
+        when(shopifyGateway.fetchGrantedScopes(eq(SHOP_DOMAIN), eq(newToken)))
+            .thenReturn(widerScopes);
+
+        String result = TenantContext.runAs(ownerTenantId, () -> tokenProvider.getValidToken(storeId));
+        assertThat(result).isEqualTo(newToken);
+
+        String scopes = jdbc.queryForObject(
+            "SELECT access_token_scopes FROM stores WHERE id = ?", String.class, storeId);
+        assertThat(scopes).isEqualTo(widerScopes);
+    }
+
+    // -----------------------------------------------------------------------
+    // CC17 — fetchGrantedScopes failing (returns null) during re-exchange must NOT wipe
+    //        the previously-known-good scope string. COALESCE keeps the old value.
+    // -----------------------------------------------------------------------
+    @Test @Order(12)
+    void cc17_scopeReadFailureOnReExchange_doesNotWipeExistingScopes() {
+        UUID storeId  = UUID.randomUUID();
+        String encOld = encryptionService.encrypt(ACCESS_TOKEN);
+        String encId  = encryptionService.encrypt(CLIENT_ID);
+        String encSec = encryptionService.encrypt(CLIENT_SECRET);
+        Timestamp nearExpiry = Timestamp.from(Instant.now().plusSeconds(5));
+        String priorScopes = "read_products,write_inventory,write_locations";
+
+        jdbc.update("INSERT INTO stores (id, tenant_id, shop_domain, platform, access_token_encrypted, " +
+            "access_token_expires_at, status, import_status, connection_type, client_id_encrypted, " +
+            "api_secret_encrypted, access_token_scopes) " +
+            "VALUES (?, ?, ?, 'shopify', ?, ?, 'connected', 'pending', 'custom_app_cc', ?, ?, ?)",
+            storeId, ownerTenantId, SHOP_DOMAIN, encOld, nearExpiry, encId, encSec, priorScopes);
+
+        String newToken = "shpat_new_cc_token_scope_fail_test";
+        when(shopifyGateway.exchangeClientCredentials(eq(SHOP_DOMAIN), eq(CLIENT_ID), eq(CLIENT_SECRET)))
+            .thenReturn(new ShopifyGateway.TokenResponse(newToken, null, 86399L, 0, null));
+        // Simulates a failed scope read (network blip, etc.) — fetchGrantedScopes returns null.
+        when(shopifyGateway.fetchGrantedScopes(eq(SHOP_DOMAIN), eq(newToken)))
+            .thenReturn(null);
+
+        String result = TenantContext.runAs(ownerTenantId, () -> tokenProvider.getValidToken(storeId));
+        assertThat(result).isEqualTo(newToken);
+
+        String scopes = jdbc.queryForObject(
+            "SELECT access_token_scopes FROM stores WHERE id = ?", String.class, storeId);
+        assertThat(scopes).isEqualTo(priorScopes);
+    }
+
+    // -----------------------------------------------------------------------
+    // CC18 — forceReExchangeNow (the admin "refresh CC scopes" action): re-exchanges even
+    //        though the current token is still fresh, and persists newly-granted scopes.
+    // -----------------------------------------------------------------------
+    @Test @Order(13)
+    void cc18_forceReExchangeNow_refreshesEvenWhenTokenStillFresh() {
+        UUID storeId  = UUID.randomUUID();
+        String encOld = encryptionService.encrypt(ACCESS_TOKEN);
+        String encId  = encryptionService.encrypt(CLIENT_ID);
+        String encSec = encryptionService.encrypt(CLIENT_SECRET);
+        Timestamp future = Timestamp.from(Instant.now().plusSeconds(3600)); // well within buffer
+
+        jdbc.update("INSERT INTO stores (id, tenant_id, shop_domain, platform, access_token_encrypted, " +
+            "access_token_expires_at, status, import_status, connection_type, client_id_encrypted, " +
+            "api_secret_encrypted, access_token_scopes) " +
+            "VALUES (?, ?, ?, 'shopify', ?, ?, 'connected', 'pending', 'custom_app_cc', ?, ?, ?)",
+            storeId, ownerTenantId, SHOP_DOMAIN, encOld, future, encId, encSec, "read_products");
+
+        String newToken = "shpat_forced_refresh_token";
+        String newScopes = "read_products,write_inventory,write_locations";
+        when(shopifyGateway.exchangeClientCredentials(eq(SHOP_DOMAIN), eq(CLIENT_ID), eq(CLIENT_SECRET)))
+            .thenReturn(new ShopifyGateway.TokenResponse(newToken, null, 86399L, 0, null));
+        when(shopifyGateway.fetchGrantedScopes(eq(SHOP_DOMAIN), eq(newToken)))
+            .thenReturn(newScopes);
+
+        String result = TenantContext.runAs(ownerTenantId, () -> tokenProvider.forceReExchangeNow(storeId));
+        assertThat(result).isEqualTo(newToken);
+        // Proves force actually bypassed the freshness short-circuit — a plain getValidToken()
+        // call would have returned the OLD token untouched since it was still fresh.
+        verify(shopifyGateway, times(1)).exchangeClientCredentials(SHOP_DOMAIN, CLIENT_ID, CLIENT_SECRET);
+
+        Map<String, Object> row = jdbc.queryForMap(
+            "SELECT access_token_encrypted, access_token_scopes FROM stores WHERE id = ?", storeId);
+        assertThat(encryptionService.decrypt((String) row.get("access_token_encrypted"))).isEqualTo(newToken);
+        assertThat(row.get("access_token_scopes")).isEqualTo(newScopes);
+    }
+
+    // -----------------------------------------------------------------------
+    // CC11 — Phase B HMAC for CC store → 200 (correct secret), 401 (wrong secret)
+    // -----------------------------------------------------------------------
+    @Test @Order(14)
     void cc11_phaseBHmac_ccStore_correctSecret_passes() {
         String encTok = encryptionService.encrypt(ACCESS_TOKEN);
         String encSec = encryptionService.encrypt(CLIENT_SECRET);
@@ -430,7 +555,7 @@ class CustomAppConnectTest {
     // -----------------------------------------------------------------------
     // CC12 — Phase B runs in tenant context (RLS-aware lookup for CC stores)
     // -----------------------------------------------------------------------
-    @Test @Order(12)
+    @Test @Order(15)
     void cc12_phaseBTenantContext_rlsAwareLookup() {
         // CC store for owner tenant — Phase B must find it under the correct GUC
         String encTok = encryptionService.encrypt(ACCESS_TOKEN);
@@ -467,7 +592,7 @@ class CustomAppConnectTest {
     // -----------------------------------------------------------------------
     // CC13 — upgrade_custom_app_to_oauth handles 'custom_app_cc' type
     // -----------------------------------------------------------------------
-    @Test @Order(13)
+    @Test @Order(16)
     void cc13_upgradeFunction_handlesCustomAppCCType() {
         // Connect a CC-type store
         var connectResp = doCustomConnect(SHOP_DOMAIN, CLIENT_ID, CLIENT_SECRET);
@@ -530,7 +655,7 @@ class CustomAppConnectTest {
     // -----------------------------------------------------------------------
     // CC14 — OAuth path unaffected: GET /connections, webhook Phase A still work
     // -----------------------------------------------------------------------
-    @Test @Order(14)
+    @Test @Order(17)
     void cc14_oauthPathUnaffected() {
         // Verify GET /connections still returns expected keys
         HttpHeaders headers = new HttpHeaders();
@@ -572,7 +697,7 @@ class CustomAppConnectTest {
     // -----------------------------------------------------------------------
     // CC15 — RLS tenant isolation: CC store for tenant A not visible to tenant B
     // -----------------------------------------------------------------------
-    @Test @Order(15)
+    @Test @Order(18)
     void cc15_rlsIsolation_ccStore_scopedToTenant() {
         doCustomConnect(SHOP_DOMAIN, CLIENT_ID, CLIENT_SECRET);
 
@@ -595,7 +720,7 @@ class CustomAppConnectTest {
     // -----------------------------------------------------------------------
     // Preserved: webhook wrong secret → 401
     // -----------------------------------------------------------------------
-    @Test @Order(16)
+    @Test @Order(19)
     void webhookHmac_wrongSecret_returns401() {
         byte[] body = "{\"bad\":true}".getBytes(StandardCharsets.UTF_8);
         String badHmac = computeHmac(body, "completely-wrong-secret-xyz");
@@ -607,7 +732,7 @@ class CustomAppConnectTest {
     // -----------------------------------------------------------------------
     // Preserved: invalid domain → 400
     // -----------------------------------------------------------------------
-    @Test @Order(17)
+    @Test @Order(20)
     void customConnect_invalidDomain_returns400() {
         var resp = doCustomConnect("not-a-shopify.com", CLIENT_ID, CLIENT_SECRET);
         assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
@@ -616,7 +741,7 @@ class CustomAppConnectTest {
     // -----------------------------------------------------------------------
     // Preserved: blank clientId → 400
     // -----------------------------------------------------------------------
-    @Test @Order(18)
+    @Test @Order(21)
     void customConnect_blankClientId_returns400() {
         var resp = doCustomConnect(SHOP_DOMAIN, "", CLIENT_SECRET);
         assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
@@ -625,7 +750,7 @@ class CustomAppConnectTest {
     // -----------------------------------------------------------------------
     // Preserved: blank clientSecret → 400
     // -----------------------------------------------------------------------
-    @Test @Order(19)
+    @Test @Order(22)
     void customConnect_blankClientSecret_returns400() {
         var resp = doCustomConnect(SHOP_DOMAIN, CLIENT_ID, "");
         assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
@@ -634,7 +759,7 @@ class CustomAppConnectTest {
     // -----------------------------------------------------------------------
     // Preserved: GET /connections shopifyCustomApp includes CC stores
     // -----------------------------------------------------------------------
-    @Test @Order(20)
+    @Test @Order(23)
     void connections_status_includesCC() {
         doCustomConnect(SHOP_DOMAIN, CLIENT_ID, CLIENT_SECRET);
 

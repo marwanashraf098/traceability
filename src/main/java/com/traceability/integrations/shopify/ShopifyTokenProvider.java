@@ -69,10 +69,14 @@ public class ShopifyTokenProvider {
             WHERE id = ?
             """;
 
+    // access_token_scopes is COALESCEd: fetchGrantedScopes() returns null on a transient
+    // read failure, and a failed scope read must never blank out a previously-known-good
+    // scope string — only a real read is allowed to overwrite it.
     private static final String UPDATE_ACCESS_ONLY = """
             UPDATE stores SET
                 access_token_encrypted  = ?,
-                access_token_expires_at = ?
+                access_token_expires_at = ?,
+                access_token_scopes     = COALESCE(?, access_token_scopes)
             WHERE id = ?
             """;
 
@@ -133,7 +137,7 @@ public class ShopifyTokenProvider {
                 throw new ShopifyStoreNeedsReauthException(row.shopDomain(),
                     "CC credentials missing — reconnect via the custom-app card");
             }
-            return reExchangeWithLock(storeId, row.shopDomain());
+            return reExchangeWithLock(storeId, row.shopDomain(), false);
         }
 
         // OAuth path: refresh token required.
@@ -162,6 +166,35 @@ public class ShopifyTokenProvider {
     // ---- private: CC re-exchange under row lock -------------------------
 
     /**
+     * Forces an immediate CC re-exchange for one store, bypassing the normal near-expiry
+     * gate — used by the admin "refresh CC scopes" action after a merchant updates the
+     * custom app's Admin API scopes on the Dev Dashboard. Shopify's client-credentials
+     * grant always reflects the app's CURRENTLY configured scopes on each fresh exchange,
+     * so this is sufficient to pick up a newly granted scope without the merchant
+     * re-entering Client ID/Secret through /custom-connect and without waiting up to
+     * ~24h for the natural near-expiry refresh cycle.
+     *
+     * @throws IllegalArgumentException if the store is not connection_type=custom_app_cc
+     */
+    public String forceReExchangeNow(UUID storeId) {
+        StoreTokenRow row = quickRead(storeId);
+        if (row == null) {
+            throw new ShopifyStoreNeedsReauthException(storeId.toString(),
+                "Store not found or not visible under current tenant");
+        }
+        if (!"custom_app_cc".equals(row.connectionType())) {
+            throw new IllegalArgumentException(
+                "forceReExchangeNow is only valid for connection_type=custom_app_cc, was: "
+                + row.connectionType());
+        }
+        if (row.clientIdEncrypted() == null || row.apiSecretEncrypted() == null) {
+            throw new ShopifyStoreNeedsReauthException(row.shopDomain(),
+                "CC credentials missing — reconnect via the custom-app card");
+        }
+        return reExchangeWithLock(storeId, row.shopDomain(), true);
+    }
+
+    /**
      * Re-exchanges the CC token under a row lock.
      *
      * When the gateway returns 4xx (credentials invalid), we need to commit a
@@ -172,13 +205,18 @@ public class ShopifyTokenProvider {
      * Solution: use a holder to carry the exchange result (new token OR the
      * "needs_reauth required" signal) out of the lambda; commit the tx cleanly;
      * then mark needs_reauth or rethrow as appropriate after the tx commits.
+     *
+     * @param force skips both freshness short-circuits below, forcing a real Shopify call
+     *              even if the current token is not yet near expiry — used by
+     *              forceReExchangeNow(); the normal getValidToken() path always passes false.
      */
-    private String reExchangeWithLock(UUID storeId, String shopDomain) {
+    private String reExchangeWithLock(UUID storeId, String shopDomain, boolean force) {
         // Holder: either the new token string, or null if reauth is needed.
         // ShopifyTransientException is rethrown directly (inside tx) since
         // we don't need to mark reauth — the outer caller will handle it.
         final String[] tokenHolder = {null};
         final boolean[] needsReauth = {false};
+        final boolean[] didExchange = {false};
         final ShopifyStoreNeedsReauthException[] reauthEx = {null};
         final ShopifyTransientException[] transientEx = {null};
 
@@ -194,7 +232,9 @@ public class ShopifyTokenProvider {
             }
 
             // Double-checked locking: another thread may have re-exchanged while we waited.
-            if (isFresh(row.accessTokenExpiresAt())) {
+            // force=true (admin-triggered refresh) always proceeds to a real exchange below,
+            // even if the current token is still fresh — that's the whole point of "force".
+            if (!force && isFresh(row.accessTokenExpiresAt())) {
                 tokenHolder[0] = encryptionService.decrypt(row.accessTokenEncrypted());
                 return null;
             }
@@ -234,13 +274,21 @@ public class ShopifyTokenProvider {
             }
 
             Timestamp newExpiresAt = Timestamp.from(Instant.now().plusSeconds(tokens.expiresIn()));
+            // access_token_scopes is deliberately NOT read here: fetchGrantedScopes is a second,
+            // unbounded-timeout Shopify network call (unlike tokenRestClient's 10s-bounded
+            // exchange above), and this UPDATE runs while still holding the SELECT ... FOR
+            // UPDATE row lock — the same class of risk tokenRestClient's bound exists to avoid.
+            // null here means "leave access_token_scopes unchanged for now" (COALESCE); the
+            // real read happens in a follow-up step below, after the lock is released.
             jdbc.update(UPDATE_ACCESS_ONLY,
                 encryptionService.encrypt(tokens.accessToken()),
                 newExpiresAt,
+                null,
                 storeId);
 
             log.info("Shopify CC token re-exchanged for store {} ({})", storeId, row.shopDomain());
             tokenHolder[0] = tokens.accessToken();
+            didExchange[0] = true;
             return null;
         });
 
@@ -254,6 +302,27 @@ public class ShopifyTokenProvider {
         if (reauthEx[0] != null) {
             throw reauthEx[0];
         }
+
+        // Real scope read happens here, outside the row lock, only when a fresh exchange
+        // actually happened (not on the double-checked-locking "already fresh" early return,
+        // where there's no new token to introspect).
+        if (didExchange[0] && tokenHolder[0] != null) {
+            String grantedScopes = shopifyGateway.fetchGrantedScopes(shopDomain, tokenHolder[0]);
+            if (grantedScopes != null) {
+                tx.execute(s -> {
+                    jdbc.update(
+                        "UPDATE stores SET access_token_scopes = ? WHERE id = ?",
+                        grantedScopes, storeId);
+                    return null;
+                });
+                log.info("Shopify CC granted scopes refreshed for store {}: {}", storeId, grantedScopes);
+            } else {
+                log.warn("Could not read granted scopes after CC re-exchange for store {} — " +
+                          "access_token_scopes left unchanged until the next successful read",
+                          storeId);
+            }
+        }
+
         return tokenHolder[0];
     }
 

@@ -87,9 +87,9 @@ public class ShopifySyncService {
                                 access_token_expires_at, status, import_status,
                                 connection_type, api_secret_encrypted, client_id_encrypted,
                                 refresh_token_encrypted, refresh_token_expires_at,
-                                orders_ingest_from)
+                                orders_ingest_from, access_token_scopes)
             VALUES (?, ?, 'shopify', ?, ?, 'connected', 'pending',
-                    'custom_app_cc', ?, ?, NULL, NULL, now())
+                    'custom_app_cc', ?, ?, NULL, NULL, now(), ?)
             ON CONFLICT (shop_domain) DO UPDATE SET
                 access_token_encrypted   = EXCLUDED.access_token_encrypted,
                 access_token_expires_at  = EXCLUDED.access_token_expires_at,
@@ -99,7 +99,8 @@ public class ShopifySyncService {
                 refresh_token_expires_at = NULL,
                 status                   = 'connected',
                 import_status            = 'pending',
-                connection_type          = 'custom_app_cc'
+                connection_type          = 'custom_app_cc',
+                access_token_scopes      = EXCLUDED.access_token_scopes
             WHERE stores.tenant_id = EXCLUDED.tenant_id
             RETURNING id
             """;
@@ -292,6 +293,16 @@ public class ShopifySyncService {
         String encryptedClientId = encryptionService.encrypt(clientId);
         String encryptedSecret   = encryptionService.encrypt(clientSecret);
 
+        // The CC exchange response itself carries no scope field — read the token's real
+        // granted scopes via a separate, live introspection call so this store's scope guard
+        // reflects Shopify's truth from the moment it's first connected, not an assumption.
+        String grantedScopes = shopifyGateway.fetchGrantedScopes(shopDomain, accessToken);
+        if (grantedScopes == null) {
+            log.warn("Could not read granted scopes at CC connect time for {} — " +
+                      "access_token_scopes will be null until the next successful re-exchange " +
+                      "or a forced refresh", shopDomain);
+        }
+
         java.sql.Timestamp expiresAt = java.sql.Timestamp.from(
             java.time.Instant.now().plusSeconds(expiresInSeconds));
 
@@ -299,7 +310,7 @@ public class ShopifySyncService {
             UUID id = jdbc.query(UPSERT_STORE_CUSTOM_APP_CC,
                 rs -> rs.next() ? rs.getObject("id", UUID.class) : null,
                 tenantId, shopDomain, encryptedToken, expiresAt,
-                encryptedSecret, encryptedClientId);
+                encryptedSecret, encryptedClientId, grantedScopes);
             if (id == null) {
                 throw new ResponseStatusException(HttpStatus.CONFLICT,
                     "Shop domain is already connected to a different account");

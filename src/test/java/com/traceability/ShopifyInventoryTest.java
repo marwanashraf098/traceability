@@ -761,4 +761,58 @@ class ShopifyInventoryTest {
         assertThat(count).as("si14: reclaim updates the SAME row, never inserts a second one").isEqualTo(1L);
     }
 
+    // ── si15: custom_app_cc scope-guard failure gets the corrected message ──────
+    //
+    // Production bug: a custom_app_cc store missing a scope was told to "reconnect" —
+    // meaningless for CC (no consent screen). The message must instead point at the Dev
+    // Dashboard custom app + token reissue. Self-contained tenant/store/location/variant so
+    // this doesn't disturb the shared fixtures used by si1-si14.
+
+    @Test @Order(15)
+    void si15_customAppCc_missingScope_getsCorrectedMessageNotReconnect() throws Exception {
+        UUID ccTenantId = UUID.randomUUID();
+        UUID ccStoreId  = UUID.randomUUID();
+        UUID ccProductId = UUID.randomUUID();
+        UUID ccVariantId = UUID.randomUUID();
+        UUID ccLocationId = UUID.randomUUID();
+
+        jdbc.update("INSERT INTO tenants (id, name) VALUES (?, 'ShopifyInventoryCcScopeTenant')", ccTenantId);
+        jdbc.update(
+            "INSERT INTO stores (id, tenant_id, shop_domain, import_status, connection_type, " +
+            "client_id_encrypted, api_secret_encrypted, access_token_scopes) " +
+            "VALUES (?, ?, 'cc-scope-test.myshopify.com', 'idle', 'custom_app_cc', 'enc-id', 'enc-secret', 'read_products')",
+            ccStoreId, ccTenantId);
+        jdbc.update(
+            "INSERT INTO products (id, tenant_id, store_id, external_id, title, status) " +
+            "VALUES (?, ?, ?, 'gid://shopify/Product/CC15', 'CC Scope Product', 'active')",
+            ccProductId, ccTenantId, ccStoreId);
+        jdbc.update(
+            "INSERT INTO variants (id, tenant_id, product_id, external_id, title, sku) " +
+            "VALUES (?, ?, ?, 'gid://shopify/ProductVariant/CC15', 'CC Scope Variant', 'SKU-CC15')",
+            ccVariantId, ccTenantId, ccProductId);
+        jdbc.update(
+            "INSERT INTO locations (id, tenant_id, name, shopify_location_id, shopify_sync_status, is_fulfillment) " +
+            "VALUES (?, ?, 'CC Warehouse', 'gid://shopify/Location/CC15', 'linked', true)",
+            ccLocationId, ccTenantId);
+
+        UUID sessionId = UUID.randomUUID();
+        TenantContext.set(ccTenantId);
+        try {
+            service.onReceivingSessionClose(ccTenantId, sessionId, ccLocationId, Map.of(ccVariantId, 1))
+                   .get(5, TimeUnit.SECONDS);
+        } finally { TenantContext.clear(); }
+
+        String error = jdbc.queryForObject(
+            "SELECT error FROM shopify_inventory_adjustments " +
+            "WHERE trigger_type = 'receiving_session' AND trigger_id = ? AND tenant_id = ?",
+            String.class, sessionId.toString(), ccTenantId);
+
+        assertThat(error).as("si15: names the missing scope").contains("Token lacks write_inventory scope");
+        assertThat(error).as("si15: must NOT tell a CC store to reconnect").doesNotContain("must reconnect");
+        assertThat(error).as("si15: must point at updating the custom app's Admin API scopes instead")
+            .contains("Admin API access scopes");
+
+        verify(shopifyGateway, never()).adjustInventoryQuantities(any(), any(), any(), any(), anyInt(), any());
+    }
+
 }

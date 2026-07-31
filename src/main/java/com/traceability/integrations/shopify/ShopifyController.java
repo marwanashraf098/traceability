@@ -14,6 +14,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.server.ResponseStatusException;
 
+import java.util.Map;
 import java.util.UUID;
 
 @RestController
@@ -31,6 +32,7 @@ public class ShopifyController {
     private final JdbcTemplate              jdbc;
     private final ObjectMapper              mapper;
     private final TransactionTemplate       tx;
+    private final ShopifyTokenProvider      tokenProvider;
 
     public ShopifyController(ShopifySyncService syncService,
                               ShopifyGateway shopifyGateway,
@@ -39,7 +41,8 @@ public class ShopifyController {
                               JobScheduler jobScheduler,
                               JdbcTemplate jdbc,
                               ObjectMapper mapper,
-                              PlatformTransactionManager txm) {
+                              PlatformTransactionManager txm,
+                              ShopifyTokenProvider tokenProvider) {
         this.syncService     = syncService;
         this.shopifyGateway  = shopifyGateway;
         this.importJob       = importJob;
@@ -48,6 +51,7 @@ public class ShopifyController {
         this.jdbc            = jdbc;
         this.mapper          = mapper;
         this.tx              = new TransactionTemplate(txm);
+        this.tokenProvider   = tokenProvider;
     }
 
     public record ConnectRequest(String shopDomain, String adminToken) {}
@@ -185,6 +189,45 @@ public class ShopifyController {
         UUID tenantId = resolveStoreTenant(storeId, principal);
         webhooksJob.run(storeId, tenantId);
         return ResponseEntity.ok().build();
+    }
+
+    /**
+     * Forces an immediate CC token re-exchange + real granted-scope read for one
+     * connection_type=custom_app_cc store — without requiring the merchant to re-enter
+     * Client ID/Secret through /custom-connect. Use this after updating the custom app's
+     * Admin API access scopes in the store admin: a fresh client-credentials exchange always
+     * reflects the app's CURRENTLY configured scopes, and this triggers that exchange right
+     * now instead of waiting up to ~24h for the natural near-expiry refresh cycle.
+     *
+     * Not applicable to public-OAuth or legacy custom_app (non-CC) stores — those refresh
+     * scopes through their own respective flows (OAuth reconnect / token exchange).
+     */
+    @PostMapping("/stores/{storeId}/refresh-cc-scopes")
+    @PreAuthorize("hasRole('OWNER')")
+    public ResponseEntity<Map<String, Object>> refreshCcScopes(
+            @PathVariable UUID storeId,
+            @AuthenticationPrincipal CustomUserDetails principal) {
+        resolveStoreTenant(storeId, principal);
+
+        String connectionType = tx.execute(s -> jdbc.query(
+            "SELECT connection_type FROM stores WHERE id = ?",
+            rs -> rs.next() ? rs.getString(1) : null,
+            storeId));
+        if (!"custom_app_cc".equals(connectionType)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                "This action is only valid for custom_app_cc stores (was: " + connectionType + ")");
+        }
+
+        tokenProvider.forceReExchangeNow(storeId);
+
+        String grantedScopes = tx.execute(s -> jdbc.query(
+            "SELECT access_token_scopes FROM stores WHERE id = ?",
+            rs -> rs.next() ? rs.getString(1) : null,
+            storeId));
+
+        return ResponseEntity.ok(Map.of(
+            "storeId", storeId.toString(),
+            "accessTokenScopes", grantedScopes != null ? grantedScopes : ""));
     }
 
     /**
