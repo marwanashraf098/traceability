@@ -234,9 +234,16 @@ public class ShopifyInventoryService {
                 variantError = "Variant has no Shopify GID: " + variantId;
             } else {
                 record StoreSnap(UUID id, String shopDomain, String grantedScopes, String connectionType) {}
+                // ORDER BY last_sync_at DESC NULLS LAST — a tenant is schema-legal to have more
+                // than one stores row (no UNIQUE(tenant_id) constraint exists), so a bare LIMIT 1
+                // picks an undefined row. Matches ConnectionsController's "most recently connected
+                // store" pattern. Without this, a stale/never-synced store row can beat the real
+                // one, reading its (possibly empty) scopes/token instead — this was live and
+                // undiagnosed during the 2026-07-31 read_products scope-check investigation.
                 StoreSnap store = tx.execute(status ->
                     jdbc.query(
-                        "SELECT id, shop_domain, access_token_scopes, connection_type FROM stores WHERE tenant_id = ? LIMIT 1",
+                        "SELECT id, shop_domain, access_token_scopes, connection_type FROM stores " +
+                        "WHERE tenant_id = ? ORDER BY last_sync_at DESC NULLS LAST LIMIT 1",
                         rs -> rs.next() ? new StoreSnap(
                             rs.getObject(1, UUID.class),
                             rs.getString(2),

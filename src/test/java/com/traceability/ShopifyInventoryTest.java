@@ -894,4 +894,82 @@ class ShopifyInventoryTest {
             .isNotEqualTo(firstAttemptKey);
     }
 
+    // ── si17: multi-store tenant — deterministic store resolution (Step 0.5) ─
+    //
+    // A tenant is schema-legal to have more than one `stores` row (no UNIQUE(tenant_id)
+    // constraint) — e.g. a stale/abandoned connect attempt left behind alongside the real,
+    // currently-synced store. Before the Step 0.5 fix, resolvePreconditions()'s bare
+    // `LIMIT 1` (no ORDER BY) could nondeterministically pick either row. This proves the
+    // fix: the most-recently-synced store (by last_sync_at) is always the one whose
+    // domain/token drive the actual Shopify call — both a positive control (the fresh
+    // store's identity IS used and the call succeeds) and a negative check (the stale
+    // store's identity is NEVER used).
+
+    @Test @Order(17)
+    void si17_multiStoreTenant_deterministicallyPicksMostRecentlySyncedStore() throws Exception {
+        UUID detTenantId   = UUID.randomUUID();
+        UUID staleStoreId  = UUID.randomUUID();
+        UUID freshStoreId  = UUID.randomUUID();
+        UUID detProductId  = UUID.randomUUID();
+        UUID detVariantId  = UUID.randomUUID();
+        UUID detLocationId = UUID.randomUUID();
+
+        jdbc.update("INSERT INTO tenants (id, name) VALUES (?, 'ShopifyInventoryDeterminismTenant')", detTenantId);
+
+        // Stale store: older last_sync_at — must NOT be the row resolvePreconditions reads.
+        jdbc.update(
+            "INSERT INTO stores (id, tenant_id, shop_domain, import_status, access_token_scopes, last_sync_at) " +
+            "VALUES (?, ?, 'stale-det.myshopify.com', 'idle', 'read_products,write_inventory', now() - interval '10 days')",
+            staleStoreId, detTenantId);
+        // Fresh store: most recent last_sync_at — the one that must win.
+        jdbc.update(
+            "INSERT INTO stores (id, tenant_id, shop_domain, import_status, access_token_scopes, last_sync_at) " +
+            "VALUES (?, ?, 'fresh-det.myshopify.com', 'idle', 'read_products,write_inventory', now())",
+            freshStoreId, detTenantId);
+
+        jdbc.update(
+            "INSERT INTO products (id, tenant_id, store_id, external_id, title, status) " +
+            "VALUES (?, ?, ?, 'gid://shopify/Product/DET17', 'Determinism Product', 'active')",
+            detProductId, detTenantId, freshStoreId);
+        jdbc.update(
+            "INSERT INTO variants (id, tenant_id, product_id, external_id, title, sku) " +
+            "VALUES (?, ?, ?, 'gid://shopify/ProductVariant/DET17', 'Determinism Variant', 'SKU-DET17')",
+            detVariantId, detTenantId, detProductId);
+        jdbc.update(
+            "INSERT INTO locations (id, tenant_id, name, shopify_location_id, shopify_sync_status, is_fulfillment) " +
+            "VALUES (?, ?, 'Determinism WH', 'gid://shopify/Location/DET17', 'linked', true)",
+            detLocationId, detTenantId);
+
+        when(tokenProvider.getValidToken(freshStoreId)).thenReturn("fresh-token");
+        when(tokenProvider.getValidToken(staleStoreId)).thenReturn("stale-token");
+        when(shopifyGateway.resolveInventoryItemId(anyString(), anyString(),
+                eq("gid://shopify/ProductVariant/DET17")))
+            .thenReturn("gid://shopify/InventoryItem/DET17");
+
+        UUID sessionId = UUID.randomUUID();
+        TenantContext.set(detTenantId);
+        try {
+            service.onReceivingSessionClose(detTenantId, sessionId, detLocationId, Map.of(detVariantId, 1))
+                   .get(5, TimeUnit.SECONDS);
+        } finally {
+            TenantContext.clear();
+        }
+
+        // Positive control: the call actually landed, using the FRESH store's domain and token.
+        verify(shopifyGateway).adjustInventoryQuantities(
+            eq("fresh-det.myshopify.com"), eq("fresh-token"), eq("gid://shopify/InventoryItem/DET17"),
+            eq("gid://shopify/Location/DET17"), eq(1), eq("received"), any());
+        // Negative: the stale store's domain/token must never appear in any call.
+        verify(shopifyGateway, never()).adjustInventoryQuantities(
+            eq("stale-det.myshopify.com"), any(), any(), any(), anyInt(), any(), any());
+        verify(shopifyGateway, never()).adjustInventoryQuantities(
+            any(), eq("stale-token"), any(), any(), anyInt(), any(), any());
+
+        Map<String, Object> row = jdbc.queryForMap(
+            "SELECT status FROM shopify_inventory_adjustments " +
+            "WHERE trigger_type = 'receiving_session' AND trigger_id = ? AND tenant_id = ?",
+            sessionId.toString(), detTenantId);
+        assertThat(row.get("status")).as("si17: resolved deterministically and applied").isEqualTo("applied");
+    }
+
 }
