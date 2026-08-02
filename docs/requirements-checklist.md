@@ -123,7 +123,7 @@ One line per requirement · [M] Must / [S] Should / [C] Could · use as the buil
 - [x] 13.1 [M] Manager/Owner: piece → Lost/Damaged/Destroyed with fixed reason list + adjusted event [Day 34: PieceAdjustService.adjustPiece(), reason enum 6 values, note required for other, adjusted event+audit, phraseKey]
 - [x] 13.2 [M] Reserved/Packed pieces guarded: must release from order first [Day 34: PieceCommittedException 409 with orderId+orderNumber; releaseForAdjust reuses unscan/unpackPiece paths; two explicit steps]
 - [x] 13.3 [M] Reverse ("found it"): Lost→Available with reason; history never rewritten [Day 34: same /adjust endpoint toStatus=available; terminal 409; append-only events confirmed in adj6 test]
-- [ ] 13.4 [S] Bulk adjustment by scan session
+- [x] 13.4 [S] Bulk adjustment by scan session — subsumed by FR-21 stock-take (see below)
 
 ## FR-14 Piece Lookup (showcase)
 - [x] 14.1 [M] Global scan/type lookup → piece page ≤ 1s
@@ -145,6 +145,16 @@ One line per requirement · [M] Must / [S] Should / [C] Could · use as the buil
 - [~] 16.2 [M] Worker screens one-handed on 5–6.5" Android; auto-focused scan field [V47: pickup scan screen has always-focused input, Enter capture, arm's-length feedback banner; one-handed Android sizing not validated]
 - [ ] 16.3 [M] Distinct success/failure audio
 - [ ] 16.4 [M] EGP everywhere ([C] Arabic-Indic numerals per user)
+
+## FR-21 Stock Taking
+- [x] 21.1 [M] Blind whole-tenant/variant-subset count session; snapshot full piece population (every status) at open [Step 2: `StockTakeService.openSession()`]
+- [x] 21.2 [M] Blind idempotent scan, same-tenant only, cross-tenant/unknown barcode never leaks existence [Step 3: `StockTakeService.scan()`]
+- [x] 21.3 [M] Disposition report: buckets (on-shelf counted/uncounted, committed, with-courier/delivered, returns bench, damaged, previously written off, unexpected finds) + per-variant rollup + coverage% [Step 4: `StockTakeReconciliationService.reconciliation()`]
+- [x] 21.4 [M] Resolutions: found-it (no piece_event), lost on free stock (gated on complete_count, drift-guarded), lost on committed stock (routes through FR-13.2 release guard, no one-tap write-off), condition correction available→damaged [Step 4: `resolve()`; `damaged→available` explicitly out of scope, see PROGRESS.md]
+- [x] 21.5 [M] Finalize: live Shopify write-off decrement via dedicated method (never `adjustInventoryQuantities`, never `inventorySetOnHandQuantities`), non-idempotent retry rule (definitive failure auto-retries, ambiguous ack does not) [Step 5: `StockTakeReconciliationService.finalizeSession()` + `StockTakeShopifyPushJob`, CLAUDE.md §7 amended]
+- [ ] 21.6 [M] Frontend `StockTake.tsx` + AR/EN i18n (Step 6 — not built this round)
+
+Built 2026-08-02 per `docs/fr-21-stock-taking-build-spec.md`, Steps 0.5–5, per-step commits; local/Testcontainers only, not run against production or a real Shopify store.
 
 ## NFR (verifiable bars)
 - [ ] N1 Scan validation p95 ≤ 300ms · piece page ≤ 1s · 1k receive ≤ 10s · 500-label PDF ≤ 15s · lists ≤ 1.5s @100k pieces · import 5k products+10k orders ≤ 30min

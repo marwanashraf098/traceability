@@ -4,6 +4,58 @@
 
 ## Current state
 
+**FR-21 — Stock Taking, Steps 0.5–5 (2026-08-02) — built and tested against LOCAL/Testcontainers
+only; not run against production or any real Shopify store.** Built to
+`docs/fr-21-stock-taking-build-spec.md` end to end, per-step commits, Step 5 gated on explicit
+go-ahead as designed. **Step 6 (frontend `StockTake.tsx` + i18n) is NOT built** — backend only.
+
+**Step 0.5 (prerequisite, its own commit):** `ShopifyInventoryService.resolvePreconditions()`'s
+store lookup was `... WHERE tenant_id = ? LIMIT 1` with no `ORDER BY` — nondeterministic on a
+multi-store tenant (no `UNIQUE(tenant_id)` on `stores`). Fixed to
+`ORDER BY last_sync_at DESC NULLS LAST LIMIT 1`, matching `ConnectionsController`'s existing
+pattern. This gated Step 5 — a live decrement cannot ride a nondeterministic store pick.
+
+**Steps 1–4 (schema, open+snapshot, blind scan, reconciliation+resolutions):** `V62` adds five
+tenant-scoped tables (`stock_take_sessions/scope_variants/expected/scans/shopify_syncs`), each
+with RLS in the same migration. `StockTakeService` (open/snapshot/scan) and
+`StockTakeReconciliationService` (reconciliation report + resolutions + attest-complete +
+cancel + finalize). Snapshot freezes the FULL piece population at the tenant's single
+`is_fulfillment` location, every status, at open. Scan is blind and idempotent; cross-tenant and
+genuinely-unknown barcodes are handled identically on purpose — under RLS they're
+indistinguishable to the query, which IS the non-leak guarantee. Reconciliation buckets by
+CURRENT live status (not the frozen snapshot status), so a piece that drifted since open shows
+up where it actually is now. `InventoryLedger.ALLOWED` gained exactly one new edge,
+`damaged:lost`, named to its one caller (`resolveLost()`). **`damaged → available` ("found it"
+on a damaged piece) is deliberately NOT offered** — `PieceAdjustService.adjustPiece()` already
+treats damaged as terminal (`AdjustTest.adj7`) and no code path reverses it; a scanned-good/
+recorded-damaged mismatch surfaces as a read-only flag instead. `resolveLost()`'s drift guard
+(`ledger.transition(expectedStatus = status_at_open, → lost, ...)`) falls out for free from the
+existing optimistic-concurrency race guard — no bespoke drift-detection code needed.
+
+**Step 5 (finalize + live decrement, explicit go-ahead required and given):** Two-phase finalize
+— the mandatory rule was "never wrap the Shopify HTTP call in a DB transaction," learned once
+already at Step 4 (`resolve()`'s `srt7` fix: a caught exception from a nested `@Transactional`
+call still poisons the whole shared transaction under REQUIRED propagation) and reapplied one
+level up. **Phase A** (`finalizeSession()`, one committed tx): atomic `open→finalized` guard,
+delta = COUNT of `stock_take_missing` piece_events per variant (never expected-minus-counted),
+claim insert (`UNIQUE(session_id)`), job enqueue. **Phase B** (`StockTakeShopifyPushJob`, a
+JobRunr job): loads the claim and resolves preconditions in their own short committed
+transactions, then calls `ShopifyGateway.pushStockTakeWriteOff()` — a brand-new dedicated method
+that does NOT share code with `executeGraphQL()`/`adjustInventoryQuantities` (that shared path
+wraps calls in Resilience4j retry-on-timeout, 3 silent attempts before any exception surfaces —
+fine for the existing `@idempotent`-protected increment/move calls, unsafe for a non-idempotent
+decrement that needs one unambiguous outcome). Exactly one HTTP attempt: a definitive rejection
+throws `ShopifyException` (rethrown → JobRunr's own retry policy retries it, safely, nothing was
+applied); a genuinely unconfirmed response (timeout, connection reset) throws the new
+`ShopifyAmbiguousException` (swallowed after recording `failed_ambiguous` — never rethrown, so
+JobRunr never auto-retries an outcome that might already have applied; surfaced for manual
+verification via `referenceDocumentUri = traced://stock-take/{session_id}`). All per-variant
+deltas ship in one `inventoryAdjustQuantities` mutation. `adjustInventoryQuantities` itself is
+untouched — its positive-only guard stays the FR-17 v2 invariant. CLAUDE.md §7 amendment applied
+verbatim, recording the dedicated-method carve-out.
+
+---
+
 **FR-17 v2 — Traced-owned Shopify location + increment-only live inventory sync (2026-07-29) —
 built and tested against LOCAL/Testcontainers only; not run against production or any real
 Shopify store.** Built exactly `docs/traced-shopify-location-and-onhand-sync-spec.md` (the
@@ -3068,6 +3120,8 @@ Provision Hetzner VPS, set up Docker Compose (app + Postgres or Supabase connect
 - **Four SECURITY DEFINER functions are the only RLS escape hatches** — `auth_lookup_user` (V1), `resolve_tenant_by_shop_domain` (V1), `lookup_refresh_token` (V3), `resolve_tenant_by_webhook_secret` (V5, approved 2026-06-14). Adding a fifth requires explicit approval. Any future cross-tenant read must go through a named, code-reviewed `SECURITY DEFINER` function; bare `BYPASSRLS` connections in application code are not an acceptable pattern.
 - **App datasource: session-mode pooler `:5432` — deliberate, not a workaround** — Supabase direct host (`db.jtkzpjaangjtkrepkqdz.supabase.co`) is IPv6-only; no A record (confirmed via nslookup). IPv4 requires Supabase's paid add-on, not on our plan. We run on the session-mode pooler (`aws-0-eu-west-1.pooler.supabase.com:5432`), which pins one backend connection per client session — `SET LOCAL app.current_tenant` behaves identically to a direct connection. Transaction-mode pooler port `6543` is FORBIDDEN: it resets the GUC between statements, silently breaking RLS. `DataSourceConfig.rejectTransactionPooler()` throws `IllegalStateException` at startup if port 6543 is detected; guarded by 4 unit tests.
 - **Production Shopify connect = public OAuth app; custom-app endpoint is DEV-ONLY** — Both pilots are on Shopify Basic. Custom (legacy) apps cannot read customer PII (name/phone/address) on Basic-plan stores — only Advanced/Plus. Our product requires customer PII for address→Bosta zone mapping, blocked-customer checks, and Mode-B order↔delivery matching. A public OAuth app can read PII on any plan after Shopify's Protected Customer Data (PCD) review. Therefore: the production connect/auth seam will be a public OAuth flow; the current custom-app token endpoint (`POST /api/v1/shopify/connect` with `adminToken`) is DEV-ONLY and must not be shipped to pilots. Everything else is unchanged — import pipeline, idempotency, gateway, encryption, Bosta Mode-B, ledger, and tenant isolation all reuse without modification. Launch-gating dependencies from this decision: (1) PCD review approval (apply early — non-trivial lead time), (2) mandatory GDPR webhooks (`customers/data_request`, `customers/redact`, `shop/redact`) required for any public app, (3) a privacy policy and data-use statement. App Store listing is post-pilot. Do not revert to custom-app-only thinking.
+- **FR-21 stock-take `damaged → available` is out of scope, permanently, not a stub** — `PieceAdjustService.adjustPiece()` already treats `damaged` as a terminal status (409, `AdjustTest.adj7`) and no code path reverses it. When Step 4's resolve-actions were being designed, adding a `damaged:available` `InventoryLedger.ALLOWED` edge to support it was explicitly considered and rejected — only `damaged:lost` was authorized. A damaged-in-snapshot piece scanned as good surfaces as a read-only flag in the `on_shelf_uncounted` bucket; reinstating it is a manual `PieceAdjustService`/`InventoryLedger` question, out of band from a stock take. Follow-up FR-21.1 (reinstate-from-damaged) needs its own separate approval if pilot demand appears — do not silently add the edge to "complete" the feature.
+- **Non-idempotent Shopify writes need their own dedicated HTTP call, not a shared retry-wrapped helper** — `ShopifyHttpGateway.executeGraphQL()` (used by every increment/move mutation) wraps calls in Resilience4j `retryExceptions(ResourceAccessException.class)`, silently re-sending up to 3 times on a connection/read timeout before any exception ever reaches the caller. That's fine when the mutation carries Shopify's `@idempotent(key:)` directive (existing increment/move calls). For FR-21's stock-take write-off (a genuinely non-idempotent decrement — `-2` applied twice is `-4`), reusing that path would defeat the whole point: the caller needs to classify ONE unambiguous outcome (a confirmed rejection vs. a genuinely-unconfirmed response) to know whether auto-retry is safe. `ShopifyGateway.pushStockTakeWriteOff()` is a separate, self-contained method: no shared retry wrapper, exactly one HTTP attempt. General lesson for any future non-idempotent Shopify write: don't route it through `executeGraphQL()`.
 
 ---
 
@@ -3077,6 +3131,7 @@ Provision Hetzner VPS, set up Docker Compose (app + Postgres or Supabase connect
 - **`ApiExceptionHandler.handleGeneral(Exception)` intercepts `AccessDeniedException` from `@PreAuthorize`** — `DispatcherServlet` resolves `AccessDeniedException` through `ExceptionHandlerExceptionResolver` before `ExceptionTranslationFilter` can invoke the `AccessDeniedHandler`. Must have an explicit `@ExceptionHandler(AccessDeniedException.class) → 403` handler above the catch-all; otherwise the `Exception` handler returns 500.
 - **Supabase 15-connection cap (free plan session-mode pooler)** — solved by sharing one `owner-pool` (max=2, min-idle=1) between Flyway and JobRunr (`@FlywayDataSource` bean in `DataSourceConfig`), and shrinking `HikariPool-1` (app_user) to max=5, min-idle=1. Total at startup: 2 connections. Stale connections from crashed previous runs can fill the 15 slots; kill them in Supabase SQL Editor with `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE application_name = 'Supavisor' AND pid <> pg_backend_pid()` then immediately restart. Use `./dev.sh` to start the app — it loads `.env`, kills :8080, and starts Maven. Running `mvn spring-boot:run` in a new terminal without sourcing `.env` first causes Flyway to try `localhost:5432` (connection refused).
 - **Shopify Protected Customer Data (PCD) is gated separately from `read_customers` scope** — `shippingAddress` and `customer` fields on Order are blocked even with `read_customers` granted until PCD is approved. Currently `customer_name`, `customer_phone`, `address` are null-populated; full data is preserved in `orders.raw` (jsonb) for backfill once approved. See pending human tasks for what to do.
+- **A caught exception from a nested `@Transactional` call still poisons the whole shared transaction** — hit twice building FR-21 (`StockTakeReconciliationService.resolve()`'s `srt7` fix, then `StockTakeShopifyPushJob`'s Phase A/B split one level up). Under Spring's default REQUIRED propagation, a `@Transactional` method called from within another `@Transactional` method joins the SAME physical transaction. If the inner call throws a RuntimeException, Spring's `TransactionInterceptor` marks that shared transaction `rollback-only` on the way out — even if the OUTER method catches the exception in a try/catch. The outer method's eventual commit then throws `UnexpectedRollbackException`, taking down everything else that ran in that transaction (e.g. every other item in a batch loop) even though it "handled" the error. Fix: don't wrap the outer operation in `@Transactional` at all when it needs to catch-and-continue past a nested call that might throw — let each independent unit commit on its own (a nested `@Transactional` call creates its own transaction when none is active). Same root cause as the general rule "never wrap an external HTTP call in a DB transaction" — both are really "don't let something outside your control decide whether your transaction commits."
 
 
 - **Docker Desktop M3 + Testcontainers API v1.41 override**: Docker Desktop on Mac M3 rejects docker-java's default v1.24 version-negotiation request with HTTP 400. Fix: `DockerDesktopMacStrategy` in `src/test/java/com/traceability/` overrides `test()`, `getClient()`, *and* `getDockerClient()` (all three are required — Testcontainers calls `getDockerClient()` after `test()` passes, and the base implementation re-does version negotiation) to force API v1.41. Strategy is loaded via `~/.testcontainers.properties` AND `src/test/resources/testcontainers.properties`. **Do not delete or "clean up" this class.** On CI (Linux Docker socket) version negotiation works fine; the class is inert there because the built-in `UnixSocketClientProviderStrategy` wins first.
