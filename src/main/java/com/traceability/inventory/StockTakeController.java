@@ -22,9 +22,12 @@ import java.util.UUID;
 public class StockTakeController {
 
     private final StockTakeService stockTake;
+    private final StockTakeReconciliationService reconciliation;
 
-    public StockTakeController(StockTakeService stockTake) {
+    public StockTakeController(StockTakeService stockTake,
+                               StockTakeReconciliationService reconciliation) {
         this.stockTake = stockTake;
+        this.reconciliation = reconciliation;
     }
 
     @PostMapping("/sessions")
@@ -49,6 +52,40 @@ public class StockTakeController {
             @RequestBody ScanRequest req,
             @AuthenticationPrincipal CustomUserDetails principal) {
         return stockTake.scan(sessionId, req.barcode(), req.condition(), principal.userId());
+    }
+
+    // ── Reconciliation + resolutions (Step 4) ────────────────────────────────
+
+    @GetMapping("/sessions/{sessionId}/reconciliation")
+    @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
+    public Map<String, Object> reconciliation(@PathVariable UUID sessionId) {
+        return reconciliation.reconciliation(sessionId);
+    }
+
+    @PostMapping("/sessions/{sessionId}/resolve")
+    @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
+    public List<Map<String, Object>> resolve(
+            @PathVariable UUID sessionId,
+            @RequestBody List<StockTakeReconciliationService.ResolveItem> items,
+            @AuthenticationPrincipal CustomUserDetails principal) {
+        return reconciliation.resolve(sessionId, items, principal.userId());
+    }
+
+    @PostMapping("/sessions/{sessionId}/attest-complete")
+    @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
+    public Map<String, Object> attestComplete(
+            @PathVariable UUID sessionId,
+            @AuthenticationPrincipal CustomUserDetails principal) {
+        return reconciliation.attestComplete(sessionId, principal.userId());
+    }
+
+    @PostMapping("/sessions/{sessionId}/cancel")
+    @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void cancel(
+            @PathVariable UUID sessionId,
+            @AuthenticationPrincipal CustomUserDetails principal) {
+        reconciliation.cancel(sessionId, principal.userId());
     }
 
     public record OpenSessionRequest(

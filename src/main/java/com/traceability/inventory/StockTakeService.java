@@ -240,6 +240,16 @@ public class StockTakeService {
                        boolean completeCount) {}
 
     SessionRow requireOpenSession(UUID sessionId, UUID tenantId) {
+        SessionRow row = requireSession(sessionId, tenantId);
+        if (!"open".equals(row.status())) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                "Stock take session is not open (status=" + row.status() + ")");
+        }
+        return row;
+    }
+
+    /** No status check — reconciliation must be viewable for finalized/cancelled sessions too. */
+    SessionRow requireSession(UUID sessionId, UUID tenantId) {
         SessionRow row = jdbc.query(
             "SELECT id, status, scope_type, location_id, complete_count " +
             "FROM stock_take_sessions WHERE id = ? AND tenant_id = ?",
@@ -252,10 +262,6 @@ public class StockTakeService {
             sessionId, tenantId);
         if (row == null) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Stock take session not found");
-        }
-        if (!"open".equals(row.status())) {
-            throw new ResponseStatusException(HttpStatus.CONFLICT,
-                "Stock take session is not open (status=" + row.status() + ")");
         }
         return row;
     }

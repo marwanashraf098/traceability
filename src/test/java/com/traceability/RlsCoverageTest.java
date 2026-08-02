@@ -87,7 +87,8 @@ class RlsCoverageTest {
             "/api/v1/fulfill/gather",
             "/api/v1/catalog",
             "/api/v1/locations/shopify-junk-report",
-            "/api/v1/shopify/inventory/reconcile"
+            "/api/v1/shopify/inventory/reconcile",
+            "/api/v1/stock-takes/sessions/{sessionId}/reconciliation"
     );
 
     // ── Patterns consciously excluded, with reasons ────────────────────────────
@@ -504,6 +505,44 @@ class RlsCoverageTest {
         assertThat(resp.getBody()).isNotEmpty();
 
         jdbc.update("DELETE FROM locations WHERE id = ?", junkId);
+    }
+
+    @Test
+    void stockTakeReconciliation_returnsComputedReportForSeededSession() {
+        UUID sessionId = UUID.randomUUID();
+        String pieceId = UlidGenerator.generate();
+
+        jdbc.update(
+            "INSERT INTO stock_take_sessions (id, tenant_id, status, scope_type, location_id, opened_by) " +
+            "VALUES (?, ?, 'open', 'all', ?, ?)",
+            sessionId, tenantId, locationId, ownerUserId);
+        jdbc.update(
+            "INSERT INTO pieces (id, tenant_id, variant_id, barcode, short_code, status, current_location_id) " +
+            "VALUES (?, ?, ?, ?, 'P' || LPAD((abs(hashtext(?)) % 999999 + 1)::text, 6, '0'), " +
+            "        'available'::piece_status, ?)",
+            pieceId, tenantId, variantId, "PC-" + pieceId, pieceId, locationId);
+        jdbc.update(
+            "INSERT INTO stock_take_expected (tenant_id, session_id, piece_id, variant_id, status_at_open) " +
+            "VALUES (?, ?, ?, ?, 'available')",
+            tenantId, sessionId, pieceId, variantId);
+
+        ResponseEntity<Map> resp = get(
+            "/api/v1/stock-takes/sessions/" + sessionId + "/reconciliation", Map.class);
+        assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.OK);
+
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> rollup = (List<Map<String, Object>>) resp.getBody().get("variantRollup");
+        assertThat(rollup).anyMatch(r -> variantId.toString().equals(r.get("variantId")));
+
+        @SuppressWarnings("unchecked")
+        Map<String, Object> buckets = (Map<String, Object>) resp.getBody().get("buckets");
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> uncounted = (List<Map<String, Object>>) buckets.get("on_shelf_uncounted");
+        assertThat(uncounted).anyMatch(p -> pieceId.equals(p.get("pieceId")));
+
+        jdbc.update("DELETE FROM stock_take_expected WHERE session_id = ?", sessionId);
+        jdbc.update("DELETE FROM stock_take_sessions WHERE id = ?", sessionId);
+        jdbc.update("DELETE FROM pieces WHERE id = ?", pieceId);
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────

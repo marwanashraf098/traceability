@@ -77,6 +77,11 @@ public class InventoryLedger {
         "available:destroyed",
         "damaged:destroyed",
         "with_courier:lost",
+        // FR-21 stock-take write-off: StockTakeReconciliationService.resolveLost() targets
+        // damaged pieces whose status_at_open was 'damaged' — the same free-stock write-off
+        // path as available:lost, just for pieces already recorded damaged at snapshot time.
+        // No other caller uses this edge.
+        "damaged:lost",
 
         // found (lost → back in stock)
         "lost:available"
