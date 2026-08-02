@@ -152,7 +152,7 @@ One line per requirement · [M] Must / [S] Should / [C] Could · use as the buil
 - [x] 21.3 [M] Disposition report: buckets (on-shelf counted/uncounted, committed, with-courier/delivered, returns bench, damaged, previously written off, unexpected finds) + per-variant rollup + coverage% [Step 4: `StockTakeReconciliationService.reconciliation()`]
 - [x] 21.4 [M] Resolutions: found-it (no piece_event), lost on free stock (gated on complete_count, drift-guarded), lost on committed stock (routes through FR-13.2 release guard, no one-tap write-off), condition correction available→damaged [Step 4: `resolve()`; `damaged→available` explicitly out of scope, see PROGRESS.md]
 - [x] 21.5 [M] Finalize: live Shopify write-off decrement via dedicated method (never `adjustInventoryQuantities`, never `inventorySetOnHandQuantities`), non-idempotent retry rule (definitive failure auto-retries, ambiguous ack does not) [Step 5: `StockTakeReconciliationService.finalizeSession()` + `StockTakeShopifyPushJob`, CLAUDE.md §7 amended]
-- [ ] 21.6 [M] Frontend `StockTake.tsx` + AR/EN i18n (Step 6 — not built this round)
+- [x] 21.6 [M] Frontend `StockTake.tsx` + AR/EN i18n [Step 6: list/create, blind scan, review/reconciliation, sync-status screens + `useScanner`/`ScanShell` extraction + `GET /sessions`, `GET /sessions/{id}`, `DELETE /sessions/{id}/scan/{pieceId}`, sync mark-resolved/repush]
 
 Built 2026-08-02 per `docs/fr-21-stock-taking-build-spec.md`, Steps 0.5–5, per-step commits; local/Testcontainers only, not run against production or a real Shopify store.
 

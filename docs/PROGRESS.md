@@ -4,10 +4,15 @@
 
 ## Current state
 
-**FR-21 — Stock Taking, Steps 0.5–5 (2026-08-02) — built and tested against LOCAL/Testcontainers
+**FR-21 — Stock Taking, Steps 0.5–6 (2026-08-02) — built and tested against LOCAL/Testcontainers
 only; not run against production or any real Shopify store.** Built to
-`docs/fr-21-stock-taking-build-spec.md` end to end, per-step commits, Step 5 gated on explicit
-go-ahead as designed. **Step 6 (frontend `StockTake.tsx` + i18n) is NOT built** — backend only.
+`docs/fr-21-stock-taking-build-spec.md` (backend, Steps 0.5–5) and
+`docs/fr-21-step6-frontend-spec.md` (frontend, Step 6) end to end, per-step commits, Step 5
+gated on explicit go-ahead as designed. **Step 6 (frontend) is now built** — list/create,
+blind scan, review/reconciliation, and sync-status screens, wired to a new read/ops backend
+slice (Step 6.1) and a scanner extraction shared with `/fulfill` (Step 6.2). Full feature is
+frontend-and-backend complete; still gated on the same production caveat as everything else in
+this section — LOCAL/Testcontainers only, no live Shopify store run yet.
 
 **Step 0.5 (prerequisite, its own commit):** `ShopifyInventoryService.resolvePreconditions()`'s
 store lookup was `... WHERE tenant_id = ? LIMIT 1` with no `ORDER BY` — nondeterministic on a
@@ -53,6 +58,57 @@ verification via `referenceDocumentUri = traced://stock-take/{session_id}`). All
 deltas ship in one `inventoryAdjustQuantities` mutation. `adjustInventoryQuantities` itself is
 untouched — its positive-only guard stays the FR-17 v2 invariant. CLAUDE.md §7 amendment applied
 verbatim, recording the dedicated-method carve-out.
+
+**Step 6 (frontend, 2026-08-02) — three commits, diagnose-first.** Step 6.0 was a read-only
+diagnosis pass against actual source (no code, no commit) that corrected several wrong
+assumptions in the original draft spec before any building started: `GET /sessions` and
+`GET /sessions/{id}` did not exist yet (had to be built, not just consumed); the Fulfill
+scan infra (HID input, flash overlay, Web-Audio beep) was inline in `Fulfill.tsx`, not a
+shared hook — needed extracting so stock-take didn't fork it; there was no camera fallback to
+preserve; and the release-for-adjust 409 flow in `Lookup.tsx`'s `AdjustPanel` is an inline
+warning card, not a `Modal` — the spec text calling it a modal was wrong. The corrected spec
+was the ground truth for the actual build.
+
+**Step 6.1 (backend read + ops endpoints):** `GET /sessions` (list, OWNER/MANAGER),
+`GET /sessions/{id}` (detail incl. `shopifySync`, WORKER+), `POST .../sync/mark-resolved`
+(only from `failed_ambiguous`), `POST .../sync/repush` (one fresh single attempt, reuses the
+existing claim row under `UNIQUE(session_id)`). Mid-step, diagnosis surfaced a real gap: there
+was no way to undo a blind mis-scan, and the spec had assumed one existed. Decision (given,
+not inferred): add `DELETE /sessions/{id}/scan/{pieceId}` as an explicit delete, never an
+upsert — an upsert would silently flip a piece's recorded condition on re-scan, unsafe in a
+blind count. Deleting a non-existent row is a 204 no-op. Every isolation test in this step
+pairs a cross-tenant negative with a same-tenant positive control — a same-tenant test that
+returns empty is not proof of RLS, it's a bug wearing a green checkmark, and this bit the first
+draft of the harness (see Gotchas: RLS-ordering).
+
+**Step 6.2 (shared scanner extraction):** `useScanner`/`ScanShell` pulled the SAFETY-CRITICAL
+scan blocks (HID input handling, flash overlay, beep, recent-scans ring buffer) out of
+`Fulfill.tsx`'s `PickScreen` behind an `onScan` callback, preserving behavior verbatim —
+UX-only extraction, no fetching inside the hook. `PickScreen` and `AwbLinkDialog` are
+byte-for-byte untouched (`git diff --stat` empty on both files after the extraction).
+
+**Step 6.3 (screens):** list/create (mirrors `Receiving.tsx`, reuses `/receiving/variants/search`
+for scoped-session picking), a full-screen blind scan view (not `Layout`-wrapped, matches the
+`/fulfill` precedent; condition mode toggle good/damaged; client-side 4-bucket tally since
+workers can never see expected quantities — `/reconciliation` is OWNER/MANAGER-only by design,
+so tallying from scan responses is structural, not a UX choice), a review/reconciliation screen
+(per-variant rollup, 8 disposition buckets, Mark-lost gated on `completeCount`/attest, the
+committed-piece 409 reusing the `AdjustPanel` inline-card pattern confirmed in 6.0 — not a
+modal), and a sync panel covering all 4 `shopifySync` states. One spec/backend mismatch found
+and resolved without pausing: the spec text says "Committed uncounted: Found-it works," but
+`StockTakeReconciliationService.resolveFound()` unconditionally 409s for any piece whose live
+status isn't `available`/`damaged` — there was no reasonable alternative reading, so committed
+rows only expose Mark-lost. `resolveStockTake()` does its own fetch + 409 body parsing rather
+than the shared `api.ts` `request()` helper, which has a pre-existing bug (never calls
+`res.json()` on error, so it can't surface `PieceCommittedError` bodies over real network calls)
+— scoped workaround, not a global fix; flagged here rather than widening blast radius. Frontend
+tests at house depth on the scan and review screens (list/create skipped per instruction);
+list/create screens introduced this codebase's first `useParams()`-dependent component test,
+solved by wrapping the component in an explicit `<Routes><Route .../></Routes>` before handing
+it to `renderWithProviders` (which itself only provides a bare `MemoryRouter`, no route
+matching). 10/10 new tests green; full frontend suite has 3 pre-existing failures in
+`blocklist`/`inventory`/`overview` tests, unrelated to this change (files never touched,
+reproduce in isolation on main).
 
 ---
 
@@ -3139,4 +3195,6 @@ Provision Hetzner VPS, set up Docker Compose (app + Postgres or Supabase connect
 - **`FORCE ROW LEVEL SECURITY` binds the table owner too** — any future Flyway migration that needs to INSERT into a tenant-scoped table (e.g., seed a default location for a new tenant) must do so as `postgres` (which holds `BYPASSRLS` and therefore bypasses RLS unconditionally — confirmed `rolbypassrls=true, rolsuper=false` on Supabase) or with a `SECURITY DEFINER` helper. `app_user` will be blocked regardless.
 - **`BostaWebhookJob` piece-transition catches are intentional idempotency guards — do not convert to errors.** A repeat terminal-state webhook (e.g. state 45 delivered arriving twice) hits one of three safe paths: (1) `current == target` fast-path check skips `ledger.transition()` entirely — no DB write; (2) `StateConflictException` where `getActual() == targetStatus` — concurrent worker applied the same transition first, treat as no-op; (3) `IllegalTransitionException` — piece has no legal path to target (e.g. a stale `with_courier` event arriving after `delivered`), log warning and continue. None of these paths fail the webhook. The dedup check (step 4) catches exact payload redeliveries before reaching pieces at all. Do not "fix" any of these catches into error or rethrow paths.
 - **`SET LOCAL` is a silent no-op outside a transaction** — the `SET LOCAL app.current_tenant = ?` call for the tenant context filter must happen inside an explicit transaction (`BEGIN` / `COMMIT`). Called outside a transaction it silently succeeds but resets at the next statement boundary, leaving subsequent queries with no tenant context (empty-string GUC → policy evaluates to false → zero rows or constraint violation).
+- **`TenantContext.set()` must happen BEFORE `TransactionTemplate.execute()`, not inside the callback** — hit building `StockTakeOpsTest`'s `app_user`/RLS harness (FR-21 Step 6.1). `TenantAwareConnection.invoke()` reads `TenantContext.get()` at the `setAutoCommit(false)` intercept point, which `DataSourceTransactionManager` triggers at the *start* of `execute()` — before the lambda body ever runs. Setting `TenantContext.set(tenantId)` inside `appUserTx.execute(status -> {...})` fires the `SET LOCAL` with no tenant already bound, so even the SAME-TENANT positive control comes back empty/404 — a genuine RLS-isolation test can pass for the wrong reason (both cross-tenant *and* same-tenant return nothing) if you don't also assert the positive control succeeds. Fix: set `TenantContext` once, outside and before the transaction callback, matching `InventoryLedgerTest`'s `@BeforeEach setTenantContext()` pattern. Applies to any future `app_user`/`TenantAwareDataSource` test harness, not just stock-take.
+- **`api.ts`'s shared `request()` never surfaces JSON error bodies** — `if (!res.ok) throw new Error(\`${res.status}: ${res.statusText}\`)` never calls `res.json()` on the error path. This makes `Lookup.tsx`'s `AdjustPanel` `PieceCommittedException` (409) parsing dead code against a real network call — it only "works" in `adjust.test.tsx` because that test mocks `adjustPiece()` directly rather than going through `request()`. Found again in FR-21 Step 6.3: `resolveStockTake()` needs the 409 body to render the release card, so it does its own `fetch` + body parsing instead of routing through `request()`. Not fixed globally (bigger blast radius than the task warranted) — flag it before reusing `request()` for anything that needs to inspect a non-2xx JSON body, and prefer the scoped-fetch pattern `resolveStockTake()` uses until `request()` itself is fixed.
 
