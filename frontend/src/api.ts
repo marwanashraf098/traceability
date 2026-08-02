@@ -694,3 +694,247 @@ export function cancelOrder(orderId: string) {
     method: 'POST',
   })
 }
+
+// ── Variant search (Receiving's autocomplete, reused by stock-take) ────────
+// GET /receiving/variants/search — despite the /receiving namespace this is a
+// generic active-variant search (SKU/title/product), not receiving-scoped.
+// Receiving.tsx itself still uses its own inline fetch helper (not this
+// function) — this wrapper exists for stock-take's variant-subset picker,
+// per the decision to route all stock-take calls through api.ts.
+
+export interface VariantMatch {
+  id: string
+  title: string
+  sku: string | null
+  product_title: string
+}
+
+export function searchVariants(query: string) {
+  return request<VariantMatch[]>(`/receiving/variants/search?q=${encodeURIComponent(query)}`)
+}
+
+// ── FR-21: Stock Taking ────────────────────────────────────────────────────
+
+export type StockTakeStatus = 'open' | 'finalized' | 'cancelled'
+export type StockTakeScopeType = 'all' | 'variant_subset'
+export type StockTakeCondition = 'good' | 'damaged'
+export type StockTakeClassification =
+  | 'match' | 'condition_mismatch' | 'unexpected_resurfaced' | 'out_of_scope' | 'unknown'
+export type StockTakeResolveAction = 'found' | 'lost' | 'mark_damaged'
+export type StockTakeSyncStatus = 'pending' | 'pushed' | 'failed' | 'failed_ambiguous'
+
+export interface StockTakeSessionSummary {
+  sessionId: string
+  status: StockTakeStatus
+  scopeType: StockTakeScopeType
+  openedBy: string
+  openedByName: string | null
+  openedAt: string
+  coveragePercent: number
+  counted: number
+  expected: number
+}
+
+export function listStockTakeSessions() {
+  return request<StockTakeSessionSummary[]>('/stock-takes/sessions')
+}
+
+export interface StockTakeSyncDelta {
+  variantId: string
+  variantTitle: string
+  sku: string
+  delta: number
+}
+
+export interface StockTakeShopifySync {
+  status: StockTakeSyncStatus
+  deltas: StockTakeSyncDelta[]
+  referenceDocumentUri: string
+  pushedAt: string | null
+  error: string | null
+}
+
+export interface StockTakeSessionDetail {
+  sessionId: string
+  status: StockTakeStatus
+  scopeType: StockTakeScopeType
+  locationId: string
+  completeCount: boolean
+  openedBy: string
+  openedByName: string | null
+  openedAt: string
+  finalizedBy: string | null
+  finalizedByName: string | null
+  finalizedAt: string | null
+  note: string | null
+  shopifySync: StockTakeShopifySync | null
+}
+
+export function getStockTakeSession(sessionId: string) {
+  return request<StockTakeSessionDetail>(`/stock-takes/sessions/${sessionId}`)
+}
+
+export interface OpenStockTakeSessionResult {
+  sessionId: string
+  locationId: string
+  scopeType: StockTakeScopeType
+  piecesSnapshotted: number
+}
+
+export function openStockTakeSession(params: {
+  scopeType: StockTakeScopeType
+  variantIds?: string[]
+  locationId?: string
+  note?: string
+}) {
+  return request<OpenStockTakeSessionResult>('/stock-takes/sessions', {
+    method: 'POST',
+    body: JSON.stringify(params),
+  })
+}
+
+export interface StockTakeScanResult {
+  sessionId: string
+  barcode: string
+  pieceId: string | null
+  classification: StockTakeClassification
+  alreadyScanned?: boolean
+}
+
+export function scanStockTakePiece(sessionId: string, barcode: string, condition: StockTakeCondition) {
+  return request<StockTakeScanResult>(`/stock-takes/sessions/${sessionId}/scan`, {
+    method: 'POST',
+    body: JSON.stringify({ barcode, condition }),
+  })
+}
+
+/** Idempotent: unscanning a piece that was never scanned is a 204 no-op, not an error. */
+export function unscanStockTakePiece(sessionId: string, pieceId: string) {
+  return request<void>(`/stock-takes/sessions/${sessionId}/scan/${pieceId}`, { method: 'DELETE' })
+}
+
+export interface StockTakePieceRow {
+  pieceId: string
+  variantId: string
+  variantTitle: string
+  sku: string | null
+  productTitle: string
+  liveStatus: string
+  orderId?: string
+  orderNumber?: string
+  shipmentId?: string
+  trackingNumber?: string
+  flag?: string
+  reason?: string
+}
+
+export interface StockTakeVariantRollup {
+  variantId: string
+  variantTitle: string
+  sku: string | null
+  totalKnown: number
+  expectedOnShelf: number
+  counted: number
+  variance: number
+  committed: number
+  gone: number
+  damagedCount: number
+}
+
+export interface StockTakeReconciliation {
+  sessionId: string
+  status: StockTakeStatus
+  completeCount: boolean
+  coveragePercent: number
+  buckets: Record<string, StockTakePieceRow[]>
+  variantRollup: StockTakeVariantRollup[]
+}
+
+export function getStockTakeReconciliation(sessionId: string) {
+  return request<StockTakeReconciliation>(`/stock-takes/sessions/${sessionId}/reconciliation`)
+}
+
+export interface StockTakeResolveItem {
+  pieceId: string
+  action: StockTakeResolveAction
+}
+
+export interface StockTakeResolveResult {
+  pieceId: string
+  action: string
+  result: string
+}
+
+/**
+ * POST /resolve — batch. On a `lost` action against a committed piece the backend
+ * throws PieceCommittedException (409, same body shape as the existing FR-13 one).
+ *
+ * Does its own fetch rather than going through the shared request() helper: request()
+ * only preserves `${status}: ${statusText}` on a non-2xx response, never the JSON body —
+ * which is also why PieceCommittedError parsing in Lookup.tsx's AdjustPanel
+ * (JSON.parse(err.message.replace(/^409: /, ''))) can never actually succeed over a
+ * real network call today; it only "works" in adjust.test.tsx because that test mocks
+ * adjustPiece() directly and never exercises request() at all. Widening request()'s
+ * error contract for every caller in the app is a bigger change than this endpoint
+ * needs — this function parses its own 409 body instead, scoped to stock-take alone.
+ */
+export async function resolveStockTake(
+  sessionId: string,
+  items: StockTakeResolveItem[],
+): Promise<StockTakeResolveResult[]> {
+  const token = getAccessToken()
+  const res = await fetch(`${BASE}/stock-takes/sessions/${sessionId}/resolve`, {
+    method: 'POST',
+    credentials: 'include',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+    body: JSON.stringify(items),
+  })
+  if (res.status === 409) {
+    const body: PieceCommittedError = await res.json()
+    throw new StockTakeCommittedError(body)
+  }
+  if (!res.ok) throw new Error(`${res.status}: ${res.statusText}`)
+  if (res.status === 204 || res.headers.get('content-length') === '0') return []
+  return res.json()
+}
+
+export class StockTakeCommittedError extends Error {
+  body: PieceCommittedError
+  constructor(body: PieceCommittedError) {
+    super('PIECE_COMMITTED')
+    this.body = body
+  }
+}
+
+export function attestStockTakeComplete(sessionId: string) {
+  return request<{ sessionId: string; completeCount: boolean }>(
+    `/stock-takes/sessions/${sessionId}/attest-complete`, { method: 'POST' })
+}
+
+export interface FinalizeStockTakeResult {
+  sessionId: string
+  status: string
+  variantDeltas: Array<{ variant_id: string; qty: number }>
+}
+
+export function finalizeStockTake(sessionId: string) {
+  return request<FinalizeStockTakeResult>(
+    `/stock-takes/sessions/${sessionId}/finalize`, { method: 'POST' })
+}
+
+export function cancelStockTake(sessionId: string) {
+  return request<void>(`/stock-takes/sessions/${sessionId}/cancel`, { method: 'POST' })
+}
+
+export function markStockTakeSyncResolved(sessionId: string) {
+  return request<{ sessionId: string; status: string }>(
+    `/stock-takes/sessions/${sessionId}/sync/mark-resolved`, { method: 'POST' })
+}
+
+export function repushStockTakeSync(sessionId: string) {
+  return request<{ sessionId: string; status: string }>(
+    `/stock-takes/sessions/${sessionId}/sync/repush`, { method: 'POST' })
+}

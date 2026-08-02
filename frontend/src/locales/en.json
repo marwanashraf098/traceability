@@ -4,6 +4,7 @@
     "orders": "Orders",
     "catalog": "Inventory",
     "receiving": "Receiving",
+    "stocktake": "Stock Take",
     "fulfill": "Pick & Pack",
     "logout": "Log out",
     "lookup": "Search barcode or AWB…",
@@ -849,5 +850,119 @@
     "cod": "COD",
     "pieceExceptions": "{{count}} piece(s) had custody gaps — check Exceptions",
     "noScans": "No packages scanned yet"
+  },
+  "stocktake": {
+    "title": "Stock Take",
+    "new": "New Count",
+    "empty": "No stock takes yet",
+    "col": {
+      "status": "Status",
+      "scope": "Scope",
+      "openedBy": "Opened By",
+      "opened": "Opened",
+      "coverage": "Coverage"
+    },
+    "status": {
+      "open": "Open",
+      "finalized": "Finalized",
+      "cancelled": "Cancelled"
+    },
+    "scope": {
+      "all": "Whole warehouse",
+      "variantSubset": "Variant subset"
+    },
+    "time": {
+      "justNow": "just now",
+      "minutesAgo": "{{count}}m ago",
+      "hoursAgo": "{{count}}h ago",
+      "daysAgo": "{{count}}d ago"
+    },
+    "create": {
+      "title": "New Stock Take",
+      "scope": "Scope",
+      "variants": "Variants",
+      "variantRequired": "Select at least one variant for a subset count",
+      "note": "Note",
+      "notePlaceholder": "Optional note",
+      "submit": "Open Count"
+    },
+    "scan": {
+      "back": "Back",
+      "backToList": "Back to Stock Takes",
+      "notFound": "Session not found",
+      "countingLabel": "Counting:",
+      "good": "GOOD",
+      "damaged": "DAMAGED",
+      "placeholder": "Scan barcode…",
+      "counted": "counted",
+      "flagged": "not expected — flagged",
+      "countedLabel": "Counted",
+      "tally": {
+        "matched": "Matched",
+        "mismatch": "Condition mismatch",
+        "unexpected": "Unexpected",
+        "unknown": "Unknown"
+      },
+      "recent": "Recent scans",
+      "noScansYet": "No scans yet",
+      "unscan": "Unscan",
+      "review": "Review →"
+    },
+    "review": {
+      "back": "Back to Stock Takes",
+      "notFound": "Session not found",
+      "title": "Stock Take Review",
+      "coverage": "{{percent}}% coverage",
+      "countedOfExpected": "{{counted}} / {{expected}} counted",
+      "variance": "Variance",
+      "col": {
+        "variant": "Variant",
+        "totalKnown": "Total Known",
+        "expectedOnShelf": "Expected on Shelf",
+        "counted": "Counted",
+        "variance": "Variance",
+        "committed": "Committed",
+        "gone": "Gone",
+        "damaged": "Damaged"
+      },
+      "bucket": {
+        "on_shelf_counted": "On shelf, counted",
+        "on_shelf_uncounted": "On shelf, uncounted",
+        "committed_to_orders": "Committed to orders",
+        "with_courier_or_delivered": "With courier / delivered",
+        "returns_bench": "Returns bench",
+        "damaged": "Damaged",
+        "previously_written_off": "Previously written off",
+        "unexpected_finds": "Unexpected finds"
+      },
+      "bucketEmpty": "Nothing in this bucket",
+      "selectRow": "Select row",
+      "selectedCount": "{{count}} selected",
+      "foundSelected": "Found it (selected)",
+      "foundIt": "Found it",
+      "markLost": "Mark lost",
+      "markLostGatedTooltip": "Locked until the count is attested complete",
+      "applyDamaged": "Apply — mark damaged",
+      "terminalFlag": "Scanned good, recorded damaged",
+      "terminalTooltip": "Reinstating a damaged piece requires manager review out of band",
+      "attestPrompt": "Attest that this count covered the full scope",
+      "attestWarning": "This arms write-offs — including a live Shopify inventory decrement.",
+      "attestButton": "Attest Complete",
+      "attested": "Count attested complete — write-offs unlocked",
+      "finalizeButton": "Finalize",
+      "finalizeConfirmTitle": "Finalize stock take?",
+      "finalizeConfirmBody": "{{count}} piece(s) will be written off. Shopify will decrement stock for: {{variants}}.",
+      "finalizeConfirmButton": "Finalize + Push to Shopify"
+    },
+    "sync": {
+      "notStarted": "Shopify sync has not started",
+      "pending": "Pushing to Shopify…",
+      "pushed": "Pushed to Shopify",
+      "failed": "Push failed — retrying automatically",
+      "ambiguousTitle": "Shopify sync needs verification",
+      "ambiguousBody": "The decrement may or may not have applied. Check Shopify inventory for {{variants}} (ref: {{ref}}), then mark resolved or re-push.",
+      "markResolved": "Mark resolved",
+      "repush": "Re-push"
+    }
   }
 }

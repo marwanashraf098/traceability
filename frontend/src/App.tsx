@@ -18,6 +18,9 @@ import Catalog from './pages/Catalog'
 import Receiving from './pages/Receiving'
 import Fulfill from './pages/Fulfill'
 import GatherList from './pages/GatherList'
+import StockTake from './pages/StockTake'
+import StockTakeScan from './pages/StockTakeScan'
+import StockTakeReview from './pages/StockTakeReview'
 import LookupPage from './pages/Lookup'
 import Returns from './pages/Returns'
 import ExceptionsPage from './pages/Exceptions'
@@ -136,6 +139,31 @@ export default function App() {
           element={
             <RequireAuth>
               <GatherList />
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="/stock-take"
+          element={
+            <RequireAuth>
+              <Layout><StockTake /></Layout>
+            </RequireAuth>
+          }
+        />
+        {/* NOT Layout-wrapped — full-screen, per the /fulfill precedent */}
+        <Route
+          path="/stock-take/:id/scan"
+          element={
+            <RequireAuth>
+              <StockTakeScan />
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="/stock-take/:id/review"
+          element={
+            <RequireAuth>
+              <Layout><StockTakeReview /></Layout>
             </RequireAuth>
           }
         />

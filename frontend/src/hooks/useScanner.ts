@@ -17,6 +17,13 @@ export type FlashState = 'idle' | 'success' | 'error'
 
 export interface ScanOutcome {
   success: boolean
+  /** Optional caller-supplied label shown on the recent-scans strip (e.g. a
+   *  classification like "matched" / "flagged") — the hook itself is agnostic
+   *  to what it means, it just carries it through. */
+  label?: string
+  /** Optional caller-supplied payload (e.g. a resolved pieceId) carried through
+   *  to the matching RecentScan entry untouched — the hook never reads it. */
+  data?: unknown
 }
 
 export interface RecentScan {
@@ -24,6 +31,7 @@ export interface RecentScan {
   barcode: string
   success: boolean
   label?: string
+  data?: unknown
 }
 
 export interface UseScannerOptions {
@@ -105,7 +113,8 @@ export function useScanner({ onScan, recentScansLimit = 20 }: UseScannerOptions)
         triggerFlash('error')
       }
       setRecentScans(prev =>
-        [{ key: `${Date.now()}-${trimmed}`, barcode: trimmed, success: result.success }, ...prev]
+        [{ key: `${Date.now()}-${trimmed}`, barcode: trimmed, success: result.success,
+           label: result.label, data: result.data }, ...prev]
           .slice(0, recentScansLimit)
       )
     } catch {

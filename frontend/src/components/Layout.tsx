@@ -2,7 +2,7 @@ import { NavLink, useNavigate } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { useState, useRef, ReactNode } from 'react'
 import {
-  LayoutGrid, ClipboardList, Package, PackageOpen, ClipboardCheck,
+  LayoutGrid, ClipboardList, Package, PackageOpen, ClipboardCheck, PackageSearch,
   Truck, RotateCcw, AlertTriangle, PlugZap, MapPin, ShoppingBag,
   Users, Settings, LogOut, Globe, Search,
 } from 'lucide-react'
@@ -78,6 +78,7 @@ export default function Layout({ children }: { children: ReactNode }) {
           <SideNavLink to="/orders"      icon={<ClipboardList {...iconProps} />} label={t('nav.orders')} />
           <SideNavLink to="/catalog"     icon={<Package       {...iconProps} />} label={t('nav.catalog')} />
           <SideNavLink to="/receiving"   icon={<PackageOpen   {...iconProps} />} label={t('nav.receiving')} />
+          <SideNavLink to="/stock-take"  icon={<PackageSearch {...iconProps} />} label={t('nav.stocktake')} />
           <SideNavLink to="/fulfill"     icon={<ClipboardCheck {...iconProps} />} label={t('nav.fulfill')} />
           <SideNavLink to="/pickups"     icon={<Truck         {...iconProps} />} label={t('nav.pickups')} />
           <SideNavLink to="/returns"     icon={<RotateCcw     {...iconProps} />} label={t('nav.returns')} />

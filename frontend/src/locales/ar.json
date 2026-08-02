@@ -4,6 +4,7 @@
     "orders": "الطلبات",
     "catalog": "المخزون",
     "receiving": "الاستلام",
+    "stocktake": "الجرد",
     "fulfill": "التجميع",
     "logout": "تسجيل الخروج",
     "lookup": "بحث باركود أو رقم شحنة…",
@@ -843,6 +844,120 @@
       "delta": "التغيير",
       "status": "الحالة",
       "createdAt": "التاريخ"
+    }
+  },
+  "stocktake": {
+    "title": "الجرد",
+    "new": "جرد جديد",
+    "empty": "لا توجد عمليات جرد بعد",
+    "col": {
+      "status": "الحالة",
+      "scope": "النطاق",
+      "openedBy": "فتحه",
+      "opened": "تاريخ الفتح",
+      "coverage": "نسبة التغطية"
+    },
+    "status": {
+      "open": "مفتوح",
+      "finalized": "مُنجز",
+      "cancelled": "ملغى"
+    },
+    "scope": {
+      "all": "المستودع بالكامل",
+      "variantSubset": "مجموعة أنواع محددة"
+    },
+    "time": {
+      "justNow": "الآن",
+      "minutesAgo": "منذ {{count}} دقيقة",
+      "hoursAgo": "منذ {{count}} ساعة",
+      "daysAgo": "منذ {{count}} يوم"
+    },
+    "create": {
+      "title": "جرد جديد",
+      "scope": "النطاق",
+      "variants": "الأنواع",
+      "variantRequired": "اختر نوعًا واحدًا على الأقل لجرد مجموعة محددة",
+      "note": "ملاحظة",
+      "notePlaceholder": "ملاحظة اختيارية",
+      "submit": "بدء الجرد"
+    },
+    "scan": {
+      "back": "رجوع",
+      "backToList": "العودة إلى عمليات الجرد",
+      "notFound": "الجلسة غير موجودة",
+      "countingLabel": "الجرد:",
+      "good": "سليم",
+      "damaged": "تالف",
+      "placeholder": "امسح الباركود…",
+      "counted": "تم الجرد",
+      "flagged": "غير متوقع — تم الوسم",
+      "countedLabel": "تم جردها",
+      "tally": {
+        "matched": "مطابق",
+        "mismatch": "عدم تطابق الحالة",
+        "unexpected": "غير متوقع",
+        "unknown": "غير معروف"
+      },
+      "recent": "آخر عمليات المسح",
+      "noScansYet": "لا توجد عمليات مسح بعد",
+      "unscan": "تراجع",
+      "review": "مراجعة ←"
+    },
+    "review": {
+      "back": "العودة إلى عمليات الجرد",
+      "notFound": "الجلسة غير موجودة",
+      "title": "مراجعة الجرد",
+      "coverage": "نسبة التغطية {{percent}}%",
+      "countedOfExpected": "{{counted}} / {{expected}} تم جردها",
+      "variance": "الفرق",
+      "col": {
+        "variant": "النوع",
+        "totalKnown": "الإجمالي المعروف",
+        "expectedOnShelf": "المتوقع على الرف",
+        "counted": "تم جردها",
+        "variance": "الفرق",
+        "committed": "محجوز",
+        "gone": "خارج المستودع",
+        "damaged": "تالف"
+      },
+      "bucket": {
+        "on_shelf_counted": "على الرف، تم جردها",
+        "on_shelf_uncounted": "على الرف، لم تُجرد",
+        "committed_to_orders": "محجوزة لطلبات",
+        "with_courier_or_delivered": "مع المندوب / تم التسليم",
+        "returns_bench": "قيد فحص المرتجعات",
+        "damaged": "تالفة",
+        "previously_written_off": "شُطبت سابقًا",
+        "unexpected_finds": "عثور غير متوقع"
+      },
+      "bucketEmpty": "لا يوجد شيء في هذه المجموعة",
+      "selectRow": "تحديد الصف",
+      "selectedCount": "تم تحديد {{count}}",
+      "foundSelected": "تم العثور عليها (المحدد)",
+      "foundIt": "تم العثور عليها",
+      "markLost": "وضع علامة مفقود",
+      "markLostGatedTooltip": "مقفل حتى يتم اعتماد اكتمال الجرد",
+      "applyDamaged": "تطبيق — وضع علامة تالف",
+      "terminalFlag": "تم مسحها كسليمة لكن المسجل تالف",
+      "terminalTooltip": "إعادة قطعة تالفة يتطلب مراجعة يدوية من المدير",
+      "attestPrompt": "اعتمد أن هذا الجرد غطى النطاق بالكامل",
+      "attestWarning": "هذا يفعّل عمليات الشطب — بما في ذلك خصم مباشر من مخزون Shopify.",
+      "attestButton": "اعتماد الاكتمال",
+      "attested": "تم اعتماد اكتمال الجرد — تم تفعيل عمليات الشطب",
+      "finalizeButton": "إنجاز",
+      "finalizeConfirmTitle": "إنجاز الجرد؟",
+      "finalizeConfirmBody": "سيتم شطب {{count}} قطعة. سيخصم Shopify المخزون لـ: {{variants}}.",
+      "finalizeConfirmButton": "إنجاز + دفع إلى Shopify"
+    },
+    "sync": {
+      "notStarted": "لم تبدأ مزامنة Shopify بعد",
+      "pending": "جارٍ الدفع إلى Shopify…",
+      "pushed": "تم الدفع إلى Shopify",
+      "failed": "فشل الدفع — إعادة المحاولة تلقائيًا",
+      "ambiguousTitle": "مزامنة Shopify تحتاج إلى تحقق",
+      "ambiguousBody": "قد يكون الخصم قد تم أو لم يتم. تحقق من مخزون Shopify لـ {{variants}} (المرجع: {{ref}})، ثم اختر وضع علامة تم الحل أو إعادة الدفع.",
+      "markResolved": "وضع علامة تم الحل",
+      "repush": "إعادة الدفع"
     }
   }
 }
