@@ -1,6 +1,9 @@
 package com.traceability.inventory;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.traceability.tenancy.TenantContext;
+import org.jobrunr.scheduling.JobScheduler;
 import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
@@ -72,15 +75,23 @@ public class StockTakeReconciliationService {
     private final InventoryLedger     ledger;
     private final PieceAdjustService  pieceAdjustService;
     private final com.traceability.account.AuditService auditService;
+    private final ObjectMapper        mapper;
+    private final JobScheduler        jobScheduler;
+    private final StockTakeShopifyPushJob pushJob;
 
     public StockTakeReconciliationService(JdbcTemplate jdbc, StockTakeService stockTake,
                                           InventoryLedger ledger, PieceAdjustService pieceAdjustService,
-                                          com.traceability.account.AuditService auditService) {
+                                          com.traceability.account.AuditService auditService,
+                                          ObjectMapper mapper, JobScheduler jobScheduler,
+                                          StockTakeShopifyPushJob pushJob) {
         this.jdbc               = jdbc;
         this.stockTake          = stockTake;
         this.ledger             = ledger;
         this.pieceAdjustService = pieceAdjustService;
         this.auditService       = auditService;
+        this.mapper             = mapper;
+        this.jobScheduler       = jobScheduler;
+        this.pushJob            = pushJob;
     }
 
     // ── Reconciliation (disposition report) ──────────────────────────────────
@@ -370,6 +381,90 @@ public class StockTakeReconciliationService {
             "stock_take_session", sessionId.toString(), null);
 
         return Map.of("sessionId", sessionId, "completeCount", true);
+    }
+
+    /**
+     * FR-21 Step 5, Phase A — claim (one committed transaction, mandatory shape). Guards
+     * the open->finalized flip, computes the per-variant write-off delta from this
+     * session's committed piece_events, inserts the pending claim row, and enqueues the
+     * push job (Phase B). Contains NO Shopify HTTP call — that's
+     * StockTakeShopifyPushJob.push(), running later on a JobRunr worker with no DB
+     * transaction around the call (same lesson as resolve()'s srt7 fix, one level up).
+     * Internal -> lost transitions already committed per-item at Step 4 resolve() time;
+     * this method writes no piece_events — the push is a separate, retryable side effect
+     * of already-durable custody truth.
+     */
+    @Transactional
+    public Map<String, Object> finalizeSession(UUID sessionId, UUID actorUserId) {
+        UUID tenantId = TenantContext.require();
+
+        // Double-finalize guard #1: atomic open->finalized flip. Computing the delta and
+        // locking the session in the SAME tx means the pushed number can't drift from the
+        // ledger between the guard check and the delta read.
+        int rows = jdbc.update(
+            "UPDATE stock_take_sessions SET status = 'finalized', finalized_by = ?, finalized_at = now() " +
+            "WHERE id = ? AND tenant_id = ? AND status = 'open'",
+            actorUserId, sessionId, tenantId);
+        if (rows == 0) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                "Stock take session is not open — already finalized or cancelled");
+        }
+
+        UUID locationId = jdbc.query(
+            "SELECT location_id FROM stock_take_sessions WHERE id = ? AND tenant_id = ?",
+            rs -> rs.next() ? rs.getObject("location_id", UUID.class) : null,
+            sessionId, tenantId);
+
+        // Per-variant delta = count of stock_take_missing piece_events for this session —
+        // NOT expected-minus-counted. Variance includes committed/soft pieces deliberately
+        // not written off, and drift-skipped write-offs are naturally excluded (they never
+        // became 'lost' — see resolveLost()'s drift guard).
+        List<Map<String, Object>> deltaRows = jdbc.queryForList(
+            "SELECT p.variant_id AS variant_id, COUNT(*) AS qty " +
+            "FROM piece_events pe " +
+            "JOIN pieces p ON p.id = pe.piece_id AND p.tenant_id = pe.tenant_id " +
+            "WHERE pe.tenant_id = ? AND pe.event_type = 'adjusted' AND pe.to_status = 'lost'::piece_status " +
+            "  AND pe.metadata->>'session_id' = ? AND pe.metadata->>'reason' = 'stock_take_missing' " +
+            "GROUP BY p.variant_id",
+            tenantId, sessionId.toString());
+
+        ObjectNode deltasNode = mapper.createObjectNode();
+        for (Map<String, Object> row : deltaRows) {
+            deltasNode.put(row.get("variant_id").toString(), ((Number) row.get("qty")).intValue());
+        }
+        ObjectNode payload = mapper.createObjectNode();
+        payload.put("locationId", locationId != null ? locationId.toString() : null);
+        payload.set("deltas", deltasNode);
+
+        // Zero deltas -> nothing to push; claim lands 'pushed' directly and no job is
+        // enqueued at all, rather than sending an empty mutation.
+        String claimStatus = deltaRows.isEmpty() ? "pushed" : "pending";
+
+        // Double-finalize guard #2: UNIQUE(session_id) referee. Guard #1 already makes a
+        // second finalize call impossible in practice; this is defense in depth.
+        jdbc.update(
+            "INSERT INTO stock_take_shopify_syncs (id, tenant_id, session_id, status, payload) " +
+            "VALUES (gen_random_uuid(), ?, ?, ?, ?::jsonb)",
+            tenantId, sessionId, claimStatus, payload.toString());
+
+        if (!deltaRows.isEmpty()) {
+            // Claim-before-call: this enqueue only ever fires after the claim INSERT above
+            // has been issued in this same transaction. JobRunr's own storage isn't
+            // Spring-transaction-aware, but its worker polls on an interval — ample
+            // separation from this transaction's commit. Matches the established pattern
+            // elsewhere in this codebase (BostaIngestionHelper, ShopifyOAuthService).
+            jobScheduler.enqueue(() -> pushJob.push(sessionId, tenantId));
+        }
+
+        auditService.record(actorUserId, "stock_take_finalize",
+            "stock_take_session", sessionId.toString(),
+            Map.of("variantCount", deltaRows.size()));
+
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("sessionId", sessionId);
+        out.put("status", "finalized");
+        out.put("variantDeltas", deltaRows);
+        return out;
     }
 
     @Transactional

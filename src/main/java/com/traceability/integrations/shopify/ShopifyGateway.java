@@ -253,6 +253,42 @@ public interface ShopifyGateway {
                                  String locationGid, int quantity, String reason,
                                  String idempotencyKey);
 
+    /** One variant's inventoryItem GID paired with its negative write-off delta. */
+    record InventoryDelta(String inventoryItemGid, int negativeDelta) {}
+
+    /**
+     * FR-21 Step 5 — the SOLE sanctioned decrement path. Pushes ALL per-variant negative
+     * deltas for one finalized stock-take session in a SINGLE inventoryAdjustQuantities
+     * mutation (one changes list, one location, one call, one outcome) — never per-variant
+     * calls, never inventorySetOnHandQuantities. A dedicated call site, deliberately NOT
+     * routed through {@link #adjustInventoryQuantities} — that method's positive-only guard
+     * is the FR-17 v2 invariant and is never modified; this is a separate method entirely.
+     *
+     * Retry safety: a negative delta is NOT idempotent at the business level (-2 applied
+     * twice = -4). Implementations MUST make exactly one HTTP attempt — no internal
+     * throttle-wait loop, no connection-error auto-retry — so the caller
+     * (StockTakeShopifyPushJob) can classify a single, unambiguous outcome and apply the
+     * FR-21 retry rule itself: definitive rejection is safe to retry, a genuinely
+     * unconfirmed response is not.
+     *
+     * @param deltas               one entry per variant; every negativeDelta must be < 0
+     * @param locationGid          the tenant's single is_fulfillment / linked location — the
+     *                             only locationId this call may ever target
+     * @param referenceDocumentUri traced://stock-take/{session_id} — trace + manual-verify anchor
+     * @param idempotencyKey       the mutation-level @idempotent key, STABLE across retries of
+     *                             the same finalize (Shopify dedupes server-side on this key)
+     * @throws IllegalArgumentException if deltas is empty or any delta is >= 0 — checked
+     *                                   BEFORE any network call
+     * @throws ShopifyException          definitive rejection — Shopify responded (4xx, 5xx
+     *                                    with a body, THROTTLED, or a GraphQL userError).
+     *                                    Nothing was applied; safe for the caller to retry.
+     * @throws ShopifyAmbiguousException no confirmed response reached this process (timeout,
+     *                                    connection reset) — genuinely unknown whether Shopify
+     *                                    applied it. Caller must NOT auto-retry.
+     */
+    void pushStockTakeWriteOff(String shopDomain, String token, List<InventoryDelta> deltas,
+                                String locationGid, String referenceDocumentUri, String idempotencyKey);
+
     /** One inventoryItem's current "available" quantity at a location (Part C reconcile read). */
     record InventoryLevel(String inventoryItemGid, int available) {}
 

@@ -2,6 +2,7 @@ package com.traceability.integrations.shopify;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import io.github.resilience4j.retry.Retry;
 import io.github.resilience4j.retry.RetryConfig;
@@ -669,6 +670,120 @@ class ShopifyHttpGateway implements ShopifyGateway {
             // Insufficient-available and any other userError must fail cleanly here —
             // caller (ShopifyInventoryService) records it as a failed row, never retries forced.
             throw new ShopifyException("inventoryMoveQuantities failed: " + msg);
+        }
+    }
+
+    private static final String STOCK_TAKE_WRITE_OFF_MUTATION = """
+            mutation StockTakeWriteOff($input: InventoryAdjustQuantitiesInput!, $idempotencyKey: String!) {
+              inventoryAdjustQuantities(input: $input) @idempotent(key: $idempotencyKey) {
+                inventoryAdjustmentGroup { createdAt }
+                userErrors { field message code }
+              }
+            }
+            """;
+
+    /**
+     * FR-21 Step 5. Deliberately self-contained — does NOT call the shared executeGraphQL()
+     * helper (used by every other mutation in this class). executeGraphQL() wraps its call
+     * in Retry.decorateSupplier(retry, ...), and `retry` is configured with
+     * .retryExceptions(ResourceAccessException.class) — i.e. it silently re-sends up to 3
+     * times on a connection/read timeout before any exception ever reaches the caller. That's
+     * fine for every other mutation here (protected by @idempotent + a positive/move-only
+     * shape), but it would defeat the whole point of this method: a caller that wants to
+     * classify ONE unambiguous outcome (definitive vs. ambiguous) cannot do that if the
+     * timeout it sees is already the LAST of three silent physical sends. Exactly one HTTP
+     * attempt, full stop — see the interface javadoc for the retry-safety rationale.
+     */
+    @Override
+    public void pushStockTakeWriteOff(String shopDomain, String token, List<InventoryDelta> deltas,
+                                       String locationGid, String referenceDocumentUri, String idempotencyKey) {
+        if (deltas == null || deltas.isEmpty()) {
+            throw new IllegalArgumentException("pushStockTakeWriteOff requires at least one delta");
+        }
+        for (InventoryDelta d : deltas) {
+            if (d.negativeDelta() >= 0) {
+                throw new IllegalArgumentException(
+                    "pushStockTakeWriteOff requires a negative delta per variant; got "
+                    + d.negativeDelta() + " for " + d.inventoryItemGid());
+            }
+        }
+
+        ArrayNode changes = mapper.createArrayNode();
+        for (InventoryDelta d : deltas) {
+            ObjectNode change = mapper.createObjectNode()
+                .put("delta", d.negativeDelta())
+                .put("inventoryItemId", d.inventoryItemGid())
+                .put("locationId", locationGid);
+            // One-shot batch write-off — no meaningful prior-read baseline to assert per
+            // item in this call shape; explicitly opts out of the compare-and-swap check
+            // (Shopify's documented null-opt-out), same as a never-activated item elsewhere.
+            change.putNull("changeFromQuantity");
+            changes.add(change);
+        }
+
+        ObjectNode input = mapper.createObjectNode()
+            .put("reason", "shrinkage")
+            .put("name", "available")
+            .put("referenceDocumentUri", referenceDocumentUri);
+        input.set("changes", changes);
+        ObjectNode vars = mapper.createObjectNode();
+        vars.set("input", input);
+        vars.put("idempotencyKey", idempotencyKey);
+
+        String url = "https://" + shopDomain + "/admin/api/" + apiVersion + "/graphql.json";
+        ObjectNode body = mapper.createObjectNode()
+            .put("query", STOCK_TAKE_WRITE_OFF_MUTATION).set("variables", vars);
+
+        JsonNode response;
+        try {
+            response = restClient.post()
+                .uri(url)
+                .header("X-Shopify-Access-Token", token)
+                .header("Content-Type", "application/json")
+                .body(body)
+                .retrieve()
+                .body(JsonNode.class);
+        } catch (HttpClientErrorException e) {
+            throw new ShopifyException(
+                "Stock-take write-off HTTP " + e.getStatusCode().value()
+                + " for " + shopDomain + ": " + e.getResponseBodyAsString(), e);
+        } catch (HttpServerErrorException e) {
+            // 5xx-with-a-response is still DEFINITIVE ("request rejected"), not ambiguous —
+            // Shopify's edge responded. Ambiguous is reserved for no response at all (below).
+            throw new ShopifyException(
+                "Stock-take write-off HTTP " + e.getStatusCode().value() + " for " + shopDomain, e);
+        } catch (ResourceAccessException e) {
+            // No response reached this process (connect/read timeout, connection reset) —
+            // genuinely unknown whether Shopify applied the decrement.
+            throw new ShopifyAmbiguousException(
+                "Stock-take write-off: no confirmed response from " + shopDomain, e);
+        }
+
+        if (response == null) {
+            throw new ShopifyAmbiguousException(
+                "Stock-take write-off: null response body from " + shopDomain);
+        }
+
+        JsonNode errors = response.get("errors");
+        if (errors != null && errors.isArray() && errors.size() > 0) {
+            // Includes THROTTLED — still a definitive "not applied" signal (Shopify explicitly
+            // rejected this attempt). No inline wait-and-resend loop: the caller (job) owns
+            // the retry decision, keeping "one call, one outcome" literally true here.
+            String code = errors.get(0).path("extensions").path("code").asText("");
+            throw new ShopifyException("Stock-take write-off GraphQL error"
+                + (code.isBlank() ? "" : " (" + code + ")") + ": "
+                + errors.get(0).path("message").asText());
+        }
+
+        JsonNode data = response.get("data");
+        if (data == null) {
+            throw new ShopifyAmbiguousException(
+                "Stock-take write-off: response had no data field from " + shopDomain);
+        }
+        JsonNode userErrors = data.path("inventoryAdjustQuantities").path("userErrors");
+        if (userErrors.isArray() && !userErrors.isEmpty()) {
+            String msg = userErrors.get(0).path("message").asText("unknown error");
+            throw new ShopifyException("Stock-take write-off failed: " + msg);
         }
     }
 

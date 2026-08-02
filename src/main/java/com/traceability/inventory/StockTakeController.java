@@ -79,6 +79,14 @@ public class StockTakeController {
         return reconciliation.attestComplete(sessionId, principal.userId());
     }
 
+    @PostMapping("/sessions/{sessionId}/finalize")
+    @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
+    public Map<String, Object> finalizeSession(
+            @PathVariable UUID sessionId,
+            @AuthenticationPrincipal CustomUserDetails principal) {
+        return reconciliation.finalizeSession(sessionId, principal.userId());
+    }
+
     @PostMapping("/sessions/{sessionId}/cancel")
     @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
     @ResponseStatus(HttpStatus.NO_CONTENT)
