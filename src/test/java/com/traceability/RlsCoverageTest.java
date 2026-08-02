@@ -88,7 +88,9 @@ class RlsCoverageTest {
             "/api/v1/catalog",
             "/api/v1/locations/shopify-junk-report",
             "/api/v1/shopify/inventory/reconcile",
-            "/api/v1/stock-takes/sessions/{sessionId}/reconciliation"
+            "/api/v1/stock-takes/sessions/{sessionId}/reconciliation",
+            "/api/v1/stock-takes/sessions",
+            "/api/v1/stock-takes/sessions/{sessionId}"
     );
 
     // ── Patterns consciously excluded, with reasons ────────────────────────────
@@ -543,6 +545,51 @@ class RlsCoverageTest {
         jdbc.update("DELETE FROM stock_take_expected WHERE session_id = ?", sessionId);
         jdbc.update("DELETE FROM stock_take_sessions WHERE id = ?", sessionId);
         jdbc.update("DELETE FROM pieces WHERE id = ?", pieceId);
+    }
+
+    @Test
+    void stockTakeSessionsList_returnsSeededSession() {
+        UUID sessionId = UUID.randomUUID();
+        jdbc.update(
+            "INSERT INTO stock_take_sessions (id, tenant_id, status, scope_type, location_id, opened_by) " +
+            "VALUES (?, ?, 'open', 'all', ?, ?)",
+            sessionId, tenantId, locationId, ownerUserId);
+
+        ResponseEntity<List> resp = get("/api/v1/stock-takes/sessions", List.class);
+        assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.OK);
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> body = resp.getBody();
+        assertThat(body).anyMatch(r -> sessionId.toString().equals(r.get("sessionId")));
+
+        jdbc.update("DELETE FROM stock_take_sessions WHERE id = ?", sessionId);
+    }
+
+    @Test
+    void stockTakeSessionDetail_returnsSeededSessionWithSyncStatus() {
+        UUID sessionId = UUID.randomUUID();
+        jdbc.update(
+            "INSERT INTO stock_take_sessions (id, tenant_id, status, scope_type, location_id, opened_by) " +
+            "VALUES (?, ?, 'finalized', 'all', ?, ?)",
+            sessionId, tenantId, locationId, ownerUserId);
+        jdbc.update(
+            "INSERT INTO stock_take_shopify_syncs (id, tenant_id, session_id, status, payload) " +
+            "VALUES (gen_random_uuid(), ?, ?, 'pushed', " +
+            "        ('{\"locationId\":\"' || ? || '\",\"deltas\":{\"' || ? || '\":2}}')::jsonb)",
+            tenantId, sessionId, locationId, variantId);
+
+        ResponseEntity<Map> resp = get(
+            "/api/v1/stock-takes/sessions/" + sessionId, Map.class);
+        assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(resp.getBody().get("sessionId")).isEqualTo(sessionId.toString());
+
+        @SuppressWarnings("unchecked")
+        Map<String, Object> shopifySync = (Map<String, Object>) resp.getBody().get("shopifySync");
+        assertThat(shopifySync).isNotNull();
+        assertThat(shopifySync.get("status")).isEqualTo("pushed");
+        assertThat(shopifySync.get("referenceDocumentUri")).isEqualTo("traced://stock-take/" + sessionId);
+
+        jdbc.update("DELETE FROM stock_take_shopify_syncs WHERE session_id = ?", sessionId);
+        jdbc.update("DELETE FROM stock_take_sessions WHERE id = ?", sessionId);
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────

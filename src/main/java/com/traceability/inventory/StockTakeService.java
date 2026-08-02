@@ -1,5 +1,7 @@
 package com.traceability.inventory;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.traceability.tenancy.TenantContext;
 import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -7,6 +9,8 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
+import java.util.ArrayList;
+import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -31,9 +35,11 @@ public class StockTakeService {
     private static final Set<String> SCOPE_TYPES = Set.of("all", "variant_subset");
 
     private final JdbcTemplate jdbc;
+    private final ObjectMapper mapper;
 
-    public StockTakeService(JdbcTemplate jdbc) {
+    public StockTakeService(JdbcTemplate jdbc, ObjectMapper mapper) {
         this.jdbc = jdbc;
+        this.mapper = mapper;
     }
 
     // ── Open + snapshot ──────────────────────────────────────────────────────
@@ -232,6 +238,132 @@ public class StockTakeService {
             return "unexpected_resurfaced";
         }
         return "out_of_scope";
+    }
+
+    // ── Step 6.1: list + detail reads ────────────────────────────────────────
+
+    /**
+     * Coverage/counted/expected are computed for every row (cheap two subqueries), but
+     * are only meaningful while a session is 'open' — the frontend list screen only
+     * displays them for open rows.
+     */
+    @Transactional(readOnly = true)
+    public List<Map<String, Object>> listSessions() {
+        UUID tenantId = TenantContext.require();
+        return jdbc.query(
+            "SELECT s.id AS session_id, s.status, s.scope_type, s.opened_by, " +
+            "       u.name AS opened_by_name, s.opened_at, " +
+            "       (SELECT COUNT(*) FROM stock_take_expected se " +
+            "        WHERE se.session_id = s.id AND se.status_at_open IN ('available','damaged')) AS expected, " +
+            "       (SELECT COUNT(*) FROM stock_take_expected se " +
+            "        JOIN stock_take_scans ts ON ts.session_id = se.session_id AND ts.piece_id = se.piece_id " +
+            "        WHERE se.session_id = s.id AND se.status_at_open IN ('available','damaged')) AS counted " +
+            "FROM stock_take_sessions s " +
+            "LEFT JOIN users u ON u.id = s.opened_by " +
+            "WHERE s.tenant_id = ? " +
+            "ORDER BY s.opened_at DESC",
+            (rs, rowNum) -> {
+                long expected = rs.getLong("expected");
+                long counted = rs.getLong("counted");
+                double coveragePercent = expected == 0 ? 100.0 : Math.round(10000.0 * counted / expected) / 100.0;
+
+                Map<String, Object> m = new LinkedHashMap<>();
+                m.put("sessionId", rs.getObject("session_id", UUID.class));
+                m.put("status", rs.getString("status"));
+                m.put("scopeType", rs.getString("scope_type"));
+                m.put("openedBy", rs.getObject("opened_by", UUID.class));
+                m.put("openedByName", rs.getString("opened_by_name"));
+                m.put("openedAt", rs.getObject("opened_at", java.time.OffsetDateTime.class));
+                m.put("coveragePercent", coveragePercent);
+                m.put("counted", counted);
+                m.put("expected", expected);
+                return m;
+            },
+            tenantId);
+    }
+
+    @Transactional(readOnly = true)
+    public Map<String, Object> getSessionDetail(UUID sessionId) {
+        UUID tenantId = TenantContext.require();
+
+        Map<String, Object> row = jdbc.query(
+            "SELECT s.id AS session_id, s.status, s.scope_type, s.location_id, s.complete_count, " +
+            "       s.opened_by, u1.name AS opened_by_name, s.opened_at, " +
+            "       s.finalized_by, u2.name AS finalized_by_name, s.finalized_at, s.note " +
+            "FROM stock_take_sessions s " +
+            "LEFT JOIN users u1 ON u1.id = s.opened_by " +
+            "LEFT JOIN users u2 ON u2.id = s.finalized_by " +
+            "WHERE s.id = ? AND s.tenant_id = ?",
+            rs -> {
+                if (!rs.next()) return null;
+                Map<String, Object> m = new LinkedHashMap<>();
+                m.put("sessionId", rs.getObject("session_id", UUID.class));
+                m.put("status", rs.getString("status"));
+                m.put("scopeType", rs.getString("scope_type"));
+                m.put("locationId", rs.getObject("location_id", UUID.class));
+                m.put("completeCount", rs.getBoolean("complete_count"));
+                m.put("openedBy", rs.getObject("opened_by", UUID.class));
+                m.put("openedByName", rs.getString("opened_by_name"));
+                m.put("openedAt", rs.getObject("opened_at", java.time.OffsetDateTime.class));
+                m.put("finalizedBy", rs.getObject("finalized_by", UUID.class));
+                m.put("finalizedByName", rs.getString("finalized_by_name"));
+                m.put("finalizedAt", rs.getObject("finalized_at", java.time.OffsetDateTime.class));
+                m.put("note", rs.getString("note"));
+                return m;
+            },
+            sessionId, tenantId);
+
+        if (row == null) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Stock take session not found");
+        }
+        row.put("shopifySync", loadShopifySync(sessionId, tenantId));
+        return row;
+    }
+
+    /** null until finalize; deltas enriched with variant title/sku for the sync panel. */
+    private Map<String, Object> loadShopifySync(UUID sessionId, UUID tenantId) {
+        record SyncRow(String status, String payload, java.time.OffsetDateTime pushedAt, String error) {}
+        SyncRow sync = jdbc.query(
+            "SELECT status, payload::text AS payload, pushed_at, error " +
+            "FROM stock_take_shopify_syncs WHERE session_id = ? AND tenant_id = ?",
+            rs -> rs.next() ? new SyncRow(
+                rs.getString("status"), rs.getString("payload"),
+                rs.getObject("pushed_at", java.time.OffsetDateTime.class), rs.getString("error")) : null,
+            sessionId, tenantId);
+        if (sync == null) return null;
+
+        List<Map<String, Object>> deltas = new ArrayList<>();
+        try {
+            JsonNode payload = mapper.readTree(sync.payload());
+            Iterator<Map.Entry<String, JsonNode>> fields = payload.path("deltas").fields();
+            while (fields.hasNext()) {
+                Map.Entry<String, JsonNode> field = fields.next();
+                UUID variantId = UUID.fromString(field.getKey());
+                int qty = field.getValue().asInt();
+                Map<String, Object> variantRow = jdbc.query(
+                    "SELECT title, sku FROM variants WHERE id = ? AND tenant_id = ?",
+                    rs -> rs.next() ? Map.of(
+                        "variantTitle", rs.getString("title") == null ? "" : rs.getString("title"),
+                        "sku", rs.getString("sku") == null ? "" : rs.getString("sku")) : Map.of(),
+                    variantId, tenantId);
+                Map<String, Object> d = new LinkedHashMap<>();
+                d.put("variantId", variantId);
+                d.put("variantTitle", variantRow.get("variantTitle"));
+                d.put("sku", variantRow.get("sku"));
+                d.put("delta", qty);
+                deltas.add(d);
+            }
+        } catch (Exception ignored) {
+            // Malformed/empty payload — surface an empty delta list rather than fail the GET.
+        }
+
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("status", sync.status());
+        out.put("deltas", deltas);
+        out.put("referenceDocumentUri", "traced://stock-take/" + sessionId);
+        out.put("pushedAt", sync.pushedAt());
+        out.put("error", sync.error());
+        return out;
     }
 
     // ── Shared session lookup (used by scan/reconciliation in later steps) ──

@@ -44,6 +44,19 @@ public class StockTakeController {
         return ResponseEntity.status(HttpStatus.CREATED).body(result);
     }
 
+    @GetMapping("/sessions")
+    @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
+    public List<Map<String, Object>> listSessions() {
+        return stockTake.listSessions();
+    }
+
+    /** WORKER+ — the scan screen loads session context before any counting starts. */
+    @GetMapping("/sessions/{sessionId}")
+    @PreAuthorize("isAuthenticated()")
+    public Map<String, Object> getSession(@PathVariable UUID sessionId) {
+        return stockTake.getSessionDetail(sessionId);
+    }
+
     /** Blind scan: the response never includes expected quantities, only the classification. */
     @PostMapping("/sessions/{sessionId}/scan")
     @PreAuthorize("isAuthenticated()")
@@ -94,6 +107,24 @@ public class StockTakeController {
             @PathVariable UUID sessionId,
             @AuthenticationPrincipal CustomUserDetails principal) {
         reconciliation.cancel(sessionId, principal.userId());
+    }
+
+    // ── Step 6.1: failed_ambiguous ops tail ──────────────────────────────────
+
+    @PostMapping("/sessions/{sessionId}/sync/mark-resolved")
+    @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
+    public Map<String, Object> markSyncResolved(
+            @PathVariable UUID sessionId,
+            @AuthenticationPrincipal CustomUserDetails principal) {
+        return reconciliation.markSyncResolved(sessionId, principal.userId());
+    }
+
+    @PostMapping("/sessions/{sessionId}/sync/repush")
+    @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
+    public Map<String, Object> repushSync(
+            @PathVariable UUID sessionId,
+            @AuthenticationPrincipal CustomUserDetails principal) {
+        return reconciliation.repushSync(sessionId, principal.userId());
     }
 
     public record OpenSessionRequest(

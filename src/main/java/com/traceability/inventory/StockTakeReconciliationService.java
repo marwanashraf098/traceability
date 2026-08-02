@@ -480,6 +480,59 @@ public class StockTakeReconciliationService {
             "stock_take_session", sessionId.toString(), null);
     }
 
+    // ── Step 6.1: failed_ambiguous ops tail ──────────────────────────────────
+
+    /**
+     * Operator asserts the decrement DID apply (verified in Shopify directly) — no
+     * Shopify call here. Only valid from failed_ambiguous; a plain UPDATE with the status
+     * in the WHERE clause is the guard (0 rows affected from pending/pushed/failed -> 409).
+     */
+    @Transactional
+    public Map<String, Object> markSyncResolved(UUID sessionId, UUID actorUserId) {
+        UUID tenantId = TenantContext.require();
+        stockTake.requireSession(sessionId, tenantId);
+
+        int rows = jdbc.update(
+            "UPDATE stock_take_shopify_syncs SET status = 'pushed', pushed_at = now() " +
+            "WHERE session_id = ? AND tenant_id = ? AND status = 'failed_ambiguous'",
+            sessionId, tenantId);
+        if (rows == 0) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                "Sync can only be marked resolved from failed_ambiguous");
+        }
+
+        auditService.record(actorUserId, "stock_take_sync_mark_resolved",
+            "stock_take_session", sessionId.toString(), null);
+        return Map.of("sessionId", sessionId, "status", "pushed");
+    }
+
+    /**
+     * Operator asserts the decrement did NOT apply — re-enqueues exactly one fresh
+     * single-attempt push. Resets the SAME claim row to 'pending' rather than inserting a
+     * second (UNIQUE(session_id) stays intact by construction — this is an UPDATE, not an
+     * INSERT). StockTakeShopifyPushJob.push() falls through its own guard for 'pending'
+     * (same as a first attempt), so this needs no changes on the Phase B side at all.
+     */
+    @Transactional
+    public Map<String, Object> repushSync(UUID sessionId, UUID actorUserId) {
+        UUID tenantId = TenantContext.require();
+        stockTake.requireSession(sessionId, tenantId);
+
+        int rows = jdbc.update(
+            "UPDATE stock_take_shopify_syncs SET status = 'pending', error = NULL " +
+            "WHERE session_id = ? AND tenant_id = ? AND status IN ('failed', 'failed_ambiguous')",
+            sessionId, tenantId);
+        if (rows == 0) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                "Re-push is only valid from failed or failed_ambiguous");
+        }
+
+        auditService.record(actorUserId, "stock_take_sync_repush",
+            "stock_take_session", sessionId.toString(), null);
+        jobScheduler.enqueue(() -> pushJob.push(sessionId, tenantId));
+        return Map.of("sessionId", sessionId, "status", "pending");
+    }
+
     // ── Helpers ───────────────────────────────────────────────────────────────
 
     private String fetchStatusAtOpen(UUID sessionId, UUID tenantId, String pieceId) {
