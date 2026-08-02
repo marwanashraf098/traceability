@@ -220,6 +220,45 @@ class StockTakeOpsTest {
         }
     }
 
+    // ops6: unscan — same-tenant positive control (own session reachable) + cross-tenant
+    // -> NOT_FOUND (the session itself is invisible before the piece check is ever
+    // reached), over a real app_user/RLS connection.
+    @Test
+    void ops6_unscan_rlsIsolated_sameTenantPositiveControl() {
+        UUID sessionId = openSession();
+        String pieceId = seedPiece("available");
+
+        try {
+            TenantContext.set(tenantId);
+            try {
+                appUserTx.execute(status -> {
+                    assertThatCode(() -> appUserStockTake.unscan(sessionId, pieceId))
+                        .as("ops6: same-tenant positive control — session + piece reachable")
+                        .doesNotThrowAnyException();
+                    return null;
+                });
+            } finally {
+                TenantContext.clear();
+            }
+
+            TenantContext.set(tenantB);
+            try {
+                assertThatThrownBy(() -> appUserTx.execute(status -> {
+                    appUserStockTake.unscan(sessionId, pieceId);
+                    return null;
+                }))
+                    .as("ops6: cross-tenant session must be invisible under RLS")
+                    .isInstanceOf(ResponseStatusException.class)
+                    .satisfies(e -> assertThat(((ResponseStatusException) e).getStatusCode())
+                        .isEqualTo(HttpStatus.NOT_FOUND));
+            } finally {
+                TenantContext.clear();
+            }
+        } catch (org.springframework.dao.DataAccessResourceFailureException e) {
+            Assumptions.assumeTrue(false, "app_user not available in test container — RLS assertion skipped: " + e.getMessage());
+        }
+    }
+
     // ops3: shopifySync null pre-finalize, populated post-finalize
     @Test
     void ops3_detail_exposesShopifySync_nullBeforeFinalizePopulatedAfter() {

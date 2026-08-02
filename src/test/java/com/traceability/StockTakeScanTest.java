@@ -335,6 +335,101 @@ class StockTakeScanTest {
         }
     }
 
+    // ss10: unscan clears the block — piece reverts to uncounted, re-scan succeeds
+    @Test
+    void ss10_unscan_revertsToUncountedAndReScanSucceeds() {
+        String piece = seedPiece("SS10", variantA, fulfillmentLocationId, tenantId, "available");
+        UUID sessionId = openAllScope(tenantId, fulfillmentLocationId, actorId);
+
+        TenantContext.set(tenantId);
+        try {
+            stockTake.scan(sessionId, "PC-" + piece, "good", actorId);
+            Integer countAfterScan = jdbc.queryForObject(
+                "SELECT COUNT(*) FROM stock_take_scans WHERE session_id = ? AND piece_id = ?",
+                Integer.class, sessionId, piece);
+            assertThat(countAfterScan).isEqualTo(1);
+
+            stockTake.unscan(sessionId, piece);
+            Integer countAfterUnscan = jdbc.queryForObject(
+                "SELECT COUNT(*) FROM stock_take_scans WHERE session_id = ? AND piece_id = ?",
+                Integer.class, sessionId, piece);
+            assertThat(countAfterUnscan).as("unscan deletes the row — piece reverts to uncounted")
+                .isEqualTo(0);
+
+            // Re-scan must succeed (not silently swallowed by the now-cleared idempotent
+            // insert block) and record a fresh row.
+            Map<String, Object> rescan = stockTake.scan(sessionId, "PC-" + piece, "damaged", actorId);
+            assertThat(rescan.get("alreadyScanned")).isEqualTo(false);
+            Integer countAfterRescan = jdbc.queryForObject(
+                "SELECT COUNT(*) FROM stock_take_scans WHERE session_id = ? AND piece_id = ?",
+                Integer.class, sessionId, piece);
+            assertThat(countAfterRescan).isEqualTo(1);
+            String recordedCondition = jdbc.queryForObject(
+                "SELECT scanned_condition FROM stock_take_scans WHERE session_id = ? AND piece_id = ?",
+                String.class, sessionId, piece);
+            assertThat(recordedCondition).as("re-scan recorded the NEW condition, not a stale one")
+                .isEqualTo("damaged");
+        } finally {
+            TenantContext.clear();
+        }
+    }
+
+    // ss11: unscan of a never-scanned piece -> 204 no-op, not an error
+    @Test
+    void ss11_unscanNeverScannedPiece_noOpNotError() {
+        String piece = seedPiece("SS11", variantA, fulfillmentLocationId, tenantId, "available");
+        UUID sessionId = openAllScope(tenantId, fulfillmentLocationId, actorId);
+
+        TenantContext.set(tenantId);
+        try {
+            assertThatCode(() -> stockTake.unscan(sessionId, piece)).doesNotThrowAnyException();
+        } finally {
+            TenantContext.clear();
+        }
+    }
+
+    // ss12: unscan on a non-open (finalized/cancelled) session -> 409, same guard as scan()
+    @Test
+    void ss12_unscanOnNonOpenSession_returns409() {
+        String piece = seedPiece("SS12", variantA, fulfillmentLocationId, tenantId, "available");
+        UUID sessionId = openAllScope(tenantId, fulfillmentLocationId, actorId);
+
+        TenantContext.set(tenantId);
+        try {
+            stockTake.scan(sessionId, "PC-" + piece, "good", actorId);
+        } finally {
+            TenantContext.clear();
+        }
+        jdbc.update("UPDATE stock_take_sessions SET status = 'cancelled' WHERE id = ?", sessionId);
+
+        TenantContext.set(tenantId);
+        try {
+            assertThatThrownBy(() -> stockTake.unscan(sessionId, piece))
+                .isInstanceOf(ResponseStatusException.class)
+                .satisfies(e -> assertThat(((ResponseStatusException) e).getStatusCode())
+                    .isEqualTo(HttpStatus.CONFLICT));
+        } finally {
+            TenantContext.clear();
+        }
+    }
+
+    // ss13: unscan of a cross-tenant piece -> NOT_FOUND, same non-leak posture as scan()
+    @Test
+    void ss13_unscanCrossTenantPiece_returnsNotFound() {
+        String crossPiece = seedPiece("SS13CROSS", variantB, locationB, tenantB, "available");
+        UUID sessionId = openAllScope(tenantId, fulfillmentLocationId, actorId);
+
+        TenantContext.set(tenantId);
+        try {
+            assertThatThrownBy(() -> stockTake.unscan(sessionId, crossPiece))
+                .isInstanceOf(ResponseStatusException.class)
+                .satisfies(e -> assertThat(((ResponseStatusException) e).getStatusCode())
+                    .isEqualTo(HttpStatus.NOT_FOUND));
+        } finally {
+            TenantContext.clear();
+        }
+    }
+
     // ── helpers ───────────────────────────────────────────────────────────────
 
     private UUID openAllScope(UUID tenant, UUID locationId, UUID actor) {

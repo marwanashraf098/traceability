@@ -215,6 +215,35 @@ public class StockTakeService {
     }
 
     /**
+     * Undo a scan (FR-21 Step 6.1 extension) — deletes the (session, piece) row so the
+     * piece reverts to uncounted and a subsequent re-scan's idempotent INSERT (blocked
+     * today by the very row this removes) succeeds again. Explicit delete, not an upsert
+     * on /scan: a silent condition-flip on re-scan would be unsafe in a blind count — the
+     * worker must deliberately undo before redoing.
+     *
+     * Idempotent: unscanning a piece that was never scanned (or already unscanned) is a
+     * no-op, not an error — 0 rows affected either way. Same cross-tenant non-leak
+     * posture as scan(): a piece invisible under this tenant's RLS is NOT_FOUND, never
+     * distinguished from "genuinely doesn't exist".
+     */
+    @Transactional
+    public void unscan(UUID sessionId, String pieceId) {
+        UUID tenantId = TenantContext.require();
+        requireOpenSession(sessionId, tenantId);
+
+        Integer pieceCount = jdbc.queryForObject(
+            "SELECT COUNT(*) FROM pieces WHERE id = ? AND tenant_id = ?",
+            Integer.class, pieceId, tenantId);
+        if (pieceCount == null || pieceCount == 0) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Piece not found");
+        }
+
+        jdbc.update(
+            "DELETE FROM stock_take_scans WHERE session_id = ? AND piece_id = ? AND tenant_id = ?",
+            sessionId, pieceId, tenantId);
+    }
+
+    /**
      * - in snapshot, scanned condition agrees with status_at_open -> "match"
      * - in snapshot, disagrees -> "condition_mismatch"
      * - not in snapshot, piece's CURRENT live status is 'lost' -> "unexpected_resurfaced"

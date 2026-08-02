@@ -67,6 +67,14 @@ public class StockTakeController {
         return stockTake.scan(sessionId, req.barcode(), req.condition(), principal.userId());
     }
 
+    /** Undo a scan — WORKER+, same role as scan(). Idempotent: no-op on an unscanned piece. */
+    @DeleteMapping("/sessions/{sessionId}/scan/{pieceId}")
+    @PreAuthorize("isAuthenticated()")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void unscan(@PathVariable UUID sessionId, @PathVariable String pieceId) {
+        stockTake.unscan(sessionId, pieceId);
+    }
+
     // ── Reconciliation + resolutions (Step 4) ────────────────────────────────
 
     @GetMapping("/sessions/{sessionId}/reconciliation")
