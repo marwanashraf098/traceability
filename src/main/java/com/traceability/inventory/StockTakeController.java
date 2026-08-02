@@ -41,6 +41,18 @@ public class StockTakeController {
         return ResponseEntity.status(HttpStatus.CREATED).body(result);
     }
 
+    /** Blind scan: the response never includes expected quantities, only the classification. */
+    @PostMapping("/sessions/{sessionId}/scan")
+    @PreAuthorize("isAuthenticated()")
+    public Map<String, Object> scan(
+            @PathVariable UUID sessionId,
+            @RequestBody ScanRequest req,
+            @AuthenticationPrincipal CustomUserDetails principal) {
+        return stockTake.scan(sessionId, req.barcode(), req.condition(), principal.userId());
+    }
+
     public record OpenSessionRequest(
         String scopeType, List<String> variantIds, String locationId, String note) {}
+
+    public record ScanRequest(String barcode, String condition) {}
 }

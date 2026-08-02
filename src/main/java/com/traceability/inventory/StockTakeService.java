@@ -138,6 +138,102 @@ public class StockTakeService {
         return fulfillmentLocationId;
     }
 
+    // ── Scan (blind, idempotent) ─────────────────────────────────────────────
+
+    private static final Set<String> CONDITIONS = Set.of("good", "damaged");
+
+    /**
+     * Resolve barcode -> piece (tenant-scoped only — same query shape as LookupService:
+     * barcode OR id OR short_code, AND tenant_id). Insert stock_take_scans; a re-scan of
+     * the same (session, piece) is a no-op via the partial unique index. Classification
+     * is always recomputed fresh from current live state, even on a re-scan.
+     *
+     * Barcode resolution is tenant-scoped by construction — under RLS (app_user, no
+     * BYPASSRLS) a piece belonging to another tenant is invisible to this query exactly
+     * like a barcode that was never issued at all, so "cross-tenant" and "genuinely
+     * unknown" are indistinguishable to this code and MUST be handled identically:
+     * logged as an unknown scan (raw_barcode, piece_id NULL), never an error, and never
+     * any hint of what tenant B's piece actually is. That IS the non-leak guarantee —
+     * there is no separate bypass check to leak through.
+     */
+    @Transactional
+    public Map<String, Object> scan(UUID sessionId, String barcode, String condition, UUID actorUserId) {
+        UUID tenantId = TenantContext.require();
+        SessionRow session = requireOpenSession(sessionId, tenantId);
+
+        if (barcode == null || barcode.isBlank()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "barcode is required");
+        }
+        if (!CONDITIONS.contains(condition)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                "condition must be 'good' or 'damaged'");
+        }
+
+        record PieceRow(String id, String status) {}
+        PieceRow piece = jdbc.query(
+            "SELECT id, status::text AS status FROM pieces " +
+            "WHERE (barcode = ? OR id = ? OR short_code = ?) AND tenant_id = ?",
+            rs -> rs.next() ? new PieceRow(rs.getString("id"), rs.getString("status")) : null,
+            barcode, barcode, barcode, tenantId);
+
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("sessionId", sessionId);
+        out.put("barcode", barcode);
+
+        if (piece == null) {
+            jdbc.update(
+                "INSERT INTO stock_take_scans " +
+                "(id, tenant_id, session_id, piece_id, raw_barcode, scanned_condition, source, actor_user_id) " +
+                "VALUES (gen_random_uuid(), ?, ?, NULL, ?, ?, 'scan', ?)",
+                tenantId, sessionId, barcode, condition, actorUserId);
+            out.put("pieceId", null);
+            out.put("classification", "unknown");
+            return out;
+        }
+
+        // Idempotent: ON CONFLICT target matches the partial unique index exactly
+        // (session_id, piece_id) WHERE piece_id IS NOT NULL. First scan wins; a re-scan
+        // does not overwrite the recorded condition, but classification below is always
+        // computed fresh against current live state.
+        int inserted = jdbc.update(
+            "INSERT INTO stock_take_scans " +
+            "(id, tenant_id, session_id, piece_id, scanned_condition, source, actor_user_id) " +
+            "VALUES (gen_random_uuid(), ?, ?, ?, ?, 'scan', ?) " +
+            "ON CONFLICT (session_id, piece_id) WHERE piece_id IS NOT NULL DO NOTHING",
+            tenantId, sessionId, piece.id(), condition, actorUserId);
+
+        out.put("pieceId", piece.id());
+        out.put("alreadyScanned", inserted == 0);
+        out.put("classification", classify(sessionId, piece.id(), condition, piece.status()));
+        return out;
+    }
+
+    /**
+     * - in snapshot, scanned condition agrees with status_at_open -> "match"
+     * - in snapshot, disagrees -> "condition_mismatch"
+     * - not in snapshot, piece's CURRENT live status is 'lost' -> "unexpected_resurfaced"
+     *   (system thought it was gone; it just got scanned, so it's physically present)
+     * - not in snapshot, not lost (e.g. a different variant under a variant-subset scope,
+     *   or created after the snapshot) -> "out_of_scope" — a real outcome the spec's three
+     *   named buckets don't enumerate but a blind scanner will still hit.
+     */
+    private String classify(UUID sessionId, String pieceId, String scannedCondition, String liveStatus) {
+        UUID tenantId = TenantContext.require();
+        String statusAtOpen = jdbc.query(
+            "SELECT status_at_open FROM stock_take_expected WHERE session_id = ? AND piece_id = ? AND tenant_id = ?",
+            rs -> rs.next() ? rs.getString("status_at_open") : null,
+            sessionId, pieceId, tenantId);
+
+        if (statusAtOpen != null) {
+            String expectedCondition = "damaged".equals(statusAtOpen) ? "damaged" : "good";
+            return expectedCondition.equals(scannedCondition) ? "match" : "condition_mismatch";
+        }
+        if ("lost".equals(liveStatus)) {
+            return "unexpected_resurfaced";
+        }
+        return "out_of_scope";
+    }
+
     // ── Shared session lookup (used by scan/reconciliation in later steps) ──
 
     record SessionRow(UUID id, String status, String scopeType, UUID locationId,
