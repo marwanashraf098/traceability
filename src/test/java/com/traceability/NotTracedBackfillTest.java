@@ -105,16 +105,16 @@ class NotTracedBackfillTest {
         //    touches 'available' pieces; V59, a locations.is_fulfillment column add +
         //    backfill; V60, a CHECK constraint widen on shopify_inventory_adjustments; V61,
         //    a one-fulfillment-location-per-tenant unique index; V62, the FR-21 stock-take
-        //    tables; and V63, a CHECK constraint fix on stock_take_shopify_syncs.status —
-        //    none of these touch orders/allocations, so their presence here doesn't affect
-        //    this test's assertions).
+        //    tables; V63, a CHECK constraint fix on stock_take_shopify_syncs.status; and
+        //    V64, the FR-22 transfers tables — none of these touch orders/allocations, so
+        //    their presence here doesn't affect this test's assertions).
         Flyway toLatest = Flyway.configure()
                 .dataSource(POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword())
                 .locations("classpath:db/migration")
                 .load();
         MigrateResult r2 = toLatest.migrate();
         assertThat(r2.success).as("migrations after V56 must succeed").isTrue();
-        assertThat(r2.migrationsExecuted).as("V57 + V58 + V59 + V60 + V61 + V62 + V63 pending after V56").isEqualTo(7);
+        assertThat(r2.migrationsExecuted).as("V57 + V58 + V59 + V60 + V61 + V62 + V63 + V64 pending after V56").isEqualTo(8);
 
         try (Connection conn = DriverManager.getConnection(
                 POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword())) {

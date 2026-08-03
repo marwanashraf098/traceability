@@ -4,6 +4,33 @@
 
 ## Current state
 
+**FR-22.1 — Transfers & External Custody, schema only (2026-08-03) — built and tested against
+Testcontainers.** Step 0 (diagnosis) found the spec's provisional "FR-21" number already taken
+(FR-21 = Stock Taking, below) — renumbered to FR-22 in `docs/transfers-build-spec.md` before any
+code landed. This commit is FR-22.1 only, per the commit plan: `V64__transfers.sql` adds
+`transfers` / `transfer_lines` / `transfer_pieces`, each with `tenant_id` + `ENABLE`/`FORCE ROW
+LEVEL SECURITY` + a `tenant_isolation` policy in the same migration (Invariant 3), plus the
+`transfer_pieces_one_active` partial-unique index (`WHERE outcome IS NULL`) as the concurrency
+referee for concurrent send-out scans — mirrors `allocations_piece_active_unique`. Destination
+locations need **no schema change**: `location_type` already has `showroom` and `vendor`
+(native enum since V1); showroom transfers use `type='showroom'`, dryclean/repair/other use
+`type='vendor'`, and `LocationController.create()` already accepts `is_fulfillment=false` with
+either type. The workflow distinction lives in `transfers.transfer_type`, not `location_type`.
+**No piece-status enum or `InventoryLedger` change in this commit** — that's FR-22.2, posted for
+review behind gate G1, not yet approved/committed.
+
+RLS proof: new `TransferRlsTest` (Day10Test/InventoryLedgerTest app_user-harness pattern) inserts
+a transfer as tenant A via the postgres/BYPASSRLS connection, then asserts over a real
+`app_user` (non-BYPASSRLS) connection that tenant B's `SELECT` returns zero rows AND — the
+positive control — tenant A's own `SELECT` still returns the row. `RlsCoverageTest` was not
+touched: it audits GET *endpoints* (none exist yet for transfers; `TransferController` is
+FR-22.6), not tables, and runs BYPASSRLS — it doesn't prove RLS. No new GET endpoints were added
+this commit, so nothing to register there yet.
+
+Housekeeping surfaced by adding a migration: two tests hardcode the total Flyway migration count
+(`MigrationSmokeTest`, `NotTracedBackfillTest`) — bumped 62→63 and 7→8 pending-after-V56
+respectively. Full suite green: 821 tests, 0 failures, 3 pre-existing skips.
+
 **FR-21 — Stock Taking, Steps 0.5–6 (2026-08-02) — built and tested against LOCAL/Testcontainers
 only; not run against production or any real Shopify store.** Built to
 `docs/fr-21-stock-taking-build-spec.md` (backend, Steps 0.5–5) and

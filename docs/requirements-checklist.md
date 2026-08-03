@@ -156,6 +156,19 @@ One line per requirement · [M] Must / [S] Should / [C] Could · use as the buil
 
 Built 2026-08-02 per `docs/fr-21-stock-taking-build-spec.md`, Steps 0.5–5, per-step commits; local/Testcontainers only, not run against production or a real Shopify store.
 
+## FR-22 Transfers
+- [ ] 22.1 [M] Schema: `transfers` / `transfer_lines` / `transfer_pieces`, RLS in-migration, `transfer_pieces_one_active` partial-unique concurrency referee
+- [ ] 22.2 [M] Status machine: `out_on_transfer` (active) + `sold` (terminal) enum values + `InventoryLedger.ALLOWED` transitions (gate G1)
+- [ ] 22.3 [M] `createTransfer` + `scanOut` (mirrors `FulfillService.scan()`) + send-out race test
+- [ ] 22.4 [M] Reconcile: `reconcileScanBack` + `reconcileClassifyShortfall` + balance enforcement
+- [ ] 22.5 [M] `reprintOutstandingLabels` + `closeTransfer`
+- [ ] 22.6 [M] `TransferController` + role gates (send-out `isAuthenticated()`, reconcile/close `OWNER`/`MANAGER`) + i18n + `LookupService` phraseKeys + `RlsCoverageTest` entries
+- [ ] 22.7 [M] Inventory-summary "Out on transfer / At vendor" bucket + pick/gather exclusion tests
+- [ ] 22.8 [M] Mode B guard (Bosta webhook on `out_on_transfer` piece → no-op) + test
+- [ ] 22.9 [M] Frontend: create/send-out scan screen, consignment list, reconcile screen (Manager/Owner), relabel-print action; RTL, ar+en
+
+Built against `docs/transfers-build-spec.md` (renumbered from a provisional FR-21 — FR-21 is Stock Taking, already built). FR-22.1 landed 2026-08-03 (V64 migration only; status machine/InventoryLedger untouched, gated behind G1).
+
 ## NFR (verifiable bars)
 - [ ] N1 Scan validation p95 ≤ 300ms · piece page ≤ 1s · 1k receive ≤ 10s · 500-label PDF ≤ 15s · lists ≤ 1.5s @100k pieces · import 5k products+10k orders ≤ 30min
 - [ ] N2 **[x] Event+state in one ACID tx (zero custody loss)** · **[x] ledger INSERT-only at DB grants** · **[x] webhooks raw-persisted, replayable, idempotent (Bosta Day 5)** · graceful integration outages · 99.5% availability · daily backups + PITR + tested restore
