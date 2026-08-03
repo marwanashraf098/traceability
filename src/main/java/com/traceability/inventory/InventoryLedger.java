@@ -84,7 +84,18 @@ public class InventoryLedger {
         "damaged:lost",
 
         // found (lost → back in stock)
-        "lost:available"
+        "lost:available",
+
+        // FR-22 transfers: send-out and reconcile (gate G1, approved by Marawan).
+        // damaged/lost were already non-terminal before this (damaged:destroyed,
+        // damaged:lost, lost:available above) — out_on_transfer:damaged and
+        // out_on_transfer:lost are additions to an already-open graph, not the
+        // first opening of a terminal.
+        "available:out_on_transfer",     // send-out scan
+        "out_on_transfer:available",     // reconcile: scanned back, good condition
+        "out_on_transfer:damaged",       // reconcile: scanned back, condemned
+        "out_on_transfer:sold",          // reconcile: quantity-classified shortfall, off-book sale
+        "out_on_transfer:lost"           // reconcile: quantity-classified shortfall, unaccounted
     );
 
     // ---- SQL ---------------------------------------------------------------

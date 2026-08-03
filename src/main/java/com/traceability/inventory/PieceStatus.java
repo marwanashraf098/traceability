@@ -13,7 +13,9 @@ public enum PieceStatus {
     RETURN_PENDING_INSPECTION("return_pending_inspection"),
     DAMAGED("damaged"),
     LOST("lost"),
-    DESTROYED("destroyed");
+    DESTROYED("destroyed"),
+    OUT_ON_TRANSFER("out_on_transfer"),
+    SOLD("sold");
 
     /** Lowercase value matching the PostgreSQL enum literal. */
     public final String db;

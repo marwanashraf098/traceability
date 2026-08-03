@@ -193,7 +193,14 @@ class InventoryLedgerTest {
             Arguments.of(RETURN_PENDING_INSPECTION, AVAILABLE),
             Arguments.of(RETURN_PENDING_INSPECTION, DAMAGED),
             Arguments.of(DAMAGED,                   DESTROYED),
-            Arguments.of(LOST,                      AVAILABLE)
+            Arguments.of(LOST,                      AVAILABLE),
+
+            // FR-22.2 transfers (gate G1)
+            Arguments.of(AVAILABLE,                 OUT_ON_TRANSFER),
+            Arguments.of(OUT_ON_TRANSFER,            AVAILABLE),
+            Arguments.of(OUT_ON_TRANSFER,            DAMAGED),
+            Arguments.of(OUT_ON_TRANSFER,            SOLD),
+            Arguments.of(OUT_ON_TRANSFER,            LOST)
         );
     }
 
@@ -228,7 +235,11 @@ class InventoryLedgerTest {
             Arguments.of(PACKED,     RESERVED),         // backward
             Arguments.of(DELIVERED,  AVAILABLE),        // terminal → forward
             Arguments.of(LOST,       DELIVERED),        // terminal → other
-            Arguments.of(DESTROYED,  AVAILABLE)         // terminal → anything
+            Arguments.of(DESTROYED,  AVAILABLE),        // terminal → anything
+
+            // FR-22.2 transfers (gate G1)
+            Arguments.of(PACKED,           OUT_ON_TRANSFER),  // only AVAILABLE may be transferred out
+            Arguments.of(OUT_ON_TRANSFER,  RESERVED)          // out_on_transfer is not pickable
         );
     }
 
