@@ -17,6 +17,8 @@ import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Consumer;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -270,8 +272,16 @@ class TransferServiceTest {
         CountDownLatch go         = new CountDownLatch(1);
         AtomicInteger  successes  = new AtomicInteger();
         AtomicInteger  rejections = new AtomicInteger();
+        // Two REAL, independent JDBC connections/transactions — each raw Thread borrows its
+        // own connection from the pool on first use; TenantContext is a ThreadLocal so each
+        // thread sets it independently. Captured explicitly (not just inferred from the
+        // success/rejection counters) so a stray UnexpectedRollbackException — or any other
+        // exception escaping scanOut() uncaught in a raw Thread, which JUnit would otherwise
+        // never see — fails this test loudly instead of silently zeroing out a counter.
+        AtomicReference<Throwable> t1Failure = new AtomicReference<>();
+        AtomicReference<Throwable> t2Failure = new AtomicReference<>();
 
-        Runnable attempt = () -> {
+        Consumer<AtomicReference<Throwable>> attempt = (failureSlot) -> {
             TenantContext.set(tenantId);
             try {
                 ready.countDown();
@@ -281,17 +291,22 @@ class TransferServiceTest {
                 else rejections.incrementAndGet();
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
+            } catch (Throwable t) {
+                failureSlot.set(t);
             } finally {
                 TenantContext.clear();
             }
         };
 
-        Thread t1 = new Thread(attempt);
-        Thread t2 = new Thread(attempt);
+        Thread t1 = new Thread(() -> attempt.accept(t1Failure));
+        Thread t2 = new Thread(() -> attempt.accept(t2Failure));
         t1.start(); t2.start();
         ready.await();
         go.countDown();
         t1.join(); t2.join();
+
+        assertThat(t1Failure.get()).as("thread 1 must not throw (e.g. UnexpectedRollbackException)").isNull();
+        assertThat(t2Failure.get()).as("thread 2 must not throw (e.g. UnexpectedRollbackException)").isNull();
 
         assertThat(successes.get()).as("exactly one scanOut wins").isEqualTo(1);
         assertThat(rejections.get()).as("exactly one scanOut rejected").isEqualTo(1);

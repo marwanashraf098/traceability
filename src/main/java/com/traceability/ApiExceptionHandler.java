@@ -8,6 +8,7 @@ import com.traceability.integrations.shopify.ShopifyTransientException;
 import com.traceability.inventory.AwbMismatchException;
 import com.traceability.inventory.LookupNotFoundException;
 import com.traceability.inventory.PieceCommittedException;
+import com.traceability.inventory.StateConflictException;
 import jakarta.servlet.http.HttpServletRequest;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -75,6 +76,35 @@ public class ApiExceptionHandler {
                 "PIECE_COMMITTED",
                 ex.getOrderId() != null ? ex.getOrderId().toString() : null,
                 ex.getOrderNumber()));
+    }
+
+    record StateConflictBody(
+            String code,
+            String pieceId,
+            String expected,
+            String actual) {}
+
+    // FR-22.3: InventoryLedger.transition() throws this when a piece's actual status no
+    // longer matches the caller's expected status. Every OTHER existing call site catches
+    // this locally and converts it to a domain-specific rejected result (e.g.
+    // FulfillService.scan() -> ALREADY_RESERVED) before it ever reaches a controller.
+    // TransferService.scanOut() is the first caller that deliberately leaves it uncaught
+    // for the winner-path call (the claim already uniquely serialized concurrent scanOut
+    // attempts on the same piece before transition() runs, so this specific exception is
+    // reserved for a genuinely different, unrelated concurrent mutation) — this handler is
+    // the generic fallback for exactly that case, and for any future caller that doesn't
+    // add its own local catch. Runs AFTER the @Transactional proxy has already rolled the
+    // transaction back (RestControllerAdvice sits outside the AOP transactional boundary),
+    // so no partial write survives regardless of which caller reaches this.
+    @ExceptionHandler(StateConflictException.class)
+    ResponseEntity<StateConflictBody> handleStateConflict(StateConflictException ex) {
+        log.warn("Piece state conflict: {}", ex.getMessage());
+        return ResponseEntity.status(HttpStatus.CONFLICT)
+            .body(new StateConflictBody(
+                "STATE_CONFLICT",
+                ex.getPieceId(),
+                ex.getExpected() != null ? ex.getExpected().db : null,
+                ex.getActual()   != null ? ex.getActual().db   : null));
     }
 
     @ExceptionHandler(ShopifyOAuthException.class)
