@@ -4,6 +4,39 @@
 
 ## Current state
 
+**FR-22.4 metadata gap fixes + FR-22.5 — reprint outstanding labels (2026-08-04) — built and
+tested against Testcontainers.**
+
+Two real gaps found re-verifying FR-22.4 metadata against the target shape and fixed in their
+own small commit first: (1) `available:out_on_transfer` never carried a `reason` key, only
+`transfer_id` — now includes `reason` = the transfer's `transfer_type` (the only always-present
+short categorical field on the transfer row). (2) `classifyShortfall`'s `sold` disposition
+incorrectly carried `attributed_to: vendor` via a metadata builder shared across all three
+dispositions — a sale is not a vendor loss and would have polluted the Phase-3 vendor-loss
+report; `closeShortfallPiece()` now takes an explicit `vendorAttributed` flag (sold=false,
+lost/condemned_not_returned=true). Confirmed with no code change needed: the balance guard
+correctly rejects over-requests against still-outstanding pieces; `reconcileScanBack`/
+`classifyShortfall` both gate on `status='reconciling'`; `sold` has zero outgoing entries in
+`InventoryLedger.ALLOWED` (hard terminal, no un-sell path, as intended).
+
+**FR-22.5 — `TransferService.reprintOutstandingLabels()` + `TransferController`.** Loops
+`LabelService.generatePieceLabel()` (one page per outstanding piece — `transfer_pieces WHERE
+outcome IS NULL`) merged into a single PDF via PDFBox's `PDDocument.importPage()`, and
+`InventoryLedger.recordLabelReprinted()` (the existing no-status-change 4th piece_events write
+path) per piece, all inside one `@Transactional` so all N reprint events land under the same
+tenant GUC in one transaction. Deliberately does not reuse `ReturnSessionController`'s per-piece
+reprint endpoint — that one is hard-gated to `return_pending_inspection`/`damaged` and would
+reject an `out_on_transfer` piece outright.
+
+First `TransferController` (`POST /api/v1/transfers/{id}/reprint-outstanding`,
+`OWNER`/`MANAGER`) — created for this one endpoint only, ahead of the rest of FR-22's HTTP
+surface (createTransfer/scanOut/reconcile*), which is FR-22.6. No new GET endpoints, so nothing
+to register in `RlsCoverageTest` (POST-only, and it only audits GETs anyway).
+
+Full suite green: 860 tests, 0 failures, 3 pre-existing skips.
+
+---
+
 **FR-22.2–22.4 — Transfers status machine + send-out + reconcile (2026-08-03) — built and
 tested against Testcontainers.**
 

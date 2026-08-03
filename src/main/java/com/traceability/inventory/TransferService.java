@@ -3,6 +3,9 @@ package com.traceability.inventory;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.traceability.tenancy.TenantContext;
+import org.apache.pdfbox.Loader;
+import org.apache.pdfbox.pdmodel.PDDocument;
+import org.apache.pdfbox.pdmodel.PDPage;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -11,6 +14,8 @@ import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
 import java.sql.Timestamp;
 import java.time.Instant;
 import java.util.LinkedHashMap;
@@ -57,11 +62,14 @@ public class TransferService {
     private final JdbcTemplate    jdbc;
     private final InventoryLedger ledger;
     private final ObjectMapper    mapper;
+    private final LabelService    labelService;
 
-    public TransferService(JdbcTemplate jdbc, InventoryLedger ledger, ObjectMapper mapper) {
-        this.jdbc   = jdbc;
-        this.ledger = ledger;
-        this.mapper = mapper;
+    public TransferService(JdbcTemplate jdbc, InventoryLedger ledger, ObjectMapper mapper,
+                           LabelService labelService) {
+        this.jdbc         = jdbc;
+        this.ledger       = ledger;
+        this.mapper       = mapper;
+        this.labelService = labelService;
     }
 
     // ── Create ────────────────────────────────────────────────────────────────
@@ -476,6 +484,55 @@ public class TransferService {
         if (rows == 0) {
             throw new ResponseStatusException(HttpStatus.CONFLICT,
                 "Transfer status changed concurrently — reload and retry");
+        }
+    }
+
+    // ── Reprint outstanding labels ───────────────────────────────────────────
+
+    /**
+     * Reprints the barcodes of every piece still outstanding on this transfer (transfer_pieces
+     * WHERE outcome IS NULL) — the physical relabel step (identity is lost at the vendor;
+     * this reprints the SAME piece IDs, it never mints new ones). Deliberately does NOT reuse
+     * ReturnSessionController's per-piece reprint endpoint: that one is hard-gated to pieces in
+     * return_pending_inspection/damaged status and would reject an out_on_transfer piece
+     * outright. Loops LabelService.generatePieceLabel() (one page per piece) merged into a
+     * single multi-page PDF, and InventoryLedger.recordLabelReprinted() (the existing
+     * no-status-change event writer — 4th piece_events write path, already established) per
+     * piece, all under one @Transactional so all N reprint events are written under the same
+     * tenant GUC in one transaction.
+     */
+    @Transactional(isolation = Isolation.READ_COMMITTED)
+    public byte[] reprintOutstandingLabels(UUID transferId, UUID actorUserId) throws IOException {
+        UUID tenantId = TenantContext.require();
+
+        List<String> transferStatusRows = jdbc.queryForList(
+            "SELECT status FROM transfers WHERE id = ? AND tenant_id = ?", String.class, transferId, tenantId);
+        if (transferStatusRows.isEmpty()) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Transfer not found");
+        }
+
+        List<String> outstandingPieceIds = jdbc.queryForList(
+            "SELECT piece_id FROM transfer_pieces WHERE transfer_id = ? AND tenant_id = ? AND outcome IS NULL " +
+            "ORDER BY created_at ASC",
+            String.class, transferId, tenantId);
+        if (outstandingPieceIds.isEmpty()) {
+            throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY,
+                "No outstanding pieces on this transfer");
+        }
+
+        try (PDDocument merged = new PDDocument()) {
+            for (String pieceId : outstandingPieceIds) {
+                byte[] pagePdf = labelService.generatePieceLabel(pieceId, null, null);
+                try (PDDocument single = Loader.loadPDF(pagePdf)) {
+                    for (PDPage page : single.getPages()) {
+                        merged.importPage(page);
+                    }
+                }
+                ledger.recordLabelReprinted(pieceId, actorUserId, null, null, null);
+            }
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            merged.save(out);
+            return out.toByteArray();
         }
     }
 

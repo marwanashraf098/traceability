@@ -161,13 +161,13 @@ Built 2026-08-02 per `docs/fr-21-stock-taking-build-spec.md`, Steps 0.5–5, per
 - [x] 22.2 [M] Status machine: `out_on_transfer` (active) + `sold` (terminal) enum values + `InventoryLedger.ALLOWED` transitions (gate G1, approved by Marawan) [V65]
 - [x] 22.3 [M] `createTransfer` + `scanOut` + send-out race test [claim-before-transition, not transition-as-race-guard — see PROGRESS.md; deviates from "mirror FulfillService.scan() exactly" for a documented Spring transactional reason]
 - [x] 22.4 [M] Reconcile: `beginReconcile` + `reconcileScanBack` + `classifyShortfall` (FIFO by `transfer_pieces.created_at`, V66) + `closeTransfer` (moved up from 22.5 — see below) + balance enforcement
-- [ ] 22.5 [M] `reprintOutstandingLabels`
-- [ ] 22.6 [M] `TransferController` + role gates (send-out `isAuthenticated()`, reconcile/close `OWNER`/`MANAGER`) + i18n + `LookupService` phraseKeys + `RlsCoverageTest` entries
+- [x] 22.5 [M] `reprintOutstandingLabels` — `TransferController` (`POST /api/v1/transfers/{id}/reprint-outstanding`, `OWNER`/`MANAGER`) created for this one endpoint only
+- [ ] 22.6 [M] `createTransfer`/`scanOut`/reconcile* endpoints + role gates (send-out `isAuthenticated()`, reconcile/close `OWNER`/`MANAGER`) + i18n + `LookupService` phraseKeys + `RlsCoverageTest` entries
 - [ ] 22.7 [M] Inventory-summary "Out on transfer / At vendor" bucket + pick/gather exclusion tests
 - [ ] 22.8 [M] Mode B guard (Bosta webhook on `out_on_transfer` piece → no-op) + test
 - [ ] 22.9 [M] Frontend: create/send-out scan screen, consignment list, reconcile screen (Manager/Owner), relabel-print action; RTL, ar+en
 
-Built against `docs/transfers-build-spec.md` (renumbered from a provisional FR-21 — FR-21 is Stock Taking, already built). No `TransferController` yet — role gating (MANAGER/OWNER on `beginReconcile`/`reconcileScanBack`/`classifyShortfall`/`closeTransfer`) is a controller-level `@PreAuthorize` concern per this codebase's established convention, deferred to 22.6; none of these service methods self-enforce roles. `closeTransfer` landed in 22.4 rather than 22.5 per explicit build-order request — 22.5 is now `reprintOutstandingLabels` only.
+Built against `docs/transfers-build-spec.md` (renumbered from a provisional FR-21 — FR-21 is Stock Taking, already built). `closeTransfer` landed in 22.4 rather than 22.5 per explicit build-order request — 22.5 became `reprintOutstandingLabels` only. `TransferController` exists now (created in 22.5, one endpoint) but `beginReconcile`/`reconcileScanBack`/`classifyShortfall`/`createTransfer`/`scanOut` still have no HTTP endpoint and no role gate — that's 22.6.
 
 ## NFR (verifiable bars)
 - [ ] N1 Scan validation p95 ≤ 300ms · piece page ≤ 1s · 1k receive ≤ 10s · 500-label PDF ≤ 15s · lists ≤ 1.5s @100k pieces · import 5k products+10k orders ≤ 30min
