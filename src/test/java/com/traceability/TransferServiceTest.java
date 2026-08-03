@@ -189,6 +189,15 @@ class TransferServiceTest {
             "SELECT outcome FROM transfer_pieces WHERE transfer_id = ? AND piece_id = ?",
             transferId, pieceId);
         assertThat(tpRow.get("outcome")).as("outstanding piece has null outcome").isNull();
+
+        Map<String, Object> event = jdbc.queryForMap(
+            "SELECT event_type, metadata FROM piece_events WHERE piece_id = ? ORDER BY id DESC LIMIT 1", pieceId);
+        assertThat(event.get("event_type")).isEqualTo("transferred_out");
+        String metaJson = event.get("metadata").toString();
+        assertThat(metaJson)
+            .as("carries transfer_id + reason (the transfer's category)")
+            .contains("\"transfer_id\"")
+            .contains("\"reason\": \"showroom\"");
     }
 
     @Test

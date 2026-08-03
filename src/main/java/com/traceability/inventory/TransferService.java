@@ -88,7 +88,7 @@ public class TransferService {
 
         // 1. Transfer must exist (tenant-scoped via RLS + explicit predicate) and be open.
         List<Map<String, Object>> transferRows = jdbc.queryForList(
-            "SELECT status, destination_location_id FROM transfers WHERE id = ? AND tenant_id = ?",
+            "SELECT status, destination_location_id, transfer_type FROM transfers WHERE id = ? AND tenant_id = ?",
             transferId, tenantId);
         if (transferRows.isEmpty()) {
             return ScanOutResult.rejected("TRANSFER_NOT_FOUND", "Transfer not found");
@@ -99,7 +99,8 @@ public class TransferService {
             return ScanOutResult.rejected("TRANSFER_NOT_OPEN",
                 "Transfer is not open for send-out (status: " + transferStatus + ")");
         }
-        UUID destinationLocationId = (UUID) transfer.get("destination_location_id");
+        UUID   destinationLocationId = (UUID)   transfer.get("destination_location_id");
+        String transferType          = (String) transfer.get("transfer_type");
 
         // 2. Look up piece by barcode — same triple-match as FulfillService.scan()
         //    (new-format raw ULID, or old-format "PC-<ULID>", or short_code).
@@ -141,6 +142,9 @@ public class TransferService {
                 "VALUES (gen_random_uuid(), ?, ?, ?, ?)",
                 tenantId, transferId, lineId, pieceId);
         } catch (DuplicateKeyException e) {
+            // No further DB access on this path: Postgres aborts the transaction on the
+            // violation above, and COMMIT on an aborted transaction is a silent, no-error
+            // implicit ROLLBACK — any statement issued here first would fail instead.
             return ScanOutResult.rejected("ALREADY_ON_TRANSFER", "Piece was claimed by a concurrent scan");
         }
 
@@ -151,7 +155,7 @@ public class TransferService {
         //    orphaned.
         ledger.transition(pieceId, PieceStatus.AVAILABLE, PieceStatus.OUT_ON_TRANSFER,
             "transferred_out", actorUserId,
-            new TransitionContext(null, null, destinationLocationId, null, transferMeta(transferId)));
+            new TransitionContext(null, null, destinationLocationId, null, transferMeta(transferId, transferType)));
 
         // 7. Explicit location update — transition() does not touch current_location_id
         //    (same pattern as ReturnService).
@@ -166,14 +170,14 @@ public class TransferService {
         return ScanOutResult.success(pieceId, barcode, variantId, lineId, qtyOut);
     }
 
-    private String transferMeta(UUID transferId) {
+    private String transferMeta(UUID transferId, String transferType) {
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("transfer_id", transferId.toString());
-        try {
-            return mapper.writeValueAsString(m);
-        } catch (JsonProcessingException e) {
-            throw new IllegalStateException("Failed to serialize metadata", e);
-        }
+        // "reason" the transition happened — the transfer's category (showroom/dryclean/
+        // repair/other) is the only always-present, short, categorical field available;
+        // the transfer's freeform note is not duplicated here (it's on the transfer row).
+        m.put("reason", transferType);
+        return writeJson(m);
     }
 
     // ── Reconcile: begin ─────────────────────────────────────────────────────
@@ -387,16 +391,18 @@ public class TransferService {
 
         int idx = 0;
         for (int i = 0; i < counts.sold(); i++) {
+            // A sale is not a vendor loss — omit attributed_to so it never pollutes the
+            // Phase-3 vendor-loss report (unlike lost/condemned_not_returned below).
             closeShortfallPiece(pieceIds.get(idx++), transferId, lineId,
-                "sold", PieceStatus.SOLD, "sold_offbook", actorUserId);
+                "sold", PieceStatus.SOLD, "sold_offbook", actorUserId, false);
         }
         for (int i = 0; i < counts.lost(); i++) {
             closeShortfallPiece(pieceIds.get(idx++), transferId, lineId,
-                "lost", PieceStatus.LOST, "lost_at_vendor", actorUserId);
+                "lost", PieceStatus.LOST, "lost_at_vendor", actorUserId, true);
         }
         for (int i = 0; i < counts.condemnedNotReturned(); i++) {
             closeShortfallPiece(pieceIds.get(idx++), transferId, lineId,
-                "condemned", PieceStatus.DAMAGED, "condemned_at_vendor", actorUserId);
+                "condemned", PieceStatus.DAMAGED, "condemned_at_vendor", actorUserId, true);
         }
 
         jdbc.update(
@@ -406,7 +412,8 @@ public class TransferService {
     }
 
     private void closeShortfallPiece(String pieceId, UUID transferId, UUID lineId,
-                                     String outcome, PieceStatus target, String eventType, UUID actorUserId) {
+                                     String outcome, PieceStatus target, String eventType,
+                                     UUID actorUserId, boolean vendorAttributed) {
         jdbc.update(
             "UPDATE transfer_pieces SET outcome = ?, outcome_verified = false, outcome_at = now(), outcome_by = ? " +
             "WHERE transfer_id = ? AND line_id = ? AND piece_id = ? AND outcome IS NULL",
@@ -416,15 +423,18 @@ public class TransferService {
         // classifyShortfall() already gives this call exclusive access to the piece row
         // for the duration of this transaction.
         ledger.transition(pieceId, PieceStatus.OUT_ON_TRANSFER, target, eventType, actorUserId,
-            new TransitionContext(null, null, null, null, shortfallMeta(transferId)));
+            new TransitionContext(null, null, null, null, shortfallMeta(transferId, vendorAttributed)));
     }
 
-    private String shortfallMeta(UUID transferId) {
+    private String shortfallMeta(UUID transferId, boolean vendorAttributed) {
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("transfer_id", transferId.toString());
         m.put("verified", false);
         m.put("reconciliation", "quantity_based");
-        m.put("attributed_to", "vendor");
+        // Sold is an off-book sale, not a vendor loss — attributed_to is omitted for it
+        // (see the "sold" call site in classifyShortfall) so it never pollutes the Phase-3
+        // vendor-loss report; lost/condemned_not_returned are genuine vendor-attributed loss.
+        if (vendorAttributed) m.put("attributed_to", "vendor");
         return writeJson(m);
     }
 

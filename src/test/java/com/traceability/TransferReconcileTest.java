@@ -368,6 +368,45 @@ class TransferReconcileTest {
     }
 
     @Test
+    void classifyShortfall_sold_hasNoVendorAttribution() {
+        // A sale is not a vendor loss — attributed_to must be absent, or it would pollute
+        // the Phase-3 vendor-loss report. lost/condemned_not_returned DO carry it (above).
+        UUID transferId = openTransferWithOutstanding(1);
+        String pieceId = outstandingPieceId(transferId);
+        transferSvc.beginReconcile(transferId, actorId);
+        UUID lineId = lineIdFor(transferId);
+
+        transferSvc.classifyShortfall(transferId, lineId,
+            new TransferService.ShortfallCounts(1, 0, 0), actorId);
+
+        assertThat(fetchStatus(pieceId)).isEqualTo("sold");
+        Map<String, Object> event = jdbc.queryForMap(
+            "SELECT event_type, metadata FROM piece_events WHERE piece_id = ? ORDER BY id DESC LIMIT 1", pieceId);
+        assertThat(event.get("event_type")).isEqualTo("sold_offbook");
+        String metaJson = event.get("metadata").toString();
+        assertThat(metaJson)
+            .contains("\"verified\": false")
+            .contains("\"reconciliation\": \"quantity_based\"")
+            .doesNotContain("attributed_to");
+    }
+
+    @Test
+    void classifyShortfall_transferNotReconciling_rejects() {
+        UUID transferId = openTransferWithOutstanding(1);
+        UUID lineId = lineIdFor(transferId);
+        // Still 'open' — beginReconcile never called.
+
+        assertThatThrownBy(() -> transferSvc.classifyShortfall(transferId, lineId,
+                new TransferService.ShortfallCounts(1, 0, 0), actorId))
+            .isInstanceOf(ResponseStatusException.class);
+
+        Integer stillOutstanding = jdbc.queryForObject(
+            "SELECT COUNT(*) FROM transfer_pieces WHERE transfer_id = ? AND outcome IS NULL",
+            Integer.class, transferId);
+        assertThat(stillOutstanding).as("no mutation when transfer isn't reconciling").isEqualTo(1);
+    }
+
+    @Test
     void classifyShortfall_exceedsRemainingOutstanding_rejectsWithNoMutation() {
         UUID transferId = openTransferWithOutstanding(2);
         transferSvc.beginReconcile(transferId, actorId);
