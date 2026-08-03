@@ -4,6 +4,51 @@
 
 ## Current state
 
+**FR-22.6 — Transfers controller layer (2026-08-04) — built and tested against
+Testcontainers.** `reprint-outstanding` (FR-22.5) has no transfer-status precondition — only
+that the transfer exists and has ≥1 outstanding piece (`transfer_pieces.outcome IS NULL`);
+works in both `open` and `reconciling` status.
+
+`TransferController` now covers the full FR-22 surface. Two response families, deliberately
+different shapes:
+- **Scan family** (`scan-out`, `scan-back`) returns `ScanOutResult`/`ScanBackResult` directly
+  as 200 JSON — success or clean rejection both — mirroring `FulfillController`'s `/scan`
+  exactly (Invariant 7: same machine codes, frontend translates via `code` client-side, no
+  server-side bilingual text at this layer, same as `FulfillService.scan()` already does).
+- **Command family** (`createTransfer`, `beginReconcile`, `classifyShortfall`,
+  `closeTransfer`) throws on failure. New `TransferException` (mirrors `ShopifyOAuthException`'s
+  shape exactly: `Code` enum + messageEn/messageAr/httpStatus) replaces every
+  `ResponseStatusException` these methods previously threw in FR-22.4/22.5 — those had no
+  body at all under the generic `handleResponseStatus` handler. One new
+  `ApiExceptionHandler.handleTransferException()` covers every `TransferException.Code` —
+  the `StateConflictException` handler from FR-22.3 is untouched, not duplicated.
+  `reconcileScanBack`'s condition-validation was moved from a thrown exception into a
+  `ScanBackResult.rejected("INVALID_CONDITION", ...)` instead, so every scan-back response
+  shares one shape.
+
+`TransferService` gained `listOpen()` (open+reconciling, "what's outside our walls") and
+`getTransfer(id)` (header + lines + outstanding count) — templated directly on
+`ReceivingService.listSessions()`/`getSession()`. Both are `@Transactional(readOnly = true)`
+and registered in `RlsCoverageTest` COVERED with seeded tests (Invariant 3 GET rule).
+
+`LookupService.phraseKey()` gained the 5 transfer event types — trivial mapping since
+`TransferService` already writes event_type strings identical to the target phraseKey names
+(`transferred_out`, `returned_from_transfer`, `condemned_at_vendor`, `sold_offbook`,
+`lost_at_vendor`). Also added `label_reprinted` (FR-22.5's reprint event, previously falling
+through to the generic `status_changed` phraseKey, which is misleading for a from==to event)
+— one key beyond the explicit list, flagged for visibility rather than silently bundled.
+
+Not done (noted, not silently skipped): `createTransfer` doesn't pre-validate `transferType`
+or `destinationLocationId` before the INSERT — an invalid value still surfaces via the
+existing generic `DataIntegrityViolationException` handler (400, generic message), not a
+`TransferException`. Wasn't in this task's explicit endpoint/requirement list; flagged rather
+than silently expanded.
+
+Full suite green: 874 tests, 0 failures, 3 pre-existing skips (12 new controller tests + 2 new
+`RlsCoverageTest` entries).
+
+---
+
 **FR-22.4 metadata gap fixes + FR-22.5 — reprint outstanding labels (2026-08-04) — built and
 tested against Testcontainers.**
 

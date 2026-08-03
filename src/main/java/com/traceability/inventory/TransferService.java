@@ -12,7 +12,6 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Transactional;
-import org.springframework.web.server.ResponseStatusException;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
@@ -209,10 +208,9 @@ public class TransferService {
             List<String> statusRows = jdbc.queryForList(
                 "SELECT status FROM transfers WHERE id = ? AND tenant_id = ?", String.class, transferId, tenantId);
             if (statusRows.isEmpty()) {
-                throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Transfer not found");
+                throw transferNotFound();
             }
-            throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY,
-                "Transfer is not open (status: " + statusRows.get(0) + ")");
+            throw transferNotOpen(statusRows.get(0));
         }
     }
 
@@ -240,7 +238,10 @@ public class TransferService {
         UUID tenantId = TenantContext.require();
 
         if (!VALID_CONDITIONS.contains(condition)) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "condition must be 'good' or 'condemned'");
+            // A malformed request, not a business outcome — but kept as a rejected() result
+            // rather than thrown, so every scan-back response (including this one) shares
+            // the same {success,code,message} shape a caller can handle uniformly.
+            return ScanBackResult.rejected("INVALID_CONDITION", "condition must be 'good' or 'condemned'");
         }
 
         // 1. Transfer must exist and be reconciling.
@@ -338,21 +339,26 @@ public class TransferService {
         UUID tenantId = TenantContext.require();
 
         if (counts.sold() < 0 || counts.lost() < 0 || counts.condemnedNotReturned() < 0) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "counts must be non-negative");
+            throw new TransferException(TransferException.Code.SHORTFALL_INVALID_COUNTS,
+                "Counts must be non-negative",
+                "يجب أن تكون الأعداد غير سالبة",
+                HttpStatus.BAD_REQUEST);
         }
         int totalRequested = counts.sold() + counts.lost() + counts.condemnedNotReturned();
         if (totalRequested == 0) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "at least one count must be positive");
+            throw new TransferException(TransferException.Code.SHORTFALL_EMPTY_REQUEST,
+                "At least one count must be positive",
+                "يجب أن يكون عدد واحد على الأقل أكبر من صفر",
+                HttpStatus.BAD_REQUEST);
         }
 
         List<String> transferStatusRows = jdbc.queryForList(
             "SELECT status FROM transfers WHERE id = ? AND tenant_id = ?", String.class, transferId, tenantId);
         if (transferStatusRows.isEmpty()) {
-            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Transfer not found");
+            throw transferNotFound();
         }
         if (!"reconciling".equals(transferStatusRows.get(0))) {
-            throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY,
-                "Transfer is not in reconciling status (status: " + transferStatusRows.get(0) + ")");
+            throw transferNotReconciling(transferStatusRows.get(0));
         }
 
         Map<String, Object> line = jdbc.query(
@@ -367,7 +373,10 @@ public class TransferService {
             ) : null,
             lineId, transferId, tenantId);
         if (line == null) {
-            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Transfer line not found");
+            throw new TransferException(TransferException.Code.TRANSFER_LINE_NOT_FOUND,
+                "Transfer line not found",
+                "لم يتم العثور على بند النقل",
+                HttpStatus.NOT_FOUND);
         }
 
         int remainingOutstanding = (Integer) line.get("qty_out")
@@ -376,9 +385,12 @@ public class TransferService {
             - (Integer) line.get("qty_sold")
             - (Integer) line.get("qty_lost");
         if (totalRequested > remainingOutstanding) {
-            throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY,
+            throw new TransferException(TransferException.Code.SHORTFALL_EXCEEDS_OUTSTANDING,
                 "Requested " + totalRequested + " exceeds remaining outstanding (" +
-                remainingOutstanding + ") on this line");
+                remainingOutstanding + ") on this line",
+                "الكمية المطلوبة (" + totalRequested + ") تتجاوز عدد القطع المتبقية (" +
+                remainingOutstanding + ") على هذا البند",
+                HttpStatus.UNPROCESSABLE_ENTITY);
         }
 
         // FIFO claim: lock the exact pieces this call will resolve.
@@ -393,8 +405,10 @@ public class TransferService {
             // Shouldn't happen given the balance check above (same transaction — no
             // concurrent writer could have shrunk the outstanding set since the counts
             // were read) — defensive, not expected to fire.
-            throw new ResponseStatusException(HttpStatus.CONFLICT,
-                "Fewer outstanding pieces than requested — reload and retry");
+            throw new TransferException(TransferException.Code.SHORTFALL_RACE_CONFLICT,
+                "Fewer outstanding pieces than requested — reload and retry",
+                "عدد القطع المتبقية أقل من المطلوب — يرجى إعادة التحميل والمحاولة مرة أخرى",
+                HttpStatus.CONFLICT);
         }
 
         int idx = 0;
@@ -462,19 +476,20 @@ public class TransferService {
         List<String> transferStatusRows = jdbc.queryForList(
             "SELECT status FROM transfers WHERE id = ? AND tenant_id = ?", String.class, transferId, tenantId);
         if (transferStatusRows.isEmpty()) {
-            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Transfer not found");
+            throw transferNotFound();
         }
         if (!"reconciling".equals(transferStatusRows.get(0))) {
-            throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY,
-                "Transfer is not in reconciling status (status: " + transferStatusRows.get(0) + ")");
+            throw transferNotReconciling(transferStatusRows.get(0));
         }
 
         Integer outstanding = jdbc.queryForObject(
             "SELECT COUNT(*) FROM transfer_pieces WHERE transfer_id = ? AND tenant_id = ? AND outcome IS NULL",
             Integer.class, transferId, tenantId);
         if (outstanding != null && outstanding > 0) {
-            throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY,
-                outstanding + " piece(s) still outstanding on this transfer — resolve before closing");
+            throw new TransferException(TransferException.Code.TRANSFER_HAS_OUTSTANDING_PIECES,
+                outstanding + " piece(s) still outstanding on this transfer — resolve before closing",
+                "لا تزال هناك " + outstanding + " قطعة معلقة على عملية النقل هذه — يجب حلها قبل الإغلاق",
+                HttpStatus.UNPROCESSABLE_ENTITY);
         }
 
         int rows = jdbc.update(
@@ -482,8 +497,10 @@ public class TransferService {
             "WHERE id = ? AND tenant_id = ? AND status = 'reconciling'",
             actorUserId, transferId, tenantId);
         if (rows == 0) {
-            throw new ResponseStatusException(HttpStatus.CONFLICT,
-                "Transfer status changed concurrently — reload and retry");
+            throw new TransferException(TransferException.Code.TRANSFER_CLOSE_RACE_CONFLICT,
+                "Transfer status changed concurrently — reload and retry",
+                "تغيرت حالة عملية النقل في نفس الوقت — يرجى إعادة التحميل والمحاولة مرة أخرى",
+                HttpStatus.CONFLICT);
         }
     }
 
@@ -508,7 +525,7 @@ public class TransferService {
         List<String> transferStatusRows = jdbc.queryForList(
             "SELECT status FROM transfers WHERE id = ? AND tenant_id = ?", String.class, transferId, tenantId);
         if (transferStatusRows.isEmpty()) {
-            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Transfer not found");
+            throw transferNotFound();
         }
 
         List<String> outstandingPieceIds = jdbc.queryForList(
@@ -516,8 +533,10 @@ public class TransferService {
             "ORDER BY created_at ASC",
             String.class, transferId, tenantId);
         if (outstandingPieceIds.isEmpty()) {
-            throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY,
-                "No outstanding pieces on this transfer");
+            throw new TransferException(TransferException.Code.TRANSFER_NO_OUTSTANDING_PIECES,
+                "No outstanding pieces on this transfer",
+                "لا توجد قطع معلقة على عملية النقل هذه",
+                HttpStatus.UNPROCESSABLE_ENTITY);
         }
 
         try (PDDocument merged = new PDDocument()) {
@@ -534,6 +553,78 @@ public class TransferService {
             merged.save(out);
             return out.toByteArray();
         }
+    }
+
+    // ── List / get (consignment view) ───────────────────────────────────────
+
+    /** "What's outside our walls, with whom, since when" — open + reconciling transfers. */
+    @Transactional(readOnly = true)
+    public List<Map<String, Object>> listOpen() {
+        UUID tenantId = TenantContext.require();
+        return jdbc.queryForList(
+            "SELECT t.id, t.transfer_type, t.status, t.note, t.expected_return_at, " +
+            "       t.created_by, t.created_at, " +
+            "       t.destination_location_id, loc.name AS destination_location_name, " +
+            "       (SELECT COUNT(*) FROM transfer_pieces tp " +
+            "        WHERE tp.transfer_id = t.id AND tp.outcome IS NULL) AS outstanding_count " +
+            "FROM transfers t " +
+            "JOIN locations loc ON loc.id = t.destination_location_id " +
+            "WHERE t.tenant_id = ? AND t.status IN ('open', 'reconciling') " +
+            "ORDER BY t.created_at DESC",
+            tenantId);
+    }
+
+    @Transactional(readOnly = true)
+    public Map<String, Object> getTransfer(UUID transferId) {
+        UUID tenantId = TenantContext.require();
+        List<Map<String, Object>> rows = jdbc.queryForList(
+            "SELECT t.id, t.transfer_type, t.status, t.note, t.expected_return_at, " +
+            "       t.created_by, t.created_at, t.closed_by, t.closed_at, " +
+            "       t.destination_location_id, loc.name AS destination_location_name " +
+            "FROM transfers t " +
+            "JOIN locations loc ON loc.id = t.destination_location_id " +
+            "WHERE t.id = ? AND t.tenant_id = ?",
+            transferId, tenantId);
+        if (rows.isEmpty()) {
+            throw transferNotFound();
+        }
+        Map<String, Object> transfer = new LinkedHashMap<>(rows.get(0));
+        transfer.put("lines", jdbc.queryForList(
+            "SELECT tl.id, tl.variant_id, v.sku, v.title AS variant_title, pr.title AS product_title, " +
+            "       tl.qty_out, tl.qty_returned_good, tl.qty_condemned, tl.qty_sold, tl.qty_lost " +
+            "FROM transfer_lines tl " +
+            "JOIN variants v  ON v.id  = tl.variant_id " +
+            "JOIN products pr ON pr.id = v.product_id " +
+            "WHERE tl.transfer_id = ? AND tl.tenant_id = ? " +
+            "ORDER BY pr.title ASC, v.title ASC",
+            transferId, tenantId));
+        transfer.put("outstandingCount", jdbc.queryForObject(
+            "SELECT COUNT(*) FROM transfer_pieces WHERE transfer_id = ? AND tenant_id = ? AND outcome IS NULL",
+            Integer.class, transferId, tenantId));
+        return transfer;
+    }
+
+    // ── Shared TransferException factories (codes reused across several methods) ────
+
+    private TransferException transferNotFound() {
+        return new TransferException(TransferException.Code.TRANSFER_NOT_FOUND,
+            "Transfer not found",
+            "لم يتم العثور على عملية النقل",
+            HttpStatus.NOT_FOUND);
+    }
+
+    private TransferException transferNotOpen(String status) {
+        return new TransferException(TransferException.Code.TRANSFER_NOT_OPEN,
+            "Transfer is not open (status: " + status + ")",
+            "عملية النقل ليست مفتوحة (الحالة الحالية: " + status + ")",
+            HttpStatus.UNPROCESSABLE_ENTITY);
+    }
+
+    private TransferException transferNotReconciling(String status) {
+        return new TransferException(TransferException.Code.TRANSFER_NOT_RECONCILING,
+            "Transfer is not in reconciling status (status: " + status + ")",
+            "عملية النقل ليست في حالة المطابقة (الحالة الحالية: " + status + ")",
+            HttpStatus.UNPROCESSABLE_ENTITY);
     }
 
     private String writeJson(Map<String, Object> m) {

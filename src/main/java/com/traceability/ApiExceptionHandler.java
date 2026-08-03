@@ -9,6 +9,7 @@ import com.traceability.inventory.AwbMismatchException;
 import com.traceability.inventory.LookupNotFoundException;
 import com.traceability.inventory.PieceCommittedException;
 import com.traceability.inventory.StateConflictException;
+import com.traceability.inventory.TransferException;
 import jakarta.servlet.http.HttpServletRequest;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -105,6 +106,21 @@ public class ApiExceptionHandler {
                 ex.getPieceId(),
                 ex.getExpected() != null ? ex.getExpected().db : null,
                 ex.getActual()   != null ? ex.getActual().db   : null));
+    }
+
+    record TransferErrorBody(
+            String code,
+            @JsonProperty("message_en") String messageEn,
+            @JsonProperty("message_ar") String messageAr) {}
+
+    // FR-22.6: the "command" family of transfer errors (create/reconcile/close — not the
+    // scan family, which returns ScanOutResult/ScanBackResult rejected() values instead,
+    // mirroring FulfillService.scan()/Invariant 7). Same {code, message_en, message_ar}
+    // shape as ShopifyOAuthException — one handler for every TransferException.Code.
+    @ExceptionHandler(TransferException.class)
+    ResponseEntity<TransferErrorBody> handleTransferException(TransferException ex) {
+        return ResponseEntity.status(ex.httpStatus())
+            .body(new TransferErrorBody(ex.code().name(), ex.messageEn(), ex.messageAr()));
     }
 
     @ExceptionHandler(ShopifyOAuthException.class)

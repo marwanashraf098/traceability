@@ -90,7 +90,9 @@ class RlsCoverageTest {
             "/api/v1/shopify/inventory/reconcile",
             "/api/v1/stock-takes/sessions/{sessionId}/reconciliation",
             "/api/v1/stock-takes/sessions",
-            "/api/v1/stock-takes/sessions/{sessionId}"
+            "/api/v1/stock-takes/sessions/{sessionId}",
+            "/api/v1/transfers",
+            "/api/v1/transfers/{transferId}"
     );
 
     // ── Patterns consciously excluded, with reasons ────────────────────────────
@@ -590,6 +592,49 @@ class RlsCoverageTest {
 
         jdbc.update("DELETE FROM stock_take_shopify_syncs WHERE session_id = ?", sessionId);
         jdbc.update("DELETE FROM stock_take_sessions WHERE id = ?", sessionId);
+    }
+
+    @Test
+    void transfersList_returnsSeededOpenTransfer() {
+        UUID destId = UUID.randomUUID();
+        UUID transferId = UUID.randomUUID();
+        jdbc.update(
+            "INSERT INTO locations (id, tenant_id, name, type, is_default, is_fulfillment) " +
+            "VALUES (?, ?, 'CVG Transfer Dest', 'showroom', false, false)",
+            destId, tenantId);
+        jdbc.update(
+            "INSERT INTO transfers (id, tenant_id, transfer_type, destination_location_id, status, created_by) " +
+            "VALUES (?, ?, 'showroom', ?, 'open', ?)",
+            transferId, tenantId, destId, ownerUserId);
+
+        ResponseEntity<List> resp = get("/api/v1/transfers", List.class);
+        assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(resp.getBody()).isNotEmpty();
+
+        jdbc.update("DELETE FROM transfers WHERE id = ?", transferId);
+        jdbc.update("DELETE FROM locations WHERE id = ?", destId);
+    }
+
+    @Test
+    void transferDetail_returnsSeededTransferWithLines() {
+        UUID destId = UUID.randomUUID();
+        UUID transferId = UUID.randomUUID();
+        jdbc.update(
+            "INSERT INTO locations (id, tenant_id, name, type, is_default, is_fulfillment) " +
+            "VALUES (?, ?, 'CVG Transfer Dest 2', 'showroom', false, false)",
+            destId, tenantId);
+        jdbc.update(
+            "INSERT INTO transfers (id, tenant_id, transfer_type, destination_location_id, status, created_by) " +
+            "VALUES (?, ?, 'showroom', ?, 'open', ?)",
+            transferId, tenantId, destId, ownerUserId);
+
+        ResponseEntity<Map> resp = get("/api/v1/transfers/" + transferId, Map.class);
+        assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(resp.getBody().get("id")).isEqualTo(transferId.toString());
+        assertThat(resp.getBody()).containsKey("lines");
+
+        jdbc.update("DELETE FROM transfers WHERE id = ?", transferId);
+        jdbc.update("DELETE FROM locations WHERE id = ?", destId);
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────

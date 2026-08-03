@@ -10,3 +10,6 @@ everything new goes to `week5.md`, even good ideas.").
   transaction rollback-only when a nested `@Transactional` call throws, even if the caller
   catches it. Reproduced concretely against this exact code path (FR-22.3 investigation,
   2026-08-03). Diagnose-only follow-up — do not fix inside FR-22.
+- `reprint-outstanding` (FR-22.5) produces a merged multi-page PDF — new print shape, add to
+  the physical Xprinter verification list alongside FR-20 (mixed Arabic/Latin, thermal page
+  handling).

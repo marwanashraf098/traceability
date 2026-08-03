@@ -8,7 +8,6 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
-import org.springframework.web.server.ResponseStatusException;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
@@ -162,7 +161,7 @@ class TransferReconcileTest {
         transferSvc.beginReconcile(transferId, actorId);
 
         assertThatThrownBy(() -> transferSvc.beginReconcile(transferId, actorId))
-            .isInstanceOf(ResponseStatusException.class);
+            .isInstanceOf(TransferException.class);
 
         String status = jdbc.queryForObject("SELECT status FROM transfers WHERE id = ?", String.class, transferId);
         assertThat(status).isEqualTo("reconciling");
@@ -171,7 +170,7 @@ class TransferReconcileTest {
     @Test
     void beginReconcile_notFound_rejects() {
         assertThatThrownBy(() -> transferSvc.beginReconcile(UUID.randomUUID(), actorId))
-            .isInstanceOf(ResponseStatusException.class);
+            .isInstanceOf(TransferException.class);
     }
 
     // -----------------------------------------------------------------------
@@ -398,7 +397,7 @@ class TransferReconcileTest {
 
         assertThatThrownBy(() -> transferSvc.classifyShortfall(transferId, lineId,
                 new TransferService.ShortfallCounts(1, 0, 0), actorId))
-            .isInstanceOf(ResponseStatusException.class);
+            .isInstanceOf(TransferException.class);
 
         Integer stillOutstanding = jdbc.queryForObject(
             "SELECT COUNT(*) FROM transfer_pieces WHERE transfer_id = ? AND outcome IS NULL",
@@ -414,7 +413,7 @@ class TransferReconcileTest {
 
         assertThatThrownBy(() -> transferSvc.classifyShortfall(transferId, lineId,
                 new TransferService.ShortfallCounts(3, 0, 0), actorId))
-            .isInstanceOf(ResponseStatusException.class);
+            .isInstanceOf(TransferException.class);
 
         Integer stillOutstanding = jdbc.queryForObject(
             "SELECT COUNT(*) FROM transfer_pieces WHERE transfer_id = ? AND outcome IS NULL",
@@ -433,7 +432,7 @@ class TransferReconcileTest {
         // 2 remain outstanding — requesting 3 must be rejected even though qty_out is 3.
         assertThatThrownBy(() -> transferSvc.classifyShortfall(transferId, lineId,
                 new TransferService.ShortfallCounts(3, 0, 0), actorId))
-            .isInstanceOf(ResponseStatusException.class);
+            .isInstanceOf(TransferException.class);
 
         // Requesting exactly 2 (the true remaining outstanding count) must succeed.
         transferSvc.classifyShortfall(transferId, lineId,
@@ -455,7 +454,7 @@ class TransferReconcileTest {
         transferSvc.beginReconcile(transferId, actorId);
 
         assertThatThrownBy(() -> transferSvc.closeTransfer(transferId, actorId))
-            .isInstanceOf(ResponseStatusException.class);
+            .isInstanceOf(TransferException.class);
 
         String status = jdbc.queryForObject("SELECT status FROM transfers WHERE id = ?", String.class, transferId);
         assertThat(status).isEqualTo("reconciling");

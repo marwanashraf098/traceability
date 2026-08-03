@@ -31,6 +31,14 @@ public class LookupService {
         if ("handover".equals(eventType))          return "handover";
         if ("unpacked".equals(eventType))          return "unpacked";
         if ("unreserved".equals(eventType))        return "unreserved";
+        // FR-22 transfers — event_type strings ARE the phraseKey names (chosen that way at
+        // write time in TransferService so no derivation is needed here).
+        if ("transferred_out".equals(eventType))         return "transferred_out";
+        if ("returned_from_transfer".equals(eventType))  return "returned_from_transfer";
+        if ("condemned_at_vendor".equals(eventType))     return "condemned_at_vendor";
+        if ("sold_offbook".equals(eventType))            return "sold_offbook";
+        if ("lost_at_vendor".equals(eventType))          return "lost_at_vendor";
+        if ("label_reprinted".equals(eventType))         return "label_reprinted";
         if ("adjusted".equals(eventType)) {
             if ("available".equals(toStatus))      return "found_it";
             return "adjusted";
