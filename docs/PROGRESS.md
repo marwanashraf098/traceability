@@ -4,6 +4,90 @@
 
 ## Current state
 
+**FR-22.2–22.4 — Transfers status machine + send-out + reconcile (2026-08-03) — built and
+tested against Testcontainers.**
+
+**FR-22.2 (gate G1, approved by Marawan):** `V65` adds `out_on_transfer`/`sold` to `piece_status`
+via two separate `ALTER TYPE ... ADD VALUE` statements (nothing else in that migration file
+references them — can't be used in the same transaction they're added in). `PieceStatus.java`
+gets the two constants; `InventoryLedger.ALLOWED` gets the 5 transitions
+(`available:out_on_transfer`, `out_on_transfer:{available,damaged,sold,lost}`). Pre-flight
+confirmed no `.ordinal()`/`EnumType.ORDINAL`/`values()[...]` dependency anywhere on `PieceStatus`
+(safe to append before `DESTROYED`), and the one `ORDER BY status`-adjacent hit
+(`ReturnSessionService`'s `ORDER BY CASE p.status ...`) is an explicit priority list over a
+5-value filter that excludes the new values. `damaged`/`lost` were already non-terminal before
+this (`damaged:destroyed`, `damaged:lost`, `lost:available`) — `out_on_transfer:damaged/lost` are
+additions to an already-open graph, not a first opening.
+
+**FR-22.3:** `TransferService.createTransfer()` + `scanOut()`. Deviates from "mirror
+`FulfillService.scan()` exactly" on purpose: `FulfillService.scan()` calls
+`ledger.transition()` first and catches `StateConflictException` to return a clean rejection —
+but `InventoryLedger.transition()` is a separate `@Transactional` bean, and when it throws while
+*participating* in the caller's own transaction (default REQUIRED propagation joins the same
+physical transaction), Spring marks that transaction rollback-only before rethrowing, regardless
+of whether the caller catches it. The caller then returns normally but its own commit fails with
+`UnexpectedRollbackException`. This isn't theoretical — reproduced it by pointing the identical
+try/catch pattern at `FulfillService.scan()` itself (`Day9Test`'s own scan-race test fails the
+same way under `-Dtest=Day9Test#j_scan_race...` in isolation, though it happens to pass when the
+full class runs — a latent, pre-existing risk in code we didn't touch). Fix used in
+`TransferService.scanOut()`: the race-deciding step is a plain `JdbcTemplate` INSERT into
+`transfer_pieces` inside `scanOut()`'s own method body (no nested transactional-proxy boundary) —
+its unique-index violation (`transfer_pieces_one_active`) is caught as `DuplicateKeyException`
+with nothing to poison. `transition()` runs only after the claim wins and is left uncaught on
+failure by design (an unrelated concurrent mutation should roll back the whole transaction, not
+be silently absorbed). Verified via `psql` that Postgres treats `COMMIT` on an aborted
+transaction as an implicit `ROLLBACK` with no client-visible error — confirms the loser path
+needs no savepoint, the whole loser transaction (including its own earlier line-upsert write) is
+discarded cleanly. Added `ApiExceptionHandler.handleStateConflict()` (409, `{code, pieceId,
+expected, actual}`) — the first global mapping for `StateConflictException` in this codebase
+(every other caller catches it locally); confirmed it runs after the `@Transactional` rollback
+since `@RestControllerAdvice` sits outside the AOP transactional boundary. `sendOutRace` test now
+captures any `Throwable` escaping each raw `Thread` into an `AtomicReference` and asserts both
+are null, rather than only inferring correctness from success/rejection counters. Added
+`docs/week5.md` (didn't exist) with a one-line deferred note about `FulfillService.scan()`'s
+latent risk — diagnose-only, not fixed.
+
+**FR-22.4:** `beginReconcile` (open→reconciling, atomic conditional UPDATE as its own race
+guard), `reconcileScanBack` (good→available / condemned→damaged, same claim-before-transition
+shape as `scanOut()` and for the identical reason — the plain `UPDATE transfer_pieces SET
+outcome=... WHERE outcome IS NULL` is the race referee, 0 rows covers both "never outstanding on
+this transfer" and "a concurrent resolve just won" as the same clean `NOT_OUTSTANDING_ON_TRANSFER`
+rejection), `classifyShortfall` (FIFO `SELECT ... FOR UPDATE ... ORDER BY created_at ASC LIMIT n`
+locks the exact pieces to resolve for the transaction's duration, so `transition()` doesn't need
+its own claim step here — no concurrent racer can touch a locked row), `closeTransfer` (checks
+`transfer_pieces.outcome IS NULL` directly — the authoritative signal — rather than trusting the
+derived `qty_*` counters; zero outstanding rows implies balance by construction since every
+resolution path increments its counter in the same transaction it resolves the row). `closeTransfer`
+landed here instead of with `reprintOutstandingLabels` (originally bundled as 22.5) per explicit
+build-order request this session.
+
+Schema gap found and closed while building `classifyShortfall`: `transfer_pieces` had no
+timestamp column, so "FIFO by transferred-out time" had nothing deterministic to order by
+(`id` is a random `uuid`, unlike `pieces.id`'s time-sortable ULID). `V66` adds
+`transfer_pieces.created_at timestamptz NOT NULL DEFAULT now()`.
+
+Metadata honesty verified end to end: scan-back writes `verified:true, reconciliation:scan`
+(+ `attributed_to:vendor` only for condemned — a good return isn't a vendor-attributed loss);
+shortfall classification writes `verified:false, reconciliation:quantity_based,
+attributed_to:vendor` for all three dispositions (sold/lost/condemned_not_returned, the last
+sharing the `condemned` `transfer_pieces.outcome` value and `condemned_at_vendor` event_type with
+the scan-verified case — distinguished by `outcome_verified`, not a second enum value, per the
+spec's "no new status for condemned/lost" locked decision). Event-type strings match the FR-22
+spec's future `LookupService` phraseKey vocabulary exactly (`transferred_out`,
+`returned_from_transfer`, `condemned_at_vendor`, `sold_offbook`, `lost_at_vendor`) so FR-22.6 can
+wire the phraseKey map directly without re-deriving what was written.
+
+No `TransferController` exists yet — role gating (MANAGER/OWNER on
+`beginReconcile`/`reconcileScanBack`/`classifyShortfall`/`closeTransfer`) is intentionally NOT
+enforced inside `TransferService`; every other role-gated action in this codebase is
+`@PreAuthorize` on the controller endpoint, never service-layer, and FR-22.6 is where that lands.
+
+Same migration-count housekeeping as FR-22.1 each time a migration landed (`MigrationSmokeTest`,
+`NotTracedBackfillTest`, bumped 3× across V65/V66). Full suite green: 853 tests, 0 failures, 3
+pre-existing skips.
+
+---
+
 **FR-22.1 — Transfers & External Custody, schema only (2026-08-03) — built and tested against
 Testcontainers.** Step 0 (diagnosis) found the spec's provisional "FR-21" number already taken
 (FR-21 = Stock Taking, below) — renumbered to FR-22 in `docs/transfers-build-spec.md` before any

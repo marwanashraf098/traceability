@@ -4,16 +4,19 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.traceability.tenancy.TenantContext;
 import org.springframework.dao.DuplicateKeyException;
+import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.server.ResponseStatusException;
 
 import java.sql.Timestamp;
 import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 
 /**
@@ -173,7 +176,308 @@ public class TransferService {
         }
     }
 
-    // ── Result shape ─────────────────────────────────────────────────────────
+    // ── Reconcile: begin ─────────────────────────────────────────────────────
+
+    /**
+     * open → reconciling. Role gate (MANAGER/OWNER) is enforced at the controller
+     * (FR-22.6) — not here, matching every other role-gated action in this codebase
+     * (@PreAuthorize on the endpoint, never inside the service layer).
+     */
+    @Transactional(isolation = Isolation.READ_COMMITTED)
+    public void beginReconcile(UUID transferId, UUID actorUserId) {
+        UUID tenantId = TenantContext.require();
+
+        // Atomic conditional UPDATE doubles as its own race guard (two concurrent
+        // beginReconcile calls on the same transfer → exactly one wins), same pattern
+        // as InventoryLedger.transition()'s race-guard UPDATE.
+        int rows = jdbc.update(
+            "UPDATE transfers SET status = 'reconciling' WHERE id = ? AND tenant_id = ? AND status = 'open'",
+            transferId, tenantId);
+        if (rows == 0) {
+            List<String> statusRows = jdbc.queryForList(
+                "SELECT status FROM transfers WHERE id = ? AND tenant_id = ?", String.class, transferId, tenantId);
+            if (statusRows.isEmpty()) {
+                throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Transfer not found");
+            }
+            throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY,
+                "Transfer is not open (status: " + statusRows.get(0) + ")");
+        }
+    }
+
+    // ── Reconcile: scan back ─────────────────────────────────────────────────
+
+    private static final Set<String> VALID_CONDITIONS = Set.of("good", "condemned");
+
+    /**
+     * Scan a physically-returned unit. condition = "good" -> available (verified=true,
+     * reconciliation=scan); condition = "condemned" -> damaged (verified=true,
+     * reconciliation=scan, attributed_to=vendor). Both are physical returns (this method
+     * only fires on a scan, so the unit is, by definition, back in hand) — current_location_id
+     * moves to the tenant's fulfillment location either way; a condemned-but-not-returned
+     * unit never reaches this method, it goes through classifyShortfall's quantity path
+     * instead, and that path leaves current_location_id untouched (never physically arrived).
+     *
+     * Same claim-before-transition shape as scanOut() (FR-22.3) and for the identical
+     * reason: the plain JdbcTemplate UPDATE ... WHERE outcome IS NULL is the race referee
+     * (0 rows covers both "never outstanding on this transfer" and "a concurrent resolve
+     * just won" — both are the same clean rejection to the caller), so transition() never
+     * needs its exception caught inside this @Transactional method.
+     */
+    @Transactional(isolation = Isolation.READ_COMMITTED)
+    public ScanBackResult reconcileScanBack(UUID transferId, String barcode, String condition, UUID actorUserId) {
+        UUID tenantId = TenantContext.require();
+
+        if (!VALID_CONDITIONS.contains(condition)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "condition must be 'good' or 'condemned'");
+        }
+
+        // 1. Transfer must exist and be reconciling.
+        List<String> transferStatusRows = jdbc.queryForList(
+            "SELECT status FROM transfers WHERE id = ? AND tenant_id = ?", String.class, transferId, tenantId);
+        if (transferStatusRows.isEmpty()) {
+            return ScanBackResult.rejected("TRANSFER_NOT_FOUND", "Transfer not found");
+        }
+        if (!"reconciling".equals(transferStatusRows.get(0))) {
+            return ScanBackResult.rejected("TRANSFER_NOT_RECONCILING",
+                "Transfer is not in reconciling status (status: " + transferStatusRows.get(0) + ")");
+        }
+
+        // 2. Piece lookup — same triple-match as scanOut().
+        List<Map<String, Object>> pieceRows = jdbc.queryForList(
+            "SELECT p.id, p.variant_id FROM pieces p " +
+            "WHERE (p.barcode = ? OR p.id = ? OR p.short_code = ?) AND p.tenant_id = ?",
+            barcode, barcode, barcode, tenantId);
+        if (pieceRows.isEmpty()) {
+            return ScanBackResult.rejected("PIECE_NOT_FOUND", "Barcode not found in inventory");
+        }
+        String pieceId   = (String) pieceRows.get(0).get("id");
+        UUID   variantId = (UUID)   pieceRows.get(0).get("variant_id");
+
+        boolean good = "good".equals(condition);
+        String outcome = good ? "returned_good" : "condemned";
+        PieceStatus targetStatus = good ? PieceStatus.AVAILABLE : PieceStatus.DAMAGED;
+
+        // 3. CLAIM — resolve the outstanding transfer_pieces row for THIS transfer+piece.
+        int resolved = jdbc.update(
+            "UPDATE transfer_pieces SET outcome = ?, outcome_verified = true, outcome_at = now(), outcome_by = ? " +
+            "WHERE transfer_id = ? AND piece_id = ? AND outcome IS NULL",
+            outcome, actorUserId, transferId, pieceId);
+        if (resolved == 0) {
+            return ScanBackResult.rejected("NOT_OUTSTANDING_ON_TRANSFER",
+                "Piece is not outstanding on this transfer");
+        }
+
+        // 4. Transition. Left uncaught by design (see scanOut()) — the claim above already
+        //    uniquely won resolution of this piece on this transfer.
+        UUID fulfillmentLocationId = fulfillmentLocationId(tenantId);
+        ledger.transition(pieceId, PieceStatus.OUT_ON_TRANSFER, targetStatus,
+            good ? "returned_from_transfer" : "condemned_at_vendor", actorUserId,
+            new TransitionContext(null, null, fulfillmentLocationId, null, reconcileScanMeta(good, transferId)));
+
+        // 5. Physical unit is back at the warehouse either way — move current_location_id.
+        jdbc.update("UPDATE pieces SET current_location_id = ? WHERE id = ?",
+            fulfillmentLocationId, pieceId);
+
+        // 6. Bump the matching line counter.
+        if (good) {
+            jdbc.update("UPDATE transfer_lines SET qty_returned_good = qty_returned_good + 1 " +
+                "WHERE transfer_id = ? AND variant_id = ?", transferId, variantId);
+        } else {
+            jdbc.update("UPDATE transfer_lines SET qty_condemned = qty_condemned + 1 " +
+                "WHERE transfer_id = ? AND variant_id = ?", transferId, variantId);
+        }
+
+        return ScanBackResult.success(pieceId, barcode, variantId, outcome);
+    }
+
+    /** Exactly one is_fulfillment=true row per tenant, guaranteed by V61's partial unique index. */
+    private UUID fulfillmentLocationId(UUID tenantId) {
+        return jdbc.queryForObject(
+            "SELECT id FROM locations WHERE tenant_id = ? AND is_fulfillment = true", UUID.class, tenantId);
+    }
+
+    private String reconcileScanMeta(boolean good, UUID transferId) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("transfer_id", transferId.toString());
+        m.put("verified", true);
+        m.put("reconciliation", "scan");
+        if (!good) m.put("attributed_to", "vendor");
+        return writeJson(m);
+    }
+
+    // ── Reconcile: classify shortfall ────────────────────────────────────────
+
+    /**
+     * FIFO-pick (oldest transferred-out first, transfer_pieces.created_at) that many
+     * still-outstanding pieces on the line and close each to its terminal — verified=false,
+     * reconciliation=quantity_based, attributed_to=vendor (spec's "quantity-asserted,
+     * vendor-attributed" shortfall). Balance enforced: the requested total must not exceed
+     * qty_out minus what's already resolved on the line.
+     *
+     * The FIFO SELECT ... FOR UPDATE locks the exact N rows this call will resolve, for the
+     * duration of this transaction — no separate claim-before-transition step is needed here
+     * (unlike scanOut()/reconcileScanBack(), a concurrent second classifyShortfall call on
+     * the same line would block on the row lock, not race transition() concurrently), so
+     * transition() is called directly per piece, still left uncaught on failure by the same
+     * design as every other call site in this class.
+     */
+    @Transactional(isolation = Isolation.READ_COMMITTED)
+    public void classifyShortfall(UUID transferId, UUID lineId, ShortfallCounts counts, UUID actorUserId) {
+        UUID tenantId = TenantContext.require();
+
+        if (counts.sold() < 0 || counts.lost() < 0 || counts.condemnedNotReturned() < 0) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "counts must be non-negative");
+        }
+        int totalRequested = counts.sold() + counts.lost() + counts.condemnedNotReturned();
+        if (totalRequested == 0) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "at least one count must be positive");
+        }
+
+        List<String> transferStatusRows = jdbc.queryForList(
+            "SELECT status FROM transfers WHERE id = ? AND tenant_id = ?", String.class, transferId, tenantId);
+        if (transferStatusRows.isEmpty()) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Transfer not found");
+        }
+        if (!"reconciling".equals(transferStatusRows.get(0))) {
+            throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY,
+                "Transfer is not in reconciling status (status: " + transferStatusRows.get(0) + ")");
+        }
+
+        Map<String, Object> line = jdbc.query(
+            "SELECT qty_out, qty_returned_good, qty_condemned, qty_sold, qty_lost " +
+            "FROM transfer_lines WHERE id = ? AND transfer_id = ? AND tenant_id = ?",
+            rs -> rs.next() ? Map.of(
+                "qty_out",           rs.getInt("qty_out"),
+                "qty_returned_good", rs.getInt("qty_returned_good"),
+                "qty_condemned",     rs.getInt("qty_condemned"),
+                "qty_sold",          rs.getInt("qty_sold"),
+                "qty_lost",          rs.getInt("qty_lost")
+            ) : null,
+            lineId, transferId, tenantId);
+        if (line == null) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Transfer line not found");
+        }
+
+        int remainingOutstanding = (Integer) line.get("qty_out")
+            - (Integer) line.get("qty_returned_good")
+            - (Integer) line.get("qty_condemned")
+            - (Integer) line.get("qty_sold")
+            - (Integer) line.get("qty_lost");
+        if (totalRequested > remainingOutstanding) {
+            throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY,
+                "Requested " + totalRequested + " exceeds remaining outstanding (" +
+                remainingOutstanding + ") on this line");
+        }
+
+        // FIFO claim: lock the exact pieces this call will resolve.
+        List<String> pieceIds = jdbc.query(
+            "SELECT piece_id FROM transfer_pieces " +
+            "WHERE transfer_id = ? AND line_id = ? AND tenant_id = ? AND outcome IS NULL " +
+            "ORDER BY created_at ASC LIMIT ? FOR UPDATE",
+            (rs, rowNum) -> rs.getString("piece_id"),
+            transferId, lineId, tenantId, totalRequested);
+
+        if (pieceIds.size() < totalRequested) {
+            // Shouldn't happen given the balance check above (same transaction — no
+            // concurrent writer could have shrunk the outstanding set since the counts
+            // were read) — defensive, not expected to fire.
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                "Fewer outstanding pieces than requested — reload and retry");
+        }
+
+        int idx = 0;
+        for (int i = 0; i < counts.sold(); i++) {
+            closeShortfallPiece(pieceIds.get(idx++), transferId, lineId,
+                "sold", PieceStatus.SOLD, "sold_offbook", actorUserId);
+        }
+        for (int i = 0; i < counts.lost(); i++) {
+            closeShortfallPiece(pieceIds.get(idx++), transferId, lineId,
+                "lost", PieceStatus.LOST, "lost_at_vendor", actorUserId);
+        }
+        for (int i = 0; i < counts.condemnedNotReturned(); i++) {
+            closeShortfallPiece(pieceIds.get(idx++), transferId, lineId,
+                "condemned", PieceStatus.DAMAGED, "condemned_at_vendor", actorUserId);
+        }
+
+        jdbc.update(
+            "UPDATE transfer_lines SET qty_sold = qty_sold + ?, qty_lost = qty_lost + ?, " +
+            "qty_condemned = qty_condemned + ? WHERE id = ?",
+            counts.sold(), counts.lost(), counts.condemnedNotReturned(), lineId);
+    }
+
+    private void closeShortfallPiece(String pieceId, UUID transferId, UUID lineId,
+                                     String outcome, PieceStatus target, String eventType, UUID actorUserId) {
+        jdbc.update(
+            "UPDATE transfer_pieces SET outcome = ?, outcome_verified = false, outcome_at = now(), outcome_by = ? " +
+            "WHERE transfer_id = ? AND line_id = ? AND piece_id = ? AND outcome IS NULL",
+            outcome, actorUserId, transferId, lineId, pieceId);
+
+        // Left uncaught by design (see class javadoc) — the FOR UPDATE lock in
+        // classifyShortfall() already gives this call exclusive access to the piece row
+        // for the duration of this transaction.
+        ledger.transition(pieceId, PieceStatus.OUT_ON_TRANSFER, target, eventType, actorUserId,
+            new TransitionContext(null, null, null, null, shortfallMeta(transferId)));
+    }
+
+    private String shortfallMeta(UUID transferId) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("transfer_id", transferId.toString());
+        m.put("verified", false);
+        m.put("reconciliation", "quantity_based");
+        m.put("attributed_to", "vendor");
+        return writeJson(m);
+    }
+
+    // ── Reconcile: close ─────────────────────────────────────────────────────
+
+    /**
+     * reconciling → closed. Rejects if any transfer_pieces row for this transfer still has
+     * outcome IS NULL — the authoritative check (not the derived qty_* counters): zero
+     * outstanding rows implies, by construction, qty_out == returned_good + condemned +
+     * sold + lost on every line (every mutation path increments its counter in the same
+     * transaction it resolves the row). One query, one transaction — no half-closed lines.
+     */
+    @Transactional(isolation = Isolation.READ_COMMITTED)
+    public void closeTransfer(UUID transferId, UUID actorUserId) {
+        UUID tenantId = TenantContext.require();
+
+        List<String> transferStatusRows = jdbc.queryForList(
+            "SELECT status FROM transfers WHERE id = ? AND tenant_id = ?", String.class, transferId, tenantId);
+        if (transferStatusRows.isEmpty()) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Transfer not found");
+        }
+        if (!"reconciling".equals(transferStatusRows.get(0))) {
+            throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY,
+                "Transfer is not in reconciling status (status: " + transferStatusRows.get(0) + ")");
+        }
+
+        Integer outstanding = jdbc.queryForObject(
+            "SELECT COUNT(*) FROM transfer_pieces WHERE transfer_id = ? AND tenant_id = ? AND outcome IS NULL",
+            Integer.class, transferId, tenantId);
+        if (outstanding != null && outstanding > 0) {
+            throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY,
+                outstanding + " piece(s) still outstanding on this transfer — resolve before closing");
+        }
+
+        int rows = jdbc.update(
+            "UPDATE transfers SET status = 'closed', closed_by = ?, closed_at = now() " +
+            "WHERE id = ? AND tenant_id = ? AND status = 'reconciling'",
+            actorUserId, transferId, tenantId);
+        if (rows == 0) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                "Transfer status changed concurrently — reload and retry");
+        }
+    }
+
+    private String writeJson(Map<String, Object> m) {
+        try {
+            return mapper.writeValueAsString(m);
+        } catch (JsonProcessingException e) {
+            throw new IllegalStateException("Failed to serialize metadata", e);
+        }
+    }
+
+    // ── Result shapes ────────────────────────────────────────────────────────
 
     public record ScanOutResult(
             boolean success,
@@ -193,4 +497,25 @@ public class TransferService {
             return new ScanOutResult(false, code, message, null, null, null, null, 0);
         }
     }
+
+    public record ScanBackResult(
+            boolean success,
+            String  code,
+            String  message,
+            String  pieceId,
+            String  barcode,
+            UUID    variantId,
+            String  outcome) {
+
+        static ScanBackResult success(String pieceId, String barcode, UUID variantId, String outcome) {
+            return new ScanBackResult(true, "SCANNED", null, pieceId, barcode, variantId, outcome);
+        }
+
+        static ScanBackResult rejected(String code, String message) {
+            return new ScanBackResult(false, code, message, null, null, null, null);
+        }
+    }
+
+    /** Shortfall quantities to classify on one transfer_lines row (classifyShortfall). */
+    public record ShortfallCounts(int sold, int lost, int condemnedNotReturned) {}
 }
