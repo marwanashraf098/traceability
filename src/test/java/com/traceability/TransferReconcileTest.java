@@ -516,6 +516,50 @@ class TransferReconcileTest {
         assertThat(status).isEqualTo("closed");
     }
 
+    // -----------------------------------------------------------------------
+    // listOpen() — must include reconciling transfers (not status='open' only),
+    // and outstanding_count must track the live balance mid-reconcile.
+    // -----------------------------------------------------------------------
+
+    @Test
+    void listOpen_includesReconcilingTransfer_excludesClosedTransfer_countAccurateMidReconcile() {
+        UUID openTransferId = openTransferWithOutstanding(1);
+
+        UUID reconcilingTransferId = openTransferWithOutstanding(5);
+        transferSvc.beginReconcile(reconcilingTransferId, actorId);
+        // Resolve 2 of 5 mid-reconcile — outstanding_count must reflect exactly 3 remaining,
+        // not the original qty_out and not zero.
+        for (int i = 0; i < 2; i++) {
+            String pieceId = outstandingPieceId(reconcilingTransferId);
+            transferSvc.reconcileScanBack(reconcilingTransferId, "PC-" + pieceId, "good", actorId);
+        }
+
+        UUID closedTransferId = openTransferWithOutstanding(1);
+        transferSvc.beginReconcile(closedTransferId, actorId);
+        String onlyPieceId = outstandingPieceId(closedTransferId);
+        transferSvc.reconcileScanBack(closedTransferId, "PC-" + onlyPieceId, "good", actorId);
+        transferSvc.closeTransfer(closedTransferId, actorId);
+
+        List<Map<String, Object>> open = transferSvc.listOpen();
+        Map<UUID, Long> outstandingById = open.stream()
+            .collect(java.util.stream.Collectors.toMap(
+                r -> (UUID) r.get("id"),
+                r -> ((Number) r.get("outstanding_count")).longValue()));
+
+        assertThat(outstandingById)
+            .as("open transfer present")
+            .containsKey(openTransferId);
+        assertThat(outstandingById)
+            .as("reconciling transfer must appear in listOpen(), not just status='open'")
+            .containsKey(reconcilingTransferId);
+        assertThat(outstandingById.get(reconcilingTransferId))
+            .as("mid-reconcile outstanding_count must reflect 5 - 2 resolved so far")
+            .isEqualTo(3L);
+        assertThat(outstandingById)
+            .as("closed transfer must NOT appear in listOpen()")
+            .doesNotContainKey(closedTransferId);
+    }
+
     @Test
     void fullCycle_everyPieceWritesExactlyOnePieceEvent() {
         UUID transferId = openTransferWithOutstanding(3);

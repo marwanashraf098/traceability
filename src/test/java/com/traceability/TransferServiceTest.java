@@ -323,7 +323,7 @@ class TransferServiceTest {
     }
 
     @Test
-    void scanOut_transferNotOpen_rejects() {
+    void scanOut_transferClosed_rejectsWithNoRowWritten() {
         UUID transferId = insertTransfer("closed");
         String pieceId = insertPiece(PieceStatus.AVAILABLE);
 
@@ -331,7 +331,31 @@ class TransferServiceTest {
 
         assertThat(result.success()).isFalse();
         assertThat(result.code()).isEqualTo("TRANSFER_NOT_OPEN");
+        assertThat(result.messageAr()).as("bilingual — scan codes must not be English-only").isNotBlank();
         assertThat(fetchStatus(pieceId)).isEqualTo("available");
+        assertThat(countEvents(pieceId)).isEqualTo(0);
+        Long claimCount = jdbc.queryForObject(
+            "SELECT COUNT(*) FROM transfer_pieces WHERE piece_id = ?", Long.class, pieceId);
+        assertThat(claimCount).as("no claim row on a rejected scan").isEqualTo(0L);
+    }
+
+    @Test
+    void scanOut_transferReconciling_rejectsWithNoRowWritten() {
+        // A piece must not be scannable onto a transfer that's already reconciling —
+        // that would corrupt the balance the reconcile flow is actively closing out.
+        UUID transferId = insertTransfer("reconciling");
+        String pieceId = insertPiece(PieceStatus.AVAILABLE);
+
+        TransferService.ScanOutResult result = transferSvc.scanOut(transferId, "PC-" + pieceId, actorId);
+
+        assertThat(result.success()).isFalse();
+        assertThat(result.code()).isEqualTo("TRANSFER_NOT_OPEN");
+        assertThat(result.messageAr()).as("bilingual — scan codes must not be English-only").isNotBlank();
+        assertThat(fetchStatus(pieceId)).isEqualTo("available");
+        assertThat(countEvents(pieceId)).isEqualTo(0);
+        Long claimCount = jdbc.queryForObject(
+            "SELECT COUNT(*) FROM transfer_pieces WHERE piece_id = ?", Long.class, pieceId);
+        assertThat(claimCount).as("no claim row on a rejected scan").isEqualTo(0L);
     }
 
     // -----------------------------------------------------------------------

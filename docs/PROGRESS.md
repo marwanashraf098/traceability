@@ -4,6 +4,29 @@
 
 ## Current state
 
+**FR-22.8 follow-up — two pre-frontend backend confirmations (2026-08-04) — both found already correct, no production code changes.**
+
+1. **`scanOut` open-status gate.** Confirmed `TransferService.scanOut()` already has
+   `if (!"open".equals(transferStatus))` → bilingual `ScanOutResult.rejected("TRANSFER_NOT_OPEN", ...)`,
+   which rejects BOTH `reconciling` and `closed` (added in the FR-22.6 follow-up, not new).
+   Coverage gap only: the existing test covered `closed` but not `reconciling`. Split
+   `scanOut_transferNotOpen_rejects` into `scanOut_transferClosed_rejectsWithNoRowWritten` and
+   a new `scanOut_transferReconciling_rejectsWithNoRowWritten`, both now asserting
+   `messageAr` is non-blank and that zero `transfer_pieces` claim rows get written.
+2. **`listOpen()` predicate.** Confirmed the SQL already filters
+   `t.status IN ('open', 'reconciling')`, not a literal `status = 'open'`, and
+   `outstanding_count` is a live per-row subquery (`COUNT(*) ... WHERE outcome IS NULL`),
+   correct at any point mid-reconcile. Coverage gap only: existing test only checked
+   "returns non-empty." Added
+   `listOpen_includesReconcilingTransfer_excludesClosedTransfer_countAccurateMidReconcile`
+   to `TransferReconcileTest` — proves a reconciling transfer (5 out, 2 scanned back) reports
+   `outstanding_count = 3` and appears in the list, while a fully closed transfer does not
+   appear at all.
+
+Full suite green: 887 tests, 0 failures, 3 pre-existing skips.
+
+---
+
 **FR-22.8 — Mode B guard + test (2026-08-04) — built and tested against Testcontainers.**
 
 **Forward direction (transfers → Bosta), grep-confirmed:** zero references to
