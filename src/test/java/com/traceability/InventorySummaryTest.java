@@ -395,4 +395,28 @@ class InventorySummaryTest {
         jdbc.update("DELETE FROM pieces WHERE id IN ('ONHAND-AVAIL', 'ONHAND-XFER')");
         jdbc.update("DELETE FROM locations WHERE id = ?", fulfillmentLocationId);
     }
+
+    // ── FR-22.7 follow-up: pieceCounts breakdown includes out_on_transfer/sold ──
+
+    @Test
+    void i13_pieceCountsBreakdown_includesOutOnTransferAndSold_totalSumsAllPieces() {
+        // Before the fix, CatalogController's hardcoded ALL_STATUSES omitted
+        // out_on_transfer/sold — both were invisible in the breakdown and silently
+        // missing from "total", which stopped summing to the true piece count.
+        insertPiece("PCB-AVAIL", "available");
+        insertPiece("PCB-XFER", "out_on_transfer");
+        insertPiece("PCB-SOLD", "sold");
+
+        var variant = catalogCtl.list().products().stream()
+            .flatMap(p -> p.variants().stream())
+            .filter(v -> variantId.toString().equals(v.id()))
+            .findFirst()
+            .orElseThrow();
+
+        assertThat(variant.pieceCounts().get("out_on_transfer")).isEqualTo(1L);
+        assertThat(variant.pieceCounts().get("sold")).isEqualTo(1L);
+        assertThat(variant.pieceCounts().get("total"))
+            .as("total must sum every piece regardless of status")
+            .isEqualTo(3L);
+    }
 }

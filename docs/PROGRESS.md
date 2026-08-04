@@ -4,6 +4,21 @@
 
 ## Current state
 
+**FR-22.7 follow-up — CatalogController.ALL_STATUSES widened (2026-08-04).** Grepped every
+consumer of `pieceCounts` (backend: only `CatalogController` itself; frontend: `Catalog.tsx`'s
+"N pieces" label + stock-breakdown chips) before touching anything — confirmed clean: nothing
+sums `pieceCounts`/`total` as a sellable/on-hand number. `committed`/`available` (the real
+sellable figures) are computed from three separate, independent SQL queries untouched by this
+list. Added `out_on_transfer`/`sold` to `ALL_STATUSES` — before the fix, those pieces were
+invisible in the breakdown and silently missing from `total`, which stopped summing to the
+true piece count. New test (`i13`) proves the fix. Noted, not fixed: the frontend has its own
+mirrored hardcoded `STATUS_KEYS` list (same 11 statuses, same gap) — needs display labels for
+both new statuses, deferred to FR-22.9 per explicit instruction.
+
+Full suite green: 883 tests, 0 failures, 3 pre-existing skips.
+
+---
+
 **FR-22.7 — Inventory summary buckets + exclusion tests (2026-08-04) — built and tested
 against Testcontainers.** `InventoryController.summary()`: Group A (point-in-time) gains
 `out_on_transfer` — "Out on transfer / At vendor" — consignment stock outside the warehouse,

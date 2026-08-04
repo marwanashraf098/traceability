@@ -16,11 +16,17 @@ public class CatalogController {
     private final JdbcTemplate jdbc;
     private final TransactionTemplate tx;
 
-    // All piece_status values in display order
+    // All piece_status values in display order. Widened for FR-22 (out_on_transfer, sold) —
+    // this list drives ONLY the raw per-status pieceCounts breakdown + its "total" key
+    // (a display figure — confirmed no consumer sums it as a sellable/on-hand number;
+    // committed/on_hand/available above are computed from separate, independent SQL).
+    // Before the fix, an out_on_transfer or sold piece was invisible in the breakdown and
+    // silently missing from "total": pieceCounts no longer summed to the true piece count.
     private static final List<String> ALL_STATUSES = List.of(
         "available", "reserved", "packed", "awaiting_pickup",
         "with_courier", "delivered", "return_in_transit",
-        "return_pending_inspection", "damaged", "lost", "destroyed"
+        "return_pending_inspection", "damaged", "lost", "destroyed",
+        "out_on_transfer", "sold"
     );
 
     public CatalogController(JdbcTemplate jdbc, PlatformTransactionManager txm) {
