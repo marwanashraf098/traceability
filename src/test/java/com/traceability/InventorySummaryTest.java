@@ -323,4 +323,76 @@ class InventorySummaryTest {
         // Case (d): DMG-01 in groupB damaged.
         assertThat(groupBCount(s, "damaged")).isEqualTo(1);
     }
+
+    // ── FR-22: Out on transfer / At vendor bucket + sold windowed bucket ────────
+
+    @Test
+    void i10_outOnTransferBucket_countedSeparatelyFromAvailable() {
+        insertPiece("AVAIL-XFER", "available");
+        insertPiece("XFER-01", "out_on_transfer");
+        insertPiece("XFER-02", "out_on_transfer");
+
+        var s = inventoryCtl.summary();
+
+        assertThat(groupACount(s, "out_on_transfer")).isEqualTo(2);
+        assertThat(groupACount(s, "available"))
+            .as("out_on_transfer pieces must not inflate the available bucket")
+            .isEqualTo(1);
+    }
+
+    @Test
+    void i11_soldBucket_windowedLikeDeliveredDamagedLost() {
+        // Recent sale — inside the 30-day window.
+        insertPiece("SOLD-NEW", "sold");
+        insertEvent("SOLD-NEW", "sold", "5 days");
+
+        // Old sale — outside the window, must not count (same windowing rule as
+        // delivered/damaged/lost — sold is not a special case).
+        insertPiece("SOLD-OLD", "sold");
+        insertEvent("SOLD-OLD", "sold", "40 days");
+
+        var s = inventoryCtl.summary();
+
+        assertThat(groupBCount(s, "sold")).isEqualTo(1);
+    }
+
+    // ── FR-22: on_hand(V) formula (CatalogController) excludes out_on_transfer ──
+
+    @Test
+    void i12_outOnTransferPiece_excludedFromCatalogOnHandFormula() {
+        // on_hand(V) = status IN (available,reserved,packed,awaiting_pickup) AND at an
+        // is_fulfillment=true location. out_on_transfer is not in that status list, so a
+        // piece there must not inflate on_hand — proven here, not assumed. No committed
+        // orders exist for this variant, so available() == onHand directly.
+        UUID fulfillmentLocationId = UUID.randomUUID();
+        jdbc.update(
+            "INSERT INTO locations (id, tenant_id, name, type, is_default, is_fulfillment) " +
+            "VALUES (?, ?, 'Summary Test Warehouse', 'warehouse', true, true)",
+            fulfillmentLocationId, tenantId);
+        jdbc.update(
+            "INSERT INTO pieces (id, tenant_id, variant_id, barcode, short_code, status, current_location_id) " +
+            "VALUES ('ONHAND-AVAIL', ?, ?, 'BC-ONHAND-AVAIL', 'ONHAND-AVAIL', 'available'::piece_status, ?)",
+            tenantId, variantId, fulfillmentLocationId);
+        jdbc.update(
+            "INSERT INTO pieces (id, tenant_id, variant_id, barcode, short_code, status, current_location_id) " +
+            "VALUES ('ONHAND-XFER', ?, ?, 'BC-ONHAND-XFER', 'ONHAND-XFER', 'out_on_transfer'::piece_status, ?)",
+            tenantId, variantId, fulfillmentLocationId);
+
+        var variant = catalogCtl.list().products().stream()
+            .flatMap(p -> p.variants().stream())
+            .filter(v -> variantId.toString().equals(v.id()))
+            .findFirst()
+            .orElseThrow();
+
+        assertThat(variant.committed()).isEqualTo(0L);
+        assertThat(variant.available())
+            .as("on_hand must count only the available piece, not the out_on_transfer one")
+            .isEqualTo(1L);
+
+        // Pieces are cleaned by @AfterEach, but that runs after this method returns — the
+        // FK from pieces.current_location_id means the location can't be deleted until its
+        // pieces are gone, so drop them here first.
+        jdbc.update("DELETE FROM pieces WHERE id IN ('ONHAND-AVAIL', 'ONHAND-XFER')");
+        jdbc.update("DELETE FROM locations WHERE id = ?", fulfillmentLocationId);
+    }
 }

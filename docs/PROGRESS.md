@@ -4,6 +4,42 @@
 
 ## Current state
 
+**FR-22.7 — Inventory summary buckets + exclusion tests (2026-08-04) — built and tested
+against Testcontainers.** `InventoryController.summary()`: Group A (point-in-time) gains
+`out_on_transfer` — "Out on transfer / At vendor" — consignment stock outside the warehouse,
+not sellable, not pickable. Group B (windowed, 30-day) gains `sold` alongside
+delivered/damaged/lost — a new terminal, and showroom sell-through is the primary reporting
+value of the whole transfers feature; without it, sold pieces would be invisible in every
+summary view. No new endpoint — same existing `/api/v1/inventory/summary`, already `@Transactional`
+and already `RlsCoverageTest`-EXEMPT (unchanged, still valid: "all-zeros is valid initial state").
+
+Exclusion proven, not assumed, in 4 places (new tests, no code changes needed in any of
+them — `out_on_transfer` was already correctly excluded everywhere, by construction, since
+none of these filters key on it):
+- **Pick scan** (`Day9Test` i2): `FulfillService.scan()` rejects an `out_on_transfer` piece
+  with `WRONG_STATUS`, same as any other non-available status.
+- **Gather list** (`GatherListTest` b2): `availableCount` for a variant with 1 available + 2
+  `out_on_transfer` pieces is 1, not 3.
+- **Shopify on-hand formula** (`InventorySummaryTest` i12): `CatalogController`'s
+  `on_hand(V)` (status IN available/reserved/packed/awaiting_pickup, at an
+  `is_fulfillment=true` location) does not count an `out_on_transfer` piece even when it
+  sits at that same location.
+- **Summary itself** (`InventorySummaryTest` i10/i11): `out_on_transfer` pieces land only in
+  their own bucket, not `available`; `sold` follows the identical windowing rule as
+  delivered/damaged/lost (old sale outside 30d excluded, recent included).
+
+**Found, not fixed — flagged for a separate decision:** `CatalogController`'s hardcoded
+`ALL_STATUSES` list (used only for the raw `pieceCounts` per-status breakdown + its `total`
+key) predates FR-22 and doesn't include `out_on_transfer`/`sold` — an out_on_transfer or sold
+piece is invisible in that breakdown and silently missing from `total`. This does **not**
+affect the `on_hand`/`available` formula (a separate, explicit SQL predicate, unaffected) or
+anything tested above — it's a display-only undercount in the catalog page's per-variant
+status chips. Not touched in this commit; wasn't in FR-22.7's explicit scope.
+
+Full suite green: 882 tests, 0 failures, 3 pre-existing skips.
+
+---
+
 **FR-22.6 follow-up — createTransfer validation, a real cross-tenant leak (2026-08-04) — built
 and tested against Testcontainers.** `createTransfer()` now validates before the INSERT:
 

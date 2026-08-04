@@ -328,6 +328,23 @@ class Day9Test {
         assertThat(result.code()).isEqualTo("WRONG_STATUS");
     }
 
+    // ── (i2) Scan WRONG_STATUS: out_on_transfer piece (FR-22) ──────────────────
+
+    @Test
+    void i2_scan_wrong_status_outOnTransfer_piece_rejected() {
+        // FR-22: a piece currently out on a transfer is consignment stock outside the
+        // warehouse — the pick scan must reject it exactly like any other non-available
+        // status, not silently allocate a piece that physically isn't here.
+        UUID orderId = insertOrderWithItem(variantAId, 1);
+        String pieceId = insertPieceWithStatus(variantAId, "out_on_transfer");
+        String barcode = "PC-" + pieceId;
+
+        FulfillService.ScanResult result = fulfillSvc.scan(orderId, barcode, actorId);
+
+        assertThat(result.success()).isFalse();
+        assertThat(result.code()).isEqualTo("WRONG_STATUS");
+    }
+
     // ── (j) Scan race: two threads, same piece ────────────────────────────────
 
     @Test

@@ -231,6 +231,26 @@ class GatherListTest {
     }
 
     @Test
+    void b2_outOnTransferPiece_excludedFromAvailableCount() {
+        // FR-22: out_on_transfer pieces are consignment stock outside the warehouse —
+        // not pickable. getGatherList()'s available_count subquery keys on
+        // status = 'available' with no other predicate, so out_on_transfer is excluded
+        // automatically — this proves it, rather than assuming it.
+        UUID productId = insertProduct(tenantA, storeA, "GL-P2B", "Transfer Product");
+        UUID variant   = insertVariant(tenantA, productId, "GL-V2B", "SKU-XFER", "Transfer Variant");
+        UUID order     = insertOrder(tenantA, storeA, "GL-O2B", "#GL-2B", "ready_to_pick", false, Instant.now());
+        insertOrderItem(tenantA, order, variant, 3);
+        insertPiece(tenantA, variant, "available");
+        insertPiece(tenantA, variant, "out_on_transfer");
+        insertPiece(tenantA, variant, "out_on_transfer");
+
+        FulfillService.GatherRow row = fulfillSvc.getGatherList(null).rows().get(0);
+        assertThat(row.needed()).isEqualTo(3);
+        assertThat(row.availableCount()).as("out_on_transfer pieces must not count as available").isEqualTo(1);
+        assertThat(row.shortage()).isTrue();
+    }
+
+    @Test
     void c_shortage_whenSufficientStock_flaggedFalse() {
         UUID productId = insertProduct(tenantA, storeA, "GL-P3", "Sufficient Product");
         UUID variant   = insertVariant(tenantA, productId, "GL-V3", "SKU-OK", "OK Variant");

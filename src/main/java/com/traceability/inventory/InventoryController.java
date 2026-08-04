@@ -17,11 +17,19 @@ import java.util.*;
  *   GET /api/v1/inventory/summary  — tenant-scoped aggregate counts
  *   GET /api/v1/pieces             — paginated filtered piece list (drill-down)
  *
- * Group A counts are point-in-time (current pieces.status).
- * Group B counts (delivered / damaged / lost) are windowed: current status = X
+ * Group A counts are point-in-time (current pieces.status). Includes out_on_transfer
+ * (FR-22) — "Out on transfer / At vendor": consignment stock outside the warehouse, not
+ * sellable, not pickable (excluded from PICKABLE_ORDERS_FILTER-adjacent piece filters and
+ * the 4-status Shopify on-hand formula purely because out_on_transfer is not one of the
+ * statuses those filters key on — no extra predicate needed anywhere, proven by test).
+ *
+ * Group B counts (delivered / damaged / lost / sold) are windowed: current status = X
  * AND the piece_events transition INTO that status occurred within the last 30 days.
  * A piece delivered and later returned has current status != 'delivered', so it
- * is naturally excluded by the p.status predicate — no double-counting possible.
+ * is naturally excluded by the p.status predicate — no double-counting possible. sold
+ * (FR-22) is included here — it's a new terminal, and showroom sell-through is the primary
+ * reporting value of the whole transfers feature; without it, sold pieces would be
+ * invisible in every summary view.
  */
 @RestController
 @RequestMapping("/api/v1")
@@ -48,10 +56,10 @@ public class InventoryController {
 
     private static final List<String> GROUP_A_STATUSES = List.of(
         "available", "reserved", "packed",
-        "awaiting_pickup", "with_courier", "return_pending_inspection"
+        "awaiting_pickup", "with_courier", "return_pending_inspection", "out_on_transfer"
     );
     private static final List<String> GROUP_B_STATUSES = List.of(
-        "delivered", "damaged", "lost"
+        "delivered", "damaged", "lost", "sold"
     );
 
     // ── Summary ───────────────────────────────────────────────────────────────
@@ -68,7 +76,8 @@ public class InventoryController {
                 FROM pieces
                 WHERE tenant_id = NULLIF(current_setting('app.current_tenant', true), '')::uuid
                   AND status IN ('available','reserved','packed',
-                                 'awaiting_pickup','with_courier','return_pending_inspection')
+                                 'awaiting_pickup','with_courier','return_pending_inspection',
+                                 'out_on_transfer')
                 GROUP BY status
                 """,
                 rs -> { rawA.put(rs.getString("s"), rs.getLong("c")); });
@@ -81,7 +90,7 @@ public class InventoryController {
                 SELECT p.status::text AS s, COUNT(*) AS c
                 FROM pieces p
                 WHERE p.tenant_id = NULLIF(current_setting('app.current_tenant', true), '')::uuid
-                  AND p.status IN ('delivered','damaged','lost')
+                  AND p.status IN ('delivered','damaged','lost','sold')
                   AND EXISTS (
                       SELECT 1 FROM piece_events pe
                       WHERE pe.tenant_id = p.tenant_id
