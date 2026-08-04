@@ -4,6 +4,61 @@
 
 ## Current state
 
+**FR-22.8 — Mode B guard + test (2026-08-04) — built and tested against Testcontainers.**
+
+**Forward direction (transfers → Bosta), grep-confirmed:** zero references to
+`integrations.bosta`, `BostaWebhookJob`, `ShipmentLinkService`, or any shipment/delivery/
+pickup/courier vocabulary anywhere in `TransferService.java`/`TransferController.java`/
+`TransferException.java`. The transfer paths cannot create or link a Bosta delivery because
+they never call into that package — structurally, not by convention.
+
+**Reverse direction (Bosta → transfers), no new guard code added — mirrors self-pickup
+exactly.** Grepped `BostaWebhookJob`/`ShipmentLinkService` for any `self_pickup`/
+`isSelfPickup` check first: zero hits in either file. Self-pickup's own "Mode B guard" is
+not an explicit piece-type check — it relies entirely on (a) self-pickup orders never
+getting a Bosta shipment row in the first place (structural), and (b) `InventoryLedger`'s
+transition machine rejecting anything that doesn't fit. Matched that exact pattern for
+transfers rather than adding a bespoke check:
+- `BostaWebhookJob` reads a piece's CURRENT status and calls `ledger.transition()` with it.
+  `InventoryLedger.ALLOWED` has no `out_on_transfer:*` entry for any Bosta-driven target
+  (`with_courier`, `delivered`, `return_in_transit`, etc.) — `transition()` throws
+  `IllegalTransitionException` before any DB write, caught by the job's existing
+  `catch (IllegalTransitionException e) { log.warn(...); }` block (the SAME catch block
+  that already handles self-pickup and every other "piece already past target state" case
+  — not new code, not transfer-specific).
+- `ShipmentLinkService.transitionPackedPieces()` (the `manualLink()` path) goes further:
+  its own SQL pre-filters `p.status = 'packed'`, so an `out_on_transfer` piece is never even
+  selected — an earlier, stronger guard than the ALLOWED check, and again not
+  piece-type-aware, purely state-driven.
+
+**Correction to the task's "routed to the exceptions list" framing.** Traced
+`BostaWebhookJob`'s control flow end to end: after the per-piece catch-log-continue loop,
+the webhook unconditionally proceeds to `webhook_events.status = 'processed'` — no error, no
+distinct marker. `ExceptionService`'s ~15 detectors are all separate queries against
+shipment/delivery state (stuck shipments, unmatched deliveries, etc.); none would surface a
+single skipped piece transition. This is genuinely NOT a silent drop or a stacktrace — the
+piece cleanly stays put, the webhook completes normally, nothing crashes, and
+`log.warn(...)` is visible in application logs — but it is also not literally written to a
+distinguishable exceptions-center row. This matches self-pickup's own existing, identical
+treatment exactly; transfers were not silently given better treatment than self-pickup
+already has for the same code path.
+
+New `TransferModeBGuardTest` (2 tests, mirrors `BostaDay6Test`/`UnlinkedResolveTest`
+harness conventions): each test seeds an `out_on_transfer` piece with a deliberately stale
+allocation (a piece can never naturally reach this state under normal invariants — `scanOut()`
+requires `available`, which precludes an active allocation — so the fixture is a constructed
+proof, not a claim this is reachable in production) alongside an ordinary eligible piece on
+the SAME order/webhook as a positive control. Confirms: the `out_on_transfer` piece is
+untouched (status unchanged, zero new `piece_events`), the ordinary piece still moves
+normally (proves the guard is specific, not an accidental blanket no-op), and the outer
+operation (webhook / `manualLink()`) completes without throwing. The `Illegal transition
+OUT_ON_TRANSFER → DELIVERED ... — skipping` warning was observed firing exactly as designed
+during the test run.
+
+Full suite green: 885 tests, 0 failures, 3 pre-existing skips.
+
+---
+
 **FR-22.7 follow-up — CatalogController.ALL_STATUSES widened (2026-08-04).** Grepped every
 consumer of `pieceCounts` (backend: only `CatalogController` itself; frontend: `Catalog.tsx`'s
 "N pieces" label + stock-breakdown chips) before touching anything — confirmed clean: nothing
