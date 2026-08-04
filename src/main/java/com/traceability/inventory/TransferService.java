@@ -1,5 +1,6 @@
 package com.traceability.inventory;
 
+import com.fasterxml.jackson.annotation.JsonProperty;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.traceability.tenancy.TenantContext;
@@ -73,10 +74,48 @@ public class TransferService {
 
     // ── Create ────────────────────────────────────────────────────────────────
 
+    private static final Set<String> VALID_TRANSFER_TYPES =
+        Set.of("showroom", "dryclean", "repair", "other");
+
     @Transactional(isolation = Isolation.READ_COMMITTED)
     public UUID createTransfer(String transferType, UUID destinationLocationId,
                                Instant expectedReturnAt, String note, UUID actorUserId) {
         UUID tenantId = TenantContext.require();
+
+        // transfer_type already has a DB CHECK constraint (V64) restricting it to the same
+        // 4 values, so an invalid value can never persist — but without this check it would
+        // surface as a raw DataIntegrityViolationException via the generic 400 handler
+        // instead of a specific, bilingual TransferException.
+        if (!VALID_TRANSFER_TYPES.contains(transferType)) {
+            throw new TransferException(TransferException.Code.TRANSFER_TYPE_INVALID,
+                "transferType must be one of: showroom, dryclean, repair, other",
+                "يجب أن يكون نوع النقل أحد: showroom أو dryclean أو repair أو other",
+                HttpStatus.BAD_REQUEST);
+        }
+
+        // RLS-scoped existence + tenant check, NOT the FK alone: Postgres row security does
+        // not apply to foreign-key satisfaction checks (documented Postgres behavior) — the
+        // `destination_location_id uuid REFERENCES locations(id)` FK only proves a row with
+        // that id exists SOMEWHERE, across every tenant. Without this explicit
+        // tenant-scoped SELECT, tenant A could create a transfer whose destination is
+        // tenant B's location row (any FK-satisfying uuid), a genuine cross-tenant leak,
+        // not just bad input hygiene.
+        List<Map<String, Object>> destRows = jdbc.queryForList(
+            "SELECT is_fulfillment FROM locations WHERE id = ? AND tenant_id = ?",
+            destinationLocationId, tenantId);
+        if (destRows.isEmpty()) {
+            throw new TransferException(TransferException.Code.TRANSFER_DESTINATION_NOT_FOUND,
+                "Destination location not found",
+                "لم يتم العثور على موقع الوجهة",
+                HttpStatus.UNPROCESSABLE_ENTITY);
+        }
+        if (Boolean.TRUE.equals(destRows.get(0).get("is_fulfillment"))) {
+            throw new TransferException(TransferException.Code.TRANSFER_DESTINATION_IS_FULFILLMENT,
+                "Destination cannot be your own fulfillment warehouse",
+                "لا يمكن أن تكون الوجهة هي مستودع التنفيذ الخاص بك",
+                HttpStatus.UNPROCESSABLE_ENTITY);
+        }
+
         UUID id = UUID.randomUUID();
         jdbc.update(
             "INSERT INTO transfers " +
@@ -98,13 +137,16 @@ public class TransferService {
             "SELECT status, destination_location_id, transfer_type FROM transfers WHERE id = ? AND tenant_id = ?",
             transferId, tenantId);
         if (transferRows.isEmpty()) {
-            return ScanOutResult.rejected("TRANSFER_NOT_FOUND", "Transfer not found");
+            return ScanOutResult.rejected("TRANSFER_NOT_FOUND",
+                "Transfer not found",
+                "لم يتم العثور على عملية النقل");
         }
         Map<String, Object> transfer = transferRows.get(0);
         String transferStatus = (String) transfer.get("status");
         if (!"open".equals(transferStatus)) {
             return ScanOutResult.rejected("TRANSFER_NOT_OPEN",
-                "Transfer is not open for send-out (status: " + transferStatus + ")");
+                "Transfer is not open for send-out (status: " + transferStatus + ")",
+                "عملية النقل ليست مفتوحة للإرسال (الحالة الحالية: " + transferStatus + ")");
         }
         UUID   destinationLocationId = (UUID)   transfer.get("destination_location_id");
         String transferType          = (String) transfer.get("transfer_type");
@@ -116,7 +158,9 @@ public class TransferService {
             "WHERE (p.barcode = ? OR p.id = ? OR p.short_code = ?) AND p.tenant_id = ?",
             barcode, barcode, barcode, tenantId);
         if (pieceRows.isEmpty()) {
-            return ScanOutResult.rejected("PIECE_NOT_FOUND", "Barcode not found in inventory");
+            return ScanOutResult.rejected("PIECE_NOT_FOUND",
+                "Barcode not found in inventory",
+                "لم يتم العثور على الباركود في المخزون");
         }
         Map<String, Object> piece   = pieceRows.get(0);
         String pieceId   = (String) piece.get("id");
@@ -125,7 +169,9 @@ public class TransferService {
 
         // 3. WRONG_STATUS: piece must be available.
         if (!"available".equals(status)) {
-            return ScanOutResult.rejected("WRONG_STATUS", "Piece is not available (status: " + status + ")");
+            return ScanOutResult.rejected("WRONG_STATUS",
+                "Piece is not available (status: " + status + ")",
+                "القطعة غير متاحة (الحالة الحالية: " + status + ")");
         }
 
         // 4. Ensure the line row exists (create-if-absent, qty_out untouched — only bumped
@@ -152,7 +198,9 @@ public class TransferService {
             // No further DB access on this path: Postgres aborts the transaction on the
             // violation above, and COMMIT on an aborted transaction is a silent, no-error
             // implicit ROLLBACK — any statement issued here first would fail instead.
-            return ScanOutResult.rejected("ALREADY_ON_TRANSFER", "Piece was claimed by a concurrent scan");
+            return ScanOutResult.rejected("ALREADY_ON_TRANSFER",
+                "Piece was claimed by a concurrent scan",
+                "تم حجز القطعة بواسطة عملية مسح متزامنة");
         }
 
         // 6. Transition available → out_on_transfer. The claim above already uniquely
@@ -241,18 +289,23 @@ public class TransferService {
             // A malformed request, not a business outcome — but kept as a rejected() result
             // rather than thrown, so every scan-back response (including this one) shares
             // the same {success,code,message} shape a caller can handle uniformly.
-            return ScanBackResult.rejected("INVALID_CONDITION", "condition must be 'good' or 'condemned'");
+            return ScanBackResult.rejected("INVALID_CONDITION",
+                "condition must be 'good' or 'condemned'",
+                "يجب أن تكون الحالة 'good' أو 'condemned'");
         }
 
         // 1. Transfer must exist and be reconciling.
         List<String> transferStatusRows = jdbc.queryForList(
             "SELECT status FROM transfers WHERE id = ? AND tenant_id = ?", String.class, transferId, tenantId);
         if (transferStatusRows.isEmpty()) {
-            return ScanBackResult.rejected("TRANSFER_NOT_FOUND", "Transfer not found");
+            return ScanBackResult.rejected("TRANSFER_NOT_FOUND",
+                "Transfer not found",
+                "لم يتم العثور على عملية النقل");
         }
         if (!"reconciling".equals(transferStatusRows.get(0))) {
             return ScanBackResult.rejected("TRANSFER_NOT_RECONCILING",
-                "Transfer is not in reconciling status (status: " + transferStatusRows.get(0) + ")");
+                "Transfer is not in reconciling status (status: " + transferStatusRows.get(0) + ")",
+                "عملية النقل ليست في حالة المطابقة (الحالة الحالية: " + transferStatusRows.get(0) + ")");
         }
 
         // 2. Piece lookup — same triple-match as scanOut().
@@ -261,7 +314,9 @@ public class TransferService {
             "WHERE (p.barcode = ? OR p.id = ? OR p.short_code = ?) AND p.tenant_id = ?",
             barcode, barcode, barcode, tenantId);
         if (pieceRows.isEmpty()) {
-            return ScanBackResult.rejected("PIECE_NOT_FOUND", "Barcode not found in inventory");
+            return ScanBackResult.rejected("PIECE_NOT_FOUND",
+                "Barcode not found in inventory",
+                "لم يتم العثور على الباركود في المخزون");
         }
         String pieceId   = (String) pieceRows.get(0).get("id");
         UUID   variantId = (UUID)   pieceRows.get(0).get("variant_id");
@@ -277,7 +332,8 @@ public class TransferService {
             outcome, actorUserId, transferId, pieceId);
         if (resolved == 0) {
             return ScanBackResult.rejected("NOT_OUTSTANDING_ON_TRANSFER",
-                "Piece is not outstanding on this transfer");
+                "Piece is not outstanding on this transfer",
+                "القطعة ليست معلقة على عملية النقل هذه");
         }
 
         // 4. Transition. Left uncaught by design (see scanOut()) — the claim above already
@@ -640,7 +696,8 @@ public class TransferService {
     public record ScanOutResult(
             boolean success,
             String  code,
-            String  message,
+            @JsonProperty("message_en") String messageEn,
+            @JsonProperty("message_ar") String messageAr,
             String  pieceId,
             String  barcode,
             UUID    variantId,
@@ -648,29 +705,30 @@ public class TransferService {
             int     qtyOut) {
 
         static ScanOutResult success(String pieceId, String barcode, UUID variantId, UUID lineId, int qtyOut) {
-            return new ScanOutResult(true, "SCANNED", null, pieceId, barcode, variantId, lineId, qtyOut);
+            return new ScanOutResult(true, "SCANNED", null, null, pieceId, barcode, variantId, lineId, qtyOut);
         }
 
-        static ScanOutResult rejected(String code, String message) {
-            return new ScanOutResult(false, code, message, null, null, null, null, 0);
+        static ScanOutResult rejected(String code, String messageEn, String messageAr) {
+            return new ScanOutResult(false, code, messageEn, messageAr, null, null, null, null, 0);
         }
     }
 
     public record ScanBackResult(
             boolean success,
             String  code,
-            String  message,
+            @JsonProperty("message_en") String messageEn,
+            @JsonProperty("message_ar") String messageAr,
             String  pieceId,
             String  barcode,
             UUID    variantId,
             String  outcome) {
 
         static ScanBackResult success(String pieceId, String barcode, UUID variantId, String outcome) {
-            return new ScanBackResult(true, "SCANNED", null, pieceId, barcode, variantId, outcome);
+            return new ScanBackResult(true, "SCANNED", null, null, pieceId, barcode, variantId, outcome);
         }
 
-        static ScanBackResult rejected(String code, String message) {
-            return new ScanBackResult(false, code, message, null, null, null, null);
+        static ScanBackResult rejected(String code, String messageEn, String messageAr) {
+            return new ScanBackResult(false, code, messageEn, messageAr, null, null, null, null);
         }
     }
 

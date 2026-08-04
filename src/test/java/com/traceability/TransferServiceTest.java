@@ -21,6 +21,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * FR-22.3 — TransferService.createTransfer() + scanOut() (the send-out vertical slice).
@@ -64,6 +65,8 @@ class TransferServiceTest {
     UUID actorId;
     UUID variantId;
     UUID destinationLocationId;
+    UUID fulfillmentLocationId;
+    UUID otherTenantLocationId;
 
     @BeforeAll
     void setup() {
@@ -73,6 +76,7 @@ class TransferServiceTest {
         UUID productId = UUID.randomUUID();
         variantId = UUID.randomUUID();
         destinationLocationId = UUID.randomUUID();
+        fulfillmentLocationId = UUID.randomUUID();
 
         jdbc.update("INSERT INTO tenants (id, name) VALUES (?, 'Transfer Test Co')", tenantId);
         jdbc.update(
@@ -96,6 +100,22 @@ class TransferServiceTest {
             "INSERT INTO locations (id, tenant_id, name, type, is_default, is_fulfillment) " +
             "VALUES (?, ?, 'Test Showroom', 'showroom', false, false)",
             destinationLocationId, tenantId);
+        // This tenant's own fulfillment warehouse — must be rejected as a transfer destination.
+        jdbc.update(
+            "INSERT INTO locations (id, tenant_id, name, type, is_default, is_fulfillment) " +
+            "VALUES (?, ?, 'Main Warehouse', 'warehouse', true, true)",
+            fulfillmentLocationId, tenantId);
+
+        // A second, unrelated tenant + its own location — used to prove createTransfer()
+        // cannot be pointed at another tenant's location id (the FK alone would allow it;
+        // RLS does not apply to FK satisfaction checks).
+        UUID otherTenantId = UUID.randomUUID();
+        otherTenantLocationId = UUID.randomUUID();
+        jdbc.update("INSERT INTO tenants (id, name) VALUES (?, 'Other Tenant Co')", otherTenantId);
+        jdbc.update(
+            "INSERT INTO locations (id, tenant_id, name, type, is_default, is_fulfillment) " +
+            "VALUES (?, ?, 'Other Tenant Showroom', 'showroom', false, false)",
+            otherTenantLocationId, otherTenantId);
     }
 
     @BeforeEach
@@ -153,6 +173,51 @@ class TransferServiceTest {
         assertThat(row.get("status")).isEqualTo("open");
         assertThat(row.get("note")).isEqualTo("Downtown consignment");
         assertThat(row.get("created_by").toString()).isEqualTo(actorId.toString());
+    }
+
+    @Test
+    void createTransfer_invalidTransferType_rejectsWithNoRowWritten() {
+        assertThatThrownBy(() -> transferSvc.createTransfer(
+                "junk", destinationLocationId, null, null, actorId))
+            .isInstanceOf(TransferException.class)
+            .satisfies(e -> assertThat(((TransferException) e).code())
+                .isEqualTo(TransferException.Code.TRANSFER_TYPE_INVALID));
+
+        Long count = jdbc.queryForObject(
+            "SELECT COUNT(*) FROM transfers WHERE created_by = ? AND transfer_type = 'junk'",
+            Long.class, actorId);
+        assertThat(count).isEqualTo(0L);
+    }
+
+    @Test
+    void createTransfer_crossTenantLocation_rejectsWithNoRowWritten() {
+        // The FK alone (destination_location_id REFERENCES locations(id)) would let this
+        // through — Postgres row security does not apply to FK satisfaction checks. Only
+        // the app-level tenant-scoped SELECT in createTransfer() catches this.
+        assertThatThrownBy(() -> transferSvc.createTransfer(
+                "showroom", otherTenantLocationId, null, null, actorId))
+            .isInstanceOf(TransferException.class)
+            .satisfies(e -> assertThat(((TransferException) e).code())
+                .isEqualTo(TransferException.Code.TRANSFER_DESTINATION_NOT_FOUND));
+
+        Long count = jdbc.queryForObject(
+            "SELECT COUNT(*) FROM transfers WHERE destination_location_id = ?",
+            Long.class, otherTenantLocationId);
+        assertThat(count).isEqualTo(0L);
+    }
+
+    @Test
+    void createTransfer_ownFulfillmentLocation_rejectsWithNoRowWritten() {
+        assertThatThrownBy(() -> transferSvc.createTransfer(
+                "showroom", fulfillmentLocationId, null, null, actorId))
+            .isInstanceOf(TransferException.class)
+            .satisfies(e -> assertThat(((TransferException) e).code())
+                .isEqualTo(TransferException.Code.TRANSFER_DESTINATION_IS_FULFILLMENT));
+
+        Long count = jdbc.queryForObject(
+            "SELECT COUNT(*) FROM transfers WHERE destination_location_id = ?",
+            Long.class, fulfillmentLocationId);
+        assertThat(count).isEqualTo(0L);
     }
 
     // -----------------------------------------------------------------------
@@ -228,6 +293,8 @@ class TransferServiceTest {
 
         assertThat(result.success()).isFalse();
         assertThat(result.code()).isEqualTo("PIECE_NOT_FOUND");
+        assertThat(result.messageEn()).isNotBlank();
+        assertThat(result.messageAr()).as("scan codes must be bilingual, not English-only").isNotBlank();
     }
 
     @Test

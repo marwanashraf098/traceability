@@ -21,7 +21,10 @@ public class TransferException extends RuntimeException {
         SHORTFALL_RACE_CONFLICT,
         TRANSFER_HAS_OUTSTANDING_PIECES,
         TRANSFER_CLOSE_RACE_CONFLICT,
-        TRANSFER_NO_OUTSTANDING_PIECES
+        TRANSFER_NO_OUTSTANDING_PIECES,
+        TRANSFER_TYPE_INVALID,
+        TRANSFER_DESTINATION_NOT_FOUND,
+        TRANSFER_DESTINATION_IS_FULFILLMENT
     }
 
     private final Code       code;

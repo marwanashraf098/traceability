@@ -4,6 +4,46 @@
 
 ## Current state
 
+**FR-22.6 follow-up — createTransfer validation, a real cross-tenant leak (2026-08-04) — built
+and tested against Testcontainers.** `createTransfer()` now validates before the INSERT:
+
+1. **Cross-tenant location leak, confirmed and closed.** `destination_location_id uuid
+   REFERENCES locations(id)` alone was insufficient — Postgres row security does not apply
+   to foreign-key satisfaction checks, so the FK only proves a row exists *somewhere*, not
+   that it belongs to the calling tenant. Tenant A could point a transfer at tenant B's
+   location id and the FK would happily accept it. Fixed with an explicit `SELECT
+   is_fulfillment FROM locations WHERE id = ? AND tenant_id = ?` before the INSERT — the FK
+   remains as a second-layer guarantee, not the tenant boundary. New test
+   (`createTransfer_crossTenantLocation_rejectsWithNoRowWritten`) proves it.
+2. `destinationLocationId` pointing at the tenant's own `is_fulfillment=true` warehouse is
+   now rejected (`TRANSFER_DESTINATION_IS_FULFILLMENT`) — can't transfer to yourself.
+3. `transferType` is now validated against the same 4 values as the DB `CHECK` constraint
+   (`showroom|dryclean|repair|other`) before hitting the DB. Correction to the original ask:
+   the premise that "it's free text with no CHECK, so junk currently persists" was checked
+   and found inaccurate — `V64` already has `CHECK (transfer_type IN (...))`, so invalid
+   values were already structurally impossible to persist. The real gap was error *quality*:
+   an invalid value surfaced as a raw `DataIntegrityViolationException` via the generic 400
+   handler instead of a specific `TransferException`. Fixed for that reason.
+
+All three new `TransferException.Code` values (`TRANSFER_TYPE_INVALID`,
+`TRANSFER_DESTINATION_NOT_FOUND`, `TRANSFER_DESTINATION_IS_FULFILLMENT`) carry full
+`message_en`/`message_ar` pairs.
+
+**Bilingual audit (grepped every construction site):** all `TransferException` codes were
+already fully bilingual — no gap there. The "scan family" (`ScanOutResult`/`ScanBackResult` —
+`scan-out`/`scan-back`'s success/rejection responses) was **English-only by design**
+(mirroring `FulfillService.scan()`'s `ScanResult`, which has no Arabic either). Per explicit
+instruction this is now fixed: both records gained a `message_en`/`message_ar` pair
+(`@JsonProperty`-annotated for the same snake_case wire shape as `TransferException`'s body),
+and all 10 rejection call sites across `scanOut()`/`reconcileScanBack()` got real Arabic
+text. This makes Transfers' scan family a superset of `FulfillService.scan()`'s shape (same
+codes, extra fields) — deliberately not backported to `FulfillService` itself, out of scope
+here.
+
+Full suite green: 877 tests, 0 failures, 3 pre-existing skips.
+
+---
+
 **FR-22.6 — Transfers controller layer (2026-08-04) — built and tested against
 Testcontainers.** `reprint-outstanding` (FR-22.5) has no transfer-status precondition — only
 that the transfer exists and has ≥1 outstanding piece (`transfer_pieces.outcome IS NULL`);
