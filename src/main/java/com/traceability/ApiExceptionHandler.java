@@ -8,6 +8,7 @@ import com.traceability.integrations.shopify.ShopifyTransientException;
 import com.traceability.inventory.AwbMismatchException;
 import com.traceability.inventory.LookupNotFoundException;
 import com.traceability.inventory.PieceCommittedException;
+import com.traceability.inventory.PieceOutOnTransferException;
 import com.traceability.inventory.StateConflictException;
 import com.traceability.inventory.TransferException;
 import jakarta.servlet.http.HttpServletRequest;
@@ -77,6 +78,26 @@ public class ApiExceptionHandler {
                 "PIECE_COMMITTED",
                 ex.getOrderId() != null ? ex.getOrderId().toString() : null,
                 ex.getOrderNumber()));
+    }
+
+    record OutOnTransferErrorBody(
+            String code,
+            String transferId,
+            @JsonProperty("message_en") String messageEn,
+            @JsonProperty("message_ar") String messageAr) {}
+
+    // Distinct from PieceCommittedException — there's no order here, only the transfer that
+    // owns the piece. Points the operator at reconciling/closing that transfer instead of
+    // adjusting the piece directly (see PieceOutOnTransferException javadoc for why).
+    @ExceptionHandler(PieceOutOnTransferException.class)
+    ResponseEntity<OutOnTransferErrorBody> handlePieceOutOnTransfer(PieceOutOnTransferException ex) {
+        String transferId = ex.getTransferId() != null ? ex.getTransferId().toString() : null;
+        return ResponseEntity.status(HttpStatus.CONFLICT)
+            .body(new OutOnTransferErrorBody(
+                "PIECE_OUT_ON_TRANSFER",
+                transferId,
+                "Piece is out on transfer — reconcile or close the transfer instead of adjusting the piece directly.",
+                "القطعة خارج المخزون ضمن عملية نقل — يجب مطابقة أو إغلاق عملية النقل بدلاً من تعديل القطعة مباشرة."));
     }
 
     record StateConflictBody(

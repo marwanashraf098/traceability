@@ -119,6 +119,22 @@ public class PieceAdjustService {
                 order != null ? (String) order.get("orderNumber") : null);
         }
 
+        // The reconcile-only ALLOWED edges (out_on_transfer:available/damaged/lost — see
+        // InventoryLedger.ALLOWED) are legal ONLY through TransferService.reconcileScanBack()/
+        // classifyShortfall(), which resolve the matching transfer_pieces row (outcome, line
+        // counters) in the SAME transaction as the ledger transition. Reaching this method
+        // with current == OUT_ON_TRANSFER would pass every other guard here and every ALLOWED
+        // check, but silently leave that transfer_pieces row orphaned (outcome IS NULL
+        // forever), permanently blocking closeTransfer() for that transfer. Reject before
+        // transition() is ever called — no partial state to unwind.
+        if (current == PieceStatus.OUT_ON_TRANSFER) {
+            UUID blockingTransferId = jdbc.query(
+                "SELECT transfer_id FROM transfer_pieces WHERE piece_id = ? AND tenant_id = ? AND outcome IS NULL LIMIT 1",
+                rs -> rs.next() ? rs.getObject("transfer_id", UUID.class) : null,
+                pieceId, tenantId);
+            throw new PieceOutOnTransferException(blockingTransferId);
+        }
+
         PieceStatus toStatus = PieceStatus.fromDb(toStatusStr);
 
         if (toStatus == PieceStatus.AVAILABLE

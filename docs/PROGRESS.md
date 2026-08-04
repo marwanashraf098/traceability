@@ -4,6 +4,55 @@
 
 ## Current state
 
+**FR-22.6 area follow-up — closed a real desync hole in `PieceAdjustService.adjustPiece()`
+(2026-08-04), found during the FR-22.9 pre-push review, approved and fixed same-day.**
+
+**The hole**: `adjustPiece()`'s only status guard was RESERVED/PACKED →
+`PieceCommittedException`. It read the piece's CURRENT status with no other filter
+(`FIND_PIECE_STATUS` has no WHERE-clause status restriction), and `InventoryLedger.ALLOWED`
+already permits `out_on_transfer:available` / `out_on_transfer:damaged` /
+`out_on_transfer:lost` (added for `TransferService`'s own reconcile-scan-back /
+classify-shortfall use). So calling adjust on a piece currently `out_on_transfer` with
+`toStatus ∈ {available, damaged, lost}` passed every guard and transitioned cleanly — but
+`adjustPiece()` never touches `transfer_pieces.outcome` or the `transfer_lines` counters.
+The row stays `outcome IS NULL` forever, and `closeTransfer()`'s authoritative check
+(`COUNT(*) FROM transfer_pieces WHERE outcome IS NULL`) never reaches zero for that
+transfer — a permanent orphan, not recoverable without a manual DB fix.
+(`toStatus=destroyed` was never exploitable — `out_on_transfer:destroyed` isn't in
+`ALLOWED`, blocked structurally by `IllegalTransitionException`.)
+
+Grepped every other `PieceStatus.fromDb(` call site (`FulfillService`, `ReturnService`,
+`ReturnSessionService` ×2, `PickupSessionService`, `StockTakeReconciliationService`) before
+touching anything — all were already safe, each via an explicit status allowlist
+(`switch`+`default→throw` or an explicit `if` set) or structurally excluded (`PickupSessionService`'s
+SQL requires an active allocation, which an `out_on_transfer` piece never has). The one
+exception delegating into the hole: `StockTakeReconciliationService.resolveMarkDamaged()`
+calls `pieceAdjustSvc.adjustPiece(pieceId, "damaged", ...)` directly with no live-status
+check of its own — confirmed it inherits the fix via delegation, no second fix needed.
+
+**Fix**: new `PieceOutOnTransferException` (distinct from `PieceCommittedException` — there's
+no order here, only the transfer that owns the piece), thrown by a new guard in
+`adjustPiece()` right after the RESERVED/PACKED check, before `ledger.transition()` is ever
+called — no partial state to unwind. Carries the blocking `transferId` (looked up from the
+still-open `transfer_pieces` row). New `ApiExceptionHandler.handlePieceOutOnTransfer()` →
+409 `{code:"PIECE_OUT_ON_TRANSFER", transferId, message_en, message_ar}`, telling the
+operator to reconcile/close the transfer instead. `InventoryLedger.ALLOWED`'s three
+reconcile-only edges got an explicit comment: "legal only via TransferService, which
+updates transfer_pieces.outcome in the same tx. Any other caller moving a piece out of
+out_on_transfer orphans the transfer row — guard your path."
+
+**4 new tests** in `TransferReconcileTest`: all three reachable targets
+(`toDamaged`/`toLost`/`toAvailable`) reject with `PieceOutOnTransferException` carrying the
+correct `transferId`, piece status unchanged, `transfer_pieces` row still `outcome IS NULL`
+(not orphaned), and `closeTransfer()` (after `beginReconcile`) still correctly throws
+`TRANSFER_HAS_OUTSTANDING_PIECES` for that same, still-legitimately-outstanding piece — plus
+one positive control proving an ordinary `available` piece still adjusts to `damaged`
+normally (the guard is scoped, not a blanket regression).
+
+Full backend suite green: 891 tests (887 + 4 new), 0 failures, 3 pre-existing skips.
+
+---
+
 **FR-22.9 — Frontend: Transfers & External Custody, RTL + ar/en (2026-08-04) — last FR-22 build step, done.**
 
 Five screens, all off the existing StockTake/Fulfill scan-screen conventions (useScanner

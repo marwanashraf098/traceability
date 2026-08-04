@@ -51,8 +51,9 @@ class TransferReconcileTest {
         r.add("spring.flyway.password",     POSTGRES::getPassword);
     }
 
-    @Autowired TransferService transferSvc;
-    @Autowired JdbcTemplate    jdbc;
+    @Autowired TransferService     transferSvc;
+    @Autowired PieceAdjustService  pieceAdjustSvc;
+    @Autowired JdbcTemplate        jdbc;
 
     UUID tenantId;
     UUID actorId;
@@ -139,6 +140,12 @@ class TransferReconcileTest {
         return jdbc.queryForObject(
             "SELECT piece_id FROM transfer_pieces WHERE transfer_id = ? AND outcome IS NULL " +
             "ORDER BY created_at ASC LIMIT 1", String.class, transferId);
+    }
+
+    private String transferPieceOutcome(UUID transferId, String pieceId) {
+        return jdbc.queryForObject(
+            "SELECT outcome FROM transfer_pieces WHERE transfer_id = ? AND piece_id = ?",
+            String.class, transferId, pieceId);
     }
 
     // -----------------------------------------------------------------------
@@ -589,5 +596,93 @@ class TransferReconcileTest {
                 "SELECT COUNT(*) FROM piece_events WHERE piece_id = ?", Integer.class, pieceId);
             assertThat(n).as("piece %s must have exactly 2 events (out + resolution)", pieceId).isEqualTo(2);
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // PieceAdjustService.adjustPiece() guard — desync prevention. Confirmed by grep
+    // (reported to Marawan before this fix) that adjustPiece() had no OUT_ON_TRANSFER
+    // check: its only status guard was RESERVED/PACKED, and out_on_transfer:available/
+    // damaged/lost are all legal ALLOWED edges, so calling adjustPiece() on a piece
+    // currently out_on_transfer would silently succeed while leaving its transfer_pieces
+    // row orphaned (outcome IS NULL forever) — permanently blocking closeTransfer(). These
+    // tests prove the new guard closes that hole for all three reachable targets, without
+    // touching the piece or the transfer_pieces row, and that an ordinary piece adjust is
+    // unaffected.
+    // -----------------------------------------------------------------------
+
+    @Test
+    void adjustPiece_outOnTransferPiece_toDamaged_rejectsWithoutOrphaning() {
+        UUID transferId = openTransferWithOutstanding(1);
+        String pieceId = outstandingPieceId(transferId);
+
+        assertThatThrownBy(() ->
+            pieceAdjustSvc.adjustPiece(pieceId, "damaged", "damaged_in_storage", null, actorId))
+            .isInstanceOf(PieceOutOnTransferException.class)
+            .satisfies(e -> assertThat(((PieceOutOnTransferException) e).getTransferId()).isEqualTo(transferId));
+
+        assertThat(fetchStatus(pieceId)).as("piece must not move").isEqualTo("out_on_transfer");
+        assertThat(transferPieceOutcome(transferId, pieceId))
+            .as("transfer_pieces row must stay unresolved, not orphaned").isNull();
+
+        transferSvc.beginReconcile(transferId, actorId);
+        assertThatThrownBy(() -> transferSvc.closeTransfer(transferId, actorId))
+            .as("closeTransfer must still correctly block on the still-outstanding piece")
+            .isInstanceOf(TransferException.class)
+            .satisfies(e -> assertThat(((TransferException) e).code())
+                .isEqualTo(TransferException.Code.TRANSFER_HAS_OUTSTANDING_PIECES));
+    }
+
+    @Test
+    void adjustPiece_outOnTransferPiece_toLost_rejectsWithoutOrphaning() {
+        UUID transferId = openTransferWithOutstanding(1);
+        String pieceId = outstandingPieceId(transferId);
+
+        assertThatThrownBy(() ->
+            pieceAdjustSvc.adjustPiece(pieceId, "lost", "theft_suspected", null, actorId))
+            .isInstanceOf(PieceOutOnTransferException.class)
+            .satisfies(e -> assertThat(((PieceOutOnTransferException) e).getTransferId()).isEqualTo(transferId));
+
+        assertThat(fetchStatus(pieceId)).as("piece must not move").isEqualTo("out_on_transfer");
+        assertThat(transferPieceOutcome(transferId, pieceId))
+            .as("transfer_pieces row must stay unresolved, not orphaned").isNull();
+
+        transferSvc.beginReconcile(transferId, actorId);
+        assertThatThrownBy(() -> transferSvc.closeTransfer(transferId, actorId))
+            .isInstanceOf(TransferException.class)
+            .satisfies(e -> assertThat(((TransferException) e).code())
+                .isEqualTo(TransferException.Code.TRANSFER_HAS_OUTSTANDING_PIECES));
+    }
+
+    @Test
+    void adjustPiece_outOnTransferPiece_toAvailable_rejectsWithoutOrphaning() {
+        UUID transferId = openTransferWithOutstanding(1);
+        String pieceId = outstandingPieceId(transferId);
+
+        assertThatThrownBy(() ->
+            pieceAdjustSvc.adjustPiece(pieceId, "available", "cycle_count_missing", null, actorId))
+            .isInstanceOf(PieceOutOnTransferException.class)
+            .satisfies(e -> assertThat(((PieceOutOnTransferException) e).getTransferId()).isEqualTo(transferId));
+
+        assertThat(fetchStatus(pieceId)).as("piece must not move").isEqualTo("out_on_transfer");
+        assertThat(transferPieceOutcome(transferId, pieceId))
+            .as("transfer_pieces row must stay unresolved, not orphaned").isNull();
+
+        transferSvc.beginReconcile(transferId, actorId);
+        assertThatThrownBy(() -> transferSvc.closeTransfer(transferId, actorId))
+            .isInstanceOf(TransferException.class)
+            .satisfies(e -> assertThat(((TransferException) e).code())
+                .isEqualTo(TransferException.Code.TRANSFER_HAS_OUTSTANDING_PIECES));
+    }
+
+    @Test
+    void adjustPiece_ordinaryAvailablePiece_toDamaged_stillAdjustsNormally() {
+        // Positive control: the new OUT_ON_TRANSFER guard must not affect a piece that was
+        // never on a transfer — proves the guard is scoped to OUT_ON_TRANSFER, not a
+        // regression that blocks adjustPiece() generally.
+        String pieceId = insertAvailablePiece();
+
+        pieceAdjustSvc.adjustPiece(pieceId, "damaged", "damaged_in_storage", null, actorId);
+
+        assertThat(fetchStatus(pieceId)).isEqualTo("damaged");
     }
 }

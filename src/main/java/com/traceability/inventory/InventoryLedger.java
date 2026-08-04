@@ -92,10 +92,14 @@ public class InventoryLedger {
         // out_on_transfer:lost are additions to an already-open graph, not the
         // first opening of a terminal.
         "available:out_on_transfer",     // send-out scan
+        // reconcile-only: legal only via TransferService, which updates
+        // transfer_pieces.outcome in the same tx. Any other caller moving a piece out of
+        // out_on_transfer orphans the transfer row — guard your path. (See
+        // PieceAdjustService.adjustPiece()'s OUT_ON_TRANSFER guard for the enforcement.)
         "out_on_transfer:available",     // reconcile: scanned back, good condition
         "out_on_transfer:damaged",       // reconcile: scanned back, condemned
-        "out_on_transfer:sold",          // reconcile: quantity-classified shortfall, off-book sale
-        "out_on_transfer:lost"           // reconcile: quantity-classified shortfall, unaccounted
+        "out_on_transfer:lost",          // reconcile: quantity-classified shortfall, unaccounted
+        "out_on_transfer:sold"           // reconcile: quantity-classified shortfall, off-book sale
     );
 
     // ---- SQL ---------------------------------------------------------------
