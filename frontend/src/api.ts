@@ -233,6 +233,8 @@ export interface PieceCounts {
   damaged: number
   lost: number
   destroyed: number
+  out_on_transfer: number
+  sold: number
   total: number
 }
 
@@ -937,4 +939,210 @@ export function markStockTakeSyncResolved(sessionId: string) {
 export function repushStockTakeSync(sessionId: string) {
   return request<{ sessionId: string; status: string }>(
     `/stock-takes/sessions/${sessionId}/sync/repush`, { method: 'POST' })
+}
+
+// ── FR-22: Transfers & External Custody ──────────────────────────────────────
+//
+// Two response families, per TransferController's own javadoc:
+//  - "scan" family (scan-out/scan-back): always 200, {success, code, message_en,
+//    message_ar, ...} — routed through the shared request() helper like any other
+//    2xx JSON endpoint; success:false is a normal, non-throwing outcome.
+//  - "command" family (create/begin-reconcile/classify/close): thrown server-side as
+//    TransferException, mapped to a real HTTP status + {code, message_en, message_ar}
+//    body. request() only preserves "<status>: <statusText>" on non-2xx (same
+//    limitation noted above resolveStockTake), so these go through their own fetch
+//    that parses the body and throws TransferCommandError — one shared helper here
+//    since (unlike stock-take's single call site) there are four.
+//
+// The frontend must render message_en/message_ar AS-IS, never re-derive text from
+// `code` — one source of truth, no double-localization (explicit build requirement).
+
+export class TransferCommandError extends Error {
+  code: string
+  messageEn: string
+  messageAr: string
+  constructor(body: { code: string; message_en: string; message_ar: string }) {
+    super(body.code)
+    this.code = body.code
+    this.messageEn = body.message_en
+    this.messageAr = body.message_ar
+  }
+}
+
+async function transferCommandRequest<T>(path: string, opts: RequestInit = {}): Promise<T> {
+  const token = getAccessToken()
+  const res = await fetch(`${BASE}${path}`, {
+    ...opts,
+    credentials: 'include',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...(opts.headers as Record<string, string> ?? {}),
+    },
+  })
+  if (!res.ok) {
+    const body = await res.json().catch(() => null) as
+      { code?: string; message_en?: string; message_ar?: string } | null
+    if (body?.code && body.message_en != null && body.message_ar != null) {
+      throw new TransferCommandError(body as { code: string; message_en: string; message_ar: string })
+    }
+    throw new Error(`${res.status}: ${res.statusText}`)
+  }
+  if (res.status === 204 || res.headers.get('content-length') === '0') return null as T
+  return res.json()
+}
+
+export type TransferStatus = 'open' | 'reconciling' | 'closed'
+export type TransferType = 'showroom' | 'dryclean' | 'repair' | 'other'
+export const TRANSFER_TYPES: TransferType[] = ['showroom', 'dryclean', 'repair', 'other']
+export type TransferCondition = 'good' | 'condemned'
+
+export interface LocationOption {
+  id: string
+  name: string
+  is_fulfillment: boolean
+}
+
+/** Non-fulfillment locations only — the valid destination set for createTransfer(). */
+export async function listTransferDestinations(): Promise<LocationOption[]> {
+  const all = await request<LocationOption[]>('/locations')
+  return all.filter(l => !l.is_fulfillment)
+}
+
+export function createTransfer(params: {
+  transferType: TransferType
+  destinationLocationId: string
+  expectedReturnAt?: string | null
+  note?: string | null
+}) {
+  return transferCommandRequest<{ id: string }>('/transfers', {
+    method: 'POST',
+    body: JSON.stringify(params),
+  })
+}
+
+export interface TransferScanResult {
+  success: boolean
+  code: string
+  message_en: string | null
+  message_ar: string | null
+  pieceId: string | null
+  barcode: string | null
+  variantId: string | null
+  lineId: string | null
+  qtyOut: number
+}
+
+export function scanOutTransferPiece(transferId: string, barcode: string) {
+  return request<TransferScanResult>(`/transfers/${transferId}/scan-out`, {
+    method: 'POST',
+    body: JSON.stringify({ barcode }),
+  })
+}
+
+export interface TransferScanBackResult {
+  success: boolean
+  code: string
+  message_en: string | null
+  message_ar: string | null
+  pieceId: string | null
+  barcode: string | null
+  variantId: string | null
+  outcome: string | null
+}
+
+export function scanBackTransferPiece(transferId: string, barcode: string, condition: TransferCondition) {
+  return request<TransferScanBackResult>(`/transfers/${transferId}/scan-back`, {
+    method: 'POST',
+    body: JSON.stringify({ barcode, condition }),
+  })
+}
+
+export interface TransferSummary {
+  id: string
+  transfer_type: TransferType
+  status: TransferStatus
+  note: string | null
+  expected_return_at: string | null
+  created_by: string
+  created_at: string
+  destination_location_id: string
+  destination_location_name: string
+  outstanding_count: number
+}
+
+export function listOpenTransfers() {
+  return request<TransferSummary[]>('/transfers')
+}
+
+export interface TransferLine {
+  id: string
+  variant_id: string
+  sku: string | null
+  variant_title: string
+  product_title: string
+  qty_out: number
+  qty_returned_good: number
+  qty_condemned: number
+  qty_sold: number
+  qty_lost: number
+}
+
+export interface TransferDetail {
+  id: string
+  transfer_type: TransferType
+  status: TransferStatus
+  note: string | null
+  expected_return_at: string | null
+  created_by: string
+  created_at: string
+  closed_by: string | null
+  closed_at: string | null
+  destination_location_id: string
+  destination_location_name: string
+  lines: TransferLine[]
+  outstandingCount: number
+}
+
+export function getTransfer(transferId: string) {
+  return request<TransferDetail>(`/transfers/${transferId}`)
+}
+
+export function beginReconcileTransfer(transferId: string) {
+  return transferCommandRequest<void>(`/transfers/${transferId}/begin-reconcile`, { method: 'POST' })
+}
+
+export function classifyTransferShortfall(
+  transferId: string,
+  lineId: string,
+  counts: { sold: number; lost: number; condemnedNotReturned: number },
+) {
+  return transferCommandRequest<void>(`/transfers/${transferId}/classify`, {
+    method: 'POST',
+    body: JSON.stringify({ lineId, ...counts }),
+  })
+}
+
+export function closeTransferSession(transferId: string) {
+  return transferCommandRequest<void>(`/transfers/${transferId}/close`, { method: 'POST' })
+}
+
+/** PDF blob download — same window.open(URL.createObjectURL(...)) pattern as Receiving/Returns. */
+export async function reprintTransferOutstanding(transferId: string): Promise<void> {
+  const token = getAccessToken()
+  const res = await fetch(`${BASE}/transfers/${transferId}/reprint-outstanding`, {
+    method: 'POST',
+    credentials: 'include',
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  })
+  if (!res.ok) {
+    const body = await res.json().catch(() => null) as
+      { code?: string; message_en?: string; message_ar?: string } | null
+    if (body?.code && body.message_en != null && body.message_ar != null) {
+      throw new TransferCommandError(body as { code: string; message_en: string; message_ar: string })
+    }
+    throw new Error(`${res.status}: ${res.statusText}`)
+  }
+  const blob = await res.blob()
+  window.open(URL.createObjectURL(blob), '_blank')
 }

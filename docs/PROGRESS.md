@@ -4,6 +4,84 @@
 
 ## Current state
 
+**FR-22.9 — Frontend: Transfers & External Custody, RTL + ar/en (2026-08-04) — last FR-22 build step, done.**
+
+Five screens, all off the existing StockTake/Fulfill scan-screen conventions (useScanner
++ ScanShell own all scan mechanics, no per-screen reimplementation):
+
+- **`Transfers.tsx`** — consignment list (`listOpenTransfers()`, shows destination/type/
+  status/since/outstanding) + create form (destination `Select` restricted to
+  `is_fulfillment=false` locations via a new `listTransferDestinations()` filter,
+  transferType segmented buttons, optional expected-return date + note).
+- **`TransferScanOut.tsx`** — full-screen send-out scan (NOT Layout-wrapped, mirrors
+  `/stock-take/:id/scan`), open-status only (redirects to detail otherwise), per-variant
+  running `qty_out` table refetched via `getTransfer()` after each successful scan (the
+  scan response alone doesn't carry a variant display name for a line it just created).
+- **`TransferDetail.tsx`** — header + lines table + status-gated actions: scan-out-more
+  (any role, open only), begin-reconcile (OWNER/MANAGER, disabled until outstanding≥1),
+  reprint-outstanding (OWNER/MANAGER, disabled at 0 outstanding), continue-reconcile
+  (reconciling state).
+- **`TransferReconcile.tsx`** — OWNER/MANAGER only (soft client-side gate, matching this
+  codebase's existing convention — real enforcement is `@PreAuthorize` server-side): scan-
+  back (good/condemned toggle) + per-line quantity classify (sold/lost/condemned-not-
+  returned inputs, FIFO-applied server-side), live per-line balance (`qty_out` vs
+  accounted), Close disabled until `transfer.outstandingCount === 0` — the same
+  authoritative field `closeTransfer()` itself checks server-side, not a client-derived sum.
+- Routes wired in `App.tsx`, nav entry added to `Layout.tsx` (ArrowLeftRight icon).
+
+**Two response families rendered exactly as designed, no double-localization**: scan-family
+rejections (`scanOutTransferPiece`/`scanBackTransferPiece`) render `message_en`/`message_ar`
+straight off the response by current `i18n.language` — never re-derived from `code`.
+Command-family failures (`create`/`begin-reconcile`/`classify`/`close`) go through a new
+`TransferCommandError` (api.ts) that parses `{code, message_en, message_ar}` off the non-2xx
+body — `request()`'s own error path only keeps `"<status>: <statusText>"`, same limitation
+already documented above `resolveStockTake()`, so these use a dedicated `transferCommandRequest()`
+fetch, one shared helper this time since there are four call sites (vs. stock-take's one).
+
+**Backend gap closed to make the destination picker correct, not best-effort**:
+`GET /api/v1/locations` didn't expose `is_fulfillment` — added it to `LocationController.list()`'s
+SELECT (additive, no test asserted the old column set). Without it the frontend would have had
+to guess which locations are valid destinations instead of filtering correctly client-side
+(the backend already rejects `is_fulfillment=true` server-side in `createTransfer()`, but that's
+a round-trip-and-fail UX, not a picker that's correct up front).
+
+**FR-22.7 gap closed** (flagged, not fixed, in the FR-22.7 follow-up entry below): `Catalog.tsx`'s
+hardcoded `STATUS_KEYS` now includes `out_on_transfer`/`sold`; `PieceCounts` interface in api.ts
+gained both fields; `Badge`'s `STATUS_TONE` map gained tones for both (`warning`/`neutral`).
+`Overview.tsx`'s Group A/B tiles needed no code change — they already derive labels live off
+`catalog.statuses.${status}`, which was the only missing piece (confirmed by reading the
+component, not assumed).
+
+**i18n additions** (`en.json`/`ar.json`): full `transfers.*` tree (title/list/create/scanOut/
+detail/reconcile, ~90 keys × 2 languages); `catalog.statuses`/`lookup.pieceStatus` gained
+`out_on_transfer`/`sold`; `lookup.phrase` gained the six FR-22 timeline phrase keys
+(`transferred_out`, `returned_from_transfer`, `condemned_at_vendor`, `sold_offbook`,
+`lost_at_vendor`, `label_reprinted`) that `LookupService.phraseKey()` has emitted since FR-22.6
+but the frontend never had translations for — found while wiring i18n for this step (a piece's
+Lookup timeline would have silently fallen back to an untranslated, always-English
+`phraseKey.replace(/_/g, ' ')` for any transfer-related event otherwise).
+
+**E2E lifecycle test** (`transfersLifecycle.test.tsx`, `tl1`): create → scan-out 3 pieces of one
+variant → begin-reconcile → scan-back 1 good + 1 condemned → classify the remaining 1 as lost →
+close — driven through real `react-router` navigation across all four screens (not four isolated
+renders), with a small mutable fake-backend model in the test (mirrors `qty_out`/
+`qty_returned_good`/`qty_condemned`/`qty_sold`/`qty_lost`/`outstandingCount` bookkeeping) so the
+UI's own balance-gating logic is exercised against realistic state transitions. Explicitly
+asserts Close stays disabled with 1 piece still unaccounted for, then becomes enabled only after
+the classify call brings `outstandingCount` to 0. One environment-specific fix during authoring:
+`userEvent.type()` on `<input type="number">` didn't update the controlled value in this
+jsdom/vitest setup — switched to `fireEvent.change()` for that one interaction.
+
+Full suite green: frontend 62/65 passing (3 pre-existing unrelated failures, confirmed present
+on a clean `git stash` of this branch before any FR-22.9 change — `ov4` chart rendering and one
+`findByRole('alert')` timeout in `inventory.test.tsx`, not touched by this work); backend
+887 tests, 0 failures, 3 pre-existing skips.
+
+This is the last FR-22 build step. Full FR-22 lifecycle (backend + frontend) is ready for
+end-to-end manual walkthrough before the branch is pushed.
+
+---
+
 **FR-22.8 follow-up — two pre-frontend backend confirmations (2026-08-04) — both found already correct, no production code changes.**
 
 1. **`scanOut` open-status gate.** Confirmed `TransferService.scanOut()` already has

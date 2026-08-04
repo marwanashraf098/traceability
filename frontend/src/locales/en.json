@@ -16,7 +16,8 @@
     "onboarding": "Getting started",
     "pickups": "Pickups",
     "locations": "Locations",
-    "shopifyInventory": "Inventory Sync"
+    "shopifyInventory": "Inventory Sync",
+    "transfers": "Transfers"
   },
   "overview": {
     "title": "Overview",
@@ -197,7 +198,9 @@
       "damaged": "Damaged",
       "lost": "Lost",
       "destroyed": "Destroyed",
-      "total": "Total"
+      "total": "Total",
+      "out_on_transfer": "Out on Transfer",
+      "sold": "Sold (Off-book)"
     }
   },
   "receiving": {
@@ -355,7 +358,13 @@
       "unpacked": "Piece unpacked — cancellation in progress",
       "unreserved": "Returned to stock (order cancelled)",
       "adjusted": "Manually adjusted — {{reason}}",
-      "found_it": "Found it — piece restored to available"
+      "found_it": "Found it — piece restored to available",
+      "transferred_out": "Sent out on transfer to {{location}}",
+      "returned_from_transfer": "Returned from transfer to stock",
+      "condemned_at_vendor": "Marked damaged by vendor (transfer)",
+      "sold_offbook": "Marked sold off-book at vendor",
+      "lost_at_vendor": "Marked lost at vendor",
+      "label_reprinted": "Label reprinted"
     },
     "pieceStatus": {
       "available": "Available",
@@ -368,7 +377,9 @@
       "return_pending_inspection": "Return — Pending Inspection",
       "damaged": "Damaged",
       "lost": "Lost",
-      "destroyed": "Destroyed"
+      "destroyed": "Destroyed",
+      "out_on_transfer": "Out on Transfer",
+      "sold": "Sold (Off-book)"
     }
   },
   "returns": {
@@ -963,6 +974,123 @@
       "ambiguousBody": "The decrement may or may not have applied. Check Shopify inventory for {{variants}} (ref: {{ref}}), then mark resolved or re-push.",
       "markResolved": "Mark resolved",
       "repush": "Re-push"
+    }
+  },
+  "transfers": {
+    "title": "Transfers",
+    "new": "New Transfer",
+    "empty": "No transfers yet",
+    "col": {
+      "destination": "Destination",
+      "type": "Type",
+      "status": "Status",
+      "since": "Since",
+      "outstanding": "Outstanding"
+    },
+    "status": {
+      "open": "Open",
+      "reconciling": "Reconciling",
+      "closed": "Closed"
+    },
+    "type": {
+      "showroom": "Showroom",
+      "dryclean": "Dry Clean",
+      "repair": "Repair",
+      "other": "Other"
+    },
+    "time": {
+      "justNow": "just now",
+      "minutesAgo": "{{count}}m ago",
+      "hoursAgo": "{{count}}h ago",
+      "daysAgo": "{{count}}d ago"
+    },
+    "create": {
+      "title": "New Transfer",
+      "destination": "Destination",
+      "destinationPlaceholder": "Select destination location…",
+      "noDestinations": "No external locations available — add one in Locations first",
+      "destinationRequired": "Select a destination",
+      "type": "Transfer Type",
+      "expectedReturn": "Expected Return Date (optional)",
+      "note": "Note (optional)",
+      "notePlaceholder": "e.g. vendor contact, reason…",
+      "submit": "Create Transfer"
+    },
+    "scanOut": {
+      "back": "Back",
+      "title": "Send Out",
+      "placeholder": "Scan piece barcode…",
+      "notFound": "Transfer not found",
+      "notOpenTitle": "This transfer is no longer open for send-out",
+      "viewTransfer": "View transfer",
+      "progress": "Send-out progress",
+      "recent": "Recent scans",
+      "noScansYet": "No scans yet",
+      "done": "Done — View Transfer"
+    },
+    "detail": {
+      "back": "Back to Transfers",
+      "notFound": "Transfer not found",
+      "destination": "Destination",
+      "type": "Type",
+      "note": "Note",
+      "expectedReturn": "Expected return",
+      "createdBy": "Created by",
+      "createdAt": "Created",
+      "closedBy": "Closed by",
+      "closedAt": "Closed",
+      "outstanding": "Outstanding pieces",
+      "closedTitle": "This transfer is closed",
+      "scanOutMore": "Scan Out More",
+      "beginReconcile": "Begin Reconcile",
+      "beginReconcileDisabledTooltip": "No outstanding pieces to reconcile",
+      "continueReconcile": "Continue Reconcile",
+      "reprintOutstanding": "Reprint Outstanding Labels",
+      "reprintNoneTooltip": "No outstanding pieces to reprint",
+      "linesTitle": "Lines",
+      "col": {
+        "variant": "Variant / SKU",
+        "qtyOut": "Sent Out",
+        "returnedGood": "Returned Good",
+        "condemned": "Condemned",
+        "sold": "Sold",
+        "lost": "Lost",
+        "outstanding": "Outstanding"
+      }
+    },
+    "reconcile": {
+      "title": "Reconcile",
+      "back": "Back to Transfer",
+      "notFound": "Transfer not found",
+      "notReconcilingTitle": "This transfer is not in reconciliation",
+      "goToDetail": "Go to transfer",
+      "accessDenied": "Manager or Owner access required",
+      "scanBackTitle": "Scan Back",
+      "conditionLabel": "Condition",
+      "good": "Good",
+      "condemned": "Condemned",
+      "placeholder": "Scan returned piece…",
+      "recent": "Recent scans",
+      "noScansYet": "No scans yet",
+      "linesTitle": "Lines — live balance",
+      "col": {
+        "variant": "Variant / SKU",
+        "qtyOut": "Sent Out",
+        "accounted": "Accounted For",
+        "outstanding": "Outstanding",
+        "sold": "Sold",
+        "lost": "Lost",
+        "condemnedNotReturned": "Condemned (not returned)"
+      },
+      "balanced": "Balanced",
+      "classify": "Classify shortfall",
+      "classifySubmit": "Apply",
+      "closeButton": "Close Transfer",
+      "closeDisabledTooltip": "All lines must balance before closing",
+      "closeConfirmTitle": "Close this transfer?",
+      "closeConfirmBody": "This transfer will move to closed and can no longer be reconciled.",
+      "closeConfirmButton": "Confirm Close",
+      "closedRedirect": "Transfer closed"
     }
   }
 }

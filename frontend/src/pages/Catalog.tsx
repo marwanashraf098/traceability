@@ -11,6 +11,7 @@ const STATUS_KEYS = [
   'available', 'reserved', 'packed', 'awaiting_pickup',
   'with_courier', 'delivered', 'return_in_transit',
   'return_pending_inspection', 'damaged', 'lost', 'destroyed',
+  'out_on_transfer', 'sold',
 ] as const
 
 export default function Catalog() {

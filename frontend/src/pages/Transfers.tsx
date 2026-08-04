@@ -1,0 +1,225 @@
+import { useState, useEffect } from 'react'
+import { useNavigate } from 'react-router-dom'
+import { useTranslation } from 'react-i18next'
+import { Badge, Button, EmptyState, Input, Select, TableSkeleton, Alert } from '../components/ui'
+import {
+  listOpenTransfers, listTransferDestinations, createTransfer,
+  TransferSummary, TransferType, TRANSFER_TYPES, LocationOption, TransferCommandError,
+} from '../api'
+
+// FR-22.9 — Consignment list ("out on transfer") + create-transfer form.
+// Modeled directly on StockTake.tsx's list+create split (same shell, same
+// relativeTime helper, same segmented-button pattern for a small closed enum).
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+function transferTone(status: string): 'warning' | 'success' | 'neutral' {
+  if (status === 'open') return 'warning'
+  if (status === 'reconciling') return 'warning'
+  return 'neutral'
+}
+
+function relativeTime(iso: string, t: (k: string, o?: Record<string, unknown>) => string): string {
+  const diffMs = Date.now() - new Date(iso).getTime()
+  const mins = Math.floor(diffMs / 60000)
+  if (mins < 1) return t('transfers.time.justNow')
+  if (mins < 60) return t('transfers.time.minutesAgo', { count: mins })
+  const hours = Math.floor(mins / 60)
+  if (hours < 24) return t('transfers.time.hoursAgo', { count: hours })
+  const days = Math.floor(hours / 24)
+  return t('transfers.time.daysAgo', { count: days })
+}
+
+// ── List + Create ────────────────────────────────────────────────────────────
+
+export default function Transfers() {
+  const { t } = useTranslation()
+  const navigate = useNavigate()
+  const [transfers, setTransfers] = useState<TransferSummary[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+  const [view, setView] = useState<'list' | 'create'>('list')
+
+  useEffect(() => { load() }, [])
+
+  async function load() {
+    setLoading(true)
+    try { setTransfers(await listOpenTransfers()) }
+    catch (e: unknown) { setError(e instanceof Error ? e.message : String(e)) }
+    finally { setLoading(false) }
+  }
+
+  function openRow(tr: TransferSummary) {
+    navigate(`/transfers/${tr.id}`)
+  }
+
+  if (view === 'create') {
+    return (
+      <CreateTransferForm
+        onCreated={(id) => navigate(`/transfers/${id}/scan-out`)}
+        onCancel={() => setView('list')}
+      />
+    )
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <h1 className="text-h1 text-primary">{t('transfers.title')}</h1>
+        <Button size="sm" onClick={() => setView('create')}>
+          + {t('transfers.new')}
+        </Button>
+      </div>
+
+      {error && <Alert tone="critical" title={error} />}
+
+      {loading ? (
+        <div className="card overflow-hidden">
+          <TableSkeleton rows={3} cols={5} />
+        </div>
+      ) : transfers.length === 0 ? (
+        <EmptyState
+          message={t('transfers.empty')}
+          icon="📦"
+          action={{ label: '+ ' + t('transfers.new'), onClick: () => setView('create') }}
+        />
+      ) : (
+        <div className="card overflow-hidden">
+          <table className="min-w-full">
+            <thead>
+              <tr className="border-b border-line">
+                {['transfers.col.destination', 'transfers.col.type', 'transfers.col.status',
+                  'transfers.col.since', 'transfers.col.outstanding'].map(k => (
+                  <th key={k} className="tbl-header">{t(k)}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {transfers.map(tr => (
+                <tr key={tr.id} className="tbl-row cursor-pointer" onClick={() => openRow(tr)}>
+                  <td className="tbl-cell text-primary">{tr.destination_location_name}</td>
+                  <td className="tbl-cell text-muted">{t(`transfers.type.${tr.transfer_type}`)}</td>
+                  <td className="tbl-cell">
+                    <Badge tone={transferTone(tr.status)} label={t(`transfers.status.${tr.status}`)} />
+                  </td>
+                  <td className="tbl-cell text-muted text-small">{relativeTime(tr.created_at, t)}</td>
+                  <td className="tbl-cell text-primary">{tr.outstanding_count}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── Create Transfer Form ────────────────────────────────────────────────────
+
+function CreateTransferForm({ onCreated, onCancel }: {
+  onCreated: (id: string) => void; onCancel: () => void
+}) {
+  const { t, i18n } = useTranslation()
+  const isAr = i18n.language === 'ar'
+  const [destinations, setDestinations] = useState<LocationOption[]>([])
+  const [loadingDest, setLoadingDest] = useState(true)
+  const [destinationId, setDestinationId] = useState('')
+  const [transferType, setTransferType] = useState<TransferType>('showroom')
+  const [expectedReturnAt, setExpectedReturnAt] = useState('')
+  const [note, setNote] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    listTransferDestinations()
+      .then(setDestinations)
+      .catch(() => setDestinations([]))
+      .finally(() => setLoadingDest(false))
+  }, [])
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault()
+    if (!destinationId) {
+      setError(t('transfers.create.destinationRequired'))
+      return
+    }
+    setSaving(true); setError(null)
+    try {
+      const res = await createTransfer({
+        transferType,
+        destinationLocationId: destinationId,
+        expectedReturnAt: expectedReturnAt ? new Date(expectedReturnAt).toISOString() : undefined,
+        note: note || undefined,
+      })
+      onCreated(res.id)
+    } catch (e: unknown) {
+      if (e instanceof TransferCommandError) setError(isAr ? e.messageAr : e.messageEn)
+      else setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div className="max-w-lg space-y-4">
+      <h1 className="text-h1 text-primary">{t('transfers.create.title')}</h1>
+      {error && <Alert tone="critical" title={error} />}
+      <form onSubmit={submit} className="card p-5 space-y-4">
+        <div className="space-y-1.5">
+          <label className="text-small text-muted">{t('transfers.create.destination')}</label>
+          {!loadingDest && destinations.length === 0 ? (
+            <Alert tone="warning" title={t('transfers.create.noDestinations')} />
+          ) : (
+            <Select
+              value={destinationId}
+              onChange={setDestinationId}
+              disabled={loadingDest}
+              placeholder={t('transfers.create.destinationPlaceholder')}
+              options={destinations.map(d => ({ value: d.id, label: d.name }))}
+            />
+          )}
+        </div>
+
+        <div className="space-y-1.5">
+          <label className="text-small text-muted">{t('transfers.create.type')}</label>
+          <div className="flex flex-wrap gap-2">
+            {TRANSFER_TYPES.map(ty => (
+              <button
+                key={ty}
+                type="button"
+                data-testid={`type-${ty}-btn`}
+                onClick={() => setTransferType(ty)}
+                className={`px-3 py-1.5 rounded-lg text-small font-medium border transition-colors ${
+                  transferType === ty
+                    ? 'bg-trace-blue text-white border-trace-blue'
+                    : 'border-line text-muted hover:border-trace-blue'
+                }`}
+              >
+                {t(`transfers.type.${ty}`)}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="space-y-1.5">
+          <label className="text-small text-muted">{t('transfers.create.expectedReturn')}</label>
+          <Input type="date" value={expectedReturnAt} onChange={e => setExpectedReturnAt(e.target.value)} />
+        </div>
+
+        <div className="space-y-1.5">
+          <label className="text-small text-muted">{t('transfers.create.note')}</label>
+          <Input value={note} onChange={e => setNote(e.target.value)} placeholder={t('transfers.create.notePlaceholder')} />
+        </div>
+
+        <div className="flex gap-3 pt-1">
+          <Button type="submit" loading={saving}>
+            {t('transfers.create.submit')}
+          </Button>
+          <Button type="button" variant="secondary" onClick={onCancel}>
+            {t('common.cancel')}
+          </Button>
+        </div>
+      </form>
+    </div>
+  )
+}

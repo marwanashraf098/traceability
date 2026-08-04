@@ -16,7 +16,8 @@
     "onboarding": "البدء",
     "pickups": "جلسات الاستلام",
     "locations": "المواقع",
-    "shopifyInventory": "مزامنة المخزون"
+    "shopifyInventory": "مزامنة المخزون",
+    "transfers": "عمليات النقل"
   },
   "overview": {
     "title": "لوحة التحكم",
@@ -197,7 +198,9 @@
       "damaged": "تالف",
       "lost": "مفقود",
       "destroyed": "مُتلف",
-      "total": "الإجمالي"
+      "total": "الإجمالي",
+      "out_on_transfer": "خارج المخزون (نقل)",
+      "sold": "مباع (خارج السجل)"
     }
   },
   "receiving": {
@@ -350,7 +353,13 @@
       "restocked": "تمت إعادته للمخزون",
       "damaged": "تم تصنيفه كتالف",
       "adjusted": "تعديل يدوي — {{reason}}",
-      "found_it": "تم العثور عليه — تم إعادة القطعة إلى المتاح"
+      "found_it": "تم العثور عليه — تم إعادة القطعة إلى المتاح",
+      "transferred_out": "أُرسلت في عملية نقل إلى {{location}}",
+      "returned_from_transfer": "عادت من عملية النقل إلى المخزون",
+      "condemned_at_vendor": "تم تحديدها كتالفة لدى الجهة الخارجية (نقل)",
+      "sold_offbook": "تم تحديدها كمباعة خارج السجل لدى الجهة الخارجية",
+      "lost_at_vendor": "تم تحديدها كمفقودة لدى الجهة الخارجية",
+      "label_reprinted": "تمت إعادة طباعة الملصق"
     },
     "pieceStatus": {
       "available": "متاح",
@@ -363,7 +372,9 @@
       "return_pending_inspection": "مرتجع ينتظر الفحص",
       "damaged": "تالف",
       "lost": "مفقود",
-      "destroyed": "مُتلف"
+      "destroyed": "مُتلف",
+      "out_on_transfer": "خارج المخزون (نقل)",
+      "sold": "مباع (خارج السجل)"
     }
   },
   "returns": {
@@ -958,6 +969,123 @@
       "ambiguousBody": "قد يكون الخصم قد تم أو لم يتم. تحقق من مخزون Shopify لـ {{variants}} (المرجع: {{ref}})، ثم اختر وضع علامة تم الحل أو إعادة الدفع.",
       "markResolved": "وضع علامة تم الحل",
       "repush": "إعادة الدفع"
+    }
+  },
+  "transfers": {
+    "title": "عمليات النقل",
+    "new": "عملية نقل جديدة",
+    "empty": "لا توجد عمليات نقل حتى الآن",
+    "col": {
+      "destination": "الوجهة",
+      "type": "النوع",
+      "status": "الحالة",
+      "since": "منذ",
+      "outstanding": "معلّقة"
+    },
+    "status": {
+      "open": "مفتوحة",
+      "reconciling": "قيد المطابقة",
+      "closed": "مغلقة"
+    },
+    "type": {
+      "showroom": "معرض عرض",
+      "dryclean": "تنظيف جاف",
+      "repair": "إصلاح",
+      "other": "أخرى"
+    },
+    "time": {
+      "justNow": "الآن",
+      "minutesAgo": "منذ {{count}} د",
+      "hoursAgo": "منذ {{count}} س",
+      "daysAgo": "منذ {{count}} يوم"
+    },
+    "create": {
+      "title": "عملية نقل جديدة",
+      "destination": "الوجهة",
+      "destinationPlaceholder": "اختر موقع الوجهة…",
+      "noDestinations": "لا توجد مواقع خارجية متاحة — أضف واحدًا من صفحة المواقع أولاً",
+      "destinationRequired": "اختر وجهة",
+      "type": "نوع النقل",
+      "expectedReturn": "تاريخ العودة المتوقع (اختياري)",
+      "note": "ملاحظة (اختياري)",
+      "notePlaceholder": "مثال: بيانات التواصل مع الجهة، السبب…",
+      "submit": "إنشاء عملية النقل"
+    },
+    "scanOut": {
+      "back": "رجوع",
+      "title": "إرسال",
+      "placeholder": "امسح باركود القطعة…",
+      "notFound": "لم يتم العثور على عملية النقل",
+      "notOpenTitle": "عملية النقل هذه لم تعد مفتوحة للإرسال",
+      "viewTransfer": "عرض عملية النقل",
+      "progress": "تقدم الإرسال",
+      "recent": "آخر عمليات المسح",
+      "noScansYet": "لا توجد عمليات مسح بعد",
+      "done": "تم — عرض عملية النقل"
+    },
+    "detail": {
+      "back": "العودة إلى عمليات النقل",
+      "notFound": "لم يتم العثور على عملية النقل",
+      "destination": "الوجهة",
+      "type": "النوع",
+      "note": "ملاحظة",
+      "expectedReturn": "العودة المتوقعة",
+      "createdBy": "أنشأها",
+      "createdAt": "تاريخ الإنشاء",
+      "closedBy": "أغلقها",
+      "closedAt": "تاريخ الإغلاق",
+      "outstanding": "قطع معلّقة",
+      "closedTitle": "عملية النقل هذه مغلقة",
+      "scanOutMore": "إرسال المزيد",
+      "beginReconcile": "بدء المطابقة",
+      "beginReconcileDisabledTooltip": "لا توجد قطع معلّقة للمطابقة",
+      "continueReconcile": "متابعة المطابقة",
+      "reprintOutstanding": "إعادة طباعة ملصقات القطع المعلّقة",
+      "reprintNoneTooltip": "لا توجد قطع معلّقة لإعادة الطباعة",
+      "linesTitle": "البنود",
+      "col": {
+        "variant": "المتغيّر / SKU",
+        "qtyOut": "المُرسل",
+        "returnedGood": "عائد سليم",
+        "condemned": "تالف",
+        "sold": "مباع",
+        "lost": "مفقود",
+        "outstanding": "معلّق"
+      }
+    },
+    "reconcile": {
+      "title": "المطابقة",
+      "back": "العودة إلى عملية النقل",
+      "notFound": "لم يتم العثور على عملية النقل",
+      "notReconcilingTitle": "عملية النقل هذه ليست في مرحلة المطابقة",
+      "goToDetail": "الذهاب إلى عملية النقل",
+      "accessDenied": "يتطلب صلاحية مدير أو مالك",
+      "scanBackTitle": "مسح العائد",
+      "conditionLabel": "الحالة",
+      "good": "سليم",
+      "condemned": "تالف",
+      "placeholder": "امسح القطعة العائدة…",
+      "recent": "آخر عمليات المسح",
+      "noScansYet": "لا توجد عمليات مسح بعد",
+      "linesTitle": "البنود — الرصيد الحي",
+      "col": {
+        "variant": "المتغيّر / SKU",
+        "qtyOut": "المُرسل",
+        "accounted": "تمت تسويته",
+        "outstanding": "معلّق",
+        "sold": "مباع",
+        "lost": "مفقود",
+        "condemnedNotReturned": "تالف (لم يُعد)"
+      },
+      "balanced": "متوازن",
+      "classify": "تصنيف العجز",
+      "classifySubmit": "تطبيق",
+      "closeButton": "إغلاق عملية النقل",
+      "closeDisabledTooltip": "يجب أن تتوازن جميع البنود قبل الإغلاق",
+      "closeConfirmTitle": "هل تريد إغلاق عملية النقل هذه؟",
+      "closeConfirmBody": "ستنتقل عملية النقل هذه إلى الحالة المغلقة ولن يمكن مطابقتها بعد ذلك.",
+      "closeConfirmButton": "تأكيد الإغلاق",
+      "closedRedirect": "تم إغلاق عملية النقل"
     }
   }
 }

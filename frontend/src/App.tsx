@@ -21,6 +21,10 @@ import GatherList from './pages/GatherList'
 import StockTake from './pages/StockTake'
 import StockTakeScan from './pages/StockTakeScan'
 import StockTakeReview from './pages/StockTakeReview'
+import Transfers from './pages/Transfers'
+import TransferScanOut from './pages/TransferScanOut'
+import TransferDetail from './pages/TransferDetail'
+import TransferReconcile from './pages/TransferReconcile'
 import LookupPage from './pages/Lookup'
 import Returns from './pages/Returns'
 import ExceptionsPage from './pages/Exceptions'
@@ -164,6 +168,39 @@ export default function App() {
           element={
             <RequireAuth>
               <Layout><StockTakeReview /></Layout>
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="/transfers"
+          element={
+            <RequireAuth>
+              <Layout><Transfers /></Layout>
+            </RequireAuth>
+          }
+        />
+        {/* NOT Layout-wrapped — full-screen, per the /stock-take/:id/scan precedent */}
+        <Route
+          path="/transfers/:id/scan-out"
+          element={
+            <RequireAuth>
+              <TransferScanOut />
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="/transfers/:id"
+          element={
+            <RequireAuth>
+              <Layout><TransferDetail /></Layout>
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="/transfers/:id/reconcile"
+          element={
+            <RequireAuth>
+              <Layout><TransferReconcile /></Layout>
             </RequireAuth>
           }
         />

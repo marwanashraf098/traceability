@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { useState, useRef, ReactNode } from 'react'
 import {
   LayoutGrid, ClipboardList, Package, PackageOpen, ClipboardCheck, PackageSearch,
-  Truck, RotateCcw, AlertTriangle, PlugZap, MapPin, ShoppingBag,
+  Truck, RotateCcw, AlertTriangle, PlugZap, MapPin, ShoppingBag, ArrowLeftRight,
   Users, Settings, LogOut, Globe, Search,
 } from 'lucide-react'
 import { getRoleFromToken, request } from '../api'
@@ -81,6 +81,7 @@ export default function Layout({ children }: { children: ReactNode }) {
           <SideNavLink to="/stock-take"  icon={<PackageSearch {...iconProps} />} label={t('nav.stocktake')} />
           <SideNavLink to="/fulfill"     icon={<ClipboardCheck {...iconProps} />} label={t('nav.fulfill')} />
           <SideNavLink to="/pickups"     icon={<Truck         {...iconProps} />} label={t('nav.pickups')} />
+          <SideNavLink to="/transfers"   icon={<ArrowLeftRight {...iconProps} />} label={t('nav.transfers')} />
           <SideNavLink to="/returns"     icon={<RotateCcw     {...iconProps} />} label={t('nav.returns')} />
           <SideNavLink to="/exceptions"  icon={<AlertTriangle {...iconProps} />} label={t('nav.exceptions')} />
           <SideNavLink to="/connections" icon={<PlugZap       {...iconProps} />} label={t('nav.connections')} />

@@ -49,7 +49,7 @@ public class LocationController {
     public List<Map<String, Object>> list() {
         return tx.execute(status ->
             jdbc.queryForList(
-                "SELECT id, name, type, is_default, " +
+                "SELECT id, name, type, is_default, is_fulfillment, " +
                 "       shopify_location_id, shopify_sync_status, " +
                 "       shopify_sync_error, shopify_synced_at " +
                 "FROM locations WHERE tenant_id = ? ORDER BY name",
