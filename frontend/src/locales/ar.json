@@ -494,7 +494,16 @@
       "connectBtn": "ربط Shopify",
       "connecting": "جارٍ التوجيه إلى Shopify…",
       "domainInvalid": "أدخل نطاق *.myshopify.com صحيح.",
-      "error": "تعذّر بدء الاتصال بـ Shopify. حاول مرة أخرى."
+      "error": "تعذّر بدء الاتصال بـ Shopify. حاول مرة أخرى.",
+      "fulfillmentActivation": {
+        "title": "تفعيل Traced كموقع تنفيذ للطلبات",
+        "live": "موقع Traced الرئيسي مُفعّل الآن على متجرك",
+        "waitingForSeed": "بانتظار انتهاء مزامنة المخزون الأولي مع Shopify قبل إمكانية التفعيل.",
+        "confirmCopy": "لقد قمت بتصفير/إزالة المخزون من موقع (مواقع) التنفيذ الحالية في Shopify. سيؤدي التفعيل إلى بيع مخزون Traced Main Warehouse جنبًا إلى جنب مع أي موقع آخر نشط — إذا كان الموقع القديم لا يزال يحتوي على مخزون، فسيحدث بيع زائد (oversell) في متجرك.",
+        "activateBtn": "تفعيل التنفيذ",
+        "activating": "جارٍ التفعيل…",
+        "genericError": "تعذّر التفعيل. حاول مرة أخرى."
+      }
     },
     "bosta": {
       "title": "بوستا",

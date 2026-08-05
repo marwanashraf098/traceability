@@ -418,6 +418,50 @@ export function bostaUpdateSettings(settings: { awbFormat?: 'A4' | 'A6'; awbLang
   })
 }
 
+// ── FR-17 v2: fulfillment activation (deliveryProfileUpdate) ─────────────────
+//
+// Joins the Traced Main Warehouse to the shop's default delivery profile's location
+// group — the step that makes it live to the storefront. Explicit, owner-triggered,
+// never automatic (see LocationController.activateShopifyFulfillment's javadoc).
+
+export interface ShopifyReconcileRow {
+  variantId: string
+  sku: string
+  title: string
+  tracedOnHand: number
+  shopifyAvailable: number
+  action: 'seed' | 'skip_nonzero' | 'noop'
+}
+
+export interface ShopifyReconcileReport {
+  tracedLocationGid: string
+  rows: ShopifyReconcileRow[]
+}
+
+/** Read-only — used here only to gate the activation checklist item on "nothing left to seed". */
+export function getShopifyInventoryReconcileReport() {
+  return request<ShopifyReconcileReport>('/shopify/inventory/reconcile')
+}
+
+export interface FulfillmentActivationResult {
+  status: 'activated'
+  locationGid: string
+  deliveryProfileId: string
+  locationGroupId: string
+  alreadyMember: boolean
+}
+
+/**
+ * Same {code, message_en, message_ar} error contract as TransferException (see
+ * ApiExceptionHandler.handleFulfillmentActivation) — reuses transferCommandRequest's
+ * generic error-body sniffing (and throws the same TransferCommandError) rather than
+ * duplicating that logic for one more call site.
+ */
+export function activateShopifyFulfillment() {
+  return transferCommandRequest<FulfillmentActivationResult>(
+    '/locations/shopify/activate-fulfillment', { method: 'POST' })
+}
+
 // ── Shopify custom-app connect (DEV/pilot only) ───────────────────────────────
 
 export function shopifyCustomConnect(shopDomain: string, clientId: string, clientSecret: string) {
@@ -1007,6 +1051,25 @@ export interface LocationOption {
 export async function listTransferDestinations(): Promise<LocationOption[]> {
   const all = await request<LocationOption[]>('/locations')
   return all.filter(l => !l.is_fulfillment)
+}
+
+export interface LocationRow {
+  id: string
+  name: string
+  type: string
+  is_default: boolean
+  is_fulfillment: boolean
+  shopify_location_id: string | null
+  shopify_sync_status: 'unsynced' | 'pending' | 'linked' | 'error'
+  shopify_sync_error: string | null
+  shopify_synced_at: string | null
+  shopify_delivery_profile_status: 'not_activated' | 'activated' | 'error'
+  shopify_delivery_profile_error: string | null
+  shopify_delivery_profile_activated_at: string | null
+}
+
+export function listLocations() {
+  return request<LocationRow[]>('/locations')
 }
 
 export function createTransfer(params: {

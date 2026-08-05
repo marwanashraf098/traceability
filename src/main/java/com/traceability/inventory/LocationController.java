@@ -1,5 +1,6 @@
 package com.traceability.inventory;
 
+import com.traceability.identity.CustomUserDetails;
 import com.traceability.integrations.shopify.ShopifyGateway;
 import com.traceability.integrations.shopify.ShopifyLocationGateway;
 import com.traceability.integrations.shopify.ShopifyTokenProvider;
@@ -9,6 +10,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -35,14 +37,17 @@ public class LocationController {
     private final TransactionTemplate    tx;
     private final ShopifyLocationGateway shopifyLocations;
     private final ShopifyTokenProvider   tokenProvider;
+    private final ShopifyFulfillmentActivationService fulfillmentActivationService;
 
     public LocationController(JdbcTemplate jdbc, PlatformTransactionManager txm,
                               ShopifyLocationGateway shopifyLocations,
-                              ShopifyTokenProvider tokenProvider) {
+                              ShopifyTokenProvider tokenProvider,
+                              ShopifyFulfillmentActivationService fulfillmentActivationService) {
         this.jdbc             = jdbc;
         this.tx               = new TransactionTemplate(txm);
         this.shopifyLocations = shopifyLocations;
         this.tokenProvider    = tokenProvider;
+        this.fulfillmentActivationService = fulfillmentActivationService;
     }
 
     @GetMapping
@@ -51,7 +56,9 @@ public class LocationController {
             jdbc.queryForList(
                 "SELECT id, name, type, is_default, is_fulfillment, " +
                 "       shopify_location_id, shopify_sync_status, " +
-                "       shopify_sync_error, shopify_synced_at " +
+                "       shopify_sync_error, shopify_synced_at, " +
+                "       shopify_delivery_profile_status, shopify_delivery_profile_error, " +
+                "       shopify_delivery_profile_activated_at " +
                 "FROM locations WHERE tenant_id = ? ORDER BY name",
                 TenantContext.require()));
     }
@@ -264,6 +271,27 @@ public class LocationController {
         });
 
         return Map.of("id", id.toString(), "shopifySyncStatus", "unsynced");
+    }
+
+    /**
+     * FR-17 v2 fulfillment activation (deliveryProfileUpdate) — joins the Traced Main Warehouse
+     * to the shop's default delivery profile's location group, making it live to the storefront.
+     * Owner-only, explicit operator/merchant action; NEVER triggered automatically anywhere in
+     * the connect chain — see ShopifyFulfillmentActivationService's class comment. The merchant
+     * confirms client-side that their old fulfillment location's stock is zeroed before calling
+     * this; Traced has no read access to that location to verify it server-side.
+     */
+    @PostMapping("/shopify/activate-fulfillment")
+    @PreAuthorize("hasRole('OWNER')")
+    public Map<String, Object> activateShopifyFulfillment(@AuthenticationPrincipal CustomUserDetails principal) {
+        ShopifyFulfillmentActivationService.ActivationResult result =
+            fulfillmentActivationService.activate(principal.userId());
+        return Map.of(
+            "status",            result.status(),
+            "locationGid",       result.locationGid(),
+            "deliveryProfileId", result.deliveryProfileId(),
+            "locationGroupId",   result.locationGroupId(),
+            "alreadyMember",     result.alreadyMember());
     }
 
 }

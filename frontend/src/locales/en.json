@@ -499,7 +499,16 @@
       "connectBtn": "Connect Shopify",
       "connecting": "Redirecting to Shopify…",
       "domainInvalid": "Enter a valid *.myshopify.com domain.",
-      "error": "Could not initiate Shopify connection. Try again."
+      "error": "Could not initiate Shopify connection. Try again.",
+      "fulfillmentActivation": {
+        "title": "Activate Traced as a fulfillment location",
+        "live": "Traced Main Warehouse is live on your storefront",
+        "waitingForSeed": "Waiting for initial stock to finish syncing to Shopify before this can be activated.",
+        "confirmCopy": "I have zeroed/removed inventory at my existing Shopify fulfillment location(s). Activating will make Traced Main Warehouse sell alongside any other active location — if the old location still has stock, my storefront will oversell.",
+        "activateBtn": "Activate fulfillment",
+        "activating": "Activating…",
+        "genericError": "Could not activate. Try again."
+      }
     },
     "bosta": {
       "title": "Bosta",

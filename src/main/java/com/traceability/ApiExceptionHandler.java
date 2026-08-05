@@ -9,6 +9,7 @@ import com.traceability.inventory.AwbMismatchException;
 import com.traceability.inventory.LookupNotFoundException;
 import com.traceability.inventory.PieceCommittedException;
 import com.traceability.inventory.PieceOutOnTransferException;
+import com.traceability.inventory.ShopifyFulfillmentActivationException;
 import com.traceability.inventory.StateConflictException;
 import com.traceability.inventory.TransferException;
 import jakarta.servlet.http.HttpServletRequest;
@@ -142,6 +143,19 @@ public class ApiExceptionHandler {
     ResponseEntity<TransferErrorBody> handleTransferException(TransferException ex) {
         return ResponseEntity.status(ex.httpStatus())
             .body(new TransferErrorBody(ex.code().name(), ex.messageEn(), ex.messageAr()));
+    }
+
+    record FulfillmentActivationErrorBody(
+            String code,
+            @JsonProperty("message_en") String messageEn,
+            @JsonProperty("message_ar") String messageAr) {}
+
+    @ExceptionHandler(ShopifyFulfillmentActivationException.class)
+    ResponseEntity<FulfillmentActivationErrorBody> handleFulfillmentActivation(
+            ShopifyFulfillmentActivationException ex) {
+        log.warn("Fulfillment activation guard: {}", ex.getMessage());
+        return ResponseEntity.status(ex.httpStatus())
+            .body(new FulfillmentActivationErrorBody(ex.code().name(), ex.messageEn(), ex.messageAr()));
     }
 
     @ExceptionHandler(ShopifyOAuthException.class)

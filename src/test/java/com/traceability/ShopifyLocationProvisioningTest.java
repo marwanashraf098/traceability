@@ -1,5 +1,6 @@
 package com.traceability;
 
+import com.traceability.integrations.shopify.ShopifyDeliveryProfileGateway;
 import com.traceability.integrations.shopify.ShopifyLocationGateway;
 import com.traceability.integrations.shopify.ShopifyTokenProvider;
 import com.traceability.inventory.LocationController;
@@ -11,6 +12,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.authentication.TestingAuthenticationToken;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.test.context.DynamicPropertyRegistry;
@@ -22,6 +24,7 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -42,6 +45,9 @@ import static org.mockito.Mockito.*;
  *   lp4 — Shopify-first case: zero locations exist -> one fulfillment location is created
  *   lp5 — standalone case: a fulfillment location already exists -> it is linked, not duplicated
  *   lp6 — junk report + guarded per-location cleanup (deactivate, never delete/auto-bulk)
+ *   lp8 — activate-fulfillment endpoint: MANAGER is forbidden (owner-only)
+ *   lp9 — activate-fulfillment endpoint: OWNER happy path wires through to
+ *         ShopifyFulfillmentActivationService and returns the expected response shape
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.NONE)
 @Testcontainers
@@ -75,6 +81,7 @@ class ShopifyLocationProvisioningTest {
 
     @MockBean ShopifyLocationGateway shopifyLocations;
     @MockBean ShopifyTokenProvider   tokenProvider;
+    @MockBean ShopifyDeliveryProfileGateway deliveryProfiles;
 
     @Autowired JdbcTemplate jdbc;
     @Autowired LocationController controller;
@@ -95,10 +102,13 @@ class ShopifyLocationProvisioningTest {
             storeId, tenantId, SHOP_DOMAIN);
         when(tokenProvider.getValidToken(storeId)).thenReturn("test-token");
         reset(shopifyLocations);
+        reset(deliveryProfiles);
     }
 
     @AfterEach
     void cleanup() {
+        jdbc.update("DELETE FROM audit_log WHERE tenant_id = ?", tenantId);
+        jdbc.update("DELETE FROM users WHERE tenant_id = ?", tenantId);
         jdbc.update("DELETE FROM locations WHERE tenant_id = ?", tenantId);
         jdbc.update("DELETE FROM stores WHERE tenant_id = ?", tenantId);
         jdbc.update("DELETE FROM tenants WHERE id = ?", tenantId);
@@ -358,5 +368,70 @@ class ShopifyLocationProvisioningTest {
             "SELECT shopify_sync_status FROM locations WHERE tenant_id = ? AND is_fulfillment = true",
             String.class, tenantId);
         assertThat(finalStatus).isEqualTo("linked");
+    }
+
+    // ── lp8: activate-fulfillment endpoint is owner-only ─────────────────────
+
+    @Test
+    void lp8_activateFulfillment_managerForbidden() {
+        var auth = new TestingAuthenticationToken("test-manager", "n/a", "ROLE_MANAGER");
+        auth.setAuthenticated(true);
+        SecurityContextHolder.getContext().setAuthentication(auth);
+        TenantContext.set(tenantId);
+        try {
+            Assertions.assertThrows(AccessDeniedException.class,
+                () -> controller.activateShopifyFulfillment(null));
+        } finally {
+            TenantContext.clear();
+            SecurityContextHolder.clearContext();
+        }
+        verify(deliveryProfiles, never()).findDefaultProfileLocationGroup(any(), any());
+        verify(deliveryProfiles, never()).addLocationToGroup(any(), any(), any(), any(), any());
+    }
+
+    // ── lp9: activate-fulfillment endpoint — owner happy path ────────────────
+
+    @Test
+    void lp9_activateFulfillment_ownerHappyPathWiresThrough() {
+        jdbc.update(
+            "UPDATE stores SET access_token_scopes = " +
+            "'read_products,write_locations,write_inventory,write_shipping' WHERE id = ?", storeId);
+        UUID locId = UUID.randomUUID();
+        jdbc.update(
+            "INSERT INTO locations (id, tenant_id, name, type, is_default, is_fulfillment, " +
+            "    shopify_location_id, shopify_sync_status) " +
+            "VALUES (?, ?, 'Main Warehouse', 'warehouse', true, true, 'gid://shopify/Location/lp9', 'linked')",
+            locId, tenantId);
+
+        when(deliveryProfiles.findDefaultProfileLocationGroup(eq(SHOP_DOMAIN), eq("test-token")))
+            .thenReturn(Optional.of(new ShopifyDeliveryProfileGateway.LocationGroupInfo(
+                "gid://shopify/DeliveryProfile/lp9", "gid://shopify/DeliveryLocationGroup/lp9", Set.of())));
+
+        UUID ownerUserId = UUID.randomUUID();
+        jdbc.update(
+            "INSERT INTO users (id, tenant_id, name, role) VALUES (?, ?, 'LP9 Owner', 'owner')",
+            ownerUserId, tenantId);
+        var principal = new com.traceability.identity.CustomUserDetails(
+            ownerUserId, tenantId, "OWNER", SHOP_DOMAIN);
+        TenantContext.set(tenantId);
+        Map<String, Object> result;
+        try {
+            result = asOwner(() -> controller.activateShopifyFulfillment(principal));
+        } finally {
+            TenantContext.clear();
+        }
+
+        assertThat(result.get("status")).isEqualTo("activated");
+        assertThat(result.get("alreadyMember")).isEqualTo(false);
+        assertThat(result.get("deliveryProfileId")).isEqualTo("gid://shopify/DeliveryProfile/lp9");
+        assertThat(result.get("locationGroupId")).isEqualTo("gid://shopify/DeliveryLocationGroup/lp9");
+
+        verify(deliveryProfiles).addLocationToGroup(
+            SHOP_DOMAIN, "test-token", "gid://shopify/DeliveryProfile/lp9",
+            "gid://shopify/DeliveryLocationGroup/lp9", "gid://shopify/Location/lp9");
+
+        String status = jdbc.queryForObject(
+            "SELECT shopify_delivery_profile_status FROM locations WHERE id = ?", String.class, locId);
+        assertThat(status).isEqualTo("activated");
     }
 }

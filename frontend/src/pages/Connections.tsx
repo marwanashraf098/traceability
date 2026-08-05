@@ -3,7 +3,9 @@ import { useTranslation } from 'react-i18next'
 import {
   getConnections, shopifyInitiate, shopifyCustomConnect,
   bostaConnect, bostaRegenerateSecret, bostaSync, bostaGetSyncStatus,
-  ConnectionsStatus, BostaBackfillStatus,
+  listLocations, getShopifyInventoryReconcileReport, activateShopifyFulfillment,
+  TransferCommandError,
+  ConnectionsStatus, BostaBackfillStatus, LocationRow,
 } from '../api'
 
 // ── Status badge helpers ──────────────────────────────────────────────────────
@@ -99,6 +101,8 @@ function ShopifyCard({ shopify }: { shopify: ConnectionsStatus['shopify'] }) {
                 : t('connections.never')}
             </span>
           </div>
+
+          <FulfillmentActivationItem />
         </div>
       ) : (
         <div className="space-y-3">
@@ -135,6 +139,130 @@ function ShopifyCard({ shopify }: { shopify: ConnectionsStatus['shopify'] }) {
               {loading ? t('connections.shopify.connecting') : t('connections.shopify.connectBtn')}
             </button>
           </form>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── Fulfillment activation checklist item (FR-17 v2) ───────────────────────────
+//
+// Shown only once Part A has already linked the Traced Main Warehouse to Shopify
+// (automatic, at connect) — separate and deliberately NOT automatic itself. Disabled
+// until the reconcile report shows nothing left to seed, and behind an explicit
+// confirmation checkbox — activating makes the location count toward storefront
+// availability, so an un-zeroed old location oversells.
+
+function FulfillmentActivationItem() {
+  const { t, i18n } = useTranslation()
+  const isAr = i18n.language === 'ar'
+
+  const [loading,    setLoading]    = useState(true)
+  const [location,   setLocation]   = useState<LocationRow | null>(null)
+  const [seedingDone, setSeedingDone] = useState(false)
+  const [confirmed,  setConfirmed]  = useState(false)
+  const [activating, setActivating] = useState(false)
+  const [errorMsg,   setErrorMsg]   = useState('')
+
+  const load = useCallback(async () => {
+    try {
+      const locations   = await listLocations()
+      const fulfillment = locations.find(l => l.is_fulfillment) ?? null
+      setLocation(fulfillment)
+
+      if (fulfillment
+          && fulfillment.shopify_sync_status === 'linked'
+          && fulfillment.shopify_delivery_profile_status !== 'activated') {
+        try {
+          const report = await getShopifyInventoryReconcileReport()
+          setSeedingDone(report.rows.every(r => r.action !== 'seed'))
+        } catch {
+          setSeedingDone(false)
+        }
+      }
+    } catch {
+      setLocation(null)
+    } finally {
+      setLoading(false)
+    }
+  }, [])
+
+  useEffect(() => { load() }, [load])
+
+  async function handleActivate() {
+    setErrorMsg('')
+    setActivating(true)
+    try {
+      await activateShopifyFulfillment()
+      setConfirmed(false)
+      await load()
+    } catch (err) {
+      if (err instanceof TransferCommandError) {
+        setErrorMsg(isAr ? err.messageAr : err.messageEn)
+      } else {
+        setErrorMsg(t('connections.shopify.fulfillmentActivation.genericError'))
+      }
+    } finally {
+      setActivating(false)
+    }
+  }
+
+  // Nothing to show until Part A has linked the location — no automatic trigger exists
+  // for that step from here, so a permanently-disabled item would just confuse.
+  if (loading || !location || location.shopify_sync_status !== 'linked') return null
+
+  const isActivated = location.shopify_delivery_profile_status === 'activated'
+  const canActivate  = seedingDone && confirmed && !activating
+
+  return (
+    <div className="pt-2 border-t border-line/40 space-y-2" data-testid="fulfillment-activation">
+      <p className="text-small font-medium text-primary">
+        {t('connections.shopify.fulfillmentActivation.title')}
+      </p>
+
+      {isActivated ? (
+        <p
+          data-testid="fulfillment-activated"
+          className="text-small text-success flex items-center gap-1.5"
+        >
+          <span className="w-2 h-2 rounded-full bg-success flex-shrink-0" />
+          {t('connections.shopify.fulfillmentActivation.live')}
+        </p>
+      ) : (
+        <div className="space-y-2">
+          {!seedingDone && (
+            <p className="text-xs text-muted" data-testid="fulfillment-waiting-seed">
+              {t('connections.shopify.fulfillmentActivation.waitingForSeed')}
+            </p>
+          )}
+
+          <label className="flex items-start gap-2 text-xs text-muted">
+            <input
+              type="checkbox"
+              checked={confirmed}
+              onChange={e => setConfirmed(e.target.checked)}
+              disabled={!seedingDone || activating}
+              className="mt-0.5 flex-shrink-0"
+              data-testid="fulfillment-confirm-checkbox"
+            />
+            <span>{t('connections.shopify.fulfillmentActivation.confirmCopy')}</span>
+          </label>
+
+          {errorMsg && (
+            <p role="alert" className="text-xs text-danger">{errorMsg}</p>
+          )}
+
+          <button
+            type="button"
+            onClick={handleActivate}
+            disabled={!canActivate}
+            className="btn btn-brand text-small"
+            data-testid="activate-fulfillment-btn"
+          >
+            {activating
+              ? t('connections.shopify.fulfillmentActivation.activating')
+              : t('connections.shopify.fulfillmentActivation.activateBtn')}
+          </button>
         </div>
       )}
     </div>

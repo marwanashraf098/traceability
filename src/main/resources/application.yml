@@ -66,7 +66,11 @@ shopify:
   # means the toml's [access_scopes] does not itself drive the consent screen; keep both lists
   # in sync manually). write_X implies read_X (see ShopifyGateway.isScopeGranted) so the
   # corresponding read_inventory/read_locations aren't listed separately.
-  scopes: ${SHOPIFY_SCOPES:read_products,read_orders,read_fulfillments,read_customers,write_inventory,write_locations}
+  # write_shipping (added for deliveryProfileUpdate / fulfillment activation, FR-17 v2)
+  # is the correct APP access scope per Shopify's per-mutation docs ("Requires Any of shipping
+  # access scopes or manage_delivery_settings user permission") — manage_delivery_settings is
+  # a merchant STAFF user permission, not an app-installable scope, and does not belong here.
+  scopes: ${SHOPIFY_SCOPES:read_products,read_orders,read_fulfillments,read_customers,write_inventory,write_locations,write_shipping}
   redirect-uri: ${SHOPIFY_REDIRECT_URI:http://localhost:8080/auth/shopify/callback}
   app-url: ${SHOPIFY_APP_URL:http://localhost:5173}
   # Base URL for webhook callback registration (must be the backend server URL, not the SPA).
