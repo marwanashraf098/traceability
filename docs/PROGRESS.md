@@ -4,6 +4,67 @@
 
 ## Current state
 
+**FR-7/FR-11 order-status redesign, Part A1–A2 shipped (2026-08-05) — one derived headline
+replaces the two contradicting pipeline/shipment pills.** Full build spec:
+`docs/order-status-redesign-build-spec.md`. A0 (diagnose-only ground-truth pass) ran first
+and found the spec's assumed shipment-state vocabulary didn't match the DB: the real
+`shipment_internal_state` enum has only 9 values (`created, with_courier, delivered,
+returning, returned, lost, exception, terminated, cancelled`) — there is no
+`in_transit`/`out_for_delivery`/`preparing`/`return_in_transit`; Bosta's granular §8.3 codes
+collapse into this set before `internal_state` is ever written (e.g. "out for delivery" and
+"picked up" are both just `with_courier`). A1/A2 were built against the corrected vocabulary,
+not the original spec draft.
+
+- **`OrderStatusDeriver`** (`fulfillment/OrderStatusDeriver.java`) — new pure-function single
+  source of truth for display status, mirroring how `PICKABLE_ORDERS_FILTER` is shared.
+  progress_rank ladder: `created=1, with_courier=2, returning=3, exception=0`; terminal =
+  `{delivered,returned,lost,terminated,cancelled}`. Precedence: order.status==cancelled wins
+  outright (label only — the A3 conflict flag is a separate, not-yet-built step) → shipment
+  terminal → failed_delivery_attempts≥1 ("delivery failed") → latest==exception ("needs
+  attention") → furthest-progress label → pipeline label (full 13-value `order_status` map,
+  not the 3 the original spec sketched). Health chips are terminal-gated; historical notes
+  (`delivered · attempt N`, `returned · N failed attempts`) are terminal-only.
+- Filled 4 gaps the spec's A5 copy table didn't cover: `status.terminated`,
+  `status.needs_attention`, `status.self_pickup_pending`, `note.returned_after` — all EN+AR,
+  flagged for review rather than silently invented.
+- §8.4 NDR `exception_code` → chip mapping only covers the 3 codes with dedicated A5 copy
+  (1/3/8, plus return-side "postponed" synonyms 21/22); every other seeded code falls back to
+  a generic `chip.exception`, DANGER-toned for the 5 critical courier-evidence codes
+  (26–30: damaged/empty/incomplete/doesn't-belong/opened), WARN otherwise. Not full 1:1 §8.4
+  coverage — a deliberate simplification, not an oversight.
+- **`OrderController.list()`** — LATERAL extended with `number_of_attempts`, `exception_code`,
+  and a `max_progress_rank` correlated subquery (SQL CASE mirroring
+  `OrderStatusDeriver.PROGRESS_RANK`, COALESCEd against the shipment's own current
+  `internal_state` so pre-V40 shipments with zero `shipment_status_history` rows still rank
+  correctly — see that migration's backfill note). `not_traced_at` was already there.
+- **`OrderController.detail()`** — added a standalone query selecting the latest forward-leg
+  shipment (`shipment_leg='forward' ORDER BY id DESC LIMIT 1`, same shape as `list()`'s
+  LATERAL) rather than trusting `shipments[0]` — `shipments` is ordered by
+  `created_at DESC` per leg, which is a materially different (and UUID-non-monotonic-risk)
+  selection than `list()`'s `id DESC`. `OrderStatusListDetailParityTest` proves list and
+  detail can never derive a different `DerivedOrderStatus` for the same order.
+- Frontend: new `<OrderStatus>` component (`components/ui.tsx`) folds `DeliveryBadge`'s tone
+  tokens in; used by `Orders.tsx`'s list badge and `OrderDetail.tsx`'s header. Removed the
+  standalone pipeline STATUS pill and the shipment SHIPMENT pill (`ShipmentCard` is facts-only
+  now: tracking, provider, courier, scheduled, last-failure-reason). **Known gap, not
+  fixed this round**: the return-leg shipment card lost its own status indicator along with
+  the removal (the unified header only derives the *forward* shipment) — flagged for A3/A4
+  or a follow-up, not silently patched.
+- Tests: `OrderStatusDeriverTest` (23 pure-function cases covering the corrected divergence
+  matrix, terminal suppression, furthest-progress-not-latest, NDR chip fallback,
+  needs_attention, full 13-value pipeline map) + `OrderStatusListDetailParityTest`
+  (Testcontainers, production-shaped fixtures — regressed created-after-with_courier,
+  delivered+failed, cancelled+live shipment — plus RLS same-tenant positive / cross-tenant
+  negative control on the detail path). Full suite: 931 tests, 0 new failures; the only 2
+  failing tests (`MigrationSmokeTest`, `NotTracedBackfillTest`) are pre-existing stale
+  hardcoded migration-count assertions (V67 already existed before this session started),
+  confirmed via `git status` as untouched by this work. `RlsCoverageTest`: 19/19 green.
+- **Explicitly not built this round (per spec sequencing)**: A3 (cancelled-conflict flag),
+  A4 (timeline promote/collapse), Part B (the two cancellation-reconciliation exception
+  detectors). `cancelOrder` and the ingest path were not touched.
+
+---
+
 **FR-22.6 area follow-up — closed a real desync hole in `PieceAdjustService.adjustPiece()`
 (2026-08-04), found during the FR-22.9 pre-push review, approved and fixed same-day.**
 

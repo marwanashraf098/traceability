@@ -4,7 +4,7 @@ import { useTranslation } from 'react-i18next'
 import { listOrders, OrderPage, listShopifyStores, syncShopifyStore } from '../api'
 import {
   Badge, Button, DataTable, type DataTableColumn,
-  DeliveryBadge, EmptyState, TableSkeleton,
+  EmptyState, OrderStatus, TableSkeleton,
 } from '../components/ui'
 
 const ORDER_STATUSES = [
@@ -75,30 +75,15 @@ export default function Orders() {
   const rows  = data?.items ?? []
 
   // ── Status cell ───────────────────────────────────────────────────────────────
+  // FR-7/FR-11: single derived headline — no independent pipeline/delivery-state
+  // reads here. onHold is a separate order-level flag, not part of the shipment
+  // derivation, so it's still rendered alongside it.
   function renderStatus(order: OrderItem) {
     return (
       <div className="flex flex-wrap items-start gap-1.5">
-        {order.deliveryState ? (
-          <DeliveryBadge state={order.deliveryState} exceptionReason={order.exceptionReason} />
-        ) : order.bostaLinkStatus === 'not_created' ? (
-          <Badge tone="critical" label={t('delivery.state.not_created')} />
-        ) : (
-          <Badge
-            status={order.status}
-            label={t(`orders.pipeline.${order.status}`, { defaultValue: order.status.replace(/_/g, ' ') })}
-          />
-        )}
+        <OrderStatus derived={order.derivedStatus} />
         {order.onHold && (
           <Badge tone="critical" label={t('orderDetail.onHold')} />
-        )}
-        {order.failedDeliveryAttempts > 0 && (
-          <Badge tone="critical" label={t('orderDetail.failedAttempts', { count: order.failedDeliveryAttempts })} />
-        )}
-        {(order.isDelayed || order.slaBreached) && (
-          <Badge tone="warning" label={t('orderDetail.delayed')} />
-        )}
-        {order.notTracedAt && (
-          <Badge tone="neutral" label={t('orders.badge.notTraced')} />
         )}
       </div>
     )

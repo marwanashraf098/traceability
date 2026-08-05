@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { getOrder, OrderDetail as IOrderDetail, ShipmentDetail, AttemptEntry, DeliveryHistoryEntry, holdOrder, releaseOrderHold, updateOrderCod } from '../api'
-import { Alert, Badge, Button, DeliveryBadge, Modal, Skeleton } from '../components/ui'
+import { Alert, Badge, Button, DeliveryBadge, Modal, OrderStatus, Skeleton } from '../components/ui'
 
 export default function OrderDetail() {
   const { t } = useTranslation()
@@ -129,7 +129,7 @@ export default function OrderDetail() {
             <dl className="space-y-2">
               <div className="flex items-start gap-2">
                 <dt className="text-small text-muted w-24 shrink-0">{t('orderDetail.status')}</dt>
-                <dd><Badge status={order.status} /></dd>
+                <dd><OrderStatus derived={order.derivedStatus} /></dd>
               </div>
               {order.onHold && (
                 <div className="flex items-start gap-2 flex-wrap">
@@ -309,18 +309,9 @@ function ShipmentCard({ shipment }: { shipment: ShipmentDetail }) {
         {isReturn ? t('orderDetail.returnShipment') : t('orderDetail.shipment')}
       </h2>
 
-      {/* Delivery status — prominent */}
-      <div className="flex items-start gap-2">
-        <dt className="text-small text-muted w-24 shrink-0">{t('orderDetail.status')}</dt>
-        <dd>
-          <DeliveryBadge
-            state={shipment.internalState}
-            exceptionReason={shipment.exceptionReason}
-            shipmentLeg={shipment.shipmentLeg}
-          />
-        </dd>
-      </div>
-
+      {/* Facts only — the derived headline above is the single status source (A1/A2).
+          Return-leg shipments currently have no status indicator of their own here;
+          flagged as a follow-up, not built this round. */}
       <dl className="space-y-2">
         {/* Tracking number — font-mono */}
         <InfoRow label={t('orderDetail.tracking')} value={shipment.trackingNumber} mono />

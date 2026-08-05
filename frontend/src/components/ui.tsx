@@ -133,6 +133,60 @@ export function DeliveryBadge({
   )
 }
 
+// ── OrderStatus ─────────────────────────────────────────────────────────────────
+// FR-7/FR-11: the one derived headline (see OrderStatusDeriver on the backend).
+// Folds DeliveryBadge's tone tokens (TONE_STYLE) in — this replaces the old
+// independent pipeline-status / shipment-status pills, not a second badge next to them.
+
+const DERIVED_TONE_STYLE: Record<import('../api').DerivedTone, BadgeTone> = {
+  NEUTRAL: 'neutral',
+  INFO:    'info',
+  SUCCESS: 'success',
+  WARN:    'warning',
+  DANGER:  'critical',
+}
+
+export function OrderStatus({
+  derived,
+  className = '',
+}: {
+  derived: import('../api').DerivedOrderStatus
+  className?: string
+}) {
+  const { t } = useTranslation()
+
+  return (
+    <span className={cn('inline-flex flex-wrap items-center gap-1.5', className)}>
+      <span className={cn('badge border', TONE_STYLE[DERIVED_TONE_STYLE[derived.tone]])}>
+        {t(derived.primaryKey, { defaultValue: derived.primaryKey.replace(/^status\./, '').replace(/_/g, ' ') })}
+      </span>
+
+      {derived.healthChips.map((chip, i) => (
+        <span
+          key={i}
+          className={cn('badge border', TONE_STYLE[DERIVED_TONE_STYLE[chip.tone]])}
+        >
+          {chip.count != null
+            ? t(chip.key, { count: chip.count, defaultValue: `${chip.count}` })
+            : t(chip.key, { defaultValue: chip.key.replace(/^chip\./, '').replace(/_/g, ' ') })}
+        </span>
+      ))}
+
+      {derived.historicalNote && (
+        <span className="text-caption text-muted leading-tight">
+          {t(derived.historicalNote.key, { count: derived.historicalNote.count })}
+        </span>
+      )}
+
+      {derived.notTraced && (
+        <span className={cn('badge border', TONE_STYLE.neutral)}>
+          {t('tag.not_traced')}
+        </span>
+      )}
+    </span>
+  )
+}
+
 // ── SeverityBadge ─────────────────────────────────────────────────────────────
 
 const SEV_TONE: Record<string, BadgeTone> = {

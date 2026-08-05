@@ -60,7 +60,7 @@ One line per requirement · [M] Must / [S] Should / [C] Could · use as the buil
 
 ## FR-7 Orders & Confirmation
 - [x] 7.1 [M] Pipeline list + filters (incl. Self-Pickup Pending); search by number/name/phone/tracking
-- [x] 7.2 [M] Order detail: customer, lines, COD, status timeline, allocated pieces, shipment, audit
+- [x] 7.2 [M] Order detail: customer, lines, COD, status timeline, allocated pieces, shipment, audit [2026-08-05: FR-7/FR-11 A1–A2 — single derived `<OrderStatus>` headline (`OrderStatusDeriver`) replaces the old independent pipeline STATUS pill + shipment SHIPMENT pill; shipment card is facts-only now. A3 (cancelled-conflict flag) + A4 (timeline collapse) not yet built — see docs/order-status-redesign-build-spec.md]
 - [ ] 7.3 [M] Confirmation modes: Auto-flow (default — straight to Ready to Pick after gates) / Gated (button or tag); prepaid auto-confirm toggle
 - [x] 7.4 [M] Hold/unhold with reason; held orders leave queues
 - [x] 7.5 [M] COD prominent, editable until packing (logged); ≤ 30,000 EGP validation; frozen after AWB
@@ -106,7 +106,7 @@ One line per requirement · [M] Must / [S] Should / [C] Could · use as the buil
 
 ## FR-11 Shipment Lifecycle
 - [x] 11.1 [M] (state code, order type)-keyed mapping per verified table (§8.3) → order/piece/event updates [Day 6 complete]
-- [x] 11.2 [M] Terminal handling: 45→Delivered; 100→Lost+exception; 46→Return Pending + order Returned [webhook path done Day 6; exception alerts not yet built]
+- [x] 11.2 [M] Terminal handling: 45→Delivered; 100→Lost+exception; 46→Return Pending + order Returned [webhook path done Day 6; exception alerts not yet built] [2026-08-05: FR-11 A1–A2 — `OrderStatusDeriver` progress_rank ladder + terminal-gated health chips are now the single source of truth for list AND detail display, correcting the "latest-Bosta-state-wins" regression bug (e.g. a re-emitted early state after 3 failed attempts no longer overwrites "Delivery failed")]
 - [x] 11.3 [M] Attempts counter from numberOfAttempts; ≥2 fails → exception (configurable) [Day 33: high_attempts MEDIUM detector, number_of_attempts already stored from webhook]
 - [ ] 11.4 [M] No end-customer notifications (merchant-facing only)
 - [x] 11.5 [M] Stuck detector: no provider update 5d (configurable) → exception

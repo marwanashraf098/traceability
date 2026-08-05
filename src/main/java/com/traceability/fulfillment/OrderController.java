@@ -39,7 +39,7 @@ public class OrderController {
         Instant placedAt, String trackingNumber,
         String deliveryState, String exceptionReason, String bostaLinkStatus,
         int failedDeliveryAttempts, Boolean isDelayed, Boolean slaBreached,
-        Instant notTracedAt) {}
+        Instant notTracedAt, OrderStatusDeriver.DerivedOrderStatus derivedStatus) {}
 
     public record OrderPage(List<OrderSummary> items, int page, int size, long total) {}
 
@@ -75,7 +75,8 @@ public class OrderController {
         String status, boolean onHold, String holdReason,
         Instant placedAt, Instant createdAt,
         List<OrderItem> items, List<ShipmentDetail> shipments,
-        String bostaLinkStatus, Instant notTracedAt) {}
+        String bostaLinkStatus, Instant notTracedAt,
+        OrderStatusDeriver.DerivedOrderStatus derivedStatus) {}
 
     // ── daily order counts (dashboard chart) ────────────────────────────────
 
@@ -143,12 +144,35 @@ public class OrderController {
 
         // LATERAL picks the latest forward shipment per order (by id DESC) so re-shipped orders
         // (terminated + new active) don't produce duplicate rows or inflate COUNT(*).
+        //
+        // max_progress_rank mirrors OrderStatusDeriver.PROGRESS_RANK/maxProgressRank() —
+        // keep the two in sync manually; OrderStatusListDetailParityTest asserts they agree.
+        // COALESCE falls back to the shipment's own current internal_state when history is
+        // empty (pre-V40 shipments have zero shipment_status_history rows — see that
+        // migration's backfill note — so history-only MAX would silently misrank them).
         String baseJoin = """
             FROM orders o
             LEFT JOIN LATERAL (
-                SELECT tracking_number, internal_state, exception_reason,
-                       failed_delivery_attempts, is_delayed, sla_breached
-                FROM shipments
+                SELECT id, tracking_number, internal_state, exception_reason,
+                       failed_delivery_attempts, is_delayed, sla_breached,
+                       number_of_attempts, exception_code,
+                       COALESCE(
+                           (SELECT MAX(CASE h.internal_state
+                                       WHEN 'created'      THEN 1
+                                       WHEN 'with_courier'  THEN 2
+                                       WHEN 'returning'     THEN 3
+                                       WHEN 'exception'     THEN 0
+                                   END)
+                            FROM shipment_status_history h
+                            WHERE h.shipment_id = sh.id),
+                           CASE sh.internal_state
+                               WHEN 'created'      THEN 1
+                               WHEN 'with_courier'  THEN 2
+                               WHEN 'returning'     THEN 3
+                               WHEN 'exception'     THEN 0
+                           END
+                       ) AS max_progress_rank
+                FROM shipments sh
                 WHERE order_id = o.id AND tenant_id = o.tenant_id
                   AND shipment_leg = 'forward'
                 ORDER BY id DESC
@@ -172,6 +196,9 @@ public class OrderController {
                    s.exception_reason          AS exception_reason,
                    o.bosta_link_status,
                    COALESCE(s.failed_delivery_attempts, 0) AS failed_delivery_attempts,
+                   COALESCE(s.number_of_attempts, 0) AS number_of_attempts,
+                   s.exception_code,
+                   s.max_progress_rank,
                    s.is_delayed,
                    s.sla_breached,
                    o.not_traced_at
@@ -179,24 +206,39 @@ public class OrderController {
              ORDER BY o.placed_at DESC NULLS LAST, o.created_at DESC
              LIMIT ? OFFSET ?
             """,
-            (rs, i) -> new OrderSummary(
-                rs.getObject("id", UUID.class).toString(),
-                rs.getString("number"),
-                rs.getString("customer_name"),
-                rs.getString("customer_phone"),
-                rs.getString("status"),
-                rs.getBoolean("on_hold"),
-                rs.getBigDecimal("cod_amount"),
-                rs.getTimestamp("placed_at") != null ? rs.getTimestamp("placed_at").toInstant() : null,
-                rs.getString("tracking_number"),
-                rs.getString("delivery_state"),
-                rs.getString("exception_reason"),
-                rs.getString("bosta_link_status"),
-                rs.getInt("failed_delivery_attempts"),
-                rs.getObject("is_delayed", Boolean.class),
-                rs.getObject("sla_breached", Boolean.class),
-                rs.getTimestamp("not_traced_at") != null ? rs.getTimestamp("not_traced_at").toInstant() : null
-            ),
+            (rs, i) -> {
+                Instant notTracedAt = rs.getTimestamp("not_traced_at") != null
+                    ? rs.getTimestamp("not_traced_at").toInstant() : null;
+                var derived = OrderStatusDeriver.derive(
+                    rs.getString("status"),
+                    rs.getString("delivery_state"),
+                    rs.getObject("max_progress_rank", Integer.class),
+                    rs.getInt("number_of_attempts"),
+                    rs.getInt("failed_delivery_attempts"),
+                    rs.getObject("exception_code", Integer.class),
+                    rs.getObject("is_delayed", Boolean.class),
+                    rs.getObject("sla_breached", Boolean.class),
+                    notTracedAt != null);
+                return new OrderSummary(
+                    rs.getObject("id", UUID.class).toString(),
+                    rs.getString("number"),
+                    rs.getString("customer_name"),
+                    rs.getString("customer_phone"),
+                    rs.getString("status"),
+                    rs.getBoolean("on_hold"),
+                    rs.getBigDecimal("cod_amount"),
+                    rs.getTimestamp("placed_at") != null ? rs.getTimestamp("placed_at").toInstant() : null,
+                    rs.getString("tracking_number"),
+                    rs.getString("delivery_state"),
+                    rs.getString("exception_reason"),
+                    rs.getString("bosta_link_status"),
+                    rs.getInt("failed_delivery_attempts"),
+                    rs.getObject("is_delayed", Boolean.class),
+                    rs.getObject("sla_breached", Boolean.class),
+                    notTracedAt,
+                    derived
+                );
+            },
             pageParams.toArray()));
 
         return new OrderPage(items, page, size, total);
@@ -242,7 +284,8 @@ public class OrderController {
                         rs.getTimestamp("created_at").toInstant(),
                         null, null,  // items + shipments filled below
                         rs.getString("bosta_link_status"),
-                        rs.getTimestamp("not_traced_at") != null ? rs.getTimestamp("not_traced_at").toInstant() : null
+                        rs.getTimestamp("not_traced_at") != null ? rs.getTimestamp("not_traced_at").toInstant() : null,
+                        null  // derivedStatus filled below
                     );
                 }, orderId);
 
@@ -335,12 +378,70 @@ public class OrderController {
                         history);
                 }, orderId);
 
+            // Latest forward-leg shipment status inputs — deliberately a standalone query,
+            // NOT shipments.get(0). shipments is ordered by created_at DESC per leg, while
+            // list()'s LATERAL orders by id DESC; this mirrors list()'s exact ORDER BY id
+            // DESC LIMIT 1 so the two paths can never derive a different DerivedOrderStatus
+            // for the same order (see OrderStatusListDetailParityTest). The max_progress_rank
+            // CASE must stay in sync with OrderStatusDeriver.PROGRESS_RANK — same caveat as
+            // the LATERAL in list().
+            Map<String, Object> fwd = jdbc.query(
+                """
+                SELECT internal_state, failed_delivery_attempts, number_of_attempts,
+                       exception_code, is_delayed, sla_breached,
+                       COALESCE(
+                           (SELECT MAX(CASE h.internal_state
+                                       WHEN 'created'      THEN 1
+                                       WHEN 'with_courier'  THEN 2
+                                       WHEN 'returning'     THEN 3
+                                       WHEN 'exception'     THEN 0
+                                   END)
+                            FROM shipment_status_history h
+                            WHERE h.shipment_id = sh.id),
+                           CASE sh.internal_state
+                               WHEN 'created'      THEN 1
+                               WHEN 'with_courier'  THEN 2
+                               WHEN 'returning'     THEN 3
+                               WHEN 'exception'     THEN 0
+                           END
+                       ) AS max_progress_rank
+                FROM shipments sh
+                WHERE order_id = ?
+                  AND tenant_id = NULLIF(current_setting('app.current_tenant', true), '')::uuid
+                  AND shipment_leg = 'forward'
+                ORDER BY id DESC
+                LIMIT 1
+                """,
+                rs -> {
+                    if (!rs.next()) return null;
+                    Map<String, Object> m = new HashMap<>();
+                    m.put("internal_state", rs.getString("internal_state"));
+                    m.put("failed_delivery_attempts", rs.getInt("failed_delivery_attempts"));
+                    m.put("number_of_attempts", rs.getInt("number_of_attempts"));
+                    m.put("exception_code", rs.getObject("exception_code", Integer.class));
+                    m.put("is_delayed", rs.getObject("is_delayed", Boolean.class));
+                    m.put("sla_breached", rs.getObject("sla_breached", Boolean.class));
+                    m.put("max_progress_rank", rs.getObject("max_progress_rank", Integer.class));
+                    return m;
+                }, orderId);
+
+            OrderStatusDeriver.DerivedOrderStatus derived = OrderStatusDeriver.derive(
+                order.status(),
+                fwd != null ? (String) fwd.get("internal_state") : null,
+                fwd != null ? (Integer) fwd.get("max_progress_rank") : null,
+                fwd != null ? (Integer) fwd.get("number_of_attempts") : 0,
+                fwd != null ? (Integer) fwd.get("failed_delivery_attempts") : 0,
+                fwd != null ? (Integer) fwd.get("exception_code") : null,
+                fwd != null ? (Boolean) fwd.get("is_delayed") : null,
+                fwd != null ? (Boolean) fwd.get("sla_breached") : null,
+                order.notTracedAt() != null);
+
             return new OrderDetail(
                 order.id(), order.number(), order.customerName(), order.customerPhone(),
                 order.address(), order.paymentMethod(), order.codAmount(),
                 order.status(), order.onHold(), order.holdReason(),
                 order.placedAt(), order.createdAt(),
-                items, shipments, order.bostaLinkStatus(), order.notTracedAt());
+                items, shipments, order.bostaLinkStatus(), order.notTracedAt(), derived);
         });
     }
 

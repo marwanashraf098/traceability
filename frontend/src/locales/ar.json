@@ -1096,5 +1096,38 @@
       "closeConfirmButton": "تأكيد الإغلاق",
       "closedRedirect": "تم إغلاق عملية النقل"
     }
+  },
+  "status": {
+    "new": "جديد",
+    "confirmed": "مؤكد",
+    "ready_to_pick": "جاهز للتجهيز",
+    "picking": "جارٍ التجهيز",
+    "packed": "تم التغليف",
+    "awaiting_courier": "في انتظار مندوب الشحن",
+    "in_transit": "في الطريق",
+    "delivery_failed": "فشل التوصيل — إعادة المحاولة",
+    "delivered": "تم التوصيل",
+    "returning": "جاري الإرجاع",
+    "returned": "مرتجع",
+    "lost": "مفقود",
+    "terminated": "منتهي",
+    "cancelled": "ملغي",
+    "self_pickup_pending": "بانتظار استلام العميل",
+    "needs_attention": "يحتاج مراجعة"
+  },
+  "chip": {
+    "delayed": "متأخر",
+    "failed_attempts": "{{count}} محاولات فاشلة",
+    "customer_refused": "العميل رفض الاستلام",
+    "postponed": "تم التأجيل",
+    "not_at_address": "العميل غير متواجد بالعنوان",
+    "exception": "استثناء في التوصيل"
+  },
+  "note": {
+    "delivered_attempt": "تم التوصيل · المحاولة {{count}}",
+    "returned_after": "مرتجع · {{count}} محاولات فاشلة"
+  },
+  "tag": {
+    "not_traced": "تم التنفيذ خارج Traced"
   }
 }

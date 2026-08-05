@@ -73,6 +73,29 @@ export function login(email: string, password: string) {
   })
 }
 
+// FR-7/FR-11 — single derived headline (see OrderStatusDeriver on the backend).
+// tone mirrors the backend's Tone enum verbatim; keep in sync.
+export type DerivedTone = 'NEUTRAL' | 'INFO' | 'SUCCESS' | 'WARN' | 'DANGER'
+
+export interface DerivedStatusChip {
+  key: string
+  tone: DerivedTone
+  count: number | null
+}
+
+export interface DerivedHistoricalNote {
+  key: string
+  count: number
+}
+
+export interface DerivedOrderStatus {
+  primaryKey: string
+  tone: DerivedTone
+  healthChips: DerivedStatusChip[]
+  historicalNote: DerivedHistoricalNote | null
+  notTraced: boolean
+}
+
 export interface OrderSummary {
   id: string
   number: string
@@ -90,6 +113,7 @@ export interface OrderSummary {
   isDelayed: boolean | null
   slaBreached: boolean | null
   notTracedAt: string | null
+  derivedStatus: DerivedOrderStatus
 }
 
 export interface OrderPage {
@@ -169,6 +193,7 @@ export interface OrderDetail {
   shipments: ShipmentDetail[]
   bostaLinkStatus: string | null
   notTracedAt: string | null
+  derivedStatus: DerivedOrderStatus
 }
 
 export interface OrderListParams {

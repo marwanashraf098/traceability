@@ -1101,5 +1101,38 @@
       "closeConfirmButton": "Confirm Close",
       "closedRedirect": "Transfer closed"
     }
+  },
+  "status": {
+    "new": "New",
+    "confirmed": "Confirmed",
+    "ready_to_pick": "Ready to pick",
+    "picking": "Picking",
+    "packed": "Packed",
+    "awaiting_courier": "Awaiting courier",
+    "in_transit": "In transit",
+    "delivery_failed": "Delivery failed — retrying",
+    "delivered": "Delivered",
+    "returning": "Returning",
+    "returned": "Returned",
+    "lost": "Lost",
+    "terminated": "Terminated",
+    "cancelled": "Cancelled",
+    "self_pickup_pending": "Ready for pickup",
+    "needs_attention": "Needs attention"
+  },
+  "chip": {
+    "delayed": "Delayed",
+    "failed_attempts": "{{count}} failed attempts",
+    "customer_refused": "Customer refused",
+    "postponed": "Postponed",
+    "not_at_address": "Not at address",
+    "exception": "Delivery exception"
+  },
+  "note": {
+    "delivered_attempt": "Delivered · attempt {{count}}",
+    "returned_after": "Returned · {{count}} failed attempts"
+  },
+  "tag": {
+    "not_traced": "Fulfilled outside Traced"
   }
 }
