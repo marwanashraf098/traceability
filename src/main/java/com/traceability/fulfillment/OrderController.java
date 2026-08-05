@@ -67,7 +67,11 @@ public class OrderController {
         Instant scheduledAt, String courierName, String courierPhone,
         String lastFailureReason,
         List<AttemptEntry> attempts,
-        List<DeliveryHistoryEntry> deliveryHistory) {}
+        List<DeliveryHistoryEntry> deliveryHistory,
+        // A3.1 — leg-scoped badge from this shipment's OWN internal_state only (no
+        // order-level precedence). The frontend renders it for the return leg ONLY; the
+        // forward leg's status lives solely in the order header (deriveOrderStatus).
+        OrderStatusDeriver.LegStatus legStatus) {}
 
     public record OrderDetail(
         String id, String number, String customerName, String customerPhone,
@@ -357,11 +361,13 @@ public class OrderController {
                     Instant scheduledAt = rs.getTimestamp("scheduled_at") != null
                         ? rs.getTimestamp("scheduled_at").toInstant() : null;
 
+                    String internalState = rs.getString("internal_state");
+
                     return new ShipmentDetail(
                         shipmentId.toString(),
                         rs.getString("tracking_number"),
                         rs.getString("provider"),
-                        rs.getString("internal_state"),
+                        internalState,
                         rs.getString("shipment_leg"),
                         rs.getInt("number_of_attempts"),
                         rs.getInt("failed_delivery_attempts"),
@@ -375,7 +381,8 @@ public class OrderController {
                         rs.getString("courier_phone"),
                         rs.getString("last_failure_reason"),
                         attempts,
-                        history);
+                        history,
+                        OrderStatusDeriver.deriveLegStatus(internalState));
                 }, orderId);
 
             // Latest forward-leg shipment status inputs — deliberately a standalone query,

@@ -175,6 +175,10 @@ export interface ShipmentDetail {
   lastFailureReason: string | null
   attempts: AttemptEntry[]
   deliveryHistory: DeliveryHistoryEntry[]
+  // A3.1 — leg-scoped badge from this shipment's OWN internal_state only (no order-level
+  // precedence). Render for the return leg ONLY; the forward leg's status lives solely in
+  // the order header (OrderStatus / derivedStatus).
+  legStatus: { primaryKey: string; tone: DerivedTone }
 }
 
 export interface OrderDetail {

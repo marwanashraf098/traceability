@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { getOrder, OrderDetail as IOrderDetail, ShipmentDetail, AttemptEntry, DeliveryHistoryEntry, holdOrder, releaseOrderHold, updateOrderCod } from '../api'
-import { Alert, Badge, Button, DeliveryBadge, Modal, OrderStatus, Skeleton } from '../components/ui'
+import { Alert, Badge, Button, DeliveryBadge, LegStatusBadge, Modal, OrderStatus, Skeleton } from '../components/ui'
 
 export default function OrderDetail() {
   const { t } = useTranslation()
@@ -305,13 +305,16 @@ function ShipmentCard({ shipment }: { shipment: ShipmentDetail }) {
 
   return (
     <section className="card p-4 space-y-3">
-      <h2 className="text-caption text-muted uppercase tracking-widest">
-        {isReturn ? t('orderDetail.returnShipment') : t('orderDetail.shipment')}
-      </h2>
+      <div className="flex items-center justify-between gap-2">
+        <h2 className="text-caption text-muted uppercase tracking-widest">
+          {isReturn ? t('orderDetail.returnShipment') : t('orderDetail.shipment')}
+        </h2>
+        {/* A3.1: leg-scoped badge, return leg ONLY — the forward leg's status lives
+            solely in the order header above (never re-add a raw state badge here). */}
+        {isReturn && <LegStatusBadge legStatus={shipment.legStatus} />}
+      </div>
 
-      {/* Facts only — the derived headline above is the single status source (A1/A2).
-          Return-leg shipments currently have no status indicator of their own here;
-          flagged as a follow-up, not built this round. */}
+      {/* Facts only — the derived headline above is the single status source (A1/A2). */}
       <dl className="space-y-2">
         {/* Tracking number — font-mono */}
         <InfoRow label={t('orderDetail.tracking')} value={shipment.trackingNumber} mono />

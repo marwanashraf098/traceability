@@ -169,6 +169,55 @@ public final class OrderStatusDeriver {
 
     private static final Set<Integer> NDR_CRITICAL_CODES = Set.of(26, 27, 28, 29, 30);
 
+    // ── A3.1: leg-scoped shipment status (no order-level precedence) ───────────
+    // For a SINGLE shipment leg's own current internal_state — used by the return-leg
+    // ShipmentCard, which has no order.status/cancelled/conflict concept of its own (that's
+    // order-scoped, decided by derive() for the forward leg only). Deliberately NOT reused
+    // for the forward leg — the header owns forward status; adding this here too would
+    // recreate the exact two-pills contradiction A1 was built to kill.
+    //
+    // Values mirror derive()'s per-state branches one-for-one (terminal labels = TERMINAL_KEY/
+    // TERMINAL_TONE; created/with_courier/returning = PROGRESS_KEY/PROGRESS_TONE at that
+    // state's own rank; exception = the same "status.needs_attention"/WARN derive() uses) —
+    // OrderStatusDeriverTest asserts leg status never disagrees with what derive() would
+    // produce for an equivalent non-cancelled, no-failed-attempts, unregressed shipment.
+    private static final Map<String, String> LEG_KEY = Map.of(
+        "created",      "status.awaiting_courier",
+        "with_courier", "status.in_transit",
+        "returning",    "status.returning",
+        "exception",    "status.needs_attention",
+        "delivered",    "status.delivered",
+        "returned",     "status.returned",
+        "lost",         "status.lost",
+        "terminated",   "status.terminated",
+        "cancelled",    "status.cancelled"
+    );
+
+    private static final Map<String, Tone> LEG_TONE = Map.of(
+        "created",      Tone.INFO,
+        "with_courier", Tone.INFO,
+        "returning",    Tone.WARN,
+        "exception",    Tone.WARN,
+        "delivered",    Tone.SUCCESS,
+        "returned",     Tone.WARN,
+        "lost",         Tone.DANGER,
+        "terminated",   Tone.DANGER,
+        "cancelled",    Tone.WARN
+    );
+
+    public record LegStatus(String primaryKey, Tone tone) {}
+
+    /**
+     * A3.1 — leg-scoped badge for a shipment leg's own internal_state. No order-level
+     * precedence (no cancelled/conflict/pipeline branches, no health chips, no historical
+     * notes) — those concepts belong to the order-level headline computed by {@link #derive}.
+     */
+    public static LegStatus deriveLegStatus(String internalState) {
+        String key  = LEG_KEY.getOrDefault(internalState, "status.awaiting_courier");
+        Tone   tone = LEG_TONE.getOrDefault(internalState, Tone.INFO);
+        return new LegStatus(key, tone);
+    }
+
     // ── the derivation ───────────────────────────────────────────────────────
 
     public static DerivedOrderStatus derive(

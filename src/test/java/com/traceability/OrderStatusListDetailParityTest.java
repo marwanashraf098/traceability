@@ -4,7 +4,9 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.traceability.fulfillment.OrderController;
 import com.traceability.fulfillment.OrderController.OrderDetail;
 import com.traceability.fulfillment.OrderController.OrderSummary;
+import com.traceability.fulfillment.OrderController.ShipmentDetail;
 import com.traceability.fulfillment.OrderStatusDeriver.DerivedOrderStatus;
+import com.traceability.fulfillment.OrderStatusDeriver.Tone;
 import com.traceability.tenancy.TenantAwareDataSource;
 import com.traceability.tenancy.TenantContext;
 import org.junit.jupiter.api.*;
@@ -121,6 +123,14 @@ class OrderStatusListDetailParityTest {
             UUID.class, tenantId, orderId, tracking, state, numberOfAttempts, failedDeliveryAttempts);
     }
 
+    private UUID insertReturnShipment(UUID orderId, String tracking, String state) {
+        return jdbc.queryForObject(
+            "INSERT INTO shipments (tenant_id, order_id, provider, tracking_number, " +
+            "    internal_state, shipment_leg) " +
+            "VALUES (?, ?, 'bosta', ?, ?::shipment_internal_state, 'return') RETURNING id",
+            UUID.class, tenantId, orderId, tracking, state);
+    }
+
     private void insertHistory(UUID shipmentId, String state) {
         jdbc.update(
             "INSERT INTO shipment_status_history (tenant_id, shipment_id, internal_state) " +
@@ -208,6 +218,64 @@ class OrderStatusListDetailParityTest {
         assertThat(detailDerived.healthChips()).isEmpty();
 
         assertParity(orderId);
+    }
+
+    // ── A3.1: return-leg leg-scoped badge, through the real DB-wired path ──────
+
+    @Test
+    void a31_returnLeg_returning_getsCorrectLegBadge_headerUnaffected() {
+        UUID orderId = insertOrder("A31-RETURN-RETURNING", "returning");
+        insertForwardShipment(orderId, "9810234581", "returned", 0, 0);
+        insertReturnShipment(orderId, "9810234582", "returning");
+
+        OrderDetail detail = controller.detail(orderId);
+        ShipmentDetail returnLeg = detail.shipments().stream()
+            .filter(s -> "return".equals(s.shipmentLeg())).findFirst().orElseThrow();
+        assertThat(returnLeg.legStatus().primaryKey()).isEqualTo("status.returning");
+        assertThat(returnLeg.legStatus().tone()).isEqualTo(Tone.WARN);
+
+        // Header is driven by the FORWARD leg only — the return leg's state must not
+        // leak into the order-level derivation.
+        assertThat(detail.derivedStatus().primaryKey()).isEqualTo("status.returned");
+        assertParity(orderId);
+    }
+
+    @Test
+    void a31_returnLeg_returned_getsCorrectLegBadge() {
+        UUID orderId = insertOrder("A31-RETURN-RETURNED", "returned");
+        insertForwardShipment(orderId, "9810234583", "returned", 0, 0);
+        insertReturnShipment(orderId, "9810234584", "returned");
+
+        ShipmentDetail returnLeg = controller.detail(orderId).shipments().stream()
+            .filter(s -> "return".equals(s.shipmentLeg())).findFirst().orElseThrow();
+        assertThat(returnLeg.legStatus().primaryKey()).isEqualTo("status.returned");
+        assertThat(returnLeg.legStatus().tone()).isEqualTo(Tone.WARN);
+    }
+
+    @Test
+    void a31_returnLeg_exception_getsCorrectLegBadge() {
+        UUID orderId = insertOrder("A31-RETURN-EXCEPTION", "returning");
+        insertForwardShipment(orderId, "9810234585", "returning", 0, 0);
+        insertReturnShipment(orderId, "9810234586", "exception");
+
+        ShipmentDetail returnLeg = controller.detail(orderId).shipments().stream()
+            .filter(s -> "return".equals(s.shipmentLeg())).findFirst().orElseThrow();
+        assertThat(returnLeg.legStatus().primaryKey()).isEqualTo("status.needs_attention");
+        assertThat(returnLeg.legStatus().tone()).isEqualTo(Tone.WARN);
+    }
+
+    @Test
+    void a31_forwardLeg_carriesLegStatus_butOrderHeaderIsWhatUltimatelyRenders() {
+        // The backend computes legStatus uniformly for every shipment row (cheap, pure) —
+        // it's the FRONTEND that gates rendering to the return leg only. This test just
+        // confirms the forward leg's own legStatus is internally consistent with its state,
+        // not that the API omits it (it doesn't need to — no UI ever renders it for forward).
+        UUID orderId = insertOrder("A31-FORWARD-CONSISTENCY", "awaiting_pickup");
+        insertForwardShipment(orderId, "9810234587", "with_courier", 0, 0);
+
+        ShipmentDetail forwardLeg = controller.detail(orderId).shipments().get(0);
+        assertThat(forwardLeg.shipmentLeg()).isEqualTo("forward");
+        assertThat(forwardLeg.legStatus().primaryKey()).isEqualTo("status.in_transit");
     }
 
     private void assertParity(UUID orderId) {

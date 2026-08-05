@@ -195,6 +195,28 @@ export function OrderStatus({
   )
 }
 
+// ── LegStatusBadge ────────────────────────────────────────────────────────────
+// A3.1: a SINGLE shipment leg's own status — no order-level precedence (no cancelled/
+// conflict/chips/notes, those are order-scoped). Backend computes the label from that
+// shipment's internal_state alone (OrderStatusDeriver.deriveLegStatus) — this component
+// only renders it. Used by the return-leg ShipmentCard; never the forward leg, whose
+// status lives solely in the OrderStatus header above.
+
+export function LegStatusBadge({
+  legStatus,
+  className = '',
+}: {
+  legStatus: { primaryKey: string; tone: import('../api').DerivedTone }
+  className?: string
+}) {
+  const { t } = useTranslation()
+  return (
+    <span className={cn('badge border', TONE_STYLE[DERIVED_TONE_STYLE[legStatus.tone]], className)}>
+      {t(legStatus.primaryKey, { defaultValue: legStatus.primaryKey.replace(/^status\./, '').replace(/_/g, ' ') })}
+    </span>
+  )
+}
+
 // ── SeverityBadge ─────────────────────────────────────────────────────────────
 
 const SEV_TONE: Record<string, BadgeTone> = {

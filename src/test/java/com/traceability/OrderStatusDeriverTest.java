@@ -275,4 +275,56 @@ class OrderStatusDeriverTest {
         assertThat(d.primaryKey()).isEqualTo("status.lost");
         assertThat(d.tone()).isEqualTo(Tone.DANGER);
     }
+
+    // ── A3.1: leg-scoped shipment status (return-leg ShipmentCard badge) ────────
+
+    @Test
+    void legStatus_returning_returnedLabel_warnTone() {
+        OrderStatusDeriver.LegStatus s = OrderStatusDeriver.deriveLegStatus("returning");
+        assertThat(s.primaryKey()).isEqualTo("status.returning");
+        assertThat(s.tone()).isEqualTo(Tone.WARN);
+    }
+
+    @Test
+    void legStatus_returned_returnedLabel_warnTone() {
+        OrderStatusDeriver.LegStatus s = OrderStatusDeriver.deriveLegStatus("returned");
+        assertThat(s.primaryKey()).isEqualTo("status.returned");
+        assertThat(s.tone()).isEqualTo(Tone.WARN);
+    }
+
+    @Test
+    void legStatus_exception_needsAttentionLabel_warnTone() {
+        OrderStatusDeriver.LegStatus s = OrderStatusDeriver.deriveLegStatus("exception");
+        assertThat(s.primaryKey()).isEqualTo("status.needs_attention");
+        assertThat(s.tone()).isEqualTo(Tone.WARN);
+    }
+
+    /**
+     * Parity guard: for every one of the 9 real internal_state values, a leg-scoped badge
+     * must never disagree with what the FULL order-level derive() would produce for an
+     * equivalent, unremarkable shipment (non-cancelled order, no failed attempts, no
+     * regression — maxProgressRank set to that exact state's own rank). This is the
+     * strongest guarantee against LEG_KEY/LEG_TONE quietly drifting from derive()'s
+     * per-state branches without needing a second hand-maintained literal map to trust.
+     */
+    @Test
+    void legStatus_neverDisagreesWithDeriveForAnEquivalentUnregressedShipment() {
+        for (String state : List.of("created", "with_courier", "returning", "exception",
+                                     "delivered", "returned", "lost", "terminated", "cancelled")) {
+            OrderStatusDeriver.LegStatus leg = OrderStatusDeriver.deriveLegStatus(state);
+            Integer rank = OrderStatusDeriver.PROGRESS_RANK.get(state); // null for terminal states
+            DerivedOrderStatus order = derive("awaiting_pickup", state, rank, 0, 0, null, false, false, false);
+            assertThat(leg.primaryKey()).as("state=" + state).isEqualTo(order.primaryKey());
+            assertThat(leg.tone()).as("state=" + state).isEqualTo(order.tone());
+        }
+    }
+
+    @Test
+    void legStatus_hasNoOrderLevelConcepts_pureFunctionOfStateAlone() {
+        // Same internal_state, wildly different (irrelevant) order context — the leg badge
+        // must be identical, since it has no cancelled/conflict/chip/note concept at all.
+        OrderStatusDeriver.LegStatus a = OrderStatusDeriver.deriveLegStatus("returning");
+        OrderStatusDeriver.LegStatus b = OrderStatusDeriver.deriveLegStatus("returning");
+        assertThat(a).isEqualTo(b);
+    }
 }

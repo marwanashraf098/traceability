@@ -4,6 +4,43 @@
 
 ## Current state
 
+**FR-7/FR-11 order-status redesign, A3.1 reversed and built (2026-08-05, later the same day)
+— return-leg ShipmentCard now shows a leg-scoped status badge.** Same build spec, same
+`OrderStatusDeriver` (no second derivation path). Supersedes the "RTO-only default, skipped"
+note below — CRP return-leg shipments are real, active production code
+(`ShipmentLinkService.isCrpDelivery()`), so this was worth building instead of deferring.
+
+- **`OrderStatusDeriver.deriveLegStatus(internalState)`** (new) — a small pure function for a
+  SINGLE shipment leg's own status, no order-level precedence at all (no cancelled/conflict/
+  chips/notes — those are order-scoped concepts decided by `derive()` for the forward leg
+  only). New `LEG_KEY`/`LEG_TONE` maps cover all 9 real `internal_state` values: the 3
+  progress states reuse the same key/tone `derive()` would pick at that state's own rank
+  (`created`→`status.awaiting_courier`, `with_courier`→`status.in_transit`,
+  `returning`→`status.returning`), the 5 terminal states reuse `TERMINAL_KEY`/`TERMINAL_TONE`
+  verbatim, and `exception`→`status.needs_attention` matches `derive()`'s own exception
+  branch. A dedicated parity test (`legStatus_neverDisagreesWithDeriveForAnEquivalentUnregressedShipment`)
+  asserts leg status can never quietly drift from what `derive()` would produce for an
+  equivalent, unregressed shipment — the strongest guarantee without collapsing the two
+  functions into one (they have genuinely different inputs/scope).
+- **`OrderController.detail()`** — `ShipmentDetail` gained a `legStatus` field, computed for
+  every shipment row (both legs — cheap, pure, no extra query). Backend does NOT gate it to
+  return-only; that's a frontend rendering decision, not a data-shape one.
+- Frontend: new `<LegStatusBadge>` (`ui.tsx`), rendered by `ShipmentCard` for the return leg
+  ONLY — `{isReturn && <LegStatusBadge legStatus={shipment.legStatus} />}`. The forward leg
+  never gets a raw-state badge; its status lives solely in the `<OrderStatus>` header.
+- Tests: 5 new `OrderStatusDeriverTest` cases (33 total, incl. the parity guard); 4 new
+  `OrderStatusListDetailParityTest` cases (12 total) proving return-leg badges through the
+  real DB-wired path AND that the order header stays driven by the forward leg only when a
+  return leg is present; new `orderDetailLegStatus.test.tsx` (4 vitest render tests) proving
+  the return card shows the leg badge and the forward card never does, even when the forward
+  shipment's own state would map to a real label ("In transit" never renders for
+  forward-only or forward+return fixtures). Backend suite: 948 tests, same 2 pre-existing
+  failures. `RlsCoverageTest`: 19/19. Frontend: 76 tests, same 3 pre-existing failures.
+- Still not built: a dedicated return-leg *timeline* (A4 explicitly kept the return leg on
+  raw/ungrouped history, unchanged); Part B.
+
+---
+
 **FR-7/FR-11 order-status redesign, Part A3/A3.1/A4 shipped (2026-08-05) — cancelled-conflict
 flag + collapsed timeline, built on the A1/A2 `OrderStatusDeriver` from earlier the same day.**
 Same build spec: `docs/order-status-redesign-build-spec.md`. Reuses the single
