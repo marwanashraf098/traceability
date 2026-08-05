@@ -146,8 +146,10 @@ public class OrderController {
             params.add("%" + tracking.trim() + "%");
         }
 
-        // LATERAL picks the latest forward shipment per order (by id DESC) so re-shipped orders
-        // (terminated + new active) don't produce duplicate rows or inflate COUNT(*).
+        // LATERAL picks the latest forward shipment per order (by created_at, id DESC as
+        // tiebreak) so re-shipped orders (terminated + new active) don't produce duplicate
+        // rows or inflate COUNT(*).
+        // UUIDv4 is not time-ordered — order by created_at, never id.
         //
         // max_progress_rank mirrors OrderStatusDeriver.PROGRESS_RANK/maxProgressRank() —
         // keep the two in sync manually; OrderStatusListDetailParityTest asserts they agree.
@@ -179,7 +181,7 @@ public class OrderController {
                 FROM shipments sh
                 WHERE order_id = o.id AND tenant_id = o.tenant_id
                   AND shipment_leg = 'forward'
-                ORDER BY id DESC
+                ORDER BY created_at DESC, id DESC
                 LIMIT 1
             ) s ON true
             """ + where;
@@ -386,12 +388,13 @@ public class OrderController {
                 }, orderId);
 
             // Latest forward-leg shipment status inputs — deliberately a standalone query,
-            // NOT shipments.get(0). shipments is ordered by created_at DESC per leg, while
-            // list()'s LATERAL orders by id DESC; this mirrors list()'s exact ORDER BY id
-            // DESC LIMIT 1 so the two paths can never derive a different DerivedOrderStatus
-            // for the same order (see OrderStatusListDetailParityTest). The max_progress_rank
-            // CASE must stay in sync with OrderStatusDeriver.PROGRESS_RANK — same caveat as
-            // the LATERAL in list().
+            // NOT shipments.get(0) (that list is ordered by created_at DESC per LEG, i.e.
+            // forward vs return, not "latest overall" within a leg the way this needs).
+            // Mirrors list()'s LATERAL exactly — same ORDER BY created_at DESC, id DESC —
+            // so the two paths can never derive a different DerivedOrderStatus for the same
+            // order (see OrderStatusListDetailParityTest). UUIDv4 is not time-ordered —
+            // order by created_at, never id. The max_progress_rank CASE must stay in sync
+            // with OrderStatusDeriver.PROGRESS_RANK — same caveat as the LATERAL in list().
             Map<String, Object> fwd = jdbc.query(
                 """
                 SELECT internal_state, failed_delivery_attempts, number_of_attempts,
@@ -416,7 +419,7 @@ public class OrderController {
                 WHERE order_id = ?
                   AND tenant_id = NULLIF(current_setting('app.current_tenant', true), '')::uuid
                   AND shipment_leg = 'forward'
-                ORDER BY id DESC
+                ORDER BY created_at DESC, id DESC
                 LIMIT 1
                 """,
                 rs -> {

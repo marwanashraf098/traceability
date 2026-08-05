@@ -370,8 +370,8 @@ public class ExceptionService {
     }
 
     /**
-     * B1 — order.status='cancelled' but the latest FORWARD shipment (by id DESC, same
-     * "latest" convention as OrderController.list()'s LATERAL / NotTracedTagger) is still
+     * B1 — order.status='cancelled' but the latest FORWARD shipment (by created_at DESC,
+     * id DESC as tiebreak — UUIDv4 is not time-ordered, never order by id alone) is still
      * non-terminal: created/with_courier/returning/exception. The AWB is still live at
      * Bosta and the courier can still collect it even though the order is dead in Traced
      * (and/or Shopify) — Shopify cancel ≠ Bosta cancel.
@@ -401,7 +401,8 @@ public class ExceptionService {
             "    SELECT id, tracking_number, internal_state, last_synced_at " +
             "    FROM shipments " +
             "    WHERE order_id = o.id AND tenant_id = o.tenant_id AND shipment_leg = 'forward' " +
-            "    ORDER BY id DESC " +
+            // UUIDv4 is not time-ordered — order by created_at, never id.
+            "    ORDER BY created_at DESC, id DESC " +
             "    LIMIT 1 " +
             ") s ON true " +
             "WHERE o.tenant_id = ? " +
@@ -435,7 +436,8 @@ public class ExceptionService {
             "    SELECT id, tracking_number, internal_state, last_synced_at " +
             "    FROM shipments " +
             "    WHERE order_id = o.id AND tenant_id = o.tenant_id AND shipment_leg = 'forward' " +
-            "    ORDER BY id DESC " +
+            // UUIDv4 is not time-ordered — order by created_at, never id.
+            "    ORDER BY created_at DESC, id DESC " +
             "    LIMIT 1 " +
             ") s ON true " +
             "WHERE o.tenant_id = ? " +

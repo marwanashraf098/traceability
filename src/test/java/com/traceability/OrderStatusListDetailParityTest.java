@@ -151,6 +151,30 @@ class OrderStatusListDetailParityTest {
     }
 
     @Test
+    void parity_regressedHistory_zeroFailedAttempts_maxRankDrivesPrimaryKey_listAndDetailAgree() {
+        // Unlike parity_regressedCreatedAfterWithCourier_listAndDetailAgree above (which
+        // has failed_delivery_attempts=3 and short-circuits derive() BEFORE
+        // maxProgressRank is ever consulted for primaryKey), this fixture has
+        // failedDeliveryAttempts=0 so primaryKey genuinely flows through the
+        // furthest-progress branch — the one place list()'s SQL CASE and detail()'s Java
+        // reducer could silently diverge without any other branch masking it.
+        UUID orderId = insertOrder("PARITY-REGRESSED-NOFAIL", "awaiting_pickup");
+        UUID shipmentId = insertForwardShipment(orderId, "9810234565", "created", 0, 0);
+        insertHistory(shipmentId, "created");
+        insertHistory(shipmentId, "with_courier");
+        insertHistory(shipmentId, "created"); // regressed, no failed attempts to mask it
+
+        assertParity(orderId);
+
+        // Not just agreement — agreement on the CORRECT answer. Two paths silently computing
+        // the same wrong maxRank would still pass assertParity alone.
+        OrderDetail detail = controller.detail(orderId);
+        assertThat(detail.derivedStatus().primaryKey())
+            .as("maxRank=2 (from history's with_courier row) must win over the regressed 'created' latest state")
+            .isEqualTo("status.in_transit");
+    }
+
+    @Test
     void parity_deliveredPlusFailedAttempt_listAndDetailAgree() {
         UUID orderId = insertOrder("PARITY-DELIVERED-FAIL", "new");
         UUID shipmentId = insertForwardShipment(orderId, "9810234562", "delivered", 2, 1);
