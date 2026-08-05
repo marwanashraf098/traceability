@@ -8,6 +8,7 @@ import {
   Loader2, Plus,
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
+import { Link } from 'react-router-dom'
 
 // ── Utility ───────────────────────────────────────────────────────────────────
 
@@ -146,6 +147,16 @@ const DERIVED_TONE_STYLE: Record<import('../api').DerivedTone, BadgeTone> = {
   DANGER:  'critical',
 }
 
+// B1: OrderStatusDeriver.computeConflictKey() and ExceptionService's two cancellation
+// detectors read the exact same predicate (order.status='cancelled' + the latest forward
+// shipment's internal_state) — so whenever conflictKey is set, the matching exception is
+// guaranteed to exist. Maps the display key to the exception `type` Exceptions.tsx filters
+// on (?type=), not a second copy of the detection logic.
+const CONFLICT_EXCEPTION_TYPE: Record<string, string> = {
+  'status.conflict.live_shipment':          'cancelled_live_shipment',
+  'status.conflict.cancelled_but_delivered': 'cancelled_but_delivered',
+}
+
 export function OrderStatus({
   derived,
   className = '',
@@ -161,12 +172,15 @@ export function OrderStatus({
         {t(derived.primaryKey, { defaultValue: derived.primaryKey.replace(/^status\./, '').replace(/_/g, ' ') })}
       </span>
 
-      {/* A3: cancelled-order conflict flag — always DANGER-toned. May one day link to a
-          Part-B exception entry; renders regardless of whether that exception exists yet. */}
+      {/* A3/B2: cancelled-order conflict flag — always DANGER-toned, links to the matching
+          Part-B exception (filtered exception-queue view). */}
       {derived.conflictKey && (
-        <span className={cn('badge border', TONE_STYLE.critical)}>
+        <Link
+          to={`/exceptions?type=${CONFLICT_EXCEPTION_TYPE[derived.conflictKey] ?? ''}`}
+          className={cn('badge border', TONE_STYLE.critical, 'hover:opacity-80 transition-opacity')}
+        >
           {t(derived.conflictKey, { defaultValue: derived.conflictKey.replace(/^status\.conflict\./, '').replace(/_/g, ' ') })}
-        </span>
+        </Link>
       )}
 
       {derived.healthChips.map((chip, i) => (

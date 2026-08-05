@@ -1134,5 +1134,9 @@
   },
   "tag": {
     "not_traced": "تم التنفيذ خارج Traced"
+  },
+  "exc": {
+    "cancelled_live_shipment": "طلب ملغي وشحنة ما زالت نشطة",
+    "cancelled_but_delivered": "ملغي لكن تم توصيله — للمراجعة"
   }
 }

@@ -98,6 +98,9 @@ class ExceptionRlsTest {
     @AfterEach  void clear() {
         TenantContext.clear();
         jdbc.update("DELETE FROM exception_resolutions WHERE tenant_id = ?", tenantId);
+        // B1 tests insert shipments — must clear before orders (FK) or later tests' cleanup
+        // fails with a leftover-row FK violation.
+        jdbc.update("DELETE FROM shipments WHERE tenant_id = ?", tenantId);
         jdbc.update("DELETE FROM orders WHERE tenant_id = ?", tenantId);
     }
 
@@ -119,7 +122,7 @@ class ExceptionRlsTest {
 
     /**
      * (b) Tenant has a blocked order — blocked_customer exception surfaces via app_user RLS.
-     * Proves all 15 detector queries run correctly under app_user without privilege errors.
+     * Proves all 17 detector queries run correctly under app_user without privilege errors.
      */
     @Test
     void b_blockedOrder_surfacesViaAppUser() {
@@ -136,5 +139,86 @@ class ExceptionRlsTest {
         @SuppressWarnings("unchecked")
         List<Map<String, Object>> items = (List<Map<String, Object>>) result.get("items");
         assertThat(items).anyMatch(e -> "blocked_customer".equals(e.get("type")));
+    }
+
+    /**
+     * (c)/(d) — Part B detectors (cancelled_live_shipment, cancelled_but_delivered) under
+     * RLS: same-tenant positive control (app_user WITH the correct GUC sees its own
+     * tenant's exceptions) alongside a cross-tenant negative control (a second app_user
+     * ExceptionService instance running under a DIFFERENT tenant's GUC must see neither —
+     * RLS makes the rows invisible, not just filtered by an application-level WHERE).
+     */
+    @Test
+    void c_cancelledLiveShipment_and_cancelledButDelivered_sameTenantPositiveControl() {
+        UUID orderLive = jdbc.queryForObject(
+            "INSERT INTO orders (tenant_id, store_id, external_id, number, status, " +
+            "    payment_method, placed_at) " +
+            "VALUES (?, ?, 'RLS-B-LIVE', '#RLS-B-LIVE', 'cancelled'::order_status, 'cod', now()) " +
+            "RETURNING id", UUID.class, tenantId, storeId);
+        jdbc.update(
+            "INSERT INTO shipments (tenant_id, order_id, provider, tracking_number, " +
+            "    internal_state, shipment_leg) " +
+            "VALUES (?, ?, 'bosta', '9820099001', 'with_courier'::shipment_internal_state, 'forward')",
+            tenantId, orderLive);
+
+        UUID orderDelivered = jdbc.queryForObject(
+            "INSERT INTO orders (tenant_id, store_id, external_id, number, status, " +
+            "    payment_method, placed_at) " +
+            "VALUES (?, ?, 'RLS-B-DELIVERED', '#RLS-B-DELIVERED', 'cancelled'::order_status, 'cod', now()) " +
+            "RETURNING id", UUID.class, tenantId, storeId);
+        jdbc.update(
+            "INSERT INTO shipments (tenant_id, order_id, provider, tracking_number, " +
+            "    internal_state, shipment_leg) " +
+            "VALUES (?, ?, 'bosta', '9820099002', 'delivered'::shipment_internal_state, 'forward')",
+            tenantId, orderDelivered);
+
+        Map<String, Object> result = appUserTx.execute(txs ->
+                appUserExcSvc.listExceptions(null, null, 0, 50));
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> items = (List<Map<String, Object>>) result.get("items");
+
+        assertThat(items).anyMatch(e -> "cancelled_live_shipment".equals(e.get("type")));
+        assertThat(items).anyMatch(e -> "cancelled_but_delivered".equals(e.get("type")));
+    }
+
+    @Test
+    void d_cancelledLiveShipment_and_cancelledButDelivered_crossTenantNegativeControl() {
+        UUID otherTenantId = UUID.randomUUID();
+        UUID otherStoreId  = UUID.randomUUID();
+        jdbc.update("INSERT INTO tenants (id, name) VALUES (?, 'RlsOtherTenant')", otherTenantId);
+        jdbc.update("INSERT INTO stores (id, tenant_id, platform, shop_domain, status) " +
+                    "VALUES (?, ?, 'shopify', 'rls-other.myshopify.com', 'disconnected')",
+                    otherStoreId, otherTenantId);
+
+        UUID orderId = jdbc.queryForObject(
+            "INSERT INTO orders (tenant_id, store_id, external_id, number, status, " +
+            "    payment_method, placed_at) " +
+            "VALUES (?, ?, 'RLS-B-XT', '#RLS-B-XT', 'cancelled'::order_status, 'cod', now()) " +
+            "RETURNING id", UUID.class, tenantId, storeId);
+        jdbc.update(
+            "INSERT INTO shipments (tenant_id, order_id, provider, tracking_number, " +
+            "    internal_state, shipment_leg) " +
+            "VALUES (?, ?, 'bosta', '9820099003', 'created'::shipment_internal_state, 'forward')",
+            tenantId, orderId);
+
+        try {
+            // Second app_user ExceptionService instance, driven under a DIFFERENT tenant's
+            // TenantContext GUC — must see neither of this tenant's B1 exceptions.
+            TenantContext.set(otherTenantId);
+            Map<String, Object> result = appUserTx.execute(txs ->
+                    appUserExcSvc.listExceptions(null, null, 0, 50));
+            @SuppressWarnings("unchecked")
+            List<Map<String, Object>> items = (List<Map<String, Object>>) result.get("items");
+
+            assertThat(items).as("cross-tenant GUC must not see this tenant's cancelled_live_shipment")
+                .noneMatch(e -> "cancelled_live_shipment".equals(e.get("type")));
+            assertThat(items).as("cross-tenant GUC must not see this tenant's cancelled_but_delivered")
+                .noneMatch(e -> "cancelled_but_delivered".equals(e.get("type")));
+        } finally {
+            TenantContext.set(tenantId); // restore for @AfterEach cleanup, which filters by tenantId
+            jdbc.update("DELETE FROM orders WHERE tenant_id = ?", otherTenantId);
+            jdbc.update("DELETE FROM stores WHERE tenant_id = ?", otherTenantId);
+            jdbc.update("DELETE FROM tenants WHERE id = ?", otherTenantId);
+        }
     }
 }

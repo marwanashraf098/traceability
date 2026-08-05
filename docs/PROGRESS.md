@@ -4,6 +4,65 @@
 
 ## Current state
 
+**FR-13/FR-15.3 Part B shipped (2026-08-05) — two cancellation-reconciliation exception
+detectors, additive only.** Same build spec (`docs/order-status-redesign-build-spec.md`).
+Did not touch `cancelOrder`, the ingest path, or `OrderStatusDeriver` — Part B is pure
+detection on top of what A1–A3.1 already derive.
+
+- **`ExceptionService.detectCancelledWithLiveShipment()`** (`cancelled_live_shipment`, HIGH)
+  and **`detectCancelledButDelivered()`** (`cancelled_but_delivered`, HIGH) — both scoped to
+  the latest FORWARD shipment (`shipment_leg='forward' ORDER BY id DESC LIMIT 1`, a `JOIN
+  LATERAL`, same convention as `OrderController.list()`/`NotTracedTagger`). Live = latest
+  forward `internal_state` NOT IN the 5 terminal values (i.e. created/with_courier/
+  returning/exception); delivered = `internal_state='delivered'`. Self-resolving like
+  `detectGuidedUnpack` — no `exception_resolutions` row, the exception disappears the moment
+  a normal Bosta sync moves the shipment to a terminal state. `occurred_at` is a
+  path-agnostic `COALESCE(cancel_requested_at, shopify_cancel_requested_at, last_synced_at,
+  created_at)` — status='cancelled' alone never says which cancel path fired, and neither
+  the query nor the message assumes one.
+- Grouped with the existing `detectShopifyCancelVsInflight` in both the aggregation list and
+  `enrich()` (comment marks the trio) — mutually exclusive by construction
+  (`status='cancelled'` vs `status='awaiting_pickup'`), confirmed by a dedicated test, not
+  just asserted in a comment.
+- **B2**: the A3 conflict chip (`OrderStatus` in `ui.tsx`) is now a `<Link>` to
+  `/exceptions?type=<code>` — safe unconditionally because `conflictKey` and the two
+  detectors read the exact same predicate over the same data, so whenever the chip renders
+  the matching exception is guaranteed to exist (no extra existence check needed).
+  `Exceptions.tsx` gained `useSearchParams()` support to read `?type=` on mount and
+  pre-filter the queue — it had no URL-driven filtering before this. Added
+  `TYPE_LABELS` entries for both new codes (existing pattern: hardcoded EN/AR pairs, not
+  i18next — 6 *other* pre-existing detector types have the same gap, not touched). Also
+  added the literally-requested `exc.cancelled_live_shipment`/`exc.cancelled_but_delivered`
+  i18n keys to en.json/ar.json even though nothing currently reads them via `t()` — flagged
+  as a minor inconsistency with the established `TYPE_LABELS` pattern, not silently resolved
+  either way.
+- **Known pre-existing UX quirk, not fixed** (matches `guided_unpack`'s existing behavior):
+  the Exceptions page still shows a "Resolve" button for these two self-resolving types even
+  though clicking it is a no-op — the detector query never consults `exception_resolutions`,
+  so the row resurfaces on the next load regardless. Not introduced by Part B; inherited from
+  the same pattern `detectGuidedUnpack` already has.
+- **Confirmed empirically, not just noted**: `ORDER BY id DESC LIMIT 1` as a "latest
+  shipment" proxy is fragile — `gen_random_uuid()` is not chronologically ordered. My own
+  `j_onlyLatestForwardShipmentConsidered` test hit this directly (insertion-order fixture
+  failed non-deterministically) and had to be rewritten with explicit low/high UUID literals
+  to test the ordering deterministically. This is a pre-existing convention used everywhere
+  in the codebase (`OrderController.list()`, `NotTracedTagger`, `PICKABLE_ORDERS_FILTER`),
+  not something Part B introduced — flagged again since it's now proven, not hypothetical.
+- Tests: new `CancellationConflictDetectorsTest` (13 cases: both live-states, delivered,
+  4 "clean cancel" terminal states, no-shipment, non-cancelled order, mutual-exclusivity
+  with `shopify_cancel_vs_inflight`, latest-forward-shipment scoping). `ExceptionRlsTest`
+  gained 2 new cases (same-tenant positive control, cross-tenant negative control) — fixed
+  its `@AfterEach` along the way (it never deleted `shipments`, which only became a problem
+  once a test in that file started inserting them). Regression confirmed by RUNNING (not just
+  not-touching) `Day14Test`, `Day37Test`, `Fr9ManifestSelfPickupTest`, `ExceptionExtTest` —
+  all green. New frontend tests: `orderStatusConflictLink.test.tsx` (3 cases),
+  `exceptionsDeepLink.test.tsx` (2 cases). Backend: 963 tests, same 2 pre-existing unrelated
+  failures. `RlsCoverageTest`: 19/19. Frontend: 81 tests, same 3 pre-existing failures.
+- Not built: Bosta `terminateDelivery` one-click resolve (item-28/§6.1 seam comment left in
+  `enrich()`'s `cancelled_live_shipment` case, as instructed).
+
+---
+
 **FR-7/FR-11 order-status redesign, A3.1 reversed and built (2026-08-05, later the same day)
 — return-leg ShipmentCard now shows a leg-scoped status badge.** Same build spec, same
 `OrderStatusDeriver` (no second derivation path). Supersedes the "RTO-only default, skipped"

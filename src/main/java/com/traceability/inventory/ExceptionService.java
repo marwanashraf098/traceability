@@ -12,12 +12,12 @@ import java.time.Instant;
 import java.util.*;
 
 /**
- * Exceptions center (FR-15.3): aggregates 8 exception detectors into one
+ * Exceptions center (FR-15.3): aggregates 17 exception detectors into one
  * prioritised list, sorted CRITICAL→HIGH→MEDIUM→LOW then oldest-first within
  * each severity tier.
  *
  * Aggregation: per-type queries run separately and merged in Java.
- * A single UNION would require all 8 queries to emit identical columns,
+ * A single UNION would require all 17 queries to emit identical columns,
  * and the stuck-shipment resolved_at>last_synced_at staleness check is
  * awkward to express generically. Per-type Java merge is readable,
  * independently testable, and trivially extensible.
@@ -73,7 +73,12 @@ public class ExceptionService {
         all.addAll(detectNdr(tenantId));
         all.addAll(detectGuidedUnpack(tenantId));
         all.addAll(detectMissingAwb(tenantId));
+        // Grouped: all three "cancel vs. still-in-flight" signals live together —
+        // shopify_cancel_vs_inflight (status=awaiting_pickup) is mutually exclusive with
+        // the two below (status=cancelled), so none of the three can double-fire.
         all.addAll(detectShopifyCancelVsInflight(tenantId));
+        all.addAll(detectCancelledWithLiveShipment(tenantId));
+        all.addAll(detectCancelledButDelivered(tenantId));
         all.addAll(detectMissingProviderId(tenantId));
         all.addAll(detectHighAttempts(tenantId));
         all.addAll(detectShopifyEditConflict(tenantId));
@@ -364,6 +369,81 @@ public class ExceptionService {
             tid);
     }
 
+    /**
+     * B1 — order.status='cancelled' but the latest FORWARD shipment (by id DESC, same
+     * "latest" convention as OrderController.list()'s LATERAL / NotTracedTagger) is still
+     * non-terminal: created/with_courier/returning/exception. The AWB is still live at
+     * Bosta and the courier can still collect it even though the order is dead in Traced
+     * (and/or Shopify) — Shopify cancel ≠ Bosta cancel.
+     *
+     * Self-resolving like detectGuidedUnpack — no exception_resolutions row: the exception
+     * disappears the moment the shipment syncs into a terminal state.
+     *
+     * status='cancelled' alone doesn't say which cancel path fired — cancel_requested_at
+     * (Traced-side cancelOrder()) vs shopify_cancel_requested_at (Shopify-side webhook).
+     * The risk (AWB still live) is identical either way, so occurred_at is a path-agnostic
+     * COALESCE and the message never assumes one path over the other.
+     *
+     * Mutually exclusive with detectShopifyCancelVsInflight on order.status ('cancelled'
+     * here vs 'awaiting_pickup' there) — cannot double-fire for the same order.
+     */
+    private List<Map<String, Object>> detectCancelledWithLiveShipment(UUID tid) {
+        return jdbc.queryForList(
+            "SELECT 'cancelled_live_shipment' AS type, 'HIGH' AS severity, 'order' AS subject_type, " +
+            "       o.id AS order_id, o.number AS order_number, " +
+            "       s.id AS shipment_id, s.tracking_number, " +
+            "       s.internal_state::text AS shipment_state, " +
+            "       COALESCE(o.cancel_requested_at, o.shopify_cancel_requested_at, " +
+            "                s.last_synced_at, o.created_at) AS occurred_at, " +
+            "       'cancelled_live_shipment:order:' || o.id AS subject_key " +
+            "FROM orders o " +
+            "JOIN LATERAL ( " +
+            "    SELECT id, tracking_number, internal_state, last_synced_at " +
+            "    FROM shipments " +
+            "    WHERE order_id = o.id AND tenant_id = o.tenant_id AND shipment_leg = 'forward' " +
+            "    ORDER BY id DESC " +
+            "    LIMIT 1 " +
+            ") s ON true " +
+            "WHERE o.tenant_id = ? " +
+            "  AND o.status = 'cancelled'::order_status " +
+            "  AND s.internal_state NOT IN ( " +
+            "      'delivered'::shipment_internal_state, " +
+            "      'returned'::shipment_internal_state, " +
+            "      'lost'::shipment_internal_state, " +
+            "      'terminated'::shipment_internal_state, " +
+            "      'cancelled'::shipment_internal_state) ",
+            tid);
+    }
+
+    /**
+     * B1 — order.status='cancelled' but the latest FORWARD shipment already reached
+     * 'delivered' — the courier delivered it despite the cancellation. Distinct code from
+     * {@link #detectCancelledWithLiveShipment} because the remediation is different
+     * (reconcile COD / arrange a return, not "cancel the AWB before it's collected").
+     * Self-resolving the same way — no exception_resolutions row.
+     */
+    private List<Map<String, Object>> detectCancelledButDelivered(UUID tid) {
+        return jdbc.queryForList(
+            "SELECT 'cancelled_but_delivered' AS type, 'HIGH' AS severity, 'order' AS subject_type, " +
+            "       o.id AS order_id, o.number AS order_number, " +
+            "       s.id AS shipment_id, s.tracking_number, " +
+            "       COALESCE(o.cancel_requested_at, o.shopify_cancel_requested_at, " +
+            "                s.last_synced_at, o.created_at) AS occurred_at, " +
+            "       'cancelled_but_delivered:order:' || o.id AS subject_key " +
+            "FROM orders o " +
+            "JOIN LATERAL ( " +
+            "    SELECT id, tracking_number, internal_state, last_synced_at " +
+            "    FROM shipments " +
+            "    WHERE order_id = o.id AND tenant_id = o.tenant_id AND shipment_leg = 'forward' " +
+            "    ORDER BY id DESC " +
+            "    LIMIT 1 " +
+            ") s ON true " +
+            "WHERE o.tenant_id = ? " +
+            "  AND o.status = 'cancelled'::order_status " +
+            "  AND s.internal_state = 'delivered'::shipment_internal_state ",
+            tid);
+    }
+
     private List<Map<String, Object>> detectMissingAwb(UUID tid) {
         return jdbc.queryForList(
             "SELECT 'missing_awb' AS type, 'MEDIUM' AS severity, 'shipment' AS subject_type, " +
@@ -617,6 +697,31 @@ public class ExceptionService {
                 item.put("suggestedAction",
                     "Shopify cancelled but parcel is in-flight — convert to self-pickup, " +
                     "cancel via guided flow, or let it RTO.");
+                item.put("actionUrl", ordersUrl(item));
+            }
+            case "cancelled_live_shipment" -> {
+                String t = str(item, "tracking_number");
+                item.put("descriptionEn",
+                    "This order is cancelled but its Bosta shipment (" + t + ") is still " +
+                    "active. Cancel the AWB in Bosta so the courier doesn't collect it.");
+                item.put("descriptionAr",
+                    "هذا الطلب ملغي ولكن شحنة بوسطة الخاصة به (" + t + ") ما زالت نشطة. " +
+                    "ألغِ بوليصة الشحن في بوسطة حتى لا يقوم المندوب باستلامها.");
+                item.put("suggestedAction", "cancel_awb_at_bosta");
+                item.put("actionUrl", ordersUrl(item));
+                // item-28 / §6.1: wire terminateDelivery() one-click resolve here when the
+                // Bosta cancel endpoint ships.
+            }
+            case "cancelled_but_delivered" -> {
+                String t = str(item, "tracking_number");
+                String shipSuffix = (t != null && !t.isBlank()) ? " (" + t + ")" : "";
+                item.put("descriptionEn",
+                    "This order was cancelled but the courier already delivered it" +
+                    shipSuffix + ". Reconcile COD / arrange a return.");
+                item.put("descriptionAr",
+                    "تم إلغاء هذا الطلب ولكن المندوب قام بالفعل بتوصيله" + shipSuffix +
+                    ". يجب تسوية الدفع عند الاستلام أو ترتيب عملية استرجاع.");
+                item.put("suggestedAction", "reconcile_cod_or_arrange_return");
                 item.put("actionUrl", ordersUrl(item));
             }
             case "return_in_transit_stuck" -> {

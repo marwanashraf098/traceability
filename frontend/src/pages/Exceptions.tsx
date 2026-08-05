@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { request, releaseOrderHold, cancelOrder as apiCancelOrder } from '../api'
 import {
   Badge, Button, EmptyState, Modal, Select, type SelectOption,
@@ -46,6 +46,10 @@ const TYPE_LABELS: Record<string, { en: string; ar: string }> = {
   delivery_limbo:     { en: 'Limbo',            ar: 'في الانتظار' },
   ndr_failed:         { en: 'NDR Failed',       ar: 'فشل التوصيل' },
   guided_unpack:      { en: 'Unpack Required',  ar: 'فك التعبئة' },
+  // B1 — grouped with shopify_cancel_vs_inflight conceptually (all three are "cancel vs.
+  // still-in-flight" signals) even though that type isn't itself in this map yet.
+  cancelled_live_shipment: { en: 'Cancelled · Live Shipment', ar: 'ملغي · شحنة نشطة' },
+  cancelled_but_delivered: { en: 'Cancelled · Delivered',     ar: 'ملغي · تم التوصيل' },
 }
 
 const ALL_TYPES      = Object.keys(TYPE_LABELS)
@@ -208,8 +212,12 @@ export default function ExceptionsPage() {
   const { t, i18n } = useTranslation()
   const isAr = i18n.language === 'ar'
 
+  // B2: the A3 conflict chip links here as /exceptions?type=<code> — pre-filter to the
+  // matching exception on load. Read once at mount; the Select below still drives further
+  // changes through local state as before.
+  const [searchParams] = useSearchParams()
   const [data,          setData]          = useState<ExceptionPage | null>(null)
-  const [typeFilter,    setTypeFilter]    = useState('')
+  const [typeFilter,    setTypeFilter]    = useState(() => searchParams.get('type') ?? '')
   const [sevFilter,     setSevFilter]     = useState('')
   const [page,          setPage]          = useState(0)
   const [loading,       setLoading]       = useState(false)

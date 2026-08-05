@@ -1139,5 +1139,9 @@
   },
   "tag": {
     "not_traced": "Fulfilled outside Traced"
+  },
+  "exc": {
+    "cancelled_live_shipment": "Cancelled order, shipment still active",
+    "cancelled_but_delivered": "Cancelled but delivered — reconcile"
   }
 }
