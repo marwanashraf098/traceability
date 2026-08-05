@@ -356,12 +356,14 @@ function ShipmentCard({ shipment }: { shipment: ShipmentDetail }) {
         )}
       </div>
 
-      {/* Per-attempt history */}
+      {/* A4: Delivery attempts, promoted above the raw/collapsed history — already the
+          case pre-A4 (this block was already rendered before the history toggle below),
+          confirmed rather than reordered. */}
       {shipment.attempts.length > 0 && (
         <AttemptHistory attempts={shipment.attempts} />
       )}
 
-      {/* Expandable delivery status timeline */}
+      {/* Expandable delivery status timeline — collapsed/grouped by default (A4) */}
       <div className="border-t border-line pt-3">
         <Button
           variant="tertiary"
@@ -373,8 +375,10 @@ function ShipmentCard({ shipment }: { shipment: ShipmentDetail }) {
         </Button>
 
         {historyOpen && (
+          // A4: forward leg gets the collapsed/grouped view; return leg keeps its own
+          // raw history unchanged (own returns-context timeline, not built this round).
           <DeliveryTimeline
-            entries={shipment.deliveryHistory}
+            entries={isReturn ? toRawDisplay(shipment.deliveryHistory) : groupHistory(shipment.deliveryHistory)}
             shipmentLeg={shipment.shipmentLeg}
             noHistoryText={t('orderDetail.noDeliveryHistory')}
             title={t('orderDetail.deliveryHistory')}
@@ -436,13 +440,74 @@ function InfoRow({ label, value, mono }: { label: string; value: string | null |
   )
 }
 
+// ── A4: history collapse (forward leg only) ─────────────────────────────────────
+// A normalized display shape both the raw (return-leg) and grouped (forward-leg) paths
+// render through, so DeliveryTimeline itself doesn't need to know which one it got.
+export interface DisplayHistoryEntry {
+  state: string
+  count: number
+  firstAt: string
+  lastAt: string
+  exceptionReason: string | null
+}
+
+const TIMELINE_TERMINAL_STATES = new Set(['delivered', 'returned', 'lost', 'terminated', 'cancelled'])
+
+export function toRawDisplay(entries: DeliveryHistoryEntry[]): DisplayHistoryEntry[] {
+  return entries.map(e => ({
+    state: e.state, count: 1, firstAt: e.occurredAt, lastAt: e.occurredAt,
+    exceptionReason: e.exceptionReason,
+  }))
+}
+
+/**
+ * Folds consecutive identical internal_state rows into one grouped entry
+ * ({ stateKey, count, firstAt, lastAt }) — e.g. "In transit · 14 scans · Jul 25–30".
+ * Exception rows and terminal transitions are milestones, never folded: an 'exception'
+ * row's specific reason usually differs occurrence to occurrence even when the raw
+ * internal_state repeats, and a terminal transition is a one-time event worth its own line
+ * even if (rare/duplicate-webhook) it repeats.
+ */
+export function groupHistory(entries: DeliveryHistoryEntry[]): DisplayHistoryEntry[] {
+  const groups: DisplayHistoryEntry[] = []
+  const isMilestoneGroup: boolean[] = []
+  for (const e of entries) {
+    const isMilestone = e.state === 'exception' || TIMELINE_TERMINAL_STATES.has(e.state)
+    const lastIdx = groups.length - 1
+    const canMerge = !isMilestone && lastIdx >= 0
+      && !isMilestoneGroup[lastIdx] && groups[lastIdx].state === e.state
+    if (canMerge) {
+      groups[lastIdx].count += 1
+      groups[lastIdx].lastAt = e.occurredAt
+    } else {
+      groups.push({
+        state: e.state, count: 1, firstAt: e.occurredAt, lastAt: e.occurredAt,
+        exceptionReason: e.exceptionReason,
+      })
+      isMilestoneGroup.push(isMilestone)
+    }
+  }
+  return groups
+}
+
+export function formatDateRange(firstAt: string, lastAt: string): string {
+  const a = new Date(firstAt)
+  const b = new Date(lastAt)
+  const fmtDay = (d: Date) => d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+  if (a.toDateString() === b.toDateString()) return fmtDay(a)
+  if (a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth()) {
+    return `${a.toLocaleDateString(undefined, { month: 'short' })} ${a.getDate()}–${b.getDate()}`
+  }
+  return `${fmtDay(a)} – ${fmtDay(b)}`
+}
+
 function DeliveryTimeline({
   entries,
   shipmentLeg,
   noHistoryText,
   title,
 }: {
-  entries: DeliveryHistoryEntry[]
+  entries: DisplayHistoryEntry[]
   shipmentLeg?: string
   noHistoryText: string
   title: string
@@ -475,13 +540,20 @@ function DeliveryTimeline({
               <span className={`absolute -start-1.5 mt-0.5 h-3 w-3 rounded-full border-2 border-base
                 ${isLast ? 'bg-trace-blue' : 'bg-line'}`}
               />
-              <div className="flex items-baseline gap-2">
+              <div className="flex flex-wrap items-baseline gap-2">
                 <span className={`text-small font-medium ${isLast ? 'text-primary' : 'text-muted'}`}>
                   {label}
                 </span>
-                <span className="text-caption text-muted">
-                  {new Date(e.occurredAt).toLocaleString()}
-                </span>
+                {e.count > 1 ? (
+                  <>
+                    <span className="text-caption text-muted">
+                      {t('orderDetail.historyGroupScans', { count: e.count })}
+                    </span>
+                    <span className="text-caption text-muted">{formatDateRange(e.firstAt, e.lastAt)}</span>
+                  </>
+                ) : (
+                  <span className="text-caption text-muted">{new Date(e.firstAt).toLocaleString()}</span>
+                )}
               </div>
               {e.exceptionReason && (
                 <p className="text-caption text-danger mt-0.5">{e.exceptionReason}</p>

@@ -128,8 +128,9 @@
     "noPieces": "No pieces allocated",
     "deliveryHistory": "Delivery history",
     "noDeliveryHistory": "No history recorded yet — transitions will appear here as they occur.",
-    "historyToggleShow": "Show history",
-    "historyToggleHide": "Hide history",
+    "historyToggleShow": "Show full history",
+    "historyToggleHide": "Hide full history",
+    "historyGroupScans": "{{count}} scans",
     "holdBtn": "Hold order",
     "unholdBtn": "Release hold",
     "holdDialog": {

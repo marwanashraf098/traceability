@@ -4,6 +4,60 @@
 
 ## Current state
 
+**FR-7/FR-11 order-status redesign, Part A3/A3.1/A4 shipped (2026-08-05) — cancelled-conflict
+flag + collapsed timeline, built on the A1/A2 `OrderStatusDeriver` from earlier the same day.**
+Same build spec: `docs/order-status-redesign-build-spec.md`. Reuses the single
+`OrderStatusDeriver` — no second status-derivation path.
+
+- **A3 — cancelled conflict.** `DerivedOrderStatus` gained a `conflictKey` field. For
+  `order.status == cancelled`, the latest forward shipment's `internal_state` decides:
+  `delivered` → `status.conflict.cancelled_but_delivered`; `created`/`with_courier`/
+  `returning`/`exception` (still live) → `status.conflict.live_shipment`; `returned`/
+  `terminated`/`cancelled`/`lost` (or no shipment at all) → no conflict, a clean cancel.
+  Fixes 2e05d4e5 (cancelled + live "Preparing" AWB → now "Cancelled" + a red live-shipment
+  chip). Chip is read-only — renders regardless of whether a Part-B exception exists yet;
+  linking it is Part B's job, not built here. **Behavior change from A1/A2**: health chips
+  (delayed/failed/NDR) are now suppressed entirely when `order.status == cancelled` — the
+  conflict flag is the sole overlay. This overturns the A1/A2-era test that asserted chips
+  DID still show alongside "Cancelled" (rewritten in `OrderStatusDeriverTest`, see the `a3_*`
+  cases). **Correction to my own prior note**: I'd said `status.conflict.*` i18n keys
+  "already exist" — they didn't (A1/A2 built the derivation logic but A3 itself, which owns
+  those keys, wasn't started yet); added now, EN+AR, using the exact copy the original spec
+  draft proposed.
+- **A3.1 — return-leg card status: skipped, RTO-only default.** Confirmed no return-leg
+  `ShipmentCard` renders any status badge (true since A2 removed `DeliveryBadge` from
+  `ShipmentCard` for both legs uniformly) — nothing to change. **Flag**: `ShipmentLinkService`
+  (`isCrpDelivery()` / `createOrFindReturnShipment()`, tested by 6 `CrpReturnShipmentTest`
+  cases) actively creates `shipment_leg='return'` rows via CRP (customer-initiated return)
+  linking — this is real, live production code, not dead/theoretical. If this pilot ever
+  sees a CRP return, its return-leg card will show facts-only with zero status indicator.
+  The RTO-only default may not hold — revisit A3.1 if CRP shows up in practice.
+- **A4 — timeline.** "Promote attempts above raw history" was already the layout pre-A4
+  (confirmed, not changed). New forward-leg-only history collapse: `groupHistory()` in
+  `OrderDetail.tsx` folds consecutive identical `internal_state` rows into one entry
+  (`{ state, count, firstAt, lastAt }`, e.g. "In transit · 14 scans · Jul 25–30"). Exception
+  rows and terminal transitions are never folded, even if consecutive and identical — each
+  is its own milestone (an NDR reason usually differs occurrence to occurrence even when the
+  raw state repeats). Return leg keeps its raw, ungrouped history unchanged
+  (`toRawDisplay()`) — its own returns-context timeline isn't built this round. Toggle
+  copy changed from "Show/Hide history" to "Show/Hide full history" to match the spec's
+  wording. `orderDetail.historyGroupScans` is the one new i18n key, EN+AR.
+- Tests: 5 new `OrderStatusDeriverTest` cases (28 total) for A3's conflict matrix +
+  suppression; 3 new `OrderStatusListDetailParityTest` cases (8 total) proving A3 through
+  the real DB-wired path, not just the pure function; new `orderDetailHistoryGroup.test.ts`
+  (7 cases, vitest) for the grouping algorithm — non-consecutive same-state runs stay
+  separate, exception rows never fold even when identical and consecutive, a state after a
+  milestone never merges backward into it. Backend suite: 939 tests, same 2 pre-existing
+  failures as this morning (stale hardcoded migration counts, confirmed untouched).
+  `RlsCoverageTest`: 19/19. Frontend: 3 pre-existing failures unrelated to this work
+  (`overview.test.tsx`, `inventory.test.tsx`, `blocklist.test.tsx` — confirmed via
+  `git stash` that they fail identically on the pre-A3/A4 baseline).
+- **Still not built**: Part B (the two cancellation-reconciliation exception detectors — the
+  conflict chip has nowhere to link yet), a return-leg timeline/status treatment if CRP turns
+  out to be live for this pilot. `cancelOrder` and the ingest path were not touched.
+
+---
+
 **FR-7/FR-11 order-status redesign, Part A1–A2 shipped (2026-08-05) — one derived headline
 replaces the two contradicting pipeline/shipment pills.** Full build spec:
 `docs/order-status-redesign-build-spec.md`. A0 (diagnose-only ground-truth pass) ran first

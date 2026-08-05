@@ -60,7 +60,7 @@ One line per requirement · [M] Must / [S] Should / [C] Could · use as the buil
 
 ## FR-7 Orders & Confirmation
 - [x] 7.1 [M] Pipeline list + filters (incl. Self-Pickup Pending); search by number/name/phone/tracking
-- [x] 7.2 [M] Order detail: customer, lines, COD, status timeline, allocated pieces, shipment, audit [2026-08-05: FR-7/FR-11 A1–A2 — single derived `<OrderStatus>` headline (`OrderStatusDeriver`) replaces the old independent pipeline STATUS pill + shipment SHIPMENT pill; shipment card is facts-only now. A3 (cancelled-conflict flag) + A4 (timeline collapse) not yet built — see docs/order-status-redesign-build-spec.md]
+- [x] 7.2 [M] Order detail: customer, lines, COD, status timeline, allocated pieces, shipment, audit [2026-08-05: FR-7/FR-11 A1–A2 — single derived `<OrderStatus>` headline (`OrderStatusDeriver`) replaces the old independent pipeline STATUS pill + shipment SHIPMENT pill; shipment card is facts-only now. 2026-08-05 (same day): A3 cancelled-conflict flag (`conflictKey`, health chips suppressed on cancelled orders) + A4 collapsed forward-leg timeline (consecutive-identical-state folding, exception/terminal rows never folded) — see docs/order-status-redesign-build-spec.md. Still open: Part B (no exception for the conflict chip to link to yet); return-leg card has no status indicator (A3.1 skipped, RTO-only default — flagged if CRP turns out live for this pilot)]
 - [ ] 7.3 [M] Confirmation modes: Auto-flow (default — straight to Ready to Pick after gates) / Gated (button or tag); prepaid auto-confirm toggle
 - [x] 7.4 [M] Hold/unhold with reason; held orders leave queues
 - [x] 7.5 [M] COD prominent, editable until packing (logged); ≤ 30,000 EGP validation; frozen after AWB
