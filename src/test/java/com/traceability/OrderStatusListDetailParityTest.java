@@ -166,6 +166,50 @@ class OrderStatusListDetailParityTest {
         assertParity(orderId);
     }
 
+    // ── A3: cancelled-order conflict flag, through the real DB-wired path ──────
+
+    @Test
+    void a3_cancelledOrder_deliveredShipment_conflictFlag_noHealthChips() {
+        UUID orderId = insertOrder("A3-CANCELLED-DELIVERED", "cancelled");
+        insertForwardShipment(orderId, "9810234571", "delivered", 2, 1);
+
+        DerivedOrderStatus detailDerived = controller.detail(orderId).derivedStatus();
+        assertThat(detailDerived.primaryKey()).isEqualTo("status.cancelled");
+        assertThat(detailDerived.conflictKey()).isEqualTo("status.conflict.cancelled_but_delivered");
+        assertThat(detailDerived.healthChips()).isEmpty();
+
+        assertParity(orderId);
+    }
+
+    @Test
+    void a3_cancelledOrder_liveShipment_conflictFlag_noHealthChips() {
+        UUID orderId = insertOrder("A3-CANCELLED-LIVE", "cancelled");
+        // isDelayed=true would normally raise chip.delayed on a non-cancelled order — A3
+        // must suppress it here since the order itself is cancelled.
+        UUID shipmentId = insertForwardShipment(orderId, "9810234572", "created", 0, 0);
+        jdbc.update("UPDATE shipments SET is_delayed = true WHERE id = ?", shipmentId);
+
+        DerivedOrderStatus detailDerived = controller.detail(orderId).derivedStatus();
+        assertThat(detailDerived.primaryKey()).isEqualTo("status.cancelled");
+        assertThat(detailDerived.conflictKey()).isEqualTo("status.conflict.live_shipment");
+        assertThat(detailDerived.healthChips()).isEmpty();
+
+        assertParity(orderId);
+    }
+
+    @Test
+    void a3_cancelledOrder_returnedShipment_noConflict_cleanCancel() {
+        UUID orderId = insertOrder("A3-CANCELLED-RETURNED", "cancelled");
+        insertForwardShipment(orderId, "9810234573", "returned", 0, 0);
+
+        DerivedOrderStatus detailDerived = controller.detail(orderId).derivedStatus();
+        assertThat(detailDerived.primaryKey()).isEqualTo("status.cancelled");
+        assertThat(detailDerived.conflictKey()).as("returned shipment is a clean cancel").isNull();
+        assertThat(detailDerived.healthChips()).isEmpty();
+
+        assertParity(orderId);
+    }
+
     private void assertParity(UUID orderId) {
         OrderSummary fromList = controller.list(null, null, null, 0, 100).items().stream()
             .filter(o -> o.id().equals(orderId.toString()))

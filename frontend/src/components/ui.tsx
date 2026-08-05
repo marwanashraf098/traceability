@@ -161,6 +161,14 @@ export function OrderStatus({
         {t(derived.primaryKey, { defaultValue: derived.primaryKey.replace(/^status\./, '').replace(/_/g, ' ') })}
       </span>
 
+      {/* A3: cancelled-order conflict flag — always DANGER-toned. May one day link to a
+          Part-B exception entry; renders regardless of whether that exception exists yet. */}
+      {derived.conflictKey && (
+        <span className={cn('badge border', TONE_STYLE.critical)}>
+          {t(derived.conflictKey, { defaultValue: derived.conflictKey.replace(/^status\.conflict\./, '').replace(/_/g, ' ') })}
+        </span>
+      )}
+
       {derived.healthChips.map((chip, i) => (
         <span
           key={i}

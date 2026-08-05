@@ -1118,7 +1118,11 @@
     "terminated": "Terminated",
     "cancelled": "Cancelled",
     "self_pickup_pending": "Ready for pickup",
-    "needs_attention": "Needs attention"
+    "needs_attention": "Needs attention",
+    "conflict": {
+      "cancelled_but_delivered": "Cancelled · but delivered",
+      "live_shipment": "Shipment still live — cancel the AWB"
+    }
   },
   "chip": {
     "delayed": "Delayed",

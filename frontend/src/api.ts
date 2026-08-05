@@ -93,6 +93,7 @@ export interface DerivedOrderStatus {
   tone: DerivedTone
   healthChips: DerivedStatusChip[]
   historicalNote: DerivedHistoricalNote | null
+  conflictKey: string | null
   notTraced: boolean
 }
 

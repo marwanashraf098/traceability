@@ -79,20 +79,64 @@ class OrderStatusDeriverTest {
     }
 
     @Test
-    void matrix_2e05d4e5_cancelledOrder_liveShipment_cancelledLabelWins() {
+    void matrix_2e05d4e5_cancelledOrder_liveShipment_cancelledLabelWins_plusA3ConflictFlag() {
+        // 2e05d4e5: cancelled + live "Preparing" AWB — A3 fixes the missing risk signal.
         DerivedOrderStatus d = derive("cancelled", "created", 1, 0, 0, null, false, false, false);
         assertThat(d.primaryKey()).isEqualTo("status.cancelled");
         assertThat(d.tone()).isEqualTo(Tone.NEUTRAL);
+        assertThat(d.conflictKey()).isEqualTo("status.conflict.live_shipment");
+    }
+
+    // ── A3: cancelled-order conflict flag + chip suppression ────────────────────
+
+    @Test
+    void a3_cancelledOrder_liveShipment_healthChipsSuppressed_conflictFlagIsSoleOverlay() {
+        // Overturns the A1/A2-era assumption (health chips gated on shipment terminal-ness
+        // only): A3 says a cancelled order shows NO health chips regardless of shipment
+        // state — the conflict flag is the sole overlay.
+        DerivedOrderStatus d = derive("cancelled", "with_courier", 2, 1, 0, null, true, false, false);
+        assertThat(d.primaryKey()).isEqualTo("status.cancelled");
+        assertThat(d.healthChips()).as("A3: health chips suppressed on cancelled orders").isEmpty();
+        assertThat(d.conflictKey()).isEqualTo("status.conflict.live_shipment");
     }
 
     @Test
-    void cancelledOrder_liveShipmentWithHealthSignal_chipStillSurfacesAlongsideCancelledLabel() {
-        // A3 (conflict flag) is out of scope this round, but health chips are gated on the
-        // SHIPMENT's own terminal-ness, not on order.status — a cancelled order with a
-        // still-live, delayed shipment should still show the delayed signal.
-        DerivedOrderStatus d = derive("cancelled", "with_courier", 2, 1, 0, null, true, false, false);
+    void a3_cancelledOrder_deliveredShipment_cancelledButDeliveredConflict_noChips() {
+        DerivedOrderStatus d = derive("cancelled", "delivered", null, 1, 0, null, false, false, false);
         assertThat(d.primaryKey()).isEqualTo("status.cancelled");
-        assertThat(d.healthChips()).containsExactly(Chip.of("chip.delayed", Tone.WARN));
+        assertThat(d.conflictKey()).isEqualTo("status.conflict.cancelled_but_delivered");
+        assertThat(d.healthChips()).isEmpty();
+    }
+
+    @Test
+    void a3_cancelledOrder_everyLiveState_getsLiveShipmentConflict() {
+        for (String state : List.of("created", "with_courier", "returning", "exception")) {
+            DerivedOrderStatus d = derive("cancelled", state, 1, 0, 0, null, false, false, false);
+            assertThat(d.conflictKey()).as("state=" + state).isEqualTo("status.conflict.live_shipment");
+        }
+    }
+
+    @Test
+    void a3_cancelledOrder_cleanTerminalStates_noConflict() {
+        for (String state : List.of("returned", "terminated", "cancelled", "lost")) {
+            DerivedOrderStatus d = derive("cancelled", state, null, 0, 1, null, false, false, false);
+            assertThat(d.conflictKey()).as("state=" + state + " is a clean cancel").isNull();
+            assertThat(d.healthChips()).as("terminal already suppresses chips regardless").isEmpty();
+        }
+    }
+
+    @Test
+    void a3_cancelledOrder_noShipmentLinked_noConflict() {
+        DerivedOrderStatus d = derive("cancelled", null, null, 0, 0, null, null, null, false);
+        assertThat(d.primaryKey()).isEqualTo("status.cancelled");
+        assertThat(d.conflictKey()).isNull();
+        assertThat(d.healthChips()).isEmpty();
+    }
+
+    @Test
+    void a3_nonCancelledOrder_neverGetsConflictKey() {
+        DerivedOrderStatus d = derive("awaiting_pickup", "delivered", null, 1, 0, null, false, false, false);
+        assertThat(d.conflictKey()).isNull();
     }
 
     // ── terminal suppression (explicit) ──────────────────────────────────────────

@@ -43,6 +43,7 @@ public final class OrderStatusDeriver {
         Tone tone,
         List<Chip> healthChips,
         HistoricalNote historicalNote,
+        String conflictKey,
         boolean notTraced
     ) {}
 
@@ -59,6 +60,12 @@ public final class OrderStatusDeriver {
 
     public static final Set<String> TERMINAL_STATES =
         Set.of("delivered", "returned", "lost", "terminated", "cancelled");
+
+    // ── A3: cancelled-order conflict states ─────────────────────────────────
+    // A cancelled order's shipment reaching one of these is "clean" — no conflict.
+    // Everything else (delivered, or still live) is a merchant-visible problem.
+    private static final Set<String> CONFLICT_LIVE_STATES =
+        Set.of("created", "with_courier", "returning", "exception");
 
     /**
      * Java-side reducer for the detail path: MAX(progress_rank) over the shipment's
@@ -177,12 +184,14 @@ public final class OrderStatusDeriver {
 
         boolean shipmentLinked = shipmentInternalState != null;
         boolean terminal = shipmentLinked && TERMINAL_STATES.contains(shipmentInternalState);
+        boolean orderCancelled = "cancelled".equals(orderStatus);
 
         String primaryKey;
         Tone tone;
 
-        if ("cancelled".equals(orderStatus)) {
-            // A3 (conflict flag) is a later step; this is the label only.
+        if (orderCancelled) {
+            // The conflict flag (below) carries the risk signal; the primary label stays
+            // the deliberate merchant decision, not a shipment waypoint (design rule 4).
             primaryKey = "status.cancelled";
             tone = Tone.NEUTRAL;
         } else if (shipmentLinked) {
@@ -208,7 +217,10 @@ public final class OrderStatusDeriver {
         List<Chip> chips = new ArrayList<>();
         HistoricalNote note = null;
 
-        if (shipmentLinked && !terminal) {
+        // A3: a cancelled order shows the conflict flag as its sole overlay — health
+        // chips (delayed/failed/NDR) are suppressed so "Cancelled" isn't cluttered with
+        // signals that belong to a shipment the merchant has already decided to kill.
+        if (shipmentLinked && !terminal && !orderCancelled) {
             if (failedDeliveryAttempts >= 1) {
                 chips.add(new Chip("chip.failed_attempts", Tone.DANGER, failedDeliveryAttempts));
             }
@@ -228,6 +240,23 @@ public final class OrderStatusDeriver {
             }
         }
 
-        return new DerivedOrderStatus(primaryKey, tone, chips, note, notTraced);
+        String conflictKey = computeConflictKey(orderCancelled, shipmentLinked, shipmentInternalState);
+
+        return new DerivedOrderStatus(primaryKey, tone, chips, note, conflictKey, notTraced);
+    }
+
+    /**
+     * A3 — cancelled orders only. Read-only display signal; does not create an exception
+     * (Part B) and does not touch cancelOrder. delivered -> distinct "but delivered" key
+     * (different remediation: reconcile COD / arrange a return) from a still-live shipment
+     * (remediation: cancel the AWB at Bosta before the courier collects). Everything else
+     * (returned/terminated/cancelled/lost, or no shipment at all) is a clean cancel — null.
+     */
+    private static String computeConflictKey(boolean orderCancelled, boolean shipmentLinked,
+                                              String shipmentInternalState) {
+        if (!orderCancelled || !shipmentLinked) return null;
+        if ("delivered".equals(shipmentInternalState)) return "status.conflict.cancelled_but_delivered";
+        if (CONFLICT_LIVE_STATES.contains(shipmentInternalState)) return "status.conflict.live_shipment";
+        return null;
     }
 }

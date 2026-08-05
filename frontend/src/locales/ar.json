@@ -1113,7 +1113,11 @@
     "terminated": "منتهي",
     "cancelled": "ملغي",
     "self_pickup_pending": "بانتظار استلام العميل",
-    "needs_attention": "يحتاج مراجعة"
+    "needs_attention": "يحتاج مراجعة",
+    "conflict": {
+      "cancelled_but_delivered": "ملغي · لكن تم التوصيل",
+      "live_shipment": "الشحنة ما زالت نشطة — ألغِ البوليصة"
+    }
   },
   "chip": {
     "delayed": "متأخر",
