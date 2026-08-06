@@ -454,8 +454,6 @@ export interface DisplayHistoryEntry {
   exceptionReason: string | null
 }
 
-const TIMELINE_TERMINAL_STATES = new Set(['delivered', 'returned', 'lost', 'terminated', 'cancelled'])
-
 export function toRawDisplay(entries: DeliveryHistoryEntry[]): DisplayHistoryEntry[] {
   return entries.map(e => ({
     state: e.state, count: 1, firstAt: e.occurredAt, lastAt: e.occurredAt,
@@ -463,31 +461,49 @@ export function toRawDisplay(entries: DeliveryHistoryEntry[]): DisplayHistoryEnt
   }))
 }
 
+// §8.4 NDR exception_code → chip map, mirrored from OrderStatusDeriver.NDR_CHIP_KEY —
+// reused as-is (same translation keys the health-chip badge already renders), not forked
+// into a second copy of the code→meaning mapping. Codes without dedicated copy, or a null
+// code (the common case — confirmed 75/75 null in prod today), fall back to a generic
+// "Delivery issue" line instead of the raw (always-null) exception_reason text.
+const NDR_CHIP_KEY: Record<number, string> = {
+  1:  'chip.not_at_address',
+  3:  'chip.postponed',
+  8:  'chip.customer_refused',
+  21: 'chip.postponed',
+  22: 'chip.postponed',
+}
+const EXCEPTION_FALLBACK_KEY = 'orderDetail.historyDeliveryIssue'
+
+function exceptionDisplayKey(exceptionCode: number | null): string {
+  return (exceptionCode != null && NDR_CHIP_KEY[exceptionCode]) || EXCEPTION_FALLBACK_KEY
+}
+
 /**
  * Folds consecutive identical internal_state rows into one grouped entry
- * ({ stateKey, count, firstAt, lastAt }) — e.g. "In transit · 14 scans · Jul 25–30".
- * Exception rows and terminal transitions are milestones, never folded: an 'exception'
- * row's specific reason usually differs occurrence to occurrence even when the raw
- * internal_state repeats, and a terminal transition is a one-time event worth its own line
- * even if (rare/duplicate-webhook) it repeats.
+ * ({ state, count, firstAt, lastAt }) — e.g. "In transit · 14 scans · Jul 25–30".
+ * Terminals fold like any other state — a duplicate-webhook redelivery of the same
+ * terminal is still the same reported state, not a second milestone. Exception rows fold
+ * on (state + exception_code) together, so two 'exception' rows only merge when they carry
+ * the same code (null == null included) — a code change is a materially different event
+ * and starts a new group even though internal_state itself didn't change.
  */
 export function groupHistory(entries: DeliveryHistoryEntry[]): DisplayHistoryEntry[] {
   const groups: DisplayHistoryEntry[] = []
-  const isMilestoneGroup: boolean[] = []
+  const groupKeys: string[] = []
   for (const e of entries) {
-    const isMilestone = e.state === 'exception' || TIMELINE_TERMINAL_STATES.has(e.state)
+    const key = e.state === 'exception' ? `exception:${e.exceptionCode ?? 'null'}` : e.state
     const lastIdx = groups.length - 1
-    const canMerge = !isMilestone && lastIdx >= 0
-      && !isMilestoneGroup[lastIdx] && groups[lastIdx].state === e.state
+    const canMerge = lastIdx >= 0 && groupKeys[lastIdx] === key
     if (canMerge) {
       groups[lastIdx].count += 1
       groups[lastIdx].lastAt = e.occurredAt
     } else {
       groups.push({
         state: e.state, count: 1, firstAt: e.occurredAt, lastAt: e.occurredAt,
-        exceptionReason: e.exceptionReason,
+        exceptionReason: e.state === 'exception' ? exceptionDisplayKey(e.exceptionCode) : null,
       })
-      isMilestoneGroup.push(isMilestone)
+      groupKeys.push(key)
     }
   }
   return groups
@@ -559,7 +575,9 @@ function DeliveryTimeline({
                 )}
               </div>
               {e.exceptionReason && (
-                <p className="text-caption text-danger mt-0.5">{e.exceptionReason}</p>
+                <p className="text-caption text-danger mt-0.5">
+                  {t(e.exceptionReason, { defaultValue: e.exceptionReason })}
+                </p>
               )}
             </li>
           )

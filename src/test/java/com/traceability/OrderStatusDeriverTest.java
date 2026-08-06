@@ -276,6 +276,23 @@ class OrderStatusDeriverTest {
         assertThat(d.tone()).isEqualTo(Tone.DANGER);
     }
 
+    // ── 'created' relabel: "Label created", distinct from the pipeline's own
+    // "Awaiting courier" (awaiting_pickup) — a freshly-created AWB and an order still
+    // waiting on pipeline pickup read as the same event otherwise. ────────────────────
+
+    @Test
+    void freshlyCreatedShipment_headerReadsLabelCreated_notAwaitingCourier() {
+        DerivedOrderStatus d = derive("awaiting_pickup", "created", 1, 0, 0, null, false, false, false);
+        assertThat(d.primaryKey()).isEqualTo("status.label_created");
+    }
+
+    @Test
+    void legStatus_created_labelCreatedKey() {
+        OrderStatusDeriver.LegStatus s = OrderStatusDeriver.deriveLegStatus("created");
+        assertThat(s.primaryKey()).isEqualTo("status.label_created");
+        assertThat(s.tone()).isEqualTo(Tone.INFO);
+    }
+
     // ── A3.1: leg-scoped shipment status (return-leg ShipmentCard badge) ────────
 
     @Test

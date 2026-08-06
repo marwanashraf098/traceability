@@ -131,6 +131,7 @@
     "historyToggleShow": "Show full history",
     "historyToggleHide": "Hide full history",
     "historyGroupScans": "{{count}} scans",
+    "historyDeliveryIssue": "Delivery issue",
     "holdBtn": "Hold order",
     "unholdBtn": "Release hold",
     "holdDialog": {
@@ -1110,6 +1111,7 @@
     "picking": "Picking",
     "packed": "Packed",
     "awaiting_courier": "Awaiting courier",
+    "label_created": "Label created",
     "in_transit": "In transit",
     "delivery_failed": "Delivery failed — retrying",
     "delivered": "Delivered",

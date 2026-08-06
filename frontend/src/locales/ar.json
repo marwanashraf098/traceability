@@ -131,6 +131,7 @@
     "historyToggleShow": "عرض السجل الكامل",
     "historyToggleHide": "إخفاء السجل الكامل",
     "historyGroupScans": "{{count}} مسح",
+    "historyDeliveryIssue": "مشكلة في التوصيل",
     "holdBtn": "تعليق الطلب",
     "unholdBtn": "رفع التعليق",
     "holdDialog": {
@@ -1105,6 +1106,7 @@
     "picking": "جارٍ التجهيز",
     "packed": "تم التغليف",
     "awaiting_courier": "في انتظار مندوب الشحن",
+    "label_created": "بوليصة تم إنشاؤها",
     "in_transit": "في الطريق",
     "delivery_failed": "فشل التوصيل — إعادة المحاولة",
     "delivered": "تم التوصيل",

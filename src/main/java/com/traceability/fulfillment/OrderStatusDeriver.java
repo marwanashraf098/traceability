@@ -140,8 +140,11 @@ public final class OrderStatusDeriver {
     );
 
     // ── furthest-progress (non-terminal, shipment-linked) labels ───────────
+    // rank 1 == internal_state 'created' — labeled "Label created" (not "Awaiting
+    // courier", which stays reserved for the pipeline's own awaiting_pickup stage below;
+    // conflating the two read as the same event when they are not).
     private static final Map<Integer, String> PROGRESS_KEY = Map.of(
-        1, "status.awaiting_courier",
+        1, "status.label_created",
         2, "status.in_transit",
         3, "status.returning"
     );
@@ -182,7 +185,7 @@ public final class OrderStatusDeriver {
     // OrderStatusDeriverTest asserts leg status never disagrees with what derive() would
     // produce for an equivalent non-cancelled, no-failed-attempts, unregressed shipment.
     private static final Map<String, String> LEG_KEY = Map.of(
-        "created",      "status.awaiting_courier",
+        "created",      "status.label_created",
         "with_courier", "status.in_transit",
         "returning",    "status.returning",
         "exception",    "status.needs_attention",
