@@ -122,6 +122,7 @@
     "lastFailureReason": "Last failure",
     "attemptHistory": "Delivery attempts",
     "attemptSucceeded": "Succeeded",
+    "attemptSucceededReturn": "Return completed",
     "attemptFailed": "Failed",
     "awb": "AWB",
     "pieces": "Allocated pieces",

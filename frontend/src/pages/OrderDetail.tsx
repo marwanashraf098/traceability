@@ -363,7 +363,7 @@ function ShipmentCard({ shipment }: { shipment: ShipmentDetail }) {
           case pre-A4 (this block was already rendered before the history toggle below),
           confirmed rather than reordered. */}
       {shipment.attempts.length > 0 && (
-        <AttemptHistory attempts={shipment.attempts} />
+        <AttemptHistory attempts={shipment.attempts} isReturn={isReturn} />
       )}
 
       {/* Expandable delivery status timeline — collapsed/grouped by default (A4) */}
@@ -392,7 +392,7 @@ function ShipmentCard({ shipment }: { shipment: ShipmentDetail }) {
   )
 }
 
-function AttemptHistory({ attempts }: { attempts: AttemptEntry[] }) {
+function AttemptHistory({ attempts, isReturn }: { attempts: AttemptEntry[]; isReturn?: boolean }) {
   const { t } = useTranslation()
   return (
     <div className="border-t border-line pt-3">
@@ -405,7 +405,9 @@ function AttemptHistory({ attempts }: { attempts: AttemptEntry[] }) {
           <li key={i} className="border-s-2 border-line ps-3 space-y-0.5">
             <div className="flex flex-wrap items-baseline gap-2">
               <span className={`text-small font-medium ${a.succeeded ? 'text-success' : 'text-danger'}`}>
-                {a.succeeded ? t('orderDetail.attemptSucceeded') : t('orderDetail.attemptFailed')}
+                {a.succeeded
+                  ? t(isReturn ? 'orderDetail.attemptSucceededReturn' : 'orderDetail.attemptSucceeded')
+                  : t('orderDetail.attemptFailed')}
               </span>
               {a.type && (
                 <span className="text-caption text-muted">({a.type})</span>

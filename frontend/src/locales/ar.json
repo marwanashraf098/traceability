@@ -122,6 +122,7 @@
     "lastFailureReason": "آخر سبب فشل",
     "attemptHistory": "محاولات التوصيل",
     "attemptSucceeded": "ناجحة",
+    "attemptSucceededReturn": "اكتمل الإرجاع",
     "attemptFailed": "فاشلة",
     "awb": "وصل الشحن",
     "pieces": "القطع المخصصة",
