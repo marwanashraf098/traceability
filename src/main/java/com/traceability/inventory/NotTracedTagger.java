@@ -18,10 +18,14 @@ import java.util.UUID;
  * method's own forward-leg lookup makes that impossible regardless of which shipment
  * triggered the call.
  *
- * The "latest forward shipment via id DESC LIMIT 1" shape here MUST stay identical to the
- * V57 migration backfill UPDATE and to the LEFT JOIN LATERAL in FulfillService.getQueue() —
- * all three select "latest forward shipment" the same way so backfill, detector, and queue
- * removal can never disagree on which orders are affected.
+ * The "latest forward shipment via created_at DESC, id DESC LIMIT 1" shape here MUST stay
+ * identical to the LEFT JOIN LATERAL in FulfillService.getQueue() and to the V68 migration's
+ * corrective backfill — all three select "latest forward shipment" the same way so backfill,
+ * detector, and queue removal can never disagree on which orders are affected. (V57's own
+ * original backfill UPDATE used a bare `id DESC` tie-break — UUIDv4 is not time-ordered, so
+ * that could silently disagree with this method on a tied order; V57's file is frozen
+ * as-applied per Flyway checksum rules, and V68 re-runs the same backfill with the corrected
+ * ordering to bring already-migrated data in line with this method and getQueue().)
  *
  * Call sites (both required — see build spec pre-work finding A):
  *   - BostaWebhookJob.process(), unconditionally after the piece-transition step. Covers
@@ -68,7 +72,8 @@ public class NotTracedTagger {
                         SELECT s2.id FROM shipments s2
                         WHERE s2.order_id = o.id AND s2.tenant_id = o.tenant_id
                           AND s2.shipment_leg = 'forward'
-                        ORDER BY s2.id DESC LIMIT 1
+                        -- UUIDv4 is not time-ordered — order by created_at, never id (see CLAUDE.md invariant)
+                        ORDER BY s2.created_at DESC, s2.id DESC LIMIT 1
                     )
               )
             """, orderId, tenantId);

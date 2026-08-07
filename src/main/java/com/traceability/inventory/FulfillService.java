@@ -78,7 +78,8 @@ public class FulfillService {
         "    FROM shipments " +
         "    WHERE order_id = o.id AND tenant_id = o.tenant_id " +
         "      AND shipment_leg = 'forward' " +
-        "    ORDER BY id DESC " +
+        // UUIDv4 is not time-ordered — order by created_at, never id (see CLAUDE.md invariant)
+        "    ORDER BY created_at DESC, id DESC " +
         "    LIMIT 1 " +
         ") latest_shipment ON true " +
         "WHERE o.tenant_id = ? " +

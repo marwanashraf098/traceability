@@ -101,22 +101,24 @@ class NotTracedBackfillTest {
         }
 
         // 2. Apply the rest of the migrations — V57 (this test's subject) and whatever
-        //    has landed since (currently V58, an unrelated allocations backfill that only
-        //    touches 'available' pieces; V59, a locations.is_fulfillment column add +
-        //    backfill; V60, a CHECK constraint widen on shopify_inventory_adjustments; V61,
-        //    a one-fulfillment-location-per-tenant unique index; V62, the FR-21 stock-take
+        //    has landed since (V58, an unrelated allocations backfill that only touches
+        //    'available' pieces; V59, a locations.is_fulfillment column add + backfill;
+        //    V60, a CHECK constraint widen on shopify_inventory_adjustments; V61, a
+        //    one-fulfillment-location-per-tenant unique index; V62, the FR-21 stock-take
         //    tables; V63, a CHECK constraint fix on stock_take_shopify_syncs.status; V64,
         //    the FR-22 transfers tables; V65, the out_on_transfer/sold piece_status enum
-        //    additions; V66, transfer_pieces.created_at; and V67, a locations delivery-
-        //    profile-activation status column — none of these touch orders/allocations, so
-        //    their presence here doesn't affect this test's assertions).
+        //    additions; V66, transfer_pieces.created_at; V67, a locations delivery-
+        //    profile-activation status column; and V68, the id-DESC sweep's corrective
+        //    not_traced backfill — V68's own effect is exercised separately in
+        //    V68NotTracedRecencyFixTest, so its presence here doesn't affect this test's
+        //    assertions beyond the count).
         Flyway toLatest = Flyway.configure()
                 .dataSource(POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword())
                 .locations("classpath:db/migration")
                 .load();
         MigrateResult r2 = toLatest.migrate();
         assertThat(r2.success).as("migrations after V56 must succeed").isTrue();
-        assertThat(r2.migrationsExecuted).as("V57 + V58 + V59 + V60 + V61 + V62 + V63 + V64 + V65 + V66 + V67 pending after V56").isEqualTo(11);
+        assertThat(r2.migrationsExecuted).as("V57 + V58 + V59 + V60 + V61 + V62 + V63 + V64 + V65 + V66 + V67 + V68 pending after V56").isEqualTo(12);
 
         try (Connection conn = DriverManager.getConnection(
                 POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword())) {

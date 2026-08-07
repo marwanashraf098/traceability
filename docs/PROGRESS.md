@@ -4,6 +4,36 @@
 
 ## Current state
 
+**id-DESC latest-row sweep closed (2026-08-07) — `docs/id-desc-sweep-spec.md`.** Closes the
+two remaining offenders the Bosta ingest audit found, so the UUIDv4 invariant in `CLAUDE.md`
+is now true everywhere, not just at the order-status-redesign call sites. Three sites, one
+commit; `resolvePreconditions` confirmed already correct (`last_sync_at DESC`) and untouched.
+
+- `FulfillService.PICKABLE_ORDERS_FILTER`'s `LEFT JOIN LATERAL` and
+  `NotTracedTagger.maybeTagNotTraced()`'s correlated subselect both moved from a bare
+  `ORDER BY id DESC` to `ORDER BY created_at DESC, id DESC`.
+- `V57__orders_not_traced.sql`'s one-time backfill (same "latest forward shipment" shape, same
+  bug) was **not** edited in place — it already applied in every migrated environment and
+  Flyway checksums it; changing its SQL would crash startup wherever it already ran, prod
+  included. Added `V68__not_traced_backfill_recency_fix.sql` instead: re-runs the identical
+  predicate with the corrected ordering, guarded by the same `not_traced_at IS NULL` one-way
+  check `NotTracedTagger` itself uses (only ever adds a missing tag, never un-tags — matches
+  the tagger's own permanent-once-set semantics). Idempotent; safe against fully-migrated data.
+- **Tie-break test proves the bug, not just the fix**: an order with two forward shipments
+  (legal only because one is `terminated`/`cancelled` — `ux_active_shipment_per_order_leg`,
+  V43, blocks two simultaneously-live forward rows) where the *older* row (still `created`)
+  carries the lexically *higher* UUID and the *newer* row (`terminated`) the lower one.
+  Verified empirically, not just reasoned: temporarily reverted both `ORDER BY` lines back to
+  bare `id DESC` and reran `IdDescSweepTest` — the tie-break test and its RLS variant both
+  failed (wrong pick), the single-shipment regression test stayed green; restored the fix and
+  all four passed. New tests: `IdDescSweepTest` (4 cases: tie-break for both the pick queue
+  and the tagger, two single-shipment regressions, app_user RLS same-tenant/cross-tenant),
+  `V68NotTracedRecencyFixTest` (Flyway two-stage migration test mirroring
+  `NotTracedBackfillTest`'s pattern — confirms V68 corrects the tie-break order, no-ops on an
+  already-correctly-tagged order, and leaves V57's applied-migration row untouched). Bumped
+  the now-stale hardcoded migration counts in `NotTracedBackfillTest` (11→12) and
+  `MigrationSmokeTest` (66→67) for V68's addition. `RlsCoverageTest` 19/19 unaffected.
+
 **FR-13/FR-15.3 Part B shipped (2026-08-05) — two cancellation-reconciliation exception
 detectors, additive only.** Same build spec (`docs/order-status-redesign-build-spec.md`).
 Did not touch `cancelOrder`, the ingest path, or `OrderStatusDeriver` — Part B is pure
