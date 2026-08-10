@@ -317,6 +317,8 @@
     "cancelPreHint": "سيتم إعادة القطع المحجوزة للمخزون.",
     "cancelConfirmBtn": "تأكيد الإلغاء",
     "selfPickupPacked": "تم التعبئة — في انتظار الاستلام",
+    "orderComplete": "اكتمل الطلب",
+    "nextOrder": "الطلب التالي ←",
     "printAwb": {
       "print": "طباعة بوليصة الشحن",
       "opening": "جارٍ فتح البوليصة…",
@@ -461,7 +463,14 @@
     "na": "—",
     "pendingConsignee": "في انتظار ربط Bosta",
     "cancel": "إلغاء",
-    "view": "عرض"
+    "view": "عرض",
+    "order": "الطلب",
+    "customer": "العميل",
+    "progress": "التقدم",
+    "payment": "الدفع",
+    "status": "الحالة",
+    "prepaid": "مدفوع مسبقًا",
+    "scanned": "تم مسح القطعة"
   },
   "signup": {
     "title": "إنشاء حساب جديد",

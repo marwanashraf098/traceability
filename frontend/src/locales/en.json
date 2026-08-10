@@ -319,6 +319,8 @@
     "cancelPreHint": "Reserved pieces will be returned to stock.",
     "cancelConfirmBtn": "Confirm Cancel",
     "selfPickupPacked": "Packed — awaiting customer collection",
+    "orderComplete": "Order complete",
+    "nextOrder": "Next order →",
     "printAwb": {
       "print": "Print Waybill",
       "opening": "Opening waybill…",
@@ -466,7 +468,14 @@
     "na": "—",
     "pendingConsignee": "Pending Bosta link",
     "cancel": "Cancel",
-    "view": "View"
+    "view": "View",
+    "order": "Order",
+    "customer": "Customer",
+    "progress": "Progress",
+    "payment": "Payment",
+    "status": "Status",
+    "prepaid": "Prepaid",
+    "scanned": "Piece scanned"
   },
   "signup": {
     "title": "Create your account",

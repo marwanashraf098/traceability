@@ -1,12 +1,14 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
+import { RefreshCw, Printer, ArrowLeft, ArrowRight } from 'lucide-react'
 import { getGatherList, GatherListResponse } from '../api'
 import { Button, EmptyState, TableSkeleton } from '../components/ui'
 
 export default function GatherList() {
-  const { t } = useTranslation()
+  const { t, i18n } = useTranslation()
   const navigate = useNavigate()
+  const BackIcon = i18n.language === 'ar' ? ArrowRight : ArrowLeft
 
   const [data, setData] = useState<GatherListResponse | null>(null)
   const [loading, setLoading] = useState(true)
@@ -49,6 +51,13 @@ export default function GatherList() {
 
           .text-primary { color: #111111 !important; }
           .text-muted   { color: #444444 !important; }
+          .text-critical-text { color: #444444 !important; font-weight: 600; }
+
+          /* .tbl-header/.tbl-cell bake text-muted/text-primary in via @apply — the
+             literal class names above don't match these elements, so repeat the
+             same override keyed to the compound class names actually present. */
+          .tbl-header { color: #444444 !important; }
+          .tbl-cell   { color: #111111 !important; }
 
           .card {
             background: #ffffff !important;
@@ -56,6 +65,7 @@ export default function GatherList() {
             box-shadow: none !important;
           }
           .bg-elevated { background: #f0f0f0 !important; }
+          tr[class*="bg-critical"] { background: #f5f5f5 !important; }
 
           table, th, td, tr { border-color: #cccccc !important; }
 
@@ -65,16 +75,22 @@ export default function GatherList() {
       `}</style>
 
       <div className="flex items-center justify-between mb-2 gather-no-print">
-        <h1 className="text-h1 text-primary">{t('fulfill.gather.title')}</h1>
+        <div className="flex items-center gap-3">
+          <button
+            onClick={() => navigate('/fulfill')}
+            className="flex items-center gap-1.5 text-primary hover:bg-elevated transition-colors -ms-1 ps-2 pe-3 py-2 rounded-lg"
+          >
+            <BackIcon size={18} strokeWidth={2} />
+            <span className="text-small font-semibold">{t('fulfill.gather.back')}</span>
+          </button>
+          <h1 className="text-h1 text-primary">{t('fulfill.gather.title')}</h1>
+        </div>
         <div className="flex gap-2">
-          <Button variant="tertiary" size="sm" onClick={load}>
+          <Button variant="secondary" size="sm" iconStart={RefreshCw} onClick={load}>
             {t('fulfill.gather.refresh')}
           </Button>
-          <Button variant="tertiary" size="sm" onClick={() => window.print()}>
+          <Button variant="secondary" size="sm" iconStart={Printer} onClick={() => window.print()}>
             {t('fulfill.gather.print')}
-          </Button>
-          <Button variant="secondary" size="sm" onClick={() => navigate('/fulfill')}>
-            {t('fulfill.gather.back')}
           </Button>
         </div>
       </div>
@@ -105,27 +121,27 @@ export default function GatherList() {
       ) : rows.length === 0 ? (
         <EmptyState message={t('fulfill.gather.empty')} icon="📦" />
       ) : (
-        <div className="card overflow-hidden">
-          <table className="w-full text-small">
+        <div className="card overflow-hidden p-0">
+          <table className="w-full">
             <thead className="bg-elevated border-b border-line">
               <tr>
-                <th className="text-start px-4 py-3 font-medium text-muted">{t('fulfill.gather.colItem')}</th>
-                <th className="text-start px-4 py-3 font-medium text-muted hidden sm:table-cell print:table-cell">{t('fulfill.gather.colSku')}</th>
-                <th className="text-end px-4 py-3 font-medium text-muted">{t('fulfill.gather.colNeeded')}</th>
-                <th className="text-end px-4 py-3 font-medium text-muted">{t('fulfill.gather.colAvailable')}</th>
-                <th className="text-start px-4 py-3 font-medium text-muted hidden md:table-cell print:table-cell">{t('fulfill.gather.colOrders')}</th>
+                <th className="tbl-header">{t('fulfill.gather.colItem')}</th>
+                <th className="tbl-header hidden sm:table-cell print:table-cell">{t('fulfill.gather.colSku')}</th>
+                <th className="tbl-header text-end">{t('fulfill.gather.colNeeded')}</th>
+                <th className="tbl-header text-end">{t('fulfill.gather.colAvailable')}</th>
+                <th className="tbl-header hidden md:table-cell print:table-cell">{t('fulfill.gather.colOrders')}</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-line">
+            <tbody>
               {rows.map(row => (
                 <tr
                   key={row.variantId}
-                  className={row.shortage ? 'bg-danger/10' : ''}
+                  className={`tbl-row ${row.shortage ? 'bg-critical/[0.14]' : ''}`}
                 >
-                  <td className="px-4 py-3">
+                  <td className="tbl-cell">
                     <p className="font-medium text-primary">{row.displayName}</p>
                     {row.shortage && (
-                      <p className="text-caption text-danger">
+                      <p className="text-caption text-critical-text">
                         {t('fulfill.gather.shortageNote', {
                           shortfall: row.needed - row.availableCount,
                           needed: row.needed,
@@ -134,14 +150,14 @@ export default function GatherList() {
                       </p>
                     )}
                   </td>
-                  <td className="px-4 py-3 text-muted hidden sm:table-cell print:table-cell">
+                  <td className="tbl-cell text-muted hidden sm:table-cell print:table-cell">
                     {row.sku ?? t('common.na')}
                   </td>
-                  <td className="px-4 py-3 text-end font-mono">{row.needed}</td>
-                  <td className={`px-4 py-3 text-end font-mono ${row.shortage ? 'text-danger font-semibold' : ''}`}>
+                  <td className="tbl-cell text-end font-mono">{row.needed}</td>
+                  <td className={`tbl-cell text-end font-mono ${row.shortage ? 'text-critical-text font-semibold' : ''}`}>
                     {row.availableCount}
                   </td>
-                  <td className="px-4 py-3 text-muted hidden md:table-cell print:table-cell">
+                  <td className="tbl-cell text-muted hidden md:table-cell print:table-cell">
                     {row.orderNumbers.join(', ')}
                   </td>
                 </tr>

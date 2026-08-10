@@ -480,18 +480,22 @@ function HandoverScreen({ order, onBack }: { order: QueueOrder; onBack: () => vo
 
 // ── Queue view ─────────────────────────────────────────────────────────────────
 
+const QUEUE_GRID_COLS = 'grid-cols-1 md:grid-cols-[120px_1fr_180px_120px_140px]'
+
 function QueueView({
   queue,
   loading,
   loadQueue,
   onSelect,
   onHandover,
+  highlightOrderId,
 }: {
   queue: QueueOrder[]
   loading: boolean
   loadQueue: () => void
   onSelect: (orderId: string) => void
   onHandover: (order: QueueOrder) => void
+  highlightOrderId: string | null
 }) {
   const { t } = useTranslation()
   const navigate = useNavigate()
@@ -544,13 +548,9 @@ function QueueView({
       <div className="flex items-center justify-between mb-6">
         <h1 className="text-h1 text-primary">{t('fulfill.title')}</h1>
         <div className="flex items-center gap-3">
-          <button
-            onClick={() => navigate('/fulfill/gather')}
-            className="flex items-center gap-2 bg-elevated border border-line text-trace-blue text-small font-semibold px-3 py-2 rounded-lg hover:bg-charcoal transition-colors"
-          >
-            <Layers size={14} strokeWidth={2} />
+          <Button variant="secondary" size="sm" iconStart={Layers} onClick={() => navigate('/fulfill/gather')}>
             {t('fulfill.gatherBtn')}
-          </button>
+          </Button>
           <button
             onClick={loadQueue}
             aria-label={t('fulfill.refresh')}
@@ -594,41 +594,56 @@ function QueueView({
             </h2>
           )}
 
-          {/* Single row list — denser on desktop via responsive layout, not a second tree */}
+          {/* Real column grid — desktop: 5 aligned columns with a header row.
+              Mobile: same grid collapses to grid-cols-1, so each field stacks as
+              its own line — one tree, no duplicated content (jsdom doesn't apply
+              media queries, so a genuinely separate mobile/desktop tree produces
+              duplicate text nodes and breaks getByText/getByTestId — learned this
+              the hard way in the previous pass). */}
+          <div className={`hidden md:grid ${QUEUE_GRID_COLS} gap-4 px-3 pb-2 text-caption text-muted uppercase tracking-wide font-semibold`}>
+            <span>{t('common.order')}</span>
+            <span>{t('common.customer')}</span>
+            <span>{t('common.progress')}</span>
+            <span>{t('common.payment')}</span>
+            <span>{t('common.status')}</span>
+          </div>
+
           <div className="space-y-2">
             {pickQueue.map(order => {
               const progress = order.total_units > 0
                 ? Math.round((order.scanned_units / order.total_units) * 100) : 0
+              const highlighted = order.id === highlightOrderId
               return (
                 <div
                   key={order.id}
-                  className={`card p-3 md:py-2.5 flex flex-col md:flex-row md:items-center gap-2 md:gap-4 cursor-pointer transition hover:border-trace-blue/50 ${order.locked_by ? 'opacity-70' : ''}`}
+                  className={`grid ${QUEUE_GRID_COLS} gap-2 md:gap-4 md:items-center card p-3 md:py-2.5 cursor-pointer transition hover:border-trace-blue/50 ${
+                    order.locked_by ? 'opacity-70' : ''
+                  } ${highlighted ? 'border-trace-blue shadow-ring-accent' : ''}`}
                   onClick={() => onSelect(order.id)}
                 >
-                  <div className="flex items-center justify-between md:justify-start md:gap-2 md:w-36 md:flex-shrink-0">
-                    <span className="font-mono text-small font-semibold text-primary">
-                      {order.number ?? order.id.slice(-8)}
-                    </span>
-                    {paymentPill(order)}
-                  </div>
+                  <span className="font-mono text-small font-semibold text-primary">
+                    {order.number ?? order.id.slice(-8)}
+                  </span>
 
-                  <div className="flex items-center gap-2 min-w-0 md:flex-1">
+                  <div className="flex items-center gap-2 min-w-0">
                     <span className="text-caption md:text-small text-muted truncate">
                       {order.customer_name ?? t('common.pendingConsignee')}
                     </span>
                     {order.is_self_pickup && <Badge tone="info" label={t('fulfill.selfPickup')} />}
                   </div>
 
-                  <div className="md:w-40 md:flex-shrink-0">{progressBar(order, progress)}</div>
+                  {progressBar(order, progress)}
 
-                  <div className="flex-shrink-0">
+                  {paymentPill(order)}
+
+                  <div>
                     {order.locked_by ? (
                       <span className="inline-flex items-center gap-1.5 bg-warning/[0.14] border border-warning/[0.30] text-warning-text text-caption font-semibold px-2 py-0.5 rounded-full">
                         <Lock size={10} strokeWidth={2} />
                         {t('fulfill.locked')}
                       </span>
                     ) : (
-                      <Badge status={order.status} className="hidden md:inline-flex" />
+                      <Badge status={order.status} />
                     )}
                   </div>
                 </div>
@@ -725,7 +740,17 @@ function GuidedUnpackPanel({
 
 // ── Pick screen ────────────────────────────────────────────────────────────────
 
-function PickScreen({ orderId, onBack }: { orderId: string; onBack: () => void }) {
+function PickScreen({
+  orderId,
+  onBack,
+  nextOrderId,
+  onGoToOrder,
+}: {
+  orderId: string
+  onBack: () => void
+  nextOrderId: string | null
+  onGoToOrder: (orderId: string) => void
+}) {
   const { t, i18n } = useTranslation()
   const DesktopBackIcon = i18n.language === 'ar' ? ArrowRight : ArrowLeft
   const [order, setOrder] = useState<OrderDetail | null>(null)
@@ -738,11 +763,12 @@ function PickScreen({ orderId, onBack }: { orderId: string; onBack: () => void }
   const [showAwbDialog, setShowAwbDialog] = useState(false)
   const [showPreCompleteLink, setShowPreCompleteLink] = useState(false)
   const [awbPrintedOnce, setAwbPrintedOnce] = useState(false)
-  const [selfPickupSuccess, setSelfPickupSuccess] = useState(false)
+  const [completed, setCompleted] = useState(false)
   const [showCancelConfirm, setShowCancelConfirm] = useState(false)
   const [awbPrinting, setAwbPrinting] = useState(false)
   const [awbMsg, setAwbMsg] = useState<AwbMsg>(null)
   const inputRef = useRef<HTMLInputElement>(null)
+  const autoBackTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const loadOrder = useCallback(async () => {
     const { data } = await api<OrderDetail>(`/fulfill/${orderId}`)
@@ -807,14 +833,27 @@ function PickScreen({ orderId, onBack }: { orderId: string; onBack: () => void }
     try {
       await api(`/fulfill/${orderId}/complete`, { method: 'POST' })
       if (order?.is_self_pickup) {
-        setSelfPickupSuccess(true)
-        setTimeout(() => onBack(), 2000)
+        setCompleted(true)
+        // Fallback auto-return if the worker doesn't interact with the completion
+        // view — cleared in goNext()/goBack() below if they click first.
+        autoBackTimer.current = setTimeout(() => onBack(), 2500)
       } else {
         setShowAwbDialog(true)
       }
     } finally {
       setCompleting(false)
     }
+  }
+
+  // Completion-view navigation — clears the self-pickup auto-return fallback (if
+  // pending) so it can never fire after the worker has already navigated away.
+  const goNextFromCompletion = () => {
+    if (autoBackTimer.current) clearTimeout(autoBackTimer.current)
+    if (nextOrderId) onGoToOrder(nextOrderId)
+  }
+  const goBackFromCompletion = () => {
+    if (autoBackTimer.current) clearTimeout(autoBackTimer.current)
+    onBack()
   }
 
   const handleCancel = async () => {
@@ -863,6 +902,29 @@ function PickScreen({ orderId, onBack }: { orderId: string; onBack: () => void }
     </div>
   )
   if (!order) return null
+
+  if (completed) return (
+    <div className="flex flex-col h-screen bg-base items-center justify-center gap-4 p-8" data-testid="fulfill-pick-complete">
+      <CheckCircle2 size={56} strokeWidth={2} className="text-success" />
+      <p className="text-h3 text-primary font-bold text-center">
+        {order.is_self_pickup ? t('fulfill.selfPickupPacked') : t('fulfill.orderComplete')}
+      </p>
+      <p className="text-body text-muted">
+        <span className="font-mono">{order.number ?? order.id.slice(-8)}</span>
+        {order.customer_name && <> · {order.customer_name}</>}
+      </p>
+      <div className="w-full max-w-xs flex flex-col gap-2 mt-2">
+        {nextOrderId && (
+          <Button onClick={goNextFromCompletion} className="w-full">
+            {t('fulfill.nextOrder')}
+          </Button>
+        )}
+        <Button variant="secondary" onClick={goBackFromCompletion} className="w-full">
+          {t('fulfill.backToQueue')}
+        </Button>
+      </div>
+    </div>
+  )
 
   const allComplete = order.items.every(i => i.allocated >= i.quantity)
   const hasCancelRequest = !!order.cancel_requested_at
@@ -962,13 +1024,16 @@ function PickScreen({ orderId, onBack }: { orderId: string; onBack: () => void }
       {/* SAFETY-CRITICAL flash overlay — do not modify */}
       <div className={flashOverlay} />
 
-      {/* Header */}
-      <div className="bg-panel border-b border-line px-4 md:px-5 h-14 flex items-center gap-3 flex-shrink-0">
-        <button onClick={onBack} className="text-primary hover:text-muted transition-colors flex-shrink-0 md:hidden" aria-label={t('fulfill.backToQueue')}>
-          <X size={20} strokeWidth={2} />
-        </button>
-        <button onClick={onBack} className="text-primary hover:text-muted transition-colors flex-shrink-0 hidden md:inline-flex" aria-label={t('fulfill.backToQueue')}>
-          <DesktopBackIcon size={20} strokeWidth={2} />
+      {/* Header — exit is a clear, labeled affordance (not a bare icon) so the
+          worker always knows how to get back to the queue from the immersive
+          full-screen scan loop. Same onBack handler as before, restyled only. */}
+      <div className="bg-panel border-b border-line px-3 md:px-5 h-14 flex items-center gap-3 flex-shrink-0">
+        <button
+          onClick={onBack}
+          className="flex items-center gap-1.5 text-primary hover:bg-elevated transition-colors flex-shrink-0 -ms-1 ps-2 pe-3 py-2 rounded-lg"
+        >
+          <DesktopBackIcon size={18} strokeWidth={2} />
+          <span className="text-small font-semibold">{t('fulfill.backToQueue')}</span>
         </button>
         <p className="flex-1 text-body font-semibold text-primary flex items-center gap-2 truncate">
           <span className="font-mono">{order.number ?? order.id.slice(-8)}</span>
@@ -1011,13 +1076,6 @@ function PickScreen({ orderId, onBack }: { orderId: string; onBack: () => void }
               </Button>
             </div>
           </div>
-        </div>
-      )}
-
-      {/* Self-pickup success banner */}
-      {selfPickupSuccess && (
-        <div className="bg-success/5 border-b border-success/30 px-6 py-3 text-center">
-          <p className="text-success font-medium text-body">{t('fulfill.selfPickupPacked')}</p>
         </div>
       )}
 
@@ -1151,9 +1209,11 @@ function PickScreen({ orderId, onBack }: { orderId: string; onBack: () => void }
         </div>
       )}
 
-      {/* Post-Complete AWB-scan dialog — mandatory verify-scan, no skip. */}
+      {/* Post-Complete AWB-scan dialog — mandatory verify-scan, no skip. Done now
+          lands on the completion view (Next order / Back to queue) instead of
+          going straight back — AwbLinkDialog itself is untouched either way. */}
       {showAwbDialog && (
-        <AwbLinkDialog orderId={orderId} onDone={onBack} />
+        <AwbLinkDialog orderId={orderId} onDone={() => { setShowAwbDialog(false); setCompleted(true) }} />
       )}
     </div>
   )
@@ -1170,6 +1230,7 @@ export default function Fulfill() {
   const [view, setView] = useState<View>({ type: 'queue' })
   const [queue, setQueue] = useState<QueueOrder[]>([])
   const [queueLoading, setQueueLoading] = useState(true)
+  const [highlightOrderId, setHighlightOrderId] = useState<string | null>(null)
 
   const loadQueue = useCallback(async () => {
     setQueueLoading(true)
@@ -1183,26 +1244,55 @@ export default function Fulfill() {
 
   useEffect(() => { loadQueue() }, [loadQueue])
 
+  // "Next pickable order" — derived from the queue already in memory (same
+  // filter QueueView uses to exclude self-pickup, which goes through
+  // HandoverScreen instead). No new fetch: reuses the last loadQueue() result.
+  const nextPickableOrderId = useCallback((currentOrderId: string): string | null => {
+    const pickable = queue.filter(o => o.status !== 'self_pickup_pending')
+    const idx = pickable.findIndex(o => o.id === currentOrderId)
+    if (idx === -1) return null
+    return pickable[idx + 1]?.id ?? null
+  }, [queue])
+
   // Returning from PickScreen triggers an explicit refetch so the just-packed
-  // order reflects its new status before the queue re-renders.
-  const backFromPick = useCallback(() => {
+  // order reflects its new status before the queue re-renders. When leaving a
+  // pick session (completed or not), highlight whichever order was "next" from
+  // there, so the queue makes it obvious where to resume.
+  const backFromPick = useCallback((fromOrderId?: string) => {
+    setHighlightOrderId(fromOrderId ? nextPickableOrderId(fromOrderId) : null)
     loadQueue()
     setView({ type: 'queue' })
-  }, [loadQueue])
+  }, [loadQueue, nextPickableOrderId])
 
   if (view.type === 'pick') {
-    return <PickScreen orderId={view.orderId} onBack={backFromPick} />
+    return (
+      // key={orderId} forces a full remount on every order switch (including
+      // "Next order →" navigation, which changes orderId without unmounting
+      // via the parent). Without it, React reuses this component instance and
+      // per-order transient state (completed, showAwbDialog, awbPrintedOnce,
+      // lastResult, ...) would leak from the just-finished order into the next
+      // one's fresh data — e.g. showing the completion screen immediately for
+      // an order that hasn't been touched yet.
+      <PickScreen
+        key={view.orderId}
+        orderId={view.orderId}
+        onBack={() => backFromPick(view.orderId)}
+        nextOrderId={nextPickableOrderId(view.orderId)}
+        onGoToOrder={orderId => setView({ type: 'pick', orderId })}
+      />
+    )
   }
   if (view.type === 'handover') {
-    return <HandoverScreen order={view.order} onBack={backFromPick} />
+    return <HandoverScreen order={view.order} onBack={() => backFromPick()} />
   }
   return (
     <QueueView
       queue={queue}
       loading={queueLoading}
       loadQueue={loadQueue}
-      onSelect={orderId => setView({ type: 'pick', orderId })}
+      onSelect={orderId => { setHighlightOrderId(null); setView({ type: 'pick', orderId }) }}
       onHandover={order => setView({ type: 'handover', order })}
+      highlightOrderId={highlightOrderId}
     />
   )
 }
