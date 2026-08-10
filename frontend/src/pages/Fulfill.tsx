@@ -197,10 +197,28 @@ function AwbLinkDialog({
   const [conflictError, setConflictError] = useState(false)
   const [mismatchError, setMismatchError] = useState<{ scanned: string; existing: string } | null>(null)
   const [genericError, setGenericError] = useState(false)
-  const [printing, setPrinting] = useState(false)
-  const [awbMsg, setAwbMsg] = useState<AwbMsg>(null)
 
   useEffect(() => { inputRef.current?.focus() }, [])
+
+  // Bug fix — holds focus on THIS dialog's own input while it's open. PickScreen's
+  // scan input has its own SAFETY-CRITICAL "refocus me on any click" document
+  // listener that stays active the whole time PickScreen is mounted — including
+  // while this dialog (inline pre-Complete, or the modal post-Complete verify-scan)
+  // is open alongside/over it, since neither AwbLinkDialog variant unmounts
+  // PickScreen. Without this, any click while typing/scanning into THIS input
+  // (even the click that focuses it) gets immediately stolen back to PickScreen's
+  // input — "select then immediately deselect". Listeners on the same target fire
+  // in attachment order, and this one always attaches after PickScreen's (it can
+  // only mount once PickScreen already has), so it always runs second and wins —
+  // fixes the fight without touching PickScreen's marked-do-not-modify refocus
+  // effect or its scan handler at all.
+  useEffect(() => {
+    const refocus = () => {
+      if (document.activeElement !== inputRef.current) inputRef.current?.focus()
+    }
+    document.addEventListener('click', refocus)
+    return () => document.removeEventListener('click', refocus)
+  }, [])
 
   // SAFETY-CRITICAL — do not modify
   const triggerFlash = (state: 'success' | 'error') => {
@@ -209,8 +227,11 @@ function AwbLinkDialog({
   }
 
   const handleLink = async (tracking: string) => {
-    const trimmed = tracking.trim()
-    if (!trimmed || linking) return
+    // Strip ALL whitespace, not just the ends — a pasted value can carry internal
+    // spaces/newlines (e.g. copied from a multi-line source) that .trim() alone
+    // wouldn't catch, and the backend's normalizer expects a clean digit string.
+    const normalized = tracking.replace(/\s+/g, '')
+    if (!normalized || linking) return
     setLinking(true)
     setConflictError(false)
     setMismatchError(null)
@@ -218,7 +239,7 @@ function AwbLinkDialog({
     try {
       const { data, status } = await api<AwbLinkResponse>(`/fulfill/${orderId}/link`, {
         method: 'POST',
-        body: JSON.stringify({ trackingNumber: trimmed }),
+        body: JSON.stringify({ trackingNumber: normalized }),
       })
       if (status === 200 || status === 201) {
         playBeep(true)
@@ -253,22 +274,6 @@ function AwbLinkDialog({
     }
   }
 
-  const handlePrint = async () => {
-    if (!linked || printing) return
-    setPrinting(true)
-    setAwbMsg(null)
-    try {
-      const result = await printAwbPdf(linked.shipmentId)
-      if (result === 'emailed') {
-        setAwbMsg({ type: 'info', text: t('fulfill.printAwb.emailed') })
-      }
-    } catch (e: unknown) {
-      setAwbMsg({ type: 'error', text: (e as Error).message || t('fulfill.printAwb.error') })
-    } finally {
-      setPrinting(false)
-    }
-  }
-
   // SAFETY-CRITICAL — flash overlay: do not modify
   const flashOverlay =
     flash === 'success' ? 'fixed inset-0 bg-success/20 pointer-events-none z-[60] animate-flash'
@@ -296,31 +301,23 @@ function AwbLinkDialog({
       </p>
 
       {linked ? (
+        // No Print Waybill here — the AWB is already printed via the bottom-bar
+        // button before Complete ever unlocks (see PickScreen's handlePrintAwb /
+        // awbPrintedOnce gate). This view is the mandatory post-Complete verify-
+        // scan's confirmation, not a second print opportunity.
         <div className="text-center space-y-4 py-2">
           <CheckCircle2 size={40} strokeWidth={2} className="text-success mx-auto" />
           <div>
             <p className="text-h4 text-primary font-bold">{t('fulfill.linkAwb.title')}</p>
             <p className="text-body font-mono text-muted mt-1">{linked.tracking}</p>
           </div>
-          <div className="space-y-2 pt-2">
-            <Button
-              loading={printing}
-              onClick={handlePrint}
-              className="w-full"
-            >
-              {printing ? t('fulfill.printAwb.opening') : t('fulfill.printAwb.print')}
-            </Button>
-            {awbMsg && (
-              <p className={`text-small text-center ${awbMsg.type === 'error' ? 'text-danger' : 'text-muted'}`}>
-                {awbMsg.text}
-              </p>
-            )}
-            {onDone && (
-              <Button variant="secondary" onClick={onDone} className="w-full">
+          {onDone && (
+            <div className="pt-2">
+              <Button onClick={onDone} className="w-full">
                 {t('fulfill.linkAwb.done')}
               </Button>
-            )}
-          </div>
+            </div>
+          )}
         </div>
       ) : (
         <>
@@ -904,25 +901,33 @@ function PickScreen({
   )
   if (!order) return null
 
+  // Order-complete moment — same success-card language as AwbLinkDialog's linked
+  // view (rounded-2xl shadow-e3 p-[22px] card), but a distinct step: this fires
+  // right after handleComplete() succeeds (self-pickup) or the post-Complete AWB
+  // dialog's Done is clicked (courier) — never merged with the AWB-link card itself.
   if (completed) return (
-    <div className="flex flex-col h-screen bg-base items-center justify-center gap-4 p-8" data-testid="fulfill-pick-complete">
-      <CheckCircle2 size={56} strokeWidth={2} className="text-success" />
-      <p className="text-h3 text-primary font-bold text-center">
-        {order.is_self_pickup ? t('fulfill.selfPickupPacked') : t('fulfill.orderComplete')}
-      </p>
-      <p className="text-body text-muted">
-        <span className="font-mono">{order.number ?? order.id.slice(-8)}</span>
-        {order.customer_name && <> · {order.customer_name}</>}
-      </p>
-      <div className="w-full max-w-xs flex flex-col gap-2 mt-2">
-        {nextOrderId && (
-          <Button onClick={goNextFromCompletion} className="w-full">
-            {t('fulfill.nextOrder')}
+    <div className="flex flex-col h-screen bg-base items-center justify-center p-8" data-testid="fulfill-pick-complete">
+      <div className="bg-panel rounded-2xl shadow-e3 p-[22px] w-full max-w-md flex flex-col items-center gap-4 text-center">
+        <CheckCircle2 size={40} strokeWidth={2} className="text-success" />
+        <div>
+          <p className="text-h4 text-primary font-bold">
+            {order.is_self_pickup ? t('fulfill.selfPickupPacked') : t('fulfill.orderComplete')}
+          </p>
+          <p className="text-body text-muted mt-1">
+            <span className="font-mono">{order.number ?? order.id.slice(-8)}</span>
+            {order.customer_name && <> · {order.customer_name}</>}
+          </p>
+        </div>
+        <div className="w-full flex flex-col gap-2 pt-2">
+          {nextOrderId && (
+            <Button onClick={goNextFromCompletion} className="w-full">
+              {t('fulfill.nextOrder')}
+            </Button>
+          )}
+          <Button variant="secondary" onClick={goBackFromCompletion} className="w-full">
+            {t('fulfill.backToQueue')}
           </Button>
-        )}
-        <Button variant="secondary" onClick={goBackFromCompletion} className="w-full">
-          {t('fulfill.backToQueue')}
-        </Button>
+        </div>
       </div>
     </div>
   )
