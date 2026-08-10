@@ -6,6 +6,7 @@ import {
   Lock, Layers, RefreshCw, ChevronRight,
 } from 'lucide-react'
 import { Badge, Button, Skeleton, EmptyState } from '../components/ui'
+import Layout from '../components/Layout'
 import { getAccessToken, clearAccessToken } from '../auth'
 
 const BASE = '/api/v1'
@@ -501,7 +502,7 @@ function QueueView({
   const navigate = useNavigate()
 
   if (loading) return (
-    <div className="p-6 max-w-4xl mx-auto space-y-3">
+    <div className="space-y-3">
       <Skeleton className="h-8 w-48 rounded-xl" />
       {Array.from({ length: 3 }).map((_, i) => (
         <Skeleton key={i} className="h-20 rounded-2xl" />
@@ -544,7 +545,7 @@ function QueueView({
   }
 
   return (
-    <div className="p-6 max-w-6xl mx-auto" data-testid="fulfill-queue">
+    <div data-testid="fulfill-queue">
       <div className="flex items-center justify-between mb-6">
         <h1 className="text-h1 text-primary">{t('fulfill.title')}</h1>
         <div className="flex items-center gap-3">
@@ -1283,16 +1284,22 @@ export default function Fulfill() {
     )
   }
   if (view.type === 'handover') {
+    // Full-screen, no shell — matches the mockup's Self-Pickup Handover treatment
+    // (phone frames + a centered card on desktop, no sidebar shown).
     return <HandoverScreen order={view.order} onBack={() => backFromPick()} />
   }
+  // Queue view only — rendered inside the shell (sidebar + topbar), matching the
+  // mockup's in-shell queue. pick/handover above stay full-screen immersive.
   return (
-    <QueueView
-      queue={queue}
-      loading={queueLoading}
-      loadQueue={loadQueue}
-      onSelect={orderId => { setHighlightOrderId(null); setView({ type: 'pick', orderId }) }}
-      onHandover={order => setView({ type: 'handover', order })}
-      highlightOrderId={highlightOrderId}
-    />
+    <Layout>
+      <QueueView
+        queue={queue}
+        loading={queueLoading}
+        loadQueue={loadQueue}
+        onSelect={orderId => { setHighlightOrderId(null); setView({ type: 'pick', orderId }) }}
+        onHandover={order => setView({ type: 'handover', order })}
+        highlightOrderId={highlightOrderId}
+      />
+    </Layout>
   )
 }

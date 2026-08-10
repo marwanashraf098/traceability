@@ -69,13 +69,35 @@ function makeOrderDetail(overrides: Partial<{
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 // Fulfill.tsx uses its own local fetch wrapper — stub is set up per test inside jsdom.
+// mockFetch is the sequential queue each test configures via .mockReturnValueOnce()
+// for Fulfill's own calls (queue/order/scan/link/...), in call order.
 let mockFetch: ReturnType<typeof vi.fn>
 
 describe('Fulfill — dark theme + AWB print', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     mockFetch = vi.fn()
-    vi.stubGlobal('fetch', mockFetch)
+    // The queue view now renders inside the shared Layout shell, which fires its
+    // own background /me and /exceptions/count requests on mount (real name/role
+    // in the sidebar, exceptions-count bell — unrelated to anything these tests
+    // assert on). Both go through the same global fetch stub as Fulfill's own
+    // calls, so without this they'd silently consume a mockFetch.mockReturnValueOnce()
+    // meant for the queue/order call and desync every response after it. Resolve
+    // them out-of-band, before they ever reach the sequential queue.
+    vi.stubGlobal('fetch', (url: string, opts?: RequestInit) => {
+      if (typeof url === 'string' && (url.endsWith('/me') || url.includes('/exceptions/count'))) {
+        // api.ts's shared request() (used by Layout, unlike Fulfill's own local
+        // api() helper) also reads res.headers — jsonOk()'s plain fake doesn't
+        // have one, so build a fuller stand-in just for this shortcut.
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          headers: { get: (k: string) => (k === 'content-type' ? 'application/json' : null) },
+          json: async () => ({}),
+        })
+      }
+      return mockFetch(url, opts)
+    })
     vi.stubGlobal('localStorage', { getItem: vi.fn().mockReturnValue(null), setItem: vi.fn(), removeItem: vi.fn() })
   })
 
