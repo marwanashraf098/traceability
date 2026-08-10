@@ -17,7 +17,8 @@
     "pickups": "Pickups",
     "locations": "Locations",
     "shopifyInventory": "Inventory Sync",
-    "transfers": "Transfers"
+    "transfers": "Transfers",
+    "manager": "Manager"
   },
   "overview": {
     "title": "Overview",

@@ -94,11 +94,15 @@
   }
 
   /* ── Nav item ───────────────────────────────────────────────────────── */
+  /* Flat full-bleed row (Traced Shell dc.html) — active state adds a 3px
+     inline-start accent border; base reserves the same 3px as a transparent
+     border so content never shifts when a row becomes active. */
   .nav-item {
-    @apply flex items-center gap-3 px-3 py-2.5 rounded-lg text-body text-muted
+    @apply flex items-center gap-2.5 py-[9px] ps-[15px] pe-[18px] text-body text-muted
+           border-s-[3px] border-transparent
            hover:bg-white/5 hover:text-primary transition-colors cursor-pointer;
   }
   .nav-item-active {
-    @apply nav-item bg-brand/10 text-primary border-s-2 border-brand;
+    @apply nav-item bg-brand/[0.12] text-primary border-trace-blue;
   }
 }

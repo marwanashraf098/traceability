@@ -6,10 +6,27 @@ export function Logo({
   size    = 32,
   className = '',
 }: {
-  variant?:  'icon' | 'wordmark'
+  variant?:  'icon' | 'wordmark' | 'mark'
   size?:     number
   className?: string
 }) {
+  // 'mark' — plain wordmark + accent dot, no burst SVG (Traced Shell dc.html
+  // sidebar brand mark). Kept separate from 'wordmark' so the burst-icon
+  // treatment used elsewhere (Landing, LegalPage) is untouched.
+  if (variant === 'mark') {
+    return (
+      <span className={`inline-flex items-baseline gap-1 ${className}`}>
+        <span
+          className="font-bold tracking-tight text-primary select-none"
+          style={{ fontSize: size }}
+        >
+          traced
+        </span>
+        <span className="w-[5px] h-[5px] rounded-full bg-trace-blue self-start mt-[5px]" />
+      </span>
+    )
+  }
+
   const burst = (
     <svg
       data-testid="logo-svg"

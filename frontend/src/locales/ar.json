@@ -17,7 +17,8 @@
     "pickups": "جلسات الاستلام",
     "locations": "المواقع",
     "shopifyInventory": "مزامنة المخزون",
-    "transfers": "عمليات النقل"
+    "transfers": "عمليات النقل",
+    "manager": "المدير"
   },
   "overview": {
     "title": "لوحة التحكم",
