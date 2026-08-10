@@ -21,11 +21,11 @@ export function cn(...classes: (string | false | null | undefined)[]): string {
 type BadgeTone = 'neutral' | 'success' | 'info' | 'warning' | 'critical'
 
 const TONE_STYLE: Record<BadgeTone, string> = {
-  neutral:  'bg-muted/10 text-muted border-muted/20',
-  success:  'bg-success/10 text-success border-success/20',
-  info:     'bg-info/10 text-info border-info/20',
-  warning:  'bg-warning/10 text-warning border-warning/20',
-  critical: 'bg-critical/10 text-critical border-critical/20',
+  neutral:  'bg-muted/[0.14] text-neutral-text border-muted/[0.30]',
+  success:  'bg-success/[0.14] text-success-text border-success/[0.30]',
+  info:     'bg-info/[0.14] text-info-text border-info/[0.30]',
+  warning:  'bg-warning/[0.14] text-warning-text border-warning/[0.30]',
+  critical: 'bg-critical/[0.14] text-critical-text border-critical/[0.30]',
 }
 
 const STATUS_TONE: Record<string, BadgeTone> = {
@@ -41,8 +41,8 @@ const STATUS_TONE: Record<string, BadgeTone> = {
   return_in_transit:         'warning',
   return_pending_inspection: 'warning',
   returned:                  'warning',
-  reserved:                  'warning',
-  ready_to_pick:             'warning',
+  reserved:                  'info',
+  ready_to_pick:             'info',
   picking:                   'warning',
   returning:                 'warning',
   damaged:                   'critical',
@@ -266,7 +266,7 @@ export function Card({
     <div
       className={cn(
         'card p-5',
-        (interactive || hoverable) && 'hover:border-grey-600 hover:shadow-e2 transition-shadow cursor-pointer',
+        (interactive || hoverable) && 'hover:border-grey-600 hover:shadow-e3 transition-shadow cursor-pointer',
         className
       )}
     >
@@ -294,7 +294,7 @@ export function StatCard({
 }) {
   const deltaPositive = (delta ?? 0) >= 0
   return (
-    <div className="card p-5 flex flex-col gap-2">
+    <div className={cn('card p-5 flex flex-col gap-2', accent && 'border-trace-blue shadow-ring-accent')}>
       <p className="text-small text-muted uppercase tracking-wider">{label}</p>
       <p className={cn('text-h2 font-mono', accent ? 'text-trace-blue' : 'text-primary')}>
         {typeof value === 'number' ? value.toLocaleString() : value}
@@ -316,14 +316,14 @@ type ButtonVariant = 'primary' | 'secondary' | 'tertiary' | 'destructive' | 'bra
 type ButtonSize    = 'sm' | 'md' | 'lg'
 
 const BTN_VARIANT: Record<ButtonVariant, string> = {
-  primary:     'bg-trace-blue hover:bg-trace-blue-hover active:bg-trace-blue-active text-white',
-  brand:       'bg-trace-blue hover:bg-trace-blue-hover active:bg-trace-blue-active text-white',
-  secondary:   'bg-transparent border border-line text-primary hover:bg-white/5',
-  outline:     'bg-transparent border border-line text-primary hover:bg-white/5',
-  tertiary:    'text-trace-blue hover:underline hover:bg-trace-blue/10 bg-transparent',
+  primary:     'bg-trace-blue hover:bg-trace-blue-hover hover:shadow-glow active:bg-trace-blue-active active:shadow-none text-white',
+  brand:       'bg-trace-blue hover:bg-trace-blue-hover hover:shadow-glow active:bg-trace-blue-active active:shadow-none text-white',
+  secondary:   'bg-transparent border border-line text-primary hover:bg-elevated hover:border-[#3A4250] active:bg-charcoal',
+  outline:     'bg-transparent border border-line text-primary hover:bg-elevated hover:border-[#3A4250] active:bg-charcoal',
+  tertiary:    'text-trace-blue bg-transparent hover:bg-trace-blue/10 hover:text-trace-blue-hover active:bg-trace-blue/[0.18] active:text-trace-blue-active',
   ghost:       'text-muted hover:text-primary hover:bg-elevated bg-transparent',
-  destructive: 'bg-critical hover:bg-critical/90 text-white',
-  danger:      'bg-critical hover:bg-critical/90 text-white',
+  destructive: 'bg-critical hover:bg-[#B91C1C] active:bg-[#991B1B] text-white',
+  danger:      'bg-critical hover:bg-[#B91C1C] active:bg-[#991B1B] text-white',
 }
 
 const BTN_SIZE: Record<ButtonSize, string> = {
@@ -363,7 +363,7 @@ export function Button({
       disabled={disabled ?? loading}
       onClick={onClick}
       className={cn(
-        'btn rounded-xl transition-colors disabled:opacity-40 disabled:cursor-not-allowed',
+        'btn rounded-xl transition-colors',
         BTN_VARIANT[variant],
         BTN_SIZE[size],
         className
@@ -411,7 +411,7 @@ export function Input({
           className={cn(
             isScan ? 'input-scan' : 'input',
             IconS && 'ps-9',
-            invalid && 'border-critical focus:border-critical focus:ring-critical',
+            invalid && 'border-critical focus:border-critical focus:ring-critical/20',
             className
           )}
         />
@@ -439,16 +439,15 @@ export function EmptyState({
   action?: { label: string; onClick: () => void }
 }) {
   return (
-    <div className="flex flex-col items-center justify-center py-16 gap-3 text-muted">
-      <span className="text-4xl opacity-30">{icon}</span>
-      <p className="text-body">{message}</p>
+    <div className="flex flex-col items-center justify-center py-16 gap-3 text-center">
+      <div className="w-12 h-12 rounded-xl bg-elevated flex items-center justify-center text-xl">
+        {icon}
+      </div>
+      <p className="text-body font-semibold text-primary">{message}</p>
       {action && (
-        <button
-          onClick={action.onClick}
-          className="text-small text-trace-blue hover:underline mt-1"
-        >
+        <Button variant="primary" size="sm" onClick={action.onClick} className="mt-1">
           {action.label}
-        </button>
+        </Button>
       )}
     </div>
   )
@@ -905,10 +904,10 @@ export function Avatar({
 // ── Alert ─────────────────────────────────────────────────────────────────────
 
 const ALERT_STYLE: Record<string, { border: string; bg: string; icon: typeof CheckCircle2; text: string }> = {
-  success:  { border: 'border-s-4 border-success',  bg: 'bg-success/10',  icon: CheckCircle2,  text: 'text-success' },
-  info:     { border: 'border-s-4 border-info',     bg: 'bg-info/10',     icon: Info,          text: 'text-info' },
-  warning:  { border: 'border-s-4 border-warning',  bg: 'bg-warning/10',  icon: AlertTriangle, text: 'text-warning' },
-  critical: { border: 'border-s-4 border-critical', bg: 'bg-critical/10', icon: AlertCircle,   text: 'text-critical' },
+  success:  { border: 'border-success/30',  bg: 'bg-success/[0.14]',  icon: CheckCircle2,  text: 'text-success-text' },
+  info:     { border: 'border-info/30',     bg: 'bg-info/[0.14]',     icon: Info,          text: 'text-info-text' },
+  warning:  { border: 'border-warning/30',  bg: 'bg-warning/[0.14]',  icon: AlertTriangle, text: 'text-warning-text' },
+  critical: { border: 'border-critical/30', bg: 'bg-critical/[0.14]', icon: AlertCircle,   text: 'text-critical-text' },
 }
 
 export function Alert({
@@ -927,7 +926,7 @@ export function Alert({
   const s    = ALERT_STYLE[tone]
   const Icon = s.icon
   return (
-    <div className={cn('flex gap-3 rounded-lg p-4', s.border, s.bg)}>
+    <div className={cn('flex gap-3 rounded-lg px-3.5 py-3 border', s.border, s.bg)}>
       <Icon size={18} strokeWidth={2} className={cn('flex-shrink-0 mt-0.5', s.text)} />
       <div className="flex-1 min-w-0">
         <p className={cn('text-body font-medium', s.text)}>{title}</p>
@@ -958,21 +957,18 @@ interface ToastItem {
   duration?: number
 }
 
-const TOAST_STYLE: Record<ToastTone, { icon: typeof CheckCircle2; text: string; border: string }> = {
-  success: { icon: CheckCircle2,  text: 'text-success',  border: 'border-s-2 border-success' },
-  info:    { icon: Info,          text: 'text-info',     border: 'border-s-2 border-info' },
-  warning: { icon: AlertTriangle, text: 'text-warning',  border: 'border-s-2 border-warning' },
-  error:   { icon: AlertCircle,   text: 'text-critical', border: 'border-s-2 border-critical' },
+const TOAST_STYLE: Record<ToastTone, { icon: typeof CheckCircle2; text: string }> = {
+  success: { icon: CheckCircle2,  text: 'text-success-text' },
+  info:    { icon: Info,          text: 'text-info-text' },
+  warning: { icon: AlertTriangle, text: 'text-warning-text' },
+  error:   { icon: AlertCircle,   text: 'text-critical-text' },
 }
 
 function ToastCard({ tone, message, action, onDismiss }: Omit<ToastItem, 'id' | 'duration'> & { onDismiss: () => void }) {
   const s    = TOAST_STYLE[tone]
   const Icon = s.icon
   return (
-    <div className={cn(
-      'flex items-start gap-3 bg-elevated border border-line rounded-lg shadow-e3 px-4 py-3 min-w-[280px] max-w-sm animate-fadeIn',
-      s.border
-    )}>
+    <div className="flex items-start gap-3 bg-elevated border border-line rounded-lg shadow-e2 px-4 py-3 min-w-[280px] max-w-sm animate-fadeIn">
       <Icon size={16} strokeWidth={2} className={cn('flex-shrink-0 mt-0.5', s.text)} />
       <p className="text-body text-primary flex-1 min-w-0">{message}</p>
       {action && (
@@ -1047,11 +1043,11 @@ export function Progress({
 }) {
   const indeterminate = value === undefined
   return (
-    <div className={cn('w-full bg-white/10 rounded-full h-1.5 overflow-hidden', className)}>
+    <div className={cn('w-full bg-white/10 rounded-full h-1.5 overflow-hidden relative', className)}>
       <div
         className={cn(
-          'h-full rounded-full bg-trace-blue',
-          indeterminate ? 'w-2/5 animate-pulse' : 'transition-all duration-300'
+          'rounded-full bg-trace-blue',
+          indeterminate ? 'absolute w-2/5 h-full animate-indet' : 'h-full transition-all duration-300'
         )}
         style={indeterminate ? undefined : { width: `${Math.min(100, Math.max(0, value ?? 0))}%` }}
       />
@@ -1062,7 +1058,15 @@ export function Progress({
 // ── Skeleton ──────────────────────────────────────────────────────────────────
 
 export function Skeleton({ className = '' }: { className?: string }) {
-  return <div className={cn('animate-pulse bg-white/5 rounded', className)} />
+  return (
+    <div
+      className={cn(
+        'rounded animate-shimmer bg-[length:400px_100%]',
+        'bg-[linear-gradient(90deg,#161B22_25%,#1E2530_37%,#161B22_63%)]',
+        className
+      )}
+    />
+  )
 }
 
 export function TableSkeleton({ rows = 5, cols = 6 }: { rows?: number; cols?: number }) {

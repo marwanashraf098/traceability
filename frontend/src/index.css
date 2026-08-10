@@ -49,8 +49,8 @@
 
   /* ── Button primitives ──────────────────────────────────────────────── */
   .btn {
-    @apply inline-flex items-center justify-center gap-2 font-medium text-body
-           px-4 py-2 rounded-xl transition-colors disabled:opacity-40 disabled:cursor-not-allowed;
+    @apply inline-flex items-center justify-center gap-2 font-semibold text-body
+           px-4 py-2 rounded-xl transition-colors disabled:opacity-[0.35] disabled:cursor-not-allowed;
   }
   .btn-brand {
     @apply btn bg-brand hover:bg-brand-hover text-white;
@@ -69,15 +69,17 @@
   .input {
     @apply w-full bg-surface border border-line rounded-lg text-primary text-body
            px-3 py-2 placeholder-muted
-           focus:border-brand focus:ring-1 focus:ring-brand transition-colors;
+           focus:border-brand focus:ring-[3px] focus:ring-brand/20 transition-colors
+           disabled:bg-charcoal disabled:opacity-60 disabled:cursor-not-allowed;
   }
   .input-scan {
-    @apply input text-lg font-mono border-2 border-brand/40 focus:border-brand py-3;
+    @apply input text-lg font-mono border-2 border-brand/40 focus:border-brand py-3
+           shadow-[0_0_0_3px_rgba(37,99,235,0.18)];
   }
 
   /* ── Status badge ───────────────────────────────────────────────────── */
   .badge {
-    @apply inline-flex items-center px-2 py-0.5 rounded-full text-small font-medium;
+    @apply inline-flex items-center px-2.5 py-1 rounded-full text-small font-semibold;
   }
 
   /* ── Table ──────────────────────────────────────────────────────────── */

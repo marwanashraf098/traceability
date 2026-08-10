@@ -14,8 +14,9 @@ export default {
           active:  '#1E40AF',
         },
 
-        critical: '#DC2626',
-        info:     '#0EA5E9',
+        critical: { DEFAULT: '#DC2626', text: '#F87171' },
+        info:     { DEFAULT: '#0EA5E9', text: '#38BDF8' },
+        neutral:  { text: '#9CA6B2' },
 
         grey: {
           50:  '#F2F4F7',
@@ -54,10 +55,12 @@ export default {
         success: {
           DEFAULT: '#16A34A', // was #22C55E
           muted:   '#14532D',
+          text:    '#4ADE80',
         },
         warning: {
           DEFAULT: '#F59E0B', // unchanged
           muted:   '#78350F',
+          text:    '#FBBF24',
         },
         danger: {
           DEFAULT: '#DC2626', // was #EF4444 → critical
@@ -107,8 +110,9 @@ export default {
         // Day 15 compat aliases
         card:     '0 1px 2px 0 rgba(0,0,0,0.30)',
         elevated: '0 4px 12px -2px rgba(0,0,0,0.38)',
-        brand:    '0 0 20px 0 rgba(37,99,235,0.25)',
-        glow:     '0 0 0 3px rgba(37,99,235,0.35)',
+        brand:      '0 0 20px 0 rgba(37,99,235,0.25)',
+        glow:       '0 0 0 4px rgba(37,99,235,0.35)',
+        'ring-accent': '0 0 0 3px rgba(37,99,235,0.14)',
       },
 
       zIndex: {
@@ -134,11 +138,21 @@ export default {
           '0%':        { transform: 'scale(1)', opacity: '1' },
           '75%, 100%': { transform: 'scale(2)', opacity: '0' },
         },
+        shimmer: {
+          '0%':   { backgroundPosition: '-200px 0' },
+          '100%': { backgroundPosition: '200px 0' },
+        },
+        indet: {
+          '0%':   { left: '-30%' },
+          '100%': { left: '100%' },
+        },
       },
       animation: {
         flash:   'flash 0.6s ease-out forwards',
         fadeIn:  'fadeIn 0.2s ease-out',
         dotPing: 'dotPing 1.5s cubic-bezier(0,0,0.2,1) infinite',
+        shimmer: 'shimmer 1.4s linear infinite',
+        indet:   'indet 1.4s ease-in-out infinite',
       },
     },
   },
