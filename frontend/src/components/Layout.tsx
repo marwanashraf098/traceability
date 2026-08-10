@@ -5,9 +5,9 @@ import type { LucideIcon } from 'lucide-react'
 import {
   LayoutDashboard, ShoppingBag, List, Inbox, ClipboardList, PackageCheck,
   Truck, Repeat, Undo2, AlertTriangle, Plug, MapPin, Store, UserPlus,
-  Users, Settings, LogOut, Globe, Search, ChevronDown,
+  Users, Settings, LogOut, Globe, Search, ChevronDown, Bell,
 } from 'lucide-react'
-import { getRoleFromToken, request } from '../api'
+import { getRoleFromToken, request, getMe, getExceptionsCount, type Me } from '../api'
 import { clearAccessToken } from '../auth'
 import { Logo } from './Logo'
 import { cn } from './ui'
@@ -36,6 +36,14 @@ function roleInitials(role: string | null): string {
   return role ? role.slice(0, 2).toUpperCase() : '?'
 }
 
+function nameInitials(name: string): string {
+  return name.trim().split(/\s+/).slice(0, 2).map(w => w[0]).join('').toUpperCase()
+}
+
+function avatarInitials(me: Me | null, role: string | null): string {
+  return me?.name ? nameInitials(me.name) : roleInitials(role)
+}
+
 // ── Layout ────────────────────────────────────────────────────────────────────
 
 export default function Layout({ children }: { children: ReactNode }) {
@@ -43,6 +51,8 @@ export default function Layout({ children }: { children: ReactNode }) {
   const navigate    = useNavigate()
   const [searchQ, setSearchQ]   = useState('')
   const [menuOpen, setMenuOpen] = useState(false)
+  const [me, setMe]             = useState<Me | null>(null)
+  const [exceptionsCount, setExceptionsCount] = useState<number | null>(null)
   const searchRef = useRef<HTMLInputElement>(null)
   const menuRef   = useRef<HTMLDivElement>(null)
   const role      = getRoleFromToken()
@@ -91,6 +101,23 @@ export default function Layout({ children }: { children: ReactNode }) {
     return () => document.removeEventListener('mousedown', onOutside)
   }, [menuOpen])
 
+  // Shell identity — decorative, non-blocking: on failure, keep the role-only
+  // placeholder from the Shell pass rather than surfacing an error.
+  useEffect(() => {
+    getMe().then(setMe).catch(err => console.error('Failed to load /me', err))
+  }, [])
+
+  // Open-exceptions count for the notification bell — decorative, non-blocking:
+  // on failure the bell renders with no badge (never NaN/stale), never throws
+  // into the shell. Restricted to Owner/Manager, matching the backend endpoint's
+  // access control (workers get 403 on /exceptions and /exceptions/count).
+  useEffect(() => {
+    if (role === 'worker') return
+    getExceptionsCount()
+      .then(r => setExceptionsCount(r.count))
+      .catch(err => console.error('Failed to load exceptions count', err))
+  }, [role])
+
   return (
     <div className="flex h-screen bg-bg overflow-hidden">
 
@@ -130,12 +157,17 @@ export default function Layout({ children }: { children: ReactNode }) {
           )}
         </nav>
 
-        {/* Bottom: identity — avatar (role-based initials) + role, no name/email available client-side */}
+        {/* Bottom: identity — real name+role once /me resolves; role-only placeholder until then/on failure */}
         <div className="border-t border-line px-[18px] py-[14px] flex items-center gap-2.5">
           <span className="w-[30px] h-[30px] rounded-full bg-trace-blue text-white text-[12px] font-bold flex items-center justify-center flex-shrink-0">
-            {roleInitials(role)}
+            {avatarInitials(me, role)}
           </span>
-          {role && (
+          {me ? (
+            <span className="min-w-0 flex flex-col">
+              <span className="text-small text-primary leading-tight truncate">{me.name}</span>
+              <span className="text-caption text-muted leading-tight">{t(`users.roles.${me.role}`)}</span>
+            </span>
+          ) : role && (
             <span className="text-small text-muted capitalize">{t(`users.roles.${role}`)}</span>
           )}
         </div>
@@ -165,43 +197,69 @@ export default function Layout({ children }: { children: ReactNode }) {
             </div>
           </form>
 
-          {/* User menu — avatar trigger, dropdown hosts lang toggle + logout */}
-          <div ref={menuRef} className="relative flex-shrink-0">
-            <button
-              type="button"
-              onClick={() => setMenuOpen(o => !o)}
-              className="flex items-center gap-1.5"
-            >
-              <span className="w-[26px] h-[26px] rounded-full bg-trace-blue text-white text-[11px] font-bold flex items-center justify-center">
-                {roleInitials(role)}
-              </span>
-              <ChevronDown
-                size={13}
-                strokeWidth={2}
-                className={cn('text-muted transition-transform', menuOpen && 'rotate-180')}
-              />
-            </button>
-
-            {menuOpen && (
-              <div className="absolute end-0 top-full mt-2 w-48 bg-surface border border-line rounded-lg shadow-e3 overflow-hidden z-dropdown py-1">
-                <button
-                  type="button"
-                  onClick={() => { toggleLang(); setMenuOpen(false) }}
-                  className="w-full flex items-center gap-2.5 px-3 py-2 text-body text-start text-muted hover:bg-white/5 hover:text-primary transition-colors"
-                >
-                  <Globe size={16} strokeWidth={1.75} />
-                  {i18n.language === 'en' ? 'العربية' : 'English'}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => { setMenuOpen(false); logout() }}
-                  className="w-full flex items-center gap-2.5 px-3 py-2 text-body text-start text-danger hover:bg-danger/10 transition-colors"
-                >
-                  <LogOut size={16} strokeWidth={1.75} />
-                  {t('nav.logout')}
-                </button>
-              </div>
+          <div className="flex items-center gap-4 flex-shrink-0">
+            {/* Notification bell — count = open exceptions, our single "needs attention"
+                surface. No badge on the Exceptions nav item — one number, one place.
+                Owner/Manager only, matching the backend endpoint's access control. */}
+            {role !== 'worker' && (
+              <button
+                type="button"
+                onClick={() => navigate('/exceptions')}
+                className="relative text-muted hover:text-primary transition-colors"
+              >
+                <Bell size={17} strokeWidth={1.75} />
+                {!!exceptionsCount && (
+                  <span className="absolute -top-1 -end-1.5 bg-critical text-white text-[9px] font-bold rounded-full px-[4px] leading-[1.2] font-mono">
+                    {exceptionsCount > 99 ? '99+' : exceptionsCount}
+                  </span>
+                )}
+              </button>
             )}
+
+            {/* User menu — avatar trigger, dropdown shows real identity + hosts lang toggle + logout */}
+            <div ref={menuRef} className="relative">
+              <button
+                type="button"
+                onClick={() => setMenuOpen(o => !o)}
+                className="flex items-center gap-1.5"
+              >
+                <span className="w-[26px] h-[26px] rounded-full bg-trace-blue text-white text-[11px] font-bold flex items-center justify-center">
+                  {avatarInitials(me, role)}
+                </span>
+                <ChevronDown
+                  size={13}
+                  strokeWidth={2}
+                  className={cn('text-muted transition-transform', menuOpen && 'rotate-180')}
+                />
+              </button>
+
+              {menuOpen && (
+                <div className="absolute end-0 top-full mt-2 w-48 bg-surface border border-line rounded-lg shadow-e3 overflow-hidden z-dropdown py-1">
+                  {me && (
+                    <div className="px-3 py-2 border-b border-line min-w-0">
+                      <p className="text-small text-primary truncate">{me.name}</p>
+                      {me.email && <p className="text-caption text-muted truncate">{me.email}</p>}
+                    </div>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => { toggleLang(); setMenuOpen(false) }}
+                    className="w-full flex items-center gap-2.5 px-3 py-2 text-body text-start text-muted hover:bg-white/5 hover:text-primary transition-colors"
+                  >
+                    <Globe size={16} strokeWidth={1.75} />
+                    {i18n.language === 'en' ? 'العربية' : 'English'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => { setMenuOpen(false); logout() }}
+                    className="w-full flex items-center gap-2.5 px-3 py-2 text-body text-start text-danger hover:bg-danger/10 transition-colors"
+                  >
+                    <LogOut size={16} strokeWidth={1.75} />
+                    {t('nav.logout')}
+                  </button>
+                </div>
+              )}
+            </div>
           </div>
         </header>
 

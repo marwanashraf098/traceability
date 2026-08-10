@@ -221,4 +221,54 @@ class ExceptionRlsTest {
             jdbc.update("DELETE FROM tenants WHERE id = ?", otherTenantId);
         }
     }
+
+    /**
+     * (e)/(f) — countOpenExceptions() under RLS: same-tenant positive control (app_user
+     * WITH the correct GUC counts its own tenant's open exception) alongside a
+     * cross-tenant negative control (app_user under a DIFFERENT tenant's GUC must
+     * count zero — RLS makes the row invisible, not just filtered by a WHERE clause).
+     */
+    @Test
+    void e_countOpenExceptions_sameTenantPositiveControl() {
+        jdbc.update(
+            "INSERT INTO orders (tenant_id, store_id, external_id, number, status, " +
+            "    payment_method, placed_at, on_hold, hold_reason) " +
+            "VALUES (?, ?, 'RLS-COUNT-001', '#RLS-COUNT-001', 'new'::order_status, " +
+            "    'cod', now(), true, 'Blocked customer')",
+            tenantId, storeId);
+
+        int count = appUserTx.execute(txs -> appUserExcSvc.countOpenExceptions());
+
+        assertThat(count).isGreaterThanOrEqualTo(1);
+    }
+
+    @Test
+    void f_countOpenExceptions_crossTenantNegativeControl() {
+        UUID otherTenantId = UUID.randomUUID();
+        UUID otherStoreId  = UUID.randomUUID();
+        jdbc.update("INSERT INTO tenants (id, name) VALUES (?, 'RlsOtherCountTenant')", otherTenantId);
+        jdbc.update("INSERT INTO stores (id, tenant_id, platform, shop_domain, status) " +
+                    "VALUES (?, ?, 'shopify', 'rls-other-count.myshopify.com', 'disconnected')",
+                    otherStoreId, otherTenantId);
+
+        jdbc.update(
+            "INSERT INTO orders (tenant_id, store_id, external_id, number, status, " +
+            "    payment_method, placed_at, on_hold, hold_reason) " +
+            "VALUES (?, ?, 'RLS-COUNT-XT', '#RLS-COUNT-XT', 'new'::order_status, " +
+            "    'cod', now(), true, 'Blocked customer')",
+            tenantId, storeId);
+
+        try {
+            TenantContext.set(otherTenantId);
+            int count = appUserTx.execute(txs -> appUserExcSvc.countOpenExceptions());
+
+            assertThat(count).as("cross-tenant GUC must count zero of this tenant's open exceptions")
+                .isEqualTo(0);
+        } finally {
+            TenantContext.set(tenantId); // restore for @AfterEach cleanup, which filters by tenantId
+            jdbc.update("DELETE FROM orders WHERE tenant_id = ?", otherTenantId);
+            jdbc.update("DELETE FROM stores WHERE tenant_id = ?", otherTenantId);
+            jdbc.update("DELETE FROM tenants WHERE id = ?", otherTenantId);
+        }
+    }
 }

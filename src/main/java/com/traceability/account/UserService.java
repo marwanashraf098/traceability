@@ -44,6 +44,27 @@ public class UserService {
             tenantId);
     }
 
+    // ── Self ──────────────────────────────────────────────────────────────────
+    // GET /api/v1/me — belt-and-suspenders tenant_id = ? alongside RLS: userId
+    // comes from the caller's own JWT, but a stale/replayed token from a user
+    // since moved to another tenant must not resolve to a foreign-tenant row.
+
+    @Transactional(readOnly = true)
+    public Map<String, Object> getSelf(UUID userId) {
+        UUID tenantId = TenantContext.require();
+        return jdbc.query(
+            "SELECT name, email, role FROM users WHERE id = ? AND tenant_id = ?",
+            rs -> {
+                if (!rs.next()) return null;
+                Map<String, Object> self = new LinkedHashMap<>();
+                self.put("name",  rs.getString("name"));
+                self.put("email", rs.getString("email"));
+                self.put("role",  rs.getString("role"));
+                return self;
+            },
+            userId, tenantId);
+    }
+
     // ── Create ────────────────────────────────────────────────────────────────
 
     @Transactional

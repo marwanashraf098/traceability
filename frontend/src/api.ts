@@ -624,6 +624,24 @@ export function deactivateUser(id: string) {
   return request<void>(`/users/${id}/deactivate`, { method: 'POST' })
 }
 
+// ── Self (shell identity) ─────────────────────────────────────────────────────
+
+export interface Me {
+  name: string
+  email: string | null
+  role: 'owner' | 'manager' | 'worker'
+}
+
+export function getMe() {
+  return request<Me>('/me')
+}
+
+// ── Open-exceptions count (shell notification bell) ───────────────────────────
+
+export function getExceptionsCount() {
+  return request<{ count: number }>('/exceptions/count')
+}
+
 // ── Inventory summary (FR-15.1) ───────────────────────────────────────────────
 
 export interface InventoryStatusCount {

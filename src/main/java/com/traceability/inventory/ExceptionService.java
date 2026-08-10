@@ -124,6 +124,46 @@ public class ExceptionService {
         return result;
     }
 
+    /**
+     * Count of currently-open exceptions — the shell's notification-bell number.
+     * Deliberately calls the SAME 17 detector methods listExceptions() calls
+     * (same config, same suppression sub-queries), just summing sizes instead of
+     * enriching/sorting/paginating — two independent implementations of the same
+     * 17 business rules would drift. Equal to listExceptions(null,null,0,MAX).total.
+     */
+    @Transactional(readOnly = true)
+    public int countOpenExceptions() {
+        UUID tenantId = TenantContext.require();
+
+        Map<String, Object> cfg = jdbc.queryForMap(
+            "SELECT never_received_window_days, stuck_shipment_days, " +
+            "       return_in_transit_stuck_days " +
+            "FROM tenants WHERE id = ?", tenantId);
+        int neverReceivedDays        = ((Number) cfg.get("never_received_window_days")).intValue();
+        int stuckDays                = ((Number) cfg.get("stuck_shipment_days")).intValue();
+        int returnInTransitStuckDays = ((Number) cfg.get("return_in_transit_stuck_days")).intValue();
+
+        int total = 0;
+        total += detectLost(tenantId).size();
+        total += detectNeverReceived(tenantId, neverReceivedDays).size();
+        total += detectUnmatched(tenantId).size();
+        total += detectBlocked(tenantId).size();
+        total += detectStuck(tenantId, stuckDays).size();
+        total += detectUnexpectedReturn(tenantId).size();
+        total += detectDeliveryLimbo(tenantId).size();
+        total += detectNdr(tenantId).size();
+        total += detectGuidedUnpack(tenantId).size();
+        total += detectMissingAwb(tenantId).size();
+        total += detectShopifyCancelVsInflight(tenantId).size();
+        total += detectCancelledWithLiveShipment(tenantId).size();
+        total += detectCancelledButDelivered(tenantId).size();
+        total += detectMissingProviderId(tenantId).size();
+        total += detectHighAttempts(tenantId).size();
+        total += detectShopifyEditConflict(tenantId).size();
+        total += detectReturnInTransitStuck(tenantId, returnInTransitStuckDays).size();
+        return total;
+    }
+
     @Transactional
     public void resolve(String exceptionType, String subjectKey, UUID resolvedBy, String note) {
         UUID tenantId = TenantContext.require();

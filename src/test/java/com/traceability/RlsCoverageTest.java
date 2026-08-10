@@ -92,7 +92,9 @@ class RlsCoverageTest {
             "/api/v1/stock-takes/sessions",
             "/api/v1/stock-takes/sessions/{sessionId}",
             "/api/v1/transfers",
-            "/api/v1/transfers/{transferId}"
+            "/api/v1/transfers/{transferId}",
+            "/api/v1/me",
+            "/api/v1/exceptions/count"
     );
 
     // ── Patterns consciously excluded, with reasons ────────────────────────────
@@ -287,6 +289,29 @@ class RlsCoverageTest {
         ResponseEntity<List> resp = get("/api/v1/users", List.class);
         assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.OK);
         assertThat(resp.getBody()).isNotEmpty();
+    }
+
+    @Test
+    void me_returnsOwnIdentity() {
+        ResponseEntity<Map> resp = get("/api/v1/me", Map.class);
+        assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(resp.getBody().get("name")).isEqualTo("cov_owner");
+        assertThat(resp.getBody().get("email")).isEqualTo("cov@test.com");
+        assertThat(resp.getBody().get("role")).isEqualTo("owner");
+    }
+
+    @Test
+    void exceptionsCount_returnsSeededCount() {
+        jdbc.update(
+            "INSERT INTO orders (tenant_id, store_id, external_id, number, status, " +
+            "    payment_method, placed_at, on_hold, hold_reason) " +
+            "VALUES (?, ?, 'EXT-CVG-EXC-COUNT', '#CVG-EXC-COUNT', 'new'::order_status, " +
+            "    'cod', now(), true, 'Blocked customer')",
+            tenantId, storeId);
+
+        ResponseEntity<Map> resp = get("/api/v1/exceptions/count", Map.class);
+        assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(((Number) resp.getBody().get("count")).intValue()).isGreaterThanOrEqualTo(1);
     }
 
     @Test

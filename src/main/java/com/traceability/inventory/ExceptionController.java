@@ -13,6 +13,7 @@ import java.util.Map;
  * Exceptions center (FR-15.3).
  *
  * GET  /api/v1/exceptions           — paginated open-exception list, sorted CRITICAL→LOW then oldest
+ * GET  /api/v1/exceptions/count     — open-exception count (shell notification bell)
  * POST /api/v1/exceptions/resolve   — acknowledge / mark resolved (writes audit record)
  * GET  /api/v1/exceptions/resolutions — audit trail of resolved exceptions
  */
@@ -34,6 +35,12 @@ public class ExceptionController {
             @RequestParam(defaultValue = "0")  int page,
             @RequestParam(defaultValue = "50") int size) {
         return svc.listExceptions(type, severity, page, Math.min(size, 200));
+    }
+
+    @GetMapping("/count")
+    @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
+    public Map<String, Object> count() {
+        return Map.of("count", svc.countOpenExceptions());
     }
 
     @PostMapping("/resolve")
