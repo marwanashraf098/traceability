@@ -167,33 +167,35 @@ async function printAwbPdf(shipmentId: string): Promise<'opened' | 'emailed'> {
 
 // ── AWB-scan dialog ────────────────────────────────────────────────────────────
 //
-// Two call sites, same scan/link/error-handling logic:
-//   - pre-Complete (variant='inline', onLinked set): the packer must link an unlinked order
-//     before Complete can appear at all. On a successful scan, onLinked() fires immediately —
-//     there is no "linked" success sub-view here, no backdrop, and no way to bypass linking.
-//     PickScreen closes this and re-fetches the order; the existing Print Waybill button
-//     (now enabled) takes over from there.
-//   - post-Complete (variant='modal' default, onLinked unset): the mandatory verify-scan.
-//     Shows the "linked" success view (Print Waybill + Done) exactly as before. The
-//     "Skip — link later" escape hatch has been removed entirely — this step cannot be
-//     bypassed, in either call site.
+// Two call sites, same scan/link/error-handling logic, both variant='inline' at
+// pre-Complete and variant='modal' at post-Complete — but BOTH now fire onLinked()
+// the instant a scan succeeds, closing this dialog with no success sub-view of its
+// own. There is exactly ONE completion screen in the whole flow: PickScreen's own
+// `completed` card (Next order / Back to Queue). This dialog used to also show its
+// own "linked" success view (checkmark + tracking + Done) for the post-Complete
+// call site only, chaining straight into PickScreen's completion card right after —
+// two success screens in a row for one action. Fixed by making the post-Complete
+// call site behave exactly like the pre-Complete one already did.
+//   - pre-Complete (variant='inline'): the packer must link an unlinked order
+//     before Complete can appear at all. PickScreen closes this and re-fetches the
+//     order; the existing Print Waybill button (now enabled) takes over.
+//   - post-Complete (variant='modal'): the mandatory verify-scan. PickScreen closes
+//     this and shows its own completion card.
+// No "Skip — link later" escape hatch in either — this step cannot be bypassed.
 
 function AwbLinkDialog({
   orderId,
-  onDone,
   onLinked,
   variant = 'modal',
 }: {
   orderId: string
-  onDone?: () => void
-  onLinked?: (result: { tracking: string; shipmentId: string }) => void
+  onLinked: (result: { tracking: string; shipmentId: string }) => void
   variant?: 'modal' | 'inline'
 }) {
   const { t } = useTranslation()
   const inputRef = useRef<HTMLInputElement>(null)
   const [flash, setFlash] = useState<FlashState>('idle')
   const [linking, setLinking] = useState(false)
-  const [linked, setLinked] = useState<{ tracking: string; shipmentId: string } | null>(null)
   const [conflictError, setConflictError] = useState(false)
   const [mismatchError, setMismatchError] = useState<{ scanned: string; existing: string } | null>(null)
   const [genericError, setGenericError] = useState(false)
@@ -244,11 +246,7 @@ function AwbLinkDialog({
       if (status === 200 || status === 201) {
         playBeep(true)
         triggerFlash('success')
-        if (onLinked) {
-          onLinked({ tracking: data.trackingNumber, shipmentId: data.shipmentId })
-        } else {
-          setLinked({ tracking: data.trackingNumber, shipmentId: data.shipmentId })
-        }
+        onLinked({ tracking: data.trackingNumber, shipmentId: data.shipmentId })
       } else if (status === 409) {
         playBeep(false)
         triggerFlash('error')
@@ -280,13 +278,12 @@ function AwbLinkDialog({
     : flash === 'error' ? 'fixed inset-0 bg-danger/20 pointer-events-none z-[60] animate-flash'
     : 'hidden'
 
-  // linked/print/done sub-view only ever renders in modal (post-Complete) usage — the
-  // inline (pre-Complete) usage calls onLinked() the moment a scan succeeds and is closed
-  // by the caller before this branch would ever be reached.
+  // No "linked" success sub-view here anymore — onLinked() fires the instant a scan
+  // succeeds (both call sites), closing this dialog before any success state would
+  // ever render. The single completion screen lives entirely in the caller
+  // (PickScreen's `completed` card / the pre-Complete inline close+reload).
   const hasError = conflictError || mismatchError || genericError
-  const stateTag = linked
-    ? { text: t('fulfill.linkAwb.stateSuccess'), className: 'text-success-text' }
-    : conflictError
+  const stateTag = conflictError
     ? { text: t('fulfill.linkAwb.stateConflict'), className: 'text-critical-text' }
     : mismatchError
     ? { text: t('fulfill.linkAwb.stateMismatch'), className: 'text-warning-text' }
@@ -300,69 +297,46 @@ function AwbLinkDialog({
         {stateTag.text}
       </p>
 
-      {linked ? (
-        // No Print Waybill here — the AWB is already printed via the bottom-bar
-        // button before Complete ever unlocks (see PickScreen's handlePrintAwb /
-        // awbPrintedOnce gate). This view is the mandatory post-Complete verify-
-        // scan's confirmation, not a second print opportunity.
-        <div className="text-center space-y-4 py-2">
-          <CheckCircle2 size={40} strokeWidth={2} className="text-success mx-auto" />
-          <div>
-            <p className="text-h4 text-primary font-bold">{t('fulfill.linkAwb.title')}</p>
-            <p className="text-body font-mono text-muted mt-1">{linked.tracking}</p>
-          </div>
-          {onDone && (
-            <div className="pt-2">
-              <Button onClick={onDone} className="w-full">
-                {t('fulfill.linkAwb.done')}
-              </Button>
-            </div>
+      <h2 className="text-h4 text-primary mb-1">{t('fulfill.linkAwb.title')}</h2>
+      <p className="text-small text-muted mb-4">{t('fulfill.linkAwb.subtitle')}</p>
+
+      {/* SAFETY-CRITICAL scan input — ref, onKeyDown, disabled behavior untouched;
+          icon is a purely visual sibling <span>, no input props/logic affected */}
+      <div className="relative mb-3">
+        <span className="absolute start-3 top-1/2 -translate-y-1/2 text-trace-blue pointer-events-none">
+          <ScanLine size={18} strokeWidth={2} />
+        </span>
+        <input
+          ref={inputRef}
+          type="text"
+          placeholder={t('fulfill.linkAwb.placeholder')}
+          className="input-scan w-full ps-10"
+          disabled={linking}
+          onKeyDown={e => {
+            if (e.key === 'Enter') handleLink((e.target as HTMLInputElement).value)
+          }}
+        />
+      </div>
+
+      {hasError && (
+        <div className="flex items-start gap-2 mb-3">
+          <AlertTriangle size={15} strokeWidth={2} className="text-critical flex-shrink-0 mt-0.5" />
+          {conflictError && (
+            <p className="text-critical-text text-small font-medium">{t('fulfill.linkAwb.conflict')}</p>
+          )}
+          {mismatchError && (
+            <p className="text-warning-text text-small font-medium">
+              {t('fulfill.linkAwb.awbMismatch', { scanned: mismatchError.scanned, existing: mismatchError.existing })}
+            </p>
+          )}
+          {genericError && (
+            <p className="text-critical-text text-small font-medium">{t('fulfill.linkAwb.error')}</p>
           )}
         </div>
-      ) : (
-        <>
-          <h2 className="text-h4 text-primary mb-1">{t('fulfill.linkAwb.title')}</h2>
-          <p className="text-small text-muted mb-4">{t('fulfill.linkAwb.subtitle')}</p>
-
-          {/* SAFETY-CRITICAL scan input — ref, onKeyDown, disabled behavior untouched;
-              icon is a purely visual sibling <span>, no input props/logic affected */}
-          <div className="relative mb-3">
-            <span className="absolute start-3 top-1/2 -translate-y-1/2 text-trace-blue pointer-events-none">
-              <ScanLine size={18} strokeWidth={2} />
-            </span>
-            <input
-              ref={inputRef}
-              type="text"
-              placeholder={t('fulfill.linkAwb.placeholder')}
-              className="input-scan w-full ps-10"
-              disabled={linking}
-              onKeyDown={e => {
-                if (e.key === 'Enter') handleLink((e.target as HTMLInputElement).value)
-              }}
-            />
-          </div>
-
-          {hasError && (
-            <div className="flex items-start gap-2 mb-3">
-              <AlertTriangle size={15} strokeWidth={2} className="text-critical flex-shrink-0 mt-0.5" />
-              {conflictError && (
-                <p className="text-critical-text text-small font-medium">{t('fulfill.linkAwb.conflict')}</p>
-              )}
-              {mismatchError && (
-                <p className="text-warning-text text-small font-medium">
-                  {t('fulfill.linkAwb.awbMismatch', { scanned: mismatchError.scanned, existing: mismatchError.existing })}
-                </p>
-              )}
-              {genericError && (
-                <p className="text-critical-text text-small font-medium">{t('fulfill.linkAwb.error')}</p>
-              )}
-            </div>
-          )}
-
-          {/* No skip/bypass — the verify-scan is mandatory in every call site. */}
-          <p className="text-caption text-muted">{t('fulfill.linkAwb.mandatoryNote')}</p>
-        </>
       )}
+
+      {/* No skip/bypass — the verify-scan is mandatory in every call site. */}
+      <p className="text-caption text-muted">{t('fulfill.linkAwb.mandatoryNote')}</p>
     </div>
   )
 
@@ -1215,11 +1189,12 @@ function PickScreen({
         </div>
       )}
 
-      {/* Post-Complete AWB-scan dialog — mandatory verify-scan, no skip. Done now
-          lands on the completion view (Next order / Back to queue) instead of
-          going straight back — AwbLinkDialog itself is untouched either way. */}
+      {/* Post-Complete AWB-scan dialog — mandatory verify-scan, no skip. onLinked
+          closes it the instant the scan succeeds (same as the pre-Complete inline
+          call site), landing directly on PickScreen's single completion card — no
+          intermediate "AWB linked" screen of its own. */}
       {showAwbDialog && (
-        <AwbLinkDialog orderId={orderId} onDone={() => { setShowAwbDialog(false); setCompleted(true) }} />
+        <AwbLinkDialog orderId={orderId} onLinked={() => { setShowAwbDialog(false); setCompleted(true) }} />
       )}
     </div>
   )
