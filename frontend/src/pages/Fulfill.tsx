@@ -1,9 +1,11 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
-import { Badge, Button, Skeleton } from '../components/ui'
-
-import { EmptyState } from '../components/ui'
+import {
+  X, ArrowLeft, ArrowRight, CheckCircle2, AlertTriangle, ScanLine,
+  Lock, Layers, RefreshCw, ChevronRight,
+} from 'lucide-react'
+import { Badge, Button, Skeleton, EmptyState } from '../components/ui'
 import { getAccessToken, clearAccessToken } from '../auth'
 
 const BASE = '/api/v1'
@@ -275,17 +277,30 @@ function AwbLinkDialog({
   // linked/print/done sub-view only ever renders in modal (post-Complete) usage — the
   // inline (pre-Complete) usage calls onLinked() the moment a scan succeeds and is closed
   // by the caller before this branch would ever be reached.
+  const hasError = conflictError || mismatchError || genericError
+  const stateTag = linked
+    ? { text: t('fulfill.linkAwb.stateSuccess'), className: 'text-success-text' }
+    : conflictError
+    ? { text: t('fulfill.linkAwb.stateConflict'), className: 'text-critical-text' }
+    : mismatchError
+    ? { text: t('fulfill.linkAwb.stateMismatch'), className: 'text-warning-text' }
+    : { text: t('fulfill.linkAwb.stateScanning'), className: 'text-muted' }
+
   const card = (
-    <div className={variant === 'modal' ? 'bg-panel rounded-xl shadow-2xl p-8 w-full max-w-md mx-4' : 'bg-panel rounded-xl border border-line p-4 w-full'}>
-      <h2 className="text-h2 text-primary mb-1">{t('fulfill.linkAwb.title')}</h2>
-      <p className="text-small text-muted mb-6">{t('fulfill.linkAwb.subtitle')}</p>
+    <div className={variant === 'modal'
+      ? 'bg-panel rounded-2xl shadow-e3 p-[22px] w-full max-w-md mx-4'
+      : 'bg-panel rounded-2xl border border-line p-4 w-full'}>
+      <p className={`text-caption font-semibold uppercase tracking-wide mb-2 ${stateTag.className}`}>
+        {stateTag.text}
+      </p>
 
       {linked ? (
-        <div className="text-center space-y-4 py-4">
-          <div className="text-5xl text-success">✓</div>
-          <p className="text-success font-medium text-body">
-            {t('fulfill.linkAwb.success', { tracking: linked.tracking })}
-          </p>
+        <div className="text-center space-y-4 py-2">
+          <CheckCircle2 size={40} strokeWidth={2} className="text-success mx-auto" />
+          <div>
+            <p className="text-h4 text-primary font-bold">{t('fulfill.linkAwb.title')}</p>
+            <p className="text-body font-mono text-muted mt-1">{linked.tracking}</p>
+          </div>
           <div className="space-y-2 pt-2">
             <Button
               loading={printing}
@@ -300,7 +315,7 @@ function AwbLinkDialog({
               </p>
             )}
             {onDone && (
-              <Button variant="tertiary" onClick={onDone} className="w-full">
+              <Button variant="secondary" onClick={onDone} className="w-full">
                 {t('fulfill.linkAwb.done')}
               </Button>
             )}
@@ -308,29 +323,46 @@ function AwbLinkDialog({
         </div>
       ) : (
         <>
-          {/* SAFETY-CRITICAL scan input — ref, onKeyDown, disabled behavior untouched */}
-          <input
-            ref={inputRef}
-            type="text"
-            placeholder={t('fulfill.linkAwb.placeholder')}
-            className="input-scan w-full mb-3"
-            disabled={linking}
-            onKeyDown={e => {
-              if (e.key === 'Enter') handleLink((e.target as HTMLInputElement).value)
-            }}
-          />
-          {conflictError && (
-            <p className="text-danger text-small font-medium mb-3">✗ {t('fulfill.linkAwb.conflict')}</p>
+          <h2 className="text-h4 text-primary mb-1">{t('fulfill.linkAwb.title')}</h2>
+          <p className="text-small text-muted mb-4">{t('fulfill.linkAwb.subtitle')}</p>
+
+          {/* SAFETY-CRITICAL scan input — ref, onKeyDown, disabled behavior untouched;
+              icon is a purely visual sibling <span>, no input props/logic affected */}
+          <div className="relative mb-3">
+            <span className="absolute start-3 top-1/2 -translate-y-1/2 text-trace-blue pointer-events-none">
+              <ScanLine size={18} strokeWidth={2} />
+            </span>
+            <input
+              ref={inputRef}
+              type="text"
+              placeholder={t('fulfill.linkAwb.placeholder')}
+              className="input-scan w-full ps-10"
+              disabled={linking}
+              onKeyDown={e => {
+                if (e.key === 'Enter') handleLink((e.target as HTMLInputElement).value)
+              }}
+            />
+          </div>
+
+          {hasError && (
+            <div className="flex items-start gap-2 mb-3">
+              <AlertTriangle size={15} strokeWidth={2} className="text-critical flex-shrink-0 mt-0.5" />
+              {conflictError && (
+                <p className="text-critical-text text-small font-medium">{t('fulfill.linkAwb.conflict')}</p>
+              )}
+              {mismatchError && (
+                <p className="text-warning-text text-small font-medium">
+                  {t('fulfill.linkAwb.awbMismatch', { scanned: mismatchError.scanned, existing: mismatchError.existing })}
+                </p>
+              )}
+              {genericError && (
+                <p className="text-critical-text text-small font-medium">{t('fulfill.linkAwb.error')}</p>
+              )}
+            </div>
           )}
-          {mismatchError && (
-            <p className="text-danger text-small font-medium mb-3">
-              ✗ {t('fulfill.linkAwb.awbMismatch', { scanned: mismatchError.scanned, existing: mismatchError.existing })}
-            </p>
-          )}
-          {genericError && (
-            <p className="text-danger text-small font-medium mb-3">✗ {t('fulfill.linkAwb.error')}</p>
-          )}
+
           {/* No skip/bypass — the verify-scan is mandatory in every call site. */}
+          <p className="text-caption text-muted">{t('fulfill.linkAwb.mandatoryNote')}</p>
         </>
       )}
     </div>
@@ -358,10 +390,12 @@ function AwbLinkDialog({
 // ── Handover screen (self_pickup_pending orders) ───────────────────────────────
 
 function HandoverScreen({ order, onBack }: { order: QueueOrder; onBack: () => void }) {
-  const { t } = useTranslation()
+  const { t, i18n } = useTranslation()
   const [confirming, setConfirming] = useState(false)
   const [done, setDone] = useState(false)
   const [count, setCount] = useState(0)
+  const [deliveredAt, setDeliveredAt] = useState<Date | null>(null)
+  const BackIcon = i18n.language === 'ar' ? ArrowRight : ArrowLeft
 
   async function confirm() {
     if (confirming) return
@@ -369,6 +403,7 @@ function HandoverScreen({ order, onBack }: { order: QueueOrder; onBack: () => vo
     try {
       const { data } = await api<{ deliveredPieces: number }>(`/fulfill/${order.id}/handover`, { method: 'POST' })
       setCount(data.deliveredPieces)
+      setDeliveredAt(new Date())
       setDone(true)
       setTimeout(() => onBack(), 2000)
     } finally {
@@ -378,35 +413,52 @@ function HandoverScreen({ order, onBack }: { order: QueueOrder; onBack: () => vo
 
   return (
     <div className="flex flex-col h-screen bg-base">
-      <div className="bg-panel border-b border-line px-6 py-3 flex items-center justify-between">
-        <Button variant="tertiary" size="sm" onClick={onBack}>
-          ← {t('fulfill.back')}
-        </Button>
-        <div className="text-center">
-          {/* Order number — font-mono per spec */}
-          <p className="font-mono font-medium text-primary">{order.number ?? order.id.slice(-8)}</p>
-          <p className="text-small text-muted">{order.customer_name ?? t('common.pendingConsignee')}</p>
-        </div>
-        <div className="w-24" />
+      <div className="bg-panel border-b border-line px-6 py-3.5 flex items-center gap-3">
+        <button onClick={onBack} className="text-primary hover:text-muted transition-colors flex-shrink-0" aria-label={t('fulfill.back')}>
+          <BackIcon size={20} strokeWidth={2} />
+        </button>
+        <p className="text-body font-medium text-primary">
+          {t('fulfill.selfPickup')} — <span className="font-mono">{order.number ?? order.id.slice(-8)}</span>
+        </p>
       </div>
 
       <div className="flex-1 flex flex-col items-center justify-center p-8">
         {done ? (
-          <div className="text-center">
-            <div className="text-6xl mb-4">✓</div>
-            <p className="text-h2 text-success">
+          <div className="text-center flex flex-col items-center gap-3">
+            <CheckCircle2 size={64} strokeWidth={2} className="text-success" />
+            <p className="text-h2 text-primary font-bold">
               {t('fulfill.handoverSuccess', { count })}
             </p>
+            <p className="text-body text-muted">
+              <span className="font-mono">{order.number ?? order.id.slice(-8)}</span> · {order.customer_name ?? t('common.pendingConsignee')}
+            </p>
+            {deliveredAt && (
+              <p className="text-caption text-muted font-mono">{deliveredAt.toLocaleString(i18n.language)}</p>
+            )}
           </div>
         ) : (
-          <>
-            <div className="text-5xl mb-6">🤝</div>
-            <h2 className="text-h1 text-primary mb-2 text-center">
-              {t('fulfill.handoverTitle')}
-            </h2>
-            <p className="text-body text-muted mb-8 text-center">
-              {t('fulfill.handoverSubtitle', { count: order.total_units })}
-            </p>
+          <div className="w-full max-w-md flex flex-col gap-4">
+            <div className="card p-[18px] flex flex-col gap-2.5">
+              <p className="text-h4 text-primary font-bold">
+                {order.customer_name ?? t('common.pendingConsignee')}
+              </p>
+              <p className="text-caption text-muted">{t('fulfill.handoverVerifyId')}</p>
+              <div className="h-px bg-line my-1" />
+              <div className="text-small flex justify-between text-primary">
+                <span>{t('fulfill.units')}</span>
+                <span className="text-muted font-mono">×{order.total_units}</span>
+              </div>
+              {order.payment_method === 'cod' && order.cod_amount && (
+                <>
+                  <div className="h-px bg-line my-1" />
+                  <div className="text-small flex justify-between font-semibold text-primary">
+                    <span>{t('fulfill.handoverCollectLabel')}</span>
+                    <span className="font-mono">COD {order.cod_amount}</span>
+                  </div>
+                </>
+              )}
+            </div>
+
             {/*
               py-5 is intentional: large tap target for warehouse handover.
               Kept as raw <button> so py-5 is not overridden by the Button component's
@@ -415,11 +467,11 @@ function HandoverScreen({ order, onBack }: { order: QueueOrder; onBack: () => vo
             <button
               onClick={confirm}
               disabled={confirming}
-              className="btn-brand btn text-body w-full max-w-sm py-5"
+              className="btn-brand btn text-body w-full py-5"
             >
               {confirming ? '…' : t('fulfill.handoverConfirm')}
             </button>
-          </>
+          </div>
         )}
       </div>
     </div>
@@ -456,49 +508,75 @@ function QueueView({
   const pickQueue     = queue.filter(o => o.status !== 'self_pickup_pending')
   const handoverQueue = queue.filter(o => o.status === 'self_pickup_pending')
 
+  function paymentPill(order: QueueOrder) {
+    if (order.payment_method === 'cod' && order.cod_amount) {
+      return (
+        <span className="inline-flex items-center whitespace-nowrap bg-elevated border border-line text-muted text-caption font-semibold px-2 py-0.5 rounded-full">
+          COD {order.cod_amount}
+        </span>
+      )
+    }
+    return (
+      <span className="inline-flex items-center whitespace-nowrap bg-muted/[0.14] border border-muted/[0.30] text-neutral-text text-caption font-semibold px-2 py-0.5 rounded-full">
+        {t('common.prepaid', { defaultValue: 'Prepaid' })}
+      </span>
+    )
+  }
+
+  function progressBar(order: QueueOrder, progress: number) {
+    return (
+      <div className="flex items-center gap-2">
+        <div className="flex-1 h-1.5 bg-elevated rounded-full min-w-[64px]">
+          <div
+            className={`h-full rounded-full transition-all ${order.locked_by ? 'bg-warning' : progress >= 100 ? 'bg-success' : 'bg-trace-blue'}`}
+            style={{ width: `${progress}%` }}
+          />
+        </div>
+        <span className={`text-caption font-mono flex-shrink-0 ${progress >= 100 ? 'text-success-text' : 'text-muted'}`}>
+          {order.scanned_units}/{order.total_units}
+        </span>
+      </div>
+    )
+  }
+
   return (
-    <div className="p-6 max-w-4xl mx-auto" data-testid="fulfill-queue">
+    <div className="p-6 max-w-6xl mx-auto" data-testid="fulfill-queue">
       <div className="flex items-center justify-between mb-6">
         <h1 className="text-h1 text-primary">{t('fulfill.title')}</h1>
-        <div className="flex gap-2">
-          <Button variant="tertiary" size="sm" onClick={() => navigate('/fulfill/gather')}>
+        <div className="flex items-center gap-3">
+          <button
+            onClick={() => navigate('/fulfill/gather')}
+            className="flex items-center gap-2 bg-elevated border border-line text-trace-blue text-small font-semibold px-3 py-2 rounded-lg hover:bg-charcoal transition-colors"
+          >
+            <Layers size={14} strokeWidth={2} />
             {t('fulfill.gatherBtn')}
-          </Button>
-          <Button variant="tertiary" size="sm" onClick={loadQueue}>
-            {t('fulfill.refresh')}
-          </Button>
+          </button>
+          <button
+            onClick={loadQueue}
+            aria-label={t('fulfill.refresh')}
+            className="text-muted hover:text-primary transition-colors"
+          >
+            <RefreshCw size={16} strokeWidth={2} />
+          </button>
         </div>
       </div>
 
       {/* Self-pickup pending section */}
       {handoverQueue.length > 0 && (
-        <div className="mb-6">
-          <h2 className="text-small text-muted font-medium uppercase tracking-wide mb-3">
-            {t('fulfill.selfPickupPending')}
-          </h2>
-          <div className="space-y-3">
+        <div className="mb-6 bg-warning/[0.14] border border-warning/[0.30] rounded-xl p-4 flex flex-col gap-2.5">
+          <p className="text-caption font-bold text-warning-text uppercase tracking-wide">
+            {t('fulfill.selfPickupPending')} ({handoverQueue.length})
+          </p>
+          <div className="flex flex-col md:flex-row md:flex-wrap gap-2 md:gap-6">
             {handoverQueue.map(order => (
               <div
                 key={order.id}
-                className="card border-warning/30 hover:border-warning/60 p-4 flex items-center justify-between cursor-pointer transition"
+                className="flex items-center justify-between md:justify-start gap-2.5 text-small cursor-pointer hover:opacity-80 transition-opacity"
                 onClick={() => onHandover(order)}
               >
-                <div>
-                  <p className="text-body font-medium text-primary flex items-center gap-2">
-                    {/* Order number — font-mono per spec */}
-                    <span className="font-mono">{order.number ?? order.id.slice(-8)}</span>
-                    <Badge tone="warning" label={t('fulfill.selfPickup')} />
-                  </p>
-                  <p className="text-small text-muted">{order.customer_name ?? t('common.pendingConsignee')}</p>
-                </div>
-                <div className="flex items-center gap-3">
-                  <span className="text-small text-muted">
-                    {order.total_units} {t('fulfill.units')}
-                  </span>
-                  <Button variant="secondary" size="sm">
-                    {t('fulfill.handoverBtn')}
-                  </Button>
-                </div>
+                <span className="font-mono font-semibold text-primary">{order.number ?? order.id.slice(-8)}</span>
+                <span className="text-muted">{order.customer_name ?? t('common.pendingConsignee')}</span>
+                <ChevronRight size={14} strokeWidth={2} className="text-warning-text rtl:rotate-180" />
               </div>
             ))}
           </div>
@@ -511,50 +589,46 @@ function QueueView({
       ) : pickQueue.length === 0 ? null : (
         <>
           {handoverQueue.length > 0 && (
-            <h2 className="text-small text-muted font-medium uppercase tracking-wide mb-3">
+            <h2 className="text-caption text-muted font-semibold uppercase tracking-wide mb-3">
               {t('fulfill.pickQueueHeader')}
             </h2>
           )}
-          <div className="space-y-3">
+
+          {/* Single row list — denser on desktop via responsive layout, not a second tree */}
+          <div className="space-y-2">
             {pickQueue.map(order => {
               const progress = order.total_units > 0
                 ? Math.round((order.scanned_units / order.total_units) * 100) : 0
               return (
                 <div
                   key={order.id}
-                  className="card hover:border-trace-blue/50 p-4 flex items-center justify-between cursor-pointer transition"
+                  className={`card p-3 md:py-2.5 flex flex-col md:flex-row md:items-center gap-2 md:gap-4 cursor-pointer transition hover:border-trace-blue/50 ${order.locked_by ? 'opacity-70' : ''}`}
                   onClick={() => onSelect(order.id)}
                 >
-                  <div>
-                    <p className="text-body font-medium text-primary flex items-center gap-2">
-                      {/* Order number — font-mono per spec */}
-                      <span className="font-mono">{order.number ?? order.id.slice(-8)}</span>
-                      {order.is_self_pickup && (
-                        <Badge tone="info" label={t('fulfill.selfPickup')} />
-                      )}
-                    </p>
-                    <p className="text-small text-muted">
-                      {order.customer_name ?? t('common.pendingConsignee')}
-                      {order.payment_method === 'cod' && order.cod_amount && (
-                        <span className="ms-2 text-warning font-medium">COD {order.cod_amount}</span>
-                      )}
-                    </p>
+                  <div className="flex items-center justify-between md:justify-start md:gap-2 md:w-36 md:flex-shrink-0">
+                    <span className="font-mono text-small font-semibold text-primary">
+                      {order.number ?? order.id.slice(-8)}
+                    </span>
+                    {paymentPill(order)}
                   </div>
-                  <div className="flex items-center gap-4">
-                    <div className="text-end">
-                      <p className="text-small text-muted">
-                        {order.scanned_units} / {order.total_units} {t('fulfill.units')}
-                      </p>
-                      <div className="w-32 bg-elevated h-2 rounded-full mt-1">
-                        <div
-                          className="bg-trace-blue h-2 rounded-full transition-all"
-                          style={{ width: `${progress}%` }}
-                        />
-                      </div>
-                    </div>
-                    <Badge status={order.status} />
-                    {order.locked_by && (
-                      <span className="text-caption text-muted italic">{t('fulfill.locked')}</span>
+
+                  <div className="flex items-center gap-2 min-w-0 md:flex-1">
+                    <span className="text-caption md:text-small text-muted truncate">
+                      {order.customer_name ?? t('common.pendingConsignee')}
+                    </span>
+                    {order.is_self_pickup && <Badge tone="info" label={t('fulfill.selfPickup')} />}
+                  </div>
+
+                  <div className="md:w-40 md:flex-shrink-0">{progressBar(order, progress)}</div>
+
+                  <div className="flex-shrink-0">
+                    {order.locked_by ? (
+                      <span className="inline-flex items-center gap-1.5 bg-warning/[0.14] border border-warning/[0.30] text-warning-text text-caption font-semibold px-2 py-0.5 rounded-full">
+                        <Lock size={10} strokeWidth={2} />
+                        {t('fulfill.locked')}
+                      </span>
+                    ) : (
+                      <Badge status={order.status} className="hidden md:inline-flex" />
                     )}
                   </div>
                 </div>
@@ -580,9 +654,15 @@ function GuidedUnpackPanel({
   const [unpacking, setUnpacking] = useState<string | null>(null)
   const [done, setDone] = useState(false)
 
-  const packedPieces = order.items
-    .flatMap(i => i.allocatedPieces)
-    .filter(p => p.piece_status === 'packed')
+  const packedPieces = order.items.flatMap(i =>
+    i.allocatedPieces
+      .filter(p => p.piece_status === 'packed')
+      .map(p => ({
+        ...p,
+        itemTitle: i.variant_title && i.variant_title !== 'Default Title'
+          ? `${i.product_title} · ${i.variant_title}` : i.product_title,
+      }))
+  )
 
   async function unpack(pieceId: string) {
     if (unpacking) return
@@ -605,31 +685,34 @@ function GuidedUnpackPanel({
 
   if (done) {
     return (
-      <div className="card border-success/40 bg-success/5 p-6 text-center">
-        <div className="text-3xl mb-2">✓</div>
+      <div className="card border-success/40 bg-success/[0.14] p-6 text-center">
+        <CheckCircle2 size={32} strokeWidth={2} className="text-success mx-auto mb-2" />
         <p className="text-success font-medium text-body">{t('fulfill.unpackDone')}</p>
       </div>
     )
   }
 
   return (
-    <div className="card border-warning/30 bg-warning/5 p-4">
-      <p className="text-small font-medium text-warning mb-3">
+    <div className="card border-warning/[0.30] bg-warning/[0.14] p-4">
+      <p className="text-small font-medium text-warning-text mb-3">
         {t('fulfill.cancelRequested', { count: packedPieces.length })}
       </p>
       <div className="space-y-2">
         {packedPieces.map(p => (
           <div
             key={p.piece_id}
-            className="flex items-center justify-between bg-panel rounded border border-warning/20 px-3 py-2"
+            className="flex items-center justify-between gap-2 bg-elevated rounded-lg border border-line px-3 py-2.5"
           >
             {/* Barcode — font-mono per spec */}
-            <span className="font-mono text-small text-primary">{p.barcode.slice(-10)}</span>
+            <span className="font-mono text-caption text-primary truncate">
+              {p.barcode.slice(-10)} <span className="text-muted font-sans">· {p.itemTitle}</span>
+            </span>
             <Button
-              variant="destructive"
+              variant="secondary"
               size="sm"
               loading={unpacking === p.piece_id}
               onClick={() => unpack(p.piece_id)}
+              className="flex-shrink-0"
             >
               {t('fulfill.unpackPiece')}
             </Button>
@@ -643,7 +726,8 @@ function GuidedUnpackPanel({
 // ── Pick screen ────────────────────────────────────────────────────────────────
 
 function PickScreen({ orderId, onBack }: { orderId: string; onBack: () => void }) {
-  const { t } = useTranslation()
+  const { t, i18n } = useTranslation()
+  const DesktopBackIcon = i18n.language === 'ar' ? ArrowRight : ArrowLeft
   const [order, setOrder] = useState<OrderDetail | null>(null)
   const [loading, setLoading] = useState(true)
   const [flash, setFlash] = useState<FlashState>('idle')
@@ -789,47 +873,131 @@ function PickScreen({ orderId, onBack }: { orderId: string; onBack: () => void }
     : flash === 'error' ? 'fixed inset-0 bg-danger/20 pointer-events-none z-50 animate-flash'
     : 'hidden'
 
+  const itemsList = (
+    <div className="flex-1 overflow-y-auto p-6 space-y-3">
+      {order.items.map(item => {
+        const complete = item.allocated >= item.quantity
+        return (
+          <div
+            key={item.id}
+            className={`card p-3.5 ${complete ? 'border-success/40' : ''}`}
+          >
+            <div className="flex items-start justify-between gap-3 mb-2.5">
+              <div className="min-w-0">
+                <p className="text-body font-semibold text-primary truncate">
+                  {item.product_title}
+                  {item.variant_title && item.variant_title !== 'Default Title' && (
+                    <span className="text-muted font-normal"> · {item.variant_title}</span>
+                  )}
+                </p>
+                {/* SKU — font-mono per spec */}
+                {item.sku && <p className="text-caption text-muted font-mono">{item.sku}</p>}
+              </div>
+              <span className={`text-body font-mono font-semibold flex-shrink-0 ${
+                complete ? 'text-success-text' : 'text-muted'
+              }`}>
+                {item.allocated}/{item.quantity}
+              </span>
+            </div>
+            {item.allocatedPieces.length > 0 ? (
+              <div className="flex flex-wrap gap-1.5">
+                {item.allocatedPieces.map(p => (
+                  <div
+                    key={p.piece_id}
+                    className="flex items-center gap-1.5 bg-elevated border border-line rounded-full px-2 py-1"
+                  >
+                    {/* Barcode — font-mono per spec */}
+                    <span className="text-caption font-mono text-primary">{p.barcode.slice(-10)}</span>
+                    {!hasCancelRequest && p.allocation_status === 'active' && (
+                      <button
+                        onClick={() => handleUnscan(p.piece_id)}
+                        className="text-muted hover:text-critical-text transition-colors"
+                        title={t('fulfill.unscan')}
+                      >
+                        <X size={10} strokeWidth={2.5} />
+                      </button>
+                    )}
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="text-caption text-muted">{t('fulfill.noPiecesScanned')}</p>
+            )}
+          </div>
+        )
+      })}
+    </div>
+  )
+
+  const scanFeedback = lastResult && (
+    lastResult.success
+      ? <><span>✓ </span><span className="font-mono">{lastResult.barcode}</span></>
+      : `✗ ${t(`fulfill.rejection.${lastResult.code}`, { defaultValue: lastResult.message ?? lastResult.code })}`
+  )
+
+  // SAFETY-CRITICAL scan input — ref, onKeyDown, disabled=scanning, autoFocus: do not modify.
+  // Rendered exactly once regardless of breakpoint; the surrounding layout repositions it
+  // (mobile: top bar under the header; desktop: bottom of the right-hand scan panel).
+  const scanInput = (
+    <div className="relative">
+      <span className="absolute start-3 top-1/2 -translate-y-1/2 text-trace-blue pointer-events-none">
+        <ScanLine size={18} strokeWidth={2} />
+      </span>
+      <input
+        ref={inputRef}
+        type="text"
+        placeholder={t('fulfill.scanPlaceholder')}
+        className="input-scan w-full ps-10"
+        disabled={scanning}
+        onKeyDown={e => {
+          if (e.key === 'Enter') handleScan((e.target as HTMLInputElement).value)
+        }}
+        autoFocus
+      />
+    </div>
+  )
+
   return (
     <div className="flex flex-col h-screen bg-base" data-testid="fulfill-pick">
       {/* SAFETY-CRITICAL flash overlay — do not modify */}
       <div className={flashOverlay} />
 
       {/* Header */}
-      <div className="bg-panel border-b border-line px-6 py-3 flex items-center justify-between">
-        <Button variant="tertiary" size="sm" onClick={onBack}>
-          ← {t('fulfill.backToQueue')}
-        </Button>
-        <div className="text-center">
-          <p className="font-medium text-primary flex items-center gap-2">
-            {/* Order number — font-mono per spec */}
-            <span className="font-mono">{order.number ?? order.id.slice(-8)}</span>
-            {order.is_self_pickup && (
-              <Badge tone="info" label={t('fulfill.selfPickup')} />
-            )}
-          </p>
-          <p className="text-small text-muted">{order.customer_name ?? t('common.pendingConsignee')}</p>
-        </div>
-        {!hasCancelRequest ? (
-          <Button variant="destructive" size="sm" onClick={() => setShowCancelConfirm(true)}>
+      <div className="bg-panel border-b border-line px-4 md:px-5 h-14 flex items-center gap-3 flex-shrink-0">
+        <button onClick={onBack} className="text-primary hover:text-muted transition-colors flex-shrink-0 md:hidden" aria-label={t('fulfill.backToQueue')}>
+          <X size={20} strokeWidth={2} />
+        </button>
+        <button onClick={onBack} className="text-primary hover:text-muted transition-colors flex-shrink-0 hidden md:inline-flex" aria-label={t('fulfill.backToQueue')}>
+          <DesktopBackIcon size={20} strokeWidth={2} />
+        </button>
+        <p className="flex-1 text-body font-semibold text-primary flex items-center gap-2 truncate">
+          <span className="font-mono">{order.number ?? order.id.slice(-8)}</span>
+          {order.is_self_pickup && (
+            <Badge tone="info" label={t('fulfill.selfPickup')} />
+          )}
+        </p>
+        {!hasCancelRequest && (
+          <button
+            onClick={() => setShowCancelConfirm(true)}
+            className="text-critical-text text-caption font-medium hover:opacity-80 transition-opacity flex-shrink-0"
+          >
             {t('fulfill.cancelOrder')}
-          </Button>
-        ) : (
-          <div className="w-24" />
+          </button>
         )}
       </div>
 
       {/* Cancel confirm dialog */}
       {showCancelConfirm && (
         <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50" onClick={() => setShowCancelConfirm(false)}>
-          <div className="bg-panel rounded-xl shadow-2xl p-6 w-full max-w-sm mx-4" onClick={e => e.stopPropagation()}>
-            <h3 className="text-body font-medium text-primary mb-2">{t('fulfill.cancelDialogTitle')}</h3>
+          <div className="bg-panel rounded-2xl shadow-e3 p-[22px] w-full max-w-sm mx-4" onClick={e => e.stopPropagation()}>
+            <h3 className="text-h4 font-bold text-primary mb-2">{t('fulfill.cancelDialogTitle')}</h3>
             <p className="text-small text-muted mb-4">
               {order.status === 'packed'
                 ? t('fulfill.cancelPackedHint')
                 : t('fulfill.cancelPreHint')}
             </p>
-            <div className="flex gap-3 justify-end">
-              <Button variant="secondary" size="sm" onClick={() => setShowCancelConfirm(false)}>
+            <div className="flex gap-2">
+              <Button variant="secondary" size="sm" onClick={() => setShowCancelConfirm(false)} className="flex-1">
                 {t('fulfill.back')}
               </Button>
               <Button
@@ -837,6 +1005,7 @@ function PickScreen({ orderId, onBack }: { orderId: string; onBack: () => void }
                 size="sm"
                 loading={cancelling}
                 onClick={handleCancel}
+                className="flex-1"
               >
                 {t('fulfill.cancelConfirmBtn')}
               </Button>
@@ -859,84 +1028,60 @@ function PickScreen({ orderId, onBack }: { orderId: string; onBack: () => void }
         </div>
       )}
 
-      {/* SAFETY-CRITICAL scan input — autoFocus, ref, onKeyDown, disabled=scanning: do not modify */}
-      {!hasCancelRequest && (
-        <div className="bg-panel border-b border-line px-6 py-4">
-          <input
-            ref={inputRef}
-            type="text"
-            placeholder={t('fulfill.scanPlaceholder')}
-            className="input-scan w-full"
-            disabled={scanning}
-            onKeyDown={e => {
-              if (e.key === 'Enter') handleScan((e.target as HTMLInputElement).value)
-            }}
-            autoFocus
-          />
-          {lastResult && (
-            <div className={`mt-2 text-small font-medium ${lastResult.success ? 'text-success' : 'text-danger'}`}>
-              {lastResult.success
-                ? <><span>✓ </span><span className="font-mono">{lastResult.barcode}</span></>
-                : `✗ ${t(`fulfill.rejection.${lastResult.code}`, { defaultValue: lastResult.message ?? lastResult.code })}`}
-            </div>
-          )}
-        </div>
-      )}
+      {hasCancelRequest ? (
+        itemsList
+      ) : (
+        <div className="flex-1 flex flex-col md:flex-row overflow-hidden min-h-0">
+          {/* Item list */}
+          <div className="flex-1 md:border-e md:border-line overflow-y-auto order-2 md:order-1">
+            {itemsList}
+          </div>
 
-      {/* Items */}
-      <div className="flex-1 overflow-y-auto p-6 space-y-4">
-        {order.items.map(item => {
-          const complete = item.allocated >= item.quantity
-          return (
-            <div
-              key={item.id}
-              className={`card p-4 ${complete ? 'border-success/40' : ''}`}
-            >
-              <div className="flex items-start justify-between mb-3">
-                <div>
-                  <p className="text-body font-medium text-primary">{item.product_title}</p>
-                  {item.variant_title && item.variant_title !== 'Default Title' && (
-                    <p className="text-small text-muted">{item.variant_title}</p>
-                  )}
-                  {/* SKU — font-mono per spec */}
-                  {item.sku && <p className="text-caption text-muted font-mono">{item.sku}</p>}
-                </div>
-                <span className={`text-body font-medium px-3 py-1 rounded-full ${
-                  complete ? 'bg-success/10 text-success' : 'bg-elevated text-muted'
-                }`}>
-                  {item.allocated}/{item.quantity}
-                </span>
-              </div>
-              {item.allocatedPieces.length > 0 && (
-                <div className="flex flex-wrap gap-2">
-                  {item.allocatedPieces.map(p => (
-                    <div
-                      key={p.piece_id}
-                      className="flex items-center gap-1 bg-trace-blue/10 border border-trace-blue/20 rounded px-2 py-1"
-                    >
-                      {/* Barcode — font-mono per spec */}
-                      <span className="text-caption font-mono text-trace-blue">{p.barcode.slice(-10)}</span>
-                      {!hasCancelRequest && p.allocation_status === 'active' && (
-                        <button
-                          onClick={() => handleUnscan(p.piece_id)}
-                          className="text-danger hover:text-danger/80 text-small ms-1"
-                          title={t('fulfill.unscan')}
-                        >
-                          ✕
-                        </button>
-                      )}
-                    </div>
-                  ))}
+          {/* Scan panel — desktop: hero result + input side-by-side with items;
+              mobile: input pinned under the header, no hero card */}
+          <div className="flex-shrink-0 md:w-[360px] md:flex md:flex-col md:p-5 md:gap-3.5 order-1 md:order-2">
+            {/* Desktop-only scan-result hero — same lastResult state as mobile's inline feedback below */}
+            <div className={`hidden md:flex flex-1 flex-col items-center justify-center gap-2 rounded-xl border text-center px-4 ${
+              lastResult
+                ? lastResult.success ? 'border-success/30 bg-success/[0.14]' : 'border-critical/30 bg-critical/[0.14]'
+                : 'border-line bg-surface'
+            }`}>
+              {lastResult ? (
+                lastResult.success ? (
+                  <>
+                    <CheckCircle2 size={44} strokeWidth={2} className="text-success" />
+                    <p className="text-h4 font-bold text-primary">{t('common.scanned', { defaultValue: 'Piece scanned' })}</p>
+                    <p className="text-body font-mono text-muted">{lastResult.barcode}</p>
+                  </>
+                ) : (
+                  <>
+                    <AlertTriangle size={44} strokeWidth={2} className="text-critical" />
+                    <p className="text-h4 font-bold text-primary">
+                      {t(`fulfill.rejection.${lastResult.code}`, { defaultValue: lastResult.message ?? lastResult.code })}
+                    </p>
+                  </>
+                )
+              ) : (
+                <p className="text-small text-muted">{t('fulfill.noPiecesScanned')}</p>
+              )}
+            </div>
+
+            <div className="bg-panel md:bg-transparent border-b md:border-b-0 border-line px-6 md:px-0 py-4 md:py-0">
+              {scanInput}
+              {/* Mobile-only inline feedback — desktop shows the hero card above instead */}
+              {scanFeedback && (
+                <div className={`mt-2 text-small font-medium md:hidden ${lastResult?.success ? 'text-success' : 'text-danger'}`}>
+                  {scanFeedback}
                 </div>
               )}
             </div>
-          )
-        })}
-      </div>
+          </div>
+        </div>
+      )}
 
       {/* Bottom bar — Print Waybill + Complete (hidden during guided unpack) */}
       {!hasCancelRequest && (
-        <div className="bg-panel border-t border-line px-6 py-4 space-y-2">
+        <div className="bg-panel border-t border-line px-4 md:px-5 py-3.5 space-y-2 flex-shrink-0">
           {order.tracking_number ? (
             /* PRINTABLE — kept as raw <button> to preserve data-testid (Button doesn't spread it) */
             <div className="space-y-1">
