@@ -39,7 +39,7 @@ public class CatalogController {
         Map<String, Long> pieceCounts, long committed, long available) {}
 
     public record ProductRow(
-        String id, String title, String status,
+        String id, String title, String status, String imageUrl,
         List<VariantRow> variants) {}
 
     public record CatalogResponse(List<ProductRow> products) {}
@@ -50,7 +50,7 @@ public class CatalogController {
         return tx.execute(txs -> {
             // Products ordered by title — explicit tenant filter is defense-in-depth on top of RLS.
             List<Map<String, Object>> productRows = jdbc.queryForList(
-                "SELECT id, title, status FROM products " +
+                "SELECT id, title, status, image_url FROM products " +
                 "WHERE tenant_id = NULLIF(current_setting('app.current_tenant', true), '')::uuid " +
                 "ORDER BY title");
 
@@ -156,6 +156,7 @@ public class CatalogController {
                     productId.toString(),
                     (String) pr.get("title"),
                     (String) pr.get("status"),
+                    (String) pr.get("image_url"),
                     variants
                 ));
             }

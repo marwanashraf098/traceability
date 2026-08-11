@@ -2,6 +2,7 @@ package com.traceability.integrations.shopify;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.traceability.identity.CustomUserDetails;
+import org.jobrunr.jobs.JobId;
 import org.jobrunr.scheduling.JobScheduler;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
@@ -28,6 +29,7 @@ public class ShopifyController {
     private final ShopifyGateway            shopifyGateway;
     private final ShopifyImportJob          importJob;
     private final RegisterShopifyWebhooksJob webhooksJob;
+    private final ProductImageBackfillJob   productImageBackfillJob;
     private final JobScheduler              jobScheduler;
     private final JdbcTemplate              jdbc;
     private final ObjectMapper              mapper;
@@ -38,6 +40,7 @@ public class ShopifyController {
                               ShopifyGateway shopifyGateway,
                               ShopifyImportJob importJob,
                               RegisterShopifyWebhooksJob webhooksJob,
+                              ProductImageBackfillJob productImageBackfillJob,
                               JobScheduler jobScheduler,
                               JdbcTemplate jdbc,
                               ObjectMapper mapper,
@@ -47,6 +50,7 @@ public class ShopifyController {
         this.shopifyGateway  = shopifyGateway;
         this.importJob       = importJob;
         this.webhooksJob     = webhooksJob;
+        this.productImageBackfillJob = productImageBackfillJob;
         this.jobScheduler    = jobScheduler;
         this.jdbc            = jdbc;
         this.mapper          = mapper;
@@ -163,6 +167,24 @@ public class ShopifyController {
         return tx.execute(s -> jdbc.queryForList(
             "SELECT id, shop_domain, status, import_status, last_sync_at FROM stores WHERE tenant_id = ?",
             principal.tenantId()));
+    }
+
+    /**
+     * One-time backfill: fetches and fills products.image_url for this tenant's
+     * already-synced products (rows that predate image capture). Not needed for stores
+     * connected after this feature shipped, and not run automatically anywhere — new/updated
+     * products capture the image at the two live sync points (catalog import,
+     * products/create|update webhook) instead. Safe to re-trigger; idempotent.
+     */
+    @PostMapping("/backfill-product-images")
+    @PreAuthorize("hasRole('OWNER')")
+    public ResponseEntity<Map<String, Object>> backfillProductImages(
+            @AuthenticationPrincipal CustomUserDetails principal) {
+        UUID tenantId = principal.tenantId();
+        JobId jobId = jobScheduler.enqueue(() -> productImageBackfillJob.run(tenantId));
+        return ResponseEntity.ok(Map.of(
+            "jobId",   jobId != null ? jobId.asUUID().toString() : "enqueued",
+            "message", "Product image backfill enqueued"));
     }
 
     /** Re-runs the Shopify import synchronously for an already-connected store. */

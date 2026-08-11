@@ -53,6 +53,7 @@ class ShopifyHttpGateway implements ShopifyGateway {
                 edges {
                   node {
                     id title status
+                    featuredImage { url }
                     variants(first: 50) {
                       edges {
                         node { id sku title price }
@@ -954,6 +955,7 @@ class ShopifyHttpGateway implements ShopifyGateway {
                     node.path("id").asText(),
                     node.path("title").asText(""),
                     node.path("status").asText("active").toLowerCase(),
+                    node.path("featuredImage").path("url").asText(null),
                     variants));
         }
         return out;

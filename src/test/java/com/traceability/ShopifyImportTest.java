@@ -87,6 +87,7 @@ class ShopifyImportTest {
             "gid://shopify/Product/111",
             "Widget",
             "active",
+            "https://cdn.shopify.com/s/files/1/0000/0001/products/widget.jpg",
             List.of(
                     new ShopifyGateway.Variant("gid://shopify/ProductVariant/10", "WID-RED", "Red",  new BigDecimal("9.99")),
                     new ShopifyGateway.Variant("gid://shopify/ProductVariant/11", "WID-BLU", "Blue", new BigDecimal("11.99"))

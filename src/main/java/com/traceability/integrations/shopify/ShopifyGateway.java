@@ -21,7 +21,7 @@ public interface ShopifyGateway {
 
     record ProductPage(List<Product> products, boolean hasNextPage, String endCursor) {}
 
-    record Product(String gid, String title, String status, List<Variant> variants) {}
+    record Product(String gid, String title, String status, String imageUrl, List<Variant> variants) {}
 
     record Variant(String gid, String sku, String title, BigDecimal price) {}
 

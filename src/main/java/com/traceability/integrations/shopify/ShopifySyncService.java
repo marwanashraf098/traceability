@@ -106,12 +106,13 @@ public class ShopifySyncService {
             """;
 
     private static final String UPSERT_PRODUCT = """
-            INSERT INTO products (tenant_id, store_id, external_id, title, status, raw)
-            VALUES (?, ?, ?, ?, ?, ?::jsonb)
+            INSERT INTO products (tenant_id, store_id, external_id, title, status, image_url, raw)
+            VALUES (?, ?, ?, ?, ?, ?, ?::jsonb)
             ON CONFLICT (store_id, external_id) DO UPDATE SET
-                title  = EXCLUDED.title,
-                status = EXCLUDED.status,
-                raw    = EXCLUDED.raw
+                title     = EXCLUDED.title,
+                status    = EXCLUDED.status,
+                image_url = EXCLUDED.image_url,
+                raw       = EXCLUDED.raw
             RETURNING id
             """;
 
@@ -477,13 +478,17 @@ public class ShopifySyncService {
             log.warn("products webhook missing admin_graphql_api_id, store={}", storeId);
             return;
         }
-        String title  = payload.path("title").asText("");
-        String status = payload.path("status").asText("active").toLowerCase();
+        String title    = payload.path("title").asText("");
+        String status   = payload.path("status").asText("active").toLowerCase();
+        // REST product payload: the featured/first image is the singular "image" object
+        // (distinct from the "images" array). Same field the GraphQL import captures via
+        // featuredImage — kept in sync here so live edits don't go stale between imports.
+        String imageUrl = payload.path("image").path("src").asText(null);
 
         tx.execute(s -> {
             UUID productId = jdbc.query(UPSERT_PRODUCT,
                 rs -> rs.next() ? rs.getObject("id", UUID.class) : null,
-                tenantId, storeId, gid, title, status, toJson(payload));
+                tenantId, storeId, gid, title, status, imageUrl, toJson(payload));
             if (productId == null) return null;
 
             for (JsonNode v : payload.path("variants")) {
@@ -524,7 +529,7 @@ public class ShopifySyncService {
     private int[] upsertProduct(UUID storeId, UUID tenantId, ShopifyGateway.Product p) {
         return tx.execute(status -> {
             UUID productId = jdbc.query(UPSERT_PRODUCT, rs -> rs.next() ? rs.getObject("id", UUID.class) : null,
-                    tenantId, storeId, p.gid(), p.title(), p.status(), toJson(p));
+                    tenantId, storeId, p.gid(), p.title(), p.status(), p.imageUrl(), toJson(p));
             if (productId == null) throw new ShopifyException("Product upsert returned no ID for GID " + p.gid());
 
             int variantCount = 0;

@@ -486,6 +486,40 @@ class RlsCoverageTest {
         assertThat(((Number) variant.get("available")).longValue())
             .as("available = on_hand(1) - committed(2)")
             .isEqualTo(-1L);
+
+        // imageUrl null case: the shared P-CVG fixture (productId) never sets image_url —
+        // must surface as JSON null, not an empty string or a missing key.
+        Map<String, Object> productRow = products.stream()
+            .filter(p -> productId.toString().equals(p.get("id")))
+            .findFirst()
+            .orElseThrow(() -> new AssertionError("seeded product not found in catalog response"));
+        assertThat(productRow.containsKey("imageUrl"))
+            .as("imageUrl key must be present in the product row")
+            .isTrue();
+        assertThat(productRow.get("imageUrl"))
+            .as("product with no Shopify image must surface imageUrl=null")
+            .isNull();
+
+        // imageUrl non-null case: a separate product with image_url set must round-trip verbatim.
+        UUID imgProductId = UUID.randomUUID();
+        String expectedImageUrl = "https://cdn.shopify.com/s/files/1/0000/0001/products/cvg-image.jpg";
+        jdbc.update("INSERT INTO products (id, tenant_id, store_id, external_id, title, status, image_url) " +
+                    "VALUES (?, ?, ?, 'P-CVG-IMG', 'Coverage Widget With Image', 'active', ?)",
+                    imgProductId, tenantId, storeId, expectedImageUrl);
+        try {
+            ResponseEntity<Map> imgResp = get("/api/v1/catalog", Map.class);
+            @SuppressWarnings("unchecked")
+            List<Map<String, Object>> imgProducts = (List<Map<String, Object>>) imgResp.getBody().get("products");
+            Map<String, Object> imgProductRow = imgProducts.stream()
+                .filter(p -> imgProductId.toString().equals(p.get("id")))
+                .findFirst()
+                .orElseThrow(() -> new AssertionError("image-seeded product not found in catalog response"));
+            assertThat(imgProductRow.get("imageUrl"))
+                .as("product with a Shopify image must round-trip the exact CDN URL")
+                .isEqualTo(expectedImageUrl);
+        } finally {
+            jdbc.update("DELETE FROM products WHERE id = ?", imgProductId);
+        }
     }
 
     @Test

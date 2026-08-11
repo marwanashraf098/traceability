@@ -282,6 +282,7 @@ export interface CatalogProduct {
   id: string
   title: string
   status: string
+  imageUrl: string | null
   variants: CatalogVariant[]
 }
 
