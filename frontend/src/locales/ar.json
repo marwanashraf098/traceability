@@ -232,6 +232,9 @@
     "printBarcodes": "طباعة الباركود",
     "piecesCreated": "{{count}} قطعة تم إنشاؤها",
     "finalizedAt": "تم الإنهاء في {{date}}",
+    "finalizeModalTitle": "إنهاء الجلسة {{ref}}؟",
+    "finalizeModalBody": "سيؤدي هذا إلى إنشاء {{count}} قطعة وقفل الجلسة عن التعديل.",
+    "finalizeModalConfirm": "إنهاء",
     "col": {
       "ref": "المرجع",
       "location": "الموقع",
@@ -242,6 +245,17 @@
       "product": "المنتج / المتغير",
       "sku": "الباركود",
       "qty": "الكمية"
+    },
+    "grid": {
+      "searchPlaceholder": "بحث عن المنتجات أو رمز SKU…",
+      "showSelectedOnly": "عرض المحدد فقط",
+      "noPhoto": "بدون صورة",
+      "summaryBadge": "{{variants}} متغيرات · {{units}} وحدة",
+      "cardBadge": "{{variants}} · {{units}}و",
+      "variantMeta": "{{count}} متغيرات",
+      "total": "{{products}} منتجات · {{variants}} متغيرات · {{units}} وحدة",
+      "emptyCatalog": "لا توجد منتجات في الكتالوج بعد",
+      "noResults": "لا توجد منتجات مطابقة لبحثك"
     }
   },
   "fulfill": {

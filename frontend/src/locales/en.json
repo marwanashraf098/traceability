@@ -232,6 +232,9 @@
     "printBarcodes": "Print Barcodes",
     "piecesCreated": "{{count}} pieces created",
     "finalizedAt": "Finalized at {{date}}",
+    "finalizeModalTitle": "Finalize session {{ref}}?",
+    "finalizeModalBody": "This creates {{count}} pieces and locks the session for editing.",
+    "finalizeModalConfirm": "Finalize",
     "col": {
       "ref": "Reference",
       "location": "Location",
@@ -242,6 +245,17 @@
       "product": "Product / Variant",
       "sku": "SKU",
       "qty": "Qty"
+    },
+    "grid": {
+      "searchPlaceholder": "Search products or SKU…",
+      "showSelectedOnly": "Show selected only",
+      "noPhoto": "No photo",
+      "summaryBadge": "{{variants}} variants · {{units}} units",
+      "cardBadge": "{{variants}} · {{units}}u",
+      "variantMeta": "{{count}} variants",
+      "total": "{{products}} products · {{variants}} variants · {{units}} units",
+      "emptyCatalog": "No products in catalog yet",
+      "noResults": "No products match your search"
     }
   },
   "fulfill": {

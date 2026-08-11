@@ -1,6 +1,7 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Alert, Badge, Button, EmptyState, Input, TableSkeleton } from '../components/ui'
+import { Alert, Badge, Button, EmptyState, Input, Modal, TableSkeleton, useToast } from '../components/ui'
+import ProductSelectionGrid from './receiving/ProductSelectionGrid'
 
 import { getAccessToken, clearAccessToken } from '../auth'
 
@@ -9,7 +10,10 @@ function authHeaders() {
   const t = getAccessToken()
   return { 'Content-Type': 'application/json', ...(t ? { Authorization: `Bearer ${t}` } : {}) }
 }
-async function api<T>(path: string, opts: RequestInit = {}): Promise<T> {
+// Exported — ProductSelectionGrid reuses this exact fetch wrapper for its line
+// mutations, so every Receiving call (session/lines/finalize) shares identical
+// 401/error-handling behavior regardless of which component fires the request.
+export async function api<T>(path: string, opts: RequestInit = {}): Promise<T> {
   const res = await fetch(BASE + path, { ...opts, headers: { ...authHeaders(), ...opts.headers as Record<string,string> } })
   if (res.status === 401) { clearAccessToken(); window.location.href = '/login'; throw new Error('Unauth') }
   if (!res.ok) { const txt = await res.text(); throw new Error(txt || res.statusText) }
@@ -21,12 +25,11 @@ interface Session {
   location_name: string | null; created_at: string; finalized_at: string | null
   line_units: number; piece_count: number
 }
-interface Line {
+export interface Line {
   id: string; variant_id: string; variant_title: string; sku: string | null
   product_title: string; quantity: number; piece_count: number
 }
 interface SessionDetail extends Session { lines: Line[] }
-interface VariantMatch { id: string; title: string; sku: string | null; product_title: string }
 interface Location { id: string; name: string }
 
 // open → warning, finalized → success, unknown → neutral
@@ -204,51 +207,22 @@ function SessionView({ session, onRefresh, onBack }: {
   session: SessionDetail; onRefresh: () => void; onBack: () => void
 }) {
   const { t } = useTranslation()
-  const [query, setQuery]               = useState('')
-  const [variants, setVariants]         = useState<VariantMatch[]>([])
-  const [selectedVariant, setSelectedVariant] = useState<VariantMatch | null>(null)
-  const [qty, setQty]                   = useState(1)
-  const [addError, setAddError]         = useState<string | null>(null)
+  const { toast } = useToast()
   const [finalizing, setFinalizing]     = useState(false)
+  const [finalizeError, setFinalizeError] = useState<string | null>(null)
+  const [showFinalizeModal, setShowFinalizeModal] = useState(false)
   const [printError, setPrintError]     = useState<string | null>(null)
   const [printingVariant, setPrintingVariant] = useState<string | null>(null)
-  const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const isOpen = session.status === 'open'
 
-  function doSearch(q: string) {
-    setQuery(q)
-    if (searchTimer.current) clearTimeout(searchTimer.current)
-    if (q.length < 2) { setVariants([]); return }
-    searchTimer.current = setTimeout(async () => {
-      try { setVariants(await api<VariantMatch[]>(`/receiving/variants/search?q=${encodeURIComponent(q)}`)) }
-      catch { setVariants([]) }
-    }, 250)
-  }
-
-  async function addLine() {
-    if (!selectedVariant) return
-    setAddError(null)
-    try {
-      await api(`/receiving/sessions/${session.id}/lines`, {
-        method: 'POST', body: JSON.stringify({ variantId: selectedVariant.id, quantity: qty }),
-      })
-      setSelectedVariant(null); setQuery(''); setVariants([]); setQty(1); onRefresh()
-    } catch (e: unknown) { setAddError((e as Error).message) }
-  }
-
-  async function removeLine(lineId: string) {
-    try { await api(`/receiving/sessions/${session.id}/lines/${lineId}`, { method: 'DELETE' }); onRefresh() }
-    catch (e: unknown) { setAddError((e as Error).message) }
-  }
-
   async function finalize() {
-    if (!confirm(t('receiving.finalizeConfirm'))) return
-    setFinalizing(true)
+    setFinalizing(true); setFinalizeError(null)
     try {
       const res = await api<{ piecesCreated: number }>(`/receiving/sessions/${session.id}/finalize`, { method: 'POST' })
-      alert(t('receiving.finalizeSuccess', { count: res.piecesCreated }))
+      setShowFinalizeModal(false)
+      toast({ tone: 'success', message: t('receiving.piecesCreated', { count: res.piecesCreated }) })
       onRefresh()
-    } catch (e: unknown) { setAddError((e as Error).message) }
+    } catch (e: unknown) { setFinalizeError((e as Error).message) }
     finally { setFinalizing(false) }
   }
 
@@ -304,141 +278,132 @@ function SessionView({ session, onRefresh, onBack }: {
             {session.location_name} · <Badge tone={sessionTone(session.status)} label={session.status} />
           </p>
         </div>
-        <div className="flex gap-2">
-          {session.status === 'finalized' && (
-            <>
-              <Button size="sm" onClick={printLabels}>
-                {t('receiving.printLabels')} ({session.piece_count})
-              </Button>
-              <Button size="sm" variant="secondary" onClick={reprintLabels}>
-                {t('receiving.reprint')}
-              </Button>
-            </>
-          )}
-          {isOpen && (
-            <Button
-              size="sm"
-              loading={finalizing}
-              disabled={session.lines.length === 0}
-              onClick={finalize}
-            >
-              {t('receiving.finalize')}
+        {session.status === 'finalized' && (
+          <div className="flex gap-2">
+            <Button size="sm" onClick={printLabels}>
+              {t('receiving.printLabels')} ({session.piece_count})
             </Button>
-          )}
-        </div>
+            <Button size="sm" variant="secondary" onClick={reprintLabels}>
+              {t('receiving.reprint')}
+            </Button>
+          </div>
+        )}
       </div>
 
       {printError && <Alert tone="critical" title={printError} />}
 
-      {/* Add line (open only) */}
+      {/* Open: the product-card selection grid IS the entry mechanism —
+          replaces the old type-ahead search + flat lines table entirely. */}
       {isOpen && (
-        <div className="card p-4">
-          <h2 className="text-caption text-muted uppercase tracking-widest mb-3">{t('receiving.addLine')}</h2>
-          {addError && <Alert tone="critical" title={addError} />}
-          <div className="flex gap-3 items-start mt-2">
-            <div className="flex-1 relative">
-              {/* Standard type-ahead search — NOT a HID/scan input; Input component is safe */}
-              <Input
-                value={query}
-                onChange={e => doSearch(e.target.value)}
-                placeholder={t('receiving.searchVariant')}
-              />
-              {variants.length > 0 && !selectedVariant && (
-                <ul className="absolute z-10 start-0 end-0 mt-1 bg-panel border border-line rounded-lg shadow-elevated max-h-48 overflow-y-auto">
-                  {variants.map(v => (
-                    <li key={v.id}
-                      className="px-3 py-2.5 text-body hover:bg-elevated cursor-pointer border-b border-line last:border-0"
-                      onClick={() => { setSelectedVariant(v); setQuery(`${v.product_title} · ${v.title}`); setVariants([]) }}>
-                      <span className="font-medium text-primary">{v.product_title}</span>
-                      <span className="text-muted"> · {v.title}</span>
-                      {/* SKU — font-mono per spec */}
-                      {v.sku && <span className="font-mono text-caption text-muted ms-2">{v.sku}</span>}
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </div>
-            <input type="number" min={1} value={qty} onChange={e => setQty(Number(e.target.value))}
-              className="input w-20 text-center" />
-            <Button size="sm" disabled={!selectedVariant} onClick={addLine}>
-              {t('receiving.add')}
-            </Button>
-          </div>
-        </div>
+        <ProductSelectionGrid
+          sessionId={session.id}
+          lines={session.lines}
+          onRefresh={onRefresh}
+          onFinalizeClick={() => setShowFinalizeModal(true)}
+          finalizing={finalizing}
+        />
       )}
 
-      {/* Lines table */}
-      <div className="card overflow-hidden">
-        <table className="min-w-full">
-          <thead>
-            <tr className="border-b border-line">
-              <th className="tbl-header">{t('receiving.col.product')}</th>
-              <th className="tbl-header">{t('receiving.col.sku')}</th>
-              <th className="tbl-header text-end">{t('receiving.col.qty')}</th>
-              <th className="tbl-header w-8" />
-            </tr>
-          </thead>
-          <tbody>
-            {session.lines.length === 0 ? (
-              <tr>
-                <td colSpan={4} className="px-4 py-8 text-center text-small text-muted">
-                  {t('receiving.noLines')}
-                </td>
+      {/* Finalized: per-variant piece counts + label printing, unchanged. */}
+      {!isOpen && (
+        <div className="card overflow-hidden">
+          <table className="min-w-full">
+            <thead>
+              <tr className="border-b border-line">
+                <th className="tbl-header">{t('receiving.col.product')}</th>
+                <th className="tbl-header">{t('receiving.col.sku')}</th>
+                <th className="tbl-header text-end">{t('receiving.col.qty')}</th>
+                <th className="tbl-header w-8" />
               </tr>
-            ) : (() => {
-              // Track first occurrence of each variant_id — Print Barcodes button
-              // appears once per unique variant so nothing double-prints.
-              const firstVariantIdx = new Map<string, number>()
-              session.lines.forEach((l, i) => {
-                if (!firstVariantIdx.has(l.variant_id)) firstVariantIdx.set(l.variant_id, i)
-              })
-              return session.lines.map((l, idx) => {
-                const isFirstOccurrence = firstVariantIdx.get(l.variant_id) === idx
-                return (
-                  <tr key={l.id} className="tbl-row">
-                    <td className="tbl-cell">
-                      <div className="text-body font-medium text-primary">{l.product_title}</div>
-                      <div className="text-small text-muted">{l.variant_title}</div>
-                    </td>
-                    {/* SKU — font-mono per spec */}
-                    <td className="tbl-cell font-mono text-small text-muted">{l.sku ?? '—'}</td>
-                    <td className="tbl-cell text-end font-semibold text-primary">{l.quantity}</td>
-                    <td className="tbl-cell text-end">
-                      {isOpen ? (
-                        <button onClick={() => removeLine(l.id)}
-                          className="text-caption text-danger hover:text-danger/70 transition-colors">✕</button>
-                      ) : isFirstOccurrence && l.piece_count > 0 ? (
-                        <Button size="sm"
-                          loading={printingVariant === l.variant_id}
-                          onClick={() => printVariantLabels(l.variant_id)}>
-                          {t('receiving.printBarcodes')} ({l.piece_count})
-                        </Button>
-                      ) : null}
-                    </td>
-                  </tr>
-                )
-              })
-            })()}
-          </tbody>
-          {session.lines.length > 0 && (
-            <tfoot className="border-t border-line bg-elevated">
-              <tr>
-                <td colSpan={2} className="px-4 py-2 text-small text-muted">{t('receiving.total')}</td>
-                <td className="px-4 py-2 text-end text-body font-bold text-primary">
-                  {session.lines.reduce((s, l) => s + l.quantity, 0)}
-                </td>
-                <td />
-              </tr>
-            </tfoot>
-          )}
-        </table>
-      </div>
+            </thead>
+            <tbody>
+              {session.lines.length === 0 ? (
+                <tr>
+                  <td colSpan={4} className="px-4 py-8 text-center text-small text-muted">
+                    {t('receiving.noLines')}
+                  </td>
+                </tr>
+              ) : (() => {
+                // Track first occurrence of each variant_id — Print Barcodes button
+                // appears once per unique variant so nothing double-prints.
+                const firstVariantIdx = new Map<string, number>()
+                session.lines.forEach((l, i) => {
+                  if (!firstVariantIdx.has(l.variant_id)) firstVariantIdx.set(l.variant_id, i)
+                })
+                return session.lines.map((l, idx) => {
+                  const isFirstOccurrence = firstVariantIdx.get(l.variant_id) === idx
+                  return (
+                    <tr key={l.id} className="tbl-row">
+                      <td className="tbl-cell">
+                        <div className="text-body font-medium text-primary">{l.product_title}</div>
+                        <div className="text-small text-muted">{l.variant_title}</div>
+                      </td>
+                      {/* SKU — font-mono per spec */}
+                      <td className="tbl-cell font-mono text-small text-muted">{l.sku ?? '—'}</td>
+                      <td className="tbl-cell text-end font-semibold text-primary">{l.quantity}</td>
+                      <td className="tbl-cell text-end">
+                        {isFirstOccurrence && l.piece_count > 0 ? (
+                          <Button size="sm"
+                            loading={printingVariant === l.variant_id}
+                            onClick={() => printVariantLabels(l.variant_id)}>
+                            {t('receiving.printBarcodes')} ({l.piece_count})
+                          </Button>
+                        ) : null}
+                      </td>
+                    </tr>
+                  )
+                })
+              })()}
+            </tbody>
+            {session.lines.length > 0 && (
+              <tfoot className="border-t border-line bg-elevated">
+                <tr>
+                  <td colSpan={2} className="px-4 py-2 text-small text-muted">{t('receiving.total')}</td>
+                  <td className="px-4 py-2 text-end text-body font-bold text-primary">
+                    {session.lines.reduce((s, l) => s + l.quantity, 0)}
+                  </td>
+                  <td />
+                </tr>
+              </tfoot>
+            )}
+          </table>
+        </div>
+      )}
 
       {session.status === 'finalized' && (
         <p className="text-small text-muted">
           {t('receiving.piecesCreated', { count: session.piece_count })} ·{' '}
           {t('receiving.finalizedAt', { date: new Date(session.finalized_at!).toLocaleString() })}
         </p>
+      )}
+
+      {showFinalizeModal && (
+        <Modal
+          title={t('receiving.finalizeModalTitle', { ref: session.reference ?? session.id.slice(-8) })}
+          onClose={() => { if (!finalizing) setShowFinalizeModal(false) }}
+        >
+          <div className="space-y-4">
+            {finalizeError && <Alert tone="critical" title={finalizeError} />}
+            <p className="text-body text-muted">
+              {t('receiving.finalizeModalBody', {
+                count: session.lines.reduce((s, l) => s + l.quantity, 0),
+              })}
+            </p>
+            <div className="flex gap-2">
+              <Button
+                variant="secondary"
+                className="flex-1"
+                disabled={finalizing}
+                onClick={() => setShowFinalizeModal(false)}
+              >
+                {t('common.cancel')}
+              </Button>
+              <Button className="flex-1" loading={finalizing} onClick={finalize}>
+                {t('receiving.finalizeModalConfirm')}
+              </Button>
+            </div>
+          </div>
+        </Modal>
       )}
     </div>
   )

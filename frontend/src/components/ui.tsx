@@ -5,7 +5,7 @@ import type { LucideIcon } from 'lucide-react'
 import {
   Check, Minus, ChevronDown, X,
   CheckCircle2, AlertCircle, AlertTriangle, Info,
-  Loader2, Plus,
+  Loader2, Plus, Package,
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { Link } from 'react-router-dom'
@@ -896,6 +896,73 @@ export function Avatar({
           <span className="text-body text-primary leading-tight">{name}</span>
           {role && <span className="text-small text-muted leading-tight">{role}</span>}
         </span>
+      )}
+    </div>
+  )
+}
+
+// ── ProductThumb ──────────────────────────────────────────────────────────────
+
+// Shopify CDN resize param — list/card thumbnail only, never the full-size image.
+// Purely a render-time transform on the URL we already have; nothing is stored or re-hosted.
+function shopifyThumbUrl(url: string): string {
+  return `${url}${url.includes('?') ? '&' : '?'}width=96`
+}
+
+/**
+ * Fixed-size tile for every state (image / null / empty / failed load) so a row's
+ * or card's layout never shifts depending on whether this particular product has
+ * an image yet. Shared by Catalog (fixed 40x40 row thumbnail) and Receiving's
+ * product-selection grid (fill-mode square card photo) — one thumbnail
+ * implementation, not forked per screen.
+ */
+export function ProductThumb({
+  src,
+  alt,
+  size = 40,
+  fill = false,
+  rounded = 'lg',
+  placeholderLabel,
+  className = '',
+}: {
+  src: string | null
+  alt: string
+  size?: number
+  fill?: boolean
+  /** 'none' when nesting inside an already-rounded, overflow-hidden card — avoids double-rounded corners. */
+  rounded?: 'lg' | 'none'
+  placeholderLabel?: string
+  className?: string
+}) {
+  const [failed, setFailed] = useState(false)
+  const showImage = !!src && !failed
+  const iconSize = fill ? 26 : Math.max(12, Math.round(size * 0.4))
+
+  return (
+    <div
+      className={cn(
+        'bg-elevated border border-line flex items-center justify-center flex-shrink-0 overflow-hidden',
+        rounded === 'lg' && 'rounded-lg',
+        fill && 'w-full h-full aspect-square',
+        className
+      )}
+      style={fill ? undefined : { width: size, height: size }}
+    >
+      {showImage ? (
+        <img
+          src={shopifyThumbUrl(src)}
+          alt={alt}
+          loading="lazy"
+          className="w-full h-full object-cover"
+          onError={() => setFailed(true)}
+        />
+      ) : (
+        <div className="flex flex-col items-center gap-1">
+          <Package size={iconSize} strokeWidth={1.75} className="text-muted" />
+          {placeholderLabel && (
+            <span className="text-[10px] text-muted/70 leading-none">{placeholderLabel}</span>
+          )}
+        </div>
       )}
     </div>
   )
