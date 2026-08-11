@@ -1,10 +1,40 @@
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import { Package } from 'lucide-react'
 import { getCatalog, CatalogProduct } from '../api'
 import {
   Alert, Badge, DataTable, type DataTableColumn,
   EmptyState, TableSkeleton,
 } from '../components/ui'
+
+// Shopify CDN resize param — list-view thumbnail only, never the full-size image.
+// Purely a render-time transform on the URL we already have; nothing is stored or re-hosted.
+function shopifyThumbUrl(url: string): string {
+  return `${url}${url.includes('?') ? '&' : '?'}width=96`
+}
+
+// Fixed-size tile for every state (image / null / empty / failed load) so a row's
+// height never shifts depending on whether this particular product has an image yet.
+function ProductThumb({ src, alt }: { src: string | null; alt: string }) {
+  const [failed, setFailed] = useState(false)
+  const showImage = !!src && !failed
+
+  return (
+    <div className="w-10 h-10 rounded-lg bg-elevated border border-line flex items-center justify-center flex-shrink-0 overflow-hidden">
+      {showImage ? (
+        <img
+          src={shopifyThumbUrl(src)}
+          alt={alt}
+          loading="lazy"
+          className="w-full h-full object-cover"
+          onError={() => setFailed(true)}
+        />
+      ) : (
+        <Package size={16} strokeWidth={1.75} className="text-muted" />
+      )}
+    </div>
+  )
+}
 
 // Piece statuses present in the catalog — used to build the stock breakdown column
 const STATUS_KEYS = [
@@ -33,6 +63,7 @@ export default function Catalog() {
       id:            v.id,
       productTitle:  p.title,
       productStatus: p.status,
+      productImageUrl: p.imageUrl,
       variantTitle:  v.title,
       sku:           v.sku,
       price:         v.price,
@@ -48,10 +79,13 @@ export default function Catalog() {
       key: 'product',
       header: t('catalog.columns.product', { defaultValue: 'Product' }),
       render: row => (
-        <div className="flex items-center gap-2 flex-wrap">
-          <span className="text-body font-medium text-primary">{row.productTitle}</span>
-          {/* Product status (ACTIVE/DRAFT/ARCHIVED) not in STATUS_TONE → neutral tone */}
-          <Badge tone="neutral" label={row.productStatus} />
+        <div className="flex items-center gap-2.5">
+          <ProductThumb src={row.productImageUrl} alt={row.productTitle} />
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-body font-medium text-primary">{row.productTitle}</span>
+            {/* Product status (ACTIVE/DRAFT/ARCHIVED) not in STATUS_TONE → neutral tone */}
+            <Badge tone="neutral" label={row.productStatus} />
+          </div>
         </div>
       ),
     },
