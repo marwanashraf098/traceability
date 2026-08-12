@@ -235,6 +235,12 @@
     "finalizeModalTitle": "إنهاء الجلسة {{ref}}؟",
     "finalizeModalBody": "سيؤدي هذا إلى إنشاء {{count}} قطعة وقفل الجلسة عن التعديل.",
     "finalizeModalConfirm": "إنهاء",
+    "deleteSession": "حذف الجلسة",
+    "deleteSuccess": "تم حذف الجلسة.",
+    "deleteModalTitle": "حذف الجلسة {{ref}}؟",
+    "deleteModalBodyEmpty": "لا توجد أصناف في هذه الجلسة بعد. لا يمكن التراجع عن هذا الإجراء.",
+    "deleteModalBodyWithLines": "سيؤدي هذا إلى حذف {{lines}} سطر بإجمالي {{units}} وحدة نهائيًا. لا يمكن التراجع عن هذا الإجراء.",
+    "deleteModalConfirm": "حذف الجلسة",
     "col": {
       "ref": "المرجع",
       "location": "الموقع",

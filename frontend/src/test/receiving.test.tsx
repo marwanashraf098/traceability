@@ -4,6 +4,12 @@ import { renderWithProviders, screen, waitFor, fireEvent, within } from './rende
 import { stubFetchWithShellDefaults } from './mockShellFetch'
 import { ToastProvider } from '../components/ui'
 import Receiving from '../pages/Receiving'
+import * as api from '../api'
+
+vi.mock('../api', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../api')>()
+  return { ...actual, getRoleFromToken: vi.fn() }
+})
 
 // ── Fake backend: a small mutable in-memory model mirroring the real
 //    ReceivingService semantics (POST always creates a new line, PUT updates
@@ -129,6 +135,9 @@ function backendFetch(url: string, opts: RequestInit = {}) {
     session.lines = session.lines.filter(l => l.id !== putMatch[1])
     return emptyResponse()
   }
+  if (url.endsWith(`/receiving/sessions/${session.id}`) && method === 'DELETE') {
+    return emptyResponse()
+  }
   if (url.endsWith(`/receiving/sessions/${session.id}/finalize`) && method === 'POST') {
     const total = session.lines.reduce((s, l) => s + l.quantity, 0)
     session.status = 'finalized'
@@ -169,6 +178,7 @@ describe('Receiving — browse grid + variant modal + selected summary', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     resetState()
+    vi.mocked(api.getRoleFromToken).mockReturnValue('owner')
     mockFetch = vi.fn(backendFetch)
     stubFetchWithShellDefaults(mockFetch)
   })
@@ -420,5 +430,45 @@ describe('Receiving — browse grid + variant modal + selected summary', () => {
     expect(await screen.findByText('5 pieces created')).toBeInTheDocument()
     expect(alertSpy).not.toHaveBeenCalled()
     await waitFor(() => expect(session.status).toBe('finalized'))
+  })
+
+  test('delete session control is hidden for a worker', async () => {
+    vi.mocked(api.getRoleFromToken).mockReturnValue('worker')
+    const user = userEvent.setup()
+    await openSession(user)
+
+    expect(screen.queryByRole('button', { name: 'Delete Session' })).not.toBeInTheDocument()
+  })
+
+  test('deleting an empty open session uses the lighter confirm wording and returns to the sessions list', async () => {
+    const user = userEvent.setup()
+    await openSession(user)
+
+    await user.click(screen.getByRole('button', { name: 'Delete Session' }))
+    expect(await screen.findByText('Delete session REC-0092?')).toBeInTheDocument()
+    expect(screen.getByText('This session has no items yet. This cannot be undone.')).toBeInTheDocument()
+
+    const confirmBtn = screen.getAllByRole('button', { name: 'Delete Session' }).slice(-1)[0]
+    await user.click(confirmBtn)
+
+    expect(await screen.findByText('Session deleted.')).toBeInTheDocument()
+    // Back on the sessions list — the grid (session view) is gone.
+    await waitFor(() => expect(screen.queryByTestId('receiving-grid')).not.toBeInTheDocument())
+    const deleteCalls = mockFetch.mock.calls.filter(([u, o]) =>
+      String(u).endsWith(`/receiving/sessions/${session.id}`) && (o as RequestInit)?.method === 'DELETE')
+    expect(deleteCalls).toHaveLength(1)
+  })
+
+  test('deleting a session with lines uses the stronger confirm wording naming line/unit counts', async () => {
+    session.lines.push(
+      { id: 'line-a', variant_id: 'v-cap-navy', variant_title: 'Navy', sku: 'CAP-NVY', product_title: 'Cap', quantity: 12, piece_count: 0 },
+      { id: 'line-b', variant_id: 'v-tshirt-s', variant_title: 'S', sku: 'TSHIRT-S', product_title: 'T-Shirt', quantity: 8, piece_count: 0 },
+    )
+    const user = userEvent.setup()
+    await openSession(user)
+
+    await user.click(screen.getByRole('button', { name: 'Delete Session' }))
+    expect(await screen.findByText('Delete session REC-0092?')).toBeInTheDocument()
+    expect(screen.getByText('This will permanently delete 2 line(s) totaling 20 unit(s). This cannot be undone.')).toBeInTheDocument()
   })
 })

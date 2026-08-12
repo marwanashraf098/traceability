@@ -235,6 +235,12 @@
     "finalizeModalTitle": "Finalize session {{ref}}?",
     "finalizeModalBody": "This creates {{count}} pieces and locks the session for editing.",
     "finalizeModalConfirm": "Finalize",
+    "deleteSession": "Delete Session",
+    "deleteSuccess": "Session deleted.",
+    "deleteModalTitle": "Delete session {{ref}}?",
+    "deleteModalBodyEmpty": "This session has no items yet. This cannot be undone.",
+    "deleteModalBodyWithLines": "This will permanently delete {{lines}} line(s) totaling {{units}} unit(s). This cannot be undone.",
+    "deleteModalConfirm": "Delete Session",
     "col": {
       "ref": "Reference",
       "location": "Location",

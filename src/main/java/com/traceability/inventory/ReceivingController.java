@@ -90,6 +90,15 @@ public class ReceivingController {
         receiving.deleteLine(sessionId, lineId);
     }
 
+    // ── Delete ────────────────────────────────────────────────────────────────
+
+    @DeleteMapping("/sessions/{sessionId}")
+    @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void deleteSession(@PathVariable UUID sessionId) {
+        receiving.deleteSession(sessionId);
+    }
+
     // ── Finalize ──────────────────────────────────────────────────────────────
 
     @PostMapping("/sessions/{sessionId}/finalize")

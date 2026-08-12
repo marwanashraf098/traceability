@@ -4,6 +4,7 @@ import { Alert, Badge, Button, EmptyState, Input, Modal, TableSkeleton, useToast
 import ProductSelectionGrid from './receiving/ProductSelectionGrid'
 
 import { getAccessToken, clearAccessToken } from '../auth'
+import { getRoleFromToken } from '../api'
 
 const BASE = '/api/v1'
 function authHeaders() {
@@ -218,7 +219,23 @@ function SessionView({ session, onRefresh, onBack }: {
   const [showFinalizeModal, setShowFinalizeModal] = useState(false)
   const [printError, setPrintError]     = useState<string | null>(null)
   const [printingVariant, setPrintingVariant] = useState<string | null>(null)
+  const [deleting, setDeleting]         = useState(false)
+  const [deleteError, setDeleteError]   = useState<string | null>(null)
+  const [showDeleteModal, setShowDeleteModal] = useState(false)
   const isOpen = session.status === 'open'
+  const role = getRoleFromToken()
+  const canDelete = isOpen && (role === 'owner' || role === 'manager')
+  const totalUnits = session.lines.reduce((s, l) => s + l.quantity, 0)
+
+  async function deleteSession() {
+    setDeleting(true); setDeleteError(null)
+    try {
+      await api<null>(`/receiving/sessions/${session.id}`, { method: 'DELETE' })
+      toast({ tone: 'success', message: t('receiving.deleteSuccess') })
+      onBack()
+    } catch (e: unknown) { setDeleteError((e as Error).message) }
+    finally { setDeleting(false) }
+  }
 
   async function finalize() {
     setFinalizing(true); setFinalizeError(null)
@@ -293,9 +310,15 @@ function SessionView({ session, onRefresh, onBack }: {
             </Button>
           </div>
         )}
+        {canDelete && (
+          <Button size="sm" variant="destructive" onClick={() => setShowDeleteModal(true)}>
+            {t('receiving.deleteSession')}
+          </Button>
+        )}
       </div>
 
       {printError && <Alert tone="critical" title={printError} />}
+      {deleteError && <Alert tone="critical" title={deleteError} />}
 
       {/* Open: the product-card selection grid IS the entry mechanism —
           replaces the old type-ahead search + flat lines table entirely. */}
@@ -405,6 +428,35 @@ function SessionView({ session, onRefresh, onBack }: {
               </Button>
               <Button className="flex-1" loading={finalizing} onClick={finalize}>
                 {t('receiving.finalizeModalConfirm')}
+              </Button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {showDeleteModal && (
+        <Modal
+          title={t('receiving.deleteModalTitle', { ref: session.reference ?? session.id.slice(-8) })}
+          onClose={() => { if (!deleting) setShowDeleteModal(false) }}
+        >
+          <div className="space-y-4">
+            {deleteError && <Alert tone="critical" title={deleteError} />}
+            <p className="text-body text-muted">
+              {session.lines.length > 0
+                ? t('receiving.deleteModalBodyWithLines', { lines: session.lines.length, units: totalUnits })
+                : t('receiving.deleteModalBodyEmpty')}
+            </p>
+            <div className="flex gap-2">
+              <Button
+                variant="secondary"
+                className="flex-1"
+                disabled={deleting}
+                onClick={() => setShowDeleteModal(false)}
+              >
+                {t('common.cancel')}
+              </Button>
+              <Button variant="destructive" className="flex-1" loading={deleting} onClick={deleteSession}>
+                {t('receiving.deleteModalConfirm')}
               </Button>
             </div>
           </div>

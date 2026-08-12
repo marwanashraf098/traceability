@@ -70,6 +70,33 @@ public class ReceivingService {
             lineId, sessionId, tenantId);
     }
 
+    // ── Delete ───────────────────────────────────────────────────────────────
+
+    /**
+     * Deletes an OPEN receiving session and its lines. Rejects anything not
+     * status='open' (a finalized session has generated pieces — real inventory
+     * and custody — and must never be deletable). kind='inbound' is checked
+     * explicitly here (not folded into the shared requireOpen() helper used by
+     * the other methods) so this, the one irreversible endpoint, can never be
+     * pointed at a 'returns' session sharing the same receipts table/id space.
+     */
+    @Transactional
+    public void deleteSession(UUID sessionId) {
+        UUID tenantId = TenantContext.require();
+        List<String> rows = jdbc.queryForList(
+            "SELECT status FROM receipts WHERE id = ? AND tenant_id = ? AND kind = 'inbound'",
+            String.class, sessionId, tenantId);
+        if (rows.isEmpty()) throw notFound("session");
+        if (!"open".equals(rows.get(0))) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                "Session is already finalized and cannot be deleted");
+        }
+        jdbc.update("DELETE FROM receipt_lines WHERE receipt_id = ? AND tenant_id = ?",
+            sessionId, tenantId);
+        jdbc.update("DELETE FROM receipts WHERE id = ? AND tenant_id = ? AND kind = 'inbound'",
+            sessionId, tenantId);
+    }
+
     // ── Finalize ─────────────────────────────────────────────────────────────
 
     /**
