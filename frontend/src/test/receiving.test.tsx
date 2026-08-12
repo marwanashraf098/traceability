@@ -9,7 +9,9 @@ import Receiving from '../pages/Receiving'
 //    ReceivingService semantics (POST always creates a new line, PUT updates
 //    one line's quantity by id, DELETE removes one line by id) — this lets
 //    the tests exercise the grid's create/update/delete reconciliation logic
-//    against realistic state transitions, not hand-picked mock values. ──────
+//    against realistic state transitions, not hand-picked mock values. This
+//    reconciliation logic is UNCHANGED from the prior inline-expand build —
+//    only the entry UI (modal instead of inline expand) changed. ───────────
 
 interface FakeVariant { id: string; title: string; sku: string | null; productId: string; productTitle: string }
 interface FakeLine {
@@ -138,7 +140,17 @@ async function openSession(user: ReturnType<typeof userEvent.setup>) {
   await screen.findByTestId('receiving-grid')
 }
 
-describe('Receiving — product-card selection grid', () => {
+async function openProductModal(user: ReturnType<typeof userEvent.setup>, productId: string) {
+  await user.click(screen.getByTestId(`product-card-${productId}`))
+  await screen.findByTestId('variant-modal-body')
+}
+
+async function checkVariant(user: ReturnType<typeof userEvent.setup>, variantId: string) {
+  const row = screen.getByTestId(`variant-row-${variantId}`)
+  await user.click(within(row).getByRole('checkbox'))
+}
+
+describe('Receiving — browse grid + variant modal + selected summary', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     resetState()
@@ -146,48 +158,65 @@ describe('Receiving — product-card selection grid', () => {
     stubFetchWithShellDefaults(mockFetch)
   })
 
-  test('expand/collapse: tapping a collapsed card reveals its variants, tapping again hides them', async () => {
+  test('clicking a card opens the variant modal over the grid; Done closes it back to the grid (no expand/reflow)', async () => {
     const user = userEvent.setup()
     await openSession(user)
 
-    expect(screen.queryByTestId('qty-input-v-tshirt-s')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('variant-modal-body')).not.toBeInTheDocument()
+    await openProductModal(user, 'p-tshirt')
+    expect(screen.getByText('TSHIRT-S')).toBeInTheDocument()
+    expect(screen.getByText('TSHIRT-M')).toBeInTheDocument()
+    // The grid card is still present underneath, unchanged (no expand-in-place).
+    expect(screen.getByTestId('product-card-p-tshirt')).toBeInTheDocument()
 
-    await user.click(screen.getByText('T-Shirt'))
-    expect(await screen.findByTestId('qty-input-v-tshirt-s')).toBeInTheDocument()
-    expect(screen.getByTestId('qty-input-v-tshirt-m')).toBeInTheDocument()
-
-    // Tap the header again (product title) to collapse
-    await user.click(screen.getByText('T-Shirt'))
-    await waitFor(() => expect(screen.queryByTestId('qty-input-v-tshirt-s')).not.toBeInTheDocument())
+    await user.click(screen.getByRole('button', { name: 'Done' }))
+    await waitFor(() => expect(screen.queryByTestId('variant-modal-body')).not.toBeInTheDocument())
   })
 
-  test('per-variant qty: first entry for a bare variant POSTs a new line (not PUT)', async () => {
+  test('quantity field is disabled until its checkbox is checked, then enables and focuses', async () => {
     const user = userEvent.setup()
     await openSession(user)
-    await user.click(screen.getByText('T-Shirt'))
+    await openProductModal(user, 'p-cap')
 
-    const input = await screen.findByTestId('qty-input-v-tshirt-m')
+    const input = screen.getByTestId('qty-input-v-cap-navy')
+    expect(input).toBeDisabled()
+
+    await checkVariant(user, 'v-cap-navy')
+    await waitFor(() => expect(input).toBeEnabled())
+    expect(input).toHaveFocus()
+  })
+
+  test('checking alone commits nothing — only entering a qty POSTs a new line', async () => {
+    const user = userEvent.setup()
+    await openSession(user)
+    await openProductModal(user, 'p-cap')
+
+    await checkVariant(user, 'v-cap-navy')
+    await new Promise(r => setTimeout(r, 50))
+    expect(session.lines).toHaveLength(0)
+
+    const input = screen.getByTestId('qty-input-v-cap-navy')
     await user.type(input, '40')
     fireEvent.blur(input)
 
     await waitFor(() => expect(session.lines).toHaveLength(1))
-    expect(session.lines[0]).toMatchObject({ variant_id: 'v-tshirt-m', quantity: 40 })
-
+    expect(session.lines[0]).toMatchObject({ variant_id: 'v-cap-navy', quantity: 40 })
     const postCalls = mockFetch.mock.calls.filter(([u, o]) =>
       String(u).endsWith('/lines') && (o as RequestInit)?.method === 'POST')
     expect(postCalls).toHaveLength(1)
   })
 
-  test('per-variant qty: editing an existing single-line variant PUTs the same line (not a second POST)', async () => {
+  test('editing an existing single-line variant PUTs the same line (not a second POST)', async () => {
     const user = userEvent.setup()
     session.lines.push({
       id: 'line-existing', variant_id: 'v-cap-navy', variant_title: 'Navy', sku: 'CAP-NVY',
       product_title: 'Cap', quantity: 20, piece_count: 0,
     })
     await openSession(user)
-    await user.click(screen.getByText('Cap'))
+    await openProductModal(user, 'p-cap')
 
-    const input = await screen.findByTestId('qty-input-v-cap-navy')
+    const input = screen.getByTestId('qty-input-v-cap-navy')
+    expect(input).toBeEnabled()
     expect(input).toHaveValue(20)
     await user.clear(input)
     await user.type(input, '35')
@@ -203,22 +232,24 @@ describe('Receiving — product-card selection grid', () => {
     expect(putCalls).toHaveLength(1)
   })
 
-  test('per-variant qty: clearing to 0 DELETEs the line', async () => {
+  test('unchecking an already-quantified variant clears it (DELETEs the line, disables the field)', async () => {
     const user = userEvent.setup()
     session.lines.push({
       id: 'line-existing', variant_id: 'v-cap-navy', variant_title: 'Navy', sku: 'CAP-NVY',
       product_title: 'Cap', quantity: 20, piece_count: 0,
     })
     await openSession(user)
-    await user.click(screen.getByText('Cap'))
+    await openProductModal(user, 'p-cap')
 
-    const input = await screen.findByTestId('qty-input-v-cap-navy')
-    await user.clear(input)
-    fireEvent.blur(input)
+    const row = screen.getByTestId('variant-row-v-cap-navy')
+    expect(within(row).getByRole('checkbox')).toBeChecked()
+
+    await user.click(within(row).getByRole('checkbox'))
 
     await waitFor(() => expect(session.lines).toHaveLength(0))
     const deleteCalls = mockFetch.mock.calls.filter(([, o]) => (o as RequestInit)?.method === 'DELETE')
     expect(deleteCalls).toHaveLength(1)
+    expect(screen.getByTestId('qty-input-v-cap-navy')).toBeDisabled()
   })
 
   test('legacy-duplicate consolidation: two pre-existing lines for one variant display as their sum, and editing consolidates to one line preserving the net quantity', async () => {
@@ -228,10 +259,10 @@ describe('Receiving — product-card selection grid', () => {
       { id: 'line-b', variant_id: 'v-cap-navy', variant_title: 'Navy', sku: 'CAP-NVY', product_title: 'Cap', quantity: 8, piece_count: 0 },
     )
     await openSession(user)
-    await user.click(screen.getByText('Cap'))
+    await openProductModal(user, 'p-cap')
 
-    // Displays the SUM (20), not either individual line's quantity.
-    const input = await screen.findByTestId('qty-input-v-cap-navy')
+    // Displays the SUM (20), pre-checked, not either individual line's quantity.
+    const input = screen.getByTestId('qty-input-v-cap-navy')
     expect(input).toHaveValue(20)
 
     // Edit to 25 — must consolidate to exactly one line, net quantity 25 (not 12+25 or lost).
@@ -243,37 +274,75 @@ describe('Receiving — product-card selection grid', () => {
       expect(session.lines).toHaveLength(1)
       expect(session.lines[0].quantity).toBe(25)
     })
-
-    // Consolidation must PUT the kept line before/without ever dropping below the
-    // intended total — assert the surviving line is one of the two originals
-    // (never a fresh POST for the consolidation itself).
     expect(['line-a', 'line-b']).toContain(session.lines[0].id)
   })
 
-  test('collapsed card shows the selected-badge (variants · units) only once qty > 0, and stays quiet when empty', async () => {
+  test('compact card shows the selected-badge (variants · units) only once qty > 0, and stays quiet when empty', async () => {
     const user = userEvent.setup()
     await openSession(user)
 
-    // Cap card starts with no badge (quiet, empty).
     const capCardBefore = screen.getByTestId('product-card-p-cap')
     expect(within(capCardBefore).queryByText(/1 · 20u/)).not.toBeInTheDocument()
 
-    // Expand T-Shirt, set both variants, collapse.
-    await user.click(screen.getByText('T-Shirt'))
-    const sInput = await screen.findByTestId('qty-input-v-tshirt-s')
-    const mInput = screen.getByTestId('qty-input-v-tshirt-m')
+    await openProductModal(user, 'p-tshirt')
+    const sInput = screen.getByTestId('qty-input-v-tshirt-s')
+    await checkVariant(user, 'v-tshirt-s')
     await user.type(sInput, '10')
     fireEvent.blur(sInput)
     await waitFor(() => expect(session.lines.some(l => l.variant_id === 'v-tshirt-s')).toBe(true))
+
+    const mInput = screen.getByTestId('qty-input-v-tshirt-m')
+    await checkVariant(user, 'v-tshirt-m')
     await user.type(mInput, '15')
     fireEvent.blur(mInput)
     await waitFor(() => expect(session.lines.some(l => l.variant_id === 'v-tshirt-m')).toBe(true))
 
-    await user.click(screen.getByText('T-Shirt'))
-    await waitFor(() => expect(screen.queryByTestId('qty-input-v-tshirt-s')).not.toBeInTheDocument())
+    await user.click(screen.getByRole('button', { name: 'Done' }))
+    await waitFor(() => expect(screen.queryByTestId('variant-modal-body')).not.toBeInTheDocument())
 
     const tshirtCard = screen.getByTestId('product-card-p-tshirt')
     expect(within(tshirtCard).getByText('2 · 25u')).toBeInTheDocument()
+  })
+
+  test('selected-products summary lists a row per product with its variants/qty and a unit subtotal, empty state when nothing selected', async () => {
+    const user = userEvent.setup()
+    await openSession(user)
+
+    expect(screen.getByText('Nothing selected yet — tap a product to add quantities.')).toBeInTheDocument()
+
+    await openProductModal(user, 'p-cap')
+    const capInput = screen.getByTestId('qty-input-v-cap-navy')
+    await checkVariant(user, 'v-cap-navy')
+    await user.type(capInput, '20')
+    fireEvent.blur(capInput)
+    await waitFor(() => expect(session.lines).toHaveLength(1))
+    await user.click(screen.getByRole('button', { name: 'Done' }))
+    await waitFor(() => expect(screen.queryByTestId('variant-modal-body')).not.toBeInTheDocument())
+
+    const row = await screen.findByTestId('summary-row-p-cap')
+    expect(within(row).getByText('Cap')).toBeInTheDocument()
+    expect(within(row).getByText('Navy: 20')).toBeInTheDocument()
+    expect(within(row).getByText('20')).toBeInTheDocument()
+  })
+
+  test('summary row Edit reopens that product\'s modal; Remove clears all its lines', async () => {
+    const user = userEvent.setup()
+    session.lines.push({
+      id: 'line-existing', variant_id: 'v-cap-navy', variant_title: 'Navy', sku: 'CAP-NVY',
+      product_title: 'Cap', quantity: 20, piece_count: 0,
+    })
+    await openSession(user)
+
+    const row = await screen.findByTestId('summary-row-p-cap')
+    await user.click(within(row).getByRole('button', { name: 'Edit' }))
+    await screen.findByTestId('variant-modal-body')
+    expect(screen.getByTestId('qty-input-v-cap-navy')).toHaveValue(20)
+    await user.click(screen.getByRole('button', { name: 'Done' }))
+    await waitFor(() => expect(screen.queryByTestId('variant-modal-body')).not.toBeInTheDocument())
+
+    await user.click(within(screen.getByTestId('summary-row-p-cap')).getByRole('button', { name: 'Remove' }))
+    await waitFor(() => expect(session.lines).toHaveLength(0))
+    await waitFor(() => expect(screen.queryByTestId('summary-row-p-cap')).not.toBeInTheDocument())
   })
 
   test('"show selected only" filters the grid to cards with a qty, then back', async () => {
@@ -284,15 +353,15 @@ describe('Receiving — product-card selection grid', () => {
     })
     await openSession(user)
 
-    expect(screen.getByText('T-Shirt')).toBeInTheDocument()
-    expect(screen.getByText('Cap')).toBeInTheDocument()
+    expect(screen.getByTestId('product-card-p-tshirt')).toBeInTheDocument()
+    expect(screen.getByTestId('product-card-p-cap')).toBeInTheDocument()
 
     await user.click(screen.getByRole('switch'))
-    await waitFor(() => expect(screen.queryByText('T-Shirt')).not.toBeInTheDocument())
-    expect(screen.getByText('Cap')).toBeInTheDocument()
+    await waitFor(() => expect(screen.queryByTestId('product-card-p-tshirt')).not.toBeInTheDocument())
+    expect(screen.getByTestId('product-card-p-cap')).toBeInTheDocument()
 
     await user.click(screen.getByRole('switch'))
-    await waitFor(() => expect(screen.getByText('T-Shirt')).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByTestId('product-card-p-tshirt')).toBeInTheDocument())
   })
 
   test('finalize is disabled until any variant qty > 0, and enables once one is set', async () => {
@@ -302,8 +371,9 @@ describe('Receiving — product-card selection grid', () => {
     const finalizeBtn = screen.getByRole('button', { name: /finalize & generate pieces/i })
     expect(finalizeBtn).toBeDisabled()
 
-    await user.click(screen.getByText('Cap'))
-    const input = await screen.findByTestId('qty-input-v-cap-navy')
+    await openProductModal(user, 'p-cap')
+    const input = screen.getByTestId('qty-input-v-cap-navy')
+    await checkVariant(user, 'v-cap-navy')
     await user.type(input, '3')
     fireEvent.blur(input)
 

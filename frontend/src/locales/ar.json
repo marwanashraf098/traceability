@@ -250,12 +250,19 @@
       "searchPlaceholder": "بحث عن المنتجات أو رمز SKU…",
       "showSelectedOnly": "عرض المحدد فقط",
       "noPhoto": "بدون صورة",
-      "summaryBadge": "{{variants}} متغيرات · {{units}} وحدة",
       "cardBadge": "{{variants}} · {{units}}و",
       "variantMeta": "{{count}} متغيرات",
       "total": "{{products}} منتجات · {{variants}} متغيرات · {{units}} وحدة",
       "emptyCatalog": "لا توجد منتجات في الكتالوج بعد",
-      "noResults": "لا توجد منتجات مطابقة لبحثك"
+      "noResults": "لا توجد منتجات مطابقة لبحثك",
+      "doneButton": "تم",
+      "summaryTitle": "المنتجات المحددة",
+      "summaryEmpty": "لم يتم تحديد شيء بعد — اضغط على منتج لإضافة الكميات.",
+      "summaryColProduct": "المنتج",
+      "summaryColVariants": "المتغيرات المحددة",
+      "summaryColUnits": "الوحدات",
+      "edit": "تعديل",
+      "remove": "إزالة"
     }
   },
   "fulfill": {

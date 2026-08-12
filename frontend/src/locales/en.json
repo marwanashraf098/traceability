@@ -250,12 +250,19 @@
       "searchPlaceholder": "Search products or SKU…",
       "showSelectedOnly": "Show selected only",
       "noPhoto": "No photo",
-      "summaryBadge": "{{variants}} variants · {{units}} units",
       "cardBadge": "{{variants}} · {{units}}u",
       "variantMeta": "{{count}} variants",
       "total": "{{products}} products · {{variants}} variants · {{units}} units",
       "emptyCatalog": "No products in catalog yet",
-      "noResults": "No products match your search"
+      "noResults": "No products match your search",
+      "doneButton": "Done",
+      "summaryTitle": "Selected products",
+      "summaryEmpty": "Nothing selected yet — tap a product to add quantities.",
+      "summaryColProduct": "Product",
+      "summaryColVariants": "Selected variants",
+      "summaryColUnits": "Units",
+      "edit": "Edit",
+      "remove": "Remove"
     }
   },
   "fulfill": {

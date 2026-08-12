@@ -904,17 +904,23 @@ export function Avatar({
 // ── ProductThumb ──────────────────────────────────────────────────────────────
 
 // Shopify CDN resize param — list/card thumbnail only, never the full-size image.
-// Purely a render-time transform on the URL we already have; nothing is stored or re-hosted.
-function shopifyThumbUrl(url: string): string {
-  return `${url}${url.includes('?') ? '&' : '?'}width=96`
+// Purely a render-time transform on the URL we already have; nothing is stored or
+// re-hosted. Width is caller-supplied (not a single hardcoded value) so a wider
+// card can request a proportionally larger source instead of upscaling a tiny one.
+function shopifyThumbUrl(url: string, width: number): string {
+  return `${url}${url.includes('?') ? '&' : '?'}width=${width}`
 }
 
 /**
- * Fixed-size tile for every state (image / null / empty / failed load) so a row's
- * or card's layout never shifts depending on whether this particular product has
- * an image yet. Shared by Catalog (fixed 40x40 row thumbnail) and Receiving's
- * product-selection grid (fill-mode square card photo) — one thumbnail
- * implementation, not forked per screen.
+ * Tile for every state (image / null / empty / failed load) so a row's or card's
+ * layout never shifts depending on whether this particular product has an image
+ * yet. Shared across Catalog (fixed 40x40 row thumbnail) and Receiving's
+ * product-selection grid (fill-mode card photo) — one thumbnail implementation,
+ * not forked per screen.
+ *
+ * fill mode stretches to 100% of the parent's box with NO aspect ratio of its
+ * own — the caller controls aspect (square, short thumbnail strip, etc.) via its
+ * own wrapper height/aspect class, since different callers want different shapes.
  */
 export function ProductThumb({
   src,
@@ -923,6 +929,7 @@ export function ProductThumb({
   fill = false,
   rounded = 'lg',
   placeholderLabel,
+  cdnWidth = 96,
   className = '',
 }: {
   src: string | null
@@ -932,25 +939,27 @@ export function ProductThumb({
   /** 'none' when nesting inside an already-rounded, overflow-hidden card — avoids double-rounded corners. */
   rounded?: 'lg' | 'none'
   placeholderLabel?: string
+  /** Shopify CDN source width to request — size for the actual rendered width, not a one-size-fits-all default. */
+  cdnWidth?: number
   className?: string
 }) {
   const [failed, setFailed] = useState(false)
   const showImage = !!src && !failed
-  const iconSize = fill ? 26 : Math.max(12, Math.round(size * 0.4))
+  const iconSize = fill ? 22 : Math.max(12, Math.round(size * 0.4))
 
   return (
     <div
       className={cn(
         'bg-elevated border border-line flex items-center justify-center flex-shrink-0 overflow-hidden',
         rounded === 'lg' && 'rounded-lg',
-        fill && 'w-full h-full aspect-square',
+        fill && 'w-full h-full',
         className
       )}
       style={fill ? undefined : { width: size, height: size }}
     >
       {showImage ? (
         <img
-          src={shopifyThumbUrl(src)}
+          src={shopifyThumbUrl(src, cdnWidth)}
           alt={alt}
           loading="lazy"
           className="w-full h-full object-cover"

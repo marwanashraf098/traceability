@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Search, ChevronUp, Check } from 'lucide-react'
+import { Search } from 'lucide-react'
 import { getCatalog, CatalogProduct, CatalogVariant } from '../../api'
-import { Alert, Button, Input, ProductThumb, Skeleton, Toggle, cn } from '../../components/ui'
+import {
+  Alert, Button, Checkbox, Input, Modal, ProductThumb, Skeleton, Toggle, cn,
+} from '../../components/ui'
 import { api, Line } from '../Receiving'
 
 // ── Line-grouping (derived from session.lines — the same array the old
@@ -39,7 +41,7 @@ export default function ProductSelectionGrid({
   const [gridError, setGridError]     = useState<string | null>(null)
   const [query, setQuery]             = useState('')
   const [showSelectedOnly, setShowSelectedOnly] = useState(false)
-  const [expanded, setExpanded]       = useState<Set<string>>(new Set())
+  const [modalProductId, setModalProductId]     = useState<string | null>(null)
 
   useEffect(() => {
     getCatalog()
@@ -56,15 +58,13 @@ export default function ProductSelectionGrid({
 
   // ── Reconciliation: commits one variant's new ABSOLUTE quantity through the
   //    existing line endpoints only (POST create / PUT update / DELETE remove)
-  //    — never a new endpoint, per the approved HARD RULE. ────────────────────
+  //    — never a new endpoint, per the approved HARD RULE. Unchanged from the
+  //    prior grid-in-place build — the entry UI changed, this contract didn't.
   //
   // Legacy consolidation (a variant with >1 pre-existing line, from the old
   // type-ahead flow which could create duplicates): PUT the new total onto the
   // first line BEFORE deleting the rest, so there is never a moment where this
   // variant's lines sum to less than the intended quantity — no lost update.
-  // Worst case on a partial failure (e.g. one DELETE fails) is a stray
-  // duplicate line left behind, which self-heals on the next edit to this
-  // variant, never a dropped quantity.
   const pendingRef  = useRef<Map<string, number>>(new Map())
   const inFlightRef = useRef<Set<string>>(new Set())
 
@@ -127,13 +127,11 @@ export default function ProductSelectionGrid({
     if (pendingRef.current.has(variantId)) void runQueued(variantId)
   }
 
-  function toggleExpanded(productId: string) {
-    setExpanded(prev => {
-      const next = new Set(prev)
-      if (next.has(productId)) next.delete(productId)
-      else next.add(productId)
-      return next
-    })
+  function removeProduct(product: CatalogProduct) {
+    for (const v of product.variants) {
+      const g = groupsRef.current.get(v.id)
+      if (g && g.qty > 0) scheduleCommit(v.id, 0)
+    }
   }
 
   const filteredProducts = useMemo(() => {
@@ -163,53 +161,127 @@ export default function ProductSelectionGrid({
     return catalog.filter(p => p.variants.some(v => (groups.get(v.id)?.qty ?? 0) > 0)).length
   }, [catalog, groups])
 
+  const selectedProducts = useMemo(() => {
+    if (!catalog) return []
+    return catalog
+      .map(product => {
+        const rows = product.variants
+          .map(variant => ({ variant, qty: groups.get(variant.id)?.qty ?? 0 }))
+          .filter(r => r.qty > 0)
+        if (rows.length === 0) return null
+        return { product, rows, subtotal: rows.reduce((s, r) => s + r.qty, 0) }
+      })
+      .filter((x): x is { product: CatalogProduct; rows: { variant: CatalogVariant; qty: number }[]; subtotal: number } => x !== null)
+  }, [catalog, groups])
+
+  const modalProduct = modalProductId ? (catalog?.find(p => p.id === modalProductId) ?? null) : null
+
   if (loadError) return <Alert tone="critical" title={loadError} />
 
   return (
-    <div className="card p-5 space-y-4" data-testid="receiving-grid">
+    <div className="space-y-4" data-testid="receiving-grid">
       {gridError && <Alert tone="critical" title={gridError} />}
 
-      <div className="flex gap-2.5 items-center flex-wrap">
-        <div className="flex-1 min-w-[200px]">
-          <Input
-            iconStart={Search}
-            value={query}
-            onChange={e => setQuery(e.target.value)}
-            placeholder={t('receiving.grid.searchPlaceholder')}
-          />
+      {/* Zone 1 — browse/add grid */}
+      <div className="card p-5 space-y-4">
+        <div className="flex gap-2.5 items-center flex-wrap">
+          <div className="flex-1 min-w-[200px]">
+            <Input
+              iconStart={Search}
+              value={query}
+              onChange={e => setQuery(e.target.value)}
+              placeholder={t('receiving.grid.searchPlaceholder')}
+            />
+          </div>
+          <label className="flex items-center gap-2 flex-shrink-0">
+            <span className="text-small text-muted whitespace-nowrap">
+              {t('receiving.grid.showSelectedOnly')}
+            </span>
+            <Toggle size="sm" checked={showSelectedOnly} onChange={setShowSelectedOnly} />
+          </label>
         </div>
-        <label className="flex items-center gap-2 flex-shrink-0">
-          <span className="text-small text-muted whitespace-nowrap">
-            {t('receiving.grid.showSelectedOnly')}
-          </span>
-          <Toggle size="sm" checked={showSelectedOnly} onChange={setShowSelectedOnly} />
-        </label>
+
+        {catalog === null ? (
+          <div className="grid grid-cols-3 sm:grid-cols-4 lg:grid-cols-5 gap-2.5">
+            {Array.from({ length: 10 }).map((_, i) => <Skeleton key={i} className="h-24 rounded-xl" />)}
+          </div>
+        ) : filteredProducts.length === 0 ? (
+          <p className="text-small text-muted text-center py-8">
+            {catalog.length === 0 ? t('receiving.grid.emptyCatalog') : t('receiving.grid.noResults')}
+          </p>
+        ) : (
+          <div className="grid grid-cols-3 sm:grid-cols-4 lg:grid-cols-5 gap-2.5">
+            {filteredProducts.map(product => (
+              <CompactProductCard
+                key={product.id}
+                product={product}
+                groups={groups}
+                onOpen={() => setModalProductId(product.id)}
+              />
+            ))}
+          </div>
+        )}
       </div>
 
-      {catalog === null ? (
-        <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5">
-          {Array.from({ length: 6 }).map((_, i) => <Skeleton key={i} className="aspect-square rounded-xl" />)}
-        </div>
-      ) : filteredProducts.length === 0 ? (
-        <p className="text-small text-muted text-center py-8">
-          {catalog.length === 0 ? t('receiving.grid.emptyCatalog') : t('receiving.grid.noResults')}
-        </p>
-      ) : (
-        <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5 max-h-[420px] overflow-y-auto p-0.5">
-          {filteredProducts.map(product => (
-            <ProductCard
-              key={product.id}
-              product={product}
-              groups={groups}
-              isExpanded={expanded.has(product.id)}
-              onToggle={() => toggleExpanded(product.id)}
-              onCommitVariant={(variantId, qty) => scheduleCommit(variantId, qty)}
-            />
-          ))}
-        </div>
-      )}
+      {/* Zone 3 — persistent selected-products summary */}
+      <div className="card p-5 space-y-3">
+        <h2 className="text-caption text-muted uppercase tracking-widest">
+          {t('receiving.grid.summaryTitle')}
+        </h2>
+        {selectedProducts.length === 0 ? (
+          <p className="text-small text-muted py-4">{t('receiving.grid.summaryEmpty')}</p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full">
+              <thead>
+                <tr className="border-b border-line">
+                  <th className="tbl-header">{t('receiving.grid.summaryColProduct')}</th>
+                  <th className="tbl-header">{t('receiving.grid.summaryColVariants')}</th>
+                  <th className="tbl-header text-end">{t('receiving.grid.summaryColUnits')}</th>
+                  <th className="tbl-header w-24" />
+                </tr>
+              </thead>
+              <tbody>
+                {selectedProducts.map(({ product, rows, subtotal }) => (
+                  <tr key={product.id} className="tbl-row" data-testid={`summary-row-${product.id}`}>
+                    <td className="tbl-cell">
+                      <div className="flex items-center gap-2.5">
+                        <ProductThumb src={product.imageUrl} alt={product.title} size={32} cdnWidth={64} />
+                        <span className="font-medium text-primary">{product.title}</span>
+                      </div>
+                    </td>
+                    <td className="tbl-cell text-small text-muted">
+                      {rows.map(r => `${r.variant.title}: ${r.qty}`).join(' · ')}
+                    </td>
+                    <td className="tbl-cell text-end font-mono font-semibold text-primary">{subtotal}</td>
+                    <td className="tbl-cell text-end">
+                      <div className="flex gap-3 justify-end">
+                        <button
+                          type="button"
+                          className="text-caption text-trace-blue hover:underline"
+                          onClick={() => setModalProductId(product.id)}
+                        >
+                          {t('receiving.grid.edit')}
+                        </button>
+                        <button
+                          type="button"
+                          className="text-caption text-danger hover:text-danger/70 transition-colors"
+                          onClick={() => removeProduct(product)}
+                        >
+                          {t('receiving.grid.remove')}
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
 
-      <div className="flex items-center justify-between border-t border-line pt-3.5 flex-wrap gap-3">
+      {/* Running total + Finalize */}
+      <div className="flex items-center justify-between flex-wrap gap-3">
         <span className="text-small text-muted">
           {t('receiving.grid.total', {
             products: productCountWithQty, variants: totals.variants, units: totals.units,
@@ -219,20 +291,26 @@ export default function ProductSelectionGrid({
           {t('receiving.finalize')}
         </Button>
       </div>
+
+      {/* Zone 2 — variant entry modal (opens OVER the grid; the grid never expands/reflows) */}
+      {modalProduct && (
+        <VariantModal
+          product={modalProduct}
+          groups={groups}
+          onCommitVariant={(variantId, qty) => scheduleCommit(variantId, qty)}
+          onClose={() => setModalProductId(null)}
+        />
+      )}
     </div>
   )
 }
 
-// ── ProductCard ────────────────────────────────────────────────────────────
+// ── CompactProductCard ───────────────────────────────────────────────────────
 
-function ProductCard({
-  product, groups, isExpanded, onToggle, onCommitVariant,
-}: {
+function CompactProductCard({ product, groups, onOpen }: {
   product: CatalogProduct
   groups: Map<string, VariantGroup>
-  isExpanded: boolean
-  onToggle: () => void
-  onCommitVariant: (variantId: string, qty: number) => void
+  onOpen: () => void
 }) {
   const { t } = useTranslation()
   let totalUnits = 0, variantsWithQty = 0
@@ -242,69 +320,33 @@ function ProductCard({
   }
   const hasAnyQty = totalUnits > 0
 
-  if (isExpanded) {
-    return (
-      <div
-        className={cn(
-          'col-span-2 sm:col-span-3 rounded-xl overflow-hidden border',
-          hasAnyQty ? 'border-trace-blue bg-trace-blue/[0.06]' : 'border-line bg-panel'
-        )}
-        data-testid={`product-card-${product.id}`}
-      >
-        <button
-          type="button"
-          onClick={onToggle}
-          className="w-full flex items-center gap-2.5 px-3 py-2.5 text-start"
-        >
-          <ProductThumb src={product.imageUrl} alt={product.title} size={36} />
-          <span className="text-body font-semibold text-primary flex-1 truncate">{product.title}</span>
-          {hasAnyQty && (
-            <span className="badge bg-trace-blue/[0.16] text-trace-blue border-0 flex-shrink-0">
-              {t('receiving.grid.summaryBadge', { variants: variantsWithQty, units: totalUnits })}
-            </span>
-          )}
-          <ChevronUp size={14} strokeWidth={2} className="text-muted flex-shrink-0" />
-        </button>
-        <div>
-          {product.variants.map(v => (
-            <VariantRow
-              key={v.id}
-              variant={v}
-              committedQty={groups.get(v.id)?.qty ?? 0}
-              onCommit={qty => onCommitVariant(v.id, qty)}
-            />
-          ))}
-        </div>
-      </div>
-    )
-  }
-
   return (
     <button
       type="button"
-      onClick={onToggle}
+      onClick={onOpen}
       className={cn(
         'rounded-xl overflow-hidden border text-start transition-colors',
         hasAnyQty ? 'border-trace-blue bg-trace-blue/[0.06]' : 'border-line bg-surface'
       )}
       data-testid={`product-card-${product.id}`}
     >
-      <div className="relative">
+      <div className="relative h-16 sm:h-20">
         <ProductThumb
           src={product.imageUrl}
           alt={product.title}
           fill
           rounded="none"
+          cdnWidth={240}
           placeholderLabel={t('receiving.grid.noPhoto')}
           className="border-0 border-b border-line"
         />
         {hasAnyQty && (
-          <span className="absolute top-1.5 end-1.5 bg-trace-blue/90 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full">
+          <span className="absolute top-1 end-1 bg-trace-blue/90 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full">
             {t('receiving.grid.cardBadge', { variants: variantsWithQty, units: totalUnits })}
           </span>
         )}
       </div>
-      <div className="px-2.5 py-2">
+      <div className="px-2 py-1.5">
         <div className="text-caption font-semibold text-primary truncate">{product.title}</div>
         <div className="text-[10px] font-mono text-muted">
           {t('receiving.grid.variantMeta', { count: product.variants.length })}
@@ -314,17 +356,72 @@ function ProductCard({
   )
 }
 
+// ── VariantModal ──────────────────────────────────────────────────────────
+
+function VariantModal({ product, groups, onCommitVariant, onClose }: {
+  product: CatalogProduct
+  groups: Map<string, VariantGroup>
+  onCommitVariant: (variantId: string, qty: number) => void
+  onClose: () => void
+}) {
+  const { t } = useTranslation()
+
+  function handleClose() {
+    // Flush whatever field currently has focus before closing — a typed-but-
+    // not-yet-blurred quantity must never be silently lost when the modal closes.
+    (document.activeElement as HTMLElement | null)?.blur?.()
+    onClose()
+  }
+
+  return (
+    <Modal title={product.title} onClose={handleClose}>
+      <div className="space-y-0.5 max-h-[50vh] overflow-y-auto" data-testid="variant-modal-body">
+        {product.variants.map(v => (
+          <VariantRow
+            key={v.id}
+            variant={v}
+            committedQty={groups.get(v.id)?.qty ?? 0}
+            onCommit={qty => onCommitVariant(v.id, qty)}
+          />
+        ))}
+      </div>
+      <div className="flex justify-end pt-4 mt-3 border-t border-line">
+        <Button onClick={handleClose}>{t('receiving.grid.doneButton')}</Button>
+      </div>
+    </Modal>
+  )
+}
+
 // ── VariantRow ────────────────────────────────────────────────────────────
-// SAFETY: not a scan input — a plain quantity field, debounced-commit on
-// change plus immediate flush on blur/Enter so a value is never silently lost.
+// SAFETY: not a scan input — a plain quantity field. Check-first-then-quantity:
+// the field stays disabled/muted until its checkbox is checked (required by
+// spec), and unchecking an already-quantified row clears it (commits qty=0).
 
 function VariantRow({ variant, committedQty, onCommit }: {
   variant: CatalogVariant
   committedQty: number
   onCommit: (qty: number) => void
 }) {
+  const [checked, setChecked]       = useState(committedQty > 0)
   const [localValue, setLocalValue] = useState<string | null>(null)
-  const debounceTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const debounceTimer  = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const inputRef        = useRef<HTMLInputElement>(null)
+  const userToggledRef  = useRef(false)
+
+  // Sync checked state if committedQty changes externally (e.g. after a commit
+  // round-trip updates the prop) without clobbering an in-progress local edit.
+  useEffect(() => {
+    if (localValue === null) setChecked(committedQty > 0)
+  }, [committedQty, localValue])
+
+  // Focus the quantity field exactly once, only right after the user's own
+  // click checked this row — never on mount, never on a props-driven sync.
+  useEffect(() => {
+    if (checked && userToggledRef.current) {
+      userToggledRef.current = false
+      inputRef.current?.focus()
+    }
+  }, [checked])
 
   function parse(raw: string): number {
     const n = Math.floor(Number(raw))
@@ -343,45 +440,48 @@ function VariantRow({ variant, committedQty, onCommit }: {
     setLocalValue(null)
   }
 
-  const qty = localValue !== null ? parse(localValue) : committedQty
-  const hasQty = qty > 0
+  function handleCheckToggle(next: boolean) {
+    userToggledRef.current = next
+    setChecked(next)
+    if (!next) {
+      if (debounceTimer.current) { clearTimeout(debounceTimer.current); debounceTimer.current = null }
+      setLocalValue(null)
+      if (committedQty > 0) onCommit(0)
+    }
+  }
+
   const displayValue = localValue ?? (committedQty > 0 ? String(committedQty) : '')
+  const hasQty = parse(displayValue) > 0
 
   return (
     <div
-      className={cn(
-        'flex items-center gap-2.5 py-2.5 px-3 border-t border-line',
-        hasQty && 'bg-trace-blue/[0.08]'
-      )}
-      style={{ paddingInlineStart: 58 }}
+      className="flex items-center gap-2.5 py-2 px-1.5 rounded-lg hover:bg-elevated transition-colors"
+      data-testid={`variant-row-${variant.id}`}
     >
-      <div
-        className={cn(
-          'w-[15px] h-[15px] rounded flex-shrink-0 flex items-center justify-center',
-          hasQty ? 'bg-trace-blue' : 'border border-line'
-        )}
-      >
-        {hasQty && <Check size={10} strokeWidth={3} className="text-white" />}
-      </div>
-      <span className={cn('text-body flex-1 truncate', hasQty ? 'font-semibold text-primary' : 'text-primary')}>
+      <Checkbox checked={checked} onChange={handleCheckToggle} />
+      <span className={cn('text-body flex-1 truncate', checked ? 'font-semibold text-primary' : 'text-primary')}>
         {variant.title}
       </span>
       {variant.sku && (
         <span className="font-mono text-caption text-muted flex-shrink-0">{variant.sku}</span>
       )}
       <input
+        ref={inputRef}
         type="number"
         min={0}
         inputMode="numeric"
         placeholder="0"
+        disabled={!checked}
         data-testid={`qty-input-${variant.id}`}
         value={displayValue}
         onChange={e => scheduleFromInput(e.target.value)}
         onBlur={flushNow}
         onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }}
         className={cn(
-          'w-14 flex-shrink-0 text-center rounded-lg border bg-transparent px-2 py-1.5 text-caption font-mono transition-colors',
-          hasQty ? 'border-trace-blue bg-elevated text-primary' : 'border-line text-muted'
+          'w-16 flex-shrink-0 text-center rounded-lg border bg-transparent px-2 py-1.5 text-caption font-mono transition-colors',
+          !checked && 'border-line text-muted/50 cursor-not-allowed',
+          checked && !hasQty && 'border-line text-muted',
+          checked && hasQty && 'border-trace-blue bg-elevated text-primary'
         )}
       />
     </div>
