@@ -17,6 +17,11 @@ export async function api<T>(path: string, opts: RequestInit = {}): Promise<T> {
   const res = await fetch(BASE + path, { ...opts, headers: { ...authHeaders(), ...opts.headers as Record<string,string> } })
   if (res.status === 401) { clearAccessToken(); window.location.href = '/login'; throw new Error('Unauth') }
   if (!res.ok) { const txt = await res.text(); throw new Error(txt || res.statusText) }
+  // PUT/DELETE on lines return 204 with NO body (ReceivingController.updateLine/
+  // deleteLine are @ResponseStatus(NO_CONTENT) void methods) — calling .json() on
+  // an empty body throws "Unexpected end of JSON input". Same guard as api.ts's
+  // request().
+  if (res.status === 204 || res.headers.get('content-length') === '0') return null as T
   return res.json()
 }
 

@@ -202,7 +202,7 @@ export default function ProductSelectionGrid({
         </div>
 
         {catalog === null ? (
-          <div className="grid grid-cols-3 sm:grid-cols-4 lg:grid-cols-5 gap-2.5">
+          <div className="grid grid-cols-3 sm:grid-cols-4 lg:grid-cols-5 gap-2.5 max-h-[380px] overflow-y-auto p-0.5">
             {Array.from({ length: 10 }).map((_, i) => <Skeleton key={i} className="h-24 rounded-xl" />)}
           </div>
         ) : filteredProducts.length === 0 ? (
@@ -210,7 +210,11 @@ export default function ProductSelectionGrid({
             {catalog.length === 0 ? t('receiving.grid.emptyCatalog') : t('receiving.grid.noResults')}
           </p>
         ) : (
-          <div className="grid grid-cols-3 sm:grid-cols-4 lg:grid-cols-5 gap-2.5">
+          // Height-capped to ~3 card rows and internally scrollable — search/toggle
+          // stay above (outside this div) since they filter the whole grid; the
+          // selected-summary and Finalize below stay visible without page scroll.
+          // A short (sub-cap) catalog naturally shrinks to fit — no forced min-height.
+          <div className="grid grid-cols-3 sm:grid-cols-4 lg:grid-cols-5 gap-2.5 max-h-[380px] overflow-y-auto p-0.5">
             {filteredProducts.map(product => (
               <CompactProductCard
                 key={product.id}
@@ -337,6 +341,7 @@ function CompactProductCard({ product, groups, onOpen }: {
           fill
           rounded="none"
           cdnWidth={240}
+          objectFit="contain"
           placeholderLabel={t('receiving.grid.noPhoto')}
           className="border-0 border-b border-line"
         />

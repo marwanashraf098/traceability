@@ -930,6 +930,7 @@ export function ProductThumb({
   rounded = 'lg',
   placeholderLabel,
   cdnWidth = 96,
+  objectFit = 'cover',
   className = '',
 }: {
   src: string | null
@@ -941,6 +942,8 @@ export function ProductThumb({
   placeholderLabel?: string
   /** Shopify CDN source width to request — size for the actual rendered width, not a one-size-fits-all default. */
   cdnWidth?: number
+  /** 'contain' shows the whole product (letterboxed) inside the same frame; 'cover' (default) crops to fill it. */
+  objectFit?: 'cover' | 'contain'
   className?: string
 }) {
   const [failed, setFailed] = useState(false)
@@ -962,7 +965,7 @@ export function ProductThumb({
           src={shopifyThumbUrl(src, cdnWidth)}
           alt={alt}
           loading="lazy"
-          className="w-full h-full object-cover"
+          className={cn('w-full h-full', objectFit === 'contain' ? 'object-contain' : 'object-cover')}
           onError={() => setFailed(true)}
         />
       ) : (

@@ -83,6 +83,21 @@ function fakeResponse(data: unknown, status = 200) {
   })
 }
 
+// Real ReceivingController.updateLine()/deleteLine() are @ResponseStatus(NO_CONTENT)
+// void methods — Spring sends a genuine 204 with NO body. A real fetch(...).json() on
+// an empty body throws SyntaxError("Unexpected end of JSON input") — this fixture must
+// reproduce that throw, not resolve to null, or it silently masks the exact production
+// bug (api()'s old unconditional res.json() call) this suite is meant to catch.
+function emptyResponse(status = 204) {
+  return Promise.resolve({
+    ok: status >= 200 && status < 300,
+    status,
+    headers: { get: (k: string) => (k === 'content-length' ? '0' : null) },
+    json: async () => { throw new SyntaxError('Unexpected end of JSON input') },
+    text: async () => '',
+  })
+}
+
 let mockFetch: ReturnType<typeof vi.fn>
 
 function backendFetch(url: string, opts: RequestInit = {}) {
@@ -108,11 +123,11 @@ function backendFetch(url: string, opts: RequestInit = {}) {
     const body = JSON.parse(opts.body as string) as { quantity: number }
     const line = session.lines.find(l => l.id === putMatch[1])
     if (line) line.quantity = body.quantity
-    return fakeResponse(null, 204)
+    return emptyResponse()
   }
   if (putMatch && method === 'DELETE') {
     session.lines = session.lines.filter(l => l.id !== putMatch[1])
-    return fakeResponse(null, 204)
+    return emptyResponse()
   }
   if (url.endsWith(`/receiving/sessions/${session.id}/finalize`) && method === 'POST') {
     const total = session.lines.reduce((s, l) => s + l.quantity, 0)
