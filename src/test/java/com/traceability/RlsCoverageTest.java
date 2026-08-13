@@ -94,7 +94,12 @@ class RlsCoverageTest {
             "/api/v1/transfers",
             "/api/v1/transfers/{transferId}",
             "/api/v1/me",
-            "/api/v1/exceptions/count"
+            "/api/v1/exceptions/count",
+            "/api/v1/inventory/status-totals",
+            "/api/v1/inventory/valuation",
+            "/api/v1/orders/funnel",
+            "/api/v1/inventory/throughput",
+            "/api/v1/activity/recent"
     );
 
     // ── Patterns consciously excluded, with reasons ────────────────────────────
@@ -346,9 +351,92 @@ class RlsCoverageTest {
                 "        'return_pending_inspection'::piece_status)",
                 pieceId, tenantId, variantId, "PC-" + pieceId, pieceId);
 
-        ResponseEntity<List> resp = get("/api/v1/returns/pending", List.class);
+        // {items, total} — not a bare list (FR-Overview §1.2: the Overview dashboard's
+        // awaiting-inspection tile reads .total, never page .items.length).
+        ResponseEntity<Map> resp = get("/api/v1/returns/pending", Map.class);
+        assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.OK);
+        @SuppressWarnings("unchecked")
+        List<?> items = (List<?>) resp.getBody().get("items");
+        assertThat(items).isNotEmpty();
+        assertThat(((Number) resp.getBody().get("total")).longValue()).isGreaterThanOrEqualTo(1);
+    }
+
+    @Test
+    void inventoryStatusTotals_returnsSeededCount() {
+        String pieceId = UlidGenerator.generate();
+        jdbc.update(
+                "INSERT INTO pieces (id, tenant_id, variant_id, barcode, short_code, status) " +
+                "VALUES (?, ?, ?, ?, 'P' || LPAD((abs(hashtext(?)) % 999999 + 1)::text, 6, '0'), " +
+                "        'available'::piece_status)",
+                pieceId, tenantId, variantId, "PC-" + pieceId, pieceId);
+
+        ResponseEntity<Map> resp = get("/api/v1/inventory/status-totals", Map.class);
+        assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.OK);
+        @SuppressWarnings("unchecked")
+        Map<String, Object> counts = (Map<String, Object>) resp.getBody().get("statusCounts");
+        assertThat(((Number) counts.get("available")).longValue()).isGreaterThanOrEqualTo(1);
+    }
+
+    @Test
+    void inventoryValuation_reflectsSeededCostedVariant() {
+        jdbc.update("UPDATE variants SET unit_cost = 10.00 WHERE id = ?", variantId);
+        String pieceId = UlidGenerator.generate();
+        jdbc.update(
+                "INSERT INTO pieces (id, tenant_id, variant_id, barcode, short_code, status) " +
+                "VALUES (?, ?, ?, ?, 'P' || LPAD((abs(hashtext(?)) % 999999 + 1)::text, 6, '0'), " +
+                "        'available'::piece_status)",
+                pieceId, tenantId, variantId, "PC-" + pieceId, pieceId);
+
+        ResponseEntity<Map> resp = get("/api/v1/inventory/valuation", Map.class);
+        assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(((Number) resp.getBody().get("variantsCosted")).longValue()).isGreaterThanOrEqualTo(1);
+        assertThat(new java.math.BigDecimal(resp.getBody().get("inventoryValue").toString()))
+                .isEqualByComparingTo("10.00");
+
+        jdbc.update("UPDATE variants SET unit_cost = NULL WHERE id = ?", variantId);
+    }
+
+    @Test
+    void ordersFunnel_reflectsSeededOrderToday() {
+        jdbc.update(
+                "INSERT INTO orders (tenant_id, store_id, external_id, number, status, " +
+                "    payment_method, placed_at, on_hold) " +
+                "VALUES (?, ?, 'EXT-CVG-FUNNEL', '#CVG-FUNNEL', 'new'::order_status, " +
+                "    'cod', now(), false)",
+                tenantId, storeId);
+
+        ResponseEntity<Map> resp = get("/api/v1/orders/funnel", Map.class);
+        assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(((Number) resp.getBody().get("newCount")).intValue()).isGreaterThanOrEqualTo(1);
+    }
+
+    @Test
+    void inventoryThroughput_returnsNonEmptyArray() {
+        // generate_series guarantees 30 data-points regardless of seeded events
+        ResponseEntity<List> resp = get("/api/v1/inventory/throughput", List.class);
         assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.OK);
         assertThat(resp.getBody()).isNotEmpty();
+    }
+
+    @Test
+    void activityRecent_returnsSeededFinalizedReceipt() {
+        UUID receiptId = UUID.randomUUID();
+        jdbc.update(
+                "INSERT INTO receipts (id, tenant_id, kind, status, reference, received_by, " +
+                "    location_id, finalized_at) " +
+                "VALUES (?, ?, 'inbound', 'finalized', 'REC-CVG-ACT', ?, ?, now())",
+                receiptId, tenantId, ownerUserId, locationId);
+        jdbc.update(
+                "INSERT INTO receipt_lines (id, tenant_id, receipt_id, variant_id, quantity) " +
+                "VALUES (gen_random_uuid(), ?, ?, ?, 5)",
+                tenantId, receiptId, variantId);
+
+        ResponseEntity<List> resp = get("/api/v1/activity/recent", List.class);
+        assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(resp.getBody()).isNotEmpty();
+
+        jdbc.update("DELETE FROM receipt_lines WHERE receipt_id = ?", receiptId);
+        jdbc.update("DELETE FROM receipts WHERE id = ?", receiptId);
     }
 
     @Test

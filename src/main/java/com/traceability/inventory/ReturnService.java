@@ -145,6 +145,20 @@ public class ReturnService {
             tenantId, size, (long) page * size);
     }
 
+    /**
+     * True total count of pieces at return_pending_inspection, independent of page/size —
+     * the Overview dashboard's awaiting-inspection tile reads this, never listPending()'s
+     * page length (that undercounts past the first page).
+     */
+    @Transactional(readOnly = true)
+    public long countPending() {
+        UUID tenantId = TenantContext.require();
+        return jdbc.queryForObject(
+            "SELECT COUNT(*) FROM pieces " +
+            "WHERE status = 'return_pending_inspection'::piece_status AND tenant_id = ?",
+            Long.class, tenantId);
+    }
+
     // ── Restock (FR-12.3) ─────────────────────────────────────────────────────
 
     @Transactional(isolation = Isolation.READ_COMMITTED)

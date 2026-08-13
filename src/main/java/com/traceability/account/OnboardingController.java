@@ -2,13 +2,16 @@ package com.traceability.account;
 
 import com.traceability.identity.CustomUserDetails;
 import com.traceability.tenancy.TenantContext;
+import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.*;
@@ -102,10 +105,38 @@ public class OnboardingController {
 
             boolean allDone = shopifyDone && bostaDone && importDone && labelDone && receivingDone;
 
+            // Dismiss state for the Overview dashboard's condensed onboarding card —
+            // the full checklist page (this endpoint's other consumer) ignores it.
+            Boolean dismissed = jdbc.queryForObject(
+                "SELECT onboarding_dismissed_at IS NOT NULL FROM tenants WHERE id = ?",
+                Boolean.class, tenantId);
+
             Map<String, Object> result = new LinkedHashMap<>();
-            result.put("steps",   steps);
-            result.put("allDone", allDone);
+            result.put("steps",     steps);
+            result.put("allDone",   allDone);
+            result.put("dismissed", dismissed);
             return result;
+        }));
+    }
+
+    /**
+     * POST /api/v1/onboarding/dismiss
+     *
+     * Manual dismiss for the Overview dashboard's condensed onboarding card.
+     * Per-tenant (not per-user) — matches allDone's tenant-wide scope above. The card
+     * hides on EITHER this being set OR allDone=true; both independently derived on
+     * read, no interaction between them.
+     */
+    @PostMapping("/dismiss")
+    @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void dismiss(@AuthenticationPrincipal CustomUserDetails principal) {
+        UUID tenantId = principal.tenantId();
+        TenantContext.runAs(tenantId, () -> tx.execute(s -> {
+            jdbc.update(
+                "UPDATE tenants SET onboarding_dismissed_at = now() WHERE id = ?",
+                tenantId);
+            return null;
         }));
     }
 

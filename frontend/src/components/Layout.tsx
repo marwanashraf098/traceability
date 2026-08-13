@@ -10,7 +10,7 @@ import {
 import { getRoleFromToken, request, getMe, getExceptionsCount, type Me } from '../api'
 import { clearAccessToken } from '../auth'
 import { Logo } from './Logo'
-import { cn } from './ui'
+import { cn, MeProvider } from './ui'
 
 // ── Nav link ──────────────────────────────────────────────────────────────────
 // Icon is passed as a component reference (not pre-rendered) so it can be
@@ -119,6 +119,7 @@ export default function Layout({ children }: { children: ReactNode }) {
   }, [role])
 
   return (
+    <MeProvider me={me}>
     <div className="flex h-screen bg-bg overflow-hidden">
 
       {/* ── Sidebar ── */}
@@ -269,5 +270,6 @@ export default function Layout({ children }: { children: ReactNode }) {
         </main>
       </div>
     </div>
+    </MeProvider>
   )
 }

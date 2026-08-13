@@ -34,11 +34,15 @@ public class ReturnController {
     /** Manager view: all pieces currently at return_pending_inspection. */
     @GetMapping("/pending")
     @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
-    public List<Map<String, Object>> pending(
+    public PendingPage pending(
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "50") int size) {
-        return returnService.listPending(page, size);
+        List<Map<String, Object>> items = returnService.listPending(page, size);
+        long total = returnService.countPending();
+        return new PendingPage(items, total);
     }
+
+    public record PendingPage(List<Map<String, Object>> items, long total) {}
 
     /** Manager: restock a piece back to available. */
     @PostMapping("/pieces/{pieceId}/restock")

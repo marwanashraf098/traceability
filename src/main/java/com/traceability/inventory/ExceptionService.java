@@ -124,15 +124,25 @@ public class ExceptionService {
         return result;
     }
 
+    /** total = critical + warning; critical = severity CRITICAL, warning = HIGH+MEDIUM+LOW collapsed. */
+    public record OpenExceptionCounts(int total, int critical, int warning) {}
+
     /**
-     * Count of currently-open exceptions — the shell's notification-bell number.
-     * Deliberately calls the SAME 17 detector methods listExceptions() calls
-     * (same config, same suppression sub-queries), just summing sizes instead of
-     * enriching/sorting/paginating — two independent implementations of the same
-     * 17 business rules would drift. Equal to listExceptions(null,null,0,MAX).total.
+     * Severity-bucketed count of currently-open exceptions — backs both the shell's
+     * notification-bell number (via countOpenExceptions() below, unchanged signature)
+     * and the Overview dashboard's exceptions-by-severity split. Deliberately calls the
+     * SAME 17 detector methods listExceptions() calls (same config, same suppression
+     * sub-queries), just tallying severities instead of enriching/sorting/paginating —
+     * two independent implementations of the same 17 business rules would drift.
+     * Equal in total to listExceptions(null,null,0,MAX).total.
+     *
+     * 4-tier severity (CRITICAL/HIGH/MEDIUM/LOW, as used by listExceptions()) collapses
+     * to 2 buckets for the dashboard: CRITICAL → critical, everything else → warning.
+     * This is a display simplification, not a new severity taxonomy — listExceptions()
+     * and the exceptions list page keep the full 4-tier severity untouched.
      */
     @Transactional(readOnly = true)
-    public int countOpenExceptions() {
+    public OpenExceptionCounts countOpenExceptionsBySeverity() {
         UUID tenantId = TenantContext.require();
 
         Map<String, Object> cfg = jdbc.queryForMap(
@@ -143,25 +153,41 @@ public class ExceptionService {
         int stuckDays                = ((Number) cfg.get("stuck_shipment_days")).intValue();
         int returnInTransitStuckDays = ((Number) cfg.get("return_in_transit_stuck_days")).intValue();
 
-        int total = 0;
-        total += detectLost(tenantId).size();
-        total += detectNeverReceived(tenantId, neverReceivedDays).size();
-        total += detectUnmatched(tenantId).size();
-        total += detectBlocked(tenantId).size();
-        total += detectStuck(tenantId, stuckDays).size();
-        total += detectUnexpectedReturn(tenantId).size();
-        total += detectDeliveryLimbo(tenantId).size();
-        total += detectNdr(tenantId).size();
-        total += detectGuidedUnpack(tenantId).size();
-        total += detectMissingAwb(tenantId).size();
-        total += detectShopifyCancelVsInflight(tenantId).size();
-        total += detectCancelledWithLiveShipment(tenantId).size();
-        total += detectCancelledButDelivered(tenantId).size();
-        total += detectMissingProviderId(tenantId).size();
-        total += detectHighAttempts(tenantId).size();
-        total += detectShopifyEditConflict(tenantId).size();
-        total += detectReturnInTransitStuck(tenantId, returnInTransitStuckDays).size();
-        return total;
+        List<Map<String, Object>> all = new ArrayList<>();
+        all.addAll(detectLost(tenantId));
+        all.addAll(detectNeverReceived(tenantId, neverReceivedDays));
+        all.addAll(detectUnmatched(tenantId));
+        all.addAll(detectBlocked(tenantId));
+        all.addAll(detectStuck(tenantId, stuckDays));
+        all.addAll(detectUnexpectedReturn(tenantId));
+        all.addAll(detectDeliveryLimbo(tenantId));
+        all.addAll(detectNdr(tenantId));
+        all.addAll(detectGuidedUnpack(tenantId));
+        all.addAll(detectMissingAwb(tenantId));
+        all.addAll(detectShopifyCancelVsInflight(tenantId));
+        all.addAll(detectCancelledWithLiveShipment(tenantId));
+        all.addAll(detectCancelledButDelivered(tenantId));
+        all.addAll(detectMissingProviderId(tenantId));
+        all.addAll(detectHighAttempts(tenantId));
+        all.addAll(detectShopifyEditConflict(tenantId));
+        all.addAll(detectReturnInTransitStuck(tenantId, returnInTransitStuckDays));
+
+        int critical = 0;
+        for (Map<String, Object> e : all) {
+            if ("CRITICAL".equals(e.get("severity"))) critical++;
+        }
+        int total = all.size();
+        return new OpenExceptionCounts(total, critical, total - critical);
+    }
+
+    /**
+     * Count of currently-open exceptions — the shell's notification-bell number.
+     * Thin delegator over countOpenExceptionsBySeverity() so the two never drift and
+     * this method's `int` contract (relied on by ExceptionRlsTest) stays unchanged.
+     */
+    @Transactional(readOnly = true)
+    public int countOpenExceptions() {
+        return countOpenExceptionsBySeverity().total();
     }
 
     @Transactional

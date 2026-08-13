@@ -28,20 +28,35 @@ function isShellPath(url: string): boolean {
 // api.ts's shared request() (used by Layout, unlike a page's own local fetch
 // wrapper if it has one) also reads res.headers — a bare {ok,status,json} fake
 // isn't enough, so this always returns a fuller stand-in.
-function shellDefaultResponse() {
+function shellDefaultResponse(body: unknown) {
   return Promise.resolve({
     ok: true,
     status: 200,
     headers: { get: (k: string) => (k === 'content-type' ? 'application/json' : null) },
-    json: async () => ({}),
+    json: async () => structuredClone(body),
   })
 }
 
+/**
+ * overrides lets a test control Layout's own /me and /exceptions/count payloads
+ * (e.g. a long name for RTL/wrap testing) without touching the page's own
+ * sequential fetch queue — backward-compatible: omit it and both still default
+ * to {} exactly as before.
+ */
 export function stubFetchWithShellDefaults(
   appFetch: (url: string, opts?: RequestInit) => unknown,
+  overrides?: { me?: unknown; exceptionsCount?: unknown },
 ): void {
   vi.stubGlobal('fetch', (url: string, opts?: RequestInit) => {
-    if (typeof url === 'string' && isShellPath(url)) return shellDefaultResponse()
+    if (typeof url === 'string') {
+      if (url.endsWith('/me') || url.includes('/me?')) {
+        return shellDefaultResponse(overrides?.me ?? {})
+      }
+      if (url.includes('/exceptions/count')) {
+        return shellDefaultResponse(overrides?.exceptionsCount ?? {})
+      }
+      if (isShellPath(url)) return shellDefaultResponse({})
+    }
     return appFetch(url, opts)
   })
 }

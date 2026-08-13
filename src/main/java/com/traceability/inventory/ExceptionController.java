@@ -37,10 +37,16 @@ public class ExceptionController {
         return svc.listExceptions(type, severity, page, Math.min(size, 200));
     }
 
+    /**
+     * count — unchanged shape/meaning, the shell nav badge keeps reading this key as-is.
+     * critical/warning added alongside for the Overview dashboard's severity split
+     * (CRITICAL → critical, HIGH+MEDIUM+LOW → warning) — backward-compatible addition.
+     */
     @GetMapping("/count")
     @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
     public Map<String, Object> count() {
-        return Map.of("count", svc.countOpenExceptions());
+        var counts = svc.countOpenExceptionsBySeverity();
+        return Map.of("count", counts.total(), "critical", counts.critical(), "warning", counts.warning());
     }
 
     @PostMapping("/resolve")

@@ -12,6 +12,7 @@ import org.springframework.web.bind.annotation.*;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.math.BigDecimal;
+import java.sql.Timestamp;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.util.*;
@@ -81,6 +82,107 @@ public class OrderController {
         List<OrderItem> items, List<ShipmentDetail> shipments,
         String bostaLinkStatus, Instant notTracedAt,
         OrderStatusDeriver.DerivedOrderStatus derivedStatus) {}
+
+    // ── fulfillment funnel — today (Overview dashboard) ─────────────────────
+
+    public record FunnelCounts(int newCount, int picking, int packed, int courier, int delivered) {}
+
+    /**
+     * FR-Overview §1.3 — bucket counts of TODAY's orders by their derived status.
+     * Reuses the exact raw-row shape list()'s LATERAL join already selects, then calls
+     * OrderStatusDeriver.derive() per row in Java — the SAME single source of truth
+     * used by list()/detail(), never a second derivation. No client-side re-derivation
+     * anywhere; this endpoint exists precisely so the frontend never has to.
+     *
+     * Bucket mapping (5 mockup buckets ← primaryKey):
+     *   New       — status.new, status.confirmed, status.ready_to_pick
+     *   Picking   — status.picking
+     *   Packed    — status.packed
+     *   Courier   — status.awaiting_courier, status.in_transit, status.label_created
+     *   Delivered — status.delivered
+     *
+     * status.label_created (progress_rank=1, i.e. shipment_internal_state='created') sits
+     * in Courier, not Packed: it means a shipment record already exists — past packing,
+     * AWB linked — and is waiting on physical courier pickup. That's the same "handoff
+     * imminent" meaning as order_status='awaiting_pickup' (already mapped to
+     * status.awaiting_courier, also Courier), not a packing-stage state.
+     *
+     * Any other terminal/exception primaryKey (returning, returned, lost, cancelled,
+     * delivery_failed, needs_attention, terminated) falls outside all 5 buckets and is
+     * not counted — the funnel is a forward-pipeline view, not the full order lifecycle.
+     *
+     * "Today" = o.placed_at::date = CURRENT_DATE, same server/session-date boundary
+     * dailyCounts() already uses (no tenant-timezone threading exists anywhere in this
+     * codebase today — not introduced here).
+     */
+    @GetMapping("/funnel")
+    @PreAuthorize("hasAnyRole('OWNER', 'MANAGER')")
+    @Transactional(readOnly = true)
+    public FunnelCounts funnel() {
+        List<String> primaryKeys = jdbc.query("""
+            SELECT o.status, o.not_traced_at,
+                   s.internal_state            AS delivery_state,
+                   COALESCE(s.failed_delivery_attempts, 0) AS failed_delivery_attempts,
+                   COALESCE(s.number_of_attempts, 0)       AS number_of_attempts,
+                   s.exception_code, s.is_delayed, s.sla_breached,
+                   s.max_progress_rank
+            FROM orders o
+            LEFT JOIN LATERAL (
+                SELECT internal_state, failed_delivery_attempts, number_of_attempts,
+                       exception_code, is_delayed, sla_breached,
+                       COALESCE(
+                           (SELECT MAX(CASE h.internal_state
+                                       WHEN 'created'      THEN 1
+                                       WHEN 'with_courier'  THEN 2
+                                       WHEN 'returning'     THEN 3
+                                       WHEN 'exception'     THEN 0
+                                   END)
+                            FROM shipment_status_history h
+                            WHERE h.shipment_id = sh.id),
+                           CASE sh.internal_state
+                               WHEN 'created'      THEN 1
+                               WHEN 'with_courier'  THEN 2
+                               WHEN 'returning'     THEN 3
+                               WHEN 'exception'     THEN 0
+                           END
+                       ) AS max_progress_rank
+                FROM shipments sh
+                WHERE order_id = o.id AND tenant_id = o.tenant_id
+                  AND shipment_leg = 'forward'
+                ORDER BY created_at DESC, id DESC
+                LIMIT 1
+            ) s ON true
+            WHERE o.tenant_id = NULLIF(current_setting('app.current_tenant', true), '')::uuid
+              AND o.placed_at::date = CURRENT_DATE
+            """,
+            (rs, i) -> {
+                Timestamp notTracedAt = rs.getTimestamp("not_traced_at");
+                var derived = OrderStatusDeriver.derive(
+                    rs.getString("status"),
+                    rs.getString("delivery_state"),
+                    rs.getObject("max_progress_rank", Integer.class),
+                    rs.getInt("number_of_attempts"),
+                    rs.getInt("failed_delivery_attempts"),
+                    rs.getObject("exception_code", Integer.class),
+                    rs.getObject("is_delayed", Boolean.class),
+                    rs.getObject("sla_breached", Boolean.class),
+                    notTracedAt != null);
+                return derived.primaryKey();
+            });
+
+        int newCount = 0, picking = 0, packed = 0, courier = 0, delivered = 0;
+        for (String primaryKey : primaryKeys) {
+            switch (primaryKey) {
+                case "status.new", "status.confirmed", "status.ready_to_pick" -> newCount++;
+                case "status.picking" -> picking++;
+                case "status.packed" -> packed++;
+                case "status.awaiting_courier", "status.in_transit", "status.label_created" -> courier++;
+                case "status.delivered" -> delivered++;
+                default -> { /* outside the forward-pipeline funnel — not counted */ }
+            }
+        }
+        return new FunnelCounts(newCount, picking, packed, courier, delivered);
+    }
 
     // ── daily order counts (dashboard chart) ────────────────────────────────
 

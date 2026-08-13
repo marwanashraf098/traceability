@@ -9,6 +9,7 @@ import {
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { Link } from 'react-router-dom'
+import type { Me } from '../api'
 
 // ── Utility ───────────────────────────────────────────────────────────────────
 
@@ -306,6 +307,73 @@ export function StatCard({
         </p>
       )}
       {sparkline && <div className="mt-1">{sparkline}</div>}
+    </div>
+  )
+}
+
+// ── MiniStat ──────────────────────────────────────────────────────────────────
+// Denser, icon-topped tile — distinct from StatCard (label/value/delta) for the
+// Overview dashboard's "Needs attention" row. Navigation stays external (wrap in
+// <Link>), same convention StatCard's own callers already use.
+
+const MINI_STAT_TONE: Record<'neutral' | 'warning' | 'critical', string> = {
+  neutral:  'border-line',
+  warning:  'border-warning/30',
+  critical: 'border-critical/30',
+}
+
+export function MiniStat({
+  icon: Icon,
+  value,
+  label,
+  tone = 'neutral',
+}: {
+  icon: LucideIcon
+  value: string | number
+  label: ReactNode
+  tone?: 'neutral' | 'warning' | 'critical'
+}) {
+  return (
+    <div className={cn('card p-3.5 flex flex-col gap-1.5 border', MINI_STAT_TONE[tone])}>
+      <Icon size={16} strokeWidth={1.75} className="text-muted" />
+      <p className="text-h3 font-mono text-primary">
+        {typeof value === 'number' ? value.toLocaleString() : value}
+      </p>
+      <p className="text-caption text-muted">{label}</p>
+    </div>
+  )
+}
+
+// ── SectionHeader ─────────────────────────────────────────────────────────────
+// note is optional — omit it for a bare uppercase label (e.g. dashboard zone
+// headers); pass it for the fuller title+subtitle+badge treatment.
+
+export function SectionHeader({
+  title,
+  note,
+  badge,
+}: {
+  title: string
+  note?: string
+  badge?: string
+}) {
+  if (!note) {
+    return (
+      <div className="flex items-center gap-2 mb-2">
+        <h2 className="text-caption font-bold text-muted uppercase tracking-wider">{title}</h2>
+        {badge && <Badge tone="info" label={badge} />}
+      </div>
+    )
+  }
+  return (
+    <div className="flex items-center gap-3 mb-3">
+      <div>
+        <h2 className="text-h3 text-primary inline-flex items-center gap-2">
+          {title}
+          {badge && <Badge tone="info" label={badge} />}
+        </h2>
+        <p className="text-caption text-muted mt-0.5">{note}</p>
+      </div>
     </div>
   )
 }
@@ -1068,6 +1136,24 @@ function ToastCard({ tone, message, action, onDismiss }: Omit<ToastItem, 'id' | 
       </button>
     </div>
   )
+}
+
+// ── Me (shell identity) ──────────────────────────────────────────────────────
+// Layout is the sole fetcher of /me (its own real-identity-in-sidebar effect).
+// Other pages that need the identity (e.g. Overview's greeting) read it from
+// here instead of issuing their own /me call — same pattern as ToastContext
+// below: a context whose only provider is Layout, thrown if read outside it.
+
+const MeContext = createContext<Me | null | undefined>(undefined)
+
+export function useMe(): Me | null {
+  const ctx = useContext(MeContext)
+  if (ctx === undefined) throw new Error('useMe must be used within MeProvider')
+  return ctx
+}
+
+export function MeProvider({ me, children }: { me: Me | null; children: ReactNode }) {
+  return <MeContext.Provider value={me}>{children}</MeContext.Provider>
 }
 
 const ToastContext = createContext<{ toast: (item: Omit<ToastItem, 'id'>) => void } | null>(null)

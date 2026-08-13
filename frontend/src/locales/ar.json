@@ -22,6 +22,13 @@
   },
   "overview": {
     "title": "لوحة التحكم",
+    "tagline": "لا شيء يتحرك دون تتبع",
+    "today": "اليوم",
+    "greeting": {
+      "morning": "صباح الخير، {{name}}",
+      "afternoon": "مساء الخير، {{name}}",
+      "evening": "مساء الخير، {{name}}"
+    },
     "recentExceptions": "الاستثناءات الأخيرة",
     "noExceptions": "لا توجد استثناءات مفتوحة",
     "viewAll": "عرض الكل",
@@ -29,6 +36,79 @@
       "title": "الطلبات بمرور الوقت",
       "subtitle": "حجم الطلبات اليومي — آخر 30 يومًا",
       "noOrders": "لا طلبات في آخر 30 يومًا"
+    },
+    "needsAttention": {
+      "title": "يحتاج إلى اهتمام",
+      "pendingPicks": "انتقاء معلّق · التجهيز",
+      "awaitingInspection": "بانتظار الفحص · المرتجعات",
+      "openExceptions": "استثناءات مفتوحة",
+      "openExceptionsBreakdown": "{{critical}} حرجة · {{warning}} تحذير",
+      "lowStock": "مخزون منخفض · الكتالوج",
+      "empty": "لا شيء يحتاج إلى اهتمام الآن"
+    },
+    "inventoryHealth": {
+      "title": "صحة المخزون",
+      "totalPieces": "إجمالي القطع",
+      "value": "قيمة المخزون",
+      "valueCaveat": "استنادًا إلى تكلفة {{costed}} من {{total}} متغير",
+      "valueNotSetUp": "لم يتم الإعداد بعد — أضف تكلفة المتغيرات لعرض القيمة",
+      "empty": "لا يوجد مخزون بعد"
+    },
+    "atAGlance": {
+      "title": "نظرة سريعة",
+      "damagedLost": "تالفة/مفقودة",
+      "pieces": "قطعة",
+      "empty": "لا توجد بيانات مخزون بعد"
+    },
+    "funnel": {
+      "title": "قمع التنفيذ — اليوم",
+      "new": "جديد",
+      "picking": "انتقاء",
+      "packed": "معبأ",
+      "courier": "مندوب الشحن",
+      "delivered": "تم التسليم",
+      "empty": "لا طلبات بعد"
+    },
+    "severity": {
+      "title": "الاستثناءات حسب الخطورة",
+      "critical": "حرجة",
+      "warning": "تحذير",
+      "viewInExceptions": "← عرض في الاستثناءات",
+      "empty": "لا توجد استثناءات مفتوحة"
+    },
+    "throughput": {
+      "title": "الإنتاجية — القطع المستلمة مقابل المشحونة، آخر 30 يومًا",
+      "received": "مستلمة",
+      "shipped": "مشحونة",
+      "empty": "لا توجد بيانات بعد"
+    },
+    "activity": {
+      "title": "النشاط الأخير",
+      "receiving": "تم استلام {{count}} قطعة في {{location}} — {{actor}}",
+      "stockTake": "اكتمل الجرد {{ref}} بواسطة {{actor}}",
+      "empty": "لا يوجد نشاط حديث"
+    },
+    "time": {
+      "justNow": "الآن",
+      "minutesAgo": "منذ {{count}} د",
+      "hoursAgo": "منذ {{count}} س",
+      "daysAgo": "منذ {{count}} يوم"
+    },
+    "onboardingCard": {
+      "title": "أكمل إعداد Traced",
+      "dismiss": "إغلاق",
+      "chip": {
+        "connect_shopify": "Shopify",
+        "connect_bosta": "بوسطة",
+        "initial_import": "الاستيراد",
+        "first_receiving": "أول استلام"
+      }
+    },
+    "freshTenant": {
+      "message": "لا يوجد شيء لعرضه بعد — ابدأ بهذه الخطوات:",
+      "connectShopify": "اربط متجر Shopify الخاص بك",
+      "receiveFirst": "استلم أول شحنة لك",
+      "inviteTeam": "ادعُ فريقك"
     }
   },
   "inventory": {

@@ -556,10 +556,15 @@ export interface OnboardingStep {
 export interface OnboardingStatus {
   steps: OnboardingStep[]
   allDone: boolean
+  dismissed: boolean
 }
 
 export function getOnboardingStatus() {
   return request<OnboardingStatus>('/onboarding/status')
+}
+
+export function dismissOnboarding() {
+  return request<void>('/onboarding/dismiss', { method: 'POST' })
 }
 
 // ── Tenant settings (FR-1.4) ──────────────────────────────────────────────────
@@ -638,9 +643,12 @@ export function getMe() {
 }
 
 // ── Open-exceptions count (shell notification bell) ───────────────────────────
+// count is unchanged — the shell nav badge keeps reading it as before. critical/
+// warning are a backward-compatible addition for the Overview dashboard's
+// severity-split widget (4-tier severity collapsed to 2 buckets server-side).
 
 export function getExceptionsCount() {
-  return request<{ count: number }>('/exceptions/count')
+  return request<{ count: number; critical: number; warning: number }>('/exceptions/count')
 }
 
 // ── Inventory summary (FR-15.1) ───────────────────────────────────────────────
@@ -657,6 +665,86 @@ export interface InventorySummary {
 
 export function getInventorySummary() {
   return request<InventorySummary>('/inventory/summary')
+}
+
+// ── Overview dashboard (FR-Overview) ────────────────────────────────────────
+// Live per-status totals — a pure per-status GROUP BY, distinct from the
+// summary() groupA/groupB above (groupB is a 30-day window, not live).
+// All 13 piece_status values are present as keys, zero-filled.
+
+export interface StatusTotals {
+  statusCounts: Record<string, number>
+}
+
+export function getStatusTotals() {
+  return request<StatusTotals>('/inventory/status-totals')
+}
+
+// Low-stock count + inventory value — deliberately separate from status-totals
+// (different join, different cost). variantsCosted/variantsTotal let the
+// caller show a "based on N of M variants costed" caveat instead of a
+// misleading "EGP 0" when nothing is costed yet.
+export interface Valuation {
+  lowStockCount: number
+  inventoryValue: number
+  variantsCosted: number
+  variantsTotal: number
+}
+
+export function getValuation() {
+  return request<Valuation>('/inventory/valuation')
+}
+
+// Fulfillment funnel — today, bucketed via the SAME OrderStatusDeriver every
+// other order-status surface uses server-side. Never re-derive this client-side.
+export interface FunnelCounts {
+  newCount: number
+  picking: number
+  packed: number
+  courier: number
+  delivered: number
+}
+
+export function getOrdersFunnel() {
+  return request<FunnelCounts>('/orders/funnel')
+}
+
+// Throughput — fixed 30d window (received vs handed-to-courier), from piece_events.
+export interface ThroughputDay {
+  date: string
+  received: number
+  shipped: number
+}
+
+export function getThroughput() {
+  return request<ThroughputDay[]>('/inventory/throughput')
+}
+
+// Recent activity — receiving + stock-take only (pickups excluded, no actor
+// column). Rendered through i18n templates client-side, never stored English.
+export interface ActivityItem {
+  type: 'receiving' | 'stock_take'
+  refId: string
+  refCode: string | null
+  actorName: string | null
+  locationName: string | null
+  occurredAt: string
+  pieceCount: number | null
+}
+
+export function getRecentActivity(limit?: number) {
+  return request<ActivityItem[]>(`/activity/recent${limit ? `?limit=${limit}` : ''}`)
+}
+
+// Returns-pending total — the awaiting-inspection tile reads .total, never a
+// page's .items.length (page length undercounts past the first page).
+export interface ReturnsPendingPage {
+  items: unknown[]
+  total: number
+}
+
+export function getReturnsPendingTotal() {
+  return request<ReturnsPendingPage>('/returns/pending?size=1')
 }
 
 export interface PieceSummary {

@@ -22,6 +22,13 @@
   },
   "overview": {
     "title": "Overview",
+    "tagline": "nothing moves untraced",
+    "today": "Today",
+    "greeting": {
+      "morning": "Good morning, {{name}}",
+      "afternoon": "Good afternoon, {{name}}",
+      "evening": "Good evening, {{name}}"
+    },
     "recentExceptions": "Recent exceptions",
     "noExceptions": "No open exceptions — all clear",
     "viewAll": "View all",
@@ -29,6 +36,79 @@
       "title": "Orders over time",
       "subtitle": "Daily order volume — last 30 days",
       "noOrders": "No orders in the last 30 days"
+    },
+    "needsAttention": {
+      "title": "Needs attention",
+      "pendingPicks": "Pending picks · Fulfill",
+      "awaitingInspection": "Awaiting inspection · Returns",
+      "openExceptions": "Open exceptions",
+      "openExceptionsBreakdown": "{{critical}} critical · {{warning}} warning",
+      "lowStock": "Low-stock variants · Catalog",
+      "empty": "Nothing needs attention right now"
+    },
+    "inventoryHealth": {
+      "title": "Inventory health",
+      "totalPieces": "Total pieces",
+      "value": "Inventory value",
+      "valueCaveat": "Based on {{costed}} of {{total}} variants costed",
+      "valueNotSetUp": "Not set up yet — add variant costs to see value",
+      "empty": "No inventory yet"
+    },
+    "atAGlance": {
+      "title": "At a glance",
+      "damagedLost": "Damaged/Lost",
+      "pieces": "pieces",
+      "empty": "No inventory data yet"
+    },
+    "funnel": {
+      "title": "Fulfillment funnel — today",
+      "new": "New",
+      "picking": "Picking",
+      "packed": "Packed",
+      "courier": "Courier",
+      "delivered": "Delivered",
+      "empty": "No orders yet"
+    },
+    "severity": {
+      "title": "Exceptions by severity",
+      "critical": "Critical",
+      "warning": "Warning",
+      "viewInExceptions": "View in Exceptions →",
+      "empty": "No open exceptions"
+    },
+    "throughput": {
+      "title": "Throughput — pieces received vs shipped, last 30 days",
+      "received": "Received",
+      "shipped": "Shipped",
+      "empty": "No data yet"
+    },
+    "activity": {
+      "title": "Recent activity",
+      "receiving": "{{count}} pieces received into {{location}} — {{actor}}",
+      "stockTake": "Stock take {{ref}} completed by {{actor}}",
+      "empty": "No recent activity"
+    },
+    "time": {
+      "justNow": "just now",
+      "minutesAgo": "{{count}}m ago",
+      "hoursAgo": "{{count}}h ago",
+      "daysAgo": "{{count}}d ago"
+    },
+    "onboardingCard": {
+      "title": "Finish setting up Traced",
+      "dismiss": "Dismiss",
+      "chip": {
+        "connect_shopify": "Shopify",
+        "connect_bosta": "Bosta",
+        "initial_import": "Import",
+        "first_receiving": "First receiving"
+      }
+    },
+    "freshTenant": {
+      "message": "Nothing to show yet — get set up with these first steps:",
+      "connectShopify": "Connect your Shopify store",
+      "receiveFirst": "Receive your first shipment",
+      "inviteTeam": "Invite your team"
     }
   },
   "inventory": {
