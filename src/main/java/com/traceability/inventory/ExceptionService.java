@@ -12,7 +12,7 @@ import java.time.Instant;
 import java.util.*;
 
 /**
- * Exceptions center (FR-15.3): aggregates 17 exception detectors into one
+ * Exceptions center (FR-15.3, +1 detector FR-24): aggregates 18 exception detectors into one
  * prioritised list, sorted CRITICAL→HIGH→MEDIUM→LOW then oldest-first within
  * each severity tier.
  *
@@ -83,6 +83,7 @@ public class ExceptionService {
         all.addAll(detectHighAttempts(tenantId));
         all.addAll(detectShopifyEditConflict(tenantId));
         all.addAll(detectReturnInTransitStuck(tenantId, returnInTransitStuckDays));
+        all.addAll(detectReturnSessionMismatch(tenantId));
 
         // Enrich with descriptions and action hints
         all.forEach(this::enrich);
@@ -171,6 +172,7 @@ public class ExceptionService {
         all.addAll(detectHighAttempts(tenantId));
         all.addAll(detectShopifyEditConflict(tenantId));
         all.addAll(detectReturnInTransitStuck(tenantId, returnInTransitStuckDays));
+        all.addAll(detectReturnSessionMismatch(tenantId));
 
         int critical = 0;
         for (Map<String, Object> e : all) {
@@ -620,6 +622,33 @@ public class ExceptionService {
             tid, stuckDays, tid, tid);
     }
 
+    /**
+     * FR-24: a piece scanned into a return session that resolved to 'mismatch' —
+     * either a legal-scan piece the operator flagged as "not the real piece", or an
+     * ours-but-illegal-state piece (never eligible for restock/damage) explicitly
+     * resolved via the mismatch release valve. Derived from return_session_items,
+     * same NOT EXISTS/exception_resolutions suppression pattern as every other
+     * detector — no separate persistence for this exception type.
+     */
+    private List<Map<String, Object>> detectReturnSessionMismatch(UUID tid) {
+        return jdbc.queryForList(
+            "SELECT 'return_mismatch' AS type, 'MEDIUM' AS severity, 'piece' AS subject_type, " +
+            "       p.id AS piece_id, p.barcode, " +
+            "       rsi.session_id, " +
+            "       rsi.disposition_at AS occurred_at, " +
+            "       'return_mismatch:item:' || rsi.id AS subject_key " +
+            "FROM return_session_items rsi " +
+            "JOIN pieces p ON p.id = rsi.piece_id AND p.tenant_id = ? " +
+            "WHERE rsi.tenant_id = ? " +
+            "  AND rsi.disposition = 'mismatch' " +
+            "  AND NOT EXISTS ( " +
+            "      SELECT 1 FROM exception_resolutions er " +
+            "      WHERE er.tenant_id = rsi.tenant_id " +
+            "        AND er.exception_type = 'return_mismatch' " +
+            "        AND er.subject_key = 'return_mismatch:item:' || rsi.id) ",
+            tid, tid);
+    }
+
     private List<Map<String, Object>> detectMissingProviderId(UUID tid) {
         return jdbc.queryForList(
             "SELECT 'missing_provider_id' AS type, 'MEDIUM' AS severity, 'shipment' AS subject_type, " +
@@ -818,6 +847,13 @@ public class ExceptionService {
                 item.put("suggestedAction", "review_order");
                 item.put("actionUrl", ordersUrl(item));
                 if (diff != null) item.put("diffJson", diff);
+            }
+            case "return_mismatch" -> {
+                String b = str(item, "barcode");
+                item.put("descriptionEn", "Piece " + b + " scanned into a return session didn't match its expected disposition");
+                item.put("descriptionAr", "القطعة " + b + " الممسوحة في جلسة إرجاع لم تطابق حالتها المتوقعة");
+                item.put("suggestedAction", "inspect_and_resolve");
+                item.put("actionUrl", "/returns");
             }
         }
     }

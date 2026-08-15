@@ -76,9 +76,10 @@ public class ReceivingService {
      * Deletes an OPEN receiving session and its lines. Rejects anything not
      * status='open' (a finalized session has generated pieces — real inventory
      * and custody — and must never be deletable). kind='inbound' is checked
-     * explicitly here (not folded into the shared requireOpen() helper used by
-     * the other methods) so this, the one irreversible endpoint, can never be
-     * pointed at a 'returns' session sharing the same receipts table/id space.
+     * explicitly here — as of FR-24 this is no longer the only kind-filtered
+     * query: requireOpen() and getSession() below are also scoped to
+     * kind='inbound' so no receipts row can be reached across the shared
+     * table/id space with `returns`-kind rows, in either direction.
      */
     @Transactional
     public void deleteSession(UUID sessionId) {
@@ -185,7 +186,7 @@ public class ReceivingService {
             "       (SELECT COUNT(*) FROM pieces p WHERE p.receipt_id = r.id) AS piece_count " +
             "FROM receipts r " +
             "LEFT JOIN locations l ON l.id = r.location_id " +
-            "WHERE r.id = ? AND r.tenant_id = ?",
+            "WHERE r.id = ? AND r.tenant_id = ? AND r.kind = 'inbound'",
             sessionId, tenantId);
         if (rows.isEmpty()) throw notFound("session");
         Map<String, Object> session = new LinkedHashMap<>(rows.get(0));
@@ -256,7 +257,7 @@ public class ReceivingService {
 
     private void requireOpen(UUID sessionId, UUID tenantId) {
         List<String> rows = jdbc.queryForList(
-            "SELECT status FROM receipts WHERE id = ? AND tenant_id = ?",
+            "SELECT status FROM receipts WHERE id = ? AND tenant_id = ? AND kind = 'inbound'",
             String.class, sessionId, tenantId);
         if (rows.isEmpty()) throw notFound("session");
         if (!"open".equals(rows.get(0))) {

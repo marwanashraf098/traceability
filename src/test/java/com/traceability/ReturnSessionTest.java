@@ -21,21 +21,32 @@ import java.util.*;
 import static org.assertj.core.api.Assertions.*;
 
 /**
- * Integration tests for the returns-receiving session (FR-12 extension).
+ * Integration tests for ReturnSessionService.
  *
- * (a) RTO path: return_in_transit verdict restock → available; return_kind=rto in event.
- * (b) Customer-return path: delivered piece inside window → restock → available;
- *     return_kind=customer_after_delivery in event.
- * (c) Return-window guard: delivered piece older than window → 422 rejected.
- * (d) Damaged verdict → piece at damaged; reprint writes label_reprinted event with actor.
- * (e) Reprint rejected on available piece not in a return flow (Change 3).
- * (f) Un-scanned delivered piece NOT counted in unresolvedRtoCount (Change 2).
- * (g) Un-scanned return_in_transit piece IS counted in unresolvedRtoCount.
- * (h) Session open on invalid shipment state (e.g. with_courier) → 422.
+ * FR-24 rewrite (2026-08-14): cases (a)-(e) rewritten against the new session-based
+ * scan()/disposition() contract (old waybill-first createSession()/recordVerdict()/
+ * finalizeSession()/getSessionPieces() are gone — superseded by the new tables).
+ * (d)/(e) still exercise validateAndRecordReprint() — that method is UNTOUCHED
+ * (see its javadoc), so those two assertions carry over unchanged in spirit.
+ * Cases (f)/(g)/(h)/(k)/(l)/(p)/(q)/(r)/(s) from the old waybill-first model had no
+ * equivalent concept in the new one (single-shipment session open, waybill-state
+ * validation, unresolvedRtoCount/deliveredKeptCount, non-blocking finalize,
+ * actionable-first piece ordering) and are retired — their spirit (tenant isolation,
+ * AWB hub-prefix normalization, foreign/unreadable scan rejection, close-blocking,
+ * one-open-session) is covered by ReturnSessionRebuildTest instead.
+ *
+ * (a) Legal scan (return_in_transit) + restock disposition → available; return_kind=rto
+ *     in the return_received event metadata.
+ * (b) Legal scan (delivered, inside window) + restock → available;
+ *     return_kind=customer_after_delivery in event metadata.
+ * (c) Delivered outside window → illegal-state fork (unexpected=true, no transition);
+ *     restock is then rejected 409 by ReturnService.restock()'s own guard.
+ * (d) Damaged disposition → piece at damaged; validateAndRecordReprint() (untouched old
+ *     gate) still accepts a damaged piece and writes label_reprinted with actor.
+ * (e) validateAndRecordReprint() still rejects an available piece / a delivered piece
+ *     not in a return flow (Change 3, untouched).
  * (i) detectReturnInTransitStuck fires after N days; not before.
  * (j) detectReturnInTransitStuck suppressed when piece has return_received event.
- * (k) Tenant isolation: piece from another tenant is not accessible.
- * (l) finalize with unresolved return_in_transit pieces does not block.
  * (m) Dismiss 2 days ago → still suppressed (within 7-day snooze window).
  * (n) Dismiss 8 days ago, piece still stuck → re-fires (snooze expired).
  * (o) Dismissed then processed (return_received + status moved) → never re-fires regardless of dismissal age.
@@ -65,6 +76,7 @@ class ReturnSessionTest {
     }
 
     @Autowired ReturnSessionService sessionSvc;
+    @Autowired ReturnService        returnSvc;
     @Autowired ExceptionService     exceptionSvc;
     @Autowired InventoryLedger      ledger;
     @Autowired JdbcTemplate         jdbc;
@@ -99,7 +111,9 @@ class ReturnSessionTest {
         TenantContext.clear();
         jdbc.update("DELETE FROM exception_resolutions WHERE tenant_id = ?", tenantId);
         jdbc.update("DELETE FROM piece_events WHERE tenant_id = ?", tenantId);
-        jdbc.update("DELETE FROM receipts WHERE tenant_id = ? AND kind = 'returns'", tenantId);
+        jdbc.update("DELETE FROM return_session_items WHERE tenant_id = ?", tenantId);
+        jdbc.update("DELETE FROM return_session_shipments WHERE tenant_id = ?", tenantId);
+        jdbc.update("DELETE FROM return_sessions WHERE tenant_id = ?", tenantId);
         jdbc.update("UPDATE pieces SET current_order_id = NULL, status = 'available'::piece_status " +
                     "WHERE tenant_id = ?", tenantId);
         jdbc.update("DELETE FROM allocations WHERE tenant_id = ?", tenantId);
@@ -109,27 +123,31 @@ class ReturnSessionTest {
         jdbc.update("DELETE FROM orders WHERE tenant_id = ?", tenantId);
     }
 
-    // ── (a) RTO path ──────────────────────────────────────────────────────────
+    private UUID openSession() {
+        return sessionSvc.createSession(null, actorId);
+    }
+
+    // ── (a) Legal scan (RTO) + restock ────────────────────────────────────────
 
     @Test
-    void a_rto_verdict_restock_transitions_and_writes_return_kind_rto() {
-        UUID orderId    = createOrder("returning");
-        UUID shipmentId = createShipment(orderId, "9100001", "returning");
-        String piece    = createPiece("return_in_transit", orderId);
+    void a_rto_scan_restock_transitions_and_writes_return_kind_rto() {
+        UUID orderId = createOrder("returning");
+        createShipment(orderId, "9100001", "returning");
+        String piece = createPiece("return_in_transit", orderId);
         createAlloc(orderId, piece);
 
-        Map<String, Object> session = sessionSvc.createSession("9100001", locationId, null, actorId);
-        UUID sessionId = (UUID) session.get("sessionId");
+        UUID sessionId = openSession();
+        Map<String, Object> scanResult = sessionSvc.scan(sessionId, "PC-" + piece, locationId, actorId);
+        assertThat(scanResult.get("disposition")).isEqualTo("pending");
+        assertThat(scanResult.get("unexpected")).isEqualTo(false);
+        assertThat(pieceStatus(piece)).isEqualTo("return_pending_inspection");
 
-        Map<String, Object> result = sessionSvc.recordVerdict(sessionId, piece,
-                "restock", null, locationId, actorId);
+        Map<String, Object> result = sessionSvc.disposition(
+                sessionId, piece, "restock", null, locationId, actorId);
 
-        assertThat(result.get("finalStatus")).isEqualTo("available");
-        assertThat(result.get("returnKind")).isEqualTo("rto");
+        assertThat(result.get("disposition")).isEqualTo("restocked");
         assertThat(pieceStatus(piece)).isEqualTo("available");
 
-        // return_received event has return_kind=rto + session_id in metadata
-        // PostgreSQL jsonb normalizes to spaced format: "key": "value"
         String meta = jdbc.queryForObject(
             "SELECT metadata::text FROM piece_events " +
             "WHERE piece_id = ? AND event_type = 'return_received'",
@@ -138,7 +156,6 @@ class ReturnSessionTest {
         assertThat(meta).contains("rto");
         assertThat(meta).contains(sessionId.toString());
 
-        // restocked event also written (from returnService.restock inside same tx)
         int restockedEvents = jdbc.queryForObject(
             "SELECT COUNT(*) FROM piece_events WHERE piece_id = ? AND event_type = 'restocked'",
             Integer.class, piece);
@@ -148,21 +165,19 @@ class ReturnSessionTest {
     // ── (b) Customer-return inside window ─────────────────────────────────────
 
     @Test
-    void b_delivered_inside_window_restock_writes_customer_after_delivery_kind() {
+    void b_delivered_inside_window_scan_restock_writes_customer_after_delivery_kind() {
         UUID orderId = createOrder("delivered");
         createShipment(orderId, "9100002", "delivered");
         String piece = createPiece("delivered", orderId);
         createAlloc(orderId, piece);
         // last_event_at defaults to now() — well inside the 30-day window
 
-        Map<String, Object> session = sessionSvc.createSession("9100002", locationId, null, actorId);
-        UUID sessionId = (UUID) session.get("sessionId");
+        UUID sessionId = openSession();
+        Map<String, Object> scanResult = sessionSvc.scan(sessionId, "PC-" + piece, locationId, actorId);
+        assertThat(scanResult.get("unexpected")).isEqualTo(false);
+        assertThat(pieceStatus(piece)).isEqualTo("return_pending_inspection");
 
-        Map<String, Object> result = sessionSvc.recordVerdict(sessionId, piece,
-                "restock", null, locationId, actorId);
-
-        assertThat(result.get("finalStatus")).isEqualTo("available");
-        assertThat(result.get("returnKind")).isEqualTo("customer_after_delivery");
+        sessionSvc.disposition(sessionId, piece, "restock", null, locationId, actorId);
         assertThat(pieceStatus(piece)).isEqualTo("available");
 
         String meta = jdbc.queryForObject(
@@ -174,10 +189,10 @@ class ReturnSessionTest {
         assertThat(meta).contains(sessionId.toString());
     }
 
-    // ── (c) Return-window guard — hard reject ─────────────────────────────────
+    // ── (c) Return-window guard — illegal-state fork, restock rejected ────────
 
     @Test
-    void c_delivered_outside_window_rejects_with_422() {
+    void c_delivered_outside_window_isIllegalState_restockRejected() {
         UUID orderId = createOrder("delivered");
         createShipment(orderId, "9100003", "delivered");
         String piece = createPiece("delivered", orderId);
@@ -185,52 +200,60 @@ class ReturnSessionTest {
         // Push last_event_at back 45 days — outside the 30-day default window
         jdbc.update("UPDATE pieces SET last_event_at = now() - interval '45 days' WHERE id = ?", piece);
 
-        Map<String, Object> session = sessionSvc.createSession("9100003", locationId, null, actorId);
-        UUID sessionId = (UUID) session.get("sessionId");
+        UUID sessionId = openSession();
+        Map<String, Object> scanResult = sessionSvc.scan(sessionId, "PC-" + piece, locationId, actorId);
 
+        // Illegal-state fork: item created, flagged unexpected, but the piece never
+        // transitioned — it's still 'delivered', not 'return_pending_inspection'.
+        assertThat(scanResult.get("unexpected")).isEqualTo(true);
+        assertThat(scanResult.get("disposition")).isEqualTo("pending");
+        assertThat(pieceStatus(piece)).isEqualTo("delivered");
+
+        // restock()'s own return_pending_inspection guard rejects it — free enforcement,
+        // no bespoke illegal-state check needed in disposition().
         ResponseStatusException ex = catchThrowableOfType(
-            () -> sessionSvc.recordVerdict(sessionId, piece, "restock", null, locationId, actorId),
+            () -> sessionSvc.disposition(sessionId, piece, "restock", null, locationId, actorId),
             ResponseStatusException.class);
+        assertThat(ex.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
+        assertThat(pieceStatus(piece)).isEqualTo("delivered");
 
-        assertThat(ex.getStatusCode()).isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY);
-        assertThat(ex.getReason()).contains("beyond the customer return window");
-        assertThat(ex.getReason()).contains("waybill-less intake");
-        // Piece must NOT have moved
+        // mismatch is always available as the release valve.
+        Map<String, Object> mismatchResult = sessionSvc.disposition(
+                sessionId, piece, "mismatch", null, locationId, actorId);
+        assertThat(mismatchResult.get("disposition")).isEqualTo("mismatch");
         assertThat(pieceStatus(piece)).isEqualTo("delivered");
     }
 
-    // ── (d) Damaged verdict + reprint writes label_reprinted event ────────────
+    // ── (d) Damaged disposition + old gated reprint still works ──────────────
 
     @Test
-    void d_damaged_verdict_and_reprint_writes_event_with_actor() {
+    void d_damaged_disposition_and_untouchedGatedReprint_writesEventWithActor() {
         UUID orderId = createOrder("returning");
         createShipment(orderId, "9100004", "returning");
         String piece = createPiece("return_in_transit", orderId);
         createAlloc(orderId, piece);
 
-        Map<String, Object> session = sessionSvc.createSession("9100004", locationId, null, actorId);
-        UUID sessionId = (UUID) session.get("sessionId");
-
-        sessionSvc.recordVerdict(sessionId, piece, "damaged", "scratched lens", locationId, actorId);
+        UUID sessionId = openSession();
+        sessionSvc.scan(sessionId, "PC-" + piece, locationId, actorId);
+        sessionSvc.disposition(sessionId, piece, "damaged", "scratched lens", locationId, actorId);
         assertThat(pieceStatus(piece)).isEqualTo("damaged");
 
-        // Reprint: piece is now in 'damaged' — valid for reprint (Change 3).
+        // Old gated reprint (untouched, FR-12 change 3): damaged qualifies.
         Map<String, Object> reprintResult = sessionSvc.validateAndRecordReprint(piece, actorId);
         assertThat(reprintResult.get("barcode")).isEqualTo("PC-" + piece);
 
-        // label_reprinted event written with correct actor
         Map<String, Object> event = jdbc.queryForMap(
             "SELECT * FROM piece_events WHERE piece_id = ? AND event_type = 'label_reprinted'",
             piece);
         assertThat(event.get("actor_user_id").toString()).isEqualTo(actorId.toString());
         assertThat(event.get("from_status").toString()).isEqualTo("damaged");
-        assertThat(event.get("to_status").toString()).isEqualTo("damaged"); // no status change
+        assertThat(event.get("to_status").toString()).isEqualTo("damaged");
     }
 
-    // ── (e) Reprint rejected on piece not in a return flow ────────────────────
+    // ── (e) Old gated reprint still rejects pieces not in a return flow ──────
 
     @Test
-    void e_reprint_rejected_on_available_piece_not_in_return_flow() {
+    void e_untouchedGatedReprint_rejectedOnAvailablePieceNotInReturnFlow() {
         String piece = createPiece("available", null);
 
         ResponseStatusException ex = catchThrowableOfType(
@@ -240,7 +263,6 @@ class ReturnSessionTest {
         assertThat(ex.getStatusCode()).isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY);
         assertThat(ex.getReason()).contains("return_pending_inspection or damaged");
 
-        // Also reject delivered (another common "not in return flow" status)
         UUID orderId = createOrder("delivered");
         createShipment(orderId, "AWB-E2", "delivered");
         String deliveredPiece = createPiece("delivered", orderId);
@@ -250,60 +272,6 @@ class ReturnSessionTest {
             () -> sessionSvc.validateAndRecordReprint(deliveredPiece, actorId),
             ResponseStatusException.class);
         assertThat(ex2.getStatusCode()).isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY);
-    }
-
-    // ── (f) Un-scanned delivered piece NOT in unresolvedRtoCount ─────────────
-
-    @Test
-    void f_unscanned_delivered_piece_not_counted_as_unresolved() {
-        UUID orderId = createOrder("delivered");
-        createShipment(orderId, "9100006", "delivered");
-        String deliveredPiece = createPiece("delivered", orderId);
-        createAlloc(orderId, deliveredPiece);
-
-        Map<String, Object> session = sessionSvc.createSession("9100006", locationId, null, actorId);
-        UUID sessionId = (UUID) session.get("sessionId");
-
-        // Finalize WITHOUT scanning the delivered piece — customer kept it
-        Map<String, Object> summary = sessionSvc.finalizeSession(sessionId, actorId);
-
-        assertThat(((Number) summary.get("unresolvedRtoCount")).intValue()).isEqualTo(0);
-        assertThat(((Number) summary.get("deliveredKeptCount")).intValue()).isEqualTo(1);
-        assertThat(((Number) summary.get("processedCount")).intValue()).isEqualTo(0);
-    }
-
-    // ── (g) Un-scanned return_in_transit IS counted as unresolved ─────────────
-
-    @Test
-    void g_unscanned_rto_piece_counted_in_unresolvedRtoCount() {
-        UUID orderId = createOrder("returning");
-        createShipment(orderId, "9100007", "returning");
-        String rtoPiece = createPiece("return_in_transit", orderId);
-        createAlloc(orderId, rtoPiece);
-
-        Map<String, Object> session = sessionSvc.createSession("9100007", locationId, null, actorId);
-        UUID sessionId = (UUID) session.get("sessionId");
-
-        // Finalize WITHOUT scanning the RTO piece
-        Map<String, Object> summary = sessionSvc.finalizeSession(sessionId, actorId);
-
-        assertThat(((Number) summary.get("unresolvedRtoCount")).intValue()).isEqualTo(1);
-        assertThat(((Number) summary.get("deliveredKeptCount")).intValue()).isEqualTo(0);
-    }
-
-    // ── (h) Session open on invalid shipment state ────────────────────────────
-
-    @Test
-    void h_session_open_on_with_courier_shipment_rejected() {
-        UUID orderId = createOrder("with_courier");
-        createShipment(orderId, "9100008", "with_courier");
-
-        ResponseStatusException ex = catchThrowableOfType(
-            () -> sessionSvc.createSession("9100008", locationId, null, actorId),
-            ResponseStatusException.class);
-
-        assertThat(ex.getStatusCode()).isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY);
-        assertThat(ex.getReason()).contains("with_courier");
     }
 
     // ── (i) detectReturnInTransitStuck fires after N days ─────────────────────
@@ -349,166 +317,6 @@ class ReturnSessionTest {
 
         List<Map<String, Object>> exceptions = listExceptionsOfType("return_in_transit_stuck");
         assertThat(exceptions).isEmpty();
-    }
-
-    // ── (k) Tenant isolation ──────────────────────────────────────────────────
-
-    @Test
-    void k_tenant_isolation_piece_not_visible_under_different_tenant() {
-        UUID orderId = createOrder("returning");
-        createShipment(orderId, "9100011", "returning");
-        String piece = createPiece("return_in_transit", orderId);
-        createAlloc(orderId, piece);
-
-        UUID otherTenant = UUID.randomUUID();
-        jdbc.update("INSERT INTO tenants (id, name) VALUES (?, 'OtherRST')", otherTenant);
-
-        TenantContext.set(otherTenant);
-        try {
-            // createSession under other tenant — waybill not visible
-            ResponseStatusException ex = catchThrowableOfType(
-                () -> sessionSvc.createSession("9100011", locationId, null, actorId),
-                ResponseStatusException.class);
-            assertThat(ex.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
-        } finally {
-            TenantContext.set(tenantId);
-            jdbc.update("DELETE FROM tenants WHERE id = ?", otherTenant);
-        }
-    }
-
-    // ── (l) Finalize with unresolved return_in_transit does not block ──────────
-
-    @Test
-    void l_finalize_with_unresolved_rto_pieces_does_not_block() {
-        UUID orderId = createOrder("returning");
-        createShipment(orderId, "9100012", "returning");
-        String rtoPiece = createPiece("return_in_transit", orderId);
-        createAlloc(orderId, rtoPiece);
-
-        Map<String, Object> session = sessionSvc.createSession("9100012", locationId, null, actorId);
-        UUID sessionId = (UUID) session.get("sessionId");
-
-        // Finalize without scanning any pieces — must not throw
-        assertThatCode(() -> sessionSvc.finalizeSession(sessionId, actorId))
-            .doesNotThrowAnyException();
-
-        String status = jdbc.queryForObject(
-            "SELECT status FROM receipts WHERE id = ? AND tenant_id = ?",
-            String.class, sessionId, tenantId);
-        assertThat(status).isEqualTo("finalized");
-    }
-
-    // ── (p) Hub-prefixed scan matches the bare stored tracking_number ──────────
-
-    @Test
-    void p_hubPrefixedScan_matchesNormalizedStoredTrackingNumber() {
-        UUID orderId = createOrder("returning");
-        createShipment(orderId, "2944282510", "returning");
-        String piece = createPiece("return_in_transit", orderId);
-        createAlloc(orderId, piece);
-
-        // Physical label top barcode carries the D-07 hub-routing prefix; the DB stores
-        // (and the Bosta system of record uses) the bare digits only.
-        Map<String, Object> session = sessionSvc.createSession("D-07-2944282510", locationId, null, actorId);
-
-        // Canonical everywhere from here on — normalized, not the raw scan.
-        assertThat(session.get("waybillNumber")).isEqualTo("2944282510");
-
-        UUID sessionId = (UUID) session.get("sessionId");
-        String reference = jdbc.queryForObject(
-            "SELECT reference FROM receipts WHERE id = ? AND tenant_id = ?",
-            String.class, sessionId, tenantId);
-        assertThat(reference).isEqualTo("2944282510");
-    }
-
-    // ── (q) Unreadable scan is rejected, not silently mismatched ────────────────
-
-    @Test
-    void q_unreadableScan_rejectedWith400() {
-        ResponseStatusException ex = catchThrowableOfType(
-            () -> sessionSvc.createSession("###garbage###", locationId, null, actorId),
-            ResponseStatusException.class);
-
-        assertThat(ex.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
-        assertThat(ex.getReason()).contains("Unreadable waybill scan");
-    }
-
-    // ── (r) getSessionPieces — return_pending_inspection appears (prod case) ───
-
-    @Test
-    void r_getSessionPieces_returnPendingInspection_appears() {
-        // Prod repro shape: state-46 (returned) shipment, piece already advanced to
-        // return_pending_inspection by the time the returns-desk session is opened —
-        // tenant e785e5e4 / order c31d5a80. The old filter (return_in_transit, delivered)
-        // never matched this status, so the session always showed zero pieces.
-        UUID orderId = createOrder("returned");
-        createShipment(orderId, "9100016", "returned");
-        String piece = createPiece("return_pending_inspection", orderId);
-        createAlloc(orderId, piece);
-
-        // A second, already-resolved piece on the same shipment — a terminal 'damaged'
-        // status must not outrank the still-actionable return_pending_inspection one.
-        String damagedPiece = createPiece("damaged", orderId);
-        createAlloc(orderId, damagedPiece);
-
-        Map<String, Object> session = sessionSvc.createSession("9100016", locationId, null, actorId);
-        UUID sessionId = (UUID) session.get("sessionId");
-
-        Map<String, Object> result = sessionSvc.getSessionPieces(sessionId);
-        @SuppressWarnings("unchecked")
-        List<Map<String, Object>> pieces = (List<Map<String, Object>>) result.get("pieces");
-
-        assertThat(pieces).hasSize(2);
-        List<String> statuses = pieces.stream().map(p -> (String) p.get("status")).toList();
-        assertThat(statuses.indexOf("return_pending_inspection"))
-            .as("actionable return_pending_inspection must sort above terminal damaged")
-            .isLessThan(statuses.indexOf("damaged"));
-
-        Map<String, Object> rpiEntry = pieces.stream()
-            .filter(p -> piece.equals(p.get("id"))).findFirst().orElseThrow();
-        assertThat(rpiEntry.get("status")).isEqualTo("return_pending_inspection");
-        assertThat(rpiEntry.get("processed")).isEqualTo(false);
-    }
-
-    // ── (s) getSessionPieces — restocked piece still appears, processed=true ───
-
-    @Test
-    void s_getSessionPieces_restockedPiece_stillAppearsProcessedTrue() {
-        UUID orderId = createOrder("returned");
-        createShipment(orderId, "9100017", "returned");
-        String piece = createPiece("return_pending_inspection", orderId);
-        createAlloc(orderId, piece);
-
-        // A sibling still-actionable piece and an already-terminal one on the same
-        // shipment — locks the actionable-first ordering intent alongside the
-        // processed=true assertion below, so an enum reorder can't silently regress it.
-        String stillPending = createPiece("return_pending_inspection", orderId);
-        createAlloc(orderId, stillPending);
-        String damagedPiece = createPiece("damaged", orderId);
-        createAlloc(orderId, damagedPiece);
-
-        Map<String, Object> session = sessionSvc.createSession("9100017", locationId, null, actorId);
-        UUID sessionId = (UUID) session.get("sessionId");
-
-        sessionSvc.recordVerdict(sessionId, piece, "restock", null, locationId, actorId);
-        assertThat(pieceStatus(piece)).isEqualTo("available");
-
-        // Re-opening/re-viewing the session (e.g. worker navigates back) must still show
-        // the resolved piece — an empty list here would look like the verdict was lost.
-        Map<String, Object> result = sessionSvc.getSessionPieces(sessionId);
-        @SuppressWarnings("unchecked")
-        List<Map<String, Object>> pieces = (List<Map<String, Object>>) result.get("pieces");
-
-        assertThat(pieces).hasSize(3);
-        List<String> statuses = pieces.stream().map(p -> (String) p.get("status")).toList();
-        assertThat(statuses.indexOf("return_pending_inspection"))
-            .as("actionable return_pending_inspection must sort above terminal damaged")
-            .isLessThan(statuses.indexOf("damaged"));
-
-        Map<String, Object> restockedEntry = pieces.stream()
-            .filter(p -> piece.equals(p.get("id"))).findFirst().orElseThrow();
-        assertThat(restockedEntry.get("status")).isEqualTo("available");
-        assertThat(restockedEntry.get("processed")).isEqualTo(true);
     }
 
     // ── (m) Dismiss 2 days ago — inside 7-day snooze, not re-fired ──────────────

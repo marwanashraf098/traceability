@@ -64,11 +64,23 @@ class Day12Test {
         r.add("spring.flyway.password",     POSTGRES::getPassword);
     }
 
-    @Autowired ReturnService  returnSvc;
-    @Autowired LookupService  lookupSvc;
-    @Autowired FulfillService fulfillSvc;
-    @Autowired JdbcTemplate   jdbc;
-    @MockBean  JobScheduler   jobScheduler;
+    @Autowired ReturnService        returnSvc;
+    @Autowired ReturnSessionService sessionSvc;
+    @Autowired LookupService        lookupSvc;
+    @Autowired FulfillService       fulfillSvc;
+    @Autowired JdbcTemplate         jdbc;
+    @MockBean  JobScheduler         jobScheduler;
+
+    /**
+     * FR-24: intakeScan() was retired with the old waybill-less intake endpoint —
+     * scanning now always happens inside a return session. Opens a fresh session and
+     * scans through it, returning the item row (barcode/status/unexpected etc.) in the
+     * same shape these tests originally asserted on from intakeScan()'s return value.
+     */
+    private Map<String, Object> scanViaSession(String barcode) {
+        UUID sessionId = sessionSvc.createSession(null, actorId);
+        return sessionSvc.scan(sessionId, barcode, locationId, actorId);
+    }
 
     UUID tenantId, actorId, locationId, variantId, storeId;
 
@@ -99,6 +111,8 @@ class Day12Test {
     @AfterEach
     void cleanup() {
         TenantContext.clear();
+        jdbc.update("DELETE FROM return_session_items WHERE tenant_id = ?", tenantId);
+        jdbc.update("DELETE FROM return_sessions WHERE tenant_id = ?", tenantId);
         jdbc.update("DELETE FROM piece_events WHERE tenant_id = ?", tenantId);
         jdbc.update("UPDATE pieces SET current_order_id = NULL WHERE tenant_id = ?", tenantId);
         jdbc.update("DELETE FROM allocations WHERE tenant_id = ?", tenantId);
@@ -117,9 +131,9 @@ class Day12Test {
         String piece    = createPiece("return_in_transit", orderId);
         createAllocationPacked(orderId, piece);
 
-        Map<String, Object> result = returnSvc.intakeScan("PC-" + piece, locationId, actorId);
+        Map<String, Object> result = scanViaSession("PC-" + piece);
 
-        assertThat(result.get("isUnexpected")).isEqualTo(false);
+        assertThat(result.get("unexpected")).isEqualTo(false);
         assertThat(pieceStatus(piece)).isEqualTo("return_pending_inspection");
 
         // return_received event written with correct location and actor
@@ -146,10 +160,10 @@ class Day12Test {
         String piece    = createPiece("with_courier", orderId);
         createAllocationPacked(orderId, piece);
 
-        Map<String, Object> result = returnSvc.intakeScan("PC-" + piece, locationId, actorId);
+        Map<String, Object> result = scanViaSession("PC-" + piece);
 
         // Intake proceeds despite unexpected state
-        assertThat(result.get("isUnexpected")).isEqualTo(true);
+        assertThat(result.get("unexpected")).isEqualTo(true);
         assertThat(pieceStatus(piece)).isEqualTo("return_pending_inspection");
 
         // Event still written
@@ -251,7 +265,7 @@ class Day12Test {
         createAllocationPacked(orderId, piece);
 
         // 1. Intake → return_pending_inspection
-        returnSvc.intakeScan("PC-" + piece, locationId, actorId);
+        scanViaSession("PC-" + piece);
         // 2. Restock → available
         returnSvc.restock(piece, locationId, actorId);
 
@@ -280,13 +294,18 @@ class Day12Test {
         String piece = createPiece("return_in_transit", orderId);
         createAllocationPacked(orderId, piece);
 
-        // Switch to a different tenant — piece should not be visible
+        // Tenant A's own session — scanning tenant A's piece into it must work.
+        UUID sessionId = sessionSvc.createSession(null, actorId);
+
+        // Switch to a different tenant — that tenant's return session lookup must not
+        // see tenant A's session at all (RLS/tenant-scoped WHERE clause on
+        // return_sessions), regardless of the piece being scanned.
         UUID otherTenant = UUID.randomUUID();
         jdbc.update("INSERT INTO tenants (id, name) VALUES (?, 'OtherD12')", otherTenant);
         TenantContext.set(otherTenant);
         try {
             ResponseStatusException ex = catchThrowableOfType(
-                () -> returnSvc.intakeScan("PC-" + piece, locationId, actorId),
+                () -> sessionSvc.scan(sessionId, "PC-" + piece, locationId, actorId),
                 ResponseStatusException.class);
             assertThat(ex.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
         } finally {
@@ -308,7 +327,7 @@ class Day12Test {
             "SELECT id FROM allocations WHERE piece_id = ?", UUID.class, piece);
 
         // Intake + restock — piece frees back to available.
-        returnSvc.intakeScan("PC-" + piece, locationId, actorId);
+        scanViaSession("PC-" + piece);
         returnSvc.restock(piece, locationId, actorId);
         assertThat(pieceStatus(piece)).isEqualTo("available");
 

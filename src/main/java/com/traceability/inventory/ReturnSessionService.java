@@ -1,6 +1,8 @@
 package com.traceability.inventory;
 
 import com.traceability.tenancy.TenantContext;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
@@ -15,32 +17,50 @@ import java.time.temporal.ChronoUnit;
 import java.util.*;
 
 /**
- * Returns-receiving session: waybill-driven workflow for restocking/damaging
- * returned pieces (both RTO courier-returns and customer-after-delivery returns).
+ * FR-24: session-based returns rebuild. Replaces the old waybill-first returns session
+ * (which required a shipment match up front and rode the shared `receipts` table,
+ * kind='returns' — see V29__returns_session.sql). That flow is fully superseded here;
+ * old closed sessions become inert history (piece history stays intact in piece_events,
+ * no backfill into the new tables per the FR-24 build plan).
  *
- * Session lifecycle:
- *   createSession → getSessionPieces → recordVerdict (per piece) → finalizeSession
+ * Model: a session is a free-scan working set. Each scan resolves to one of three
+ * outcomes — legal (piece transitions to return_pending_inspection, item created
+ * disposition=pending), illegal-state (piece is ours but not in a return-eligible
+ * status — no transition, item created unexpected=true, disposition can only ever
+ * become 'mismatch'), or foreign (matches nothing of ours — 422, no row written at
+ * all). An AWB scan doesn't create a persisted row; it surfaces the shipment's
+ * still-unscanned expected pieces as a transient, recomputed-on-read list (backed by
+ * return_session_shipments, which just remembers which AWBs were scanned into this
+ * session for the close-summary count + audit).
  *
- * Invariants:
- *   - delivered → return_pending_inspection is guarded by customer_return_window_days.
- *   - InventoryLedger is the sole writer of piece_events (4 methods on that class).
- *   - ReturnService.restock() and markDamaged() are called AS-IS within the same
- *     @Transactional(READ_COMMITTED) boundary — Spring REQUIRED propagation joins them.
+ * Abandon does NOT revert (change B, approved 2026-08-14): undispositioned legal-scan
+ * pieces simply stay at return_pending_inspection and resurface as "unassigned
+ * pending" — no reverse InventoryLedger.ALLOWED pairs, no cancel event. The session
+ * itself is soft-deleted (status='abandoned', rows kept) since real pieces and
+ * piece_events already reference it by the time abandon can be called.
+ *
+ * InventoryLedger remains the sole writer of piece_events — this service only calls
+ * ledger.transition() (legal-scan transitions), ledger.recordReturnReceived() (the
+ * "adopt" sibling-append for a piece already at return_pending_inspection before this
+ * session touched it — 3rd write path), ledger.recordLabelReprinted() (reprint — 4th
+ * write path), and ReturnService.restock()/markDamaged() (which themselves only call
+ * ledger.transition()).
  */
 @Service
 public class ReturnSessionService {
 
-    private static final Set<String> VALID_SESSION_STATES = Set.of(
-        "returning",   // Bosta RTO in progress — return_in_transit pieces expected
-        "returned",    // Bosta confirmed full return
-        "delivered",   // All pieces delivered — customer-after-delivery scenario
-        "exception"    // Courier exception — pieces in various states
+    private static final Logger log = LoggerFactory.getLogger(ReturnSessionService.class);
+
+    /** Statuses from which a scan legally moves a piece into return_pending_inspection. */
+    private static final Set<PieceStatus> LEGAL_SCAN_STATUSES = Set.of(
+        PieceStatus.RETURN_IN_TRANSIT, PieceStatus.WITH_COURIER, PieceStatus.AWAITING_PICKUP,
+        PieceStatus.DELIVERED, PieceStatus.RETURN_PENDING_INSPECTION
     );
 
     private final JdbcTemplate    jdbc;
-    private final InventoryLedger  ledger;
-    private final ReturnService    returnService;
-    private final Clock            clock;
+    private final InventoryLedger ledger;
+    private final ReturnService   returnService;
+    private final Clock           clock;
 
     public ReturnSessionService(JdbcTemplate jdbc, InventoryLedger ledger,
                                 ReturnService returnService, Clock clock) {
@@ -50,328 +70,279 @@ public class ReturnSessionService {
         this.clock         = clock;
     }
 
-    // ── Create session ────────────────────────────────────────────────────────
+    // ── Create / open ─────────────────────────────────────────────────────────
+
+    /**
+     * Claim-before-call: the INSERT itself is the one-open-session-per-tenant guard
+     * (return_sessions_one_open_per_tenant, V73). A concurrent second call gets a
+     * DuplicateKeyException from the DB driver, propagated uncaught — Spring rolls the
+     * transaction back cleanly. The controller catches it and calls
+     * getOpenSessionSummary() (a fresh, separate transaction) to build the 409 body;
+     * querying inside THIS transaction after the violation would fail outright —
+     * Postgres aborts the whole transaction on the constraint violation and only a
+     * rollback is valid until it ends (see TransferService's identical note on
+     * transfer_pieces_one_active for the same pattern).
+     */
+    @Transactional
+    public UUID createSession(String note, UUID actorUserId) {
+        UUID tenantId = TenantContext.require();
+        UUID id = UUID.randomUUID();
+        jdbc.update(
+            "INSERT INTO return_sessions (id, tenant_id, status, opened_by, note) " +
+            "VALUES (?, ?, 'open', ?, ?)",
+            id, tenantId, actorUserId, note);
+        return id;
+    }
+
+    @Transactional(readOnly = true)
+    public Map<String, Object> getOpenSessionSummary() {
+        UUID tenantId = TenantContext.require();
+        List<Map<String, Object>> rows = jdbc.queryForList(
+            "SELECT rs.id, rs.opened_by, rs.opened_at, " +
+            "       (SELECT COUNT(*) FROM return_session_items i " +
+            "        WHERE i.session_id = rs.id AND i.tenant_id = rs.tenant_id) AS piece_count " +
+            "FROM return_sessions rs WHERE rs.tenant_id = ? AND rs.status = 'open'",
+            tenantId);
+        return rows.isEmpty() ? null : rows.get(0);
+    }
+
+    // ── Abandon (soft-delete, no revert — change B) ──────────────────────────────
 
     @Transactional
-    public Map<String, Object> createSession(String waybillNumber, UUID locationId,
-                                              String note, UUID actorUserId) {
+    public void abandon(UUID sessionId, UUID actorUserId) {
         UUID tenantId = TenantContext.require();
-
-        // Normalize before matching — the physical Bosta label's top barcode carries a hub
-        // routing prefix (e.g. D-07-2944282510) that shipments.tracking_number never stores
-        // (see TrackingNumberNormalizer javadoc). Canonical everywhere from here on: the
-        // normalized value is what gets matched, stored, and echoed back — never the raw scan.
-        String trackingNumber = TrackingNumberNormalizer.normalize(waybillNumber);
-        if (trackingNumber == null) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
-                "Unreadable waybill scan: " + waybillNumber);
-        }
-
-        // Validate shipment exists and is in a state where returns make sense.
-        Map<String, Object> shipment = jdbc.query(
-            "SELECT s.id, s.internal_state::text AS state, " +
-            "       o.id AS order_id, o.number AS order_number " +
-            "FROM shipments s " +
-            "JOIN orders o ON o.id = s.order_id AND o.tenant_id = ? " +
-            "WHERE s.tracking_number = ? AND s.tenant_id = ?",
-            rs -> rs.next() ? Map.of(
-                "shipmentId",   rs.getObject("id", UUID.class),
-                "state",        rs.getString("state"),
-                "orderId",      rs.getObject("order_id", UUID.class),
-                "orderNumber",  rs.getString("order_number")
-            ) : null,
-            tenantId, trackingNumber, tenantId);
-
-        if (shipment == null) {
-            throw new ResponseStatusException(HttpStatus.NOT_FOUND,
-                "Shipment not found: " + trackingNumber);
-        }
-
-        String state = (String) shipment.get("state");
-        if (!VALID_SESSION_STATES.contains(state)) {
-            throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY,
-                "Cannot open a returns session for a shipment in state '" + state +
-                "'. Valid states: returning, returned, delivered, exception.");
-        }
-
-        UUID sessionId = UUID.randomUUID();
+        requireOpen(sessionId, tenantId);
         jdbc.update(
-            "INSERT INTO receipts " +
-            "(id, tenant_id, kind, reference, received_by, location_id, note, status) " +
-            "VALUES (?, ?, 'returns', ?, ?, ?, ?, 'open')",
-            sessionId, tenantId, trackingNumber, actorUserId, locationId, note);
-
-        Map<String, Object> result = new LinkedHashMap<>();
-        result.put("sessionId",   sessionId);
-        result.put("waybillNumber", trackingNumber);
-        result.put("orderId",     shipment.get("orderId"));
-        result.put("orderNumber", shipment.get("orderNumber"));
-        return result;
+            "UPDATE return_sessions SET status = 'abandoned', closed_by = ?, closed_at = now() " +
+            "WHERE id = ? AND tenant_id = ?",
+            actorUserId, sessionId, tenantId);
     }
 
-    // ── List sessions ─────────────────────────────────────────────────────────
+    // ── Scan ──────────────────────────────────────────────────────────────────
 
-    @Transactional(readOnly = true)
-    public List<Map<String, Object>> listSessions() {
-        UUID tenantId = TenantContext.require();
-        return jdbc.queryForList(
-            "SELECT r.id, r.status, r.reference AS waybill_number, " +
-            "       r.created_at, r.finalized_at, " +
-            "       l.name AS location_name " +
-            "FROM receipts r " +
-            "LEFT JOIN locations l ON l.id = r.location_id " +
-            "WHERE r.tenant_id = ? AND r.kind = 'returns' " +
-            "ORDER BY r.created_at DESC",
-            tenantId);
-    }
-
-    // ── Pieces eligible for return ────────────────────────────────────────────
-
-    /**
-     * Returns all pieces relevant to this session — both still-actionable arrivals and
-     * already-resolved ones — annotated with whether they've already been processed.
-     *
-     * Status set covers the full return lifecycle a piece may be in when this is called:
-     *   - return_in_transit          — RTO in transit, not yet arrived
-     *   - delivered                  — customer-after-delivery scenario, not yet returned
-     *   - return_pending_inspection  — arrived and awaiting a verdict (the common case: a
-     *                                  session is opened AFTER physical arrival, by which
-     *                                  point state-46/intake has already moved the piece here)
-     *   - available / damaged        — verdict already recorded (restock / damaged); a
-     *                                  re-opened session must still show these so the list
-     *                                  isn't empty on a second view. `processed` (below)
-     *                                  is what actually distinguishes resolved from pending.
-     *
-     * Change 2 note: delivered pieces that were NOT scanned are the NORMAL case
-     * (customer kept the item). They are returned with processed=false but the UI
-     * must NOT treat them as a problem — only un-scanned return_in_transit pieces
-     * are actionable.
-     */
-    @Transactional(readOnly = true)
-    public Map<String, Object> getSessionPieces(UUID sessionId) {
-        UUID tenantId = TenantContext.require();
-        requireOpen(sessionId, tenantId);
-
-        String waybill = jdbc.queryForObject(
-            "SELECT reference FROM receipts WHERE id = ? AND tenant_id = ?",
-            String.class, sessionId, tenantId);
-
-        List<Map<String, Object>> pieces = jdbc.queryForList(
-            "SELECT " +
-            "    p.id, p.barcode, p.status::text AS status, " +
-            "    v.title AS variant_title, pr.title AS product_title, v.sku, " +
-            "    EXISTS ( " +
-            "        SELECT 1 FROM piece_events pe " +
-            "        WHERE pe.piece_id        = p.id " +
-            "          AND pe.event_type      = 'return_received' " +
-            "          AND pe.metadata->>'session_id' = ?::text " +
-            "          AND pe.tenant_id       = ? " +
-            "    ) AS processed " +
-            "FROM pieces p " +
-            "JOIN allocations a  ON a.piece_id      = p.id " +
-            // 'released' included (as of the restock() fix, root-cause-B) so an
-            // already-restocked piece — whose allocation is now correctly released,
-            // not left dangling 'packed' — still resolves to the order/shipment it
-            // came from. Pinned to the single LATEST allocation row per piece so a
-            // piece with prior unscan/rescan history doesn't fan out into duplicate
-            // rows; safe because ALREADY_RESERVED blocks a second live allocation
-            // from ever being created while the shipped one is still active.
-            "                    AND a.status        IN ('active','packed','released') " +
-            "                    AND a.id = ( " +
-            "                        SELECT a2.id FROM allocations a2 " +
-            "                        WHERE a2.piece_id = p.id " +
-            "                        ORDER BY a2.allocated_at DESC LIMIT 1 " +
-            "                    ) " +
-            "JOIN order_items oi ON oi.id            = a.order_item_id " +
-            "JOIN orders o       ON o.id             = oi.order_id " +
-            "JOIN shipments s    ON s.order_id       = o.id " +
-            "                    AND s.shipment_leg   = 'forward' " +
-            "JOIN variants v     ON v.id             = p.variant_id " +
-            "JOIN products pr    ON pr.id            = v.product_id " +
-            "WHERE s.tracking_number = ? " +
-            "  AND s.tenant_id       = ? " +
-            "  AND p.status IN ( " +
-            "      'return_in_transit'::piece_status, 'delivered'::piece_status, " +
-            "      'return_pending_inspection'::piece_status, " +
-            "      'available'::piece_status, 'damaged'::piece_status) " +
-            "ORDER BY CASE p.status " +
-            "             WHEN 'return_pending_inspection' THEN 0 " +
-            "             WHEN 'return_in_transit'         THEN 1 " +
-            "             WHEN 'delivered'                 THEN 2 " +
-            "             WHEN 'available'                 THEN 3 " +
-            "             WHEN 'damaged'                   THEN 4 " +
-            "             ELSE 5 " +
-            "         END, p.last_event_at ASC",
-            sessionId, tenantId, waybill, tenantId);
-
-        Map<String, Object> result = new LinkedHashMap<>();
-        result.put("sessionId", sessionId);
-        result.put("waybillNumber", waybill);
-        result.put("pieces", pieces);
-        return result;
-    }
-
-    // ── Record piece verdict ──────────────────────────────────────────────────
-
-    /**
-     * Two-step atomic operation within one READ_COMMITTED transaction:
-     *   1. Transition piece to return_pending_inspection (return_received event).
-     *   2. Apply verdict: restock → available; damaged → damaged.
-     *
-     * For DELIVERED pieces the return-window guard fires before step 1.
-     * RETURN_IN_TRANSIT pieces are not window-guarded (RTO is courier-initiated).
-     * RETURN_PENDING_INSPECTION pieces (Bosta-lag) get only a return_received event
-     * with session metadata, then the verdict is applied directly.
-     *
-     * ReturnService.restock() and markDamaged() participate in this transaction
-     * via Spring REQUIRED propagation (their @Transactional joins the outer context).
-     */
     @Transactional(isolation = Isolation.READ_COMMITTED)
-    public Map<String, Object> recordVerdict(UUID sessionId, String pieceId,
-                                              String verdict, String reason,
-                                              UUID locationId, UUID actorUserId) {
+    public Map<String, Object> scan(UUID sessionId, String rawScan, UUID locationId, UUID actorUserId) {
         UUID tenantId = TenantContext.require();
         requireOpen(sessionId, tenantId);
 
-        if (!"restock".equals(verdict) && !"damaged".equals(verdict)) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
-                "verdict must be 'restock' or 'damaged'");
-        }
-        if ("damaged".equals(verdict) && (reason == null || reason.isBlank())) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
-                "reason is required when verdict is 'damaged'");
+        String cleaned = rawScan == null ? "" : rawScan.replaceAll("\\s+", "");
+        if (cleaned.isEmpty()) {
+            throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY, "Empty scan");
         }
 
-        // Fetch piece + order/shipment context.
-        Map<String, Object> piece = fetchPieceContext(pieceId, tenantId);
-        PieceStatus current = PieceStatus.fromDb((String) piece.get("status"));
-        UUID orderId    = (UUID) piece.get("orderId");
-        UUID shipmentId = (UUID) piece.get("shipmentId");
-        String metaSuffix = "\"session_id\":\"" + sessionId + "\"";
+        Map<String, Object> piece = fetchPieceByScan(cleaned, tenantId);
+        if (piece != null) {
+            return scanPiece(sessionId, tenantId, piece, locationId, actorUserId);
+        }
+
+        String trackingNumber = TrackingNumberNormalizer.normalize(cleaned);
+        if (trackingNumber != null) {
+            List<Map<String, Object>> shipmentRows = jdbc.queryForList(
+                "SELECT 1 FROM shipments WHERE tracking_number = ? AND tenant_id = ?",
+                trackingNumber, tenantId);
+            if (!shipmentRows.isEmpty()) {
+                return scanAwb(sessionId, tenantId, trackingNumber);
+            }
+        }
+
+        // Foreign scan: nothing of ours matched. No row written, ledger untouched.
+        log.warn("Foreign return scan: raw={} session={} tenant={}", rawScan, sessionId, tenantId);
+        throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY,
+            "Scan does not match any piece or shipment: " + rawScan);
+    }
+
+    private Map<String, Object> scanPiece(UUID sessionId, UUID tenantId, Map<String, Object> piece,
+                                          UUID locationId, UUID actorUserId) {
+        String pieceId = (String) piece.get("id");
+
+        // Idempotent re-scan: same piece already has an item row in this session — return
+        // it as-is rather than re-processing (single post-action view, no duplicate work).
+        List<Map<String, Object>> existing = jdbc.queryForList(
+            "SELECT id FROM return_session_items WHERE session_id = ? AND piece_id = ? AND tenant_id = ?",
+            sessionId, pieceId, tenantId);
+        if (!existing.isEmpty()) {
+            return itemRow((UUID) existing.get(0).get("id"), tenantId);
+        }
+
+        PieceStatus current   = PieceStatus.fromDb((String) piece.get("status"));
+        UUID orderId          = (UUID) piece.get("order_id");
+        UUID shipmentId       = (UUID) piece.get("shipment_id");
+        String metaSuffix     = "\"session_id\":\"" + sessionId + "\"";
+        boolean legal;
+        boolean unexpected = false;
 
         switch (current) {
-            case DELIVERED -> {
-                enforceReturnWindow(pieceId, tenantId);
-                String meta = "{\"return_kind\":\"customer_after_delivery\"," + metaSuffix + "}";
-                ledger.transition(pieceId, PieceStatus.DELIVERED,
-                        PieceStatus.RETURN_PENDING_INSPECTION, "return_received",
-                        actorUserId,
-                        new TransitionContext(orderId, shipmentId, locationId, orderId, meta));
-            }
             case RETURN_IN_TRANSIT -> {
+                legal = true;
                 String meta = "{\"return_kind\":\"rto\"," + metaSuffix + "}";
-                ledger.transition(pieceId, PieceStatus.RETURN_IN_TRANSIT,
-                        PieceStatus.RETURN_PENDING_INSPECTION, "return_received",
-                        actorUserId,
-                        new TransitionContext(orderId, shipmentId, locationId, orderId, meta));
+                ledger.transition(pieceId, PieceStatus.RETURN_IN_TRANSIT, PieceStatus.RETURN_PENDING_INSPECTION,
+                    "return_received", actorUserId, new TransitionContext(orderId, shipmentId, locationId, orderId, meta));
+            }
+            case WITH_COURIER -> {
+                legal = true; unexpected = true;
+                String meta = "{\"return_kind\":\"rto\"," + metaSuffix + "}";
+                ledger.transition(pieceId, PieceStatus.WITH_COURIER, PieceStatus.RETURN_PENDING_INSPECTION,
+                    "return_received", actorUserId, new TransitionContext(orderId, shipmentId, locationId, orderId, meta));
+            }
+            case AWAITING_PICKUP -> {
+                legal = true; unexpected = true;
+                String meta = "{\"return_kind\":\"rto\"," + metaSuffix + "}";
+                ledger.transition(pieceId, PieceStatus.AWAITING_PICKUP, PieceStatus.RETURN_PENDING_INSPECTION,
+                    "return_received", actorUserId, new TransitionContext(orderId, shipmentId, locationId, orderId, meta));
+            }
+            case DELIVERED -> {
+                if (withinReturnWindow(pieceId, tenantId)) {
+                    legal = true;
+                    String meta = "{\"return_kind\":\"customer_after_delivery\"," + metaSuffix + "}";
+                    ledger.transition(pieceId, PieceStatus.DELIVERED, PieceStatus.RETURN_PENDING_INSPECTION,
+                        "return_received", actorUserId, new TransitionContext(orderId, shipmentId, locationId, orderId, meta));
+                } else {
+                    // Outside the customer return window: ours, but no longer return-eligible.
+                    // Illegal-state fork — no transition, mismatch-only.
+                    legal = false; unexpected = true;
+                    log.warn("Illegal-state return scan (delivered, out of window): piece={} session={}", pieceId, sessionId);
+                }
             }
             case RETURN_PENDING_INSPECTION -> {
-                // Bosta state-46 already advanced the piece here before the session scan.
-                String meta = "{\"return_kind\":\"rto\"," + metaSuffix + "}";
-                ledger.recordReturnReceived(pieceId, locationId, actorUserId,
-                        orderId, shipmentId, meta);
+                // Adopt: Bosta state-46 (or a prior session) already put this piece here.
+                // No status transition — sibling-append only, carrying this session's id.
+                legal = true;
+                String meta = "{" + metaSuffix + "}";
+                ledger.recordReturnReceived(pieceId, locationId, actorUserId, orderId, shipmentId, meta);
             }
-            default -> throw new ResponseStatusException(HttpStatus.CONFLICT,
-                "Piece " + pieceId + " is in status '" + current.db +
-                "' and cannot be verdicted in a returns session");
+            default -> {
+                // Ours, but in a status with no return-eligible transition (available,
+                // reserved, packed, damaged, lost, destroyed, out_on_transfer, sold).
+                // No ledger write at all — restock()/markDamaged() will independently
+                // reject this piece with 409 since it never reaches return_pending_inspection.
+                legal = false; unexpected = true;
+                log.warn("Illegal-state return scan (status={}): piece={} session={}", current.db, pieceId, sessionId);
+            }
         }
 
-        // Apply verdict — both methods participate in this transaction via REQUIRED propagation.
-        if ("restock".equals(verdict)) {
-            returnService.restock(pieceId, locationId, actorUserId);
-        } else {
-            returnService.markDamaged(pieceId, reason, actorUserId);
+        if (legal && locationId != null) {
+            jdbc.update("UPDATE pieces SET current_location_id = ? WHERE id = ?", locationId, pieceId);
         }
 
-        Map<String, Object> out = new LinkedHashMap<>();
-        out.put("pieceId",     pieceId);
-        out.put("barcode",     piece.get("barcode"));
-        out.put("finalStatus", "restock".equals(verdict) ? "available" : "damaged");
-        out.put("returnKind",  current == PieceStatus.DELIVERED
-                               ? "customer_after_delivery" : "rto");
-        return out;
+        UUID itemId = UUID.randomUUID();
+        jdbc.update(
+            "INSERT INTO return_session_items (id, tenant_id, session_id, piece_id, scanned_by, scan_source, unexpected) " +
+            "VALUES (?, ?, ?, ?, ?, 'barcode', ?)",
+            itemId, tenantId, sessionId, pieceId, actorUserId, unexpected);
+
+        return itemRow(itemId, tenantId);
     }
 
-    // ── Finalize session ──────────────────────────────────────────────────────
+    private Map<String, Object> scanAwb(UUID sessionId, UUID tenantId, String trackingNumber) {
+        jdbc.update(
+            "INSERT INTO return_session_shipments (id, tenant_id, session_id, awb) VALUES (?, ?, ?, ?) " +
+            "ON CONFLICT (session_id, awb) DO NOTHING",
+            UUID.randomUUID(), tenantId, sessionId, trackingNumber);
 
-    /**
-     * Marks the session finalized. Does NOT block on unresolved pieces.
-     *
-     * Change 2: unresolvedRtoCount counts un-scanned return_in_transit pieces only
-     * (the actionable gap). deliveredKeptCount counts unscanned delivered pieces
-     * (expected — customer kept the item). The UI must not treat the latter as a problem.
-     */
-    @Transactional
-    public Map<String, Object> finalizeSession(UUID sessionId, UUID actorUserId) {
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("scanType", "awb");
+        result.put("awb", trackingNumber);
+        result.put("expectedPieces", fetchExpectedPieces(sessionId, tenantId));
+        return result;
+    }
+
+    // ── Disposition ───────────────────────────────────────────────────────────
+
+    @Transactional(isolation = Isolation.READ_COMMITTED)
+    public Map<String, Object> disposition(UUID sessionId, String pieceId, String disposition,
+                                           String reason, UUID locationId, UUID actorUserId) {
         UUID tenantId = TenantContext.require();
         requireOpen(sessionId, tenantId);
 
-        String waybill = jdbc.queryForObject(
-            "SELECT reference FROM receipts WHERE id = ? AND tenant_id = ?",
-            String.class, sessionId, tenantId);
+        if (!Set.of("restock", "damaged", "mismatch").contains(disposition)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                "disposition must be one of restock, damaged, mismatch");
+        }
 
-        // Count processed pieces in this session.
-        Integer processedCount = jdbc.queryForObject(
-            "SELECT COUNT(DISTINCT pe.piece_id) FROM piece_events pe " +
-            "WHERE pe.tenant_id = ? " +
-            "  AND pe.event_type = 'return_received' " +
-            "  AND pe.metadata->>'session_id' = ?::text",
-            Integer.class, tenantId, sessionId);
+        Map<String, Object> item = fetchItemByPiece(sessionId, pieceId, tenantId);
+        if (!"pending".equals(item.get("disposition"))) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                "Item already dispositioned as " + item.get("disposition"));
+        }
 
-        // Count remaining return_in_transit pieces (actionable — these are the stuck ones).
-        Integer unresolvedRtoCount = jdbc.queryForObject(
-            "SELECT COUNT(p.id) " +
-            "FROM pieces p " +
-            "JOIN allocations a  ON a.piece_id      = p.id " +
-            "                    AND a.status        IN ('active','packed') " +
-            "JOIN order_items oi ON oi.id            = a.order_item_id " +
-            "JOIN orders o       ON o.id             = oi.order_id " +
-            "JOIN shipments s    ON s.order_id       = o.id " +
-            "WHERE s.tracking_number = ? AND s.tenant_id = ? " +
-            "  AND p.status = 'return_in_transit'::piece_status",
-            Integer.class, waybill, tenantId);
+        switch (disposition) {
+            // restock()/markDamaged() are the existing return_pending_inspection guard —
+            // this is what makes "illegal-state item rejects restock/damage" free: those
+            // pieces never reached return_pending_inspection, so these throw 409 unchanged.
+            case "restock"  -> returnService.restock(pieceId, locationId, actorUserId);
+            case "damaged"  -> returnService.markDamaged(pieceId, reason, actorUserId); // 400 inside if reason blank
+            case "mismatch" -> log.warn("Return mismatch: piece={} session={}", pieceId, sessionId);
+            // No ledger transition for mismatch — piece stays at return_pending_inspection.
+            // No revert, no cancel event (change B) — a dedicated mismatch-resolution
+            // action is a tracked future item, not this pass.
+        }
 
-        // Count unscanned delivered pieces — normal (customer kept them).
-        Integer deliveredKeptCount = jdbc.queryForObject(
-            "SELECT COUNT(p.id) " +
-            "FROM pieces p " +
-            "JOIN allocations a  ON a.piece_id      = p.id " +
-            "                    AND a.status        IN ('active','packed') " +
-            "JOIN order_items oi ON oi.id            = a.order_item_id " +
-            "JOIN orders o       ON o.id             = oi.order_id " +
-            "JOIN shipments s    ON s.order_id       = o.id " +
-            "WHERE s.tracking_number = ? AND s.tenant_id = ? " +
-            "  AND p.status = 'delivered'::piece_status",
-            Integer.class, waybill, tenantId);
-
+        String stored = "restock".equals(disposition) ? "restocked" : disposition;
         jdbc.update(
-            "UPDATE receipts SET status = 'finalized', finalized_at = now() " +
-            "WHERE id = ? AND tenant_id = ?",
-            sessionId, tenantId);
+            "UPDATE return_session_items SET disposition = ?, disposition_at = now(), disposition_by = ?, damage_reason = ? " +
+            "WHERE session_id = ? AND piece_id = ? AND tenant_id = ?",
+            stored, actorUserId, "damaged".equals(disposition) ? reason : null, sessionId, pieceId, tenantId);
 
-        Map<String, Object> out = new LinkedHashMap<>();
-        out.put("sessionId",          sessionId);
-        out.put("waybillNumber",      waybill);
-        out.put("processedCount",     processedCount != null ? processedCount : 0);
-        out.put("unresolvedRtoCount", unresolvedRtoCount != null ? unresolvedRtoCount : 0);
-        out.put("deliveredKeptCount", deliveredKeptCount != null ? deliveredKeptCount : 0);
-        out.put("finalizedAt",        Instant.now(clock));
-        return out;
+        return fetchItemByPiece(sessionId, pieceId, tenantId);
     }
 
-    // ── Label reprint (Change 3: scoped to pieces in a return flow) ───────────
+    // ── Reprint ───────────────────────────────────────────────────────────────
 
     /**
-     * Validates the piece is in a return flow (return_pending_inspection or damaged),
-     * then records a label_reprinted event. The controller calls LabelService for the PDF.
-     *
-     * Change 3: rejects reprint on arbitrary pieces not in a return flow.
+     * Reprint is allowed in ANY piece status (change per FR-24 §3 — widens the old
+     * ReturnSessionController.validateAndRecordReprint() gate, which only allowed
+     * return_pending_inspection/damaged; that old gated endpoint is untouched — this is
+     * a separate surface, per the transfers-spec precedent of not widening it). Reads
+     * the stored barcode; never mints one. Non-status sibling-append via
+     * InventoryLedger.recordLabelReprinted() (4th write path, unchanged).
+     */
+    @Transactional(isolation = Isolation.READ_COMMITTED)
+    public Map<String, Object> recordReprint(UUID sessionId, String pieceId, UUID actorUserId) {
+        UUID tenantId = TenantContext.require();
+        requireOpen(sessionId, tenantId);
+
+        Map<String, Object> piece = jdbc.query(
+            "SELECT p.id, p.barcode, p.current_order_id AS order_id, p.current_location_id AS location_id, " +
+            "       s.id AS shipment_id " +
+            "FROM pieces p " +
+            "LEFT JOIN orders o    ON o.id = p.current_order_id AND o.tenant_id = ? " +
+            "LEFT JOIN shipments s ON s.order_id = o.id AND s.tenant_id = ? AND s.shipment_leg = 'forward' " +
+            "WHERE p.id = ? AND p.tenant_id = ?",
+            rs -> {
+                if (!rs.next()) return null;
+                Map<String, Object> m = new LinkedHashMap<>();
+                m.put("id",         rs.getString("id"));
+                m.put("barcode",    rs.getString("barcode"));
+                m.put("orderId",    rs.getObject("order_id",    UUID.class));
+                m.put("locationId", rs.getObject("location_id", UUID.class));
+                m.put("shipmentId", rs.getObject("shipment_id", UUID.class));
+                return m;
+            },
+            tenantId, tenantId, pieceId, tenantId);
+
+        if (piece == null) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Piece not found: " + pieceId);
+        }
+
+        ledger.recordLabelReprinted(pieceId, actorUserId,
+            (UUID) piece.get("locationId"), (UUID) piece.get("orderId"), (UUID) piece.get("shipmentId"));
+
+        return Map.of("pieceId", pieceId, "barcode", piece.get("barcode"));
+    }
+
+    /**
+     * PRE-EXISTING, UNTOUCHED (FR-12 change 3) — the old single-piece gated reprint path.
+     * Kept exactly as it was: only return_pending_inspection/damaged pieces qualify.
+     * recordReprint() above is a deliberately separate, unrestricted surface for the new
+     * session model — this one is not widened to match it, per the transfers-spec
+     * precedent of never widening this specific gate (TransferService.
+     * reprintOutstandingLabels() built its own method rather than reuse/widen this one).
      */
     @Transactional(isolation = Isolation.READ_COMMITTED)
     public Map<String, Object> validateAndRecordReprint(String pieceId, UUID actorUserId) {
         UUID tenantId = TenantContext.require();
 
-        Map<String, Object> piece = fetchPieceContext(pieceId, tenantId);
+        Map<String, Object> piece = fetchPieceContextForOldReprintGate(pieceId, tenantId);
         PieceStatus current = PieceStatus.fromDb((String) piece.get("status"));
 
         if (current != PieceStatus.RETURN_PENDING_INSPECTION && current != PieceStatus.DAMAGED) {
@@ -381,47 +352,20 @@ public class ReturnSessionService {
         }
 
         ledger.recordLabelReprinted(pieceId, actorUserId,
-                (UUID) piece.get("locationId"),
-                (UUID) piece.get("orderId"),
-                (UUID) piece.get("shipmentId"));
+                (UUID) piece.get("locationId"), (UUID) piece.get("orderId"), (UUID) piece.get("shipmentId"));
 
         return Map.of("pieceId", pieceId, "barcode", piece.get("barcode"));
     }
 
-    // ── Private helpers ───────────────────────────────────────────────────────
-
-    /** Throws 422 if piece's last_event_at is before the tenant's customer return window. */
-    private void enforceReturnWindow(String pieceId, UUID tenantId) {
-        int windowDays = jdbc.queryForObject(
-            "SELECT customer_return_window_days FROM tenants WHERE id = ?",
-            Integer.class, tenantId);
-
-        Timestamp lastEventAt = jdbc.queryForObject(
-            "SELECT last_event_at FROM pieces WHERE id = ? AND tenant_id = ?",
-            Timestamp.class, pieceId, tenantId);
-
-        Instant cutoff = clock.instant().minus(windowDays, ChronoUnit.DAYS);
-
-        if (lastEventAt == null || lastEventAt.toInstant().isBefore(cutoff)) {
-            long daysAgo = lastEventAt != null
-                ? ChronoUnit.DAYS.between(lastEventAt.toInstant(), clock.instant())
-                : 9999L;
-            throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY,
-                "Piece was delivered " + daysAgo + " days ago, beyond the customer return " +
-                "window of " + windowDays + " days. Use the waybill-less intake for " +
-                "out-of-window returns.");
-        }
-    }
-
-    private Map<String, Object> fetchPieceContext(String pieceId, UUID tenantId) {
+    private Map<String, Object> fetchPieceContextForOldReprintGate(String pieceId, UUID tenantId) {
         Map<String, Object> row = jdbc.query(
             "SELECT p.id, p.barcode, p.status::text AS status, " +
             "       p.current_order_id AS order_id, " +
             "       p.current_location_id AS location_id, " +
             "       s.id AS shipment_id " +
             "FROM pieces p " +
-            "LEFT JOIN orders o      ON o.id  = p.current_order_id AND o.tenant_id = ? " +
-            "LEFT JOIN shipments s   ON s.order_id = o.id AND s.tenant_id = ? AND s.shipment_leg = 'forward' " +
+            "LEFT JOIN orders o    ON o.id = p.current_order_id AND o.tenant_id = ? " +
+            "LEFT JOIN shipments s ON s.order_id = o.id AND s.tenant_id = ? AND s.shipment_leg = 'forward' " +
             "WHERE p.id = ? AND p.tenant_id = ?",
             rs -> {
                 if (!rs.next()) return null;
@@ -442,16 +386,311 @@ public class ReturnSessionService {
         return row;
     }
 
+    // ── Close ─────────────────────────────────────────────────────────────────
+
+    @Transactional
+    public Map<String, Object> close(UUID sessionId, UUID actorUserId) {
+        UUID tenantId = TenantContext.require();
+        requireOpen(sessionId, tenantId);
+
+        List<Map<String, Object>> pending = jdbc.queryForList(
+            "SELECT i.piece_id AS \"pieceId\", p.barcode, pr.title AS \"productTitle\" " +
+            "FROM return_session_items i " +
+            "JOIN pieces p    ON p.id = i.piece_id " +
+            "JOIN variants v  ON v.id = p.variant_id " +
+            "JOIN products pr ON pr.id = v.product_id " +
+            "WHERE i.session_id = ? AND i.tenant_id = ? AND i.disposition = 'pending' " +
+            "ORDER BY i.scanned_at ASC",
+            sessionId, tenantId);
+
+        if (!pending.isEmpty()) {
+            throw new ReturnSessionException(ReturnSessionException.Code.SESSION_CLOSE_BLOCKED,
+                pending.size() + " piece(s) still need a disposition before this session can close",
+                "يوجد " + pending.size() + " قطعة بحاجة إلى قرار قبل إمكانية إغلاق الجلسة",
+                HttpStatus.CONFLICT,
+                Map.of("blockingItems", pending));
+        }
+
+        Map<String, Object> counts = jdbc.query(
+            "SELECT " +
+            "  COUNT(*)                                          AS piece_count, " +
+            "  COUNT(*) FILTER (WHERE disposition = 'restocked') AS restocked_count, " +
+            "  COUNT(*) FILTER (WHERE disposition = 'damaged')   AS damaged_count, " +
+            "  COUNT(*) FILTER (WHERE disposition = 'mismatch')  AS mismatch_count " +
+            "FROM return_session_items WHERE session_id = ? AND tenant_id = ?",
+            rs -> {
+                rs.next();
+                Map<String, Object> m = new LinkedHashMap<>();
+                m.put("pieceCount",      rs.getInt("piece_count"));
+                m.put("restockedCount",  rs.getInt("restocked_count"));
+                m.put("damagedCount",    rs.getInt("damaged_count"));
+                m.put("mismatchCount",   rs.getInt("mismatch_count"));
+                return m;
+            },
+            sessionId, tenantId);
+
+        Integer shipmentCount = jdbc.queryForObject(
+            "SELECT COUNT(*) FROM return_session_shipments WHERE session_id = ? AND tenant_id = ?",
+            Integer.class, sessionId, tenantId);
+
+        jdbc.update(
+            "UPDATE return_sessions SET status = 'closed', closed_by = ?, closed_at = now() " +
+            "WHERE id = ? AND tenant_id = ?",
+            actorUserId, sessionId, tenantId);
+
+        Map<String, Object> result = new LinkedHashMap<>(counts);
+        result.put("sessionId", sessionId.toString());
+        result.put("shipmentCount", shipmentCount);
+        result.put("closedAt", Instant.now(clock).toString());
+        return result;
+    }
+
+    // ── List / detail ─────────────────────────────────────────────────────────
+
+    @Transactional(readOnly = true)
+    public Map<String, Object> listSessions(int page, int size) {
+        UUID tenantId = TenantContext.require();
+        List<Map<String, Object>> items = jdbc.queryForList(
+            "SELECT rs.id, rs.status, rs.opened_by, rs.opened_at, rs.closed_by, rs.closed_at, rs.note, " +
+            "       (SELECT COUNT(*) FROM return_session_items i WHERE i.session_id = rs.id) AS piece_count, " +
+            "       (SELECT COUNT(*) FILTER (WHERE i.disposition = 'restocked') " +
+            "        FROM return_session_items i WHERE i.session_id = rs.id) AS restocked_count, " +
+            "       (SELECT COUNT(*) FILTER (WHERE i.disposition = 'damaged') " +
+            "        FROM return_session_items i WHERE i.session_id = rs.id) AS damaged_count, " +
+            "       (SELECT COUNT(*) FILTER (WHERE i.disposition = 'mismatch') " +
+            "        FROM return_session_items i WHERE i.session_id = rs.id) AS mismatch_count " +
+            "FROM return_sessions rs " +
+            "WHERE rs.tenant_id = ? " +
+            "ORDER BY rs.opened_at DESC, rs.id DESC " +
+            "LIMIT ? OFFSET ?",
+            tenantId, size, (long) page * size);
+        int total = jdbc.queryForObject(
+            "SELECT COUNT(*) FROM return_sessions WHERE tenant_id = ?", Integer.class, tenantId);
+
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("items", items);
+        result.put("total", total);
+        return result;
+    }
+
+    @Transactional(readOnly = true)
+    public Map<String, Object> getSession(UUID sessionId) {
+        UUID tenantId = TenantContext.require();
+        List<Map<String, Object>> rows = jdbc.queryForList(
+            "SELECT id, status, opened_by, opened_at, closed_by, closed_at, note " +
+            "FROM return_sessions WHERE id = ? AND tenant_id = ?",
+            sessionId, tenantId);
+        if (rows.isEmpty()) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Return session not found");
+        }
+
+        List<Map<String, Object>> items = jdbc.queryForList(
+            "SELECT i.id, i.piece_id, p.barcode, p.status::text AS status, " +
+            "       v.title AS variant_title, pr.title AS product_title, v.sku, " +
+            "       i.disposition, i.unexpected, i.scan_source, i.damage_reason, " +
+            "       i.scanned_at, i.disposition_at " +
+            "FROM return_session_items i " +
+            "JOIN pieces p    ON p.id  = i.piece_id " +
+            "JOIN variants v  ON v.id  = p.variant_id " +
+            "JOIN products pr ON pr.id = v.product_id " +
+            "WHERE i.session_id = ? AND i.tenant_id = ? " +
+            "ORDER BY i.scanned_at ASC",
+            sessionId, tenantId);
+
+        Map<String, Object> result = new LinkedHashMap<>(rows.get(0));
+        result.put("items", items);
+        result.put("expectedPieces", fetchExpectedPieces(sessionId, tenantId));
+        return result;
+    }
+
+    // ── Analytics (derive-on-read) ────────────────────────────────────────────
+
+    /**
+     * "Unassigned pending" is defined by the session relationship, not status alone
+     * (load-bearing per the FR-24 build plan, change B): a piece at
+     * return_pending_inspection resurfaces here unless it has an item row that is
+     * either in a still-open session, or already resolved (disposition <> 'pending').
+     * This is what stops a mismatched piece from re-appearing here even though it
+     * physically remains at return_pending_inspection forever (mismatch never
+     * transitions it) — its item row has a resolved disposition, so the NOT EXISTS
+     * excludes it. An abandoned session's still-pending items do NOT exclude their
+     * pieces (status='abandoned' is neither 'open' nor a resolved disposition) — those
+     * pieces correctly resurface, which is the point of change B's no-revert design.
+     */
+    @Transactional(readOnly = true)
+    public Map<String, Object> analytics(Instant from, Instant to) {
+        UUID tenantId = TenantContext.require();
+        Instant effTo   = to != null ? to : clock.instant();
+        Instant effFrom = from != null ? from : effTo.minus(30, ChronoUnit.DAYS);
+        Timestamp tsFrom = Timestamp.from(effFrom);
+        Timestamp tsTo   = Timestamp.from(effTo);
+
+        Integer totalReturns = jdbc.queryForObject(
+            "SELECT COUNT(*) FROM return_session_items WHERE tenant_id = ? AND scanned_at BETWEEN ? AND ?",
+            Integer.class, tenantId, tsFrom, tsTo);
+        Integer restockedCount = jdbc.queryForObject(
+            "SELECT COUNT(*) FROM return_session_items " +
+            "WHERE tenant_id = ? AND disposition = 'restocked' AND disposition_at BETWEEN ? AND ?",
+            Integer.class, tenantId, tsFrom, tsTo);
+        Integer damagedCount = jdbc.queryForObject(
+            "SELECT COUNT(*) FROM return_session_items " +
+            "WHERE tenant_id = ? AND disposition = 'damaged' AND disposition_at BETWEEN ? AND ?",
+            Integer.class, tenantId, tsFrom, tsTo);
+        Integer mismatchCount = jdbc.queryForObject(
+            "SELECT COUNT(*) FROM return_session_items " +
+            "WHERE tenant_id = ? AND disposition = 'mismatch' AND disposition_at BETWEEN ? AND ?",
+            Integer.class, tenantId, tsFrom, tsTo);
+
+        int neverReceivedWindowDays = jdbc.queryForObject(
+            "SELECT never_received_window_days FROM tenants WHERE id = ?", Integer.class, tenantId);
+        int expectedNotScannedCount = returnService.neverReceived(neverReceivedWindowDays).size();
+
+        Integer unassignedPendingCount = jdbc.queryForObject(unassignedPendingCountSql(), Integer.class, tenantId);
+        List<Map<String, Object>> unassignedPending = jdbc.queryForList(unassignedPendingListSql(), tenantId);
+
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("from", effFrom.toString());
+        result.put("to", effTo.toString());
+        result.put("totalReturns", totalReturns);
+        result.put("restockedCount", restockedCount);
+        result.put("damagedCount", damagedCount);
+        result.put("mismatchCount", mismatchCount);
+        result.put("expectedNotScannedCount", expectedNotScannedCount);
+        result.put("unassignedPendingCount", unassignedPendingCount);
+        result.put("unassignedPending", unassignedPending);
+        return result;
+    }
+
+    private static String unassignedPendingPredicate() {
+        return
+            "p.tenant_id = ? AND p.status = 'return_pending_inspection'::piece_status " +
+            "  AND NOT EXISTS ( " +
+            "      SELECT 1 FROM return_session_items i " +
+            "      JOIN return_sessions s ON i.session_id = s.id " +
+            "      WHERE i.piece_id = p.id AND i.tenant_id = p.tenant_id " +
+            "        AND (s.status = 'open' OR i.disposition <> 'pending')) ";
+    }
+
+    private static String unassignedPendingCountSql() {
+        return "SELECT COUNT(*) FROM pieces p WHERE " + unassignedPendingPredicate();
+    }
+
+    private static String unassignedPendingListSql() {
+        return
+            "SELECT p.id AS \"pieceId\", p.barcode, pr.title AS \"productTitle\", v.sku, " +
+            "       p.last_event_at AS \"lastEventAt\" " +
+            "FROM pieces p " +
+            "JOIN variants v  ON v.id  = p.variant_id " +
+            "JOIN products pr ON pr.id = v.product_id " +
+            "WHERE " + unassignedPendingPredicate() +
+            "ORDER BY p.last_event_at ASC LIMIT 50";
+    }
+
+    // ── Private helpers ───────────────────────────────────────────────────────
+
+    private Map<String, Object> fetchPieceByScan(String scan, UUID tenantId) {
+        return jdbc.query(
+            "SELECT p.id, p.status::text AS status, " +
+            "       p.current_order_id AS order_id, s.id AS shipment_id " +
+            "FROM pieces p " +
+            "LEFT JOIN orders o    ON o.id = p.current_order_id AND o.tenant_id = ? " +
+            "LEFT JOIN shipments s ON s.order_id = o.id AND s.tenant_id = ? AND s.shipment_leg = 'forward' " +
+            "WHERE (p.barcode = ? OR p.id = ? OR p.short_code = ?) AND p.tenant_id = ?",
+            rs -> {
+                if (!rs.next()) return null;
+                Map<String, Object> m = new LinkedHashMap<>();
+                m.put("id",         rs.getString("id"));
+                m.put("status",     rs.getString("status"));
+                m.put("order_id",   rs.getObject("order_id",   UUID.class));
+                m.put("shipment_id", rs.getObject("shipment_id", UUID.class));
+                return m;
+            },
+            tenantId, tenantId, scan, scan, scan, tenantId);
+    }
+
+    /** Expected-but-unscanned pieces for every AWB scanned into this session — recomputed on read. */
+    private List<Map<String, Object>> fetchExpectedPieces(UUID sessionId, UUID tenantId) {
+        return jdbc.queryForList(
+            "SELECT p.id, p.barcode, p.status::text AS status, " +
+            "       v.title AS variant_title, pr.title AS product_title, v.sku, " +
+            "       rss.awb " +
+            "FROM return_session_shipments rss " +
+            "JOIN shipments s    ON s.tracking_number = rss.awb AND s.tenant_id = rss.tenant_id " +
+            "JOIN orders o       ON o.id = s.order_id AND o.tenant_id = rss.tenant_id " +
+            "JOIN order_items oi ON oi.order_id = o.id " +
+            "JOIN allocations a  ON a.order_item_id = oi.id " +
+            "                    AND a.status IN ('active','packed','released') " +
+            "                    AND a.id = ( " +
+            "                        SELECT a2.id FROM allocations a2 " +
+            "                        WHERE a2.piece_id = a.piece_id " +
+            "                        ORDER BY a2.allocated_at DESC LIMIT 1) " +
+            "JOIN pieces p       ON p.id = a.piece_id AND p.tenant_id = rss.tenant_id " +
+            "JOIN variants v     ON v.id = p.variant_id " +
+            "JOIN products pr    ON pr.id = v.product_id " +
+            "WHERE rss.session_id = ? AND rss.tenant_id = ? " +
+            "  AND p.status IN ('return_in_transit'::piece_status, 'with_courier'::piece_status, " +
+            "                   'awaiting_pickup'::piece_status, 'delivered'::piece_status, " +
+            "                   'return_pending_inspection'::piece_status) " +
+            "  AND NOT EXISTS ( " +
+            "      SELECT 1 FROM return_session_items i " +
+            "      WHERE i.session_id = rss.session_id AND i.piece_id = p.id) " +
+            "ORDER BY p.last_event_at ASC",
+            sessionId, tenantId);
+    }
+
+    private Map<String, Object> itemRow(UUID itemId, UUID tenantId) {
+        List<Map<String, Object>> rows = jdbc.queryForList(
+            "SELECT i.id, i.piece_id, p.barcode, p.status::text AS status, " +
+            "       v.title AS variant_title, pr.title AS product_title, v.sku, " +
+            "       i.disposition, i.unexpected, i.scan_source, i.damage_reason, " +
+            "       i.scanned_at, i.disposition_at " +
+            "FROM return_session_items i " +
+            "JOIN pieces p    ON p.id  = i.piece_id " +
+            "JOIN variants v  ON v.id  = p.variant_id " +
+            "JOIN products pr ON pr.id = v.product_id " +
+            "WHERE i.id = ? AND i.tenant_id = ?",
+            itemId, tenantId);
+        if (rows.isEmpty()) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Item not found");
+        return rows.get(0);
+    }
+
+    private Map<String, Object> fetchItemByPiece(UUID sessionId, String pieceId, UUID tenantId) {
+        List<Map<String, Object>> rows = jdbc.queryForList(
+            "SELECT i.id, i.piece_id, p.barcode, p.status::text AS status, " +
+            "       v.title AS variant_title, pr.title AS product_title, v.sku, " +
+            "       i.disposition, i.unexpected, i.scan_source, i.damage_reason, " +
+            "       i.scanned_at, i.disposition_at " +
+            "FROM return_session_items i " +
+            "JOIN pieces p    ON p.id  = i.piece_id " +
+            "JOIN variants v  ON v.id  = p.variant_id " +
+            "JOIN products pr ON pr.id = v.product_id " +
+            "WHERE i.session_id = ? AND i.piece_id = ? AND i.tenant_id = ?",
+            sessionId, pieceId, tenantId);
+        if (rows.isEmpty()) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Item not found in this session");
+        }
+        return rows.get(0);
+    }
+
+    private boolean withinReturnWindow(String pieceId, UUID tenantId) {
+        int windowDays = jdbc.queryForObject(
+            "SELECT customer_return_window_days FROM tenants WHERE id = ?", Integer.class, tenantId);
+        Timestamp lastEventAt = jdbc.queryForObject(
+            "SELECT last_event_at FROM pieces WHERE id = ? AND tenant_id = ?",
+            Timestamp.class, pieceId, tenantId);
+        Instant cutoff = clock.instant().minus(windowDays, ChronoUnit.DAYS);
+        return lastEventAt != null && !lastEventAt.toInstant().isBefore(cutoff);
+    }
+
     private void requireOpen(UUID sessionId, UUID tenantId) {
         List<String> rows = jdbc.queryForList(
-            "SELECT status FROM receipts WHERE id = ? AND tenant_id = ? AND kind = 'returns'",
+            "SELECT status FROM return_sessions WHERE id = ? AND tenant_id = ?",
             String.class, sessionId, tenantId);
         if (rows.isEmpty()) {
-            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Returns session not found");
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Return session not found");
         }
         if (!"open".equals(rows.get(0))) {
-            throw new ResponseStatusException(HttpStatus.CONFLICT,
-                "Session is already finalized");
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Return session is not open");
         }
     }
 }

@@ -79,9 +79,9 @@ class RlsCoverageTest {
             "/api/v1/audit-log",
             "/api/v1/shipments/unlinked",
             "/api/v1/returns/pending",
-            "/api/v1/returns/never-received",
             "/api/v1/returns/sessions",
-            "/api/v1/returns/sessions/{sessionId}/pieces",
+            "/api/v1/returns/sessions/{sessionId}",
+            "/api/v1/returns/analytics",
             "/api/v1/orders/daily-counts",
             "/api/v1/lookup",
             "/api/v1/fulfill/gather",
@@ -236,6 +236,10 @@ class RlsCoverageTest {
     void cleanPerTest() {
         jdbc.update("DELETE FROM audit_log               WHERE tenant_id = ?", tenantId);
         jdbc.update("DELETE FROM unlinked_bosta_deliveries WHERE tenant_id = ?", tenantId);
+        // return_session_items/return_sessions before pieces — FK references pieces(id),
+        // a leftover row here would abort the "DELETE FROM pieces" below.
+        jdbc.update("DELETE FROM return_session_items    WHERE tenant_id = ?", tenantId);
+        jdbc.update("DELETE FROM return_sessions         WHERE tenant_id = ?", tenantId);
         jdbc.update("DELETE FROM piece_events            WHERE tenant_id = ?", tenantId);
         jdbc.update("DELETE FROM allocations             WHERE tenant_id = ?", tenantId);
         jdbc.update("DELETE FROM pieces                  WHERE tenant_id = ?", tenantId);
@@ -352,12 +356,12 @@ class RlsCoverageTest {
                 pieceId, tenantId, variantId, "PC-" + pieceId, pieceId);
 
         // {items, total} — not a bare list (FR-Overview §1.2: the Overview dashboard's
-        // awaiting-inspection tile reads .total, never page .items.length).
+        // awaiting-inspection tile reads .total, never page .items.length). FR-24:
+        // items is always [] now (listPending() retired with the old three-tab UI —
+        // only countPending()/.total survives, since Overview depends on it); the old
+        // items-non-empty assertion no longer applies.
         ResponseEntity<Map> resp = get("/api/v1/returns/pending", Map.class);
         assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.OK);
-        @SuppressWarnings("unchecked")
-        List<?> items = (List<?>) resp.getBody().get("items");
-        assertThat(items).isNotEmpty();
         assertThat(((Number) resp.getBody().get("total")).longValue()).isGreaterThanOrEqualTo(1);
     }
 
@@ -440,7 +444,7 @@ class RlsCoverageTest {
     }
 
     @Test
-    void returnsNeverReceived_returnsSeededShipment() {
+    void returnsAnalytics_reflectsSeededNeverReceivedShipment() {
         UUID orderId      = UUID.randomUUID();
         UUID orderItemId  = UUID.randomUUID();
         UUID shipmentId   = UUID.randomUUID();
@@ -463,36 +467,66 @@ class RlsCoverageTest {
                     "VALUES (?, ?, ?, 'TN-NEVER-REC', 'returned'::shipment_internal_state, 'forward', " +
                     "        now() - interval '1 hour')",
                     shipmentId, tenantId, orderId);
+        // never_received_window_days default is 3 — set to 0 so this seeded shipment
+        // (returned 1 hour ago) counts as "expected but not scanned" immediately.
+        jdbc.update("UPDATE tenants SET never_received_window_days = 0 WHERE id = ?", tenantId);
 
-        // windowDays=0 → returned_at < now() — matches any past returned_at
-        ResponseEntity<List> resp = get("/api/v1/returns/never-received?windowDays=0", List.class);
+        // FR-24: /returns/never-received (raw HTTP endpoint) was retired with the old
+        // three-tab UI — neverReceived() is now wrapped, unmodified, inside analytics'
+        // expectedNotScannedCount.
+        ResponseEntity<Map> resp = get("/api/v1/returns/analytics", Map.class);
         assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.OK);
-        assertThat(resp.getBody()).isNotEmpty();
+        assertThat(((Number) resp.getBody().get("expectedNotScannedCount")).intValue())
+            .isGreaterThanOrEqualTo(1);
+
+        jdbc.update("UPDATE tenants SET never_received_window_days = 3 WHERE id = ?", tenantId);
     }
 
     @Test
     void returnsSessions_returnsSeededSession() {
-        UUID receiptId = UUID.randomUUID();
-        jdbc.update("INSERT INTO receipts (id, tenant_id, kind, status, reference) " +
-                    "VALUES (?, ?, 'returns', 'open', 'TN-CVG-SESS')",
-                    receiptId, tenantId);
+        UUID sessionId = UUID.randomUUID();
+        jdbc.update("INSERT INTO return_sessions (id, tenant_id, status, opened_by) " +
+                    "VALUES (?, ?, 'open', ?)",
+                    sessionId, tenantId, ownerUserId);
 
-        ResponseEntity<List> resp = get("/api/v1/returns/sessions", List.class);
+        // {items, total} — not a bare list (same convention as /returns/pending).
+        ResponseEntity<Map> resp = get("/api/v1/returns/sessions", Map.class);
         assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.OK);
-        assertThat(resp.getBody()).isNotEmpty();
+        @SuppressWarnings("unchecked")
+        List<?> items = (List<?>) resp.getBody().get("items");
+        assertThat(items).isNotEmpty();
+        assertThat(((Number) resp.getBody().get("total")).longValue()).isGreaterThanOrEqualTo(1);
+
+        jdbc.update("DELETE FROM return_sessions WHERE id = ?", sessionId);
     }
 
     @Test
-    void returnsSessionPieces_returnsSessionMapWithWaybill() {
-        UUID receiptId = UUID.randomUUID();
-        jdbc.update("INSERT INTO receipts (id, tenant_id, kind, status, reference) " +
-                    "VALUES (?, ?, 'returns', 'open', 'TN-CVG-SESS-P')",
-                    receiptId, tenantId);
+    void returnsSessionDetail_returnsSeededSessionWithItems() {
+        UUID sessionId = UUID.randomUUID();
+        String pieceId = UlidGenerator.generate();
+        jdbc.update("INSERT INTO return_sessions (id, tenant_id, status, opened_by) " +
+                    "VALUES (?, ?, 'open', ?)",
+                    sessionId, tenantId, ownerUserId);
+        jdbc.update("INSERT INTO pieces (id, tenant_id, variant_id, barcode, short_code, status) " +
+                    "VALUES (?, ?, ?, ?, 'P' || LPAD((abs(hashtext(?)) % 999999 + 1)::text, 6, '0'), " +
+                    "        'return_pending_inspection'::piece_status)",
+                    pieceId, tenantId, variantId, "PC-" + pieceId, pieceId);
+        jdbc.update("INSERT INTO return_session_items " +
+                    "(id, tenant_id, session_id, piece_id, scanned_by, scan_source) " +
+                    "VALUES (gen_random_uuid(), ?, ?, ?, ?, 'barcode')",
+                    tenantId, sessionId, pieceId, ownerUserId);
 
-        ResponseEntity<Map> resp = get("/api/v1/returns/sessions/" + receiptId + "/pieces", Map.class);
+        ResponseEntity<Map> resp = get("/api/v1/returns/sessions/" + sessionId, Map.class);
         assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.OK);
-        assertThat(resp.getBody()).isNotNull();
-        assertThat(resp.getBody().get("waybillNumber")).isEqualTo("TN-CVG-SESS-P");
+        assertThat(resp.getBody().get("status")).isEqualTo("open");
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> items = (List<Map<String, Object>>) resp.getBody().get("items");
+        assertThat(items).hasSize(1);
+        assertThat(items.get(0).get("piece_id")).isEqualTo(pieceId);
+
+        jdbc.update("DELETE FROM return_session_items WHERE session_id = ?", sessionId);
+        jdbc.update("DELETE FROM return_sessions WHERE id = ?", sessionId);
+        jdbc.update("DELETE FROM pieces WHERE id = ?", pieceId);
     }
 
     @Test

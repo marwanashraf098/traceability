@@ -212,11 +212,13 @@ export default function App() {
             </RequireAuth>
           }
         />
+        {/* NOT Layout-wrapped — full-screen open session, per the /fulfill precedent.
+            Returns applies <Layout> internally around its landing (list) view only. */}
         <Route
           path="/returns"
           element={
             <RequireAuth>
-              <Layout><Returns /></Layout>
+              <Returns />
             </RequireAuth>
           }
         />

@@ -1,14 +1,23 @@
 package com.traceability.inventory;
 
-import com.traceability.identity.CustomUserDetails;
 import org.springframework.security.access.prepost.PreAuthorize;
-import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
 import java.util.Map;
-import java.util.UUID;
 
+/**
+ * FR-24: trimmed to the one endpoint that survives the session-based rebuild.
+ * intake/pieces-{id}-restock/pieces-{id}-damage/never-received were the old
+ * three-tab UI's endpoints, retired along with it (superseded by
+ * ReturnSessionController's scan/disposition/analytics). This one stays because
+ * Overview's "Awaiting Inspection" tile depends on it (api.ts's
+ * getReturnsPendingTotal()) and it's semantically distinct from the new
+ * analytics "unassigned pending" count — see ReturnSessionService.analytics()'s
+ * javadoc: countPending() is ALL pieces at return_pending_inspection, unassigned
+ * pending is those not claimed by any session. Do not repoint Overview to
+ * analytics — the numbers mean different things.
+ */
 @RestController
 @RequestMapping("/api/v1/returns")
 public class ReturnController {
@@ -19,62 +28,15 @@ public class ReturnController {
         this.returnService = returnService;
     }
 
-    /** Worker scans an arriving RTO piece barcode. */
-    @PostMapping("/intake")
-    @PreAuthorize("isAuthenticated()")
-    public Map<String, Object> intake(
-            @RequestBody IntakeRequest req,
-            @AuthenticationPrincipal CustomUserDetails principal) {
-        return returnService.intakeScan(
-                req.barcode().trim(),
-                req.locationId(),
-                principal.userId());
-    }
-
-    /** Manager view: all pieces currently at return_pending_inspection. */
+    /** Manager view: count of all pieces currently at return_pending_inspection. */
     @GetMapping("/pending")
     @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
     public PendingPage pending(
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "50") int size) {
-        List<Map<String, Object>> items = returnService.listPending(page, size);
         long total = returnService.countPending();
-        return new PendingPage(items, total);
+        return new PendingPage(List.of(), total);
     }
 
     public record PendingPage(List<Map<String, Object>> items, long total) {}
-
-    /** Manager: restock a piece back to available. */
-    @PostMapping("/pieces/{pieceId}/restock")
-    @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
-    public void restock(
-            @PathVariable String pieceId,
-            @RequestBody RestockRequest req,
-            @AuthenticationPrincipal CustomUserDetails principal) {
-        returnService.restock(pieceId, req.locationId(), principal.userId());
-    }
-
-    /** Manager: mark a piece as damaged (terminal). Reason required. */
-    @PostMapping("/pieces/{pieceId}/damage")
-    @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
-    public void damage(
-            @PathVariable String pieceId,
-            @RequestBody DamageRequest req,
-            @AuthenticationPrincipal CustomUserDetails principal) {
-        returnService.markDamaged(pieceId, req.reason(), principal.userId());
-    }
-
-    /** Never-received report: pieces Bosta confirmed returned but not yet scanned in. */
-    @GetMapping("/never-received")
-    @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
-    public List<Map<String, Object>> neverReceived(
-            @RequestParam(defaultValue = "3") int windowDays) {
-        return returnService.neverReceived(windowDays);
-    }
-
-    // ── Request records ───────────────────────────────────────────────────────
-
-    public record IntakeRequest(String barcode, UUID locationId) {}
-    public record RestockRequest(UUID locationId) {}
-    public record DamageRequest(String reason) {}
 }

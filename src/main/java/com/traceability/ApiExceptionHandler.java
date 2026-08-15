@@ -9,6 +9,7 @@ import com.traceability.inventory.AwbMismatchException;
 import com.traceability.inventory.LookupNotFoundException;
 import com.traceability.inventory.PieceCommittedException;
 import com.traceability.inventory.PieceOutOnTransferException;
+import com.traceability.inventory.ReturnSessionException;
 import com.traceability.inventory.ShopifyFulfillmentActivationException;
 import com.traceability.inventory.StateConflictException;
 import com.traceability.inventory.TransferException;
@@ -30,6 +31,7 @@ import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.server.ResponseStatusException;
 
+import java.util.Map;
 import java.util.stream.Collectors;
 
 /**
@@ -143,6 +145,21 @@ public class ApiExceptionHandler {
     ResponseEntity<TransferErrorBody> handleTransferException(TransferException ex) {
         return ResponseEntity.status(ex.httpStatus())
             .body(new TransferErrorBody(ex.code().name(), ex.messageEn(), ex.messageAr()));
+    }
+
+    record ReturnSessionErrorBody(
+            String code,
+            @JsonProperty("message_en") String messageEn,
+            @JsonProperty("message_ar") String messageAr,
+            Map<String, Object> details) {}
+
+    // FR-24: the only two returns-session failures needing a structured body — "already open"
+    // (frontend needs the existing session id to render the Resume-session state) and
+    // "close blocked" (frontend needs the exact blocking items, not just a message).
+    @ExceptionHandler(ReturnSessionException.class)
+    ResponseEntity<ReturnSessionErrorBody> handleReturnSessionException(ReturnSessionException ex) {
+        return ResponseEntity.status(ex.httpStatus())
+            .body(new ReturnSessionErrorBody(ex.code().name(), ex.messageEn(), ex.messageAr(), ex.details()));
     }
 
     record FulfillmentActivationErrorBody(

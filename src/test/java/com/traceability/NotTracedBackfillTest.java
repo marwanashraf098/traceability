@@ -112,17 +112,18 @@ class NotTracedBackfillTest {
         //    not_traced backfill — V68's own effect is exercised separately in
         //    V68NotTracedRecencyFixTest, so its presence here doesn't affect this test's
         //    assertions beyond the count; V69, a nullable products.image_url column add
-        //    (metadata only, no data touched by this test); and V70/V71/V72, the Overview
+        //    (metadata only, no data touched by this test); V70/V71/V72, the Overview
         //    dashboard's three additive columns (variants.unit_cost, tenants.low_stock_
         //    threshold, tenants.onboarding_dismissed_at — all metadata-only, no data
-        //    touched by this test).
+        //    touched by this test); and V73, the FR-24 returns-session tables (new tables,
+        //    no existing data touched).
         Flyway toLatest = Flyway.configure()
                 .dataSource(POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword())
                 .locations("classpath:db/migration")
                 .load();
         MigrateResult r2 = toLatest.migrate();
         assertThat(r2.success).as("migrations after V56 must succeed").isTrue();
-        assertThat(r2.migrationsExecuted).as("V57 + V58 + V59 + V60 + V61 + V62 + V63 + V64 + V65 + V66 + V67 + V68 + V69 + V70 + V71 + V72 pending after V56").isEqualTo(16);
+        assertThat(r2.migrationsExecuted).as("V57 + V58 + V59 + V60 + V61 + V62 + V63 + V64 + V65 + V66 + V67 + V68 + V69 + V70 + V71 + V72 + V73 pending after V56").isEqualTo(17);
 
         try (Connection conn = DriverManager.getConnection(
                 POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword())) {
