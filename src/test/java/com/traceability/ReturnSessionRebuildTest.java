@@ -418,11 +418,22 @@ class ReturnSessionRebuildTest {
         post("/api/v1/returns/sessions/" + sessionId + "/scan", Map.of("scan", "PC-" + piece), ownerToken);
         assertThat(pieceStatus(piece)).isEqualTo("return_pending_inspection");
 
+        // Tripwire: abandon() must not go through InventoryLedger at all — no reverse
+        // transition, no cancel event, no write of any kind for this piece. Captured
+        // immediately around the abandon call so any future ledger call added to
+        // abandon() (accidental or "helpful") fails this test immediately.
+        int eventsBefore = countEvents(piece);
+
         ResponseEntity<Void> resp = rest.exchange(
             base() + "/api/v1/returns/sessions/" + sessionId, HttpMethod.DELETE,
             new HttpEntity<>(authJson(ownerToken)), Void.class);
 
+        int eventsAfter = countEvents(piece);
+
         assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.NO_CONTENT);
+        assertThat(eventsAfter)
+            .as("change B: abandon() writes no piece_events row of any kind for a pending piece")
+            .isEqualTo(eventsBefore);
         String status = jdbc.queryForObject(
             "SELECT status FROM return_sessions WHERE id = ?", String.class, sessionId);
         assertThat(status).isEqualTo("abandoned");
@@ -433,6 +444,18 @@ class ReturnSessionRebuildTest {
         Integer itemCount = jdbc.queryForObject(
             "SELECT COUNT(*) FROM return_session_items WHERE session_id = ?", Integer.class, sessionId);
         assertThat(itemCount).isEqualTo(1);
+
+        // Live write→read confirmation (not the insertSessionItem() fixture path used by
+        // analytics_unassignedPending_everyBranch's branch (d)): the piece this test just
+        // abandoned for real must actually surface through the real analytics endpoint.
+        ResponseEntity<Map> analyticsResp = get("/api/v1/returns/analytics", ownerToken);
+        assertThat(analyticsResp.getStatusCode()).isEqualTo(HttpStatus.OK);
+        List<Map<String, Object>> unassigned =
+            (List<Map<String, Object>>) analyticsResp.getBody().get("unassignedPending");
+        List<String> unassignedIds = unassigned.stream().map(m -> (String) m.get("pieceId")).toList();
+        assertThat(unassignedIds)
+            .as("abandoned session's still-pending piece resurfaces via the real analytics endpoint")
+            .contains(piece);
 
         // One-open-session index must now allow a new session.
         ResponseEntity<Map> next = post("/api/v1/returns/sessions", Map.of(), ownerToken);
@@ -585,6 +608,11 @@ class ReturnSessionRebuildTest {
 
     private String pieceStatus(String pieceId) {
         return jdbc.queryForObject("SELECT status::text FROM pieces WHERE id = ?", String.class, pieceId);
+    }
+
+    private int countEvents(String pieceId) {
+        return jdbc.queryForObject(
+            "SELECT COUNT(*) FROM piece_events WHERE piece_id = ?", Integer.class, pieceId);
     }
 
     private UUID closedSession() {
