@@ -152,10 +152,14 @@
       "number": "رقم الطلب",
       "customer": "العميل",
       "status": "الحالة",
-      "cod": "الدفع عند الاستلام",
-      "placedAt": "تاريخ الطلب",
+      "cod": "المبلغ",
+      "placedAt": "التاريخ",
       "tracking": "التتبع"
     },
+    "sync": "مزامنة من Shopify",
+    "syncNoStore": "لا يوجد متجر مربوط",
+    "syncSuccess": "تمت المزامنة",
+    "syncError": "فشلت المزامنة",
     "pipeline": {
       "new": "جديد",
       "confirmed": "مؤكد",
@@ -181,6 +185,9 @@
   "orderDetail": {
     "title": "الطلب",
     "back": "→ العودة للطلبات",
+    "stepper": {
+      "created": "تم الإنشاء"
+    },
     "customer": "العميل",
     "phone": "الهاتف",
     "address": "العنوان",

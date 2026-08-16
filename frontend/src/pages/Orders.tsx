@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { listOrders, OrderPage, listShopifyStores, syncShopifyStore } from '../api'
 import {
-  Badge, Button, DataTable, type DataTableColumn,
+  Alert, Badge, Button, DataTable, type DataTableColumn,
   EmptyState, OrderStatus, TableSkeleton,
 } from '../components/ui'
 
@@ -56,16 +56,16 @@ export default function Orders() {
     setSyncMsg('')
     try {
       const stores = await listShopifyStores()
-      if (stores.length === 0) { setSyncMsg('No store connected'); return }
+      if (stores.length === 0) { setSyncMsg(t('orders.syncNoStore')); return }
       await Promise.all(stores.map(s => syncShopifyStore(s.id)))
-      setSyncMsg('Synced')
+      setSyncMsg(t('orders.syncSuccess'))
       fetchOrders()
     } catch {
-      setSyncMsg('Sync failed')
+      setSyncMsg(t('orders.syncError'))
     } finally {
       setSyncing(false)
     }
-  }, [fetchOrders])
+  }, [fetchOrders, t])
 
   function applyFilter(fn: () => void) { fn(); setPage(0) }
 
@@ -124,14 +124,14 @@ export default function Orders() {
     },
     {
       key: 'cod',
-      header: t('orders.columns.cod', { defaultValue: 'COD' }),
+      header: t('orders.columns.cod', { defaultValue: 'Amount' }),
       render: row => row.codAmount != null
-        ? <span className="text-warning">{row.codAmount.toLocaleString()} EGP</span>
+        ? <span className="font-mono text-primary">{row.codAmount.toLocaleString()} EGP</span>
         : <span className="text-muted">{t('common.na')}</span>,
     },
     {
       key: 'placedAt',
-      header: t('orders.columns.placedAt', { defaultValue: 'Placed' }),
+      header: t('orders.columns.placedAt', { defaultValue: 'Date' }),
       render: row => (
         <span className="text-small text-muted">
           {row.placedAt ? new Date(row.placedAt).toLocaleDateString() : t('common.na')}
@@ -162,7 +162,7 @@ export default function Orders() {
             loading={syncing}
             onClick={handleSync}
           >
-            {syncing ? 'Shopify' : '↻ Shopify'}
+            {t('orders.sync')}
           </Button>
         </div>
       </div>
@@ -195,17 +195,19 @@ export default function Orders() {
         </select>
       </div>
 
-      {error && <p className="text-small text-danger">{error}</p>}
-
-      {/* Table — loading/empty/data handled here so EmptyState can carry an action */}
+      {/* Table — loading/empty/error/data handled here so EmptyState can carry an action */}
       <div className="card overflow-hidden">
-        {loading ? (
+        {error ? (
+          <div className="p-4">
+            <Alert tone="critical" title={error} />
+          </div>
+        ) : loading ? (
           <TableSkeleton rows={5} cols={columns.length} />
         ) : rows.length === 0 ? (
           <EmptyState
             message={t('orders.empty')}
             icon="📦"
-            action={{ label: '↻ Sync from Shopify', onClick: handleSync }}
+            action={{ label: t('orders.sync'), onClick: handleSync }}
           />
         ) : (
           <DataTable columns={columns} rows={rows} />
@@ -213,7 +215,7 @@ export default function Orders() {
       </div>
 
       {/* Pagination */}
-      {!loading && total > 0 && (
+      {!loading && !error && total > 0 && (
         <div className="flex items-center justify-between text-small text-muted">
           <span>{t('orders.showing', { from, to, total })}</span>
           <div className="flex gap-2">

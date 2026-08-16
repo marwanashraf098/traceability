@@ -170,9 +170,12 @@ describe('OrderDetail — A3.1 leg-scoped return badge', () => {
 
     await waitFor(() => expect(screen.getByText('#A31')).toBeInTheDocument())
 
-    // "In transit" appears exactly once — the order header — never a second time from a
-    // forward-card leg badge (there is no return card here to legitimately show it either).
-    expect(screen.getAllByText('In transit')).toHaveLength(1)
+    // "In transit" legitimately appears twice here: the order header, and the status
+    // stepper's "In transit" step (reuses the same status.in_transit copy — approved,
+    // see computeStepperSteps in OrderDetail.tsx). Exactly 2, never a 3rd, which is what
+    // a forward-card leg badge (the thing this test actually guards against) would add
+    // (there is no return card here to legitimately show a 2nd "In transit" of its own).
+    expect(screen.getAllByText('In transit')).toHaveLength(2)
     expect(screen.queryByText('Return Shipment')).toBeNull()
   })
 })

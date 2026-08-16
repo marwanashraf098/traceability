@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
+import { Check } from 'lucide-react'
 import { getOrder, OrderDetail as IOrderDetail, ShipmentDetail, AttemptEntry, DeliveryHistoryEntry, holdOrder, releaseOrderHold, updateOrderCod } from '../api'
-import { Alert, Badge, Button, DeliveryBadge, LegStatusBadge, Modal, OrderStatus, Skeleton } from '../components/ui'
+import { Alert, Badge, Button, DeliveryBadge, LegStatusBadge, Modal, OrderStatus, Skeleton, cn } from '../components/ui'
 
 export default function OrderDetail() {
   const { t } = useTranslation()
@@ -96,6 +97,8 @@ export default function OrderDetail() {
     ? Object.values(order.address).filter(Boolean).join(', ')
     : null
 
+  const stepperSteps = computeStepperSteps(order)
+
   return (
     <div className="space-y-6">
       <div>
@@ -107,10 +110,12 @@ export default function OrderDetail() {
         </h1>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+      {stepperSteps && <StatusStepper steps={stepperSteps} />}
 
-        {/* Left: customer + order meta + shipments */}
-        <div className="lg:col-span-1 space-y-4">
+      <div className="grid grid-cols-1 lg:grid-cols-[260px_340px_1fr] gap-4">
+
+        {/* Column 1: customer */}
+        <div className="space-y-4">
           <section className="card p-4">
             <h2 className="text-caption text-muted uppercase tracking-widest mb-3">
               {t('orderDetail.customer')}
@@ -121,7 +126,10 @@ export default function OrderDetail() {
               <InfoRow label={t('orderDetail.address')}  value={addr} />
             </dl>
           </section>
+        </div>
 
+        {/* Column 2: status + shipment(s) + return leg */}
+        <div className="space-y-4">
           <section className="card p-4 space-y-3">
             <h2 className="text-caption text-muted uppercase tracking-widest">
               {t('orderDetail.status')}
@@ -146,18 +154,24 @@ export default function OrderDetail() {
                 <dt className="text-small text-muted w-24 shrink-0">{t('orderDetail.cod')}</dt>
                 {codEditing ? (
                   <dd className="flex items-center gap-1.5 flex-wrap">
-                    <input
-                      ref={codInputRef}
-                      type="number"
-                      min={1} max={30000} step={1}
-                      value={codValue}
-                      onChange={e => setCodValue(e.target.value)}
-                      onKeyDown={e => { if (e.key === 'Enter') saveCod(); if (e.key === 'Escape') setCodEditing(false) }}
-                      className="input w-28 text-sm py-0.5 px-2"
-                    />
+                    <div className={cn(
+                      'flex items-center rounded-lg border transition-colors',
+                      codBusy ? 'opacity-70 border-line' : codErr ? 'border-critical' : 'border-trace-blue ring-2 ring-trace-blue/20',
+                    )}>
+                      <input
+                        ref={codInputRef}
+                        type="number"
+                        min={1} max={30000} step={1}
+                        value={codValue}
+                        disabled={codBusy}
+                        onChange={e => setCodValue(e.target.value)}
+                        onKeyDown={e => { if (e.key === 'Enter') saveCod(); if (e.key === 'Escape') setCodEditing(false) }}
+                        className="w-24 bg-transparent text-sm py-1 px-2 text-primary outline-none disabled:cursor-not-allowed"
+                      />
+                    </div>
                     <span className="text-small text-muted">EGP</span>
                     <Button size="sm" onClick={saveCod} loading={codBusy}>{t('orderDetail.codSave')}</Button>
-                    <Button size="sm" variant="secondary" onClick={() => { setCodEditing(false); setCodErr('') }}>{t('orderDetail.codCancel')}</Button>
+                    <Button size="sm" variant="secondary" disabled={codBusy} onClick={() => { setCodEditing(false); setCodErr('') }}>{t('orderDetail.codCancel')}</Button>
                     {codErr && <p className="text-critical text-small w-full">{codErr}</p>}
                   </dd>
                 ) : (
@@ -215,8 +229,8 @@ export default function OrderDetail() {
           )}
         </div>
 
-        {/* Right: order items */}
-        <div className="lg:col-span-2 space-y-3">
+        {/* Column 3: order items */}
+        <div className="space-y-3">
           <h2 className="text-caption text-muted uppercase tracking-widest">
             {t('orderDetail.items')}
           </h2>
@@ -292,6 +306,141 @@ export default function OrderDetail() {
           </div>
         </div>
       </Modal>}
+    </div>
+  )
+}
+
+// ── Status stepper ───────────────────────────────────────────────────────────
+// Read-only, presentational positioning over fields OrderDetail already fetches
+// (derivedStatus.primaryKey/.notTraced, the forward shipment's internalState +
+// deliveryHistory). Never re-derives tone/label/health-chips/conflict — those stay
+// 100% owned by OrderStatusDeriver via derivedStatus, rendered elsewhere via the
+// single OrderStatus component. This only decides which of 5 fixed milestones the
+// order has reached, for the timeline widget — approved mapping, see PROGRESS.md.
+
+export type StepKey = 'created' | 'packed' | 'with_courier' | 'in_transit' | 'delivered'
+export type StepState = 'done' | 'current' | 'pending'
+
+export interface StepperStep {
+  key: StepKey
+  state: StepState
+  at: string | null
+}
+
+// Suppress the stepper for any primaryKey off the forward-delivery ladder — a
+// returned/lost/exception/cancelled/self-pickup order isn't "on step N of 5
+// toward delivery"; the existing OrderStatus badge (health chips, conflict-link,
+// historical note) is the sole status surface for those, untouched here.
+const STEPPER_SUPPRESS_KEYS = new Set([
+  'status.cancelled', 'status.returning', 'status.returned', 'status.lost',
+  'status.terminated', 'status.needs_attention', 'status.self_pickup_pending',
+])
+
+export function computeStepperSteps(order: IOrderDetail): StepperStep[] | null {
+  // Not-traced suppresses unconditionally, before any primaryKey branching.
+  if (order.derivedStatus.notTraced) return null
+
+  const primaryKey = order.derivedStatus.primaryKey
+  if (STEPPER_SUPPRESS_KEYS.has(primaryKey)) return null
+
+  const forward = order.shipments.find(s => s.shipmentLeg === 'forward') ?? null
+
+  let currentIndex: number
+  if (primaryKey === 'status.delivery_failed') {
+    // Split by the shipment's own internalState rather than re-deriving a rank —
+    // if it's 'exception' in this combination there's no reliable rank signal
+    // (the failed-attempts branch is checked before the exception branch in
+    // OrderStatusDeriver.derive(), so that combination is reachable), so suppress.
+    if (forward?.internalState === 'created') currentIndex = 2
+    else if (forward?.internalState === 'with_courier') currentIndex = 3
+    else return null
+  } else {
+    switch (primaryKey) {
+      case 'status.new':
+      case 'status.confirmed':
+      case 'status.ready_to_pick':
+      case 'status.picking':
+        currentIndex = 0; break
+      case 'status.packed':
+        currentIndex = 1; break
+      case 'status.label_created':
+      case 'status.awaiting_courier':
+        currentIndex = 2; break
+      case 'status.in_transit':
+        currentIndex = 3; break
+      case 'status.delivered':
+        currentIndex = 4; break
+      default:
+        // Any unmapped primaryKey — safe default is no phantom progress.
+        return null
+    }
+  }
+
+  const stepState = (i: number): StepState => {
+    if (i < currentIndex) return 'done'
+    if (i === currentIndex) return currentIndex === 4 ? 'done' : 'current'
+    return 'pending'
+  }
+  const historyAt = (state: string): string | null =>
+    forward?.deliveryHistory.find(e => e.state === state)?.occurredAt ?? null
+
+  return [
+    { key: 'created',      state: stepState(0), at: order.placedAt ?? order.createdAt },
+    { key: 'packed',       state: stepState(1), at: null }, // no packed_at anywhere — marker only
+    { key: 'with_courier', state: stepState(2), at: historyAt('created') },
+    { key: 'in_transit',   state: stepState(3), at: historyAt('with_courier') },
+    { key: 'delivered',    state: stepState(4), at: historyAt('delivered') },
+  ]
+}
+
+const STEP_LABEL_KEY: Record<StepKey, string> = {
+  created:      'orderDetail.stepper.created',
+  packed:       'orders.pipeline.packed',
+  with_courier: 'orders.pipeline.with_courier',
+  in_transit:   'status.in_transit',
+  delivered:    'orders.pipeline.delivered',
+}
+
+function StepDot({ state }: { state: StepState }) {
+  if (state === 'done') {
+    return (
+      <span className="w-5 h-5 rounded-full bg-success flex items-center justify-center flex-shrink-0">
+        <Check size={12} strokeWidth={3} className="text-white" />
+      </span>
+    )
+  }
+  if (state === 'current') {
+    return <span className="w-[22px] h-[22px] rounded-full bg-trace-blue shadow-ring-accent flex-shrink-0" />
+  }
+  return <span className="w-5 h-5 rounded-full border-2 border-line flex-shrink-0" />
+}
+
+function StatusStepper({ steps }: { steps: StepperStep[] }) {
+  const { t } = useTranslation()
+  return (
+    <div className="flex items-start px-1 py-2" data-testid="order-stepper">
+      {steps.map((step, i) => (
+        <div key={step.key} className="flex flex-col items-center flex-1">
+          <div className="flex items-center w-full">
+            <div className={cn('flex-1 h-0.5', i > 0 && steps[i - 1].state === 'done' ? 'bg-success' : 'bg-line')} />
+            <StepDot state={step.state} />
+            <div className={cn('flex-1 h-0.5', step.state === 'done' ? 'bg-success' : 'bg-line')} />
+          </div>
+          <div className="mt-1.5 text-center">
+            <div className={cn(
+              'text-caption font-medium',
+              step.state === 'current' ? 'text-trace-blue' : step.state === 'pending' ? 'text-muted' : 'text-primary',
+            )}>
+              {t(STEP_LABEL_KEY[step.key])}
+            </div>
+            {step.at && (
+              <div className="text-[10px] text-muted font-mono mt-0.5">
+                {new Date(step.at).toLocaleString()}
+              </div>
+            )}
+          </div>
+        </div>
+      ))}
     </div>
   )
 }

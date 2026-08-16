@@ -152,10 +152,14 @@
       "number": "Order #",
       "customer": "Customer",
       "status": "Status",
-      "cod": "COD",
-      "placedAt": "Placed",
+      "cod": "Amount",
+      "placedAt": "Date",
       "tracking": "Tracking"
     },
+    "sync": "Sync from Shopify",
+    "syncNoStore": "No store connected",
+    "syncSuccess": "Synced",
+    "syncError": "Sync failed",
     "pipeline": {
       "new": "New",
       "confirmed": "Confirmed",
@@ -181,6 +185,9 @@
   "orderDetail": {
     "title": "Order",
     "back": "← Back to Orders",
+    "stepper": {
+      "created": "Created"
+    },
     "customer": "Customer",
     "phone": "Phone",
     "address": "Address",
