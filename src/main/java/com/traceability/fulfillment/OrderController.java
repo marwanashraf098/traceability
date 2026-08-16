@@ -101,11 +101,17 @@ public class OrderController {
      *   Courier   — status.awaiting_courier, status.in_transit, status.label_created
      *   Delivered — status.delivered
      *
-     * status.label_created (progress_rank=1, i.e. shipment_internal_state='created') sits
-     * in Courier, not Packed: it means a shipment record already exists — past packing,
-     * AWB linked — and is waiting on physical courier pickup. That's the same "handoff
-     * imminent" meaning as order_status='awaiting_pickup' (already mapped to
-     * status.awaiting_courier, also Courier), not a packing-stage state.
+     * status.label_created / status.awaiting_courier (a shipment record exists, AWB linked)
+     * sit in Courier ONLY when OrderStatusDeriver.packedConfirmed is true — i.e. Traced's own
+     * order.status independently confirms packing happened, or the shipment has progressed
+     * far enough (courier physically holding it, or a non-cancelled terminal state) that
+     * packing is physically unavoidable. A shipment record existing is NOT, by itself, proof
+     * of packing — Mode-B webhook auto-match (ShipmentLinkService.tryMatchDelivery(),
+     * unguarded) can create that shipment row while the order is still pre-pack. When
+     * packedConfirmed is false, the order routes to New or Picking instead, by its own raw
+     * order.status — never counted as Courier while packing hasn't actually happened. See
+     * PROGRESS.md "Orders — status-split fix" for the full diagnosis (this comment previously
+     * asserted "past packing, AWB linked" unconditionally — that premise was disproven).
      *
      * Any other terminal/exception primaryKey (returning, returned, lost, cancelled,
      * delivery_failed, needs_attention, terminated) falls outside all 5 buckets and is
@@ -119,7 +125,9 @@ public class OrderController {
     @PreAuthorize("hasAnyRole('OWNER', 'MANAGER')")
     @Transactional(readOnly = true)
     public FunnelCounts funnel() {
-        List<String> primaryKeys = jdbc.query("""
+        record StatusRow(String orderStatus, OrderStatusDeriver.DerivedOrderStatus derived) {}
+
+        List<StatusRow> rows = jdbc.query("""
             SELECT o.status, o.not_traced_at,
                    s.internal_state            AS delivery_state,
                    COALESCE(s.failed_delivery_attempts, 0) AS failed_delivery_attempts,
@@ -156,9 +164,10 @@ public class OrderController {
               AND o.placed_at::date = CURRENT_DATE
             """,
             (rs, i) -> {
+                String orderStatus = rs.getString("status");
                 Timestamp notTracedAt = rs.getTimestamp("not_traced_at");
                 var derived = OrderStatusDeriver.derive(
-                    rs.getString("status"),
+                    orderStatus,
                     rs.getString("delivery_state"),
                     rs.getObject("max_progress_rank", Integer.class),
                     rs.getInt("number_of_attempts"),
@@ -167,11 +176,21 @@ public class OrderController {
                     rs.getObject("is_delayed", Boolean.class),
                     rs.getObject("sla_breached", Boolean.class),
                     notTracedAt != null);
-                return derived.primaryKey();
+                return new StatusRow(orderStatus, derived);
             });
 
         int newCount = 0, picking = 0, packed = 0, courier = 0, delivered = 0;
-        for (String primaryKey : primaryKeys) {
+        for (StatusRow row : rows) {
+            String primaryKey = row.derived().primaryKey();
+            boolean isCourierAwbState =
+                "status.awaiting_courier".equals(primaryKey) || "status.label_created".equals(primaryKey);
+            if (isCourierAwbState && !row.derived().packedConfirmed()) {
+                // A shipment record exists but packing hasn't actually happened yet (the
+                // Mode-B early-webhook-match case) — route by the order's own raw status,
+                // same as an order with no shipment at all would be, not into Courier.
+                if ("picking".equals(row.orderStatus())) picking++; else newCount++;
+                continue;
+            }
             switch (primaryKey) {
                 case "status.new", "status.confirmed", "status.ready_to_pick" -> newCount++;
                 case "status.picking" -> picking++;
@@ -197,20 +216,24 @@ public class OrderController {
      *
      * Bucket mapping mirrors funnel()'s grouping exactly (kept in sync manually — if funnel()'s
      * buckets ever change, this must change with it):
-     *   Processing   — status.new, status.confirmed, status.ready_to_pick, status.picking, status.packed
-     *   With courier — status.awaiting_courier, status.in_transit, status.label_created
+     *   Processing   — status.new, status.confirmed, status.ready_to_pick, status.picking, status.packed,
+     *                  AND status.awaiting_courier/status.label_created when packedConfirmed is false
+     *                  (a shipment record exists but packing hasn't actually happened yet — see below)
+     *   With courier — status.awaiting_courier, status.in_transit, status.label_created, ONLY when
+     *                  OrderStatusDeriver.packedConfirmed is true
      *   Delivered    — status.delivered
      *   Returned     — status.returned only (terminal). status.returning (in-progress) is
      *                  deliberately left uncounted.
      *
+     * A shipment record existing (label_created/awaiting_courier) is NOT, by itself, proof
+     * packing happened — Mode-B webhook auto-match (ShipmentLinkService.tryMatchDelivery(),
+     * unguarded) can create that shipment row while the order is still pre-pack. Counting it as
+     * "With courier" would overstate how many orders have actually left the warehouse. See
+     * PROGRESS.md "Orders — status-split fix" for the full diagnosis.
+     *
      * The four breakdown buckets intentionally do not sum to `total` — cancelled, lost, terminated,
      * needs_attention, delivery_failed, self_pickup_pending, and returning are uncounted by design,
      * exactly like funnel() already leaves several primaryKeys outside its 5 buckets. Not a bug.
-     *
-     * SLICE-1 DEPENDENCY: the Processing/With-courier boundary (packed vs label_created) inherits
-     * today's not-yet-corrected ordering between those two states (see the Orders status-split
-     * diagnosis in PROGRESS.md). When that reorder lands, this bucketing — and funnel()'s identical
-     * boundary — both need to move together.
      *
      * Scale note: unlike funnel(), this has no date filter — every order the tenant has ever placed
      * gets pulled into Java for per-row derivation. Fine at pilot volume; would need a materialized/
@@ -220,7 +243,7 @@ public class OrderController {
     @PreAuthorize("hasAnyRole('OWNER', 'MANAGER')")
     @Transactional(readOnly = true)
     public OrderSummaryCounts summary() {
-        List<String> primaryKeys = jdbc.query("""
+        List<OrderStatusDeriver.DerivedOrderStatus> rows = jdbc.query("""
             SELECT o.status, o.not_traced_at,
                    s.internal_state            AS delivery_state,
                    COALESCE(s.failed_delivery_attempts, 0) AS failed_delivery_attempts,
@@ -257,7 +280,7 @@ public class OrderController {
             """,
             (rs, i) -> {
                 Timestamp notTracedAt = rs.getTimestamp("not_traced_at");
-                var derived = OrderStatusDeriver.derive(
+                return OrderStatusDeriver.derive(
                     rs.getString("status"),
                     rs.getString("delivery_state"),
                     rs.getObject("max_progress_rank", Integer.class),
@@ -267,11 +290,20 @@ public class OrderController {
                     rs.getObject("is_delayed", Boolean.class),
                     rs.getObject("sla_breached", Boolean.class),
                     notTracedAt != null);
-                return derived.primaryKey();
             });
 
         int processing = 0, withCourier = 0, delivered = 0, returned = 0;
-        for (String primaryKey : primaryKeys) {
+        for (OrderStatusDeriver.DerivedOrderStatus derived : rows) {
+            String primaryKey = derived.primaryKey();
+            boolean isCourierAwbState =
+                "status.awaiting_courier".equals(primaryKey) || "status.label_created".equals(primaryKey);
+            if (isCourierAwbState && !derived.packedConfirmed()) {
+                // A shipment record exists but packing hasn't actually happened yet — Processing
+                // is already one merged bucket, so no need to distinguish which raw pre-pack
+                // status it's really at (unlike funnel()'s finer-grained New/Picking split).
+                processing++;
+                continue;
+            }
             switch (primaryKey) {
                 case "status.new", "status.confirmed", "status.ready_to_pick",
                      "status.picking", "status.packed" -> processing++;
@@ -282,7 +314,7 @@ public class OrderController {
                                 self_pickup_pending/returning — intentionally uncounted */ }
             }
         }
-        return new OrderSummaryCounts(primaryKeys.size(), processing, withCourier, delivered, returned);
+        return new OrderSummaryCounts(rows.size(), processing, withCourier, delivered, returned);
     }
 
     // ── daily order counts (dashboard chart) ────────────────────────────────

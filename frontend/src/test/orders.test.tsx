@@ -44,6 +44,7 @@ function makeDerivedStatus(overrides: Partial<DerivedOrderStatus> = {}): Derived
     historicalNote: null,
     conflictKey: null,
     notTraced: false,
+    packedConfirmed: false,
     ...overrides,
   }
 }
@@ -386,17 +387,88 @@ describe('Order status stepper', () => {
   })
 
   test('delivery_failed splits by shipment internalState onto the correct rank (not suppressed)', () => {
+    // Status-split fix: at internalState='created' with the fixture's default order.status
+    // ('new'), a failed attempt this early does NOT prove packing happened (it can be a
+    // failed PICKUP attempt — courier came before the order was ready) — Packed correctly
+    // shows 'pending', not 'done'. This is a genuine behavior correction from the fix, not a
+    // relaxed assertion: the step2 dot is still 'current' at the shipment's real rank, exactly
+    // as before — only step1's honesty changed.
     const atCreated = makeOrderDetail({
       derivedStatus: makeDerivedStatus({ primaryKey: 'status.delivery_failed' }),
       shipments: [makeShipment({ internalState: 'created', failedDeliveryAttempts: 1 })],
     })
-    expect(computeStepperSteps(atCreated)!.map(s => s.state)).toEqual(['done', 'done', 'current', 'pending', 'pending'])
+    expect(computeStepperSteps(atCreated)!.map(s => s.state)).toEqual(['done', 'pending', 'current', 'pending', 'pending'])
 
+    // At internalState='with_courier', the courier physically holding the parcel IS proof
+    // packing happened, regardless of order.status — Packed correctly shows 'done'.
     const atWithCourier = makeOrderDetail({
       derivedStatus: makeDerivedStatus({ primaryKey: 'status.delivery_failed' }),
       shipments: [makeShipment({ internalState: 'with_courier', failedDeliveryAttempts: 1 })],
     })
     expect(computeStepperSteps(atWithCourier)!.map(s => s.state)).toEqual(['done', 'done', 'done', 'current', 'pending'])
+  })
+
+  // ── Slice 1 (status-split fix): packedReached ───────────────────────────────
+  // Each of these is a tripwire — prove it fails first by reverting packedReached to the
+  // old `stepState(1)` (i.e. `1 < currentIndex`), then restore.
+
+  test('SLICE1(a) — webhook-matched never-packed order: Packed not done, With-courier lit, grey line between', () => {
+    // The core bug this fix targets: a shipment exists at label_created (rank 1) while
+    // order.status is still pre-pack ('picking') — ShipmentLinkService.tryMatchDelivery()'s
+    // guarded packed->awaiting_pickup flip is a documented no-op here since packing never
+    // happened. No phantom "Packed" checkmark.
+    const order = makeOrderDetail({
+      status: 'picking',
+      derivedStatus: makeDerivedStatus({ primaryKey: 'status.label_created' }),
+      shipments: [makeShipment({ internalState: 'created' })],
+    })
+    const steps = computeStepperSteps(order)!
+    expect(steps.map(s => s.state)).toEqual(['done', 'pending', 'current', 'pending', 'pending'])
+    expect(steps[1].key).toBe('packed')
+    expect(steps[2].key).toBe('with_courier')
+  })
+
+  test('SLICE1(b) — packer-first order (order.status="packed"): Packed done, even with no shipment yet', () => {
+    // The normal, gated linkByAwbScan() flow: order.status reaches 'packed' before any
+    // shipment exists.
+    const order = makeOrderDetail({
+      status: 'packed',
+      derivedStatus: makeDerivedStatus({ primaryKey: 'status.packed' }),
+      shipments: [],
+    })
+    expect(computeStepperSteps(order)!.map(s => s.state)).toEqual(['done', 'done', 'pending', 'pending', 'pending'])
+  })
+
+  test('SLICE1(c) — courier physically holding the parcel proves packing, even with order.status stuck pre-pack', () => {
+    // order.status never reached 'packed' in Traced's own record (the guarded flip to
+    // awaiting_pickup only fires once, at shipment-creation time — not on every later
+    // shipment progression) — but the courier holding the parcel is unambiguous physical
+    // proof packing happened.
+    const order = makeOrderDetail({
+      status: 'picking',
+      derivedStatus: makeDerivedStatus({ primaryKey: 'status.in_transit' }),
+      shipments: [makeShipment({ internalState: 'with_courier' })],
+    })
+    expect(computeStepperSteps(order)!.map(s => s.state)).toEqual(['done', 'done', 'done', 'current', 'pending'])
+  })
+
+  test('SLICE1(d) — a shipment-cancelled order never reaches the frontend "Packed not done" branch at all, because it is fully suppressed', () => {
+    // Any forward shipment reaching internal_state='cancelled' is a TERMINAL_STATES member,
+    // so OrderStatusDeriver.derive() always produces primaryKey='status.cancelled' for it,
+    // regardless of order.status — and 'status.cancelled' is already in STEPPER_SUPPRESS_KEYS.
+    // So on the frontend, "cancelled is not proof of packing" is moot by construction: there is
+    // no reachable non-suppressed primaryKey for a shipment-cancelled order to test packedReached
+    // against. The exclusion is real and load-bearing on the BACKEND (funnel()/summary()'s
+    // packedConfirmed, `terminal && !"cancelled".equals(shipmentInternalState)`), where it's
+    // covered by OrderStatusListDetailParityTest.slice1_cancelledShipment_notProofOfPacking_
+    // packedConfirmedFalse — asserting the frontend suppression here instead of an unreachable,
+    // fabricated primaryKey/shipment-state combination.
+    const order = makeOrderDetail({
+      status: 'picking',
+      derivedStatus: makeDerivedStatus({ primaryKey: 'status.cancelled' }),
+      shipments: [makeShipment({ internalState: 'cancelled' })],
+    })
+    expect(computeStepperSteps(order)).toBeNull()
   })
 
   // ── Tripwire 1 ──

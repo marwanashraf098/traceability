@@ -44,7 +44,19 @@ public final class OrderStatusDeriver {
         List<Chip> healthChips,
         HistoricalNote historicalNote,
         String conflictKey,
-        boolean notTraced
+        boolean notTraced,
+        // Slice 1 (status-split fix) — purely additive, does not affect primaryKey/tone/chips/
+        // conflictKey/notTraced in any way. `shipmentInternalState` reaching a rank (progress_rank
+        // 1, i.e. 'created'/label_created) is NOT proof packing happened — Mode-B webhook
+        // auto-match (ShipmentLinkService.tryMatchDelivery(), unguarded) can create that shipment
+        // row while the order is still pre-pack. packedConfirmed is true only when either Traced's
+        // own order.status independently confirms packing, or the shipment has progressed far
+        // enough (courier physically holding it, or a non-cancelled terminal state) that packing
+        // is physically unavoidable. See PROGRESS.md "Orders — status-split fix" for the full
+        // diagnosis. Consumed by funnel()/summary() to stop miscounting never-packed orders as
+        // "past packing" (Courier/With courier); the frontend stepper computes its own equivalent
+        // signal independently from already-fetched OrderDetail fields, not from this field.
+        boolean packedConfirmed
     ) {}
 
     // ── progress_rank ladder ─────────────────────────────────────────────────
@@ -294,8 +306,21 @@ public final class OrderStatusDeriver {
 
         String conflictKey = computeConflictKey(orderCancelled, shipmentLinked, shipmentInternalState);
 
-        return new DerivedOrderStatus(primaryKey, tone, chips, note, conflictKey, notTraced);
+        // Slice 1 — see the record's own doc comment. Computed unconditionally, independent of
+        // which primaryKey branch fired above, from inputs this method already receives — no new
+        // parameters, no new SQL columns, no migration.
+        boolean packedConfirmed =
+               PACKED_OR_LATER_STATUSES.contains(orderStatus)
+            || (maxProgressRank != null && maxProgressRank >= 2)
+            || (terminal && !"cancelled".equals(shipmentInternalState));
+
+        return new DerivedOrderStatus(primaryKey, tone, chips, note, conflictKey, notTraced, packedConfirmed);
     }
+
+    // packed/awaiting_pickup/with_courier/delivered — order.status values that can only be
+    // reached after FulfillService.complete()'s scan-gated pack event has fired.
+    private static final Set<String> PACKED_OR_LATER_STATUSES =
+        Set.of("packed", "awaiting_pickup", "with_courier", "delivered");
 
     /**
      * A3 — cancelled orders only. Read-only display signal; does not create an exception

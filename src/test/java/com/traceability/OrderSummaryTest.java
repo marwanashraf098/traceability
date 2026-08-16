@@ -2,6 +2,7 @@ package com.traceability;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.traceability.fulfillment.OrderController;
+import com.traceability.fulfillment.OrderController.FunnelCounts;
 import com.traceability.fulfillment.OrderController.OrderSummaryCounts;
 import com.traceability.tenancy.TenantAwareDataSource;
 import com.traceability.tenancy.TenantContext;
@@ -194,6 +195,64 @@ class OrderSummaryTest {
         long breakdownSum = counts.processing() + counts.withCourier() + counts.delivered() + counts.returned();
         assertThat(counts.total()).as("total must exceed the sum of the 4 breakdown buckets")
             .isGreaterThan(breakdownSum);
+    }
+
+    // ── Slice 1 (status-split fix): never-packed webhook-matched order ─────────
+    // reclassification tripwire — the merchant-facing miscount this whole fix targets.
+
+    @Test
+    void summary_neverPackedWebhookMatchedOrder_countsAsProcessing_notWithCourier() {
+        UUID reclassTenantId = UUID.randomUUID();
+        UUID reclassStoreId  = UUID.randomUUID();
+        jdbc.update("INSERT INTO tenants (id, name) VALUES (?, 'SummaryReclassTenant')", reclassTenantId);
+        jdbc.update("INSERT INTO stores (id, tenant_id, platform, shop_domain, status) " +
+                    "VALUES (?, ?, 'shopify', 'summary-reclass-test.myshopify.com', 'connected')",
+                    reclassStoreId, reclassTenantId);
+
+        // Mode-B webhook auto-match: shipment exists at label_created while order.status is
+        // still 'picking' — packing has NOT happened. Before this fix, this order counted as
+        // "With courier" (a shipment record existing was wrongly treated as proof of packing).
+        UUID orderId = insertOrder(reclassTenantId, reclassStoreId, "RECLASS-EARLY-MATCH", "picking");
+        insertForwardShipment(reclassTenantId, orderId, "RECLASS-TRK-1", "created");
+
+        TenantContext.set(reclassTenantId);
+        OrderSummaryCounts counts;
+        try {
+            counts = tx.execute(status -> controller.summary());
+        } finally {
+            TenantContext.set(tenantId);
+        }
+
+        assertThat(counts.processing()).as("never-packed order must count as Processing").isEqualTo(1);
+        assertThat(counts.withCourier()).as("never-packed order must NOT count as With courier").isEqualTo(0);
+    }
+
+    @Test
+    void funnel_neverPackedWebhookMatchedOrder_countsAsPicking_notCourier() {
+        UUID reclassTenantId = UUID.randomUUID();
+        UUID reclassStoreId  = UUID.randomUUID();
+        jdbc.update("INSERT INTO tenants (id, name) VALUES (?, 'FunnelReclassTenant')", reclassTenantId);
+        jdbc.update("INSERT INTO stores (id, tenant_id, platform, shop_domain, status) " +
+                    "VALUES (?, ?, 'shopify', 'funnel-reclass-test.myshopify.com', 'connected')",
+                    reclassStoreId, reclassTenantId);
+
+        // Same shape as the summary test above, routed through funnel() instead (today-scoped —
+        // insertOrder() already sets placed_at=now(), so this order is in scope). Routes by its
+        // own raw order.status ('picking') rather than a merged Processing bucket, since funnel()
+        // keeps New/Picking/Packed as separate buckets.
+        UUID orderId = insertOrder(reclassTenantId, reclassStoreId, "RECLASS-FUNNEL-1", "picking");
+        insertForwardShipment(reclassTenantId, orderId, "RECLASS-FUNNEL-TRK-1", "created");
+
+        TenantContext.set(reclassTenantId);
+        FunnelCounts counts;
+        try {
+            counts = tx.execute(status -> controller.funnel());
+        } finally {
+            TenantContext.set(tenantId);
+        }
+
+        assertThat(counts.picking()).as("never-packed order must count as Picking (its own raw status)").isEqualTo(1);
+        assertThat(counts.courier()).as("never-packed order must NOT count as Courier").isEqualTo(0);
     }
 
     // ── RLS ──────────────────────────────────────────────────────────────────

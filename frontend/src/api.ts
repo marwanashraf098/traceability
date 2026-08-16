@@ -95,6 +95,11 @@ export interface DerivedOrderStatus {
   historicalNote: DerivedHistoricalNote | null
   conflictKey: string | null
   notTraced: boolean
+  // Status-split fix — a shipment existing is not proof packing happened (see
+  // OrderStatusDeriver.packedConfirmed doc comment on the backend). Not consumed by the
+  // stepper (OrderDetail.tsx computes its own equivalent client-side from already-fetched
+  // fields) — included here for wire-contract completeness.
+  packedConfirmed: boolean
 }
 
 export interface OrderSummary {

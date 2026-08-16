@@ -200,6 +200,69 @@ class OrderStatusListDetailParityTest {
         assertParity(orderId);
     }
 
+    // ── Slice 1 (status-split fix): packedConfirmed, through the real DB-wired path ─────
+
+    @Test
+    void slice1_webhookEarlyMatch_shipmentLinkedButOrderNeverPacked_packedConfirmedFalse_listAndDetailAgree() {
+        // Mode-B webhook auto-match: shipment exists at label_created (rank 1) while
+        // order.status is still pre-pack — ShipmentLinkService.tryMatchDelivery()'s guarded
+        // "UPDATE ... WHERE status='packed'" is a documented no-op here since packing hasn't
+        // happened. packedConfirmed must be false — this is the exact phantom-progress shape.
+        UUID orderId = insertOrder("SLICE1-EARLY-MATCH", "picking");
+        insertForwardShipment(orderId, "9810234591", "created", 0, 0);
+
+        OrderDetail detail = controller.detail(orderId);
+        assertThat(detail.derivedStatus().primaryKey()).isEqualTo("status.label_created");
+        assertThat(detail.derivedStatus().packedConfirmed())
+            .as("a shipment record existing is not proof packing happened")
+            .isFalse();
+
+        assertParity(orderId);
+    }
+
+    @Test
+    void slice1_packerFirst_orderStatusPacked_packedConfirmedTrue_evenWithoutShipmentYet() {
+        // The normal, gated linkByAwbScan() flow: order.status reaches 'packed' before any
+        // shipment exists. packedConfirmed must be true from order.status alone.
+        UUID orderId = insertOrder("SLICE1-PACKED-NO-SHIP", "packed");
+
+        OrderDetail detail = controller.detail(orderId);
+        assertThat(detail.derivedStatus().packedConfirmed()).isTrue();
+
+        assertParity(orderId);
+    }
+
+    @Test
+    void slice1_courierHolding_orderStatusStuckPrePack_packedConfirmedTrueViaShipmentRank() {
+        // Physical proof branch: the courier holding the parcel (rank>=2) proves packing
+        // happened even if Traced's own order.status never got updated (e.g. it stayed at
+        // 'picking' because the guarded packed->awaiting_pickup flip only fires once, at
+        // shipment-creation time, not on every later shipment progression).
+        UUID orderId = insertOrder("SLICE1-COURIER-HOLDING", "picking");
+        insertForwardShipment(orderId, "9810234592", "with_courier", 0, 0);
+
+        OrderDetail detail = controller.detail(orderId);
+        assertThat(detail.derivedStatus().primaryKey()).isEqualTo("status.in_transit");
+        assertThat(detail.derivedStatus().packedConfirmed()).isTrue();
+
+        assertParity(orderId);
+    }
+
+    @Test
+    void slice1_cancelledShipment_notProofOfPacking_packedConfirmedFalse() {
+        // A Bosta-side cancel is explicitly excluded from the terminal-implies-packed branch —
+        // a shipment can be cancelled before ever being physically handed over.
+        UUID orderId = insertOrder("SLICE1-CANCELLED-SHIP", "picking");
+        insertForwardShipment(orderId, "9810234593", "cancelled", 0, 0);
+
+        OrderDetail detail = controller.detail(orderId);
+        assertThat(detail.derivedStatus().packedConfirmed())
+            .as("a Bosta-side shipment cancellation is not proof packing happened")
+            .isFalse();
+
+        assertParity(orderId);
+    }
+
     // ── A3: cancelled-order conflict flag, through the real DB-wired path ──────
 
     @Test

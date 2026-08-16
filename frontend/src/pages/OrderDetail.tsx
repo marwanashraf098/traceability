@@ -384,9 +384,32 @@ export function computeStepperSteps(order: IOrderDetail): StepperStep[] | null {
   const historyAt = (state: string): string | null =>
     forward?.deliveryHistory.find(e => e.state === state)?.occurredAt ?? null
 
+  // Status-split fix — a shipment existing (primaryKey reaching label_created/in_transit/etc.)
+  // is NOT proof packing happened: Mode-B webhook auto-match (ShipmentLinkService.
+  // tryMatchDelivery(), unguarded) can create that shipment row while the order is still
+  // pre-pack. Packed's done-ness is computed independently of the shipment-derived
+  // currentIndex above, from two honest signals: Traced's own order.status confirming
+  // FulfillService.complete() ran, or the shipment having progressed far enough (courier
+  // physically holding it, or a non-cancelled terminal state) that packing is physically
+  // unavoidable — mirrors OrderStatusDeriver.packedConfirmed() exactly, computed client-side
+  // from fields already on OrderDetail (no new fetch).
+  const packedReached =
+       (['packed', 'awaiting_pickup', 'with_courier', 'delivered'] as string[]).includes(order.status)
+    || primaryKey === 'status.in_transit'
+    || primaryKey === 'status.delivered'
+    || (primaryKey === 'status.delivery_failed' && forward?.internalState === 'with_courier')
+
+  // 'current' only when nothing has moved on either axis yet (no shipment, not packed) — the
+  // plain "still in our warehouse" case. Once a shipment exists but packing hasn't happened,
+  // Packed is 'pending' (not done, not current) — an honest hollow dot that can sit to the
+  // left of an already-lit shipment step. That's a deliberate, approved rendering shape, not
+  // a bug: the connecting line into that shipment step (steps[1].state === 'done' check in
+  // StatusStepper) will correctly render unfilled in that case.
+  const packedState: StepState = packedReached ? 'done' : (forward === null ? 'current' : 'pending')
+
   return [
     { key: 'created',      state: stepState(0), at: order.placedAt ?? order.createdAt },
-    { key: 'packed',       state: stepState(1), at: null }, // no packed_at anywhere — marker only
+    { key: 'packed',       state: packedState,  at: null }, // no packed_at anywhere — marker only
     { key: 'with_courier', state: stepState(2), at: historyAt('created') },
     { key: 'in_transit',   state: stepState(3), at: historyAt('with_courier') },
     { key: 'delivered',    state: stepState(4), at: historyAt('delivered') },
