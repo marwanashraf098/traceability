@@ -160,6 +160,10 @@
     "syncNoStore": "لا يوجد متجر مربوط",
     "syncSuccess": "تمت المزامنة",
     "syncError": "فشلت المزامنة",
+    "summary": {
+      "total": "الإجمالي",
+      "processing": "قيد المعالجة"
+    },
     "pipeline": {
       "new": "جديد",
       "confirmed": "مؤكد",

@@ -160,6 +160,10 @@
     "syncNoStore": "No store connected",
     "syncSuccess": "Synced",
     "syncError": "Sync failed",
+    "summary": {
+      "total": "Total",
+      "processing": "Processing"
+    },
     "pipeline": {
       "new": "New",
       "confirmed": "Confirmed",

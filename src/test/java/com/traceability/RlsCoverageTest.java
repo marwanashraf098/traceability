@@ -98,6 +98,7 @@ class RlsCoverageTest {
             "/api/v1/inventory/status-totals",
             "/api/v1/inventory/valuation",
             "/api/v1/orders/funnel",
+            "/api/v1/orders/summary",
             "/api/v1/inventory/throughput",
             "/api/v1/activity/recent"
     );
@@ -412,6 +413,21 @@ class RlsCoverageTest {
         ResponseEntity<Map> resp = get("/api/v1/orders/funnel", Map.class);
         assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.OK);
         assertThat(((Number) resp.getBody().get("newCount")).intValue()).isGreaterThanOrEqualTo(1);
+    }
+
+    @Test
+    void ordersSummary_reflectsSeededOrders() {
+        jdbc.update(
+            "INSERT INTO orders (tenant_id, store_id, external_id, number, status, " +
+            "    payment_method, placed_at, on_hold) " +
+            "VALUES (?, ?, 'EXT-CVG-SUMMARY', '#CVG-SUMMARY', 'new'::order_status, " +
+            "    'cod', now(), false)",
+            tenantId, storeId);
+
+        ResponseEntity<Map> resp = get("/api/v1/orders/summary", Map.class);
+        assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(((Number) resp.getBody().get("total")).longValue()).isGreaterThanOrEqualTo(1);
+        assertThat(((Number) resp.getBody().get("processing")).intValue()).isGreaterThanOrEqualTo(1);
     }
 
     @Test

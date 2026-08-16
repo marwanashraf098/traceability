@@ -184,6 +184,107 @@ public class OrderController {
         return new FunnelCounts(newCount, picking, packed, courier, delivered);
     }
 
+    // ── orders summary — all-time, 5-tile calm row (Orders list) ────────────
+
+    public record OrderSummaryCounts(long total, int processing, int withCourier, int delivered, int returned) {}
+
+    /**
+     * GET /orders/summary — reuses the exact raw-row shape funnel()/list() already select,
+     * calling OrderStatusDeriver.derive() per row in Java — the SAME single source of truth,
+     * never a second derivation. Unlike funnel() (today-scoped), this covers ALL of the
+     * tenant's orders — the "how's my order book doing overall" row cut from the original
+     * Orders redesign for lack of an honest data source (see PROGRESS.md "Orders screen restyle").
+     *
+     * Bucket mapping mirrors funnel()'s grouping exactly (kept in sync manually — if funnel()'s
+     * buckets ever change, this must change with it):
+     *   Processing   — status.new, status.confirmed, status.ready_to_pick, status.picking, status.packed
+     *   With courier — status.awaiting_courier, status.in_transit, status.label_created
+     *   Delivered    — status.delivered
+     *   Returned     — status.returned only (terminal). status.returning (in-progress) is
+     *                  deliberately left uncounted.
+     *
+     * The four breakdown buckets intentionally do not sum to `total` — cancelled, lost, terminated,
+     * needs_attention, delivery_failed, self_pickup_pending, and returning are uncounted by design,
+     * exactly like funnel() already leaves several primaryKeys outside its 5 buckets. Not a bug.
+     *
+     * SLICE-1 DEPENDENCY: the Processing/With-courier boundary (packed vs label_created) inherits
+     * today's not-yet-corrected ordering between those two states (see the Orders status-split
+     * diagnosis in PROGRESS.md). When that reorder lands, this bucketing — and funnel()'s identical
+     * boundary — both need to move together.
+     *
+     * Scale note: unlike funnel(), this has no date filter — every order the tenant has ever placed
+     * gets pulled into Java for per-row derivation. Fine at pilot volume; would need a materialized/
+     * cached count if order volume grows into the tens of thousands. Not pre-optimized here.
+     */
+    @GetMapping("/summary")
+    @PreAuthorize("hasAnyRole('OWNER', 'MANAGER')")
+    @Transactional(readOnly = true)
+    public OrderSummaryCounts summary() {
+        List<String> primaryKeys = jdbc.query("""
+            SELECT o.status, o.not_traced_at,
+                   s.internal_state            AS delivery_state,
+                   COALESCE(s.failed_delivery_attempts, 0) AS failed_delivery_attempts,
+                   COALESCE(s.number_of_attempts, 0)       AS number_of_attempts,
+                   s.exception_code, s.is_delayed, s.sla_breached,
+                   s.max_progress_rank
+            FROM orders o
+            LEFT JOIN LATERAL (
+                SELECT internal_state, failed_delivery_attempts, number_of_attempts,
+                       exception_code, is_delayed, sla_breached,
+                       COALESCE(
+                           (SELECT MAX(CASE h.internal_state
+                                       WHEN 'created'      THEN 1
+                                       WHEN 'with_courier'  THEN 2
+                                       WHEN 'returning'     THEN 3
+                                       WHEN 'exception'     THEN 0
+                                   END)
+                            FROM shipment_status_history h
+                            WHERE h.shipment_id = sh.id),
+                           CASE sh.internal_state
+                               WHEN 'created'      THEN 1
+                               WHEN 'with_courier'  THEN 2
+                               WHEN 'returning'     THEN 3
+                               WHEN 'exception'     THEN 0
+                           END
+                       ) AS max_progress_rank
+                FROM shipments sh
+                WHERE order_id = o.id AND tenant_id = o.tenant_id
+                  AND shipment_leg = 'forward'
+                ORDER BY created_at DESC, id DESC
+                LIMIT 1
+            ) s ON true
+            WHERE o.tenant_id = NULLIF(current_setting('app.current_tenant', true), '')::uuid
+            """,
+            (rs, i) -> {
+                Timestamp notTracedAt = rs.getTimestamp("not_traced_at");
+                var derived = OrderStatusDeriver.derive(
+                    rs.getString("status"),
+                    rs.getString("delivery_state"),
+                    rs.getObject("max_progress_rank", Integer.class),
+                    rs.getInt("number_of_attempts"),
+                    rs.getInt("failed_delivery_attempts"),
+                    rs.getObject("exception_code", Integer.class),
+                    rs.getObject("is_delayed", Boolean.class),
+                    rs.getObject("sla_breached", Boolean.class),
+                    notTracedAt != null);
+                return derived.primaryKey();
+            });
+
+        int processing = 0, withCourier = 0, delivered = 0, returned = 0;
+        for (String primaryKey : primaryKeys) {
+            switch (primaryKey) {
+                case "status.new", "status.confirmed", "status.ready_to_pick",
+                     "status.picking", "status.packed" -> processing++;
+                case "status.awaiting_courier", "status.in_transit", "status.label_created" -> withCourier++;
+                case "status.delivered" -> delivered++;
+                case "status.returned" -> returned++;
+                default -> { /* cancelled/lost/terminated/needs_attention/delivery_failed/
+                                self_pickup_pending/returning — intentionally uncounted */ }
+            }
+        }
+        return new OrderSummaryCounts(primaryKeys.size(), processing, withCourier, delivered, returned);
+    }
+
     // ── daily order counts (dashboard chart) ────────────────────────────────
 
     public record DayCount(String date, int count) {}

@@ -1,10 +1,10 @@
 import { useEffect, useState, useCallback } from 'react'
 import { Link } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
-import { listOrders, OrderPage, listShopifyStores, syncShopifyStore } from '../api'
+import { listOrders, OrderPage, listShopifyStores, syncShopifyStore, getOrdersSummary, OrderSummaryCounts } from '../api'
 import {
   Alert, Badge, Button, DataTable, type DataTableColumn,
-  EmptyState, OrderStatus, TableSkeleton,
+  EmptyState, OrderStatus, StatCard, TableSkeleton,
 } from '../components/ui'
 
 const ORDER_STATUSES = [
@@ -29,6 +29,13 @@ export default function Orders() {
   const [error,    setError]    = useState('')
   const [syncing,  setSyncing]  = useState(false)
   const [syncMsg,  setSyncMsg]  = useState('')
+  const [summary,  setSummary]  = useState<OrderSummaryCounts | null>(null)
+
+  // Independent, non-blocking — a failure here must never affect the table below (no
+  // shared error state), and there's simply no tile row while it's unset.
+  useEffect(() => {
+    getOrdersSummary().then(setSummary).catch(() => {})
+  }, [])
 
   const fetchOrders = useCallback(async () => {
     setLoading(true)
@@ -166,6 +173,17 @@ export default function Orders() {
           </Button>
         </div>
       </div>
+
+      {/* Summary tile row — calm, independent of the table's own loading/error state */}
+      {summary && (
+        <div className="grid grid-cols-5 gap-3" data-testid="orders-summary">
+          <StatCard label={t('orders.summary.total')}      value={summary.total} />
+          <StatCard label={t('orders.summary.processing')} value={summary.processing} />
+          <StatCard label={t('orders.pipeline.with_courier')} value={summary.withCourier} />
+          <StatCard label={t('orders.pipeline.delivered')} value={summary.delivered} />
+          <StatCard label={t('orders.pipeline.returned')}  value={summary.returned} />
+        </div>
+      )}
 
       {/* Filter bar — raw inputs keep .input class; Input component can't hold fixed width without wrapper */}
       <div className="flex flex-wrap gap-2">

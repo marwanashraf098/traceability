@@ -709,6 +709,20 @@ export function getOrdersFunnel() {
   return request<FunnelCounts>('/orders/funnel')
 }
 
+// All-time orders summary (Orders list tile row) — bucketed server-side via the SAME
+// OrderStatusDeriver every other order-status surface uses. Never re-derive this client-side.
+export interface OrderSummaryCounts {
+  total: number
+  processing: number
+  withCourier: number
+  delivered: number
+  returned: number
+}
+
+export function getOrdersSummary() {
+  return request<OrderSummaryCounts>('/orders/summary')
+}
+
 // Throughput — fixed 30d window (received vs handed-to-courier), from piece_events.
 export interface ThroughputDay {
   date: string

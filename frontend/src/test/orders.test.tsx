@@ -1,13 +1,14 @@
 import { test, expect, describe, vi, beforeEach, afterEach } from 'vitest'
 import userEvent from '@testing-library/user-event'
 import { Routes, Route } from 'react-router-dom'
-import { renderWithProviders, screen, waitFor } from './renderWithProviders'
+import { renderWithProviders, screen, waitFor, within } from './renderWithProviders'
 import { stubFetchWithShellDefaults } from './mockShellFetch'
 import Layout from '../components/Layout'
 import Orders from '../pages/Orders'
 import OrderDetail, { computeStepperSteps } from '../pages/OrderDetail'
 import type {
   OrderPage, OrderSummary, OrderDetail as IOrderDetail, ShipmentDetail, DerivedOrderStatus,
+  OrderSummaryCounts,
 } from '../api'
 
 // ── fetch fakes — shapes mirror api.ts's request() contract exactly ────────────
@@ -72,6 +73,10 @@ function makeOrderSummary(overrides: Partial<OrderSummary> = {}): OrderSummary {
 
 function makeOrderPage(items: OrderSummary[], overrides: Partial<OrderPage> = {}): OrderPage {
   return { items, page: 0, size: 20, total: items.length, ...overrides }
+}
+
+function makeOrderSummaryCounts(overrides: Partial<OrderSummaryCounts> = {}): OrderSummaryCounts {
+  return { total: 3, processing: 1, withCourier: 1, delivered: 1, returned: 0, ...overrides }
 }
 
 function makeShipment(overrides: Partial<ShipmentDetail> = {}): ShipmentDetail {
@@ -156,6 +161,7 @@ describe('Orders list', () => {
   test('loading state renders the table skeleton', async () => {
     const appFetch = vi.fn((url: string) => {
       if (url.includes('/orders?')) return new Promise(() => {}) // never resolves
+      if (url.includes('/orders/summary')) return jsonOk(makeOrderSummaryCounts())
       return jsonOk({})
     })
     renderOrdersList(appFetch)
@@ -166,6 +172,7 @@ describe('Orders list', () => {
   test('empty state shows the sync CTA, not a bare table', async () => {
     const appFetch = vi.fn((url: string) => {
       if (url.includes('/orders?')) return jsonOk(makeOrderPage([]))
+      if (url.includes('/orders/summary')) return jsonOk(makeOrderSummaryCounts())
       return jsonOk({})
     })
     renderOrdersList(appFetch)
@@ -176,6 +183,7 @@ describe('Orders list', () => {
   test('error state shows an Alert card, not a bare table', async () => {
     const appFetch = vi.fn((url: string) => {
       if (url.includes('/orders?')) return jsonErr()
+      if (url.includes('/orders/summary')) return jsonOk(makeOrderSummaryCounts())
       return jsonOk({})
     })
     renderOrdersList(appFetch)
@@ -186,6 +194,7 @@ describe('Orders list', () => {
   test('loaded state renders rows with codAmount-only Amount cell — no payment sub-line', async () => {
     const appFetch = vi.fn((url: string) => {
       if (url.includes('/orders?')) return jsonOk(makeOrderPage([makeOrderSummary()]))
+      if (url.includes('/orders/summary')) return jsonOk(makeOrderSummaryCounts())
       return jsonOk({})
     })
     renderOrdersList(appFetch)
@@ -200,6 +209,7 @@ describe('Orders list', () => {
   test('status filter re-fetches with the selected status', async () => {
     const appFetch = vi.fn((url: string) => {
       if (url.includes('/orders?')) return jsonOk(makeOrderPage([makeOrderSummary()]))
+      if (url.includes('/orders/summary')) return jsonOk(makeOrderSummaryCounts())
       return jsonOk({})
     })
     renderOrdersList(appFetch)
@@ -222,6 +232,7 @@ describe('Orders list', () => {
           { total: 45 },
         ))
       }
+      if (url.includes('/orders/summary')) return jsonOk(makeOrderSummaryCounts())
       return jsonOk({})
     })
     renderOrdersList(appFetch)
@@ -237,6 +248,53 @@ describe('Orders list', () => {
       const calls = appFetch.mock.calls.map(c => c[0]).filter((u): u is string => typeof u === 'string' && u.includes('/orders?'))
       expect(calls.some(u => u.includes('page=1'))).toBe(true)
     })
+  })
+
+  test('summary tile row renders the 5 buckets from GET /orders/summary', async () => {
+    const appFetch = vi.fn((url: string) => {
+      if (url.includes('/orders?')) return jsonOk(makeOrderPage([makeOrderSummary()]))
+      if (url.includes('/orders/summary')) {
+        return jsonOk(makeOrderSummaryCounts({ total: 12, processing: 5, withCourier: 3, delivered: 3, returned: 1 }))
+      }
+      return jsonOk({})
+    })
+    renderOrdersList(appFetch)
+    await screen.findByText('#1001')
+
+    const row = await screen.findByTestId('orders-summary')
+    expect(within(row).getByText('Total')).toBeInTheDocument()
+    expect(within(row).getByText('12')).toBeInTheDocument()
+    expect(within(row).getByText('Processing')).toBeInTheDocument()
+    expect(within(row).getByText('5')).toBeInTheDocument()
+    expect(within(row).getByText('With Courier')).toBeInTheDocument()
+    expect(within(row).getByText('Delivered')).toBeInTheDocument()
+    expect(within(row).getAllByText('3')).toHaveLength(2) // withCourier and delivered both 3
+    expect(within(row).getByText('Returned')).toBeInTheDocument()
+    expect(within(row).getByText('1')).toBeInTheDocument()
+  })
+
+  // TRIPWIRE — proves the calm-fail is real, not assumed. Verified by temporarily changing
+  // Orders.tsx's `.catch(() => {})` on the summary fetch to `.catch(() => setError(t('common.error')))`
+  // (sharing the table's own error state — the exact regression this test guards against) and
+  // re-running: the test failed because the shared error state replaced the table with the
+  // Alert card, so '#1001' never rendered. Then reverted.
+  test('when GET /orders/summary rejects, no summary row renders and the table still loads normally', async () => {
+    const appFetch = vi.fn((url: string) => {
+      if (url.includes('/orders?')) return jsonOk(makeOrderPage([makeOrderSummary()]))
+      if (url.includes('/orders/summary')) return jsonErr()
+      return jsonOk({})
+    })
+    renderOrdersList(appFetch)
+
+    // Table renders normally, unaffected by the summary endpoint's failure.
+    expect(await screen.findByText('#1001')).toBeInTheDocument()
+    expect(document.querySelector('table')).toBeInTheDocument()
+
+    // No broken/empty tile row — the summary section simply doesn't exist.
+    expect(screen.queryByTestId('orders-summary')).toBeNull()
+
+    // No shared error state with the table either — the list's own error Alert never appears.
+    expect(screen.queryByText('Something went wrong')).toBeNull()
   })
 })
 
