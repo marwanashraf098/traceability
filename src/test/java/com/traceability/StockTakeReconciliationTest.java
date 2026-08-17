@@ -1,5 +1,6 @@
 package com.traceability;
 
+import com.traceability.integrations.shopify.ShopifyGateway;
 import com.traceability.inventory.*;
 import com.traceability.tenancy.TenantContext;
 import org.jobrunr.scheduling.JobScheduler;
@@ -12,6 +13,8 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.web.server.ResponseStatusException;
+
+import static org.mockito.Mockito.verifyNoInteractions;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
@@ -37,7 +40,9 @@ import static org.assertj.core.api.Assertions.*;
  *         resolve -> skipped, not lost.
  * srt8  — action=mark_damaged applies the available->damaged condition correction.
  * srt9  — attest-complete sets complete_count=true.
- * srt10 — cancel sets status=cancelled, no piece writes.
+ * srt10 — cancel sets status=cancelled, no piece writes, ZERO piece_events rows, and ZERO
+ *         interactions with ShopifyGateway — the "Abandon count" UI affordance (new in the
+ *         Returns-pattern restyle) must never trigger the write-off path.
  * srt11 — reconciliation surfaces unexpected finds (resurfaced from lost).
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.NONE)
@@ -70,6 +75,7 @@ class StockTakeReconciliationTest {
     @Autowired FulfillService                  fulfillService;
     @Autowired JdbcTemplate                    jdbc;
     @MockBean  JobScheduler                    jobScheduler;
+    @MockBean  ShopifyGateway                  shopifyGateway;
 
     UUID tenantId, actorId, storeId, productId, variantA;
     UUID fulfillmentLocationId;
@@ -351,11 +357,14 @@ class StockTakeReconciliationTest {
         assertThat(after).isTrue();
     }
 
-    // srt10: cancel sets status=cancelled, no piece writes
+    // srt10: cancel sets status=cancelled, no piece writes, no piece_events, no Shopify call
     @Test
-    void srt10_cancel_setsStatusCancelledNoWrites() {
+    void srt10_cancel_setsStatusCancelledNoWritesNoPieceEventsNoShopifyCall() {
         String piece = seedPiece("available");
         UUID sessionId = openAllScopeAndSnapshot();
+
+        Integer eventsBefore = jdbc.queryForObject(
+            "SELECT COUNT(*) FROM piece_events WHERE tenant_id = ?", Integer.class, tenantId);
 
         TenantContext.set(tenantId);
         try {
@@ -368,6 +377,14 @@ class StockTakeReconciliationTest {
             "SELECT status FROM stock_take_sessions WHERE id = ?", String.class, sessionId);
         assertThat(status).isEqualTo("cancelled");
         assertThat(pieceStatus(piece)).isEqualTo("available");
+
+        Integer eventsAfter = jdbc.queryForObject(
+            "SELECT COUNT(*) FROM piece_events WHERE tenant_id = ?", Integer.class, tenantId);
+        assertThat(eventsAfter)
+            .as("srt10: abandon must write ZERO piece_events — no ledger transition of any kind")
+            .isEqualTo(eventsBefore);
+
+        verifyNoInteractions(shopifyGateway);
     }
 
     // srt11: reconciliation surfaces unexpected finds (resurfaced from lost)

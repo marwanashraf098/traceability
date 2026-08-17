@@ -395,6 +395,61 @@ public class StockTakeService {
         return out;
     }
 
+    // ── Summary — landing analytics band (derive-on-read, 4 cheap indexed aggregates) ──
+
+    /**
+     * avgVariancePercent is null (not 0.0) when no finalized session exists yet — "no
+     * history" and "counts were perfect" must never share a number. Ratio-of-sums
+     * (weighted) over ALL finalized sessions, not a mean of per-session percentages: one
+     * big session isn't diluted by many small ones, and it costs one indexed query instead
+     * of N. piecesWrittenOff reuses finalizeSession()'s own predicate verbatim (adjusted →
+     * lost, reason=stock_take_missing) — the same rows that produced every historical
+     * Shopify decrement, not a parallel/approximate count.
+     */
+    public record StockTakeSummaryCounts(
+        long countsThisMonth, long piecesWrittenOff, Double avgVariancePercent, long openSessions) {}
+
+    @Transactional(readOnly = true)
+    public StockTakeSummaryCounts summary() {
+        UUID tenantId = TenantContext.require();
+
+        Long countsThisMonth = jdbc.queryForObject(
+            "SELECT COUNT(*) FROM stock_take_sessions " +
+            "WHERE tenant_id = ? AND opened_at >= date_trunc('month', now())",
+            Long.class, tenantId);
+
+        Long piecesWrittenOff = jdbc.queryForObject(
+            "SELECT COUNT(*) FROM piece_events " +
+            "WHERE tenant_id = ? AND event_type = 'adjusted' AND to_status = 'lost'::piece_status " +
+            "  AND metadata->>'reason' = 'stock_take_missing'",
+            Long.class, tenantId);
+
+        Long openSessions = jdbc.queryForObject(
+            "SELECT COUNT(*) FROM stock_take_sessions WHERE tenant_id = ? AND status = 'open'",
+            Long.class, tenantId);
+
+        record VarianceInputs(long expectedOnShelf, long counted) {}
+        VarianceInputs variance = jdbc.query(
+            "SELECT " +
+            "  COUNT(*) FILTER (WHERE se.status_at_open IN ('available','damaged')) AS expected_on_shelf, " +
+            "  COUNT(*) FILTER (WHERE se.status_at_open IN ('available','damaged') AND ts.id IS NOT NULL) AS counted " +
+            "FROM stock_take_expected se " +
+            "JOIN stock_take_sessions sts ON sts.id = se.session_id " +
+            "LEFT JOIN stock_take_scans ts ON ts.session_id = se.session_id AND ts.piece_id = se.piece_id " +
+            "WHERE sts.tenant_id = ? AND sts.status = 'finalized'",
+            rs -> {
+                rs.next();
+                return new VarianceInputs(rs.getLong("expected_on_shelf"), rs.getLong("counted"));
+            },
+            tenantId);
+
+        Double avgVariancePercent = variance.expectedOnShelf() == 0
+            ? null
+            : Math.round(((variance.expectedOnShelf() - variance.counted()) * 10000.0) / variance.expectedOnShelf()) / 100.0;
+
+        return new StockTakeSummaryCounts(countsThisMonth, piecesWrittenOff, avgVariancePercent, openSessions);
+    }
+
     // ── Shared session lookup (used by scan/reconciliation in later steps) ──
 
     record SessionRow(UUID id, String status, String scopeType, UUID locationId,

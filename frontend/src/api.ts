@@ -941,6 +941,17 @@ export function listStockTakeSessions() {
   return request<StockTakeSessionSummary[]>('/stock-takes/sessions')
 }
 
+export interface StockTakeSummaryCounts {
+  countsThisMonth: number
+  piecesWrittenOff: number
+  avgVariancePercent: number | null
+  openSessions: number
+}
+
+export function getStockTakeSummary() {
+  return request<StockTakeSummaryCounts>('/stock-takes/summary')
+}
+
 export interface StockTakeSyncDelta {
   variantId: string
   variantTitle: string

@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useParams, useNavigate, Link } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
+import { Lock, ClipboardCheck } from 'lucide-react'
 import {
-  Badge, Button, Card, Spinner, Alert, Modal, EmptyState,
+  Badge, Button, Card, Spinner, Alert, Modal, EmptyState, Checkbox,
 } from '../components/ui'
 import {
   getStockTakeReconciliation, getStockTakeSession, resolveStockTake,
@@ -34,6 +35,10 @@ export default function StockTakeReview() {
   const [attesting, setAttesting] = useState(false)
   const [showFinalizeConfirm, setShowFinalizeConfirm] = useState(false)
   const [finalizing, setFinalizing] = useState(false)
+  // Gates the Finalize button inside the modal — unticked -> disabled. This is the one
+  // action in the product that removes real sellable stock; the friction must gate, not
+  // decorate. Reset on every open/close so a stale "understood" never survives a re-open.
+  const [understood, setUnderstood] = useState(false)
 
   const load = useCallback(async () => {
     if (!id) return
@@ -179,7 +184,7 @@ export default function StockTakeReview() {
           ) : (
             <>
               <p className="text-body text-success font-medium">{t('stocktake.review.attested')}</p>
-              <Button variant="destructive" onClick={() => setShowFinalizeConfirm(true)}>
+              <Button variant="destructive" onClick={() => { setUnderstood(false); setShowFinalizeConfirm(true) }}>
                 {t('stocktake.review.finalizeButton')}
               </Button>
             </>
@@ -187,27 +192,131 @@ export default function StockTakeReview() {
         </Card>
       )}
 
-      {showFinalizeConfirm && (
-        <Modal title={t('stocktake.review.finalizeConfirmTitle')} onClose={() => setShowFinalizeConfirm(false)}>
-          <div className="space-y-4">
-            <p className="text-body text-primary">
-              {t('stocktake.review.finalizeConfirmBody', {
-                count: reconciliation.buckets.on_shelf_uncounted?.length ?? 0,
-                variants: rollup.filter(r => r.variance < 0).map(r => r.variantTitle).join(', ') || t('common.na'),
-              })}
-            </p>
-            <div className="flex gap-3 justify-end">
-              <Button variant="secondary" onClick={() => setShowFinalizeConfirm(false)}>{t('common.cancel')}</Button>
-              <Button variant="destructive" loading={finalizing} onClick={handleFinalize}>
-                {t('stocktake.review.finalizeConfirmButton')}
-              </Button>
+      {showFinalizeConfirm && (() => {
+        const negativeRollup = rollup.filter(r => r.variance < 0)
+        return (
+          <Modal title={t('stocktake.review.finalizeConfirmTitle')} onClose={() => setShowFinalizeConfirm(false)}>
+            <div className="space-y-4">
+              <p className="text-body text-primary">
+                {t('stocktake.review.finalizeConfirmBody', {
+                  count: reconciliation.buckets.on_shelf_uncounted?.length ?? 0,
+                  variants: negativeRollup.map(r => r.variantTitle).join(', ') || t('common.na'),
+                })}
+              </p>
+              {negativeRollup.length > 0 && (
+                <div className="rounded-lg border border-line bg-elevated p-3 space-y-1.5">
+                  {negativeRollup.map(r => (
+                    <div key={r.variantId} className="flex items-center justify-between text-small">
+                      <span className="text-muted">{r.variantTitle}</span>
+                      <span className="font-mono font-semibold text-danger">{r.variance}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+              <Checkbox
+                checked={understood}
+                onChange={setUnderstood}
+                label={t('stocktake.review.finalizeUnderstand')}
+              />
+              <div className="flex gap-3 justify-end">
+                <Button variant="secondary" onClick={() => setShowFinalizeConfirm(false)}>{t('common.cancel')}</Button>
+                <Button
+                  variant="destructive"
+                  loading={finalizing}
+                  disabled={!understood}
+                  onClick={handleFinalize}
+                >
+                  {t('stocktake.review.finalizeConfirmButton')}
+                </Button>
+              </div>
             </div>
-          </div>
-        </Modal>
-      )}
+          </Modal>
+        )
+      })()}
 
       {/* Sync panel */}
       {isFinalized && <SyncPanel sessionId={id} shopifySync={session.shopifySync} onChanged={load} />}
+
+      {/* Close summary — auditable record of a finalized session */}
+      {isFinalized && (
+        <CloseSummaryCard session={session} totalCounted={totalCounted} totalVariance={totalVariance} />
+      )}
+    </div>
+  )
+}
+
+// ── Close summary ─────────────────────────────────────────────────────────────
+// Every field here is already on the wire — session detail (openedBy/finalizedBy/
+// finalizedAt) and shopifySync.deltas (per-variant write-off counts, populated at
+// finalize) — no new data, purely a client-side render of what finalizeStockTake()
+// and getStockTakeSession() already return.
+
+function syncStatusKey(status: string | undefined): string {
+  if (status === 'pending') return 'syncPending'
+  if (status === 'pushed') return 'syncPushed'
+  if (status === 'failed') return 'syncFailed'
+  if (status === 'failed_ambiguous') return 'syncAmbiguous'
+  return 'syncNotStarted'
+}
+
+function formatDuration(openedAt: string, finalizedAt: string): string {
+  const ms = new Date(finalizedAt).getTime() - new Date(openedAt).getTime()
+  const totalMinutes = Math.max(0, Math.round(ms / 60000))
+  const hours = Math.floor(totalMinutes / 60)
+  const minutes = totalMinutes % 60
+  if (hours === 0) return `${minutes}m`
+  return `${hours}h ${minutes}m`
+}
+
+function CloseSummaryCard({ session, totalCounted, totalVariance }: {
+  session: StockTakeSessionDetail
+  totalCounted: number
+  totalVariance: number
+}) {
+  const { t } = useTranslation()
+  const writtenOff = (session.shopifySync?.deltas ?? []).reduce((sum, d) => sum + Math.abs(d.delta), 0)
+
+  return (
+    <Card className="flex flex-col items-center gap-3 text-center py-8" data-testid="close-summary">
+      <ClipboardCheck size={40} strokeWidth={1.75} className="text-success" />
+      <h2 className="text-h2 text-primary">{t('stocktake.review.closeSummary.title')}</h2>
+      <div className="flex gap-6 mt-1">
+        <SummaryStat value={totalCounted} label={t('stocktake.review.closeSummary.counted')} />
+        <SummaryStat value={totalVariance} label={t('stocktake.review.closeSummary.variance')} tone={totalVariance < 0 ? 'danger' : 'success'} />
+        <SummaryStat value={writtenOff} label={t('stocktake.review.closeSummary.writtenOff')} tone={writtenOff > 0 ? 'danger' : 'success'} />
+      </div>
+      <div className="w-full max-w-xs border-t border-line mt-2 pt-3 flex flex-col gap-1.5 text-start">
+        <div className="flex justify-between text-small">
+          <span className="text-muted">{t('stocktake.review.closeSummary.attestedBy')}</span>
+          <span className="text-primary">{session.openedByName ?? t('common.na')}</span>
+        </div>
+        {session.finalizedByName && session.finalizedAt && (
+          <>
+            <div className="flex justify-between text-small">
+              <span className="text-muted">{t('stocktake.review.closeSummary.finalizedBy')}</span>
+              <span className="text-primary">{session.finalizedByName}</span>
+            </div>
+            <div className="flex justify-between text-small">
+              <span className="text-muted">{t('stocktake.review.closeSummary.duration')}</span>
+              <span className="text-primary font-mono">{formatDuration(session.openedAt, session.finalizedAt)}</span>
+            </div>
+          </>
+        )}
+        <div className="flex justify-between text-small">
+          <span className="text-muted">{t('stocktake.review.closeSummary.shopifySync')}</span>
+          <span className="text-primary">{t(`stocktake.review.closeSummary.${syncStatusKey(session.shopifySync?.status)}`)}</span>
+        </div>
+      </div>
+    </Card>
+  )
+}
+
+function SummaryStat({ value, label, tone = 'primary' }: { value: number; label: string; tone?: 'primary' | 'success' | 'danger' }) {
+  const toneClass = tone === 'success' ? 'text-success' : tone === 'danger' ? 'text-danger' : 'text-primary'
+  return (
+    <div className="text-center">
+      <p className={`text-h3 font-mono font-bold ${toneClass}`}>{value}</p>
+      <p className="text-caption text-muted">{label}</p>
     </div>
   )
 }
@@ -355,6 +464,7 @@ function DispositionBucket({
                         <span title={!completeCount ? t('stocktake.review.markLostGatedTooltip') : undefined}>
                           <Button size="sm" variant="destructive" loading={busy === row.pieceId}
                             disabled={!completeCount}
+                            iconStart={!completeCount ? Lock : undefined}
                             onClick={() => runResolve(row.pieceId, 'lost')}>
                             {t('stocktake.review.markLost')}
                           </Button>

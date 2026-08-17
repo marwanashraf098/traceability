@@ -164,8 +164,10 @@ describe('FR-21 Step 6.3 — Stock Take Review screen', () => {
     ).toBeGreaterThan(0)
   })
 
-  // str3: finalize shows a confirmation modal before calling POST /finalize
-  test('str3 — finalize requires confirmation', async () => {
+  // str3: finalize shows a confirmation modal before calling POST /finalize, AND the
+  // confirm button stays disabled until the "I understand..." checkbox is ticked — the
+  // friction must gate, not decorate.
+  test('str3 — finalize requires confirmation AND the understand-checkbox actually gates', async () => {
     vi.mocked(api.getStockTakeReconciliation).mockResolvedValue(makeReconciliation({ completeCount: true }))
     vi.mocked(api.getStockTakeSession).mockResolvedValue(makeSession({ completeCount: true }))
     vi.mocked(api.finalizeStockTake).mockResolvedValue({ sessionId: SESSION_ID, status: 'finalized', variantDeltas: [] })
@@ -178,10 +180,40 @@ describe('FR-21 Step 6.3 — Stock Take Review screen', () => {
     expect(await screen.findByText('Finalize stock take?')).toBeInTheDocument()
     expect(api.finalizeStockTake).not.toHaveBeenCalled()
 
-    const confirmBtn = screen.getByText('Finalize + Push to Shopify')
-    await userEvent.click(confirmBtn)
+    const confirmBtn = screen.getByText('Finalize + Push to Shopify').closest('button')!
+    expect(confirmBtn).toBeDisabled()
 
+    // Clicking a disabled button must not fire the handler.
+    await userEvent.click(confirmBtn)
+    expect(api.finalizeStockTake).not.toHaveBeenCalled()
+
+    const understandCheckbox = screen.getByText('I understand this permanently decrements Shopify inventory.')
+    await userEvent.click(understandCheckbox)
+    expect(confirmBtn).not.toBeDisabled()
+
+    await userEvent.click(confirmBtn)
     await waitFor(() => expect(api.finalizeStockTake).toHaveBeenCalledWith(SESSION_ID))
+  })
+
+  // str5: re-opening the finalize modal resets the checkbox — a stale "understood" from a
+  // prior open/cancel must never survive.
+  test('str5 — re-opening the finalize modal resets the understand-checkbox', async () => {
+    vi.mocked(api.getStockTakeReconciliation).mockResolvedValue(makeReconciliation({ completeCount: true }))
+    vi.mocked(api.getStockTakeSession).mockResolvedValue(makeSession({ completeCount: true }))
+
+    renderReview()
+
+    await userEvent.click(await screen.findByText('Finalize'))
+    await userEvent.click(screen.getByText('I understand this permanently decrements Shopify inventory.'))
+    const firstConfirmBtn = screen.getByText('Finalize + Push to Shopify').closest('button')!
+    expect(firstConfirmBtn).not.toBeDisabled()
+
+    await userEvent.click(screen.getByText('Cancel'))
+    expect(screen.queryByText('Finalize stock take?')).not.toBeInTheDocument()
+
+    await userEvent.click(screen.getByText('Finalize'))
+    const secondConfirmBtn = screen.getByText('Finalize + Push to Shopify').closest('button')!
+    expect(secondConfirmBtn).toBeDisabled()
   })
 
   // str4: failed_ambiguous sync panel buttons call the right endpoints

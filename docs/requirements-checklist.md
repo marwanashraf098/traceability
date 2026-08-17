@@ -153,8 +153,9 @@ One line per requirement · [M] Must / [S] Should / [C] Could · use as the buil
 - [x] 21.4 [M] Resolutions: found-it (no piece_event), lost on free stock (gated on complete_count, drift-guarded), lost on committed stock (routes through FR-13.2 release guard, no one-tap write-off), condition correction available→damaged [Step 4: `resolve()`; `damaged→available` explicitly out of scope, see PROGRESS.md]
 - [x] 21.5 [M] Finalize: live Shopify write-off decrement via dedicated method (never `adjustInventoryQuantities`, never `inventorySetOnHandQuantities`), non-idempotent retry rule (definitive failure auto-retries, ambiguous ack does not) [Step 5: `StockTakeReconciliationService.finalizeSession()` + `StockTakeShopifyPushJob`, CLAUDE.md §7 amended]
 - [x] 21.6 [M] Frontend `StockTake.tsx` + AR/EN i18n [Step 6: list/create, blind scan, review/reconciliation, sync-status screens + `useScanner`/`ScanShell` extraction + `GET /sessions`, `GET /sessions/{id}`, `DELETE /sessions/{id}/scan/{pieceId}`, sync mark-resolved/repush]
+- [x] 21.7 [M] Returns-pattern restyle — landing analytics band (`GET /stock-takes/summary`), 5-bucket blind-scan feedback, gated finalize checkbox, Abandon-count wiring, close-summary card [see PROGRESS.md "Stock-take restyle"]
 
-Built 2026-08-02 per `docs/fr-21-stock-taking-build-spec.md`, Steps 0.5–5, per-step commits; local/Testcontainers only, not run against production or a real Shopify store.
+Built 2026-08-02 per `docs/fr-21-stock-taking-build-spec.md`, Steps 0.5–5, per-step commits; local/Testcontainers only, not run against production or a real Shopify store. Restyled 2026-08-17 to the Returns session pattern — appearance-only for the write-off engine itself (`resolveLost()`/`finalizeSession()`/`pushStockTakeWriteOff()` untouched); still local/Testcontainers only, no live Shopify store run yet.
 
 ## FR-22 Transfers
 - [x] 22.1 [M] Schema: `transfers` / `transfer_lines` / `transfer_pieces`, RLS in-migration, `transfer_pieces_one_active` partial-unique concurrency referee [V64]

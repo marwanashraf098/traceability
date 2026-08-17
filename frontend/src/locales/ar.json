@@ -1033,6 +1033,7 @@
     "new": "جرد جديد",
     "empty": "لا توجد عمليات جرد بعد",
     "col": {
+      "session": "الجلسة",
       "status": "الحالة",
       "scope": "النطاق",
       "openedBy": "فتحه",
@@ -1053,6 +1054,21 @@
       "minutesAgo": "منذ {{count}} دقيقة",
       "hoursAgo": "منذ {{count}} ساعة",
       "daysAgo": "منذ {{count}} يوم"
+    },
+    "summary": {
+      "countsThisMonth": "عمليات الجرد هذا الشهر",
+      "piecesWrittenOff": "إجمالي القطع المشطوبة",
+      "avgVariance": "متوسط الفارق",
+      "avgVarianceEmpty": "لا توجد عمليات جرد بعد",
+      "openSessions": "الجلسات المفتوحة"
+    },
+    "list": {
+      "resumeSession": "استئناف الجرد {{id}}",
+      "alreadyOpenNote": "يوجد جرد مفتوح بالفعل (تم مسح {{count}} قطعة حتى الآن). لا يمكن بدء جرد جديد حتى إغلاقه.",
+      "tableTitle": "الجلسات · {{count}} إجمالي",
+      "showing": "عرض {{from}}–{{to}} من {{total}}",
+      "prev": "السابق",
+      "next": "التالي"
     },
     "create": {
       "title": "جرد جديد",
@@ -1080,10 +1096,21 @@
         "unexpected": "غير متوقع",
         "unknown": "غير معروف"
       },
+      "feedback": {
+        "matched": "مطابقة",
+        "mismatch": "عدم تطابق الحالة",
+        "resurfaced": "غير متوقعة — عادت للظهور",
+        "outOfScope": "خارج النطاق",
+        "unknown": "باركود غير معروف"
+      },
       "recent": "آخر عمليات المسح",
       "noScansYet": "لا توجد عمليات مسح بعد",
       "unscan": "تراجع",
-      "review": "مراجعة ←"
+      "review": "مراجعة ←",
+      "abandon": "إلغاء الجرد",
+      "abandonConfirmTitle": "إلغاء هذا الجرد؟",
+      "abandonConfirmBody": "سيؤدي هذا إلى إلغاء الجلسة. لن يتم شطب أو تغيير أي شيء تم مسحه حتى الآن — تبقى القطع كما هي تمامًا.",
+      "abandonConfirmButton": "إلغاء الجرد"
     },
     "review": {
       "back": "العودة إلى عمليات الجرد",
@@ -1128,8 +1155,24 @@
       "attested": "تم اعتماد اكتمال الجرد — تم تفعيل عمليات الشطب",
       "finalizeButton": "إنجاز",
       "finalizeConfirmTitle": "إنجاز الجرد؟",
-      "finalizeConfirmBody": "سيتم شطب {{count}} قطعة. سيخصم Shopify المخزون لـ: {{variants}}.",
-      "finalizeConfirmButton": "إنجاز + دفع إلى Shopify"
+      "finalizeConfirmBody": "سيتم شطب {{count}} قطعة. سيخصم Shopify المخزون لـ: {{variants}}. لا يمكن التراجع عن هذا الإجراء.",
+      "finalizeUnderstand": "أدرك أن هذا سيخصم مخزون Shopify بشكل دائم.",
+      "finalizeConfirmButton": "إنجاز + دفع إلى Shopify",
+      "closeSummary": {
+        "title": "تم إنجاز الجرد",
+        "counted": "تم جردها",
+        "variance": "الفارق",
+        "writtenOff": "مشطوبة",
+        "attestedBy": "اعتمده",
+        "finalizedBy": "أنجزه",
+        "duration": "المدة",
+        "shopifySync": "مزامنة Shopify",
+        "syncNotStarted": "لم تبدأ",
+        "syncPending": "قيد الانتظار",
+        "syncPushed": "تم الدفع",
+        "syncFailed": "فشلت",
+        "syncAmbiguous": "تحتاج إلى تحقق"
+      }
     },
     "sync": {
       "notStarted": "لم تبدأ مزامنة Shopify بعد",

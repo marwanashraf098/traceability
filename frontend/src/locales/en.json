@@ -1038,6 +1038,7 @@
     "new": "New Count",
     "empty": "No stock takes yet",
     "col": {
+      "session": "Session",
       "status": "Status",
       "scope": "Scope",
       "openedBy": "Opened By",
@@ -1058,6 +1059,21 @@
       "minutesAgo": "{{count}}m ago",
       "hoursAgo": "{{count}}h ago",
       "daysAgo": "{{count}}d ago"
+    },
+    "summary": {
+      "countsThisMonth": "Counts this month",
+      "piecesWrittenOff": "Total pieces written off",
+      "avgVariance": "Average variance",
+      "avgVarianceEmpty": "No counts yet",
+      "openSessions": "Open sessions"
+    },
+    "list": {
+      "resumeSession": "Resume count {{id}}",
+      "alreadyOpenNote": "A count is already open ({{count}} pieces scanned so far). Starting a new one isn't available until it's closed.",
+      "tableTitle": "Sessions · {{count}} total",
+      "showing": "Showing {{from}}–{{to}} of {{total}}",
+      "prev": "Prev",
+      "next": "Next"
     },
     "create": {
       "title": "New Stock Take",
@@ -1085,10 +1101,21 @@
         "unexpected": "Unexpected",
         "unknown": "Unknown"
       },
+      "feedback": {
+        "matched": "Match",
+        "mismatch": "Condition mismatch",
+        "resurfaced": "Unexpected — resurfaced",
+        "outOfScope": "Out of scope",
+        "unknown": "Unknown barcode"
+      },
       "recent": "Recent scans",
       "noScansYet": "No scans yet",
       "unscan": "Unscan",
-      "review": "Review →"
+      "review": "Review →",
+      "abandon": "Abandon count",
+      "abandonConfirmTitle": "Abandon this count?",
+      "abandonConfirmBody": "This cancels the session. Nothing scanned so far is written off or changed — pieces stay exactly as they are.",
+      "abandonConfirmButton": "Abandon count"
     },
     "review": {
       "back": "Back to Stock Takes",
@@ -1133,8 +1160,24 @@
       "attested": "Count attested complete — write-offs unlocked",
       "finalizeButton": "Finalize",
       "finalizeConfirmTitle": "Finalize stock take?",
-      "finalizeConfirmBody": "{{count}} piece(s) will be written off. Shopify will decrement stock for: {{variants}}.",
-      "finalizeConfirmButton": "Finalize + Push to Shopify"
+      "finalizeConfirmBody": "{{count}} piece(s) will be written off. Shopify will decrement stock for: {{variants}}. This cannot be undone.",
+      "finalizeUnderstand": "I understand this permanently decrements Shopify inventory.",
+      "finalizeConfirmButton": "Finalize + Push to Shopify",
+      "closeSummary": {
+        "title": "Count finalized",
+        "counted": "counted",
+        "variance": "variance",
+        "writtenOff": "written off",
+        "attestedBy": "Attested by",
+        "finalizedBy": "Finalized by",
+        "duration": "Duration",
+        "shopifySync": "Shopify sync",
+        "syncNotStarted": "Not started",
+        "syncPending": "Pending",
+        "syncPushed": "Pushed",
+        "syncFailed": "Failed",
+        "syncAmbiguous": "Needs verification"
+      }
     },
     "sync": {
       "notStarted": "Shopify sync has not started",

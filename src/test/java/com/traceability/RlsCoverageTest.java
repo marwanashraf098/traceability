@@ -91,6 +91,7 @@ class RlsCoverageTest {
             "/api/v1/stock-takes/sessions/{sessionId}/reconciliation",
             "/api/v1/stock-takes/sessions",
             "/api/v1/stock-takes/sessions/{sessionId}",
+            "/api/v1/stock-takes/summary",
             "/api/v1/transfers",
             "/api/v1/transfers/{transferId}",
             "/api/v1/me",
@@ -744,6 +745,22 @@ class RlsCoverageTest {
         jdbc.update("DELETE FROM stock_take_expected WHERE session_id = ?", sessionId);
         jdbc.update("DELETE FROM stock_take_sessions WHERE id = ?", sessionId);
         jdbc.update("DELETE FROM pieces WHERE id = ?", pieceId);
+    }
+
+    @Test
+    void stockTakeSummary_reflectsSeededSession() {
+        UUID sessionId = UUID.randomUUID();
+        jdbc.update(
+            "INSERT INTO stock_take_sessions (id, tenant_id, status, scope_type, location_id, opened_by) " +
+            "VALUES (?, ?, 'open', 'all', ?, ?)",
+            sessionId, tenantId, locationId, ownerUserId);
+
+        ResponseEntity<Map> resp = get("/api/v1/stock-takes/summary", Map.class);
+        assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(((Number) resp.getBody().get("openSessions")).longValue()).isGreaterThanOrEqualTo(1);
+        assertThat(((Number) resp.getBody().get("countsThisMonth")).longValue()).isGreaterThanOrEqualTo(1);
+
+        jdbc.update("DELETE FROM stock_take_sessions WHERE id = ?", sessionId);
     }
 
     @Test

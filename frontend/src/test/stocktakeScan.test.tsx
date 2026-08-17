@@ -14,6 +14,7 @@ vi.mock('../api', async (importOriginal) => {
     getStockTakeSession: vi.fn(),
     scanStockTakePiece:  vi.fn(),
     unscanStockTakePiece: vi.fn(),
+    cancelStockTake: vi.fn(),
   }
 })
 
@@ -107,11 +108,12 @@ describe('FR-21 Step 6.3 — Stock Take Scan screen', () => {
 
     await waitFor(() => expect(screen.getByTestId('counted-display')).toHaveTextContent('1'))
     const feedback = await screen.findByTestId('last-scan-feedback')
-    expect(feedback).toHaveTextContent('counted')
+    expect(feedback).toHaveTextContent('Match')
+    await waitFor(() => expect(screen.getByTestId('tally-matched')).toHaveTextContent('1'))
   })
 
-  // sts4: unknown classification -> NOT counted, flagged feedback shown
-  test('sts4 — unknown classification does not count, shows flagged feedback', async () => {
+  // sts4: unknown classification -> NOT counted, distinct "unknown barcode" feedback shown
+  test('sts4 — unknown classification does not count, shows unknown-barcode feedback', async () => {
     vi.mocked(api.scanStockTakePiece).mockResolvedValue(
       makeScanResult({ classification: 'unknown', pieceId: null })
     )
@@ -122,8 +124,50 @@ describe('FR-21 Step 6.3 — Stock Take Scan screen', () => {
     await userEvent.keyboard('{Enter}')
 
     const feedback = await screen.findByTestId('last-scan-feedback')
-    expect(feedback).toHaveTextContent('flagged')
+    expect(feedback).toHaveTextContent('Unknown barcode')
     expect(screen.getByTestId('counted-display')).toHaveTextContent('0')
+    await waitFor(() => expect(screen.getByTestId('tally-unknown')).toHaveTextContent('1'))
+  })
+
+  // sts7: unexpected_resurfaced and out_of_scope land in SEPARATE tally buckets — the
+  // 4->5 split approved in this restyle. Neither one is the blind-count leak (both stay
+  // outcomes-only, no denominator).
+  test('sts7 — resurfaced and out-of-scope tally into distinct buckets, not merged', async () => {
+    vi.mocked(api.scanStockTakePiece)
+      .mockResolvedValueOnce(makeScanResult({ classification: 'unexpected_resurfaced', pieceId: 'piece-r' }))
+      .mockResolvedValueOnce(makeScanResult({ classification: 'out_of_scope', pieceId: 'piece-o', barcode: 'PC-OOS999' }))
+    renderScan()
+
+    const input = await screen.findByPlaceholderText('Scan barcode…')
+    await userEvent.type(input, 'PC-ABC123')
+    await userEvent.keyboard('{Enter}')
+    await waitFor(() => expect(screen.getByTestId('tally-resurfaced')).toHaveTextContent('1'))
+    expect(screen.getByTestId('tally-outOfScope')).toHaveTextContent('0')
+
+    await userEvent.clear(input)
+    await userEvent.type(input, 'PC-OOS999')
+    await userEvent.keyboard('{Enter}')
+    await waitFor(() => expect(screen.getByTestId('tally-outOfScope')).toHaveTextContent('1'))
+    expect(screen.getByTestId('tally-resurfaced')).toHaveTextContent('1')
+  })
+
+  // sts8: Abandon count opens a confirm modal and, on confirm, calls cancelStockTake ONLY —
+  // never scanStockTakePiece or any resolve/finalize endpoint. This is the UI's first entry
+  // point to cancel(); it must never bleed into the write-off path.
+  test('sts8 — abandon count confirms and calls cancelStockTake only', async () => {
+    vi.mocked(api.cancelStockTake).mockResolvedValue(undefined)
+    renderScan()
+
+    const abandonLink = await screen.findByTestId('abandon-link')
+    await userEvent.click(abandonLink)
+
+    expect(await screen.findByText('Abandon this count?')).toBeInTheDocument()
+
+    const confirmBtn = screen.getByTestId('confirm-abandon')
+    await userEvent.click(confirmBtn)
+
+    await waitFor(() => expect(api.cancelStockTake).toHaveBeenCalledWith(SESSION_ID))
+    expect(api.scanStockTakePiece).not.toHaveBeenCalled()
   })
 
   // sts5: unscan calls the API and decrements the tally/counted
@@ -138,7 +182,7 @@ describe('FR-21 Step 6.3 — Stock Take Scan screen', () => {
 
     await waitFor(() => expect(screen.getByTestId('counted-display')).toHaveTextContent('1'))
 
-    const unscanBtns = await screen.findAllByText('Unscan')
+    const unscanBtns = await screen.findAllByTitle('Unscan')
     await userEvent.click(unscanBtns[0])
 
     await waitFor(() =>

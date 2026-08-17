@@ -50,6 +50,13 @@ public class StockTakeController {
         return stockTake.listSessions();
     }
 
+    /** Landing analytics band — 4-tile calm row, derive-on-read, no client-side scraping. */
+    @GetMapping("/summary")
+    @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
+    public StockTakeService.StockTakeSummaryCounts summary() {
+        return stockTake.summary();
+    }
+
     /** WORKER+ — the scan screen loads session context before any counting starts. */
     @GetMapping("/sessions/{sessionId}")
     @PreAuthorize("isAuthenticated()")

@@ -1,10 +1,11 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
-import { Badge, Button, EmptyState, Input, TableSkeleton, Alert } from '../components/ui'
+import { ArrowRightCircle } from 'lucide-react'
+import { Badge, Button, EmptyState, Input, TableSkeleton, Alert, StatCard } from '../components/ui'
 import {
-  listStockTakeSessions, openStockTakeSession, searchVariants,
-  StockTakeSessionSummary, StockTakeScopeType, VariantMatch,
+  listStockTakeSessions, openStockTakeSession, searchVariants, getStockTakeSummary,
+  StockTakeSessionSummary, StockTakeScopeType, StockTakeSummaryCounts, VariantMatch,
 } from '../api'
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -26,24 +27,38 @@ function relativeTime(iso: string, t: (k: string, o?: Record<string, unknown>) =
   return t('stocktake.time.daysAgo', { count: days })
 }
 
+// Display-only truncation of the real sessionId already on the wire — same convention
+// as Returns.tsx's shortId(), not a stored/generated reference.
+function shortId(id: string): string {
+  return 'ST-' + id.replace(/-/g, '').slice(0, 4).toUpperCase()
+}
+
+const PAGE_SIZE = 10
+
 // ── List + Create ────────────────────────────────────────────────────────────
 
 export default function StockTake() {
   const { t } = useTranslation()
   const navigate = useNavigate()
   const [sessions, setSessions] = useState<StockTakeSessionSummary[]>([])
+  const [summary, setSummary] = useState<StockTakeSummaryCounts | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [view, setView] = useState<'list' | 'create'>('list')
+  const [page, setPage] = useState(0)
 
-  useEffect(() => { load() }, [])
-
-  async function load() {
+  const load = useCallback(async () => {
     setLoading(true)
     try { setSessions(await listStockTakeSessions()) }
     catch (e: unknown) { setError(e instanceof Error ? e.message : String(e)) }
     finally { setLoading(false) }
-  }
+  }, [])
+
+  useEffect(() => { load() }, [load])
+
+  // Independent, non-blocking — a failure here must never affect the sessions table
+  // (no shared error state), matching Orders.tsx's own summary-tile convention.
+  useEffect(() => { getStockTakeSummary().then(setSummary).catch(() => {}) }, [])
 
   function openRow(s: StockTakeSessionSummary) {
     if (s.status === 'open') navigate(`/stock-take/${s.sessionId}/scan`)
@@ -59,20 +74,57 @@ export default function StockTake() {
     )
   }
 
+  // Defensive against the latent no-unique-open-session-index gap (schema has no partial
+  // unique index the way Returns does) — if more than one open session somehow exists,
+  // resume the most recently opened rather than crashing or picking arbitrarily.
+  const openSessions = sessions.filter(s => s.status === 'open')
+    .slice().sort((a, b) => new Date(b.openedAt).getTime() - new Date(a.openedAt).getTime())
+  const mostRecentOpen = openSessions[0]
+
+  const totalPages = Math.max(1, Math.ceil(sessions.length / PAGE_SIZE))
+  const pageStart = page * PAGE_SIZE
+  const pageRows = sessions.slice(pageStart, pageStart + PAGE_SIZE)
+
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <h1 className="text-h1 text-primary">{t('stocktake.title')}</h1>
-        <Button size="sm" onClick={() => setView('create')}>
-          + {t('stocktake.new')}
-        </Button>
+        {mostRecentOpen ? (
+          <Button size="sm" iconStart={ArrowRightCircle} onClick={() => navigate(`/stock-take/${mostRecentOpen.sessionId}/scan`)}>
+            {t('stocktake.list.resumeSession', { id: shortId(mostRecentOpen.sessionId) })}
+          </Button>
+        ) : (
+          <Button size="sm" onClick={() => setView('create')}>
+            + {t('stocktake.new')}
+          </Button>
+        )}
       </div>
+
+      {mostRecentOpen && (
+        <Alert
+          tone="warning"
+          title={t('stocktake.list.alreadyOpenNote', { count: mostRecentOpen.counted })}
+        />
+      )}
 
       {error && <Alert tone="critical" title={error} />}
 
+      {/* Analytics band — plain label + number, no gauges, no trend arrows */}
+      {summary && (
+        <div className="grid grid-cols-4 gap-3" data-testid="stocktake-summary">
+          <StatCard label={t('stocktake.summary.countsThisMonth')} value={summary.countsThisMonth} />
+          <StatCard label={t('stocktake.summary.piecesWrittenOff')} value={summary.piecesWrittenOff} />
+          <StatCard
+            label={t('stocktake.summary.avgVariance')}
+            value={summary.avgVariancePercent === null ? t('stocktake.summary.avgVarianceEmpty') : `${summary.avgVariancePercent}%`}
+          />
+          <StatCard label={t('stocktake.summary.openSessions')} value={summary.openSessions} />
+        </div>
+      )}
+
       {loading ? (
         <div className="card overflow-hidden">
-          <TableSkeleton rows={3} cols={5} />
+          <TableSkeleton rows={3} cols={6} />
         </div>
       ) : sessions.length === 0 ? (
         <EmptyState
@@ -81,38 +133,84 @@ export default function StockTake() {
           action={{ label: '+ ' + t('stocktake.new'), onClick: () => setView('create') }}
         />
       ) : (
-        <div className="card overflow-hidden">
-          <table className="min-w-full">
-            <thead>
-              <tr className="border-b border-line">
-                {['stocktake.col.status', 'stocktake.col.scope', 'stocktake.col.openedBy',
-                  'stocktake.col.opened', 'stocktake.col.coverage'].map(k => (
-                  <th key={k} className="tbl-header">{t(k)}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {sessions.map(s => (
-                <tr key={s.sessionId} className="tbl-row cursor-pointer" onClick={() => openRow(s)}>
-                  <td className="tbl-cell">
-                    <Badge tone={sessionTone(s.status)} label={t(`stocktake.status.${s.status}`)} />
-                  </td>
-                  <td className="tbl-cell text-muted">
-                    {t(s.scopeType === 'all' ? 'stocktake.scope.all' : 'stocktake.scope.variantSubset')}
-                  </td>
-                  <td className="tbl-cell text-primary">{s.openedByName ?? t('common.na')}</td>
-                  <td className="tbl-cell text-muted text-small">{relativeTime(s.openedAt, t)}</td>
-                  <td className="tbl-cell text-primary">
-                    {s.status === 'open' ? `${s.coveragePercent}% (${s.counted}/${s.expected})` : '—'}
-                  </td>
+        <div className="space-y-2">
+          <p className="text-small text-muted">{t('stocktake.list.tableTitle', { count: sessions.length })}</p>
+          <div className="card overflow-hidden">
+            <table className="min-w-full">
+              <thead>
+                <tr className="border-b border-line">
+                  {['stocktake.col.session', 'stocktake.col.scope', 'stocktake.col.openedBy',
+                    'stocktake.col.opened', 'stocktake.col.status', 'stocktake.col.coverage'].map(k => (
+                    <th key={k} className="tbl-header">{t(k)}</th>
+                  ))}
+                  <th className="tbl-header" />
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {pageRows.map(s => (
+                  <tr key={s.sessionId} className="tbl-row cursor-pointer" onClick={() => openRow(s)}>
+                    <td className="tbl-cell font-mono font-semibold text-primary">{shortId(s.sessionId)}</td>
+                    <td className="tbl-cell text-muted">
+                      {t(s.scopeType === 'all' ? 'stocktake.scope.all' : 'stocktake.scope.variantSubset')}
+                    </td>
+                    <td className="tbl-cell text-primary">{s.openedByName ?? t('common.na')}</td>
+                    <td className="tbl-cell text-muted text-small">{relativeTime(s.openedAt, t)}</td>
+                    <td className="tbl-cell">
+                      <Badge tone={sessionTone(s.status)} label={t(`stocktake.status.${s.status}`)} />
+                    </td>
+                    <td className="tbl-cell text-primary">
+                      <CoverageOrVarianceCell session={s} />
+                    </td>
+                    <td className="tbl-cell text-end">
+                      <span className="text-trace-blue text-small font-semibold">{t('common.view')} →</span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          {sessions.length > PAGE_SIZE && (
+            <div className="flex justify-between items-center pt-1">
+              <span className="text-small text-muted">
+                {t('stocktake.list.showing', {
+                  from: pageStart + 1,
+                  to: Math.min(pageStart + PAGE_SIZE, sessions.length),
+                  total: sessions.length,
+                })}
+              </span>
+              <div className="flex gap-2">
+                <Button size="sm" variant="secondary" disabled={page === 0} onClick={() => setPage(p => Math.max(0, p - 1))}>
+                  {t('stocktake.list.prev')}
+                </Button>
+                <Button size="sm" variant="secondary" disabled={page >= totalPages - 1} onClick={() => setPage(p => Math.min(totalPages - 1, p + 1))}>
+                  {t('stocktake.list.next')}
+                </Button>
+              </div>
+            </div>
+          )}
         </div>
       )}
     </div>
   )
+}
+
+// Coverage while open (unchanged); variance once finalized — expected/counted are already
+// computed for EVERY row by the backend regardless of status (only display was gated to
+// open before this restyle), so this is a pure client-side reveal, no new data. Cancelled
+// sessions never got reconciled — a neutral dash, never a fabricated variance number.
+function CoverageOrVarianceCell({ session }: { session: StockTakeSessionSummary }) {
+  if (session.status === 'open') {
+    return <>{session.coveragePercent}% ({session.counted}/{session.expected})</>
+  }
+  if (session.status === 'finalized') {
+    const variance = session.counted - session.expected
+    return (
+      <span className={`font-mono font-semibold ${variance < 0 ? 'text-danger' : 'text-success'}`}>
+        {variance}
+      </span>
+    )
+  }
+  return <span className="text-muted">—</span>
 }
 
 // ── Create Session Form ───────────────────────────────────────────────────────
