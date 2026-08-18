@@ -603,6 +603,27 @@
   "exceptions": {
     "title": "Exceptions"
   },
+  "exchange": {
+    "mapping": {
+      "title": "Exchange {{tracking}}",
+      "outboundLabel": "Outbound",
+      "outboundHint": "Leaving to customer",
+      "inboundLabel": "Inbound",
+      "inboundHint": "Coming back from customer",
+      "rawDescriptionNote": "As reported by the courier — not parsed. Pick the exact variant below.",
+      "selectVariant": "Select variant",
+      "changeVariant": "Change",
+      "confirmButton": "Confirm mapping",
+      "notFound": "Exchange not found",
+      "successTitle": "Exchange mapped",
+      "successBody": "Order {{order}} was created for the outbound leg.",
+      "backToExceptions": "Back to Exceptions"
+    },
+    "picker": {
+      "title": "Select a variant",
+      "close": "Close"
+    }
+  },
   "common": {
     "loading": "Loading...",
     "error": "Something went wrong",

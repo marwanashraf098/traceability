@@ -52,7 +52,8 @@ class MigrationSmokeTest {
             "stock_take_shopify_syncs",
             "return_sessions",
             "return_session_items",
-            "return_session_shipments"
+            "return_session_shipments",
+            "exchanges"
     );
 
     @Test
@@ -70,8 +71,8 @@ class MigrationSmokeTest {
                 .as("Flyway migrations must succeed")
                 .isTrue();
         assertThat(result.migrationsExecuted)
-                .as("all migrations V1–V73 must execute (V38 was never used — 72 files, not 73)")
-                .isEqualTo(72);
+                .as("all migrations V1–V74 must execute (V38 was never used — 73 files, not 74)")
+                .isEqualTo(73);
 
         try (Connection conn = DriverManager.getConnection(
                 POSTGRES.getJdbcUrl(),
@@ -141,15 +142,17 @@ class MigrationSmokeTest {
                         .isTrue();
             }
 
-            // 7. Seed data: all 23 Bosta state mapping rows present
-            // (code 41 has two rows: SEND and RTO; defensive codes 22,23,25,40,60,104 included)
+            // 7. Seed data: Bosta state mapping rows present.
+            // V74 deletes the 41:EXCHANGE row (FR-EXCHANGE Phase 1) — it wrongly mapped the
+            // exchange's outbound leg to 'returning'; type.code=30 deliveries now bypass this
+            // table entirely (BostaWebhookJob step 6.5, ahead of stateMapper.map()). 27→26.
             try (PreparedStatement ps = conn.prepareStatement(
                     "SELECT COUNT(*) FROM bosta_state_mappings");
                  ResultSet rs = ps.executeQuery()) {
                 rs.next();
                 assertThat(rs.getInt(1))
                         .as("bosta_state_mappings must be seeded")
-                        .isEqualTo(27);
+                        .isEqualTo(26);
             }
 
             // 8. Seed data: all 22 NDR code rows present (11 forward + 11 return)

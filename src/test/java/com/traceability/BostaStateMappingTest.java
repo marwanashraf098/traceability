@@ -41,7 +41,7 @@ import static org.mockito.Mockito.*;
  *   s9  — BostaWebhookJob: unknown code -1 → webhook_events.status='failed' (not processed)
  *   s10 — BostaStatusPollJob: state-60 shipment (internal=returned) excluded from poll set
  *   s11 — BostaStateMapper: state 11 → created, pieceStatusAfter=null (new from V37)
- *   s12 — BostaStateMapper: state 41:FXF_SEND → with_courier; 41:EXCHANGE → returning
+ *   s12 — BostaStateMapper: state 41:FXF_SEND → with_courier; 41:EXCHANGE removed (V74)
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.NONE)
 @Testcontainers
@@ -357,9 +357,15 @@ class BostaStateMappingTest {
         assertThat(fxfSend.shipmentInternalState()).isEqualTo("with_courier");
         assertThat(fxfSend.unknownCode()).isFalse();
 
+        // V74 (FR-EXCHANGE Phase 1) deletes 41:EXCHANGE — it wrongly mapped the exchange's
+        // OUTBOUND leg to 'returning' (only correct for the inbound/CRP-shaped leg). Exchange
+        // deliveries (type.code=30) now bypass this mapper entirely at ingest (BostaWebhookJob
+        // step 6.5, ahead of stateMapper.map()), so this key is intentionally gone, not a
+        // regression — same "no :ALL fallback for 41" shape as the CRP dead-key check below.
         BostaStateMapper.MappedState exchange = stateMapper.map(41, "EXCHANGE");
-        assertThat(exchange.shipmentInternalState()).isEqualTo("returning");
-        assertThat(exchange.unknownCode()).isFalse();
+        assertThat(exchange.unknownCode())
+            .as("41:EXCHANGE removed by V74 — exchange deliveries bypass this mapper, never reach it")
+            .isTrue();
 
         // V43 fix: V37 seeded applies_to_order_type='CRP'; Bosta API sends type.value
         // 'Customer Return Pickup' which normalizes to 'CUSTOMER RETURN PICKUP' (not 'CRP').

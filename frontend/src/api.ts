@@ -1376,3 +1376,39 @@ export async function reprintTransferOutstanding(transferId: string): Promise<vo
   const blob = await res.blob()
   window.open(URL.createObjectURL(blob), '_blank')
 }
+
+// ── FR-EXCHANGE Phase 2 — mapping step ───────────────────────────────────────
+// Raw column-labelled response (snake_case), same convention as the exception
+// detector payloads (see Exceptions.tsx) — not a hand-built camelCase DTO.
+
+export interface ExchangeSummary {
+  id: string
+  tracking_number: string
+  outbound_description: string | null
+  inbound_description: string | null
+  inbound_description_ar: string | null
+  cod: number | null
+  goods_value: number | null
+  outbound_items_count: number | null
+  inbound_items_count: number | null
+  customer_name: string | null
+  customer_phone: string | null
+}
+
+/** Omit status to fetch every exchange for the tenant (e.g. re-visiting a since-mapped one). */
+export function getExchanges(status?: string) {
+  return request<ExchangeSummary[]>(`/exchanges${status ? `?status=${status}` : ''}`)
+}
+
+export interface MapExchangeResult {
+  exchangeId: string
+  orderId: string
+  status: string
+}
+
+export function mapExchange(id: string, outboundVariantId: string, inboundVariantId: string) {
+  return request<MapExchangeResult>(`/exchanges/${id}/map`, {
+    method: 'POST',
+    body: JSON.stringify({ outboundVariantId, inboundVariantId }),
+  })
+}

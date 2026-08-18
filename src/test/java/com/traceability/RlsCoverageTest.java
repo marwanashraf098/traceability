@@ -101,7 +101,8 @@ class RlsCoverageTest {
             "/api/v1/orders/funnel",
             "/api/v1/orders/summary",
             "/api/v1/inventory/throughput",
-            "/api/v1/activity/recent"
+            "/api/v1/activity/recent",
+            "/api/v1/exchanges"
     );
 
     // ── Patterns consciously excluded, with reasons ────────────────────────────
@@ -246,6 +247,8 @@ class RlsCoverageTest {
         jdbc.update("DELETE FROM allocations             WHERE tenant_id = ?", tenantId);
         jdbc.update("DELETE FROM pieces                  WHERE tenant_id = ?", tenantId);
         jdbc.update("DELETE FROM shipments               WHERE tenant_id = ?", tenantId);
+        // exchanges.outbound_order_id FKs to orders — delete exchanges first.
+        jdbc.update("DELETE FROM exchanges               WHERE tenant_id = ?", tenantId);
         jdbc.update("DELETE FROM order_items             WHERE tenant_id = ?", tenantId);
         jdbc.update("DELETE FROM orders                  WHERE tenant_id = ?", tenantId);
         jdbc.update("DELETE FROM receipts                WHERE tenant_id = ?", tenantId);
@@ -344,6 +347,16 @@ class RlsCoverageTest {
                     "VALUES (?, 'TN-CVG-001', 45, 'normal')", tenantId);
 
         ResponseEntity<List> resp = get("/api/v1/shipments/unlinked", List.class);
+        assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(resp.getBody()).isNotEmpty();
+    }
+
+    @Test
+    void exchanges_returnsSeededNeedsMappingRow() {
+        jdbc.update("INSERT INTO exchanges (tenant_id, tracking_number, status, raw) " +
+                    "VALUES (?, 'TN-CVG-EXC-001', 'needs_mapping', '{}'::jsonb)", tenantId);
+
+        ResponseEntity<List> resp = get("/api/v1/exchanges?status=needs_mapping", List.class);
         assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.OK);
         assertThat(resp.getBody()).isNotEmpty();
     }

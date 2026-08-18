@@ -68,6 +68,7 @@ public class BostaWebhookJob {
     private final InventoryLedger      ledger;
     private final com.traceability.inventory.ShipmentLinkService shipmentLinkService;
     private final com.traceability.inventory.NotTracedTagger notTracedTagger;
+    private final com.traceability.inventory.ExchangeIngestService exchangeIngestService;
     private final MatcherVersionHolder matcherVersionHolder;
 
     public BostaWebhookJob(JdbcTemplate jdbc,
@@ -79,6 +80,7 @@ public class BostaWebhookJob {
                             InventoryLedger ledger,
                             com.traceability.inventory.ShipmentLinkService shipmentLinkService,
                             com.traceability.inventory.NotTracedTagger notTracedTagger,
+                            com.traceability.inventory.ExchangeIngestService exchangeIngestService,
                             MatcherVersionHolder matcherVersionHolder) {
         this.jdbc                = jdbc;
         this.tx                  = new TransactionTemplate(txm);
@@ -89,6 +91,7 @@ public class BostaWebhookJob {
         this.ledger              = ledger;
         this.shipmentLinkService = shipmentLinkService;
         this.notTracedTagger     = notTracedTagger;
+        this.exchangeIngestService = exchangeIngestService;
         this.matcherVersionHolder = matcherVersionHolder;
     }
 
@@ -181,6 +184,31 @@ public class BostaWebhookJob {
 
             if (delivery == null) {
                 markFailed(webhookEventId, "Delivery not found: " + trackingNumber);
+                return;
+            }
+
+            // 6.5 — FR-EXCHANGE Phase 1: type.code=30 (EXCHANGE) deliveries are rerouted to
+            // the exchange lane BEFORE step 7's generic (state_code, type) mapper is ever
+            // consulted — not just before step 8's shipment lookup. This is deliberately
+            // earlier than "before the shipment lookup" because state 41 has no :ALL
+            // fallback (V43) and this same migration (V74) deletes the 41:EXCHANGE seed
+            // row (Phase 0 finding: it wrongly maps the OUTBOUND leg to 'returning'). If
+            // this branch ran after stateMapper.map(), an exchange first observed at state
+            // 41 would hit unknownCode() and be marked failed before ever reaching here.
+            if (delivery.typeCode() == 30) {
+                boolean routedToExchangeLane =
+                    exchangeIngestService.upsertFromDelivery(tenantId, trackingNumber, delivery);
+                if (routedToExchangeLane) {
+                    markProcessed(webhookEventId, idemKey, "exchange: " + trackingNumber);
+                } else {
+                    // itemsCount != 1 on a leg (first sighting) — the single-variant-per-leg
+                    // schema can't represent it. Falls back to the pre-existing generic
+                    // unmatched lane so it still raises an exception, just not exchange-shaped
+                    // ("do not auto-handle" — FR-EXCHANGE v2 §2 data trap).
+                    recordUnlinked(tenantId, trackingNumber, delivery, webhookEventId,
+                        "EXCHANGE_MULTI_ITEM");
+                    markProcessed(webhookEventId, idemKey, "unlinked: " + trackingNumber);
+                }
                 return;
             }
 

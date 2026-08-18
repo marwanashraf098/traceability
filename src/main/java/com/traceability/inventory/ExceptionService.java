@@ -12,12 +12,12 @@ import java.time.Instant;
 import java.util.*;
 
 /**
- * Exceptions center (FR-15.3, +1 detector FR-24): aggregates 18 exception detectors into one
- * prioritised list, sorted CRITICAL→HIGH→MEDIUM→LOW then oldest-first within
- * each severity tier.
+ * Exceptions center (FR-15.3, +1 detector FR-24, +1 detector FR-EXCHANGE): aggregates 19
+ * exception detectors into one prioritised list, sorted CRITICAL→HIGH→MEDIUM→LOW then
+ * oldest-first within each severity tier.
  *
  * Aggregation: per-type queries run separately and merged in Java.
- * A single UNION would require all 17 queries to emit identical columns,
+ * A single UNION would require all of them to emit identical columns,
  * and the stuck-shipment resolved_at>last_synced_at staleness check is
  * awkward to express generically. Per-type Java merge is readable,
  * independently testable, and trivially extensible.
@@ -84,6 +84,7 @@ public class ExceptionService {
         all.addAll(detectShopifyEditConflict(tenantId));
         all.addAll(detectReturnInTransitStuck(tenantId, returnInTransitStuckDays));
         all.addAll(detectReturnSessionMismatch(tenantId));
+        all.addAll(detectExchangeNeedsMapping(tenantId));
 
         // Enrich with descriptions and action hints
         all.forEach(this::enrich);
@@ -173,6 +174,7 @@ public class ExceptionService {
         all.addAll(detectShopifyEditConflict(tenantId));
         all.addAll(detectReturnInTransitStuck(tenantId, returnInTransitStuckDays));
         all.addAll(detectReturnSessionMismatch(tenantId));
+        all.addAll(detectExchangeNeedsMapping(tenantId));
 
         int critical = 0;
         for (Map<String, Object> e : all) {
@@ -268,6 +270,16 @@ public class ExceptionService {
             tid, tid, windowDays, tid, tid);
     }
 
+    /**
+     * Deliberately NOT filtered by bosta_order_type. Single-item EXCHANGE deliveries are
+     * intercepted at ingest (BostaWebhookJob step 6.5) and never reach
+     * unlinked_bosta_deliveries at all going forward; the 4 fleet-confirmed rows from
+     * before that reroute existed are marked resolved=true by the V74 backfill, so this
+     * query already excludes them via WHERE resolved = false. A bosta_order_type =
+     * 'EXCHANGE' row CAN still land here going forward — that's the intentional
+     * multi-item-anomaly fallback (see ExchangeIngestService javadoc) — and it must keep
+     * surfacing as a real exception ("do not auto-handle"), so it is not filtered out.
+     */
     private List<Map<String, Object>> detectUnmatched(UUID tid) {
         return jdbc.queryForList(
             "SELECT 'unmatched_delivery' AS type, 'MEDIUM' AS severity, 'delivery' AS subject_type, " +
@@ -649,6 +661,26 @@ public class ExceptionService {
             tid, tid);
     }
 
+    /**
+     * FR-EXCHANGE Phase 1: a Bosta-direct exchange upserted at ingest (§ExchangeIngestService)
+     * that still needs its outbound/inbound descriptions mapped to catalog variants before
+     * it can enter Fulfill/Returns. No exception_resolutions row is written by the mapping
+     * step — mapping flips exchanges.status away from 'needs_mapping', which removes the row
+     * from this query directly, so no separate resolution/suppression bookkeeping is needed
+     * (same self-resolving pattern as detectGuidedUnpack).
+     */
+    private List<Map<String, Object>> detectExchangeNeedsMapping(UUID tid) {
+        return jdbc.queryForList(
+            "SELECT 'exchange_needs_mapping' AS type, 'MEDIUM' AS severity, 'exchange' AS subject_type, " +
+            "       e.id AS exchange_id, e.tracking_number, " +
+            "       e.outbound_description, e.inbound_description, " +
+            "       e.created_at AS occurred_at, " +
+            "       'exchange_needs_mapping:' || e.id AS subject_key " +
+            "FROM exchanges e " +
+            "WHERE e.tenant_id = ? AND e.status = 'needs_mapping'",
+            tid);
+    }
+
     private List<Map<String, Object>> detectMissingProviderId(UUID tid) {
         return jdbc.queryForList(
             "SELECT 'missing_provider_id' AS type, 'MEDIUM' AS severity, 'shipment' AS subject_type, " +
@@ -854,6 +886,13 @@ public class ExceptionService {
                 item.put("descriptionAr", "القطعة " + b + " الممسوحة في جلسة إرجاع لم تطابق حالتها المتوقعة");
                 item.put("suggestedAction", "inspect_and_resolve");
                 item.put("actionUrl", "/returns");
+            }
+            case "exchange_needs_mapping" -> {
+                String t = str(item, "tracking_number");
+                item.put("descriptionEn", "Exchange " + t + " needs its outbound/inbound items mapped to catalog variants");
+                item.put("descriptionAr", "الاستبدال " + t + " يحتاج إلى ربط الأصناف الصادرة والواردة بمتغيرات الكتالوج");
+                item.put("suggestedAction", "map_exchange");
+                item.put("actionUrl", "/exchanges/" + item.get("exchange_id"));
             }
         }
     }

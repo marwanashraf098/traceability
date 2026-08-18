@@ -28,6 +28,7 @@ import TransferReconcile from './pages/TransferReconcile'
 import LookupPage from './pages/Lookup'
 import Returns from './pages/Returns'
 import ExceptionsPage from './pages/Exceptions'
+import ExchangeMapping from './pages/exchanges/ExchangeMapping'
 import Connections from './pages/Connections'
 import Settings from './pages/Settings'
 import Users from './pages/Users'
@@ -111,6 +112,14 @@ export default function App() {
           element={
             <RequireAuth>
               <Layout><OrderDetail /></Layout>
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="/exchanges/:id"
+          element={
+            <RequireAuth>
+              <Layout><ExchangeMapping /></Layout>
             </RequireAuth>
           }
         />

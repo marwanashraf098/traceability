@@ -598,6 +598,27 @@
   "exceptions": {
     "title": "الاستثناءات"
   },
+  "exchange": {
+    "mapping": {
+      "title": "استبدال {{tracking}}",
+      "outboundLabel": "صادر",
+      "outboundHint": "متجه إلى العميل",
+      "inboundLabel": "وارد",
+      "inboundHint": "عائد من العميل",
+      "rawDescriptionNote": "كما أوردته شركة الشحن — دون تحليل. اختر المتغير الدقيق أدناه.",
+      "selectVariant": "اختيار المتغير",
+      "changeVariant": "تغيير",
+      "confirmButton": "تأكيد الربط",
+      "notFound": "الاستبدال غير موجود",
+      "successTitle": "تم ربط الاستبدال",
+      "successBody": "تم إنشاء الطلب {{order}} للجزء الصادر.",
+      "backToExceptions": "العودة إلى الاستثناءات"
+    },
+    "picker": {
+      "title": "اختيار متغير",
+      "close": "إغلاق"
+    }
+  },
   "common": {
     "loading": "جارٍ التحميل...",
     "error": "حدث خطأ ما",

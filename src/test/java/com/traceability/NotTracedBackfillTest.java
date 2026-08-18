@@ -115,15 +115,18 @@ class NotTracedBackfillTest {
         //    (metadata only, no data touched by this test); V70/V71/V72, the Overview
         //    dashboard's three additive columns (variants.unit_cost, tenants.low_stock_
         //    threshold, tenants.onboarding_dismissed_at — all metadata-only, no data
-        //    touched by this test); and V73, the FR-24 returns-session tables (new tables,
-        //    no existing data touched).
+        //    touched by this test); V73, the FR-24 returns-session tables (new tables,
+        //    no existing data touched); and V74, the FR-EXCHANGE Phase 1 exchanges table +
+        //    dead-seed-row delete + one-time backfill (the backfill UPDATE only touches
+        //    unlinked_bosta_deliveries rows with bosta_order_type='EXCHANGE', none of which
+        //    exist in this test's fixtures — no interaction with the stuck/traced orders here).
         Flyway toLatest = Flyway.configure()
                 .dataSource(POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword())
                 .locations("classpath:db/migration")
                 .load();
         MigrateResult r2 = toLatest.migrate();
         assertThat(r2.success).as("migrations after V56 must succeed").isTrue();
-        assertThat(r2.migrationsExecuted).as("V57 + V58 + V59 + V60 + V61 + V62 + V63 + V64 + V65 + V66 + V67 + V68 + V69 + V70 + V71 + V72 + V73 pending after V56").isEqualTo(17);
+        assertThat(r2.migrationsExecuted).as("V57 + V58 + V59 + V60 + V61 + V62 + V63 + V64 + V65 + V66 + V67 + V68 + V69 + V70 + V71 + V72 + V73 + V74 pending after V56").isEqualTo(18);
 
         try (Connection conn = DriverManager.getConnection(
                 POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword())) {
