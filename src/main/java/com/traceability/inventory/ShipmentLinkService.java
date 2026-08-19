@@ -103,7 +103,8 @@ public class ShipmentLinkService {
     public Map<String, Object> linkByAwbScan(UUID orderId, String rawScan, UUID actorUserId) {
         UUID tenantId = TenantContext.require();
 
-        // 1. Verify order exists and is in a linkable state (unchanged gate)
+        // 1. Verify order exists and is in a linkable state (unchanged gate) — the
+        // packer must have finished picking/packing before an AWB can be linked.
         String[] orderInfo = jdbc.query(
             "SELECT status, number FROM orders WHERE id = ? AND tenant_id = ?",
             rs -> rs.next() ? new String[]{rs.getString("status"), rs.getString("number")} : null,
@@ -118,6 +119,53 @@ public class ShipmentLinkService {
                 "Order must be in 'packed' state to link an AWB (current: " + orderStatus + ")");
         }
 
+        return linkTrackingNumberToOrder(orderId, orderNumber, rawScan, tenantId, actorUserId);
+    }
+
+    /**
+     * FR-EXCHANGE — map-time forward-shipment creation. Package-private (no new HTTP
+     * surface): called only by ExchangeService.map(), never by a controller. Mirror-image
+     * gate to linkByAwbScan()'s — an exchange order is unpicked ('new'/'ready_to_pick')
+     * at map time, the opposite lifecycle point from a normal AWB scan.
+     *
+     * Shares 100% of the creation/link logic below via linkTrackingNumberToOrder() — no
+     * duplication, and the swapped-AWB guard + forward-only INSERT are exactly the code
+     * linkByAwbScan() already uses, untouched. completeLink()'s tail (piece transitions,
+     * order→awaiting_pickup) is a structural no-op at map-time: zero allocations exist
+     * yet (nothing's been picked, so transitionPackedPieces()'s query returns an empty
+     * list), and the order-status UPDATE's own `WHERE status='packed'` guard doesn't
+     * match 'new'/'ready_to_pick', so the order never advances past its unpicked state —
+     * this doesn't need special-casing, it falls out of the existing WHERE clauses.
+     */
+    @Transactional(isolation = Isolation.READ_COMMITTED)
+    Map<String, Object> linkAtMapTime(UUID orderId, String trackingNumber, UUID actorUserId) {
+        UUID tenantId = TenantContext.require();
+
+        String[] orderInfo = jdbc.query(
+            "SELECT status, number FROM orders WHERE id = ? AND tenant_id = ?",
+            rs -> rs.next() ? new String[]{rs.getString("status"), rs.getString("number")} : null,
+            orderId, tenantId);
+        if (orderInfo == null) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Order not found");
+        }
+        String orderStatus = orderInfo[0];
+        String orderNumber = orderInfo[1];
+        if (!"new".equals(orderStatus) && !"ready_to_pick".equals(orderStatus)) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                "Order must be unpicked ('new'/'ready_to_pick') to auto-link at map-time (current: " + orderStatus + ")");
+        }
+
+        return linkTrackingNumberToOrder(orderId, orderNumber, trackingNumber, tenantId, actorUserId);
+    }
+
+    /**
+     * Shared body of linkByAwbScan() and linkAtMapTime(): normalize, Mode-B verify,
+     * swapped-AWB check, forward-only INSERT, then completeLink()'s tail. Extracted
+     * verbatim — callers differ only in which order-status gate they check before
+     * reaching here.
+     */
+    private Map<String, Object> linkTrackingNumberToOrder(UUID orderId, String orderNumber, String rawScan,
+                                                            UUID tenantId, UUID actorUserId) {
         // Normalize the raw scan — single source of truth, used everywhere below.
         String trackingNumber = TrackingNumberNormalizer.normalize(rawScan);
         if (trackingNumber == null) {

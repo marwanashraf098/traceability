@@ -103,13 +103,18 @@ export default function Orders() {
       header: t('orders.columns.number', { defaultValue: 'Order' }),
       mono: true,
       render: row => (
-        // Order number — mono, links to detail
-        <Link
-          to={`/orders/${row.id}`}
-          className="text-trace-blue hover:text-trace-blue-hover font-medium transition-colors"
-        >
-          {row.number ?? t('common.na')}
-        </Link>
+        // Order number — mono, links to detail. Exchanges stay inline with normal
+        // orders (no filter, no row restyling, no separate section) — the badge is
+        // the only differentiator, same component QueueView/PickScreen already use.
+        <div className="flex items-center gap-1.5">
+          <Link
+            to={`/orders/${row.id}`}
+            className="text-trace-blue hover:text-trace-blue-hover font-medium transition-colors"
+          >
+            {row.number ?? t('common.na')}
+          </Link>
+          {row.isExchange && <Badge tone="info" label={t('exchange.badge')} />}
+        </div>
       ),
     },
     {

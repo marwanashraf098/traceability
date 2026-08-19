@@ -32,10 +32,23 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  *        populates PII, records the mapping, flips status → mapped
  *   m3 — store_id is derived from the OUTBOUND variant's product, not "the tenant's
  *        only store" — proven with two stores, variant under the non-first one
- *   m4 — map() creates NO shipments row and does not touch is_self_pickup (Fulfill
- *        queue inertness guarantee, §0b)
+ *   m4 — map() creates+links a 'created' forward shipment against exchanges.
+ *        tracking_number (moved from pack-time to map-time); the order itself stays
+ *        genuinely unpicked — status not advanced, no allocations, no piece
+ *        transitions — and is now pickable via the standard shipment-created
+ *        disjunct, no exchange-specific queue clause needed
  *   m5 — re-posting an already-mapped exchange 409s (claim-first idempotency)
  *   m6 — unknown variant id → 400, before any order/order_item write
+ *   m7 — the map-time shipment satisfies Print Waybill's own preconditions
+ *        (order_id set, non-terminal internal_state, not CRP-typed)
+ *   m8 — map() atomicity: a malformed tracking number makes linkAtMapTime() throw,
+ *        which rolls back the WHOLE transaction — no orphan order, exchange reverts
+ *        to needs_mapping (not stranded 'mapped' with no order)
+ *   m9 — forward-only: exactly one shipments row for the tracking after map()
+ *   m10 — the PUBLIC linkByAwbScan() gate is unweakened: called directly against the
+ *         still-unpicked ('new') order map() just created, it still 409s exactly as
+ *         it would for any other unpicked order — proves the extraction that added
+ *         linkAtMapTime() did not loosen linkByAwbScan()'s own precondition
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.NONE)
 @Testcontainers
@@ -62,6 +75,7 @@ class ExchangeMappingTest {
     }
 
     @Autowired ExchangeService excSvc;
+    @Autowired com.traceability.inventory.ShipmentLinkService linkSvc;
     @Autowired JdbcTemplate    jdbc;
     @MockBean  JobScheduler    jobScheduler;
 
@@ -101,8 +115,11 @@ class ExchangeMappingTest {
 
     @AfterEach
     void cleanup() {
-        // exchanges.outbound_order_id FKs to orders — delete exchanges first.
+        // exchanges.outbound_order_id FKs to orders — delete exchanges first. map() now
+        // creates a shipments row too (FR-EXCHANGE map-time link) — shipments_order_id_fkey
+        // means it must go before orders as well.
         jdbc.update("DELETE FROM exchanges   WHERE tenant_id = ?", tenantId);
+        jdbc.update("DELETE FROM shipments   WHERE tenant_id = ?", tenantId);
         jdbc.update("DELETE FROM order_items WHERE tenant_id = ?", tenantId);
         jdbc.update("DELETE FROM orders      WHERE tenant_id = ?", tenantId);
     }
@@ -128,14 +145,14 @@ class ExchangeMappingTest {
 
     @Test
     void m1_list_returnsParsedFieldsScopedByStatus() {
-        UUID id = seedExchange("EXMAP-M1", "Yellow hat", 1, "Red hat", "قبعة حمراء", 1);
+        UUID id = seedExchange("910000001", "Yellow hat", 1, "Red hat", "قبعة حمراء", 1);
 
         List<Map<String, Object>> rows = excSvc.list("needs_mapping");
         Map<String, Object> row = rows.stream()
             .filter(r -> id.toString().equals(r.get("id").toString()))
             .findFirst().orElseThrow();
 
-        assertThat(row.get("tracking_number")).isEqualTo("EXMAP-M1");
+        assertThat(row.get("tracking_number")).isEqualTo("910000001");
         assertThat(row.get("outbound_description")).isEqualTo("Yellow hat");
         assertThat(row.get("inbound_description")).isEqualTo("Red hat");
         assertThat(row.get("inbound_description_ar")).isEqualTo("قبعة حمراء");
@@ -151,15 +168,15 @@ class ExchangeMappingTest {
 
     @Test
     void m2_map_createsOrderAndOrderItem_populatesPii_flipsStatus() {
-        UUID id = seedExchange("EXMAP-M2", "Yellow hat", 1, "Red hat", "قبعة حمراء", 1);
+        UUID id = seedExchange("910000002", "Yellow hat", 1, "Red hat", "قبعة حمراء", 1);
 
         Map<String, Object> result = excSvc.map(id, outboundVariantId, inboundVariantId);
         UUID orderId = UUID.fromString((String) result.get("orderId"));
 
         Map<String, Object> order = jdbc.queryForMap(
             "SELECT * FROM orders WHERE id = ? AND tenant_id = ?", orderId, tenantId);
-        assertThat(order.get("external_id")).isEqualTo("internal:exchange:EXMAP-M2");
-        assertThat(order.get("number")).isEqualTo("EXC-EXMAP-M2");
+        assertThat(order.get("external_id")).isEqualTo("internal:exchange:910000002");
+        assertThat(order.get("number")).isEqualTo("EXC-910000002");
         assertThat(order.get("customer_name")).isEqualTo("Maya Mostafa");
         assertThat(order.get("customer_phone")).isNotNull();
         assertThat(order.get("payment_method")).isNull();
@@ -182,7 +199,7 @@ class ExchangeMappingTest {
 
     @Test
     void m3_map_derivesStoreIdFromOutboundVariantProduct_notTenantsFirstStore() {
-        UUID id = seedExchange("EXMAP-M3", "Yellow hat", 1, "Red hat", "قبعة حمراء", 1);
+        UUID id = seedExchange("910000003", "Yellow hat", 1, "Red hat", "قبعة حمراء", 1);
 
         Map<String, Object> result = excSvc.map(id, outboundVariantId, inboundVariantId);
         UUID orderId = UUID.fromString((String) result.get("orderId"));
@@ -195,23 +212,43 @@ class ExchangeMappingTest {
             .isNotEqualTo(storeAId);
     }
 
-    // ── m4: no shipments row, is_self_pickup untouched (Fulfill inertness) ──────
+    // ── m4: map() creates+links a 'created' forward shipment; order stays unpicked ──
 
     @Test
-    void m4_map_createsNoShipmentsRow_leavesIsSelfPickupDefault() {
-        UUID id = seedExchange("EXMAP-M4", "Yellow hat", 1, "Red hat", "قبعة حمراء", 1);
+    void m4_map_createsLinkedForwardShipment_orderStaysGenuinelyUnpicked() {
+        UUID id = seedExchange("910000004", "Yellow hat", 1, "Red hat", "قبعة حمراء", 1);
         Map<String, Object> result = excSvc.map(id, outboundVariantId, inboundVariantId);
         UUID orderId = UUID.fromString((String) result.get("orderId"));
 
-        Integer shipmentCount = jdbc.queryForObject(
-            "SELECT COUNT(*) FROM shipments WHERE order_id = ?", Integer.class, orderId);
-        assertThat(shipmentCount).as("Phase 2 must not create a shipments row").isZero();
+        Map<String, Object> shipment = jdbc.queryForMap(
+            "SELECT tracking_number, shipment_leg, internal_state::text AS internal_state, order_id " +
+            "FROM shipments WHERE order_id = ?", orderId);
+        assertThat(shipment.get("tracking_number")).isEqualTo("910000004");
+        assertThat(shipment.get("shipment_leg")).isEqualTo("forward");
+        assertThat(shipment.get("internal_state")).isEqualTo("created");
 
-        Boolean isSelfPickup = jdbc.queryForObject(
-            "SELECT is_self_pickup FROM orders WHERE id = ?", Boolean.class, orderId);
-        assertThat(isSelfPickup).isFalse();
+        // The order itself is genuinely untouched by the completeLink() tail — it falls
+        // out of that tail's own WHERE clauses (status='packed' guard, empty allocation
+        // set), not a special case linkAtMapTime() has to implement.
+        String orderStatus = jdbc.queryForObject(
+            "SELECT status::text FROM orders WHERE id = ?", String.class, orderId);
+        assertThat(orderStatus).as("map-time link must not advance the order past unpicked").isEqualTo("new");
 
-        // Directly re-verify the Fulfill pickability predicate excludes this order.
+        Integer allocationCount = jdbc.queryForObject(
+            "SELECT COUNT(*) FROM allocations a JOIN order_items oi ON oi.id = a.order_item_id " +
+            "WHERE oi.order_id = ?", Integer.class, orderId);
+        assertThat(allocationCount).as("nothing has been picked — zero allocations").isZero();
+
+        Integer awaitingPickupEvents = jdbc.queryForObject(
+            "SELECT COUNT(*) FROM piece_events WHERE event_type = 'tracking_linked'",
+            Integer.class);
+        assertThat(awaitingPickupEvents)
+            .as("transitionPackedPieces() found nothing to transition — no piece_events row")
+            .isZero();
+
+        // Fulfill pickability now includes this order via the SAME disjunct a normal
+        // Shopify order's pre-pack webhook-auto-matched AWB already relies on — no
+        // exchange-specific clause.
         Integer pickable = jdbc.queryForObject(
             "SELECT COUNT(*) FROM orders o " +
             "LEFT JOIN LATERAL (" +
@@ -223,14 +260,14 @@ class ExchangeMappingTest {
             "  AND o.on_hold = false " +
             "  AND (o.is_self_pickup = true OR latest_shipment.internal_state = 'created')",
             Integer.class, orderId);
-        assertThat(pickable).as("internal exchange order must be inert to the Fulfill queue").isZero();
+        assertThat(pickable).as("mapped exchange order must be pickable immediately").isEqualTo(1);
     }
 
     // ── m5: re-posting an already-mapped exchange 409s ───────────────────────────
 
     @Test
     void m5_map_alreadyMapped_conflicts() {
-        UUID id = seedExchange("EXMAP-M5", "Yellow hat", 1, "Red hat", "قبعة حمراء", 1);
+        UUID id = seedExchange("910000005", "Yellow hat", 1, "Red hat", "قبعة حمراء", 1);
         excSvc.map(id, outboundVariantId, inboundVariantId);
 
         // Message text (not just the 409 status) proves the CLAIM guard fired, not the
@@ -244,7 +281,7 @@ class ExchangeMappingTest {
         // Exactly one order — the second call never reached the orders INSERT.
         Integer orderCount = jdbc.queryForObject(
             "SELECT COUNT(*) FROM orders WHERE external_id = ?",
-            Integer.class, "internal:exchange:EXMAP-M5");
+            Integer.class, "internal:exchange:910000005");
         assertThat(orderCount).isEqualTo(1);
     }
 
@@ -252,7 +289,7 @@ class ExchangeMappingTest {
 
     @Test
     void m6_map_unknownOutboundVariant_badRequest_noWrites() {
-        UUID id = seedExchange("EXMAP-M6", "Yellow hat", 1, "Red hat", "قبعة حمراء", 1);
+        UUID id = seedExchange("910000006", "Yellow hat", 1, "Red hat", "قبعة حمراء", 1);
 
         assertThatThrownBy(() -> excSvc.map(id, UUID.randomUUID(), inboundVariantId))
             .isInstanceOf(ResponseStatusException.class)
@@ -262,5 +299,84 @@ class ExchangeMappingTest {
         String status = jdbc.queryForObject(
             "SELECT status FROM exchanges WHERE id = ?", String.class, id);
         assertThat(status).as("failed mapping must not strand the exchange in 'mapped'").isEqualTo("needs_mapping");
+    }
+
+    // ── m7: map-time shipment satisfies Print Waybill's own preconditions ───────
+
+    @Test
+    void m7_mapTimeShipment_satisfiesPrintWaybillPreconditions() {
+        UUID id = seedExchange("910000007", "Yellow hat", 1, "Red hat", "قبعة حمراء", 1);
+        Map<String, Object> result = excSvc.map(id, outboundVariantId, inboundVariantId);
+        UUID orderId = UUID.fromString((String) result.get("orderId"));
+
+        // Mirrors BostaAwbService.printAwb()'s own pre-filter exactly (order_id IS NOT
+        // NULL / non-terminal internal_state / not CRP-typed) — a positive count here
+        // means the map-time shipment would NOT be excluded from a print batch.
+        Integer printable = jdbc.queryForObject(
+            "SELECT COUNT(*) FROM shipments " +
+            "WHERE order_id = ? " +
+            "  AND order_id IS NOT NULL " +
+            "  AND internal_state::text NOT IN " +
+            "      ('delivered','returned','returning','lost','terminated','cancelled') " +
+            "  AND COALESCE((raw -> 'type' ->> 'code')::int, -1) <> 25",
+            Integer.class, orderId);
+        assertThat(printable).as("map-time 'created' shipment must pass every Print Waybill pre-filter").isEqualTo(1);
+    }
+
+    // ── m8: map() atomicity — malformed tracking rolls back the WHOLE transaction ──
+
+    @Test
+    void m8_map_malformedTrackingAtLinkStep_rollsBackEntireTransaction_noOrphanOrder() {
+        // No dash, non-numeric — TrackingNumberNormalizer.normalize() returns null,
+        // linkAtMapTime() throws BAD_REQUEST. exchanges.tracking_number has no format
+        // constraint at INSERT time, so this seeds cleanly; the failure surfaces only
+        // when map() reaches the link step.
+        UUID id = seedExchange("BADTRACKNOTNUMERIC", "Yellow hat", 1, "Red hat", "قبعة حمراء", 1);
+
+        assertThatThrownBy(() -> excSvc.map(id, outboundVariantId, inboundVariantId))
+            .isInstanceOf(ResponseStatusException.class)
+            .hasMessageContaining("Unreadable AWB scan");
+
+        // The order + order_item INSERTs that happened BEFORE the failing link call
+        // must have been rolled back along with everything else — no orphan order left
+        // behind with no shipment and no way to retry via a fresh map() call.
+        Integer orderCount = jdbc.queryForObject(
+            "SELECT COUNT(*) FROM orders WHERE external_id = ?",
+            Integer.class, "internal:exchange:BADTRACKNOTNUMERIC");
+        assertThat(orderCount).as("failed map-time link must not strand an orphan order").isZero();
+
+        String status = jdbc.queryForObject(
+            "SELECT status FROM exchanges WHERE id = ?", String.class, id);
+        assertThat(status).as("failed mapping must not strand the exchange in 'mapped'").isEqualTo("needs_mapping");
+    }
+
+    // ── m9: forward-only — exactly one shipments row for the tracking after map() ──
+
+    @Test
+    void m9_map_forwardOnly_exactlyOneShipmentRowForTracking() {
+        UUID id = seedExchange("910000009", "Yellow hat", 1, "Red hat", "قبعة حمراء", 1);
+        excSvc.map(id, outboundVariantId, inboundVariantId);
+
+        Integer count = jdbc.queryForObject(
+            "SELECT COUNT(*) FROM shipments WHERE tracking_number = ?", Integer.class, "910000009");
+        assertThat(count).isEqualTo(1);
+    }
+
+    // ── m10: public linkByAwbScan() gate is unweakened by the extraction ────────
+
+    @Test
+    void m10_publicLinkByAwbScan_stillRejectsTheStillUnpickedMapTimeOrder() {
+        UUID id = seedExchange("910000010", "Yellow hat", 1, "Red hat", "قبعة حمراء", 1);
+        Map<String, Object> result = excSvc.map(id, outboundVariantId, inboundVariantId);
+        UUID orderId = UUID.fromString((String) result.get("orderId"));
+
+        // The order map() just created is still 'new' (m4 already proves this). Calling
+        // the PUBLIC, HTTP-facing linkByAwbScan() against it directly — exactly what an
+        // operator's scan would do — must still 409 exactly as it would for any other
+        // unpicked order. Proves the extraction that introduced linkAtMapTime() did not
+        // loosen linkByAwbScan()'s own 'packed'/'awaiting_pickup' gate.
+        assertThatThrownBy(() -> linkSvc.linkByAwbScan(orderId, "999999999", null))
+            .isInstanceOf(ResponseStatusException.class)
+            .hasMessageContaining("must be in 'packed' state");
     }
 }

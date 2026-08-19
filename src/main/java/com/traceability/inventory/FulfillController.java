@@ -23,12 +23,10 @@ public class FulfillController {
 
     private final FulfillService      svc;
     private final ShipmentLinkService linkSvc;
-    private final ExchangeService     exchangeSvc;
 
-    public FulfillController(FulfillService svc, ShipmentLinkService linkSvc, ExchangeService exchangeSvc) {
-        this.svc         = svc;
-        this.linkSvc     = linkSvc;
-        this.exchangeSvc = exchangeSvc;
+    public FulfillController(FulfillService svc, ShipmentLinkService linkSvc) {
+        this.svc     = svc;
+        this.linkSvc = linkSvc;
     }
 
     @GetMapping("/queue")
@@ -94,19 +92,6 @@ public class FulfillController {
             @PathVariable UUID orderId,
             @AuthenticationPrincipal CustomUserDetails principal) {
         int packed = svc.complete(orderId, principal.userId());
-
-        // FR-EXCHANGE Phase 5 (pack-time auto-link): an exchange has exactly one
-        // possible AWB — the tracking number Traced already holds — so the operator
-        // verification scan a normal order needs (to catch a label mixed up between
-        // MULTIPLE candidate orders at the pack station) doesn't apply; there is no
-        // second order it could be. Reuses linkByAwbScan() completely UNCHANGED, just
-        // triggered automatically instead of waiting for a scan.
-        // trackingNumberForPackedOutboundOrder() only returns a value when complete()
-        // just routed THIS order to 'packed' — a self-pickup exchange is routed to
-        // 'self_pickup_pending' instead and never reaches the call below.
-        exchangeSvc.trackingNumberForPackedOutboundOrder(orderId)
-            .ifPresent(trackingNumber -> linkSvc.linkByAwbScan(orderId, trackingNumber, principal.userId()));
-
         return Map.of("packedPieces", packed);
     }
 

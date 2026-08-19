@@ -72,18 +72,16 @@ public class FulfillService {
      * not_traced_at (see NotTracedTagger): the two mechanisms are independent so a
      * 'created'-state order that was wrongly tagged still shows up here.
      *
-     * FR-EXCHANGE Phase 3/4: third disjunct for the internal (Model-A, origin='exchange')
-     * outbound order. Per the spec (§3.2/§3.4), the forward `shipments` row for an
-     * exchange is created AT PACK via linkByAwbScan — same as any order — not at mapping
-     * or queue-entry time. So a mapped exchange order has NO shipment row yet while it's
-     * sitting in the queue, and would otherwise be permanently excluded by the
-     * shipment-state gate above (confirmed in Phase 2 Step 0 §0b: is_self_pickup is never
-     * set for it, so neither existing disjunct applies). Keyed on
-     * `exchanges.status = 'mapped'` specifically (not any other status) — confirmed
-     * (Phase 3/4 Step 0 §0b) that 'mapped' is currently a terminal value with exactly one
-     * writer (ExchangeService.map()'s claim UPDATE) and no code path this pass moves it
-     * away, so an order can never be silently dropped from the queue mid-pick by a status
-     * change racing the operator.
+     * FR-EXCHANGE: an exchange's forward shipment is now created+linked at MAP time
+     * (ExchangeService.map() → ShipmentLinkService.linkAtMapTime()), not at pack — so a
+     * mapped exchange order already has a `'created'` forward shipment by the time it
+     * would ever reach this filter. No exchange-specific disjunct is needed: the existing
+     * `latest_shipment.internal_state = 'created'` clause already covers it, the exact
+     * same way it already covers a normal Shopify order whose AWB was webhook-auto-
+     * matched before pack (ShipmentLinkService.tryMatchDelivery() — see
+     * OrderStatusDeriver's packedConfirmed javadoc for the same "shipment exists is not
+     * proof of packing" invariant this relies on). An earlier pass added a redundant
+     * `EXISTS(exchanges...status='mapped')` disjunct before this ordering existed; removed.
      */
     private static final String PICKABLE_ORDERS_FILTER =
         "LEFT JOIN LATERAL ( " +
@@ -100,9 +98,7 @@ public class FulfillService {
         "  AND o.on_hold = false " +
         "  AND o.placed_at > now() - (? * INTERVAL '1 day') " +
         "  AND (o.is_self_pickup = true " +
-        "       OR latest_shipment.internal_state = 'created' " +
-        "       OR EXISTS (SELECT 1 FROM exchanges e " +
-        "                  WHERE e.outbound_order_id = o.id AND e.status = 'mapped')) ";
+        "       OR latest_shipment.internal_state = 'created') ";
 
     /**
      * Returns orders eligible for action — see {@link #PICKABLE_ORDERS_FILTER} for the

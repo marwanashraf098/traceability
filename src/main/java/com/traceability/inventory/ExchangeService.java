@@ -14,7 +14,6 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 import java.util.UUID;
 
 /**
@@ -27,10 +26,12 @@ import java.util.UUID;
  * detectors / ShipmentLinkService.listUnlinked() — snake_case JSON, matches the
  * existing Exceptions.tsx precedent for this shape of endpoint).
  *
- * map() does NOT insert into shipments and does NOT touch orders.is_self_pickup — the
- * inertness guarantee that keeps the new internal order out of the Fulfill queue until
- * Phase 3 creates the forward shipment row (see FulfillService.PICKABLE_ORDERS_FILTER;
- * confirmed in Phase 2 Step 0 §0b).
+ * map() creates AND links the forward shipment immediately (ShipmentLinkService.
+ * linkAtMapTime(), reusing linkByAwbScan()'s creation/link body — see that class for the
+ * full reasoning). The order enters the Fulfill queue via PICKABLE_ORDERS_FILTER's
+ * existing `latest_shipment.internal_state = 'created'` disjunct — the same mechanism
+ * a normal order's webhook-auto-matched-before-pack AWB already uses; no exchange-
+ * specific queue disjunct is needed. map() still does NOT touch orders.is_self_pickup.
  */
 @Service
 public class ExchangeService {
@@ -168,6 +169,19 @@ public class ExchangeService {
             "INSERT INTO order_items (tenant_id, order_id, variant_id, quantity) VALUES (?, ?, ?, ?)",
             tenantId, orderId, outboundVariantId, quantity);
 
+        // 4.5 — Forward shipment, created and linked NOW (not deferred to pack). An
+        // exchange has exactly one possible AWB — Traced already holds it in
+        // trackingNumber — so there is nothing an operator scan could verify that isn't
+        // already known. Reuses linkByAwbScan()'s exact creation/link body via
+        // linkAtMapTime(): forward leg only, swapped-AWB guard intact, and — because the
+        // order is still unpicked at this exact moment (no order_items allocations exist
+        // yet; that INSERT is a line above, allocations only come from FulfillService.
+        // scan()) — completeLink()'s piece-transition and order→awaiting_pickup side
+        // effects are structural no-ops here, not something this call has to avoid.
+        // actorUserId=null: no operator is present at map time, same as the webhook
+        // auto-matcher's system-initiated links (ShipmentLinkService.tryMatchDelivery()).
+        shipmentLinkService.linkAtMapTime(orderId, trackingNumber, null);
+
         // 5. PII — reuse, don't reimplement. Same receiver/dropOffAddress shape
         //    ShipmentLinkService already parses for every other Bosta delivery
         //    (confirmed identical in Step 0 §0.5 — Bosta's delivery payload shape is
@@ -185,31 +199,5 @@ public class ExchangeService {
         result.put("orderId", orderId.toString());
         result.put("status", "mapped");
         return result;
-    }
-
-    /**
-     * FR-EXCHANGE Phase 5 (pack-time auto-link). Returns the exchange's tracking number
-     * iff {@code orderId} is a mapped exchange's outbound order AND FulfillService.complete()
-     * has JUST routed it to 'packed'. An exchange has exactly one possible AWB — the
-     * tracking number Traced already holds from ingest — so the operator verification
-     * scan a normal order needs (to catch a label mixed up between orders at the pack
-     * station) doesn't apply here; there is no second candidate order it could be.
-     *
-     * Gating on {@code o.status = 'packed'} (not just exchange existence) means a
-     * self-pickup exchange — which complete() routes to 'self_pickup_pending' instead —
-     * never reaches this far: the caller's {@code Optional} comes back empty and no
-     * auto-link is attempted, rather than attempting one and having linkByAwbScan()
-     * reject it. Read-only; does not call linkByAwbScan() itself — the caller composes
-     * that separately so linkByAwbScan() stays completely unmodified.
-     */
-    @Transactional(readOnly = true)
-    public Optional<String> trackingNumberForPackedOutboundOrder(UUID orderId) {
-        UUID tenantId = TenantContext.require();
-        return Optional.ofNullable(jdbc.query(
-            "SELECT e.tracking_number FROM exchanges e " +
-            "JOIN orders o ON o.id = e.outbound_order_id " +
-            "WHERE e.outbound_order_id = ? AND e.tenant_id = ? AND o.status = 'packed'",
-            rs -> rs.next() ? rs.getString(1) : null,
-            orderId, tenantId));
     }
 }

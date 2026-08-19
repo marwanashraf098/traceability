@@ -105,8 +105,9 @@ export default function OrderDetail() {
         <Link to="/orders" className="text-small text-trace-blue hover:text-trace-blue-hover transition-colors">
           ← {t('orderDetail.back')}
         </Link>
-        <h1 className="text-h1 text-primary mt-2">
-          {t('orderDetail.title')} <span className="font-mono">{order.number}</span>
+        <h1 className="text-h1 text-primary mt-2 flex items-center gap-2 flex-wrap">
+          <span>{t('orderDetail.title')} <span className="font-mono">{order.number}</span></span>
+          {order.isExchange && <Badge tone="info" label={t('exchange.badge')} />}
         </h1>
       </div>
 

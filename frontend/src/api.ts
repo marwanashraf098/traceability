@@ -119,6 +119,7 @@ export interface OrderSummary {
   isDelayed: boolean | null
   slaBreached: boolean | null
   notTracedAt: string | null
+  isExchange: boolean
   derivedStatus: DerivedOrderStatus
 }
 
@@ -203,6 +204,7 @@ export interface OrderDetail {
   shipments: ShipmentDetail[]
   bostaLinkStatus: string | null
   notTracedAt: string | null
+  isExchange: boolean
   derivedStatus: DerivedOrderStatus
 }
 

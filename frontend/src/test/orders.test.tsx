@@ -67,6 +67,7 @@ function makeOrderSummary(overrides: Partial<OrderSummary> = {}): OrderSummary {
     isDelayed: null,
     slaBreached: null,
     notTracedAt: null,
+    isExchange: false,
     derivedStatus: makeDerivedStatus(),
     ...overrides,
   }
@@ -123,6 +124,7 @@ function makeOrderDetail(overrides: Partial<IOrderDetail> = {}): IOrderDetail {
     shipments: [],
     bostaLinkStatus: 'linked',
     notTracedAt: null,
+    isExchange: false,
     derivedStatus: makeDerivedStatus(),
     ...overrides,
   }
@@ -297,6 +299,30 @@ describe('Orders list', () => {
     // No shared error state with the table either — the list's own error Alert never appears.
     expect(screen.queryByText('Something went wrong')).toBeNull()
   })
+
+  // FR-EXCHANGE Part 2 — display-only badge, no filter/restyle/section. Exchanges stay
+  // inline with normal orders; the badge is the sole differentiator, reusing the exact
+  // <Badge tone="info"> QueueView/PickScreen already render for is_self_pickup.
+  test('a mapped exchange order shows the Exchange badge; a normal order does not', async () => {
+    const appFetch = vi.fn((url: string) => {
+      if (url.includes('/orders?')) {
+        return jsonOk(makeOrderPage([
+          makeOrderSummary({ id: 'order-1', number: '#1001', isExchange: false }),
+          makeOrderSummary({ id: 'order-2', number: '#EXC-2', isExchange: true }),
+        ]))
+      }
+      if (url.includes('/orders/summary')) return jsonOk(makeOrderSummaryCounts())
+      return jsonOk({})
+    })
+    renderOrdersList(appFetch)
+    await screen.findByText('#1001')
+    await screen.findByText('#EXC-2')
+
+    const normalRow = screen.getByText('#1001').closest('tr')!
+    const exchangeRow = screen.getByText('#EXC-2').closest('tr')!
+    expect(within(normalRow).queryByText('Exchange')).toBeNull()
+    expect(within(exchangeRow).getByText('Exchange')).toBeInTheDocument()
+  })
 })
 
 // ── Order detail ─────────────────────────────────────────────────────────────
@@ -347,6 +373,27 @@ describe('Order detail', () => {
     await user.click(screen.getByText('Save'))
     await waitFor(() => expect(input.closest('div')).toHaveClass('border-critical'))
     expect(screen.getByText(/400/)).toBeInTheDocument()
+  })
+
+  // FR-EXCHANGE Part 2 — same badge, next to the header title. Display-only.
+  test('exchange order detail header shows the Exchange badge; a normal order does not', async () => {
+    const appFetch = vi.fn((url: string) => {
+      if (url.includes('/orders/order-1')) return jsonOk(makeOrderDetail({ isExchange: true }))
+      return jsonOk({})
+    })
+    renderOrderDetailPage(appFetch)
+    await screen.findByText('#1001')
+    expect(screen.getByText('Exchange')).toBeInTheDocument()
+  })
+
+  test('normal order detail header shows no Exchange badge', async () => {
+    const appFetch = vi.fn((url: string) => {
+      if (url.includes('/orders/order-1')) return jsonOk(makeOrderDetail({ isExchange: false }))
+      return jsonOk({})
+    })
+    renderOrderDetailPage(appFetch)
+    await screen.findByText('#1001')
+    expect(screen.queryByText('Exchange')).toBeNull()
   })
 })
 

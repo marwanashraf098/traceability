@@ -40,7 +40,8 @@ public class OrderController {
         Instant placedAt, String trackingNumber,
         String deliveryState, String exceptionReason, String bostaLinkStatus,
         int failedDeliveryAttempts, Boolean isDelayed, Boolean slaBreached,
-        Instant notTracedAt, OrderStatusDeriver.DerivedOrderStatus derivedStatus) {}
+        Instant notTracedAt, boolean isExchange,
+        OrderStatusDeriver.DerivedOrderStatus derivedStatus) {}
 
     public record OrderPage(List<OrderSummary> items, int page, int size, long total) {}
 
@@ -80,7 +81,7 @@ public class OrderController {
         String status, boolean onHold, String holdReason,
         Instant placedAt, Instant createdAt,
         List<OrderItem> items, List<ShipmentDetail> shipments,
-        String bostaLinkStatus, Instant notTracedAt,
+        String bostaLinkStatus, Instant notTracedAt, boolean isExchange,
         OrderStatusDeriver.DerivedOrderStatus derivedStatus) {}
 
     // ── fulfillment funnel — today (Overview dashboard) ─────────────────────
@@ -419,6 +420,7 @@ public class OrderController {
                 ORDER BY created_at DESC, id DESC
                 LIMIT 1
             ) s ON true
+            LEFT JOIN exchanges e ON e.outbound_order_id = o.id
             """ + where;
 
         long total = tx.execute(txs -> jdbc.queryForObject(
@@ -442,7 +444,8 @@ public class OrderController {
                    s.max_progress_rank,
                    s.is_delayed,
                    s.sla_breached,
-                   o.not_traced_at
+                   o.not_traced_at,
+                   (e.id IS NOT NULL) AS is_exchange
             """ + baseJoin + """
              ORDER BY o.placed_at DESC NULLS LAST, o.created_at DESC
              LIMIT ? OFFSET ?
@@ -477,6 +480,7 @@ public class OrderController {
                     rs.getObject("is_delayed", Boolean.class),
                     rs.getObject("sla_breached", Boolean.class),
                     notTracedAt,
+                    rs.getBoolean("is_exchange"),
                     derived
                 );
             },
@@ -498,8 +502,10 @@ public class OrderController {
                 SELECT o.id, o.number, o.customer_name, o.customer_phone,
                        o.address, o.payment_method, o.cod_amount,
                        o.status, o.on_hold, o.hold_reason,
-                       o.placed_at, o.created_at, o.bosta_link_status, o.not_traced_at
+                       o.placed_at, o.created_at, o.bosta_link_status, o.not_traced_at,
+                       (e.id IS NOT NULL) AS is_exchange
                 FROM orders o
+                LEFT JOIN exchanges e ON e.outbound_order_id = o.id AND e.tenant_id = o.tenant_id
                 WHERE o.id = ?
                   AND o.tenant_id = NULLIF(current_setting('app.current_tenant', true), '')::uuid
                 """,
@@ -526,6 +532,7 @@ public class OrderController {
                         null, null,  // items + shipments filled below
                         rs.getString("bosta_link_status"),
                         rs.getTimestamp("not_traced_at") != null ? rs.getTimestamp("not_traced_at").toInstant() : null,
+                        rs.getBoolean("is_exchange"),
                         null  // derivedStatus filled below
                     );
                 }, orderId);
@@ -686,7 +693,8 @@ public class OrderController {
                 order.address(), order.paymentMethod(), order.codAmount(),
                 order.status(), order.onHold(), order.holdReason(),
                 order.placedAt(), order.createdAt(),
-                items, shipments, order.bostaLinkStatus(), order.notTracedAt(), derived);
+                items, shipments, order.bostaLinkStatus(), order.notTracedAt(),
+                order.isExchange(), derived);
         });
     }
 

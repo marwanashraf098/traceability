@@ -812,13 +812,6 @@ function PickScreen({
         // Fallback auto-return if the worker doesn't interact with the completion
         // view — cleared in goNext()/goBack() below if they click first.
         autoBackTimer.current = setTimeout(() => onBack(), 2500)
-      } else if (order?.is_exchange) {
-        // FR-EXCHANGE Phase 5: complete() already auto-linked the forward shipment
-        // server-side (exchanges.tracking_number — exactly one possible AWB, so no
-        // operator verification scan applies). Skip the mandatory post-Complete
-        // AwbLinkDialog entirely — there's nothing left to scan. No auto-back timer:
-        // that's specific to the self-pickup customer-handover flow, not this one.
-        setCompleted(true)
       } else {
         setShowAwbDialog(true)
       }
@@ -1151,12 +1144,13 @@ function PickScreen({
                 </p>
               )}
             </div>
-          ) : allComplete && !order.is_self_pickup && !order.is_exchange ? (
+          ) : allComplete && !order.is_self_pickup ? (
             /* Precondition to Complete: unlinked order, picking finished — the packer must
                scan the physical AWB before Print Waybill (and Complete) can appear at all.
-               Exchange orders never reach this branch (FR-EXCHANGE Phase 5) — there is
-               exactly one possible AWB (exchanges.tracking_number, already known), so
-               complete() auto-links it server-side instead of prompting a redundant scan. */
+               An exchange order never reaches this branch in practice — its forward
+               shipment (and tracking_number) already exists from map-time, so the
+               PRINTABLE branch above fires first, exactly like any Mode-B order whose AWB
+               was webhook-auto-matched before pack. No exchange-specific check needed. */
             <button
               onClick={() => setShowPreCompleteLink(true)}
               className="btn-brand btn text-small w-full"
@@ -1165,8 +1159,8 @@ function PickScreen({
               {t('fulfill.linkAwb.scanPrompt')}
             </button>
           ) : (
-            /* NOT-YET-LINKED (still picking, self-pickup, or an exchange awaiting its
-               auto-link at Complete) — kept as raw <button> to preserve data-testid */
+            /* NOT-YET-LINKED (still picking, or self-pickup) — kept as raw <button> to
+               preserve data-testid */
             <div className="space-y-1">
               <button
                 disabled
@@ -1182,12 +1176,11 @@ function PickScreen({
           )}
 
           {/* Complete: self-pickup never needs a Bosta AWB (unchanged, unaffected by the
-              link/print gate below). Exchange orders skip the same gate for a different
-              reason (FR-EXCHANGE Phase 5) — complete() auto-links using the already-known
-              exchanges.tracking_number, so there's nothing an operator needs to scan or
-              print before Complete is allowed. Every other non-self-pickup order must
-              still be linked AND printed first. */}
-          {allComplete && (order.is_self_pickup || order.is_exchange || (!!order.tracking_number && awbPrintedOnce)) && (
+              link/print gate below). Every other non-self-pickup order — exchange
+              included — must be linked AND printed first; an exchange order satisfies
+              "linked" from map-time onward, so this gate needs no exchange-specific
+              bypass. */}
+          {allComplete && (order.is_self_pickup || (!!order.tracking_number && awbPrintedOnce)) && (
             <Button
               loading={completing}
               onClick={handleComplete}
