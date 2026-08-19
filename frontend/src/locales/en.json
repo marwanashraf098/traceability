@@ -622,7 +622,8 @@
     "picker": {
       "title": "Select a variant",
       "close": "Close"
-    }
+    },
+    "badge": "Exchange"
   },
   "common": {
     "loading": "Loading...",

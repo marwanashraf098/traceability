@@ -71,6 +71,19 @@ public class FulfillService {
      * This is the state-gate filter alone — deliberately NOT also filtered on
      * not_traced_at (see NotTracedTagger): the two mechanisms are independent so a
      * 'created'-state order that was wrongly tagged still shows up here.
+     *
+     * FR-EXCHANGE Phase 3/4: third disjunct for the internal (Model-A, origin='exchange')
+     * outbound order. Per the spec (§3.2/§3.4), the forward `shipments` row for an
+     * exchange is created AT PACK via linkByAwbScan — same as any order — not at mapping
+     * or queue-entry time. So a mapped exchange order has NO shipment row yet while it's
+     * sitting in the queue, and would otherwise be permanently excluded by the
+     * shipment-state gate above (confirmed in Phase 2 Step 0 §0b: is_self_pickup is never
+     * set for it, so neither existing disjunct applies). Keyed on
+     * `exchanges.status = 'mapped'` specifically (not any other status) — confirmed
+     * (Phase 3/4 Step 0 §0b) that 'mapped' is currently a terminal value with exactly one
+     * writer (ExchangeService.map()'s claim UPDATE) and no code path this pass moves it
+     * away, so an order can never be silently dropped from the queue mid-pick by a status
+     * change racing the operator.
      */
     private static final String PICKABLE_ORDERS_FILTER =
         "LEFT JOIN LATERAL ( " +
@@ -86,7 +99,10 @@ public class FulfillService {
         "  AND o.status IN ('new','ready_to_pick','self_pickup_pending') " +
         "  AND o.on_hold = false " +
         "  AND o.placed_at > now() - (? * INTERVAL '1 day') " +
-        "  AND (o.is_self_pickup = true OR latest_shipment.internal_state = 'created') ";
+        "  AND (o.is_self_pickup = true " +
+        "       OR latest_shipment.internal_state = 'created' " +
+        "       OR EXISTS (SELECT 1 FROM exchanges e " +
+        "                  WHERE e.outbound_order_id = o.id AND e.status = 'mapped')) ";
 
     /**
      * Returns orders eligible for action — see {@link #PICKABLE_ORDERS_FILTER} for the
@@ -99,6 +115,7 @@ public class FulfillService {
             "SELECT o.id, o.number, o.customer_name, o.customer_phone, " +
             "       o.status, o.payment_method, o.cod_amount, o.placed_at, " +
             "       o.locked_by, o.locked_at, o.is_self_pickup, " +
+            "       (e.id IS NOT NULL) AS is_exchange, " +
             "       COALESCE(SUM(oi.quantity), 0) AS total_units, " +
             "       COALESCE(( " +
             "           SELECT COUNT(*) FROM allocations a " +
@@ -107,8 +124,10 @@ public class FulfillService {
             "       ), 0) AS scanned_units " +
             "FROM orders o " +
             "LEFT JOIN order_items oi ON oi.order_id = o.id " +
+            // Badge derivation only (FR-EXCHANGE Phase 3/4 §0e) — no new orders column.
+            "LEFT JOIN exchanges e ON e.outbound_order_id = o.id " +
             PICKABLE_ORDERS_FILTER +
-            "GROUP BY o.id " +
+            "GROUP BY o.id, e.id " +
             "ORDER BY o.created_at ASC",
             tenantId, lookbackDays);
     }
@@ -239,9 +258,12 @@ public class FulfillService {
             "SELECT o.id, o.number, o.customer_name, o.customer_phone, o.address, " +
             "       o.status, o.payment_method, o.cod_amount, o.placed_at, " +
             "       o.locked_by, o.locked_at, o.is_self_pickup, o.cancel_requested_at, " +
+            "       (e.id IS NOT NULL) AS is_exchange, " +
             "       s.id AS shipment_id, s.tracking_number " +
             "FROM orders o " +
             "LEFT JOIN shipments s ON s.order_id = o.id AND s.tenant_id = o.tenant_id AND s.shipment_leg = 'forward' " +
+            // Badge derivation only (FR-EXCHANGE Phase 3/4 §0e) — no new orders column.
+            "LEFT JOIN exchanges e ON e.outbound_order_id = o.id AND e.tenant_id = o.tenant_id " +
             "WHERE o.id = ? AND o.tenant_id = ?",
             orderId, tenantId);
         if (rows.isEmpty()) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Order not found");

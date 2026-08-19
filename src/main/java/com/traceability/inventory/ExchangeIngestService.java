@@ -2,11 +2,13 @@ package com.traceability.inventory;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.traceability.integrations.bosta.BostaDelivery;
+import com.traceability.integrations.bosta.ExchangeStateInterpreter;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
+import java.util.Optional;
 import java.util.UUID;
 
 /**
@@ -31,9 +33,11 @@ import java.util.UUID;
 public class ExchangeIngestService {
 
     private final JdbcTemplate jdbc;
+    private final ExchangeStateInterpreter interpreter;
 
-    public ExchangeIngestService(JdbcTemplate jdbc) {
+    public ExchangeIngestService(JdbcTemplate jdbc, ExchangeStateInterpreter interpreter) {
         this.jdbc = jdbc;
+        this.interpreter = interpreter;
     }
 
     /**
@@ -78,6 +82,20 @@ public class ExchangeIngestService {
             "    updated_at = now()",
             tenantId, trackingNumber, outboundDesc, inboundDesc, inboundDescAr,
             cod, goodsValue, raw.toString());
+
+        // FR-EXCHANGE Phase 3/4 §3.5 structural hook: derive exchanges.status from
+        // return-leg timeline progress. interpretReturnLeg() always returns empty this
+        // pass (HELD pending confirmed vocabulary — see ExchangeStateInterpreter javadoc),
+        // so this is a no-op today; wired now so a future vocabulary pass only needs to
+        // populate the interpreter's map, not touch this call site. Guarded to
+        // status <> 'needs_mapping' so this can never resurrect/advance a not-yet-mapped
+        // exchange — status only ever moves forward from a mapped exchange onward.
+        Optional<String> returnLegStatus = interpreter.interpretReturnLeg(raw);
+        returnLegStatus.ifPresent(status -> jdbc.update(
+            "UPDATE exchanges SET status = ?, updated_at = now() " +
+            "WHERE tenant_id = ? AND tracking_number = ? AND status <> 'needs_mapping'",
+            status, tenantId, trackingNumber));
+
         return true;
     }
 

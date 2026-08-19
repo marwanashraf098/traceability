@@ -47,6 +47,7 @@ interface QueueOrder {
   locked_by: string | null
   locked_at: string | null
   is_self_pickup: boolean
+  is_exchange: boolean
 }
 
 interface AllocatedPiece {
@@ -77,6 +78,7 @@ interface OrderDetail {
   cod_amount: string | null
   locked_by: string | null
   is_self_pickup: boolean
+  is_exchange: boolean
   cancel_requested_at: string | null
   shipment_id: string | null
   tracking_number: string | null
@@ -602,6 +604,7 @@ function QueueView({
                       {order.customer_name ?? t('common.pendingConsignee')}
                     </span>
                     {order.is_self_pickup && <Badge tone="info" label={t('fulfill.selfPickup')} />}
+                    {order.is_exchange && <Badge tone="info" label={t('exchange.badge')} />}
                   </div>
 
                   {progressBar(order, progress)}
@@ -1019,6 +1022,9 @@ function PickScreen({
           <span className="font-mono">{order.number ?? order.id.slice(-8)}</span>
           {order.is_self_pickup && (
             <Badge tone="info" label={t('fulfill.selfPickup')} />
+          )}
+          {order.is_exchange && (
+            <Badge tone="info" label={t('exchange.badge')} />
           )}
         </p>
         {!hasCancelRequest && (

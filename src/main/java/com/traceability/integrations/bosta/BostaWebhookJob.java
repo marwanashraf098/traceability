@@ -69,6 +69,7 @@ public class BostaWebhookJob {
     private final com.traceability.inventory.ShipmentLinkService shipmentLinkService;
     private final com.traceability.inventory.NotTracedTagger notTracedTagger;
     private final com.traceability.inventory.ExchangeIngestService exchangeIngestService;
+    private final ExchangeStateInterpreter exchangeStateInterpreter;
     private final MatcherVersionHolder matcherVersionHolder;
 
     public BostaWebhookJob(JdbcTemplate jdbc,
@@ -81,6 +82,7 @@ public class BostaWebhookJob {
                             com.traceability.inventory.ShipmentLinkService shipmentLinkService,
                             com.traceability.inventory.NotTracedTagger notTracedTagger,
                             com.traceability.inventory.ExchangeIngestService exchangeIngestService,
+                            ExchangeStateInterpreter exchangeStateInterpreter,
                             MatcherVersionHolder matcherVersionHolder) {
         this.jdbc                = jdbc;
         this.tx                  = new TransactionTemplate(txm);
@@ -92,6 +94,7 @@ public class BostaWebhookJob {
         this.shipmentLinkService = shipmentLinkService;
         this.notTracedTagger     = notTracedTagger;
         this.exchangeIngestService = exchangeIngestService;
+        this.exchangeStateInterpreter = exchangeStateInterpreter;
         this.matcherVersionHolder = matcherVersionHolder;
     }
 
@@ -187,27 +190,81 @@ public class BostaWebhookJob {
                 return;
             }
 
-            // 6.5 — FR-EXCHANGE Phase 1: type.code=30 (EXCHANGE) deliveries are rerouted to
-            // the exchange lane BEFORE step 7's generic (state_code, type) mapper is ever
-            // consulted — not just before step 8's shipment lookup. This is deliberately
-            // earlier than "before the shipment lookup" because state 41 has no :ALL
-            // fallback (V43) and this same migration (V74) deletes the 41:EXCHANGE seed
-            // row (Phase 0 finding: it wrongly maps the OUTBOUND leg to 'returning'). If
-            // this branch ran after stateMapper.map(), an exchange first observed at state
-            // 41 would hit unknownCode() and be marked failed before ever reaching here.
+            // 6.5 — FR-EXCHANGE: type.code=30 (EXCHANGE) deliveries are rerouted BEFORE
+            // step 7's generic (state_code, type) mapper is ever consulted — not just
+            // before step 8's shipment lookup. This is deliberately earlier than "before
+            // the shipment lookup" because state 41 has no :ALL fallback (V43) and V74
+            // deletes the 41:EXCHANGE seed row (Phase 0 finding: it wrongly maps the
+            // OUTBOUND leg to 'returning'). If this branch ran after stateMapper.map(), an
+            // exchange first observed at state 41 would hit unknownCode() and be marked
+            // failed before ever reaching here.
+            //
+            // Phase 3/4 restructure (Step 0 §0c finding): Phase 1 rerouted EVERY type-30
+            // webhook here unconditionally, forever — including after Phase 3/4 creates a
+            // real forward `shipments` row at pack (§3.2/§3.4). Left unconditional, that
+            // row would never be updated again by any webhook: internal_state would freeze
+            // at 'created', custody-lock HOLD/RELEASE (FR-16) would never apply, and
+            // shipment_status_history/piece transitions would never fire for an exchange.
+            // So this now branches on shipment existence: no forward shipments row yet →
+            // pre-mapping/pre-pack, keep the Phase 1 behavior (upsert exchanges.raw +
+            // derive exchanges.status — see ExchangeIngestService). A forward shipments
+            // row already exists → post-pack, run the per-leg interpreter and apply its
+            // result through the SAME writer every normal delivery uses (applyMappedState) —
+            // never createOrFindShipment/createOrFindReturnShipment again for this
+            // tracking (0a: the row already exists, this only ever UPDATEs it).
             if (delivery.typeCode() == 30) {
-                boolean routedToExchangeLane =
-                    exchangeIngestService.upsertFromDelivery(tenantId, trackingNumber, delivery);
-                if (routedToExchangeLane) {
-                    markProcessed(webhookEventId, idemKey, "exchange: " + trackingNumber);
+                ShipmentRow existingForward = tx.execute(s -> jdbc.query(
+                    "SELECT id, order_id FROM shipments " +
+                    "WHERE tracking_number = ? AND shipment_leg = 'forward'",
+                    rs -> rs.next() ? new ShipmentRow(
+                        rs.getObject("id", UUID.class),
+                        rs.getObject("order_id", UUID.class)) : null,
+                    trackingNumber));
+
+                if (existingForward == null) {
+                    boolean routedToExchangeLane =
+                        exchangeIngestService.upsertFromDelivery(tenantId, trackingNumber, delivery);
+                    if (routedToExchangeLane) {
+                        markProcessed(webhookEventId, idemKey, "exchange: " + trackingNumber);
+                    } else {
+                        // itemsCount != 1 on a leg (first sighting) — the single-variant-per-leg
+                        // schema can't represent it. Falls back to the pre-existing generic
+                        // unmatched lane so it still raises an exception, just not exchange-shaped
+                        // ("do not auto-handle" — FR-EXCHANGE v2 §2 data trap).
+                        recordUnlinked(tenantId, trackingNumber, delivery, webhookEventId,
+                            "EXCHANGE_MULTI_ITEM");
+                        markProcessed(webhookEventId, idemKey, "unlinked: " + trackingNumber);
+                    }
+                    return;
+                }
+
+                // Post-pack: interpret per-leg state off raw.state.value (never the bare
+                // code — Trap B). FAIL-SAFE DEFAULT: an unrecognized value applies NO
+                // transition, refreshes raw only, and is left for exchange_unmapped_state
+                // (ExceptionService) to surface for manual review — never guessed.
+                java.util.Optional<BostaStateMapper.MappedState> interpreted =
+                    exchangeStateInterpreter.interpretForwardLeg(delivery.raw());
+
+                if (interpreted.isPresent()) {
+                    applyMappedState(webhookEventId, tenantId, delivery,
+                        interpreted.get(), existingForward);
+                    markProcessed(webhookEventId, idemKey, "exchange_forward: " + trackingNumber);
                 } else {
-                    // itemsCount != 1 on a leg (first sighting) — the single-variant-per-leg
-                    // schema can't represent it. Falls back to the pre-existing generic
-                    // unmatched lane so it still raises an exception, just not exchange-shaped
-                    // ("do not auto-handle" — FR-EXCHANGE v2 §2 data trap).
-                    recordUnlinked(tenantId, trackingNumber, delivery, webhookEventId,
-                        "EXCHANGE_MULTI_ITEM");
-                    markProcessed(webhookEventId, idemKey, "unlinked: " + trackingNumber);
+                    final ShipmentRow forward = existingForward;
+                    tx.execute(s -> {
+                        jdbc.update(
+                            "UPDATE shipments SET raw = ?::jsonb, last_synced_at = now() WHERE id = ?",
+                            delivery.raw().toString(), forward.id());
+                        return null;
+                    });
+                    log.warn("Exchange tracking {} at unrecognized state.value — no transition applied, " +
+                        "flagged for review", trackingNumber);
+                    // "unlinked:" prefix deliberately reused: it makes this outcome
+                    // retry-eligible under the SAME matcher_version mechanism (step 4) —
+                    // once a future deploy adds this value to the interpreter's vocabulary,
+                    // the bumped matcher_version automatically earns this event one retry.
+                    markProcessed(webhookEventId, idemKey,
+                        "unlinked:exchange_unmapped_state: " + trackingNumber);
                 }
                 return;
             }
@@ -264,189 +321,12 @@ public class BostaWebhookJob {
                 }
             }
 
-            // Lambda capture requires effectively-final reference.
-            final ShipmentRow resolvedShipment = shipment;
-
-            // 9. Persist updated courier state on the shipment row.
-            //    For state 46/60 (returned), set returned_at to start the
-            //    never-received detection clock (FR-12.4).
-            //    For state 47 (exception), extract NDR code/reason from raw.
-            boolean isReturnedState = "returned".equals(mapped.shipmentInternalState());
-            Integer exceptionCode   = null;
-            String  exceptionReason = null;
-            if (mapped.isException() && delivery.raw() != null) {
-                JsonNode raw = delivery.raw();
-                JsonNode codeNode = raw.path("exceptionCode");
-                if (codeNode.isNumber()) exceptionCode = codeNode.asInt();
-                exceptionReason = raw.path("exceptionReason").asText(null);
-                if (exceptionReason == null || exceptionReason.isBlank()) {
-                    exceptionReason = raw.path("exceptionDetails").asText(null);
-                }
-                if (exceptionCode != null) {
-                    log.info("Tracking {} exception: code={} reason={}",
-                        trackingNumber, exceptionCode, exceptionReason);
-                }
-            }
-            final Integer fExceptionCode   = exceptionCode;
-            final String  fExceptionReason = exceptionReason;
-            final BostaAttentionExtractor.AttentionFields af =
-                BostaAttentionExtractor.extract(delivery.raw());
-            tx.execute(s -> {
-                // Custody-lock guard (FR-16):
-                //   - HOLD: shipment_leg='forward', custody_locked_by_scan=true, incoming='created'
-                //     (Bosta pre-transit codes 10/11/20 arriving after physical handover)
-                //   - RELEASE: incoming is with_courier/returning/delivered/returned
-                //     (genuine downstream progression — Bosta caught up)
-                //   - HOLD through: exception/cancelled/terminated/lost (not "caught up")
-                //   - Both branches require shipment_leg='forward' (C2/C3 correction)
-                jdbc.update("""
-                    UPDATE shipments
-                    SET internal_state = CASE
-                            WHEN custody_locked_by_scan = true
-                             AND shipment_leg = 'forward'
-                             AND ?::shipment_internal_state = 'created'
-                            THEN internal_state
-                            ELSE ?::shipment_internal_state
-                        END,
-                        custody_locked_by_scan = CASE
-                            WHEN custody_locked_by_scan = true
-                             AND shipment_leg = 'forward'
-                             AND ?::shipment_internal_state IN
-                                 ('with_courier','returning','delivered','returned')
-                            THEN false
-                            ELSE custody_locked_by_scan
-                        END,
-                        provider_state           = ?,
-                        number_of_attempts       = ?,
-                        failed_delivery_attempts = ?,
-                        last_attempt_at          = ?::timestamptz,
-                        last_failure_reason      = ?,
-                        is_delayed               = ?,
-                        sla_breached             = ?,
-                        scheduled_at             = ?::timestamptz,
-                        courier_name             = ?,
-                        courier_phone            = ?,
-                        raw                      = ?::jsonb,
-                        last_synced_at           = now(),
-                        returned_at              = CASE WHEN ? THEN now() ELSE returned_at END,
-                        exception_code           = COALESCE(?, exception_code),
-                        exception_reason         = COALESCE(?, exception_reason)
-                    WHERE id = ?
-                    """,
-                    // hold branch param (internal_state CASE arg 1)
-                    mapped.shipmentInternalState(),
-                    // else branch param (internal_state CASE arg 2)
-                    mapped.shipmentInternalState(),
-                    // release branch param (custody_locked_by_scan CASE)
-                    mapped.shipmentInternalState(),
-                    delivery.stateCode(),
-                    af.totalAttempts(),
-                    af.failedDeliveryAttempts(),
-                    af.lastAttemptAt() != null ? af.lastAttemptAt().toString() : null,
-                    af.lastFailureReason(),
-                    af.isDelayed(), af.slaBreached(),
-                    af.scheduledAt(),
-                    af.courierName(), af.courierPhone(),
-                    delivery.raw().toString(), isReturnedState,
-                    fExceptionCode, fExceptionReason,
-                    resolvedShipment.id());
-
-                // 9.5 — History row for the delivery timeline (idempotent).
-                jdbc.update("""
-                    INSERT INTO shipment_status_history
-                        (tenant_id, shipment_id, internal_state, provider_state,
-                         exception_code, exception_reason, webhook_event_id)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
-                    ON CONFLICT (webhook_event_id)
-                        WHERE webhook_event_id IS NOT NULL
-                    DO NOTHING
-                    """,
-                    tenantId, resolvedShipment.id(),
-                    mapped.shipmentInternalState(), delivery.stateCode(),
-                    fExceptionCode, fExceptionReason,
-                    webhookEventId);
-                return null;
-            });
-
-            // 9.6 — Populate consignee PII from Bosta receiver on every event that
-            //       reaches this path (shipment already existed — tryMatchDelivery was
-            //       called for the FIRST arrival only, so PII was never written for
-            //       subsequent webhooks on pre-existing shipments, or for
-            //       reconcile/manualLink-created shipments). COALESCE in the SQL means
-            //       this is idempotent — existing values are never overwritten.
-            if (resolvedShipment.orderId() != null) {
-                shipmentLinkService.populateConsigneePii(
-                    resolvedShipment.orderId(), tenantId, delivery);
-            }
-
-            // 10. Move pieces — only if the mapping carries a piece-status change.
-            //     The ledger's state-machine guard is the idempotency backstop:
-            //       • current==target  → fast skip, no DB write.
-            //       • StateConflictException(actual==target) → concurrent worker already applied, no-op.
-            //       • StateConflictException(actual!=target) → unexpected state, log + skip.
-            //       • IllegalTransitionException → no legal path to target from current, log + skip.
-            String targetDb = mapped.pieceStatusAfter();
-            if (targetDb != null) {
-                PieceStatus targetStatus = PieceStatus.fromDb(targetDb);
-                String metaJson = String.format(
-                    "{\"provider_state\":%d,\"order_type\":\"%s\",\"attempts\":%d}",
-                    delivery.stateCode(), delivery.type(), delivery.numberOfAttempts());
-
-                List<PieceRow> pieces = tx.execute(s -> jdbc.query("""
-                    SELECT p.id, p.status::text AS status
-                    FROM pieces p
-                    JOIN allocations a  ON a.piece_id  = p.id
-                    JOIN order_items oi ON oi.id        = a.order_item_id
-                    WHERE oi.order_id = ?
-                      AND a.status IN ('active', 'packed')
-                    """,
-                    (rs, i) -> new PieceRow(rs.getString("id"), rs.getString("status")),
-                    resolvedShipment.orderId()));
-
-                for (PieceRow pr : pieces) {
-                    PieceStatus current = PieceStatus.fromDb(pr.status());
-
-                    if (current == targetStatus) {
-                        // Already at target — idempotent no-op, no DB write.
-                        log.debug("Piece {} already at {}, webhook {} — skipping",
-                            pr.id(), targetStatus, webhookEventId);
-                        continue;
-                    }
-
-                    TransitionContext ctx = new TransitionContext(
-                        shipment.orderId(), shipment.id(), null, shipment.orderId(), metaJson);
-
-                    try {
-                        ledger.transition(pr.id(), current, targetStatus, "courier_update", null, ctx);
-                        log.debug("Piece {} {} → {} via webhook {}",
-                            pr.id(), current, targetStatus, webhookEventId);
-                    } catch (StateConflictException e) {
-                        if (e.getActual() == targetStatus) {
-                            // Concurrent duplicate already applied this transition.
-                            log.debug("Piece {} already at {} (concurrent), webhook {} — no-op",
-                                pr.id(), targetStatus, webhookEventId);
-                        } else {
-                            log.warn("Piece {} in unexpected state {} for target {}, webhook {} — skipping",
-                                pr.id(), e.getActual(), targetStatus, webhookEventId);
-                        }
-                    } catch (IllegalTransitionException e) {
-                        // Piece has no legal path to target from its current state.
-                        // This is expected for pieces already past the target state (e.g.
-                        // a stale 'with_courier' event arriving after 'delivered').
-                        log.warn("Illegal transition {} → {} for piece {}, webhook {} — skipping",
-                            current, targetStatus, pr.id(), webhookEventId);
-                    }
-                }
-            }
-
-            // 10.5 — Queue-gating-not-traced: runs UNCONDITIONALLY, regardless of whether
-            // step 10 found any pieces. The not-traced case IS zero allocations/pieces, so
-            // gating this on "pieces found" would make it never fire for exactly the orders
-            // it exists to catch. Self-contained (re-derives the latest forward shipment
-            // itself) — see NotTracedTagger javadoc.
-            if (resolvedShipment.orderId() != null) {
-                notTracedTagger.maybeTagNotTraced(resolvedShipment.orderId(), tenantId);
-            }
+            // Steps 9–10.5 (shipment state UPDATE, custody-lock HOLD/RELEASE, history row,
+            // PII, piece transitions, not-traced tagging) live in applyMappedState() —
+            // shared verbatim with the FR-EXCHANGE post-pack interpreter branch (step 6.5
+            // above) so a normal delivery's write path and an exchange's post-pack write
+            // path can never drift apart. See applyMappedState() javadoc.
+            applyMappedState(webhookEventId, tenantId, delivery, mapped, shipment);
 
             // 11. Mark processed + claim external_event_id AFTER all state is applied.
             //     A crash before this step leaves the event 'pending' → retry-safe.
@@ -472,6 +352,206 @@ public class BostaWebhookJob {
                 });
             }
         });
+    }
+
+    /**
+     * Steps 9–10.5: persist a resolved {@link BostaStateMapper.MappedState} onto an
+     * existing forward shipment row — the shipment-state UPDATE (with the FR-16
+     * custody-lock HOLD/RELEASE CASE), the shipment_status_history row, consignee PII
+     * population, piece transitions, and not-traced tagging. Extracted verbatim from the
+     * normal delivery flow (previously inline in {@link #process}) so the FR-EXCHANGE
+     * Phase 3/4 post-pack interpreter branch (step 6.5) can reuse the exact same writer
+     * instead of duplicating it — the two call sites must never drift apart, since this
+     * is also where FR-16's custody guarantee and the never-received precondition
+     * (returned_at) are written.
+     *
+     * Does NOT mark the webhook event processed — callers do that themselves (the normal
+     * flow and the exchange flow use different {@code error} note conventions, so step 11
+     * intentionally stays outside this shared method).
+     */
+    private void applyMappedState(long webhookEventId, UUID tenantId, BostaDelivery delivery,
+                                   BostaStateMapper.MappedState mapped, ShipmentRow resolvedShipment) {
+        // 9. Persist updated courier state on the shipment row.
+        //    For state 46/60 (returned), set returned_at to start the
+        //    never-received detection clock (FR-12.4).
+        //    For state 47 (exception), extract NDR code/reason from raw.
+        boolean isReturnedState = "returned".equals(mapped.shipmentInternalState());
+        Integer exceptionCode   = null;
+        String  exceptionReason = null;
+        if (mapped.isException() && delivery.raw() != null) {
+            JsonNode raw = delivery.raw();
+            JsonNode codeNode = raw.path("exceptionCode");
+            if (codeNode.isNumber()) exceptionCode = codeNode.asInt();
+            exceptionReason = raw.path("exceptionReason").asText(null);
+            if (exceptionReason == null || exceptionReason.isBlank()) {
+                exceptionReason = raw.path("exceptionDetails").asText(null);
+            }
+            if (exceptionCode != null) {
+                log.info("Tracking {} exception: code={} reason={}",
+                    delivery.trackingNumber(), exceptionCode, exceptionReason);
+            }
+        }
+        final Integer fExceptionCode   = exceptionCode;
+        final String  fExceptionReason = exceptionReason;
+        final BostaAttentionExtractor.AttentionFields af =
+            BostaAttentionExtractor.extract(delivery.raw());
+        tx.execute(s -> {
+            // Custody-lock guard (FR-16):
+            //   - HOLD: shipment_leg='forward', custody_locked_by_scan=true, incoming='created'
+            //     (Bosta pre-transit codes 10/11/20 arriving after physical handover)
+            //   - RELEASE: incoming is with_courier/returning/delivered/returned
+            //     (genuine downstream progression — Bosta caught up)
+            //   - HOLD through: exception/cancelled/terminated/lost (not "caught up")
+            //   - Both branches require shipment_leg='forward' (C2/C3 correction)
+            jdbc.update("""
+                UPDATE shipments
+                SET internal_state = CASE
+                        WHEN custody_locked_by_scan = true
+                         AND shipment_leg = 'forward'
+                         AND ?::shipment_internal_state = 'created'
+                        THEN internal_state
+                        ELSE ?::shipment_internal_state
+                    END,
+                    custody_locked_by_scan = CASE
+                        WHEN custody_locked_by_scan = true
+                         AND shipment_leg = 'forward'
+                         AND ?::shipment_internal_state IN
+                             ('with_courier','returning','delivered','returned')
+                        THEN false
+                        ELSE custody_locked_by_scan
+                    END,
+                    provider_state           = ?,
+                    number_of_attempts       = ?,
+                    failed_delivery_attempts = ?,
+                    last_attempt_at          = ?::timestamptz,
+                    last_failure_reason      = ?,
+                    is_delayed               = ?,
+                    sla_breached             = ?,
+                    scheduled_at             = ?::timestamptz,
+                    courier_name             = ?,
+                    courier_phone            = ?,
+                    raw                      = ?::jsonb,
+                    last_synced_at           = now(),
+                    returned_at              = CASE WHEN ? THEN now() ELSE returned_at END,
+                    exception_code           = COALESCE(?, exception_code),
+                    exception_reason         = COALESCE(?, exception_reason)
+                WHERE id = ?
+                """,
+                // hold branch param (internal_state CASE arg 1)
+                mapped.shipmentInternalState(),
+                // else branch param (internal_state CASE arg 2)
+                mapped.shipmentInternalState(),
+                // release branch param (custody_locked_by_scan CASE)
+                mapped.shipmentInternalState(),
+                delivery.stateCode(),
+                af.totalAttempts(),
+                af.failedDeliveryAttempts(),
+                af.lastAttemptAt() != null ? af.lastAttemptAt().toString() : null,
+                af.lastFailureReason(),
+                af.isDelayed(), af.slaBreached(),
+                af.scheduledAt(),
+                af.courierName(), af.courierPhone(),
+                delivery.raw().toString(), isReturnedState,
+                fExceptionCode, fExceptionReason,
+                resolvedShipment.id());
+
+            // 9.5 — History row for the delivery timeline (idempotent).
+            jdbc.update("""
+                INSERT INTO shipment_status_history
+                    (tenant_id, shipment_id, internal_state, provider_state,
+                     exception_code, exception_reason, webhook_event_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT (webhook_event_id)
+                    WHERE webhook_event_id IS NOT NULL
+                DO NOTHING
+                """,
+                tenantId, resolvedShipment.id(),
+                mapped.shipmentInternalState(), delivery.stateCode(),
+                fExceptionCode, fExceptionReason,
+                webhookEventId);
+            return null;
+        });
+
+        // 9.6 — Populate consignee PII from Bosta receiver on every event that
+        //       reaches this path (shipment already existed — tryMatchDelivery was
+        //       called for the FIRST arrival only, so PII was never written for
+        //       subsequent webhooks on pre-existing shipments, or for
+        //       reconcile/manualLink-created shipments). COALESCE in the SQL means
+        //       this is idempotent — existing values are never overwritten.
+        if (resolvedShipment.orderId() != null) {
+            shipmentLinkService.populateConsigneePii(
+                resolvedShipment.orderId(), tenantId, delivery);
+        }
+
+        // 10. Move pieces — only if the mapping carries a piece-status change.
+        //     The ledger's state-machine guard is the idempotency backstop:
+        //       • current==target  → fast skip, no DB write.
+        //       • StateConflictException(actual==target) → concurrent worker already applied, no-op.
+        //       • StateConflictException(actual!=target) → unexpected state, log + skip.
+        //       • IllegalTransitionException → no legal path to target from current, log + skip.
+        String targetDb = mapped.pieceStatusAfter();
+        if (targetDb != null) {
+            PieceStatus targetStatus = PieceStatus.fromDb(targetDb);
+            String metaJson = String.format(
+                "{\"provider_state\":%d,\"order_type\":\"%s\",\"attempts\":%d}",
+                delivery.stateCode(), delivery.type(), delivery.numberOfAttempts());
+
+            List<PieceRow> pieces = tx.execute(s -> jdbc.query("""
+                SELECT p.id, p.status::text AS status
+                FROM pieces p
+                JOIN allocations a  ON a.piece_id  = p.id
+                JOIN order_items oi ON oi.id        = a.order_item_id
+                WHERE oi.order_id = ?
+                  AND a.status IN ('active', 'packed')
+                """,
+                (rs, i) -> new PieceRow(rs.getString("id"), rs.getString("status")),
+                resolvedShipment.orderId()));
+
+            for (PieceRow pr : pieces) {
+                PieceStatus current = PieceStatus.fromDb(pr.status());
+
+                if (current == targetStatus) {
+                    // Already at target — idempotent no-op, no DB write.
+                    log.debug("Piece {} already at {}, webhook {} — skipping",
+                        pr.id(), targetStatus, webhookEventId);
+                    continue;
+                }
+
+                TransitionContext ctx = new TransitionContext(
+                    resolvedShipment.orderId(), resolvedShipment.id(), null,
+                    resolvedShipment.orderId(), metaJson);
+
+                try {
+                    ledger.transition(pr.id(), current, targetStatus, "courier_update", null, ctx);
+                    log.debug("Piece {} {} → {} via webhook {}",
+                        pr.id(), current, targetStatus, webhookEventId);
+                } catch (StateConflictException e) {
+                    if (e.getActual() == targetStatus) {
+                        // Concurrent duplicate already applied this transition.
+                        log.debug("Piece {} already at {} (concurrent), webhook {} — no-op",
+                            pr.id(), targetStatus, webhookEventId);
+                    } else {
+                        log.warn("Piece {} in unexpected state {} for target {}, webhook {} — skipping",
+                            pr.id(), e.getActual(), targetStatus, webhookEventId);
+                    }
+                } catch (IllegalTransitionException e) {
+                    // Piece has no legal path to target from its current state.
+                    // This is expected for pieces already past the target state (e.g.
+                    // a stale 'with_courier' event arriving after 'delivered').
+                    log.warn("Illegal transition {} → {} for piece {}, webhook {} — skipping",
+                        current, targetStatus, pr.id(), webhookEventId);
+                }
+            }
+        }
+
+        // 10.5 — Queue-gating-not-traced: runs UNCONDITIONALLY, regardless of whether
+        // step 10 found any pieces. The not-traced case IS zero allocations/pieces, so
+        // gating this on "pieces found" would make it never fire for exactly the orders
+        // it exists to catch. Self-contained (re-derives the latest forward shipment
+        // itself) — see NotTracedTagger javadoc.
+        if (resolvedShipment.orderId() != null) {
+            notTracedTagger.maybeTagNotTraced(resolvedShipment.orderId(), tenantId);
+        }
     }
 
     // ---- helpers -----------------------------------------------------------

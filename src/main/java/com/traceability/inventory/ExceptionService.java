@@ -12,7 +12,7 @@ import java.time.Instant;
 import java.util.*;
 
 /**
- * Exceptions center (FR-15.3, +1 detector FR-24, +1 detector FR-EXCHANGE): aggregates 19
+ * Exceptions center (FR-15.3, +1 detector FR-24, +2 detectors FR-EXCHANGE): aggregates 20
  * exception detectors into one prioritised list, sorted CRITICAL→HIGH→MEDIUM→LOW then
  * oldest-first within each severity tier.
  *
@@ -85,6 +85,7 @@ public class ExceptionService {
         all.addAll(detectReturnInTransitStuck(tenantId, returnInTransitStuckDays));
         all.addAll(detectReturnSessionMismatch(tenantId));
         all.addAll(detectExchangeNeedsMapping(tenantId));
+        all.addAll(detectExchangeUnmappedState(tenantId));
 
         // Enrich with descriptions and action hints
         all.forEach(this::enrich);
@@ -175,6 +176,7 @@ public class ExceptionService {
         all.addAll(detectReturnInTransitStuck(tenantId, returnInTransitStuckDays));
         all.addAll(detectReturnSessionMismatch(tenantId));
         all.addAll(detectExchangeNeedsMapping(tenantId));
+        all.addAll(detectExchangeUnmappedState(tenantId));
 
         int critical = 0;
         for (Map<String, Object> e : all) {
@@ -681,6 +683,32 @@ public class ExceptionService {
             tid);
     }
 
+    /**
+     * FR-EXCHANGE Phase 3/4: the exchange's forward shipment (created at pack) has
+     * reported a {@code state.value} the interpreter doesn't recognize yet
+     * (ExchangeStateInterpreter FAIL-SAFE DEFAULT — see its javadoc). No transition was
+     * applied; {@code raw} was still refreshed on every webhook, so this reads the
+     * latest-known value straight off the shipment row rather than a separately stored
+     * flag. Self-resolving (same pattern as detectExchangeNeedsMapping): once a future
+     * pass adds the value to the interpreter's vocabulary and a later webhook re-reports
+     * it (or the same value is re-fetched), the next webhook applies a real transition and
+     * this query stops matching — no exception_resolutions bookkeeping needed.
+     */
+    private List<Map<String, Object>> detectExchangeUnmappedState(UUID tid) {
+        return jdbc.queryForList(
+            "SELECT 'exchange_unmapped_state' AS type, 'MEDIUM' AS severity, 'exchange' AS subject_type, " +
+            "       e.id AS exchange_id, e.tracking_number, e.outbound_order_id AS order_id, " +
+            "       s.raw #>> '{state,value}' AS unmapped_state_value, " +
+            "       s.last_synced_at AS occurred_at, " +
+            "       'exchange_unmapped_state:' || e.id AS subject_key " +
+            "FROM exchanges e " +
+            "JOIN shipments s ON s.order_id = e.outbound_order_id AND s.shipment_leg = 'forward' " +
+            "WHERE e.tenant_id = ? AND s.tenant_id = ? " +
+            "  AND s.raw #>> '{state,value}' IS NOT NULL " +
+            "  AND lower(trim(s.raw #>> '{state,value}')) NOT IN ('new', 'picked_up', 'in_transit')",
+            tid, tid);
+    }
+
     private List<Map<String, Object>> detectMissingProviderId(UUID tid) {
         return jdbc.queryForList(
             "SELECT 'missing_provider_id' AS type, 'MEDIUM' AS severity, 'shipment' AS subject_type, " +
@@ -893,6 +921,15 @@ public class ExceptionService {
                 item.put("descriptionAr", "الاستبدال " + t + " يحتاج إلى ربط الأصناف الصادرة والواردة بمتغيرات الكتالوج");
                 item.put("suggestedAction", "map_exchange");
                 item.put("actionUrl", "/exchanges/" + item.get("exchange_id"));
+            }
+            case "exchange_unmapped_state" -> {
+                String t = str(item, "tracking_number");
+                String v = str(item, "unmapped_state_value");
+                item.put("descriptionEn", "Exchange " + t + " reported an unrecognized courier state ('" + v + "') — no update was applied");
+                item.put("descriptionAr", "الاستبدال " + t + " أبلغ عن حالة غير معروفة من شركة الشحن ('" + v + "') — لم يتم تطبيق أي تحديث");
+                item.put("suggestedAction", "review_exchange_state");
+                Object oid = item.get("order_id");
+                item.put("actionUrl", oid != null ? "/fulfill/" + oid : "/exceptions");
             }
         }
     }
