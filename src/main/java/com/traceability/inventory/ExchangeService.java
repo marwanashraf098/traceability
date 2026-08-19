@@ -14,6 +14,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 
 /**
@@ -184,5 +185,31 @@ public class ExchangeService {
         result.put("orderId", orderId.toString());
         result.put("status", "mapped");
         return result;
+    }
+
+    /**
+     * FR-EXCHANGE Phase 5 (pack-time auto-link). Returns the exchange's tracking number
+     * iff {@code orderId} is a mapped exchange's outbound order AND FulfillService.complete()
+     * has JUST routed it to 'packed'. An exchange has exactly one possible AWB — the
+     * tracking number Traced already holds from ingest — so the operator verification
+     * scan a normal order needs (to catch a label mixed up between orders at the pack
+     * station) doesn't apply here; there is no second candidate order it could be.
+     *
+     * Gating on {@code o.status = 'packed'} (not just exchange existence) means a
+     * self-pickup exchange — which complete() routes to 'self_pickup_pending' instead —
+     * never reaches this far: the caller's {@code Optional} comes back empty and no
+     * auto-link is attempted, rather than attempting one and having linkByAwbScan()
+     * reject it. Read-only; does not call linkByAwbScan() itself — the caller composes
+     * that separately so linkByAwbScan() stays completely unmodified.
+     */
+    @Transactional(readOnly = true)
+    public Optional<String> trackingNumberForPackedOutboundOrder(UUID orderId) {
+        UUID tenantId = TenantContext.require();
+        return Optional.ofNullable(jdbc.query(
+            "SELECT e.tracking_number FROM exchanges e " +
+            "JOIN orders o ON o.id = e.outbound_order_id " +
+            "WHERE e.outbound_order_id = ? AND e.tenant_id = ? AND o.status = 'packed'",
+            rs -> rs.next() ? rs.getString(1) : null,
+            orderId, tenantId));
     }
 }
