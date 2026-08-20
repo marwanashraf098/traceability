@@ -45,6 +45,8 @@ function makeDerivedStatus(overrides: Partial<DerivedOrderStatus> = {}): Derived
     conflictKey: null,
     notTraced: false,
     packedConfirmed: false,
+    fulfillmentKey: 'status.new',
+    fulfillmentTone: 'NEUTRAL',
     ...overrides,
   }
 }
@@ -126,6 +128,7 @@ function makeOrderDetail(overrides: Partial<IOrderDetail> = {}): IOrderDetail {
     notTracedAt: null,
     isExchange: false,
     derivedStatus: makeDerivedStatus(),
+    shopifyOrderUrl: null,
     ...overrides,
   }
 }
@@ -209,7 +212,11 @@ describe('Orders list', () => {
     expect(screen.queryByText(/PENDING|PAID/)).toBeNull()
   })
 
-  test('status filter re-fetches with the selected status', async () => {
+  test('clicking a tab re-fetches filtered by the shipment deliveryState, not orders.status', async () => {
+    // NOT status=delivered — orders.status is never written to 'with_courier'/'returned' by
+    // the app (confirmed by grep of FulfillService/ShipmentLinkService), and only reaches
+    // 'delivered' for self-pickup handover. The real signal is the shipment's own
+    // internal_state, joined via the LATERAL `s` alias list() already selects.
     const appFetch = vi.fn((url: string) => {
       if (url.includes('/orders?')) return jsonOk(makeOrderPage([makeOrderSummary()]))
       if (url.includes('/orders/summary')) return jsonOk(makeOrderSummaryCounts())
@@ -219,12 +226,62 @@ describe('Orders list', () => {
     await screen.findByText('#1001')
 
     const user = userEvent.setup()
-    await user.selectOptions(screen.getByRole('combobox'), 'packed')
+    await user.click(screen.getByRole('button', { name: /Delivered/ }))
 
     await waitFor(() => {
       const calls = appFetch.mock.calls.map(c => c[0]).filter((u): u is string => typeof u === 'string' && u.includes('/orders?'))
-      expect(calls.some(u => u.includes('status=packed'))).toBe(true)
+      expect(calls.some(u => u.includes('deliveryState=delivered'))).toBe(true)
+      expect(calls.some(u => u.includes('status=delivered'))).toBe(false)
     })
+  })
+
+  test('tab count and click-through list use the SAME deliveryState predicate (parity)', async () => {
+    // Regression guard for the review finding: the tab's count (from /orders/summary)
+    // and its click-through list (from /orders?deliveryState=...) must agree on what
+    // "In transit" means. Simulates a backend that filters by internal_state and
+    // returns exactly the count summary() derived — proves the two paths share one
+    // definition (same param, same value), not two that can silently diverge.
+    const appFetch = vi.fn((url: string) => {
+      if (url.includes('/orders?')) {
+        if (url.includes('deliveryState=with_courier')) {
+          return jsonOk(makeOrderPage(
+            [makeOrderSummary({ id: 'a' }), makeOrderSummary({ id: 'b' })],
+            { total: 2 },
+          ))
+        }
+        return jsonOk(makeOrderPage([makeOrderSummary()]))
+      }
+      if (url.includes('/orders/summary')) return jsonOk(makeOrderSummaryCounts({ withCourier: 2 }))
+      return jsonOk({})
+    })
+    renderOrdersList(appFetch)
+    await screen.findByText('#1001')
+
+    const inTransitTab = screen.getByRole('button', { name: /In transit/ })
+    expect(within(inTransitTab).getByText('2')).toBeInTheDocument()
+
+    const user = userEvent.setup()
+    await user.click(inTransitTab)
+
+    expect(await screen.findByText('Showing 1–2 of 2')).toBeInTheDocument()
+  })
+
+  test('the Needs attention tab is not clickable/filtering (no raw-status equivalent)', async () => {
+    const appFetch = vi.fn((url: string) => {
+      if (url.includes('/orders?')) return jsonOk(makeOrderPage([makeOrderSummary()]))
+      if (url.includes('/orders/summary')) return jsonOk(makeOrderSummaryCounts())
+      return jsonOk({})
+    })
+    renderOrdersList(appFetch)
+    await screen.findByText('#1001')
+
+    const user = userEvent.setup()
+    appFetch.mockClear()
+    await user.click(screen.getByRole('button', { name: /Needs attention/ }))
+
+    // No new /orders? fetch fired — the click is a no-op, per the approved resolution.
+    await new Promise(r => setTimeout(r, 50))
+    expect(appFetch.mock.calls.some(c => typeof c[0] === 'string' && c[0].includes('/orders?'))).toBe(false)
   })
 
   test('pagination — Previous disabled on page 1, Next advances to page 2', async () => {
@@ -253,7 +310,7 @@ describe('Orders list', () => {
     })
   })
 
-  test('summary tile row renders the 5 buckets from GET /orders/summary', async () => {
+  test('subheader shows the total; tabs show the buckets from GET /orders/summary', async () => {
     const appFetch = vi.fn((url: string) => {
       if (url.includes('/orders?')) return jsonOk(makeOrderPage([makeOrderSummary()]))
       if (url.includes('/orders/summary')) {
@@ -264,16 +321,17 @@ describe('Orders list', () => {
     renderOrdersList(appFetch)
     await screen.findByText('#1001')
 
-    const row = await screen.findByTestId('orders-summary')
-    expect(within(row).getByText('Total')).toBeInTheDocument()
-    expect(within(row).getByText('12')).toBeInTheDocument()
-    expect(within(row).getByText('Processing')).toBeInTheDocument()
-    expect(within(row).getByText('5')).toBeInTheDocument()
-    expect(within(row).getByText('With Courier')).toBeInTheDocument()
-    expect(within(row).getByText('Delivered')).toBeInTheDocument()
-    expect(within(row).getAllByText('3')).toHaveLength(2) // withCourier and delivered both 3
-    expect(within(row).getByText('Returned')).toBeInTheDocument()
-    expect(within(row).getByText('1')).toBeInTheDocument()
+    expect(await screen.findByText('12 orders')).toBeInTheDocument()
+
+    const allTab       = screen.getByRole('button', { name: /All/ })
+    const inTransitTab = screen.getByRole('button', { name: /In transit/ })
+    const deliveredTab = screen.getByRole('button', { name: /Delivered/ })
+    const returnsTab   = screen.getByRole('button', { name: /Returns/ })
+
+    expect(within(allTab).getByText('12')).toBeInTheDocument()
+    expect(within(inTransitTab).getByText('3')).toBeInTheDocument()
+    expect(within(deliveredTab).getByText('3')).toBeInTheDocument()
+    expect(within(returnsTab).getByText('1')).toBeInTheDocument()
   })
 
   // TRIPWIRE — proves the calm-fail is real, not assumed. Verified by temporarily changing
@@ -322,6 +380,32 @@ describe('Orders list', () => {
     const exchangeRow = screen.getByText('#EXC-2').closest('tr')!
     expect(within(normalRow).queryByText('Exchange')).toBeNull()
     expect(within(exchangeRow).getByText('Exchange')).toBeInTheDocument()
+  })
+
+  test('Delivery cell: no shipment shows "Not shipped"; a linked shipment shows the delivery facet', async () => {
+    const appFetch = vi.fn((url: string) => {
+      if (url.includes('/orders?')) {
+        return jsonOk(makeOrderPage([
+          makeOrderSummary({ id: 'order-1', number: '#1001', deliveryState: null }),
+          makeOrderSummary({
+            id: 'order-2', number: '#1002', deliveryState: 'with_courier',
+            derivedStatus: makeDerivedStatus({ primaryKey: 'status.in_transit', tone: 'INFO' }),
+          }),
+        ]))
+      }
+      if (url.includes('/orders/summary')) return jsonOk(makeOrderSummaryCounts())
+      return jsonOk({})
+    })
+    renderOrdersList(appFetch)
+    await screen.findByText('#1001')
+    await screen.findByText('#1002')
+
+    const noShipmentRow  = screen.getByText('#1001').closest('tr')!
+    const shipmentRow    = screen.getByText('#1002').closest('tr')!
+    expect(within(noShipmentRow).getByText('Not shipped')).toBeInTheDocument()
+    expect(within(noShipmentRow).queryByText('In transit')).toBeNull()
+    expect(within(shipmentRow).getByText('In transit')).toBeInTheDocument()
+    expect(within(shipmentRow).queryByText('Not shipped')).toBeNull()
   })
 })
 

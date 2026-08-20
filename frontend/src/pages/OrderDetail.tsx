@@ -471,7 +471,7 @@ function StatusStepper({ steps }: { steps: StepperStep[] }) {
 
 // ── Sub-components ────────────────────────────────────────────────────────────
 
-function ShipmentCard({ shipment }: { shipment: ShipmentDetail }) {
+export function ShipmentCard({ shipment }: { shipment: ShipmentDetail }) {
   const { t } = useTranslation()
   const [historyOpen, setHistoryOpen] = useState(false)
   const isReturn = shipment.shipmentLeg === 'return'

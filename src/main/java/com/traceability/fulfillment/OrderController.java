@@ -82,7 +82,12 @@ public class OrderController {
         Instant placedAt, Instant createdAt,
         List<OrderItem> items, List<ShipmentDetail> shipments,
         String bostaLinkStatus, Instant notTracedAt, boolean isExchange,
-        OrderStatusDeriver.DerivedOrderStatus derivedStatus) {}
+        OrderStatusDeriver.DerivedOrderStatus derivedStatus,
+        // Orders-rebuild pass (a), drawer "View in Shopify" — DTO-only add, no new persistence.
+        // Pre-built from stores.shop_domain + orders.external_id (Shopify GID form, e.g.
+        // "gid://shopify/Order/123"); null whenever either input is missing/unparseable, in
+        // which case the frontend omits the button rather than rendering a dead link.
+        String shopifyOrderUrl) {}
 
     // ── fulfillment funnel — today (Overview dashboard) ─────────────────────
 
@@ -137,8 +142,28 @@ public class OrderController {
                    s.max_progress_rank
             FROM orders o
             LEFT JOIN LATERAL (
-                SELECT internal_state, failed_delivery_attempts, number_of_attempts,
+                SELECT internal_state, number_of_attempts,
                        exception_code, is_delayed, sla_breached,
+                       -- Orders-rebuild pass (b): canonical attempt count, not the
+                       -- shipments.failed_delivery_attempts stored counter (which the
+                       -- pass-(a) subline and this bucket must now agree with by
+                       -- construction — see the /orders/{id}/timeline read). exception is
+                       -- NOT 1:1 with a delivery attempt (Bosta states 47/101/102/103 all
+                       -- collapse into internal_state='exception' — damage-found/
+                       -- investigation/hub-limbo are not attempts); ndr_codes.category=
+                       -- 'forward' scopes to the actual §8.4 delivery-attempt NDR codes only.
+                       -- LEFT JOIN (not INNER) — exception_code has no FK to ndr_codes, so an
+                       -- unrecognized/future code would silently vanish from an INNER JOIN,
+                       -- undercounting a real attempt. Fail-open on "code present but
+                       -- unmapped" (still counts — better to over-flag than hide a genuine
+                       -- delivery problem); fail-closed on "no code at all" (states
+                       -- 101/102/103 typically carry none — not an attempt, see above).
+                       (SELECT COUNT(*) FROM shipment_status_history h2
+                        LEFT JOIN ndr_codes n ON n.code = h2.exception_code
+                        WHERE h2.shipment_id = sh.id AND h2.internal_state = 'exception'
+                          AND h2.exception_code IS NOT NULL
+                          AND (n.category = 'forward' OR n.category IS NULL)
+                       ) AS failed_delivery_attempts,
                        COALESCE(
                            (SELECT MAX(CASE h.internal_state
                                        WHEN 'created'      THEN 1
@@ -242,80 +267,132 @@ public class OrderController {
      */
     @GetMapping("/summary")
     @PreAuthorize("hasAnyRole('OWNER', 'MANAGER')")
-    @Transactional(readOnly = true)
     public OrderSummaryCounts summary() {
-        List<OrderStatusDeriver.DerivedOrderStatus> rows = jdbc.query("""
-            SELECT o.status, o.not_traced_at,
-                   s.internal_state            AS delivery_state,
-                   COALESCE(s.failed_delivery_attempts, 0) AS failed_delivery_attempts,
-                   COALESCE(s.number_of_attempts, 0)       AS number_of_attempts,
-                   s.exception_code, s.is_delayed, s.sla_breached,
-                   s.max_progress_rank
-            FROM orders o
-            LEFT JOIN LATERAL (
-                SELECT internal_state, failed_delivery_attempts, number_of_attempts,
-                       exception_code, is_delayed, sla_breached,
-                       COALESCE(
-                           (SELECT MAX(CASE h.internal_state
-                                       WHEN 'created'      THEN 1
-                                       WHEN 'with_courier'  THEN 2
-                                       WHEN 'returning'     THEN 3
-                                       WHEN 'exception'     THEN 0
-                                   END)
-                            FROM shipment_status_history h
-                            WHERE h.shipment_id = sh.id),
-                           CASE sh.internal_state
-                               WHEN 'created'      THEN 1
-                               WHEN 'with_courier'  THEN 2
-                               WHEN 'returning'     THEN 3
-                               WHEN 'exception'     THEN 0
-                           END
-                       ) AS max_progress_rank
-                FROM shipments sh
-                WHERE order_id = o.id AND tenant_id = o.tenant_id
-                  AND shipment_leg = 'forward'
-                ORDER BY created_at DESC, id DESC
-                LIMIT 1
-            ) s ON true
-            WHERE o.tenant_id = NULLIF(current_setting('app.current_tenant', true), '')::uuid
-            """,
-            (rs, i) -> {
-                Timestamp notTracedAt = rs.getTimestamp("not_traced_at");
-                return OrderStatusDeriver.derive(
-                    rs.getString("status"),
-                    rs.getString("delivery_state"),
-                    rs.getObject("max_progress_rank", Integer.class),
-                    rs.getInt("number_of_attempts"),
-                    rs.getInt("failed_delivery_attempts"),
-                    rs.getObject("exception_code", Integer.class),
-                    rs.getObject("is_delayed", Boolean.class),
-                    rs.getObject("sla_breached", Boolean.class),
-                    notTracedAt != null);
-            });
+        // tx.execute(), not @Transactional — this method now runs two sequential queries
+        // that must share ONE bound connection for TenantAwareConnection's SET LOCAL
+        // app.current_tenant to stay in effect across both (SET LOCAL only persists for
+        // the life of an open transaction) — same reasoning as detail()/timeline().
+        return tx.execute(txs -> {
+            List<OrderStatusDeriver.DerivedOrderStatus> rows = jdbc.query("""
+                SELECT o.status, o.not_traced_at,
+                       s.internal_state            AS delivery_state,
+                       COALESCE(s.failed_delivery_attempts, 0) AS failed_delivery_attempts,
+                       COALESCE(s.number_of_attempts, 0)       AS number_of_attempts,
+                       s.exception_code, s.is_delayed, s.sla_breached,
+                       s.max_progress_rank
+                FROM orders o
+                LEFT JOIN LATERAL (
+                    SELECT internal_state, number_of_attempts,
+                           exception_code, is_delayed, sla_breached,
+                           -- Orders-rebuild pass (b): canonical attempt count, not the
+                           -- shipments.failed_delivery_attempts stored counter (which the
+                           -- pass-(a) subline and this bucket must now agree with by
+                           -- construction — see the /orders/{id}/timeline read). exception is
+                           -- NOT 1:1 with a delivery attempt (Bosta states 47/101/102/103 all
+                           -- collapse into internal_state='exception' — damage-found/
+                           -- investigation/hub-limbo are not attempts); ndr_codes.category=
+                           -- 'forward' scopes to the actual §8.4 delivery-attempt NDR codes only.
+                           -- LEFT JOIN (not INNER) — see funnel()'s identical comment: an
+                           -- unrecognized code must not silently vanish and undercount.
+                           (SELECT COUNT(*) FROM shipment_status_history h2
+                            LEFT JOIN ndr_codes n ON n.code = h2.exception_code
+                            WHERE h2.shipment_id = sh.id AND h2.internal_state = 'exception'
+                              AND h2.exception_code IS NOT NULL
+                              AND (n.category = 'forward' OR n.category IS NULL)
+                           ) AS failed_delivery_attempts,
+                           COALESCE(
+                               (SELECT MAX(CASE h.internal_state
+                                           WHEN 'created'      THEN 1
+                                           WHEN 'with_courier'  THEN 2
+                                           WHEN 'returning'     THEN 3
+                                           WHEN 'exception'     THEN 0
+                                       END)
+                                FROM shipment_status_history h
+                                WHERE h.shipment_id = sh.id),
+                               CASE sh.internal_state
+                                   WHEN 'created'      THEN 1
+                                   WHEN 'with_courier'  THEN 2
+                                   WHEN 'returning'     THEN 3
+                                   WHEN 'exception'     THEN 0
+                               END
+                           ) AS max_progress_rank
+                    FROM shipments sh
+                    WHERE order_id = o.id AND tenant_id = o.tenant_id
+                      AND shipment_leg = 'forward'
+                    ORDER BY created_at DESC, id DESC
+                    LIMIT 1
+                ) s ON true
+                WHERE o.tenant_id = NULLIF(current_setting('app.current_tenant', true), '')::uuid
+                """,
+                (rs, i) -> {
+                    Timestamp notTracedAt = rs.getTimestamp("not_traced_at");
+                    return OrderStatusDeriver.derive(
+                        rs.getString("status"),
+                        rs.getString("delivery_state"),
+                        rs.getObject("max_progress_rank", Integer.class),
+                        rs.getInt("number_of_attempts"),
+                        rs.getInt("failed_delivery_attempts"),
+                        rs.getObject("exception_code", Integer.class),
+                        rs.getObject("is_delayed", Boolean.class),
+                        rs.getObject("sla_breached", Boolean.class),
+                        notTracedAt != null);
+                });
 
-        int processing = 0, withCourier = 0, delivered = 0, returned = 0;
-        for (OrderStatusDeriver.DerivedOrderStatus derived : rows) {
-            String primaryKey = derived.primaryKey();
-            boolean isCourierAwbState =
-                "status.awaiting_courier".equals(primaryKey) || "status.label_created".equals(primaryKey);
-            if (isCourierAwbState && !derived.packedConfirmed()) {
-                // A shipment record exists but packing hasn't actually happened yet — Processing
-                // is already one merged bucket, so no need to distinguish which raw pre-pack
-                // status it's really at (unlike funnel()'s finer-grained New/Picking split).
-                processing++;
-                continue;
+            int processing = 0, delivered = 0, returned = 0;
+            for (OrderStatusDeriver.DerivedOrderStatus derived : rows) {
+                String primaryKey = derived.primaryKey();
+                boolean isCourierAwbState =
+                    "status.awaiting_courier".equals(primaryKey) || "status.label_created".equals(primaryKey);
+                if (isCourierAwbState && !derived.packedConfirmed()) {
+                    // A shipment record exists but packing hasn't actually happened yet — Processing
+                    // is already one merged bucket, so no need to distinguish which raw pre-pack
+                    // status it's really at (unlike funnel()'s finer-grained New/Picking split).
+                    processing++;
+                    continue;
+                }
+                switch (primaryKey) {
+                    case "status.new", "status.confirmed", "status.ready_to_pick",
+                         "status.picking", "status.packed" -> processing++;
+                    // withCourier is NOT counted here — see below. It no longer comes from
+                    // derived.primaryKey()/packedConfirmed() at all.
+                    case "status.delivered" -> delivered++;
+                    case "status.returned" -> returned++;
+                    default -> { /* cancelled/lost/terminated/needs_attention/delivery_failed/
+                                    self_pickup_pending/returning/with_courier bucket — see below */ }
+                }
             }
-            switch (primaryKey) {
-                case "status.new", "status.confirmed", "status.ready_to_pick",
-                     "status.picking", "status.packed" -> processing++;
-                case "status.awaiting_courier", "status.in_transit", "status.label_created" -> withCourier++;
-                case "status.delivered" -> delivered++;
-                case "status.returned" -> returned++;
-                default -> { /* cancelled/lost/terminated/needs_attention/delivery_failed/
-                                self_pickup_pending/returning — intentionally uncounted */ }
-            }
-        }
-        return new OrderSummaryCounts(rows.size(), processing, withCourier, delivered, returned);
+
+            // Orders-rebuild pass (b) — In-transit convergence (review finding: the tab's
+            // count and its click-through list must use ONE predicate, never two that can
+            // silently diverge). This is the SAME raw predicate list()'s
+            // `deliveryState=with_courier` filter uses — identical WHERE/ORDER BY/LIMIT
+            // text to the LATERAL above and in list()/detail()'s fwd query, kept in sync
+            // manually (same convention already used for the max_progress_rank CASE across
+            // all four). NOT derived.primaryKey()/packedConfirmed() — that's a deliberate,
+            // documented divergence from funnel() (untouched, still today-only +
+            // packedConfirmed-gated): Orders' "In transit" tab is literal all-time raw
+            // shipment-state membership (count==list, by construction); Overview's funnel
+            // stays a stricter today-only, packing-confirmed snapshot. Two surfaces, two
+            // questions, on purpose.
+            long withCourier = jdbc.queryForObject(
+                """
+                SELECT COUNT(*)
+                FROM orders o
+                LEFT JOIN LATERAL (
+                    SELECT internal_state
+                    FROM shipments sh
+                    WHERE order_id = o.id AND tenant_id = o.tenant_id
+                      AND shipment_leg = 'forward'
+                    ORDER BY created_at DESC, id DESC
+                    LIMIT 1
+                ) s ON true
+                WHERE o.tenant_id = NULLIF(current_setting('app.current_tenant', true), '')::uuid
+                  AND s.internal_state = 'with_courier'
+                """,
+                Long.class);
+
+            return new OrderSummaryCounts(rows.size(), processing, (int) (long) withCourier, delivered, returned);
+        });
     }
 
     // ── daily order counts (dashboard chart) ────────────────────────────────
@@ -353,6 +430,7 @@ public class OrderController {
     @PreAuthorize("hasAnyRole('OWNER', 'MANAGER')")
     public OrderPage list(
             @RequestParam(required = false) String status,
+            @RequestParam(required = false) String deliveryState,
             @RequestParam(required = false) String q,
             @RequestParam(required = false) String tracking,
             @RequestParam(defaultValue = "0")  int page,
@@ -371,6 +449,18 @@ public class OrderController {
         if (status != null && !status.isBlank()) {
             where.append(" AND o.status = ?::order_status");
             params.add(status);
+        }
+        // Orders-rebuild pass (a) fix — o.status alone cannot express "in transit" /
+        // "delivered" / "returned" for the courier pipeline: the app never writes
+        // orders.status to 'with_courier' or 'returned' (confirmed by grep — only
+        // ShipmentLinkService writes 'awaiting_pickup' and FulfillService writes
+        // 'delivered'/'cancelled', the latter gated to self-pickup handover only). The
+        // real delivery signal lives solely in the shipment's own internal_state, already
+        // selected via the LATERAL `s` alias below — filter on that instead of the raw
+        // order pipeline column. Reuses the existing join, no new backend derivation.
+        if (deliveryState != null && !deliveryState.isBlank()) {
+            where.append(" AND s.internal_state = ?::shipment_internal_state");
+            params.add(deliveryState);
         }
         if (q != null && !q.isBlank()) {
             where.append(" AND (o.number ILIKE ? OR o.customer_name ILIKE ? OR o.customer_phone ILIKE ?)");
@@ -396,8 +486,17 @@ public class OrderController {
             FROM orders o
             LEFT JOIN LATERAL (
                 SELECT id, tracking_number, internal_state, exception_reason,
-                       failed_delivery_attempts, is_delayed, sla_breached,
+                       is_delayed, sla_breached,
                        number_of_attempts, exception_code,
+                       -- Canonical attempt count — see the funnel()/summary() LATERALs'
+                       -- identical comment (LEFT JOIN, fail-open on unmapped codes, fail-
+                       -- closed on no code). Kept in sync manually across the three.
+                       (SELECT COUNT(*) FROM shipment_status_history h2
+                        LEFT JOIN ndr_codes n ON n.code = h2.exception_code
+                        WHERE h2.shipment_id = sh.id AND h2.internal_state = 'exception'
+                          AND h2.exception_code IS NOT NULL
+                          AND (n.category = 'forward' OR n.category IS NULL)
+                       ) AS failed_delivery_attempts,
                        COALESCE(
                            (SELECT MAX(CASE h.internal_state
                                        WHEN 'created'      THEN 1
@@ -503,9 +602,11 @@ public class OrderController {
                        o.address, o.payment_method, o.cod_amount,
                        o.status, o.on_hold, o.hold_reason,
                        o.placed_at, o.created_at, o.bosta_link_status, o.not_traced_at,
+                       o.external_id, st.shop_domain,
                        (e.id IS NOT NULL) AS is_exchange
                 FROM orders o
                 LEFT JOIN exchanges e ON e.outbound_order_id = o.id AND e.tenant_id = o.tenant_id
+                LEFT JOIN stores st ON st.id = o.store_id
                 WHERE o.id = ?
                   AND o.tenant_id = NULLIF(current_setting('app.current_tenant', true), '')::uuid
                 """,
@@ -533,7 +634,8 @@ public class OrderController {
                         rs.getString("bosta_link_status"),
                         rs.getTimestamp("not_traced_at") != null ? rs.getTimestamp("not_traced_at").toInstant() : null,
                         rs.getBoolean("is_exchange"),
-                        null  // derivedStatus filled below
+                        null,  // derivedStatus filled below
+                        buildShopifyOrderUrl(rs.getString("shop_domain"), rs.getString("external_id"))
                     );
                 }, orderId);
 
@@ -544,14 +646,31 @@ public class OrderController {
             // ORDER BY: forward before return, newest first within each leg.
             List<ShipmentDetail> shipments = jdbc.query(
                 """
-                SELECT id, tracking_number, provider,
-                       internal_state, shipment_leg::text AS shipment_leg,
-                       number_of_attempts, failed_delivery_attempts,
-                       awb_url, exception_code, exception_reason,
-                       is_delayed, sla_breached, scheduled_at,
-                       courier_name, courier_phone, last_failure_reason,
-                       raw::text AS raw_json
-                FROM shipments
+                SELECT sh.id, sh.tracking_number, sh.provider,
+                       sh.internal_state, sh.shipment_leg::text AS shipment_leg,
+                       sh.number_of_attempts,
+                       -- Canonical attempt count, leg-aware: ndr_codes.category matches
+                       -- shipment_leg's own value ('forward'/'return' are identical
+                       -- strings on both sides) — no CASE needed. severity='normal'
+                       -- excludes the return leg's 26-30 codes (courier-side evidence of
+                       -- loss/tamper, not attempts; harmless no-op on the forward leg,
+                       -- whose codes are all 'normal' already). LEFT JOIN — exception_code
+                       -- has no FK to ndr_codes; fail-open on "code present but unmapped"
+                       -- (still counts, so an unrecognized code is never silently dropped
+                       -- and undercounted), fail-closed on "no code at all" (states
+                       -- 101/102/103 typically carry none — not an attempt).
+                       (SELECT COUNT(*) FROM shipment_status_history h2
+                        LEFT JOIN ndr_codes n ON n.code = h2.exception_code
+                        WHERE h2.shipment_id = sh.id AND h2.internal_state = 'exception'
+                          AND h2.exception_code IS NOT NULL
+                          AND (n.category = sh.shipment_leg::text OR n.category IS NULL)
+                          AND (n.severity = 'normal' OR n.severity IS NULL)
+                       ) AS failed_delivery_attempts,
+                       sh.awb_url, sh.exception_code, sh.exception_reason,
+                       sh.is_delayed, sh.sla_breached, sh.scheduled_at,
+                       sh.courier_name, sh.courier_phone, sh.last_failure_reason,
+                       sh.raw::text AS raw_json
+                FROM shipments sh
                 WHERE order_id = ?
                 ORDER BY shipment_leg ASC, created_at DESC
                 """,
@@ -639,8 +758,17 @@ public class OrderController {
             // with OrderStatusDeriver.PROGRESS_RANK — same caveat as the LATERAL in list().
             Map<String, Object> fwd = jdbc.query(
                 """
-                SELECT internal_state, failed_delivery_attempts, number_of_attempts,
+                SELECT internal_state, number_of_attempts,
                        exception_code, is_delayed, sla_breached,
+                       -- Canonical attempt count — see the funnel()/summary()/list()
+                       -- LATERALs' identical comment (LEFT JOIN, fail-open on unmapped
+                       -- codes, fail-closed on no code). Kept in sync manually across all four.
+                       (SELECT COUNT(*) FROM shipment_status_history h2
+                        LEFT JOIN ndr_codes n ON n.code = h2.exception_code
+                        WHERE h2.shipment_id = sh.id AND h2.internal_state = 'exception'
+                          AND h2.exception_code IS NOT NULL
+                          AND (n.category = 'forward' OR n.category IS NULL)
+                       ) AS failed_delivery_attempts,
                        COALESCE(
                            (SELECT MAX(CASE h.internal_state
                                        WHEN 'created'      THEN 1
@@ -694,12 +822,197 @@ public class OrderController {
                 order.status(), order.onHold(), order.holdReason(),
                 order.placedAt(), order.createdAt(),
                 items, shipments, order.bostaLinkStatus(), order.notTracedAt(),
-                order.isExchange(), derived);
+                order.isExchange(), derived, order.shopifyOrderUrl());
+        });
+    }
+
+    // ── merged trace timeline — GET /orders/{id}/timeline (Orders rebuild pass (b)) ────
+    //
+    // Union across real recorded sources only — order creation, piece_events (pick/pack),
+    // shipments (handoff+AWB), shipment_status_history (courier waypoints + attempt
+    // failures). No source is synthesized. "Inventory reserved" is NOT one of these
+    // sources — committed inventory is derived on every read from order_items/order.status
+    // (see CatalogController), never a stored event; there is no discrete timestamp to
+    // show honestly, so it is omitted rather than approximated. A "Packed" row only
+    // appears when a real piece_events 'pack' row exists for this order —
+    // packedConfirmed (OrderStatusDeriver) can be true via the shipment-rank branch alone
+    // (Mode-B early-webhook-match) with no pack event ever recorded; this endpoint shows
+    // less in that case rather than fabricating a time.
+    //
+    // kind is presentational only, computed AFTER the union: every shipment_status_history
+    // 'exception' row is 'fail'; the chronologically-last row (if not already 'fail')
+    // becomes 'now'; everything else 'done'. This never competes with OrderStatusDeriver —
+    // both read the same underlying rows, so the drawer's Current-state card
+    // (derivedStatus) and this endpoint's 'now' row agree by construction, not by
+    // cross-checking each other.
+    public record TimelineItem(
+        Instant occurredAt, String eventKey, String actorName,
+        String locationName, String detail, String kind) {}
+
+    @GetMapping("/{orderId}/timeline")
+    @PreAuthorize("hasAnyRole('OWNER', 'MANAGER')")
+    public List<TimelineItem> timeline(@PathVariable UUID orderId) {
+        // tx.execute() (TransactionTemplate), not @Transactional — same reason as
+        // detail(): this method issues many sequential jdbc calls that must share ONE
+        // bound connection for TenantAwareConnection's SET LOCAL app.current_tenant to
+        // stay in effect across all of them (SET LOCAL only persists for the life of an
+        // open transaction). @Transactional-via-AOP-proxy would also work in the real
+        // Spring-managed bean, but tx.execute() is the robust, already-established choice
+        // for a multi-statement read in this file.
+        return tx.execute(txs -> {
+            // is_exchange via the SAME join list()/detail() already use — not an
+            // external_id string-prefix check.
+            Map<String, Object> order = jdbc.query(
+                """
+                SELECT o.placed_at, o.created_at, (e.id IS NOT NULL) AS is_exchange
+                FROM orders o
+                LEFT JOIN exchanges e ON e.outbound_order_id = o.id AND e.tenant_id = o.tenant_id
+                WHERE o.id = ?
+                  AND o.tenant_id = NULLIF(current_setting('app.current_tenant', true), '')::uuid
+                """,
+                rs -> {
+                    if (!rs.next()) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Order not found");
+                    Map<String, Object> m = new HashMap<>();
+                    Timestamp placedAt = rs.getTimestamp("placed_at");
+                    Timestamp createdAt = rs.getTimestamp("created_at");
+                    m.put("placed_at", (placedAt != null ? placedAt : createdAt).toInstant());
+                    m.put("is_exchange", rs.getBoolean("is_exchange"));
+                    return m;
+                }, orderId);
+
+            List<TimelineItem> items = new ArrayList<>();
+
+            // 1. Order created — omitted for exchanges (synthetic Model-A order created in
+            // the SAME map()-time transaction as its forward shipment — ExchangeService.
+            // map() — no real customer-facing placement moment exists; the timeline starts
+            // at the Bosta leg instead, added below).
+            if (!(Boolean) order.get("is_exchange")) {
+                items.add(new TimelineItem(
+                    (Instant) order.get("placed_at"), "order_created", null, null, null, "done"));
+            }
+
+            // 2. Picked — collapsed by DISTINCT actor (handoffs preserve custody as
+            // separate rows), each timestamped at that actor's FIRST scan. Resolved off
+            // piece_events directly, never allocations (the getSessionPieces staleness class).
+            jdbc.query(
+                """
+                SELECT pe.actor_user_id, MIN(pe.occurred_at) AS first_scan_at, u.name AS actor_name
+                FROM piece_events pe
+                LEFT JOIN users u ON u.id = pe.actor_user_id
+                WHERE pe.order_id = ? AND pe.event_type = 'scan' AND pe.to_status = 'reserved'
+                GROUP BY pe.actor_user_id, u.name
+                ORDER BY first_scan_at ASC
+                """,
+                (rs, i) -> items.add(new TimelineItem(
+                    rs.getTimestamp("first_scan_at").toInstant(), "picked_up",
+                    rs.getString("actor_name"), null, null, "done")),
+                orderId);
+
+            // 3. Packed — a single real event in practice (one FulfillService.complete()
+            // call packs every reserved piece for the order in one transaction, one actor);
+            // omitted entirely if absent, never inferred from packedConfirmed.
+            jdbc.query(
+                """
+                SELECT pe.occurred_at, u.name AS actor_name
+                FROM piece_events pe
+                LEFT JOIN users u ON u.id = pe.actor_user_id
+                WHERE pe.order_id = ? AND pe.event_type = 'pack'
+                ORDER BY pe.occurred_at ASC
+                LIMIT 1
+                """,
+                rs -> {
+                    if (rs.next()) {
+                        items.add(new TimelineItem(rs.getTimestamp("occurred_at").toInstant(),
+                            "packed", rs.getString("actor_name"), null, null, "done"));
+                    }
+                    return null;
+                }, orderId);
+
+            // 4. Handed to Bosta + courier waypoints — union across EVERY shipment on this
+            // order (both legs, and every re-ship attempt), not just the latest forward
+            // shipment list()/detail() use for status display. A re-shipped order genuinely
+            // was handed to Bosta twice; showing both is the complete truth, not a bug.
+            List<Map<String, Object>> shipmentRows = jdbc.queryForList(
+                "SELECT id, created_at, tracking_number, shipment_leg::text AS shipment_leg " +
+                "FROM shipments WHERE order_id = ? ORDER BY created_at ASC, id ASC",
+                orderId);
+            for (Map<String, Object> s : shipmentRows) {
+                UUID shipmentId = (UUID) s.get("id");
+                boolean isReturn = "return".equals(s.get("shipment_leg"));
+                items.add(new TimelineItem(
+                    ((Timestamp) s.get("created_at")).toInstant(),
+                    isReturn ? "return_shipment_created" : "handed_to_bosta",
+                    null, null, (String) s.get("tracking_number"), "done"));
+
+                jdbc.query(
+                    """
+                    SELECT h.internal_state, h.occurred_at, h.exception_code, h.exception_reason,
+                           n.category AS ndr_category
+                    FROM shipment_status_history h
+                    LEFT JOIN ndr_codes n ON n.code = h.exception_code
+                    WHERE h.shipment_id = ?
+                    ORDER BY h.occurred_at ASC, h.id ASC
+                    """,
+                    (rs, i) -> {
+                        String state = rs.getString("internal_state");
+                        boolean isException = "exception".equals(state);
+                        // Same fail-open/fail-closed rule as the canonical count above: a
+                        // present-but-unmapped code still counts as an attempt failure (never
+                        // silently relabel a real problem as a generic waypoint); no code at
+                        // all (states 101/102/103) does not.
+                        Integer exceptionCode = rs.getObject("exception_code", Integer.class);
+                        String ndrCategory = rs.getString("ndr_category");
+                        boolean isAttemptFailure = isException && !isReturn && exceptionCode != null
+                            && (ndrCategory == null || "forward".equals(ndrCategory));
+                        String eventKey = isAttemptFailure
+                            ? "delivery_attempt_failed"
+                            : (isReturn ? "return_shipment_state_" : "shipment_state_") + state;
+                        items.add(new TimelineItem(
+                            rs.getTimestamp("occurred_at").toInstant(), eventKey, null, null,
+                            isException ? rs.getString("exception_reason") : null,
+                            isException ? "fail" : "done"));
+                        return null;
+                    }, shipmentId);
+            }
+
+            // 5. Order chronologically ascending on the real event timestamp. List.sort is
+            // a STABLE sort (TimSort) — ties keep their insertion order, which already
+            // reflects source priority (order -> pick -> pack -> per-shipment
+            // handoff+waypoints, shipments themselves iterated oldest-created first) — the
+            // deterministic secondary tiebreak, never id as a time proxy.
+            items.sort(Comparator.comparing(TimelineItem::occurredAt));
+
+            // 6. kind: fail rows stay fail; the chronologically-last row becomes 'now'
+            // unless it's already 'fail' (a delivery_failed order's last row IS the
+            // failure — the mockup shows this exact case staying 'fail', not flipping to 'now').
+            if (!items.isEmpty()) {
+                int lastIdx = items.size() - 1;
+                TimelineItem last = items.get(lastIdx);
+                if (!"fail".equals(last.kind())) {
+                    items.set(lastIdx, new TimelineItem(
+                        last.occurredAt(), last.eventKey(), last.actorName(),
+                        last.locationName(), last.detail(), "now"));
+                }
+            }
+
+            return items;
         });
     }
 
     private static String nullIfBlank(String s) {
         return (s == null || s.isBlank()) ? null : s;
+    }
+
+    // Orders-rebuild pass (a) — pure URL transform on already-stored data, same pattern as
+    // the frontend's shopifyThumbUrl(). external_id is always stored in GID form
+    // ("gid://shopify/Order/123", both the GraphQL import path and the REST-payload path use
+    // admin_graphql_api_id — see ShopifySyncService) — take the trailing numeric segment.
+    // Null on anything unparseable rather than emitting a dead link.
+    private static String buildShopifyOrderUrl(String shopDomain, String externalId) {
+        if (shopDomain == null || externalId == null) return null;
+        String numericId = externalId.substring(externalId.lastIndexOf('/') + 1);
+        if (numericId.isEmpty() || !numericId.chars().allMatch(Character::isDigit)) return null;
+        return "https://" + shopDomain + "/admin/orders/" + numericId;
     }
 
     private List<OrderItem> fetchItems(UUID orderId) {

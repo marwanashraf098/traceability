@@ -152,6 +152,8 @@
       "number": "رقم الطلب",
       "customer": "العميل",
       "status": "الحالة",
+      "fulfillment": "التجهيز",
+      "delivery": "التسليم",
       "cod": "المبلغ",
       "placedAt": "التاريخ",
       "tracking": "التتبع"
@@ -163,6 +165,64 @@
     "summary": {
       "total": "الإجمالي",
       "processing": "قيد المعالجة"
+    },
+    "tabs": {
+      "all": "الكل",
+      "needsAttention": "بحاجة إلى انتباه",
+      "inTransit": "قيد الشحن",
+      "delivered": "تم التسليم",
+      "returns": "مرتجعات"
+    },
+    "totalCount": "{{count}} طلب",
+    "needAttentionSubheader": "{{count}} بحاجة إلى انتباه",
+    "delivery": {
+      "notShipped": "لم يُشحن بعد"
+    },
+    "drawer": {
+      "tabs": {
+        "overview": "نظرة عامة",
+        "items": "المنتجات ({{count}})",
+        "shipment": "الشحنة",
+        "notes": "ملاحظات"
+      },
+      "currentState": "الحالة الحالية",
+      "contactCustomer": "التواصل مع العميل",
+      "viewShipment": "عرض الشحنة",
+      "viewInShopify": "عرض في Shopify",
+      "viewAllItems": "عرض جميع المنتجات",
+      "traceTimeline": "سجل التتبع",
+      "timelineEmpty": "لم يُسجَّل أي نشاط بعد",
+      "timelineError": "تعذّر تحميل النشاط",
+      "lastUpdated": "آخر تحديث {{time}}",
+      "close": "إغلاق",
+      "notesEmpty": "لا توجد ملاحظات بعد"
+    },
+    "timeline": {
+      "system": "النظام",
+      "order_created": "تم إنشاء الطلب",
+      "picked_up": "تم الالتقاط بواسطة {{name}}",
+      "packed": "تم التغليف",
+      "handed_to_bosta": "تم التسليم لبوسطة",
+      "return_shipment_created": "تم جدولة استلام المرتجع",
+      "delivery_attempt_failed": "فشلت محاولة التوصيل",
+      "shipment_state_created": "تم إنشاء البوليصة",
+      "shipment_state_with_courier": "في الطريق للتوصيل",
+      "shipment_state_delivered": "تم التوصيل",
+      "shipment_state_returning": "جاري إرجاع الشحنة",
+      "shipment_state_returned": "تمت الإعادة إلى المستودع",
+      "shipment_state_lost": "مفقود",
+      "shipment_state_exception": "مشكلة في التوصيل",
+      "shipment_state_terminated": "تم إنهاء الشحنة",
+      "shipment_state_cancelled": "تم إلغاء الشحنة",
+      "return_shipment_state_created": "تم إنشاء بوليصة الإرجاع",
+      "return_shipment_state_with_courier": "المرتجع في الطريق",
+      "return_shipment_state_delivered": "تمت العودة إلى المستودع",
+      "return_shipment_state_returning": "جاري الإرجاع",
+      "return_shipment_state_returned": "تم استلام المرتجع",
+      "return_shipment_state_lost": "مرتجع مفقود",
+      "return_shipment_state_exception": "مشكلة في الإرجاع",
+      "return_shipment_state_terminated": "تم إنهاء الإرجاع",
+      "return_shipment_state_cancelled": "تم إلغاء الإرجاع"
     },
     "pipeline": {
       "new": "جديد",
@@ -1335,6 +1395,7 @@
     "in_transit": "في الطريق",
     "delivery_failed": "فشل التوصيل — إعادة المحاولة",
     "delivered": "تم التوصيل",
+    "fulfilled": "تم التجهيز",
     "returning": "جاري الإرجاع",
     "returned": "مرتجع",
     "lost": "مفقود",

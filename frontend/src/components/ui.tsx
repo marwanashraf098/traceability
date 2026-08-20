@@ -822,7 +822,7 @@ export function Tabs({
   activeKey,
   onChange,
 }: {
-  tabs: Array<{ key: string; label: string }>
+  tabs: Array<{ key: string; label: string; count?: number; disabled?: boolean }>
   activeKey: string
   onChange: (key: string) => void
 }) {
@@ -832,15 +832,22 @@ export function Tabs({
         <button
           key={tab.key}
           type="button"
+          disabled={tab.disabled}
           onClick={() => onChange(tab.key)}
           className={cn(
-            'pb-3 text-body transition-colors border-b-2 -mb-px',
+            'pb-3 text-body transition-colors border-b-2 -mb-px inline-flex items-center gap-2',
             tab.key === activeKey
               ? 'text-primary border-trace-blue'
-              : 'text-muted border-transparent hover:text-primary'
+              : 'text-muted border-transparent hover:text-primary',
+            tab.disabled && 'cursor-default'
           )}
         >
           {tab.label}
+          {tab.count != null && (
+            <span className="text-caption font-semibold text-muted bg-elevated border border-line rounded-full px-2 py-0.5">
+              {tab.count.toLocaleString()}
+            </span>
+          )}
         </button>
       ))}
     </div>

@@ -56,7 +56,14 @@ public final class OrderStatusDeriver {
         // diagnosis. Consumed by funnel()/summary() to stop miscounting never-packed orders as
         // "past packing" (Courier/With courier); the frontend stepper computes its own equivalent
         // signal independently from already-fetched OrderDetail fields, not from this field.
-        boolean packedConfirmed
+        boolean packedConfirmed,
+        // Orders-rebuild pass (a) — additive fulfillment facet, computed from fields this method
+        // already derives (packedConfirmed, primaryKey, tone). primaryKey/tone remain the
+        // delivery/composite facet exactly as before — untouched by this addition, still the
+        // sole input to funnel()/summary()/the stepper/OrderStatusListDetailParityTest. Frontend
+        // renders both facets straight through i18n with no client-side re-derivation.
+        String fulfillmentKey,
+        Tone fulfillmentTone
     ) {}
 
     // ── progress_rank ladder ─────────────────────────────────────────────────
@@ -314,7 +321,33 @@ public final class OrderStatusDeriver {
             || (maxProgressRank != null && maxProgressRank >= 2)
             || (terminal && !"cancelled".equals(shipmentInternalState));
 
-        return new DerivedOrderStatus(primaryKey, tone, chips, note, conflictKey, notTraced, packedConfirmed);
+        // Fulfillment facet — orthogonal to the delivery/composite facet above (primaryKey/tone).
+        // Cancelled and returned/returning read the SAME key+tone on both facets (a returned
+        // order is unfulfilled AND its delivery leg is "returned" — expected overlap, not a bug;
+        // cancelled mirrors the orderCancelled branch's existing suppression). Otherwise, once
+        // packing is confirmed the merchant's fulfillment obligation is done regardless of how
+        // the delivery leg is going (in transit, delivered, even a failed attempt or a lost/
+        // terminated shipment) — "status.fulfilled" is the one new catalog key this needs
+        // (approved). Pre-pack, reuse the same PIPELINE_KEY/PIPELINE_TONE the no-shipment branch
+        // above already uses — no new map.
+        String fulfillmentKey;
+        Tone fulfillmentTone;
+        boolean shipmentReturnLeg = shipmentLinked
+            && ("returned".equals(shipmentInternalState) || "returning".equals(shipmentInternalState));
+        if (orderCancelled || shipmentReturnLeg) {
+            fulfillmentKey = primaryKey;
+            fulfillmentTone = tone;
+        } else if (packedConfirmed) {
+            fulfillmentKey = "status.fulfilled";
+            fulfillmentTone = Tone.SUCCESS;
+        } else {
+            fulfillmentKey = PIPELINE_KEY.getOrDefault(orderStatus, "status.new");
+            fulfillmentTone = PIPELINE_TONE.getOrDefault(orderStatus, Tone.NEUTRAL);
+        }
+
+        return new DerivedOrderStatus(
+            primaryKey, tone, chips, note, conflictKey, notTraced, packedConfirmed,
+            fulfillmentKey, fulfillmentTone);
     }
 
     // packed/awaiting_pickup/with_courier/delivered — order.status values that can only be

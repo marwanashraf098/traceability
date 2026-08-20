@@ -1,27 +1,42 @@
 import { useEffect, useState, useCallback } from 'react'
 import { Link } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
-import { listOrders, OrderPage, listShopifyStores, syncShopifyStore, getOrdersSummary, OrderSummaryCounts } from '../api'
+import {
+  listOrders, OrderPage, listShopifyStores, syncShopifyStore,
+  getOrdersSummary, OrderSummaryCounts, getExceptionsCount,
+} from '../api'
 import {
   Alert, Badge, Button, DataTable, type DataTableColumn,
-  EmptyState, OrderStatus, StatCard, TableSkeleton,
+  EmptyState, LegStatusBadge, Tabs, TableSkeleton,
 } from '../components/ui'
-
-const ORDER_STATUSES = [
-  'new', 'confirmed', 'ready_to_pick', 'picking', 'packed',
-  'awaiting_pickup', 'with_courier', 'delivered',
-  'returning', 'returned', 'lost', 'cancelled',
-]
+import OrderDrawer from '../components/OrderDrawer'
 
 const PAGE_SIZE = 20
 
 // Infer item type from the API's OrderPage shape
 type OrderItem = NonNullable<OrderPage['items']>[number]
 
+// Tabs. All/needsAttention aside, these filter on the SHIPMENT's own internal_state
+// (deliveryState param) — NOT orders.status. Confirmed by grep: the app never writes
+// orders.status to 'with_courier' or 'returned' (only ShipmentLinkService's
+// 'awaiting_pickup' and FulfillService's self-pickup-only 'delivered'/'cancelled'
+// writes exist) — the real courier-pipeline signal lives solely on the shipment row.
+// Using orders.status here would make the tab's count (from /orders/summary, which
+// DOES derive off shipment state) and its click-through list silently diverge —
+// exactly the parity bug caught in review. 'needsAttention' still has no equivalent
+// column at all (derived from exception fields, not a single value) — count-only.
+const TAB_DEFS = [
+  { key: 'all',            labelKey: 'orders.tabs.all',            filterDeliveryState: null as string | null, clickable: true },
+  { key: 'needsAttention', labelKey: 'orders.tabs.needsAttention', filterDeliveryState: null as string | null, clickable: false },
+  { key: 'inTransit',      labelKey: 'orders.tabs.inTransit',      filterDeliveryState: 'with_courier',        clickable: true },
+  { key: 'delivered',      labelKey: 'orders.tabs.delivered',      filterDeliveryState: 'delivered',           clickable: true },
+  { key: 'returns',        labelKey: 'orders.tabs.returns',        filterDeliveryState: 'returned',            clickable: true },
+] as const
+
 export default function Orders() {
   const { t } = useTranslation()
   const [data,     setData]     = useState<OrderPage | null>(null)
-  const [status,   setStatus]   = useState('')
+  const [deliveryStateFilter, setDeliveryStateFilter] = useState('')
   const [q,        setQ]        = useState('')
   const [tracking, setTracking] = useState('')
   const [page,     setPage]     = useState(0)
@@ -30,11 +45,16 @@ export default function Orders() {
   const [syncing,  setSyncing]  = useState(false)
   const [syncMsg,  setSyncMsg]  = useState('')
   const [summary,  setSummary]  = useState<OrderSummaryCounts | null>(null)
+  const [needsAttention, setNeedsAttention] = useState<number | null>(null)
+  const [drawerOrderId, setDrawerOrderId]   = useState<string | null>(null)
 
   // Independent, non-blocking — a failure here must never affect the table below (no
   // shared error state), and there's simply no tile row while it's unset.
   useEffect(() => {
     getOrdersSummary().then(setSummary).catch(() => {})
+    // Same source as the shell's Alerts bell (Layout's own /exceptions/count poll) — the
+    // Needs-attention tab and subheader must never show a number that could contradict it.
+    getExceptionsCount().then(c => setNeedsAttention(c.count)).catch(() => {})
   }, [])
 
   const fetchOrders = useCallback(async () => {
@@ -42,7 +62,7 @@ export default function Orders() {
     setError('')
     try {
       const res = await listOrders({
-        status:   status || undefined,
+        deliveryState: deliveryStateFilter || undefined,
         q:        q || undefined,
         tracking: tracking || undefined,
         page,
@@ -54,7 +74,7 @@ export default function Orders() {
     } finally {
       setLoading(false)
     }
-  }, [status, q, tracking, page, t])
+  }, [deliveryStateFilter, q, tracking, page, t])
 
   useEffect(() => { fetchOrders() }, [fetchOrders])
 
@@ -81,19 +101,27 @@ export default function Orders() {
   const to    = Math.min((page + 1) * PAGE_SIZE, total)
   const rows  = data?.items ?? []
 
-  // ── Status cell ───────────────────────────────────────────────────────────────
-  // FR-7/FR-11: single derived headline — no independent pipeline/delivery-state
-  // reads here. onHold is a separate order-level flag, not part of the shipment
-  // derivation, so it's still rendered alongside it.
-  function renderStatus(order: OrderItem) {
+  // ── Fulfillment / Delivery cells ─────────────────────────────────────────────
+  // Two facets of the single OrderStatusDeriver output — no client-side re-derivation.
+  // Fulfillment reads derivedStatus.fulfillmentKey/.fulfillmentTone (new additive deriver
+  // fields); Delivery reads derivedStatus.primaryKey/.tone (the existing composite facet,
+  // untouched). The only branch here is presentational, not a re-derivation: no shipment
+  // linked (row.deliveryState null, the same signal the LATERAL join already leaves null)
+  // renders the "Not shipped" placeholder instead of echoing the pipeline stage — approved
+  // in Step 0 review. onHold is a separate order-level flag, rendered alongside Fulfillment.
+  function renderFulfillment(order: OrderItem) {
     return (
       <div className="flex flex-wrap items-start gap-1.5">
-        <OrderStatus derived={order.derivedStatus} />
-        {order.onHold && (
-          <Badge tone="critical" label={t('orderDetail.onHold')} />
-        )}
+        <LegStatusBadge legStatus={{ primaryKey: order.derivedStatus.fulfillmentKey, tone: order.derivedStatus.fulfillmentTone }} />
+        {order.onHold && <Badge tone="critical" label={t('orderDetail.onHold')} />}
       </div>
     )
+  }
+
+  function renderDelivery(order: OrderItem) {
+    return order.deliveryState
+      ? <LegStatusBadge legStatus={{ primaryKey: order.derivedStatus.primaryKey, tone: order.derivedStatus.tone }} />
+      : <LegStatusBadge legStatus={{ primaryKey: 'orders.delivery.notShipped', tone: 'NEUTRAL' }} />
   }
 
   // ── Column definitions ─────────────────────────────────────────────────────
@@ -106,7 +134,9 @@ export default function Orders() {
         // Order number — mono, links to detail. Exchanges stay inline with normal
         // orders (no filter, no row restyling, no separate section) — the badge is
         // the only differentiator, same component QueueView/PickScreen already use.
-        <div className="flex items-center gap-1.5">
+        // stopPropagation — this cell sits inside a row whose click opens the drawer;
+        // OrderDetail.tsx must stay reachable via this link without also opening it.
+        <div className="flex items-center gap-1.5" onClick={e => e.stopPropagation()}>
           <Link
             to={`/orders/${row.id}`}
             className="text-trace-blue hover:text-trace-blue-hover font-medium transition-colors"
@@ -130,13 +160,19 @@ export default function Orders() {
       ),
     },
     {
-      key: 'status',
-      header: t('orders.columns.status', { defaultValue: 'Status' }),
-      render: renderStatus,
+      key: 'fulfillment',
+      header: t('orders.columns.fulfillment'),
+      render: renderFulfillment,
+    },
+    {
+      key: 'delivery',
+      header: t('orders.columns.delivery'),
+      render: renderDelivery,
     },
     {
       key: 'cod',
       header: t('orders.columns.cod', { defaultValue: 'Amount' }),
+      align: 'end',
       render: row => row.codAmount != null
         ? <span className="font-mono text-primary">{row.codAmount.toLocaleString()} EGP</span>
         : <span className="text-muted">{t('common.na')}</span>,
@@ -144,22 +180,30 @@ export default function Orders() {
     {
       key: 'placedAt',
       header: t('orders.columns.placedAt', { defaultValue: 'Date' }),
+      align: 'end',
       render: row => (
         <span className="text-small text-muted">
           {row.placedAt ? new Date(row.placedAt).toLocaleDateString() : t('common.na')}
         </span>
       ),
     },
-    {
-      key: 'tracking',
-      header: t('orders.columns.tracking', { defaultValue: 'Tracking' }),
-      mono: true,
-      render: row => (
-        // Tracking number — mono per spec
-        <span className="text-caption text-muted">{row.trackingNumber ?? t('common.na')}</span>
-      ),
-    },
   ]
+
+  const activeTabKey = TAB_DEFS.find(d => d.filterDeliveryState === (deliveryStateFilter || null))?.key ?? 'all'
+  function handleTabClick(key: string) {
+    const def = TAB_DEFS.find(d => d.key === key)
+    if (!def || !def.clickable) return
+    applyFilter(() => setDeliveryStateFilter(def.filterDeliveryState ?? ''))
+  }
+  const tabCount = (key: typeof TAB_DEFS[number]['key']): number | undefined => {
+    switch (key) {
+      case 'all':            return summary?.total
+      case 'needsAttention': return needsAttention ?? undefined
+      case 'inTransit':      return summary?.withCourier
+      case 'delivered':      return summary?.delivered
+      case 'returns':        return summary?.returned
+    }
+  }
 
   return (
     <div className="space-y-4">
@@ -179,19 +223,34 @@ export default function Orders() {
         </div>
       </div>
 
-      {/* Summary tile row — calm, independent of the table's own loading/error state */}
-      {summary && (
-        <div className="grid grid-cols-5 gap-3" data-testid="orders-summary">
-          <StatCard label={t('orders.summary.total')}      value={summary.total} />
-          <StatCard label={t('orders.summary.processing')} value={summary.processing} />
-          <StatCard label={t('orders.pipeline.with_courier')} value={summary.withCourier} />
-          <StatCard label={t('orders.pipeline.delivered')} value={summary.delivered} />
-          <StatCard label={t('orders.pipeline.returned')}  value={summary.returned} />
-        </div>
-      )}
+      {/* Subheader — total + needs-attention count, calm and independent of table state */}
+      <p className="text-small text-muted -mt-2" data-testid="orders-subheader">
+        {t('orders.totalCount', { count: summary?.total ?? 0 })}
+        {!!needsAttention && (
+          <>
+            <span className="mx-2 text-muted/50">•</span>
+            <span className="text-trace-blue font-medium">
+              {t('orders.needAttentionSubheader', { count: needsAttention })}
+            </span>
+          </>
+        )}
+      </p>
+
+      {/* Tabs — counts from /orders/summary (+ /exceptions/count for Needs attention);
+          clicking filters on the shipment's own internal_state (see TAB_DEFS comment). */}
+      <Tabs
+        activeKey={activeTabKey}
+        onChange={handleTabClick}
+        tabs={TAB_DEFS.map(def => ({
+          key: def.key,
+          label: t(def.labelKey),
+          count: tabCount(def.key),
+          disabled: !def.clickable,
+        }))}
+      />
 
       {/* Filter bar — raw inputs keep .input class; Input component can't hold fixed width without wrapper */}
-      <div className="flex flex-wrap gap-2">
+      <div className="flex flex-wrap items-center gap-2">
         <input
           type="text"
           placeholder={t('orders.search')}
@@ -206,16 +265,6 @@ export default function Orders() {
           onChange={e => applyFilter(() => setTracking(e.target.value))}
           className="input w-40"
         />
-        <select
-          value={status}
-          onChange={e => applyFilter(() => setStatus(e.target.value))}
-          className="input w-auto"
-        >
-          <option value="">{t('orders.filterStatus')}</option>
-          {ORDER_STATUSES.map(s => (
-            <option key={s} value={s}>{s.replace(/_/g, ' ')}</option>
-          ))}
-        </select>
       </div>
 
       {/* Table — loading/empty/error/data handled here so EmptyState can carry an action */}
@@ -233,7 +282,7 @@ export default function Orders() {
             action={{ label: t('orders.sync'), onClick: handleSync }}
           />
         ) : (
-          <DataTable columns={columns} rows={rows} />
+          <DataTable columns={columns} rows={rows} onRowClick={row => setDrawerOrderId(row.id)} />
         )}
       </div>
 
@@ -261,6 +310,9 @@ export default function Orders() {
           </div>
         </div>
       )}
+
+      {/* Slide-in overlay, not a route — Layout stays outside this view-switch. */}
+      <OrderDrawer orderId={drawerOrderId} onClose={() => setDrawerOrderId(null)} />
     </div>
   )
 }

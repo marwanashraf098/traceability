@@ -156,9 +156,14 @@ class OrderSummaryTest {
         insertOrder(bucketTenantId, bucketStoreId, "SUMMARY-PICKING", "picking");
         insertOrder(bucketTenantId, bucketStoreId, "SUMMARY-PACKED", "packed");
 
-        // With courier: shipment-linked at internal_state='created' (label_created).
+        // With courier: shipment-linked at internal_state='with_courier' — the converged
+        // predicate (Orders-rebuild pass (b), review-approved option (a)): withCourier now
+        // means literal raw internal_state='with_courier' only, matching list()'s
+        // deliveryState filter exactly. A 'created'-state shipment (label printed, not yet
+        // collected) is deliberately NOT in this bucket anymore — see
+        // summary_labelPrintedNotYetCollected_notCountedAsInTransit below.
         UUID withCourierOrder = insertOrder(bucketTenantId, bucketStoreId, "SUMMARY-AWAITING", "awaiting_pickup");
-        insertForwardShipment(bucketTenantId, withCourierOrder, "SUMMARY-TRK-1", "created");
+        insertForwardShipment(bucketTenantId, withCourierOrder, "SUMMARY-TRK-1", "with_courier");
 
         // Delivered: shipment-linked, terminal delivered.
         UUID deliveredOrder = insertOrder(bucketTenantId, bucketStoreId, "SUMMARY-DELIVERED", "new");
@@ -182,7 +187,7 @@ class OrderSummaryTest {
         }
 
         assertThat(counts.processing()).as("new + picking + packed").isEqualTo(3);
-        assertThat(counts.withCourier()).as("label_created shipment").isEqualTo(1);
+        assertThat(counts.withCourier()).as("with_courier shipment").isEqualTo(1);
         assertThat(counts.delivered()).isEqualTo(1);
         assertThat(counts.returned()).isEqualTo(1);
 
@@ -195,6 +200,48 @@ class OrderSummaryTest {
         long breakdownSum = counts.processing() + counts.withCourier() + counts.delivered() + counts.returned();
         assertThat(counts.total()).as("total must exceed the sum of the 4 breakdown buckets")
             .isGreaterThan(breakdownSum);
+    }
+
+    // ── Orders-rebuild pass (b), review-approved option (a): the converged withCourier
+    // predicate is narrower than the old packedConfirmed-gated bucket on purpose. A
+    // 'created'-state shipment (AWB/label printed, courier hasn't collected it yet) is
+    // genuinely not "in transit" — the old bucket was loose. Uncounted here follows the
+    // same precedent as the cancelled order in the tally test above: present in total,
+    // absent from all 4 breakdown buckets, not a bug. ──────────────────────────────────
+
+    @Test
+    void summary_labelPrintedNotYetCollected_notCountedAsInTransit() {
+        UUID labelTenantId = UUID.randomUUID();
+        UUID labelStoreId  = UUID.randomUUID();
+        jdbc.update("INSERT INTO tenants (id, name) VALUES (?, 'SummaryLabelTenant')", labelTenantId);
+        jdbc.update("INSERT INTO stores (id, tenant_id, platform, shop_domain, status) " +
+                    "VALUES (?, ?, 'shopify', 'summary-label-test.myshopify.com', 'connected')",
+                    labelStoreId, labelTenantId);
+
+        UUID orderId = insertOrder(labelTenantId, labelStoreId, "LABEL-PRINTED", "awaiting_pickup");
+        insertForwardShipment(labelTenantId, orderId, "LABEL-TRK-1", "created");
+
+        TenantContext.set(labelTenantId);
+        OrderSummaryCounts counts;
+        try {
+            counts = tx.execute(status -> controller.summary());
+        } finally {
+            TenantContext.set(tenantId);
+        }
+
+        assertThat(counts.withCourier())
+            .as("label printed / not yet collected is NOT 'in transit' under the converged predicate")
+            .isEqualTo(0);
+        assertThat(counts.processing())
+            .as("packedConfirmed is true (order.status='awaiting_pickup') but this order isn't " +
+                "a raw pipeline stage either — it falls out of Processing too, same as a " +
+                "cancelled/returning order already does")
+            .isEqualTo(0);
+        assertThat(counts.delivered()).isEqualTo(0);
+        assertThat(counts.returned()).isEqualTo(0);
+        assertThat(counts.total())
+            .as("still visible in the tenant's total — findable under All, just not bucketed")
+            .isEqualTo(1);
     }
 
     // ── Slice 1 (status-split fix): never-packed webhook-matched order ─────────

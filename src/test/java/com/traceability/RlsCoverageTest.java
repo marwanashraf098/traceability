@@ -114,6 +114,11 @@ class RlsCoverageTest {
                     "uses tx.execute(); empty valid for new tenant; covered by FulfillTest"),
             entry("/api/v1/orders/{orderId}",
                     "single-entity GET; uses tx.execute(); covered by FulfillTest"),
+            entry("/api/v1/orders/{orderId}/timeline",
+                    "single-entity GET; uses tx.execute(); RLS-covered by " +
+                    "OrderStatusListDetailParityTest's real app_user same-tenant positive " +
+                    "control + cross-tenant negative control (stronger than this class's " +
+                    "own BYPASSRLS pattern for a genuinely RLS-sensitive read)"),
             entry("/api/v1/fulfill/queue",
                     "uses tx.execute(); empty valid for new tenant"),
             entry("/api/v1/fulfill/{orderId}",

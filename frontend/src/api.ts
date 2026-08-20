@@ -100,6 +100,11 @@ export interface DerivedOrderStatus {
   // stepper (OrderDetail.tsx computes its own equivalent client-side from already-fetched
   // fields) — included here for wire-contract completeness.
   packedConfirmed: boolean
+  // Orders-rebuild pass (a) — fulfillment facet, orthogonal to primaryKey/tone (the
+  // delivery/composite facet). Render straight through i18n, same as primaryKey/tone —
+  // no client-side re-derivation.
+  fulfillmentKey: string
+  fulfillmentTone: DerivedTone
 }
 
 export interface OrderSummary {
@@ -206,10 +211,17 @@ export interface OrderDetail {
   notTracedAt: string | null
   isExchange: boolean
   derivedStatus: DerivedOrderStatus
+  // Orders-rebuild pass (a), drawer "View in Shopify" — null whenever the backend
+  // couldn't resolve a shop domain + numeric order id; omit the button in that case.
+  shopifyOrderUrl: string | null
 }
 
 export interface OrderListParams {
   status?: string
+  // Filters on the shipment's own internal_state (LATERAL-joined), not orders.status —
+  // orders.status is never written to 'with_courier'/'returned' by the app, only the
+  // shipment row reflects courier-pipeline state. Use this for delivery-facet filters.
+  deliveryState?: string
   q?: string
   tracking?: string
   page?: number
@@ -218,7 +230,8 @@ export interface OrderListParams {
 
 export function listOrders(params: OrderListParams = {}) {
   const q = new URLSearchParams()
-  if (params.status)   q.set('status', params.status)
+  if (params.status)        q.set('status', params.status)
+  if (params.deliveryState) q.set('deliveryState', params.deliveryState)
   if (params.q)        q.set('q', params.q)
   if (params.tracking) q.set('tracking', params.tracking)
   if (params.page != null) q.set('page', String(params.page))
@@ -228,6 +241,25 @@ export function listOrders(params: OrderListParams = {}) {
 
 export function getOrder(id: string) {
   return request<OrderDetail>(`/orders/${id}`)
+}
+
+// ── Trace timeline (Orders rebuild pass (b)) ────────────────────────────────────
+// Separate endpoint, separate fetch from getOrder() — the drawer must not gate the
+// order header/items on this, and a timeline-fetch failure must not blank/hang the
+// rest of the drawer. eventKey/kind are the wire contract with GET
+// /orders/{id}/timeline; kind is backend-computed and rendered as-is, never
+// recomputed client-side.
+export interface TimelineItem {
+  occurredAt: string
+  eventKey: string
+  actorName: string | null
+  locationName: string | null
+  detail: string | null
+  kind: 'done' | 'now' | 'fail'
+}
+
+export function getOrderTimeline(id: string) {
+  return request<TimelineItem[]>(`/orders/${id}/timeline`)
 }
 
 export interface DayCount { date: string; count: number }

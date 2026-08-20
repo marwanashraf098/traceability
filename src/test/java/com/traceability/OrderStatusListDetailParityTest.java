@@ -3,8 +3,10 @@ package com.traceability;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.traceability.fulfillment.OrderController;
 import com.traceability.fulfillment.OrderController.OrderDetail;
+import com.traceability.fulfillment.OrderController.OrderPage;
 import com.traceability.fulfillment.OrderController.OrderSummary;
 import com.traceability.fulfillment.OrderController.ShipmentDetail;
+import com.traceability.fulfillment.OrderController.TimelineItem;
 import com.traceability.fulfillment.OrderStatusDeriver.DerivedOrderStatus;
 import com.traceability.fulfillment.OrderStatusDeriver.Tone;
 import com.traceability.tenancy.TenantAwareDataSource;
@@ -23,6 +25,11 @@ import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
+import java.sql.Timestamp;
+import java.time.Instant;
+import java.time.temporal.ChronoUnit;
+import java.util.Comparator;
+import java.util.List;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -75,7 +82,7 @@ class OrderStatusListDetailParityTest {
 
     private OrderController controller;
 
-    UUID tenantId, otherTenantId, storeId;
+    UUID tenantId, otherTenantId, storeId, productId, variantId;
 
     @BeforeAll
     void setupAppUser() {
@@ -99,6 +106,16 @@ class OrderStatusListDetailParityTest {
         jdbc.update("INSERT INTO stores (id, tenant_id, platform, shop_domain, status) " +
                     "VALUES (?, ?, 'shopify', 'parity-test.myshopify.com', 'connected')",
                     storeId, tenantId);
+
+        // Product/variant fixture for the timeline's piece_events (pick/pack) rows.
+        productId = UUID.randomUUID();
+        variantId = UUID.randomUUID();
+        jdbc.update("INSERT INTO products (id, tenant_id, store_id, external_id, title, status) " +
+                    "VALUES (?, ?, ?, 'P-PARITY', 'Parity Widget', 'active')",
+                    productId, tenantId, storeId);
+        jdbc.update("INSERT INTO variants (id, tenant_id, product_id, external_id, title, sku) " +
+                    "VALUES (?, ?, ?, 'V-PARITY', 'Default', 'PARITY-001')",
+                    variantId, tenantId, productId);
     }
 
     @BeforeEach void ctx()   { TenantContext.set(tenantId); }
@@ -135,6 +152,52 @@ class OrderStatusListDetailParityTest {
         jdbc.update(
             "INSERT INTO shipment_status_history (tenant_id, shipment_id, internal_state) " +
             "VALUES (?, ?, ?::shipment_internal_state)", tenantId, shipmentId, state);
+    }
+
+    // ── timeline (pass-b) helpers — explicit timestamps for deterministic ordering
+    // assertions; insertOrder/insertForwardShipment above default to now(), too coarse
+    // for asserting chronological order across several rows inserted in one test. ──────
+
+    private UUID insertOrderAt(String extId, String status, Instant placedAt) {
+        return jdbc.queryForObject(
+            "INSERT INTO orders (tenant_id, store_id, external_id, number, status, " +
+            "    payment_method, placed_at) " +
+            "VALUES (?, ?, ?, ?, ?::order_status, 'cod', ?) RETURNING id",
+            UUID.class, tenantId, storeId, extId, "#" + extId, status, Timestamp.from(placedAt));
+    }
+
+    private UUID insertForwardShipmentAt(UUID orderId, String tracking, String state, Instant createdAt) {
+        return jdbc.queryForObject(
+            "INSERT INTO shipments (tenant_id, order_id, provider, tracking_number, " +
+            "    internal_state, shipment_leg, created_at) " +
+            "VALUES (?, ?, 'bosta', ?, ?::shipment_internal_state, 'forward', ?) RETURNING id",
+            UUID.class, tenantId, orderId, tracking, state, Timestamp.from(createdAt));
+    }
+
+    private void insertHistoryAt(UUID shipmentId, String state, Instant occurredAt,
+                                  Integer exceptionCode, String exceptionReason) {
+        jdbc.update(
+            "INSERT INTO shipment_status_history " +
+            "(tenant_id, shipment_id, internal_state, occurred_at, exception_code, exception_reason) " +
+            "VALUES (?, ?, ?::shipment_internal_state, ?, ?, ?)",
+            tenantId, shipmentId, state, Timestamp.from(occurredAt), exceptionCode, exceptionReason);
+    }
+
+    // Direct piece_events insert (not through InventoryLedger — this suite tests the
+    // TIMELINE READ, not the ledger). actorUserId may be null (system/automated, same as
+    // production — no users fixture exists in this class).
+    private void insertPieceEvent(UUID orderId, String eventType, String fromStatus,
+                                   String toStatus, Instant occurredAt) {
+        String pieceId = com.traceability.inventory.UlidGenerator.generate();
+        jdbc.update(
+            "INSERT INTO pieces (id, tenant_id, variant_id, barcode, short_code, status) " +
+            "VALUES (?, ?, ?, ?, 'P' || LPAD((abs(hashtext(?)) % 999999 + 1)::text, 6, '0'), ?::piece_status)",
+            pieceId, tenantId, variantId, "PC-" + pieceId, pieceId, toStatus);
+        jdbc.update(
+            "INSERT INTO piece_events " +
+            "(tenant_id, piece_id, event_type, actor_user_id, order_id, occurred_at, from_status, to_status) " +
+            "VALUES (?, ?, ?, NULL, ?, ?, ?::piece_status, ?::piece_status)",
+            tenantId, pieceId, eventType, orderId, Timestamp.from(occurredAt), fromStatus, toStatus);
     }
 
     // ── list vs detail parity ────────────────────────────────────────────────
@@ -366,7 +429,7 @@ class OrderStatusListDetailParityTest {
     }
 
     private void assertParity(UUID orderId) {
-        OrderSummary fromList = controller.list(null, null, null, 0, 100).items().stream()
+        OrderSummary fromList = controller.list(null, null, null, null, 0, 100).items().stream()
             .filter(o -> o.id().equals(orderId.toString()))
             .findFirst().orElseThrow();
         OrderDetail fromDetail = controller.detail(orderId);
@@ -398,5 +461,187 @@ class OrderStatusListDetailParityTest {
             .as("app_user under a different tenant's GUC must not see this order")
             .isInstanceOf(ResponseStatusException.class)
             .hasMessageContaining("404");
+    }
+
+    // ── deliveryState filter on list() — guards the silent-zero-row class ───────
+    // (review, before pilot deploy) A filter returning empty because of a scoping bug
+    // looks identical to "no matching orders" from the outside — the positive control
+    // is what actually proves the predicate matches, not just that it doesn't leak
+    // across tenants. Mirrors rls_detail_sameTenantPositiveControl_crossTenantNegativeControl
+    // above, but exercises the NEW `s.internal_state = ?::shipment_internal_state`
+    // predicate specifically (list()'s pre-existing `status`/`tracking` filters already
+    // had no equivalent test before this pass either — scoped to the predicate this
+    // review is about, not a general backfill).
+
+    @Test
+    void rls_list_deliveryStateFilter_sameTenantPositiveControl_forEveryTabState() {
+        OrderController appUserController = new OrderController(appUserJdbc, mapper, appUserTxm);
+
+        for (String state : List.of("with_courier", "delivered", "returned")) {
+            UUID orderId = insertOrder("DSF-POS-" + state, "with_courier");
+            insertForwardShipment(orderId, "DSF-TRK-" + state, state, 1, 0);
+
+            OrderPage page = TenantContext.runAs(tenantId,
+                () -> appUserController.list(null, state, null, null, 0, 100));
+
+            assertThat(page.items())
+                .as("deliveryState=%s must return the seeded same-tenant order, not a silent empty page", state)
+                .anyMatch(o -> o.id().equals(orderId.toString()));
+        }
+    }
+
+    @Test
+    void rls_list_deliveryStateFilter_crossTenantNegativeControl() {
+        UUID orderId = insertOrder("DSF-NEG", "with_courier");
+        insertForwardShipment(orderId, "DSF-TRK-NEG", "with_courier", 1, 0);
+
+        OrderController appUserController = new OrderController(appUserJdbc, mapper, appUserTxm);
+
+        // Same filter, different tenant's GUC — the seeded row must not leak across
+        // tenants through the new predicate (an empty page here, not a 404 — list()
+        // has no single-entity 404 concept, unlike detail()).
+        OrderPage page = TenantContext.runAs(otherTenantId,
+            () -> appUserController.list(null, "with_courier", null, null, 0, 100));
+
+        assertThat(page.items())
+            .as("app_user under a different tenant's GUC must not see this order via deliveryState")
+            .noneMatch(o -> o.id().equals(orderId.toString()));
+    }
+
+    // ── Orders-rebuild pass (b): GET /orders/{id}/timeline ──────────────────────
+
+    @Test
+    void rls_timeline_sameTenantPositiveControl_orderedSeededEvents_crossTenantNegativeControl() {
+        Instant t0 = Instant.parse("2026-01-01T10:00:00Z");
+        UUID orderId = insertOrderAt("TL-POS", "with_courier", t0);
+        insertPieceEvent(orderId, "scan", "available", "reserved", t0.plus(1, ChronoUnit.HOURS));
+        insertPieceEvent(orderId, "pack", "reserved", "packed", t0.plus(2, ChronoUnit.HOURS));
+        UUID shipmentId = insertForwardShipmentAt(orderId, "9810299001", "created", t0.plus(3, ChronoUnit.HOURS));
+        insertHistoryAt(shipmentId, "created", t0.plus(4, ChronoUnit.HOURS), null, null);
+        insertHistoryAt(shipmentId, "with_courier", t0.plus(5, ChronoUnit.HOURS), null, null);
+
+        OrderController appUserController = new OrderController(appUserJdbc, mapper, appUserTxm);
+
+        // Positive control: app_user WITH the correct tenant GUC sees the full, correctly
+        // ordered, seeded timeline — proves this isn't a silent-empty-page RLS/GUC bug
+        // wearing a "no events yet" costume.
+        List<TimelineItem> timeline =
+            TenantContext.runAs(tenantId, () -> appUserController.timeline(orderId));
+
+        assertThat(timeline).extracting(TimelineItem::eventKey).containsExactly(
+            "order_created", "picked_up", "packed", "handed_to_bosta",
+            "shipment_state_created", "shipment_state_with_courier");
+        assertThat(timeline).isSortedAccordingTo(Comparator.comparing(TimelineItem::occurredAt));
+        assertThat(timeline.get(timeline.size() - 1).kind())
+            .as("chronologically-last row, no failure seeded -> 'now'")
+            .isEqualTo("now");
+        assertThat(timeline.subList(0, timeline.size() - 1))
+            .as("every non-last row is 'done' — no failure seeded")
+            .allMatch(i -> "done".equals(i.kind()));
+
+        // Negative control: app_user under a DIFFERENT tenant's GUC cannot see it — 404,
+        // matching detail()'s existing contract, not a security-bypass 200/empty list.
+        assertThatThrownBy(() -> TenantContext.runAs(otherTenantId, () -> appUserController.timeline(orderId)))
+            .as("app_user under a different tenant's GUC must not see this order's timeline")
+            .isInstanceOf(ResponseStatusException.class)
+            .hasMessageContaining("404");
+    }
+
+    @Test
+    void timeline_deliveryAttemptFailed_marksFailKind_notOverriddenByLastRowNowRule() {
+        Instant t0 = Instant.parse("2026-02-01T09:00:00Z");
+        UUID orderId = insertOrderAt("TL-FAIL", "with_courier", t0);
+        UUID shipmentId = insertForwardShipmentAt(orderId, "9810299005", "with_courier", t0.plus(1, ChronoUnit.HOURS));
+        insertHistoryAt(shipmentId, "with_courier", t0.plus(2, ChronoUnit.HOURS), null, null);
+        // Last row IS the failure — must stay 'fail', never flip to 'now'.
+        insertHistoryAt(shipmentId, "exception", t0.plus(3, ChronoUnit.HOURS), 8, "Customer refused");
+
+        List<TimelineItem> timeline = controller.timeline(orderId);
+        TimelineItem last = timeline.get(timeline.size() - 1);
+        assertThat(last.eventKey()).isEqualTo("delivery_attempt_failed");
+        assertThat(last.kind()).isEqualTo("fail");
+        assertThat(last.detail()).isEqualTo("Customer refused");
+    }
+
+    // ── attempt-count canonical source: exception is NOT 1:1 with a delivery attempt ──
+
+    @Test
+    void attemptCount_exceptionNotOneToOneWithDeliveryAttempts_scopedToForwardNdrCodes() {
+        UUID orderId = insertOrder("ATTEMPT-SCOPE", "with_courier");
+        UUID shipmentId = insertForwardShipment(orderId, "9810299002", "with_courier", 2, 0);
+
+        // Genuine forward delivery-attempt failure — NDR code 8 ("Refused by customer"),
+        // ndr_codes.category='forward' — MUST count.
+        insertHistoryAt(shipmentId, "exception", Instant.now(), 8, "Customer refused");
+        // Bosta states 101/102/103 (damage found / investigation / hub-limbo) also collapse
+        // into internal_state='exception' but carry no §8.4 forward NDR code — MUST NOT
+        // count as a delivery attempt.
+        insertHistoryAt(shipmentId, "exception", Instant.now(), null, "Investigation opened");
+
+        ShipmentDetail forward = controller.detail(orderId).shipments().get(0);
+        assertThat(forward.failedDeliveryAttempts())
+            .as("only the genuine NDR forward-attempt row counts, not the uncoded exception")
+            .isEqualTo(1);
+    }
+
+    // ── in-transit convergence: summary().withCourier and list(deliveryState=with_courier)
+    // must share one predicate — the review finding this pass fixes. ────────────────────
+
+    @Test
+    void inTransit_convergedPredicate_summaryCountMatchesListMembership() {
+        UUID a = insertOrder("CONV-A", "with_courier");
+        insertForwardShipment(a, "9810299010", "with_courier", 0, 0);
+        UUID b = insertOrder("CONV-B", "awaiting_pickup");
+        insertForwardShipment(b, "9810299011", "with_courier", 0, 0);
+        // Noise — NOT with_courier, must not appear in the list and must not be double-
+        // counted, proving the assertion isn't trivially true.
+        UUID c = insertOrder("CONV-C", "awaiting_pickup");
+        insertForwardShipment(c, "9810299012", "created", 0, 0);
+
+        OrderController.OrderSummaryCounts summary = controller.summary();
+        OrderPage list = controller.list(null, "with_courier", null, null, 0, 100);
+
+        assertThat((long) summary.withCourier())
+            .as("summary().withCourier and list(deliveryState=with_courier).total must agree — one predicate")
+            .isEqualTo(list.total());
+        assertThat(list.items()).extracting(OrderSummary::id)
+            .contains(a.toString(), b.toString())
+            .doesNotContain(c.toString());
+    }
+
+    // ── attempt-count LEFT JOIN: unmapped codes must fail OPEN, not silently undercount ──
+
+    @Test
+    void attemptCount_unmappedForwardCode_stillCountsAsAttempt_notSilentlyDropped() {
+        // exception_code has no FK to ndr_codes (confirmed by grep of V40's schema) — an
+        // INNER JOIN would silently drop a code Bosta reports that isn't in our V2 seed.
+        // 999 is deliberately not seeded by V2__bosta_seed.sql.
+        UUID orderId = insertOrder("ATTEMPT-UNMAPPED", "with_courier");
+        UUID shipmentId = insertForwardShipment(orderId, "9810299020", "with_courier", 1, 0);
+        insertHistoryAt(shipmentId, "exception", Instant.now(), 999, "Unrecognized courier code");
+
+        ShipmentDetail forward = controller.detail(orderId).shipments().get(0);
+        assertThat(forward.failedDeliveryAttempts())
+            .as("a present-but-unmapped exception_code must still count — fail open, never silently undercount")
+            .isEqualTo(1);
+    }
+
+    @Test
+    void attemptCount_returnLeg_unmappedCode_countsAsAttempt_butKnownCriticalEvidenceCodeDoesNot() {
+        UUID orderId = insertOrder("ATTEMPT-RETURN-SCOPE", "returning");
+        insertForwardShipment(orderId, "9810299021", "returning", 0, 0);
+        UUID returnShipmentId = insertReturnShipment(orderId, "9810299022", "returning");
+
+        // Unmapped return-side code — fail open, counts.
+        insertHistoryAt(returnShipmentId, "exception", Instant.now(), 998, "Unrecognized return code");
+        // Known critical evidence code (26 = "Order damaged") — courier-side evidence, not
+        // an RTO attempt (ndr_codes.severity='critical') — must NOT count.
+        insertHistoryAt(returnShipmentId, "exception", Instant.now(), 26, "Order damaged");
+
+        ShipmentDetail returnLeg = controller.detail(orderId).shipments().stream()
+            .filter(s -> "return".equals(s.shipmentLeg())).findFirst().orElseThrow();
+        assertThat(returnLeg.failedDeliveryAttempts())
+            .as("unmapped return code counts (fail open); known critical evidence code (26) does not")
+            .isEqualTo(1);
     }
 }

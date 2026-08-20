@@ -194,6 +194,26 @@ class OrderStatusDeriverTest {
         assertThat(d.tone()).isEqualTo(Tone.WARN);
     }
 
+    // Orders-rebuild pass (b), attempt-count repoint characterization: pins the exact
+    // input shape a shipment whose ONLY exception history is non-forward (Bosta states
+    // 101 damaged / 102 investigation / 103 hub-limbo — see OrderController's canonical
+    // count query) now produces. failedDeliveryAttempts=0 here is not a hypothetical —
+    // it's what the new forward-NDR-scoped count computes for exactly this shipment
+    // shape. Functionally identical to latestException_noFailedAttempts_needsAttention
+    // above; named separately so this specific review finding stays traceable to a test.
+    @Test
+    void nonForwardExceptionOnly_zeroCanonicalAttempts_needsAttentionNotDeliveryFailed() {
+        DerivedOrderStatus d = derive("awaiting_pickup", "exception", 0, 0, 0, null, false, false, false);
+        assertThat(d.primaryKey())
+            .as("no genuine forward-attempt row exists — 'needs attention' is the honest signal, " +
+                "not 'delivery failed — retrying' (which implies a delivery attempt happened and will retry)")
+            .isEqualTo("status.needs_attention");
+        assertThat(d.tone())
+            .as("tone is WARN either way — same visual severity as the old delivery_failed branch, " +
+                "only the label/copy changes")
+            .isEqualTo(Tone.WARN);
+    }
+
     @Test
     void ndrCode_mapped_customerRefused_specificChip() {
         DerivedOrderStatus d = derive("awaiting_pickup", "exception", 0, 1, 0, 8, false, false, false);
@@ -343,5 +363,97 @@ class OrderStatusDeriverTest {
         OrderStatusDeriver.LegStatus a = OrderStatusDeriver.deriveLegStatus("returning");
         OrderStatusDeriver.LegStatus b = OrderStatusDeriver.deriveLegStatus("returning");
         assertThat(a).isEqualTo(b);
+    }
+
+    // ── Orders-rebuild pass (a): fulfillment facet (additive, orthogonal to primaryKey/tone) ──
+
+    @Test
+    void fulfillment_packedAndShipped_readsFulfilled() {
+        // with_courier, rank 2 → packedConfirmed true, no failed attempts/exception —
+        // delivery facet is in-progress ("In transit") but fulfillment is done.
+        DerivedOrderStatus d = derive("with_courier", "with_courier", 2, 1, 0, null, false, false, false);
+        assertThat(d.primaryKey()).isEqualTo("status.in_transit");
+        assertThat(d.packedConfirmed()).isTrue();
+        assertThat(d.fulfillmentKey()).isEqualTo("status.fulfilled");
+        assertThat(d.fulfillmentTone()).isEqualTo(Tone.SUCCESS);
+    }
+
+    @Test
+    void fulfillment_deliveryFailed_stillReadsFulfilled_deliveryFacetReadsFailed() {
+        // Courier already holding the piece (rank 2) with a failed attempt — packing/handoff
+        // happened; only the delivery leg is in trouble. The two facets must diverge here.
+        DerivedOrderStatus d = derive("with_courier", "with_courier", 2, 2, 1, null, false, false, false);
+        assertThat(d.primaryKey()).isEqualTo("status.delivery_failed");
+        assertThat(d.tone()).isEqualTo(Tone.WARN);
+        assertThat(d.fulfillmentKey()).isEqualTo("status.fulfilled");
+        assertThat(d.fulfillmentTone()).isEqualTo(Tone.SUCCESS);
+    }
+
+    @Test
+    void fulfillment_returnedOrReturning_matchesDeliveryFacetExactly() {
+        for (String state : List.of("returned", "returning")) {
+            Integer rank = OrderStatusDeriver.PROGRESS_RANK.get(state); // null for 'returned' (terminal)
+            DerivedOrderStatus d = derive("with_courier", state, rank, 1, 0, null, false, false, false);
+            assertThat(d.fulfillmentKey()).as("state=" + state).isEqualTo(d.primaryKey());
+            assertThat(d.fulfillmentTone()).as("state=" + state).isEqualTo(d.tone());
+        }
+    }
+
+    @Test
+    void fulfillment_cancelledOrder_matchesDeliveryFacetExactly_regardlessOfShipmentState() {
+        // Mirrors the A3 cancelled-suppression set — cancelled always wins on both facets,
+        // the same way primaryKey's orderCancelled branch fires before any shipment branch.
+        for (String state : List.of("created", "with_courier", "returning", "exception",
+                                     "delivered", "returned", "lost", "terminated", "cancelled")) {
+            DerivedOrderStatus d = derive("cancelled", state, 1, 0, 0, null, false, false, false);
+            assertThat(d.primaryKey()).as("state=" + state).isEqualTo("status.cancelled");
+            assertThat(d.fulfillmentKey()).as("state=" + state).isEqualTo("status.cancelled");
+            assertThat(d.fulfillmentTone()).as("state=" + state).isEqualTo(Tone.NEUTRAL);
+        }
+        DerivedOrderStatus noShipment = derive("cancelled", null, null, 0, 0, null, null, null, false);
+        assertThat(noShipment.fulfillmentKey()).isEqualTo("status.cancelled");
+        assertThat(noShipment.fulfillmentTone()).isEqualTo(Tone.NEUTRAL);
+    }
+
+    @Test
+    void fulfillment_prePack_noShipment_mirrorsPipelineKeyAndTone() {
+        // Not yet packed, no shipment at all — fulfillment facet reuses the exact same
+        // PIPELINE_KEY/PIPELINE_TONE the delivery/composite facet already uses for this
+        // branch (primaryKey IS the pipeline key here too), no new map.
+        for (String status : List.of("new", "confirmed", "ready_to_pick", "picking")) {
+            DerivedOrderStatus d = derive(status, null, null, 0, 0, null, null, null, false);
+            assertThat(d.fulfillmentKey()).as("status=" + status).isEqualTo(d.primaryKey());
+            assertThat(d.fulfillmentTone()).as("status=" + status).isEqualTo(d.tone());
+        }
+    }
+
+    @Test
+    void fulfillment_packedButNotYetShipped_readsFulfilled_deliveryFacetStaysPipelinePacked() {
+        // order.status='packed', no shipment row yet (not linked to Bosta) — packedConfirmed
+        // is true via PACKED_OR_LATER_STATUSES alone (no shipment needed). Fulfillment must
+        // read Fulfilled even though nothing has shipped; the delivery/composite facet
+        // (primaryKey) stays whatever the no-shipment pipeline branch already produces —
+        // "Not shipped" is a frontend-only presentational fallback (Orders.tsx's Delivery
+        // cell, keyed off row.deliveryState being null), never emitted by the deriver itself.
+        DerivedOrderStatus d = derive("packed", null, null, 0, 0, null, null, null, false);
+        assertThat(d.packedConfirmed()).isTrue();
+        assertThat(d.primaryKey()).isEqualTo("status.packed");
+        assertThat(d.tone()).isEqualTo(Tone.INFO);
+        assertThat(d.fulfillmentKey()).isEqualTo("status.fulfilled");
+        assertThat(d.fulfillmentTone()).isEqualTo(Tone.SUCCESS);
+    }
+
+    @Test
+    void fulfillment_prePack_shipmentExistsButRankOne_notYetFulfilled() {
+        // Mode-B early-webhook-match edge case: a shipment row exists (rank 1, 'created') but
+        // order.status hasn't reached a packed-or-later value and rank hasn't hit 2 —
+        // packedConfirmed is false, so fulfillment must NOT claim "Fulfilled" yet. Falls back
+        // to the order's own raw pipeline status, same edge case OrderController.funnel()/
+        // summary() already special-case for the delivery facet's Courier/withCourier bucket.
+        DerivedOrderStatus d = derive("picking", "created", 1, 0, 0, null, false, false, false);
+        assertThat(d.packedConfirmed()).isFalse();
+        assertThat(d.primaryKey()).isEqualTo("status.label_created");
+        assertThat(d.fulfillmentKey()).isEqualTo("status.picking");
+        assertThat(d.fulfillmentTone()).isEqualTo(Tone.INFO);
     }
 }

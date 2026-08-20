@@ -152,6 +152,8 @@
       "number": "Order #",
       "customer": "Customer",
       "status": "Status",
+      "fulfillment": "Fulfillment",
+      "delivery": "Delivery",
       "cod": "Amount",
       "placedAt": "Date",
       "tracking": "Tracking"
@@ -163,6 +165,64 @@
     "summary": {
       "total": "Total",
       "processing": "Processing"
+    },
+    "tabs": {
+      "all": "All",
+      "needsAttention": "Needs attention",
+      "inTransit": "In transit",
+      "delivered": "Delivered",
+      "returns": "Returns"
+    },
+    "totalCount": "{{count}} orders",
+    "needAttentionSubheader": "{{count}} need attention",
+    "delivery": {
+      "notShipped": "Not shipped"
+    },
+    "drawer": {
+      "tabs": {
+        "overview": "Overview",
+        "items": "Items ({{count}})",
+        "shipment": "Shipment",
+        "notes": "Notes"
+      },
+      "currentState": "Current state",
+      "contactCustomer": "Contact customer",
+      "viewShipment": "View shipment",
+      "viewInShopify": "View in Shopify",
+      "viewAllItems": "View all items",
+      "traceTimeline": "Trace timeline",
+      "timelineEmpty": "No activity recorded yet",
+      "timelineError": "Couldn't load activity",
+      "lastUpdated": "Last updated {{time}}",
+      "close": "Close",
+      "notesEmpty": "No notes yet"
+    },
+    "timeline": {
+      "system": "System",
+      "order_created": "Order created",
+      "picked_up": "Picked by {{name}}",
+      "packed": "Packed",
+      "handed_to_bosta": "Handed to Bosta",
+      "return_shipment_created": "Return pickup scheduled",
+      "delivery_attempt_failed": "Delivery attempt failed",
+      "shipment_state_created": "Label created",
+      "shipment_state_with_courier": "Out for delivery",
+      "shipment_state_delivered": "Delivered",
+      "shipment_state_returning": "Return in transit",
+      "shipment_state_returned": "Returned to warehouse",
+      "shipment_state_lost": "Lost",
+      "shipment_state_exception": "Delivery issue",
+      "shipment_state_terminated": "Terminated",
+      "shipment_state_cancelled": "Shipment cancelled",
+      "return_shipment_state_created": "Return label created",
+      "return_shipment_state_with_courier": "Return in progress",
+      "return_shipment_state_delivered": "Returned to warehouse",
+      "return_shipment_state_returning": "Returning",
+      "return_shipment_state_returned": "Return received",
+      "return_shipment_state_lost": "Return lost",
+      "return_shipment_state_exception": "Return issue",
+      "return_shipment_state_terminated": "Return terminated",
+      "return_shipment_state_cancelled": "Return cancelled"
     },
     "pipeline": {
       "new": "New",
@@ -1340,6 +1400,7 @@
     "in_transit": "In transit",
     "delivery_failed": "Delivery failed — retrying",
     "delivered": "Delivered",
+    "fulfilled": "Fulfilled",
     "returning": "Returning",
     "returned": "Returned",
     "lost": "Lost",
