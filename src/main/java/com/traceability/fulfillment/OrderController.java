@@ -1023,19 +1023,25 @@ public class OrderController {
                 }
             }
 
-            // 5. Phase-primary, occurred_at-within-phase (2c) — order created -> warehouse
-            // (pick/pack) -> courier (forward-leg Bosta waypoints: awb_linked,
-            // shipment_state_*, delivery_attempt_failed) -> return leg (return_awb_linked,
-            // return_shipment_state_*, its own phase, always after courier). Guarantees the
-            // intended sequence regardless of clock skew between
-            // our DB and Bosta; each row still carries its own real timestamp. List.sort is
-            // a STABLE sort (TimSort) — ties on (phaseRank, occurredAt) keep insertion
-            // order, which already reflects source priority within a phase (per-shipment
-            // rows are built and appended in occurred_at ASC order above) — the
-            // deterministic secondary tiebreak, never id as a time proxy. This must NOT
-            // regroup a real with_courier -> exception -> with_courier interleaving:
-            // phaseRank is identical for all three (courier), so the comparator falls
-            // through to occurredAt and preserves their real order exactly.
+            // 5. Phase-primary, occurred_at-within-phase (2c) — order created always first;
+            // return-leg events always last (occurred_at ASC within that group); every
+            // OTHER forward-side event (picked_up, packed, awb_linked,
+            // delivery_attempt_failed, shipment_state_*) sorted purely by occurred_at ASC,
+            // no warehouse-vs-courier sub-rank. warehouse-before-courier is NOT a real
+            // invariant — in Mode B the AWB is linked before physical pick/pack, so forcing
+            // awb_linked after picked_up/packed fabricated a sequence that never happened
+            // (live order #2212096474: real AWB-link time was right after order_created,
+            // days before pick/pack, but the old 3-way phaseRank still rendered it last).
+            // return-after-forward IS a real invariant (a return leg cannot start before
+            // the forward leg it's returning), so that's the only phase boundary kept.
+            // List.sort is a STABLE sort (TimSort) — ties on (phaseRank, occurredAt) keep
+            // insertion order, the deterministic secondary tiebreak, never id as a time
+            // proxy. This must NOT regroup a real with_courier -> exception -> with_courier
+            // interleaving: all three are forward-phase (rank 1), so the comparator falls
+            // through to occurredAt and preserves their real order exactly — 2b's
+            // per-shipment collapse already ran before this global merge, so both
+            // with_courier rows are already the correct, distinct rows by the time this
+            // sort sees them.
             items.sort(Comparator.comparingInt((TimelineItem i) -> phaseRank(i.eventKey()))
                 .thenComparing(TimelineItem::occurredAt));
 
@@ -1065,17 +1071,18 @@ public class OrderController {
             : state;
     }
 
-    // Phase-primary ordering (2c) — order created -> warehouse (pick/pack) -> courier
-    // (forward-leg Bosta waypoints) -> return leg. Prefix-matched rather than an exhaustive
-    // per-state enum so any future shipment_internal_state value is classified automatically
-    // by which of the two eventKey-building branches above produced it.
+    // Phase ordering (2c) — only two real boundaries: order_created is always first, and a
+    // return leg can never start before the forward leg it's returning, so return-leg
+    // events are always last. Everything else (picked_up, packed, awb_linked,
+    // delivery_attempt_failed, shipment_state_*) is ONE undivided forward-phase bucket,
+    // ordered purely by occurred_at — warehouse-before-courier is not a real invariant (in
+    // Mode B the AWB links before pick/pack) and must not be enforced as one. Prefix-matched
+    // rather than an exhaustive per-state enum so any future shipment_internal_state value
+    // is classified automatically by which eventKey-building branch produced it.
     private static int phaseRank(String eventKey) {
         if ("order_created".equals(eventKey)) return 0;
-        if ("picked_up".equals(eventKey) || "packed".equals(eventKey)) return 1;
-        if ("awb_linked".equals(eventKey) || "delivery_attempt_failed".equals(eventKey)
-            || eventKey.startsWith("shipment_state_")) return 2;
-        if ("return_awb_linked".equals(eventKey) || eventKey.startsWith("return_shipment_state_")) return 3;
-        throw new IllegalStateException("Unclassified timeline eventKey: " + eventKey);
+        if ("return_awb_linked".equals(eventKey) || eventKey.startsWith("return_shipment_state_")) return 2;
+        return 1; // picked_up, packed, awb_linked, delivery_attempt_failed, shipment_state_*
     }
 
     private static String nullIfBlank(String s) {

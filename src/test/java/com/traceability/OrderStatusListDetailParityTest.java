@@ -715,13 +715,22 @@ class OrderStatusListDetailParityTest {
         assertThat(timeline.get(3).detail()).isEqualTo("Not at address");
     }
 
-    // ── Orders fix pass — 2c: phase-primary ordering, immune to clock skew ──────
+    // ── Orders fix pass — 2c: phase ordering (only 2 real boundaries), immune to clock skew ──
+    // Only two phase boundaries are real: order_created is always first, and a return leg
+    // can never start before the forward leg it's returning, so return-leg events are
+    // always last. Everything else (picked_up, packed, awb_linked,
+    // delivery_attempt_failed, shipment_state_*) is ONE undivided forward bucket ordered
+    // purely by occurred_at — warehouse-before-courier is NOT enforced as a sub-rank
+    // (superseded 3-tier design; see timeline_awbLinkedBeforePickPack_sortsByRealTime_notPhaseForced below,
+    // reproducing live order #2212096474 where the old 3-tier phaseRank rendered a
+    // Mode-B early AWB-link after picked_up/packed despite its real timestamp being days
+    // earlier).
 
     @Test
-    void timeline_phasePrimaryOrdering_returnLegAlwaysAfterCourier_evenWithClockSkew() {
+    void timeline_phasePrimaryOrdering_returnLegAlwaysAfterForward_evenWithClockSkew() {
         // Deliberately construct a clock-skew shape: the return leg's real timestamp is
         // EARLIER than the forward leg's delivered timestamp. Phase must still win — the
-        // return leg's row renders after ALL courier-phase rows regardless.
+        // return leg's row renders after ALL forward-phase rows regardless.
         Instant t0 = Instant.parse("2026-03-08T09:00:00Z");
         UUID orderId = insertOrderAt("TL-PHASE-SKEW", "returning", t0);
 
@@ -745,12 +754,14 @@ class OrderStatusListDetailParityTest {
     }
 
     @Test
-    void timeline_phasePrimaryOrdering_reattemptInterleaving_preservedWithinCourierPhase() {
-        // The other named risk for 2c: phase-primary sorting must NOT regroup a real
+    void timeline_phasePrimaryOrdering_reattemptInterleaving_preservedWithinForwardPhase() {
+        // The other named risk for 2c: sorting must NOT regroup a real
         // with_courier -> exception -> with_courier interleaving into
         // with_courier -> with_courier -> exception just because all three share one phase.
-        // All three are courier-phase (rank 2), so the comparator falls through to
-        // occurred_at and must preserve their real order exactly.
+        // All three are forward-phase (rank 1), so the comparator falls through to
+        // occurred_at and must preserve their real order exactly — proving 2b's
+        // per-shipment collapse (which already ran and correctly kept both with_courier
+        // rows distinct) survives the global phase+time merge untouched.
         Instant t0 = Instant.parse("2026-03-09T09:00:00Z");
         UUID orderId = insertOrderAt("TL-PHASE-INTERLEAVE", "with_courier", t0);
         UUID shipmentId = insertForwardShipmentAt(orderId, "9810299052", "with_courier", t0.plus(1, ChronoUnit.HOURS));
@@ -763,6 +774,37 @@ class OrderStatusListDetailParityTest {
         assertThat(timeline).extracting(TimelineItem::eventKey)
             .containsExactly("order_created", "awb_linked", "shipment_state_with_courier",
                 "delivery_attempt_failed", "shipment_state_with_courier");
+    }
+
+    @Test
+    void timeline_awbLinkedBeforePickPack_sortsByRealTime_notPhaseForced() {
+        // Reproduces live order #2212096474: Mode B links the AWB before physical pick/pack
+        // (the shipment is created and Bosta's first status row lands right after
+        // order_created), but the OLD 3-tier phaseRank (order -> warehouse -> courier ->
+        // return) still forced awb_linked to render AFTER picked_up/packed regardless of
+        // its real timestamp being days earlier — a fabricated sequence that never
+        // happened. warehouse-before-courier is not a real invariant; only
+        // return-after-forward is. This asserts the fix: awb_linked sorts strictly by its
+        // real occurred_at, landing BEFORE picked_up and packed here.
+        Instant t0 = Instant.parse("2026-08-11T00:00:00Z");
+        UUID orderId = insertOrderAt("TL-2212096474", "with_courier", t0);
+
+        // AWB linked ~20 minutes after order_created — before any pick/pack event.
+        UUID shipmentId = insertForwardShipmentAt(orderId, "5442471492", "created", t0.plus(20, ChronoUnit.MINUTES));
+        insertHistoryAt(shipmentId, "created", t0.plus(21, ChronoUnit.MINUTES), null, null);
+
+        // Pick/pack happen DAYS later — the live order's actual shape.
+        insertPieceEvent(orderId, "scan", "available", "reserved", t0.plus(2, ChronoUnit.DAYS));
+        insertPieceEvent(orderId, "pack", "reserved", "packed", t0.plus(2, ChronoUnit.DAYS).plus(1, ChronoUnit.HOURS));
+        insertHistoryAt(shipmentId, "with_courier", t0.plus(3, ChronoUnit.DAYS), null, null);
+
+        List<TimelineItem> timeline = controller.timeline(orderId);
+        assertThat(timeline).extracting(TimelineItem::eventKey).containsExactly(
+            "order_created", "awb_linked", "picked_up", "packed", "shipment_state_with_courier");
+        assertThat(timeline).extracting(TimelineItem::occurredAt).containsExactly(
+            t0, t0.plus(21, ChronoUnit.MINUTES),
+            t0.plus(2, ChronoUnit.DAYS), t0.plus(2, ChronoUnit.DAYS).plus(1, ChronoUnit.HOURS),
+            t0.plus(3, ChronoUnit.DAYS));
     }
 
     // ── Orders fix pass — item 3: image_url on the item DTO ─────────────────────
