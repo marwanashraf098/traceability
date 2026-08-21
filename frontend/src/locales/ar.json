@@ -213,7 +213,8 @@
     "totalCount": "{{count}} طلب",
     "needAttentionSubheader": "{{count}} بحاجة إلى انتباه",
     "delivery": {
-      "notShipped": "لم يُشحن بعد"
+      "notShipped": "لم يُشحن بعد",
+      "awbCreated": "تم إنشاء بوليصة الشحن"
     },
     "drawer": {
       "tabs": {
@@ -239,8 +240,8 @@
       "order_created": "تم إنشاء الطلب",
       "picked_up": "تم الالتقاط بواسطة {{name}}",
       "packed": "تم التغليف",
-      "awb_linked": "تم ربط بوليصة الشحن",
-      "return_awb_linked": "تم ربط بوليصة الشحن",
+      "awb_linked": "تم ربط بوليصة شحن بوسطة",
+      "return_awb_linked": "تم ربط بوليصة إرجاع بوسطة",
       "delivery_attempt_failed": "فشلت محاولة التوصيل",
       "shipment_state_created": "تم إنشاء البوليصة",
       "shipment_state_with_courier": "في الطريق للتوصيل",

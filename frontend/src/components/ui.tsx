@@ -220,14 +220,21 @@ export function OrderStatus({
 export function LegStatusBadge({
   legStatus,
   className = '',
+  labelOverride,
 }: {
   legStatus: { primaryKey: string; tone: import('../api').DerivedTone }
   className?: string
+  // Cell-level label override — does NOT touch the shared status.* key. Use this when one
+  // specific render site wants to phrase the same primaryKey/tone differently (e.g. Orders
+  // list's Delivery column says "AWB created" — an event — while every other reader of
+  // status.label_created, like the drawer's Current-state pill and the Overview funnel,
+  // keeps "Label created" — a state) rather than editing the shared translation.
+  labelOverride?: string
 }) {
   const { t } = useTranslation()
   return (
     <span className={cn('badge border', TONE_STYLE[DERIVED_TONE_STYLE[legStatus.tone]], className)}>
-      {t(legStatus.primaryKey, { defaultValue: legStatus.primaryKey.replace(/^status\./, '').replace(/_/g, ' ') })}
+      {labelOverride ?? t(legStatus.primaryKey, { defaultValue: legStatus.primaryKey.replace(/^status\./, '').replace(/_/g, ' ') })}
     </span>
   )
 }

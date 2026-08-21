@@ -123,9 +123,22 @@ export default function Orders() {
   }
 
   function renderDelivery(order: OrderItem) {
-    return order.deliveryState
-      ? <LegStatusBadge legStatus={{ primaryKey: order.derivedStatus.primaryKey, tone: order.derivedStatus.tone }} />
-      : <LegStatusBadge legStatus={{ primaryKey: 'orders.delivery.notShipped', tone: 'NEUTRAL' }} />
+    if (!order.deliveryState) {
+      return <LegStatusBadge legStatus={{ primaryKey: 'orders.delivery.notShipped', tone: 'NEUTRAL' }} />
+    }
+    // Cell-level label override ONLY — status.label_created itself is untouched (the
+    // drawer's Current-state pill and the Overview funnel both still read that shared key
+    // and must keep saying "Label created", a state). This list cell is stating an event
+    // ("an AWB now exists for this order"), so it reads differently on purpose.
+    const labelOverride = order.derivedStatus.primaryKey === 'status.label_created'
+      ? t('orders.delivery.awbCreated')
+      : undefined
+    return (
+      <LegStatusBadge
+        legStatus={{ primaryKey: order.derivedStatus.primaryKey, tone: order.derivedStatus.tone }}
+        labelOverride={labelOverride}
+      />
+    )
   }
 
   // ── Column definitions ─────────────────────────────────────────────────────

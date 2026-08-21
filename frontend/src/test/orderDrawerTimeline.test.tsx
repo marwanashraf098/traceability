@@ -152,7 +152,7 @@ test('drawer renders forward, return-leg, non-attempt-exception, and picked_up(n
   expect(await screen.findByText('Order created')).toBeInTheDocument()
   expect(screen.getByText('Picked by Ahmed Mostafa')).toBeInTheDocument()
   expect(screen.getByText('Packed')).toBeInTheDocument()
-  expect(screen.getByText('AWB Linked')).toBeInTheDocument()
+  expect(screen.getByText('Bosta AWB Linked')).toBeInTheDocument()
   // Non-attempt exception (no forward NDR code) — distinct from "Delivery attempt failed".
   expect(screen.getByText('Delivery issue')).toBeInTheDocument()
   expect(screen.getByText('Investigation opened')).toBeInTheDocument()

@@ -213,7 +213,8 @@
     "totalCount": "{{count}} orders",
     "needAttentionSubheader": "{{count}} need attention",
     "delivery": {
-      "notShipped": "Not shipped"
+      "notShipped": "Not shipped",
+      "awbCreated": "AWB created"
     },
     "drawer": {
       "tabs": {
@@ -239,8 +240,8 @@
       "order_created": "Order created",
       "picked_up": "Picked by {{name}}",
       "packed": "Packed",
-      "awb_linked": "AWB Linked",
-      "return_awb_linked": "AWB Linked",
+      "awb_linked": "Bosta AWB Linked",
+      "return_awb_linked": "Bosta Return AWB Linked",
       "delivery_attempt_failed": "Delivery attempt failed",
       "shipment_state_created": "Label created",
       "shipment_state_with_courier": "Out for delivery",
