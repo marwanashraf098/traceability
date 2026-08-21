@@ -102,7 +102,9 @@ class RlsCoverageTest {
             "/api/v1/orders/summary",
             "/api/v1/inventory/throughput",
             "/api/v1/activity/recent",
-            "/api/v1/exchanges"
+            "/api/v1/exchanges",
+            "/api/v1/overview/trends",
+            "/api/v1/overview/top-skus"
     );
 
     // ── Patterns consciously excluded, with reasons ────────────────────────────
@@ -824,6 +826,47 @@ class RlsCoverageTest {
 
         jdbc.update("DELETE FROM stock_take_shopify_syncs WHERE session_id = ?", sessionId);
         jdbc.update("DELETE FROM stock_take_sessions WHERE id = ?", sessionId);
+    }
+
+    @Test
+    void overviewTrends_reflectsSeededOrderToday() {
+        jdbc.update(
+                "INSERT INTO orders (tenant_id, store_id, external_id, number, status, " +
+                "    payment_method, placed_at, on_hold) " +
+                "VALUES (?, ?, 'EXT-CVG-OVTRENDS', '#CVG-OVTRENDS', 'new'::order_status, " +
+                "    'cod', now(), false)",
+                tenantId, storeId);
+
+        ResponseEntity<List> resp = get("/api/v1/overview/trends", List.class);
+        assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.OK);
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> body = resp.getBody();
+        Map<String, Object> orders = body.stream()
+            .filter(m -> "orders".equals(m.get("metric")))
+            .findFirst().orElseThrow(() -> new AssertionError("orders metric not found"));
+        assertThat(((Number) orders.get("today")).intValue()).isGreaterThanOrEqualTo(1);
+    }
+
+    @Test
+    void overviewTopSkus_reflectsSeededOrderItem() {
+        UUID orderId = UUID.randomUUID();
+        jdbc.update(
+                "INSERT INTO orders (id, tenant_id, store_id, external_id, number, status, " +
+                "    payment_method, placed_at, on_hold) " +
+                "VALUES (?, ?, ?, 'EXT-CVG-OVSKUS', '#CVG-OVSKUS', 'new'::order_status, " +
+                "    'cod', now(), false)",
+                orderId, tenantId, storeId);
+        jdbc.update(
+                "INSERT INTO order_items (id, tenant_id, order_id, variant_id, quantity) " +
+                "VALUES (gen_random_uuid(), ?, ?, ?, 3)",
+                tenantId, orderId, variantId);
+
+        ResponseEntity<List> resp = get("/api/v1/overview/top-skus", List.class);
+        assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(resp.getBody()).isNotEmpty();
+
+        jdbc.update("DELETE FROM order_items WHERE order_id = ?", orderId);
+        jdbc.update("DELETE FROM orders WHERE id = ?", orderId);
     }
 
     @Test

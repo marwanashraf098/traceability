@@ -800,6 +800,42 @@ export function getReturnsPendingTotal() {
   return request<ReturnsPendingPage>('/returns/pending?size=1')
 }
 
+// ── Overview trends + top-selling SKUs (FR-Overview §2) ────────────────────
+// trends(): 5 metrics × 14 zero-filled Cairo-days, live-aggregated server-side —
+// never re-derive today/yesterday/deltaPct client-side. deltaPct is null (not 0,
+// not a fabricated %) whenever yesterday=0. "exceptions" here is a FLOW count
+// (opened today, 12 event-based detectors only) — distinct from the shell's
+// notification badge (getExceptionsCount(), a STOCK count of currently-open
+// exceptions). The two numbers are expected to diverge; never reconcile them.
+
+export interface TrendPoint {
+  date: string
+  count: number
+}
+
+export interface MetricTrend {
+  metric: 'orders' | 'shipments' | 'delivered' | 'exceptions' | 'returns'
+  today: number
+  yesterday: number
+  deltaPct: number | null
+  series: TrendPoint[]
+}
+
+export function getOverviewTrends() {
+  return request<MetricTrend[]>('/overview/trends')
+}
+
+export interface TopSku {
+  sku: string | null
+  title: string
+  imageUrl: string | null
+  units: number
+}
+
+export function getOverviewTopSkus() {
+  return request<TopSku[]>('/overview/top-skus')
+}
+
 export interface PieceSummary {
   id: string
   barcode: string

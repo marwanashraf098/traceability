@@ -94,6 +94,43 @@
       "hoursAgo": "{{count}}h ago",
       "daysAgo": "{{count}}d ago"
     },
+    "stats": {
+      "shipments": "Shipments",
+      "vsYesterday": "vs yesterday"
+    },
+    "flow": {
+      "title": "Live operations",
+      "subtitle": "Real-time flow of your operations",
+      "inProgress": "In progress",
+      "completed": "Completed"
+    },
+    "alerts": {
+      "title": "Alerts",
+      "empty": "No alerts right now"
+    },
+    "topSkus": {
+      "title": "Top selling SKUs",
+      "subtitle": "Units ordered · last 30 days",
+      "empty": "No orders in the last 30 days"
+    },
+    "donut": {
+      "title": "Orders by status",
+      "total": "Total",
+      "other": "Other",
+      "empty": "No orders yet"
+    },
+    "recentOrders": {
+      "title": "Recent orders",
+      "carrier": "Bosta",
+      "empty": "No shipped orders yet"
+    },
+    "quickActions": {
+      "title": "Quick actions",
+      "fulfill": "Fulfill orders",
+      "receiving": "Receive stock",
+      "transfers": "Transfer stock",
+      "lookup": "Look up"
+    },
     "onboardingCard": {
       "title": "Finish setting up Traced",
       "dismiss": "Dismiss",

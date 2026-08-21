@@ -94,6 +94,43 @@
       "hoursAgo": "منذ {{count}} س",
       "daysAgo": "منذ {{count}} يوم"
     },
+    "stats": {
+      "shipments": "الشحنات",
+      "vsYesterday": "مقارنة بالأمس"
+    },
+    "flow": {
+      "title": "العمليات المباشرة",
+      "subtitle": "التدفق الفوري لعملياتك",
+      "inProgress": "قيد التنفيذ",
+      "completed": "مكتمل"
+    },
+    "alerts": {
+      "title": "التنبيهات",
+      "empty": "لا توجد تنبيهات الآن"
+    },
+    "topSkus": {
+      "title": "الأكثر مبيعًا",
+      "subtitle": "الوحدات المطلوبة · آخر 30 يومًا",
+      "empty": "لا توجد طلبات خلال آخر 30 يومًا"
+    },
+    "donut": {
+      "title": "الطلبات حسب الحالة",
+      "total": "الإجمالي",
+      "other": "أخرى",
+      "empty": "لا توجد طلبات بعد"
+    },
+    "recentOrders": {
+      "title": "أحدث الطلبات",
+      "carrier": "بوسطة",
+      "empty": "لا توجد طلبات مشحونة بعد"
+    },
+    "quickActions": {
+      "title": "إجراءات سريعة",
+      "fulfill": "تجهيز الطلبات",
+      "receiving": "استلام مخزون",
+      "transfers": "نقل مخزون",
+      "lookup": "بحث"
+    },
     "onboardingCard": {
       "title": "أكمل إعداد Traced",
       "dismiss": "إغلاق",
