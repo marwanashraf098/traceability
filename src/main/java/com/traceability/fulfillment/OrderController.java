@@ -995,15 +995,31 @@ public class OrderController {
                              (Integer) historyRows.get(0).get("exception_code"))
                     : null;
 
+                // "Back at Bosta hub" tracking (forward leg only) — a 'created' row is only
+                // ever the AWB-Linked/label-creation moment on its FIRST appearance (already
+                // handled above). Any LATER 'created' row on this same shipment means the
+                // parcel physically bounced back to Bosta after already being with the
+                // courier at least once — relabel that event, don't call it "Label created"
+                // again. reachedWithCourier is set from the raw internal_state of every row
+                // this shipment ever had, INCLUDING the subsumed row-0 (which still proves
+                // physical custody even though its own TimelineItem became the awb_linked
+                // marker, not a shipment_state_with_courier row) and including rows that 2b
+                // is about to collapse away as re-poll duplicates (the custody fact is real
+                // regardless of whether a distinct row renders for it).
+                boolean reachedWithCourier = !historyRows.isEmpty()
+                    && "with_courier".equals(historyRows.get(0).get("internal_state"));
+
                 for (int i = startIdx; i < historyRows.size(); i++) {
                     Map<String, Object> row = historyRows.get(i);
                     String state = (String) row.get("internal_state");
                     Integer exceptionCode = (Integer) row.get("exception_code");
                     String key = runKey(state, exceptionCode);
-                    if (key.equals(lastRunKey)) {
+                    boolean isRepoll = key.equals(lastRunKey);
+                    lastRunKey = key;
+                    if ("with_courier".equals(state)) reachedWithCourier = true;
+                    if (isRepoll) {
                         continue; // consecutive re-poll of the same state — not a new event
                     }
-                    lastRunKey = key;
 
                     boolean isException = "exception".equals(state);
                     // Same fail-open/fail-closed rule as the canonical count above: a
@@ -1013,9 +1029,17 @@ public class OrderController {
                     String ndrCategory = (String) row.get("ndr_category");
                     boolean isAttemptFailure = isException && !isReturn && exceptionCode != null
                         && (ndrCategory == null || "forward".equals(ndrCategory));
-                    String eventKey = isAttemptFailure
-                        ? "delivery_attempt_failed"
-                        : (isReturn ? "return_shipment_state_" : "shipment_state_") + state;
+                    String eventKey;
+                    if (isAttemptFailure) {
+                        eventKey = "delivery_attempt_failed";
+                    } else if (!isReturn && "created".equals(state) && reachedWithCourier) {
+                        // Reset back to 'created' AFTER already reaching the courier at least
+                        // once — a real bounce-back, not the original label-creation moment.
+                        // No fabricated hub location beyond the label text itself.
+                        eventKey = "back_at_bosta_hub";
+                    } else {
+                        eventKey = (isReturn ? "return_shipment_state_" : "shipment_state_") + state;
+                    }
                     items.add(new TimelineItem(
                         ((Timestamp) row.get("occurred_at")).toInstant(), eventKey, null, null,
                         isException ? (String) row.get("exception_reason") : null,
@@ -1082,7 +1106,7 @@ public class OrderController {
     private static int phaseRank(String eventKey) {
         if ("order_created".equals(eventKey)) return 0;
         if ("return_awb_linked".equals(eventKey) || eventKey.startsWith("return_shipment_state_")) return 2;
-        return 1; // picked_up, packed, awb_linked, delivery_attempt_failed, shipment_state_*
+        return 1; // picked_up, packed, awb_linked, delivery_attempt_failed, back_at_bosta_hub, shipment_state_*
     }
 
     private static String nullIfBlank(String s) {

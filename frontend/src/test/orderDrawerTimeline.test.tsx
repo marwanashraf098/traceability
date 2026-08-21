@@ -15,12 +15,14 @@ import type { OrderDetail, TimelineItem } from '../api'
 // naming convention): "order_created"/"picked_up"/"packed" (literals),
 // isReturn ? "return_awb_linked" : "awb_linked" (Orders fix pass 2a — relabels the
 // earliest real shipment_status_history row, or falls back to shipments.created_at if
-// none exists yet), "delivery_attempt_failed", and
+// none exists yet), "delivery_attempt_failed", "back_at_bosta_hub" (forward leg only — a
+// 'created' row AFTER this shipment already reached 'with_courier' at least once; the
+// FIRST 'created' row stays subsumed into awb_linked, unaffected), and
 // (isReturn ? "return_shipment_state_" : "shipment_state_") + state for all 9
 // shipment_internal_state enum values.
 const BACKEND_EVENT_KEYS = [
   'order_created', 'picked_up', 'packed', 'awb_linked',
-  'return_awb_linked', 'delivery_attempt_failed',
+  'return_awb_linked', 'delivery_attempt_failed', 'back_at_bosta_hub',
   'shipment_state_created', 'shipment_state_with_courier', 'shipment_state_delivered',
   'shipment_state_returning', 'shipment_state_returned', 'shipment_state_lost',
   'shipment_state_exception', 'shipment_state_terminated', 'shipment_state_cancelled',
@@ -41,9 +43,9 @@ function flatten(obj: unknown, prefix = ''): Record<string, string> {
   return out
 }
 
-describe('orders.timeline.* — all 24 backend eventKeys resolve, no raw-key fallback', () => {
+describe('orders.timeline.* — all 25 backend eventKeys resolve, no raw-key fallback', () => {
   test(`exactly ${BACKEND_EVENT_KEYS.length} keys enumerated`, () => {
-    expect(BACKEND_EVENT_KEYS.length).toBe(24)
+    expect(BACKEND_EVENT_KEYS.length).toBe(25)
   })
 
   for (const locale of [{ name: 'en', dict: en }, { name: 'ar', dict: ar }]) {

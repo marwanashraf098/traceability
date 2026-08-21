@@ -715,6 +715,104 @@ class OrderStatusListDetailParityTest {
         assertThat(timeline.get(3).detail()).isEqualTo("Not at address");
     }
 
+    // ── Orders fix pass — context-dependent 'created' label: "Back at Bosta hub" ────
+    // A forward-leg 'created' row is only ever the AWB-Linked/label-creation moment on its
+    // FIRST appearance (handled by 2a, unchanged). Any LATER 'created' row on the SAME
+    // shipment, after it already reached 'with_courier' at least once, means the parcel
+    // physically bounced back to Bosta — relabel that event "Back at Bosta hub" instead of
+    // repeating "Label created". 2b's consecutive-collapse still runs first and is keyed on
+    // raw internal_state, so this is purely a downstream relabel of the SURVIVING row, not a
+    // change to what collapses.
+
+    @Test
+    void timeline_backAtBostaHub_firstCreatedIsAwbLinked_laterCreatedAfterWithCourierIsHubReturn() {
+        Instant t0 = Instant.parse("2026-03-10T09:00:00Z");
+        UUID orderId = insertOrderAt("TL-HUB-RETURN", "with_courier", t0);
+        UUID shipmentId = insertForwardShipmentAt(orderId, "9810299060", "created", t0.plus(1, ChronoUnit.HOURS));
+        insertHistoryAt(shipmentId, "created", t0.plus(2, ChronoUnit.HOURS), null, null);       // subsumed -> awb_linked
+        insertHistoryAt(shipmentId, "with_courier", t0.plus(3, ChronoUnit.HOURS), null, null);  // reaches courier
+        insertHistoryAt(shipmentId, "created", t0.plus(4, ChronoUnit.HOURS), null, null);       // bounced back
+        insertHistoryAt(shipmentId, "with_courier", t0.plus(5, ChronoUnit.HOURS), null, null);  // re-dispatched
+
+        List<TimelineItem> timeline = controller.timeline(orderId);
+        assertThat(timeline).extracting(TimelineItem::eventKey).containsExactly(
+            "order_created", "awb_linked", "shipment_state_with_courier",
+            "back_at_bosta_hub", "shipment_state_with_courier");
+        assertThat(timeline).extracting(TimelineItem::occurredAt).containsExactly(
+            t0, t0.plus(2, ChronoUnit.HOURS), t0.plus(3, ChronoUnit.HOURS),
+            t0.plus(4, ChronoUnit.HOURS), t0.plus(5, ChronoUnit.HOURS));
+    }
+
+    @Test
+    void timeline_backAtBostaHub_withCourierCreatedWithCourierCreated_bothHubRowsSurvive_notFoldedAsRepoll() {
+        // The exact interaction the fix pass called out: with_courier -> created ->
+        // with_courier -> created is NOT two repeats of 'created' (they're not adjacent —
+        // a with_courier sits between each pair), so 2b's consecutive-only collapse must
+        // keep BOTH 'created' rows, and both get relabeled "Back at Bosta hub" (neither is
+        // the first-ever row on this shipment).
+        Instant t0 = Instant.parse("2026-03-11T09:00:00Z");
+        UUID orderId = insertOrderAt("TL-HUB-INTERLEAVE", "with_courier", t0);
+        UUID shipmentId = insertForwardShipmentAt(orderId, "9810299061", "with_courier", t0.plus(1, ChronoUnit.HOURS));
+        insertHistoryAt(shipmentId, "with_courier", t0.plus(2, ChronoUnit.HOURS), null, null); // subsumed -> awb_linked
+        insertHistoryAt(shipmentId, "created", t0.plus(3, ChronoUnit.HOURS), null, null);      // bounce 1
+        insertHistoryAt(shipmentId, "with_courier", t0.plus(4, ChronoUnit.HOURS), null, null);
+        insertHistoryAt(shipmentId, "created", t0.plus(5, ChronoUnit.HOURS), null, null);      // bounce 2
+
+        List<TimelineItem> timeline = controller.timeline(orderId);
+        assertThat(timeline).extracting(TimelineItem::eventKey).containsExactly(
+            "order_created", "awb_linked", "back_at_bosta_hub",
+            "shipment_state_with_courier", "back_at_bosta_hub");
+        assertThat(timeline).extracting(TimelineItem::occurredAt)
+            .as("both 'created' rows survive distinctly — never folded into one")
+            .containsExactly(t0, t0.plus(2, ChronoUnit.HOURS), t0.plus(3, ChronoUnit.HOURS),
+                t0.plus(4, ChronoUnit.HOURS), t0.plus(5, ChronoUnit.HOURS));
+    }
+
+    @Test
+    void timeline_backAtBostaHub_reproduces2212094474Shape() {
+        // Live order #2212094474: out-for-delivery -> delivery-issue -> out-for-delivery ->
+        // "Label created" -> out-for-delivery -> "Label created" — the mid-journey "Label
+        // created" rows were the bug; both must now read "Back at Bosta hub".
+        Instant t0 = Instant.parse("2026-03-12T09:00:00Z");
+        UUID orderId = insertOrderAt("TL-2212094474", "with_courier", t0);
+        UUID shipmentId = insertForwardShipmentAt(orderId, "9810299062", "with_courier", t0.plus(1, ChronoUnit.HOURS));
+        insertHistoryAt(shipmentId, "with_courier", t0.plus(2, ChronoUnit.HOURS), null, null);          // subsumed -> awb_linked
+        insertHistoryAt(shipmentId, "exception", t0.plus(3, ChronoUnit.HOURS), 8, "Customer not answering"); // delivery issue
+        insertHistoryAt(shipmentId, "with_courier", t0.plus(4, ChronoUnit.HOURS), null, null);          // out for delivery again
+        insertHistoryAt(shipmentId, "created", t0.plus(5, ChronoUnit.HOURS), null, null);               // bounced -> hub
+        insertHistoryAt(shipmentId, "with_courier", t0.plus(6, ChronoUnit.HOURS), null, null);          // out for delivery again
+        insertHistoryAt(shipmentId, "created", t0.plus(7, ChronoUnit.HOURS), null, null);               // bounced -> hub again
+
+        List<TimelineItem> timeline = controller.timeline(orderId);
+        assertThat(timeline).extracting(TimelineItem::eventKey).containsExactly(
+            "order_created", "awb_linked", "delivery_attempt_failed", "shipment_state_with_courier",
+            "back_at_bosta_hub", "shipment_state_with_courier", "back_at_bosta_hub");
+        // No row ever reverts to the plain "shipment_state_created" ("Label created") label
+        // once the shipment has reached the courier — the whole point of the fix.
+        assertThat(timeline).extracting(TimelineItem::eventKey).doesNotContain("shipment_state_created");
+    }
+
+    @Test
+    void timeline_backAtBostaHub_returnLeg_createdStaysUntouched_evenAfterReturnLegOwnWithCourier() {
+        // FORWARD leg only. A return-leg 'created' row is a genuine return-label event and
+        // must never become "Back at Bosta hub" — checked here against the return leg's OWN
+        // with_courier history (not just the forward leg's), since reachedWithCourier is
+        // tracked per-shipment and the !isReturn guard must still hold regardless.
+        Instant t0 = Instant.parse("2026-03-13T09:00:00Z");
+        UUID orderId = insertOrderAt("TL-HUB-RETURN-LEG", "returning", t0);
+        insertForwardShipmentAt(orderId, "9810299063", "delivered", t0.plus(1, ChronoUnit.HOURS));
+
+        UUID returnId = insertReturnShipmentAt(orderId, "9810299064", "created", t0.plus(2, ChronoUnit.HOURS));
+        insertHistoryAt(returnId, "created", t0.plus(3, ChronoUnit.HOURS), null, null);      // subsumed -> return_awb_linked
+        insertHistoryAt(returnId, "with_courier", t0.plus(4, ChronoUnit.HOURS), null, null);
+        insertHistoryAt(returnId, "created", t0.plus(5, ChronoUnit.HOURS), null, null);      // stays a real return-label event
+
+        List<TimelineItem> timeline = controller.timeline(orderId);
+        assertThat(timeline).extracting(TimelineItem::eventKey)
+            .contains("return_awb_linked", "return_shipment_state_with_courier", "return_shipment_state_created")
+            .doesNotContain("back_at_bosta_hub");
+    }
+
     // ── Orders fix pass — 2c: phase ordering (only 2 real boundaries), immune to clock skew ──
     // Only two phase boundaries are real: order_created is always first, and a return leg
     // can never start before the forward leg it's returning, so return-leg events are

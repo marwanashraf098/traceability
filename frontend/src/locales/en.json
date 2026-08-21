@@ -242,6 +242,7 @@
       "packed": "Packed",
       "awb_linked": "Bosta AWB Linked",
       "return_awb_linked": "Bosta Return AWB Linked",
+      "back_at_bosta_hub": "Back at Bosta hub",
       "delivery_attempt_failed": "Delivery attempt failed",
       "shipment_state_created": "Label created",
       "shipment_state_with_courier": "Out for delivery",
