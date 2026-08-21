@@ -2,9 +2,12 @@ import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { TFunction } from 'i18next'
 import { X, ExternalLink, CheckCircle2, AlertTriangle, Truck, Package, Clock } from 'lucide-react'
-import { getOrder, getOrderTimeline, OrderDetail, TimelineItem, DerivedTone } from '../api'
+import {
+  getOrder, getOrderTimeline, holdOrder, releaseOrderHold,
+  OrderDetail, TimelineItem, DerivedTone,
+} from '../api'
 import { ShipmentCard } from '../pages/OrderDetail'
-import { Button, EmptyState, OrderStatus, ProductThumb, Skeleton, cn } from './ui'
+import { Badge, Button, EmptyState, Modal, OrderStatus, ProductThumb, Skeleton, cn } from './ui'
 
 // ── Relative time — same pattern as Overview.tsx/StockTake.tsx/Transfers.tsx (each
 // page owns a small local formatter); reuses the existing generic overview.time.*
@@ -53,6 +56,34 @@ export default function OrderDrawer({
   const [tab, setTab] = useState<DrawerTab>('overview')
   const open = orderId != null
 
+  // Hold/Unhold — folded in from OrderDetail.tsx (now-unrouted), same handler/endpoint
+  // (holdOrder()/releaseOrderHold() -> POST /fulfill/{orderId}/hold|release-hold).
+  const [holdOpen,   setHoldOpen]   = useState(false)
+  const [holdReason, setHoldReason] = useState('')
+  const [holdBusy,   setHoldBusy]   = useState(false)
+  const [holdErr,    setHoldErr]    = useState('')
+
+  const reload = () => {
+    if (!orderId) return
+    getOrder(orderId).then(setOrder).catch(() => {})
+  }
+
+  const handleHold = async () => {
+    if (!orderId || !holdReason.trim()) return
+    setHoldBusy(true); setHoldErr('')
+    try {
+      await holdOrder(orderId, holdReason.trim())
+      setHoldOpen(false); setHoldReason(''); reload()
+    } catch { setHoldErr(t('common.error')) }
+    finally { setHoldBusy(false) }
+  }
+
+  const handleUnhold = async () => {
+    if (!orderId) return
+    try { await releaseOrderHold(orderId); reload() }
+    catch { /* noop — reload regardless */ }
+  }
+
   // Separate state from `order` — this fetch runs independently (own loading/error),
   // so a timeline failure never blanks or hangs the rest of the drawer, and the order
   // header/items render as soon as getOrder() resolves without waiting on this.
@@ -61,6 +92,11 @@ export default function OrderDrawer({
   const [timelineError, setTimelineError]     = useState(false)
 
   useEffect(() => {
+    // Also resets the hold dialog on close (orderId -> null) and on switching orders —
+    // otherwise Escape (which always closes the whole drawer, since Modal has no Escape
+    // handling of its own) can leave holdOpen=true stranded behind a closed drawer,
+    // reappearing as a floating dialog the next time it's reopened.
+    setHoldOpen(false); setHoldReason(''); setHoldErr('')
     if (!orderId) return
     setLoading(true)
     setOrder(null)
@@ -220,6 +256,25 @@ export default function OrderDrawer({
                         {t('orders.drawer.viewShipment')}
                       </Button>
                     </div>
+                    {/* Hold/Unhold — folded into the action row from OrderDetail.tsx
+                        (now-unrouted); same handler/endpoint, same terminal-status gate. */}
+                    {order.onHold ? (
+                      <Button
+                        size="sm" variant="secondary" className="w-full justify-center mt-2.5"
+                        onClick={handleUnhold}
+                      >
+                        {t('orderDetail.unholdBtn')}
+                      </Button>
+                    ) : (
+                      !['delivered', 'cancelled', 'returned', 'lost'].includes(order.status) && (
+                        <Button
+                          size="sm" variant="secondary" className="w-full justify-center mt-2.5"
+                          onClick={() => { setHoldErr(''); setHoldReason(''); setHoldOpen(true) }}
+                        >
+                          {t('orderDetail.holdBtn')}
+                        </Button>
+                      )
+                    )}
                   </div>
 
                   <div>
@@ -229,7 +284,7 @@ export default function OrderDrawer({
                     <ul>
                       {order.items.slice(0, 2).map(item => (
                         <li key={item.id} className="flex items-center gap-3 py-2.5 border-b border-line">
-                          <ProductThumb src={null} alt={item.productTitle} size={40} />
+                          <ProductThumb src={item.imageUrl} alt={item.productTitle} size={40} />
                           <div className="min-w-0 flex-1">
                             <p className="text-small font-semibold text-primary truncate">{item.productTitle}</p>
                             {item.sku && <p className="text-caption text-muted font-mono">{item.sku}</p>}
@@ -278,14 +333,37 @@ export default function OrderDrawer({
               {tab === 'items' && (
                 <ul>
                   {order.items.map(item => (
-                    <li key={item.id} className="flex items-center gap-3 py-2.5 border-b border-line">
-                      <ProductThumb src={null} alt={item.productTitle} size={40} />
-                      <div className="min-w-0 flex-1">
-                        <p className="text-small font-semibold text-primary truncate">{item.productTitle}</p>
-                        <p className="text-caption text-muted">{item.variantTitle}</p>
-                        {item.sku && <p className="text-caption text-muted font-mono">{item.sku}</p>}
+                    <li key={item.id} className="py-2.5 border-b border-line">
+                      <div className="flex items-center gap-3">
+                        <ProductThumb src={item.imageUrl} alt={item.productTitle} size={40} />
+                        <div className="min-w-0 flex-1">
+                          <p className="text-small font-semibold text-primary truncate">{item.productTitle}</p>
+                          <p className="text-caption text-muted">{item.variantTitle}</p>
+                          {item.sku && <p className="text-caption text-muted font-mono">{item.sku}</p>}
+                        </div>
+                        <span className="text-small text-muted flex-shrink-0">×{item.quantity}</span>
                       </div>
-                      <span className="text-small text-muted flex-shrink-0">×{item.quantity}</span>
+                      {/* Allocated piece barcode(s) — real allocations already on the DTO;
+                          this row was previously the only thing not rendering them.
+                          Explicit empty state, not a hidden/blank gap — fulfilled-outside
+                          orders correctly hit this, that's expected, not a bug. */}
+                      <div className="mt-2 ps-[52px]">
+                        {item.allocatedPieces.length === 0 ? (
+                          <p className="text-caption text-muted/50">{t('orderDetail.noPieces')}</p>
+                        ) : (
+                          <div className="flex flex-wrap gap-1.5">
+                            {item.allocatedPieces.map(p => (
+                              <div
+                                key={p.pieceId}
+                                className="flex items-center gap-1.5 border border-line rounded-md px-2 py-0.5 bg-elevated"
+                              >
+                                <span className="font-mono text-caption text-muted">{p.barcode}</span>
+                                <Badge status={p.status} />
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
                     </li>
                   ))}
                 </ul>
@@ -317,6 +395,42 @@ export default function OrderDrawer({
           </>
         )}
       </aside>
+      {/* Hold dialog — folded in from OrderDetail.tsx (now-unrouted). */}
+      {holdOpen && (
+        <Modal title={t('orderDetail.holdDialog.title')} onClose={() => setHoldOpen(false)}>
+          <div className="space-y-4">
+            <div>
+              <label className="text-small text-muted block mb-1">
+                {t('orderDetail.holdDialog.reasonLabel')}
+              </label>
+              <input
+                autoFocus
+                type="text"
+                className="input w-full"
+                placeholder={t('orderDetail.holdDialog.reasonPlaceholder')}
+                value={holdReason}
+                onChange={e => setHoldReason(e.target.value)}
+                onKeyDown={e => { if (e.key === 'Enter') handleHold() }}
+                maxLength={200}
+              />
+            </div>
+            {holdErr && <p className="text-critical text-small">{holdErr}</p>}
+            <div className="flex justify-end gap-2">
+              <Button variant="secondary" onClick={() => setHoldOpen(false)}>
+                {t('orderDetail.holdDialog.cancel')}
+              </Button>
+              <Button
+                variant="destructive"
+                loading={holdBusy}
+                disabled={!holdReason.trim()}
+                onClick={handleHold}
+              >
+                {t('orderDetail.holdDialog.confirm')}
+              </Button>
+            </div>
+          </div>
+        </Modal>
+      )}
     </>
   )
 }

@@ -183,6 +183,14 @@ class OrderStatusListDetailParityTest {
             tenantId, shipmentId, state, Timestamp.from(occurredAt), exceptionCode, exceptionReason);
     }
 
+    private UUID insertReturnShipmentAt(UUID orderId, String tracking, String state, Instant createdAt) {
+        return jdbc.queryForObject(
+            "INSERT INTO shipments (tenant_id, order_id, provider, tracking_number, " +
+            "    internal_state, shipment_leg, created_at) " +
+            "VALUES (?, ?, 'bosta', ?, ?::shipment_internal_state, 'return', ?) RETURNING id",
+            UUID.class, tenantId, orderId, tracking, state, Timestamp.from(createdAt));
+    }
+
     // Direct piece_events insert (not through InventoryLedger — this suite tests the
     // TIMELINE READ, not the ledger). actorUserId may be null (system/automated, same as
     // production — no users fixture exists in this class).
@@ -529,8 +537,11 @@ class OrderStatusListDetailParityTest {
             TenantContext.runAs(tenantId, () -> appUserController.timeline(orderId));
 
         assertThat(timeline).extracting(TimelineItem::eventKey).containsExactly(
-            "order_created", "picked_up", "packed", "handed_to_bosta",
-            "shipment_state_created", "shipment_state_with_courier");
+            "order_created", "picked_up", "packed", "awb_linked",
+            "shipment_state_with_courier");
+        assertThat(timeline.get(3).detail())
+            .as("awb_linked carries the tracking number; the earliest real Bosta row ('created') is subsumed into it, not duplicated")
+            .isEqualTo("9810299001");
         assertThat(timeline).isSortedAccordingTo(Comparator.comparing(TimelineItem::occurredAt));
         assertThat(timeline.get(timeline.size() - 1).kind())
             .as("chronologically-last row, no failure seeded -> 'now'")
@@ -561,6 +572,223 @@ class OrderStatusListDetailParityTest {
         assertThat(last.eventKey()).isEqualTo("delivery_attempt_failed");
         assertThat(last.kind()).isEqualTo("fail");
         assertThat(last.detail()).isEqualTo("Customer refused");
+    }
+
+    // ── Orders fix pass — 2a: AWB-linked relabeling ─────────────────────────────
+
+    @Test
+    void timeline_awbLinked_zeroHistoryRows_fallsBackToShipmentCreatedAt() {
+        // Just-linked shipment, no Bosta webhook received yet — the AWB is still a true
+        // fact to show, not hide, so awb_linked falls back to shipments.created_at.
+        Instant t0 = Instant.parse("2026-03-01T09:00:00Z");
+        UUID orderId = insertOrderAt("TL-AWB-FALLBACK", "awaiting_pickup", t0);
+        insertForwardShipmentAt(orderId, "9810299030", "created", t0.plus(1, ChronoUnit.HOURS));
+
+        List<TimelineItem> timeline = controller.timeline(orderId);
+        TimelineItem awb = timeline.stream()
+            .filter(i -> "awb_linked".equals(i.eventKey())).findFirst().orElseThrow();
+        assertThat(awb.occurredAt()).isEqualTo(t0.plus(1, ChronoUnit.HOURS));
+        assertThat(awb.detail()).isEqualTo("9810299030");
+        assertThat(timeline).extracting(TimelineItem::eventKey).doesNotContain("handed_to_bosta");
+    }
+
+    @Test
+    void timeline_awbLinked_realHistoryRowWins_neverUsesCreatedAtOnceOneExists() {
+        // Once any real Bosta row exists, shipments.created_at is never consulted again —
+        // the earliest real row's own occurred_at becomes the AWB-linked timestamp, and
+        // that row is subsumed (not duplicated) rather than also appearing under its own
+        // "Label created" label.
+        Instant t0 = Instant.parse("2026-03-02T09:00:00Z");
+        UUID orderId = insertOrderAt("TL-AWB-REAL", "with_courier", t0);
+        UUID shipmentId = insertForwardShipmentAt(orderId, "9810299031", "created", t0.plus(1, ChronoUnit.HOURS));
+        insertHistoryAt(shipmentId, "created", t0.plus(2, ChronoUnit.HOURS), null, null);
+
+        List<TimelineItem> timeline = controller.timeline(orderId);
+        assertThat(timeline).extracting(TimelineItem::eventKey)
+            .as("the 'created' row is subsumed into awb_linked, not shown twice")
+            .containsExactly("order_created", "awb_linked");
+        TimelineItem awb = timeline.get(1);
+        assertThat(awb.occurredAt())
+            .as("the real Bosta row's timestamp wins over shipments.created_at")
+            .isEqualTo(t0.plus(2, ChronoUnit.HOURS));
+        assertThat(awb.detail()).isEqualTo("9810299031");
+    }
+
+    @Test
+    void timeline_returnLeg_getsSameAwbLinkedTreatment() {
+        Instant t0 = Instant.parse("2026-03-03T09:00:00Z");
+        UUID orderId = insertOrderAt("TL-AWB-RETURN", "returning", t0);
+        UUID returnShipmentId = insertReturnShipmentAt(orderId, "9810299032", "created",
+            t0.plus(1, ChronoUnit.HOURS));
+        insertHistoryAt(returnShipmentId, "created", t0.plus(2, ChronoUnit.HOURS), null, null);
+
+        List<TimelineItem> timeline = controller.timeline(orderId);
+        assertThat(timeline).extracting(TimelineItem::eventKey)
+            .containsExactly("order_created", "return_awb_linked");
+        assertThat(timeline.get(1).detail()).isEqualTo("9810299032");
+        assertThat(timeline.get(1).occurredAt()).isEqualTo(t0.plus(2, ChronoUnit.HOURS));
+    }
+
+    @Test
+    void timeline_awbLinked_firstRowIsException_notSilentlyAbsorbed() {
+        // Rare edge case: the very first-ever Bosta webhook for a shipment is itself an
+        // exception. It must NOT be silently relabeled away as a bland "done" AWB marker —
+        // the failure stays its own 'fail' row alongside the AWB marker.
+        Instant t0 = Instant.parse("2026-03-04T09:00:00Z");
+        UUID orderId = insertOrderAt("TL-AWB-FIRST-EXC", "with_courier", t0);
+        UUID shipmentId = insertForwardShipmentAt(orderId, "9810299033", "exception", t0.plus(1, ChronoUnit.HOURS));
+        insertHistoryAt(shipmentId, "exception", t0.plus(2, ChronoUnit.HOURS), 8, "Refused on first contact");
+
+        List<TimelineItem> timeline = controller.timeline(orderId);
+        assertThat(timeline).extracting(TimelineItem::eventKey)
+            .containsExactly("order_created", "awb_linked", "delivery_attempt_failed");
+        TimelineItem exceptionRow = timeline.get(2);
+        assertThat(exceptionRow.kind()).isEqualTo("fail");
+        assertThat(exceptionRow.detail()).isEqualTo("Refused on first contact");
+    }
+
+    // ── Orders fix pass — 2b: consecutive-only collapse ─────────────────────────
+
+    @Test
+    void timeline_consecutiveIdenticalState_collapsesToFirstOccurrence() {
+        // Live-order shape: repeated webhooks re-polling the SAME state (e.g. "Out for
+        // delivery" ×4) must collapse to a single row at the first occurrence.
+        Instant t0 = Instant.parse("2026-03-05T09:00:00Z");
+        UUID orderId = insertOrderAt("TL-COLLAPSE", "with_courier", t0);
+        UUID shipmentId = insertForwardShipmentAt(orderId, "9810299040", "with_courier", t0.plus(1, ChronoUnit.HOURS));
+        insertHistoryAt(shipmentId, "created", t0.plus(2, ChronoUnit.HOURS), null, null);
+        insertHistoryAt(shipmentId, "with_courier", t0.plus(3, ChronoUnit.HOURS), null, null);
+        insertHistoryAt(shipmentId, "with_courier", t0.plus(4, ChronoUnit.HOURS), null, null); // re-poll
+        insertHistoryAt(shipmentId, "with_courier", t0.plus(5, ChronoUnit.HOURS), null, null); // re-poll
+
+        List<TimelineItem> timeline = controller.timeline(orderId);
+        assertThat(timeline).extracting(TimelineItem::eventKey)
+            .containsExactly("order_created", "awb_linked", "shipment_state_with_courier");
+        assertThat(timeline.get(2).occurredAt())
+            .as("collapses to the FIRST occurrence's timestamp, not the last")
+            .isEqualTo(t0.plus(3, ChronoUnit.HOURS));
+    }
+
+    @Test
+    void timeline_reattemptAfterException_survivesCollapse_notFoldedAsRepoll() {
+        // The critical case from the fix-pass spec: with_courier -> exception -> with_courier
+        // MUST keep BOTH with_courier rows — the second one is a genuine re-attempt, not a
+        // re-poll of the first, because it is not ADJACENT to it (an exception sits between).
+        Instant t0 = Instant.parse("2026-03-06T09:00:00Z");
+        UUID orderId = insertOrderAt("TL-REATTEMPT", "with_courier", t0);
+        UUID shipmentId = insertForwardShipmentAt(orderId, "9810299041", "with_courier", t0.plus(1, ChronoUnit.HOURS));
+        insertHistoryAt(shipmentId, "created", t0.plus(2, ChronoUnit.HOURS), null, null);
+        insertHistoryAt(shipmentId, "with_courier", t0.plus(3, ChronoUnit.HOURS), null, null);
+        insertHistoryAt(shipmentId, "exception", t0.plus(4, ChronoUnit.HOURS), 8, "Customer not answering");
+        insertHistoryAt(shipmentId, "with_courier", t0.plus(5, ChronoUnit.HOURS), null, null); // re-attempt
+
+        List<TimelineItem> timeline = controller.timeline(orderId);
+        assertThat(timeline).extracting(TimelineItem::eventKey)
+            .as("both with_courier rows survive — separated by a real exception, not consecutive")
+            .containsExactly("order_created", "awb_linked", "shipment_state_with_courier",
+                "delivery_attempt_failed", "shipment_state_with_courier");
+        assertThat(timeline).extracting(TimelineItem::occurredAt)
+            .containsExactly(t0, t0.plus(2, ChronoUnit.HOURS), t0.plus(3, ChronoUnit.HOURS),
+                t0.plus(4, ChronoUnit.HOURS), t0.plus(5, ChronoUnit.HOURS));
+    }
+
+    @Test
+    void timeline_consecutiveExceptions_sameCodeCollapses_differentCodeDoesNot() {
+        // Keyed on (internal_state, exception_code) per the 2b clarification — reusing
+        // groupHistory()'s existing frontend precedent (OrderDetail.tsx): two consecutive
+        // exceptions with the SAME code fold like any other repeated state; a different
+        // code is a genuinely different event and must never merge.
+        Instant t0 = Instant.parse("2026-03-07T09:00:00Z");
+        UUID orderId = insertOrderAt("TL-EXC-COLLAPSE", "with_courier", t0);
+        UUID shipmentId = insertForwardShipmentAt(orderId, "9810299042", "exception", t0.plus(1, ChronoUnit.HOURS));
+        insertHistoryAt(shipmentId, "created", t0.plus(2, ChronoUnit.HOURS), null, null);
+        insertHistoryAt(shipmentId, "exception", t0.plus(3, ChronoUnit.HOURS), 8, "Refused by customer");
+        insertHistoryAt(shipmentId, "exception", t0.plus(4, ChronoUnit.HOURS), 8, "Refused by customer"); // re-poll, same code
+        insertHistoryAt(shipmentId, "exception", t0.plus(5, ChronoUnit.HOURS), 1, "Not at address"); // different code
+
+        List<TimelineItem> timeline = controller.timeline(orderId);
+        assertThat(timeline).extracting(TimelineItem::eventKey)
+            .containsExactly("order_created", "awb_linked", "delivery_attempt_failed", "delivery_attempt_failed");
+        assertThat(timeline).extracting(TimelineItem::occurredAt)
+            .containsExactly(t0, t0.plus(2, ChronoUnit.HOURS), t0.plus(3, ChronoUnit.HOURS), t0.plus(5, ChronoUnit.HOURS));
+        assertThat(timeline.get(2).detail()).isEqualTo("Refused by customer");
+        assertThat(timeline.get(3).detail()).isEqualTo("Not at address");
+    }
+
+    // ── Orders fix pass — 2c: phase-primary ordering, immune to clock skew ──────
+
+    @Test
+    void timeline_phasePrimaryOrdering_returnLegAlwaysAfterCourier_evenWithClockSkew() {
+        // Deliberately construct a clock-skew shape: the return leg's real timestamp is
+        // EARLIER than the forward leg's delivered timestamp. Phase must still win — the
+        // return leg's row renders after ALL courier-phase rows regardless.
+        Instant t0 = Instant.parse("2026-03-08T09:00:00Z");
+        UUID orderId = insertOrderAt("TL-PHASE-SKEW", "returning", t0);
+
+        UUID forwardId = insertForwardShipmentAt(orderId, "9810299050", "delivered", t0.plus(1, ChronoUnit.HOURS));
+        insertHistoryAt(forwardId, "created", t0.plus(2, ChronoUnit.HOURS), null, null);
+        insertHistoryAt(forwardId, "delivered", t0.plus(3, ChronoUnit.HOURS), null, null);
+
+        // Return shipment's own AWB-linked row lands at t0+2h45m — chronologically BEFORE
+        // the forward leg's "delivered" at t0+3h, but must still sort AFTER it.
+        UUID returnId = insertReturnShipmentAt(orderId, "9810299051", "created", t0.plus(1, ChronoUnit.HOURS));
+        insertHistoryAt(returnId, "created", t0.plus(2, ChronoUnit.HOURS).plus(45, ChronoUnit.MINUTES), null, null);
+
+        List<TimelineItem> timeline = controller.timeline(orderId);
+        assertThat(timeline).extracting(TimelineItem::eventKey).containsExactly(
+            "order_created", "awb_linked", "shipment_state_delivered", "return_awb_linked");
+        assertThat(timeline.get(2).occurredAt()).isEqualTo(t0.plus(3, ChronoUnit.HOURS));
+        assertThat(timeline.get(3).occurredAt())
+            .as("chronologically earlier than shipment_state_delivered, but phase (return) wins over raw time")
+            .isEqualTo(t0.plus(2, ChronoUnit.HOURS).plus(45, ChronoUnit.MINUTES))
+            .isBefore(timeline.get(2).occurredAt());
+    }
+
+    @Test
+    void timeline_phasePrimaryOrdering_reattemptInterleaving_preservedWithinCourierPhase() {
+        // The other named risk for 2c: phase-primary sorting must NOT regroup a real
+        // with_courier -> exception -> with_courier interleaving into
+        // with_courier -> with_courier -> exception just because all three share one phase.
+        // All three are courier-phase (rank 2), so the comparator falls through to
+        // occurred_at and must preserve their real order exactly.
+        Instant t0 = Instant.parse("2026-03-09T09:00:00Z");
+        UUID orderId = insertOrderAt("TL-PHASE-INTERLEAVE", "with_courier", t0);
+        UUID shipmentId = insertForwardShipmentAt(orderId, "9810299052", "with_courier", t0.plus(1, ChronoUnit.HOURS));
+        insertHistoryAt(shipmentId, "created", t0.plus(2, ChronoUnit.HOURS), null, null);
+        insertHistoryAt(shipmentId, "with_courier", t0.plus(3, ChronoUnit.HOURS), null, null);
+        insertHistoryAt(shipmentId, "exception", t0.plus(4, ChronoUnit.HOURS), 8, "Customer not answering");
+        insertHistoryAt(shipmentId, "with_courier", t0.plus(5, ChronoUnit.HOURS), null, null);
+
+        List<TimelineItem> timeline = controller.timeline(orderId);
+        assertThat(timeline).extracting(TimelineItem::eventKey)
+            .containsExactly("order_created", "awb_linked", "shipment_state_with_courier",
+                "delivery_attempt_failed", "shipment_state_with_courier");
+    }
+
+    // ── Orders fix pass — item 3: image_url on the item DTO ─────────────────────
+
+    @Test
+    void detail_orderItem_imageUrl_sameTenantPositiveControl() {
+        UUID imgProductId = UUID.randomUUID();
+        UUID imgVariantId = UUID.randomUUID();
+        String imageUrl = "https://cdn.shopify.com/s/files/1/parity-widget.jpg";
+        jdbc.update("INSERT INTO products (id, tenant_id, store_id, external_id, title, status, image_url) " +
+                    "VALUES (?, ?, ?, 'P-IMG', 'Imaged Widget', 'active', ?)",
+                    imgProductId, tenantId, storeId, imageUrl);
+        jdbc.update("INSERT INTO variants (id, tenant_id, product_id, external_id, title, sku) " +
+                    "VALUES (?, ?, ?, 'V-IMG', 'Default', 'IMG-001')",
+                    imgVariantId, tenantId, imgProductId);
+
+        UUID orderId = insertOrder("IMG-POS", "new");
+        UUID itemId = jdbc.queryForObject(
+            "INSERT INTO order_items (tenant_id, order_id, variant_id, quantity) VALUES (?, ?, ?, 1) RETURNING id",
+            UUID.class, tenantId, orderId, imgVariantId);
+
+        OrderController.OrderItem item = controller.detail(orderId).items().stream()
+            .filter(i -> i.id().equals(itemId.toString())).findFirst().orElseThrow();
+        assertThat(item.imageUrl())
+            .as("same-tenant positive control — products.image_url flows through fetchItems() to the DTO")
+            .isEqualTo(imageUrl);
     }
 
     // ── attempt-count canonical source: exception is NOT 1:1 with a delivery attempt ──

@@ -1321,7 +1321,7 @@ export function DataTable<T extends { id: string }>({
           ) : rows.map(row => (
             <tr
               key={row.id}
-              className={cn('tbl-row', onRowClick && 'cursor-pointer')}
+              className={cn('tbl-row group', onRowClick && 'cursor-pointer')}
               onClick={() => onRowClick?.(row)}
             >
               {columns.map(col => (

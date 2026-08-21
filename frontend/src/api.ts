@@ -147,6 +147,7 @@ export interface OrderItem {
   variantTitle: string
   sku: string | null
   quantity: number
+  imageUrl: string | null
   allocatedPieces: AllocatedPiece[]
 }
 

@@ -12,13 +12,15 @@ import type { OrderDetail, TimelineItem } from '../api'
 // ── Strong no-missing-key test (data-level, no rendering needed) ────────────────
 // The backend eventKey set (OrderController.timeline()) is not exported as constants —
 // enumerated here verbatim from the actual emit sites (grepped, not retyped from a
-// naming convention): "order_created"/"picked_up"/"packed"/"handed_to_bosta" (literals),
-// isReturn ? "return_shipment_created" : "handed_to_bosta", "delivery_attempt_failed",
-// and (isReturn ? "return_shipment_state_" : "shipment_state_") + state for all 9
+// naming convention): "order_created"/"picked_up"/"packed" (literals),
+// isReturn ? "return_awb_linked" : "awb_linked" (Orders fix pass 2a — relabels the
+// earliest real shipment_status_history row, or falls back to shipments.created_at if
+// none exists yet), "delivery_attempt_failed", and
+// (isReturn ? "return_shipment_state_" : "shipment_state_") + state for all 9
 // shipment_internal_state enum values.
 const BACKEND_EVENT_KEYS = [
-  'order_created', 'picked_up', 'packed', 'handed_to_bosta',
-  'return_shipment_created', 'delivery_attempt_failed',
+  'order_created', 'picked_up', 'packed', 'awb_linked',
+  'return_awb_linked', 'delivery_attempt_failed',
   'shipment_state_created', 'shipment_state_with_courier', 'shipment_state_delivered',
   'shipment_state_returning', 'shipment_state_returned', 'shipment_state_lost',
   'shipment_state_exception', 'shipment_state_terminated', 'shipment_state_cancelled',
@@ -92,7 +94,7 @@ function makeOrderDetail(overrides: Partial<OrderDetail> = {}): OrderDetail {
     id: 'order-1', number: '#2212094474', customerName: 'Habiba Ali', customerPhone: '01211000010',
     address: null, paymentMethod: 'cod', codAmount: 990, status: 'with_courier', onHold: false,
     holdReason: null, placedAt: '2026-08-11T10:42:00Z', createdAt: '2026-08-11T10:42:00Z',
-    items: [{ id: 'item-1', productTitle: 'Bikini Pink', variantTitle: 'M', sku: 'SN-BIK-PNK-M', quantity: 1, allocatedPieces: [] }],
+    items: [{ id: 'item-1', productTitle: 'Bikini Pink', variantTitle: 'M', sku: 'SN-BIK-PNK-M', quantity: 1, imageUrl: null, allocatedPieces: [] }],
     shipments: [],
     bostaLinkStatus: 'linked', notTracedAt: null, isExchange: false, shopifyOrderUrl: null,
     derivedStatus: {
@@ -112,7 +114,7 @@ function makeMixedTimeline(): TimelineItem[] {
     { occurredAt: '2026-08-11T10:42:00Z', eventKey: 'order_created', actorName: null, locationName: null, detail: null, kind: 'done' },
     { occurredAt: '2026-08-11T11:00:00Z', eventKey: 'picked_up', actorName: 'Ahmed Mostafa', locationName: null, detail: null, kind: 'done' },
     { occurredAt: '2026-08-11T11:15:00Z', eventKey: 'packed', actorName: 'Ahmed Mostafa', locationName: null, detail: null, kind: 'done' },
-    { occurredAt: '2026-08-11T14:00:00Z', eventKey: 'handed_to_bosta', actorName: null, locationName: null, detail: '3920909349', kind: 'done' },
+    { occurredAt: '2026-08-11T14:00:00Z', eventKey: 'awb_linked', actorName: null, locationName: null, detail: '3920909349', kind: 'done' },
     { occurredAt: '2026-08-12T09:00:00Z', eventKey: 'shipment_state_exception', actorName: null, locationName: null, detail: 'Investigation opened', kind: 'fail' },
     { occurredAt: '2026-08-12T13:00:00Z', eventKey: 'shipment_state_with_courier', actorName: null, locationName: null, detail: null, kind: 'done' },
     { occurredAt: '2026-08-13T09:00:00Z', eventKey: 'return_shipment_state_returning', actorName: null, locationName: null, detail: null, kind: 'now' },
@@ -150,7 +152,7 @@ test('drawer renders forward, return-leg, non-attempt-exception, and picked_up(n
   expect(await screen.findByText('Order created')).toBeInTheDocument()
   expect(screen.getByText('Picked by Ahmed Mostafa')).toBeInTheDocument()
   expect(screen.getByText('Packed')).toBeInTheDocument()
-  expect(screen.getByText('Handed to Bosta')).toBeInTheDocument()
+  expect(screen.getByText('AWB Linked')).toBeInTheDocument()
   // Non-attempt exception (no forward NDR code) — distinct from "Delivery attempt failed".
   expect(screen.getByText('Delivery issue')).toBeInTheDocument()
   expect(screen.getByText('Investigation opened')).toBeInTheDocument()

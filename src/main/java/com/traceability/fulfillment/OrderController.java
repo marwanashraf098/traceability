@@ -49,7 +49,7 @@ public class OrderController {
 
     public record OrderItem(
         String id, String productTitle, String variantTitle,
-        String sku, int quantity, List<AllocatedPiece> allocatedPieces) {}
+        String sku, int quantity, String imageUrl, List<AllocatedPiece> allocatedPieces) {}
 
     public record AttemptEntry(
         String attemptDate, String type, boolean succeeded,
@@ -829,8 +829,9 @@ public class OrderController {
     // ── merged trace timeline — GET /orders/{id}/timeline (Orders rebuild pass (b)) ────
     //
     // Union across real recorded sources only — order creation, piece_events (pick/pack),
-    // shipments (handoff+AWB), shipment_status_history (courier waypoints + attempt
-    // failures). No source is synthesized. "Inventory reserved" is NOT one of these
+    // shipments (AWB linkage, relabeled onto the earliest real shipment_status_history row
+    // when one exists — see step 4 below), shipment_status_history (courier waypoints +
+    // attempt failures). No source is synthesized. "Inventory reserved" is NOT one of these
     // sources — committed inventory is derived on every read from order_items/order.status
     // (see CatalogController), never a stored event; there is no discrete timestamp to
     // show honestly, so it is omitted rather than approximated. A "Packed" row only
@@ -839,12 +840,12 @@ public class OrderController {
     // (Mode-B early-webhook-match) with no pack event ever recorded; this endpoint shows
     // less in that case rather than fabricating a time.
     //
-    // kind is presentational only, computed AFTER the union: every shipment_status_history
-    // 'exception' row is 'fail'; the chronologically-last row (if not already 'fail')
-    // becomes 'now'; everything else 'done'. This never competes with OrderStatusDeriver —
-    // both read the same underlying rows, so the drawer's Current-state card
-    // (derivedStatus) and this endpoint's 'now' row agree by construction, not by
-    // cross-checking each other.
+    // kind is presentational only, computed AFTER the union+sort: every
+    // shipment_status_history 'exception' row is 'fail'; the LAST row in final (phase,
+    // occurred_at) order (if not already 'fail') becomes 'now'; everything else 'done'.
+    // This never competes with OrderStatusDeriver — both read the same underlying rows, so
+    // the drawer's Current-state card (derivedStatus) and this endpoint's 'now' row agree
+    // by construction, not by cross-checking each other.
     public record TimelineItem(
         Instant occurredAt, String eventKey, String actorName,
         String locationName, String detail, String kind) {}
@@ -928,10 +929,29 @@ public class OrderController {
                     return null;
                 }, orderId);
 
-            // 4. Handed to Bosta + courier waypoints — union across EVERY shipment on this
-            // order (both legs, and every re-ship attempt), not just the latest forward
-            // shipment list()/detail() use for status display. A re-shipped order genuinely
-            // was handed to Bosta twice; showing both is the complete truth, not a bug.
+            // 4. AWB linked + courier waypoints — union across EVERY shipment on this order
+            // (both legs, and every re-ship attempt), not just the latest forward shipment
+            // list()/detail() use for status display. A re-shipped order genuinely was
+            // handed to Bosta twice; showing both is the complete truth, not a bug.
+            //
+            // AWB-linked timestamp/detail: prefer the EARLIEST real shipment_status_history
+            // row for this shipment (whatever its state) over the synthetic
+            // shipments.created_at — a real Bosta row at (near-)the same instant as our own
+            // ingestion time otherwise renders twice (e.g. "Handed to Bosta" + "Label
+            // created" both at 12:21:29 AM for Mode-B orders). Falls back to
+            // shipments.created_at ONLY when the shipment has zero status rows yet (just
+            // linked, no Bosta webhook received) — the AWB is still a true fact to show, not
+            // hide, until a real row exists to carry it instead. Once any real row exists,
+            // created_at is never consulted again.
+            //
+            // Consecutive-collapse (2b): fold a run of shipment_status_history rows sharing
+            // the same (internal_state, exception_code) key down to its first occurrence — a
+            // repeated webhook re-polling the same state, not a real transition.
+            // CONSECUTIVE ONLY: a with_courier -> exception -> with_courier sequence keeps
+            // BOTH with_courier rows since they aren't adjacent in the run — the second one
+            // is a genuine re-attempt, not a re-poll. Mirrors groupHistory()'s existing
+            // frontend precedent (OrderDetail.tsx) exactly, including that same-code
+            // exceptions fold like any other repeated state; different codes never merge.
             List<Map<String, Object>> shipmentRows = jdbc.queryForList(
                 "SELECT id, created_at, tracking_number, shipment_leg::text AS shipment_leg " +
                 "FROM shipments WHERE order_id = ? ORDER BY created_at ASC, id ASC",
@@ -939,12 +959,9 @@ public class OrderController {
             for (Map<String, Object> s : shipmentRows) {
                 UUID shipmentId = (UUID) s.get("id");
                 boolean isReturn = "return".equals(s.get("shipment_leg"));
-                items.add(new TimelineItem(
-                    ((Timestamp) s.get("created_at")).toInstant(),
-                    isReturn ? "return_shipment_created" : "handed_to_bosta",
-                    null, null, (String) s.get("tracking_number"), "done"));
+                String tracking = (String) s.get("tracking_number");
 
-                jdbc.query(
+                List<Map<String, Object>> historyRows = jdbc.queryForList(
                     """
                     SELECT h.internal_state, h.occurred_at, h.exception_code, h.exception_reason,
                            n.category AS ndr_category
@@ -952,35 +969,75 @@ public class OrderController {
                     LEFT JOIN ndr_codes n ON n.code = h.exception_code
                     WHERE h.shipment_id = ?
                     ORDER BY h.occurred_at ASC, h.id ASC
-                    """,
-                    (rs, i) -> {
-                        String state = rs.getString("internal_state");
-                        boolean isException = "exception".equals(state);
-                        // Same fail-open/fail-closed rule as the canonical count above: a
-                        // present-but-unmapped code still counts as an attempt failure (never
-                        // silently relabel a real problem as a generic waypoint); no code at
-                        // all (states 101/102/103) does not.
-                        Integer exceptionCode = rs.getObject("exception_code", Integer.class);
-                        String ndrCategory = rs.getString("ndr_category");
-                        boolean isAttemptFailure = isException && !isReturn && exceptionCode != null
-                            && (ndrCategory == null || "forward".equals(ndrCategory));
-                        String eventKey = isAttemptFailure
-                            ? "delivery_attempt_failed"
-                            : (isReturn ? "return_shipment_state_" : "shipment_state_") + state;
-                        items.add(new TimelineItem(
-                            rs.getTimestamp("occurred_at").toInstant(), eventKey, null, null,
-                            isException ? rs.getString("exception_reason") : null,
-                            isException ? "fail" : "done"));
-                        return null;
-                    }, shipmentId);
+                    """, shipmentId);
+
+                Instant awbAt = historyRows.isEmpty()
+                    ? ((Timestamp) s.get("created_at")).toInstant()
+                    : ((Timestamp) historyRows.get(0).get("occurred_at")).toInstant();
+                items.add(new TimelineItem(
+                    awbAt, isReturn ? "return_awb_linked" : "awb_linked",
+                    null, null, tracking, "done"));
+
+                // The earliest history row is subsumed into the AWB-linked marker above
+                // UNLESS it's itself a real failure — an exception must never be silently
+                // absorbed into a bland "done" marker, even at the cost of two rows at the
+                // same instant (a genuine AWB-exists fact and a genuine first-contact
+                // failure are two different truths, not a duplicate).
+                boolean firstIsException = !historyRows.isEmpty()
+                    && "exception".equals(historyRows.get(0).get("internal_state"));
+                int startIdx = (!historyRows.isEmpty() && !firstIsException) ? 1 : 0;
+
+                // Run-key seeded from the subsumed row (when there is one) so an immediate
+                // repeat of that same state right after linking still folds away; null when
+                // the loop itself will emit row 0 (nothing to seed from yet).
+                String lastRunKey = startIdx == 1
+                    ? runKey((String) historyRows.get(0).get("internal_state"),
+                             (Integer) historyRows.get(0).get("exception_code"))
+                    : null;
+
+                for (int i = startIdx; i < historyRows.size(); i++) {
+                    Map<String, Object> row = historyRows.get(i);
+                    String state = (String) row.get("internal_state");
+                    Integer exceptionCode = (Integer) row.get("exception_code");
+                    String key = runKey(state, exceptionCode);
+                    if (key.equals(lastRunKey)) {
+                        continue; // consecutive re-poll of the same state — not a new event
+                    }
+                    lastRunKey = key;
+
+                    boolean isException = "exception".equals(state);
+                    // Same fail-open/fail-closed rule as the canonical count above: a
+                    // present-but-unmapped code still counts as an attempt failure (never
+                    // silently relabel a real problem as a generic waypoint); no code at
+                    // all (states 101/102/103) does not.
+                    String ndrCategory = (String) row.get("ndr_category");
+                    boolean isAttemptFailure = isException && !isReturn && exceptionCode != null
+                        && (ndrCategory == null || "forward".equals(ndrCategory));
+                    String eventKey = isAttemptFailure
+                        ? "delivery_attempt_failed"
+                        : (isReturn ? "return_shipment_state_" : "shipment_state_") + state;
+                    items.add(new TimelineItem(
+                        ((Timestamp) row.get("occurred_at")).toInstant(), eventKey, null, null,
+                        isException ? (String) row.get("exception_reason") : null,
+                        isException ? "fail" : "done"));
+                }
             }
 
-            // 5. Order chronologically ascending on the real event timestamp. List.sort is
-            // a STABLE sort (TimSort) — ties keep their insertion order, which already
-            // reflects source priority (order -> pick -> pack -> per-shipment
-            // handoff+waypoints, shipments themselves iterated oldest-created first) — the
-            // deterministic secondary tiebreak, never id as a time proxy.
-            items.sort(Comparator.comparing(TimelineItem::occurredAt));
+            // 5. Phase-primary, occurred_at-within-phase (2c) — order created -> warehouse
+            // (pick/pack) -> courier (forward-leg Bosta waypoints: awb_linked,
+            // shipment_state_*, delivery_attempt_failed) -> return leg (return_awb_linked,
+            // return_shipment_state_*, its own phase, always after courier). Guarantees the
+            // intended sequence regardless of clock skew between
+            // our DB and Bosta; each row still carries its own real timestamp. List.sort is
+            // a STABLE sort (TimSort) — ties on (phaseRank, occurredAt) keep insertion
+            // order, which already reflects source priority within a phase (per-shipment
+            // rows are built and appended in occurred_at ASC order above) — the
+            // deterministic secondary tiebreak, never id as a time proxy. This must NOT
+            // regroup a real with_courier -> exception -> with_courier interleaving:
+            // phaseRank is identical for all three (courier), so the comparator falls
+            // through to occurredAt and preserves their real order exactly.
+            items.sort(Comparator.comparingInt((TimelineItem i) -> phaseRank(i.eventKey()))
+                .thenComparing(TimelineItem::occurredAt));
 
             // 6. kind: fail rows stay fail; the chronologically-last row becomes 'now'
             // unless it's already 'fail' (a delivery_failed order's last row IS the
@@ -997,6 +1054,28 @@ public class OrderController {
 
             return items;
         });
+    }
+
+    // Consecutive-collapse fold key (2b) — mirrors groupHistory()'s frontend precedent
+    // (OrderDetail.tsx) exactly: exception rows key on (state + code) so two different NDR
+    // codes never merge into one row; every other state keys on itself.
+    private static String runKey(String state, Integer exceptionCode) {
+        return "exception".equals(state)
+            ? "exception:" + (exceptionCode == null ? "null" : exceptionCode)
+            : state;
+    }
+
+    // Phase-primary ordering (2c) — order created -> warehouse (pick/pack) -> courier
+    // (forward-leg Bosta waypoints) -> return leg. Prefix-matched rather than an exhaustive
+    // per-state enum so any future shipment_internal_state value is classified automatically
+    // by which of the two eventKey-building branches above produced it.
+    private static int phaseRank(String eventKey) {
+        if ("order_created".equals(eventKey)) return 0;
+        if ("picked_up".equals(eventKey) || "packed".equals(eventKey)) return 1;
+        if ("awb_linked".equals(eventKey) || "delivery_attempt_failed".equals(eventKey)
+            || eventKey.startsWith("shipment_state_")) return 2;
+        if ("return_awb_linked".equals(eventKey) || eventKey.startsWith("return_shipment_state_")) return 3;
+        throw new IllegalStateException("Unclassified timeline eventKey: " + eventKey);
     }
 
     private static String nullIfBlank(String s) {
@@ -1021,7 +1100,7 @@ public class OrderController {
             """
             SELECT oi.id AS item_id, oi.variant_id, oi.quantity,
                    v.title AS variant_title, v.sku,
-                   p.title AS product_title
+                   p.title AS product_title, p.image_url
             FROM order_items oi
             JOIN variants v  ON v.id = oi.variant_id
             JOIN products p  ON p.id = v.product_id
@@ -1056,6 +1135,7 @@ public class OrderController {
                 (String) row.get("variant_title"),
                 (String) row.get("sku"),
                 ((Number) row.get("quantity")).intValue(),
+                (String) row.get("image_url"),
                 pieces
             ));
         }

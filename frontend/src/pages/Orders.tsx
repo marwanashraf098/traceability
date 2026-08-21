@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback } from 'react'
-import { Link } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
+import { ChevronRight } from 'lucide-react'
 import {
   listOrders, OrderPage, listShopifyStores, syncShopifyStore,
   getOrdersSummary, OrderSummaryCounts, getExceptionsCount,
@@ -114,6 +114,10 @@ export default function Orders() {
       <div className="flex flex-wrap items-start gap-1.5">
         <LegStatusBadge legStatus={{ primaryKey: order.derivedStatus.fulfillmentKey, tone: order.derivedStatus.fulfillmentTone }} />
         {order.onHold && <Badge tone="critical" label={t('orderDetail.onHold')} />}
+        {/* Quiet marker for fulfilled-outside-Traced orders — same derivedStatus.notTraced
+            flag the (dormant) stepper suppression already reads. Neutral/muted tone
+            deliberately — must not shout over the ~60 normal orders in the list. */}
+        {order.derivedStatus.notTraced && <Badge tone="neutral" label={t('orders.badge.notTraced')} />}
       </div>
     )
   }
@@ -131,18 +135,21 @@ export default function Orders() {
       header: t('orders.columns.number', { defaultValue: 'Order' }),
       mono: true,
       render: row => (
-        // Order number — mono, links to detail. Exchanges stay inline with normal
+        // Order number — mono, opens the same drawer the row click does (the full
+        // OrderDetail.tsx page is retired/unrouted). Exchanges stay inline with normal
         // orders (no filter, no row restyling, no separate section) — the badge is
         // the only differentiator, same component QueueView/PickScreen already use.
-        // stopPropagation — this cell sits inside a row whose click opens the drawer;
-        // OrderDetail.tsx must stay reachable via this link without also opening it.
+        // stopPropagation is defensive here (this button's own click already does
+        // exactly what the row click does) — kept so a future divergence between the
+        // two can't accidentally double-fire.
         <div className="flex items-center gap-1.5" onClick={e => e.stopPropagation()}>
-          <Link
-            to={`/orders/${row.id}`}
+          <button
+            type="button"
+            onClick={() => setDrawerOrderId(row.id)}
             className="text-trace-blue hover:text-trace-blue-hover font-medium transition-colors"
           >
             {row.number ?? t('common.na')}
-          </Link>
+          </button>
           {row.isExchange && <Badge tone="info" label={t('exchange.badge')} />}
         </div>
       ),
@@ -185,6 +192,22 @@ export default function Orders() {
         <span className="text-small text-muted">
           {row.placedAt ? new Date(row.placedAt).toLocaleDateString() : t('common.na')}
         </span>
+      ),
+    },
+    {
+      // Visual hint only — NOT a separate click target. The whole row already opens
+      // the drawer (DataTable's onRowClick); this chevron just signals that. Hidden
+      // until row hover (DataTable's <tr> carries `group`), muted, and flips for RTL
+      // via the same rtl:rotate-180 convention used in Fulfill.tsx.
+      key: 'chevron',
+      header: '',
+      align: 'end',
+      render: () => (
+        <ChevronRight
+          size={16}
+          strokeWidth={2}
+          className="text-muted opacity-0 group-hover:opacity-100 transition-opacity rtl:rotate-180"
+        />
       ),
     },
   ]

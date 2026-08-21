@@ -13,7 +13,6 @@ import Login from './pages/Login'
 import Signup from './pages/Signup'
 import Overview from './pages/Overview'
 import Orders from './pages/Orders'
-import OrderDetail from './pages/OrderDetail'
 import Catalog from './pages/Catalog'
 import Receiving from './pages/Receiving'
 import Fulfill from './pages/Fulfill'
@@ -107,14 +106,10 @@ export default function App() {
             </RequireAuth>
           }
         />
-        <Route
-          path="/orders/:id"
-          element={
-            <RequireAuth>
-              <Layout><OrderDetail /></Layout>
-            </RequireAuth>
-          }
-        />
+        {/* /orders/:id (OrderDetail.tsx) intentionally unrouted — Orders fix pass:
+            order-number link + row click both open OrderDrawer instead. OrderDetail.tsx
+            is left in place (not deleted) since OrderDrawer still imports ShipmentCard/
+            groupHistory/toRawDisplay from it. */}
         <Route
           path="/exchanges/:id"
           element={
