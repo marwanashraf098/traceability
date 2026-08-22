@@ -289,6 +289,49 @@ public interface ShopifyGateway {
     void pushStockTakeWriteOff(String shopDomain, String token, List<InventoryDelta> deltas,
                                 String locationGid, String referenceDocumentUri, String idempotencyKey);
 
+    /**
+     * FR-13.x — one of the named set of sanctioned decrement methods (CLAUDE.md, FR-21 §7
+     * extension, approved 2026-08-23). A single piece is voided as a receiving-overcount /
+     * duplicate-entry correction — NOT a loss. Deliberately self-contained, same shape and
+     * same rationale as {@link #pushStockTakeWriteOff}: does not call {@code executeGraphQL()}
+     * (which silently retries on connection/read timeout — see that method's javadoc), makes
+     * exactly one HTTP attempt, and distinguishes a definitive rejection from a genuinely
+     * unconfirmed response so the caller never double-decrements on retry.
+     *
+     * @param negativeDelta        must be < 0 (always -1 for a single piece in this build)
+     * @param referenceDocumentUri traced://piece/{piece_id} — trace + manual-verify anchor
+     * @param idempotencyKey       the mutation-level @idempotent key — piece_id (void is
+     *                             terminal; a piece can only be voided once, ever)
+     * @throws IllegalArgumentException if negativeDelta >= 0 — checked BEFORE any network call
+     * @throws ShopifyException         definitive rejection — nothing was applied; safe to retry
+     * @throws ShopifyAmbiguousException no confirmed response reached this process — caller
+     *                                    must NOT auto-retry
+     */
+    void pushVoidCorrection(String shopDomain, String token, String inventoryItemGid,
+                             String locationGid, int negativeDelta, String referenceDocumentUri,
+                             String idempotencyKey);
+
+    /**
+     * FR-13.x — one of the named set of sanctioned decrement methods (CLAUDE.md, FR-21 §7
+     * extension, approved 2026-08-23). A currently-sellable piece enters {@code on_hold} —
+     * QC/quarantine — and leaves the sellable pool. Same self-contained, single-HTTP-attempt
+     * shape as {@link #pushVoidCorrection} / {@link #pushStockTakeWriteOff}; deliberately does
+     * not share code with either (no general-purpose decrement helper — CLAUDE.md invariant).
+     *
+     * @param negativeDelta        must be < 0 (always -1 for a single piece in this build)
+     * @param referenceDocumentUri traced://piece/{piece_id} — trace + manual-verify anchor
+     * @param idempotencyKey       the mutation-level @idempotent key — piece_id + the hold
+     *                             event id (NOT piece_id alone: a piece can be held, released,
+     *                             and held again, so piece_id alone would collide across cycles)
+     * @throws IllegalArgumentException if negativeDelta >= 0 — checked BEFORE any network call
+     * @throws ShopifyException         definitive rejection — nothing was applied; safe to retry
+     * @throws ShopifyAmbiguousException no confirmed response reached this process — caller
+     *                                    must NOT auto-retry
+     */
+    void pushHoldEnter(String shopDomain, String token, String inventoryItemGid,
+                        String locationGid, int negativeDelta, String referenceDocumentUri,
+                        String idempotencyKey);
+
     /** One inventoryItem's current "available" quantity at a location (Part C reconcile read). */
     record InventoryLevel(String inventoryItemGid, int available) {}
 

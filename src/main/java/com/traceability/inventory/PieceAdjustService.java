@@ -37,6 +37,14 @@ public class PieceAdjustService {
         "lost", "damaged", "destroyed", "available"
     );
 
+    private static final Set<String> VOID_REASONS = Set.of(
+        "receiving_overcount", "duplicate_entry", "other"
+    );
+
+    private static final Set<String> HOLD_REASONS = Set.of(
+        "quality_check", "quarantine", "repair", "other"
+    );
+
     private static final String FIND_PIECE_STATUS =
         "SELECT status::text, current_location_id FROM pieces WHERE id = ? AND tenant_id = ?";
 
@@ -148,14 +156,19 @@ public class PieceAdjustService {
         ledger.transition(pieceId, current, toStatus, "adjusted", actorUserId,
             new TransitionContext(null, null, null, null, metadata));
 
-        // FR-17 v2 trigger 3: a currently-sellable piece damaged in the warehouse.
-        // Guards already satisfied by this point — RESERVED/PACKED (allocated to an open
-        // order) was rejected above with 409, so reaching here with toStatus=DAMAGED means
-        // current was AVAILABLE (the only other legal source per InventoryLedger.ALLOWED).
-        // Damaged pieces reaching DAMAGED via return_pending_inspection go through
-        // ReturnService.markDamaged() instead — a separate method with no call here.
+        // FR-17 v2 trigger 3: a currently-sellable piece damaged in the warehouse. Fires ONLY
+        // from AVAILABLE — a piece already left the sellable pool once at hold_enter (FR-13.x),
+        // so on_hold:damaged escalation (also legal per InventoryLedger.ALLOWED as of FR-13.x)
+        // must NOT call this a second time, or on_hand would be double-decremented. Damaged
+        // pieces reaching DAMAGED via return_pending_inspection go through ReturnService.
+        // markDamaged() instead — a separate method with no call here.
         if (current == PieceStatus.AVAILABLE && toStatus == PieceStatus.DAMAGED) {
             shopifyInventory.onSellablePieceDamaged(tenantId, pieceId, currentLocationId);
+        }
+
+        if (toStatus == PieceStatus.DAMAGED) {
+            jdbc.update("UPDATE pieces SET condition = 'damaged' WHERE id = ? AND tenant_id = ?",
+                pieceId, tenantId);
         }
 
         Map<String, Object> auditMeta = new LinkedHashMap<>();
@@ -164,6 +177,217 @@ public class PieceAdjustService {
         auditMeta.put("reason", reason);
         if (note != null && !note.isBlank()) auditMeta.put("note", note);
         auditService.record(actorUserId, "piece_adjust", "piece", pieceId, auditMeta);
+    }
+
+    /**
+     * FR-13.x — Void: a receiving-overcount / duplicate-entry correction, NOT a loss. Source is
+     * available ONLY (unlike adjustPiece(), which also accepts lost→available). Reserved/packed
+     * → PieceCommittedException (release-first, same guard as adjustPiece()). out_on_transfer →
+     * PieceOutOnTransferException, same reasoning as adjustPiece(). Any other non-available
+     * status → 409. Terminal: no reverse edge exists (voided is a dead end in ALLOWED).
+     *
+     * Shopify: the decrement is conditional — see ShopifyInventoryService.processVoidCorrection()
+     * — it only fires if the piece's originating receiving increment actually applied; otherwise
+     * the on_hand count is already correct and the call is skipped (still recorded for audit).
+     */
+    @Transactional(isolation = Isolation.READ_COMMITTED)
+    public void voidPiece(String pieceId, String reason, String note, UUID actorUserId) {
+        UUID tenantId = TenantContext.require();
+
+        if (!VOID_REASONS.contains(reason)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                "reason must be one of: receiving_overcount, duplicate_entry, other");
+        }
+        if ("other".equals(reason) && (note == null || note.isBlank())) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                "note is required when reason is 'other'");
+        }
+
+        record PieceRow(String status, UUID currentLocationId) {}
+        PieceRow pieceRow = jdbc.query(FIND_PIECE_STATUS,
+            rs -> rs.next() ? new PieceRow(rs.getString(1), rs.getObject(2, UUID.class)) : null,
+            pieceId, tenantId);
+        if (pieceRow == null) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Piece not found");
+        }
+        PieceStatus current = PieceStatus.fromDb(pieceRow.status());
+        UUID currentLocationId = pieceRow.currentLocationId();
+
+        if (current == PieceStatus.RESERVED || current == PieceStatus.PACKED) {
+            Map<String, Object> order = jdbc.query(FIND_COMMITTED_ORDER,
+                rs -> rs.next()
+                    ? Map.of("orderId", rs.getObject("order_id"),
+                             "orderNumber", rs.getString("order_number"))
+                    : null,
+                pieceId, tenantId);
+            throw new PieceCommittedException(
+                order != null ? (UUID) order.get("orderId") : null,
+                order != null ? (String) order.get("orderNumber") : null);
+        }
+
+        if (current == PieceStatus.OUT_ON_TRANSFER) {
+            UUID blockingTransferId = jdbc.query(
+                "SELECT transfer_id FROM transfer_pieces WHERE piece_id = ? AND tenant_id = ? AND outcome IS NULL LIMIT 1",
+                rs -> rs.next() ? rs.getObject("transfer_id", UUID.class) : null,
+                pieceId, tenantId);
+            throw new PieceOutOnTransferException(blockingTransferId);
+        }
+
+        if (current != PieceStatus.AVAILABLE) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                "Piece must be available to void (current: " + current.db + ")");
+        }
+
+        String metadata = buildMeta(reason, note);
+
+        ledger.transition(pieceId, PieceStatus.AVAILABLE, PieceStatus.VOIDED, "voided", actorUserId,
+            new TransitionContext(null, null, null, null, metadata));
+
+        shopifyInventory.onPieceVoided(tenantId, pieceId, currentLocationId);
+
+        Map<String, Object> auditMeta = new LinkedHashMap<>();
+        auditMeta.put("from",   current.db);
+        auditMeta.put("to",     "voided");
+        auditMeta.put("reason", reason);
+        if (note != null && !note.isBlank()) auditMeta.put("note", note);
+        auditService.record(actorUserId, "piece_void", "piece", pieceId, auditMeta);
+    }
+
+    /**
+     * FR-13.x — On Hold (enter): reversible QC/quarantine. Source is available ONLY —
+     * reserved/packed → PieceCommittedException (release-first), out_on_transfer →
+     * PieceOutOnTransferException, same guards as voidPiece()/adjustPiece().
+     *
+     * Generates a fresh holdEventId per call and stores it in the 'held' piece_events row's
+     * metadata — unhold() reads it back to scope the Shopify hold_exit claim to the SAME hold
+     * cycle (a piece can be held/released/held again; piece_id alone would collide with a
+     * prior cycle's already-'applied' claim row).
+     *
+     * @return the generated hold event id (also embedded in the piece_events metadata)
+     */
+    @Transactional(isolation = Isolation.READ_COMMITTED)
+    public UUID hold(String pieceId, String reason, String note, UUID actorUserId) {
+        UUID tenantId = TenantContext.require();
+
+        if (!HOLD_REASONS.contains(reason)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                "reason must be one of: quality_check, quarantine, repair, other");
+        }
+        if ("other".equals(reason) && (note == null || note.isBlank())) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                "note is required when reason is 'other'");
+        }
+
+        record PieceRow(String status, UUID currentLocationId) {}
+        PieceRow pieceRow = jdbc.query(FIND_PIECE_STATUS,
+            rs -> rs.next() ? new PieceRow(rs.getString(1), rs.getObject(2, UUID.class)) : null,
+            pieceId, tenantId);
+        if (pieceRow == null) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Piece not found");
+        }
+        PieceStatus current = PieceStatus.fromDb(pieceRow.status());
+        UUID currentLocationId = pieceRow.currentLocationId();
+
+        if (current == PieceStatus.RESERVED || current == PieceStatus.PACKED) {
+            Map<String, Object> order = jdbc.query(FIND_COMMITTED_ORDER,
+                rs -> rs.next()
+                    ? Map.of("orderId", rs.getObject("order_id"),
+                             "orderNumber", rs.getString("order_number"))
+                    : null,
+                pieceId, tenantId);
+            throw new PieceCommittedException(
+                order != null ? (UUID) order.get("orderId") : null,
+                order != null ? (String) order.get("orderNumber") : null);
+        }
+
+        if (current == PieceStatus.OUT_ON_TRANSFER) {
+            UUID blockingTransferId = jdbc.query(
+                "SELECT transfer_id FROM transfer_pieces WHERE piece_id = ? AND tenant_id = ? AND outcome IS NULL LIMIT 1",
+                rs -> rs.next() ? rs.getObject("transfer_id", UUID.class) : null,
+                pieceId, tenantId);
+            throw new PieceOutOnTransferException(blockingTransferId);
+        }
+
+        if (current != PieceStatus.AVAILABLE) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                "Piece must be available to hold (current: " + current.db + ")");
+        }
+
+        UUID holdEventId = UUID.randomUUID();
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("reason", reason);
+        if (note != null && !note.isBlank()) m.put("note", note);
+        m.put("hold_event_id", holdEventId.toString());
+        String metadata;
+        try {
+            metadata = mapper.writeValueAsString(m);
+        } catch (JsonProcessingException e) {
+            throw new IllegalStateException("Failed to serialize metadata", e);
+        }
+
+        ledger.transition(pieceId, PieceStatus.AVAILABLE, PieceStatus.ON_HOLD, "held", actorUserId,
+            new TransitionContext(null, null, null, null, metadata));
+
+        shopifyInventory.onHoldEnter(tenantId, pieceId, currentLocationId, holdEventId);
+
+        Map<String, Object> auditMeta = new LinkedHashMap<>();
+        auditMeta.put("from",        current.db);
+        auditMeta.put("to",          "on_hold");
+        auditMeta.put("reason",      reason);
+        auditMeta.put("holdEventId", holdEventId.toString());
+        if (note != null && !note.isBlank()) auditMeta.put("note", note);
+        auditService.record(actorUserId, "piece_hold", "piece", pieceId, auditMeta);
+
+        return holdEventId;
+    }
+
+    /**
+     * FR-13.x — On Hold (exit): on_hold → available. Reads back the hold_event_id from the most
+     * recent 'held' piece_events row landing on on_hold for this piece, so the Shopify hold_exit
+     * claim is scoped to the SAME cycle hold() opened — see hold()'s javadoc.
+     *
+     * Shopify: +1 via the EXISTING positive/increment path (ShopifyInventoryService.onHoldExit,
+     * which reuses applyIncrementAdjustment) — NOT the negative-delta gateway. This is an
+     * increment, not part of the named decrement set.
+     */
+    @Transactional(isolation = Isolation.READ_COMMITTED)
+    public void unhold(String pieceId, UUID actorUserId) {
+        UUID tenantId = TenantContext.require();
+
+        record PieceRow(String status, UUID currentLocationId) {}
+        PieceRow pieceRow = jdbc.query(FIND_PIECE_STATUS,
+            rs -> rs.next() ? new PieceRow(rs.getString(1), rs.getObject(2, UUID.class)) : null,
+            pieceId, tenantId);
+        if (pieceRow == null) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Piece not found");
+        }
+        PieceStatus current = PieceStatus.fromDb(pieceRow.status());
+        if (current != PieceStatus.ON_HOLD) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                "Piece must be on_hold to unhold (current: " + current.db + ")");
+        }
+        UUID currentLocationId = pieceRow.currentLocationId();
+
+        String holdEventIdRaw = jdbc.query(
+            "SELECT metadata->>'hold_event_id' FROM piece_events " +
+            "WHERE piece_id = ? AND tenant_id = ? AND event_type = 'held' " +
+            "  AND to_status = 'on_hold'::piece_status " +
+            "ORDER BY occurred_at DESC, id DESC LIMIT 1",
+            rs -> rs.next() ? rs.getString(1) : null,
+            pieceId, tenantId);
+        if (holdEventIdRaw == null) {
+            throw new IllegalStateException(
+                "on_hold piece " + pieceId + " has no matching 'held' event with hold_event_id");
+        }
+        UUID holdEventId = UUID.fromString(holdEventIdRaw);
+
+        ledger.transition(pieceId, PieceStatus.ON_HOLD, PieceStatus.AVAILABLE, "unheld", actorUserId,
+            new TransitionContext(null, null, null, null, null));
+
+        shopifyInventory.onHoldExit(tenantId, pieceId, currentLocationId, holdEventId);
+
+        auditService.record(actorUserId, "piece_unhold", "piece", pieceId,
+            Map.of("holdEventId", holdEventId.toString()));
     }
 
     /**

@@ -8,11 +8,13 @@ import com.traceability.integrations.shopify.ShopifyTokenProvider;
 import com.traceability.tenancy.TenantContext;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
+import org.springframework.web.server.ResponseStatusException;
 
 import java.time.Instant;
 import java.util.Map;
@@ -37,17 +39,30 @@ import java.util.concurrent.CompletableFuture;
  * transaction is ever held open across the HTTP call.
  *
  * INVARIANT (never relax without explicit approval — FR-17 v2, CLAUDE.md):
- *   Traced NEVER decrements Shopify on_hand and NEVER writes absolute on_hand.
- *   inventorySetOnHandQuantities is FORBIDDEN — it is never called anywhere in this
- *   codebase. Only two write shapes exist, both targeting the Traced Main Warehouse
- *   GID only:
- *     - inventoryAdjustQuantities with a POSITIVE delta (triggers 1 and 2).
+ *   Traced NEVER writes absolute on_hand (inventorySetOnHandQuantities is FORBIDDEN — never
+ *   called anywhere in this codebase). As of FR-21 §7 (extended 2026-08-23 for FR-13.x),
+ *   decrements are sanctioned ONLY through a named, closed set of dedicated gateway methods —
+ *   this class's void/hold-enter triggers below, plus stock-take write-off (a separate class,
+ *   StockTakeReconciliationService/StockTakeShopifyPushJob) — never a shared decrement helper.
+ *   Write shapes used here, all targeting the Traced Main Warehouse GID only:
+ *     - inventoryAdjustQuantities with a POSITIVE delta (triggers 1, 2, hold_exit).
  *     - inventoryMoveQuantities available->damaged (trigger 3).
+ *     - pushVoidCorrection / pushHoldEnter — dedicated single-attempt NEGATIVE-delta gateway
+ *       methods (FR-13.x; see CLAUDE.md FR-21 §7 extension for the full named set).
  *   Trigger 1: receiving session close                → +N per variant.
  *   Trigger 2: return inspection → AVAILABLE           → +1 per piece.
  *              (return_pending_inspection → damaged does nothing — no call here.)
- *   Trigger 3: a currently-sellable piece damaged      → move 1 unit available→damaged.
- *   No fourth trigger. No courier/loss/order-driven decrement trigger — Shopify owns those.
+ *   Trigger 3: a currently-sellable piece damaged      → move 1 unit available->damaged.
+ *   Trigger void_correction: available->voided piece   → -1, CONDITIONAL on the piece's
+ *              originating receiving increment having actually applied; skipped (not failed)
+ *              otherwise — the count is already correct.
+ *   Trigger hold_enter: available->on_hold piece        → -1, scoped per hold-cycle (piece_id +
+ *              hold_event_id), not just piece_id — a piece can be held/released/held again.
+ *   Trigger hold_exit: on_hold->available piece          → +1 via the EXISTING positive path
+ *              (applyIncrementAdjustment) — not a decrement, needs no new gateway method.
+ *   on_hold->damaged|lost|destroyed makes NO Shopify call — the piece already left the
+ *              sellable pool at hold_enter; a second decrement here would double-count.
+ *   No courier/loss/order-driven decrement trigger — Shopify owns those.
  *
  * LOCATION-TARGET GUARD: the Shopify locationGid used in every mutation call is read
  * directly off the SAME location row that passed the is_fulfillment=true AND
@@ -132,6 +147,248 @@ public class ShopifyInventoryService {
             }
         });
         return CompletableFuture.completedFuture(null);
+    }
+
+    // ── Trigger: FR-13.x void correction (named decrement set — CLAUDE.md) ──
+
+    /**
+     * Called after PieceAdjustService.voidPiece() commits an available→voided transition.
+     * Decrements only if the piece's originating receiving increment actually applied
+     * (checked against shopify_inventory_adjustments for that piece's receipt session) —
+     * see processVoidCorrection() for the exact query. If the increment never fired, the
+     * on_hand count is already correct: no Shopify call, but still recorded ('skipped') here
+     * for audit.
+     */
+    @Async
+    public CompletableFuture<Void> onPieceVoided(UUID tenantId, String pieceId, UUID locationId) {
+        TenantContext.runAs(tenantId, () -> {
+            try {
+                processVoidCorrection(pieceId, locationId);
+            } catch (Exception e) {
+                log.error("Shopify inventory sync failed: trigger=void_correction piece={}", pieceId, e);
+            }
+        });
+        return CompletableFuture.completedFuture(null);
+    }
+
+    // ── Trigger: FR-13.x hold enter (named decrement set — CLAUDE.md) ───────
+
+    /**
+     * Called after PieceAdjustService.hold() commits an available→on_hold transition.
+     * holdEventId scopes the trigger to THIS hold cycle — a piece can be held, released, and
+     * held again, so piece_id alone would collide with a prior cycle's already-'applied' claim
+     * row (the UNIQUE(trigger_type, trigger_id, variant_id, location_id) constraint only
+     * reclaims from 'failed' — see claim()'s javadoc).
+     */
+    @Async
+    public CompletableFuture<Void> onHoldEnter(UUID tenantId, String pieceId, UUID locationId, UUID holdEventId) {
+        TenantContext.runAs(tenantId, () -> {
+            try {
+                processHoldEnter(pieceId, locationId, holdEventId);
+            } catch (Exception e) {
+                log.error("Shopify inventory sync failed: trigger=hold_enter piece={}", pieceId, e);
+            }
+        });
+        return CompletableFuture.completedFuture(null);
+    }
+
+    // ── Trigger: FR-13.x hold exit — EXISTING positive path, not a decrement ─
+
+    /**
+     * Called after PieceAdjustService.unhold() commits an on_hold→available transition.
+     * Reuses the SAME positive-delta path as receiving/return-inspection (applyIncrementAdjustment)
+     * — this is an increment, not part of the named decrement set, needs no new gateway method.
+     * holdEventId must be the SAME id used by the onHoldEnter() call for this cycle so the two
+     * halves of one hold cycle claim distinct rows from any other cycle of the same piece.
+     */
+    @Async
+    public CompletableFuture<Void> onHoldExit(UUID tenantId, String pieceId, UUID locationId, UUID holdEventId) {
+        TenantContext.runAs(tenantId, () -> {
+            try {
+                UUID variantId = resolveVariantForPiece(pieceId);
+                if (variantId == null) {
+                    log.warn("Shopify inventory sync: piece not found piece={}", pieceId);
+                    return;
+                }
+                UUID batchId = UUID.randomUUID();
+                applyIncrementAdjustment(batchId, variantId, locationId, 1,
+                                          "hold_exit", pieceId + ":" + holdEventId, "hold_exit");
+            } catch (Exception e) {
+                log.error("Shopify inventory sync failed: trigger=hold_exit piece={}", pieceId, e);
+            }
+        });
+        return CompletableFuture.completedFuture(null);
+    }
+
+    // ── Void correction processing ───────────────────────────────────────────
+
+    private record PieceReceiptRow(UUID variantId, UUID receiptId) {}
+
+    private void processVoidCorrection(String pieceId, UUID locationId) {
+        UUID tenantId = TenantContext.require();
+        UUID batchId = UUID.randomUUID();
+
+        PieceReceiptRow row = tx.execute(status ->
+            jdbc.query(
+                "SELECT variant_id, receipt_id FROM pieces WHERE id = ? AND tenant_id = ?",
+                rs -> rs.next() ? new PieceReceiptRow(
+                    rs.getObject(1, UUID.class), rs.getObject(2, UUID.class)) : null,
+                pieceId, tenantId));
+        if (row == null) {
+            log.warn("Shopify inventory sync: piece not found piece={}", pieceId);
+            return;
+        }
+
+        if (!isFulfillmentLocation(tenantId, locationId, "void_correction", pieceId)) {
+            return;
+        }
+
+        ObjectNode initialPayload = mapper.createObjectNode().put("reason", "void").put("delta", -1);
+        if (!claim(tenantId, batchId, row.variantId(), locationId, -1, "void_correction", pieceId, initialPayload)) {
+            log.debug("Shopify inventory: void_correction already claimed, skipping duplicate call piece={}", pieceId);
+            return;
+        }
+
+        // Did this piece's originating receiving increment actually apply? Receiving syncs
+        // per (session, variant, location) — not per piece — so this is the closest per-piece
+        // signal available (see Step-0 diagnosis, section C.10): no per-piece flag exists.
+        boolean incrementApplied = row.receiptId() != null && Boolean.TRUE.equals(tx.execute(status ->
+            jdbc.query(
+                "SELECT EXISTS (SELECT 1 FROM shopify_inventory_adjustments " +
+                "WHERE tenant_id = ? AND trigger_type = 'receiving_session' AND trigger_id = ? " +
+                "  AND variant_id = ? AND location_id = ? AND status = 'applied')",
+                rs -> rs.next() && rs.getBoolean(1),
+                tenantId, row.receiptId().toString(), row.variantId(), locationId)));
+
+        if (!incrementApplied) {
+            markResult(tenantId, "void_correction", pieceId, row.variantId(), locationId, null, null,
+                       "skipped", "Receiving increment never applied for this piece's session — on_hand already correct");
+            return;
+        }
+
+        Preconditions p = resolvePreconditions(tenantId, row.variantId(), locationId, "void_correction", pieceId);
+        if (p.error() != null) {
+            markResult(tenantId, "void_correction", pieceId, row.variantId(), locationId,
+                       p.shopifyInventoryItemId(), p.shopifyLocationId(), "failed", p.error());
+            return;
+        }
+
+        String status;
+        String error = null;
+        try {
+            String idempotencyKey = ShopifyGateway.idempotencyKey(
+                tenantId, "void_correction", pieceId, row.variantId(), locationId);
+            shopify.pushVoidCorrection(p.shopDomain(), p.token(), p.shopifyInventoryItemId(),
+                                        p.shopifyLocationId(), -1, "traced://piece/" + pieceId, idempotencyKey);
+            status = "applied";
+        } catch (Exception e) {
+            status = "failed";
+            error = e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName();
+            log.warn("Shopify inventory void correction failed: piece={} variant={} error={}",
+                     pieceId, row.variantId(), error);
+        }
+
+        markResult(tenantId, "void_correction", pieceId, row.variantId(), locationId,
+                   p.shopifyInventoryItemId(), p.shopifyLocationId(), status, error);
+    }
+
+    // ── Hold enter processing ────────────────────────────────────────────────
+
+    private void processHoldEnter(String pieceId, UUID locationId, UUID holdEventId) {
+        UUID tenantId = TenantContext.require();
+        UUID batchId = UUID.randomUUID();
+        String triggerId = pieceId + ":" + holdEventId;
+
+        UUID variantId = resolveVariantForPiece(pieceId);
+        if (variantId == null) {
+            log.warn("Shopify inventory sync: piece not found piece={}", pieceId);
+            return;
+        }
+
+        if (!isFulfillmentLocation(tenantId, locationId, "hold_enter", triggerId)) {
+            return;
+        }
+
+        ObjectNode initialPayload = mapper.createObjectNode().put("reason", "hold").put("delta", -1);
+        if (!claim(tenantId, batchId, variantId, locationId, -1, "hold_enter", triggerId, initialPayload)) {
+            log.debug("Shopify inventory: hold_enter already claimed, skipping duplicate call piece={}", pieceId);
+            return;
+        }
+
+        Preconditions p = resolvePreconditions(tenantId, variantId, locationId, "hold_enter", triggerId);
+        if (p.error() != null) {
+            markResult(tenantId, "hold_enter", triggerId, variantId, locationId,
+                       p.shopifyInventoryItemId(), p.shopifyLocationId(), "failed", p.error());
+            return;
+        }
+
+        String status;
+        String error = null;
+        try {
+            String idempotencyKey = ShopifyGateway.idempotencyKey(
+                tenantId, "hold_enter", triggerId, variantId, locationId);
+            shopify.pushHoldEnter(p.shopDomain(), p.token(), p.shopifyInventoryItemId(),
+                                   p.shopifyLocationId(), -1, "traced://piece/" + pieceId, idempotencyKey);
+            status = "applied";
+        } catch (Exception e) {
+            status = "failed";
+            error = e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName();
+            log.warn("Shopify inventory hold enter failed: piece={} variant={} error={}",
+                     pieceId, variantId, error);
+        }
+
+        markResult(tenantId, "hold_enter", triggerId, variantId, locationId,
+                   p.shopifyInventoryItemId(), p.shopifyLocationId(), status, error);
+    }
+
+    // ── Manual repush (FR-13.x exceptions center integration) ────────────────
+
+    /**
+     * Manual, synchronous, one-shot re-attempt of a FAILED void_correction or hold_enter
+     * adjustment — a deliberate operator action after seeing the ExceptionService
+     * 'void_hold_sync_failed' detector fire, not a hot path (same "manual action" reasoning
+     * as ShopifyInventoryReconcileService.apply()). Full auto-repush parity (failed_ambiguous
+     * classification, scheduled retry) is explicitly deferred — this is a single re-attempt.
+     *
+     * Reuses claim()'s EXISTING "ON CONFLICT ... WHERE status = 'failed'" reclaim branch — no
+     * new claim mechanism, no new gateway call shape. Reads locationId off the STORED
+     * adjustment row (not the piece's current_location_id, which may have moved since) so the
+     * retry targets the exact same location the original attempt did.
+     *
+     * @throws ResponseStatusException 404 if no matching row; 409 if it is not currently 'failed'
+     */
+    public void repushFailedVoidOrHold(String triggerType, String triggerId) {
+        UUID tenantId = TenantContext.require();
+        if (!"void_correction".equals(triggerType) && !"hold_enter".equals(triggerType)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                "triggerType must be void_correction or hold_enter");
+        }
+
+        record FailedRow(UUID locationId, String status) {}
+        FailedRow row = tx.execute(status ->
+            jdbc.query(
+                "SELECT location_id, status FROM shopify_inventory_adjustments " +
+                "WHERE tenant_id = ? AND trigger_type = ? AND trigger_id = ?",
+                rs -> rs.next() ? new FailedRow(rs.getObject(1, UUID.class), rs.getString(2)) : null,
+                tenantId, triggerType, triggerId));
+        if (row == null) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND,
+                "No adjustment found for " + triggerType + "/" + triggerId);
+        }
+        if (!"failed".equals(row.status())) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                "Adjustment is not in 'failed' status (current: " + row.status() + ")");
+        }
+
+        if ("void_correction".equals(triggerType)) {
+            processVoidCorrection(triggerId, row.locationId());
+        } else {
+            String[] parts = triggerId.split(":", 2);
+            if (parts.length != 2) {
+                throw new IllegalStateException("Malformed hold_enter trigger_id: " + triggerId);
+            }
+            processHoldEnter(parts[0], row.locationId(), UUID.fromString(parts[1]));
+        }
     }
 
     // ── Receiving session processing ─────────────────────────────────────────

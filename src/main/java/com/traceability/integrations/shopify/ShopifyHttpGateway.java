@@ -788,6 +788,187 @@ class ShopifyHttpGateway implements ShopifyGateway {
         }
     }
 
+    private static final String VOID_CORRECTION_MUTATION = """
+            mutation VoidCorrection($input: InventoryAdjustQuantitiesInput!, $idempotencyKey: String!) {
+              inventoryAdjustQuantities(input: $input) @idempotent(key: $idempotencyKey) {
+                inventoryAdjustmentGroup { createdAt }
+                userErrors { field message code }
+              }
+            }
+            """;
+
+    /**
+     * FR-13.x. Deliberately self-contained — see {@link #pushStockTakeWriteOff}'s javadoc for
+     * why this does not call the shared executeGraphQL() helper (its silent 3x retry on
+     * connection/read timeout would defeat single-attempt-outcome classification here). No
+     * code is shared with pushStockTakeWriteOff or pushHoldEnter — three separate methods,
+     * three separate call sites, no general-purpose decrement helper (CLAUDE.md invariant).
+     */
+    @Override
+    public void pushVoidCorrection(String shopDomain, String token, String inventoryItemGid,
+                                    String locationGid, int negativeDelta, String referenceDocumentUri,
+                                    String idempotencyKey) {
+        if (negativeDelta >= 0) {
+            throw new IllegalArgumentException(
+                "pushVoidCorrection requires a negative delta; got " + negativeDelta);
+        }
+
+        ObjectNode change = mapper.createObjectNode()
+            .put("delta", negativeDelta)
+            .put("inventoryItemId", inventoryItemGid)
+            .put("locationId", locationGid);
+        // One-shot single-piece write-off — no meaningful prior-read baseline to assert;
+        // explicitly opts out of the compare-and-swap check (Shopify's documented null-opt-out).
+        change.putNull("changeFromQuantity");
+
+        ObjectNode input = mapper.createObjectNode()
+            .put("reason", "other")
+            .put("name", "available")
+            .put("referenceDocumentUri", referenceDocumentUri);
+        input.set("changes", mapper.createArrayNode().add(change));
+        ObjectNode vars = mapper.createObjectNode();
+        vars.set("input", input);
+        vars.put("idempotencyKey", idempotencyKey);
+
+        String url = "https://" + shopDomain + "/admin/api/" + apiVersion + "/graphql.json";
+        ObjectNode body = mapper.createObjectNode()
+            .put("query", VOID_CORRECTION_MUTATION).set("variables", vars);
+
+        JsonNode response;
+        try {
+            response = restClient.post()
+                .uri(url)
+                .header("X-Shopify-Access-Token", token)
+                .header("Content-Type", "application/json")
+                .body(body)
+                .retrieve()
+                .body(JsonNode.class);
+        } catch (HttpClientErrorException e) {
+            throw new ShopifyException(
+                "Void correction HTTP " + e.getStatusCode().value()
+                + " for " + shopDomain + ": " + e.getResponseBodyAsString(), e);
+        } catch (HttpServerErrorException e) {
+            throw new ShopifyException(
+                "Void correction HTTP " + e.getStatusCode().value() + " for " + shopDomain, e);
+        } catch (ResourceAccessException e) {
+            throw new ShopifyAmbiguousException(
+                "Void correction: no confirmed response from " + shopDomain, e);
+        }
+
+        if (response == null) {
+            throw new ShopifyAmbiguousException(
+                "Void correction: null response body from " + shopDomain);
+        }
+
+        JsonNode errors = response.get("errors");
+        if (errors != null && errors.isArray() && errors.size() > 0) {
+            String code = errors.get(0).path("extensions").path("code").asText("");
+            throw new ShopifyException("Void correction GraphQL error"
+                + (code.isBlank() ? "" : " (" + code + ")") + ": "
+                + errors.get(0).path("message").asText());
+        }
+
+        JsonNode data = response.get("data");
+        if (data == null) {
+            throw new ShopifyAmbiguousException(
+                "Void correction: response had no data field from " + shopDomain);
+        }
+        JsonNode userErrors = data.path("inventoryAdjustQuantities").path("userErrors");
+        if (userErrors.isArray() && !userErrors.isEmpty()) {
+            String msg = userErrors.get(0).path("message").asText("unknown error");
+            throw new ShopifyException("Void correction failed: " + msg);
+        }
+    }
+
+    private static final String HOLD_ENTER_MUTATION = """
+            mutation HoldEnter($input: InventoryAdjustQuantitiesInput!, $idempotencyKey: String!) {
+              inventoryAdjustQuantities(input: $input) @idempotent(key: $idempotencyKey) {
+                inventoryAdjustmentGroup { createdAt }
+                userErrors { field message code }
+              }
+            }
+            """;
+
+    /**
+     * FR-13.x. Deliberately self-contained — see {@link #pushStockTakeWriteOff}'s javadoc for
+     * why this does not call the shared executeGraphQL() helper. No code is shared with
+     * pushStockTakeWriteOff or pushVoidCorrection — three separate methods, three separate
+     * call sites, no general-purpose decrement helper (CLAUDE.md invariant).
+     */
+    @Override
+    public void pushHoldEnter(String shopDomain, String token, String inventoryItemGid,
+                               String locationGid, int negativeDelta, String referenceDocumentUri,
+                               String idempotencyKey) {
+        if (negativeDelta >= 0) {
+            throw new IllegalArgumentException(
+                "pushHoldEnter requires a negative delta; got " + negativeDelta);
+        }
+
+        ObjectNode change = mapper.createObjectNode()
+            .put("delta", negativeDelta)
+            .put("inventoryItemId", inventoryItemGid)
+            .put("locationId", locationGid);
+        change.putNull("changeFromQuantity");
+
+        ObjectNode input = mapper.createObjectNode()
+            .put("reason", "other")
+            .put("name", "available")
+            .put("referenceDocumentUri", referenceDocumentUri);
+        input.set("changes", mapper.createArrayNode().add(change));
+        ObjectNode vars = mapper.createObjectNode();
+        vars.set("input", input);
+        vars.put("idempotencyKey", idempotencyKey);
+
+        String url = "https://" + shopDomain + "/admin/api/" + apiVersion + "/graphql.json";
+        ObjectNode body = mapper.createObjectNode()
+            .put("query", HOLD_ENTER_MUTATION).set("variables", vars);
+
+        JsonNode response;
+        try {
+            response = restClient.post()
+                .uri(url)
+                .header("X-Shopify-Access-Token", token)
+                .header("Content-Type", "application/json")
+                .body(body)
+                .retrieve()
+                .body(JsonNode.class);
+        } catch (HttpClientErrorException e) {
+            throw new ShopifyException(
+                "Hold enter HTTP " + e.getStatusCode().value()
+                + " for " + shopDomain + ": " + e.getResponseBodyAsString(), e);
+        } catch (HttpServerErrorException e) {
+            throw new ShopifyException(
+                "Hold enter HTTP " + e.getStatusCode().value() + " for " + shopDomain, e);
+        } catch (ResourceAccessException e) {
+            throw new ShopifyAmbiguousException(
+                "Hold enter: no confirmed response from " + shopDomain, e);
+        }
+
+        if (response == null) {
+            throw new ShopifyAmbiguousException(
+                "Hold enter: null response body from " + shopDomain);
+        }
+
+        JsonNode errors = response.get("errors");
+        if (errors != null && errors.isArray() && errors.size() > 0) {
+            String code = errors.get(0).path("extensions").path("code").asText("");
+            throw new ShopifyException("Hold enter GraphQL error"
+                + (code.isBlank() ? "" : " (" + code + ")") + ": "
+                + errors.get(0).path("message").asText());
+        }
+
+        JsonNode data = response.get("data");
+        if (data == null) {
+            throw new ShopifyAmbiguousException(
+                "Hold enter: response had no data field from " + shopDomain);
+        }
+        JsonNode userErrors = data.path("inventoryAdjustQuantities").path("userErrors");
+        if (userErrors.isArray() && !userErrors.isEmpty()) {
+            String msg = userErrors.get(0).path("message").asText("unknown error");
+            throw new ShopifyException("Hold enter failed: " + msg);
+        }
+    }
+
     private static final String INVENTORY_LEVELS_QUERY = """
             query InventoryLevelsAtLocation($ids: [ID!]!, $locationId: ID!) {
               nodes(ids: $ids) {

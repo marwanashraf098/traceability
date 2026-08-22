@@ -124,16 +124,22 @@ class NotTracedBackfillTest {
         //    placed_at), shipments(tenant_id, created_at), shipment_status_history(tenant_id,
         //    internal_state, occurred_at) — no policy change, no data touched); V78,
         //    the Phase A inventory-backend index-only migration (pieces(tenant_id,
-        //    current_location_id, status) — no policy change, no data touched); and V79,
+        //    current_location_id, status) — no policy change, no data touched); V79,
         //    two more index-only migrations on shopify_inventory_adjustments (tenant_id,
-        //    created_at) and (tenant_id, variant_id) — no policy change, no data touched.
+        //    created_at) and (tenant_id, variant_id) — no policy change, no data touched);
+        //    V80, the FR-13.x piece_status enum additions (voided, on_hold — statements-
+        //    only, no data touched, same executeInTransaction-safe pattern as V65); V81,
+        //    pieces.condition (new column, DEFAULT 'good' backfills every existing row
+        //    metadata-only, no interaction with the stuck/traced orders here); and V82,
+        //    the shopify_inventory_adjustments trigger_type/status CHECK widen for FR-13.x
+        //    void/hold (constraint-only, no data touched).
         Flyway toLatest = Flyway.configure()
                 .dataSource(POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword())
                 .locations("classpath:db/migration")
                 .load();
         MigrateResult r2 = toLatest.migrate();
         assertThat(r2.success).as("migrations after V56 must succeed").isTrue();
-        assertThat(r2.migrationsExecuted).as("V57 + V58 + V59 + V60 + V61 + V62 + V63 + V64 + V65 + V66 + V67 + V68 + V69 + V70 + V71 + V72 + V73 + V74 + V75 + V76 + V77 + V78 + V79 pending after V56").isEqualTo(23);
+        assertThat(r2.migrationsExecuted).as("V57 + V58 + V59 + V60 + V61 + V62 + V63 + V64 + V65 + V66 + V67 + V68 + V69 + V70 + V71 + V72 + V73 + V74 + V75 + V76 + V77 + V78 + V79 + V80 + V81 + V82 pending after V56").isEqualTo(26);
 
         try (Connection conn = DriverManager.getConnection(
                 POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword())) {

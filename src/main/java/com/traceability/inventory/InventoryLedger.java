@@ -99,7 +99,23 @@ public class InventoryLedger {
         "out_on_transfer:available",     // reconcile: scanned back, good condition
         "out_on_transfer:damaged",       // reconcile: scanned back, condemned
         "out_on_transfer:lost",          // reconcile: quantity-classified shortfall, unaccounted
-        "out_on_transfer:sold"           // reconcile: quantity-classified shortfall, off-book sale
+        "out_on_transfer:sold",          // reconcile: quantity-classified shortfall, off-book sale
+
+        // FR-13.x: Void (receiving-overcount / duplicate-entry correction — terminal, NOT a
+        // loss; excluded from every loss-reporting site by construction because they all key on
+        // literal status='lost', never a negated set — see PieceAdjustService.voidPiece()).
+        "available:voided",
+
+        // FR-13.x: On Hold (reversible QC/quarantine). Escalation edges reuse the SAME targets
+        // already opened by the manual-adjustment block above (available:damaged/lost/destroyed
+        // — this is not the first opening of a terminal, same reasoning as the FR-22 transfer
+        // comment above). PieceAdjustService.unhold() guards on_hold:available separately from
+        // return_pending_inspection:available (different Shopify effect — see ShopifyInventoryService).
+        "available:on_hold",
+        "on_hold:available",
+        "on_hold:damaged",
+        "on_hold:lost",
+        "on_hold:destroyed"
     );
 
     // ---- SQL ---------------------------------------------------------------

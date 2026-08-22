@@ -117,6 +117,9 @@ public class ReturnService {
         TransitionContext ctx = new TransitionContext(null, null, null, null, meta);
         ledger.transition(pieceId, PieceStatus.RETURN_PENDING_INSPECTION,
                 PieceStatus.DAMAGED, "damaged", actorUserId, ctx);
+
+        jdbc.update("UPDATE pieces SET condition = 'damaged' WHERE id = ? AND tenant_id = ?",
+            pieceId, tenantId);
     }
 
     // ── Never-received report (FR-12.4) ──────────────────────────────────────
