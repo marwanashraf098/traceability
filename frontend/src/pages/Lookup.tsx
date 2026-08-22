@@ -329,10 +329,10 @@ function AdjustPanel({ pieceId, pieceStatus, onDone }: AdjustPanelProps) {
 
   return (
     <div className="mt-4 pt-4 border-t border-line space-y-2">
-      {/* ── Found It button (lost pieces) — Adjust stays alongside it: lost's only legal
-          edge is lost:available (Found It itself), so opening Adjust here has no
-          reachable pill. Preserved as-is (not removed) — appearance-only restyle must
-          not smuggle a behavior change; flagged for a follow-up decision instead. ── */}
+      {/* ── Found It button (lost pieces only) — no Adjust button here (approved by
+          Marawan): lost's only legal edge is lost:available, i.e. Found It itself, so
+          opening Adjust from a lost piece has no reachable pill — it was a dead
+          affordance, now removed rather than preserved. ── */}
       {isLost && !open && (
         <div className="flex flex-wrap gap-2">
           <button
@@ -342,13 +342,6 @@ function AdjustPanel({ pieceId, pieceStatus, onDone }: AdjustPanelProps) {
             className="btn-brand text-small"
           >
             {submitting ? <Spinner size={14} /> : t('adjust.foundIt')}
-          </button>
-          <button
-            data-testid="adjust-open-btn"
-            onClick={handleOpen}
-            className="btn-outline text-small"
-          >
-            {t('adjust.title')}
           </button>
         </div>
       )}

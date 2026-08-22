@@ -110,8 +110,10 @@ describe('FR-13 Adjust Panel', () => {
     expect(submitBtn).not.toBeDisabled()
   })
 
-  // fa3: lost piece shows both "Found It" and "Adjust" buttons
-  test('fa3 — lost piece: shows found-it button and adjust button', async () => {
+  // fa3: lost piece shows "Found It" only — no Adjust button (lost's only legal edge is
+  // lost:available, i.e. Found It itself; Adjust here would open onto zero reachable
+  // pills, so it's hidden rather than shown-but-dead — approved by Marawan).
+  test('fa3 — lost piece: shows found-it button, hides adjust button', async () => {
     vi.mocked(api.lookup).mockResolvedValue(makeLostPiece())
 
     renderWithProviders(<LookupPage />)
@@ -120,7 +122,7 @@ describe('FR-13 Adjust Panel', () => {
     await userEvent.keyboard('{Enter}')
 
     expect(await screen.findByTestId('found-it-btn')).toBeInTheDocument()
-    expect(screen.getByTestId('adjust-open-btn')).toBeInTheDocument()
+    expect(screen.queryByTestId('adjust-open-btn')).not.toBeInTheDocument()
   })
 
   // fa4: Found It button calls adjustPiece with toStatus=available
