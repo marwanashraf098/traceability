@@ -612,8 +612,14 @@
   "lookup": {
     "title": "بحث عن قطعة",
     "placeholder": "امسح أو اكتب باركود قطعة أو رقم تتبع…",
+    "scanPrompt": "امسح رمزًا، أو اكتب رقم قطعة أو طلب أو تتبع…",
+    "tryExamplesPrefix": "جرّب",
+    "tryExamplesSep": "، ",
+    "tryExamplesOr": "، أو ",
     "search": "بحث",
     "notFound": "غير موجود — تحقق من الباركود وأعد المحاولة",
+    "notFoundTitle": "لا توجد نتائج لـ \"{{query}}\"",
+    "notFoundHint": "تحقق من الرمز وأعد المحاولة — قد ينتمي إلى مستودع آخر.",
     "pieceHeader": "القطعة",
     "status": "الحالة",
     "variant": "المنتج",
@@ -621,12 +627,18 @@
     "order": "الطلب",
     "shipment": "الشحنة",
     "receivedAt": "تاريخ الاستلام",
+    "condition": "الحالة الفنية",
+    "conditionValue": {
+      "good": "جيدة",
+      "damaged": "تالفة"
+    },
     "receivingSession": "جلسة الاستلام",
     "timeline": "سجل الحضانة",
     "system": "النظام",
     "noTimeline": "لا توجد أحداث مسجلة بعد",
     "trackingResult": "الشحنة",
     "trackingPieces": "القطع في هذه الشحنة",
+    "orderResult": "الطلب",
     "noPieces": "لا توجد قطع مرتبطة بعد",
     "viewPiece": "عرض القطعة",
     "viewOrder": "عرض الطلب",
@@ -655,7 +667,10 @@
       "condemned_at_vendor": "تم تحديدها كتالفة لدى الجهة الخارجية (نقل)",
       "sold_offbook": "تم تحديدها كمباعة خارج السجل لدى الجهة الخارجية",
       "lost_at_vendor": "تم تحديدها كمفقودة لدى الجهة الخارجية",
-      "label_reprinted": "تمت إعادة طباعة الملصق"
+      "label_reprinted": "تمت إعادة طباعة الملصق",
+      "voided": "أُلغيت — أُزيلت من المخزون القابل للبيع",
+      "held": "تم تعليقها",
+      "unheld": "أُنهي التعليق — أصبحت متاحة"
     },
     "pieceStatus": {
       "available": "متاح",
@@ -670,7 +685,9 @@
       "lost": "مفقود",
       "destroyed": "مُتلف",
       "out_on_transfer": "خارج المخزون (نقل)",
-      "sold": "مباع (خارج السجل)"
+      "sold": "مباع (خارج السجل)",
+      "voided": "مُلغاة",
+      "on_hold": "معلّقة"
     }
   },
   "returns": {
@@ -1045,6 +1062,7 @@
   },
   "adjust": {
     "title": "تعديل القطعة",
+    "managerOnly": "تعديل — للمدراء فقط",
     "toStatus": "الحالة الجديدة",
     "reason": "السبب",
     "note": "ملاحظة",
@@ -1054,6 +1072,8 @@
     "foundIt": "تم العثور عليه",
     "foundItTitle": "تأكيد العثور على القطعة",
     "foundItDesc": "إعادة هذه القطعة المفقودة إلى حالة المتاح.",
+    "releaseFromHold": "إنهاء التعليق",
+    "releaseFromHoldDesc": "إعادة هذه القطعة إلى حالة المتاح.",
     "committedTitle": "القطعة مرتبطة بطلب",
     "committedBody": "هذه القطعة {{status}} حالياً للطلب {{orderNumber}}. قم بفكّ ارتباطها قبل التعديل.",
     "releaseBtn": "فكّ الارتباط بالطلب",
@@ -1064,12 +1084,19 @@
       "sample_giveaway": "عينة / هدية",
       "theft_suspected": "سرقة محتملة",
       "receiving_correction": "تصحيح استلام",
+      "receiving_overcount": "زيادة عند الاستلام",
+      "duplicate_entry": "إدخال مكرر",
+      "quality_check": "فحص جودة",
+      "quarantine": "حجر احترازي",
+      "repair": "إصلاح",
       "other": "أخرى"
     },
     "statusLabel": {
       "lost": "مفقودة",
       "damaged": "تالفة",
-      "destroyed": "مُتلَفة"
+      "destroyed": "مُتلَفة",
+      "void": "إلغاء",
+      "on_hold": "تعليق"
     }
   },
   "blocklist": {

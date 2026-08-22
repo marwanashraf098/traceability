@@ -56,6 +56,8 @@ const STATUS_TONE: Record<string, BadgeTone> = {
   created:                   'neutral',
   out_on_transfer:           'warning',
   sold:                      'neutral',
+  voided:                    'neutral',
+  on_hold:                   'warning',
 }
 
 export function Badge({

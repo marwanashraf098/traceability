@@ -27,7 +27,19 @@ public class LookupController {
         if (isPieceQuery(trimmed)) {
             return service.lookupPiece(trimmed, isWorker);
         }
-        return service.lookupTracking(trimmed);
+        // '#'-prefixed is unambiguously an order query — no tracking-number format uses '#'.
+        if (trimmed.startsWith("#")) {
+            return service.lookupOrder(trimmed);
+        }
+        // Bare digits / an arbitrary string are ambiguous — a Bosta AWB can also be a plain
+        // digit string (see isPieceQuery()'s javadoc). Preserve every existing tracking lookup
+        // unchanged by trying it FIRST; only fall back to an order-number lookup (bare '1042',
+        // or a full custom Shopify order name) when tracking finds nothing.
+        try {
+            return service.lookupTracking(trimmed);
+        } catch (LookupNotFoundException e) {
+            return service.lookupOrder(trimmed);
+        }
     }
 
     /**

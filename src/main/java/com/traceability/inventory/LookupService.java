@@ -43,6 +43,11 @@ public class LookupService {
             if ("available".equals(toStatus))      return "found_it";
             return "adjusted";
         }
+        // FR-13.x — void / on-hold. "voided" is terminal (no reverse edge); "held"/"unheld"
+        // are the two halves of one reversible hold cycle.
+        if ("voided".equals(eventType))            return "voided";
+        if ("held".equals(eventType))              return "held";
+        if ("unheld".equals(eventType))            return "unheld";
         if ("courier_update".equals(eventType)) {
             if ("delivered".equals(toStatus))                       return "courier_delivered";
             if ("with_courier".equals(toStatus))                    return "courier_picked_up";
@@ -66,7 +71,7 @@ public class LookupService {
         Map<String, Object> piece;
         try {
             piece = jdbc.queryForMap(
-                "SELECT p.id, p.barcode, p.short_code, p.status, p.created_at AS received_at, " +
+                "SELECT p.id, p.barcode, p.short_code, p.status, p.condition, p.created_at AS received_at, " +
                 "       v.id AS variant_id, v.title AS variant_title, v.sku, " +
                 "       pr.title AS product_title, " +
                 "       loc.id AS location_id, loc.name AS location_name, " +
@@ -177,6 +182,7 @@ public class LookupService {
         result.put("barcode",         piece.get("barcode"));
         result.put("shortCode",       piece.get("short_code"));
         result.put("status",          piece.get("status"));
+        result.put("condition",       piece.get("condition"));
         result.put("receivedAt",      piece.get("received_at"));
         result.put("variant",         variantMap);
         result.put("currentLocation", locationMap);
@@ -240,6 +246,50 @@ public class LookupService {
         result.put("orderNumber",    shipment.get("order_number"));
         result.put("internalState",  shipment.get("internal_state"));
         result.put("pieces",         pieceList);
+        return result;
+    }
+
+    // ── Order lookup (FR-13.x) ────────────────────────────────────────────────
+
+    /**
+     * Resolves '#1042', '1042', or a full Shopify order name to its order — IDENTITY ONLY
+     * (id + number), deliberately not a second order-detail data path. The full order detail
+     * (customer, items, shipments, hold state, derived status, etc.) already has exactly one
+     * tenant-scoped source — GET /api/v1/orders/{id} (OrderController.detail()) — which is
+     * what OrderDrawer calls; this method exists only to turn a typed order number into the
+     * id that endpoint needs, mirroring lookupTracking()'s "resolve then hand off" shape.
+     * The frontend opens the SAME OrderDrawer used everywhere else with the resolved id — see
+     * CLAUDE.md decision, approved by Marawan, on consolidating onto the existing order-detail
+     * path instead of a parallel lookup-specific fetch.
+     *
+     * orders.number is stored exactly as Shopify's "name" field, WITH the leading '#' (see
+     * ShopifySyncService — payload.path("name")) — so a bare-digit query is tried both as-is
+     * and with '#' prepended. No UNIQUE constraint exists on (tenant_id, number) (only
+     * (store_id, external_id) is unique) — ORDER BY placed_at DESC picks the most recent
+     * match, same "most recent wins" convention used elsewhere in this codebase for a
+     * non-unique lookup key.
+     */
+    @Transactional(readOnly = true)
+    public Map<String, Object> lookupOrder(String query) {
+        UUID tenantId = TenantContext.require();
+        String trimmed = query.trim();
+        String withHash = trimmed.startsWith("#") ? trimmed : "#" + trimmed;
+
+        record OrderRow(UUID id, String number) {}
+        OrderRow order = jdbc.query(
+            "SELECT id, number FROM orders " +
+            "WHERE tenant_id = ? AND number IN (?, ?) " +
+            "ORDER BY placed_at DESC NULLS LAST, id DESC LIMIT 1",
+            rs -> rs.next() ? new OrderRow(rs.getObject("id", UUID.class), rs.getString("number")) : null,
+            tenantId, trimmed, withHash);
+        if (order == null) {
+            throw new LookupNotFoundException("ORDER_NOT_FOUND", query);
+        }
+
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("type",        "order");
+        result.put("orderId",     order.id().toString());
+        result.put("orderNumber", order.number());
         return result;
     }
 }

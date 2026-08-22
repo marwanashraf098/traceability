@@ -614,8 +614,14 @@
   "lookup": {
     "title": "Piece Lookup",
     "placeholder": "Scan or type a piece barcode or tracking number…",
+    "scanPrompt": "Scan a barcode, or type a piece, order, or tracking number…",
+    "tryExamplesPrefix": "Try",
+    "tryExamplesSep": ", ",
+    "tryExamplesOr": ", or ",
     "search": "Look up",
     "notFound": "Not found — check the barcode and try again",
+    "notFoundTitle": "Nothing found for \"{{query}}\"",
+    "notFoundHint": "Check the code and try again — it may belong to another warehouse.",
     "pieceHeader": "Piece",
     "status": "Status",
     "variant": "Variant",
@@ -623,12 +629,18 @@
     "order": "Order",
     "shipment": "Shipment",
     "receivedAt": "Received",
+    "condition": "Condition",
+    "conditionValue": {
+      "good": "Good",
+      "damaged": "Damaged"
+    },
     "receivingSession": "Receiving session",
     "timeline": "Custody history",
     "system": "System",
     "noTimeline": "No events recorded yet",
     "trackingResult": "Shipment",
     "trackingPieces": "Pieces in this shipment",
+    "orderResult": "Order",
     "noPieces": "No pieces linked yet",
     "viewPiece": "View piece",
     "viewOrder": "View order",
@@ -660,7 +672,10 @@
       "condemned_at_vendor": "Marked damaged by vendor (transfer)",
       "sold_offbook": "Marked sold off-book at vendor",
       "lost_at_vendor": "Marked lost at vendor",
-      "label_reprinted": "Label reprinted"
+      "label_reprinted": "Label reprinted",
+      "voided": "Voided — removed from sellable stock",
+      "held": "Placed on hold",
+      "unheld": "Released from hold — back to available"
     },
     "pieceStatus": {
       "available": "Available",
@@ -675,7 +690,9 @@
       "lost": "Lost",
       "destroyed": "Destroyed",
       "out_on_transfer": "Out on Transfer",
-      "sold": "Sold (Off-book)"
+      "sold": "Sold (Off-book)",
+      "voided": "Voided",
+      "on_hold": "On Hold"
     }
   },
   "returns": {
@@ -1050,6 +1067,7 @@
   },
   "adjust": {
     "title": "Adjust Piece",
+    "managerOnly": "Adjust — manager+ only",
     "toStatus": "New status",
     "reason": "Reason",
     "note": "Note",
@@ -1059,6 +1077,8 @@
     "foundIt": "Found It",
     "foundItTitle": "Mark as Found",
     "foundItDesc": "Restore this lost piece to Available.",
+    "releaseFromHold": "Release from Hold",
+    "releaseFromHoldDesc": "Return this piece to Available.",
     "committedTitle": "Piece is committed to an order",
     "committedBody": "This piece is currently {{status}} for order {{orderNumber}}. Release it from the order before adjusting.",
     "releaseBtn": "Release from order",
@@ -1069,12 +1089,19 @@
       "sample_giveaway": "Sample / giveaway",
       "theft_suspected": "Theft suspected",
       "receiving_correction": "Receiving correction",
+      "receiving_overcount": "Receiving overcount",
+      "duplicate_entry": "Duplicate entry",
+      "quality_check": "Quality check",
+      "quarantine": "Quarantine",
+      "repair": "Repair",
       "other": "Other"
     },
     "statusLabel": {
       "lost": "Lost",
       "damaged": "Damaged",
-      "destroyed": "Destroyed"
+      "destroyed": "Destroyed",
+      "void": "Void",
+      "on_hold": "On Hold"
     }
   },
   "blocklist": {

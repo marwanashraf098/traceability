@@ -399,6 +399,7 @@ export interface PieceLookupResult {
   id: string
   barcode: string
   status: string
+  condition: 'good' | 'damaged'
   receivedAt: string
   variant: LookupVariant
   currentLocation: { id: string; name: string } | null
@@ -418,7 +419,16 @@ export interface TrackingLookupResult {
   pieces: Array<{ pieceId: string; barcode: string; status: string }>
 }
 
-export type LookupResult = PieceLookupResult | TrackingLookupResult
+// Identity only — deliberately not a second order-detail data path. The frontend
+// resolves the order number here, then opens the SAME OrderDrawer (getOrder()/
+// getOrderTimeline() -> GET /api/v1/orders/{id}) used everywhere else in the app.
+export interface OrderLookupResult {
+  type: 'order'
+  orderId: string
+  orderNumber: string | null
+}
+
+export type LookupResult = PieceLookupResult | TrackingLookupResult | OrderLookupResult
 
 export function lookup(q: string) {
   return request<LookupResult>(`/lookup?q=${encodeURIComponent(q)}`)
@@ -1033,6 +1043,36 @@ export function adjustPiece(
 
 export function releasePieceForAdjust(pieceId: string) {
   return request<void>(`/pieces/${pieceId}/release-for-adjust`, { method: 'POST' })
+}
+
+// ── Void / On Hold (FR-13.x) ───────────────────────────────────────────────────
+
+export type VoidReason = 'receiving_overcount' | 'duplicate_entry' | 'other'
+
+export const VOID_REASONS: VoidReason[] = ['receiving_overcount', 'duplicate_entry', 'other']
+
+export type HoldReason = 'quality_check' | 'quarantine' | 'repair' | 'other'
+
+export const HOLD_REASONS: HoldReason[] = ['quality_check', 'quarantine', 'repair', 'other']
+
+export function voidPiece(pieceId: string, reason: VoidReason, note?: string) {
+  return request<void>(`/pieces/${pieceId}/void`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ reason, note }),
+  })
+}
+
+export function holdPiece(pieceId: string, reason: HoldReason, note?: string) {
+  return request<{ holdEventId: string }>(`/pieces/${pieceId}/hold`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ reason, note }),
+  })
+}
+
+export function unholdPiece(pieceId: string) {
+  return request<void>(`/pieces/${pieceId}/unhold`, { method: 'POST' })
 }
 
 // ── Blocklist (FR-7.9) ────────────────────────────────────────────────────────
