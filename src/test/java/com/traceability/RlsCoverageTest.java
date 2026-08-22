@@ -104,7 +104,12 @@ class RlsCoverageTest {
             "/api/v1/activity/recent",
             "/api/v1/exchanges",
             "/api/v1/overview/trends",
-            "/api/v1/overview/top-skus"
+            "/api/v1/overview/top-skus",
+            "/api/v1/inventory/stock",
+            "/api/v1/inventory/variants/{variantId}/breakdown",
+            "/api/v1/inventory/breakdown",
+            "/api/v1/inventory/pieces",
+            "/api/v1/inventory/movements"
     );
 
     // ── Patterns consciously excluded, with reasons ────────────────────────────
@@ -951,6 +956,173 @@ class RlsCoverageTest {
 
         jdbc.update("DELETE FROM transfers WHERE id = ?", transferId);
         jdbc.update("DELETE FROM locations WHERE id = ?", destId);
+    }
+
+    // ── Phase A: Inventory backend endpoints ────────────────────────────────────
+
+    @Test
+    void inventoryStock_reflectsSeededPiece_andNullsCommittedWhenLocationScoped() {
+        String pieceId = UlidGenerator.generate();
+        jdbc.update("INSERT INTO pieces (id, tenant_id, variant_id, barcode, short_code, status, current_location_id) " +
+                    "VALUES (?, ?, ?, ?, 'P' || LPAD((abs(hashtext(?)) % 999999 + 1)::text, 6, '0'), " +
+                    "        'available'::piece_status, ?)",
+                    pieceId, tenantId, variantId, "PC-" + pieceId, pieceId, locationId);
+
+        // Tenant-wide: committed present (0, no open orders), on_hand/available = 1.
+        ResponseEntity<Map> resp = get("/api/v1/inventory/stock", Map.class);
+        assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.OK);
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> items = (List<Map<String, Object>>) resp.getBody().get("items");
+        Map<String, Object> variant = items.stream()
+            .flatMap(p -> ((List<Map<String, Object>>) p.get("variants")).stream())
+            .filter(v -> variantId.toString().equals(v.get("id")))
+            .findFirst()
+            .orElseThrow(() -> new AssertionError("seeded variant not found in /inventory/stock"));
+        assertThat(((Number) variant.get("onHand")).longValue()).isEqualTo(1L);
+        assertThat(((Number) variant.get("committed")).longValue()).isEqualTo(0L);
+        assertThat(((Number) variant.get("available")).longValue()).isEqualTo(1L);
+        assertThat(variant.get("shopifySync")).isEqualTo("none");
+
+        // Location-scoped: committed must be absent (null), not a fake 0.
+        ResponseEntity<Map> locResp = get("/api/v1/inventory/stock?locationId=" + locationId, Map.class);
+        assertThat(locResp.getStatusCode()).isEqualTo(HttpStatus.OK);
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> locItems = (List<Map<String, Object>>) locResp.getBody().get("items");
+        Map<String, Object> locVariant = locItems.stream()
+            .flatMap(p -> ((List<Map<String, Object>>) p.get("variants")).stream())
+            .filter(v -> variantId.toString().equals(v.get("id")))
+            .findFirst()
+            .orElseThrow(() -> new AssertionError("seeded variant not found in location-scoped /inventory/stock"));
+        assertThat(locVariant.get("committed"))
+            .as("committed must be null when locationId is set — it has no location")
+            .isNull();
+        assertThat(((Number) locVariant.get("onHand")).longValue()).isEqualTo(1L);
+        assertThat(((Number) locVariant.get("available")).longValue()).isEqualTo(1L);
+    }
+
+    @Test
+    void inventoryVariantBreakdown_reflectsSeededPieceAcrossLocations() {
+        String pieceId = UlidGenerator.generate();
+        jdbc.update("INSERT INTO pieces (id, tenant_id, variant_id, barcode, short_code, status, current_location_id) " +
+                    "VALUES (?, ?, ?, ?, 'P' || LPAD((abs(hashtext(?)) % 999999 + 1)::text, 6, '0'), " +
+                    "        'available'::piece_status, ?)",
+                    pieceId, tenantId, variantId, "PC-" + pieceId, pieceId, locationId);
+
+        ResponseEntity<Map> resp = get("/api/v1/inventory/variants/" + variantId + "/breakdown", Map.class);
+        assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(((Number) resp.getBody().get("onHand")).longValue()).isEqualTo(1L);
+        assertThat(((Number) resp.getBody().get("committed")).longValue()).isEqualTo(0L);
+        assertThat(((Number) resp.getBody().get("available")).longValue()).isEqualTo(1L);
+
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> locations = (List<Map<String, Object>>) resp.getBody().get("locations");
+        Map<String, Object> loc = locations.stream()
+            .filter(l -> locationId.toString().equals(l.get("locationId")))
+            .findFirst()
+            .orElseThrow(() -> new AssertionError("fixture location not in breakdown"));
+        assertThat(((Number) loc.get("onHand")).longValue()).isEqualTo(1L);
+        assertThat(((Number) loc.get("available")).longValue()).isEqualTo(1L);
+
+        assertThat(resp.getBody()).containsKey("recentMovements");
+    }
+
+    @Test
+    void inventoryBreakdown_reflectsSeededPhaseCounts() {
+        String availId  = UlidGenerator.generate();
+        String courierId = UlidGenerator.generate();
+        String damagedId = UlidGenerator.generate();
+        jdbc.update("INSERT INTO pieces (id, tenant_id, variant_id, barcode, short_code, status) " +
+                    "VALUES (?, ?, ?, ?, 'P' || LPAD((abs(hashtext(?)) % 999999 + 1)::text, 6, '0'), 'available'::piece_status)",
+                    availId, tenantId, variantId, "PC-" + availId, availId);
+        jdbc.update("INSERT INTO pieces (id, tenant_id, variant_id, barcode, short_code, status) " +
+                    "VALUES (?, ?, ?, ?, 'P' || LPAD((abs(hashtext(?)) % 999999 + 1)::text, 6, '0'), 'with_courier'::piece_status)",
+                    courierId, tenantId, variantId, "PC-" + courierId, courierId);
+        jdbc.update("INSERT INTO pieces (id, tenant_id, variant_id, barcode, short_code, status) " +
+                    "VALUES (?, ?, ?, ?, 'P' || LPAD((abs(hashtext(?)) % 999999 + 1)::text, 6, '0'), 'damaged'::piece_status)",
+                    damagedId, tenantId, variantId, "PC-" + damagedId, damagedId);
+
+        ResponseEntity<Map> resp = get("/api/v1/inventory/breakdown", Map.class);
+        assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(((Number) resp.getBody().get("inWarehouse")).longValue()).isGreaterThanOrEqualTo(1L);
+        assertThat(((Number) resp.getBody().get("onTheWayOut")).longValue()).isGreaterThanOrEqualTo(1L);
+        assertThat(((Number) resp.getBody().get("problem")).longValue()).isGreaterThanOrEqualTo(1L);
+    }
+
+    @Test
+    void inventoryPieces_returnsSeededPieceWithOrderAndTracking() {
+        UUID orderId = UUID.randomUUID();
+        String pieceId = UlidGenerator.generate();
+        jdbc.update("INSERT INTO orders (id, tenant_id, store_id, external_id, number, status, on_hold) " +
+                    "VALUES (?, ?, ?, 'EXT-CVG-PIECES', '#CVG-PIECES', 'new'::order_status, false)",
+                    orderId, tenantId, storeId);
+        jdbc.update("INSERT INTO shipments (tenant_id, order_id, provider, tracking_number, internal_state, shipment_leg) " +
+                    "VALUES (?, ?, 'bosta', 'TN-CVG-PIECES', 'created'::shipment_internal_state, 'forward')",
+                    tenantId, orderId);
+        jdbc.update("INSERT INTO pieces (id, tenant_id, variant_id, barcode, short_code, status, " +
+                    "    current_location_id, current_order_id) " +
+                    "VALUES (?, ?, ?, ?, 'P' || LPAD((abs(hashtext(?)) % 999999 + 1)::text, 6, '0'), " +
+                    "        'reserved'::piece_status, ?, ?)",
+                    pieceId, tenantId, variantId, "PC-" + pieceId, pieceId, locationId, orderId);
+
+        ResponseEntity<Map> resp = get("/api/v1/inventory/pieces?status=reserved", Map.class);
+        assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.OK);
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> items = (List<Map<String, Object>>) resp.getBody().get("items");
+        Map<String, Object> row = items.stream()
+            .filter(r -> pieceId.equals(r.get("id")))
+            .findFirst()
+            .orElseThrow(() -> new AssertionError("seeded piece not found in /inventory/pieces"));
+        assertThat(row.get("orderNumber")).isEqualTo("#CVG-PIECES");
+        assertThat(row.get("trackingNumber")).isEqualTo("TN-CVG-PIECES");
+        assertThat(row.get("locationName")).isNotNull();
+
+        jdbc.update("DELETE FROM shipments WHERE order_id = ?", orderId);
+    }
+
+    @Test
+    void inventoryMovements_unionsAdjustmentAndStockTakeRows() {
+        UUID sessionId = UUID.randomUUID();
+        UUID batchId = UUID.randomUUID();
+        jdbc.update("INSERT INTO shopify_inventory_adjustments " +
+                    "(tenant_id, batch_id, variant_id, location_id, delta, trigger_type, trigger_id, status) " +
+                    "VALUES (?, ?, ?, ?, 5, 'receiving_session', 'CVG-RCPT-1', 'applied')",
+                    tenantId, batchId, variantId, locationId);
+
+        jdbc.update("INSERT INTO stock_take_sessions (id, tenant_id, status, scope_type, location_id, opened_by, finalized_by, finalized_at) " +
+                    "VALUES (?, ?, 'finalized', 'all', ?, ?, ?, now())",
+                    sessionId, tenantId, locationId, ownerUserId, ownerUserId);
+        jdbc.update("INSERT INTO stock_take_shopify_syncs (id, tenant_id, session_id, status, payload) " +
+                    "VALUES (gen_random_uuid(), ?, ?, 'pushed', " +
+                    "        ('{\"locationId\":\"' || ? || '\",\"deltas\":{\"' || ? || '\":3}}')::jsonb)",
+                    tenantId, sessionId, locationId, variantId);
+
+        try {
+            ResponseEntity<Map> resp = get("/api/v1/inventory/movements", Map.class);
+            assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.OK);
+            @SuppressWarnings("unchecked")
+            List<Map<String, Object>> items = (List<Map<String, Object>>) resp.getBody().get("items");
+
+            Map<String, Object> adjRow = items.stream()
+                .filter(r -> "adjustment".equals(r.get("source")) && variantId.toString().equals(r.get("variantId")))
+                .findFirst()
+                .orElseThrow(() -> new AssertionError("seeded adjustment row not found in /inventory/movements"));
+            assertThat(((Number) adjRow.get("delta")).intValue()).isEqualTo(5);
+            assertThat(adjRow.get("syncStatus")).isEqualTo("synced");
+
+            Map<String, Object> stRow = items.stream()
+                .filter(r -> "stock_take".equals(r.get("source")))
+                .findFirst()
+                .orElseThrow(() -> new AssertionError("seeded stock_take row not found in /inventory/movements"));
+            assertThat(((Number) stRow.get("delta")).intValue())
+                .as("stock-take delta must be the NEGATED sum of write-off magnitudes (a decrement)")
+                .isEqualTo(-3);
+            assertThat(stRow.get("syncStatus")).isEqualTo("synced");
+            assertThat(stRow.get("variantId")).isNull();
+        } finally {
+            jdbc.update("DELETE FROM shopify_inventory_adjustments WHERE batch_id = ?", batchId);
+            jdbc.update("DELETE FROM stock_take_shopify_syncs WHERE session_id = ?", sessionId);
+            jdbc.update("DELETE FROM stock_take_sessions WHERE id = ?", sessionId);
+        }
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────

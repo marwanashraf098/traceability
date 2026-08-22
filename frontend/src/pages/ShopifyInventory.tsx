@@ -10,7 +10,7 @@ function authHeaders(): Record<string, string> {
 interface Adjustment {
   id: number
   batch_id: string
-  trigger_type: 'receiving_session' | 'return_inspection'
+  trigger_type: 'receiving_session' | 'return_inspection' | 'damage_move' | 'initial_seed'
   trigger_id: string
   sku: string
   variant_title: string
