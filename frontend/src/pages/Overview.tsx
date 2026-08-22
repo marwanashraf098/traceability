@@ -310,7 +310,7 @@ function AlertsPanel({
       key: 'low_stock', icon: PackageX, tone: 'warning',
       descriptionEn: t('overview.needsAttention.lowStock', { lng: 'en' }),
       descriptionAr: t('overview.needsAttention.lowStock', { lng: 'ar' }),
-      actionUrl: '/catalog', ageSeconds: 0,
+      actionUrl: '/inventory?lowStockOnly=true', ageSeconds: 0,
     })
   }
   if (unmatchedDelivery[0]) {

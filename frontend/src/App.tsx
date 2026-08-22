@@ -13,7 +13,6 @@ import Login from './pages/Login'
 import Signup from './pages/Signup'
 import Overview from './pages/Overview'
 import Orders from './pages/Orders'
-import Catalog from './pages/Catalog'
 import Receiving from './pages/Receiving'
 import Fulfill from './pages/Fulfill'
 import GatherList from './pages/GatherList'
@@ -34,7 +33,6 @@ import Users from './pages/Users'
 import Onboarding from './pages/Onboarding'
 import Inventory from './pages/Inventory'
 import PickupSessions from './pages/PickupSessions'
-import ShopifyInventory from './pages/ShopifyInventory'
 import Locations from './pages/Locations'
 import Privacy from './pages/Privacy'
 import Terms from './pages/Terms'
@@ -118,14 +116,8 @@ export default function App() {
             </RequireAuth>
           }
         />
-        <Route
-          path="/catalog"
-          element={
-            <RequireAuth>
-              <Layout><Catalog /></Layout>
-            </RequireAuth>
-          }
-        />
+        {/* Absorbed into /inventory Tab 1 (Stock by location) — Phase B consolidation. */}
+        <Route path="/catalog" element={<Navigate to="/inventory" replace />} />
         <Route
           path="/receiving"
           element={
@@ -282,14 +274,8 @@ export default function App() {
             </RequireAuth>
           }
         />
-        <Route
-          path="/shopify-inventory"
-          element={
-            <RequireAuth>
-              <Layout><ShopifyInventory /></Layout>
-            </RequireAuth>
-          }
-        />
+        {/* Absorbed into /inventory Tab 3 (Movement ledger) — Phase B consolidation. */}
+        <Route path="/shopify-inventory" element={<Navigate to="/inventory" replace />} />
         <Route
           path="/locations"
           element={

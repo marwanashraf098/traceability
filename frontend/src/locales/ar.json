@@ -150,6 +150,71 @@
   },
   "inventory": {
     "title": "المخزون",
+    "tabs": {
+      "stock": "المخزون حسب الموقع",
+      "breakdown": "توزيع المخزون",
+      "ledger": "سجل الحركة"
+    },
+    "stock": {
+      "searchPlaceholder": "ابحث عن SKU أو منتج",
+      "allLocations": "كل المواقع",
+      "lowStock": "مخزون منخفض",
+      "empty": "لا توجد منتجات",
+      "variantCount": "{{count}} خيار",
+      "loadMore": "تحميل المزيد",
+      "footerHint": "المنتجات مطوية افتراضيًا · البحث وفلتر المخزون المنخفض يوسّعان المنتجات المطابقة فقط · اضغط على خيار لعرض توزيعه حسب الموقع.",
+      "committedTenantWideTooltip": "المحجوز هو الطلب على مستوى المستأجر بالكامل — لا يتبع موقعًا محددًا حتى تُمسح القطعة، لذلك لا يتغير عند التصفية حسب الموقع.",
+      "col": {
+        "product": "المنتج",
+        "onHand": "المتوفر",
+        "committed": "محجوز",
+        "available": "متاح",
+        "shopify": "شوبيفاي"
+      },
+      "sync": {
+        "synced": "متزامن",
+        "pending": "قيد الانتظار",
+        "failed": "فشل",
+        "none": "لا يوجد"
+      }
+    },
+    "drawer": {
+      "close": "إغلاق",
+      "error": "تعذّر تحميل توزيع هذا الخيار",
+      "matrixTitle": "المخزون حسب الموقع",
+      "committedTotal": "محجوز {{count}}",
+      "committedTenantWide": "المحجوز يُعرض هنا مرة واحدة على مستوى المستأجر — لا يوجد له توزيع حسب الموقع.",
+      "colLocation": "الموقع",
+      "colAvailable": "متاح",
+      "colOnHand": "متوفر",
+      "total": "الإجمالي",
+      "recentMovements": "آخر الحركات",
+      "noMovements": "لا توجد حركات حديثة لهذا الخيار"
+    },
+    "breakdown": {
+      "phase": {
+        "inWarehouse": "في المخزن",
+        "onTheWayOut": "في طريق الخروج",
+        "delivered": "تم التسليم (٣٠ يومًا)",
+        "comingBack": "قيد الإرجاع",
+        "problem": "مشكلة"
+      },
+      "pieceCount": "{{count}} قطعة",
+      "noPieces": "لا توجد قطع بهذه الحالة",
+      "timeline": "السجل",
+      "loadMore": "تحميل المزيد"
+    },
+    "ledger": {
+      "empty": "لا توجد حركات مسجّلة بعد",
+      "stockTakeSource": "جرد المخزون",
+      "stockTakeSession": "شطب جرد المخزون — جلسة",
+      "loadMore": "تحميل المزيد",
+      "sync": {
+        "synced": "متزامن",
+        "pending": "قيد الانتظار",
+        "failed": "فشل"
+      }
+    },
     "live": "المخزون الحي",
     "liveNote": "أعداد القطع الحالية حسب الحالة",
     "window30d": "آخر 30 يومًا",

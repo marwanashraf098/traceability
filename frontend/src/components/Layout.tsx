@@ -3,8 +3,8 @@ import { useTranslation } from 'react-i18next'
 import { useState, useRef, useEffect, ReactNode } from 'react'
 import type { LucideIcon } from 'lucide-react'
 import {
-  LayoutDashboard, ShoppingBag, List, Inbox, ClipboardList, PackageCheck,
-  Truck, Repeat, Undo2, AlertTriangle, Plug, MapPin, Store, UserPlus,
+  LayoutDashboard, ShoppingBag, Warehouse, Inbox, ClipboardList, PackageCheck,
+  Truck, Repeat, Undo2, AlertTriangle, Plug, MapPin, UserPlus,
   Users, Settings, LogOut, Globe, Search, ChevronDown, Bell,
 } from 'lucide-react'
 import { getRoleFromToken, request, getMe, getExceptionsCount, type Me } from '../api'
@@ -134,7 +134,7 @@ export default function Layout({ children }: { children: ReactNode }) {
         <nav className="flex-1 overflow-y-auto py-3 flex flex-col gap-0.5">
           <SideNavLink to="/overview"    icon={LayoutDashboard} label={t('nav.overview')} />
           <SideNavLink to="/orders"      icon={ShoppingBag}     label={t('nav.orders')} />
-          <SideNavLink to="/catalog"     icon={List}            label={t('nav.catalog')} />
+          <SideNavLink to="/inventory"   icon={Warehouse}       label={t('nav.catalog')} />
           <SideNavLink to="/receiving"   icon={Inbox}           label={t('nav.receiving')} />
           <SideNavLink to="/stock-take"  icon={ClipboardList}   label={t('nav.stocktake')} />
           <SideNavLink to="/fulfill"     icon={PackageCheck}    label={t('nav.fulfill')} />
@@ -150,7 +150,6 @@ export default function Layout({ children }: { children: ReactNode }) {
                 {t('nav.manager')}
               </div>
               <SideNavLink to="/locations"         icon={MapPin}   label={t('nav.locations')} />
-              <SideNavLink to="/shopify-inventory"  icon={Store}    label={t('nav.shopifyInventory')} />
               <SideNavLink to="/onboarding"         icon={UserPlus} label={t('nav.onboarding')} />
               <SideNavLink to="/users"              icon={Users}    label={t('nav.users')} />
               <SideNavLink to="/settings"           icon={Settings} label={t('nav.settings')} />
