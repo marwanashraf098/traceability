@@ -1091,7 +1091,9 @@
     },
     "trigger": {
       "receiving_session": "Receiving",
-      "return_inspection": "Return"
+      "return_inspection": "Return",
+      "damage_move": "Damage",
+      "initial_seed": "Initial seed"
     },
     "col": {
       "product": "Product / Variant",
