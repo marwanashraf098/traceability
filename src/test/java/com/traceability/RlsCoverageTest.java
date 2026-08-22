@@ -612,14 +612,15 @@ class RlsCoverageTest {
 
     @Test
     void catalog_committedAndAvailable_reflectSeededOrder() {
-        // Positive control: an in-window order (status=ready_to_pick) contributes to
-        // committed; a piece at the (is_fulfillment=true) location contributes to on_hand.
+        // Positive control: PHASE 0 — 'new' is the only orders.status value the
+        // committed window reads (VariantStockService); a piece at the
+        // (is_fulfillment=true) location contributes to on_hand.
         UUID orderId     = UUID.randomUUID();
         UUID orderItemId = UUID.randomUUID();
         String pieceId   = UlidGenerator.generate();
 
         jdbc.update("INSERT INTO orders (id, tenant_id, store_id, external_id, status, on_hold) " +
-                    "VALUES (?, ?, ?, 'EXT-CVG-CATALOG', 'ready_to_pick'::order_status, false)",
+                    "VALUES (?, ?, ?, 'EXT-CVG-CATALOG', 'new'::order_status, false)",
                     orderId, tenantId, storeId);
         jdbc.update("INSERT INTO order_items (id, tenant_id, order_id, variant_id, quantity) " +
                     "VALUES (?, ?, ?, ?, 2)", orderItemId, tenantId, orderId, variantId);
@@ -645,6 +646,46 @@ class RlsCoverageTest {
         assertThat(((Number) variant.get("available")).longValue())
             .as("available = on_hand(1) - committed(2)")
             .isEqualTo(-1L);
+
+        // PHASE 0: a piece already scanned/allocated (allocation status='active') to a
+        // second 'new' order's line must net that line's contribution to zero — proves
+        // VariantStockService's allocation-netting under the real HTTP/RLS path, not just
+        // an in-process unit test. Total committed stays 2 (order1's un-allocated line
+        // only) — order2's fully-covered line adds nothing.
+        UUID order2Id     = UUID.randomUUID();
+        UUID order2ItemId = UUID.randomUUID();
+        String piece2Id   = UlidGenerator.generate();
+        jdbc.update("INSERT INTO orders (id, tenant_id, store_id, external_id, status, on_hold) " +
+                    "VALUES (?, ?, ?, 'EXT-CVG-CATALOG-SCANNED', 'new'::order_status, false)",
+                    order2Id, tenantId, storeId);
+        jdbc.update("INSERT INTO order_items (id, tenant_id, order_id, variant_id, quantity) " +
+                    "VALUES (?, ?, ?, ?, 1)", order2ItemId, tenantId, order2Id, variantId);
+        jdbc.update("INSERT INTO pieces (id, tenant_id, variant_id, barcode, short_code, status, current_location_id) " +
+                    "VALUES (?, ?, ?, ?, 'P' || LPAD((abs(hashtext(?)) % 999999 + 1)::text, 6, '0'), " +
+                    "        'reserved'::piece_status, ?)",
+                    piece2Id, tenantId, variantId, "PC-" + piece2Id, piece2Id, locationId);
+        jdbc.update("INSERT INTO allocations (id, tenant_id, order_item_id, piece_id, status) " +
+                    "VALUES (gen_random_uuid(), ?, ?, ?, 'active'::allocation_status)",
+                    tenantId, order2ItemId, piece2Id);
+        try {
+            ResponseEntity<Map> scannedResp = get("/api/v1/catalog", Map.class);
+            @SuppressWarnings("unchecked")
+            List<Map<String, Object>> scannedProducts =
+                (List<Map<String, Object>>) scannedResp.getBody().get("products");
+            Map<String, Object> scannedVariant = scannedProducts.stream()
+                .flatMap(p -> ((List<Map<String, Object>>) p.get("variants")).stream())
+                .filter(v -> variantId.toString().equals(v.get("id")))
+                .findFirst()
+                .orElseThrow(() -> new AssertionError("seeded variant not found in catalog response"));
+            assertThat(((Number) scannedVariant.get("committed")).longValue())
+                .as("order2's active allocation must net its line to 0; total committed unchanged at 2")
+                .isEqualTo(2L);
+        } finally {
+            jdbc.update("DELETE FROM allocations WHERE order_item_id = ?", order2ItemId);
+            jdbc.update("DELETE FROM pieces WHERE id = ?", piece2Id);
+            jdbc.update("DELETE FROM order_items WHERE id = ?", order2ItemId);
+            jdbc.update("DELETE FROM orders WHERE id = ?", order2Id);
+        }
 
         // imageUrl null case: the shared P-CVG fixture (productId) never sets image_url —
         // must surface as JSON null, not an empty string or a missing key.
