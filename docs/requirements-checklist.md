@@ -124,10 +124,13 @@ One line per requirement · [M] Must / [S] Should / [C] Could · use as the buil
 - [x] 13.2 [M] Reserved/Packed pieces guarded: must release from order first [Day 34: PieceCommittedException 409 with orderId+orderNumber; releaseForAdjust reuses unscan/unpackPiece paths; two explicit steps]
 - [x] 13.3 [M] Reverse ("found it"): Lost→Available with reason; history never rewritten [Day 34: same /adjust endpoint toStatus=available; terminal 409; append-only events confirmed in adj6 test]
 - [x] 13.4 [S] Bulk adjustment by scan session — subsumed by FR-21 stock-take (see below)
+- [x] 13.5 [M] Void: receiving-overcount/duplicate-entry correction, terminal (available:voided only), NOT a loss — excluded from all three loss-reporting sites by construction (new enum value, literal status='lost' filters never match it), not a filter added after the fact [2026-08-23: PieceAdjustService.voidPiece(); Shopify decrement conditional on the piece's originating receiving increment having actually applied, skipped+audited otherwise; see PROGRESS.md FR-13.x entry]
+- [x] 13.6 [M] On Hold: reversible QC/quarantine — enter (-1 Shopify decrement) / exit (+1 via the existing increment path) / escalate to Lost·Damaged·Destroyed with NO second Shopify call (piece already left the sellable pool at hold-enter) [2026-08-23: PieceAdjustService.hold()/unhold(); InventoryLedger.ALLOWED gained available:on_hold + on_hold:{available,damaged,lost,destroyed}]
+- [x] 13.7 [M] Failed void/hold Shopify decrement surfaced, not silent: new 'void_hold_sync_failed' CRITICAL exception detector (excludes the correct 'skipped' outcome) + existing resolve() flow + manual one-shot repush [2026-08-23: ExceptionService.detectVoidHoldSyncFailed(), ShopifyInventoryService.repushFailedVoidOrHold(), POST /exceptions/void-hold-sync/repush; full auto-repush parity with stock-take's failed_ambiguous tail deliberately deferred]
 
 ## FR-14 Piece Lookup (showcase)
-- [x] 14.1 [M] Global scan/type lookup → piece page ≤ 1s
-- [x] 14.2 [M] Piece page: variant, status, location, order/shipment links, receiving origin, full timeline
+- [x] 14.1 [M] Global scan/type lookup → piece page ≤ 1s [2026-08-23: added order-number resolution — '#1042'/bare digits/full Shopify order name — LookupController falls back to LookupService.lookupOrder() only after an unambiguous piece/tracking match fails, zero regression on existing AWB lookups; opens the SAME OrderDrawer the Orders list uses (GET /orders/{id}), not a parallel order-detail fetch]
+- [x] 14.2 [M] Piece page: variant, status, location, order/shipment links, receiving origin, full timeline [2026-08-23: added Condition field, backed by new pieces.condition column (V81), set wherever a piece becomes damaged via either disposition path]
 - [x] 14.3 [M] Timeline human-phrased, newest-first, viewer's language
 - [x] 14.4 [M] AWB barcode in lookup → shipment/order page with its pieces
 - [x] 14.5 [M] Bidirectional navigation order↔piece↔shipment

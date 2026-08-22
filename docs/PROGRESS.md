@@ -4,6 +4,75 @@
 
 ## Current state
 
+**FR-13.x Void / On Hold + FR-14 Lookup restyle + order-number lookup shipped (2026-08-23).**
+Two-phase build (Step 0 diagnosis → Phase 1 backend gate → Phase 2 frontend), both gates
+reviewed and approved by Marawan before proceeding.
+
+- **Void** (`PieceAdjustService.voidPiece()`) — receiving-overcount/duplicate-entry
+  correction, terminal (`available:voided` only, no reverse edge), explicitly NOT a loss.
+  Excluded from all three loss-reporting sites (`OverviewService.exceptionsRaw`,
+  `ExceptionService.detectLost`, `InventoryStockController.breakdown()`) by construction —
+  they all filter on literal `status='lost'`/`'damaged'`, never a negated set, so a genuinely
+  new enum value is invisible to them without any code change. Proven, not assumed: RTC
+  reverted `voided`→`lost` in the test's own seed helper and watched all three assertions
+  flip to failing before restoring.
+- **On Hold** (`PieceAdjustService.hold()`/`unhold()`) — reversible QC/quarantine.
+  `available:on_hold` (−1 Shopify decrement) / `on_hold:available` (+1 via the EXISTING
+  increment path, not a new gateway method) / escalation `on_hold:{damaged,lost,destroyed}`
+  with **zero** Shopify call (the piece already left the sellable pool at hold-enter — a
+  second decrement here would be a real double-count bug). `hold()` generates a
+  `holdEventId` per cycle and threads it through both the `held` event's metadata and the
+  Shopify claim's `trigger_id` (`pieceId:holdEventId`) — required because a piece can be
+  held/released/held again, and `piece_id` alone would collide with a prior cycle's
+  already-`applied` claim row.
+- **FR-21 §7 invariant amended (approved 2026-08-23), not violated** — "sole sanctioned
+  decrement" became a **named, closed set of three** single-attempt gateway methods:
+  `pushStockTakeWriteOff` (unchanged), `pushVoidCorrection`, `pushHoldEnter`. Each is its
+  own method, own call site, no shared decrement helper. A `NamedDecrementSetGuardTest`
+  source-text scan guards the set from quietly growing a fourth caller — proven with a real
+  RTC (temporarily added a second textual caller, watched the test fail, removed it).
+- **Failed void/hold decrements are no longer silent** — new CRITICAL exception detector
+  `ExceptionService.detectVoidHoldSyncFailed()` (scoped to `status='failed'` only; the
+  `'skipped'` outcome for a void whose receiving increment never applied is explicitly NOT
+  an exception — that's the correct, do-nothing outcome). Resolution reuses the existing
+  generic `resolve()` flow. Manual (not auto) repush:
+  `ShopifyInventoryService.repushFailedVoidOrHold()` reuses `claim()`'s existing
+  `WHERE status='failed'` reclaim branch — no new claim mechanism. Full `failed_ambiguous`
+  auto-repush parity with stock-take is deliberately deferred.
+- **Order-number lookup** — `#1042`/bare digits/full Shopify order name. `#`-prefixed is
+  unambiguous (no tracking format uses `#`); bare digits try `lookupTracking()` FIRST
+  (zero regression on existing AWB lookups, since a Bosta AWB can also be all-digits) and
+  fall back to `lookupOrder()` only on 404. `LookupService.lookupOrder()` deliberately
+  resolves IDENTITY ONLY (order id + number) — it is NOT a second order-detail data path.
+  The frontend takes the resolved id and opens the SAME `OrderDrawer` (`getOrder()`/
+  `getOrderTimeline()` → `GET /orders/{id}` → `OrderController.detail()`) already used from
+  the Orders list — confirmed and consolidated after first shipping a parallel
+  Lookup-specific fetch, per Marawan's review.
+- **Lookup restyle** to `design/Traced Lookup Flow.dc.html` — search prompt/not-found/AR
+  states, piece-view meta grid (+ new Condition field, backed by `pieces.condition`, V81),
+  pulsing-dot custody timeline, tracking-view piece chips. Appearance-only except where
+  explicitly flagged: `pieces.condition` is new data (not a restyle), and the `lost`-piece
+  Adjust button (dead — lost's only legal edge is `lost:available`, already covered by
+  Found It) was first preserved as a behavior-freeze default, then removed in a dedicated
+  follow-up commit once Marawan confirmed it — never silently dropped mid-restyle.
+- **AdjustPanel extended** with Void/On Hold pills, **contextual to piece status** — from
+  `available`: all five `ALLOWED` targets (Lost/Damaged/Destroyed/Void/On Hold); from
+  `on_hold`: only the three escalation targets (Void has no `on_hold:voided` edge, on_hold
+  has no self-edge). Reason dropdown swaps per pill (`ADJUST_REASONS`/`VOID_REASONS`/
+  `HOLD_REASONS`). "Release from Hold" added alongside "Found It" as a peer quick-action.
+- 3 migrations (V80–V82): `piece_status` += `voided`/`on_hold`; `pieces.condition`;
+  `shopify_inventory_adjustments` trigger_type/status CHECK widen. Both migration-count
+  gates bumped in the same commits (`MigrationSmokeTest` 78→81, `NotTracedBackfillTest`
+  23→26).
+- New test files: `VoidHoldTest` (14 cases incl. vh9b/vh9c — explicit per-target
+  double-decrement guards for on_hold→lost and on_hold→destroyed, not just damaged, added
+  after Marawan flagged that the property rested on a single `if` in `adjustPiece()`),
+  `VoidHoldSyncExceptionTest` (5 cases), `NamedDecrementSetGuardTest` (1). Every load-bearing
+  claim in this entry has a real revert→fail→restore RTC behind it, not just a green run.
+
+Next up: Deploy-prep / VPS provisioning (still the top item below), or any FR-13.x/FR-14
+follow-ups Marawan flags after this ships.
+
 **id-DESC latest-row sweep closed (2026-08-07) — `docs/id-desc-sweep-spec.md`.** Closes the
 two remaining offenders the Bosta ingest audit found, so the UUIDv4 invariant in `CLAUDE.md`
 is now true everywhere, not just at the order-status-redesign call sites. Three sites, one
@@ -3923,7 +3992,7 @@ Provision Hetzner VPS, set up Docker Compose (app + Postgres or Supabase connect
 - **`BostaWebhookJob` piece-transition catches are intentional idempotency guards — do not convert to errors.** A repeat terminal-state webhook (e.g. state 45 delivered arriving twice) hits one of three safe paths: (1) `current == target` fast-path check skips `ledger.transition()` entirely — no DB write; (2) `StateConflictException` where `getActual() == targetStatus` — concurrent worker applied the same transition first, treat as no-op; (3) `IllegalTransitionException` — piece has no legal path to target (e.g. a stale `with_courier` event arriving after `delivered`), log warning and continue. None of these paths fail the webhook. The dedup check (step 4) catches exact payload redeliveries before reaching pieces at all. Do not "fix" any of these catches into error or rethrow paths.
 - **`SET LOCAL` is a silent no-op outside a transaction** — the `SET LOCAL app.current_tenant = ?` call for the tenant context filter must happen inside an explicit transaction (`BEGIN` / `COMMIT`). Called outside a transaction it silently succeeds but resets at the next statement boundary, leaving subsequent queries with no tenant context (empty-string GUC → policy evaluates to false → zero rows or constraint violation).
 - **`TenantContext.set()` must happen BEFORE `TransactionTemplate.execute()`, not inside the callback** — hit building `StockTakeOpsTest`'s `app_user`/RLS harness (FR-21 Step 6.1). `TenantAwareConnection.invoke()` reads `TenantContext.get()` at the `setAutoCommit(false)` intercept point, which `DataSourceTransactionManager` triggers at the *start* of `execute()` — before the lambda body ever runs. Setting `TenantContext.set(tenantId)` inside `appUserTx.execute(status -> {...})` fires the `SET LOCAL` with no tenant already bound, so even the SAME-TENANT positive control comes back empty/404 — a genuine RLS-isolation test can pass for the wrong reason (both cross-tenant *and* same-tenant return nothing) if you don't also assert the positive control succeeds. Fix: set `TenantContext` once, outside and before the transaction callback, matching `InventoryLedgerTest`'s `@BeforeEach setTenantContext()` pattern. Applies to any future `app_user`/`TenantAwareDataSource` test harness, not just stock-take.
-- **`api.ts`'s shared `request()` never surfaces JSON error bodies** — `if (!res.ok) throw new Error(\`${res.status}: ${res.statusText}\`)` never calls `res.json()` on the error path. This makes `Lookup.tsx`'s `AdjustPanel` `PieceCommittedException` (409) parsing dead code against a real network call — it only "works" in `adjust.test.tsx` because that test mocks `adjustPiece()` directly rather than going through `request()`. Found again in FR-21 Step 6.3: `resolveStockTake()` needs the 409 body to render the release card, so it does its own `fetch` + body parsing instead of routing through `request()`. Not fixed globally (bigger blast radius than the task warranted) — flag it before reusing `request()` for anything that needs to inspect a non-2xx JSON body, and prefer the scoped-fetch pattern `resolveStockTake()` uses until `request()` itself is fixed.
+- **`api.ts`'s shared `request()` never surfaces JSON error bodies** — `if (!res.ok) throw new Error(\`${res.status}: ${res.statusText}\`)` never calls `res.json()` on the error path. This makes `Lookup.tsx`'s `AdjustPanel` `PieceCommittedException` (409) parsing dead code against a real network call — it only "works" in `adjust.test.tsx` because that test mocks `adjustPiece()` directly rather than going through `request()`. Found again in FR-21 Step 6.3: `resolveStockTake()` needs the 409 body to render the release card, so it does its own `fetch` + body parsing instead of routing through `request()`. Not fixed globally (bigger blast radius than the task warranted) — flag it before reusing `request()` for anything that needs to inspect a non-2xx JSON body, and prefer the scoped-fetch pattern `resolveStockTake()` uses until `request()` itself is fixed. **Blast radius grew 2026-08-23**: `AdjustPanel`'s Void/On Hold submit paths reuse the exact same `err instanceof Response` catch pattern, so the same dead-code gap now also applies to void/hold's `PIECE_COMMITTED` 409 body — not newly introduced, just newly present on two more code paths that share the pre-existing bug.
 
 ---
 
