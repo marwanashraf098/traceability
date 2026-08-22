@@ -617,8 +617,11 @@ class RlsCoverageTest {
 
     @Test
     void catalog_committedAndAvailable_reflectSeededOrder() {
-        // Positive control: PHASE 0 — 'new' is the only orders.status value the
-        // committed window reads (VariantStockService); a piece at the
+        // Positive control: PHASE 0 narrowed committed to orders.status='new'; the
+        // committed-over-counting fix additionally requires the SAME pickable
+        // shipment-gate the Fulfill queue uses (FulfillService.PICKABLE_SHIPMENT_GATE) —
+        // self-pickup, or the latest forward shipment at internal_state='created'. This
+        // order clears the gate via a 'created' forward shipment. A piece at the
         // (is_fulfillment=true) location contributes to on_hand.
         UUID orderId     = UUID.randomUUID();
         UUID orderItemId = UUID.randomUUID();
@@ -627,6 +630,9 @@ class RlsCoverageTest {
         jdbc.update("INSERT INTO orders (id, tenant_id, store_id, external_id, status, on_hold) " +
                     "VALUES (?, ?, ?, 'EXT-CVG-CATALOG', 'new'::order_status, false)",
                     orderId, tenantId, storeId);
+        jdbc.update("INSERT INTO shipments (tenant_id, order_id, provider, tracking_number, internal_state, shipment_leg) " +
+                    "VALUES (?, ?, 'bosta', 'TN-CVG-CATALOG', 'created'::shipment_internal_state, 'forward')",
+                    tenantId, orderId);
         jdbc.update("INSERT INTO order_items (id, tenant_id, order_id, variant_id, quantity) " +
                     "VALUES (?, ?, ?, ?, 2)", orderItemId, tenantId, orderId, variantId);
         jdbc.update("INSERT INTO pieces (id, tenant_id, variant_id, barcode, short_code, status, current_location_id) " +
@@ -724,6 +730,45 @@ class RlsCoverageTest {
                 .isEqualTo(expectedImageUrl);
         } finally {
             jdbc.update("DELETE FROM products WHERE id = ?", imgProductId);
+        }
+    }
+
+    @Test
+    void catalog_committed_excludesNewOrderWhoseForwardShipmentAlreadyDelivered() {
+        // The committed-over-counting fix, under real RLS/HTTP: an order stuck at
+        // orders.status='new' whose forward shipment already progressed past 'created'
+        // (here: 'delivered') is not open backlog — Traced's own pack flow never ran for
+        // it, but the shipment shows it's already out the door. Proven on live pilot data
+        // (The Snouts, 2026-08): 40 of 45 units counted for one variant were exactly this
+        // shape. Must contribute 0, not its order_item quantity.
+        UUID deliveredOrderId     = UUID.randomUUID();
+        UUID deliveredOrderItemId = UUID.randomUUID();
+        jdbc.update("INSERT INTO orders (id, tenant_id, store_id, external_id, status, on_hold) " +
+                    "VALUES (?, ?, ?, 'EXT-CVG-DELIVERED-STUCK', 'new'::order_status, false)",
+                    deliveredOrderId, tenantId, storeId);
+        jdbc.update("INSERT INTO shipments (tenant_id, order_id, provider, tracking_number, internal_state, shipment_leg) " +
+                    "VALUES (?, ?, 'bosta', 'TN-CVG-DELIVERED-STUCK', 'delivered'::shipment_internal_state, 'forward')",
+                    tenantId, deliveredOrderId);
+        jdbc.update("INSERT INTO order_items (id, tenant_id, order_id, variant_id, quantity) " +
+                    "VALUES (?, ?, ?, ?, 40)", deliveredOrderItemId, tenantId, deliveredOrderId, variantId);
+
+        try {
+            ResponseEntity<Map> resp = get("/api/v1/catalog", Map.class);
+            @SuppressWarnings("unchecked")
+            List<Map<String, Object>> products = (List<Map<String, Object>>) resp.getBody().get("products");
+            Map<String, Object> variant = products.stream()
+                .flatMap(p -> ((List<Map<String, Object>>) p.get("variants")).stream())
+                .filter(v -> variantId.toString().equals(v.get("id")))
+                .findFirst()
+                .orElseThrow(() -> new AssertionError("seeded variant not found in catalog response"));
+            assertThat(((Number) variant.get("committed")).longValue())
+                .as("a 'new' order whose forward shipment already shows 'delivered' must not contribute — " +
+                    "it isn't sitting pre-shipment, regardless of orders.status")
+                .isEqualTo(0L);
+        } finally {
+            jdbc.update("DELETE FROM order_items WHERE id = ?", deliveredOrderItemId);
+            jdbc.update("DELETE FROM shipments WHERE order_id = ?", deliveredOrderId);
+            jdbc.update("DELETE FROM orders WHERE id = ?", deliveredOrderId);
         }
     }
 

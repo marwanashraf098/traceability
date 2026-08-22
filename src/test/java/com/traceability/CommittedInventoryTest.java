@@ -122,6 +122,7 @@ class CommittedInventoryTest {
         jdbc.update("DELETE FROM piece_events WHERE tenant_id = ?", tenantId);
         jdbc.update("DELETE FROM pieces       WHERE tenant_id = ?", tenantId);
         jdbc.update("DELETE FROM order_items  WHERE tenant_id = ?", tenantId);
+        jdbc.update("DELETE FROM shipments    WHERE tenant_id = ?", tenantId);
         jdbc.update("DELETE FROM orders       WHERE tenant_id = ?", tenantId);
         // V61: at most one is_fulfillment=true location per tenant — each test method that
         // creates one must not leak it into the next.
@@ -183,6 +184,20 @@ class CommittedInventoryTest {
             tenantId, orderItemId, pieceId, status);
     }
 
+    /** Forward shipment at the given internal_state — the shipment-gate half of the
+     *  committed predicate (FulfillService.PICKABLE_SHIPMENT_GATE). */
+    private void insertForwardShipment(UUID orderId, String internalState) {
+        jdbc.update(
+            "INSERT INTO shipments (tenant_id, order_id, provider, tracking_number, internal_state, shipment_leg) " +
+            "VALUES (?, ?, 'bosta', ?, ?::shipment_internal_state, 'forward')",
+            tenantId, orderId, "TN-" + UUID.randomUUID(), internalState);
+    }
+
+    private void markSelfPickup(UUID orderId) {
+        jdbc.update("UPDATE orders SET is_self_pickup = true WHERE id = ? AND tenant_id = ?",
+            orderId, tenantId);
+    }
+
     private CatalogController.VariantRow variantRow(UUID variantId) {
         return catalogCtl.list().products().stream()
             .flatMap(p -> p.variants().stream())
@@ -217,6 +232,9 @@ class CommittedInventoryTest {
         for (var f : fixtures) {
             UUID orderId = insertOrder("EXT-C1-" + (i++), f.status());
             insertOrderItem(orderId, variantId, f.quantity());
+            // Only the 'new' fixture needs to clear the shipment gate — every other
+            // status is already excluded on status alone, gate or no gate.
+            if ("new".equals(f.status())) insertForwardShipment(orderId, "created");
         }
 
         long committed = variantRow(variantId).committed();
@@ -233,6 +251,7 @@ class CommittedInventoryTest {
     void c1b_committed_netsOutActiveAllocations_notFlooredNegativeAtSqlLevel() {
         UUID variantId = insertVariant("gid://shopify/ProductVariant/C1B", "SKU-C1B");
         UUID orderId   = insertOrder("EXT-C1B", "new");
+        insertForwardShipment(orderId, "created");
         UUID itemId    = insertOrderItem(orderId, variantId, 3);
 
         // No allocation yet: full quantity is committed.
@@ -261,6 +280,68 @@ class CommittedInventoryTest {
             .isEqualTo(0L);
     }
 
+    // ── c1c: shipment-state gate — the live-data over-counting fix ───────────
+    // Proven on The Snouts (live pilot, 2026-08): orders.status='new' alone is not
+    // sufficient. An order whose forward shipment already progressed past 'created'
+    // (delivered/with_courier/returned/etc.) is not open backlog just because
+    // orders.status never got updated for it — Traced's own pack flow never ran for
+    // that order (e.g. fulfilled directly in Shopify; no orders/fulfilled webhook
+    // exists to tell Traced). 40 of 45 units on one live variant were exactly this.
+
+    @Test
+    void c1c_committed_excludesNewOrderWhoseShipmentAlreadyProgressed_includesOnlyCreatedGate() {
+        UUID variantId = insertVariant("gid://shopify/ProductVariant/C1C", "SKU-C1C");
+
+        // The exact live-bug shape: status='new', shipment already delivered. Must NOT count.
+        UUID deliveredOrderId = insertOrder("EXT-C1C-DELIVERED", "new");
+        insertForwardShipment(deliveredOrderId, "delivered");
+        insertOrderItem(deliveredOrderId, variantId, 40);
+
+        // Real open backlog: status='new', shipment still at 'created'. MUST count.
+        UUID openOrderId = insertOrder("EXT-C1C-OPEN", "new");
+        insertForwardShipment(openOrderId, "created");
+        insertOrderItem(openOrderId, variantId, 5);
+
+        // Other live shipment states that must also be excluded — same reasoning as
+        // 'delivered': the shipment already left 'created', so Traced's own pack flow
+        // is irrelevant to whether this unit is still "open demand" from a picking
+        // perspective; it isn't sitting pre-shipment.
+        UUID withCourierOrderId = insertOrder("EXT-C1C-WITHCOURIER", "new");
+        insertForwardShipment(withCourierOrderId, "with_courier");
+        insertOrderItem(withCourierOrderId, variantId, 7);
+
+        UUID returnedOrderId = insertOrder("EXT-C1C-RETURNED", "new");
+        insertForwardShipment(returnedOrderId, "returned");
+        insertOrderItem(returnedOrderId, variantId, 3);
+
+        // No shipment at all (never AWB-linked) — excluded, same as the queue.
+        UUID noShipmentOrderId = insertOrder("EXT-C1C-NOSHIPMENT", "new");
+        insertOrderItem(noShipmentOrderId, variantId, 11);
+
+        long committed = variantRow(variantId).committed();
+        assertThat(committed)
+            .as("only the 'created'-shipment order (qty=5) may contribute; delivered/with_courier/"
+                + "returned/no-shipment orders (qty 40+7+3+11=61) must all be excluded")
+            .isEqualTo(5L);
+    }
+
+    @Test
+    void c1d_committed_selfPickupExemptFromShipmentGate() {
+        UUID variantId = insertVariant("gid://shopify/ProductVariant/C1D", "SKU-C1D");
+
+        // Self-pickup orders never get a forward shipment by design (FulfillService.complete()
+        // routes them straight to self_pickup_pending, skipping AWB-link) — the gate exempts
+        // them via is_self_pickup=true, same as the Fulfill queue.
+        UUID selfPickupOrderId = insertOrder("EXT-C1D-SELFPICKUP", "new");
+        markSelfPickup(selfPickupOrderId);
+        insertOrderItem(selfPickupOrderId, variantId, 4);
+
+        long committed = variantRow(variantId).committed();
+        assertThat(committed)
+            .as("self-pickup order with no forward shipment must still count — is_self_pickup=true bypasses the gate")
+            .isEqualTo(4L);
+    }
+
     // ── c2: identity — available = on_hand - committed, not floored ──────────
 
     @Test
@@ -271,6 +352,7 @@ class CommittedInventoryTest {
         // 1 available piece on hand, but 3 units committed (no allocation) -> short by 2.
         insertPiece(variantId, fulfillmentLoc, "available");
         UUID orderId = insertOrder("EXT-C2", "new");
+        insertForwardShipment(orderId, "created");
         insertOrderItem(orderId, variantId, 3);
 
         var row = variantRow(variantId);
@@ -309,6 +391,7 @@ class CommittedInventoryTest {
         String pieceId = insertPiece(variantId, fulfillmentLoc, "available");
 
         UUID orderId = insertOrder("EXT-RTC-A", "new");
+        insertForwardShipment(orderId, "created");
         insertOrderItem(orderId, variantId, 1);
 
         // Stage: placed, nothing scanned.
@@ -370,6 +453,7 @@ class CommittedInventoryTest {
     void revertToConfirm_b_cancelOrder_withNoPieceScanned_dropsCommittedToZero() {
         UUID variantId = insertVariant("gid://shopify/ProductVariant/RTCb", "SKU-RTC-B");
         UUID orderId = insertOrder("EXT-RTC-B", "new");
+        insertForwardShipment(orderId, "created");
         insertOrderItem(orderId, variantId, 1);
 
         assertThat(variantRow(variantId).committed())

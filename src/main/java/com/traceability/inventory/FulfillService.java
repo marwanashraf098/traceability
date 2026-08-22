@@ -83,7 +83,21 @@ public class FulfillService {
      * proof of packing" invariant this relies on). An earlier pass added a redundant
      * `EXISTS(exchanges...status='mapped')` disjunct before this ordering existed; removed.
      */
-    private static final String PICKABLE_ORDERS_FILTER =
+    /**
+     * Package-private (not private) — {@link VariantStockService} reuses this verbatim
+     * for its committed(V) derivation, binding exactly one param (tenantId) immediately
+     * before any of its own query's remaining params. Requires the query to alias the
+     * orders table as {@code o}, same as {@link #PICKABLE_ORDERS_FILTER}.
+     *
+     * This is the pickable-order GATE only — status/on_hold/self-pickup-or-shipment-
+     * created. It deliberately excludes the {@code placed_at} lookback window: that
+     * window is a Pick & Pack UX filter (don't clutter the queue with ancient orders),
+     * not a truth about whether the order still reserves stock — a genuinely open order
+     * placed 45 days ago still owes its customer that unit regardless of the queue's
+     * display window. {@link #PICKABLE_ORDERS_FILTER} below is this gate PLUS the
+     * lookback, for the queue's own use; VariantStockService takes the gate alone.
+     */
+    static final String PICKABLE_SHIPMENT_GATE =
         "LEFT JOIN LATERAL ( " +
         "    SELECT internal_state " +
         "    FROM shipments " +
@@ -96,9 +110,16 @@ public class FulfillService {
         "WHERE o.tenant_id = ? " +
         "  AND o.status IN ('new','ready_to_pick','self_pickup_pending') " +
         "  AND o.on_hold = false " +
-        "  AND o.placed_at > now() - (? * INTERVAL '1 day') " +
         "  AND (o.is_self_pickup = true " +
         "       OR latest_shipment.internal_state = 'created') ";
+
+    /** Queue-only UX filter — appended after {@link #PICKABLE_SHIPMENT_GATE}, binds one
+     *  more param (lookbackDays) after the gate's own tenantId param. */
+    private static final String PICKABLE_LOOKBACK_CLAUSE =
+        "  AND o.placed_at > now() - (? * INTERVAL '1 day') ";
+
+    private static final String PICKABLE_ORDERS_FILTER =
+        PICKABLE_SHIPMENT_GATE + PICKABLE_LOOKBACK_CLAUSE;
 
     /**
      * Returns orders eligible for action — see {@link #PICKABLE_ORDERS_FILTER} for the

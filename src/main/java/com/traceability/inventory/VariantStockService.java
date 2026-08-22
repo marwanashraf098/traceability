@@ -1,5 +1,6 @@
 package com.traceability.inventory;
 
+import com.traceability.tenancy.TenantContext;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.RowCallbackHandler;
 import org.springframework.stereotype.Service;
@@ -12,46 +13,51 @@ import java.util.Set;
 import java.util.UUID;
 
 /**
- * PHASE 0 committed-inventory fix — the ONE place committed/available/on_hand are
- * derived per variant. {@code CatalogController} and any future stock-breakdown
- * endpoint (e.g. the planned {@code /inventory/stock}) MUST call this rather than
- * re-deriving the numbers — no second path.
+ * PHASE 0/committed-over-counting fix — the ONE place committed/available/on_hand are
+ * derived per variant. {@code CatalogController}, {@code InventoryStockController}, and
+ * any future stock-breakdown endpoint MUST call this rather than re-deriving the
+ * numbers — no second path.
  *
- * Root cause this replaces: the old formula filtered on {@code orders.status IN
- * (...,'packed','awaiting_pickup')}, but nothing in the codebase ever advances
- * {@code orders.status} past 'awaiting_pickup' for a courier-fulfilled order — not
- * on courier pickup, not on delivery, not ever (confirmed by grepping every
- * {@code UPDATE orders SET status}: only 'packed'/'self_pickup_pending' (pack),
- * 'awaiting_pickup' (AWB-link), 'delivered' (self-pickup handover only), and
- * 'cancelled' are ever written). So a packed/shipped/delivered order stayed
- * "committed" forever.
- *
- * <p><b>committed(variant)</b> = SUM over OPEN order lines of
+ * <p><b>committed(variant)</b> = SUM over PICKABLE order lines of
  * {@code MAX(0, order_item.quantity - active_allocations_on_that_line)}, where
- * "open" = {@code orders.status = 'new'}. 'new' is the ONLY pre-pack value ever
- * written to {@code orders.status} — the enum also defines 'confirmed'/'ready_to_pick'/
- * 'picking' but grepping every {@code UPDATE orders SET status} in this codebase
- * shows none of the three is ever written anywhere (that sub-flow was never built),
- * so a whitelist including them would wrongly imply orders can reach those states
- * today. Using 'new' alone: (1) is exactly what both order-ingest paths
- * ({@code ShopifySyncService.UPSERT_ORDER}, {@code ExchangeService}'s order insert)
- * leave behind, since neither specifies the {@code status} column and it defaults to
- * 'new'; (2) already excludes cancelled orders with no extra clause needed —
- * {@code FulfillService.cancelOrder()} rewrites a pre-pack order's status straight to
- * 'cancelled' synchronously, in the same transaction, confirmed by tracing the
- * zero-packed-pieces branch directly (no deferred/flag-only cancellation exists for
- * an order still in 'new'). If 'confirmed'/'ready_to_pick'/'picking' are ever wired
- * up, this predicate must be revisited alongside that work — do not widen it
- * preemptively. Once an order leaves 'new' it is excluded from committed entirely,
- * regardless of piece status — packed/awaiting_pickup/with_courier/etc. are
- * deliberately NOT read from {@code orders.status} again, because that column stops
- * updating right there.
+ * "pickable" is {@link FulfillService#PICKABLE_SHIPMENT_GATE} — the EXACT SAME gate the
+ * Fulfill/Pick&Pack queue uses (shared field, not a forked copy), MINUS that class's
+ * {@code placed_at} lookback window (a queue-only UX filter — see below).
+ *
+ * <p>PHASE 0 fixed the first bug: the original formula filtered on
+ * {@code orders.status IN (...,'packed','awaiting_pickup')}, but nothing in the codebase
+ * ever advances {@code orders.status} past 'awaiting_pickup' for a courier-fulfilled
+ * order, so a packed/shipped/delivered order stayed "committed" forever. The Phase 0 fix
+ * narrowed to {@code orders.status = 'new'} alone (the only pre-pack value ever written)
+ * plus netting against active allocations.
+ *
+ * <p>That fix was still wrong, proven on live pilot data (The Snouts tenant, 2026-08):
+ * {@code orders.status = 'new'} is necessary but not sufficient. An order AWB-linked to
+ * Bosta advances to {@code 'awaiting_pickup'} — fine, Phase 0 already excludes that — but
+ * {@code orders.status} can ALSO simply never move at all for orders that were never
+ * picked in Traced in the first place: an order whose Shopify webhook never triggered a
+ * pack (e.g. fulfilled directly in Shopify, bypassing Traced/Bosta entirely — see the
+ * committed-over-counting diagnosis: there is no {@code orders/fulfilled} webhook handler
+ * at all) sits at {@code 'new'} indefinitely with its {@code shipments.internal_state}
+ * showing 'delivered'/'returned'/'with_courier' — the shipment progressed, but nothing
+ * ever touches {@code orders.status} for it because Traced's own pack flow never ran. 40
+ * of 45 units counted for one live variant were exactly this: real orders, correctly
+ * still 'new', but with a forward shipment already delivered/returned/in-transit — not
+ * open backlog by any operational definition. The fix: require the SAME shipment-state
+ * gate the queue already uses (self-pickup, OR latest forward shipment
+ * {@code internal_state = 'created'}) — an order isn't "open demand" just because
+ * {@code orders.status} says 'new'; it has to actually be sitting pre-shipment.
+ *
+ * <p>The lookback window ({@code FulfillService}'s {@code placed_at} filter) is
+ * deliberately NOT reused here — that's a Pick & Pack display filter (don't clutter the
+ * queue with ancient orders), not a fact about whether the order still owes its customer
+ * stock. A genuinely open order placed 45 days ago is still committed.
  *
  * <p>Subtracting active allocations (not just checking order status) also fixes a
- * second, smaller gap in the old formula: a piece scanned to an order (allocation
- * status='active') already satisfies that unit of demand even before the order is
- * packed — the old formula counted it as still-committed until the whole order
- * packed, double-covering the same unit (once as a reserved piece, once as demand).
+ * second, smaller gap: a piece scanned to an order (allocation status='active') already
+ * satisfies that unit of demand even before the order is packed — counting it as still-
+ * committed until pack would double-cover the same unit (once as a reserved piece, once
+ * as demand).
  *
  * <p><b>on_hand(variant)</b> = COUNT(pieces WHERE status='available' AND at an
  * is_fulfillment location). Reserved/packed/beyond pieces are NOT in this number —
@@ -76,20 +82,22 @@ public class VariantStockService {
 
     private static final VariantStock ZERO = new VariantStock(0, 0, 0);
 
+    // Binds tenantId TWICE, in this order: (1) the allocations subquery's own filter,
+    // (2) FulfillService.PICKABLE_SHIPMENT_GATE's "WHERE o.tenant_id = ?" — the gate is
+    // appended verbatim, not re-typed, so this query can never drift from what the
+    // Fulfill queue actually shows as pickable.
     private static final String COMMITTED_SQL = """
         SELECT oi.variant_id,
                SUM(GREATEST(oi.quantity - COALESCE(alloc.active_count, 0), 0)) AS committed
-        FROM order_items oi
-        JOIN orders o ON o.id = oi.order_id
+        FROM orders o
+        JOIN order_items oi ON oi.order_id = o.id
         LEFT JOIN (
             SELECT a.order_item_id, COUNT(*) AS active_count
             FROM allocations a
-            WHERE a.tenant_id = NULLIF(current_setting('app.current_tenant', true), '')::uuid
-              AND a.status = 'active'
+            WHERE a.tenant_id = ? AND a.status = 'active'
             GROUP BY a.order_item_id
         ) alloc ON alloc.order_item_id = oi.id
-        WHERE oi.tenant_id = NULLIF(current_setting('app.current_tenant', true), '')::uuid
-          AND o.status = 'new'
+        """ + FulfillService.PICKABLE_SHIPMENT_GATE + """
         GROUP BY oi.variant_id
         """;
 
@@ -115,9 +123,12 @@ public class VariantStockService {
      */
     @Transactional(readOnly = true)
     public Map<UUID, VariantStock> computeAll() {
+        UUID tenantId = TenantContext.require();
+
         Map<UUID, Long> committedByVariant = new HashMap<>();
         jdbc.query(COMMITTED_SQL, (RowCallbackHandler) rs -> committedByVariant.put(
-            rs.getObject("variant_id", UUID.class), rs.getLong("committed")));
+            rs.getObject("variant_id", UUID.class), rs.getLong("committed")),
+            tenantId, tenantId);
 
         Map<UUID, Long> onHandByVariant = new HashMap<>();
         jdbc.query(ON_HAND_SQL, (RowCallbackHandler) rs -> onHandByVariant.put(
