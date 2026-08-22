@@ -175,13 +175,27 @@ function SparkStatCard({
 // shipment_internal_state enum before reaching the app), the exact same cut
 // already made for the Orders-detail stepper restyle.
 
-const FLOW_NODES: { key: keyof FunnelCounts; labelKey: string; icon: typeof ShoppingBag }[] = [
-  { key: 'newCount',  labelKey: 'overview.funnel.new',      icon: ShoppingBag },
-  { key: 'picking',   labelKey: 'overview.funnel.picking',  icon: PackageSearch },
-  { key: 'packed',    labelKey: 'overview.funnel.packed',   icon: PackageCheck },
-  { key: 'courier',   labelKey: 'overview.funnel.courier',  icon: Truck },
-  { key: 'delivered', labelKey: 'overview.funnel.delivered', icon: CheckCircle2 },
+type FlowTone = 'new' | 'picking' | 'packed' | 'courier' | 'delivered'
+
+const FLOW_NODES: { key: keyof FunnelCounts; labelKey: string; icon: typeof ShoppingBag; tone: FlowTone }[] = [
+  { key: 'newCount',  labelKey: 'overview.funnel.new',      icon: ShoppingBag,    tone: 'new' },
+  { key: 'picking',   labelKey: 'overview.funnel.picking',  icon: PackageSearch,  tone: 'picking' },
+  { key: 'packed',    labelKey: 'overview.funnel.packed',   icon: PackageCheck,   tone: 'packed' },
+  { key: 'courier',   labelKey: 'overview.funnel.courier',  icon: Truck,          tone: 'courier' },
+  { key: 'delivered', labelKey: 'overview.funnel.delivered', icon: CheckCircle2,  tone: 'delivered' },
 ]
+
+// Each stage gets its own DS-token tile, same pattern the old Delivered-only
+// styling used: tinted bg (token @ ~12% opacity) + border (token @ 40%) +
+// icon stroke in the full/bright token color. Tailwind classes reference
+// tailwind.config.js tokens directly — no hex consts needed here.
+const FLOW_TONE_CLASSES: Record<FlowTone, string> = {
+  new:       'bg-grey-300/[0.12] border-grey-300/40 text-neutral-text',
+  picking:   'bg-info/[0.12] border-info/40 text-info-text',
+  packed:    'bg-warning/[0.12] border-warning/40 text-warning-text',
+  courier:   'bg-trace-blue/[0.12] border-trace-blue/40 text-trace-blue',
+  delivered: 'bg-success/[0.12] border-success/40 text-success-text',
+}
 
 function FlowStrip({ counts }: { counts: FunnelCounts }) {
   const { t } = useTranslation()
@@ -206,7 +220,7 @@ function FlowStrip({ counts }: { counts: FunnelCounts }) {
               <div className="flex flex-col items-center gap-2 flex-1 text-center min-w-0">
                 <div className={cn(
                   'w-12 h-12 rounded-2xl border flex items-center justify-center flex-shrink-0',
-                  isLast ? 'bg-success/[0.12] border-success/40 text-success-text' : 'bg-elevated border-line text-muted'
+                  FLOW_TONE_CLASSES[node.tone]
                 )}>
                   <Icon size={20} strokeWidth={1.75} />
                 </div>
@@ -380,6 +394,9 @@ function TopSkusList({ skus }: { skus: TopSku[] }) {
 
 const DONUT_R = 40
 const DONUT_C = 2 * Math.PI * DONUT_R
+const DONUT_SIZE = 204 // rendered px — enlarged from the prior 120px card
+const DONUT_STROKE = 15 // thicker ring, up from 12
+const DONUT_GAP = 2.5 // subtracted from each slice's dasharray so segments don't touch
 
 function OrdersDonut({ summary }: { summary: OrderSummaryCounts }) {
   const { t } = useTranslation()
@@ -405,26 +422,27 @@ function OrdersDonut({ summary }: { summary: OrderSummaryCounts }) {
 
   let offset = 0
   return (
-    <div className="flex items-center gap-4">
-      <svg width="120" height="120" viewBox="0 0 100 100" className="flex-shrink-0">
+    <div className="flex flex-col items-center gap-4">
+      <svg width={DONUT_SIZE} height={DONUT_SIZE} viewBox="0 0 100 100" className="flex-shrink-0">
         {segments.filter(s => s.value > 0).map(s => {
           const len = (s.value / summary.total) * DONUT_C
           const circle = (
-            <circle key={s.labelKey} cx="50" cy="50" r={DONUT_R} fill="none" stroke={s.color} strokeWidth="12"
-                    strokeDasharray={`${len} ${DONUT_C}`} strokeDashoffset={-offset}
+            <circle key={s.labelKey} cx="50" cy="50" r={DONUT_R} fill="none" stroke={s.color} strokeWidth={DONUT_STROKE}
+                    strokeLinecap="round"
+                    strokeDasharray={`${Math.max(0, len - DONUT_GAP)} ${DONUT_C}`} strokeDashoffset={-offset}
                     transform="rotate(-90 50 50)" />
           )
           offset += len
           return circle
         })}
-        <text x="50" y="47" textAnchor="middle" fontSize="15" fontWeight="700" fill="#F2F4F7" fontFamily="monospace">
+        <text x="50" y="46" textAnchor="middle" fontSize="19" fontWeight="700" fill="#F2F4F7" fontFamily="monospace">
           {summary.total >= 1000 ? `${(summary.total / 1000).toFixed(1)}K` : summary.total}
         </text>
-        <text x="50" y="61" textAnchor="middle" fontSize="8" fill="#828B99">{t('overview.donut.total')}</text>
+        <text x="50" y="61" textAnchor="middle" fontSize="9" fill="#828B99">{t('overview.donut.total')}</text>
       </svg>
-      <div className="flex flex-col gap-1.5 flex-1 min-w-0">
+      <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 w-full">
         {segments.map(s => (
-          <span key={s.labelKey} className="flex items-center gap-1.5 text-caption">
+          <span key={s.labelKey} className="flex items-center gap-1.5 text-caption min-w-0">
             <span className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ background: s.color }} />
             <span className="text-muted flex-1 truncate">{t(s.labelKey)}</span>
             <span className="text-primary font-mono font-semibold">{s.value.toLocaleString()}</span>
