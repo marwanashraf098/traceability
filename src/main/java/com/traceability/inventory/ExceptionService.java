@@ -12,9 +12,9 @@ import java.time.Instant;
 import java.util.*;
 
 /**
- * Exceptions center (FR-15.3, +1 detector FR-24, +2 detectors FR-EXCHANGE): aggregates 20
- * exception detectors into one prioritised list, sorted CRITICAL→HIGH→MEDIUM→LOW then
- * oldest-first within each severity tier.
+ * Exceptions center (FR-15.3, +1 detector FR-24, +2 detectors FR-EXCHANGE, +1 detector
+ * FR-13.x): aggregates 21 exception detectors into one prioritised list, sorted
+ * CRITICAL→HIGH→MEDIUM→LOW then oldest-first within each severity tier.
  *
  * Aggregation: per-type queries run separately and merged in Java.
  * A single UNION would require all of them to emit identical columns,
@@ -86,6 +86,7 @@ public class ExceptionService {
         all.addAll(detectReturnSessionMismatch(tenantId));
         all.addAll(detectExchangeNeedsMapping(tenantId));
         all.addAll(detectExchangeUnmappedState(tenantId));
+        all.addAll(detectVoidHoldSyncFailed(tenantId));
 
         // Enrich with descriptions and action hints
         all.forEach(this::enrich);
@@ -177,6 +178,7 @@ public class ExceptionService {
         all.addAll(detectReturnSessionMismatch(tenantId));
         all.addAll(detectExchangeNeedsMapping(tenantId));
         all.addAll(detectExchangeUnmappedState(tenantId));
+        all.addAll(detectVoidHoldSyncFailed(tenantId));
 
         int critical = 0;
         for (Map<String, Object> e : all) {
@@ -239,6 +241,51 @@ public class ExceptionService {
             "      WHERE er.tenant_id = p.tenant_id " +
             "        AND er.exception_type = 'lost' " +
             "        AND er.subject_key = 'lost:piece:' || p.id) ",
+            tid);
+    }
+
+    /**
+     * FR-13.x — a void or hold-enter Shopify decrement that definitively failed. This is NOT
+     * a loss and NOT a courier/loss-driven exception — it means the piece's Traced status
+     * (voided / on_hold) and Shopify's on_hand have DIVERGED, which is a live sellable-count
+     * integrity problem (Shopify may still be selling a piece Traced has already pulled from
+     * the floor, or vice versa). CRITICAL for the same reason 'lost' is CRITICAL.
+     *
+     * Scope: only 'failed' rows — 'pending'/'applied'/'skipped' are not exceptions. 'skipped'
+     * in particular is the CORRECT outcome for a void whose receiving increment never applied
+     * (see PieceAdjustService.voidPiece() / ShopifyInventoryService.processVoidCorrection()) —
+     * it must never surface here.
+     *
+     * trigger_id is the piece_id directly for void_correction, but "pieceId:holdEventId" for
+     * hold_enter (see ShopifyInventoryService.processHoldEnter()) — split_part extracts the
+     * piece_id for the join either way.
+     *
+     * No auto-repush here (deferred) — visibility + the existing generic resolve() flow only.
+     * A manager fixes the divergence out-of-band (or via
+     * ShopifyInventoryService.repushFailedVoidOrHold(), Phase 2's manual repush action) then
+     * resolves this exception the same way as every other detector.
+     */
+    private List<Map<String, Object>> detectVoidHoldSyncFailed(UUID tid) {
+        return jdbc.queryForList(
+            "SELECT 'void_hold_sync_failed' AS type, 'CRITICAL' AS severity, 'piece' AS subject_type, " +
+            "       sia.trigger_type, sia.trigger_id, sia.error, " +
+            "       p.id AS piece_id, p.barcode, p.status::text AS live_status, " +
+            "       sia.created_at AS occurred_at, " +
+            "       'void_hold_sync_failed:' || sia.trigger_type || ':' || sia.trigger_id AS subject_key " +
+            "FROM shopify_inventory_adjustments sia " +
+            "LEFT JOIN pieces p ON p.id = " +
+            "    (CASE WHEN sia.trigger_type = 'hold_enter' THEN split_part(sia.trigger_id, ':', 1) " +
+            "          ELSE sia.trigger_id END) " +
+            "    AND p.tenant_id = sia.tenant_id " +
+            "WHERE sia.tenant_id = ? " +
+            "  AND sia.trigger_type IN ('void_correction', 'hold_enter') " +
+            "  AND sia.status = 'failed' " +
+            "  AND NOT EXISTS ( " +
+            "      SELECT 1 FROM exception_resolutions er " +
+            "      WHERE er.tenant_id = sia.tenant_id " +
+            "        AND er.exception_type = 'void_hold_sync_failed' " +
+            "        AND er.subject_key = 'void_hold_sync_failed:' || sia.trigger_type || ':' || sia.trigger_id) " +
+            "ORDER BY sia.created_at ASC",
             tid);
     }
 
@@ -746,6 +793,17 @@ public class ExceptionService {
                 item.put("descriptionAr", "القطعة " + b + " مُسجَّلة كمفقودة لدى شركة الشحن");
                 item.put("suggestedAction", "confirm_write_off");
                 item.put("actionUrl", ordersUrl(item));
+            }
+            case "void_hold_sync_failed" -> {
+                String b = str(item, "barcode");
+                String triggerType = str(item, "trigger_type");
+                String label = "hold_enter".equals(triggerType) ? "hold" : "void";
+                item.put("descriptionEn", "Shopify " + label + " sync failed for piece " + b
+                    + " — Traced and Shopify inventory have diverged");
+                item.put("descriptionAr", "فشلت مزامنة " + ("hold_enter".equals(triggerType) ? "التعليق" : "الإلغاء")
+                    + " مع Shopify للقطعة " + b + " — تعارض بين مخزون Traced ومخزون Shopify");
+                item.put("suggestedAction", "manual_repush");
+                item.put("actionUrl", b != null ? "/lookup?q=" + b : "/lookup");
             }
             case "never_received" -> {
                 String b = str(item, "barcode");

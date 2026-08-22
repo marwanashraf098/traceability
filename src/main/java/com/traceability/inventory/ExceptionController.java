@@ -16,15 +16,20 @@ import java.util.Map;
  * GET  /api/v1/exceptions/count     — open-exception count (shell notification bell)
  * POST /api/v1/exceptions/resolve   — acknowledge / mark resolved (writes audit record)
  * GET  /api/v1/exceptions/resolutions — audit trail of resolved exceptions
+ * POST /api/v1/exceptions/void-hold-sync/repush — FR-13.x manual repush of a failed
+ *      void_correction/hold_enter Shopify decrement (does NOT resolve the exception —
+ *      call /resolve separately once the operator confirms the repush succeeded)
  */
 @RestController
 @RequestMapping("/api/v1/exceptions")
 public class ExceptionController {
 
-    private final ExceptionService svc;
+    private final ExceptionService        svc;
+    private final ShopifyInventoryService shopifyInventory;
 
-    public ExceptionController(ExceptionService svc) {
+    public ExceptionController(ExceptionService svc, ShopifyInventoryService shopifyInventory) {
         this.svc = svc;
+        this.shopifyInventory = shopifyInventory;
     }
 
     @GetMapping
@@ -67,4 +72,13 @@ public class ExceptionController {
     }
 
     public record ResolveRequest(String exceptionType, String subjectKey, String note) {}
+
+    public record RepushRequest(String triggerType, String triggerId) {}
+
+    @PostMapping("/void-hold-sync/repush")
+    @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void repushVoidHoldSync(@RequestBody RepushRequest req) {
+        shopifyInventory.repushFailedVoidOrHold(req.triggerType(), req.triggerId());
+    }
 }
