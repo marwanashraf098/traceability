@@ -837,36 +837,160 @@ export function getOverviewTopSkus() {
   return request<TopSku[]>('/overview/top-skus')
 }
 
-export interface PieceSummary {
+// ── Inventory screen (Phase A backend) ────────────────────────────────────────
+// Every field named committed/available/onHand below is exactly what
+// VariantStockService computed — no client-side re-derivation. committed is
+// nullable by design (Phase A location-scoping rule): it's order demand, which
+// has no location until a piece is scanned, so it's null whenever a query is
+// location-scoped rather than tenant-wide.
+
+export type ShopifySyncStatus = 'synced' | 'pending' | 'failed' | 'none'
+
+export interface InventoryStockVariant {
+  id: string
+  title: string
+  sku: string | null
+  price: number | null
+  onHand: number
+  committed: number | null
+  available: number
+  shopifySync: ShopifySyncStatus
+}
+
+export interface InventoryStockProduct {
+  id: string
+  title: string
+  imageUrl: string | null
+  onHand: number
+  committed: number | null
+  available: number
+  variants: InventoryStockVariant[]
+}
+
+export interface InventoryStockPage {
+  items: InventoryStockProduct[]
+  nextCursor: string | null
+}
+
+export function getInventoryStock(params: {
+  q?: string
+  locationId?: string
+  lowStockOnly?: boolean
+  cursor?: string
+  size?: number
+}) {
+  const q = new URLSearchParams()
+  if (params.q)            q.set('q', params.q)
+  if (params.locationId)   q.set('locationId', params.locationId)
+  if (params.lowStockOnly) q.set('lowStockOnly', 'true')
+  if (params.cursor)       q.set('cursor', params.cursor)
+  if (params.size != null) q.set('size', String(params.size))
+  return request<InventoryStockPage>(`/inventory/stock?${q}`)
+}
+
+export interface InventoryLocationStock {
+  locationId: string
+  locationName: string
+  available: number
+  onHand: number
+}
+
+export interface InventoryVariantMovement {
+  id: string
+  triggerType: string
+  delta: number | null
+  status: string
+  locationName: string
+  createdAt: string
+  appliedAt: string | null
+}
+
+export interface InventoryVariantBreakdown {
+  variantId: string
+  onHand: number
+  committed: number
+  available: number
+  locations: InventoryLocationStock[]
+  recentMovements: InventoryVariantMovement[]
+}
+
+export function getInventoryVariantBreakdown(variantId: string) {
+  return request<InventoryVariantBreakdown>(`/inventory/variants/${variantId}/breakdown`)
+}
+
+export interface InventoryPhaseCounts {
+  inWarehouse: number
+  onTheWayOut: number
+  delivered: number
+  comingBack: number
+  problem: number
+}
+
+export function getInventoryBreakdown() {
+  return request<InventoryPhaseCounts>('/inventory/breakdown')
+}
+
+export interface InventoryPieceRow {
   id: string
   barcode: string
-  status: string
   variantTitle: string
   sku: string | null
   productTitle: string
+  orderNumber: string | null
+  trackingNumber: string | null
   locationName: string | null
   lastEventAt: string | null
 }
 
-export interface PiecePage {
-  items: PieceSummary[]
-  total: number
-  page: number
-  size: number
+export interface InventoryPiecePage {
+  items: InventoryPieceRow[]
+  nextCursor: string | null
 }
 
-export function listPieces(params: {
+export function getInventoryPieces(params: {
   status: string
-  within30d?: boolean
-  page?: number
+  variantId?: string
+  locationId?: string
+  cursor?: string
   size?: number
 }) {
   const q = new URLSearchParams()
   q.set('status', params.status)
-  if (params.within30d) q.set('within30d', 'true')
-  if (params.page  != null) q.set('page',  String(params.page))
-  if (params.size  != null) q.set('size',  String(params.size))
-  return request<PiecePage>(`/pieces?${q}`)
+  if (params.variantId)    q.set('variantId', params.variantId)
+  if (params.locationId)   q.set('locationId', params.locationId)
+  if (params.cursor)       q.set('cursor', params.cursor)
+  if (params.size != null) q.set('size', String(params.size))
+  return request<InventoryPiecePage>(`/inventory/pieces?${q}`)
+}
+
+/** 'stock_take' rows are session-grain — variant/sku/variantTitle/productTitle are
+ *  null by design (per-variant payload decomposition is a documented backend
+ *  fast-follow). Render at session grain, not a fake per-variant row. */
+export interface InventoryMovementRow {
+  id: string
+  source: 'adjustment' | 'stock_take'
+  triggerType: string | null
+  variantId: string | null
+  sku: string | null
+  variantTitle: string | null
+  productTitle: string | null
+  locationName: string | null
+  delta: number | null
+  syncStatus: 'synced' | 'pending' | 'failed'
+  createdAt: string
+  appliedAt: string | null
+}
+
+export interface InventoryMovementPage {
+  items: InventoryMovementRow[]
+  nextCursor: string | null
+}
+
+export function getInventoryMovements(params: { cursor?: string; size?: number } = {}) {
+  const q = new URLSearchParams()
+  if (params.cursor)        q.set('cursor', params.cursor)
+  if (params.size != null)  q.set('size', String(params.size))
+  return request<InventoryMovementPage>(`/inventory/movements?${q}`)
 }
 
 // ── Manual adjustments (FR-13) ────────────────────────────────────────────────

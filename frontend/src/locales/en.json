@@ -150,6 +150,71 @@
   },
   "inventory": {
     "title": "Inventory",
+    "tabs": {
+      "stock": "Stock by location",
+      "breakdown": "Stock breakdown",
+      "ledger": "Movement ledger"
+    },
+    "stock": {
+      "searchPlaceholder": "Search SKU or product",
+      "allLocations": "All locations",
+      "lowStock": "Low stock",
+      "empty": "No products found",
+      "variantCount": "{{count}} variants",
+      "loadMore": "Load more",
+      "footerHint": "Products collapsed by default · search and the low-stock filter auto-expand only matching products · tap a variant for its per-location breakdown.",
+      "committedTenantWideTooltip": "Committed is demand across the whole tenant — it has no location until a piece is scanned, so it doesn't change when you filter by location.",
+      "col": {
+        "product": "Product",
+        "onHand": "On hand",
+        "committed": "Committed",
+        "available": "Available",
+        "shopify": "Shopify"
+      },
+      "sync": {
+        "synced": "Synced",
+        "pending": "Pending",
+        "failed": "Failed",
+        "none": "None"
+      }
+    },
+    "drawer": {
+      "close": "Close",
+      "error": "Couldn't load this variant's breakdown",
+      "matrixTitle": "Stock by location",
+      "committedTotal": "Committed {{count}}",
+      "committedTenantWide": "Committed is shown once here, tenant-wide — it has no per-location breakdown.",
+      "colLocation": "Location",
+      "colAvailable": "Avail.",
+      "colOnHand": "On hand",
+      "total": "Total",
+      "recentMovements": "Recent movements",
+      "noMovements": "No recent movements for this variant"
+    },
+    "breakdown": {
+      "phase": {
+        "inWarehouse": "In warehouse",
+        "onTheWayOut": "On the way out",
+        "delivered": "Delivered 30d",
+        "comingBack": "Coming back",
+        "problem": "Problem"
+      },
+      "pieceCount": "{{count}} pieces",
+      "noPieces": "No pieces in this status",
+      "timeline": "timeline",
+      "loadMore": "Load more"
+    },
+    "ledger": {
+      "empty": "No movements recorded yet",
+      "stockTakeSource": "Stock take",
+      "stockTakeSession": "Stock-take write-off — session",
+      "loadMore": "Load more",
+      "sync": {
+        "synced": "Synced",
+        "pending": "Pending",
+        "failed": "Failed"
+      }
+    },
     "live": "Live inventory",
     "liveNote": "Current piece counts by status",
     "window30d": "Last 30 days",
