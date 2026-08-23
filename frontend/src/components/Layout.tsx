@@ -4,10 +4,13 @@ import { useState, useRef, useEffect, ReactNode } from 'react'
 import type { LucideIcon } from 'lucide-react'
 import {
   LayoutDashboard, ShoppingBag, Warehouse, Inbox, ClipboardList, PackageCheck,
-  Truck, Repeat, Undo2, AlertTriangle, Plug, MapPin, UserPlus,
-  Users, Settings, LogOut, Globe, Search, ChevronDown, Bell,
+  Truck, Repeat, Undo2, AlertTriangle,
+  Settings, LogOut, Globe, Search, ChevronDown, Bell,
 } from 'lucide-react'
-import { getRoleFromToken, request, getMe, getExceptionsCount, type Me } from '../api'
+import {
+  getRoleFromToken, request, getMe, getExceptionsCount, getOnboardingStatus,
+  type Me, type OnboardingStatus,
+} from '../api'
 import { clearAccessToken } from '../auth'
 import { Logo } from './Logo'
 import { cn, MeProvider } from './ui'
@@ -53,6 +56,7 @@ export default function Layout({ children }: { children: ReactNode }) {
   const [menuOpen, setMenuOpen] = useState(false)
   const [me, setMe]             = useState<Me | null>(null)
   const [exceptionsCount, setExceptionsCount] = useState<number | null>(null)
+  const [onboarding, setOnboarding] = useState<OnboardingStatus | null>(null)
   const searchRef = useRef<HTMLInputElement>(null)
   const menuRef   = useRef<HTMLDivElement>(null)
   const role      = getRoleFromToken()
@@ -118,6 +122,16 @@ export default function Layout({ children }: { children: ReactNode }) {
       .catch(err => console.error('Failed to load exceptions count', err))
   }, [role])
 
+  // Setup N/5 chip — decorative, non-blocking: on failure the chip just doesn't
+  // render (never a stale/NaN count). Owner/Manager only, matching the endpoint's
+  // access control (workers get 403 on /onboarding/status).
+  useEffect(() => {
+    if (role === 'worker') return
+    getOnboardingStatus()
+      .then(setOnboarding)
+      .catch(err => console.error('Failed to load onboarding status', err))
+  }, [role])
+
   return (
     <MeProvider me={me}>
     <div className="flex h-screen bg-bg overflow-hidden">
@@ -142,17 +156,13 @@ export default function Layout({ children }: { children: ReactNode }) {
           <SideNavLink to="/transfers"   icon={Repeat}          label={t('nav.transfers')} />
           <SideNavLink to="/returns"     icon={Undo2}           label={t('nav.returns')} />
           <SideNavLink to="/exceptions"  icon={AlertTriangle}   label={t('nav.exceptions')} />
-          <SideNavLink to="/connections" icon={Plug}            label={t('nav.connections')} />
           {role !== 'worker' && (
             <>
               <div className="h-px bg-line mx-[18px] my-2.5" />
               <div className="px-[18px] pt-1.5 pb-0.5 text-[11px] font-semibold tracking-wider text-muted uppercase">
                 {t('nav.manager')}
               </div>
-              <SideNavLink to="/locations"         icon={MapPin}   label={t('nav.locations')} />
-              <SideNavLink to="/onboarding"         icon={UserPlus} label={t('nav.onboarding')} />
-              <SideNavLink to="/users"              icon={Users}    label={t('nav.users')} />
-              <SideNavLink to="/settings"           icon={Settings} label={t('nav.settings')} />
+              <SideNavLink to="/settings" icon={Settings} label={t('nav.settings')} />
             </>
           )}
         </nav>
@@ -240,6 +250,18 @@ export default function Layout({ children }: { children: ReactNode }) {
                       <p className="text-small text-primary truncate">{me.name}</p>
                       {me.email && <p className="text-caption text-muted truncate">{me.email}</p>}
                     </div>
+                  )}
+                  {onboarding && !onboarding.allDone && (
+                    <button
+                      type="button"
+                      onClick={() => { setMenuOpen(false); navigate('/overview') }}
+                      className="w-full flex items-center justify-between px-3 py-2 text-caption text-start hover:bg-white/5 transition-colors border-b border-line"
+                    >
+                      <span className="text-muted">{t('nav.setupProgress')}</span>
+                      <span className="font-bold text-trace-blue bg-trace-blue/15 rounded-full px-2 py-0.5">
+                        {t('nav.setupCount', { done: onboarding.steps.filter(s => s.done).length, total: onboarding.steps.length })}
+                      </span>
+                    </button>
                   )}
                   <button
                     type="button"

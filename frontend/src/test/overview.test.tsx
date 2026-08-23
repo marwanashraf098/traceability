@@ -1,4 +1,5 @@
 import { test, expect, describe, vi, beforeEach, afterEach } from 'vitest'
+import userEvent from '@testing-library/user-event'
 import { renderWithProviders, screen, waitFor, within } from './renderWithProviders'
 import { stubFetchWithShellDefaults } from './mockShellFetch'
 import Layout from '../components/Layout'
@@ -108,11 +109,11 @@ const EMPTY_LIST      = { items: [] }
 
 const NOT_ALL_DONE_ONBOARDING = {
   steps: [
-    { key: 'connect_shopify', label: 'Connect Shopify', status: 'done' },
-    { key: 'connect_bosta',   label: 'Connect Bosta',   status: 'done' },
-    { key: 'initial_import',  label: 'Import',          status: 'pending' },
-    { key: 'test_label',      label: 'Test label',      status: 'pending' },
-    { key: 'first_receiving', label: 'First receiving', status: 'pending' },
+    { key: 'connect_shopify', done: true,  auto: true,  manual: false },
+    { key: 'connect_bosta',   done: true,  auto: true,  manual: false },
+    { key: 'location',        done: false, auto: false, manual: false },
+    { key: 'test_label',      done: false, auto: false, manual: false },
+    { key: 'first_receiving', done: false, auto: false, manual: false },
   ],
   allDone: false,
   dismissed: false,
@@ -147,7 +148,6 @@ function makeAppFetch(map: EndpointMap = {}) {
     if (url.includes('/inventory/valuation'))          return jsonOk(map.valuation ?? COSTED_VALUATION)
     if (url.includes('/orders/funnel'))                return jsonOk(map.funnel ?? POPULATED_FUNNEL)
     if (url.includes('/onboarding/dismiss'))           return jsonNoContent()
-    if (url.includes('/onboarding/status'))            return jsonOk(map.onboarding ?? NOT_ALL_DONE_ONBOARDING)
     if (url.includes('/overview/trends'))              return jsonOk(map.trends ?? POPULATED_TRENDS)
     if (url.includes('/overview/top-skus'))            return jsonOk(map.topSkus ?? POPULATED_TOP_SKUS)
     if (url.includes('/orders/summary'))               return jsonOk(map.ordersSummary ?? POPULATED_ORDERS_SUMMARY)
@@ -160,9 +160,15 @@ function makeAppFetch(map: EndpointMap = {}) {
 }
 
 function renderOverview(map: EndpointMap = {}, overrides?: { me?: unknown; exceptionsCount?: unknown }) {
+  // /onboarding/status is called by BOTH Layout's Setup-N/5 chip and Overview's own
+  // onboarding card — same URL, so stubFetchWithShellDefaults intercepts it before
+  // makeAppFetch(map) ever sees it. Route this test's onboarding fixture through the
+  // shell override channel instead of through map, so both callers see the same
+  // per-test data and Layout's extra call can never desync map's other handlers.
   stubFetchWithShellDefaults(makeAppFetch(map), {
     me: overrides?.me ?? { name: 'Mostafa', email: 'm@test.com', role: 'owner' },
     exceptionsCount: overrides?.exceptionsCount ?? { count: 7, critical: 3, warning: 4 },
+    onboardingStatus: map.onboarding ?? NOT_ALL_DONE_ONBOARDING,
   })
   return renderWithProviders(<Layout><Overview /></Layout>)
 }
@@ -361,5 +367,83 @@ describe('Overview dashboard', () => {
     renderOverview({ statusTotals: POPULATED_STATUS_TOTALS })
     await screen.findByTestId('stat-cards')
     expect(screen.queryByTestId('fresh-tenant-card')).toBeNull()
+  })
+
+  // ── Manual checkbox + celebratory transition ─────────────────────────────────
+
+  // ov13: clicking a step's manual checkbox calls setOnboardingStep and flips the
+  // checkbox's checked state optimistically — before the POST's response arrives.
+  test('ov13 manual checkbox — click calls setOnboardingStep and optimistically flips before the network settles', async () => {
+    let resolvePost!: () => void
+    const postPromise = new Promise<void>(res => { resolvePost = res })
+
+    const baseAppFetch = makeAppFetch({})
+    const appFetch = vi.fn((url: string, opts?: RequestInit) => {
+      if (url.includes('/onboarding/steps')) {
+        return postPromise.then(() => jsonNoContent())
+      }
+      return baseAppFetch(url, opts)
+    })
+    stubFetchWithShellDefaults(appFetch, {
+      me: { name: 'Mostafa', email: 'm@test.com', role: 'owner' },
+      exceptionsCount: { count: 0 },
+      onboardingStatus: NOT_ALL_DONE_ONBOARDING,
+    })
+    renderWithProviders(<Layout><Overview /></Layout>)
+
+    await screen.findByTestId('onboarding-card')
+    const row = screen.getByTestId('onboarding-step-location')
+    const checkbox = within(row).getByRole('checkbox') as HTMLInputElement
+    expect(checkbox.checked).toBe(false)
+
+    const user = userEvent.setup()
+    await user.click(checkbox)
+
+    // Optimistic: flips to checked immediately, before the mocked POST resolves.
+    expect(checkbox.checked).toBe(true)
+    expect(appFetch).toHaveBeenCalledWith(
+      expect.stringContaining('/onboarding/steps'),
+      expect.objectContaining({ method: 'POST', body: JSON.stringify({ step: 'location', checked: true }) })
+    )
+
+    // Let the POST resolve and the refetch settle — no leftover pending/disabled state.
+    resolvePost()
+    await waitFor(() => expect(checkbox.disabled).toBe(false))
+  })
+
+  // ov14: an allDone false->true transition (detected across a refetch, here triggered
+  // by the same manual-checkbox flow as ov13) fires the transient "all set" toast and
+  // performs NO db write of its own — specifically, it must never call
+  // POST /onboarding/dismiss. dismissOnboarding is user-initiated only (the X button);
+  // the celebratory toast must never trigger it as a side effect of rendering.
+  test('ov14 celebratory transition — toast fires on false->true, never calls dismissOnboarding', async () => {
+    let onboardingCalls = 0
+    // stubFetchWithShellDefaults intercepts /onboarding/status itself (Layout and
+    // Overview both call it — see renderOverview's own comment above), so the stateful
+    // sequence has to go through its onboardingStatus override, not appFetch directly.
+    const appFetch = makeAppFetch({})
+    stubFetchWithShellDefaults(appFetch, {
+      me: { name: 'Mostafa', email: 'm@test.com', role: 'owner' },
+      exceptionsCount: { count: 0 },
+      onboardingStatus: () => {
+        onboardingCalls += 1
+        return onboardingCalls === 1 ? NOT_ALL_DONE_ONBOARDING : ALL_DONE_ONBOARDING
+      },
+    })
+    renderWithProviders(<Layout><Overview /></Layout>)
+
+    await screen.findByTestId('onboarding-card')
+    const row = screen.getByTestId('onboarding-step-location')
+    const checkbox = within(row).getByRole('checkbox')
+    const user = userEvent.setup()
+    await user.click(checkbox)
+
+    // The refetch after the toggle returns allDone:true -> transient toast fires.
+    await screen.findByText("You're all set up!")
+
+    // No write beyond the manual-step POST the user explicitly triggered — in
+    // particular, never /onboarding/dismiss as a side effect of the transition/render.
+    expect(appFetch).not.toHaveBeenCalledWith(
+      expect.stringContaining('/onboarding/dismiss'), expect.anything())
   })
 })

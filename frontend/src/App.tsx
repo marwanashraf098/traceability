@@ -27,13 +27,9 @@ import LookupPage from './pages/Lookup'
 import Returns from './pages/Returns'
 import ExceptionsPage from './pages/Exceptions'
 import ExchangeMapping from './pages/exchanges/ExchangeMapping'
-import Connections from './pages/Connections'
-import Settings from './pages/Settings'
-import Users from './pages/Users'
-import Onboarding from './pages/Onboarding'
+import SettingsPage from './pages/settings/SettingsPage'
 import Inventory from './pages/Inventory'
 import PickupSessions from './pages/PickupSessions'
-import Locations from './pages/Locations'
 import Privacy from './pages/Privacy'
 import Terms from './pages/Terms'
 
@@ -243,47 +239,21 @@ export default function App() {
           }
         />
         <Route
-          path="/connections"
-          element={
-            <RequireAuth>
-              <Layout><Connections /></Layout>
-            </RequireAuth>
-          }
-        />
-        <Route
-          path="/onboarding"
-          element={
-            <RequireAuth>
-              <Layout><Onboarding /></Layout>
-            </RequireAuth>
-          }
-        />
-        <Route
           path="/settings"
           element={
             <RequireAuth>
-              <Layout><Settings /></Layout>
+              <Layout><SettingsPage /></Layout>
             </RequireAuth>
           }
         />
-        <Route
-          path="/users"
-          element={
-            <RequireAuth>
-              <Layout><Users /></Layout>
-            </RequireAuth>
-          }
-        />
+        {/* Absorbed into /settings — Settings consolidation. Old direct links keep resolving. */}
+        <Route path="/connections" element={<Navigate to="/settings?tab=connections" replace />} />
+        <Route path="/users"       element={<Navigate to="/settings?tab=users" replace />} />
+        <Route path="/locations"   element={<Navigate to="/settings?tab=locations" replace />} />
+        {/* Folded into the Overview onboarding card — Settings consolidation. */}
+        <Route path="/onboarding" element={<Navigate to="/overview" replace />} />
         {/* Absorbed into /inventory Tab 3 (Movement ledger) — Phase B consolidation. */}
         <Route path="/shopify-inventory" element={<Navigate to="/inventory" replace />} />
-        <Route
-          path="/locations"
-          element={
-            <RequireAuth>
-              <Layout><Locations /></Layout>
-            </RequireAuth>
-          }
-        />
         {import.meta.env.DEV && StyleGuide && (
           <Route path="/_styleguide" element={<Suspense fallback={null}><StyleGuide /></Suspense>} />
         )}

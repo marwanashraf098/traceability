@@ -6,7 +6,7 @@ import {
   listLocations, getShopifyInventoryReconcileReport, activateShopifyFulfillment,
   TransferCommandError,
   ConnectionsStatus, BostaBackfillStatus, LocationRow,
-} from '../api'
+} from '../../api'
 
 // ── Status badge helpers ──────────────────────────────────────────────────────
 
@@ -826,9 +826,17 @@ function ShopifyCustomAppCard({
   )
 }
 
-// ── Connections page ──────────────────────────────────────────────────────────
+// ── Connections tab ────────────────────────────────────────────────────────────
+//
+// readOnly (Manager only — Owner and Worker never pass true here: Worker never
+// mounts this tab at all) wraps the whole grid in a native <fieldset disabled>.
+// That cascades disabled to every descendant input/button/select without touching
+// any of the cards' own gating or data logic above — status stays fully visible,
+// only the interactive connect/edit/copy controls stop responding. `display:
+// contents` keeps the fieldset out of the box model so it doesn't break the
+// sm:grid-cols-2 layout of its children.
 
-export default function Connections() {
+export default function ConnectionsTab({ readOnly }: { readOnly: boolean }) {
   const { t } = useTranslation()
   const [status,  setStatus]  = useState<ConnectionsStatus | null>(null)
   const [loading, setLoading] = useState(true)
@@ -849,12 +857,7 @@ export default function Connections() {
   useEffect(() => { load() }, [])
 
   return (
-    <div className="max-w-3xl mx-auto space-y-6">
-      <div>
-        <h1 className="text-h1 text-primary">{t('connections.title')}</h1>
-        <p className="text-small text-muted mt-1">{t('connections.subtitle')}</p>
-      </div>
-
+    <div className="max-w-3xl space-y-6">
       {loading && (
         <div className="flex items-center justify-center py-16">
           <svg className="animate-spin w-6 h-6 text-brand" fill="none" viewBox="0 0 24 24">
@@ -871,16 +874,18 @@ export default function Connections() {
       )}
 
       {!loading && status && (
-        <div className="grid gap-4 sm:grid-cols-2">
-          <ShopifyCard shopify={status.shopify} />
-          <BostaCard   bosta={status.bosta} onConnected={load} />
-          {status.customAppAvailable && (
-            <ShopifyCustomAppCard
-              shopifyCustomApp={status.shopifyCustomApp}
-              onConnected={load}
-            />
-          )}
-        </div>
+        <fieldset disabled={readOnly} className="contents border-0 p-0 m-0">
+          <div className="grid gap-4 sm:grid-cols-2">
+            <ShopifyCard shopify={status.shopify} />
+            <BostaCard   bosta={status.bosta} onConnected={load} />
+            {status.customAppAvailable && (
+              <ShopifyCustomAppCard
+                shopifyCustomApp={status.shopifyCustomApp}
+                onConnected={load}
+              />
+            )}
+          </div>
+        </fieldset>
       )}
     </div>
   )

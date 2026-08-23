@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react'
 import { Link } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
-import { getTenantSettings, updateTenantSettings, getConnections, bostaUpdateSettings, getRoleFromToken, TenantSettings } from '../api'
+import { Eye } from 'lucide-react'
+import { getTenantSettings, updateTenantSettings, getConnections, bostaUpdateSettings, TenantSettings } from '../../api'
 
 // ── Segmented control ─────────────────────────────────────────────────────────
 
@@ -10,11 +11,13 @@ function SegmentedControl<T extends string>({
   options,
   onChange,
   disabled,
+  testId,
 }: {
   value: T
   options: { value: T; label: string }[]
   onChange: (v: T) => void
   disabled?: boolean
+  testId?: string
 }) {
   return (
     <div className="inline-flex rounded-lg border border-line overflow-hidden">
@@ -24,6 +27,7 @@ function SegmentedControl<T extends string>({
           type="button"
           disabled={disabled}
           onClick={() => onChange(opt.value)}
+          data-testid={testId ? `${testId}-${opt.value}` : undefined}
           className={[
             'px-4 py-1.5 text-small font-medium transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand/60',
             value === opt.value
@@ -38,17 +42,38 @@ function SegmentedControl<T extends string>({
   )
 }
 
-// ── Settings page ─────────────────────────────────────────────────────────────
+// ── Tenant field snapshot — the diff baseline for Save fan-out ────────────────
 
-export default function Settings() {
+interface TenantFields {
+  name: string
+  pickupAddress: string
+  labelSize: '40x25' | '50x25'
+  defaultLanguage: 'ar' | 'en'
+  timezone: string
+}
+
+interface AwbFields {
+  awbFormat: 'A4' | 'A6'
+  awbLang: 'ar' | 'en'
+}
+
+// ── Business tab ───────────────────────────────────────────────────────────────
+//
+// Save fans out into up to two independent calls — changed tenant fields to
+// PUT /tenant/settings, changed AWB fields (format + language) to PUT
+// /bosta/settings — each fired only if its own section actually changed, and
+// awb_lang/awbFormat are NEVER included in the tenant payload. Promise.allSettled
+// so one section failing never hides or blocks the other section's success;
+// each section shows its own Saved/error state.
+
+export default function BusinessTab({ isOwner }: { isOwner: boolean }) {
   const { t } = useTranslation()
-  const role = getRoleFromToken()
-  const isOwner = role === 'owner'
 
-  const [loading,  setLoading]  = useState(true)
-  const [saving,   setSaving]   = useState(false)
-  const [error,    setError]    = useState('')
-  const [saved,    setSaved]    = useState(false)
+  const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState('')
+
+  const [tenantSnapshot, setTenantSnapshot] = useState<TenantFields | null>(null)
+  const [awbSnapshot,    setAwbSnapshot]    = useState<AwbFields | null>(null)
 
   const [name,            setName]            = useState('')
   const [pickupAddress,   setPickupAddress]   = useState('')
@@ -62,25 +87,43 @@ export default function Settings() {
   const [awbFormat,      setAwbFormat]      = useState<'A4' | 'A6'>('A4')
   const [awbLang,        setAwbLang]        = useState<'ar' | 'en'>('ar')
 
+  const [saving,        setSaving]        = useState(false)
+  const [tenantResult,  setTenantResult]  = useState<'idle' | 'saved' | 'error'>('idle')
+  const [awbResult,     setAwbResult]     = useState<'idle' | 'saved' | 'error'>('idle')
+
   useEffect(() => {
     async function load() {
       try {
         const [s, conn] = await Promise.all([getTenantSettings(), getConnections()])
-        setName(s.name ?? '')
-        setPickupAddress(s.pickupAddress ?? '')
-        setLabelSize(s.labelSize)
-        setDefaultLanguage(s.defaultLanguage)
-        setTimezone(s.timezone)
+        const tenantFields: TenantFields = {
+          name: s.name ?? '',
+          pickupAddress: s.pickupAddress ?? '',
+          labelSize: s.labelSize,
+          defaultLanguage: s.defaultLanguage,
+          timezone: s.timezone,
+        }
+        setName(tenantFields.name)
+        setPickupAddress(tenantFields.pickupAddress)
+        setLabelSize(tenantFields.labelSize)
+        setDefaultLanguage(tenantFields.defaultLanguage)
+        setTimezone(tenantFields.timezone)
+        setTenantSnapshot(tenantFields)
         setConsentSettings({
           consentPrivacyVersion: s.consentPrivacyVersion,
           consentTermsVersion:   s.consentTermsVersion,
           consentAcceptedAt:     s.consentAcceptedAt,
         })
+
         setBostaConnected(conn.bosta.connected)
-        if (conn.bosta.awbFormat) setAwbFormat(conn.bosta.awbFormat)
-        if (conn.bosta.awbLang === 'en') setAwbLang('en')
+        const awbFields: AwbFields = {
+          awbFormat: conn.bosta.awbFormat ?? 'A4',
+          awbLang:   conn.bosta.awbLang === 'en' ? 'en' : 'ar',
+        }
+        setAwbFormat(awbFields.awbFormat)
+        setAwbLang(awbFields.awbLang)
+        setAwbSnapshot(awbFields)
       } catch {
-        setError(t('common.error'))
+        setLoadError(t('common.error'))
       } finally {
         setLoading(false)
       }
@@ -90,35 +133,68 @@ export default function Settings() {
 
   async function handleSave(e: React.FormEvent) {
     e.preventDefault()
-    setSaving(true)
-    setError('')
-    setSaved(false)
-    try {
-      const payload: Partial<TenantSettings> = {}
-      if (name.trim())          payload.name            = name.trim()
-      if (pickupAddress.trim()) payload.pickupAddress   = pickupAddress.trim()
-      payload.labelSize       = labelSize
-      payload.defaultLanguage = defaultLanguage
-      if (timezone.trim())      payload.timezone        = timezone.trim()
+    if (!tenantSnapshot || !awbSnapshot) return
 
-      const saves: Promise<unknown>[] = [updateTenantSettings(payload)]
-      if (bostaConnected) {
-        saves.push(bostaUpdateSettings({ awbFormat, awbLang }))
-      }
-      await Promise.all(saves)
-      setSaved(true)
-      setTimeout(() => setSaved(false), 4000)
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : ''
-      if (msg.includes('400')) {
-        setError(t('settings.errors.generic'))
+    const tenantPayload: Partial<TenantSettings> = {}
+    if (name.trim() !== tenantSnapshot.name)                     tenantPayload.name            = name.trim()
+    if (pickupAddress.trim() !== tenantSnapshot.pickupAddress)   tenantPayload.pickupAddress   = pickupAddress.trim()
+    if (labelSize !== tenantSnapshot.labelSize)                  tenantPayload.labelSize       = labelSize
+    if (defaultLanguage !== tenantSnapshot.defaultLanguage)      tenantPayload.defaultLanguage = defaultLanguage
+    if (timezone.trim() !== tenantSnapshot.timezone)             tenantPayload.timezone        = timezone.trim()
+
+    // awb_lang / awbFormat are NEVER part of the tenant payload above — they go
+    // to PUT /bosta/settings only, and only if the bosta section actually changed.
+    const awbPayload: { awbFormat?: 'A4' | 'A6'; awbLang?: string } = {}
+    if (bostaConnected && awbFormat !== awbSnapshot.awbFormat) awbPayload.awbFormat = awbFormat
+    if (bostaConnected && awbLang   !== awbSnapshot.awbLang)   awbPayload.awbLang   = awbLang
+
+    const tenantChanged = Object.keys(tenantPayload).length > 0
+    const awbChanged    = Object.keys(awbPayload).length > 0
+    if (!tenantChanged && !awbChanged) return
+
+    setSaving(true)
+    setTenantResult('idle')
+    setAwbResult('idle')
+
+    const [tenantOutcome, awbOutcome] = await Promise.allSettled([
+      tenantChanged ? updateTenantSettings(tenantPayload) : Promise.resolve(undefined),
+      awbChanged    ? bostaUpdateSettings(awbPayload)      : Promise.resolve(undefined),
+    ])
+
+    if (tenantChanged) {
+      if (tenantOutcome.status === 'fulfilled') {
+        setTenantSnapshot({
+          name: name.trim(),
+          pickupAddress: pickupAddress.trim(),
+          labelSize,
+          defaultLanguage,
+          timezone: timezone.trim(),
+        })
+        setTenantResult('saved')
       } else {
-        setError(t('settings.errors.generic'))
+        setTenantResult('error')
       }
-    } finally {
-      setSaving(false)
     }
+    if (awbChanged) {
+      if (awbOutcome.status === 'fulfilled') {
+        setAwbSnapshot({ ...awbSnapshot, ...awbPayload } as AwbFields)
+        setAwbResult('saved')
+      } else {
+        setAwbResult('error')
+      }
+    }
+    setSaving(false)
   }
+
+  const hasChanges = !!tenantSnapshot && !!awbSnapshot && (
+    name.trim() !== tenantSnapshot.name ||
+    pickupAddress.trim() !== tenantSnapshot.pickupAddress ||
+    labelSize !== tenantSnapshot.labelSize ||
+    defaultLanguage !== tenantSnapshot.defaultLanguage ||
+    timezone.trim() !== tenantSnapshot.timezone ||
+    (bostaConnected && awbFormat !== awbSnapshot.awbFormat) ||
+    (bostaConnected && awbLang !== awbSnapshot.awbLang)
+  )
 
   const labelOptions: { value: '40x25' | '50x25'; label: string }[] = [
     { value: '40x25', label: '40×25 mm' },
@@ -140,13 +216,10 @@ export default function Settings() {
     { value: 'en', label: t('settings.roles.en') },
   ]
 
-  return (
-    <div className="max-w-xl mx-auto space-y-6">
-      <div>
-        <h1 className="text-h1 text-primary">{t('settings.title')}</h1>
-        <p className="text-small text-muted mt-1">{t('settings.subtitle')}</p>
-      </div>
+  const fieldsDisabled = !isOwner || saving
 
+  return (
+    <div className="max-w-xl space-y-6">
       {loading ? (
         <div className="flex items-center justify-center py-16">
           <svg className="animate-spin w-6 h-6 text-brand" fill="none" viewBox="0 0 24 24">
@@ -157,20 +230,15 @@ export default function Settings() {
       ) : (
         <div className="card p-6 space-y-6">
           {!isOwner && (
-            <div className="text-small text-muted bg-elevated border border-line rounded px-3 py-2">
-              {t('settings.ownerOnly')}
+            <div className="flex items-center gap-2 text-small text-muted bg-elevated border border-line rounded px-3 py-2">
+              <Eye size={14} strokeWidth={1.75} className="flex-shrink-0" />
+              {t('settings.readOnlyBanner')}
             </div>
           )}
 
-          {error && (
+          {loadError && (
             <div role="alert" className="text-small text-danger bg-danger/10 border border-danger/25 rounded px-3 py-2">
-              {error}
-            </div>
-          )}
-
-          {saved && (
-            <div role="status" className="text-small text-success bg-success/10 border border-success/25 rounded px-3 py-2">
-              {t('settings.saved')}
+              {loadError}
             </div>
           )}
 
@@ -186,7 +254,7 @@ export default function Settings() {
                 value={name}
                 onChange={e => setName(e.target.value)}
                 className="input"
-                disabled={!isOwner || saving}
+                disabled={fieldsDisabled}
               />
             </div>
 
@@ -201,7 +269,7 @@ export default function Settings() {
                 value={pickupAddress}
                 onChange={e => setPickupAddress(e.target.value)}
                 className="input"
-                disabled={!isOwner || saving}
+                disabled={fieldsDisabled}
               />
               <p className="text-caption text-muted mt-1">{t('settings.pickupAddressHint')}</p>
             </div>
@@ -213,7 +281,8 @@ export default function Settings() {
                 value={labelSize}
                 options={labelOptions}
                 onChange={setLabelSize}
-                disabled={!isOwner || saving}
+                disabled={fieldsDisabled}
+                testId="labelSize"
               />
             </div>
 
@@ -224,7 +293,8 @@ export default function Settings() {
                 value={awbFormat}
                 options={awbFormatOptions}
                 onChange={setAwbFormat}
-                disabled={!isOwner || saving || !bostaConnected}
+                disabled={fieldsDisabled || !bostaConnected}
+                testId="awbFormat"
               />
               <p className="text-caption text-muted mt-1">
                 {awbFormat === 'A6'
@@ -243,9 +313,16 @@ export default function Settings() {
                 value={awbLang}
                 options={awbLangOptions}
                 onChange={setAwbLang}
-                disabled={!isOwner || saving || !bostaConnected}
+                disabled={fieldsDisabled || !bostaConnected}
+                testId="awbLang"
               />
               <p className="text-caption text-muted mt-1">{t('settings.awbLangHint')}</p>
+              {awbResult === 'saved' && (
+                <p role="status" data-testid="awb-result-saved" className="text-caption text-success mt-1">{t('settings.saved')}</p>
+              )}
+              {awbResult === 'error' && (
+                <p role="alert" data-testid="awb-result-error" className="text-caption text-danger mt-1">{t('settings.errors.awbSection')}</p>
+              )}
             </div>
 
             {/* Default language */}
@@ -255,7 +332,8 @@ export default function Settings() {
                 value={defaultLanguage}
                 options={langOptions}
                 onChange={setDefaultLanguage}
-                disabled={!isOwner || saving}
+                disabled={fieldsDisabled}
+                testId="defaultLanguage"
               />
               <p className="text-caption text-muted mt-1.5">{t('settings.langNote')}</p>
             </div>
@@ -271,7 +349,7 @@ export default function Settings() {
                 value={timezone}
                 onChange={e => setTimezone(e.target.value)}
                 className="input"
-                disabled={!isOwner || saving}
+                disabled={fieldsDisabled}
                 placeholder="Africa/Cairo"
                 dir="ltr"
               />
@@ -279,13 +357,22 @@ export default function Settings() {
             </div>
 
             {isOwner && (
-              <button
-                type="submit"
-                disabled={saving}
-                className="btn btn-brand"
-              >
-                {saving ? t('settings.saving') : t('settings.save')}
-              </button>
+              <div className="flex items-center gap-3">
+                <button
+                  type="submit"
+                  disabled={saving || !hasChanges}
+                  data-testid="business-save"
+                  className="btn btn-brand"
+                >
+                  {saving ? t('settings.saving') : t('settings.save')}
+                </button>
+                {tenantResult === 'saved' && (
+                  <span role="status" data-testid="business-result-saved" className="text-small text-success">{t('settings.saved')}</span>
+                )}
+                {tenantResult === 'error' && (
+                  <span role="alert" data-testid="business-result-error" className="text-small text-danger">{t('settings.errors.businessSection')}</span>
+                )}
+              </div>
             )}
           </form>
         </div>

@@ -18,7 +18,9 @@
     "locations": "Locations",
     "shopifyInventory": "Inventory Sync",
     "transfers": "Transfers",
-    "manager": "Manager"
+    "manager": "Manager",
+    "setupProgress": "Setup progress",
+    "setupCount": "Setup {{done}}/{{total}}"
   },
   "overview": {
     "title": "Overview",
@@ -134,10 +136,14 @@
     "onboardingCard": {
       "title": "Finish setting up Traced",
       "dismiss": "Dismiss",
+      "go": "Go →",
+      "manualCheckbox": "Mark \"{{step}}\" done manually",
+      "allSetToast": "You're all set up!",
       "chip": {
         "connect_shopify": "Shopify",
         "connect_bosta": "Bosta",
-        "initial_import": "Import",
+        "location": "Location",
+        "test_label": "Test label",
         "first_receiving": "First receiving"
       }
     },
@@ -949,6 +955,13 @@
     "title": "Settings",
     "subtitle": "Business and label configuration for your workspace.",
     "ownerOnly": "Only the account owner can save changes.",
+    "readOnlyBanner": "View only — ask an owner to make changes here.",
+    "tabs": {
+      "business": "Business",
+      "connections": "Connections",
+      "users": "Users",
+      "locations": "Locations"
+    },
     "businessName": "Business name",
     "pickupAddress": "Pickup address",
     "pickupAddressHint": "Where Bosta collects your parcels.",
@@ -969,7 +982,9 @@
     "errors": {
       "labelSize": "Label size must be 40×25 or 50×25.",
       "language": "Language must be 'ar' or 'en'.",
-      "generic": "Could not save settings. Please try again."
+      "generic": "Could not save settings. Please try again.",
+      "businessSection": "Could not save business settings. Please try again.",
+      "awbSection": "Could not save AWB settings. Please try again."
     },
     "roles": {
       "ar": "Arabic",

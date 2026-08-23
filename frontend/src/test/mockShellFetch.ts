@@ -19,7 +19,7 @@ import { vi } from 'vitest'
  * If Layout ever grows more background calls, add their paths to SHELL_PATHS.
  */
 
-const SHELL_PATHS = ['/me', '/exceptions/count']
+const SHELL_PATHS = ['/me', '/exceptions/count', '/onboarding/status']
 
 function isShellPath(url: string): boolean {
   return SHELL_PATHS.some(path => url.endsWith(path) || url.includes(path))
@@ -45,7 +45,13 @@ function shellDefaultResponse(body: unknown) {
  */
 export function stubFetchWithShellDefaults(
   appFetch: (url: string, opts?: RequestInit) => unknown,
-  overrides?: { me?: unknown; exceptionsCount?: unknown },
+  overrides?: {
+    me?: unknown
+    exceptionsCount?: unknown
+    /** Static value, or a () => value factory for tests that need the response to
+     *  change across repeated calls (e.g. simulating a refetch after a mutation). */
+    onboardingStatus?: unknown | (() => unknown)
+  },
 ): void {
   vi.stubGlobal('fetch', (url: string, opts?: RequestInit) => {
     if (typeof url === 'string') {
@@ -54,6 +60,13 @@ export function stubFetchWithShellDefaults(
       }
       if (url.includes('/exceptions/count')) {
         return shellDefaultResponse(overrides?.exceptionsCount ?? {})
+      }
+      if (url.includes('/onboarding/status')) {
+        // Default: complete + dismissed, so Layout's Setup N/5 chip stays silent
+        // in tests that don't care about it — matches the chip's own !allDone gate.
+        const ov = overrides?.onboardingStatus
+        const body = typeof ov === 'function' ? (ov as () => unknown)() : (ov ?? { steps: [], allDone: true, dismissed: true })
+        return shellDefaultResponse(body)
       }
       if (isShellPath(url)) return shellDefaultResponse({})
     }

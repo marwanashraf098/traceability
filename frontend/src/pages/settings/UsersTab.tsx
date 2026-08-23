@@ -1,7 +1,7 @@
 import { useState, useEffect, FormEvent } from 'react'
 import { useTranslation } from 'react-i18next'
-import { listUsers, createUser, updateUser, deactivateUser, getRoleFromToken, User } from '../api'
-import { Modal } from '../components/ui'
+import { listUsers, createUser, updateUser, deactivateUser, getRoleFromToken, User } from '../../api'
+import { Modal } from '../../components/ui'
 
 // ── Role badge ────────────────────────────────────────────────────────────────
 
@@ -354,9 +354,9 @@ function DeactivateModal({
   )
 }
 
-// ── Users page ────────────────────────────────────────────────────────────────
+// ── Users tab ─────────────────────────────────────────────────────────────────
 
-export default function Users() {
+export default function UsersTab() {
   const { t } = useTranslation()
   const currentRole = getRoleFromToken()
 
@@ -389,12 +389,8 @@ export default function Users() {
   }
 
   return (
-    <div className="max-w-4xl mx-auto space-y-6">
-      <div className="flex items-center justify-between gap-4">
-        <div>
-          <h1 className="text-h1 text-primary">{t('users.title')}</h1>
-          <p className="text-small text-muted mt-1">{t('users.subtitle')}</p>
-        </div>
+    <div className="max-w-4xl space-y-6">
+      <div className="flex items-center justify-end gap-4">
         <button onClick={() => setShowCreate(true)} className="btn btn-brand flex-shrink-0">
           {t('users.addUser')}
         </button>

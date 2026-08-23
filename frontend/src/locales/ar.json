@@ -18,7 +18,9 @@
     "locations": "المواقع",
     "shopifyInventory": "مزامنة المخزون",
     "transfers": "عمليات النقل",
-    "manager": "المدير"
+    "manager": "المدير",
+    "setupProgress": "تقدّم الإعداد",
+    "setupCount": "الإعداد {{done}}/{{total}}"
   },
   "overview": {
     "title": "لوحة التحكم",
@@ -134,10 +136,14 @@
     "onboardingCard": {
       "title": "أكمل إعداد Traced",
       "dismiss": "إغلاق",
+      "go": "→ الانتقال",
+      "manualCheckbox": "وضع علامة \"{{step}}\" كمكتملة يدويًا",
+      "allSetToast": "كل شيء جاهز!",
       "chip": {
         "connect_shopify": "Shopify",
         "connect_bosta": "بوسطة",
-        "initial_import": "الاستيراد",
+        "location": "الموقع",
+        "test_label": "ملصق تجريبي",
         "first_receiving": "أول استلام"
       }
     },
@@ -944,6 +950,13 @@
     "title": "الإعدادات",
     "subtitle": "إعدادات النشاط التجاري والملصقات لمساحة عملك.",
     "ownerOnly": "يمكن للمالك فقط حفظ التغييرات.",
+    "readOnlyBanner": "للعرض فقط — اطلب من المالك إجراء التغييرات هنا.",
+    "tabs": {
+      "business": "العمل",
+      "connections": "الاتصالات",
+      "users": "المستخدمون",
+      "locations": "المواقع"
+    },
     "businessName": "اسم النشاط التجاري",
     "pickupAddress": "عنوان الاستلام",
     "pickupAddressHint": "المكان الذي تستلم منه بوستا طرودك.",
@@ -964,7 +977,9 @@
     "errors": {
       "labelSize": "يجب أن يكون حجم الملصق 40×25 أو 50×25.",
       "language": "يجب أن تكون اللغة 'ar' أو 'en'.",
-      "generic": "تعذّر حفظ الإعدادات. يرجى المحاولة مرة أخرى."
+      "generic": "تعذّر حفظ الإعدادات. يرجى المحاولة مرة أخرى.",
+      "businessSection": "تعذّر حفظ إعدادات النشاط التجاري. يرجى المحاولة مرة أخرى.",
+      "awbSection": "تعذّر حفظ إعدادات بوليصة الشحن. يرجى المحاولة مرة أخرى."
     },
     "roles": {
       "ar": "العربية",

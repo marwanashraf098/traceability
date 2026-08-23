@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
-import { getAccessToken } from '../auth'
+import { getAccessToken } from '../../auth'
 
 function authHeaders(): Record<string, string> {
   const t = getAccessToken()
@@ -69,7 +69,7 @@ function CreateForm({ onCreated }: { onCreated: () => void }) {
 
   if (!open) {
     return (
-      <button onClick={() => setOpen(true)} className="btn-primary text-sm">
+      <button onClick={() => setOpen(true)} className="btn btn-brand text-small">
         {t('locations.addLocation')}
       </button>
     )
@@ -77,30 +77,30 @@ function CreateForm({ onCreated }: { onCreated: () => void }) {
 
   return (
     <form onSubmit={submit} className="card p-4 space-y-3 max-w-sm">
-      <h3 className="font-medium text-primary text-sm">{t('locations.newTitle')}</h3>
+      <h3 className="font-medium text-primary text-small">{t('locations.newTitle')}</h3>
       <input
         type="text"
         value={name}
         onChange={e => setName(e.target.value)}
         placeholder={t('locations.namePlaceholder')}
-        className="input text-sm w-full"
+        className="input text-small w-full"
         autoFocus
         disabled={busy}
       />
       {err && <p className="text-xs text-danger">{err}</p>}
       <div className="flex gap-2">
-        <button type="submit" disabled={busy || !name.trim()} className="btn-primary text-sm">
+        <button type="submit" disabled={busy || !name.trim()} className="btn btn-brand text-small">
           {busy ? t('common.loading') : t('locations.create')}
         </button>
         <button type="button" onClick={() => { setOpen(false); setErr(null) }}
-          className="btn-secondary text-sm">{t('common.cancel')}</button>
+          className="btn btn-ghost text-small">{t('common.cancel')}</button>
       </div>
       <p className="text-xs text-muted">{t('locations.shopifySyncNote')}</p>
     </form>
   )
 }
 
-export default function Locations() {
+export default function LocationsTab() {
   const { t } = useTranslation()
   const [locations, setLocations] = useState<Location[]>([])
   const [loading, setLoading]     = useState(false)
@@ -123,42 +123,41 @@ export default function Locations() {
   useEffect(() => { load() }, [load])
 
   return (
-    <div className="space-y-5">
-      <div className="flex items-center justify-between">
-        <h1 className="text-xl font-semibold text-primary">{t('locations.title')}</h1>
+    <div className="max-w-4xl space-y-5">
+      <div className="flex items-center justify-end">
         <CreateForm onCreated={load} />
       </div>
 
-      {loading && <p className="text-sm text-muted">{t('common.loading')}</p>}
-      {error   && <p className="text-sm text-danger">{error}</p>}
+      {loading && <p className="text-small text-muted">{t('common.loading')}</p>}
+      {error   && <p className="text-small text-danger">{error}</p>}
 
       {!loading && !error && locations.length === 0 && (
-        <div className="card p-8 text-center text-muted text-sm">{t('locations.empty')}</div>
+        <div className="card p-8 text-center text-muted text-small">{t('locations.empty')}</div>
       )}
 
       {!loading && !error && locations.length > 0 && (
         <div className="card overflow-hidden">
-          <table className="w-full text-sm">
-            <thead className="bg-surface border-b border-line">
+          <table className="w-full">
+            <thead>
               <tr>
-                <th className="text-start px-4 py-2.5 text-xs font-medium text-secondary">{t('locations.col.name')}</th>
-                <th className="text-start px-4 py-2.5 text-xs font-medium text-secondary">{t('locations.col.type')}</th>
-                <th className="text-start px-4 py-2.5 text-xs font-medium text-secondary">{t('locations.col.shopifySync')}</th>
-                <th className="text-start px-4 py-2.5 text-xs font-medium text-secondary">{t('locations.col.shopifyId')}</th>
-                <th className="text-start px-4 py-2.5 text-xs font-medium text-secondary">{t('locations.col.syncedAt')}</th>
+                <th className="tbl-header text-start">{t('locations.col.name')}</th>
+                <th className="tbl-header text-start">{t('locations.col.type')}</th>
+                <th className="tbl-header text-start">{t('locations.col.shopifySync')}</th>
+                <th className="tbl-header text-start">{t('locations.col.shopifyId')}</th>
+                <th className="tbl-header text-start">{t('locations.col.syncedAt')}</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-line">
+            <tbody>
               {locations.map(loc => (
-                <tr key={loc.id}>
-                  <td className="px-4 py-3">
+                <tr key={loc.id} className="tbl-row">
+                  <td className="tbl-cell">
                     <div className="font-medium text-primary">{loc.name}</div>
                     {loc.is_default && (
                       <span className="text-xs text-muted">{t('locations.default')}</span>
                     )}
                   </td>
-                  <td className="px-4 py-3 text-secondary capitalize">{loc.type}</td>
-                  <td className="px-4 py-3">
+                  <td className="tbl-cell text-muted capitalize">{loc.type}</td>
+                  <td className="tbl-cell">
                     <SyncBadge status={loc.shopify_sync_status} error={loc.shopify_sync_error} />
                     {loc.shopify_sync_status === 'error' && loc.shopify_sync_error && (
                       <div className="text-xs text-danger mt-0.5 max-w-xs truncate"
@@ -167,10 +166,10 @@ export default function Locations() {
                       </div>
                     )}
                   </td>
-                  <td className="px-4 py-3 text-secondary text-xs font-mono">
+                  <td className="tbl-cell text-muted text-xs font-mono">
                     {loc.shopify_location_id ?? t('common.na')}
                   </td>
-                  <td className="px-4 py-3 text-secondary text-xs">
+                  <td className="tbl-cell text-muted text-xs">
                     {loc.shopify_synced_at
                       ? new Date(loc.shopify_synced_at).toLocaleString()
                       : t('common.na')}

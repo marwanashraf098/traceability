@@ -598,9 +598,10 @@ export function bostaGetSyncStatus() {
 // ── Onboarding checklist (FR-1.2) ────────────────────────────────────────────
 
 export interface OnboardingStep {
-  key: 'connect_shopify' | 'connect_bosta' | 'initial_import' | 'test_label' | 'first_receiving'
-  label: string
-  status: 'done' | 'pending'
+  key: 'connect_shopify' | 'connect_bosta' | 'location' | 'test_label' | 'first_receiving'
+  done: boolean
+  auto: boolean
+  manual: boolean
 }
 
 export interface OnboardingStatus {
@@ -615,6 +616,13 @@ export function getOnboardingStatus() {
 
 export function dismissOnboarding() {
   return request<void>('/onboarding/dismiss', { method: 'POST' })
+}
+
+export function setOnboardingStep(step: OnboardingStep['key'], checked: boolean) {
+  return request<void>('/onboarding/steps', {
+    method: 'POST',
+    body: JSON.stringify({ step, checked }),
+  })
 }
 
 // ── Tenant settings (FR-1.4) ──────────────────────────────────────────────────

@@ -5,6 +5,7 @@ import i18next from 'i18next'
 import { initReactI18next } from 'react-i18next'
 import en from '../locales/en.json'
 import { ReactElement } from 'react'
+import { ToastProvider } from '../components/ui'
 
 // Fresh i18next instance for tests — does NOT share state with the singleton in
 // src/i18n.ts, avoids the localStorage.getItem('lang') call at import time, and
@@ -30,7 +31,9 @@ export function renderWithProviders(
     return (
       <MemoryRouter initialEntries={initialEntries}>
         <I18nextProvider i18n={testI18n}>
-          {children}
+          <ToastProvider>
+            {children}
+          </ToastProvider>
         </I18nextProvider>
       </MemoryRouter>
     )

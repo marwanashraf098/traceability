@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import type { TFunction } from 'i18next'
@@ -11,13 +11,14 @@ import {
 import {
   request,
   getStatusTotals, getValuation, getOrdersFunnel, getOnboardingStatus, dismissOnboarding,
+  setOnboardingStep,
   getOverviewTrends, getOverviewTopSkus, getOrdersSummary, listOrders,
   type StatusTotals, type Valuation, type FunnelCounts,
   type OnboardingStatus, type OnboardingStep,
   type MetricTrend, type TrendPoint, type TopSku, type OrderSummaryCounts, type OrderSummary,
 } from '../api'
 import {
-  EmptyState, Progress, useMe,
+  EmptyState, Progress, useMe, useToast,
   Skeleton, Spinner, ProductThumb, DeliveryBadge, cn,
 } from '../components/ui'
 
@@ -39,10 +40,11 @@ const ELEVATED    = '#161B22'
 // blocks another. A shared source is fetched ONCE and passed to every widget
 // that reads it — never re-fetched per widget.
 
-function useZoneFetch<T>(fetchFn: () => Promise<T>): { data: T | null; loading: boolean; error: boolean } {
+function useZoneFetch<T>(fetchFn: () => Promise<T>): { data: T | null; loading: boolean; error: boolean; refetch: () => void } {
   const [data, setData]       = useState<T | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError]     = useState(false)
+  const [version, setVersion] = useState(0)
 
   useEffect(() => {
     let cancelled = false
@@ -54,9 +56,9 @@ function useZoneFetch<T>(fetchFn: () => Promise<T>): { data: T | null; loading: 
       .finally(() => { if (!cancelled) setLoading(false) })
     return () => { cancelled = true }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [version])
 
-  return { data, loading, error }
+  return { data, loading, error, refetch: () => setVersion(v => v + 1) }
 }
 
 // ── Minimal inline error fallback — never the full-bleed critical Alert ────
@@ -519,17 +521,63 @@ function QuickActions() {
 }
 
 // ── Onboarding card — condensed, dismissible ────────────────────────────────
+//
+// The 5 checklist steps, in a fixed display order — key strings are the ones
+// OnboardingController.status() returns (connect_shopify/connect_bosta/location/
+// test_label/first_receiving are unchanged; "location" is the new FR-1.2 step,
+// "initial_import" was dropped). Each row shows the auto/manual-derived `done`
+// state plus a manual-override checkbox — checking it calls setOnboardingStep()
+// and reconciles from the next onboarding refetch (optimistic flip in between).
 
-const ONBOARDING_CHIPS = ['connect_shopify', 'connect_bosta', 'initial_import', 'first_receiving'] as const
+const ONBOARDING_STEP_ORDER = ['connect_shopify', 'connect_bosta', 'location', 'test_label', 'first_receiving'] as const
 
-function OnboardingCard({ status, onDismissed }: { status: OnboardingStatus; onDismissed: () => void }) {
+const STEP_DEST: Record<string, string> = {
+  connect_shopify: '/settings?tab=connections',
+  connect_bosta:   '/settings?tab=connections',
+  location:        '/settings?tab=locations',
+  test_label:      '/receiving',
+  first_receiving: '/receiving',
+}
+
+function OnboardingCard({
+  status,
+  onDismissed,
+  onRefetch,
+}: {
+  status: OnboardingStatus
+  onDismissed: () => void
+  onRefetch: () => void
+}) {
   const { t } = useTranslation()
   const [dismissing, setDismissing] = useState(false)
+  const [pendingToggle, setPendingToggle] = useState<Set<string>>(new Set())
+  // Optimistic local override for the manual flag, keyed by step — flipped the instant
+  // the checkbox is clicked, before the network round-trip. Cleared per-key once the
+  // authoritative `status` prop (from the next onboarding refetch) actually agrees with
+  // it — reconciling on the real server state, not just on the request settling, so a
+  // failed write correctly snaps back instead of sticking.
+  const [optimisticManual, setOptimisticManual] = useState<Record<string, boolean>>({})
 
-  const steps = ONBOARDING_CHIPS
+  useEffect(() => {
+    setOptimisticManual(prev => {
+      if (Object.keys(prev).length === 0) return prev
+      const next = { ...prev }
+      let changed = false
+      for (const s of status.steps) {
+        if (s.key in next && next[s.key] === s.manual) { delete next[s.key]; changed = true }
+      }
+      return changed ? next : prev
+    })
+  }, [status.steps])
+
+  const steps = ONBOARDING_STEP_ORDER
     .map(key => status.steps.find(s => s.key === key))
     .filter((s): s is OnboardingStep => !!s)
-  const doneCount = steps.filter(s => s.status === 'done').length
+    .map(s => {
+      const manual = s.key in optimisticManual ? optimisticManual[s.key] : s.manual
+      return { ...s, manual, done: s.auto || manual }
+    })
+  const doneCount = steps.filter(s => s.done).length
   const pct = steps.length > 0 ? (doneCount / steps.length) * 100 : 0
 
   async function handleDismiss() {
@@ -538,37 +586,67 @@ function OnboardingCard({ status, onDismissed }: { status: OnboardingStatus; onD
     onDismissed()
   }
 
+  async function handleToggle(key: OnboardingStep['key'], checked: boolean) {
+    setOptimisticManual(prev => ({ ...prev, [key]: checked }))
+    setPendingToggle(prev => new Set(prev).add(key))
+    try {
+      await setOnboardingStep(key, checked)
+    } catch {
+      // Write failed — drop the optimistic guess immediately (it would otherwise strand
+      // forever: the reconciling effect only clears an entry once the server's value
+      // matches it, which never happens for a value the server never accepted).
+      setOptimisticManual(prev => { const next = { ...prev }; delete next[key]; return next })
+    }
+    onRefetch()
+    setPendingToggle(prev => { const next = new Set(prev); next.delete(key); return next })
+  }
+
   return (
-    <div className="card border-trace-blue p-4 flex items-center gap-4" data-testid="onboarding-card">
-      <div className="flex-1 flex flex-col gap-2 min-w-0">
-        <div className="flex items-center justify-between">
-          <span className="text-small font-bold text-primary">{t('overview.onboardingCard.title')}</span>
-          <button
-            type="button"
-            onClick={handleDismiss}
-            disabled={dismissing}
-            aria-label={t('overview.onboardingCard.dismiss')}
-            className="text-muted hover:text-primary transition-colors"
-          >
-            <X size={14} strokeWidth={2} />
-          </button>
-        </div>
-        <Progress value={pct} />
+    <div className="card border-trace-blue p-4 flex flex-col gap-3" data-testid="onboarding-card">
+      <div className="flex items-center justify-between">
+        <span className="text-small font-bold text-primary">{t('overview.onboardingCard.title')}</span>
+        <button
+          type="button"
+          onClick={handleDismiss}
+          disabled={dismissing}
+          aria-label={t('overview.onboardingCard.dismiss')}
+          className="text-muted hover:text-primary transition-colors"
+        >
+          <X size={14} strokeWidth={2} />
+        </button>
       </div>
-      <div className="flex flex-wrap gap-3.5 text-caption flex-shrink-0">
+      <Progress value={pct} />
+      <div className="flex flex-col gap-1.5">
         {steps.map(step => (
-          <Link
+          <div
             key={step.key}
-            to={step.status === 'done' ? '#' : '/connections'}
-            className={step.status === 'done'
-              ? 'flex items-center gap-1.5 text-muted pointer-events-none'
-              : 'flex items-center gap-1.5 text-trace-blue hover:text-trace-blue-hover transition-colors'}
+            data-testid={`onboarding-step-${step.key}`}
+            data-done={step.done}
+            className="flex items-center gap-2.5 text-caption"
           >
-            {step.status === 'done'
-              ? <CheckCircle2 size={13} strokeWidth={2} className="text-success-text" />
-              : <Circle size={13} strokeWidth={2} />}
-            {t(`overview.onboardingCard.chip.${step.key}`)}
-          </Link>
+            <input
+              type="checkbox"
+              checked={step.manual}
+              disabled={pendingToggle.has(step.key)}
+              onChange={e => handleToggle(step.key, e.target.checked)}
+              aria-label={t('overview.onboardingCard.manualCheckbox', { step: t(`overview.onboardingCard.chip.${step.key}`) })}
+              className="flex-shrink-0"
+            />
+            {step.done
+              ? <CheckCircle2 size={13} strokeWidth={2} className="text-success-text flex-shrink-0" />
+              : <Circle size={13} strokeWidth={2} className="text-muted flex-shrink-0" />}
+            <span className={step.done ? 'flex-1 text-muted line-through' : 'flex-1 text-primary'}>
+              {t(`overview.onboardingCard.chip.${step.key}`)}
+            </span>
+            {!step.done && (
+              <Link
+                to={STEP_DEST[step.key]}
+                className="text-trace-blue hover:text-trace-blue-hover transition-colors font-medium flex-shrink-0"
+              >
+                {t('overview.onboardingCard.go')}
+              </Link>
+            )}
+          </div>
         ))}
       </div>
     </div>
@@ -638,6 +716,22 @@ export default function Overview() {
 
   const [onboardingHidden, setOnboardingHidden] = useState(false)
 
+  // Transient "you're all set up!" toast — fires only on an in-session false->true
+  // transition (e.g. checking the last manual-override box), never on a fresh load
+  // that's already allDone, and never writes to onboarding_dismissed_at. The
+  // persistent onboarding-card condition below is untouched by this.
+  const { toast } = useToast()
+  const prevAllDoneRef = useRef<boolean | null>(null)
+  useEffect(() => {
+    if (onboarding.loading || onboarding.error || !onboarding.data) return
+    const wasIncomplete = prevAllDoneRef.current === false
+    if (wasIncomplete && onboarding.data.allDone) {
+      toast({ tone: 'success', message: t('overview.onboardingCard.allSetToast') })
+    }
+    prevAllDoneRef.current = onboarding.data.allDone
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [onboarding.data, onboarding.loading, onboarding.error])
+
   const counts = statusTotals.data?.statusCounts
   const totalPieces = (counts?.available ?? 0) + (counts?.reserved ?? 0) + (counts?.damaged ?? 0) + (counts?.lost ?? 0)
 
@@ -676,7 +770,11 @@ export default function Overview() {
         <>
           {/* ── Onboarding card ── */}
           {showOnboarding && onboarding.data && (
-            <OnboardingCard status={onboarding.data} onDismissed={() => setOnboardingHidden(true)} />
+            <OnboardingCard
+              status={onboarding.data}
+              onDismissed={() => setOnboardingHidden(true)}
+              onRefetch={onboarding.refetch}
+            />
           )}
 
           {/* ── 5 sparkline stat cards ── */}
