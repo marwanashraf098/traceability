@@ -960,7 +960,14 @@
       "business": "Business",
       "connections": "Connections",
       "users": "Users",
-      "locations": "Locations"
+      "locations": "Locations",
+      "usersSubtitle": "Team",
+      "locationsSubtitle": "Warehouses & locations"
+    },
+    "sections": {
+      "businessDetails": "Business details",
+      "labelsPrinting": "Labels & printing",
+      "localization": "Localization"
     },
     "businessName": "Business name",
     "pickupAddress": "Pickup address",

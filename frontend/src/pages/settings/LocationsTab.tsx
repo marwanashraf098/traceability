@@ -123,8 +123,9 @@ export default function LocationsTab() {
   useEffect(() => { load() }, [load])
 
   return (
-    <div className="max-w-4xl space-y-5">
-      <div className="flex items-center justify-end">
+    <div className="space-y-5">
+      <div className="flex items-center justify-between gap-4">
+        <h2 className="text-h3 text-primary">{t('settings.tabs.locationsSubtitle')}</h2>
         <CreateForm onCreated={load} />
       </div>
 

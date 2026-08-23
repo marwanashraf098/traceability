@@ -955,7 +955,14 @@
       "business": "العمل",
       "connections": "الاتصالات",
       "users": "المستخدمون",
-      "locations": "المواقع"
+      "locations": "المواقع",
+      "usersSubtitle": "الفريق",
+      "locationsSubtitle": "المستودعات والمواقع"
+    },
+    "sections": {
+      "businessDetails": "تفاصيل النشاط التجاري",
+      "labelsPrinting": "الملصقات والطباعة",
+      "localization": "الإعدادات المحلية"
     },
     "businessName": "اسم النشاط التجاري",
     "pickupAddress": "عنوان الاستلام",

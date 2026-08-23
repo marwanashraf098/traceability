@@ -42,6 +42,35 @@ function SegmentedControl<T extends string>({
   )
 }
 
+// ── Settings-row layout primitives ────────────────────────────────────────────
+// Appearance only — label+hint on the left (~1/3), control on the right (~2/3),
+// row fills the section's full width. The control itself gets a capped max-width
+// (see className="input max-w-md" below) so a lone text input doesn't stretch
+// edge-to-edge on a wide screen. Row order is plain DOM order (label div first,
+// control div second) so it mirrors automatically under dir="rtl" — no ps-/pe-
+// direction hacks needed here, same as the rest of the app's flex layouts.
+
+function SettingsSection({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <div className="card p-6">
+      <h2 className="text-h3 text-primary mb-4">{title}</h2>
+      <div className="divide-y divide-line">{children}</div>
+    </div>
+  )
+}
+
+function SettingsRow({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
+  return (
+    <div className="flex flex-col sm:flex-row sm:items-start gap-2 sm:gap-6 py-4 first:pt-0 last:pb-0">
+      <div className="sm:w-1/3 flex-shrink-0">
+        <div className="text-small font-medium text-primary">{label}</div>
+        {hint && <p className="text-caption text-muted mt-0.5">{hint}</p>}
+      </div>
+      <div className="sm:w-2/3 min-w-0">{children}</div>
+    </div>
+  )
+}
+
 // ── Tenant field snapshot — the diff baseline for Save fan-out ────────────────
 
 interface TenantFields {
@@ -219,7 +248,7 @@ export default function BusinessTab({ isOwner }: { isOwner: boolean }) {
   const fieldsDisabled = !isOwner || saving
 
   return (
-    <div className="max-w-xl space-y-6">
+    <div className="space-y-6">
       {loading ? (
         <div className="flex items-center justify-center py-16">
           <svg className="animate-spin w-6 h-6 text-brand" fill="none" viewBox="0 0 24 24">
@@ -228,7 +257,7 @@ export default function BusinessTab({ isOwner }: { isOwner: boolean }) {
           </svg>
         </div>
       ) : (
-        <div className="card p-6 space-y-6">
+        <form onSubmit={handleSave} className="space-y-6">
           {!isOwner && (
             <div className="flex items-center gap-2 text-small text-muted bg-elevated border border-line rounded px-3 py-2">
               <Eye size={14} strokeWidth={1.75} className="flex-shrink-0" />
@@ -242,41 +271,33 @@ export default function BusinessTab({ isOwner }: { isOwner: boolean }) {
             </div>
           )}
 
-          <form onSubmit={handleSave} className="space-y-5">
-            {/* Business name */}
-            <div>
-              <label className="block text-small text-muted mb-1.5" htmlFor="bizName">
-                {t('settings.businessName')}
-              </label>
+          <SettingsSection title={t('settings.sections.businessDetails')}>
+            <SettingsRow label={t('settings.businessName')}>
+              <label className="sr-only" htmlFor="bizName">{t('settings.businessName')}</label>
               <input
                 id="bizName"
                 type="text"
                 value={name}
                 onChange={e => setName(e.target.value)}
-                className="input"
+                className="input max-w-md"
                 disabled={fieldsDisabled}
               />
-            </div>
-
-            {/* Pickup address */}
-            <div>
-              <label className="block text-small text-muted mb-1.5" htmlFor="pickupAddr">
-                {t('settings.pickupAddress')}
-              </label>
+            </SettingsRow>
+            <SettingsRow label={t('settings.pickupAddress')} hint={t('settings.pickupAddressHint')}>
+              <label className="sr-only" htmlFor="pickupAddr">{t('settings.pickupAddress')}</label>
               <input
                 id="pickupAddr"
                 type="text"
                 value={pickupAddress}
                 onChange={e => setPickupAddress(e.target.value)}
-                className="input"
+                className="input max-w-md"
                 disabled={fieldsDisabled}
               />
-              <p className="text-caption text-muted mt-1">{t('settings.pickupAddressHint')}</p>
-            </div>
+            </SettingsRow>
+          </SettingsSection>
 
-            {/* Label size */}
-            <div>
-              <span className="block text-small text-muted mb-2">{t('settings.labelSize')}</span>
+          <SettingsSection title={t('settings.sections.labelsPrinting')}>
+            <SettingsRow label={t('settings.labelSize')}>
               <SegmentedControl
                 value={labelSize}
                 options={labelOptions}
@@ -284,11 +305,9 @@ export default function BusinessTab({ isOwner }: { isOwner: boolean }) {
                 disabled={fieldsDisabled}
                 testId="labelSize"
               />
-            </div>
+            </SettingsRow>
 
-            {/* AWB label size — Bosta courier only */}
-            <div>
-              <span className="block text-small text-muted mb-2">{t('settings.awbFormat')}</span>
+            <SettingsRow label={t('settings.awbFormat')}>
               <SegmentedControl
                 value={awbFormat}
                 options={awbFormatOptions}
@@ -296,7 +315,7 @@ export default function BusinessTab({ isOwner }: { isOwner: boolean }) {
                 disabled={fieldsDisabled || !bostaConnected}
                 testId="awbFormat"
               />
-              <p className="text-caption text-muted mt-1">
+              <p className="text-caption text-muted mt-1.5">
                 {awbFormat === 'A6'
                   ? t('settings.awbFormatA6')
                   : t('settings.awbFormatA4')}
@@ -304,11 +323,9 @@ export default function BusinessTab({ isOwner }: { isOwner: boolean }) {
               {!bostaConnected && (
                 <p className="text-caption text-muted mt-0.5 opacity-60">{t('settings.awbFormatNotConnected')}</p>
               )}
-            </div>
+            </SettingsRow>
 
-            {/* AWB language (printed on the waybill) */}
-            <div>
-              <span className="block text-small text-muted mb-2">{t('settings.awbLang')}</span>
+            <SettingsRow label={t('settings.awbLang')} hint={t('settings.awbLangHint')}>
               <SegmentedControl
                 value={awbLang}
                 options={awbLangOptions}
@@ -316,18 +333,17 @@ export default function BusinessTab({ isOwner }: { isOwner: boolean }) {
                 disabled={fieldsDisabled || !bostaConnected}
                 testId="awbLang"
               />
-              <p className="text-caption text-muted mt-1">{t('settings.awbLangHint')}</p>
               {awbResult === 'saved' && (
-                <p role="status" data-testid="awb-result-saved" className="text-caption text-success mt-1">{t('settings.saved')}</p>
+                <p role="status" data-testid="awb-result-saved" className="text-caption text-success mt-1.5">{t('settings.saved')}</p>
               )}
               {awbResult === 'error' && (
-                <p role="alert" data-testid="awb-result-error" className="text-caption text-danger mt-1">{t('settings.errors.awbSection')}</p>
+                <p role="alert" data-testid="awb-result-error" className="text-caption text-danger mt-1.5">{t('settings.errors.awbSection')}</p>
               )}
-            </div>
+            </SettingsRow>
+          </SettingsSection>
 
-            {/* Default language */}
-            <div>
-              <span className="block text-small text-muted mb-2">{t('settings.defaultLanguage')}</span>
+          <SettingsSection title={t('settings.sections.localization')}>
+            <SettingsRow label={t('settings.defaultLanguage')} hint={t('settings.langNote')}>
               <SegmentedControl
                 value={defaultLanguage}
                 options={langOptions}
@@ -335,47 +351,42 @@ export default function BusinessTab({ isOwner }: { isOwner: boolean }) {
                 disabled={fieldsDisabled}
                 testId="defaultLanguage"
               />
-              <p className="text-caption text-muted mt-1.5">{t('settings.langNote')}</p>
-            </div>
+            </SettingsRow>
 
-            {/* Timezone */}
-            <div>
-              <label className="block text-small text-muted mb-1.5" htmlFor="timezone">
-                {t('settings.timezone')}
-              </label>
+            <SettingsRow label={t('settings.timezone')} hint={t('settings.timezoneHint')}>
+              <label className="sr-only" htmlFor="timezone">{t('settings.timezone')}</label>
               <input
                 id="timezone"
                 type="text"
                 value={timezone}
                 onChange={e => setTimezone(e.target.value)}
-                className="input"
+                className="input max-w-md"
                 disabled={fieldsDisabled}
                 placeholder="Africa/Cairo"
                 dir="ltr"
               />
-              <p className="text-caption text-muted mt-1">{t('settings.timezoneHint')}</p>
-            </div>
+            </SettingsRow>
+          </SettingsSection>
 
-            {isOwner && (
-              <div className="flex items-center gap-3">
-                <button
-                  type="submit"
-                  disabled={saving || !hasChanges}
-                  data-testid="business-save"
-                  className="btn btn-brand"
-                >
-                  {saving ? t('settings.saving') : t('settings.save')}
-                </button>
-                {tenantResult === 'saved' && (
-                  <span role="status" data-testid="business-result-saved" className="text-small text-success">{t('settings.saved')}</span>
-                )}
-                {tenantResult === 'error' && (
-                  <span role="alert" data-testid="business-result-error" className="text-small text-danger">{t('settings.errors.businessSection')}</span>
-                )}
-              </div>
-            )}
-          </form>
-        </div>
+          {isOwner && (
+            <div className="flex items-center justify-end gap-3 pt-4 border-t border-line">
+              {tenantResult === 'saved' && (
+                <span role="status" data-testid="business-result-saved" className="text-small text-success">{t('settings.saved')}</span>
+              )}
+              {tenantResult === 'error' && (
+                <span role="alert" data-testid="business-result-error" className="text-small text-danger">{t('settings.errors.businessSection')}</span>
+              )}
+              <button
+                type="submit"
+                disabled={saving || !hasChanges}
+                data-testid="business-save"
+                className="btn btn-brand"
+              >
+                {saving ? t('settings.saving') : t('settings.save')}
+              </button>
+            </div>
+          )}
+        </form>
       )}
 
       {/* Legal agreement — read-only */}

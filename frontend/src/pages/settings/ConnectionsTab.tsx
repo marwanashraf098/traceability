@@ -857,7 +857,7 @@ export default function ConnectionsTab({ readOnly }: { readOnly: boolean }) {
   useEffect(() => { load() }, [])
 
   return (
-    <div className="max-w-3xl space-y-6">
+    <div className="space-y-6">
       {loading && (
         <div className="flex items-center justify-center py-16">
           <svg className="animate-spin w-6 h-6 text-brand" fill="none" viewBox="0 0 24 24">
@@ -879,10 +879,12 @@ export default function ConnectionsTab({ readOnly }: { readOnly: boolean }) {
             <ShopifyCard shopify={status.shopify} />
             <BostaCard   bosta={status.bosta} onConnected={load} />
             {status.customAppAvailable && (
-              <ShopifyCustomAppCard
-                shopifyCustomApp={status.shopifyCustomApp}
-                onConnected={load}
-              />
+              <div className="sm:col-span-2">
+                <ShopifyCustomAppCard
+                  shopifyCustomApp={status.shopifyCustomApp}
+                  onConnected={load}
+                />
+              </div>
             )}
           </div>
         </fieldset>

@@ -389,8 +389,9 @@ export default function UsersTab() {
   }
 
   return (
-    <div className="max-w-4xl space-y-6">
-      <div className="flex items-center justify-end gap-4">
+    <div className="space-y-6">
+      <div className="flex items-center justify-between gap-4">
+        <h2 className="text-h3 text-primary">{t('settings.tabs.usersSubtitle')}</h2>
         <button onClick={() => setShowCreate(true)} className="btn btn-brand flex-shrink-0">
           {t('users.addUser')}
         </button>
