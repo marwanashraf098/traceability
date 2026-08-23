@@ -403,6 +403,21 @@ public class BostaWebhookJob {
             //     (genuine downstream progression — Bosta caught up)
             //   - HOLD through: exception/cancelled/terminated/lost (not "caught up")
             //   - Both branches require shipment_leg='forward' (C2/C3 correction)
+            //
+            // Monotonic-vs-created guard (CLAUDE.md invariant, added after the 2026-08-23
+            // incident): independent of and evaluated AFTER the custody-lock branch above
+            // (custody-lock still wins if both conditions somehow hold at once — untouched).
+            // Bosta reuses codes 10/11/20 ("created") for both a genuine first dispatch AND
+            // a "back at hub / re-route" event on a shipment that has already moved — a
+            // static per-code mapping table can't tell those apart (Step 0 Part A finding).
+            // So once shipment_status_history has ANY row for this shipment whose
+            // internal_state isn't 'created' (with_courier, returning, exception, delivered,
+            // returned, lost, terminated, cancelled — real progress of any kind, not just
+            // with_courier), a later webhook mapping to 'created' resolves to 'exception'
+            // instead — never silently re-opens the pickable state. shipment_status_history
+            // is read here (append-only, unaffected by this very guard), never the live
+            // internal_state column — reading the column would be circular, since it's
+            // exactly the value this guard corrects.
             jdbc.update("""
                 UPDATE shipments
                 SET internal_state = CASE
@@ -410,6 +425,13 @@ public class BostaWebhookJob {
                          AND shipment_leg = 'forward'
                          AND ?::shipment_internal_state = 'created'
                         THEN internal_state
+                        WHEN ?::shipment_internal_state = 'created'
+                         AND EXISTS (
+                             SELECT 1 FROM shipment_status_history h
+                             WHERE h.shipment_id = shipments.id
+                               AND h.internal_state <> 'created'
+                         )
+                        THEN 'exception'::shipment_internal_state
                         ELSE ?::shipment_internal_state
                     END,
                     custody_locked_by_scan = CASE
@@ -437,9 +459,11 @@ public class BostaWebhookJob {
                     exception_reason         = COALESCE(?, exception_reason)
                 WHERE id = ?
                 """,
-                // hold branch param (internal_state CASE arg 1)
+                // custody-lock hold branch param (internal_state CASE arg 1)
                 mapped.shipmentInternalState(),
-                // else branch param (internal_state CASE arg 2)
+                // monotonic-vs-created guard branch param (internal_state CASE arg 2)
+                mapped.shipmentInternalState(),
+                // else branch param (internal_state CASE arg 3, blind overwrite)
                 mapped.shipmentInternalState(),
                 // release branch param (custody_locked_by_scan CASE)
                 mapped.shipmentInternalState(),

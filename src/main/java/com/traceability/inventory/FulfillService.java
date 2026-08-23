@@ -353,6 +353,14 @@ public class FulfillService {
     public ScanResult scan(UUID orderId, String barcode, UUID actorUserId) {
         UUID tenantId = TenantContext.require();
 
+        // 0. Re-verify eligibility server-side — the queue list filter (PICKABLE_ORDERS_FILTER)
+        //    is a display-time filter only, never re-checked at any write. See CLAUDE.md
+        //    invariant: scan()/complete() must not trust the queue list alone.
+        if (hasEverShippedPastCreated(orderId, tenantId)) {
+            return ScanResult.rejected("ALREADY_SHIPPED",
+                "This order's shipment has already left 'created' — pick/pack is no longer possible");
+        }
+
         // 1. Look up piece by barcode — accept both:
         //    • new label format: scanner returns the raw ULID (matches p.id)
         //    • old label format: scanner returns "PC-<ULID>" (matches p.barcode)
@@ -514,6 +522,12 @@ public class FulfillService {
     @Transactional(isolation = Isolation.READ_COMMITTED)
     public int complete(UUID orderId, UUID actorUserId) {
         UUID tenantId = TenantContext.require();
+
+        // Re-verify eligibility server-side — same guard as scan(), see its comment.
+        if (hasEverShippedPastCreated(orderId, tenantId)) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                "This order's shipment has already left 'created' — cannot complete picking");
+        }
 
         // Ensure all lines are fully scanned
         List<Map<String, Object>> lines = jdbc.queryForList(
@@ -959,6 +973,31 @@ public class FulfillService {
             "      SELECT id FROM shipments WHERE order_id = ? AND tenant_id = ?" +
             "  )",
             tenantId, orderId, tenantId);
+    }
+
+    /**
+     * ALREADY_SHIPPED eligibility guard for scan()/complete() — see CLAUDE.md invariant
+     * "Pick scan() and complete() must re-verify eligibility server-side via
+     * shipment_status_history, never trusting the queue list filter alone."
+     *
+     * Reads shipment_status_history (append-only), never shipments.internal_state — the
+     * live column is exactly what a Bosta "back at hub" webhook can blindly rewind to
+     * 'created' (see BostaWebhookJob.applyMappedState()'s monotonic-vs-created guard,
+     * added for the same 2026-08-23 incident this guard defends against independently).
+     * Self-pickup orders never get a forward shipment, so this always returns false for
+     * them — no carve-out needed.
+     */
+    private boolean hasEverShippedPastCreated(UUID orderId, UUID tenantId) {
+        Boolean exists = jdbc.queryForObject(
+            "SELECT EXISTS (" +
+            "    SELECT 1 FROM shipment_status_history h " +
+            "    JOIN shipments s ON s.id = h.shipment_id " +
+            "    WHERE s.order_id = ? AND s.tenant_id = ? " +
+            "      AND s.shipment_leg = 'forward' " +
+            "      AND h.internal_state <> 'created'" +
+            ")",
+            Boolean.class, orderId, tenantId);
+        return Boolean.TRUE.equals(exists);
     }
 
     private void requirePickableStatus(UUID orderId, UUID tenantId) {
