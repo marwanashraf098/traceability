@@ -124,7 +124,7 @@ class CustomAppConnectTest {
         // CC path uses exchangeClientCredentials + fetchShop
         defaultMocks();
 
-        SignupRequest req = new SignupRequest("CC Co", "cc_owner", "ccowner@test.com", "password99", true);
+        SignupRequest req = new SignupRequest("CC Co", "cc_owner", "ccowner@test.com", "01012345678", "password99", true);
         ResponseEntity<TokenResponse> resp = rest.postForEntity(
                 base() + "/api/v1/auth/signup", req, TokenResponse.class);
         assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.CREATED);

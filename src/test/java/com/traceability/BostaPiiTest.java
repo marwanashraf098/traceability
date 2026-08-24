@@ -96,7 +96,7 @@ class BostaPiiTest {
 
     @BeforeAll
     void setupOwner() {
-        SignupRequest req = new SignupRequest("Bosta PII Co", "pii_owner", "pii@test.com", "password99", true);
+        SignupRequest req = new SignupRequest("Bosta PII Co", "pii_owner", "pii@test.com", "01012345678", "password99", true);
         ResponseEntity<TokenResponse> resp = rest.postForEntity(
                 "http://localhost:" + port + "/api/v1/auth/signup", req, TokenResponse.class);
         assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.CREATED);

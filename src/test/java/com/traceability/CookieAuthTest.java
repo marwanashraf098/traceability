@@ -213,7 +213,7 @@ class CookieAuthTest {
         String email = "ca-no-rt-" + System.nanoTime() + "@cookie.test";
         ResponseEntity<java.util.Map> resp = rest.postForEntity(
                 base() + "/api/v1/auth/signup",
-                new SignupRequest("No-RT Corp", "no-rt", email, "password123", true),
+                new SignupRequest("No-RT Corp", "no-rt", email, "01012345678", "password123", true),
                 java.util.Map.class);
         assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.CREATED);
         assertThat(resp.getBody()).doesNotContainKey("refreshToken");
@@ -311,7 +311,7 @@ class CookieAuthTest {
     private ResponseEntity<AccessTokenResponse> doSignup(String email, String password) {
         return rest.postForEntity(
                 base() + "/api/v1/auth/signup",
-                new SignupRequest("Cookie Corp", email.split("@")[0], email, password, true),
+                new SignupRequest("Cookie Corp", email.split("@")[0], email, "01012345678", password, true),
                 AccessTokenResponse.class);
     }
 }

@@ -216,7 +216,7 @@ class RlsCoverageTest {
     @BeforeAll
     void setup() {
         SignupRequest req = new SignupRequest(
-                "Coverage Co", "cov_owner", "cov@test.com", "Password99!", true);
+                "Coverage Co", "cov_owner", "cov@test.com", "01012345678", "Password99!", true);
         ResponseEntity<TokenResponse> resp = rest.postForEntity(
                 base() + "/api/v1/auth/signup", req, TokenResponse.class);
         assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.CREATED);

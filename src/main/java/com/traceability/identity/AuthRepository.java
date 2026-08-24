@@ -39,7 +39,7 @@ public class AuthRepository {
     /** Creates tenant + owner user + default Main Warehouse in one transaction. */
     @Transactional
     public UUID createTenantWithOwner(UUID tenantId, String tenantName,
-                                      UUID userId, String name, String email,
+                                      UUID userId, String name, String email, String phone,
                                       String passwordHash,
                                       String privacyVersion, String termsVersion,
                                       java.sql.Timestamp acceptedAt) {
@@ -48,10 +48,10 @@ public class AuthRepository {
                 tenantId, tenantName);
         jdbc.update(
                 "INSERT INTO users " +
-                "(id, tenant_id, name, email, password_hash, role, " +
+                "(id, tenant_id, name, email, phone, password_hash, role, " +
                 " accepted_privacy_version, accepted_terms_version, accepted_at) " +
-                "VALUES (?, ?, ?, ?, ?, 'owner', ?, ?, ?)",
-                userId, tenantId, name, email, passwordHash,
+                "VALUES (?, ?, ?, ?, ?, ?, 'owner', ?, ?, ?)",
+                userId, tenantId, name, email, phone, passwordHash,
                 privacyVersion, termsVersion, acceptedAt);
         jdbc.update(
                 "INSERT INTO locations (id, tenant_id, name, type, is_default, is_fulfillment) " +

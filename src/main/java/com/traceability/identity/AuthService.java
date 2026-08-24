@@ -59,6 +59,11 @@ public class AuthService {
             throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY,
                     "You must accept the Privacy Policy and Terms of Service to create an account");
         }
+        String phone = normalizeEgyptianPhoneToE164(req.phone());
+        if (phone == null) {
+            throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY,
+                    "A valid Egyptian mobile number is required");
+        }
         UUID tenantId  = UUID.randomUUID();
         UUID userId    = UUID.randomUUID();
         String hash    = encoder.encode(req.password());
@@ -67,11 +72,34 @@ public class AuthService {
         // runAs sets TenantContext so the @Transactional createTenantWithOwner fires GUC.
         return TenantContext.runAs(tenantId, () -> {
             repo.createTenantWithOwner(tenantId, req.tenantName(), userId,
-                    req.name(), req.email(), hash,
+                    req.name(), req.email(), phone, hash,
                     PolicyVersions.PRIVACY, PolicyVersions.TERMS, acceptedAt);
             String refresh = repo.storeRefreshToken(userId, tenantId);
             return new TokenResponse(jwt.issueAccessToken(userId, tenantId, "owner"), refresh);
         });
+    }
+
+    /**
+     * Accepts +20/0020/0-prefixed or bare-10-digit Egyptian mobile input and normalizes to
+     * canonical +20 E.164 (e.g. "+201012345678"). Mirrors the accepted input shapes of
+     * ShipmentLinkService.normalizePhone(), but that helper's 01XXXXXXXXX local-form output
+     * is a different convention (Bosta/order matching) — signup needs E.164 for the future
+     * OTP target, so this is a separate, purpose-scoped normalizer rather than a shared util.
+     */
+    static String normalizeEgyptianPhoneToE164(String raw) {
+        if (raw == null) return null;
+        String digits = raw.replaceAll("[^0-9]", "");
+        if (digits.startsWith("0020") && digits.length() == 14) {
+            digits = "0" + digits.substring(4);
+        } else if (digits.startsWith("20") && digits.length() == 12) {
+            digits = "0" + digits.substring(2);
+        } else if (digits.length() == 10) {
+            digits = "0" + digits;
+        }
+        if (digits.startsWith("01") && digits.length() == 11) {
+            return "+20" + digits.substring(1);
+        }
+        return null;
     }
 
     // ---- login ----

@@ -255,7 +255,7 @@ class AuthIntegrationTest {
     @Order(7)
     void signupWithoutConsentIsRejected() {
         SignupRequest noConsent = new SignupRequest(
-                "No-Consent Corp", "nc", "noconsent@example.com", "password123", false);
+                "No-Consent Corp", "nc", "noconsent@example.com", "01012345678", "password123", false);
         ResponseEntity<String> resp = rest.postForEntity(
                 base() + "/api/v1/auth/signup", noConsent, String.class);
         assertThat(resp.getStatusCode().value())
@@ -329,11 +329,94 @@ class AuthIntegrationTest {
     }
 
     // -----------------------------------------------------------------------
+    // Phone required (revert-to-confirm): missing/blank phone must be rejected.
+    // On pre-phone-required code this signup would have returned 201 — this is the
+    // test that fails on old behavior and passes on new.
+    // -----------------------------------------------------------------------
+    @Test
+    @Order(10)
+    void signupWithoutPhoneIsRejected() {
+        SignupRequest noPhone = new SignupRequest(
+                "No-Phone Corp", "np", "nophone@example.com", null, "password123", true);
+        ResponseEntity<String> resp = rest.postForEntity(
+                base() + "/api/v1/auth/signup", noPhone, String.class);
+        assertThat(resp.getStatusCode().value())
+                .as("Signup without a phone must be rejected (422)")
+                .isEqualTo(422);
+
+        SignupRequest blankPhone = new SignupRequest(
+                "No-Phone Corp 2", "np2", "nophone2@example.com", "   ", "password123", true);
+        ResponseEntity<String> blankResp = rest.postForEntity(
+                base() + "/api/v1/auth/signup", blankPhone, String.class);
+        assertThat(blankResp.getStatusCode().value())
+                .as("Signup with a blank phone must be rejected (422)")
+                .isEqualTo(422);
+    }
+
+    // -----------------------------------------------------------------------
+    // Phone normalization: every accepted raw input shape converges on the same
+    // canonical +20 E.164 value stored on the owner's users row.
+    // -----------------------------------------------------------------------
+    @Test
+    @Order(11)
+    void signupPhoneVariousFormsNormalizeToSameE164() {
+        signup("Phone Form A", "phonea@example.com", "password123", "01012345678");
+        signup("Phone Form B", "phoneb@example.com", "password123", "+201012345678");
+        signup("Phone Form C", "phonec@example.com", "password123", "1012345678");
+        signup("Phone Form D", "phoned@example.com", "password123", "0020 101 234 5678");
+
+        for (String email : new String[] {
+                "phonea@example.com", "phoneb@example.com", "phonec@example.com", "phoned@example.com" }) {
+            String stored = jdbc.queryForObject(
+                    "SELECT phone FROM users WHERE email = ?", String.class, email);
+            assertThat(stored)
+                    .as("phone for %s must normalize to canonical +20 E.164", email)
+                    .isEqualTo("+201012345678");
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Invalid phone (not an Egyptian mobile shape) → 422.
+    // -----------------------------------------------------------------------
+    @Test
+    @Order(12)
+    void signupWithInvalidPhoneIsRejected() {
+        SignupRequest badPhone = new SignupRequest(
+                "Bad Phone Corp", "bp", "badphone@example.com", "0212345678", "password123", true);
+        ResponseEntity<String> resp = rest.postForEntity(
+                base() + "/api/v1/auth/signup", badPhone, String.class);
+        assertThat(resp.getStatusCode().value())
+                .as("Signup with a non-mobile Egyptian number must be rejected (422)")
+                .isEqualTo(422);
+    }
+
+    // -----------------------------------------------------------------------
+    // Existing owner rows with a NULL phone (pre-dating the required-phone rule,
+    // e.g. current pilot tenants) must remain valid — login is unaffected.
+    // -----------------------------------------------------------------------
+    @Test
+    @Order(13)
+    void loginStillWorksWhenPhoneIsNull() {
+        AccessTokenResponse tokens = signup("Legacy Phone Co", "legacyphone@example.com", "password123");
+        assertThat(tokens.accessToken()).isNotBlank();
+
+        // Simulate a pre-existing row that predates the required-phone rule.
+        jdbc.update("UPDATE users SET phone = NULL WHERE email = 'legacyphone@example.com'");
+
+        AccessTokenResponse loginTokens = login("legacyphone@example.com", "password123");
+        assertThat(loginTokens.accessToken()).isNotBlank();
+    }
+
+    // -----------------------------------------------------------------------
     // helpers
     // -----------------------------------------------------------------------
 
     private AccessTokenResponse signup(String tenantName, String email, String password) {
-        SignupRequest body = new SignupRequest(tenantName, email.split("@")[0], email, password, true);
+        return signup(tenantName, email, password, "01012345678");
+    }
+
+    private AccessTokenResponse signup(String tenantName, String email, String password, String phone) {
+        SignupRequest body = new SignupRequest(tenantName, email.split("@")[0], email, phone, password, true);
         ResponseEntity<AccessTokenResponse> resp = rest.postForEntity(
                 base() + "/api/v1/auth/signup", body, AccessTokenResponse.class);
         assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.CREATED);
