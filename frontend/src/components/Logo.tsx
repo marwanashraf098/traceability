@@ -15,7 +15,7 @@ export function Logo({
   // treatment used elsewhere (Landing, LegalPage) is untouched.
   if (variant === 'mark') {
     return (
-      <span className={`inline-flex items-baseline gap-1 ${className}`}>
+      <span data-testid="logo-mark" className={`inline-flex items-baseline gap-1 ${className}`}>
         <span
           className="font-bold tracking-tight text-primary select-none"
           style={{ fontSize: size }}

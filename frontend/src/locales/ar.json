@@ -827,7 +827,9 @@
     "payment": "الدفع",
     "status": "الحالة",
     "prepaid": "مدفوع مسبقًا",
-    "scanned": "تم مسح القطعة"
+    "scanned": "تم مسح القطعة",
+    "showPassword": "إظهار",
+    "hidePassword": "إخفاء"
   },
   "signup": {
     "title": "إنشاء حساب جديد",

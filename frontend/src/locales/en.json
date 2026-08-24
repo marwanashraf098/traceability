@@ -832,7 +832,9 @@
     "payment": "Payment",
     "status": "Status",
     "prepaid": "Prepaid",
-    "scanned": "Piece scanned"
+    "scanned": "Piece scanned",
+    "showPassword": "Show",
+    "hidePassword": "Hide"
   },
   "signup": {
     "title": "Create your account",

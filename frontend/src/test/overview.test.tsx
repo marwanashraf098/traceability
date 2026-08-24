@@ -185,10 +185,15 @@ describe('Overview dashboard', () => {
     vi.unstubAllGlobals()
   })
 
-  // ov1: Login still renders the SVG logo (kept from the previous suite)
-  test('ov1 Login shows SVG logo, not "T" text placeholder', () => {
+  // ov1: Login still renders the real brand mark, not a "T" text placeholder.
+  // Login/Signup now share the same Logo "mark" variant as the app shell's
+  // sidebar (Layout.tsx) rather than the burst-icon "wordmark" variant, so
+  // this asserts the mark's testid instead of the burst SVG's.
+  test('ov1 Login shows the real brand mark, not a "T" text placeholder', () => {
     const { container } = renderWithProviders(<Login />)
-    expect(container.querySelector('[data-testid="logo-svg"]')).toBeTruthy()
+    const mark = container.querySelector('[data-testid="logo-mark"]')
+    expect(mark).toBeTruthy()
+    expect(mark?.textContent).toContain('traced')
   })
 
   // ── Populated: every zone renders real data ────────────────────────────────

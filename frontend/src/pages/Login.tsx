@@ -9,10 +9,11 @@ import { Input, Button } from '../components/ui'
 export default function Login() {
   const { t }      = useTranslation()
   const navigate   = useNavigate()
-  const [email,    setEmail]    = useState('')
-  const [password, setPassword] = useState('')
-  const [error,    setError]    = useState('')
-  const [loading,  setLoading]  = useState(false)
+  const [email,        setEmail]        = useState('')
+  const [password,     setPassword]     = useState('')
+  const [showPassword, setShowPassword] = useState(false)
+  const [error,        setError]        = useState('')
+  const [loading,      setLoading]      = useState(false)
 
   // Remove any stale key left from the pre-cookie auth system.
   useEffect(() => { localStorage.removeItem('token') }, [])
@@ -63,13 +64,22 @@ export default function Login() {
           <div className="space-y-1.5">
             <label className="block text-small text-muted">{t('login.password')}</label>
             <Input
-              type="password"
+              type={showPassword ? 'text' : 'password'}
               required
               value={password}
               onChange={e => setPassword(e.target.value)}
               autoComplete="current-password"
               invalid={!!error}
               error={error || undefined}
+              endAdornment={
+                <button
+                  type="button"
+                  onClick={() => setShowPassword(v => !v)}
+                  className="text-caption font-medium text-muted hover:text-primary transition-colors px-2 py-1"
+                >
+                  {showPassword ? t('common.hidePassword') : t('common.showPassword')}
+                </button>
+              }
             />
           </div>
 

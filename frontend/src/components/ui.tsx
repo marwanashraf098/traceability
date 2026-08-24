@@ -465,6 +465,7 @@ export function Input({
   error,
   iconStart,
   prefix,
+  endAdornment,
   className = '',
   ...props
 }: React.InputHTMLAttributes<HTMLInputElement> & {
@@ -475,6 +476,8 @@ export function Input({
   iconStart?: LucideIcon
   /** Fixed text/node shown in a bordered slot at the field's start (e.g. a "+20" country-code prefix). */
   prefix?: ReactNode
+  /** Interactive control docked at the field's end (e.g. a password show/hide toggle). */
+  endAdornment?: ReactNode
 }) {
   const isScan = scan || variant === 'scan'
   const IconS  = iconStart
@@ -500,10 +503,16 @@ export function Input({
             isScan ? 'input-scan' : 'input',
             IconS && 'ps-9',
             prefix && 'ps-12',
+            !!endAdornment && 'pe-14',
             invalid && 'border-critical focus:border-critical focus:ring-critical/20',
             className
           )}
         />
+        {endAdornment && (
+          <span className="absolute end-1.5 top-1/2 -translate-y-1/2">
+            {endAdornment}
+          </span>
+        )}
       </div>
       {error && <p className="text-small text-critical">{error}</p>}
     </div>

@@ -25,6 +25,7 @@ export default function Signup() {
   const [email,        setEmail]        = useState('')
   const [phone,        setPhone]        = useState('')
   const [password,     setPassword]     = useState('')
+  const [showPassword, setShowPassword] = useState(false)
   const [consent,      setConsent]      = useState(false)
   const [error,        setError]        = useState('')
   const [loading,      setLoading]      = useState(false)
@@ -149,12 +150,21 @@ export default function Signup() {
             </label>
             <Input
               id="password"
-              type="password"
+              type={showPassword ? 'text' : 'password'}
               required
               value={password}
               onChange={e => setPassword(e.target.value)}
               autoComplete="new-password"
               minLength={8}
+              endAdornment={
+                <button
+                  type="button"
+                  onClick={() => setShowPassword(v => !v)}
+                  className="text-caption font-medium text-muted hover:text-primary transition-colors px-2 py-1"
+                >
+                  {showPassword ? t('common.hidePassword') : t('common.showPassword')}
+                </button>
+              }
             />
             <p className="text-caption text-muted">{t('signup.passwordHint')}</p>
           </div>
