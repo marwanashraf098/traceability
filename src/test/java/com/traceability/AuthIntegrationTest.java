@@ -181,11 +181,15 @@ class AuthIntegrationTest {
                     "UPDATE users SET pin_code = password_hash WHERE email = 'alice@acme.com'");
         }
 
+        String aliceUserId = jdbc.queryForObject(
+                "SELECT id::text FROM users WHERE email = 'alice@acme.com'", String.class);
         HttpHeaders headers = bearerHeaders(accessTokenA);
 
         // Verify first attempt reaches PinService (JWT valid, endpoint reachable).
+        // This is the single-worker case of FIX 2 (Worker Station Phase B): userId-hinted,
+        // one PIN-holder in the tenant, so it also exercises the general path.
         ResponseEntity<String> first = rest.postForEntity(base() + "/api/v1/auth/pin",
-                new HttpEntity<>(new PinRequest("0000"), headers), String.class);
+                new HttpEntity<>(new PinRequest(aliceUserId, "0000"), headers), String.class);
         assertThat(first.getStatusCode().value()).as("1st wrong PIN should return 401").isEqualTo(401);
         assertThat(jdbc.queryForObject("SELECT pin_fail_count FROM users WHERE email = 'alice@acme.com'",
                 Integer.class)).as("fail_count after 1st attempt").isEqualTo(1);
@@ -193,7 +197,7 @@ class AuthIntegrationTest {
         ResponseEntity<String> fifth = null;
         for (int i = 1; i < 5; i++) {
             fifth = rest.postForEntity(base() + "/api/v1/auth/pin",
-                    new HttpEntity<>(new PinRequest("0000"), headers), String.class);
+                    new HttpEntity<>(new PinRequest(aliceUserId, "0000"), headers), String.class);
         }
         assertThat(fifth.getStatusCode().value()).as("5th attempt must trigger lockout (423)").isEqualTo(423);
 
@@ -204,14 +208,14 @@ class AuthIntegrationTest {
 
         // Any PIN now rejected with 423
         ResponseEntity<String> locked = rest.postForEntity(base() + "/api/v1/auth/pin",
-                new HttpEntity<>(new PinRequest("0000"), headers), String.class);
+                new HttpEntity<>(new PinRequest(aliceUserId, "0000"), headers), String.class);
         assertThat(locked.getStatusCode().value())
                 .as("PIN locked after 5 failures (body: %s)", locked.getBody())
                 .isEqualTo(423);
 
         // Even the correct PIN is locked
         ResponseEntity<String> correct = rest.postForEntity(base() + "/api/v1/auth/pin",
-                new HttpEntity<>(new PinRequest("password123"), headers), String.class);
+                new HttpEntity<>(new PinRequest(aliceUserId, "password123"), headers), String.class);
         assertThat(correct.getStatusCode().value()).as("Correct PIN also rejected while locked").isEqualTo(423);
     }
 

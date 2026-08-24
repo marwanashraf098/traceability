@@ -1,3 +1,3 @@
 package com.traceability.identity.model;
 
-public record PinRequest(String pin) {}
+public record PinRequest(String userId, String pin) {}

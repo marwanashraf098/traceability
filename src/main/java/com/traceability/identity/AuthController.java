@@ -72,14 +72,20 @@ public class AuthController {
     }
 
     /**
-     * PIN switch issues a new access token attributed to the worker.
-     * No refresh cookie is written — the device session continues under the original cookie.
+     * PIN switch issues a new access token attributed to the worker AND rotates the
+     * device's traced_refresh cookie to the same worker: the incoming cookie's refresh
+     * token (if any) is revoked and replaced with one minted for the switched-in user.
+     * Without this, a later /auth/refresh (page reload, idle timeout) would silently
+     * re-derive identity from the stored refresh row's original owner/manager.
      */
     @PostMapping("/pin")
     @PreAuthorize("isAuthenticated()")
     public AccessTokenResponse pinSwitch(@RequestBody PinRequest req,
-                                         @AuthenticationPrincipal CustomUserDetails principal) {
-        TokenResponse tokens = pinService.switchPin(principal.tenantId(), req);
+                                         @AuthenticationPrincipal CustomUserDetails principal,
+                                         @CookieValue(value = COOKIE_NAME, required = false) String rawRefreshToken,
+                                         HttpServletResponse response) {
+        TokenResponse tokens = pinService.switchPin(principal.tenantId(), req, rawRefreshToken);
+        setRefreshCookie(response, tokens.refreshToken(), COOKIE_MAX_AGE);
         return new AccessTokenResponse(tokens.accessToken());
     }
 
