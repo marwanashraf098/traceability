@@ -87,7 +87,7 @@ public class ReturnSessionController {
     }
 
     @PostMapping("/sessions/{sessionId}/items/{pieceId}/disposition")
-    @PreAuthorize("isAuthenticated()")
+    @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
     public Map<String, Object> disposition(
             @PathVariable UUID sessionId,
             @PathVariable String pieceId,

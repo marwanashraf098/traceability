@@ -88,6 +88,7 @@ public class ShopifyInventoryController {
     }
 
     @GetMapping("/adjustments/export.csv")
+    @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
     public ResponseEntity<String> exportCsv(
             @RequestParam(required = false) String status,
             @RequestParam(required = false) String triggerType,

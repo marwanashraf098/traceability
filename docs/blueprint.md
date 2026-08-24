@@ -347,7 +347,7 @@ Design notes: scan endpoints return in <150 ms with explicit machine-readable er
 
 **Owner** — everything: billing, integrations, users, adjustments, exports.
 **Manager** — receiving, returns resolution, adjustments (reason required), pickups, exceptions, dashboards, user management for workers; no billing/integration credentials.
-**Worker** — pick/pack queues, scanning, return intake scan only; no costs, no customer phone numbers beyond what packing requires, no adjustments, no exports.
+**Worker** — pick/pack queues, scanning, return intake scan, and pickups (open/scan/close/manifest); no costs, no customer phone numbers beyond what packing requires, no adjustments, no exports, no returns resolution, no order cancel.
 
 Implementation: simple role enum + permission middleware (full RBAC tables are over-engineering at MVP). Every privileged mutation already lands in `piece_events`/audit, so accountability is structural. Workers authenticate by personal PIN at shared scan stations — *named* attribution with zero login friction; never allow a shared "warehouse" account, it destroys your accountability story.
 

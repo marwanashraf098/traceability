@@ -142,7 +142,7 @@ public class FulfillController {
 
     /** FR-9.12/9.13 — Cancel order (pre-pack auto-release or post-pack guided unpack). */
     @PostMapping("/{orderId}/cancel")
-    @PreAuthorize("isAuthenticated()")
+    @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
     public org.springframework.http.ResponseEntity<FulfillService.CancelResult> cancelOrder(
             @PathVariable UUID orderId,
             @AuthenticationPrincipal CustomUserDetails principal) {
