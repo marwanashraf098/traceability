@@ -13,6 +13,7 @@ import org.springframework.web.server.ResponseStatusException;
 
 import java.sql.Timestamp;
 import java.time.Instant;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
@@ -148,5 +149,28 @@ public class PinService {
         }
         jdbc.update("UPDATE users SET pin_fail_count = ? WHERE id = ?", fails, targetUserId);
         throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Invalid PIN");
+    }
+
+    /**
+     * Minimal roster for the station gate's name-picker: active, PIN-holding users in the
+     * caller's tenant. Callable by ANY authenticated role (including Worker) — after a
+     * reload the device may hold a worker-scoped token, and the gate must still be able
+     * to list who can PIN in. Returns only what the picker needs — no email, no role, no
+     * failure count — just id, display name, whether currently locked, and (only while
+     * locked) lockedUntil, so the gate's locked-state countdown has something to count
+     * down to without the /auth/pin 423 response needing to carry it (that response is a
+     * plain error message, not structured data — parsing it would be worse than this).
+     */
+    @Transactional(readOnly = true)
+    public List<Map<String, Object>> roster(UUID callerTenantId) {
+        return jdbc.queryForList(
+                "SELECT id, name, " +
+                "       (pin_locked_until IS NOT NULL AND pin_locked_until > now()) AS locked, " +
+                "       CASE WHEN pin_locked_until IS NOT NULL AND pin_locked_until > now() " +
+                "            THEN pin_locked_until ELSE NULL END AS \"lockedUntil\" " +
+                "FROM users " +
+                "WHERE tenant_id = ? AND pin_code IS NOT NULL AND active = true " +
+                "ORDER BY name",
+                callerTenantId);
     }
 }

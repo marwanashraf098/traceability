@@ -189,7 +189,10 @@ class RlsCoverageTest {
             entry("/api/v1/returns/pieces/{pieceId}/label",
                     "label bytes — single-entity GET, not a list"),
             entry("/api/v1/test/probe",
-                    "test-only probe controller (src/test/java); not a production endpoint")
+                    "test-only probe controller (src/test/java); not a production endpoint"),
+            entry("/api/v1/station/roster",
+                    "isAuthenticated() by design (worker-token-callable); multi-tenant " +
+                    "isolation + locked-flag covered by StationRosterTest")
     );
 
     // ── Spring / HTTP wiring ──────────────────────────────────────────────────
