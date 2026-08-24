@@ -3,7 +3,7 @@ import { Link, useNavigate } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { login } from '../api'
 import { setAccessToken } from '../auth'
-import { Logo } from '../components/Logo'
+import AuthLayout from '../components/AuthLayout'
 import { Input, Button } from '../components/ui'
 
 export default function Login() {
@@ -33,27 +33,20 @@ export default function Login() {
   }
 
   return (
-    <div className="min-h-screen bg-bg flex items-center justify-center px-4">
-
-      {/* Brand glow — decorative, symmetric, not directional */}
-      <div aria-hidden className="pointer-events-none fixed inset-0 overflow-hidden">
-        <div className="absolute top-1/3 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[600px] h-[600px] rounded-full bg-trace-blue/5 blur-3xl" />
-      </div>
-
-      <div className="w-full max-w-sm relative z-10">
-
-        {/* Wordmark — letters text-primary, only trailing dot is trace-blue */}
-        <div className="text-center mb-10">
-          <Logo variant="icon" size={56} className="mb-5" />
-          <h1 className="text-display font-light text-primary tracking-tight">
-            traced<span className="text-trace-blue">.</span>
-          </h1>
-          <p className="text-small text-muted mt-2 tracking-wide">{t('login.subtitle')}</p>
+    <AuthLayout>
+      <div className="card p-6">
+        <div className="mb-5">
+          <h2 className="text-h3 text-primary">{t('login.cardTitle')}</h2>
+          <p className="text-small text-muted mt-1">{t('login.cardSubtitle')}</p>
         </div>
 
-        {/* Form card */}
-        <form onSubmit={handleSubmit} className="card p-6 space-y-4 bg-surface">
+        {error && (
+          <div role="alert" className="text-small text-critical bg-critical/10 border border-critical/25 rounded-lg px-3 py-2 mb-4">
+            {error}
+          </div>
+        )}
 
+        <form onSubmit={handleSubmit} className="space-y-4" noValidate>
           <div className="space-y-1.5">
             <label className="block text-small text-muted">{t('login.email')}</label>
             <Input
@@ -88,17 +81,15 @@ export default function Login() {
           >
             {t('login.submit')}
           </Button>
-
         </form>
-
-        <p className="text-center text-small text-muted mt-5">
-          {t('login.noAccount')}{' '}
-          <Link to="/signup" className="text-trace-blue hover:underline transition-colors">
-            {t('login.signUp')}
-          </Link>
-        </p>
-
       </div>
-    </div>
+
+      <p className="text-center text-small text-muted mt-5">
+        {t('login.noAccount')}{' '}
+        <Link to="/signup" className="text-trace-blue hover:underline transition-colors">
+          {t('login.signUp')}
+        </Link>
+      </p>
+    </AuthLayout>
   )
 }

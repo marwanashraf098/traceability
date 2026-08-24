@@ -464,6 +464,7 @@ export function Input({
   invalid,
   error,
   iconStart,
+  prefix,
   className = '',
   ...props
 }: React.InputHTMLAttributes<HTMLInputElement> & {
@@ -472,6 +473,8 @@ export function Input({
   invalid?: boolean
   error?: string
   iconStart?: LucideIcon
+  /** Fixed text/node shown in a bordered slot at the field's start (e.g. a "+20" country-code prefix). */
+  prefix?: ReactNode
 }) {
   const isScan = scan || variant === 'scan'
   const IconS  = iconStart
@@ -483,11 +486,20 @@ export function Input({
             <IconS size={16} strokeWidth={2} />
           </span>
         )}
+        {prefix && (
+          <span
+            dir="ltr"
+            className="absolute start-0 top-0 bottom-0 flex items-center justify-center w-11 text-muted text-body border-e border-line pointer-events-none"
+          >
+            {prefix}
+          </span>
+        )}
         <input
           {...props}
           className={cn(
             isScan ? 'input-scan' : 'input',
             IconS && 'ps-9',
+            prefix && 'ps-12',
             invalid && 'border-critical focus:border-critical focus:ring-critical/20',
             className
           )}
@@ -707,12 +719,16 @@ export function Checkbox({
   label,
   disabled = false,
   indeterminate = false,
+  required = false,
+  className = '',
 }: {
   checked: boolean
   onChange: (checked: boolean) => void
-  label?: string
+  label?: ReactNode
   disabled?: boolean
   indeterminate?: boolean
+  required?: boolean
+  className?: string
 }) {
   const ref = useRef<HTMLInputElement>(null)
 
@@ -721,17 +737,22 @@ export function Checkbox({
   }, [indeterminate, checked])
 
   return (
-    <label className={cn('inline-flex items-center gap-2 cursor-pointer select-none', disabled && 'opacity-40 cursor-not-allowed')}>
+    <label className={cn(
+      'inline-flex items-start gap-2 cursor-pointer select-none',
+      disabled && 'opacity-40 cursor-not-allowed',
+      className
+    )}>
       <input
         ref={ref}
         type="checkbox"
         checked={checked}
         onChange={e => onChange(e.target.checked)}
         disabled={disabled}
+        aria-required={required}
         className="sr-only"
       />
       <span className={cn(
-        'w-4 h-4 rounded-sm border flex items-center justify-center flex-shrink-0 transition-colors',
+        'w-4 h-4 mt-0.5 rounded-sm border flex items-center justify-center flex-shrink-0 transition-colors',
         checked || indeterminate ? 'bg-trace-blue border-trace-blue' : 'bg-surface border-line'
       )}>
         {checked && <Check size={11} strokeWidth={3} className="text-white" />}

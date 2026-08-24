@@ -241,9 +241,16 @@
     "next": "Next",
     "showing": "Showing {{from}}–{{to}} of {{total}}"
   },
+  "auth": {
+    "tagline": "Nothing moves untraced.",
+    "legalPrefix": "By continuing you agree to Traced's",
+    "legalTerms": "Terms",
+    "legalAnd": "&",
+    "legalPrivacy": "Privacy Policy"
+  },
   "login": {
-    "title": "traced",
-    "subtitle": "nothing moves untraced",
+    "cardTitle": "Welcome back",
+    "cardSubtitle": "Log in to your warehouse.",
     "email": "Email",
     "password": "Password",
     "submit": "Sign in",
@@ -829,12 +836,13 @@
   },
   "signup": {
     "title": "Create your account",
-    "subtitle": "Get started with Traced",
+    "subtitle": "Set up your warehouse in a few minutes.",
     "businessName": "Business name",
     "ownerName": "Your name",
     "email": "Email",
-    "phone": "Phone (optional)",
-    "phonePlaceholder": "01XXXXXXXXX or +20XXXXXXXXX",
+    "phone": "Phone",
+    "phonePlaceholder": "10 1234 5678",
+    "phoneHint": "Egyptian mobile. Used to reach you about your account.",
     "password": "Password",
     "passwordHint": "At least 8 characters",
     "submit": "Create account",

@@ -456,10 +456,12 @@ export function getRoleFromToken(): 'owner' | 'manager' | 'worker' | null {
 
 // ── Auth: signup ──────────────────────────────────────────────────────────────
 
-export function signup(tenantName: string, name: string, email: string, password: string, consent: boolean) {
+export function signup(
+  tenantName: string, name: string, email: string, phone: string, password: string, consent: boolean
+) {
   return request<{ accessToken: string }>('/auth/signup', {
     method: 'POST',
-    body: JSON.stringify({ tenantName, name, email, password, consent }),
+    body: JSON.stringify({ tenantName, name, email, phone, password, consent }),
   })
 }
 

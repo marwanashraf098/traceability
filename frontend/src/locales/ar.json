@@ -241,9 +241,16 @@
     "next": "التالي",
     "showing": "عرض {{from}}–{{to}} من {{total}}"
   },
+  "auth": {
+    "tagline": "لا شيء يتحرك دون تتبع.",
+    "legalPrefix": "بمتابعتك فإنك توافق على",
+    "legalTerms": "الشروط",
+    "legalAnd": "و",
+    "legalPrivacy": "سياسة الخصوصية"
+  },
   "login": {
-    "title": "traced",
-    "subtitle": "nothing moves untraced",
+    "cardTitle": "أهلاً بعودتك",
+    "cardSubtitle": "سجّل الدخول إلى مستودعك.",
     "email": "البريد الإلكتروني",
     "password": "كلمة المرور",
     "submit": "تسجيل الدخول",
@@ -824,12 +831,13 @@
   },
   "signup": {
     "title": "إنشاء حساب جديد",
-    "subtitle": "ابدأ مع Traced",
+    "subtitle": "جهّز مستودعك في دقائق معدودة.",
     "businessName": "اسم النشاط التجاري",
     "ownerName": "اسمك",
     "email": "البريد الإلكتروني",
-    "phone": "الهاتف (اختياري)",
-    "phonePlaceholder": "01XXXXXXXXX أو +20XXXXXXXXX",
+    "phone": "الهاتف",
+    "phonePlaceholder": "10 1234 5678",
+    "phoneHint": "رقم موبايل مصري. يُستخدم للتواصل معك بخصوص حسابك.",
     "password": "كلمة المرور",
     "passwordHint": "8 أحرف على الأقل",
     "submit": "إنشاء الحساب",
