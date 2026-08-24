@@ -465,6 +465,48 @@ export function signup(
   })
 }
 
+// ── Worker Station Gate ─────────────────────────────────────────────────────────
+
+export interface StationRosterEntry {
+  id: string
+  name: string
+  locked: boolean
+  lockedUntil: string | null
+}
+
+/** Any authenticated tenant user — including a worker-scoped token held after a reload. */
+export function getStationRoster() {
+  return request<StationRosterEntry[]>('/station/roster')
+}
+
+export type PinSwitchResult =
+  | { ok: true; accessToken: string }
+  | { ok: false; status: 401 | 423 }
+
+/**
+ * Deliberately a raw fetch, NOT request(): request()'s 401-retry interceptor treats any
+ * 401 as "access token expired," silently refreshes, and retries once — a wrong PIN would
+ * hit the retry's own 401 and get treated as "the refresh itself failed," hard-redirecting
+ * to /login. A wrong PIN must surface as a wrong-PIN state in the gate, never a logout.
+ */
+export async function switchPin(userId: string, pin: string): Promise<PinSwitchResult> {
+  const token = getAccessToken()
+  const res = await fetch(BASE + '/auth/pin', {
+    method: 'POST',
+    credentials: 'include',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+    body: JSON.stringify({ userId, pin }),
+  })
+  if (res.status === 200) {
+    const data: { accessToken: string } = await res.json()
+    return { ok: true, accessToken: data.accessToken }
+  }
+  return { ok: false, status: res.status === 423 ? 423 : 401 }
+}
+
 // ── Connections status ────────────────────────────────────────────────────────
 
 export interface ConnectionsStatus {

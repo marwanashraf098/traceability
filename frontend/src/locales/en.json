@@ -864,6 +864,37 @@
       "consentRequired": "You must accept the Privacy Policy and Terms of Service."
     }
   },
+  "station": {
+    "roster": {
+      "title": "Who's working?",
+      "subtitle": "Select your name to sign in",
+      "locked": "Locked",
+      "loadError": "Couldn't load the team roster.",
+      "retry": "Retry",
+      "exit": "Exit station mode"
+    },
+    "pin": {
+      "subtitle": "Enter your PIN",
+      "wrong": "Incorrect PIN. Try again.",
+      "back": "← Switch worker",
+      "backspace": "Delete digit",
+      "locked": {
+        "title": "PIN locked",
+        "body": "Try again in {{minutes}}m",
+        "back": "Back to roster"
+      }
+    },
+    "exit": {
+      "title": "Exit station mode",
+      "subtitle": "Sign in with an owner or manager account",
+      "email": "Email",
+      "password": "Password",
+      "submit": "Exit",
+      "cancel": "Cancel",
+      "error": "Invalid email or password",
+      "workerError": "Only an owner or manager can exit station mode."
+    }
+  },
   "connections": {
     "title": "Connections",
     "subtitle": "Connect your store and courier to start processing orders.",
@@ -978,6 +1009,12 @@
       "businessDetails": "Business details",
       "labelsPrinting": "Labels & printing",
       "localization": "Localization"
+    },
+    "stationMode": {
+      "title": "Station mode",
+      "description": "Turn this device into a shared worker station — workers sign in with a name and PIN instead of email and password.",
+      "active": "This device is in station mode.",
+      "enter": "Enter station mode"
     },
     "businessName": "Business name",
     "pickupAddress": "Pickup address",

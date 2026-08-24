@@ -1,7 +1,8 @@
 import { useState, useEffect, FormEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 import { listUsers, createUser, updateUser, deactivateUser, getRoleFromToken, User } from '../../api'
-import { Modal } from '../../components/ui'
+import { Modal, Button } from '../../components/ui'
+import { useStation } from '../../components/StationProvider'
 
 // ── Role badge ────────────────────────────────────────────────────────────────
 
@@ -17,6 +18,32 @@ function RoleBadge({ role }: { role: string }) {
     <span className={`inline-flex items-center px-2 py-0.5 rounded text-caption font-medium border ${ROLE_STYLE[role] ?? ROLE_STYLE.worker}`}>
       {t(`users.roles.${role}`, role)}
     </span>
+  )
+}
+
+// ── Station mode ──────────────────────────────────────────────────────────────
+// Worker Station Gate (Phase C): device-level flag, entered here by an owner/
+// manager. Exit requires password re-auth and is only reachable from the gate
+// itself (StationGate.tsx) — there is no exit control here.
+
+function StationModeCard() {
+  const { t } = useTranslation()
+  const { stationMode, enterStationMode } = useStation()
+
+  return (
+    <div className="card p-4 flex items-center justify-between gap-4">
+      <div>
+        <h3 className="text-body text-primary font-medium">{t('settings.stationMode.title')}</h3>
+        <p className="text-small text-muted mt-0.5">
+          {stationMode ? t('settings.stationMode.active') : t('settings.stationMode.description')}
+        </p>
+      </div>
+      {!stationMode && (
+        <Button variant="secondary" onClick={enterStationMode} className="flex-shrink-0">
+          {t('settings.stationMode.enter')}
+        </Button>
+      )}
+    </div>
   )
 }
 
@@ -396,6 +423,8 @@ export default function UsersTab() {
           {t('users.addUser')}
         </button>
       </div>
+
+      {(currentRole === 'owner' || currentRole === 'manager') && <StationModeCard />}
 
       {error && (
         <div role="alert" className="text-small text-danger bg-danger/10 border border-danger/25 rounded px-3 py-2">

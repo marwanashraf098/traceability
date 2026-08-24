@@ -3,6 +3,8 @@ import { useState, useEffect, lazy, Suspense } from 'react'
 import { getAccessToken, setAccessToken, clearAccessToken } from './auth'
 import { ToastProvider } from './components/ui'
 import Layout from './components/Layout'
+import { StationProvider, useStation } from './components/StationProvider'
+import StationGate from './components/StationGate'
 // StyleGuide is DEV-only — lazy import ensures Rollup dead-code-eliminates
 // the entire module when import.meta.env.DEV === false (production build).
 const StyleGuide = import.meta.env.DEV
@@ -42,10 +44,11 @@ import Terms from './pages/Terms'
  * Fast path: if the access token is already in memory (in-session navigation) we skip
  * the refresh call entirely — no spinner, no extra RTT.
  */
-function RequireAuth({ children }: { children: React.ReactNode }) {
+export function RequireAuth({ children }: { children: React.ReactNode }) {
   const [state, setState] = useState<'loading' | 'authenticated' | 'unauthenticated'>(
     () => getAccessToken() !== null ? 'authenticated' : 'loading'
   )
+  const { stationMode, currentWorker } = useStation()
 
   useEffect(() => {
     if (state !== 'loading') return
@@ -71,11 +74,21 @@ function RequireAuth({ children }: { children: React.ReactNode }) {
     clearAccessToken()
     return <Navigate to="/login" replace />
   }
+  // Worker Station Gate (Phase C): every fresh open (reload/reboot resets
+  // currentWorker to null, in-memory only) lands on the gate whenever the
+  // device is in station mode — never a silent fallback to whoever's access
+  // token /auth/refresh happened to restore.
+  if (stationMode && !currentWorker) {
+    return <StationGate />
+  }
   return <>{children}</>
 }
 
 export default function App() {
   return (
+    // StationProvider sits ABOVE the router so currentWorker survives route
+    // navigation between worker screens — only a true reload resets it.
+    <StationProvider>
     <BrowserRouter>
       <ToastProvider>
       <Routes>
@@ -261,5 +274,6 @@ export default function App() {
       </Routes>
       </ToastProvider>
     </BrowserRouter>
+    </StationProvider>
   )
 }

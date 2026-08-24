@@ -146,6 +146,13 @@ export default {
           '0%':   { left: '-30%' },
           '100%': { left: '100%' },
         },
+        shake: {
+          '0%, 100%': { transform: 'translateX(0)' },
+          '20%':      { transform: 'translateX(-8px)' },
+          '40%':      { transform: 'translateX(8px)' },
+          '60%':      { transform: 'translateX(-6px)' },
+          '80%':      { transform: 'translateX(6px)' },
+        },
       },
       animation: {
         flash:   'flash 0.6s ease-out forwards',
@@ -153,6 +160,7 @@ export default {
         dotPing: 'dotPing 1.5s cubic-bezier(0,0,0.2,1) infinite',
         shimmer: 'shimmer 1.4s linear infinite',
         indet:   'indet 1.4s ease-in-out infinite',
+        shake:   'shake 0.4s ease-in-out',
       },
     },
   },
