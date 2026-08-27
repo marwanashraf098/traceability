@@ -51,9 +51,9 @@ public class TransferController {
 
     // ── Send-out scan ────────────────────────────────────────────────────────
 
-    /** Mirrors pick permissions — any authenticated role may send a piece out on a transfer. */
+    /** OWNER/MANAGER only — transfers are not a Worker capability (blueprint.md §11). */
     @PostMapping("/{transferId}/scan-out")
-    @PreAuthorize("isAuthenticated()")
+    @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
     public TransferService.ScanOutResult scanOut(
             @PathVariable UUID transferId,
             @RequestBody ScanRequest req,
@@ -62,15 +62,16 @@ public class TransferController {
     }
 
     // ── List / get (consignment view) ───────────────────────────────────────
+    // OWNER/MANAGER only — transfers are not a Worker capability (blueprint.md §11).
 
     @GetMapping
-    @PreAuthorize("isAuthenticated()")
+    @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
     public List<Map<String, Object>> listOpen() {
         return transferSvc.listOpen();
     }
 
     @GetMapping("/{transferId}")
-    @PreAuthorize("isAuthenticated()")
+    @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
     public Map<String, Object> getTransfer(@PathVariable UUID transferId) {
         return transferSvc.getTransfer(transferId);
     }

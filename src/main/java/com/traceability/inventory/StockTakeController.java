@@ -57,16 +57,19 @@ public class StockTakeController {
         return stockTake.summary();
     }
 
-    /** WORKER+ — the scan screen loads session context before any counting starts. */
+    /** OWNER/MANAGER only — stock take is not a Worker capability (blueprint.md §11). */
     @GetMapping("/sessions/{sessionId}")
-    @PreAuthorize("isAuthenticated()")
+    @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
     public Map<String, Object> getSession(@PathVariable UUID sessionId) {
         return stockTake.getSessionDetail(sessionId);
     }
 
-    /** Blind scan: the response never includes expected quantities, only the classification. */
+    /**
+     * Blind scan: the response never includes expected quantities, only the classification.
+     * OWNER/MANAGER only — stock take is not a Worker capability (blueprint.md §11).
+     */
     @PostMapping("/sessions/{sessionId}/scan")
-    @PreAuthorize("isAuthenticated()")
+    @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
     public Map<String, Object> scan(
             @PathVariable UUID sessionId,
             @RequestBody ScanRequest req,
@@ -74,9 +77,12 @@ public class StockTakeController {
         return stockTake.scan(sessionId, req.barcode(), req.condition(), principal.userId());
     }
 
-    /** Undo a scan — WORKER+, same role as scan(). Idempotent: no-op on an unscanned piece. */
+    /**
+     * Undo a scan — OWNER/MANAGER only, same role as scan(). Idempotent: no-op on an
+     * unscanned piece.
+     */
     @DeleteMapping("/sessions/{sessionId}/scan/{pieceId}")
-    @PreAuthorize("isAuthenticated()")
+    @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
     @ResponseStatus(HttpStatus.NO_CONTENT)
     public void unscan(@PathVariable UUID sessionId, @PathVariable String pieceId) {
         stockTake.unscan(sessionId, pieceId);

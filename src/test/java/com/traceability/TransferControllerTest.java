@@ -188,24 +188,38 @@ class TransferControllerTest {
     }
 
     // -----------------------------------------------------------------------
-    // scan-out — isAuthenticated (mirrors pick permissions); ScanOutResult shape
+    // scan-out — OWNER/MANAGER only (transfers are not a Worker capability,
+    // blueprint.md §11); ScanOutResult shape verified via the owner positive control.
     // -----------------------------------------------------------------------
 
     @Test
-    void scanOut_worker_allowedAndReturnsScanResultShape() {
+    void scanOut_worker_forbidden() {
+        UUID transferId = createOpenTransfer(ownerToken);
+        String pieceId = insertAvailablePiece();
+
+        ResponseEntity<Map> resp = rest.exchange(
+            base() + "/api/v1/transfers/" + transferId + "/scan-out", HttpMethod.POST,
+            new HttpEntity<>(Map.of("barcode", "PC-" + pieceId), authJson(workerToken)),
+            Map.class);
+
+        assertThat(resp.getStatusCode())
+            .as("worker must be rejected (403) — transfers are Owner/Manager-tier per blueprint.md")
+            .isEqualTo(HttpStatus.FORBIDDEN);
+    }
+
+    @Test
+    void scanOut_owner_allowedAndReturnsScanResultShape() {
         UUID transferId = createOpenTransfer(ownerToken);
         String pieceId = insertAvailablePiece();
 
         long start = System.nanoTime();
         ResponseEntity<Map> resp = rest.exchange(
             base() + "/api/v1/transfers/" + transferId + "/scan-out", HttpMethod.POST,
-            new HttpEntity<>(Map.of("barcode", "PC-" + pieceId), authJson(workerToken)),
+            new HttpEntity<>(Map.of("barcode", "PC-" + pieceId), authJson(ownerToken)),
             Map.class);
         long elapsedMs = (System.nanoTime() - start) / 1_000_000;
 
-        assertThat(resp.getStatusCode())
-            .as("WORKER is allowed to scan out — mirrors pick permissions")
-            .isEqualTo(HttpStatus.OK);
+        assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.OK);
         assertThat(resp.getBody().get("success")).isEqualTo(true);
         assertThat(resp.getBody().get("code")).isEqualTo("SCANNED");
         assertThat(resp.getBody().get("pieceId")).isEqualTo(pieceId);
@@ -329,25 +343,48 @@ class TransferControllerTest {
     }
 
     // -----------------------------------------------------------------------
-    // GET endpoints — isAuthenticated
+    // GET endpoints — OWNER/MANAGER only (transfers are not a Worker capability,
+    // blueprint.md §11)
     // -----------------------------------------------------------------------
 
     @Test
-    void listOpen_worker_allowed() {
+    void listOpen_worker_forbidden() {
+        createOpenTransfer(ownerToken);
+        ResponseEntity<Map> resp = rest.exchange(
+            base() + "/api/v1/transfers", HttpMethod.GET,
+            new HttpEntity<>(authJson(workerToken)), Map.class);
+        assertThat(resp.getStatusCode())
+            .as("worker must be rejected (403) — transfers are Owner/Manager-tier per blueprint.md")
+            .isEqualTo(HttpStatus.FORBIDDEN);
+    }
+
+    @Test
+    void listOpen_owner_allowed() {
         createOpenTransfer(ownerToken);
         ResponseEntity<java.util.List> resp = rest.exchange(
             base() + "/api/v1/transfers", HttpMethod.GET,
-            new HttpEntity<>(authJson(workerToken)), java.util.List.class);
+            new HttpEntity<>(authJson(ownerToken)), java.util.List.class);
         assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.OK);
         assertThat(resp.getBody()).isNotEmpty();
     }
 
     @Test
-    void getTransfer_worker_allowed() {
+    void getTransfer_worker_forbidden() {
         UUID transferId = createOpenTransfer(ownerToken);
         ResponseEntity<Map> resp = rest.exchange(
             base() + "/api/v1/transfers/" + transferId, HttpMethod.GET,
             new HttpEntity<>(authJson(workerToken)), Map.class);
+        assertThat(resp.getStatusCode())
+            .as("worker must be rejected (403) — transfers are Owner/Manager-tier per blueprint.md")
+            .isEqualTo(HttpStatus.FORBIDDEN);
+    }
+
+    @Test
+    void getTransfer_owner_allowed() {
+        UUID transferId = createOpenTransfer(ownerToken);
+        ResponseEntity<Map> resp = rest.exchange(
+            base() + "/api/v1/transfers/" + transferId, HttpMethod.GET,
+            new HttpEntity<>(authJson(ownerToken)), Map.class);
         assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.OK);
         assertThat(resp.getBody().get("id")).isEqualTo(transferId.toString());
     }

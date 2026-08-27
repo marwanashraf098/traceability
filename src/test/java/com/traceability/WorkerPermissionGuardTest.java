@@ -24,18 +24,31 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * Worker permission-guard fix (Phase A) — revert-to-confirm proofs for the three endpoints
- * locked from isAuthenticated() to hasAnyRole('OWNER','MANAGER'):
+ * Worker permission-guard fixes — revert-to-confirm proofs for the endpoints locked from
+ * isAuthenticated() to hasAnyRole('OWNER','MANAGER').
+ *
+ * Phase A (three endpoints):
  *   1. ReturnSessionController.disposition()
  *   2. ShopifyInventoryController.exportCsv()
  *   3. FulfillController.cancelOrder()
  *
+ * Worker experience fix, backend pass (six endpoints — this REVERSES two deliberate prior
+ * decisions; stock-take scan and transfer scan-out were intentionally opened to Worker,
+ * Marawan has reclassified both as owner/manager-only):
+ *   4. TransferController.scanOut()
+ *   5. TransferController.listOpen()
+ *   6. TransferController.getTransfer()
+ *   7. StockTakeController.getSession()
+ *   8. StockTakeController.scan()
+ *   9. StockTakeController.unscan()
+ *
  * Each gets a worker JWT -> 403 (fails on the old isAuthenticated() guard, where it was
- * 200/202) and an owner JWT -> success positive control on the SAME resource afterward,
+ * allowed) and an owner JWT -> success positive control on the SAME resource afterward,
  * proving the worker call had zero effect and the endpoint still works for the allowed role.
  *
- * Pickups (PickupSessionController) are deliberately NOT covered here — Phase A keeps them
- * Worker-callable (see docs/blueprint.md:350 amendment in this same commit).
+ * Pickups (PickupSessionController) are deliberately NOT covered here — pickups stay
+ * Worker-callable (docs/blueprint.md:350). Receiving is NOT covered — it was already fully
+ * OWNER/MANAGER-locked before either pass; nothing to prove there.
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @Testcontainers
@@ -101,6 +114,10 @@ class WorkerPermissionGuardTest {
     @AfterEach
     void cleanup() {
         jdbc.update("DELETE FROM piece_events WHERE tenant_id = ?", tenantId);
+        jdbc.update("DELETE FROM stock_take_scans WHERE tenant_id = ?", tenantId);
+        // transfer_pieces/transfer_lines FK-reference pieces/transfers — must go before both.
+        jdbc.update("DELETE FROM transfer_pieces WHERE tenant_id = ?", tenantId);
+        jdbc.update("DELETE FROM transfer_lines WHERE tenant_id = ?", tenantId);
         jdbc.update("DELETE FROM return_session_items WHERE tenant_id = ?", tenantId);
         jdbc.update("DELETE FROM return_session_shipments WHERE tenant_id = ?", tenantId);
         jdbc.update("DELETE FROM return_sessions WHERE tenant_id = ?", tenantId);
@@ -110,6 +127,8 @@ class WorkerPermissionGuardTest {
         jdbc.update("DELETE FROM order_items WHERE tenant_id = ?", tenantId);
         jdbc.update("DELETE FROM shipments WHERE tenant_id = ?", tenantId);
         jdbc.update("DELETE FROM orders WHERE tenant_id = ?", tenantId);
+        jdbc.update("DELETE FROM transfers WHERE tenant_id = ?", tenantId);
+        jdbc.update("DELETE FROM stock_take_sessions WHERE tenant_id = ?", tenantId);
         jdbc.update("DELETE FROM variants WHERE tenant_id = ?", tenantId);
         jdbc.update("DELETE FROM products WHERE tenant_id = ?", tenantId);
         jdbc.update("DELETE FROM stores WHERE tenant_id = ?", tenantId);
@@ -198,6 +217,130 @@ class WorkerPermissionGuardTest {
         assertThat(orderStatus(orderId)).isEqualTo("cancelled");
     }
 
+    // ─────────────────────────────────────────────────────────────────────────
+    // 4. Transfer scan-out — worker 403, owner succeeds
+    // ─────────────────────────────────────────────────────────────────────────
+    @Test
+    void transferScanOut_workerForbidden_ownerSucceeds() {
+        UUID transferId = createTransfer();
+        String pieceId = createPiece("available", null);
+        Map<String, Object> body = Map.of("barcode", "PC-" + pieceId);
+        String url = base() + "/api/v1/transfers/" + transferId + "/scan-out";
+
+        ResponseEntity<String> workerResp = rest.exchange(
+            url, HttpMethod.POST, new HttpEntity<>(body, bearerHeaders(workerToken)), String.class);
+        assertThat(workerResp.getStatusCode().value())
+            .as("worker must be rejected (403) — transfers are Owner/Manager-tier per blueprint.md")
+            .isEqualTo(403);
+
+        ResponseEntity<Map> ownerResp = rest.exchange(
+            url, HttpMethod.POST, new HttpEntity<>(body, bearerHeaders(ownerToken)), Map.class);
+        assertThat(ownerResp.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(ownerResp.getBody().get("success")).isEqualTo(true);
+        assertThat(ownerResp.getBody().get("pieceId")).isEqualTo(pieceId);
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // 5. Transfer list — worker 403, owner succeeds
+    // ─────────────────────────────────────────────────────────────────────────
+    @Test
+    void transferList_workerForbidden_ownerSucceeds() {
+        createTransfer();
+        String url = base() + "/api/v1/transfers";
+
+        ResponseEntity<String> workerResp = rest.exchange(
+            url, HttpMethod.GET, new HttpEntity<>(bearerHeaders(workerToken)), String.class);
+        assertThat(workerResp.getStatusCode().value())
+            .as("worker must be rejected (403) — transfers are Owner/Manager-tier per blueprint.md")
+            .isEqualTo(403);
+
+        ResponseEntity<java.util.List> ownerResp = rest.exchange(
+            url, HttpMethod.GET, new HttpEntity<>(bearerHeaders(ownerToken)), java.util.List.class);
+        assertThat(ownerResp.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(ownerResp.getBody()).isNotEmpty();
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // 6. Transfer detail — worker 403, owner succeeds
+    // ─────────────────────────────────────────────────────────────────────────
+    @Test
+    void transferDetail_workerForbidden_ownerSucceeds() {
+        UUID transferId = createTransfer();
+        String url = base() + "/api/v1/transfers/" + transferId;
+
+        ResponseEntity<String> workerResp = rest.exchange(
+            url, HttpMethod.GET, new HttpEntity<>(bearerHeaders(workerToken)), String.class);
+        assertThat(workerResp.getStatusCode().value())
+            .as("worker must be rejected (403) — transfers are Owner/Manager-tier per blueprint.md")
+            .isEqualTo(403);
+
+        ResponseEntity<Map> ownerResp = rest.exchange(
+            url, HttpMethod.GET, new HttpEntity<>(bearerHeaders(ownerToken)), Map.class);
+        assertThat(ownerResp.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(ownerResp.getBody().get("id")).isEqualTo(transferId.toString());
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // 7. Stock-take session detail — worker 403, owner succeeds
+    // ─────────────────────────────────────────────────────────────────────────
+    @Test
+    void stockTakeSessionDetail_workerForbidden_ownerSucceeds() {
+        UUID sessionId = createStockTakeSession();
+        String url = base() + "/api/v1/stock-takes/sessions/" + sessionId;
+
+        ResponseEntity<String> workerResp = rest.exchange(
+            url, HttpMethod.GET, new HttpEntity<>(bearerHeaders(workerToken)), String.class);
+        assertThat(workerResp.getStatusCode().value())
+            .as("worker must be rejected (403) — stock take is Owner/Manager-tier per blueprint.md")
+            .isEqualTo(403);
+
+        ResponseEntity<Map> ownerResp = rest.exchange(
+            url, HttpMethod.GET, new HttpEntity<>(bearerHeaders(ownerToken)), Map.class);
+        assertThat(ownerResp.getStatusCode()).isEqualTo(HttpStatus.OK);
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // 8. Stock-take scan — worker 403, owner succeeds
+    // ─────────────────────────────────────────────────────────────────────────
+    @Test
+    void stockTakeScan_workerForbidden_ownerSucceeds() {
+        UUID sessionId = createStockTakeSession();
+        String pieceId = createPiece("available", null);
+        Map<String, Object> body = Map.of("barcode", "PC-" + pieceId, "condition", "good");
+        String url = base() + "/api/v1/stock-takes/sessions/" + sessionId + "/scan";
+
+        ResponseEntity<String> workerResp = rest.exchange(
+            url, HttpMethod.POST, new HttpEntity<>(body, bearerHeaders(workerToken)), String.class);
+        assertThat(workerResp.getStatusCode().value())
+            .as("worker must be rejected (403) — stock take is Owner/Manager-tier per blueprint.md")
+            .isEqualTo(403);
+
+        ResponseEntity<Map> ownerResp = rest.exchange(
+            url, HttpMethod.POST, new HttpEntity<>(body, bearerHeaders(ownerToken)), Map.class);
+        assertThat(ownerResp.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(ownerResp.getBody().get("pieceId")).isEqualTo(pieceId);
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // 9. Stock-take unscan — worker 403, owner succeeds
+    // ─────────────────────────────────────────────────────────────────────────
+    @Test
+    void stockTakeUnscan_workerForbidden_ownerSucceeds() {
+        UUID sessionId = createStockTakeSession();
+        String pieceId = createPiece("available", null);
+        String url = base() + "/api/v1/stock-takes/sessions/" + sessionId + "/scan/" + pieceId;
+
+        ResponseEntity<String> workerResp = rest.exchange(
+            url, HttpMethod.DELETE, new HttpEntity<>(bearerHeaders(workerToken)), String.class);
+        assertThat(workerResp.getStatusCode().value())
+            .as("worker must be rejected (403) — stock take is Owner/Manager-tier per blueprint.md")
+            .isEqualTo(403);
+
+        ResponseEntity<Void> ownerResp = rest.exchange(
+            url, HttpMethod.DELETE, new HttpEntity<>(bearerHeaders(ownerToken)), Void.class);
+        assertThat(ownerResp.getStatusCode()).isEqualTo(HttpStatus.NO_CONTENT);
+    }
+
     // ── helpers ───────────────────────────────────────────────────────────────
 
     private static HttpHeaders bearerHeaders(String token) {
@@ -234,5 +377,19 @@ class WorkerPermissionGuardTest {
     private String orderStatus(UUID orderId) {
         return jdbc.queryForObject(
             "SELECT status::text FROM orders WHERE id = ?", String.class, orderId);
+    }
+
+    private UUID createTransfer() {
+        return jdbc.queryForObject(
+            "INSERT INTO transfers (tenant_id, transfer_type, destination_location_id, created_by) " +
+            "VALUES (?, 'showroom', ?, ?) RETURNING id",
+            UUID.class, tenantId, locationId, ownerId);
+    }
+
+    private UUID createStockTakeSession() {
+        return jdbc.queryForObject(
+            "INSERT INTO stock_take_sessions (tenant_id, scope_type, location_id, opened_by) " +
+            "VALUES (?, 'all', ?, ?) RETURNING id",
+            UUID.class, tenantId, locationId, ownerId);
     }
 }
