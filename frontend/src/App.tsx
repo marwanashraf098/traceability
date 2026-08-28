@@ -37,20 +37,22 @@ import WorkerHome from './pages/WorkerHome'
 import Privacy from './pages/Privacy'
 import Terms from './pages/Terms'
 
+type AuthRefreshState = 'loading' | 'authenticated' | 'unauthenticated'
+
 /**
- * Async auth gate. On page reload the in-memory access token is gone, so we call
- * POST /api/v1/auth/refresh — the browser sends the traced_refresh httpOnly cookie
- * automatically. If the cookie is valid we get a new access token and proceed; if not
- * (expired, revoked, or absent) we redirect to /login.
+ * Shared by RequireAuth and RootRoute — one refresh attempt per fresh load. On page
+ * reload the in-memory access token is gone, so we call POST /api/v1/auth/refresh —
+ * the browser sends the traced_refresh httpOnly cookie automatically. If the cookie
+ * is valid we get a new access token and proceed; if not (expired, revoked, or
+ * absent) callers treat 'unauthenticated' as their logged-out case.
  *
  * Fast path: if the access token is already in memory (in-session navigation) we skip
  * the refresh call entirely — no spinner, no extra RTT.
  */
-export function RequireAuth({ children }: { children: React.ReactNode }) {
-  const [state, setState] = useState<'loading' | 'authenticated' | 'unauthenticated'>(
+function useAuthRefresh(): AuthRefreshState {
+  const [state, setState] = useState<AuthRefreshState>(
     () => getAccessToken() !== null ? 'authenticated' : 'loading'
   )
-  const { stationMode, currentWorker } = useStation()
 
   useEffect(() => {
     if (state !== 'loading') return
@@ -65,12 +67,23 @@ export function RequireAuth({ children }: { children: React.ReactNode }) {
       .catch(() => setState('unauthenticated'))
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
+  return state
+}
+
+function AuthLoadingSpinner() {
+  return (
+    <div className="min-h-screen bg-base flex items-center justify-center">
+      <div className="w-8 h-8 rounded-full border-2 border-brand/30 border-t-brand animate-spin" />
+    </div>
+  )
+}
+
+export function RequireAuth({ children }: { children: React.ReactNode }) {
+  const state = useAuthRefresh()
+  const { stationMode, currentWorker } = useStation()
+
   if (state === 'loading') {
-    return (
-      <div className="min-h-screen bg-base flex items-center justify-center">
-        <div className="w-8 h-8 rounded-full border-2 border-brand/30 border-t-brand animate-spin" />
-      </div>
-    )
+    return <AuthLoadingSpinner />
   }
   if (state === 'unauthenticated') {
     clearAccessToken()
@@ -84,6 +97,36 @@ export function RequireAuth({ children }: { children: React.ReactNode }) {
     return <StationGate />
   }
   return <>{children}</>
+}
+
+/**
+ * Root path "/". A logged-out visitor sees the Landing page exactly as before.
+ * A logged-in device (valid traced_refresh cookie) is forwarded into the app
+ * instead — a warehouse tablet reopening the bare domain should never see
+ * marketing content it has to click through. Reuses the same one-shot
+ * /auth/refresh probe as RequireAuth (no new auth mechanism) and the same
+ * stationMode/role routing RequireAuth + OwnerOnlyRoute/WorkerOnlyRoute use
+ * elsewhere, so a fresh open lands on the same screen App already sends that
+ * user to post-login.
+ */
+export function RootRoute() {
+  const state = useAuthRefresh()
+  const { stationMode, currentWorker } = useStation()
+
+  if (state === 'loading') {
+    return <AuthLoadingSpinner />
+  }
+  if (state === 'unauthenticated') {
+    return <Landing />
+  }
+  // Same precedence as RequireAuth: station-mode gate wins over role routing.
+  if (stationMode && !currentWorker) {
+    return <Navigate to="/overview" replace />
+  }
+  if (getRoleFromToken() === 'worker') {
+    return <Navigate to="/worker-home" replace />
+  }
+  return <Navigate to="/overview" replace />
 }
 
 /**
@@ -117,7 +160,7 @@ export default function App() {
     <BrowserRouter>
       <ToastProvider>
       <Routes>
-        <Route path="/"        element={<Landing />} />
+        <Route path="/"        element={<RootRoute />} />
         <Route path="/privacy" element={<Privacy />} />
         <Route path="/terms"   element={<Terms />} />
         <Route path="/login"   element={<Login />} />

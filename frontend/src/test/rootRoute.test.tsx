@@ -1,0 +1,145 @@
+import { describe, test, expect, beforeEach, afterEach, vi } from 'vitest'
+import { screen, render, cleanup } from '@testing-library/react'
+import { MemoryRouter, Routes, Route } from 'react-router-dom'
+import { I18nextProvider, initReactI18next } from 'react-i18next'
+import i18next from 'i18next'
+import en from '../locales/en.json'
+import { RootRoute, RequireAuth } from '../App'
+import { StationProvider } from '../components/StationProvider'
+import { clearAccessToken } from '../auth'
+
+// Landing is a marketing page full of browser APIs jsdom doesn't implement
+// (canvas 2d context, ResizeObserver, SVG getTotalLength, scroll-reveal
+// IntersectionObserver) — none of which this test cares about. This test's only
+// concern is ROUTING: does RootRoute render Landing (logged-out) or redirect
+// (logged-in)? Mocking it keeps the test decoupled from Landing's internals and
+// avoids shimming unrelated browser APIs. Landing's own content is untouched.
+vi.mock('../pages/Landing', () => ({
+  default: () => <div data-testid="landing-page">LANDING</div>,
+}))
+
+// Fresh i18next instance — mirrors renderWithProviders.tsx / stationGate.test.tsx.
+const testI18n = i18next.createInstance()
+testI18n.use(initReactI18next).init({
+  lng: 'en',
+  fallbackLng: 'en',
+  initImmediate: false,
+  resources: { en: { translation: en } },
+  interpolation: { escapeValue: false },
+})
+
+/** Minimal fake JWT — getRoleFromToken() only reads the middle segment's `role` claim. */
+function fakeJwt(role: 'owner' | 'manager' | 'worker'): string {
+  const payload = btoa(JSON.stringify({ role }))
+  return `h.${payload}.s`
+}
+
+function jsonResponse(status: number, body: unknown) {
+  return Promise.resolve({
+    ok: status >= 200 && status < 300,
+    status,
+    statusText: '',
+    headers: { get: (k: string) => (k.toLowerCase() === 'content-type' ? 'application/json' : null) },
+    json: async () => body,
+  })
+}
+
+function mockRefresh(result: { ok: true; role: 'owner' | 'manager' | 'worker' } | { ok: false }) {
+  vi.stubGlobal('fetch', vi.fn((url: string) => {
+    if (url.includes('/auth/refresh')) {
+      if (!result.ok) return jsonResponse(401, {})
+      return jsonResponse(200, { accessToken: fakeJwt(result.role) })
+    }
+    // StationGate's roster fetch, when reached.
+    if (url.includes('/station/roster')) return jsonResponse(200, [])
+    return jsonResponse(404, {})
+  }))
+}
+
+/** Same tree shape as App.tsx's real routing: RootRoute at "/", RequireAuth-wrapped
+ * destinations at /overview and /worker-home so a stationMode redirect actually
+ * exercises the gate, exactly like production. */
+function renderAtRoot() {
+  return render(
+    <StationProvider>
+      <MemoryRouter initialEntries={['/']}>
+        <I18nextProvider i18n={testI18n}>
+          <Routes>
+            <Route path="/" element={<RootRoute />} />
+            <Route
+              path="/overview"
+              element={<RequireAuth><div data-testid="overview-page">OVERVIEW</div></RequireAuth>}
+            />
+            <Route
+              path="/worker-home"
+              element={<RequireAuth><div data-testid="worker-home-page">WORKER HOME</div></RequireAuth>}
+            />
+          </Routes>
+        </I18nextProvider>
+      </MemoryRouter>
+    </StationProvider>
+  )
+}
+
+beforeEach(() => {
+  localStorage.clear()
+  clearAccessToken()
+})
+
+afterEach(() => {
+  vi.unstubAllGlobals()
+  cleanup()
+})
+
+describe('Root route ("/") — logged-in forwarding', () => {
+  test('(a) logged out at "/" -> Landing renders', async () => {
+    mockRefresh({ ok: false })
+
+    renderAtRoot()
+
+    expect(await screen.findByTestId('landing-page')).toBeInTheDocument()
+    expect(screen.queryByTestId('overview-page')).not.toBeInTheDocument()
+  })
+
+  test('(b) logged-in owner at "/" -> redirected to /overview, Landing not shown', async () => {
+    mockRefresh({ ok: true, role: 'owner' })
+
+    renderAtRoot()
+
+    expect(await screen.findByTestId('overview-page')).toBeInTheDocument()
+    expect(screen.queryByTestId('landing-page')).not.toBeInTheDocument()
+  })
+
+  test('(c) logged-in worker at "/" -> redirected to /worker-home', async () => {
+    mockRefresh({ ok: true, role: 'worker' })
+
+    renderAtRoot()
+
+    expect(await screen.findByTestId('worker-home-page')).toBeInTheDocument()
+    expect(screen.queryByTestId('landing-page')).not.toBeInTheDocument()
+  })
+
+  test('(d) stationMode device at "/" -> lands on the gate, not Landing and not straight into the app', async () => {
+    localStorage.setItem('stationMode', 'true')
+    mockRefresh({ ok: true, role: 'owner' })
+
+    renderAtRoot()
+
+    expect(await screen.findByText(/who's working/i)).toBeInTheDocument()
+    expect(screen.queryByTestId('landing-page')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('overview-page')).not.toBeInTheDocument()
+  })
+
+  test('(e) no Landing content-flash before redirect — loading state precedes the redirect', async () => {
+    mockRefresh({ ok: true, role: 'owner' })
+
+    renderAtRoot()
+
+    // Synchronously after the first render (before the /auth/refresh promise
+    // resolves), RootRoute must be in its loading/spinner state — never Landing.
+    expect(screen.queryByTestId('landing-page')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('overview-page')).not.toBeInTheDocument()
+
+    expect(await screen.findByTestId('overview-page')).toBeInTheDocument()
+  })
+})
