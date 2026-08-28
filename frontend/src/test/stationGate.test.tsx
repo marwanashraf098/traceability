@@ -92,7 +92,10 @@ describe('Worker Station Gate — key behaviors', () => {
     localStorage.setItem('stationMode', 'true')
     setAccessToken('owner-token')
 
-    renderGated(<div data-testid="scan-screen">SCAN SCREEN</div>)
+    // Worker sign-in now navigates to /worker-home (Worker experience frontend
+    // pass, FIX 3) — render the intercepted route AT /worker-home so this test's
+    // "children render after sign-in" assertion still lands on a matched route.
+    renderGated(<div data-testid="scan-screen">SCAN SCREEN</div>, '/worker-home')
     await signInViaGate()
 
     expect(await screen.findByTestId('scan-screen')).toBeInTheDocument()
@@ -103,7 +106,8 @@ describe('Worker Station Gate — key behaviors', () => {
     localStorage.setItem('stationMode', 'true')
     setAccessToken('owner-token')
 
-    const { unmount } = renderGated(<div data-testid="scan-screen">SCAN SCREEN</div>)
+    // Worker sign-in now navigates to /worker-home (FIX 3) — same rationale as (b).
+    const { unmount } = renderGated(<div data-testid="scan-screen">SCAN SCREEN</div>, '/worker-home')
     await signInViaGate()
     expect(await screen.findByTestId('scan-screen')).toBeInTheDocument()
 
@@ -114,7 +118,7 @@ describe('Worker Station Gate — key behaviors', () => {
     // that: stationMode survives (localStorage), currentWorker does not.
     unmount()
     setAccessToken('worker-token')
-    renderGated(<div data-testid="scan-screen">SCAN SCREEN</div>)
+    renderGated(<div data-testid="scan-screen">SCAN SCREEN</div>, '/worker-home')
 
     expect(await screen.findByText(/who's working/i)).toBeInTheDocument()
     expect(screen.queryByTestId('scan-screen')).not.toBeInTheDocument()

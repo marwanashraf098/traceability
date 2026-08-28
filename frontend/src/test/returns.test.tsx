@@ -332,9 +332,20 @@ describe('Returns — session-based rebuild', () => {
   })
 
   test('rs15 close disabled for a worker even with nothing pending', async () => {
+    // A worker's landing never fetches the sessions list/analytics (FIX 6a —
+    // owner-only endpoints), so its "Open return session" button always POSTs
+    // directly; resuming an already-open session goes through the
+    // SESSION_ALREADY_OPEN 409 → details.sessionId path, not enterSession()'s
+    // owner-path list-then-resume sequence.
     vi.mocked(api.getRoleFromToken).mockReturnValue('worker')
     const user = userEvent.setup()
-    await enterSession(user, makeSessionDetail({ items: [makeItem({ disposition: 'restocked' })] }))
+    const detail = makeSessionDetail({ items: [makeItem({ disposition: 'restocked' })] })
+    mockFetch
+      .mockReturnValueOnce(jsonErr({ code: 'SESSION_ALREADY_OPEN', message_en: 'Already open', details: { sessionId: detail.id } }, 409))
+      .mockReturnValueOnce(jsonOk(detail))
+    renderWithProviders(<Returns />)
+    await user.click(await screen.findByTestId('open-session-button'))
+    await waitFor(() => screen.getByTestId('open-session-screen'))
     expect(screen.getByTestId('close-session-button')).toBeDisabled()
     expect(screen.queryByTestId('abandon-link')).not.toBeInTheDocument()
   })

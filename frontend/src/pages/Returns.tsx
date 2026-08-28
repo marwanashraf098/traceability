@@ -192,15 +192,20 @@ const PAGE_SIZE = 10
 
 function LandingScreen({ onOpenSession }: { onOpenSession: (sessionId: string) => void }) {
   const { t } = useTranslation()
+  const isWorker = getRoleFromToken() === 'worker'
   const [page, setPage] = useState(0)
   const [sessions, setSessions] = useState<LandingSession[]>([])
   const [total, setTotal] = useState(0)
   const [analytics, setAnalytics] = useState<Analytics | null>(null)
-  const [loading, setLoading] = useState(true)
+  const [loading, setLoading] = useState(!isWorker)
   const [error, setError] = useState<string | null>(null)
   const [opening, setOpening] = useState(false)
 
   const load = useCallback(async () => {
+    // Workers only get the "Open return session" intake action below — the
+    // sessions list + analytics band are owner/manager-only endpoints
+    // (blueprint.md §11), so a worker never calls them.
+    if (isWorker) return
     setLoading(true); setError(null)
     try {
       const [sessResp, analyticsResp] = await Promise.all([
@@ -215,7 +220,7 @@ function LandingScreen({ onOpenSession }: { onOpenSession: (sessionId: string) =
     } finally {
       setLoading(false)
     }
-  }, [page, t])
+  }, [page, t, isWorker])
 
   useEffect(() => { load() }, [load])
 
@@ -236,6 +241,30 @@ function LandingScreen({ onOpenSession }: { onOpenSession: (sessionId: string) =
     } finally {
       setOpening(false)
     }
+  }
+
+  if (isWorker) {
+    // Reduced worker landing — just the intake action. No sessions list, no
+    // analytics band (owner/manager-only endpoints, never called for a worker).
+    // "Open return session" resumes an already-open session server-side via
+    // the SESSION_ALREADY_OPEN catch above, so a worker never needs the list.
+    return (
+      <div className="space-y-4" data-testid="returns-landing">
+        <div className="flex items-center justify-between">
+          <h1 className="text-h1 text-primary">{t('returns.title')}</h1>
+          <button
+            className="btn-brand"
+            disabled={opening}
+            onClick={openSession}
+            data-testid="open-session-button"
+          >
+            {opening ? <Spinner size={16} /> : <ScanLine size={16} strokeWidth={2} />}
+            {t('returns.landing.openSession')}
+          </button>
+        </div>
+        {error && <Alert tone="critical" title={error} />}
+      </div>
+    )
   }
 
   const openSessionRow = sessions.find(s => s.status === 'open') ?? (page === 0 ? sessions[0] : undefined)

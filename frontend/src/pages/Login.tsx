@@ -5,10 +5,12 @@ import { login } from '../api'
 import { setAccessToken } from '../auth'
 import AuthLayout from '../components/AuthLayout'
 import { Input, Button } from '../components/ui'
+import { useStation } from '../components/StationProvider'
 
 export default function Login() {
   const { t }      = useTranslation()
   const navigate   = useNavigate()
+  const { exitStationMode } = useStation()
   const [email,        setEmail]        = useState('')
   const [password,     setPassword]     = useState('')
   const [showPassword, setShowPassword] = useState(false)
@@ -25,6 +27,10 @@ export default function Login() {
     try {
       const res = await login(email, password)
       setAccessToken(res.accessToken)
+      // A full email+password login is always an owner/manager action (workers
+      // sign in via the station PIN gate) — clear any persisted stationMode flag
+      // so this device never lands back in the gate instead of the app.
+      exitStationMode()
       navigate('/overview')
     } catch {
       setError(t('login.error'))

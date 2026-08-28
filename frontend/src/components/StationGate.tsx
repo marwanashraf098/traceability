@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { Delete } from 'lucide-react'
 import {
@@ -21,6 +22,7 @@ type Step = 'roster' | 'pin' | 'exit'
  */
 export default function StationGate() {
   const { signInWorker, exitStationMode } = useStation()
+  const navigate = useNavigate()
   const [step, setStep] = useState<Step>('roster')
 
   const [roster, setRoster] = useState<StationRosterEntry[]>([])
@@ -74,6 +76,7 @@ export default function StationGate() {
       try {
         const me = await getMe()
         signInWorker(me)
+        navigate('/worker-home')
       } catch {
         // /me failed right after a successful PIN switch — extremely unlikely.
         // Fall back to the roster rather than leaving the gate stuck mid-submit.

@@ -6,6 +6,7 @@ import { initReactI18next } from 'react-i18next'
 import en from '../locales/en.json'
 import { ReactElement } from 'react'
 import { ToastProvider } from '../components/ui'
+import { StationProvider } from '../components/StationProvider'
 
 // Fresh i18next instance for tests — does NOT share state with the singleton in
 // src/i18n.ts, avoids the localStorage.getItem('lang') call at import time, and
@@ -29,13 +30,17 @@ export function renderWithProviders(
 ) {
   function Wrapper({ children }: { children: React.ReactNode }) {
     return (
-      <MemoryRouter initialEntries={initialEntries}>
-        <I18nextProvider i18n={testI18n}>
-          <ToastProvider>
-            {children}
-          </ToastProvider>
-        </I18nextProvider>
-      </MemoryRouter>
+      // StationProvider sits ABOVE the router here too, mirroring App.tsx's real
+      // nesting — Login and any future screen may call useStation().
+      <StationProvider>
+        <MemoryRouter initialEntries={initialEntries}>
+          <I18nextProvider i18n={testI18n}>
+            <ToastProvider>
+              {children}
+            </ToastProvider>
+          </I18nextProvider>
+        </MemoryRouter>
+      </StationProvider>
     )
   }
   return render(ui, { wrapper: Wrapper, ...renderOptions })

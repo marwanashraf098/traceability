@@ -17,7 +17,14 @@ function authHeaders() {
 export async function api<T>(path: string, opts: RequestInit = {}): Promise<T> {
   const res = await fetch(BASE + path, { ...opts, headers: { ...authHeaders(), ...opts.headers as Record<string,string> } })
   if (res.status === 401) { clearAccessToken(); window.location.href = '/login'; throw new Error('Unauth') }
-  if (!res.ok) { const txt = await res.text(); throw new Error(txt || res.statusText) }
+  if (!res.ok) {
+    // Never surface the raw response body — Spring Security's default 403 body
+    // (ACCESS_DENIED + granted authorities) is not meant for display. Business
+    // exceptions carry a message_en field (ApiExceptionHandler); anything else
+    // falls back to a generic HTTP-status message.
+    const body = await res.json().catch(() => null) as { message_en?: string } | null
+    throw new Error(body?.message_en || `HTTP ${res.status}`)
+  }
   // PUT/DELETE on lines return 204 with NO body (ReceivingController.updateLine/
   // deleteLine are @ResponseStatus(NO_CONTENT) void methods) — calling .json() on
   // an empty body throws "Unexpected end of JSON input". Same guard as api.ts's

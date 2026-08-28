@@ -1,5 +1,6 @@
 {
   "nav": {
+    "home": "Home",
     "overview": "Overview",
     "orders": "Orders",
     "catalog": "Inventory",
@@ -1633,5 +1634,15 @@
   "exc": {
     "cancelled_live_shipment": "Cancelled order, shipment still active",
     "cancelled_but_delivered": "Cancelled but delivered — reconcile"
+  },
+  "workerHome": {
+    "greeting": "Hi, {{name}}",
+    "subtitle": "What are you working on? Pick a task to start scanning.",
+    "tiles": {
+      "fulfill": { "title": "Pick & Pack", "desc": "Scan and pack orders in the queue" },
+      "returns": { "title": "Returns", "desc": "Open a session and scan returned items" },
+      "pickups": { "title": "Pickups", "desc": "Prepare and hand off courier pickups" },
+      "lookup": { "title": "Look up", "desc": "Find an order by barcode or AWB" }
+    }
   }
 }

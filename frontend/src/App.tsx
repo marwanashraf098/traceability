@@ -1,6 +1,7 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { useState, useEffect, lazy, Suspense } from 'react'
 import { getAccessToken, setAccessToken, clearAccessToken } from './auth'
+import { getRoleFromToken } from './api'
 import { ToastProvider } from './components/ui'
 import Layout from './components/Layout'
 import { StationProvider, useStation } from './components/StationProvider'
@@ -32,6 +33,7 @@ import ExchangeMapping from './pages/exchanges/ExchangeMapping'
 import SettingsPage from './pages/settings/SettingsPage'
 import Inventory from './pages/Inventory'
 import PickupSessions from './pages/PickupSessions'
+import WorkerHome from './pages/WorkerHome'
 import Privacy from './pages/Privacy'
 import Terms from './pages/Terms'
 
@@ -84,6 +86,29 @@ export function RequireAuth({ children }: { children: React.ReactNode }) {
   return <>{children}</>
 }
 
+/**
+ * Guards the owner/manager-only screens (Overview, Orders, Inventory, Receiving,
+ * Stock Take, Transfers, Exceptions, Settings — the same set hidden from the
+ * worker sidebar nav in Layout.tsx). A worker who reaches one of these routes
+ * (typed URL, stale bookmark, kiosk default) is redirected to /worker-home
+ * instead of rendering a screen whose API calls will 403.
+ */
+export function OwnerOnlyRoute({ children }: { children: React.ReactNode }) {
+  if (getRoleFromToken() === 'worker') {
+    return <Navigate to="/worker-home" replace />
+  }
+  return <>{children}</>
+}
+
+/** /worker-home is worker-only — owner/manager land on /overview instead. */
+export function WorkerOnlyRoute({ children }: { children: React.ReactNode }) {
+  const role = getRoleFromToken()
+  if (role === 'owner' || role === 'manager') {
+    return <Navigate to="/overview" replace />
+  }
+  return <>{children}</>
+}
+
 export default function App() {
   return (
     // StationProvider sits ABOVE the router so currentWorker survives route
@@ -101,7 +126,9 @@ export default function App() {
           path="/overview"
           element={
             <RequireAuth>
-              <Layout><Overview /></Layout>
+              <OwnerOnlyRoute>
+                <Layout><Overview /></Layout>
+              </OwnerOnlyRoute>
             </RequireAuth>
           }
         />
@@ -109,7 +136,9 @@ export default function App() {
           path="/orders"
           element={
             <RequireAuth>
-              <Layout><Orders /></Layout>
+              <OwnerOnlyRoute>
+                <Layout><Orders /></Layout>
+              </OwnerOnlyRoute>
             </RequireAuth>
           }
         />
@@ -121,7 +150,9 @@ export default function App() {
           path="/exchanges/:id"
           element={
             <RequireAuth>
-              <Layout><ExchangeMapping /></Layout>
+              <OwnerOnlyRoute>
+                <Layout><ExchangeMapping /></Layout>
+              </OwnerOnlyRoute>
             </RequireAuth>
           }
         />
@@ -131,7 +162,9 @@ export default function App() {
           path="/receiving"
           element={
             <RequireAuth>
-              <Layout><Receiving /></Layout>
+              <OwnerOnlyRoute>
+                <Layout><Receiving /></Layout>
+              </OwnerOnlyRoute>
             </RequireAuth>
           }
         />
@@ -155,7 +188,9 @@ export default function App() {
           path="/stock-take"
           element={
             <RequireAuth>
-              <Layout><StockTake /></Layout>
+              <OwnerOnlyRoute>
+                <Layout><StockTake /></Layout>
+              </OwnerOnlyRoute>
             </RequireAuth>
           }
         />
@@ -164,7 +199,9 @@ export default function App() {
           path="/stock-take/:id/scan"
           element={
             <RequireAuth>
-              <StockTakeScan />
+              <OwnerOnlyRoute>
+                <StockTakeScan />
+              </OwnerOnlyRoute>
             </RequireAuth>
           }
         />
@@ -172,7 +209,9 @@ export default function App() {
           path="/stock-take/:id/review"
           element={
             <RequireAuth>
-              <Layout><StockTakeReview /></Layout>
+              <OwnerOnlyRoute>
+                <Layout><StockTakeReview /></Layout>
+              </OwnerOnlyRoute>
             </RequireAuth>
           }
         />
@@ -180,7 +219,9 @@ export default function App() {
           path="/transfers"
           element={
             <RequireAuth>
-              <Layout><Transfers /></Layout>
+              <OwnerOnlyRoute>
+                <Layout><Transfers /></Layout>
+              </OwnerOnlyRoute>
             </RequireAuth>
           }
         />
@@ -189,7 +230,9 @@ export default function App() {
           path="/transfers/:id/scan-out"
           element={
             <RequireAuth>
-              <TransferScanOut />
+              <OwnerOnlyRoute>
+                <TransferScanOut />
+              </OwnerOnlyRoute>
             </RequireAuth>
           }
         />
@@ -197,7 +240,9 @@ export default function App() {
           path="/transfers/:id"
           element={
             <RequireAuth>
-              <Layout><TransferDetail /></Layout>
+              <OwnerOnlyRoute>
+                <Layout><TransferDetail /></Layout>
+              </OwnerOnlyRoute>
             </RequireAuth>
           }
         />
@@ -205,7 +250,9 @@ export default function App() {
           path="/transfers/:id/reconcile"
           element={
             <RequireAuth>
-              <Layout><TransferReconcile /></Layout>
+              <OwnerOnlyRoute>
+                <Layout><TransferReconcile /></Layout>
+              </OwnerOnlyRoute>
             </RequireAuth>
           }
         />
@@ -231,7 +278,9 @@ export default function App() {
           path="/exceptions"
           element={
             <RequireAuth>
-              <Layout><ExceptionsPage /></Layout>
+              <OwnerOnlyRoute>
+                <Layout><ExceptionsPage /></Layout>
+              </OwnerOnlyRoute>
             </RequireAuth>
           }
         />
@@ -239,7 +288,9 @@ export default function App() {
           path="/inventory"
           element={
             <RequireAuth>
-              <Layout><Inventory /></Layout>
+              <OwnerOnlyRoute>
+                <Layout><Inventory /></Layout>
+              </OwnerOnlyRoute>
             </RequireAuth>
           }
         />
@@ -252,10 +303,22 @@ export default function App() {
           }
         />
         <Route
+          path="/worker-home"
+          element={
+            <RequireAuth>
+              <WorkerOnlyRoute>
+                <Layout><WorkerHome /></Layout>
+              </WorkerOnlyRoute>
+            </RequireAuth>
+          }
+        />
+        <Route
           path="/settings"
           element={
             <RequireAuth>
-              <Layout><SettingsPage /></Layout>
+              <OwnerOnlyRoute>
+                <Layout><SettingsPage /></Layout>
+              </OwnerOnlyRoute>
             </RequireAuth>
           }
         />
