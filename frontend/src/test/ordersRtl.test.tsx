@@ -10,6 +10,7 @@ import ar from '../locales/ar.json'
 import { stubFetchWithShellDefaults } from './mockShellFetch'
 import Layout from '../components/Layout'
 import Orders from '../pages/Orders'
+import { StationProvider } from '../components/StationProvider'
 import type { OrderPage, OrderSummary, OrderSummaryCounts, DerivedOrderStatus, OrderDetail } from '../api'
 
 // ── AR/RTL headless render check (verify bar item) ──────────────────────────────
@@ -32,9 +33,13 @@ function renderRtl(ui: ReactElement) {
   document.documentElement.setAttribute('lang', 'ar')
   return render(ui, {
     wrapper: ({ children }) => (
-      <MemoryRouter initialEntries={['/']}>
-        <I18nextProvider i18n={arI18n}>{children}</I18nextProvider>
-      </MemoryRouter>
+      // Layout now reads useStation() (worker "Switch / Lock" control) — needs a
+      // StationProvider ancestor, same as App.tsx's real nesting.
+      <StationProvider>
+        <MemoryRouter initialEntries={['/']}>
+          <I18nextProvider i18n={arI18n}>{children}</I18nextProvider>
+        </MemoryRouter>
+      </StationProvider>
     ),
   })
 }

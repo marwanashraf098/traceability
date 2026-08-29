@@ -14,6 +14,7 @@ import {
 import { clearAccessToken } from '../auth'
 import { Logo } from './Logo'
 import { cn, MeProvider } from './ui'
+import { useStation } from './StationProvider'
 
 // ── Nav link ──────────────────────────────────────────────────────────────────
 // Icon is passed as a component reference (not pre-rendered) so it can be
@@ -60,11 +61,28 @@ export default function Layout({ children }: { children: ReactNode }) {
   const searchRef = useRef<HTMLInputElement>(null)
   const menuRef   = useRef<HTMLDivElement>(null)
   const role      = getRoleFromToken()
+  const { stationMode, signOutWorker } = useStation()
+
+  // A worker's control hands the station to the next worker rather than logging
+  // the whole device out — the refresh cookie and stationMode stay untouched.
+  // signOutWorker() clears currentWorker in-memory only; RequireAuth reacts to
+  // that and re-renders <StationGate/> in place. Owner/manager (or a device not
+  // in station mode) keep the real full logout, unchanged.
+  const isWorkerAtStation = role === 'worker' && stationMode
 
   async function logout() {
     try { await request<void>('/auth/logout', { method: 'POST' }) } catch { /* ignore */ }
     clearAccessToken()
     navigate('/login')
+  }
+
+  function logoutControl() {
+    setMenuOpen(false)
+    if (isWorkerAtStation) {
+      signOutWorker()
+    } else {
+      logout()
+    }
   }
 
   function handleSearch(e: React.FormEvent) {
@@ -281,11 +299,11 @@ export default function Layout({ children }: { children: ReactNode }) {
                   </button>
                   <button
                     type="button"
-                    onClick={() => { setMenuOpen(false); logout() }}
+                    onClick={logoutControl}
                     className="w-full flex items-center gap-2.5 px-3 py-2 text-body text-start text-danger hover:bg-danger/10 transition-colors"
                   >
                     <LogOut size={16} strokeWidth={1.75} />
-                    {t('nav.logout')}
+                    {isWorkerAtStation ? t('nav.switchLock') : t('nav.logout')}
                   </button>
                 </div>
               )}

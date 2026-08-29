@@ -40,9 +40,13 @@ function jsonResponse(status: number, body: unknown) {
 
 function renderIn18n(ui: React.ReactNode, initialEntries: string[]) {
   return render(
-    <MemoryRouter initialEntries={initialEntries}>
-      <I18nextProvider i18n={testI18n}>{ui}</I18nextProvider>
-    </MemoryRouter>
+    // Layout now reads useStation() (worker "Switch / Lock" control) — every
+    // render of it needs a StationProvider ancestor, same as App.tsx's real nesting.
+    <StationProvider>
+      <MemoryRouter initialEntries={initialEntries}>
+        <I18nextProvider i18n={testI18n}>{ui}</I18nextProvider>
+      </MemoryRouter>
+    </StationProvider>
   )
 }
 

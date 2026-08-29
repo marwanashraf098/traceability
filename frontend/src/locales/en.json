@@ -8,6 +8,7 @@
     "stocktake": "Stock Take",
     "fulfill": "Pick & Pack",
     "logout": "Log out",
+    "switchLock": "Switch / Lock",
     "lookup": "Search barcode or AWB…",
     "returns": "Returns",
     "exceptions": "Exceptions",
