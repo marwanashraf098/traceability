@@ -3,7 +3,9 @@ package com.traceability.identity;
 import com.traceability.identity.model.LoginRequest;
 import com.traceability.identity.model.SignupRequest;
 import com.traceability.identity.model.TokenResponse;
+import com.traceability.notifications.WelcomeEmailJob;
 import com.traceability.tenancy.TenantContext;
+import org.jobrunr.scheduling.JobScheduler;
 import org.springframework.dao.EmptyResultDataAccessException;
 import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -36,14 +38,19 @@ public class AuthService {
     private final JwtService jwt;
     private final PasswordEncoder encoder;
     private final Clock clock;
+    private final JobScheduler jobScheduler;
+    private final WelcomeEmailJob welcomeEmailJob;
 
     public AuthService(JdbcTemplate jdbc, AuthRepository repo,
-                       JwtService jwt, PasswordEncoder encoder, Clock clock) {
+                       JwtService jwt, PasswordEncoder encoder, Clock clock,
+                       JobScheduler jobScheduler, WelcomeEmailJob welcomeEmailJob) {
         this.jdbc    = jdbc;
         this.repo    = repo;
         this.jwt     = jwt;
         this.encoder = encoder;
         this.clock   = clock;
+        this.jobScheduler     = jobScheduler;
+        this.welcomeEmailJob  = welcomeEmailJob;
     }
 
     // ---- signup ----
@@ -70,13 +77,17 @@ public class AuthService {
         Timestamp acceptedAt = Timestamp.from(Instant.now(clock));
 
         // runAs sets TenantContext so the @Transactional createTenantWithOwner fires GUC.
-        return TenantContext.runAs(tenantId, () -> {
+        // A rollback (e.g. duplicate email) throws out of runAs, so the enqueue below is
+        // only reached once createTenantWithOwner has actually committed.
+        TokenResponse tokens = TenantContext.runAs(tenantId, () -> {
             repo.createTenantWithOwner(tenantId, req.tenantName(), userId,
                     req.name(), req.email(), phone, hash,
                     PolicyVersions.PRIVACY, PolicyVersions.TERMS, acceptedAt);
             String refresh = repo.storeRefreshToken(userId, tenantId);
             return new TokenResponse(jwt.issueAccessToken(userId, tenantId, "owner"), refresh);
         });
+        jobScheduler.enqueue(() -> welcomeEmailJob.run(req.email(), req.name()));
+        return tokens;
     }
 
     /**

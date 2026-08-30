@@ -130,6 +130,11 @@ class CustomAppConnectTest {
         assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.CREATED);
         ownerToken    = resp.getBody().accessToken();
         ownerTenantId = UUID.fromString((String) jwtService.verify(ownerToken).getClaim("tenant"));
+
+        // Signup itself enqueues a welcome-email job on this shared mock. @MockBean is only
+        // auto-reset after each @AfterEach, not after @BeforeAll, so without this reset that
+        // one call bleeds into cc1's exact-count verify() below.
+        reset(jobScheduler);
     }
 
     @BeforeEach
