@@ -1,0 +1,191 @@
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="x-apple-disable-message-reformatting" />
+<title>Exceptions need your attention</title>
+<!--[if mso]>
+<style type="text/css">body,table,td,a{font-family:Arial,Helvetica,sans-serif !important;}</style>
+<![endif]-->
+</head>
+<body style="margin:0; padding:0; background-color:#F4F5F7;">
+
+<div style="display:none; font-size:1px; color:#F4F5F7; line-height:1px; max-height:0; max-width:0; opacity:0; overflow:hidden;">{{ALERT_COUNT}} high-priority exceptions were flagged since your last alert.</div>
+
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:#F4F5F7;">
+  <tr>
+    <td align="center" style="padding:32px 16px;">
+
+      <table role="presentation" width="600" cellpadding="0" cellspacing="0" border="0" style="width:600px; max-width:600px;">
+
+        <!-- wordmark -->
+        <tr>
+          <td align="left" style="padding:0 0 16px 4px; font-family:'Geist', -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; font-size:20px; font-weight:bold; letter-spacing:-0.4px; color:#2563EB;">
+            traced<span style="color:#2563EB;">&#8226;</span>
+          </td>
+        </tr>
+
+        <!-- card -->
+        <tr>
+          <td style="background-color:#FFFFFF; border:1px solid #E5E7EB; border-radius:12px;">
+
+            <!-- ============ ENGLISH ============ -->
+            <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+              <tr>
+                <td align="left" style="padding:40px 40px 0 40px; font-family:'Geist', -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; font-size:24px; line-height:32px; font-weight:bold; color:#1F2937;">
+                  {{ALERT_COUNT}} exceptions need your attention
+                </td>
+              </tr>
+              <tr>
+                <td align="left" style="padding:12px 40px 0 40px; font-family:'Geist', -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; font-size:16px; line-height:26px; color:#4B5563;">
+                  These are the high-priority items flagged since your last alert.
+                </td>
+              </tr>
+
+              <!-- exception list -->
+              <tr>
+                <td style="padding:24px 40px 0 40px;">
+                  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+
+<!-- EXCEPTION_ROW_START -->
+                    <tr>
+                      <td style="padding:12px 0; border-top:1px solid #E5E7EB;">
+                        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+                          <tr>
+                            <td width="80" valign="top" align="left" style="width:80px; padding:0 12px 0 0;">
+                              <table role="presentation" cellpadding="0" cellspacing="0" border="0">
+                                <tr>
+                                  <td align="center" bgcolor="{{ITEM_SEVERITY_BG}}" style="background-color:{{ITEM_SEVERITY_BG}}; border-radius:6px; padding:3px 8px; font-family:'Geist', -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; font-size:11px; font-weight:bold; line-height:16px; color:#FFFFFF; white-space:nowrap;">
+                                    {{ITEM_SEVERITY_LABEL}}
+                                  </td>
+                                </tr>
+                              </table>
+                            </td>
+                            <td valign="top" align="left" style="font-family:'Geist', -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; font-size:14px; line-height:22px; color:#1F2937;">
+                              {{ITEM_DESC}}
+                            </td>
+                            <td width="60" valign="top" align="right" style="width:60px; padding:0 0 0 12px; font-family:'Geist', -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; font-size:13px; line-height:22px; white-space:nowrap;">
+                              <a href="{{ITEM_URL}}" target="_blank" style="color:#2563EB; text-decoration:none; font-weight:bold;">View &rarr;</a>
+                            </td>
+                          </tr>
+                        </table>
+                      </td>
+                    </tr>
+<!-- EXCEPTION_ROW_END -->
+
+                    <tr><td style="border-top:1px solid #E5E7EB; font-size:1px; line-height:1px;">&nbsp;</td></tr>
+                  </table>
+                </td>
+              </tr>
+
+              <!-- CTA -->
+              <tr>
+                <td align="left" style="padding:28px 40px 40px 40px;">
+                  <table role="presentation" cellpadding="0" cellspacing="0" border="0">
+                    <tr>
+                      <td align="center" bgcolor="#2563EB" style="background-color:#2563EB; border-radius:8px;">
+                        <a href="{{APP_URL}}" target="_blank" style="display:inline-block; padding:14px 32px; font-family:'Geist', -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; font-size:16px; font-weight:bold; line-height:20px; color:#FFFFFF; text-decoration:none;">Open Traced</a>
+                      </td>
+                    </tr>
+                  </table>
+                </td>
+              </tr>
+            </table>
+
+            <!-- divider -->
+            <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+              <tr>
+                <td style="padding:0 40px;">
+                  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+                    <tr><td height="1" style="height:1px; line-height:1px; font-size:1px; background-color:#E5E7EB;">&nbsp;</td></tr>
+                  </table>
+                </td>
+              </tr>
+            </table>
+
+            <!-- ============ ARABIC ============ -->
+            <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" dir="rtl">
+              <tr>
+                <td align="right" dir="rtl" style="padding:40px 40px 0 40px; font-family:'Cairo', Tahoma, Arial, sans-serif; font-size:24px; line-height:36px; font-weight:bold; color:#1F2937;">
+                  {{ALERT_COUNT}} استثناءات تحتاج انتباهك
+                </td>
+              </tr>
+              <tr>
+                <td align="right" dir="rtl" style="padding:12px 40px 0 40px; font-family:'Cairo', Tahoma, Arial, sans-serif; font-size:16px; line-height:30px; color:#4B5563;">
+                  هذه هي البنود ذات الأولوية العالية التي ظهرت منذ آخر تنبيه.
+                </td>
+              </tr>
+
+              <tr>
+                <td dir="rtl" style="padding:24px 40px 0 40px;">
+                  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" dir="rtl">
+
+<!-- EXCEPTION_ROW_START -->
+                    <tr>
+                      <td dir="rtl" style="padding:12px 0; border-top:1px solid #E5E7EB;">
+                        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" dir="rtl">
+                          <tr>
+                            <td width="80" valign="top" align="right" style="width:80px; padding:0 0 0 12px;">
+                              <table role="presentation" cellpadding="0" cellspacing="0" border="0" align="right">
+                                <tr>
+                                  <td align="center" bgcolor="{{ITEM_SEVERITY_BG}}" style="background-color:{{ITEM_SEVERITY_BG}}; border-radius:6px; padding:3px 8px; font-family:'Cairo', Tahoma, Arial, sans-serif; font-size:11px; font-weight:bold; line-height:18px; color:#FFFFFF; white-space:nowrap;">
+                                    {{ITEM_SEVERITY_LABEL}}
+                                  </td>
+                                </tr>
+                              </table>
+                            </td>
+                            <td valign="top" align="right" dir="rtl" style="font-family:'Cairo', Tahoma, Arial, sans-serif; font-size:14px; line-height:26px; color:#1F2937;">
+                              {{ITEM_DESC}}
+                            </td>
+                            <td width="60" valign="top" align="left" style="width:60px; padding:0 12px 0 0; font-family:'Cairo', Tahoma, Arial, sans-serif; font-size:13px; line-height:26px; white-space:nowrap;">
+                              <a href="{{ITEM_URL}}" target="_blank" style="color:#2563EB; text-decoration:none; font-weight:bold;">عرض &larr;</a>
+                            </td>
+                          </tr>
+                        </table>
+                      </td>
+                    </tr>
+<!-- EXCEPTION_ROW_END -->
+
+                    <tr><td style="border-top:1px solid #E5E7EB; font-size:1px; line-height:1px;">&nbsp;</td></tr>
+                  </table>
+                </td>
+              </tr>
+
+              <tr>
+                <td align="right" dir="rtl" style="padding:28px 40px 40px 40px;">
+                  <table role="presentation" cellpadding="0" cellspacing="0" border="0" align="right">
+                    <tr>
+                      <td align="center" bgcolor="#2563EB" style="background-color:#2563EB; border-radius:8px;">
+                        <a href="{{APP_URL}}" target="_blank" style="display:inline-block; padding:14px 32px; font-family:'Cairo', Tahoma, Arial, sans-serif; font-size:16px; font-weight:bold; line-height:20px; color:#FFFFFF; text-decoration:none;">افتح Traced</a>
+                      </td>
+                    </tr>
+                  </table>
+                </td>
+              </tr>
+            </table>
+
+          </td>
+        </tr>
+
+        <!-- footer -->
+        <tr>
+          <td align="left" style="padding:24px 8px 0 8px; font-family:'Geist', -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; font-size:12px; line-height:20px; color:#9CA3AF;">
+            Sent by Traced. Need a hand? Write to <a href="mailto:support@tracedtech.com" style="color:#2563EB; text-decoration:none;">support@tracedtech.com</a>.<br />
+            This is an automated message from an unmonitored address &mdash; please don&rsquo;t reply directly.
+          </td>
+        </tr>
+        <tr>
+          <td align="right" dir="rtl" style="padding:12px 8px 8px 8px; font-family:'Cairo', Tahoma, Arial, sans-serif; font-size:12px; line-height:22px; color:#9CA3AF;">
+            أُرسلت من Traced. للمساعدة: <a href="mailto:support@tracedtech.com" style="color:#2563EB; text-decoration:none;">support@tracedtech.com</a> &mdash; هذه رسالة تلقائية من عنوان غير مُراقب، برجاء عدم الرد عليها.
+          </td>
+        </tr>
+
+      </table>
+
+    </td>
+  </tr>
+</table>
+
+</body>
+</html>

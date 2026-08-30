@@ -110,6 +110,15 @@ class ExceptionDigestJobTest {
                 orderId, tenantId, storeId, "ext-low-" + orderId);
     }
 
+    /** MEDIUM — detectUnmatched: an unresolved unlinked Bosta delivery. */
+    private void seedMedium(UUID tenantId) {
+        jdbc.update(
+                "INSERT INTO unlinked_bosta_deliveries " +
+                "(tenant_id, tracking_number, bosta_state_code, bosta_order_type, resolved) " +
+                "VALUES (?, ?, 10, 'SEND', false)",
+                tenantId, "TRK-" + UUID.randomUUID());
+    }
+
     private long digestLedgerCount(UUID tenantId) {
         return jdbc.queryForObject(
                 "SELECT COUNT(*) FROM exception_notifications WHERE tenant_id = ? AND channel = 'digest'",
@@ -134,10 +143,14 @@ class ExceptionDigestJobTest {
         ArgumentCaptor<String> bodyCaptor = ArgumentCaptor.forClass(String.class);
         verify(emailGateway, times(1)).send(eq(ownerEmail), anyString(), bodyCaptor.capture());
         String body = bodyCaptor.getValue();
+        assertThat(body).doesNotContain("{{");
         assertThat(body).contains("marked as lost");     // CRITICAL item, itemized as "new"
         assertThat(body).contains("is on hold");          // LOW item, itemized as "new"
         assertThat(body).contains("New since last summary");
-        assertThat(body).contains("2</strong> total (1 critical, 1 other)");
+        // roll-up: total=2, critical=1, warning=1 (LOW collapses into the warning bucket)
+        assertThat(body).contains("color:#1F2937;\">2</div>");
+        assertThat(body).contains("color:#DC2626;\">1</div>");
+        assertThat(body).contains("color:#D97706;\">1</div>");
 
         assertThat(digestLedgerCount(tenantId)).isEqualTo(2L);
     }
@@ -161,12 +174,41 @@ class ExceptionDigestJobTest {
         ArgumentCaptor<String> bodyCaptor = ArgumentCaptor.forClass(String.class);
         verify(emailGateway, times(1)).send(eq(ownerEmail), anyString(), bodyCaptor.capture());
         String body = bodyCaptor.getValue();
+        assertThat(body).doesNotContain("{{");
         assertThat(body).doesNotContain("marked as lost");
-        assertThat(body).contains("No new exceptions since the last summary.");
-        assertThat(body).contains("1</strong> total (1 critical, 0 other)");
+        assertThat(body).contains("New since last summary");
+        assertThat(body).contains("No new exceptions since your last summary.");
+        assertThat(body).contains("لا توجد استثناءات جديدة منذ آخر ملخص.");
+        // roll-up still reflects the full open set: total=1, critical=1, warning=0
+        assertThat(body).contains("color:#1F2937;\">1</div>");
+        assertThat(body).contains("color:#DC2626;\">1</div>");
+        assertThat(body).contains("color:#D97706;\">0</div>");
 
         // No new items to ledger on the second run — count stays at 1 from the first run.
         assertThat(digestLedgerCount(tenantId)).isEqualTo(1L);
+    }
+
+    // -----------------------------------------------------------------------
+    // (template) MEDIUM severity uses the gray tier color — proves the formatter's
+    // severity map covers all 4 tiers, not just the 2 the immediate sweep ever sends.
+    // -----------------------------------------------------------------------
+    @Test
+    void digestBody_mediumSeverityUsesGrayColor_provesFourTierMap() {
+        UUID tenantId = seedTenant("DigMed");
+        String ownerEmail = "owner-" + UUID.randomUUID() + "@test.com";
+        seedUser(tenantId, ownerEmail, "owner", true);
+        seedMedium(tenantId);
+
+        digestJob.run();
+
+        ArgumentCaptor<String> bodyCaptor = ArgumentCaptor.forClass(String.class);
+        verify(emailGateway, times(1)).send(eq(ownerEmail), anyString(), bodyCaptor.capture());
+        String body = bodyCaptor.getValue();
+
+        assertThat(body).doesNotContain("{{");
+        assertThat(body).contains("#6B7280");
+        assertThat(body).contains("MEDIUM");
+        assertThat(body).contains("متوسطة");
     }
 
     // -----------------------------------------------------------------------
@@ -203,6 +245,7 @@ class ExceptionDigestJobTest {
         ArgumentCaptor<String> bodyCaptor = ArgumentCaptor.forClass(String.class);
         verify(emailGateway, times(1)).send(eq(ownerEmail), anyString(), bodyCaptor.capture());
         String body = bodyCaptor.getValue();
+        assertThat(body).doesNotContain("{{");
         assertThat(body).contains("New since last summary");
         assertThat(body).contains("marked as lost");
     }

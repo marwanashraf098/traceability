@@ -17,8 +17,10 @@ import org.springframework.transaction.support.TransactionTemplate;
 import javax.sql.DataSource;
 import java.time.Clock;
 import java.time.LocalDate;
+import java.time.format.DateTimeFormatter;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
@@ -48,6 +50,11 @@ import java.util.UUID;
 public class ExceptionDigestJob {
 
     private static final Logger log = LoggerFactory.getLogger(ExceptionDigestJob.class);
+
+    // {{DIGEST_DATE}} template token format — computed here (Africa/Cairo, via the injected
+    // Clock) and passed into the formatter; the formatter never recomputes a server-local date.
+    private static final DateTimeFormatter DIGEST_DATE_FORMAT =
+            DateTimeFormatter.ofPattern("d MMM yyyy", Locale.ENGLISH);
 
     private final JdbcTemplate ownerJdbc;
     private final JdbcTemplate jdbc;
@@ -121,7 +128,9 @@ public class ExceptionDigestJob {
             }
 
             String subject = buildSubject();
-            String body = buildBody(newSinceLast, counts);
+            String body = ExceptionEmailFormatter.buildDigestBody(
+                    newSinceLast, counts.total(), counts.critical(), counts.warning(),
+                    DIGEST_DATE_FORMAT.format(LocalDate.now(clock)), appUrl);
 
             for (String email : recipients) {
                 emailGateway.send(email, subject, body);
@@ -152,34 +161,4 @@ public class ExceptionDigestJob {
         return "Daily exceptions summary — " + LocalDate.now(clock) + " · Traced";
     }
 
-    private String buildBody(List<Map<String, Object>> newItems, ExceptionService.OpenExceptionCounts counts) {
-        StringBuilder enItems = new StringBuilder();
-        StringBuilder arItems = new StringBuilder();
-        for (Map<String, Object> item : newItems) {
-            enItems.append(ExceptionEmailFormatter.itemRowEn(item, appUrl));
-            arItems.append(ExceptionEmailFormatter.itemRowAr(item, appUrl));
-        }
-        String enNewSection = newItems.isEmpty()
-                ? "<p>No new exceptions since the last summary.</p>"
-                : "<p><strong>New since last summary:</strong></p><ul style=\"padding-left: 20px;\">"
-                        + enItems + "</ul>";
-        String arNewSection = newItems.isEmpty()
-                ? "<p>لا توجد استثناءات جديدة منذ آخر ملخص.</p>"
-                : "<p><strong>جديد منذ آخر ملخص:</strong></p><ul style=\"padding-right: 20px;\">"
-                        + arItems + "</ul>";
-
-        return """
-                <div style="font-family: Arial, sans-serif; font-size: 15px; color: #111; line-height: 1.5;">
-                  %s
-                  <p>Open totals: <strong>%d</strong> total (%d critical, %d other).</p>
-                </div>
-                <hr style="border: none; border-top: 1px solid #ddd; margin: 24px 0;">
-                <div dir="rtl" style="font-family: Arial, sans-serif; font-size: 15px; color: #111; line-height: 1.5;">
-                  %s
-                  <p>إجمالي المفتوح: <strong>%d</strong> (حرجة: %d، أخرى: %d).</p>
-                </div>
-                """.formatted(
-                        enNewSection, counts.total(), counts.critical(), counts.warning(),
-                        arNewSection, counts.total(), counts.critical(), counts.warning());
-    }
 }

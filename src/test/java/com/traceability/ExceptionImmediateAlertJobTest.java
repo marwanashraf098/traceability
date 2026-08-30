@@ -143,6 +143,17 @@ class ExceptionImmediateAlertJobTest {
                 Long.class, tenantId);
     }
 
+    private static final String ARABIC_MARKER = "<!-- ============ ARABIC ============ -->";
+
+    private static int countOccurrences(String haystack, String needle) {
+        int count = 0, idx = 0;
+        while ((idx = haystack.indexOf(needle, idx)) != -1) {
+            count++;
+            idx += needle.length();
+        }
+        return count;
+    }
+
     // -----------------------------------------------------------------------
     // (a) one CRITICAL + one HIGH, ledger empty → one batched email, 2 ledger rows.
     // -----------------------------------------------------------------------
@@ -164,6 +175,49 @@ class ExceptionImmediateAlertJobTest {
         assertThat(body).contains("must be physically unpacked");     // HIGH item
 
         assertThat(immediateLedgerCount(tenantId)).isEqualTo(2L);
+    }
+
+    // -----------------------------------------------------------------------
+    // (template) no leftover {{ tokens; correct per-severity color+label in each
+    // language region; N items render N rows in BOTH the EN and AR regions.
+    // -----------------------------------------------------------------------
+    @Test
+    void alertBody_noLeftoverTokens_correctSeverityColors_andRowCountPerLanguage() {
+        UUID tenantId = seedTenant("ImmTpl");
+        UUID storeId = seedStore(tenantId);
+        String ownerEmail = "owner-" + UUID.randomUUID() + "@test.com";
+        seedUser(tenantId, ownerEmail, "owner", true);
+        seedCritical(tenantId, storeId);
+        seedHigh(tenantId, storeId);
+
+        job.run();
+
+        ArgumentCaptor<String> bodyCaptor = ArgumentCaptor.forClass(String.class);
+        verify(emailGateway, times(1)).send(eq(ownerEmail), anyString(), bodyCaptor.capture());
+        String body = bodyCaptor.getValue();
+
+        assertThat(body).doesNotContain("{{");
+
+        int arabicIdx = body.indexOf(ARABIC_MARKER);
+        assertThat(arabicIdx).isGreaterThan(0);
+        String enHalf = body.substring(0, arabicIdx);
+        String arHalf = body.substring(arabicIdx);
+
+        // CRITICAL row: correct color + label in each language's half.
+        assertThat(enHalf).contains("#DC2626").contains("CRITICAL");
+        assertThat(arHalf).contains("#DC2626").contains("حرجة");
+        // HIGH row: correct color + label in each language's half.
+        assertThat(enHalf).contains("#D97706").contains("HIGH");
+        assertThat(arHalf).contains("#D97706").contains("عالية");
+
+        // 2 items → exactly 2 rows in the EN region and 2 in the AR region
+        // (each row has exactly one language-specific "view" link).
+        assertThat(countOccurrences(enHalf, "View &rarr;")).isEqualTo(2);
+        assertThat(countOccurrences(arHalf, "عرض &larr;")).isEqualTo(2);
+
+        // Descriptions land in the correct language half, not the other.
+        assertThat(enHalf).contains("marked as lost");
+        assertThat(arHalf).doesNotContain("marked as lost");
     }
 
     // -----------------------------------------------------------------------
