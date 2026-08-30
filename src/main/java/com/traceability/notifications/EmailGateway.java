@@ -13,4 +13,10 @@ public interface EmailGateway {
      * @param magicLink the full link including raw token (https://app/auth/magic?token=...)
      */
     void sendMagicLink(String toEmail, String magicLink);
+
+    /**
+     * General-purpose HTML email send (welcome, exception notifications, etc).
+     * Distinct from {@link #sendMagicLink} — that seam is left untouched.
+     */
+    void send(String to, String subject, String htmlBody);
 }

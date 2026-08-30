@@ -15,4 +15,10 @@ public class LoggingEmailGateway implements EmailGateway {
     public void sendMagicLink(String toEmail, String magicLink) {
         log.warn("EMAIL NOT SENT (configure spring.mail.host): to={} link={}", toEmail, magicLink);
     }
+
+    @Override
+    public void send(String to, String subject, String htmlBody) {
+        log.warn("EMAIL NOT SENT (configure spring.mail.host): to={} subject={} body={}",
+                to, subject, htmlBody);
+    }
 }
