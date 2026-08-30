@@ -34,6 +34,9 @@ import static org.mockito.Mockito.*;
  * verify the enqueue call's captured lambda, mirroring how other tests treat JobRunr's
  * lambda-based enqueue as a black box: we assert on EmailGateway.send() being called with
  * the right recipient/body, not on JobScheduler internals.
+ *
+ * Body now comes from the approved classpath template (emails/welcome.html) with
+ * {{APP_URL}} and the two heading tokens substituted — see WelcomeEmailJob.run().
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @Testcontainers
@@ -81,28 +84,50 @@ class WelcomeEmailTest {
         return new SignupRequest(tenantName, ownerName, email, "01012345678", "password123", true);
     }
 
-    // -----------------------------------------------------------------------
-    // (a) Standard signup → exactly one welcome send, EN + AR markers present.
-    // -----------------------------------------------------------------------
-    @Test
-    void standardSignup_sendsOneWelcomeEmail_withEnAndArMarkers() {
-        String email = "owner-" + System.nanoTime() + "@welcome.test";
-
+    private String captureWelcomeBody(String email, String tenantName, String ownerName) {
         ResponseEntity<AccessTokenResponse> resp = new RestTemplate().postForEntity(
                 base() + "/api/v1/auth/signup",
-                signupRequest(email, "Welcome Co", "Owner Name"),
+                signupRequest(email, tenantName, ownerName),
                 AccessTokenResponse.class);
-
         assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.CREATED);
-        assertThat(resp.getBody().accessToken()).isNotBlank();
 
         ArgumentCaptor<String> bodyCaptor = ArgumentCaptor.forClass(String.class);
-        verify(emailGateway, times(1))
-                .send(eq(email), anyString(), bodyCaptor.capture());
+        verify(emailGateway, times(1)).send(eq(email), anyString(), bodyCaptor.capture());
+        return bodyCaptor.getValue();
+    }
 
-        String body = bodyCaptor.getValue();
-        assertThat(body).contains("Welcome to Traced");   // EN marker
-        assertThat(body).contains("مرحبًا بك في Traced");  // AR marker
+    // -----------------------------------------------------------------------
+    // (a) Standard signup, name present → EN + AR markers, name substituted with a
+    //     comma in both languages, and every {{...}} token resolved.
+    // -----------------------------------------------------------------------
+    @Test
+    void standardSignup_withOwnerName_sendsWelcomeEmail_nameCommaSubstitutedBothLanguages() {
+        String email = "owner-" + System.nanoTime() + "@welcome.test";
+
+        String body = captureWelcomeBody(email, "Welcome Co", "Owner Name");
+
+        assertThat(body).contains("Welcome to Traced");         // EN marker
+        assertThat(body).contains("مرحبًا بك في Traced");        // AR marker
+        assertThat(body).contains("Welcome to Traced, Owner Name");
+        assertThat(body).contains("مرحبًا بك في Traced، Owner Name");
+        assertThat(body).doesNotContain("{{");
+    }
+
+    // -----------------------------------------------------------------------
+    // (a2) Standard signup, blank owner name → generic heading, no dangling comma
+    //      or stray-space artifact in either language, every token still resolved.
+    // -----------------------------------------------------------------------
+    @Test
+    void standardSignup_blankOwnerName_sendsWelcomeEmail_noCommaArtifact() {
+        String email = "noname-" + System.nanoTime() + "@welcome.test";
+
+        String body = captureWelcomeBody(email, "Blank Name Co", "");
+
+        assertThat(body).contains("Welcome to Traced");
+        assertThat(body).contains("مرحبًا بك في Traced");
+        assertThat(body).doesNotContain("Welcome to Traced,");
+        assertThat(body).doesNotContain("مرحبًا بك في Traced،");
+        assertThat(body).doesNotContain("{{");
     }
 
     // -----------------------------------------------------------------------
