@@ -50,6 +50,56 @@ public class ExceptionService {
     @Transactional(readOnly = true)
     public Map<String, Object> listExceptions(String typeFilter, String severityFilter,
                                                int page, int size) {
+        List<Map<String, Object>> all = detectAllOpen();
+
+        // Optional filters
+        if (typeFilter != null && !typeFilter.isBlank()) {
+            all = all.stream()
+                .filter(e -> typeFilter.equals(e.get("type")))
+                .collect(java.util.stream.Collectors.toList());
+        }
+        if (severityFilter != null && !severityFilter.isBlank()) {
+            all = all.stream()
+                .filter(e -> severityFilter.equals(e.get("severity")))
+                .collect(java.util.stream.Collectors.toList());
+        }
+
+        // Sort: severity asc (CRITICAL first), then occurredAt asc (oldest first)
+        Instant epoch = Instant.EPOCH;
+        all.sort(Comparator
+            .comparingInt((Map<String, Object> e) ->
+                SEVERITY_ORDER.getOrDefault((String) e.get("severity"), 99))
+            .thenComparing(e -> toInstant(e.get("occurred_at"), epoch)));
+
+        // Enrich with ageSeconds
+        Instant now = clock.instant();
+        all.forEach(e -> e.put("ageSeconds",
+            Duration.between(toInstant(e.get("occurred_at"), now), now).getSeconds()));
+
+        // Paginate
+        int total  = all.size();
+        int from   = Math.min(page * size, total);
+        int to     = Math.min(from + size, total);
+
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("total", total);
+        result.put("page",  page);
+        result.put("size",  size);
+        result.put("items", all.subList(from, to));
+        return result;
+    }
+
+    /**
+     * The single full-detect entry point: every currently-open exception across all 21
+     * detectors, enriched (descriptionEn/Ar, actionUrl, etc), unsorted and unpaginated.
+     * listExceptions(), countOpenExceptionsBySeverity(), and the exception-notification
+     * jobs (immediate CRITICAL/HIGH sweep + daily digest) ALL call this — there is no
+     * curated detector subset anywhere. A future detector added here flows to every
+     * caller automatically, with zero drift risk between "the list", "the count", and
+     * "what gets emailed".
+     */
+    @Transactional(readOnly = true)
+    public List<Map<String, Object>> detectAllOpen() {
         UUID tenantId = TenantContext.require();
 
         // Per-tenant config
@@ -90,42 +140,7 @@ public class ExceptionService {
 
         // Enrich with descriptions and action hints
         all.forEach(this::enrich);
-
-        // Optional filters
-        if (typeFilter != null && !typeFilter.isBlank()) {
-            all = all.stream()
-                .filter(e -> typeFilter.equals(e.get("type")))
-                .collect(java.util.stream.Collectors.toList());
-        }
-        if (severityFilter != null && !severityFilter.isBlank()) {
-            all = all.stream()
-                .filter(e -> severityFilter.equals(e.get("severity")))
-                .collect(java.util.stream.Collectors.toList());
-        }
-
-        // Sort: severity asc (CRITICAL first), then occurredAt asc (oldest first)
-        Instant epoch = Instant.EPOCH;
-        all.sort(Comparator
-            .comparingInt((Map<String, Object> e) ->
-                SEVERITY_ORDER.getOrDefault((String) e.get("severity"), 99))
-            .thenComparing(e -> toInstant(e.get("occurred_at"), epoch)));
-
-        // Enrich with ageSeconds
-        Instant now = clock.instant();
-        all.forEach(e -> e.put("ageSeconds",
-            Duration.between(toInstant(e.get("occurred_at"), now), now).getSeconds()));
-
-        // Paginate
-        int total  = all.size();
-        int from   = Math.min(page * size, total);
-        int to     = Math.min(from + size, total);
-
-        Map<String, Object> result = new LinkedHashMap<>();
-        result.put("total", total);
-        result.put("page",  page);
-        result.put("size",  size);
-        result.put("items", all.subList(from, to));
-        return result;
+        return all;
     }
 
     /** total = critical + warning; critical = severity CRITICAL, warning = HIGH+MEDIUM+LOW collapsed. */
@@ -134,51 +149,19 @@ public class ExceptionService {
     /**
      * Severity-bucketed count of currently-open exceptions — backs both the shell's
      * notification-bell number (via countOpenExceptions() below, unchanged signature)
-     * and the Overview dashboard's exceptions-by-severity split. Deliberately calls the
-     * SAME 17 detector methods listExceptions() calls (same config, same suppression
-     * sub-queries), just tallying severities instead of enriching/sorting/paginating —
-     * two independent implementations of the same 17 business rules would drift.
+     * and the Overview dashboard's exceptions-by-severity split, and the exception
+     * digest's "open totals" roll-up. Calls the SAME detectAllOpen() every other caller
+     * uses, just tallying severities instead of sorting/paginating.
      * Equal in total to listExceptions(null,null,0,MAX).total.
      *
      * 4-tier severity (CRITICAL/HIGH/MEDIUM/LOW, as used by listExceptions()) collapses
-     * to 2 buckets for the dashboard: CRITICAL → critical, everything else → warning.
-     * This is a display simplification, not a new severity taxonomy — listExceptions()
-     * and the exceptions list page keep the full 4-tier severity untouched.
+     * to 2 buckets here: CRITICAL → critical, everything else → warning. This is a
+     * display simplification, not a new severity taxonomy — listExceptions() and the
+     * exception-notification jobs keep the full 4-tier severity untouched.
      */
     @Transactional(readOnly = true)
     public OpenExceptionCounts countOpenExceptionsBySeverity() {
-        UUID tenantId = TenantContext.require();
-
-        Map<String, Object> cfg = jdbc.queryForMap(
-            "SELECT never_received_window_days, stuck_shipment_days, " +
-            "       return_in_transit_stuck_days " +
-            "FROM tenants WHERE id = ?", tenantId);
-        int neverReceivedDays        = ((Number) cfg.get("never_received_window_days")).intValue();
-        int stuckDays                = ((Number) cfg.get("stuck_shipment_days")).intValue();
-        int returnInTransitStuckDays = ((Number) cfg.get("return_in_transit_stuck_days")).intValue();
-
-        List<Map<String, Object>> all = new ArrayList<>();
-        all.addAll(detectLost(tenantId));
-        all.addAll(detectNeverReceived(tenantId, neverReceivedDays));
-        all.addAll(detectUnmatched(tenantId));
-        all.addAll(detectBlocked(tenantId));
-        all.addAll(detectStuck(tenantId, stuckDays));
-        all.addAll(detectUnexpectedReturn(tenantId));
-        all.addAll(detectDeliveryLimbo(tenantId));
-        all.addAll(detectNdr(tenantId));
-        all.addAll(detectGuidedUnpack(tenantId));
-        all.addAll(detectMissingAwb(tenantId));
-        all.addAll(detectShopifyCancelVsInflight(tenantId));
-        all.addAll(detectCancelledWithLiveShipment(tenantId));
-        all.addAll(detectCancelledButDelivered(tenantId));
-        all.addAll(detectMissingProviderId(tenantId));
-        all.addAll(detectHighAttempts(tenantId));
-        all.addAll(detectShopifyEditConflict(tenantId));
-        all.addAll(detectReturnInTransitStuck(tenantId, returnInTransitStuckDays));
-        all.addAll(detectReturnSessionMismatch(tenantId));
-        all.addAll(detectExchangeNeedsMapping(tenantId));
-        all.addAll(detectExchangeUnmappedState(tenantId));
-        all.addAll(detectVoidHoldSyncFailed(tenantId));
+        List<Map<String, Object>> all = detectAllOpen();
 
         int critical = 0;
         for (Map<String, Object> e : all) {
