@@ -251,6 +251,29 @@ class ExceptionDigestJobTest {
     }
 
     // -----------------------------------------------------------------------
+    // (logo) rendered body carries the app-parity wordmark — dark "traced" +
+    // blue dot span — NOT the old all-blue "traced•".
+    // -----------------------------------------------------------------------
+    @Test
+    void digestBody_containsCorrectedWordmark_notOldAllBlueTraced() {
+        UUID tenantId = seedTenant("DigWordmark");
+        UUID storeId = seedStore(tenantId);
+        String ownerEmail = "owner-" + UUID.randomUUID() + "@test.com";
+        seedUser(tenantId, ownerEmail, "owner", true);
+        seedCritical(tenantId, storeId);
+
+        digestJob.run();
+
+        ArgumentCaptor<String> bodyCaptor = ArgumentCaptor.forClass(String.class);
+        verify(emailGateway, times(1)).send(eq(ownerEmail), anyString(), bodyCaptor.capture());
+        String body = bodyCaptor.getValue();
+
+        assertThat(body).contains("letter-spacing:-0.4px; color:#1F2937;");
+        assertThat(body).contains("border-radius:50%; background-color:#2563EB;");
+        assertThat(body).doesNotContain("traced<span style=\"color:#2563EB;\">&#8226;</span>");
+    }
+
+    // -----------------------------------------------------------------------
     // (l) digest recipients owners+managers; tenant isolation holds.
     // -----------------------------------------------------------------------
     @Test

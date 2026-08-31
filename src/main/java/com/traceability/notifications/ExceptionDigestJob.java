@@ -6,7 +6,6 @@ import org.jobrunr.jobs.annotations.Job;
 import org.jobrunr.jobs.annotations.Recurring;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.autoconfigure.flyway.FlywayDataSource;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -62,9 +61,6 @@ public class ExceptionDigestJob {
     private final EmailGateway emailGateway;
     private final TransactionTemplate tx;
     private final Clock clock;
-
-    @Value("${shopify.app-url:http://localhost:5173}")
-    private String appUrl;
 
     public ExceptionDigestJob(
             @FlywayDataSource DataSource ownerDs,
@@ -130,7 +126,7 @@ public class ExceptionDigestJob {
             String subject = buildSubject();
             String body = ExceptionEmailFormatter.buildDigestBody(
                     newSinceLast, counts.total(), counts.critical(), counts.warning(),
-                    DIGEST_DATE_FORMAT.format(LocalDate.now(clock)), appUrl);
+                    DIGEST_DATE_FORMAT.format(LocalDate.now(clock)));
 
             for (String email : recipients) {
                 emailGateway.send(email, subject, body);

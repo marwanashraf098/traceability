@@ -3,7 +3,6 @@ package com.traceability.notifications;
 import org.jobrunr.jobs.annotations.Job;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.stereotype.Component;
 
@@ -19,8 +18,7 @@ import java.nio.charset.StandardCharsets;
  * Does no DB lookup — the payload (email, display name) is passed in at enqueue time.
  *
  * Body is the approved bilingual template at classpath:emails/welcome.html, loaded once
- * and cached (see {@link #template()}), with {{APP_URL}} and the two heading tokens
- * substituted per send.
+ * and cached (see {@link #template()}), with the two heading tokens substituted per send.
  */
 @Component
 public class WelcomeEmailJob {
@@ -38,13 +36,8 @@ public class WelcomeEmailJob {
     private static final String AR_HEADING_BASE =
             "مرحبًا بك في Traced";
     private static final char ARABIC_COMMA = '،';
-    private static final String APP_URL_TOKEN = "{{APP_URL}}";
 
     private final EmailGateway emailGateway;
-
-    // Same config property MagicLinkService uses to build the magic link — not a new hardcode.
-    @Value("${shopify.app-url:http://localhost:5173}")
-    private String appUrl;
 
     private volatile String templateCache;
 
@@ -83,8 +76,7 @@ public class WelcomeEmailJob {
 
         String body = template()
                 .replace(EN_HEADING_TOKEN, enHeading)
-                .replace(AR_HEADING_TOKEN, arHeading)
-                .replace(APP_URL_TOKEN, appUrl);
+                .replace(AR_HEADING_TOKEN, arHeading);
 
         emailGateway.send(email, subject, body);
         log.info("Welcome email sent to={}", email);

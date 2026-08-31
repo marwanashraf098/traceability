@@ -211,13 +211,41 @@ class ExceptionImmediateAlertJobTest {
         assertThat(arHalf).contains("#D97706").contains("عالية");
 
         // 2 items → exactly 2 rows in the EN region and 2 in the AR region
-        // (each row has exactly one language-specific "view" link).
-        assertThat(countOccurrences(enHalf, "View &rarr;")).isEqualTo(2);
-        assertThat(countOccurrences(arHalf, "عرض &larr;")).isEqualTo(2);
+        // (badge + description only — no per-item link). "border-radius:6px" occurs
+        // exactly once per row template (the severity badge cell), so its count scales
+        // 1:1 with item count — unlike counting severity label text, which false-positives
+        // in Arabic ("العالية" in the intro sentence contains "عالية" as a substring).
+        assertThat(countOccurrences(enHalf, "border-radius:6px")).isEqualTo(2);
+        assertThat(countOccurrences(arHalf, "border-radius:6px")).isEqualTo(2);
+        assertThat(body).doesNotContain("View");
+        assertThat(body).doesNotContain("عرض");
 
         // Descriptions land in the correct language half, not the other.
         assertThat(enHalf).contains("marked as lost");
         assertThat(arHalf).doesNotContain("marked as lost");
+    }
+
+    // -----------------------------------------------------------------------
+    // (logo) rendered body carries the app-parity wordmark — dark "traced" +
+    // blue dot span — NOT the old all-blue "traced•".
+    // -----------------------------------------------------------------------
+    @Test
+    void alertBody_containsCorrectedWordmark_notOldAllBlueTraced() {
+        UUID tenantId = seedTenant("ImmWordmark");
+        UUID storeId = seedStore(tenantId);
+        String ownerEmail = "owner-" + UUID.randomUUID() + "@test.com";
+        seedUser(tenantId, ownerEmail, "owner", true);
+        seedCritical(tenantId, storeId);
+
+        job.run();
+
+        ArgumentCaptor<String> bodyCaptor = ArgumentCaptor.forClass(String.class);
+        verify(emailGateway, times(1)).send(eq(ownerEmail), anyString(), bodyCaptor.capture());
+        String body = bodyCaptor.getValue();
+
+        assertThat(body).contains("letter-spacing:-0.4px; color:#1F2937;");
+        assertThat(body).contains("border-radius:50%; background-color:#2563EB;");
+        assertThat(body).doesNotContain("traced<span style=\"color:#2563EB;\">&#8226;</span>");
     }
 
     // -----------------------------------------------------------------------

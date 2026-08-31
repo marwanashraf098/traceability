@@ -21,10 +21,10 @@ import java.util.stream.Collectors;
  * They are extracted and filled independently — descriptionEn feeds the first,AR the
  * second — never assumed to share one row shape.
  *
- * Item-derived text (descriptions, URLs) is substituted into its row template ONLY —
- * never re-passed through the template-wide scalar substitution pass — so a description
- * that happens to contain a literal "{{...}}" sequence (operator free-text) can't corrupt
- * or be corrupted by the outer token fill.
+ * Item-derived text (descriptions) is substituted into its row template ONLY — never
+ * re-passed through the template-wide scalar substitution pass — so a description that
+ * happens to contain a literal "{{...}}" sequence (operator free-text) can't corrupt or
+ * be corrupted by the outer token fill.
  */
 final class ExceptionEmailFormatter {
 
@@ -51,15 +51,14 @@ final class ExceptionEmailFormatter {
     // ── Public API ───────────────────────────────────────────────────────────
 
     /** The immediate-alert body. Never called with an empty list (the job skips sending then). */
-    static String buildAlertBody(List<Map<String, Object>> items, String appUrl) {
+    static String buildAlertBody(List<Map<String, Object>> items) {
         Regions regions = splitRegions(loadAlertTemplate());
 
-        String rowsEn = joinRows(regions.rowTemplateEn(), items, appUrl, true);
-        String rowsAr = joinRows(regions.rowTemplateAr(), items, appUrl, false);
+        String rowsEn = joinRows(regions.rowTemplateEn(), items, true);
+        String rowsAr = joinRows(regions.rowTemplateAr(), items, false);
 
         Map<String, String> scalars = Map.of(
-                "{{ALERT_COUNT}}", String.valueOf(items.size()),
-                "{{APP_URL}}", appUrl);
+                "{{ALERT_COUNT}}", String.valueOf(items.size()));
 
         return assemble(regions, scalars, rowsEn, rowsAr);
     }
@@ -71,7 +70,7 @@ final class ExceptionEmailFormatter {
      */
     static String buildDigestBody(List<Map<String, Object>> newItems,
                                    int countTotal, int countCritical, int countWarning,
-                                   String digestDate, String appUrl) {
+                                   String digestDate) {
         Regions regions = splitRegions(loadDigestTemplate());
 
         String rowsEn, rowsAr;
@@ -79,16 +78,15 @@ final class ExceptionEmailFormatter {
             rowsEn = EMPTY_NEW_EN;
             rowsAr = EMPTY_NEW_AR;
         } else {
-            rowsEn = joinRows(regions.rowTemplateEn(), newItems, appUrl, true);
-            rowsAr = joinRows(regions.rowTemplateAr(), newItems, appUrl, false);
+            rowsEn = joinRows(regions.rowTemplateEn(), newItems, true);
+            rowsAr = joinRows(regions.rowTemplateAr(), newItems, false);
         }
 
         Map<String, String> scalars = Map.of(
                 "{{DIGEST_DATE}}", digestDate,
                 "{{COUNT_TOTAL}}", String.valueOf(countTotal),
                 "{{COUNT_CRITICAL}}", String.valueOf(countCritical),
-                "{{COUNT_WARNING}}", String.valueOf(countWarning),
-                "{{APP_URL}}", appUrl);
+                "{{COUNT_WARNING}}", String.valueOf(countWarning));
 
         return assemble(regions, scalars, rowsEn, rowsAr);
     }
@@ -172,22 +170,20 @@ final class ExceptionEmailFormatter {
         return s;
     }
 
-    private static String joinRows(String rowTemplate, List<Map<String, Object>> items, String appUrl, boolean english) {
+    private static String joinRows(String rowTemplate, List<Map<String, Object>> items, boolean english) {
         return items.stream()
-                .map(item -> fillRow(rowTemplate, item, appUrl, english))
+                .map(item -> fillRow(rowTemplate, item, english))
                 .collect(Collectors.joining());
     }
 
-    private static String fillRow(String rowTemplate, Map<String, Object> item, String appUrl, boolean english) {
+    private static String fillRow(String rowTemplate, Map<String, Object> item, boolean english) {
         String severity = (String) item.get("severity");
         String desc = escapeHtml(String.valueOf(english ? item.get("descriptionEn") : item.get("descriptionAr")));
-        String url = resolveUrl((String) item.get("actionUrl"), appUrl);
         String label = english ? severityLabelEn(severity) : severityLabelAr(severity);
         return rowTemplate
                 .replace("{{ITEM_SEVERITY_BG}}", severityBg(severity))
                 .replace("{{ITEM_SEVERITY_LABEL}}", label)
-                .replace("{{ITEM_DESC}}", desc)
-                .replace("{{ITEM_URL}}", url);
+                .replace("{{ITEM_DESC}}", desc);
     }
 
     // ── Severity map — single source, all four tiers (the digest itemizes every severity) ──
@@ -219,13 +215,6 @@ final class ExceptionEmailFormatter {
     }
 
     // ── Shared utilities ─────────────────────────────────────────────────────
-
-    /** Prefixes a relative actionUrl with the app base URL; passes an absolute URL through as-is. */
-    static String resolveUrl(String actionUrl, String appUrl) {
-        if (actionUrl == null || actionUrl.isBlank()) return appUrl;
-        if (actionUrl.startsWith("http://") || actionUrl.startsWith("https://")) return actionUrl;
-        return appUrl + actionUrl;
-    }
 
     /** Escapes text pulled from operator-entered fields (e.g. hold_reason) before HTML embedding. */
     static String escapeHtml(String s) {

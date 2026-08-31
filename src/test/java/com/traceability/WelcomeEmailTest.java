@@ -35,8 +35,9 @@ import static org.mockito.Mockito.*;
  * lambda-based enqueue as a black box: we assert on EmailGateway.send() being called with
  * the right recipient/body, not on JobScheduler internals.
  *
- * Body now comes from the approved classpath template (emails/welcome.html) with
- * {{APP_URL}} and the two heading tokens substituted — see WelcomeEmailJob.run().
+ * Body now comes from the approved classpath template (emails/welcome.html) with the
+ * two heading tokens substituted — see WelcomeEmailJob.run(). The template has no CTA
+ * link (de-linked) — just a plain "Log in to your dashboard" line.
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @Testcontainers
@@ -111,6 +112,28 @@ class WelcomeEmailTest {
         assertThat(body).contains("Welcome to Traced, Owner Name");
         assertThat(body).contains("مرحبًا بك في Traced، Owner Name");
         assertThat(body).doesNotContain("{{");
+        // The old CTA anchor text — not a blanket "Open Traced" check, which would
+        // also match the unrelated hidden preheader sentence ("...Open Traced to
+        // connect your Shopify store."), left untouched by the de-link.
+        assertThat(body).doesNotContain(">Open Traced<");
+        assertThat(body).doesNotContain(">افتح Traced<");
+        assertThat(body).doesNotContain("APP_URL");
+        assertThat(body).contains("Log in to your dashboard to get started.");
+    }
+
+    // -----------------------------------------------------------------------
+    // (logo) rendered body carries the app-parity wordmark — dark "traced" +
+    // blue dot span — NOT the old all-blue "traced•".
+    // -----------------------------------------------------------------------
+    @Test
+    void welcomeBody_containsCorrectedWordmark_notOldAllBlueTraced() {
+        String email = "wordmark-" + System.nanoTime() + "@welcome.test";
+
+        String body = captureWelcomeBody(email, "Wordmark Co", "Owner Name");
+
+        assertThat(body).contains("letter-spacing:-0.4px; color:#1F2937;");
+        assertThat(body).contains("border-radius:50%; background-color:#2563EB;");
+        assertThat(body).doesNotContain("traced<span style=\"color:#2563EB;\">&#8226;</span>");
     }
 
     // -----------------------------------------------------------------------
