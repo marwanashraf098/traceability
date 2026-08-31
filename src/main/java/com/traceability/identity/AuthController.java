@@ -1,8 +1,11 @@
 package com.traceability.identity;
 
 import com.traceability.identity.model.AccessTokenResponse;
+import com.traceability.identity.model.ForgotPasswordRequest;
+import com.traceability.identity.model.ForgotPasswordResponse;
 import com.traceability.identity.model.LoginRequest;
 import com.traceability.identity.model.PinRequest;
+import com.traceability.identity.model.ResetPasswordRequest;
 import com.traceability.identity.model.SignupRequest;
 import com.traceability.identity.model.TokenResponse;
 import jakarta.servlet.http.HttpServletResponse;
@@ -22,12 +25,19 @@ public class AuthController {
     static final String COOKIE_PATH    = "/api/v1/auth/refresh";
     static final int    COOKIE_MAX_AGE = 2_592_000; // 30 days
 
+    // Same generic body regardless of whether the email matched a user — enumeration-safe.
+    private static final ForgotPasswordResponse FORGOT_PASSWORD_RESPONSE =
+            new ForgotPasswordResponse("If that email is registered, a reset code has been sent.");
+
     private final AuthService authService;
     private final PinService  pinService;
+    private final PasswordResetService passwordResetService;
 
-    public AuthController(AuthService authService, PinService pinService) {
-        this.authService = authService;
-        this.pinService  = pinService;
+    public AuthController(AuthService authService, PinService pinService,
+                          PasswordResetService passwordResetService) {
+        this.authService          = authService;
+        this.pinService           = pinService;
+        this.passwordResetService = passwordResetService;
     }
 
     @PostMapping("/signup")
@@ -87,6 +97,24 @@ public class AuthController {
         TokenResponse tokens = pinService.switchPin(principal.tenantId(), req, rawRefreshToken);
         setRefreshCookie(response, tokens.refreshToken(), COOKIE_MAX_AGE);
         return new AccessTokenResponse(tokens.accessToken());
+    }
+
+    /**
+     * Always 200 with the same generic body, whether or not the email matched an active,
+     * password-having user. requestReset() itself never throws for a not-found/passwordless/
+     * throttled case — it silently no-ops — so there is no branch here to leak from.
+     */
+    @PostMapping("/forgot-password")
+    public ForgotPasswordResponse forgotPassword(@RequestBody ForgotPasswordRequest req) {
+        passwordResetService.requestReset(req.email());
+        return FORGOT_PASSWORD_RESPONSE;
+    }
+
+    /** 200 on success; generic 401 (ResponseStatusException from the service) on any failure. */
+    @PostMapping("/reset-password")
+    @ResponseStatus(HttpStatus.OK)
+    public void resetPassword(@RequestBody ResetPasswordRequest req) {
+        passwordResetService.resetPassword(req.email(), req.code(), req.newPassword());
     }
 
     /** Sets or clears the httpOnly refresh-token cookie. Package-visible for MagicLinkController. */

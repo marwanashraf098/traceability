@@ -101,6 +101,26 @@ public class AuthRepository {
                 userId);
     }
 
+    /**
+     * Completes a code-based password reset in one transaction: sets the new hash,
+     * revokes every active refresh token (session invalidation), and consumes any
+     * other outstanding reset codes for the user. Mirrors createTenantWithOwner's
+     * shape (several statements, one @Transactional method) rather than composing
+     * separate repo calls, so the three writes commit or roll back together.
+     */
+    @Transactional
+    public void completePasswordReset(UUID userId, String passwordHash) {
+        jdbc.update("UPDATE users SET password_hash = ? WHERE id = ?", passwordHash, userId);
+        jdbc.update(
+                "UPDATE refresh_tokens SET revoked_at = now() " +
+                "WHERE user_id = ? AND revoked_at IS NULL",
+                userId);
+        jdbc.update(
+                "UPDATE password_reset_codes SET consumed_at = now() " +
+                "WHERE user_id = ? AND consumed_at IS NULL",
+                userId);
+    }
+
     // ---- helpers ----
 
     static String generateRawToken() {
