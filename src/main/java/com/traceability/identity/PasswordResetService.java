@@ -172,19 +172,19 @@ public class PasswordResetService {
     /**
      * Refuses (silently) a new code if 3+ have been issued to this user in the last hour, or
      * the most recent one is younger than 60s (debounce against double-click / resend spam).
-     * Plain app_user read — password_reset_codes carries no RLS or DEFINER-only restriction
-     * (see V85's migration comment), so this matches the access path issuance itself uses.
+     * As of V86, app_user has no direct SELECT on password_reset_codes — this reads via
+     * check_password_reset_throttle (SECURITY DEFINER, 8th hatch). userId here always comes
+     * from PasswordResetService's own prior auth_lookup_user resolution, never raw request
+     * input, so the function's lack of tenant scoping is not an attacker-controllable probe.
      */
     private boolean isThrottled(UUID userId) {
         Map<String, Object> row = jdbc.queryForMap(
-                "SELECT COUNT(*) FILTER (WHERE created_at > now() - interval '1 hour') AS hour_count, " +
-                "       MAX(created_at) AS latest " +
-                "FROM password_reset_codes WHERE user_id = ?",
+                "SELECT hour_count, latest_created_at FROM check_password_reset_throttle(?)",
                 userId);
         long hourCount = ((Number) row.get("hour_count")).longValue();
         if (hourCount >= MAX_CODES_PER_HOUR) return true;
 
-        Timestamp latest = (Timestamp) row.get("latest");
+        Timestamp latest = (Timestamp) row.get("latest_created_at");
         return latest != null
                 && latest.toInstant().isAfter(Instant.now().minusSeconds(MIN_SECONDS_BETWEEN_CODES));
     }

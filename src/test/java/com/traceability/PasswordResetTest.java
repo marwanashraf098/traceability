@@ -17,6 +17,9 @@ import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
+import java.sql.Connection;
+import java.sql.DriverManager;
+import java.sql.SQLException;
 import java.sql.Timestamp;
 import java.time.Instant;
 import java.util.Map;
@@ -25,11 +28,15 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 /**
- * Code-based forgot/reset password (V85, PasswordResetService).
+ * Code-based forgot/reset password (V85, PasswordResetService) and the
+ * credential-table lockdown (V86 — app_user restricted to INSERT on
+ * magic_link_tokens / password_reset_codes; consume/throttle rerouted
+ * through SECURITY DEFINER functions).
  *
  * Each test uses its own freshly signed-up user (unique email via nanoTime) — no shared
  * ordering, mirroring WelcomeEmailTest's style rather than AuthIntegrationTest's @Order chain,
@@ -367,5 +374,40 @@ class PasswordResetTest {
         Integer codeCount = jdbc.queryForObject(
                 "SELECT COUNT(*) FROM password_reset_codes WHERE user_id = ?", Integer.class, userId);
         assertThat(codeCount).as("no reset code should ever be issued for a passwordless owner").isEqualTo(0);
+    }
+
+    // -----------------------------------------------------------------------
+    // Isolation (V86): app_user has no direct SELECT on either token table —
+    // only INSERT survives the REVOKE; every read/consume goes through a
+    // SECURITY DEFINER function. Unlike every other test in this file (whose
+    // @Autowired jdbc bean runs as plain postgres via this class's own
+    // @DynamicPropertySource override — the standard "connect as postgres,
+    // bypass RLS friction" pattern used throughout this test suite), these two
+    // tests open a genuine app_user connection, mirroring
+    // AuthIntegrationTest.crossTenantIsolationViaAppUserConnection. This is the
+    // ONLY place in this file that actually exercises the REVOKE — the other
+    // 9 tests' table reads/writes are unaffected by it regardless of whether
+    // it's in place, because they never run as app_user.
+    // -----------------------------------------------------------------------
+    @Test
+    void appUser_directSelectOnPasswordResetCodes_isDenied() throws Exception {
+        try (Connection conn = DriverManager.getConnection(POSTGRES.getJdbcUrl(), "app_user", "testpw")) {
+            conn.setAutoCommit(false);
+            assertThatThrownBy(() -> conn.createStatement().executeQuery("SELECT COUNT(*) FROM password_reset_codes"))
+                    .as("app_user must not be able to SELECT password_reset_codes directly")
+                    .isInstanceOf(SQLException.class)
+                    .hasMessageContaining("permission denied");
+        }
+    }
+
+    @Test
+    void appUser_directSelectOnMagicLinkTokens_isDenied() throws Exception {
+        try (Connection conn = DriverManager.getConnection(POSTGRES.getJdbcUrl(), "app_user", "testpw")) {
+            conn.setAutoCommit(false);
+            assertThatThrownBy(() -> conn.createStatement().executeQuery("SELECT COUNT(*) FROM magic_link_tokens"))
+                    .as("app_user must not be able to SELECT magic_link_tokens directly")
+                    .isInstanceOf(SQLException.class)
+                    .hasMessageContaining("permission denied");
+        }
     }
 }

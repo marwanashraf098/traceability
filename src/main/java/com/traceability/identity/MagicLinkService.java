@@ -96,7 +96,9 @@ public class MagicLinkService {
     /**
      * Validates and consumes a raw token, issues access + refresh tokens.
      *
-     * The SECURITY DEFINER function is the only reader of magic_link_tokens.
+     * The SECURITY DEFINER function is the only reader of magic_link_tokens — as of V86,
+     * this is enforced at the grant level (app_user has INSERT only), not just by code
+     * discipline.
      * All invalid sub-conditions (not-found / expired / consumed) are indistinguishable
      * to the caller — MAGIC_LINK_INVALID in every case.
      */
