@@ -19,16 +19,17 @@ import java.security.SecureRandom;
 import java.sql.Timestamp;
 import java.time.Instant;
 import java.util.Base64;
-import java.util.HashMap;
-import java.util.Map;
 import java.util.UUID;
 
 /**
  * OAuth state lifecycle + resolve-or-create decision tree.
  *
  * State table (shopify_oauth_state) is not under tenant RLS — see V13 migration.
- * The provisioning function (provision_tenant_from_shopify) is a SECURITY DEFINER
- * hatch — see V14 migration and blueprint.md §16.
+ * As of V87, app_user has INSERT only on it; consume goes through
+ * consume_shopify_oauth_state (SECURITY DEFINER, 9th hatch) — enforced at the grant
+ * level, not just by code discipline. The provisioning function
+ * (provision_tenant_from_shopify) is a SECURITY DEFINER hatch — see V14 migration and
+ * blueprint.md §16.
  *
  * Critical ordering in linkOrProvision:
  *   resolve_tenant_by_shop_domain is called BEFORE any tenant GUC is set.
@@ -40,8 +41,6 @@ import java.util.UUID;
 public class ShopifyOAuthService {
 
     private static final Logger log = LoggerFactory.getLogger(ShopifyOAuthService.class);
-
-    private static final int STATE_TTL_SECONDS = 600; // 10 minutes
 
     private static final String INSERT_STORE = """
             INSERT INTO stores (tenant_id, shop_domain, platform,
@@ -195,42 +194,31 @@ public class ShopifyOAuthService {
     /**
      * Atomically loads, validates, and consumes a state nonce.
      *
-     * All invalid-state sub-conditions (expired, consumed, shop-mismatch, not-found)
-     * throw SHOPIFY_STATE_INVALID — the caller must not leak which case triggered.
+     * As of V87, this goes entirely through consume_shopify_oauth_state (SECURITY
+     * DEFINER, 9th hatch) — app_user has no direct SELECT/UPDATE on shopify_oauth_state
+     * any more. All invalid-state sub-conditions (expired, consumed, shop-mismatch,
+     * not-found) collapse to the same empty result there, surfaced here as the SAME
+     * SHOPIFY_STATE_INVALID — the caller must not leak which case triggered.
      *
-     * SELECT FOR UPDATE inside the transaction prevents concurrent replays:
-     * the second request waits for the first to commit consumed_at, then sees it
-     * non-null and rejects.
+     * The 10-minute TTL now lives as a single hardcoded literal inside the DEFINER
+     * function's SQL — no second Java constant that could drift from it.
+     *
+     * FOR UPDATE inside the function prevents concurrent replays: the second request
+     * waits for the first to commit consumed_at, then sees it non-null and rejects.
      */
     public StateRecord consumeState(String nonce, String callbackShop) {
         return tx.execute(s -> {
-            Map<String, Object> row = jdbc.query(
-                "SELECT tenant_id, shop_domain, created_at, consumed_at " +
-                "FROM shopify_oauth_state WHERE nonce = ? FOR UPDATE",
-                rs -> {
-                    if (!rs.next()) return null;
-                    Map<String, Object> m = new HashMap<>();
-                    m.put("tenant_id",   rs.getObject("tenant_id", UUID.class));
-                    m.put("shop_domain", rs.getString("shop_domain"));
-                    m.put("created_at",  rs.getTimestamp("created_at").toInstant());
-                    m.put("consumed_at", rs.getTimestamp("consumed_at"));
-                    return m;
-                }, nonce);
+            StateRecord record = jdbc.query(
+                "SELECT tenant_id, shop_domain FROM consume_shopify_oauth_state(?, ?)",
+                rs -> rs.next()
+                    ? new StateRecord(rs.getObject("tenant_id", UUID.class), rs.getString("shop_domain"))
+                    : null,
+                nonce, callbackShop);
 
-            if (row == null || row.get("consumed_at") != null) {
+            if (record == null) {
                 throw stateInvalid();
             }
-            Instant createdAt = (Instant) row.get("created_at");
-            if (createdAt.isBefore(Instant.now().minusSeconds(STATE_TTL_SECONDS))) {
-                throw stateInvalid();
-            }
-            String stateShop = (String) row.get("shop_domain");
-            if (!stateShop.equals(callbackShop)) {
-                throw stateInvalid();
-            }
-
-            jdbc.update("UPDATE shopify_oauth_state SET consumed_at = now() WHERE nonce = ?", nonce);
-            return new StateRecord((UUID) row.get("tenant_id"), stateShop);
+            return record;
         });
     }
 

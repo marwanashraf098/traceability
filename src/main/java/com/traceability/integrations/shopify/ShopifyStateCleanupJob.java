@@ -19,6 +19,12 @@ import org.springframework.stereotype.Component;
  * The 1-hour window is a conservative retention ceiling: the application enforces
  * a 10-minute TTL on nonce consumption (consumeState), so any row older than 1h
  * is guaranteed to be either consumed or irrecoverably expired.
+ *
+ * As of V87, the DELETE itself goes through purge_expired_shopify_oauth_state
+ * (SECURITY DEFINER, 10th hatch) — app_user has no direct DELETE on this table any
+ * more (INSERT only, like the other two locked-down credential tables). Deliberately
+ * unscoped by tenant, same as before: one sweep for every tenant's (and every Path-2
+ * null-tenant's) stale rows, no per-tenant GUC exists for this job to filter by anyway.
  */
 // Only registered as a Spring bean (and thus as a JobRunr recurring job) when the
 // background-job-server is enabled. Tests set enabled=false, which prevents the
@@ -42,8 +48,7 @@ public class ShopifyStateCleanupJob {
     @Recurring(id = "shopify-state-cleanup", cron = "0 * * * *")
     @Job(name = "Shopify OAuth state cleanup")
     public void purgeExpiredStates() {
-        int deleted = jdbc.update(
-            "DELETE FROM shopify_oauth_state WHERE created_at < now() - interval '1 hour'");
+        Integer deleted = jdbc.queryForObject("SELECT purge_expired_shopify_oauth_state()", Integer.class);
         log.info("Shopify OAuth state cleanup: {} stale nonce(s) deleted", deleted);
     }
 }
