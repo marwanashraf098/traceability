@@ -56,7 +56,7 @@ export default function WorkerHome() {
             key={tile.to}
             type="button"
             onClick={() => navigate(tile.to)}
-            className="group flex items-center gap-4 rounded-xl border border-line bg-surface p-5 text-start transition-colors hover:border-brand/50 hover:bg-white/5"
+            className="group flex items-center gap-4 rounded-xl border border-line bg-surface p-5 text-start transition-colors hover:border-brand/50 hover:bg-black/[0.04]"
             data-testid={`worker-home-tile-${tile.to.slice(1)}`}
           >
             <span className={`w-12 h-12 rounded-full flex items-center justify-center shrink-0 ${tile.badgeClass}`}>

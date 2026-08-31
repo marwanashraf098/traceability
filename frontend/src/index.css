@@ -5,11 +5,11 @@
 @tailwind utilities;
 
 @layer base {
-  :root { color-scheme: dark; }
+  :root { color-scheme: light; }
 
   html, body {
-    background: #0D1117;
-    color: #F2F4F7;
+    background: #F7F8FA;
+    color: #111827;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
   }
@@ -31,11 +31,11 @@
     outline: none;
   }
 
-  /* Scrollbar — dark theme */
+  /* Scrollbar — light theme */
   ::-webkit-scrollbar { width: 6px; height: 6px; }
-  ::-webkit-scrollbar-track { background: #0D1117; }
-  ::-webkit-scrollbar-thumb { background: #262C36; border-radius: 9999px; }
-  ::-webkit-scrollbar-thumb:hover { background: #3A4553; }
+  ::-webkit-scrollbar-track { background: #F1F3F5; }
+  ::-webkit-scrollbar-thumb { background: #CBD1D9; border-radius: 9999px; }
+  ::-webkit-scrollbar-thumb:hover { background: #AEB6C0; }
 }
 
 @layer components {
@@ -56,7 +56,7 @@
     @apply btn bg-brand hover:bg-brand-hover text-white;
   }
   .btn-outline {
-    @apply btn border border-line text-primary hover:bg-white/5;
+    @apply btn border border-line text-primary hover:bg-black/[0.04];
   }
   .btn-danger {
     @apply btn bg-danger/10 border border-danger/30 text-danger hover:bg-danger/20;
@@ -79,7 +79,7 @@
 
   /* ── Status badge ───────────────────────────────────────────────────── */
   .badge {
-    @apply inline-flex items-center px-2.5 py-1 rounded-full text-small font-semibold;
+    @apply inline-flex items-center px-2.5 py-1 rounded-md text-small font-semibold;
   }
 
   /* ── Table ──────────────────────────────────────────────────────────── */
@@ -90,19 +90,21 @@
     @apply text-body text-primary px-4 py-3;
   }
   .tbl-row {
-    @apply border-b border-line hover:bg-white/[0.02] transition-colors;
+    @apply border-b border-line hover:bg-black/[0.015] transition-colors;
   }
 
   /* ── Nav item ───────────────────────────────────────────────────────── */
   /* Flat full-bleed row (Traced Shell dc.html) — active state adds a 3px
      inline-start accent border; base reserves the same 3px as a transparent
-     border so content never shifts when a row becomes active. */
+     border so content never shifts when a row becomes active.
+     Sidebar rail is a fixed-dark palette that never flips with the theme —
+     uses sidebar-text/sidebar-active, not muted/primary. */
   .nav-item {
-    @apply flex items-center gap-2.5 py-[9px] ps-[15px] pe-[18px] text-body text-muted
+    @apply flex items-center gap-2.5 py-[9px] ps-[15px] pe-[18px] text-body text-sidebar-text
            border-s-[3px] border-transparent
-           hover:bg-white/5 hover:text-primary transition-colors cursor-pointer;
+           hover:bg-white/5 hover:text-sidebar-active transition-colors cursor-pointer;
   }
   .nav-item-active {
-    @apply nav-item bg-brand/[0.12] text-primary border-trace-blue;
+    @apply nav-item bg-brand/[0.12] text-sidebar-active border-trace-blue;
   }
 }

@@ -510,7 +510,7 @@ function QuickActions() {
         <Link
           key={a.to}
           to={a.to}
-          className="flex items-center justify-center gap-2 bg-elevated border border-line rounded-lg px-4 py-3.5 text-small font-semibold text-primary hover:border-grey-600 hover:bg-white/5 transition-colors"
+          className="flex items-center justify-center gap-2 bg-elevated border border-line rounded-lg px-4 py-3.5 text-small font-semibold text-primary hover:border-grey-600 hover:bg-black/[0.04] transition-colors"
         >
           <a.icon size={17} strokeWidth={1.75} className="text-trace-blue" />
           {t(a.labelKey)}
@@ -669,7 +669,7 @@ function FreshTenantCard() {
         <Link
           key={item.to}
           to={item.to}
-          className="flex items-center gap-2.5 bg-elevated border border-line rounded-lg p-3 hover:bg-white/5 transition-colors"
+          className="flex items-center gap-2.5 bg-elevated border border-line rounded-lg p-3 hover:bg-black/[0.04] transition-colors"
         >
           <item.icon size={16} strokeWidth={1.75} className="text-trace-blue" />
           <span className="flex-1 text-small text-primary">{item.label}</span>

@@ -29,7 +29,7 @@ export default function AuthLayout({ children }: { children: ReactNode }) {
       <button
         type="button"
         onClick={() => toggleLang(i18n)}
-        className="fixed top-5 end-5 z-20 inline-flex items-center gap-1.5 text-caption text-muted hover:text-primary hover:bg-white/5 transition-colors px-2.5 py-1.5 rounded-lg"
+        className="fixed top-5 end-5 z-20 inline-flex items-center gap-1.5 text-caption text-muted hover:text-primary hover:bg-black/[0.04] transition-colors px-2.5 py-1.5 rounded-lg"
       >
         <Globe size={14} strokeWidth={1.75} />
         {i18n.language === 'en' ? 'العربية' : 'English'}

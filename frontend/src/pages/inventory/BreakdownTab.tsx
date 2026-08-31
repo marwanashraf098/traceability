@@ -141,7 +141,7 @@ export default function BreakdownTab() {
               <button
                 type="button"
                 onClick={() => setOpenPhase(isPhaseOpen ? null : phaseKey)}
-                className="w-full flex items-center gap-2.5 px-4 py-3 bg-elevated hover:bg-white/[0.03] transition-colors text-start"
+                className="w-full flex items-center gap-2.5 px-4 py-3 bg-elevated hover:bg-black/[0.025] transition-colors text-start"
               >
                 <ChevronRight
                   size={14} strokeWidth={2} className="text-muted transition-transform flex-none rtl:rotate-180"
@@ -159,7 +159,7 @@ export default function BreakdownTab() {
                     <button
                       type="button"
                       onClick={() => toggleStatus(status)}
-                      className="w-full flex items-center gap-2.5 py-2.5 px-4 ps-9 border-t border-line hover:bg-white/[0.03] transition-colors text-start"
+                      className="w-full flex items-center gap-2.5 py-2.5 px-4 ps-9 border-t border-line hover:bg-black/[0.025] transition-colors text-start"
                     >
                       <Badge status={status} />
                       <span className="text-small text-muted ms-auto">

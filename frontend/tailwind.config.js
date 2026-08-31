@@ -5,8 +5,8 @@ export default {
     extend: {
       colors: {
         // ── Design System v1.0 tokens ─────────────────────────────────────────
-        charcoal: '#0D1117',
-        surface:  '#0F141B',
+        charcoal: '#F2F4F7',   // light theme repoint (was #0D1117)
+        surface:  '#FFFFFF',   // light theme repoint (was #0F141B)
 
         'trace-blue': {
           DEFAULT: '#2563EB',
@@ -14,9 +14,9 @@ export default {
           active:  '#1E40AF',
         },
 
-        critical: { DEFAULT: '#DC2626', text: '#F87171' },
-        info:     { DEFAULT: '#0EA5E9', text: '#38BDF8' },
-        neutral:  { text: '#9CA6B2' },
+        critical: { DEFAULT: '#DC2626', text: '#B91C1C' },
+        info:     { DEFAULT: '#0EA5E9', text: '#0369A1' },
+        neutral:  { text: '#4B5563' },
 
         grey: {
           50:  '#F2F4F7',
@@ -31,16 +31,24 @@ export default {
           900: '#0D1117',
         },
 
-        bg: '#0D1117',
+        bg: '#F7F8FA',
 
         // ── Day 15 aliases — old names → new values so existing pages render ──
-        base:    '#0D1117',   // was #0B1220 → now bg/charcoal
-        panel:   '#0F141B',   // was #1E293B → now surface
-        elevated:'#161B22',   // was #253449
-        line:    '#262C36',   // was #2D3F55 → now grey.700
-        primary:   '#F2F4F7',   // was #F8FAFC — text token alias
-        muted:     '#828B99',   // was #647488 — text token alias
-        secondary: '#828B99',   // orphan alias in Locations/ShopifyInventory/LegalPage → muted
+        base:    '#F7F8FA',   // light theme repoint (was #0D1117)
+        panel:   '#FFFFFF',   // light theme repoint (was #0F141B)
+        elevated:'#F2F4F7',   // light theme repoint (was #161B22)
+        line:    '#E5E7EB',   // light theme repoint (was #262C36)
+        primary:   '#111827',   // light theme repoint (was #F2F4F7)
+        muted:     '#5B6675',   // light theme repoint (was #828B99)
+        secondary: '#5B6675',   // orphan alias in Locations/ShopifyInventory/LegalPage → muted
+
+        // ── Fixed sidebar palette — NEVER flips with theme (Layout.tsx rail only) ──
+        sidebar: {
+          DEFAULT: '#0D1117',
+          text:    '#9CA6B2',
+          active:  '#F2F4F7',
+          line:    '#262C36',
+        },
 
         brand: {
           DEFAULT: '#2563EB', // was #6366FF → trace-blue
@@ -55,12 +63,12 @@ export default {
         success: {
           DEFAULT: '#16A34A', // was #22C55E
           muted:   '#14532D',
-          text:    '#4ADE80',
+          text:    '#15803D', // light theme repoint (was #4ADE80)
         },
         warning: {
           DEFAULT: '#F59E0B', // unchanged
           muted:   '#78350F',
-          text:    '#FBBF24',
+          text:    '#B45309', // light theme repoint (was #FBBF24)
         },
         danger: {
           DEFAULT: '#DC2626', // was #EF4444 → critical
@@ -100,16 +108,16 @@ export default {
         full:    '9999px',
       },
 
-      // Dark-UI elevations (adapted to higher-alpha black — CONFIRM)
+      // Light-UI elevations — low-alpha neutral-gray recipe (was higher-alpha black)
       boxShadow: {
         none: 'none',
-        e1:   '0 1px 2px 0 rgba(0,0,0,0.30)',
-        e2:   '0 4px 12px -2px rgba(0,0,0,0.38)',
-        e3:   '0 8px 24px -4px rgba(0,0,0,0.46)',
-        e4:   '0 16px 48px -8px rgba(0,0,0,0.55)',
+        e1:   '0 1px 2px 0 rgba(16,24,40,0.06), 0 1px 3px 0 rgba(16,24,40,0.10)',
+        e2:   '0 2px 4px -2px rgba(16,24,40,0.06), 0 4px 8px -2px rgba(16,24,40,0.10)',
+        e3:   '0 4px 6px -2px rgba(16,24,40,0.03), 0 12px 16px -4px rgba(16,24,40,0.08)',
+        e4:   '0 8px 8px -4px rgba(16,24,40,0.03), 0 20px 24px -4px rgba(16,24,40,0.08)',
         // Day 15 compat aliases
-        card:     '0 1px 2px 0 rgba(0,0,0,0.30)',
-        elevated: '0 4px 12px -2px rgba(0,0,0,0.38)',
+        card:     '0 1px 2px 0 rgba(16,24,40,0.06), 0 1px 3px 0 rgba(16,24,40,0.10)',
+        elevated: '0 2px 4px -2px rgba(16,24,40,0.06), 0 4px 8px -2px rgba(16,24,40,0.10)',
         brand:      '0 0 20px 0 rgba(37,99,235,0.25)',
         glow:       '0 0 0 4px rgba(37,99,235,0.35)',
         'ring-accent': '0 0 0 3px rgba(37,99,235,0.14)',

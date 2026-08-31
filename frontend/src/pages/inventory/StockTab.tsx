@@ -192,7 +192,7 @@ export default function StockTab() {
                   return (
                     <Fragment key={product.id}>
                       <tr
-                        className="tbl-row cursor-pointer hover:bg-white/[0.03]"
+                        className="tbl-row cursor-pointer hover:bg-black/[0.025]"
                         onClick={() => toggleProduct(product.id)}
                       >
                         <td className="tbl-cell">
@@ -224,7 +224,7 @@ export default function StockTab() {
                       {isOpen && product.variants.map(variant => (
                         <tr
                           key={variant.id}
-                          className="bg-charcoal/40 cursor-pointer hover:bg-white/[0.03] border-b border-line"
+                          className="bg-charcoal/40 cursor-pointer hover:bg-black/[0.025] border-b border-line"
                           onClick={() => setDrawerVariant({
                             id: variant.id, title: `${product.title} — ${variant.title}`,
                             sku: variant.sku, imageUrl: product.imageUrl,

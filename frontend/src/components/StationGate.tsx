@@ -204,7 +204,7 @@ function RosterStep({
               type="button"
               onClick={() => onSelect(worker)}
               disabled={worker.locked}
-              className="flex flex-col items-center justify-center gap-2 rounded-xl border border-line bg-surface px-3 py-6 text-center transition-colors hover:border-brand/50 hover:bg-white/5 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:border-line disabled:hover:bg-surface"
+              className="flex flex-col items-center justify-center gap-2 rounded-xl border border-line bg-surface px-3 py-6 text-center transition-colors hover:border-brand/50 hover:bg-black/[0.04] disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:border-line disabled:hover:bg-surface"
             >
               <span className="w-12 h-12 rounded-full bg-trace-blue/15 text-trace-blue font-medium flex items-center justify-center text-h4">
                 {initials(worker.name)}
@@ -311,7 +311,7 @@ function PinStep({
                 type="button"
                 onClick={() => onDigit(d)}
                 disabled={status === 'submitting'}
-                className="aspect-square rounded-xl border border-line bg-surface text-h3 text-primary transition-colors hover:border-brand/50 hover:bg-white/5 disabled:opacity-50"
+                className="aspect-square rounded-xl border border-line bg-surface text-h3 text-primary transition-colors hover:border-brand/50 hover:bg-black/[0.04] disabled:opacity-50"
               >
                 {d}
               </button>
@@ -330,7 +330,7 @@ function PinStep({
               onClick={onBackspace}
               disabled={status === 'submitting'}
               aria-label={t('station.pin.backspace')}
-              className="aspect-square rounded-xl border border-line bg-surface text-primary flex items-center justify-center transition-colors hover:border-brand/50 hover:bg-white/5 disabled:opacity-50"
+              className="aspect-square rounded-xl border border-line bg-surface text-primary flex items-center justify-center transition-colors hover:border-brand/50 hover:bg-black/[0.04] disabled:opacity-50"
             >
               <Delete size={18} strokeWidth={2} />
             </button>

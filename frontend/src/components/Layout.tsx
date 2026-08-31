@@ -155,10 +155,12 @@ export default function Layout({ children }: { children: ReactNode }) {
     <div className="flex h-screen bg-bg overflow-hidden">
 
       {/* ── Sidebar ── */}
-      <aside className="w-56 flex-shrink-0 bg-panel border-e border-line flex flex-col">
+      {/* Fixed dark rail — pinned to the sidebar-* tokens, never flips with the
+          content-area theme (see tailwind.config.js `sidebar` palette). */}
+      <aside className="w-56 flex-shrink-0 bg-sidebar border-e border-sidebar-line flex flex-col">
 
         {/* Wordmark */}
-        <div className="flex items-center px-[18px] py-5 border-b border-line">
+        <div className="flex items-center px-[18px] py-5 border-b border-sidebar-line">
           <Logo variant="mark" size={18} />
         </div>
 
@@ -184,8 +186,8 @@ export default function Layout({ children }: { children: ReactNode }) {
               <SideNavLink to="/transfers"   icon={Repeat}          label={t('nav.transfers')} />
               <SideNavLink to="/returns"     icon={Undo2}           label={t('nav.returns')} />
               <SideNavLink to="/exceptions"  icon={AlertTriangle}   label={t('nav.exceptions')} />
-              <div className="h-px bg-line mx-[18px] my-2.5" />
-              <div className="px-[18px] pt-1.5 pb-0.5 text-[11px] font-semibold tracking-wider text-muted uppercase">
+              <div className="h-px bg-sidebar-line mx-[18px] my-2.5" />
+              <div className="px-[18px] pt-1.5 pb-0.5 text-[11px] font-semibold tracking-wider text-sidebar-text uppercase">
                 {t('nav.manager')}
               </div>
               <SideNavLink to="/settings" icon={Settings} label={t('nav.settings')} />
@@ -194,17 +196,17 @@ export default function Layout({ children }: { children: ReactNode }) {
         </nav>
 
         {/* Bottom: identity — real name+role once /me resolves; role-only placeholder until then/on failure */}
-        <div className="border-t border-line px-[18px] py-[14px] flex items-center gap-2.5">
+        <div className="border-t border-sidebar-line px-[18px] py-[14px] flex items-center gap-2.5">
           <span className="w-[30px] h-[30px] rounded-full bg-trace-blue text-white text-[12px] font-bold flex items-center justify-center flex-shrink-0">
             {avatarInitials(me, role)}
           </span>
           {me ? (
             <span className="min-w-0 flex flex-col">
-              <span className="text-small text-primary leading-tight truncate">{me.name}</span>
-              <span className="text-caption text-muted leading-tight">{t(`users.roles.${me.role}`)}</span>
+              <span className="text-small text-sidebar-active leading-tight truncate">{me.name}</span>
+              <span className="text-caption text-sidebar-text leading-tight">{t(`users.roles.${me.role}`)}</span>
             </span>
           ) : role && (
-            <span className="text-small text-muted capitalize">{t(`users.roles.${role}`)}</span>
+            <span className="text-small text-sidebar-text capitalize">{t(`users.roles.${role}`)}</span>
           )}
         </div>
       </aside>
@@ -281,7 +283,7 @@ export default function Layout({ children }: { children: ReactNode }) {
                     <button
                       type="button"
                       onClick={() => { setMenuOpen(false); navigate('/overview') }}
-                      className="w-full flex items-center justify-between px-3 py-2 text-caption text-start hover:bg-white/5 transition-colors border-b border-line"
+                      className="w-full flex items-center justify-between px-3 py-2 text-caption text-start hover:bg-black/[0.04] transition-colors border-b border-line"
                     >
                       <span className="text-muted">{t('nav.setupProgress')}</span>
                       <span className="font-bold text-trace-blue bg-trace-blue/15 rounded-full px-2 py-0.5">
@@ -292,7 +294,7 @@ export default function Layout({ children }: { children: ReactNode }) {
                   <button
                     type="button"
                     onClick={() => { toggleLang(); setMenuOpen(false) }}
-                    className="w-full flex items-center gap-2.5 px-3 py-2 text-body text-start text-muted hover:bg-white/5 hover:text-primary transition-colors"
+                    className="w-full flex items-center gap-2.5 px-3 py-2 text-body text-start text-muted hover:bg-black/[0.04] hover:text-primary transition-colors"
                   >
                     <Globe size={16} strokeWidth={1.75} />
                     {i18n.language === 'en' ? 'العربية' : 'English'}

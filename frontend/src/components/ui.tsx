@@ -276,7 +276,7 @@ export function Card({
     <div
       className={cn(
         'card p-5',
-        (interactive || hoverable) && 'hover:border-grey-600 hover:shadow-e3 transition-shadow cursor-pointer',
+        (interactive || hoverable) && 'hover:border-grey-300 hover:shadow-e3 transition-shadow cursor-pointer',
         className
       )}
     >
@@ -395,8 +395,8 @@ type ButtonSize    = 'sm' | 'md' | 'lg'
 const BTN_VARIANT: Record<ButtonVariant, string> = {
   primary:     'bg-trace-blue hover:bg-trace-blue-hover hover:shadow-glow active:bg-trace-blue-active active:shadow-none text-white',
   brand:       'bg-trace-blue hover:bg-trace-blue-hover hover:shadow-glow active:bg-trace-blue-active active:shadow-none text-white',
-  secondary:   'bg-transparent border border-line text-primary hover:bg-elevated hover:border-[#3A4250] active:bg-charcoal',
-  outline:     'bg-transparent border border-line text-primary hover:bg-elevated hover:border-[#3A4250] active:bg-charcoal',
+  secondary:   'bg-transparent border border-line text-primary hover:bg-elevated hover:border-grey-300 active:bg-charcoal',
+  outline:     'bg-transparent border border-line text-primary hover:bg-elevated hover:border-grey-300 active:bg-charcoal',
   tertiary:    'text-trace-blue bg-transparent hover:bg-trace-blue/10 hover:text-trace-blue-hover active:bg-trace-blue/[0.18] active:text-trace-blue-active',
   ghost:       'text-muted hover:text-primary hover:bg-elevated bg-transparent',
   destructive: 'bg-critical hover:bg-[#B91C1C] active:bg-[#991B1B] text-white',
@@ -690,7 +690,7 @@ export function Select({
                   onClick={() => handleSelect(opt)}
                   className={cn(
                     'w-full flex items-center justify-between px-3 py-2 text-body text-start transition-colors',
-                    i === highlighted ? 'bg-white/5 text-primary' : 'text-muted hover:bg-white/5 hover:text-primary'
+                    i === highlighted ? 'bg-black/[0.04] text-primary' : 'text-muted hover:bg-black/[0.04] hover:text-primary'
                   )}
                 >
                   <span>{opt.label}</span>
@@ -706,7 +706,7 @@ export function Select({
                 <button
                   type="button"
                   onClick={() => { onCreate(search); setOpen(false); setSearch('') }}
-                  className="w-full flex items-center gap-2 px-3 py-2 text-body text-trace-blue hover:bg-white/5 transition-colors"
+                  className="w-full flex items-center gap-2 px-3 py-2 text-body text-trace-blue hover:bg-black/[0.04] transition-colors"
                 >
                   <Plus size={14} strokeWidth={2} />
                   Create "{search}"
@@ -938,7 +938,7 @@ export function FilterChip({
 }) {
   const text = dateRange ? `${dateRange.start} → ${dateRange.end}` : (label ?? '')
   return (
-    <span className="inline-flex items-center gap-1.5 bg-white/5 border border-line rounded-full text-small text-primary px-3 py-1">
+    <span className="inline-flex items-center gap-1.5 bg-black/[0.04] border border-line rounded-full text-small text-primary px-3 py-1">
       {text}
       {onRemove && (
         <button
@@ -1254,7 +1254,7 @@ export function Progress({
 }) {
   const indeterminate = value === undefined
   return (
-    <div className={cn('w-full bg-white/10 rounded-full h-1.5 overflow-hidden relative', className)}>
+    <div className={cn('w-full bg-black/[0.06] rounded-full h-1.5 overflow-hidden relative', className)}>
       <div
         className={cn(
           'rounded-full bg-trace-blue',
@@ -1273,7 +1273,7 @@ export function Skeleton({ className = '' }: { className?: string }) {
     <div
       className={cn(
         'rounded animate-shimmer bg-[length:400px_100%]',
-        'bg-[linear-gradient(90deg,#161B22_25%,#1E2530_37%,#161B22_63%)]',
+        'bg-[linear-gradient(90deg,#EEF0F3_25%,#E2E5EA_37%,#EEF0F3_63%)]',
         className
       )}
     />
