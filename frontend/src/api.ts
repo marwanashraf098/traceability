@@ -73,6 +73,26 @@ export function login(email: string, password: string) {
   })
 }
 
+export interface ForgotPasswordResponse {
+  message: string
+}
+
+// Always resolves (200) whether or not the email matched an account — enumeration-safe by
+// design on the backend; the response body carries the same generic message either way.
+export function forgotPassword(email: string) {
+  return request<ForgotPasswordResponse>('/auth/forgot-password', {
+    method: 'POST',
+    body: JSON.stringify({ email }),
+  })
+}
+
+export function resetPassword(email: string, code: string, newPassword: string) {
+  return request<void>('/auth/reset-password', {
+    method: 'POST',
+    body: JSON.stringify({ email, code, newPassword }),
+  })
+}
+
 // FR-7/FR-11 — single derived headline (see OrderStatusDeriver on the backend).
 // tone mirrors the backend's Tone enum verbatim; keep in sync.
 export type DerivedTone = 'NEUTRAL' | 'INFO' | 'SUCCESS' | 'WARN' | 'DANGER'

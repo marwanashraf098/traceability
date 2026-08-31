@@ -258,7 +258,9 @@
     "submit": "Sign in",
     "error": "Invalid email or password",
     "noAccount": "Don't have an account?",
-    "signUp": "Sign up"
+    "signUp": "Sign up",
+    "forgotPassword": "Forgot password?",
+    "resetSuccess": "Your password has been reset. Sign in with your new password."
   },
   "orders": {
     "title": "Orders",
@@ -864,6 +866,34 @@
       "phoneInvalid": "Enter a valid Egyptian number (01X or +20X).",
       "generic": "Could not create account. Please try again.",
       "consentRequired": "You must accept the Privacy Policy and Terms of Service."
+    }
+  },
+  "forgotPassword": {
+    "cardTitle": "Reset your password",
+    "cardSubtitle": "Enter your email and we'll send you a code.",
+    "email": "Email",
+    "submit": "Send reset code",
+    "error": "Something went wrong. Please try again.",
+    "sentTitle": "Check your email",
+    "sentBody": "If that email is registered, we've sent a 6-digit code to reset your password.",
+    "enterCode": "Enter code",
+    "backToLogin": "Back to sign in"
+  },
+  "resetPassword": {
+    "cardTitle": "Enter your reset code",
+    "cardSubtitle": "Enter the code we sent you and choose a new password.",
+    "email": "Email",
+    "code": "Reset code",
+    "codeHint": "The 6-digit code we emailed you.",
+    "newPassword": "New password",
+    "passwordHint": "At least 8 characters",
+    "confirmPassword": "Confirm new password",
+    "submit": "Reset password",
+    "error": "That code is invalid or has expired. Please request a new one.",
+    "backToLogin": "Back to sign in",
+    "errors": {
+      "passwordShort": "Password must be at least 8 characters.",
+      "mismatch": "Passwords don't match."
     }
   },
   "station": {

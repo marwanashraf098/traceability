@@ -1,5 +1,5 @@
 import { useState, FormEvent, useEffect } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
+import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { login } from '../api'
 import { setAccessToken } from '../auth'
@@ -10,12 +10,14 @@ import { useStation } from '../components/StationProvider'
 export default function Login() {
   const { t }      = useTranslation()
   const navigate   = useNavigate()
+  const location   = useLocation()
   const { exitStationMode } = useStation()
   const [email,        setEmail]        = useState('')
   const [password,     setPassword]     = useState('')
   const [showPassword, setShowPassword] = useState(false)
   const [error,        setError]        = useState('')
   const [loading,      setLoading]      = useState(false)
+  const resetSuccess = !!(location.state as { resetSuccess?: boolean } | null)?.resetSuccess
 
   // Remove any stale key left from the pre-cookie auth system.
   useEffect(() => { localStorage.removeItem('token') }, [])
@@ -47,6 +49,12 @@ export default function Login() {
           <p className="text-small text-muted mt-1">{t('login.cardSubtitle')}</p>
         </div>
 
+        {resetSuccess && !error && (
+          <div role="status" className="text-small text-success bg-success/10 border border-success/25 rounded-lg px-3 py-2 mb-4">
+            {t('login.resetSuccess')}
+          </div>
+        )}
+
         {error && (
           <div role="alert" className="text-small text-critical bg-critical/10 border border-critical/25 rounded-lg px-3 py-2 mb-4">
             {error}
@@ -68,7 +76,12 @@ export default function Login() {
           </div>
 
           <div className="space-y-1.5">
-            <label className="block text-small text-muted">{t('login.password')}</label>
+            <div className="flex items-center justify-between">
+              <label className="block text-small text-muted">{t('login.password')}</label>
+              <Link to="/forgot-password" className="text-caption text-trace-blue hover:underline transition-colors">
+                {t('login.forgotPassword')}
+              </Link>
+            </div>
             <Input
               type={showPassword ? 'text' : 'password'}
               required
