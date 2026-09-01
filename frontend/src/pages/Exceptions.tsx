@@ -3,8 +3,8 @@ import { useTranslation } from 'react-i18next'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { request, releaseOrderHold, cancelOrder as apiCancelOrder } from '../api'
 import {
-  Badge, Button, EmptyState, Modal, Select, type SelectOption,
-  SeverityBadge, Skeleton, useToast,
+  Badge, Button, Card, cn, EmptyState, Modal, Select, type SelectOption,
+  severityToneClasses, SeverityBadge, Skeleton, useToast,
 } from '../components/ui'
 
 interface ExceptionItem {
@@ -34,7 +34,15 @@ interface ExceptionItem {
   diffJson?: string
 }
 
-interface ExceptionPage { total: number; page: number; size: number; items: ExceptionItem[] }
+interface SeverityCounts { critical: number; high: number; medium: number; low: number }
+interface ExceptionPage { total: number; page: number; size: number; items: ExceptionItem[]; counts: SeverityCounts }
+
+const SEVERITY_TILES: { key: keyof SeverityCounts; severity: string; en: string; ar: string }[] = [
+  { key: 'critical', severity: 'CRITICAL', en: 'Critical', ar: 'حرج' },
+  { key: 'high',     severity: 'HIGH',     en: 'High',     ar: 'مرتفع' },
+  { key: 'medium',   severity: 'MEDIUM',   en: 'Medium',   ar: 'متوسط' },
+  { key: 'low',      severity: 'LOW',      en: 'Low',      ar: 'منخفض' },
+]
 
 const TYPE_LABELS: Record<string, { en: string; ar: string }> = {
   lost:               { en: 'Lost',             ar: 'مفقود' },
@@ -244,6 +252,13 @@ export default function ExceptionsPage() {
 
   const handleResolved = () => { setResolvingItem(null); load() }
 
+  // Tile click drives the same sevFilter state as the "All severities" Select —
+  // clicking the already-active tile resets to All.
+  const toggleSeverityTile = (severity: string) => {
+    setSevFilter(prev => (prev === severity ? '' : severity))
+    setPage(0)
+  }
+
   // DS Select options — empty-string value = "All" (no filter applied)
   const severityOptions: SelectOption[] = [
     { value: '', label: isAr ? 'كل الأولويات' : 'All severities' },
@@ -264,6 +279,38 @@ export default function ExceptionsPage() {
         <Button variant="secondary" size="sm" onClick={load}>
           ↻ {isAr ? 'تحديث' : 'Refresh'}
         </Button>
+      </div>
+
+      {/* Severity summary tiles — always the full unfiltered open-set breakdown from
+          data.counts, independent of the active severity/type filter. */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+        {SEVERITY_TILES.map(tile => {
+          const count = data?.counts?.[tile.key] ?? 0
+          const active = sevFilter === tile.severity
+          return (
+            <button
+              key={tile.key}
+              type="button"
+              data-testid={`exc-tile-${tile.key}`}
+              onClick={() => toggleSeverityTile(tile.severity)}
+              className="text-start"
+              aria-pressed={active}
+            >
+              <Card
+                interactive
+                className={cn(
+                  severityToneClasses(tile.severity),
+                  active && 'ring-2 ring-current'
+                )}
+              >
+                <p className="text-small uppercase tracking-wider">
+                  {isAr ? tile.ar : tile.en}
+                </p>
+                <p className="text-h2 font-mono">{count}</p>
+              </Card>
+            </button>
+          )
+        })}
       </div>
 
       {/* Filters — Select components; filter state and query params unchanged */}

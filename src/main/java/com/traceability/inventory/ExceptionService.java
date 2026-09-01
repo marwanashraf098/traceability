@@ -52,6 +52,10 @@ public class ExceptionService {
                                                int page, int size) {
         List<Map<String, Object>> all = detectAllOpen();
 
+        // Severity breakdown over the FULL unfiltered open set — computed before type/severity
+        // filtering below so the summary tiles never zero out under an active filter.
+        Map<String, Object> counts = severityCounts(all);
+
         // Optional filters
         if (typeFilter != null && !typeFilter.isBlank()) {
             all = all.stream()
@@ -86,7 +90,30 @@ public class ExceptionService {
         result.put("page",  page);
         result.put("size",  size);
         result.put("items", all.subList(from, to));
+        result.put("counts", counts);
         return result;
+    }
+
+    /** Severity tally over whatever list is passed in — callers must pass the full, unfiltered set. */
+    private static Map<String, Object> severityCounts(List<Map<String, Object>> all) {
+        int critical = 0, high = 0, medium = 0, low = 0;
+        for (Map<String, Object> e : all) {
+            String sev = (String) e.get("severity");
+            if (sev == null) continue;
+            switch (sev) {
+                case "CRITICAL" -> critical++;
+                case "HIGH"     -> high++;
+                case "MEDIUM"   -> medium++;
+                case "LOW"      -> low++;
+                default -> { }
+            }
+        }
+        Map<String, Object> counts = new LinkedHashMap<>();
+        counts.put("critical", critical);
+        counts.put("high",     high);
+        counts.put("medium",   medium);
+        counts.put("low",      low);
+        return counts;
     }
 
     /**

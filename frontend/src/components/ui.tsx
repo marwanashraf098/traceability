@@ -259,6 +259,12 @@ export function SeverityBadge({ severity }: { severity: string }) {
   )
 }
 
+/** Same severity→tone resolution as SeverityBadge, exposed for callers (e.g. summary
+ *  tiles) that need the border/background classes on a non-badge element. */
+export function severityToneClasses(severity: string): string {
+  return TONE_STYLE[SEV_TONE[severity] ?? 'neutral']
+}
+
 // ── Card ──────────────────────────────────────────────────────────────────────
 
 export function Card({
