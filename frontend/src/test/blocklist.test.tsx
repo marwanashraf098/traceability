@@ -51,7 +51,7 @@ function makeExceptionPage(extraItem?: object) {
       {
         type: 'blocked_customer',
         severity: 'LOW',
-        subjectKey: 'blocked:order-1',
+        subject_key: 'blocked:order-1',
         subject_type: 'order',
         order_id: 'order-1',
         order_number: '#1001',

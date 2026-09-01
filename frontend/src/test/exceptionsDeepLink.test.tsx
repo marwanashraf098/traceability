@@ -25,7 +25,7 @@ function exceptionItem(type: string) {
   return {
     type,
     severity: 'HIGH',
-    subjectKey: `${type}:order:o1`,
+    subject_key: `${type}:order:o1`,
     subject_type: 'order',
     order_id: 'o1',
     order_number: '#1001',

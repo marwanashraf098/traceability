@@ -10,7 +10,7 @@ import {
 interface ExceptionItem {
   type: string
   severity: 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'LOW'
-  subjectKey: string
+  subject_key: string
   subject_type: string
   piece_id?: string
   barcode?: string
@@ -75,9 +75,12 @@ function ResolveDialog({ item, onClose, onResolved }: { item: ExceptionItem; onC
   async function submit() {
     setLoading(true)
     try {
+      // Intentional asymmetry: outgoing request key is camelCase (matches backend
+      // ResolveRequest), sourced from item.subject_key because the /exceptions list
+      // response is a raw JDBC map and stays snake_case. Do not "fix" either side to match.
       await request<void>('/exceptions/resolve', {
         method: 'POST',
-        body: JSON.stringify({ exceptionType: item.type, subjectKey: item.subjectKey, note }),
+        body: JSON.stringify({ exceptionType: item.type, subjectKey: item.subject_key, note }),
       })
       toast({ tone: 'success', message: isAr ? 'تم معالجة الاستثناء' : 'Exception resolved' })
       onResolved()
@@ -87,7 +90,7 @@ function ResolveDialog({ item, onClose, onResolved }: { item: ExceptionItem; onC
   }
 
   return (
-    <Modal title={isAr ? 'تأكيد المعالجة' : 'Acknowledge exception'} onClose={onClose}>
+    <Modal title={isAr ? 'تأكيد المعالجة' : 'Resolve exception'} onClose={onClose}>
       <p className="text-body text-muted mb-4">
         {isAr ? item.descriptionAr : item.descriptionEn}
       </p>
@@ -103,7 +106,7 @@ function ResolveDialog({ item, onClose, onResolved }: { item: ExceptionItem; onC
           {isAr ? 'إلغاء' : 'Cancel'}
         </Button>
         <Button loading={loading} size="sm" onClick={submit}>
-          {isAr ? 'تأكيد المعالجة' : 'Mark resolved'}
+          {isAr ? 'تأكيد المعالجة' : 'Resolve'}
         </Button>
       </div>
     </Modal>
