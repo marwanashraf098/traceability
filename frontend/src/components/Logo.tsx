@@ -16,8 +16,11 @@ export function Logo({
   if (variant === 'mark') {
     return (
       <span data-testid="logo-mark" className={`inline-flex items-baseline gap-1 ${className}`}>
+        {/* No hardcoded fg color here — 'mark' renders on both the dark sidebar
+            (Layout.tsx) and light surfaces (AuthLayout/StationGate); color is
+            inherited from the wrapper's className at each call site. */}
         <span
-          className="font-bold tracking-tight text-primary select-none"
+          className="font-bold tracking-tight select-none"
           style={{ fontSize: size }}
         >
           traced

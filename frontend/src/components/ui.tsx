@@ -19,7 +19,7 @@ export function cn(...classes: (string | false | null | undefined)[]): string {
 
 // ── Badge ─────────────────────────────────────────────────────────────────────
 
-type BadgeTone = 'neutral' | 'success' | 'info' | 'warning' | 'critical'
+export type BadgeTone = 'neutral' | 'success' | 'info' | 'warning' | 'critical'
 
 const TONE_STYLE: Record<BadgeTone, string> = {
   neutral:  'bg-muted/[0.14] text-neutral-text border-muted/[0.30]',
@@ -265,6 +265,20 @@ export function severityToneClasses(severity: string): string {
   return TONE_STYLE[SEV_TONE[severity] ?? 'neutral']
 }
 
+/** Text-only half of TONE_STYLE — for callers that want a tone on a single accent
+ *  element (e.g. a stat number) without pulling in the badge's bg/border too. Kept
+ *  in sync with TONE_STYLE's tone→token mapping; same 5 tones, no new colors. */
+const TONE_TEXT: Record<BadgeTone, string> = {
+  neutral:  'text-neutral-text',
+  success:  'text-success-text',
+  info:     'text-info-text',
+  warning:  'text-warning-text',
+  critical: 'text-critical-text',
+}
+export function toneTextClass(tone: BadgeTone): string {
+  return TONE_TEXT[tone]
+}
+
 // ── Card ──────────────────────────────────────────────────────────────────────
 
 export function Card({
@@ -299,6 +313,7 @@ export function StatCard({
   delta,
   deltaLabel,
   accent = false,
+  tone,
   sparkline,
 }: {
   label: string
@@ -306,13 +321,16 @@ export function StatCard({
   delta?: number
   deltaLabel?: string
   accent?: boolean
+  /** Semantic tone for the value only — container stays DS-neutral (card/border-line).
+   *  Takes precedence over `accent`'s trace-blue value color when both are given. */
+  tone?: BadgeTone
   sparkline?: ReactNode
 }) {
   const deltaPositive = (delta ?? 0) >= 0
   return (
     <div className={cn('card p-5 flex flex-col gap-2', accent && 'border-trace-blue shadow-ring-accent')}>
       <p className="text-small text-muted uppercase tracking-wider">{label}</p>
-      <p className={cn('text-h2 font-mono', accent ? 'text-trace-blue' : 'text-primary')}>
+      <p className={cn('text-h2 font-mono', tone ? toneTextClass(tone) : accent ? 'text-trace-blue' : 'text-primary')}>
         {typeof value === 'number' ? value.toLocaleString() : value}
       </p>
       {delta !== undefined && (

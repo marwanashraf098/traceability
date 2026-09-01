@@ -4,6 +4,7 @@ import { renderWithProviders, screen, waitFor, within } from './renderWithProvid
 import { stubFetchWithShellDefaults } from './mockShellFetch'
 import Returns from '../pages/Returns'
 import * as api from '../api'
+import i18n from '../i18n'
 
 vi.mock('../api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../api')>()
@@ -49,6 +50,10 @@ function makeSessionRow(overrides: Partial<{
   }
 }
 
+function makeAbandonedRow(overrides: Partial<ReturnType<typeof makeSessionRow>> = {}) {
+  return makeSessionRow({ status: 'abandoned', restocked_count: 0, damaged_count: 0, mismatch_count: 0, ...overrides })
+}
+
 function makeAnalytics(overrides: Partial<{
   totalReturns: number; restockedCount: number; damagedCount: number; mismatchCount: number
   expectedNotScannedCount: number; unassignedPendingCount: number
@@ -76,11 +81,13 @@ function makeItem(overrides: Partial<{
 
 function makeSessionDetail(overrides: Partial<{
   id: string; status: 'open' | 'closed' | 'abandoned'; opened_at: string
+  closed_by: string | null; closed_at: string | null; note: string | null
   items: unknown[]; expectedPieces: unknown[]
 }> = {}) {
   return {
     id: 'aaaaaaaa-0000-0000-0000-000000000001', status: 'open',
     opened_by: 'user-1', opened_at: '2026-08-14T08:14:00Z',
+    closed_by: null, closed_at: null, note: null,
     items: [], expectedPieces: [],
     ...overrides,
   }
@@ -387,5 +394,107 @@ describe('Returns — session-based rebuild', () => {
     const user = userEvent.setup()
     await enterSession(user, makeSessionDetail({ items: [] }))
     expect(screen.getByTestId('scan-input').className).toContain('input-scan')
+  })
+
+  // ── Terminal-session routing (FIX: closed/abandoned rows no longer open the
+  // live scan loop — Step 0 confirmed requireOpen() already blocks writes
+  // server-side, so this was a frontend routing gap, not a data-integrity one) ──
+
+  test('rt1 clicking a CLOSED row opens a read-only summary — no scan input, no disposition buttons', async () => {
+    mockFetch
+      .mockReturnValueOnce(jsonOk({ items: [makeSessionRow({ status: 'closed' })], total: 1 }))
+      .mockReturnValueOnce(jsonOk(makeAnalytics()))
+      .mockReturnValueOnce(jsonOk(makeSessionDetail({
+        status: 'closed', closed_at: '2026-08-10T10:30:00Z',
+        items: [makeItem({ disposition: 'restocked' })],
+      })))
+    const user = userEvent.setup()
+    renderWithProviders(<Returns />)
+    await waitFor(() => screen.getByTestId('sessions-table'))
+    await user.click(screen.getByText('RT-AAAA'))
+    await waitFor(() => screen.getByTestId('item-piece-1'))
+    expect(screen.getByTestId('session-summary-screen')).toBeInTheDocument()
+    expect(screen.queryByTestId('open-session-screen')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('scan-input')).not.toBeInTheDocument()
+    expect(screen.queryByText('Restock')).not.toBeInTheDocument()
+    expect(screen.queryByText('Damage')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('close-session-button')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('abandon-link')).not.toBeInTheDocument()
+    // Read-only item data from GET /returns/sessions/{id} is still rendered.
+    expect(screen.getByTestId('item-piece-1')).toHaveTextContent('Restocked')
+  })
+
+  test('rt2 clicking an ABANDONED row does nothing — stays on the landing table', async () => {
+    mockFetch
+      .mockReturnValueOnce(jsonOk({ items: [makeAbandonedRow()], total: 1 }))
+      .mockReturnValueOnce(jsonOk(makeAnalytics()))
+    const user = userEvent.setup()
+    renderWithProviders(<Returns />)
+    await waitFor(() => screen.getByTestId('sessions-table'))
+    const row = screen.getByText('RT-AAAA').closest('tr')!
+    expect(row.className).not.toContain('cursor-pointer')
+    await user.click(row)
+    expect(screen.queryByTestId('open-session-screen')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('session-summary-screen')).not.toBeInTheDocument()
+    expect(screen.getByTestId('returns-landing')).toBeInTheDocument()
+  })
+
+  test('rt3 clicking an OPEN row still resumes the live scan view', async () => {
+    mockFetch
+      .mockReturnValueOnce(jsonOk({ items: [makeSessionRow({ status: 'open', piece_count: 0 })], total: 1 }))
+      .mockReturnValueOnce(jsonOk(makeAnalytics()))
+      .mockReturnValueOnce(jsonOk(makeSessionDetail({ status: 'open' })))
+    const user = userEvent.setup()
+    renderWithProviders(<Returns />)
+    await waitFor(() => screen.getByTestId('sessions-table'))
+    await user.click(screen.getByText('RT-AAAA'))
+    await waitFor(() => screen.getByTestId('open-session-screen'))
+    expect(screen.getByTestId('scan-input')).toBeInTheDocument()
+  })
+
+  // ── Sidebar wordmark token (Fix 1) ────────────────────────────────────────
+
+  test('rt4 sidebar wordmark uses the dark-rail token, not the light-content token', async () => {
+    mockFetch
+      .mockReturnValueOnce(jsonOk({ items: [makeSessionRow()], total: 1 }))
+      .mockReturnValueOnce(jsonOk(makeAnalytics()))
+    renderWithProviders(<Returns />)
+    await waitFor(() => screen.getByTestId('sessions-table'))
+    const mark = screen.getByTestId('logo-mark')
+    // The wrapper carries the color (Layout.tsx passes text-sidebar-active); the
+    // inner "traced" span no longer hardcodes text-primary (near-black — would be
+    // invisible on the #0D1117 dark rail).
+    expect(mark.className).toContain('text-sidebar-active')
+    expect(mark.querySelector('span')!.className).not.toContain('text-primary')
+  })
+
+  // ── RTL layout ────────────────────────────────────────────────────────────
+  // NOTE: renderWithProviders uses its own English-only i18next instance
+  // (renderWithProviders.tsx) — a pre-existing harness limitation, not touched
+  // here — so component tests can't assert actual Arabic strings. This exercises
+  // the new views under dir="rtl" (set on the real app singleton, exactly as
+  // toggleLang() does) to catch any hardcoded ltr-only class breaking the
+  // logical-property layout; string-level AR content is confirmed at the
+  // live-acceptance pass instead.
+
+  test('rt5 RTL layout — closed session summary still renders read-only under dir=rtl', async () => {
+    await i18n.changeLanguage('ar')
+    mockFetch
+      .mockReturnValueOnce(jsonOk({ items: [makeSessionRow({ status: 'closed' })], total: 1 }))
+      .mockReturnValueOnce(jsonOk(makeAnalytics()))
+      .mockReturnValueOnce(jsonOk(makeSessionDetail({
+        status: 'closed', closed_at: '2026-08-10T10:30:00Z',
+        items: [makeItem({ disposition: 'damaged', damage_reason: 'Stained' })],
+      })))
+    const user = userEvent.setup()
+    renderWithProviders(<Returns />)
+    await waitFor(() => screen.getByTestId('sessions-table'))
+    await user.click(screen.getByText('RT-AAAA'))
+    await waitFor(() => screen.getByTestId('item-piece-1'))
+    expect(document.documentElement.dir).toBe('rtl')
+    expect(screen.getByTestId('session-summary-screen')).toBeInTheDocument()
+    expect(screen.getByTestId('item-piece-1')).toHaveTextContent('reason: Stained')
+    expect(screen.queryByTestId('scan-input')).not.toBeInTheDocument()
+    await i18n.changeLanguage('en')
   })
 })

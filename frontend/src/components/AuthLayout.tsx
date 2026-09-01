@@ -37,7 +37,7 @@ export default function AuthLayout({ children }: { children: ReactNode }) {
 
       <div className="w-full max-w-sm relative z-10">
         <div className="text-center mb-10">
-          <Logo variant="mark" size={28} className="justify-center mb-4" />
+          <Logo variant="mark" size={28} className="justify-center mb-4 text-primary" />
           <p className="text-small text-muted tracking-wide">{t('auth.tagline')}</p>
         </div>
 

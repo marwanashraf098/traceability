@@ -5,7 +5,7 @@ import {
   Inbox, ArrowRightCircle, XCircle, ChevronLeft, ChevronRight,
 } from 'lucide-react'
 import {
-  Badge, Button, EmptyState, Skeleton, StatCard, Modal, Alert, Spinner,
+  Badge, Button, EmptyState, Skeleton, StatCard, Modal, Alert, Spinner, cn,
 } from '../components/ui'
 import Layout from '../components/Layout'
 import { getAccessToken, clearAccessToken } from '../auth'
@@ -143,6 +143,9 @@ interface SessionDetail {
   status: 'open' | 'closed' | 'abandoned'
   opened_by: string | null
   opened_at: string
+  closed_by: string | null
+  closed_at: string | null
+  note: string | null
   items: SessionItem[]
   expectedPieces: ExpectedPiece[]
 }
@@ -159,7 +162,10 @@ interface CloseSummary {
 
 // ── Root ──────────────────────────────────────────────────────────────────────
 
-type View = { type: 'landing' } | { type: 'session'; sessionId: string }
+type View =
+  | { type: 'landing' }
+  | { type: 'session'; sessionId: string }
+  | { type: 'summary'; sessionId: string }
 
 export default function Returns() {
   const [view, setView] = useState<View>({ type: 'landing' })
@@ -179,9 +185,27 @@ export default function Returns() {
     )
   }
 
+  if (view.type === 'summary') {
+    // Read-only inspection of a closed session — a "look at a record" view, not an
+    // active scan loop, so it's Layout-wrapped like the landing table (never
+    // OpenSessionScreen, which is reserved for status === 'open').
+    return (
+      <Layout>
+        <SessionSummaryScreen
+          key={view.sessionId}
+          sessionId={view.sessionId}
+          onBack={() => setView({ type: 'landing' })}
+        />
+      </Layout>
+    )
+  }
+
   return (
     <Layout>
-      <LandingScreen onOpenSession={id => setView({ type: 'session', sessionId: id })} />
+      <LandingScreen
+        onOpenSession={id => setView({ type: 'session', sessionId: id })}
+        onOpenSummary={id => setView({ type: 'summary', sessionId: id })}
+      />
     </Layout>
   )
 }
@@ -190,7 +214,10 @@ export default function Returns() {
 
 const PAGE_SIZE = 10
 
-function LandingScreen({ onOpenSession }: { onOpenSession: (sessionId: string) => void }) {
+function LandingScreen({ onOpenSession, onOpenSummary }: {
+  onOpenSession: (sessionId: string) => void
+  onOpenSummary: (sessionId: string) => void
+}) {
   const { t } = useTranslation()
   const isWorker = getRoleFromToken() === 'worker'
   const [page, setPage] = useState(0)
@@ -319,11 +346,11 @@ function LandingScreen({ onOpenSession }: { onOpenSession: (sessionId: string) =
         <>
           {analytics && (
             <div className="grid grid-cols-2 sm:grid-cols-5 gap-3" data-testid="analytics-band">
-              <StatCard label={t('returns.landing.stats.total')} value={analytics.totalReturns} />
-              <StatCard label={t('returns.landing.stats.restocked')} value={analytics.restockedCount} />
-              <StatCard label={t('returns.landing.stats.damaged')} value={analytics.damagedCount} />
-              <StatCard label={t('returns.landing.stats.mismatch')} value={analytics.mismatchCount} />
-              <StatCard label={t('returns.landing.stats.expectedNotScanned')} value={analytics.expectedNotScannedCount} />
+              <StatCard label={t('returns.landing.stats.total')} value={analytics.totalReturns} tone="neutral" />
+              <StatCard label={t('returns.landing.stats.restocked')} value={analytics.restockedCount} tone="success" />
+              <StatCard label={t('returns.landing.stats.damaged')} value={analytics.damagedCount} tone="critical" />
+              <StatCard label={t('returns.landing.stats.mismatch')} value={analytics.mismatchCount} tone="warning" />
+              <StatCard label={t('returns.landing.stats.expectedNotScanned')} value={analytics.expectedNotScannedCount} tone="warning" />
             </div>
           )}
 
@@ -362,11 +389,20 @@ function LandingScreen({ onOpenSession }: { onOpenSession: (sessionId: string) =
                 </tr>
               </thead>
               <tbody>
-                {sessions.map(s => (
+                {sessions.map(s => {
+                  // 'open' resumes the live scan loop; 'closed' opens a read-only
+                  // summary; 'abandoned' is inert — the Abandoned badge is the
+                  // explanation, and its pieces already resurface via the
+                  // unassigned-pending pool, so there's nothing to view here.
+                  const clickable = s.status !== 'abandoned'
+                  const onRowClick = s.status === 'open' ? () => onOpenSession(s.id)
+                    : s.status === 'closed' ? () => onOpenSummary(s.id)
+                    : undefined
+                  return (
                   <tr
                     key={s.id}
-                    className="border-b border-line last:border-0 hover:bg-elevated cursor-pointer"
-                    onClick={() => onOpenSession(s.id)}
+                    className={cn('border-b border-line last:border-0', clickable && 'hover:bg-elevated cursor-pointer')}
+                    onClick={onRowClick}
                   >
                     <td className="px-4 py-3 font-mono font-medium text-primary">{shortId(s.id)}</td>
                     <td className="px-4 py-3 text-muted">{s.opened_by ? t('returns.landing.operator') : '—'}</td>
@@ -384,7 +420,8 @@ function LandingScreen({ onOpenSession }: { onOpenSession: (sessionId: string) =
                         : dispositionSummary(s, t)}
                     </td>
                   </tr>
-                ))}
+                  )
+                })}
               </tbody>
             </table>
             <div className="flex items-center justify-between px-4 py-3">
@@ -607,24 +644,19 @@ function OpenSessionScreen({ sessionId, onExit, onStartNew }: {
   if (closeSummary) {
     return (
       <div className="min-h-screen bg-base flex items-center justify-center p-6" data-testid="close-summary">
-        <div className="flex flex-col items-center gap-4 text-center max-w-sm">
-          <ClipboardCheck size={44} strokeWidth={1.75} className="text-success" />
-          <h2 className="text-h2 text-primary">{t('returns.openSession.closedTitle')}</h2>
-          <p className="text-small text-muted">
-            {shortId(closeSummary.sessionId)} · {closeSummary.pieceCount} {t('returns.openSession.piecesStat')}
-          </p>
-          <div className="flex gap-4">
-            <SummaryStat value={closeSummary.restockedCount} label={t('returns.openSession.restocked')} tone="success" />
-            <SummaryStat value={closeSummary.damagedCount} label={t('returns.openSession.damaged')} tone="critical" />
-            <SummaryStat value={closeSummary.mismatchCount} label={t('returns.openSession.mismatchLabel')} tone="warning" />
-          </div>
-          <Button variant="primary" loading={startingNew} onClick={startNewSession} className="mt-2">
-            {t('returns.openSession.startNew')}
-          </Button>
-          <button onClick={onExit} className="text-small text-muted hover:text-primary underline mt-1">
-            {t('returns.openSession.backToLanding')}
-          </button>
-        </div>
+        <SessionSummary
+          variant="post-close"
+          data={{
+            sessionId: closeSummary.sessionId,
+            pieceCount: closeSummary.pieceCount,
+            restockedCount: closeSummary.restockedCount,
+            damagedCount: closeSummary.damagedCount,
+            mismatchCount: closeSummary.mismatchCount,
+          }}
+          onPrimaryAction={startNewSession}
+          primaryActionLoading={startingNew}
+          onBack={onExit}
+        />
       </div>
     )
   }
@@ -714,34 +746,7 @@ function OpenSessionScreen({ sessionId, onExit, onStartNew }: {
           const isPending = item.disposition === 'pending'
           const isIllegal = isPending && item.status !== 'return_pending_inspection'
           if (!isPending) {
-            return (
-              <div
-                key={item.id}
-                className="border border-line bg-surface rounded-xl px-3.5 py-3 flex items-center gap-3.5 opacity-85"
-                data-testid={`item-${item.piece_id}`}
-              >
-                {item.disposition === 'restocked'
-                  ? <RotateCcw size={16} strokeWidth={2} className="text-success shrink-0" />
-                  : item.disposition === 'damaged'
-                  ? <AlertTriangle size={16} strokeWidth={2} className="text-critical shrink-0" />
-                  : <XCircle size={16} strokeWidth={2} className="text-warning shrink-0" />}
-                <div className="flex-1 min-w-0">
-                  <p className="text-small font-semibold text-primary truncate">{item.product_title}</p>
-                  <p className="text-caption font-mono text-muted">
-                    {item.barcode}
-                    {item.damage_reason && ` · ${t('returns.openSession.reasonPrefix', { reason: item.damage_reason })}`}
-                  </p>
-                </div>
-                <Badge
-                  tone={item.disposition === 'restocked' ? 'success' : item.disposition === 'damaged' ? 'critical' : 'warning'}
-                  label={item.disposition === 'restocked'
-                    ? t('returns.openSession.restocked')
-                    : item.disposition === 'damaged'
-                    ? t('returns.openSession.damaged')
-                    : t('returns.openSession.mismatchLabel')}
-                />
-              </div>
-            )
+            return <DispositionedItemRow key={item.id} item={item} />
           }
           return (
             <div
@@ -899,6 +904,187 @@ function SummaryStat({ value, label, tone }: { value: number; label: string; ton
     <div className="text-center">
       <div className={`text-h3 font-mono font-bold ${toneClass}`}>{value}</div>
       <div className="text-caption text-muted">{label}</div>
+    </div>
+  )
+}
+
+// ── Dispositioned item row — read-only, shared by the live scan loop's resolved
+// items AND the historical session summary below. ────────────────────────────
+
+function DispositionedItemRow({ item }: { item: SessionItem }) {
+  const { t } = useTranslation()
+  return (
+    <div
+      className="border border-line bg-surface rounded-xl px-3.5 py-3 flex items-center gap-3.5 opacity-85"
+      data-testid={`item-${item.piece_id}`}
+    >
+      {item.disposition === 'restocked'
+        ? <RotateCcw size={16} strokeWidth={2} className="text-success shrink-0" />
+        : item.disposition === 'damaged'
+        ? <AlertTriangle size={16} strokeWidth={2} className="text-critical shrink-0" />
+        : <XCircle size={16} strokeWidth={2} className="text-warning shrink-0" />}
+      <div className="flex-1 min-w-0">
+        <p className="text-small font-semibold text-primary truncate">{item.product_title}</p>
+        <p className="text-caption font-mono text-muted">
+          {item.barcode}
+          {item.damage_reason && ` · ${t('returns.openSession.reasonPrefix', { reason: item.damage_reason })}`}
+        </p>
+      </div>
+      <Badge
+        tone={item.disposition === 'restocked' ? 'success' : item.disposition === 'damaged' ? 'critical' : 'warning'}
+        label={item.disposition === 'restocked'
+          ? t('returns.openSession.restocked')
+          : item.disposition === 'damaged'
+          ? t('returns.openSession.damaged')
+          : t('returns.openSession.mismatchLabel')}
+      />
+    </div>
+  )
+}
+
+// ── Session summary — shared read-only receipt. 'post-close' fires right after
+// Close (fed by the close() response, no items — a fresh, celebratory moment with
+// a Start-new-session action). 'historical' fires from a closed row on the landing
+// table (fed by GET /returns/sessions/{id}, full item list, zero write affordances
+// — just a Back action). Same visual core, two data shapes, two action rails. ────
+
+interface SessionSummaryData {
+  sessionId: string
+  pieceCount: number
+  restockedCount: number
+  damagedCount: number
+  mismatchCount: number
+  openedBy?: string | null
+  openedAt?: string | null
+  closedAt?: string | null
+  note?: string | null
+  /** Present only for the historical variant — CloseSummary (post-close) has no items. */
+  items?: SessionItem[]
+}
+
+function SessionSummary({ data, variant, onPrimaryAction, primaryActionLoading, onBack }: {
+  data: SessionSummaryData
+  variant: 'post-close' | 'historical'
+  onPrimaryAction?: () => void
+  primaryActionLoading?: boolean
+  onBack: () => void
+}) {
+  const { t } = useTranslation()
+  const fmtTime = (iso: string | null | undefined) => iso
+    ? new Date(iso).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
+    : null
+
+  return (
+    <div className="flex flex-col items-center gap-4 text-center max-w-sm mx-auto w-full">
+      <ClipboardCheck size={44} strokeWidth={1.75} className="text-success" />
+      <h2 className="text-h2 text-primary">
+        {variant === 'post-close' ? t('returns.openSession.closedTitle') : t('returns.summary.title')}
+      </h2>
+      <p className="text-small text-muted">
+        {shortId(data.sessionId)} · {data.pieceCount} {t('returns.openSession.piecesStat')}
+      </p>
+
+      {variant === 'historical' && (data.openedAt || data.closedAt) && (
+        <p className="text-caption text-muted -mt-2">
+          {data.openedAt && t('returns.summary.opened', {
+            time: fmtTime(data.openedAt),
+            operator: data.openedBy ? t('returns.landing.operator') : '—',
+          })}
+          {data.closedAt && ` · ${t('returns.summary.closed', { time: fmtTime(data.closedAt) })}`}
+        </p>
+      )}
+      {variant === 'historical' && data.note && (
+        <p className="text-caption text-muted">{t('returns.summary.note', { note: data.note })}</p>
+      )}
+
+      <div className="flex gap-4">
+        <SummaryStat value={data.restockedCount} label={t('returns.openSession.restocked')} tone="success" />
+        <SummaryStat value={data.damagedCount} label={t('returns.openSession.damaged')} tone="critical" />
+        <SummaryStat value={data.mismatchCount} label={t('returns.openSession.mismatchLabel')} tone="warning" />
+      </div>
+
+      {variant === 'historical' && data.items && (
+        <div className="w-full text-start space-y-2 mt-2" data-testid="summary-items">
+          {data.items.length === 0
+            ? <p className="text-small text-muted text-center">{t('returns.summary.noItems')}</p>
+            : data.items.map(item => <DispositionedItemRow key={item.id} item={item} />)}
+        </div>
+      )}
+
+      {variant === 'post-close' ? (
+        <>
+          <Button variant="primary" loading={primaryActionLoading} onClick={onPrimaryAction} className="mt-2">
+            {t('returns.openSession.startNew')}
+          </Button>
+          <button onClick={onBack} className="text-small text-muted hover:text-primary underline mt-1">
+            {t('returns.openSession.backToLanding')}
+          </button>
+        </>
+      ) : (
+        <Button variant="secondary" onClick={onBack} className="mt-2">
+          {t('returns.openSession.backToLanding')}
+        </Button>
+      )}
+    </div>
+  )
+}
+
+// ── Session summary screen — in-shell (Layout-wrapped by the Returns() root),
+// per the list-view/scan-loop split: this is a read-only "look at a record" view,
+// not an active scan loop, so it never mounts OpenSessionScreen or its inputs. ──
+
+function SessionSummaryScreen({ sessionId, onBack }: { sessionId: string; onBack: () => void }) {
+  const { t } = useTranslation()
+  const [detail, setDetail] = useState<SessionDetail | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    api<SessionDetail>(`/returns/sessions/${sessionId}`)
+      .then(data => { if (!cancelled) setDetail(data) })
+      .catch((e: unknown) => { if (!cancelled) setError((e as Error).message || t('common.error')) })
+      .finally(() => { if (!cancelled) setLoading(false) })
+    return () => { cancelled = true }
+  }, [sessionId, t])
+
+  if (loading) {
+    return (
+      <div data-testid="session-summary-screen">
+        <Skeleton className="h-96 w-full max-w-2xl mx-auto rounded-2xl" />
+      </div>
+    )
+  }
+
+  if (error || !detail) {
+    return (
+      <div className="space-y-4" data-testid="session-summary-screen">
+        <Alert tone="critical" title={error ?? t('common.error')} />
+        <Button variant="secondary" onClick={onBack}>{t('returns.openSession.backToLanding')}</Button>
+      </div>
+    )
+  }
+
+  const restockedCount = detail.items.filter(i => i.disposition === 'restocked').length
+  const damagedCount   = detail.items.filter(i => i.disposition === 'damaged').length
+  const mismatchCount  = detail.items.filter(i => i.disposition === 'mismatch').length
+
+  return (
+    <div data-testid="session-summary-screen">
+      <SessionSummary
+        variant="historical"
+        data={{
+          sessionId:      detail.id,
+          pieceCount:     detail.items.length,
+          restockedCount, damagedCount, mismatchCount,
+          openedBy:       detail.opened_by,
+          openedAt:       detail.opened_at,
+          closedAt:       detail.closed_at,
+          note:           detail.note,
+          items:          detail.items,
+        }}
+        onBack={onBack}
+      />
     </div>
   )
 }

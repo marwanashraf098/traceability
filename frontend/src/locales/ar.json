@@ -800,6 +800,13 @@
       "startNew": "بدء جلسة جديدة",
       "backToLanding": "العودة إلى الجلسات"
     },
+    "summary": {
+      "title": "ملخص الجلسة",
+      "opened": "فُتحت {{time}} · {{operator}}",
+      "closed": "أُغلقت {{time}}",
+      "note": "ملاحظة: {{note}}",
+      "noItems": "لم يتم مسح أي قطع في هذه الجلسة."
+    },
     "pending": {
       "restock": "إعادة للمخزون",
       "damage": "تصنيف تالف",

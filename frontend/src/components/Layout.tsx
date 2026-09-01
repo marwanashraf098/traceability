@@ -161,7 +161,7 @@ export default function Layout({ children }: { children: ReactNode }) {
 
         {/* Wordmark */}
         <div className="flex items-center px-[18px] py-5 border-b border-sidebar-line">
-          <Logo variant="mark" size={18} />
+          <Logo variant="mark" size={18} className="text-sidebar-active" />
         </div>
 
         {/* Nav — worker gets a reduced task-scoped set (Home + the three worker

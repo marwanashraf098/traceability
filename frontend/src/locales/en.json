@@ -805,6 +805,13 @@
       "startNew": "Start new session",
       "backToLanding": "Back to sessions"
     },
+    "summary": {
+      "title": "Session summary",
+      "opened": "Opened {{time}} · {{operator}}",
+      "closed": "Closed {{time}}",
+      "note": "Note: {{note}}",
+      "noItems": "No pieces were scanned into this session."
+    },
     "pending": {
       "restock": "Restock",
       "damage": "Mark Damaged",

@@ -128,7 +128,7 @@ export default function StationGate() {
 
       <div className="w-full max-w-md relative z-10">
         <div className="text-center mb-8">
-          <Logo variant="mark" size={28} className="justify-center mb-4" />
+          <Logo variant="mark" size={28} className="justify-center mb-4 text-primary" />
         </div>
 
         {step === 'roster' && (
