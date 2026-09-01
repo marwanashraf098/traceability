@@ -27,7 +27,6 @@
   "overview": {
     "title": "لوحة التحكم",
     "tagline": "لا شيء يتحرك دون تتبع",
-    "today": "اليوم",
     "greeting": {
       "morning": "صباح الخير، {{name}}",
       "afternoon": "مساء الخير، {{name}}",
@@ -99,8 +98,23 @@
       "daysAgo": "منذ {{count}} يوم"
     },
     "stats": {
-      "shipments": "الشحنات",
-      "vsYesterday": "مقارنة بالأمس"
+      "codDelivered": "التحصيل عند الاستلام"
+    },
+    "dateRange": {
+      "today": "اليوم",
+      "yesterday": "أمس",
+      "last7": "آخر 7 أيام",
+      "last30": "آخر 30 يومًا",
+      "thisMonth": "هذا الشهر",
+      "custom": "مخصص",
+      "fromLabel": "تاريخ البداية",
+      "toLabel": "تاريخ النهاية"
+    },
+    "lateToPack": {
+      "title": "متأخر عن التجهيز",
+      "asOfNow": "حتى الآن",
+      "allCaughtUp": "لا يوجد تأخير",
+      "over48": "{{count}} تجاوز 48 ساعة"
     },
     "flow": {
       "title": "العمليات المباشرة",

@@ -897,15 +897,30 @@ export interface TrendPoint {
 }
 
 export interface MetricTrend {
-  metric: 'orders' | 'shipments' | 'delivered' | 'exceptions' | 'returns'
-  today: number
-  yesterday: number
-  deltaPct: number | null
+  metric: 'orders' | 'cod_delivered' | 'delivered' | 'exceptions' | 'returns'
+  total: number
   series: TrendPoint[]
 }
 
-export function getOverviewTrends() {
-  return request<MetricTrend[]>('/overview/trends')
+// from/to are ISO local dates (YYYY-MM-DD), inclusive. Omit both for the
+// backend's own default (Last 7 days). The 14-day `series` on every metric is
+// unaffected by from/to — only `total` is scoped to the requested range.
+export function getOverviewTrends(from?: string, to?: string) {
+  const params = new URLSearchParams()
+  if (from) params.set('from', from)
+  if (to) params.set('to', to)
+  const qs = params.toString()
+  return request<MetricTrend[]>(`/overview/trends${qs ? `?${qs}` : ''}`)
+}
+
+export interface LateToPack {
+  overdue: number
+  over48: number
+}
+
+// Live state — NOT scoped by the date-range picker.
+export function getLateToPack() {
+  return request<LateToPack>('/overview/late-to-pack')
 }
 
 export interface TopSku {

@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import type { TFunction } from 'i18next'
 import {
-  AlertTriangle, PackageX, ChevronDown, X,
+  AlertTriangle, PackageX, X,
   Plug, Inbox, Users as UsersIcon, CheckCircle2, Circle,
   Truck, Unlink, ShoppingBag, PackageSearch, PackageCheck,
   Repeat, Search,
@@ -12,14 +12,16 @@ import {
   request,
   getStatusTotals, getValuation, getOrdersFunnel, getOnboardingStatus, dismissOnboarding,
   setOnboardingStep,
-  getOverviewTrends, getOverviewTopSkus, getOrdersSummary, listOrders,
+  getOverviewTrends, getOverviewTopSkus, getOrdersSummary, listOrders, getLateToPack,
   type StatusTotals, type Valuation, type FunnelCounts,
   type OnboardingStatus, type OnboardingStep,
   type MetricTrend, type TrendPoint, type TopSku, type OrderSummaryCounts, type OrderSummary,
+  type LateToPack,
 } from '../api'
 import {
   EmptyState, Progress, useMe, useToast,
   Skeleton, Spinner, ProductThumb, DeliveryBadge, cn,
+  SegmentedControl, Input,
 } from '../components/ui'
 
 // ── DS token hex values — SVG presentation attrs can't use Tailwind classes ────
@@ -111,57 +113,170 @@ function Sparkline({ series, color }: { series: TrendPoint[]; color: string }) {
   )
 }
 
-// ── Stat cards with sparkline + "vs yesterday" delta ────────────────────────
-// DELTA COLOR = improvement, not arrow direction. The arrow always shows the
-// actual sign of deltaPct; goodDirection picks which sign is success-toned.
-// deltaPct === null (yesterday=0, guarded server-side) renders "—", never a
-// fabricated infinite/undefined percentage.
+// ── Stat cards with sparkline ───────────────────────────────────────────────
+// Headline = trend.total, scoped to whatever [from,to] range the date-range
+// picker has selected. Sparkline = trend.series, ALWAYS the fixed trailing
+// 14-day shape regardless of the selected range — deliberately decoupled (see
+// OverviewService's class doc) so Today/Yesterday don't collapse it to a
+// single point. There is no "vs yesterday" comparison anymore: it doesn't have
+// a coherent meaning against an arbitrary range total (the backend no longer
+// returns yesterday/deltaPct at all).
 
 const STAT_DEFS: {
   metric: MetricTrend['metric']
   labelKey: string
   color: string
-  goodDirection: 'up' | 'down'
+  format?: (n: number) => string
 }[] = [
-  { metric: 'orders',     labelKey: 'nav.orders',              color: INFO,       goodDirection: 'up' },
-  { metric: 'shipments',  labelKey: 'overview.stats.shipments', color: TRACE_BLUE, goodDirection: 'up' },
-  { metric: 'delivered',  labelKey: 'orders.pipeline.delivered', color: SUCCESS,   goodDirection: 'up' },
-  { metric: 'exceptions', labelKey: 'nav.exceptions',           color: CRITICAL,   goodDirection: 'down' },
-  { metric: 'returns',    labelKey: 'nav.returns',              color: WARNING,    goodDirection: 'down' },
+  { metric: 'orders',        labelKey: 'nav.orders',                color: INFO },
+  { metric: 'cod_delivered', labelKey: 'overview.stats.codDelivered', color: TRACE_BLUE, format: n => `${n.toLocaleString()} EGP` },
+  { metric: 'delivered',     labelKey: 'orders.pipeline.delivered', color: SUCCESS },
+  { metric: 'exceptions',    labelKey: 'nav.exceptions',            color: CRITICAL },
+  { metric: 'returns',       labelKey: 'nav.returns',               color: WARNING },
 ]
 
 function SparkStatCard({
-  label, trend, color, goodDirection,
+  label, trend, color, format,
 }: {
   label: string
   trend: MetricTrend | undefined
   color: string
-  goodDirection: 'up' | 'down'
+  format?: (n: number) => string
 }) {
-  const { t } = useTranslation()
   if (!trend) return <Skeleton className="h-[118px] rounded-2xl" />
-
-  const deltaPct = trend.deltaPct
-  const up = (deltaPct ?? 0) >= 0
-  const isGood = goodDirection === 'up' ? up : !up
 
   return (
     <div className="card p-5 flex flex-col gap-1" data-testid={`stat-${trend.metric}`}>
       <p className="text-small text-muted font-medium">{label}</p>
       <div className="flex items-end justify-between gap-2">
-        <p className="text-h2 font-mono text-primary">{trend.today.toLocaleString()}</p>
+        <p className="text-h2 font-mono text-primary">{format ? format(trend.total) : trend.total.toLocaleString()}</p>
         {trend.series.length > 0 && <Sparkline series={trend.series} color={color} />}
       </div>
-      {deltaPct === null ? (
-        <p className="text-small text-muted mt-1">
-          — <span>{t('overview.stats.vsYesterday')}</span>
-        </p>
+    </div>
+  )
+}
+
+// ── Date-range picker (top stat cards only — Zone 1) ────────────────────────
+// Presets computed in Cairo local calendar days, matching the server's own
+// Cairo-pinned Clock — no date library, just Intl.DateTimeFormat('en-CA', ...)
+// (which formats as YYYY-MM-DD) plus UTC-anchored day arithmetic on that
+// Y-M-D triple, so it's immune to the runtime's own local timezone.
+
+type DateRangePreset = 'today' | 'yesterday' | '7d' | '30d' | 'month' | 'custom'
+
+function cairoDateStr(date: Date): string {
+  return new Intl.DateTimeFormat('en-CA', { timeZone: 'Africa/Cairo' }).format(date)
+}
+
+function cairoTodayStr(): string {
+  return cairoDateStr(new Date())
+}
+
+function cairoOffsetStr(days: number): string {
+  const [y, m, d] = cairoTodayStr().split('-').map(Number)
+  const base = new Date(Date.UTC(y, m - 1, d))
+  base.setUTCDate(base.getUTCDate() + days)
+  return base.toISOString().slice(0, 10)
+}
+
+function cairoMonthStartStr(): string {
+  const [y, m] = cairoTodayStr().split('-')
+  return `${y}-${m}-01`
+}
+
+function rangeForPreset(preset: DateRangePreset, customFrom: string, customTo: string): { from: string; to: string } {
+  switch (preset) {
+    case 'today':     return { from: cairoTodayStr(), to: cairoTodayStr() }
+    case 'yesterday': { const y = cairoOffsetStr(-1); return { from: y, to: y } }
+    case '30d':       return { from: cairoOffsetStr(-29), to: cairoTodayStr() }
+    case 'month':     return { from: cairoMonthStartStr(), to: cairoTodayStr() }
+    case 'custom':    return { from: customFrom, to: customTo }
+    case '7d':
+    default:          return { from: cairoOffsetStr(-6), to: cairoTodayStr() }
+  }
+}
+
+const DATE_RANGE_PRESETS: { value: DateRangePreset; labelKey: string }[] = [
+  { value: 'today',     labelKey: 'overview.dateRange.today' },
+  { value: 'yesterday', labelKey: 'overview.dateRange.yesterday' },
+  { value: '7d',        labelKey: 'overview.dateRange.last7' },
+  { value: '30d',       labelKey: 'overview.dateRange.last30' },
+  { value: 'month',     labelKey: 'overview.dateRange.thisMonth' },
+  { value: 'custom',    labelKey: 'overview.dateRange.custom' },
+]
+
+function DateRangePicker({
+  preset, onPresetChange, customFrom, customTo, onCustomChange,
+}: {
+  preset: DateRangePreset
+  onPresetChange: (p: DateRangePreset) => void
+  customFrom: string
+  customTo: string
+  onCustomChange: (from: string, to: string) => void
+}) {
+  const { t } = useTranslation()
+  return (
+    <div className="flex items-center gap-2 flex-wrap" data-testid="date-range-picker">
+      <SegmentedControl
+        options={DATE_RANGE_PRESETS.map(o => ({ value: o.value, label: t(o.labelKey) }))}
+        value={preset}
+        onChange={v => onPresetChange(v as DateRangePreset)}
+      />
+      {preset === 'custom' && (
+        <div className="flex items-center gap-1.5" data-testid="date-range-custom">
+          <div className="w-[152px]">
+            <Input
+              type="date"
+              value={customFrom}
+              max={customTo || undefined}
+              aria-label={t('overview.dateRange.fromLabel')}
+              onChange={e => onCustomChange(e.target.value, customTo)}
+            />
+          </div>
+          <span className="text-muted text-small flex-shrink-0">→</span>
+          <div className="w-[152px]">
+            <Input
+              type="date"
+              value={customTo}
+              min={customFrom || undefined}
+              aria-label={t('overview.dateRange.toLabel')}
+              onChange={e => onCustomChange(customFrom, e.target.value)}
+            />
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── Late-to-pack (live state — NOT scoped by the date-range picker) ────────
+// overdue/over48 are absolute counts as of right now, not a period metric —
+// caption says "as of now" so it never reads like it's scoped to the picker
+// above it. overdue=0 is a genuinely calm state (over48 is then necessarily
+// 0 too, since over48 orders are a subset of overdue ones).
+
+function LateToPackCard({ data }: { data: LateToPack | null }) {
+  const { t } = useTranslation()
+  if (!data) return <Skeleton className="h-[118px] rounded-2xl" />
+  const calm = data.overdue === 0
+
+  return (
+    <div className="card p-5 flex flex-col gap-1" data-testid="late-to-pack-card">
+      <p className="text-small text-muted font-medium">{t('overview.lateToPack.title')}</p>
+      <p className={cn('text-h2 font-mono', calm ? 'text-success' : 'text-critical')}>
+        {data.overdue.toLocaleString()}
+      </p>
+      {calm ? (
+        <p className="text-small text-muted mt-1">{t('overview.lateToPack.allCaughtUp')}</p>
       ) : (
-        <p className={cn('text-small font-semibold flex items-center gap-1 mt-1', isGood ? 'text-success' : 'text-critical')}>
-          <span>{up ? '↑' : '↓'}</span>
-          <span>{Math.abs(deltaPct).toFixed(1)}%</span>
-          <span className="text-muted font-normal">{t('overview.stats.vsYesterday')}</span>
-        </p>
+        <>
+          <p className="text-small text-muted mt-1">{t('overview.lateToPack.asOfNow')}</p>
+          {data.over48 > 0 && (
+            <p className="text-small font-semibold text-critical mt-0.5">
+              {t('overview.lateToPack.over48', { count: data.over48 })}
+            </p>
+          )}
+        </>
       )}
     </div>
   )
@@ -703,16 +818,38 @@ export default function Overview() {
   const statusTotals = useZoneFetch<StatusTotals>(getStatusTotals)
   const onboarding   = useZoneFetch<OnboardingStatus>(getOnboardingStatus)
 
-  const trends   = useZoneFetch<MetricTrend[]>(getOverviewTrends)
+  // ── Date-range picker (Zone 1 — top stat cards only) ──────────────────────
+  const [dateRangePreset, setDateRangePreset] = useState<DateRangePreset>('7d')
+  const [customFrom, setCustomFrom] = useState('')
+  const [customTo, setCustomTo]     = useState('')
+  const { from, to } = rangeForPreset(dateRangePreset, customFrom, customTo)
+
+  const trends   = useZoneFetch<MetricTrend[]>(() => getOverviewTrends(from, to))
   const funnel   = useZoneFetch<FunnelCounts>(getOrdersFunnel)
   const valuation = useZoneFetch<Valuation>(getValuation)
   const topSkus  = useZoneFetch<TopSku[]>(getOverviewTopSkus)
   const ordersSummary = useZoneFetch<OrderSummaryCounts>(getOrdersSummary)
   const recentOrders  = useZoneFetch<OrderSummary[]>(() => listOrders({ size: 20 }).then(r => r.items))
+  const lateToPack     = useZoneFetch<LateToPack>(getLateToPack)
 
   const ndrFailed         = useZoneFetch<AlertException[]>(() => fetchExceptionsByType('ndr_failed'))
   const stuckShipment     = useZoneFetch<AlertException[]>(() => fetchExceptionsByType('stuck_shipment'))
   const unmatchedDelivery = useZoneFetch<AlertException[]>(() => fetchExceptionsByType('unmatched_delivery'))
+
+  // Re-fetch trends whenever the selected range changes (skip the very first
+  // render — useZoneFetch's own mount effect already fetched the initial
+  // [from,to] once).
+  const rangeMounted = useRef(false)
+  useEffect(() => {
+    if (!rangeMounted.current) { rangeMounted.current = true; return }
+    trends.refetch()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [from, to])
+
+  function handleCustomRangeChange(nextFrom: string, nextTo: string) {
+    setCustomFrom(nextFrom)
+    setCustomTo(nextTo)
+  }
 
   const [onboardingHidden, setOnboardingHidden] = useState(false)
 
@@ -754,14 +891,13 @@ export default function Overview() {
           </h1>
           <p className="text-small text-muted mt-0.5">{t('overview.tagline')}</p>
         </div>
-        <button
-          type="button"
-          data-testid="today-control"
-          className="flex items-center gap-1.5 bg-elevated border border-line rounded-lg px-3 py-1.5 text-small text-primary"
-        >
-          <span>{t('overview.today')}</span>
-          <ChevronDown size={12} strokeWidth={2} className="text-muted" />
-        </button>
+        <DateRangePicker
+          preset={dateRangePreset}
+          onPresetChange={setDateRangePreset}
+          customFrom={customFrom}
+          customTo={customTo}
+          onCustomChange={handleCustomRangeChange}
+        />
       </div>
 
       {isFreshTenant ? (
@@ -788,14 +924,14 @@ export default function Overview() {
                   label={t(def.labelKey)}
                   trend={trendFor(def.metric)}
                   color={def.color}
-                  goodDirection={def.goodDirection}
+                  format={def.format}
                 />
               ))
             )}
           </div>
 
-          {/* ── Live operations + Alerts ── */}
-          <div className="grid grid-cols-1 lg:grid-cols-[1fr_380px] gap-3.5">
+          {/* ── Live operations + Late-to-pack + Alerts ── */}
+          <div className="grid grid-cols-1 lg:grid-cols-[1fr_220px_380px] gap-3.5">
             <div className="card p-5">
               <p className="text-caption font-bold text-muted uppercase">{t('overview.flow.title')}</p>
               <p className="text-caption text-muted">{t('overview.flow.subtitle')}</p>
@@ -803,6 +939,7 @@ export default function Overview() {
                 <FlowStrip counts={funnel.data} />
               )}
             </div>
+            {lateToPack.error ? <ZoneError /> : <LateToPackCard data={lateToPack.data} />}
             <div className="card p-5" data-testid="alerts-panel">
               <div className="flex items-center justify-between mb-1">
                 <p className="text-caption font-bold text-muted uppercase">{t('overview.alerts.title')}</p>

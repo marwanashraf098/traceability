@@ -27,7 +27,6 @@
   "overview": {
     "title": "Overview",
     "tagline": "nothing moves untraced",
-    "today": "Today",
     "greeting": {
       "morning": "Good morning, {{name}}",
       "afternoon": "Good afternoon, {{name}}",
@@ -99,8 +98,23 @@
       "daysAgo": "{{count}}d ago"
     },
     "stats": {
-      "shipments": "Shipments",
-      "vsYesterday": "vs yesterday"
+      "codDelivered": "COD delivered"
+    },
+    "dateRange": {
+      "today": "Today",
+      "yesterday": "Yesterday",
+      "last7": "Last 7 days",
+      "last30": "Last 30 days",
+      "thisMonth": "This month",
+      "custom": "Custom",
+      "fromLabel": "From date",
+      "toLabel": "To date"
+    },
+    "lateToPack": {
+      "title": "Late to pack",
+      "asOfNow": "as of now",
+      "allCaughtUp": "All caught up",
+      "over48": "{{count}} over 48h"
     },
     "flow": {
       "title": "Live operations",

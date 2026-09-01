@@ -1,9 +1,11 @@
 package com.traceability.overview;
 
 import com.traceability.tenancy.TenantContext;
+import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.server.ResponseStatusException;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
@@ -12,18 +14,27 @@ import java.time.Clock;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneId;
+import java.time.format.DateTimeParseException;
 import java.util.*;
 
 /**
- * Overview dashboard trends (FR-Overview §2) — 5 stat-card sparklines + Top-selling
- * SKUs. LIVE AGGREGATION over source-event timestamps only: no daily-snapshot table,
- * no rollup job, no stored counter that could drift from the ledger.
+ * Overview dashboard trends (FR-Overview §2, extended for the date-range picker +
+ * COD-delivered + Late-to-pack behavior change) — 5 stat-card sparklines, a live
+ * Late-to-pack tile, and Top-selling SKUs. LIVE AGGREGATION over source-event
+ * timestamps only: no daily-snapshot table, no rollup job, no stored counter that
+ * could drift from the ledger.
  *
  * Day bucketing is always Africa/Cairo local calendar days, via the same Cairo-pinned
  * {@link Clock} bean AppConfig already injects app-wide (never the JVM/DB default —
  * confirmed neither is Cairo). Bucketing happens in Java (Instant -> Cairo LocalDate),
- * not in SQL, so all 5 metrics share one bucketing/zero-fill implementation instead of
- * repeating an `AT TIME ZONE 'Africa/Cairo'` CTE five times.
+ * not in SQL, so all metrics share one bucketing/zero-fill implementation instead of
+ * repeating an `AT TIME ZONE 'Africa/Cairo'` CTE for each one.
+ *
+ * The 14-day trailing sparkline (`series`) and the caller-selected [from,to] headline
+ * (`total`) are DELIBERATELY DECOUPLED: the sparkline always shows the same 14-day
+ * shape regardless of which date-range preset is active, while `total` is scoped to
+ * whatever range the caller asked for. This means Today/Yesterday don't collapse the
+ * sparkline to a single point.
  */
 @Service
 public class OverviewService {
@@ -45,26 +56,46 @@ public class OverviewService {
 
     public record TrendPoint(String date, int count) {}
 
-    public record MetricTrend(
-        String metric, int today, int yesterday, Double deltaPct, List<TrendPoint> series) {}
+    // total is a double so it can carry either an exact integer count (orders,
+    // delivered, exceptions, returns) or a fractional EGP amount (cod_delivered)
+    // through one shared shape — matches the frontend's `number` type either way.
+    public record MetricTrend(String metric, double total, List<TrendPoint> series) {}
 
     public record TopSku(String sku, String title, String imageUrl, int units) {}
+
+    public record LateToPack(int overdue, int over48) {}
 
     // ── Trends ───────────────────────────────────────────────────────────────
 
     @Transactional(readOnly = true)
-    public List<MetricTrend> trends() {
+    public List<MetricTrend> trends(String fromStr, String toStr) {
         UUID tid = TenantContext.require();
         LocalDate today = LocalDate.now(clock);
-        Instant lowerBound = today.minusDays(WINDOW_DAYS - 1L).atStartOfDay(CAIRO).toInstant();
-        Timestamp lowerTs = Timestamp.from(lowerBound);
+
+        LocalDate from, to;
+        try {
+            from = fromStr != null ? LocalDate.parse(fromStr) : today.minusDays(6);
+            to   = toStr   != null ? LocalDate.parse(toStr)   : today;
+        } catch (DateTimeParseException e) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "from/to must be YYYY-MM-DD");
+        }
+        if (from.isAfter(to)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "from must not be after to");
+        }
+
+        // The raw-event query's lower bound must cover BOTH the fixed 14-day sparkline
+        // window AND whatever range the caller asked for — a "Last 30 days" or "Custom"
+        // selection can reach further back than the sparkline's own 14 days.
+        LocalDate seriesLower = today.minusDays(WINDOW_DAYS - 1L);
+        LocalDate effectiveLower = seriesLower.isBefore(from) ? seriesLower : from;
+        Timestamp lowerTs = Timestamp.from(effectiveLower.atStartOfDay(CAIRO).toInstant());
 
         List<MetricTrend> out = new ArrayList<>();
-        out.add(toTrend("orders",     bucketize(ordersRaw(tid, lowerTs), today)));
-        out.add(toTrend("shipments",  bucketize(shipmentsRaw(tid, lowerTs), today)));
-        out.add(toTrend("delivered",  bucketize(deliveredRaw(tid, lowerTs), today)));
-        out.add(toTrend("exceptions", bucketize(exceptionsRaw(tid, lowerTs), today)));
-        out.add(toTrend("returns",    bucketize(returnsRaw(tid, lowerTs), today)));
+        out.add(countMetric("orders",     ordersRaw(tid, lowerTs),     today, from, to));
+        out.add(codMetric("cod_delivered", codDeliveredRaw(tid, lowerTs), today, from, to));
+        out.add(countMetric("delivered",  deliveredRaw(tid, lowerTs),  today, from, to));
+        out.add(countMetric("exceptions", exceptionsRaw(tid, lowerTs), today, from, to));
+        out.add(countMetric("returns",    returnsRaw(tid, lowerTs),    today, from, to));
         return out;
     }
 
@@ -78,43 +109,53 @@ public class OverviewService {
             TS_MAPPER, tid, lower);
     }
 
-    // Shipments = shipments.created_at, forward leg only — "first linked/dispatched"
-    // is the outbound-to-customer shipment record's own creation moment. Scoped to
-    // shipment_leg='forward' matching funnel()/throughput()'s existing precedent
-    // (a return-leg shipment record isn't a "dispatch").
-    private List<Instant> shipmentsRaw(UUID tid, Timestamp lower) {
-        return jdbc.query(
-            "SELECT created_at FROM shipments " +
-            "WHERE tenant_id = ? AND shipment_leg = 'forward' AND created_at >= ?",
-            TS_MAPPER, tid, lower);
-    }
-
-    // Delivered = shipment_status_history.occurred_at WHERE internal_state='delivered',
-    // NOT shipments.internal_state. Resolves the Step-0 ambiguity: shipments has no
-    // delivered_at column at all (only last_synced_at, rewritten on every sync, and
-    // created_at) — shipment_status_history is the one real per-transition timestamp,
-    // the same source funnel()/summary() already prefer over shipments' own stored
-    // snapshot fields (see their failed_delivery_attempts comment). Forward leg only,
-    // matching the Shipments metric above.
+    // Delivered = one row per ORDER (not per shipment/event), keyed by the EARLIEST
+    // shipment_status_history.occurred_at where internal_state='delivered' on that
+    // order's forward leg. Deduped via GROUP BY s.order_id — an order that (rarely)
+    // has two forward-leg shipments both independently reach 'delivered' (reship,
+    // data-quality edge case) is counted once, at its first delivery, not twice.
+    // NOT shipments.internal_state: shipments has no delivered_at column at all
+    // (only last_synced_at, rewritten on every sync, and created_at) —
+    // shipment_status_history is the one real per-transition timestamp.
     private List<Instant> deliveredRaw(UUID tid, Timestamp lower) {
         return jdbc.query(
             """
-            SELECT h.occurred_at
+            SELECT MIN(h.occurred_at) AS occurred_at
             FROM shipment_status_history h
             JOIN shipments s ON s.id = h.shipment_id AND s.tenant_id = h.tenant_id
                              AND s.shipment_leg = 'forward'
             WHERE h.tenant_id = ? AND h.internal_state = 'delivered' AND h.occurred_at >= ?
+            GROUP BY s.order_id
             """,
             TS_MAPPER, tid, lower);
     }
 
-    // Returns = return_sessions.opened_at — ALL sessions opened that day regardless of
-    // eventual status (open/closed/abandoned). This is a flow count of work started,
-    // not a stock count of work outstanding (that's /returns/pending, untouched).
-    private List<Instant> returnsRaw(UUID tid, Timestamp lower) {
+    // COD delivered = orders.cod_amount summed once per order that was delivered in
+    // range, keyed at the SAME per-order-deduped delivery moment as `deliveredRaw`
+    // above (mirrors its exact GROUP BY s.order_id dedup — see that method's doc for
+    // why). orders.cod_amount, NOT shipments.cod_amount: shipments.cod_amount is
+    // declared in the schema but never written by any INSERT/UPDATE in the codebase
+    // (verified against all 3 `INSERT INTO shipments` call sites in
+    // ShipmentLinkService — none populate it) — it is permanently NULL. orders.cod_amount
+    // is the one live figure: set from Shopify at sync (ShopifySyncService, "cod"
+    // payment_method => totalPrice) and operator-correctable pre-pack via
+    // FulfillService.updateCod() (FR-7.5). Prepaid orders store cod_amount=NULL —
+    // COALESCE to 0 so they contribute nothing (this is a cash-collected metric, not GMV).
+    private record CodEvent(Instant occurredAt, BigDecimal codAmount) {}
+
+    private List<CodEvent> codDeliveredRaw(UUID tid, Timestamp lower) {
         return jdbc.query(
-            "SELECT opened_at FROM return_sessions WHERE tenant_id = ? AND opened_at >= ?",
-            TS_MAPPER, tid, lower);
+            """
+            SELECT MIN(h.occurred_at) AS occurred_at, COALESCE(o.cod_amount, 0) AS cod_amount
+            FROM shipment_status_history h
+            JOIN shipments s ON s.id = h.shipment_id AND s.tenant_id = h.tenant_id
+                             AND s.shipment_leg = 'forward'
+            JOIN orders o ON o.id = s.order_id AND o.tenant_id = s.tenant_id
+            WHERE h.tenant_id = ? AND h.internal_state = 'delivered' AND h.occurred_at >= ?
+            GROUP BY s.order_id, o.cod_amount
+            """,
+            (rs, i) -> new CodEvent(rs.getTimestamp("occurred_at").toInstant(), rs.getBigDecimal("cod_amount")),
+            tid, lower);
     }
 
     /**
@@ -274,7 +315,16 @@ public class OverviewService {
         return all;
     }
 
-    // ── Bucketing / delta ────────────────────────────────────────────────────
+    // Returns = return_sessions.opened_at — ALL sessions opened that day regardless of
+    // eventual status (open/closed/abandoned). This is a flow count of work started,
+    // not a stock count of work outstanding (that's /returns/pending, untouched).
+    private List<Instant> returnsRaw(UUID tid, Timestamp lower) {
+        return jdbc.query(
+            "SELECT opened_at FROM return_sessions WHERE tenant_id = ? AND opened_at >= ?",
+            TS_MAPPER, tid, lower);
+    }
+
+    // ── Bucketing / range-total helpers ─────────────────────────────────────
 
     private List<TrendPoint> bucketize(List<Instant> raw, LocalDate today) {
         Map<LocalDate, Integer> counts = new HashMap<>();
@@ -289,16 +339,76 @@ public class OverviewService {
         return series;
     }
 
-    private MetricTrend toTrend(String metric, List<TrendPoint> series) {
-        int today     = series.get(series.size() - 1).count();
-        int yesterday = series.get(series.size() - 2).count();
-        // Guard yesterday=0: a percentage change against a zero baseline is either
-        // undefined (0 -> 0) or infinite (0 -> N) — neither is a real percentage.
-        // null lets the frontend render "—"/"New" instead of a fabricated number.
-        Double deltaPct = (yesterday == 0) ? null :
-            BigDecimal.valueOf((today - yesterday) * 100.0 / yesterday)
-                .setScale(1, RoundingMode.HALF_UP).doubleValue();
-        return new MetricTrend(metric, today, yesterday, deltaPct, series);
+    private int countInRange(List<Instant> raw, LocalDate from, LocalDate to) {
+        int n = 0;
+        for (Instant t : raw) {
+            LocalDate d = t.atZone(CAIRO).toLocalDate();
+            if (!d.isBefore(from) && !d.isAfter(to)) n++;
+        }
+        return n;
+    }
+
+    private MetricTrend countMetric(String metric, List<Instant> raw, LocalDate today, LocalDate from, LocalDate to) {
+        return new MetricTrend(metric, countInRange(raw, from, to), bucketize(raw, today));
+    }
+
+    private List<TrendPoint> bucketizeAmount(List<CodEvent> raw, LocalDate today) {
+        Map<LocalDate, BigDecimal> sums = new HashMap<>();
+        for (CodEvent e : raw) {
+            LocalDate d = e.occurredAt().atZone(CAIRO).toLocalDate();
+            sums.merge(d, e.codAmount(), BigDecimal::add);
+        }
+        List<TrendPoint> series = new ArrayList<>(WINDOW_DAYS);
+        for (int i = WINDOW_DAYS - 1; i >= 0; i--) {
+            LocalDate d = today.minusDays(i);
+            BigDecimal sum = sums.getOrDefault(d, BigDecimal.ZERO);
+            series.add(new TrendPoint(d.toString(), sum.setScale(0, RoundingMode.HALF_UP).intValue()));
+        }
+        return series;
+    }
+
+    private double sumInRange(List<CodEvent> raw, LocalDate from, LocalDate to) {
+        BigDecimal sum = BigDecimal.ZERO;
+        for (CodEvent e : raw) {
+            LocalDate d = e.occurredAt().atZone(CAIRO).toLocalDate();
+            if (!d.isBefore(from) && !d.isAfter(to)) sum = sum.add(e.codAmount());
+        }
+        return sum.setScale(2, RoundingMode.HALF_UP).doubleValue();
+    }
+
+    private MetricTrend codMetric(String metric, List<CodEvent> raw, LocalDate today, LocalDate from, LocalDate to) {
+        return new MetricTrend(metric, sumInRange(raw, from, to), bucketizeAmount(raw, today));
+    }
+
+    // ── Late-to-pack (live state, NOT scoped by the date-range picker) ─────────
+    //
+    // overdue = orders still in a pre-pack status (new/confirmed/ready_to_pick/picking
+    // — everything before 'packed' in the order_status enum) whose placed_at is more
+    // than 24h old. over48 = the same predicate at 48h. On-hold/short/blocked orders
+    // are NOT excluded — they're still sitting in a pre-pack status, which is exactly
+    // the condition this tile reports on; special-casing them would hide real backlog.
+    // placed_at IS NOT NULL guard: the column is nullable and an order with no known
+    // placement time can't be judged "late" against it.
+    @Transactional(readOnly = true)
+    public LateToPack lateToPack() {
+        UUID tid = TenantContext.require();
+        Instant now = clock.instant();
+        Timestamp cutoff24 = Timestamp.from(now.minusSeconds(24 * 3600L));
+        Timestamp cutoff48 = Timestamp.from(now.minusSeconds(48 * 3600L));
+
+        Map<String, Object> row = jdbc.queryForMap(
+            "SELECT " +
+            "  COUNT(*) FILTER (WHERE placed_at < ?) AS overdue, " +
+            "  COUNT(*) FILTER (WHERE placed_at < ?) AS over48 " +
+            "FROM orders " +
+            "WHERE tenant_id = ? AND placed_at IS NOT NULL " +
+            "  AND status IN ('new'::order_status, 'confirmed'::order_status, " +
+            "                 'ready_to_pick'::order_status, 'picking'::order_status)",
+            cutoff24, cutoff48, tid);
+
+        return new LateToPack(
+            ((Number) row.get("overdue")).intValue(),
+            ((Number) row.get("over48")).intValue());
     }
 
     // ── Top-selling SKUs ─────────────────────────────────────────────────────

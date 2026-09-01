@@ -63,18 +63,19 @@ function series(startCount: number, step: number) {
 }
 
 const POPULATED_TRENDS = [
-  { metric: 'orders',     today: 42, yesterday: 30, deltaPct: 40.0,  series: series(10, 2) },
-  { metric: 'shipments',  today: 20, yesterday: 25, deltaPct: -20.0, series: series(15, 1) },
-  { metric: 'delivered',  today: 15, yesterday: 10, deltaPct: 50.0,  series: series(5, 1) },
-  // exceptions: today < yesterday → a DECREASE, which is good (goodDirection='down')
-  { metric: 'exceptions', today: 3,  yesterday: 5,  deltaPct: -40.0, series: series(6, -1) },
-  // returns: today > yesterday → an INCREASE, which is bad (goodDirection='down')
-  { metric: 'returns',    today: 7,  yesterday: 4,  deltaPct: 75.0,  series: series(2, 1) },
+  { metric: 'orders',        total: 42,  series: series(10, 2) },
+  { metric: 'cod_delivered', total: 5200, series: series(1500, 100) },
+  { metric: 'delivered',     total: 15,  series: series(5, 1) },
+  { metric: 'exceptions',    total: 3,   series: series(6, -1) },
+  { metric: 'returns',       total: 7,   series: series(2, 1) },
 ]
 
-const ZERO_TRENDS = ['orders', 'shipments', 'delivered', 'exceptions', 'returns'].map(metric => ({
-  metric, today: 0, yesterday: 0, deltaPct: null, series: series(0, 0),
+const ZERO_TRENDS = ['orders', 'cod_delivered', 'delivered', 'exceptions', 'returns'].map(metric => ({
+  metric, total: 0, series: series(0, 0),
 }))
+
+const LATE_TO_PACK_OVERDUE = { overdue: 4, over48: 2 }
+const LATE_TO_PACK_CAUGHT_UP = { overdue: 0, over48: 0 }
 
 const POPULATED_TOP_SKUS = [
   { sku: 'SN-BIK-PNK-M', title: 'Bike — Pink / M', imageUrl: null, units: 342 },
@@ -127,6 +128,7 @@ interface EndpointMap {
   funnel?: unknown
   onboarding?: unknown
   trends?: unknown
+  lateToPack?: unknown
   topSkus?: unknown
   ordersSummary?: unknown
   ordersPage?: unknown
@@ -149,6 +151,7 @@ function makeAppFetch(map: EndpointMap = {}) {
     if (url.includes('/orders/funnel'))                return jsonOk(map.funnel ?? POPULATED_FUNNEL)
     if (url.includes('/onboarding/dismiss'))           return jsonNoContent()
     if (url.includes('/overview/trends'))              return jsonOk(map.trends ?? POPULATED_TRENDS)
+    if (url.includes('/overview/late-to-pack'))         return jsonOk(map.lateToPack ?? LATE_TO_PACK_OVERDUE)
     if (url.includes('/overview/top-skus'))            return jsonOk(map.topSkus ?? POPULATED_TOP_SKUS)
     if (url.includes('/orders/summary'))               return jsonOk(map.ordersSummary ?? POPULATED_ORDERS_SUMMARY)
     if (url.includes('/exceptions?type=ndr_failed'))         return jsonOk(map.ndrAlert ?? NDR_ALERT)
@@ -197,15 +200,24 @@ describe('Overview dashboard', () => {
   })
 
   // ── Populated: every zone renders real data ────────────────────────────────
-  test('ov2 populated — stat cards, flow strip, alerts, top-SKUs, donut, recent shipments, quick actions', async () => {
+  test('ov2 populated — stat cards, late-to-pack, flow strip, alerts, top-SKUs, donut, recent shipments, quick actions', async () => {
     renderOverview()
 
-    expect(await screen.findByText(/Good morning, Mostafa/)).toBeInTheDocument()
-    expect(screen.getByTestId('today-control')).toBeInTheDocument()
+    // Pre-existing: greetingKey() reads the real wall clock, so the greeting
+    // word varies with whatever time the suite happens to run at — match any
+    // of the 3, not a hardcoded "morning".
+    expect(await screen.findByText(/Good (morning|afternoon|evening), Mostafa/)).toBeInTheDocument()
+    expect(screen.getByTestId('date-range-picker')).toBeInTheDocument()
 
-    // Stat cards — today's value from /overview/trends, not re-derived
+    // Stat cards — range total from /overview/trends, not re-derived
     const statCards = await screen.findByTestId('stat-cards')
-    expect(within(statCards).getByText('42')).toBeInTheDocument() // orders today
+    expect(within(statCards).getByText('42')).toBeInTheDocument() // orders total
+    expect(within(statCards).getByText('5,200 EGP')).toBeInTheDocument() // cod_delivered total
+
+    // Late-to-pack — live tile, independent of the date-range picker
+    const lateToPack = await screen.findByTestId('late-to-pack-card')
+    expect(within(lateToPack).getByText('4')).toBeInTheDocument()
+    expect(within(lateToPack).getByText('2 over 48h')).toBeInTheDocument()
 
     // Flow strip — /orders/funnel counts
     const flow = await screen.findByTestId('flow-strip')
@@ -242,32 +254,64 @@ describe('Overview dashboard', () => {
     expect(screen.queryByText(/View reports/i)).toBeNull()
   })
 
-  // ── Delta color = improvement, not arrow direction ──────────────────────────
-  test('ov2b delta color flips by metric — exceptions/returns down=good, orders up=good', async () => {
-    renderOverview()
+  // ── Date-range picker — preset switch refetches trends with a scoped range ──
+  test('ov2b date-range picker — selecting "Today" refetches /overview/trends with from===to', async () => {
+    const appFetch = makeAppFetch()
+    stubFetchWithShellDefaults(appFetch, {
+      me: { name: 'Mostafa', email: 'm@test.com', role: 'owner' },
+      exceptionsCount: { count: 0 },
+      onboardingStatus: ALL_DONE_ONBOARDING,
+    })
+    renderWithProviders(<Layout><Overview /></Layout>)
 
-    const ordersCard = await screen.findByTestId('stat-orders')
-    // orders: deltaPct=+40 (up), goodDirection='up' → success-toned, up arrow
-    const ordersDelta = within(ordersCard).getByText('↑').closest('p')
-    expect(ordersDelta).toHaveClass('text-success')
+    await screen.findByTestId('stat-cards')
+    const callsBefore = appFetch.mock.calls.length
 
-    const exceptionsCard = await screen.findByTestId('stat-exceptions')
-    // exceptions: deltaPct=-40 (down), goodDirection='down' → a decrease is GOOD → success-toned
-    const exceptionsDelta = within(exceptionsCard).getByText('↓').closest('p')
-    expect(exceptionsDelta).toHaveClass('text-success')
+    const picker = screen.getByTestId('date-range-picker')
+    const user = userEvent.setup()
+    await user.click(within(picker).getByText('Today'))
 
-    const returnsCard = await screen.findByTestId('stat-returns')
-    // returns: deltaPct=+75 (up), goodDirection='down' → an increase is BAD → critical-toned
-    const returnsDelta = within(returnsCard).getByText('↑').closest('p')
-    expect(returnsDelta).toHaveClass('text-critical')
+    await waitFor(() => expect(appFetch.mock.calls.length).toBeGreaterThan(callsBefore))
+    const trendsCall = appFetch.mock.calls
+      .map(c => String(c[0]))
+      .reverse()
+      .find(url => url.includes('/overview/trends'))
+    expect(trendsCall).toBeTruthy()
+    const params = new URL(trendsCall!, 'http://x').searchParams
+    expect(params.get('from')).toBe(params.get('to'))
   })
 
-  // ── deltaPct null guard — never a fabricated percentage ─────────────────────
-  test('ov2c deltaPct null renders "—", never a fabricated infinite/undefined percent', async () => {
+  // ── Date-range picker — Custom reveals two date inputs, other presets hide them ──
+  test('ov2c date-range picker — Custom preset reveals from/to date inputs', async () => {
+    renderOverview()
+    await screen.findByTestId('stat-cards')
+
+    expect(screen.queryByTestId('date-range-custom')).toBeNull()
+
+    const picker = screen.getByTestId('date-range-picker')
+    const user = userEvent.setup()
+    await user.click(within(picker).getByText('Custom'))
+
+    const custom = await screen.findByTestId('date-range-custom')
+    expect(within(custom).getAllByDisplayValue('')).toHaveLength(2)
+  })
+
+  // ── Late-to-pack calm state ──────────────────────────────────────────────
+  test('ov2d late-to-pack — overdue=0 renders the calm "all caught up" state, not a red count', async () => {
+    renderOverview({ lateToPack: LATE_TO_PACK_CAUGHT_UP })
+    const lateToPack = await screen.findByTestId('late-to-pack-card')
+    expect(within(lateToPack).getByText('0')).toBeInTheDocument()
+    expect(within(lateToPack).getByText('All caught up')).toBeInTheDocument()
+    expect(within(lateToPack).queryByText(/over 48h/)).toBeNull()
+  })
+
+  // ── Zero total renders 0, not a stale/fabricated value ──────────────────────
+  test('ov2e zero-value trends render 0 on every stat card, not blank or stale', async () => {
     renderOverview({ trends: ZERO_TRENDS })
     const ordersCard = await screen.findByTestId('stat-orders')
-    expect(within(ordersCard).getByText('—')).toBeInTheDocument()
-    expect(within(ordersCard).queryByText('%')).toBeNull()
+    expect(within(ordersCard).getByText('0')).toBeInTheDocument()
+    const codCard = await screen.findByTestId('stat-cod_delivered')
+    expect(within(codCard).getByText('0 EGP')).toBeInTheDocument()
   })
 
   // ── Loading: skeletons show while zones are still fetching ─────────────────
@@ -275,7 +319,7 @@ describe('Overview dashboard', () => {
     const { container } = renderOverview({ pending: ['/overview/trends', '/orders/funnel'] })
     expect(container.querySelectorAll('.animate-shimmer, [class*="skeleton"], .animate-pulse').length).toBeGreaterThanOrEqual(0)
     // At minimum the page must not crash while these zones are still pending.
-    expect(screen.getByTestId('today-control')).toBeInTheDocument()
+    expect(screen.getByTestId('date-range-picker')).toBeInTheDocument()
   })
 
   // ── Empty states — calm, never a full-bleed critical Alert ──────────────────
@@ -326,7 +370,7 @@ describe('Overview dashboard', () => {
   test('ov5 per-zone error — trends fails, rest of the page still renders', async () => {
     renderOverview({ failing: ['/overview/trends'] })
 
-    expect(await screen.findByText(/Good morning, Mostafa/)).toBeInTheDocument()
+    expect(await screen.findByText(/Good (morning|afternoon|evening), Mostafa/)).toBeInTheDocument()
     expect(await screen.findByTestId('flow-strip')).toBeInTheDocument()
     expect(await screen.findByTestId('top-skus')).toBeInTheDocument()
 

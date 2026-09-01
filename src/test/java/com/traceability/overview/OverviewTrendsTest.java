@@ -17,28 +17,44 @@ import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
 import java.time.Clock;
+import java.time.LocalDate;
 import java.time.ZoneId;
 import java.util.List;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
- * GET /overview/trends and GET /overview/top-skus (FR-Overview §2).
+ * GET /overview/trends, GET /overview/late-to-pack, and GET /overview/top-skus
+ * (FR-Overview §2, extended for the date-range picker + COD-delivered + Late-to-pack
+ * behavior change).
  *
- * ovt1 — orders series: today's Cairo-day count reflects seeded orders.
- * ovt2 — shipments series: forward-leg shipments count; a return-leg shipment created
- *        the same moment does NOT.
- * ovt3 — delivered series: sourced from shipment_status_history (internal_state=
- *        'delivered'), not the shipments.internal_state snapshot.
- * ovt4 — exceptions series: an event-based detector (lost) counts; a refresh-based
- *        one (high_attempts' own condition) does NOT — proves the 12-vs-8 boundary,
- *        not just that "some number" comes back.
- * ovt5 — returns series: return_sessions.opened_at, regardless of eventual status.
- * ovt6 — deltaPct is null when yesterday=0 (guard), never a fabricated number.
- * ovt7 — top-skus: units summed per variant, cancelled order excluded, sorted desc.
- * ovt8 — cross-tenant isolation + same-tenant positive control, trends().
- * ovt9 — cross-tenant isolation + same-tenant positive control, topSkus().
+ * ovt1  — orders total: default range (no from/to) is Last-7-days and reflects seeded
+ *         orders; series stays a fixed 14-day trailing window regardless.
+ * ovt2  — cod_delivered total: orders.cod_amount summed once per order delivered in
+ *         range, deduped per order even when the order has 2 forward-leg shipments
+ *         that both independently reach 'delivered' — proves the per-order GROUP BY
+ *         dedup, not just that "some number" comes back. A prepaid order (cod_amount
+ *         NULL) contributes 0, not a null-poisoned sum.
+ * ovt3  — delivered total: sourced from shipment_status_history (internal_state=
+ *         'delivered'), not the shipments.internal_state snapshot; same per-order
+ *         dedup as cod_delivered.
+ * ovt4  — exceptions total: an event-based detector (lost) counts; a refresh-based
+ *         one (high_attempts' own condition) does NOT — proves the 12-vs-8 boundary,
+ *         not just that "some number" comes back.
+ * ovt5  — returns total: return_sessions.opened_at, regardless of eventual status.
+ * ovt6  — from/to range restricts `total` but never `series` — an order placed 10
+ *         days ago is excluded from a Last-7-days total but still shows up in the
+ *         fixed 14-day sparkline.
+ * ovt7  — top-skus: units summed per variant, cancelled order excluded, sorted desc.
+ * ovt8  — cross-tenant isolation + same-tenant positive control, trends().
+ * ovt9  — cross-tenant isolation + same-tenant positive control, topSkus().
+ * ovt10 — late-to-pack: an order placed 30h ago in a pre-pack status counts toward
+ *         overdue but not over48; one placed 50h ago counts toward both; a 'packed'
+ *         order past 24h does NOT count (already past pre-pack); on-hold does not
+ *         exclude an otherwise-overdue pre-pack order.
+ * ovt11 — trends: malformed from/to → 400, not a 500 or a silently-ignored param.
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.NONE)
 @Testcontainers
@@ -134,45 +150,64 @@ class OverviewTrendsTest {
         jdbc.update("DELETE FROM unlinked_bosta_deliveries WHERE tenant_id IN (?, ?)", tenantA, tenantB);
     }
 
-    // ── ovt1: orders ─────────────────────────────────────────────────────────
+    // ── ovt1: orders — default range (no from/to) is Last-7-days ──────────────
 
     @Test
-    void ovt1_ordersSeries_reflectsSeededOrdersToday() {
+    void ovt1_ordersTotal_defaultRangeReflectsSeededOrders() {
         insertOrder(tenantA, storeA, "new", false, "now()", null, null, null);
         insertOrder(tenantA, storeA, "new", false, "now()", null, null, null);
         insertOrder(tenantB, storeB, "new", false, "now()", null, null, null); // noise
 
         TenantContext.set(tenantA);
         List<OverviewService.MetricTrend> trends;
-        try { trends = overview.trends(); } finally { TenantContext.clear(); }
+        try { trends = overview.trends(null, null); } finally { TenantContext.clear(); }
 
         OverviewService.MetricTrend orders = byMetric(trends, "orders");
-        assertThat(orders.today()).isEqualTo(2);
+        assertThat(orders.total()).isEqualTo(2.0);
         assertThat(orders.series()).hasSize(14);
         assertThat(orders.series().get(13).count()).isEqualTo(2);
     }
 
-    // ── ovt2: shipments (forward leg only) ──────────────────────────────────
+    // ── ovt2: cod_delivered — per-order dedup, prepaid contributes 0 ──────────
 
     @Test
-    void ovt2_shipmentsSeries_forwardLegOnly_returnLegExcluded() {
-        UUID orderId = insertOrder(tenantA, storeA, "packed", false, "now()", null, null, null);
-        insertShipment(tenantA, orderId, "forward", "created", "now()", 0, false, null);
-        insertShipment(tenantA, orderId, "return",  "created", "now()", 0, false, null);
+    void ovt2_codDeliveredTotal_dedupsPerOrder_prepaidContributesZero() {
+        // Order 1: cod=250, TWO forward-leg shipments (reship scenario) whose
+        // shipment_status_history BOTH independently recorded a 'delivered' event —
+        // must be summed ONCE, not twice. ship1a's own internal_state is set to
+        // 'terminated' (not 'delivered') solely to satisfy
+        // ux_active_shipment_per_order_leg (V43, only excludes terminated/cancelled),
+        // which otherwise blocks two live forward shipments on one order — its
+        // shipment_status_history 'delivered' row (append-only, never deleted) still
+        // stands, modeling a shipment that was delivered then later corrected/
+        // terminated before a reship, which is exactly the edge case the per-order
+        // dedup in OverviewService guards against.
+        UUID order1 = insertOrder(tenantA, storeA, "delivered", false, "now()", null, null, null);
+        jdbc.update("UPDATE orders SET cod_amount = 250 WHERE id = ?", order1);
+        UUID ship1a = insertShipment(tenantA, order1, "forward", "terminated", "now() - interval '3 hours'", 1, false, null);
+        insertStatusHistory(tenantA, ship1a, "delivered", "now() - interval '3 hours'");
+        UUID ship1b = insertShipment(tenantA, order1, "forward", "delivered", "now()", 1, false, null);
+        insertStatusHistory(tenantA, ship1b, "delivered", "now()");
+
+        // Order 2: prepaid (cod_amount NULL) — delivered, contributes 0, not a
+        // null-poisoned sum.
+        UUID order2 = insertOrder(tenantA, storeA, "delivered", false, "now()", null, null, null);
+        UUID ship2 = insertShipment(tenantA, order2, "forward", "delivered", "now()", 1, false, null);
+        insertStatusHistory(tenantA, ship2, "delivered", "now()");
 
         TenantContext.set(tenantA);
         List<OverviewService.MetricTrend> trends;
-        try { trends = overview.trends(); } finally { TenantContext.clear(); }
+        try { trends = overview.trends(null, null); } finally { TenantContext.clear(); }
 
-        assertThat(byMetric(trends, "shipments").today())
-            .as("only the forward-leg shipment counts, not the return-leg one created the same moment")
-            .isEqualTo(1);
+        assertThat(byMetric(trends, "cod_delivered").total())
+            .as("order1's 250 counted once despite 2 delivered shipments; prepaid order2 contributes 0")
+            .isEqualTo(250.0);
     }
 
     // ── ovt3: delivered (shipment_status_history, not the shipments snapshot) ──
 
     @Test
-    void ovt3_deliveredSeries_sourcedFromStatusHistory() {
+    void ovt3_deliveredTotal_sourcedFromStatusHistory_dedupedPerOrder() {
         UUID orderId = insertOrder(tenantA, storeA, "delivered", false, "now()", null, null, null);
         UUID shipmentId = insertShipment(tenantA, orderId, "forward", "delivered", "now()", 1, false, null);
         insertStatusHistory(tenantA, shipmentId, "created", "now() - interval '2 hours'");
@@ -180,64 +215,74 @@ class OverviewTrendsTest {
 
         TenantContext.set(tenantA);
         List<OverviewService.MetricTrend> trends;
-        try { trends = overview.trends(); } finally { TenantContext.clear(); }
+        try { trends = overview.trends(null, null); } finally { TenantContext.clear(); }
 
-        assertThat(byMetric(trends, "delivered").today()).isEqualTo(1);
+        assertThat(byMetric(trends, "delivered").total()).isEqualTo(1.0);
     }
 
     // ── ovt4: exceptions — event-based counts, refresh-based excluded ─────────
 
     @Test
-    void ovt4_exceptionsSeries_eventBasedCounts_refreshBasedExcluded() {
+    void ovt4_exceptionsTotal_eventBasedCounts_refreshBasedExcluded() {
         // Event-based, included: a piece currently 'lost'.
         insertPiece(tenantA, variantA, "lost", "now()");
 
         // Refresh-based, EXCLUDED: a shipment matching high_attempts' own condition
         // (number_of_attempts >= 2, non-terminal). If exceptionsRaw() ever regresses
-        // to include this detector, this assertion catches it (today would be 2, not 1).
+        // to include this detector, this assertion catches it (total would be 2, not 1).
         UUID orderId = insertOrder(tenantA, storeA, "with_courier", false, "now()", null, null, null);
         insertShipment(tenantA, orderId, "forward", "with_courier", "now()", 3, false, null);
 
         TenantContext.set(tenantA);
         List<OverviewService.MetricTrend> trends;
-        try { trends = overview.trends(); } finally { TenantContext.clear(); }
+        try { trends = overview.trends(null, null); } finally { TenantContext.clear(); }
 
-        assertThat(byMetric(trends, "exceptions").today())
+        assertThat(byMetric(trends, "exceptions").total())
             .as("only the lost piece (event-based) counts; the high-attempts shipment (refresh-based) must not")
-            .isEqualTo(1);
+            .isEqualTo(1.0);
     }
 
     // ── ovt5: returns ────────────────────────────────────────────────────────
 
     @Test
-    void ovt5_returnsSeries_reflectsOpenedSessionsRegardlessOfStatus() {
+    void ovt5_returnsTotal_reflectsOpenedSessionsRegardlessOfStatus() {
         insertReturnSession(tenantA, actorA, "open", "now()");
         insertReturnSession(tenantA, actorA, "abandoned", "now()");
 
         TenantContext.set(tenantA);
         List<OverviewService.MetricTrend> trends;
-        try { trends = overview.trends(); } finally { TenantContext.clear(); }
+        try { trends = overview.trends(null, null); } finally { TenantContext.clear(); }
 
-        assertThat(byMetric(trends, "returns").today())
+        assertThat(byMetric(trends, "returns").total())
             .as("flow count = sessions opened that day, regardless of eventual status")
-            .isEqualTo(2);
+            .isEqualTo(2.0);
     }
 
-    // ── ovt6: deltaPct guard ─────────────────────────────────────────────────
+    // ── ovt6: from/to restricts `total`, never `series` ────────────────────────
 
     @Test
-    void ovt6_deltaPct_nullWhenYesterdayIsZero() {
+    void ovt6_dateRange_restrictsTotalOnly_seriesStaysFixed14Days() {
+        // Placed 10 days ago — outside a Last-7-days total, but still inside the
+        // fixed 14-day sparkline window.
+        insertOrder(tenantA, storeA, "new", false, "now() - interval '10 days'", null, null, null);
+        // Placed today — inside both.
         insertOrder(tenantA, storeA, "new", false, "now()", null, null, null);
+
+        LocalDate today = LocalDate.now(CAIRO_CLOCK.getZone());
+        String from = today.minusDays(6).toString();
+        String to   = today.toString();
 
         TenantContext.set(tenantA);
         List<OverviewService.MetricTrend> trends;
-        try { trends = overview.trends(); } finally { TenantContext.clear(); }
+        try { trends = overview.trends(from, to); } finally { TenantContext.clear(); }
 
         OverviewService.MetricTrend orders = byMetric(trends, "orders");
-        assertThat(orders.yesterday()).isEqualTo(0);
-        assertThat(orders.deltaPct())
-            .as("no fabricated infinite/undefined percentage against a zero baseline")
-            .isNull();
+        assertThat(orders.total())
+            .as("Last-7-days total excludes the order placed 10 days ago")
+            .isEqualTo(1.0);
+        assertThat(orders.series().stream().mapToInt(OverviewService.TrendPoint::count).sum())
+            .as("the 14-day sparkline still includes both seeded orders")
+            .isEqualTo(2);
     }
 
     // ── ovt7: top-skus ───────────────────────────────────────────────────────
@@ -273,10 +318,10 @@ class OverviewTrendsTest {
             TenantContext.set(tenantA);
             try {
                 appUserTx.execute(status -> {
-                    List<OverviewService.MetricTrend> trends = appUserOverview.trends();
-                    assertThat(byMetric(trends, "orders").today())
+                    List<OverviewService.MetricTrend> trends = appUserOverview.trends(null, null);
+                    assertThat(byMetric(trends, "orders").total())
                         .as("ovt8: same-tenant positive control sees only tenant A's order")
-                        .isEqualTo(1);
+                        .isEqualTo(1.0);
                     return null;
                 });
             } finally {
@@ -310,6 +355,47 @@ class OverviewTrendsTest {
             }
         } catch (org.springframework.dao.DataAccessResourceFailureException e) {
             Assumptions.assumeTrue(false, "app_user not available in test container — RLS assertion skipped: " + e.getMessage());
+        }
+    }
+
+    // ── ovt10: late-to-pack ─────────────────────────────────────────────────────
+
+    @Test
+    void ovt10_lateToPack_overdueAndOver48_onHoldStillCounts_packedExcluded() {
+        // 30h old, pre-pack ('ready_to_pick') — overdue, not over48.
+        insertOrder(tenantA, storeA, "ready_to_pick", false, "now() - interval '30 hours'", null, null, null);
+        // 50h old, pre-pack ('new'), ON HOLD — must still count: on-hold is not a
+        // carve-out, per FR-Overview §2's explicit "do NOT special-case" instruction.
+        insertOrder(tenantA, storeA, "new", true, "now() - interval '50 hours'", null, null, null);
+        // 30h old but already 'packed' — must NOT count, it's past pre-pack.
+        insertOrder(tenantA, storeA, "packed", false, "now() - interval '30 hours'", null, null, null);
+        // 1h old, pre-pack — too fresh, must NOT count.
+        insertOrder(tenantA, storeA, "picking", false, "now() - interval '1 hour'", null, null, null);
+        insertOrder(tenantB, storeB, "new", false, "now() - interval '50 hours'", null, null, null); // noise
+
+        TenantContext.set(tenantA);
+        OverviewService.LateToPack result;
+        try { result = overview.lateToPack(); } finally { TenantContext.clear(); }
+
+        assertThat(result.overdue())
+            .as("the 30h and 50h pre-pack orders both count; 'packed' and the 1h-old one don't")
+            .isEqualTo(2);
+        assertThat(result.over48())
+            .as("only the 50h order clears the 48h bar")
+            .isEqualTo(1);
+    }
+
+    // ── ovt11: malformed from/to → 400, not a 500 or a silently-ignored param ──
+
+    @Test
+    void ovt11_trends_malformedDateParam_throws400() {
+        TenantContext.set(tenantA);
+        try {
+            assertThatThrownBy(() -> overview.trends("not-a-date", null))
+                .isInstanceOf(org.springframework.web.server.ResponseStatusException.class)
+                .hasMessageContaining("400");
+        } finally {
+            TenantContext.clear();
         }
     }
 

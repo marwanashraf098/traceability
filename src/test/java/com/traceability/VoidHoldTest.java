@@ -291,7 +291,7 @@ class VoidHoldTest {
 
         TenantContext.set(tenantId);
         try {
-            overviewService.trends(); // exercises exceptionsRaw() internally — must not throw
+            overviewService.trends(null, null); // exercises exceptionsRaw() internally — must not throw
         } finally {
             TenantContext.clear();
         }

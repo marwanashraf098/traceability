@@ -104,6 +104,7 @@ class RlsCoverageTest {
             "/api/v1/activity/recent",
             "/api/v1/exchanges",
             "/api/v1/overview/trends",
+            "/api/v1/overview/late-to-pack",
             "/api/v1/overview/top-skus",
             "/api/v1/inventory/stock",
             "/api/v1/inventory/variants/{variantId}/breakdown",
@@ -938,7 +939,21 @@ class RlsCoverageTest {
         Map<String, Object> orders = body.stream()
             .filter(m -> "orders".equals(m.get("metric")))
             .findFirst().orElseThrow(() -> new AssertionError("orders metric not found"));
-        assertThat(((Number) orders.get("today")).intValue()).isGreaterThanOrEqualTo(1);
+        assertThat(((Number) orders.get("total")).intValue()).isGreaterThanOrEqualTo(1);
+    }
+
+    @Test
+    void overviewLateToPack_reflectsSeededPrePackOrder() {
+        jdbc.update(
+                "INSERT INTO orders (tenant_id, store_id, external_id, number, status, " +
+                "    payment_method, placed_at, on_hold) " +
+                "VALUES (?, ?, 'EXT-CVG-LATETOPACK', '#CVG-LATETOPACK', 'new'::order_status, " +
+                "    'cod', now() - interval '30 hours', false)",
+                tenantId, storeId);
+
+        ResponseEntity<Map> resp = get("/api/v1/overview/late-to-pack", Map.class);
+        assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(((Number) resp.getBody().get("overdue")).intValue()).isGreaterThanOrEqualTo(1);
     }
 
     @Test
