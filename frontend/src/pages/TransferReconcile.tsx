@@ -221,7 +221,14 @@ export default function TransferReconcile() {
       {/* Per-line classify + live balance */}
       <Card className="space-y-3">
         <h2 className="text-body font-semibold text-primary">{t('transfers.reconcile.linesTitle')}</h2>
-        <div className="overflow-x-auto">
+        {/* Shield this table from useScanner's document-wide click-refocus listener —
+            same technique Modal already uses (stopPropagation on the container so the
+            click never bubbles to document). Without this, clicking a shortfall Input
+            sets focus there, then the bubbled click reaches useScanner's global
+            listener and steals focus straight back to the scan bar. useScanner.ts
+            itself is SAFETY-CRITICAL and untouched; this scopes the fix to the one
+            screen that puts other inputs next to a scan bar outside a modal. */}
+        <div className="overflow-x-auto" onClick={e => e.stopPropagation()}>
           <table className="min-w-full">
             <thead>
               <tr className="border-b border-line">
@@ -262,6 +269,14 @@ export default function TransferReconcile() {
                           disabled={outstanding === 0}
                           value={inputs[field]}
                           onChange={e => setLineInput(line.id, field, e.target.value)}
+                          onKeyDown={e => {
+                            if (e.key !== 'Enter') return
+                            e.preventDefault()
+                            if (canSubmit) handleClassify(line)
+                            // Return focus to the scan bar so a subsequent scan can't
+                            // land in this quantity field instead.
+                            scanner.inputRef.current?.focus()
+                          }}
                           className="w-16"
                         />
                       </td>

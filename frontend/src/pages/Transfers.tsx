@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
-import { Badge, Button, EmptyState, Input, Select, TableSkeleton, Alert } from '../components/ui'
+import { Badge, Button, EmptyState, Input, Select, StatCard, TableSkeleton, Alert } from '../components/ui'
 import {
   listOpenTransfers, listTransferDestinations, createTransfer,
   TransferSummary, TransferType, TRANSFER_TYPES, LocationOption, TransferCommandError,
@@ -62,6 +62,10 @@ export default function Transfers() {
     )
   }
 
+  const openCount = transfers.filter(tr => tr.status === 'open').length
+  const reconcilingCount = transfers.filter(tr => tr.status === 'reconciling').length
+  const outstandingTotal = transfers.reduce((sum, tr) => sum + tr.outstanding_count, 0)
+
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
@@ -69,6 +73,16 @@ export default function Transfers() {
         <Button size="sm" onClick={() => setView('create')}>
           + {t('transfers.new')}
         </Button>
+      </div>
+
+      {/* Summary tiles — derived client-side from the already-fetched open+reconciling
+          set (listOpenTransfers() returns the full set with a per-row outstanding_count,
+          not paginated), so no extra fetch is needed. Containers stay neutral (StatCard's
+          default); tone lives on the number only. */}
+      <div className="grid grid-cols-3 gap-3" data-testid="transfers-summary">
+        <StatCard label={t('transfers.summary.open')} value={openCount} tone="neutral" />
+        <StatCard label={t('transfers.summary.reconciling')} value={reconcilingCount} tone="warning" />
+        <StatCard label={t('transfers.summary.outstanding')} value={outstandingTotal} tone="warning" />
       </div>
 
       {error && <Alert tone="critical" title={error} />}

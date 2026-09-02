@@ -1531,6 +1531,11 @@
     "title": "Transfers",
     "new": "New Transfer",
     "empty": "No transfers yet",
+    "summary": {
+      "open": "Open",
+      "reconciling": "Reconciling",
+      "outstanding": "Pieces Outstanding"
+    },
     "col": {
       "destination": "Destination",
       "type": "Type",

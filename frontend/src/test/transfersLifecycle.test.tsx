@@ -8,6 +8,7 @@ import Transfers from '../pages/Transfers'
 import TransferScanOut from '../pages/TransferScanOut'
 import TransferDetail from '../pages/TransferDetail'
 import TransferReconcile from '../pages/TransferReconcile'
+import i18n from '../i18n'
 
 // FR-22.9 — one end-to-end test through the FULL transfer lifecycle, driven
 // through real navigation (react-router, not four isolated renders): create →
@@ -236,5 +237,74 @@ describe('FR-22.9 — Transfers full lifecycle', () => {
 
     // ── 7. Final state: navigated back to detail, shows closed ──────────────
     await screen.findByText('This transfer is closed')
+  })
+})
+
+describe('Transfers summary tiles', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    vi.mocked(api.getRoleFromToken).mockReturnValue('owner')
+  })
+
+  test('ts1 — tiles derive open/reconciling/outstanding from the already-fetched list, zero renders as 0', async () => {
+    vi.mocked(api.listOpenTransfers).mockResolvedValue([
+      { id: 't1', transfer_type: 'showroom', status: 'open', note: null, expected_return_at: null,
+        created_by: 'u1', created_at: new Date().toISOString(),
+        destination_location_id: 'd1', destination_location_name: 'Vendor A', outstanding_count: 3 },
+      { id: 't2', transfer_type: 'repair', status: 'open', note: null, expected_return_at: null,
+        created_by: 'u1', created_at: new Date().toISOString(),
+        destination_location_id: 'd2', destination_location_name: 'Vendor B', outstanding_count: 2 },
+      { id: 't3', transfer_type: 'dryclean', status: 'reconciling', note: null, expected_return_at: null,
+        created_by: 'u1', created_at: new Date().toISOString(),
+        destination_location_id: 'd3', destination_location_name: 'Vendor C', outstanding_count: 1 },
+    ])
+
+    renderWithProviders(
+      <Routes><Route path="/transfers" element={<Transfers />} /></Routes>,
+      { initialEntries: ['/transfers'] },
+    )
+
+    const tiles = await screen.findByTestId('transfers-summary')
+    expect(within(tiles).getByText('Open')).toBeInTheDocument()
+    expect(within(tiles).getByText('2')).toBeInTheDocument() // open count
+    expect(within(tiles).getByText('Reconciling')).toBeInTheDocument()
+    expect(within(tiles).getAllByText('1').length).toBeGreaterThan(0) // reconciling count
+    expect(within(tiles).getByText('Pieces Outstanding')).toBeInTheDocument()
+    expect(within(tiles).getByText('6')).toBeInTheDocument() // 3+2+1 outstanding
+  })
+
+  test('ts2 — empty list renders tiles at 0, not hidden', async () => {
+    vi.mocked(api.listOpenTransfers).mockResolvedValue([])
+
+    renderWithProviders(
+      <Routes><Route path="/transfers" element={<Transfers />} /></Routes>,
+      { initialEntries: ['/transfers'] },
+    )
+
+    const tiles = await screen.findByTestId('transfers-summary')
+    expect(within(tiles).getAllByText('0')).toHaveLength(3)
+  })
+
+  // NOTE: renderWithProviders uses its own English-only i18next instance — a
+  // pre-existing harness limitation (see returns.test.tsx's rt5) — so this only
+  // exercises layout under dir="rtl", not actual Arabic strings; string-level AR
+  // content is confirmed at the live-acceptance pass instead.
+  test('ts3 RTL layout — tiles render without crash under dir=rtl', async () => {
+    await i18n.changeLanguage('ar')
+    vi.mocked(api.listOpenTransfers).mockResolvedValue([
+      { id: 't1', transfer_type: 'showroom', status: 'open', note: null, expected_return_at: null,
+        created_by: 'u1', created_at: new Date().toISOString(),
+        destination_location_id: 'd1', destination_location_name: 'Vendor A', outstanding_count: 5 },
+    ])
+
+    renderWithProviders(
+      <Routes><Route path="/transfers" element={<Transfers />} /></Routes>,
+      { initialEntries: ['/transfers'] },
+    )
+
+    const tiles = await screen.findByTestId('transfers-summary')
+    expect(document.documentElement.dir).toBe('rtl')
+    expect(within(tiles).getByText('5')).toBeInTheDocument()
+    await i18n.changeLanguage('en')
   })
 })
