@@ -1610,9 +1610,11 @@
       "reprintOutstanding": "إعادة طباعة ملصقات القطع المعلّقة",
       "reprintNoneTooltip": "لا توجد قطع معلّقة لإعادة الطباعة",
       "linesTitle": "البنود",
+      "piecesTitle": "القطع",
       "col": {
         "variant": "المتغيّر / SKU",
         "qtyOut": "المُرسل",
+        "sent": "المُرسل",
         "returnedGood": "عائد سليم",
         "condemned": "تالف",
         "sold": "مباع",

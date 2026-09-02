@@ -1615,9 +1615,11 @@
       "reprintOutstanding": "Reprint Outstanding Labels",
       "reprintNoneTooltip": "No outstanding pieces to reprint",
       "linesTitle": "Lines",
+      "piecesTitle": "Pieces",
       "col": {
         "variant": "Variant / SKU",
         "qtyOut": "Sent Out",
+        "sent": "Sent",
         "returnedGood": "Returned Good",
         "condemned": "Condemned",
         "sold": "Sold",

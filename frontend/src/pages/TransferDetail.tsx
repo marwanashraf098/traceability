@@ -131,40 +131,86 @@ export default function TransferDetail() {
         <Alert tone="info" title={t('transfers.detail.closedTitle')} />
       )}
 
-      {/* Lines */}
-      <Card className="space-y-3">
-        <h2 className="text-body font-semibold text-primary">{t('transfers.detail.linesTitle')}</h2>
-        <div className="overflow-x-auto">
-          <table className="min-w-full">
-            <thead>
-              <tr className="border-b border-line">
-                {['variant', 'qtyOut', 'returnedGood', 'condemned', 'sold', 'lost', 'outstanding'].map(k => (
-                  <th key={k} className="tbl-header">{t(`transfers.detail.col.${k}`)}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {transfer.lines.map(line => {
-                const lineOutstanding = line.qty_out - line.qty_returned_good - line.qty_condemned - line.qty_sold - line.qty_lost
-                return (
-                  <tr key={line.id} className="tbl-row">
-                    <td className="tbl-cell text-primary">
-                      {line.product_title} · {line.variant_title}
-                      {line.sku && <span className="font-mono text-caption text-muted ms-2">{line.sku}</span>}
-                    </td>
-                    <td className="tbl-cell text-primary">{line.qty_out}</td>
-                    <td className="tbl-cell text-muted">{line.qty_returned_good}</td>
-                    <td className="tbl-cell text-muted">{line.qty_condemned}</td>
-                    <td className="tbl-cell text-muted">{line.qty_sold}</td>
-                    <td className="tbl-cell text-muted">{line.qty_lost}</td>
-                    <td className={`tbl-cell font-semibold ${lineOutstanding > 0 ? 'text-warning' : 'text-success'}`}>{lineOutstanding}</td>
+      {/* Lines — relocate_out gets a reduced, relocation-framed table (no reconcile
+          concepts: a one-way relocate has no returned/condemned/sold/lost, those
+          columns stay permanently 0 and would be meaningless clutter). Round-trip
+          renders the full existing table, byte-identical to before. */}
+      {transfer.transfer_mode === 'relocate_out' ? (
+        // Card (components/ui.tsx) only destructures children/className/interactive/
+        // hoverable — it does not forward arbitrary props, so data-testid must live on a
+        // plain element this component controls directly, not on <Card> itself.
+        <div data-testid="relocate-lines-card">
+          <Card className="space-y-3">
+            <h2 className="text-body font-semibold text-primary">{t('transfers.detail.piecesTitle')}</h2>
+            <div className="overflow-x-auto">
+              <table className="min-w-full">
+                <thead>
+                  <tr className="border-b border-line">
+                    {['variant', 'sent', 'outstanding'].map(k => (
+                      <th key={k} className="tbl-header">{t(`transfers.detail.col.${k}`)}</th>
+                    ))}
                   </tr>
-                )
-              })}
-            </tbody>
-          </table>
+                </thead>
+                <tbody>
+                  {transfer.lines.map(line => {
+                    // Relocate close is all-or-nothing at the transfer level (closeOneWay()
+                    // resolves every outstanding piece across every line in one shot — there
+                    // is no partial per-line close state), so transfer.status alone — already
+                    // in the response — correctly derives per-line outstanding without the
+                    // round-trip reconcile-counter formula (which would stay stuck at
+                    // qty_out forever, since relocate never touches those counters).
+                    const lineOutstanding = transfer.status === 'closed' ? 0 : line.qty_out
+                    return (
+                      <tr key={line.id} className="tbl-row">
+                        <td className="tbl-cell text-primary">
+                          {line.product_title} · {line.variant_title}
+                          {line.sku && <span className="font-mono text-caption text-muted ms-2">{line.sku}</span>}
+                        </td>
+                        <td className="tbl-cell text-primary">{line.qty_out}</td>
+                        <td className={`tbl-cell font-semibold ${lineOutstanding > 0 ? 'text-warning' : 'text-success'}`}>{lineOutstanding}</td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </Card>
         </div>
-      </Card>
+      ) : (
+        <Card className="space-y-3">
+          <h2 className="text-body font-semibold text-primary">{t('transfers.detail.linesTitle')}</h2>
+          <div className="overflow-x-auto">
+            <table className="min-w-full">
+              <thead>
+                <tr className="border-b border-line">
+                  {['variant', 'qtyOut', 'returnedGood', 'condemned', 'sold', 'lost', 'outstanding'].map(k => (
+                    <th key={k} className="tbl-header">{t(`transfers.detail.col.${k}`)}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {transfer.lines.map(line => {
+                  const lineOutstanding = line.qty_out - line.qty_returned_good - line.qty_condemned - line.qty_sold - line.qty_lost
+                  return (
+                    <tr key={line.id} className="tbl-row">
+                      <td className="tbl-cell text-primary">
+                        {line.product_title} · {line.variant_title}
+                        {line.sku && <span className="font-mono text-caption text-muted ms-2">{line.sku}</span>}
+                      </td>
+                      <td className="tbl-cell text-primary">{line.qty_out}</td>
+                      <td className="tbl-cell text-muted">{line.qty_returned_good}</td>
+                      <td className="tbl-cell text-muted">{line.qty_condemned}</td>
+                      <td className="tbl-cell text-muted">{line.qty_sold}</td>
+                      <td className="tbl-cell text-muted">{line.qty_lost}</td>
+                      <td className={`tbl-cell font-semibold ${lineOutstanding > 0 ? 'text-warning' : 'text-success'}`}>{lineOutstanding}</td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+        </Card>
+      )}
 
       {/* Actions */}
       {transfer.status !== 'closed' && (

@@ -308,3 +308,102 @@ describe('Transfers summary tiles', () => {
     await i18n.changeLanguage('en')
   })
 })
+
+describe('Transfer detail — relocate line table (FR-22.10)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    vi.mocked(api.getRoleFromToken).mockReturnValue('owner')
+  })
+
+  function baseDetail(overrides: Partial<api.TransferDetail>): api.TransferDetail {
+    return {
+      id: 'transfer-x',
+      transfer_type: 'other',
+      transfer_mode: 'round_trip',
+      status: 'open',
+      note: null,
+      expected_return_at: null,
+      created_by: 'u1',
+      created_at: new Date().toISOString(),
+      closed_by: null,
+      closed_at: null,
+      destination_location_id: 'd1',
+      destination_location_name: 'Warehouse 2',
+      lines: [{
+        id: 'line-1', variant_id: 'variant-1', sku: 'SKU1',
+        variant_title: 'W-1', product_title: 'Widget',
+        qty_out: 5, qty_returned_good: 0, qty_condemned: 0, qty_sold: 0, qty_lost: 0,
+      }],
+      outstandingCount: 5,
+      ...overrides,
+    }
+  }
+
+  function renderDetail() {
+    return renderWithProviders(
+      <Routes><Route path="/transfers/:id" element={<TransferDetail />} /></Routes>,
+      { initialEntries: ['/transfers/transfer-x'] },
+    )
+  }
+
+  test('td1 — relocate_out detail renders the reduced Pieces table, no reconcile columns', async () => {
+    vi.mocked(api.getTransfer).mockResolvedValue(baseDetail({ transfer_mode: 'relocate_out' }))
+
+    renderDetail()
+
+    const card = await screen.findByTestId('relocate-lines-card')
+    expect(within(card).getByText('Pieces')).toBeInTheDocument()
+    expect(within(card).getByText('Variant / SKU')).toBeInTheDocument()
+    expect(within(card).getByText('Sent')).toBeInTheDocument()
+    expect(within(card).getByText('Outstanding')).toBeInTheDocument()
+
+    // The four round-trip reconcile columns must be entirely absent.
+    expect(within(card).queryByText('Returned Good')).not.toBeInTheDocument()
+    expect(within(card).queryByText('Condemned')).not.toBeInTheDocument()
+    expect(within(card).queryByText('Sold')).not.toBeInTheDocument()
+    expect(within(card).queryByText('Lost')).not.toBeInTheDocument()
+
+    expect(within(card).getByText('Widget · W-1')).toBeInTheDocument()
+    // Sent + Outstanding both read 5 (still open, so nothing has been relocated yet).
+    expect(within(card).getAllByText('5')).toHaveLength(2)
+  })
+
+  test('td2 — POSITIVE CONTROL: round_trip detail still renders every reconcile column', async () => {
+    vi.mocked(api.getTransfer).mockResolvedValue(baseDetail({
+      transfer_mode: 'round_trip',
+      lines: [{
+        id: 'line-1', variant_id: 'variant-1', sku: 'SKU1',
+        variant_title: 'W-1', product_title: 'Widget',
+        qty_out: 10, qty_returned_good: 6, qty_condemned: 1, qty_sold: 3, qty_lost: 0,
+      }],
+    }))
+
+    renderDetail()
+
+    await screen.findByText('Widget · W-1')
+    expect(screen.queryByTestId('relocate-lines-card')).not.toBeInTheDocument()
+    expect(screen.getByText('Lines')).toBeInTheDocument()
+    expect(screen.getByText('Sent Out')).toBeInTheDocument()
+    expect(screen.getByText('Returned Good')).toBeInTheDocument()
+    expect(screen.getByText('Condemned')).toBeInTheDocument()
+    expect(screen.getByText('Sold')).toBeInTheDocument()
+    expect(screen.getByText('Lost')).toBeInTheDocument()
+    expect(screen.getByText('Outstanding')).toBeInTheDocument()
+  })
+
+  // NOTE: renderWithProviders uses its own English-only i18next instance — a pre-existing
+  // harness limitation (see returns.test.tsx's rt5) — so this only exercises layout under
+  // dir="rtl", not actual Arabic strings; string-level AR content is confirmed at the
+  // live-acceptance pass instead.
+  test('td3 RTL layout — relocate Pieces table renders without crash under dir=rtl', async () => {
+    await i18n.changeLanguage('ar')
+    vi.mocked(api.getTransfer).mockResolvedValue(baseDetail({ transfer_mode: 'relocate_out' }))
+
+    renderDetail()
+
+    const card = await screen.findByTestId('relocate-lines-card')
+    expect(document.documentElement.dir).toBe('rtl')
+    expect(within(card).getByText('Widget · W-1')).toBeInTheDocument()
+    await i18n.changeLanguage('en')
+  })
+})
