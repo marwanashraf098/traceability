@@ -17,7 +17,8 @@ public enum PieceStatus {
     OUT_ON_TRANSFER("out_on_transfer"),
     SOLD("sold"),
     VOIDED("voided"),
-    ON_HOLD("on_hold");
+    ON_HOLD("on_hold"),
+    TRANSFERRED_OUT("transferred_out");
 
     /** Lowercase value matching the PostgreSQL enum literal. */
     public final String db;

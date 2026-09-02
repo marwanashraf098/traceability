@@ -7,6 +7,11 @@ import {
   TransferSummary, TransferType, TRANSFER_TYPES, LocationOption, TransferCommandError,
 } from '../api'
 
+// FR-22.10 — Relocate is a distinct top-level create action, not a TRANSFER_TYPES radio
+// value: transfer_mode (workflow: round_trip vs relocate_out) is orthogonal to transfer_type
+// (category: showroom/dryclean/repair/other — see V64's header comment). Relocate rides on
+// transfer_type='other' under the hood; the user never sees a type picker for it.
+
 // FR-22.9 — Consignment list ("out on transfer") + create-transfer form.
 // Modeled directly on StockTake.tsx's list+create split (same shell, same
 // relativeTime helper, same segmented-button pattern for a small closed enum).
@@ -38,9 +43,16 @@ export default function Transfers() {
   const [transfers, setTransfers] = useState<TransferSummary[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [view, setView] = useState<'list' | 'create'>('list')
+  const [view, setView] = useState<'list' | 'create' | 'relocate'>('list')
+  // Gates the "Relocate" affordance's visibility: destinations are every non-fulfillment
+  // location, so an empty list already means "tenant has <2 locations" — no separate count
+  // query needed, this is the exact same fetch CreateTransferForm makes for its own picker.
+  const [destinationCount, setDestinationCount] = useState<number | null>(null)
 
-  useEffect(() => { load() }, [])
+  useEffect(() => {
+    load()
+    listTransferDestinations().then(d => setDestinationCount(d.length)).catch(() => setDestinationCount(0))
+  }, [])
 
   async function load() {
     setLoading(true)
@@ -62,17 +74,34 @@ export default function Transfers() {
     )
   }
 
+  if (view === 'relocate') {
+    return (
+      <RelocateTransferForm
+        onCreated={(id) => navigate(`/transfers/${id}/scan-out`)}
+        onCancel={() => setView('list')}
+      />
+    )
+  }
+
   const openCount = transfers.filter(tr => tr.status === 'open').length
   const reconcilingCount = transfers.filter(tr => tr.status === 'reconciling').length
   const outstandingTotal = transfers.reduce((sum, tr) => sum + tr.outstanding_count, 0)
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between gap-2">
         <h1 className="text-h1 text-primary">{t('transfers.title')}</h1>
-        <Button size="sm" onClick={() => setView('create')}>
-          + {t('transfers.new')}
-        </Button>
+        <div className="flex items-center gap-2">
+          {/* Single-location pilots never see this — no second location to relocate to. */}
+          {destinationCount !== null && destinationCount > 0 && (
+            <Button size="sm" variant="secondary" onClick={() => setView('relocate')}>
+              {t('transfers.relocate.action')}
+            </Button>
+          )}
+          <Button size="sm" onClick={() => setView('create')}>
+            + {t('transfers.new')}
+          </Button>
+        </div>
       </div>
 
       {/* Summary tiles — derived client-side from the already-fetched open+reconciling
@@ -228,6 +257,95 @@ function CreateTransferForm({ onCreated, onCancel }: {
         <div className="flex gap-3 pt-1">
           <Button type="submit" loading={saving}>
             {t('transfers.create.submit')}
+          </Button>
+          <Button type="button" variant="secondary" onClick={onCancel}>
+            {t('common.cancel')}
+          </Button>
+        </div>
+      </form>
+    </div>
+  )
+}
+
+// ── Relocate Form (FR-22.10, one-way A->B) ──────────────────────────────────
+//
+// No Type picker, no Expected Return field — a relocate is one-way (rides on
+// transfer_type='other' under the hood, invisible to the user) and never comes back on
+// its own transfer, so "expected return" has no meaning here. Destination validation
+// (must be a real, tenant-owned, non-fulfillment location) is identical to
+// CreateTransferForm's — same createTransfer() call, just with transferMode set.
+
+function RelocateTransferForm({ onCreated, onCancel }: {
+  onCreated: (id: string) => void; onCancel: () => void
+}) {
+  const { t, i18n } = useTranslation()
+  const isAr = i18n.language === 'ar'
+  const [destinations, setDestinations] = useState<LocationOption[]>([])
+  const [loadingDest, setLoadingDest] = useState(true)
+  const [destinationId, setDestinationId] = useState('')
+  const [note, setNote] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    listTransferDestinations()
+      .then(setDestinations)
+      .catch(() => setDestinations([]))
+      .finally(() => setLoadingDest(false))
+  }, [])
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault()
+    if (!destinationId) {
+      setError(t('transfers.create.destinationRequired'))
+      return
+    }
+    setSaving(true); setError(null)
+    try {
+      const res = await createTransfer({
+        transferType: 'other',
+        destinationLocationId: destinationId,
+        note: note || undefined,
+        transferMode: 'relocate_out',
+      })
+      onCreated(res.id)
+    } catch (e: unknown) {
+      if (e instanceof TransferCommandError) setError(isAr ? e.messageAr : e.messageEn)
+      else setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div className="max-w-lg space-y-4">
+      <h1 className="text-h1 text-primary">{t('transfers.relocate.title')}</h1>
+      <p className="text-small text-muted">{t('transfers.relocate.description')}</p>
+      {error && <Alert tone="critical" title={error} />}
+      <form onSubmit={submit} className="card p-5 space-y-4">
+        <div className="space-y-1.5">
+          <label className="text-small text-muted">{t('transfers.create.destination')}</label>
+          {!loadingDest && destinations.length === 0 ? (
+            <Alert tone="warning" title={t('transfers.create.noDestinations')} />
+          ) : (
+            <Select
+              value={destinationId}
+              onChange={setDestinationId}
+              disabled={loadingDest}
+              placeholder={t('transfers.create.destinationPlaceholder')}
+              options={destinations.map(d => ({ value: d.id, label: d.name }))}
+            />
+          )}
+        </div>
+
+        <div className="space-y-1.5">
+          <label className="text-small text-muted">{t('transfers.create.note')}</label>
+          <Input value={note} onChange={e => setNote(e.target.value)} placeholder={t('transfers.create.notePlaceholder')} />
+        </div>
+
+        <div className="flex gap-3 pt-1">
+          <Button type="submit" loading={saving}>
+            {t('transfers.relocate.submit')}
           </Button>
           <Button type="button" variant="secondary" onClick={onCancel}>
             {t('common.cancel')}

@@ -2,11 +2,11 @@ import { useState, useEffect, useCallback } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import {
-  Badge, Button, Card, Spinner, Alert, useToast,
+  Badge, Button, Card, Modal, Spinner, Alert, useToast,
 } from '../components/ui'
 import {
-  getTransfer, getRoleFromToken, beginReconcileTransfer, reprintTransferOutstanding,
-  TransferCommandError, TransferDetail as TransferDetailType,
+  getTransfer, getRoleFromToken, beginReconcileTransfer, closeOneWayTransfer,
+  reprintTransferOutstanding, TransferCommandError, TransferDetail as TransferDetailType,
 } from '../api'
 
 // FR-22.9 — Transfer detail: header + lines table + status-gated actions
@@ -31,6 +31,9 @@ export default function TransferDetail() {
   const [error, setError] = useState<string | null>(null)
   const [beginning, setBeginning] = useState(false)
   const [reprinting, setReprinting] = useState(false)
+  const [showCloseOneWayConfirm, setShowCloseOneWayConfirm] = useState(false)
+  const [closingOneWay, setClosingOneWay] = useState(false)
+  const [closeOneWayError, setCloseOneWayError] = useState<string | null>(null)
 
   const load = useCallback(async () => {
     if (!id) return
@@ -53,6 +56,22 @@ export default function TransferDetail() {
       toast({ tone: 'error', message: msg })
     } finally {
       setBeginning(false)
+    }
+  }
+
+  async function handleCloseOneWay() {
+    if (!id) return
+    setClosingOneWay(true); setCloseOneWayError(null)
+    try {
+      await closeOneWayTransfer(id)
+      setShowCloseOneWayConfirm(false)
+      await load()
+    } catch (e: unknown) {
+      const msg = e instanceof TransferCommandError ? (isAr ? e.messageAr : e.messageEn)
+        : e instanceof Error ? e.message : String(e)
+      setCloseOneWayError(msg)
+    } finally {
+      setClosingOneWay(false)
     }
   }
 
@@ -156,7 +175,17 @@ export default function TransferDetail() {
             </Button>
           )}
 
-          {canManage && transfer.status === 'open' && (
+          {/* relocate_out: one-shot close, no reconcile stage — replaces Begin Reconcile
+              entirely (a relocate transfer never reaches 'reconciling'). */}
+          {canManage && transfer.status === 'open' && transfer.transfer_mode === 'relocate_out' && (
+            <span title={outstanding === 0 ? t('transfers.detail.closeOneWayDisabledTooltip') : undefined}>
+              <Button variant="destructive" disabled={outstanding === 0} onClick={() => setShowCloseOneWayConfirm(true)}>
+                {t('transfers.detail.closeOneWay')}
+              </Button>
+            </span>
+          )}
+
+          {canManage && transfer.status === 'open' && transfer.transfer_mode !== 'relocate_out' && (
             <span title={outstanding === 0 ? t('transfers.detail.beginReconcileDisabledTooltip') : undefined}>
               <Button variant="secondary" loading={beginning} disabled={outstanding === 0} onClick={handleBeginReconcile}>
                 {t('transfers.detail.beginReconcile')}
@@ -178,6 +207,22 @@ export default function TransferDetail() {
             </span>
           )}
         </Card>
+      )}
+
+      {closeOneWayError && <Alert tone="critical" title={closeOneWayError} />}
+
+      {showCloseOneWayConfirm && (
+        <Modal title={t('transfers.detail.closeOneWayConfirmTitle')} onClose={() => setShowCloseOneWayConfirm(false)}>
+          <div className="space-y-4">
+            <p className="text-body text-primary">{t('transfers.detail.closeOneWayConfirmBody')}</p>
+            <div className="flex gap-3 justify-end">
+              <Button variant="secondary" onClick={() => setShowCloseOneWayConfirm(false)}>{t('common.cancel')}</Button>
+              <Button variant="destructive" loading={closingOneWay} onClick={handleCloseOneWay}>
+                {t('transfers.detail.closeOneWayConfirmButton')}
+              </Button>
+            </div>
+          </div>
+        </Modal>
       )}
     </div>
   )

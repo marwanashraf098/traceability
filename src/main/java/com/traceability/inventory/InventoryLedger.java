@@ -101,6 +101,14 @@ public class InventoryLedger {
         "out_on_transfer:lost",          // reconcile: quantity-classified shortfall, unaccounted
         "out_on_transfer:sold",          // reconcile: quantity-classified shortfall, off-book sale
 
+        // FR-22.10 — Relocate (one-way A->B, gate G2, approved by Marawan). The B1 one-shot
+        // close (TransferService.closeOneWay()): no reconcile stage, straight to a terminal,
+        // un-pickable status (FulfillService.scan()'s status='available' gate rejects it
+        // unmodified — no pick-path change). Deliberately does NOT add the reverse edge
+        // (transferred_out:out_on_transfer) here — that is FR-22.11 (B2, the B->A return
+        // path), a separate approval; without it this status has no legal way out yet.
+        "out_on_transfer:transferred_out",
+
         // FR-13.x: Void (receiving-overcount / duplicate-entry correction — terminal, NOT a
         // loss; excluded from every loss-reporting site by construction because they all key on
         // literal status='lost', never a negated set — see PieceAdjustService.voidPiece()).

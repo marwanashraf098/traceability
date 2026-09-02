@@ -24,7 +24,8 @@ public class TransferException extends RuntimeException {
         TRANSFER_NO_OUTSTANDING_PIECES,
         TRANSFER_TYPE_INVALID,
         TRANSFER_DESTINATION_NOT_FOUND,
-        TRANSFER_DESTINATION_IS_FULFILLMENT
+        TRANSFER_DESTINATION_IS_FULFILLMENT,
+        TRANSFER_NOT_RELOCATE_OUT
     }
 
     private final Code       code;

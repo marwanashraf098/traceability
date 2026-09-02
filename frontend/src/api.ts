@@ -1529,6 +1529,8 @@ export type TransferStatus = 'open' | 'reconciling' | 'closed'
 export type TransferType = 'showroom' | 'dryclean' | 'repair' | 'other'
 export const TRANSFER_TYPES: TransferType[] = ['showroom', 'dryclean', 'repair', 'other']
 export type TransferCondition = 'good' | 'condemned'
+// relocate_return (B2, FR-22.11) intentionally omitted — no create path emits it yet.
+export type TransferMode = 'round_trip' | 'relocate_out'
 
 export interface LocationOption {
   id: string
@@ -1566,6 +1568,7 @@ export function createTransfer(params: {
   destinationLocationId: string
   expectedReturnAt?: string | null
   note?: string | null
+  transferMode?: TransferMode
 }) {
   return transferCommandRequest<{ id: string }>('/transfers', {
     method: 'POST',
@@ -1613,6 +1616,7 @@ export function scanBackTransferPiece(transferId: string, barcode: string, condi
 export interface TransferSummary {
   id: string
   transfer_type: TransferType
+  transfer_mode: TransferMode
   status: TransferStatus
   note: string | null
   expected_return_at: string | null
@@ -1643,6 +1647,7 @@ export interface TransferLine {
 export interface TransferDetail {
   id: string
   transfer_type: TransferType
+  transfer_mode: TransferMode
   status: TransferStatus
   note: string | null
   expected_return_at: string | null
@@ -1677,6 +1682,11 @@ export function classifyTransferShortfall(
 
 export function closeTransferSession(transferId: string) {
   return transferCommandRequest<void>(`/transfers/${transferId}/close`, { method: 'POST' })
+}
+
+/** relocate_out only — open → closed directly, no reconcile stage. */
+export function closeOneWayTransfer(transferId: string) {
+  return transferCommandRequest<void>(`/transfers/${transferId}/close-one-way`, { method: 'POST' })
 }
 
 /** PDF blob download — same window.open(URL.createObjectURL(...)) pattern as Receiving/Returns. */

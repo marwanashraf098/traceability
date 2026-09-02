@@ -43,9 +43,12 @@ public class TransferController {
     public ResponseEntity<Map<String, Object>> createTransfer(
             @RequestBody CreateTransferRequest req,
             @AuthenticationPrincipal CustomUserDetails principal) {
+        // transferMode is optional on the wire (every pre-Relocate frontend build omits it) —
+        // null defaults to round_trip, same as the 5-arg createTransfer() overload.
         UUID id = transferSvc.createTransfer(
             req.transferType(), UUID.fromString(req.destinationLocationId()),
-            req.expectedReturnAt(), req.note(), principal.userId());
+            req.expectedReturnAt(), req.note(), principal.userId(),
+            req.transferMode() != null ? req.transferMode() : "round_trip");
         return ResponseEntity.status(HttpStatus.CREATED).body(Map.of("id", id.toString()));
     }
 
@@ -115,6 +118,17 @@ public class TransferController {
         transferSvc.closeTransfer(transferId, principal.userId());
     }
 
+    // ── One-shot close (Relocate, FR-22.10) ─────────────────────────────────
+
+    /** relocate_out only — open → closed directly, no reconcile stage. Mirrors close's shape. */
+    @PostMapping("/{transferId}/close-one-way")
+    @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void closeOneWay(@PathVariable UUID transferId,
+                            @AuthenticationPrincipal CustomUserDetails principal) {
+        transferSvc.closeOneWay(transferId, principal.userId());
+    }
+
     // ── Reprint outstanding labels (FR-22.5) ────────────────────────────────
 
     /**
@@ -136,8 +150,10 @@ public class TransferController {
 
     // ── Request records ──────────────────────────────────────────────────────
 
+    /** transferMode is optional (nullable) — null means round_trip, the pre-Relocate default. */
     public record CreateTransferRequest(
-        String transferType, String destinationLocationId, Instant expectedReturnAt, String note) {}
+        String transferType, String destinationLocationId, Instant expectedReturnAt, String note,
+        String transferMode) {}
 
     public record ScanRequest(String barcode) {}
 

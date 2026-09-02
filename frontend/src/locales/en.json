@@ -1531,6 +1531,12 @@
     "title": "Transfers",
     "new": "New Transfer",
     "empty": "No transfers yet",
+    "relocate": {
+      "action": "Relocate",
+      "title": "Relocate Stock",
+      "description": "Move stock to another location permanently — no reconcile step, no scan-back. Close once every piece has been scanned out.",
+      "submit": "Start Relocate"
+    },
     "summary": {
       "open": "Open",
       "reconciling": "Reconciling",
@@ -1601,6 +1607,11 @@
       "beginReconcile": "Begin Reconcile",
       "beginReconcileDisabledTooltip": "No outstanding pieces to reconcile",
       "continueReconcile": "Continue Reconcile",
+      "closeOneWay": "Close",
+      "closeOneWayDisabledTooltip": "No outstanding pieces to close",
+      "closeOneWayConfirmTitle": "Close this relocate transfer?",
+      "closeOneWayConfirmBody": "Every outstanding piece will move to the new location permanently and can no longer be picked from here. This cannot be undone from this screen.",
+      "closeOneWayConfirmButton": "Confirm Close",
       "reprintOutstanding": "Reprint Outstanding Labels",
       "reprintNoneTooltip": "No outstanding pieces to reprint",
       "linesTitle": "Lines",

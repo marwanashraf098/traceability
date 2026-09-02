@@ -77,9 +77,30 @@ public class TransferService {
     private static final Set<String> VALID_TRANSFER_TYPES =
         Set.of("showroom", "dryclean", "repair", "other");
 
+    // relocate_return (FR-22.11 / B2) deliberately excluded — the DB CHECK (V89) already
+    // allows it so B2 needs no schema change, but no service-layer path may create one yet.
+    private static final Set<String> VALID_TRANSFER_MODES =
+        Set.of("round_trip", "relocate_out");
+
+    /** Existing 5-arg signature, unchanged — every pre-Relocate caller keeps compiling and
+     *  keeps creating ordinary round-trip transfers with no behavior change. */
     @Transactional(isolation = Isolation.READ_COMMITTED)
     public UUID createTransfer(String transferType, UUID destinationLocationId,
                                Instant expectedReturnAt, String note, UUID actorUserId) {
+        return createTransfer(transferType, destinationLocationId, expectedReturnAt, note,
+            actorUserId, "round_trip");
+    }
+
+    /** FR-22.10 — Relocate: same validation and destination guard as the round-trip path
+     *  (a relocate destination must be a real, tenant-owned, non-fulfillment location exactly
+     *  like every other transfer type — relocating to your own main warehouse is nonsensical).
+     *  transferMode only decides which CLOSE path is legal later (closeTransfer() for
+     *  round_trip, closeOneWay() for relocate_out) — it does not change anything about
+     *  create() or scanOut() themselves. */
+    @Transactional(isolation = Isolation.READ_COMMITTED)
+    public UUID createTransfer(String transferType, UUID destinationLocationId,
+                               Instant expectedReturnAt, String note, UUID actorUserId,
+                               String transferMode) {
         UUID tenantId = TenantContext.require();
 
         // transfer_type already has a DB CHECK constraint (V64) restricting it to the same
@@ -90,6 +111,12 @@ public class TransferService {
             throw new TransferException(TransferException.Code.TRANSFER_TYPE_INVALID,
                 "transferType must be one of: showroom, dryclean, repair, other",
                 "يجب أن يكون نوع النقل أحد: showroom أو dryclean أو repair أو other",
+                HttpStatus.BAD_REQUEST);
+        }
+        if (!VALID_TRANSFER_MODES.contains(transferMode)) {
+            throw new TransferException(TransferException.Code.TRANSFER_TYPE_INVALID,
+                "transferMode must be one of: round_trip, relocate_out",
+                "يجب أن يكون نمط النقل أحد: round_trip أو relocate_out",
                 HttpStatus.BAD_REQUEST);
         }
 
@@ -119,10 +146,10 @@ public class TransferService {
         UUID id = UUID.randomUUID();
         jdbc.update(
             "INSERT INTO transfers " +
-            "(id, tenant_id, transfer_type, destination_location_id, note, expected_return_at, created_by) " +
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            "(id, tenant_id, transfer_type, destination_location_id, note, expected_return_at, created_by, transfer_mode) " +
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             id, tenantId, transferType, destinationLocationId, note,
-            expectedReturnAt != null ? Timestamp.from(expectedReturnAt) : null, actorUserId);
+            expectedReturnAt != null ? Timestamp.from(expectedReturnAt) : null, actorUserId, transferMode);
         return id;
     }
 
@@ -560,6 +587,108 @@ public class TransferService {
         }
     }
 
+    // ── One-shot close (Relocate, FR-22.10) ─────────────────────────────────
+
+    /**
+     * open → closed directly, NO reconciling stage — the structural opposite of
+     * closeTransfer(): that method GATES on outcome-IS-NULL == 0 (rejects while anything is
+     * outstanding); this method ACTS ON the outcome-IS-NULL rows (there is no scan-back step
+     * to wait for in a one-way relocate — the send-out scan is the only physical evidence
+     * this model has, by design). Structurally mirrors classifyShortfall()'s FOR-UPDATE
+     * bulk-resolve shape, not closeTransfer()'s gate-and-flip shape.
+     *
+     * Per outstanding piece, BOTH of these writes happen in the SAME transaction — #1 is not
+     * optional:
+     *   1. UPDATE transfer_pieces SET outcome='relocated', ... WHERE outcome IS NULL — frees
+     *      transfer_pieces_one_active's UNIQUE (piece_id) WHERE outcome IS NULL slot. Skipping
+     *      this leaves outcome NULL forever, permanently blocking this piece_id from ever being
+     *      claimed by a future return transfer (FR-22.11 / B2) — un-pickable (correctly) AND
+     *      un-returnable (a genuine stranding bug, not a hypothetical one).
+     *   2. ledger.transition(OUT_ON_TRANSFER, TRANSFERRED_OUT, 'relocated_out', ...) — the
+     *      un-pickable terminal transition itself; FulfillService.scan()'s existing
+     *      status='available' gate rejects this status unmodified, no pick-path change.
+     *
+     * outcome_verified=true (unlike the shortfall paths' false): the send-out scan IS the
+     * physical verification here — there is no separate arrival-confirmation step in this
+     * model, by design (no reconcile stage exists for a relocate_out transfer).
+     *
+     * FOR UPDATE lock on the outstanding rows gives this the same race behavior as
+     * classifyShortfall(): a concurrent second call blocks on the row lock, then (after the
+     * first commits) re-reads and finds outcome already set, so its own SELECT returns an
+     * empty set — harmless no-op loop — and its closing UPDATE (status='open' guard) then
+     * naturally affects 0 rows, surfacing TRANSFER_CLOSE_RACE_CONFLICT instead of double-
+     * processing anything.
+     */
+    @Transactional(isolation = Isolation.READ_COMMITTED)
+    public void closeOneWay(UUID transferId, UUID actorUserId) {
+        UUID tenantId = TenantContext.require();
+
+        List<Map<String, Object>> transferRows = jdbc.queryForList(
+            "SELECT status, transfer_mode FROM transfers WHERE id = ? AND tenant_id = ?",
+            transferId, tenantId);
+        if (transferRows.isEmpty()) {
+            throw transferNotFound();
+        }
+        String status = (String) transferRows.get(0).get("status");
+        String mode   = (String) transferRows.get(0).get("transfer_mode");
+
+        if (!"relocate_out".equals(mode)) {
+            throw new TransferException(TransferException.Code.TRANSFER_NOT_RELOCATE_OUT,
+                "This transfer is not a relocate transfer (mode: " + mode + ") — use close instead",
+                "عملية النقل هذه ليست عملية نقل نهائي (النمط: " + mode + ") — استخدم الإغلاق العادي بدلاً من ذلك",
+                HttpStatus.UNPROCESSABLE_ENTITY);
+        }
+        if (!"open".equals(status)) {
+            throw transferNotOpen(status);
+        }
+
+        // FIFO claim: lock every outstanding row on this transfer — mirrors
+        // classifyShortfall()'s FOR UPDATE shape.
+        List<String> pieceIds = jdbc.query(
+            "SELECT piece_id FROM transfer_pieces " +
+            "WHERE transfer_id = ? AND tenant_id = ? AND outcome IS NULL " +
+            "ORDER BY created_at ASC FOR UPDATE",
+            (rs, rowNum) -> rs.getString("piece_id"),
+            transferId, tenantId);
+
+        for (String pieceId : pieceIds) {
+            // Write #1 — NOT optional (see method javadoc): frees the one-active-transfer
+            // slot for this piece_id before the ledger transition below.
+            jdbc.update(
+                "UPDATE transfer_pieces SET outcome = 'relocated', outcome_verified = true, " +
+                "outcome_at = now(), outcome_by = ? " +
+                "WHERE transfer_id = ? AND piece_id = ? AND outcome IS NULL",
+                actorUserId, transferId, pieceId);
+
+            // Write #2 — the un-pickable terminal transition. Left uncaught by design (same
+            // reasoning as every other call site in this class): the FOR UPDATE lock above
+            // already gives this call exclusive access to the piece row for the duration of
+            // this transaction, so StateConflictException is not expected here.
+            ledger.transition(pieceId, PieceStatus.OUT_ON_TRANSFER, PieceStatus.TRANSFERRED_OUT,
+                "relocated_out", actorUserId,
+                new TransitionContext(null, null, null, null, relocatedOutMeta(transferId)));
+        }
+
+        int rows = jdbc.update(
+            "UPDATE transfers SET status = 'closed', closed_by = ?, closed_at = now() " +
+            "WHERE id = ? AND tenant_id = ? AND status = 'open'",
+            actorUserId, transferId, tenantId);
+        if (rows == 0) {
+            throw new TransferException(TransferException.Code.TRANSFER_CLOSE_RACE_CONFLICT,
+                "Transfer status changed concurrently — reload and retry",
+                "تغيرت حالة عملية النقل في نفس الوقت — يرجى إعادة التحميل والمحاولة مرة أخرى",
+                HttpStatus.CONFLICT);
+        }
+    }
+
+    private String relocatedOutMeta(UUID transferId) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("transfer_id", transferId.toString());
+        m.put("verified", true);
+        m.put("reconciliation", "one_shot");
+        return writeJson(m);
+    }
+
     // ── Reprint outstanding labels ───────────────────────────────────────────
 
     /**
@@ -618,7 +747,7 @@ public class TransferService {
     public List<Map<String, Object>> listOpen() {
         UUID tenantId = TenantContext.require();
         return jdbc.queryForList(
-            "SELECT t.id, t.transfer_type, t.status, t.note, t.expected_return_at, " +
+            "SELECT t.id, t.transfer_type, t.transfer_mode, t.status, t.note, t.expected_return_at, " +
             "       t.created_by, t.created_at, " +
             "       t.destination_location_id, loc.name AS destination_location_name, " +
             "       (SELECT COUNT(*) FROM transfer_pieces tp " +
@@ -634,7 +763,7 @@ public class TransferService {
     public Map<String, Object> getTransfer(UUID transferId) {
         UUID tenantId = TenantContext.require();
         List<Map<String, Object>> rows = jdbc.queryForList(
-            "SELECT t.id, t.transfer_type, t.status, t.note, t.expected_return_at, " +
+            "SELECT t.id, t.transfer_type, t.transfer_mode, t.status, t.note, t.expected_return_at, " +
             "       t.created_by, t.created_at, t.closed_by, t.closed_at, " +
             "       t.destination_location_id, loc.name AS destination_location_name " +
             "FROM transfers t " +

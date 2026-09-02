@@ -1526,6 +1526,12 @@
     "title": "عمليات النقل",
     "new": "عملية نقل جديدة",
     "empty": "لا توجد عمليات نقل حتى الآن",
+    "relocate": {
+      "action": "نقل نهائي",
+      "title": "نقل المخزون",
+      "description": "انقل المخزون إلى موقع آخر بشكل نهائي — بدون خطوة مطابقة، بدون مسح إرجاع. أغلق العملية بعد مسح جميع القطع.",
+      "submit": "بدء النقل النهائي"
+    },
     "summary": {
       "open": "مفتوحة",
       "reconciling": "قيد المطابقة",
@@ -1596,6 +1602,11 @@
       "beginReconcile": "بدء المطابقة",
       "beginReconcileDisabledTooltip": "لا توجد قطع معلّقة للمطابقة",
       "continueReconcile": "متابعة المطابقة",
+      "closeOneWay": "إغلاق",
+      "closeOneWayDisabledTooltip": "لا توجد قطع معلّقة للإغلاق",
+      "closeOneWayConfirmTitle": "إغلاق عملية النقل النهائي هذه؟",
+      "closeOneWayConfirmBody": "ستنتقل كل القطع المعلّقة إلى الموقع الجديد بشكل نهائي ولن يمكن اختيارها من هنا بعد الآن. لا يمكن التراجع عن هذا من هذه الشاشة.",
+      "closeOneWayConfirmButton": "تأكيد الإغلاق",
       "reprintOutstanding": "إعادة طباعة ملصقات القطع المعلّقة",
       "reprintNoneTooltip": "لا توجد قطع معلّقة لإعادة الطباعة",
       "linesTitle": "البنود",

@@ -1,0 +1,21 @@
+-- ============================================================
+-- V88 — FR-22.10 (Relocate B1): piece_status enum addition
+--
+-- Isolated per the V65/V80 precedent: ALTER TYPE ... ADD VALUE cannot be
+-- referenced in the same transaction it's added in — Postgres requires the
+-- new enum label to be committed before it can appear in any expression.
+-- This file does the ADD and nothing else; no DML/DDL here may mention
+-- 'transferred_out'.
+--
+-- transferred_out is the terminal status a piece reaches when a one-way
+-- Relocate transfer (A->B) closes without a reconcile stage — un-pickable
+-- by fulfillment (FulfillService.scan()'s existing status='available' gate
+-- rejects it unmodified) and NOT the same as out_on_transfer (which is the
+-- active, round-trip-transfer-in-flight status). See InventoryLedger.ALLOWED
+-- (V89-adjacent Java change) for the one edge into this status
+-- (out_on_transfer:transferred_out) — the return path back out of it
+-- (transferred_out:out_on_transfer) is deliberately NOT added yet; that is
+-- FR-22.11 (B2), a separate approval.
+-- ============================================================
+
+ALTER TYPE piece_status ADD VALUE 'transferred_out';
