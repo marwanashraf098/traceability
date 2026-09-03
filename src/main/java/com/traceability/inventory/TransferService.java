@@ -21,6 +21,7 @@ import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
 
@@ -77,10 +78,8 @@ public class TransferService {
     private static final Set<String> VALID_TRANSFER_TYPES =
         Set.of("showroom", "dryclean", "repair", "other");
 
-    // relocate_return (FR-22.11 / B2) deliberately excluded — the DB CHECK (V89) already
-    // allows it so B2 needs no schema change, but no service-layer path may create one yet.
     private static final Set<String> VALID_TRANSFER_MODES =
-        Set.of("round_trip", "relocate_out");
+        Set.of("round_trip", "relocate_out", "relocate_return");
 
     /** Existing 5-arg signature, unchanged — every pre-Relocate caller keeps compiling and
      *  keeps creating ordinary round-trip transfers with no behavior change. */
@@ -101,6 +100,17 @@ public class TransferService {
     public UUID createTransfer(String transferType, UUID destinationLocationId,
                                Instant expectedReturnAt, String note, UUID actorUserId,
                                String transferMode) {
+        return createTransfer(transferType, destinationLocationId, expectedReturnAt, note,
+            actorUserId, transferMode, null);
+    }
+
+    /** FR-22.11 (B2) — Relocate Return: the 8th param, sourceLocationId, is required for
+     *  transferMode='relocate_return' and ignored (stored NULL) for every other mode — a
+     *  round_trip or relocate_out transfer has no notion of "origin", only destination. */
+    @Transactional(isolation = Isolation.READ_COMMITTED)
+    public UUID createTransfer(String transferType, UUID destinationLocationId,
+                               Instant expectedReturnAt, String note, UUID actorUserId,
+                               String transferMode, UUID sourceLocationId) {
         UUID tenantId = TenantContext.require();
 
         // transfer_type already has a DB CHECK constraint (V64) restricting it to the same
@@ -115,10 +125,11 @@ public class TransferService {
         }
         if (!VALID_TRANSFER_MODES.contains(transferMode)) {
             throw new TransferException(TransferException.Code.TRANSFER_TYPE_INVALID,
-                "transferMode must be one of: round_trip, relocate_out",
-                "يجب أن يكون نمط النقل أحد: round_trip أو relocate_out",
+                "transferMode must be one of: round_trip, relocate_out, relocate_return",
+                "يجب أن يكون نمط النقل أحد: round_trip أو relocate_out أو relocate_return",
                 HttpStatus.BAD_REQUEST);
         }
+        boolean isReturn = "relocate_return".equals(transferMode);
 
         // RLS-scoped existence + tenant check, NOT the FK alone: Postgres row security does
         // not apply to foreign-key satisfaction checks (documented Postgres behavior) — the
@@ -136,20 +147,62 @@ public class TransferService {
                 "لم يتم العثور على موقع الوجهة",
                 HttpStatus.UNPROCESSABLE_ENTITY);
         }
-        if (Boolean.TRUE.equals(destRows.get(0).get("is_fulfillment"))) {
+        boolean destIsFulfillment = Boolean.TRUE.equals(destRows.get(0).get("is_fulfillment"));
+        // round_trip / relocate_out: destination must NOT be the fulfillment warehouse
+        // (unaffected by this method — same guard as before B2). relocate_return: destination
+        // MUST be the fulfillment warehouse — a return that lands anywhere else isn't sellable
+        // at A. The "To" field is locked to A in the UI, but this is enforced server-side too.
+        if (!isReturn && destIsFulfillment) {
             throw new TransferException(TransferException.Code.TRANSFER_DESTINATION_IS_FULFILLMENT,
                 "Destination cannot be your own fulfillment warehouse",
                 "لا يمكن أن تكون الوجهة هي مستودع التنفيذ الخاص بك",
                 HttpStatus.UNPROCESSABLE_ENTITY);
         }
+        if (isReturn && !destIsFulfillment) {
+            throw new TransferException(TransferException.Code.TRANSFER_RETURN_DESTINATION_NOT_FULFILLMENT,
+                "A return must land at your fulfillment warehouse",
+                "يجب أن تصل عملية الإرجاع إلى مستودع التنفيذ الخاص بك",
+                HttpStatus.UNPROCESSABLE_ENTITY);
+        }
+
+        if (isReturn) {
+            if (sourceLocationId == null) {
+                throw new TransferException(TransferException.Code.TRANSFER_SOURCE_REQUIRED,
+                    "sourceLocationId is required for a relocate_return transfer",
+                    "موقع المصدر مطلوب لعملية إرجاع النقل النهائي",
+                    HttpStatus.BAD_REQUEST);
+            }
+            if (sourceLocationId.equals(destinationLocationId)) {
+                throw new TransferException(TransferException.Code.TRANSFER_SOURCE_EQUALS_DESTINATION,
+                    "Source and destination cannot be the same location",
+                    "لا يمكن أن يكون المصدر والوجهة نفس الموقع",
+                    HttpStatus.UNPROCESSABLE_ENTITY);
+            }
+            List<Map<String, Object>> sourceRows = jdbc.queryForList(
+                "SELECT is_fulfillment FROM locations WHERE id = ? AND tenant_id = ?",
+                sourceLocationId, tenantId);
+            if (sourceRows.isEmpty()) {
+                throw new TransferException(TransferException.Code.TRANSFER_SOURCE_NOT_FOUND,
+                    "Source location not found",
+                    "لم يتم العثور على موقع المصدر",
+                    HttpStatus.UNPROCESSABLE_ENTITY);
+            }
+            if (Boolean.TRUE.equals(sourceRows.get(0).get("is_fulfillment"))) {
+                throw new TransferException(TransferException.Code.TRANSFER_SOURCE_IS_FULFILLMENT,
+                    "Source cannot be your own fulfillment warehouse",
+                    "لا يمكن أن يكون المصدر هو مستودع التنفيذ الخاص بك",
+                    HttpStatus.UNPROCESSABLE_ENTITY);
+            }
+        }
 
         UUID id = UUID.randomUUID();
         jdbc.update(
             "INSERT INTO transfers " +
-            "(id, tenant_id, transfer_type, destination_location_id, note, expected_return_at, created_by, transfer_mode) " +
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            "(id, tenant_id, transfer_type, destination_location_id, note, expected_return_at, created_by, transfer_mode, source_location_id) " +
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             id, tenantId, transferType, destinationLocationId, note,
-            expectedReturnAt != null ? Timestamp.from(expectedReturnAt) : null, actorUserId, transferMode);
+            expectedReturnAt != null ? Timestamp.from(expectedReturnAt) : null, actorUserId, transferMode,
+            isReturn ? sourceLocationId : null);
         return id;
     }
 
@@ -260,6 +313,149 @@ public class TransferService {
         // the transfer's freeform note is not duplicated here (it's on the transfer row).
         m.put("reason", transferType);
         return writeJson(m);
+    }
+
+    // ── Return send-out scan (FR-22.11 / B2) ────────────────────────────────
+
+    /**
+     * The one legal exit from the 'transferred_out' terminal (opened by this method's
+     * corresponding InventoryLedger.ALLOWED edge, "transferred_out:out_on_transfer" —
+     * returnScanOut() is its SOLE caller; see the B2 diagnosis's grep proof). A NEW SIBLING
+     * to scanOut(), not a branch inside it — scanOut() carries load-bearing concurrency
+     * javadoc (see class header) and its own precondition (status='available') is a
+     * different piece of the state machine than this method's (status='transferred_out').
+     *
+     * Same claim-before-transition shape as scanOut() and for the identical reason: the
+     * plain JdbcTemplate transfer_pieces INSERT is the race referee, so transition()'s
+     * StateConflictException never needs to be caught inside this @Transactional method.
+     */
+    @Transactional(isolation = Isolation.READ_COMMITTED)
+    public ScanOutResult returnScanOut(UUID transferId, String barcode, UUID actorUserId) {
+        UUID tenantId = TenantContext.require();
+
+        // 1. Transfer must exist, be open, and be a relocate_return transfer.
+        List<Map<String, Object>> transferRows = jdbc.queryForList(
+            "SELECT status, transfer_mode, destination_location_id, source_location_id, transfer_type " +
+            "FROM transfers WHERE id = ? AND tenant_id = ?",
+            transferId, tenantId);
+        if (transferRows.isEmpty()) {
+            return ScanOutResult.rejected("TRANSFER_NOT_FOUND",
+                "Transfer not found",
+                "لم يتم العثور على عملية النقل");
+        }
+        Map<String, Object> transfer = transferRows.get(0);
+        String transferStatus = (String) transfer.get("status");
+        String transferMode   = (String) transfer.get("transfer_mode");
+        if (!"relocate_return".equals(transferMode)) {
+            return ScanOutResult.rejected("TRANSFER_NOT_RELOCATE_RETURN",
+                "This transfer is not a return transfer (mode: " + transferMode + ")",
+                "عملية النقل هذه ليست عملية إرجاع (النمط: " + transferMode + ")");
+        }
+        if (!"open".equals(transferStatus)) {
+            return ScanOutResult.rejected("TRANSFER_NOT_OPEN",
+                "Transfer is not open for send-out (status: " + transferStatus + ")",
+                "عملية النقل ليست مفتوحة للإرسال (الحالة الحالية: " + transferStatus + ")");
+        }
+        UUID   destinationLocationId = (UUID)   transfer.get("destination_location_id");
+        UUID   sourceLocationId      = (UUID)   transfer.get("source_location_id");
+        String transferType          = (String) transfer.get("transfer_type");
+
+        // 2. Piece lookup — same triple-match as scanOut().
+        List<Map<String, Object>> pieceRows = jdbc.queryForList(
+            "SELECT p.id, p.variant_id, p.status, p.current_location_id FROM pieces p " +
+            "WHERE (p.barcode = ? OR p.id = ? OR p.short_code = ?) AND p.tenant_id = ?",
+            barcode, barcode, barcode, tenantId);
+        if (pieceRows.isEmpty()) {
+            return ScanOutResult.rejected("PIECE_NOT_FOUND",
+                "Barcode not found in inventory",
+                "لم يتم العثور على الباركود في المخزون");
+        }
+        Map<String, Object> piece   = pieceRows.get(0);
+        String pieceId   = (String) piece.get("id");
+        UUID   variantId = (UUID)   piece.get("variant_id");
+        String status    = (String) piece.get("status");
+        UUID   pieceLocationId = (UUID) piece.get("current_location_id");
+
+        // 3. WRONG_STATUS: piece must be transferred_out (the terminal Relocate close leaves
+        //    it in — not 'available', which is scanOut()'s precondition, not this one's).
+        if (!"transferred_out".equals(status)) {
+            return ScanOutResult.rejected("WRONG_STATUS",
+                "Piece is not transferred_out (status: " + status + ")",
+                "القطعة ليست في حالة النقل النهائي (الحالة الحالية: " + status + ")");
+        }
+
+        // 4. WRONG_ORIGIN: scope the claim to THIS return's declared source location — a
+        //    piece sitting at Warehouse-B-2 must not be claimable by a return declared
+        //    against Warehouse-B-1 (see the B2 diagnosis's option (a)/(c) tradeoff).
+        if (!Objects.equals(pieceLocationId, sourceLocationId)) {
+            return ScanOutResult.rejected("WRONG_ORIGIN",
+                "Piece is not at this return's source location",
+                "القطعة ليست في موقع المصدر لعملية الإرجاع هذه");
+        }
+
+        // 5. Ensure the line row exists (create-if-absent, qty_out untouched — only bumped
+        //    once the claim + transition below both succeed). Same get-or-create idiom as
+        //    scanOut().
+        UUID lineId = jdbc.query(
+            "INSERT INTO transfer_lines (id, tenant_id, transfer_id, variant_id) " +
+            "VALUES (gen_random_uuid(), ?, ?, ?) " +
+            "ON CONFLICT (transfer_id, variant_id) DO UPDATE SET transfer_id = EXCLUDED.transfer_id " +
+            "RETURNING id",
+            rs -> rs.next() ? rs.getObject("id", UUID.class) : null,
+            tenantId, transferId, variantId);
+
+        // 6. CLAIM — the race referee, identical shape to scanOut()'s (see class javadoc for
+        //    why this must be a plain JdbcTemplate call in this method body, not a call into
+        //    another @Transactional bean).
+        try {
+            jdbc.update(
+                "INSERT INTO transfer_pieces (id, tenant_id, transfer_id, line_id, piece_id) " +
+                "VALUES (gen_random_uuid(), ?, ?, ?, ?)",
+                tenantId, transferId, lineId, pieceId);
+        } catch (DuplicateKeyException e) {
+            return ScanOutResult.rejected("ALREADY_ON_TRANSFER",
+                "Piece was claimed by a concurrent scan",
+                "تم حجز القطعة بواسطة عملية مسح متزامنة");
+        }
+
+        // 7. Transition transferred_out → out_on_transfer — the one legal exit from
+        //    terminal. Left uncaught by design, same reasoning as scanOut()'s step 6.
+        ledger.transition(pieceId, PieceStatus.TRANSFERRED_OUT, PieceStatus.OUT_ON_TRANSFER,
+            "return_transfer_out", actorUserId,
+            new TransitionContext(null, null, destinationLocationId, null, transferMeta(transferId, transferType)));
+
+        // 8. Explicit location update — transition() does not touch current_location_id
+        //    (same pattern as scanOut()). The piece is physically still at B until it's
+        //    scanned back at A during reconcile; this mirrors scanOut()'s own convention of
+        //    moving current_location_id to the transfer's destination immediately on the
+        //    send-out scan (the piece is "in transit to A" from this point).
+        jdbc.update("UPDATE pieces SET current_location_id = ? WHERE id = ?",
+            destinationLocationId, pieceId);
+
+        int qtyOut = jdbc.queryForObject(
+            "UPDATE transfer_lines SET qty_out = qty_out + 1 WHERE id = ? RETURNING qty_out",
+            Integer.class, lineId);
+
+        return ScanOutResult.success(pieceId, barcode, variantId, lineId, qtyOut);
+    }
+
+    // ── Return piece picker (FR-22.11 / B2) ─────────────────────────────────
+
+    /** Pieces available to pull onto a NEW return transfer from a chosen origin location —
+     *  the return create screen's picker list. Read-only, tenant-scoped explicitly (matching
+     *  scanOut()'s piece lookup) alongside RLS. */
+    @Transactional(readOnly = true)
+    public List<Map<String, Object>> listReturnablePieces(UUID sourceLocationId) {
+        UUID tenantId = TenantContext.require();
+        return jdbc.queryForList(
+            "SELECT p.id, p.barcode, p.short_code, p.variant_id, v.sku, v.title AS variant_title, " +
+            "       pr.title AS product_title " +
+            "FROM pieces p " +
+            "JOIN variants v  ON v.id  = p.variant_id " +
+            "JOIN products pr ON pr.id = v.product_id " +
+            "WHERE p.status = 'transferred_out' AND p.current_location_id = ? AND p.tenant_id = ? " +
+            "ORDER BY pr.title ASC, v.title ASC",
+            sourceLocationId, tenantId);
     }
 
     // ── Reconcile: begin ─────────────────────────────────────────────────────
@@ -742,10 +938,25 @@ public class TransferService {
 
     // ── List / get (consignment view) ───────────────────────────────────────
 
-    /** "What's outside our walls, with whom, since when" — open + reconciling transfers. */
+    private static final Set<String> VALID_STATUS_FILTERS = Set.of("open", "closed", "all");
+
+    /** "What's outside our walls, with whom, since when" — open + reconciling transfers.
+     *  Default view, unchanged from before the closed-view toggle. */
     @Transactional(readOnly = true)
     public List<Map<String, Object>> listOpen() {
+        return listOpen("open");
+    }
+
+    /** statusFilter: "open" (open+reconciling, the historical default) | "closed" | "all". */
+    @Transactional(readOnly = true)
+    public List<Map<String, Object>> listOpen(String statusFilter) {
         UUID tenantId = TenantContext.require();
+        String filter = VALID_STATUS_FILTERS.contains(statusFilter) ? statusFilter : "open";
+        String statusPredicate = switch (filter) {
+            case "closed" -> "t.status = 'closed'";
+            case "all"    -> "TRUE";
+            default       -> "t.status IN ('open', 'reconciling')";
+        };
         return jdbc.queryForList(
             "SELECT t.id, t.transfer_type, t.transfer_mode, t.status, t.note, t.expected_return_at, " +
             "       t.created_by, t.created_at, " +
@@ -754,7 +965,7 @@ public class TransferService {
             "        WHERE tp.transfer_id = t.id AND tp.outcome IS NULL) AS outstanding_count " +
             "FROM transfers t " +
             "JOIN locations loc ON loc.id = t.destination_location_id " +
-            "WHERE t.tenant_id = ? AND t.status IN ('open', 'reconciling') " +
+            "WHERE t.tenant_id = ? AND " + statusPredicate + " " +
             "ORDER BY t.created_at DESC",
             tenantId);
     }
@@ -765,9 +976,11 @@ public class TransferService {
         List<Map<String, Object>> rows = jdbc.queryForList(
             "SELECT t.id, t.transfer_type, t.transfer_mode, t.status, t.note, t.expected_return_at, " +
             "       t.created_by, t.created_at, t.closed_by, t.closed_at, " +
-            "       t.destination_location_id, loc.name AS destination_location_name " +
+            "       t.destination_location_id, loc.name AS destination_location_name, " +
+            "       t.source_location_id, srcloc.name AS source_location_name " +
             "FROM transfers t " +
             "JOIN locations loc ON loc.id = t.destination_location_id " +
+            "LEFT JOIN locations srcloc ON srcloc.id = t.source_location_id " +
             "WHERE t.id = ? AND t.tenant_id = ?",
             transferId, tenantId);
         if (rows.isEmpty()) {

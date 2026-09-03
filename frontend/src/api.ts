@@ -1529,8 +1529,7 @@ export type TransferStatus = 'open' | 'reconciling' | 'closed'
 export type TransferType = 'showroom' | 'dryclean' | 'repair' | 'other'
 export const TRANSFER_TYPES: TransferType[] = ['showroom', 'dryclean', 'repair', 'other']
 export type TransferCondition = 'good' | 'condemned'
-// relocate_return (B2, FR-22.11) intentionally omitted — no create path emits it yet.
-export type TransferMode = 'round_trip' | 'relocate_out'
+export type TransferMode = 'round_trip' | 'relocate_out' | 'relocate_return'
 
 export interface LocationOption {
   id: string
@@ -1569,6 +1568,8 @@ export function createTransfer(params: {
   expectedReturnAt?: string | null
   note?: string | null
   transferMode?: TransferMode
+  /** Required only when transferMode is 'relocate_return' — the B->A return's origin B. */
+  sourceLocationId?: string | null
 }) {
   return transferCommandRequest<{ id: string }>('/transfers', {
     method: 'POST',
@@ -1593,6 +1594,30 @@ export function scanOutTransferPiece(transferId: string, barcode: string) {
     method: 'POST',
     body: JSON.stringify({ barcode }),
   })
+}
+
+/** relocate_return only — the return leg's send-out scan at the origin (B). */
+export function returnScanOutTransferPiece(transferId: string, barcode: string) {
+  return request<TransferScanResult>(`/transfers/${transferId}/return-scan-out`, {
+    method: 'POST',
+    body: JSON.stringify({ barcode }),
+  })
+}
+
+export interface ReturnablePiece {
+  id: string
+  barcode: string
+  short_code: string
+  variant_id: string
+  sku: string | null
+  variant_title: string
+  product_title: string
+}
+
+/** transferred_out pieces sitting at the given (non-fulfillment) location — the Return
+ *  create screen's picker list. */
+export function listReturnablePieces(locationId: string) {
+  return request<ReturnablePiece[]>(`/transfers/returnable-pieces?locationId=${locationId}`)
 }
 
 export interface TransferScanBackResult {
@@ -1627,8 +1652,11 @@ export interface TransferSummary {
   outstanding_count: number
 }
 
-export function listOpenTransfers() {
-  return request<TransferSummary[]>('/transfers')
+export type TransferListView = 'open' | 'closed' | 'all'
+
+/** view: 'open' (open+reconciling, the default) | 'closed' | 'all' — the closed-view toggle. */
+export function listOpenTransfers(view: TransferListView = 'open') {
+  return request<TransferSummary[]>(`/transfers?status=${view}`)
 }
 
 export interface TransferLine {
@@ -1657,6 +1685,9 @@ export interface TransferDetail {
   closed_at: string | null
   destination_location_id: string
   destination_location_name: string
+  /** Set only for transfer_mode='relocate_return' — the return's origin B. */
+  source_location_id: string | null
+  source_location_name: string | null
   lines: TransferLine[]
   outstandingCount: number
 }

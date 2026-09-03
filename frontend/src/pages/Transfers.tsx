@@ -1,10 +1,11 @@
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
-import { Badge, Button, EmptyState, Input, Select, StatCard, TableSkeleton, Alert } from '../components/ui'
+import { Badge, Button, EmptyState, Input, Select, StatCard, TableSkeleton, Alert, Checkbox, SegmentedControl } from '../components/ui'
 import {
-  listOpenTransfers, listTransferDestinations, createTransfer,
+  listOpenTransfers, listTransferDestinations, listLocations, createTransfer, listReturnablePieces,
   TransferSummary, TransferType, TRANSFER_TYPES, LocationOption, TransferCommandError,
+  TransferListView, ReturnablePiece,
 } from '../api'
 
 // FR-22.10 — Relocate is a distinct top-level create action, not a TRANSFER_TYPES radio
@@ -43,22 +44,39 @@ export default function Transfers() {
   const [transfers, setTransfers] = useState<TransferSummary[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [view, setView] = useState<'list' | 'create' | 'relocate'>('list')
+  const [view, setView] = useState<'list' | 'create' | 'relocate' | 'return'>('list')
+  // Closed-view toggle — default 'open' preserves the pre-toggle behavior exactly.
+  const [statusView, setStatusView] = useState<TransferListView>('open')
   // Gates the "Relocate" affordance's visibility: destinations are every non-fulfillment
   // location, so an empty list already means "tenant has <2 locations" — no separate count
   // query needed, this is the exact same fetch CreateTransferForm makes for its own picker.
   const [destinationCount, setDestinationCount] = useState<number | null>(null)
+  // Gates "Return": needs a destination AND something to have ever gone out one-way.
+  // Reuses the 'all' transfers fetch (already needed for the closed-view toggle) rather
+  // than a dedicated existence-check endpoint — an approximation (a relocate_out transfer
+  // existing doesn't guarantee any of its pieces are still transferred_out today), but the
+  // Return screen's own picker is the real source of truth once a location is chosen
+  // (same pattern CreateTransferForm already uses for an empty destination list).
+  const [everRelocated, setEverRelocated] = useState<boolean | null>(null)
 
   useEffect(() => {
-    load()
+    load('open')
     listTransferDestinations().then(d => setDestinationCount(d.length)).catch(() => setDestinationCount(0))
+    listOpenTransfers('all')
+      .then(all => setEverRelocated(all.some(tr => tr.transfer_mode === 'relocate_out')))
+      .catch(() => setEverRelocated(false))
   }, [])
 
-  async function load() {
+  async function load(nextView: TransferListView) {
     setLoading(true)
-    try { setTransfers(await listOpenTransfers()) }
+    try { setTransfers(await listOpenTransfers(nextView)) }
     catch (e: unknown) { setError(e instanceof Error ? e.message : String(e)) }
     finally { setLoading(false) }
+  }
+
+  function changeStatusView(next: TransferListView) {
+    setStatusView(next)
+    load(next)
   }
 
   function openRow(tr: TransferSummary) {
@@ -83,6 +101,15 @@ export default function Transfers() {
     )
   }
 
+  if (view === 'return') {
+    return (
+      <ReturnTransferForm
+        onCreated={(id) => navigate(`/transfers/${id}/scan-out`)}
+        onCancel={() => setView('list')}
+      />
+    )
+  }
+
   const openCount = transfers.filter(tr => tr.status === 'open').length
   const reconcilingCount = transfers.filter(tr => tr.status === 'reconciling').length
   const outstandingTotal = transfers.reduce((sum, tr) => sum + tr.outstanding_count, 0)
@@ -98,11 +125,26 @@ export default function Transfers() {
               {t('transfers.relocate.action')}
             </Button>
           )}
+          {destinationCount !== null && destinationCount > 0 && everRelocated && (
+            <Button size="sm" variant="secondary" onClick={() => setView('return')}>
+              {t('transfers.return.action')}
+            </Button>
+          )}
           <Button size="sm" onClick={() => setView('create')}>
             + {t('transfers.new')}
           </Button>
         </div>
       </div>
+
+      <SegmentedControl
+        value={statusView}
+        onChange={(v) => changeStatusView(v as TransferListView)}
+        options={[
+          { value: 'open', label: t('transfers.view.open') },
+          { value: 'closed', label: t('transfers.view.closed') },
+          { value: 'all', label: t('transfers.view.all') },
+        ]}
+      />
 
       {/* Summary tiles — derived client-side from the already-fetched open+reconciling
           set (listOpenTransfers() returns the full set with a per-row outstanding_count,
@@ -346,6 +388,172 @@ function RelocateTransferForm({ onCreated, onCancel }: {
         <div className="flex gap-3 pt-1">
           <Button type="submit" loading={saving}>
             {t('transfers.relocate.submit')}
+          </Button>
+          <Button type="button" variant="secondary" onClick={onCancel}>
+            {t('common.cancel')}
+          </Button>
+        </div>
+      </form>
+    </div>
+  )
+}
+
+// ── Return Form (FR-22.11 / B2, B->A) ───────────────────────────────────────
+//
+// From = any non-fulfillment location (source_location_id); To is locked to the tenant's
+// fulfillment warehouse (server-enforced too — createTransfer() rejects any other
+// destination for transfer_mode='relocate_return'). The piece list below is informational
+// only, not a bulk-claim call — the backend has no such endpoint, by design: a transfer's
+// pieces are only ever claimed one at a time by an actual scan (returnScanOut, same as
+// every other transfer type's scanOut), matching the "identity break-and-reissue" model
+// (transfers-build-spec.md). Selecting here just lets the operator confirm what they expect
+// to scan on the next screen; Create only opens the transfer shell (source + destination).
+
+function ReturnTransferForm({ onCreated, onCancel }: {
+  onCreated: (id: string) => void; onCancel: () => void
+}) {
+  const { t, i18n } = useTranslation()
+  const isAr = i18n.language === 'ar'
+  const [sources, setSources] = useState<LocationOption[]>([])
+  const [loadingSources, setLoadingSources] = useState(true)
+  const [sourceId, setSourceId] = useState('')
+  const [fulfillmentLocation, setFulfillmentLocation] = useState<LocationOption | null>(null)
+  const [pieces, setPieces] = useState<ReturnablePiece[]>([])
+  const [loadingPieces, setLoadingPieces] = useState(false)
+  const [selected, setSelected] = useState<Set<string>>(new Set())
+  const [note, setNote] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    listTransferDestinations()
+      .then(setSources)
+      .catch(() => setSources([]))
+      .finally(() => setLoadingSources(false))
+    // "To" is locked to the tenant's fulfillment warehouse — listTransferDestinations()
+    // filters is_fulfillment out (it's the valid-destination set for every OTHER transfer
+    // type), so its id/name come from the unfiltered locations list instead.
+    listLocations()
+      .then(all => setFulfillmentLocation(all.find(l => l.is_fulfillment) ?? null))
+      .catch(() => setFulfillmentLocation(null))
+  }, [])
+
+  useEffect(() => {
+    if (!sourceId) { setPieces([]); setSelected(new Set()); return }
+    setLoadingPieces(true)
+    listReturnablePieces(sourceId)
+      .then(rows => { setPieces(rows); setSelected(new Set(rows.map(p => p.id))) })
+      .catch(() => setPieces([]))
+      .finally(() => setLoadingPieces(false))
+  }, [sourceId])
+
+  function toggleOne(id: string) {
+    setSelected(prev => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id); else next.add(id)
+      return next
+    })
+  }
+
+  function toggleAll() {
+    setSelected(prev => prev.size === pieces.length ? new Set() : new Set(pieces.map(p => p.id)))
+  }
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault()
+    if (!sourceId) {
+      setError(t('transfers.return.sourceRequired'))
+      return
+    }
+    if (!fulfillmentLocation) {
+      setError(t('transfers.return.noFulfillmentLocation'))
+      return
+    }
+    setSaving(true); setError(null)
+    try {
+      const res = await createTransfer({
+        transferType: 'other',
+        destinationLocationId: fulfillmentLocation.id,
+        note: note || undefined,
+        transferMode: 'relocate_return',
+        sourceLocationId: sourceId,
+      })
+      onCreated(res.id)
+    } catch (e: unknown) {
+      if (e instanceof TransferCommandError) setError(isAr ? e.messageAr : e.messageEn)
+      else setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div className="max-w-lg space-y-4">
+      <h1 className="text-h1 text-primary">{t('transfers.return.title')}</h1>
+      <p className="text-small text-muted">{t('transfers.return.description')}</p>
+      {error && <Alert tone="critical" title={error} />}
+      <form onSubmit={submit} className="card p-5 space-y-4">
+        <div className="space-y-1.5">
+          <label className="text-small text-muted">{t('transfers.return.from')}</label>
+          {!loadingSources && sources.length === 0 ? (
+            <Alert tone="warning" title={t('transfers.create.noDestinations')} />
+          ) : (
+            <Select
+              value={sourceId}
+              onChange={setSourceId}
+              disabled={loadingSources}
+              placeholder={t('transfers.return.fromPlaceholder')}
+              options={sources.map(d => ({ value: d.id, label: d.name }))}
+            />
+          )}
+        </div>
+
+        <div className="space-y-1.5">
+          <label className="text-small text-muted">{t('transfers.return.to')}</label>
+          <p className="text-body text-primary">{fulfillmentLocation?.name ?? t('transfers.return.toLocked')}</p>
+        </div>
+
+        {sourceId && (
+          <div className="space-y-1.5">
+            <div className="flex items-center justify-between">
+              <label className="text-small text-muted">{t('transfers.return.pieces')}</label>
+              {pieces.length > 0 && (
+                <Checkbox
+                  checked={selected.size === pieces.length}
+                  indeterminate={selected.size > 0 && selected.size < pieces.length}
+                  onChange={toggleAll}
+                  label={t('transfers.return.selectAll')}
+                />
+              )}
+            </div>
+            {loadingPieces ? (
+              <p className="text-small text-muted">{t('common.loading')}</p>
+            ) : pieces.length === 0 ? (
+              <Alert tone="info" title={t('transfers.return.noPieces')} />
+            ) : (
+              <div className="card overflow-hidden max-h-64 overflow-y-auto">
+                {pieces.map(p => (
+                  <div key={p.id} className="tbl-row flex items-center gap-2 px-3 py-2">
+                    <Checkbox checked={selected.has(p.id)} onChange={() => toggleOne(p.id)} />
+                    <span className="text-small text-primary">
+                      {p.product_title} · {p.variant_title}
+                      {p.sku && <span className="font-mono text-caption text-muted ms-2">{p.sku}</span>}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        <div className="space-y-1.5">
+          <label className="text-small text-muted">{t('transfers.create.note')}</label>
+          <Input value={note} onChange={e => setNote(e.target.value)} placeholder={t('transfers.create.notePlaceholder')} />
+        </div>
+
+        <div className="flex gap-3 pt-1">
+          <Button type="submit" loading={saving}>
+            {t('transfers.return.submit')}
           </Button>
           <Button type="button" variant="secondary" onClick={onCancel}>
             {t('common.cancel')}

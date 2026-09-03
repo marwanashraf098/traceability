@@ -110,7 +110,9 @@ export default function TransferDetail() {
       <div className="flex items-start justify-between flex-wrap gap-3">
         <div>
           <h1 className="text-h1 text-primary flex items-center gap-2">
-            {transfer.destination_location_name}
+            {transfer.transfer_mode === 'relocate_return' && transfer.source_location_name
+              ? `${transfer.source_location_name} → ${transfer.destination_location_name}`
+              : transfer.destination_location_name}
             <Badge tone={tone(transfer.status)} label={t(`transfers.status.${transfer.status}`)} />
           </h1>
           <p className="text-small text-muted mt-1">

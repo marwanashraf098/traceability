@@ -704,6 +704,8 @@
       "sold_offbook": "Marked sold off-book at vendor",
       "lost_at_vendor": "Marked lost at vendor",
       "label_reprinted": "Label reprinted",
+      "relocated_out": "Relocated to {{location}} — no longer pickable",
+      "return_transfer_out": "Sent out on return to {{location}}",
       "voided": "Voided — removed from sellable stock",
       "held": "Placed on hold",
       "unheld": "Released from hold — back to available"
@@ -1536,6 +1538,27 @@
       "title": "Relocate Stock",
       "description": "Move stock to another location permanently — no reconcile step, no scan-back. Close once every piece has been scanned out.",
       "submit": "Start Relocate"
+    },
+    "return": {
+      "action": "Return",
+      "title": "Return Stock",
+      "description": "Bring relocated stock back to your fulfillment warehouse — scan it out at the source, then scan it back on arrival.",
+      "from": "From",
+      "fromPlaceholder": "Select source location…",
+      "to": "To",
+      "toLocked": "Fulfillment warehouse",
+      "noFulfillmentLocation": "No fulfillment warehouse found",
+      "sourceRequired": "Select a source location",
+      "pieces": "Pieces at this location",
+      "selectAll": "Select all",
+      "noPieces": "No relocated pieces at this location",
+      "submit": "Start Return",
+      "scanOutSubtitle": "Return — send out"
+    },
+    "view": {
+      "open": "Open",
+      "closed": "Closed",
+      "all": "All"
     },
     "summary": {
       "open": "Open",

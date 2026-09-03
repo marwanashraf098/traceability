@@ -48,7 +48,8 @@ public class TransferController {
         UUID id = transferSvc.createTransfer(
             req.transferType(), UUID.fromString(req.destinationLocationId()),
             req.expectedReturnAt(), req.note(), principal.userId(),
-            req.transferMode() != null ? req.transferMode() : "round_trip");
+            req.transferMode() != null ? req.transferMode() : "round_trip",
+            req.sourceLocationId() != null ? UUID.fromString(req.sourceLocationId()) : null);
         return ResponseEntity.status(HttpStatus.CREATED).body(Map.of("id", id.toString()));
     }
 
@@ -64,13 +65,38 @@ public class TransferController {
         return transferSvc.scanOut(transferId, req.barcode(), principal.userId());
     }
 
+    // ── Return send-out scan (FR-22.11 / B2) ────────────────────────────────
+
+    /** relocate_return only — the return leg's send-out scan, pulling transferred_out
+     *  pieces off the terminal at B. Mirrors scanOut()'s route/gating shape exactly. */
+    @PostMapping("/{transferId}/return-scan-out")
+    @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
+    public TransferService.ScanOutResult returnScanOut(
+            @PathVariable UUID transferId,
+            @RequestBody ScanRequest req,
+            @AuthenticationPrincipal CustomUserDetails principal) {
+        return transferSvc.returnScanOut(transferId, req.barcode(), principal.userId());
+    }
+
+    // ── Return piece picker (FR-22.11 / B2) ─────────────────────────────────
+
+    /** transferred_out pieces sitting at the given location — the return create screen's
+     *  picker list. OWNER/MANAGER only, same gate as every other transfers endpoint. */
+    @GetMapping("/returnable-pieces")
+    @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
+    public List<Map<String, Object>> listReturnablePieces(@RequestParam UUID locationId) {
+        return transferSvc.listReturnablePieces(locationId);
+    }
+
     // ── List / get (consignment view) ───────────────────────────────────────
     // OWNER/MANAGER only — transfers are not a Worker capability (blueprint.md §11).
 
+    /** status: "open" (open+reconciling, default) | "closed" | "all" — the closed-view toggle. */
     @GetMapping
     @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
-    public List<Map<String, Object>> listOpen() {
-        return transferSvc.listOpen();
+    public List<Map<String, Object>> listOpen(
+            @RequestParam(name = "status", required = false) String status) {
+        return transferSvc.listOpen(status != null ? status : "open");
     }
 
     @GetMapping("/{transferId}")
@@ -150,10 +176,12 @@ public class TransferController {
 
     // ── Request records ──────────────────────────────────────────────────────
 
-    /** transferMode is optional (nullable) — null means round_trip, the pre-Relocate default. */
+    /** transferMode is optional (nullable) — null means round_trip, the pre-Relocate default.
+     *  sourceLocationId is optional (nullable) — required only when transferMode is
+     *  relocate_return (enforced server-side in TransferService.createTransfer()). */
     public record CreateTransferRequest(
         String transferType, String destinationLocationId, Instant expectedReturnAt, String note,
-        String transferMode) {}
+        String transferMode, String sourceLocationId) {}
 
     public record ScanRequest(String barcode) {}
 

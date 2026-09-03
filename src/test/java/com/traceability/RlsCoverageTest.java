@@ -94,6 +94,7 @@ class RlsCoverageTest {
             "/api/v1/stock-takes/summary",
             "/api/v1/transfers",
             "/api/v1/transfers/{transferId}",
+            "/api/v1/transfers/returnable-pieces",
             "/api/v1/me",
             "/api/v1/exceptions/count",
             "/api/v1/inventory/status-totals",
@@ -1019,6 +1020,30 @@ class RlsCoverageTest {
 
         jdbc.update("DELETE FROM transfers WHERE id = ?", transferId);
         jdbc.update("DELETE FROM locations WHERE id = ?", destId);
+    }
+
+    @Test
+    void returnablePieces_returnsSeededTransferredOutPieceAtLocation() {
+        UUID locId = UUID.randomUUID();
+        String pieceId = UlidGenerator.generate();
+        jdbc.update(
+            "INSERT INTO locations (id, tenant_id, name, type, is_default, is_fulfillment) " +
+            "VALUES (?, ?, 'CVG Return Source', 'warehouse', false, false)",
+            locId, tenantId);
+        jdbc.update(
+            "INSERT INTO pieces (id, tenant_id, variant_id, barcode, short_code, status, current_location_id) " +
+            "VALUES (?, ?, ?, ?, 'P' || LPAD((abs(hashtext(?)) % 999999 + 1)::text, 6, '0'), " +
+            "        'transferred_out'::piece_status, ?)",
+            pieceId, tenantId, variantId, "PC-" + pieceId, pieceId, locId);
+
+        ResponseEntity<List> resp = get("/api/v1/transfers/returnable-pieces?locationId=" + locId, List.class);
+        assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.OK);
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> items = resp.getBody();
+        assertThat(items).anyMatch(row -> pieceId.equals(row.get("id")));
+
+        jdbc.update("DELETE FROM pieces WHERE id = ?", pieceId);
+        jdbc.update("DELETE FROM locations WHERE id = ?", locId);
     }
 
     // ── Phase A: Inventory backend endpoints ────────────────────────────────────

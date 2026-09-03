@@ -109,6 +109,13 @@ public class InventoryLedger {
         // path), a separate approval; without it this status has no legal way out yet.
         "out_on_transfer:transferred_out",
 
+        // FR-22.11 — Relocate Return (B2, approved by Marawan). The one legal exit from the
+        // 'transferred_out' terminal — TransferService.returnScanOut() is its SOLE caller
+        // (confirmed by grep in the B2 diagnosis: no other code reads or writes
+        // 'transferred_out'). Opens the door back into the existing out_on_transfer graph
+        // above (reconcile/shortfall paths), not a new terminal of its own.
+        "transferred_out:out_on_transfer",
+
         // FR-13.x: Void (receiving-overcount / duplicate-entry correction — terminal, NOT a
         // loss; excluded from every loss-reporting site by construction because they all key on
         // literal status='lost', never a negated set — see PieceAdjustService.voidPiece()).

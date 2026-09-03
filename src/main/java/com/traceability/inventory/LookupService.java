@@ -39,6 +39,12 @@ public class LookupService {
         if ("sold_offbook".equals(eventType))            return "sold_offbook";
         if ("lost_at_vendor".equals(eventType))          return "lost_at_vendor";
         if ("label_reprinted".equals(eventType))         return "label_reprinted";
+        // FR-22.10 (B1) — backfilled here: relocated_out was left unmapped and fell through
+        // to the generic "status_changed" label; B2's return leg needs the same treatment
+        // for consistency, so both are added together.
+        if ("relocated_out".equals(eventType))           return "relocated_out";
+        // FR-22.11 (B2) — return leg's send-out scan (transferred_out -> out_on_transfer).
+        if ("return_transfer_out".equals(eventType))     return "return_transfer_out";
         if ("adjusted".equals(eventType)) {
             if ("available".equals(toStatus))      return "found_it";
             return "adjusted";

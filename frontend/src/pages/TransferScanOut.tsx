@@ -4,7 +4,7 @@ import { useTranslation } from 'react-i18next'
 import { useScanner } from '../hooks/useScanner'
 import { ScanShell } from '../components/ScanShell'
 import { Button, Spinner } from '../components/ui'
-import { getTransfer, scanOutTransferPiece, TransferDetail } from '../api'
+import { getTransfer, scanOutTransferPiece, returnScanOutTransferPiece, TransferDetail } from '../api'
 
 // FR-22.9 — Send-out scan screen (open state only). Same scan UX as the pick
 // screen / StockTakeScan.tsx: useScanner + ScanShell own all scan mechanics,
@@ -35,7 +35,12 @@ export default function TransferScanOut() {
   const scanner = useScanner({
     onScan: async (barcode) => {
       if (!id) return { success: false }
-      const result = await scanOutTransferPiece(id, barcode)
+      // relocate_return's send-out leg pulls transferred_out pieces off the terminal at B
+      // (a different backend precondition than every other transfer's available->out_on_transfer
+      // scan) — same screen, different API call, mirroring TransferDetail's mode branching.
+      const result = transfer?.transfer_mode === 'relocate_return'
+        ? await returnScanOutTransferPiece(id, barcode)
+        : await scanOutTransferPiece(id, barcode)
 
       if (result.success) {
         // Refetch so the per-variant table (names + qty_out) stays authoritative —
@@ -90,8 +95,18 @@ export default function TransferScanOut() {
           ← {t('transfers.scanOut.back')}
         </Button>
         <div className="text-end">
-          <p className="text-body font-medium text-primary">{transfer.destination_location_name}</p>
-          <p className="text-caption text-muted">{t(`transfers.type.${transfer.transfer_type}`)}</p>
+          {/* relocate_return's send-out leg happens AT the origin B — showing the
+              destination (always Main Warehouse for a return) here would be misleading. */}
+          <p className="text-body font-medium text-primary">
+            {transfer.transfer_mode === 'relocate_return'
+              ? transfer.source_location_name
+              : transfer.destination_location_name}
+          </p>
+          <p className="text-caption text-muted">
+            {transfer.transfer_mode === 'relocate_return'
+              ? t('transfers.return.scanOutSubtitle')
+              : t(`transfers.type.${transfer.transfer_type}`)}
+          </p>
         </div>
       </div>
 
