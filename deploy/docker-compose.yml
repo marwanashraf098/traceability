@@ -35,6 +35,10 @@ services:
       - /etc/letsencrypt:/etc/letsencrypt:ro
       # Certbot HTTP-01 challenge webroot
       - /var/www/certbot:/var/www/certbot:ro
+      # tracedtech.com marketing site — static files only, served directly by
+      # nginx (root /usr/share/nginx/marketing in nginx.conf). Decoupled from
+      # the app service: no build step, no container, just this bind mount.
+      - ../marketing:/usr/share/nginx/marketing:ro
     depends_on:
       app:
         condition: service_healthy
