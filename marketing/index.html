@@ -341,6 +341,66 @@
   .flow .nchip { position: relative; z-index: 1; }
   .flow .nchip .ic { background: var(--blue-tint); border-color: var(--blue); color: var(--blue); }
   .flow .nchip.hub .ic { background: var(--blue); border-color: var(--blue); color: #fff; box-shadow: 0 4px 12px rgba(37,99,235,.28); }
+
+  /* Global search — detailed traced result */
+  .search-box.typed .squery { flex: 1; font-family: var(--mono); font-size: 14.5px; color: #E4E4E7; display: flex; align-items: center; }
+  .caret { display: inline-block; width: 2px; height: 16px; background: #6E9BFF; margin-left: 3px; animation: blink 1.1s steps(1) infinite; }
+  @keyframes blink { 50% { opacity: 0; } }
+  .sr-detail { background: var(--dark-2); border: 1px solid var(--dark-line); border-radius: 14px; padding: 20px 22px 22px; margin-bottom: 18px; }
+  .sr-detail-head { display: flex; align-items: center; gap: 13px; padding-bottom: 18px; border-bottom: 1px solid var(--dark-line); }
+  .sr-thumb { width: 42px; height: 42px; border-radius: 10px; background: #1B1E27; border: 1px solid var(--dark-line); display: flex; align-items: center; justify-content: center; color: #9CA0AB; flex: none; }
+  .sr-meta { flex: 1; min-width: 0; }
+  .sr-sku { font-family: var(--mono); font-size: 14.5px; color: #F4F4F5; }
+  .sr-name { font-size: 12.5px; color: #9CA0AB; margin-top: 3px; }
+  .jlabel { font-size: 11.5px; color: #71768A; margin: 18px 0 4px; letter-spacing: .01em; }
+  .journey { position: relative; display: flex; justify-content: space-between; padding-top: 20px; gap: 6px; }
+  .jline { position: absolute; left: 9%; right: 9%; top: 26px; height: 2px; background: linear-gradient(90deg, #2b3550, var(--blue)); z-index: 0; }
+  .jnode { position: relative; z-index: 1; flex: 1; text-align: center; min-width: 0; }
+  .jdot { display: block; width: 11px; height: 11px; border-radius: 50%; background: var(--blue); margin: 0 auto 12px; box-shadow: 0 0 0 4px var(--dark-2); }
+  .jdot.end { background: var(--green); box-shadow: 0 0 0 4px var(--dark-2), 0 0 0 6px rgba(22,163,74,.25); }
+  .jstage { font-size: 11.5px; font-weight: 600; color: #C7CAD3; line-height: 1.3; }
+  .jloc { font-size: 12px; font-weight: 600; color: #F4F4F5; margin-top: 3px; }
+  .jloc.awb { font-family: var(--mono); font-size: 10.5px; color: #6E9BFF; font-weight: 500; }
+  .jmeta { font-size: 10.5px; color: #6B7280; margin-top: 4px; }
+  .sr-more { font-size: 11.5px; color: #71768A; margin-bottom: 10px; }
+  .search-dark .results { grid-template-columns: repeat(3, 1fr); }
+
+  /* Brand wordmark stays LTR in any direction — dot always on the right */
+  .logo, .strip-node.brand-traced .nm, .bm-traced { direction: ltr; unicode-bidi: isolate; }
+
+  /* ---------- PRICING ---------- */
+  .pricing-head { text-align: center; max-width: 34rem; margin: 0 auto 44px; }
+  .pricing-head h2 { font-size: 34px; line-height: 1.12; }
+  .pricing-head .lead { margin-top: 16px; }
+  .pricing-card { max-width: 560px; margin: 0 auto; background: #fff; border: 1px solid var(--line); border-radius: 20px; box-shadow: var(--shadow-card); padding: 36px 38px 34px; }
+  .pc-top { text-align: center; padding-bottom: 26px; border-bottom: 1px solid var(--line-soft); }
+  .pc-badge { display: inline-block; font-size: 12.5px; font-weight: 600; color: var(--blue); background: var(--blue-tint); padding: 5px 13px; border-radius: 999px; margin-bottom: 20px; }
+  .pc-price { display: flex; align-items: baseline; justify-content: center; gap: 8px; }
+  .pc-amt { font-size: 56px; font-weight: 800; letter-spacing: -.035em; color: var(--ink); line-height: 1; }
+  .pc-cur { font-size: 20px; font-weight: 700; color: var(--grey-700); }
+  .pc-per { font-size: 16px; color: var(--grey-500); font-weight: 500; }
+  .pc-note { font-size: 13.5px; color: var(--grey-500); margin-top: 14px; }
+  .pc-list { display: grid; grid-template-columns: 1fr 1fr; gap: 14px 22px; padding: 28px 0 30px; }
+  .pc-feat { display: flex; align-items: flex-start; gap: 10px; font-size: 14.5px; color: var(--grey-700); }
+  .pc-check { flex: none; width: 20px; height: 20px; border-radius: 50%; background: var(--green-tint); color: var(--green); font-size: 12px; font-weight: 700; display: flex; align-items: center; justify-content: center; margin-top: 1px; }
+  .pc-cta { width: 100%; justify-content: center; font-size: 15.5px; padding: 13px 22px; }
+  @media (max-width: 560px) { .pc-list { grid-template-columns: 1fr; } .pricing-card { padding: 30px 24px 28px; } .pc-amt { font-size: 46px; } }
+
+  /* ---------- ANIMATIONS (subtle, JS-gated + reduced-motion safe) ---------- */
+  @media (prefers-reduced-motion: no-preference) {
+    .anim-ready .reveal { opacity: 0; transform: translateY(16px); transition: opacity .6s cubic-bezier(.22,.61,.36,1), transform .6s cubic-bezier(.22,.61,.36,1); will-change: opacity, transform; }
+    .anim-ready .reveal.in { opacity: 1; transform: none; }
+    .anim-ready .steps3 .step-card:nth-child(2) { transition-delay: .09s; }
+    .anim-ready .steps3 .step-card:nth-child(3) { transition-delay: .18s; }
+    .anim-ready .feat-grid .feat:nth-child(2) { transition-delay: .06s; }
+    .anim-ready .feat-grid .feat:nth-child(3) { transition-delay: .12s; }
+    .anim-ready .feat-grid .feat:nth-child(4) { transition-delay: .18s; }
+  }
+  .track-card, .step-card, .pricing-card { transition: transform .2s ease, box-shadow .2s ease; }
+  .step-card:hover, .pricing-card:hover { transform: translateY(-3px); box-shadow: var(--shadow-lift); }
+  .track-card:hover { transform: translateY(-2px); box-shadow: var(--shadow-lift); }
+  .btn-primary { transition: background .15s ease, transform .12s ease, box-shadow .15s ease; }
+  .btn-primary:hover { box-shadow: 0 6px 18px rgba(37,99,235,.28); }
 </style>
 </head>
 <body>
@@ -350,16 +410,16 @@
   <div class="wrap nav-inner">
     <div class="logo">traced<b>.</b></div>
     <div class="nav-links">
-      <a href="#product">Product</a>
-      <a href="#usecases">Use cases</a>
-      <a href="#integrations">Integrations</a>
-      <a href="#pricing">Pricing</a>
-      <a href="#about">About</a>
+      <a href="#product" data-i18n="nav_product">Product</a>
+      <a href="#usecases" data-i18n="nav_usecases">Use cases</a>
+      <a href="#integrations" data-i18n="nav_integrations">Integrations</a>
+      <a href="#pricing" data-i18n="nav_pricing">Pricing</a>
+      <a href="#about" data-i18n="nav_about">About</a>
     </div>
     <div class="nav-right">
       <button class="lang-toggle" id="lang-toggle">العربية</button>
-      <a href="https://app.tracedtech.com/login" class="nav-login">Log in</a>
-      <a href="https://app.tracedtech.com/signup" class="btn btn-primary">Sign up <span class="arw">→</span></a>
+      <a href="https://app.tracedtech.com/login" class="nav-login" data-i18n="nav_login">Log in</a>
+      <a href="https://app.tracedtech.com/signup" class="btn btn-primary" data-i18n="nav_signup">Sign up <span class="arw">→</span></a>
     </div>
   </div>
 </nav>
@@ -367,19 +427,19 @@
 <!-- HERO -->
 <header class="hero">
   <div class="wrap hero-grid">
-    <div>
-      <div class="eyebrow">Operations intelligence for physical things</div>
-      <h1>Every item.<br>One clear history.</h1>
-      <p class="sub lead">Traced connects your store, warehouse, and delivery into one trusted trail — so you know where every item is, what happened to it, and what needs attention.</p>
-      <div class="trust"><span class="dot"></span> Built first for <b>Shopify</b> brands using <b>Bosta</b> in Egypt.</div>
+    <div class="reveal">
+      <div class="eyebrow" data-i18n="hero_eyebrow">Operations intelligence for physical things</div>
+      <h1 data-i18n="hero_h1">Every item.<br>One clear history.</h1>
+      <p class="sub lead" data-i18n="hero_sub">Traced connects your store, warehouse, and delivery into one trusted trail — so you know where every item is, what happened to it, and what needs attention.</p>
+      <div class="trust" data-i18n="hero_trust"><span class="dot"></span> Built first for <b>Shopify</b> brands using <b>Bosta</b> in Egypt.</div>
       <div class="hero-cta">
-        <a href="https://app.tracedtech.com/signup" class="btn btn-primary">Join early access <span class="arw">→</span></a>
-        <a href="#how" class="btn btn-ghost">See how it works</a>
+        <a href="https://app.tracedtech.com/signup" class="btn btn-primary" data-i18n="cta_get_organized">Get organized <span class="arw">→</span></a>
+        <a href="#how" class="btn btn-ghost" data-i18n="cta_see_how">See how it works</a>
       </div>
     </div>
 
     <!-- TRACKING CARD -->
-    <div class="track-card">
+    <div class="track-card reveal">
       <div class="track-head">
         <div class="track-thumb">
           <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 7l4-3 4 2 4-2 4 3-3 3v9H7v-9L4 7z"/></svg>
@@ -388,7 +448,7 @@
           <div class="track-sku">SS-TSHIRT-00428</div>
           <div class="track-name">Black Essential Tee · Size M</div>
         </div>
-        <span class="pill delivered"><span class="pd"></span> Delivered</span>
+        <span class="pill delivered" data-i18n="pill_delivered"><span class="pd"></span> Delivered</span>
       </div>
 
       <div class="timeline">
@@ -396,7 +456,7 @@
           <div class="rail"><div class="node"></div></div>
           <div class="body">
             <div>
-              <div class="label">Picked</div>
+              <div class="label" data-i18n="tl_picked">Picked</div>
               <div class="meta">May 21, 2025 · 9:14 AM<span class="mdot"></span>WH Cairo 2<span class="mdot"></span><span class="who">John</span></div>
             </div>
           </div>
@@ -405,7 +465,7 @@
           <div class="rail"><div class="node"></div></div>
           <div class="body">
             <div>
-              <div class="label">Packed</div>
+              <div class="label" data-i18n="tl_packed">Packed</div>
               <div class="meta">May 21, 2025 · 9:47 AM<span class="mdot"></span>WH Cairo 2<span class="mdot"></span><span class="who">Sarah</span></div>
             </div>
           </div>
@@ -414,7 +474,7 @@
           <div class="rail"><div class="node"></div></div>
           <div class="body">
             <div>
-              <div class="label">Handed to Bosta</div>
+              <div class="label" data-i18n="tl_handed">Handed to Bosta</div>
               <div class="meta">May 21, 2025 · 1:15 PM<span class="mdot"></span>WH Cairo 2<span class="mdot"></span><span class="who">Ahmed</span></div>
             </div>
             <span class="awb">BOSTA-338281</span>
@@ -424,7 +484,7 @@
           <div class="rail"><div class="node"></div></div>
           <div class="body">
             <div>
-              <div class="label">In transit</div>
+              <div class="label" data-i18n="tl_transit">In transit</div>
               <div class="meta">May 21, 2025 · 3:42 PM<span class="mdot"></span>Bosta<span class="mdot"></span><span class="who">Mohsen</span></div>
             </div>
           </div>
@@ -433,7 +493,7 @@
           <div class="rail"><div class="node"></div></div>
           <div class="body">
             <div>
-              <div class="label">Delivered</div>
+              <div class="label" data-i18n="tl_delivered">Delivered</div>
               <div class="meta">May 22, 2025 · 12:08 PM<span class="mdot"></span>Nasr City<span class="mdot"></span><span class="who">Omar</span></div>
             </div>
           </div>
@@ -446,20 +506,20 @@
 <!-- STACK STRIP -->
 <section class="strip" id="integrations">
   <div class="wrap">
-    <div class="strip-label">One operational trail across your stack</div>
-    <div class="strip-flow">
+    <div class="strip-label" data-i18n="strip_label">One operational trail across your stack</div>
+    <div class="strip-flow reveal">
       <div class="strip-node brand-shopify">
         <span class="brand-ic shopify" role="img" aria-label="Shopify"></span>
-        <div><div class="nm">Shopify</div><div class="sm">Orders</div></div>
+        <div><div class="nm">Shopify</div><div class="sm" data-i18n="strip_orders">Orders</div></div>
       </div>
       <span class="flow-arrow"><svg width="26" height="16" viewBox="0 0 26 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M1 8h22m0 0l-6-6m6 6l-6 6"/></svg></span>
       <div class="strip-node brand-traced">
-        <div><div class="nm">traced<b>.</b></div><div class="sm">Operational intelligence</div></div>
+        <div><div class="nm">traced<b>.</b></div><div class="sm" data-i18n="strip_opsint">Operational intelligence</div></div>
       </div>
       <span class="flow-arrow"><svg width="26" height="16" viewBox="0 0 26 16" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M1 8h22m0 0l-6-6m6 6l-6 6"/></svg></span>
       <div class="strip-node brand-bosta">
         <span class="brand-ic bosta" role="img" aria-label="Bosta"></span>
-        <div><div class="nm">Bosta</div><div class="sm">Delivery</div></div>
+        <div><div class="nm">Bosta</div><div class="sm" data-i18n="strip_delivery">Delivery</div></div>
       </div>
     </div>
   </div>
@@ -468,44 +528,44 @@
 <!-- PROBLEM -->
 <section class="block" id="product">
   <div class="wrap two-col">
-    <div class="col-head">
-      <div class="eyebrow">The problem</div>
-      <h2>Stop reconstructing what happened.</h2>
-      <p>Most brands lose visibility the moment an order leaves the store. Systems don't talk, updates get delayed, and teams chase answers across chats, spreadsheets, and dashboards.</p>
+    <div class="col-head reveal">
+      <div class="eyebrow" data-i18n="pr_eyebrow">The problem</div>
+      <h2 data-i18n="pr_h2">Stop reconstructing what happened.</h2>
+      <p data-i18n="pr_p">Most brands lose visibility the moment an order leaves the store. Systems don't talk, updates get delayed, and teams chase answers across chats, spreadsheets, and dashboards.</p>
     </div>
-    <div class="ba">
+    <div class="ba reveal">
       <div class="ba-side before">
-        <div class="ba-cap">Before Traced</div>
-        <div class="ba-sub">Scattered. Delayed. Unreliable.</div>
+        <div class="ba-cap" data-i18n="ba_before">Before Traced</div>
+        <div class="ba-sub" data-i18n="ba_before_sub">Scattered. Delayed. Unreliable.</div>
         <div class="scatter">
           <svg class="scatter-lines" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
             <path d="M12 22 L30 60" /><path d="M30 60 L56 22" /><path d="M56 22 L82 60" />
             <path d="M82 60 L68 88" /><path d="M12 22 L82 60" /><path d="M56 22 L68 88" />
             <path d="M30 60 L68 88" />
           </svg>
-          <div class="nchip s1"><div class="ic"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 9l1-4h16l1 4M4 9v11h16V9M4 9h16"/></svg></div><div class="nl">Store</div></div>
-          <div class="nchip s2"><div class="ic"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 20V9l9-5 9 5v11M9 20v-6h6v6"/></svg></div><div class="nl">Warehouse</div></div>
-          <div class="nchip s3"><div class="ic"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M1 5h13v10H1zM14 8h4l4 4v3h-8M5 20a2 2 0 100-4 2 2 0 000 4zM18 20a2 2 0 100-4 2 2 0 000 4z"/></svg></div><div class="nl">Delivery</div></div>
-          <div class="nchip s4"><div class="ic"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/></svg></div><div class="nl">Support</div></div>
-          <div class="nchip s5"><div class="ic"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 4h16v16H4zM4 9h16M9 4v16"/></svg></div><div class="nl">Sheets</div></div>
+          <div class="nchip s1"><div class="ic"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 9l1-4h16l1 4M4 9v11h16V9M4 9h16"/></svg></div><div class="nl" data-i18n="nl_store">Store</div></div>
+          <div class="nchip s2"><div class="ic"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 20V9l9-5 9 5v11M9 20v-6h6v6"/></svg></div><div class="nl" data-i18n="nl_warehouse">Warehouse</div></div>
+          <div class="nchip s3"><div class="ic"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M1 5h13v10H1zM14 8h4l4 4v3h-8M5 20a2 2 0 100-4 2 2 0 000 4zM18 20a2 2 0 100-4 2 2 0 000 4z"/></svg></div><div class="nl" data-i18n="nl_delivery">Delivery</div></div>
+          <div class="nchip s4"><div class="ic"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/></svg></div><div class="nl" data-i18n="nl_support">Support</div></div>
+          <div class="nchip s5"><div class="ic"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 4h16v16H4zM4 9h16M9 4v16"/></svg></div><div class="nl" data-i18n="nl_sheets">Sheets</div></div>
           <span class="scatter-q">?</span>
         </div>
-        <div class="ba-foot q">Where is this order?</div>
+        <div class="ba-foot q" data-i18n="ba_q">Where is this order?</div>
       </div>
       <div class="ba-side after">
-        <div class="ba-cap after">After Traced</div>
-        <div class="ba-sub">Connected. Real-time. Trusted.</div>
+        <div class="ba-cap after" data-i18n="ba_after">After Traced</div>
+        <div class="ba-sub" data-i18n="ba_after_sub">Connected. Real-time. Trusted.</div>
         <div class="flow">
           <div class="flow-track" aria-hidden="true"></div>
-          <div class="nchip"><div class="ic"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 9l1-4h16l1 4M4 9v11h16V9M4 9h16"/></svg></div><div class="nl">Store</div></div>
-          <div class="nchip"><div class="ic"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 20V9l9-5 9 5v11M9 20v-6h6v6"/></svg></div><div class="nl">Warehouse</div></div>
-          <div class="nchip hub"><div class="ic"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M12 2v6m0 0l3-3m-3 3L9 5M4 13a8 8 0 0016 0"/></svg></div><div class="nl">Traced</div></div>
-          <div class="nchip"><div class="ic"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M1 5h13v10H1zM14 8h4l4 4v3h-8M5 20a2 2 0 100-4 2 2 0 000 4zM18 20a2 2 0 100-4 2 2 0 000 4z"/></svg></div><div class="nl">Delivery</div></div>
-          <div class="nchip"><div class="ic"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M20 6L9 17l-5-5"/></svg></div><div class="nl">Proof</div></div>
+          <div class="nchip"><div class="ic"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 9l1-4h16l1 4M4 9v11h16V9M4 9h16"/></svg></div><div class="nl" data-i18n="nl_store">Store</div></div>
+          <div class="nchip"><div class="ic"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 20V9l9-5 9 5v11M9 20v-6h6v6"/></svg></div><div class="nl" data-i18n="nl_warehouse">Warehouse</div></div>
+          <div class="nchip hub"><div class="ic"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M12 2v6m0 0l3-3m-3 3L9 5M4 13a8 8 0 0016 0"/></svg></div><div class="nl" data-i18n="nl_traced">Traced</div></div>
+          <div class="nchip"><div class="ic"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M1 5h13v10H1zM14 8h4l4 4v3h-8M5 20a2 2 0 100-4 2 2 0 000 4zM18 20a2 2 0 100-4 2 2 0 000 4z"/></svg></div><div class="nl" data-i18n="nl_delivery">Delivery</div></div>
+          <div class="nchip"><div class="ic"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M20 6L9 17l-5-5"/></svg></div><div class="nl" data-i18n="nl_proof">Proof</div></div>
         </div>
         <div class="ba-result">
           <span class="rsku">SS-TSHIRT-00428</span>
-          <span class="pill delivered"><span class="pd"></span> Delivered</span>
+          <span class="pill delivered" data-i18n="pill_delivered"><span class="pd"></span> Delivered</span>
         </div>
       </div>
     </div>
@@ -515,30 +575,30 @@
 <!-- HOW IT WORKS -->
 <section class="block" id="how" style="background:var(--bg-alt);border-top:1px solid var(--line-soft);border-bottom:1px solid var(--line-soft);">
   <div class="wrap two-col">
-    <div class="col-head">
-      <div class="eyebrow">How Traced works</div>
-      <h2>One operational trail across your stack.</h2>
-      <p>Traced creates a live, verified history for every item from order to delivery — across your systems and your team.</p>
-      <a href="#integrations" class="learn">Learn more about integrations <span>→</span></a>
+    <div class="col-head reveal">
+      <div class="eyebrow" data-i18n="hw_eyebrow">How Traced works</div>
+      <h2 data-i18n="hw_h2">One operational trail across your stack.</h2>
+      <p data-i18n="hw_p">Traced creates a live, verified history for every item from order to delivery — across your systems and your team.</p>
+      <a href="#integrations" class="learn" data-i18n="hw_learn">Learn more about integrations <span>→</span></a>
     </div>
     <div class="steps3" id="usecases">
-      <div class="step-card">
-        <div class="idx">Step 1</div>
+      <div class="step-card reveal">
+        <div class="idx" data-i18n="step1">Step 1</div>
         <div class="brandmark"><span class="lockup shopify"><span class="brand-ic shopify" role="img" aria-label="Shopify"></span><span class="lk-name">Shopify</span></span></div>
-        <div class="sc-title">Orders come in</div>
-        <div class="sc-desc">Orders flow in from Shopify in real time — no manual entry, no gaps.</div>
+        <div class="sc-title" data-i18n="hw_t1">Orders come in</div>
+        <div class="sc-desc" data-i18n="hw_d1">Orders flow in from Shopify in real time — no manual entry, no gaps.</div>
       </div>
-      <div class="step-card">
-        <div class="idx">Step 2</div>
+      <div class="step-card reveal">
+        <div class="idx" data-i18n="step2">Step 2</div>
         <div class="brandmark"><span class="bm-traced">traced<b>.</b></span></div>
-        <div class="sc-title">Traced connects the dots</div>
-        <div class="sc-desc">Every item is barcoded and tracked person-by-person across warehouse and delivery.</div>
+        <div class="sc-title" data-i18n="hw_t2">Traced connects the dots</div>
+        <div class="sc-desc" data-i18n="hw_d2">Every item is barcoded and tracked person-by-person across warehouse and delivery.</div>
       </div>
-      <div class="step-card">
-        <div class="idx">Step 3</div>
+      <div class="step-card reveal">
+        <div class="idx" data-i18n="step3">Step 3</div>
         <div class="brandmark"><span class="lockup bosta"><span class="brand-ic bosta" role="img" aria-label="Bosta"></span><span class="lk-name">Bosta</span></span></div>
-        <div class="sc-title">Delivered with proof</div>
-        <div class="sc-desc">Every update is captured and visible in one place — from handoff to doorstep.</div>
+        <div class="sc-title" data-i18n="hw_t3">Delivered with proof</div>
+        <div class="sc-desc" data-i18n="hw_d3">Every update is captured and visible in one place — from handoff to doorstep.</div>
       </div>
     </div>
   </div>
@@ -547,31 +607,67 @@
 <!-- FEATURES -->
 <section class="block">
   <div class="wrap two-col">
-    <div class="col-head">
-      <div class="eyebrow">Built for real operations</div>
-      <h2>Visibility that drives better outcomes.</h2>
+    <div class="col-head reveal">
+      <div class="eyebrow" data-i18n="ft_eyebrow">Built for real operations</div>
+      <h2 data-i18n="ft_h2">Visibility that drives better outcomes.</h2>
     </div>
     <div class="feat-grid">
-      <div class="feat">
+      <div class="feat reveal">
         <div class="fic"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 7l8-4 8 4-8 4-8-4zM4 7v10l8 4 8-4V7M12 11v10"/></svg></div>
-        <div class="ft">Inventory accuracy</div>
-        <div class="fd">Know what you have, where it is, and what's moving — down to the piece.</div>
+        <div class="ft" data-i18n="ft_t1">Inventory accuracy</div>
+        <div class="fd" data-i18n="ft_d1">Know what you have, where it is, and what's moving — down to the piece.</div>
       </div>
-      <div class="feat">
+      <div class="feat reveal">
         <div class="fic"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg></div>
-        <div class="ft">Order tracking</div>
-        <div class="fd">Real-time updates your customers can actually trust.</div>
+        <div class="ft" data-i18n="ft_t2">Order tracking</div>
+        <div class="fd" data-i18n="ft_d2">Real-time updates your customers can actually trust.</div>
       </div>
-      <div class="feat">
+      <div class="feat reveal">
         <div class="fic"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M3 7l4-4M3 7l4 4M3 7h13a5 5 0 010 10h-3M21 17l-4 4M21 17l-4-4"/></svg></div>
-        <div class="ft">Returns management</div>
-        <div class="fd">Track returns end-to-end without the confusion or lost items.</div>
+        <div class="ft" data-i18n="ft_t3">Returns management</div>
+        <div class="fd" data-i18n="ft_d3">Track returns end-to-end without the confusion or lost items.</div>
       </div>
-      <div class="feat">
+      <div class="feat reveal">
         <div class="fic"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M12 3l9 16H3L12 3zM12 9v5M12 17h.01"/></svg></div>
-        <div class="ft">Exception handling</div>
-        <div class="fd">Spot issues early and act before your customers notice.</div>
+        <div class="ft" data-i18n="ft_t4">Exception handling</div>
+        <div class="fd" data-i18n="ft_d4">Spot issues early and act before your customers notice.</div>
       </div>
+    </div>
+  </div>
+</section>
+
+<!-- PRICING -->
+<section class="block pricing-section" id="pricing" style="background:var(--bg-alt);border-top:1px solid var(--line-soft);border-bottom:1px solid var(--line-soft);">
+  <div class="wrap">
+    <div class="pricing-head reveal">
+      <div class="eyebrow" data-i18n="price_eyebrow">Pricing</div>
+      <h2 data-i18n="price_h2">One plan. Everything included.</h2>
+      <p class="lead" data-i18n="price_sub">Everything Traced does today — for one simple monthly price. No tiers, no add-ons.</p>
+    </div>
+
+    <div class="pricing-card reveal">
+      <div class="pc-top">
+        <span class="pc-badge" data-i18n="price_badge">All-in-one</span>
+        <div class="pc-price">
+          <span class="pc-amt">700</span>
+          <span class="pc-cur" data-i18n="price_cur">EGP</span>
+          <span class="pc-per" data-i18n="price_per">/ month</span>
+        </div>
+        <div class="pc-note" data-i18n="price_note">No setup fees · Cancel anytime</div>
+      </div>
+      <div class="pc-list">
+        <div class="pc-feat"><span class="pc-check">✓</span><span data-i18n="price_f1">Piece-level tracking &amp; custody chain</span></div>
+        <div class="pc-feat"><span class="pc-check">✓</span><span data-i18n="price_f2">Inventory accuracy</span></div>
+        <div class="pc-feat"><span class="pc-check">✓</span><span data-i18n="price_f3">Order tracking</span></div>
+        <div class="pc-feat"><span class="pc-check">✓</span><span data-i18n="price_f4">Returns management</span></div>
+        <div class="pc-feat"><span class="pc-check">✓</span><span data-i18n="price_f5">Exception handling</span></div>
+        <div class="pc-feat"><span class="pc-check">✓</span><span data-i18n="price_f6">Global search</span></div>
+        <div class="pc-feat"><span class="pc-check">✓</span><span data-i18n="price_f7">Shopify integration</span></div>
+        <div class="pc-feat"><span class="pc-check">✓</span><span data-i18n="price_f8">Bosta integration</span></div>
+        <div class="pc-feat"><span class="pc-check">✓</span><span data-i18n="price_f9">Worker stations &amp; roles</span></div>
+        <div class="pc-feat"><span class="pc-check">✓</span><span data-i18n="price_f10">Bilingual dashboard (EN / AR)</span></div>
+      </div>
+      <a href="https://app.tracedtech.com/signup" class="btn btn-primary pc-cta" data-i18n="cta_get_organized">Get organized <span class="arw">→</span></a>
     </div>
   </div>
 </section>
@@ -580,22 +676,71 @@
 <section class="search-dark">
   <div class="wrap">
     <div class="search-grid">
-      <div>
-        <div class="eyebrow">Global search</div>
-        <h2>Search your physical operations like software.</h2>
-        <p class="sd-sub">Find any order, item, shipment, or update in seconds — across your entire operation.</p>
+      <div class="reveal">
+        <div class="eyebrow" data-i18n="gs_eyebrow">Global search</div>
+        <h2 data-i18n="gs_h2">Search your physical operations like software.</h2>
+        <p class="sd-sub" data-i18n="gs_sub">Find any order, item, shipment, or update in seconds — across your entire operation.</p>
       </div>
-      <div>
-        <div class="search-box">
+      <div class="reveal">
+        <div class="search-box typed">
           <span class="sicon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4-4"/></svg></span>
-          <span class="sph">Search order ID, item SKU, shipment ID, customer…</span>
+          <span class="squery">SS-TSHIRT-00428<span class="caret"></span></span>
           <span class="kbd">⌘K</span>
         </div>
+
+        <div class="sr-detail">
+          <div class="sr-detail-head">
+            <div class="sr-thumb">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 7l4-3 4 2 4-2 4 3-3 3v9H7v-9L4 7z"/></svg>
+            </div>
+            <div class="sr-meta">
+              <div class="sr-sku">SS-TSHIRT-00428</div>
+              <div class="sr-name">Black Essential Tee · Size M</div>
+            </div>
+            <span class="pill delivered" data-i18n="pill_delivered"><span class="pd"></span> Delivered</span>
+          </div>
+
+          <div class="jlabel" data-i18n="gs_jlabel">Full trail — every scan, handoff, and location</div>
+          <div class="journey">
+            <div class="jline"></div>
+            <div class="jnode">
+              <span class="jdot"></span>
+              <div class="jstage" data-i18n="js_received">Received</div>
+              <div class="jloc">WH Cairo 2</div>
+              <div class="jmeta">Sarah · May 20</div>
+            </div>
+            <div class="jnode">
+              <span class="jdot"></span>
+              <div class="jstage" data-i18n="js_pickpack">Picked &amp; packed</div>
+              <div class="jloc">WH Cairo 2</div>
+              <div class="jmeta">John · May 21</div>
+            </div>
+            <div class="jnode">
+              <span class="jdot"></span>
+              <div class="jstage" data-i18n="js_handed">Handed to Bosta</div>
+              <div class="jloc awb">BOSTA-338281</div>
+              <div class="jmeta">Ahmed · 1:15 PM</div>
+            </div>
+            <div class="jnode">
+              <span class="jdot"></span>
+              <div class="jstage" data-i18n="js_transit">In transit</div>
+              <div class="jloc">Cairo Hub</div>
+              <div class="jmeta">Mohsen · May 21</div>
+            </div>
+            <div class="jnode">
+              <span class="jdot end"></span>
+              <div class="jstage" data-i18n="js_delivered">Delivered</div>
+              <div class="jloc">Nasr City</div>
+              <div class="jmeta">Omar · May 22</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="sr-more" data-i18n="gs_more">Also matching your search</div>
         <div class="results">
-          <div class="rchip"><div class="rid">SS-TSHIRT-00428</div><div class="rstat"><span class="rd g"></span> Delivered</div></div>
-          <div class="rchip"><div class="rid">BOSTA-338281</div><div class="rstat"><span class="rd b"></span> In transit</div></div>
-          <div class="rchip"><div class="rid">RTN-88210</div><div class="rstat"><span class="rd r"></span> Return received</div></div>
-          <div class="rchip"><div class="rid">Order #1054</div><div class="rstat"><span class="rd g"></span> Packed</div></div>
+          <div class="rchip"><div class="rid">BOSTA-338281</div><div class="rstat" data-i18n="rs_transit"><span class="rd b"></span> In transit</div></div>
+          <div class="rchip"><div class="rid">RTN-88210</div><div class="rstat" data-i18n="rs_return"><span class="rd r"></span> Return received</div></div>
+          <div class="rchip"><div class="rid">Order #1054</div><div class="rstat" data-i18n="rs_packed"><span class="rd g"></span> Packed</div></div>
         </div>
       </div>
     </div>
@@ -605,15 +750,15 @@
 <!-- BELIEF -->
 <section class="belief" id="about">
   <div class="wrap belief-grid">
-    <div>
-      <div class="eyebrow">Our belief</div>
-      <h2>Visibility disappearing is the real problem.</h2>
-      <p>Traced exists to make physical operations visible, reliable, and understandable — for everyone who touches an order, from the warehouse floor to the customer's door.</p>
+    <div class="reveal">
+      <div class="eyebrow" data-i18n="bl_eyebrow">Our belief</div>
+      <h2 data-i18n="bl_h2">Visibility disappearing is the real problem.</h2>
+      <p data-i18n="bl_p">Traced exists to make physical operations visible, reliable, and understandable — for everyone who touches an order, from the warehouse floor to the customer's door.</p>
     </div>
-    <div class="cta-panel" id="join">
-      <h3>Nothing moves untraced.</h3>
-      <p>Join early access and help shape what's next.</p>
-      <a href="https://app.tracedtech.com/signup" class="btn btn-primary">Join early access <span class="arw">→</span></a>
+    <div class="cta-panel reveal" id="join">
+      <h3 data-i18n="bl_cta_h3">Nothing moves untraced.</h3>
+      <p data-i18n="bl_cta_p">Get every item on one clear trail — from receipt to doorstep.</p>
+      <a href="https://app.tracedtech.com/signup" class="btn btn-primary" data-i18n="cta_get_organized">Get organized <span class="arw">→</span></a>
     </div>
   </div>
 </section>
@@ -624,23 +769,23 @@
     <div class="foot-top">
       <div class="logo">traced<b>.</b></div>
       <div class="foot-links">
-        <a href="#product">Product</a>
-        <a href="#usecases">Use cases</a>
-        <a href="#integrations">Integrations</a>
-        <a href="#pricing">Pricing</a>
-        <a href="#about">About</a>
+        <a href="#product" data-i18n="nav_product">Product</a>
+        <a href="#usecases" data-i18n="nav_usecases">Use cases</a>
+        <a href="#integrations" data-i18n="nav_integrations">Integrations</a>
+        <a href="#pricing" data-i18n="nav_pricing">Pricing</a>
+        <a href="#about" data-i18n="nav_about">About</a>
       </div>
     </div>
     <div class="foot-bottom">
-      <div class="foot-copy">© 2025 Traced. All rights reserved.</div>
+      <div class="foot-copy" data-i18n="foot_copy">© 2025 Traced. All rights reserved.</div>
       <div class="foot-legal">
-        <a href="https://app.tracedtech.com/privacy">Privacy Policy</a>
-        <a href="https://app.tracedtech.com/terms">Terms of Service</a>
+        <a href="https://app.tracedtech.com/privacy" data-i18n="foot_privacy">Privacy Policy</a>
+        <a href="https://app.tracedtech.com/terms" data-i18n="foot_terms">Terms of Service</a>
       </div>
     </div>
   </div>
 </footer>
 
-<script src="app.js"></script>
+<script src="app.js" defer></script>
 </body>
 </html>
