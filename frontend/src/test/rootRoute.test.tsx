@@ -8,16 +8,6 @@ import { RootRoute, RequireAuth } from '../App'
 import { StationProvider } from '../components/StationProvider'
 import { clearAccessToken } from '../auth'
 
-// Landing is a marketing page full of browser APIs jsdom doesn't implement
-// (canvas 2d context, ResizeObserver, SVG getTotalLength, scroll-reveal
-// IntersectionObserver) — none of which this test cares about. This test's only
-// concern is ROUTING: does RootRoute render Landing (logged-out) or redirect
-// (logged-in)? Mocking it keeps the test decoupled from Landing's internals and
-// avoids shimming unrelated browser APIs. Landing's own content is untouched.
-vi.mock('../pages/Landing', () => ({
-  default: () => <div data-testid="landing-page">LANDING</div>,
-}))
-
 // Fresh i18next instance — mirrors renderWithProviders.tsx / stationGate.test.tsx.
 const testI18n = i18next.createInstance()
 testI18n.use(initReactI18next).init({
@@ -66,6 +56,7 @@ function renderAtRoot() {
         <I18nextProvider i18n={testI18n}>
           <Routes>
             <Route path="/" element={<RootRoute />} />
+            <Route path="/login" element={<div data-testid="login-page">LOGIN</div>} />
             <Route
               path="/overview"
               element={<RequireAuth><div data-testid="overview-page">OVERVIEW</div></RequireAuth>}
@@ -92,22 +83,22 @@ afterEach(() => {
 })
 
 describe('Root route ("/") — logged-in forwarding', () => {
-  test('(a) logged out at "/" -> Landing renders', async () => {
+  test('(a) logged out at "/" -> redirected to /login', async () => {
     mockRefresh({ ok: false })
 
     renderAtRoot()
 
-    expect(await screen.findByTestId('landing-page')).toBeInTheDocument()
+    expect(await screen.findByTestId('login-page')).toBeInTheDocument()
     expect(screen.queryByTestId('overview-page')).not.toBeInTheDocument()
   })
 
-  test('(b) logged-in owner at "/" -> redirected to /overview, Landing not shown', async () => {
+  test('(b) logged-in owner at "/" -> redirected to /overview, not /login', async () => {
     mockRefresh({ ok: true, role: 'owner' })
 
     renderAtRoot()
 
     expect(await screen.findByTestId('overview-page')).toBeInTheDocument()
-    expect(screen.queryByTestId('landing-page')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('login-page')).not.toBeInTheDocument()
   })
 
   test('(c) logged-in worker at "/" -> redirected to /worker-home', async () => {
@@ -116,28 +107,28 @@ describe('Root route ("/") — logged-in forwarding', () => {
     renderAtRoot()
 
     expect(await screen.findByTestId('worker-home-page')).toBeInTheDocument()
-    expect(screen.queryByTestId('landing-page')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('login-page')).not.toBeInTheDocument()
   })
 
-  test('(d) stationMode device at "/" -> lands on the gate, not Landing and not straight into the app', async () => {
+  test('(d) stationMode device at "/" -> lands on the gate, not /login and not straight into the app', async () => {
     localStorage.setItem('stationMode', 'true')
     mockRefresh({ ok: true, role: 'owner' })
 
     renderAtRoot()
 
     expect(await screen.findByText(/who's working/i)).toBeInTheDocument()
-    expect(screen.queryByTestId('landing-page')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('login-page')).not.toBeInTheDocument()
     expect(screen.queryByTestId('overview-page')).not.toBeInTheDocument()
   })
 
-  test('(e) no Landing content-flash before redirect — loading state precedes the redirect', async () => {
+  test('(e) no /login content-flash before redirect — loading state precedes the redirect', async () => {
     mockRefresh({ ok: true, role: 'owner' })
 
     renderAtRoot()
 
     // Synchronously after the first render (before the /auth/refresh promise
-    // resolves), RootRoute must be in its loading/spinner state — never Landing.
-    expect(screen.queryByTestId('landing-page')).not.toBeInTheDocument()
+    // resolves), RootRoute must be in its loading/spinner state — never /login.
+    expect(screen.queryByTestId('login-page')).not.toBeInTheDocument()
     expect(screen.queryByTestId('overview-page')).not.toBeInTheDocument()
 
     expect(await screen.findByTestId('overview-page')).toBeInTheDocument()

@@ -11,7 +11,6 @@ import StationGate from './components/StationGate'
 const StyleGuide = import.meta.env.DEV
   ? lazy(() => import('./pages/StyleGuide'))
   : null
-import Landing from './pages/Landing'
 import Login from './pages/Login'
 import Signup from './pages/Signup'
 import ForgotPassword from './pages/ForgotPassword'
@@ -102,14 +101,14 @@ export function RequireAuth({ children }: { children: React.ReactNode }) {
 }
 
 /**
- * Root path "/". A logged-out visitor sees the Landing page exactly as before.
- * A logged-in device (valid traced_refresh cookie) is forwarded into the app
- * instead — a warehouse tablet reopening the bare domain should never see
- * marketing content it has to click through. Reuses the same one-shot
- * /auth/refresh probe as RequireAuth (no new auth mechanism) and the same
- * stationMode/role routing RequireAuth + OwnerOnlyRoute/WorkerOnlyRoute use
- * elsewhere, so a fresh open lands on the same screen App already sends that
- * user to post-login.
+ * Root path "/". Marketing/landing content now lives standalone at
+ * tracedtech.com — a logged-out visitor here is sent to /login. A logged-in
+ * device (valid traced_refresh cookie) is forwarded into the app instead —
+ * a warehouse tablet reopening the bare domain should never see a login form
+ * it has to click through. Reuses the same one-shot /auth/refresh probe as
+ * RequireAuth (no new auth mechanism) and the same stationMode/role routing
+ * RequireAuth + OwnerOnlyRoute/WorkerOnlyRoute use elsewhere, so a fresh open
+ * lands on the same screen App already sends that user to post-login.
  */
 export function RootRoute() {
   const state = useAuthRefresh()
@@ -119,7 +118,7 @@ export function RootRoute() {
     return <AuthLoadingSpinner />
   }
   if (state === 'unauthenticated') {
-    return <Landing />
+    return <Navigate to="/login" replace />
   }
   // Same precedence as RequireAuth: station-mode gate wins over role routing.
   if (stationMode && !currentWorker) {

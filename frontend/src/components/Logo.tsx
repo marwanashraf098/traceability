@@ -12,7 +12,7 @@ export function Logo({
 }) {
   // 'mark' — plain wordmark + accent dot, no burst SVG (Traced Shell dc.html
   // sidebar brand mark). Kept separate from 'wordmark' so the burst-icon
-  // treatment used elsewhere (Landing, LegalPage) is untouched.
+  // treatment used elsewhere (LegalPage) is untouched.
   if (variant === 'mark') {
     return (
       <span data-testid="logo-mark" className={`inline-flex items-baseline gap-1 ${className}`}>
