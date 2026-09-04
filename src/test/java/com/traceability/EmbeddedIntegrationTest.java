@@ -93,6 +93,9 @@ class EmbeddedIntegrationTest {
     UUID tenantB;
     static final String SHOP_B = "embedded-test-b.myshopify.com";
 
+    UUID storeAId;
+    UUID storeBId;
+
     // Tenant C — not registered (unknown shop test)
     static final String SHOP_C = "embedded-test-c.myshopify.com";
 
@@ -115,18 +118,21 @@ class EmbeddedIntegrationTest {
             ownerA, tenantA);
 
         // shop-A: linked to tenantA
+        storeAId = UUID.randomUUID();
         jdbc.update(
             "INSERT INTO stores (id, tenant_id, shop_domain, status) VALUES (?, ?, ?, 'connected')",
-            UUID.randomUUID(), tenantA, SHOP_A);
+            storeAId, tenantA, SHOP_A);
 
         // shop-B: linked to tenantB (cross-tenant isolation fixture)
+        storeBId = UUID.randomUUID();
         jdbc.update(
             "INSERT INTO stores (id, tenant_id, shop_domain, status) VALUES (?, ?, ?, 'connected')",
-            UUID.randomUUID(), tenantB, SHOP_B);
+            storeBId, tenantB, SHOP_B);
     }
 
     @AfterAll
     void teardown() {
+        jdbc.update("DELETE FROM orders  WHERE tenant_id IN (?, ?)", tenantA, tenantB);
         jdbc.update("DELETE FROM stores  WHERE shop_domain IN (?, ?)", SHOP_A, SHOP_B);
         jdbc.update("DELETE FROM users   WHERE tenant_id IN (?, ?)", tenantA, tenantB);
         jdbc.update("DELETE FROM tenants WHERE id IN (?, ?)", tenantA, tenantB);
@@ -268,6 +274,107 @@ class EmbeddedIntegrationTest {
     void e11_validToken_storesStatus_200() throws Exception {
         ResponseEntity<String> r = get("/api/v1/embedded/stores/status", tokenA());
         assertThat(r.getStatusCode()).isEqualTo(HttpStatus.OK);
+    }
+
+    // ── E13: /orders/funnel — cross-tenant isolation (build-spec item 4) ────────
+    // Tenant A gets 2 'new'-status orders placed today, tenant B gets 5 — under RLS
+    // isolation, each token's funnel().newCount must equal ONLY that tenant's seeded
+    // count, never the sum. This is the tenant-isolation "fail closed" proof for the
+    // new /orders/funnel endpoint.
+
+    @Test @Order(13)
+    void e13_ordersFunnel_crossTenantIsolation() throws Exception {
+        seedOrders(tenantA, storeAId, "new", "now()", 2, "EMB-FUNNEL-A");
+        seedOrders(tenantB, storeBId, "new", "now()", 5, "EMB-FUNNEL-B");
+
+        ResponseEntity<String> a = get("/api/v1/embedded/orders/funnel", tokenA());
+        assertThat(a.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(a.getBody()).contains("\"newCount\":2");
+
+        ResponseEntity<String> b = get("/api/v1/embedded/orders/funnel", tokenB());
+        assertThat(b.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(b.getBody()).contains("\"newCount\":5");
+    }
+
+    // ── E14: /overview/late-to-pack — cross-tenant isolation ────────────────────
+    // Tenant A: 1 pre-pack order placed 30h ago (overdue, not over48). Tenant B: 3
+    // pre-pack orders placed 50h ago (overdue AND over48). Each token must see ONLY
+    // its own tenant's counts.
+
+    @Test @Order(14)
+    void e14_lateToPack_crossTenantIsolation() throws Exception {
+        seedOrders(tenantA, storeAId, "new", "now() - interval '30 hours'", 1, "EMB-LTP-A");
+        seedOrders(tenantB, storeBId, "new", "now() - interval '50 hours'", 3, "EMB-LTP-B");
+
+        ResponseEntity<String> a = get("/api/v1/embedded/overview/late-to-pack", tokenA());
+        assertThat(a.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(a.getBody()).contains("\"overdue\":1", "\"over48\":0");
+
+        ResponseEntity<String> b = get("/api/v1/embedded/overview/late-to-pack", tokenB());
+        assertThat(b.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(b.getBody()).contains("\"overdue\":3", "\"over48\":3");
+    }
+
+    // ── E15: /orders/list — cross-tenant isolation ───────────────────────────────
+    // Tenant A and tenant B each get one order with a distinctive order number.
+    // Tenant A's token must see A's order number and NEVER B's, and vice versa.
+
+    @Test @Order(15)
+    void e15_ordersList_crossTenantIsolation() throws Exception {
+        jdbc.update(
+            "INSERT INTO orders (tenant_id, store_id, external_id, number, status, " +
+            "customer_name, customer_phone, placed_at) " +
+            "VALUES (?, ?, 'EXT-EMB-LIST-A', '#EMB-LIST-A', 'new'::order_status, " +
+            "'Alice A', '01000000001', now())",
+            tenantA, storeAId);
+        jdbc.update(
+            "INSERT INTO orders (tenant_id, store_id, external_id, number, status, " +
+            "customer_name, customer_phone, placed_at) " +
+            "VALUES (?, ?, 'EXT-EMB-LIST-B', '#EMB-LIST-B', 'new'::order_status, " +
+            "'Bob B', '01000000002', now())",
+            tenantB, storeBId);
+
+        ResponseEntity<String> a = get("/api/v1/embedded/orders/list", tokenA());
+        assertThat(a.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(a.getBody()).contains("#EMB-LIST-A", "Alice A");
+        assertThat(a.getBody()).doesNotContain("#EMB-LIST-B", "Bob B");
+
+        ResponseEntity<String> b = get("/api/v1/embedded/orders/list", tokenB());
+        assertThat(b.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(b.getBody()).contains("#EMB-LIST-B", "Bob B");
+        assertThat(b.getBody()).doesNotContain("#EMB-LIST-A", "Alice A");
+    }
+
+    // ── E16: /orders/list — proves OrderStatusDeriver actually ran server-side ──
+    // A 'packed', no-shipment-linked order must come back with primaryKey=status.packed
+    // AND fulfillmentKey=status.fulfilled. fulfillmentKey=status.fulfilled is NOT a raw
+    // column value anywhere — it only exists if OrderStatusDeriver.derive()'s
+    // packedConfirmed branch actually ran server-side. A naive passthrough of
+    // orders.status would never produce it.
+
+    @Test @Order(16)
+    void e16_ordersList_derivesStatusServerSide_notClientReDerived() throws Exception {
+        jdbc.update(
+            "INSERT INTO orders (tenant_id, store_id, external_id, number, status, placed_at) " +
+            "VALUES (?, ?, 'EXT-EMB-DERIVE', '#EMB-DERIVE', 'packed'::order_status, now())",
+            tenantA, storeAId);
+
+        ResponseEntity<String> r = get("/api/v1/embedded/orders/list", tokenA());
+        assertThat(r.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(r.getBody()).contains("#EMB-DERIVE");
+        assertThat(r.getBody()).contains("\"primaryKey\":\"status.packed\"");
+        assertThat(r.getBody()).contains("\"fulfillmentKey\":\"status.fulfilled\"");
+    }
+
+    /** Seeds N orders of the given status/placed_at expression for one tenant/store. */
+    private void seedOrders(UUID tenantId, UUID storeId, String status, String placedAtExpr,
+                             int count, String numberPrefix) {
+        for (int i = 0; i < count; i++) {
+            jdbc.update(
+                "INSERT INTO orders (tenant_id, store_id, external_id, number, status, placed_at) " +
+                "VALUES (?, ?, ?, ?, ?::order_status, " + placedAtExpr + ")",
+                tenantId, storeId, "EXT-" + numberPrefix + "-" + i, "#" + numberPrefix + "-" + i, status);
+        }
     }
 
     // ── Helpers ──────────────────────────────────────────────────────────────

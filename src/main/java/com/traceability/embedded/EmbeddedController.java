@@ -1,5 +1,6 @@
 package com.traceability.embedded;
 
+import com.traceability.fulfillment.OrderStatusDeriver;
 import com.traceability.inventory.ExceptionService;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.RowCallbackHandler;
@@ -8,6 +9,9 @@ import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.bind.annotation.*;
 
+import java.math.BigDecimal;
+import java.sql.Timestamp;
+import java.time.Instant;
 import java.time.LocalDate;
 import java.util.*;
 
@@ -160,5 +164,238 @@ public class EmbeddedController {
 
         Object total = full.getOrDefault("total", 0);
         return Map.of("count", total, "exceptions", trimmed);
+    }
+
+    // ── GET /api/v1/embedded/orders/funnel ────────────────────────────────────
+
+    public record FunnelCounts(int newCount, int picking, int packed, int courier, int delivered) {}
+
+    /**
+     * Read-only mirror of {@code OrderController.funnel()} (today's orders bucketed via
+     * {@link OrderStatusDeriver}). SQL and bucket logic are DUPLICATED here rather than
+     * calling into {@code OrderController} — that controller is
+     * {@code @PreAuthorize("hasAnyRole('OWNER','MANAGER')")}-gated and SHOPIFY_EMBEDDED
+     * cannot reach it. KNOWN DRIFT RISK: if {@code OrderController.funnel()}'s LATERAL
+     * join or bucket mapping changes, this copy must be updated by hand — no shared
+     * helper exists between the two controllers (deliberately out of scope for this
+     * build pass; see the build-spec comment on {@link #ordersList()} below).
+     */
+    @GetMapping("/orders/funnel")
+    @PreAuthorize("hasRole('SHOPIFY_EMBEDDED')")
+    public FunnelCounts ordersFunnel() {
+        record StatusRow(String orderStatus, OrderStatusDeriver.DerivedOrderStatus derived) {}
+
+        List<StatusRow> rows = tx.execute(txs -> jdbc.query("""
+                SELECT o.status, o.not_traced_at,
+                       s.internal_state            AS delivery_state,
+                       COALESCE(s.failed_delivery_attempts, 0) AS failed_delivery_attempts,
+                       COALESCE(s.number_of_attempts, 0)       AS number_of_attempts,
+                       s.exception_code, s.is_delayed, s.sla_breached,
+                       s.max_progress_rank
+                FROM orders o
+                LEFT JOIN LATERAL (
+                    SELECT internal_state, number_of_attempts,
+                           exception_code, is_delayed, sla_breached,
+                           (SELECT COUNT(*) FROM shipment_status_history h2
+                            LEFT JOIN ndr_codes n ON n.code = h2.exception_code
+                            WHERE h2.shipment_id = sh.id AND h2.internal_state = 'exception'
+                              AND h2.exception_code IS NOT NULL
+                              AND (n.category = 'forward' OR n.category IS NULL)
+                           ) AS failed_delivery_attempts,
+                           COALESCE(
+                               (SELECT MAX(CASE h.internal_state
+                                           WHEN 'created'      THEN 1
+                                           WHEN 'with_courier'  THEN 2
+                                           WHEN 'returning'     THEN 3
+                                           WHEN 'exception'     THEN 0
+                                       END)
+                                FROM shipment_status_history h
+                                WHERE h.shipment_id = sh.id),
+                               CASE sh.internal_state
+                                   WHEN 'created'      THEN 1
+                                   WHEN 'with_courier'  THEN 2
+                                   WHEN 'returning'     THEN 3
+                                   WHEN 'exception'     THEN 0
+                               END
+                           ) AS max_progress_rank
+                    FROM shipments sh
+                    WHERE order_id = o.id AND tenant_id = o.tenant_id
+                      AND shipment_leg = 'forward'
+                    ORDER BY created_at DESC, id DESC
+                    LIMIT 1
+                ) s ON true
+                WHERE o.tenant_id = NULLIF(current_setting('app.current_tenant', true), '')::uuid
+                  AND o.placed_at::date = CURRENT_DATE
+                """,
+                (rs, i) -> {
+                    String orderStatus = rs.getString("status");
+                    Timestamp notTracedAt = rs.getTimestamp("not_traced_at");
+                    var derived = OrderStatusDeriver.derive(
+                            orderStatus,
+                            rs.getString("delivery_state"),
+                            rs.getObject("max_progress_rank", Integer.class),
+                            rs.getInt("number_of_attempts"),
+                            rs.getInt("failed_delivery_attempts"),
+                            rs.getObject("exception_code", Integer.class),
+                            rs.getObject("is_delayed", Boolean.class),
+                            rs.getObject("sla_breached", Boolean.class),
+                            notTracedAt != null);
+                    return new StatusRow(orderStatus, derived);
+                }));
+
+        int newCount = 0, picking = 0, packed = 0, courier = 0, delivered = 0;
+        for (StatusRow row : rows) {
+            String primaryKey = row.derived().primaryKey();
+            boolean isCourierAwbState =
+                    "status.awaiting_courier".equals(primaryKey) || "status.label_created".equals(primaryKey);
+            if (isCourierAwbState && !row.derived().packedConfirmed()) {
+                if ("picking".equals(row.orderStatus())) picking++; else newCount++;
+                continue;
+            }
+            switch (primaryKey) {
+                case "status.new", "status.confirmed", "status.ready_to_pick" -> newCount++;
+                case "status.picking" -> picking++;
+                case "status.packed" -> packed++;
+                case "status.awaiting_courier", "status.in_transit", "status.label_created" -> courier++;
+                case "status.delivered" -> delivered++;
+                default -> { /* outside the forward-pipeline funnel — not counted */ }
+            }
+        }
+        return new FunnelCounts(newCount, picking, packed, courier, delivered);
+    }
+
+    // ── GET /api/v1/embedded/overview/late-to-pack ─────────────────────────────
+
+    public record LateToPack(int overdue, int over48) {}
+
+    /**
+     * Read-only mirror of {@code OverviewService.lateToPack()} — the same 24h/48h
+     * pre-pack-status cutoff predicate, DUPLICATED here (not a call into
+     * {@code OverviewService}, which is {@code @PreAuthorize("hasAnyRole('OWNER','MANAGER')")}
+     * -gated). Uses Postgres {@code now()} rather than the injected Cairo-pinned Clock
+     * bean {@code OverviewService} uses — equivalent here: the 24h/48h window is a plain
+     * Instant offset, timezone-agnostic, so DB-server time and the Clock bean produce the
+     * same cutoff. KNOWN DRIFT RISK: if {@code OverviewService.lateToPack()}'s pre-pack
+     * status set changes, update this copy too.
+     */
+    @GetMapping("/overview/late-to-pack")
+    @PreAuthorize("hasRole('SHOPIFY_EMBEDDED')")
+    public LateToPack lateToPack() {
+        return tx.execute(txs -> {
+            Map<String, Object> row = jdbc.queryForMap("""
+                    SELECT
+                      COUNT(*) FILTER (WHERE placed_at < now() - INTERVAL '24 hours') AS overdue,
+                      COUNT(*) FILTER (WHERE placed_at < now() - INTERVAL '48 hours') AS over48
+                    FROM orders
+                    WHERE tenant_id = NULLIF(current_setting('app.current_tenant', true), '')::uuid
+                      AND placed_at IS NOT NULL
+                      AND status IN ('new'::order_status, 'confirmed'::order_status,
+                                     'ready_to_pick'::order_status, 'picking'::order_status)
+                    """);
+            return new LateToPack(
+                    ((Number) row.get("overdue")).intValue(),
+                    ((Number) row.get("over48")).intValue());
+        });
+    }
+
+    // ── GET /api/v1/embedded/orders/list ────────────────────────────────────────
+
+    public record EmbeddedOrderRow(
+            String id, String number, boolean isExchange, boolean notTraced,
+            String customerName, String customerPhone, BigDecimal codAmount,
+            Instant placedAt,
+            String primaryKey, OrderStatusDeriver.Tone tone,
+            String fulfillmentKey, OrderStatusDeriver.Tone fulfillmentTone) {}
+
+    /**
+     * Capped recent-orders list for the embedded Orders tab — the 50 most recently
+     * created orders, NO pagination/search/tracking/deliveryState filters (scope-locked
+     * by the build spec). Status facets come from calling {@link OrderStatusDeriver#derive}
+     * server-side — the SAME deriver {@code OrderController} uses — never re-derived
+     * client-side. SQL is DUPLICATED from {@code OrderController.list()}'s LATERAL join
+     * (trimmed: no q/tracking/deliveryState filters, no pagination) because that
+     * controller is OWNER/MANAGER-gated and unreachable from SHOPIFY_EMBEDDED. KNOWN
+     * DRIFT RISK: if {@code OrderController.list()}'s LATERAL join or
+     * {@code max_progress_rank} CASE changes, this copy must be updated by hand — this is
+     * the accepted tradeoff of not extracting a shared service in this pass.
+     *
+     * {@code ORDER BY o.created_at DESC, o.id DESC} — never {@code id} alone (UUIDv4 is
+     * not time-ordered); {@code created_at} is the tiebreak-safe recency column.
+     */
+    @GetMapping("/orders/list")
+    @PreAuthorize("hasRole('SHOPIFY_EMBEDDED')")
+    public List<EmbeddedOrderRow> ordersList() {
+        return tx.execute(txs -> jdbc.query("""
+                SELECT o.id, o.number, o.customer_name, o.customer_phone, o.status,
+                       o.cod_amount, o.placed_at, o.not_traced_at,
+                       (e.id IS NOT NULL) AS is_exchange,
+                       s.internal_state            AS delivery_state,
+                       COALESCE(s.failed_delivery_attempts, 0) AS failed_delivery_attempts,
+                       COALESCE(s.number_of_attempts, 0)       AS number_of_attempts,
+                       s.exception_code, s.is_delayed, s.sla_breached,
+                       s.max_progress_rank
+                FROM orders o
+                LEFT JOIN LATERAL (
+                    SELECT internal_state, number_of_attempts,
+                           exception_code, is_delayed, sla_breached,
+                           (SELECT COUNT(*) FROM shipment_status_history h2
+                            LEFT JOIN ndr_codes n ON n.code = h2.exception_code
+                            WHERE h2.shipment_id = sh.id AND h2.internal_state = 'exception'
+                              AND h2.exception_code IS NOT NULL
+                              AND (n.category = 'forward' OR n.category IS NULL)
+                           ) AS failed_delivery_attempts,
+                           COALESCE(
+                               (SELECT MAX(CASE h.internal_state
+                                           WHEN 'created'      THEN 1
+                                           WHEN 'with_courier'  THEN 2
+                                           WHEN 'returning'     THEN 3
+                                           WHEN 'exception'     THEN 0
+                                       END)
+                                FROM shipment_status_history h
+                                WHERE h.shipment_id = sh.id),
+                               CASE sh.internal_state
+                                   WHEN 'created'      THEN 1
+                                   WHEN 'with_courier'  THEN 2
+                                   WHEN 'returning'     THEN 3
+                                   WHEN 'exception'     THEN 0
+                               END
+                           ) AS max_progress_rank
+                    FROM shipments sh
+                    WHERE order_id = o.id AND tenant_id = o.tenant_id
+                      AND shipment_leg = 'forward'
+                    ORDER BY created_at DESC, id DESC
+                    LIMIT 1
+                ) s ON true
+                LEFT JOIN exchanges e ON e.outbound_order_id = o.id
+                WHERE o.tenant_id = NULLIF(current_setting('app.current_tenant', true), '')::uuid
+                ORDER BY o.created_at DESC, o.id DESC
+                LIMIT 50
+                """,
+                (rs, i) -> {
+                    String orderStatus = rs.getString("status");
+                    Timestamp notTracedAt = rs.getTimestamp("not_traced_at");
+                    var derived = OrderStatusDeriver.derive(
+                            orderStatus,
+                            rs.getString("delivery_state"),
+                            rs.getObject("max_progress_rank", Integer.class),
+                            rs.getInt("number_of_attempts"),
+                            rs.getInt("failed_delivery_attempts"),
+                            rs.getObject("exception_code", Integer.class),
+                            rs.getObject("is_delayed", Boolean.class),
+                            rs.getObject("sla_breached", Boolean.class),
+                            notTracedAt != null);
+                    Timestamp placedAtTs = rs.getTimestamp("placed_at");
+                    return new EmbeddedOrderRow(
+                            rs.getObject("id", UUID.class).toString(),
+                            rs.getString("number"),
+                            rs.getBoolean("is_exchange"),
+                            derived.notTraced(),
+                            rs.getString("customer_name"),
+                            rs.getString("customer_phone"),
+                            rs.getBigDecimal("cod_amount"),
+                            placedAtTs != null ? placedAtTs.toInstant() : null,
+                            derived.primaryKey(), derived.tone(),
+                            derived.fulfillmentKey(), derived.fulfillmentTone());
+                }));
     }
 }

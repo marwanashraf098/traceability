@@ -20,8 +20,11 @@ import {
   InlineGrid,
   Link,
   Divider,
+  Tabs,
+  DataTable,
 } from '@shopify/polaris'
 import { notLinkedCopy } from './notLinkedCopy'
+import { statusLabel, polarisTone, type DerivedTone } from './statusLabels'
 
 // CDN App Bridge global — injected by the <script> in embedded.html before React mounts.
 declare const shopify: { idToken(): Promise<string> }
@@ -42,6 +45,29 @@ interface InventorySummary { groupA: StatusCount[]; groupB: StatusCount[] }
 interface DayCount { date: string; count: number }
 interface ExceptionRow { type: string; severity: string; subjectKey: string }
 interface ExceptionsData { count: number; exceptions: ExceptionRow[] }
+
+// GET /api/v1/embedded/orders/funnel — mirrors OrderController.funnel()'s FunnelCounts shape.
+interface FunnelCounts { newCount: number; picking: number; packed: number; courier: number; delivered: number }
+
+// GET /api/v1/embedded/overview/late-to-pack — mirrors OverviewService.LateToPack.
+interface LateToPack { overdue: number; over48: number }
+
+// GET /api/v1/embedded/orders/list — one row per order, status facets pre-derived
+// server-side by OrderStatusDeriver.derive(). Never re-derived client-side here.
+interface EmbeddedOrderRow {
+  id: string
+  number: string
+  isExchange: boolean
+  notTraced: boolean
+  customerName: string | null
+  customerPhone: string | null
+  codAmount: number | null
+  placedAt: string | null
+  primaryKey: string
+  tone: DerivedTone
+  fulfillmentKey: string
+  fulfillmentTone: DerivedTone
+}
 
 type AsyncState<T> =
   | { status: 'loading' }
@@ -348,6 +374,148 @@ function ExceptionsSection({ state }: { state: AsyncState<ExceptionsData> }) {
   )
 }
 
+// ── Section: Order flow (funnel) ──────────────────────────────────────────
+// Pure display — mirrors the standalone Overview's flow-strip node vocabulary
+// (New/Picking/Packed/Courier/Delivered), today's orders only, no interaction.
+
+function FlowStripSection({ state }: { state: AsyncState<FunnelCounts> }) {
+  if (state.status === 'loading') return <Skeleton lines={3} />
+  if (state.status === 'err') {
+    return (
+      <Card>
+        <Banner tone="critical" title="Could not load order flow" />
+      </Card>
+    )
+  }
+
+  const { newCount, picking, packed, courier, delivered } = state.data
+  const nodes: { label: string; value: number }[] = [
+    { label: 'New',       value: newCount },
+    { label: 'Picking',   value: picking },
+    { label: 'Packed',    value: packed },
+    { label: 'Courier',   value: courier },
+    { label: 'Delivered', value: delivered },
+  ]
+  const allZero = nodes.every(n => n.value === 0)
+
+  return (
+    <Card>
+      <BlockStack gap="300">
+        <Text as="h2" variant="headingMd">Today's order flow</Text>
+        {allZero ? (
+          <Text as="p" tone="subdued">No orders placed yet today.</Text>
+        ) : (
+          <InlineStack gap="300" blockAlign="center" wrap>
+            {nodes.map((n, i) => (
+              <InlineStack key={n.label} gap="300" blockAlign="center">
+                <BlockStack gap="050">
+                  <Text as="p" variant="headingLg">{n.value.toLocaleString()}</Text>
+                  <Text as="p" variant="bodySm" tone="subdued">{n.label}</Text>
+                </BlockStack>
+                {i < nodes.length - 1 && <Text as="span" tone="subdued">→</Text>}
+              </InlineStack>
+            ))}
+          </InlineStack>
+        )}
+      </BlockStack>
+    </Card>
+  )
+}
+
+// ── Section: Late to pack ──────────────────────────────────────────────────
+// Live state (not date-range scoped) — mirrors the standalone Overview's
+// Late-to-pack card. Pure display.
+
+function LateToPackSection({ state }: { state: AsyncState<LateToPack> }) {
+  if (state.status === 'loading') return <Skeleton lines={2} />
+  if (state.status === 'err') {
+    return (
+      <Card>
+        <Banner tone="critical" title="Could not load late-to-pack" />
+      </Card>
+    )
+  }
+
+  const { overdue, over48 } = state.data
+  const calm = overdue === 0
+
+  return (
+    <Card>
+      <BlockStack gap="100">
+        <Text as="p" variant="bodySm" tone="subdued">Late to pack</Text>
+        <Text as="p" variant="headingXl">{overdue.toLocaleString()}</Text>
+        {calm ? (
+          <Text as="p" variant="bodySm" tone="subdued">All caught up</Text>
+        ) : (
+          <>
+            <Text as="p" variant="bodySm" tone="subdued">as of now</Text>
+            {over48 > 0 && (
+              <Text as="p" variant="bodySm" fontWeight="semibold" tone="critical">
+                {over48} over 48h
+              </Text>
+            )}
+          </>
+        )}
+      </BlockStack>
+    </Card>
+  )
+}
+
+// ── Orders tab: read-only table ─────────────────────────────────────────────
+// GET /orders/list — 50 most recent orders, no pagination/search/filters, no row
+// click, no drawer. Every status badge renders a server-derived key straight
+// through the local statusLabels map — no client-side re-derivation.
+
+function OrdersTable({ state }: { state: AsyncState<EmbeddedOrderRow[]> }) {
+  if (state.status === 'loading') return <Skeleton lines={8} />
+  if (state.status === 'err') {
+    return (
+      <Card>
+        <Banner tone="critical" title="Could not load orders" />
+      </Card>
+    )
+  }
+
+  const rows = state.data
+  if (rows.length === 0) {
+    return (
+      <Card>
+        <Text as="p" tone="subdued">No orders yet.</Text>
+      </Card>
+    )
+  }
+
+  return (
+    <Card padding="0">
+      <DataTable
+        columnContentTypes={['text', 'text', 'text', 'text', 'numeric', 'text']}
+        headings={['Order', 'Customer', 'Fulfillment', 'Delivery', 'Amount', 'Date']}
+        rows={rows.map(o => [
+          <InlineStack key="number" gap="150" blockAlign="center" wrap={false}>
+            <Text as="span" fontWeight="medium">{o.number}</Text>
+            {o.isExchange && <Badge tone="info">Exchange</Badge>}
+            {o.notTraced && <Badge>Not Traced</Badge>}
+          </InlineStack>,
+          <BlockStack key="customer" gap="0">
+            <Text as="span">{o.customerName ?? '—'}</Text>
+            {o.customerPhone && (
+              <Text as="span" variant="bodySm" tone="subdued">{o.customerPhone}</Text>
+            )}
+          </BlockStack>,
+          <Badge key="fulfillment" tone={polarisTone(o.fulfillmentTone)}>
+            {statusLabel(o.fulfillmentKey)}
+          </Badge>,
+          <Badge key="delivery" tone={polarisTone(o.tone)}>
+            {statusLabel(o.primaryKey)}
+          </Badge>,
+          o.codAmount != null ? `${o.codAmount.toLocaleString()} EGP` : '—',
+          o.placedAt ? new Date(o.placedAt).toLocaleDateString() : '—',
+        ])}
+      />
+    </Card>
+  )
+}
+
 // ── Section: Not linked to any Traced account ─────────────────────────────
 
 /**
@@ -404,6 +572,17 @@ export default function EmbeddedApp() {
   const [invState,    setInvState]        = useState<AsyncState<InventorySummary>>(loading)
   const [actState,    setActState]        = useState<AsyncState<DayCount[]>>(loading)
   const [excState,    setExcState]        = useState<AsyncState<ExceptionsData>>(loading)
+  const [funnelState, setFunnelState]     = useState<AsyncState<FunnelCounts>>(loading)
+  const [ltpState,    setLtpState]        = useState<AsyncState<LateToPack>>(loading)
+  const [ordersState, setOrdersState]     = useState<AsyncState<EmbeddedOrderRow[]>>(loading)
+
+  // In-page tab state only — NOT App Bridge navigation (no shopify.app / NavMenu use
+  // anywhere in this bundle). Selection resets to Overview on remount; not persisted.
+  const [selectedTab, setSelectedTab] = useState(0)
+  const TABS = [
+    { id: 'overview', content: 'Overview' },
+    { id: 'orders',   content: 'Orders' },
+  ]
 
   useEffect(() => {
     // Token exchange fires in parallel with the four data fetches below (same round-trip
@@ -451,6 +630,21 @@ export default function EmbeddedApp() {
       .then(r => r.ok ? r.json() as Promise<ExceptionsData> : Promise.reject(r.status))
       .then(d  => setExcState({ status: 'ok', data: d }))
       .catch(() => setExcState({ status: 'err' }))
+
+    authFetch('/api/v1/embedded/orders/funnel')
+      .then(r => r.ok ? r.json() as Promise<FunnelCounts> : Promise.reject(r.status))
+      .then(d  => setFunnelState({ status: 'ok', data: d }))
+      .catch(() => setFunnelState({ status: 'err' }))
+
+    authFetch('/api/v1/embedded/overview/late-to-pack')
+      .then(r => r.ok ? r.json() as Promise<LateToPack> : Promise.reject(r.status))
+      .then(d  => setLtpState({ status: 'ok', data: d }))
+      .catch(() => setLtpState({ status: 'err' }))
+
+    authFetch('/api/v1/embedded/orders/list')
+      .then(r => r.ok ? r.json() as Promise<EmbeddedOrderRow[]> : Promise.reject(r.status))
+      .then(d  => setOrdersState({ status: 'ok', data: d }))
+      .catch(() => setOrdersState({ status: 'err' }))
   }, [authFetch])
 
   // 'checking': render one shared skeleton, not four independent section skeletons — avoids
@@ -485,19 +679,45 @@ export default function EmbeddedApp() {
     >
       <BlockStack gap="500">
 
-        {/* 1 — Connection status (full width, always first) */}
-        <ConnectionSection state={storesState} />
+        {/* In-page tabs (Polaris Tabs, plain React state) — NOT App Bridge navigation.
+            No history/URL involvement; selecting a tab does not change the iframe route.
+            Tabs is used WITHOUT its own `children`/Panel prop deliberately: Polaris's
+            <Tabs> mounts one internal Panel per configured tab (see
+            Tabs/components/Panel/Panel.js) and wraps the SAME children element in
+            every one of them, CSS-hiding all but the selected index rather than
+            omitting the others from the DOM — passing dynamic, per-tab content through
+            that prop produces one correct panel and one inert-but-present duplicate.
+            Rendering the tab bar and the single active panel separately below sidesteps
+            that entirely — one real content block, not two. */}
+        <Tabs tabs={TABS} selected={selectedTab} onSelect={setSelectedTab} />
+        <div role="tabpanel" aria-labelledby={TABS[selectedTab].id} style={{ paddingTop: 16 }}>
+          {selectedTab === 0 ? (
+            <BlockStack gap="500">
+              {/* 1 — Connection status (full width, always first) */}
+              <ConnectionSection state={storesState} />
 
-        {/* 2 — Inventory summary (full width) */}
-        <InventorySection state={invState} />
+              {/* 2 — Inventory summary (full width) */}
+              <InventorySection state={invState} />
 
-        {/* 3 + 4 — Activity chart + Exceptions side by side on wider screens */}
-        <InlineGrid columns={{ xs: 1, sm: 2 }} gap="400">
-          <ActivitySection state={actState} />
-          <ExceptionsSection state={excState} />
-        </InlineGrid>
+              {/* 3 + 4 — Activity chart + Exceptions side by side on wider screens */}
+              <InlineGrid columns={{ xs: 1, sm: 2 }} gap="400">
+                <ActivitySection state={actState} />
+                <ExceptionsSection state={excState} />
+              </InlineGrid>
 
-        {/* Footer deep-link — reinforces that resolution happens in the SaaS */}
+              {/* 5 + 6 — Order flow + Late-to-pack side by side on wider screens */}
+              <InlineGrid columns={{ xs: 1, sm: 2 }} gap="400">
+                <FlowStripSection state={funnelState} />
+                <LateToPackSection state={ltpState} />
+              </InlineGrid>
+            </BlockStack>
+          ) : (
+            <OrdersTable state={ordersState} />
+          )}
+        </div>
+
+        {/* Footer deep-link — reinforces that resolution happens in the SaaS, visible on
+            both tabs since it applies to the whole read-only panel, not one view. */}
         <Card>
           <InlineStack align="space-between" blockAlign="center">
             <BlockStack gap="100">

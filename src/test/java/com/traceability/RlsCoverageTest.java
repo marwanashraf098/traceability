@@ -178,6 +178,18 @@ class RlsCoverageTest {
                     "connection status, not an RLS-gated list"),
             entry("/api/v1/embedded/exceptions",
                     "uses embedded token auth; delegates to covered services"),
+            entry("/api/v1/embedded/orders/funnel",
+                    "uses embedded token auth; cross-tenant isolation asserted by " +
+                    "EmbeddedIntegrationTest's seeded tenant-A/tenant-B funnel-count tests " +
+                    "(real HTTP + full filter chain, stronger than this class's BYPASSRLS pattern)"),
+            entry("/api/v1/embedded/overview/late-to-pack",
+                    "uses embedded token auth; cross-tenant isolation asserted by " +
+                    "EmbeddedIntegrationTest's seeded tenant-A/tenant-B late-to-pack tests " +
+                    "(real HTTP + full filter chain, stronger than this class's BYPASSRLS pattern)"),
+            entry("/api/v1/embedded/orders/list",
+                    "uses embedded token auth; cross-tenant isolation asserted by " +
+                    "EmbeddedIntegrationTest's seeded tenant-A/tenant-B orders/list tests " +
+                    "(real HTTP + full filter chain, stronger than this class's BYPASSRLS pattern)"),
             entry("/api/v1/tenant/settings",
                     "single tenant config row — not a list"),
             entry("/api/v1/connections",
