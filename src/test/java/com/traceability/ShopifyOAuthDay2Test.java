@@ -84,7 +84,7 @@ class ShopifyOAuthDay2Test {
     @MockBean ShopifyGateway   shopifyGateway;
     @MockBean JobScheduler     jobScheduler;
     @MockBean ShopifyImportJob importJob;
-    @MockBean EmailGateway     emailGateway; // issueMagicLink called on PROVISIONED path
+    @MockBean EmailGateway     emailGateway; // MagicLinkService dependency (context wiring only — PROVISIONED path is dead, see LinkOutcome)
 
     @Value("${shopify.client-secret}")
     String clientSecret;
@@ -255,62 +255,65 @@ class ShopifyOAuthDay2Test {
     }
 
     // -----------------------------------------------------------------------
-    // 4. Path-2 new shop → exactly one tenant + one owner (Owner role, no password) + one store
+    // 4. Path-2 new shop, cold install (Option A, 2026-09-04): creates NOTHING —
+    //    no tenant, no owner, no store, no jobs — and redirects back into the
+    //    embedded/standalone app root, never to a pricing/setup-pending page.
+    //    fetchShop() must never even be called — zero provisioning attempt.
     // -----------------------------------------------------------------------
     @Test
-    void path2_newShop_provisionsTenantOwnerStore() {
+    void path2_newShop_coldInstall_createsNothing_redirectsToEmbedded() {
         when(shopifyGateway.exchangeCode(eq(SHOP_PATH2), eq(CODE_A))).thenReturn(EXCHANGE_A);
-        when(shopifyGateway.fetchShop(eq(SHOP_PATH2), eq(TOKEN_A)))
-            .thenReturn(new ShopifyGateway.ShopInfo("owner@path2-new.myshopify.com", "Path2 New Shop", "Africa/Cairo"));
 
         String nonce = insertState(null, SHOP_PATH2, Instant.now());
         var resp = noRedirectRest.getForEntity(
             base() + "/auth/shopify/callback?" + callbackParams(nonce, SHOP_PATH2, CODE_A), Void.class);
 
         assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.FOUND);
-        assertThat(resp.getHeaders().getFirst("Location")).contains("setup-pending");
+        String location = resp.getHeaders().getFirst("Location");
+        assertThat(location)
+            .as("must redirect back into the app — never a pricing/paywall/setup-pending page")
+            .doesNotContain("setup-pending")
+            .doesNotContain("connect/error")
+            .doesNotContain("pricing");
 
-        // Exactly one tenant
+        // Zero tenant, owner, store rows — nothing created
         Integer tenantCount = jdbc.queryForObject(
             "SELECT COUNT(*) FROM tenants WHERE name = 'Path2 New Shop'", Integer.class);
-        assertThat(tenantCount).isEqualTo(1);
+        assertThat(tenantCount).as("cold install must create no tenant").isEqualTo(0);
 
-        // Exactly one owner user with no password_hash
         Integer ownerCount = jdbc.queryForObject(
-            "SELECT COUNT(*) FROM users WHERE email = 'owner@path2-new.myshopify.com' " +
-            "AND role = 'owner' AND password_hash IS NULL",
-            Integer.class);
-        assertThat(ownerCount).isEqualTo(1);
+            "SELECT COUNT(*) FROM users WHERE email = 'owner@path2-new.myshopify.com'", Integer.class);
+        assertThat(ownerCount).as("cold install must create no owner user").isEqualTo(0);
 
-        // Exactly one store
         Integer storeCount = jdbc.queryForObject(
             "SELECT COUNT(*) FROM stores WHERE shop_domain = ?", Integer.class, SHOP_PATH2);
-        assertThat(storeCount).isEqualTo(1);
+        assertThat(storeCount).as("cold install must create no store").isEqualTo(0);
 
-        // Import job enqueued
-        verify(jobScheduler, times(2)).enqueue(any(org.jobrunr.jobs.lambdas.JobLambda.class));
+        // No jobs enqueued
+        verify(jobScheduler, never()).enqueue(any(org.jobrunr.jobs.lambdas.JobLambda.class));
+
+        // fetchShop() is what would surface the shop's owner email for provisioning —
+        // must never be invoked, proving zero attempt was made (not just a rolled-back one).
+        verify(shopifyGateway, never()).fetchShop(anyString(), anyString());
     }
 
     // -----------------------------------------------------------------------
-    // 5. Path-2 existing shop → idempotent link to existing tenant; no new tenant/owner
+    // 5. Path-2, shop ALREADY linked to a tenant (seeded directly — Option A cold
+    //    installs no longer provision, so we can't establish this via a first Path-2
+    //    install any more) → idempotent re-link, no new tenant/owner/store.
     // -----------------------------------------------------------------------
     @Test
     void path2_existingShop_idempotentLink() {
-        // First Path-2 install provisions the tenant
-        when(shopifyGateway.exchangeCode(eq(SHOP_PATH2), eq(CODE_A))).thenReturn(EXCHANGE_A);
-        when(shopifyGateway.fetchShop(eq(SHOP_PATH2), eq(TOKEN_A)))
-            .thenReturn(new ShopifyGateway.ShopInfo("owner@path2-new.myshopify.com", "Path2 New Shop", "Africa/Cairo"));
+        UUID seededTenant = jdbc.queryForObject(
+            "INSERT INTO tenants (name) VALUES ('Path2 New Shop') RETURNING id", UUID.class);
+        jdbc.update(
+            "INSERT INTO users (tenant_id, name, email, role) VALUES (?, 'Seed Owner', ?, 'owner')",
+            seededTenant, "owner@path2-new.myshopify.com");
+        jdbc.update(
+            "INSERT INTO stores (tenant_id, shop_domain, platform, access_token_encrypted, status, import_status) " +
+            "VALUES (?, ?, 'shopify', 'seed-token', 'connected', 'idle')",
+            seededTenant, SHOP_PATH2);
 
-        String nonce1 = insertState(null, SHOP_PATH2, Instant.now());
-        noRedirectRest.getForEntity(
-            base() + "/auth/shopify/callback?" + callbackParams(nonce1, SHOP_PATH2, CODE_A), Void.class);
-
-        long tenantCountAfterFirst = jdbc.queryForObject(
-            "SELECT COUNT(*) FROM tenants WHERE name = 'Path2 New Shop'", Long.class);
-        long ownerCountAfterFirst = jdbc.queryForObject(
-            "SELECT COUNT(*) FROM users WHERE email = 'owner@path2-new.myshopify.com'", Long.class);
-
-        // Second Path-2 install (re-install) — no new tenant or user
         when(shopifyGateway.exchangeCode(eq(SHOP_PATH2), eq(CODE_B))).thenReturn(EXCHANGE_B);
 
         String nonce2 = insertState(null, SHOP_PATH2, Instant.now());
@@ -319,29 +322,33 @@ class ShopifyOAuthDay2Test {
 
         assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.FOUND);
 
-        long tenantCountAfterSecond = jdbc.queryForObject(
+        long tenantCountAfter = jdbc.queryForObject(
             "SELECT COUNT(*) FROM tenants WHERE name = 'Path2 New Shop'", Long.class);
-        long ownerCountAfterSecond = jdbc.queryForObject(
+        long ownerCountAfter = jdbc.queryForObject(
             "SELECT COUNT(*) FROM users WHERE email = 'owner@path2-new.myshopify.com'", Long.class);
 
-        assertThat(tenantCountAfterSecond).isEqualTo(tenantCountAfterFirst); // no new tenant
-        assertThat(ownerCountAfterSecond).isEqualTo(ownerCountAfterFirst);   // no new owner
+        assertThat(tenantCountAfter).isEqualTo(1); // still exactly one — no new tenant
+        assertThat(ownerCountAfter).isEqualTo(1);  // still exactly one — no new owner
 
         Integer storeCount = jdbc.queryForObject(
             "SELECT COUNT(*) FROM stores WHERE shop_domain = ?", Integer.class, SHOP_PATH2);
         assertThat(storeCount).isEqualTo(1); // still exactly one store
+
+        String token = jdbc.queryForObject(
+            "SELECT access_token_encrypted FROM stores WHERE shop_domain = ?", String.class, SHOP_PATH2);
+        assertThat(token).isNotEqualTo("seed-token"); // token updated — idempotent link still functions
     }
 
     // -----------------------------------------------------------------------
-    // 6. Concurrent double-install race (real threads, same new Path-2 shop)
-    //    → exactly one tenant, one owner, one store; loser re-resolves and links
+    // 6. Concurrent double cold-install (real threads, same never-seen Path-2 shop).
+    //    Option A (2026-09-04): cold path2() no longer writes anything, so the
+    //    provisioning race this test originally exercised no longer exists — both
+    //    concurrent installs must complete cleanly (no 5xx) and create ZERO rows.
     // -----------------------------------------------------------------------
     @Test
-    void concurrentDoubleInstall_race_exactlyOneTenantOwnerStore() throws Exception {
+    void concurrentDoubleInstall_race_coldInstall_createsNothing() throws Exception {
         when(shopifyGateway.exchangeCode(eq(SHOP_RACE), eq(CODE_A))).thenReturn(EXCHANGE_A);
         when(shopifyGateway.exchangeCode(eq(SHOP_RACE), eq(CODE_B))).thenReturn(EXCHANGE_B);
-        when(shopifyGateway.fetchShop(eq(SHOP_RACE), anyString()))
-            .thenReturn(new ShopifyGateway.ShopInfo("owner@race-shop.myshopify.com", "Race Shop", "Africa/Cairo"));
 
         String nonceA = insertState(null, SHOP_RACE, Instant.now());
         String nonceB = insertState(null, SHOP_RACE, Instant.now());
@@ -378,18 +385,18 @@ class ShopifyOAuthDay2Test {
         // Both threads must complete without 5xx — at least one 302
         assertThat(successes.get()).isGreaterThanOrEqualTo(1);
 
-        // Database: exactly one of each
+        // Database: zero of each — cold install creates nothing, even under concurrency
         Integer tenantCount = jdbc.queryForObject(
             "SELECT COUNT(*) FROM tenants WHERE name = 'Race Shop'", Integer.class);
-        assertThat(tenantCount).as("exactly one tenant").isEqualTo(1);
+        assertThat(tenantCount).as("cold install creates no tenant, even under concurrency").isEqualTo(0);
 
         Integer ownerCount = jdbc.queryForObject(
             "SELECT COUNT(*) FROM users WHERE email = 'owner@race-shop.myshopify.com'", Integer.class);
-        assertThat(ownerCount).as("exactly one owner").isEqualTo(1);
+        assertThat(ownerCount).as("cold install creates no owner, even under concurrency").isEqualTo(0);
 
         Integer storeCount = jdbc.queryForObject(
             "SELECT COUNT(*) FROM stores WHERE shop_domain = ?", Integer.class, SHOP_RACE);
-        assertThat(storeCount).as("exactly one store").isEqualTo(1);
+        assertThat(storeCount).as("cold install creates no store, even under concurrency").isEqualTo(0);
     }
 
     // -----------------------------------------------------------------------

@@ -2,7 +2,6 @@ package com.traceability;
 
 import com.traceability.integrations.shopify.ShopifyGateway;
 import com.traceability.integrations.shopify.ShopifyImportJob;
-import com.traceability.integrations.shopify.ShopifyOAuthException;
 import com.traceability.integrations.shopify.ShopifyOAuthService;
 import com.traceability.notifications.EmailGateway;
 import com.traceability.tenancy.TenantAwareDataSource;
@@ -13,7 +12,6 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.dao.IncorrectResultSizeDataAccessException;
-import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.datasource.DataSourceTransactionManager;
 import org.springframework.jdbc.datasource.DriverManagerDataSource;
@@ -32,6 +30,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
@@ -270,57 +270,58 @@ class EmailUniquenessProvisionTest {
         }
     }
 
-    // ── eu_prod: production path — exercises provisionNewTenant() catch block ────────────────────
+    // ── eu_prod: production path — cold install never attempts provisioning ─────────────────────
 
     /**
-     * This is the test that proves the ACTUAL FIX works, not just the constraint.
+     * Superseded 2026-09-04 (Option A): this test formerly proved that a cold Shopify-first
+     * install colliding on email surfaced through provisionNewTenant()'s catch block as
+     * SHOPIFY_EMAIL_ALREADY_REGISTERED (409), by exercising linkOrProvision() → branch() →
+     * path2() → provisionNewTenant().
      *
-     * eu1 calls provision_tenant_from_shopify directly via raw JDBC — it exercises the
-     * PostgreSQL rollback guarantee but does NOT touch provisionNewTenant()'s catch block
-     * in ShopifyOAuthService. A raw DuplicateKeyException from eu1 would mean the fix is
-     * absent and the exception propagates as 500.
+     * As of Option A, path2() no longer calls provisionNewTenant() at all when no owner is
+     * found — a cold install creates nothing, unconditionally, regardless of what email the
+     * shop would have resolved to. There is no longer any email-collision path to reach
+     * through the OAuth flow: fetchShop() (the call that would surface the shop's owner
+     * email) is never invoked. provisionNewTenant()'s catch block and the
+     * SHOPIFY_EMAIL_ALREADY_REGISTERED code remain in the codebase (proven live by eu1's
+     * direct call to provision_tenant_from_shopify) but are unreachable from linkOrProvision()
+     * — see ShopifyOAuthService.LinkOutcome's PROVISIONED comment.
      *
-     * This test calls linkOrProvision() → branch() → path2() → provisionNewTenant(), with
-     * ShopifyGateway mocked to return the collisionEmail from fetchShop(). The catch block
-     * inside provisionNewTenant() must intercept the DuplicateKeyException and convert it
-     * to ShopifyOAuthException(SHOPIFY_EMAIL_ALREADY_REGISTERED, HTTP 409) — not rethrow it.
-     *
-     * Without the catch block, a bare DuplicateKeyException propagates through linkOrProvision()'s
-     * outer catch (which calls resolveShopOwner — returns null because tenants rolled back) →
-     * raceRelink(null) → throws SHOPIFY_STATE_INVALID 400. Wrong code, wrong status.
+     * This test now proves the Option A guarantee instead: even with a shop whose resolved
+     * email WOULD collide with an existing tenant's owner, a cold install still creates
+     * nothing and never attempts provisioning in the first place.
      */
     @Test
     @Order(4)
-    void eu_prod_emailCollisionThroughLinkOrProvision_throwsShopifyOAuthException_409() {
-        // shopC has never been seen — resolveShopOwner returns null → Path-2 → provisionNewTenant().
+    void eu_prod_coldInstall_neverAttemptsProvisioning_evenWithWouldBeEmailCollision() {
+        // shopC has never been seen — resolveShopOwner returns null → Path-2 → cold install.
         String shopC = "eu-shop-c.myshopify.com";
         ShopifyGateway.TokenResponse fakeTokens =
             new ShopifyGateway.TokenResponse("shpat_fake_c", "shprt_fake_c", 3600L, 7776000L, null);
 
         when(shopifyGateway.exchangeCode(eq(shopC), eq("fake-code-c"))).thenReturn(fakeTokens);
-        // fetchShop returns the SAME email as the already-provisioned shop-a tenant.
-        when(shopifyGateway.fetchShop(eq(shopC), anyString()))
-            .thenReturn(new ShopifyGateway.ShopInfo(collisionEmail, "Shop C", "Africa/Cairo"));
 
         int tenantsBefore = countAll("tenants");
 
-        assertThatThrownBy(() ->
-            oauthService.linkOrProvision(
-                new ShopifyOAuthService.StateRecord(null, shopC), shopC, "fake-code-c"))
-            .isInstanceOf(ShopifyOAuthException.class)
-            .satisfies(ex -> {
-                ShopifyOAuthException e = (ShopifyOAuthException) ex;
-                assertThat(e.code())
-                    .as("must be SHOPIFY_EMAIL_ALREADY_REGISTERED — not DuplicateKeyException, not SHOPIFY_STATE_INVALID")
-                    .isEqualTo(ShopifyOAuthException.Code.SHOPIFY_EMAIL_ALREADY_REGISTERED);
-                assertThat(e.httpStatus())
-                    .as("HTTP status must be 409 CONFLICT")
-                    .isEqualTo(HttpStatus.CONFLICT);
-            });
+        ShopifyOAuthService.LinkResult result = oauthService.linkOrProvision(
+            new ShopifyOAuthService.StateRecord(null, shopC), shopC, "fake-code-c");
 
-        // No orphan tenant — PostgreSQL rolled back the tenants INSERT inside the DEFINER function.
+        assertThat(result.outcome())
+            .as("cold install with no linked tenant must resolve to NOT_LINKED, never throw")
+            .isEqualTo(ShopifyOAuthService.LinkOutcome.NOT_LINKED);
+
+        // fetchShop() is what would have surfaced the shop's (colliding) owner email —
+        // must never be called, proving zero provisioning attempt was made.
+        verify(shopifyGateway, never()).fetchShop(anyString(), anyString());
+
+        // No orphan tenant — nothing was ever attempted, let alone rolled back.
         assertThat(countAll("tenants") - tenantsBefore)
-            .as("tenants delta must be 0: provision_tenant_from_shopify rolled back everything")
+            .as("tenants delta must be 0: cold install creates nothing, regardless of email collision")
+            .isEqualTo(0);
+
+        assertThat(jdbc.queryForObject(
+                "SELECT COUNT(*) FROM stores WHERE shop_domain = ?", Integer.class, shopC))
+            .as("no store row for shop-c")
             .isEqualTo(0);
     }
 

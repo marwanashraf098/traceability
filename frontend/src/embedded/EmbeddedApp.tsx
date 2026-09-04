@@ -21,6 +21,7 @@ import {
   Link,
   Divider,
 } from '@shopify/polaris'
+import { notLinkedCopy } from './notLinkedCopy'
 
 // CDN App Bridge global — injected by the <script> in embedded.html before React mounts.
 declare const shopify: { idToken(): Promise<string> }
@@ -347,41 +348,88 @@ function ExceptionsSection({ state }: { state: AsyncState<ExceptionsData> }) {
   )
 }
 
+// ── Section: Not linked to any Traced account ─────────────────────────────
+
+/**
+ * Option A (2026-09-04): a cold Shopify-side install no longer auto-provisions a tenant
+ * (see ShopifyOAuthService.path2()). This renders instead of the dashboard whenever the
+ * embedded token-exchange call reports NOT_PROVISIONED — a neutral empty state, not a
+ * redirect and not a paywall. Deliberately carries no pricing/payment copy: billing lives
+ * entirely off-platform at tracedtech.com and must never be presented as a gate here.
+ *
+ * `lang` defaults to 'en' and is never auto-detected — no locale signal exists anywhere in
+ * the embedded surface (embedded.html hardcodes lang="en", no dir attribute, no locale meta
+ * tag). 'ar' is reachable only by an explicit caller (tests, visual verification), matching
+ * the instruction not to invent a new locale-detection mechanism.
+ */
+export function NotLinked({ lang = 'en' }: { lang?: 'en' | 'ar' }) {
+  const copy = notLinkedCopy[lang]
+
+  useEffect(() => {
+    document.documentElement.dir  = lang === 'ar' ? 'rtl' : 'ltr'
+    document.documentElement.lang = lang
+  }, [lang])
+
+  return (
+    <Page title={copy.pageTitle}>
+      <Card>
+        <BlockStack gap="400">
+          <Text as="h2" variant="headingMd">{copy.heading}</Text>
+          <Text as="p">{copy.body}</Text>
+          <BlockStack gap="200">
+            <Text as="p">
+              {copy.newAccount}{' '}
+              <Link url="https://tracedtech.com" external>tracedtech.com</Link>
+            </Text>
+            <Text as="p">
+              {copy.existingAccount}{' '}
+              <Link url={SaaS} external>{copy.openTraced}</Link>
+            </Text>
+          </BlockStack>
+        </BlockStack>
+      </Card>
+    </Page>
+  )
+}
+
 // ── Root dashboard ────────────────────────────────────────────────────────
+
+type LinkStatus = 'checking' | 'linked' | 'not_linked'
 
 export default function EmbeddedApp() {
   const authFetch = useAuthFetch()
 
+  const [linkStatus,  setLinkStatus]      = useState<LinkStatus>('checking')
   const [storesState, setStoresState]     = useState<AsyncState<StoreRow[]>>(loading)
   const [invState,    setInvState]        = useState<AsyncState<InventorySummary>>(loading)
   const [actState,    setActState]        = useState<AsyncState<DayCount[]>>(loading)
   const [excState,    setExcState]        = useState<AsyncState<ExceptionsData>>(loading)
 
   useEffect(() => {
-    // Token exchange: fired in parallel with the data fetches (Q5 decision).
-    // The dashboard renders from session-token auth — it does not wait for this call.
-    // NOT_PROVISIONED (new merchant, no tenant yet) → top-level redirect to legacy install
-    //   flow (consent + callback) which provisions the tenant, then returns to embedded.
-    // Generic 401 (bad session token) → silent; connection-status card shows error.
-    // 502/503 (Shopify rejected or transient) → silent; dashboard still renders.
+    // Token exchange fires in parallel with the four data fetches below (same round-trip
+    // cost as before — no added latency on the happy path). What changed (Option A,
+    // 2026-09-04) is what happens on NOT_PROVISIONED: previously a top-level redirect into
+    // the legacy install flow, which auto-provisioned a tenant with no human/payment step.
+    // Now: render the NotLinked empty state in place of the dashboard. linkStatus starts
+    // 'checking' so the four sections never mount (and never flash their error Banners)
+    // until we know which case we're in — the four fetches still run underneath and
+    // populate their state regardless, so once linkStatus resolves to 'linked' the
+    // dashboard renders immediately with whatever those fetches have resolved to by then.
     authFetch('/api/v1/embedded/token-exchange', { method: 'POST' })
       .then(async r => {
         if (r.status === 401) {
           const body = await r.json().catch(() => ({})) as { error?: string }
           if (body?.error === 'NOT_PROVISIONED') {
-            // Break out of the Shopify admin iframe — consent screen cannot run inside
-            // an iframe, so this must be a top-level navigation (window.top).
-            const shop = new URLSearchParams(window.location.search).get('shop')
-            if (shop && window.top) {
-              window.top.location.href = '/auth/shopify/install?shop=' + shop
-            }
+            setLinkStatus('not_linked')
+            return
           }
-          // Other 401s (bad session token) → leave dashboard in error/loading state;
-          // the data-fetch calls below will also fail and show their error Banners.
+          // Other 401s (bad session token) → fall through to 'linked' below; the
+          // data-fetch calls will also fail and show their error Banners as before.
         }
-        // 204 (success/skip), 502, 503 → no UI action needed; dashboard renders normally.
+        // 204 (success/skip), 502, 503 → dashboard renders normally.
+        setLinkStatus('linked')
       })
-      .catch(() => { /* network error → ignore; dashboard still renders */ })
+      .catch(() => setLinkStatus('linked')) // network error on token-exchange itself → don't block the dashboard
 
     // All four data requests fire in parallel — each section populates independently.
     authFetch('/api/v1/embedded/stores/status')
@@ -404,6 +452,26 @@ export default function EmbeddedApp() {
       .then(d  => setExcState({ status: 'ok', data: d }))
       .catch(() => setExcState({ status: 'err' }))
   }, [authFetch])
+
+  // 'checking': render one shared skeleton, not four independent section skeletons — avoids
+  // flashing four "Could not load..." Banners in the not-linked case (item 6). The four data
+  // fetches above still fire and populate their own state regardless of linkStatus, so once
+  // it resolves to 'linked' the dashboard below renders immediately with whatever they've
+  // already resolved to — no added round-trip versus the pre-Option-A behavior.
+  if (linkStatus === 'checking') {
+    return (
+      <Page title="Traced">
+        <BlockStack gap="500">
+          <Skeleton lines={2} />
+          <Skeleton lines={6} />
+        </BlockStack>
+      </Page>
+    )
+  }
+
+  if (linkStatus === 'not_linked') {
+    return <NotLinked />
+  }
 
   return (
     <Page

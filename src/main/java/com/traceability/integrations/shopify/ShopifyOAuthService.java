@@ -160,7 +160,14 @@ public class ShopifyOAuthService {
     public enum LinkOutcome {
         LINKED_NEW,           // Path-1 or Path-2: first-time link for this shop
         LINKED_EXISTING,      // idempotent re-install (same tenant owns the shop)
-        PROVISIONED,          // Path-2-new: new tenant + owner + store created
+        // PROVISIONED retired from the live decision tree 2026-09-04 (Option A): cold
+        // Shopify-first installs no longer auto-provision a tenant — see NOT_LINKED below.
+        // Kept only because provisionNewTenant() (dead code, unreferenced by branch()/path2()
+        // as of this change) still returns it — removing it would not compile. Neither the
+        // enum value nor provisionNewTenant() is reachable from any live code path; both are
+        // retained pending a future claim-code mechanism (Option B, out of scope here).
+        PROVISIONED,           // dead: only provisionNewTenant() (now unreferenced) returns this
+        NOT_LINKED,            // Path-2, no owner found: cold install — nothing created
         REJECTED_CROSS_TENANT // shop already owned by a different tenant
     }
 
@@ -237,7 +244,13 @@ public class ShopifyOAuthService {
      *
      * Path-2 (state.tenantId == null — Shopify-first):
      *   owner != null      → UPDATE store token (idempotent)   → LINKED_EXISTING
-     *   owner == null      → provision_tenant_from_shopify     → PROVISIONED
+     *   owner == null      → no write, nothing created         → NOT_LINKED
+     *
+     * As of 2026-09-04 (Option A), a cold Shopify-first install (owner == null) no longer
+     * calls provisionNewTenant() — it creates NOTHING (no tenant, user, store, magic link)
+     * and enqueues NO jobs. Only Path-1 (an already-authenticated, already-paid Owner
+     * initiating from inside the SaaS) can link a store to a tenant. See
+     * ShopifyOAuthController.callback()'s NOT_LINKED case for the embedded re-entry redirect.
      * </pre>
      *
      * Race backstop: on DuplicateKeyException (23505) we re-resolve (winner now
@@ -321,7 +334,12 @@ public class ShopifyOAuthService {
             log.info("OAuth Path-2 existing link: shop={} tenant={}", shop, owner);
             return new LinkResult(owner, null, LinkOutcome.LINKED_EXISTING);
         } else {
-            return provisionNewTenant(shop, tokens);
+            // Option A (2026-09-04): cold Shopify-first install, no owning tenant.
+            // Deliberately does NOT call provisionNewTenant() — creates nothing, enqueues
+            // nothing. The exchanged token (tokens) is discarded; nothing is persisted for
+            // this shop. Only Path-1 (authenticated Owner, already paid) may link a store.
+            log.info("OAuth Path-2 cold install, no linked tenant — nothing provisioned: shop={}", shop);
+            return new LinkResult(null, null, LinkOutcome.NOT_LINKED);
         }
     }
 
