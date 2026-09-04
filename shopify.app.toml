@@ -16,6 +16,14 @@ redirect_urls = [ "https://app.tracedtech.com/auth/shopify/callback" ]
 
 [webhooks]
 api_version = "2026-04"
-# Webhook subscriptions are registered programmatically by RegisterShopifyWebhooksJob
-# on each store install — required by use_legacy_install_flow = true (app-specific
-# toml subscriptions are incompatible with the legacy install flow).
+# Business webhook subscriptions are registered programmatically by
+# RegisterShopifyWebhooksJob on each store install — required by
+# use_legacy_install_flow = true (app-specific toml subscriptions are incompatible
+# with the legacy install flow). Mandatory compliance (GDPR) webhooks below are the
+# one exception: Shopify requires these declared at the app-config level regardless
+# of install flow, not registered per-shop via the Admin API.
+
+  [webhooks.privacy_compliance]
+  customer_deletion_url = "https://app.tracedtech.com/webhooks/shopify/customers/redact"
+  customer_data_request_url = "https://app.tracedtech.com/webhooks/shopify/customers/data_request"
+  shop_deletion_url = "https://app.tracedtech.com/webhooks/shopify/shop/redact"
