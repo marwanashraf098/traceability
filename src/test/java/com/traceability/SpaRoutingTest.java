@@ -2,6 +2,7 @@ package com.traceability;
 
 import com.traceability.identity.JwtService;
 import com.traceability.identity.SecurityConfig;
+import com.traceability.integrations.shopify.ShopifyOAuthService;
 import com.traceability.web.SpaController;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -13,8 +14,13 @@ import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.context.annotation.Import;
 import org.springframework.test.web.servlet.MockMvc;
 
+import static org.hamcrest.Matchers.containsString;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
+import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.forwardedUrl;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.redirectedUrl;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -29,8 +35,9 @@ import org.junit.jupiter.api.Test;
 class SpaRoutingTest {
 
     @Autowired MockMvc mvc;
-    @MockBean JwtService    jwtService;
-    @MockBean JdbcTemplate  jdbcTemplate;   // required by SecurityConfig.filterChain()
+    @MockBean JwtService          jwtService;
+    @MockBean JdbcTemplate        jdbcTemplate;   // required by SecurityConfig.filterChain()
+    @MockBean ShopifyOAuthService oauthService;   // SpaController's Fix-2.3.3 breakout dependency
 
     /** Public SPA routes listed in SecurityConfig permitAll must forward to index.html. */
     @ParameterizedTest(name = "GET {0} -> forward {1}")
@@ -112,12 +119,77 @@ class SpaRoutingTest {
     // then sees Shopify's own 404 when opening the app (app not installed).
     // Redirect to /auth/shopify/install so HMAC is verified and OAuth consent starts.
 
-    /** GET /?shop=... without host (Shopify install flow) → redirect to /auth/shopify/install. */
+    /**
+     * GET /?shop=...&hmac=...&timestamp=... without host AND WITHOUT embedded= (Shopify
+     * install/reinstall flow — genuine fresh-install intent, not an admin-embed attempt) →
+     * redirect to /auth/shopify/install. hmac alone (no embedded) must NOT trigger the
+     * Fix-2.3.3 top-level breakout below — this is the regression guard for that: hmac is
+     * present on this genuine install hit too, so embedded= (not hmac) is the signal that
+     * distinguishes it from the framed-bootstrap case.
+     */
     @Test
     void rootWithShopParamOnlyRedirectsToInstall() throws Exception {
         mvc.perform(get("/?shop=test.myshopify.com&hmac=abc&timestamp=123"))
            .andExpect(status().is3xxRedirection())
            .andExpect(redirectedUrl("/auth/shopify/install?shop=test.myshopify.com&hmac=abc&timestamp=123"));
+    }
+
+    // Fix 2.3.3 (managed framed-open path): Shopify's legacy embedded-app bootstrap hit loads
+    // application_url INSIDE the admin iframe with {shop, hmac, embedded} but NO host yet. The
+    // old server-side redirect to /auth/shopify/install stayed trapped inside that iframe and
+    // dead-ended at Shopify's own un-framable OAuth consent page → Shopify admin's own 404.
+    // Fix: respond 200 with an HTML page whose script does window.top.location = <admin app
+    // URL>, breaking out of the iframe so Shopify re-frames the app WITH host present.
+
+    /**
+     * GET /?shop=...&hmac=...&embedded=1 WITHOUT host (framed bootstrap) → 200 HTML with a
+     * window.top.location breakout to the admin app URL, NOT a redirect to /auth/shopify/install.
+     * buildAdminAppUrl() itself (store-handle derivation, app-handle config) is exercised
+     * end-to-end against the real bean in ShopifyOAuthDay2Test — here it's mocked so this test
+     * verifies only SpaController's own branching and HTML rendering, per this file's stated
+     * "verifies SpaController routing in isolation" scope.
+     */
+    @Test
+    void rootFramedBootstrapNoHost_topLevelBreakout_notRedirectToInstall() throws Exception {
+        String shop = "testingphase-lyaxrnht.myshopify.com";
+        String adminAppUrl = "https://admin.shopify.com/store/testingphase-lyaxrnht/apps/trace-3";
+        when(oauthService.buildAdminAppUrl(eq(shop), isNull())).thenReturn(adminAppUrl);
+
+        mvc.perform(get("/?shop=" + shop + "&hmac=abc&timestamp=123&embedded=1"))
+           .andExpect(status().isOk())
+           .andExpect(content().contentTypeCompatibleWith("text/html"))
+           .andExpect(content().string(containsString("window.top.location.href = \"" + adminAppUrl + "\"")))
+           .andExpect(content().string(containsString(adminAppUrl)))
+           .andExpect(result -> {
+               String loc = result.getResponse().getHeader("Location");
+               if (loc != null) {
+                   throw new AssertionError("Must not be a redirect — got Location: " + loc);
+               }
+           });
+    }
+
+    /** Same framed-bootstrap case via POST (Shopify sometimes POSTs this bootstrap hit too). */
+    @Test
+    void rootPostFramedBootstrapNoHost_topLevelBreakout() throws Exception {
+        String shop = "testingphase-lyaxrnht.myshopify.com";
+        String adminAppUrl = "https://admin.shopify.com/store/testingphase-lyaxrnht/apps/trace-3";
+        when(oauthService.buildAdminAppUrl(eq(shop), isNull())).thenReturn(adminAppUrl);
+
+        mvc.perform(post("/?shop=" + shop + "&hmac=abc&timestamp=123&embedded=1"))
+           .andExpect(status().isOk())
+           .andExpect(content().string(containsString("window.top.location.href = \"" + adminAppUrl + "\"")));
+    }
+
+    /**
+     * A malformed shop domain must never reach the breakout HTML (defense-in-depth against
+     * injecting arbitrary content into the inline <script> block) — falls back to the
+     * pre-existing /auth/shopify/install redirect instead.
+     */
+    @Test
+    void rootFramedBootstrapMalformedShop_fallsBackToInstallRedirect() throws Exception {
+        mvc.perform(get("/?shop=not-a-shop&hmac=abc&timestamp=123&embedded=1"))
+           .andExpect(status().is3xxRedirection())
+           .andExpect(redirectedUrl("/auth/shopify/install?shop=not-a-shop&hmac=abc&timestamp=123&embedded=1"));
     }
 
     // Shopify sends a POST (form submission) to the app URL when initiating install/reinstall

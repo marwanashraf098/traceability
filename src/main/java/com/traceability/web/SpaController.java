@@ -1,6 +1,8 @@
 package com.traceability.web;
 
+import com.traceability.integrations.shopify.ShopifyOAuthService;
 import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.stereotype.Controller;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -10,6 +12,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.io.IOException;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
@@ -48,6 +51,17 @@ public class SpaController {
     private static final Logger log = LoggerFactory.getLogger(SpaController.class);
     private static final String SEG = "[^.]*";
 
+    // Same format ShopifyOAuthController.SHOP_DOMAIN_PATTERN validates against — checked
+    // here too before `shop` is embedded into the top-level-breakout HTML/JS below, since
+    // that context (inline <script>) has different injection risks than a redirect URL.
+    private static final String SHOP_DOMAIN_PATTERN = "[a-zA-Z0-9][a-zA-Z0-9-]*\\.myshopify\\.com";
+
+    private final ShopifyOAuthService oauthService;
+
+    public SpaController(ShopifyOAuthService oauthService) {
+        this.oauthService = oauthService;
+    }
+
     // Root route — three distinct cases, distinguished by which Shopify params are present.
     // Accepts both GET and POST: Shopify sends a POST (form submission) when initiating
     // install/reinstall from the Partner Dashboard or admin, with shop/hmac/timestamp in
@@ -59,16 +73,31 @@ public class SpaController {
     //    POST: redirect to GET /? with the same params (Post/Redirect/Get) so App Bridge
     //    can read host from window.location.search (POST body is invisible to JS).
     //
-    // 2. shop= present, host= absent  → INSTALL / OAUTH INITIATION.
-    //    GET or POST: redirect to /auth/shopify/install with all params in the query
-    //    string.  getParameterMap() covers both URL params and POST form body.
+    // 2. shop= present, host= absent  → two sub-cases (Fix 2.3.3, managed framed-open path):
+    //
+    //    2a. FRAMED BOOTSTRAP — embedded=1 and/or hmac present. This is Shopify's legacy
+    //        embedded-app bootstrap hit: it loads application_url INSIDE the admin iframe
+    //        with {shop, hmac, embedded} but no host yet. A server-side redirect here stays
+    //        trapped inside that iframe and dead-ends at Shopify's own (un-framable) OAuth
+    //        consent page → Shopify admin shows its own 404. Fix: respond 200 with an HTML
+    //        page whose script does `window.top.location = <admin app URL>` — a top-level
+    //        breakout, exempt from framing rules since it isn't itself being framed. Shopify
+    //        then re-frames the app at that URL WITH host present, and branch 1 above takes
+    //        over normally. adminAppUrl reuses ShopifyOAuthService.buildAdminAppUrl()'s
+    //        shop-derived fallback (host is null here) — same URL/logic as the OAuth-callback
+    //        fix, not duplicated.
+    //
+    //    2b. GENUINE FRESH-INSTALL INTENT — shop present, neither embedded nor hmac. A direct
+    //        /?shop=... link (not a Shopify-driven admin embed attempt) — unchanged from
+    //        before: redirect to /auth/shopify/install to start OAuth.
     //
     // 3. Neither → STANDALONE LANDING PAGE.  Direct browser hit, marketing pages, etc.
     @RequestMapping(value = "/", method = {RequestMethod.GET, RequestMethod.POST})
     public String root(
             @RequestParam(name = "host",  required = false) String host,
             @RequestParam(name = "shop",  required = false) String shop,
-            HttpServletRequest request) {
+            HttpServletRequest request,
+            HttpServletResponse response) throws IOException {
 
         if (host != null) {
             if ("POST".equalsIgnoreCase(request.getMethod())) {
@@ -81,6 +110,23 @@ public class SpaController {
         }
 
         if (shop != null) {
+            // embedded=1 ONLY — NOT hmac. hmac is a general Shopify request-signing mechanism
+            // present on genuine install/reinstall hits too (SpaRoutingTest's own
+            // rootWithShopParamOnlyRedirectsToInstall / rootPostWithShopOnlyRedirectsToInstall /
+            // rootPostInstallFormBodyMyshopifyOriginRedirectsToInstall all use shop+hmac+timestamp
+            // with NO embedded and must keep redirecting to /auth/shopify/install). embedded=1 is
+            // Shopify's specific "this is an admin-embedded app open" marker and is never present
+            // on those install-intent hits — it's the reliable signal, not hmac.
+            boolean framedBootstrap = request.getParameter("embedded") != null;
+
+            if (framedBootstrap && shop.matches(SHOP_DOMAIN_PATTERN)) {
+                String adminAppUrl = oauthService.buildAdminAppUrl(shop, null);
+                log.debug("[SPA-ROOT] framed bootstrap (embedded/hmac present, host=null) shop={} → top-level breakout to {}",
+                        shop, adminAppUrl);
+                writeTopLevelBreakout(response, adminAppUrl);
+                return null;
+            }
+
             String qs = paramsToQueryString(request.getParameterMap());
             String dest = "/auth/shopify/install" + (qs.isEmpty() ? "" : "?" + qs);
             log.debug("[SPA-ROOT] method={} host=null shop={} → redirect:{}", request.getMethod(), shop, dest);
@@ -89,6 +135,24 @@ public class SpaController {
 
         log.debug("[SPA-ROOT] method={} host=null shop=null → forward:/index.html (landing)", request.getMethod());
         return "forward:/index.html";
+    }
+
+    // Writes the response directly (returning null from root() above) rather than going
+    // through a view name — the body is a dynamic per-request URL, not a static template.
+    // adminAppUrl is safe to inline as-is: it's built from a shop that already passed
+    // SHOP_DOMAIN_PATTERN (letters/digits/hyphens/dots only) plus our own trusted
+    // shopify.app-handle config — no character requiring HTML/JS escaping can appear in it.
+    private void writeTopLevelBreakout(HttpServletResponse response, String adminAppUrl) throws IOException {
+        response.setStatus(HttpServletResponse.SC_OK);
+        response.setContentType("text/html;charset=UTF-8");
+        response.getWriter().write(
+            "<!doctype html>\n" +
+            "<html><head><meta charset=\"UTF-8\"><title>Redirecting…</title></head>\n" +
+            "<body>\n" +
+            "<script>window.top.location.href = \"" + adminAppUrl + "\";</script>\n" +
+            "<noscript><a href=\"" + adminAppUrl + "\">Continue to Traced</a></noscript>\n" +
+            "</body></html>"
+        );
     }
 
     // Exact match beats the pattern catch-all — /embedded → embedded.html (App Bridge shell).
