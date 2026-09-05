@@ -127,40 +127,44 @@ class ShopifyHttpGateway implements ShopifyGateway {
 
     // ---- public API -----------------------------------------------------
 
+    // App Store review 2.2.4 (GraphQL Admin API, not REST) — these two previously called
+    // REST GET /admin/api/{v}/shop.json. Replaced with the equivalent `shop { ... }` GraphQL
+    // query, each requesting only the fields it actually consumes. Routed through the shared
+    // executeGraphQL() helper (retry + throttle handling), the same machinery every other
+    // read in this class already uses — not a new HTTP path.
+    private static final String SHOP_NAME_QUERY = """
+            query ValidateShop {
+              shop { name }
+            }
+            """;
+
+    private static final String SHOP_INFO_QUERY = """
+            query FetchShop {
+              shop { name email ianaTimezone }
+            }
+            """;
+
     @Override
     public String validateShop(String shopDomain, String token) {
-        String url = "https://" + shopDomain + "/admin/api/" + apiVersion + "/shop.json";
-        JsonNode body = Retry.decorateSupplier(retry, () ->
-            restClient.get()
-                .uri(url)
-                .header("X-Shopify-Access-Token", token)
-                .retrieve()
-                .body(JsonNode.class)
-        ).get();
-        if (body == null || !body.has("shop")) {
-            throw new ShopifyException("Shopify /shop.json returned unexpected response");
+        JsonNode data = executeGraphQL(shopDomain, token, SHOP_NAME_QUERY, mapper.createObjectNode());
+        JsonNode shop = data.path("shop");
+        if (shop.isMissingNode() || shop.isNull()) {
+            throw new ShopifyException("Shopify shop query returned no shop");
         }
-        return body.get("shop").path("name").asText("unknown");
+        return shop.path("name").asText("unknown");
     }
 
     @Override
     public ShopInfo fetchShop(String shopDomain, String token) {
-        String url = "https://" + shopDomain + "/admin/api/" + apiVersion + "/shop.json";
-        JsonNode body = Retry.decorateSupplier(retry, () ->
-            restClient.get()
-                .uri(url)
-                .header("X-Shopify-Access-Token", token)
-                .retrieve()
-                .body(JsonNode.class)
-        ).get();
-        if (body == null || !body.has("shop")) {
-            throw new ShopifyException("Shopify /shop.json returned unexpected response for fetchShop");
+        JsonNode data = executeGraphQL(shopDomain, token, SHOP_INFO_QUERY, mapper.createObjectNode());
+        JsonNode shop = data.path("shop");
+        if (shop.isMissingNode() || shop.isNull()) {
+            throw new ShopifyException("Shopify shop query returned no shop for fetchShop");
         }
-        JsonNode shop = body.get("shop");
         return new ShopInfo(
             nullableText(shop, "email"),
             shop.path("name").asText(""),
-            shop.path("timezone").asText("UTC"));
+            shop.path("ianaTimezone").asText("UTC"));
     }
 
     @Override
