@@ -89,6 +89,9 @@ class ShopifyOAuthDay2Test {
     @Value("${shopify.client-secret}")
     String clientSecret;
 
+    @Value("${shopify.app-handle}")
+    String appHandle;
+
     private String ownerToken;
     private UUID   ownerTenantId;
 
@@ -163,6 +166,9 @@ class ShopifyOAuthDay2Test {
             base() + "/auth/shopify/callback?" + callbackParams(nonce, SHOP_PATH1, CODE_A), Void.class);
 
         assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.FOUND);
+        assertThat(resp.getHeaders().getFirst("Location"))
+            .as("LINKED_NEW must also redirect into the Shopify admin embedded app")
+            .isEqualTo("https://admin.shopify.com/store/path1/apps/" + appHandle);
 
         Integer count = jdbc.queryForObject(
             "SELECT COUNT(*) FROM stores WHERE shop_domain = ? AND tenant_id = ?",
@@ -259,22 +265,29 @@ class ShopifyOAuthDay2Test {
     //    no tenant, no owner, no store, no jobs — and redirects back into the
     //    embedded/standalone app root, never to a pricing/setup-pending page.
     //    fetchShop() must never even be called — zero provisioning attempt.
+    //
+    //    Fix 2.3.3: `host` is absent on this state (matches a real fresh/cold
+    //    install — App Store reviewer scenario), so the redirect MUST be the
+    //    shop-derived Shopify ADMIN url, not our bare app domain. Before this
+    //    fix, this asserted only "doesNotContain(setup-pending/...)" — which a
+    //    bare https://app.tracedtech.com redirect also satisfied, silently
+    //    passing while the reviewer still saw Shopify's own 404. Reverting
+    //    ShopifyOAuthController.callback()'s embeddedReturn to the old
+    //    `appBase` ternary fails this new isEqualTo assertion.
     // -----------------------------------------------------------------------
     @Test
-    void path2_newShop_coldInstall_createsNothing_redirectsToEmbedded() {
+    void path2_newShop_coldInstall_createsNothing_redirectsToAdminAppUrl() {
         when(shopifyGateway.exchangeCode(eq(SHOP_PATH2), eq(CODE_A))).thenReturn(EXCHANGE_A);
 
-        String nonce = insertState(null, SHOP_PATH2, Instant.now());
+        String nonce = insertState(null, SHOP_PATH2, Instant.now()); // host absent — the cold-install case
         var resp = noRedirectRest.getForEntity(
             base() + "/auth/shopify/callback?" + callbackParams(nonce, SHOP_PATH2, CODE_A), Void.class);
 
         assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.FOUND);
         String location = resp.getHeaders().getFirst("Location");
         assertThat(location)
-            .as("must redirect back into the app — never a pricing/paywall/setup-pending page")
-            .doesNotContain("setup-pending")
-            .doesNotContain("connect/error")
-            .doesNotContain("pricing");
+            .as("NOT_LINKED must redirect into the Shopify admin embedded app, never our bare domain")
+            .isEqualTo("https://admin.shopify.com/store/path2-new/apps/" + appHandle);
 
         // Zero tenant, owner, store rows — nothing created
         Integer tenantCount = jdbc.queryForObject(
@@ -295,6 +308,61 @@ class ShopifyOAuthDay2Test {
         // fetchShop() is what would surface the shop's owner email for provisioning —
         // must never be invoked, proving zero attempt was made (not just a rolled-back one).
         verify(shopifyGateway, never()).fetchShop(anyString(), anyString());
+    }
+
+    // -----------------------------------------------------------------------
+    // 4b. Fix 2.3.3 — store-handle derivation against the exact App Store reviewer
+    //     shop pattern reported in the rejection ("app-review-fb112dfb-r88...").
+    //     Confirms ".myshopify.com" is stripped correctly (not just for the short
+    //     test-fixture domains used elsewhere in this file).
+    // -----------------------------------------------------------------------
+    @Test
+    void coldInstall_reviewerShopPattern_redirectsToAdminAppUrl() {
+        String reviewerShop = "app-review-fb112dfb-r88.myshopify.com";
+        jdbc.update("DELETE FROM stores WHERE shop_domain = ?", reviewerShop);
+
+        when(shopifyGateway.exchangeCode(eq(reviewerShop), eq("fake-code-reviewer")))
+            .thenReturn(EXCHANGE_A);
+
+        String nonce = insertState(null, reviewerShop, Instant.now()); // host absent — cold install
+        var resp = noRedirectRest.getForEntity(
+            base() + "/auth/shopify/callback?" + callbackParams(nonce, reviewerShop, "fake-code-reviewer"),
+            Void.class);
+
+        assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.FOUND);
+        assertThat(resp.getHeaders().getFirst("Location"))
+            .isEqualTo("https://admin.shopify.com/store/app-review-fb112dfb-r88/apps/" + appHandle);
+
+        jdbc.update("DELETE FROM stores WHERE shop_domain = ?", reviewerShop);
+    }
+
+    // -----------------------------------------------------------------------
+    // 4c. Fix 2.3.3 — when host WAS captured at install time (re-authorization from
+    //     an already-open embedded session, not the cold-install case), callback()
+    //     prefers the decoded host over the shop-derived URL.
+    // -----------------------------------------------------------------------
+    @Test
+    void coldInstall_hostCapturedAtInstall_prefersDecodedHostOverShopDerived() {
+        String shop = "host-preferred.myshopify.com";
+        jdbc.update("DELETE FROM stores WHERE shop_domain = ?", shop);
+
+        String decodedAdminPath = "admin.shopify.com/store/host-preferred-handle";
+        String host = Base64.getEncoder().encodeToString(
+            decodedAdminPath.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+
+        when(shopifyGateway.exchangeCode(eq(shop), eq("fake-code-host"))).thenReturn(EXCHANGE_A);
+
+        String nonce = insertState(null, shop, Instant.now(), host);
+        var resp = noRedirectRest.getForEntity(
+            base() + "/auth/shopify/callback?" + callbackParams(nonce, shop, "fake-code-host"),
+            Void.class);
+
+        assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.FOUND);
+        assertThat(resp.getHeaders().getFirst("Location"))
+            .as("host captured at install time must win over the shop-derived fallback")
+            .isEqualTo("https://" + decodedAdminPath);
+
+        jdbc.update("DELETE FROM stores WHERE shop_domain = ?", shop);
     }
 
     // -----------------------------------------------------------------------
@@ -321,6 +389,9 @@ class ShopifyOAuthDay2Test {
             base() + "/auth/shopify/callback?" + callbackParams(nonce2, SHOP_PATH2, CODE_B), Void.class);
 
         assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.FOUND);
+        assertThat(resp.getHeaders().getFirst("Location"))
+            .as("LINKED_EXISTING must also redirect into the Shopify admin embedded app")
+            .isEqualTo("https://admin.shopify.com/store/path2-new/apps/" + appHandle);
 
         long tenantCountAfter = jdbc.queryForObject(
             "SELECT COUNT(*) FROM tenants WHERE name = 'Path2 New Shop'", Long.class);
@@ -546,12 +617,16 @@ class ShopifyOAuthDay2Test {
     private String base() { return "http://localhost:" + port; }
 
     private String insertState(UUID tenantId, String shopDomain, Instant createdAt) {
+        return insertState(tenantId, shopDomain, createdAt, null);
+    }
+
+    private String insertState(UUID tenantId, String shopDomain, Instant createdAt, String host) {
         byte[] nonceBytes = new byte[16];
         new SecureRandom().nextBytes(nonceBytes);
         String nonce = Base64.getUrlEncoder().withoutPadding().encodeToString(nonceBytes);
         jdbc.update(
-            "INSERT INTO shopify_oauth_state (nonce, tenant_id, shop_domain, created_at) VALUES (?, ?, ?, ?)",
-            nonce, tenantId, shopDomain, Timestamp.from(createdAt));
+            "INSERT INTO shopify_oauth_state (nonce, tenant_id, shop_domain, created_at, host) VALUES (?, ?, ?, ?, ?)",
+            nonce, tenantId, shopDomain, Timestamp.from(createdAt), host);
         return nonce;
     }
 

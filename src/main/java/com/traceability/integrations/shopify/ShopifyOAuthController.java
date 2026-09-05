@@ -62,7 +62,8 @@ public class ShopifyOAuthController {
                 HttpStatus.BAD_REQUEST);
         }
 
-        String nonce      = oauthService.initiateOAuth(principal.tenantId(), shop);
+        // Path-1 is initiated from inside our own standalone SaaS (never embedded) — no host.
+        String nonce      = oauthService.initiateOAuth(principal.tenantId(), shop, null);
         String consentUrl = oauthService.buildConsentUrl(shop, nonce);
         return ResponseEntity.ok(new InitiateResponse(consentUrl));
     }
@@ -96,7 +97,12 @@ public class ShopifyOAuthController {
             checkTimestampFreshness(allParams);
         }
 
-        String nonce = oauthService.initiateOAuth(null, shop);
+        // Capture host if Shopify provided it (e.g. a re-authorization triggered from an
+        // already-open embedded session) so callback() can build a precise admin URL from it.
+        // NOT guaranteed on a fresh/cold install — buildAdminAppUrl()'s shop-derived fallback
+        // is what makes that case work regardless.
+        String host  = allParams.get("host");
+        String nonce = oauthService.initiateOAuth(null, shop, host);
         return ResponseEntity.status(HttpStatus.FOUND)
             .location(URI.create(oauthService.buildConsentUrl(shop, nonce)))
             .build();
@@ -130,17 +136,15 @@ public class ShopifyOAuthController {
 
         ShopifyOAuthService.LinkResult result = oauthService.linkOrProvision(stateRec, shop, code);
 
-        // For embedded apps Shopify includes host= in the callback params (base64-encoded admin
-        // origin).  If present, redirect back to /?shop=X&host=Y — SpaController.root() forwards
-        // to embedded.html, the CDN App Bridge script detects it is running in a top-level
-        // browser (not an iframe), and automatically navigates to the Shopify admin with the app
-        // open.  Without host= (e.g. direct install link, dev store from outside admin) the
-        // fallback is the app root which shows the standalone landing page.
-        String host = allParams.get("host");
-        String appBase = oauthService.getAppUrl();
-        String embeddedReturn = (host != null && !host.isBlank())
-                ? appBase + "?shop=" + shop + "&host=" + host
-                : appBase;
+        // Fix 2.3.3: redirect the top-level browser back to the Shopify ADMIN embedded-app
+        // URL (admin.shopify.com/store/{handle}/apps/{app-handle}), not our bare domain.
+        // `host` is NOT guaranteed on the OAuth callback (it's not a documented classic-OAuth
+        // callback param, and is normally absent on a fresh/cold install) — buildAdminAppUrl()
+        // prefers stateRec.host() (captured at install time, if Shopify gave it to us then)
+        // and otherwise falls back to a URL derived from `shop`, which is always present and
+        // HMAC-verified. Once the browser lands there, Shopify frames application_url (/) with
+        // host+shop+embedded=1, which SpaController already serves correctly as embedded.html.
+        String embeddedReturn = oauthService.buildAdminAppUrl(shop, stateRec.host());
 
         return switch (result.outcome()) {
             case LINKED_NEW, LINKED_EXISTING -> ResponseEntity.status(HttpStatus.FOUND)

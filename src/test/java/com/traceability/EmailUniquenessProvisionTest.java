@@ -304,7 +304,7 @@ class EmailUniquenessProvisionTest {
         int tenantsBefore = countAll("tenants");
 
         ShopifyOAuthService.LinkResult result = oauthService.linkOrProvision(
-            new ShopifyOAuthService.StateRecord(null, shopC), shopC, "fake-code-c");
+            new ShopifyOAuthService.StateRecord(null, shopC, null), shopC, "fake-code-c");
 
         assertThat(result.outcome())
             .as("cold install with no linked tenant must resolve to NOT_LINKED, never throw")

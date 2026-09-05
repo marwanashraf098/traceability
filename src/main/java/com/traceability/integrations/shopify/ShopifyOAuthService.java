@@ -121,6 +121,7 @@ public class ShopifyOAuthService {
     private final String scopes;
     private final String redirectUri;
     private final String appUrl;
+    private final String appHandle;
 
     public ShopifyOAuthService(
             JdbcTemplate jdbc,
@@ -135,7 +136,8 @@ public class ShopifyOAuthService {
             @Value("${shopify.client-secret}") String clientSecret,
             @Value("${shopify.scopes}") String scopes,
             @Value("${shopify.redirect-uri}") String redirectUri,
-            @Value("${shopify.app-url}") String appUrl) {
+            @Value("${shopify.app-url}") String appUrl,
+            @Value("${shopify.app-handle}") String appHandle) {
         this.jdbc              = jdbc;
         this.shopifyGateway    = shopifyGateway;
         this.encryptionService = encryptionService;
@@ -149,12 +151,17 @@ public class ShopifyOAuthService {
         this.scopes            = scopes;
         this.redirectUri       = redirectUri;
         this.appUrl            = appUrl;
+        this.appHandle         = appHandle;
     }
 
     // ---- public records -----------------------------------------------
 
-    /** Carries the tenant and shop resolved from a consumed state nonce. */
-    public record StateRecord(UUID tenantId, String shopDomain) {}
+    /**
+     * Carries the tenant and shop resolved from a consumed state nonce.
+     * host is the Shopify `host` param captured at /auth/shopify/install time,
+     * if it was present (NOT guaranteed — see buildAdminAppUrl()).
+     */
+    public record StateRecord(UUID tenantId, String shopDomain, String host) {}
 
     /** Outcome of the resolve-or-create decision tree on callback. */
     public enum LinkOutcome {
@@ -182,19 +189,21 @@ public class ShopifyOAuthService {
      *
      * @param tenantId   the authenticated owner's tenant (null for Path-2)
      * @param shopDomain the shop domain to bind to this state
+     * @param host       Shopify's `host` param, if present at install time (null otherwise —
+     *                   normal for a fresh/cold install; see buildAdminAppUrl()'s fallback)
      */
-    public String initiateOAuth(UUID tenantId, String shopDomain) {
+    public String initiateOAuth(UUID tenantId, String shopDomain, String host) {
         byte[] nonceBytes = new byte[16]; // 128 bits
         rng.nextBytes(nonceBytes);
         String nonce = Base64.getUrlEncoder().withoutPadding().encodeToString(nonceBytes);
 
         tx.execute(s -> {
             jdbc.update(
-                "INSERT INTO shopify_oauth_state (nonce, tenant_id, shop_domain) VALUES (?, ?, ?)",
-                nonce, tenantId, shopDomain);
+                "INSERT INTO shopify_oauth_state (nonce, tenant_id, shop_domain, host) VALUES (?, ?, ?, ?)",
+                nonce, tenantId, shopDomain, host);
             return null;
         });
-        log.debug("OAuth state created: nonce={} shop={} tenant={}", nonce, shopDomain, tenantId);
+        log.debug("OAuth state created: nonce={} shop={} tenant={} host={}", nonce, shopDomain, tenantId, host);
         return nonce;
     }
 
@@ -216,9 +225,9 @@ public class ShopifyOAuthService {
     public StateRecord consumeState(String nonce, String callbackShop) {
         return tx.execute(s -> {
             StateRecord record = jdbc.query(
-                "SELECT tenant_id, shop_domain FROM consume_shopify_oauth_state(?, ?)",
+                "SELECT tenant_id, shop_domain, host FROM consume_shopify_oauth_state(?, ?)",
                 rs -> rs.next()
-                    ? new StateRecord(rs.getObject("tenant_id", UUID.class), rs.getString("shop_domain"))
+                    ? new StateRecord(rs.getObject("tenant_id", UUID.class), rs.getString("shop_domain"), rs.getString("host"))
                     : null,
                 nonce, callbackShop);
 
@@ -297,6 +306,52 @@ public class ShopifyOAuthService {
 
     public String getAppUrl()        { return appUrl; }
     public String getClientSecret()  { return clientSecret; }
+
+    private static final String MYSHOPIFY_SUFFIX = ".myshopify.com";
+
+    /**
+     * Builds the Shopify ADMIN url that frames this app, so the post-OAuth top-level
+     * redirect hands the browser back to admin.shopify.com instead of our bare domain
+     * (Fix 2.3.3 — the previous embeddedReturn assumed `host` would be present on the
+     * OAuth callback, which is not guaranteed on a fresh/cold install).
+     *
+     * Preference order:
+     *   1. host (captured at install time via StateRecord.host(), OR — belt and braces —
+     *      present directly on the callback params) — base64-decoded to the exact admin
+     *      URL Shopify itself handed us.
+     *   2. shop-derived fallback: https://admin.shopify.com/store/{store-handle}/apps/{app-handle}
+     *      — always available (shop is a required, HMAC-verified callback param), so this
+     *      is the reliable path for the fresh-install case host is normally absent from.
+     *
+     * A malformed/undecodable host never throws — it falls through to the shop-derived URL
+     * rather than risking a redirect to a broken location.
+     */
+    public String buildAdminAppUrl(String shop, String host) {
+        if (host != null && !host.isBlank()) {
+            String decoded = decodeHost(host);
+            if (decoded != null) {
+                return "https://" + decoded;
+            }
+        }
+        String storeHandle = shop.toLowerCase().endsWith(MYSHOPIFY_SUFFIX)
+            ? shop.substring(0, shop.length() - MYSHOPIFY_SUFFIX.length())
+            : shop;
+        return "https://admin.shopify.com/store/" + storeHandle + "/apps/" + appHandle;
+    }
+
+    /** Returns null (never throws) on anything that isn't valid base64 — caller falls back. */
+    private static String decodeHost(String host) {
+        try {
+            return new String(Base64.getDecoder().decode(host), java.nio.charset.StandardCharsets.UTF_8);
+        } catch (IllegalArgumentException e) {
+            try {
+                return new String(Base64.getUrlDecoder().decode(host), java.nio.charset.StandardCharsets.UTF_8);
+            } catch (IllegalArgumentException e2) {
+                log.warn("Could not base64-decode Shopify host param, falling back to shop-derived admin URL: {}", host);
+                return null;
+            }
+        }
+    }
 
     // ---- private: decision tree ---------------------------------------
 

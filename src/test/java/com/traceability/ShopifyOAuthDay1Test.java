@@ -172,6 +172,38 @@ class ShopifyOAuthDay1Test {
     }
 
     // -------------------------------------------------------------------------
+    // (b2) Fix 2.3.3 — when Shopify DOES provide host at /install (e.g. a
+    // re-authorization from an already-open embedded session), it must be
+    // captured into shopify_oauth_state so callback() can prefer it. Absent on
+    // a genuinely cold install — this only proves the capture path when present.
+    // -------------------------------------------------------------------------
+    @Test
+    void install_withHostParam_capturesHostOnStateRow() {
+        String hostShop = "host-capture-test.myshopify.com";
+        jdbc.update("DELETE FROM shopify_oauth_state WHERE shop_domain = ?", hostShop);
+        String hostValue = "YWRtaW4uc2hvcGlmeS5jb20vc3RvcmUvaG9zdC1jYXB0dXJl"; // base64, opaque to install()
+
+        String timestamp = String.valueOf(Instant.now().getEpochSecond());
+        Map<String, String> params = new LinkedHashMap<>();
+        params.put("shop", hostShop);
+        params.put("host", hostValue);
+        params.put("timestamp", timestamp);
+        params.put("hmac", computeHmac(params));
+
+        ResponseEntity<Void> resp = noRedirectRest.getForEntity(
+                base() + "/auth/shopify/install?" + buildQueryString(params), Void.class);
+
+        assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.FOUND);
+
+        String capturedHost = jdbc.queryForObject(
+                "SELECT host FROM shopify_oauth_state WHERE shop_domain = ? AND tenant_id IS NULL",
+                String.class, hostShop);
+        assertThat(capturedHost).isEqualTo(hostValue);
+
+        jdbc.update("DELETE FROM shopify_oauth_state WHERE shop_domain = ?", hostShop);
+    }
+
+    // -------------------------------------------------------------------------
     // (c) Callback HMAC reject — bad HMAC returns 401 with SHOPIFY_HMAC_INVALID
     // -------------------------------------------------------------------------
     @Test

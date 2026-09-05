@@ -73,6 +73,15 @@ shopify:
   scopes: ${SHOPIFY_SCOPES:read_products,read_orders,read_fulfillments,read_customers,write_inventory,write_locations,write_shipping}
   redirect-uri: ${SHOPIFY_REDIRECT_URI:http://localhost:8080/auth/shopify/callback}
   app-url: ${SHOPIFY_APP_URL:http://localhost:5173}
+  # App handle from the Partner Dashboard (Apps > this app > the URL slug in
+  # admin.shopify.com/store/{shop}/apps/{handle}) — used by
+  # ShopifyOAuthService.buildAdminAppUrl() to redirect the post-OAuth browser
+  # back into the Shopify admin embedded app. NOT derivable from shopify.app.toml
+  # (Shopify assigns/dedupes the handle server-side, e.g. "trace" -> "trace-1" if
+  # taken). The placeholder below is deliberately invalid so a missing override
+  # produces an obviously broken URL rather than a plausible-looking wrong one.
+  # CONFIRM THE REAL VALUE IN THE PARTNER DASHBOARD BEFORE DEPLOYING THIS FIX.
+  app-handle: ${SHOPIFY_APP_HANDLE:REPLACE_WITH_PARTNER_DASHBOARD_APP_HANDLE}
   # Base URL for webhook callback registration (must be the backend server URL, not the SPA).
   webhook-base-url: ${SHOPIFY_WEBHOOK_BASE_URL:http://localhost:8080}
 
