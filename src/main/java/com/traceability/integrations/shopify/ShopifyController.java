@@ -4,6 +4,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.traceability.identity.CustomUserDetails;
 import org.jobrunr.jobs.JobId;
 import org.jobrunr.scheduling.JobScheduler;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -22,6 +24,8 @@ import java.util.UUID;
 @RequestMapping("/api/v1/shopify")
 public class ShopifyController {
 
+    private static final Logger log = LoggerFactory.getLogger(ShopifyController.class);
+
     @Value("${app.custom-app-connect-enabled:false}")
     private boolean customAppConnectEnabled;
 
@@ -35,6 +39,7 @@ public class ShopifyController {
     private final ObjectMapper              mapper;
     private final TransactionTemplate       tx;
     private final ShopifyTokenProvider      tokenProvider;
+    private final ShopifyDisconnectService  disconnectService;
 
     public ShopifyController(ShopifySyncService syncService,
                               ShopifyGateway shopifyGateway,
@@ -45,7 +50,8 @@ public class ShopifyController {
                               JdbcTemplate jdbc,
                               ObjectMapper mapper,
                               PlatformTransactionManager txm,
-                              ShopifyTokenProvider tokenProvider) {
+                              ShopifyTokenProvider tokenProvider,
+                              ShopifyDisconnectService disconnectService) {
         this.syncService     = syncService;
         this.shopifyGateway  = shopifyGateway;
         this.importJob       = importJob;
@@ -56,6 +62,7 @@ public class ShopifyController {
         this.mapper          = mapper;
         this.tx              = new TransactionTemplate(txm);
         this.tokenProvider   = tokenProvider;
+        this.disconnectService = disconnectService;
     }
 
     public record ConnectRequest(String shopDomain, String adminToken) {}
@@ -196,6 +203,35 @@ public class ShopifyController {
         UUID tenantId = resolveStoreTenant(storeId, principal);
         importJob.run(storeId, tenantId);
         return ResponseEntity.ok().build();
+    }
+
+    /**
+     * Soft-disconnects a Shopify store: marks it disconnected, stops token use, pauses sync.
+     * Data stays. Reuses the exact status-flip seam app/uninstalled uses
+     * (ShopifyWebhookProcessorJob.handleAppUninstalled()) — no parallel disconnect path.
+     *
+     * Idempotent: an already-disconnected store returns 204 without attempting a revoke.
+     * Shopify-side token revocation is best-effort and runs AFTER the local disconnect has
+     * committed — a failed or slow revoke never blocks or reverses the local state change.
+     */
+    @PostMapping("/stores/{storeId}/disconnect")
+    @PreAuthorize("hasRole('OWNER')")
+    public ResponseEntity<Void> disconnect(
+            @PathVariable UUID storeId,
+            @AuthenticationPrincipal CustomUserDetails principal) {
+
+        ShopifyDisconnectService.DisconnectResult result = disconnectService.disconnect(storeId);
+
+        if (!result.alreadyDisconnected() && result.rawAccessToken() != null) {
+            try {
+                shopifyGateway.revokeAccessToken(result.shopDomain(), result.rawAccessToken());
+            } catch (Exception e) {
+                log.warn("Best-effort Shopify token revoke failed for shop={}: {}",
+                    result.shopDomain(), e.getMessage());
+            }
+        }
+
+        return ResponseEntity.noContent().build();
     }
 
     /**

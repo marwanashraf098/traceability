@@ -242,6 +242,26 @@ class ShopifyHttpGateway implements ShopifyGateway {
     }
 
     @Override
+    public void revokeAccessToken(String shopDomain, String token) {
+        String url = "https://" + shopDomain + "/admin/api_permissions/current.json";
+        try {
+            restClient.delete()
+                .uri(url)
+                .header("X-Shopify-Access-Token", token)
+                .retrieve()
+                .toBodilessEntity();
+        } catch (HttpClientErrorException e) {
+            throw new ShopifyException(
+                "Token revoke HTTP " + e.getStatusCode().value() + " for " + shopDomain, e);
+        } catch (HttpServerErrorException e) {
+            throw new ShopifyException(
+                "Token revoke HTTP " + e.getStatusCode().value() + " for " + shopDomain, e);
+        } catch (ResourceAccessException e) {
+            throw new ShopifyTransientException("Token revoke network failure for " + shopDomain, e);
+        }
+    }
+
+    @Override
     public ProductPage fetchProductsPage(String shopDomain, String token, String cursor) {
         ObjectNode vars = mapper.createObjectNode();
         if (cursor != null) vars.put("cursor", cursor);

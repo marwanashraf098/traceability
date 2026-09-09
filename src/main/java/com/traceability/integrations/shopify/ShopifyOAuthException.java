@@ -24,7 +24,10 @@ public class ShopifyOAuthException extends RuntimeException {
         // Day 4 codes
         MAGIC_LINK_INVALID,              // not-found / expired / consumed — no oracle (all sub-conditions identical)
         // V42 codes
-        SHOPIFY_EMAIL_ALREADY_REGISTERED // provision_tenant_from_shopify 23505 on users_email_unique
+        SHOPIFY_EMAIL_ALREADY_REGISTERED, // provision_tenant_from_shopify 23505 on users_email_unique
+        // Disconnect/reconnect hard rule: a tenant is permanently bound to its original
+        // shop_domain — initiate() rejects a different shop pre-consent, before any write.
+        SHOPIFY_SHOP_MISMATCH
     }
 
     private final Code       code;

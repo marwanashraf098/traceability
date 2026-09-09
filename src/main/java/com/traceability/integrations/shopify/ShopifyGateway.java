@@ -96,6 +96,14 @@ public interface ShopifyGateway {
      */
     TokenResponse refreshAccessToken(String shopDomain, String refreshToken);
 
+    /**
+     * Best-effort revoke of an offline access token — DELETE /admin/api_permissions/current.json.
+     * Callers must treat this as fire-and-forget: a failure (4xx/5xx/timeout) must never block
+     * or reverse a local disconnect that has already committed. No retry, no state change here —
+     * the caller decides what "best-effort" means at the call site.
+     */
+    void revokeAccessToken(String shopDomain, String token);
+
     // ---- OAuth Day 2 additions ------------------------------------------
 
     /** Shop info returned by the Shopify /admin/api/{v}/shop.json resource. */

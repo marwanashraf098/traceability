@@ -19,6 +19,7 @@ import java.security.SecureRandom;
 import java.sql.Timestamp;
 import java.time.Instant;
 import java.util.Base64;
+import java.util.List;
 import java.util.UUID;
 
 /**
@@ -175,7 +176,10 @@ public class ShopifyOAuthService {
         // retained pending a future claim-code mechanism (Option B, out of scope here).
         PROVISIONED,           // dead: only provisionNewTenant() (now unreferenced) returns this
         NOT_LINKED,            // Path-2, no owner found: cold install — nothing created
-        REJECTED_CROSS_TENANT // shop already owned by a different tenant
+        REJECTED_CROSS_TENANT, // shop already owned by a different tenant
+        // Write-site backstop to assertBoundShop() (initiate()-time guard): the intended tenant
+        // already owns a DIFFERENT shop. Guards the write path if initiate() is ever bypassed.
+        REJECTED_SHOP_MISMATCH
     }
 
     /** Result returned by linkOrProvision. */
@@ -193,6 +197,13 @@ public class ShopifyOAuthService {
      *                   normal for a fresh/cold install; see buildAdminAppUrl()'s fallback)
      */
     public String initiateOAuth(UUID tenantId, String shopDomain, String host) {
+        // Hard rule: a tenant is permanently bound to its original shop_domain. Path-1 only
+        // (tenantId != null) — Path-2 install has no authenticated tenant yet, nothing to bind.
+        // Checked BEFORE any state nonce is generated or written — pre-consent rejection.
+        if (tenantId != null) {
+            assertBoundShop(tenantId, shopDomain);
+        }
+
         byte[] nonceBytes = new byte[16]; // 128 bits
         rng.nextBytes(nonceBytes);
         String nonce = Base64.getUrlEncoder().withoutPadding().encodeToString(nonceBytes);
@@ -205,6 +216,32 @@ public class ShopifyOAuthService {
         });
         log.debug("OAuth state created: nonce={} shop={} tenant={} host={}", nonce, shopDomain, tenantId, host);
         return nonce;
+    }
+
+    /**
+     * Layer 1 of the same-shop-only guard: a tenant with ANY existing stores row (regardless
+     * of status — connected, disconnected, needs_reauth) may only initiate OAuth against a
+     * shop_domain it already owns. Zero existing rows means first connect — any valid shop
+     * is allowed. Own-tenant shop only, in the message — never leaks another tenant's domain.
+     */
+    private void assertBoundShop(UUID tenantId, String requestedShop) {
+        TenantContext.set(tenantId);
+        try {
+            List<String> shopDomains = tx.execute(s -> jdbc.query(
+                "SELECT shop_domain FROM stores WHERE tenant_id = ?",
+                (rs, rowNum) -> rs.getString("shop_domain"), tenantId));
+            if (!shopDomains.isEmpty() && !shopDomains.contains(requestedShop)) {
+                throw new ShopifyOAuthException(
+                    ShopifyOAuthException.Code.SHOPIFY_SHOP_MISMATCH,
+                    "This account is connected to " + shopDomains.get(0) +
+                        " and can only reconnect that store.",
+                    "هذا الحساب متصل بـ " + shopDomains.get(0) +
+                        " ولا يمكن إلا إعادة الاتصال بنفس المتجر.",
+                    HttpStatus.CONFLICT);
+            }
+        } finally {
+            TenantContext.clear();
+        }
     }
 
     /**
@@ -367,6 +404,13 @@ public class ShopifyOAuthService {
     private LinkResult path1(UUID intended, String shop,
                               ShopifyGateway.TokenResponse tokens, UUID owner) {
         if (owner == null) {
+            // Layer 2 backstop (symmetric to REJECTED_CROSS_TENANT below): guards the write
+            // site directly in case initiate()'s assertBoundShop() is ever bypassed. No row is
+            // inserted for a second shop_domain under a tenant that already owns a different one.
+            if (tenantOwnsDifferentShop(intended, shop)) {
+                log.warn("OAuth same-tenant shop-mismatch reject: shop={} tenant={}", shop, intended);
+                return new LinkResult(null, null, LinkOutcome.REJECTED_SHOP_MISMATCH);
+            }
             UUID storeId = insertStore(intended, shop, tokens);
             enqueueImport(storeId, intended);
             log.info("OAuth Path-1 new link: shop={} tenant={}", shop, intended);
@@ -505,6 +549,19 @@ public class ShopifyOAuthService {
                 "SELECT resolve_tenant_by_shop_domain(?)", UUID.class, shopDomain);
         } catch (EmptyResultDataAccessException e) {
             return null;
+        }
+    }
+
+    /** Layer 2 backstop check — see path1()'s owner==null branch. */
+    private boolean tenantOwnsDifferentShop(UUID tenantId, String shop) {
+        TenantContext.set(tenantId);
+        try {
+            Boolean exists = tx.execute(s -> jdbc.query(
+                "SELECT EXISTS(SELECT 1 FROM stores WHERE tenant_id = ? AND shop_domain <> ?)",
+                rs -> rs.next() && rs.getBoolean(1), tenantId, shop));
+            return Boolean.TRUE.equals(exists);
+        } finally {
+            TenantContext.clear();
         }
     }
 

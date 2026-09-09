@@ -35,7 +35,7 @@ function tenantSettingsFixture(): api.TenantSettings {
 // Bosta connected (as it is for the pilots) so AWB controls are enabled.
 function connectionsFixture(): api.ConnectionsStatus {
   return {
-    shopify: { connected: false, shopDomain: null, importStatus: null, lastSyncAt: null },
+    shopify: { connected: false, storeId: null, shopDomain: null, importStatus: null, lastSyncAt: null },
     bosta: { connected: true, businessName: 'Acme Logistics', pickupMode: null, awbFormat: 'A4', awbLang: 'ar' },
     shopifyCustomApp: { connected: false, shopDomain: null, importStatus: null, lastSyncAt: null },
     customAppAvailable: false,

@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, FormEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 import {
-  getConnections, shopifyInitiate, shopifyCustomConnect,
+  getConnections, shopifyInitiate, shopifyDisconnect, shopifyCustomConnect,
   bostaConnect, bostaRegenerateSecret, bostaSync, bostaGetSyncStatus,
   listLocations, getShopifyInventoryReconcileReport, activateShopifyFulfillment,
   TransferCommandError,
@@ -30,13 +30,35 @@ function DisconnectedBadge({ label }: { label: string }) {
 
 // ── Shopify card ──────────────────────────────────────────────────────────────
 
-function ShopifyCard({ shopify }: { shopify: ConnectionsStatus['shopify'] }) {
+function ShopifyCard({ shopify, onDisconnected }: {
+  shopify: ConnectionsStatus['shopify']
+  onDisconnected: () => void
+}) {
   const { t } = useTranslation()
-  const [shop,      setShop]      = useState('')
-  const [loading,   setLoading]   = useState(false)
-  const [error,     setError]     = useState('')
+  const [shop,        setShop]        = useState('')
+  const [loading,     setLoading]     = useState(false)
+  const [error,       setError]       = useState('')
+  const [disconnecting, setDisconnecting] = useState(false)
+  const [disconnectError, setDisconnectError] = useState('')
 
   const SHOP_RE = /^[a-zA-Z0-9][a-zA-Z0-9-]*\.myshopify\.com$/
+
+  async function handleDisconnect() {
+    if (!shopify.storeId) return
+    if (!window.confirm(
+      t('connections.shopify.disconnectConfirm', { shop: shopify.shopDomain })
+    )) return
+    setDisconnectError('')
+    setDisconnecting(true)
+    try {
+      await shopifyDisconnect(shopify.storeId)
+      onDisconnected()
+    } catch {
+      setDisconnectError(t('connections.shopify.disconnectError'))
+    } finally {
+      setDisconnecting(false)
+    }
+  }
 
   async function handleConnect(e: FormEvent) {
     e.preventDefault()
@@ -103,6 +125,23 @@ function ShopifyCard({ shopify }: { shopify: ConnectionsStatus['shopify'] }) {
           </div>
 
           <FulfillmentActivationItem />
+
+          <div className="pt-2 border-t border-line/40 space-y-2">
+            {disconnectError && (
+              <p role="alert" className="text-xs text-danger">{disconnectError}</p>
+            )}
+            <button
+              type="button"
+              onClick={handleDisconnect}
+              disabled={disconnecting || !shopify.storeId}
+              className="btn btn-outline text-small text-danger border-danger/30 hover:bg-danger/10"
+              data-testid="shopify-disconnect-btn"
+            >
+              {disconnecting
+                ? t('connections.shopify.disconnecting')
+                : t('connections.shopify.disconnectBtn')}
+            </button>
+          </div>
         </div>
       ) : (
         <div className="space-y-3">
@@ -876,7 +915,7 @@ export default function ConnectionsTab({ readOnly }: { readOnly: boolean }) {
       {!loading && status && (
         <fieldset disabled={readOnly} className="contents border-0 p-0 m-0">
           <div className="grid gap-4 sm:grid-cols-2">
-            <ShopifyCard shopify={status.shopify} />
+            <ShopifyCard shopify={status.shopify} onDisconnected={load} />
             <BostaCard   bosta={status.bosta} onConnected={load} />
             {status.customAppAvailable && (
               <div className="sm:col-span-2">

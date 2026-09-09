@@ -122,6 +122,10 @@ public class ShopifyTokenProvider {
             throw new ShopifyStoreNeedsReauthException(row.shopDomain(),
                 "Store is marked needs_reauth — merchant must reconnect");
         }
+        if ("disconnected".equals(row.status())) {
+            throw new ShopifyStoreDisconnectedException(row.shopDomain(),
+                "Store is disconnected — merchant must reconnect to resume sync");
+        }
 
         // Fresh token: has an expiry set and it's > 5 min away.
         if (isFresh(row.accessTokenExpiresAt())) {

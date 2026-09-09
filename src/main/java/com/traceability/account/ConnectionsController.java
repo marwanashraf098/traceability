@@ -47,7 +47,7 @@ public class ConnectionsController {
      * Returns connection status for all integration types the tenant has configured.
      * Response shape:
      * {
-     *   "shopify": { "connected": bool, "shopDomain": str|null, "importStatus": str|null, "lastSyncAt": str|null },
+     *   "shopify": { "connected": bool, "storeId": str|null, "shopDomain": str|null, "importStatus": str|null, "lastSyncAt": str|null },
      *   "bosta":   { "connected": bool, "businessName": str|null, "pickupMode": str|null }
      * }
      */
@@ -59,18 +59,20 @@ public class ConnectionsController {
         return TenantContext.runAs(tenantId, () -> tx.execute(s -> {
             // Shopify — take the most recently connected store
             Map<String, Object> shopify = jdbc.query(
-                "SELECT shop_domain, status, import_status::text, last_sync_at " +
+                "SELECT id, shop_domain, status, import_status::text, last_sync_at " +
                 "FROM stores WHERE tenant_id = ? ORDER BY last_sync_at DESC NULLS LAST LIMIT 1",
                 rs -> {
                     Map<String, Object> m = new LinkedHashMap<>();
                     if (!rs.next()) {
                         m.put("connected",    false);
+                        m.put("storeId",      null);
                         m.put("shopDomain",   null);
                         m.put("importStatus", null);
                         m.put("lastSyncAt",   null);
                     } else {
                         boolean connected = "connected".equals(rs.getString("status"));
                         m.put("connected",    connected);
+                        m.put("storeId",      rs.getObject("id", UUID.class).toString());
                         m.put("shopDomain",   rs.getString("shop_domain"));
                         m.put("importStatus", rs.getString("import_status"));
                         m.put("lastSyncAt",   rs.getTimestamp("last_sync_at"));

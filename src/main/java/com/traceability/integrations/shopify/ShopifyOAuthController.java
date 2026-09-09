@@ -169,6 +169,13 @@ public class ShopifyOAuthController {
                 .location(URI.create(oauthService.getAppUrl() +
                     "/connect/error?code=SHOPIFY_STORE_ALREADY_CONNECTED"))
                 .build();
+            // Write-site backstop to the initiate()-time assertBoundShop() guard — should not
+            // be reachable in normal operation, but kept for switch exhaustiveness and defense
+            // in depth in case initiate() is ever bypassed.
+            case REJECTED_SHOP_MISMATCH -> ResponseEntity.status(HttpStatus.FOUND)
+                .location(URI.create(oauthService.getAppUrl() +
+                    "/connect/error?code=SHOPIFY_SHOP_MISMATCH"))
+                .build();
         };
     }
 

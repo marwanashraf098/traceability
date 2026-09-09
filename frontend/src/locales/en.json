@@ -967,6 +967,10 @@
       "connecting": "Redirecting to Shopify…",
       "domainInvalid": "Enter a valid *.myshopify.com domain.",
       "error": "Could not initiate Shopify connection. Try again.",
+      "disconnectBtn": "Disconnect",
+      "disconnecting": "Disconnecting…",
+      "disconnectConfirm": "Disconnect {{shop}}? You'll need to reconnect the same store to resume syncing.",
+      "disconnectError": "Could not disconnect. Try again.",
       "fulfillmentActivation": {
         "title": "Activate Traced as a fulfillment location",
         "live": "Traced Main Warehouse is live on your storefront",

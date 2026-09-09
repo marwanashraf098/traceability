@@ -532,6 +532,7 @@ export async function switchPin(userId: string, pin: string): Promise<PinSwitchR
 export interface ConnectionsStatus {
   shopify: {
     connected: boolean
+    storeId: string | null
     shopDomain: string | null
     importStatus: string | null
     lastSyncAt: string | null
@@ -623,6 +624,12 @@ export function shopifyInitiate(shop: string) {
     method: 'POST',
     body: JSON.stringify({ shop }),
   })
+}
+
+// ── Shopify: soft disconnect ────────────────────────────────────────────────
+
+export function shopifyDisconnect(storeId: string) {
+  return request<void>(`/shopify/stores/${storeId}/disconnect`, { method: 'POST' })
 }
 
 // ── Bosta connect ─────────────────────────────────────────────────────────────

@@ -3,6 +3,7 @@ package com.traceability;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.traceability.integrations.shopify.ShopifyOAuthException;
 import com.traceability.integrations.shopify.ShopifySessionTokenExchangeException;
+import com.traceability.integrations.shopify.ShopifyStoreDisconnectedException;
 import com.traceability.integrations.shopify.ShopifyStoreNeedsReauthException;
 import com.traceability.integrations.shopify.ShopifyTransientException;
 import com.traceability.inventory.AwbMismatchException;
@@ -191,6 +192,19 @@ public class ApiExceptionHandler {
         return ResponseEntity.status(HttpStatus.FORBIDDEN)
             .body(new ReauthErrorBody(
                 "SHOPIFY_NEEDS_REAUTH",
+                ex.getMessage(),
+                ex.getShopDomain()));
+    }
+
+    // Mirrors ShopifyStoreNeedsReauthException above — thrown by ShopifyTokenProvider.getValidToken()
+    // when the store's status is 'disconnected'. 409: the store exists and is known, but the
+    // requested action (token use) conflicts with its current (disconnected) state.
+    @ExceptionHandler(ShopifyStoreDisconnectedException.class)
+    ResponseEntity<ReauthErrorBody> handleShopifyDisconnected(ShopifyStoreDisconnectedException ex) {
+        log.warn("Shopify store disconnected: {}", ex.getMessage());
+        return ResponseEntity.status(HttpStatus.CONFLICT)
+            .body(new ReauthErrorBody(
+                "SHOPIFY_STORE_DISCONNECTED",
                 ex.getMessage(),
                 ex.getShopDomain()));
     }
