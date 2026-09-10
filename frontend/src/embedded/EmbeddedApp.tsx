@@ -24,6 +24,7 @@ import {
   DataTable,
 } from '@shopify/polaris'
 import { notLinkedCopy } from './notLinkedCopy'
+import { disconnectedCopy } from './disconnectedCopy'
 import { statusLabel, polarisTone, type DerivedTone } from './statusLabels'
 
 // CDN App Bridge global — injected by the <script> in embedded.html before React mounts.
@@ -560,9 +561,50 @@ export function NotLinked({ lang = 'en' }: { lang?: 'en' | 'ar' }) {
   )
 }
 
+// ── Section: Disconnected (user paused sync from Traced settings) ─────────
+
+/**
+ * Renders in place of the dashboard whenever the embedded token-exchange call reports
+ * SHOPIFY_STORE_DISCONNECTED (409) — the merchant clicked Disconnect in Traced settings,
+ * or Shopify sent app/uninstalled. Disconnect is a deliberate pause: opening/refreshing
+ * this embedded app must NOT silently re-link the store or show a live-looking dashboard
+ * (see ShopifyOAuthService.acquireOrRefreshViaSessionToken()'s disconnected guard) — this
+ * component is that guard's visible half. No reconnect action lives here: reconnecting
+ * requires the OAuth-consent flow, which only runs from Traced settings, never from this
+ * read-only embedded surface.
+ *
+ * `lang` defaults to 'en' and is never auto-detected — same rationale as NotLinked.
+ */
+export function Disconnected({ lang = 'en' }: { lang?: 'en' | 'ar' }) {
+  const copy = disconnectedCopy[lang]
+
+  useEffect(() => {
+    document.documentElement.dir  = lang === 'ar' ? 'rtl' : 'ltr'
+    document.documentElement.lang = lang
+  }, [lang])
+
+  return (
+    <Page title={copy.pageTitle}>
+      <Card>
+        <BlockStack gap="400">
+          <InlineStack gap="200" blockAlign="center">
+            <Badge tone="attention">{lang === 'ar' ? 'غير متصل' : 'Disconnected'}</Badge>
+          </InlineStack>
+          <Text as="h2" variant="headingMd">{copy.heading}</Text>
+          <Text as="p">{copy.body}</Text>
+          <Text as="p">
+            {copy.reconnectPrompt}{' '}
+            <Link url={`${SaaS}/settings`} external>{copy.openTraced}</Link>
+          </Text>
+        </BlockStack>
+      </Card>
+    </Page>
+  )
+}
+
 // ── Root dashboard ────────────────────────────────────────────────────────
 
-type LinkStatus = 'checking' | 'linked' | 'not_linked'
+type LinkStatus = 'checking' | 'linked' | 'not_linked' | 'disconnected'
 
 export default function EmbeddedApp() {
   const authFetch = useAuthFetch()
@@ -604,6 +646,15 @@ export default function EmbeddedApp() {
           }
           // Other 401s (bad session token) → fall through to 'linked' below; the
           // data-fetch calls will also fail and show their error Banners as before.
+        }
+        if (r.status === 409) {
+          const body = await r.json().catch(() => ({})) as { error?: string }
+          if (body?.error === 'SHOPIFY_STORE_DISCONNECTED') {
+            setLinkStatus('disconnected')
+            return
+          }
+          // An unrecognized 409 shape falls through to 'linked' below rather than
+          // guessing — the dashboard's own per-section error Banners still apply.
         }
         // 204 (success/skip), 502, 503 → dashboard renders normally.
         setLinkStatus('linked')
@@ -665,6 +716,10 @@ export default function EmbeddedApp() {
 
   if (linkStatus === 'not_linked') {
     return <NotLinked />
+  }
+
+  if (linkStatus === 'disconnected') {
+    return <Disconnected />
   }
 
   return (

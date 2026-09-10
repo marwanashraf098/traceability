@@ -60,24 +60,32 @@ public class ShopifyTokenProvider {
             FROM stores WHERE id = ? FOR UPDATE
             """;
 
+    // WHERE-clause guard is a write-level backstop, not the primary defense — the primary
+    // defense is the lock-scoped status re-check in refreshWithLock()/reExchangeWithLock()
+    // below, which fires BEFORE the Shopify network call. This guard exists for any caller
+    // that reaches this UPDATE without going through that re-check (today: none — both
+    // in-class callers hold the row lock and re-check first — but it costs nothing and closes
+    // the class of bug where a caller trusts "0 rows can't happen" and ignores the result).
     private static final String UPDATE_TOKENS = """
             UPDATE stores SET
                 access_token_encrypted  = ?,
                 access_token_expires_at = ?,
                 refresh_token_encrypted = ?,
                 refresh_token_expires_at = ?
-            WHERE id = ?
+            WHERE id = ? AND status <> 'disconnected'
             """;
 
     // access_token_scopes is COALESCEd: fetchGrantedScopes() returns null on a transient
     // read failure, and a failed scope read must never blank out a previously-known-good
     // scope string — only a real read is allowed to overwrite it.
+    // See UPDATE_TOKENS above for why the WHERE-clause guard exists alongside the
+    // lock-scoped re-check rather than instead of it.
     private static final String UPDATE_ACCESS_ONLY = """
             UPDATE stores SET
                 access_token_encrypted  = ?,
                 access_token_expires_at = ?,
                 access_token_scopes     = COALESCE(?, access_token_scopes)
-            WHERE id = ?
+            WHERE id = ? AND status <> 'disconnected'
             """;
 
     private static final String SET_NEEDS_REAUTH =
@@ -223,6 +231,7 @@ public class ShopifyTokenProvider {
         final boolean[] didExchange = {false};
         final ShopifyStoreNeedsReauthException[] reauthEx = {null};
         final ShopifyTransientException[] transientEx = {null};
+        final ShopifyStoreDisconnectedException[] disconnectedEx = {null};
 
         tx.execute(s -> {
             // Acquire row lock — blocks concurrent re-exchangers on the same store.
@@ -247,6 +256,17 @@ public class ShopifyTokenProvider {
             if ("needs_reauth".equals(row.status())) {
                 reauthEx[0] = new ShopifyStoreNeedsReauthException(row.shopDomain(),
                     "Store marked needs_reauth under lock");
+                return null;
+            }
+            // forceReExchangeNow() (admin "refresh CC scopes" action) has NO entry-level
+            // status check of its own — this lock-scoped re-check is its only guard, and it
+            // must fire HERE, before the live Shopify network call below, not merely before
+            // the DB write. getValidToken()'s CC branch already throws on entry for a
+            // disconnected store; this also covers the race window where disconnect happens
+            // between that unlocked read and this row lock.
+            if ("disconnected".equals(row.status())) {
+                disconnectedEx[0] = new ShopifyStoreDisconnectedException(row.shopDomain(),
+                    "Store is disconnected — merchant must reconnect to resume sync");
                 return null;
             }
             if (row.clientIdEncrypted() == null || row.apiSecretEncrypted() == null) {
@@ -284,11 +304,20 @@ public class ShopifyTokenProvider {
             // UPDATE row lock — the same class of risk tokenRestClient's bound exists to avoid.
             // null here means "leave access_token_scopes unchanged for now" (COALESCE); the
             // real read happens in a follow-up step below, after the lock is released.
-            jdbc.update(UPDATE_ACCESS_ONLY,
+            int rows = jdbc.update(UPDATE_ACCESS_ONLY,
                 encryptionService.encrypt(tokens.accessToken()),
                 newExpiresAt,
                 null,
                 storeId);
+            if (rows == 0) {
+                // Backstop: the lock-scoped re-check above already rejects a disconnected
+                // store before this point in every current caller, so this should be
+                // unreachable in practice — but a write that CAN silently affect 0 rows must
+                // never be read as success. Never skip this check because "it can't happen."
+                disconnectedEx[0] = new ShopifyStoreDisconnectedException(row.shopDomain(),
+                    "Store is disconnected — token write rejected");
+                return null;
+            }
 
             log.info("Shopify CC token re-exchanged for store {} ({})", storeId, row.shopDomain());
             tokenHolder[0] = tokens.accessToken();
@@ -305,6 +334,9 @@ public class ShopifyTokenProvider {
         }
         if (reauthEx[0] != null) {
             throw reauthEx[0];
+        }
+        if (disconnectedEx[0] != null) {
+            throw disconnectedEx[0];
         }
 
         // Real scope read happens here, outside the row lock, only when a fresh exchange
@@ -353,6 +385,14 @@ public class ShopifyTokenProvider {
                 throw new ShopifyStoreNeedsReauthException(row.shopDomain(),
                     "Store marked needs_reauth under lock");
             }
+            // Race backstop: getValidToken() already throws on entry for a disconnected
+            // store (unlocked read) — this covers the window where disconnect happens
+            // between that read and this row lock, and fires BEFORE the Shopify network
+            // call below, not merely before the DB write.
+            if ("disconnected".equals(row.status())) {
+                throw new ShopifyStoreDisconnectedException(row.shopDomain(),
+                    "Store was disconnected under lock — merchant must reconnect to resume sync");
+            }
             if (row.refreshTokenEncrypted() == null) {
                 jdbc.update(SET_NEEDS_REAUTH, storeId);
                 throw new ShopifyStoreNeedsReauthException(row.shopDomain(),
@@ -382,12 +422,19 @@ public class ShopifyTokenProvider {
             Timestamp newAccessExpiresAt  = Timestamp.from(Instant.now().plusSeconds(newTokens.expiresIn()));
             Timestamp newRefreshExpiresAt = Timestamp.from(Instant.now().plusSeconds(newTokens.refreshTokenExpiresIn()));
 
-            jdbc.update(UPDATE_TOKENS,
+            int rows = jdbc.update(UPDATE_TOKENS,
                 encryptionService.encrypt(newTokens.accessToken()),
                 newAccessExpiresAt,
                 encryptionService.encrypt(newTokens.refreshToken()),
                 newRefreshExpiresAt,
                 storeId);
+            if (rows == 0) {
+                // Backstop: the lock-scoped re-check above already rejects a disconnected
+                // store before this point, so this should be unreachable in practice — but
+                // a write that CAN silently affect 0 rows must never be read as success.
+                throw new ShopifyStoreDisconnectedException(row.shopDomain(),
+                    "Store is disconnected — token write rejected");
+            }
 
             log.info("Shopify token refreshed for store {} ({})", storeId, row.shopDomain());
             return newTokens.accessToken();

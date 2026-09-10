@@ -619,6 +619,11 @@ public class ShopifyOAuthService {
      *
      * <pre>
      * 1. SELECT store snap (id, expires_at, status, import_status) — RLS-guarded.
+     * 1b. If status=disconnected → throw ShopifyStoreDisconnectedException, no exchange,
+     *     no write. Disconnect is a deliberate user pause (button, or app/uninstalled);
+     *     an incidental embedded-app open merely proves the token still works — it carries
+     *     no reconnect intent and must never clear the flag. Only a deliberate OAuth-consent
+     *     reconnect (path1()'s LINKED_EXISTING branch) may.
      * 2. If access_token_expires_at > now+10min AND status=connected → return (skip).
      * 3. Call gateway.exchangeSessionToken(shopDomain, rawSessionToken).
      *    - ShopifySessionTokenExchangeException (4xx) → propagate; caller returns 502.
@@ -640,6 +645,8 @@ public class ShopifyOAuthService {
      * @param shopDomain     the verified shop domain (from principal.shopDomain(), NOT a request param)
      * @param rawSessionToken the raw HS256 session token from Authorization: Bearer
      * @return true if token is fresh or exchange succeeded; false if the store row is missing
+     * @throws ShopifyStoreDisconnectedException if the store is disconnected — caller
+     *         (ApiExceptionHandler) returns 409 SHOPIFY_STORE_DISCONNECTED
      */
     public boolean acquireOrRefreshViaSessionToken(UUID tenantId, String shopDomain, String rawSessionToken) {
         // Step 1: freshness check — needs TenantContext for RLS
@@ -669,6 +676,21 @@ public class ShopifyOAuthService {
         if (snap == null) {
             log.warn("Token exchange: store not found tenant={} shop={}", tenantId, shopDomain);
             return false;
+        }
+
+        // Disconnect = pause, not uninstall. A disconnected store must stay disconnected
+        // through any incidental auth (embedded app open / session-token exchange) — this
+        // is exactly the entry point that previously flipped it back to 'connected' with a
+        // fresh token as a side effect of merely opening the embedded app. Thrown BEFORE the
+        // connType branch and BEFORE any network call or DB write, so nothing about a
+        // disconnected store's token is touched here. Only a deliberate OAuth-consent
+        // reconnect (ShopifyOAuthController.callback() → path1()'s LINKED_EXISTING branch)
+        // may clear this flag.
+        if ("disconnected".equals(snap.status())) {
+            log.info("Token exchange skipped: shop={} tenant={} is disconnected — no re-link, no refresh",
+                shopDomain, tenantId);
+            throw new ShopifyStoreDisconnectedException(shopDomain,
+                "Store is disconnected — reconnect via Traced settings to resume sync");
         }
 
         // Guard: session-token exchange is only valid for OAuth stores. custom_app and

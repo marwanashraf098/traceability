@@ -40,6 +40,15 @@ import static org.mockito.Mockito.*;
  *          reusing the app/uninstalled status-flip seam, plus best-effort Shopify revoke.
  * PART B — ShopifyTokenProvider.getValidToken() central guard: a 'disconnected' store's
  *          token must never be decrypted or refreshed.
+ * PART C — Sibling-door fix: the disconnected guard pushed down to the shared UPDATE_TOKENS /
+ *          UPDATE_ACCESS_ONLY writes themselves (WHERE status <> 'disconnected'), plus a
+ *          lock-scoped re-check in refreshWithLock()/reExchangeWithLock() before any Shopify
+ *          network call. forceReExchangeNow() (POST /stores/{id}/refresh-cc-scopes) had NO
+ *          status guard at all — it silently refreshed live Shopify credentials on a
+ *          disconnected CC store. The other two callers (getValidToken()'s OAuth and CC
+ *          branches) were already guarded at entry; the new lock-scoped checks and the
+ *          affected-row-count checks are the backstop for the race window between that
+ *          entry check and the row lock.
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @Testcontainers
@@ -270,5 +279,157 @@ class ShopifyDisconnectTest {
 
         verify(shopifyGateway, never()).refreshAccessToken(any(), any());
         verify(shopifyGateway, never()).exchangeClientCredentials(any(), any(), any());
+    }
+
+    // =========================================================================
+    // PART C — sibling-door fix (write-level guard on UPDATE_TOKENS / UPDATE_ACCESS_ONLY)
+    // =========================================================================
+
+    // The actual reported gap: forceReExchangeNow() has NO entry-level status check at all.
+    // Before this fix it went straight to a live Shopify CC exchange call and persisted the
+    // result on a disconnected store. Real HTTP path, matching how Part A tests the sibling
+    // disconnect endpoint.
+    @Test
+    void forceReExchangeNow_disconnectedCcStore_returns409_noExchangeCall_noWrite() {
+        Signup owner = signupOwner("Disconnect C1 Corp", "disc_c1_owner", "disc_c1@test.com");
+        String shopDomain = "disc-c1.myshopify.com";
+        String encToken   = encryptionService.encrypt("shpat_cc_sentinel_token");
+        String encClientId = encryptionService.encrypt("client-id-sentinel");
+        String encSecret   = encryptionService.encrypt("client-secret-sentinel");
+        String scopesSentinel = "read_products,read_orders";
+        UUID storeId = UUID.randomUUID();
+        jdbc.update(
+            "INSERT INTO stores (id, tenant_id, shop_domain, platform, access_token_encrypted, " +
+            "access_token_expires_at, status, import_status, connection_type, client_id_encrypted, " +
+            "api_secret_encrypted, access_token_scopes) " +
+            "VALUES (?, ?, ?, 'shopify', ?, ?, 'disconnected', 'completed', 'custom_app_cc', ?, ?, ?)",
+            storeId, owner.tenantId(), shopDomain, encToken,
+            Timestamp.from(Instant.now().plusSeconds(3600)), encClientId, encSecret, scopesSentinel);
+
+        HttpHeaders headers = new HttpHeaders();
+        headers.setBearerAuth(owner.token());
+        var resp = rest.exchange(
+            base() + "/api/v1/shopify/stores/" + storeId + "/refresh-cc-scopes",
+            HttpMethod.POST, new HttpEntity<>(headers), Map.class);
+
+        // Sane disconnected signal — not a silent 200.
+        assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
+        assertThat(resp.getBody()).containsEntry("error", "SHOPIFY_STORE_DISCONNECTED");
+
+        // No live Shopify call — the lock-scoped re-check fires before the network call,
+        // not merely before the DB write.
+        verify(shopifyGateway, never()).exchangeClientCredentials(any(), any(), any());
+
+        // 0 rows written: token, scopes, and status all byte-for-byte unchanged.
+        Map<String, Object> row = jdbc.queryForMap(
+            "SELECT status, access_token_encrypted, access_token_scopes FROM stores WHERE id = ?", storeId);
+        assertThat(row.get("status")).isEqualTo("disconnected");
+        assertThat(row.get("access_token_encrypted")).isEqualTo(encToken);
+        assertThat(row.get("access_token_scopes")).isEqualTo(scopesSentinel);
+    }
+
+    // Race-window backstop for refreshWithLock() (OAuth path, via getValidToken()). Realistically
+    // unreachable while the row lock is held (Postgres blocks a concurrent writer), but this
+    // proves the affected-row check is live code, not decoration: the mocked gateway call
+    // flips the row to disconnected (same thread/transaction, so it's visible to the later
+    // UPDATE) before returning a token — without the `rows == 0` check this would silently
+    // persist "shpat_should_never_be_persisted" and return it as if nothing were wrong.
+    @Test
+    void refreshWithLock_disconnectedBetweenRecheckAndWrite_backstopRejectsWrite() {
+        Signup owner = signupOwner("Disconnect C2 Corp", "disc_c2_owner", "disc_c2@test.com");
+        String shopDomain = "disc-c2.myshopify.com";
+        String originalEncToken   = encryptionService.encrypt("shpat_original");
+        String originalEncRefresh = encryptionService.encrypt("shprt_original");
+        UUID storeId = UUID.randomUUID();
+        jdbc.update(
+            "INSERT INTO stores (id, tenant_id, shop_domain, platform, access_token_encrypted, " +
+            "access_token_expires_at, refresh_token_encrypted, refresh_token_expires_at, " +
+            "status, import_status, connection_type) " +
+            "VALUES (?, ?, ?, 'shopify', ?, ?, ?, ?, 'connected', 'completed', 'oauth')",
+            storeId, owner.tenantId(), shopDomain, originalEncToken,
+            Timestamp.from(Instant.now().plusSeconds(60)), originalEncRefresh,
+            Timestamp.from(Instant.now().plusSeconds(7_000_000)));
+
+        when(shopifyGateway.refreshAccessToken(eq(shopDomain), anyString()))
+            .thenAnswer(invocation -> {
+                jdbc.update("UPDATE stores SET status = 'disconnected' WHERE id = ?", storeId);
+                return new ShopifyGateway.TokenResponse(
+                    "shpat_should_never_be_persisted", "shprt_should_never_be_persisted",
+                    3600L, 7776000L, null);
+            });
+
+        assertThatThrownBy(() ->
+            TenantContext.runAs(owner.tenantId(), () -> tokenProvider.getValidToken(storeId)))
+            .isInstanceOf(ShopifyStoreDisconnectedException.class);
+
+        // The fake token from the mocked call must never have been persisted.
+        String tokenAfter = jdbc.queryForObject(
+            "SELECT access_token_encrypted FROM stores WHERE id = ?", String.class, storeId);
+        assertThat(tokenAfter).isEqualTo(originalEncToken);
+    }
+
+    // Same backstop, other shared write: reExchangeWithLock() via getValidToken()'s CC branch
+    // (force=false) — distinct code path from forceReExchangeNow() (force=true) above, but the
+    // same shared method and the same UPDATE_ACCESS_ONLY write.
+    @Test
+    void reExchangeWithLock_viaGetValidToken_disconnectedBetweenRecheckAndWrite_backstopRejectsWrite() {
+        Signup owner = signupOwner("Disconnect C3 Corp", "disc_c3_owner", "disc_c3@test.com");
+        String shopDomain = "disc-c3.myshopify.com";
+        String originalEncToken = encryptionService.encrypt("shpat_cc_original");
+        String encClientId = encryptionService.encrypt("client-id-c3");
+        String encSecret   = encryptionService.encrypt("client-secret-c3");
+        UUID storeId = UUID.randomUUID();
+        jdbc.update(
+            "INSERT INTO stores (id, tenant_id, shop_domain, platform, access_token_encrypted, " +
+            "access_token_expires_at, status, import_status, connection_type, client_id_encrypted, " +
+            "api_secret_encrypted) " +
+            "VALUES (?, ?, ?, 'shopify', ?, ?, 'connected', 'completed', 'custom_app_cc', ?, ?)",
+            storeId, owner.tenantId(), shopDomain, originalEncToken,
+            Timestamp.from(Instant.now().plusSeconds(60)), encClientId, encSecret);
+
+        when(shopifyGateway.exchangeClientCredentials(eq(shopDomain), anyString(), anyString()))
+            .thenAnswer(invocation -> {
+                jdbc.update("UPDATE stores SET status = 'disconnected' WHERE id = ?", storeId);
+                return new ShopifyGateway.TokenResponse(
+                    "shpat_should_never_be_persisted", null, 86399L, 0, null);
+            });
+
+        assertThatThrownBy(() ->
+            TenantContext.runAs(owner.tenantId(), () -> tokenProvider.getValidToken(storeId)))
+            .isInstanceOf(ShopifyStoreDisconnectedException.class);
+
+        String tokenAfter = jdbc.queryForObject(
+            "SELECT access_token_encrypted FROM stores WHERE id = ?", String.class, storeId);
+        assertThat(tokenAfter).isEqualTo(originalEncToken);
+    }
+
+    // Positive control: a genuinely connected store's OAuth refresh must still work — proves
+    // the new `AND status <> 'disconnected'` WHERE clause doesn't break the happy path.
+    @Test
+    void getValidToken_connectedStore_oauthRefresh_stillWorks_positiveControl() {
+        Signup owner = signupOwner("Disconnect C4 Corp", "disc_c4_owner", "disc_c4@test.com");
+        String shopDomain = "disc-c4.myshopify.com";
+        String oldEncToken   = encryptionService.encrypt("shpat_old");
+        String oldEncRefresh = encryptionService.encrypt("shprt_old");
+        UUID storeId = UUID.randomUUID();
+        jdbc.update(
+            "INSERT INTO stores (id, tenant_id, shop_domain, platform, access_token_encrypted, " +
+            "access_token_expires_at, refresh_token_encrypted, refresh_token_expires_at, " +
+            "status, import_status, connection_type) " +
+            "VALUES (?, ?, ?, 'shopify', ?, ?, ?, ?, 'connected', 'completed', 'oauth')",
+            storeId, owner.tenantId(), shopDomain, oldEncToken,
+            Timestamp.from(Instant.now().plusSeconds(60)), oldEncRefresh,
+            Timestamp.from(Instant.now().plusSeconds(7_000_000)));
+
+        when(shopifyGateway.refreshAccessToken(eq(shopDomain), anyString()))
+            .thenReturn(new ShopifyGateway.TokenResponse(
+                "shpat_new", "shprt_new", 3600L, 7776000L, null));
+
+        String result = TenantContext.runAs(owner.tenantId(), () -> tokenProvider.getValidToken(storeId));
+
+        assertThat(result).isEqualTo("shpat_new");
+        String encTokenAfter = jdbc.queryForObject(
+            "SELECT access_token_encrypted FROM stores WHERE id = ?", String.class, storeId);
+        assertThat(encryptionService.decrypt(encTokenAfter)).isEqualTo("shpat_new");
     }
 }

@@ -355,6 +355,33 @@ class ShopifyTokenExchangeTest {
         assertThat(row.get("access_token_expires_at")).isNotNull();
     }
 
+    // ── TE13: disconnected store → 409, no exchange, status/token untouched ────
+    // This is the disconnect-then-reconnect bug's exact entry point: an embedded app
+    // open (or refresh) must never silently re-link a store the user disconnected.
+
+    @Test @Order(13)
+    void te13_disconnectedStore_returns409_noExchangeCalled_stateUntouched() throws Exception {
+        setStoreState(storeA, "disconnected", "completed",
+                Timestamp.from(Instant.now().plusSeconds(1200)));
+        jdbc.update("UPDATE stores SET access_token_encrypted = 'te13-sentinel-token' WHERE id = ?",
+                storeA);
+
+        ResponseEntity<String> r = post("/api/v1/embedded/token-exchange", tokenA());
+
+        assertThat(r.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
+        assertThat(r.getBody()).contains("\"error\":\"SHOPIFY_STORE_DISCONNECTED\"");
+        assertThat(r.getBody()).contains("\"shop\":\"" + SHOP_A + "\"");
+
+        // No network call — a disconnected store's token must never even be read from Shopify.
+        verify(shopifyGateway, never()).exchangeSessionToken(any(), any());
+
+        // Status stays disconnected; the pre-set token is byte-for-byte unchanged (no refresh).
+        Map<String, Object> row = jdbc.queryForMap(
+                "SELECT status::text, access_token_encrypted FROM stores WHERE id = ?", storeA);
+        assertThat(row.get("status")).isEqualTo("disconnected");
+        assertThat(row.get("access_token_encrypted")).isEqualTo("te13-sentinel-token");
+    }
+
     // ── TE11: Unknown shop → 401 + NOT_PROVISIONED body ─────────────────────────
 
     @Test @Order(11)
