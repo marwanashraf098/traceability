@@ -66,4 +66,4 @@ These Terms are governed by the laws of the Arab Republic of Egypt. Disputes are
 
 ## 15. Contact
 
-Traced — North Investors Area, Cairo, Egypt — **hello@tracedtech.com**
+Traced — North Investors Area, Cairo, Egypt — **tracedtechnology@gmail.com**

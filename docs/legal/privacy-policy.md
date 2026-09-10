@@ -8,7 +8,7 @@ This Privacy Policy explains how **Traced** ("Traced", "we", "us") handles infor
 
 ## 1. Who we are
 
-Traced, a company established in Egypt, located at North Investors Area, Cairo, Egypt. For any privacy question, contact us at **hello@tracedtech.com**.
+Traced, a company established in Egypt, located at North Investors Area, Cairo, Egypt. For any privacy question, contact us at **tracedtechnology@gmail.com**.
 
 ## 2. Our two roles
 
@@ -56,7 +56,7 @@ We protect data with encryption in transit (TLS) and encryption of sensitive fie
 
 ## 9. Your rights and your customers' rights
 
-Depending on your location, you may have rights to access, correct, export, delete, or restrict processing of your personal data, and to object or complain to a supervisory authority. To exercise these, contact **hello@tracedtech.com**.
+Depending on your location, you may have rights to access, correct, export, delete, or restrict processing of your personal data, and to object or complain to a supervisory authority. To exercise these, contact **tracedtechnology@gmail.com**.
 
 For **end-customer** requests, because we act as your processor, requests are handled through you as the controller. We support Shopify's data-request, customer-redact, and shop-redact webhooks: a valid redaction erases the relevant end-customer personal data from orders and stored raw payloads, while the tamper-evident custody log (which holds no end-customer personal data) is preserved.
 
@@ -84,4 +84,4 @@ When you connect a Shopify store, the following applies:
 
 ## 14. Contact
 
-Traced — North Investors Area, Cairo, Egypt — **hello@tracedtech.com**
+Traced — North Investors Area, Cairo, Egypt — **tracedtechnology@gmail.com**

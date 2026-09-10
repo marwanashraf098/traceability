@@ -1,8 +1,14 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import ReactMarkdown from 'react-markdown'
+import ReactMarkdown, { defaultUrlTransform } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { Logo } from '../components/Logo'
+
+// react-markdown's defaultUrlTransform only allows http(s)/irc(s)/mailto/xmpp and
+// strips anything else (e.g. tel:) to an empty href — the Contact page needs tel: links.
+function urlTransform(url: string) {
+  return url.startsWith('tel:') ? url : defaultUrlTransform(url)
+}
 
 function LegalNav() {
   const [scrolled, setScrolled] = useState(false)
@@ -19,7 +25,7 @@ function LegalNav() {
     >
       <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
         <Link to="/" aria-label="Traced home">
-          <Logo variant="wordmark" size={26} />
+          <Logo variant="mark" size={26} className="text-primary" />
         </Link>
         <div className="flex items-center gap-3">
           <Link to="/login" className="btn-outline text-sm px-4 py-1.5">
@@ -40,7 +46,7 @@ function LegalFooter() {
     <footer className="py-10 border-t border-line/50 mt-16">
       <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col sm:flex-row items-center justify-between gap-4">
         <Link to="/" aria-label="Traced home">
-          <Logo variant="wordmark" size={22} />
+          <Logo variant="mark" size={22} className="text-primary" />
         </Link>
         <div className="flex flex-wrap justify-center gap-x-6 gap-y-2">
           <Link to="/privacy" className="text-sm text-muted hover:text-primary transition-colors">
@@ -49,9 +55,12 @@ function LegalFooter() {
           <Link to="/terms" className="text-sm text-muted hover:text-primary transition-colors">
             Terms of Service
           </Link>
-          <a href="mailto:hello@tracedtech.com" className="text-sm text-muted hover:text-primary transition-colors">
+          <Link to="/refund" className="text-sm text-muted hover:text-primary transition-colors">
+            Refund Policy
+          </Link>
+          <Link to="/contact" className="text-sm text-muted hover:text-primary transition-colors">
             Contact
-          </a>
+          </Link>
         </div>
         <p className="text-xs text-muted">© {year} Traced. All rights reserved.</p>
       </div>
@@ -72,6 +81,7 @@ export default function LegalPage({ content }: LegalPageProps) {
         <div className="max-w-prose mx-auto">
           <ReactMarkdown
             remarkPlugins={[remarkGfm]}
+            urlTransform={urlTransform}
             components={{
               blockquote: () => null,
               h1: ({ children }) => (
