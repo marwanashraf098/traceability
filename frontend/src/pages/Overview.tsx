@@ -158,7 +158,10 @@ function SparkStatCard({
   if (!trend) return <Skeleton className="h-[118px] rounded-2xl" />
 
   return (
-    <div className={cn('card p-5 flex flex-col gap-1', emphasize && 'border-danger')} data-testid={`stat-${trend.metric}`}>
+    <div
+      className={cn('card p-5 flex flex-col gap-1 animate-fadeIn motion-reduce:animate-none', emphasize && 'border-danger')}
+      data-testid={`stat-${trend.metric}`}
+    >
       <p className="text-small text-muted font-medium">{label}</p>
       <div className="flex items-end justify-between gap-2">
         <p className={cn('text-h2 font-mono', emphasize ? 'text-danger' : 'text-primary')}>
@@ -275,7 +278,7 @@ function LateToPackCard({ data }: { data: LateToPack | null }) {
   const calm = data.overdue === 0
 
   return (
-    <div className="card p-5 flex flex-col gap-1" data-testid="late-to-pack-card">
+    <div className="card p-5 flex flex-col gap-1 animate-fadeIn motion-reduce:animate-none" data-testid="late-to-pack-card">
       <p className="text-small text-muted font-medium">{t('overview.lateToPack.title')}</p>
       <p className={cn('text-h2 font-mono', calm ? 'text-success' : 'text-critical')}>
         {data.overdue.toLocaleString()}
@@ -337,11 +340,15 @@ function FlowStrip({ counts }: { counts: FunnelCounts }) {
   const pct = completed + inProgress > 0 ? (completed / (completed + inProgress)) * 100 : 0
 
   if (allZero) {
-    return <p className="text-caption text-muted text-center py-8" data-testid="flow-empty">{t('overview.funnel.empty')}</p>
+    return (
+      <p className="text-caption text-muted text-center py-8 animate-fadeIn motion-reduce:animate-none" data-testid="flow-empty">
+        {t('overview.funnel.empty')}
+      </p>
+    )
   }
 
   return (
-    <div data-testid="flow-strip">
+    <div data-testid="flow-strip" className="animate-fadeIn motion-reduce:animate-none">
       <div className="flex items-start gap-1 mt-2">
         {FLOW_NODES.map((node, i) => {
           const isLast = i === FLOW_NODES.length - 1
@@ -457,7 +464,7 @@ function AlertsPanel({
   }
 
   return (
-    <div className="flex flex-col">
+    <div className="flex flex-col animate-fadeIn motion-reduce:animate-none">
       {rows.map((row, i) => {
         const Icon = row.icon
         return (
@@ -469,7 +476,7 @@ function AlertsPanel({
               <Icon size={16} strokeWidth={1.75} />
             </div>
             <div className="flex-1 min-w-0">
-              <Link to={row.actionUrl} className="text-small text-primary hover:text-trace-blue transition-colors block">
+              <Link to={row.actionUrl} className="text-small text-primary [@media(hover:hover)_and_(pointer:fine)]:hover:text-trace-blue transition-colors block">
                 {isAr ? row.descriptionAr : row.descriptionEn}
               </Link>
             </div>
@@ -496,7 +503,7 @@ function TopSkusList({ skus }: { skus: TopSku[] }) {
     return <EmptyState icon="—" message={t('overview.topSkus.empty')} />
   }
   return (
-    <div className="flex flex-col">
+    <div className="flex flex-col animate-fadeIn motion-reduce:animate-none">
       {skus.map((sku, i) => (
         <div key={`${sku.sku ?? sku.title}-${i}`} className={cn('flex items-center gap-3 py-2.5', i > 0 && 'border-t border-line')}>
           <span className="w-4 text-caption text-muted font-semibold text-center flex-shrink-0">{i + 1}</span>
@@ -543,7 +550,7 @@ function OrdersDonut({ summary }: { summary: OrderSummaryCounts }) {
   if (summary.total === 0) {
     return (
       <div className="flex flex-col items-center gap-2 py-4">
-        <svg width="88" height="88" viewBox="0 0 100 100">
+        <svg width="88" height="88" viewBox="0 0 100 100" className="animate-fadeIn motion-reduce:animate-none">
           <circle cx="50" cy="50" r={DONUT_R} fill="none" stroke={ELEVATED} strokeWidth="12" />
         </svg>
         <span className="text-caption text-muted">{t('overview.donut.empty')}</span>
@@ -554,7 +561,18 @@ function OrdersDonut({ summary }: { summary: OrderSummaryCounts }) {
   let offset = 0
   return (
     <div className="flex flex-col items-center gap-4">
-      <svg width={DONUT_SIZE} height={DONUT_SIZE} viewBox="0 0 100 100" className="flex-shrink-0">
+      {/* Ring settles in once on first load (fadeIn is a mount-only CSS
+          animation — it does not replay on data refetch since the same DOM
+          node stays mounted; see useZoneFetch's stale-data-during-refetch
+          behavior). Opacity chosen over an animated stroke-dashoffset "draw":
+          each segment already has a distinct, hand-computed dashoffset for
+          its pie-slice position, and animating that per-segment safely would
+          need per-element keyframes — opacity is the equivalent settle with
+          none of that risk. */}
+      <svg
+        width={DONUT_SIZE} height={DONUT_SIZE} viewBox="0 0 100 100"
+        className="flex-shrink-0 animate-fadeIn motion-reduce:animate-none"
+      >
         {segments.filter(s => s.value > 0).map(s => {
           const len = (s.value / summary.total) * DONUT_C
           const circle = (
@@ -607,7 +625,7 @@ function RecentOrdersList({ orders }: { orders: OrderSummary[] }) {
   }
 
   return (
-    <div className="flex flex-col">
+    <div className="flex flex-col animate-fadeIn motion-reduce:animate-none">
       {shipped.map((o, i) => (
         <div key={o.id} className={cn('flex items-center gap-3 py-2.5', i > 0 && 'border-t border-line')}>
           <span className="text-small font-semibold font-mono text-trace-blue truncate">{o.trackingNumber}</span>
@@ -639,7 +657,11 @@ function QuickActions() {
         <Link
           key={a.to}
           to={a.to}
-          className="flex items-center justify-center gap-2 bg-elevated border border-line rounded-lg px-4 py-3.5 text-small font-semibold text-primary hover:border-grey-600 hover:bg-black/[0.04] transition-colors"
+          className="flex items-center justify-center gap-2 bg-elevated border border-line rounded-lg px-4 py-3.5 text-small font-semibold text-primary
+                     [@media(hover:hover)_and_(pointer:fine)]:hover:border-grey-600 [@media(hover:hover)_and_(pointer:fine)]:hover:bg-black/[0.04]
+                     transition-[background-color,border-color,transform] duration-100 ease-out [@media(hover:hover)_and_(pointer:fine)]:hover:duration-150
+                     active:scale-[0.97] active:duration-100
+                     motion-reduce:transition-none motion-reduce:active:scale-100"
         >
           <a.icon size={17} strokeWidth={1.75} className="text-trace-blue" />
           {t(a.labelKey)}
@@ -731,7 +753,7 @@ function OnboardingCard({
   }
 
   return (
-    <div className="card border-trace-blue p-4 flex flex-col gap-3" data-testid="onboarding-card">
+    <div className="card border-trace-blue p-4 flex flex-col gap-3 animate-fadeIn motion-reduce:animate-none" data-testid="onboarding-card">
       <div className="flex items-center justify-between">
         <span className="text-small font-bold text-primary">{t('overview.onboardingCard.title')}</span>
         <button
@@ -739,7 +761,7 @@ function OnboardingCard({
           onClick={handleDismiss}
           disabled={dismissing}
           aria-label={t('overview.onboardingCard.dismiss')}
-          className="text-muted hover:text-primary transition-colors p-1.5 -m-1.5"
+          className="text-muted [@media(hover:hover)_and_(pointer:fine)]:hover:text-primary transition-colors p-1.5 -m-1.5"
         >
           <X size={14} strokeWidth={2} />
         </button>
@@ -770,7 +792,7 @@ function OnboardingCard({
             {!step.done && (
               <Link
                 to={STEP_DEST[step.key]}
-                className="text-trace-blue hover:text-trace-blue-hover transition-colors font-medium flex-shrink-0"
+                className="text-trace-blue [@media(hover:hover)_and_(pointer:fine)]:hover:text-trace-blue-hover transition-colors font-medium flex-shrink-0"
               >
                 {t('overview.onboardingCard.go')}
               </Link>
@@ -792,13 +814,17 @@ function FreshTenantCard() {
     { icon: UsersIcon, label: t('overview.freshTenant.inviteTeam'),     to: '/users' },
   ]
   return (
-    <div className="card p-5 flex flex-col gap-3" data-testid="fresh-tenant-card">
+    <div className="card p-5 flex flex-col gap-3 animate-fadeIn motion-reduce:animate-none" data-testid="fresh-tenant-card">
       <p className="text-small text-muted">{t('overview.freshTenant.message')}</p>
       {items.map(item => (
         <Link
           key={item.to}
           to={item.to}
-          className="flex items-center gap-2.5 bg-elevated border border-line rounded-lg p-3 hover:bg-black/[0.04] transition-colors"
+          className="flex items-center gap-2.5 bg-elevated border border-line rounded-lg p-3
+                     [@media(hover:hover)_and_(pointer:fine)]:hover:bg-black/[0.04]
+                     transition-[background-color,transform] duration-100 ease-out [@media(hover:hover)_and_(pointer:fine)]:hover:duration-150
+                     active:scale-[0.97] active:duration-100
+                     motion-reduce:transition-none motion-reduce:active:scale-100"
         >
           <item.icon size={16} strokeWidth={1.75} className="text-trace-blue" />
           <span className="flex-1 text-small text-primary">{item.label}</span>
@@ -961,7 +987,7 @@ export default function Overview() {
             <div className="card p-5" data-testid="alerts-panel">
               <div className="flex items-center justify-between mb-1">
                 <h2 className="text-caption font-bold text-muted uppercase">{t('overview.alerts.title')}</h2>
-                <Link to="/exceptions" className="text-caption text-trace-blue hover:text-trace-blue-hover transition-colors">
+                <Link to="/exceptions" className="text-caption text-trace-blue [@media(hover:hover)_and_(pointer:fine)]:hover:text-trace-blue-hover transition-colors">
                   {t('overview.viewAll')}
                 </Link>
               </div>
@@ -994,14 +1020,14 @@ export default function Overview() {
               {ordersSummary.loading ? <Skeleton className="h-40 rounded-xl mt-2" /> : ordersSummary.error ? <ZoneError /> : ordersSummary.data && (
                 <OrdersDonut summary={ordersSummary.data} />
               )}
-              <Link to="/orders" className="text-caption text-trace-blue hover:text-trace-blue-hover transition-colors mt-3.5 inline-block">
+              <Link to="/orders" className="text-caption text-trace-blue [@media(hover:hover)_and_(pointer:fine)]:hover:text-trace-blue-hover transition-colors mt-3.5 inline-block">
                 {t('overview.viewAll')} →
               </Link>
             </div>
             <div className="card p-5" data-testid="recent-orders">
               <div className="flex items-center justify-between mb-1">
                 <h2 className="text-caption font-bold text-muted uppercase">{t('overview.recentOrders.title')}</h2>
-                <Link to="/orders" className="text-caption text-trace-blue hover:text-trace-blue-hover transition-colors">
+                <Link to="/orders" className="text-caption text-trace-blue [@media(hover:hover)_and_(pointer:fine)]:hover:text-trace-blue-hover transition-colors">
                   {t('overview.viewAll')}
                 </Link>
               </div>
