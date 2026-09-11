@@ -26,16 +26,24 @@ import {
 
 // ── DS token hex values — SVG presentation attrs can't use Tailwind classes ────
 // Mirrors tailwind.config.js exactly — never introduce a hex value that isn't
-// already a named DS token there.
+// already a named DS token there. NEUTRAL_TXT/ELEVATED were pinned to the old
+// dark-theme values (sidebar text / dark elevated) and never repointed when
+// the app converted to light (8e54bbb) — fixed here to the current tokens.
 
 const SUCCESS     = '#16A34A'
 const INFO        = '#0EA5E9'
 const CRITICAL    = '#DC2626'
 const WARNING     = '#F59E0B'
 const TRACE_BLUE  = '#2563EB'
-const NEUTRAL_TXT = '#9CA6B2'
-const GREY_600    = '#2A333F'
-const ELEVATED    = '#161B22'
+const NEUTRAL_TXT = '#4B5563' // current `neutral.text` (was the old dark sidebar-text #9CA6B2)
+const MUTED       = '#5B6675' // current `muted` (was `grey.600` #2A333F) — grey.600 read as a
+                               // near-black blemish next to green/blue/orange siblings, and the
+                               // next step down (grey.500) sat too close in value to NEUTRAL_TXT
+                               // to read as a separate ring segment (both verified by eye,
+                               // headless render). `muted` is lighter than NEUTRAL_TXT, which
+                               // also fits: "Other" is the least important bucket, and its
+                               // quietest color now matches that.
+const ELEVATED    = '#F2F4F7' // current `elevated` (was the old dark elevated #161B22)
 
 // ── Generic per-zone fetch hook ─────────────────────────────────────────────
 // Every zone on this page fetches independently — one slow/broken zone never
@@ -136,20 +144,26 @@ const STAT_DEFS: {
 ]
 
 function SparkStatCard({
-  label, trend, color, format,
+  label, trend, color, format, emphasize = false,
 }: {
   label: string
   trend: MetricTrend | undefined
   color: string
   format?: (n: number) => string
+  /** Exceptions-only: true when its count > 0, to give the one metric that
+      needs attention a visual weight the other 4 (equally-styled) cards
+      don't carry — see Overview audit P2 "no KPI hierarchy". */
+  emphasize?: boolean
 }) {
   if (!trend) return <Skeleton className="h-[118px] rounded-2xl" />
 
   return (
-    <div className="card p-5 flex flex-col gap-1" data-testid={`stat-${trend.metric}`}>
+    <div className={cn('card p-5 flex flex-col gap-1', emphasize && 'border-danger')} data-testid={`stat-${trend.metric}`}>
       <p className="text-small text-muted font-medium">{label}</p>
       <div className="flex items-end justify-between gap-2">
-        <p className="text-h2 font-mono text-primary">{format ? format(trend.total) : trend.total.toLocaleString()}</p>
+        <p className={cn('text-h2 font-mono', emphasize ? 'text-danger' : 'text-primary')}>
+          {format ? format(trend.total) : trend.total.toLocaleString()}
+        </p>
         {trend.series.length > 0 && <Sparkline series={trend.series} color={color} />}
       </div>
     </div>
@@ -523,7 +537,7 @@ function OrdersDonut({ summary }: { summary: OrderSummaryCounts }) {
     { labelKey: 'orders.pipeline.with_courier', value: summary.withCourier, color: INFO },
     { labelKey: 'orders.pipeline.delivered',    value: summary.delivered,  color: SUCCESS },
     { labelKey: 'orders.pipeline.returned',     value: summary.returned,  color: WARNING },
-    { labelKey: 'overview.donut.other',         value: other,             color: GREY_600 },
+    { labelKey: 'overview.donut.other',         value: other,             color: MUTED },
   ]
 
   if (summary.total === 0) {
@@ -552,10 +566,10 @@ function OrdersDonut({ summary }: { summary: OrderSummaryCounts }) {
           offset += len
           return circle
         })}
-        <text x="50" y="46" textAnchor="middle" fontSize="19" fontWeight="700" fill="#F2F4F7" fontFamily="monospace">
+        <text x="50" y="46" textAnchor="middle" fontSize="19" fontWeight="700" fill="#111827" fontFamily="monospace">
           {summary.total >= 1000 ? `${(summary.total / 1000).toFixed(1)}K` : summary.total}
         </text>
-        <text x="50" y="61" textAnchor="middle" fontSize="9" fill="#828B99">{t('overview.donut.total')}</text>
+        <text x="50" y="61" textAnchor="middle" fontSize="9" fill="#5B6675">{t('overview.donut.total')}</text>
       </svg>
       <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 w-full">
         {segments.map(s => (
@@ -725,7 +739,7 @@ function OnboardingCard({
           onClick={handleDismiss}
           disabled={dismissing}
           aria-label={t('overview.onboardingCard.dismiss')}
-          className="text-muted hover:text-primary transition-colors"
+          className="text-muted hover:text-primary transition-colors p-1.5 -m-1.5"
         >
           <X size={14} strokeWidth={2} />
         </button>
@@ -918,22 +932,26 @@ export default function Overview() {
             {trends.error ? (
               <div className="col-span-full"><ZoneError /></div>
             ) : (
-              STAT_DEFS.map(def => (
-                <SparkStatCard
-                  key={def.metric}
-                  label={t(def.labelKey)}
-                  trend={trendFor(def.metric)}
-                  color={def.color}
-                  format={def.format}
-                />
-              ))
+              STAT_DEFS.map(def => {
+                const trend = trendFor(def.metric)
+                return (
+                  <SparkStatCard
+                    key={def.metric}
+                    label={t(def.labelKey)}
+                    trend={trend}
+                    color={def.color}
+                    format={def.format}
+                    emphasize={def.metric === 'exceptions' && !!trend && trend.total > 0}
+                  />
+                )
+              })
             )}
           </div>
 
           {/* ── Live operations + Late-to-pack + Alerts ── */}
           <div className="grid grid-cols-1 lg:grid-cols-[1fr_220px_380px] gap-3.5">
             <div className="card p-5">
-              <p className="text-caption font-bold text-muted uppercase">{t('overview.flow.title')}</p>
+              <h2 className="text-caption font-bold text-muted uppercase">{t('overview.flow.title')}</h2>
               <p className="text-caption text-muted">{t('overview.flow.subtitle')}</p>
               {funnel.loading ? <Skeleton className="h-32 rounded-xl mt-3" /> : funnel.error ? <ZoneError /> : funnel.data && (
                 <FlowStrip counts={funnel.data} />
@@ -942,7 +960,7 @@ export default function Overview() {
             {lateToPack.error ? <ZoneError /> : <LateToPackCard data={lateToPack.data} />}
             <div className="card p-5" data-testid="alerts-panel">
               <div className="flex items-center justify-between mb-1">
-                <p className="text-caption font-bold text-muted uppercase">{t('overview.alerts.title')}</p>
+                <h2 className="text-caption font-bold text-muted uppercase">{t('overview.alerts.title')}</h2>
                 <Link to="/exceptions" className="text-caption text-trace-blue hover:text-trace-blue-hover transition-colors">
                   {t('overview.viewAll')}
                 </Link>
@@ -965,7 +983,7 @@ export default function Overview() {
           {/* ── Top SKUs + Orders by status + Recent shipments ── */}
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-3.5">
             <div className="card p-5" data-testid="top-skus">
-              <p className="text-caption font-bold text-muted uppercase">{t('overview.topSkus.title')}</p>
+              <h2 className="text-caption font-bold text-muted uppercase">{t('overview.topSkus.title')}</h2>
               <p className="text-caption text-muted">{t('overview.topSkus.subtitle')}</p>
               {topSkus.loading ? <Skeleton className="h-40 rounded-xl mt-2" /> : topSkus.error ? <ZoneError /> : topSkus.data && (
                 <TopSkusList skus={topSkus.data} />
@@ -982,7 +1000,7 @@ export default function Overview() {
             </div>
             <div className="card p-5" data-testid="recent-orders">
               <div className="flex items-center justify-between mb-1">
-                <p className="text-caption font-bold text-muted uppercase">{t('overview.recentOrders.title')}</p>
+                <h2 className="text-caption font-bold text-muted uppercase">{t('overview.recentOrders.title')}</h2>
                 <Link to="/orders" className="text-caption text-trace-blue hover:text-trace-blue-hover transition-colors">
                   {t('overview.viewAll')}
                 </Link>
@@ -995,7 +1013,7 @@ export default function Overview() {
 
           {/* ── Quick actions ── */}
           <div className="card p-5" data-testid="quick-actions">
-            <p className="text-caption font-bold text-muted uppercase mb-3">{t('overview.quickActions.title')}</p>
+            <h2 className="text-caption font-bold text-muted uppercase mb-3">{t('overview.quickActions.title')}</h2>
             <QuickActions />
           </div>
         </>
