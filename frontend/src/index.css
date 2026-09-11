@@ -27,7 +27,19 @@
     font-family: theme('fontFamily.mono');
   }
 
+  /* Keyboard/programmatic focus only (never a mouse click) gets a visible
+     brand-colored ring — buttons, links, SegmentedControl, checkboxes, etc.
+     WCAG 2.4.7; this used to be a blanket `outline: none` with no
+     replacement. `.input`/`.input-scan` opt out below: they already carry
+     their own focus:border-brand + focus:ring-brand/20 treatment (see
+     `.input` further down) and would otherwise show two rings stacked. */
   *:focus-visible {
+    outline: 2px solid theme('colors.brand.DEFAULT');
+    outline-offset: 1px;
+  }
+
+  .input:focus-visible,
+  .input-scan:focus-visible {
     outline: none;
   }
 
