@@ -23,6 +23,7 @@ import {
   Skeleton, Spinner, ProductThumb, DeliveryBadge, cn,
   SegmentedControl, Input,
 } from '../components/ui'
+import OrderDrawer from '../components/OrderDrawer'
 
 // ── DS token hex values — SVG presentation attrs can't use Tailwind classes ────
 // Mirrors tailwind.config.js exactly — never introduce a hex value that isn't
@@ -399,6 +400,22 @@ function FlowStrip({ counts }: { counts: FunnelCounts }) {
 // from the backend's existing bilingual descriptionEn/descriptionAr — never a
 // new hardcoded English map. Degrades gracefully: an empty type is simply
 // omitted, not shown as a blank/broken row.
+//
+// Destination routing (diagnosis: most ExceptionService.enrich() actionUrls point
+// at paths with no matching route — e.g. /orders/{id}, /shipments/{id} — so
+// react-router's catch-all silently redirects them to /overview). Rather than
+// touching enrich() (a separate, shared fix — Exceptions.tsx's own "Go →" button
+// has the identical bug and needs the same decision), these 3 buckets are handled
+// here, frontend-only, keyed by exception `type`:
+//   1. Order-anchored types: open OrderDrawer by order_id, the SAME app-wide
+//      destination Orders.tsx/Lookup.tsx/VariantDrawer.tsx already use — never
+//      navigate to the dead actionUrl for these.
+//   2. Types whose actionUrl already resolves to a real route: used as-is.
+//   3. unmatched_delivery / guided_unpack: no real destination exists yet (no
+//      unlinked-delivery reconciliation screen; Fulfill has no deep-link-to-order
+//      entry point — both unbuilt backlog). Falls back to /exceptions?type=<type>
+//      (a real, already-supported filter — see Exceptions.tsx's own typeFilter)
+//      so the alert always lands somewhere useful, never on /overview.
 
 interface AlertException {
   type: string
@@ -406,6 +423,32 @@ interface AlertException {
   descriptionAr: string
   actionUrl: string
   ageSeconds: number
+  order_id?: string
+}
+
+type AlertDestination =
+  | { kind: 'order'; orderId: string }
+  | { kind: 'url'; url: string }
+
+// The 12 types whose enrich() actionUrl is a dead /orders/{id} (or similar) but
+// which always carry a real order_id — see the Overview diagnosis pass.
+const ORDER_ANCHORED_ALERT_TYPES = new Set([
+  'lost', 'blocked_customer', 'stuck_shipment', 'delivery_limbo', 'ndr_failed',
+  'missing_awb', 'missing_provider_id', 'high_attempts', 'shopify_cancel_vs_inflight',
+  'cancelled_live_shipment', 'cancelled_but_delivered', 'shopify_edit_conflict',
+])
+
+// No real destination exists for these yet — see the header comment above.
+const EXCEPTIONS_FALLBACK_ALERT_TYPES = new Set(['unmatched_delivery', 'guided_unpack'])
+
+function destinationFor(item: AlertException): AlertDestination {
+  if (ORDER_ANCHORED_ALERT_TYPES.has(item.type) && item.order_id) {
+    return { kind: 'order', orderId: item.order_id }
+  }
+  if (EXCEPTIONS_FALLBACK_ALERT_TYPES.has(item.type)) {
+    return { kind: 'url', url: `/exceptions?type=${item.type}` }
+  }
+  return { kind: 'url', url: item.actionUrl }
 }
 
 interface AlertRow {
@@ -414,7 +457,7 @@ interface AlertRow {
   tone: 'critical' | 'warning' | 'info'
   descriptionEn: string
   descriptionAr: string
-  actionUrl: string
+  destination: AlertDestination
   ageSeconds: number
 }
 
@@ -425,12 +468,13 @@ const ALERT_TONE_CLASSES: Record<AlertRow['tone'], string> = {
 }
 
 function AlertsPanel({
-  ndrFailed, stuckShipment, unmatchedDelivery, lowStockCount,
+  ndrFailed, stuckShipment, unmatchedDelivery, lowStockCount, onSelectOrder,
 }: {
   ndrFailed: AlertException[]
   stuckShipment: AlertException[]
   unmatchedDelivery: AlertException[]
   lowStockCount: number
+  onSelectOrder: (orderId: string) => void
 }) {
   const { t, i18n } = useTranslation()
   const isAr = i18n.language === 'ar'
@@ -440,14 +484,14 @@ function AlertsPanel({
     rows.push({
       key: 'ndr_failed', icon: AlertTriangle, tone: 'critical',
       descriptionEn: ndrFailed[0].descriptionEn, descriptionAr: ndrFailed[0].descriptionAr,
-      actionUrl: ndrFailed[0].actionUrl, ageSeconds: ndrFailed[0].ageSeconds,
+      destination: destinationFor(ndrFailed[0]), ageSeconds: ndrFailed[0].ageSeconds,
     })
   }
   if (stuckShipment[0]) {
     rows.push({
       key: 'stuck_shipment', icon: Truck, tone: 'warning',
       descriptionEn: stuckShipment[0].descriptionEn, descriptionAr: stuckShipment[0].descriptionAr,
-      actionUrl: stuckShipment[0].actionUrl, ageSeconds: stuckShipment[0].ageSeconds,
+      destination: destinationFor(stuckShipment[0]), ageSeconds: stuckShipment[0].ageSeconds,
     })
   }
   if (lowStockCount > 0) {
@@ -455,14 +499,14 @@ function AlertsPanel({
       key: 'low_stock', icon: PackageX, tone: 'warning',
       descriptionEn: t('overview.needsAttention.lowStock', { lng: 'en' }),
       descriptionAr: t('overview.needsAttention.lowStock', { lng: 'ar' }),
-      actionUrl: '/inventory?lowStockOnly=true', ageSeconds: 0,
+      destination: { kind: 'url', url: '/inventory?lowStockOnly=true' }, ageSeconds: 0,
     })
   }
   if (unmatchedDelivery[0]) {
     rows.push({
       key: 'unmatched_delivery', icon: Unlink, tone: 'info',
       descriptionEn: unmatchedDelivery[0].descriptionEn, descriptionAr: unmatchedDelivery[0].descriptionAr,
-      actionUrl: unmatchedDelivery[0].actionUrl, ageSeconds: unmatchedDelivery[0].ageSeconds,
+      destination: destinationFor(unmatchedDelivery[0]), ageSeconds: unmatchedDelivery[0].ageSeconds,
     })
   }
 
@@ -470,10 +514,13 @@ function AlertsPanel({
     return <EmptyState icon="✓" message={t('overview.alerts.empty')} />
   }
 
+  const linkClass = 'text-small text-primary [@media(hover:hover)_and_(pointer:fine)]:hover:text-trace-blue transition-colors block'
+
   return (
     <div className="flex flex-col animate-fadeIn motion-reduce:animate-none">
       {rows.map((row, i) => {
         const Icon = row.icon
+        const destination = row.destination
         return (
           <div
             key={row.key}
@@ -483,9 +530,15 @@ function AlertsPanel({
               <Icon size={16} strokeWidth={1.75} />
             </div>
             <div className="flex-1 min-w-0">
-              <Link to={row.actionUrl} className="text-small text-primary [@media(hover:hover)_and_(pointer:fine)]:hover:text-trace-blue transition-colors block">
-                {isAr ? row.descriptionAr : row.descriptionEn}
-              </Link>
+              {destination.kind === 'order' ? (
+                <button type="button" onClick={() => onSelectOrder(destination.orderId)} className={cn(linkClass, 'text-start w-full bg-transparent border-0 p-0')}>
+                  {isAr ? row.descriptionAr : row.descriptionEn}
+                </button>
+              ) : (
+                <Link to={destination.url} className={linkClass}>
+                  {isAr ? row.descriptionAr : row.descriptionEn}
+                </Link>
+              )}
             </div>
             {row.ageSeconds > 0 && (
               <span className="text-caption text-muted whitespace-nowrap">
@@ -622,8 +675,14 @@ function OrdersDonut({ summary }: { summary: OrderSummaryCounts }) {
 // already have a shipment attached. Status chip reuses DeliveryBadge (the SAME
 // component Orders.tsx/OrderDetail.tsx already render shipment state with) —
 // no new label map.
+//
+// Rows open OrderDrawer by o.id (already the React key) — the SAME app-wide
+// order destination Orders.tsx/Lookup.tsx/VariantDrawer.tsx use, not a new
+// route. A native <button> gives Enter/Space activation for free; the
+// bg-black/[0.04] hover + rounded corners mirrors FreshTenantCard's row-item
+// treatment elsewhere on this page.
 
-function RecentOrdersList({ orders }: { orders: OrderSummary[] }) {
+function RecentOrdersList({ orders, onSelectOrder }: { orders: OrderSummary[]; onSelectOrder: (orderId: string) => void }) {
   const { t } = useTranslation()
   const shipped = orders.filter(o => o.trackingNumber).slice(0, 5)
 
@@ -634,14 +693,23 @@ function RecentOrdersList({ orders }: { orders: OrderSummary[] }) {
   return (
     <div className="flex flex-col animate-fadeIn motion-reduce:animate-none">
       {shipped.map((o, i) => (
-        <div key={o.id} className={cn('flex items-center gap-3 py-2.5', i > 0 && 'border-t border-line')}>
+        <button
+          key={o.id}
+          type="button"
+          onClick={() => onSelectOrder(o.id)}
+          className={cn(
+            'flex items-center gap-3 py-2.5 -mx-2 px-2 rounded-lg text-start w-full bg-transparent border-0',
+            '[@media(hover:hover)_and_(pointer:fine)]:hover:bg-black/[0.04] transition-colors',
+            i > 0 && 'border-t border-line',
+          )}
+        >
           <span className="text-small font-semibold font-mono text-trace-blue truncate">{o.trackingNumber}</span>
           <span className="text-caption text-muted w-11 flex-shrink-0">{t('overview.recentOrders.carrier')}</span>
           <DeliveryBadge state={o.deliveryState} className="ms-auto flex-shrink-0" />
           {o.placedAt && (
             <span className="text-caption text-muted w-11 text-end flex-shrink-0">{relativeTime(o.placedAt, t)}</span>
           )}
-        </div>
+        </button>
       ))}
     </div>
   )
@@ -883,6 +951,10 @@ export default function Overview() {
   const stuckShipment     = useZoneFetch<AlertException[]>(() => fetchExceptionsByType('stuck_shipment'))
   const unmatchedDelivery = useZoneFetch<AlertException[]>(() => fetchExceptionsByType('unmatched_delivery'))
 
+  // Slide-in overlay, not a route — shared by Recent orders rows and order-anchored
+  // alert rows, same OrderDrawer Orders.tsx/Lookup.tsx/VariantDrawer.tsx already use.
+  const [drawerOrderId, setDrawerOrderId] = useState<string | null>(null)
+
   // Re-fetch trends whenever the selected range changes (skip the very first
   // render — useZoneFetch's own mount effect already fetched the initial
   // [from,to] once).
@@ -1008,6 +1080,7 @@ export default function Overview() {
                   stuckShipment={stuckShipment.data ?? []}
                   unmatchedDelivery={unmatchedDelivery.data ?? []}
                   lowStockCount={valuation.data?.lowStockCount ?? 0}
+                  onSelectOrder={setDrawerOrderId}
                 />
               )}
             </div>
@@ -1039,7 +1112,7 @@ export default function Overview() {
                 </Link>
               </div>
               {recentOrders.loading ? <Skeleton className="h-40 rounded-xl mt-2" /> : recentOrders.error ? <ZoneError /> : recentOrders.data && (
-                <RecentOrdersList orders={recentOrders.data} />
+                <RecentOrdersList orders={recentOrders.data} onSelectOrder={setDrawerOrderId} />
               )}
             </div>
           </div>
@@ -1051,6 +1124,9 @@ export default function Overview() {
           </div>
         </>
       )}
+
+      {/* Slide-in overlay, not a route — same pattern as Orders.tsx. */}
+      <OrderDrawer orderId={drawerOrderId} onClose={() => setDrawerOrderId(null)} />
     </div>
   )
 }

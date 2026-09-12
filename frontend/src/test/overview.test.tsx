@@ -100,13 +100,36 @@ function orderFixture(overrides: Record<string, unknown> = {}) {
 const POPULATED_ORDERS_PAGE = { items: [orderFixture()], page: 0, size: 20, total: 1 }
 const NO_SHIPMENT_ORDERS_PAGE = { items: [orderFixture({ trackingNumber: null, deliveryState: null })], page: 0, size: 20, total: 1 }
 
-function exceptionAlert(type: string, en: string) {
-  return { items: [{ type, severity: 'HIGH', descriptionEn: en, descriptionAr: `AR:${en}`, actionUrl: '/orders/1', ageSeconds: 720 }] }
+function exceptionAlert(type: string, en: string, orderId?: string) {
+  return {
+    items: [{
+      type, severity: 'HIGH', descriptionEn: en, descriptionAr: `AR:${en}`, actionUrl: '/orders/1',
+      ageSeconds: 720, ...(orderId ? { order_id: orderId } : {}),
+    }],
+  }
 }
-const NDR_ALERT       = exceptionAlert('ndr_failed', 'Delivery failed for order #2212094474')
-const STUCK_ALERT     = exceptionAlert('stuck_shipment', 'Shipment #BSA12988461 stuck — no scan in 48h')
+// ndr_failed/stuck_shipment always carry order_id in production (their detector
+// queries INNER JOIN orders) — included here so these fixtures exercise the real
+// OrderDrawer-by-order_id destination (see AlertsPanel's destinationFor()), not
+// just the defensive no-order_id fallback.
+const NDR_ALERT       = exceptionAlert('ndr_failed', 'Delivery failed for order #2212094474', 'o1')
+const STUCK_ALERT     = exceptionAlert('stuck_shipment', 'Shipment #BSA12988461 stuck — no scan in 48h', 'o1')
+// unmatched_delivery never carries order_id (only unlinked_id) — no orderId here
+// is the realistic case, and it's the one that exercises the /exceptions?type=
+// fallback destination (see ov16 below).
 const UNMATCHED_ALERT = exceptionAlert('unmatched_delivery', 'Bosta delivery unmatched to an order')
 const EMPTY_LIST      = { items: [] }
+
+// Minimal OrderDetail the OrderDrawer fetches when a Recent-orders row or an
+// order-anchored alert is clicked — same shape orderDrawerTimeline.test.tsx uses.
+const DRAWER_ORDER_DETAIL = {
+  id: 'o1', number: '#1001-DRAWER', customerName: 'Test Customer', customerPhone: '0100',
+  address: null, paymentMethod: 'cod', codAmount: 100, status: 'with_courier', onHold: false,
+  holdReason: null, placedAt: new Date().toISOString(), createdAt: new Date().toISOString(),
+  items: [], shipments: [], bostaLinkStatus: 'created', notTracedAt: null, isExchange: false,
+  shopifyOrderUrl: null,
+  derivedStatus: { primaryKey: 'status.in_transit', tone: 'INFO', healthChips: [], historicalNote: null, conflictKey: null, notTraced: false, packedConfirmed: true, fulfillmentKey: 'x', fulfillmentTone: 'INFO' },
+}
 
 const NOT_ALL_DONE_ONBOARDING = {
   steps: [
@@ -158,6 +181,10 @@ function makeAppFetch(map: EndpointMap = {}) {
     if (url.includes('/exceptions?type=stuck_shipment'))     return jsonOk(map.stuckAlert ?? STUCK_ALERT)
     if (url.includes('/exceptions?type=unmatched_delivery')) return jsonOk(map.unmatchedAlert ?? UNMATCHED_ALERT)
     if (url.includes('/orders?'))                      return jsonOk(map.ordersPage ?? POPULATED_ORDERS_PAGE)
+    // OrderDrawer's own fetches (Recent-orders row / order-anchored alert click) —
+    // distinct from /orders? (list) and /orders/funnel|summary above.
+    if (url.includes('/orders/o1/timeline'))           return jsonOk([])
+    if (url.includes('/orders/o1'))                    return jsonOk(DRAWER_ORDER_DETAIL)
     return jsonOk({})
   })
 }
@@ -494,5 +521,43 @@ describe('Overview dashboard', () => {
     // particular, never /onboarding/dismiss as a side effect of the transition/render.
     expect(appFetch).not.toHaveBeenCalledWith(
       expect.stringContaining('/onboarding/dismiss'), expect.anything())
+  })
+
+  // ── OrderDrawer destinations (Overview navigation pass) ─────────────────────
+  // Both ov15/ov16 assert real navigation destinations, not just text presence —
+  // href-based assertions here are deliberate (this is exactly what a prior pass
+  // got wrong: actionUrl values that were never checked for resolving anywhere).
+
+  test('ov15 recent orders — row click opens OrderDrawer by o.id, not a dead link', async () => {
+    renderOverview()
+    const recentOrders = await screen.findByTestId('recent-orders')
+    const row = within(recentOrders).getByText('BSA12988473').closest('button')
+    expect(row).toBeInTheDocument()
+
+    const user = userEvent.setup()
+    await user.click(row!)
+
+    // OrderDrawer fetched GET /orders/o1 and rendered its own number — proves the
+    // drawer actually opened with the row's id, not a navigation to a dead route.
+    expect(await screen.findByText('#1001-DRAWER')).toBeInTheDocument()
+  })
+
+  test('ov16 alerts — an order-anchored type (ndr_failed) opens OrderDrawer by order_id', async () => {
+    renderOverview()
+    const alerts = await screen.findByTestId('alerts-panel')
+    const alertButton = within(alerts).getByText(/Delivery failed for order/).closest('button')
+    expect(alertButton).toBeInTheDocument()
+
+    const user = userEvent.setup()
+    await user.click(alertButton!)
+
+    expect(await screen.findByText('#1001-DRAWER')).toBeInTheDocument()
+  })
+
+  test('ov17 alerts — unmatched_delivery (no real destination) falls back to /exceptions?type=, never /overview', async () => {
+    renderOverview()
+    const alerts = await screen.findByTestId('alerts-panel')
+    const link = within(alerts).getByText(/unmatched to an order/).closest('a')
+    expect(link).toHaveAttribute('href', '/exceptions?type=unmatched_delivery')
   })
 })
