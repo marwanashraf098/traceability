@@ -27,19 +27,18 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * GET /overview/trends, GET /overview/late-to-pack, and GET /overview/top-skus
- * (FR-Overview §2, extended for the date-range picker + COD-delivered + Late-to-pack
- * behavior change).
+ * (FR-Overview §2, extended for the date-range picker + Late-to-pack behavior change;
+ * COD-delivered was replaced by Exchanges — see exchangesRaw()).
  *
  * ovt1  — orders total: default range (no from/to) is Last-7-days and reflects seeded
  *         orders; series stays a fixed 14-day trailing window regardless.
- * ovt2  — cod_delivered total: orders.cod_amount summed once per order delivered in
- *         range, deduped per order even when the order has 2 forward-leg shipments
- *         that both independently reach 'delivered' — proves the per-order GROUP BY
- *         dedup, not just that "some number" comes back. A prepaid order (cod_amount
- *         NULL) contributes 0, not a null-poisoned sum.
+ * ovt2  — exchanges total: counts orders reachable via exchanges.outbound_order_id,
+ *         keyed by that order's placed_at — proves it's the real join (only a MAPPED
+ *         exchange, which has an outbound order, counts), not a bare 'EXC-' prefix
+ *         match on orders.number and not a still-needs_mapping exchange (no order yet).
  * ovt3  — delivered total: sourced from shipment_status_history (internal_state=
  *         'delivered'), not the shipments.internal_state snapshot; same per-order
- *         dedup as cod_delivered.
+ *         dedup that COD-delivered used to rely on.
  * ovt4  — exceptions total: an event-based detector (lost) counts; a refresh-based
  *         one (high_attempts' own condition) does NOT — proves the 12-vs-8 boundary,
  *         not just that "some number" comes back.
@@ -146,6 +145,7 @@ class OverviewTrendsTest {
         jdbc.update("DELETE FROM pieces WHERE tenant_id IN (?, ?)", tenantA, tenantB);
         jdbc.update("DELETE FROM shipments WHERE tenant_id IN (?, ?)", tenantA, tenantB);
         jdbc.update("DELETE FROM order_items WHERE tenant_id IN (?, ?)", tenantA, tenantB);
+        jdbc.update("DELETE FROM exchanges WHERE tenant_id IN (?, ?)", tenantA, tenantB);
         jdbc.update("DELETE FROM orders WHERE tenant_id IN (?, ?)", tenantA, tenantB);
         jdbc.update("DELETE FROM unlinked_bosta_deliveries WHERE tenant_id IN (?, ?)", tenantA, tenantB);
     }
@@ -168,40 +168,37 @@ class OverviewTrendsTest {
         assertThat(orders.series().get(13).count()).isEqualTo(2);
     }
 
-    // ── ovt2: cod_delivered — per-order dedup, prepaid contributes 0 ──────────
+    // ── ovt2: exchanges — real outbound_order_id join, not a bare 'EXC-' prefix ────
 
     @Test
-    void ovt2_codDeliveredTotal_dedupsPerOrder_prepaidContributesZero() {
-        // Order 1: cod=250, TWO forward-leg shipments (reship scenario) whose
-        // shipment_status_history BOTH independently recorded a 'delivered' event —
-        // must be summed ONCE, not twice. ship1a's own internal_state is set to
-        // 'terminated' (not 'delivered') solely to satisfy
-        // ux_active_shipment_per_order_leg (V43, only excludes terminated/cancelled),
-        // which otherwise blocks two live forward shipments on one order — its
-        // shipment_status_history 'delivered' row (append-only, never deleted) still
-        // stands, modeling a shipment that was delivered then later corrected/
-        // terminated before a reship, which is exactly the edge case the per-order
-        // dedup in OverviewService guards against.
-        UUID order1 = insertOrder(tenantA, storeA, "delivered", false, "now()", null, null, null);
-        jdbc.update("UPDATE orders SET cod_amount = 250 WHERE id = ?", order1);
-        UUID ship1a = insertShipment(tenantA, order1, "forward", "terminated", "now() - interval '3 hours'", 1, false, null);
-        insertStatusHistory(tenantA, ship1a, "delivered", "now() - interval '3 hours'");
-        UUID ship1b = insertShipment(tenantA, order1, "forward", "delivered", "now()", 1, false, null);
-        insertStatusHistory(tenantA, ship1b, "delivered", "now()");
+    void ovt2_exchangesTotal_countsOutboundOrderJoin_notBarePrefixOrUnmappedExchange() {
+        // Mapped exchange: an outbound internal order + an exchanges row pointing at
+        // it via outbound_order_id — exactly what ExchangeService.mapExchange() leaves
+        // behind. This is the only row that should count.
+        UUID mappedOrder = insertOrder(tenantA, storeA, "new", false, "now()", null, null, null);
+        insertExchange(tenantA, "TN-MAPPED-1", "mapped", mappedOrder);
 
-        // Order 2: prepaid (cod_amount NULL) — delivered, contributes 0, not a
-        // null-poisoned sum.
-        UUID order2 = insertOrder(tenantA, storeA, "delivered", false, "now()", null, null, null);
-        UUID ship2 = insertShipment(tenantA, order2, "forward", "delivered", "now()", 1, false, null);
-        insertStatusHistory(tenantA, ship2, "delivered", "now()");
+        // Still needs_mapping: no outbound order exists yet (outbound_order_id NULL) —
+        // nothing to join to, so it must NOT be counted as an order-shaped event.
+        insertExchange(tenantA, "TN-UNMAPPED-1", "needs_mapping", null);
+
+        // A plain order whose number happens to start with 'EXC-' but has NO exchanges
+        // row at all — proves the tile counts the real exchanges.outbound_order_id
+        // join, not a string-prefix heuristic over orders.number.
+        jdbc.update(
+            "INSERT INTO orders (tenant_id, store_id, external_id, number, placed_at) " +
+            "VALUES (?, ?, 'EXT-FAKE-EXC', 'EXC-FAKE', now())",
+            tenantA, storeA);
+
+        insertOrder(tenantB, storeB, "new", false, "now()", null, null, null); // noise, other tenant
 
         TenantContext.set(tenantA);
         List<OverviewService.MetricTrend> trends;
         try { trends = overview.trends(null, null); } finally { TenantContext.clear(); }
 
-        assertThat(byMetric(trends, "cod_delivered").total())
-            .as("order1's 250 counted once despite 2 delivered shipments; prepaid order2 contributes 0")
-            .isEqualTo(250.0);
+        assertThat(byMetric(trends, "exchanges").total())
+            .as("only the mapped exchange's outbound order counts — not the unmapped exchange (no order yet) or the bare EXC-prefixed order (no exchanges row)")
+            .isEqualTo(1.0);
     }
 
     // ── ovt3: delivered (shipment_status_history, not the shipments snapshot) ──
@@ -489,6 +486,15 @@ class OverviewTrendsTest {
             "INSERT INTO shipment_status_history (tenant_id, shipment_id, internal_state, occurred_at) " +
             "VALUES (?, ?, ?, " + occurredAtExpr + ")",
             tenantId, shipmentId, internalState);
+    }
+
+    private UUID insertExchange(UUID tenantId, String trackingNumber, String status, UUID outboundOrderId) {
+        UUID id = UUID.randomUUID();
+        jdbc.update(
+            "INSERT INTO exchanges (id, tenant_id, tracking_number, status, outbound_order_id, raw) " +
+            "VALUES (?, ?, ?, ?, ?, '{}'::jsonb)",
+            id, tenantId, trackingNumber, status, outboundOrderId);
+        return id;
     }
 
     private void insertReturnSession(UUID tenantId, UUID actorId, String status, String openedAtExpr) {

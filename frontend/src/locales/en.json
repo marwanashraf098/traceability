@@ -98,7 +98,7 @@
       "daysAgo": "{{count}}d ago"
     },
     "stats": {
-      "codDelivered": "COD delivered"
+      "exchanges": "Exchanges"
     },
     "dateRange": {
       "today": "Today",

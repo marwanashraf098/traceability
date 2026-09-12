@@ -904,7 +904,7 @@ export interface TrendPoint {
 }
 
 export interface MetricTrend {
-  metric: 'orders' | 'cod_delivered' | 'delivered' | 'exceptions' | 'returns'
+  metric: 'orders' | 'delivered' | 'returns' | 'exchanges' | 'exceptions'
   total: number
   series: TrendPoint[]
 }

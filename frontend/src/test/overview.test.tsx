@@ -63,14 +63,14 @@ function series(startCount: number, step: number) {
 }
 
 const POPULATED_TRENDS = [
-  { metric: 'orders',        total: 42,  series: series(10, 2) },
-  { metric: 'cod_delivered', total: 5200, series: series(1500, 100) },
-  { metric: 'delivered',     total: 15,  series: series(5, 1) },
-  { metric: 'exceptions',    total: 3,   series: series(6, -1) },
-  { metric: 'returns',       total: 7,   series: series(2, 1) },
+  { metric: 'orders',     total: 42,  series: series(10, 2) },
+  { metric: 'delivered',  total: 15,  series: series(5, 1) },
+  { metric: 'returns',    total: 7,   series: series(2, 1) },
+  { metric: 'exchanges',  total: 4,   series: series(1, 0) },
+  { metric: 'exceptions', total: 3,   series: series(6, -1) },
 ]
 
-const ZERO_TRENDS = ['orders', 'cod_delivered', 'delivered', 'exceptions', 'returns'].map(metric => ({
+const ZERO_TRENDS = ['orders', 'delivered', 'returns', 'exchanges', 'exceptions'].map(metric => ({
   metric, total: 0, series: series(0, 0),
 }))
 
@@ -212,7 +212,7 @@ describe('Overview dashboard', () => {
     // Stat cards — range total from /overview/trends, not re-derived
     const statCards = await screen.findByTestId('stat-cards')
     expect(within(statCards).getByText('42')).toBeInTheDocument() // orders total
-    expect(within(statCards).getByText('5,200 EGP')).toBeInTheDocument() // cod_delivered total
+    expect(within(statCards).getByText('4')).toBeInTheDocument() // exchanges total
 
     // Late-to-pack — live tile, independent of the date-range picker
     const lateToPack = await screen.findByTestId('late-to-pack-card')
@@ -310,8 +310,8 @@ describe('Overview dashboard', () => {
     renderOverview({ trends: ZERO_TRENDS })
     const ordersCard = await screen.findByTestId('stat-orders')
     expect(within(ordersCard).getByText('0')).toBeInTheDocument()
-    const codCard = await screen.findByTestId('stat-cod_delivered')
-    expect(within(codCard).getByText('0 EGP')).toBeInTheDocument()
+    const exchangesCard = await screen.findByTestId('stat-exchanges')
+    expect(within(exchangesCard).getByText('0')).toBeInTheDocument()
   })
 
   // ── Loading: skeletons show while zones are still fetching ─────────────────

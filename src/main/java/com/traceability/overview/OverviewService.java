@@ -8,8 +8,6 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
-import java.math.BigDecimal;
-import java.math.RoundingMode;
 import java.sql.Timestamp;
 import java.time.Clock;
 import java.time.Instant;
@@ -20,8 +18,9 @@ import java.util.*;
 
 /**
  * Overview dashboard trends (FR-Overview §2, extended for the date-range picker +
- * COD-delivered + Late-to-pack behavior change) — 5 stat-card sparklines, a live
- * Late-to-pack tile, and Top-selling SKUs. LIVE AGGREGATION over source-event
+ * Late-to-pack behavior change; COD-delivered was replaced by Exchanges — see
+ * exchangesRaw()) — 5 stat-card sparklines, a live Late-to-pack tile, and
+ * Top-selling SKUs. LIVE AGGREGATION over source-event
  * timestamps only: no daily-snapshot table, no rollup job, no stored counter that
  * could drift from the ledger.
  *
@@ -57,9 +56,9 @@ public class OverviewService {
 
     public record TrendPoint(String date, int count) {}
 
-    // total is a double so it can carry either an exact integer count (orders,
-    // delivered, exceptions, returns) or a fractional EGP amount (cod_delivered)
-    // through one shared shape — matches the frontend's `number` type either way.
+    // total is a double (all 5 metrics are integer counts today) so a future
+    // fractional metric can reuse this same shape without a type change —
+    // matches the frontend's `number` type either way.
     public record MetricTrend(String metric, double total, List<TrendPoint> series) {}
 
     public record TopSku(String sku, String title, String imageUrl, int units) {}
@@ -93,10 +92,10 @@ public class OverviewService {
 
         List<MetricTrend> out = new ArrayList<>();
         out.add(countMetric("orders",     ordersRaw(tid, lowerTs),     today, from, to));
-        out.add(codMetric("cod_delivered", codDeliveredRaw(tid, lowerTs), today, from, to));
         out.add(countMetric("delivered",  deliveredRaw(tid, lowerTs),  today, from, to));
-        out.add(countMetric("exceptions", exceptionsRaw(tid, lowerTs), today, from, to));
         out.add(countMetric("returns",    returnsRaw(tid, lowerTs),    today, from, to));
+        out.add(countMetric("exchanges",  exchangesRaw(tid, lowerTs),  today, from, to));
+        out.add(countMetric("exceptions", exceptionsRaw(tid, lowerTs), today, from, to));
         return out;
     }
 
@@ -131,32 +130,20 @@ public class OverviewService {
             TS_MAPPER, tid, lower);
     }
 
-    // COD delivered = orders.cod_amount summed once per order that was delivered in
-    // range, keyed at the SAME per-order-deduped delivery moment as `deliveredRaw`
-    // above (mirrors its exact GROUP BY s.order_id dedup — see that method's doc for
-    // why). orders.cod_amount, NOT shipments.cod_amount: shipments.cod_amount is
-    // declared in the schema but never written by any INSERT/UPDATE in the codebase
-    // (verified against all 3 `INSERT INTO shipments` call sites in
-    // ShipmentLinkService — none populate it) — it is permanently NULL. orders.cod_amount
-    // is the one live figure: set from Shopify at sync (ShopifySyncService, "cod"
-    // payment_method => totalPrice) and operator-correctable pre-pack via
-    // FulfillService.updateCod() (FR-7.5). Prepaid orders store cod_amount=NULL —
-    // COALESCE to 0 so they contribute nothing (this is a cash-collected metric, not GMV).
-    private record CodEvent(Instant occurredAt, BigDecimal codAmount) {}
-
-    private List<CodEvent> codDeliveredRaw(UUID tid, Timestamp lower) {
+    // Exchanges = one row per exchange's OUTBOUND internal order (orders.number =
+    // 'EXC-<trackingNumber>'), keyed by that order's placed_at — the exact instant
+    // ExchangeService.mapExchange() creates it (INSERT INTO orders ... placed_at=now(),
+    // in the same statement group that sets exchanges.outbound_order_id). Mirrors
+    // ordersRaw() exactly, scoped down to orders with a matching exchange. No explicit
+    // DISTINCT needed: outbound_order_id is set at most once per exchange (1:1 by
+    // construction — ExchangeService.mapExchange() rejects an exchange not still in
+    // 'needs_mapping'), so the join can't multiply an order's row.
+    private List<Instant> exchangesRaw(UUID tid, Timestamp lower) {
         return jdbc.query(
-            """
-            SELECT MIN(h.occurred_at) AS occurred_at, COALESCE(o.cod_amount, 0) AS cod_amount
-            FROM shipment_status_history h
-            JOIN shipments s ON s.id = h.shipment_id AND s.tenant_id = h.tenant_id
-                             AND s.shipment_leg = 'forward'
-            JOIN orders o ON o.id = s.order_id AND o.tenant_id = s.tenant_id
-            WHERE h.tenant_id = ? AND h.internal_state = 'delivered' AND h.occurred_at >= ?
-            GROUP BY s.order_id, o.cod_amount
-            """,
-            (rs, i) -> new CodEvent(rs.getTimestamp("occurred_at").toInstant(), rs.getBigDecimal("cod_amount")),
-            tid, lower);
+            "SELECT o.placed_at FROM orders o " +
+            "JOIN exchanges e ON e.outbound_order_id = o.id AND e.tenant_id = o.tenant_id " +
+            "WHERE o.tenant_id = ? AND o.placed_at >= ?",
+            TS_MAPPER, tid, lower);
     }
 
     /**
@@ -351,34 +338,6 @@ public class OverviewService {
 
     private MetricTrend countMetric(String metric, List<Instant> raw, LocalDate today, LocalDate from, LocalDate to) {
         return new MetricTrend(metric, countInRange(raw, from, to), bucketize(raw, today));
-    }
-
-    private List<TrendPoint> bucketizeAmount(List<CodEvent> raw, LocalDate today) {
-        Map<LocalDate, BigDecimal> sums = new HashMap<>();
-        for (CodEvent e : raw) {
-            LocalDate d = e.occurredAt().atZone(CAIRO).toLocalDate();
-            sums.merge(d, e.codAmount(), BigDecimal::add);
-        }
-        List<TrendPoint> series = new ArrayList<>(WINDOW_DAYS);
-        for (int i = WINDOW_DAYS - 1; i >= 0; i--) {
-            LocalDate d = today.minusDays(i);
-            BigDecimal sum = sums.getOrDefault(d, BigDecimal.ZERO);
-            series.add(new TrendPoint(d.toString(), sum.setScale(0, RoundingMode.HALF_UP).intValue()));
-        }
-        return series;
-    }
-
-    private double sumInRange(List<CodEvent> raw, LocalDate from, LocalDate to) {
-        BigDecimal sum = BigDecimal.ZERO;
-        for (CodEvent e : raw) {
-            LocalDate d = e.occurredAt().atZone(CAIRO).toLocalDate();
-            if (!d.isBefore(from) && !d.isAfter(to)) sum = sum.add(e.codAmount());
-        }
-        return sum.setScale(2, RoundingMode.HALF_UP).doubleValue();
-    }
-
-    private MetricTrend codMetric(String metric, List<CodEvent> raw, LocalDate today, LocalDate from, LocalDate to) {
-        return new MetricTrend(metric, sumInRange(raw, from, to), bucketizeAmount(raw, today));
     }
 
     // ── Late-to-pack (live state, NOT scoped by the date-range picker) ─────────

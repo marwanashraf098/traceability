@@ -98,7 +98,7 @@
       "daysAgo": "منذ {{count}} يوم"
     },
     "stats": {
-      "codDelivered": "التحصيل عند الاستلام"
+      "exchanges": "الاستبدالات"
     },
     "dateRange": {
       "today": "اليوم",

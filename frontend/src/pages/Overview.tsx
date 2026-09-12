@@ -136,11 +136,11 @@ const STAT_DEFS: {
   color: string
   format?: (n: number) => string
 }[] = [
-  { metric: 'orders',        labelKey: 'nav.orders',                color: INFO },
-  { metric: 'cod_delivered', labelKey: 'overview.stats.codDelivered', color: TRACE_BLUE, format: n => `${n.toLocaleString()} EGP` },
-  { metric: 'delivered',     labelKey: 'orders.pipeline.delivered', color: SUCCESS },
-  { metric: 'exceptions',    labelKey: 'nav.exceptions',            color: CRITICAL },
-  { metric: 'returns',       labelKey: 'nav.returns',               color: WARNING },
+  { metric: 'orders',     labelKey: 'nav.orders',                  color: INFO },
+  { metric: 'delivered',  labelKey: 'orders.pipeline.delivered',   color: SUCCESS },
+  { metric: 'returns',    labelKey: 'nav.returns',                 color: WARNING },
+  { metric: 'exchanges',  labelKey: 'overview.stats.exchanges',    color: TRACE_BLUE },
+  { metric: 'exceptions', labelKey: 'nav.exceptions',              color: CRITICAL },
 ]
 
 function SparkStatCard({
