@@ -69,7 +69,6 @@
       "picking": "Picking",
       "packed": "Packed",
       "courier": "Courier",
-      "delivered": "Delivered",
       "empty": "No orders yet"
     },
     "severity": {

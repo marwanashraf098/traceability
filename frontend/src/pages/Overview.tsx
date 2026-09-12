@@ -301,22 +301,26 @@ function LateToPackCard({ data }: { data: LateToPack | null }) {
 
 // ── Live-ops flow strip ──────────────────────────────────────────────────────
 // Reuses /orders/funnel (today, 5 buckets) — the SAME source the old funnel
-// bars used, just restyled as nodes+arrows. Deliberately 5 nodes, not the
-// mockup's 6: no separate "Warehouse/in stock" pipeline stage exists (that's
-// a different concept, total available inventory, not an order-flow stage),
-// and "Out for delivery" isn't split from "In transit" — no data signal
-// distinguishes them (Bosta's granular codes collapse into the 9-value
-// shipment_internal_state enum before reaching the app), the exact same cut
-// already made for the Orders-detail stepper restyle.
+// bars used, just restyled as nodes+arrows. Deliberately 4 in-progress nodes,
+// not the mockup's 6: no separate "Warehouse/in stock" pipeline stage exists
+// (that's a different concept, total available inventory, not an order-flow
+// stage), and "Out for delivery" isn't split from "In transit" — no data
+// signal distinguishes them (Bosta's granular codes collapse into the
+// 9-value shipment_internal_state enum before reaching the app), the exact
+// same cut already made for the Orders-detail stepper restyle.
+//
+// Delivered is intentionally NOT a strip node (an order that's Delivered has
+// left the "in progress" work the strip visualizes) — but counts.delivered
+// still feeds the footer's Completed figure directly below, unaffected by
+// this array.
 
-type FlowTone = 'new' | 'picking' | 'packed' | 'courier' | 'delivered'
+type FlowTone = 'new' | 'picking' | 'packed' | 'courier'
 
 const FLOW_NODES: { key: keyof FunnelCounts; labelKey: string; icon: typeof ShoppingBag; tone: FlowTone }[] = [
-  { key: 'newCount',  labelKey: 'overview.funnel.new',      icon: ShoppingBag,    tone: 'new' },
-  { key: 'picking',   labelKey: 'overview.funnel.picking',  icon: PackageSearch,  tone: 'picking' },
-  { key: 'packed',    labelKey: 'overview.funnel.packed',   icon: PackageCheck,   tone: 'packed' },
-  { key: 'courier',   labelKey: 'overview.funnel.courier',  icon: Truck,          tone: 'courier' },
-  { key: 'delivered', labelKey: 'overview.funnel.delivered', icon: CheckCircle2,  tone: 'delivered' },
+  { key: 'newCount', labelKey: 'overview.funnel.new',     icon: ShoppingBag,   tone: 'new' },
+  { key: 'picking',  labelKey: 'overview.funnel.picking', icon: PackageSearch, tone: 'picking' },
+  { key: 'packed',   labelKey: 'overview.funnel.packed',  icon: PackageCheck,  tone: 'packed' },
+  { key: 'courier',  labelKey: 'overview.funnel.courier', icon: Truck,         tone: 'courier' },
 ]
 
 // Each stage gets its own DS-token tile, same pattern the old Delivered-only
@@ -324,19 +328,22 @@ const FLOW_NODES: { key: keyof FunnelCounts; labelKey: string; icon: typeof Shop
 // icon stroke in the full/bright token color. Tailwind classes reference
 // tailwind.config.js tokens directly — no hex consts needed here.
 const FLOW_TONE_CLASSES: Record<FlowTone, string> = {
-  new:       'bg-grey-300/[0.12] border-grey-300/40 text-neutral-text',
-  picking:   'bg-info/[0.12] border-info/40 text-info-text',
-  packed:    'bg-warning/[0.12] border-warning/40 text-warning-text',
-  courier:   'bg-trace-blue/[0.12] border-trace-blue/40 text-trace-blue',
-  delivered: 'bg-success/[0.12] border-success/40 text-success-text',
+  new:     'bg-grey-300/[0.12] border-grey-300/40 text-neutral-text',
+  picking: 'bg-info/[0.12] border-info/40 text-info-text',
+  packed:  'bg-warning/[0.12] border-warning/40 text-warning-text',
+  courier: 'bg-trace-blue/[0.12] border-trace-blue/40 text-trace-blue',
 }
 
 function FlowStrip({ counts }: { counts: FunnelCounts }) {
   const { t } = useTranslation()
   const values = FLOW_NODES.map(n => counts[n.key])
-  const allZero = values.every(v => v === 0)
   const inProgress = counts.newCount + counts.picking + counts.packed + counts.courier
   const completed  = counts.delivered
+  // NOT values.every(v => v === 0): values only spans the 4 in-progress nodes
+  // now that Delivered isn't one of them. A day with nothing in progress but
+  // orders delivered (inProgress=0, completed>0) must still show the strip +
+  // footer's Completed count, not fall into the "No orders yet" empty state.
+  const allZero = inProgress === 0 && completed === 0
   const pct = completed + inProgress > 0 ? (completed / (completed + inProgress)) * 100 : 0
 
   if (allZero) {
