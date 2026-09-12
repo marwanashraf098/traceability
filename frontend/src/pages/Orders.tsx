@@ -6,7 +6,7 @@ import {
   getOrdersSummary, OrderSummaryCounts, getExceptionsCount,
 } from '../api'
 import {
-  Alert, Badge, Button, DataTable, type DataTableColumn,
+  Alert, Avatar, Badge, Button, DataTable, type DataTableColumn,
   EmptyState, LegStatusBadge, Tabs, TableSkeleton,
 } from '../components/ui'
 import OrderDrawer from '../components/OrderDrawer'
@@ -159,7 +159,7 @@ export default function Orders() {
           <button
             type="button"
             onClick={() => setDrawerOrderId(row.id)}
-            className="text-trace-blue hover:text-trace-blue-hover font-medium transition-colors"
+            className="text-trace-blue hover:text-trace-blue-hover font-medium transition-colors tabular-nums"
           >
             {row.number ?? t('common.na')}
           </button>
@@ -171,11 +171,14 @@ export default function Orders() {
       key: 'customer',
       header: t('orders.columns.customer', { defaultValue: 'Customer' }),
       render: row => (
-        <div>
-          <div className="text-primary">{row.customerName ?? t('common.na')}</div>
-          {row.customerPhone && (
-            <div className="text-small text-muted mt-0.5">{row.customerPhone}</div>
-          )}
+        <div className="flex items-center gap-2.5">
+          <Avatar name={row.customerName ?? ''} size="sm" showText={false} />
+          <div>
+            <div className="text-primary">{row.customerName ?? t('common.na')}</div>
+            {row.customerPhone && (
+              <div className="text-small text-muted mt-0.5">{row.customerPhone}</div>
+            )}
+          </div>
         </div>
       ),
     },
@@ -194,7 +197,7 @@ export default function Orders() {
       header: t('orders.columns.cod', { defaultValue: 'Amount' }),
       align: 'end',
       render: row => row.codAmount != null
-        ? <span className="font-mono text-primary">{row.codAmount.toLocaleString()} EGP</span>
+        ? <span className="font-mono tabular-nums text-primary">{row.codAmount.toLocaleString()} EGP</span>
         : <span className="text-muted">{t('common.na')}</span>,
     },
     {
@@ -202,7 +205,7 @@ export default function Orders() {
       header: t('orders.columns.placedAt', { defaultValue: 'Date' }),
       align: 'end',
       render: row => (
-        <span className="text-small text-muted">
+        <span className="text-small text-muted tabular-nums">
           {row.placedAt ? new Date(row.placedAt).toLocaleDateString() : t('common.na')}
         </span>
       ),

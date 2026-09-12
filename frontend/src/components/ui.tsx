@@ -1016,10 +1016,15 @@ export function Avatar({
   name,
   role,
   size = 'md',
+  showText = true,
 }: {
   name: string
   role?: string
   size?: 'sm' | 'md'
+  // Orders list reuses just the initials circle inline with its own name/phone stack —
+  // Avatar's built-in name/role text would otherwise duplicate that. Default true keeps
+  // every existing call site (StyleGuide) rendering exactly as before.
+  showText?: boolean
 }) {
   return (
     <div className="inline-flex items-center gap-2.5">
@@ -1029,7 +1034,7 @@ export function Avatar({
       )}>
         {initials(name)}
       </span>
-      {(name || role) && (
+      {showText && (name || role) && (
         <span className="flex flex-col">
           <span className="text-body text-primary leading-tight">{name}</span>
           {role && <span className="text-small text-muted leading-tight">{role}</span>}
