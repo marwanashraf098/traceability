@@ -132,6 +132,8 @@ class EmbeddedIntegrationTest {
 
     @AfterAll
     void teardown() {
+        // shipments before orders — FK order, needed now that e14b seeds a shipment row.
+        jdbc.update("DELETE FROM shipments WHERE tenant_id IN (?, ?)", tenantA, tenantB);
         jdbc.update("DELETE FROM orders  WHERE tenant_id IN (?, ?)", tenantA, tenantB);
         jdbc.update("DELETE FROM stores  WHERE shop_domain IN (?, ?)", SHOP_A, SHOP_B);
         jdbc.update("DELETE FROM users   WHERE tenant_id IN (?, ?)", tenantA, tenantB);
@@ -313,6 +315,48 @@ class EmbeddedIntegrationTest {
         ResponseEntity<String> b = get("/api/v1/embedded/overview/late-to-pack", tokenB());
         assertThat(b.getStatusCode()).isEqualTo(HttpStatus.OK);
         assertThat(b.getBody()).contains("\"overdue\":3", "\"over48\":3");
+    }
+
+    // ── E14b: embedded path shares OverviewService.lateToPack() — same fix, same bug
+    // it closes. Reproduces OverviewTrendsTest's ovt12 through the embedded HTTP surface
+    // instead of calling the service directly, so a future re-duplication (a second
+    // hand-rolled copy of the query landing back in EmbeddedController) would be caught
+    // here too, not just in OverviewTrendsTest.
+
+    @Test @Order(14)
+    void e14b_lateToPack_excludesOrderWhoseShipmentAlreadyProgressed_evenWhenOrderStatusNeverAdvanced() throws Exception {
+        // Delta-based, not absolute-count-based: this class shares one DB across all
+        // @Order-sequenced tests with no per-test cleanup (only @AfterAll), and e14 above
+        // already leaves its own tenantA orders behind. Asserting "adding this one order
+        // changes nothing" is robust to whatever else has accumulated in tenantA by this
+        // point, while still failing exactly the way the bug would: if orders.status
+        // alone were still trusted, this addition would push both counts up by 1.
+        ResponseEntity<String> before = get("/api/v1/embedded/overview/late-to-pack", tokenA());
+        assertThat(before.getStatusCode()).isEqualTo(HttpStatus.OK);
+
+        // orders.status stuck at 'ready_to_pick' (no Traced pack scan ever fired), but the
+        // shipment is DELIVERED — must NOT count via the embedded endpoint either.
+        UUID orderId = UUID.randomUUID();
+        jdbc.update(
+            "INSERT INTO orders (id, tenant_id, store_id, external_id, number, status, placed_at) " +
+            "VALUES (?, ?, ?, ?, ?, 'ready_to_pick'::order_status, now() - interval '60 hours')",
+            orderId, tenantA, storeAId, "EXT-E14B", "#E14B");
+        insertShipment(tenantA, orderId, "delivered");
+
+        ResponseEntity<String> after = get("/api/v1/embedded/overview/late-to-pack", tokenA());
+        assertThat(after.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(after.getBody())
+            .as("a 60h-old order whose shipment is already delivered must not move either count")
+            .isEqualTo(before.getBody());
+    }
+
+    private void insertShipment(UUID tenantId, UUID orderId, String internalState) {
+        jdbc.update(
+            "INSERT INTO shipments (id, tenant_id, order_id, tracking_number, provider, " +
+            "    internal_state, shipment_leg, created_at) " +
+            "VALUES (gen_random_uuid(), ?, ?, ?, 'bosta', ?::shipment_internal_state, 'forward', " +
+            "        now() - interval '58 hours')",
+            tenantId, orderId, "TN-" + orderId.toString().substring(0, 12), internalState);
     }
 
     // ── E15: /orders/list — cross-tenant isolation ───────────────────────────────

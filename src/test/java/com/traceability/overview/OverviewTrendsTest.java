@@ -385,6 +385,52 @@ class OverviewTrendsTest {
             .isEqualTo(1);
     }
 
+    // ── ovt12: the actual production bug — orders.status frozen pre-pack while the
+    // shipment shows the order is really done (Mode-B / any fulfillment that never
+    // routed through Traced's own pack scan). Reproduces the reported 612/635 and
+    // 51/101 inflated counts: without this fix every order below would incorrectly
+    // count, because raw orders.status alone never advances past its pack-flow value.
+
+    @Test
+    void ovt12_lateToPack_excludesOrdersWhoseShipmentAlreadyProgressed_evenWhenOrderStatusNeverAdvanced() {
+        // orders.status stuck at 'ready_to_pick' forever (no Traced pack scan ever
+        // fired for this order), but its shipment is actually DELIVERED — the exact
+        // production symptom. Must NOT count.
+        UUID delivered = insertOrder(tenantA, storeA, "ready_to_pick", false,
+            "now() - interval '60 hours'", null, null, null);
+        insertShipment(tenantA, delivered, "forward", "delivered",
+            "now() - interval '58 hours'", 1, false, null);
+
+        // orders.status stuck at 'picking', shipment reached with_courier (rank 2) —
+        // packing is physically unavoidable at that point even though Traced's own
+        // pack scan never fired. Must NOT count.
+        UUID withCourier = insertOrder(tenantA, storeA, "picking", false,
+            "now() - interval '60 hours'", null, null, null);
+        insertShipment(tenantA, withCourier, "forward", "with_courier",
+            "now() - interval '58 hours'", 1, false, null);
+
+        // orders.status = 'picking', a shipment record EXISTS (Mode-B webhook auto-
+        // match already created it) but at rank 1 ('created') only — packing has NOT
+        // actually happened yet (packedConfirmed=false). This is the funnel()
+        // Mode-B-early-match fallback: must still count as late, a shipment row
+        // existing is not proof of packing.
+        UUID modeBEarlyMatch = insertOrder(tenantA, storeA, "picking", false,
+            "now() - interval '60 hours'", null, null, null);
+        insertShipment(tenantA, modeBEarlyMatch, "forward", "created",
+            "now() - interval '58 hours'", 0, false, null);
+
+        TenantContext.set(tenantA);
+        OverviewService.LateToPack result;
+        try { result = overview.lateToPack(); } finally { TenantContext.clear(); }
+
+        assertThat(result.overdue())
+            .as("only modeBEarlyMatch is genuinely still pre-pack; delivered and withCourier are not")
+            .isEqualTo(1);
+        assertThat(result.over48())
+            .as("same order, also past 48h")
+            .isEqualTo(1);
+    }
+
     // ── ovt11: malformed from/to → 400, not a 500 or a silently-ignored param ──
 
     @Test

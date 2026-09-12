@@ -2,6 +2,7 @@ package com.traceability.embedded;
 
 import com.traceability.fulfillment.OrderStatusDeriver;
 import com.traceability.inventory.ExceptionService;
+import com.traceability.overview.OverviewService;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.RowCallbackHandler;
 import org.springframework.security.access.prepost.PreAuthorize;
@@ -35,6 +36,7 @@ public class EmbeddedController {
     private final JdbcTemplate       jdbc;
     private final TransactionTemplate tx;
     private final ExceptionService   exceptionService;
+    private final OverviewService    overviewService;
 
     private static final List<String> GROUP_A = List.of(
             "available", "reserved", "packed",
@@ -43,10 +45,12 @@ public class EmbeddedController {
 
     public EmbeddedController(JdbcTemplate jdbc,
                                PlatformTransactionManager txm,
-                               ExceptionService exceptionService) {
+                               ExceptionService exceptionService,
+                               OverviewService overviewService) {
         this.jdbc             = jdbc;
         this.tx               = new TransactionTemplate(txm);
         this.exceptionService = exceptionService;
+        this.overviewService  = overviewService;
     }
 
     public record StatusCount(String status, long count) {}
@@ -266,36 +270,26 @@ public class EmbeddedController {
 
     // ── GET /api/v1/embedded/overview/late-to-pack ─────────────────────────────
 
-    public record LateToPack(int overdue, int over48) {}
-
     /**
-     * Read-only mirror of {@code OverviewService.lateToPack()} — the same 24h/48h
-     * pre-pack-status cutoff predicate, DUPLICATED here (not a call into
-     * {@code OverviewService}, which is {@code @PreAuthorize("hasAnyRole('OWNER','MANAGER')")}
-     * -gated). Uses Postgres {@code now()} rather than the injected Cairo-pinned Clock
-     * bean {@code OverviewService} uses — equivalent here: the 24h/48h window is a plain
-     * Instant offset, timezone-agnostic, so DB-server time and the Clock bean produce the
-     * same cutoff. KNOWN DRIFT RISK: if {@code OverviewService.lateToPack()}'s pre-pack
-     * status set changes, update this copy too.
+     * Delegates to {@link OverviewService#lateToPack()} — the ONE implementation, no
+     * second copy. This used to be a hand-duplicated query here (same predicate, same
+     * bug: raw {@code orders.status} never reflects a shipment that progressed without
+     * Traced's own pack scan ever firing — see OverviewService's fix). It's safe to call
+     * the service directly: {@code OverviewService} carries no {@code @PreAuthorize} of
+     * its own — that gate lives on {@code OverviewController}, a separate class — so this
+     * endpoint's own {@code @PreAuthorize("hasRole('SHOPIFY_EMBEDDED')")} is still the
+     * only authorization check that applies. {@code tx.execute()} is mandatory, same
+     * reason as {@code exceptions()} above: {@code TenantAwareConnection} sets the RLS GUC
+     * at transaction start, and {@code OverviewService.lateToPack()}'s own explicit
+     * {@code tenant_id = ?} predicate (via {@code TenantContext}, populated for embedded
+     * requests too by {@code TenantContextFilter} running after {@code
+     * ShopifySessionTokenFilter}) is defense-in-depth on top of that, not a replacement
+     * for it.
      */
     @GetMapping("/overview/late-to-pack")
     @PreAuthorize("hasRole('SHOPIFY_EMBEDDED')")
-    public LateToPack lateToPack() {
-        return tx.execute(txs -> {
-            Map<String, Object> row = jdbc.queryForMap("""
-                    SELECT
-                      COUNT(*) FILTER (WHERE placed_at < now() - INTERVAL '24 hours') AS overdue,
-                      COUNT(*) FILTER (WHERE placed_at < now() - INTERVAL '48 hours') AS over48
-                    FROM orders
-                    WHERE tenant_id = NULLIF(current_setting('app.current_tenant', true), '')::uuid
-                      AND placed_at IS NOT NULL
-                      AND status IN ('new'::order_status, 'confirmed'::order_status,
-                                     'ready_to_pick'::order_status, 'picking'::order_status)
-                    """);
-            return new LateToPack(
-                    ((Number) row.get("overdue")).intValue(),
-                    ((Number) row.get("over48")).intValue());
-        });
+    public OverviewService.LateToPack lateToPack() {
+        return tx.execute(txs -> overviewService.lateToPack());
     }
 
     // ── GET /api/v1/embedded/orders/list ────────────────────────────────────────

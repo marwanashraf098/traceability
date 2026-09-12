@@ -1,5 +1,6 @@
 package com.traceability.overview;
 
+import com.traceability.fulfillment.OrderStatusDeriver;
 import com.traceability.tenancy.TenantContext;
 import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -382,13 +383,28 @@ public class OverviewService {
 
     // ── Late-to-pack (live state, NOT scoped by the date-range picker) ─────────
     //
-    // overdue = orders still in a pre-pack status (new/confirmed/ready_to_pick/picking
-    // — everything before 'packed' in the order_status enum) whose placed_at is more
-    // than 24h old. over48 = the same predicate at 48h. On-hold/short/blocked orders
-    // are NOT excluded — they're still sitting in a pre-pack status, which is exactly
-    // the condition this tile reports on; special-casing them would hide real backlog.
-    // placed_at IS NOT NULL guard: the column is nullable and an order with no known
-    // placement time can't be judged "late" against it.
+    // BUG (fixed): the previous version filtered on the raw `orders.status` enum alone
+    // (status IN new/confirmed/ready_to_pick/picking). That column only ever advances via
+    // FulfillService's own scan-gated pack flow (completePack() -> 'packed'/'self_pickup_pending',
+    // ShipmentLinkService -> 'awaiting_pickup') — it never reflects a shipment that progressed
+    // (with_courier, delivered, returned, ...) without Traced's own pack scan ever firing for
+    // that order, which is exactly what happens on a Mode-B early webhook match
+    // (ShipmentLinkService.tryMatchDelivery(), unguarded) or any order fulfilled outside
+    // Traced's scan flow entirely — orders.status stays stuck at a pre-pack value forever while
+    // the real shipment is long since delivered. That's why the ratio of inflated/real orders
+    // differed per tenant (how much of that tenant's fulfillment ever touches Traced's own pack
+    // scan): not a join fanout (COUNT(*) with no join to a multi-row child table — no fanout
+    // possible), a stale/never-advanced status column.
+    //
+    // Fix: use OrderStatusDeriver.derive() — the ONE place order status is decided elsewhere
+    // in this codebase (OrderController.list()/detail()/funnel()) — instead of reading
+    // orders.status directly, so a shipment's real progress is checked, not just Traced's own
+    // pack-flow flag. "Still pre-pack" = derive()'s primaryKey resolves to New or Picking,
+    // using funnel()'s own established Mode-B fallback (a shipment record existing is NOT proof
+    // packing happened; packedConfirmed decides). One row per order via the same
+    // shipment_leg='forward', ORDER BY created_at DESC (never id DESC — UUIDv4 isn't
+    // time-ordered), LIMIT 1 LATERAL join funnel() already uses — COUNT is over DISTINCT
+    // orders by construction, not a join-inflated row count.
     @Transactional(readOnly = true)
     public LateToPack lateToPack() {
         UUID tid = TenantContext.require();
@@ -396,19 +412,94 @@ public class OverviewService {
         Timestamp cutoff24 = Timestamp.from(now.minusSeconds(24 * 3600L));
         Timestamp cutoff48 = Timestamp.from(now.minusSeconds(48 * 3600L));
 
-        Map<String, Object> row = jdbc.queryForMap(
-            "SELECT " +
-            "  COUNT(*) FILTER (WHERE placed_at < ?) AS overdue, " +
-            "  COUNT(*) FILTER (WHERE placed_at < ?) AS over48 " +
-            "FROM orders " +
-            "WHERE tenant_id = ? AND placed_at IS NOT NULL " +
-            "  AND status IN ('new'::order_status, 'confirmed'::order_status, " +
-            "                 'ready_to_pick'::order_status, 'picking'::order_status)",
-            cutoff24, cutoff48, tid);
+        record Candidate(String orderStatus, Timestamp placedAt, OrderStatusDeriver.DerivedOrderStatus derived) {}
 
-        return new LateToPack(
-            ((Number) row.get("overdue")).intValue(),
-            ((Number) row.get("over48")).intValue());
+        // placed_at < cutoff24 (the older of the two cutoffs) bounds the fetch to only
+        // candidates that could possibly count toward either number — over48 is a strict
+        // subset of overdue's placed_at threshold, never a wider one.
+        List<Candidate> candidates = jdbc.query("""
+            SELECT o.status, o.placed_at, o.not_traced_at,
+                   s.internal_state            AS delivery_state,
+                   COALESCE(s.failed_delivery_attempts, 0) AS failed_delivery_attempts,
+                   COALESCE(s.number_of_attempts, 0)       AS number_of_attempts,
+                   s.exception_code, s.is_delayed, s.sla_breached,
+                   s.max_progress_rank
+            FROM orders o
+            LEFT JOIN LATERAL (
+                SELECT internal_state, number_of_attempts,
+                       exception_code, is_delayed, sla_breached,
+                       (SELECT COUNT(*) FROM shipment_status_history h2
+                        LEFT JOIN ndr_codes n ON n.code = h2.exception_code
+                        WHERE h2.shipment_id = sh.id AND h2.internal_state = 'exception'
+                          AND h2.exception_code IS NOT NULL
+                          AND (n.category = 'forward' OR n.category IS NULL)
+                       ) AS failed_delivery_attempts,
+                       COALESCE(
+                           (SELECT MAX(CASE h.internal_state
+                                       WHEN 'created'      THEN 1
+                                       WHEN 'with_courier'  THEN 2
+                                       WHEN 'returning'     THEN 3
+                                       WHEN 'exception'     THEN 0
+                                   END)
+                            FROM shipment_status_history h
+                            WHERE h.shipment_id = sh.id),
+                           CASE sh.internal_state
+                               WHEN 'created'      THEN 1
+                               WHEN 'with_courier'  THEN 2
+                               WHEN 'returning'     THEN 3
+                               WHEN 'exception'     THEN 0
+                           END
+                       ) AS max_progress_rank
+                FROM shipments sh
+                WHERE order_id = o.id AND tenant_id = o.tenant_id
+                  AND shipment_leg = 'forward'
+                ORDER BY created_at DESC, id DESC
+                LIMIT 1
+            ) s ON true
+            WHERE o.tenant_id = ? AND o.placed_at IS NOT NULL AND o.placed_at < ?
+            """,
+            (rs, i) -> {
+                String orderStatus = rs.getString("status");
+                Timestamp notTracedAt = rs.getTimestamp("not_traced_at");
+                var derived = OrderStatusDeriver.derive(
+                    orderStatus,
+                    rs.getString("delivery_state"),
+                    rs.getObject("max_progress_rank", Integer.class),
+                    rs.getInt("number_of_attempts"),
+                    rs.getInt("failed_delivery_attempts"),
+                    rs.getObject("exception_code", Integer.class),
+                    rs.getObject("is_delayed", Boolean.class),
+                    rs.getObject("sla_breached", Boolean.class),
+                    notTracedAt != null);
+                return new Candidate(orderStatus, rs.getTimestamp("placed_at"), derived);
+            },
+            tid, cutoff24);
+
+        int overdue = 0, over48 = 0;
+        for (Candidate c : candidates) {
+            if (!isStillPrePack(c.orderStatus(), c.derived())) continue;
+            if (c.placedAt().before(cutoff24)) overdue++;
+            if (c.placedAt().before(cutoff48)) over48++;
+        }
+        return new LateToPack(overdue, over48);
+    }
+
+    // Mirrors funnel()'s New+Picking classification exactly (OrderController.funnel()) —
+    // both must agree on what "not yet packed" means. A shipment record existing
+    // (status.awaiting_courier / status.label_created) is not proof packing happened;
+    // when packedConfirmed is false, the order is still pre-pack regardless of what
+    // rank the shipment itself reached.
+    private static boolean isStillPrePack(String orderStatus, OrderStatusDeriver.DerivedOrderStatus derived) {
+        String primaryKey = derived.primaryKey();
+        boolean isCourierAwbState =
+            "status.awaiting_courier".equals(primaryKey) || "status.label_created".equals(primaryKey);
+        if (isCourierAwbState && !derived.packedConfirmed()) {
+            return true;
+        }
+        return switch (primaryKey) {
+            case "status.new", "status.confirmed", "status.ready_to_pick", "status.picking" -> true;
+            default -> false;
+        };
     }
 
     // ── Top-selling SKUs ─────────────────────────────────────────────────────
