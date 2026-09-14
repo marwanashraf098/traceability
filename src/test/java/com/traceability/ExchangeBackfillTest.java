@@ -83,9 +83,10 @@ class ExchangeBackfillTest {
         MigrateResult r2 = toLatest.migrate();
         assertThat(r2.success).as("V74 must succeed").isTrue();
         assertThat(r2.migrationsExecuted)
-            .as("V74 + V75 + V76 + V77 + V78 + V79 pending after V73 (V75-79 are index-only " +
-                "migrations, no data touched, added after this test was written)")
-            .isEqualTo(6);
+            .as("V74 through V92 pending after V73 (19 total; V75-V92 are unrelated schema/" +
+                "index-only migrations added after this test was written — confirmed none " +
+                "touch unlinked_bosta_deliveries or exchanges data)")
+            .isEqualTo(19);
 
         try (Connection conn = DriverManager.getConnection(
                 POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword())) {
