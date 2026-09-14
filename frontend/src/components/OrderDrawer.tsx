@@ -4,7 +4,8 @@ import type { TFunction } from 'i18next'
 import { X, ExternalLink, CheckCircle2, AlertTriangle, Truck, Package, Clock } from 'lucide-react'
 import {
   getOrder, getOrderTimeline, holdOrder, releaseOrderHold,
-  OrderDetail, TimelineItem, DerivedTone,
+  getOrderNotes, addOrderNote,
+  OrderDetail, TimelineItem, DerivedTone, OrderNote,
 } from '../api'
 import { ShipmentCard } from '../pages/OrderDetail'
 import { Badge, Button, EmptyState, Modal, OrderStatus, ProductThumb, Skeleton, cn } from './ui'
@@ -91,6 +92,14 @@ export default function OrderDrawer({
   const [timelineLoading, setTimelineLoading] = useState(false)
   const [timelineError, setTimelineError]     = useState(false)
 
+  // Notes tab — same independent-fetch shape as the timeline above (own loading/error,
+  // never gates the rest of the drawer).
+  const [notes, setNotes]               = useState<OrderNote[] | null>(null)
+  const [notesLoading, setNotesLoading] = useState(false)
+  const [notesError, setNotesError]     = useState(false)
+  const [noteDraft, setNoteDraft]       = useState('')
+  const [noteSubmitting, setNoteSubmitting] = useState(false)
+
   useEffect(() => {
     // Also resets the hold dialog on close (orderId -> null) and on switching orders —
     // otherwise Escape (which always closes the whole drawer, since Modal has no Escape
@@ -117,6 +126,29 @@ export default function OrderDrawer({
       .catch(() => setTimelineError(true))
       .finally(() => setTimelineLoading(false))
   }, [orderId])
+
+  useEffect(() => {
+    setNoteDraft('')
+    if (!orderId) return
+    setNotesLoading(true)
+    setNotes(null)
+    setNotesError(false)
+    getOrderNotes(orderId)
+      .then(setNotes)
+      .catch(() => setNotesError(true))
+      .finally(() => setNotesLoading(false))
+  }, [orderId])
+
+  const handleAddNote = async () => {
+    if (!orderId || !noteDraft.trim()) return
+    setNoteSubmitting(true)
+    try {
+      const created = await addOrderNote(orderId, noteDraft.trim())
+      setNotes(prev => [created, ...(prev ?? [])])
+      setNoteDraft('')
+    } catch { /* keep the draft so the user can retry */ }
+    finally { setNoteSubmitting(false) }
+  }
 
   useEffect(() => {
     if (!open) return
@@ -378,7 +410,57 @@ export default function OrderDrawer({
               )}
 
               {tab === 'notes' && (
-                <EmptyState message={t('orders.drawer.notesEmpty')} />
+                <div className="space-y-4">
+                  <div>
+                    <textarea
+                      className="input w-full min-h-[84px] resize-none"
+                      placeholder={t('orders.drawer.notes.placeholder')}
+                      value={noteDraft}
+                      onChange={e => setNoteDraft(e.target.value)}
+                      maxLength={2000}
+                    />
+                    <div className="flex justify-end mt-2.5">
+                      <Button
+                        size="sm"
+                        variant="primary"
+                        disabled={!noteDraft.trim() || noteSubmitting}
+                        onClick={handleAddNote}
+                      >
+                        {t('orders.drawer.notes.addButton')}
+                      </Button>
+                    </div>
+                  </div>
+
+                  {notesLoading ? (
+                    <div className="space-y-2">
+                      <Skeleton className="h-16 rounded-xl" />
+                      <Skeleton className="h-16 rounded-xl" />
+                    </div>
+                  ) : notesError ? (
+                    <div className="flex items-center gap-3 bg-elevated border border-line rounded-2xl p-4 text-critical">
+                      <AlertTriangle size={18} strokeWidth={1.9} className="flex-shrink-0" />
+                      <p className="text-small">{t('orders.drawer.notes.error')}</p>
+                    </div>
+                  ) : !notes || notes.length === 0 ? (
+                    <EmptyState message={t('orders.drawer.notesEmpty')} />
+                  ) : (
+                    <ul className="space-y-3">
+                      {notes.map(n => (
+                        <li key={n.id} className="bg-elevated border border-line rounded-2xl p-3.5">
+                          <div className="flex items-center justify-between gap-3 mb-1.5">
+                            <span className="text-small font-semibold text-primary">
+                              {n.authorName ?? t('common.na')}
+                            </span>
+                            <span className="text-caption text-muted flex-shrink-0">
+                              {relativeTime(n.createdAt, t)}
+                            </span>
+                          </div>
+                          <p className="text-small text-primary whitespace-pre-wrap">{n.body}</p>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
               )}
             </div>
 

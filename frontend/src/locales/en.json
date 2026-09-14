@@ -328,7 +328,12 @@
       "timelineError": "Couldn't load activity",
       "lastUpdated": "Last updated {{time}}",
       "close": "Close",
-      "notesEmpty": "No notes yet"
+      "notesEmpty": "No notes yet — add the first one.",
+      "notes": {
+        "placeholder": "Add a note about this order",
+        "addButton": "Add note",
+        "error": "Couldn't load notes"
+      }
     },
     "timeline": {
       "system": "System",

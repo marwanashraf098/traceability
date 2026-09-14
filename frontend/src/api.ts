@@ -283,6 +283,26 @@ export function getOrderTimeline(id: string) {
   return request<TimelineItem[]>(`/orders/${id}/timeline`)
 }
 
+// ── Notes (drawer Notes tab) — append-only, add + list. ─────────────────────────
+
+export interface OrderNote {
+  id: string
+  body: string
+  authorName: string | null
+  createdAt: string
+}
+
+export function getOrderNotes(id: string) {
+  return request<OrderNote[]>(`/orders/${id}/notes`)
+}
+
+export function addOrderNote(id: string, body: string) {
+  return request<OrderNote>(`/orders/${id}/notes`, {
+    method: 'POST',
+    body: JSON.stringify({ body }),
+  })
+}
+
 export interface DayCount { date: string; count: number }
 export function getOrderDailyCounts(days = 30) {
   return request<DayCount[]>(`/orders/daily-counts?days=${days}`)

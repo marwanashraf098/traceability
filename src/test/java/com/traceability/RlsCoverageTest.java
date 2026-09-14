@@ -128,6 +128,10 @@ class RlsCoverageTest {
                     "OrderStatusListDetailParityTest's real app_user same-tenant positive " +
                     "control + cross-tenant negative control (stronger than this class's " +
                     "own BYPASSRLS pattern for a genuinely RLS-sensitive read)"),
+            entry("/api/v1/orders/{orderId}/notes",
+                    "delegates to OrderNotesService (@Transactional); RLS-covered by " +
+                    "OrderStatusListDetailParityTest's real app_user same-tenant positive " +
+                    "control + cross-tenant negative control, same pattern as timeline above"),
             entry("/api/v1/fulfill/queue",
                     "uses tx.execute(); empty valid for new tenant"),
             entry("/api/v1/fulfill/{orderId}",

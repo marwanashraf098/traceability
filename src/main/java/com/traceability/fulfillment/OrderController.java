@@ -2,9 +2,11 @@ package com.traceability.fulfillment;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.traceability.identity.CustomUserDetails;
 import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
@@ -24,12 +26,14 @@ public class OrderController {
     private final JdbcTemplate jdbc;
     private final ObjectMapper mapper;
     private final TransactionTemplate tx;
+    private final OrderNotesService notesService;
 
     public OrderController(JdbcTemplate jdbc, ObjectMapper mapper,
-                           PlatformTransactionManager txm) {
+                           PlatformTransactionManager txm, OrderNotesService notesService) {
         this.jdbc   = jdbc;
         this.mapper = mapper;
         this.tx     = new TransactionTemplate(txm);
+        this.notesService = notesService;
     }
 
     // ── response records ─────────────────────────────────────────────────────
@@ -1084,6 +1088,28 @@ public class OrderController {
 
             return items;
         });
+    }
+
+    // ── Notes (drawer Notes tab) ─────────────────────────────────────────────
+
+    public record OrderNoteResponse(String id, String body, String authorName, Instant createdAt) {}
+    public record CreateNoteRequest(String body) {}
+
+    @GetMapping("/{orderId}/notes")
+    @PreAuthorize("hasAnyRole('OWNER', 'MANAGER')")
+    public List<OrderNoteResponse> listNotes(@PathVariable UUID orderId) {
+        return notesService.list(orderId).stream()
+            .map(n -> new OrderNoteResponse(n.id(), n.body(), n.authorName(), n.createdAt()))
+            .toList();
+    }
+
+    @PostMapping("/{orderId}/notes")
+    @PreAuthorize("hasAnyRole('OWNER', 'MANAGER')")
+    public OrderNoteResponse addNote(@PathVariable UUID orderId,
+                                     @RequestBody CreateNoteRequest req,
+                                     @AuthenticationPrincipal CustomUserDetails principal) {
+        OrderNotesService.OrderNote note = notesService.add(orderId, req.body(), principal.userId());
+        return new OrderNoteResponse(note.id(), note.body(), note.authorName(), note.createdAt());
     }
 
     // Consecutive-collapse fold key (2b) — mirrors groupHistory()'s frontend precedent

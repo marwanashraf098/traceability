@@ -328,7 +328,12 @@
       "timelineError": "تعذّر تحميل النشاط",
       "lastUpdated": "آخر تحديث {{time}}",
       "close": "إغلاق",
-      "notesEmpty": "لا توجد ملاحظات بعد"
+      "notesEmpty": "لا توجد ملاحظات بعد — أضف أول ملاحظة.",
+      "notes": {
+        "placeholder": "أضف ملاحظة حول هذا الطلب",
+        "addButton": "إضافة ملاحظة",
+        "error": "تعذّر تحميل الملاحظات"
+      }
     },
     "timeline": {
       "system": "النظام",

@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.traceability.fulfillment.OrderController;
 import com.traceability.fulfillment.OrderController.FunnelCounts;
 import com.traceability.fulfillment.OrderController.OrderSummaryCounts;
+import com.traceability.fulfillment.OrderNotesService;
 import com.traceability.tenancy.TenantAwareDataSource;
 import com.traceability.tenancy.TenantContext;
 import org.junit.jupiter.api.*;
@@ -93,7 +94,7 @@ class OrderSummaryTest {
 
     @BeforeAll
     void setupFixture() {
-        controller = new OrderController(jdbc, mapper, txm);
+        controller = new OrderController(jdbc, mapper, txm, new OrderNotesService(jdbc));
         tx         = new TransactionTemplate(txm);
 
         tenantId      = UUID.randomUUID();
@@ -308,7 +309,7 @@ class OrderSummaryTest {
     void rls_summary_sameTenantPositiveControl_crossTenantNegativeControl() {
         insertOrder("SUMMARY-RLS", "new");
 
-        OrderController appUserController = new OrderController(appUserJdbc, mapper, appUserTxm);
+        OrderController appUserController = new OrderController(appUserJdbc, mapper, appUserTxm, new OrderNotesService(appUserJdbc));
 
         // Positive control: app_user WITH the correct tenant GUC sees this tenant's orders.
         OrderSummaryCounts sameTenant = TenantContext.runAs(tenantId,

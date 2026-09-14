@@ -7,6 +7,8 @@ import com.traceability.fulfillment.OrderController.OrderPage;
 import com.traceability.fulfillment.OrderController.OrderSummary;
 import com.traceability.fulfillment.OrderController.ShipmentDetail;
 import com.traceability.fulfillment.OrderController.TimelineItem;
+import com.traceability.fulfillment.OrderNotesService;
+import com.traceability.identity.CustomUserDetails;
 import com.traceability.fulfillment.OrderStatusDeriver.DerivedOrderStatus;
 import com.traceability.fulfillment.OrderStatusDeriver.Tone;
 import com.traceability.tenancy.TenantAwareDataSource;
@@ -20,6 +22,7 @@ import org.springframework.jdbc.datasource.DriverManagerDataSource;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.server.ResponseStatusException;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
@@ -79,6 +82,12 @@ class OrderStatusListDetailParityTest {
     // app_user infrastructure for the RLS test — mirrors DeliveryStatusTest's appUserJdbc/Tx.
     private JdbcTemplate        appUserJdbc;
     private PlatformTransactionManager appUserTxm;
+    // Notes-only: OrderNotesService uses @Transactional (Spring AOP), which is inert on a
+    // manually-`new`'d instance (same caveat as InventoryLedgerTest's appUserLedger) — the
+    // GUC only fires on a real setAutoCommit(false) transition (TenantAwareConnection), so
+    // calls must be wrapped in this TransactionTemplate explicitly, exactly like
+    // OrderSummaryTest's rls_summary test wraps appUserController.summary().
+    private TransactionTemplate appUserTx;
 
     private OrderController controller;
 
@@ -91,11 +100,12 @@ class OrderStatusListDetailParityTest {
         TenantAwareDataSource appDs = new TenantAwareDataSource(rawDs);
         appUserJdbc = new JdbcTemplate(appDs);
         appUserTxm  = new DataSourceTransactionManager(appDs);
+        appUserTx   = new TransactionTemplate(appUserTxm);
     }
 
     @BeforeAll
     void setupFixture() {
-        controller = new OrderController(jdbc, mapper, txm);
+        controller = new OrderController(jdbc, mapper, txm, new OrderNotesService(jdbc));
 
         tenantId      = UUID.randomUUID();
         otherTenantId = UUID.randomUUID();
@@ -129,6 +139,12 @@ class OrderStatusListDetailParityTest {
             "    payment_method, placed_at) " +
             "VALUES (?, ?, ?, ?, ?::order_status, 'cod', now()) RETURNING id",
             UUID.class, tenantId, storeId, extId, "#" + extId, status);
+    }
+
+    private UUID insertUser(UUID tenantId, String name) {
+        return jdbc.queryForObject(
+            "INSERT INTO users (tenant_id, name, role) VALUES (?, ?, 'owner'::user_role) RETURNING id",
+            UUID.class, tenantId, name);
     }
 
     private UUID insertForwardShipment(UUID orderId, String tracking, String state,
@@ -456,7 +472,7 @@ class OrderStatusListDetailParityTest {
         UUID orderId = insertOrder("PARITY-RLS", "new");
         insertForwardShipment(orderId, "9810234564", "created", 0, 0);
 
-        OrderController appUserController = new OrderController(appUserJdbc, mapper, appUserTxm);
+        OrderController appUserController = new OrderController(appUserJdbc, mapper, appUserTxm, new OrderNotesService(appUserJdbc));
 
         // Positive control: app_user WITH the correct tenant GUC can fetch its own order.
         OrderDetail found = TenantContext.runAs(tenantId, () -> appUserController.detail(orderId));
@@ -483,7 +499,7 @@ class OrderStatusListDetailParityTest {
 
     @Test
     void rls_list_deliveryStateFilter_sameTenantPositiveControl_forEveryTabState() {
-        OrderController appUserController = new OrderController(appUserJdbc, mapper, appUserTxm);
+        OrderController appUserController = new OrderController(appUserJdbc, mapper, appUserTxm, new OrderNotesService(appUserJdbc));
 
         for (String state : List.of("with_courier", "delivered", "returned")) {
             UUID orderId = insertOrder("DSF-POS-" + state, "with_courier");
@@ -503,7 +519,7 @@ class OrderStatusListDetailParityTest {
         UUID orderId = insertOrder("DSF-NEG", "with_courier");
         insertForwardShipment(orderId, "DSF-TRK-NEG", "with_courier", 1, 0);
 
-        OrderController appUserController = new OrderController(appUserJdbc, mapper, appUserTxm);
+        OrderController appUserController = new OrderController(appUserJdbc, mapper, appUserTxm, new OrderNotesService(appUserJdbc));
 
         // Same filter, different tenant's GUC — the seeded row must not leak across
         // tenants through the new predicate (an empty page here, not a 404 — list()
@@ -528,7 +544,7 @@ class OrderStatusListDetailParityTest {
         insertHistoryAt(shipmentId, "created", t0.plus(4, ChronoUnit.HOURS), null, null);
         insertHistoryAt(shipmentId, "with_courier", t0.plus(5, ChronoUnit.HOURS), null, null);
 
-        OrderController appUserController = new OrderController(appUserJdbc, mapper, appUserTxm);
+        OrderController appUserController = new OrderController(appUserJdbc, mapper, appUserTxm, new OrderNotesService(appUserJdbc));
 
         // Positive control: app_user WITH the correct tenant GUC sees the full, correctly
         // ordered, seeded timeline — proves this isn't a silent-empty-page RLS/GUC bug
@@ -556,6 +572,65 @@ class OrderStatusListDetailParityTest {
             .as("app_user under a different tenant's GUC must not see this order's timeline")
             .isInstanceOf(ResponseStatusException.class)
             .hasMessageContaining("404");
+    }
+
+    // ── Notes (drawer Notes tab) ─────────────────────────────────────────────
+
+    @Test
+    void rls_notes_sameTenantPositiveControl_authorResolved_orderedNewestFirst_crossTenantNegativeControl() {
+        UUID orderId = insertOrder("NOTES-RLS", "new");
+        UUID authorId = insertUser(tenantId, "Notes Author");
+        CustomUserDetails author = new CustomUserDetails(authorId, tenantId, "owner", null);
+
+        OrderController appUserController = new OrderController(appUserJdbc, mapper, appUserTxm, new OrderNotesService(appUserJdbc));
+
+        // Positive control: app_user WITH the correct tenant GUC can add and list notes on
+        // its own order — proves the endpoint actually reaches the row, not a silent-empty
+        // page wearing a "no notes yet" costume. OrderNotesService's @Transactional is
+        // inert on this manually-`new`'d instance, so each call is wrapped in appUserTx
+        // explicitly — the GUC only fires on a real setAutoCommit(false) transition.
+        OrderController.OrderNoteResponse first = TenantContext.runAs(tenantId, () -> appUserTx.execute(status ->
+            appUserController.addNote(orderId, new OrderController.CreateNoteRequest("First note"), author)));
+        assertThat(first.body()).isEqualTo("First note");
+        assertThat(first.authorName()).isEqualTo("Notes Author");
+        assertThat(first.createdAt()).isNotNull();
+
+        OrderController.OrderNoteResponse second = TenantContext.runAs(tenantId, () -> appUserTx.execute(status ->
+            appUserController.addNote(orderId, new OrderController.CreateNoteRequest("  Second note  "), author)));
+        assertThat(second.body())
+            .as("body is trimmed before storage")
+            .isEqualTo("Second note");
+
+        List<OrderController.OrderNoteResponse> notes = TenantContext.runAs(tenantId, () -> appUserTx.execute(status ->
+            appUserController.listNotes(orderId)));
+        assertThat(notes).extracting(OrderController.OrderNoteResponse::body)
+            .as("newest first — created_at DESC, id DESC")
+            .containsExactly("Second note", "First note");
+        assertThat(notes).allMatch(n -> "Notes Author".equals(n.authorName()));
+
+        // Negative control: app_user under a DIFFERENT tenant's GUC cannot see this order
+        // (or its notes) at all — 404, matching detail()/timeline()'s existing contract.
+        assertThatThrownBy(() -> TenantContext.runAs(otherTenantId,
+                () -> appUserTx.execute(status -> appUserController.listNotes(orderId))))
+            .as("app_user under a different tenant's GUC must not see this order's notes")
+            .isInstanceOf(ResponseStatusException.class)
+            .hasMessageContaining("404");
+        assertThatThrownBy(() -> TenantContext.runAs(otherTenantId, () -> appUserTx.execute(status ->
+                appUserController.addNote(orderId, new OrderController.CreateNoteRequest("Intruding note"), author))))
+            .as("app_user under a different tenant's GUC must not be able to attach a note to this order")
+            .isInstanceOf(ResponseStatusException.class)
+            .hasMessageContaining("404");
+    }
+
+    @Test
+    void notes_blankBody_rejected() {
+        UUID orderId = insertOrder("NOTES-BLANK", "new");
+        UUID authorId = insertUser(tenantId, "Blank Body Author");
+        CustomUserDetails author = new CustomUserDetails(authorId, tenantId, "owner", null);
+
+        assertThatThrownBy(() -> controller.addNote(orderId, new OrderController.CreateNoteRequest("   "), author))
+            .isInstanceOf(ResponseStatusException.class)
+            .hasMessageContaining("400");
     }
 
     @Test
