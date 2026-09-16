@@ -78,6 +78,7 @@ class OrderStatusListDetailParityTest {
     @Autowired JdbcTemplate              jdbc;
     @Autowired ObjectMapper              mapper;
     @Autowired PlatformTransactionManager txm;
+    @Autowired com.traceability.inventory.FulfillService fulfillService;
 
     // app_user infrastructure for the RLS test — mirrors DeliveryStatusTest's appUserJdbc/Tx.
     private JdbcTemplate        appUserJdbc;
@@ -105,7 +106,7 @@ class OrderStatusListDetailParityTest {
 
     @BeforeAll
     void setupFixture() {
-        controller = new OrderController(jdbc, mapper, txm, new OrderNotesService(jdbc));
+        controller = new OrderController(jdbc, mapper, txm, new OrderNotesService(jdbc), fulfillService);
 
         tenantId      = UUID.randomUUID();
         otherTenantId = UUID.randomUUID();
@@ -472,7 +473,7 @@ class OrderStatusListDetailParityTest {
         UUID orderId = insertOrder("PARITY-RLS", "new");
         insertForwardShipment(orderId, "9810234564", "created", 0, 0);
 
-        OrderController appUserController = new OrderController(appUserJdbc, mapper, appUserTxm, new OrderNotesService(appUserJdbc));
+        OrderController appUserController = new OrderController(appUserJdbc, mapper, appUserTxm, new OrderNotesService(appUserJdbc), fulfillService);
 
         // Positive control: app_user WITH the correct tenant GUC can fetch its own order.
         OrderDetail found = TenantContext.runAs(tenantId, () -> appUserController.detail(orderId));
@@ -499,7 +500,7 @@ class OrderStatusListDetailParityTest {
 
     @Test
     void rls_list_deliveryStateFilter_sameTenantPositiveControl_forEveryTabState() {
-        OrderController appUserController = new OrderController(appUserJdbc, mapper, appUserTxm, new OrderNotesService(appUserJdbc));
+        OrderController appUserController = new OrderController(appUserJdbc, mapper, appUserTxm, new OrderNotesService(appUserJdbc), fulfillService);
 
         for (String state : List.of("with_courier", "delivered", "returned")) {
             UUID orderId = insertOrder("DSF-POS-" + state, "with_courier");
@@ -519,7 +520,7 @@ class OrderStatusListDetailParityTest {
         UUID orderId = insertOrder("DSF-NEG", "with_courier");
         insertForwardShipment(orderId, "DSF-TRK-NEG", "with_courier", 1, 0);
 
-        OrderController appUserController = new OrderController(appUserJdbc, mapper, appUserTxm, new OrderNotesService(appUserJdbc));
+        OrderController appUserController = new OrderController(appUserJdbc, mapper, appUserTxm, new OrderNotesService(appUserJdbc), fulfillService);
 
         // Same filter, different tenant's GUC — the seeded row must not leak across
         // tenants through the new predicate (an empty page here, not a 404 — list()
@@ -544,7 +545,7 @@ class OrderStatusListDetailParityTest {
         insertHistoryAt(shipmentId, "created", t0.plus(4, ChronoUnit.HOURS), null, null);
         insertHistoryAt(shipmentId, "with_courier", t0.plus(5, ChronoUnit.HOURS), null, null);
 
-        OrderController appUserController = new OrderController(appUserJdbc, mapper, appUserTxm, new OrderNotesService(appUserJdbc));
+        OrderController appUserController = new OrderController(appUserJdbc, mapper, appUserTxm, new OrderNotesService(appUserJdbc), fulfillService);
 
         // Positive control: app_user WITH the correct tenant GUC sees the full, correctly
         // ordered, seeded timeline — proves this isn't a silent-empty-page RLS/GUC bug
@@ -582,7 +583,7 @@ class OrderStatusListDetailParityTest {
         UUID authorId = insertUser(tenantId, "Notes Author");
         CustomUserDetails author = new CustomUserDetails(authorId, tenantId, "owner", null);
 
-        OrderController appUserController = new OrderController(appUserJdbc, mapper, appUserTxm, new OrderNotesService(appUserJdbc));
+        OrderController appUserController = new OrderController(appUserJdbc, mapper, appUserTxm, new OrderNotesService(appUserJdbc), fulfillService);
 
         // Positive control: app_user WITH the correct tenant GUC can add and list notes on
         // its own order — proves the endpoint actually reaches the row, not a silent-empty

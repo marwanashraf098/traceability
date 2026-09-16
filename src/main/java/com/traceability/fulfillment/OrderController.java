@@ -3,6 +3,8 @@ package com.traceability.fulfillment;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.traceability.identity.CustomUserDetails;
+import com.traceability.inventory.FulfillService;
+import com.traceability.tenancy.TenantContext;
 import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.security.access.prepost.PreAuthorize;
@@ -27,13 +29,16 @@ public class OrderController {
     private final ObjectMapper mapper;
     private final TransactionTemplate tx;
     private final OrderNotesService notesService;
+    private final FulfillService fulfillService;
 
     public OrderController(JdbcTemplate jdbc, ObjectMapper mapper,
-                           PlatformTransactionManager txm, OrderNotesService notesService) {
+                           PlatformTransactionManager txm, OrderNotesService notesService,
+                           FulfillService fulfillService) {
         this.jdbc   = jdbc;
         this.mapper = mapper;
         this.tx     = new TransactionTemplate(txm);
         this.notesService = notesService;
+        this.fulfillService = fulfillService;
     }
 
     // ── response records ─────────────────────────────────────────────────────
@@ -91,7 +96,13 @@ public class OrderController {
         // Pre-built from stores.shop_domain + orders.external_id (Shopify GID form, e.g.
         // "gid://shopify/Order/123"); null whenever either input is missing/unparseable, in
         // which case the frontend omits the button rather than rendering a dead link.
-        String shopifyOrderUrl) {}
+        String shopifyOrderUrl,
+        // "Physically with Bosta" gate — same predicate FulfillService.cancelOrder()/
+        // holdOrder() enforce server-side (FulfillService.isPhysicallyWithCourier(),
+        // history-based). Server still returns 409 on a forced call; this field only lets
+        // the drawer disable Hold/Cancel proactively without a second (client-side)
+        // derivation of the same query.
+        boolean physicallyWithCourier) {}
 
     // ── fulfillment funnel — today (Overview dashboard) ─────────────────────
 
@@ -639,7 +650,8 @@ public class OrderController {
                         rs.getTimestamp("not_traced_at") != null ? rs.getTimestamp("not_traced_at").toInstant() : null,
                         rs.getBoolean("is_exchange"),
                         null,  // derivedStatus filled below
-                        buildShopifyOrderUrl(rs.getString("shop_domain"), rs.getString("external_id"))
+                        buildShopifyOrderUrl(rs.getString("shop_domain"), rs.getString("external_id")),
+                        false  // physicallyWithCourier filled below
                     );
                 }, orderId);
 
@@ -820,13 +832,18 @@ public class OrderController {
                 fwd != null ? (Boolean) fwd.get("sla_breached") : null,
                 order.notTracedAt() != null);
 
+            // Same predicate FulfillService.cancelOrder()/holdOrder() enforce — one query,
+            // no second derivation (see FulfillService.isPhysicallyWithCourier()).
+            boolean physicallyWithCourier =
+                fulfillService.isPhysicallyWithCourier(orderId, TenantContext.require());
+
             return new OrderDetail(
                 order.id(), order.number(), order.customerName(), order.customerPhone(),
                 order.address(), order.paymentMethod(), order.codAmount(),
                 order.status(), order.onHold(), order.holdReason(),
                 order.placedAt(), order.createdAt(),
                 items, shipments, order.bostaLinkStatus(), order.notTracedAt(),
-                order.isExchange(), derived, order.shopifyOrderUrl());
+                order.isExchange(), derived, order.shopifyOrderUrl(), physicallyWithCourier);
         });
     }
 

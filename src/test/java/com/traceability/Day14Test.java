@@ -281,6 +281,20 @@ class Day14Test {
         jdbc.update("UPDATE orders SET status = 'with_courier'::order_status WHERE id = ?", orderId);
         jdbc.update("UPDATE pieces SET status = 'with_courier'::piece_status WHERE id = ?", pieceId);
 
+        // Gate is history-based (FulfillService.isPhysicallyWithCourier(), see
+        // hasEverShippedPastCreated()) — a forced orders.status update alone no longer
+        // blocks cancel; a real forward shipment with courier-progress history is required.
+        UUID shipmentId = jdbc.queryForObject(
+            "INSERT INTO shipments (tenant_id, order_id, provider, tracking_number, " +
+            "    internal_state, shipment_leg) " +
+            "VALUES (?, ?, 'bosta', ?, 'with_courier'::shipment_internal_state, 'forward') " +
+            "RETURNING id",
+            UUID.class, tenantId, orderId, "D14F-" + orderId);
+        jdbc.update(
+            "INSERT INTO shipment_status_history (tenant_id, shipment_id, internal_state) " +
+            "VALUES (?, ?, 'with_courier')",
+            tenantId, shipmentId);
+
         TenantContext.set(tenantId);
         assertThatThrownBy(() -> fulfillSvc.cancelOrder(orderId, actorId))
             .isInstanceOf(ResponseStatusException.class)

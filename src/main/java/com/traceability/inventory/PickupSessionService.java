@@ -365,6 +365,23 @@ public class PickupSessionService {
                         WHERE id = ? AND tenant_id = ?
                         """, sh.shipmentId(), tenantId);
 
+                    // Journal the handover into shipment_status_history so a "physically
+                    // with courier" read (FulfillService.hasEverShippedPastCreated()) is
+                    // true from this moment, even before any Bosta webhook confirms it —
+                    // closes the blind window between physical handover and Bosta catching
+                    // up. webhook_event_id is deliberately NULL: there is no webhook event
+                    // for this manual action, and NULL is what the unique index on
+                    // webhook_event_id (V40, WHERE webhook_event_id IS NOT NULL) exempts,
+                    // so a shipment re-scanned into a later pickup session after a failed
+                    // handover can insert another row here without conflict. Do not
+                    // fabricate a provider_state or webhook_event_id.
+                    jdbc.update("""
+                        INSERT INTO shipment_status_history
+                            (tenant_id, shipment_id, internal_state, provider_state,
+                             exception_code, exception_reason, occurred_at, webhook_event_id)
+                        VALUES (?, ?, 'with_courier', NULL, NULL, NULL, now(), NULL)
+                        """, tenantId, sh.shipmentId());
+
                     // Transition pieces: packed/awaiting_pickup → with_courier.
                     record PieceRow(String id, String status) {}
                     List<PieceRow> pieces = jdbc.query(

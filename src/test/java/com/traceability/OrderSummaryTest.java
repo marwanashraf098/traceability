@@ -62,6 +62,7 @@ class OrderSummaryTest {
     @Autowired JdbcTemplate               jdbc;
     @Autowired ObjectMapper               mapper;
     @Autowired PlatformTransactionManager txm;
+    @Autowired com.traceability.inventory.FulfillService fulfillService;
 
     // app_user infrastructure for the RLS test — mirrors OrderStatusListDetailParityTest.
     private JdbcTemplate               appUserJdbc;
@@ -94,7 +95,7 @@ class OrderSummaryTest {
 
     @BeforeAll
     void setupFixture() {
-        controller = new OrderController(jdbc, mapper, txm, new OrderNotesService(jdbc));
+        controller = new OrderController(jdbc, mapper, txm, new OrderNotesService(jdbc), fulfillService);
         tx         = new TransactionTemplate(txm);
 
         tenantId      = UUID.randomUUID();
@@ -309,7 +310,7 @@ class OrderSummaryTest {
     void rls_summary_sameTenantPositiveControl_crossTenantNegativeControl() {
         insertOrder("SUMMARY-RLS", "new");
 
-        OrderController appUserController = new OrderController(appUserJdbc, mapper, appUserTxm, new OrderNotesService(appUserJdbc));
+        OrderController appUserController = new OrderController(appUserJdbc, mapper, appUserTxm, new OrderNotesService(appUserJdbc), fulfillService);
 
         // Positive control: app_user WITH the correct tenant GUC sees this tenant's orders.
         OrderSummaryCounts sameTenant = TenantContext.runAs(tenantId,

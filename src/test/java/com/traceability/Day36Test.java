@@ -26,12 +26,16 @@ import static org.assertj.core.api.Assertions.assertThat;
  * Tests call FulfillService.handleShopifyLineItemEdit() directly (the routing + release
  * method) with a pre-computed diff, avoiding the need to mock ShopifyGateway.
  *
- * r1 — picking, line removed → allocations released, pieces→Available, exception raised
- * r2 — picking, qty 3→1 → exactly 2 pieces released, 1 still allocated, diff correct
- * r3 — picking, qty increased / line added → exception, NO auto-allocation, allocations untouched
- * r4 — new/ready_to_pick edited → line items update, NO release, NO exception
+ * r1 — mid-pick (real 'new' status + a real active allocation), line removed → allocations
+ *      released, pieces→Available, exception raised. Genuinely reproduces "actively being
+ *      picked" via allocations.status='active', not the fictional 'picking' order_status
+ *      (orders.status is never actually set to that value — see FulfillService's own
+ *      PAST_PACKING_STATUSES doc comment).
+ * r2 — mid-pick, qty 3→1 → exactly 2 pieces released, 1 still allocated, diff correct
+ * r3 — mid-pick, qty increased / line added → exception, NO auto-allocation, allocations untouched
+ * r4 — new/ready_to_pick edited, NO active allocation yet → line items update, NO release, NO exception
  * r5 — packed order edited → exception raised, allocations + pieces UNTOUCHED
- * r6 — with_courier edited → exception only, nothing released
+ * r6 — awaiting_pickup edited → exception only, nothing released
  * r7 — released events attributed to null (SHOPIFY_WEBHOOK_ACTOR sentinel)
  * r8 — double handleShopifyLineItemEdit → single release, single exception
  * r9 — tenant isolation: edit signal on tenantA order not visible under tenantB
@@ -108,10 +112,11 @@ class Day36Test {
         jdbc.update("DELETE FROM pieces WHERE tenant_id = ?",                          tenantA);
     }
 
-    // r1: picking order, line removed → allocations released, pieces→Available, exception raised
+    // r1: mid-pick order (real 'new' status + a real active allocation), line removed →
+    // allocations released, pieces→Available, exception raised.
     @Test
     void r1_pickingOrder_lineRemoved_allocationsReleasedAndExceptionRaised() {
-        UUID   orderId = createOrder("picking");
+        UUID   orderId = createOrder("new");
         UUID   itemId  = addOrderItem(orderId, EXT_A, 2);
         String p1      = receivePiece();
         String p2      = receivePiece();
@@ -121,7 +126,7 @@ class Day36Test {
         TenantContext.set(tenantA);
         try {
             fulfillSvc.handleShopifyLineItemEdit(
-                orderId, "picking",
+                orderId, "new",
                 "{\"removed\":[\"" + EXT_A + "\"],\"reduced\":{},\"added\":[],\"increased\":{}}",
                 List.of(EXT_A),   // removed external IDs
                 Map.of()          // releaseCountByExternalId (fully removed, not partial)
@@ -141,10 +146,10 @@ class Day36Test {
         assertEditConflictSignaled(orderId);
     }
 
-    // r2: picking, qty 3→1 → exactly 2 pieces released, 1 still allocated
+    // r2: mid-pick, qty 3→1 → exactly 2 pieces released, 1 still allocated
     @Test
     void r2_pickingOrder_qtyReduced_exactlyTwoPiecesReleased_oneRemains() {
-        UUID   orderId = createOrder("picking");
+        UUID   orderId = createOrder("new");
         UUID   itemId  = addOrderItem(orderId, EXT_A, 3);
         String p1      = receivePiece();
         String p2      = receivePiece();
@@ -157,7 +162,7 @@ class Day36Test {
         try {
             // qty 3→1: release 2
             fulfillSvc.handleShopifyLineItemEdit(
-                orderId, "picking",
+                orderId, "new",
                 "{\"reduced\":{\"" + EXT_A + "\":[3,1]}}",
                 List.of(),
                 Map.of(EXT_A, 2)   // release 2 (= 3-1)
@@ -179,10 +184,10 @@ class Day36Test {
         assertEditConflictSignaled(orderId);
     }
 
-    // r3: picking, qty increased / line added → exception, NO auto-allocation, allocations untouched
+    // r3: mid-pick, qty increased / line added → exception, NO auto-allocation, allocations untouched
     @Test
     void r3_pickingOrder_lineAdded_noAutoAllocation_existingAllocsUntouched() {
-        UUID   orderId = createOrder("picking");
+        UUID   orderId = createOrder("new");
         UUID   itemId  = addOrderItem(orderId, EXT_A, 1);
         String p1      = receivePiece();
         reservePiece(p1, orderId, itemId);
@@ -191,7 +196,7 @@ class Day36Test {
         try {
             // Line B is new (added), line A qty unchanged — but diff still reports changes
             fulfillSvc.handleShopifyLineItemEdit(
-                orderId, "picking",
+                orderId, "new",
                 "{\"removed\":[],\"reduced\":{},\"added\":[\"" + EXT_B + "\"],\"increased\":{}}",
                 List.of(),   // no removals
                 Map.of()     // no reductions
@@ -205,6 +210,40 @@ class Day36Test {
         assertThat(activeAllocCount(orderId)).isEqualTo(1);
 
         // Exception signal still raised (operator must handle the added line)
+        assertEditConflictSignaled(orderId);
+    }
+
+    // r3b: THE production-leak repro. status='ready_to_pick' (the other real pre-pack raw
+    // status, distinct from r1/r2/r3/r7/r8's 'new') with a REAL active allocation — i.e. a
+    // worker has already scanned a piece to this order, so it's genuinely being picked
+    // right now, even though orders.status still reads 'ready_to_pick' (orders.status is
+    // never advanced to 'picking' by any code path — confirmed by a full-repo grep). Before
+    // the fix, this order fell into the old PRE_PICK_STATUSES early-return and both the
+    // allocation release and the exception silently never fired — the exact bug reported
+    // in production. Verified by stashing just the fix (FulfillService.java) and re-running
+    // this test: it fails with the piece still 'reserved' and no conflict signal, proving
+    // the leak; restored, it passes.
+    @Test
+    void r3b_readyToPickOrder_realActiveAllocation_lineRemoved_releasedAndExceptionRaised() {
+        UUID   orderId = createOrder("ready_to_pick");
+        UUID   itemId  = addOrderItem(orderId, EXT_A, 1);
+        String p1      = receivePiece();
+        reservePiece(p1, orderId, itemId);
+
+        TenantContext.set(tenantA);
+        try {
+            fulfillSvc.handleShopifyLineItemEdit(
+                orderId, "ready_to_pick",
+                "{\"removed\":[\"" + EXT_A + "\"]}",
+                List.of(EXT_A),
+                Map.of()
+            );
+        } finally {
+            TenantContext.clear();
+        }
+
+        assertThat(pieceStatus(p1)).isEqualTo("available");
+        assertThat(activeAllocCount(orderId)).isZero();
         assertEditConflictSignaled(orderId);
     }
 
@@ -268,16 +307,19 @@ class Day36Test {
         assertEditConflictSignaled(orderId);
     }
 
-    // r6: with_courier edited → exception only, nothing released
+    // r6: awaiting_pickup edited → exception only, nothing released. (Previously used the
+    // synthetic 'with_courier' status — orders.status is never actually set to that value
+    // either; 'awaiting_pickup' is the real value this codebase settles on for every
+    // courier-fulfilled order past packing, and it's the one PAST_PACKING_STATUSES checks.)
     @Test
     void r6_withCourierOrder_lineEdited_exceptionOnlyNothingReleased() {
-        UUID orderId = createOrder("with_courier");
+        UUID orderId = createOrder("awaiting_pickup");
         addOrderItem(orderId, EXT_A, 1);
 
         TenantContext.set(tenantA);
         try {
             fulfillSvc.handleShopifyLineItemEdit(
-                orderId, "with_courier",
+                orderId, "awaiting_pickup",
                 "{\"removed\":[\"" + EXT_A + "\"]}",
                 List.of(EXT_A),
                 Map.of()
@@ -299,7 +341,7 @@ class Day36Test {
     // r7: released piece events carry actor_user_id = null (SHOPIFY_WEBHOOK_ACTOR sentinel)
     @Test
     void r7_releasedEvents_attributedToWebhookSentinel_actorIsNull() {
-        UUID   orderId = createOrder("picking");
+        UUID   orderId = createOrder("new");
         UUID   itemId  = addOrderItem(orderId, EXT_A, 1);
         String p1      = receivePiece();
         reservePiece(p1, orderId, itemId);
@@ -307,7 +349,7 @@ class Day36Test {
         TenantContext.set(tenantA);
         try {
             fulfillSvc.handleShopifyLineItemEdit(
-                orderId, "picking",
+                orderId, "new",
                 "{\"removed\":[\"" + EXT_A + "\"]}",
                 List.of(EXT_A),
                 Map.of()
@@ -327,7 +369,7 @@ class Day36Test {
     // r8: calling handleShopifyLineItemEdit twice → single release, single exception
     @Test
     void r8_doubleHandleEdit_singleRelease_singleException() {
-        UUID   orderId = createOrder("picking");
+        UUID   orderId = createOrder("new");
         UUID   itemId  = addOrderItem(orderId, EXT_A, 1);
         String p1      = receivePiece();
         reservePiece(p1, orderId, itemId);
@@ -338,10 +380,10 @@ class Day36Test {
             List<String> removed = List.of(EXT_A);
 
             // First call: releases p1
-            fulfillSvc.handleShopifyLineItemEdit(orderId, "picking", diffJson, removed, Map.of());
+            fulfillSvc.handleShopifyLineItemEdit(orderId, "new", diffJson, removed, Map.of());
 
             // Second call: piece already available, ledger catches the conflict, allocation already released
-            fulfillSvc.handleShopifyLineItemEdit(orderId, "picking", diffJson, removed, Map.of());
+            fulfillSvc.handleShopifyLineItemEdit(orderId, "new", diffJson, removed, Map.of());
         } finally {
             TenantContext.clear();
         }

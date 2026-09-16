@@ -742,7 +742,8 @@ public class FulfillService {
      * - Pre-pack (reserved pieces only): auto-releases → order → cancelled (200).
      * - Post-pack (packed pieces): sets cancel_requested_at; returns 202 with
      *   remaining packed count. Worker must unpack each piece via unpackPiece().
-     * - With courier (awaiting_pickup / with_courier): 409 — pieces are at Bosta.
+     * - Physically with courier (isPhysicallyWithCourier(), history-based — see
+     *   FulfillService.hasEverShippedPastCreated()): 409 — pieces are at Bosta.
      */
     @Transactional(isolation = Isolation.READ_COMMITTED)
     public void releaseHold(UUID orderId, UUID actorUserId) {
@@ -764,12 +765,26 @@ public class FulfillService {
         auditService.record(actorUserId, "release_hold", "order", orderId.toString(), null);
     }
 
-    /** FR-7.4 — Manually hold an order with a required reason. */
+    /**
+     * FR-7.4 — Manually hold an order with a required reason.
+     *
+     * Gated on isPhysicallyWithCourier() (same predicate as cancelOrder()) — an order
+     * already handed to the courier can't be held back from picking, since picking is
+     * already done. This was previously ungated. releaseHold() above is deliberately
+     * NOT gated — releasing a hold must stay allowed even when with-courier.
+     */
     @Transactional(isolation = Isolation.READ_COMMITTED)
     public void holdOrder(UUID orderId, UUID actorUserId, String reason) {
         if (reason == null || reason.isBlank())
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Hold reason is required");
         UUID tenantId = TenantContext.require();
+
+        if (isPhysicallyWithCourier(orderId, tenantId)) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                "Order has been handed to courier — contact Bosta to arrange cancellation. " +
+                "Pieces will be released once the courier returns them.");
+        }
+
         int updated = jdbc.update(
             "UPDATE orders SET on_hold = true, hold_reason = ? " +
             "WHERE id = ? AND tenant_id = ? AND on_hold = false",
@@ -828,8 +843,7 @@ public class FulfillService {
             throw new ResponseStatusException(HttpStatus.CONFLICT,
                 "Order is already in terminal status: " + status);
         }
-        if ("with_courier".equals(status) || "awaiting_pickup".equals(status) ||
-            "returning".equals(status)) {
+        if (isPhysicallyWithCourier(orderId, tenantId)) {
             throw new ResponseStatusException(HttpStatus.CONFLICT,
                 "Order has been handed to courier — contact Bosta to arrange cancellation. " +
                 "Pieces will be released once the courier returns them.");
@@ -1000,6 +1014,17 @@ public class FulfillService {
         return Boolean.TRUE.equals(exists);
     }
 
+    /**
+     * Public "physically with Bosta" gate — the SAME predicate and SQL as
+     * {@link #hasEverShippedPastCreated}, exposed under a clearer name for callers
+     * outside the pick-flow (cancelOrder(), holdOrder() below, and
+     * OrderController.detail()'s physicallyWithCourier field). One query, no
+     * second (SQL or client-side) derivation — every caller routes through this.
+     */
+    public boolean isPhysicallyWithCourier(UUID orderId, UUID tenantId) {
+        return hasEverShippedPastCreated(orderId, tenantId);
+    }
+
     private void requirePickableStatus(UUID orderId, UUID tenantId) {
         List<String> rows = jdbc.queryForList(
             "SELECT status FROM orders WHERE id = ? AND tenant_id = ?",
@@ -1060,26 +1085,37 @@ public class FulfillService {
     // actor_user_id = null in piece_events means no human is responsible.
     private static final UUID SHOPIFY_WEBHOOK_ACTOR = null;
 
-    private static final Set<String> NO_TOUCH_STATUSES = Set.of(
-        "packed", "self_pickup_pending", "awaiting_pickup",
-        "with_courier", "returning");
-
-    private static final Set<String> TERMINAL_STATUSES = Set.of(
-        "delivered", "returned", "lost", "cancelled");
-
-    private static final Set<String> PRE_PICK_STATUSES = Set.of(
-        "new", "confirmed", "ready_to_pick");
+    // The only order_status values FulfillService itself ever actually writes past pick
+    // start — see completePack()/ShipmentLinkService. 'with_courier'/'returning'/terminal
+    // values are NOT included here on purpose: nothing in this codebase ever sets
+    // orders.status to any of those either (it caps out at 'awaiting_pickup' and a
+    // shipment's own internal_state carries all further progress) — including them would
+    // be exactly the same "matching a value that never occurs" mistake this fix removes.
+    // An order that's genuinely terminal (delivered/returned/lost/cancelled) always has
+    // zero active allocations by the time it gets there (cancellation releases them;
+    // delivery never leaves them 'active') — see hasActiveAllocation() below, which
+    // handles that case correctly without needing its own explicit branch.
+    private static final Set<String> PAST_PACKING_STATUSES = Set.of(
+        "packed", "self_pickup_pending", "awaiting_pickup");
 
     /**
      * Handles the allocation and exception-signalling side of a Shopify line-item edit.
      * Called by ShopifyWebhookProcessorJob before the order-row upsert so the pre-edit
      * order_items are still intact for the release queries.
      *
-     * Routing by status:
-     *   - pre-pick (new/confirmed/ready_to_pick): no-op — caller upserts line items, that's all.
-     *   - picking: release active allocations for removed/reduced lines; raise exception.
-     *   - packed/self_pickup_pending/awaiting_pickup/with_courier/returning: no touch; raise exception.
-     *   - terminal: no-op — no exception, just let caller upsert.
+     * Routing (does NOT use the raw order_status "picking" value — orders.status is never
+     * actually set to 'picking' anywhere in this codebase, confirmed by a full-repo write-
+     * site grep; the previous version's {@code "picking".equals(orderStatus)} branch and
+     * its pre-pick early-return were both permanently unreachable/over-broad as a result —
+     * see the FR-3.6 diagnosis):
+     *   - past packing (packed/self_pickup_pending/awaiting_pickup, PAST_PACKING_STATUSES):
+     *     don't touch allocations, raise the exception. These ARE reliably written.
+     *   - otherwise, keyed on whether picking has actually started — an EXISTS check
+     *     against allocations.status='active' (the same ground truth getQueue()'s
+     *     scanned_units and VariantStockService's committed() derivation already use, and
+     *     the only signal that's synchronous with the real scan/unscan/pack actions):
+     *       - active allocation exists → release for removed/reduced lines, raise exception.
+     *       - none exist → true no-op (genuinely untouched order, or already-terminal one).
      *
      * @param orderId     order whose line items changed
      * @param orderStatus current order_status string (pre-edit)
@@ -1097,22 +1133,38 @@ public class FulfillService {
 
         UUID tenantId = TenantContext.require();
 
-        if (TERMINAL_STATUSES.contains(orderStatus) || PRE_PICK_STATUSES.contains(orderStatus)) {
-            return; // no allocation changes, no exception
+        if (PAST_PACKING_STATUSES.contains(orderStatus)) {
+            setEditConflictSignal(orderId, tenantId, diffJson);
+            return;
         }
 
-        if ("picking".equals(orderStatus)) {
-            // Release active allocations for fully removed lines
-            for (String extId : removedExternalIds) {
-                releaseActiveAllocsForItem(orderId, tenantId, extId, Integer.MAX_VALUE);
-            }
-            // Release excess allocations for reduced-qty lines
-            for (Map.Entry<String, Integer> e : releaseCountByExternalId.entrySet()) {
-                releaseActiveAllocsForItem(orderId, tenantId, e.getKey(), e.getValue());
-            }
+        if (!hasActiveAllocation(orderId, tenantId)) {
+            return; // nothing scanned yet (or already terminal) — no allocation changes, no exception
         }
-        // picking AND no-touch statuses both raise the exception
+
+        // Release active allocations for fully removed lines
+        for (String extId : removedExternalIds) {
+            releaseActiveAllocsForItem(orderId, tenantId, extId, Integer.MAX_VALUE);
+        }
+        // Release excess allocations for reduced-qty lines
+        for (Map.Entry<String, Integer> e : releaseCountByExternalId.entrySet()) {
+            releaseActiveAllocsForItem(orderId, tenantId, e.getKey(), e.getValue());
+        }
         setEditConflictSignal(orderId, tenantId, diffJson);
+    }
+
+    // Same active-allocation ground truth as getQueue()'s scanned_units / VariantStockService's
+    // committed() derivation — an order is "being picked right now" iff at least one of its
+    // order_items has an active (scanned-but-not-yet-packed) allocation, never a status string.
+    private boolean hasActiveAllocation(UUID orderId, UUID tenantId) {
+        Boolean exists = jdbc.queryForObject(
+            "SELECT EXISTS ( " +
+            "    SELECT 1 FROM allocations a " +
+            "    JOIN order_items oi ON oi.id = a.order_item_id " +
+            "    WHERE oi.order_id = ? AND oi.tenant_id = ? AND a.status = 'active' " +
+            ")",
+            Boolean.class, orderId, tenantId);
+        return Boolean.TRUE.equals(exists);
     }
 
     private void releaseActiveAllocsForItem(UUID orderId, UUID tenantId,
