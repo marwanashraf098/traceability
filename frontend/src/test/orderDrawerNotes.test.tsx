@@ -33,6 +33,7 @@ function makeOrderDetail(overrides: Partial<OrderDetail> = {}): OrderDetail {
       conflictKey: null, notTraced: false, packedConfirmed: true,
       fulfillmentKey: 'status.fulfilled', fulfillmentTone: 'SUCCESS',
     },
+    physicallyWithCourier: false,
     ...overrides,
   }
 }

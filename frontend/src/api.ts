@@ -235,6 +235,10 @@ export interface OrderDetail {
   // Orders-rebuild pass (a), drawer "View in Shopify" — null whenever the backend
   // couldn't resolve a shop domain + numeric order id; omit the button in that case.
   shopifyOrderUrl: string | null
+  // "Physically with Bosta" gate (FulfillService.isPhysicallyWithCourier(), history-based)
+  // — server still enforces this with a 409 on Hold/Cancel; this field only lets the
+  // drawer disable those actions proactively. Read as-is, never re-derived client-side.
+  physicallyWithCourier: boolean
 }
 
 export interface OrderListParams {
@@ -1240,10 +1244,13 @@ export function updateOrderCod(orderId: string, amount: number) {
   })
 }
 
+// FR-9.12/9.13 — POST /api/v1/fulfill/{orderId}/cancel (FulfillController.cancelOrder(),
+// backed by FulfillService.CancelResult). Was previously pointed at the non-existent
+// /orders/{id}/cancel — never called from any UI until now, so the wrong path went
+// unnoticed; fixed here as part of wiring up the drawer's Cancel button.
 export function cancelOrder(orderId: string) {
-  return request<{ status: string; message: string }>(`/orders/${orderId}/cancel`, {
-    method: 'POST',
-  })
+  return request<{ status: string; message: string; remainingPacked: number }>(
+    `/fulfill/${orderId}/cancel`, { method: 'POST' })
 }
 
 // ── Variant search (Receiving's autocomplete, reused by stock-take) ────────

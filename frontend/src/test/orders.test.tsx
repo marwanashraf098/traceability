@@ -129,6 +129,7 @@ function makeOrderDetail(overrides: Partial<IOrderDetail> = {}): IOrderDetail {
     isExchange: false,
     derivedStatus: makeDerivedStatus(),
     shopifyOrderUrl: null,
+    physicallyWithCourier: false,
     ...overrides,
   }
 }

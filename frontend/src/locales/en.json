@@ -435,6 +435,15 @@
     },
     "holdSuccess": "Order placed on hold",
     "unholdSuccess": "Hold released",
+    "cancelBtn": "Cancel order",
+    "cancelDialog": {
+      "title": "Cancel order",
+      "body": "Are you sure you want to cancel this order? This can't be undone.",
+      "confirm": "Cancel order"
+    },
+    "cancelSuccess": "Order cancelled",
+    "cancelError": "Couldn't cancel this order — try again",
+    "courierGatedReason": "Order has been handed to courier — contact Bosta to arrange cancellation. Pieces will be released once the courier returns them.",
     "codEdit": "Edit COD",
     "codSave": "Save",
     "codCancel": "Cancel",

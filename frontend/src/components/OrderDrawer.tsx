@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next'
 import type { TFunction } from 'i18next'
 import { X, ExternalLink, CheckCircle2, AlertTriangle, Truck, Package, Clock } from 'lucide-react'
 import {
-  getOrder, getOrderTimeline, holdOrder, releaseOrderHold,
+  getOrder, getOrderTimeline, holdOrder, releaseOrderHold, cancelOrder,
   getOrderNotes, addOrderNote,
   OrderDetail, TimelineItem, DerivedTone, OrderNote,
 } from '../api'
@@ -64,6 +64,13 @@ export default function OrderDrawer({
   const [holdBusy,   setHoldBusy]   = useState(false)
   const [holdErr,    setHoldErr]    = useState('')
 
+  // Cancel — same confirm-dialog shape as Hold, but no input: a plain destructive
+  // confirmation (mirrors UsersTab's deactivate-user dialog). Calls the existing
+  // api.ts cancelOrder() (FR-9.12/9.13, POST /fulfill/{orderId}/cancel).
+  const [cancelOpen, setCancelOpen] = useState(false)
+  const [cancelBusy, setCancelBusy] = useState(false)
+  const [cancelErr,  setCancelErr]  = useState('')
+
   const reload = () => {
     if (!orderId) return
     getOrder(orderId).then(setOrder).catch(() => {})
@@ -83,6 +90,27 @@ export default function OrderDrawer({
     if (!orderId) return
     try { await releaseOrderHold(orderId); reload() }
     catch { /* noop — reload regardless */ }
+  }
+
+  const handleCancel = async () => {
+    if (!orderId) return
+    setCancelBusy(true); setCancelErr('')
+    try {
+      await cancelOrder(orderId)
+      setCancelOpen(false); reload()
+    } catch (err: unknown) {
+      // request() throws `${status}: ${statusText}` (no body — see ApiExceptionHandler's
+      // bare-ResponseStatusException handler, which returns no body on purpose) — the
+      // gate's 409 is detected by status code, same pattern as UsersTab's `msg.includes('403')`.
+      // Its text is the same server copy shown for the gated disabled state (courierGatedReason),
+      // not a re-derivation — the drawer already prevents this by disabling the button while
+      // physicallyWithCourier is true; this only covers a race (another actor/webhook flips
+      // it between render and click).
+      const msg = err instanceof Error ? err.message : ''
+      setCancelErr(msg.startsWith('409') ? t('orderDetail.courierGatedReason') : t('orderDetail.cancelError'))
+    } finally {
+      setCancelBusy(false)
+    }
   }
 
   // Separate state from `order` — this fetch runs independently (own loading/error),
@@ -106,6 +134,7 @@ export default function OrderDrawer({
     // handling of its own) can leave holdOpen=true stranded behind a closed drawer,
     // reappearing as a floating dialog the next time it's reopened.
     setHoldOpen(false); setHoldReason(''); setHoldErr('')
+    setCancelOpen(false); setCancelErr('')
     if (!orderId) return
     setLoading(true)
     setOrder(null)
@@ -160,6 +189,9 @@ export default function OrderDrawer({
   }, [open, onClose])
 
   const forward = order?.shipments.find(s => s.shipmentLeg === 'forward') ?? null
+  // Hold and Cancel both hide on the same terminal statuses — there is nothing left to
+  // hold or cancel once an order is delivered/cancelled/returned/lost.
+  const isTerminal = order ? ['delivered', 'cancelled', 'returned', 'lost'].includes(order.status) : false
   const stateIcoTone = order?.derivedStatus.tone ?? 'NEUTRAL'
   const StateIcon = STATE_ICON[stateIcoTone]
   const stateSub = order
@@ -289,23 +321,42 @@ export default function OrderDrawer({
                       </Button>
                     </div>
                     {/* Hold/Unhold — folded into the action row from OrderDetail.tsx
-                        (now-unrouted); same handler/endpoint, same terminal-status gate. */}
-                    {order.onHold ? (
+                        (now-unrouted); same handler/endpoint, same terminal-status gate.
+                        Cancel sits alongside it. Both disable together — reading
+                        order.physicallyWithCourier as-is, never re-derived here — when the
+                        order has physically been handed to the courier; the server still
+                        enforces this with a 409 regardless. Unhold is never gated: releasing
+                        a hold must stay allowed even when with-courier. */}
+                    {order.onHold && (
                       <Button
                         size="sm" variant="secondary" className="w-full justify-center mt-2.5"
                         onClick={handleUnhold}
                       >
                         {t('orderDetail.unholdBtn')}
                       </Button>
-                    ) : (
-                      !['delivered', 'cancelled', 'returned', 'lost'].includes(order.status) && (
+                    )}
+                    {!isTerminal && (
+                      <div className="flex gap-2 mt-2.5">
+                        {!order.onHold && (
+                          <Button
+                            size="sm" variant="secondary" className="flex-1 justify-center"
+                            disabled={order.physicallyWithCourier}
+                            onClick={() => { setHoldErr(''); setHoldReason(''); setHoldOpen(true) }}
+                          >
+                            {t('orderDetail.holdBtn')}
+                          </Button>
+                        )}
                         <Button
-                          size="sm" variant="secondary" className="w-full justify-center mt-2.5"
-                          onClick={() => { setHoldErr(''); setHoldReason(''); setHoldOpen(true) }}
+                          size="sm" variant="destructive" className="flex-1 justify-center"
+                          disabled={order.physicallyWithCourier}
+                          onClick={() => { setCancelErr(''); setCancelOpen(true) }}
                         >
-                          {t('orderDetail.holdBtn')}
+                          {t('orderDetail.cancelBtn')}
                         </Button>
-                      )
+                      </div>
+                    )}
+                    {order.physicallyWithCourier && (
+                      <p className="text-caption text-muted mt-2">{t('orderDetail.courierGatedReason')}</p>
                     )}
                   </div>
 
@@ -508,6 +559,29 @@ export default function OrderDrawer({
                 onClick={handleHold}
               >
                 {t('orderDetail.holdDialog.confirm')}
+              </Button>
+            </div>
+          </div>
+        </Modal>
+      )}
+      {/* Cancel confirm dialog — plain destructive confirmation, no input (mirrors
+          UsersTab's deactivate-user dialog: dismiss stays "Cancel", the destructive
+          action gets its own distinct label so the two never read as the same button). */}
+      {cancelOpen && (
+        <Modal title={t('orderDetail.cancelDialog.title')} onClose={() => setCancelOpen(false)}>
+          <div className="space-y-4">
+            <p className="text-small text-muted">{t('orderDetail.cancelDialog.body')}</p>
+            {cancelErr && <p className="text-critical text-small">{cancelErr}</p>}
+            <div className="flex justify-end gap-2">
+              <Button variant="secondary" onClick={() => setCancelOpen(false)}>
+                {t('common.cancel')}
+              </Button>
+              <Button
+                variant="destructive"
+                loading={cancelBusy}
+                onClick={handleCancel}
+              >
+                {t('orderDetail.cancelDialog.confirm')}
               </Button>
             </div>
           </div>
