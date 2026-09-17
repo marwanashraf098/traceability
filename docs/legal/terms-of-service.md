@@ -1,6 +1,6 @@
 # Terms of Service
 
-**Version 1.0 — Effective 1 July 2026**
+**Version 1.1 — Effective 17 September 2026**
 
 > ⚠️ **Template — not legal advice.** Fill every `[PLACEHOLDER]` and have a qualified lawyer review before publishing. The signup consent record stores the version a user accepted, so keep `Version` and `Effective` accurate.
 
@@ -16,7 +16,7 @@ You must provide accurate account information, keep your credentials secure, and
 
 ## 3. Subscription and fees
 
-The Service is offered on a subscription basis at **EGP 999 per month** (or the price shown at signup), inclusive of the features described at the time of purchase. Payment is currently collected manually via Instapay or bank transfer; your plan is activated once payment is received. Fees are exclusive of any applicable taxes, which are your responsibility. Fees are non-refundable except where required by law. We may change pricing on notice, effective at your next billing cycle.
+Traced is currently provided free of charge during its early access period. We may introduce paid subscription fees in the future. If we do, we will notify you in advance, and any fees will apply only to your continued use of the Service after that notice takes effect. No fees will be charged without prior notice.
 
 ## 4. Acceptable use
 

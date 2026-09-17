@@ -9,6 +9,6 @@ package com.traceability.identity;
 public final class PolicyVersions {
     private PolicyVersions() {}
 
-    public static final String PRIVACY = "1.0";
-    public static final String TERMS   = "1.0";
+    public static final String PRIVACY = "1.1";
+    public static final String TERMS   = "1.1";
 }

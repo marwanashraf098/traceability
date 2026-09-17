@@ -1,6 +1,6 @@
 # Privacy Policy
 
-**Version 1.0 — Effective 1 July 2026**
+**Version 1.1 — Effective 17 September 2026**
 
 > ⚠️ **Template — not legal advice.** Fill every `[PLACEHOLDER]` and have a qualified lawyer review this before publishing, especially the processor / sub-processor sections. Keep the `Version` and `Effective` lines accurate — the signup consent record stores the version a user accepted.
 
@@ -71,6 +71,8 @@ The Service is for businesses and is not directed to children. We do not knowing
 ## 12. Changes
 
 We may update this policy. We will change the version and effective date above, and where changes are material we will notify account owners. Continued use after an update means you accept the revised policy.
+
+Traced is currently offered free of charge during early access. If we introduce fees in the future, we will notify account owners in advance, as described in our Terms of Service.
 
 ## 13. Shopify-connected stores
 
