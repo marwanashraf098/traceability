@@ -860,6 +860,7 @@
     "na": "—",
     "pendingConsignee": "في انتظار ربط Bosta",
     "cancel": "إلغاء",
+    "back": "رجوع",
     "view": "عرض",
     "order": "الطلب",
     "customer": "العميل",
@@ -987,6 +988,111 @@
         "activateBtn": "تفعيل التنفيذ",
         "activating": "جارٍ التفعيل…",
         "genericError": "تعذّر التفعيل. حاول مرة أخرى."
+      },
+      "actionNeeded": "إجراء مطلوب",
+      "merchant": {
+        "badge": "للتجار",
+        "title": "اربط متجرك الآن",
+        "body": "قائمتنا في متجر تطبيقات Shopify قيد المراجعة. إلى أن تُنشر، اربط متجرك عبر تطبيق خاص — يعمل على جميع خطط Shopify بما فيها Basic.",
+        "cta": "اربط متجري"
+      },
+      "reviewer": {
+        "badge": "لمراجعي Shopify",
+        "title": "استخدم تطبيق Traced الرسمي",
+        "body": "تراجع تطبيق Traced لمتجر التطبيقات؟ ثبّت التطبيق الرسمي بالطريقة المعتادة.",
+        "cta": "الاتصال عبر Shopify"
+      },
+      "choose": {
+        "title": "كيف تريد إتمام الإعداد؟",
+        "subtitle": "يستغرق كلا الخيارين نحو ١٠–١٥ دقيقة.",
+        "call": {
+          "title": "احجز مكالمة إعداد",
+          "recommend": "الأسهل",
+          "body": "نربط متجرك معًا في مكالمة قصيرة. الأنسب إن كنت تفضّل عدم تغيير الإعدادات بنفسك."
+        },
+        "self": {
+          "title": "سأتولى الإعداد بنفسي",
+          "body": "اتبع دليلًا قصيرًا. ستنشئ تطبيقًا خاصًا في Shopify وتلصق مفتاحين هنا."
+        }
+      },
+      "wizard": {
+        "title": "الربط عبر تطبيق خاص",
+        "stepLabel": "الخطوة {{current}} من {{total}}",
+        "back": "رجوع",
+        "next": "التالي",
+        "copy": "نسخ",
+        "copied": "تم النسخ",
+        "toggleOn": "فعّله",
+        "toggleOff": "اتركه مغلقًا (false)",
+        "step1": {
+          "title": "افتح Develop apps في Shopify",
+          "body": "من لوحة تحكم متجرك، اذهب إلى الإعدادات ← التطبيقات وقنوات البيع ← Develop apps."
+        },
+        "step2": {
+          "title": "أنشئ تطبيقًا باسم Traced",
+          "body": "اضغط Create an app، وسمِّه Traced، ثم أكِّد."
+        },
+        "step3": {
+          "title": "أضِف رابط التطبيق (App URL)",
+          "body": "في إعدادات التطبيق، اضبط App URL على:"
+        },
+        "step4": {
+          "title": "ضمّن التطبيق داخل لوحة Shopify",
+          "body": "فعّل خيار \"Embed app in Shopify admin\"."
+        },
+        "step5": {
+          "title": "اضبط إصدار الـ API للـ Webhooks",
+          "body": "من قسم Webhooks، اضبط إصدار الـ API على:"
+        },
+        "step6": {
+          "title": "أضِف نطاقات الوصول (API access scopes)",
+          "body": "من قسم API access scopes، أضِف كل هذه:"
+        },
+        "step7": {
+          "title": "اترك legacy install flow مغلقًا",
+          "body": "أبقِ \"Use legacy install flow\" على false — اتركه كما هو."
+        },
+        "step8": {
+          "title": "أضِف رابط إعادة التوجيه",
+          "body": "من Allowed redirection URL(s)، أضِف:"
+        },
+        "step9": {
+          "title": "أصدِر التطبيق وثبّته",
+          "body": "اضغط Release، ثم ثبّت التطبيق على متجرك."
+        },
+        "step10": {
+          "title": "اربط متجرك",
+          "body": "احصل على نطاق متجرك من الإعدادات ← Domains (نطاق ‎.myshopify.com الأساسي). انسخ Client ID و Client Secret من إعدادات التطبيق، ثم الصق الثلاثة بالأسفل.",
+          "domain": "نطاق المتجر",
+          "clientId": "Client ID",
+          "clientIdPlaceholder": "الصق Client ID",
+          "secret": "Client Secret",
+          "secretPlaceholder": "الصق Client Secret",
+          "secure": "مفاتيحك مشفّرة وتُستخدم فقط لمزامنة متجرك.",
+          "cta": "اتصل",
+          "domainInvalid": "أدخل نطاق *.myshopify.com صحيح.",
+          "clientIdRequired": "Client ID مطلوب.",
+          "secretRequired": "Client Secret مطلوب."
+        }
+      },
+      "connectingPanel": {
+        "title": "جارٍ ربط متجرك…",
+        "subtitle": "نتحقق من مفاتيحك ونبدأ أول مزامنة."
+      },
+      "connectedPanel": {
+        "title": "تم ربط المتجر",
+        "badgeEa": "وصول مبكر",
+        "badgeOfficial": "التطبيق الرسمي",
+        "upgradeBanner": {
+          "title": "تطبيق Traced الرسمي أصبح متاحًا",
+          "body": "رقِّ بنقرة واحدة لاتصال أكثر أمانًا. تبقى بياناتك وسجلّك كما هما تمامًا.",
+          "cta": "الترقية إلى التطبيق الرسمي"
+        }
+      },
+      "attention": {
+        "title": "أعد ربط متجرك",
+        "body": "انتهت صلاحية وصول Shopify فتوقّفت المزامنة. أعد الاتصال لاستئناف ما توقف.",
+        "cta": "أعد الاتصال"
       }
     },
     "bosta": {

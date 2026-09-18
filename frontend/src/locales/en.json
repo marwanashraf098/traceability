@@ -865,6 +865,7 @@
     "na": "—",
     "pendingConsignee": "Pending Bosta link",
     "cancel": "Cancel",
+    "back": "Back",
     "view": "View",
     "order": "Order",
     "customer": "Customer",
@@ -992,6 +993,111 @@
         "activateBtn": "Activate fulfillment",
         "activating": "Activating…",
         "genericError": "Could not activate. Try again."
+      },
+      "actionNeeded": "Action needed",
+      "merchant": {
+        "badge": "For merchants",
+        "title": "Connect your store now",
+        "body": "Our Shopify App Store listing is under review. Until it goes live, connect with a private app — it works on every Shopify plan, including Basic.",
+        "cta": "Connect my store"
+      },
+      "reviewer": {
+        "badge": "For Shopify reviewers",
+        "title": "Use the official Traced app",
+        "body": "Reviewing Traced for the App Store? Install the official app the standard way.",
+        "cta": "Connect with Shopify"
+      },
+      "choose": {
+        "title": "How would you like to set things up?",
+        "subtitle": "Either way takes about 10–15 minutes.",
+        "call": {
+          "title": "Book a setup call",
+          "recommend": "Easiest",
+          "body": "We connect your store together on a quick call. Best if you'd rather not touch settings yourself."
+        },
+        "self": {
+          "title": "Set it up myself",
+          "body": "Follow a short guide. You'll create a private app in Shopify and paste two keys here."
+        }
+      },
+      "wizard": {
+        "title": "Connect with a private app",
+        "stepLabel": "Step {{current}} of {{total}}",
+        "back": "Back",
+        "next": "Next",
+        "copy": "Copy",
+        "copied": "Copied",
+        "toggleOn": "Set to On",
+        "toggleOff": "Leave off (false)",
+        "step1": {
+          "title": "Open Develop apps in Shopify",
+          "body": "In your Shopify admin, go to Settings → Apps and sales channels → Develop apps."
+        },
+        "step2": {
+          "title": "Create an app called Traced",
+          "body": "Click Create an app, name it Traced, then confirm."
+        },
+        "step3": {
+          "title": "Add the app URL",
+          "body": "In the app's configuration, set the App URL to:"
+        },
+        "step4": {
+          "title": "Embed the app in Shopify admin",
+          "body": "Turn on \"Embed app in Shopify admin\"."
+        },
+        "step5": {
+          "title": "Set the webhook API version",
+          "body": "Under Webhooks, set the API version to:"
+        },
+        "step6": {
+          "title": "Add the API access scopes",
+          "body": "Under API access scopes, add all of these:"
+        },
+        "step7": {
+          "title": "Leave legacy install flow off",
+          "body": "Keep \"Use legacy install flow\" set to false — leave it as it is."
+        },
+        "step8": {
+          "title": "Add the redirect URL",
+          "body": "Under Allowed redirection URL(s), add:"
+        },
+        "step9": {
+          "title": "Release and install",
+          "body": "Click Release, then install the app on your store."
+        },
+        "step10": {
+          "title": "Connect your store",
+          "body": "Get your store domain from Settings → Domains (your primary .myshopify.com domain). Copy the Client ID and Client Secret from the app's settings. Paste all three below.",
+          "domain": "Store domain",
+          "clientId": "Client ID",
+          "clientIdPlaceholder": "Paste your Client ID",
+          "secret": "Client Secret",
+          "secretPlaceholder": "Paste your Client Secret",
+          "secure": "Your keys are encrypted and used only to sync your store.",
+          "cta": "Connect",
+          "domainInvalid": "Enter a valid *.myshopify.com domain.",
+          "clientIdRequired": "Client ID is required.",
+          "secretRequired": "Client Secret is required."
+        }
+      },
+      "connectingPanel": {
+        "title": "Connecting your store…",
+        "subtitle": "Checking your keys and starting the first sync."
+      },
+      "connectedPanel": {
+        "title": "Store connected",
+        "badgeEa": "Early access",
+        "badgeOfficial": "Official app",
+        "upgradeBanner": {
+          "title": "The official Traced app is live",
+          "body": "Upgrade in one click for a more secure connection. Your data and history stay exactly as they are.",
+          "cta": "Upgrade to the official app"
+        }
+      },
+      "attention": {
+        "title": "Reconnect your store",
+        "body": "Shopify access expired, so syncing has paused. Reconnect to pick up where it left off.",
+        "cta": "Reconnect"
       }
     },
     "bosta": {
