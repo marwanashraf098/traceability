@@ -11,17 +11,36 @@ import java.util.UUID;
 
 /**
  * Same-shop-only guard, shared by EVERY Shopify connect path (OAuth, custom-app,
- * custom-app CC): a tenant with ANY existing stores row (any status — connected,
- * disconnected, needs_reauth, error) may only connect a shop_domain it already owns.
- * Zero existing rows means first connect — any valid shop is allowed. Re-submitting the
- * SAME shop_domain is always allowed (the legitimate reconnect / CC re-exchange case).
+ * custom-app CC): a tenant with a NON-DISCONNECTED stores row (connected, needs_reauth,
+ * or error) may only connect a shop_domain it already owns. A tenant whose stores are
+ * ALL status='disconnected' (or has none at all) may connect any valid shop — this is
+ * the disconnect-then-switch case: a merchant who connected the wrong store and
+ * disconnected it must be able to connect the right one, not be permanently 409'd.
+ * Re-submitting the SAME shop_domain is always allowed regardless of status (the
+ * legitimate reconnect / CC re-exchange case) — a disconnected row for that exact
+ * domain doesn't even reach the mismatch check below, since it's excluded from
+ * activeShopDomains and an empty list short-circuits to "allowed" either way.
+ *
+ * FR-3.1 follow-up (approved): originally this only excluded nothing (ANY existing row,
+ * including disconnected, blocked a different shop) — a merchant who disconnected a
+ * wrong store stayed permanently bound to it. Relaxed to ignore disconnected rows.
+ * Cross-tenant ownership of a shop_domain is unaffected — that's still a straight DB
+ * UNIQUE(shop_domain) conflict at the upsert, unrelated to this guard.
+ *
+ * KNOWN RACE (documented, not fixed here — same exposure OAuth's assertBoundShop had
+ * before this class existed): the existence check and the eventual write are not
+ * atomic. Two concurrent connect requests for two DIFFERENT shop_domains, from a tenant
+ * with zero active rows, could both pass this guard before either has written its row —
+ * both would then succeed, leaving the tenant with two active stores. Narrowing this
+ * would need a DB-level exclusion (e.g. a partial unique index on tenant_id WHERE status
+ * <> 'disconnected', or an advisory lock scoped to tenant_id) — out of scope here.
  *
  * Originally OAuth-only (ShopifyOAuthService.assertBoundShop); extracted so the
  * custom-app and custom-app-CC connect paths (ShopifySyncService.connect(),
  * connectCustomApp(), connectCustomAppCC()) enforce the identical invariant — those
  * paths had no equivalent guard, so a tenant could accumulate a second stores row for a
  * different shop_domain via /custom-connect even though the mockup and the rest of the
- * product model exactly one Shopify connection per tenant.
+ * product model exactly one ACTIVE Shopify connection per tenant.
  *
  * TenantContext contract: this class runs its own dedicated transaction (own
  * TransactionTemplate) so SET LOCAL app.current_tenant reliably fires for its query
@@ -48,19 +67,20 @@ public class ShopifySameShopGuard {
 
     /**
      * @throws ShopifyOAuthException Code.SHOPIFY_SHOP_MISMATCH (409) if the tenant already
-     *                                owns a different shop_domain than requestedShop.
+     *                                owns a different, non-disconnected shop_domain than
+     *                                requestedShop.
      */
     public void assertBoundShop(UUID tenantId, String requestedShop) {
-        List<String> shopDomains = tx.execute(s -> jdbc.query(
-            "SELECT shop_domain FROM stores WHERE tenant_id = ?",
+        List<String> activeShopDomains = tx.execute(s -> jdbc.query(
+            "SELECT shop_domain FROM stores WHERE tenant_id = ? AND status <> 'disconnected'",
             (rs, rowNum) -> rs.getString("shop_domain"), tenantId));
 
-        if (!shopDomains.isEmpty() && !shopDomains.contains(requestedShop)) {
+        if (!activeShopDomains.isEmpty() && !activeShopDomains.contains(requestedShop)) {
             throw new ShopifyOAuthException(
                 ShopifyOAuthException.Code.SHOPIFY_SHOP_MISMATCH,
-                "This account is connected to " + shopDomains.get(0) +
+                "This account is connected to " + activeShopDomains.get(0) +
                     " and can only reconnect that store.",
-                "هذا الحساب متصل بـ " + shopDomains.get(0) +
+                "هذا الحساب متصل بـ " + activeShopDomains.get(0) +
                     " ولا يمكن إلا إعادة الاتصال بنفس المتجر.",
                 HttpStatus.CONFLICT);
         }

@@ -838,6 +838,82 @@ class CustomAppConnectTest {
     }
 
     // -----------------------------------------------------------------------
+    // FR-3.1 follow-up (b variant) — needs_reauth is an ACTIVE status (not disconnected):
+    // a different shop must still be rejected, same as 'connected'.
+    // -----------------------------------------------------------------------
+    @Test @Order(27)
+    void sameShopGuard_existingNeedsReauthRow_differentShop_rejected409() {
+        doCustomConnect(SHOP_DOMAIN, CLIENT_ID, CLIENT_SECRET);
+        jdbc.update("UPDATE stores SET status = 'needs_reauth' WHERE tenant_id = ? AND shop_domain = ?",
+            ownerTenantId, SHOP_DOMAIN);
+
+        String differentShop = "custom-app-cc-needsreauth-different.myshopify.com";
+        var resp = doCustomConnect(differentShop, CLIENT_ID, CLIENT_SECRET);
+
+        assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
+        assertThat(resp.getBody()).containsEntry("code", "SHOPIFY_SHOP_MISMATCH");
+
+        Integer differentShopRows = jdbc.queryForObject(
+            "SELECT COUNT(*) FROM stores WHERE shop_domain = ?", Integer.class, differentShop);
+        assertThat(differentShopRows).isEqualTo(0);
+    }
+
+    // -----------------------------------------------------------------------
+    // FR-3.1 follow-up (a variant) — disconnect-then-switch on the custom-app path: a
+    // tenant whose only row is status='disconnected' may connect a DIFFERENT shop. This
+    // creates a second row (the old disconnected one is not deleted) — proves the guard
+    // change, not that rows get merged.
+    // -----------------------------------------------------------------------
+    @Test @Order(28)
+    void sameShopGuard_onlyDisconnectedRow_differentShop_allowsSwitch() {
+        doCustomConnect(SHOP_DOMAIN, CLIENT_ID, CLIENT_SECRET);
+        jdbc.update("UPDATE stores SET status = 'disconnected' WHERE tenant_id = ? AND shop_domain = ?",
+            ownerTenantId, SHOP_DOMAIN);
+
+        String newShop = "custom-app-cc-switched.myshopify.com";
+        var resp = doCustomConnect(newShop, CLIENT_ID, CLIENT_SECRET);
+
+        assertThat(resp.getStatusCode())
+            .as("a tenant with only a disconnected row must be allowed to connect a different shop")
+            .isEqualTo(HttpStatus.ACCEPTED);
+
+        Integer totalRows = jdbc.queryForObject(
+            "SELECT COUNT(*) FROM stores WHERE tenant_id = ?", Integer.class, ownerTenantId);
+        assertThat(totalRows).as("old disconnected row is kept, not merged/deleted").isEqualTo(2);
+
+        String newShopStatus = jdbc.queryForObject(
+            "SELECT status::text FROM stores WHERE tenant_id = ? AND shop_domain = ?",
+            String.class, ownerTenantId, newShop);
+        assertThat(newShopStatus).isEqualTo("connected");
+    }
+
+    // -----------------------------------------------------------------------
+    // FR-3.1 follow-up (d variant) — same shop_domain re-submit is allowed regardless of
+    // the existing row's status, including disconnected and needs_reauth (not just
+    // 'connected', already covered by sameShopGuard_existingStoreSameShop_allowed...).
+    // -----------------------------------------------------------------------
+    @Test @Order(29)
+    void sameShopGuard_sameShopResubmit_allowedAtDisconnectedOrNeedsReauthStatus() {
+        doCustomConnect(SHOP_DOMAIN, CLIENT_ID, CLIENT_SECRET);
+
+        jdbc.update("UPDATE stores SET status = 'disconnected' WHERE tenant_id = ? AND shop_domain = ?",
+            ownerTenantId, SHOP_DOMAIN);
+        var respDisconnected = doCustomConnect(SHOP_DOMAIN, CLIENT_ID, CLIENT_SECRET);
+        assertThat(respDisconnected.getStatusCode())
+            .as("same-shop resubmit allowed while the row is disconnected").isEqualTo(HttpStatus.ACCEPTED);
+
+        jdbc.update("UPDATE stores SET status = 'needs_reauth' WHERE tenant_id = ? AND shop_domain = ?",
+            ownerTenantId, SHOP_DOMAIN);
+        var respNeedsReauth = doCustomConnect(SHOP_DOMAIN, CLIENT_ID, CLIENT_SECRET);
+        assertThat(respNeedsReauth.getStatusCode())
+            .as("same-shop resubmit allowed while the row is needs_reauth").isEqualTo(HttpStatus.ACCEPTED);
+
+        Integer totalRows = jdbc.queryForObject(
+            "SELECT COUNT(*) FROM stores WHERE tenant_id = ?", Integer.class, ownerTenantId);
+        assertThat(totalRows).as("same-shop resubmits never create a second row").isEqualTo(1);
+    }
+
+    // -----------------------------------------------------------------------
     // Helpers
     // -----------------------------------------------------------------------
 

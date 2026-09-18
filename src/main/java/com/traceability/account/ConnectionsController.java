@@ -76,12 +76,18 @@ public class ConnectionsController {
      * and "shopifyCustomApp" (connection_type IN ('custom_app','custom_app_cc')) were two
      * independent queries that could both report the SAME store row when a tenant's only
      * store happened to be a custom-app connection, misrepresenting it as also OAuth-style
-     * connected. One store row per tenant is now an enforced invariant (see
-     * ShopifySameShopGuard) — this endpoint picks that single row directly, in every
-     * connection_type. The deterministic ORDER BY … LIMIT 1 is kept as defense-in-depth
-     * only: it no longer needs to disambiguate between two live connection types (the
-     * guard prevents new duplicates), it just guards against any pre-existing or raced
-     * row the guard didn't see.
+     * connected. This endpoint now picks the tenant's single row directly, in every
+     * connection_type — with ShopifySameShopGuard as the write-side invariant.
+     *
+     * FR-3.1 follow-up: the guard now allows a distinct shop_domain once the tenant's
+     * existing row(s) are all status='disconnected' (disconnect-then-switch — see
+     * ShopifySameShopGuard), so a tenant can legitimately hold one disconnected (old) row
+     * and one active (new) row at once. The pick below is ORDER BY (status <>
+     * 'disconnected') DESC — i.e. any non-disconnected row wins outright over a
+     * disconnected one — THEN last_sync_at DESC NULLS LAST as the tiebreak among rows of
+     * the same "active-ness". This is no longer pure defense-in-depth (as it was when one
+     * row per tenant was closer to guaranteed): it is the primary mechanism that keeps a
+     * stale disconnected row from ever shadowing the real active connection.
      */
     @GetMapping
     @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
@@ -89,10 +95,12 @@ public class ConnectionsController {
         UUID tenantId = principal.tenantId();
 
         return TenantContext.runAs(tenantId, () -> tx.execute(s -> {
-            // Shopify — the tenant's single store row, any connection_type.
+            // Shopify — the tenant's single row, preferring an active (non-disconnected)
+            // one over a stale disconnected one, any connection_type.
             Map<String, Object> shopify = jdbc.query(
                 "SELECT id, shop_domain, status::text, connection_type, import_status::text, last_sync_at " +
-                "FROM stores WHERE tenant_id = ? ORDER BY last_sync_at DESC NULLS LAST LIMIT 1",
+                "FROM stores WHERE tenant_id = ? " +
+                "ORDER BY (status <> 'disconnected') DESC, last_sync_at DESC NULLS LAST LIMIT 1",
                 rs -> {
                     Map<String, Object> m = new LinkedHashMap<>();
                     if (!rs.next()) {

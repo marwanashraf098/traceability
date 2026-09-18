@@ -246,6 +246,35 @@ class ConnectionsOnboardingTest {
         assertThat(scopes).isNotEmpty();
     }
 
+    // FR-3.1 follow-up (e) — disconnect-then-switch: tenant holds one disconnected (old)
+    // row and one active (new) row. /connections must surface the active one, not
+    // whichever the plain ORDER BY last_sync_at would have picked.
+    @Test
+    void c7_disconnectThenSwitch_connectionsReturnsActiveRowNotDisconnected() {
+        jdbc.update("UPDATE stores SET status = 'disconnected' WHERE id = ?", storeId);
+
+        UUID newStoreId = UUID.randomUUID();
+        // last_sync_at intentionally OLDER than the disconnected row would get if synced —
+        // proves the pick is status-first, not last_sync_at-first.
+        jdbc.update("INSERT INTO stores (id, tenant_id, platform, shop_domain, status, " +
+                    "connection_type, last_sync_at) " +
+                    "VALUES (?, ?, 'shopify', 'switched-conn.myshopify.com', 'connected', " +
+                    "'oauth', now() - interval '1 hour')",
+                    newStoreId, tenantId);
+        jdbc.update("UPDATE stores SET last_sync_at = now() WHERE id = ?", storeId);
+
+        try {
+            Map<String, Object> status = connCtl.status(principal());
+            @SuppressWarnings("unchecked")
+            Map<String, Object> shopify = (Map<String, Object>) status.get("shopify");
+            assertThat(shopify.get("storeId")).isEqualTo(newStoreId.toString());
+            assertThat(shopify.get("shopDomain")).isEqualTo("switched-conn.myshopify.com");
+            assertThat(shopify.get("connected")).isEqualTo(true);
+        } finally {
+            jdbc.update("DELETE FROM stores WHERE id = ?", newStoreId);
+        }
+    }
+
     @Test
     void c3_bostaActive_reflectsInStatus() {
         jdbc.update(

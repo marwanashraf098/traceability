@@ -202,16 +202,16 @@ class ShopifySameShopGuardTest {
     }
 
     // -----------------------------------------------------------------------
-    // Layer 1a — tenant already owns SHOP_X (disconnected), initiates for SHOP_Y →
-    // SHOPIFY_SHOP_MISMATCH, no state row, no write.
+    // Layer 1a — tenant already owns SHOP_X (an ACTIVE row — connected), initiates for
+    // SHOP_Y → SHOPIFY_SHOP_MISMATCH, no state row, no write.
     // -----------------------------------------------------------------------
     @Test
-    void initiate_tenantOwnsDifferentShop_rejectedPreConsent() {
+    void initiate_tenantOwnsDifferentActiveShop_rejectedPreConsent() {
         Signup owner = signupOwner("SameShopGuard L1a Corp", "ssg_l1a_owner", "ssg_l1a@test.com");
 
         jdbc.update(
             "INSERT INTO stores (tenant_id, shop_domain, platform, status, import_status) " +
-            "VALUES (?, ?, 'shopify', 'disconnected', 'completed')",
+            "VALUES (?, ?, 'shopify', 'connected', 'completed')",
             owner.tenantId(), SHOP_X);
 
         HttpHeaders headers = new HttpHeaders();
@@ -233,6 +233,42 @@ class ShopifySameShopGuardTest {
         Integer storeCount = jdbc.queryForObject(
             "SELECT COUNT(*) FROM stores WHERE shop_domain = ?", Integer.class, SHOP_Y);
         assertThat(storeCount).as("no store row written for the mismatched shop").isEqualTo(0);
+    }
+
+    // -----------------------------------------------------------------------
+    // FR-3.1 follow-up — disconnect-then-switch: tenant's ONLY row for SHOP_X is
+    // disconnected, initiates for a DIFFERENT shop SHOP_Y → must proceed normally, not
+    // SHOPIFY_SHOP_MISMATCH. This is the behavior change from Layer 1a's old assertion
+    // (this same fixture used to expect 409 — see git history) — a merchant who connected
+    // the wrong store and disconnected it must be able to connect the right one.
+    // -----------------------------------------------------------------------
+    @Test
+    void initiate_tenantOwnsOnlyDisconnectedDifferentShop_allowsSwitch() {
+        Signup owner = signupOwner("SameShopGuard Switch Corp", "ssg_switch_owner", "ssg_switch@test.com");
+
+        jdbc.update(
+            "INSERT INTO stores (tenant_id, shop_domain, platform, status, import_status) " +
+            "VALUES (?, ?, 'shopify', 'disconnected', 'completed')",
+            owner.tenantId(), SHOP_X);
+
+        HttpHeaders headers = new HttpHeaders();
+        headers.setBearerAuth(owner.token());
+        headers.setContentType(MediaType.APPLICATION_JSON);
+        var resp = rest.exchange(
+            base() + "/api/v1/shopify/oauth/initiate",
+            HttpMethod.POST,
+            new HttpEntity<>(Map.of("shop", SHOP_Y), headers),
+            Map.class);
+
+        assertThat(resp.getStatusCode())
+            .as("a tenant with only a disconnected different-shop row must be allowed to switch")
+            .isEqualTo(HttpStatus.OK);
+        assertThat(resp.getBody()).containsKey("consentUrl");
+
+        Integer stateCount = jdbc.queryForObject(
+            "SELECT COUNT(*) FROM shopify_oauth_state WHERE shop_domain = ? AND tenant_id = ?",
+            Integer.class, SHOP_Y, owner.tenantId());
+        assertThat(stateCount).as("state nonce written for the new shop").isEqualTo(1);
     }
 
     // -----------------------------------------------------------------------
