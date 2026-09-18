@@ -21,24 +21,38 @@ vi.mock('../api', async (importOriginal) => {
 const STORE_ID = 'store-123'
 const SHOP_DOMAIN = 'test-shop.myshopify.com'
 
+const SHOPIFY_SETUP_FIXTURE = {
+  appUrl: 'http://localhost:5173',
+  redirectUrl: 'http://localhost:8080/auth/shopify/callback',
+  webhookApiVersion: '2026-04',
+  scopes: ['read_products', 'read_orders'],
+}
+
 function connectedFixture(): api.ConnectionsStatus {
   return {
     shopify: {
       connected: true, storeId: STORE_ID, shopDomain: SHOP_DOMAIN,
+      connectionType: 'oauth', status: 'connected',
       importStatus: 'completed', lastSyncAt: null,
     },
     bosta: { connected: false, businessName: null, pickupMode: null, awbFormat: null, awbLang: null },
-    shopifyCustomApp: { connected: false, shopDomain: null, importStatus: null, lastSyncAt: null },
     customAppAvailable: false,
+    oauthAvailable: false,
+    shopifySetup: SHOPIFY_SETUP_FIXTURE,
   }
 }
 
 function disconnectedFixture(): api.ConnectionsStatus {
   return {
-    shopify: { connected: false, storeId: null, shopDomain: null, importStatus: null, lastSyncAt: null },
+    shopify: {
+      connected: false, storeId: null, shopDomain: null,
+      connectionType: null, status: 'disconnected',
+      importStatus: null, lastSyncAt: null,
+    },
     bosta: { connected: false, businessName: null, pickupMode: null, awbFormat: null, awbLang: null },
-    shopifyCustomApp: { connected: false, shopDomain: null, importStatus: null, lastSyncAt: null },
     customAppAvailable: false,
+    oauthAvailable: false,
+    shopifySetup: SHOPIFY_SETUP_FIXTURE,
   }
 }
 

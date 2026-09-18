@@ -194,6 +194,15 @@ export default function ShopifyConnectionCard({
   const [wizardStartStep, setWizardStartStep] = useState(1)
   const [wizardError, setWizardError] = useState('')
 
+  // Step 10's fields live here, not in SetupWizard — that component fully unmounts
+  // while uiState is 'connecting', so anything it owned locally would be lost on a
+  // failed submit. Cleared only on success (handleWizardSubmit) or on actually leaving
+  // the wizard (closeWizard) — never on a failed-submit retry (openWizard, used by
+  // handleWizardSubmit's catch branch, deliberately does not touch these).
+  const [wizardShopDomain, setWizardShopDomain] = useState('')
+  const [wizardClientId, setWizardClientId] = useState('')
+  const [wizardClientSecret, setWizardClientSecret] = useState('')
+
   const [reviewerShop, setReviewerShop] = useState('')
   const [reviewerLoading, setReviewerLoading] = useState(false)
   const [reviewerError, setReviewerError] = useState('')
@@ -209,11 +218,34 @@ export default function ShopifyConnectionCard({
 
   const uiState: UiState = override ?? deriveUiState(shopify)
 
+  // Reopens the wizard preserving whatever the merchant already typed — used only by
+  // handleWizardSubmit's catch branch (a failed submit lands back on step 10 with the
+  // same values and an error, not a blank form).
   function openWizard(startStep: number, error = '') {
     setWizardStartStep(startStep)
     setWizardError(error)
     setWizardKey(k => k + 1)
     setOverride('guide')
+  }
+
+  // Opens the wizard fresh — "Set it up myself" from choose, or "Reconnect" for a
+  // custom_app_cc store from attention. Clears any leftover field values from a
+  // previous session (there shouldn't be any at this point, but this is the one path
+  // that's explicitly "starting over", so it's the right place to guarantee it).
+  function openFreshWizard(startStep: number) {
+    setWizardShopDomain('')
+    setWizardClientId('')
+    setWizardClientSecret('')
+    openWizard(startStep)
+  }
+
+  // Leaving the wizard back to "choose" (Back at step 1) — clears the fields, matching
+  // "clear only on success or on leaving the wizard".
+  function closeWizard() {
+    setWizardShopDomain('')
+    setWizardClientId('')
+    setWizardClientSecret('')
+    setOverride('choose')
   }
 
   async function handleReviewerConnect(e: FormEvent) {
@@ -260,7 +292,7 @@ export default function ShopifyConnectionCard({
     } else {
       // custom_app / custom_app_cc: reconnect is re-submitting fresh credentials —
       // reopen the wizard at the connect form, not the whole 10-step walkthrough.
-      openWizard(10)
+      openFreshWizard(10)
     }
   }
 
@@ -286,7 +318,12 @@ export default function ShopifyConnectionCard({
       await shopifyCustomConnect(shopDomain, clientId, clientSecret)
       await reload()
       setOverride(null)
+      setWizardShopDomain('')
+      setWizardClientId('')
+      setWizardClientSecret('')
     } catch (err) {
+      // Deliberately does NOT clear wizardShopDomain/clientId/clientSecret — the
+      // merchant retries from step 10 with everything they already typed still there.
       openWizard(10, connectErrorMessage(err, isAr, t('connections.shopify.error')))
     }
   }
@@ -385,7 +422,7 @@ export default function ShopifyConnectionCard({
 
           <button
             type="button"
-            onClick={() => openWizard(1)}
+            onClick={() => openFreshWizard(1)}
             className="w-full flex items-start gap-3 rounded-xl border border-line p-4 hover:border-brand/40 hover:bg-brand/5 transition-colors text-start"
           >
             <div className="flex-1 min-w-0">
@@ -403,7 +440,13 @@ export default function ShopifyConnectionCard({
           shopifySetup={shopifySetup}
           initialStep={wizardStartStep}
           initialError={wizardError}
-          onBack={() => setOverride('choose')}
+          shopDomain={wizardShopDomain}
+          clientId={wizardClientId}
+          clientSecret={wizardClientSecret}
+          onShopDomainChange={setWizardShopDomain}
+          onClientIdChange={setWizardClientId}
+          onClientSecretChange={setWizardClientSecret}
+          onBack={closeWizard}
           onSubmit={handleWizardSubmit}
         />
       )}

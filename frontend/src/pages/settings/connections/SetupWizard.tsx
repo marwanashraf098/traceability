@@ -46,25 +46,41 @@ function StepBody({ title, body, children }: { title: string; body: string; chil
 // shopify.app.toml). Step navigation (Back/Next) is local UI state; the actual
 // connect submission is handed to the parent via onSubmit, which owns the async
 // call and the transition to the "connecting" panel — see ShopifyConnectionCard.
+//
+// Step 10's fields (shopDomain/clientId/clientSecret) are CONTROLLED by the parent,
+// not local state here — this component fully unmounts while uiState is 'connecting'
+// (see ShopifyConnectionCard), so any local field state would be lost on a failed
+// submit, forcing the merchant to retype everything on exactly the path they're most
+// likely to fumble. The parent is responsible for clearing them on success or when the
+// user actually leaves the wizard (Back to choose) — never on a failed submit.
 
 export default function SetupWizard({
   shopifySetup,
   initialStep,
   initialError,
+  shopDomain,
+  clientId,
+  clientSecret,
+  onShopDomainChange,
+  onClientIdChange,
+  onClientSecretChange,
   onBack,
   onSubmit,
 }: {
   shopifySetup: ConnectionsStatus['shopifySetup']
   initialStep: number
   initialError?: string
+  shopDomain: string
+  clientId: string
+  clientSecret: string
+  onShopDomainChange: (value: string) => void
+  onClientIdChange: (value: string) => void
+  onClientSecretChange: (value: string) => void
   onBack: () => void
   onSubmit: (shopDomain: string, clientId: string, clientSecret: string) => void
 }) {
   const { t } = useTranslation()
   const [step, setStep] = useState(initialStep)
-  const [shopDomain, setShopDomain] = useState('')
-  const [clientId, setClientId] = useState('')
-  const [clientSecret, setClientSecret] = useState('')
   const [formError, setFormError] = useState(initialError ?? '')
 
   const scopesCsv = shopifySetup.scopes.join(',')
@@ -208,7 +224,7 @@ export default function SetupWizard({
                   id="wizardShopDomain"
                   type="text"
                   value={shopDomain}
-                  onChange={e => setShopDomain(e.target.value)}
+                  onChange={e => onShopDomainChange(e.target.value)}
                   placeholder={t('connections.shopify.shopPlaceholder')}
                   dir="ltr"
                   autoComplete="off"
@@ -222,7 +238,7 @@ export default function SetupWizard({
                   id="wizardClientId"
                   type="text"
                   value={clientId}
-                  onChange={e => setClientId(e.target.value)}
+                  onChange={e => onClientIdChange(e.target.value)}
                   placeholder={t('connections.shopify.wizard.step10.clientIdPlaceholder')}
                   dir="ltr"
                   autoComplete="off"
@@ -236,7 +252,7 @@ export default function SetupWizard({
                   id="wizardClientSecret"
                   type="password"
                   value={clientSecret}
-                  onChange={e => setClientSecret(e.target.value)}
+                  onChange={e => onClientSecretChange(e.target.value)}
                   placeholder={t('connections.shopify.wizard.step10.secretPlaceholder')}
                   dir="ltr"
                   autoComplete="off"
