@@ -670,7 +670,6 @@ class CustomAppConnectTest {
             HttpMethod.GET, new HttpEntity<>(headers), Map.class);
         assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.OK);
         assertThat(resp.getBody()).containsKey("shopify");
-        assertThat(resp.getBody()).containsKey("shopifyCustomApp");
         assertThat(resp.getBody()).containsKey("customAppAvailable");
         assertThat(resp.getBody().get("customAppAvailable")).isEqualTo(true);
 
@@ -762,7 +761,9 @@ class CustomAppConnectTest {
     }
 
     // -----------------------------------------------------------------------
-    // Preserved: GET /connections shopifyCustomApp includes CC stores
+    // Preserved (FR-3.1 unify): GET /connections "shopify" (now unified, no more
+    // separate "shopifyCustomApp" key) reports a connected CC store with
+    // connectionType='custom_app_cc'.
     // -----------------------------------------------------------------------
     @Test @Order(23)
     void connections_status_includesCC() {
@@ -776,9 +777,64 @@ class CustomAppConnectTest {
 
         assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.OK);
         @SuppressWarnings("unchecked")
-        Map<String, Object> customApp = (Map<String, Object>) resp.getBody().get("shopifyCustomApp");
-        assertThat(customApp.get("connected")).isEqualTo(true);
-        assertThat(customApp.get("shopDomain")).isEqualTo(SHOP_DOMAIN);
+        Map<String, Object> shopify = (Map<String, Object>) resp.getBody().get("shopify");
+        assertThat(shopify.get("connected")).isEqualTo(true);
+        assertThat(shopify.get("shopDomain")).isEqualTo(SHOP_DOMAIN);
+        assertThat(shopify.get("connectionType")).isEqualTo("custom_app_cc");
+        assertThat(shopify.get("status")).isEqualTo("connected");
+    }
+
+    // -----------------------------------------------------------------------
+    // FR-3.1 — same-shop-only guard now also enforced on the /custom-connect path
+    // (previously OAuth-only). Mirrors ShopifySameShopGuardTest's OAuth coverage.
+    // -----------------------------------------------------------------------
+    @Test @Order(24)
+    void sameShopGuard_existingStoreSameShop_allowed_updatesInPlace_noSecondRow() {
+        doCustomConnect(SHOP_DOMAIN, CLIENT_ID, CLIENT_SECRET);
+        UUID firstStoreId = jdbc.queryForObject(
+            "SELECT id FROM stores WHERE tenant_id = ? AND shop_domain = ?",
+            UUID.class, ownerTenantId, SHOP_DOMAIN);
+
+        // Re-submit the SAME shop_domain — the legitimate custom_app_cc reconnect /
+        // re-exchange case (wizard step 10 resubmitted after needs_reauth, say).
+        var resp = doCustomConnect(SHOP_DOMAIN, CLIENT_ID, CLIENT_SECRET);
+        assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.ACCEPTED);
+
+        Integer totalRows = jdbc.queryForObject(
+            "SELECT COUNT(*) FROM stores WHERE tenant_id = ?", Integer.class, ownerTenantId);
+        assertThat(totalRows).as("same-shop resubmit updates in place, no second row").isEqualTo(1);
+
+        UUID secondStoreId = jdbc.queryForObject(
+            "SELECT id FROM stores WHERE tenant_id = ? AND shop_domain = ?",
+            UUID.class, ownerTenantId, SHOP_DOMAIN);
+        assertThat(secondStoreId).isEqualTo(firstStoreId);
+    }
+
+    @Test @Order(25)
+    void sameShopGuard_existingStoreDifferentShop_rejected409_noSecondRow() {
+        doCustomConnect(SHOP_DOMAIN, CLIENT_ID, CLIENT_SECRET);
+
+        String differentShop = "custom-app-cc-different.myshopify.com";
+        var resp = doCustomConnect(differentShop, CLIENT_ID, CLIENT_SECRET);
+
+        assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
+        assertThat(resp.getBody()).containsEntry("code", "SHOPIFY_SHOP_MISMATCH");
+
+        Integer totalRows = jdbc.queryForObject(
+            "SELECT COUNT(*) FROM stores WHERE tenant_id = ?", Integer.class, ownerTenantId);
+        assertThat(totalRows).as("mismatched shop must not create a second row").isEqualTo(1);
+
+        Integer differentShopRows = jdbc.queryForObject(
+            "SELECT COUNT(*) FROM stores WHERE shop_domain = ?", Integer.class, differentShop);
+        assertThat(differentShopRows).isEqualTo(0);
+    }
+
+    @Test @Order(26)
+    void sameShopGuard_noExistingStore_allowsAnyShop() {
+        // No prior doCustomConnect() call in this test — fresh tenant-equivalent state
+        // (AfterEach cleans owner stores after every test).
+        var resp = doCustomConnect(SHOP_DOMAIN, CLIENT_ID, CLIENT_SECRET);
+        assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.ACCEPTED);
     }
 
     // -----------------------------------------------------------------------

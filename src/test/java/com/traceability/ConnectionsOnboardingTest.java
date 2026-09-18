@@ -158,7 +158,8 @@ class ConnectionsOnboardingTest {
         TenantContext.clear();
         SecurityContextHolder.clearContext();
         // Reset integration state
-        jdbc.update("UPDATE stores SET status='disconnected', import_status='idle' WHERE tenant_id=?", tenantId);
+        jdbc.update("UPDATE stores SET status='disconnected', import_status='idle', connection_type='oauth', " +
+                    "client_id_encrypted = NULL, api_secret_encrypted = NULL WHERE tenant_id=?", tenantId);
         jdbc.update("DELETE FROM courier_accounts WHERE tenant_id=?", tenantId);
         jdbc.update("DELETE FROM label_reprints WHERE tenant_id=?", tenantId);
         jdbc.update("DELETE FROM receipt_lines   WHERE tenant_id=?", tenantId);
@@ -185,13 +186,64 @@ class ConnectionsOnboardingTest {
 
     @Test
     void c2_shopifyConnected_reflectsInStatus() {
-        jdbc.update("UPDATE stores SET status='connected' WHERE id=?", storeId);
+        jdbc.update("UPDATE stores SET status='connected', connection_type='oauth' WHERE id=?", storeId);
 
         Map<String, Object> status = connCtl.status(principal());
         @SuppressWarnings("unchecked")
         Map<String, Object> shopify = (Map<String, Object>) status.get("shopify");
         assertThat(shopify.get("connected")).isEqualTo(true);
         assertThat(shopify.get("shopDomain")).isEqualTo("conn.myshopify.com");
+        assertThat(shopify.get("connectionType")).isEqualTo("oauth");
+        assertThat(shopify.get("status")).isEqualTo("connected");
+    }
+
+    // FR-3.1 — unified shopify object: connectionType and fine-grained status (previously
+    // only a "connected" boolean, losing the needs_reauth/error distinction the DB already
+    // tracked). Also covers custom_app_cc reporting through the SAME "shopify" key —
+    // the two-object split (shopify + shopifyCustomApp) that could double-report a single
+    // custom-app store is gone.
+    @Test
+    void c4_shopifyNeedsReauth_reflectsFineGrainedStatus() {
+        jdbc.update("UPDATE stores SET status='needs_reauth', connection_type='oauth' WHERE id=?", storeId);
+
+        Map<String, Object> status = connCtl.status(principal());
+        @SuppressWarnings("unchecked")
+        Map<String, Object> shopify = (Map<String, Object>) status.get("shopify");
+        assertThat(shopify.get("connected")).isEqualTo(false);
+        assertThat(shopify.get("status")).isEqualTo("needs_reauth");
+        assertThat(shopify.get("connectionType")).isEqualTo("oauth");
+    }
+
+    @Test
+    void c5_shopifyCustomAppCC_reportedThroughUnifiedShopifyKey() {
+        // stores_cc_requires_credentials (V51) requires non-null client_id/api_secret for
+        // connection_type='custom_app_cc' — dummy encrypted values, not read by status().
+        jdbc.update(
+            "UPDATE stores SET status='connected', connection_type='custom_app_cc', " +
+            "client_id_encrypted = ?, api_secret_encrypted = ? WHERE id=?",
+            encSvc.encrypt("dummy-client-id"), encSvc.encrypt("dummy-secret"), storeId);
+
+        Map<String, Object> status = connCtl.status(principal());
+        assertThat(status).doesNotContainKey("shopifyCustomApp");
+        @SuppressWarnings("unchecked")
+        Map<String, Object> shopify = (Map<String, Object>) status.get("shopify");
+        assertThat(shopify.get("connected")).isEqualTo(true);
+        assertThat(shopify.get("connectionType")).isEqualTo("custom_app_cc");
+    }
+
+    @Test
+    void c6_shopifySetupAndOauthAvailable_present() {
+        Map<String, Object> status = connCtl.status(principal());
+        assertThat(status).containsKey("oauthAvailable");
+        assertThat(status.get("oauthAvailable")).isEqualTo(false); // default, no env override in tests
+
+        @SuppressWarnings("unchecked")
+        Map<String, Object> setup = (Map<String, Object>) status.get("shopifySetup");
+        assertThat(setup).containsKeys("appUrl", "redirectUrl", "webhookApiVersion", "scopes");
+        assertThat((String) setup.get("webhookApiVersion")).isNotBlank();
+        @SuppressWarnings("unchecked")
+        List<String> scopes = (List<String>) setup.get("scopes");
+        assertThat(scopes).isNotEmpty();
     }
 
     @Test

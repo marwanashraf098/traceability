@@ -33,6 +33,21 @@ public class ConnectionsController {
     @Value("${app.custom-app-connect-enabled:false}")
     private boolean customAppConnectEnabled;
 
+    @Value("${shopify.oauth-available:false}")
+    private boolean oauthAvailable;
+
+    @Value("${shopify.app-url}")
+    private String shopifyAppUrl;
+
+    @Value("${shopify.redirect-uri}")
+    private String shopifyRedirectUrl;
+
+    @Value("${shopify.api-version}")
+    private String shopifyWebhookApiVersion;
+
+    @Value("${shopify.scopes}")
+    private String shopifyScopesCsv;
+
     private final JdbcTemplate       jdbc;
     private final TransactionTemplate tx;
 
@@ -47,9 +62,26 @@ public class ConnectionsController {
      * Returns connection status for all integration types the tenant has configured.
      * Response shape:
      * {
-     *   "shopify": { "connected": bool, "storeId": str|null, "shopDomain": str|null, "importStatus": str|null, "lastSyncAt": str|null },
-     *   "bosta":   { "connected": bool, "businessName": str|null, "pickupMode": str|null }
+     *   "shopify": { "connected": bool, "storeId": str|null, "shopDomain": str|null,
+     *                "connectionType": "oauth"|"custom_app"|"custom_app_cc"|null,
+     *                "status": "connected"|"needs_reauth"|"error"|"disconnected",
+     *                "importStatus": str|null, "lastSyncAt": str|null },
+     *   "bosta":   { "connected": bool, "businessName": str|null, "pickupMode": str|null },
+     *   "customAppAvailable": bool,
+     *   "oauthAvailable": bool,
+     *   "shopifySetup": { "appUrl": str, "redirectUrl": str, "webhookApiVersion": str, "scopes": [str] }
      * }
+     *
+     * FR-3.1: unified — previously "shopify" (picked without regard to connection_type)
+     * and "shopifyCustomApp" (connection_type IN ('custom_app','custom_app_cc')) were two
+     * independent queries that could both report the SAME store row when a tenant's only
+     * store happened to be a custom-app connection, misrepresenting it as also OAuth-style
+     * connected. One store row per tenant is now an enforced invariant (see
+     * ShopifySameShopGuard) — this endpoint picks that single row directly, in every
+     * connection_type. The deterministic ORDER BY … LIMIT 1 is kept as defense-in-depth
+     * only: it no longer needs to disambiguate between two live connection types (the
+     * guard prevents new duplicates), it just guards against any pre-existing or raced
+     * row the guard didn't see.
      */
     @GetMapping
     @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
@@ -57,25 +89,29 @@ public class ConnectionsController {
         UUID tenantId = principal.tenantId();
 
         return TenantContext.runAs(tenantId, () -> tx.execute(s -> {
-            // Shopify — take the most recently connected store
+            // Shopify — the tenant's single store row, any connection_type.
             Map<String, Object> shopify = jdbc.query(
-                "SELECT id, shop_domain, status, import_status::text, last_sync_at " +
+                "SELECT id, shop_domain, status::text, connection_type, import_status::text, last_sync_at " +
                 "FROM stores WHERE tenant_id = ? ORDER BY last_sync_at DESC NULLS LAST LIMIT 1",
                 rs -> {
                     Map<String, Object> m = new LinkedHashMap<>();
                     if (!rs.next()) {
-                        m.put("connected",    false);
-                        m.put("storeId",      null);
-                        m.put("shopDomain",   null);
-                        m.put("importStatus", null);
-                        m.put("lastSyncAt",   null);
+                        m.put("connected",      false);
+                        m.put("storeId",        null);
+                        m.put("shopDomain",     null);
+                        m.put("connectionType", null);
+                        m.put("status",         "disconnected");
+                        m.put("importStatus",   null);
+                        m.put("lastSyncAt",     null);
                     } else {
-                        boolean connected = "connected".equals(rs.getString("status"));
-                        m.put("connected",    connected);
-                        m.put("storeId",      rs.getObject("id", UUID.class).toString());
-                        m.put("shopDomain",   rs.getString("shop_domain"));
-                        m.put("importStatus", rs.getString("import_status"));
-                        m.put("lastSyncAt",   rs.getTimestamp("last_sync_at"));
+                        String storeStatus = rs.getString("status");
+                        m.put("connected",      "connected".equals(storeStatus));
+                        m.put("storeId",        rs.getObject("id", UUID.class).toString());
+                        m.put("shopDomain",     rs.getString("shop_domain"));
+                        m.put("connectionType", rs.getString("connection_type"));
+                        m.put("status",         storeStatus);
+                        m.put("importStatus",   rs.getString("import_status"));
+                        m.put("lastSyncAt",     rs.getTimestamp("last_sync_at"));
                     }
                     return m;
                 }, tenantId);
@@ -103,33 +139,18 @@ public class ConnectionsController {
                     return m;
                 }, tenantId);
 
-            // shopifyCustomApp status — custom_app and custom_app_cc connection_type stores
-            Map<String, Object> shopifyCustomApp = jdbc.query(
-                "SELECT shop_domain, status, import_status::text, last_sync_at " +
-                "FROM stores WHERE tenant_id = ? AND connection_type IN ('custom_app', 'custom_app_cc') " +
-                "ORDER BY last_sync_at DESC NULLS LAST LIMIT 1",
-                rs -> {
-                    Map<String, Object> m = new LinkedHashMap<>();
-                    if (!rs.next()) {
-                        m.put("connected",    false);
-                        m.put("shopDomain",   null);
-                        m.put("importStatus", null);
-                        m.put("lastSyncAt",   null);
-                    } else {
-                        boolean connected = "connected".equals(rs.getString("status"));
-                        m.put("connected",    connected);
-                        m.put("shopDomain",   rs.getString("shop_domain"));
-                        m.put("importStatus", rs.getString("import_status"));
-                        m.put("lastSyncAt",   rs.getTimestamp("last_sync_at"));
-                    }
-                    return m;
-                }, tenantId);
+            Map<String, Object> shopifySetup = new LinkedHashMap<>();
+            shopifySetup.put("appUrl",            shopifyAppUrl);
+            shopifySetup.put("redirectUrl",       shopifyRedirectUrl);
+            shopifySetup.put("webhookApiVersion", shopifyWebhookApiVersion);
+            shopifySetup.put("scopes",            List.of(shopifyScopesCsv.split(",")));
 
             Map<String, Object> result = new LinkedHashMap<>();
-            result.put("shopify",          shopify);
-            result.put("bosta",            bosta);
-            result.put("shopifyCustomApp", shopifyCustomApp);
+            result.put("shopify",            shopify);
+            result.put("bosta",              bosta);
             result.put("customAppAvailable", customAppConnectEnabled);
+            result.put("oauthAvailable",     oauthAvailable);
+            result.put("shopifySetup",       shopifySetup);
             return result;
         }));
     }

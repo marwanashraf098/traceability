@@ -192,6 +192,7 @@ public class ShopifySyncService {
     private final ObjectMapper mapper;
     private final TransactionTemplate tx;
     private final BlocklistService blocklist;
+    private final ShopifySameShopGuard sameShopGuard;
     private final int importLookbackDays;
 
     // FR-18: per-store connection cutoff cache. orders_ingest_from is set once at first connect
@@ -204,6 +205,7 @@ public class ShopifySyncService {
                                ObjectMapper mapper,
                                PlatformTransactionManager txm,
                                BlocklistService blocklist,
+                               ShopifySameShopGuard sameShopGuard,
                                @Value("${shopify.import.lookback-days:30}") int importLookbackDays) {
         this.jdbc                = jdbc;
         this.shopifyGateway      = shopifyGateway;
@@ -211,6 +213,7 @@ public class ShopifySyncService {
         this.mapper              = mapper;
         this.tx                  = new TransactionTemplate(txm);
         this.blocklist           = blocklist;
+        this.sameShopGuard       = sameShopGuard;
         this.importLookbackDays  = importLookbackDays;
     }
 
@@ -224,6 +227,7 @@ public class ShopifySyncService {
      * Returns immediately — the actual import runs as a background JobRunr job.
      */
     public ConnectResult connect(UUID tenantId, String shopDomain, String rawToken) {
+        sameShopGuard.assertBoundShop(tenantId, shopDomain);
         String shopName = shopifyGateway.validateShop(shopDomain, rawToken);
         String encrypted = encryptionService.encrypt(rawToken);
 
@@ -249,6 +253,7 @@ public class ShopifySyncService {
      * Returns 400 if the token does not look like a permanent admin token.
      */
     public ConnectResult connectCustomApp(UUID tenantId, String shopDomain, String rawToken, String rawApiSecret) {
+        sameShopGuard.assertBoundShop(tenantId, shopDomain);
         String shopName = shopifyGateway.validateShop(shopDomain, rawToken);
         // Rotating/expiring token guard: permanent custom-app admin tokens start with "shpat_".
         // Expiring tokens from the token-exchange flow have a different prefix.
@@ -290,6 +295,7 @@ public class ShopifySyncService {
     public ConnectResult connectCustomAppCC(UUID tenantId, String shopDomain,
                                             String clientId, String clientSecret,
                                             String accessToken, long expiresInSeconds) {
+        sameShopGuard.assertBoundShop(tenantId, shopDomain);
         String encryptedToken    = encryptionService.encrypt(accessToken);
         String encryptedClientId = encryptionService.encrypt(clientId);
         String encryptedSecret   = encryptionService.encrypt(clientSecret);

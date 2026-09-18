@@ -553,11 +553,16 @@ export async function switchPin(userId: string, pin: string): Promise<PinSwitchR
 
 // ── Connections status ────────────────────────────────────────────────────────
 
+export type ShopifyConnectionType = 'oauth' | 'custom_app' | 'custom_app_cc' | null
+export type ShopifyStoreStatus = 'connected' | 'needs_reauth' | 'error' | 'disconnected'
+
 export interface ConnectionsStatus {
   shopify: {
     connected: boolean
     storeId: string | null
     shopDomain: string | null
+    connectionType: ShopifyConnectionType
+    status: ShopifyStoreStatus
     importStatus: string | null
     lastSyncAt: string | null
   }
@@ -568,13 +573,14 @@ export interface ConnectionsStatus {
     awbFormat: 'A4' | 'A6' | null
     awbLang: string | null
   }
-  shopifyCustomApp: {
-    connected: boolean
-    shopDomain: string | null
-    importStatus: string | null
-    lastSyncAt: string | null
-  }
   customAppAvailable: boolean
+  oauthAvailable: boolean
+  shopifySetup: {
+    appUrl: string
+    redirectUrl: string
+    webhookApiVersion: string
+    scopes: string[]
+  }
 }
 
 export function getConnections() {
@@ -632,19 +638,28 @@ export function activateShopifyFulfillment() {
     '/locations/shopify/activate-fulfillment', { method: 'POST' })
 }
 
-// ── Shopify custom-app connect (DEV/pilot only) ───────────────────────────────
+// ── Shopify custom-app connect (custom_app_cc pilot path) ─────────────────────
+//
+// Uses transferCommandRequest (not request) so a same-shop-guard rejection
+// (SHOPIFY_SHOP_MISMATCH, 409 — see ShopifySameShopGuard) and other
+// ShopifyOAuthException-shaped errors from the backend surface as a
+// TransferCommandError with messageEn/messageAr, rendered AS-IS by the caller.
 
 export function shopifyCustomConnect(shopDomain: string, clientId: string, clientSecret: string) {
-  return request<{ storeId: string; importStatus: string }>('/shopify/custom-connect', {
+  return transferCommandRequest<{ storeId: string; importStatus: string }>('/shopify/custom-connect', {
     method: 'POST',
     body: JSON.stringify({ shopDomain, clientId, clientSecret }),
   })
 }
 
 // ── Shopify OAuth: initiate install flow ──────────────────────────────────────
+//
+// Same TransferCommandError contract as shopifyCustomConnect — a same-shop-guard
+// rejection here (tenant already bound to a different shop_domain) is the same
+// SHOPIFY_SHOP_MISMATCH shape.
 
 export function shopifyInitiate(shop: string) {
-  return request<{ consentUrl: string }>('/shopify/oauth/initiate', {
+  return transferCommandRequest<{ consentUrl: string }>('/shopify/oauth/initiate', {
     method: 'POST',
     body: JSON.stringify({ shop }),
   })

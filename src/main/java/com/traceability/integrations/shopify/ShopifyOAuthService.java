@@ -19,7 +19,6 @@ import java.security.SecureRandom;
 import java.sql.Timestamp;
 import java.time.Instant;
 import java.util.Base64;
-import java.util.List;
 import java.util.UUID;
 
 /**
@@ -114,6 +113,7 @@ public class ShopifyOAuthService {
     private final ShopifyImportJob          importJob;
     private final RegisterShopifyWebhooksJob webhooksJob;
     private final MagicLinkService          magicLinkService;
+    private final ShopifySameShopGuard      sameShopGuard;
     private final TransactionTemplate       tx;
     private final SecureRandom              rng = new SecureRandom();
 
@@ -132,6 +132,7 @@ public class ShopifyOAuthService {
             ShopifyImportJob importJob,
             RegisterShopifyWebhooksJob webhooksJob,
             MagicLinkService magicLinkService,
+            ShopifySameShopGuard sameShopGuard,
             PlatformTransactionManager txm,
             @Value("${shopify.client-id}") String clientId,
             @Value("${shopify.client-secret}") String clientSecret,
@@ -146,6 +147,7 @@ public class ShopifyOAuthService {
         this.importJob         = importJob;
         this.webhooksJob       = webhooksJob;
         this.magicLinkService  = magicLinkService;
+        this.sameShopGuard     = sameShopGuard;
         this.tx                = new TransactionTemplate(txm);
         this.clientId          = clientId;
         this.clientSecret      = clientSecret;
@@ -223,22 +225,17 @@ public class ShopifyOAuthService {
      * of status — connected, disconnected, needs_reauth) may only initiate OAuth against a
      * shop_domain it already owns. Zero existing rows means first connect — any valid shop
      * is allowed. Own-tenant shop only, in the message — never leaks another tenant's domain.
+     *
+     * Delegates the assertion itself to the shared ShopifySameShopGuard (also used by the
+     * custom-app connect paths in ShopifySyncService) — this method's own job is just to
+     * scope TenantContext around the call, since unlike ShopifySyncService's connect paths,
+     * nothing has set an ambient tenant context by the time initiateOAuth() runs (the
+     * controller deliberately does not touch TenantContext — see ShopifyOAuthController).
      */
     private void assertBoundShop(UUID tenantId, String requestedShop) {
         TenantContext.set(tenantId);
         try {
-            List<String> shopDomains = tx.execute(s -> jdbc.query(
-                "SELECT shop_domain FROM stores WHERE tenant_id = ?",
-                (rs, rowNum) -> rs.getString("shop_domain"), tenantId));
-            if (!shopDomains.isEmpty() && !shopDomains.contains(requestedShop)) {
-                throw new ShopifyOAuthException(
-                    ShopifyOAuthException.Code.SHOPIFY_SHOP_MISMATCH,
-                    "This account is connected to " + shopDomains.get(0) +
-                        " and can only reconnect that store.",
-                    "هذا الحساب متصل بـ " + shopDomains.get(0) +
-                        " ولا يمكن إلا إعادة الاتصال بنفس المتجر.",
-                    HttpStatus.CONFLICT);
-            }
+            sameShopGuard.assertBoundShop(tenantId, requestedShop);
         } finally {
             TenantContext.clear();
         }

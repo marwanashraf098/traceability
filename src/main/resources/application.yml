@@ -61,6 +61,12 @@ shopify:
   # Public OAuth app credentials (set via env in production).
   client-id: ${SHOPIFY_CLIENT_ID:dev-client-id}
   client-secret: ${SHOPIFY_CLIENT_SECRET:dev-client-secret-development-ok!!}
+  # Feature flag: the public App Store listing is live/approved, so the frontend can offer
+  # OAuth as a first-class path (reviewer "Connect with Shopify" without a caveat, and the
+  # early-access → official upgrade banner). The /oauth/initiate endpoint itself works
+  # regardless of this flag — it's a UI-copy/gating signal only, not a backend capability
+  # gate. Set SHOPIFY_OAUTH_AVAILABLE=true once the listing is approved.
+  oauth-available: ${SHOPIFY_OAUTH_AVAILABLE:false}
   # ShopifyOAuthService.buildConsentUrl() sends this verbatim as the &scope= param — this is
   # the list Shopify actually requests/grants (use_legacy_install_flow=true in shopify.app.toml
   # means the toml's [access_scopes] does not itself drive the consent screen; keep both lists
