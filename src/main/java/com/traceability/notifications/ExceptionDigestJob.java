@@ -80,7 +80,10 @@ public class ExceptionDigestJob {
     @Recurring(id = "exception-daily-digest", cron = "0 8 * * *", zoneId = "Africa/Cairo")
     @Job(name = "Exception daily digest")
     public void run() {
-        List<UUID> tenantIds = ownerJdbc.queryForList("SELECT id FROM tenants", UUID.class);
+        // FR-DEMO: the shared demo tenant produces zero real-world side effects —
+        // never emails, per the is_demo guard contract.
+        List<UUID> tenantIds = ownerJdbc.queryForList(
+                "SELECT id FROM tenants WHERE is_demo = false", UUID.class);
         for (UUID tenantId : tenantIds) {
             try {
                 processTenant(tenantId);

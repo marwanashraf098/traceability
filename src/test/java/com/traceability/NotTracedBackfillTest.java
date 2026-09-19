@@ -138,15 +138,18 @@ class NotTracedBackfillTest {
         //    no interaction with the stuck/traced orders here); V91, a nullable
         //    shopify_oauth_state.host column + consume_shopify_oauth_state() signature
         //    change (OAuth install-flow only, no interaction with the stuck/traced
-        //    orders here); and V92, the new order_notes table (new table, no existing
-        //    data touched, no interaction with the stuck/traced orders here).
+        //    orders here); V92, the new order_notes table (new table, no existing
+        //    data touched, no interaction with the stuck/traced orders here); and V93,
+        //    tenants.is_demo (new column, DEFAULT false backfills every existing row
+        //    metadata-only) + the new demo_leads table (no existing data touched, no
+        //    interaction with the stuck/traced orders here).
         Flyway toLatest = Flyway.configure()
                 .dataSource(POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword())
                 .locations("classpath:db/migration")
                 .load();
         MigrateResult r2 = toLatest.migrate();
         assertThat(r2.success).as("migrations after V56 must succeed").isTrue();
-        assertThat(r2.migrationsExecuted).as("V57 + V58 + V59 + V60 + V61 + V62 + V63 + V64 + V65 + V66 + V67 + V68 + V69 + V70 + V71 + V72 + V73 + V74 + V75 + V76 + V77 + V78 + V79 + V80 + V81 + V82 + V83 + V84 + V85 + V86 + V87 + V88 + V89 + V90 + V91 + V92 pending after V56").isEqualTo(36);
+        assertThat(r2.migrationsExecuted).as("V57 + V58 + V59 + V60 + V61 + V62 + V63 + V64 + V65 + V66 + V67 + V68 + V69 + V70 + V71 + V72 + V73 + V74 + V75 + V76 + V77 + V78 + V79 + V80 + V81 + V82 + V83 + V84 + V85 + V86 + V87 + V88 + V89 + V90 + V91 + V92 + V93 pending after V56").isEqualTo(37);
 
         try (Connection conn = DriverManager.getConnection(
                 POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword())) {

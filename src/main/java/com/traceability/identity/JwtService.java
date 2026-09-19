@@ -12,6 +12,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.Base64;
 import java.util.Date;
@@ -37,6 +38,15 @@ public class JwtService {
     }
 
     public String issueAccessToken(UUID userId, UUID tenantId, String role) {
+        return issueAccessToken(userId, tenantId, role, Duration.ofMinutes(accessTokenMinutes));
+    }
+
+    /**
+     * Same as {@link #issueAccessToken(UUID, UUID, String)} but with a caller-supplied TTL
+     * instead of the {@code app.jwt.access-token-minutes} default — e.g. the demo session's
+     * longer-lived, access-only (no refresh) token (FR-DEMO Day 2).
+     */
+    public String issueAccessToken(UUID userId, UUID tenantId, String role, Duration ttl) {
         try {
             Instant now = Instant.now();
             JWTClaimsSet claims = new JWTClaimsSet.Builder()
@@ -44,7 +54,7 @@ public class JwtService {
                     .claim("tenant", tenantId.toString())
                     .claim("role", role)
                     .issueTime(Date.from(now))
-                    .expirationTime(Date.from(now.plusSeconds(accessTokenMinutes * 60)))
+                    .expirationTime(Date.from(now.plus(ttl)))
                     .build();
             JWSSigner signer = new MACSigner(secret);
             SignedJWT jwt = new SignedJWT(new JWSHeader(JWSAlgorithm.HS256), claims);
