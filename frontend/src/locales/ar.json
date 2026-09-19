@@ -1118,6 +1118,7 @@
       "secretWarning": "احفظ هذا الآن — لن يُعرض مجدداً.",
       "secretWarningDetail": "الصق مفتاح التفويض في إعدادات Webhook في بوستا. إذا فقدته، استخدم خيار التجديد للحصول على مفتاح جديد.",
       "webhookUrlLabel": "رابط Webhook",
+      "authKeyNameLabel": "اسم مفتاح التفويض",
       "authKeyLabel": "مفتاح التفويض",
       "authKeyHint": "الصق هذه القيمة بالضبط في حقل «Authorization Key» في بوستا",
       "rawSecretLabel": "الرمز الخام (للمرجع)",
@@ -1128,7 +1129,33 @@
       "regenerating": "جارٍ التجديد…",
       "regenerateError": "تعذّر التجديد. أعد المحاولة.",
       "regenerateConfirmTitle": "تجديد رمز Webhook؟",
-      "regenerateConfirmMsg": "سيتم إلغاء الرمز الحالي. يجب تحديث مفتاح التفويض في إعدادات Webhook في بوستا فوراً."
+      "regenerateConfirmMsg": "سيتم إلغاء الرمز الحالي. يجب تحديث مفتاح التفويض في إعدادات Webhook في بوستا فوراً.",
+      "wizard": {
+        "title": "ربط حساب بوستا",
+        "stepLabel": "الخطوة {{current}} من {{total}}",
+        "back": "رجوع",
+        "next": "التالي",
+        "step1": {
+          "title": "افتح Applications في بوستا",
+          "body": "اذهب إلى موقع بوستا وسجّل الدخول، ثم افتح Applications من قائمة حسابك."
+        },
+        "step2": {
+          "title": "اربط متجرك باستخدام مفتاح API",
+          "body": "من Applications، اختر \"Connect your store using an API key\"."
+        },
+        "step3": {
+          "title": "أدخل رمز التحقق",
+          "body": "يرسل بوستا رمزًا لمرة واحدة (OTP) إلى رقم هاتفك المسجَّل. أدخله للمتابعة."
+        },
+        "step4": {
+          "title": "أنشئ مفتاح API بصلاحية Full access",
+          "body": "اضبط مستوى الوصول على Full access، ثم اضغط Create."
+        },
+        "step5": {
+          "title": "انسخ مفتاح API الخاص بك",
+          "body": "انسخ المفتاح الذي يعرضه بوستا، ثم الصقه أدناه لربط حسابك."
+        }
+      }
     },
     "never": "لم تتم"
   },

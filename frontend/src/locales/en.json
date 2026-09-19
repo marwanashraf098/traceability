@@ -1123,6 +1123,7 @@
       "secretWarning": "Save this now — it won't be shown again.",
       "secretWarningDetail": "Paste the Authorization Key into Bosta's webhook settings. If you lose it, use Regenerate to get a new one.",
       "webhookUrlLabel": "Webhook URL",
+      "authKeyNameLabel": "Authorization key name",
       "authKeyLabel": "Authorization Key",
       "authKeyHint": "Paste this exact value into Bosta's \"Authorization Key\" field",
       "rawSecretLabel": "Raw secret (for reference)",
@@ -1133,7 +1134,33 @@
       "regenerating": "Regenerating…",
       "regenerateError": "Could not regenerate. Try again.",
       "regenerateConfirmTitle": "Regenerate webhook secret?",
-      "regenerateConfirmMsg": "The current secret will be invalidated. You must update the Authorization Key in Bosta's webhook settings immediately after."
+      "regenerateConfirmMsg": "The current secret will be invalidated. You must update the Authorization Key in Bosta's webhook settings immediately after.",
+      "wizard": {
+        "title": "Connect your Bosta account",
+        "stepLabel": "Step {{current}} of {{total}}",
+        "back": "Back",
+        "next": "Next",
+        "step1": {
+          "title": "Open Applications in Bosta",
+          "body": "Go to the Bosta website and sign in, then open Applications from your account menu."
+        },
+        "step2": {
+          "title": "Connect your store using an API key",
+          "body": "In Applications, choose \"Connect your store using an API key\"."
+        },
+        "step3": {
+          "title": "Enter the verification code",
+          "body": "Bosta sends a one-time code (OTP) to your registered phone number. Enter it to continue."
+        },
+        "step4": {
+          "title": "Create a Full access API key",
+          "body": "Set the access level to Full access, then click Create."
+        },
+        "step5": {
+          "title": "Copy your API key",
+          "body": "Copy the key Bosta shows you, then paste it below to connect your account."
+        }
+      }
     },
     "never": "Never"
   },

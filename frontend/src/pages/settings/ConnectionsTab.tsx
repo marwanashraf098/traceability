@@ -1,12 +1,14 @@
-import { useState, useEffect, useCallback, FormEvent } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
 import {
   getConnections,
   bostaConnect, bostaRegenerateSecret, bostaSync, bostaGetSyncStatus,
   ConnectionsStatus, BostaBackfillStatus,
 } from '../../api'
+import { Button } from '../../components/ui'
 import { CopyRow } from './connections/CopyRow'
 import ShopifyConnectionCard from './connections/ShopifyConnectionCard'
+import BostaSetupWizard from './connections/BostaSetupWizard'
 
 // ── Status badge helpers ──────────────────────────────────────────────────────
 
@@ -29,6 +31,18 @@ function DisconnectedBadge({ label }: { label: string }) {
 }
 
 // ── Webhook secret reveal panel (shown once after connect or regenerate) ──────
+//
+// Restyled to sit under the same step-shell heading/spacing as BostaSetupWizard
+// (StepBody-style h4 + muted body, no bordered/tinted box) for visual parity
+// with the Shopify wizard's step content — cosmetic only. The show-once secret
+// contract, the CopyRows, and the underlying values are unchanged.
+//
+// The "authorization key name" Bosta's webhook config asks for is the fixed
+// HTTP header name "Authorization" — a literal constant, not a per-store
+// value, so it is never passed through t() (translating an HTTP header name
+// would break the paste-in). It gets its own CopyRow for copy-paste parity
+// with the other two rows; the two rows that actually carry secret material
+// remain the Bearer value and the raw secret.
 
 function WebhookSecretReveal({ secret, onDone }: { secret: string; onDone: () => void }) {
   const { t } = useTranslation()
@@ -36,18 +50,18 @@ function WebhookSecretReveal({ secret, onDone }: { secret: string; onDone: () =>
   const authKeyValue = `Bearer ${secret}`
 
   return (
-    <div className="rounded-lg border-2 border-warning/40 bg-warning/5 p-4 space-y-4">
-      {/* Warning banner */}
-      <div className="flex gap-2">
-        <span className="text-warning text-base flex-shrink-0">⚠</span>
-        <div>
-          <p className="text-small font-semibold text-warning">
-            {t('connections.bosta.secretWarning')}
-          </p>
-          <p className="text-xs text-muted mt-0.5">
-            {t('connections.bosta.secretWarningDetail')}
-          </p>
-        </div>
+    <div className="space-y-4">
+      <div>
+        <h4 className="text-body-lg font-semibold text-primary mb-1">
+          {t('connections.bosta.webhookSetup')}
+        </h4>
+        <p className="text-small font-medium text-warning flex items-center gap-1.5">
+          <span aria-hidden className="flex-shrink-0">⚠</span>
+          {t('connections.bosta.secretWarning')}
+        </p>
+        <p className="text-xs text-muted mt-0.5">
+          {t('connections.bosta.secretWarningDetail')}
+        </p>
       </div>
 
       {/* Copyable rows */}
@@ -55,6 +69,12 @@ function WebhookSecretReveal({ secret, onDone }: { secret: string; onDone: () =>
         <CopyRow
           label={t('connections.bosta.webhookUrlLabel')}
           value={webhookUrl}
+          copyLabel={t('connections.bosta.copy')}
+          copiedLabel={t('connections.bosta.copied')}
+        />
+        <CopyRow
+          label={t('connections.bosta.authKeyNameLabel')}
+          value="Authorization"
           copyLabel={t('connections.bosta.copy')}
           copiedLabel={t('connections.bosta.copied')}
         />
@@ -73,25 +93,30 @@ function WebhookSecretReveal({ secret, onDone }: { secret: string; onDone: () =>
         />
       </div>
 
-      <button
-        type="button"
-        onClick={onDone}
-        className="btn btn-brand w-full"
-      >
+      <Button variant="primary" className="w-full" onClick={onDone}>
         {t('connections.bosta.doneBtn')}
-      </button>
+      </Button>
     </div>
   )
 }
 
-// ── Bosta card ────────────────────────────────────────────────────────────────
+// ── Bosta card — state machine wrapper ─────────────────────────────────────────
+//
+// uiState mirrors ShopifyConnectionCard's override/derived-state pattern, scaled
+// down to what Bosta actually needs: no OAuth review, no needs_reauth/error
+// equivalent (courier_accounts.status never leaves 'active' in practice — see
+// ConnectionsController), no choose-method fork (Bosta has one connect path).
+// `override` holds local wizard state; null means "trust bosta.connected".
+// Clearing it (onBack, or after a successful connect) always resolves back to
+// whichever real state applies — 'connected' if already connected (the
+// Reconnect path), 'disconnected' otherwise — with no separate exit target
+// needed for either case.
 
-function BostaCard({ bosta, onConnected }: { bosta: ConnectionsStatus['bosta']; onConnected: () => void }) {
+type BostaUiState = 'disconnected' | 'wizard' | 'connected'
+
+function BostaCard({ bosta, onConnected }: { bosta: ConnectionsStatus['bosta']; onConnected: () => Promise<void> }) {
   const { t } = useTranslation()
-  const [apiKey,         setApiKey]        = useState('')
-  const [loading,        setLoading]       = useState(false)
-  const [error,          setError]         = useState('')
-  const [showForm,       setShowForm]      = useState(false)
+  const [override,       setOverride]      = useState<'wizard' | null>(null)
   const [syncing,        setSyncing]       = useState(false)
   const [syncError,      setSyncError]     = useState('')
   const [syncStatus,     setSyncStatus]    = useState<BostaBackfillStatus | null>(null)
@@ -99,28 +124,30 @@ function BostaCard({ bosta, onConnected }: { bosta: ConnectionsStatus['bosta']; 
   const [regenerating,   setRegenerating]  = useState(false)
   const [regenerateErr,  setRegenerateErr] = useState('')
 
+  const uiState: BostaUiState = override ?? (bosta.connected ? 'connected' : 'disconnected')
+
   useEffect(() => {
     if (bosta.connected) {
       bostaGetSyncStatus().then(setSyncStatus).catch(() => {/* non-critical */})
     }
   }, [bosta.connected])
 
-  async function handleConnect(e: FormEvent) {
-    e.preventDefault()
-    setError('')
-    if (!apiKey.trim()) return
-    setLoading(true)
-    try {
-      const result = await bostaConnect(apiKey.trim())
-      setApiKey('')
-      setShowForm(false)
-      onConnected()
-      setRevealSecret(result.webhookSecret)  // show-once reveal panel
-    } catch {
-      setError(t('connections.bosta.error'))
-    } finally {
-      setLoading(false)
-    }
+  // Passed to BostaSetupWizard as onConnect — errors propagate back to the
+  // wizard's own step-5 form so it can show them inline, exactly as the old
+  // single-form handleConnect did.
+  async function handleWizardConnect(apiKey: string) {
+    return bostaConnect(apiKey)
+  }
+
+  // Passed to BostaSetupWizard as onSuccess. onConnected() (the parent's
+  // getConnections() reload) is awaited BEFORE clearing override, so
+  // bosta.connected is already true by the time uiState re-derives — avoids a
+  // one-frame flash back to 'disconnected' (same ordering as
+  // ShopifyConnectionCard.handleWizardSubmit).
+  async function handleWizardSuccess(webhookSecret: string) {
+    await onConnected()
+    setOverride(null)
+    setRevealSecret(webhookSecret)  // show-once reveal panel
   }
 
   async function handleSync() {
@@ -154,8 +181,6 @@ function BostaCard({ bosta, onConnected }: { bosta: ConnectionsStatus['bosta']; 
     }
   }, [t])
 
-  const showConnect = !bosta.connected || showForm
-
   return (
     <div className="card p-5 space-y-4">
       <div className="flex items-center justify-between gap-3">
@@ -181,7 +206,7 @@ function BostaCard({ bosta, onConnected }: { bosta: ConnectionsStatus['bosta']; 
         />
       )}
 
-      {bosta.connected && !showForm && !revealSecret && (
+      {uiState === 'connected' && !revealSecret && (
         <div className="space-y-2 text-small">
           {bosta.businessName && (
             <div className="flex gap-2">
@@ -208,7 +233,7 @@ function BostaCard({ bosta, onConnected }: { bosta: ConnectionsStatus['bosta']; 
                 {syncing ? t('connections.bosta.syncing') : t('connections.bosta.syncBtn')}
               </button>
               <button
-                onClick={() => { setShowForm(true); setRevealSecret(null) }}
+                onClick={() => { setOverride('wizard'); setRevealSecret(null) }}
                 className="btn btn-ghost text-small"
               >
                 {t('connections.bosta.reconnect')}
@@ -238,53 +263,21 @@ function BostaCard({ bosta, onConnected }: { bosta: ConnectionsStatus['bosta']; 
         </div>
       )}
 
-      {showConnect && (
+      {uiState === 'disconnected' && (
         <div className="space-y-3">
           <p className="text-small text-muted">{t('connections.bosta.connectTitle')}</p>
-
-          {error && (
-            <div role="alert" className="text-small text-danger bg-danger/10 border border-danger/25 rounded px-3 py-2">
-              {error}
-            </div>
-          )}
-
-          <form onSubmit={handleConnect} className="space-y-3">
-            <div>
-              <label className="block text-small text-muted mb-1.5" htmlFor="bostaApiKey">
-                {t('connections.bosta.apiKeyLabel')}
-              </label>
-              <input
-                id="bostaApiKey"
-                type="password"
-                value={apiKey}
-                onChange={e => setApiKey(e.target.value)}
-                className="input"
-                placeholder={t('connections.bosta.apiKeyPlaceholder')}
-                dir="ltr"
-                disabled={loading}
-                autoComplete="off"
-              />
-            </div>
-            <div className="flex gap-2">
-              <button
-                type="submit"
-                disabled={loading || !apiKey.trim()}
-                className="btn btn-brand"
-              >
-                {loading ? t('connections.bosta.connecting') : t('connections.bosta.connectBtn')}
-              </button>
-              {bosta.connected && (
-                <button
-                  type="button"
-                  onClick={() => { setShowForm(false); setError('') }}
-                  className="btn btn-ghost"
-                >
-                  {t('common.cancel')}
-                </button>
-              )}
-            </div>
-          </form>
+          <Button variant="primary" className="w-full" onClick={() => setOverride('wizard')}>
+            {t('connections.bosta.connectBtn')}
+          </Button>
         </div>
+      )}
+
+      {uiState === 'wizard' && (
+        <BostaSetupWizard
+          onBack={() => setOverride(null)}
+          onConnect={handleWizardConnect}
+          onSuccess={handleWizardSuccess}
+        />
       )}
     </div>
   )
