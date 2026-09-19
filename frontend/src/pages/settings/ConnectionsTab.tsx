@@ -320,9 +320,25 @@ export default function ConnectionsTab({ readOnly }: { readOnly: boolean }) {
 
   useEffect(() => { load() }, [])
 
+  // Spinner gates on `!status` (first load only), and the fieldset gates on
+  // `status` alone (not `!loading`) — deliberately, not the obvious `loading &&
+  // status && ...` split. A REload (any card's onConnected/reload prop, e.g.
+  // BostaCard after a successful connect) sets loading=true again while status
+  // still holds the previous good value; if the fieldset also required
+  // `!loading`, that reload would unmount ShopifyConnectionCard/BostaCard for
+  // its duration and remount them fresh once it resolves — silently discarding
+  // any local child state set in the same tick as the reload call (e.g.
+  // BostaCard's post-connect `setRevealSecret`, which react 18 batches into the
+  // SAME commit as the reload's `setLoading(true)`, so the update lands on the
+  // fiber that's being torn down and is gone by the time the remount happens).
+  // Confirmed via RTL repro: the webhook-secret reveal never rendered under the
+  // old `!loading && status` gate, in either await- or fire-and-forget-style
+  // reload calls. Once `status` exists, the grid stays mounted through every
+  // subsequent reload; only the very first load (status still null) blocks on
+  // the spinner.
   return (
     <div className="space-y-6">
-      {loading && (
+      {loading && !status && (
         <div className="flex items-center justify-center py-16">
           <svg className="animate-spin w-6 h-6 text-brand" fill="none" viewBox="0 0 24 24">
             <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
@@ -337,7 +353,7 @@ export default function ConnectionsTab({ readOnly }: { readOnly: boolean }) {
         </div>
       )}
 
-      {!loading && status && (
+      {status && (
         <fieldset disabled={readOnly} className="contents border-0 p-0 m-0">
           <div className="grid gap-4 sm:grid-cols-2">
             <ShopifyConnectionCard
