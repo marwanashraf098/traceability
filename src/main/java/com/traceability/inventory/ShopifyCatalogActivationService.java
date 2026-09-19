@@ -2,6 +2,7 @@ package com.traceability.inventory;
 
 import com.traceability.integrations.shopify.ShopifyGateway;
 import com.traceability.integrations.shopify.ShopifyTokenProvider;
+import com.traceability.integrations.shopify.StoreRepository;
 import com.traceability.tenancy.TenantContext;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -34,13 +35,16 @@ public class ShopifyCatalogActivationService {
     private final TransactionTemplate tx;
     private final ShopifyGateway shopify;
     private final ShopifyTokenProvider tokenProvider;
+    private final StoreRepository storeRepository;
 
     public ShopifyCatalogActivationService(JdbcTemplate jdbc, PlatformTransactionManager txm,
-                                            ShopifyGateway shopify, ShopifyTokenProvider tokenProvider) {
+                                            ShopifyGateway shopify, ShopifyTokenProvider tokenProvider,
+                                            StoreRepository storeRepository) {
         this.jdbc          = jdbc;
         this.tx            = new TransactionTemplate(txm);
         this.shopify       = shopify;
         this.tokenProvider = tokenProvider;
+        this.storeRepository = storeRepository;
     }
 
     public record ActivationOutcome(int total, int succeeded, int failed, List<Map<String, String>> failures) {}
@@ -48,11 +52,9 @@ public class ShopifyCatalogActivationService {
     public ActivationOutcome activateAll() {
         UUID tenantId = TenantContext.require();
 
-        record StoreSnap(UUID id, String shopDomain) {}
-        StoreSnap store = tx.execute(s -> jdbc.query(
-            "SELECT id, shop_domain FROM stores WHERE tenant_id = ? LIMIT 1",
-            rs -> rs.next() ? new StoreSnap(rs.getObject(1, UUID.class), rs.getString(2)) : null,
-            tenantId));
+        // FR-3.1 follow-up — StoreRepository.findActiveStoreByTenant() is the single
+        // canonical pick shared by every job/service (never a disconnected row).
+        StoreRepository.Store store = storeRepository.findActiveStoreByTenant(tenantId).orElse(null);
         if (store == null) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "No Shopify store connected");
         }

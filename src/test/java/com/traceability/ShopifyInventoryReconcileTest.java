@@ -396,4 +396,45 @@ class ShopifyInventoryReconcileTest {
             Long.class, tenantId, variantId);
         assertThat(count).as("pc6: the retry updates the same row, never inserts a second one").isEqualTo(1L);
     }
+
+    // -----------------------------------------------------------------------
+    // FR-3.1 follow-up — StoreRepository.findActiveStoreByTenant() coverage.
+    // -----------------------------------------------------------------------
+
+    @Test
+    void pc7_disconnectThenSwitch_resolvesActiveStoreNotDisconnected() {
+        jdbc.update("UPDATE stores SET status = 'disconnected' WHERE id = ?", storeId);
+        UUID activeStoreId = UUID.randomUUID();
+        String activeDomain = "pc-active.myshopify.com";
+        jdbc.update("INSERT INTO stores (id, tenant_id, shop_domain, status, last_sync_at) " +
+            "VALUES (?, ?, ?, 'connected', now())", activeStoreId, tenantId, activeDomain);
+        when(tokenProvider.getValidToken(activeStoreId)).thenReturn("active-token");
+        when(shopifyGateway.fetchAvailableQuantities(eq(activeDomain), eq("active-token"), eq(TRACED_GID), anyList()))
+            .thenReturn(List.of());
+
+        TenantContext.set(tenantId);
+        try {
+            var report = reconcileService.reconcile();
+            assertThat(report.tracedLocationGid()).isEqualTo(TRACED_GID);
+        } finally {
+            TenantContext.clear();
+        }
+        verify(shopifyGateway, never()).fetchAvailableQuantities(eq(SHOP_DOMAIN), any(), any(), anyList());
+
+        jdbc.update("DELETE FROM stores WHERE id = ?", activeStoreId);
+    }
+
+    @Test
+    void pc8_allStoresDisconnected_conflictNoGatewayCalls() {
+        jdbc.update("UPDATE stores SET status = 'disconnected' WHERE id = ?", storeId);
+
+        TenantContext.set(tenantId);
+        try {
+            Assertions.assertThrows(
+                org.springframework.web.server.ResponseStatusException.class, reconcileService::reconcile);
+        } finally {
+            TenantContext.clear();
+        }
+        verifyNoInteractions(shopifyGateway);
+    }
 }

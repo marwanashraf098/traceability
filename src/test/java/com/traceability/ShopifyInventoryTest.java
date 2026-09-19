@@ -126,8 +126,8 @@ class ShopifyInventoryTest {
         jdbc.update("INSERT INTO tenants (id, name) VALUES (?, 'ShopifyInventoryTenant')", tenantId);
 
         jdbc.update(
-            "INSERT INTO stores (id, tenant_id, shop_domain, import_status, access_token_scopes) " +
-            "VALUES (?, ?, ?, 'idle', " +
+            "INSERT INTO stores (id, tenant_id, shop_domain, status, import_status, access_token_scopes) " +
+            "VALUES (?, ?, ?, 'connected', 'idle', " +
             "'read_orders,write_inventory,read_products,write_locations,read_locations,read_customers')",
             storeId, tenantId, SHOP_DOMAIN);
 
@@ -163,8 +163,8 @@ class ShopifyInventoryTest {
         storeUnsynced  = UUID.randomUUID();
         jdbc.update("INSERT INTO tenants (id, name) VALUES (?, 'ShopifyInventoryUnsyncedTenant')", tenantUnsynced);
         jdbc.update(
-            "INSERT INTO stores (id, tenant_id, shop_domain, import_status, access_token_scopes) " +
-            "VALUES (?, ?, 'unsynced-test.myshopify.com', 'idle', " +
+            "INSERT INTO stores (id, tenant_id, shop_domain, status, import_status, access_token_scopes) " +
+            "VALUES (?, ?, 'unsynced-test.myshopify.com', 'connected', 'idle', " +
             "'read_orders,write_inventory,read_products,write_locations,read_locations,read_customers')",
             storeUnsynced, tenantUnsynced);
         productUnsynced = UUID.randomUUID();
@@ -779,9 +779,9 @@ class ShopifyInventoryTest {
 
         jdbc.update("INSERT INTO tenants (id, name) VALUES (?, 'ShopifyInventoryCcScopeTenant')", ccTenantId);
         jdbc.update(
-            "INSERT INTO stores (id, tenant_id, shop_domain, import_status, connection_type, " +
+            "INSERT INTO stores (id, tenant_id, shop_domain, status, import_status, connection_type, " +
             "client_id_encrypted, api_secret_encrypted, access_token_scopes) " +
-            "VALUES (?, ?, 'cc-scope-test.myshopify.com', 'idle', 'custom_app_cc', 'enc-id', 'enc-secret', 'read_products')",
+            "VALUES (?, ?, 'cc-scope-test.myshopify.com', 'connected', 'idle', 'custom_app_cc', 'enc-id', 'enc-secret', 'read_products')",
             ccStoreId, ccTenantId);
         jdbc.update(
             "INSERT INTO products (id, tenant_id, store_id, external_id, title, status) " +
@@ -918,13 +918,13 @@ class ShopifyInventoryTest {
 
         // Stale store: older last_sync_at — must NOT be the row resolvePreconditions reads.
         jdbc.update(
-            "INSERT INTO stores (id, tenant_id, shop_domain, import_status, access_token_scopes, last_sync_at) " +
-            "VALUES (?, ?, 'stale-det.myshopify.com', 'idle', 'read_products,write_inventory', now() - interval '10 days')",
+            "INSERT INTO stores (id, tenant_id, shop_domain, status, import_status, access_token_scopes, last_sync_at) " +
+            "VALUES (?, ?, 'stale-det.myshopify.com', 'connected', 'idle', 'read_products,write_inventory', now() - interval '10 days')",
             staleStoreId, detTenantId);
         // Fresh store: most recent last_sync_at — the one that must win.
         jdbc.update(
-            "INSERT INTO stores (id, tenant_id, shop_domain, import_status, access_token_scopes, last_sync_at) " +
-            "VALUES (?, ?, 'fresh-det.myshopify.com', 'idle', 'read_products,write_inventory', now())",
+            "INSERT INTO stores (id, tenant_id, shop_domain, status, import_status, access_token_scopes, last_sync_at) " +
+            "VALUES (?, ?, 'fresh-det.myshopify.com', 'connected', 'idle', 'read_products,write_inventory', now())",
             freshStoreId, detTenantId);
 
         jdbc.update(

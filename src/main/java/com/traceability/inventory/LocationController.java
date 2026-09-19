@@ -4,6 +4,7 @@ import com.traceability.identity.CustomUserDetails;
 import com.traceability.integrations.shopify.ShopifyGateway;
 import com.traceability.integrations.shopify.ShopifyLocationGateway;
 import com.traceability.integrations.shopify.ShopifyTokenProvider;
+import com.traceability.integrations.shopify.StoreRepository;
 import com.traceability.tenancy.TenantContext;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -38,16 +39,19 @@ public class LocationController {
     private final ShopifyLocationGateway shopifyLocations;
     private final ShopifyTokenProvider   tokenProvider;
     private final ShopifyFulfillmentActivationService fulfillmentActivationService;
+    private final StoreRepository        storeRepository;
 
     public LocationController(JdbcTemplate jdbc, PlatformTransactionManager txm,
                               ShopifyLocationGateway shopifyLocations,
                               ShopifyTokenProvider tokenProvider,
-                              ShopifyFulfillmentActivationService fulfillmentActivationService) {
+                              ShopifyFulfillmentActivationService fulfillmentActivationService,
+                              StoreRepository storeRepository) {
         this.jdbc             = jdbc;
         this.tx               = new TransactionTemplate(txm);
         this.shopifyLocations = shopifyLocations;
         this.tokenProvider    = tokenProvider;
         this.fulfillmentActivationService = fulfillmentActivationService;
+        this.storeRepository  = storeRepository;
     }
 
     @GetMapping
@@ -130,23 +134,16 @@ public class LocationController {
         String syncStatus = "unsynced";
         String syncError  = null;
         try {
-            record StoreSnap(UUID id, String shopDomain, String grantedScopes, String connectionType) {}
-            StoreSnap store = tx.execute(status ->
-                jdbc.query(
-                    "SELECT id, shop_domain, access_token_scopes, connection_type FROM stores WHERE tenant_id = ? LIMIT 1",
-                    rs -> rs.next() ? new StoreSnap(
-                        rs.getObject(1, UUID.class),
-                        rs.getString(2),
-                        rs.getString(3),
-                        rs.getString(4)) : null,
-                    tenantId));
+            // FR-3.1 follow-up — StoreRepository.findActiveStoreByTenant() is the single
+            // canonical pick shared by every job/service (never a disconnected row).
+            StoreRepository.Store store = storeRepository.findActiveStoreByTenant(tenantId).orElse(null);
 
             if (store == null) {
                 throw new IllegalStateException("No Shopify store connected");
             }
-            if (!ShopifyGateway.isScopeGranted("write_locations", store.grantedScopes())) {
+            if (!ShopifyGateway.isScopeGranted("write_locations", store.accessTokenScopes())) {
                 String message = ShopifyGateway.scopeGrantMessage(
-                    store.connectionType(), "write_locations", store.grantedScopes());
+                    store.connectionType(), "write_locations", store.accessTokenScopes());
                 log.warn("Location sync skipped: {}", message);
                 throw new IllegalStateException(message);
             }
@@ -242,12 +239,9 @@ public class LocationController {
                 "Location has no Shopify link to clean up");
         }
 
-        record StoreSnap(UUID id, String shopDomain) {}
-        StoreSnap store = tx.execute(status ->
-            jdbc.query(
-                "SELECT id, shop_domain FROM stores WHERE tenant_id = ? LIMIT 1",
-                rs -> rs.next() ? new StoreSnap(rs.getObject(1, UUID.class), rs.getString(2)) : null,
-                tenantId));
+        // FR-3.1 follow-up — StoreRepository.findActiveStoreByTenant() is the single
+        // canonical pick shared by every job/service (never a disconnected row).
+        StoreRepository.Store store = storeRepository.findActiveStoreByTenant(tenantId).orElse(null);
         if (store == null) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "No Shopify store connected");
         }

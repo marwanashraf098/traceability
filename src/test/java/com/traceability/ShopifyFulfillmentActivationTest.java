@@ -233,4 +233,44 @@ class ShopifyFulfillmentActivationTest {
             "SELECT shopify_delivery_profile_status FROM locations WHERE id = ?", String.class, locationId);
         assertThat(status).isEqualTo("error");
     }
+
+    // -----------------------------------------------------------------------
+    // FR-3.1 follow-up — StoreRepository.findActiveStoreByTenant() coverage.
+    // -----------------------------------------------------------------------
+
+    @Test
+    void fa6_disconnectThenSwitch_resolvesActiveStoreNotDisconnected() {
+        jdbc.update("UPDATE stores SET status = 'disconnected' WHERE id = ?", storeId);
+        UUID activeStoreId = UUID.randomUUID();
+        String activeDomain = "fa-active.myshopify.com";
+        jdbc.update(
+            "INSERT INTO stores (id, tenant_id, shop_domain, status, access_token_scopes, connection_type, last_sync_at) " +
+            "VALUES (?, ?, ?, 'connected', 'read_products,write_locations,write_inventory,write_shipping', 'oauth', now())",
+            activeStoreId, tenantId, activeDomain);
+        when(tokenProvider.getValidToken(activeStoreId)).thenReturn("active-token");
+        when(deliveryProfiles.findDefaultProfileLocationGroup(activeDomain, "active-token"))
+            .thenReturn(Optional.of(new ShopifyDeliveryProfileGateway.LocationGroupInfo(
+                PROFILE_GID, GROUP_GID, Set.of("gid://shopify/Location/other"))));
+
+        ShopifyFulfillmentActivationService.ActivationResult result =
+            asTenant(() -> activationService.activate(null));
+
+        assertThat(result.status()).isEqualTo(ShopifyFulfillmentActivationService.STATUS_ACTIVATED);
+        verify(deliveryProfiles).addLocationToGroup(
+            activeDomain, "active-token", PROFILE_GID, GROUP_GID, LOCATION_GID);
+        verify(deliveryProfiles, never()).findDefaultProfileLocationGroup(eq(SHOP_DOMAIN), any());
+
+        jdbc.update("DELETE FROM stores WHERE id = ?", activeStoreId);
+    }
+
+    @Test
+    void fa7_allStoresDisconnected_conflictNoGatewayCalls() {
+        jdbc.update("UPDATE stores SET status = 'disconnected' WHERE id = ?", storeId);
+
+        Assertions.assertThrows(
+            org.springframework.web.server.ResponseStatusException.class,
+            () -> asTenant(() -> activationService.activate(null)));
+
+        verifyNoInteractions(deliveryProfiles);
+    }
 }

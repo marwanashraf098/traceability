@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.traceability.integrations.shopify.ShopifyException;
 import com.traceability.integrations.shopify.ShopifyGateway;
 import com.traceability.integrations.shopify.ShopifyTokenProvider;
+import com.traceability.integrations.shopify.StoreRepository;
 import com.traceability.tenancy.TenantContext;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -80,17 +81,20 @@ public class ShopifyInventoryService {
     private final ShopifyGateway       shopify;
     private final ShopifyTokenProvider tokenProvider;
     private final ObjectMapper         mapper;
+    private final StoreRepository      storeRepository;
 
     public ShopifyInventoryService(JdbcTemplate jdbc,
                                    PlatformTransactionManager txm,
                                    ShopifyGateway shopify,
                                    ShopifyTokenProvider tokenProvider,
-                                   ObjectMapper mapper) {
+                                   ObjectMapper mapper,
+                                   StoreRepository storeRepository) {
         this.jdbc          = jdbc;
         this.tx            = new TransactionTemplate(txm);
         this.shopify       = shopify;
         this.tokenProvider = tokenProvider;
         this.mapper        = mapper;
+        this.storeRepository = storeRepository;
     }
 
     // ── Trigger 1: receiving session close ───────────────────────────────────
@@ -490,27 +494,17 @@ public class ShopifyInventoryService {
             if (variantGid == null || variantGid.isBlank()) {
                 variantError = "Variant has no Shopify GID: " + variantId;
             } else {
-                record StoreSnap(UUID id, String shopDomain, String grantedScopes, String connectionType) {}
-                // ORDER BY last_sync_at DESC NULLS LAST — a tenant is schema-legal to have more
-                // than one stores row (no UNIQUE(tenant_id) constraint exists), so a bare LIMIT 1
-                // picks an undefined row. Matches ConnectionsController's "most recently connected
-                // store" pattern. Without this, a stale/never-synced store row can beat the real
-                // one, reading its (possibly empty) scopes/token instead — this was live and
-                // undiagnosed during the 2026-07-31 read_products scope-check investigation.
-                StoreSnap store = tx.execute(status ->
-                    jdbc.query(
-                        "SELECT id, shop_domain, access_token_scopes, connection_type FROM stores " +
-                        "WHERE tenant_id = ? ORDER BY last_sync_at DESC NULLS LAST LIMIT 1",
-                        rs -> rs.next() ? new StoreSnap(
-                            rs.getObject(1, UUID.class),
-                            rs.getString(2),
-                            rs.getString(3),
-                            rs.getString(4)) : null,
-                        tenantId));
+                // FR-3.1 follow-up — StoreRepository.findActiveStoreByTenant() is the single
+                // canonical pick (never a disconnected row) shared by every job/service, so a
+                // disconnect-then-switch tenant's stale old row can never beat the real one
+                // here. Fixes the same class of bug the 2026-07-31 read_products scope-check
+                // investigation diagnosed (an unordered/under-ordered pick reading a stale
+                // store's possibly-empty scopes/token instead of the real one).
+                StoreRepository.Store store = storeRepository.findActiveStoreByTenant(tenantId).orElse(null);
 
                 if (store == null) {
                     variantError = "No store found for tenant";
-                } else if (!ShopifyGateway.isScopeGranted("read_products", store.grantedScopes())) {
+                } else if (!ShopifyGateway.isScopeGranted("read_products", store.accessTokenScopes())) {
                     // TEMPORARY DIAGNOSTIC (2026-07-31) — tracing a live bug where the DB
                     // confirms correct scopes for tenant ab9af168 but this check still fails.
                     // Logs the ThreadLocal tenant alongside the tenantId parameter used for the
@@ -532,14 +526,14 @@ public class ShopifyInventoryService {
                              "rawAccessTokenScopes='{}'] claimRow[triggerType={}, triggerId={}, " +
                              "createdAt={}] now={}",
                         tenantId, threadLocalTenantId, tenantId.equals(threadLocalTenantId),
-                        store.id(), store.shopDomain(), store.grantedScopes(),
+                        store.id(), store.shopDomain(), store.accessTokenScopes(),
                         triggerType, triggerId, claimRowCreatedAt, Instant.now());
 
                     variantError = ShopifyGateway.scopeGrantMessage(
-                        store.connectionType(), "read_products", store.grantedScopes());
-                } else if (!ShopifyGateway.isScopeGranted("write_inventory", store.grantedScopes())) {
+                        store.connectionType(), "read_products", store.accessTokenScopes());
+                } else if (!ShopifyGateway.isScopeGranted("write_inventory", store.accessTokenScopes())) {
                     variantError = ShopifyGateway.scopeGrantMessage(
-                        store.connectionType(), "write_inventory", store.grantedScopes());
+                        store.connectionType(), "write_inventory", store.accessTokenScopes());
                 } else {
                     shopDomain = store.shopDomain();
                     token = tokenProvider.getValidToken(store.id());

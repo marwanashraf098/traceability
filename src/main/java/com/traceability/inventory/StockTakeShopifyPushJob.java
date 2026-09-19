@@ -6,6 +6,7 @@ import com.traceability.integrations.shopify.ShopifyAmbiguousException;
 import com.traceability.integrations.shopify.ShopifyException;
 import com.traceability.integrations.shopify.ShopifyGateway;
 import com.traceability.integrations.shopify.ShopifyTokenProvider;
+import com.traceability.integrations.shopify.StoreRepository;
 import com.traceability.tenancy.TenantContext;
 import org.jobrunr.jobs.annotations.Job;
 import org.slf4j.Logger;
@@ -43,15 +44,17 @@ public class StockTakeShopifyPushJob {
     private final ShopifyGateway       shopify;
     private final ShopifyTokenProvider tokenProvider;
     private final ObjectMapper         mapper;
+    private final StoreRepository      storeRepository;
 
     public StockTakeShopifyPushJob(JdbcTemplate jdbc, PlatformTransactionManager txm,
                                    ShopifyGateway shopify, ShopifyTokenProvider tokenProvider,
-                                   ObjectMapper mapper) {
+                                   ObjectMapper mapper, StoreRepository storeRepository) {
         this.jdbc          = jdbc;
         this.tx            = new TransactionTemplate(txm);
         this.shopify       = shopify;
         this.tokenProvider = tokenProvider;
         this.mapper        = mapper;
+        this.storeRepository = storeRepository;
     }
 
     @Job(name = "Stock-take Shopify push — session %0")
@@ -166,23 +169,17 @@ public class StockTakeShopifyPushJob {
         }
         String locationGid = (String) locRow.get("shopify_location_id");
 
-        record StoreSnap(UUID id, String shopDomain, String grantedScopes, String connectionType) {}
-        // ORDER BY last_sync_at DESC NULLS LAST — same fix as Step 0.5's resolvePreconditions();
-        // a tenant is schema-legal to have more than one stores row, so a bare LIMIT 1 would be
-        // nondeterministic. This is a new call site — built correctly from the start.
-        StoreSnap store = jdbc.query(
-            "SELECT id, shop_domain, access_token_scopes, connection_type FROM stores " +
-            "WHERE tenant_id = ? ORDER BY last_sync_at DESC NULLS LAST LIMIT 1",
-            rs -> rs.next() ? new StoreSnap(
-                rs.getObject(1, UUID.class), rs.getString(2), rs.getString(3), rs.getString(4)) : null,
-            tenantId);
+        // FR-3.1 follow-up — StoreRepository.findActiveStoreByTenant() is the single
+        // canonical pick shared by every job/service (never a disconnected row), so a
+        // disconnect-then-switch tenant's stale old row can never beat the real one here.
+        StoreRepository.Store store = storeRepository.findActiveStoreByTenant(tenantId).orElse(null);
 
         if (store == null) {
             return err("No store found for tenant");
         }
-        if (!ShopifyGateway.isScopeGranted("write_inventory", store.grantedScopes())) {
+        if (!ShopifyGateway.isScopeGranted("write_inventory", store.accessTokenScopes())) {
             return err(ShopifyGateway.scopeGrantMessage(
-                store.connectionType(), "write_inventory", store.grantedScopes()));
+                store.connectionType(), "write_inventory", store.accessTokenScopes()));
         }
 
         String token = tokenProvider.getValidToken(store.id());

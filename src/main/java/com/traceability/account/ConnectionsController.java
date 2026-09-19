@@ -1,6 +1,7 @@
 package com.traceability.account;
 
 import com.traceability.identity.CustomUserDetails;
+import com.traceability.integrations.shopify.StoreRepository;
 import com.traceability.tenancy.TenantContext;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -12,6 +13,7 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.sql.Timestamp;
 import java.util.*;
 
 /**
@@ -50,10 +52,12 @@ public class ConnectionsController {
 
     private final JdbcTemplate       jdbc;
     private final TransactionTemplate tx;
+    private final StoreRepository    storeRepository;
 
-    public ConnectionsController(JdbcTemplate jdbc, PlatformTransactionManager txm) {
+    public ConnectionsController(JdbcTemplate jdbc, PlatformTransactionManager txm, StoreRepository storeRepository) {
         this.jdbc = jdbc;
         this.tx   = new TransactionTemplate(txm);
+        this.storeRepository = storeRepository;
     }
 
     /**
@@ -95,34 +99,34 @@ public class ConnectionsController {
         UUID tenantId = principal.tenantId();
 
         return TenantContext.runAs(tenantId, () -> tx.execute(s -> {
-            // Shopify — the tenant's single row, preferring an active (non-disconnected)
-            // one over a stale disconnected one, any connection_type.
-            Map<String, Object> shopify = jdbc.query(
-                "SELECT id, shop_domain, status::text, connection_type, import_status::text, last_sync_at " +
-                "FROM stores WHERE tenant_id = ? " +
-                "ORDER BY (status <> 'disconnected') DESC, last_sync_at DESC NULLS LAST LIMIT 1",
-                rs -> {
-                    Map<String, Object> m = new LinkedHashMap<>();
-                    if (!rs.next()) {
-                        m.put("connected",      false);
-                        m.put("storeId",        null);
-                        m.put("shopDomain",     null);
-                        m.put("connectionType", null);
-                        m.put("status",         "disconnected");
-                        m.put("importStatus",   null);
-                        m.put("lastSyncAt",     null);
-                    } else {
-                        String storeStatus = rs.getString("status");
-                        m.put("connected",      "connected".equals(storeStatus));
-                        m.put("storeId",        rs.getObject("id", UUID.class).toString());
-                        m.put("shopDomain",     rs.getString("shop_domain"));
-                        m.put("connectionType", rs.getString("connection_type"));
-                        m.put("status",         storeStatus);
-                        m.put("importStatus",   rs.getString("import_status"));
-                        m.put("lastSyncAt",     rs.getTimestamp("last_sync_at"));
-                    }
-                    return m;
-                }, tenantId);
+            // Shopify — the tenant's single row (StoreRepository.findByTenant: preferring
+            // status='connected', then any other non-disconnected row, then a disconnected
+            // one last — any connection_type). Uses the SAME pick as
+            // StoreRepository.findActiveStoreByTenant(), which every job/service now goes
+            // through, so the UI and background jobs always agree on "the store". Unlike
+            // findActiveStoreByTenant(), this deliberately keeps a disconnected result
+            // (rather than mapping it to empty) — the UI must still render the
+            // disconnected/attention state with the stale domain when that's the only row.
+            Map<String, Object> shopify = new LinkedHashMap<>();
+            Optional<StoreRepository.Store> storeOpt = storeRepository.findByTenant(tenantId);
+            if (storeOpt.isEmpty()) {
+                shopify.put("connected",      false);
+                shopify.put("storeId",        null);
+                shopify.put("shopDomain",     null);
+                shopify.put("connectionType", null);
+                shopify.put("status",         "disconnected");
+                shopify.put("importStatus",   null);
+                shopify.put("lastSyncAt",     null);
+            } else {
+                StoreRepository.Store store = storeOpt.get();
+                shopify.put("connected",      "connected".equals(store.status()));
+                shopify.put("storeId",        store.id().toString());
+                shopify.put("shopDomain",     store.shopDomain());
+                shopify.put("connectionType", store.connectionType());
+                shopify.put("status",         store.status());
+                shopify.put("importStatus",   store.importStatus());
+                shopify.put("lastSyncAt",     store.lastSyncAt() != null ? Timestamp.from(store.lastSyncAt()) : null);
+            }
 
             // Bosta — active courier account
             Map<String, Object> bosta = jdbc.query(

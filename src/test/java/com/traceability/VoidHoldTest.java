@@ -112,8 +112,8 @@ class VoidHoldTest {
         jdbc.update("INSERT INTO tenants (id, name) VALUES (?, 'VoidHoldTenantB')", tenantB);
 
         jdbc.update(
-            "INSERT INTO stores (id, tenant_id, shop_domain, import_status, access_token_scopes) " +
-            "VALUES (?, ?, ?, 'idle', 'read_orders,write_inventory,read_products,write_locations,read_locations,read_customers')",
+            "INSERT INTO stores (id, tenant_id, shop_domain, status, import_status, access_token_scopes) " +
+            "VALUES (?, ?, ?, 'connected', 'idle', 'read_orders,write_inventory,read_products,write_locations,read_locations,read_customers')",
             storeId, tenantId, SHOP_DOMAIN);
 
         productId = UUID.randomUUID();
@@ -137,8 +137,8 @@ class VoidHoldTest {
         // Tenant B fixtures for vh11/vh12 cross-tenant checks.
         tenantBStoreId = UUID.randomUUID();
         jdbc.update(
-            "INSERT INTO stores (id, tenant_id, shop_domain, import_status, access_token_scopes) " +
-            "VALUES (?, ?, 'vh-b.myshopify.com', 'idle', 'read_orders,write_inventory')",
+            "INSERT INTO stores (id, tenant_id, shop_domain, status, import_status, access_token_scopes) " +
+            "VALUES (?, ?, 'vh-b.myshopify.com', 'connected', 'idle', 'read_orders,write_inventory')",
             tenantBStoreId, tenantB);
         tenantBProductId = UUID.randomUUID();
         jdbc.update(

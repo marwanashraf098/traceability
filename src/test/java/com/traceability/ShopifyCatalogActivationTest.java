@@ -200,4 +200,50 @@ class ShopifyCatalogActivationTest {
         }
         verifyNoInteractions(shopifyGateway);
     }
+
+    // -----------------------------------------------------------------------
+    // FR-3.1 follow-up — StoreRepository.findActiveStoreByTenant() coverage.
+    // -----------------------------------------------------------------------
+
+    @Test
+    void pb5_disconnectThenSwitch_resolvesActiveStoreNotDisconnected() {
+        // Old, disconnected row for a DIFFERENT domain — must never be picked.
+        jdbc.update("UPDATE stores SET status = 'disconnected' WHERE id = ?", storeId);
+        UUID activeStoreId = UUID.randomUUID();
+        String activeDomain = "pb-active.myshopify.com";
+        jdbc.update("INSERT INTO stores (id, tenant_id, shop_domain, status, last_sync_at) " +
+            "VALUES (?, ?, ?, 'connected', now() - interval '1 hour')", activeStoreId, tenantId, activeDomain);
+        when(tokenProvider.getValidToken(activeStoreId)).thenReturn("active-token");
+
+        UUID v1 = seedVariant("gid://shopify/ProductVariant/pb5");
+        when(shopifyGateway.resolveInventoryItemId(eq(activeDomain), eq("active-token"), anyString()))
+            .thenReturn("gid://shopify/InventoryItem/pb5");
+
+        TenantContext.set(tenantId);
+        try {
+            var outcome = activationService.activateAll();
+            assertThat(outcome.succeeded()).as("must resolve the active store, not the disconnected one").isEqualTo(1);
+        } finally {
+            TenantContext.clear();
+        }
+        verify(shopifyGateway).activateInventoryItem(
+            eq(activeDomain), eq("active-token"), eq("gid://shopify/InventoryItem/pb5"), eq(TRACED_GID), any());
+        verify(shopifyGateway, never()).resolveInventoryItemId(eq(SHOP_DOMAIN), any(), anyString());
+
+        jdbc.update("DELETE FROM stores WHERE id = ?", activeStoreId);
+    }
+
+    @Test
+    void pb6_allStoresDisconnected_conflictNoGatewayCalls() {
+        jdbc.update("UPDATE stores SET status = 'disconnected' WHERE id = ?", storeId);
+        seedVariant("gid://shopify/ProductVariant/pb6");
+
+        TenantContext.set(tenantId);
+        try {
+            Assertions.assertThrows(ResponseStatusException.class, activationService::activateAll);
+        } finally {
+            TenantContext.clear();
+        }
+        verifyNoInteractions(shopifyGateway);
+    }
 }

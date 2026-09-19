@@ -6,6 +6,7 @@ import com.traceability.account.AuditService;
 import com.traceability.integrations.shopify.ShopifyException;
 import com.traceability.integrations.shopify.ShopifyGateway;
 import com.traceability.integrations.shopify.ShopifyTokenProvider;
+import com.traceability.integrations.shopify.StoreRepository;
 import com.traceability.tenancy.TenantContext;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -60,26 +61,27 @@ public class ShopifyInventoryReconcileService {
     private final ShopifyTokenProvider tokenProvider;
     private final ObjectMapper mapper;
     private final AuditService auditService;
+    private final StoreRepository storeRepository;
 
     public ShopifyInventoryReconcileService(JdbcTemplate jdbc, PlatformTransactionManager txm,
                                              ShopifyGateway shopify, ShopifyTokenProvider tokenProvider,
-                                             ObjectMapper mapper, AuditService auditService) {
+                                             ObjectMapper mapper, AuditService auditService,
+                                             StoreRepository storeRepository) {
         this.jdbc          = jdbc;
         this.tx            = new TransactionTemplate(txm);
         this.shopify       = shopify;
         this.tokenProvider = tokenProvider;
         this.mapper        = mapper;
         this.auditService  = auditService;
+        this.storeRepository = storeRepository;
     }
 
     private record Context(UUID storeId, String shopDomain, UUID tracedLocationId, String tracedGid, String token) {}
 
+    // FR-3.1 follow-up — StoreRepository.findActiveStoreByTenant() is the single canonical
+    // pick shared by every job/service (never a disconnected row).
     private Context resolveContext(UUID tenantId) {
-        record StoreSnap(UUID id, String shopDomain) {}
-        StoreSnap store = tx.execute(s -> jdbc.query(
-            "SELECT id, shop_domain FROM stores WHERE tenant_id = ? LIMIT 1",
-            rs -> rs.next() ? new StoreSnap(rs.getObject(1, UUID.class), rs.getString(2)) : null,
-            tenantId));
+        StoreRepository.Store store = storeRepository.findActiveStoreByTenant(tenantId).orElse(null);
         if (store == null) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "No Shopify store connected");
         }

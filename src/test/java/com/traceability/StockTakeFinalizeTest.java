@@ -113,8 +113,8 @@ class StockTakeFinalizeTest {
             "VALUES (?, ?, 'Main WH', true, ?, 'linked')",
             fulfillmentLocationId, tenantId, TRACED_GID);
         jdbc.update(
-            "INSERT INTO stores (id, tenant_id, shop_domain, import_status, access_token_scopes, last_sync_at) " +
-            "VALUES (?, ?, ?, 'idle', 'read_products,write_inventory', now())",
+            "INSERT INTO stores (id, tenant_id, shop_domain, status, import_status, access_token_scopes, last_sync_at) " +
+            "VALUES (?, ?, ?, 'connected', 'idle', 'read_products,write_inventory', now())",
             storeId, tenantId, SHOP_DOMAIN);
         jdbc.update(
             "INSERT INTO products (id, tenant_id, store_id, external_id, title, status) " +
@@ -360,8 +360,8 @@ class StockTakeFinalizeTest {
     void sft6_multiStoreTenant_deterministicResolution() {
         UUID staleStoreId = UUID.randomUUID();
         jdbc.update(
-            "INSERT INTO stores (id, tenant_id, shop_domain, import_status, access_token_scopes, last_sync_at) " +
-            "VALUES (?, ?, 'stale-sft.myshopify.com', 'idle', 'read_products,write_inventory', now() - interval '10 days')",
+            "INSERT INTO stores (id, tenant_id, shop_domain, status, import_status, access_token_scopes, last_sync_at) " +
+            "VALUES (?, ?, 'stale-sft.myshopify.com', 'connected', 'idle', 'read_products,write_inventory', now() - interval '10 days')",
             staleStoreId, tenantId);
         when(tokenProvider.getValidToken(staleStoreId)).thenReturn("stale-token");
 

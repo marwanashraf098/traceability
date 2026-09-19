@@ -5,6 +5,7 @@ import com.traceability.integrations.shopify.ShopifyDeliveryProfileGateway;
 import com.traceability.integrations.shopify.ShopifyException;
 import com.traceability.integrations.shopify.ShopifyGateway;
 import com.traceability.integrations.shopify.ShopifyTokenProvider;
+import com.traceability.integrations.shopify.StoreRepository;
 import com.traceability.tenancy.TenantContext;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -56,28 +57,28 @@ public class ShopifyFulfillmentActivationService {
     private final ShopifyDeliveryProfileGateway deliveryProfiles;
     private final ShopifyTokenProvider tokenProvider;
     private final AuditService auditService;
+    private final StoreRepository storeRepository;
 
     public ShopifyFulfillmentActivationService(JdbcTemplate jdbc, PlatformTransactionManager txm,
                                                 ShopifyDeliveryProfileGateway deliveryProfiles,
                                                 ShopifyTokenProvider tokenProvider,
-                                                AuditService auditService) {
+                                                AuditService auditService,
+                                                StoreRepository storeRepository) {
         this.jdbc             = jdbc;
         this.tx               = new TransactionTemplate(txm);
         this.deliveryProfiles = deliveryProfiles;
         this.tokenProvider    = tokenProvider;
         this.auditService     = auditService;
+        this.storeRepository  = storeRepository;
     }
 
     private record Context(UUID storeId, String shopDomain, String grantedScopes, String connectionType,
                             UUID locationId, String locationGid) {}
 
+    // FR-3.1 follow-up — StoreRepository.findActiveStoreByTenant() is the single canonical
+    // pick shared by every job/service (never a disconnected row).
     private Context resolveContext(UUID tenantId) {
-        record StoreSnap(UUID id, String shopDomain, String grantedScopes, String connectionType) {}
-        StoreSnap store = jdbc.query(
-            "SELECT id, shop_domain, access_token_scopes, connection_type FROM stores WHERE tenant_id = ? LIMIT 1",
-            rs -> rs.next() ? new StoreSnap(
-                rs.getObject(1, UUID.class), rs.getString(2), rs.getString(3), rs.getString(4)) : null,
-            tenantId);
+        StoreRepository.Store store = storeRepository.findActiveStoreByTenant(tenantId).orElse(null);
         if (store == null) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "No Shopify store connected");
         }
@@ -93,7 +94,7 @@ public class ShopifyFulfillmentActivationService {
                 "Traced Main Warehouse is not linked to Shopify yet");
         }
 
-        return new Context(store.id(), store.shopDomain(), store.grantedScopes(), store.connectionType(),
+        return new Context(store.id(), store.shopDomain(), store.accessTokenScopes(), store.connectionType(),
             loc.id(), loc.gid());
     }
 

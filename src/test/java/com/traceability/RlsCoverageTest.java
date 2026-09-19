@@ -801,6 +801,11 @@ class RlsCoverageTest {
             "UPDATE locations SET shopify_location_id = 'gid://shopify/Location/cvg-traced', " +
             "    shopify_sync_status = 'linked' WHERE id = ?",
             locationId);
+        // The shared fixture store is deliberately status='disconnected' (see seedFixtures) —
+        // StoreRepository.findActiveStoreByTenant() correctly excludes it, so this endpoint
+        // needs it flipped to 'connected' for its own duration, same in/out pattern as the
+        // location above.
+        jdbc.update("UPDATE stores SET status = 'connected' WHERE id = ?", storeId);
 
         when(tokenProvider.getValidToken(any())).thenReturn("test-token");
         when(shopifyGateway.resolveInventoryItemId(any(), any(), any()))
@@ -821,6 +826,7 @@ class RlsCoverageTest {
                 "UPDATE locations SET shopify_location_id = NULL, shopify_sync_status = 'unsynced' " +
                 "WHERE id = ?",
                 locationId);
+            jdbc.update("UPDATE stores SET status = 'disconnected' WHERE id = ?", storeId);
         }
     }
 
