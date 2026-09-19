@@ -405,7 +405,7 @@ export default function ShopifyConnectionCard({
 
           <button
             type="button"
-            onClick={() => window.open(import.meta.env.VITE_CALENDLY_SHOPIFY_URL, '_blank', 'noopener')}
+            onClick={() => window.open(import.meta.env.VITE_CALENDLY_SETUP_URL, '_blank', 'noopener')}
             className="w-full flex items-start gap-3 rounded-xl border border-line p-4 hover:border-brand/40 hover:bg-brand/5 transition-colors text-start"
           >
             <div className="flex-1 min-w-0">
