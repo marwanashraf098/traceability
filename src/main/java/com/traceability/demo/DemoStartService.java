@@ -50,6 +50,11 @@ public class DemoStartService {
         checkRateLimit(ip);
         persistLead(req, ip);
 
+        // Self-heal: DemoBootstrapStartupListener already does this on ApplicationReadyEvent,
+        // but this call is what protects the first real visitor even if that listener were
+        // ever skipped (e.g. a startup ordering issue) — ensureBootstrapped() is existence-
+        // checked, so this is a no-op read on every call after the very first.
+        demoSeeder.ensureBootstrapped();
         UUID ownerId = demoSeeder.resolveOwnerId();
         String accessToken = jwtService.issueAccessToken(
                 ownerId, DemoSeeder.DEMO_TENANT_ID, "owner", DEMO_TOKEN_TTL);
