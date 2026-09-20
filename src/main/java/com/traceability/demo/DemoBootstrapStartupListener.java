@@ -7,6 +7,8 @@ import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.event.EventListener;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 
 /**
  * FR-DEMO — closes the "never bootstrapped before the first 30-min DemoReseedJob tick" gap.
@@ -41,21 +43,29 @@ public class DemoBootstrapStartupListener {
 
     private static final Logger log = LoggerFactory.getLogger(DemoBootstrapStartupListener.class);
 
-    private final DemoSeeder   demoSeeder;
-    private final JdbcTemplate jdbc;
+    private final DemoSeeder          demoSeeder;
+    private final JdbcTemplate        jdbc;
+    private final TransactionTemplate tx;
 
-    public DemoBootstrapStartupListener(DemoSeeder demoSeeder, JdbcTemplate jdbc) {
+    public DemoBootstrapStartupListener(DemoSeeder demoSeeder, JdbcTemplate jdbc,
+                                         PlatformTransactionManager txm) {
         this.demoSeeder = demoSeeder;
         this.jdbc       = jdbc;
+        this.tx         = new TransactionTemplate(txm);
     }
 
     @EventListener(ApplicationReadyEvent.class)
     public void onApplicationReady() {
         try {
-            boolean existedBefore = TenantContext.runAs(DemoSeeder.DEMO_TENANT_ID, () -> Boolean.TRUE.equals(
-                    jdbc.queryForObject(
+            // Same tx.execute()-inside-runAs() requirement as DemoSeeder.ensureBootstrapped()/
+            // resolveOwnerId() — see those methods' comments. A bare runAs+jdbc call never
+            // crosses the connection's setAutoCommit(true->false) transition, so
+            // TenantAwareConnection never fires SET LOCAL app.current_tenant, so this
+            // RLS-scoped read always sees zero rows regardless of whether the tenant exists.
+            boolean existedBefore = TenantContext.runAs(DemoSeeder.DEMO_TENANT_ID, () -> tx.execute(status ->
+                    Boolean.TRUE.equals(jdbc.queryForObject(
                             "SELECT EXISTS(SELECT 1 FROM tenants WHERE id = ?)",
-                            Boolean.class, DemoSeeder.DEMO_TENANT_ID)));
+                            Boolean.class, DemoSeeder.DEMO_TENANT_ID))));
 
             demoSeeder.ensureBootstrapped();
 

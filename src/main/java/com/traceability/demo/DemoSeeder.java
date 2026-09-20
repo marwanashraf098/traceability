@@ -227,10 +227,20 @@ public class DemoSeeder {
      * {@code locations_one_fulfillment_per_tenant}) unguarded — confirmed prod incident.
      */
     public void ensureBootstrapped() {
-        boolean exists = TenantContext.runAs(DEMO_TENANT_ID, () -> Boolean.TRUE.equals(
+        // MUST run inside tx.execute(), not a bare jdbc call: TenantAwareConnection only fires
+        // SET LOCAL app.current_tenant on a connection's setAutoCommit(true->false) transition.
+        // A bare autocommit=true query never crosses that transition, so the GUC is never set
+        // and this RLS-scoped read silently sees zero rows — confirmed prod bug (this EXISTS
+        // check always evaluated false, silently re-running insertDemoFixtureIdempotent() on
+        // every call). @Transactional on this method would NOT fix it either: the AOP proxy
+        // begins the transaction (and fires the one-shot GUC-set) at method entry, BEFORE
+        // TenantContext.runAs() below has set the ThreadLocal — the GUC would still be set from
+        // a null tenant. TenantContext must be set (by runAs) BEFORE the transaction begins, so
+        // tx.execute() has to be the inner call, exactly like insertDemoFixtureIdempotent() below.
+        boolean exists = TenantContext.runAs(DEMO_TENANT_ID, () -> tx.execute(status -> Boolean.TRUE.equals(
                 jdbc.queryForObject(
                         "SELECT EXISTS(SELECT 1 FROM tenants WHERE id = ?)",
-                        Boolean.class, DEMO_TENANT_ID)));
+                        Boolean.class, DEMO_TENANT_ID))));
         if (exists) {
             return;
         }
@@ -315,9 +325,13 @@ public class DemoSeeder {
      * (tenant id is already known) — no DEFINER hatch needed.
      */
     public UUID resolveOwnerId() {
-        return TenantContext.runAs(DEMO_TENANT_ID, () -> jdbc.queryForObject(
+        // Same tx.execute()-inside-runAs() requirement as ensureBootstrapped()'s EXISTS check
+        // above — see that comment. This was the confirmed prod 500: the bare (non-transactional)
+        // version of this call never set the RLS GUC, so it always found zero rows regardless
+        // of whether the owner row existed, throwing "Incorrect result size: expected 1, actual 0".
+        return TenantContext.runAs(DEMO_TENANT_ID, () -> tx.execute(status -> jdbc.queryForObject(
                 "SELECT id FROM users WHERE tenant_id = ? AND role = 'owner' AND active = true",
-                UUID.class, DEMO_TENANT_ID));
+                UUID.class, DEMO_TENANT_ID)));
     }
 
     // ==================================================================
