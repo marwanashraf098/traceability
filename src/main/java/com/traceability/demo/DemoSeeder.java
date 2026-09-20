@@ -218,8 +218,13 @@ public class DemoSeeder {
      * same boot — the EXISTS check below is a fast-path OPTIMIZATION only (skip the password
      * hashing + DB round trip once bootstrapped); it is deliberately NOT the correctness
      * mechanism. Correctness comes from {@link #insertDemoFixtureIdempotent} using fixed ids
-     * and {@code ON CONFLICT (id) DO NOTHING} on every statement, so a second caller that also
-     * passed the EXISTS check (TOCTOU race) silently no-ops instead of throwing.
+     * and a bare {@code ON CONFLICT DO NOTHING} on every statement, so a second caller that
+     * also passed the EXISTS check (TOCTOU race) silently no-ops instead of throwing — even
+     * against a stale leftover row that shares a natural key (email, location name) but not
+     * the fixed id, e.g. a row committed by a pre-fix caller before this idempotency guard
+     * existed. A narrower {@code ON CONFLICT (id)} only catches an id collision and left
+     * {@code users_email_unique} (and, latently, {@code locations_name_unique} /
+     * {@code locations_one_fulfillment_per_tenant}) unguarded — confirmed prod incident.
      */
     public void ensureBootstrapped() {
         boolean exists = TenantContext.runAs(DEMO_TENANT_ID, () -> Boolean.TRUE.equals(
@@ -235,15 +240,29 @@ public class DemoSeeder {
     }
 
     /**
-     * Raw, idempotent inserts for the tenant/owner/location/2 workers — every statement is
-     * {@code ON CONFLICT (id) DO NOTHING} against a fixed id, so this is safe to run twice
-     * (sequentially or concurrently) with no exception and no duplicate rows. Deliberately does
-     * NOT call AuthRepository.createTenantWithOwner()/UserService.create() — see class javadoc.
+     * Raw, idempotent inserts for the tenant/owner/location/2 workers — every statement uses a
+     * BARE {@code ON CONFLICT DO NOTHING} (no target list), which absorbs a violation of ANY
+     * unique or exclusion constraint on that table, not just the {@code id} primary key. This
+     * matters because a stale leftover row (committed by a pre-fix caller under the old
+     * random-id code, during the exact race this idempotency guard exists to prevent) shares a
+     * natural key — {@code users.email}, or {@code locations}' per-tenant name/fulfillment
+     * uniqueness — without sharing the new fixed id, so a narrower {@code ON CONFLICT (id)}
+     * would still throw on that other constraint. Confirmed prod incident on
+     * {@code users_email_unique}; {@code locations_name_unique} and
+     * {@code locations_one_fulfillment_per_tenant} are the same latent shape, pre-empted here
+     * before they fire. Deliberately does NOT call
+     * AuthRepository.createTenantWithOwner()/UserService.create() — see class javadoc.
      * Wrapped in one explicit transaction (TransactionTemplate, not a self-invoked
      * {@code @Transactional} method, which Spring's proxy would silently ignore) so
      * TenantAwareConnection reliably fires the GUC set before any RLS-checked write.
      */
-    private void insertDemoFixtureIdempotent() {
+    // Package-private (not private) so DemoSeederNaturalKeyCollisionTest can call it directly,
+    // bypassing ensureBootstrapped()'s own EXISTS(tenants.id=...) gate. That gate can never let
+    // a real caller reach this method while a natural-key-colliding users/locations row already
+    // exists for DEMO_TENANT_ID: those tables' tenant_id is NOT NULL REFERENCES tenants(id), so
+    // such a row can only exist once the tenant row itself does — which is exactly the condition
+    // that makes the outer EXISTS check short-circuit first. No other behavior change.
+    void insertDemoFixtureIdempotent() {
         String ownerPasswordHash = passwordEncoder.encode(randomUndisclosedPassword());
         String worker1PinHash    = passwordEncoder.encode(DEMO_WORKER_1_PIN);
         String worker2PinHash    = passwordEncoder.encode(DEMO_WORKER_2_PIN);
@@ -252,31 +271,31 @@ public class DemoSeeder {
         TenantContext.runAs(DEMO_TENANT_ID, () -> tx.execute(status -> {
             jdbc.update(
                     "INSERT INTO tenants (id, name, plan, status, is_demo) " +
-                    "VALUES (?, ?, 'trial', 'trial', true) ON CONFLICT (id) DO NOTHING",
+                    "VALUES (?, ?, 'trial', 'trial', true) ON CONFLICT DO NOTHING",
                     DEMO_TENANT_ID, DEMO_TENANT_NAME);
 
             jdbc.update(
                     "INSERT INTO users " +
                     "(id, tenant_id, name, email, password_hash, role, " +
                     " accepted_privacy_version, accepted_terms_version, accepted_at) " +
-                    "VALUES (?, ?, ?, ?, ?, 'owner', ?, ?, ?) ON CONFLICT (id) DO NOTHING",
+                    "VALUES (?, ?, ?, ?, ?, 'owner', ?, ?, ?) ON CONFLICT DO NOTHING",
                     DEMO_OWNER_ID, DEMO_TENANT_ID, DEMO_OWNER_NAME, DEMO_OWNER_EMAIL,
                     ownerPasswordHash, PolicyVersions.PRIVACY, PolicyVersions.TERMS, acceptedAt);
 
             jdbc.update(
                     "INSERT INTO locations (id, tenant_id, name, type, is_default, is_fulfillment) " +
                     "VALUES (?, ?, 'Main Warehouse', 'warehouse', true, true) " +
-                    "ON CONFLICT (id) DO NOTHING",
+                    "ON CONFLICT DO NOTHING",
                     DEMO_LOCATION_ID, DEMO_TENANT_ID);
 
             jdbc.update(
                     "INSERT INTO users (id, tenant_id, name, pin_code, role) " +
-                    "VALUES (?, ?, ?, ?, 'worker') ON CONFLICT (id) DO NOTHING",
+                    "VALUES (?, ?, ?, ?, 'worker') ON CONFLICT DO NOTHING",
                     DEMO_WORKER_1_ID, DEMO_TENANT_ID, DEMO_WORKER_1_NAME, worker1PinHash);
 
             jdbc.update(
                     "INSERT INTO users (id, tenant_id, name, pin_code, role) " +
-                    "VALUES (?, ?, ?, ?, 'worker') ON CONFLICT (id) DO NOTHING",
+                    "VALUES (?, ?, ?, ?, 'worker') ON CONFLICT DO NOTHING",
                     DEMO_WORKER_2_ID, DEMO_TENANT_ID, DEMO_WORKER_2_NAME, worker2PinHash);
 
             return null;
