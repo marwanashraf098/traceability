@@ -1,7 +1,5 @@
 package com.traceability.demo;
 
-import com.traceability.account.UserService;
-import com.traceability.identity.AuthRepository;
 import com.traceability.identity.PolicyVersions;
 import com.traceability.inventory.UlidGenerator;
 import com.traceability.tenancy.TenantContext;
@@ -12,6 +10,8 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.datasource.SingleConnectionDataSource;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import javax.sql.DataSource;
 import java.math.BigDecimal;
@@ -32,12 +32,19 @@ import java.util.concurrent.atomic.AtomicInteger;
  * FR-DEMO Day 1 — bootstraps and re-seeds the single shared, lead-gated demo tenant.
  *
  * Two entry points, both idempotent, both safe to call repeatedly:
- *   - {@link #ensureBootstrapped()} — one-time tenant + owner + 2 workers, reusing the
- *     SAME provisioning seam as real signup ({@link AuthRepository#createTenantWithOwner}
- *     + {@link UserService#create}), never {@code provision_tenant_from_shopify} (that
- *     hatch exists to solve a chicken-and-egg UUID problem this seeder doesn't have — the
- *     demo tenant id is a fixed, known constant — and it forces a Shopify {@code stores}
- *     row into existence, which the demo tenant must not carry).
+ *   - {@link #ensureBootstrapped()} — one-time tenant + owner + 2 workers. Fixed,
+ *     deterministic ids for every row (tenant/owner/workers/location) plus
+ *     {@code ON CONFLICT (id) DO NOTHING} on every INSERT make this safe against a genuine
+ *     concurrent race between {@link DemoBootstrapStartupListener} and {@link DemoReseedJob}'s
+ *     cron tick both bootstrapping on the same boot (confirmed prod incident: both passed the
+ *     EXISTS check against an empty table, both INSERTed, the loser hit a duplicate-key
+ *     exception on {@code tenants_pkey}). Writes raw SQL directly rather than routing through
+ *     {@code AuthRepository.createTenantWithOwner()}/{@code UserService.create()} — both are
+ *     shared with real signup/user-management and must keep their own random-id,
+ *     throw-on-conflict semantics unchanged for those paths. Never
+ *     {@code provision_tenant_from_shopify} (that hatch exists to solve a chicken-and-egg UUID
+ *     problem this seeder doesn't have — the demo tenant id is a fixed, known constant — and it
+ *     forces a Shopify {@code stores} row into existence, which the demo tenant must not carry).
  *   - {@link #reseed()} — deletes every mutable row for the demo tenant and reloads the
  *     golden fixture, in ONE transaction on the raw BYPASSRLS owner connection. Called by
  *     {@link DemoReseedJob} on both the very first tick (bootstrap already happened, the
@@ -93,6 +100,17 @@ public class DemoSeeder {
     private static final String DEMO_WORKER_1_PIN  = "4821";
     private static final String DEMO_WORKER_2_NAME = "Karim (Demo Worker)";
     private static final String DEMO_WORKER_2_PIN  = "1197";
+
+    /**
+     * Fixed, deterministic ids for every row ensureBootstrapped() creates — same reasoning
+     * as DEMO_TENANT_ID: a concurrent second caller's INSERT targets the exact same primary
+     * key, so ON CONFLICT (id) DO NOTHING makes the loser a no-op instead of a duplicate-key
+     * exception. Never regenerated.
+     */
+    private static final UUID DEMO_OWNER_ID    = UUID.fromString("50d3c595-114f-42f4-9542-691a231650fe");
+    private static final UUID DEMO_WORKER_1_ID = UUID.fromString("2547a91c-b876-4d31-850d-1402ef6f2343");
+    private static final UUID DEMO_WORKER_2_ID = UUID.fromString("28dfc318-df62-4a3d-bd31-99503703e4c6");
+    private static final UUID DEMO_LOCATION_ID = UUID.fromString("54796ed5-55e2-4404-8506-e76716e084a7");
 
     /**
      * Every table carrying per-tenant mutable state, in strict FK-safe (child-before-parent)
@@ -175,22 +193,19 @@ public class DemoSeeder {
             List.of("2-Piece", "4-Piece", "6-Piece"))
     );
 
-    private final JdbcTemplate    jdbc;
-    private final DataSource      ownerDs;
-    private final AuthRepository  authRepository;
-    private final UserService     userService;
-    private final PasswordEncoder passwordEncoder;
+    private final JdbcTemplate       jdbc;
+    private final DataSource         ownerDs;
+    private final PasswordEncoder    passwordEncoder;
+    private final TransactionTemplate tx;
 
     public DemoSeeder(JdbcTemplate jdbc,
                        @FlywayDataSource DataSource ownerDs,
-                       AuthRepository authRepository,
-                       UserService userService,
-                       PasswordEncoder passwordEncoder) {
+                       PasswordEncoder passwordEncoder,
+                       PlatformTransactionManager txm) {
         this.jdbc            = jdbc;
         this.ownerDs         = ownerDs;
-        this.authRepository  = authRepository;
-        this.userService     = userService;
         this.passwordEncoder = passwordEncoder;
+        this.tx              = new TransactionTemplate(txm);
     }
 
     // ==================================================================
@@ -199,7 +214,12 @@ public class DemoSeeder {
 
     /**
      * Creates the demo tenant + owner + 2 workers if they don't already exist. Safe to call
-     * on every scheduled tick — the existence check makes every call after the first a no-op.
+     * on every scheduled tick, on every application boot, and from two callers racing on the
+     * same boot — the EXISTS check below is a fast-path OPTIMIZATION only (skip the password
+     * hashing + DB round trip once bootstrapped); it is deliberately NOT the correctness
+     * mechanism. Correctness comes from {@link #insertDemoFixtureIdempotent} using fixed ids
+     * and {@code ON CONFLICT (id) DO NOTHING} on every statement, so a second caller that also
+     * passed the EXISTS check (TOCTOU race) silently no-ops instead of throwing.
      */
     public void ensureBootstrapped() {
         boolean exists = TenantContext.runAs(DEMO_TENANT_ID, () -> Boolean.TRUE.equals(
@@ -210,32 +230,57 @@ public class DemoSeeder {
             return;
         }
 
-        UUID ownerId = UUID.randomUUID();
-        String passwordHash = passwordEncoder.encode(randomUndisclosedPassword());
-
-        TenantContext.runAs(DEMO_TENANT_ID, () -> {
-            authRepository.createTenantWithOwner(
-                    DEMO_TENANT_ID, DEMO_TENANT_NAME, ownerId,
-                    DEMO_OWNER_NAME, DEMO_OWNER_EMAIL, null, passwordHash,
-                    PolicyVersions.PRIVACY, PolicyVersions.TERMS,
-                    Timestamp.from(Instant.now()));
-            return null;
-        });
-
-        // is_demo=true is a plain UPDATE under the tenant's own RLS context — not a new
-        // parameter on createTenantWithOwner, which stays untouched for the real signup path.
-        TenantContext.runAs(DEMO_TENANT_ID, () -> {
-            jdbc.update("UPDATE tenants SET is_demo = true WHERE id = ?", DEMO_TENANT_ID);
-            return null;
-        });
-
-        TenantContext.runAs(DEMO_TENANT_ID, () -> {
-            userService.create(ownerId, "owner", DEMO_WORKER_1_NAME, null, "worker", null, DEMO_WORKER_1_PIN);
-            userService.create(ownerId, "owner", DEMO_WORKER_2_NAME, null, "worker", null, DEMO_WORKER_2_PIN);
-            return null;
-        });
-
+        insertDemoFixtureIdempotent();
         log.info("Demo tenant bootstrapped: {}", DEMO_TENANT_ID);
+    }
+
+    /**
+     * Raw, idempotent inserts for the tenant/owner/location/2 workers — every statement is
+     * {@code ON CONFLICT (id) DO NOTHING} against a fixed id, so this is safe to run twice
+     * (sequentially or concurrently) with no exception and no duplicate rows. Deliberately does
+     * NOT call AuthRepository.createTenantWithOwner()/UserService.create() — see class javadoc.
+     * Wrapped in one explicit transaction (TransactionTemplate, not a self-invoked
+     * {@code @Transactional} method, which Spring's proxy would silently ignore) so
+     * TenantAwareConnection reliably fires the GUC set before any RLS-checked write.
+     */
+    private void insertDemoFixtureIdempotent() {
+        String ownerPasswordHash = passwordEncoder.encode(randomUndisclosedPassword());
+        String worker1PinHash    = passwordEncoder.encode(DEMO_WORKER_1_PIN);
+        String worker2PinHash    = passwordEncoder.encode(DEMO_WORKER_2_PIN);
+        Timestamp acceptedAt     = Timestamp.from(Instant.now());
+
+        TenantContext.runAs(DEMO_TENANT_ID, () -> tx.execute(status -> {
+            jdbc.update(
+                    "INSERT INTO tenants (id, name, plan, status, is_demo) " +
+                    "VALUES (?, ?, 'trial', 'trial', true) ON CONFLICT (id) DO NOTHING",
+                    DEMO_TENANT_ID, DEMO_TENANT_NAME);
+
+            jdbc.update(
+                    "INSERT INTO users " +
+                    "(id, tenant_id, name, email, password_hash, role, " +
+                    " accepted_privacy_version, accepted_terms_version, accepted_at) " +
+                    "VALUES (?, ?, ?, ?, ?, 'owner', ?, ?, ?) ON CONFLICT (id) DO NOTHING",
+                    DEMO_OWNER_ID, DEMO_TENANT_ID, DEMO_OWNER_NAME, DEMO_OWNER_EMAIL,
+                    ownerPasswordHash, PolicyVersions.PRIVACY, PolicyVersions.TERMS, acceptedAt);
+
+            jdbc.update(
+                    "INSERT INTO locations (id, tenant_id, name, type, is_default, is_fulfillment) " +
+                    "VALUES (?, ?, 'Main Warehouse', 'warehouse', true, true) " +
+                    "ON CONFLICT (id) DO NOTHING",
+                    DEMO_LOCATION_ID, DEMO_TENANT_ID);
+
+            jdbc.update(
+                    "INSERT INTO users (id, tenant_id, name, pin_code, role) " +
+                    "VALUES (?, ?, ?, ?, 'worker') ON CONFLICT (id) DO NOTHING",
+                    DEMO_WORKER_1_ID, DEMO_TENANT_ID, DEMO_WORKER_1_NAME, worker1PinHash);
+
+            jdbc.update(
+                    "INSERT INTO users (id, tenant_id, name, pin_code, role) " +
+                    "VALUES (?, ?, ?, ?, 'worker') ON CONFLICT (id) DO NOTHING",
+                    DEMO_WORKER_2_ID, DEMO_TENANT_ID, DEMO_WORKER_2_NAME, worker2PinHash);
+
+            return null;
+        }));
     }
 
     private static String randomUndisclosedPassword() {

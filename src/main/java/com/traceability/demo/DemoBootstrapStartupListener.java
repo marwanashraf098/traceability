@@ -27,6 +27,14 @@ import org.springframework.stereotype.Component;
  *
  * Deliberately does NOT call {@code reseed()} — the fixture load/refresh stays exclusively
  * owned by DemoReseedJob's recurring schedule.
+ *
+ * FAIL-SOFT (confirmed prod incident): an uncaught exception from an
+ * {@code @EventListener(ApplicationReadyEvent.class)} method aborts the whole application
+ * context, taking down every tenant on the box, not just the demo one. Every statement here —
+ * including the pre-check, not just ensureBootstrapped() itself — runs inside one try/catch;
+ * a demo-seeding failure is logged at ERROR and swallowed, never propagated. The endpoint
+ * self-heal in DemoStartService.start() (which also calls ensureBootstrapped()) is what
+ * covers the case where startup seeding failed or was skipped.
  */
 @Component
 public class DemoBootstrapStartupListener {
@@ -43,17 +51,24 @@ public class DemoBootstrapStartupListener {
 
     @EventListener(ApplicationReadyEvent.class)
     public void onApplicationReady() {
-        boolean existedBefore = TenantContext.runAs(DemoSeeder.DEMO_TENANT_ID, () -> Boolean.TRUE.equals(
-                jdbc.queryForObject(
-                        "SELECT EXISTS(SELECT 1 FROM tenants WHERE id = ?)",
-                        Boolean.class, DemoSeeder.DEMO_TENANT_ID)));
+        try {
+            boolean existedBefore = TenantContext.runAs(DemoSeeder.DEMO_TENANT_ID, () -> Boolean.TRUE.equals(
+                    jdbc.queryForObject(
+                            "SELECT EXISTS(SELECT 1 FROM tenants WHERE id = ?)",
+                            Boolean.class, DemoSeeder.DEMO_TENANT_ID)));
 
-        demoSeeder.ensureBootstrapped();
+            demoSeeder.ensureBootstrapped();
 
-        if (existedBefore) {
-            log.info("Demo tenant already present");
-        } else {
-            log.info("Demo tenant bootstrapped: {}", DemoSeeder.DEMO_TENANT_ID);
+            if (existedBefore) {
+                log.info("Demo tenant already present");
+            } else {
+                log.info("Demo tenant bootstrapped: {}", DemoSeeder.DEMO_TENANT_ID);
+            }
+        } catch (Exception e) {
+            // Never propagate — an uncaught exception here would abort application startup
+            // for every tenant on this box, not just the demo one. DemoStartService.start()'s
+            // own ensureBootstrapped() call self-heals on the first real visitor regardless.
+            log.error("Demo tenant bootstrap failed at startup — continuing without it", e);
         }
     }
 }
