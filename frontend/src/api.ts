@@ -509,6 +509,53 @@ export function signup(
   })
 }
 
+// ── FR-DEMO Day 3: public live-demo start ───────────────────────────────────────
+//
+// POST /api/v1/public/demo/start is unauthenticated (no token, no cookie) and throws
+// DemoException server-side on 400/429, mapped to a real HTTP status + {code,
+// message_en, message_ar} body — same contract as TransferCommandError above. The
+// shared request() helper drops the body on non-2xx, so this needs its own fetch,
+// exactly like transferCommandRequest.
+//
+// The frontend must render message_en/message_ar AS-IS, never re-derive text from
+// `code` (same rule as Transfers).
+
+export interface DemoStartResponse {
+  accessToken: string
+  redirect: string
+}
+
+export class DemoStartError extends Error {
+  code: string
+  messageEn: string
+  messageAr: string
+  constructor(body: { code: string; message_en: string; message_ar: string }) {
+    super(body.code)
+    this.code = body.code
+    this.messageEn = body.message_en
+    this.messageAr = body.message_ar
+  }
+}
+
+export async function demoStart(
+  name: string, email: string, phone: string, consent: boolean
+): Promise<DemoStartResponse> {
+  const res = await fetch(`${BASE}/public/demo/start`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name, email, phone, consent }),
+  })
+  if (!res.ok) {
+    const body = await res.json().catch(() => null) as
+      { code?: string; message_en?: string; message_ar?: string } | null
+    if (body?.code && body.message_en != null && body.message_ar != null) {
+      throw new DemoStartError(body as { code: string; message_en: string; message_ar: string })
+    }
+    throw new Error(`${res.status}: ${res.statusText}`)
+  }
+  return res.json()
+}
+
 // ── Worker Station Gate ─────────────────────────────────────────────────────────
 
 export interface StationRosterEntry {

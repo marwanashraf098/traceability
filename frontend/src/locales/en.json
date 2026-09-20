@@ -905,6 +905,33 @@
       "consentRequired": "You must accept the Privacy Policy and Terms of Service."
     }
   },
+  "demo": {
+    "landing": {
+      "title": "Try the live demo",
+      "subtitle": "Explore Traced with real sample data — no signup required."
+    },
+    "expired": {
+      "title": "Your demo session ended",
+      "message": "Demo sessions don't persist across page reloads. Start a new one to keep exploring.",
+      "startAgain": "Start demo"
+    },
+    "modal": {
+      "title": "Start your live demo",
+      "name": "Your name",
+      "email": "Email",
+      "phone": "Phone",
+      "submit": "Start demo"
+    },
+    "consent": {
+      "prefix": "I agree to the",
+      "privacy": "Privacy Policy",
+      "and": "and",
+      "terms": "Terms of Service"
+    },
+    "errors": {
+      "generic": "Could not start the demo. Please try again."
+    }
+  },
   "forgotPassword": {
     "cardTitle": "Reset your password",
     "cardSubtitle": "Enter your email and we'll send you a code.",

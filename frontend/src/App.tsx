@@ -13,6 +13,7 @@ const StyleGuide = import.meta.env.DEV
   : null
 import Login from './pages/Login'
 import Signup from './pages/Signup'
+import DemoLanding, { DEMO_SESSION_MARKER } from './pages/DemoLanding'
 import ForgotPassword from './pages/ForgotPassword'
 import ResetPassword from './pages/ResetPassword'
 import Overview from './pages/Overview'
@@ -90,6 +91,14 @@ export function RequireAuth({ children }: { children: React.ReactNode }) {
   }
   if (state === 'unauthenticated') {
     clearAccessToken()
+    // A lost DEMO session (no cookie by design — see DemoLanding.tsx) is not a real
+    // logout: bouncing a never-signed-up visitor to the bare /login form is a dead
+    // end. The marker is set only by a successful /demo/start and cleared on
+    // reaching /demo?expired=1 or on a real login (see Login.tsx), so this never
+    // catches an actual account holder.
+    if (sessionStorage.getItem(DEMO_SESSION_MARKER) === '1') {
+      return <Navigate to="/demo?expired=1" replace />
+    }
     return <Navigate to="/login" replace />
   }
   // Worker Station Gate (Phase C): every fresh open (reload/reboot resets
@@ -120,6 +129,10 @@ export function RootRoute() {
     return <AuthLoadingSpinner />
   }
   if (state === 'unauthenticated') {
+    // Same demo-session redirect as RequireAuth above — see that branch's comment.
+    if (sessionStorage.getItem(DEMO_SESSION_MARKER) === '1') {
+      return <Navigate to="/demo?expired=1" replace />
+    }
     return <Navigate to="/login" replace />
   }
   // Same precedence as RequireAuth: station-mode gate wins over role routing.
@@ -170,6 +183,7 @@ export default function App() {
         <Route path="/contact" element={<Contact />} />
         <Route path="/login"   element={<Login />} />
         <Route path="/signup" element={<Signup />} />
+        <Route path="/demo"   element={<DemoLanding />} />
         <Route path="/forgot-password" element={<ForgotPassword />} />
         <Route path="/reset-password"  element={<ResetPassword />} />
         <Route
