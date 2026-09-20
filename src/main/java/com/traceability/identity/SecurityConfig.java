@@ -111,7 +111,12 @@ public class SecurityConfig {
                     "/webhooks/shopify/**",
                     "/auth/shopify/install",
                     "/auth/shopify/callback",
-                    "/auth/magic"
+                    "/auth/magic",
+                    // FR-DEMO Day 2 — explicit entry (not relying on the SPA fallback below,
+                    // which is dotless-path-only and not meant to cover a real data-writing
+                    // POST). Rides the same unauthenticated pass-through as /api/v1/auth/login:
+                    // JwtAuthenticationFilter/TenantContextFilter are no-ops with no token.
+                    "/api/v1/public/demo/start"
                 ).permitAll()
                 // SPA shell fallback: any path without a dot (not a static file) that doesn't
                 // start with /api/, /auth/, /webhooks/, or /actuator/ is a client-side route.

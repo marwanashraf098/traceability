@@ -176,10 +176,12 @@ public class ApiExceptionHandler {
             .body(new FulfillmentActivationErrorBody(ex.code().name(), ex.messageEn(), ex.messageAr()));
     }
 
-    @ExceptionHandler(ShopifyOAuthException.class)
-    ResponseEntity<OAuthErrorBody> handleShopifyOAuth(ShopifyOAuthException ex) {
+    // Repointed to the base type (FR-DEMO Day 2) so both ShopifyOAuthException and the new
+    // DemoException flow through unchanged — same body shape, same status resolution.
+    @ExceptionHandler(ApiException.class)
+    ResponseEntity<OAuthErrorBody> handleShopifyOAuth(ApiException ex) {
         return ResponseEntity.status(ex.httpStatus())
-            .body(new OAuthErrorBody(ex.code().name(), ex.messageEn(), ex.messageAr()));
+            .body(new OAuthErrorBody(ex.errorCode(), ex.messageEn(), ex.messageAr()));
     }
 
     // Shopify token is stale or lacks required scopes. Returning 403 with JSON so the UI can

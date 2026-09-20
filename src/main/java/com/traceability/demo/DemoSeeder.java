@@ -244,6 +244,18 @@ public class DemoSeeder {
         return Base64.getUrlEncoder().withoutPadding().encodeToString(bytes);
     }
 
+    /**
+     * FR-DEMO Day 2: the demo owner's user id is random per bootstrap (unlike
+     * {@link #DEMO_TENANT_ID}, which is fixed) — the public demo-start endpoint resolves it
+     * at request time rather than relying on a hardcoded constant. Plain RLS-scoped read
+     * (tenant id is already known) — no DEFINER hatch needed.
+     */
+    public UUID resolveOwnerId() {
+        return TenantContext.runAs(DEMO_TENANT_ID, () -> jdbc.queryForObject(
+                "SELECT id FROM users WHERE tenant_id = ? AND role = 'owner' AND active = true",
+                UUID.class, DEMO_TENANT_ID));
+    }
+
     // ==================================================================
     // Reseed — the dangerous operation
     // ==================================================================

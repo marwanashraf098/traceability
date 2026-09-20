@@ -1,5 +1,6 @@
 package com.traceability.integrations.shopify;
 
+import com.traceability.ApiException;
 import org.springframework.http.HttpStatus;
 
 /**
@@ -9,8 +10,12 @@ import org.springframework.http.HttpStatus;
  *
  * SHOPIFY_STATE_INVALID intentionally covers expired/consumed/shop-mismatch cases —
  * the caller must not leak which specific sub-condition failed.
+ *
+ * Extends {@link ApiException} (extracted FR-DEMO Day 2) — messageEn/messageAr/httpStatus
+ * are now inherited, not redeclared; code() keeps its own enum-typed accessor (no rename,
+ * no behavior change) rather than colliding with the base's plain-String errorCode().
  */
-public class ShopifyOAuthException extends RuntimeException {
+public class ShopifyOAuthException extends ApiException {
 
     public enum Code {
         SHOPIFY_HMAC_INVALID,
@@ -30,21 +35,12 @@ public class ShopifyOAuthException extends RuntimeException {
         SHOPIFY_SHOP_MISMATCH
     }
 
-    private final Code       code;
-    private final String     messageEn;
-    private final String     messageAr;
-    private final HttpStatus httpStatus;
+    private final Code code;
 
     public ShopifyOAuthException(Code code, String messageEn, String messageAr, HttpStatus httpStatus) {
-        super(code.name() + ": " + messageEn);
-        this.code       = code;
-        this.messageEn  = messageEn;
-        this.messageAr  = messageAr;
-        this.httpStatus = httpStatus;
+        super(code.name(), messageEn, messageAr, httpStatus);
+        this.code = code;
     }
 
-    public Code       code()       { return code; }
-    public String     messageEn()  { return messageEn; }
-    public String     messageAr()  { return messageAr; }
-    public HttpStatus httpStatus() { return httpStatus; }
+    public Code code() { return code; }
 }
