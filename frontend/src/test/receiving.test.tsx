@@ -57,6 +57,7 @@ let lineSeq = 0
 
 function resetState() {
   lineSeq = 0
+  sessionGetDelayMs = 0
   session = {
     id: 'sess-1', status: 'open', reference: 'REC-0092', supplier_name: 'Cairo Cotton Co.',
     location_name: 'Main Warehouse', created_at: new Date().toISOString(), finalized_at: null,
@@ -106,12 +107,22 @@ function emptyResponse(status = 204) {
 
 let mockFetch: ReturnType<typeof vi.fn>
 
+// Artificial delay on the session-detail GET only — models onRefresh()'s real
+// network round-trip being strictly slower than the write that triggered it
+// (fire-and-forget, never awaited by commitQty). Used only by the doubling-bug
+// regression tests below; 0 (instant, as before) everywhere else.
+let sessionGetDelayMs = 0
+
 function backendFetch(url: string, opts: RequestInit = {}) {
   const method = (opts.method ?? 'GET').toUpperCase()
 
   if (url.includes('/api/v1/catalog')) return fakeResponse(CATALOG)
   if (url.endsWith('/receiving/sessions') && method === 'GET') return fakeResponse([sessionSummary()])
   if (url.endsWith(`/receiving/sessions/${session.id}`) && method === 'GET') {
+    if (sessionGetDelayMs > 0) {
+      return new Promise(resolve =>
+        setTimeout(() => resolve(fakeResponse({ ...sessionSummary(), lines: session.lines })), sessionGetDelayMs))
+    }
     return fakeResponse({ ...sessionSummary(), lines: session.lines })
   }
   if (url.endsWith(`/receiving/sessions/${session.id}/lines`) && method === 'POST') {
@@ -470,5 +481,75 @@ describe('Receiving — browse grid + variant modal + selected summary', () => {
     await user.click(screen.getByRole('button', { name: 'Delete Session' }))
     expect(await screen.findByText('Delete session REC-0092?')).toBeInTheDocument()
     expect(screen.getByText('This will permanently delete 2 line(s) totaling 20 unit(s). This cannot be undone.')).toBeInTheDocument()
+  })
+
+  // ── Real-tenant doubling bug regression (FIX A + FIX B) ────────────────────
+  //
+  // Both scenarios use a deliberately SLOW session-detail GET (sessionGetDelayMs)
+  // to model production reality: onRefresh() is fire-and-forget, and the real
+  // network round-trip it kicks off is strictly slower than the write that
+  // triggered it. Without this delay, the mocked GET resolves near-instantly and
+  // would mask the staleness window these tests exist to catch.
+
+  test('DEFECT A — typing a qty, letting the debounce auto-commit, then blurring does NOT re-POST the same value', async () => {
+    sessionGetDelayMs = 300
+    const user = userEvent.setup()
+    await openSession(user)
+    await openProductModal(user, 'p-cap')
+    await checkVariant(user, 'v-cap-navy')
+
+    const input = screen.getByTestId('qty-input-v-cap-navy')
+    await user.type(input, '5')
+
+    // Let the 500ms debounce fire on its own — NOT a blur. This is the auto-commit;
+    // the write itself resolves fast (session.lines updates), but the slow GET
+    // that onRefresh() kicked off is still pending.
+    await waitFor(() => expect(session.lines).toHaveLength(1), { timeout: 1000 })
+    expect(session.lines[0].quantity).toBe(5)
+
+    // Now blur, well before the delayed GET resolves — the single most common
+    // interaction shape (type a value, then click elsewhere/Done to move on).
+    fireEvent.blur(input)
+    await new Promise(r => setTimeout(r, 50))
+
+    // Before FIX A: localValue was never reset after the debounce's own commit,
+    // so this blur's flushNow() saw it as still-pending and fired onCommit(5)
+    // again — a real second network call for the SAME already-committed value.
+    const lineWriteCalls = mockFetch.mock.calls.filter(([u, o]) =>
+      String(u).includes('/lines') && ['POST', 'PUT'].includes(((o as RequestInit)?.method ?? '').toUpperCase()))
+    expect(lineWriteCalls).toHaveLength(1)
+    expect(session.lines).toHaveLength(1)
+    expect(session.lines[0].quantity).toBe(5)
+  })
+
+  test('DEFECT B — a rapid second, DISTINCT edit before the refresh returns PUT-updates the line, not a duplicate POST', async () => {
+    sessionGetDelayMs = 300
+    const user = userEvent.setup()
+    await openSession(user)
+    await openProductModal(user, 'p-cap')
+    await checkVariant(user, 'v-cap-navy')
+
+    const input = screen.getByTestId('qty-input-v-cap-navy')
+    await user.type(input, '3')
+
+    // Let the first debounce auto-commit (creates the line) — the slow GET it
+    // triggers is still pending when we make the SECOND, genuinely different edit.
+    await waitFor(() => expect(session.lines).toHaveLength(1), { timeout: 1000 })
+    expect(session.lines[0].quantity).toBe(3)
+
+    await user.clear(input)
+    await user.type(input, '5')
+    fireEvent.blur(input)
+
+    // Before FIX B: groupsRef still reflected pre-write state (the slow GET
+    // hadn't landed yet), so commitQty took the "create new" branch again
+    // instead of PUT-updating the existing line — two lines, double the total.
+    await waitFor(() => expect(session.lines).toHaveLength(1))
+    expect(session.lines[0].quantity).toBe(5)
+    const postCalls = mockFetch.mock.calls.filter(([u, o]) =>
+      String(u).endsWith('/lines') && (o as RequestInit)?.method === 'POST')
+    expect(postCalls).toHaveLength(1) // only the FIRST edit's create — the second was a PUT
+    const putCalls = mockFetch.mock.calls.filter(([, o]) => (o as RequestInit)?.method === 'PUT')
+    expect(putCalls).toHaveLength(1)
   })
 })

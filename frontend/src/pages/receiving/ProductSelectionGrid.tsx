@@ -56,6 +56,34 @@ export default function ProductSelectionGrid({
   const groupsRef = useRef(groups)
   groupsRef.current = groups
 
+  // FIX (real-tenant doubling bug, part 2): optimistic overrides, read directly
+  // by currentGroup() below — NOT merged into groupsRef at render time. An
+  // earlier version of this fix tried merging into groupsRef during render, but
+  // a successful commit's setGridError(null) is a no-op when gridError is
+  // already null (the common case) — React bails out of that state update and
+  // never re-renders, so the merge never ran until the slow onRefresh() GET
+  // eventually landed, defeating the whole point. Reading both refs directly
+  // at call time (currentGroup) is immediately correct with no render dependency.
+  //
+  // Never read by anything rendered (totals/selectedProducts/committedQty all
+  // read `groups` directly, so the visible UI only ever reflects server-
+  // confirmed state — zero flicker risk). Needed because onRefresh() is fire-
+  // and-forget: the GET + re-render that would otherwise refresh `groupsRef`
+  // takes strictly longer than the write that just completed, so a rapid
+  // SECOND, DISTINCT edit for the same variant would otherwise see pre-write
+  // state and duplicate the line (POST) instead of updating it (PUT) — the
+  // other half of the doubling bug.
+  const optimisticRef = useRef<Map<string, VariantGroup>>(new Map())
+  // Reconciled every render: once the server-confirmed groupsRef catches up to
+  // an optimistic value, the override is dropped so a later, unrelated
+  // staleness (e.g. a concurrent edit from another tab) is never masked.
+  for (const [variantId, opt] of optimisticRef.current) {
+    if ((groupsRef.current.get(variantId)?.qty ?? 0) === opt.qty) optimisticRef.current.delete(variantId)
+  }
+  function currentGroup(variantId: string): VariantGroup | undefined {
+    return optimisticRef.current.get(variantId) ?? groupsRef.current.get(variantId)
+  }
+
   // ── Reconciliation: commits one variant's new ABSOLUTE quantity through the
   //    existing line endpoints only (POST create / PUT update / DELETE remove)
   //    — never a new endpoint, per the approved HARD RULE. Unchanged from the
@@ -69,16 +97,17 @@ export default function ProductSelectionGrid({
   const inFlightRef = useRef<Set<string>>(new Set())
 
   async function commitQty(variantId: string, newQty: number) {
-    const group   = groupsRef.current.get(variantId)
+    const group   = currentGroup(variantId)
     const current = group?.qty ?? 0
     if (newQty === current) return
 
     try {
       if (!group || group.lineIds.length === 0) {
         if (newQty > 0) {
-          await api(`/receiving/sessions/${sessionId}/lines`, {
+          const res = await api<{ lineId: string }>(`/receiving/sessions/${sessionId}/lines`, {
             method: 'POST', body: JSON.stringify({ variantId, quantity: newQty }),
           })
+          optimisticRef.current.set(variantId, { qty: newQty, lineIds: [res.lineId] })
         }
       } else if (group.lineIds.length === 1) {
         const lineId = group.lineIds[0]
@@ -86,8 +115,10 @@ export default function ProductSelectionGrid({
           await api(`/receiving/sessions/${sessionId}/lines/${lineId}`, {
             method: 'PUT', body: JSON.stringify({ quantity: newQty }),
           })
+          optimisticRef.current.set(variantId, { qty: newQty, lineIds: [lineId] })
         } else {
           await api(`/receiving/sessions/${sessionId}/lines/${lineId}`, { method: 'DELETE' })
+          optimisticRef.current.set(variantId, { qty: 0, lineIds: [] })
         }
       } else {
         const [keep, ...extra] = group.lineIds
@@ -97,9 +128,11 @@ export default function ProductSelectionGrid({
           })
           await Promise.all(extra.map(id =>
             api(`/receiving/sessions/${sessionId}/lines/${id}`, { method: 'DELETE' })))
+          optimisticRef.current.set(variantId, { qty: newQty, lineIds: [keep] })
         } else {
           await Promise.all(group.lineIds.map(id =>
             api(`/receiving/sessions/${sessionId}/lines/${id}`, { method: 'DELETE' })))
+          optimisticRef.current.set(variantId, { qty: 0, lineIds: [] })
         }
       }
       setGridError(null)
@@ -129,7 +162,7 @@ export default function ProductSelectionGrid({
 
   function removeProduct(product: CatalogProduct) {
     for (const v of product.variants) {
-      const g = groupsRef.current.get(v.id)
+      const g = currentGroup(v.id)
       if (g && g.qty > 0) scheduleCommit(v.id, 0)
     }
   }
@@ -412,6 +445,10 @@ function VariantRow({ variant, committedQty, onCommit }: {
   const debounceTimer  = useRef<ReturnType<typeof setTimeout> | null>(null)
   const inputRef        = useRef<HTMLInputElement>(null)
   const userToggledRef  = useRef(false)
+  // What the debounce timer's own auto-commit last sent, if anything — lets
+  // flushNow() (blur) tell "the field still shows exactly what was already
+  // committed" apart from "the user kept typing after that" (see flushNow).
+  const lastAutoCommittedRef = useRef<number | null>(null)
 
   // Sync checked state if committedQty changes externally (e.g. after a commit
   // round-trip updates the prop) without clobbering an in-progress local edit.
@@ -436,12 +473,35 @@ function VariantRow({ variant, committedQty, onCommit }: {
   function scheduleFromInput(raw: string) {
     setLocalValue(raw)
     if (debounceTimer.current) clearTimeout(debounceTimer.current)
-    debounceTimer.current = setTimeout(() => onCommit(parse(raw)), 500)
+    debounceTimer.current = setTimeout(() => {
+      const qty = parse(raw)
+      onCommit(qty)
+      // Remember what this auto-commit sent — NOT a reset of localValue itself:
+      // clearing localValue here would fall the field back to the committedQty
+      // PROP, which briefly still reflects the pre-write value while the (fire-
+      // and-forget) refresh this commit triggered is in flight — an empirically
+      // confirmed flicker (the checkbox/field would flash unchecked/disabled
+      // for that window). Leaving localValue as-is keeps the field showing
+      // exactly what the user typed, with zero visible change, while still
+      // letting flushNow (below) recognize a same-value re-send as redundant.
+      lastAutoCommittedRef.current = qty
+      debounceTimer.current = null
+    }, 500)
   }
 
   function flushNow() {
     if (debounceTimer.current) { clearTimeout(debounceTimer.current); debounceTimer.current = null }
-    if (localValue !== null) onCommit(parse(localValue))
+    if (localValue !== null) {
+      const qty = parse(localValue)
+      // FIX (real-tenant doubling bug): only re-commit if this differs from
+      // what the debounce timer's own auto-commit already sent. Before this
+      // fix, blurring right after an idle-triggered auto-commit — type a qty,
+      // pause long enough for scheduleFromInput's timer to fire, then blur to
+      // move on, the single most common interaction shape — unconditionally
+      // re-sent the SAME already-committed value a second time.
+      if (qty !== lastAutoCommittedRef.current) onCommit(qty)
+    }
+    lastAutoCommittedRef.current = null
     setLocalValue(null)
   }
 
