@@ -7,6 +7,8 @@ services:
     build:
       context: ..
       dockerfile: Dockerfile
+      args:
+        VITE_CALENDLY_SETUP_URL: "https://calendly.com/tracedtechnology/traced-setup-call"
     image: traceability-app:latest
     env_file: ../.env
     restart: unless-stopped
