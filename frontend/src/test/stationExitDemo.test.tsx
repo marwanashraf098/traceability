@@ -9,6 +9,7 @@ import DemoLanding from '../pages/DemoLanding'
 import { RequireAuth, RootRoute } from '../App'
 import { StationProvider } from '../components/StationProvider'
 import { setAccessToken, clearAccessToken } from '../auth'
+import { getTenantIdFromToken } from '../api'
 import { DEMO_TENANT_ID, DEMO_SESSION_MARKER } from '../demoConstants'
 
 const testI18n = i18next.createInstance()
@@ -75,10 +76,35 @@ afterEach(() => {
   cleanup()
 })
 
+// ISSUE 2 — getTenantIdFromToken() read the wrong JWT claim key ("tenantId"
+// instead of the real "tenant" JwtService.issueAccessToken() writes), so it
+// always returned null for every token, demo or real, and the demo-exit
+// button never rendered. Direct unit coverage on the decode itself, plus the
+// existing StationGate integration tests below re-exercise it end to end.
+describe('getTenantIdFromToken() — claim-key fix (ISSUE 2)', () => {
+  afterEach(() => clearAccessToken())
+
+  test('demo token ("tenant" claim = DEMO_TENANT_ID) decodes to the demo tenant id', () => {
+    setAccessToken(fakeJwt({ role: 'owner', tenant: DEMO_TENANT_ID }))
+    expect(getTenantIdFromToken()).toBe(DEMO_TENANT_ID)
+  })
+
+  test('real token ("tenant" claim = some other tenant) decodes to that tenant id, non-null', () => {
+    setAccessToken(fakeJwt({ role: 'owner', tenant: 'a-real-tenant-id' }))
+    const result = getTenantIdFromToken()
+    expect(result).not.toBeNull()
+    expect(result).toBe('a-real-tenant-id')
+  })
+
+  test('no token in memory -> null', () => {
+    expect(getTenantIdFromToken()).toBeNull()
+  })
+})
+
 describe('StationGate ExitStep — demo-only no-password bypass (FIX 3a)', () => {
   test('demo tenant token: "Exit demo" button appears and exits with no password', async () => {
     localStorage.setItem('stationMode', 'true')
-    setAccessToken(fakeJwt({ role: 'owner', tenantId: DEMO_TENANT_ID }))
+    setAccessToken(fakeJwt({ role: 'owner', tenant: DEMO_TENANT_ID }))
 
     renderGated()
     await goToExitStep()
@@ -94,7 +120,7 @@ describe('StationGate ExitStep — demo-only no-password bypass (FIX 3a)', () =>
 
   test('real tenant token: no demo-exit button, unchanged password re-auth flow', async () => {
     localStorage.setItem('stationMode', 'true')
-    setAccessToken(fakeJwt({ role: 'owner', tenantId: 'a-real-tenant-id' }))
+    setAccessToken(fakeJwt({ role: 'owner', tenant: 'a-real-tenant-id' }))
 
     renderGated()
     await goToExitStep()
@@ -104,7 +130,7 @@ describe('StationGate ExitStep — demo-only no-password bypass (FIX 3a)', () =>
     expect(screen.getByRole('button', { name: 'Exit' })).toBeInTheDocument()
   })
 
-  test('no tenantId claim at all (e.g. a non-JWT placeholder token): no demo-exit button', async () => {
+  test('no tenant claim at all (e.g. a non-JWT placeholder token): no demo-exit button', async () => {
     localStorage.setItem('stationMode', 'true')
     setAccessToken('not-a-real-jwt')
 
@@ -157,7 +183,7 @@ describe('stationMode persistence fix — demo session end clears it (FIX 3b)', 
 
   test('a real worker/owner session never has stationMode cleared by demo logic', async () => {
     localStorage.setItem('stationMode', 'true')
-    setAccessToken(fakeJwt({ role: 'owner', tenantId: 'a-real-tenant-id' }))
+    setAccessToken(fakeJwt({ role: 'owner', tenant: 'a-real-tenant-id' }))
     // No DEMO_SESSION_MARKER set at all — this is not a demo visitor.
 
     renderGated('/overview')

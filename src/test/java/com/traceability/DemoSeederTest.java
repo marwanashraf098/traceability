@@ -81,6 +81,7 @@ class DemoSeederTest {
     @Autowired ShopifyInventoryService     shopifyInventoryService;
     @Autowired ExceptionDigestJob          digestJob;
     @Autowired ExceptionImmediateAlertJob  immediateJob;
+    @Autowired com.traceability.inventory.ReceivingService receiving;
 
     private static final UUID DEMO_ID = DemoSeeder.DEMO_TENANT_ID;
 
@@ -176,14 +177,17 @@ class DemoSeederTest {
         // ---- demo tenant: reset to golden counts ----
         assertThat(countRows("products", DEMO_ID)).isEqualTo(productsBeforeReseed).isEqualTo(6L);
         assertThat(countRows("variants", DEMO_ID)).isEqualTo(variantsBeforeReseed).isEqualTo(20L);
-        // 20 variants * 3 available + 3 in-transit + 2 returns + 1 lost = 66
-        assertThat(countRows("pieces", DEMO_ID)).isEqualTo(66L);
+        // 20 variants * 3 available (60) + 3 in-transit + 2 returns-pending + 1 lost (66)
+        // + ISSUE 3's damaged + restocked return items (2) + ISSUE 4's finalized
+        // receiving session (12+8+20=40 pieces) = 108.
+        assertThat(countRows("pieces", DEMO_ID)).isEqualTo(108L);
         // 10 pickable + 3 in-transit + 1 blocked = 14
         assertThat(countRows("orders", DEMO_ID)).isEqualTo(14L);
         assertThat(countRows("audit_log", DEMO_ID)).isEqualTo(0L); // the stray visitor row is gone
         assertThat(countRows("stores", DEMO_ID)).isEqualTo(1L);
-        assertThat(countRows("return_sessions", DEMO_ID)).isEqualTo(1L);
-        assertThat(countRows("return_session_items", DEMO_ID)).isEqualTo(2L);
+        // ISSUE 3: 2 sessions (1 open with 2 pending + 1 damaged item, 1 closed with 1 restocked item).
+        assertThat(countRows("return_sessions", DEMO_ID)).isEqualTo(2L);
+        assertThat(countRows("return_session_items", DEMO_ID)).isEqualTo(4L);
 
         Long lostCount = jdbc.queryForObject(
                 "SELECT COUNT(*) FROM pieces WHERE tenant_id = ? AND status = 'lost'::piece_status",
@@ -238,7 +242,7 @@ class DemoSeederTest {
         assertThatCode(() -> demoSeeder.reseed()).doesNotThrowAnyException();
         assertThatCode(() -> demoSeeder.reseed()).doesNotThrowAnyException();
         assertThat(countRows("products", DEMO_ID)).isEqualTo(6L);
-        assertThat(countRows("pieces", DEMO_ID)).isEqualTo(66L);
+        assertThat(countRows("pieces", DEMO_ID)).isEqualTo(108L);
     }
 
     // -----------------------------------------------------------------------
@@ -324,5 +328,39 @@ class DemoSeederTest {
                 "SELECT COUNT(*) FROM users WHERE tenant_id = ? AND role = 'owner' AND active = true",
                 Long.class, DEMO_ID);
         assertThat(ownerCount).isEqualTo(1L);
+    }
+
+    // -----------------------------------------------------------------------
+    // (g) ISSUE 1b — the seeded OPEN receiving session (REC-DEMO-2) finalizes for
+    //     real through ReceivingService.finalize()/InventoryLedger.batchReceive()
+    //     without a pieces_short_code_tenant_unique violation. Before the
+    //     piece_counters seed in loadGoldenFixture(), this call would have failed:
+    //     batchReceive()'s counter claim started at 0 for a tenant piece_counters
+    //     had never seen, colliding with the fixture's own raw-inserted short codes.
+    // -----------------------------------------------------------------------
+    @Test
+    @Order(7)
+    void demoOpenReceivingSession_finalizesWithoutUniqueViolation() {
+        demoSeeder.reseed();
+
+        UUID openSessionId = jdbc.queryForObject(
+                "SELECT id FROM receipts WHERE tenant_id = ? AND reference = 'REC-DEMO-2'",
+                UUID.class, DEMO_ID);
+        UUID ownerId = jdbc.queryForObject(
+                "SELECT id FROM users WHERE tenant_id = ? AND role = 'owner'",
+                UUID.class, DEMO_ID);
+
+        assertThatCode(() ->
+                TenantContext.runAs(DEMO_ID, () -> receiving.finalize(openSessionId, ownerId))
+        ).as("finalize() must not throw a short_code unique violation for the demo tenant")
+                .doesNotThrowAnyException();
+
+        Long piecesFromThisSession = jdbc.queryForObject(
+                "SELECT COUNT(*) FROM pieces WHERE receipt_id = ?", Long.class, openSessionId);
+        assertThat(piecesFromThisSession).as("5 + 5 seeded line quantities").isEqualTo(10L);
+
+        String status = jdbc.queryForObject(
+                "SELECT status FROM receipts WHERE id = ?", String.class, openSessionId);
+        assertThat(status).isEqualTo("finalized");
     }
 }

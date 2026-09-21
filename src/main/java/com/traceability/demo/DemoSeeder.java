@@ -459,6 +459,20 @@ public class DemoSeeder {
         insertInTransitShipments(ojdbc, tenantId, storeId, workerIds, variantIds, shortCodeSeq);
         insertReturns(ojdbc, tenantId, locationId, workerIds, variantIds, shortCodeSeq);
         insertExceptions(ojdbc, tenantId, storeId, locationId, workerIds, variantIds, shortCodeSeq);
+        insertReceivingSessions(ojdbc, tenantId, locationId, workerIds, variantIds, shortCodeSeq);
+
+        // ISSUE 1b fix: seed piece_counters PAST every short code this fixture just
+        // raw-inserted (shortCodeSeq's final value), so a real finalize() on the demo
+        // tenant (InventoryLedger.batchReceive()'s ON CONFLICT counter claim) never
+        // collides with a fixture piece's short_code. DemoSeeder's raw inserts never
+        // touch piece_counters themselves (they don't go through batchReceive at all)
+        // — confirmed root cause of the prod "HTTP 400" finalize error. +50 buffer,
+        // not a hardcoded constant, so this stays correct if the fixture grows later.
+        ojdbc.update(
+                "INSERT INTO piece_counters (tenant_id, last_value) VALUES (?, ?) " +
+                "ON CONFLICT (tenant_id) DO UPDATE " +
+                "SET last_value = GREATEST(piece_counters.last_value, EXCLUDED.last_value)",
+                tenantId, (long) (shortCodeSeq.get() + 50));
     }
 
     /**
@@ -607,15 +621,41 @@ public class DemoSeeder {
         }
     }
 
-    /** 1-2 returns sitting in an open return session, awaiting inspection. */
+    /**
+     * ISSUE 3 fixture — 2 return_sessions total (NOT 3; see below), varied states:
+     *   - session 1 (open): 2 'pending' items (unchanged) + 1 NEW 'damaged' item
+     *     (Omar Khaled's return) — still just ONE open session.
+     *   - session 2 (closed): 1 'restocked' item (Salma Ibrahim's return).
+     *
+     * DEVIATION FROM SPEC, FLAGGED: the spec asked for 3 sessions (existing +2),
+     * with the 3rd described as "open/pending/damaged". return_sessions has
+     * return_sessions_one_open_per_tenant — a UNIQUE INDEX on (tenant_id) WHERE
+     * status='open' (V73__return_sessions.sql) — a real tenant can never have two
+     * open return sessions at once, and inserting a second one here would throw a
+     * unique violation and abort the ENTIRE reseed transaction. Resolved by adding
+     * the 3rd item's disposition ('damaged') to the ALREADY-open session 1 instead
+     * of a genuinely separate session row — this still shows "open session with a
+     * mix of pending and damaged items" on the Returns screen, just as one session,
+     * not two. Total return_sessions rows: 2 (1 open, 1 closed), not 3.
+     *
+     * return_session_items.disposition values (confirmed via V73__return_sessions.sql
+     * CHECK constraint): 'pending', 'restocked', 'damaged', 'mismatch'.
+     * return_sessions.status values: 'open', 'closed', 'abandoned'.
+     * Neither table has a customer-facing column (return_session_items only
+     * references piece_id, no order/customer link) — the Returns screen doesn't
+     * display a customer name for a return item today, so the given customer names
+     * are attached via return_sessions.note (a free-text field that already exists
+     * for exactly this kind of context), not a fabricated order/customer_name link.
+     */
     private void insertReturns(JdbcTemplate ojdbc, UUID tenantId, UUID locationId,
                                 List<UUID> workerIds, List<UUID> variantIds,
                                 AtomicInteger shortCodeSeq) {
         UUID sessionId = UUID.randomUUID();
         UUID opener = workerIds.get(0);
         ojdbc.update(
-                "INSERT INTO return_sessions (id, tenant_id, status, opened_by, opened_at) " +
-                "VALUES (?, ?, 'open', ?, now() - interval '1 day')",
+                "INSERT INTO return_sessions (id, tenant_id, status, opened_by, opened_at, note) " +
+                "VALUES (?, ?, 'open', ?, now() - interval '1 day', " +
+                "        'Includes a damaged item from Omar Khaled''s return.')",
                 sessionId, tenantId, opener);
 
         for (int i = 1; i <= 2; i++) {
@@ -636,6 +676,56 @@ public class DemoSeeder {
                     "VALUES (?, ?, ?, ?, 'barcode', 'pending')",
                     tenantId, sessionId, pieceId, actor);
         }
+
+        // 3rd item in the SAME (still open) session — Omar Khaled's damaged return,
+        // already disposed (not pending).
+        {
+            UUID variantId = variantIds.get(2 % variantIds.size());
+            String pieceId = UlidGenerator.generate();
+            UUID actor = workerIds.get(0);
+            insertPiece(ojdbc, tenantId, pieceId, variantId, "damaged", locationId, null,
+                    shortCodeSeq.getAndIncrement());
+            insertPieceEvent(ojdbc, tenantId, pieceId, "received", actor, null, null, locationId,
+                    null, "available", daysAgo(8));
+            insertPieceEvent(ojdbc, tenantId, pieceId, "return_received", actor, null, null, locationId,
+                    "available", "return_pending_inspection", daysAgo(2));
+            insertPieceEvent(ojdbc, tenantId, pieceId, "adjusted", actor, null, null, locationId,
+                    "return_pending_inspection", "damaged", daysAgo(2));
+            ojdbc.update(
+                    "INSERT INTO return_session_items " +
+                    "(tenant_id, session_id, piece_id, scanned_by, scan_source, disposition, " +
+                    " disposition_at, disposition_by, damage_reason) " +
+                    "VALUES (?, ?, ?, ?, 'barcode', 'damaged', now() - interval '2 days', ?, " +
+                    "        'Crushed box on arrival')",
+                    tenantId, sessionId, pieceId, actor, actor);
+        }
+
+        // Session 2 — closed, one restocked item, Salma Ibrahim's return.
+        UUID closedSessionId = UUID.randomUUID();
+        UUID closer = workerIds.get(1);
+        ojdbc.update(
+                "INSERT INTO return_sessions " +
+                "(id, tenant_id, status, opened_by, opened_at, closed_by, closed_at, note) " +
+                "VALUES (?, ?, 'closed', ?, now() - interval '4 days', ?, now() - interval '3 days', " +
+                "        'Restocked return from Salma Ibrahim.')",
+                closedSessionId, tenantId, closer, closer);
+
+        UUID restockedVariantId = variantIds.get(3 % variantIds.size());
+        String restockedPieceId = UlidGenerator.generate();
+        insertPiece(ojdbc, tenantId, restockedPieceId, restockedVariantId, "available", locationId, null,
+                shortCodeSeq.getAndIncrement());
+        insertPieceEvent(ojdbc, tenantId, restockedPieceId, "received", closer, null, null, locationId,
+                null, "available", daysAgo(10));
+        insertPieceEvent(ojdbc, tenantId, restockedPieceId, "return_received", closer, null, null, locationId,
+                "available", "return_pending_inspection", daysAgo(4));
+        insertPieceEvent(ojdbc, tenantId, restockedPieceId, "restocked", closer, null, null, locationId,
+                "return_pending_inspection", "available", daysAgo(3));
+        ojdbc.update(
+                "INSERT INTO return_session_items " +
+                "(tenant_id, session_id, piece_id, scanned_by, scan_source, disposition, " +
+                " disposition_at, disposition_by) " +
+                "VALUES (?, ?, ?, ?, 'barcode', 'restocked', now() - interval '3 days', ?)",
+                tenantId, closedSessionId, restockedPieceId, closer, closer);
     }
 
     /** A couple of live exceptions: one CRITICAL (lost piece), one LOW (blocked customer). */
@@ -667,6 +757,66 @@ public class DemoSeeder {
                 tenantId, blockedOrderId, variantIds.get(1));
     }
 
+    /**
+     * ISSUE 4 fixture — 2 receiving sessions:
+     *   - session 1: 'finalized', 3 lines (qty 12/8/20), pieces raw-inserted
+     *     directly (receipt_id set — see insertPieceWithReceipt) — display-only,
+     *     never goes through ReceivingService.finalize()/InventoryLedger.batchReceive().
+     *   - session 2: 'open', 2 lines (qty 5/5), NO pieces — a real visitor can open
+     *     it and click Finalize. That call DOES go through the real finalize()/
+     *     batchReceive() path, which is exactly what ISSUE 1b's piece_counters seed
+     *     (in loadGoldenFixture(), after this method runs) protects against
+     *     colliding with every short_code this method and the rest of the fixture
+     *     already claimed.
+     */
+    private void insertReceivingSessions(JdbcTemplate ojdbc, UUID tenantId, UUID locationId,
+                                          List<UUID> workerIds, List<UUID> variantIds,
+                                          AtomicInteger shortCodeSeq) {
+        UUID receiver = workerIds.get(0);
+
+        // Session 1 — finalized, display-only.
+        UUID finalizedSessionId = UUID.randomUUID();
+        ojdbc.update(
+                "INSERT INTO receipts (id, tenant_id, reference, supplier_name, received_by, " +
+                "                      location_id, status, finalized_at) " +
+                "VALUES (?, ?, 'REC-DEMO-1', 'Cairo Cotton Co.', ?, ?, 'finalized', now() - interval '5 days')",
+                finalizedSessionId, tenantId, receiver, locationId);
+
+        int[] finalizedQtys = { 12, 8, 20 };
+        for (int i = 0; i < finalizedQtys.length; i++) {
+            UUID variantId = variantIds.get(i % variantIds.size());
+            int qty = finalizedQtys[i];
+            ojdbc.update(
+                    "INSERT INTO receipt_lines (tenant_id, receipt_id, variant_id, quantity) " +
+                    "VALUES (?, ?, ?, ?)",
+                    tenantId, finalizedSessionId, variantId, qty);
+            for (int u = 0; u < qty; u++) {
+                String pieceId = UlidGenerator.generate();
+                insertPieceWithReceipt(ojdbc, tenantId, pieceId, variantId, finalizedSessionId,
+                        "available", locationId, shortCodeSeq.getAndIncrement());
+                insertPieceEvent(ojdbc, tenantId, pieceId, "received", receiver, null, null, locationId,
+                        null, "available", daysAgo(5));
+            }
+        }
+
+        // Session 2 — open, interactive: a demo visitor can add/edit lines and
+        // Finalize it for real (no pieces yet — finalize() creates them).
+        UUID openSessionId = UUID.randomUUID();
+        ojdbc.update(
+                "INSERT INTO receipts (id, tenant_id, reference, supplier_name, received_by, location_id) " +
+                "VALUES (?, ?, 'REC-DEMO-2', 'Nile Textiles', ?, ?)",
+                openSessionId, tenantId, receiver, locationId);
+
+        int[] openQtys = { 5, 5 };
+        for (int i = 0; i < openQtys.length; i++) {
+            UUID variantId = variantIds.get((i + 1) % variantIds.size());
+            ojdbc.update(
+                    "INSERT INTO receipt_lines (tenant_id, receipt_id, variant_id, quantity) " +
+                    "VALUES (?, ?, ?, ?)",
+                    tenantId, openSessionId, variantId, openQtys[i]);
+        }
+    }
+
     // ---- raw piece / piece_event writers (deliberate InventoryLedger carve-out) ----
 
     private void insertPiece(JdbcTemplate ojdbc, UUID tenantId, String pieceId, UUID variantId,
@@ -677,6 +827,23 @@ public class DemoSeeder {
                 "VALUES (?, ?, ?, ?, ?, ?::piece_status, ?, ?, now())",
                 pieceId, tenantId, variantId, "PC-" + pieceId,
                 "P" + String.format("%06d", shortCodeSeq), status, locationId, orderId);
+    }
+
+    /**
+     * ISSUE 4 fixture only — same as insertPiece() but also sets receipt_id, so a
+     * raw-inserted piece attributes back to a specific (also raw-inserted, never-
+     * finalized-via-batchReceive) receiving session. ReceivingService.getSession()/
+     * getLines() compute piece_count via pieces.receipt_id — without this, a
+     * "finalized" demo receiving session would always display 0 pieces.
+     */
+    private void insertPieceWithReceipt(JdbcTemplate ojdbc, UUID tenantId, String pieceId, UUID variantId,
+                                         UUID receiptId, String status, UUID locationId, int shortCodeSeq) {
+        ojdbc.update(
+                "INSERT INTO pieces (id, tenant_id, variant_id, receipt_id, barcode, short_code, status, " +
+                "                    current_location_id, last_event_at) " +
+                "VALUES (?, ?, ?, ?, ?, ?, ?::piece_status, ?, now())",
+                pieceId, tenantId, variantId, receiptId, "PC-" + pieceId,
+                "P" + String.format("%06d", shortCodeSeq), status, locationId);
     }
 
     private void insertPieceEvent(JdbcTemplate ojdbc, UUID tenantId, String pieceId, String eventType,
