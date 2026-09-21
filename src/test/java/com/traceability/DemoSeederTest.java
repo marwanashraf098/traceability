@@ -244,6 +244,10 @@ class DemoSeederTest {
         assertThatCode(() -> demoSeeder.reseed()).doesNotThrowAnyException();
         assertThat(countRows("products", DEMO_ID)).isEqualTo(6L);
         assertThat(countRows("pieces", DEMO_ID)).isEqualTo(112L);
+        // Idempotency of the self-healing second-location insert (loadGoldenFixture()) across
+        // repeated reseeds — must stay exactly 2, never duplicate on ON CONFLICT DO NOTHING.
+        assertThat(countRows("locations", DEMO_ID)).isEqualTo(2L);
+        assertThat(countRows("transfers", DEMO_ID)).isEqualTo(2L);
     }
 
     // -----------------------------------------------------------------------

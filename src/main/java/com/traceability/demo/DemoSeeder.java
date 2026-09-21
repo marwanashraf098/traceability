@@ -459,6 +459,20 @@ public class DemoSeeder {
                 "SELECT id FROM locations WHERE tenant_id = ? AND is_fulfillment = true LIMIT 1",
                 UUID.class, tenantId);
 
+        // Self-heal: an already-bootstrapped tenant may predate DEMO_DESTINATION_LOCATION_ID
+        // (confirmed prod incident — ensureBootstrapped()'s fast-path returns early for an
+        // existing tenant, so a location added to insertDemoFixtureIdempotent() after that
+        // tenant was first created never retroactively appears on it). This must run on
+        // EVERY reseed, not just bootstrap, so it's idempotent (fixed id, ON CONFLICT DO
+        // NOTHING, locations is never deleted by deleteMutableRows()) and unconditional here
+        // — never gated behind ensureBootstrapped()'s EXISTS check. Runs before
+        // insertTransfers() below, which requires this row to exist as a destination.
+        ojdbc.update(
+                "INSERT INTO locations (id, tenant_id, name, type, is_default, is_fulfillment) " +
+                "VALUES (?, ?, 'Zamalek Showroom', 'showroom', false, false) " +
+                "ON CONFLICT DO NOTHING",
+                DEMO_DESTINATION_LOCATION_ID, tenantId);
+
         List<UUID> workerIds = ojdbc.queryForList(
                 "SELECT id FROM users WHERE tenant_id = ? AND role = 'worker' ORDER BY created_at LIMIT 2",
                 UUID.class, tenantId);
