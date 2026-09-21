@@ -314,12 +314,12 @@ document.querySelectorAll('[data-calc]').forEach(sec=>{
   // brands strip
   (() => {
 const Q=[
- ['BLNCO','assets/brand-blnco.png','Omar Aly · Founder, BLNCO','Setup took an afternoon. We labelled the whole stockroom and haven\'t lost a piece since.',5],
- ['Jumi','assets/brand-jumi.png','Mohamed Afyouni · Founder, Jumi','The scanner blocks anything on hold, so returns don\'t get reshipped by mistake anymore.',5],
- ['The Snouts','assets/brand-snouts.png','Mohamed Ghanem · Founder, The Snouts','Bosta claimed a parcel never reached the hub. I sent them the scan. Refunded in two days.',5],
- ['BLNCO','assets/brand-blnco.png','Omar Aly · BLNCO','Shopify stock finally matches what\'s actually on the shelf. Oversells stopped.',5],
- ['Jumi','assets/brand-jumi.png','Mohamed Afyouni · Jumi','My team scans from their phones, I see every move from the laptop. Simple.',5],
- ['The Snouts','assets/brand-snouts.png','Mohamed Ghanem · The Snouts','Wish we had this a year ago. Would have saved us thousands in write-offs.',5]
+ ['BLNCO','assets/landing/brand-blnco.png','Omar Aly · Founder, BLNCO','Setup took an afternoon. We labelled the whole stockroom and haven\'t lost a piece since.',5],
+ ['Jumi','assets/landing/brand-jumi.png','Mohamed Afyouni · Founder, Jumi','The scanner blocks anything on hold, so returns don\'t get reshipped by mistake anymore.',5],
+ ['The Snouts','assets/landing/brand-snouts.png','Mohamed Ghanem · Founder, The Snouts','Bosta claimed a parcel never reached the hub. I sent them the scan. Refunded in two days.',5],
+ ['BLNCO','assets/landing/brand-blnco.png','Omar Aly · BLNCO','Shopify stock finally matches what\'s actually on the shelf. Oversells stopped.',5],
+ ['Jumi','assets/landing/brand-jumi.png','Mohamed Afyouni · Jumi','My team scans from their phones, I see every move from the laptop. Simple.',5],
+ ['The Snouts','assets/landing/brand-snouts.png','Mohamed Ghanem · The Snouts','Wish we had this a year ago. Would have saved us thousands in write-offs.',5]
 ];
 const card=(r,i)=>`<div class="tq"><div class="lg"><img src="${r[1]}" alt="${r[0]}"></div><div><div class="top"><b>${r[0]}</b><span class="stars">${'★'.repeat(r[4])}</span></div><q>${r[3]}</q><div class="who">${r[2]}</div></div></div>`;
 const fill=(el,arr)=>{ el.innerHTML=arr.map(card).join('')+arr.map(card).join(''); };
