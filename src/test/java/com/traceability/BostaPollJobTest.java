@@ -53,6 +53,9 @@ import static org.mockito.Mockito.*;
  *         nothing dropped, nothing double-enqueued
  *   p17 — Tier 2 high-water mark: item above the mark always fetched, at/below never
  *   p18 — Tier 2 per-tenant advisory lock: held elsewhere → this run skips cleanly
+ *   p19 — Tier 2 high-water mark: from-null first cycle, page-exhaustion — mark
+ *         still advances even when the scan never reaches an empty page or matches
+ *         a (null) stored mark
  *
  * BostaGateway and JobScheduler are @MockBean. BostaStatusPollJob, BostaDiscoveryPollJob,
  * and BostaWebhookJob are exercised directly (JobRunr scheduling is not involved).
@@ -1025,6 +1028,65 @@ class BostaPollJobTest {
 
         verify(bostaGateway, times(1)).listDeliveriesPage(anyString(), eq(1), anyInt());
         verify(bostaGateway, times(1)).fetchDelivery(anyString(), eq(tracking));
+    }
+
+    // ── p19: Tier 2 high-water mark — from-null first cycle, page-exhaustion ──
+    //
+    // Reproduces the 2026-09-21 prod bug: a tenant whose already-linked history
+    // alone spans more pages than discoveryPages (3, default) × pageSize never hits
+    // reachedMark (storedMark is null — an equality match against null is never
+    // true) or cleanEnd (every page it looks at is full), so the old code exited
+    // the page loop via neither branch and silently never wrote a mark — forever.
+    // p16 covers null-start-with-ceiling-hit (mark correctly withheld); this covers
+    // null-start-WITHOUT a ceiling hit, where every scanned item is cheap
+    // already-linked filler and the mark must still advance.
+
+    @Test
+    void p19_discoveryPoll_fromNullMark_pageExhaustion_markAdvancesToNewest() {
+        setupCourierAccount("poll-key-p19");
+        String[] tracking = {
+            "BOS-P19-1", "BOS-P19-2", "BOS-P19-3", "BOS-P19-4", "BOS-P19-5",
+            "BOS-P19-6", "BOS-P19-7", "BOS-P19-8", "BOS-P19-9"
+        };
+        // All 9 are already linked (shipments rows exist) — mirrors the prod tenant
+        // with 205 already-linked deliveries: nothing genuinely new, so the ceiling
+        // (attempted-only) never fires either.
+        for (String t : tracking) createShipment(t, "with_courier");
+
+        when(bostaGateway.listDeliveriesPage(anyString(), eq(1), anyInt())).thenReturn(List.of(
+            new BostaGateway.SlimDelivery(tracking[0], 41, "SEND"),
+            new BostaGateway.SlimDelivery(tracking[1], 41, "SEND"),
+            new BostaGateway.SlimDelivery(tracking[2], 41, "SEND")));
+        when(bostaGateway.listDeliveriesPage(anyString(), eq(2), anyInt())).thenReturn(List.of(
+            new BostaGateway.SlimDelivery(tracking[3], 41, "SEND"),
+            new BostaGateway.SlimDelivery(tracking[4], 41, "SEND"),
+            new BostaGateway.SlimDelivery(tracking[5], 41, "SEND")));
+        when(bostaGateway.listDeliveriesPage(anyString(), eq(3), anyInt())).thenReturn(List.of(
+            new BostaGateway.SlimDelivery(tracking[6], 41, "SEND"),
+            new BostaGateway.SlimDelivery(tracking[7], 41, "SEND"),
+            new BostaGateway.SlimDelivery(tracking[8], 41, "SEND")));
+
+        // discovery_high_water_tracking starts NULL (never set for this tenant).
+        String markBefore = jdbc.queryForObject(
+            "SELECT discovery_high_water_tracking FROM courier_accounts WHERE tenant_id = ?",
+            String.class, tenantId);
+        assertThat(markBefore).isNull();
+
+        discoveryPollJob.discoverAll();
+
+        // discoveryPages defaults to 3 — the walk exhausts its page budget without
+        // ever seeing an empty page or matching a (null) stored mark.
+        verify(bostaGateway, times(1)).listDeliveriesPage(anyString(), eq(3), anyInt());
+        verify(bostaGateway, never()).listDeliveriesPage(anyString(), eq(4), anyInt());
+        verify(bostaGateway, never()).fetchDelivery(anyString(), any());
+
+        String markAfter = jdbc.queryForObject(
+            "SELECT discovery_high_water_tracking FROM courier_accounts WHERE tenant_id = ?",
+            String.class, tenantId);
+        assertThat(markAfter)
+            .as("from-null first cycle over an all-linked burst must still advance the "
+                + "mark to the newest item seen (page 1's first item), not stay null")
+            .isEqualTo(tracking[0]);
     }
 
     // ── helpers ───────────────────────────────────────────────────────────────

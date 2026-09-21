@@ -49,14 +49,25 @@ import java.util.stream.Collectors;
  * (brand new, or still-unlinked from an earlier cycle — Guard 3 in BostaIngestionHelper
  * keeps governing those exactly as before) are actually fetched from Bosta.
  *
- * The mark advances to the newest item seen at the end of any cycle that hit no
- * transient error, didn't run into the per-cycle ceiling, and reached either the old
- * mark or the true end of the list — even if that newest item is itself still
- * unresolved (its ingest was only just enqueued this cycle; BostaWebhookJob decides
- * whether it links, asynchronously, later). That's why requirement (b) above matters:
- * if the mark's own item still hasn't linked by the next cycle, the equality match
- * alone is NOT treated as "caught up" — it falls through to the unresolved branch and
- * gets retried, exactly like any other still-unlinked delivery, instead of the scan
+ * The mark advances to the newest item seen (page 1's first item, topOfListTracking)
+ * at the end of ANY cycle that hit no transient error and didn't run into the
+ * per-cycle ceiling — regardless of whether the scan actually reached the old mark
+ * or the true end of the list. Reaching the mark or an empty page lets the scan
+ * break out early (cheaper), but neither is required for the write: a cycle that
+ * simply runs out of discoveryPages while every page it saw was already-linked
+ * filler (isLinked skip, doesn't touch the ceiling) is just as "clean" as one that
+ * hit an empty page, and must advance too — otherwise a tenant whose linked history
+ * alone exceeds discoveryPages×pageSize never writes a mark at all (confirmed in
+ * prod 2026-09-21: discovery_high_water_tracking stayed null forever for a tenant
+ * with 205 linked shipments, even though the job "succeeded" every cycle). See
+ * BostaPollJobTest p19 for the from-null, page-exhaustion regression case.
+ *
+ * This advances the mark even when the newest item is itself still unresolved (its
+ * ingest was only just enqueued this cycle; BostaWebhookJob decides whether it
+ * links, asynchronously, later). That's why requirement (b) above matters: if the
+ * mark's own item still hasn't linked by the next cycle, the equality match alone is
+ * NOT treated as "caught up" — it falls through to the unresolved branch and gets
+ * retried, exactly like any other still-unlinked delivery, instead of the scan
  * wrongly stopping there and burying it. A tenant with a persistently-unlinked
  * delivery therefore keeps re-fetching it every cycle indefinitely — matching today's
  * behavior for anything within the scanned window — rather than the mark silently
@@ -217,7 +228,6 @@ public class BostaDiscoveryPollJob {
             int total = 0, enqueued = 0, attempted = 0;
             boolean ceilingHit      = false;
             boolean reachedMark     = false;
-            boolean cleanEnd        = false;
             boolean transientError  = false;
             String topOfListTracking = null;
 
@@ -233,7 +243,7 @@ public class BostaDiscoveryPollJob {
                     break;
                 }
 
-                if (items.isEmpty()) { cleanEnd = true; break; }
+                if (items.isEmpty()) break;
 
                 Set<String> linked = alreadyLinkedTrackingNumbers(tenantId,
                     items.stream().map(BostaGateway.SlimDelivery::trackingNumber).toList());
@@ -303,16 +313,22 @@ public class BostaDiscoveryPollJob {
                 if (reachedMark || ceilingHit) break;
             }
 
-            // Advance the mark on any fully clean cycle: no transient error, the
-            // ceiling wasn't hit, and the scan reached either the old mark or the true
-            // end of the list. Safe even when the newest item is itself still
-            // unresolved (just enqueued this cycle, not yet linked) — the isLinked
-            // check above means a stale mark pointing at a not-yet-linked item simply
-            // gets re-attempted next cycle instead of wrongly short-circuiting, so
-            // nothing gets silently buried. On ceilingHit or a transient error, the
-            // mark is left exactly as it was; the next cycle re-walks the same span
-            // and (thanks to the per-item shipments skip-check above) that's cheap.
-            if (!transientError && !ceilingHit && (reachedMark || cleanEnd)
+            // Advance the mark on any fully clean cycle: no transient error and the
+            // ceiling wasn't hit. Deliberately NOT gated on (reachedMark || cleanEnd) —
+            // those two only control whether the scan got to break out early; a cycle
+            // that instead exhausts discoveryPages while every page was already-linked
+            // filler (isLinked skip — doesn't count toward the ceiling) is just as
+            // clean and must advance too, or a tenant whose linked history alone spans
+            // more than discoveryPages×pageSize never writes a mark (the from-null,
+            // page-exhaustion bug — see class javadoc and BostaPollJobTest p19).
+            // Advancing is safe even when the newest item is itself still unresolved
+            // (just enqueued this cycle, not yet linked) — the isLinked check above
+            // means a stale mark pointing at a not-yet-linked item simply gets
+            // re-attempted next cycle instead of wrongly short-circuiting, so nothing
+            // gets silently buried. On ceilingHit or a transient error, the mark is
+            // left exactly as it was; the next cycle re-walks the same span and
+            // (thanks to the per-item shipments skip-check above) that's cheap.
+            if (!transientError && !ceilingHit
                     && topOfListTracking != null && !topOfListTracking.equals(storedMark)) {
                 advanceHighWaterMark(tenantId, topOfListTracking);
             }
