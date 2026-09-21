@@ -112,10 +112,11 @@ class DemoSeederLegacyRowRegressionTest {
                 Long.class, DemoSeeder.DEMO_TENANT_ID);
         assertThat(workerCount).as("worker count").isEqualTo(2L);
 
+        // 2 fixed-id locations (DEMO_LOCATION_ID + DEMO_DESTINATION_LOCATION_ID).
         Long locationCount = jdbc.queryForObject(
                 "SELECT COUNT(*) FROM locations WHERE tenant_id = ?",
                 Long.class, DemoSeeder.DEMO_TENANT_ID);
-        assertThat(locationCount).as("location count").isEqualTo(1L);
+        assertThat(locationCount).as("location count").isEqualTo(2L);
     }
 
     // -----------------------------------------------------------------------

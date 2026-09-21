@@ -134,10 +134,13 @@ class DemoSeederNaturalKeyCollisionTest {
 
         assertThatCode(() -> demoSeeder.insertDemoFixtureIdempotent()).doesNotThrowAnyException();
 
+        // The stale "Main Warehouse" row collides with DEMO_LOCATION_ID's natural key (same
+        // name + is_fulfillment=true) and is skipped; DEMO_DESTINATION_LOCATION_ID
+        // ("Zamalek Showroom") collides with nothing here and inserts normally -> 2 total.
         Long locationCount = jdbc.queryForObject(
                 "SELECT COUNT(*) FROM locations WHERE tenant_id = ?",
                 Long.class, DemoSeeder.DEMO_TENANT_ID);
-        assertThat(locationCount).as("stale location survives; no duplicate, no exception").isEqualTo(1L);
+        assertThat(locationCount).as("stale location survives; no duplicate, no exception").isEqualTo(2L);
 
         Long ownerCount = jdbc.queryForObject(
                 "SELECT COUNT(*) FROM users WHERE tenant_id = ? AND role = 'owner'",

@@ -119,10 +119,12 @@ class DemoSeederConcurrentBootstrapTest {
                 Long.class, DemoSeeder.DEMO_TENANT_ID);
         assertThat(workerCount).as("exactly two workers, not four").isEqualTo(2L);
 
+        // 2 fixed-id locations (DEMO_LOCATION_ID + DEMO_DESTINATION_LOCATION_ID) —
+        // exactly 2, not 4, proves the race didn't double either one.
         Long locationCount = jdbc.queryForObject(
                 "SELECT COUNT(*) FROM locations WHERE tenant_id = ?",
                 Long.class, DemoSeeder.DEMO_TENANT_ID);
-        assertThat(locationCount).as("exactly one location, not two").isEqualTo(1L);
+        assertThat(locationCount).as("exactly two locations, not four").isEqualTo(2L);
     }
 
     private Void raceInvoke(CountDownLatch bothReady, CountDownLatch go) throws Exception {

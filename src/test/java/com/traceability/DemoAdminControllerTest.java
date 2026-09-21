@@ -109,7 +109,7 @@ class DemoAdminControllerTest {
         assertThat(productsAfter).as("golden catalog restored").isEqualTo(6L);
         Long piecesAfter = jdbc.queryForObject(
                 "SELECT COUNT(*) FROM pieces WHERE tenant_id = ?", Long.class, DemoSeeder.DEMO_TENANT_ID);
-        assertThat(piecesAfter).as("golden piece count restored").isEqualTo(108L);
+        assertThat(piecesAfter).as("golden piece count restored").isEqualTo(112L);
     }
 
     // -----------------------------------------------------------------------

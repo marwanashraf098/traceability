@@ -179,8 +179,9 @@ class DemoSeederTest {
         assertThat(countRows("variants", DEMO_ID)).isEqualTo(variantsBeforeReseed).isEqualTo(20L);
         // 20 variants * 3 available (60) + 3 in-transit + 2 returns-pending + 1 lost (66)
         // + ISSUE 3's damaged + restocked return items (2) + ISSUE 4's finalized
-        // receiving session (12+8+20=40 pieces) = 108.
-        assertThat(countRows("pieces", DEMO_ID)).isEqualTo(108L);
+        // receiving session (12+8+20=40 pieces) = 108, + 4 seeded transfer pieces
+        // (2 still out_on_transfer, 1 returned_good, 1 condemned) = 112.
+        assertThat(countRows("pieces", DEMO_ID)).isEqualTo(112L);
         // 10 pickable + 3 in-transit + 1 blocked = 14
         assertThat(countRows("orders", DEMO_ID)).isEqualTo(14L);
         assertThat(countRows("audit_log", DEMO_ID)).isEqualTo(0L); // the stray visitor row is gone
@@ -242,7 +243,7 @@ class DemoSeederTest {
         assertThatCode(() -> demoSeeder.reseed()).doesNotThrowAnyException();
         assertThatCode(() -> demoSeeder.reseed()).doesNotThrowAnyException();
         assertThat(countRows("products", DEMO_ID)).isEqualTo(6L);
-        assertThat(countRows("pieces", DEMO_ID)).isEqualTo(108L);
+        assertThat(countRows("pieces", DEMO_ID)).isEqualTo(112L);
     }
 
     // -----------------------------------------------------------------------

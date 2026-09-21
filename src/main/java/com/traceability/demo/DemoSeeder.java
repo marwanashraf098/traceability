@@ -113,6 +113,18 @@ public class DemoSeeder {
     private static final UUID DEMO_LOCATION_ID = UUID.fromString("54796ed5-55e2-4404-8506-e76716e084a7");
 
     /**
+     * Second demo location — transfers need a destination distinct from the fulfillment
+     * warehouse (transfers.destination_location_id is NOT NULL; V64/V90 give round_trip
+     * transfers no notion of "source" at all, only a destination). Non-fulfillment
+     * (is_fulfillment=false — V61 allows only one true per tenant, already claimed by
+     * DEMO_LOCATION_ID) so it never competes for that slot. Bootstrap-time, not
+     * golden-fixture: locations is one of the 3 tables reseed() deliberately never
+     * deletes (see DELETE_ORDER's javadoc), so this has to be idempotent-inserted here,
+     * exactly like DEMO_LOCATION_ID, not (re)inserted in loadGoldenFixture().
+     */
+    private static final UUID DEMO_DESTINATION_LOCATION_ID = UUID.fromString("6a1f9d3e-8c47-4b12-9e05-3d7b9a2c4e81");
+
+    /**
      * Every table carrying per-tenant mutable state, in strict FK-safe (child-before-parent)
      * delete order. tenants, users, and locations are the ONLY tenant-scoped tables NOT in
      * this list — they are the identity/fixture-anchor rows reseed() preserves. Derived from
@@ -326,6 +338,12 @@ public class DemoSeeder {
                     DEMO_LOCATION_ID, DEMO_TENANT_ID);
 
             jdbc.update(
+                    "INSERT INTO locations (id, tenant_id, name, type, is_default, is_fulfillment) " +
+                    "VALUES (?, ?, 'Zamalek Showroom', 'showroom', false, false) " +
+                    "ON CONFLICT DO NOTHING",
+                    DEMO_DESTINATION_LOCATION_ID, DEMO_TENANT_ID);
+
+            jdbc.update(
                     "INSERT INTO users (id, tenant_id, name, pin_code, role) " +
                     "VALUES (?, ?, ?, ?, 'worker') ON CONFLICT DO NOTHING",
                     DEMO_WORKER_1_ID, DEMO_TENANT_ID, DEMO_WORKER_1_NAME, worker1PinHash);
@@ -460,6 +478,10 @@ public class DemoSeeder {
         insertReturns(ojdbc, tenantId, locationId, workerIds, variantIds, shortCodeSeq);
         insertExceptions(ojdbc, tenantId, storeId, locationId, workerIds, variantIds, shortCodeSeq);
         insertReceivingSessions(ojdbc, tenantId, locationId, workerIds, variantIds, shortCodeSeq);
+        insertTransfers(ojdbc, tenantId, locationId, DEMO_DESTINATION_LOCATION_ID, workerIds, variantIds, shortCodeSeq);
+        insertPickups(ojdbc, tenantId, workerIds);
+        insertStockTake(ojdbc, tenantId, locationId, workerIds);
+        insertExchange(ojdbc, tenantId, variantIds);
 
         // ISSUE 1b fix: seed piece_counters PAST every short code this fixture just
         // raw-inserted (shortCodeSeq's final value), so a real finalize() on the demo
@@ -815,6 +837,281 @@ public class DemoSeeder {
                     "VALUES (?, ?, ?, ?)",
                     tenantId, openSessionId, variantId, openQtys[i]);
         }
+    }
+
+    /**
+     * FR-DEMO — 2 transfers to the second demo location, both transfer_mode='round_trip'
+     * (V64 transfer_type/status CHECK; V89 transfer_mode/outcome CHECK — round_trip needs
+     * no source_location_id, that column is relocate_return-only per V90). Event types and
+     * outcome→piece-status mapping match TransferService exactly (scanOut()'s
+     * "transferred_out", reconcileScanBack()'s "returned_from_transfer"/
+     * "condemned_at_vendor", outcome values 'returned_good'/'condemned').
+     *
+     * Transfer 1 — open, showroom: 2 pieces still out (outcome NULL, status
+     * out_on_transfer, current_location_id = the showroom) — this is what
+     * transfer_pieces_one_active (UNIQUE (piece_id) WHERE outcome IS NULL) protects, and
+     * why these pieces are never touched by any other insert method.
+     * Transfer 2 — closed, dryclean: 2 pieces sent, 1 returned_good (back to available at
+     * the warehouse), 1 condemned (damaged, still physically back at the warehouse per
+     * reconcileScanBack()'s own current_location_id convention).
+     */
+    private void insertTransfers(JdbcTemplate ojdbc, UUID tenantId, UUID fulfillmentLocationId,
+                                  UUID destinationLocationId, List<UUID> workerIds,
+                                  List<UUID> variantIds, AtomicInteger shortCodeSeq) {
+        UUID creator = workerIds.get(0);
+        UUID closer = workerIds.get(1);
+
+        // Transfer 1 — open, round_trip, 2 pieces still out.
+        UUID openTransferId = UUID.randomUUID();
+        ojdbc.update(
+                "INSERT INTO transfers (id, tenant_id, transfer_type, transfer_mode, " +
+                "                       destination_location_id, note, created_by, created_at) " +
+                "VALUES (?, ?, 'showroom', 'round_trip', ?, 'Window display rotation', ?, " +
+                "        now() - interval '3 days')",
+                openTransferId, tenantId, destinationLocationId, creator);
+
+        for (int i = 0; i < 2; i++) {
+            UUID variantId = variantIds.get(i);
+            UUID lineId = UUID.randomUUID();
+            ojdbc.update(
+                    "INSERT INTO transfer_lines (id, tenant_id, transfer_id, variant_id, qty_out) " +
+                    "VALUES (?, ?, ?, ?, 1)",
+                    lineId, tenantId, openTransferId, variantId);
+
+            String pieceId = UlidGenerator.generate();
+            insertPiece(ojdbc, tenantId, pieceId, variantId, "out_on_transfer", destinationLocationId, null,
+                    shortCodeSeq.getAndIncrement());
+            insertPieceEvent(ojdbc, tenantId, pieceId, "received", creator, null, null, fulfillmentLocationId,
+                    null, "available", daysAgo(9));
+            insertPieceEvent(ojdbc, tenantId, pieceId, "transferred_out", creator, null, null,
+                    destinationLocationId, "available", "out_on_transfer", daysAgo(3));
+
+            ojdbc.update(
+                    "INSERT INTO transfer_pieces (id, tenant_id, transfer_id, line_id, piece_id) " +
+                    "VALUES (?, ?, ?, ?, ?)",
+                    UUID.randomUUID(), tenantId, openTransferId, lineId, pieceId);
+        }
+
+        // Transfer 2 — closed, round_trip, 2 pieces sent: 1 returned good, 1 condemned.
+        UUID closedTransferId = UUID.randomUUID();
+        ojdbc.update(
+                "INSERT INTO transfers (id, tenant_id, transfer_type, transfer_mode, " +
+                "                       destination_location_id, status, note, created_by, created_at, " +
+                "                       closed_by, closed_at) " +
+                "VALUES (?, ?, 'dryclean', 'round_trip', ?, 'closed', 'Dry-clean batch', ?, " +
+                "        now() - interval '10 days', ?, now() - interval '2 days')",
+                closedTransferId, tenantId, destinationLocationId, creator, closer);
+
+        UUID sharedVariantId = variantIds.get(2);
+        UUID closedLineId = UUID.randomUUID();
+        ojdbc.update(
+                "INSERT INTO transfer_lines " +
+                "(id, tenant_id, transfer_id, variant_id, qty_out, qty_returned_good, qty_condemned) " +
+                "VALUES (?, ?, ?, ?, 2, 1, 1)",
+                closedLineId, tenantId, closedTransferId, sharedVariantId);
+
+        String goodPieceId = UlidGenerator.generate();
+        insertPiece(ojdbc, tenantId, goodPieceId, sharedVariantId, "available", fulfillmentLocationId, null,
+                shortCodeSeq.getAndIncrement());
+        insertPieceEvent(ojdbc, tenantId, goodPieceId, "received", creator, null, null, fulfillmentLocationId,
+                null, "available", daysAgo(15));
+        insertPieceEvent(ojdbc, tenantId, goodPieceId, "transferred_out", creator, null, null,
+                destinationLocationId, "available", "out_on_transfer", daysAgo(10));
+        insertPieceEvent(ojdbc, tenantId, goodPieceId, "returned_from_transfer", closer, null, null,
+                fulfillmentLocationId, "out_on_transfer", "available", daysAgo(2));
+        ojdbc.update(
+                "INSERT INTO transfer_pieces " +
+                "(id, tenant_id, transfer_id, line_id, piece_id, outcome, outcome_verified, outcome_at, outcome_by) " +
+                "VALUES (?, ?, ?, ?, ?, 'returned_good', true, now() - interval '2 days', ?)",
+                UUID.randomUUID(), tenantId, closedTransferId, closedLineId, goodPieceId, closer);
+
+        String condemnedPieceId = UlidGenerator.generate();
+        insertPiece(ojdbc, tenantId, condemnedPieceId, sharedVariantId, "damaged", fulfillmentLocationId, null,
+                shortCodeSeq.getAndIncrement());
+        insertPieceEvent(ojdbc, tenantId, condemnedPieceId, "received", creator, null, null, fulfillmentLocationId,
+                null, "available", daysAgo(15));
+        insertPieceEvent(ojdbc, tenantId, condemnedPieceId, "transferred_out", creator, null, null,
+                destinationLocationId, "available", "out_on_transfer", daysAgo(10));
+        insertPieceEvent(ojdbc, tenantId, condemnedPieceId, "condemned_at_vendor", closer, null, null,
+                fulfillmentLocationId, "out_on_transfer", "damaged", daysAgo(2));
+        ojdbc.update(
+                "INSERT INTO transfer_pieces " +
+                "(id, tenant_id, transfer_id, line_id, piece_id, outcome, outcome_verified, outcome_at, outcome_by) " +
+                "VALUES (?, ?, ?, ?, ?, 'condemned', true, now() - interval '2 days', ?)",
+                UUID.randomUUID(), tenantId, closedTransferId, closedLineId, condemnedPieceId, closer);
+    }
+
+    /**
+     * FR-DEMO — 2 pickups (FR-16 session model). scheduled_date is mandatory on every
+     * row: PickupSessionService.listSessions()/getSession() both call
+     * rs.getDate("scheduled_date").toLocalDate() unconditionally — a NULL here 500s the
+     * Pickups screen. courier_account_id stays NULL (nullable — the demo deliberately has
+     * no courier_accounts row; Bosta pickups are merchant-managed in Bosta's own
+     * dashboard per FR-16 Phase 1, Traced never creates one). pickup_shipments rows are
+     * raw-inserted directly against the fixture's own already-seeded shipments, bypassing
+     * scan()'s allocation/piece-state re-validation (not needed for a display fixture).
+     */
+    private void insertPickups(JdbcTemplate ojdbc, UUID tenantId, List<UUID> workerIds) {
+        UUID opener = workerIds.get(0);
+        UUID closer = workerIds.get(1);
+
+        // Open pickup — scheduled tomorrow, 2 pickable-order shipments already scanned in.
+        UUID openPickupId = UUID.randomUUID();
+        ojdbc.update(
+                "INSERT INTO pickups (id, tenant_id, session_status, scheduled_date, " +
+                "                     scheduled_time_slot, notes, opened_by_user_id) " +
+                "VALUES (?, ?, 'open', CURRENT_DATE + 1, '12:00 PM - 4:00 PM', " +
+                "        'Afternoon pickup — packages ready at the counter', ?)",
+                openPickupId, tenantId, opener);
+
+        List<UUID> openShipmentIds = ojdbc.queryForList(
+                "SELECT id FROM shipments WHERE tenant_id = ? AND tracking_number IN (?, ?)",
+                UUID.class, tenantId,
+                bareTrackingNumber(999000000000L + 1), bareTrackingNumber(999000000000L + 2));
+        for (UUID shipmentId : openShipmentIds) {
+            ojdbc.update(
+                    "INSERT INTO pickup_shipments (pickup_id, shipment_id, tenant_id, scanned_at, scanned_by_user_id) " +
+                    "VALUES (?, ?, ?, now() - interval '2 hours', ?)",
+                    openPickupId, shipmentId, tenantId, opener);
+        }
+
+        // Closed pickup — yesterday morning, the 3 in-transit shipments already handed to courier.
+        UUID closedPickupId = UUID.randomUUID();
+        ojdbc.update(
+                "INSERT INTO pickups (id, tenant_id, session_status, scheduled_date, scheduled_time_slot, " +
+                "                     notes, opened_by_user_id, closed_by_user_id, closed_at, no_of_packages) " +
+                "VALUES (?, ?, 'closed', CURRENT_DATE - 1, '9:00 AM - 12:00 PM', " +
+                "        'Morning pickup — completed', ?, ?, now() - interval '1 day', 3)",
+                closedPickupId, tenantId, opener, closer);
+
+        List<UUID> closedShipmentIds = ojdbc.queryForList(
+                "SELECT id FROM shipments WHERE tenant_id = ? AND tracking_number IN (?, ?, ?)",
+                UUID.class, tenantId,
+                bareTrackingNumber(999100000000L + 1), bareTrackingNumber(999100000000L + 2),
+                bareTrackingNumber(999100000000L + 3));
+        for (UUID shipmentId : closedShipmentIds) {
+            ojdbc.update(
+                    "INSERT INTO pickup_shipments (pickup_id, shipment_id, tenant_id, scanned_at, scanned_by_user_id) " +
+                    "VALUES (?, ?, ?, now() - interval '1 day', ?)",
+                    closedPickupId, shipmentId, tenantId, closer);
+        }
+    }
+
+    /**
+     * FR-DEMO — 2 stock-take sessions over the demo's real, already-seeded piece
+     * population at the fulfillment location (scope_type='all', mirroring
+     * StockTakeService.snapshotExpectedPopulation()'s own query exactly, so the snapshot
+     * is never a hand-picked subset that could drift from what the fixture actually
+     * contains). Session 1 — finalized, complete_count=true, ~92% counted, 0 write-offs
+     * (StockTakeReconciliationService.finalizeSession() lands a 0-delta claim straight at
+     * 'pushed' with no JobRunr job enqueued — this fixture mirrors that exact terminal
+     * shape). Session 2 — open, ~40% counted, in progress.
+     */
+    private void insertStockTake(JdbcTemplate ojdbc, UUID tenantId, UUID locationId, List<UUID> workerIds) {
+        UUID opener = workerIds.get(0);
+        UUID closer = workerIds.get(1);
+
+        UUID finalizedSessionId = UUID.randomUUID();
+        ojdbc.update(
+                "INSERT INTO stock_take_sessions " +
+                "(id, tenant_id, status, scope_type, location_id, complete_count, opened_by, opened_at, " +
+                " finalized_by, finalized_at, note) " +
+                "VALUES (?, ?, 'finalized', 'all', ?, true, ?, now() - interval '2 days', ?, " +
+                "        now() - interval '1 day', 'Monthly full count')",
+                finalizedSessionId, tenantId, locationId, opener, closer);
+        snapshotAllPiecesAtLocation(ojdbc, tenantId, finalizedSessionId, locationId);
+        scanFractionOfExpected(ojdbc, tenantId, finalizedSessionId, closer, 92);
+        ojdbc.update(
+                "INSERT INTO stock_take_shopify_syncs (id, tenant_id, session_id, status, payload) " +
+                "VALUES (gen_random_uuid(), ?, ?, 'pushed', ?::jsonb)",
+                tenantId, finalizedSessionId, "{\"locationId\":\"" + locationId + "\",\"deltas\":{}}");
+
+        UUID openSessionId = UUID.randomUUID();
+        ojdbc.update(
+                "INSERT INTO stock_take_sessions " +
+                "(id, tenant_id, status, scope_type, location_id, opened_by, opened_at, note) " +
+                "VALUES (?, ?, 'open', 'all', ?, ?, now() - interval '2 hours', 'Spot count in progress')",
+                openSessionId, tenantId, locationId, opener);
+        snapshotAllPiecesAtLocation(ojdbc, tenantId, openSessionId, locationId);
+        scanFractionOfExpected(ojdbc, tenantId, openSessionId, opener, 40);
+    }
+
+    private void snapshotAllPiecesAtLocation(JdbcTemplate ojdbc, UUID tenantId, UUID sessionId, UUID locationId) {
+        ojdbc.update(
+                "INSERT INTO stock_take_expected (tenant_id, session_id, piece_id, variant_id, status_at_open) " +
+                "SELECT ?, ?, p.id, p.variant_id, p.status::text " +
+                "FROM pieces p WHERE p.tenant_id = ? AND p.current_location_id = ?",
+                tenantId, sessionId, tenantId, locationId);
+    }
+
+    /**
+     * Scans the first {@code percent}% (by piece_id order — arbitrary but deterministic)
+     * of this session's on-shelf-eligible (available/damaged) expected pieces, condition
+     * matching status_at_open exactly (a clean "match" under StockTakeService.classify()).
+     * Percentage-based, not a fixed row count, so this adapts to however many pieces the
+     * rest of the fixture happens to seed at this location, rather than assuming a count.
+     */
+    private void scanFractionOfExpected(JdbcTemplate ojdbc, UUID tenantId, UUID sessionId,
+                                         UUID actorUserId, int percent) {
+        ojdbc.update(
+                "INSERT INTO stock_take_scans " +
+                "(id, tenant_id, session_id, piece_id, scanned_condition, source, actor_user_id) " +
+                "SELECT gen_random_uuid(), ?, ?, ranked.piece_id, " +
+                "       CASE WHEN ranked.status_at_open = 'damaged' THEN 'damaged' ELSE 'good' END, " +
+                "       'scan', ? " +
+                "FROM (" +
+                "    SELECT piece_id, status_at_open, " +
+                "           ROW_NUMBER() OVER (ORDER BY piece_id) AS rn, COUNT(*) OVER () AS total " +
+                "    FROM stock_take_expected " +
+                "    WHERE session_id = ? AND status_at_open IN ('available', 'damaged')" +
+                ") ranked " +
+                "WHERE ranked.rn <= (ranked.total * ?) / 100",
+                tenantId, sessionId, actorUserId, sessionId, percent);
+    }
+
+    /**
+     * FR-DEMO — ONE exchange row, status='reconciled'. Confirmed via ExchangeService/
+     * ExceptionService/BostaWebhookJob review: no @Recurring/@Scheduled job polls
+     * exchanges at all — every write is either event-driven off a REAL Bosta webhook
+     * matching this tenant's tracking_number (unreachable for the demo tenant — no real
+     * courier, no real webhooks) or a user action off ExchangeController's REST
+     * endpoints (map/attach/bare-return/dismiss), none of which this row is ever the
+     * target of on its own. 'reconciled' is additionally a declared-but-unwritten
+     * placeholder status (V74/V95 migration comments: no service code writes it today),
+     * so it sits fully inert — display-only, matching the frontend's own
+     * EXCHANGE_STATUS_TONE mapping ('reconciled' -> success/green).
+     *
+     * raw is shaped to match ExchangeService.ROW_SELECT's JSONB-path extraction exactly
+     * (receiver.fullName/phone, specs/returnSpecs.packageDetails.itemsCount) so the
+     * Exchanges & Refunds tab's customer/item columns render real values, not blanks.
+     * matched_order_id/match_method/matched_at are left NULL — 'reconciled' doesn't
+     * require a match, and this keeps the row minimal rather than fabricating a
+     * relationship to a specific seeded order.
+     */
+    private void insertExchange(JdbcTemplate ojdbc, UUID tenantId, List<UUID> variantIds) {
+        UUID exchangeId = UUID.randomUUID();
+        String trackingNumber = bareTrackingNumber(999200000001L);
+        UUID outboundVariantId = variantIds.get(14); // Wireless Earbuds — White
+        UUID inboundVariantId = variantIds.get(17);  // Ceramic Coffee Mug Set — 2-Piece
+
+        String raw = "{"
+                + "\"receiver\":{\"fullName\":\"Nadia Fouad\",\"phone\":\"+20 109 774 2261\"},"
+                + "\"specs\":{\"packageDetails\":{\"itemsCount\":1,\"description\":\"Wireless Earbuds - White\"}},"
+                + "\"returnSpecs\":{\"packageDetails\":{\"itemsCount\":1,"
+                + "\"description\":\"Ceramic Coffee Mug Set - 2-Piece\","
+                + "\"descriptionAr\":\"طقم أكواب قهوة سيراميك 2 قطعة\"}},"
+                + "\"cod\":0,\"goodsInfo\":{\"amount\":224.00}"
+                + "}";
+
+        ojdbc.update(
+                "INSERT INTO exchanges " +
+                "(id, tenant_id, tracking_number, status, outbound_description, inbound_description, " +
+                " inbound_description_ar, outbound_variant_id, inbound_variant_id, cod, goods_value, raw, " +
+                " created_at, updated_at) " +
+                "VALUES (?, ?, ?, 'reconciled', 'Wireless Earbuds - White', " +
+                "        'Ceramic Coffee Mug Set - 2-Piece', 'طقم أكواب قهوة سيراميك 2 قطعة', ?, ?, 0, 224.00, " +
+                "        ?::jsonb, now() - interval '6 days', now() - interval '1 day')",
+                exchangeId, tenantId, trackingNumber, outboundVariantId, inboundVariantId, raw);
     }
 
     // ---- raw piece / piece_event writers (deliberate InventoryLedger carve-out) ----
