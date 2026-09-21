@@ -42,6 +42,16 @@ import static org.mockito.Mockito.*;
  *   e3 — itemsCount != 1 on a leg falls back to the pre-existing generic unmatched lane
  *        (recordUnlinked, match_reason='EXCHANGE_MULTI_ITEM') — no exchanges row
  *   e4 — cross-tenant RLS isolation on exchanges (app_user, GUC-scoped)
+ *
+ * Step 2 Part B (Step 1 diagnosis §2b): raw.returnSpecs only populates once the courier
+ * reaches the doorstep (state 41+) — absent on early sightings, not itemsCount=0.
+ *   e5 — returnSpecs entirely absent (real Snouts 5794052882 shape) → HELD: no exchanges
+ *        row, no unlinked/EXCHANGE_MULTI_ITEM row, webhook still marked processed
+ *   e6 — a later webhook for the SAME tracking with returnSpecs now populated (itemsCount=1)
+ *        re-evaluates from scratch and routes into the exchange lane — proves HELD's
+ *        "no row written" design IS the re-check mechanism, nothing else needed
+ *   e7 — a later webhook with returnSpecs now populated but itemsCount=2 correctly
+ *        rejects as EXCHANGE_MULTI_ITEM — proves HELD does not permanently bypass the gate
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.NONE)
 @Testcontainers
@@ -211,6 +221,90 @@ class ExchangeIngestTest {
         assertThat(unlinked.get("match_reason")).isEqualTo("EXCHANGE_MULTI_ITEM");
     }
 
+    // ── e5: returnSpecs entirely absent (real early-sighting shape) → HELD ───────────
+
+    @Test
+    void e5_returnSpecsAbsent_earlySighting_held_noExchangeNoUnlinkedRow() {
+        String tracking = "5794052882";
+        Long wid = insertWebhookEvent(tracking, 10, "2026-09-06T17:01:22.903Z");
+        when(bostaGateway.fetchDelivery(eq("ex-api-key"), eq(tracking)))
+            .thenReturn(new BostaDelivery(tracking, 10, "EXCHANGE", 0, null, null,
+                exchangeRawNoReturnSpecs(10, "The Bikinis - M/L/XL / Brown & Purple  X 1", 1,
+                    "0", "600")));
+
+        bostaWebhookJob.process(wid, tenantId);
+
+        assertThat(webhookStatus(wid)).as("held is a handled outcome, not a failure").isEqualTo("processed");
+        assertThat(jdbc.queryForObject(
+                "SELECT COUNT(*) FROM exchanges WHERE tenant_id = ? AND tracking_number = ?",
+                Integer.class, tenantId, tracking))
+            .as("must not create an exchanges row before the inbound leg is known").isZero();
+        assertThat(countUnlinked(tracking))
+            .as("must NOT be recorded as EXCHANGE_MULTI_ITEM — absent is not confirmed multi-item")
+            .isZero();
+    }
+
+    // ── e6: later webhook, returnSpecs now populated itemsCount=1 → routes ───────────
+
+    @Test
+    void e6_heldThenReturnSpecsPopulatedSingleItem_laterWebhook_routesToExchangeLane() {
+        String tracking = "4818277658";
+        Long wid1 = insertWebhookEvent(tracking, 10, "2026-09-16T19:40:12.830Z");
+        when(bostaGateway.fetchDelivery(eq("ex-api-key"), eq(tracking)))
+            .thenReturn(new BostaDelivery(tracking, 10, "EXCHANGE", 0, null, null,
+                exchangeRawNoReturnSpecs(10, "Flipped Pants in Black - S  X 1", 1, "0", "400")));
+        bostaWebhookJob.process(wid1, tenantId);
+        assertThat(jdbc.queryForObject(
+                "SELECT COUNT(*) FROM exchanges WHERE tenant_id = ? AND tracking_number = ?",
+                Integer.class, tenantId, tracking))
+            .as("still held after first sighting").isZero();
+
+        // Courier reached the doorstep — Bosta has now populated returnSpecs.
+        Long wid2 = insertWebhookEvent(tracking, 41, "2026-09-19T06:48:15.164Z");
+        when(bostaGateway.fetchDelivery(eq("ex-api-key"), eq(tracking)))
+            .thenReturn(new BostaDelivery(tracking, 41, "EXCHANGE", 1, null, null,
+                exchangeRaw(41, "Flipped Pants in Black - S  X 1", 1,
+                    "Old flip flops", "شبشب قديم", 1, "0", "400")));
+        bostaWebhookJob.process(wid2, tenantId);
+
+        assertThat(webhookStatus(wid2)).isEqualTo("processed");
+        Map<String, Object> row = jdbc.queryForMap(
+            "SELECT * FROM exchanges WHERE tenant_id = ? AND tracking_number = ?",
+            tenantId, tracking);
+        assertThat(row.get("status")).isEqualTo("needs_mapping");
+        assertThat(row.get("inbound_description")).isEqualTo("Old flip flops");
+        assertThat(countUnlinked(tracking)).isZero();
+    }
+
+    // ── e7: later webhook, returnSpecs now populated itemsCount=2 → still rejects ────
+
+    @Test
+    void e7_heldThenReturnSpecsPopulatedMultiItem_laterWebhook_stillRejectsMultiItem() {
+        String tracking = "9999999999";
+        Long wid1 = insertWebhookEvent(tracking, 10, "2026-09-10T10:00:00.000Z");
+        when(bostaGateway.fetchDelivery(eq("ex-api-key"), eq(tracking)))
+            .thenReturn(new BostaDelivery(tracking, 10, "EXCHANGE", 0, null, null,
+                exchangeRawNoReturnSpecs(10, "One shirt", 1, "0", "400")));
+        bostaWebhookJob.process(wid1, tenantId);
+
+        Long wid2 = insertWebhookEvent(tracking, 41, "2026-09-12T10:00:00.000Z");
+        when(bostaGateway.fetchDelivery(eq("ex-api-key"), eq(tracking)))
+            .thenReturn(new BostaDelivery(tracking, 41, "EXCHANGE", 1, null, null,
+                exchangeRaw(41, "One shirt", 1, "Two shirts", "قميصين", 2, "0", "400")));
+        bostaWebhookJob.process(wid2, tenantId);
+
+        assertThat(webhookStatus(wid2)).isEqualTo("processed");
+        assertThat(jdbc.queryForObject(
+                "SELECT COUNT(*) FROM exchanges WHERE tenant_id = ? AND tracking_number = ?",
+                Integer.class, tenantId, tracking))
+            .as("confirmed multi-item inbound must still never be represented in exchanges")
+            .isZero();
+        Map<String, Object> unlinked = jdbc.queryForMap(
+            "SELECT * FROM unlinked_bosta_deliveries WHERE tenant_id = ? AND tracking_number = ?",
+            tenantId, tracking);
+        assertThat(unlinked.get("match_reason")).isEqualTo("EXCHANGE_MULTI_ITEM");
+    }
+
     // ── e4: cross-tenant RLS isolation on exchanges ──────────────────────────────────
 
     @Test
@@ -295,6 +389,43 @@ class ExchangeIngestTest {
         inboundDetails.put("description", inboundDesc);
         inboundDetails.put("descriptionAr", inboundDescAr);
         inboundDetails.put("itemsCount", inboundCount);
+
+        ObjectNode parcels = raw.putObject("parcels");
+        parcels.putObject("forward").put("trackingNumber", "placeholder");
+        ObjectNode crp = parcels.putObject("crp");
+        crp.put("trackingNumber", "placeholder");
+        crp.put("desc", "N/A");
+
+        raw.put("cod", cod);
+        raw.putObject("goodsInfo").put("amount", goodsAmount);
+        raw.putObject("receiver").put("phone", "+201000301512").put("fullName", "Test Receiver");
+        raw.put("businessReference", (String) null);
+        raw.put("updatedAt", "2026-08-18T10:00:00.000Z");
+        return raw;
+    }
+
+    /**
+     * Builds a raw Bosta exchange payload with returnSpecs entirely ABSENT — the real
+     * shape confirmed live for early-sighting deliveries (state 10/20, before the
+     * courier reaches the doorstep). No returnSpecs key at all, not an empty object and
+     * not itemsCount=0 — see class javadoc §2b.
+     */
+    private ObjectNode exchangeRawNoReturnSpecs(int stateCode, String outboundDesc, int outboundCount,
+                                                 String cod, String goodsAmount) {
+        ObjectNode raw = mapper.createObjectNode();
+        ObjectNode type = raw.putObject("type");
+        type.put("code", 30);
+        type.put("value", "Exchange");
+        ObjectNode state = raw.putObject("state");
+        state.put("code", stateCode);
+        state.put("value", "state-" + stateCode);
+
+        ObjectNode specs = raw.putObject("specs");
+        ObjectNode outboundDetails = specs.putObject("packageDetails");
+        outboundDetails.put("description", outboundDesc);
+        outboundDetails.put("itemsCount", outboundCount);
+
+        // returnSpecs deliberately omitted — the point of this fixture.
 
         ObjectNode parcels = raw.putObject("parcels");
         parcels.putObject("forward").put("trackingNumber", "placeholder");

@@ -222,24 +222,35 @@ public class BostaWebhookJob {
                     trackingNumber));
 
                 if (existingForward == null) {
-                    boolean routedToExchangeLane =
+                    ExchangeIngestService.IngestOutcome outcome =
                         exchangeIngestService.upsertFromDelivery(tenantId, trackingNumber, delivery);
-                    if (routedToExchangeLane) {
-                        markProcessed(webhookEventId, idemKey, "exchange: " + trackingNumber);
-                    } else {
-                        // itemsCount != 1 on a leg (first sighting) — the single-variant-per-leg
-                        // schema can't represent it. Falls back to the pre-existing generic
-                        // unmatched lane so it still raises an exception, just not exchange-shaped
-                        // ("do not auto-handle" — FR-EXCHANGE v2 §2 data trap).
-                        recordUnlinked(tenantId, trackingNumber, delivery, webhookEventId,
-                            "EXCHANGE_MULTI_ITEM");
-                        markProcessed(webhookEventId, idemKey, "unlinked: " + trackingNumber);
+                    switch (outcome) {
+                        case ROUTED -> markProcessed(webhookEventId, idemKey, "exchange: " + trackingNumber);
+                        case HELD ->
+                            // Inbound leg (raw.returnSpecs) not populated yet — Bosta only fills it
+                            // in once the courier reaches the doorstep (state 41+). Not a rejection:
+                            // no exchanges row, no unlinked row. A later webhook for this tracking
+                            // re-runs upsertFromDelivery() and re-evaluates from scratch (Step 2
+                            // Part B — Step 1 diagnosis §2b).
+                            markProcessed(webhookEventId, idemKey, "exchange_held: " + trackingNumber);
+                        case MULTI_ITEM -> {
+                            // itemsCount != 1 on a leg, CONFIRMED (first sighting) — the
+                            // single-variant-per-leg schema can't represent it. Falls back to the
+                            // pre-existing generic unmatched lane so it still raises an exception,
+                            // just not exchange-shaped ("do not auto-handle" — FR-EXCHANGE v2 §2
+                            // data trap).
+                            recordUnlinked(tenantId, trackingNumber, delivery, webhookEventId,
+                                "EXCHANGE_MULTI_ITEM");
+                            markProcessed(webhookEventId, idemKey, "unlinked: " + trackingNumber);
+                        }
                     }
                     return;
                 }
 
-                // Post-pack: interpret per-leg state off raw.state.value (never the bare
-                // code — Trap B). FAIL-SAFE DEFAULT: an unrecognized value applies NO
+                // Post-pack: interpret per-leg state off the most-recently-completed
+                // raw.timeline[] entry (never the generic raw.state.value, which is the same
+                // label for the whole code-46 family — Step 1 diagnosis §2a; never the bare
+                // code either — Trap B). FAIL-SAFE DEFAULT: an unrecognized value applies NO
                 // transition, refreshes raw only, and is left for exchange_unmapped_state
                 // (ExceptionService) to surface for manual review — never guessed.
                 java.util.Optional<BostaStateMapper.MappedState> interpreted =

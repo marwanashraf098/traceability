@@ -462,6 +462,53 @@ class ReturnSessionTest {
             .isTrue();
     }
 
+    // ── (r) Return leg resolves to terminal once fully dispositioned ─────────────
+
+    /**
+     * Step 2 Part C's "loose thread" from Step 1: without resolving the return-leg
+     * shipment to a terminal state once its piece is dispositioned, hasActiveReturnLeg()
+     * would suppress unexpected_return FOREVER for this order — including a completely
+     * unrelated LATER genuine unexpected return. restock()/markDamaged() now call
+     * ShipmentLinkService.resolveReturnLegIfComplete() to close the leg out once no piece
+     * remains at return_pending_inspection for the order.
+     */
+    @Test
+    void r_returnLegResolvedAfterDisposition_laterUnrelatedReturnStillFlagged() {
+        UUID orderId = createOrder("with_courier");
+        createShipment(orderId, "AWB-CRP-R-FWD", "delivered");
+        UUID returnLegId = createReturnLegShipment(orderId, "AWB-CRP-R-RET", "delivered");
+        String piece1 = createPiece("with_courier", orderId);
+        createAlloc(orderId, piece1);
+
+        UUID sessionId = openSession();
+        Map<String, Object> scan1 = sessionSvc.scan(sessionId, "PC-" + piece1, locationId, actorId);
+        assertThat(scan1.get("unexpected")).isEqualTo(false);
+
+        // Disposition the only piece from this return leg.
+        sessionSvc.disposition(sessionId, piece1, "restock", null, locationId, actorId);
+
+        String returnLegState = jdbc.queryForObject(
+            "SELECT internal_state::text FROM shipments WHERE id = ?", String.class, returnLegId);
+        assertThat(returnLegState)
+            .as("return leg must resolve to a terminal state once its piece is dispositioned")
+            .isEqualTo("returned");
+
+        // A completely unrelated, later, genuine unexpected return on the SAME order.
+        String piece2 = createPiece("with_courier", orderId);
+        createAlloc(orderId, piece2);
+        Map<String, Object> scan2 = sessionSvc.scan(sessionId, "PC-" + piece2, locationId, actorId);
+
+        assertThat(scan2.get("unexpected"))
+            .as("resolved return leg must not suppress a later unrelated genuine unexpected return")
+            .isEqualTo(true);
+
+        boolean present = listExceptionsOfType("unexpected_return").stream()
+            .anyMatch(e -> ("PC-" + piece2).equals(e.get("barcode")));
+        assertThat(present)
+            .as("HIGH exception must fire for the later unrelated unexpected return")
+            .isTrue();
+    }
+
     // ── DB helpers ────────────────────────────────────────────────────────────
 
     private UUID createOrder(String status) {

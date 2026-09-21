@@ -19,18 +19,37 @@ import java.util.UUID;
  * 41, which has no :ALL fallback).
  *
  * Single-variant-per-leg schema: the fleet-confirmed shape has itemsCount=1 on both
- * legs. A multi-item exchange (itemsCount != 1 on either leg) cannot be represented —
- * upsertFromDelivery() returns false and the caller falls back to the pre-existing
- * generic unmatched-delivery lane so it still raises an exception (just not
- * exchange-shaped), per the "do not auto-handle" instruction.
+ * legs. A CONFIRMED multi-item exchange (itemsCount != 1 on either leg, once known)
+ * cannot be represented — upsertFromDelivery() returns MULTI_ITEM and the caller falls
+ * back to the pre-existing generic unmatched-delivery lane so it still raises an
+ * exception (just not exchange-shaped), per the "do not auto-handle" instruction.
+ *
+ * Step 2 Part B (Step 1 diagnosis §2b): {@code raw.returnSpecs} — the INBOUND leg's
+ * item details — is confirmed live to populate only once the courier reaches the
+ * doorstep (state 41+, "out_for_exchange" or later); on early sightings (Pickup
+ * requested / Route Assigned) it is entirely ABSENT, not itemsCount=0 or missing just
+ * the count. Treating "absent" the same as "confirmed != 1" was the bug: two live false
+ * positives (Snouts 5794052882, Jumi 4818277658) were rejected as EXCHANGE_MULTI_ITEM
+ * while still at their earliest sighting, purely because Bosta hadn't told us the
+ * inbound item yet. upsertFromDelivery() now returns HELD for that case instead —
+ * never records EXCHANGE_MULTI_ITEM, never creates an exchanges row.
  *
  * The itemsCount check only gates the FIRST sighting of a tracking number. Once an
  * exchanges row exists, later webhooks (state updates) always update it regardless of
  * itemsCount — re-validating on every webhook would let a later malformed/re-fetched
- * payload evict an exchange that was already correctly captured.
+ * payload evict an exchange that was already correctly captured. HELD deliberately
+ * creates NO row of any kind (exchanges or unlinked), so the "exists" check below stays
+ * false and a later webhook for the same tracking re-runs this whole gate from scratch —
+ * that IS the re-check mechanism, no separate pending marker needed. Creating a
+ * placeholder exchanges row while inbound is still unknown was considered and rejected:
+ * once a row exists this gate never re-runs, so a genuinely multi-item inbound
+ * discovered on a later webhook would silently never be caught.
  */
 @Service
 public class ExchangeIngestService {
+
+    /** Outcome of a first-sighting ingest attempt. See class javadoc for HELD. */
+    public enum IngestOutcome { ROUTED, MULTI_ITEM, HELD }
 
     private final JdbcTemplate jdbc;
     private final ExchangeStateInterpreter interpreter;
@@ -41,18 +60,21 @@ public class ExchangeIngestService {
     }
 
     /**
-     * @return true if the delivery was upserted into the exchange lane (caller should
-     *         mark the webhook event processed and stop); false if it could not be
-     *         represented (missing raw, or itemsCount != 1 on a leg for a NEW tracking
-     *         number) and the caller must fall back to the generic unmatched lane.
+     * @return ROUTED if the delivery was upserted into the exchange lane (caller should
+     *         mark the webhook event processed and stop); MULTI_ITEM if a leg's itemsCount
+     *         is confirmed != 1 for a NEW tracking number (caller must fall back to the
+     *         generic unmatched lane); HELD if the inbound leg's item details are not yet
+     *         known (caller marks the webhook processed and does nothing else — a later
+     *         webhook re-evaluates).
      */
     @Transactional
-    public boolean upsertFromDelivery(UUID tenantId, String trackingNumber, BostaDelivery delivery) {
+    public IngestOutcome upsertFromDelivery(UUID tenantId, String trackingNumber, BostaDelivery delivery) {
         JsonNode raw = delivery.raw();
-        if (raw == null) return false;
+        if (raw == null) return IngestOutcome.MULTI_ITEM;
 
         JsonNode outboundDetails = raw.path("specs").path("packageDetails");
-        JsonNode inboundDetails  = raw.path("returnSpecs").path("packageDetails");
+        JsonNode returnSpecsNode = raw.path("returnSpecs");
+        JsonNode inboundDetails  = returnSpecsNode.path("packageDetails");
 
         Boolean exists = jdbc.queryForObject(
             "SELECT EXISTS(SELECT 1 FROM exchanges WHERE tenant_id = ? AND tracking_number = ?)",
@@ -60,9 +82,15 @@ public class ExchangeIngestService {
 
         if (!Boolean.TRUE.equals(exists)) {
             int outboundCount = outboundDetails.path("itemsCount").asInt(-1);
-            int inboundCount  = inboundDetails.path("itemsCount").asInt(-1);
-            if (outboundCount != 1 || inboundCount != 1) {
-                return false;
+            if (outboundCount != 1) {
+                return IngestOutcome.MULTI_ITEM;
+            }
+            if (returnSpecsNode.isMissingNode() || inboundDetails.isMissingNode()) {
+                return IngestOutcome.HELD;
+            }
+            int inboundCount = inboundDetails.path("itemsCount").asInt(-1);
+            if (inboundCount != 1) {
+                return IngestOutcome.MULTI_ITEM;
             }
         }
 
@@ -96,7 +124,7 @@ public class ExchangeIngestService {
             "WHERE tenant_id = ? AND tracking_number = ? AND status <> 'needs_mapping'",
             status, tenantId, trackingNumber));
 
-        return true;
+        return IngestOutcome.ROUTED;
     }
 
     private static BigDecimal parseDecimal(JsonNode node) {

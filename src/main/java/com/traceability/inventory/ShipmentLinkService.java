@@ -651,17 +651,57 @@ public class ShipmentLinkService {
      * method, so the two classifications can never drift apart, same discipline as
      * FulfillService.PICKABLE_ORDERS_FILTER.
      */
+    // Shared with resolveReturnLegIfComplete() below — single source of truth for what
+    // "terminal/closed" means for a return-leg shipment.
+    private static final String RETURN_LEG_TERMINAL_STATES =
+        "'returned'::shipment_internal_state, 'lost'::shipment_internal_state, " +
+        "'exception'::shipment_internal_state, 'terminated'::shipment_internal_state, " +
+        "'cancelled'::shipment_internal_state";
+
     public boolean hasActiveReturnLeg(UUID orderId, UUID tenantId) {
         if (orderId == null) return false;
         Boolean exists = jdbc.queryForObject(
             "SELECT EXISTS (SELECT 1 FROM shipments " +
             "WHERE order_id = ? AND tenant_id = ? AND shipment_leg = 'return' " +
-            "AND internal_state NOT IN (" +
-            "    'returned'::shipment_internal_state, 'lost'::shipment_internal_state, " +
-            "    'exception'::shipment_internal_state, 'terminated'::shipment_internal_state, " +
-            "    'cancelled'::shipment_internal_state))",
+            "AND internal_state NOT IN (" + RETURN_LEG_TERMINAL_STATES + "))",
             Boolean.class, orderId, tenantId);
         return Boolean.TRUE.equals(exists);
+    }
+
+    /**
+     * Closes out the order's active CRP return leg(s) once every piece scanned into them
+     * has been dispositioned (restocked or marked damaged — no piece remains at
+     * return_pending_inspection for this order). Called by ReturnService.restock() /
+     * markDamaged() after every disposition.
+     *
+     * Without this, a return-leg shipment that reached a non-terminal state (typically
+     * 'delivered' — the parcel physically arrived) and never gets another Bosta webhook
+     * (the common case: Bosta has nothing further to report once a CRP parcel is
+     * received) would suppress {@link #hasActiveReturnLeg} FOREVER for that order — a
+     * completely unrelated LATER genuine unexpected return on the same order would be
+     * wrongly suppressed too.
+     *
+     * Order-scoped, not shipment-scoped: pieces carry no stored link back to which
+     * return-leg shipment id they arrived via (piece_events.shipment_id records the
+     * piece's original FORWARD shipment), so this checks "does the order have ANY piece
+     * still at return_pending_inspection" rather than per-shipment piece counts. Safe: if
+     * a SECOND, later CRP return leg starts after this one resolves, hasActiveReturnLeg()
+     * picks it up independently via its own non-terminal state — resolving this leg early
+     * never blocks a future one.
+     */
+    public void resolveReturnLegIfComplete(UUID orderId, UUID tenantId) {
+        if (orderId == null) return;
+        Integer stillPending = jdbc.queryForObject(
+            "SELECT COUNT(*) FROM pieces WHERE current_order_id = ? AND tenant_id = ? " +
+            "AND status = 'return_pending_inspection'::piece_status",
+            Integer.class, orderId, tenantId);
+        if (stillPending != null && stillPending == 0) {
+            jdbc.update(
+                "UPDATE shipments SET internal_state = 'returned'::shipment_internal_state " +
+                "WHERE order_id = ? AND tenant_id = ? AND shipment_leg = 'return' " +
+                "AND internal_state NOT IN (" + RETURN_LEG_TERMINAL_STATES + ")",
+                orderId, tenantId);
+        }
     }
 
     /**

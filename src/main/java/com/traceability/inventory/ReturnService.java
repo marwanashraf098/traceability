@@ -24,12 +24,15 @@ public class ReturnService {
     private final JdbcTemplate            jdbc;
     private final InventoryLedger         ledger;
     private final ShopifyInventoryService shopifyInventory;
+    private final ShipmentLinkService     shipmentLinkService;
 
     public ReturnService(JdbcTemplate jdbc, InventoryLedger ledger,
-                         ShopifyInventoryService shopifyInventory) {
-        this.jdbc             = jdbc;
-        this.ledger           = ledger;
-        this.shopifyInventory = shopifyInventory;
+                         ShopifyInventoryService shopifyInventory,
+                         ShipmentLinkService shipmentLinkService) {
+        this.jdbc                = jdbc;
+        this.ledger              = ledger;
+        this.shopifyInventory    = shopifyInventory;
+        this.shipmentLinkService = shipmentLinkService;
     }
 
     /**
@@ -51,18 +54,22 @@ public class ReturnService {
     public void restock(String pieceId, UUID locationId, UUID actorUserId) {
         UUID tenantId = TenantContext.require();
 
-        String status = jdbc.query(
-            "SELECT status::text FROM pieces WHERE id = ? AND tenant_id = ?",
-            rs -> rs.next() ? rs.getString(1) : null,
+        PieceStatusAndOrder piece = jdbc.query(
+            "SELECT status::text AS status, current_order_id FROM pieces WHERE id = ? AND tenant_id = ?",
+            rs -> rs.next() ? new PieceStatusAndOrder(
+                rs.getString("status"), rs.getObject("current_order_id", UUID.class)) : null,
             pieceId, tenantId);
 
-        if (status == null) {
+        if (piece == null) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Piece not found");
         }
-        if (!"return_pending_inspection".equals(status)) {
+        if (!"return_pending_inspection".equals(piece.status())) {
             throw new ResponseStatusException(HttpStatus.CONFLICT,
-                "Piece must be in return_pending_inspection to restock (current: " + status + ")");
+                "Piece must be in return_pending_inspection to restock (current: " + piece.status() + ")");
         }
+        // Captured before the UPDATE below clears current_order_id — needed to resolve
+        // the order's return leg afterward.
+        UUID orderId = piece.orderId();
 
         TransitionContext ctx = new TransitionContext(null, null, locationId, null, null);
         ledger.transition(pieceId, PieceStatus.RETURN_PENDING_INSPECTION,
@@ -88,6 +95,11 @@ public class ReturnService {
         // Async Shopify shadow sync — Trigger 2 (return_inspection → AVAILABLE).
         // Damaged pieces are NOT routed here; markDamaged() has no sync call — invariant preserved.
         shopifyInventory.onReturnInspectionAvailable(tenantId, pieceId, locationId);
+
+        // Close out the order's return leg if this was its last outstanding piece — see
+        // ShipmentLinkService.resolveReturnLegIfComplete() javadoc for why this must run
+        // after every disposition, not just this one call site's local concern.
+        shipmentLinkService.resolveReturnLegIfComplete(orderId, tenantId);
     }
 
     // ── Mark damaged (FR-12.3) ────────────────────────────────────────────────
@@ -100,17 +112,18 @@ public class ReturnService {
         }
         UUID tenantId = TenantContext.require();
 
-        String status = jdbc.query(
-            "SELECT status::text FROM pieces WHERE id = ? AND tenant_id = ?",
-            rs -> rs.next() ? rs.getString(1) : null,
+        PieceStatusAndOrder piece = jdbc.query(
+            "SELECT status::text AS status, current_order_id FROM pieces WHERE id = ? AND tenant_id = ?",
+            rs -> rs.next() ? new PieceStatusAndOrder(
+                rs.getString("status"), rs.getObject("current_order_id", UUID.class)) : null,
             pieceId, tenantId);
 
-        if (status == null) {
+        if (piece == null) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Piece not found");
         }
-        if (!"return_pending_inspection".equals(status)) {
+        if (!"return_pending_inspection".equals(piece.status())) {
             throw new ResponseStatusException(HttpStatus.CONFLICT,
-                "Piece must be in return_pending_inspection to mark damaged (current: " + status + ")");
+                "Piece must be in return_pending_inspection to mark damaged (current: " + piece.status() + ")");
         }
 
         String meta = "{\"reason\":" + escapeJson(reason) + "}";
@@ -120,6 +133,9 @@ public class ReturnService {
 
         jdbc.update("UPDATE pieces SET condition = 'damaged' WHERE id = ? AND tenant_id = ?",
             pieceId, tenantId);
+
+        // See restock()'s identical call — same reasoning.
+        shipmentLinkService.resolveReturnLegIfComplete(piece.orderId(), tenantId);
     }
 
     // ── Never-received report (FR-12.4) ──────────────────────────────────────
@@ -157,6 +173,8 @@ public class ReturnService {
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────
+
+    private record PieceStatusAndOrder(String status, UUID orderId) {}
 
     private static String escapeJson(String s) {
         return "\"" + s.replace("\\", "\\\\").replace("\"", "\\\"") + "\"";
