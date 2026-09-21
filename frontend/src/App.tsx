@@ -33,6 +33,7 @@ import LookupPage from './pages/Lookup'
 import Returns from './pages/Returns'
 import ExceptionsPage from './pages/Exceptions'
 import ExchangeMapping from './pages/exchanges/ExchangeMapping'
+import ExchangesRefunds from './pages/ExchangesRefunds'
 import SettingsPage from './pages/settings/SettingsPage'
 import Inventory from './pages/Inventory'
 import PickupSessions from './pages/PickupSessions'
@@ -260,6 +261,17 @@ export default function App() {
             <RequireAuth>
               <OwnerOnlyRoute>
                 <Layout><ExchangeMapping /></Layout>
+              </OwnerOnlyRoute>
+            </RequireAuth>
+          }
+        />
+        {/* FR-EXCHANGE Step 4c — additive to /exchanges/:id above, never replaces it. */}
+        <Route
+          path="/exchanges"
+          element={
+            <RequireAuth>
+              <OwnerOnlyRoute>
+                <Layout><ExchangesRefunds /></Layout>
               </OwnerOnlyRoute>
             </RequireAuth>
           }

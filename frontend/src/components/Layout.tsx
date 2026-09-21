@@ -4,7 +4,7 @@ import { useState, useRef, useEffect, ReactNode } from 'react'
 import type { LucideIcon } from 'lucide-react'
 import {
   LayoutDashboard, ShoppingBag, Warehouse, Inbox, ClipboardList, PackageCheck,
-  Truck, Repeat, Undo2, AlertTriangle, Home,
+  Truck, Repeat, Undo2, AlertTriangle, Home, ArrowRightLeft,
   Settings, LogOut, Globe, Search, ChevronDown, Bell,
 } from 'lucide-react'
 import {
@@ -185,6 +185,7 @@ export default function Layout({ children }: { children: ReactNode }) {
               <SideNavLink to="/pickups"     icon={Truck}           label={t('nav.pickups')} />
               <SideNavLink to="/transfers"   icon={Repeat}          label={t('nav.transfers')} />
               <SideNavLink to="/returns"     icon={Undo2}           label={t('nav.returns')} />
+              <SideNavLink to="/exchanges"   icon={ArrowRightLeft}  label={t('nav.exchangesRefunds')} />
               <SideNavLink to="/exceptions"  icon={AlertTriangle}   label={t('nav.exceptions')} />
               <div className="h-px bg-sidebar-line mx-[18px] my-2.5" />
               <div className="px-[18px] pt-1.5 pb-0.5 text-[11px] font-semibold tracking-wider text-sidebar-text uppercase">

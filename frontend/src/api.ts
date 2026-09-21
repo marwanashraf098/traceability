@@ -498,13 +498,16 @@ export function getRoleFromToken(): 'owner' | 'manager' | 'worker' | null {
   return null
 }
 
-/** tenantId claim of the CURRENT in-memory access token — used by StationGate's
- *  demo-only exit bypass (FR-DEMO) to tell the demo tenant apart from a real one. */
+/** tenant claim of the CURRENT in-memory access token — used by StationGate's
+ *  demo-only exit bypass (FR-DEMO) to tell the demo tenant apart from a real one.
+ *  ISSUE 2 fix: JwtService.issueAccessToken() writes this claim as "tenant"
+ *  (see identity/JwtService.java), not "tenantId" — the original wrong key meant
+ *  this always returned null, so the demo-exit button never rendered for anyone. */
 export function getTenantIdFromToken(): string | null {
   const t = getAccessToken()
   if (!t) return null
   const claims = parseJwtPayload(t)
-  const tenantId = claims['tenantId']
+  const tenantId = claims['tenant']
   return typeof tenantId === 'string' ? tenantId : null
 }
 
@@ -1858,10 +1861,22 @@ export async function reprintTransferOutstanding(transferId: string): Promise<vo
 // ── FR-EXCHANGE Phase 2 — mapping step ───────────────────────────────────────
 // Raw column-labelled response (snake_case), same convention as the exception
 // detector payloads (see Exceptions.tsx) — not a hand-built camelCase DTO.
+//
+// FR-EXCHANGE Step 4a: status/matched_order_id/match_method/matched_at (V95) are now
+// exposed here too — LABELLING GUARD (see ExchangeService's backend javadoc): this shape
+// deliberately has NO outbound_order_id field. outbound_order_id is the synthetic
+// replacement order map() creates — a different order than matched_order_id (the
+// customer's original order the old item is returning from) — and must never be read as
+// "the mapped order." Leaving the field out entirely is the guard: nothing in this file
+// can accidentally reach for it.
 
 export interface ExchangeSummary {
   id: string
   tracking_number: string
+  status: string
+  matched_order_id: string | null
+  match_method: 'reference' | 'phone' | 'manual' | 'bare' | null
+  matched_at: string | null
   outbound_description: string | null
   inbound_description: string | null
   inbound_description_ar: string | null
@@ -1874,8 +1889,54 @@ export interface ExchangeSummary {
 }
 
 /** Omit status to fetch every exchange for the tenant (e.g. re-visiting a since-mapped one). */
-export function getExchanges(status?: string) {
-  return request<ExchangeSummary[]>(`/exchanges${status ? `?status=${status}` : ''}`)
+export function getExchanges(status?: string, page = 0, size = 100) {
+  const params = new URLSearchParams({ page: String(page), size: String(size) })
+  if (status) params.set('status', status)
+  return request<ExchangeSummary[]>(`/exchanges?${params.toString()}`)
+}
+
+/** Step 4a-1 — single-exchange detail, same row shape as getExchanges(). */
+export function getExchangeDetail(id: string) {
+  return request<ExchangeSummary>(`/exchanges/${id}`)
+}
+
+/** One delivered piece from a candidate order — the eventual link target for a
+ *  needs_confirmation exchange. Array order is the backend's raw SQL result order —
+ *  NOT a ranked/scored list (no confidence field exists), so the UI must not imply
+ *  a "best match" beyond that. */
+export interface ExchangeCandidate {
+  pieceId: string
+  orderId: string
+  variantTitle: string | null
+  productTitle: string | null
+}
+
+export function getExchangeCandidates(id: string) {
+  return request<ExchangeCandidate[]>(`/exchanges/${id}/candidates`)
+}
+
+export interface AttachExchangeResult {
+  exchangeId: string
+  matchedOrderId: string
+  status: string
+}
+
+/** Part D — merchant supplies (or confirms) the order the old item is returning from. */
+export function attachExchange(id: string, orderId: string) {
+  return request<AttachExchangeResult>(`/exchanges/${id}/attach`, {
+    method: 'POST',
+    body: JSON.stringify({ orderId }),
+  })
+}
+
+/** Part D — accept the physical item back with no order link. */
+export function acceptExchangeBareReturn(id: string) {
+  return request<void>(`/exchanges/${id}/bare-return`, { method: 'POST' })
+}
+
+/** Part D — dismiss an unmatched/needs_confirmation exchange. */
+export function dismissExchange(id: string) {
+  return request<void>(`/exchanges/${id}/dismiss`, { method: 'POST' })
 }
 
 export interface MapExchangeResult {
@@ -1889,4 +1950,26 @@ export function mapExchange(id: string, outboundVariantId: string, inboundVarian
     method: 'POST',
     body: JSON.stringify({ outboundVariantId, inboundVariantId }),
   })
+}
+
+// ── FR-EXCHANGE Step 4a-2 — CRP refund feed ──────────────────────────────────
+// Raw column-labelled response, same convention as ExchangeSummary above. order_id is
+// always present (a CRP leg is created already tied to its order) — unlike an exchange's
+// matched_order_id, which is nullable pre-match.
+
+export interface RefundLeg {
+  id: string
+  tracking_number: string
+  internal_state: string
+  order_id: string
+  order_number: string
+  customer_name: string | null
+  customer_phone: string | null
+  /** OrderStatusDeriver.deriveLegStatus(internal_state) — the same primitive the order
+   *  detail drawer's return-leg badge already uses. Render with <LegStatusBadge>. */
+  leg_status: { primaryKey: string; tone: DerivedTone }
+}
+
+export function getRefunds(page = 0, size = 100) {
+  return request<RefundLeg[]>(`/refunds?page=${page}&size=${size}`)
 }

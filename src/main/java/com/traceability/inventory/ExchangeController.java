@@ -27,8 +27,25 @@ public class ExchangeController {
 
     @GetMapping
     @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
-    public List<Map<String, Object>> list(@RequestParam(required = false) String status) {
-        return svc.list(status);
+    public List<Map<String, Object>> list(
+            @RequestParam(required = false) String status,
+            @RequestParam(defaultValue = "0")  int page,
+            @RequestParam(defaultValue = "50") int size) {
+        return svc.list(status, page, Math.min(size, 100));
+    }
+
+    /** Step 4a-1 — single-exchange detail, same row shape as list(). */
+    @GetMapping("/{id}")
+    @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
+    public Map<String, Object> detail(@PathVariable UUID id) {
+        return svc.detail(id);
+    }
+
+    /** Step 4a-1 — wires the already-built ExchangeMatchService.listCandidates(); derived at read. */
+    @GetMapping("/{id}/candidates")
+    @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
+    public List<ExchangeMatchService.Candidate> candidates(@PathVariable UUID id) {
+        return matchSvc.listCandidates(id);
     }
 
     @PostMapping("/{id}/map")

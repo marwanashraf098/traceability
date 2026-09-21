@@ -147,7 +147,7 @@ class ExchangeMappingTest {
     void m1_list_returnsParsedFieldsScopedByStatus() {
         UUID id = seedExchange("910000001", "Yellow hat", 1, "Red hat", "قبعة حمراء", 1);
 
-        List<Map<String, Object>> rows = excSvc.list("needs_mapping");
+        List<Map<String, Object>> rows = excSvc.list("needs_mapping", 0, 50);
         Map<String, Object> row = rows.stream()
             .filter(r -> id.toString().equals(r.get("id").toString()))
             .findFirst().orElseThrow();
@@ -161,7 +161,112 @@ class ExchangeMappingTest {
         assertThat(row.get("customer_name")).isEqualTo("Maya Mostafa");
         assertThat(row.get("customer_phone")).isEqualTo("+201000301512");
 
-        assertThat(excSvc.list("mapped")).noneMatch(r -> id.toString().equals(r.get("id").toString()));
+        assertThat(excSvc.list("mapped", 0, 50)).noneMatch(r -> id.toString().equals(r.get("id").toString()));
+    }
+
+    // ── Step 4a-1: list()/detail() widened fields, ordering, pagination, labelling guard ──
+
+    @Test
+    void m11_list_exposesStatusMatchedOrderIdMatchMethodMatchedAt_nullPreMatch() {
+        UUID id = seedExchange("910000011", "Yellow hat", 1, "Red hat", "قبعة حمراء", 1);
+
+        Map<String, Object> row = excSvc.list("needs_mapping", 0, 50).stream()
+            .filter(r -> id.toString().equals(r.get("id").toString()))
+            .findFirst().orElseThrow();
+
+        assertThat(row.get("status")).isEqualTo("needs_mapping");
+        assertThat(row.get("matched_order_id")).isNull();
+        assertThat(row.get("match_method")).isNull();
+        assertThat(row.get("matched_at")).isNull();
+    }
+
+    @Test
+    void m12_list_ordersByCreatedAtDescThenIdDesc_notAscending() {
+        UUID older = seedExchange("910000012A", "d", 1, "d", "d", 1);
+        UUID newer = seedExchange("910000012B", "d", 1, "d", "d", 1);
+        jdbc.update("UPDATE exchanges SET created_at = now() - interval '2 days' WHERE id = ?", older);
+        jdbc.update("UPDATE exchanges SET created_at = now() - interval '1 day'  WHERE id = ?", newer);
+
+        List<Map<String, Object>> rows = excSvc.list(null, 0, 50);
+        int olderIdx = indexOfId(rows, older);
+        int newerIdx = indexOfId(rows, newer);
+        assertThat(newerIdx)
+            .as("ORDER BY must be created_at DESC (newest first) — was ASC before Step 4a-1")
+            .isLessThan(olderIdx);
+    }
+
+    @Test
+    void m13_list_paginatesWithPageAndSize() {
+        UUID a = seedExchange("910000013A", "d", 1, "d", "d", 1);
+        UUID b = seedExchange("910000013B", "d", 1, "d", "d", 1);
+        UUID c = seedExchange("910000013C", "d", 1, "d", "d", 1);
+        jdbc.update("UPDATE exchanges SET created_at = now() - interval '3 minutes' WHERE id = ?", a);
+        jdbc.update("UPDATE exchanges SET created_at = now() - interval '2 minutes' WHERE id = ?", b);
+        jdbc.update("UPDATE exchanges SET created_at = now() - interval '1 minutes' WHERE id = ?", c);
+
+        List<Map<String, Object>> page0 = excSvc.list(null, 0, 2);
+        List<Map<String, Object>> page1 = excSvc.list(null, 1, 2);
+
+        assertThat(page0).hasSize(2);
+        assertThat(page0.get(0).get("id").toString()).isEqualTo(c.toString());
+        assertThat(page0.get(1).get("id").toString()).isEqualTo(b.toString());
+        assertThat(page1).hasSize(1);
+        assertThat(page1.get(0).get("id").toString()).isEqualTo(a.toString());
+    }
+
+    @Test
+    void m14_detail_returnsWidenedFields_and404sForUnknownId() {
+        UUID id = seedExchange("910000014", "Yellow hat", 1, "Red hat", "قبعة حمراء", 1);
+
+        Map<String, Object> row = excSvc.detail(id);
+        assertThat(row.get("status")).isEqualTo("needs_mapping");
+        assertThat(row.get("matched_order_id")).isNull();
+        assertThat(row.get("tracking_number")).isEqualTo("910000014");
+
+        assertThatThrownBy(() -> excSvc.detail(UUID.randomUUID()))
+            .isInstanceOf(ResponseStatusException.class)
+            .hasMessageContaining("404");
+    }
+
+    // ── m15: LABELLING GUARD — matched_order_id surfaces, outbound_order_id never does ──
+
+    @Test
+    void m15_listAndDetail_surfaceMatchedOrderId_neverOutboundOrderId_whenTheyDiffer() {
+        UUID id = seedExchange("910000015", "Yellow hat", 1, "Red hat", "قبعة حمراء", 1);
+        Map<String, Object> mapResult = excSvc.map(id, outboundVariantId, inboundVariantId);
+        UUID outboundOrderId = UUID.fromString((String) mapResult.get("orderId"));
+
+        // A DIFFERENT, pre-existing order — the customer's original order the old item is
+        // actually coming back from — matched via the same columns ExchangeMatchService
+        // writes (attemptMatch()/searchAttach()), simulated directly here.
+        UUID originalOrderId = UUID.randomUUID();
+        jdbc.update("INSERT INTO orders (id, tenant_id, store_id, external_id, status, on_hold) " +
+                    "VALUES (?, ?, ?, 'EXT-EXMAP-ORIGINAL-15', 'new'::order_status, false)",
+                    originalOrderId, tenantId, storeAId);
+        jdbc.update("UPDATE exchanges SET matched_order_id = ?, match_method = 'manual', " +
+                    "matched_at = now(), status = 'matched' WHERE id = ?", originalOrderId, id);
+
+        Map<String, Object> detail = excSvc.detail(id);
+        assertThat(detail.get("matched_order_id")).isEqualTo(originalOrderId);
+        assertThat(detail.get("matched_order_id"))
+            .as("labelling guard: matched_order_id must never equal outbound_order_id here — they are different orders")
+            .isNotEqualTo(outboundOrderId);
+        assertThat(detail.containsKey("outbound_order_id"))
+            .as("outbound_order_id must never be surfaced as 'the mapped order'")
+            .isFalse();
+
+        Map<String, Object> row = excSvc.list("matched", 0, 50).stream()
+            .filter(r -> id.toString().equals(r.get("id").toString()))
+            .findFirst().orElseThrow();
+        assertThat(row.get("matched_order_id")).isEqualTo(originalOrderId);
+        assertThat(row.containsKey("outbound_order_id")).isFalse();
+    }
+
+    private int indexOfId(List<Map<String, Object>> rows, UUID id) {
+        for (int i = 0; i < rows.size(); i++) {
+            if (id.toString().equals(rows.get(i).get("id").toString())) return i;
+        }
+        throw new AssertionError("id not found in rows: " + id);
     }
 
     // ── m2: map() creates the order + order_item, populates PII, flips status ───

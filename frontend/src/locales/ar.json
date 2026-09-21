@@ -11,6 +11,7 @@
     "switchLock": "تبديل / قفل",
     "lookup": "بحث باركود أو رقم شحنة…",
     "returns": "المرتجعات",
+    "exchangesRefunds": "الاستبدال والاسترجاع",
     "exceptions": "الاستثناءات",
     "connections": "الاتصالات",
     "users": "الفريق",
@@ -853,6 +854,90 @@
       "close": "إغلاق"
     },
     "badge": "استبدال"
+  },
+  "exchangesRefunds": {
+    "title": "الاستبدال والاسترجاع",
+    "tabs": {
+      "all": "الكل",
+      "needsAction": "يحتاج إجراء",
+      "refunds": "استرجاع",
+      "exchanges": "استبدال",
+      "inTransit": "في الطريق",
+      "received": "تم الاستلام"
+    },
+    "chips": {
+      "total": "الإجمالي",
+      "needsAction": "يحتاج إجراء",
+      "inTransit": "في الطريق",
+      "received": "تم الاستلام"
+    },
+    "columns": {
+      "type": "النوع",
+      "customer": "العميل",
+      "tracking": "رقم الشحنة",
+      "mappedOrder": "الطلب المرتبط",
+      "status": "الحالة",
+      "lastUpdate": "آخر تحديث"
+    },
+    "type": {
+      "refund": "استرجاع"
+    },
+    "noMappedOrder": "لم يتم الربط بعد",
+    "errorTitle": "تعذر تحميل القائمة",
+    "retry": "إعادة المحاولة",
+    "emptyTitle": "لا توجد عمليات استبدال أو استرجاع بعد",
+    "status": {
+      "needs_mapping": "بحاجة إلى ربط",
+      "mapped": "مربوط",
+      "outbound_in_fulfillment": "الصادر قيد التجهيز",
+      "out_for_exchange": "خارج للاستبدال",
+      "return_pending": "الإرجاع معلق",
+      "needs_confirmation": "بحاجة إلى تأكيد",
+      "matched": "تم المطابقة",
+      "unmatched": "غير مطابق",
+      "bare_return": "إرجاع دون طلب",
+      "dismissed": "مرفوض",
+      "return_received": "تم الاستلام",
+      "reconciled": "تمت التسوية",
+      "cancelled": "ملغى"
+    },
+    "matchMethod": {
+      "reference": "مرجع",
+      "phone": "مطابقة الهاتف",
+      "manual": "يدوي",
+      "bare": "إرجاع دون طلب"
+    },
+    "drawer": {
+      "close": "إغلاق",
+      "error": "تعذر تحميل بيانات هذا الاستبدال",
+      "refund": {
+        "originalOrder": "الطلب الأصلي",
+        "lifecycle": "الحالة",
+        "resolutionNote": "قرارات إعادة التخزين أو التلف للقطعة المرتجعة تتم من شاشة المرتجعات.",
+        "goToReturns": "فتح في المرتجعات"
+      },
+      "exchange": {
+        "replacementSection": "البديل (الصادر)",
+        "itemsCount": "{{count}} قطعة",
+        "itemsCount_other": "{{count}} قطعة",
+        "statusLabel": "الحالة",
+        "candidatesTitle": "التطابقات المحتملة",
+        "candidatesEmpty": "لم يتم العثور على قطع مطابقة.",
+        "confirmMatch": "تأكيد التطابق",
+        "confirmed": "تم التأكيد",
+        "searchAttachTitle": "الربط بطلب",
+        "orderIdPlaceholder": "رقم الطلب",
+        "attachButton": "ربط",
+        "bareReturnButton": "قبول كإرجاع دون طلب",
+        "dismissButton": "رفض",
+        "actionFailed": "لم يتم تنفيذ الإجراء — يرجى المحاولة مرة أخرى.",
+        "readOnlyNote": "تم حل هذا الاستبدال.",
+        "matchedOrder": "الطلب المطابق",
+        "matchMethod": "طريقة المطابقة",
+        "bareReturnNote": "تم القبول كإرجاع دون طلب — بدون ربط بطلب.",
+        "dismissedNote": "تم الرفض — لا يوجد إجراء آخر متوقع."
+      }
+    }
   },
   "common": {
     "loading": "جارٍ التحميل...",

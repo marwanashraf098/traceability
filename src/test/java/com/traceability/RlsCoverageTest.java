@@ -104,6 +104,9 @@ class RlsCoverageTest {
             "/api/v1/inventory/throughput",
             "/api/v1/activity/recent",
             "/api/v1/exchanges",
+            "/api/v1/exchanges/{id}",
+            "/api/v1/exchanges/{id}/candidates",
+            "/api/v1/refunds",
             "/api/v1/overview/trends",
             "/api/v1/overview/late-to-pack",
             "/api/v1/overview/top-skus",
@@ -392,6 +395,68 @@ class RlsCoverageTest {
         ResponseEntity<List> resp = get("/api/v1/exchanges?status=needs_mapping", List.class);
         assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.OK);
         assertThat(resp.getBody()).isNotEmpty();
+    }
+
+    @Test
+    void exchangeDetail_returnsWidenedFields_notOutboundOrderId() {
+        UUID exchangeId = UUID.randomUUID();
+        jdbc.update("INSERT INTO exchanges (id, tenant_id, tracking_number, status, raw) " +
+                    "VALUES (?, ?, 'TN-CVG-EXC-DETAIL', 'needs_mapping', '{}'::jsonb)",
+                    exchangeId, tenantId);
+
+        ResponseEntity<Map> resp = get("/api/v1/exchanges/" + exchangeId, Map.class);
+        assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(resp.getBody().get("status")).isEqualTo("needs_mapping");
+        assertThat(resp.getBody().get("matched_order_id")).isNull();
+        assertThat(resp.getBody().containsKey("outbound_order_id"))
+            .as("labelling guard: outbound_order_id must never be surfaced as 'the mapped order'")
+            .isFalse();
+    }
+
+    @Test
+    void exchangeCandidates_returnsPhoneMatchedDeliveredPiece() {
+        UUID orderId = UUID.randomUUID();
+        String pieceId = UlidGenerator.generate();
+        UUID exchangeId = UUID.randomUUID();
+        jdbc.update("INSERT INTO orders (id, tenant_id, store_id, external_id, number, status, " +
+                    "    customer_name, customer_phone, payment_method, placed_at, on_hold) " +
+                    "VALUES (?, ?, ?, 'EXT-CVG-CAND', '#CVG-CAND', 'new'::order_status, " +
+                    "    'Cov Candidate', '01099998888', 'cod', now(), false)",
+                    orderId, tenantId, storeId);
+        jdbc.update("INSERT INTO pieces (id, tenant_id, variant_id, barcode, short_code, status, " +
+                    "    current_order_id, last_event_at) " +
+                    "VALUES (?, ?, ?, ?, 'P' || LPAD((abs(hashtext(?)) % 999999 + 1)::text, 6, '0'), " +
+                    "        'delivered'::piece_status, ?, now())",
+                    pieceId, tenantId, variantId, "PC-" + pieceId, pieceId, orderId);
+        jdbc.update("INSERT INTO exchanges (id, tenant_id, tracking_number, status, raw) " +
+                    "VALUES (?, ?, 'TN-CVG-EXC-CAND', 'mapped', ?::jsonb)",
+                    exchangeId, tenantId, "{\"receiver\":{\"phone\":\"01099998888\"}}");
+
+        ResponseEntity<List> resp = get("/api/v1/exchanges/" + exchangeId + "/candidates", List.class);
+        assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.OK);
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> body = resp.getBody();
+        assertThat(body).anyMatch(c -> pieceId.equals(c.get("pieceId")));
+    }
+
+    @Test
+    void refundsList_returnsSeededCrpReturnLeg() {
+        UUID orderId = UUID.randomUUID();
+        jdbc.update("INSERT INTO orders (id, tenant_id, store_id, external_id, number, status, " +
+                    "    customer_name, customer_phone, payment_method, placed_at, on_hold) " +
+                    "VALUES (?, ?, ?, 'EXT-CVG-RFD', '#CVG-RFD', 'new'::order_status, " +
+                    "    'Cov Refund', '01055556666', 'cod', now(), false)",
+                    orderId, tenantId, storeId);
+        jdbc.update("INSERT INTO shipments (tenant_id, order_id, provider, tracking_number, " +
+                    "    internal_state, shipment_leg) " +
+                    "VALUES (?, ?, 'bosta', 'TN-CVG-RFD-001', 'delivered'::shipment_internal_state, 'return')",
+                    tenantId, orderId);
+
+        ResponseEntity<List> resp = get("/api/v1/refunds", List.class);
+        assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.OK);
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> body = resp.getBody();
+        assertThat(body).anyMatch(r -> "TN-CVG-RFD-001".equals(r.get("tracking_number")));
     }
 
     @Test

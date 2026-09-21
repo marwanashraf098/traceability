@@ -22,9 +22,23 @@ import java.util.UUID;
  * order (§3.3 of the spec) and records the inbound mapping, flipping status
  * needs_mapping → mapped.
  *
- * list() returns raw column-labelled maps (same convention as ExceptionService's
+ * list()/detail() return raw column-labelled maps (same convention as ExceptionService's
  * detectors / ShipmentLinkService.listUnlinked() — snake_case JSON, matches the
  * existing Exceptions.tsx precedent for this shape of endpoint).
+ *
+ * FR-EXCHANGE Step 4a: list()/detail() now surface status/matched_order_id/match_method/
+ * matched_at (V95 columns — added by Step 3 Part A, never exposed by a read endpoint
+ * until now). LABELLING GUARD: matched_order_id is the ONLY field either method ever
+ * calls "the mapped order" for an exchange — outbound_order_id (the synthetic Model-A
+ * replacement order created by map(), below) is a structurally different concept and is
+ * deliberately NOT included in either projection, so no caller can mistake one for the
+ * other. list() also deliberately carries no return-leg lifecycle state: no shipments
+ * row exists for an exchange's return leg (V74 — the forward and return legs share one
+ * tracking_number, and shipments.tracking_number has been globally UNIQUE since V1, so a
+ * second shipments row for the same number is a hard DB conflict, not just unbuilt), and
+ * ExchangeStateInterpreter.interpretReturnLeg() is an intentionally-unimplemented hook
+ * (always empty, pending confirmed Bosta vocabulary) — so exchanges.status itself is the
+ * only real lifecycle signal available today, and it is what's exposed here.
  *
  * map() creates AND links the forward shipment immediately (ShipmentLinkService.
  * linkAtMapTime(), reusing linkByAwbScan()'s creation/link body — see that class for the
@@ -47,30 +61,54 @@ public class ExchangeService {
         this.shipmentLinkService = shipmentLinkService;
     }
 
+    // Shared projection for list() and detail() — kept identical so a row looks the same
+    // shape whichever endpoint returned it. matched_order_id is the ONLY "mapped order"
+    // field here — see class javadoc's labelling guard; outbound_order_id is never
+    // included.
+    private static final String ROW_SELECT =
+        "SELECT e.id, e.tracking_number, e.status, e.matched_order_id, e.match_method, e.matched_at, " +
+        "       e.outbound_description, e.inbound_description, " +
+        "       e.inbound_description_ar, e.cod, e.goods_value, " +
+        "       NULLIF(e.raw #>> '{specs,packageDetails,itemsCount}', '')::int AS outbound_items_count, " +
+        "       NULLIF(e.raw #>> '{returnSpecs,packageDetails,itemsCount}', '')::int AS inbound_items_count, " +
+        "       COALESCE(" +
+        "           NULLIF(e.raw #>> '{receiver,fullName}', ''), " +
+        "           NULLIF(trim(concat(e.raw #>> '{receiver,firstName}', ' ', e.raw #>> '{receiver,lastName}')), '')" +
+        "       ) AS customer_name, " +
+        "       e.raw #>> '{receiver,phone}' AS customer_phone " +
+        "FROM exchanges e ";
+
+    /**
+     * Only caller confirmed (Step 4a-1 diagnosis): ExchangeController's GET / route —
+     * no frontend consumer exists yet either, so flipping the ordering below is safe.
+     */
     @Transactional(readOnly = true)
-    public List<Map<String, Object>> list(String status) {
+    public List<Map<String, Object>> list(String status, int page, int size) {
         UUID tenantId = TenantContext.require();
 
-        StringBuilder sql = new StringBuilder(
-            "SELECT e.id, e.tracking_number, e.outbound_description, e.inbound_description, " +
-            "       e.inbound_description_ar, e.cod, e.goods_value, " +
-            "       NULLIF(e.raw #>> '{specs,packageDetails,itemsCount}', '')::int AS outbound_items_count, " +
-            "       NULLIF(e.raw #>> '{returnSpecs,packageDetails,itemsCount}', '')::int AS inbound_items_count, " +
-            "       COALESCE(" +
-            "           NULLIF(e.raw #>> '{receiver,fullName}', ''), " +
-            "           NULLIF(trim(concat(e.raw #>> '{receiver,firstName}', ' ', e.raw #>> '{receiver,lastName}')), '')" +
-            "       ) AS customer_name, " +
-            "       e.raw #>> '{receiver,phone}' AS customer_phone " +
-            "FROM exchanges e WHERE e.tenant_id = ?");
+        StringBuilder sql = new StringBuilder(ROW_SELECT).append("WHERE e.tenant_id = ?");
         List<Object> params = new ArrayList<>();
         params.add(tenantId);
         if (status != null && !status.isBlank()) {
             sql.append(" AND e.status = ?");
             params.add(status);
         }
-        sql.append(" ORDER BY e.created_at ASC");
+        sql.append(" ORDER BY e.created_at DESC, e.id DESC LIMIT ? OFFSET ?");
+        params.add(size);
+        params.add(page * size);
 
         return jdbc.queryForList(sql.toString(), params.toArray());
+    }
+
+    @Transactional(readOnly = true)
+    public Map<String, Object> detail(UUID exchangeId) {
+        UUID tenantId = TenantContext.require();
+        List<Map<String, Object>> rows = jdbc.queryForList(
+            ROW_SELECT + "WHERE e.id = ? AND e.tenant_id = ?", exchangeId, tenantId);
+        if (rows.isEmpty()) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Exchange not found");
+        }
+        return rows.get(0);
     }
 
     /**

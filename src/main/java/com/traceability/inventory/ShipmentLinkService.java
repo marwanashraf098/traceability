@@ -6,6 +6,7 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.traceability.integrations.bosta.BostaDelivery;
 import com.traceability.integrations.bosta.BostaGateway;
 import com.traceability.integrations.bosta.BostaStateMapper;
+import com.traceability.fulfillment.OrderStatusDeriver;
 import com.traceability.security.EncryptionService;
 import com.traceability.tenancy.TenantContext;
 import org.slf4j.Logger;
@@ -450,6 +451,51 @@ public class ShipmentLinkService {
             "FROM unlinked_bosta_deliveries " +
             "WHERE tenant_id = ? AND resolved = false " +
             "ORDER BY first_seen_at DESC LIMIT ? OFFSET ?",
+            tenantId, size, page * size);
+    }
+
+    /**
+     * FR-EXCHANGE Step 4a-2 — cross-order CRP refund list (the "Exchanges & Refunds" tab's
+     * second feed). No such list existed before this: ReturnController.pending() only ever
+     * returned a hardcoded empty items list (a count-only tile for Overview). This is
+     * genuinely new, not a repoint.
+     *
+     * order_id is always present for a CRP leg (unlike an exchange's matched_order_id,
+     * which is nullable pre-match) — every shipments row with shipment_leg='return' is
+     * created already tied to the order it belongs to. Ship-tab-first scope: unmatched
+     * CRPs (deliveries with no resolvable order at all) never reach the shipments table in
+     * the first place — they stay in unlinked_bosta_deliveries / the existing exceptions
+     * surface, so no needs_confirmation-equivalent filtering is needed here.
+     *
+     * Lifecycle via OrderStatusDeriver.deriveLegStatus(internal_state) — the same primitive
+     * OrderController.detail() already applies to every shipment row (forward or return);
+     * reused here, not reimplemented, so there is exactly one leg-status derivation path.
+     * Lifecycle only — piece-level disposition detail is fetched per-row when the tab opens
+     * a single CRP leg, same split as the exchange feed's candidates-on-open pattern.
+     */
+    @Transactional(readOnly = true)
+    public List<Map<String, Object>> listCrpReturns(int page, int size) {
+        UUID tenantId = TenantContext.require();
+        return jdbc.query(
+            "SELECT sh.id, sh.tracking_number, sh.internal_state, sh.order_id, " +
+            "       o.number AS order_number, o.customer_name, o.customer_phone, sh.created_at " +
+            "FROM shipments sh " +
+            "JOIN orders o ON o.id = sh.order_id AND o.tenant_id = sh.tenant_id " +
+            "WHERE sh.tenant_id = ? AND sh.shipment_leg = 'return' " +
+            "ORDER BY sh.created_at DESC, sh.id DESC LIMIT ? OFFSET ?",
+            (rs, i) -> {
+                String internalState = rs.getString("internal_state");
+                Map<String, Object> row = new LinkedHashMap<>();
+                row.put("id", rs.getObject("id", UUID.class).toString());
+                row.put("tracking_number", rs.getString("tracking_number"));
+                row.put("internal_state", internalState);
+                row.put("order_id", rs.getObject("order_id", UUID.class).toString());
+                row.put("order_number", rs.getString("order_number"));
+                row.put("customer_name", rs.getString("customer_name"));
+                row.put("customer_phone", rs.getString("customer_phone"));
+                row.put("leg_status", OrderStatusDeriver.deriveLegStatus(internalState));
+                return row;
+            },
             tenantId, size, page * size);
     }
 

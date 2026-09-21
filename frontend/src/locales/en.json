@@ -11,6 +11,7 @@
     "switchLock": "Switch / Lock",
     "lookup": "Search barcode or AWB…",
     "returns": "Returns",
+    "exchangesRefunds": "Exchanges & Refunds",
     "exceptions": "Exceptions",
     "connections": "Connections",
     "users": "Team",
@@ -858,6 +859,90 @@
       "close": "Close"
     },
     "badge": "Exchange"
+  },
+  "exchangesRefunds": {
+    "title": "Exchanges & Refunds",
+    "tabs": {
+      "all": "All",
+      "needsAction": "Needs action",
+      "refunds": "Refunds",
+      "exchanges": "Exchanges",
+      "inTransit": "In transit",
+      "received": "Received"
+    },
+    "chips": {
+      "total": "Total",
+      "needsAction": "Needs action",
+      "inTransit": "In transit",
+      "received": "Received"
+    },
+    "columns": {
+      "type": "Type",
+      "customer": "Customer",
+      "tracking": "Tracking",
+      "mappedOrder": "Mapped order",
+      "status": "Status",
+      "lastUpdate": "Last update"
+    },
+    "type": {
+      "refund": "Refund"
+    },
+    "noMappedOrder": "Not yet mapped",
+    "errorTitle": "Couldn't load this list",
+    "retry": "Retry",
+    "emptyTitle": "No exchanges or refunds yet",
+    "status": {
+      "needs_mapping": "Needs mapping",
+      "mapped": "Mapped",
+      "outbound_in_fulfillment": "Outbound in fulfillment",
+      "out_for_exchange": "Out for exchange",
+      "return_pending": "Return pending",
+      "needs_confirmation": "Needs confirmation",
+      "matched": "Matched",
+      "unmatched": "Unmatched",
+      "bare_return": "Bare return",
+      "dismissed": "Dismissed",
+      "return_received": "Received",
+      "reconciled": "Reconciled",
+      "cancelled": "Cancelled"
+    },
+    "matchMethod": {
+      "reference": "Reference",
+      "phone": "Phone match",
+      "manual": "Manual",
+      "bare": "Bare return"
+    },
+    "drawer": {
+      "close": "Close",
+      "error": "Couldn't load this exchange",
+      "refund": {
+        "originalOrder": "Original order",
+        "lifecycle": "Lifecycle",
+        "resolutionNote": "Restock/damage decisions for the returned item happen in Returns.",
+        "goToReturns": "Open in Returns"
+      },
+      "exchange": {
+        "replacementSection": "Replacement (outbound)",
+        "itemsCount": "{{count}} item",
+        "itemsCount_other": "{{count}} items",
+        "statusLabel": "Status",
+        "candidatesTitle": "Possible matches",
+        "candidatesEmpty": "No candidate pieces found.",
+        "confirmMatch": "Confirm match",
+        "confirmed": "Confirmed",
+        "searchAttachTitle": "Attach to an order",
+        "orderIdPlaceholder": "Order ID",
+        "attachButton": "Attach",
+        "bareReturnButton": "Accept as bare return",
+        "dismissButton": "Dismiss",
+        "actionFailed": "That didn't go through — please try again.",
+        "readOnlyNote": "This exchange is resolved.",
+        "matchedOrder": "Matched order",
+        "matchMethod": "Matched via",
+        "bareReturnNote": "Accepted as a bare return — no order link.",
+        "dismissedNote": "Dismissed — no further action expected."
+      }
+    }
   },
   "common": {
     "loading": "Loading...",
