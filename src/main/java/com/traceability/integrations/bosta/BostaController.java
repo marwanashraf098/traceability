@@ -235,6 +235,37 @@ public class BostaController {
                 tenantId)));
     }
 
+    // ---- POST /api/v1/bosta/reinterpret-exchange (OWNER — one-off admin) ----
+
+    /**
+     * Step 3C-fix Part 2: re-runs the exchange forward-leg interpreter against a
+     * shipment's ALREADY-STORED raw and applies the result through the same
+     * applyMappedState() writer the live webhook pipeline uses — no fresh Bosta API
+     * call, no fabricated webhook_events row. See
+     * {@link BostaWebhookJob#reinterpretExchangeForwardLeg} for the exact guard
+     * (internal_state='created' only) and idempotency reasoning.
+     */
+    @PostMapping("/bosta/reinterpret-exchange")
+    @PreAuthorize("hasRole('OWNER')")
+    public Map<String, Object> reinterpretExchange(
+            @RequestBody ReinterpretRequest req,
+            @AuthenticationPrincipal CustomUserDetails principal) {
+
+        UUID tenantId = principal.tenantId();
+        boolean applied = TenantContext.runAs(tenantId,
+            () -> webhookJob.reinterpretExchangeForwardLeg(req.trackingNumber()));
+
+        log.info("Bosta reinterpret-exchange: tenant={} tracking={} applied={}",
+            tenantId, req.trackingNumber(), applied);
+
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("trackingNumber", req.trackingNumber());
+        result.put("applied", applied);
+        return result;
+    }
+
+    public record ReinterpretRequest(String trackingNumber) {}
+
     // ---- POST /api/v1/webhooks/bosta (public — no JWT) ----------------------
 
     /**

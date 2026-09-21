@@ -2,6 +2,8 @@ package com.traceability.integrations.bosta;
 
 import com.fasterxml.jackson.databind.JsonNode;
 
+import java.util.Locale;
+
 /**
  * Authoritative delivery state fetched from the Bosta API.
  *
@@ -35,5 +37,38 @@ public record BostaDelivery(
     public int typeCode() {
         if (raw == null) return -1;
         return raw.path("type").path("code").asInt(-1);
+    }
+
+    /**
+     * Reconstructs a BostaDelivery from an already-fetched raw payload — the SAME field
+     * extraction {@link BostaHttpGateway#fetchDelivery} uses (state.code, type.value
+     * uppercased, numberOfAttempts, businessReference, shopifyInfo.orderId with the
+     * legacy shopifyOrderId fallback), kept here so a caller re-deriving state from
+     * STORED raw (no fresh API call) reads the payload identically to a live fetch.
+     * Deliberately NOT wired into fetchDelivery() itself in this pass — that method is
+     * untouched, live production code; this factory only has one caller so far
+     * (BostaWebhookJob's admin re-interpret action).
+     */
+    public static BostaDelivery fromRaw(String trackingNumber, JsonNode data) {
+        String tn = data.path("trackingNumber").asText(trackingNumber);
+
+        JsonNode stateNode = data.path("state");
+        int code = stateNode.isObject() ? stateNode.path("code").asInt(-1) : stateNode.asInt(-1);
+
+        JsonNode typeNode = data.path("type");
+        String type = typeNode.isObject()
+            ? typeNode.path("value").asText("SEND").toUpperCase(Locale.ROOT)
+            : typeNode.asText("SEND").toUpperCase(Locale.ROOT);
+
+        int attempts = data.path("numberOfAttempts").asInt(0);
+        String ref   = data.path("businessReference").asText(null);
+
+        String shopifyOrderId = data.path("shopifyInfo").path("orderId").asText(null);
+        if (shopifyOrderId == null || shopifyOrderId.isBlank()) {
+            shopifyOrderId = data.path("shopifyOrderId").asText(null);
+        }
+        if (shopifyOrderId != null && shopifyOrderId.isBlank()) shopifyOrderId = null;
+
+        return new BostaDelivery(tn, code, type, attempts, ref, shopifyOrderId, data);
     }
 }

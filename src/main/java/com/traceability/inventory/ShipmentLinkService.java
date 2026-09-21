@@ -48,14 +48,15 @@ public class ShipmentLinkService {
     public static final String REASON_AMBIGUOUS_MULTI = "AMBIGUOUS_MULTI";
     public static final String REASON_COD_ONLY        = "COD_ONLY_AMBIGUOUS";
 
-    private final JdbcTemplate      jdbc;
-    private final InventoryLedger   ledger;
-    private final BostaStateMapper  stateMapper;
-    private final BostaGateway      bostaGateway;
-    private final EncryptionService encryptionService;
-    private final BlocklistService  blocklist;
-    private final ObjectMapper      mapper;
-    private final NotTracedTagger   notTracedTagger;
+    private final JdbcTemplate         jdbc;
+    private final InventoryLedger      ledger;
+    private final BostaStateMapper     stateMapper;
+    private final BostaGateway         bostaGateway;
+    private final EncryptionService    encryptionService;
+    private final BlocklistService     blocklist;
+    private final ObjectMapper         mapper;
+    private final NotTracedTagger      notTracedTagger;
+    private final ExchangeMatchService exchangeMatchService;
 
     public ShipmentLinkService(JdbcTemplate jdbc,
                                 InventoryLedger ledger,
@@ -64,15 +65,17 @@ public class ShipmentLinkService {
                                 EncryptionService encryptionService,
                                 BlocklistService blocklist,
                                 ObjectMapper mapper,
-                                NotTracedTagger notTracedTagger) {
-        this.jdbc              = jdbc;
-        this.ledger            = ledger;
-        this.stateMapper       = stateMapper;
-        this.bostaGateway      = bostaGateway;
-        this.encryptionService = encryptionService;
-        this.blocklist         = blocklist;
-        this.mapper            = mapper;
-        this.notTracedTagger   = notTracedTagger;
+                                NotTracedTagger notTracedTagger,
+                                ExchangeMatchService exchangeMatchService) {
+        this.jdbc                 = jdbc;
+        this.ledger               = ledger;
+        this.stateMapper          = stateMapper;
+        this.bostaGateway         = bostaGateway;
+        this.encryptionService    = encryptionService;
+        this.blocklist            = blocklist;
+        this.mapper               = mapper;
+        this.notTracedTagger      = notTracedTagger;
+        this.exchangeMatchService = exchangeMatchService;
     }
 
     /**
@@ -707,8 +710,21 @@ public class ShipmentLinkService {
      * counts. Safe: if a SECOND, later CRP return leg or exchange starts after this one
      * resolves, hasActiveReturnLeg() picks it up independently via its own non-terminal
      * state — resolving early never blocks a future one.
+     *
+     * Step 3C-fix (Test 2 gap): the CRP-leg resolution above stays unconditional — it has
+     * no variant concept. The EXCHANGE resolution is different: on a multi-item matched
+     * order, "no piece left at RPI" can become true from disposing a piece that ISN'T the
+     * exchange's actual item (the order's OTHER, unrelated delivered item, also covered
+     * by the same order-scoped {@link #hasActiveReturnLeg} bypass). Flipping the exchange
+     * to return_received in that case would misrepresent it as resolved while its real
+     * item was never returned. So the exchange branch is delegated to
+     * {@link ExchangeMatchService#resolveIfDispositionedPieceMatches}, which only flips it
+     * when {@code dispositionedPieceId} — the piece THIS call is actually resolving — is
+     * the one the matcher would currently call "the" match. The piece itself always
+     * finishes restocking/damaging via the caller's own ledger.transition() regardless;
+     * this guard is purely about the exchange's own status, never about the piece.
      */
-    public void resolveReturnLegIfComplete(UUID orderId, UUID tenantId) {
+    public void resolveReturnLegIfComplete(UUID orderId, UUID tenantId, String dispositionedPieceId) {
         if (orderId == null) return;
         Integer stillPending = jdbc.queryForObject(
             "SELECT COUNT(*) FROM pieces WHERE current_order_id = ? AND tenant_id = ? " +
@@ -720,10 +736,7 @@ public class ShipmentLinkService {
                 "WHERE order_id = ? AND tenant_id = ? AND shipment_leg = 'return' " +
                 "AND internal_state NOT IN (" + RETURN_LEG_TERMINAL_STATES + ")",
                 orderId, tenantId);
-            jdbc.update(
-                "UPDATE exchanges SET status = 'return_received', updated_at = now() " +
-                "WHERE matched_order_id = ? AND tenant_id = ? AND status = 'matched'",
-                orderId, tenantId);
+            exchangeMatchService.resolveIfDispositionedPieceMatches(orderId, tenantId, dispositionedPieceId);
         }
     }
 

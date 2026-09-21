@@ -9,10 +9,12 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 
@@ -145,37 +147,113 @@ public class ExchangeMatchService {
             return;
         }
 
-        List<Candidate> narrowed = candidates;
-        if (candidates.size() > 1 && ex.inboundDescription() != null && !ex.inboundDescription().isBlank()) {
-            String desc = ex.inboundDescription().toLowerCase(Locale.ROOT);
-            // Variant-title match takes precedence over product-title match — candidates
-            // sharing a product (different variants, e.g. Red vs Blue of the same Bucket
-            // Hat) must never both "match" via the shared product name alone. Product
-            // title is only consulted as a fallback when no candidate's variant title
-            // appears in the description at all.
-            List<Candidate> byVariant = candidates.stream()
-                .filter(c -> matchesText(desc, c.variantTitle()))
-                .toList();
-            if (byVariant.size() == 1) {
-                narrowed = byVariant;
-            } else if (byVariant.isEmpty()) {
-                List<Candidate> byProduct = candidates.stream()
-                    .filter(c -> matchesText(desc, c.productTitle()))
-                    .toList();
-                if (byProduct.size() == 1) narrowed = byProduct;
-            }
-            // byVariant.size() > 1: still ambiguous at the variant level — never fall
-            // through to product-title matching, which could only widen it further.
-        }
+        Optional<Candidate> resolved = narrowToSingle(candidates, ex.inboundDescription());
 
-        if (narrowed.size() == 1) {
+        if (resolved.isPresent()) {
             jdbc.update(
                 "UPDATE exchanges SET matched_order_id = ?, match_method = 'phone', " +
                 "    matched_at = now(), status = 'matched', updated_at = now() " +
                 "WHERE id = ? AND tenant_id = ?",
-                narrowed.get(0).orderId(), ex.id(), tenantId);
+                resolved.get().orderId(), ex.id(), tenantId);
         } else {
             setStatus(ex.id(), tenantId, "needs_confirmation");
+        }
+    }
+
+    /**
+     * Narrows a candidate list down to a single piece, or empty if still ambiguous.
+     * Shared by attemptMatch() (deciding matched vs needs_confirmation) and
+     * {@link #resolveIfDispositionedPieceMatches} (Step 3C-fix — re-deriving, at
+     * disposition time, which piece the matcher would currently call "the" match) so the
+     * two can never disagree on the narrowing rule.
+     *
+     * Trivial single-candidate case aside, variant-title match takes precedence over
+     * product-title match — candidates sharing a product (different variants, e.g. Red vs
+     * Blue of the same Bucket Hat) must never both "match" via the shared product name
+     * alone. Product title is only consulted as a fallback when no candidate's variant
+     * title appears in the description at all.
+     */
+    private Optional<Candidate> narrowToSingle(List<Candidate> candidates, String inboundDescription) {
+        if (candidates.size() == 1) return Optional.of(candidates.get(0));
+        if (candidates.isEmpty()) return Optional.empty();
+        if (inboundDescription == null || inboundDescription.isBlank()) return Optional.empty();
+
+        String desc = inboundDescription.toLowerCase(Locale.ROOT);
+        List<Candidate> byVariant = candidates.stream()
+            .filter(c -> matchesText(desc, c.variantTitle()))
+            .toList();
+        if (byVariant.size() == 1) return Optional.of(byVariant.get(0));
+        if (byVariant.isEmpty()) {
+            List<Candidate> byProduct = candidates.stream()
+                .filter(c -> matchesText(desc, c.productTitle()))
+                .toList();
+            if (byProduct.size() == 1) return Optional.of(byProduct.get(0));
+        }
+        // byVariant.size() > 1: still ambiguous at the variant level — never fall through
+        // to product-title matching, which could only widen it further.
+        return Optional.empty();
+    }
+
+    /**
+     * Step 3C-fix (Test 2 gap): guards resolveReturnLegIfComplete()'s exchange branch.
+     * Called by ShipmentLinkService with the piece that was JUST dispositioned (restocked
+     * or marked damaged) once no piece remains at return_pending_inspection for the
+     * order. Flips the matched exchange to return_received ONLY if that piece is the one
+     * the matcher would currently identify as this exchange's item — re-derived via the
+     * SAME candidate query + {@link #narrowToSingle} precedence attemptMatch() uses, not
+     * a new stored column (matched_order_id has no piece-level counterpart, deliberately
+     * — see ExchangeMatchService's class javadoc).
+     *
+     * By the time this runs the piece has already left 'delivered' (ledger.transition()
+     * already applied), so it can't appear in a fresh findCandidates() call — its own
+     * variant/product title is fetched directly and added back into the candidate set
+     * alongside whatever ELSE is still genuinely 'delivered', reconstructing the pool as
+     * it stood immediately before this disposition. A wrong-variant piece disposed under
+     * the same order's cover restocks/damages normally regardless (ReturnService's own
+     * ledger call, already committed) — this method only decides whether THAT resolution
+     * also resolves the exchange.
+     */
+    public void resolveIfDispositionedPieceMatches(UUID orderId, UUID tenantId, String dispositionedPieceId) {
+        if (orderId == null || dispositionedPieceId == null) return;
+
+        ExchangeRow ex = jdbc.query(
+            "SELECT id, status, inbound_description, outbound_order_id, raw::text AS raw " +
+            "FROM exchanges WHERE matched_order_id = ? AND tenant_id = ? AND status = 'matched'",
+            rs -> rs.next() ? new ExchangeRow(
+                rs.getObject("id", UUID.class), rs.getString("status"),
+                rs.getString("inbound_description"),
+                rs.getObject("outbound_order_id", UUID.class), rs.getString("raw")) : null,
+            orderId, tenantId);
+        if (ex == null) return;
+
+        Candidate dispositioned = jdbc.query(
+            "SELECT v.title AS variant_title, pr.title AS product_title " +
+            "FROM pieces p " +
+            "JOIN variants v  ON v.id  = p.variant_id " +
+            "JOIN products pr ON pr.id = v.product_id " +
+            "WHERE p.id = ? AND p.tenant_id = ?",
+            rs -> rs.next() ? new Candidate(dispositionedPieceId, orderId,
+                rs.getString("variant_title"), rs.getString("product_title")) : null,
+            dispositionedPieceId, tenantId);
+        if (dispositioned == null) return;
+
+        JsonNode raw = parseRaw(ex.rawJson());
+        String bostaPhone = raw == null ? null
+            : ShipmentLinkService.normalizePhone(raw.path("receiver").path("phone").asText(null));
+
+        List<Candidate> candidates = new ArrayList<>();
+        if (bostaPhone != null) {
+            int windowDays = returnWindowDays(tenantId);
+            candidates.addAll(findCandidates(tenantId, bostaPhone, windowDays, ex.outboundOrderId()));
+        }
+        candidates.add(dispositioned);
+
+        Optional<Candidate> resolved = narrowToSingle(candidates, ex.inboundDescription());
+        if (resolved.isPresent() && dispositionedPieceId.equals(resolved.get().pieceId())) {
+            jdbc.update(
+                "UPDATE exchanges SET status = 'return_received', updated_at = now() " +
+                "WHERE id = ? AND tenant_id = ? AND status = 'matched'",
+                ex.id(), tenantId);
         }
     }
 

@@ -663,29 +663,29 @@ class ReturnSessionTest {
             .isEqualTo("delivered");
     }
 
-    // ── (w) Step 3C Test 2: order-scoped bypass on a multi-item matched order ────
+    // ── (w) Step 3C-fix Part 1: resolution flip guarded to the matched variant ───
 
     /**
-     * DIAGNOSTIC, documents CURRENT behavior — not a "should" assertion, see the Step 3C
-     * report. hasActiveReturnLeg() is order-scoped: on a matched-exchange order with
-     * MULTIPLE delivered items, an out-of-window scan of the item the matcher did NOT
-     * select (variantB, unrelated to the exchange) is accepted under the same exchange's
-     * cover as the actual matched item would be — no piece/variant filtering exists
-     * anywhere in the chain (matched_order_id has no piece-level counterpart in V95).
+     * Fixes the Step 3C Test-2 gap (formerly documented here as CURRENT BEHAVIOR — now
+     * corrected). hasActiveReturnLeg() stays order-scoped (unchanged — any delivered
+     * piece on a matched-exchange order still clears the scan-acceptance bypass), but
+     * resolveReturnLegIfComplete()'s exchange branch now re-derives, via
+     * ExchangeMatchService.resolveIfDispositionedPieceMatches(), whether the piece it is
+     * ACTUALLY resolving is the one the matcher would currently call "the" match — same
+     * variant-title-over-product-title precedence attemptMatch() uses.
      *
-     * Two things proven here:
-     *   1. The wrong-variant piece itself restocks correctly (real barcode, real ledger
-     *      transition, real Shopify sync trigger) — no inventory corruption.
-     *   2. Disposing ONLY the wrong-variant piece (never touching the actual matched
-     *      item) is enough to flip the exchange to return_received — a misleading
-     *      resolution: the exchange now reads "resolved" while the item it was actually
-     *      about was never returned.
+     * Sequence: dispose the wrong-variant piece first (order-scoped cover still accepts
+     * the scan, unchanged) → it restocks normally, but the exchange must NOT flip to
+     * return_received. Only when the REAL matched piece is later scanned and resolved
+     * does the exchange flip.
      */
     @Test
-    void w_multiItemMatchedOrder_wrongVariantPieceAlsoAccepted_prematurelyResolvesExchange() {
+    void w_multiItemMatchedOrder_wrongVariantDisposal_doesNotResolveExchange_realMatchDoes() {
         UUID orderId = createOrder("delivered");
         createShipment(orderId, "AWB-EXC-W-FWD", "delivered");
-        createExchange("EXC-W-TRACK", "matched", orderId);
+        // Exchange's inbound description matches the class-level variant's title ("Blue M")
+        // — see setupFixture() — not the unrelated second variant created below.
+        UUID exchangeId = createExchangeMatched("EXC-W-TRACK", orderId, "01000000002", "Blue M");
 
         // A second variant on the SAME order — unrelated to the exchange.
         UUID productB = UUID.randomUUID();
@@ -695,38 +695,41 @@ class ReturnSessionTest {
         jdbc.update("INSERT INTO variants (id, tenant_id, product_id, external_id, title, sku) " +
                     "VALUES (?, ?, ?, 'V-RST-W', 'Unrelated Item', 'OTHER-SKU')", variantB, tenantId, productB);
 
-        String wrongPiece = UlidGenerator.generate();
-        jdbc.update(
-            "INSERT INTO pieces " +
-            "(id, tenant_id, variant_id, barcode, short_code, status, current_order_id, last_event_at) " +
-            "VALUES (?, ?, ?, ?, 'P' || LPAD((abs(hashtext(?)) % 999999 + 1)::text, 6, '0'), " +
-            "        'delivered'::piece_status, ?, now() - interval '45 days')",
-            wrongPiece, tenantId, variantB, "PC-" + wrongPiece, wrongPiece, orderId);
-        UUID itemIdB = UUID.randomUUID();
-        jdbc.update("INSERT INTO order_items (id, tenant_id, order_id, variant_id, quantity) " +
-                    "VALUES (?, ?, ?, ?, 1)", itemIdB, tenantId, orderId, variantB);
-        jdbc.update("INSERT INTO allocations (id, tenant_id, order_item_id, piece_id, status) " +
-                    "VALUES (gen_random_uuid(), ?, ?, ?, 'packed')", tenantId, itemIdB, wrongPiece);
+        // realPiece stays WITHIN the return window (unlike wrongPiece) — it must remain a
+        // visible 'delivered' candidate to findCandidates() while wrongPiece is being
+        // resolved, or narrowing has nothing to disambiguate against and trivially
+        // "matches" whatever the sole remaining candidate is. Its own scan/resolve below
+        // doesn't need the exchange bypass either way — the normal in-window path accepts it.
+        String wrongPiece = createPieceForVariant(variantB, orderId, "delivered", 45);
+        String realPiece  = createPiece("delivered", orderId);
+        createAllocForVariant(orderId, variantB, wrongPiece);
+        createAlloc(orderId, realPiece);
 
         UUID sessionId = openSession();
-        Map<String, Object> scan = sessionSvc.scan(sessionId, "PC-" + wrongPiece, locationId, actorId);
 
-        assertThat(scan.get("unexpected"))
-            .as("CURRENT BEHAVIOR: order-scoped bypass accepts ANY delivered piece on the " +
-                "matched order, not only the matched variant")
+        // Dispose the WRONG variant first.
+        Map<String, Object> scanWrong = sessionSvc.scan(sessionId, "PC-" + wrongPiece, locationId, actorId);
+        assertThat(scanWrong.get("unexpected"))
+            .as("order-scoped bypass still accepts any delivered piece — unchanged")
             .isEqualTo(false);
-
         sessionSvc.disposition(sessionId, wrongPiece, "restock", null, locationId, actorId);
-
         assertThat(pieceStatus(wrongPiece))
             .as("the wrong-variant piece itself still restocks correctly — no inventory corruption")
             .isEqualTo("available");
 
-        String exchangeStatus = jdbc.queryForObject(
-            "SELECT status FROM exchanges WHERE tracking_number = ?", String.class, "EXC-W-TRACK");
-        assertThat(exchangeStatus)
-            .as("CURRENT BEHAVIOR: resolving only the wrong-variant piece is enough to flip the " +
-                "exchange to return_received — the actual matched item was never scanned")
+        assertThat(exchangeStatusById(exchangeId))
+            .as("GUARD: resolving the wrong variant must NOT flip the exchange — it isn't the matched item")
+            .isEqualTo("matched");
+
+        // Now the REAL matched item.
+        Map<String, Object> scanReal = sessionSvc.scan(sessionId, "PC-" + realPiece, locationId, actorId);
+        assertThat(scanReal.get("unexpected"))
+            .as("cover is still open — exchange hasn't resolved yet")
+            .isEqualTo(false);
+        sessionSvc.disposition(sessionId, realPiece, "restock", null, locationId, actorId);
+
+        assertThat(exchangeStatusById(exchangeId))
+            .as("resolving the ACTUAL matched piece must flip the exchange")
             .isEqualTo("return_received");
     }
 
@@ -778,21 +781,53 @@ class ReturnSessionTest {
             UUID.class, tenantId, trackingNumber);
     }
 
+    /**
+     * Matched exchange with a REAL raw payload (receiver.phone + returnSpecs.description)
+     * — needed so ExchangeMatchService.resolveIfDispositionedPieceMatches() can actually
+     * re-derive a candidate pool and narrow by description, instead of falling back to
+     * the trivial single-candidate case createExchange()'s raw='{}' always hits.
+     */
+    private UUID createExchangeMatched(String trackingNumber, UUID matchedOrderId,
+                                        String phone, String inboundDescription) {
+        String raw = "{\"receiver\":{\"phone\":\"" + phone + "\"}," +
+            "\"returnSpecs\":{\"packageDetails\":{\"description\":\"" + inboundDescription + "\"}}}";
+        return jdbc.queryForObject(
+            "INSERT INTO exchanges " +
+            "(tenant_id, tracking_number, status, matched_order_id, match_method, matched_at, " +
+            "    inbound_description, raw) " +
+            "VALUES (?, ?, 'matched', ?, 'phone', now(), ?, ?::jsonb) RETURNING id",
+            UUID.class, tenantId, trackingNumber, matchedOrderId, inboundDescription, raw);
+    }
+
+    private String exchangeStatusById(UUID exchangeId) {
+        return jdbc.queryForObject("SELECT status FROM exchanges WHERE id = ?", String.class, exchangeId);
+    }
+
     private String createPiece(String status, UUID orderId) {
+        return createPieceForVariant(variantId, orderId, status, 0);
+    }
+
+    /** Like createPiece(), but for an explicit variant and with last_event_at backdated. */
+    private String createPieceForVariant(UUID variant, UUID orderId, String status, int daysAgo) {
         String id = UlidGenerator.generate();
         jdbc.update(
             "INSERT INTO pieces " +
             "(id, tenant_id, variant_id, barcode, short_code, status, current_order_id, last_event_at) " +
-            "VALUES (?, ?, ?, ?, 'P' || LPAD((abs(hashtext(?)) % 999999 + 1)::text, 6, '0'), ?::piece_status, ?, now())",
-            id, tenantId, variantId, "PC-" + id, id, status, orderId);
+            "VALUES (?, ?, ?, ?, 'P' || LPAD((abs(hashtext(?)) % 999999 + 1)::text, 6, '0'), " +
+            "        ?::piece_status, ?, now() - (interval '1 day' * ?))",
+            id, tenantId, variant, "PC-" + id, id, status, orderId, daysAgo);
         return id;
     }
 
     private void createAlloc(UUID orderId, String pieceId) {
+        createAllocForVariant(orderId, variantId, pieceId);
+    }
+
+    private void createAllocForVariant(UUID orderId, UUID variant, String pieceId) {
         UUID itemId = UUID.randomUUID();
         jdbc.update(
             "INSERT INTO order_items (id, tenant_id, order_id, variant_id, quantity) " +
-            "VALUES (?, ?, ?, ?, 1)", itemId, tenantId, orderId, variantId);
+            "VALUES (?, ?, ?, ?, 1)", itemId, tenantId, orderId, variant);
         jdbc.update(
             "INSERT INTO allocations (id, tenant_id, order_item_id, piece_id, status) " +
             "VALUES (gen_random_uuid(), ?, ?, ?, 'packed')",

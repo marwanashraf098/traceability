@@ -95,7 +95,7 @@ class ExceptionRlsTest {
         // ShipmentLinkService here only needs hasActiveReturnLeg() (jdbc-only) — the other
         // collaborators are never touched by listExceptions(), so null is safe.
         ShipmentLinkService appUserShipmentLinkSvc = new ShipmentLinkService(
-                appUserJdbc, null, null, null, null, null, null, null);
+                appUserJdbc, null, null, null, null, null, null, null, null);
         appUserExcSvc = new ExceptionService(appUserJdbc, Clock.systemUTC(), appUserShipmentLinkSvc);
     }
 

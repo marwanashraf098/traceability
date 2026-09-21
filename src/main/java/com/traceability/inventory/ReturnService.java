@@ -99,7 +99,7 @@ public class ReturnService {
         // Close out the order's return leg if this was its last outstanding piece — see
         // ShipmentLinkService.resolveReturnLegIfComplete() javadoc for why this must run
         // after every disposition, not just this one call site's local concern.
-        shipmentLinkService.resolveReturnLegIfComplete(orderId, tenantId);
+        shipmentLinkService.resolveReturnLegIfComplete(orderId, tenantId, pieceId);
     }
 
     // ── Mark damaged (FR-12.3) ────────────────────────────────────────────────
@@ -135,7 +135,7 @@ public class ReturnService {
             pieceId, tenantId);
 
         // See restock()'s identical call — same reasoning.
-        shipmentLinkService.resolveReturnLegIfComplete(piece.orderId(), tenantId);
+        shipmentLinkService.resolveReturnLegIfComplete(piece.orderId(), tenantId, pieceId);
     }
 
     // ── Never-received report (FR-12.4) ──────────────────────────────────────

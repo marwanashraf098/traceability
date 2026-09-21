@@ -390,8 +390,13 @@ public class BostaWebhookJob {
      * flow and the exchange flow use different {@code error} note conventions, so step 11
      * intentionally stays outside this shared method).
      */
-    private void applyMappedState(long webhookEventId, UUID tenantId, BostaDelivery delivery,
+    private void applyMappedState(Long webhookEventId, UUID tenantId, BostaDelivery delivery,
                                    BostaStateMapper.MappedState mapped, ShipmentRow resolvedShipment) {
+        // webhookEventId is null for a manually-triggered application (the admin
+        // re-interpret action — see reinterpretExchangeForwardLeg()): shipment_status_
+        // history.webhook_event_id is a nullable FK (V40) precisely for this — a
+        // non-webhook-triggered history row, not a fabricated one. Every real webhook
+        // call site still passes its actual id (auto-boxed long → Long, unchanged).
         // 9. Persist updated courier state on the shipment row.
         //    For state 46/60 (returned), set returned_at to start the
         //    never-received detection clock (FR-12.4).
@@ -597,6 +602,76 @@ public class BostaWebhookJob {
         if (resolvedShipment.orderId() != null) {
             notTracedTagger.maybeTagNotTraced(resolvedShipment.orderId(), tenantId);
         }
+    }
+
+    // ---- admin: re-interpret a stuck exchange forward leg (Step 3C-fix Part 2) ----
+
+    /**
+     * OWNER-gated (BostaController), tenant-scoped: for a type-30 exchange forward
+     * shipment stuck at internal_state='created' (Step 2 diagnosis §2a — the interpreter
+     * was reading the wrong field before this deploy, so the shipment never advanced),
+     * re-runs {@link ExchangeStateInterpreter#interpretForwardLeg} against the
+     * ALREADY-STORED {@code raw} and applies the result through the SAME
+     * {@link #applyMappedState} writer the live webhook pipeline uses — real
+     * provider_state (read from the stored raw's own state.code, not invented), real
+     * shipment_status_history row via the normal path, real piece transitions if any
+     * allocation exists. No fresh Bosta API call (the point is to re-derive from data
+     * already ingested), no fabricated webhook_events row — webhookEventId=null is a
+     * legitimate nullable FK (see {@link #applyMappedState}'s note), not fabricated data.
+     *
+     * Guarded to act only if the shipment is STILL {@code internal_state='created'} at
+     * the moment of the SELECT — idempotent: a second call after a successful first
+     * finds no matching row (internal_state has moved on) and returns false, exactly
+     * like the live pipeline's own custody/monotonic guards fail safe rather than redo.
+     *
+     * @return true if a transition was applied; false if no such stuck shipment exists
+     *         for this tracking number/tenant, its raw is unparseable, or the interpreter
+     *         still doesn't recognize its current timeline (fail-safe — never guessed,
+     *         same as the live pipeline).
+     */
+    public boolean reinterpretExchangeForwardLeg(String trackingNumber) {
+        UUID tenantId = TenantContext.require();
+
+        record StuckShipment(UUID id, UUID orderId, String rawJson) {}
+        StuckShipment shipment = tx.execute(s -> jdbc.query(
+            "SELECT id, order_id, raw::text AS raw FROM shipments " +
+            "WHERE tracking_number = ? AND tenant_id = ? AND shipment_leg = 'forward' " +
+            "  AND internal_state = 'created'",
+            rs -> rs.next() ? new StuckShipment(
+                rs.getObject("id", UUID.class), rs.getObject("order_id", UUID.class),
+                rs.getString("raw")) : null,
+            trackingNumber, tenantId));
+        if (shipment == null) {
+            log.info("reinterpretExchangeForwardLeg: {} not found, not tenant-owned, not " +
+                "shipment_leg='forward', or not internal_state='created' — nothing to do",
+                trackingNumber);
+            return false;
+        }
+
+        JsonNode raw;
+        try {
+            raw = mapper.readTree(shipment.rawJson());
+        } catch (Exception e) {
+            log.warn("reinterpretExchangeForwardLeg: malformed stored raw for {} — aborting",
+                trackingNumber, e);
+            return false;
+        }
+
+        java.util.Optional<BostaStateMapper.MappedState> interpreted =
+            exchangeStateInterpreter.interpretForwardLeg(raw);
+        if (interpreted.isEmpty()) {
+            log.info("reinterpretExchangeForwardLeg: {} still unrecognized by the interpreter " +
+                "(raw.timeline has no completed milestone this map knows) — no change applied",
+                trackingNumber);
+            return false;
+        }
+
+        BostaDelivery delivery = BostaDelivery.fromRaw(trackingNumber, raw);
+        ShipmentRow resolvedShipment = new ShipmentRow(shipment.id(), shipment.orderId());
+        applyMappedState(null, tenantId, delivery, interpreted.get(), resolvedShipment);
+        log.info("reinterpretExchangeForwardLeg: {} → {} (provider_state={})",
+            trackingNumber, interpreted.get().shipmentInternalState(), delivery.stateCode());
+        return true;
     }
 
     // ---- helpers -----------------------------------------------------------
