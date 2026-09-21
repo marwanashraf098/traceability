@@ -291,9 +291,9 @@ section{position:relative;padding:72px var(--pad)}
 .ts .avg span{display:block;font-size:11px;color:var(--mute2);margin-top:6px;text-align:right}
 .ts .stars{color:#CEDEFF;letter-spacing:1px;font-size:12px}
 .ts .rail{height:1px;background:var(--linei);margin:26px 0 18px}
-.ts .strip{overflow:hidden;-webkit-mask:linear-gradient(90deg,transparent,#000 6%,#000 94%,transparent);mask:linear-gradient(90deg,transparent,#000 6%,#000 94%,transparent)}
-.ts .lane{display:flex;gap:12px;width:max-content;animation:roll 58s linear infinite;padding:0 var(--pad)}
-.ts .strip:active .lane{animation-play-state:paused}
+.ts .strip{overflow-x:auto;touch-action:pan-x pan-y;-webkit-overflow-scrolling:touch;scrollbar-width:none;-webkit-mask:linear-gradient(90deg,transparent,#000 6%,#000 94%,transparent);mask:linear-gradient(90deg,transparent,#000 6%,#000 94%,transparent)}
+.ts .strip::-webkit-scrollbar{display:none}
+.ts .lane{display:flex;gap:12px;width:max-content;padding:0 var(--pad)}
 .tq{flex:none;width:300px;display:grid;grid-template-columns:44px 1fr;gap:12px;align-items:start;padding:16px;border-radius:16px;background:var(--ink2);border:1px solid rgba(255,255,255,.08)}
 .tq .lg{width:44px;height:44px;border-radius:12px;overflow:hidden}
 .tq .lg img{width:100%;height:100%;object-fit:cover}
@@ -570,5 +570,6 @@ section{position:relative;padding:72px var(--pad)}
 </footer>
 
 <script src="assets/landing/mobile-main.js"></script>
+<script src="assets/landing/testimonials-mobile.js"></script>
 
 </body></html>
