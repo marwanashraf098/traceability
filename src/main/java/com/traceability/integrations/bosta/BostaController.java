@@ -238,12 +238,13 @@ public class BostaController {
     // ---- POST /api/v1/bosta/reinterpret-exchange (OWNER — one-off admin) ----
 
     /**
-     * Step 3C-fix Part 2: re-runs the exchange forward-leg interpreter against a
-     * shipment's ALREADY-STORED raw and applies the result through the same
-     * applyMappedState() writer the live webhook pipeline uses — no fresh Bosta API
-     * call, no fabricated webhook_events row. See
+     * Step 3C-fix Part 2 (Step 4-close bug #1 fix): re-runs the exchange forward-leg
+     * interpreter against a shipment's ALREADY-STORED raw and applies the result through
+     * the same applyMappedState() writer the live webhook pipeline uses — no fresh Bosta
+     * API call, no fabricated webhook_events row. Also always attempts an exchange match
+     * afterward (attemptMatch), regardless of whether the state flip itself applied — see
      * {@link BostaWebhookJob#reinterpretExchangeForwardLeg} for the exact guard
-     * (internal_state='created' only) and idempotency reasoning.
+     * (state flip only applies from internal_state='created') and idempotency reasoning.
      */
     @PostMapping("/bosta/reinterpret-exchange")
     @PreAuthorize("hasRole('OWNER')")

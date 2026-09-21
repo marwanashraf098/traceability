@@ -608,9 +608,7 @@ public class BostaWebhookJob {
 
     /**
      * OWNER-gated (BostaController), tenant-scoped: for a type-30 exchange forward
-     * shipment stuck at internal_state='created' (Step 2 diagnosis §2a — the interpreter
-     * was reading the wrong field before this deploy, so the shipment never advanced),
-     * re-runs {@link ExchangeStateInterpreter#interpretForwardLeg} against the
+     * shipment, re-runs {@link ExchangeStateInterpreter#interpretForwardLeg} against the
      * ALREADY-STORED {@code raw} and applies the result through the SAME
      * {@link #applyMappedState} writer the live webhook pipeline uses — real
      * provider_state (read from the stored raw's own state.code, not invented), real
@@ -619,59 +617,83 @@ public class BostaWebhookJob {
      * already ingested), no fabricated webhook_events row — webhookEventId=null is a
      * legitimate nullable FK (see {@link #applyMappedState}'s note), not fabricated data.
      *
-     * Guarded to act only if the shipment is STILL {@code internal_state='created'} at
-     * the moment of the SELECT — idempotent: a second call after a successful first
-     * finds no matching row (internal_state has moved on) and returns false, exactly
-     * like the live pipeline's own custody/monotonic guards fail safe rather than redo.
+     * The state-flip attempt is still guarded to {@code internal_state='created'} —
+     * unchanged, idempotent for the reasons documented below. Step 4-close bug #1 fix:
+     * {@link #attemptMatch} is now called UNCONDITIONALLY before returning, regardless of
+     * whether a flip happened — mirroring the live webhook path's own unconditional call
+     * (see {@code process()}'s post-pack per-leg branch, right after its interpret/apply
+     * if-else). Before this fix, an admin-unstuck exchange whose forward leg had already
+     * progressed past 'created' (the normal case seconds after a successful reinterpret)
+     * sat at {@code exchanges.status='mapped'} forever — this method returned before ever
+     * reaching a match attempt. attemptMatch() has its own OPEN_FOR_MATCHING gate and
+     * returnSpecs-not-ready early-bail, so calling it here — on a fresh flip, an
+     * already-flipped row, or a row this call found nothing to flip for — is safe and
+     * idempotent, exactly as it is on every live webhook.
      *
-     * @return true if a transition was applied; false if no such stuck shipment exists
-     *         for this tracking number/tenant, its raw is unparseable, or the interpreter
-     *         still doesn't recognize its current timeline (fail-safe — never guessed,
-     *         same as the live pipeline).
+     * The shipment lookup itself is intentionally NOT scoped to internal_state='created'
+     * (widened from the pre-Step-4-close version): a caller re-invoking this on an
+     * already-progressed row (e.g. re-running it minutes after a first successful call)
+     * must still reach the attemptMatch() call below, not bail out at "not found" before
+     * ever attempting a match.
+     *
+     * @return true if a state transition was applied; false if the shipment doesn't exist
+     *         for this tracking/tenant, isn't shipment_leg='forward', its raw is
+     *         unparseable, its internal_state is already past 'created' (nothing to flip),
+     *         or the interpreter still doesn't recognize its current timeline (fail-safe —
+     *         never guessed, same as the live pipeline). A match attempt is made either way.
      */
     public boolean reinterpretExchangeForwardLeg(String trackingNumber) {
         UUID tenantId = TenantContext.require();
 
-        record StuckShipment(UUID id, UUID orderId, String rawJson) {}
+        record StuckShipment(UUID id, UUID orderId, String internalState, String rawJson) {}
         StuckShipment shipment = tx.execute(s -> jdbc.query(
-            "SELECT id, order_id, raw::text AS raw FROM shipments " +
-            "WHERE tracking_number = ? AND tenant_id = ? AND shipment_leg = 'forward' " +
-            "  AND internal_state = 'created'",
+            "SELECT id, order_id, internal_state::text AS internal_state, raw::text AS raw " +
+            "FROM shipments WHERE tracking_number = ? AND tenant_id = ? AND shipment_leg = 'forward'",
             rs -> rs.next() ? new StuckShipment(
                 rs.getObject("id", UUID.class), rs.getObject("order_id", UUID.class),
-                rs.getString("raw")) : null,
+                rs.getString("internal_state"), rs.getString("raw")) : null,
             trackingNumber, tenantId));
         if (shipment == null) {
-            log.info("reinterpretExchangeForwardLeg: {} not found, not tenant-owned, not " +
-                "shipment_leg='forward', or not internal_state='created' — nothing to do",
+            log.info("reinterpretExchangeForwardLeg: {} not found, not tenant-owned, or not " +
+                "shipment_leg='forward' — nothing to do, no match attempt possible",
                 trackingNumber);
             return false;
         }
 
-        JsonNode raw;
-        try {
-            raw = mapper.readTree(shipment.rawJson());
-        } catch (Exception e) {
-            log.warn("reinterpretExchangeForwardLeg: malformed stored raw for {} — aborting",
-                trackingNumber, e);
-            return false;
+        boolean applied = false;
+        if ("created".equals(shipment.internalState())) {
+            JsonNode raw = null;
+            try {
+                raw = mapper.readTree(shipment.rawJson());
+            } catch (Exception e) {
+                log.warn("reinterpretExchangeForwardLeg: malformed stored raw for {} — skipping the flip",
+                    trackingNumber, e);
+            }
+            if (raw != null) {
+                java.util.Optional<BostaStateMapper.MappedState> interpreted =
+                    exchangeStateInterpreter.interpretForwardLeg(raw);
+                if (interpreted.isPresent()) {
+                    BostaDelivery delivery = BostaDelivery.fromRaw(trackingNumber, raw);
+                    ShipmentRow resolvedShipment = new ShipmentRow(shipment.id(), shipment.orderId());
+                    applyMappedState(null, tenantId, delivery, interpreted.get(), resolvedShipment);
+                    log.info("reinterpretExchangeForwardLeg: {} → {} (provider_state={})",
+                        trackingNumber, interpreted.get().shipmentInternalState(), delivery.stateCode());
+                    applied = true;
+                } else {
+                    log.info("reinterpretExchangeForwardLeg: {} still unrecognized by the interpreter " +
+                        "(raw.timeline has no completed milestone this map knows) — no flip applied",
+                        trackingNumber);
+                }
+            }
+        } else {
+            log.info("reinterpretExchangeForwardLeg: {} already at internal_state={} — no flip needed; " +
+                "still attempting a match (bug #1 fix)", trackingNumber, shipment.internalState());
         }
 
-        java.util.Optional<BostaStateMapper.MappedState> interpreted =
-            exchangeStateInterpreter.interpretForwardLeg(raw);
-        if (interpreted.isEmpty()) {
-            log.info("reinterpretExchangeForwardLeg: {} still unrecognized by the interpreter " +
-                "(raw.timeline has no completed milestone this map knows) — no change applied",
-                trackingNumber);
-            return false;
-        }
+        // Bug #1 fix — see javadoc above: unconditional, not gated on `applied`.
+        exchangeMatchService.attemptMatch(trackingNumber);
 
-        BostaDelivery delivery = BostaDelivery.fromRaw(trackingNumber, raw);
-        ShipmentRow resolvedShipment = new ShipmentRow(shipment.id(), shipment.orderId());
-        applyMappedState(null, tenantId, delivery, interpreted.get(), resolvedShipment);
-        log.info("reinterpretExchangeForwardLeg: {} → {} (provider_state={})",
-            trackingNumber, interpreted.get().shipmentInternalState(), delivery.stateCode());
-        return true;
+        return applied;
     }
 
     // ---- helpers -----------------------------------------------------------

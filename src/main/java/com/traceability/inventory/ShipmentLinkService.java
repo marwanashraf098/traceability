@@ -478,7 +478,18 @@ public class ShipmentLinkService {
         UUID tenantId = TenantContext.require();
         return jdbc.query(
             "SELECT sh.id, sh.tracking_number, sh.internal_state, sh.order_id, " +
-            "       o.number AS order_number, o.customer_name, o.customer_phone, sh.created_at " +
+            "       o.number AS order_number, o.customer_name, o.customer_phone, sh.created_at, " +
+            // Step 4-close Part 2 (gap #4) — disposition rollup, ADDITIVE to leg_status
+            // below, never replacing it. Correlated form of the SAME predicate
+            // resolveReturnLegIfComplete() uses ("pieces remaining at
+            // return_pending_inspection for this order") — kept textually adjacent to
+            // that method in this same class so the two can't silently drift; a plain
+            // '?'-parameterized reuse isn't possible here since this one is correlated
+            // per row (sh.order_id/sh.tenant_id) instead of invoked per-call.
+            "       (SELECT COUNT(*) FROM pieces p WHERE p.current_order_id = sh.order_id " +
+            "          AND p.tenant_id = sh.tenant_id " +
+            "          AND p.status = 'return_pending_inspection'::piece_status" +
+            "       ) AS pending_inspection_count " +
             "FROM shipments sh " +
             "JOIN orders o ON o.id = sh.order_id AND o.tenant_id = sh.tenant_id " +
             "WHERE sh.tenant_id = ? AND sh.shipment_leg = 'return' " +
@@ -493,6 +504,16 @@ public class ShipmentLinkService {
                 row.put("order_number", rs.getString("order_number"));
                 row.put("customer_name", rs.getString("customer_name"));
                 row.put("customer_phone", rs.getString("customer_phone"));
+                // Additive facet — deriveLegStatus's lifecycle badge is untouched/still the
+                // single display-status path for the raw courier state. inspectionState is
+                // a SEPARATE, piece-disposition-level facet layered on top of it, only
+                // meaningful once the leg has reached 'returned' (arrived):
+                //   pre-'returned'        → "in_transit" (courier hasn't delivered it back yet)
+                //   'returned', pieces still at return_pending_inspection → "needs_inspection"
+                //   'returned', none left at return_pending_inspection    → "resolved"
+                String inspectionState = !"returned".equals(internalState) ? "in_transit"
+                    : rs.getInt("pending_inspection_count") > 0 ? "needs_inspection" : "resolved";
+                row.put("inspection_state", inspectionState);
                 row.put("leg_status", OrderStatusDeriver.deriveLegStatus(internalState));
                 return row;
             },

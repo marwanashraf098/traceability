@@ -59,6 +59,20 @@ const REFUND: RefundLeg = {
   customer_name: 'Nour Adel',
   customer_phone: '01098765432',
   leg_status: { primaryKey: 'status.in_transit', tone: 'INFO' },
+  inspection_state: 'in_transit',
+}
+
+// Step 4-close Part 2 — a returned-and-not-yet-inspected refund leg.
+const NEEDS_INSPECTION_REFUND: RefundLeg = {
+  id: 'ship-refund-2',
+  tracking_number: 'RFD-TN-002',
+  internal_state: 'returned',
+  order_id: 'order-refund-2',
+  order_number: '#RFD-1002',
+  customer_name: 'Sara Kamal',
+  customer_phone: '01077778888',
+  leg_status: { primaryKey: 'status.returned', tone: 'WARN' },
+  inspection_state: 'needs_inspection',
 }
 
 function fakeResponse(data: unknown, status = 200) {
@@ -75,6 +89,7 @@ let attachCalls: Array<{ id: string; body: unknown }> = []
 let bareReturnCalls: string[] = []
 let dismissCalls: string[] = []
 let exchangesOverride: ExchangeSummary[] | null = null
+let refundsOverride: RefundLeg[] | null = null
 
 function backendFetch(url: string, opts: RequestInit = {}) {
   const method = (opts.method ?? 'GET').toUpperCase()
@@ -109,7 +124,7 @@ function backendFetch(url: string, opts: RequestInit = {}) {
     return fakeResponse(exchangesOverride ?? [MATCHED_EXCHANGE, NEEDS_CONFIRMATION_EXCHANGE, UNMATCHED_EXCHANGE])
   }
   if (url.includes('/api/v1/refunds') && method === 'GET') {
-    return fakeResponse([REFUND])
+    return fakeResponse(refundsOverride ?? [REFUND])
   }
   return fakeResponse({})
 }
@@ -126,6 +141,7 @@ beforeEach(() => {
   bareReturnCalls = []
   dismissCalls = []
   exchangesOverride = null
+  refundsOverride = null
   mockFetch = vi.fn(backendFetch)
   stubFetchWithShellDefaults(mockFetch)
 })
@@ -146,7 +162,8 @@ describe('Exchanges & Refunds — list', () => {
     await screen.findByText('Nour Adel')
 
     const refundRow = screen.getByText('Nour Adel').closest('tr')!
-    // LegStatusBadge renders the courier-derived label for the refund.
+    // Step 4-close Part 2: the STATUS cell now renders inspectionState, not the raw
+    // courier leg_status badge.
     expect(within(refundRow).getByText(/in transit/i)).toBeInTheDocument()
 
     const exchangeRow = screen.getByText('Maya Mostafa').closest('tr')!
@@ -184,6 +201,41 @@ describe('Exchanges & Refunds — list', () => {
     // matched_order_id = 'order-original-1' → short id "ORDERORI" (first 8 chars,
     // dashes stripped, uppercased) — see ExchangesRefunds.tsx's shortId().
     expect(within(exchangeRow).getByText('ORDERORI')).toBeInTheDocument()
+  })
+
+  // Step 4-close Part 2 — a returned-but-undispositioned refund reads "Needs inspection"
+  // and shows up under Needs action.
+  test('a returned refund with an undispositioned piece shows "Needs inspection" and appears under Needs action', async () => {
+    const user = userEvent.setup()
+    refundsOverride = [REFUND, NEEDS_INSPECTION_REFUND]
+    renderScreen()
+    await screen.findByText('Sara Kamal')
+
+    const needsInspectionRow = screen.getByText('Sara Kamal').closest('tr')!
+    expect(within(needsInspectionRow).getByText(/needs inspection/i)).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: /^Needs action/i }))
+    expect(screen.getByText('Sara Kamal')).toBeInTheDocument()
+    expect(screen.queryByText('Nour Adel')).not.toBeInTheDocument()
+  })
+
+  // Once the backend reports inspection_state='resolved' (piece dispositioned), the SAME
+  // row reads "Resolved" and no longer appears under Needs action — proven with a fresh
+  // render at the resolved state (the backend integration test, RefundListTest.java, is
+  // what proves the real before/after transition against a live database; this proves the
+  // frontend renders each reported state correctly).
+  test('once resolved, the row reads "Resolved" and does not appear under Needs action', async () => {
+    const user = userEvent.setup()
+    refundsOverride = [REFUND, { ...NEEDS_INSPECTION_REFUND, inspection_state: 'resolved' }]
+    renderScreen()
+    await screen.findByText('Sara Kamal')
+
+    const resolvedRow = screen.getByText('Sara Kamal').closest('tr')!
+    expect(within(resolvedRow).getByText(/resolved/i)).toBeInTheDocument()
+    expect(within(resolvedRow).queryByText(/needs inspection/i)).not.toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: /^Needs action/i }))
+    expect(screen.queryByText('Sara Kamal')).not.toBeInTheDocument()
   })
 })
 
@@ -251,7 +303,10 @@ describe('Exchanges & Refunds — drawer', () => {
     await user.click(screen.getByText('Nour Adel'))
     const body = await screen.findByTestId('refund-drawer-body')
     expect(within(body).getByText('#RFD-1001')).toBeInTheDocument()
-    expect(within(body).getByText(/in transit/i)).toBeInTheDocument()
+    // Both the lifecycle (legStatus) badge and the Step 4-close Part 2 inspection facet
+    // read "In transit" for this fixture — two separate, additive sections, not a
+    // duplicate render of the same thing.
+    expect(within(body).getAllByText(/in transit/i)).toHaveLength(2)
     expect(within(body).getByRole('link', { name: /open in returns/i })).toHaveAttribute('href', '/returns')
   })
 })

@@ -33,6 +33,7 @@ function makeRefund(overrides: Partial<RefundLeg> = {}): RefundLeg {
     customer_name: 'Nour Adel',
     customer_phone: '01098765432',
     leg_status: { primaryKey: 'status.in_transit', tone: 'INFO' },
+    inspection_state: 'in_transit',
     ...overrides,
   }
 }
@@ -96,26 +97,31 @@ describe('matchesFilter — honesty constraint 2 (no fake exchange courier progr
     expect(matchesFilter(exchangeRow, 'inTransit')).toBe(false)
   })
 
-  test('inTransit matches a refund row whose leg_status is with_courier (status.in_transit)', () => {
-    const refundRow = normalizeRefund(makeRefund({ leg_status: { primaryKey: 'status.in_transit', tone: 'INFO' } }))
+  // Step 4-close Part 2: inTransit/needsAction/received now read inspectionState
+  // (piece-disposition-level), not legStatus.primaryKey — 'status.delivered' never
+  // actually applies to a CRP return leg (a forward-leg concept); the corrected
+  // "received" signal is internal_state='returned', surfaced here as inspectionState
+  // being anything other than 'in_transit'.
+  test('inTransit matches a refund row whose inspectionState is in_transit (pre-arrival)', () => {
+    const refundRow = normalizeRefund(makeRefund({ inspection_state: 'in_transit' }))
     expect(matchesFilter(refundRow, 'inTransit')).toBe(true)
   })
 
-  test('received matches exchange status return_received and refund leg_status delivered', () => {
+  test('received matches exchange status return_received and refund inspectionState needs_inspection/resolved (arrived)', () => {
     const exchangeRow = normalizeExchange(makeExchange({ status: 'return_received' }))
-    const refundRow   = normalizeRefund(makeRefund({ leg_status: { primaryKey: 'status.delivered', tone: 'SUCCESS' } }))
+    const needsInspectionRow = normalizeRefund(makeRefund({ inspection_state: 'needs_inspection' }))
+    const resolvedRow        = normalizeRefund(makeRefund({ inspection_state: 'resolved' }))
     expect(matchesFilter(exchangeRow, 'received')).toBe(true)
-    expect(matchesFilter(refundRow, 'received')).toBe(true)
+    expect(matchesFilter(needsInspectionRow, 'received')).toBe(true)
+    expect(matchesFilter(resolvedRow, 'received')).toBe(true)
   })
 
-  test('needsAction matches unmatched/needs_confirmation exchanges and needs_attention refunds', () => {
+  test('needsAction matches unmatched/needs_confirmation exchanges and needs_inspection refunds, not resolved ones', () => {
     expect(matchesFilter(normalizeExchange(makeExchange({ status: 'unmatched' })), 'needsAction')).toBe(true)
     expect(matchesFilter(normalizeExchange(makeExchange({ status: 'needs_confirmation' })), 'needsAction')).toBe(true)
     expect(matchesFilter(normalizeExchange(makeExchange({ status: 'matched' })), 'needsAction')).toBe(false)
-    expect(matchesFilter(
-      normalizeRefund(makeRefund({ leg_status: { primaryKey: 'status.needs_attention', tone: 'WARN' } })),
-      'needsAction',
-    )).toBe(true)
+    expect(matchesFilter(normalizeRefund(makeRefund({ inspection_state: 'needs_inspection' })), 'needsAction')).toBe(true)
+    expect(matchesFilter(normalizeRefund(makeRefund({ inspection_state: 'resolved' })), 'needsAction')).toBe(false)
   })
 
   test('refunds/exchanges tabs split by kind only', () => {

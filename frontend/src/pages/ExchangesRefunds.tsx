@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { getExchanges, getRefunds } from '../api'
-import { Badge, DataTable, DataTableColumn, LegStatusBadge, StatCard, Tabs } from '../components/ui'
+import { Badge, DataTable, DataTableColumn, StatCard, Tabs } from '../components/ui'
 import { MergedRow, FilterTab, normalizeExchange, normalizeRefund, matchesFilter } from './exchangesRefunds/normalize'
-import { exchangeStatusTone } from './exchangesRefunds/statusTone'
+import { exchangeStatusTone, inspectionStateTone } from './exchangesRefunds/statusTone'
 import ExchangeRefundDrawer from './exchangesRefunds/ExchangeRefundDrawer'
 
 /**
@@ -93,10 +93,22 @@ export default function ExchangesRefunds() {
           : <span className="text-muted">{t('exchangesRefunds.noMappedOrder')}</span>,
     },
     {
+      // Step 4-close Part 2: a refund row's STATUS renders from inspectionState (the
+      // piece-disposition facet — In transit / Needs inspection / Resolved), not the raw
+      // courier leg_status badge — deriveLegStatus stays the single display-status path
+      // for the courier state itself, this is an additive facet layered on top of it
+      // (still readable via row.legStatus if ever needed elsewhere).
       key: 'status', header: t('exchangesRefunds.columns.status'),
       render: row => row.kind === 'refund'
-        ? (row.legStatus
-            ? <span data-testid="refund-leg-badge"><LegStatusBadge legStatus={row.legStatus} /></span>
+        ? (row.inspectionState
+            ? (
+              <span data-testid="refund-inspection-badge">
+                <Badge
+                  tone={inspectionStateTone(row.inspectionState)}
+                  label={t(`exchangesRefunds.inspectionState.${row.inspectionState}`)}
+                />
+              </span>
+            )
             : <span className="text-muted">—</span>)
         : (
           <span data-testid="exchange-status-badge">

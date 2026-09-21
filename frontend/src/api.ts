@@ -1968,6 +1968,11 @@ export interface RefundLeg {
   /** OrderStatusDeriver.deriveLegStatus(internal_state) — the same primitive the order
    *  detail drawer's return-leg badge already uses. Render with <LegStatusBadge>. */
   leg_status: { primaryKey: string; tone: DerivedTone }
+  /** Step 4-close Part 2 — ADDITIVE piece-disposition facet, layered on internal_state,
+   *  never replacing leg_status. Only meaningful once internal_state='returned'
+   *  (pre-that, always 'in_transit'): 'needs_inspection' while any piece for this order
+   *  is still at return_pending_inspection, 'resolved' once none are. */
+  inspection_state: 'in_transit' | 'needs_inspection' | 'resolved'
 }
 
 export function getRefunds(page = 0, size = 100) {

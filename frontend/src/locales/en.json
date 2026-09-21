@@ -880,20 +880,20 @@
       "type": "Type",
       "customer": "Customer",
       "tracking": "Tracking",
-      "mappedOrder": "Mapped order",
+      "mappedOrder": "Original order",
       "status": "Status",
       "lastUpdate": "Last update"
     },
     "type": {
       "refund": "Refund"
     },
-    "noMappedOrder": "Not yet mapped",
+    "noMappedOrder": "Not yet matched",
     "errorTitle": "Couldn't load this list",
     "retry": "Retry",
     "emptyTitle": "No exchanges or refunds yet",
     "status": {
       "needs_mapping": "Needs mapping",
-      "mapped": "Mapped",
+      "mapped": "Replacement ready",
       "outbound_in_fulfillment": "Outbound in fulfillment",
       "out_for_exchange": "Out for exchange",
       "return_pending": "Return pending",
@@ -912,12 +912,18 @@
       "manual": "Manual",
       "bare": "Bare return"
     },
+    "inspectionState": {
+      "in_transit": "In transit",
+      "needs_inspection": "Needs inspection",
+      "resolved": "Resolved"
+    },
     "drawer": {
       "close": "Close",
       "error": "Couldn't load this exchange",
       "refund": {
         "originalOrder": "Original order",
         "lifecycle": "Lifecycle",
+        "inspection": "Inspection",
         "resolutionNote": "Restock/damage decisions for the returned item happen in Returns.",
         "goToReturns": "Open in Returns"
       },

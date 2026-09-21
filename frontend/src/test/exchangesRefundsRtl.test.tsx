@@ -63,11 +63,14 @@ const EXCHANGE: ExchangeSummary = {
   customer_name: 'مايا مصطفى', customer_phone: '01001234567',
 }
 
+// internal_state='returned' — the real CRP-arrival value (Step 4-close diagnosis: a
+// return leg never reaches 'delivered', that's a forward-leg-only concept).
 const REFUND: RefundLeg = {
-  id: 'ship-1', tracking_number: 'RFD-001', internal_state: 'delivered',
+  id: 'ship-1', tracking_number: 'RFD-001', internal_state: 'returned',
   order_id: 'order-1', order_number: '#1001',
   customer_name: 'نور عادل', customer_phone: '01098765432',
-  leg_status: { primaryKey: 'status.delivered', tone: 'SUCCESS' },
+  leg_status: { primaryKey: 'status.returned', tone: 'WARN' },
+  inspection_state: 'needs_inspection',
 }
 
 function appFetch(url: string) {
@@ -88,10 +91,10 @@ test('Exchanges & Refunds list renders Arabic labels and RTL dir without crashin
   // Tabs — Arabic labels from ar.json's exchangesRefunds.tabs.*
   expect(screen.getByRole('button', { name: /الكل/ })).toBeInTheDocument()
   expect(screen.getByRole('button', { name: /^استرجاع/ })).toBeInTheDocument()
-  // Refund leg status via the shared status.* catalog (delivered → "تم التوصيل" or
-  // whatever ar.json's status.delivered says) renders through Arabic, not English.
+  // Step 4-close Part 2: the STATUS cell renders the Arabic inspectionState vocabulary
+  // (exchangesRefunds.inspectionState.*), not the raw courier leg_status.
   const refundRow = screen.getByText('نور عادل').closest('tr')!
-  expect(within(refundRow).getByText(ar.status.delivered)).toBeInTheDocument()
+  expect(within(refundRow).getByText(ar.exchangesRefunds.inspectionState.needs_inspection)).toBeInTheDocument()
   // Exchange status pill renders the Arabic exchangesRefunds.status.* vocabulary.
   const exchangeRow = screen.getByText('مايا مصطفى').closest('tr')!
   expect(within(exchangeRow).getByText(ar.exchangesRefunds.status.needs_confirmation)).toBeInTheDocument()

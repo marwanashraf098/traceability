@@ -26,3 +26,14 @@ const EXCHANGE_STATUS_TONE: Record<string, BadgeTone> = {
 export function exchangeStatusTone(status: string): BadgeTone {
   return EXCHANGE_STATUS_TONE[status] ?? 'neutral'
 }
+
+/** Step 4-close Part 2 — tone for a refund row's inspectionState facet. */
+const INSPECTION_STATE_TONE: Record<string, BadgeTone> = {
+  in_transit: 'info',
+  needs_inspection: 'warning',
+  resolved: 'success',
+}
+
+export function inspectionStateTone(state: string): BadgeTone {
+  return INSPECTION_STATE_TONE[state] ?? 'neutral'
+}

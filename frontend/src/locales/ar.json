@@ -875,20 +875,20 @@
       "type": "النوع",
       "customer": "العميل",
       "tracking": "رقم الشحنة",
-      "mappedOrder": "الطلب المرتبط",
+      "mappedOrder": "الطلب الأصلي",
       "status": "الحالة",
       "lastUpdate": "آخر تحديث"
     },
     "type": {
       "refund": "استرجاع"
     },
-    "noMappedOrder": "لم يتم الربط بعد",
+    "noMappedOrder": "لم تتم المطابقة بعد",
     "errorTitle": "تعذر تحميل القائمة",
     "retry": "إعادة المحاولة",
     "emptyTitle": "لا توجد عمليات استبدال أو استرجاع بعد",
     "status": {
       "needs_mapping": "بحاجة إلى ربط",
-      "mapped": "مربوط",
+      "mapped": "البديل جاهز",
       "outbound_in_fulfillment": "الصادر قيد التجهيز",
       "out_for_exchange": "خارج للاستبدال",
       "return_pending": "الإرجاع معلق",
@@ -907,12 +907,18 @@
       "manual": "يدوي",
       "bare": "إرجاع دون طلب"
     },
+    "inspectionState": {
+      "in_transit": "في الطريق",
+      "needs_inspection": "بحاجة إلى فحص",
+      "resolved": "تم الحل"
+    },
     "drawer": {
       "close": "إغلاق",
       "error": "تعذر تحميل بيانات هذا الاستبدال",
       "refund": {
         "originalOrder": "الطلب الأصلي",
         "lifecycle": "الحالة",
+        "inspection": "الفحص",
         "resolutionNote": "قرارات إعادة التخزين أو التلف للقطعة المرتجعة تتم من شاشة المرتجعات.",
         "goToReturns": "فتح في المرتجعات"
       },

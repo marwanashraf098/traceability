@@ -35,6 +35,11 @@ export interface MergedRow {
   /** Refund only — OrderStatusDeriver.deriveLegStatus(internal_state), rendered via
    *  <LegStatusBadge>. An exchange row NEVER carries this — see HONESTY CONSTRAINT 2. */
   legStatus?: { primaryKey: string; tone: DerivedTone }
+  /** Refund only — Step 4-close Part 2's disposition rollup (backend: RefundLeg.
+   *  inspection_state). ADDITIVE to legStatus, never a replacement for it — the row's
+   *  STATUS column renders from this now (In transit / Needs inspection / Resolved),
+   *  legStatus stays available for anything that still wants the raw courier badge. */
+  inspectionState?: RefundLeg['inspection_state']
 }
 
 export function normalizeExchange(e: ExchangeSummary): MergedRow {
@@ -64,6 +69,7 @@ export function normalizeRefund(r: RefundLeg): MergedRow {
     orderNumber: r.order_number,
     matchedAt: null,
     legStatus: r.leg_status,
+    inspectionState: r.inspection_state,
   }
 }
 
@@ -73,6 +79,12 @@ export function normalizeRefund(r: RefundLeg): MergedRow {
 // exchange's inbound leg has no courier-progress signal (interpretReturnLeg is an
 // intentionally-unimplemented hook on the backend), so it must yield zero exchange
 // rows rather than a fabricated badge.
+//
+// Step 4-close Part 2 correction: the refund-side inTransit/needsAction/received
+// predicates below now read inspectionState (piece-disposition-level), not
+// legStatus.primaryKey — the diagnosis found the old legStatus-based mapping used
+// 'status.delivered' for "received", a forward-leg concept that never actually applies
+// to a CRP return leg (which reaches 'returned' on arrival, never 'delivered').
 
 export type FilterTab = 'all' | 'needsAction' | 'refunds' | 'exchanges' | 'inTransit' | 'received'
 
@@ -89,12 +101,15 @@ export function matchesFilter(row: MergedRow, tab: FilterTab): boolean {
     case 'needsAction':
       return row.kind === 'exchange'
         ? EXCHANGE_NEEDS_ACTION.has(row.exchangeStatus ?? '')
-        : row.legStatus?.primaryKey === 'status.needs_attention'
+        : row.inspectionState === 'needs_inspection'
     case 'inTransit':
-      return row.kind === 'refund' && row.legStatus?.primaryKey === 'status.in_transit'
+      return row.kind === 'refund' && row.inspectionState === 'in_transit'
     case 'received':
       return row.kind === 'exchange'
         ? row.exchangeStatus === 'return_received'
-        : row.legStatus?.primaryKey === 'status.delivered'
+        // internal_state='returned' (arrived) — both needs_inspection and resolved rows
+        // are "received"; inspectionState is never 'in_transit' once internal_state has
+        // reached 'returned', so this is exactly the complement of the inTransit check.
+        : row.inspectionState === 'needs_inspection' || row.inspectionState === 'resolved'
   }
 }

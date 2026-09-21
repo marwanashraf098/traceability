@@ -1,5 +1,6 @@
 package com.traceability;
 
+import com.traceability.inventory.ReturnService;
 import com.traceability.inventory.ShipmentLinkService;
 import com.traceability.inventory.UlidGenerator;
 import com.traceability.tenancy.TenantContext;
@@ -32,6 +33,16 @@ import static org.assertj.core.api.Assertions.assertThat;
  * (r2) a forward-leg shipment on the same order is never surfaced by this list.
  * (r3) ORDER BY created_at DESC, id DESC.
  * (r4) cross-tenant isolation, with a same-tenant positive control.
+ *
+ * Step 4-close Part 2 (gap #4) — inspection_state, additive to leg_status:
+ * (r5) internal_state pre-'returned' → inspection_state='in_transit'.
+ * (r6) internal_state='returned' + a piece still at return_pending_inspection for the
+ *      order → inspection_state='needs_inspection'.
+ * (r7) internal_state='returned' + no piece at return_pending_inspection → 'resolved'.
+ * (r8) THE real transition, through the actual disposition path (not simulated): a piece
+ *      at return_pending_inspection restocked via ReturnService.restock() flips the same
+ *      row from 'needs_inspection' to 'resolved' — proves listCrpReturns() and
+ *      resolveReturnLegIfComplete() agree, not just that the SQL predicate looks right.
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.NONE)
 @Testcontainers
@@ -58,25 +69,42 @@ class RefundListTest {
     }
 
     @Autowired ShipmentLinkService linkSvc;
+    @Autowired ReturnService       returnSvc;
     @Autowired JdbcTemplate        jdbc;
     @MockBean  JobScheduler        jobScheduler;
 
-    UUID tenantId, storeId;
+    UUID tenantId, storeId, productId, variantId, locationId, actorId;
 
     @BeforeAll
     void setupFixture() {
-        tenantId = UUID.randomUUID();
-        storeId  = UUID.randomUUID();
+        tenantId   = UUID.randomUUID();
+        storeId    = UUID.randomUUID();
+        productId  = UUID.randomUUID();
+        variantId  = UUID.randomUUID();
+        locationId = UUID.randomUUID();
+        actorId    = UUID.randomUUID();
         jdbc.update("INSERT INTO tenants (id, name) VALUES (?, 'RefundListTenant')", tenantId);
         jdbc.update("INSERT INTO stores (id, tenant_id, platform, shop_domain, status) " +
                     "VALUES (?, ?, 'shopify', 'refund-list.myshopify.com', 'disconnected')", storeId, tenantId);
+        jdbc.update("INSERT INTO products (id, tenant_id, store_id, external_id, title, status) " +
+                    "VALUES (?, ?, ?, 'P-RFD', 'Bucket Hat', 'active')", productId, tenantId, storeId);
+        jdbc.update("INSERT INTO variants (id, tenant_id, product_id, external_id, title, sku) " +
+                    "VALUES (?, ?, ?, 'V-RFD', 'Red', 'RED-RFD')", variantId, tenantId, productId);
+        jdbc.update("INSERT INTO locations (id, tenant_id, name, type, is_default, is_fulfillment) " +
+                    "VALUES (?, ?, 'RFD Warehouse', 'warehouse', true, true)", locationId, tenantId);
+        jdbc.update("INSERT INTO users (id, tenant_id, name, email, password_hash, role) " +
+                    "VALUES (?, ?, 'Actor', 'rfd-actor@test.com', 'x', 'owner'::user_role)", actorId, tenantId);
     }
 
     @BeforeEach void ctx()   { TenantContext.set(tenantId); }
     @AfterEach  void clear() {
         TenantContext.clear();
-        jdbc.update("DELETE FROM shipments WHERE tenant_id = ?", tenantId);
-        jdbc.update("DELETE FROM orders    WHERE tenant_id = ?", tenantId);
+        jdbc.update("UPDATE pieces SET current_order_id = NULL WHERE tenant_id = ?", tenantId);
+        jdbc.update("DELETE FROM allocations   WHERE tenant_id = ?", tenantId);
+        jdbc.update("DELETE FROM piece_events  WHERE tenant_id = ?", tenantId);
+        jdbc.update("DELETE FROM pieces        WHERE tenant_id = ?", tenantId);
+        jdbc.update("DELETE FROM shipments     WHERE tenant_id = ?", tenantId);
+        jdbc.update("DELETE FROM orders        WHERE tenant_id = ?", tenantId);
     }
 
     private UUID seedOrder(String extId, String customerName, String customerPhone) {
@@ -182,6 +210,67 @@ class RefundListTest {
         jdbc.update("DELETE FROM orders    WHERE tenant_id = ?", tenantB);
         jdbc.update("DELETE FROM stores    WHERE tenant_id = ?", tenantB);
         jdbc.update("DELETE FROM tenants   WHERE id = ?", tenantB);
+    }
+
+    private String seedPendingInspectionPiece(UUID orderId) {
+        String id = UlidGenerator.generate();
+        jdbc.update(
+            "INSERT INTO pieces (id, tenant_id, variant_id, barcode, short_code, status, current_order_id) " +
+            "VALUES (?, ?, ?, ?, 'P' || LPAD((abs(hashtext(?)) % 999999 + 1)::text, 6, '0'), " +
+            "        'return_pending_inspection'::piece_status, ?)",
+            id, tenantId, variantId, "PC-" + id, id, orderId);
+        return id;
+    }
+
+    private Map<String, Object> findRow(List<Map<String, Object>> rows, String tracking) {
+        return rows.stream().filter(r -> tracking.equals(r.get("tracking_number"))).findFirst().orElseThrow();
+    }
+
+    @Test
+    void r5_preReturned_inspectionStateIsInTransit() {
+        UUID orderId = seedOrder("EXT-RFD-005", "Yara Fouad", "01012340005");
+        seedCrpShipment(orderId, "RFD-TN-005", "with_courier");
+
+        Map<String, Object> row = findRow(linkSvc.listCrpReturns(0, 50), "RFD-TN-005");
+        assertThat(row.get("inspection_state")).isEqualTo("in_transit");
+    }
+
+    @Test
+    void r6_returnedWithPendingPiece_inspectionStateNeedsInspection() {
+        UUID orderId = seedOrder("EXT-RFD-006", "Hana Wael", "01012340006");
+        seedCrpShipment(orderId, "RFD-TN-006", "returned");
+        seedPendingInspectionPiece(orderId);
+
+        Map<String, Object> row = findRow(linkSvc.listCrpReturns(0, 50), "RFD-TN-006");
+        assertThat(row.get("inspection_state")).isEqualTo("needs_inspection");
+    }
+
+    @Test
+    void r7_returnedWithNoPendingPiece_inspectionStateResolved() {
+        UUID orderId = seedOrder("EXT-RFD-007", "Karim Adly", "01012340007");
+        seedCrpShipment(orderId, "RFD-TN-007", "returned");
+        // No piece at return_pending_inspection for this order at all.
+
+        Map<String, Object> row = findRow(linkSvc.listCrpReturns(0, 50), "RFD-TN-007");
+        assertThat(row.get("inspection_state")).isEqualTo("resolved");
+    }
+
+    @Test
+    void r8_realRestockTransition_needsInspectionThenResolved() {
+        UUID orderId = seedOrder("EXT-RFD-008", "Sara Kamal", "01012340008");
+        seedCrpShipment(orderId, "RFD-TN-008", "returned");
+        String pieceId = seedPendingInspectionPiece(orderId);
+
+        Map<String, Object> before = findRow(linkSvc.listCrpReturns(0, 50), "RFD-TN-008");
+        assertThat(before.get("inspection_state"))
+            .as("undispositioned piece still at return_pending_inspection").isEqualTo("needs_inspection");
+
+        returnSvc.restock(pieceId, locationId, actorId);
+
+        Map<String, Object> after = findRow(linkSvc.listCrpReturns(0, 50), "RFD-TN-008");
+        assertThat(after.get("inspection_state"))
+            .as("Step 4-close Part 2: restocking the last pending piece must flip the row to resolved")
+            .isEqualTo("resolved");
     }
 
     private int indexOfTracking(List<Map<String, Object>> rows, String tracking) {

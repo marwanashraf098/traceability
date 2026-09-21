@@ -8,7 +8,7 @@ import {
 } from '../../api'
 import { Badge, Button, EmptyState, Input, LegStatusBadge, Skeleton, Spinner, cn, useToast } from '../../components/ui'
 import { MergedRow } from './normalize'
-import { exchangeStatusTone } from './statusTone'
+import { exchangeStatusTone, inspectionStateTone } from './statusTone'
 
 /**
  * FR-EXCHANGE Step 4c — detail drawer. Same slide-in shell as VariantDrawer.tsx
@@ -105,6 +105,17 @@ function RefundDrawerBody({ row }: { row: MergedRow }) {
         </h3>
         {row.legStatus
           ? <LegStatusBadge legStatus={row.legStatus} />
+          : <span className="text-small text-muted">—</span>}
+      </section>
+
+      {/* Step 4-close Part 2: the disposition facet, additive to lifecycle above — a
+          Needs-inspection refund reads visibly actionable, a Resolved one reads done. */}
+      <section>
+        <h3 className="text-caption font-semibold text-muted uppercase tracking-wider mb-2">
+          {t('exchangesRefunds.drawer.refund.inspection')}
+        </h3>
+        {row.inspectionState
+          ? <Badge tone={inspectionStateTone(row.inspectionState)} label={t(`exchangesRefunds.inspectionState.${row.inspectionState}`)} />
           : <span className="text-small text-muted">—</span>}
       </section>
 
