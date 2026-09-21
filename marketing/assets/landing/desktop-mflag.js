@@ -1,0 +1,1 @@
+(function(){var m=matchMedia('(max-width:899px)').matches;if(m){document.documentElement.classList.add('m');}})();
