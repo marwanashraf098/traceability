@@ -1882,6 +1882,10 @@ export interface ExchangeSummary {
   inbound_description_ar: string | null
   cod: number | null
   goods_value: number | null
+  /** V97 — true only when the outbound leg was auto-committed by the resolver
+   *  classifying EXACT (never for a human map() call); flips back to false the moment
+   *  a merchant overrides the auto-pick via overrideOutboundVariant(). */
+  auto_matched: boolean
   outbound_items_count: number | null
   inbound_items_count: number | null
   customer_name: string | null
@@ -1913,6 +1917,48 @@ export interface ExchangeCandidate {
 
 export function getExchangeCandidates(id: string) {
   return request<ExchangeCandidate[]>(`/exchanges/${id}/candidates`)
+}
+
+// ── Outbound auto-commit (build task: "outbound exchange variant: exact-match
+// auto-commit + ranked recs") — Part A/C. ranked candidates ARE scored here
+// (axesMatched), unlike ExchangeCandidate above — that's the INBOUND leg's
+// unscored SQL-order list; this is the OUTBOUND resolver's ranked output. ────────
+
+export type OutboundMatchClassification = 'EXACT' | 'RECS' | 'NONE'
+
+export interface OutboundVariantCandidate {
+  variantId: string
+  variantTitle: string | null
+  productTitle: string | null
+  axesMatched: number
+}
+
+export interface OutboundResolution {
+  classification: OutboundMatchClassification
+  committedVariantId: string | null
+  candidates: OutboundVariantCandidate[]
+}
+
+/** What the resolver currently says for this exchange's outbound leg — never commits
+ *  anything. Used to pre-select (never auto-confirm) the mapping screen's outbound
+ *  picker on RECS. */
+export function getExchangeOutboundCandidates(id: string) {
+  return request<OutboundResolution>(`/exchanges/${id}/outbound-candidates`)
+}
+
+export interface OverrideOutboundVariantResult {
+  exchangeId: string
+  orderId: string
+  variantId: string
+}
+
+/** Corrects an auto-committed (or any still-unpicked) exchange's outbound variant
+ *  before pack. 409s once a piece has already been scanned for the order. */
+export function overrideOutboundVariant(id: string, variantId: string) {
+  return request<OverrideOutboundVariantResult>(`/exchanges/${id}/outbound-variant`, {
+    method: 'POST',
+    body: JSON.stringify({ variantId }),
+  })
 }
 
 export interface AttachExchangeResult {

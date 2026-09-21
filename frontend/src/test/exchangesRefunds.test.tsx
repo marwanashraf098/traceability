@@ -50,6 +50,22 @@ const UNMATCHED_EXCHANGE: ExchangeSummary = {
   customer_phone: '01066667777',
 }
 
+// Build task ("outbound exchange variant: exact-match auto-commit + ranked recs"),
+// Part B/C — auto-committed via tryAutoMap(), never a human map() call.
+const AUTO_MATCHED_EXCHANGE: ExchangeSummary = {
+  ...MATCHED_EXCHANGE,
+  id: 'exc-auto-matched',
+  tracking_number: '910000004',
+  status: 'mapped',
+  matched_order_id: null,
+  match_method: null,
+  matched_at: null,
+  auto_matched: true,
+  outbound_description: 'XS/S pink & white bandana',
+  customer_name: 'Yara Adly',
+  customer_phone: '01033332222',
+}
+
 const REFUND: RefundLeg = {
   id: 'ship-refund-1',
   tracking_number: 'RFD-TN-001',
@@ -85,9 +101,29 @@ function fakeResponse(data: unknown, status = 200) {
   })
 }
 
+const CATALOG = {
+  products: [
+    {
+      id: 'product-bandanas', title: 'The Bandanas', status: 'active', imageUrl: null,
+      variants: [
+        {
+          id: 'variant-ml', title: 'M/L / Pink & White', sku: 'BAND-ML-PW', price: null,
+          pieceCounts: {
+            available: 0, reserved: 0, packed: 0, awaiting_pickup: 0, with_courier: 0,
+            delivered: 0, return_in_transit: 0, return_pending_inspection: 0, damaged: 0,
+            lost: 0, destroyed: 0, out_on_transfer: 0, sold: 0, total: 0,
+          },
+          committed: 0, available: 0,
+        },
+      ],
+    },
+  ],
+}
+
 let attachCalls: Array<{ id: string; body: unknown }> = []
 let bareReturnCalls: string[] = []
 let dismissCalls: string[] = []
+let overrideVariantCalls: Array<{ id: string; body: unknown }> = []
 let exchangesOverride: ExchangeSummary[] | null = null
 let refundsOverride: RefundLeg[] | null = null
 
@@ -113,6 +149,15 @@ function backendFetch(url: string, opts: RequestInit = {}) {
   if (url.includes('/api/v1/exchanges/') && url.endsWith('/dismiss') && method === 'POST') {
     dismissCalls.push(url.split('/exchanges/')[1].split('/dismiss')[0])
     return fakeResponse({})
+  }
+  if (url.includes('/api/v1/exchanges/') && url.endsWith('/outbound-variant') && method === 'POST') {
+    const id = url.split('/exchanges/')[1].split('/outbound-variant')[0]
+    const body = JSON.parse(opts.body as string)
+    overrideVariantCalls.push({ id, body })
+    return fakeResponse({ exchangeId: id, orderId: 'order-auto-1', variantId: body.variantId })
+  }
+  if (url.includes('/api/v1/catalog') && method === 'GET') {
+    return fakeResponse(CATALOG)
   }
   if (url.includes('/api/v1/exchanges/') && method === 'GET') {
     const id = url.split('/exchanges/')[1]
@@ -140,6 +185,7 @@ beforeEach(() => {
   attachCalls = []
   bareReturnCalls = []
   dismissCalls = []
+  overrideVariantCalls = []
   exchangesOverride = null
   refundsOverride = null
   mockFetch = vi.fn(backendFetch)
@@ -308,5 +354,40 @@ describe('Exchanges & Refunds — drawer', () => {
     // duplicate render of the same thing.
     expect(within(body).getAllByText(/in transit/i)).toHaveLength(2)
     expect(within(body).getByRole('link', { name: /open in returns/i })).toHaveAttribute('href', '/returns')
+  })
+})
+
+describe('Exchanges & Refunds — outbound auto-commit review (build task Part B/C)', () => {
+  test('an auto-matched exchange row carries the Auto-matched marker', async () => {
+    exchangesOverride = [MATCHED_EXCHANGE, AUTO_MATCHED_EXCHANGE]
+    renderScreen()
+    await screen.findByText('Yara Adly')
+
+    const row = screen.getByText('Yara Adly').closest('tr')!
+    expect(within(row).getByTestId('exchange-auto-matched-row-badge')).toBeInTheDocument()
+
+    const matchedRow = screen.getByText('Maya Mostafa').closest('tr')!
+    expect(within(matchedRow).queryByTestId('exchange-auto-matched-row-badge')).not.toBeInTheDocument()
+  })
+
+  test('drawer shows the review banner and Change variant lets the operator override the auto-pick', async () => {
+    const user = userEvent.setup()
+    exchangesOverride = [MATCHED_EXCHANGE, AUTO_MATCHED_EXCHANGE]
+    renderScreen()
+    await screen.findByText('Yara Adly')
+
+    await user.click(screen.getByText('Yara Adly'))
+    const banner = await screen.findByTestId('exchange-auto-matched-banner')
+    expect(within(banner).getByText(/auto-matched/i)).toBeInTheDocument()
+
+    await user.click(screen.getByTestId('change-variant-button'))
+    await screen.findByTestId('exchange-variant-picker')
+    await user.click(screen.getByTestId('exchange-picker-product-product-bandanas'))
+    await screen.findByTestId('exchange-picker-variant-list')
+    await user.click(screen.getByTestId('exchange-picker-variant-variant-ml'))
+
+    await waitFor(() => {
+      expect(overrideVariantCalls).toEqual([{ id: 'exc-auto-matched', body: { variantId: 'variant-ml' } }])
+    })
   })
 })

@@ -4,11 +4,12 @@ import { Link } from 'react-router-dom'
 import { X } from 'lucide-react'
 import {
   getExchangeDetail, getExchangeCandidates, attachExchange, acceptExchangeBareReturn,
-  dismissExchange, ExchangeSummary, ExchangeCandidate,
+  dismissExchange, overrideOutboundVariant, ExchangeSummary, ExchangeCandidate, CatalogVariant,
 } from '../../api'
 import { Badge, Button, EmptyState, Input, LegStatusBadge, Skeleton, Spinner, cn, useToast } from '../../components/ui'
 import { MergedRow } from './normalize'
 import { exchangeStatusTone, inspectionStateTone } from './statusTone'
+import ExchangeVariantPicker from '../exchanges/ExchangeVariantPicker'
 
 /**
  * FR-EXCHANGE Step 4c — detail drawer. Same slide-in shell as VariantDrawer.tsx
@@ -134,9 +135,11 @@ function RefundDrawerBody({ row }: { row: MergedRow }) {
 
 function ExchangeDrawerBody({ exchangeId, onChanged }: { exchangeId: string; onChanged: () => void }) {
   const { t } = useTranslation()
+  const { toast } = useToast()
   const [detail, setDetail] = useState<ExchangeSummary | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(false)
+  const [overriding, setOverriding] = useState(false)
 
   const load = () => {
     setLoading(true)
@@ -165,6 +168,17 @@ function ExchangeDrawerBody({ exchangeId, onChanged }: { exchangeId: string; onC
 
   const refresh = () => { load(); onChanged() }
 
+  const overrideVariant = async (variantId: string) => {
+    setOverriding(false)
+    try {
+      await overrideOutboundVariant(exchangeId, variantId)
+      toast({ tone: 'success', message: t('exchangesRefunds.drawer.exchange.confirmed') })
+      refresh()
+    } catch {
+      toast({ tone: 'error', message: t('exchangesRefunds.drawer.exchange.actionFailed') })
+    }
+  }
+
   return (
     <div className="space-y-5" data-testid="exchange-drawer-body">
       <section>
@@ -181,12 +195,32 @@ function ExchangeDrawerBody({ exchangeId, onChanged }: { exchangeId: string; onC
         </div>
       </section>
 
+      {detail.auto_matched && (
+        <section className="card border-line bg-elevated p-3.5 space-y-2" data-testid="exchange-auto-matched-banner">
+          <Badge tone="warning" label={t('exchangesRefunds.drawer.exchange.autoMatchedBadge')} />
+          <p className="text-small text-muted">{t('exchangesRefunds.drawer.exchange.autoMatchedNote')}</p>
+          {detail.status === 'mapped' && (
+            // raw <button> — Button doesn't spread data-testid, see UnmatchedActions above
+            <button className="btn-outline" onClick={() => setOverriding(true)} data-testid="change-variant-button">
+              {t('exchangesRefunds.drawer.exchange.changeVariantButton')}
+            </button>
+          )}
+        </section>
+      )}
+
       <section>
         <h3 className="text-caption font-semibold text-muted uppercase tracking-wider mb-2">
           {t('exchangesRefunds.drawer.exchange.statusLabel')}
         </h3>
         <Badge tone={exchangeStatusTone(detail.status)} label={t(`exchangesRefunds.status.${detail.status}`, { defaultValue: detail.status.replace(/_/g, ' ') })} />
       </section>
+
+      {overriding && (
+        <ExchangeVariantPicker
+          onClose={() => setOverriding(false)}
+          onSelect={(variant: CatalogVariant) => overrideVariant(variant.id)}
+        />
+      )}
 
       {detail.status === 'needs_confirmation' && (
         <CandidatePicker exchangeId={exchangeId} onConfirmed={refresh} />

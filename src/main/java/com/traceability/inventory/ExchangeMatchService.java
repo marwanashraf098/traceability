@@ -10,6 +10,8 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -17,6 +19,8 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
+import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 
 /**
  * FR-EXCHANGE Step 3 Part B — Option A fuzzy matcher for the INBOUND (old item) leg.
@@ -192,6 +196,173 @@ public class ExchangeMatchService {
         // byVariant.size() > 1: still ambiguous at the variant level — never fall through
         // to product-title matching, which could only widen it further.
         return Optional.empty();
+    }
+
+    // ── Outbound auto-commit resolver (build task: "outbound exchange variant: exact-
+    // match auto-commit + ranked recs") — co-located here, not in ExchangeService,
+    // specifically so it shares narrowToSingle()'s sibling-guard philosophy: a shared
+    // PRODUCT name alone never resolves anything by itself; the size/color axes must
+    // independently pin a SINGLE variant, and if more than one candidate satisfies the
+    // axes actually present in the text, that is ambiguity, not a match. Distinct
+    // matching mechanism from narrowToSingle() (which compares whole-title substrings
+    // against a small phone-narrowed candidate SET for the INBOUND leg) because the
+    // input here is different in kind: the OUTBOUND resolver searches the tenant's
+    // WHOLE catalog with no phone/order signal to narrow by first, so it needs real
+    // axis tokenization (product/size/color) rather than a title-substring check —
+    // but the precedence rule (specific axis match beats a shared product name) is the
+    // same rule, applied one level more granularly.
+
+    public enum OutboundMatchClassification { EXACT, RECS, NONE }
+
+    /** axesMatched = how many of {size, color} the description actually pinned for this
+     *  variant (0–2) — the ranking key for RECS; product match is the entry ticket into
+     *  the candidate set at all, not counted again here. */
+    public record OutboundVariantCandidate(UUID variantId, String variantTitle, String productTitle, int axesMatched) {}
+
+    public record OutboundResolution(OutboundMatchClassification classification, UUID committedVariantId,
+                                      List<OutboundVariantCandidate> rankedCandidates) {}
+
+    private record CatalogVariantRow(UUID variantId, String variantTitle, String productTitle) {}
+
+    private record VariantAxes(Set<String> sizeTokens, Set<String> colorTokens) {}
+
+    private static final Pattern WORD_SPLIT = Pattern.compile("[^a-z0-9]+");
+
+    /**
+     * Part A — outbound_description → variant, over the ACTING TENANT's own catalog
+     * only (TenantContext.require(), same as every other read in this class — never
+     * takes a tenant id as a parameter, so there is no call shape that could leak
+     * another tenant's catalog into the candidate set).
+     *
+     * Never writes anything — pure read, used both by ExchangeService.tryAutoMap()
+     * (decides whether to auto-commit) and by the mapping screen's RECS pre-population
+     * (decides what to pre-select without committing). See ExchangeService.map()'s
+     * javadoc for why EXACT is required (never RECS) before anything auto-commits a
+     * real order_items FK.
+     */
+    @Transactional(readOnly = true)
+    public OutboundResolution resolveOutboundVariant(String outboundDescription) {
+        UUID tenantId = TenantContext.require();
+        if (outboundDescription == null || outboundDescription.isBlank()) {
+            return new OutboundResolution(OutboundMatchClassification.NONE, null, List.of());
+        }
+
+        // MULTI-ITEM ("X // Y") — never EXACT, regardless of how cleanly the first
+        // segment alone would otherwise resolve. Resolution still runs against the
+        // first (primary/outbound) segment so RECS can still offer useful candidates;
+        // the multiItem flag only caps the final classification below.
+        String[] items = outboundDescription.split("//", 2);
+        boolean multiItem = items.length > 1;
+        String primary = items[0];
+        String descLower = primary.toLowerCase(Locale.ROOT);
+        Set<String> descWords = wordsOf(primary);
+
+        List<CatalogVariantRow> rows = jdbc.query(
+            "SELECT v.id AS variant_id, v.title AS variant_title, pr.title AS product_title " +
+            "FROM variants v JOIN products pr ON pr.id = v.product_id " +
+            "WHERE v.tenant_id = ?",
+            (rs, i) -> new CatalogVariantRow(rs.getObject("variant_id", UUID.class),
+                rs.getString("variant_title"), rs.getString("product_title")),
+            tenantId);
+
+        List<OutboundVariantCandidate> partials = new ArrayList<>();
+        List<OutboundVariantCandidate> fullSatisfiers = new ArrayList<>();
+
+        for (CatalogVariantRow row : rows) {
+            if (!productMatches(descLower, row.productTitle())) continue;
+
+            VariantAxes axes = axesOf(row.variantTitle());
+            boolean sizeOk  = axes.sizeTokens().isEmpty()  || descWords.containsAll(axes.sizeTokens());
+            boolean colorOk = axes.colorTokens().isEmpty() || descWords.containsAll(axes.colorTokens());
+            int score = (!axes.sizeTokens().isEmpty()  && sizeOk  ? 1 : 0)
+                      + (!axes.colorTokens().isEmpty() && colorOk ? 1 : 0);
+
+            OutboundVariantCandidate candidate = new OutboundVariantCandidate(
+                row.variantId(), row.variantTitle(), row.productTitle(), score);
+            partials.add(candidate);
+            if (sizeOk && colorOk) fullSatisfiers.add(candidate);
+        }
+
+        List<OutboundVariantCandidate> ranked = partials.stream()
+            .sorted(Comparator.comparingInt(OutboundVariantCandidate::axesMatched).reversed()
+                .thenComparing(c -> c.variantTitle() == null ? "" : c.variantTitle(),
+                    Comparator.naturalOrder()))
+            .toList();
+
+        // EXACT requires: a single item description, exactly one full-axis satisfier,
+        // AND no sibling also satisfying — fullSatisfiers.size() > 1 is exactly that
+        // sibling case (e.g. a duplicate/archived variant sharing the same size+color)
+        // and must fall to RECS, never guess between them.
+        if (!multiItem && fullSatisfiers.size() == 1) {
+            return new OutboundResolution(OutboundMatchClassification.EXACT,
+                fullSatisfiers.get(0).variantId(), ranked);
+        }
+        if (ranked.isEmpty()) {
+            return new OutboundResolution(OutboundMatchClassification.NONE, null, List.of());
+        }
+        return new OutboundResolution(OutboundMatchClassification.RECS, null, ranked);
+    }
+
+    /**
+     * product matched by contains, per the build task: strip a leading "the " and
+     * naively de-pluralize each word (trailing 's', len > 3, never "ss") on the
+     * product title, then check whether that key appears as a substring anywhere in
+     * the description — "bandana" (product key of "The Bandanas") inside
+     * "xs/s pink & white bandana"; "bucket hat" (key of "The Bucket Hat") inside
+     * "red checkered bucket hat size xl/2xl/3xl".
+     */
+    private boolean productMatches(String descLower, String productTitle) {
+        if (productTitle == null || productTitle.isBlank()) return false;
+        return descLower.contains(productKey(productTitle));
+    }
+
+    private String productKey(String productTitle) {
+        String t = productTitle.toLowerCase(Locale.ROOT).trim();
+        if (t.startsWith("the ")) t = t.substring(4);
+        String[] words = t.split("\\s+");
+        for (int i = 0; i < words.length; i++) {
+            String w = words[i];
+            if (w.length() > 3 && w.endsWith("s") && !w.endsWith("ss")) {
+                words[i] = w.substring(0, w.length() - 1);
+            }
+        }
+        return String.join(" ", words);
+    }
+
+    /**
+     * Variant titles are "SIZE / COLOR" or compound "SIZE / SIZE / COLOR" (segments
+     * separated by " / ", spaces required — NOT the bare "/" a single size segment
+     * itself may use internally, e.g. "XS/S"). Last segment is always color; every
+     * segment before it contributes size tokens, each further split on bare "/".
+     * A title with no " / " separator at all (missing axis / malformed catalog row —
+     * e.g. a blank or single-word title) degrades to "whole title is color, no size
+     * axis" rather than throwing — a defensive fallback, not a classification path any
+     * required test relies on (see resolver test x4: NONE there comes from zero
+     * candidates, not from this fallback).
+     */
+    private VariantAxes axesOf(String variantTitle) {
+        if (variantTitle == null || variantTitle.isBlank()) return new VariantAxes(Set.of(), Set.of());
+        String[] segments = variantTitle.split(" / ");
+        if (segments.length < 2) {
+            return new VariantAxes(Set.of(), colorTokensOf(segments[0]));
+        }
+        Set<String> sizeTokens = new java.util.HashSet<>();
+        for (int i = 0; i < segments.length - 1; i++) {
+            sizeTokens.addAll(wordsOf(segments[i].replace('/', ' ')));
+        }
+        Set<String> colorTokens = colorTokensOf(segments[segments.length - 1]);
+        return new VariantAxes(sizeTokens, colorTokens);
+    }
+
+    private Set<String> colorTokensOf(String segment) {
+        return wordsOf(segment.replace('&', ' ').replaceAll("(?i)\\band\\b", " "));
+    }
+
+    private Set<String> wordsOf(String text) {
+        if (text == null || text.isBlank()) return Set.of();
+        return Arrays.stream(WORD_SPLIT.split(text.toLowerCase(Locale.ROOT)))
+            .filter(w -> !w.isBlank())
+            .collect(Collectors.toSet());
     }
 
     /**

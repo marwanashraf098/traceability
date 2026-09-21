@@ -54,6 +54,23 @@ public class ExchangeController {
         return svc.map(id, req.outboundVariantId(), req.inboundVariantId());
     }
 
+    /** Part A/C — what the resolver currently says for this exchange's outbound leg
+     *  (EXACT/RECS/NONE + ranked candidates), without committing anything. Feeds the
+     *  mapping screen's RECS pre-population. */
+    @GetMapping("/{id}/outbound-candidates")
+    @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
+    public Map<String, Object> outboundCandidates(@PathVariable UUID id) {
+        return svc.outboundResolution(id);
+    }
+
+    /** Part B — corrects an auto-committed (or any still-unpicked) exchange's outbound
+     *  variant before pack. */
+    @PostMapping("/{id}/outbound-variant")
+    @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
+    public Map<String, Object> overrideOutboundVariant(@PathVariable UUID id, @RequestBody OverrideOutboundRequest req) {
+        return svc.overrideOutboundVariant(id, req.variantId());
+    }
+
     /** Part D — merchant supplies the order the old item is actually returning from. */
     @PostMapping("/{id}/attach")
     @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
@@ -77,4 +94,5 @@ public class ExchangeController {
 
     public record MapRequest(UUID outboundVariantId, UUID inboundVariantId) {}
     public record AttachRequest(UUID orderId) {}
+    public record OverrideOutboundRequest(UUID variantId) {}
 }

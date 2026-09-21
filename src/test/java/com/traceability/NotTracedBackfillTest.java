@@ -148,14 +148,16 @@ class NotTracedBackfillTest {
         //    matched_order_id/match_method/matched_at (new nullable columns) + a widened
         //    status CHECK (strict superset of the old allowed values — no existing row
         //    can violate it) + a new partial index (no data touched, no interaction with
-        //    the stuck/traced orders here).
+        //    the stuck/traced orders here); and V97, exchanges.auto_matched (new NOT
+        //    NULL DEFAULT false column, metadata-only backfill, no interaction with the
+        //    stuck/traced orders here).
         Flyway toLatest = Flyway.configure()
                 .dataSource(POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword())
                 .locations("classpath:db/migration")
                 .load();
         MigrateResult r2 = toLatest.migrate();
         assertThat(r2.success).as("migrations after V56 must succeed").isTrue();
-        assertThat(r2.migrationsExecuted).as("V57 + V58 + V59 + V60 + V61 + V62 + V63 + V64 + V65 + V66 + V67 + V68 + V69 + V70 + V71 + V72 + V73 + V74 + V75 + V76 + V77 + V78 + V79 + V80 + V81 + V82 + V83 + V84 + V85 + V86 + V87 + V88 + V89 + V90 + V91 + V92 + V93 + V94 + V95 + V96 pending after V56").isEqualTo(40);
+        assertThat(r2.migrationsExecuted).as("V57 + V58 + V59 + V60 + V61 + V62 + V63 + V64 + V65 + V66 + V67 + V68 + V69 + V70 + V71 + V72 + V73 + V74 + V75 + V76 + V77 + V78 + V79 + V80 + V81 + V82 + V83 + V84 + V85 + V86 + V87 + V88 + V89 + V90 + V91 + V92 + V93 + V94 + V95 + V96 + V97 pending after V56").isEqualTo(41);
 
         try (Connection conn = DriverManager.getConnection(
                 POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword())) {

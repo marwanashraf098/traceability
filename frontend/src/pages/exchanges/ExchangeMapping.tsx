@@ -2,7 +2,9 @@ import { useEffect, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { CheckCircle2 } from 'lucide-react'
-import { getExchanges, mapExchange, ExchangeSummary, CatalogProduct, CatalogVariant } from '../../api'
+import {
+  getExchanges, mapExchange, getExchangeOutboundCandidates, ExchangeSummary, CatalogProduct, CatalogVariant,
+} from '../../api'
 import { Alert, Badge, Button, ProductThumb, Skeleton } from '../../components/ui'
 import ExchangeVariantPicker from './ExchangeVariantPicker'
 
@@ -43,6 +45,35 @@ export default function ExchangeMapping() {
       .catch(() => setLoadError(t('common.error')))
       .finally(() => setLoading(false))
   }, [id, t])
+
+  // RECS pre-population (build task Part C): pre-select the outbound leg's best-ranked
+  // candidate WITHOUT committing anything — the operator still confirms or overrides
+  // via the normal picker below. EXACT-resolving exchanges never reach this screen at
+  // all (they're already auto-committed by the time a human would open it); this only
+  // ever fires for the RECS case. No candidate images/pieceCounts are available from
+  // this endpoint (it's not the catalog), so the pre-selection is a lightweight stand-in
+  // — "Change" still opens the full ExchangeVariantPicker with real catalog data.
+  useEffect(() => {
+    if (!id) return
+    getExchangeOutboundCandidates(id)
+      .then(res => {
+        if (res.classification !== 'RECS' || res.candidates.length === 0) return
+        const best = res.candidates[0]
+        setOutbound(current => current ?? {
+          variant: {
+            id: best.variantId, title: best.variantTitle ?? '', sku: null, price: null,
+            pieceCounts: {
+              available: 0, reserved: 0, packed: 0, awaiting_pickup: 0, with_courier: 0,
+              delivered: 0, return_in_transit: 0, return_pending_inspection: 0, damaged: 0,
+              lost: 0, destroyed: 0, out_on_transfer: 0, sold: 0, total: 0,
+            },
+            committed: 0, available: 0,
+          },
+          product: { id: '', title: best.productTitle ?? '', status: 'active', imageUrl: null, variants: [] },
+        })
+      })
+      .catch(() => { /* pre-population is a convenience — the manual picker still works if this fails */ })
+  }, [id])
 
   async function handleConfirm() {
     if (!id || !outbound || !inbound) return

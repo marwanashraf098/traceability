@@ -32,6 +32,9 @@ export interface MergedRow {
   matchedAt: string | null
   /** Exchange only — the status vocabulary (mapped/matched/needs_confirmation/...). */
   exchangeStatus?: ExchangeSummary['status']
+  /** Exchange only — true when the outbound leg was auto-committed by the resolver
+   *  (never set for a refund row). */
+  autoMatched?: boolean
   /** Refund only — OrderStatusDeriver.deriveLegStatus(internal_state), rendered via
    *  <LegStatusBadge>. An exchange row NEVER carries this — see HONESTY CONSTRAINT 2. */
   legStatus?: { primaryKey: string; tone: DerivedTone }
@@ -54,6 +57,7 @@ export function normalizeExchange(e: ExchangeSummary): MergedRow {
     orderNumber: null,
     matchedAt: e.matched_at,
     exchangeStatus: e.status,
+    autoMatched: e.auto_matched,
   }
 }
 

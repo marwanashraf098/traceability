@@ -888,6 +888,7 @@
       "refund": "Refund"
     },
     "noMappedOrder": "Not yet matched",
+    "autoMatchedRowBadge": "Auto-matched",
     "errorTitle": "Couldn't load this list",
     "retry": "Retry",
     "emptyTitle": "No exchanges or refunds yet",
@@ -946,7 +947,10 @@
         "matchedOrder": "Matched order",
         "matchMethod": "Matched via",
         "bareReturnNote": "Accepted as a bare return — no order link.",
-        "dismissedNote": "Dismissed — no further action expected."
+        "dismissedNote": "Dismissed — no further action expected.",
+        "autoMatchedBadge": "Auto-matched — review",
+        "autoMatchedNote": "The outbound variant was matched automatically from the courier's description. Please confirm it's correct before this order is packed.",
+        "changeVariantButton": "Change variant"
       }
     }
   },

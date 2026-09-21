@@ -72,6 +72,7 @@ public class BostaWebhookJob {
     private final ExchangeStateInterpreter exchangeStateInterpreter;
     private final MatcherVersionHolder matcherVersionHolder;
     private final com.traceability.inventory.ExchangeMatchService exchangeMatchService;
+    private final com.traceability.inventory.ExchangeService exchangeService;
 
     public BostaWebhookJob(JdbcTemplate jdbc,
                             PlatformTransactionManager txm,
@@ -85,7 +86,8 @@ public class BostaWebhookJob {
                             com.traceability.inventory.ExchangeIngestService exchangeIngestService,
                             ExchangeStateInterpreter exchangeStateInterpreter,
                             MatcherVersionHolder matcherVersionHolder,
-                            com.traceability.inventory.ExchangeMatchService exchangeMatchService) {
+                            com.traceability.inventory.ExchangeMatchService exchangeMatchService,
+                            com.traceability.inventory.ExchangeService exchangeService) {
         this.jdbc                = jdbc;
         this.tx                  = new TransactionTemplate(txm);
         this.bostaGateway        = bostaGateway;
@@ -99,6 +101,7 @@ public class BostaWebhookJob {
         this.exchangeStateInterpreter = exchangeStateInterpreter;
         this.matcherVersionHolder = matcherVersionHolder;
         this.exchangeMatchService = exchangeMatchService;
+        this.exchangeService = exchangeService;
     }
 
     // ---- private row types -------------------------------------------------
@@ -247,6 +250,13 @@ public class BostaWebhookJob {
                             markProcessed(webhookEventId, idemKey, "unlinked: " + trackingNumber);
                         }
                     }
+                    // Build task ("outbound exchange variant: exact-match auto-commit"):
+                    // tryAutoMap() runs BEFORE attemptMatch() — an EXACT-resolved exchange
+                    // flips to 'mapped' right here, so attemptMatch() (gated on status=
+                    // 'mapped', see its javadoc) can usefully act in this SAME webhook
+                    // invocation instead of waiting for a later one. Cheap no-op otherwise
+                    // (status still 'needs_mapping', or resolver returned RECS/NONE).
+                    exchangeService.tryAutoMap(trackingNumber);
                     // Step 3 Part B: cheap no-op pre-Phase-2 (status is still 'needs_mapping' —
                     // ExchangeMatchService only acts once status='mapped', see its javadoc).
                     // Kept here for symmetry/future-proofing with the post-pack call below.

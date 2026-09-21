@@ -106,6 +106,7 @@ class RlsCoverageTest {
             "/api/v1/exchanges",
             "/api/v1/exchanges/{id}",
             "/api/v1/exchanges/{id}/candidates",
+            "/api/v1/exchanges/{id}/outbound-candidates",
             "/api/v1/refunds",
             "/api/v1/overview/trends",
             "/api/v1/overview/late-to-pack",
@@ -437,6 +438,21 @@ class RlsCoverageTest {
         @SuppressWarnings("unchecked")
         List<Map<String, Object>> body = resp.getBody();
         assertThat(body).anyMatch(c -> pieceId.equals(c.get("pieceId")));
+    }
+
+    @Test
+    void exchangeOutboundCandidates_resolvesExactAgainstSeededCatalogVariant() {
+        UUID exchangeId = UUID.randomUUID();
+        jdbc.update("INSERT INTO exchanges (id, tenant_id, tracking_number, status, " +
+                    "    outbound_description, raw) " +
+                    "VALUES (?, ?, 'TN-CVG-EXC-OUTCAND', 'needs_mapping', " +
+                    "        'Default coverage widget', '{}'::jsonb)",
+                    exchangeId, tenantId);
+
+        ResponseEntity<Map> resp = get("/api/v1/exchanges/" + exchangeId + "/outbound-candidates", Map.class);
+        assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(resp.getBody().get("classification")).isEqualTo("EXACT");
+        assertThat(resp.getBody().get("committedVariantId")).isEqualTo(variantId.toString());
     }
 
     @Test

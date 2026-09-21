@@ -111,11 +111,16 @@ export default function ExchangesRefunds() {
             )
             : <span className="text-muted">—</span>)
         : (
-          <span data-testid="exchange-status-badge">
+          <span className="inline-flex items-center gap-1.5" data-testid="exchange-status-badge">
             <Badge
               tone={exchangeStatusTone(row.exchangeStatus ?? '')}
               label={t(`exchangesRefunds.status.${row.exchangeStatus}`, { defaultValue: (row.exchangeStatus ?? '').replace(/_/g, ' ') })}
             />
+            {row.autoMatched && (
+              <span data-testid="exchange-auto-matched-row-badge">
+                <Badge tone="warning" label={t('exchangesRefunds.autoMatchedRowBadge')} />
+              </span>
+            )}
           </span>
         ),
     },
