@@ -71,6 +71,7 @@ public class BostaWebhookJob {
     private final com.traceability.inventory.ExchangeIngestService exchangeIngestService;
     private final ExchangeStateInterpreter exchangeStateInterpreter;
     private final MatcherVersionHolder matcherVersionHolder;
+    private final com.traceability.inventory.ExchangeMatchService exchangeMatchService;
 
     public BostaWebhookJob(JdbcTemplate jdbc,
                             PlatformTransactionManager txm,
@@ -83,7 +84,8 @@ public class BostaWebhookJob {
                             com.traceability.inventory.NotTracedTagger notTracedTagger,
                             com.traceability.inventory.ExchangeIngestService exchangeIngestService,
                             ExchangeStateInterpreter exchangeStateInterpreter,
-                            MatcherVersionHolder matcherVersionHolder) {
+                            MatcherVersionHolder matcherVersionHolder,
+                            com.traceability.inventory.ExchangeMatchService exchangeMatchService) {
         this.jdbc                = jdbc;
         this.tx                  = new TransactionTemplate(txm);
         this.bostaGateway        = bostaGateway;
@@ -96,6 +98,7 @@ public class BostaWebhookJob {
         this.exchangeIngestService = exchangeIngestService;
         this.exchangeStateInterpreter = exchangeStateInterpreter;
         this.matcherVersionHolder = matcherVersionHolder;
+        this.exchangeMatchService = exchangeMatchService;
     }
 
     // ---- private row types -------------------------------------------------
@@ -244,6 +247,10 @@ public class BostaWebhookJob {
                             markProcessed(webhookEventId, idemKey, "unlinked: " + trackingNumber);
                         }
                     }
+                    // Step 3 Part B: cheap no-op pre-Phase-2 (status is still 'needs_mapping' —
+                    // ExchangeMatchService only acts once status='mapped', see its javadoc).
+                    // Kept here for symmetry/future-proofing with the post-pack call below.
+                    exchangeMatchService.attemptMatch(trackingNumber);
                     return;
                 }
 
@@ -277,6 +284,9 @@ public class BostaWebhookJob {
                     markProcessed(webhookEventId, idemKey,
                         "unlinked:exchange_unmapped_state: " + trackingNumber);
                 }
+                // Step 3 Part B: raw refreshed above either way — returnSpecs may have newly
+                // populated on THIS webhook even though it hadn't before Phase 2 mapping.
+                exchangeMatchService.attemptMatch(trackingNumber);
                 return;
             }
 

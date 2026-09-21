@@ -127,6 +127,7 @@ class ReturnSessionTest {
         jdbc.update("DELETE FROM pieces WHERE tenant_id = ?", tenantId);
         jdbc.update("DELETE FROM shipments WHERE tenant_id = ?", tenantId);
         jdbc.update("DELETE FROM order_items WHERE tenant_id = ?", tenantId);
+        jdbc.update("DELETE FROM exchanges WHERE tenant_id = ?", tenantId);
         jdbc.update("DELETE FROM orders WHERE tenant_id = ?", tenantId);
     }
 
@@ -509,6 +510,226 @@ class ReturnSessionTest {
             .isTrue();
     }
 
+    // ── (s) Matched exchange suppresses unexpected — positive (Step 3 Part C) ────
+
+    /**
+     * Step 3 Part C: hasActiveReturnLeg() now also returns true when the order has an
+     * exchange with matched_order_id=order AND status='matched' — proven here through
+     * the SAME two existing call sites (scanPiece()'s WITH_COURIER branch,
+     * detectUnexpectedReturn()), no third classifier. No CRP return-leg shipment exists
+     * for this order at all — the exchange match is the only signal.
+     */
+    @Test
+    void s_matchedExchange_scanAndException_bothSuppressUnexpected() {
+        UUID orderId = createOrder("with_courier");
+        createShipment(orderId, "AWB-EXC-S-FWD", "with_courier");
+        createExchange("EXC-S-TRACK", "matched", orderId);
+        String piece = createPiece("with_courier", orderId);
+        createAlloc(orderId, piece);
+
+        UUID sessionId = openSession();
+        Map<String, Object> scanResult = sessionSvc.scan(sessionId, "PC-" + piece, locationId, actorId);
+
+        assertThat(scanResult.get("unexpected"))
+            .as("matched exchange → scan must not be flagged unexpected")
+            .isEqualTo(false);
+
+        boolean present = listExceptionsOfType("unexpected_return").stream()
+            .anyMatch(e -> ("PC-" + piece).equals(e.get("barcode")));
+        assertThat(present)
+            .as("matched exchange → no HIGH unexpected_return exception")
+            .isFalse();
+    }
+
+    // ── (t) Unmatched-exchange order, same tenant — unexpected still flagged ─────
+
+    /**
+     * Negative control, same tenant as (s): an exchange EXISTS for this order but its
+     * status is 'unmatched' (no matched_order_id) — must NOT suppress. Proves the
+     * predicate discriminates on status, not merely "an exchanges row exists".
+     */
+    @Test
+    void t_unmatchedExchange_sameTenant_unexpectedStillFlagged_exceptionStillFires() {
+        UUID orderId = createOrder("with_courier");
+        createShipment(orderId, "AWB-EXC-T-FWD", "with_courier");
+        createExchangeUnmatched("EXC-T-TRACK");
+        String piece = createPiece("with_courier", orderId);
+        createAlloc(orderId, piece);
+
+        UUID sessionId = openSession();
+        Map<String, Object> scanResult = sessionSvc.scan(sessionId, "PC-" + piece, locationId, actorId);
+
+        assertThat(scanResult.get("unexpected"))
+            .as("unmatched exchange (no link to THIS order) → must still be flagged unexpected")
+            .isEqualTo(true);
+
+        boolean present = listExceptionsOfType("unexpected_return").stream()
+            .anyMatch(e -> ("PC-" + piece).equals(e.get("barcode")));
+        assertThat(present)
+            .as("unmatched exchange → HIGH exception must still fire")
+            .isTrue();
+    }
+
+    // ── (u) Matched exchange resolves to return_received once dispositioned ──────
+
+    @Test
+    void u_matchedExchange_resolvedAfterDisposition_laterUnrelatedReturnStillFlagged() {
+        UUID orderId = createOrder("with_courier");
+        createShipment(orderId, "AWB-EXC-U-FWD", "with_courier");
+        UUID exchangeId = createExchange("EXC-U-TRACK", "matched", orderId);
+        String piece1 = createPiece("with_courier", orderId);
+        createAlloc(orderId, piece1);
+
+        UUID sessionId = openSession();
+        Map<String, Object> scan1 = sessionSvc.scan(sessionId, "PC-" + piece1, locationId, actorId);
+        assertThat(scan1.get("unexpected")).isEqualTo(false);
+
+        sessionSvc.disposition(sessionId, piece1, "restock", null, locationId, actorId);
+
+        String exchangeStatus = jdbc.queryForObject(
+            "SELECT status FROM exchanges WHERE id = ?", String.class, exchangeId);
+        assertThat(exchangeStatus)
+            .as("matched exchange must resolve to return_received once its piece is dispositioned")
+            .isEqualTo("return_received");
+
+        String piece2 = createPiece("with_courier", orderId);
+        createAlloc(orderId, piece2);
+        Map<String, Object> scan2 = sessionSvc.scan(sessionId, "PC-" + piece2, locationId, actorId);
+
+        assertThat(scan2.get("unexpected"))
+            .as("resolved exchange must not suppress a later unrelated genuine unexpected return")
+            .isEqualTo(true);
+    }
+
+    // ── (v) Step 3C: out-of-window matched-exchange scan accepted, bypass closes ─
+
+    /**
+     * Step 3C Test 1. The old item is DELIVERED and OUTSIDE the customer return window
+     * (last_event_at pushed back 45 days, default window is 30) — before this build such
+     * a scan hits the illegal-state fork (legal=false, unexpected=true, no transition).
+     * A matched exchange for this order now bypasses the window check: scan is accepted,
+     * legal, unexpected=false, return_kind='exchange_match' in the event metadata. Once
+     * the piece is dispositioned, the exchange resolves to return_received (Step 3
+     * Part C's resolution flip) and the bypass closes — proven by scanning a SECOND
+     * out-of-window delivered piece on the SAME order afterward, which must now be
+     * correctly rejected again.
+     */
+    @Test
+    void v_matchedExchange_outOfWindowScanAccepted_bypassClosesAfterResolution() {
+        UUID orderId = createOrder("delivered");
+        createShipment(orderId, "AWB-EXC-V-FWD", "delivered");
+        UUID exchangeId = createExchange("EXC-V-TRACK", "matched", orderId);
+
+        String piece1 = createPiece("delivered", orderId);
+        jdbc.update("UPDATE pieces SET last_event_at = now() - interval '45 days' WHERE id = ?", piece1);
+        createAlloc(orderId, piece1);
+
+        UUID sessionId = openSession();
+        Map<String, Object> scan1 = sessionSvc.scan(sessionId, "PC-" + piece1, locationId, actorId);
+
+        assertThat(scan1.get("unexpected"))
+            .as("matched exchange must bypass the out-of-window rejection")
+            .isEqualTo(false);
+        assertThat(pieceStatus(piece1)).isEqualTo("return_pending_inspection");
+
+        String meta = jdbc.queryForObject(
+            "SELECT metadata::text FROM piece_events " +
+            "WHERE piece_id = ? AND event_type = 'return_received'",
+            String.class, piece1);
+        assertThat(meta)
+            .as("out-of-window acceptance via the exchange bypass must be labeled exchange_match")
+            .contains("return_kind")
+            .contains("exchange_match");
+
+        // Resolve it — Step 3 Part C's resolution flip must fire.
+        sessionSvc.disposition(sessionId, piece1, "restock", null, locationId, actorId);
+        String exchangeStatus = jdbc.queryForObject(
+            "SELECT status FROM exchanges WHERE id = ?", String.class, exchangeId);
+        assertThat(exchangeStatus).isEqualTo("return_received");
+
+        // A SECOND out-of-window delivered piece on the SAME order, after resolution —
+        // the bypass must be closed now that the exchange is no longer 'matched'.
+        String piece2 = createPiece("delivered", orderId);
+        jdbc.update("UPDATE pieces SET last_event_at = now() - interval '45 days' WHERE id = ?", piece2);
+        createAlloc(orderId, piece2);
+        Map<String, Object> scan2 = sessionSvc.scan(sessionId, "PC-" + piece2, locationId, actorId);
+
+        assertThat(scan2.get("unexpected"))
+            .as("bypass must be closed once the exchange is resolved — a second out-of-window " +
+                "delivered piece must be rejected again, not silently waved through")
+            .isEqualTo(true);
+        assertThat(pieceStatus(piece2))
+            .as("rejected piece must not transition")
+            .isEqualTo("delivered");
+    }
+
+    // ── (w) Step 3C Test 2: order-scoped bypass on a multi-item matched order ────
+
+    /**
+     * DIAGNOSTIC, documents CURRENT behavior — not a "should" assertion, see the Step 3C
+     * report. hasActiveReturnLeg() is order-scoped: on a matched-exchange order with
+     * MULTIPLE delivered items, an out-of-window scan of the item the matcher did NOT
+     * select (variantB, unrelated to the exchange) is accepted under the same exchange's
+     * cover as the actual matched item would be — no piece/variant filtering exists
+     * anywhere in the chain (matched_order_id has no piece-level counterpart in V95).
+     *
+     * Two things proven here:
+     *   1. The wrong-variant piece itself restocks correctly (real barcode, real ledger
+     *      transition, real Shopify sync trigger) — no inventory corruption.
+     *   2. Disposing ONLY the wrong-variant piece (never touching the actual matched
+     *      item) is enough to flip the exchange to return_received — a misleading
+     *      resolution: the exchange now reads "resolved" while the item it was actually
+     *      about was never returned.
+     */
+    @Test
+    void w_multiItemMatchedOrder_wrongVariantPieceAlsoAccepted_prematurelyResolvesExchange() {
+        UUID orderId = createOrder("delivered");
+        createShipment(orderId, "AWB-EXC-W-FWD", "delivered");
+        createExchange("EXC-W-TRACK", "matched", orderId);
+
+        // A second variant on the SAME order — unrelated to the exchange.
+        UUID productB = UUID.randomUUID();
+        UUID variantB = UUID.randomUUID();
+        jdbc.update("INSERT INTO products (id, tenant_id, store_id, external_id, title, status) " +
+                    "VALUES (?, ?, ?, 'P-RST-W', 'Other Product', 'active')", productB, tenantId, storeId);
+        jdbc.update("INSERT INTO variants (id, tenant_id, product_id, external_id, title, sku) " +
+                    "VALUES (?, ?, ?, 'V-RST-W', 'Unrelated Item', 'OTHER-SKU')", variantB, tenantId, productB);
+
+        String wrongPiece = UlidGenerator.generate();
+        jdbc.update(
+            "INSERT INTO pieces " +
+            "(id, tenant_id, variant_id, barcode, short_code, status, current_order_id, last_event_at) " +
+            "VALUES (?, ?, ?, ?, 'P' || LPAD((abs(hashtext(?)) % 999999 + 1)::text, 6, '0'), " +
+            "        'delivered'::piece_status, ?, now() - interval '45 days')",
+            wrongPiece, tenantId, variantB, "PC-" + wrongPiece, wrongPiece, orderId);
+        UUID itemIdB = UUID.randomUUID();
+        jdbc.update("INSERT INTO order_items (id, tenant_id, order_id, variant_id, quantity) " +
+                    "VALUES (?, ?, ?, ?, 1)", itemIdB, tenantId, orderId, variantB);
+        jdbc.update("INSERT INTO allocations (id, tenant_id, order_item_id, piece_id, status) " +
+                    "VALUES (gen_random_uuid(), ?, ?, ?, 'packed')", tenantId, itemIdB, wrongPiece);
+
+        UUID sessionId = openSession();
+        Map<String, Object> scan = sessionSvc.scan(sessionId, "PC-" + wrongPiece, locationId, actorId);
+
+        assertThat(scan.get("unexpected"))
+            .as("CURRENT BEHAVIOR: order-scoped bypass accepts ANY delivered piece on the " +
+                "matched order, not only the matched variant")
+            .isEqualTo(false);
+
+        sessionSvc.disposition(sessionId, wrongPiece, "restock", null, locationId, actorId);
+
+        assertThat(pieceStatus(wrongPiece))
+            .as("the wrong-variant piece itself still restocks correctly — no inventory corruption")
+            .isEqualTo("available");
+
+        String exchangeStatus = jdbc.queryForObject(
+            "SELECT status FROM exchanges WHERE tracking_number = ?", String.class, "EXC-W-TRACK");
+        assertThat(exchangeStatus)
+            .as("CURRENT BEHAVIOR: resolving only the wrong-variant piece is enough to flip the " +
+                "exchange to return_received — the actual matched item was never scanned")
+            .isEqualTo("return_received");
+    }
+
     // ── DB helpers ────────────────────────────────────────────────────────────
 
     private UUID createOrder(String status) {
@@ -538,6 +759,23 @@ class ReturnSessionTest {
             "VALUES (?, ?, ?, ?, ?::shipment_internal_state, 'return')",
             id, tenantId, orderId, trackingNumber, state);
         return id;
+    }
+
+    /** Exchange matched to orderId (matched_order_id/match_method/matched_at all set). */
+    private UUID createExchange(String trackingNumber, String status, UUID matchedOrderId) {
+        return jdbc.queryForObject(
+            "INSERT INTO exchanges " +
+            "(tenant_id, tracking_number, status, matched_order_id, match_method, matched_at, raw) " +
+            "VALUES (?, ?, ?, ?, 'phone', now(), '{}'::jsonb) RETURNING id",
+            UUID.class, tenantId, trackingNumber, status, matchedOrderId);
+    }
+
+    /** Exchange with no matched_order_id at all — status='unmatched'. */
+    private UUID createExchangeUnmatched(String trackingNumber) {
+        return jdbc.queryForObject(
+            "INSERT INTO exchanges (tenant_id, tracking_number, status, raw) " +
+            "VALUES (?, ?, 'unmatched', '{}'::jsonb) RETURNING id",
+            UUID.class, tenantId, trackingNumber);
     }
 
     private String createPiece(String status, UUID orderId) {

@@ -636,20 +636,29 @@ public class ShipmentLinkService {
     }
 
     /**
-     * True when {@code orderId} has an existing CRP return-leg shipment row
-     * (shipment_leg='return') in a non-terminal state — matched (created), collected
-     * (with_courier), in-transit (returning), or received-not-yet-resolved (delivered).
-     * A return-intake scan against such an order is an EXPECTED CRP return, not an
-     * illegal-state anomaly.
+     * True when {@code orderId} has EITHER:
+     *   (a) an existing CRP return-leg shipment row (shipment_leg='return') in a
+     *       non-terminal state — matched (created), collected (with_courier), in-transit
+     *       (returning), or received-not-yet-resolved (delivered); or
+     *   (b) an exchange matched to this order (matched_order_id=orderId) whose inbound
+     *       leg is not yet resolved (status='matched' — flips to the terminal
+     *       'return_received' by {@link #resolveReturnLegIfComplete} once its piece is
+     *       dispositioned, same as it does for (a) — see that method's javadoc).
+     * Either way, a return-intake scan against such an order is an EXPECTED return, not
+     * an illegal-state anomaly.
      *
-     * Terminal (excluded) states: returned, lost, exception, terminated, cancelled — a
-     * return leg that's actually closed/dead no longer makes a later scan "expected".
+     * Terminal (excluded) shipment states: returned, lost, exception, terminated,
+     * cancelled — a return leg that's actually closed/dead no longer makes a later scan
+     * "expected". Exchange side: only 'matched' counts as active — needs_mapping/
+     * unmatched/needs_confirmation/bare_return/dismissed/return_received/cancelled are
+     * all either not-yet-decided or already-resolved, never "an inbound leg in flight".
      *
      * Shared verbatim by ReturnSessionService.scanPiece() (suppresses the
      * return_session_items.unexpected flag at scan time) and
      * ExceptionService.detectUnexpectedReturn() (suppresses the HIGH exception) — same
      * method, so the two classifications can never drift apart, same discipline as
-     * FulfillService.PICKABLE_ORDERS_FILTER.
+     * FulfillService.PICKABLE_ORDERS_FILTER. Step 3 Part C extends this SAME method
+     * (rather than adding a third classifier) for exactly that reason.
      */
     // Shared with resolveReturnLegIfComplete() below — single source of truth for what
     // "terminal/closed" means for a return-leg shipment.
@@ -661,33 +670,43 @@ public class ShipmentLinkService {
     public boolean hasActiveReturnLeg(UUID orderId, UUID tenantId) {
         if (orderId == null) return false;
         Boolean exists = jdbc.queryForObject(
-            "SELECT EXISTS (SELECT 1 FROM shipments " +
-            "WHERE order_id = ? AND tenant_id = ? AND shipment_leg = 'return' " +
-            "AND internal_state NOT IN (" + RETURN_LEG_TERMINAL_STATES + "))",
-            Boolean.class, orderId, tenantId);
+            "SELECT EXISTS (" +
+            "  SELECT 1 FROM shipments " +
+            "  WHERE order_id = ? AND tenant_id = ? AND shipment_leg = 'return' " +
+            "    AND internal_state NOT IN (" + RETURN_LEG_TERMINAL_STATES + ")" +
+            "  UNION ALL " +
+            "  SELECT 1 FROM exchanges " +
+            "  WHERE matched_order_id = ? AND tenant_id = ? AND status = 'matched'" +
+            ")",
+            Boolean.class, orderId, tenantId, orderId, tenantId);
         return Boolean.TRUE.equals(exists);
     }
 
     /**
-     * Closes out the order's active CRP return leg(s) once every piece scanned into them
-     * has been dispositioned (restocked or marked damaged — no piece remains at
-     * return_pending_inspection for this order). Called by ReturnService.restock() /
-     * markDamaged() after every disposition.
+     * Closes out the order's active CRP return leg(s) AND any matched exchange once
+     * every piece scanned into them has been dispositioned (restocked or marked damaged
+     * — no piece remains at return_pending_inspection for this order). Called by
+     * ReturnService.restock() / markDamaged() after every disposition.
      *
      * Without this, a return-leg shipment that reached a non-terminal state (typically
      * 'delivered' — the parcel physically arrived) and never gets another Bosta webhook
      * (the common case: Bosta has nothing further to report once a CRP parcel is
      * received) would suppress {@link #hasActiveReturnLeg} FOREVER for that order — a
      * completely unrelated LATER genuine unexpected return on the same order would be
-     * wrongly suppressed too.
+     * wrongly suppressed too. The same is true of a matched exchange left at
+     * status='matched' forever: Step 3 Part C's REPORT covers the gated scan-acceptance
+     * change separately, but the resolution side (this method) does not depend on it —
+     * it fires exactly when it did before, for a piece that already legally reached
+     * return_pending_inspection (in-window customer return, or eventually the
+     * out-of-window exchange path once approved).
      *
-     * Order-scoped, not shipment-scoped: pieces carry no stored link back to which
-     * return-leg shipment id they arrived via (piece_events.shipment_id records the
+     * Order-scoped, not shipment/exchange-scoped: pieces carry no stored link back to
+     * which return-leg shipment id they arrived via (piece_events.shipment_id records the
      * piece's original FORWARD shipment), so this checks "does the order have ANY piece
-     * still at return_pending_inspection" rather than per-shipment piece counts. Safe: if
-     * a SECOND, later CRP return leg starts after this one resolves, hasActiveReturnLeg()
-     * picks it up independently via its own non-terminal state — resolving this leg early
-     * never blocks a future one.
+     * still at return_pending_inspection" rather than per-shipment/per-exchange piece
+     * counts. Safe: if a SECOND, later CRP return leg or exchange starts after this one
+     * resolves, hasActiveReturnLeg() picks it up independently via its own non-terminal
+     * state — resolving early never blocks a future one.
      */
     public void resolveReturnLegIfComplete(UUID orderId, UUID tenantId) {
         if (orderId == null) return;
@@ -700,6 +719,10 @@ public class ShipmentLinkService {
                 "UPDATE shipments SET internal_state = 'returned'::shipment_internal_state " +
                 "WHERE order_id = ? AND tenant_id = ? AND shipment_leg = 'return' " +
                 "AND internal_state NOT IN (" + RETURN_LEG_TERMINAL_STATES + ")",
+                orderId, tenantId);
+            jdbc.update(
+                "UPDATE exchanges SET status = 'return_received', updated_at = now() " +
+                "WHERE matched_order_id = ? AND tenant_id = ? AND status = 'matched'",
                 orderId, tenantId);
         }
     }

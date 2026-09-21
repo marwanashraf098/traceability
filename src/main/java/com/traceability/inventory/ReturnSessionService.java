@@ -199,14 +199,24 @@ public class ReturnSessionService {
                     "return_received", actorUserId, new TransitionContext(orderId, shipmentId, locationId, orderId, meta));
             }
             case DELIVERED -> {
-                if (withinReturnWindow(pieceId, tenantId)) {
+                boolean inWindow = withinReturnWindow(pieceId, tenantId);
+                // Step 3C: a matched exchange's old item is expected back regardless of the
+                // generic customer-return window — the merchant already confirmed this
+                // specific return via matching (ExchangeMatchService/Part D), so it isn't a
+                // walk-in "is this even still returnable" judgment call. hasActiveReturnLeg()
+                // is order-scoped (see Test 2 in the Step 3C report) — any delivered piece on
+                // a matched-exchange order clears this, not only the specific matched variant.
+                boolean matchedExchangeCover = !inWindow && shipmentLinkService.hasActiveReturnLeg(orderId, tenantId);
+                if (inWindow || matchedExchangeCover) {
                     legal = true;
-                    String meta = "{\"return_kind\":\"customer_after_delivery\"," + metaSuffix + "}";
+                    String returnKind = matchedExchangeCover ? "exchange_match" : "customer_after_delivery";
+                    String meta = "{\"return_kind\":\"" + returnKind + "\"," + metaSuffix + "}";
                     ledger.transition(pieceId, PieceStatus.DELIVERED, PieceStatus.RETURN_PENDING_INSPECTION,
                         "return_received", actorUserId, new TransitionContext(orderId, shipmentId, locationId, orderId, meta));
                 } else {
-                    // Outside the customer return window: ours, but no longer return-eligible.
-                    // Illegal-state fork — no transition, mismatch-only.
+                    // Outside the customer return window and no active return leg / matched
+                    // exchange covers it: ours, but no longer return-eligible. Illegal-state
+                    // fork — no transition, mismatch-only.
                     legal = false; unexpected = true;
                     log.warn("Illegal-state return scan (delivered, out of window): piece={} session={}", pieceId, sessionId);
                 }
