@@ -108,16 +108,36 @@ bosta:
     status-max-per-cycle: 200    # cap; rotation via last_polled_at ensures no starvation
     # Tier 2 — Discovery poll: pages Bosta list for new deliveries not yet ingested.
     discovery-enabled: true
-    discovery-interval-minutes: 20   # cron hardcoded as */20 * * * * in BostaDiscoveryPollJob
-    discovery-pages: 3               # first 3 pages (~150 newest-created deliveries)
+    # Config-wired (BostaDiscoveryPollJob's @Recurring reads this key) — NOT flipped by
+    # this change, still */20. Cadence increase is a deliberate follow-up once the
+    # high-water mark + per-tenant advisory lock below have proven themselves at this
+    # interval; changing this value alone is now enough to do it, no redeploy of code.
+    discovery-cron: "*/20 * * * *"
+    # Hard page-count safety valve (circuit breaker), independent of the ceiling below —
+    # protects against a runaway/buggy page walk. NOT the normal per-cycle work bound
+    # any more (that's discovery-max-items-per-cycle) — see BostaDiscoveryPollJob javadoc.
+    discovery-pages: 3
+    # Per-cycle cap on genuinely unresolved items (brand new, or still-unlinked from an
+    # earlier cycle) that get a real Bosta fetchDelivery call — the current effective
+    # discovery-pages × backfill.page-size bound (3 × 50). Already-linked items are
+    # skipped via a cheap local shipments check and don't count toward this. If a burst
+    # exceeds it, the cycle processes what it can and resumes next cycle — see
+    # BostaDiscoveryPollJob javadoc for why nothing is dropped.
+    discovery-max-items-per-cycle: 150
     # Shared throttle — 2s between individual fetchDelivery calls (increased after 429 incident).
     # With 16 shipments × 2s = 32s per cycle. Webhook re-fetch adds ~16 parallel calls.
     # If Bosta rate-limits again, BostaRateLimitException sets per-tenant backoff in ConcurrentHashMap.
     inter-fetch-delay-ms: 2000
     # Rate-limit math (per tenant per hour, ~16 in-flight shipments):
     #   Tier 1: 20 cycles/hr × 16 fetches × 1 webhook re-fetch = ~640 API calls/hr (sequential)
-    #   Tier 2: 3 cycles/hr × (3 list calls + ~50 per-shipment) = ~159 API calls/hr
-    #   Total: ~800 API calls/hr/tenant at current scale
+    #   Tier 2, steady state (nothing new): 3 cycles/hr × 1 list call = 3 API calls/hr —
+    #     the high-water mark stops the page walk at the first already-seen item, and
+    #     the shipments skip-check means an already-linked item is never re-fetched.
+    #   Tier 2, worst case (everything in the scanned range is unresolved, e.g. first
+    #     connect or a burst larger than the ceiling): 3 cycles/hr × (3 list calls +
+    #     up to discovery-max-items-per-cycle fetches) ≈ same ~159 API calls/hr as before
+    #     this change — the ceiling is deliberately unchanged from the old fixed bound.
+    #   Total: ~643–800 API calls/hr/tenant depending on how much is still unresolved.
   reconcile:
     # Tier 3 — Order Reconcile: detects orders with no linked Bosta delivery.
     # Works purely against local unlinked_bosta_deliveries — no Bosta API calls.

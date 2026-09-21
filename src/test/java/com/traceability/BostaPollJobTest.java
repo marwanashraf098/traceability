@@ -22,6 +22,8 @@ import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
+import java.sql.Connection;
+import java.sql.PreparedStatement;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -46,6 +48,11 @@ import static org.mockito.Mockito.*;
  *   p9  — terminal state set is correct (all 5 terminal values excluded)
  *   p10 — multi-tenant: tenant A's poll does not touch tenant B's shipments
  *   p11 — 429 rate limit: cycle aborts + per-tenant backoff prevents immediate retry
+ *   p15 — Tier 2 high-water mark: steady state converges to 1 list call, 0 fetches
+ *   p16 — Tier 2 burst > ceiling: resumes next cycle via the shipments skip-check,
+ *         nothing dropped, nothing double-enqueued
+ *   p17 — Tier 2 high-water mark: item above the mark always fetched, at/below never
+ *   p18 — Tier 2 per-tenant advisory lock: held elsewhere → this run skips cleanly
  *
  * BostaGateway and JobScheduler are @MockBean. BostaStatusPollJob, BostaDiscoveryPollJob,
  * and BostaWebhookJob are exercised directly (JobRunr scheduling is not involved).
@@ -78,6 +85,9 @@ class BostaPollJobTest {
         r.add("bosta.poll.inter-fetch-delay-ms",     () -> "0");
         // Small cap for p4 (cap/rotation test)
         r.add("bosta.poll.status-max-per-cycle",     () -> "3");
+        // Small ceiling + page size for p16 (burst > ceiling, resumable in 2 cycles)
+        r.add("bosta.poll.discovery-max-items-per-cycle", () -> "3");
+        r.add("bosta.backfill.page-size",                 () -> "3");
     }
 
     @Autowired JdbcTemplate          jdbc;
@@ -382,10 +392,19 @@ class BostaPollJobTest {
         jdbc.execute("DELETE FROM tenants WHERE id = '" + tenant2Id + "'");
     }
 
-    // ── p6: Tier 1 + Tier 2 coexistence — same delivery deduplicated ──────────
+    // ── p6: Tier 1 + Tier 2 coexistence — Tier 2 no longer touches a linked delivery ─
 
+    /**
+     * Before the high-water-mark change, Tier 2 unconditionally re-fetched every item
+     * on its scanned pages regardless of link status, so a delivery already linked (and
+     * therefore already owned by Tier 1) still produced a SECOND webhook_events row —
+     * harmless (idem-key dedup at BostaWebhookJob.process() step 4 caught it, see
+     * p12/p13), but a wasted Bosta API call every cycle. The shipments skip-check now
+     * means Tier 2 never even calls Bosta for it: coexistence is enforced by Tier 2
+     * staying out of the way entirely, not by a second event racing to be deduped.
+     */
     @Test
-    void p6_pollAndDiscovery_sameDelivery_coexistWithoutDuplicate() {
+    void p6_pollAndDiscovery_alreadyLinkedDelivery_discoveryCheaplySkipsIt() {
         String tracking  = "BOS-POLL-P6";
         String updatedAt = "2026-07-05T12:00:00.000Z";
         String extId     = "EXT-POLL-P6";
@@ -404,27 +423,25 @@ class BostaPollJobTest {
         when(bostaGateway.listDeliveriesPage(anyString(), eq(3), anyInt()))
             .thenReturn(List.of());
 
-        // Both Tier 1 and Tier 2 fire for the same delivery
+        // Both Tier 1 and Tier 2 fire for the same, already-linked delivery.
         statusPollJob.pollAll();
         discoveryPollJob.discoverAll();
 
-        // Two webhook_events rows (one per source), but the same idem key
-        Integer eventCount = jdbc.queryForObject(
-            "SELECT COUNT(*) FROM webhook_events WHERE payload->>'trackingNumber' = ?",
-            Integer.class, tracking);
-        assertThat(eventCount).isEqualTo(2);
+        // Discovery's list call still happens (it always lists page 1 first), but the
+        // only fetchDelivery call for this tracking number is Tier 1's — Tier 2 skips
+        // it via the shipments check without ever touching Bosta.
+        verify(bostaGateway, times(1)).fetchDelivery(anyString(), eq(tracking));
 
-        // Process both — only the first one transitions; second is dedup'd
-        List<Long> ids = jdbc.queryForList(
-            "SELECT id FROM webhook_events WHERE payload->>'trackingNumber' = ? ORDER BY id",
-            Long.class, tracking);
-        webhookJob.process(ids.get(0), tenantId);
-        webhookJob.process(ids.get(1), tenantId);
+        // Exactly one webhook_events row — Tier 1's. Tier 2 produced none.
+        List<Map<String, Object>> rows = jdbc.queryForList(
+            "SELECT id, source::text AS source FROM webhook_events WHERE payload->>'trackingNumber' = ?",
+            tracking);
+        assertThat(rows).hasSize(1);
+        assertThat(rows.get(0).get("source")).isEqualTo("bosta_poll");
 
-        assertThat(webhookStatus(ids.get(0))).isEqualTo("processed");
-        String secondError = jdbc.queryForObject(
-            "SELECT error FROM webhook_events WHERE id = ?", String.class, ids.get(1));
-        assertThat(secondError).as("second event (same idem key) is a duplicate").contains("duplicate");
+        Long id = (Long) rows.get(0).get("id");
+        webhookJob.process(id, tenantId);
+        assertThat(webhookStatus(id)).isEqualTo("processed");
     }
 
     // ── p7: Tier 2 — new delivery discovered + ingested ────────────────────────
@@ -808,6 +825,206 @@ class BostaPollJobTest {
             "SELECT COUNT(*) FROM webhook_events WHERE payload->>'trackingNumber' = ?",
             Long.class, tracking);
         assertThat(newEventCount).as("one event row created for state-changed delivery").isEqualTo(1L);
+    }
+
+    // ── p15: Tier 2 high-water mark — steady state converges to 1 list call, 0 fetches ─
+
+    @Test
+    void p15_discoveryPoll_steadyState_stopsAtHighWaterMark_zeroFetchesWhenNothingNew() {
+        String older = "BOS-P15-OLDER";
+        String fresh = "BOS-P15-NEW";
+
+        setupCourierAccount("poll-key-p15");
+        createShipment(older, "with_courier");
+        jdbc.update("UPDATE courier_accounts SET discovery_high_water_tracking = ? WHERE tenant_id = ?",
+            older, tenantId);
+
+        when(bostaGateway.listDeliveriesPage(anyString(), eq(1), anyInt()))
+            .thenReturn(List.of(
+                new BostaGateway.SlimDelivery(fresh, 41, "SEND"),
+                new BostaGateway.SlimDelivery(older, 24, "SEND")));
+        when(bostaGateway.fetchDelivery(anyString(), eq(fresh)))
+            .thenReturn(new BostaDelivery(fresh, 41, "SEND", 0, "REF-P15", null,
+                rawWithUpdatedAt("2026-08-01T10:00:00.000Z")));
+
+        // Cycle 1: one genuinely new delivery above the mark.
+        discoveryPollJob.discoverAll();
+
+        verify(bostaGateway, times(1)).listDeliveriesPage(anyString(), eq(1), anyInt());
+        verify(bostaGateway, never()).listDeliveriesPage(anyString(), eq(2), anyInt());
+        verify(bostaGateway, times(1)).fetchDelivery(anyString(), eq(fresh));
+
+        String markAfterCycle1 = jdbc.queryForObject(
+            "SELECT discovery_high_water_tracking FROM courier_accounts WHERE tenant_id = ?",
+            String.class, tenantId);
+        assertThat(markAfterCycle1).as("clean cycle — mark advances to the new top of the list")
+            .isEqualTo(fresh);
+
+        // Simulate the async pipeline finishing between cron fires — exactly what a real
+        // 20-minute gap gives BostaWebhookJob to link this delivery before the next poll.
+        createShipment(fresh, "with_courier");
+
+        reset(bostaGateway);
+        when(bostaGateway.listDeliveriesPage(anyString(), eq(1), anyInt()))
+            .thenReturn(List.of(
+                new BostaGateway.SlimDelivery(fresh, 41, "SEND"),
+                new BostaGateway.SlimDelivery(older, 24, "SEND")));
+
+        // Cycle 2: nothing new arrived, and "fresh" is now confirmed linked.
+        discoveryPollJob.discoverAll();
+
+        verify(bostaGateway, times(1)).listDeliveriesPage(anyString(), eq(1), anyInt());
+        verify(bostaGateway, never()).listDeliveriesPage(anyString(), eq(2), anyInt());
+        verify(bostaGateway, never()).fetchDelivery(anyString(), any());
+    }
+
+    // ── p16: Tier 2 burst > ceiling — resumes next cycle, nothing dropped ─────
+
+    @Test
+    void p16_discoveryPoll_burstExceedsCeiling_resumesNextCycle_nothingDropped() {
+        setupCourierAccount("poll-key-p16");
+        String[] tracking = {
+            "BOS-P16-1", "BOS-P16-2", "BOS-P16-3", "BOS-P16-4", "BOS-P16-5", "BOS-P16-6"
+        };
+
+        for (String t : tracking) {
+            when(bostaGateway.fetchDelivery(anyString(), eq(t)))
+                .thenReturn(new BostaDelivery(t, 41, "SEND", 0, "REF-" + t, null,
+                    rawWithUpdatedAt("2026-08-02T09:00:00.000Z")));
+        }
+        when(bostaGateway.listDeliveriesPage(anyString(), eq(1), anyInt())).thenReturn(List.of(
+            new BostaGateway.SlimDelivery(tracking[0], 41, "SEND"),
+            new BostaGateway.SlimDelivery(tracking[1], 41, "SEND"),
+            new BostaGateway.SlimDelivery(tracking[2], 41, "SEND")));
+        when(bostaGateway.listDeliveriesPage(anyString(), eq(2), anyInt())).thenReturn(List.of(
+            new BostaGateway.SlimDelivery(tracking[3], 41, "SEND"),
+            new BostaGateway.SlimDelivery(tracking[4], 41, "SEND"),
+            new BostaGateway.SlimDelivery(tracking[5], 41, "SEND")));
+        when(bostaGateway.listDeliveriesPage(anyString(), eq(3), anyInt())).thenReturn(List.of());
+
+        // Cycle 1: ceiling (3, test-configured) reached at the end of page 1 — page 2
+        // is never fetched even though the mock has an answer ready for it.
+        discoveryPollJob.discoverAll();
+
+        verify(bostaGateway, times(1)).listDeliveriesPage(anyString(), eq(1), anyInt());
+        verify(bostaGateway, never()).listDeliveriesPage(anyString(), eq(2), anyInt());
+        for (int i = 0; i < 3; i++) verify(bostaGateway, times(1)).fetchDelivery(anyString(), eq(tracking[i]));
+        for (int i = 3; i < 6; i++) verify(bostaGateway, never()).fetchDelivery(anyString(), eq(tracking[i]));
+
+        String markAfterCycle1 = jdbc.queryForObject(
+            "SELECT discovery_high_water_tracking FROM courier_accounts WHERE tenant_id = ?",
+            String.class, tenantId);
+        assertThat(markAfterCycle1).as("ceiling hit mid-burst — mark must not advance").isNull();
+
+        // Simulate the async pipeline finishing between cron fires: the first 3 link.
+        for (int i = 0; i < 3; i++) createShipment(tracking[i], "with_courier");
+
+        reset(bostaGateway);
+        for (String t : tracking) {
+            when(bostaGateway.fetchDelivery(anyString(), eq(t)))
+                .thenReturn(new BostaDelivery(t, 41, "SEND", 0, "REF-" + t, null,
+                    rawWithUpdatedAt("2026-08-02T09:00:00.000Z")));
+        }
+        when(bostaGateway.listDeliveriesPage(anyString(), eq(1), anyInt())).thenReturn(List.of(
+            new BostaGateway.SlimDelivery(tracking[0], 41, "SEND"),
+            new BostaGateway.SlimDelivery(tracking[1], 41, "SEND"),
+            new BostaGateway.SlimDelivery(tracking[2], 41, "SEND")));
+        when(bostaGateway.listDeliveriesPage(anyString(), eq(2), anyInt())).thenReturn(List.of(
+            new BostaGateway.SlimDelivery(tracking[3], 41, "SEND"),
+            new BostaGateway.SlimDelivery(tracking[4], 41, "SEND"),
+            new BostaGateway.SlimDelivery(tracking[5], 41, "SEND")));
+        when(bostaGateway.listDeliveriesPage(anyString(), eq(3), anyInt())).thenReturn(List.of());
+
+        // Cycle 2: items 1–3 skipped cheaply (already linked, no Bosta call); items
+        // 4–6 are genuinely still unresolved and get drained.
+        discoveryPollJob.discoverAll();
+
+        for (int i = 0; i < 3; i++) verify(bostaGateway, never()).fetchDelivery(anyString(), eq(tracking[i]));
+        for (int i = 3; i < 6; i++) verify(bostaGateway, times(1)).fetchDelivery(anyString(), eq(tracking[i]));
+
+        // Nothing dropped, nothing double-enqueued: exactly one webhook_events row per
+        // tracking number across both cycles combined.
+        for (String t : tracking) {
+            Integer count = jdbc.queryForObject(
+                "SELECT COUNT(*) FROM webhook_events WHERE payload->>'trackingNumber' = ?",
+                Integer.class, t);
+            assertThat(count).as(t + " enqueued exactly once").isEqualTo(1);
+        }
+    }
+
+    // ── p17: Tier 2 high-water mark — above always fetched, at/below never ────
+
+    @Test
+    void p17_discoveryPoll_highWaterMark_neverRefetchesOlderThanMark_alwaysRefetchesNew() {
+        String aboveMark = "BOS-P17-ABOVE";
+        String atMark    = "BOS-P17-AT";
+        String belowMark = "BOS-P17-BELOW";
+
+        setupCourierAccount("poll-key-p17");
+        createShipment(atMark, "with_courier");
+        createShipment(belowMark, "delivered");
+        jdbc.update("UPDATE courier_accounts SET discovery_high_water_tracking = ? WHERE tenant_id = ?",
+            atMark, tenantId);
+
+        when(bostaGateway.listDeliveriesPage(anyString(), eq(1), anyInt())).thenReturn(List.of(
+            new BostaGateway.SlimDelivery(aboveMark, 41, "SEND"),
+            new BostaGateway.SlimDelivery(atMark, 24, "SEND"),
+            new BostaGateway.SlimDelivery(belowMark, 45, "SEND")));
+        when(bostaGateway.fetchDelivery(anyString(), eq(aboveMark)))
+            .thenReturn(new BostaDelivery(aboveMark, 41, "SEND", 0, "REF-P17", null,
+                rawWithUpdatedAt("2026-08-04T09:00:00.000Z")));
+
+        discoveryPollJob.discoverAll();
+
+        verify(bostaGateway, times(1)).fetchDelivery(anyString(), eq(aboveMark));
+        verify(bostaGateway, never()).fetchDelivery(anyString(), eq(atMark));
+        verify(bostaGateway, never()).fetchDelivery(anyString(), eq(belowMark));
+        // The scan stops the instant it hits the mark — a second page (where belowMark
+        // would live in a real, longer list) is never even requested.
+        verify(bostaGateway, never()).listDeliveriesPage(anyString(), eq(2), anyInt());
+    }
+
+    // ── p18: Tier 2 advisory lock — held elsewhere → this run skips cleanly ───
+
+    @Test
+    void p18_discoveryAdvisoryLock_heldByOther_skipsWithoutDuplicateWork() throws Exception {
+        String tracking = "BOS-P18";
+        setupCourierAccount("poll-key-p18");
+
+        when(bostaGateway.listDeliveriesPage(anyString(), eq(1), anyInt()))
+            .thenReturn(List.of(new BostaGateway.SlimDelivery(tracking, 41, "SEND")));
+        when(bostaGateway.fetchDelivery(anyString(), eq(tracking)))
+            .thenReturn(new BostaDelivery(tracking, 41, "SEND", 0, "REF-P18", null,
+                rawWithUpdatedAt("2026-08-03T09:00:00.000Z")));
+
+        int[] lockKey = BostaDiscoveryPollJob.advisoryLockKeys(tenantId);
+
+        try (Connection lockConn = jdbc.getDataSource().getConnection()) {
+            // Simulate a previous cycle for this tenant still being in progress by
+            // holding the exact same session-level advisory lock discoverAll() uses.
+            try (PreparedStatement ps = lockConn.prepareStatement("SELECT pg_advisory_lock(?, ?)")) {
+                ps.setInt(1, lockKey[0]);
+                ps.setInt(2, lockKey[1]);
+                ps.execute();
+            }
+
+            discoveryPollJob.discoverAll();
+
+            verify(bostaGateway, never()).listDeliveriesPage(anyString(), anyInt(), anyInt());
+            verify(bostaGateway, never()).fetchDelivery(anyString(), any());
+
+            try (PreparedStatement ps = lockConn.prepareStatement("SELECT pg_advisory_unlock(?, ?)")) {
+                ps.setInt(1, lockKey[0]);
+                ps.setInt(2, lockKey[1]);
+                ps.execute();
+            }
+        }
+
+        // Lock is free again — this run proceeds normally.
+        discoveryPollJob.discoverAll();
+
+        verify(bostaGateway, times(1)).listDeliveriesPage(anyString(), eq(1), anyInt());
+        verify(bostaGateway, times(1)).fetchDelivery(anyString(), eq(tracking));
     }
 
     // ── helpers ───────────────────────────────────────────────────────────────
