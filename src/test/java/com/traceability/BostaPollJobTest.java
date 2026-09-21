@@ -56,6 +56,9 @@ import static org.mockito.Mockito.*;
  *   p19 — Tier 2 high-water mark: from-null first cycle, page-exhaustion — mark
  *         still advances even when the scan never reaches an empty page or matches
  *         a (null) stored mark
+ *   p20 — Tier 2 high-water mark: mark can land on a still-unresolved item; the
+ *         next cycle falls through it instead of stopping early, so nothing older
+ *         goes unvisited
  *
  * BostaGateway and JobScheduler are @MockBean. BostaStatusPollJob, BostaDiscoveryPollJob,
  * and BostaWebhookJob are exercised directly (JobRunr scheduling is not involved).
@@ -1087,6 +1090,89 @@ class BostaPollJobTest {
             .as("from-null first cycle over an all-linked burst must still advance the "
                 + "mark to the newest item seen (page 1's first item), not stay null")
             .isEqualTo(tracking[0]);
+    }
+
+    // ── p20: Tier 2 high-water mark — mark can land on a still-unresolved item; ──
+    // ── the next cycle must not skip anything as a result ─────────────────────
+    //
+    // The advance target (topOfListTracking) is written without checking isLinked, so
+    // the mark can legitimately point at an item that hasn't resolved yet. The
+    // reachedMark check that reads it back (equals(storedMark) && isLinked) is what
+    // has to carry all the safety here: if that item is STILL unresolved on the next
+    // cycle, the equality match alone must not be treated as "caught up" — the scan
+    // has to fall through and keep going, or anything strictly older than the mark
+    // (but never visited yet) would be silently skipped forever.
+
+    @Test
+    void p20_discoveryPoll_markLandsOnUnlinkedItem_nextCycleDoesNotSkipUnresolvedItems() {
+        String top   = "BOS-P20-TOP";
+        String new2  = "BOS-P20-NEW2";
+        String older = "BOS-P20-OLDER";
+
+        setupCourierAccount("poll-key-p20");
+
+        when(bostaGateway.listDeliveriesPage(anyString(), eq(1), anyInt()))
+            .thenReturn(List.of(new BostaGateway.SlimDelivery(top, 41, "SEND")));
+        when(bostaGateway.listDeliveriesPage(anyString(), eq(2), anyInt()))
+            .thenReturn(List.of());
+        when(bostaGateway.fetchDelivery(anyString(), eq(top)))
+            .thenReturn(new BostaDelivery(top, 41, "SEND", 0, "REF-P20-TOP", null,
+                rawWithUpdatedAt("2026-08-05T09:00:00.000Z")));
+
+        // Cycle 1: mark starts null; "top" is the only item on the list, brand new,
+        // and deliberately left UNRESOLVED — no shipment row is created and
+        // webhookJob.process() is never called, exactly like a real delivery whose
+        // ingest was only just enqueued this cycle and whose ShipmentLinkService
+        // match hasn't run yet.
+        discoveryPollJob.discoverAll();
+
+        verify(bostaGateway, times(1)).fetchDelivery(anyString(), eq(top));
+
+        String markAfterCycle1 = jdbc.queryForObject(
+            "SELECT discovery_high_water_tracking FROM courier_accounts WHERE tenant_id = ?",
+            String.class, tenantId);
+        assertThat(markAfterCycle1)
+            .as("mark is allowed to land on a still-unresolved item — see class javadoc")
+            .isEqualTo(top);
+
+        // Cycle 2: a newer item ("new2") and an older one ("older") appear around the
+        // mark. Both are ALSO left unresolved. If the isLinked gate on the equality
+        // check were wrong — stopping on a bare tracking-number match regardless of
+        // link state — the scan would stop dead the instant it re-encounters "top"
+        // and "older", strictly behind it in the newest-first list, would never be
+        // fetched at all.
+        reset(bostaGateway);
+        when(bostaGateway.listDeliveriesPage(anyString(), eq(1), anyInt())).thenReturn(List.of(
+            new BostaGateway.SlimDelivery(new2, 41, "SEND"),
+            new BostaGateway.SlimDelivery(top, 41, "SEND"),
+            new BostaGateway.SlimDelivery(older, 41, "SEND")));
+        when(bostaGateway.fetchDelivery(anyString(), eq(new2)))
+            .thenReturn(new BostaDelivery(new2, 41, "SEND", 0, "REF-P20-NEW2", null,
+                rawWithUpdatedAt("2026-08-05T09:05:00.000Z")));
+        when(bostaGateway.fetchDelivery(anyString(), eq(top)))
+            .thenReturn(new BostaDelivery(top, 41, "SEND", 0, "REF-P20-TOP", null,
+                rawWithUpdatedAt("2026-08-05T09:00:00.000Z")));
+        when(bostaGateway.fetchDelivery(anyString(), eq(older)))
+            .thenReturn(new BostaDelivery(older, 41, "SEND", 0, "REF-P20-OLDER", null,
+                rawWithUpdatedAt("2026-08-05T08:00:00.000Z")));
+
+        discoveryPollJob.discoverAll();
+
+        // The scan must not latch onto "top" — it has to fall through and reach
+        // "older", proving nothing between the mark and the true end of this cycle's
+        // scan was silently skipped.
+        verify(bostaGateway, times(1)).fetchDelivery(anyString(), eq(new2));
+        verify(bostaGateway, times(1)).fetchDelivery(anyString(), eq(older));
+
+        // "top" is re-attempted (harmless retry, not a skip) but must land exactly
+        // one webhook_events row — content-derived idem key (tracking+state+
+        // updatedAt) absorbs the duplicate call, same as p8/p12/p13/p16.
+        Integer topEventCount = jdbc.queryForObject(
+            "SELECT COUNT(*) FROM webhook_events WHERE payload->>'trackingNumber' = ?",
+            Integer.class, top);
+        assertThat(topEventCount)
+            .as("re-attempting the still-unlinked mark item is idempotent, not duplicated")
+            .isEqualTo(1);
     }
 
     // ── helpers ───────────────────────────────────────────────────────────────
