@@ -6,7 +6,7 @@ import { setAccessToken } from '../auth'
 import AuthLayout from '../components/AuthLayout'
 import { Input, Button } from '../components/ui'
 import { useStation } from '../components/StationProvider'
-import { DEMO_SESSION_MARKER } from './DemoLanding'
+import { DEMO_SESSION_MARKER, DEMO_ACCESS_TOKEN_KEY } from '../demoConstants'
 
 export default function Login() {
   const { t }      = useTranslation()
@@ -31,8 +31,10 @@ export default function Login() {
       const res = await login(email, password)
       setAccessToken(res.accessToken)
       // A real login means this is no longer (if it ever was) a demo visitor —
-      // clear the marker so a later session loss bounces to /login, not /demo.
+      // clear the marker AND any stashed demo token so a later session loss
+      // bounces to /login, not /demo, and no stale demo token lingers.
       sessionStorage.removeItem(DEMO_SESSION_MARKER)
+      sessionStorage.removeItem(DEMO_ACCESS_TOKEN_KEY)
       // A full email+password login is always an owner/manager action (workers
       // sign in via the station PIN gate) — clear any persisted stationMode flag
       // so this device never lands back in the gate instead of the app.

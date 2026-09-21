@@ -1,7 +1,7 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
-import { useState, useEffect, lazy, Suspense } from 'react'
+import { useState, useEffect, useRef, lazy, Suspense } from 'react'
 import { getAccessToken, setAccessToken, clearAccessToken } from './auth'
-import { getRoleFromToken } from './api'
+import { getRoleFromToken, getJwtExpiry } from './api'
 import { ToastProvider } from './components/ui'
 import Layout from './components/Layout'
 import { StationProvider, useStation } from './components/StationProvider'
@@ -13,7 +13,8 @@ const StyleGuide = import.meta.env.DEV
   : null
 import Login from './pages/Login'
 import Signup from './pages/Signup'
-import DemoLanding, { DEMO_SESSION_MARKER } from './pages/DemoLanding'
+import DemoLanding from './pages/DemoLanding'
+import { DEMO_SESSION_MARKER, DEMO_ACCESS_TOKEN_KEY } from './demoConstants'
 import ForgotPassword from './pages/ForgotPassword'
 import ResetPassword from './pages/ResetPassword'
 import Overview from './pages/Overview'
@@ -52,11 +53,54 @@ type AuthRefreshState = 'loading' | 'authenticated' | 'unauthenticated'
  *
  * Fast path: if the access token is already in memory (in-session navigation) we skip
  * the refresh call entirely — no spinner, no extra RTT.
+ *
+ * FIX 2 (FR-DEMO): a demo session has no cookie at all (by design — DemoLanding.tsx),
+ * so a hard refresh would otherwise ALWAYS fall through to the cookie-based refresh
+ * above, 401, and bounce to /demo?expired=1 even when the 90-minute demo token is
+ * still perfectly valid. Before falling back to 'loading' (real-user path, unchanged),
+ * check for a demo token stashed in sessionStorage (set only by DemoLanding's own
+ * onSuccess — a real login NEVER writes this key, so this is a pure no-op for every
+ * real user) and rehydrate it into memory if its `exp` claim is still in the future.
+ * If it's expired, remove ONLY the token key — NOT the DEMO_SESSION_MARKER, which is
+ * what drives the existing /demo?expired=1 redirect below; clearing it here would
+ * silently send an expired demo visitor to the bare /login form instead.
  */
 function useAuthRefresh(): AuthRefreshState {
-  const [state, setState] = useState<AuthRefreshState>(
-    () => getAccessToken() !== null ? 'authenticated' : 'loading'
-  )
+  const { exitStationMode } = useStation()
+  // Set (during the state initializer below, which runs before this ref's owning
+  // effect) when a stashed demo token is found but already expired — read by the
+  // effect right after, since calling a DIFFERENT component's state setter
+  // (exitStationMode, from StationProvider) during THIS component's render is not
+  // safe, but doing so from an effect after commit always is.
+  const expiredDemoRef = useRef(false)
+
+  const [state, setState] = useState<AuthRefreshState>(() => {
+    if (getAccessToken() === null) {
+      const demoToken = sessionStorage.getItem(DEMO_ACCESS_TOKEN_KEY)
+      if (demoToken) {
+        const exp = getJwtExpiry(demoToken)
+        if (exp !== null && exp * 1000 > Date.now()) {
+          setAccessToken(demoToken)
+        } else {
+          sessionStorage.removeItem(DEMO_ACCESS_TOKEN_KEY)
+          expiredDemoRef.current = true
+        }
+      }
+    }
+    return getAccessToken() !== null ? 'authenticated' : 'loading'
+  })
+
+  useEffect(() => {
+    // FIX 3(b): an expired demo token found above means this device's demo session
+    // just ended — clear any stationMode trap left over from it so the /demo?expired=1
+    // redirect below doesn't hand the visitor a fresh demo session that's immediately
+    // stuck in the station gate. Only ever fires when a demo token was actually
+    // present, so this never touches a real worker/owner's stationMode.
+    if (expiredDemoRef.current) {
+      exitStationMode()
+      expiredDemoRef.current = false
+    }
+  }, [exitStationMode])
 
   useEffect(() => {
     if (state !== 'loading') return

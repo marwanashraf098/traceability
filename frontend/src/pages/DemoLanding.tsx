@@ -5,10 +5,8 @@ import { demoStart, DemoStartError } from '../api'
 import { setAccessToken } from '../auth'
 import AuthLayout from '../components/AuthLayout'
 import { Modal, Input, Button, Checkbox } from '../components/ui'
-
-/** Set the moment a demo session starts; cleared on session loss or a real login.
- *  See RequireAuth/RootRoute in App.tsx for the redirect this marker drives. */
-export const DEMO_SESSION_MARKER = 'traced_demo'
+import { useStation } from '../components/StationProvider'
+import { DEMO_SESSION_MARKER, DEMO_ACCESS_TOKEN_KEY } from '../demoConstants'
 
 /**
  * FR-DEMO Day 3 — public /demo landing. Two states, driven by the ?expired=1 query
@@ -26,6 +24,7 @@ export default function DemoLanding() {
   const [params] = useSearchParams()
   const expired = params.get('expired') === '1'
   const isAr = i18n.language === 'ar'
+  const { exitStationMode } = useStation()
 
   // Not expired -> open the modal immediately on first render (no flash of the
   // base card first). Expired -> base "session ended" card, modal stays closed
@@ -37,8 +36,17 @@ export default function DemoLanding() {
     // session — clear the marker so a later, unrelated logged-out hit (e.g. they
     // click through to /login on their own) goes to the plain login form instead
     // of looping back here.
-    if (expired) sessionStorage.removeItem(DEMO_SESSION_MARKER)
-  }, [expired])
+    if (expired) {
+      sessionStorage.removeItem(DEMO_SESSION_MARKER)
+      // FIX 3(b): a demo visitor who entered station mode before their session
+      // ended must not find a NEW demo session trapped in the gate too — stationMode
+      // is a device-level localStorage flag with no tenant/session scoping of its
+      // own. This route is only ever reached via the demo-lost-session redirect (a
+      // real user's expired session goes straight to /login, never here), so this
+      // can never clear stationMode out from under a real worker/owner.
+      exitStationMode()
+    }
+  }, [expired, exitStationMode])
 
   return (
     <AuthLayout>
@@ -70,6 +78,9 @@ export default function DemoLanding() {
           onSuccess={(accessToken, redirect) => {
             setAccessToken(accessToken)
             sessionStorage.setItem(DEMO_SESSION_MARKER, '1')
+            // FIX 2: persist the token itself (not just the marker) so a hard
+            // refresh can rehydrate it — see App.tsx's useAuthRefresh.
+            sessionStorage.setItem(DEMO_ACCESS_TOKEN_KEY, accessToken)
             navigate(redirect)
           }}
         />

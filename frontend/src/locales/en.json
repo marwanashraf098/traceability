@@ -912,7 +912,7 @@
     },
     "expired": {
       "title": "Your demo session ended",
-      "message": "Demo sessions don't persist across page reloads. Start a new one to keep exploring.",
+      "message": "Start a new one to keep exploring.",
       "startAgain": "Start demo"
     },
     "modal": {
@@ -930,6 +930,9 @@
     },
     "errors": {
       "generic": "Could not start the demo. Please try again."
+    },
+    "exit": {
+      "button": "Exit demo — no password needed"
     }
   },
   "forgotPassword": {

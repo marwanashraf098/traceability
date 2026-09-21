@@ -3,13 +3,14 @@ import { useNavigate } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { Delete } from 'lucide-react'
 import {
-  getStationRoster, switchPin, getMe, login, getRoleFromToken,
+  getStationRoster, switchPin, getMe, login, getRoleFromToken, getTenantIdFromToken,
   StationRosterEntry,
 } from '../api'
 import { setAccessToken, clearAccessToken } from '../auth'
 import { useStation } from './StationProvider'
 import { Button, Input, cn } from './ui'
 import { Logo } from './Logo'
+import { DEMO_TENANT_ID } from '../demoConstants'
 
 type Step = 'roster' | 'pin' | 'exit'
 
@@ -358,6 +359,16 @@ function ExitStep({ onCancel, onExited }: { onCancel: () => void; onExited: () =
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
 
+  // FIX 3(a) — the demo owner's password is a genuinely random, never-disclosed
+  // value (DemoSeeder.randomUndisclosedPassword()) by design, same as any real
+  // tenant's owner password would be unknown to a walk-up visitor. Real tenants
+  // are unaffected: their owner/manager always knows their own credential, so the
+  // password re-auth flow below is untouched for them. getTenantIdFromToken()
+  // reads the CURRENT in-memory token — the one that got this visitor into
+  // station mode in the first place, still valid the whole time they're on the
+  // gate (entering station mode doesn't clear it).
+  const isDemoTenant = getTenantIdFromToken() === DEMO_TENANT_ID
+
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
     setError('')
@@ -425,6 +436,17 @@ function ExitStep({ onCancel, onExited }: { onCancel: () => void; onExited: () =
           </Button>
         </div>
       </form>
+
+      {isDemoTenant && (
+        <Button
+          type="button"
+          variant="secondary"
+          className="w-full mt-3"
+          onClick={onExited}
+        >
+          {t('demo.exit.button')}
+        </Button>
+      )}
     </div>
   )
 }

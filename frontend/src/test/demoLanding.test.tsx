@@ -6,10 +6,11 @@ import { I18nextProvider, initReactI18next } from 'react-i18next'
 import i18next from 'i18next'
 import en from '../locales/en.json'
 import ar from '../locales/ar.json'
-import DemoLanding, { DEMO_SESSION_MARKER } from '../pages/DemoLanding'
+import DemoLanding from '../pages/DemoLanding'
 import { RootRoute, RequireAuth } from '../App'
 import { StationProvider } from '../components/StationProvider'
-import { clearAccessToken, getAccessToken } from '../auth'
+import { clearAccessToken, getAccessToken, setAccessToken } from '../auth'
+import { DEMO_SESSION_MARKER, DEMO_ACCESS_TOKEN_KEY } from '../demoConstants'
 
 // Mirrors rootRoute.test.tsx's fresh-instance pattern — independent of the app's
 // singleton i18n.ts (avoids the localStorage.getItem('lang') read at import time).
@@ -23,6 +24,13 @@ function makeI18n(lng: 'en' | 'ar') {
     interpolation: { escapeValue: false },
   })
   return instance
+}
+
+/** Minimal fake JWT — getJwtExpiry()/getTenantIdFromToken() only read the middle
+ *  segment's claims, same technique as rootRoute.test.tsx's fakeJwt(role). */
+function fakeJwt(claims: Record<string, unknown>): string {
+  const payload = btoa(JSON.stringify(claims))
+  return `h.${payload}.s`
 }
 
 function jsonResponse(status: number, body: unknown) {
@@ -288,5 +296,67 @@ describe('RequireAuth / RootRoute — lost demo session redirect', () => {
     renderRootRoute()
 
     expect(await screen.findByTestId('login-page')).toBeInTheDocument()
+  })
+})
+
+// -----------------------------------------------------------------------
+// FIX 2 — demo session survives refresh. useAuthRefresh() rehydrates a stashed
+// demo token from sessionStorage before falling back to the cookie-based
+// /auth/refresh flow real users go through.
+// -----------------------------------------------------------------------
+describe('useAuthRefresh — demo token rehydration (FIX 2)', () => {
+  test('valid (non-expired) demo token in sessionStorage -> stays authenticated, no bounce', async () => {
+    const futureExp = Math.floor(Date.now() / 1000) + 3600 // 1h from now
+    const token = fakeJwt({ role: 'owner', exp: futureExp })
+    sessionStorage.setItem(DEMO_ACCESS_TOKEN_KEY, token)
+    const fetchMock = vi.fn(() => jsonResponse(401, {})) // must never be reached
+    vi.stubGlobal('fetch', fetchMock)
+
+    renderRequireAuthAtOverview()
+
+    expect(await screen.findByTestId('overview-page')).toBeInTheDocument()
+    expect(screen.queryByTestId('login-page')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('demo-page')).not.toBeInTheDocument()
+    expect(getAccessToken()).toBe(token)
+    // Fast path: the token was already valid in memory before the effect ran,
+    // so the cookie-based refresh call is never made — real-user path untouched.
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  test('EXPIRED demo token in sessionStorage -> token key cleared, marker retained, lands on /demo?expired=1', async () => {
+    const pastExp = Math.floor(Date.now() / 1000) - 60 // 1 minute ago
+    const token = fakeJwt({ role: 'owner', exp: pastExp })
+    sessionStorage.setItem(DEMO_ACCESS_TOKEN_KEY, token)
+    sessionStorage.setItem(DEMO_SESSION_MARKER, '1')
+    mockRefreshUnauthenticated() // no cookie for a demo session -> 401
+
+    renderRequireAuthAtOverview()
+
+    const demoPage = await screen.findByTestId('demo-page')
+    expect(demoPage.textContent).toContain('expired=1')
+    expect(sessionStorage.getItem(DEMO_ACCESS_TOKEN_KEY)).toBeNull()
+    // The marker is what actually drives this redirect — must survive the
+    // expired-token cleanup, or a later hit would wrongly fall through to /login.
+    expect(sessionStorage.getItem(DEMO_SESSION_MARKER)).toBe('1')
+    expect(getAccessToken()).toBeNull()
+  })
+
+  test('real user: no demo token key at all -> unchanged cookie-based refresh path', async () => {
+    const fetchMock = vi.fn((url: string) => {
+      if (url.includes('/auth/refresh')) return jsonResponse(200, { accessToken: fakeJwt({ role: 'owner' }) })
+      return jsonResponse(404, {})
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    renderRequireAuthAtOverview()
+
+    expect(await screen.findByTestId('overview-page')).toBeInTheDocument()
+    // Confirms the real-user path was actually exercised (not skipped) — additive
+    // only, never a shortcut around the existing cookie-based mechanism.
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining('/auth/refresh'),
+      expect.objectContaining({ credentials: 'include' })
+    )
+    expect(sessionStorage.getItem(DEMO_ACCESS_TOKEN_KEY)).toBeNull()
   })
 })

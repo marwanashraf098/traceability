@@ -498,6 +498,25 @@ export function getRoleFromToken(): 'owner' | 'manager' | 'worker' | null {
   return null
 }
 
+/** tenantId claim of the CURRENT in-memory access token — used by StationGate's
+ *  demo-only exit bypass (FR-DEMO) to tell the demo tenant apart from a real one. */
+export function getTenantIdFromToken(): string | null {
+  const t = getAccessToken()
+  if (!t) return null
+  const claims = parseJwtPayload(t)
+  const tenantId = claims['tenantId']
+  return typeof tenantId === 'string' ? tenantId : null
+}
+
+/** `exp` claim (seconds since epoch) of an ARBITRARY token — unlike the two helpers
+ *  above, takes the token explicitly rather than reading getAccessToken(), since it's
+ *  used to validate a token that is NOT yet the in-memory one (a candidate rehydrated
+ *  from sessionStorage — see App.tsx's useAuthRefresh). */
+export function getJwtExpiry(token: string): number | null {
+  const exp = parseJwtPayload(token)['exp']
+  return typeof exp === 'number' ? exp : null
+}
+
 // ── Auth: signup ──────────────────────────────────────────────────────────────
 
 export function signup(

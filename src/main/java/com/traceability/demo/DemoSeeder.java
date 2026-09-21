@@ -193,6 +193,33 @@ public class DemoSeeder {
             List.of("2-Piece", "4-Piece", "6-Piece"))
     );
 
+    /** Realistic Egyptian customer name/phone per seeded order — FR-DEMO fix. */
+    private record Customer(String name, String phone) {}
+
+    /** #DEMO-Q1..Q10 (insertPickableOrders), indexed i-1. */
+    private static final List<Customer> Q_CUSTOMERS = List.of(
+        new Customer("Nour Hassan",    "+20 100 214 5533"),
+        new Customer("Ahmed Fathy",    "+20 111 887 2210"),
+        new Customer("Mariam Adel",    "+20 128 440 9187"),
+        new Customer("Omar Khaled",    "+20 100 662 3390"),
+        new Customer("Salma Ibrahim",  "+20 122 019 7745"),
+        new Customer("Youssef Nabil",  "+20 114 553 8801"),
+        new Customer("Habiba Sherif",  "+20 106 778 2394"),
+        new Customer("Kareem Mostafa", "+20 101 330 5567"),
+        new Customer("Farida Tarek",   "+20 127 904 1123"),
+        new Customer("Mahmoud Ali",    "+20 112 246 8890")
+    );
+
+    /** #DEMO-T1..T3 (insertInTransitShipments), indexed i-1. */
+    private static final List<Customer> T_CUSTOMERS = List.of(
+        new Customer("Laila Sami",   "+20 100 558 7712"),
+        new Customer("Hassan Gamal", "+20 128 113 4406"),
+        new Customer("Dina Ashraf",  "+20 115 667 9028")
+    );
+
+    /** #DEMO-BLOCKED keeps its narrative name ("Repeat RTO Customer") — phone only. */
+    private static final String BLOCKED_CUSTOMER_PHONE = "+20 106 000 4417";
+
     private final JdbcTemplate       jdbc;
     private final DataSource         ownerDs;
     private final PasswordEncoder    passwordEncoder;
@@ -508,13 +535,15 @@ public class DemoSeeder {
         for (int i = 1; i <= 10; i++) {
             UUID orderId = UUID.randomUUID();
             UUID variantId = variantIds.get((i - 1) % variantIds.size());
+            Customer customer = Q_CUSTOMERS.get(i - 1);
 
             ojdbc.update(
-                    "INSERT INTO orders (id, tenant_id, store_id, external_id, number, status, " +
-                    "                    payment_method, placed_at, on_hold) " +
-                    "VALUES (?, ?, ?, ?, ?, 'new'::order_status, 'cod'::order_payment_method, " +
+                    "INSERT INTO orders (id, tenant_id, store_id, external_id, number, customer_name, " +
+                    "                    customer_phone, status, payment_method, placed_at, on_hold) " +
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, 'new'::order_status, 'cod'::order_payment_method, " +
                     "        now() - make_interval(hours => ?), false)",
-                    orderId, tenantId, storeId, "DEMO-ORDER-Q" + i, "#DEMO-Q" + i, i * 3);
+                    orderId, tenantId, storeId, "DEMO-ORDER-Q" + i, "#DEMO-Q" + i,
+                    customer.name(), customer.phone(), i * 3);
 
             ojdbc.update(
                     "INSERT INTO order_items (tenant_id, order_id, variant_id, quantity) VALUES (?, ?, ?, ?)",
@@ -536,13 +565,15 @@ public class DemoSeeder {
             UUID orderId = UUID.randomUUID();
             UUID variantId = variantIds.get(i % variantIds.size());
             UUID actor = workerIds.get(i % workerIds.size());
+            Customer customer = T_CUSTOMERS.get(i - 1);
 
             ojdbc.update(
-                    "INSERT INTO orders (id, tenant_id, store_id, external_id, number, status, " +
-                    "                    payment_method, placed_at, on_hold) " +
-                    "VALUES (?, ?, ?, ?, ?, 'with_courier'::order_status, 'cod'::order_payment_method, " +
+                    "INSERT INTO orders (id, tenant_id, store_id, external_id, number, customer_name, " +
+                    "                    customer_phone, status, payment_method, placed_at, on_hold) " +
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, 'with_courier'::order_status, 'cod'::order_payment_method, " +
                     "        now() - interval '2 days', false)",
-                    orderId, tenantId, storeId, "DEMO-ORDER-T" + i, "#DEMO-T" + i);
+                    orderId, tenantId, storeId, "DEMO-ORDER-T" + i, "#DEMO-T" + i,
+                    customer.name(), customer.phone());
 
             UUID orderItemId = UUID.randomUUID();
             ojdbc.update(
@@ -626,11 +657,11 @@ public class DemoSeeder {
         UUID blockedOrderId = UUID.randomUUID();
         ojdbc.update(
                 "INSERT INTO orders (id, tenant_id, store_id, external_id, number, customer_name, " +
-                "                    status, payment_method, placed_at, on_hold, hold_reason) " +
-                "VALUES (?, ?, ?, 'DEMO-ORDER-BLOCKED', '#DEMO-BLOCKED', 'Repeat RTO Customer', " +
+                "                    customer_phone, status, payment_method, placed_at, on_hold, hold_reason) " +
+                "VALUES (?, ?, ?, 'DEMO-ORDER-BLOCKED', '#DEMO-BLOCKED', 'Repeat RTO Customer', ?, " +
                 "        'new'::order_status, 'cod'::order_payment_method, now() - interval '1 day', " +
                 "        true, 'Blocked customer')",
-                blockedOrderId, tenantId, storeId);
+                blockedOrderId, tenantId, storeId, BLOCKED_CUSTOMER_PHONE);
         ojdbc.update(
                 "INSERT INTO order_items (tenant_id, order_id, variant_id, quantity) VALUES (?, ?, ?, 1)",
                 tenantId, blockedOrderId, variantIds.get(1));
