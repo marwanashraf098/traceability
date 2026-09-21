@@ -636,6 +636,35 @@ public class ShipmentLinkService {
     }
 
     /**
+     * True when {@code orderId} has an existing CRP return-leg shipment row
+     * (shipment_leg='return') in a non-terminal state — matched (created), collected
+     * (with_courier), in-transit (returning), or received-not-yet-resolved (delivered).
+     * A return-intake scan against such an order is an EXPECTED CRP return, not an
+     * illegal-state anomaly.
+     *
+     * Terminal (excluded) states: returned, lost, exception, terminated, cancelled — a
+     * return leg that's actually closed/dead no longer makes a later scan "expected".
+     *
+     * Shared verbatim by ReturnSessionService.scanPiece() (suppresses the
+     * return_session_items.unexpected flag at scan time) and
+     * ExceptionService.detectUnexpectedReturn() (suppresses the HIGH exception) — same
+     * method, so the two classifications can never drift apart, same discipline as
+     * FulfillService.PICKABLE_ORDERS_FILTER.
+     */
+    public boolean hasActiveReturnLeg(UUID orderId, UUID tenantId) {
+        if (orderId == null) return false;
+        Boolean exists = jdbc.queryForObject(
+            "SELECT EXISTS (SELECT 1 FROM shipments " +
+            "WHERE order_id = ? AND tenant_id = ? AND shipment_leg = 'return' " +
+            "AND internal_state NOT IN (" +
+            "    'returned'::shipment_internal_state, 'lost'::shipment_internal_state, " +
+            "    'exception'::shipment_internal_state, 'terminated'::shipment_internal_state, " +
+            "    'cancelled'::shipment_internal_state))",
+            Boolean.class, orderId, tenantId);
+        return Boolean.TRUE.equals(exists);
+    }
+
+    /**
      * Creates a return-leg shipment row for a CRP delivery, or finds the existing one
      * (idempotent on tracking_number). Inserts with shipment_leg='return' so it can
      * coexist with an active forward shipment under ux_active_shipment_per_order_leg (V43).

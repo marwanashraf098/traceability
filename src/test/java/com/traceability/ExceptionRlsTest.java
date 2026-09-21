@@ -1,6 +1,7 @@
 package com.traceability;
 
 import com.traceability.inventory.ExceptionService;
+import com.traceability.inventory.ShipmentLinkService;
 import com.traceability.tenancy.TenantAwareDataSource;
 import com.traceability.tenancy.TenantContext;
 import org.jobrunr.scheduling.JobScheduler;
@@ -91,7 +92,11 @@ class ExceptionRlsTest {
         appUserTx = new TransactionTemplate(appUserTxm);
         // Non-proxied: @Transactional is inactive, so we wrap with appUserTx explicitly —
         // same effect as the production @Transactional(readOnly=true) proxy.
-        appUserExcSvc = new ExceptionService(appUserJdbc, Clock.systemUTC());
+        // ShipmentLinkService here only needs hasActiveReturnLeg() (jdbc-only) — the other
+        // collaborators are never touched by listExceptions(), so null is safe.
+        ShipmentLinkService appUserShipmentLinkSvc = new ShipmentLinkService(
+                appUserJdbc, null, null, null, null, null, null, null);
+        appUserExcSvc = new ExceptionService(appUserJdbc, Clock.systemUTC(), appUserShipmentLinkSvc);
     }
 
     @BeforeEach void ctx()   { TenantContext.set(tenantId); }

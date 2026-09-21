@@ -50,6 +50,13 @@ import static org.assertj.core.api.Assertions.*;
  * (m) Dismiss 2 days ago → still suppressed (within 7-day snooze window).
  * (n) Dismiss 8 days ago, piece still stuck → re-fires (snooze expired).
  * (o) Dismissed then processed (return_received + status moved) → never re-fires regardless of dismissal age.
+ * (p) Matched active CRP return leg (shipments row, shipment_leg='return', non-terminal state)
+ *     → scan() reports unexpected=false AND no HIGH unexpected_return exception — the two
+ *     classification sites (ReturnSessionService.scanPiece(), ExceptionService.
+ *     detectUnexpectedReturn()) now share ShipmentLinkService.hasActiveReturnLeg().
+ * (q) Negative control, same tenant, no return-leg row → scan() still reports
+ *     unexpected=true AND the HIGH exception still fires — proves the predicate
+ *     discriminates rather than globally suppressing unexpected_return.
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.NONE)
 @Testcontainers
@@ -400,6 +407,61 @@ class ReturnSessionTest {
         assertThat(myPiecePresent).isFalse();
     }
 
+    // ── (p) Matched active CRP return leg suppresses unexpected — positive ────
+
+    /**
+     * Reproduces the Jumi ~75-CRP false-positive: the piece is still WITH_COURIER
+     * (Bosta hasn't caught the piece's own status up yet) but the order already has a
+     * matched shipments row, shipment_leg='return', in a non-terminal state — this is
+     * an EXPECTED CRP return, not an anomaly.
+     */
+    @Test
+    void p_activeCrpReturnLeg_scanAndException_bothSuppressUnexpected() {
+        UUID orderId = createOrder("with_courier");
+        createShipment(orderId, "AWB-CRP-P-FWD", "delivered");
+        createReturnLegShipment(orderId, "AWB-CRP-P-RET", "delivered");
+        String piece = createPiece("with_courier", orderId);
+        createAlloc(orderId, piece);
+
+        UUID sessionId = openSession();
+        Map<String, Object> scanResult = sessionSvc.scan(sessionId, "PC-" + piece, locationId, actorId);
+
+        assertThat(scanResult.get("unexpected"))
+            .as("matched active CRP return leg → scan must not be flagged unexpected")
+            .isEqualTo(false);
+        assertThat(pieceStatus(piece)).isEqualTo("return_pending_inspection");
+
+        boolean present = listExceptionsOfType("unexpected_return").stream()
+            .anyMatch(e -> ("PC-" + piece).equals(e.get("barcode")));
+        assertThat(present)
+            .as("matched active CRP return leg → no HIGH unexpected_return exception")
+            .isFalse();
+    }
+
+    // ── (q) Negative control, same tenant, no return leg — unexpected still flagged ──
+
+    @Test
+    void q_noReturnLeg_sameTenant_unexpectedStillFlagged_exceptionStillFires() {
+        UUID orderId = createOrder("with_courier");
+        createShipment(orderId, "AWB-CRP-Q-FWD", "with_courier");
+        String piece = createPiece("with_courier", orderId);
+        createAlloc(orderId, piece);
+
+        UUID sessionId = openSession();
+        Map<String, Object> scanResult = sessionSvc.scan(sessionId, "PC-" + piece, locationId, actorId);
+
+        assertThat(scanResult.get("unexpected"))
+            .as("no return leg in flight → genuine unexpected return must still be flagged")
+            .isEqualTo(true);
+        assertThat(pieceStatus(piece)).isEqualTo("return_pending_inspection");
+
+        boolean present = listExceptionsOfType("unexpected_return").stream()
+            .anyMatch(e -> ("PC-" + piece).equals(e.get("barcode")));
+        assertThat(present)
+            .as("no return leg in flight → HIGH unexpected_return exception must still fire")
+            .isTrue();
+    }
+
     // ── DB helpers ────────────────────────────────────────────────────────────
 
     private UUID createOrder(String status) {
@@ -416,6 +478,17 @@ class ReturnSessionTest {
         jdbc.update(
             "INSERT INTO shipments (id, tenant_id, order_id, tracking_number, internal_state) " +
             "VALUES (?, ?, ?, ?, ?::shipment_internal_state)",
+            id, tenantId, orderId, trackingNumber, state);
+        return id;
+    }
+
+    /** CRP return-leg shipment (shipment_leg='return') — coexists with a forward shipment
+     *  for the same order under ux_active_shipment_per_order_leg (V43). */
+    private UUID createReturnLegShipment(UUID orderId, String trackingNumber, String state) {
+        UUID id = UUID.randomUUID();
+        jdbc.update(
+            "INSERT INTO shipments (id, tenant_id, order_id, tracking_number, internal_state, shipment_leg) " +
+            "VALUES (?, ?, ?, ?, ?::shipment_internal_state, 'return')",
             id, tenantId, orderId, trackingNumber, state);
         return id;
     }

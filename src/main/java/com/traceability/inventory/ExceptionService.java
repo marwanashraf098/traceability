@@ -37,12 +37,14 @@ public class ExceptionService {
         "LOW",      3
     );
 
-    private final JdbcTemplate jdbc;
-    private final Clock        clock;
+    private final JdbcTemplate        jdbc;
+    private final Clock               clock;
+    private final ShipmentLinkService shipmentLinkService;
 
-    public ExceptionService(JdbcTemplate jdbc, Clock clock) {
-        this.jdbc  = jdbc;
-        this.clock = clock;
+    public ExceptionService(JdbcTemplate jdbc, Clock clock, ShipmentLinkService shipmentLinkService) {
+        this.jdbc                = jdbc;
+        this.clock               = clock;
+        this.shipmentLinkService = shipmentLinkService;
     }
 
     // ── Public API ────────────────────────────────────────────────────────────
@@ -404,7 +406,7 @@ public class ExceptionService {
     }
 
     private List<Map<String, Object>> detectUnexpectedReturn(UUID tid) {
-        return jdbc.queryForList(
+        List<Map<String, Object>> candidates = jdbc.queryForList(
             "SELECT 'unexpected_return' AS type, 'HIGH' AS severity, 'piece' AS subject_type, " +
             "       p.id AS piece_id, p.barcode, " +
             "       o.id AS order_id, o.number AS order_number, " +
@@ -423,6 +425,12 @@ public class ExceptionService {
             "        AND er.exception_type = 'unexpected_return' " +
             "        AND er.subject_key = 'unexpected_return:' || p.id) ",
             tid);
+        // Suppress candidates whose order has a matched CRP return leg already in flight —
+        // same predicate ReturnSessionService.scanPiece() uses (ShipmentLinkService.
+        // hasActiveReturnLeg), so "expected" can never drift between the two call sites.
+        return candidates.stream()
+            .filter(row -> !shipmentLinkService.hasActiveReturnLeg((UUID) row.get("order_id"), tid))
+            .collect(java.util.stream.Collectors.toList());
     }
 
     private List<Map<String, Object>> detectDeliveryLimbo(UUID tid) {

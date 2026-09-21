@@ -57,17 +57,20 @@ public class ReturnSessionService {
         PieceStatus.DELIVERED, PieceStatus.RETURN_PENDING_INSPECTION
     );
 
-    private final JdbcTemplate    jdbc;
-    private final InventoryLedger ledger;
-    private final ReturnService   returnService;
-    private final Clock           clock;
+    private final JdbcTemplate       jdbc;
+    private final InventoryLedger    ledger;
+    private final ReturnService      returnService;
+    private final ShipmentLinkService shipmentLinkService;
+    private final Clock              clock;
 
     public ReturnSessionService(JdbcTemplate jdbc, InventoryLedger ledger,
-                                ReturnService returnService, Clock clock) {
-        this.jdbc          = jdbc;
-        this.ledger        = ledger;
-        this.returnService = returnService;
-        this.clock         = clock;
+                                ReturnService returnService, ShipmentLinkService shipmentLinkService,
+                                Clock clock) {
+        this.jdbc                = jdbc;
+        this.ledger              = ledger;
+        this.returnService       = returnService;
+        this.shipmentLinkService = shipmentLinkService;
+        this.clock               = clock;
     }
 
     // ── Create / open ─────────────────────────────────────────────────────────
@@ -179,13 +182,18 @@ public class ReturnSessionService {
                     "return_received", actorUserId, new TransitionContext(orderId, shipmentId, locationId, orderId, meta));
             }
             case WITH_COURIER -> {
-                legal = true; unexpected = true;
+                legal = true;
+                // Not unexpected if this order has a matched CRP return leg already in
+                // flight — Bosta just hasn't caught the piece's own status up yet. See
+                // ShipmentLinkService.hasActiveReturnLeg() javadoc.
+                unexpected = !shipmentLinkService.hasActiveReturnLeg(orderId, tenantId);
                 String meta = "{\"return_kind\":\"rto\"," + metaSuffix + "}";
                 ledger.transition(pieceId, PieceStatus.WITH_COURIER, PieceStatus.RETURN_PENDING_INSPECTION,
                     "return_received", actorUserId, new TransitionContext(orderId, shipmentId, locationId, orderId, meta));
             }
             case AWAITING_PICKUP -> {
-                legal = true; unexpected = true;
+                legal = true;
+                unexpected = !shipmentLinkService.hasActiveReturnLeg(orderId, tenantId);
                 String meta = "{\"return_kind\":\"rto\"," + metaSuffix + "}";
                 ledger.transition(pieceId, PieceStatus.AWAITING_PICKUP, PieceStatus.RETURN_PENDING_INSPECTION,
                     "return_received", actorUserId, new TransitionContext(orderId, shipmentId, locationId, orderId, meta));
