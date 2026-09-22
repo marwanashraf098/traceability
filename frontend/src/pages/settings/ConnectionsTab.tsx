@@ -313,6 +313,27 @@ export default function ConnectionsTab({ readOnly }: { readOnly: boolean }) {
 
   useEffect(() => { load() }, [])
 
+  // Polls getConnections() while the async install chain (OAuth callback -> JobRunr
+  // import -> Traced Main Warehouse location provisioning) is still in flight, so
+  // ShopifyConnectionCard's importStatus/lastSyncAt props actually change once it
+  // finishes — without this, a user who reaches this tab before the import job runs
+  // would be stuck on a stale pre-import snapshot until a manual page reload (see the
+  // fulfillment-activation-card race). Deliberately silent: on a transient poll
+  // failure it just retries next tick, never touches the page-level `error` state or
+  // unmounts the cards (status stays truthy throughout — see the comment on the
+  // fieldset gate below for why that matters).
+  useEffect(() => {
+    if (!status?.shopify.connected || status.shopify.importStatus === 'completed') return
+    const id = setInterval(async () => {
+      try {
+        setStatus(await getConnections())
+      } catch {
+        // transient — retry next tick
+      }
+    }, 3000)
+    return () => clearInterval(id)
+  }, [status?.shopify.connected, status?.shopify.importStatus])
+
   // Spinner gates on `!status` (first load only), and the fieldset gates on
   // `status` alone (not `!loading`) — deliberately, not the obvious `loading &&
   // status && ...` split. A REload (any card's onConnected/reload prop, e.g.

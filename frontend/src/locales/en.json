@@ -168,6 +168,11 @@
       "connectShopify": "Connect your Shopify store",
       "receiveFirst": "Receive your first shipment",
       "inviteTeam": "Invite your team"
+    },
+    "fulfillmentPrompt": {
+      "title": "Activate your warehouse location",
+      "body": "Traced Main Warehouse is linked to Shopify but isn't live on your storefront yet.",
+      "cta": "Activate now"
     }
   },
   "inventory": {
@@ -1117,7 +1122,9 @@
         "confirmCopy": "I have zeroed/removed inventory at my existing Shopify fulfillment location(s). Activating will make Traced Main Warehouse sell alongside any other active location — if the old location still has stock, my storefront will oversell.",
         "activateBtn": "Activate fulfillment",
         "activating": "Activating…",
-        "genericError": "Could not activate. Try again."
+        "genericError": "Could not activate. Try again.",
+        "loadError": "Could not load fulfillment status.",
+        "retry": "Retry"
       },
       "actionNeeded": "Action needed",
       "merchant": {

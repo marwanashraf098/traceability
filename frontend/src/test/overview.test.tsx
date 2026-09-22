@@ -158,10 +158,45 @@ interface EndpointMap {
   ndrAlert?: unknown
   stuckAlert?: unknown
   unmatchedAlert?: unknown
+  connections?: unknown
+  locations?: unknown
   /** URL substrings that should hang forever (for loading-state assertions). */
   pending?: string[]
   /** URL substrings that should reject (for error-fallback assertions). */
   failing?: string[]
+}
+
+// Default: disconnected / no locations — needsFulfillmentActivation() is false for
+// every pre-existing test that doesn't opt into these fixtures, so the new
+// fulfillment-activation prompt card never appears unless a test asks for it.
+const DISCONNECTED_CONNECTIONS = {
+  shopify: {
+    connected: false, storeId: null, shopDomain: null, connectionType: null,
+    status: 'disconnected', importStatus: null, lastSyncAt: null,
+  },
+  bosta: { connected: false, businessName: null, pickupMode: null, awbFormat: null, awbLang: null },
+  customAppAvailable: false,
+  oauthAvailable: false,
+  shopifySetup: { appUrl: '', redirectUrl: '', webhookApiVersion: '2026-04', scopes: [] },
+}
+const CONNECTED_CONNECTIONS = {
+  ...DISCONNECTED_CONNECTIONS,
+  shopify: {
+    connected: true, storeId: 'store-1', shopDomain: 'test-shop.myshopify.com',
+    connectionType: 'oauth', status: 'connected',
+    importStatus: 'completed', lastSyncAt: '2026-01-01T00:00:00Z',
+  },
+}
+function locationFixture(overrides: Record<string, unknown> = {}) {
+  return {
+    id: 'loc-1', name: 'Traced Main Warehouse', type: 'warehouse',
+    is_default: false, is_fulfillment: true,
+    shopify_location_id: 'gid://shopify/Location/1',
+    shopify_sync_status: 'linked', shopify_sync_error: null, shopify_synced_at: '2026-01-01T00:00:00Z',
+    shopify_delivery_profile_status: 'not_activated',
+    shopify_delivery_profile_error: null, shopify_delivery_profile_activated_at: null,
+    ...overrides,
+  }
 }
 
 function makeAppFetch(map: EndpointMap = {}) {
@@ -181,6 +216,8 @@ function makeAppFetch(map: EndpointMap = {}) {
     if (url.includes('/exceptions?type=stuck_shipment'))     return jsonOk(map.stuckAlert ?? STUCK_ALERT)
     if (url.includes('/exceptions?type=unmatched_delivery')) return jsonOk(map.unmatchedAlert ?? UNMATCHED_ALERT)
     if (url.includes('/orders?'))                      return jsonOk(map.ordersPage ?? POPULATED_ORDERS_PAGE)
+    if (url.includes('/connections'))                  return jsonOk(map.connections ?? DISCONNECTED_CONNECTIONS)
+    if (url.includes('/locations'))                    return jsonOk(map.locations ?? [])
     // OrderDrawer's own fetches (Recent-orders row / order-anchored alert click) —
     // distinct from /orders? (list) and /orders/funnel|summary above.
     if (url.includes('/orders/o1/timeline'))           return jsonOk([])
@@ -559,5 +596,57 @@ describe('Overview dashboard', () => {
     const alerts = await screen.findByTestId('alerts-panel')
     const link = within(alerts).getByText(/unmatched to an order/).closest('a')
     expect(link).toHaveAttribute('href', '/exceptions?type=unmatched_delivery')
+  })
+
+  // ── Fulfillment-activation prompt card ───────────────────────────────────────
+  // Visibility must track needsFulfillmentActivation() (api.ts) exactly — the same
+  // helper ShopifyConnectionCard's FulfillmentActivationItem uses. No second
+  // derivation on this page.
+
+  test('ov18 fulfillment prompt — shown when store connected, location linked, not yet activated', async () => {
+    renderOverview({
+      connections: CONNECTED_CONNECTIONS,
+      locations: [locationFixture({ shopify_delivery_profile_status: 'not_activated' })],
+    })
+
+    const card = await screen.findByTestId('fulfillment-activation-prompt')
+    expect(within(card).getByText('Activate your warehouse location')).toBeInTheDocument()
+    expect(within(card).getByTestId('fulfillment-activation-prompt-link'))
+      .toHaveAttribute('href', '/settings?tab=connections')
+  })
+
+  // Deliberately renders even in the fresh-tenant zero-pieces state — a brand-new
+  // store can need activation with nothing received yet (the reconcile report has
+  // no 'seed' rows when Traced holds zero on-hand stock), so this must not be
+  // swallowed by the isFreshTenant/FreshTenantCard collapse.
+  test('ov19 fulfillment prompt — still shown on a fresh tenant with zero pieces', async () => {
+    renderOverview({
+      statusTotals: ZERO_STATUS_TOTALS,
+      connections: CONNECTED_CONNECTIONS,
+      locations: [locationFixture({ shopify_delivery_profile_status: 'not_activated' })],
+    })
+
+    await screen.findByTestId('fresh-tenant-card')
+    expect(screen.getByTestId('fulfillment-activation-prompt')).toBeInTheDocument()
+  })
+
+  test('ov20 fulfillment prompt — hidden once the location is already activated', async () => {
+    renderOverview({
+      connections: CONNECTED_CONNECTIONS,
+      locations: [locationFixture({ shopify_delivery_profile_status: 'activated' })],
+    })
+
+    await screen.findByTestId('stat-cards')
+    expect(screen.queryByTestId('fulfillment-activation-prompt')).toBeNull()
+  })
+
+  test('ov21 fulfillment prompt — hidden when Shopify is not connected', async () => {
+    renderOverview({
+      connections: DISCONNECTED_CONNECTIONS,
+      locations: [locationFixture({ shopify_delivery_profile_status: 'not_activated' })],
+    })
+
+    await screen.findByTestId('stat-cards')
+    expect(screen.queryByTestId('fulfillment-activation-prompt')).toBeNull()
   })
 })

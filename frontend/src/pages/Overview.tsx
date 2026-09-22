@@ -13,10 +13,11 @@ import {
   getStatusTotals, getValuation, getOrdersFunnel, getOnboardingStatus, dismissOnboarding,
   setOnboardingStep,
   getOverviewTrends, getOverviewTopSkus, getOrdersSummary, listOrders, getLateToPack,
+  getConnections, listLocations, needsFulfillmentActivation,
   type StatusTotals, type Valuation, type FunnelCounts,
   type OnboardingStatus, type OnboardingStep,
   type MetricTrend, type TrendPoint, type TopSku, type OrderSummaryCounts, type OrderSummary,
-  type LateToPack,
+  type LateToPack, type ConnectionsStatus, type LocationRow,
 } from '../api'
 import {
   EmptyState, Progress, useMe, useToast,
@@ -909,6 +910,38 @@ function FreshTenantCard() {
   )
 }
 
+// ── Fulfillment-activation prompt card ──────────────────────────────────────────
+//
+// Visibility predicate is needsFulfillmentActivation() (api.ts) — the SAME helper
+// ShopifyConnectionCard's FulfillmentActivationItem uses to decide whether to show its
+// own "Activate fulfillment" UI. Deliberately rendered outside the isFreshTenant/
+// FreshTenantCard split below: a brand-new store can legitimately need activation with
+// zero pieces received yet (the reconcile report has nothing to seed when Traced holds
+// no on-hand stock at all), so this must not be swallowed by the fresh-tenant empty-state
+// collapse the way the rest of the zone stack is.
+
+function FulfillmentActivationPromptCard() {
+  const { t } = useTranslation()
+  return (
+    <div
+      className="card border-trace-blue p-4 flex items-center justify-between gap-3 flex-wrap animate-fadeIn motion-reduce:animate-none"
+      data-testid="fulfillment-activation-prompt"
+    >
+      <div>
+        <p className="text-small font-bold text-primary">{t('overview.fulfillmentPrompt.title')}</p>
+        <p className="text-caption text-muted mt-0.5">{t('overview.fulfillmentPrompt.body')}</p>
+      </div>
+      <Link
+        to="/settings?tab=connections"
+        className="btn btn-brand text-small flex-shrink-0"
+        data-testid="fulfillment-activation-prompt-link"
+      >
+        {t('overview.fulfillmentPrompt.cta')}
+      </Link>
+    </div>
+  )
+}
+
 // ── Root ──────────────────────────────────────────────────────────────────────
 
 function greetingKey(): 'morning' | 'afternoon' | 'evening' {
@@ -932,6 +965,12 @@ export default function Overview() {
   // gate-collision gotcha).
   const statusTotals = useZoneFetch<StatusTotals>(getStatusTotals)
   const onboarding   = useZoneFetch<OnboardingStatus>(getOnboardingStatus)
+
+  // Feeds the fulfillment-activation prompt card below — same two calls
+  // FulfillmentActivationItem (Settings > Connections) already makes, independently
+  // fetched here since this page doesn't otherwise touch either endpoint.
+  const connections        = useZoneFetch<ConnectionsStatus>(getConnections)
+  const fulfillmentLocations = useZoneFetch<LocationRow[]>(listLocations)
 
   // ── Date-range picker (Zone 1 — top stat cards only) ──────────────────────
   const [dateRangePreset, setDateRangePreset] = useState<DateRangePreset>('7d')
@@ -997,6 +1036,12 @@ export default function Overview() {
   const isFreshTenant = !statusTotals.loading && !statusTotals.error && totalPieces === 0 &&
     !onboarding.loading && !onboarding.error && onboarding.data && !onboarding.data.allDone
 
+  const showFulfillmentPrompt = !connections.loading && !connections.error && connections.data &&
+    !fulfillmentLocations.loading && !fulfillmentLocations.error &&
+    needsFulfillmentActivation(
+      connections.data.shopify.connected,
+      fulfillmentLocations.data?.find(l => l.is_fulfillment) ?? null)
+
   const trendFor = (metric: MetricTrend['metric']) => trends.data?.find(t2 => t2.metric === metric)
 
   return (
@@ -1018,6 +1063,8 @@ export default function Overview() {
           onCustomChange={handleCustomRangeChange}
         />
       </div>
+
+      {showFulfillmentPrompt && <FulfillmentActivationPromptCard />}
 
       {isFreshTenant ? (
         <FreshTenantCard />

@@ -1680,6 +1680,24 @@ export function listLocations() {
   return request<LocationRow[]>('/locations')
 }
 
+/**
+ * Single shared predicate for "the fulfillment location is linked to Shopify but not yet
+ * joined to a delivery profile" — the one server-state condition that gates BOTH the
+ * Connections-tab checklist item (ShopifyConnectionCard.tsx) and the Overview prompt card
+ * (Overview.tsx). Kept here, not duplicated in either component, so the two surfaces can
+ * never drift into disagreeing about when activation is "needed".
+ */
+export function needsFulfillmentActivation(
+  shopifyConnected: boolean,
+  location: LocationRow | null | undefined,
+): boolean {
+  return shopifyConnected
+    && !!location
+    && location.is_fulfillment
+    && location.shopify_sync_status === 'linked'
+    && location.shopify_delivery_profile_status !== 'activated'
+}
+
 export function createTransfer(params: {
   transferType: TransferType
   destinationLocationId: string

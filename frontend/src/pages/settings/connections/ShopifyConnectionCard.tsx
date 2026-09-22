@@ -6,6 +6,7 @@ import SetupWizard from './SetupWizard'
 import {
   shopifyInitiate, shopifyCustomConnect, shopifyDisconnect, TransferCommandError,
   listLocations, getShopifyInventoryReconcileReport, activateShopifyFulfillment,
+  needsFulfillmentActivation,
   ConnectionsStatus, LocationRow,
 } from '../../../api'
 
@@ -51,11 +52,18 @@ function connectErrorMessage(err: unknown, isAr: boolean, fallback: string): str
 // confirmation checkbox — activating makes the location count toward storefront
 // availability, so an un-zeroed old location oversells.
 
-function FulfillmentActivationItem() {
+function FulfillmentActivationItem({
+  shopifyConnected, importStatus, lastSyncAt,
+}: {
+  shopifyConnected: boolean
+  importStatus: string | null
+  lastSyncAt: string | null
+}) {
   const { t, i18n } = useTranslation()
   const isAr = i18n.language === 'ar'
 
   const [loading,    setLoading]    = useState(true)
+  const [loadError,  setLoadError]  = useState(false)
   const [location,   setLocation]   = useState<LocationRow | null>(null)
   const [seedingDone, setSeedingDone] = useState(false)
   const [confirmed,  setConfirmed]  = useState(false)
@@ -63,6 +71,7 @@ function FulfillmentActivationItem() {
   const [errorMsg,   setErrorMsg]   = useState('')
 
   const load = useCallback(async () => {
+    setLoadError(false)
     try {
       const locations   = await listLocations()
       const fulfillment = locations.find(l => l.is_fulfillment) ?? null
@@ -80,12 +89,17 @@ function FulfillmentActivationItem() {
       }
     } catch {
       setLocation(null)
+      setLoadError(true)
     } finally {
       setLoading(false)
     }
   }, [])
 
-  useEffect(() => { load() }, [load])
+  // Re-runs whenever the parent's import-status snapshot changes (ConnectionsTab polls
+  // getConnections() while an import is in flight) — not mount-once. This is what makes
+  // the card appear once Part A's async location-provisioning job actually finishes,
+  // instead of forever reflecting whatever `listLocations()` returned at first mount.
+  useEffect(() => { load() }, [load, importStatus, lastSyncAt])
 
   async function handleActivate() {
     setErrorMsg('')
@@ -105,11 +119,32 @@ function FulfillmentActivationItem() {
     }
   }
 
+  // A failed listLocations()/reconcile fetch must not look identical to "not ready yet" —
+  // distinct state, with its own retry, checked before the "nothing to show" early return.
+  if (loadError) {
+    return (
+      <div className="pt-2 border-t border-line/40 space-y-2" data-testid="fulfillment-activation-error">
+        <p role="alert" className="text-xs text-danger">
+          {t('connections.shopify.fulfillmentActivation.loadError')}
+        </p>
+        <button
+          type="button"
+          onClick={load}
+          className="btn btn-outline text-small"
+          data-testid="fulfillment-retry-btn"
+        >
+          {t('connections.shopify.fulfillmentActivation.retry')}
+        </button>
+      </div>
+    )
+  }
+
   // Nothing to show until Part A has linked the location — no automatic trigger exists
   // for that step from here, so a permanently-disabled item would just confuse.
   if (loading || !location || location.shopify_sync_status !== 'linked') return null
 
-  const isActivated = location.shopify_delivery_profile_status === 'activated'
+  // Shared predicate with Overview's prompt card (api.ts) — never a second derivation.
+  const isActivated = !needsFulfillmentActivation(shopifyConnected, location)
   const canActivate  = seedingDone && confirmed && !activating
 
   return (
@@ -494,7 +529,11 @@ export default function ShopifyConnectionCard({
             )}
           </div>
 
-          <FulfillmentActivationItem />
+          <FulfillmentActivationItem
+            shopifyConnected={shopify.connected}
+            importStatus={shopify.importStatus}
+            lastSyncAt={shopify.lastSyncAt}
+          />
 
           {uiState === 'connected-ea' && oauthAvailable && (
             <div className="rounded-xl border border-brand/20 bg-brand/5 p-4 space-y-2">
