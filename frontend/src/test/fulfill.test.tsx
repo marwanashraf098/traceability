@@ -36,6 +36,7 @@ function makeQueueOrder(overrides: Partial<{
 function makeOrderDetail(overrides: Partial<{
   shipment_id: string | null
   tracking_number: string | null
+  shipment_has_courier: boolean
   allocated: number
   is_self_pickup: boolean
 }> = {}) {
@@ -53,6 +54,10 @@ function makeOrderDetail(overrides: Partial<{
     cancel_requested_at: null,
     shipment_id: null,
     tracking_number: null,
+    // Realistic default (a real courier-backed shipment) so every EXISTING fixture
+    // in this file keeps requiring a successful print before Complete, exactly as
+    // before this change — only the new no-courier tests below override it.
+    shipment_has_courier: true,
     items: [{
       id: 'item-1',
       variant_id: 'v1',
@@ -300,5 +305,102 @@ describe('Fulfill — dark theme + AWB print', () => {
     await user.click(screen.getByText('#101'))
     await waitFor(() => screen.getByText('Complete & Pack Order'))
     expect(screen.queryByTestId('btn-scan-to-link')).toBeNull()
+  })
+
+  // ── FIX 3: complete without print when the shipment has no courier account ────
+
+  // ft12: linked shipment, no courier account — Complete appears with no print step;
+  // Print Waybill is not rendered at all; a neutral note explains why. Revert-to-confirm:
+  // RED on pre-fix code (Complete's gate required awbPrintedOnce unconditionally, and the
+  // PRINTABLE branch always rendered btn-print-awb whenever tracking_number was set).
+  test('ft12 no-courier shipment — Complete appears without printing, no Print Waybill button', async () => {
+    mockFetch
+      .mockReturnValueOnce(jsonOk([makeQueueOrder()]))
+      .mockReturnValueOnce(jsonOk(makeOrderDetail({
+        shipment_id: 'ship-1', tracking_number: 'TRK-123',
+        shipment_has_courier: false, allocated: 1,
+      })))
+    const user = userEvent.setup()
+    renderWithProviders(<Fulfill />)
+    await waitFor(() => screen.getByText('#101'))
+    await user.click(screen.getByText('#101'))
+
+    await waitFor(() => screen.getByTestId('awb-no-courier-note'))
+    expect(screen.getByTestId('awb-no-courier-note').textContent)
+      .toMatch(/no courier account connected/i)
+    expect(screen.queryByTestId('btn-print-awb')).toBeNull()
+    expect(screen.getByText('Complete & Pack Order')).toBeTruthy()
+  })
+
+  // ft13: positive control — a courier-backed shipment still requires a successful
+  // print before Complete appears, unchanged by the FIX 3 gate rewrite.
+  test('ft13 courier-backed shipment (positive control) — Complete still hidden until print succeeds', async () => {
+    vi.spyOn(window, 'open').mockImplementation(() => null)
+    vi.stubGlobal('URL', { createObjectURL: vi.fn().mockReturnValue('blob:fake') })
+    mockFetch
+      .mockReturnValueOnce(jsonOk([makeQueueOrder()]))
+      .mockReturnValueOnce(jsonOk(makeOrderDetail({
+        shipment_id: 'ship-1', tracking_number: 'TRK-123',
+        shipment_has_courier: true, allocated: 1,
+      })))
+      .mockReturnValueOnce(jsonOk({ pdfBase64List: [btoa('%PDF-1.4 fake')], emailMessage: null, exceptions: [] }))
+    const user = userEvent.setup()
+    renderWithProviders(<Fulfill />)
+    await waitFor(() => screen.getByText('#101'))
+    await user.click(screen.getByText('#101'))
+    await waitFor(() => screen.getByTestId('btn-print-awb'))
+
+    expect(screen.queryByTestId('awb-no-courier-note')).toBeNull()
+    expect(screen.queryByText('Complete & Pack Order')).toBeNull()
+
+    await user.click(screen.getByTestId('btn-print-awb'))
+    await waitFor(() => screen.getByText('Complete & Pack Order'))
+    vi.restoreAllMocks()
+  })
+
+  // ft14: self-pickup remains untouched by the shipment_has_courier gate (it never
+  // even reaches the tracking_number branch) — explicit dedicated assertion alongside
+  // ft11 for this change's own test group.
+  test('ft14 self-pickup unaffected by the no-courier gate change', async () => {
+    mockFetch
+      .mockReturnValueOnce(jsonOk([makeQueueOrder({ is_self_pickup: true })]))
+      .mockReturnValueOnce(jsonOk(makeOrderDetail({
+        tracking_number: null, shipment_has_courier: false, allocated: 1, is_self_pickup: true,
+      })))
+    const user = userEvent.setup()
+    renderWithProviders(<Fulfill />)
+    await waitFor(() => screen.getByText('#101'))
+    await user.click(screen.getByText('#101'))
+    await waitFor(() => screen.getByText('Complete & Pack Order'))
+    expect(screen.queryByTestId('awb-no-courier-note')).toBeNull()
+  })
+
+  // ── FIX 4 (narrow): typed {code, message_en, message_ar} body rendered as-is ──
+
+  // ft15: AWB print 400 with a typed NoBostaAccountException body → the real
+  // message_en renders, never the bare "HTTP 400" fallback.
+  test('ft15 AWB print error body {code, message_en, message_ar} renders message_en, not raw HTTP 400', async () => {
+    mockFetch
+      .mockReturnValueOnce(jsonOk([makeQueueOrder()]))
+      .mockReturnValueOnce(jsonOk(makeOrderDetail({
+        shipment_id: 'ship-1', tracking_number: 'TRK-123',
+        shipment_has_courier: true, allocated: 1,
+      })))
+      .mockReturnValueOnce(jsonErr({
+        code: 'NO_BOSTA_ACCOUNT',
+        message_en: 'No active Bosta account for this store.',
+        message_ar: 'لا يوجد حساب Bosta نشط لهذا المتجر.',
+      }, 400))
+    const user = userEvent.setup()
+    renderWithProviders(<Fulfill />)
+    await waitFor(() => screen.getByText('#101'))
+    await user.click(screen.getByText('#101'))
+    await waitFor(() => screen.getByTestId('btn-print-awb'))
+    await user.click(screen.getByTestId('btn-print-awb'))
+
+    await waitFor(() => screen.getByTestId('awb-msg'))
+    const text = screen.getByTestId('awb-msg').textContent
+    expect(text).toMatch(/No active Bosta account for this store\./)
+    expect(text).not.toMatch(/HTTP 400/)
   })
 })

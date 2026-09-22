@@ -276,7 +276,8 @@ public class FulfillService {
             "       o.status, o.payment_method, o.cod_amount, o.placed_at, " +
             "       o.locked_by, o.locked_at, o.is_self_pickup, o.cancel_requested_at, " +
             "       (e.id IS NOT NULL) AS is_exchange, " +
-            "       s.id AS shipment_id, s.tracking_number " +
+            "       s.id AS shipment_id, s.tracking_number, " +
+            "       (s.courier_account_id IS NOT NULL) AS shipment_has_courier " +
             "FROM orders o " +
             "LEFT JOIN shipments s ON s.order_id = o.id AND s.tenant_id = o.tenant_id AND s.shipment_leg = 'forward' " +
             // Badge derivation only (FR-EXCHANGE Phase 3/4 §0e) — no new orders column.

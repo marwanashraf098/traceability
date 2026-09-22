@@ -4,12 +4,10 @@ import com.traceability.security.EncryptionService;
 import com.traceability.tenancy.TenantContext;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
-import org.springframework.web.server.ResponseStatusException;
 
 import java.util.*;
 import java.util.stream.Collectors;
@@ -104,7 +102,9 @@ public class BostaAwbService {
                 tenantId)));
 
         if (account == null) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "No active Bosta account");
+            throw new NoBostaAccountException(
+                "No active Bosta account for this store.",
+                "لا يوجد حساب Bosta نشط لهذا المتجر.");
         }
 
         String apiKey = encryptionService.decrypt((String) account.get("api_key_encrypted"));

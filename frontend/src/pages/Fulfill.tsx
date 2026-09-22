@@ -8,6 +8,7 @@ import {
 import { Badge, Button, Skeleton, EmptyState } from '../components/ui'
 import Layout from '../components/Layout'
 import { getAccessToken, clearAccessToken } from '../auth'
+import { TransferCommandError } from '../api'
 
 const BASE = '/api/v1'
 
@@ -82,6 +83,7 @@ interface OrderDetail {
   cancel_requested_at: string | null
   shipment_id: string | null
   tracking_number: string | null
+  shipment_has_courier: boolean
   items: OrderItem[]
 }
 
@@ -146,6 +148,14 @@ async function printAwbPdf(shipmentId: string): Promise<'opened' | 'emailed'> {
   })
 
   if (status < 200 || status >= 300) {
+    // Typed {code, message_en, message_ar} bodies (e.g. NoBostaAccountException via
+    // ApiExceptionHandler) — same contract TransferCommandError already wraps
+    // elsewhere in the app; surfaced AS-IS by the caller instead of a bare status code.
+    const body = data as unknown as
+      { code?: string; message_en?: string; message_ar?: string } | null
+    if (body?.code && body.message_en != null && body.message_ar != null) {
+      throw new TransferCommandError(body as { code: string; message_en: string; message_ar: string })
+    }
     throw new Error((data as { message?: string })?.message ?? `HTTP ${status}`)
   }
 
@@ -860,7 +870,10 @@ function PickScreen({
       // emailed — satisfies this; only a thrown error (caught below) does not.
       setAwbPrintedOnce(true)
     } catch (e: unknown) {
-      setAwbMsg({ type: 'error', text: (e as Error).message || t('fulfill.printAwb.error') })
+      const text = e instanceof TransferCommandError
+        ? (i18n.language === 'ar' ? e.messageAr : e.messageEn)
+        : (e as Error).message || t('fulfill.printAwb.error')
+      setAwbMsg({ type: 'error', text })
     } finally {
       setAwbPrinting(false)
     }
@@ -1126,7 +1139,14 @@ function PickScreen({
       {/* Bottom bar — Print Waybill + Complete (hidden during guided unpack) */}
       {!hasCancelRequest && (
         <div className="bg-panel border-t border-line px-4 md:px-5 py-3.5 space-y-2 flex-shrink-0">
-          {order.tracking_number ? (
+          {order.tracking_number && !order.shipment_has_courier ? (
+            /* Shipment exists (AWB scanned/linked) but no courier account backs it —
+               there is no real courier-issued label to print. Complete's own gate
+               below already allows this case through without awbPrintedOnce. */
+            <p className="text-caption text-muted text-center" data-testid="awb-no-courier-note">
+              {t('fulfill.printAwb.noCourierAccount')}
+            </p>
+          ) : order.tracking_number ? (
             /* PRINTABLE — kept as raw <button> to preserve data-testid (Button doesn't spread it) */
             <div className="space-y-1">
               <button
@@ -1179,8 +1199,12 @@ function PickScreen({
               link/print gate below). Every other non-self-pickup order — exchange
               included — must be linked AND printed first; an exchange order satisfies
               "linked" from map-time onward, so this gate needs no exchange-specific
-              bypass. */}
-          {allComplete && (order.is_self_pickup || (!!order.tracking_number && awbPrintedOnce)) && (
+              bypass. A linked shipment with no courier account (!shipment_has_courier)
+              has no real label to print, so it skips the awbPrintedOnce requirement —
+              a shipment WITH a courier account still requires a successful print,
+              exactly as before. */}
+          {allComplete && (order.is_self_pickup ||
+            (!!order.tracking_number && (awbPrintedOnce || !order.shipment_has_courier))) && (
             <Button
               loading={completing}
               onClick={handleComplete}

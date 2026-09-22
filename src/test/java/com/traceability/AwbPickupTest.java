@@ -263,6 +263,32 @@ class AwbPickupTest {
         assertThat(result.exceptions().get(0).trackingNumber()).isEqualTo("AWB-T06B");
     }
 
+    // ── 6.5 No active Bosta account → NoBostaAccountException, not a bodyless
+    //      ResponseStatusException (FIX 4 — ApiExceptionHandler.handleResponseStatus()
+    //      discards a plain ResponseStatusException's reason string; the typed exception
+    //      + its own @ExceptionHandler is what puts {code, message_en, message_ar} on
+    //      the wire — see ApiExceptionHandler.handleNoBostaAccount()). Isolated tenant
+    //      with zero courier_accounts rows, not the shared fixture tenant above.
+
+    @Test
+    void t065_awbPrint_noBostaAccount_throwsTypedExceptionWithBilingualMessage() {
+        UUID noAccountTenant = UUID.randomUUID();
+        jdbc.update("INSERT INTO tenants (id, name) VALUES (?, 'NoBostaAccountTenant')", noAccountTenant);
+        try {
+            assertThatThrownBy(() ->
+                    awbService.printAwb(noAccountTenant, List.of(UUID.randomUUID()), null, null))
+                .isInstanceOf(NoBostaAccountException.class)
+                .satisfies(e -> {
+                    NoBostaAccountException nba = (NoBostaAccountException) e;
+                    assertThat(nba.code()).isEqualTo("NO_BOSTA_ACCOUNT");
+                    assertThat(nba.messageEn()).isNotBlank();
+                    assertThat(nba.messageAr()).isNotBlank();
+                });
+        } finally {
+            jdbc.update("DELETE FROM tenants WHERE id = ?", noAccountTenant);
+        }
+    }
+
     // ── 7. BOSTA_MANAGED: createPickup never called ──────────────────────────
 
     @Test

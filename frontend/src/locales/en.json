@@ -658,7 +658,8 @@
       "opening": "Opening waybill…",
       "emailed": "Bosta will email the AWB label",
       "error": "Could not print waybill",
-      "notLinked": "Waybill not linked yet — the Bosta delivery hasn't synced."
+      "notLinked": "Waybill not linked yet — the Bosta delivery hasn't synced.",
+      "noCourierAccount": "Waybill printed outside Traced — no courier account connected."
     }
   },
   "lookup": {

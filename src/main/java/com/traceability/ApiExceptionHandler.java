@@ -11,6 +11,7 @@ import com.traceability.inventory.LookupNotFoundException;
 import com.traceability.inventory.PieceCommittedException;
 import com.traceability.inventory.PieceOutOnTransferException;
 import com.traceability.inventory.ReturnSessionException;
+import com.traceability.integrations.bosta.NoBostaAccountException;
 import com.traceability.inventory.ShopifyFulfillmentActivationException;
 import com.traceability.inventory.StateConflictException;
 import com.traceability.inventory.TransferException;
@@ -174,6 +175,17 @@ public class ApiExceptionHandler {
         log.warn("Fulfillment activation guard: {}", ex.getMessage());
         return ResponseEntity.status(ex.httpStatus())
             .body(new FulfillmentActivationErrorBody(ex.code().name(), ex.messageEn(), ex.messageAr()));
+    }
+
+    record NoBostaAccountErrorBody(
+            String code,
+            @JsonProperty("message_en") String messageEn,
+            @JsonProperty("message_ar") String messageAr) {}
+
+    @ExceptionHandler(NoBostaAccountException.class)
+    ResponseEntity<NoBostaAccountErrorBody> handleNoBostaAccount(NoBostaAccountException ex) {
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+            .body(new NoBostaAccountErrorBody(ex.code(), ex.messageEn(), ex.messageAr()));
     }
 
     // Repointed to the base type (FR-DEMO Day 2) so both ShopifyOAuthException and the new
