@@ -4,6 +4,36 @@
 
 ## Current state
 
+**Fulfill `shipment_has_courier` fix — built 2026-09-23 on branch `fix/fulfill-has-courier-predicate`, pushed to main 2026-09-23 (not deployed).**
+Critical prod bug: Fulfill showed "Waybill printed outside Traced — no courier account
+connected" for every pilot order (e.g. tenant e785e5e4, order #2212129474), hiding Print
+Waybill and letting Complete through without a print on BOTH pilots since d3aabb8.
+
+- **Root cause:** `FulfillService.getOrder()` derived the flag from
+  `shipments.courier_account_id IS NOT NULL`; no ingest path ever writes that column (prod:
+  Jumi 200/200, Snouts 105/105 forward shipments NULL), so it was always false. Hidden because
+  no backend test covered the predicate — `fulfill.test.tsx` hand-sets the computed flag.
+- **Fix (backend only):** `shipment_has_courier = s.id IS NOT NULL AND EXISTS(tenant's
+  courier_accounts row, provider='bosta', status='active')` — exactly
+  `BostaAwbService.printAwb()`'s account resolution, so flag == "print can succeed". Field name,
+  `Fulfill.tsx`, ingest paths and the column untouched; no backfill.
+- **Tests:** new `FulfillShipmentHasCourierTest` (6, app_user/RLS path, every shipment has
+  `courier_account_id` NULL): active → true (and print succeeds); none → false; disconnected /
+  error → false AND `printAwb()` throws `NoBostaAccountException`; self-pickup / return-leg-only →
+  false. Revert-to-confirm: (a) RED on the old predicate ("expected: true but was: false");
+  the other five pass on both. `fulfill.test.tsx` `makeOrderDetail()` comment only.
+- **Impact query** (orders packed after the gate deploy with no Traced print) is in the Step 0
+  report; there is no print-success record, so the set is every non-self-pickup order packed
+  post-deploy on a tenant with an active Bosta account.
+- **Backlog (recorded, NOT fixed):**
+  1. Fulfill's `fulfill.printAwb.noCourierAccount` copy ("no courier account connected") is
+     inaccurate when the account exists but is `disconnected` / `error`.
+  2. `shipments.courier_account_id` is dead — never written by any ingest path, and now never
+     read. Decide later: drop the column, or populate it at ingest.
+  3. Successful AWB prints are never recorded (only failures, via
+     `awb_print_failed_reason/_at`) — "was this order printed via Traced?" is unanswerable.
+- Gotcha: two sessions shared one checkout; switching its branch made the other session's
+  commits land on the wrong branch. Use a separate `git worktree` per concurrent session.
 **CRP address correction (V99) — built 2026-09-23 on branch `fix/crp-address-backfill` (not merged).**
 Data-only migration correcting `orders.address` rows polluted by a CRP's merchant
 `dropOffAddress` before the Step 2 fix (production: 2 Jumi orders, #385327169470 via CRP

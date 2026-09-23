@@ -54,9 +54,13 @@ function makeOrderDetail(overrides: Partial<{
     cancel_requested_at: null,
     shipment_id: null,
     tracking_number: null,
-    // Realistic default (a real courier-backed shipment) so every EXISTING fixture
-    // in this file keeps requiring a successful print before Complete, exactly as
-    // before this change — only the new no-courier tests below override it.
+    // Realistic default (a tenant with an active Bosta account) so every EXISTING
+    // fixture in this file keeps requiring a successful print before Complete — only
+    // the no-courier tests below override it. The flag is TENANT-account-derived:
+    // FulfillService.getOrder() computes it from the tenant's active Bosta
+    // courier_accounts row (the same resolution Print Waybill uses), NOT from
+    // shipments.courier_account_id, which is never populated. Hand-setting it here
+    // tests the UI only; the SQL is covered by FulfillShipmentHasCourierTest.
     shipment_has_courier: true,
     items: [{
       id: 'item-1',

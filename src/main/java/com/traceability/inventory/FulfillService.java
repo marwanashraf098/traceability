@@ -277,7 +277,13 @@ public class FulfillService {
             "       o.locked_by, o.locked_at, o.is_self_pickup, o.cancel_requested_at, " +
             "       (e.id IS NOT NULL) AS is_exchange, " +
             "       s.id AS shipment_id, s.tracking_number, " +
-            "       (s.courier_account_id IS NOT NULL) AS shipment_has_courier " +
+            // "Has courier" == "Print Waybill can succeed": the same account resolution as
+            // BostaAwbService.printAwb() (tenant's bosta row, status 'active'). NOT
+            // shipments.courier_account_id — no ingest path ever populates that column.
+            "       (s.id IS NOT NULL AND EXISTS (" +
+            "           SELECT 1 FROM courier_accounts ca " +
+            "           WHERE ca.tenant_id = o.tenant_id AND ca.provider = 'bosta' " +
+            "             AND ca.status = 'active')) AS shipment_has_courier " +
             "FROM orders o " +
             "LEFT JOIN shipments s ON s.order_id = o.id AND s.tenant_id = o.tenant_id AND s.shipment_leg = 'forward' " +
             // Badge derivation only (FR-EXCHANGE Phase 3/4 §0e) — no new orders column.
