@@ -4,10 +4,8 @@
 
 ## Current state
 
-**Returns page: courier returns awaiting scan — Step 2 PARTIAL on branch `feature/returns-awaiting-scan` (2026-09-23, not merged).**
-Built: A (shared definition), B (endpoint), D (CRP AWB parcel info), E (dated session header),
-G (CRP address fix), corrected `unassignedSubtitle` copy. **Not built:** C callout wiring (needs
-an approved edit to existing frontend tests — see below) and F (auto-close, gated off).
+**Returns page: courier returns awaiting scan — Step 2 COMPLETE on branch `feature/returns-awaiting-scan` (2026-09-23, not merged).**
+Built A–G. Backend 1385 run / only the 3 known failures; frontend 334/334, tsc + vite build clean.
 
 - **A:** `ShipmentLinkService.RETURN_LEG_AWAITING_SCAN_SQL` is THE definition of "return leg
   awaiting scan" (return leg, `returned`, intake NULL, no scan evidence). `detectReturnLegUnscanned`
@@ -25,12 +23,15 @@ an approved edit to existing frontend tests — see below) and F (auto-close, ga
 - **G:** `populateConsigneePiiFromRaw` takes a CRP's (type 25) address from `pickupAddress`
   (customer), not `dropOffAddress` (merchant). Receiver = customer on a CRP (merchant is `sender`),
   so name/phone unchanged. Revert-to-confirm proven.
-- **F (auto-close idle sessions) NOT built — gate tripped:** `close()` throws
-  `SESSION_CLOSE_BLOCKED` (409) while any item has `disposition='pending'`, so it cannot close a
-  session with pending pieces as F requires. Needs a decision.
-- **C pending approval:** every Returns landing test uses a strict sequential fetch-mock queue;
-  any new landing fetch (`/returns/awaiting-scan`) desyncs them (e.g. `rs15`). Wiring C needs an
-  edit to existing frontend tests (a default route for the new URL in `returns.test.tsx`).
+- **C:** `LandingCallout` (one component for both banners); awaiting-scan callout for owner,
+  manager AND worker (reduced landing included), hidden at 0, also shown above the empty state.
+  Approved test change: `returns.test.tsx` answers `/returns/awaiting-scan` by URL (count 0) in
+  `beforeEach` — the sequential queues stay in step, no assertion changes.
+- **F:** `ReturnSessionAutoCloseJob` (hourly) closes open sessions idle > 12h (latest of
+  opened_at, piece scan, AWB scan, disposition) with ZERO pending items, via the normal `close()`
+  (intake stamp runs; preconditions never bypassed). Actor = system (`closed_by` NULL). Decision
+  (2026-09-23) after the gate: `close()` rejects pending dispositions, so sessions with pending
+  items are never auto-closed.
 - **RS.7 (`manualLink()` creating a forward leg for a CRP) PARKED** — production count is 0, and
   the V43 `ux_active_shipment_per_order_leg` index already 409s it for orders with a forward leg.
 - Gotcha: `vite build` (not just `mvn test`) also writes into `src/main/resources/static/` —

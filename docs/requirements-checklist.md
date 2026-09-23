@@ -213,10 +213,10 @@ Built 2026-08-15 on branch `returns-rebuild`, single cutover, not yet merged. Mo
 - [ ] RS.7 [M] Follow-up: `manualLink()` creates a forward leg for a CRP — PARKED 2026-09-23 (production count 0; V43 index already 409s the common case)
 - [x] RS.9 [M] Shared "return leg awaiting scan" definition; detector reuses it
 - [x] RS.10 [M] `GET /api/v1/returns/awaiting-scan` (all roles incl. worker, no PII)
-- [ ] RS.11 [M] Returns landing "courier returns waiting to be scanned" callout (owner/manager/worker) — pending approval to edit existing frontend test mocks
+- [x] RS.11 [M] Returns landing "courier returns waiting to be scanned" callout (owner/manager/worker)
 - [x] RS.12 [M] CRP AWB scan shows Bosta's itemsCount/description in the session view
 - [x] RS.13 [M] Open-session header shows date + time when not opened today
-- [ ] RS.14 [M] Auto-close idle return sessions — gated: `close()` rejects pending dispositions
+- [x] RS.14 [M] Auto-close idle return sessions (idle > 12h, nothing pending, via close())
 - [x] RS.15 [M] CRP customer address from `pickupAddress`, not merchant `dropOffAddress`
 - [ ] RS.8 [M] Follow-up: identify (do not auto-fix) the pre-V98 piece stranded at `return_pending_inspection` by a CRP state-46 `courier_update`
 
