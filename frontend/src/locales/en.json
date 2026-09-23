@@ -766,8 +766,10 @@
         "expectedNotScanned": "Expected, not scanned"
       },
       "unassignedTitle": "{{count}} unassigned pending returns",
-      "unassignedSubtitle": "Bosta reported these as returned, but no session has claimed them yet. Scan one to pull it into your current session.",
+      "unassignedSubtitle": "These items are waiting for inspection but aren't in an open session. Scan one to pull it into your current session.",
       "unassignedReview": "Review →",
+      "awaitingScanTitle": "{{count}} courier returns waiting to be scanned",
+      "awaitingScanSubtitle": "Bosta brought these back to your warehouse. Scan the parcel label to start.",
       "tableTitle": "Sessions · {{count}} total",
       "col": {
         "session": "Session",
@@ -794,6 +796,8 @@
     "openSession": {
       "title": "Return session",
       "startedAt": "started {{time}}",
+      "startedOn": "started {{time}}",
+      "bostaSays": "Bosta says: {{count}} items — {{description}}",
       "abandon": "Abandon session",
       "abandonConfirmTitle": "Abandon this session?",
       "abandonConfirmBodyWithItems": "{{count}} piece(s) scanned into this session will stay exactly as they are — dispositioned pieces keep their disposition, and undispositioned pieces stay at return_pending_inspection and resurface as unassigned. This only closes the session; it does not undo anything.",

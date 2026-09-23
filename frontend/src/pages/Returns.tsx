@@ -10,6 +10,7 @@ import {
 import Layout from '../components/Layout'
 import { getAccessToken, clearAccessToken } from '../auth'
 import { getRoleFromToken } from '../api'
+import { formatSessionStart } from './returns/sessionStart'
 
 const BASE = '/api/v1'
 
@@ -138,6 +139,14 @@ interface ExpectedPiece {
   sku: string | null
 }
 
+/** Bosta's own description of a scanned courier-return (CRP) parcel — returnSpecs.packageDetails. */
+interface CourierReturnInfo {
+  awb: string
+  itemsCount: number | null
+  description: string | null
+  descriptionAr: string | null
+}
+
 interface SessionDetail {
   id: string
   status: 'open' | 'closed' | 'abandoned'
@@ -148,6 +157,7 @@ interface SessionDetail {
   note: string | null
   items: SessionItem[]
   expectedPieces: ExpectedPiece[]
+  courierReturns?: CourierReturnInfo[]
 }
 
 interface CloseSummary {
@@ -474,7 +484,7 @@ function OpenSessionScreen({ sessionId, onExit, onStartNew }: {
   onExit: () => void
   onStartNew: (sessionId: string) => void
 }) {
-  const { t } = useTranslation()
+  const { t, i18n } = useTranslation()
   const role = getRoleFromToken()
   const canManage = role === 'owner' || role === 'manager'
   const scanRef = useRef<HTMLInputElement>(null)
@@ -675,9 +685,11 @@ function OpenSessionScreen({ sessionId, onExit, onStartNew }: {
         </div>
         {detail && (
           <span className="text-small text-muted">
-            {t('returns.openSession.startedAt', {
-              time: new Date(detail.opened_at).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' }),
-            })}
+            {(() => {
+              const started = formatSessionStart(detail.opened_at, i18n.language)
+              return t(started.sameDay ? 'returns.openSession.startedAt' : 'returns.openSession.startedOn',
+                { time: started.text })
+            })()}
           </span>
         )}
         <div className="flex-1" />
@@ -722,6 +734,16 @@ function OpenSessionScreen({ sessionId, onExit, onStartNew }: {
             <p className="text-small text-muted">{t('returns.openSession.emptySubtitle')}</p>
           </div>
         )}
+
+        {(detail?.courierReturns ?? []).map(c => {
+          const description = i18n.language === 'ar' && c.descriptionAr ? c.descriptionAr : c.description
+          if (c.itemsCount == null || !description) return null
+          return (
+            <p key={c.awb} className="text-small text-muted" data-testid={`courier-return-info-${c.awb}`}>
+              {t('returns.openSession.bostaSays', { count: c.itemsCount, description })}
+            </p>
+          )
+        })}
 
         {detail?.expectedPieces.map(p => (
           <div key={p.id} className="border border-line bg-elevated rounded-xl px-3.5 py-3 flex items-center gap-3.5" data-testid={`expected-${p.id}`}>
