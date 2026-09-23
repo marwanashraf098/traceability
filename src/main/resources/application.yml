@@ -52,6 +52,11 @@ app:
   # Set CUSTOM_APP_CONNECT_ENABLED=true in .env to activate.
   custom-app-connect-enabled: ${CUSTOM_APP_CONNECT_ENABLED:false}
 
+# Returns portal (Step 4a). HMAC-SHA256 key for the stateless lookup token. No default:
+# PortalTokenService fails fast at startup when it is missing or shorter than 32 bytes.
+portal:
+  token-secret: ${PORTAL_TOKEN_SECRET:}
+
 shopify:
   # Pin the API version — never use "latest" in code paths.
   api-version: ${SHOPIFY_API_VERSION:2026-04}

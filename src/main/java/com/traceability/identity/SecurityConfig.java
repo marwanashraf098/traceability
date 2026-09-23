@@ -116,7 +116,10 @@ public class SecurityConfig {
                     // which is dotless-path-only and not meant to cover a real data-writing
                     // POST). Rides the same unauthenticated pass-through as /api/v1/auth/login:
                     // JwtAuthenticationFilter/TenantContextFilter are no-ops with no token.
-                    "/api/v1/public/demo/start"
+                    "/api/v1/public/demo/start",
+                    // Returns portal (Step 4a) — unauthenticated, slug-resolved via hatch #14
+                    // (resolve_tenant_by_portal_slug), then TenantContext.runAs + RLS.
+                    "/api/v1/portal/**"
                 ).permitAll()
                 // SPA shell fallback: any path without a dot (not a static file) that doesn't
                 // start with /api/, /auth/, /webhooks/, or /actuator/ is a client-side route.
