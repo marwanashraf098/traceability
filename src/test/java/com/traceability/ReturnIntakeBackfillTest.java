@@ -86,6 +86,8 @@ class ReturnIntakeBackfillTest {
         MigrateResult r2 = Flyway.configure()
                 .dataSource(POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword())
                 .locations("classpath:db/migration")
+                // Pinned: later migrations must not change this V98-only count.
+                .target("98")
                 .load().migrate();
         assertThat(r2.success).isTrue();
         assertThat(r2.migrationsExecuted).as("V98 only").isEqualTo(1);
