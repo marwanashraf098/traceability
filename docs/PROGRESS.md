@@ -4,6 +4,61 @@
 
 ## Current state
 
+**Returns: scan-as-truth for return legs — built 2026-09-23 on branch `feature/returns-scan-as-truth` (not merged, not deployed).**
+Step 1 of the Returns Portal work (Step 0 / 0b were diagnosis-only). Local/Testcontainers only;
+production was not touched.
+
+- **Root cause fixed:** `BostaWebhookJob.applyMappedState()`'s piece step is order-scoped (every
+  `active`/`packed` allocation on the order), so a CRP (type 25) return leg reaching state 46
+  moved **every** delivered piece to `return_pending_inspection`, including items the customer
+  kept. Now skipped when the resolved shipment's `shipment_leg='return'` — shipment row, status
+  history, PII and not-traced tagging still run. All three callers inherit it; `:277` (exchange
+  post-pack) and `:688` (admin re-interpret) only ever resolve `shipment_leg='forward'` rows, and
+  only `tryMatchDelivery()` (type 25) + the V43 backfill create return legs.
+- **V98:** `shipments.return_intake_completed_at`, `tenants.return_unscanned_window_days` (default
+  3), evidence-based backfill (terminal return legs with a `return_received` event at/after the
+  leg's `created_at` → earliest such `occurred_at`; everything else NULL — a pre-V98 state-46
+  `courier_update` is NOT scan evidence).
+- **Intake completion:** `ReturnSessionService.close()` (never abandon) stamps every return leg of
+  an order that had a legal scan in the session — orders read from the session's
+  `return_received` events (`metadata->>'session_id'`), because `restock()` clears
+  `pieces.current_order_id` before close.
+- **Acceptance:** new `ShipmentLinkService.hasReturnLegAwaitingIntake()` (non-terminal, or
+  `returned` + intake NULL) OR'd into `scanPiece()`'s DELIVERED case. `hasActiveReturnLeg()` and
+  its four callers untouched.
+- **`return_kind` labels now mean what they say (window-independent), acceptance unchanged:**
+  `exchange_match` (matched exchange on the order — new `hasMatchedExchange()`) > `crp_return`
+  (new) > `customer_after_delivery`. The legacy adopt path (piece already at
+  `return_pending_inspection`) still writes no `return_kind`. No production reader of
+  `return_kind` exists (LookupService passes metadata through opaquely; frontend types it
+  `unknown`).
+- **`listCrpReturns` `inspection_state`:** `returned` + intake NULL → `needs_inspection` (zero
+  pending pieces before the scan means "not scanned", not "resolved").
+- **New HIGH exception `return_leg_unscanned`:** returned, intake NULL, entered `returned` >
+  `return_unscanned_window_days` ago (`shipments.returned_at`, fallback earliest `returned`
+  `shipment_status_history` row), and **no scan evidence** (silent while a scan sits in an
+  open session). `ExceptionEmailFormatter` is type-agnostic (renders `enrich()`'s EN/AR text) and
+  the immediate-alert job picks up every HIGH detector automatically — no per-type entry needed.
+- Open return sessions never auto-close or expire — only manual `close()`/`abandon()`.
+- Tests: new `ReturnLegScanAsTruthTest` (9) + `ReturnIntakeBackfillTest` (1). T1/T2 proven RED with
+  the B1 skip reverted (pieces went to `return_pending_inspection`), GREEN restored.
+  `RefundListTest` r7/r8 fixtures updated (assertions unchanged): r7 seeds
+  `return_intake_completed_at`; r8 now goes open → scan → restock disposition → close. Backend
+  1373 run, only the 3 known failures; frontend 316/316, tsc + vite build clean.
+- CLAUDE.md / blueprint §16.1: hatch inventory corrected (13 built incl. `upgrade_custom_app_to_oauth`),
+  #14 `resolve_tenant_by_portal_slug` recorded APPROVED-NOT-BUILT, MODE B AMENDMENT #2 (type-25
+  creation, approved-not-built), return-leg invariant.
+
+**Follow-ups (not fixed this step):**
+- `ShipmentLinkService.manualLink()` always calls `createOrFindShipment()` — manually linking an
+  unlinked CRP creates a **forward** leg, which then still moves pieces under applyMappedState.
+- Known pre-V98 stranded piece: one production piece moved to `return_pending_inspection` by a CRP
+  state-46 `courier_update`; identify with the post-deploy SQL in the Step 1 report — do not auto-fix.
+- After deploy, existing return legs left NULL by the backfill will raise `return_leg_unscanned`.
+
+Next up: merge/deploy decision for this branch; then Returns Portal Slice 1 proper (hatch #14,
+CRP creation under MODE B AMENDMENT #2).
+
 **FR-13.x Void / On Hold + FR-14 Lookup restyle + order-number lookup shipped (2026-08-23).**
 Two-phase build (Step 0 diagnosis → Phase 1 backend gate → Phase 2 frontend), both gates
 reviewed and approved by Marawan before proceeding.
@@ -3979,6 +4034,7 @@ Provision Hetzner VPS, set up Docker Compose (app + Postgres or Supabase connect
 
 ## Gotchas / environment quirks
 
+- **`mvn test` rebuilds the frontend bundle into `src/main/resources/static/`** — every backend test run leaves `static/index.html` modified and new hashed `assets/main-*.js/.css` files (old ones deleted). This is how the working tree got its uncommitted bundle before 2026-09-23. After a test run, `git checkout -- src/main/resources/static/` and delete the untracked `main-*` files unless the bundle is being deliberately committed.
 - **Shopify 2026-04 removed `financialStatus` field on Order** — use `displayFinancialStatus` instead. Returns capitalized display values ("Pending", "Paid", "Authorized"). COD inference checks `"pending".equalsIgnoreCase(displayFinancialStatus)` — case-insensitive, so both are safe.
 - **`ApiExceptionHandler.handleGeneral(Exception)` intercepts `AccessDeniedException` from `@PreAuthorize`** — `DispatcherServlet` resolves `AccessDeniedException` through `ExceptionHandlerExceptionResolver` before `ExceptionTranslationFilter` can invoke the `AccessDeniedHandler`. Must have an explicit `@ExceptionHandler(AccessDeniedException.class) → 403` handler above the catch-all; otherwise the `Exception` handler returns 500.
 - **Supabase 15-connection cap (free plan session-mode pooler)** — solved by sharing one `owner-pool` (max=2, min-idle=1) between Flyway and JobRunr (`@FlywayDataSource` bean in `DataSourceConfig`), and shrinking `HikariPool-1` (app_user) to max=5, min-idle=1. Total at startup: 2 connections. Stale connections from crashed previous runs can fill the 15 slots; kill them in Supabase SQL Editor with `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE application_name = 'Supavisor' AND pid <> pg_backend_pid()` then immediately restart. Use `./dev.sh` to start the app — it loads `.env`, kills :8080, and starts Maven. Running `mvn spring-boot:run` in a new terminal without sourcing `.env` first causes Flyway to try `localhost:5432` (connection refused).
