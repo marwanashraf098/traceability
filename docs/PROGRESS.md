@@ -4,6 +4,29 @@
 
 ## Current state
 
+**CRP address correction (V99) — built 2026-09-23 on branch `fix/crp-address-backfill` (not merged).**
+Data-only migration correcting `orders.address` rows polluted by a CRP's merchant
+`dropOffAddress` before the Step 2 fix (production: 2 Jumi orders, #385327169470 via CRP
+6136538746 with no forward leg, #385328209470 via CRP 9730639058 with a forward leg).
+- Targets exactly the Step 2 detection predicate + `pii_source='bosta'` + `pii_redacted_at IS NULL`.
+- New address: the forward leg's `dropOffAddress` if a forward leg with raw exists, else the
+  CRP's `pickupAddress`; NULL if neither has any of the four fields.
+- Shape = what `populateConsigneePiiFromRaw()` writes today (`jsonb_strip_nulls`, untrimmed,
+  "" kept). Address only; idempotent (proven by re-executing the V99 SQL → 0 rows).
+- `MigrationSmokeTest` 97→98, `NotTracedBackfillTest` 42→43; `ReturnIntakeBackfillTest` and the
+  new `CrpAddressBackfillTest` pin their second migrate with `.target(...)` so later migrations
+  can't stale their "only this migration" count (the trap `ExchangeBackfillTest` fell into).
+
+**Follow-up — two `orders.address` JSON shapes exist in production (do not normalize without a decision):**
+V45 and `BostaController`'s PII backfill write all four keys (`firstLine/city/zone/district`),
+JSON null for missing, values TRIMmed, only when firstLine or city is present.
+`populateConsigneePiiFromRaw()` (and V99) write only present keys, untrimmed, "" kept, when any of
+the four is present. Harmless only while no reader distinguishes missing key from null — checked
+2026-09-23: `OrderController.detail()` (generic Object passthrough), frontend `OrderDetail.tsx`
+(`Object.values(...).filter(Boolean)`), `FulfillService.getOrder()` (passthrough, unused by
+Fulfill.tsx), `SentryConfig` (key-name scrubbing). No `?`/`@>`/whole-object equality anywhere.
+Any new reader must treat missing and null the same, or the shapes must be normalized first.
+
 **Returns page: courier returns awaiting scan — Step 2 COMPLETE on branch `feature/returns-awaiting-scan` (2026-09-23, not merged).**
 Built A–G. Backend 1385 run / only the 3 known failures; frontend 334/334, tsc + vite build clean.
 

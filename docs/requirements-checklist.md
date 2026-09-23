@@ -218,6 +218,8 @@ Built 2026-08-15 on branch `returns-rebuild`, single cutover, not yet merged. Mo
 - [x] RS.13 [M] Open-session header shows date + time when not opened today
 - [x] RS.14 [M] Auto-close idle return sessions (idle > 12h, nothing pending, via close())
 - [x] RS.15 [M] CRP customer address from `pickupAddress`, not merchant `dropOffAddress`
+- [x] RS.16 [M] V99: correct existing orders polluted by a CRP merchant address (data-only, idempotent)
+- [ ] RS.17 [S] Follow-up: two `orders.address` JSON shapes (V45/BostaController vs populateConsigneePiiFromRaw) — normalize only if a reader starts distinguishing missing key from null
 - [ ] RS.8 [M] Follow-up: identify (do not auto-fix) the pre-V98 piece stranded at `return_pending_inspection` by a CRP state-46 `courier_update`
 
 Built 2026-09-23 on branch `feature/returns-scan-as-truth`, not merged, not deployed. Local/Testcontainers only. `MigrationSmokeTest` 96→97, `NotTracedBackfillTest` 41→42. Backend 1373 run, only the 3 known failures; frontend 316/316.
