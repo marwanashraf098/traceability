@@ -225,6 +225,10 @@ Built 2026-08-15 on branch `returns-rebuild`, single cutover, not yet merged. Mo
 - [x] RP.3 [M] Public `GET /api/v1/portal/{slug}/config` + `POST /api/v1/portal/{slug}/lookup` (generic failures, throttle, HMAC token, no PII)
 - [x] RP.4 [M] nginx portal rate-limit zone
 - [ ] RP.5 [M] Portal request submission + merchant approval (Step 4b)
+- [x] RS.18 [M] Return session parcel cards (per scanned AWB), feedback strip, footer summary
+- [x] RS.19 [M] Untracked courier return: mark received / undo (no stock change), V101 intake outcome + actor
+- [x] RS.20 [M] `return_to_receive` exception (MEDIUM) + E&R "Received · not tracked"
+- [x] RS.21 [M] Count strings use the `_one`/`_other` plural convention (EN), AR per exchangesRefunds pattern
 - [ ] RS.8 [M] Follow-up: identify (do not auto-fix) the pre-V98 piece stranded at `return_pending_inspection` by a CRP state-46 `courier_update`
 
 Built 2026-09-23 on branch `feature/returns-scan-as-truth`, not merged, not deployed. Local/Testcontainers only. `MigrationSmokeTest` 96→97, `NotTracedBackfillTest` 41→42. Backend 1373 run, only the 3 known failures; frontend 316/316.

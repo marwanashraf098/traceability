@@ -4,6 +4,35 @@
 
 ## Current state
 
+**Returns Step 5 — parcel cards, untracked courier returns, "Return To Receive" — built 2026-09-23 on branch `feature/returns-parcel-cards` (not merged).**
+Mockups: `design/returns-parcel-states/1–7`. No pieces created or moved, no Shopify writes.
+- **V101:** `shipments.return_intake_outcome` (`scanned` | `received_untracked`), `return_intake_by`
+  (NULL = system), `return_intake_session_id` (no FK — audit pointer; FK-safe cleanup orders delete
+  sessions before shipments). Stamped rows backfilled to `scanned`. `close()` (and so auto-close)
+  now records outcome `scanned`, the closing user (NULL for the job) and the session.
+- **"Never tracked"** = no allocation of ANY status on the order — `ShipmentLinkService.orderUntrackedSql()`
+  / `isOrderUntracked()`; the only definition, used by mark-received and the parcel view.
+- **Mark received / undo:** `POST /returns/sessions/{id}/parcels/{shipmentId}/mark-received` and
+  `…/undo-mark-received` (isAuthenticated — workers included). Guards: open session, return leg of
+  this tenant (else 404), AWB scanned in THIS session, intake not complete, order untracked — each
+  a specific 409. Undo only in the same open session for an intake that session recorded.
+- **Session detail:** additive `parcels[]` (per scanned AWB: leg, order, customer first name + initial,
+  returnedAt, Bosta note, tracked, intake outcome/marked-by, expectedPieces, scannedItems, counts,
+  complete), `otherItems[]`, `lastScan`. An item's order comes from its `return_received` event in this
+  session (restock clears `current_order_id`).
+- **`return_to_receive`** (MEDIUM): open while outcome `received_untracked` and no resolution at/after
+  the marking (undo + re-mark re-opens it); shared open-predicate with `listCrpReturns`'
+  `awaiting_receiving`. `inspection_state = received_untracked` (counted under Received in E&R).
+- **UI:** parcel cards per mockups 1–4/6 using the EXISTING row renderers and disposition/reprint
+  controls (mismatch kept — see below); feedback strip from `lastScan`; empty state only with no items
+  and no parcels; footer summary; plurals `_one`/`_other`; `<bdi>` + Unicode isolates for AWBs,
+  codes, names, order numbers. The SAFETY-CRITICAL scan handler and refocus handlers are untouched.
+- **Mockup vs behaviour (behaviour kept):** "Not the real piece" (mismatch) stays in the item controls;
+  the existing close-blocked callout (lists blocking pieces) stays alongside the footer line;
+  restock location ("Shelf A-04") isn't shown — the session restock sends no location; Exceptions keeps
+  the generic "Go →" (to Receiving) rather than a "Receiving →" label; E&R phone masking not changed.
+- Resolve flow already supports a note (optional textarea → `exception_resolutions.note`).
+
 **Returns portal Step 4a (foundation) — built 2026-09-23 on branch `feature/portal-4a-foundation` (not merged).**
 Backend + nginx only; no frontend, no Bosta calls, no emails, no piece moves.
 - **V100:** `tenants.portal_slug` (UNIQUE, `^[a-z0-9-]{3,40}$`), `portal_enabled`, `portal_auto_approve`
