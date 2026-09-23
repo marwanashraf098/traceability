@@ -277,7 +277,33 @@ public class ReturnSessionService {
         result.put("scanType", "awb");
         result.put("awb", trackingNumber);
         result.put("expectedPieces", fetchExpectedPieces(sessionId, tenantId));
+        // Courier (CRP) return label: add Bosta's own parcel description so the worker knows
+        // which of the order's pieces are actually in this parcel. Forward AWBs unchanged.
+        List<Map<String, Object>> crp = courierReturnInfo(
+            "rss.session_id = ? AND rss.tenant_id = ? AND rss.awb = ?", sessionId, tenantId, trackingNumber);
+        if (!crp.isEmpty()) {
+            result.put("itemsCount",    crp.get(0).get("itemsCount"));
+            result.put("description",   crp.get(0).get("description"));
+            result.put("descriptionAr", crp.get(0).get("descriptionAr"));
+        }
         return result;
+    }
+
+    /**
+     * Bosta's returnSpecs.packageDetails for return-leg (CRP) AWBs scanned into a session.
+     * Forward-leg AWBs never match (shipment_leg='return' filter).
+     */
+    private List<Map<String, Object>> courierReturnInfo(String where, Object... args) {
+        return jdbc.queryForList(
+            "SELECT rss.awb, " +
+            "       (s.raw #>> '{returnSpecs,packageDetails,itemsCount}')::int AS \"itemsCount\", " +
+            "       s.raw #>> '{returnSpecs,packageDetails,description}'   AS \"description\", " +
+            "       s.raw #>> '{returnSpecs,packageDetails,descriptionAr}' AS \"descriptionAr\" " +
+            "FROM return_session_shipments rss " +
+            "JOIN shipments s ON s.tracking_number = rss.awb AND s.tenant_id = rss.tenant_id " +
+            "                AND s.shipment_leg = 'return' " +
+            "WHERE " + where + " ORDER BY rss.awb",
+            args);
     }
 
     // ── Disposition ───────────────────────────────────────────────────────────
@@ -550,6 +576,10 @@ public class ReturnSessionService {
         Map<String, Object> result = new LinkedHashMap<>(rows.get(0));
         result.put("items", items);
         result.put("expectedPieces", fetchExpectedPieces(sessionId, tenantId));
+        // Re-read on every load (the scan handler reloads detail, it never keeps the scan
+        // response), so the session view renders Bosta's parcel description from here.
+        result.put("courierReturns", courierReturnInfo(
+            "rss.session_id = ? AND rss.tenant_id = ?", sessionId, tenantId));
         return result;
     }
 

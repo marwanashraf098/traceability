@@ -18,10 +18,27 @@ public class ReturnSessionController {
 
     private final ReturnSessionService sessionService;
     private final LabelService         labelService;
+    private final ShipmentLinkService  shipmentLinkService;
 
-    public ReturnSessionController(ReturnSessionService sessionService, LabelService labelService) {
-        this.sessionService = sessionService;
-        this.labelService   = labelService;
+    public ReturnSessionController(ReturnSessionService sessionService, LabelService labelService,
+                                   ShipmentLinkService shipmentLinkService) {
+        this.sessionService      = sessionService;
+        this.labelService        = labelService;
+        this.shipmentLinkService = shipmentLinkService;
+    }
+
+    // ── Courier returns awaiting scan ─────────────────────────────────────────
+
+    /**
+     * Courier (CRP) return parcels Bosta reports back at the warehouse that nobody has
+     * scanned yet — see ShipmentLinkService.RETURN_LEG_AWAITING_SCAN_SQL. Same role gate
+     * as opening a session (isAuthenticated: owner, manager, worker) since this is what a
+     * worker needs to know before starting one; carries no customer PII.
+     */
+    @GetMapping("/awaiting-scan")
+    @PreAuthorize("isAuthenticated()")
+    public Map<String, Object> awaitingScan() {
+        return shipmentLinkService.awaitingScan();
     }
 
     // ── Sessions ──────────────────────────────────────────────────────────────

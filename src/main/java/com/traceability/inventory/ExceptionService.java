@@ -259,27 +259,6 @@ public class ExceptionService {
     }
 
     /**
-     * FR-13.x — a void or hold-enter Shopify decrement that definitively failed. This is NOT
-     * a loss and NOT a courier/loss-driven exception — it means the piece's Traced status
-     * (voided / on_hold) and Shopify's on_hand have DIVERGED, which is a live sellable-count
-     * integrity problem (Shopify may still be selling a piece Traced has already pulled from
-     * the floor, or vice versa). CRITICAL for the same reason 'lost' is CRITICAL.
-     *
-     * Scope: only 'failed' rows — 'pending'/'applied'/'skipped' are not exceptions. 'skipped'
-     * in particular is the CORRECT outcome for a void whose receiving increment never applied
-     * (see PieceAdjustService.voidPiece() / ShopifyInventoryService.processVoidCorrection()) —
-     * it must never surface here.
-     *
-     * trigger_id is the piece_id directly for void_correction, but "pieceId:holdEventId" for
-     * hold_enter (see ShopifyInventoryService.processHoldEnter()) — split_part extracts the
-     * piece_id for the join either way.
-     *
-     * No auto-repush here (deferred) — visibility + the existing generic resolve() flow only.
-     * A manager fixes the divergence out-of-band (or via
-     * ShopifyInventoryService.repushFailedVoidOrHold(), Phase 2's manual repush action) then
-     * resolves this exception the same way as every other detector.
-     */
-    /**
      * V98 scan-as-truth: a CRP return leg Bosta reports 'returned' (state 46) whose parcel
      * was never scanned in. Return-leg courier states no longer move pieces, so without
      * this a returned-but-unscanned parcel would be invisible.
@@ -303,21 +282,11 @@ public class ExceptionService {
             "       'return_leg_unscanned:shipment:' || s.id AS subject_key " +
             "FROM shipments s " +
             "JOIN orders o ON o.id = s.order_id AND o.tenant_id = s.tenant_id " +
-            "CROSS JOIN LATERAL ( " +
-            "    SELECT COALESCE(s.returned_at, " +
-            "        (SELECT MIN(h.occurred_at) FROM shipment_status_history h " +
-            "          WHERE h.shipment_id = s.id AND h.internal_state = 'returned')) AS entered_returned_at " +
-            ") x " +
+            "CROSS JOIN LATERAL (SELECT " + ShipmentLinkService.RETURN_LEG_ENTERED_RETURNED_AT_SQL +
+            "    AS entered_returned_at) x " +
             "WHERE s.tenant_id = ? " +
-            "  AND s.shipment_leg = 'return' " +
-            "  AND s.internal_state = 'returned'::shipment_internal_state " +
-            "  AND s.return_intake_completed_at IS NULL " +
+            "  AND " + ShipmentLinkService.RETURN_LEG_AWAITING_SCAN_SQL +
             "  AND x.entered_returned_at < now() - (interval '1 day' * ?) " +
-            "  AND NOT EXISTS ( " +
-            "      SELECT 1 FROM piece_events pe " +
-            "      WHERE pe.tenant_id = s.tenant_id AND pe.order_id = s.order_id " +
-            "        AND pe.event_type = 'return_received' " +
-            "        AND pe.occurred_at >= s.created_at) " +
             "  AND NOT EXISTS ( " +
             "      SELECT 1 FROM exception_resolutions er " +
             "      WHERE er.tenant_id = s.tenant_id " +
@@ -326,6 +295,27 @@ public class ExceptionService {
             tid, windowDays);
     }
 
+    /**
+     * FR-13.x — a void or hold-enter Shopify decrement that definitively failed. This is NOT
+     * a loss and NOT a courier/loss-driven exception — it means the piece's Traced status
+     * (voided / on_hold) and Shopify's on_hand have DIVERGED, which is a live sellable-count
+     * integrity problem (Shopify may still be selling a piece Traced has already pulled from
+     * the floor, or vice versa). CRITICAL for the same reason 'lost' is CRITICAL.
+     *
+     * Scope: only 'failed' rows — 'pending'/'applied'/'skipped' are not exceptions. 'skipped'
+     * in particular is the CORRECT outcome for a void whose receiving increment never applied
+     * (see PieceAdjustService.voidPiece() / ShopifyInventoryService.processVoidCorrection()) —
+     * it must never surface here.
+     *
+     * trigger_id is the piece_id directly for void_correction, but "pieceId:holdEventId" for
+     * hold_enter (see ShopifyInventoryService.processHoldEnter()) — split_part extracts the
+     * piece_id for the join either way.
+     *
+     * No auto-repush here (deferred) — visibility + the existing generic resolve() flow only.
+     * A manager fixes the divergence out-of-band (or via
+     * ShopifyInventoryService.repushFailedVoidOrHold(), Phase 2's manual repush action) then
+     * resolves this exception the same way as every other detector.
+     */
     private List<Map<String, Object>> detectVoidHoldSyncFailed(UUID tid) {
         return jdbc.queryForList(
             "SELECT 'void_hold_sync_failed' AS type, 'CRITICAL' AS severity, 'piece' AS subject_type, " +

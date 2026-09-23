@@ -108,6 +108,7 @@ class RlsCoverageTest {
             "/api/v1/exchanges/{id}/candidates",
             "/api/v1/exchanges/{id}/outbound-candidates",
             "/api/v1/refunds",
+            "/api/v1/returns/awaiting-scan",
             "/api/v1/overview/trends",
             "/api/v1/overview/late-to-pack",
             "/api/v1/overview/top-skus",
@@ -473,6 +474,50 @@ class RlsCoverageTest {
         @SuppressWarnings("unchecked")
         List<Map<String, Object>> body = resp.getBody();
         assertThat(body).anyMatch(r -> "TN-CVG-RFD-001".equals(r.get("tracking_number")));
+    }
+
+    @Test
+    void returnsAwaitingScan_returnsSeededReturnedLeg_crossTenantIsolated() {
+        UUID orderId = UUID.randomUUID();
+        jdbc.update("INSERT INTO orders (id, tenant_id, store_id, external_id, number, status, " +
+                    "    payment_method, placed_at, on_hold) " +
+                    "VALUES (?, ?, ?, 'EXT-CVG-AWS', '#CVG-AWS', 'delivered'::order_status, 'cod', now(), false)",
+                    orderId, tenantId, storeId);
+        jdbc.update("INSERT INTO shipments (tenant_id, order_id, provider, tracking_number, " +
+                    "    internal_state, shipment_leg, returned_at) " +
+                    "VALUES (?, ?, 'bosta', '5550001001', 'returned'::shipment_internal_state, 'return', now())",
+                    tenantId, orderId);
+
+        UUID otherTenant = UUID.randomUUID();
+        UUID otherStore  = UUID.randomUUID();
+        UUID otherOrder  = UUID.randomUUID();
+        jdbc.update("INSERT INTO tenants (id, name) VALUES (?, 'Cov Other')", otherTenant);
+        jdbc.update("INSERT INTO stores (id, tenant_id, platform, shop_domain, status) " +
+                    "VALUES (?, ?, 'shopify', 'cov-aws-other.myshopify.com', 'disconnected')", otherStore, otherTenant);
+        jdbc.update("INSERT INTO orders (id, tenant_id, store_id, external_id, number, status, " +
+                    "    payment_method, placed_at, on_hold) " +
+                    "VALUES (?, ?, ?, 'EXT-CVG-AWS-B', '#CVG-AWS-B', 'delivered'::order_status, 'cod', now(), false)",
+                    otherOrder, otherTenant, otherStore);
+        jdbc.update("INSERT INTO shipments (tenant_id, order_id, provider, tracking_number, " +
+                    "    internal_state, shipment_leg, returned_at) " +
+                    "VALUES (?, ?, 'bosta', '5550001002', 'returned'::shipment_internal_state, 'return', now())",
+                    otherTenant, otherOrder);
+        try {
+            ResponseEntity<Map> resp = get("/api/v1/returns/awaiting-scan", Map.class);
+            assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.OK);
+            @SuppressWarnings("unchecked")
+            List<Map<String, Object>> items = (List<Map<String, Object>>) resp.getBody().get("items");
+            assertThat(items).as("same-tenant positive control")
+                .anyMatch(r -> "5550001001".equals(r.get("trackingNumber")));
+            assertThat(items).as("other tenant's returned leg must never appear")
+                .noneMatch(r -> "5550001002".equals(r.get("trackingNumber")));
+            assertThat(resp.getBody().get("count")).isEqualTo(1);
+        } finally {
+            jdbc.update("DELETE FROM shipments WHERE tenant_id = ?", otherTenant);
+            jdbc.update("DELETE FROM orders    WHERE tenant_id = ?", otherTenant);
+            jdbc.update("DELETE FROM stores    WHERE tenant_id = ?", otherTenant);
+            jdbc.update("DELETE FROM tenants   WHERE id = ?", otherTenant);
+        }
     }
 
     @Test

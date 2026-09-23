@@ -784,6 +784,63 @@ public class ShipmentLinkService {
     }
 
     /**
+     * THE single definition of "return leg awaiting scan" (alias {@code s} = shipments):
+     * a CRP return leg Bosta reports 'returned', intake not completed, and no scan evidence
+     * — no return_received piece event for a piece of the order at/after the leg's
+     * created_at (so a scan sitting in a still-open session counts as scanned).
+     * Shared by ExceptionService.detectReturnLegUnscanned() (which adds the age window)
+     * and {@link #awaitingScan()} (any age) — never write a second copy.
+     */
+    public static final String RETURN_LEG_AWAITING_SCAN_SQL =
+        "s.shipment_leg = 'return' " +
+        "AND s.internal_state = 'returned'::shipment_internal_state " +
+        "AND s.return_intake_completed_at IS NULL " +
+        "AND NOT EXISTS ( " +
+        "    SELECT 1 FROM piece_events pe " +
+        "    WHERE pe.tenant_id = s.tenant_id AND pe.order_id = s.order_id " +
+        "      AND pe.event_type = 'return_received' " +
+        "      AND pe.occurred_at >= s.created_at) ";
+
+    /**
+     * When a return leg (alias {@code s}) entered 'returned': shipments.returned_at (stamped
+     * by BostaWebhookJob.applyMappedState()), falling back to the earliest 'returned'
+     * shipment_status_history row. NULL when neither exists.
+     */
+    public static final String RETURN_LEG_ENTERED_RETURNED_AT_SQL =
+        "COALESCE(s.returned_at, " +
+        "    (SELECT MIN(h.occurred_at) FROM shipment_status_history h " +
+        "      WHERE h.shipment_id = s.id AND h.internal_state = 'returned')) ";
+
+    /**
+     * Returns page "courier returns waiting to be scanned": every return leg awaiting scan
+     * (any age), with Bosta's own parcel description from shipments.raw.returnSpecs. No
+     * customer name/phone/address — this feed is visible to workers.
+     */
+    @Transactional(readOnly = true)
+    public Map<String, Object> awaitingScan() {
+        UUID tenantId = TenantContext.require();
+        Integer count = jdbc.queryForObject(
+            "SELECT COUNT(*) FROM shipments s WHERE s.tenant_id = ? AND " + RETURN_LEG_AWAITING_SCAN_SQL,
+            Integer.class, tenantId);
+        List<Map<String, Object>> items = jdbc.queryForList(
+            "SELECT s.id AS \"shipmentId\", s.tracking_number AS \"trackingNumber\", " +
+            "       o.number AS \"orderNumber\", x.returned_at AS \"returnedAt\", " +
+            "       (s.raw #>> '{returnSpecs,packageDetails,itemsCount}')::int AS \"itemsCount\", " +
+            "       s.raw #>> '{returnSpecs,packageDetails,description}'   AS \"description\", " +
+            "       s.raw #>> '{returnSpecs,packageDetails,descriptionAr}' AS \"descriptionAr\" " +
+            "FROM shipments s " +
+            "JOIN orders o ON o.id = s.order_id AND o.tenant_id = s.tenant_id " +
+            "CROSS JOIN LATERAL (SELECT " + RETURN_LEG_ENTERED_RETURNED_AT_SQL + " AS returned_at) x " +
+            "WHERE s.tenant_id = ? AND " + RETURN_LEG_AWAITING_SCAN_SQL +
+            "ORDER BY x.returned_at DESC NULLS LAST, s.id DESC LIMIT 50",
+            tenantId);
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("count", count);
+        result.put("items", items);
+        return result;
+    }
+
+    /**
      * Labeling only (return_kind='exchange_match'): true when a matched exchange
      * (status='matched') covers {@code orderId}. The exchange half of
      * {@link #hasActiveReturnLeg}, split out so a CRP-only cover is never labeled as an
@@ -939,6 +996,7 @@ public class ShipmentLinkService {
      *   name  ← receiver.fullName (fallback: firstName + " " + lastName)
      *   phone ← receiver.phone (E.164, normalized to canonical 01XXXXXXXXX)
      *   addr  ← dropOffAddress.{firstLine, city.name, zone.name, district.name}
+     *           (CRP / type.code=25: pickupAddress — the customer; dropOffAddress is the merchant)
      */
     void populateConsigneePiiFromRaw(UUID orderId, UUID tenantId, JsonNode raw) {
         if (raw == null) return;
@@ -957,8 +1015,13 @@ public class ShipmentLinkService {
         // Phone: normalize to canonical 01XXXXXXXXX
         String phone = normalizePhone(raw.path("receiver").path("phone").asText(null));
 
-        // Address: build JSON only when at least one field is present
-        JsonNode drop     = raw.path("dropOffAddress");
+        // Address: build JSON only when at least one field is present.
+        // CRP (type 25): the customer is where the courier PICKS UP — pickupAddress.
+        // dropOffAddress/returnAddress on a CRP are the merchant's own location, and
+        // writing those into orders.address would pollute the customer's record.
+        // receiver is the customer on both SEND and CRP (the merchant is raw.sender).
+        JsonNode drop     = raw.path("type").path("code").asInt(-1) == 25
+                            ? raw.path("pickupAddress") : raw.path("dropOffAddress");
         String firstLine  = drop.path("firstLine").asText(null);
         String city       = drop.path("city").path("name").asText(null);
         String zone       = drop.path("zone").path("name").asText(null);
