@@ -4,6 +4,29 @@
 
 ## Current state
 
+**Returns portal Step 4a (foundation) — built 2026-09-23 on branch `feature/portal-4a-foundation` (not merged).**
+Backend + nginx only; no frontend, no Bosta calls, no emails, no piece moves.
+- **V100:** `tenants.portal_slug` (UNIQUE, `^[a-z0-9-]{3,40}$`), `portal_enabled`, `portal_auto_approve`
+  (no slug backfill); `variants.non_returnable`; `shipments.delivered_at` (forward legs backfilled
+  from the earliest `delivered` history row, else the earliest delivered piece event at/after
+  `created_at`); `orders (tenant_id, number)` index; `return_request_status` enum;
+  `return_requests`, `return_request_items` (one active item per piece, partial unique),
+  `portal_lookup_attempts` (no IP, no phone) — all three RLS in-migration and in
+  `MigrationSmokeTest.TENANT_SCOPED_TABLES`; hatch #14 `resolve_tenant_by_portal_slug` (BUILT —
+  CLAUDE.md + blueprint §16.1 now say 14).
+- **Ingest:** `applyMappedState` sets `delivered_at` once when a FORWARD leg maps to `delivered`
+  (never overwritten; return legs and type-30 exchange paths excluded).
+  Known gap: `manualLink()` (parked) never calls `applyMappedState`, so a manually linked
+  delivered shipment has no `delivered_at` and its order won't pass portal lookup.
+- **Public API** (`com.traceability.portal`, permitAll `/api/v1/portal/**`): `GET {slug}/config`,
+  `POST {slug}/lookup`. Slug → hatch #14 → `TenantContext.runAs` + programmatic tx on app_user.
+  Every lookup failure is the same 404 body; throttle 5 failures/60 min per tenant + order key
+  → 429; every attempt recorded. Success returns an HMAC token (30 min) + variant-grouped lines,
+  no customer PII. `PortalTokenService.verify()` is the 4b hook.
+- **Secret:** `PORTAL_TOKEN_SECRET` (≥32 bytes) is REQUIRED — the app refuses to start without it.
+  **Add it to the server `.env` before deploying** (deploy compose reads `../.env`).
+- **nginx:** `limit_req_zone portal` 10r/m per client IP, `location ^~ /api/v1/portal/` burst 5.
+
 **Fulfill `shipment_has_courier` fix — built 2026-09-23 on branch `fix/fulfill-has-courier-predicate`, pushed to main 2026-09-23 (not deployed).**
 Critical prod bug: Fulfill showed "Waybill printed outside Traced — no courier account
 connected" for every pilot order (e.g. tenant e785e5e4, order #2212129474), hiding Print
@@ -34,6 +57,7 @@ Waybill and letting Complete through without a print on BOTH pilots since d3aabb
      `awb_print_failed_reason/_at`) — "was this order printed via Traced?" is unanswerable.
 - Gotcha: two sessions shared one checkout; switching its branch made the other session's
   commits land on the wrong branch. Use a separate `git worktree` per concurrent session.
+
 **CRP address correction (V99) — built 2026-09-23 on branch `fix/crp-address-backfill` (not merged).**
 Data-only migration correcting `orders.address` rows polluted by a CRP's merchant
 `dropOffAddress` before the Step 2 fix (production: 2 Jumi orders, #385327169470 via CRP

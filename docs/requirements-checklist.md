@@ -220,6 +220,11 @@ Built 2026-08-15 on branch `returns-rebuild`, single cutover, not yet merged. Mo
 - [x] RS.15 [M] CRP customer address from `pickupAddress`, not merchant `dropOffAddress`
 - [x] RS.16 [M] V99: correct existing orders polluted by a CRP merchant address (data-only, idempotent)
 - [ ] RS.17 [S] Follow-up: two `orders.address` JSON shapes (V45/BostaController vs populateConsigneePiiFromRaw) — normalize only if a reader starts distinguishing missing key from null
+- [x] RP.1 [M] Returns portal data model (V100): return_requests / return_request_items / portal_lookup_attempts, portal settings, non_returnable, shipments.delivered_at
+- [x] RP.2 [M] Hatch #14 `resolve_tenant_by_portal_slug` built
+- [x] RP.3 [M] Public `GET /api/v1/portal/{slug}/config` + `POST /api/v1/portal/{slug}/lookup` (generic failures, throttle, HMAC token, no PII)
+- [x] RP.4 [M] nginx portal rate-limit zone
+- [ ] RP.5 [M] Portal request submission + merchant approval (Step 4b)
 - [ ] RS.8 [M] Follow-up: identify (do not auto-fix) the pre-V98 piece stranded at `return_pending_inspection` by a CRP state-46 `courier_update`
 
 Built 2026-09-23 on branch `feature/returns-scan-as-truth`, not merged, not deployed. Local/Testcontainers only. `MigrationSmokeTest` 96→97, `NotTracedBackfillTest` 41→42. Backend 1373 run, only the 3 known failures; frontend 316/316.
