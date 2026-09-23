@@ -4,6 +4,38 @@
 
 ## Current state
 
+**Returns page: courier returns awaiting scan — Step 2 PARTIAL on branch `feature/returns-awaiting-scan` (2026-09-23, not merged).**
+Built: A (shared definition), B (endpoint), D (CRP AWB parcel info), E (dated session header),
+G (CRP address fix), corrected `unassignedSubtitle` copy. **Not built:** C callout wiring (needs
+an approved edit to existing frontend tests — see below) and F (auto-close, gated off).
+
+- **A:** `ShipmentLinkService.RETURN_LEG_AWAITING_SCAN_SQL` is THE definition of "return leg
+  awaiting scan" (return leg, `returned`, intake NULL, no scan evidence). `detectReturnLegUnscanned`
+  reuses it plus the age window; `RETURN_LEG_ENTERED_RETURNED_AT_SQL` shared too. Detector tests
+  unchanged and green.
+- **B:** `GET /api/v1/returns/awaiting-scan` — `isAuthenticated()` (owner, manager, worker; same
+  gate as opening a session). Count + ≤50 legs (returned DESC, id DESC) with
+  `returnSpecs.packageDetails` itemsCount/description/descriptionAr. No customer PII. In
+  `RlsCoverageTest` COVERED.
+- **D:** CRP AWB scan response carries itemsCount/description/descriptionAr; session detail
+  carries `courierReturns` and the UI renders "Bosta says: N items — description" from the
+  detail, because the SAFETY-CRITICAL `handleScan` discards the scan response and reloads.
+- **E:** `pages/returns/sessionStart.ts` — date + time when the session didn't open today;
+  new `returns.openSession.startedOn` key (AR `startedAt` reads "at hour", unusable with a date).
+- **G:** `populateConsigneePiiFromRaw` takes a CRP's (type 25) address from `pickupAddress`
+  (customer), not `dropOffAddress` (merchant). Receiver = customer on a CRP (merchant is `sender`),
+  so name/phone unchanged. Revert-to-confirm proven.
+- **F (auto-close idle sessions) NOT built — gate tripped:** `close()` throws
+  `SESSION_CLOSE_BLOCKED` (409) while any item has `disposition='pending'`, so it cannot close a
+  session with pending pieces as F requires. Needs a decision.
+- **C pending approval:** every Returns landing test uses a strict sequential fetch-mock queue;
+  any new landing fetch (`/returns/awaiting-scan`) desyncs them (e.g. `rs15`). Wiring C needs an
+  edit to existing frontend tests (a default route for the new URL in `returns.test.tsx`).
+- **RS.7 (`manualLink()` creating a forward leg for a CRP) PARKED** — production count is 0, and
+  the V43 `ux_active_shipment_per_order_leg` index already 409s it for orders with a forward leg.
+- Gotcha: `vite build` (not just `mvn test`) also writes into `src/main/resources/static/` —
+  restore it before committing.
+
 **Returns: scan-as-truth for return legs — built 2026-09-23 on branch `feature/returns-scan-as-truth` (not merged, not deployed).**
 Step 1 of the Returns Portal work (Step 0 / 0b were diagnosis-only). Local/Testcontainers only;
 production was not touched.

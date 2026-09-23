@@ -210,7 +210,14 @@ Built 2026-08-15 on branch `returns-rebuild`, single cutover, not yet merged. Mo
 - [x] RS.4 [M] `hasReturnLegAwaitingIntake()` gates DELIVERED-case intake acceptance; `return_kind` labels `exchange_match` > `crp_return` > `customer_after_delivery`
 - [x] RS.5 [M] `listCrpReturns` reports `needs_inspection` for returned-but-unscanned legs
 - [x] RS.6 [M] New HIGH exception `return_leg_unscanned` (silent on scan evidence), EN/AR, frontend label
-- [ ] RS.7 [M] Follow-up: `manualLink()` creates a forward leg for a CRP
+- [ ] RS.7 [M] Follow-up: `manualLink()` creates a forward leg for a CRP — PARKED 2026-09-23 (production count 0; V43 index already 409s the common case)
+- [x] RS.9 [M] Shared "return leg awaiting scan" definition; detector reuses it
+- [x] RS.10 [M] `GET /api/v1/returns/awaiting-scan` (all roles incl. worker, no PII)
+- [ ] RS.11 [M] Returns landing "courier returns waiting to be scanned" callout (owner/manager/worker) — pending approval to edit existing frontend test mocks
+- [x] RS.12 [M] CRP AWB scan shows Bosta's itemsCount/description in the session view
+- [x] RS.13 [M] Open-session header shows date + time when not opened today
+- [ ] RS.14 [M] Auto-close idle return sessions — gated: `close()` rejects pending dispositions
+- [x] RS.15 [M] CRP customer address from `pickupAddress`, not merchant `dropOffAddress`
 - [ ] RS.8 [M] Follow-up: identify (do not auto-fix) the pre-V98 piece stranded at `return_pending_inspection` by a CRP state-46 `courier_update`
 
 Built 2026-09-23 on branch `feature/returns-scan-as-truth`, not merged, not deployed. Local/Testcontainers only. `MigrationSmokeTest` 96→97, `NotTracedBackfillTest` 41→42. Backend 1373 run, only the 3 known failures; frontend 316/316.
