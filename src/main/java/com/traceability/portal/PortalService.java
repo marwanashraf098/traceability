@@ -86,13 +86,14 @@ public class PortalService {
         String orderKey = stripped.toLowerCase(Locale.ROOT);
 
         // 1. Throttle first — counts failures only, per tenant + order key, last 60 min.
+        //    A throttled call is NOT recorded: only real attempts count, so the lockout lifts
+        //    60 minutes after the 5th real failure no matter how often the caller retries.
         Integer recentFailures = jdbc.queryForObject(
             "SELECT COUNT(*) FROM portal_lookup_attempts " +
             "WHERE tenant_id = ? AND order_key = ? AND success = false " +
             "  AND attempted_at > now() - (interval '1 minute' * ?)",
             Integer.class, tenantId, orderKey, THROTTLE_WINDOW_MINUTES);
         if (recentFailures != null && recentFailures >= THROTTLE_MAX_FAILURES) {
-            recordAttempt(tenantId, orderKey, false);
             return LookupResult.throttled();
         }
 

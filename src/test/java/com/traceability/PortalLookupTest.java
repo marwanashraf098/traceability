@@ -244,7 +244,7 @@ class PortalLookupTest {
     // ── Throttle ────────────────────────────────────────────────────────────
 
     @Test
-    void throttle_fiveFailuresThen429_evenWithCorrectPhone() {
+    void throttle_fiveFailuresThen429_evenWithCorrectPhone_throttledCallsNotRecorded_liftsAfter60Min() {
         UUID order = order(tenantA, storeA, "#4001", "01033330001", false);
         forwardLeg(tenantA, order, Duration.ofDays(1));
 
@@ -254,11 +254,19 @@ class PortalLookupTest {
         ResponseEntity<Map> sixth = lookup("snouts", "4001", "01033330001");
         assertThat(sixth.getStatusCode()).isEqualTo(HttpStatus.TOO_MANY_REQUESTS);
         assertThat(sixth.getBody()).isEqualTo(Map.of("message", "Too many attempts. Please try again later."));
+        // Retrying while locked out is also 429 and also not recorded.
+        assertThat(lookup("snouts", "4001", "01033330001").getStatusCode()).isEqualTo(HttpStatus.TOO_MANY_REQUESTS);
 
-        Integer recorded = jdbc.queryForObject(
+        assertThat(jdbc.queryForObject(
             "SELECT COUNT(*) FROM portal_lookup_attempts WHERE tenant_id = ? AND order_key = '4001'",
-            Integer.class, tenantA);
-        assertThat(recorded).as("every attempt recorded").isEqualTo(6);
+            Integer.class, tenantA))
+            .as("only the 5 real failures are recorded — throttled calls are not").isEqualTo(5);
+
+        // Move the clock past the 60-minute mark: the 5 real failures age out, the lockout lifts.
+        jdbc.update("UPDATE portal_lookup_attempts SET attempted_at = attempted_at - interval '61 minutes' " +
+                    "WHERE tenant_id = ? AND order_key = '4001'", tenantA);
+        assertThat(lookup("snouts", "4001", "01033330001").getStatusCode())
+            .as("correct phone succeeds once the window has passed").isEqualTo(HttpStatus.OK);
     }
 
     @Test

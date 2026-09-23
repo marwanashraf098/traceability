@@ -21,7 +21,8 @@ Backend + nginx only; no frontend, no Bosta calls, no emails, no piece moves.
 - **Public API** (`com.traceability.portal`, permitAll `/api/v1/portal/**`): `GET {slug}/config`,
   `POST {slug}/lookup`. Slug → hatch #14 → `TenantContext.runAs` + programmatic tx on app_user.
   Every lookup failure is the same 404 body; throttle 5 failures/60 min per tenant + order key
-  → 429; every attempt recorded. Success returns an HMAC token (30 min) + variant-grouped lines,
+  → 429. Only real attempts (success or genuine failure) are recorded — a throttled 429 is NOT,
+  so the lockout lifts 60 min after the 5th real failure however often the caller retries. Success returns an HMAC token (30 min) + variant-grouped lines,
   no customer PII. `PortalTokenService.verify()` is the 4b hook.
 - **Secret:** `PORTAL_TOKEN_SECRET` (≥32 bytes) is REQUIRED — the app refuses to start without it.
   **Add it to the server `.env` before deploying** (deploy compose reads `../.env`).
