@@ -58,6 +58,7 @@ const TYPE_LABELS: Record<string, { en: string; ar: string }> = {
   // still-in-flight" signals) even though that type isn't itself in this map yet.
   cancelled_live_shipment: { en: 'Cancelled · Live Shipment', ar: 'ملغي · شحنة نشطة' },
   cancelled_but_delivered: { en: 'Cancelled · Delivered',     ar: 'ملغي · تم التوصيل' },
+  return_leg_unscanned:    { en: 'Return Not Scanned',        ar: 'مرتجع لم يُمسح' },
 }
 
 const ALL_TYPES      = Object.keys(TYPE_LABELS)
