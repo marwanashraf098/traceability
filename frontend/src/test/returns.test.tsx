@@ -102,7 +102,13 @@ describe('Returns — session-based rebuild', () => {
     vi.clearAllMocks()
     mockFetch = vi.fn()
     // Landing renders inside the shared Layout shell — see mockShellFetch.ts.
-    stubFetchWithShellDefaults(mockFetch)
+    // GET /returns/awaiting-scan (fired on every landing mount, all roles) is answered by
+    // URL with an empty default, never from the sequential queue — same idea as the
+    // shell stub, so the existing queued responses stay in step.
+    stubFetchWithShellDefaults((url: string, opts?: RequestInit) =>
+      String(url).includes('/returns/awaiting-scan')
+        ? jsonOk({ count: 0, items: [] })
+        : mockFetch(url, opts))
     vi.mocked(api.getRoleFromToken).mockReturnValue('owner')
     vi.stubGlobal('localStorage', { getItem: vi.fn().mockReturnValue(null), setItem: vi.fn(), removeItem: vi.fn() })
   })

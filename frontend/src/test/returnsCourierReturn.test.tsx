@@ -39,6 +39,13 @@ function makeSessionDetail(overrides: Record<string, unknown> = {}) {
 
 let mockFetch: ReturnType<typeof vi.fn>
 
+/** GET /returns/awaiting-scan answered by URL (empty default), never from the queue. */
+function routeAwaitingScan(url: string, opts?: RequestInit) {
+  return String(url).includes('/returns/awaiting-scan')
+    ? jsonOk({ count: 0, items: [] })
+    : mockFetch(url, opts)
+}
+
 /**
  * renderWithProviders() pins an EN-only i18n instance; the AR cases render against the app's
  * real i18n singleton (EN + AR resources) with the same provider nesting.
@@ -71,7 +78,7 @@ describe('Returns — courier return (CRP) AWB info line', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     mockFetch = vi.fn()
-    stubFetchWithShellDefaults(mockFetch)
+    stubFetchWithShellDefaults(routeAwaitingScan)
     vi.mocked(api.getRoleFromToken).mockReturnValue('worker')
     vi.stubGlobal('localStorage', { getItem: vi.fn().mockReturnValue(null), setItem: vi.fn(), removeItem: vi.fn() })
   })
@@ -157,7 +164,7 @@ describe('Returns — open-session header timestamp', () => {
   test('hs4 header renders "started <date, time>" for a session opened on an earlier day', async () => {
     vi.clearAllMocks()
     mockFetch = vi.fn()
-    stubFetchWithShellDefaults(mockFetch)
+    stubFetchWithShellDefaults(routeAwaitingScan)
     vi.mocked(api.getRoleFromToken).mockReturnValue('worker')
     vi.stubGlobal('localStorage', { getItem: vi.fn().mockReturnValue(null), setItem: vi.fn(), removeItem: vi.fn() })
     await openWorkerSession(makeSessionDetail({ opened_at: '2026-08-28T09:05:00Z' }))

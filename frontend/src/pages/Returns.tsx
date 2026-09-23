@@ -224,6 +224,43 @@ export default function Returns() {
 
 const PAGE_SIZE = 10
 
+/**
+ * Landing callout — one component for both the unassigned-pending and the courier
+ * returns awaiting-scan banners (same styling, same "Review →" action).
+ */
+function LandingCallout({ testId, title, subtitle, reviewLabel, onReview }: {
+  testId: string
+  title: string
+  subtitle: string
+  reviewLabel: string
+  onReview: () => void
+}) {
+  return (
+    <div className="card border-warning/30 bg-warning/5 p-4 flex items-center gap-4" data-testid={testId}>
+      <Inbox size={20} strokeWidth={1.75} className="text-warning shrink-0" />
+      <div className="flex-1 min-w-0">
+        <p className="text-small font-semibold text-warning">{title}</p>
+        <p className="text-caption text-muted">{subtitle}</p>
+      </div>
+      <Button variant="secondary" size="sm" onClick={onReview}>{reviewLabel}</Button>
+    </div>
+  )
+}
+
+/** GET /returns/awaiting-scan — every role (incl. workers); no customer PII. */
+interface AwaitingScan {
+  count: number
+  items: Array<{
+    shipmentId: string
+    trackingNumber: string
+    orderNumber: string | null
+    returnedAt: string | null
+    itemsCount: number | null
+    description: string | null
+    descriptionAr: string | null
+  }>
+}
+
 function LandingScreen({ onOpenSession, onOpenSummary }: {
   onOpenSession: (sessionId: string) => void
   onOpenSummary: (sessionId: string) => void
@@ -237,6 +274,17 @@ function LandingScreen({ onOpenSession, onOpenSummary }: {
   const [loading, setLoading] = useState(!isWorker)
   const [error, setError] = useState<string | null>(null)
   const [opening, setOpening] = useState(false)
+  const [awaitingScanCount, setAwaitingScanCount] = useState(0)
+
+  // Courier returns waiting to be scanned — fetched for every role, independent of the
+  // owner-only sessions/analytics load, and never allowed to break the landing.
+  useEffect(() => {
+    let cancelled = false
+    api<AwaitingScan>('/returns/awaiting-scan')
+      .then(r => { if (!cancelled) setAwaitingScanCount(r?.count ?? 0) })
+      .catch(() => { if (!cancelled) setAwaitingScanCount(0) })
+    return () => { cancelled = true }
+  }, [])
 
   const load = useCallback(async () => {
     // Workers only get the "Open return session" intake action below — the
@@ -300,12 +348,32 @@ function LandingScreen({ onOpenSession, onOpenSummary }: {
           </button>
         </div>
         {error && <Alert tone="critical" title={error} />}
+        {awaitingScanCount > 0 && (
+          <LandingCallout
+            testId="awaiting-scan-callout"
+            title={t('returns.landing.awaitingScanTitle', { count: awaitingScanCount })}
+            subtitle={t('returns.landing.awaitingScanSubtitle')}
+            reviewLabel={t('returns.landing.unassignedReview')}
+            onReview={openSession}
+          />
+        )}
       </div>
     )
   }
 
   const openSessionRow = sessions.find(s => s.status === 'open') ?? (page === 0 ? sessions[0] : undefined)
   const hasOpenSession = openSessionRow?.status === 'open'
+  // Both callouts' "Review →": resume the open session, else open one.
+  const reviewAction = () => hasOpenSession ? onOpenSession(openSessionRow!.id) : openSession()
+  const awaitingScanCallout = awaitingScanCount > 0 ? (
+    <LandingCallout
+      testId="awaiting-scan-callout"
+      title={t('returns.landing.awaitingScanTitle', { count: awaitingScanCount })}
+      subtitle={t('returns.landing.awaitingScanSubtitle')}
+      reviewLabel={t('returns.landing.unassignedReview')}
+      onReview={reviewAction}
+    />
+  ) : null
 
   const fmtDate = (iso: string | null) => iso
     ? new Date(iso).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
@@ -351,7 +419,10 @@ function LandingScreen({ onOpenSession, onOpenSummary }: {
           <Button variant="secondary" size="sm" onClick={load}>{t('returns.landing.retry')}</Button>
         </div>
       ) : total === 0 ? (
-        <EmptyState message={t('returns.landing.emptyTitle')} icon="↩️" />
+        <>
+          {awaitingScanCallout}
+          <EmptyState message={t('returns.landing.emptyTitle')} icon="↩️" />
+        </>
       ) : (
         <>
           {analytics && (
@@ -365,23 +436,16 @@ function LandingScreen({ onOpenSession, onOpenSummary }: {
           )}
 
           {analytics && analytics.unassignedPendingCount > 0 && (
-            <div className="card border-warning/30 bg-warning/5 p-4 flex items-center gap-4" data-testid="unassigned-callout">
-              <Inbox size={20} strokeWidth={1.75} className="text-warning shrink-0" />
-              <div className="flex-1 min-w-0">
-                <p className="text-small font-semibold text-warning">
-                  {t('returns.landing.unassignedTitle', { count: analytics.unassignedPendingCount })}
-                </p>
-                <p className="text-caption text-muted">{t('returns.landing.unassignedSubtitle')}</p>
-              </div>
-              <Button
-                variant="secondary"
-                size="sm"
-                onClick={() => hasOpenSession ? onOpenSession(openSessionRow!.id) : openSession()}
-              >
-                {t('returns.landing.unassignedReview')}
-              </Button>
-            </div>
+            <LandingCallout
+              testId="unassigned-callout"
+              title={t('returns.landing.unassignedTitle', { count: analytics.unassignedPendingCount })}
+              subtitle={t('returns.landing.unassignedSubtitle')}
+              reviewLabel={t('returns.landing.unassignedReview')}
+              onReview={reviewAction}
+            />
           )}
+
+          {awaitingScanCallout}
 
           <div className="card overflow-hidden" data-testid="sessions-table">
             <div className="px-4 py-3 border-b border-line text-small font-medium text-muted">
