@@ -32,6 +32,7 @@ const INSPECTION_STATE_TONE: Record<string, BadgeTone> = {
   in_transit: 'info',
   needs_inspection: 'warning',
   resolved: 'success',
+  received_untracked: 'neutral',
 }
 
 export function inspectionStateTone(state: string): BadgeTone {

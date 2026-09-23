@@ -43,6 +43,8 @@ export interface MergedRow {
    *  STATUS column renders from this now (In transit / Needs inspection / Resolved),
    *  legStatus stays available for anything that still wants the raw courier badge. */
   inspectionState?: RefundLeg['inspection_state']
+  /** Refund only — Step 5: untracked parcel marked received, still waiting to be added in Receiving. */
+  awaitingReceiving?: boolean
 }
 
 export function normalizeExchange(e: ExchangeSummary): MergedRow {
@@ -74,6 +76,7 @@ export function normalizeRefund(r: RefundLeg): MergedRow {
     matchedAt: null,
     legStatus: r.leg_status,
     inspectionState: r.inspection_state,
+    awaitingReceiving: r.awaiting_receiving ?? false,
   }
 }
 
@@ -115,5 +118,7 @@ export function matchesFilter(row: MergedRow, tab: FilterTab): boolean {
         // are "received"; inspectionState is never 'in_transit' once internal_state has
         // reached 'returned', so this is exactly the complement of the inTransit check.
         : row.inspectionState === 'needs_inspection' || row.inspectionState === 'resolved'
+          // Step 5: an untracked parcel marked received is received — never "needs action".
+          || row.inspectionState === 'received_untracked'
   }
 }

@@ -21,6 +21,10 @@ interface ExceptionItem {
   unlinked_id?: number
   ndr_code?: number
   ndr_description?: string
+  // return_to_receive (Step 5): Bosta's parcel description + who marked it received, in which session
+  bosta_description?: string | null
+  marked_by_name?: string | null
+  intake_session_id?: string | null
   number_of_attempts?: number
   hold_reason?: string
   shipment_state?: string
@@ -59,6 +63,7 @@ const TYPE_LABELS: Record<string, { en: string; ar: string }> = {
   cancelled_live_shipment: { en: 'Cancelled · Live Shipment', ar: 'ملغي · شحنة نشطة' },
   cancelled_but_delivered: { en: 'Cancelled · Delivered',     ar: 'ملغي · تم التوصيل' },
   return_leg_unscanned:    { en: 'Return Not Scanned',        ar: 'مرتجع لم يُمسح' },
+  return_to_receive:       { en: 'Return To Receive',         ar: 'مرتجع بانتظار الاستلام' },
 }
 
 const ALL_TYPES      = Object.keys(TYPE_LABELS)
@@ -174,7 +179,23 @@ function ExceptionRow({ item, onAck, onAction }: { item: ExceptionItem; onAck: (
           {item.ndr_description && (
             <span className="text-small text-muted">NDR: {item.ndr_description}</span>
           )}
+          {item.bosta_description && (
+            <span className="text-small text-muted font-mono">
+              {isAr ? 'بوستا' : 'Bosta'}: <bdi>{item.bosta_description}</bdi>
+            </span>
+          )}
         </div>
+        {item.type === 'return_to_receive' && (
+          <p className="text-caption text-muted mt-1" data-testid="return-to-receive-note">
+            {item.marked_by_name && item.intake_session_id
+              ? t('exc.returnToReceive.markedBy', {
+                  name: item.marked_by_name,
+                  session: 'RT-' + item.intake_session_id.replace(/-/g, '').slice(0, 4).toUpperCase(),
+                }) + ' · '
+              : ''}
+            {t('exc.returnToReceive.noShopifyRestock')}
+          </p>
+        )}
       </div>
 
       {/* Actions */}

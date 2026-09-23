@@ -39,6 +39,19 @@ function makeSessionDetail(overrides: Record<string, unknown> = {}) {
 
 let mockFetch: ReturnType<typeof vi.fn>
 
+/** A tracked courier-return parcel exactly as GET /returns/sessions/{id} parcels[] returns it. */
+function makeParcel(bosta: { itemsCount: number | null; description: string | null; descriptionAr: string | null }) {
+  return {
+    shipmentId: 'bbbbbbbb-0000-0000-0000-000000000001', awb: '7040001111', leg: 'return',
+    orderNumber: '#1047', customerShortName: 'Mariam S.', returnedAt: '2026-09-20T10:00:00Z',
+    bosta, tracked: true, intakeOutcome: null, markedBy: null, markedAt: null, markedInThisSession: false,
+    expectedPieces: [
+      { id: 'p1', barcode: 'PC-p1', status: 'delivered', variant_title: 'Grey L', product_title: 'Hoodie', sku: 'H-1', awb: '7040001111' },
+    ],
+    scannedItems: [], counts: { expected: 1, scanned: 0 }, complete: false,
+  }
+}
+
 /** GET /returns/awaiting-scan answered by URL (empty default), never from the queue. */
 function routeAwaitingScan(url: string, opts?: RequestInit) {
   return String(url).includes('/returns/awaiting-scan')
@@ -88,12 +101,12 @@ describe('Returns — courier return (CRP) AWB info line', () => {
     await i18n.changeLanguage('en')
   })
 
-  test('cr1 CRP AWB scanned → "Bosta says" line above the expected pieces (EN)', async () => {
+  test('cr1 CRP AWB scanned → Bosta\'s note in the parcel card, above the expected pieces (EN)', async () => {
     await openWorkerSession(makeSessionDetail({
-      courierReturns: [{ awb: '7040001111', itemsCount: 2, description: 'Hoodie + scarf', descriptionAr: 'هودي وشال' }],
+      parcels: [makeParcel({ itemsCount: 2, description: 'Hoodie + scarf', descriptionAr: 'هودي وشال' })],
     }))
-    const line = await screen.findByTestId('courier-return-info-7040001111')
-    expect(line).toHaveTextContent('Bosta says: 2 items — Hoodie + scarf')
+    const line = await screen.findByTestId('parcel-bosta-note')
+    expect(line).toHaveTextContent('2 items — Hoodie + scarf')
     // Rendered before (above) the expected-pieces list.
     const expected = screen.getByTestId('expected-p1')
     expect(line.compareDocumentPosition(expected) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
@@ -102,37 +115,33 @@ describe('Returns — courier return (CRP) AWB info line', () => {
   test('cr2 AR uses descriptionAr when present', async () => {
     await i18n.changeLanguage('ar')
     await openWorkerSession(makeSessionDetail({
-      courierReturns: [{ awb: '7040001111', itemsCount: 2, description: 'Hoodie + scarf', descriptionAr: 'هودي وشال' }],
+      parcels: [makeParcel({ itemsCount: 2, description: 'Hoodie + scarf', descriptionAr: 'هودي وشال' })],
     }), true)
-    expect(await screen.findByTestId('courier-return-info-7040001111'))
-      .toHaveTextContent('بحسب بوستا: 2 قطع — هودي وشال')
+    expect(await screen.findByTestId('parcel-bosta-note'))
+      .toHaveTextContent('2 قطع — هودي وشال')
   })
 
   test('cr3 AR falls back to the EN description when descriptionAr is missing', async () => {
     await i18n.changeLanguage('ar')
     await openWorkerSession(makeSessionDetail({
-      courierReturns: [{ awb: '7040001111', itemsCount: 1, description: 'Hoodie', descriptionAr: null }],
+      parcels: [makeParcel({ itemsCount: 1, description: 'Hoodie', descriptionAr: null })],
     }), true)
-    expect(await screen.findByTestId('courier-return-info-7040001111'))
-      .toHaveTextContent('بحسب بوستا: 1 قطع — Hoodie')
+    expect(await screen.findByTestId('parcel-bosta-note'))
+      .toHaveTextContent('قطعة واحدة — Hoodie')
   })
 
-  test('cr4 missing itemsCount or description → no line', async () => {
+  test('cr4 missing description → no Bosta note; missing count → description only', async () => {
     await openWorkerSession(makeSessionDetail({
-      courierReturns: [
-        { awb: '7040002222', itemsCount: null, description: 'Hoodie', descriptionAr: null },
-        { awb: '7040003333', itemsCount: 1, description: null, descriptionAr: null },
-      ],
+      parcels: [makeParcel({ itemsCount: 1, description: null, descriptionAr: null })],
     }))
     await screen.findByTestId('expected-p1')
-    expect(screen.queryByTestId('courier-return-info-7040002222')).not.toBeInTheDocument()
-    expect(screen.queryByTestId('courier-return-info-7040003333')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('parcel-bosta-note')).not.toBeInTheDocument()
   })
 
   test('cr5 forward-only session (no courierReturns field) renders no line', async () => {
     await openWorkerSession(makeSessionDetail())
     await screen.findByTestId('expected-p1')
-    expect(screen.queryByText(/Bosta says/)).not.toBeInTheDocument()
+    expect(screen.queryByTestId('parcel-bosta-note')).not.toBeInTheDocument()
   })
 })
 

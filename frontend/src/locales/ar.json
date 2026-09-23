@@ -786,13 +786,14 @@
       },
       "showing": "عرض {{from}}–{{to}} من {{total}}",
       "prev": "السابق",
-      "next": "التالي"
+      "next": "التالي",
+      "awaitingScanTitle_other": "{{count}} مرتجعات من بوستا بانتظار المسح"
     },
     "openSession": {
       "title": "جلسة إرجاع",
       "startedAt": "بدأت الساعة {{time}}",
       "startedOn": "بدأت في {{time}}",
-      "bostaSays": "بحسب بوستا: {{count}} قطع — {{description}}",
+      "bostaSays": "{{count}} قطع — {{description}}",
       "abandon": "إلغاء الجلسة",
       "abandonConfirmTitle": "إلغاء هذه الجلسة؟",
       "abandonConfirmBodyWithItems": "{{count}} قطعة تم مسحها في هذه الجلسة ستبقى كما هي — القطع المُقرَّر بشأنها تحتفظ بقرارها، والقطع بلا قرار تبقى بحالة \"قيد فحص الإرجاع\" وتظهر لاحقًا كغير مُخصّصة. هذا الإجراء يُغلق الجلسة فقط، ولا يُلغي أي شيء.",
@@ -824,7 +825,58 @@
       "closedTitle": "تم إغلاق الجلسة",
       "piecesStat": "قطعة",
       "startNew": "بدء جلسة جديدة",
-      "backToLanding": "العودة إلى الجلسات"
+      "backToLanding": "العودة إلى الجلسات",
+      "feedback": {
+        "itemScanned": "تم مسح القطعة",
+        "awbRecognised": "تم التعرّف على ملصق الشحنة",
+        "markedReceived": "تم تسجيل الشحنة كمستلمة"
+      },
+      "parcel": {
+        "courierReturn": "مرتجع من بوستا",
+        "returnToSender": "مرتجع للمرسل",
+        "order": "الطلب",
+        "customer": "العميل",
+        "backAtWarehouse": "وصل المستودع",
+        "progress": "تم مسح {{scanned}} من {{count}} قطعة",
+        "progress_other": "تم مسح {{scanned}} من {{count}} قطعة",
+        "allIn": "وصلت كل القطع ({{count}})",
+        "allIn_other": "وصلت كل القطع ({{count}})",
+        "allInShort": "وصلت كل القطع",
+        "notTracked": "غير متتبَّع في Traced",
+        "receivedNotTracked": "مستلَم · غير متتبَّع",
+        "bostaNote": "ملاحظة بوستا",
+        "itemsOnOrder": "قطع هذا الطلب",
+        "scanHint": "امسح ملصق Traced لكل قطعة. الملصق مفقود؟ أعد طباعته أولًا.",
+        "allDecided": "تم مسح كل قطع هذه الشحنة واتخاذ القرار بشأنها.",
+        "notTrackedTitle": "لم يتتبّع Traced هذا الطلب",
+        "notTrackedBody": "شُحن هذا الطلب قبل تتبّع قطعه في Traced، لذلك لا توجد ملصقات لمسحها. افتح الشحنة وقارنها بملاحظة بوستا، ثم سجّلها كمستلمة.",
+        "notTrackedWarning": "لن يضيف Traced هذه القطعة إلى المخزون من هنا. بعد تسجيلها كمستلمة، سيصل تنبيه للمديرين لإضافتها في جلسة الاستلام القادمة. لا تُعِدها إلى المخزون في Shopify حتى لا تُحتسب مرتين.",
+        "markReceived": "تسجيل الشحنة كمستلمة",
+        "leaveForNow": "اتركها الآن",
+        "leaveHint": "إذا تركتها، ستبقى ضمن «بانتظار المسح» حتى يسجّلها أحد كمستلمة.",
+        "markedBy": "سجّلها <b>{{name}}</b> كمستلمة الساعة {{time}}.",
+        "markedBySystem": "سُجّلت كمستلمة الساعة {{time}}.",
+        "markedBody": "لم يتغيّر المخزون. تم تنبيه المديرين لإضافة هذه القطعة في جلسة الاستلام القادمة. لا تُعِدها إلى المخزون في Shopify أيضًا حتى لا تُحتسب مرتين.",
+        "undo": "تراجع",
+        "forwardNothing": "لا توجد قطع من هذه الشحنة بانتظار المسح.",
+        "collapsedItems": "الطلب {{order}} · {{count}} قطعة",
+        "collapsedItems_other": "الطلب {{order}} · {{count}} قطعة",
+        "collapsedNotTracked": "الطلب {{order}} · غير متتبَّع في Traced",
+        "dispRestocked": "أُعيد للمخزون",
+        "dispDamaged": "تالف",
+        "dispMismatch": "غير مطابق",
+        "expand": "عرض الشحنة"
+      },
+      "footer": {
+        "parcels": "{{count}} شحنة",
+        "parcels_other": "{{count}} شحنة",
+        "itemsScanned": "{{count}} قطعة ممسوحة",
+        "itemsScanned_other": "{{count}} قطعة ممسوحة",
+        "nothingLeft": "لا شيء بانتظار قرار",
+        "blocked": "اختر إعادة التخزين أو تالف لكل قطعة ممسوحة قبل الإغلاق."
+      },
+      "bostaSays_other": "{{count}} قطع — {{description}}",
+      "bostaSays_one": "قطعة واحدة — {{description}}"
     },
     "summary": {
       "title": "ملخص الجلسة",
@@ -921,8 +973,10 @@
     "inspectionState": {
       "in_transit": "في الطريق",
       "needs_inspection": "بحاجة إلى فحص",
-      "resolved": "تم الحل"
+      "resolved": "تم الحل",
+      "received_untracked": "مستلَم · غير متتبَّع"
     },
+    "awaitingReceiving": "بانتظار إضافتها في الاستلام",
     "drawer": {
       "close": "إغلاق",
       "error": "تعذر تحميل بيانات هذا الاستبدال",
@@ -2007,6 +2061,10 @@
     "not_traced": "تم التنفيذ خارج Traced"
   },
   "exc": {
+    "returnToReceive": {
+      "markedBy": "سجّلها {{name}} كمستلمة في الجلسة {{session}}",
+      "noShopifyRestock": "لا تُعِدها إلى المخزون في Shopify أيضًا."
+    },
     "cancelled_live_shipment": "طلب ملغي وشحنة ما زالت نشطة",
     "cancelled_but_delivered": "ملغي لكن تم توصيله — للمراجعة"
   },
@@ -2014,10 +2072,22 @@
     "greeting": "أهلاً، {{name}}",
     "subtitle": "على ماذا تعمل؟ اختر مهمة لبدء المسح.",
     "tiles": {
-      "fulfill": { "title": "التجميع", "desc": "امسح وجهّز الطلبات في قائمة الانتظار" },
-      "returns": { "title": "المرتجعات", "desc": "افتح جلسة وامسح المنتجات المرتجعة" },
-      "pickups": { "title": "جلسات الاستلام", "desc": "جهّز الطلبات وسلّمها للمندوب" },
-      "lookup": { "title": "بحث", "desc": "ابحث عن طلب بالباركود أو رقم الشحنة" }
+      "fulfill": {
+        "title": "التجميع",
+        "desc": "امسح وجهّز الطلبات في قائمة الانتظار"
+      },
+      "returns": {
+        "title": "المرتجعات",
+        "desc": "افتح جلسة وامسح المنتجات المرتجعة"
+      },
+      "pickups": {
+        "title": "جلسات الاستلام",
+        "desc": "جهّز الطلبات وسلّمها للمندوب"
+      },
+      "lookup": {
+        "title": "بحث",
+        "desc": "ابحث عن طلب بالباركود أو رقم الشحنة"
+      }
     }
   }
 }

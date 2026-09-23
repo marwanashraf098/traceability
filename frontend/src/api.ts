@@ -2036,7 +2036,10 @@ export interface RefundLeg {
    *  never replacing leg_status. Only meaningful once internal_state='returned'
    *  (pre-that, always 'in_transit'): 'needs_inspection' while any piece for this order
    *  is still at return_pending_inspection, 'resolved' once none are. */
-  inspection_state: 'in_transit' | 'needs_inspection' | 'resolved'
+  inspection_state: 'in_transit' | 'needs_inspection' | 'resolved' | 'received_untracked'
+  /** Step 5: the return_to_receive exception for this leg is still open (untracked parcel
+   *  marked received, not yet added in Receiving). Absent on older responses. */
+  awaiting_receiving?: boolean
 }
 
 export function getRefunds(page = 0, size = 100) {

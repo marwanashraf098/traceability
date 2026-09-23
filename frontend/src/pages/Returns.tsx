@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
-import { useTranslation } from 'react-i18next'
+import { useTranslation, Trans } from 'react-i18next'
 import {
   X, ScanLine, Printer, RotateCcw, AlertTriangle, ClipboardCheck, WifiOff,
-  Inbox, ArrowRightCircle, XCircle, ChevronLeft, ChevronRight,
+  Inbox, ArrowRightCircle, XCircle, ChevronLeft, ChevronRight, CheckCircle2, Package,
 } from 'lucide-react'
 import {
   Badge, Button, EmptyState, Skeleton, StatCard, Modal, Alert, Spinner, cn,
@@ -147,6 +147,33 @@ interface CourierReturnInfo {
   descriptionAr: string | null
 }
 
+/** Step 5 — one card per AWB scanned in this session (GET /returns/sessions/{id} parcels[]). */
+interface Parcel {
+  shipmentId: string
+  awb: string
+  leg: 'return' | 'forward'
+  orderNumber: string | null
+  customerShortName: string | null
+  returnedAt: string | null
+  bosta: { itemsCount: number | null; description: string | null; descriptionAr: string | null } | null
+  tracked: boolean
+  intakeOutcome: 'scanned' | 'received_untracked' | null
+  markedBy: string | null
+  markedAt: string | null
+  markedInThisSession: boolean
+  expectedPieces: ExpectedPiece[]
+  scannedItems: SessionItem[]
+  counts: { expected: number; scanned: number }
+  complete: boolean
+}
+
+interface LastScan {
+  kind: 'piece' | 'awb' | 'marked_received'
+  code: string | null
+  label: string | null
+  at: string
+}
+
 interface SessionDetail {
   id: string
   status: 'open' | 'closed' | 'abandoned'
@@ -158,6 +185,11 @@ interface SessionDetail {
   items: SessionItem[]
   expectedPieces: ExpectedPiece[]
   courierReturns?: CourierReturnInfo[]
+  // Step 5 parcel view — optional so older fixtures/responses still render (items then
+  // count as "other" items and unclaimed expected pieces render on their own).
+  parcels?: Parcel[]
+  otherItems?: SessionItem[]
+  lastScan?: LastScan | null
 }
 
 interface CloseSummary {
@@ -653,6 +685,28 @@ function OpenSessionScreen({ sessionId, onExit, onStartNew }: {
     finally { setReprinting(null) }
   }
 
+  // ── Step 5: courier-return parcels whose order Traced never tracked ──────────
+  // Collapse override per parcel: true = collapsed by the user ("Leave it for now"),
+  // false = expanded by the user. Default: newest incomplete parcel expanded.
+  const [collapseOverride, setCollapseOverride] = useState<Record<string, boolean>>({})
+  const [parcelBusy, setParcelBusy] = useState<string | null>(null)
+
+  const parcelAction = async (shipmentId: string, action: 'mark-received' | 'undo-mark-received') => {
+    if (parcelBusy) return
+    setParcelBusy(shipmentId)
+    try {
+      await api(`/returns/sessions/${sessionId}/parcels/${shipmentId}/${action}`, { method: 'POST' })
+      if (action === 'mark-received') playBeep(true)
+      setCollapseOverride(prev => { const n = { ...prev }; delete n[shipmentId]; return n })
+      await load()
+    } catch (e: unknown) {
+      playBeep(false)
+      setError((e as Error).message || t('common.error'))
+    } finally {
+      setParcelBusy(null)
+    }
+  }
+
   const abandon = async () => {
     setAbandoning(true)
     try {
@@ -707,109 +761,17 @@ function OpenSessionScreen({ sessionId, onExit, onStartNew }: {
   const pendingItems = detail?.items.filter(i => i.disposition === 'pending') ?? []
   const canClose = pendingItems.length === 0
 
-  if (loading) {
-    return (
-      <div className="min-h-screen bg-base flex items-center justify-center">
-        <Skeleton className="h-96 w-full max-w-2xl rounded-2xl" />
-      </div>
-    )
-  }
+  // Step 5 parcel view. Expected pieces / items already grouped under a parcel render
+  // inside its card; anything left (older responses, plain piece scans) renders below.
+  const parcels = detail?.parcels ?? []
+  const otherItems = detail?.otherItems ?? detail?.items ?? []
+  const parcelExpectedIds = new Set(parcels.flatMap(pc => pc.expectedPieces.map(e => e.id)))
+  const orphanExpected = (detail?.expectedPieces ?? []).filter(e => !parcelExpectedIds.has(e.id))
+  const newestIncompleteId = parcels.find(pc => !pc.complete)?.shipmentId
+  const scannedCount = detail?.items.length ?? 0
 
-  if (closeSummary) {
-    return (
-      <div className="min-h-screen bg-base flex items-center justify-center p-6" data-testid="close-summary">
-        <SessionSummary
-          variant="post-close"
-          data={{
-            sessionId: closeSummary.sessionId,
-            pieceCount: closeSummary.pieceCount,
-            restockedCount: closeSummary.restockedCount,
-            damagedCount: closeSummary.damagedCount,
-            mismatchCount: closeSummary.mismatchCount,
-          }}
-          onPrimaryAction={startNewSession}
-          primaryActionLoading={startingNew}
-          onBack={onExit}
-        />
-      </div>
-    )
-  }
-
-  return (
-    <div className="min-h-screen bg-base flex flex-col" data-testid="open-session-screen">
-      {/* SAFETY-CRITICAL flash overlay — do not modify */}
-      <div className={flashOverlay} />
-
-      <div className="h-14 border-b border-line bg-surface flex items-center gap-3 px-5 shrink-0">
-        <button onClick={onExit} aria-label={t('common.cancel')} className="text-muted hover:text-primary">
-          <X size={18} strokeWidth={2} />
-        </button>
-        <div className="text-body font-semibold text-primary">
-          {t('returns.openSession.title')} <span className="font-mono">{shortId(sessionId)}</span>
-        </div>
-        {detail && (
-          <span className="text-small text-muted">
-            {(() => {
-              const started = formatSessionStart(detail.opened_at, i18n.language)
-              return t(started.sameDay ? 'returns.openSession.startedAt' : 'returns.openSession.startedOn',
-                { time: started.text })
-            })()}
-          </span>
-        )}
-        <div className="flex-1" />
-        {canManage && (
-          <button
-            onClick={() => setShowAbandonModal(true)}
-            className="text-small font-semibold text-critical hover:text-critical/80"
-            data-testid="abandon-link"
-          >
-            {t('returns.openSession.abandon')}
-          </button>
-        )}
-      </div>
-
-      <div className="px-5 py-3.5 border-b border-line bg-base flex items-center gap-2.5 shrink-0">
-        <ScanLine size={18} strokeWidth={2} className="text-trace-blue" />
-        {/* SAFETY-CRITICAL scan input — ref, autoFocus, onKeyDown, disabled: do not modify */}
-        <input
-          ref={scanRef}
-          type="text"
-          placeholder={t('returns.openSession.scanPlaceholder')}
-          className="input-scan flex-1"
-          disabled={scanning}
-          onKeyDown={e => { if (e.key === 'Enter') handleScan((e.target as HTMLInputElement).value) }}
-          autoFocus
-          data-testid="scan-input"
-        />
-        <span className="text-caption text-muted hidden sm:inline">{t('returns.openSession.autoFocused')}</span>
-      </div>
-
-      {error && (
-        <div className="px-5 pt-3">
-          <Alert tone="critical" title={error} />
-        </div>
-      )}
-
-      <div className="flex-1 overflow-auto px-5 py-4 space-y-2.5 relative" data-testid="items-list">
-        {detail && detail.items.length === 0 && detail.expectedPieces.length === 0 && (
-          <div className="h-full flex flex-col items-center justify-center gap-2 text-center">
-            <ScanLine size={36} strokeWidth={1.75} className="text-muted" />
-            <p className="text-body font-semibold text-primary">{t('returns.openSession.emptyTitle')}</p>
-            <p className="text-small text-muted">{t('returns.openSession.emptySubtitle')}</p>
-          </div>
-        )}
-
-        {(detail?.courierReturns ?? []).map(c => {
-          const description = i18n.language === 'ar' && c.descriptionAr ? c.descriptionAr : c.description
-          if (c.itemsCount == null || !description) return null
-          return (
-            <p key={c.awb} className="text-small text-muted" data-testid={`courier-return-info-${c.awb}`}>
-              {t('returns.openSession.bostaSays', { count: c.itemsCount, description })}
-            </p>
-          )
-        })}
-
-        {detail?.expectedPieces.map(p => (
+  // Existing rows, unchanged — rendered inside parcel cards and in the "other" list.
+  const renderExpected = (p: ExpectedPiece) => (
           <div key={p.id} className="border border-line bg-elevated rounded-xl px-3.5 py-3 flex items-center gap-3.5" data-testid={`expected-${p.id}`}>
             <span className="w-2 h-2 rounded-full bg-info shrink-0" />
             <div className="flex-1 min-w-0">
@@ -826,9 +788,9 @@ function OpenSessionScreen({ sessionId, onExit, onStartNew }: {
               <Printer size={12} strokeWidth={2} />
             </button>
           </div>
-        ))}
+        )
 
-        {detail?.items.map(item => {
+  const renderItem = (item: SessionItem) => {
           const isPending = item.disposition === 'pending'
           const isIllegal = isPending && item.status !== 'return_pending_inspection'
           if (!isPending) {
@@ -921,7 +883,136 @@ function OpenSessionScreen({ sessionId, onExit, onStartNew }: {
               )}
             </div>
           )
-        })}
+        }
+
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-base flex items-center justify-center">
+        <Skeleton className="h-96 w-full max-w-2xl rounded-2xl" />
+      </div>
+    )
+  }
+
+  if (closeSummary) {
+    return (
+      <div className="min-h-screen bg-base flex items-center justify-center p-6" data-testid="close-summary">
+        <SessionSummary
+          variant="post-close"
+          data={{
+            sessionId: closeSummary.sessionId,
+            pieceCount: closeSummary.pieceCount,
+            restockedCount: closeSummary.restockedCount,
+            damagedCount: closeSummary.damagedCount,
+            mismatchCount: closeSummary.mismatchCount,
+          }}
+          onPrimaryAction={startNewSession}
+          primaryActionLoading={startingNew}
+          onBack={onExit}
+        />
+      </div>
+    )
+  }
+
+  return (
+    <div className="min-h-screen bg-base flex flex-col" data-testid="open-session-screen">
+      {/* SAFETY-CRITICAL flash overlay — do not modify */}
+      <div className={flashOverlay} />
+
+      <div className="h-14 border-b border-line bg-surface flex items-center gap-3 px-5 shrink-0">
+        <button onClick={onExit} aria-label={t('common.cancel')} className="text-muted hover:text-primary">
+          <X size={18} strokeWidth={2} />
+        </button>
+        <div className="text-body font-semibold text-primary">
+          {t('returns.openSession.title')} <span className="font-mono">{shortId(sessionId)}</span>
+        </div>
+        {detail && (
+          <span className="text-small text-muted">
+            {(() => {
+              const started = formatSessionStart(detail.opened_at, i18n.language)
+              return t(started.sameDay ? 'returns.openSession.startedAt' : 'returns.openSession.startedOn',
+                { time: started.text })
+            })()}
+          </span>
+        )}
+        <div className="flex-1" />
+        {canManage && (
+          <button
+            onClick={() => setShowAbandonModal(true)}
+            className="text-small font-semibold text-critical hover:text-critical/80"
+            data-testid="abandon-link"
+          >
+            {t('returns.openSession.abandon')}
+          </button>
+        )}
+      </div>
+
+      <div className="px-5 py-3.5 border-b border-line bg-base flex items-center gap-2.5 shrink-0">
+        <ScanLine size={18} strokeWidth={2} className="text-trace-blue" />
+        {/* SAFETY-CRITICAL scan input — ref, autoFocus, onKeyDown, disabled: do not modify */}
+        <input
+          ref={scanRef}
+          type="text"
+          placeholder={t('returns.openSession.scanPlaceholder')}
+          className="input-scan flex-1"
+          disabled={scanning}
+          onKeyDown={e => { if (e.key === 'Enter') handleScan((e.target as HTMLInputElement).value) }}
+          autoFocus
+          data-testid="scan-input"
+        />
+        <span className="text-caption text-muted hidden sm:inline">{t('returns.openSession.autoFocused')}</span>
+      </div>
+
+      {detail?.lastScan && (
+        <div className="px-5 pt-3 flex" data-testid="scan-feedback">
+          <div className="inline-flex items-center gap-2 px-3.5 py-2 rounded-full bg-success/10 text-success text-small font-medium">
+            <CheckCircle2 size={16} strokeWidth={2.2} className="shrink-0" />
+            <span>
+              {t(detail.lastScan.kind === 'piece' ? 'returns.openSession.feedback.itemScanned'
+                : detail.lastScan.kind === 'awb' ? 'returns.openSession.feedback.awbRecognised'
+                : 'returns.openSession.feedback.markedReceived')}
+              {' · '}
+              <bdi className="font-mono">
+                {detail.lastScan.kind === 'piece' ? detail.lastScan.code : `AWB ${detail.lastScan.code}`}
+              </bdi>
+              {detail.lastScan.kind === 'piece' && detail.lastScan.label && ` ${detail.lastScan.label}`}
+            </span>
+          </div>
+        </div>
+      )}
+
+      {error && (
+        <div className="px-5 pt-3">
+          <Alert tone="critical" title={error} />
+        </div>
+      )}
+
+      <div className="flex-1 overflow-auto px-5 py-4 space-y-3 relative" data-testid="items-list">
+        {detail && detail.items.length === 0 && parcels.length === 0 && orphanExpected.length === 0 && (
+          <div className="h-full flex flex-col items-center justify-center gap-2 text-center">
+            <ScanLine size={36} strokeWidth={1.75} className="text-muted" />
+            <p className="text-body font-semibold text-primary">{t('returns.openSession.emptyTitle')}</p>
+            <p className="text-small text-muted">{t('returns.openSession.emptySubtitle')}</p>
+          </div>
+        )}
+
+        {parcels.map(parcel => (
+          <ParcelCard
+            key={parcel.shipmentId}
+            parcel={parcel}
+            expanded={collapseOverride[parcel.shipmentId] !== undefined
+              ? !collapseOverride[parcel.shipmentId]
+              : parcel.shipmentId === newestIncompleteId || (parcel.intakeOutcome === 'received_untracked' && parcel.markedInThisSession)}
+            onToggle={expand => setCollapseOverride(prev => ({ ...prev, [parcel.shipmentId]: !expand }))}
+            busy={parcelBusy === parcel.shipmentId}
+            onMarkReceived={() => parcelAction(parcel.shipmentId, 'mark-received')}
+            onUndo={() => parcelAction(parcel.shipmentId, 'undo-mark-received')}
+            renderExpected={renderExpected}
+            renderItem={renderItem}
+          />
+        ))}
+
+        {orphanExpected.map(renderExpected)}
+        {otherItems.map(renderItem)}
 
         {rejectedScan && (
           <div
@@ -940,6 +1031,17 @@ function OpenSessionScreen({ sessionId, onExit, onStartNew }: {
       </div>
 
       <div className="px-5 py-3.5 border-t border-line bg-surface shrink-0 flex flex-col gap-2">
+        {detail && (parcels.length > 0 || scannedCount > 0) && (
+          <p className="text-caption text-muted text-center" data-testid="session-footer-summary">
+            {canClose
+              ? [
+                  parcels.length > 0 ? t('returns.openSession.footer.parcels', { count: parcels.length }) : null,
+                  scannedCount > 0 ? t('returns.openSession.footer.itemsScanned', { count: scannedCount }) : null,
+                  t('returns.openSession.footer.nothingLeft'),
+                ].filter(Boolean).join(' · ')
+              : t('returns.openSession.footer.blocked')}
+          </p>
+        )}
         {!canClose && (
           <div className="bg-warning/10 border border-warning/30 rounded-lg px-3 py-2.5 text-small text-warning" data-testid="close-blocked-callout">
             <b>{t('returns.openSession.closeBlockedTitle')}</b> —{' '}
@@ -980,6 +1082,192 @@ function OpenSessionScreen({ sessionId, onExit, onStartNew }: {
           </div>
         </Modal>
       )}
+    </div>
+  )
+}
+
+// ── Parcel card (Step 5) — one per AWB scanned into the open session. Items inside
+// render through the SAME row renderers as before (renderItem / renderExpected), so the
+// restock / damaged / mismatch and reprint controls are the existing ones, unchanged. ──
+
+function ParcelCard({ parcel, expanded, onToggle, busy, onMarkReceived, onUndo, renderExpected, renderItem }: {
+  parcel: Parcel
+  expanded: boolean
+  onToggle: (expand: boolean) => void
+  busy: boolean
+  onMarkReceived: () => void
+  onUndo: () => void
+  renderExpected: (p: ExpectedPiece) => React.ReactNode
+  renderItem: (item: SessionItem) => React.ReactNode
+}) {
+  const { t, i18n } = useTranslation()
+  const lang = i18n.language
+  const isAr = lang === 'ar'
+  const received = parcel.intakeOutcome === 'received_untracked'
+  const untrackedOpen = parcel.leg === 'return' && !parcel.tracked && !parcel.intakeOutcome
+  const awaiting = parcel.expectedPieces.length
+  const nothingToScan = parcel.tracked && awaiting === 0 && parcel.scannedItems.length === 0 && !parcel.intakeOutcome
+
+  const pill: { tone: 'success' | 'warning' | 'neutral'; label: string } | null =
+    received ? { tone: 'neutral', label: t('returns.openSession.parcel.receivedNotTracked') }
+    : untrackedOpen ? { tone: 'neutral', label: t('returns.openSession.parcel.notTracked') }
+    : parcel.complete ? { tone: 'success', label: expanded
+        ? t('returns.openSession.parcel.allIn', { count: parcel.counts.scanned })
+        : t('returns.openSession.parcel.allInShort') }
+    : parcel.counts.expected > 0 ? { tone: 'warning', label: t('returns.openSession.parcel.progress',
+        { scanned: parcel.counts.scanned, count: parcel.counts.expected }) }
+    : null
+
+  const order = parcel.orderNumber ?? '—'
+  // Order numbers / Latin names inside translated sentences: Unicode first-strong isolate so
+  // "#1052" doesn't flip to "1052#" in RTL (<bdi> can't be used inside an i18n string).
+  const isolatedOrder = `\u2068${order}\u2069`
+  const bostaDescription = parcel.bosta
+    ? (isAr && parcel.bosta.descriptionAr ? parcel.bosta.descriptionAr : parcel.bosta.description)
+    : null
+  const bostaIsEnglishInAr = isAr && !!parcel.bosta && !parcel.bosta.descriptionAr
+  const returnedAt = parcel.returnedAt
+    ? new Date(parcel.returnedAt).toLocaleDateString(lang, { day: 'numeric', month: 'short' })
+    : '—'
+
+  if (!expanded) {
+    const dispositions = Array.from(new Set(parcel.scannedItems.map(i => i.disposition)))
+      .filter(d => d !== 'pending')
+      .map(d => t(d === 'restocked' ? 'returns.openSession.parcel.dispRestocked'
+        : d === 'damaged' ? 'returns.openSession.parcel.dispDamaged' : 'returns.openSession.parcel.dispMismatch'))
+    const summary = !parcel.tracked
+      ? t('returns.openSession.parcel.collapsedNotTracked', { order: isolatedOrder })
+      : [t('returns.openSession.parcel.collapsedItems', { order: isolatedOrder, count: parcel.counts.expected }), ...dispositions].join(' · ')
+    return (
+      <button
+        type="button"
+        onClick={() => onToggle(true)}
+        aria-expanded={false}
+        aria-label={t('returns.openSession.parcel.expand')}
+        className="card w-full text-start px-5 py-3.5 flex items-center gap-4 hover:border-trace-blue/40"
+        data-testid={`parcel-collapsed-${parcel.awb}`}
+      >
+        <span className={cn('w-9 h-9 rounded-lg flex items-center justify-center shrink-0',
+          parcel.complete && !received ? 'bg-success/10 text-success' : 'bg-elevated text-muted')}>
+          {parcel.complete && !received ? <CheckCircle2 size={18} strokeWidth={2.2} /> : <Package size={18} strokeWidth={1.8} />}
+        </span>
+        <bdi className="font-mono text-body font-semibold text-primary w-52 shrink-0">AWB {parcel.awb}</bdi>
+        <span className="text-small text-muted flex-1 min-w-0 truncate">{summary}</span>
+        {pill && <Badge tone={pill.tone} label={pill.label} />}
+      </button>
+    )
+  }
+
+  return (
+    <section className="card overflow-hidden" data-testid={`parcel-card-${parcel.awb}`}>
+      <div className="px-5 py-4 flex flex-wrap items-center gap-x-6 gap-y-3">
+        <span className={cn('w-11 h-11 rounded-lg flex items-center justify-center shrink-0',
+          received || untrackedOpen ? 'bg-elevated text-muted'
+            : parcel.complete ? 'bg-success/10 text-success' : 'bg-trace-blue/10 text-trace-blue')}>
+          {parcel.complete && !received ? <CheckCircle2 size={22} strokeWidth={2.2} /> : <Package size={22} strokeWidth={1.8} />}
+        </span>
+        <div className="flex flex-col gap-0.5 w-56 shrink-0">
+          <span className="text-caption font-semibold uppercase tracking-wider text-muted">
+            {parcel.leg === 'return' ? t('returns.openSession.parcel.courierReturn') : t('returns.openSession.parcel.returnToSender')}
+          </span>
+          <bdi className="font-mono text-body-lg font-semibold text-primary">AWB {parcel.awb}</bdi>
+        </div>
+        <div className="flex gap-8 flex-1 min-w-0">
+          <ParcelFact label={t('returns.openSession.parcel.order')} value={<bdi>{order}</bdi>} />
+          {parcel.customerShortName && (
+            <ParcelFact label={t('returns.openSession.parcel.customer')} value={<bdi>{parcel.customerShortName}</bdi>} />
+          )}
+          <ParcelFact label={t('returns.openSession.parcel.backAtWarehouse')} value={returnedAt} />
+        </div>
+        {pill && <span data-testid="parcel-pill"><Badge tone={pill.tone} label={pill.label} /></span>}
+      </div>
+
+      {bostaDescription && !received && (
+        <div className="px-5 py-3 bg-elevated border-t border-line flex gap-4 items-baseline">
+          <span className="text-caption font-semibold uppercase tracking-wider text-muted whitespace-nowrap">
+            {t('returns.openSession.parcel.bostaNote')}
+          </span>
+          <span className="text-small text-primary" data-testid="parcel-bosta-note">
+            {parcel.bosta?.itemsCount != null
+              ? <>
+                  {/* description interpolated as '' then rendered in <bdi> — the key ends with it */}
+                  {t('returns.openSession.bostaSays', { count: parcel.bosta.itemsCount, description: '' })}
+                  <bdi dir={bostaIsEnglishInAr ? 'ltr' : undefined}>{bostaDescription}</bdi>
+                </>
+              : <bdi dir={bostaIsEnglishInAr ? 'ltr' : undefined}>{bostaDescription}</bdi>}
+          </span>
+        </div>
+      )}
+
+      {received ? (
+        <div className="px-5 py-4 border-t border-line flex items-center gap-4" data-testid="parcel-received-untracked">
+          <div className="flex flex-col gap-1 flex-1">
+            <p className="text-small text-primary">
+              {parcel.markedBy
+                ? <Trans i18nKey="returns.openSession.parcel.markedBy"
+                    values={{ name: parcel.markedBy, time: parcel.markedAt ? new Date(parcel.markedAt).toLocaleTimeString(lang, { hour: 'numeric', minute: '2-digit' }) : '' }}
+                    components={{ b: <b /> }} />
+                : t('returns.openSession.parcel.markedBySystem', { time: parcel.markedAt ? new Date(parcel.markedAt).toLocaleTimeString(lang, { hour: 'numeric', minute: '2-digit' }) : '' })}
+            </p>
+            <p className="text-small text-muted leading-relaxed">{t('returns.openSession.parcel.markedBody')}</p>
+          </div>
+          {parcel.markedInThisSession && (
+            <button className="btn-outline btn" disabled={busy} onClick={onUndo} data-testid="parcel-undo">
+              {busy && <Spinner size={16} />}
+              {t('returns.openSession.parcel.undo')}
+            </button>
+          )}
+        </div>
+      ) : untrackedOpen ? (
+        <div className="px-5 py-5 border-t border-line flex flex-col gap-4" data-testid="parcel-untracked">
+          <div className="flex gap-3.5 p-4 rounded-xl bg-warning/5 border border-warning/30">
+            <AlertTriangle size={20} strokeWidth={2} className="text-warning shrink-0 mt-0.5" />
+            <div className="flex flex-col gap-2">
+              <p className="text-body font-semibold text-warning">{t('returns.openSession.parcel.notTrackedTitle')}</p>
+              <p className="text-small text-primary leading-relaxed">{t('returns.openSession.parcel.notTrackedBody')}</p>
+              <p className="text-small text-primary leading-relaxed font-semibold">{t('returns.openSession.parcel.notTrackedWarning')}</p>
+            </div>
+          </div>
+          <div className="flex flex-wrap items-center gap-3">
+            {/* raw <button>s — Button doesn't spread data-testid */}
+            <button className="btn-brand" disabled={busy} onClick={onMarkReceived} data-testid="parcel-mark-received">
+              {busy && <Spinner size={16} />}
+              {t('returns.openSession.parcel.markReceived')}
+            </button>
+            <button className="btn-outline btn" onClick={() => onToggle(false)} data-testid="parcel-leave">
+              {t('returns.openSession.parcel.leaveForNow')}
+            </button>
+            <span className="text-caption text-muted">{t('returns.openSession.parcel.leaveHint')}</span>
+          </div>
+        </div>
+      ) : nothingToScan ? (
+        <div className="px-5 py-4 border-t border-line text-small text-muted" data-testid="parcel-nothing-to-scan">
+          {t('returns.openSession.parcel.forwardNothing')}
+        </div>
+      ) : (
+        <div className="border-t border-line">
+          <div className="px-5 py-3 flex items-center gap-4">
+            <span className="text-small font-semibold text-primary">{t('returns.openSession.parcel.itemsOnOrder')}</span>
+            <span className="flex-1" />
+            <span className="text-caption text-muted">
+              {awaiting > 0 ? t('returns.openSession.parcel.scanHint') : parcel.complete ? t('returns.openSession.parcel.allDecided') : null}
+            </span>
+          </div>
+          <div className="px-5 pb-4 space-y-2.5">
+            {parcel.scannedItems.map(renderItem)}
+            {parcel.expectedPieces.map(renderExpected)}
+          </div>
+        </div>
+      )}
+    </section>
+  )
+}
+
+function ParcelFact({ label, value }: { label: string; value: React.ReactNode }) {
+  return (
+    <div className="flex flex-col gap-0.5 min-w-0">
+      <span className="text-caption text-muted">{label}</span>
+      <span className="text-small font-semibold text-primary truncate">{value}</span>
     </div>
   )
 }

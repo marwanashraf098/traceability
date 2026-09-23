@@ -102,11 +102,16 @@ export default function ExchangesRefunds() {
       render: row => row.kind === 'refund'
         ? (row.inspectionState
             ? (
-              <span data-testid="refund-inspection-badge">
+              <span className="inline-flex flex-col items-start gap-1" data-testid="refund-inspection-badge">
                 <Badge
                   tone={inspectionStateTone(row.inspectionState)}
                   label={t(`exchangesRefunds.inspectionState.${row.inspectionState}`)}
                 />
+                {row.inspectionState === 'received_untracked' && row.awaitingReceiving && (
+                  <span className="text-caption text-muted" data-testid="refund-awaiting-receiving">
+                    {t('exchangesRefunds.awaitingReceiving')}
+                  </span>
+                )}
               </span>
             )
             : <span className="text-muted">—</span>)

@@ -768,7 +768,7 @@
       "unassignedTitle": "{{count}} unassigned pending returns",
       "unassignedSubtitle": "These items are waiting for inspection but aren't in an open session. Scan one to pull it into your current session.",
       "unassignedReview": "Review →",
-      "awaitingScanTitle": "{{count}} courier returns waiting to be scanned",
+      "awaitingScanTitle": "{{count}} courier return waiting to be scanned",
       "awaitingScanSubtitle": "Bosta brought these back to your warehouse. Scan the parcel label to start.",
       "tableTitle": "Sessions · {{count}} total",
       "col": {
@@ -791,13 +791,14 @@
       },
       "showing": "Showing {{from}}–{{to}} of {{total}}",
       "prev": "Prev",
-      "next": "Next"
+      "next": "Next",
+      "awaitingScanTitle_other": "{{count}} courier returns waiting to be scanned"
     },
     "openSession": {
       "title": "Return session",
       "startedAt": "started {{time}}",
       "startedOn": "started {{time}}",
-      "bostaSays": "Bosta says: {{count}} items — {{description}}",
+      "bostaSays": "{{count}} item — {{description}}",
       "abandon": "Abandon session",
       "abandonConfirmTitle": "Abandon this session?",
       "abandonConfirmBodyWithItems": "{{count}} piece(s) scanned into this session will stay exactly as they are — dispositioned pieces keep their disposition, and undispositioned pieces stay at return_pending_inspection and resurface as unassigned. This only closes the session; it does not undo anything.",
@@ -829,7 +830,57 @@
       "closedTitle": "Session closed",
       "piecesStat": "pieces",
       "startNew": "Start new session",
-      "backToLanding": "Back to sessions"
+      "backToLanding": "Back to sessions",
+      "feedback": {
+        "itemScanned": "Item scanned",
+        "awbRecognised": "Parcel label recognised",
+        "markedReceived": "Parcel marked received"
+      },
+      "parcel": {
+        "courierReturn": "Courier return",
+        "returnToSender": "Return to sender",
+        "order": "Order",
+        "customer": "Customer",
+        "backAtWarehouse": "Back at warehouse",
+        "progress": "{{scanned}} of {{count}} item scanned",
+        "progress_other": "{{scanned}} of {{count}} items scanned",
+        "allIn": "All {{count}} item in",
+        "allIn_other": "All {{count}} items in",
+        "allInShort": "All items in",
+        "notTracked": "Not tracked by Traced",
+        "receivedNotTracked": "Received · not tracked",
+        "bostaNote": "Bosta's note",
+        "itemsOnOrder": "Items on this order",
+        "scanHint": "Scan each item's Traced label. Label missing? Reprint it first.",
+        "allDecided": "Everything from this parcel is scanned and decided.",
+        "notTrackedTitle": "Traced didn't track this order",
+        "notTrackedBody": "It was shipped before its items were tracked in Traced, so there are no labels to scan. Open the parcel, check it against Bosta's note, then mark it received.",
+        "notTrackedWarning": "Traced won't add this item to stock from here. Once you mark it received, managers get a notification to add it in their next Receiving session. Don't restock it in Shopify, or it will be counted twice.",
+        "markReceived": "Mark parcel received",
+        "leaveForNow": "Leave it for now",
+        "leaveHint": "Left for now, it stays in \"waiting to be scanned\" until someone marks it received.",
+        "markedBy": "Marked received by <b>{{name}}</b> at {{time}}.",
+        "markedBySystem": "Marked received at {{time}}.",
+        "markedBody": "Stock wasn't changed. Managers have been notified to add this item in their next Receiving session. Don't restock it in Shopify as well, or it will be counted twice.",
+        "undo": "Undo",
+        "forwardNothing": "No items from this shipment are waiting to be scanned.",
+        "collapsedItems": "Order {{order}} · {{count}} item",
+        "collapsedItems_other": "Order {{order}} · {{count}} items",
+        "collapsedNotTracked": "Order {{order}} · not tracked by Traced",
+        "dispRestocked": "restocked",
+        "dispDamaged": "damaged",
+        "dispMismatch": "mismatch",
+        "expand": "Show parcel"
+      },
+      "footer": {
+        "parcels": "{{count}} parcel",
+        "parcels_other": "{{count}} parcels",
+        "itemsScanned": "{{count}} item scanned",
+        "itemsScanned_other": "{{count}} items scanned",
+        "nothingLeft": "nothing left to decide",
+        "blocked": "Choose restock or damaged for every scanned item before closing."
+      },
+      "bostaSays_other": "{{count}} items — {{description}}"
     },
     "summary": {
       "title": "Session summary",
@@ -926,8 +977,10 @@
     "inspectionState": {
       "in_transit": "In transit",
       "needs_inspection": "Needs inspection",
-      "resolved": "Resolved"
+      "resolved": "Resolved",
+      "received_untracked": "Received · not tracked"
     },
+    "awaitingReceiving": "Waiting to be added in Receiving",
     "drawer": {
       "close": "Close",
       "error": "Couldn't load this exchange",
@@ -2012,6 +2065,10 @@
     "not_traced": "Fulfilled outside Traced"
   },
   "exc": {
+    "returnToReceive": {
+      "markedBy": "Marked received by {{name}} in session {{session}}",
+      "noShopifyRestock": "Don't restock it in Shopify as well."
+    },
     "cancelled_live_shipment": "Cancelled order, shipment still active",
     "cancelled_but_delivered": "Cancelled but delivered — reconcile"
   },
@@ -2019,10 +2076,22 @@
     "greeting": "Hi, {{name}}",
     "subtitle": "What are you working on? Pick a task to start scanning.",
     "tiles": {
-      "fulfill": { "title": "Pick & Pack", "desc": "Scan and pack orders in the queue" },
-      "returns": { "title": "Returns", "desc": "Open a session and scan returned items" },
-      "pickups": { "title": "Pickups", "desc": "Prepare and hand off courier pickups" },
-      "lookup": { "title": "Look up", "desc": "Find an order by barcode or AWB" }
+      "fulfill": {
+        "title": "Pick & Pack",
+        "desc": "Scan and pack orders in the queue"
+      },
+      "returns": {
+        "title": "Returns",
+        "desc": "Open a session and scan returned items"
+      },
+      "pickups": {
+        "title": "Pickups",
+        "desc": "Prepare and hand off courier pickups"
+      },
+      "lookup": {
+        "title": "Look up",
+        "desc": "Find an order by barcode or AWB"
+      }
     }
   }
 }
