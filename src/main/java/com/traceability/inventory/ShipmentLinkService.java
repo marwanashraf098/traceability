@@ -478,6 +478,8 @@ public class ShipmentLinkService {
         UUID tenantId = TenantContext.require();
         return jdbc.query(
             "SELECT sh.id, sh.tracking_number, sh.internal_state, sh.order_id, sh.return_intake_completed_at, " +
+            "       sh.return_intake_outcome, " +
+            "       EXISTS (SELECT 1 FROM shipments s WHERE s.id = sh.id AND " + RETURN_TO_RECEIVE_OPEN_SQL + ") AS awaiting_receiving, " +
             "       o.number AS order_number, o.customer_name, o.customer_phone, sh.created_at, " +
             // Step 4-close Part 2 (gap #4) — disposition rollup, ADDITIVE to leg_status
             // below, never replacing it. Correlated form of the SAME predicate
@@ -515,10 +517,15 @@ public class ShipmentLinkService {
                 //   "needs_inspection" regardless of piece counts — CRP courier states no
                 //   longer move pieces, so zero pieces at return_pending_inspection before the
                 //   intake scan means "not scanned yet", not "resolved".
-                String inspectionState = !"returned".equals(internalState) ? "in_transit"
+                // Step 5: a parcel marked received from an order Traced never tracked is its
+                // own state — received, but no pieces were inspected or restocked.
+                String inspectionState = "received_untracked".equals(rs.getString("return_intake_outcome"))
+                        ? "received_untracked"
+                    : !"returned".equals(internalState) ? "in_transit"
                     : rs.getTimestamp("return_intake_completed_at") == null ? "needs_inspection"
                     : rs.getInt("pending_inspection_count") > 0 ? "needs_inspection" : "resolved";
                 row.put("inspection_state", inspectionState);
+                row.put("awaiting_receiving", rs.getBoolean("awaiting_receiving"));
                 row.put("leg_status", OrderStatusDeriver.deriveLegStatus(internalState));
                 return row;
             },
@@ -800,6 +807,40 @@ public class ShipmentLinkService {
         "    WHERE pe.tenant_id = s.tenant_id AND pe.order_id = s.order_id " +
         "      AND pe.event_type = 'return_received' " +
         "      AND pe.occurred_at >= s.created_at) ";
+
+    /**
+     * THE single definition of an order Traced never tracked: none of its order items has an
+     * allocation row of ANY status (active / packed / released). A restocked order still has
+     * its released allocations, so it counts as tracked. {@code orderIdExpr} is the SQL
+     * expression for the order id (a column reference or a bind '?'). Used by
+     * {@link #isOrderUntracked} and the return-session parcel view — never re-derive it.
+     */
+    public static String orderUntrackedSql(String orderIdExpr) {
+        return "NOT EXISTS (SELECT 1 FROM order_items oi_ut " +
+               "            JOIN allocations a_ut ON a_ut.order_item_id = oi_ut.id " +
+               "            WHERE oi_ut.order_id = " + orderIdExpr + ") ";
+    }
+
+    public boolean isOrderUntracked(UUID orderId, UUID tenantId) {
+        Boolean untracked = jdbc.queryForObject(
+            "SELECT " + orderUntrackedSql("o.id") + " FROM orders o WHERE o.id = ? AND o.tenant_id = ?",
+            Boolean.class, orderId, tenantId);
+        return Boolean.TRUE.equals(untracked);
+    }
+
+    /**
+     * "Return To Receive" is still open for a return leg (alias {@code s}): marked received
+     * as untracked, and no exception_resolutions row for it resolved at/after the marking
+     * (so undo + re-mark re-opens it). Shared by ExceptionService.detectReturnToReceive()
+     * and listCrpReturns()'s awaitingReceiving flag.
+     */
+    public static final String RETURN_TO_RECEIVE_OPEN_SQL =
+        "s.shipment_leg = 'return' AND s.return_intake_outcome = 'received_untracked' " +
+        "AND NOT EXISTS (SELECT 1 FROM exception_resolutions er " +
+        "                WHERE er.tenant_id = s.tenant_id " +
+        "                  AND er.exception_type = 'return_to_receive' " +
+        "                  AND er.subject_key = s.id::text " +
+        "                  AND er.resolved_at >= s.return_intake_completed_at) ";
 
     /**
      * When a return leg (alias {@code s}) entered 'returned': shipments.returned_at (stamped

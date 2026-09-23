@@ -92,6 +92,29 @@ public class ReturnSessionController {
         return sessionService.close(sessionId, principal.userId());
     }
 
+    // ── Untracked courier-return parcels (Step 5) ────────────────────────────
+
+    /**
+     * Mark a courier-return parcel received when Traced never tracked its order (no labels to
+     * scan). Same role gate as scanning (isAuthenticated: owner, manager, worker). Creates or
+     * moves no pieces and writes nothing to Shopify — see ReturnSessionService.markReceived().
+     */
+    @PostMapping("/sessions/{sessionId}/parcels/{shipmentId}/mark-received")
+    @PreAuthorize("isAuthenticated()")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void markReceived(@PathVariable UUID sessionId, @PathVariable UUID shipmentId,
+                             @AuthenticationPrincipal CustomUserDetails principal) {
+        sessionService.markReceived(sessionId, shipmentId, principal.userId());
+    }
+
+    @PostMapping("/sessions/{sessionId}/parcels/{shipmentId}/undo-mark-received")
+    @PreAuthorize("isAuthenticated()")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void undoMarkReceived(@PathVariable UUID sessionId, @PathVariable UUID shipmentId,
+                                 @AuthenticationPrincipal CustomUserDetails principal) {
+        sessionService.undoMarkReceived(sessionId, shipmentId, principal.userId());
+    }
+
     // ── Scan / disposition ───────────────────────────────────────────────────
 
     @PostMapping("/sessions/{sessionId}/scan")

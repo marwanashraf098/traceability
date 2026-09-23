@@ -503,8 +503,11 @@ public class ReturnSessionService {
         // intake-complete. Orders come from this session's return_received events, not
         // pieces.current_order_id — restock() has already cleared that by close time.
         // Illegal-state (mismatch) scans write no event, so they never complete a leg.
+        // Step 5 (V101): also record HOW and BY WHOM — outcome 'scanned', the closing user
+        // (NULL when ReturnSessionAutoCloseJob closes it = system), and this session.
         jdbc.update(
-            "UPDATE shipments SET return_intake_completed_at = now() " +
+            "UPDATE shipments SET return_intake_completed_at = now(), " +
+            "    return_intake_outcome = 'scanned', return_intake_by = ?, return_intake_session_id = ? " +
             "WHERE tenant_id = ? AND shipment_leg = 'return' " +
             "  AND return_intake_completed_at IS NULL " +
             "  AND order_id IN ( " +
@@ -512,13 +515,100 @@ public class ReturnSessionService {
             "      WHERE pe.tenant_id = ? AND pe.event_type = 'return_received' " +
             "        AND pe.order_id IS NOT NULL " +
             "        AND pe.metadata->>'session_id' = ?)",
-            tenantId, tenantId, sessionId.toString());
+            actorUserId, sessionId, tenantId, tenantId, sessionId.toString());
 
         Map<String, Object> result = new LinkedHashMap<>(counts);
         result.put("sessionId", sessionId.toString());
         result.put("shipmentCount", shipmentCount);
         result.put("closedAt", Instant.now(clock).toString());
         return result;
+    }
+
+    // ── Mark a courier-return parcel received (untracked order) ────────────────
+
+    /**
+     * Step 5: a courier-return (CRP) parcel whose order Traced never tracked has no Traced
+     * labels to scan, so its intake can never complete through a piece scan. A worker opens
+     * the parcel, checks it against Bosta's note, and marks it received here. NO piece is
+     * created or moved and NO Shopify write happens — the return_to_receive exception asks a
+     * manager to add the item in their next Receiving session.
+     *
+     * Allowed only when: the session is open; the shipment is a return leg of this tenant;
+     * its AWB was scanned in THIS session; its intake is not already complete; and the order
+     * is untracked (ShipmentLinkService.orderUntrackedSql). Otherwise 409 with a specific
+     * message; another tenant's shipment is a plain 404.
+     */
+    @Transactional
+    public void markReceived(UUID sessionId, UUID shipmentId, UUID actorUserId) {
+        UUID tenantId = TenantContext.require();
+        requireOpen(sessionId, tenantId);
+        Map<String, Object> leg = requireScannedParcel(sessionId, shipmentId, tenantId);
+
+        if (!"return".equals(leg.get("shipment_leg"))) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                "Only courier-return parcels can be marked received.");
+        }
+        if (leg.get("return_intake_completed_at") != null) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                "This parcel's intake is already complete.");
+        }
+        if (!shipmentLinkService.isOrderUntracked((UUID) leg.get("order_id"), tenantId)) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                "This order has tracked items — scan them instead.");
+        }
+        int updated = jdbc.update(
+            "UPDATE shipments SET return_intake_completed_at = now(), " +
+            "    return_intake_outcome = 'received_untracked', return_intake_by = ?, " +
+            "    return_intake_session_id = ? " +
+            "WHERE id = ? AND tenant_id = ? AND shipment_leg = 'return' " +
+            "  AND return_intake_completed_at IS NULL",
+            actorUserId, sessionId, shipmentId, tenantId);
+        if (updated != 1) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                "This parcel's intake is already complete.");
+        }
+    }
+
+    /**
+     * Reverses {@link #markReceived} — only while the SAME session is still open, and only
+     * for an intake this session recorded as 'received_untracked'. Clears all four fields,
+     * so the parcel is back in "waiting to be scanned" and the exception disappears.
+     */
+    @Transactional
+    public void undoMarkReceived(UUID sessionId, UUID shipmentId, UUID actorUserId) {
+        UUID tenantId = TenantContext.require();
+        requireOpen(sessionId, tenantId);
+        requireScannedParcel(sessionId, shipmentId, tenantId);
+        int updated = jdbc.update(
+            "UPDATE shipments SET return_intake_completed_at = NULL, return_intake_outcome = NULL, " +
+            "    return_intake_by = NULL, return_intake_session_id = NULL " +
+            "WHERE id = ? AND tenant_id = ? AND shipment_leg = 'return' " +
+            "  AND return_intake_outcome = 'received_untracked' AND return_intake_session_id = ?",
+            shipmentId, tenantId, sessionId);
+        if (updated != 1) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                "Only a parcel marked received in this session can be undone.");
+        }
+    }
+
+    /** The shipment (this tenant, else 404) whose AWB was scanned in this session (else 409). */
+    private Map<String, Object> requireScannedParcel(UUID sessionId, UUID shipmentId, UUID tenantId) {
+        List<Map<String, Object>> rows = jdbc.queryForList(
+            "SELECT s.id, s.order_id, s.shipment_leg, s.tracking_number, s.return_intake_completed_at, " +
+            "       EXISTS (SELECT 1 FROM return_session_shipments rss " +
+            "               WHERE rss.session_id = ? AND rss.tenant_id = s.tenant_id " +
+            "                 AND rss.awb = s.tracking_number) AS scanned_here " +
+            "FROM shipments s WHERE s.id = ? AND s.tenant_id = ?",
+            sessionId, shipmentId, tenantId);
+        if (rows.isEmpty()) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Shipment not found");
+        }
+        Map<String, Object> leg = rows.get(0);
+        if (!Boolean.TRUE.equals(leg.get("scanned_here"))) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                "Scan this parcel's AWB in this session first.");
+        }
+        return leg;
     }
 
     // ── List / detail ─────────────────────────────────────────────────────────
@@ -564,7 +654,7 @@ public class ReturnSessionService {
             "SELECT i.id, i.piece_id, p.barcode, p.status::text AS status, " +
             "       v.title AS variant_title, pr.title AS product_title, v.sku, " +
             "       i.disposition, i.unexpected, i.scan_source, i.damage_reason, " +
-            "       i.scanned_at, i.disposition_at " +
+            "       i.scanned_at, i.disposition_at, p.short_code " +
             "FROM return_session_items i " +
             "JOIN pieces p    ON p.id  = i.piece_id " +
             "JOIN variants v  ON v.id  = p.variant_id " +
@@ -572,15 +662,176 @@ public class ReturnSessionService {
             "WHERE i.session_id = ? AND i.tenant_id = ? " +
             "ORDER BY i.scanned_at ASC",
             sessionId, tenantId);
+        List<Map<String, Object>> expected = fetchExpectedPieces(sessionId, tenantId);
 
         Map<String, Object> result = new LinkedHashMap<>(rows.get(0));
         result.put("items", items);
-        result.put("expectedPieces", fetchExpectedPieces(sessionId, tenantId));
+        result.put("expectedPieces", expected);
         // Re-read on every load (the scan handler reloads detail, it never keeps the scan
         // response), so the session view renders Bosta's parcel description from here.
         result.put("courierReturns", courierReturnInfo(
             "rss.session_id = ? AND rss.tenant_id = ?", sessionId, tenantId));
+        addParcelView(result, sessionId, tenantId, items, expected);
         return result;
+    }
+
+    /**
+     * Step 5 parcel view — additive to items / expectedPieces / courierReturns (kept for
+     * compatibility). One parcel per AWB scanned in this session, newest first, with the
+     * expected pieces grouped under the AWB they came from and the session items that belong
+     * to that parcel's order; otherItems = items tied to no scanned AWB (plain piece scans);
+     * lastScan = the newest of piece scan / AWB scan / mark-received, for the feedback strip.
+     *
+     * An item's order is the order on its return_received event in THIS session, falling
+     * back to pieces.current_order_id (illegal-state scans write no event) — never
+     * current_order_id alone, because restock() clears it.
+     */
+    private void addParcelView(Map<String, Object> result, UUID sessionId, UUID tenantId,
+                               List<Map<String, Object>> items, List<Map<String, Object>> expected) {
+        List<Map<String, Object>> legs = jdbc.queryForList(
+            "SELECT s.id AS shipment_id, rss.awb, s.shipment_leg, s.order_id, o.number AS order_number, " +
+            "       o.customer_name, rss.linked_at, " +
+            "       CASE WHEN s.shipment_leg = 'return' THEN " + ShipmentLinkService.RETURN_LEG_ENTERED_RETURNED_AT_SQL +
+            "            ELSE s.returned_at END AS returned_at, " +
+            "       (s.raw #>> '{returnSpecs,packageDetails,itemsCount}')::int AS items_count, " +
+            "       s.raw #>> '{returnSpecs,packageDetails,description}'   AS description, " +
+            "       s.raw #>> '{returnSpecs,packageDetails,descriptionAr}' AS description_ar, " +
+            "       " + ShipmentLinkService.orderUntrackedSql("s.order_id") + " AS untracked, " +
+            "       s.return_intake_outcome, s.return_intake_completed_at, s.return_intake_session_id, " +
+            "       u.name AS marked_by " +
+            "FROM return_session_shipments rss " +
+            "JOIN shipments s ON s.tracking_number = rss.awb AND s.tenant_id = rss.tenant_id " +
+            "JOIN orders o    ON o.id = s.order_id AND o.tenant_id = s.tenant_id " +
+            "LEFT JOIN users u ON u.id = s.return_intake_by " +
+            "WHERE rss.session_id = ? AND rss.tenant_id = ? " +
+            "ORDER BY rss.linked_at DESC, rss.id DESC",
+            sessionId, tenantId);
+
+        Map<Object, Object> itemOrder = new HashMap<>();
+        jdbc.query(
+            "SELECT i.id, COALESCE((SELECT pe.order_id FROM piece_events pe " +
+            "                       WHERE pe.piece_id = i.piece_id AND pe.tenant_id = i.tenant_id " +
+            "                         AND pe.event_type = 'return_received' " +
+            "                         AND pe.metadata->>'session_id' = ? " +
+            "                       ORDER BY pe.occurred_at DESC, pe.id DESC LIMIT 1), " +
+            "                      p.current_order_id) AS order_id " +
+            "FROM return_session_items i JOIN pieces p ON p.id = i.piece_id " +
+            "WHERE i.session_id = ? AND i.tenant_id = ?",
+            (org.springframework.jdbc.core.RowCallbackHandler) rs -> itemOrder.put(rs.getObject("id"), rs.getObject("order_id")),
+            sessionId.toString(), sessionId, tenantId);
+
+        List<Map<String, Object>> parcels = new ArrayList<>();
+        Set<Object> ordersTaken = new HashSet<>();
+        Set<Object> itemsTaken = new HashSet<>();
+        Set<Object> expectedTaken = new HashSet<>();
+        for (Map<String, Object> leg : legs) {
+            Object orderId = leg.get("order_id");
+            String awb = (String) leg.get("awb");
+            boolean firstParcelForOrder = ordersTaken.add(orderId);
+
+            List<Map<String, Object>> parcelExpected = new ArrayList<>();
+            for (Map<String, Object> e : expected) {
+                if (awb.equals(e.get("awb")) && expectedTaken.add(e.get("id"))) parcelExpected.add(e);
+            }
+            List<Map<String, Object>> scanned = new ArrayList<>();
+            if (firstParcelForOrder) {
+                for (Map<String, Object> it : items) {
+                    if (orderId != null && orderId.equals(itemOrder.get(it.get("id"))) && itemsTaken.add(it.get("id"))) {
+                        scanned.add(it);
+                    }
+                }
+            }
+            String outcome = (String) leg.get("return_intake_outcome");
+            boolean anyPending = scanned.stream().anyMatch(it -> "pending".equals(it.get("disposition")));
+            boolean complete = outcome != null
+                || (!scanned.isEmpty() && parcelExpected.isEmpty() && !anyPending);
+
+            Map<String, Object> parcel = new LinkedHashMap<>();
+            parcel.put("shipmentId", leg.get("shipment_id").toString());
+            parcel.put("awb", awb);
+            parcel.put("leg", leg.get("shipment_leg"));
+            parcel.put("orderNumber", leg.get("order_number"));
+            parcel.put("customerShortName", shortName((String) leg.get("customer_name")));
+            parcel.put("returnedAt", leg.get("returned_at"));
+            if ("return".equals(leg.get("shipment_leg"))) {
+                Map<String, Object> bosta = new LinkedHashMap<>();
+                bosta.put("itemsCount", leg.get("items_count"));
+                bosta.put("description", leg.get("description"));
+                bosta.put("descriptionAr", leg.get("description_ar"));
+                parcel.put("bosta", bosta);
+            } else {
+                parcel.put("bosta", null);
+            }
+            parcel.put("tracked", !Boolean.TRUE.equals(leg.get("untracked")));
+            parcel.put("intakeOutcome", outcome);
+            parcel.put("markedBy", outcome != null ? leg.get("marked_by") : null);
+            parcel.put("markedAt", outcome != null ? leg.get("return_intake_completed_at") : null);
+            parcel.put("markedInThisSession", sessionId.equals(leg.get("return_intake_session_id")));
+            parcel.put("expectedPieces", parcelExpected);
+            parcel.put("scannedItems", scanned);
+            Map<String, Object> counts = new LinkedHashMap<>();
+            counts.put("expected", scanned.size() + parcelExpected.size());
+            counts.put("scanned", scanned.size());
+            parcel.put("counts", counts);
+            parcel.put("complete", complete);
+            parcels.add(parcel);
+        }
+
+        List<Map<String, Object>> otherItems = new ArrayList<>();
+        for (Map<String, Object> it : items) {
+            if (!itemsTaken.contains(it.get("id"))) otherItems.add(it);
+        }
+        result.put("parcels", parcels);
+        result.put("otherItems", otherItems);
+        result.put("lastScan", lastScan(sessionId, tenantId, items, legs));
+    }
+
+    /** Newest of: piece scan, AWB scan, mark-received in this session. Null when nothing yet. */
+    private Map<String, Object> lastScan(UUID sessionId, UUID tenantId,
+                                         List<Map<String, Object>> items, List<Map<String, Object>> legs) {
+        Map<String, Object> best = null;
+        java.sql.Timestamp bestAt = null;
+        for (Map<String, Object> it : items) {
+            java.sql.Timestamp at = (java.sql.Timestamp) it.get("scanned_at");
+            if (at != null && (bestAt == null || at.after(bestAt))) {
+                bestAt = at;
+                Object code = it.get("short_code") != null ? it.get("short_code") : it.get("barcode");
+                best = scanEntry("piece", code, it.get("product_title"), at);
+            }
+        }
+        for (Map<String, Object> leg : legs) {
+            java.sql.Timestamp at = (java.sql.Timestamp) leg.get("linked_at");
+            if (at != null && (bestAt == null || at.after(bestAt))) {
+                bestAt = at;
+                best = scanEntry("awb", leg.get("awb"), null, at);
+            }
+            java.sql.Timestamp marked = (java.sql.Timestamp) leg.get("return_intake_completed_at");
+            if ("received_untracked".equals(leg.get("return_intake_outcome"))
+                    && sessionId.equals(leg.get("return_intake_session_id"))
+                    && marked != null && (bestAt == null || marked.after(bestAt))) {
+                bestAt = marked;
+                best = scanEntry("marked_received", leg.get("awb"), null, marked);
+            }
+        }
+        return best;
+    }
+
+    private static Map<String, Object> scanEntry(String kind, Object code, Object label, java.sql.Timestamp at) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("kind", kind);
+        m.put("code", code);
+        m.put("label", label);
+        m.put("at", at.toInstant().toString());
+        return m;
+    }
+
+    /** "Mariam Samir" → "Mariam S." ; single name as-is ; null stays null. First name + last initial only. */
+    static String shortName(String fullName) {
+        if (fullName == null || fullName.isBlank()) return null;
+        String[] parts = fullName.trim().split("\\s+");
+        if (parts.length == 1) return parts[0];
+        return parts[0] + " " + parts[parts.length - 1].codePoints()
+            .limit(1).collect(StringBuilder::new, StringBuilder::appendCodePoint, StringBuilder::append) + ".";
     }
 
     // ── Analytics (derive-on-read) ────────────────────────────────────────────

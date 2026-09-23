@@ -168,6 +168,7 @@ public class ExceptionService {
         all.addAll(detectExchangeUnmappedState(tenantId));
         all.addAll(detectVoidHoldSyncFailed(tenantId));
         all.addAll(detectReturnLegUnscanned(tenantId, returnUnscannedDays));
+        all.addAll(detectReturnToReceive(tenantId));
 
         // Enrich with descriptions and action hints
         all.forEach(this::enrich);
@@ -273,6 +274,30 @@ public class ExceptionService {
      * order at/after the leg's created_at — even while that session is still open. The
      * exception means "parcel never scanned", nothing else.
      */
+    /**
+     * Step 5: a courier-return parcel a worker marked "received" because Traced never tracked
+     * its order. Stock was NOT changed — a manager must add the item in their next Receiving
+     * session, or resolve this if it won't go back into stock. MEDIUM.
+     * Open-ness is ShipmentLinkService.RETURN_TO_RECEIVE_OPEN_SQL (shared with
+     * listCrpReturns' awaitingReceiving); subject_key = the shipment id. A resolution only
+     * counts if made at/after the marking, so undo + re-mark re-opens it.
+     */
+    private List<Map<String, Object>> detectReturnToReceive(UUID tid) {
+        return jdbc.queryForList(
+            "SELECT 'return_to_receive' AS type, 'MEDIUM' AS severity, 'shipment' AS subject_type, " +
+            "       s.id AS shipment_id, s.tracking_number, " +
+            "       o.id AS order_id, o.number AS order_number, " +
+            "       s.raw #>> '{returnSpecs,packageDetails,description}' AS bosta_description, " +
+            "       u.name AS marked_by_name, s.return_intake_session_id AS intake_session_id, " +
+            "       s.return_intake_completed_at AS occurred_at, " +
+            "       s.id::text AS subject_key " +
+            "FROM shipments s " +
+            "JOIN orders o ON o.id = s.order_id AND o.tenant_id = s.tenant_id " +
+            "LEFT JOIN users u ON u.id = s.return_intake_by " +
+            "WHERE s.tenant_id = ? AND " + ShipmentLinkService.RETURN_TO_RECEIVE_OPEN_SQL,
+            tid);
+    }
+
     private List<Map<String, Object>> detectReturnLegUnscanned(UUID tid, int windowDays) {
         return jdbc.queryForList(
             "SELECT 'return_leg_unscanned' AS type, 'HIGH' AS severity, 'shipment' AS subject_type, " +
@@ -1039,6 +1064,18 @@ public class ExceptionService {
                     "المرتجع " + t + " للطلب " + n + " عاد وفق بوسطة ولكن لم يتم مسحه عند الاستلام");
                 item.put("suggestedAction", "intake_return");
                 item.put("actionUrl", "/returns");
+            }
+            case "return_to_receive" -> {
+                String t = str(item, "tracking_number");
+                String n = str(item, "order_number");
+                item.put("descriptionEn",
+                    "Return " + t + " for order " + n + " arrived, but Traced never tracked this order. " +
+                    "Add the item in your next Receiving session, or resolve this if it won't go back into stock.");
+                item.put("descriptionAr",
+                    "وصل المرتجع " + t + " للطلب " + n + "، لكن Traced لم يتتبّع هذا الطلب. " +
+                    "أضف القطعة في جلسة الاستلام القادمة، أو عالِج هذا التنبيه إذا لن تعود إلى المخزون.");
+                item.put("suggestedAction", "add_in_receiving");
+                item.put("actionUrl", "/receiving");
             }
             case "exchange_needs_mapping" -> {
                 String t = str(item, "tracking_number");
