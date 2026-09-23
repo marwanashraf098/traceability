@@ -515,6 +515,16 @@ public class BostaWebhookJob {
                 fExceptionCode, fExceptionReason,
                 resolvedShipment.id());
 
+            // 9.2 — Returns portal (V100): the forward leg's delivered timestamp, set ONCE —
+            // never overwritten by a repeat or later 'delivered' event. Return legs and the
+            // exchange paths (type 30, incl. the admin re-interpret) are deliberately excluded.
+            if ("delivered".equals(mapped.shipmentInternalState()) && delivery.typeCode() != 30) {
+                jdbc.update(
+                    "UPDATE shipments SET delivered_at = now() " +
+                    "WHERE id = ? AND shipment_leg = 'forward' AND delivered_at IS NULL",
+                    resolvedShipment.id());
+            }
+
             // 9.5 — History row for the delivery timeline (idempotent).
             jdbc.update("""
                 INSERT INTO shipment_status_history
