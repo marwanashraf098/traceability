@@ -1,6 +1,7 @@
 package com.traceability;
 
 import com.traceability.inventory.ReturnService;
+import com.traceability.inventory.ReturnSessionService;
 import com.traceability.inventory.ShipmentLinkService;
 import com.traceability.inventory.UlidGenerator;
 import com.traceability.tenancy.TenantContext;
@@ -70,6 +71,7 @@ class RefundListTest {
 
     @Autowired ShipmentLinkService linkSvc;
     @Autowired ReturnService       returnSvc;
+    @Autowired ReturnSessionService sessionSvc;
     @Autowired JdbcTemplate        jdbc;
     @MockBean  JobScheduler        jobScheduler;
 
@@ -248,7 +250,10 @@ class RefundListTest {
     @Test
     void r7_returnedWithNoPendingPiece_inspectionStateResolved() {
         UUID orderId = seedOrder("EXT-RFD-007", "Karim Adly", "01012340007");
-        seedCrpShipment(orderId, "RFD-TN-007", "returned");
+        UUID legId = seedCrpShipment(orderId, "RFD-TN-007", "returned");
+        // V98 scan-as-truth: "resolved" now also requires intake to be complete — a returned
+        // leg with return_intake_completed_at NULL reads needs_inspection (never scanned).
+        jdbc.update("UPDATE shipments SET return_intake_completed_at = now() WHERE id = ?", legId);
         // No piece at return_pending_inspection for this order at all.
 
         Map<String, Object> row = findRow(linkSvc.listCrpReturns(0, 50), "RFD-TN-007");
@@ -261,16 +266,26 @@ class RefundListTest {
         seedCrpShipment(orderId, "RFD-TN-008", "returned");
         String pieceId = seedPendingInspectionPiece(orderId);
 
+        // V98 scan-as-truth: the real intake path (open → scan → restock disposition →
+        // close) — close() is what stamps return_intake_completed_at; a bare restock no
+        // longer resolves the row on its own.
+        UUID sessionId = sessionSvc.createSession(null, actorId);
+        sessionSvc.scan(sessionId, "PC-" + pieceId, locationId, actorId);
+
         Map<String, Object> before = findRow(linkSvc.listCrpReturns(0, 50), "RFD-TN-008");
         assertThat(before.get("inspection_state"))
             .as("undispositioned piece still at return_pending_inspection").isEqualTo("needs_inspection");
 
-        returnSvc.restock(pieceId, locationId, actorId);
+        sessionSvc.disposition(sessionId, pieceId, "restock", null, locationId, actorId);
+        sessionSvc.close(sessionId, actorId);
 
         Map<String, Object> after = findRow(linkSvc.listCrpReturns(0, 50), "RFD-TN-008");
         assertThat(after.get("inspection_state"))
             .as("Step 4-close Part 2: restocking the last pending piece must flip the row to resolved")
             .isEqualTo("resolved");
+
+        jdbc.update("DELETE FROM return_session_items WHERE session_id = ?", sessionId);
+        jdbc.update("DELETE FROM return_sessions      WHERE id = ?", sessionId);
     }
 
     private int indexOfTracking(List<Map<String, Object>> rows, String tracking) {

@@ -477,7 +477,7 @@ public class ShipmentLinkService {
     public List<Map<String, Object>> listCrpReturns(int page, int size) {
         UUID tenantId = TenantContext.require();
         return jdbc.query(
-            "SELECT sh.id, sh.tracking_number, sh.internal_state, sh.order_id, " +
+            "SELECT sh.id, sh.tracking_number, sh.internal_state, sh.order_id, sh.return_intake_completed_at, " +
             "       o.number AS order_number, o.customer_name, o.customer_phone, sh.created_at, " +
             // Step 4-close Part 2 (gap #4) — disposition rollup, ADDITIVE to leg_status
             // below, never replacing it. Correlated form of the SAME predicate
@@ -511,7 +511,12 @@ public class ShipmentLinkService {
                 //   pre-'returned'        → "in_transit" (courier hasn't delivered it back yet)
                 //   'returned', pieces still at return_pending_inspection → "needs_inspection"
                 //   'returned', none left at return_pending_inspection    → "resolved"
+                //   V98 scan-as-truth: 'returned' with return_intake_completed_at NULL →
+                //   "needs_inspection" regardless of piece counts — CRP courier states no
+                //   longer move pieces, so zero pieces at return_pending_inspection before the
+                //   intake scan means "not scanned yet", not "resolved".
                 String inspectionState = !"returned".equals(internalState) ? "in_transit"
+                    : rs.getTimestamp("return_intake_completed_at") == null ? "needs_inspection"
                     : rs.getInt("pending_inspection_count") > 0 ? "needs_inspection" : "resolved";
                 row.put("inspection_state", inspectionState);
                 row.put("leg_status", OrderStatusDeriver.deriveLegStatus(internalState));
@@ -749,6 +754,47 @@ public class ShipmentLinkService {
             "  WHERE matched_order_id = ? AND tenant_id = ? AND status = 'matched'" +
             ")",
             Boolean.class, orderId, tenantId, orderId, tenantId);
+        return Boolean.TRUE.equals(exists);
+    }
+
+    /**
+     * Scan-as-truth intake gate (V98): true when {@code orderId} has a CRP return leg
+     * (shipment_leg='return') that is still awaiting its intake scan — either
+     * non-terminal, or already 'returned' per Bosta (state 46) with
+     * return_intake_completed_at still NULL. Return-leg courier states never move pieces,
+     * so a returned-but-unscanned leg must keep the order's delivered pieces scannable.
+     *
+     * Deliberately separate from {@link #hasActiveReturnLeg}: that method and its four
+     * callers (unexpected-flag suppression, the exchange-match window bypass,
+     * detectUnexpectedReturn) keep treating 'returned' as terminal, unchanged.
+     * return_intake_completed_at is stamped by ReturnSessionService.close().
+     */
+    public boolean hasReturnLegAwaitingIntake(UUID orderId, UUID tenantId) {
+        if (orderId == null) return false;
+        Boolean exists = jdbc.queryForObject(
+            "SELECT EXISTS (" +
+            "  SELECT 1 FROM shipments " +
+            "  WHERE order_id = ? AND tenant_id = ? AND shipment_leg = 'return' " +
+            "    AND ( internal_state NOT IN (" + RETURN_LEG_TERMINAL_STATES + ") " +
+            "       OR ( internal_state = 'returned'::shipment_internal_state " +
+            "            AND return_intake_completed_at IS NULL ) )" +
+            ")",
+            Boolean.class, orderId, tenantId);
+        return Boolean.TRUE.equals(exists);
+    }
+
+    /**
+     * Labeling only (return_kind='exchange_match'): true when a matched exchange
+     * (status='matched') covers {@code orderId}. The exchange half of
+     * {@link #hasActiveReturnLeg}, split out so a CRP-only cover is never labeled as an
+     * exchange. Not an acceptance gate — acceptance still goes through hasActiveReturnLeg.
+     */
+    public boolean hasMatchedExchange(UUID orderId, UUID tenantId) {
+        if (orderId == null) return false;
+        Boolean exists = jdbc.queryForObject(
+            "SELECT EXISTS (SELECT 1 FROM exchanges " +
+            "  WHERE matched_order_id = ? AND tenant_id = ? AND status = 'matched')",
+            Boolean.class, orderId, tenantId);
         return Boolean.TRUE.equals(exists);
     }
 

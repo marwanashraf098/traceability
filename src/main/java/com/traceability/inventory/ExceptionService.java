@@ -134,11 +134,12 @@ public class ExceptionService {
         // Per-tenant config
         Map<String, Object> cfg = jdbc.queryForMap(
             "SELECT never_received_window_days, stuck_shipment_days, " +
-            "       return_in_transit_stuck_days " +
+            "       return_in_transit_stuck_days, return_unscanned_window_days " +
             "FROM tenants WHERE id = ?", tenantId);
         int neverReceivedDays       = ((Number) cfg.get("never_received_window_days")).intValue();
         int stuckDays               = ((Number) cfg.get("stuck_shipment_days")).intValue();
         int returnInTransitStuckDays = ((Number) cfg.get("return_in_transit_stuck_days")).intValue();
+        int returnUnscannedDays      = ((Number) cfg.get("return_unscanned_window_days")).intValue();
 
         // Collect all open exceptions
         List<Map<String, Object>> all = new ArrayList<>();
@@ -166,6 +167,7 @@ public class ExceptionService {
         all.addAll(detectExchangeNeedsMapping(tenantId));
         all.addAll(detectExchangeUnmappedState(tenantId));
         all.addAll(detectVoidHoldSyncFailed(tenantId));
+        all.addAll(detectReturnLegUnscanned(tenantId, returnUnscannedDays));
 
         // Enrich with descriptions and action hints
         all.forEach(this::enrich);
@@ -277,6 +279,53 @@ public class ExceptionService {
      * ShopifyInventoryService.repushFailedVoidOrHold(), Phase 2's manual repush action) then
      * resolves this exception the same way as every other detector.
      */
+    /**
+     * V98 scan-as-truth: a CRP return leg Bosta reports 'returned' (state 46) whose parcel
+     * was never scanned in. Return-leg courier states no longer move pieces, so without
+     * this a returned-but-unscanned parcel would be invisible.
+     *
+     * "Entered returned" = shipments.returned_at (stamped by BostaWebhookJob.
+     * applyMappedState() when the mapped state is 'returned'), falling back to the
+     * earliest 'returned' shipment_status_history row. A leg with neither (only reachable
+     * via resolveReturnLegIfComplete(), i.e. after a scan) never fires.
+     *
+     * Does not fire when intake is complete (return_intake_completed_at set on session
+     * close), nor when there is scan evidence — a return_received event for a piece of the
+     * order at/after the leg's created_at — even while that session is still open. The
+     * exception means "parcel never scanned", nothing else.
+     */
+    private List<Map<String, Object>> detectReturnLegUnscanned(UUID tid, int windowDays) {
+        return jdbc.queryForList(
+            "SELECT 'return_leg_unscanned' AS type, 'HIGH' AS severity, 'shipment' AS subject_type, " +
+            "       s.id AS shipment_id, s.tracking_number, " +
+            "       o.id AS order_id, o.number AS order_number, " +
+            "       x.entered_returned_at AS occurred_at, " +
+            "       'return_leg_unscanned:shipment:' || s.id AS subject_key " +
+            "FROM shipments s " +
+            "JOIN orders o ON o.id = s.order_id AND o.tenant_id = s.tenant_id " +
+            "CROSS JOIN LATERAL ( " +
+            "    SELECT COALESCE(s.returned_at, " +
+            "        (SELECT MIN(h.occurred_at) FROM shipment_status_history h " +
+            "          WHERE h.shipment_id = s.id AND h.internal_state = 'returned')) AS entered_returned_at " +
+            ") x " +
+            "WHERE s.tenant_id = ? " +
+            "  AND s.shipment_leg = 'return' " +
+            "  AND s.internal_state = 'returned'::shipment_internal_state " +
+            "  AND s.return_intake_completed_at IS NULL " +
+            "  AND x.entered_returned_at < now() - (interval '1 day' * ?) " +
+            "  AND NOT EXISTS ( " +
+            "      SELECT 1 FROM piece_events pe " +
+            "      WHERE pe.tenant_id = s.tenant_id AND pe.order_id = s.order_id " +
+            "        AND pe.event_type = 'return_received' " +
+            "        AND pe.occurred_at >= s.created_at) " +
+            "  AND NOT EXISTS ( " +
+            "      SELECT 1 FROM exception_resolutions er " +
+            "      WHERE er.tenant_id = s.tenant_id " +
+            "        AND er.exception_type = 'return_leg_unscanned' " +
+            "        AND er.subject_key = 'return_leg_unscanned:shipment:' || s.id) ",
+            tid, windowDays);
+    }
+
     private List<Map<String, Object>> detectVoidHoldSyncFailed(UUID tid) {
         return jdbc.queryForList(
             "SELECT 'void_hold_sync_failed' AS type, 'CRITICAL' AS severity, 'piece' AS subject_type, " +
@@ -989,6 +1038,16 @@ public class ExceptionService {
                 item.put("descriptionEn", "Piece " + b + " scanned into a return session didn't match its expected disposition");
                 item.put("descriptionAr", "القطعة " + b + " الممسوحة في جلسة إرجاع لم تطابق حالتها المتوقعة");
                 item.put("suggestedAction", "inspect_and_resolve");
+                item.put("actionUrl", "/returns");
+            }
+            case "return_leg_unscanned" -> {
+                String t = str(item, "tracking_number");
+                String n = str(item, "order_number");
+                item.put("descriptionEn",
+                    "Return " + t + " for order " + n + " is back per Bosta but was never scanned in");
+                item.put("descriptionAr",
+                    "المرتجع " + t + " للطلب " + n + " عاد وفق بوسطة ولكن لم يتم مسحه عند الاستلام");
+                item.put("suggestedAction", "intake_return");
                 item.put("actionUrl", "/returns");
             }
             case "exchange_needs_mapping" -> {

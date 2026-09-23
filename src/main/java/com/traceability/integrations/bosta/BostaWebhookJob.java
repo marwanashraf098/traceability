@@ -549,8 +549,23 @@ public class BostaWebhookJob {
         //       • StateConflictException(actual==target) → concurrent worker already applied, no-op.
         //       • StateConflictException(actual!=target) → unexpected state, log + skip.
         //       • IllegalTransitionException → no legal path to target from current, log + skip.
+        //
+        //     Return legs (shipment_leg='return', CRP type 25) never reach this step —
+        //     their courier states update the shipment row only (above), and only an
+        //     intake scan moves a delivered piece (CLAUDE.md scan-as-truth invariant).
+        //     The piece query below is order-scoped, so a CRP at state 46 used to move
+        //     every delivered piece on the order, including items the customer kept.
+        //     Checked here, not at the call sites, so all three callers inherit it.
         String targetDb = mapped.pieceStatusAfter();
-        if (targetDb != null) {
+        String leg = tx.execute(s -> jdbc.query(
+            "SELECT shipment_leg FROM shipments WHERE id = ?",
+            rs -> rs.next() ? rs.getString(1) : null,
+            resolvedShipment.id()));
+        if (targetDb != null && "return".equals(leg)) {
+            log.debug("Return leg {} — courier state {} applied to shipment only, no piece moves",
+                resolvedShipment.id(), delivery.stateCode());
+        }
+        if (targetDb != null && !"return".equals(leg)) {
             PieceStatus targetStatus = PieceStatus.fromDb(targetDb);
             String metaJson = String.format(
                 "{\"provider_state\":%d,\"order_type\":\"%s\",\"attempts\":%d}",

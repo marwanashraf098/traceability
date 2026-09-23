@@ -207,15 +207,31 @@ public class ReturnSessionService {
                 // is order-scoped (see Test 2 in the Step 3C report) — any delivered piece on
                 // a matched-exchange order clears this, not only the specific matched variant.
                 boolean matchedExchangeCover = !inWindow && shipmentLinkService.hasActiveReturnLeg(orderId, tenantId);
-                if (inWindow || matchedExchangeCover) {
+                // Scan-as-truth: a CRP return leg that hasn't had its intake scan yet —
+                // including one Bosta already reports 'returned' (state 46), which
+                // hasActiveReturnLeg() treats as terminal — covers the order's delivered
+                // pieces. Return-leg courier states no longer move pieces, so this scan is
+                // the ONLY way such a piece reaches return_pending_inspection.
+                boolean crpAwaitingIntake = shipmentLinkService.hasReturnLegAwaitingIntake(orderId, tenantId);
+                if (inWindow || matchedExchangeCover || crpAwaitingIntake) {
                     legal = true;
-                    String returnKind = matchedExchangeCover ? "exchange_match" : "customer_after_delivery";
+                    // Label = what actually covers the piece, independent of the window
+                    // (acceptance above is unchanged). Precedence:
+                    // exchange_match > crp_return > customer_after_delivery.
+                    //   exchange_match — a matched exchange on this order.
+                    //   crp_return     — a return leg, non-terminal or awaiting intake
+                    //                    (hasReturnLegAwaitingIntake covers both).
+                    //   customer_after_delivery — in window, neither of the above.
+                    String returnKind = shipmentLinkService.hasMatchedExchange(orderId, tenantId) ? "exchange_match"
+                        : crpAwaitingIntake ? "crp_return"
+                        : "customer_after_delivery";
                     String meta = "{\"return_kind\":\"" + returnKind + "\"," + metaSuffix + "}";
                     ledger.transition(pieceId, PieceStatus.DELIVERED, PieceStatus.RETURN_PENDING_INSPECTION,
                         "return_received", actorUserId, new TransitionContext(orderId, shipmentId, locationId, orderId, meta));
                 } else {
                     // Outside the customer return window and no active return leg / matched
-                    // exchange covers it: ours, but no longer return-eligible. Illegal-state
+                    // exchange / return leg awaiting intake covers it: ours, but no longer
+                    // return-eligible. Illegal-state
                     // fork — no transition, mismatch-only.
                     legal = false; unexpected = true;
                     log.warn("Illegal-state return scan (delivered, out of window): piece={} session={}", pieceId, sessionId);
@@ -455,6 +471,22 @@ public class ReturnSessionService {
             "UPDATE return_sessions SET status = 'closed', closed_by = ?, closed_at = now() " +
             "WHERE id = ? AND tenant_id = ?",
             actorUserId, sessionId, tenantId);
+
+        // Scan-as-truth intake completion (close only — abandon never gets here): every
+        // return leg of an order that had a piece legally scanned in this session is now
+        // intake-complete. Orders come from this session's return_received events, not
+        // pieces.current_order_id — restock() has already cleared that by close time.
+        // Illegal-state (mismatch) scans write no event, so they never complete a leg.
+        jdbc.update(
+            "UPDATE shipments SET return_intake_completed_at = now() " +
+            "WHERE tenant_id = ? AND shipment_leg = 'return' " +
+            "  AND return_intake_completed_at IS NULL " +
+            "  AND order_id IN ( " +
+            "      SELECT pe.order_id FROM piece_events pe " +
+            "      WHERE pe.tenant_id = ? AND pe.event_type = 'return_received' " +
+            "        AND pe.order_id IS NOT NULL " +
+            "        AND pe.metadata->>'session_id' = ?)",
+            tenantId, tenantId, sessionId.toString());
 
         Map<String, Object> result = new LinkedHashMap<>(counts);
         result.put("sessionId", sessionId.toString());
