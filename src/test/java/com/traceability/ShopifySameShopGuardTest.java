@@ -84,6 +84,9 @@ class ShopifySameShopGuardTest {
     @MockBean ShopifyImportJob importJob;
     @MockBean EmailGateway     emailGateway;
 
+    @Value("${shopify.app-url}")
+    String appUrl;
+
     @Value("${shopify.client-secret}")
     String clientSecret;
 
@@ -187,8 +190,7 @@ class ShopifySameShopGuardTest {
         String location = callbackResp.getHeaders().getFirst("Location");
         assertThat(location)
             .as("must not be rejected as a shop mismatch or cross-tenant conflict")
-            .doesNotContain("SHOPIFY_SHOP_MISMATCH")
-            .doesNotContain("SHOPIFY_STORE_ALREADY_CONNECTED");
+            .doesNotContain("shopify_error");
 
         Integer totalRowsForTenant = jdbc.queryForObject(
             "SELECT COUNT(*) FROM stores WHERE tenant_id = ?", Integer.class, owner.tenantId());
@@ -343,11 +345,14 @@ class ShopifySameShopGuardTest {
                 "shpat_backstop_token", "shprt_backstop_refresh", 3600L, 7776000L, null));
 
         String nonce = insertState(owner.tenantId(), SHOP_Y, Instant.now());
+        List<String> storesBefore = storesSnapshot();
         var resp = noRedirectRest.getForEntity(
             base() + "/auth/shopify/callback?" + callbackParams(nonce, SHOP_Y, code), Void.class);
 
         assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.FOUND);
-        assertThat(resp.getHeaders().getFirst("Location")).contains("SHOPIFY_SHOP_MISMATCH");
+        assertThat(resp.getHeaders().getFirst("Location"))
+            .isEqualTo(appUrl + "/settings?tab=connections&shopify_error=SHOP_MISMATCH");
+        assertThat(storesSnapshot()).as("stores table byte-identical").isEqualTo(storesBefore);
 
         Integer totalStores = jdbc.queryForObject(
             "SELECT COUNT(*) FROM stores WHERE tenant_id = ?", Integer.class, owner.tenantId());
@@ -359,6 +364,14 @@ class ShopifySameShopGuardTest {
     }
 
     // ---- helpers ------------------------------------------------------------
+
+    /**
+     * Every stores row, every column, as JSON text. ORDER BY id is only for a deterministic
+     * before/after comparison (not a recency query), so created_at ordering doesn't apply.
+     */
+    private List<String> storesSnapshot() {
+        return jdbc.queryForList("SELECT to_jsonb(s)::text FROM stores s ORDER BY s.id", String.class);
+    }
 
     private String base() { return "http://localhost:" + port; }
 

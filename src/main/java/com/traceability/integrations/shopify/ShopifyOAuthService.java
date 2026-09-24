@@ -35,7 +35,7 @@ import java.util.UUID;
  *   resolve_tenant_by_shop_domain is called BEFORE any tenant GUC is set.
  *   A tenant-scoped SELECT under the intended tenant's RLS would hide a store
  *   owned by a different tenant, causing a confusing 23505 instead of a clean
- *   SHOPIFY_STORE_ALREADY_CONNECTED redirect. The DEFINER function sees all tenants.
+ *   SHOP_LINKED_ELSEWHERE redirect. The DEFINER function sees all tenants.
  */
 @Service
 public class ShopifyOAuthService {

@@ -84,6 +84,9 @@ class ShopifyOAuthDay1Test {
     @Value("${shopify.client-secret}")
     String clientSecret;
 
+    @Value("${shopify.app-url}")
+    String appUrl;
+
     private String ownerToken;
     private UUID   ownerTenantId;
 
@@ -129,20 +132,21 @@ class ShopifyOAuthDay1Test {
     }
 
     // -------------------------------------------------------------------------
-    // (a) Install HMAC reject — bad HMAC returns 401 with SHOPIFY_HMAC_INVALID
+    // (a) Install HMAC reject — bad HMAC → 302 to the connections page with
+    //     shopify_error=INSTALL_FAILED (browser navigation never gets bare JSON).
+    //     No state row is created.
     // -------------------------------------------------------------------------
     @Test
-    void installHmacReject_badHmacReturns401() {
+    void installHmacReject_badHmacRedirectsInstallFailed() {
         String timestamp = String.valueOf(Instant.now().getEpochSecond());
-        ResponseEntity<Map> resp = noRedirectRest.getForEntity(
+        ResponseEntity<Void> resp = noRedirectRest.getForEntity(
                 base() + "/auth/shopify/install?shop=" + SHOP
                         + "&timestamp=" + timestamp + "&hmac=invalid-hex-hmac",
-                Map.class);
+                Void.class);
 
-        assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
-        assertThat(resp.getBody()).containsEntry("code", "SHOPIFY_HMAC_INVALID");
-        assertThat(resp.getBody()).containsKey("message_en");
-        assertThat(resp.getBody()).containsKey("message_ar");
+        assertErrorRedirect(resp, "INSTALL_FAILED");
+        Integer states = jdbc.queryForObject("SELECT COUNT(*) FROM shopify_oauth_state", Integer.class);
+        assertThat(states).isZero();
     }
 
     // -------------------------------------------------------------------------
@@ -204,27 +208,30 @@ class ShopifyOAuthDay1Test {
     }
 
     // -------------------------------------------------------------------------
-    // (c) Callback HMAC reject — bad HMAC returns 401 with SHOPIFY_HMAC_INVALID
+    // (c) Callback HMAC reject — bad HMAC → 302 shopify_error=INSTALL_FAILED.
+    //     Nothing from the (unverified) request is reflected into the redirect.
     // -------------------------------------------------------------------------
     @Test
-    void callbackHmacReject_badHmacReturns401() {
+    void callbackHmacReject_badHmacRedirectsInstallFailed() {
         String nonce = insertState(ownerTenantId, SHOP, Instant.now());
         String timestamp = String.valueOf(Instant.now().getEpochSecond());
 
-        ResponseEntity<Map> resp = noRedirectRest.getForEntity(
+        ResponseEntity<Void> resp = noRedirectRest.getForEntity(
                 base() + "/auth/shopify/callback?code=" + CODE
                         + "&shop=" + SHOP
                         + "&state=" + nonce
                         + "&timestamp=" + timestamp
                         + "&hmac=bad-hmac",
-                Map.class);
+                Void.class);
 
-        assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
-        assertThat(resp.getBody()).containsEntry("code", "SHOPIFY_HMAC_INVALID");
+        assertErrorRedirect(resp, "INSTALL_FAILED");
+        Integer stores = jdbc.queryForObject(
+                "SELECT COUNT(*) FROM stores WHERE shop_domain = ?", Integer.class, SHOP);
+        assertThat(stores).isZero();
     }
 
     // -------------------------------------------------------------------------
-    // (d) State replay — second callback with same state → SHOPIFY_STATE_INVALID
+    // (d) State replay — second callback with same state → 302 INSTALL_EXPIRED
     // -------------------------------------------------------------------------
     @Test
     void stateReplay_secondCallbackIsRejected() {
@@ -237,15 +244,15 @@ class ShopifyOAuthDay1Test {
                 base() + "/auth/shopify/callback?" + callbackParams(nonce), Void.class);
         assertThat(first.getStatusCode()).isEqualTo(HttpStatus.FOUND);
 
-        // Second callback with same state → SHOPIFY_STATE_INVALID
-        ResponseEntity<Map> second = noRedirectRest.getForEntity(
-                base() + "/auth/shopify/callback?" + callbackParams(nonce), Map.class);
-        assertThat(second.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
-        assertThat(second.getBody()).containsEntry("code", "SHOPIFY_STATE_INVALID");
+        // Second callback with same state → state invalid → INSTALL_EXPIRED redirect
+        ResponseEntity<Void> second = noRedirectRest.getForEntity(
+                base() + "/auth/shopify/callback?" + callbackParams(nonce), Void.class);
+        assertErrorRedirect(second, "INSTALL_EXPIRED");
     }
 
     // -------------------------------------------------------------------------
-    // (e) State shop-mismatch — callback shop ≠ state shop → SHOPIFY_STATE_INVALID
+    // (e) State shop-mismatch — callback shop ≠ state shop → 302 INSTALL_EXPIRED
+    //     (state-invalid sub-conditions stay indistinguishable to the browser)
     // -------------------------------------------------------------------------
     @Test
     void stateShopMismatch_rejectsCallback() {
@@ -260,26 +267,55 @@ class ShopifyOAuthDay1Test {
         params.put("timestamp", timestamp);
         params.put("hmac",      computeHmac(params));
 
-        ResponseEntity<Map> resp = noRedirectRest.getForEntity(
-                base() + "/auth/shopify/callback?" + buildQueryString(params), Map.class);
+        ResponseEntity<Void> resp = noRedirectRest.getForEntity(
+                base() + "/auth/shopify/callback?" + buildQueryString(params), Void.class);
 
-        assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
-        assertThat(resp.getBody()).containsEntry("code", "SHOPIFY_STATE_INVALID");
+        assertErrorRedirect(resp, "INSTALL_EXPIRED");
     }
 
     // -------------------------------------------------------------------------
-    // (f) Expired state (>10 min old) → SHOPIFY_STATE_INVALID
+    // (f) Expired state (>10 min old) → 302 INSTALL_EXPIRED
     // -------------------------------------------------------------------------
     @Test
     void expiredState_rejectsCallback() {
         Instant expiredAt = Instant.now().minus(15, ChronoUnit.MINUTES);
         String nonce = insertState(ownerTenantId, SHOP, expiredAt);
 
-        ResponseEntity<Map> resp = noRedirectRest.getForEntity(
-                base() + "/auth/shopify/callback?" + callbackParams(nonce), Map.class);
+        ResponseEntity<Void> resp = noRedirectRest.getForEntity(
+                base() + "/auth/shopify/callback?" + callbackParams(nonce), Void.class);
 
-        assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
-        assertThat(resp.getBody()).containsEntry("code", "SHOPIFY_STATE_INVALID");
+        assertErrorRedirect(resp, "INSTALL_EXPIRED");
+    }
+
+    // -------------------------------------------------------------------------
+    // (f3) Token exchange failure → 302 INSTALL_FAILED, no store row written.
+    // -------------------------------------------------------------------------
+    @Test
+    void tokenExchangeFailure_callbackRedirectsInstallFailed_noStoreWritten() {
+        when(shopifyGateway.exchangeCode(eq(SHOP), eq(CODE)))
+                .thenThrow(new RuntimeException("simulated Shopify 500"));
+        String nonce = insertState(ownerTenantId, SHOP, Instant.now());
+
+        ResponseEntity<Void> resp = noRedirectRest.getForEntity(
+                base() + "/auth/shopify/callback?" + callbackParams(nonce), Void.class);
+
+        assertErrorRedirect(resp, "INSTALL_FAILED");
+        Integer stores = jdbc.queryForObject(
+                "SELECT COUNT(*) FROM stores WHERE shop_domain = ?", Integer.class, SHOP);
+        assertThat(stores).isZero();
+    }
+
+    // -------------------------------------------------------------------------
+    // (f4) Install with an invalid shop domain → 302 INSTALL_FAILED; the bad
+    //      value is never reflected into the redirect.
+    // -------------------------------------------------------------------------
+    @Test
+    void install_invalidShopDomain_redirectsInstallFailed() {
+        ResponseEntity<Void> resp = noRedirectRest.getForEntity(
+                base() + "/auth/shopify/install?shop=evil.example.com", Void.class);
+
+        assertErrorRedirect(resp, "INSTALL_FAILED");
+        assertThat(resp.getHeaders().getFirst("Location")).doesNotContain("evil");
     }
 
     // -------------------------------------------------------------------------
@@ -335,6 +371,13 @@ class ShopifyOAuthDay1Test {
     // ---- helpers -----------------------------------------------------------
 
     private String base() { return "http://localhost:" + port; }
+
+    /** 302 to exactly the connections page carrying ONLY the fixed code — nothing reflected. */
+    private void assertErrorRedirect(ResponseEntity<?> resp, String code) {
+        assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.FOUND);
+        assertThat(resp.getHeaders().getFirst("Location"))
+                .isEqualTo(appUrl + "/settings?tab=connections&shopify_error=" + code);
+    }
 
     /** Inserts a state row directly (bypasses the initiate endpoint for test setup speed). */
     private String insertState(UUID tenantId, String shopDomain, Instant createdAt) {

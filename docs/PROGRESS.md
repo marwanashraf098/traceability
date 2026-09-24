@@ -4,6 +4,25 @@
 
 ## Current state
 
+**Shopify OAuth connect failures now visible — built 2026-09-24 on branch `feature/portal-4b-requests` (uncommitted; display-only).**
+- Every failure in `/auth/shopify/install` and `/auth/shopify/callback` → 302 to
+  `{appUrl}/settings?tab=connections&shopify_error=CODE` (codes only: `SHOP_LINKED_ELSEWHERE`,
+  `SHOP_MISMATCH`, `INSTALL_EXPIRED` = state invalid/expired/replayed + stale timestamp,
+  `INSTALL_FAILED` = HMAC, bad shop, token exchange, anything unexpected). Nothing from the request
+  is reflected. `initiate()` still JSON. Decision tree / service / schema untouched.
+  The old `/connect/error` target (a dead React route that silently bounced to /overview) is gone.
+- **NOT_LINKED unchanged** (still redirects into the embedded app's NotLinked state).
+- `ShopifyConnectionCard` shows a warning banner (EN/AR, dismissible) per code — unknown/empty →
+  generic — and strips `shopify_error` with `replace`, keeping `tab`.
+- Logging: `ShopifyOAuthException` → no extra log (as before); DB/unexpected → ERROR (mirrors
+  `ApiExceptionHandler`'s messages, now from `ShopifyOAuthController`'s logger).
+- **Known gaps (accepted):** (1) a logged-out user (Path-2 / pre-state failure) hits RequireAuth →
+  /login and loses the param; (2) a *framed* `/auth/shopify/install` error is a blank frame —
+  nginx sends `X-Frame-Options: DENY` on `/auth/shopify/*`. Follow-up: frame-ancestors CSP there.
+- Pre-existing, unrelated: `ShopifyMagicLinkTest.provisionWiring_path2NewInstall_…` fails on
+  main too (expects Path-2 provisioning, dead since Option A 2026-09-04).
+- `PROVISIONED` branch still points at dead `/connect/setup-pending` — unreachable, left as is.
+
 **Returns portal Step 4b — customer requests, merchant approve/reject, portal settings — built 2026-09-24 on branch `feature/portal-4b-requests` (not merged).**
 Backend only; no frontend, no Bosta calls, no emails, no piece moves (InventoryLedger untouched).
 - **V102:** `return_requests.reference` NOT NULL (`RR-` + 6 chars from `23456789ABCDEFGHJKLMNPQRSTUVWXYZ`;

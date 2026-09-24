@@ -1288,6 +1288,14 @@
         "title": "Reconnect your store",
         "body": "Shopify access expired, so syncing has paused. Reconnect to pick up where it left off.",
         "cta": "Reconnect"
+      },
+      "callbackError": {
+        "SHOP_LINKED_ELSEWHERE": "This Shopify store is already connected to a different Traced account. Sign in to that account to manage it, or uninstall Traced from the store first.",
+        "SHOP_MISMATCH": "This Traced account is already connected to a different Shopify store.",
+        "INSTALL_EXPIRED": "The Shopify connection request expired. Please try connecting again.",
+        "INSTALL_FAILED": "Couldn't connect your Shopify store. Please try again.",
+        "generic": "Couldn't connect your Shopify store. Please try again.",
+        "dismiss": "Dismiss"
       }
     },
     "bosta": {

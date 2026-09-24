@@ -89,6 +89,9 @@ class ShopifyOAuthDay2Test {
     @Value("${shopify.client-secret}")
     String clientSecret;
 
+    @Value("${shopify.app-url}")
+    String appUrl;
+
     @Value("${shopify.app-handle}")
     String appHandle;
 
@@ -213,8 +216,10 @@ class ShopifyOAuthDay2Test {
     }
 
     // -----------------------------------------------------------------------
-    // 3. Path-1, shop owned by DIFFERENT tenant → SHOPIFY_STORE_ALREADY_CONNECTED redirect
-    //    Existing row's token and tenant must be unchanged (byte-for-byte).
+    // 3. Path-1, shop owned by DIFFERENT tenant → 302 to the connections page with
+    //    shopify_error=SHOP_LINKED_ELSEWHERE (and nothing else in the URL).
+    //    Existing row's token and tenant must be unchanged (byte-for-byte), and the
+    //    whole stores table is identical before/after — the decision tree wrote nothing.
     // -----------------------------------------------------------------------
     @Test
     void path1_crossTenant_redirectToError_existingRowUntouched() {
@@ -241,13 +246,15 @@ class ShopifyOAuthDay2Test {
 
         when(shopifyGateway.exchangeCode(eq(SHOP_CROSS), eq(CODE_B))).thenReturn(EXCHANGE_B);
         String nonce2 = insertState(intruderTenantId, SHOP_CROSS, Instant.now());
+        List<String> storesBefore = storesSnapshot();
         var resp = noRedirectRest.getForEntity(
             base() + "/auth/shopify/callback?" + callbackParams(nonce2, SHOP_CROSS, CODE_B), Void.class);
 
-        // Must redirect to error page — never return 500
+        // Must redirect to the real connections route with only the fixed code — never 500
         assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.FOUND);
-        String location = resp.getHeaders().getFirst("Location");
-        assertThat(location).contains("SHOPIFY_STORE_ALREADY_CONNECTED");
+        assertThat(resp.getHeaders().getFirst("Location"))
+            .isEqualTo(appUrl + "/settings?tab=connections&shopify_error=SHOP_LINKED_ELSEWHERE");
+        assertThat(storesSnapshot()).as("stores table byte-identical").isEqualTo(storesBefore);
 
         // Original row unchanged
         String afterToken = jdbc.queryForObject(
@@ -515,11 +522,12 @@ class ShopifyOAuthDay2Test {
     }
 
     // -----------------------------------------------------------------------
-    // 8. A1: Stale timestamp (>300s ago) with valid HMAC → SHOPIFY_REQUEST_EXPIRED
-    //    Applies to BOTH /auth/shopify/install and /auth/shopify/callback
+    // 8. A1: Stale timestamp (>300s ago) with valid HMAC → 302 to the connections page
+    //    with shopify_error=INSTALL_EXPIRED. Applies to BOTH /auth/shopify/install and
+    //    /auth/shopify/callback. The callback's state is not consumed (freshness runs first).
     // -----------------------------------------------------------------------
     @Test
-    void timestampFreshness_staleTimestamp_returnsRequestExpired() {
+    void timestampFreshness_staleTimestamp_redirectsInstallExpired() {
         long staleTs = Instant.now().minus(10, ChronoUnit.MINUTES).getEpochSecond();
 
         // Install endpoint
@@ -529,9 +537,10 @@ class ShopifyOAuthDay2Test {
         installParams.put("hmac",      computeHmac(installParams));
 
         var installResp = noRedirectRest.getForEntity(
-            base() + "/auth/shopify/install?" + buildQueryString(installParams), Map.class);
-        assertThat(installResp.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
-        assertThat(installResp.getBody()).containsEntry("code", "SHOPIFY_REQUEST_EXPIRED");
+            base() + "/auth/shopify/install?" + buildQueryString(installParams), Void.class);
+        assertThat(installResp.getStatusCode()).isEqualTo(HttpStatus.FOUND);
+        assertThat(installResp.getHeaders().getFirst("Location"))
+            .isEqualTo(appUrl + "/settings?tab=connections&shopify_error=INSTALL_EXPIRED");
 
         // Callback endpoint — need a valid state nonce first
         String nonce = insertState(ownerTenantId, SHOP_PATH1, Instant.now());
@@ -543,9 +552,14 @@ class ShopifyOAuthDay2Test {
         cbParams.put("hmac",      computeHmac(cbParams));
 
         var cbResp = noRedirectRest.getForEntity(
-            base() + "/auth/shopify/callback?" + buildQueryString(cbParams), Map.class);
-        assertThat(cbResp.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
-        assertThat(cbResp.getBody()).containsEntry("code", "SHOPIFY_REQUEST_EXPIRED");
+            base() + "/auth/shopify/callback?" + buildQueryString(cbParams), Void.class);
+        assertThat(cbResp.getStatusCode()).isEqualTo(HttpStatus.FOUND);
+        assertThat(cbResp.getHeaders().getFirst("Location"))
+            .isEqualTo(appUrl + "/settings?tab=connections&shopify_error=INSTALL_EXPIRED");
+        Integer unconsumed = jdbc.queryForObject(
+            "SELECT COUNT(*) FROM shopify_oauth_state WHERE nonce = ? AND consumed_at IS NULL",
+            Integer.class, nonce);
+        assertThat(unconsumed).isEqualTo(1);
     }
 
     // -----------------------------------------------------------------------
@@ -609,10 +623,19 @@ class ShopifyOAuthDay2Test {
             base() + "/auth/shopify/callback?" + callbackParams(nonce2, SHOP_CROSS, CODE_B), Void.class);
 
         assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.FOUND);
-        assertThat(resp.getHeaders().getFirst("Location")).contains("SHOPIFY_STORE_ALREADY_CONNECTED");
+        assertThat(resp.getHeaders().getFirst("Location"))
+            .isEqualTo(appUrl + "/settings?tab=connections&shopify_error=SHOP_LINKED_ELSEWHERE");
     }
 
     // ---- helpers ----------------------------------------------------------
+
+    /**
+     * Every stores row, every column, as JSON text. ORDER BY id is only for a deterministic
+     * before/after comparison (not a recency query), so created_at ordering doesn't apply.
+     */
+    private List<String> storesSnapshot() {
+        return jdbc.queryForList("SELECT to_jsonb(s)::text FROM stores s ORDER BY s.id", String.class);
+    }
 
     private String base() { return "http://localhost:" + port; }
 

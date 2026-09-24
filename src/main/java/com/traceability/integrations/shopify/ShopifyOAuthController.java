@@ -1,6 +1,9 @@
 package com.traceability.integrations.shopify;
 
 import com.traceability.identity.CustomUserDetails;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.dao.DataAccessException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
@@ -33,6 +36,16 @@ public class ShopifyOAuthController {
 
     private static final String SHOP_DOMAIN_PATTERN = "[a-zA-Z0-9][a-zA-Z0-9-]*\\.myshopify\\.com";
     private static final int    TIMESTAMP_WINDOW_SECONDS = 300;
+
+    private static final Logger log = LoggerFactory.getLogger(ShopifyOAuthController.class);
+
+    /**
+     * Browser-facing failure codes for install()/callback(). These are the ONLY values ever
+     * placed in the failure redirect — nothing from the request (shop, state, host, message)
+     * is reflected, since several failure branches are for unverified requests.
+     * The connections page (ShopifyConnectionCard) maps each to an EN/AR message.
+     */
+    enum BrowserError { SHOP_LINKED_ELSEWHERE, SHOP_MISMATCH, INSTALL_EXPIRED, INSTALL_FAILED }
 
     private final ShopifyOAuthService oauthService;
 
@@ -75,6 +88,14 @@ public class ShopifyOAuthController {
      */
     @GetMapping("/auth/shopify/install")
     public ResponseEntity<Void> install(@RequestParam Map<String, String> allParams) {
+        try {
+            return doInstall(allParams);
+        } catch (Exception e) {
+            return failureRedirect(e);
+        }
+    }
+
+    private ResponseEntity<Void> doInstall(Map<String, String> allParams) {
         String shop = allParams.getOrDefault("shop", "");
         if (!shop.matches(SHOP_DOMAIN_PATTERN)) {
             throw new ShopifyOAuthException(
@@ -119,6 +140,17 @@ public class ShopifyOAuthController {
      */
     @GetMapping("/auth/shopify/callback")
     public ResponseEntity<Void> callback(@RequestParam Map<String, String> allParams) {
+        // Every failure — thrown (HMAC, freshness, state, token exchange, unexpected) or a
+        // REJECTED_* outcome — ends in a 302 to the connections page with a fixed code, never
+        // a bare JSON/status on a browser navigation. Decision logic below is unchanged.
+        try {
+            return doCallback(allParams);
+        } catch (Exception e) {
+            return failureRedirect(e);
+        }
+    }
+
+    private ResponseEntity<Void> doCallback(Map<String, String> allParams) {
         String shop  = allParams.getOrDefault("shop", "");
         String state = allParams.getOrDefault("state", "");
         String code  = allParams.getOrDefault("code", "");
@@ -165,18 +197,40 @@ public class ShopifyOAuthController {
             case PROVISIONED -> ResponseEntity.status(HttpStatus.FOUND)
                 .location(URI.create(oauthService.getAppUrl() + "/connect/setup-pending"))
                 .build();
-            case REJECTED_CROSS_TENANT -> ResponseEntity.status(HttpStatus.FOUND)
-                .location(URI.create(oauthService.getAppUrl() +
-                    "/connect/error?code=SHOPIFY_STORE_ALREADY_CONNECTED"))
-                .build();
+            case REJECTED_CROSS_TENANT -> errorRedirect(BrowserError.SHOP_LINKED_ELSEWHERE);
             // Write-site backstop to the initiate()-time assertBoundShop() guard — should not
             // be reachable in normal operation, but kept for switch exhaustiveness and defense
             // in depth in case initiate() is ever bypassed.
-            case REJECTED_SHOP_MISMATCH -> ResponseEntity.status(HttpStatus.FOUND)
-                .location(URI.create(oauthService.getAppUrl() +
-                    "/connect/error?code=SHOPIFY_SHOP_MISMATCH"))
-                .build();
+            case REJECTED_SHOP_MISMATCH -> errorRedirect(BrowserError.SHOP_MISMATCH);
         };
+    }
+
+    /**
+     * Maps a thrown install/callback failure to its browser code. Server-side logging mirrors
+     * what ApiExceptionHandler logged for the same exception before this redirect existed
+     * (ShopifyOAuthException: nothing extra — the service already logs e.g. token-exchange
+     * failures with the cause; DataAccessException / anything else: logged at ERROR).
+     */
+    private ResponseEntity<Void> failureRedirect(Exception e) {
+        if (e instanceof ShopifyOAuthException oauthEx) {
+            return errorRedirect(switch (oauthEx.code()) {
+                case SHOPIFY_STATE_INVALID, SHOPIFY_REQUEST_EXPIRED -> BrowserError.INSTALL_EXPIRED;
+                default -> BrowserError.INSTALL_FAILED;
+            });
+        }
+        if (e instanceof DataAccessException dae) {
+            log.error("Unexpected database error: {}", dae.getMostSpecificCause().getMessage());
+        } else {
+            log.error("Unhandled exception", e);
+        }
+        return errorRedirect(BrowserError.INSTALL_FAILED);
+    }
+
+    private ResponseEntity<Void> errorRedirect(BrowserError code) {
+        return ResponseEntity.status(HttpStatus.FOUND)
+            .location(URI.create(oauthService.getAppUrl()
+                + "/settings?tab=connections&shopify_error=" + code.name()))
+            .build();
     }
 
     // ---- private helpers -----------------------------------------------

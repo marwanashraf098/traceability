@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, FormEvent } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Check, AlertTriangle, ArrowUpRight } from 'lucide-react'
+import { useSearchParams } from 'react-router-dom'
+import { Check, AlertTriangle, ArrowUpRight, X } from 'lucide-react'
 import { Badge, Button, Input, Spinner } from '../../../components/ui'
 import SetupWizard from './SetupWizard'
 import {
@@ -25,6 +26,17 @@ function deriveUiState(shopify: ConnectionsStatus['shopify']): UiState {
   }
   if (shopify.status === 'needs_reauth' || shopify.status === 'error') return 'attention'
   return 'disconnected'
+}
+
+// Codes the OAuth install/callback redirect puts in ?shopify_error= (ShopifyOAuthController
+// .BrowserError). The URL value is only ever used to pick one of these keys — it's never
+// rendered itself; anything else (unknown, empty, tampered) falls back to the generic message.
+const CALLBACK_ERROR_CODES = ['SHOP_LINKED_ELSEWHERE', 'SHOP_MISMATCH', 'INSTALL_EXPIRED', 'INSTALL_FAILED']
+
+function callbackErrorKey(code: string): string {
+  return CALLBACK_ERROR_CODES.includes(code)
+    ? `connections.shopify.callbackError.${code}`
+    : 'connections.shopify.callbackError.generic'
 }
 
 function ShopifyLogo() {
@@ -251,6 +263,19 @@ export default function ShopifyConnectionCard({
   const [attentionReconnecting, setAttentionReconnecting] = useState(false)
   const [attentionError, setAttentionError] = useState('')
 
+  // A failed Shopify connect lands back here as ?shopify_error=CODE. Captured once on
+  // mount, then stripped from the URL (replace, so Back/refresh don't re-show it).
+  const [searchParams, setSearchParams] = useSearchParams()
+  const [callbackError, setCallbackError] = useState<string | null>(() => searchParams.get('shopify_error'))
+  useEffect(() => {
+    if (!searchParams.has('shopify_error')) return
+    setSearchParams(prev => {
+      const next = new URLSearchParams(prev)
+      next.delete('shopify_error')
+      return next
+    }, { replace: true })
+  }, [searchParams, setSearchParams])
+
   const uiState: UiState = override ?? deriveUiState(shopify)
 
   // Reopens the wizard preserving whatever the merchant already typed — used only by
@@ -378,6 +403,21 @@ export default function ShopifyConnectionCard({
         </div>
         <Badge tone={statusPillTone} label={statusPillLabel} />
       </div>
+
+      {callbackError !== null && (
+        <div role="alert" className="flex items-start gap-3 rounded-xl border border-warning/25 bg-warning/10 p-3">
+          <AlertTriangle size={18} className="text-warning flex-shrink-0 mt-0.5" />
+          <p className="text-small text-primary flex-1">{t(callbackErrorKey(callbackError))}</p>
+          <button
+            type="button"
+            onClick={() => setCallbackError(null)}
+            aria-label={t('connections.shopify.callbackError.dismiss')}
+            className="text-muted hover:text-primary flex-shrink-0"
+          >
+            <X size={16} />
+          </button>
+        </div>
+      )}
 
       {uiState === 'disconnected' && (
         <div className="space-y-3">
