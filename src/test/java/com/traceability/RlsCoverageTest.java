@@ -109,6 +109,9 @@ class RlsCoverageTest {
             "/api/v1/exchanges/{id}/outbound-candidates",
             "/api/v1/refunds",
             "/api/v1/returns/awaiting-scan",
+            "/api/v1/return-requests",
+            "/api/v1/return-requests/{id}",
+            "/api/v1/tenant/portal-settings",
             "/api/v1/overview/trends",
             "/api/v1/overview/late-to-pack",
             "/api/v1/overview/top-skus",
@@ -291,6 +294,8 @@ class RlsCoverageTest {
         jdbc.update("DELETE FROM shipments               WHERE tenant_id = ?", tenantId);
         // exchanges.outbound_order_id FKs to orders — delete exchanges first.
         jdbc.update("DELETE FROM exchanges               WHERE tenant_id = ?", tenantId);
+        jdbc.update("DELETE FROM return_request_items    WHERE tenant_id = ?", tenantId);
+        jdbc.update("DELETE FROM return_requests         WHERE tenant_id = ?", tenantId);
         jdbc.update("DELETE FROM order_items             WHERE tenant_id = ?", tenantId);
         jdbc.update("DELETE FROM orders                  WHERE tenant_id = ?", tenantId);
         jdbc.update("DELETE FROM receipts                WHERE tenant_id = ?", tenantId);
@@ -522,6 +527,59 @@ class RlsCoverageTest {
             jdbc.update("DELETE FROM stores    WHERE tenant_id = ?", otherTenant);
             jdbc.update("DELETE FROM tenants   WHERE id = ?", otherTenant);
         }
+    }
+
+    @Test
+    void returnRequests_listAndDetail_crossTenantIsolated_withSameTenantPositiveControl() {
+        UUID mine = seedReturnRequest(tenantId, storeId, "RR-CVG2A3");
+        UUID otherTenant = UUID.randomUUID(), otherStore = UUID.randomUUID();
+        jdbc.update("INSERT INTO tenants (id, name) VALUES (?, 'Cov RR Other')", otherTenant);
+        jdbc.update("INSERT INTO stores (id, tenant_id, platform, shop_domain, status) " +
+                    "VALUES (?, ?, 'shopify', 'cov-rr-other.myshopify.com', 'disconnected')", otherStore, otherTenant);
+        UUID theirs = seedReturnRequest(otherTenant, otherStore, "RR-CVG4B5");
+        try {
+            ResponseEntity<Map> list = get("/api/v1/return-requests", Map.class);
+            assertThat(list.getStatusCode()).isEqualTo(HttpStatus.OK);
+            @SuppressWarnings("unchecked")
+            List<Map<String, Object>> items = (List<Map<String, Object>>) list.getBody().get("items");
+            assertThat(items).as("same-tenant positive control").anyMatch(r -> "RR-CVG2A3".equals(r.get("reference")));
+            assertThat(items).noneMatch(r -> "RR-CVG4B5".equals(r.get("reference")));
+
+            ResponseEntity<Map> own = get("/api/v1/return-requests/" + mine, Map.class);
+            assertThat(own.getStatusCode()).isEqualTo(HttpStatus.OK);
+            assertThat(own.getBody().get("reference")).isEqualTo("RR-CVG2A3");
+            assertThat(get("/api/v1/return-requests/" + theirs, Map.class).getStatusCode())
+                .isEqualTo(HttpStatus.NOT_FOUND);
+        } finally {
+            jdbc.update("DELETE FROM return_request_items WHERE tenant_id IN (?, ?)", tenantId, otherTenant);
+            jdbc.update("DELETE FROM return_requests WHERE tenant_id IN (?, ?)", tenantId, otherTenant);
+            jdbc.update("DELETE FROM orders WHERE tenant_id = ?", otherTenant);
+            jdbc.update("DELETE FROM stores WHERE tenant_id = ?", otherTenant);
+            jdbc.update("DELETE FROM tenants WHERE id = ?", otherTenant);
+        }
+    }
+
+    @Test
+    void portalSettings_returnsOwnTenantsSettings() {
+        jdbc.update("UPDATE tenants SET portal_slug = 'cov-portal', portal_enabled = true WHERE id = ?", tenantId);
+        try {
+            ResponseEntity<Map> resp = get("/api/v1/tenant/portal-settings", Map.class);
+            assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.OK);
+            assertThat(resp.getBody()).containsEntry("slug", "cov-portal").containsEntry("enabled", true)
+                .containsEntry("returnWindowDays", 30);
+        } finally {
+            jdbc.update("UPDATE tenants SET portal_slug = NULL, portal_enabled = false WHERE id = ?", tenantId);
+        }
+    }
+
+    private UUID seedReturnRequest(UUID tenant, UUID store, String reference) {
+        UUID order = jdbc.queryForObject(
+            "INSERT INTO orders (tenant_id, store_id, external_id, number, status, payment_method, placed_at, on_hold) " +
+            "VALUES (?, ?, ?, ?, 'delivered'::order_status, 'cod', now(), false) RETURNING id",
+            UUID.class, tenant, store, "EXT-" + reference, "#" + reference);
+        return jdbc.queryForObject(
+            "INSERT INTO return_requests (tenant_id, order_id, reference) VALUES (?, ?, ?) RETURNING id",
+            UUID.class, tenant, order, reference);
     }
 
     @Test
