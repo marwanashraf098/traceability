@@ -10,13 +10,17 @@ export default defineConfig({
     outDir: '../src/main/resources/static',
     emptyOutDir: true,
     rollupOptions: {
-      // Two separate entry points: standalone SPA (index.html) and the
-      // embedded Shopify App Bridge shell (embedded.html).
+      // Three separate entry points: standalone SPA (index.html), the
+      // embedded Shopify App Bridge shell (embedded.html), and the public
+      // customer returns portal (portal.html, served on returns.tracedtech.com).
       // App Bridge + Polaris are only in the embedded bundle — NOT in the
-      // standalone bundle. Vite tree-shakes and code-splits automatically.
+      // standalone bundle. The portal imports only src/portal/** plus fonts and
+      // libraries — never the app's api client, i18n.ts, shell or router.
+      // Vite tree-shakes and code-splits automatically.
       input: {
         main:     resolve(__dirname, 'index.html'),
         embedded: resolve(__dirname, 'embedded.html'),
+        portal:   resolve(__dirname, 'portal.html'),
       },
     },
   },

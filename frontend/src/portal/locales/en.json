@@ -1,0 +1,103 @@
+{
+  "common": {
+    "poweredBy": "Powered by Traced",
+    "back": "Back",
+    "switchTo": "العربية",
+    "switchToLang": "ar",
+    "switchLabel": "Switch to Arabic",
+    "close": "Close",
+    "optional": "(optional)"
+  },
+  "unavailable": {
+    "title": "This returns page isn't available",
+    "body": "Check the link you were given, or contact the store."
+  },
+  "loadError": {
+    "title": "Something went wrong. Please try again.",
+    "retry": "Try again"
+  },
+  "p1": {
+    "title": "Start a return",
+    "intro": "Enter your order number and the phone number you used when ordering.",
+    "orderLabel": "Order number",
+    "orderPlaceholder": "e.g. #1047",
+    "phoneLabel": "Phone number",
+    "phonePlaceholder": "01X XXXX XXXX",
+    "find": "Find my order",
+    "tryAgain": "Try again",
+    "finding": "Searching…",
+    "windowNote": "Returns are accepted within {{count}} day of delivery.",
+    "windowNote_other": "Returns are accepted within {{count}} days of delivery.",
+    "pickupNote": "The store will arrange a courier to collect the item from your address.",
+    "pickupNoteBooking": "A Bosta courier collects the item from your address.",
+    "orderMissing": "Enter your order number.",
+    "phoneMissing": "Enter the phone number you used when ordering."
+  },
+  "errors": {
+    "notFound": "We couldn't find a returnable order with those details. Check the order number and phone, or contact {{store}}.",
+    "throttled": "Too many attempts for this order. Please try again in an hour, or contact {{store}}.",
+    "generic": "Something went wrong. Please try again.",
+    "expired": "Your session has expired. Please look up your order again.",
+    "conflict": "Some items are no longer available. Please start again.",
+    "invalid": "We couldn't accept this return request. Please start again.",
+    "submitThrottled": "Too many attempts. Please try again later."
+  },
+  "p2": {
+    "step": "Step {{step}} of {{total}}",
+    "title": "What would you like to return?",
+    "orderLine": "Order {{number}} · delivered {{date}}",
+    "quantity": "Quantity",
+    "decrease": "Decrease quantity",
+    "increase": "Increase quantity",
+    "of": "of {{count}}",
+    "reasonLabel": "Why are you returning it?",
+    "reasonPlaceholder": "Choose a reason",
+    "cantReturn": "Can't be returned",
+    "alreadyRequested": "Already in a return request",
+    "selected": "{{count}} item selected",
+    "selected_other": "{{count}} items selected",
+    "noneSelected": "Choose at least one item",
+    "reasonMissing": "Choose a reason for each item",
+    "continue": "Continue"
+  },
+  "reasons": {
+    "wrong_size": "Wrong size",
+    "damaged": "Damaged or faulty",
+    "not_as_pictured": "Not as pictured",
+    "wrong_item": "Wrong item received",
+    "changed_mind": "Changed my mind",
+    "other": "Other"
+  },
+  "p3": {
+    "title": "Almost done",
+    "returning": "Returning",
+    "edit": "Edit",
+    "lineQty": "{{count}} × {{reason}}",
+    "pickup": "Pickup",
+    "pickupText": "The store will arrange a courier to collect the item from the address this order was delivered to.",
+    "pickupTextBooking": "A Bosta courier collects the item from the address this order was delivered to.",
+    "noteLabel": "Anything the store should know?",
+    "emailLabel": "Email for updates",
+    "emailPlaceholder": "you@example.com",
+    "emailInvalid": "Enter a valid email address, or leave it empty.",
+    "send": "Send return request",
+    "sending": "Sending…",
+    "policy": "By sending, you agree to {{store}}'s <policy>return policy</policy>.",
+    "policyTitle": "Return policy"
+  },
+  "p4": {
+    "title": "Request sent",
+    "review": "{{store}} will review your return request.",
+    "approved": "Your return is approved. A courier will contact you to collect it.",
+    "reference": "Your reference",
+    "copy": "Copy",
+    "copied": "Copied",
+    "copyManual": "Select the reference above to copy it.",
+    "nextTitle": "What happens next",
+    "stepReview": "{{store}} reviews your request.",
+    "stepCollect": "{{store}} arranges a courier to collect the item from your address.",
+    "stepCollectBooking": "A Bosta courier collects the item from your address.",
+    "stepRefund": "Your refund is sent once the item has been checked.",
+    "email": "We'll email updates to {{email}}."
+  }
+}
