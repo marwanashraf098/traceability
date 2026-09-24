@@ -229,7 +229,8 @@ Built 2026-08-15 on branch `returns-rebuild`, single cutover, not yet merged. Mo
 - [x] RP.7 [M] Portal branding (V103: logo link on cdn.shopify.com, brand colour, policy text) in settings + public config (Step 4e-A)
 - [x] RP.8 [M] Merchant UI: Exchanges & Refunds → Requests tab (list, drawer, approve/reject) (Step 4e-A)
 - [x] RP.9 [M] Merchant UI: Settings → Returns portal (switches, link, window, auto-approve, non-returnable list, branding) (Step 4e-A)
-- [ ] RP.10 [M] Customer-facing portal UI (Step 4e-B)
+- [x] RP.10 [M] Customer-facing portal UI on returns.tracedtech.com — portal.html entry, P1–P7 (Step 4e-B)
+- [x] RP.12 [M] nginx: portal zone 30r/m burst 15 + JSON 429; returns port-80 block; returns port-443 block (separate commit, after certbot) (Step 4e-B)
 - [ ] RP.11 [M] Bosta pickup booking on approval — pickupBooking true (Step 4c)
 - [x] RS.18 [M] Return session parcel cards (per scanned AWB), feedback strip, footer summary
 - [x] RS.19 [M] Untracked courier return: mark received / undo (no stock change), V101 intake outcome + actor

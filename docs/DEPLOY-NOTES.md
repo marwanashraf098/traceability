@@ -179,42 +179,42 @@ sudo ufw status
 
 ### 2.1 DNS
 
-In Cloudflare:
-- Add an **A record**: `[DOMAIN]` → `[SERVER_IP]`
-- Set proxy status to **Proxied** (orange cloud) — this enables Cloudflare's WAF and DDoS
-  protection, and is required for the `CF-Connecting-IP` header that `deploy/nginx.conf` uses
-  for real-IP extraction
+DNS is at **GoDaddy**; there is **no Cloudflare** (or any other proxy) in front of the server.
+Each hostname is a plain **A record** → `[SERVER_IP]`:
+`app.tracedtech.com`, `tracedtech.com`, `www.tracedtech.com`, `returns.tracedtech.com`.
+Clients connect to nginx directly, so nginx's `$remote_addr` is the real client IP (the
+Cloudflare `set_real_ip_from` lines in `deploy/nginx.conf` are inert — see its header).
 
-> **CF SSL mode**: Set Cloudflare SSL/TLS → Overview → mode to **Full (strict)**.
-> "Flexible" would mean Cloudflare talks HTTP to nginx, which breaks HSTS and leaks traffic.
+### 2.2 Issue TLS certificates (as the server is today)
 
-### 2.2 Issue TLS certificate
+> **⚠ nginx will NOT start with a missing certificate.** `nginx -t` fails hard on any
+> `ssl_certificate` path that doesn't exist, and nginx validates the WHOLE file — one missing
+> certificate takes down every host. A new host's port-443 block is only added to
+> `deploy/nginx.conf` **after** its certificate exists (see §10 for the returns host).
 
-> **⚠ nginx will NOT start without certs.** `deploy/docker-compose.yml` mounts
-> `/etc/letsencrypt:/etc/letsencrypt:ro` into the nginx container. If the cert files are
-> absent, nginx exits immediately and the `depends_on: service_healthy` condition is never met.
-> **Issue the cert on the host BEFORE running compose up.**
-
-`deploy/nginx.conf` serves the certbot HTTP-01 challenge at `/.well-known/acme-challenge/`
-from `/var/www/certbot`. Issue using standalone mode (simpler for first-time):
+All certificates are issued by the host's **system certbot** in **webroot** mode. nginx serves
+the HTTP-01 challenge from `/var/www/certbot` on every port-80 block
+(`location /.well-known/acme-challenge/`), and `deploy/docker-compose.yml` mounts
+`/var/www/certbot` and `/etc/letsencrypt` read-only into the nginx container.
 
 ```bash
-sudo apt install -y certbot
-
-# Standalone mode — runs its own temporary HTTP server on port 80.
-# Port 80 must be free (nothing bound yet — this runs before compose up).
-sudo certbot certonly --standalone \
-  -d [DOMAIN] \
-  --agree-tos \
-  -m [OPERATOR-SUPPLIED: your-email@example.com]
+sudo certbot certonly --webroot -w /var/www/certbot -d app.tracedtech.com
+sudo certbot certonly --webroot -w /var/www/certbot -d tracedtech.com -d www.tracedtech.com
+sudo certbot certonly --webroot -w /var/www/certbot -d returns.tracedtech.com   # §10
 ```
 
-Certs land at:
-- `/etc/letsencrypt/live/[DOMAIN]/fullchain.pem`
-- `/etc/letsencrypt/live/[DOMAIN]/privkey.pem`
+| Certificate | Names |
+|---|---|
+| `/etc/letsencrypt/live/app.tracedtech.com/` | app.tracedtech.com |
+| `/etc/letsencrypt/live/tracedtech.com/` | tracedtech.com, www.tracedtech.com |
+| `/etc/letsencrypt/live/returns.tracedtech.com/` | returns.tracedtech.com (§10) |
 
-These are the exact paths `deploy/nginx.conf` references (lines `ssl_certificate` and
-`ssl_certificate_key`).
+> **Do not use `--standalone`.** It needs port 80 free, which it never is while nginx runs, so a
+> standalone certificate cannot renew. **2026-09-24:** the app.tracedtech.com certificate was
+> found expiring the same day — its renewal config was `authenticator = standalone` (from the
+> original first-boot issuance) and every renewal had failed to bind port 80. It was re-issued
+> via `--webroot`, which also switched its renewal config to webroot. Check any certificate with
+> `sudo grep authenticator /etc/letsencrypt/renewal/*.conf` — every line must say `webroot`.
 
 ### 2.3 Patch `YOUR_DOMAIN` in nginx.conf
 
@@ -231,16 +231,25 @@ Verify:
 grep YOUR_DOMAIN deploy/nginx.conf   # must return nothing
 ```
 
-### 2.4 Auto-renewal cron
+### 2.4 Auto-renewal (certbot.timer + deploy hook)
 
+Renewal is the **system `certbot.timer`** (installed by the certbot package; runs
+`certbot renew` twice a day). There is **no root crontab** entry — do not add one.
+
+- `certbot renew` replays each certificate's saved method, so every certificate issued with
+  `--webroot -w /var/www/certbot` renews through the running nginx with no downtime.
+- A **deploy hook** at `/etc/letsencrypt/renewal-hooks/deploy/reload-nginx.sh` reloads nginx
+  after each successful renewal, so the new certificate is picked up.
+
+Checks:
 ```bash
-sudo crontab -e
+systemctl list-timers | grep certbot                     # timer active, next run shown
+sudo certbot renew --dry-run                             # every certificate must succeed
+sudo grep authenticator /etc/letsencrypt/renewal/*.conf  # all 'webroot'
+ls -l /etc/letsencrypt/renewal-hooks/deploy/             # reload-nginx.sh present, executable
 ```
 
-Add:
-```cron
-0 3 * * * certbot renew --quiet && docker compose -f /opt/traced/deploy/docker-compose.yml exec nginx nginx -s reload
-```
+The repository on the server is at **`/home/traced/traceability`**.
 
 ---
 
@@ -529,6 +538,58 @@ Before handing the URL to pilots:
 
 ---
 
+## 10. Returns portal host — returns.tracedtech.com (Step 4e-B)
+
+The customer returns portal is served on its own host. nginx maps `/{slug}` to the app's
+`/portal.html` and proxies only `/assets/` and `/api/v1/portal/**`; everything else is 404 there.
+It ships in **two deploys** so the new certificate can be issued in between.
+
+**1. DNS** — GoDaddy A record `returns.tracedtech.com` → `[SERVER_IP]`. *(Done.)*
+Check: `dig +short returns.tracedtech.com` returns the server IP.
+
+**2. Deploy group 1** (everything except the returns port-443 block: the portal bundle,
+`GET /portal.html` permitAll, portal rate limit 30r/m burst 15 with a JSON 429, and the returns
+**port-80** block). It has no certificate dependency.
+```bash
+cd /home/traced/traceability
+git pull
+sudo docker compose -f deploy/docker-compose.yml up -d --build app
+sudo docker compose -f deploy/docker-compose.yml restart nginx   # re-reads nginx.conf
+curl -sI http://returns.tracedtech.com/ | head -3                # 301 → https://returns.tracedtech.com/
+```
+
+**3. Issue the certificate** (webroot — nginx keeps running):
+```bash
+sudo certbot certonly --webroot -w /var/www/certbot -d returns.tracedtech.com
+sudo ls /etc/letsencrypt/live/returns.tracedtech.com/          # fullchain.pem, privkey.pem
+sudo grep authenticator /etc/letsencrypt/renewal/returns.tracedtech.com.conf   # webroot
+```
+
+**4. Deploy group 2** (the single commit adding the returns port-443 block). Test the NEW file
+before restarting — `nginx -t` inside the running container would read the file it started
+with, because `nginx.conf` is a single-file bind mount:
+```bash
+cd /home/traced/traceability
+git pull
+sudo docker run --rm --network deploy_internal \
+  -v "$PWD/deploy/nginx.conf:/etc/nginx/nginx.conf:ro" \
+  -v /etc/letsencrypt:/etc/letsencrypt:ro \
+  nginx:1.27-alpine nginx -t          # network: the compose network (`docker network ls`)
+# only if the test is successful:
+sudo docker compose -f deploy/docker-compose.yml restart nginx
+```
+
+**5. Verify:**
+```bash
+curl -sI https://returns.tracedtech.com/[slug] | grep -iE '^HTTP|content-security|x-frame'
+curl -s  https://returns.tracedtech.com/api/v1/portal/[slug]/config          # JSON config
+curl -sI https://returns.tracedtech.com/api/v1/auth/login | head -1          # 404
+curl -sI https://returns.tracedtech.com/actuator/health | head -1            # 404
+sudo certbot renew --dry-run
+```
+
+---
+
 ## Quick reference
 
 ```bash
@@ -550,6 +611,6 @@ docker compose -f deploy/docker-compose.yml ps
 # Health check
 curl -s https://[DOMAIN]/actuator/health
 
-# Renew cert manually
-sudo certbot renew && docker compose -f deploy/docker-compose.yml exec nginx nginx -s reload
+# Renew certs manually (normally certbot.timer does this; the deploy hook reloads nginx)
+sudo certbot renew
 ```

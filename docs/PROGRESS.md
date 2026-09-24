@@ -4,6 +4,43 @@
 
 ## Current state
 
+**Returns portal Step 4e-B — customer portal on returns.tracedtech.com — built 2026-09-24 on branch `feature/portal-4e-customer` (not merged, not deployed).**
+Mockups `design/returns-portal/P1–P7`. Two deploy groups: **group 1** = everything below except
+the returns port-443 block; **group 2** = one commit adding only that block, deployed after
+`certbot certonly --webroot -w /var/www/certbot -d returns.tracedtech.com` (runbook:
+`docs/DEPLOY-NOTES.md` §10).
+- **Frontend:** third Vite input `portal: portal.html` → `static/portal.html` + `assets/portal-*.js/.css`.
+  `src/portal/**` imports nothing from the merchant app (no `api.ts`, `src/i18n.ts`, router, shell,
+  `index.css`); own fetch wrapper (`credentials: 'omit'`, Bearer = lookup token on submit only), own
+  i18next instance + `src/portal/locales/{en,ar}.json`, plain CSS (`.pp-*`), self-hosted fontsource.
+  Language: saved (`localStorage traced.portal.lang`) → browser `ar*` → English; toggle sets `<html dir/lang>`.
+  Brand: `brandColor ?? #3656E0`; button text white or #141821 at ≥ 4.5:1, else default blue + white.
+  `frontend/scripts/check-portal-bundle.mjs` (run after a build) follows every file `portal.html` loads
+  and fails on the app's token-refresh path or merchant-only strings.
+- **Backend:** `SecurityConfig` permits `GET /portal.html` only (test fixture
+  `src/test/resources/static/portal.html`; the real one is Vite output, never committed).
+- **nginx (group 1):** portal zone 30r/m, burst 15; nginx's own 429 on `/api/v1/portal/` →
+  `{"message":"Too many attempts. Please try again later."}` JSON via `error_page 429 = @portal_429`;
+  returns port-80 block (ACME + 301); stale "commented out"/Cloudflare-edge comments fixed
+  (Cloudflare `real_ip` directives kept, documented as inert).
+- **nginx (group 2):** returns port-443 block — `/assets/`, `^~ /api/v1/portal/` (zone + JSON 429),
+  `= /` and `^/[a-z0-9-]{3,40}/?$` rewritten to `/portal.html`, everything else 404; own CSP,
+  X-Frame-Options DENY; forwarded headers overwritten (`X-Forwarded-For $remote_addr`,
+  `Forwarded ""`, `CF-Connecting-IP ""`).
+- **Mockup vs behaviour:** see the Step 4e-B report — pre-4c pickup copy (no city/area, no "Bosta
+  courier collects"), no "Contact {store}" link (no contact data in config), no "Back to store",
+  IBM Plex Mono → self-hosted Geist Mono (no third-party requests).
+- **DEPLOY-NOTES §2.1/§2.2/§2.4** now match the server: GoDaddy DNS, no Cloudflare; all certificates
+  `--webroot /var/www/certbot`, renewed by `certbot.timer` + deploy hook
+  `/etc/letsencrypt/renewal-hooks/deploy/reload-nginx.sh`, no root crontab; repo at
+  `/home/traced/traceability`. 2026-09-24: the app certificate was found expiring the same day
+  (renewal was `standalone`, couldn't bind port 80) and was re-issued via webroot.
+- **Gotcha:** `nginx.conf` is a single-file bind mount — `nginx -t` inside the running container tests
+  the file it started with, not a freshly pulled one. Test with a one-off container (§10 step 4).
+- **Flaky test (pre-existing):** `ShopifyMagicLinkTest.expiry_expiredToken_isMagicLinkInvalid` inserts a
+  token expired 1 s ago by the JVM clock and is checked against Postgres `now()` — fails when the Docker
+  VM clock lags. Passed on re-run.
+
 **Returns portal Step 4e-A — merchant side: Requests tab, approve/reject, portal settings, branding — built 2026-09-24 on branch `feature/portal-4e-merchant` (not merged).**
 Stacked on `feature/portal-4b-requests` (main does not contain Step 4b, whose endpoints this step uses).
 Mockups `design/returns-portal/M1–M4`. No Bosta calls, no customer-facing UI, no piece moves.
