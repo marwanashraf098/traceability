@@ -1286,7 +1286,7 @@
         "cta": "أعد الاتصال"
       },
       "callbackError": {
-        "SHOP_LINKED_ELSEWHERE": "متجر Shopify هذا مرتبط بالفعل بحساب Traced مختلف. سجّل الدخول إلى ذلك الحساب لإدارته، أو أزِل تثبيت Traced من المتجر أولاً.",
+        "SHOP_LINKED_ELSEWHERE": "متجر Shopify هذا مرتبط بالفعل بحساب Traced مختلف. سجّل الدخول إلى ذلك الحساب لإدارته.",
         "SHOP_MISMATCH": "حساب Traced هذا مرتبط بالفعل بمتجر Shopify مختلف.",
         "INSTALL_EXPIRED": "انتهت صلاحية طلب الربط مع Shopify. يرجى محاولة الربط مرة أخرى.",
         "INSTALL_FAILED": "تعذّر ربط متجر Shopify الخاص بك. يرجى المحاولة مرة أخرى.",

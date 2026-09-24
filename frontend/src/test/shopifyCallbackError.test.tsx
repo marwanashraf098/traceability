@@ -56,7 +56,7 @@ const GENERIC = "Couldn't connect your Shopify store. Please try again."
 
 const CASES: Array<[string, string]> = [
   ['SHOP_LINKED_ELSEWHERE',
-    'This Shopify store is already connected to a different Traced account. Sign in to that account to manage it, or uninstall Traced from the store first.'],
+    'This Shopify store is already connected to a different Traced account. Sign in to that account to manage it.'],
   ['SHOP_MISMATCH', 'This Traced account is already connected to a different Shopify store.'],
   ['INSTALL_EXPIRED', 'The Shopify connection request expired. Please try connecting again.'],
   ['INSTALL_FAILED', GENERIC],
