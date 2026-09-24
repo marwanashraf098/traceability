@@ -1,1 +1,0 @@
-if(matchMedia('(max-width: 899px)').matches&&!location.search.includes('desktop')){location.replace('mobile.html'+location.hash);}

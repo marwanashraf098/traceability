@@ -1,0 +1,292 @@
+/* Traced: phone layout (<900px). Loaded only on small screens; desktop untouched. */
+html.m{scroll-behavior:auto}
+html.m body{overflow-x:clip}
+
+/* ---- nav: wordmark, menu button, Start free ---- */
+html.m .nav{gap:14px;height:64px}
+html.m .links{position:fixed;left:0;right:0;top:64px;display:none;flex-direction:column;align-items:stretch;gap:0;padding:8px var(--pad) 18px;background:var(--bar-bg,#111315);border-bottom:1px solid var(--bar-line,rgba(255,255,255,.1));backdrop-filter:blur(16px)}
+html.m .nav.open .links{display:flex}
+html.m .nav.open{--bar-bg:rgba(17,19,21,.96)}
+html.m .nav[data-theme="light"].open{--bar-bg:rgba(247,248,250,.97)}
+html.m .links .lnk{height:52px;font-size:17px;border-bottom:1px solid rgba(128,128,128,.14);padding:0}
+html.m .links .lnk::after{display:none}
+html.m .right .lnk{display:none}
+html.m .right{gap:10px;margin-left:auto}
+html.m .cta span{height:36px;padding:0 16px;font-size:14px}
+html.m .mbtn{display:inline-flex;align-items:center;gap:8px;height:36px;padding:0 12px;border-radius:99px;border:1px solid rgba(128,128,128,.28);background:transparent;color:inherit;font:inherit;font-size:13px;cursor:pointer}
+html.m .mbtn svg{width:14px;height:14px;transition:transform .3s}
+html.m .nav.open .mbtn svg{transform:rotate(180deg)}
+
+/* ---- the travelling dot, thread and fixed layers: off on phones ---- */
+html.m .tdot,html.m .tline,html.m .fb-sky,html.m .fb-pin{display:none!important}
+
+/* ---- hero: copy, then the phone only ---- */
+html.m #hero{height:auto!important;min-height:100svh;padding:96px var(--pad) 0!important;position:relative!important;--stage-h:520px}
+html.m .cine-spacer{display:none}
+html.m #hero h1{font-size:clamp(34px,10.5vw,44px);letter-spacing:-.04em;line-height:1.02}
+html.m #hero .sub{font-size:16px;max-width:34ch}
+html.m #hero .ctas{flex-direction:column;align-items:stretch;width:100%;gap:12px}
+html.m #hero .ctas .cta span{justify-content:center;height:50px;font-size:16px}
+html.m #hero .ctas .quiet{justify-content:center;height:50px}
+html.m #hero .stage{height:520px;margin-top:20px;overflow:hidden}
+html.m #hero .thread,html.m .rig .card,html.m .rig .dots{display:none!important}
+html.m #hero .stage{height:auto;margin:28px 0 0;overflow:visible;display:flex;justify-content:center}
+html.m .rig{position:relative!important;left:auto!important;bottom:auto!important;margin:0!important;width:270px!important;aspect-ratio:auto!important;height:560px;transform:none!important}
+html.m .rig .shot,html.m .rig .vbez,html.m .rig .lapglass{display:none!important}
+html.m .rig .phglass{position:absolute!important;left:0!important;top:0!important;width:270px!important;height:560px!important;transform:none!important;clip-path:none!important;border-radius:40px;background:#0B0C0E;padding:10px;box-sizing:border-box;box-shadow:0 40px 90px -30px rgba(0,0,0,.6),0 0 0 1px rgba(17,19,21,.25),inset 0 0 0 2px #2A2D33;opacity:1!important;visibility:visible!important}
+html.m .rig .phglass .scr{border-radius:32px;overflow:hidden;height:100%}
+html.m .rig .phglass::before{content:"";position:absolute;left:50%;top:12px;translate:-50% 0;width:90px;height:26px;border-radius:99px;background:#0B0C0E;z-index:3}
+html.m #hero .band{display:block;top:auto;bottom:-10%;height:60%}
+html.m .trust{position:relative!important;height:auto;margin:28px calc(-1 * var(--pad)) 0;padding:16px var(--pad);gap:14px;flex-wrap:wrap;justify-content:center;border-top:1px solid #E2E4E8;background:#F7F8FA}
+html.m #hero .recede{display:flex;flex-direction:column}
+html.m .trust .logos{display:flex}
+html.m .lg{font-size:15px}
+html.m #hero .kicker,html.m #hero h1,html.m #hero .sub,html.m #hero .ctas,html.m #hero .trust{opacity:1!important;transform:none!important}
+html.m .recede{transform:none!important;opacity:1!important}
+html.m #hero .inkrise,html.m #hero .band{display:none}
+
+/* ---- features: intro, then stacked cards each with its own screen ---- */
+html.m .feat{background:#111315}
+html.m #features.feat{margin-top:0!important}
+html.m .fb-introwrap{height:auto;padding:72px var(--pad) 36px;z-index:auto}
+html.m .fb-intro{opacity:1!important;transform:none!important;position:static;height:auto;padding:0;justify-content:flex-start;max-width:none}
+html.m .fb-intro p{max-width:none!important}
+html.m .fb-intro h2{font-size:clamp(32px,9.5vw,40px)}
+html.m .fb-intro p{font-size:16px}
+html.m .fb-stack{padding:0 var(--pad)}
+html.m .fb-card{height:auto;grid-template-columns:1fr;padding:24px 22px 0;gap:18px;margin-bottom:14px;opacity:1!important;transform:none!important}
+html.m .fb-card h3{font-size:clamp(26px,7.5vw,32px)}
+html.m .fb-card p{font-size:15px}
+html.m .fb-card .fb-win{position:relative!important;left:auto!important;top:auto!important;width:100%!important;height:auto!important;aspect-ratio:16/10;border-radius:12px 12px 0 0;overflow:hidden;box-shadow:0 -20px 50px -30px rgba(0,0,0,.5)}
+html.m .fb-card .fb-win .fb-demo{position:relative;opacity:1!important;visibility:visible!important;height:100%;container-type:inline-size}
+html.m .fb-card .fb-win .fb-scr{border-radius:12px 12px 0 0;height:100%}
+html.m .fb-tailwrap{height:auto;padding:40px var(--pad) 80px}
+html.m .fb-tail{position:static;grid-template-columns:1fr;gap:20px;opacity:1!important;transform:none!important}
+html.m .fb-tail h3{font-size:clamp(28px,8vw,36px)}
+html.m .fb-list{max-height:none;overflow:visible;mask:none;-webkit-mask:none}
+html.m .fb-list li{padding:14px 0;font-size:16px}
+html.m .fb-mshot{width:100%;aspect-ratio:16/10;border-radius:12px;overflow:hidden;background:#15181C;margin-top:16px;position:relative}
+html.m .fb-mshot .fb-tshot{position:absolute;inset:0;opacity:0;transition:opacity .4s}
+html.m .fb-mshot .fb-tshot.on{opacity:1}
+
+/* ---- use cases: dial above, list below, section scrolls normally ---- */
+html.m .ucd{height:auto!important;margin-top:0!important;padding:72px 0 60px!important}
+html.m .ucd .ucstage{position:static;height:auto;overflow:visible;pointer-events:auto}
+html.m .ucd .dialwrap{position:relative;height:92vw;max-height:440px;pointer-events:none;display:grid;place-items:center}
+html.m .ucd .dialwrap::before{content:"";position:absolute;left:50%;top:50%;width:70vw;height:70vw;max-width:340px;max-height:340px;translate:-50% -50%;border-radius:50%;border:1px solid rgba(255,255,255,.16)}
+html.m .ucd .dialwrap::after{content:"";position:absolute;left:50%;top:50%;width:52vw;height:52vw;max-width:250px;max-height:250px;translate:-50% -50%;border-radius:50%;border:1px dashed rgba(255,255,255,.14)}
+html.m .ucd .dialwrap{--cx:50%}
+html.m .ucd .dial{display:none!important}
+html.m .ucd .dial{translate:-50% -50%;left:50%!important;top:50%!important}
+html.m .ucd .dial .ring{stroke-dashoffset:0!important;stroke-dasharray:none!important;stroke:rgba(255,255,255,.22)}
+html.m .ucd .dial .ticks,html.m .ucd .dial #stops{opacity:1!important}
+html.m .ucd .core{left:50%!important;top:50%!important}
+html.m .ucd .orbit{left:50%!important;top:50%!important;opacity:1!important;transform:none!important}
+html.m .ucd .pop{width:24vw;max-width:116px;position:absolute;left:0;top:0;translate:-50% -50%;transform:translate(calc(var(--px,0) * 1px),calc(var(--py,0) * 1px)) scale(var(--ps,1))!important;transition:transform .9s var(--ease),opacity .6s}
+html.m .ucd .dialwrap{overflow:visible}
+html.m .ucd .dial .ring.outer{stroke:rgba(255,255,255,.14)}
+html.m .ucd .dial .ticks{opacity:1;stroke:rgba(255,255,255,.3)}
+html.m .ucd .orbit{transition:transform .9s var(--ease)}
+html.m .ucd .pop{opacity:var(--po,.5)!important;transition:opacity .6s,transform .9s var(--ease)}
+html.m .ucd .core{opacity:1!important;transform:none!important}
+html.m .ucd .pop{width:26vw}
+html.m .ucd .col{position:static;translate:none;transform:none!important;opacity:1!important;padding:28px var(--pad) 0;width:auto}
+html.m .ucd h2{font-size:clamp(32px,9.5vw,42px)}
+html.m .ucd .ctas{flex-direction:column;margin:22px 0 28px}
+html.m .ucd .pill{justify-content:center;height:50px}
+html.m .ucd .item{grid-template-columns:44px 1fr;gap:14px;padding:14px 16px}
+html.m .ucd .item b{line-height:44px;font-size:16px}
+html.m .ucd .ic{width:44px;height:44px}
+html.m .ucd .item p{font-size:14.5px}
+html.m .ucd .wmreveal{display:none}
+
+/* ---- testimonials ---- */
+html.m .ts{height:auto!important;margin-top:0!important;padding:60px 0 40px!important}
+html.m .ts .tswrap{position:static;height:auto;display:block;overflow:visible}
+html.m .ts .head{opacity:1!important;transform:none!important;padding:0 var(--pad);flex-direction:column;align-items:flex-start;gap:14px}
+html.m .ts h2{font-size:clamp(30px,9vw,40px)}
+html.m .ts .avdot{background:#4477FF;border-radius:50%;width:.22em;height:.22em;top:-.06em;margin:0 .04em}
+html.m .ts .ul svg path{stroke-dashoffset:0}
+html.m .ts .rail{opacity:1;transform:none}
+html.m .ts .tq{width:300px}
+
+/* ---- pricing ---- */
+html.m .pr{padding:80px 0 80px!important;background:#F7F8FA!important}
+html.m .pr-stage{padding:0 var(--pad);min-height:0}
+html.m .pr h2{font-size:clamp(32px,9.5vw,42px)}
+html.m .pr .calc,html.m .pr .grid,html.m .pr .plans{grid-template-columns:1fr!important}
+html.m .pr .pr-in{opacity:1!important;transform:none!important}
+html.m .pr .plan .dotslot{display:none}
+
+/* ---- integrations ---- */
+html.m .ig{padding:80px var(--pad) 70px!important;background:#111315!important}
+html.m .ig h2{font-size:clamp(30px,9vw,40px)}
+html.m .ig-globe{display:none}
+html.m .ig-in{opacity:1!important;transform:none!important}
+html.m .ig-stack{grid-auto-flow:row;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;overflow:visible;justify-items:stretch}
+html.m .ig-tile{width:auto;height:64px}
+html.m .ig-logo{width:100%;height:22px;padding:0 10px;box-sizing:border-box}
+html.m .ig-logo img{max-height:18px;max-width:80px}
+html.m .ig-tile small{font-size:9px}
+html.m .ig-rows{margin-top:20px}
+html.m .ig-rows{display:grid;gap:0}
+html.m .ig-r{position:static;height:auto;padding:16px 0;border-top:1px solid rgba(255,255,255,.08);display:grid;grid-template-columns:8px 1fr;gap:14px;align-items:start}
+html.m .ig-r i{margin-top:8px}
+html.m .ig-r b{font-size:17px;margin-bottom:4px}
+html.m .ig-r.soon{opacity:.6}
+html.m .ig-r span{font-size:14px}
+html.m .ig-note{margin-top:30px}
+
+/* ---- why: no pin; the three beats stacked ---- */
+html.m .why{height:auto!important;padding:80px var(--pad) 70px!important;background:#111315}
+html.m .why .scene{position:static;height:auto;overflow:visible}
+html.m .why .wfield,html.m .why .edge,html.m .why .vig{display:none}
+html.m .why .bleed .aur{opacity:.35}
+html.m .why .wcopy{position:static;transform:none;max-width:none;text-align:left;padding:0}
+html.m .why .wcopy h2{font-size:clamp(30px,9vw,40px);text-align:left}
+html.m .why .wcopy h2 .w{display:block}
+html.m .why .wcopy h2 .w svg{opacity:1!important}
+html.m .why .wcopy p{text-align:left;max-width:none}
+html.m .why .wdots{justify-content:flex-start}
+html.m .why .by{text-align:left}
+html.m .why .by::before{margin-left:0}
+html.m .why .mbeats{display:grid;gap:26px;margin:32px 0 0}
+html.m .why .mbeat b{display:block;font-size:24px;font-weight:500;letter-spacing:-.03em;color:#4477FF;margin-bottom:8px}
+html.m .why .mbeat p{margin:0 0 14px;font-size:15.5px;line-height:1.5;color:#B4B9C2}
+html.m .why .mbeats .pc{position:static;translate:none;transform:none;opacity:1;width:auto;max-width:340px}
+html.m .why .wcopy h2 .w,html.m .why .wcopy h2 .l3,html.m .why .wcopy h2 .w *{display:none!important}
+html.m .why .wcopy{position:static!important;translate:none!important;transform:none!important;width:auto!important;z-index:auto}
+html.m .why .scene{position:static!important}
+html.m .why .wcopy h2 .l2{display:block;color:#F2F4F8}
+html.m .why .wcopy #sub,html.m .why .wdots{display:none!important}
+html.m .why .mbeat .pc .wcard{max-width:100%}
+
+/* ---- faq ---- */
+html.m .fq{padding:80px var(--pad) 60px!important;background:#F7F8FA!important}
+html.m .fq h2{font-size:clamp(30px,9vw,40px)}
+html.m .fq-grid{margin-top:32px}
+html.m .fq-in{opacity:1!important;transform:none!important}
+html.m .fq-more{flex-direction:row}
+
+
+/* ===== pass 2: alignment and rhythm ===== */
+/* hero */
+html.m #hero .sub:not(.tk .sub){display:block!important;margin:14px auto 0;font-size:16px;max-width:32ch}
+html.m #hero h1:not(.tk h1){font-size:clamp(34px,10.5vw,44px)!important}
+html.m #hero{padding:92px var(--pad) 0!important;--stage-h:auto}
+html.m #hero .stage{height:auto!important;margin:26px 0 0!important}
+html.m .rig{width:236px!important;height:490px!important}
+html.m .rig .phglass{width:236px!important;height:490px!important;border-radius:36px;padding:9px}
+html.m .rig .phglass .scr{border-radius:28px}
+html.m .rig .phglass::before{width:80px;height:24px;top:10px}
+html.m .trust{flex-direction:column;align-items:flex-start;gap:14px;padding:18px var(--pad) 22px}
+html.m .trust .demo{width:100%;justify-content:flex-start;height:auto;font-size:15px}
+html.m .trust .logos{width:100%;justify-content:flex-start;gap:18px;flex-wrap:wrap;height:auto;overflow:visible;mask:none;-webkit-mask:none;animation:none!important}
+html.m .trust .logos > *{animation:none!important;transform:none!important}
+html.m .lg{font-size:14px}
+html.m .lg.soon::after{margin-left:6px}
+
+/* features */
+html.m .fb-intro{width:100%!important;max-width:none!important;padding:0!important}
+html.m .fb-intro h2{max-width:none!important}
+html.m .fb-card{padding:22px 20px 0!important}
+html.m .fb-card h3{max-width:none!important;padding:0!important;margin:0}
+html.m .fb-card p{max-width:none!important}
+html.m .fb-card .fb-win{margin:6px -20px 0;width:calc(100% + 40px)!important;border-radius:0}
+html.m .fb-card .fb-win .fb-scr{border-radius:0}
+html.m .fb-tail{padding:0!important;height:auto!important;display:flex;flex-direction:column}
+html.m .fb-tail h3{padding:0!important}
+html.m .fb-mshot{order:2;margin:18px 0 0;position:sticky;top:76px;z-index:2;box-shadow:0 30px 60px -30px rgba(0,0,0,.8)}
+html.m .fb-list{order:3;margin-top:18px}
+html.m .fb-tail .fb-mute{display:block}
+
+/* use cases */
+html.m .ucd .dialwrap{height:84vw;max-height:400px}
+html.m .ucd .col{padding-top:20px}
+
+/* testimonials */
+html.m .ts .head{gap:10px}
+html.m .ts .avg{align-items:center;gap:12px}
+html.m .ts .avg b{font-size:34px;line-height:1}
+html.m .ts .avdot{display:inline-block;width:.16em;height:.16em;border-radius:50%;background:#4477FF;vertical-align:baseline;margin:0 .06em;top:0}
+
+/* pricing */
+html.m .pr-stage{padding:0 var(--pad)!important}
+html.m .pr .plans{gap:14px}
+
+/* integrations: 2 columns, Traced tile spans the row */
+html.m .ig-stack{grid-template-columns:repeat(2,minmax(0,1fr))}
+html.m .ig-tile.core{grid-column:1 / -1}
+html.m .ig-tile{height:70px}
+html.m .ig-logo img{max-height:20px;max-width:96px}
+
+/* why */
+html.m .why .wcopy h2{font-size:clamp(32px,9.5vw,42px)}
+html.m .why .mbeats{margin-top:28px;gap:22px}
+html.m .why .mbeat .pc{max-width:none;width:100%}
+html.m .why .by{margin-top:36px}
+
+/* global: kill leftover desktop max-widths and inner paddings in single column */
+html.m .ucd .col,html.m .ts .head,html.m .ig-wrap,html.m .fq-wrap,html.m .pr-stage{max-width:none}
+html.m .k{margin-bottom:12px}
+
+html.m .fb-card .fb-copy,html.m .fb-card > div:first-child{padding:0!important;max-width:none!important;width:100%!important;margin:0!important}
+html.m .fb-card h3,html.m .fb-card p{width:100%;max-width:none!important;padding:0!important;margin-right:0!important}
+html.m .fb-card .fb-txt{padding:0!important;max-width:none!important;width:100%!important}
+
+html.m .mbtn{height:38px;padding:0 14px 0 16px;border-radius:99px;font-size:14px;font-weight:500;letter-spacing:0;display:inline-flex;align-items:center;gap:8px;
+  background:rgba(17,19,21,.06);border:1px solid rgba(17,19,21,.22);color:#111315;transition:background .3s,border-color .3s,color .3s}
+html.m .nav:not(.is-light) .mbtn{background:rgba(255,255,255,.08);border-color:rgba(255,255,255,.28);color:#F2F4F8}
+html.m .mbtn svg{width:14px;height:14px;stroke-width:2.2}
+html.m .mbtn.open{background:#111315;color:#F2F4F8;border-color:#111315}
+html.m .nav:not(.is-light) .mbtn.open{background:#F2F4F8;color:#111315;border-color:#F2F4F8}
+
+/* feature card head: kicker sits beside the headline, not above it */
+html.m .fb-card .fb-txt{display:grid;grid-template-columns:auto minmax(0,1fr);column-gap:14px;align-items:start}
+html.m .fb-card .fb-n{grid-column:1;grid-row:1;margin:0;padding-top:9px;white-space:nowrap}
+html.m .fb-card h3{grid-column:2;grid-row:1;font-size:clamp(24px,7vw,30px);line-height:1.05}
+html.m .fb-card p{grid-column:1 / -1;grid-row:2;margin-top:14px}
+
+/* tail screen: sits right under the headline, fixed aspect, shots visible */
+html.m .fb-mshot{order:initial;position:relative;top:auto;margin:20px 0 6px;width:100%;aspect-ratio:16/10;border-radius:14px;overflow:hidden;background:#fff;box-shadow:0 30px 60px -30px rgba(0,0,0,.8);border:1px solid rgba(255,255,255,.1)}
+html.m .fb-mshot .pane{position:absolute;inset:0;opacity:1!important;visibility:visible!important;height:100%}
+html.m .fb-mshot .appmount{position:absolute;inset:0;height:100%;width:100%;container-type:inline-size}
+html.m .fb-mshot .fb-tshot{position:absolute;inset:0;opacity:0;visibility:hidden;transition:opacity .4s}
+html.m .fb-mshot .fb-tshot.on{opacity:1;visibility:visible}
+html.m .fb-mshot .tk{height:100%;font-size:2.6cqw}
+html.m .fb-list{order:initial}
+
+/* ===== polish pass ===== */
+/* hero: the Start free pill fills its full-width wrapper, no ghost behind it */
+html.m #hero .ctas .cta{display:block;width:100%}
+html.m #hero .ctas .cta .rim{display:block;width:100%;background:none!important;box-shadow:none!important;padding:0!important}
+html.m #hero .ctas .cta span{display:flex;width:100%;box-sizing:border-box}
+/* hero: nothing floats over the phone */
+html.m #hero .stage > .card,html.m #hero .stage > .dots,html.m #hero .stage > svg{display:none!important}
+html.m .rig .phglass{box-shadow:0 40px 80px -30px rgba(17,19,21,.45),0 0 0 1px rgba(17,19,21,.08)}
+/* tail screen: phone-native view of the app (no sidebar, readable type, taller) */
+html.m .fb-mshot{aspect-ratio:4/3;border-radius:16px}
+html.m .fb-mshot .tk{grid-template-columns:1fr!important;font-size:3.4cqw!important}
+html.m .fb-mshot .tk-side{display:none!important}
+html.m .fb-mshot .tk-page{padding:4cqw!important}
+html.m .fb-mshot .tk-top{padding:2.6cqw 4cqw!important}
+html.m .fb-mshot .tk h1{font-size:5.2cqw!important}
+html.m .fb-mshot .tk-card{border-radius:2.4cqw}
+html.m .fb-mshot .fb-tshot{overflow:hidden}
+
+/* feature-card screens: same phone-native app view */
+html.m .fb-card .fb-win{aspect-ratio:4/3;height:auto!important}
+html.m .fb-card .fb-win .tk{grid-template-columns:1fr!important;font-size:3.4cqw!important}
+html.m .fb-card .fb-win .tk-side{display:none!important}
+html.m .fb-card .fb-win .tk-page{padding:4cqw!important}
+html.m .fb-card .fb-win .tk-top{padding:2.6cqw 4cqw!important}
+html.m .fb-card .fb-win .tk h1{font-size:5.2cqw!important}
+
+html.m #fbTailList,html.m .fb-list ul{position:static!important;top:auto!important;transform:none!important;height:auto!important;margin:0!important}
+html.m .fb-list{position:static!important;height:auto!important;min-height:0!important}
+html.m .fb-tail p{margin-top:18px}
+
+/* pricing: recommended plan gets a flat tint on phones (the desktop radial wash bands at this width) */
+html.m .pr .plan.rec{background:#F2F6FF!important;border:1px solid #D6E0FF!important;box-shadow:none!important;background-image:none!important}
+html.m .pr .plan.rec::before,html.m .pr .plan.rec::after{display:none!important}
+html.m .pr .plan{background-image:none!important}
