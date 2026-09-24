@@ -73,7 +73,12 @@ public class ReturnRequestService {
         List<Map<String, Object>> rows = jdbc.queryForList(
             "SELECT rr.id, rr.reference, rr.order_id, o.number AS order_number, o.customer_name, " +
             "       rr.type, rr.status::text AS status, rr.customer_email, rr.customer_note, rr.created_at, " +
-            "       rr.decided_at, rr.decided_by, u.name AS decided_by_name, rr.rejection_reason, rr.return_shipment_id " +
+            "       rr.decided_at, rr.decided_by, u.name AS decided_by_name, rr.rejection_reason, rr.return_shipment_id, " +
+            "       o.customer_phone, o.address->>'city' AS address_city, o.address->>'zone' AS address_zone, " +
+            "       (SELECT s.delivered_at FROM shipments s " +
+            "         WHERE s.order_id = rr.order_id AND s.tenant_id = rr.tenant_id " +
+            "           AND s.shipment_leg = 'forward' AND s.delivered_at IS NOT NULL " +
+            "         ORDER BY s.delivered_at DESC, s.id DESC LIMIT 1) AS delivered_at " +
             "FROM return_requests rr " +
             "JOIN orders o ON o.id = rr.order_id AND o.tenant_id = rr.tenant_id " +
             "LEFT JOIN users u ON u.id = rr.decided_by " +
@@ -104,6 +109,11 @@ public class ReturnRequestService {
         d.put("status", r.get("status"));
         d.put("email", r.get("customer_email"));
         d.put("note", r.get("customer_note"));
+        // Step 4e-A (M2): phone, delivery date and pickup area for the merchant's drawer.
+        d.put("customerPhone", r.get("customer_phone"));
+        d.put("deliveredAt", r.get("delivered_at"));
+        d.put("pickupCity", r.get("address_city"));
+        d.put("pickupZone", r.get("address_zone"));
         d.put("createdAt", r.get("created_at"));
         d.put("decidedAt", r.get("decided_at"));
         d.put("decidedBy", r.get("decided_by"));

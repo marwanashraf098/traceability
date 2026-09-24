@@ -112,6 +112,7 @@ class RlsCoverageTest {
             "/api/v1/return-requests",
             "/api/v1/return-requests/{id}",
             "/api/v1/tenant/portal-settings",
+            "/api/v1/variants",
             "/api/v1/overview/trends",
             "/api/v1/overview/late-to-pack",
             "/api/v1/overview/top-skus",
@@ -569,6 +570,33 @@ class RlsCoverageTest {
                 .containsEntry("returnWindowDays", 30);
         } finally {
             jdbc.update("UPDATE tenants SET portal_slug = NULL, portal_enabled = false WHERE id = ?", tenantId);
+        }
+    }
+
+    @Test
+    void variants_crossTenantIsolated_withSameTenantPositiveControl() {
+        UUID otherTenant = UUID.randomUUID(), otherStore = UUID.randomUUID();
+        UUID otherProduct = UUID.randomUUID(), otherVariant = UUID.randomUUID();
+        jdbc.update("INSERT INTO tenants (id, name) VALUES (?, 'Cov Variants Other')", otherTenant);
+        jdbc.update("INSERT INTO stores (id, tenant_id, platform, shop_domain, status) " +
+                    "VALUES (?, ?, 'shopify', 'cov-var-other.myshopify.com', 'disconnected')", otherStore, otherTenant);
+        jdbc.update("INSERT INTO products (id, tenant_id, store_id, external_id, title, status) " +
+                    "VALUES (?, ?, ?, 'P-CVG-O', 'Coverage Widget', 'active')", otherProduct, otherTenant, otherStore);
+        jdbc.update("INSERT INTO variants (id, tenant_id, product_id, external_id, title, sku, non_returnable) " +
+                    "VALUES (?, ?, ?, 'V-CVG-O', 'Other', 'CVG-OTHER', true)", otherVariant, otherTenant, otherProduct);
+        try {
+            ResponseEntity<Map> resp = get("/api/v1/variants?search=coverage", Map.class);
+            assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.OK);
+            @SuppressWarnings("unchecked")
+            List<Map<String, Object>> items = (List<Map<String, Object>>) resp.getBody().get("items");
+            assertThat(items).as("same-tenant positive control").anyMatch(v -> variantId.toString().equals(v.get("id")));
+            assertThat(items).noneMatch(v -> otherVariant.toString().equals(v.get("id")));
+            assertThat(resp.getBody()).containsEntry("total", items.size());
+        } finally {
+            jdbc.update("DELETE FROM variants WHERE tenant_id = ?", otherTenant);
+            jdbc.update("DELETE FROM products WHERE tenant_id = ?", otherTenant);
+            jdbc.update("DELETE FROM stores WHERE tenant_id = ?", otherTenant);
+            jdbc.update("DELETE FROM tenants WHERE id = ?", otherTenant);
         }
     }
 

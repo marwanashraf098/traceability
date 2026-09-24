@@ -31,6 +31,9 @@ public class PortalService {
     public static final List<String> REASON_CODES =
         List.of("wrong_size", "damaged", "not_as_pictured", "wrong_item", "changed_mind", "other");
 
+    /** Step 4c books the Bosta pickup on approval; until then this is false everywhere. */
+    public static final boolean PICKUP_BOOKING = false;
+
     static final int THROTTLE_MAX_FAILURES = 5;
     static final int THROTTLE_WINDOW_MINUTES = 60;
 
@@ -63,11 +66,18 @@ public class PortalService {
         if (tenantId == null) return Optional.empty();
         return Optional.ofNullable(TenantContext.runAs(tenantId, () -> tx.execute(s -> {
             Map<String, Object> t = jdbc.queryForMap(
-                "SELECT name, customer_return_window_days FROM tenants WHERE id = ?", tenantId);
+                "SELECT name, customer_return_window_days, portal_auto_approve, " +
+                "       portal_logo_url, portal_brand_color, portal_policy_text " +
+                "FROM tenants WHERE id = ?", tenantId);
             Map<String, Object> body = new LinkedHashMap<>();
             body.put("storeName", t.get("name"));
             body.put("returnWindowDays", t.get("customer_return_window_days"));
             body.put("reasonCodes", REASON_CODES);
+            body.put("logoUrl", t.get("portal_logo_url"));
+            body.put("brandColor", t.get("portal_brand_color"));
+            body.put("policyText", t.get("portal_policy_text"));
+            body.put("autoApprove", t.get("portal_auto_approve"));
+            body.put("pickupBooking", PICKUP_BOOKING);
             return body;
         })));
     }

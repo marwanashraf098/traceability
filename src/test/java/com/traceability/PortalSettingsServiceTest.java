@@ -67,6 +67,7 @@ class PortalSettingsServiceTest {
     }
 
     private void failUpdateWith(RuntimeException e) {
-        when(jdbc.update(startsWith(UPDATE_PREFIX), any(), any(), any(), any(), any())).thenThrow(e);
+        // 8 bind args: slug, enabled, autoApprove, window, logoUrl, brandColor, policyText (V103), id.
+        when(jdbc.update(startsWith(UPDATE_PREFIX), any(), any(), any(), any(), any(), any(), any(), any())).thenThrow(e);
     }
 }

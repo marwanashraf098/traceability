@@ -2,10 +2,12 @@ package com.traceability.portal;
 
 import com.traceability.identity.CustomUserDetails;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
 
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.UUID;
 
@@ -68,8 +70,27 @@ public class ReturnsPortalAdminController {
 
     @PutMapping("/tenant/portal-settings")
     @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
-    public Map<String, Object> putSettings(@RequestBody(required = false) PortalSettingsService.Settings body) {
-        return settings.update(body);
+    public ResponseEntity<Map<String, Object>> putSettings(@RequestBody(required = false) PortalSettingsService.Settings body) {
+        try {
+            return ResponseEntity.ok(settings.update(body));
+        } catch (PortalSettingsService.FieldException e) {
+            // Answered here with a body (the global ResponseStatusException handler is bodyless),
+            // so the settings page can put the error next to the right field.
+            Map<String, Object> err = new LinkedHashMap<>();
+            err.put("field", e.field());
+            err.put("error", e.code());
+            err.put("message", e.getReason());
+            return ResponseEntity.status(e.getStatusCode()).body(err);
+        }
+    }
+
+    /** Step 4e-A — variant list for the "products that can't be returned" setting. */
+    @GetMapping("/variants")
+    @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
+    public Map<String, Object> listVariants(@RequestParam(required = false) String search,
+                                            @RequestParam(defaultValue = "0")  int page,
+                                            @RequestParam(defaultValue = "25") int size) {
+        return settings.listVariants(search, Math.max(page, 0), Math.min(Math.max(size, 1), 100));
     }
 
     public record NonReturnableRequest(Boolean value) {}
