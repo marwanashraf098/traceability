@@ -226,6 +226,11 @@ Built 2026-08-15 on branch `returns-rebuild`, single cutover, not yet merged. Mo
 - [x] RP.4 [M] nginx portal rate-limit zone
 - [x] RP.5 [M] Portal request submission + merchant approval (Step 4b)
 - [x] RP.6 [M] Portal settings (slug/enabled/auto-approve/window) + variant non-returnable flag (Step 4b)
+- [x] RP.7 [M] Portal branding (V103: logo link on cdn.shopify.com, brand colour, policy text) in settings + public config (Step 4e-A)
+- [x] RP.8 [M] Merchant UI: Exchanges & Refunds → Requests tab (list, drawer, approve/reject) (Step 4e-A)
+- [x] RP.9 [M] Merchant UI: Settings → Returns portal (switches, link, window, auto-approve, non-returnable list, branding) (Step 4e-A)
+- [ ] RP.10 [M] Customer-facing portal UI (Step 4e-B)
+- [ ] RP.11 [M] Bosta pickup booking on approval — pickupBooking true (Step 4c)
 - [x] RS.18 [M] Return session parcel cards (per scanned AWB), feedback strip, footer summary
 - [x] RS.19 [M] Untracked courier return: mark received / undo (no stock change), V101 intake outcome + actor
 - [x] RS.20 [M] `return_to_receive` exception (MEDIUM) + E&R "Received · not tracked"

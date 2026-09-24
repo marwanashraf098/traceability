@@ -4,6 +4,34 @@
 
 ## Current state
 
+**Returns portal Step 4e-A — merchant side: Requests tab, approve/reject, portal settings, branding — built 2026-09-24 on branch `feature/portal-4e-merchant` (not merged).**
+Stacked on `feature/portal-4b-requests` (main does not contain Step 4b, whose endpoints this step uses).
+Mockups `design/returns-portal/M1–M4`. No Bosta calls, no customer-facing UI, no piece moves.
+- **V103:** `tenants.portal_logo_url` (CHECK `LIKE 'https://cdn.shopify.com/%'`), `portal_brand_color`
+  (CHECK `^#[0-9A-Fa-f]{6}$`), `portal_policy_text` (CHECK ≤ 2000). Nullable, no backfill.
+  `MigrationSmokeTest` 101→102, `NotTracedBackfillTest` 46→47.
+- **Settings PUT** now carries `logoUrl/brandColor/policyText` (full replace — absent/blank → NULL), validated
+  as 400s before the single UPDATE. Every settings 400/409 now has a body `{field, error, message}`
+  (error codes `SLUG_FORMAT/SLUG_RESERVED/SLUG_REQUIRED/SLUG_TAKEN/WINDOW_RANGE/LOGO_URL/BRAND_COLOR/POLICY_LENGTH/REQUIRED`) —
+  answered in `ReturnsPortalAdminController` because the global `ResponseStatusException` handler is bodyless.
+  GET also returns read-only `pickupBooking` (constant `PortalService.PICKUP_BOOKING = false` until Step 4c).
+- **Public config** adds `logoUrl, brandColor, policyText, autoApprove, pickupBooking:false` — nothing else.
+- **`GET /api/v1/variants?search=&page=&size=`** (owner/manager): id, productTitle, variantTitle, sku,
+  nonReturnable; ILIKE on product title / variant title / SKU with `%`/`_` literal; ORDER BY product title,
+  variant title, id; `{items, total}`. In `RlsCoverageTest.COVERED` with a cross-tenant test.
+- **Request detail** adds `customerPhone`, `deliveredAt` (latest forward-leg `delivered_at`), `pickupCity/pickupZone`
+  (`orders.address` city/zone) for the M2 drawer.
+- **UI:** E&R gains a "Requests" tab (owner/manager only; "{n} new" badge = `status=requested` total) with its
+  own paginated fetch (25/page), drawer (M2) and inline reject form (M3, ≤ 300, counter). Pre-4c footer copy:
+  "After approving, book the pickup in Bosta." 409 → "This request was already decided — refreshed." + reload.
+  Existing E&R tabs untouched (the stat chips hide only while Requests is active). Settings gains a
+  "Returns portal" tab (`?tab=portal`, owner/manager): switches (`role="switch"`), link + Copy, window,
+  auto-approve, non-returnable list (each switch saves immediately), Branding (logo link + preview, colour,
+  policy). `Tabs` got an optional `badge`, `Toggle` an optional `ariaLabel`, `CopyRow` exports `writeToClipboard`.
+- **Mockup vs behaviour:** order number in the drawer is plain text (no `/orders/:id` route exists);
+  auto-approve helper doesn't promise a Bosta booking before 4c; M4 is a Settings tab, not a standalone page;
+  the "Exchanges" tab the mockup omits is kept.
+
 **Shopify OAuth connect failures now visible — built 2026-09-24 on branch `feature/portal-4b-requests` (uncommitted; display-only).**
 - Every failure in `/auth/shopify/install` and `/auth/shopify/callback` → 302 to
   `{appUrl}/settings?tab=connections&shopify_error=CODE` (codes only: `SHOP_LINKED_ELSEWHERE`,
