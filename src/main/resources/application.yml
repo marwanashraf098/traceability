@@ -32,12 +32,28 @@ spring:
 
 server:
   port: ${PORT:8080}
-  # Honor X-Forwarded-Proto / X-Forwarded-Host from nginx so Spring builds redirect URLs
-  # with the external https:// scheme instead of the internal http:// scheme used on the
-  # Docker-internal network between nginx and the app container.  Without this, Spring's
+  # Honor X-Forwarded-For / -Proto / -Host from nginx so the app sees the real client IP and
+  # builds redirect URLs with the external https://app.tracedtech.com instead of the internal
+  # http:// address on the Docker network. Without the scheme, Spring's
   # redirect:/auth/shopify/install produces Location: http://... which Shopify refuses to
   # follow, breaking dashboard-initiated installs.
-  forward-headers-strategy: framework
+  #
+  # native = Tomcat's RemoteIpValve. Unlike the old `framework` strategy it trusts these
+  # headers ONLY when the TCP peer is an internal proxy, takes the client IP as the rightmost
+  # X-Forwarded-For entry that isn't an internal proxy (client-prepended values are ignored),
+  # and ignores the RFC 7239 `Forwarded` header entirely. nginx overwrites all of these
+  # headers anyway (deploy/nginx.conf); this is the second layer.
+  forward-headers-strategy: native
+  tomcat:
+    remoteip:
+      # Only nginx, on the internal Docker bridge network, may reach the app (the app's port
+      # is not published — deploy/docker-compose.yml). These are Spring Boot 3.3.5's default
+      # private ranges, stated explicitly: 10/8, 192.168/16, 169.254/16, 127/8, 100.64/10,
+      # 172.16/12, ::1. The Docker bridge network sits inside 172.16/12.
+      internal-proxies: '10\.\d{1,3}\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3}|169\.254\.\d{1,3}\.\d{1,3}|127\.\d{1,3}\.\d{1,3}\.\d{1,3}|100\.6[4-9]{1}\.\d{1,3}\.\d{1,3}|100\.[7-9]{1}\d{1}\.\d{1,3}\.\d{1,3}|100\.1[0-1]{1}\d{1}\.\d{1,3}\.\d{1,3}|100\.12[0-7]{1}\.\d{1,3}\.\d{1,3}|172\.1[6-9]{1}\.\d{1,3}\.\d{1,3}|172\.2[0-9]{1}\.\d{1,3}\.\d{1,3}|172\.3[0-1]{1}\.\d{1,3}\.\d{1,3}|0:0:0:0:0:0:0:1|::1'
+      remote-ip-header: X-Forwarded-For
+      protocol-header: X-Forwarded-Proto
+      host-header: X-Forwarded-Host
 
 app:
   jwt:
