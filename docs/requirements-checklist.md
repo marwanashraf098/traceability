@@ -224,7 +224,8 @@ Built 2026-08-15 on branch `returns-rebuild`, single cutover, not yet merged. Mo
 - [x] RP.2 [M] Hatch #14 `resolve_tenant_by_portal_slug` built
 - [x] RP.3 [M] Public `GET /api/v1/portal/{slug}/config` + `POST /api/v1/portal/{slug}/lookup` (generic failures, throttle, HMAC token, no PII)
 - [x] RP.4 [M] nginx portal rate-limit zone
-- [ ] RP.5 [M] Portal request submission + merchant approval (Step 4b)
+- [x] RP.5 [M] Portal request submission + merchant approval (Step 4b)
+- [x] RP.6 [M] Portal settings (slug/enabled/auto-approve/window) + variant non-returnable flag (Step 4b)
 - [x] RS.18 [M] Return session parcel cards (per scanned AWB), feedback strip, footer summary
 - [x] RS.19 [M] Untracked courier return: mark received / undo (no stock change), V101 intake outcome + actor
 - [x] RS.20 [M] `return_to_receive` exception (MEDIUM) + E&R "Received · not tracked"

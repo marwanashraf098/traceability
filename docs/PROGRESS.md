@@ -4,6 +4,29 @@
 
 ## Current state
 
+**Returns portal Step 4b — customer requests, merchant approve/reject, portal settings — built 2026-09-24 on branch `feature/portal-4b-requests` (not merged).**
+Backend only; no frontend, no Bosta calls, no emails, no piece moves (InventoryLedger untouched).
+- **V102:** `return_requests.reference` NOT NULL (`RR-` + 6 chars from `23456789ABCDEFGHJKLMNPQRSTUVWXYZ`;
+  CHECK accepts 4+; UNIQUE(tenant_id, reference); generated in `PortalService` with a pre-checked
+  retry loop), `customer_note` (CHECK ≤ 300).
+- **Public submit** `POST /api/v1/portal/{slug}/requests`: Bearer lookup token verified (signature,
+  expiry, tenant == slug's tenant) else 401 generic. Eligibility re-checked from scratch (shared
+  `deliveredWithinWindow()`), specific free delivered pieces bound `ORDER BY created_at, id`, request +
+  items in one tx. Race on `return_request_items_one_active_per_piece` → 409 (only that index name;
+  other unique violations rethrow). Invalid line / out of window → 400 generic. `portal_auto_approve`
+  → `approved`, `decided_by` NULL. Response `{reference, status}` only; email/note/phone never logged.
+  The controller parses the raw body itself (malformed JSON → 400, not the catch-all's 500).
+- **Merchant** (`ReturnsPortalAdminController`, owner/manager): `GET /return-requests` (`{items, total}`,
+  created_at DESC, id DESC), `GET /return-requests/{id}`, `POST …/approve`, `POST …/reject {reason}`
+  — only from `requested` (else 409; unknown id 404). Reject deactivates the items, so those pieces
+  are returnable again.
+- **Settings:** `GET/PUT /tenant/portal-settings`, `PUT /variants/{id}/non-returnable`. Slug lowercased,
+  format + reserved list → 400; enabled needs a slug; window 1–90. **Taken slug under RLS:** the
+  global UNIQUE on `tenants.portal_slug` is enforced across all rows regardless of RLS, so the single
+  UPDATE of our own row raises `tenants_portal_slug_unique` → 409 (constraint name matched; nothing
+  else maps). One UPDATE statement → all-or-nothing. **No new SECURITY DEFINER; hatch count stays 14.**
+- No audit-log entry for settings changes yet.
+
 **Returns Step 5 — parcel cards, untracked courier returns, "Return To Receive" — built 2026-09-23 on branch `feature/returns-parcel-cards` (not merged).**
 Mockups: `design/returns-parcel-states/1–7`. No pieces created or moved, no Shopify writes.
 - **V101:** `shipments.return_intake_outcome` (`scanned` | `received_untracked`), `return_intake_by`
