@@ -2045,3 +2045,144 @@ export interface RefundLeg {
 export function getRefunds(page = 0, size = 100) {
   return request<RefundLeg[]>(`/refunds?page=${page}&size=${size}`)
 }
+
+// ── Returns portal — merchant side (Step 4b API, Step 4e-A UI) ─────────────────
+
+export type ReturnRequestStatus =
+  | 'requested' | 'approved' | 'rejected' | 'pickup_booked' | 'received'
+  | 'refund_pending' | 'refunded' | 'cancelled'
+
+export interface ReturnRequestRow {
+  id: string
+  reference: string
+  orderNumber: string
+  customerName: string | null
+  itemCount: number
+  reasonCodes: string[]
+  status: ReturnRequestStatus
+  createdAt: string
+}
+
+export interface ReturnRequestPage {
+  items: ReturnRequestRow[]
+  total: number
+}
+
+export interface ReturnRequestItem {
+  id: string
+  pieceId: string
+  shortCode: string
+  variantId: string
+  productTitle: string
+  variantTitle: string | null
+  imageUrl: string | null
+  reasonCode: string
+  active: boolean
+}
+
+export interface ReturnRequestDetail {
+  id: string
+  reference: string
+  orderId: string
+  orderNumber: string
+  customerName: string | null
+  customerPhone: string | null
+  type: string
+  status: ReturnRequestStatus
+  email: string | null
+  note: string | null
+  createdAt: string
+  deliveredAt: string | null
+  pickupCity: string | null
+  pickupZone: string | null
+  decidedAt: string | null
+  decidedBy: string | null
+  decidedByName: string | null
+  rejectionReason: string | null
+  returnShipmentId: string | null
+  items: ReturnRequestItem[]
+}
+
+export function getReturnRequests(page = 0, size = 25, status?: ReturnRequestStatus) {
+  const params = new URLSearchParams({ page: String(page), size: String(size) })
+  if (status) params.set('status', status)
+  return request<ReturnRequestPage>(`/return-requests?${params.toString()}`)
+}
+
+export function getReturnRequest(id: string) {
+  return request<ReturnRequestDetail>(`/return-requests/${id}`)
+}
+
+export function approveReturnRequest(id: string) {
+  return request<void>(`/return-requests/${id}/approve`, { method: 'POST' })
+}
+
+export function rejectReturnRequest(id: string, reason: string) {
+  return request<void>(`/return-requests/${id}/reject`, { method: 'POST', body: JSON.stringify({ reason }) })
+}
+
+export interface PortalSettings {
+  slug: string | null
+  enabled: boolean
+  autoApprove: boolean
+  returnWindowDays: number
+  logoUrl: string | null
+  brandColor: string | null
+  policyText: string | null
+  /** Read-only — false until Step 4c books the Bosta pickup on approval. */
+  pickupBooking: boolean
+}
+
+export type PortalSettingsInput = Omit<PortalSettings, 'pickupBooking'>
+
+export function getPortalSettings() {
+  return request<PortalSettings>('/tenant/portal-settings')
+}
+
+/** A 400/409 from PUT /tenant/portal-settings, tied to one field when {@code field} is set. */
+export class PortalSettingsError extends Error {
+  constructor(
+    public readonly status: number,
+    public readonly field: string | null,
+    public readonly code: string | null,
+  ) {
+    super(`${status}: ${code ?? 'error'}`)
+  }
+}
+
+/** Reads the error body (field + code) — the shared request() drops it. */
+export async function savePortalSettings(input: PortalSettingsInput): Promise<PortalSettings> {
+  const token = getAccessToken()
+  const res = await fetch(`${BASE}/tenant/portal-settings`, {
+    method: 'PUT',
+    credentials: 'include',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+    body: JSON.stringify(input),
+  })
+  if (!res.ok) {
+    const body = await res.json().catch(() => null) as { field?: string | null; error?: string } | null
+    throw new PortalSettingsError(res.status, body?.field ?? null, body?.error ?? null)
+  }
+  return res.json()
+}
+
+export interface PortalVariantRow {
+  id: string
+  productTitle: string
+  variantTitle: string | null
+  sku: string | null
+  nonReturnable: boolean
+}
+
+export function getPortalVariants(search: string, page = 0, size = 25) {
+  const params = new URLSearchParams({ page: String(page), size: String(size) })
+  if (search.trim()) params.set('search', search.trim())
+  return request<{ items: PortalVariantRow[]; total: number }>(`/variants?${params.toString()}`)
+}
+
+export function setVariantNonReturnable(id: string, value: boolean) {
+  return request<void>(`/variants/${id}/non-returnable`, { method: 'PUT', body: JSON.stringify({ value }) })
+}

@@ -925,7 +925,8 @@
       "refunds": "استرجاع",
       "exchanges": "استبدال",
       "inTransit": "في الطريق",
-      "received": "تم الاستلام"
+      "received": "تم الاستلام",
+      "requests": "الطلبات"
     },
     "chips": {
       "total": "الإجمالي",
@@ -1010,6 +1011,73 @@
         "autoMatchedBadge": "مطابقة تلقائية — بحاجة إلى مراجعة",
         "autoMatchedNote": "تمت مطابقة المتغير الصادر تلقائيًا من وصف شركة الشحن. يرجى التأكد من صحته قبل تجهيز هذا الطلب.",
         "changeVariantButton": "تغيير المتغير"
+      }
+    },
+    "requests": {
+      "newBadge": "{{count}} جديد",
+      "newBadge_other": "{{count}} جديدة",
+      "columns": {
+        "reference": "المرجع",
+        "customer": "العميل",
+        "order": "الطلب",
+        "items": "القطع",
+        "reasons": "السبب",
+        "sent": "أُرسل",
+        "status": "الحالة"
+      },
+      "status": {
+        "requested": "بانتظار القرار",
+        "approved": "مقبول",
+        "rejected": "مرفوض",
+        "pickup_booked": "تم حجز الاستلام",
+        "received": "تم الاستلام",
+        "refund_pending": "بانتظار الاسترداد",
+        "refunded": "تم الاسترداد",
+        "cancelled": "ملغي"
+      },
+      "reasons": {
+        "wrong_size": "مقاس غير مناسب",
+        "damaged": "تالف أو به عيب",
+        "not_as_pictured": "مختلف عن الصورة",
+        "wrong_item": "منتج خاطئ",
+        "changed_mind": "غيّرت رأيي",
+        "other": "سبب آخر"
+      },
+      "reasonSeparator": "، ",
+      "sentToday": "اليوم، {{time}}",
+      "sentYesterday": "أمس",
+      "empty": "لا توجد طلبات إرجاع بعد",
+      "pageRange": "{{from}}–{{to}} من {{total}}",
+      "prev": "السابق",
+      "next": "التالي",
+      "drawer": {
+        "label": "طلب الإرجاع {{reference}}",
+        "customer": "العميل",
+        "phone": "الهاتف",
+        "order": "الطلب",
+        "delivered": "تم التوصيل {{date}}",
+        "sent": "أُرسل",
+        "pickup": "الاستلام",
+        "email": "البريد الإلكتروني",
+        "items": "القطع ({{count}})",
+        "note": "ملاحظة العميل",
+        "rejectionReason": "سبب الرفض",
+        "decidedBy": "قرار {{name}} · {{date}}",
+        "decidedAuto": "قُبل تلقائيًا · {{date}}",
+        "helperManual": "بعد القبول، احجز الاستلام من بوسطة.",
+        "helperBooking": "القبول يحجز استلامًا من بوسطة من عنوان العميل.",
+        "approve": "قبول",
+        "reject": "رفض",
+        "cancel": "إلغاء",
+        "rejectConfirm": "رفض الطلب",
+        "rejectLabel": "سبب الرفض",
+        "rejectVisible": "— سيراه العميل",
+        "rejectRequired": "اكتب سبب الرفض.",
+        "approved": "تم قبول الطلب",
+        "rejected": "تم رفض الطلب",
+        "conflict": "تم البت في هذا الطلب بالفعل — تم التحديث.",
+        "actionFailed": "تعذّر الحفظ. حاول مرة أخرى.",
+        "loadError": "تعذّر تحميل هذا الطلب"
       }
     }
   },
@@ -1402,7 +1470,8 @@
       "users": "المستخدمون",
       "locations": "المواقع",
       "usersSubtitle": "الفريق",
-      "locationsSubtitle": "المستودعات والمواقع"
+      "locationsSubtitle": "المستودعات والمواقع",
+      "portal": "بوابة الإرجاع"
     },
     "sections": {
       "businessDetails": "تفاصيل النشاط التجاري",
@@ -1449,6 +1518,68 @@
       "termsVersion": "إصدار شروط الخدمة",
       "acceptedAt": "تاريخ الموافقة",
       "none": "لا يوجد سجل موافقة."
+    },
+    "portal": {
+      "loadError": "تعذّر تحميل إعدادات بوابة الإرجاع",
+      "on": "مفعّل",
+      "off": "متوقف",
+      "enabled": {
+        "title": "يمكن للعملاء بدء الإرجاع",
+        "description": "عند التفعيل، يمكن لأي شخص لديه رابط البوابة طلب إرجاع لطلب تم توصيله."
+      },
+      "link": {
+        "label": "رابط البوابة",
+        "copy": "نسخ الرابط",
+        "copied": "تم النسخ",
+        "help": "أضف هذا الرابط إلى تذييل متجرك أو إلى صفحة \"الإرجاع\" في Shopify. حروف إنجليزية صغيرة وأرقام وشرطات فقط."
+      },
+      "window": {
+        "label": "مدة الإرجاع",
+        "suffix": "يوم بعد التوصيل (1–90)"
+      },
+      "autoApprove": {
+        "title": "قبول الطلبات تلقائيًا",
+        "description": "عند التفعيل، يُقبل كل طلب فور إرساله. ما زلت تحجز الاستلام من بوسطة.",
+        "descriptionBooking": "عند التفعيل، يُقبل كل طلب فور إرساله ويُحجز استلام بوسطة مباشرة."
+      },
+      "products": {
+        "title": "منتجات لا يمكن إرجاعها",
+        "description": "يرى العملاء هذه المنتجات لكن لا يمكنهم اختيارها.",
+        "searchLabel": "ابحث في المنتجات",
+        "searchPlaceholder": "ابحث بالمنتج أو SKU",
+        "nonReturnable": "لا يمكن إرجاعه",
+        "returnable": "قابل للإرجاع",
+        "switchLabel": "{{name}} لا يمكن إرجاعه",
+        "empty": "لا توجد منتجات مطابقة.",
+        "showMore": "عرض {{count}} أخرى",
+        "showMore_other": "عرض {{count}} أخرى",
+        "loadFailed": "تعذّر تحميل المنتجات.",
+        "saveFailed": "تعذّر حفظ هذا المنتج. حاول مرة أخرى."
+      },
+      "branding": {
+        "title": "الهوية",
+        "description": "كيف تظهر صفحة الإرجاع لعملائك.",
+        "logoLabel": "رابط الشعار",
+        "logoHelp": "ارفع شعارك في Shopify ← المحتوى ← الملفات، ثم الصق رابطه هنا.",
+        "logoPreview": "معاينة الشعار",
+        "colorLabel": "لون العلامة",
+        "colorPicker": "اختر لون العلامة",
+        "policyLabel": "سياسة الإرجاع"
+      },
+      "save": "حفظ التغييرات",
+      "saved": "تم حفظ إعدادات بوابة الإرجاع",
+      "saveFailed": "تعذّر الحفظ. حاول مرة أخرى.",
+      "errors": {
+        "SLUG_FORMAT": "استخدم من 3 إلى 40 حرفًا إنجليزيًا صغيرًا أو رقمًا أو شرطة.",
+        "SLUG_RESERVED": "هذا العنوان محجوز. اختر عنوانًا آخر.",
+        "SLUG_REQUIRED": "اختر عنوانًا قبل تفعيل البوابة.",
+        "SLUG_TAKEN": "هذا العنوان مستخدم بالفعل.",
+        "WINDOW_RANGE": "أدخل عدد أيام من 1 إلى 90.",
+        "LOGO_URL": "الصق رابطًا يبدأ بـ https://cdn.shopify.com/",
+        "BRAND_COLOR": "استخدم لونًا بصيغة hex مثل #1A2B3C.",
+        "POLICY_LENGTH": "الحد الأقصى للسياسة 2000 حرف.",
+        "generic": "راجع الحقول المحددة وحاول مرة أخرى."
+      }
     }
   },
   "users": {

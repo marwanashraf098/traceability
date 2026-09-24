@@ -929,7 +929,8 @@
       "refunds": "Refunds",
       "exchanges": "Exchanges",
       "inTransit": "In transit",
-      "received": "Received"
+      "received": "Received",
+      "requests": "Requests"
     },
     "chips": {
       "total": "Total",
@@ -1014,6 +1015,73 @@
         "autoMatchedBadge": "Auto-matched — review",
         "autoMatchedNote": "The outbound variant was matched automatically from the courier's description. Please confirm it's correct before this order is packed.",
         "changeVariantButton": "Change variant"
+      }
+    },
+    "requests": {
+      "newBadge": "{{count}} new",
+      "newBadge_other": "{{count}} new",
+      "columns": {
+        "reference": "Reference",
+        "customer": "Customer",
+        "order": "Order",
+        "items": "Items",
+        "reasons": "Reason",
+        "sent": "Sent",
+        "status": "Status"
+      },
+      "status": {
+        "requested": "Requested",
+        "approved": "Approved",
+        "rejected": "Rejected",
+        "pickup_booked": "Pickup booked",
+        "received": "Received",
+        "refund_pending": "Refund pending",
+        "refunded": "Refunded",
+        "cancelled": "Cancelled"
+      },
+      "reasons": {
+        "wrong_size": "Wrong size",
+        "damaged": "Damaged or faulty",
+        "not_as_pictured": "Not as pictured",
+        "wrong_item": "Wrong item sent",
+        "changed_mind": "Changed my mind",
+        "other": "Other"
+      },
+      "reasonSeparator": ", ",
+      "sentToday": "Today, {{time}}",
+      "sentYesterday": "Yesterday",
+      "empty": "No return requests yet",
+      "pageRange": "{{from}}–{{to}} of {{total}}",
+      "prev": "Previous",
+      "next": "Next",
+      "drawer": {
+        "label": "Return request {{reference}}",
+        "customer": "Customer",
+        "phone": "Phone",
+        "order": "Order",
+        "delivered": "delivered {{date}}",
+        "sent": "Sent",
+        "pickup": "Pickup",
+        "email": "Email",
+        "items": "Items ({{count}})",
+        "note": "Customer's note",
+        "rejectionReason": "Reason for rejecting",
+        "decidedBy": "Decided by {{name}} · {{date}}",
+        "decidedAuto": "Approved automatically · {{date}}",
+        "helperManual": "After approving, book the pickup in Bosta.",
+        "helperBooking": "Approving books a Bosta pickup from the customer's address.",
+        "approve": "Approve",
+        "reject": "Reject",
+        "cancel": "Cancel",
+        "rejectConfirm": "Reject request",
+        "rejectLabel": "Reason for rejecting",
+        "rejectVisible": "— the customer will see this",
+        "rejectRequired": "Add a reason for rejecting.",
+        "approved": "Request approved",
+        "rejected": "Request rejected",
+        "conflict": "This request was already decided — refreshed.",
+        "actionFailed": "Couldn't save that. Please try again.",
+        "loadError": "Couldn't load this request"
       }
     }
   },
@@ -1406,7 +1474,8 @@
       "users": "Users",
       "locations": "Locations",
       "usersSubtitle": "Team",
-      "locationsSubtitle": "Warehouses & locations"
+      "locationsSubtitle": "Warehouses & locations",
+      "portal": "Returns portal"
     },
     "sections": {
       "businessDetails": "Business details",
@@ -1453,6 +1522,68 @@
       "termsVersion": "Terms of Service version",
       "acceptedAt": "Accepted on",
       "none": "No consent record on file."
+    },
+    "portal": {
+      "loadError": "Couldn't load the returns portal settings",
+      "on": "On",
+      "off": "Off",
+      "enabled": {
+        "title": "Customers can start returns",
+        "description": "When on, anyone with your portal link can request a return for a delivered order."
+      },
+      "link": {
+        "label": "Portal link",
+        "copy": "Copy link",
+        "copied": "Copied",
+        "help": "Add this link to your store's footer, or to a \"Returns\" page in Shopify. Lowercase letters, numbers and dashes only."
+      },
+      "window": {
+        "label": "Return window",
+        "suffix": "days after delivery (1–90)"
+      },
+      "autoApprove": {
+        "title": "Approve requests automatically",
+        "description": "When on, every request is approved as soon as it's sent. You still book the pickup in Bosta.",
+        "descriptionBooking": "When on, every request is approved as soon as it's sent and the Bosta pickup is booked right away."
+      },
+      "products": {
+        "title": "Products that can't be returned",
+        "description": "Customers see these items but can't select them.",
+        "searchLabel": "Search products",
+        "searchPlaceholder": "Search products or SKUs",
+        "nonReturnable": "Can't be returned",
+        "returnable": "Returnable",
+        "switchLabel": "{{name}} can't be returned",
+        "empty": "No products match.",
+        "showMore": "Show {{count}} more",
+        "showMore_other": "Show {{count}} more",
+        "loadFailed": "Couldn't load products.",
+        "saveFailed": "Couldn't save that product. Please try again."
+      },
+      "branding": {
+        "title": "Branding",
+        "description": "How your returns page looks to customers.",
+        "logoLabel": "Logo link",
+        "logoHelp": "Upload your logo in Shopify → Content → Files, then paste its link here.",
+        "logoPreview": "Logo preview",
+        "colorLabel": "Brand colour",
+        "colorPicker": "Pick a brand colour",
+        "policyLabel": "Return policy"
+      },
+      "save": "Save changes",
+      "saved": "Returns portal settings saved",
+      "saveFailed": "Couldn't save. Please try again.",
+      "errors": {
+        "SLUG_FORMAT": "Use 3–40 lowercase letters, numbers and dashes.",
+        "SLUG_RESERVED": "That address is reserved. Please choose another.",
+        "SLUG_REQUIRED": "Choose an address before turning the portal on.",
+        "SLUG_TAKEN": "That address is already taken.",
+        "WINDOW_RANGE": "Enter a number of days from 1 to 90.",
+        "LOGO_URL": "Paste a link that starts with https://cdn.shopify.com/",
+        "BRAND_COLOR": "Use a hex colour like #1A2B3C.",
+        "POLICY_LENGTH": "The policy can be at most 2000 characters.",
+        "generic": "Check the highlighted fields and try again."
+      }
     }
   },
   "users": {

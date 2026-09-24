@@ -6,9 +6,10 @@ import BusinessTab from './BusinessTab'
 import ConnectionsTab from './ConnectionsTab'
 import UsersTab from './UsersTab'
 import LocationsTab from './LocationsTab'
+import ReturnsPortalTab from './ReturnsPortalTab'
 
-type TabKey = 'business' | 'connections' | 'users' | 'locations'
-const ALL_TABS: TabKey[] = ['business', 'connections', 'users', 'locations']
+type TabKey = 'business' | 'connections' | 'users' | 'locations' | 'portal'
+const ALL_TABS: TabKey[] = ['business', 'connections', 'users', 'locations', 'portal']
 
 /**
  * The consolidated Settings screen — one page, four tabs, replacing the four
@@ -25,6 +26,9 @@ const ALL_TABS: TabKey[] = ['business', 'connections', 'users', 'locations']
  *   manager — all 4 tabs; Business read-only (banner, disabled fields, no Save);
  *             Connections read-only (status visible, actions disabled).
  *   owner   — full access to all 4 tabs.
+ *
+ * Returns portal Step 4e-A adds a fifth tab, "Returns portal" (?tab=portal) — owner and
+ * manager, both editable (PUT /tenant/portal-settings allows both); never a worker.
  */
 export default function SettingsPage() {
   const { t } = useTranslation()
@@ -62,6 +66,7 @@ export default function SettingsPage() {
         {activeTab === 'connections' && <ConnectionsTab readOnly={!isOwner} />}
         {activeTab === 'users' && <UsersTab />}
         {activeTab === 'locations' && <LocationsTab />}
+        {activeTab === 'portal' && <ReturnsPortalTab />}
       </div>
     </div>
   )

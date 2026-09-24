@@ -6,7 +6,7 @@ import { useState } from 'react'
 // Shopify setup wizard's copyable config values (SetupWizard.tsx) — extracted from
 // its original ConnectionsTab.tsx-local definition so both have one source.
 
-async function writeToClipboard(text: string): Promise<void> {
+export async function writeToClipboard(text: string): Promise<void> {
   if (navigator.clipboard?.writeText) {
     await navigator.clipboard.writeText(text)
     return

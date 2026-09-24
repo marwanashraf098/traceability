@@ -1,10 +1,14 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { ReactNode, useCallback, useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { getExchanges, getRefunds } from '../api'
+import { getExchanges, getRefunds, getReturnRequests, getRoleFromToken } from '../api'
 import { Badge, DataTable, DataTableColumn, StatCard, Tabs } from '../components/ui'
 import { MergedRow, FilterTab, normalizeExchange, normalizeRefund, matchesFilter } from './exchangesRefunds/normalize'
 import { exchangeStatusTone, inspectionStateTone } from './exchangesRefunds/statusTone'
 import ExchangeRefundDrawer from './exchangesRefunds/ExchangeRefundDrawer'
+import RequestsPanel from './exchangesRefunds/RequestsPanel'
+
+/** Returns portal Step 4e-A — the Requests tab sits beside the filter tabs, not among them. */
+type PageTab = FilterTab | 'requests'
 
 /**
  * FR-EXCHANGE Step 4c — the merchant-facing "Exchanges & Refunds" tab.
@@ -27,8 +31,26 @@ export default function ExchangesRefunds() {
   const [rows, setRows] = useState<MergedRow[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(false)
-  const [tab, setTab] = useState<FilterTab>('all')
+  const [tab, setTab] = useState<PageTab>('all')
   const [selected, setSelected] = useState<MergedRow | null>(null)
+
+  // Returns portal Step 4e-A — customer return requests, owner and manager only (the API
+  // answers 403 to a worker). Its own fetches; the exchange/refund feeds above are untouched.
+  const role = getRoleFromToken()
+  const canSeeRequests = role === 'owner' || role === 'manager'
+  const [newRequests, setNewRequests] = useState(0)
+
+  const loadNewRequests = useCallback(async () => {
+    if (!canSeeRequests) return
+    try {
+      const res = await getReturnRequests(0, 1, 'requested')
+      setNewRequests(res.total)
+    } catch {
+      // The badge is a hint only — the tab itself shows its own load error.
+    }
+  }, [canSeeRequests])
+
+  useEffect(() => { loadNewRequests() }, [loadNewRequests])
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -59,7 +81,10 @@ export default function ExchangesRefunds() {
     received: rows.filter(r => matchesFilter(r, 'received')).length,
   }), [rows])
 
-  const filteredRows = useMemo(() => rows.filter(r => matchesFilter(r, tab)), [rows, tab])
+  const filteredRows = useMemo(
+    () => (tab === 'requests' ? [] : rows.filter(r => matchesFilter(r, tab))),
+    [rows, tab],
+  )
 
   const columns: DataTableColumn<MergedRow>[] = [
     {
@@ -135,8 +160,19 @@ export default function ExchangesRefunds() {
     },
   ]
 
-  const tabs: Array<{ key: FilterTab; label: string; count: number }> = [
+  const tabs: Array<{ key: PageTab; label: string; count?: number; badge?: ReactNode }> = [
     { key: 'all', label: t('exchangesRefunds.tabs.all'), count: counts.all },
+    ...(canSeeRequests ? [{
+      key: 'requests' as const,
+      label: t('exchangesRefunds.tabs.requests'),
+      badge: newRequests > 0
+        ? (
+          <span data-testid="requests-new-badge">
+            <Badge tone="warning" label={t('exchangesRefunds.requests.newBadge', { count: newRequests })} />
+          </span>
+        )
+        : undefined,
+    }] : []),
     { key: 'needsAction', label: t('exchangesRefunds.tabs.needsAction'), count: counts.needsAction },
     { key: 'refunds', label: t('exchangesRefunds.tabs.refunds'), count: counts.refunds },
     { key: 'exchanges', label: t('exchangesRefunds.tabs.exchanges'), count: counts.exchanges },
@@ -149,7 +185,7 @@ export default function ExchangesRefunds() {
       <div className="space-y-4" data-testid="exchanges-refunds-page">
         <h1 className="text-h1 text-primary">{t('exchangesRefunds.title')}</h1>
 
-        {!loading && !error && (
+        {!loading && !error && tab !== 'requests' && (
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3" data-testid="summary-chips">
             <StatCard label={t('exchangesRefunds.chips.total')} value={counts.all} tone="neutral" />
             <StatCard label={t('exchangesRefunds.chips.needsAction')} value={counts.needsAction} tone="warning" />
@@ -158,9 +194,11 @@ export default function ExchangesRefunds() {
           </div>
         )}
 
-        <Tabs tabs={tabs} activeKey={tab} onChange={key => setTab(key as FilterTab)} />
+        <Tabs tabs={tabs} activeKey={tab} onChange={key => setTab(key as PageTab)} />
 
-        {error ? (
+        {tab === 'requests' ? (
+          <RequestsPanel onDecided={loadNewRequests} />
+        ) : error ? (
           <div className="card p-10 flex flex-col items-center gap-3 text-center" data-testid="load-error">
             <p className="text-body font-semibold text-primary">{t('exchangesRefunds.errorTitle')}</p>
             <button className="btn-outline" onClick={load}>{t('exchangesRefunds.retry')}</button>

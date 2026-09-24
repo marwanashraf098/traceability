@@ -839,12 +839,15 @@ export function Toggle({
   label,
   disabled = false,
   size = 'md',
+  ariaLabel,
 }: {
   checked: boolean
   onChange: (checked: boolean) => void
   label?: string
   disabled?: boolean
   size?: 'sm' | 'md'
+  /** Accessible name when there is no visible label next to the switch. */
+  ariaLabel?: string
 }) {
   // Knob uses start-* (inset-inline-start) so it slides toward the correct
   // physical edge in both LTR and RTL without any rtl: variant override.
@@ -857,6 +860,7 @@ export function Toggle({
         type="button"
         role="switch"
         aria-checked={checked}
+        aria-label={ariaLabel}
         disabled={disabled}
         onClick={() => !disabled && onChange(!checked)}
         className={cn(
@@ -885,7 +889,8 @@ export function Tabs({
   activeKey,
   onChange,
 }: {
-  tabs: Array<{ key: string; label: string; count?: number; disabled?: boolean }>
+  /** badge: a custom pill in place of the count (e.g. "2 new"); count wins if both are set. */
+  tabs: Array<{ key: string; label: string; count?: number; badge?: ReactNode; disabled?: boolean }>
   activeKey: string
   onChange: (key: string) => void
 }) {
@@ -911,6 +916,7 @@ export function Tabs({
               {tab.count.toLocaleString()}
             </span>
           )}
+          {tab.count == null && tab.badge}
         </button>
       ))}
     </div>
