@@ -136,6 +136,19 @@ public class PortalService {
         Map<String, Object> order = matches.get(0);
         if (order.get("pii_redacted_at") != null) return null;
 
+        Timestamp deliveredAt = deliveredWithinWindow(tenantId, (UUID) order.get("id"));
+        if (deliveredAt == null) return null;
+
+        Map<String, Object> result = new LinkedHashMap<>(order);
+        result.put("delivered_at", deliveredAt);
+        return result;
+    }
+
+    /**
+     * The order's newest forward leg's delivered_at when it is within the tenant's return
+     * window; null otherwise. Shared by lookup and submission (which re-checks from scratch).
+     */
+    private Timestamp deliveredWithinWindow(UUID tenantId, UUID orderId) {
         List<Map<String, Object>> delivered = jdbc.queryForList(
             "SELECT s.delivered_at, " +
             "       (now() - s.delivered_at <= interval '1 day' * t.customer_return_window_days) AS in_window " +
@@ -143,12 +156,9 @@ public class PortalService {
             "WHERE s.tenant_id = ? AND s.order_id = ? AND s.shipment_leg = 'forward' " +
             "  AND s.delivered_at IS NOT NULL " +
             "ORDER BY s.created_at DESC, s.id DESC LIMIT 1",
-            tenantId, order.get("id"));
+            tenantId, orderId);
         if (delivered.isEmpty() || !Boolean.TRUE.equals(delivered.get(0).get("in_window"))) return null;
-
-        Map<String, Object> result = new LinkedHashMap<>(order);
-        result.put("delivered_at", delivered.get(0).get("delivered_at"));
-        return result;
+        return (Timestamp) delivered.get(0).get("delivered_at");
     }
 
     /**
@@ -182,6 +192,137 @@ public class PortalService {
                 return line;
             },
             tenantId, orderId);
+    }
+
+    // ── Step 4b: customer submission ─────────────────────────────────────────────
+
+    public enum SubmitOutcome { CREATED, UNAUTHORIZED, INVALID, CONFLICT }
+
+    public record SubmitLine(UUID variantId, Integer quantity, String reasonCode) {}
+
+    public record SubmitRequest(List<SubmitLine> lines, String email, String note) {}
+
+    public record SubmitResult(SubmitOutcome outcome, Map<String, Object> body) {}
+
+    static final int NOTE_MAX = 300;
+    private static final String REFERENCE_ALPHABET = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ"; // no 0/O/1/I
+    private static final int REFERENCE_LENGTH = 6;
+    private static final java.security.SecureRandom RANDOM = new java.security.SecureRandom();
+    private static final java.util.regex.Pattern EMAIL =
+        java.util.regex.Pattern.compile("^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$");
+    private static final String ACTIVE_PIECE_INDEX = "return_request_items_one_active_per_piece";
+
+    /** Thrown inside the submission transaction to roll it back and answer 400. */
+    private static final class InvalidSubmission extends RuntimeException {
+        InvalidSubmission() { super(null, null, false, false); }
+    }
+
+    /**
+     * POST /api/v1/portal/{slug}/requests. Empty for an unknown/disabled slug.
+     *
+     * The lookup token must verify (signature, expiry) AND carry this slug's tenant; the order
+     * it names is re-checked from scratch (not redacted, delivered within the window) — nothing
+     * from the lookup response is trusted. Each line binds specific pieces: delivered pieces of
+     * that variant on that order, not in an active request item, oldest first (created_at, id).
+     * Request + items are one transaction; a concurrent submission that grabbed the same piece
+     * trips the one-active-item-per-piece index → CONFLICT. Auto-approve tenants get
+     * status 'approved' (decided_by NULL = system) in the same transaction.
+     * Email, note and phone are never logged.
+     */
+    public Optional<SubmitResult> submit(String slug, String bearerToken, SubmitRequest req) {
+        UUID tenantId = resolveTenant(slug);
+        if (tenantId == null) return Optional.empty();
+        Optional<PortalTokenService.Claims> claims = tokens.verify(bearerToken, tenantId);
+        if (claims.isEmpty()) return Optional.of(new SubmitResult(SubmitOutcome.UNAUTHORIZED, null));
+        UUID orderId = claims.get().orderId();
+
+        try {
+            Map<String, Object> body = TenantContext.runAs(tenantId,
+                () -> tx.execute(s -> submitInTenant(tenantId, orderId, req)));
+            return Optional.of(new SubmitResult(SubmitOutcome.CREATED, body));
+        } catch (InvalidSubmission e) {
+            return Optional.of(new SubmitResult(SubmitOutcome.INVALID, null));
+        } catch (org.springframework.dao.DuplicateKeyException e) {
+            // A concurrent submission took one of these pieces first (one active item per piece).
+            if (String.valueOf(e.getMessage()).contains(ACTIVE_PIECE_INDEX)) {
+                return Optional.of(new SubmitResult(SubmitOutcome.CONFLICT, null));
+            }
+            throw e;
+        }
+    }
+
+    private Map<String, Object> submitInTenant(UUID tenantId, UUID orderId, SubmitRequest req) {
+        if (req == null || req.lines() == null || req.lines().isEmpty()) throw new InvalidSubmission();
+        String email = req.email() == null || req.email().isBlank() ? null : req.email().trim();
+        String note  = req.note()  == null || req.note().isBlank()  ? null : req.note().trim();
+        if (email != null && (email.length() > 254 || !EMAIL.matcher(email).matches())) throw new InvalidSubmission();
+        if (note != null && note.length() > NOTE_MAX) throw new InvalidSubmission();
+
+        // Re-check eligibility from scratch.
+        List<Map<String, Object>> order = jdbc.queryForList(
+            "SELECT id FROM orders WHERE id = ? AND tenant_id = ? AND pii_redacted_at IS NULL",
+            orderId, tenantId);
+        if (order.isEmpty() || deliveredWithinWindow(tenantId, orderId) == null) throw new InvalidSubmission();
+
+        // Bind pieces line by line (the same variant may appear on two lines with different reasons).
+        Set<String> bound = new HashSet<>();
+        List<Object[]> items = new ArrayList<>();
+        for (SubmitLine line : req.lines()) {
+            if (line == null || line.variantId() == null || line.quantity() == null || line.quantity() < 1
+                    || !REASON_CODES.contains(line.reasonCode())) {
+                throw new InvalidSubmission();
+            }
+            List<String> free = jdbc.queryForList(
+                "SELECT p.id FROM pieces p JOIN variants v ON v.id = p.variant_id " +
+                "WHERE p.tenant_id = ? AND p.current_order_id = ? AND p.variant_id = ? " +
+                "  AND p.status = 'delivered'::piece_status AND v.non_returnable = false " +
+                "  AND NOT EXISTS (SELECT 1 FROM return_request_items rri " +
+                "                  WHERE rri.piece_id = p.id AND rri.tenant_id = p.tenant_id AND rri.active) " +
+                "ORDER BY p.created_at, p.id",
+                String.class, tenantId, orderId, line.variantId());
+            free.removeAll(bound);
+            if (free.size() < line.quantity()) throw new InvalidSubmission();
+            for (String pieceId : free.subList(0, line.quantity())) {
+                bound.add(pieceId);
+                items.add(new Object[]{pieceId, line.variantId(), line.reasonCode()});
+            }
+        }
+
+        boolean autoApprove = Boolean.TRUE.equals(jdbc.queryForObject(
+            "SELECT portal_auto_approve FROM tenants WHERE id = ?", Boolean.class, tenantId));
+        String reference = newReference(tenantId);
+        UUID requestId = jdbc.queryForObject(
+            "INSERT INTO return_requests (tenant_id, order_id, type, status, reference, customer_email, customer_note, " +
+            "    decided_at) " +
+            "VALUES (?, ?, 'refund', ?::return_request_status, ?, ?, ?, CASE WHEN ? THEN now() END) RETURNING id",
+            UUID.class, tenantId, orderId, autoApprove ? "approved" : "requested", reference, email, note, autoApprove);
+        for (Object[] it : items) {
+            jdbc.update(
+                "INSERT INTO return_request_items (tenant_id, request_id, piece_id, variant_id, reason_code) " +
+                "VALUES (?, ?, ?, ?, ?)",
+                tenantId, requestId, it[0], it[1], it[2]);
+        }
+
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("reference", reference);
+        body.put("status", autoApprove ? "approved" : "requested");
+        return body;
+    }
+
+    /** RR- + 6 characters from an unambiguous alphabet, unused within this tenant. */
+    private String newReference(UUID tenantId) {
+        for (int attempt = 0; attempt < 10; attempt++) {
+            StringBuilder sb = new StringBuilder("RR-");
+            for (int i = 0; i < REFERENCE_LENGTH; i++) {
+                sb.append(REFERENCE_ALPHABET.charAt(RANDOM.nextInt(REFERENCE_ALPHABET.length())));
+            }
+            String ref = sb.toString();
+            Boolean taken = jdbc.queryForObject(
+                "SELECT EXISTS (SELECT 1 FROM return_requests WHERE tenant_id = ? AND reference = ?)",
+                Boolean.class, tenantId, ref);
+            if (!Boolean.TRUE.equals(taken)) return ref;
+        }
+        throw new IllegalStateException("Could not generate a unique return reference");
     }
 
     private void recordAttempt(UUID tenantId, String orderKey, boolean success) {

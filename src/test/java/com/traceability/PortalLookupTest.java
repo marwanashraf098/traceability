@@ -296,7 +296,8 @@ class PortalLookupTest {
         jdbc.update("UPDATE pieces SET status = 'return_pending_inspection' WHERE id = ?", kept); // not delivered any more
 
         UUID req = jdbc.queryForObject(
-            "INSERT INTO return_requests (tenant_id, order_id) VALUES (?, ?) RETURNING id", UUID.class, tenantA, order);
+            "INSERT INTO return_requests (tenant_id, order_id, reference) VALUES (?, ?, 'RR-TEST2A') RETURNING id",
+            UUID.class, tenantA, order);
         jdbc.update("INSERT INTO return_request_items (tenant_id, request_id, piece_id, variant_id, reason_code) " +
                     "VALUES (?, ?, ?, ?, 'wrong_size')", tenantA, req, p1, variantA);
         jdbc.update("UPDATE variants SET non_returnable = true WHERE id = ?", variantA2);
