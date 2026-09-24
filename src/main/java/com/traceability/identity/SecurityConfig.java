@@ -7,6 +7,7 @@ import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
@@ -98,6 +99,10 @@ public class SecurityConfig {
                     "/", "/index.html", "/embedded.html", "/embedded",
                     "/assets/**", "/favicon.ico"
                 ).permitAll()
+                // Returns portal page (Step 4e-B) — the customer-facing entry served on
+                // returns.tracedtech.com (nginx maps /{slug} → /portal.html). GET only; the page
+                // is static and every data call goes through the public /api/v1/portal/**.
+                .requestMatchers(HttpMethod.GET, "/portal.html").permitAll()
                 // Fixed API + webhook paths that use non-JWT auth or are always public.
                 .requestMatchers(
                     "/api/v1/auth/signup",
