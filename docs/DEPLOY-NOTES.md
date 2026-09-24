@@ -3,7 +3,7 @@
 **Target**: Hetzner CX32 (4 vCPU, 8 GB RAM) · Ubuntu 24.04  
 **Stack**: Docker Compose — two services: `app` (Spring Boot) + `nginx` (TLS reverse proxy)  
 **Database**: Supabase (external). No Postgres container in this stack.  
-**Edge**: Cloudflare free (DNS-proxied)
+**Edge**: none — DNS at GoDaddy points straight at the server; nginx terminates TLS (no Cloudflare)
 
 All paths are relative to the repo root unless stated otherwise.
 
@@ -182,8 +182,8 @@ sudo ufw status
 DNS is at **GoDaddy**; there is **no Cloudflare** (or any other proxy) in front of the server.
 Each hostname is a plain **A record** → `[SERVER_IP]`:
 `app.tracedtech.com`, `tracedtech.com`, `www.tracedtech.com`, `returns.tracedtech.com`.
-Clients connect to nginx directly, so nginx's `$remote_addr` is the real client IP (the
-Cloudflare `set_real_ip_from` lines in `deploy/nginx.conf` are inert — see its header).
+Clients connect to nginx directly, so nginx's `$remote_addr` is the real client IP. nginx has
+no `real_ip` directives; see §11 for how the client IP and host reach the app.
 
 ### 2.2 Issue TLS certificates (as the server is today)
 
@@ -586,6 +586,54 @@ curl -s  https://returns.tracedtech.com/api/v1/portal/[slug]/config          # J
 curl -sI https://returns.tracedtech.com/api/v1/auth/login | head -1          # 404
 curl -sI https://returns.tracedtech.com/actuator/health | head -1            # 404
 sudo certbot renew --dry-run
+```
+
+---
+
+## 11. nginx — client identity, unknown hosts, testing a change
+
+**Client IP and host (no CDN in front).** Every location that proxies to the app overwrites
+the identity headers instead of passing client values through:
+
+| Header | Value sent to the app |
+|---|---|
+| `Host`, `X-Forwarded-Host` | `$host` — always one of the real server names (see default servers) |
+| `X-Forwarded-Proto` | `https` |
+| `X-Real-IP`, `X-Forwarded-For` | `$remote_addr` (overwritten, never appended) |
+| `Forwarded`, `CF-Connecting-IP`, `CF-Ray` | `""` (dropped) |
+
+The app runs `server.forward-headers-strategy: native` (Tomcat `RemoteIpValve`): it trusts
+`X-Forwarded-For/-Proto/-Host` only from an internal proxy address (the Docker network — the
+app's port is never published), takes the rightmost non-proxy `X-Forwarded-For` entry as the
+client, and ignores the RFC 7239 `Forwarded` header. So the demo rate limit and
+`demo_leads.ip` see the real client IP, and redirects are `https://app.tracedtech.com/…`.
+
+**Default servers.** `listen 80 default_server` → `return 444` (connection closed, no
+response); `listen 443 ssl default_server` → `ssl_reject_handshake on` (no certificate needed).
+A request whose Host/SNI isn't one of `app.tracedtech.com`, `returns.tracedtech.com`,
+`tracedtech.com`, `www.tracedtech.com` never reaches the app. A valid SNI with a different
+`Host:` header gets nginx's own `421`. Adding a new hostname = add its own server blocks
+(port 80 with the ACME location first; port 443 only after its certificate exists — §10).
+
+**Testing an nginx change before restarting.** `deploy/nginx.conf` is a single-file bind mount:
+`nginx -t` inside the running container reads the file the container started with, not the one
+`git pull` just wrote. Test the new file in a one-off container on the compose network, with
+the real certificates:
+```bash
+cd /home/traced/traceability
+sudo docker run --rm --network deploy_internal \
+  -v "$PWD/deploy/nginx.conf:/etc/nginx/nginx.conf:ro" \
+  -v /etc/letsencrypt:/etc/letsencrypt:ro \
+  nginx:1.27-alpine nginx -t      # network name: `docker network ls` (compose project + _internal)
+# only if "test is successful":
+sudo docker compose -f deploy/docker-compose.yml restart nginx
+```
+After restarting, check each host:
+```bash
+curl -sI https://app.tracedtech.com/ | head -1                    # 200
+curl -sI https://returns.tracedtech.com/[slug] | head -1           # 200
+curl -sI https://tracedtech.com/ | head -1                         # 200
+curl -s -o /dev/null -w '%{http_code}\n' -H 'Host: nope.example' http://[SERVER_IP]/   # 000 (444)
 ```
 
 ---

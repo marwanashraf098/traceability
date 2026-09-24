@@ -4,6 +4,30 @@
 
 ## Current state
 
+**Proxy trust hardening — built 2026-09-24 on branch `fix/proxy-trust` (not merged, not deployed).**
+Follows the Step 0 diagnosis (no Cloudflare; Spring trusted client-sent forwarded headers).
+- **Spring:** `server.forward-headers-strategy: native` (Tomcat `RemoteIpValve`) replaces `framework`.
+  `server.tomcat.remoteip.*` stated explicitly: internal-proxies = Boot 3.3.5's default private
+  ranges (the Docker bridge is in 172.16/12), `X-Forwarded-For` / `X-Forwarded-Proto` /
+  `X-Forwarded-Host`. Client IP = rightmost non-proxy XFF entry; RFC 7239 `Forwarded` ignored.
+  `SpaController`'s two redirects still come out as `https://app.tracedtech.com/…` behind nginx.
+- **nginx:** every app.tracedtech.com location that proxies (`= /`, `^~ /embedded`, `/assets/`,
+  `^~ /api/v1/portal/`, `/api/`, `/`, `/actuator/health`) sets `Host`/`X-Forwarded-Host $host`,
+  `X-Forwarded-Proto https`, `X-Real-IP`/`X-Forwarded-For $remote_addr`, `Forwarded`/
+  `CF-Connecting-IP`/`CF-Ray ""` (X-Request-Id and existing `Origin ""` kept; framing CSPs untouched).
+  Default servers: `:80 default_server → 444`, `:443 ssl default_server → ssl_reject_handshake on`.
+  Cloudflare `set_real_ip_from`/`real_ip_*` removed. Returns host: `CF-Ray ""` added, comment → native.
+- **ShopifyEntryDiagFilter:** redacts query/body params `id_token, hmac, session, code, state,
+  signature` (raw query string and param list, URL-encoded names too) and headers `Authorization`,
+  `Cookie` → `[redacted]`. TODO: remove after App Store approval.
+- **Tests:** `ProxyTrustTest` (real HTTP, 7) — Forwarded ignored for IP and host, XFF from the
+  loopback proxy sets the IP, client-prepended XFF ignored, demo limit per resolved IP, both SPA
+  redirects `https://app.tracedtech.com/…`. Revert-checked: 4 of 7 fail under `framework`.
+  `ShopifyEntryDiagFilterRedactionTest` (2) — both fail on the old filter.
+- **Gotcha:** `-Dserver.forward-headers-strategy=…` on the mvn command line does reach the forked
+  test JVM (proved by the revert check) — handy for strategy experiments without file edits.
+- Not changed: `log_format` still records `cf_ray=$http_cf_ray` (client-supplied, log-only).
+
 **Returns portal Step 4e-B — customer portal on returns.tracedtech.com — built 2026-09-24 on branch `feature/portal-4e-customer` (not merged, not deployed).**
 Mockups `design/returns-portal/P1–P7`. Two deploy groups: **group 1** = everything below except
 the returns port-443 block; **group 2** = one commit adding only that block, deployed after

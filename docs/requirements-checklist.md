@@ -248,6 +248,8 @@ Built 2026-09-23 on branch `feature/returns-scan-as-truth`, not merged, not depl
 - [ ] N5 Sentry + structured logs w/ correlation IDs · dead-letter retry UI · per-tenant feature flags · resettable demo tenant
 - [ ] N6 **[x] Tests: state machine** · **[x] scan race** · **[x] webhook idempotency (Bosta Day 5)** · **[x] RLS** · **[x] Bosta mapping (Day 5)** · staging wired to Shopify dev store + Bosta staging
 - [ ] OPS Bosta IP whitelisting ticket (static IP) · staging access (stg-app.bosta.co)
+- [x] N3a Proxy trust: nginx overwrites client identity headers on every app location, default servers drop unknown hosts (444 / TLS reject), Spring `forward-headers-strategy: native` with explicit internal proxies, Cloudflare real_ip removed
+- [x] N3b ShopifyEntryDiagFilter redacts id_token/hmac/session/code/state/signature and Authorization/Cookie (filter itself: remove after App Store approval)
 
 ## Go-live acceptance (30 days, both pilots)
 - [ ] 100% new inventory labeled · ≥95% orders full scan path · every piece queryable end-to-end · all RTOs intaken + gaps caught · 300-piece count ≥99% match · zero isolation/custody incidents · ≥150 pieces/hr receiving, ≤4 min pick+pack · both pilots paying
