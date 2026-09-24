@@ -1,0 +1,1 @@
+window.__img=p=>{const e=document.querySelector('#imgPre img[data-k="'+p+'"]');return e?e.getAttribute('src'):p;};(function(){var m=matchMedia('(max-width:899px)').matches;if(m){document.documentElement.classList.add('m');}})();

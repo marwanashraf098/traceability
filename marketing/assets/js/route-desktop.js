@@ -1,0 +1,1 @@
+window.__img=p=>{const e=document.querySelector('#imgPre img[data-k="'+p+'"]');return e?e.getAttribute('src'):p;};if(matchMedia('(max-width: 899px)').matches&&!location.search.includes('desktop')){location.replace('mobile.html'+location.hash);}
