@@ -182,7 +182,7 @@ section{position:relative;padding:72px var(--pad)}
 .menu .lg{display:block;padding:14px 0 0;color:var(--mute);font-size:15px}
 /* hero */
 .hero{min-height:100svh;padding:104px var(--pad) 0;overflow:hidden;background:radial-gradient(90% 40% at 50% 100%,rgba(30,91,255,.10),transparent 70%),var(--paper)}
-.hero .cartons{position:absolute;inset:-6% -10%;background:url(assets/parcels.png) center 30%/cover no-repeat;opacity:.16;filter:blur(1.5px);pointer-events:none;-webkit-mask:linear-gradient(180deg,#000 0,#000 55%,transparent 92%);mask:linear-gradient(180deg,#000 0,#000 55%,transparent 92%);animation:drift 40s ease-in-out infinite alternate}
+.hero .cartons{position:absolute;inset:-6% -10%;background:url(assets/parcels.webp) center 30%/cover no-repeat;opacity:.16;filter:blur(1.5px);pointer-events:none;-webkit-mask:linear-gradient(180deg,#000 0,#000 55%,transparent 92%);mask:linear-gradient(180deg,#000 0,#000 55%,transparent 92%);animation:drift 40s ease-in-out infinite alternate}
 @keyframes drift{from{transform:translate3d(0,0,0) scale(1)}to{transform:translate3d(-2%,-1.5%,0) scale(1.04)}}
 .hero .kick{position:relative;display:inline-flex;align-items:center;gap:8px;font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:var(--mute);margin-bottom:22px}
 .hero .kick i{width:6px;height:6px;border-radius:50%;background:var(--blue);box-shadow:0 0 0 3px rgba(30,91,255,.14)}
@@ -396,7 +396,7 @@ section{position:relative;padding:72px var(--pad)}
 .ig .note a{color:#F2F4F8;text-decoration:underline;text-underline-offset:3px;text-decoration-color:rgba(255,255,255,.3)}
 /* why */
 .why{padding:96px var(--pad) 84px;background:#111315;overflow:hidden;text-align:center}
-.why .aur{position:absolute;inset:-10%;background:url(assets/why-bg-b.png) center/cover;opacity:.45;pointer-events:none;-webkit-mask:radial-gradient(60% 50% at 50% 50%,transparent 20%,#000 75%);mask:radial-gradient(60% 50% at 50% 50%,transparent 20%,#000 75%);animation:drift 30s ease-in-out infinite alternate}
+.why .aur{position:absolute;inset:-10%;background:url(assets/why-bg-b.webp) center/cover;opacity:.45;pointer-events:none;-webkit-mask:radial-gradient(60% 50% at 50% 50%,transparent 20%,#000 75%);mask:radial-gradient(60% 50% at 50% 50%,transparent 20%,#000 75%);animation:drift 30s ease-in-out infinite alternate}
 .why .k{text-align:center;color:#8A9099}
 .why h2{position:relative;font-size:clamp(38px,11vw,50px);line-height:1.02}
 .why h2 .w{display:block;position:relative;height:1.05em;overflow:hidden}
@@ -457,7 +457,7 @@ section{position:relative;padding:72px var(--pad)}
 </head><body>
 
 <header class="nav" id="nav">
-  <a href="#top" aria-label="Traced"><img class="wm wm-b" src="assets/wordmark-black.png" alt="Traced"><img class="wm wm-w" src="assets/wordmark-white.png" alt="Traced"></a>
+  <a href="#top" aria-label="Traced"><img class="wm wm-b" src="assets/wordmark-black.webp" alt="Traced"><img class="wm wm-w" src="assets/wordmark-white.webp" alt="Traced"></a>
   <div class="r"><button class="mbtn" id="mbtn" aria-expanded="false">Menu <svg viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg></button><a class="pill blue" href="https://app.tracedtech.com/signup">Start free</a></div>
 </header>
 <nav class="menu" id="menu">
@@ -465,7 +465,7 @@ section{position:relative;padding:72px var(--pad)}
   <a class="lg" href="https://app.tracedtech.com/login">Log in</a>
 </nav>
 
-<div id="imgPre" hidden aria-hidden="true"><img data-k="assets/brand-blnco.png" src="assets/brand-blnco.png" alt=""><img data-k="assets/brand-jumi.png" src="assets/brand-jumi.png" alt=""><img data-k="assets/brand-snouts.png" src="assets/brand-snouts.png" alt=""></div>
+<div id="imgPre" hidden aria-hidden="true"><img data-k="assets/brand-blnco.webp" src="assets/brand-blnco.webp" alt=""><img data-k="assets/brand-jumi.webp" src="assets/brand-jumi.webp" alt=""><img data-k="assets/brand-snouts.webp" src="assets/brand-snouts.webp" alt=""></div>
 <main id="top">
 <section class="hero" id="hero" data-theme="light">
   <div class="cartons"></div>
@@ -507,10 +507,10 @@ section{position:relative;padding:72px var(--pad)}
   <h2 class="rv">One piece. <em>Every hand.</em></h2>
   <p class="lead rv">Follow one shirt through the week. Swipe.</p>
   <div class="swipe rv" id="swipe">
-    <div class="ucc"><div class="img"><img src="assets/uc-bosta.png" alt=""><div class="scan"><i></i><b>TRC-0413 · With courier</b><span>Tue 09:02</span></div></div><div class="t"><h3>Where is it?</h3><p>Bosta says the parcel never reached the hub. You open the piece, send the scan with a name and a time, and the claim closes in days.</p></div></div>
-    <div class="ucc"><div class="img"><img src="assets/uc-clean.png" alt=""><div class="scan"><i class="r"></i><b>TRC-0413 · Hold, not cleaned</b><span>Tue 11:02</span></div></div><div class="t"><h3>Is this the damaged one?</h3><p>A worn piece comes back and lands on the shelf. It stays on hold until someone scans it back in clean; the scanner refuses it at dispatch.</p></div></div>
-    <div class="ucc"><div class="img"><img src="assets/uc-exchange.png" alt=""><div class="scan"><i></i><b>TRC-0413 out · TRC-0414 back</b><span>Wed 15:20</span></div></div><div class="t"><h3>Which one went where?</h3><p>An exchange is two pieces moving at once: one out, one back. Both get scanned, both get counted, and the one coming back is checked before it sells again.</p></div></div>
-    <div class="ucc"><div class="img"><img src="assets/uc-dash.png" alt=""><div class="scan"><i></i><b>Linen shirt · M · 4 on shelf</b><span>Synced</span></div></div><div class="t"><h3>How many do I really have?</h3><p>Shopify shows what’s on the shelf, minus holds, minus pieces with couriers. Oversells stop.</p></div></div>
+    <div class="ucc"><div class="img"><img src="assets/uc-bosta.webp" alt=""><div class="scan"><i></i><b>TRC-0413 · With courier</b><span>Tue 09:02</span></div></div><div class="t"><h3>Where is it?</h3><p>Bosta says the parcel never reached the hub. You open the piece, send the scan with a name and a time, and the claim closes in days.</p></div></div>
+    <div class="ucc"><div class="img"><img src="assets/uc-clean.webp" alt=""><div class="scan"><i class="r"></i><b>TRC-0413 · Hold, not cleaned</b><span>Tue 11:02</span></div></div><div class="t"><h3>Is this the damaged one?</h3><p>A worn piece comes back and lands on the shelf. It stays on hold until someone scans it back in clean; the scanner refuses it at dispatch.</p></div></div>
+    <div class="ucc"><div class="img"><img src="assets/uc-exchange.webp" alt=""><div class="scan"><i></i><b>TRC-0413 out · TRC-0414 back</b><span>Wed 15:20</span></div></div><div class="t"><h3>Which one went where?</h3><p>An exchange is two pieces moving at once: one out, one back. Both get scanned, both get counted, and the one coming back is checked before it sells again.</p></div></div>
+    <div class="ucc"><div class="img"><img src="assets/uc-dash.webp" alt=""><div class="scan"><i></i><b>Linen shirt · M · 4 on shelf</b><span>Synced</span></div></div><div class="t"><h3>How many do I really have?</h3><p>Shopify shows what’s on the shelf, minus holds, minus pieces with couriers. Oversells stop.</p></div></div>
   </div>
   <div class="dots" id="udots"><i class="on"></i><i></i><i></i><i></i></div>
   <div class="ctas rv"><a class="pill blue" href="https://calendly.com/tracedtechnology/traced-setup-call" target="_blank" rel="noopener">Book a demo</a><a class="pill ghost" href="https://app.tracedtech.com/signup">Start free</a></div>
@@ -547,13 +547,13 @@ section{position:relative;padding:72px var(--pad)}
   <span class="k rv">Integrations</span>
   <h2 class="rv">Your store and your couriers, <em>one timeline.</em></h2>
   <div class="stack rv">
-    <div class="tile core"><div class="lg"><img src="assets/wordmark-white.png" alt="Traced"></div><div><span class="st"><i></i>Every piece, one history</span><span>Labels, scans and counts live here, on the laptop and the phone.</span></div></div>
-    <div class="tile"><div class="lg"><img src="assets/logo-shopify-white.png" alt="Shopify"></div><div><span class="st"><i></i>Live</span><b>Orders in, availability out</b><span>Pieces are created from the order. Holds and returns change what customers can buy.</span></div></div>
-    <div class="tile"><div class="lg"><img src="assets/logo-bosta-white.png" alt="Bosta"></div><div><span class="st"><i></i>Live</span><b>Courier scans in the timeline</b><span>Pickup, hub and delivery, including exchanges and returns, on the piece itself.</span></div></div>
-    <div class="tile soon"><div class="lg"><img src="assets/logo-shipblu-white.png" alt="ShipBlu"></div><div><span class="st">Soon</span><b>Same timeline, next courier</b></div></div>
-    <div class="tile soon"><div class="lg"><img src="assets/logo-aramex-white.png" alt="Aramex"></div><div><span class="st">Soon</span><b>Same timeline, next courier</b></div></div>
-    <div class="tile soon"><div class="lg"><img src="assets/logo-mylerz-white.png" alt="Mylerz"></div><div><span class="st">Soon</span><b>Same timeline, next courier</b></div></div>
-    <div class="tile soon"><div class="lg"><img src="assets/logo-turuq-white.png" alt="Turuq"></div><div><span class="st">Soon</span><b>Same timeline, next courier</b></div></div>
+    <div class="tile core"><div class="lg"><img src="assets/wordmark-white.webp" alt="Traced"></div><div><span class="st"><i></i>Every piece, one history</span><span>Labels, scans and counts live here, on the laptop and the phone.</span></div></div>
+    <div class="tile"><div class="lg"><img src="assets/logo-shopify-white.webp" alt="Shopify"></div><div><span class="st"><i></i>Live</span><b>Orders in, availability out</b><span>Pieces are created from the order. Holds and returns change what customers can buy.</span></div></div>
+    <div class="tile"><div class="lg"><img src="assets/logo-bosta-white.webp" alt="Bosta"></div><div><span class="st"><i></i>Live</span><b>Courier scans in the timeline</b><span>Pickup, hub and delivery, including exchanges and returns, on the piece itself.</span></div></div>
+    <div class="tile soon"><div class="lg"><img src="assets/logo-shipblu-white.webp" alt="ShipBlu"></div><div><span class="st">Soon</span><b>Same timeline, next courier</b></div></div>
+    <div class="tile soon"><div class="lg"><img src="assets/logo-aramex-white.webp" alt="Aramex"></div><div><span class="st">Soon</span><b>Same timeline, next courier</b></div></div>
+    <div class="tile soon"><div class="lg"><img src="assets/logo-mylerz-white.webp" alt="Mylerz"></div><div><span class="st">Soon</span><b>Same timeline, next courier</b></div></div>
+    <div class="tile soon"><div class="lg"><img src="assets/logo-turuq-white.webp" alt="Turuq"></div><div><span class="st">Soon</span><b>Same timeline, next courier</b></div></div>
   </div>
   <p class="note rv">Using a courier we don't list? Your own riders already work: they scan with the phone app like everyone else. <a href="#contact">Tell us who to add next.</a></p>
   </div>
@@ -589,7 +589,7 @@ section{position:relative;padding:72px var(--pad)}
     <div><h4>Follow</h4><a href="https://instagram.com" rel="noopener" target="_blank">Instagram</a><a href="https://linkedin.com" rel="noopener" target="_blank">LinkedIn</a></div>
     <div><h4>Legal</h4><a href="https://app.tracedtech.com/privacy">Privacy</a><a href="https://app.tracedtech.com/terms">Terms</a><a href="https://app.tracedtech.com/refund">Refund Policy</a><a href="https://app.tracedtech.com/contact">Contact Us</a></div>
   </div>
-  <div class="bot"><img src="assets/wordmark-white.png" alt="Traced"><span>© 2026 Traced · Cairo, Egypt</span></div>
+  <div class="bot"><img src="assets/wordmark-white.webp" alt="Traced"><span>© 2026 Traced · Cairo, Egypt</span></div>
 </footer>
 
 <script src="assets/js/mobile-main.js"></script>

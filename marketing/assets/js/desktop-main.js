@@ -339,12 +339,12 @@ document.querySelectorAll('[data-calc]').forEach(sec=>{
   // brands strip
   (() => {
 const Q=[
- ['BLNCO','assets/brand-blnco.png','Omar Aly · Founder, BLNCO','Setup took an afternoon. We labelled the whole stockroom and haven\'t lost a piece since.',5],
- ['Jumi','assets/brand-jumi.png','Mohamed Afyouni · Founder, Jumi','The scanner blocks anything on hold, so returns don\'t get reshipped by mistake anymore.',5],
- ['The Snouts','assets/brand-snouts.png','Mohamed Ghanem · Founder, The Snouts','Bosta claimed a parcel never reached the hub. I sent them the scan. Refunded in two days.',5],
- ['BLNCO','assets/brand-blnco.png','Omar Aly · BLNCO','Shopify stock finally matches what\'s actually on the shelf. Oversells stopped.',5],
- ['Jumi','assets/brand-jumi.png','Mohamed Afyouni · Jumi','My team scans from their phones, I see every move from the laptop. Simple.',5],
- ['The Snouts','assets/brand-snouts.png','Mohamed Ghanem · The Snouts','Wish we had this a year ago. Would have saved us thousands in write-offs.',5]
+ ['BLNCO','assets/brand-blnco.webp','Omar Aly · Founder, BLNCO','Setup took an afternoon. We labelled the whole stockroom and haven\'t lost a piece since.',5],
+ ['Jumi','assets/brand-jumi.webp','Mohamed Afyouni · Founder, Jumi','The scanner blocks anything on hold, so returns don\'t get reshipped by mistake anymore.',5],
+ ['The Snouts','assets/brand-snouts.webp','Mohamed Ghanem · Founder, The Snouts','Bosta claimed a parcel never reached the hub. I sent them the scan. Refunded in two days.',5],
+ ['BLNCO','assets/brand-blnco.webp','Omar Aly · BLNCO','Shopify stock finally matches what\'s actually on the shelf. Oversells stopped.',5],
+ ['Jumi','assets/brand-jumi.webp','Mohamed Afyouni · Jumi','My team scans from their phones, I see every move from the laptop. Simple.',5],
+ ['The Snouts','assets/brand-snouts.webp','Mohamed Ghanem · The Snouts','Wish we had this a year ago. Would have saved us thousands in write-offs.',5]
 ];
 const card=(r,i)=>`<div class="tq"><div class="lg"><img src="${__img(r[1])}" alt="${r[0]}"></div><div><div class="top"><b>${r[0]}</b><span class="stars">${'★'.repeat(r[4])}</span></div><q>${r[3]}</q><div class="who">${r[2]}</div></div></div>`;
 const fill=(el,arr)=>{ el.innerHTML=arr.map(card).join('')+arr.map(card).join(''); };
@@ -356,7 +356,7 @@ const BEATS=window.WHY_BEATS=[
  {w:'Proven',sub:'A courier says a parcel never arrived. You open the piece and show the scan: hub, name, 13:40. The conversation ends there.',
   cards:[
    {x:14,y:26,w:220,html:'<div class="wcard"><div class="h"><i></i><span class="t">TRC-0413 · Linen shirt · M</span><span class="tag">With courier</span></div><div class="row"><span>Handed to Bosta, Nasr City hub</span><b>Omar · 13:40</b></div><div class="row"><span>Out for delivery, Maadi</span><b>Bosta · 09:02</b></div></div>'},
-   {x:12,y:70,w:190,img:'assets/uc-courier.png'},
+   {x:12,y:70,w:190,img:'assets/uc-courier.webp'},
    {x:84,y:22,w:230,html:'<div class="wcard dark"><div class="h"><i class="g"></i><span class="t">Bosta</span><span class="tag">Delivered</span></div><div class="row"><span>Signed by</span><b>Mariam A.</b></div><div class="row"><span>Scan</span><b>Tue 14:12</b></div></div>'},
    {x:86,y:68,w:210,html:'<div class="wcard"><div class="h"><i></i><span class="t">Claim</span><span class="tag">Sent</span></div><div class="big">EGP 1,200<small>recovered</small></div><div class="row"><span>Proof attached</span><b>3 scans</b></div></div>'},
    {x:50,y:12,w:200,html:'<div class="wcard dark"><div class="h"><i class="r"></i><span class="t">TRC-0391</span><span class="tag">49h without a scan</span></div><div class="row"><span>Last seen</span><b>Bosta hub</b></div></div>'},
@@ -366,14 +366,14 @@ const BEATS=window.WHY_BEATS=[
   cards:[
    {x:13,y:30,w:230,html:'<div class="wcard"><div class="h"><i></i><span class="t">Linen shirt · M</span><span class="tag">Synced 2 min ago</span></div><div class="big">4<small>available on Shopify</small></div><div class="row"><span>2 shelf · 1 courier · 1 hold</span><b>live</b></div></div>'},
    {x:14,y:74,w:180,html:'<div class="wcard"><div class="bar"></div><div class="code">TRC-0413 · LINEN SHIRT · M</div></div>'},
-   {x:86,y:26,w:190,img:'assets/uc-stock.png'},
+   {x:86,y:26,w:190,img:'assets/uc-stock.webp'},
    {x:85,y:72,w:230,html:'<div class="wcard dark"><div class="h"><i class="g"></i><span class="t">Shelf B3</span><span class="tag">Counted</span></div><div class="row"><span>Pieces</span><b>14 of 14</b></div><div class="row"><span>By</span><b>Sara · Wed 10:05</b></div></div>'},
    {x:50,y:11,w:210,html:'<div class="wcard"><div class="h"><i></i><span class="t">Order #4821</span><span class="tag">3 labels printed</span></div><div class="row"><span>TRC-0413 · 0414 · 0415</span><b>Sara</b></div></div>'},
    {x:50,y:90,w:200,html:'<div class="wcard dark"><div class="h"><i></i><span class="t">Oversells this month</span><span class="tag">0</span></div></div>'}
   ]},
  {w:'Found',sub:'Returned, exchanged, at the cleaner, back on the shelf. Every piece tells you where it is, so nobody has to remember.',
   cards:[
-   {x:14,y:28,w:190,img:'assets/uc-return.png'},
+   {x:14,y:28,w:190,img:'assets/uc-return.webp'},
    {x:13,y:72,w:230,html:'<div class="wcard"><div class="h"><i class="r"></i><span class="t">TRC-0413 · Linen shirt · M</span><span class="tag" style="background:#FDF1F1;color:#B91C1C">Hold · not cleaned</span></div><div class="row"><span>Returned, size exchange</span><b>Sara · 11:02</b></div><div class="row"><span>Sent to Clean&amp;Co</span><b>Sara · 11:20</b></div></div>'},
    {x:86,y:24,w:230,html:'<div class="wcard dark"><div class="h"><i class="g"></i><span class="t">TRC-0413</span><span class="tag">Back in stock</span></div><div class="row"><span>Cleaned</span><b>Clean&amp;Co · Wed</b></div><div class="row"><span>Shelf</span><b>B3</b></div></div>'},
    {x:86,y:70,w:200,html:'<div class="wcard"><div class="h"><i></i><span class="t">Where is it?</span><span class="tag">Scan</span></div><div class="big">B3<small>shelf, 2nd row</small></div></div>'},

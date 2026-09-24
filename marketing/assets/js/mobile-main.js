@@ -43,12 +43,12 @@ const sw=$('#swipe'), ud=$$('#udots i');
 sw.addEventListener('scroll',()=>{ const i=Math.round(sw.scrollLeft/(sw.firstElementChild.offsetWidth+14)); ud.forEach((d,k)=>d.classList.toggle('on',k===i)); },{passive:true});
 /* testimonials */
 const Q=[
- ['BLNCO','assets/brand-blnco.png','Omar Aly · Founder, BLNCO','Setup took an afternoon. We labelled the whole stockroom and haven\'t lost a piece since.'],
- ['Jumi','assets/brand-jumi.png','Mohamed Afyouni · Founder, Jumi','The scanner blocks anything on hold, so returns don\'t get reshipped by mistake anymore.'],
- ['The Snouts','assets/brand-snouts.png','Mohamed Ghanem · Founder, The Snouts','Bosta claimed a parcel never reached the hub. I sent them the scan. Refunded in two days.'],
- ['BLNCO','assets/brand-blnco.png','Omar Aly · BLNCO','Shopify stock finally matches what\'s actually on the shelf. Oversells stopped.'],
- ['Jumi','assets/brand-jumi.png','Mohamed Afyouni · Jumi','My team scans from their phones, I see every move from the laptop. Simple.'],
- ['The Snouts','assets/brand-snouts.png','Mohamed Ghanem · The Snouts','Wish we had this a year ago. Would have saved us thousands in write-offs.']
+ ['BLNCO','assets/brand-blnco.webp','Omar Aly · Founder, BLNCO','Setup took an afternoon. We labelled the whole stockroom and haven\'t lost a piece since.'],
+ ['Jumi','assets/brand-jumi.webp','Mohamed Afyouni · Founder, Jumi','The scanner blocks anything on hold, so returns don\'t get reshipped by mistake anymore.'],
+ ['The Snouts','assets/brand-snouts.webp','Mohamed Ghanem · Founder, The Snouts','Bosta claimed a parcel never reached the hub. I sent them the scan. Refunded in two days.'],
+ ['BLNCO','assets/brand-blnco.webp','Omar Aly · BLNCO','Shopify stock finally matches what\'s actually on the shelf. Oversells stopped.'],
+ ['Jumi','assets/brand-jumi.webp','Mohamed Afyouni · Jumi','My team scans from their phones, I see every move from the laptop. Simple.'],
+ ['The Snouts','assets/brand-snouts.webp','Mohamed Ghanem · The Snouts','Wish we had this a year ago. Would have saved us thousands in write-offs.']
 ];
 const card=r=>`<div class="tq"><div class="lg"><img src="${__img(r[1])}" alt="${r[0]}"></div><div><div class="top"><b>${r[0]}</b><span class="stars">★★★★★</span></div><q>${r[3]}</q><div class="who">${r[2]}</div></div></div>`;
 $('#tlane').innerHTML=Q.map(card).join('')+Q.map(card).join('');

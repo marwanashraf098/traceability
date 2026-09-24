@@ -19,7 +19,7 @@
         '<button type="button" class="dlb-close" aria-label="Close video">' +
           '<svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M3 3l6 6M9 3l-6 6"/></svg>' +
         '</button>' +
-        '<video controls playsinline preload="none" poster="assets/demo-60-poster.jpg"></video>' +
+        '<video controls playsinline preload="none" poster="assets/demo-60-poster.webp"></video>' +
       '</div>';
     document.body.appendChild(box);
     video = box.querySelector('video');
