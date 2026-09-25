@@ -4,6 +4,50 @@
 
 ## Current state
 
+**Step 4c-1 — more than one courier-return (CRP) leg per order — built 2026-09-25 on branch `feature/multi-return-legs` (from origin/main; not merged, not deployed).**
+Before: V43's `ux_active_shipment_per_order_leg` let a finished return leg hold the order's only
+return slot forever, so a second CRP (second portal request, or one after a dashboard CRP) was
+booked in Bosta but landed in `unlinked_bosta_deliveries` (production: 9 Jumi orders have a
+finished leg in the slot).
+- **V104:** `ux_active_forward_shipment_per_order` = UNIQUE (order_id) WHERE forward AND not
+  terminated/cancelled, created first; then V43's index dropped. Return legs: global UNIQUE
+  `tracking_number` only (`createOrFindReturnShipment` already finds by tracking before insert).
+- **Canonical rule `ShipmentLinkService.returnLegScanEvidenceSql(sessionIdExpr)`** — "return leg has
+  scan evidence". Rule 1: own AWB scanned in a non-abandoned session holding a `return_received`
+  event for the order. Rule 2: the order's only unstamped return leg + a `return_received` event for
+  the order at/after the leg's `created_at`. `sessionIdExpr` = null (any session) or one session.
+  Two refinements beyond the approved text (both change nothing on a single-leg order):
+  (a) an event from a session in which ANOTHER return leg's AWB was scanned is that leg's, not
+  Rule 2 evidence for this one — without it the approved test "A never scanned, B scanned via its
+  AWB → A still awaiting" fails once B is stamped (A becomes the only unstamped leg and B's scan
+  hides it; proven by a revert run); (b) a leg in created/with_courier/returning gets no Rule 2
+  evidence while the order has another non-terminated/cancelled return leg (Marawan, option 1:
+  single-leg courier lag stays exactly as today). `terminated`/`cancelled` legs never count as
+  "other legs" (they never held V43's slot, so the old single-leg world is preserved).
+- **Used by:** `ReturnSessionService.close()` (stamps only legs with evidence from THIS session;
+  single UPDATE, so "only unstamped leg" is judged on the pre-close state) and so the auto-close
+  job; `resolveReturnLegIfComplete()` (only unstamped legs with evidence; still writes
+  `internal_state` only — no history row, no `returned_at`, unchanged); `RETURN_LEG_AWAITING_SCAN_SQL`
+  (awaiting-scan callout + `return_leg_unscanned`).
+- **Tests:** `MultiReturnLegTest` (7): m1 close stamps only the AWB-scanned leg, in-transit leg
+  neither stamped nor flipped (also in a later session); m2 older unscanned leg still awaiting +
+  still raises `return_leg_unscanned`; m3 two unstamped legs + items, no AWB → neither stamped;
+  m4 second CRP on an order with a finished leg links as a return leg via the real ingest path;
+  m5 single in-transit leg + item scan → stamped and flipped as today; m6/m6b multi-leg in-transit
+  legs not stamped without their own AWB. Revert runs: old Java logic → m1 m2 m3 m6 m6b fail; old
+  awaiting SQL only → m2 fails; literal Rule 2 (no refinement a) → m2 fails; no V104 → m4 (and
+  others) fail. `MigrationSmokeTest` 103, `NotTracedBackfillTest` 48.
+- **Single-leg edge changes (accepted by the approved rule, no existing test covers them):** close()
+  now needs the session's event to be at/after the leg's `created_at` (before: any event of the
+  session) and `resolveReturnLegIfComplete` now needs evidence and skips stamped legs (before:
+  flipped every non-terminal return leg). Only differs when a scan predates the leg's Traced
+  insert (e.g. a CRP linked late) or a stamped leg is still non-terminal.
+- **TODO(4d), not built:** `listCrpReturns` pending_inspection_count is order-level; parcel cards put
+  all scanned items on the order's first card; `manualLink()` still turns a CRP into a forward leg
+  (RS.7, untouched); The Snouts' unlinked type-25 delivery has no matching order (not the index).
+- **Gotcha:** a spec's revert tests can prove a rule wrong — here the literal Rule 2 failed the
+  spec's own m2; run the revert before trusting the wording.
+
 **Proxy trust hardening — built 2026-09-24 on branch `fix/proxy-trust` (not merged, not deployed).**
 Follows the Step 0 diagnosis (no Cloudflare; Spring trusted client-sent forwarded headers).
 - **Spring:** `server.forward-headers-strategy: native` (Tomcat `RemoteIpValve`) replaces `framework`.

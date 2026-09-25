@@ -206,7 +206,7 @@ Built 2026-08-15 on branch `returns-rebuild`, single cutover, not yet merged. Mo
 ## Returns — scan-as-truth for return legs (Returns Portal Step 1)
 - [x] RS.1 [M] Return-leg (CRP, `shipment_leg='return'`) courier states update the shipment row only — `applyMappedState()` skips piece transitions for return legs
 - [x] RS.2 [M] V98: `shipments.return_intake_completed_at`, `tenants.return_unscanned_window_days`, evidence-based backfill
-- [x] RS.3 [M] Return-session close stamps intake completion on the session's orders' return legs (abandon never does)
+- [x] RS.3 [M] Return-session close stamps intake completion on the session's orders' return legs (abandon never does) — per leg since Step 4c-1 (only legs with scan evidence from that session)
 - [x] RS.4 [M] `hasReturnLegAwaitingIntake()` gates DELIVERED-case intake acceptance; `return_kind` labels `exchange_match` > `crp_return` > `customer_after_delivery`
 - [x] RS.5 [M] `listCrpReturns` reports `needs_inspection` for returned-but-unscanned legs
 - [x] RS.6 [M] New HIGH exception `return_leg_unscanned` (silent on scan evidence), EN/AR, frontend label
@@ -232,6 +232,8 @@ Built 2026-08-15 on branch `returns-rebuild`, single cutover, not yet merged. Mo
 - [x] RP.10 [M] Customer-facing portal UI on returns.tracedtech.com — portal.html entry, P1–P7 (Step 4e-B)
 - [x] RP.12 [M] nginx: portal zone 30r/m burst 15 + JSON 429; returns port-80 block; returns port-443 block (separate commit, after certbot) (Step 4e-B)
 - [ ] RP.11 [M] Bosta pickup booking on approval — pickupBooking true (Step 4c)
+- [x] RP.13 [M] More than one courier-return (CRP) leg per order — V104 forward-only active index; canonical per-leg scan-evidence rule (`ShipmentLinkService.returnLegScanEvidenceSql`) used by close() stamping, `resolveReturnLegIfComplete`, awaiting-scan / `return_leg_unscanned` (Step 4c-1)
+- [ ] RP.14 [S] Follow-up (4d): per-leg `listCrpReturns` pending_inspection_count and parcel-card scanned-item grouping for multi-leg orders
 - [x] RS.18 [M] Return session parcel cards (per scanned AWB), feedback strip, footer summary
 - [x] RS.19 [M] Untracked courier return: mark received / undo (no stock change), V101 intake outcome + actor
 - [x] RS.20 [M] `return_to_receive` exception (MEDIUM) + E&R "Received · not tracked"
