@@ -4,6 +4,38 @@
 
 ## Current state
 
+**Step 4c-3 — book the Bosta customer return pickup (type 25) on approval — built 2026-09-25 on branch `feature/portal-4c3` (from origin/main `fb29db8`; not merged, not deployed).**
+MODE B AMENDMENT #2 implemented: create type 25 only, from an approved request, claim-before-call, businessReference = order
+number. No terminate, no edit, no other Bosta write.
+- **V106:** `return_requests.booking_status` (pending/booked/failed/failed_ambiguous/needs_review), `booking_attempted_at`,
+  `booking_error`, `bosta_delivery_id`, `bosta_tracking_number` (unique when set), `booking_verified_at`;
+  `tenants.portal_pickup_booking_since` (deviation — see below).
+- **Create:** `BostaV2Client.createReturnPickup` — its own RestClient (connect 5 s, read 20 s; `bosta.create-read-timeout`),
+  ONE attempt, no retry decorator. 2xx+trackingNumber → CREATED; 429/other 4xx → NOT_CREATED (Bosta's message);
+  ConnectException/UnknownHost/NoRouteToHost → NOT_CREATED (nothing sent); 5xx/timeout/reset/unreadable 2xx → AMBIGUOUS.
+  Logs request id, outcome, status only. Payload builder `returnPickupPayload` is a pure function.
+- **Booking:** `ReturnPickupBookingService` (programmatic transactions; app_user-constructible). Preconditions → 'failed' + reason,
+  no POST (not approved, booking off, no active account, no return location, no/unavailable district, redacted, firstLine ≤ 5,
+  plus: no receiver name/phone, no items). Claim UPDATE → 'pending' from NULL/'failed' only; POST outside any transaction;
+  result in its own transaction; CREATED → booked + request pickup_booked + link existing return leg; then read-back.
+  `ReturnPickupBookingJob` (`@Job(retries = 0)`); `PickupBookingScheduler.enqueueAfterCommit` (approve), enqueue after the
+  submit transaction (auto-approve), both only when the tenant books pickups. Sweeper `ReturnPickupBookingSweepJob` every
+  10 min (tenant ids via the owner pool like BostaStatusPollJob; work per tenant under runAs).
+- **Read-back:** v0 `fetchDelivery`: type 25, businessReference (equal or equal without '#'), cod 0 (missing = 0),
+  itemsCount (returnSpecs, falling back to specs), customer district (pickupAddress first, else dropOffAddress).
+- **Merchant:** POST `/return-requests/{id}/booking/retry` (from failed), `/booking/not-booked` (ambiguous → failed → retry),
+  `/booking/confirm {trackingNumber}` (ambiguous only; type 25, this order, created ≥ claim − 2 min, not on another request).
+  Change area blocked while pending/booked/needs_review. `pickup_booking_problem` exception (HIGH; key includes the attempt
+  time so a later failure is a new exception) → `/exchanges?tab=requests&request=<id>` (new deep link).
+  Settings switch; drawer booking row; list "Attention" badge; portal copy (P1/P4, auto-approve lead) EN/AR.
+- **Tests:** `ReturnPickupBookingTest` (19; real HTTP Bosta stub for v2 create + v0 read). Revert: the create wrapped in the
+  v0 Resilience4j retry → the timeout case makes 3 POSTs and the test fails. Frontend +20 (portal copy, drawer booking,
+  settings switch). Renders: drawer states EN/AR + requests list.
+- **Deviations:** `portal_pickup_booking_since` (so switching booking on never books older approvals the merchant may have
+  booked by hand); connection-never-made = NOT_CREATED; two extra preconditions (receiver name/phone, items); manual entry
+  allows 2 min of clock skew; businessReference compared with/without '#'; cod missing = 0; itemsCount falls back to specs.
+- **Not verified live:** the v2 create itself (fields, cod 0 on type 25, Bosta's rearrangement, error bodies). Stage it first.
+
 **Step 4c-2 — Bosta reference data, return warehouse, pickup area in the portal (no booking) — built 2026-09-25 on branch `feature/portal-4c2` (from origin/main `cd1ec79`; not merged, not deployed).**
 No Bosta writes. Two new Bosta v2 READS in `BostaV2Client` (v0 client and `bosta.api-version` untouched).
 - **V105:** `bosta_districts` (global, no tenant_id/RLS, app_user SELECT only — INSERT/UPDATE/DELETE/TRUNCATE

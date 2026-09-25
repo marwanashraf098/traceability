@@ -231,7 +231,7 @@ Built 2026-08-15 on branch `returns-rebuild`, single cutover, not yet merged. Mo
 - [x] RP.9 [M] Merchant UI: Settings → Returns portal (switches, link, window, auto-approve, non-returnable list, branding) (Step 4e-A)
 - [x] RP.10 [M] Customer-facing portal UI on returns.tracedtech.com — portal.html entry, P1–P7 (Step 4e-B)
 - [x] RP.12 [M] nginx: portal zone 30r/m burst 15 + JSON 429; returns port-80 block; returns port-443 block (separate commit, after certbot) (Step 4e-B)
-- [ ] RP.11 [M] Bosta pickup booking on approval — pickupBooking true (Step 4c)
+- [x] RP.11 [M] Bosta pickup booking on approval — type 25 create, claim-before-call, no retry, read-back, sweeper (Step 4c-3)
 - [x] RP.13 [M] More than one courier-return (CRP) leg per order — V104 forward-only active index; canonical per-leg scan-evidence rule (`ShipmentLinkService.returnLegScanEvidenceSql`) used by close() stamping, `resolveReturnLegIfComplete`, awaiting-scan / `return_leg_unscanned` (Step 4c-1)
 - [ ] RP.14 [S] Follow-up (4d): per-leg `listCrpReturns` pending_inspection_count and parcel-card scanned-item grouping for multi-leg orders
 - [x] RP.15 [M] Bosta reference data: global `bosta_districts` (V105, app_user SELECT only) refreshed daily + on empty startup from `getAllDistricts` (no auth, owner connection) (Step 4c-2)
@@ -239,7 +239,10 @@ Built 2026-08-15 on branch `returns-rebuild`, single cutover, not yet merged. Mo
 - [x] RP.17 [M] Per-tenant `tenants.portal_pickup_booking` replaces the global PICKUP_BOOKING constant (no UI switch yet) (Step 4c-2)
 - [x] RP.18 [M] Portal pickup area: lookup `pickup` offer, required district on submit, snapshot on the request, P3 City + Area (EN/AR) (Step 4c-2)
 - [x] RP.19 [M] Merchant drawer: pickup area from the snapshot + "Change area" (requested/approved, owner/manager) (Step 4c-2)
-- [ ] RP.20 [S] Follow-up: a Settings switch for `portal_pickup_booking` (arrives with the booking itself, RP.11)
+- [x] RP.20 [S] Settings switch for `portal_pickup_booking` (needs active Bosta + saved return location) (Step 4c-3)
+- [x] RP.21 [M] `pickup_booking_problem` exception (HIGH) + drawer booking states/actions + Requests "Attention" badge (Step 4c-3)
+- [ ] RP.22 [S] Follow-up: store the district's Arabic city name on the request snapshot (the AR drawer shows the English city)
+- [ ] RP.23 [S] Follow-up: staging check of the v2 create against live Bosta (field names, cod 0 on type 25, rearrangement)
 - [x] RS.18 [M] Return session parcel cards (per scanned AWB), feedback strip, footer summary
 - [x] RS.19 [M] Untracked courier return: mark received / undo (no stock change), V101 intake outcome + actor
 - [x] RS.20 [M] `return_to_receive` exception (MEDIUM) + E&R "Received · not tracked"
