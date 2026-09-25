@@ -301,7 +301,7 @@ export default function OrderDrawer({
                         {stateSub && <p className="text-small text-muted">{stateSub}</p>}
                       </div>
                     </div>
-                    <div className="flex gap-2.5 mt-3.5">
+                    <div className="flex items-start gap-2.5 mt-3.5">
                       <a
                         href={order.customerPhone ? `tel:${order.customerPhone}` : undefined}
                         className={cn(
@@ -311,14 +311,23 @@ export default function OrderDrawer({
                       >
                         {t('orders.drawer.contactCustomer')}
                       </a>
-                      <Button
-                        variant="primary"
-                        className="flex-1 justify-center"
-                        disabled={!forward}
-                        onClick={() => setTab('shipment')}
-                      >
-                        {t('orders.drawer.viewShipment')}
-                      </Button>
+                      <div className="flex-1 flex flex-col gap-1">
+                        <Button
+                          variant="primary"
+                          className="w-full justify-center"
+                          disabled={!forward}
+                          onClick={() => setTab('shipment')}
+                        >
+                          {t('orders.drawer.viewShipment')}
+                        </Button>
+                        {/* Disabled only because no forward (Bosta) shipment exists yet —
+                            say so rather than leave a dead button unexplained. */}
+                        {!forward && (
+                          <p className="text-caption text-muted text-center" data-testid="drawer-no-waybill">
+                            {t('orders.drawer.noWaybillYet')}
+                          </p>
+                        )}
+                      </div>
                     </div>
                     {/* Hold/Unhold — folded into the action row from OrderDetail.tsx
                         (now-unrouted); same handler/endpoint, same terminal-status gate.

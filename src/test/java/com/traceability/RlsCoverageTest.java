@@ -154,6 +154,9 @@ class RlsCoverageTest {
                     "control + cross-tenant negative control, same pattern as timeline above"),
             entry("/api/v1/fulfill/queue",
                     "uses tx.execute(); empty valid for new tenant"),
+            entry("/api/v1/fulfill/queue/awaiting-waybill-count",
+                    "@Transactional + TenantContext.require(); zero valid for new tenant; " +
+                    "tenant scoping covered by AwaitingWaybillCountTest"),
             entry("/api/v1/fulfill/{orderId}",
                     "single-entity GET; uses tx.execute()"),
             entry("/api/v1/inventory/summary",

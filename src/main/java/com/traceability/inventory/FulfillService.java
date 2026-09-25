@@ -149,6 +149,45 @@ public class FulfillService {
             tenantId, lookbackDays);
     }
 
+    /**
+     * Pick &amp; Pack empty-state hint: how many open orders are kept out of the queue ONLY
+     * because no Bosta waybill (forward shipment) exists for them yet.
+     *
+     * Same base conditions as {@link #PICKABLE_SHIPMENT_GATE} — tenant, status IN
+     * ('new','ready_to_pick','self_pickup_pending'), on_hold=false, same latest-forward-
+     * shipment LATERAL — plus the queue's own {@link #PICKABLE_LOOKBACK_CLAUSE}, reused
+     * as-is. The shipment branch is the complement of the gate's: no forward shipment at
+     * all AND not self-pickup. An order whose latest forward shipment exists but isn't
+     * 'created' (already moving/terminal) is excluded for a different reason and is NOT
+     * counted. The gate's base predicates can't be shared as a fragment without splitting
+     * PICKABLE_SHIPMENT_GATE (which must not be touched), so they're restated here;
+     * AwaitingWaybillCountTest pins the equivalence — an order counted here is absent
+     * from getQueue(), and appears there the moment a 'created' shipment is linked.
+     */
+    @Transactional(readOnly = true)
+    public int getAwaitingWaybillCount() {
+        UUID tenantId = TenantContext.require();
+        Integer count = jdbc.queryForObject(
+            "SELECT COUNT(*) FROM orders o " +
+            "LEFT JOIN LATERAL ( " +
+            "    SELECT internal_state " +
+            "    FROM shipments " +
+            "    WHERE order_id = o.id AND tenant_id = o.tenant_id " +
+            "      AND shipment_leg = 'forward' " +
+            // UUIDv4 is not time-ordered — order by created_at, never id (see CLAUDE.md invariant)
+            "    ORDER BY created_at DESC, id DESC " +
+            "    LIMIT 1 " +
+            ") latest_shipment ON true " +
+            "WHERE o.tenant_id = ? " +
+            "  AND o.status IN ('new','ready_to_pick','self_pickup_pending') " +
+            "  AND o.on_hold = false " +
+            "  AND o.is_self_pickup = false " +
+            "  AND latest_shipment.internal_state IS NULL " +
+            PICKABLE_LOOKBACK_CLAUSE,
+            Integer.class, tenantId, lookbackDays);
+        return count == null ? 0 : count;
+    }
+
     // ── Gather list (FR-8.7) ─────────────────────────────────────────────────
 
     /**

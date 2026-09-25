@@ -35,6 +35,13 @@ public class FulfillController {
         return svc.getQueue();
     }
 
+    /** Pick &amp; Pack empty state — open orders held out of the queue only for lack of a Bosta waybill. */
+    @GetMapping("/queue/awaiting-waybill-count")
+    @PreAuthorize("isAuthenticated()")
+    public Map<String, Integer> awaitingWaybillCount() {
+        return Map.of("count", svc.getAwaitingWaybillCount());
+    }
+
     /** FR-8.7 — read-only consolidated gather list across all ready_to_pick orders. */
     @GetMapping("/gather")
     @PreAuthorize("isAuthenticated()")

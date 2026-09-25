@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, Link } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import {
   X, ArrowLeft, ArrowRight, CheckCircle2, AlertTriangle, ScanLine,
@@ -466,6 +466,49 @@ function HandoverScreen({ order, onBack }: { order: QueueOrder; onBack: () => vo
 
 const QUEUE_GRID_COLS = 'grid-cols-1 md:grid-cols-[120px_1fr_180px_120px_140px]'
 
+// ── Empty state: orders waiting for a Bosta waybill ──────────────────────────
+
+interface AwaitingWaybillHint {
+  count: number
+  /** null = unknown (e.g. a worker, who can't read /connections) — no Connect link. */
+  bostaConnected: boolean | null
+}
+
+async function loadAwaitingWaybillHint(): Promise<AwaitingWaybillHint | null> {
+  try {
+    const { data, status } = await api<{ count: number }>('/fulfill/queue/awaiting-waybill-count')
+    if (status !== 200 || typeof data?.count !== 'number' || data.count <= 0) return null
+    let bostaConnected: boolean | null = null
+    try {
+      const conn = await api<{ bosta?: { connected?: boolean } }>('/connections')
+      if (conn.status === 200 && typeof conn.data?.bosta?.connected === 'boolean') {
+        bostaConnected = conn.data.bosta.connected
+      }
+    } catch { /* unknown — link omitted */ }
+    return { count: data.count, bostaConnected }
+  } catch {
+    return null
+  }
+}
+
+function AwaitingWaybillEmptyState({ hint }: { hint: AwaitingWaybillHint }) {
+  const { t } = useTranslation()
+  return (
+    <div className="flex flex-col items-center justify-center py-16 gap-3 text-center" data-testid="fulfill-awaiting-waybill">
+      <div className="w-12 h-12 rounded-xl bg-elevated flex items-center justify-center text-xl">📦</div>
+      <p className="text-body font-semibold text-primary">{t('fulfill.empty')}</p>
+      <p className="text-small text-muted max-w-md">
+        {t('fulfill.awaitingWaybill', { count: hint.count })}
+      </p>
+      {hint.bostaConnected === false && (
+        <Link to="/settings?tab=connections" className="btn-brand btn text-small mt-1" data-testid="fulfill-connect-bosta">
+          {t('fulfill.connectBosta')}
+        </Link>
+      )}
+    </div>
+  )
+}
+
 function QueueView({
   queue,
   loading,
@@ -483,6 +526,20 @@ function QueueView({
 }) {
   const { t } = useTranslation()
   const navigate = useNavigate()
+
+  // Empty-queue hint: open orders held out of the queue ONLY because no Bosta waybill
+  // exists yet (PICKABLE_ORDERS_FILTER requires a 'created' forward shipment). Fetched
+  // only when the queue is fully empty — a non-empty queue makes no extra calls. Any
+  // failure falls back to the plain "No orders ready to pick" message. /connections is
+  // owner/manager-only; for a worker it fails and the Connect Bosta link is omitted.
+  const queueEmpty = !loading && queue.length === 0
+  const [waybillHint, setWaybillHint] = useState<AwaitingWaybillHint | null>(null)
+  useEffect(() => {
+    if (!queueEmpty) { setWaybillHint(null); return }
+    let cancelled = false
+    loadAwaitingWaybillHint().then(h => { if (!cancelled) setWaybillHint(h) })
+    return () => { cancelled = true }
+  }, [queueEmpty, queue])
 
   if (loading) return (
     <div className="space-y-3">
@@ -569,7 +626,9 @@ function QueueView({
 
       {/* Normal pick queue */}
       {pickQueue.length === 0 && handoverQueue.length === 0 ? (
-        <EmptyState message={t('fulfill.empty')} icon="📦" />
+        waybillHint
+          ? <AwaitingWaybillEmptyState hint={waybillHint} />
+          : <EmptyState message={t('fulfill.empty')} icon="📦" />
       ) : pickQueue.length === 0 ? null : (
         <>
           {handoverQueue.length > 0 && (

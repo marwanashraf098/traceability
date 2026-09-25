@@ -166,6 +166,7 @@
     "freshTenant": {
       "message": "Nothing to show yet — get set up with these first steps:",
       "connectShopify": "Connect your Shopify store",
+      "shopifyConnected": "Shopify store connected",
       "receiveFirst": "Receive your first shipment",
       "inviteTeam": "Invite your team"
     },
@@ -327,6 +328,7 @@
       "currentState": "Current state",
       "contactCustomer": "Contact customer",
       "viewShipment": "View shipment",
+      "noWaybillYet": "No Bosta waybill yet",
       "viewInShopify": "View in Shopify",
       "viewAllItems": "View all items",
       "traceTimeline": "Trace timeline",
@@ -580,6 +582,9 @@
     "title": "Pick & Pack",
     "refresh": "Refresh",
     "empty": "No orders ready to pick",
+    "awaitingWaybill_one": "{{count}} order is waiting for a Bosta waybill. Orders appear here once a waybill is created in Bosta.",
+    "awaitingWaybill_other": "{{count}} orders are waiting for a Bosta waybill. Orders appear here once a waybill is created in Bosta.",
+    "connectBosta": "Connect Bosta",
     "units": "units",
     "locked": "Locked",
     "backToQueue": "Back to Queue",

@@ -471,7 +471,7 @@ describe('Overview dashboard', () => {
 
   // ── Fresh-tenant card — shown / not shown ────────────────────────────────────
   test('ov11 fresh-tenant card — shown when zero pieces and onboarding not all done', async () => {
-    renderOverview({ statusTotals: ZERO_STATUS_TOTALS, onboarding: NOT_ALL_DONE_ONBOARDING })
+    renderOverview({ statusTotals: ZERO_STATUS_TOTALS, ordersSummary: ZERO_ORDERS_SUMMARY, onboarding: NOT_ALL_DONE_ONBOARDING })
     expect(await screen.findByTestId('fresh-tenant-card')).toBeInTheDocument()
     expect(screen.queryByTestId('stat-cards')).toBeNull()
   })
@@ -622,6 +622,7 @@ describe('Overview dashboard', () => {
   test('ov19 fulfillment prompt — still shown on a fresh tenant with zero pieces', async () => {
     renderOverview({
       statusTotals: ZERO_STATUS_TOTALS,
+      ordersSummary: ZERO_ORDERS_SUMMARY,
       connections: CONNECTED_CONNECTIONS,
       locations: [locationFixture({ shopify_delivery_profile_status: 'not_activated' })],
     })

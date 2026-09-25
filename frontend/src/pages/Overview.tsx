@@ -882,16 +882,39 @@ function OnboardingCard({
 
 // ── Fresh-tenant card — replaces the whole zone stack ───────────────────────
 
-function FreshTenantCard() {
+// `shopifyConnected` comes from the /connections call Overview already makes — the
+// "Connect your Shopify store" step reflects real connection state, never hardcoded.
+function FreshTenantCard({ shopifyConnected }: { shopifyConnected: boolean }) {
   const { t } = useTranslation()
   const items = [
-    { icon: Plug,      label: t('overview.freshTenant.connectShopify'), to: '/connections' },
     { icon: Inbox,     label: t('overview.freshTenant.receiveFirst'),   to: '/receiving' },
     { icon: UsersIcon, label: t('overview.freshTenant.inviteTeam'),     to: '/users' },
   ]
   return (
     <div className="card p-5 flex flex-col gap-3 animate-fadeIn motion-reduce:animate-none" data-testid="fresh-tenant-card">
       <p className="text-small text-muted">{t('overview.freshTenant.message')}</p>
+      {shopifyConnected ? (
+        <div
+          className="flex items-center gap-2.5 bg-elevated border border-line rounded-lg p-3"
+          data-testid="fresh-tenant-shopify-done"
+        >
+          <CheckCircle2 size={16} strokeWidth={1.75} className="text-success-text" />
+          <span className="flex-1 text-small text-muted">{t('overview.freshTenant.shopifyConnected')}</span>
+        </div>
+      ) : (
+        <Link
+          to="/connections"
+          className="flex items-center gap-2.5 bg-elevated border border-line rounded-lg p-3
+                     [@media(hover:hover)_and_(pointer:fine)]:hover:bg-black/[0.04]
+                     transition-[background-color,transform] duration-100 ease-out [@media(hover:hover)_and_(pointer:fine)]:hover:duration-150
+                     active:scale-[0.97] active:duration-100
+                     motion-reduce:transition-none motion-reduce:active:scale-100"
+          data-testid="fresh-tenant-shopify-todo"
+        >
+          <Plug size={16} strokeWidth={1.75} className="text-trace-blue" />
+          <span className="flex-1 text-small text-primary">{t('overview.freshTenant.connectShopify')}</span>
+        </Link>
+      )}
       {items.map(item => (
         <Link
           key={item.to}
@@ -1033,7 +1056,12 @@ export default function Overview() {
   const showOnboarding = !onboardingHidden && !onboarding.loading && !onboarding.error &&
     onboarding.data && !onboarding.data.dismissed && !onboarding.data.allDone
 
+  // Fresh = nothing to show at all: no pieces AND no orders. A store connected with real
+  // orders but no received stock yet must see the dashboard (its orders), not the
+  // "get set up" card. orders/summary.total is all-time; a failed/loading call keeps
+  // the dashboard, same as a failed status-totals call already does.
   const isFreshTenant = !statusTotals.loading && !statusTotals.error && totalPieces === 0 &&
+    !ordersSummary.loading && !ordersSummary.error && ordersSummary.data?.total === 0 &&
     !onboarding.loading && !onboarding.error && onboarding.data && !onboarding.data.allDone
 
   const showFulfillmentPrompt = !connections.loading && !connections.error && connections.data &&
@@ -1067,7 +1095,7 @@ export default function Overview() {
       {showFulfillmentPrompt && <FulfillmentActivationPromptCard />}
 
       {isFreshTenant ? (
-        <FreshTenantCard />
+        <FreshTenantCard shopifyConnected={connections.data?.shopify.connected === true} />
       ) : (
         <>
           {/* ── Onboarding card ── */}
