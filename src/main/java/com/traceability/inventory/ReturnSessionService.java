@@ -498,24 +498,25 @@ public class ReturnSessionService {
             "WHERE id = ? AND tenant_id = ?",
             actorUserId, sessionId, tenantId);
 
-        // Scan-as-truth intake completion (close only — abandon never gets here): every
-        // return leg of an order that had a piece legally scanned in this session is now
-        // intake-complete. Orders come from this session's return_received events, not
-        // pieces.current_order_id — restock() has already cleared that by close time.
-        // Illegal-state (mismatch) scans write no event, so they never complete a leg.
+        // Scan-as-truth intake completion (close only — abandon never gets here): a return
+        // leg is intake-complete when it has scan evidence FROM THIS SESSION under the
+        // canonical ShipmentLinkService.returnLegScanEvidenceSql (Step 4c-1): its own AWB was
+        // scanned here, or it is its order's only unstamped return leg and a piece of the
+        // order was legally scanned here. Either way the evidence needs a return_received
+        // event of this session, so illegal-state (mismatch) scans, which write no event,
+        // never complete a leg. Several legs of one order and no AWB → none is stamped
+        // (never guess). The single-statement UPDATE evaluates "only unstamped leg" against
+        // the pre-close state, so stamping one leg here can't make another eligible.
         // Step 5 (V101): also record HOW and BY WHOM — outcome 'scanned', the closing user
         // (NULL when ReturnSessionAutoCloseJob closes it = system), and this session.
         jdbc.update(
-            "UPDATE shipments SET return_intake_completed_at = now(), " +
-            "    return_intake_outcome = 'scanned', return_intake_by = ?, return_intake_session_id = ? " +
-            "WHERE tenant_id = ? AND shipment_leg = 'return' " +
-            "  AND return_intake_completed_at IS NULL " +
-            "  AND order_id IN ( " +
-            "      SELECT pe.order_id FROM piece_events pe " +
-            "      WHERE pe.tenant_id = ? AND pe.event_type = 'return_received' " +
-            "        AND pe.order_id IS NOT NULL " +
-            "        AND pe.metadata->>'session_id' = ?)",
-            actorUserId, sessionId, tenantId, tenantId, sessionId.toString());
+            "UPDATE shipments s SET return_intake_completed_at = now(), " +
+            "    return_intake_outcome = 'scanned', return_intake_by = ?, return_intake_session_id = cs.session_id " +
+            "FROM (SELECT ?::uuid AS session_id) cs " +
+            "WHERE s.tenant_id = ? AND s.shipment_leg = 'return' " +
+            "  AND s.return_intake_completed_at IS NULL " +
+            "  AND " + ShipmentLinkService.returnLegScanEvidenceSql("cs.session_id"),
+            actorUserId, sessionId, tenantId);
 
         Map<String, Object> result = new LinkedHashMap<>(counts);
         result.put("sessionId", sessionId.toString());
@@ -727,6 +728,8 @@ public class ReturnSessionService {
         for (Map<String, Object> leg : legs) {
             Object orderId = leg.get("order_id");
             String awb = (String) leg.get("awb");
+            // TODO(4d): scanned items go to the order's FIRST parcel card only — with several
+            // return legs on one order (V104) the other cards show none of them.
             boolean firstParcelForOrder = ordersTaken.add(orderId);
 
             List<Map<String, Object>> parcelExpected = new ArrayList<>();

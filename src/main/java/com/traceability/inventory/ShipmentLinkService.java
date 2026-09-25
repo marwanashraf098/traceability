@@ -205,7 +205,7 @@ public class ShipmentLinkService {
 
         // 3. No existing forward shipment — fall through to original swapped-AWB check.
         //    Both the check and the INSERT receive the normalized value so a formatting
-        //    difference can never again trigger ux_active_shipment_per_order_leg.
+        //    difference can never again trigger ux_active_forward_shipment_per_order (V104).
         UUID shipmentId = handleSwappedAwbCheck(trackingNumber, tenantId, orderId, orderNumber);
 
         // 4. Create shipment if not already present
@@ -220,7 +220,7 @@ public class ShipmentLinkService {
                     shipmentId, tenantId, orderId, trackingNumber);
                 isNewShipment = true;
             } catch (DuplicateKeyException e) {
-                // ux_active_shipment_per_order_leg: should now be unreachable via scan.
+                // ux_active_forward_shipment_per_order (V104): should now be unreachable via scan.
                 throw new ResponseStatusException(HttpStatus.CONFLICT,
                     "Order already has an active shipment — resolve it before linking a new AWB");
             }
@@ -313,7 +313,8 @@ public class ShipmentLinkService {
         // Step 3 — create/find shipment and link.
         // CRP (type.code=25) is a separate Bosta delivery (new tracking number) created
         // by the customer initiating a return. It gets shipment_leg='return' so it can
-        // coexist with the forward shipment under ux_active_shipment_per_order_leg (V43).
+        // coexist with the forward shipment; since V104 an order may carry several return
+        // legs (only the forward leg is one-active-per-order).
         UUID shipmentId;
         if (isCrpDelivery(delivery)) {
             try {
@@ -330,7 +331,7 @@ public class ShipmentLinkService {
                 shipmentId = createOrFindShipment(
                     tenantId, orderId, trackingNumber, mapped.shipmentInternalState(), delivery);
             } catch (DuplicateKeyException e) {
-                // ux_active_shipment_per_order_leg fired: order already has an active forward
+                // ux_active_forward_shipment_per_order (V104) fired: order already has an active forward
                 // shipment (concurrent double-link race). Route to unlinked.
                 log.warn("Active-forward-shipment constraint prevented double-link for order {} tracking {}",
                          orderId, trackingNumber);
@@ -488,6 +489,8 @@ public class ShipmentLinkService {
             // that method in this same class so the two can't silently drift; a plain
             // '?'-parameterized reuse isn't possible here since this one is correlated
             // per row (sh.order_id/sh.tenant_id) instead of invoked per-call.
+            // TODO(4d): order-level, not per leg — with several return legs on one order
+            // (V104) every leg of the order reports the same count.
             "       (SELECT COUNT(*) FROM pieces p WHERE p.current_order_id = sh.order_id " +
             "          AND p.tenant_id = sh.tenant_id " +
             "          AND p.status = 'return_pending_inspection'::piece_status" +
@@ -791,10 +794,81 @@ public class ShipmentLinkService {
     }
 
     /**
+     * THE canonical rule (Step 4c-1): "return leg {@code s} of its order has scan evidence".
+     * An order can carry more than one return leg (V104), and a return piece carries no
+     * link to the leg it came back on (piece_events.shipment_id is the FORWARD shipment),
+     * so this is the only place that decides which leg a return scan belongs to. Used by
+     * ReturnSessionService.close() (intake stamping), {@link #resolveReturnLegIfComplete}
+     * and {@link #RETURN_LEG_AWAITING_SCAN_SQL} — never re-derive it.
+     *
+     * Rule 1 — the leg's own AWB was scanned (return_session_shipments) in a non-abandoned
+     *          return session S, and S holds a return_received piece event for the order.
+     * Rule 2 — the leg is the order's ONLY return leg with return_intake_completed_at NULL,
+     *          and a return_received piece event for the order exists at/after the leg's
+     *          created_at. Refinements, none of which can change a single-leg order:
+     *            • an event from a session in which ANOTHER return leg's AWB was scanned
+     *              belongs to that leg (Rule 1) and is not evidence for this one, so a
+     *              newer leg's scans never hide an older unscanned leg;
+     *            • a leg still in transit (created / with_courier / returning) gets no Rule 2
+     *              evidence while the order has another return leg — on a multi-leg order
+     *              only its own AWB scan (Rule 1) can speak for it;
+     *            • 'terminated' / 'cancelled' legs are not "other legs" (Bosta abandoned
+     *              them; they never held V43's per-order slot either).
+     * Otherwise the leg has no scan evidence — never guess between legs.
+     *
+     * Single-leg orders: Rule 2 is exactly the pre-V104 order-wide check.
+     *
+     * {@code sessionIdExpr}: null → evidence from any session (Rule 1: any non-abandoned
+     * session; Rule 2: any event). Otherwise a SQL expression of type uuid naming one
+     * session → evidence from THAT session only (Rule 1: S = it; Rule 2: the event is in it).
+     * Alias {@code s} must be the return-leg shipments row. Returns a parenthesized predicate.
+     */
+    public static String returnLegScanEvidenceSql(String sessionIdExpr) {
+        String rule1Session = sessionIdExpr == null ? "" : "AND rss_ev.session_id = " + sessionIdExpr + " ";
+        String rule2Session = sessionIdExpr == null ? "" : "AND pe_ev.metadata->>'session_id' = (" + sessionIdExpr + ")::text ";
+        return "(" +
+            // Rule 1
+            "EXISTS (SELECT 1 FROM return_session_shipments rss_ev " +
+            "        JOIN return_sessions rs_ev ON rs_ev.id = rss_ev.session_id AND rs_ev.tenant_id = rss_ev.tenant_id " +
+            "        WHERE rss_ev.tenant_id = s.tenant_id AND rss_ev.awb = s.tracking_number " +
+            "          AND rs_ev.status <> 'abandoned' " + rule1Session +
+            "          AND EXISTS (SELECT 1 FROM piece_events pe_r1 " +
+            "                      WHERE pe_r1.tenant_id = s.tenant_id AND pe_r1.order_id = s.order_id " +
+            "                        AND pe_r1.event_type = 'return_received' " +
+            "                        AND pe_r1.metadata->>'session_id' = rss_ev.session_id::text)) " +
+            // Rule 2
+            "OR (s.return_intake_completed_at IS NULL " +
+            "    AND NOT EXISTS (SELECT 1 FROM shipments s_un " +
+            "                    WHERE s_un.tenant_id = s.tenant_id AND s_un.order_id = s.order_id " +
+            "                      AND s_un.shipment_leg = 'return' AND s_un.id <> s.id " +
+            "                      AND s_un.return_intake_completed_at IS NULL " +
+            "                      AND s_un.internal_state NOT IN ('terminated', 'cancelled')) " +
+            "    AND (s.internal_state NOT IN ('created', 'with_courier', 'returning') " +
+            "         OR NOT EXISTS (SELECT 1 FROM shipments s_ml " +
+            "                        WHERE s_ml.tenant_id = s.tenant_id AND s_ml.order_id = s.order_id " +
+            "                          AND s_ml.shipment_leg = 'return' AND s_ml.id <> s.id " +
+            "                          AND s_ml.internal_state NOT IN ('terminated', 'cancelled'))) " +
+            "    AND EXISTS (SELECT 1 FROM piece_events pe_ev " +
+            "                WHERE pe_ev.tenant_id = s.tenant_id AND pe_ev.order_id = s.order_id " +
+            "                  AND pe_ev.event_type = 'return_received' " +
+            "                  AND pe_ev.occurred_at >= s.created_at " + rule2Session +
+            "                  AND NOT EXISTS (SELECT 1 FROM return_session_shipments rss_o " +
+            "                                  JOIN shipments s_o ON s_o.tenant_id = rss_o.tenant_id " +
+            "                                                    AND s_o.tracking_number = rss_o.awb " +
+            "                                  WHERE rss_o.tenant_id = s.tenant_id " +
+            "                                    AND rss_o.session_id::text = pe_ev.metadata->>'session_id' " +
+            "                                    AND s_o.order_id = s.order_id AND s_o.shipment_leg = 'return' " +
+            "                                    AND s_o.id <> s.id " +
+            "                                    AND s_o.internal_state NOT IN ('terminated', 'cancelled')))) " +
+            ")";
+    }
+
+    /**
      * THE single definition of "return leg awaiting scan" (alias {@code s} = shipments):
      * a CRP return leg Bosta reports 'returned', intake not completed, and no scan evidence
-     * — no return_received piece event for a piece of the order at/after the leg's
-     * created_at (so a scan sitting in a still-open session counts as scanned).
+     * under {@link #returnLegScanEvidenceSql} (any session — so a scan sitting in a
+     * still-open session counts as scanned). Step 4c-1: evidence is per leg, so a newer
+     * leg's scans no longer hide an older unscanned leg on the same order.
      * Shared by ExceptionService.detectReturnLegUnscanned() (which adds the age window)
      * and {@link #awaitingScan()} (any age) — never write a second copy.
      */
@@ -802,11 +876,7 @@ public class ShipmentLinkService {
         "s.shipment_leg = 'return' " +
         "AND s.internal_state = 'returned'::shipment_internal_state " +
         "AND s.return_intake_completed_at IS NULL " +
-        "AND NOT EXISTS ( " +
-        "    SELECT 1 FROM piece_events pe " +
-        "    WHERE pe.tenant_id = s.tenant_id AND pe.order_id = s.order_id " +
-        "      AND pe.event_type = 'return_received' " +
-        "      AND pe.occurred_at >= s.created_at) ";
+        "AND NOT " + returnLegScanEvidenceSql(null) + " ";
 
     /**
      * THE single definition of an order Traced never tracked: none of its order items has an
@@ -922,6 +992,10 @@ public class ShipmentLinkService {
      * resolves, hasActiveReturnLeg() picks it up independently via its own non-terminal
      * state — resolving early never blocks a future one.
      *
+     * Step 4c-1 (V104, several return legs per order): the piece check stays order-scoped,
+     * but only legs with scan evidence under {@link #returnLegScanEvidenceSql} and intake
+     * not yet stamped are flipped — never a second leg that is still with the courier.
+     *
      * Step 3C-fix (Test 2 gap): the CRP-leg resolution above stays unconditional — it has
      * no variant concept. The EXCHANGE resolution is different: on a multi-item matched
      * order, "no piece left at RPI" can become true from disposing a piece that ISN'T the
@@ -942,10 +1016,17 @@ public class ShipmentLinkService {
             "AND status = 'return_pending_inspection'::piece_status",
             Integer.class, orderId, tenantId);
         if (stillPending != null && stillPending == 0) {
+            // Step 4c-1: only legs with scan evidence (returnLegScanEvidenceSql, any session)
+            // and intake not yet stamped. A leg still with the courier and no evidence of
+            // its own is never touched — on a multi-leg order the dispositioned pieces may
+            // belong to a different leg. Like before, this writes internal_state only: no
+            // shipment_status_history row and no returned_at.
             jdbc.update(
-                "UPDATE shipments SET internal_state = 'returned'::shipment_internal_state " +
-                "WHERE order_id = ? AND tenant_id = ? AND shipment_leg = 'return' " +
-                "AND internal_state NOT IN (" + RETURN_LEG_TERMINAL_STATES + ")",
+                "UPDATE shipments s SET internal_state = 'returned'::shipment_internal_state " +
+                "WHERE s.order_id = ? AND s.tenant_id = ? AND s.shipment_leg = 'return' " +
+                "AND s.internal_state NOT IN (" + RETURN_LEG_TERMINAL_STATES + ") " +
+                "AND s.return_intake_completed_at IS NULL " +
+                "AND " + returnLegScanEvidenceSql(null),
                 orderId, tenantId);
             exchangeMatchService.resolveIfDispositionedPieceMatches(orderId, tenantId, dispositionedPieceId);
         }
@@ -954,7 +1035,9 @@ public class ShipmentLinkService {
     /**
      * Creates a return-leg shipment row for a CRP delivery, or finds the existing one
      * (idempotent on tracking_number). Inserts with shipment_leg='return' so it can
-     * coexist with an active forward shipment under ux_active_shipment_per_order_leg (V43).
+     * coexist with an active forward shipment. Since V104 there is no per-order limit on
+     * return legs; the global UNIQUE tracking_number is the only guard, and this method
+     * finds by tracking number before it inserts.
      */
     private UUID createOrFindReturnShipment(UUID tenantId, UUID orderId, String trackingNumber,
                                              String internalState, BostaDelivery delivery) {
