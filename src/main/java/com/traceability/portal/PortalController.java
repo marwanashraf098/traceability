@@ -86,7 +86,8 @@ public class PortalController {
             }
             String email = n.hasNonNull("email") ? n.get("email").asText() : null;
             String note  = n.hasNonNull("note")  ? n.get("note").asText()  : null;
-            return new PortalService.SubmitRequest(lines, email, note);
+            String districtId = n.hasNonNull("districtId") ? n.get("districtId").asText() : null;
+            return new PortalService.SubmitRequest(lines, email, note, districtId);
         } catch (Exception e) {
             return null;
         }

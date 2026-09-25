@@ -1081,7 +1081,16 @@
         "rejected": "Request rejected",
         "conflict": "This request was already decided — refreshed.",
         "actionFailed": "Couldn't save that. Please try again.",
-        "loadError": "Couldn't load this request"
+        "loadError": "Couldn't load this request",
+        "changeArea": "Change area",
+        "areaLabel": "Pickup area",
+        "areaPlaceholder": "Choose an area",
+        "areaSave": "Save area",
+        "areaSaved": "Pickup area updated",
+        "areaFailed": "Couldn't change the area. Please try again.",
+        "areaConflict": "The area can't be changed at this stage.",
+        "areaNone": "No pickup areas are available for this city.",
+        "areaLoadFailed": "Couldn't load the pickup areas."
       }
     }
   },
@@ -1582,7 +1591,26 @@
         "LOGO_URL": "Paste a link that starts with https://cdn.shopify.com/",
         "BRAND_COLOR": "Use a hex colour like #1A2B3C.",
         "POLICY_LENGTH": "The policy can be at most 2000 characters.",
-        "generic": "Check the highlighted fields and try again."
+        "generic": "Check the highlighted fields and try again.",
+        "RETURN_LOCATION_UNKNOWN": "That location isn't in your Bosta account. Choose another.",
+        "BOSTA_KEY_REFUSED": "Bosta didn't accept the connected API key for locations",
+        "NO_BOSTA_ACCOUNT": "Connect Bosta to choose where returns go.",
+        "BOSTA_UNAVAILABLE": "Couldn't reach Bosta. Please try again."
+      },
+      "returnLocation": {
+        "label": "Returns go back to",
+        "help": "Bosta brings returned items to this pickup location.",
+        "loading": "Loading your Bosta locations…",
+        "empty": "There are no pickup locations in your Bosta account yet.",
+        "default": "{{name}} (default)",
+        "saved": "Saved: {{name}}",
+        "retry": "Try again",
+        "errors": {
+          "BOSTA_KEY_REFUSED": "Bosta didn't accept the connected API key for locations",
+          "NO_BOSTA_ACCOUNT": "Connect Bosta to choose where returns go.",
+          "BOSTA_UNAVAILABLE": "Couldn't reach Bosta. Please try again.",
+          "generic": "Couldn't load your Bosta locations."
+        }
       }
     }
   },

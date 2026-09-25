@@ -177,7 +177,7 @@ class PortalLookupTest {
 
         // Customer PII never appears in the response.
         String json = mapper.writeValueAsString(resp.getBody());
-        assertThat(resp.getBody().keySet()).containsExactlyInAnyOrder("token", "orderNumber", "deliveredAt", "lines");
+        assertThat(resp.getBody().keySet()).containsExactlyInAnyOrder("token", "orderNumber", "deliveredAt", "lines", "pickup");
         assertThat(json).doesNotContain("Mona Customer").doesNotContain("1012345678").doesNotContain("12 Customer St")
             .doesNotContain("customer").doesNotContain("phone").doesNotContain("address").doesNotContain("email");
         @SuppressWarnings("unchecked")

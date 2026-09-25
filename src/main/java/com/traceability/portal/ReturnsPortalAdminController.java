@@ -8,6 +8,7 @@ import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
@@ -21,10 +22,13 @@ public class ReturnsPortalAdminController {
 
     private final ReturnRequestService  requests;
     private final PortalSettingsService settings;
+    private final ReturnLocationService returnLocations;
 
-    public ReturnsPortalAdminController(ReturnRequestService requests, PortalSettingsService settings) {
-        this.requests = requests;
-        this.settings = settings;
+    public ReturnsPortalAdminController(ReturnRequestService requests, PortalSettingsService settings,
+                                        ReturnLocationService returnLocations) {
+        this.requests        = requests;
+        this.settings        = settings;
+        this.returnLocations = returnLocations;
     }
 
     // ── Return requests ──────────────────────────────────────────────────────
@@ -60,6 +64,23 @@ public class ReturnsPortalAdminController {
         requests.reject(id, body == null ? null : body.reason(), principal.userId());
     }
 
+    public record PickupAreaRequest(String districtId) {}
+
+    /** Step 4c-2 — the pickup-available districts of the request's city, for "Change area". */
+    @GetMapping("/return-requests/{id}/pickup-areas")
+    @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
+    public Map<String, Object> pickupAreas(@PathVariable UUID id) {
+        return requests.pickupAreas(id);
+    }
+
+    /** Step 4c-2 — change the request's pickup area (requested / approved only). */
+    @PutMapping("/return-requests/{id}/pickup-area")
+    @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void setPickupArea(@PathVariable UUID id, @RequestBody(required = false) PickupAreaRequest body) {
+        requests.setPickupArea(id, body == null ? null : body.districtId());
+    }
+
     // ── Portal settings ──────────────────────────────────────────────────────
 
     @GetMapping("/tenant/portal-settings")
@@ -72,16 +93,40 @@ public class ReturnsPortalAdminController {
     @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
     public ResponseEntity<Map<String, Object>> putSettings(@RequestBody(required = false) PortalSettingsService.Settings body) {
         try {
-            return ResponseEntity.ok(settings.update(body));
+            // Step 4c-2: a new return location is checked against Bosta BEFORE the settings
+            // transaction opens (no connection held across the HTTP call).
+            ReturnLocationService.Location location =
+                body != null && body.returnLocationId() != null && !body.returnLocationId().isBlank()
+                    ? returnLocations.resolveForSave(body.returnLocationId())
+                    : null;
+            return ResponseEntity.ok(settings.update(body, location));
         } catch (PortalSettingsService.FieldException e) {
-            // Answered here with a body (the global ResponseStatusException handler is bodyless),
-            // so the settings page can put the error next to the right field.
-            Map<String, Object> err = new LinkedHashMap<>();
-            err.put("field", e.field());
-            err.put("error", e.code());
-            err.put("message", e.getReason());
-            return ResponseEntity.status(e.getStatusCode()).body(err);
+            return fieldError(e);
         }
+    }
+
+    /** Step 4c-2 — the tenant's Bosta pickup locations, for "Returns go back to". */
+    @GetMapping("/tenant/bosta/return-locations")
+    @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
+    public ResponseEntity<?> returnLocations() {
+        try {
+            List<Map<String, Object>> list = returnLocations.list();
+            return ResponseEntity.ok(list);
+        } catch (PortalSettingsService.FieldException e) {
+            return fieldError(e);
+        }
+    }
+
+    /**
+     * Answered here with a body (the global ResponseStatusException handler is bodyless), so
+     * the settings page can put the error next to the right field.
+     */
+    private static ResponseEntity<Map<String, Object>> fieldError(PortalSettingsService.FieldException e) {
+        Map<String, Object> err = new LinkedHashMap<>();
+        err.put("field", e.field());
+        err.put("error", e.code());
+        err.put("message", e.getReason());
+        return ResponseEntity.status(e.getStatusCode()).body(err);
     }
 
     /** Step 4e-A — variant list for the "products that can't be returned" setting. */

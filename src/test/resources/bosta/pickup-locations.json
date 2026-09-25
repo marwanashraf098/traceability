@@ -1,0 +1,37 @@
+{
+  "success": true,
+  "message": "Done successfully.",
+  "data": {
+    "total": 2,
+    "list": [
+      {
+        "locationName": "Maadi Warehouse",
+        "contactPerson": { "name": "Store Ops", "email": "ops@example.com", "phone": "01000000000" },
+        "address": {
+          "firstLine": "Street 9, building 12",
+          "floor": "1",
+          "apartment": "1",
+          "city": { "_id": "FceDyHXwpSYYF9zGW", "name": "Cairo" },
+          "district": "Maadi"
+        },
+        "_id": "yfWPU0tP2",
+        "contacts": [],
+        "isDefault": true,
+        "canEdit": true,
+        "canDelete": true
+      },
+      {
+        "_id": "5f0a7def4a839b00139d6203",
+        "locationName": "Original Business Location",
+        "address": { "firstLine": "1st settlement, New Cairo, Egypt" },
+        "contactPerson": { "name": "Store Owner", "email": "owner@example.com", "phone": "01000000001" },
+        "contacts": [],
+        "canEdit": false,
+        "canDelete": false
+      }
+    ],
+    "page": 1,
+    "limit": 50,
+    "pages": 1
+  }
+}

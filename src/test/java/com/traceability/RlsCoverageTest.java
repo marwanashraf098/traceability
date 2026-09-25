@@ -3,9 +3,11 @@ package com.traceability;
 import com.traceability.identity.JwtService;
 import com.traceability.identity.model.SignupRequest;
 import com.traceability.identity.model.TokenResponse;
+import com.traceability.integrations.bosta.BostaV2Client;
 import com.traceability.integrations.shopify.ShopifyGateway;
 import com.traceability.integrations.shopify.ShopifyTokenProvider;
 import com.traceability.inventory.UlidGenerator;
+import com.traceability.security.EncryptionService;
 import org.junit.jupiter.api.*;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -29,6 +31,9 @@ import java.util.stream.Collectors;
 import static java.util.Map.entry;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
@@ -111,7 +116,9 @@ class RlsCoverageTest {
             "/api/v1/returns/awaiting-scan",
             "/api/v1/return-requests",
             "/api/v1/return-requests/{id}",
+            "/api/v1/return-requests/{id}/pickup-areas",
             "/api/v1/tenant/portal-settings",
+            "/api/v1/tenant/bosta/return-locations",
             "/api/v1/variants",
             "/api/v1/overview/trends",
             "/api/v1/overview/late-to-pack",
@@ -236,6 +243,8 @@ class RlsCoverageTest {
     RequestMappingHandlerMapping handlerMapping;
     @MockBean ShopifyGateway shopifyGateway;
     @MockBean ShopifyTokenProvider tokenProvider;
+    @MockBean BostaV2Client bostaV2;
+    @Autowired EncryptionService encryption;
 
     // ── Per-class shared state ────────────────────────────────────────────────
 
@@ -527,6 +536,54 @@ class RlsCoverageTest {
             jdbc.update("DELETE FROM orders    WHERE tenant_id = ?", otherTenant);
             jdbc.update("DELETE FROM stores    WHERE tenant_id = ?", otherTenant);
             jdbc.update("DELETE FROM tenants   WHERE id = ?", otherTenant);
+        }
+    }
+
+    @Test
+    void returnRequestPickupAreas_crossTenantIsolated_withSameTenantPositiveControl() {
+        UUID mine = seedReturnRequest(tenantId, storeId, "RR-CVG6C7");
+        UUID otherTenant = UUID.randomUUID(), otherStore = UUID.randomUUID();
+        jdbc.update("INSERT INTO tenants (id, name) VALUES (?, 'Cov Areas Other')", otherTenant);
+        jdbc.update("INSERT INTO stores (id, tenant_id, platform, shop_domain, status) " +
+                    "VALUES (?, ?, 'shopify', 'cov-areas-other.myshopify.com', 'disconnected')", otherStore, otherTenant);
+        UUID theirs = seedReturnRequest(otherTenant, otherStore, "RR-CVG8D9");
+        try {
+            ResponseEntity<Map> own = get("/api/v1/return-requests/" + mine + "/pickup-areas", Map.class);
+            assertThat(own.getStatusCode()).as("same-tenant positive control").isEqualTo(HttpStatus.OK);
+            assertThat(own.getBody()).containsKeys("cityId", "districts", "selectedDistrictId", "editable");
+            assertThat(get("/api/v1/return-requests/" + theirs + "/pickup-areas", Map.class).getStatusCode())
+                .isEqualTo(HttpStatus.NOT_FOUND);
+        } finally {
+            jdbc.update("DELETE FROM return_request_items WHERE tenant_id IN (?, ?)", tenantId, otherTenant);
+            jdbc.update("DELETE FROM return_requests WHERE tenant_id IN (?, ?)", tenantId, otherTenant);
+            jdbc.update("DELETE FROM orders WHERE tenant_id = ?", otherTenant);
+            jdbc.update("DELETE FROM stores WHERE tenant_id = ?", otherTenant);
+            jdbc.update("DELETE FROM tenants WHERE id = ?", otherTenant);
+        }
+    }
+
+    @Test
+    void bostaReturnLocations_usesThisTenantsDecryptedKey_neverAnotherTenants() {
+        UUID otherTenant = UUID.randomUUID();
+        jdbc.update("INSERT INTO tenants (id, name) VALUES (?, 'Cov Bosta Other')", otherTenant);
+        UUID ownAccount = UUID.randomUUID(), otherAccount = UUID.randomUUID();
+        jdbc.update("INSERT INTO courier_accounts (id, tenant_id, provider, api_key_encrypted, webhook_secret, status) " +
+                    "VALUES (?, ?, 'bosta', ?, 'cov-hash-own', 'active')", ownAccount, tenantId, encryption.encrypt("cov-key-own"));
+        jdbc.update("INSERT INTO courier_accounts (id, tenant_id, provider, api_key_encrypted, webhook_secret, status) " +
+                    "VALUES (?, ?, 'bosta', ?, 'cov-hash-other', 'active')", otherAccount, otherTenant, encryption.encrypt("cov-key-other"));
+        when(bostaV2.listPickupLocations(anyString())).thenAnswer(inv -> List.of(new BostaV2Client.PickupLocation(
+            "loc-" + inv.getArgument(0), "Warehouse for " + inv.getArgument(0), true, "Cairo")));
+        try {
+            ResponseEntity<List> resp = get("/api/v1/tenant/bosta/return-locations", List.class);
+            assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.OK);
+            @SuppressWarnings("unchecked")
+            List<Map<String, Object>> list = resp.getBody();
+            assertThat(list).extracting(l -> l.get("id")).containsExactly("loc-cov-key-own");
+            verify(bostaV2).listPickupLocations("cov-key-own");
+            verify(bostaV2, never()).listPickupLocations("cov-key-other");
+        } finally {
+            jdbc.update("DELETE FROM courier_accounts WHERE id IN (?, ?)", ownAccount, otherAccount);
+            jdbc.update("DELETE FROM tenants WHERE id = ?", otherTenant);
         }
     }
 

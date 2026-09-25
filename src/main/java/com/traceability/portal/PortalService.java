@@ -31,9 +31,6 @@ public class PortalService {
     public static final List<String> REASON_CODES =
         List.of("wrong_size", "damaged", "not_as_pictured", "wrong_item", "changed_mind", "other");
 
-    /** Step 4c books the Bosta pickup on approval; until then this is false everywhere. */
-    public static final boolean PICKUP_BOOKING = false;
-
     static final int THROTTLE_MAX_FAILURES = 5;
     static final int THROTTLE_WINDOW_MINUTES = 60;
 
@@ -47,11 +44,15 @@ public class PortalService {
     private final JdbcTemplate        jdbc;
     private final TransactionTemplate tx;
     private final PortalTokenService  tokens;
+    private final PickupAreaService   pickupAreas;
 
     public PortalService(JdbcTemplate jdbc, PlatformTransactionManager txm, PortalTokenService tokens) {
-        this.jdbc   = jdbc;
-        this.tx     = new TransactionTemplate(txm);
-        this.tokens = tokens;
+        this.jdbc        = jdbc;
+        this.tx          = new TransactionTemplate(txm);
+        this.tokens      = tokens;
+        // Built on the same JdbcTemplate (not injected) so a test that constructs this service
+        // on an app_user connection gets pickup-area reads on that connection too.
+        this.pickupAreas = new PickupAreaService(jdbc);
     }
 
     /** Hatch #14. Null for an unknown or disabled slug. */
@@ -67,7 +68,7 @@ public class PortalService {
         return Optional.ofNullable(TenantContext.runAs(tenantId, () -> tx.execute(s -> {
             Map<String, Object> t = jdbc.queryForMap(
                 "SELECT name, customer_return_window_days, portal_auto_approve, " +
-                "       portal_logo_url, portal_brand_color, portal_policy_text " +
+                "       portal_logo_url, portal_brand_color, portal_policy_text, portal_pickup_booking " +
                 "FROM tenants WHERE id = ?", tenantId);
             Map<String, Object> body = new LinkedHashMap<>();
             body.put("storeName", t.get("name"));
@@ -77,7 +78,7 @@ public class PortalService {
             body.put("brandColor", t.get("portal_brand_color"));
             body.put("policyText", t.get("portal_policy_text"));
             body.put("autoApprove", t.get("portal_auto_approve"));
-            body.put("pickupBooking", PICKUP_BOOKING);
+            body.put("pickupBooking", t.get("portal_pickup_booking"));
             return body;
         })));
     }
@@ -122,7 +123,21 @@ public class PortalService {
         body.put("orderNumber", order.get("number"));
         body.put("deliveredAt", ((Timestamp) order.get("delivered_at")).toInstant().toString());
         body.put("lines",       lines);
+        // Step 4c-2: the pickup area choice — only when this tenant books Bosta pickups and
+        // the delivery city has pickup-available districts. City and district names only.
+        body.put("pickup", pickupOffer(tenantId, orderId).map(a -> a.toJson(true)).orElse(null));
         return new LookupResult(Outcome.SUCCESS, body);
+    }
+
+    /**
+     * The pickup-area choice for this order, or empty: booking off, delivery city unknown, or
+     * no pickup-available district in it. Lookup and submission both use this, so submission
+     * requires a district exactly when lookup offered the choice.
+     */
+    private Optional<PickupAreaService.CityAreas> pickupOffer(UUID tenantId, UUID orderId) {
+        boolean booking = Boolean.TRUE.equals(jdbc.queryForObject(
+            "SELECT portal_pickup_booking FROM tenants WHERE id = ?", Boolean.class, tenantId));
+        return booking ? pickupAreas.forOrder(tenantId, orderId) : Optional.empty();
     }
 
     /**
@@ -210,7 +225,12 @@ public class PortalService {
 
     public record SubmitLine(UUID variantId, Integer quantity, String reasonCode) {}
 
-    public record SubmitRequest(List<SubmitLine> lines, String email, String note) {}
+    /** districtId: the chosen pickup area — required when lookup offered one, ignored otherwise. */
+    public record SubmitRequest(List<SubmitLine> lines, String email, String note, String districtId) {
+        public SubmitRequest(List<SubmitLine> lines, String email, String note) {
+            this(lines, email, note, null);
+        }
+    }
 
     public record SubmitResult(SubmitOutcome outcome, Map<String, Object> body) {}
 
@@ -298,14 +318,27 @@ public class PortalService {
             }
         }
 
+        // Step 4c-2: the pickup area, re-derived from scratch (never trusted from the lookup).
+        Optional<PickupAreaService.CityAreas> offer = pickupOffer(tenantId, orderId);
+        PickupAreaService.District district = null;
+        if (offer.isPresent()) {
+            district = offer.get().find(req.districtId()).orElseThrow(InvalidSubmission::new);
+        }
+
         boolean autoApprove = Boolean.TRUE.equals(jdbc.queryForObject(
             "SELECT portal_auto_approve FROM tenants WHERE id = ?", Boolean.class, tenantId));
         String reference = newReference(tenantId);
         UUID requestId = jdbc.queryForObject(
             "INSERT INTO return_requests (tenant_id, order_id, type, status, reference, customer_email, customer_note, " +
-            "    decided_at) " +
-            "VALUES (?, ?, 'refund', ?::return_request_status, ?, ?, ?, CASE WHEN ? THEN now() END) RETURNING id",
-            UUID.class, tenantId, orderId, autoApprove ? "approved" : "requested", reference, email, note, autoApprove);
+            "    decided_at, pickup_city_id, pickup_city_name, pickup_district_id, pickup_district_name, " +
+            "    pickup_district_name_ar) " +
+            "VALUES (?, ?, 'refund', ?::return_request_status, ?, ?, ?, CASE WHEN ? THEN now() END, ?, ?, ?, ?, ?) RETURNING id",
+            UUID.class, tenantId, orderId, autoApprove ? "approved" : "requested", reference, email, note, autoApprove,
+            district == null ? null : offer.get().cityId(),
+            district == null ? null : offer.get().cityName(),
+            district == null ? null : district.id(),
+            district == null ? null : district.name(),
+            district == null ? null : district.nameAr());
         for (Object[] it : items) {
             jdbc.update(
                 "INSERT INTO return_request_items (tenant_id, request_id, piece_id, variant_id, reason_code) " +

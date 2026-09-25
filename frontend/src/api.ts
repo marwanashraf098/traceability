@@ -2093,8 +2093,15 @@ export interface ReturnRequestDetail {
   note: string | null
   createdAt: string
   deliveredAt: string | null
+  /** Order address city / zone — the fallback when no pickup area was chosen. */
   pickupCity: string | null
   pickupZone: string | null
+  /** Step 4c-2 — the chosen pickup area snapshot (null when none). */
+  pickupCityId: string | null
+  pickupCityName: string | null
+  pickupDistrictId: string | null
+  pickupDistrictName: string | null
+  pickupDistrictNameAr: string | null
   decidedAt: string | null
   decidedBy: string | null
   decidedByName: string | null
@@ -2121,6 +2128,32 @@ export function rejectReturnRequest(id: string, reason: string) {
   return request<void>(`/return-requests/${id}/reject`, { method: 'POST', body: JSON.stringify({ reason }) })
 }
 
+export interface PickupDistrict {
+  id: string
+  name: string
+  nameAr: string | null
+  zoneName: string | null
+  zoneNameAr: string | null
+}
+
+/** GET /return-requests/{id}/pickup-areas — the request city's pickup-available districts. */
+export interface ReturnRequestPickupAreas {
+  cityId: string | null
+  cityName: string | null
+  cityNameAr: string | null
+  districts: PickupDistrict[]
+  selectedDistrictId: string | null
+  editable: boolean
+}
+
+export function getReturnRequestPickupAreas(id: string) {
+  return request<ReturnRequestPickupAreas>(`/return-requests/${id}/pickup-areas`)
+}
+
+export function setReturnRequestPickupArea(id: string, districtId: string) {
+  return request<void>(`/return-requests/${id}/pickup-area`, { method: 'PUT', body: JSON.stringify({ districtId }) })
+}
+
 export interface PortalSettings {
   slug: string | null
   enabled: boolean
@@ -2129,11 +2162,46 @@ export interface PortalSettings {
   logoUrl: string | null
   brandColor: string | null
   policyText: string | null
-  /** Read-only — false until Step 4c books the Bosta pickup on approval. */
+  /** Read-only — tenants.portal_pickup_booking (same value as portalPickupBooking). */
   pickupBooking: boolean
+  /** Read-only for now (no switch in Settings yet). */
+  portalPickupBooking: boolean
+  /** The Bosta pickup location returns go back to (null until chosen). */
+  returnLocationId: string | null
+  returnLocationName: string | null
 }
 
-export type PortalSettingsInput = Omit<PortalSettings, 'pickupBooking'>
+/** returnLocationId: sent to change it; null/absent leaves the saved one as it is. */
+export type PortalSettingsInput = Omit<PortalSettings, 'pickupBooking' | 'portalPickupBooking' | 'returnLocationName'>
+
+export interface BostaReturnLocation {
+  id: string
+  name: string
+  isDefault: boolean
+  cityName: string | null
+}
+
+/** GET /tenant/bosta/return-locations failed; code = NO_BOSTA_ACCOUNT | BOSTA_KEY_REFUSED | BOSTA_UNAVAILABLE. */
+export class ReturnLocationsError extends Error {
+  constructor(public readonly status: number, public readonly code: string | null) {
+    super(`${status}: ${code ?? 'error'}`)
+  }
+}
+
+/** Reads the error body (its code) — the shared request() drops it. */
+export async function getReturnLocations(): Promise<BostaReturnLocation[]> {
+  const token = getAccessToken()
+  const res = await fetch(`${BASE}/tenant/bosta/return-locations`, {
+    credentials: 'include',
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  })
+  if (!res.ok) {
+    const body = await res.json().catch(() => null) as { error?: string } | null
+    throw new ReturnLocationsError(res.status, body?.error ?? null)
+  }
+  const data: unknown = await res.json().catch(() => null)
+  return Array.isArray(data) ? (data as BostaReturnLocation[]) : []
+}
 
 export function getPortalSettings() {
   return request<PortalSettings>('/tenant/portal-settings')

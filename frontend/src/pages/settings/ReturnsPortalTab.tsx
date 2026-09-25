@@ -2,8 +2,9 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Search } from 'lucide-react'
 import {
-  getPortalSettings, getPortalVariants, savePortalSettings, setVariantNonReturnable,
-  PortalSettings, PortalSettingsError, PortalSettingsInput, PortalVariantRow,
+  getPortalSettings, getPortalVariants, getReturnLocations, savePortalSettings, setVariantNonReturnable,
+  BostaReturnLocation, PortalSettings, PortalSettingsError, PortalSettingsInput, PortalVariantRow,
+  ReturnLocationsError,
 } from '../../api'
 import { Button, Input, Skeleton, Toggle, cn, useToast } from '../../components/ui'
 import { writeToClipboard } from './connections/CopyRow'
@@ -26,7 +27,7 @@ export function isValidLogoUrl(url: string): boolean {
 
 const HEX = /^#[0-9A-Fa-f]{6}$/
 
-type FieldKey = 'slug' | 'returnWindowDays' | 'logoUrl' | 'brandColor' | 'policyText'
+type FieldKey = 'slug' | 'returnWindowDays' | 'logoUrl' | 'brandColor' | 'policyText' | 'returnLocationId'
 
 /**
  * Returns portal Step 4e-A (M4) — the merchant's portal settings, owner and manager (the
@@ -35,6 +36,10 @@ type FieldKey = 'slug' | 'returnWindowDays' | 'logoUrl' | 'brandColor' | 'policy
  * "Save changes" sends the whole form in one PUT (the backend applies it as one UPDATE).
  * The non-returnable switches are separate: each saves immediately through
  * PUT /variants/{id}/non-returnable, as in the mockup (they are not part of the form).
+ *
+ * Step 4c-2: "Returns go back to" — the tenant's Bosta pickup locations, fetched live. Not in
+ * the M4 mockup; it is a row of the first card styled like the return-window row. With nothing
+ * saved yet, Bosta's default location is preselected (so Save becomes available to store it).
  */
 export default function ReturnsPortalTab() {
   const { t } = useTranslation()
@@ -217,6 +222,13 @@ export default function ReturnsPortalTab() {
           onChange={v => update('autoApprove', v)}
         />
 
+        <ReturnLocationRow
+          savedName={saved.returnLocationName}
+          value={form.returnLocationId}
+          onChange={id => update('returnLocationId', id)}
+          error={errors.returnLocationId}
+        />
+
         <NonReturnableList />
       </section>
 
@@ -316,6 +328,80 @@ export default function ReturnsPortalTab() {
           {t('settings.portal.save')}
         </Button>
       </div>
+    </div>
+  )
+}
+
+/** "Returns go back to" — the tenant's Bosta pickup locations, loaded live. */
+function ReturnLocationRow({
+  savedName, value, onChange, error,
+}: { savedName: string | null; value: string | null; onChange: (id: string | null) => void; error?: string }) {
+  const { t } = useTranslation()
+  const [locations, setLocations] = useState<BostaReturnLocation[] | null>(null)
+  const [loadError, setLoadError] = useState<string | null>(null)
+
+  const load = useCallback(async () => {
+    setLoadError(null)
+    setLocations(null)
+    try {
+      setLocations(await getReturnLocations())
+    } catch (e) {
+      setLoadError(e instanceof ReturnLocationsError && e.code ? e.code : 'generic')
+    }
+  }, [])
+
+  useEffect(() => { load() }, [load])
+
+  // Nothing saved yet → preselect Bosta's default location.
+  useEffect(() => {
+    if (!locations || value) return
+    const def = locations.find(l => l.isDefault)
+    if (def) onChange(def.id)
+  }, [locations, value, onChange])
+
+  const label = (l: BostaReturnLocation) => {
+    const name = l.cityName ? `${l.name} · ${l.cityName}` : l.name
+    return l.isDefault ? t('settings.portal.returnLocation.default', { name }) : name
+  }
+
+  return (
+    <div className="p-6 space-y-2" data-testid="return-location-row">
+      <label htmlFor="portal-return-location" className="text-body font-medium text-primary block">
+        {t('settings.portal.returnLocation.label')}
+      </label>
+      {loadError ? (
+        <div className="space-y-2">
+          <p className="text-small text-critical" role="alert" data-testid="return-location-error">
+            {t(`settings.portal.returnLocation.errors.${loadError}`, {
+              defaultValue: t('settings.portal.returnLocation.errors.generic'),
+            })}
+          </p>
+          {savedName && (
+            <p className="text-small text-muted"><bdi>{t('settings.portal.returnLocation.saved', { name: savedName })}</bdi></p>
+          )}
+          {loadError !== 'NO_BOSTA_ACCOUNT' && (
+            <Button variant="outline" size="sm" onClick={load}>{t('settings.portal.returnLocation.retry')}</Button>
+          )}
+        </div>
+      ) : locations === null ? (
+        <p className="text-small text-muted" aria-busy="true">{t('settings.portal.returnLocation.loading')}</p>
+      ) : locations.length === 0 ? (
+        <p className="text-small text-muted">{t('settings.portal.returnLocation.empty')}</p>
+      ) : (
+        <select
+          id="portal-return-location"
+          className={cn('input w-full max-w-md', error && 'border-critical')}
+          aria-invalid={!!error}
+          aria-describedby="portal-return-location-help"
+          value={value ?? ''}
+          onChange={e => onChange(e.target.value || null)}
+        >
+          {!value && <option value="" disabled>{t('settings.portal.returnLocation.label')}</option>}
+          {locations.map(l => <option key={l.id} value={l.id}>{label(l)}</option>)}
+        </select>
+      )}
+      {error && <p className="text-small text-critical" role="alert" data-testid="error-returnLocationId">{error}</p>}
+      <p id="portal-return-location-help" className="text-small text-muted">{t('settings.portal.returnLocation.help')}</p>
     </div>
   )
 }
@@ -459,6 +545,7 @@ function toInput(s: PortalSettings): PortalSettingsInput {
     logoUrl: s.logoUrl,
     brandColor: s.brandColor,
     policyText: s.policyText,
+    returnLocationId: s.returnLocationId,
   }
 }
 
@@ -472,9 +559,10 @@ function normalize(i: PortalSettingsInput) {
     logoUrl: blank(i.logoUrl),
     brandColor: blank(i.brandColor),
     policyText: blank(i.policyText),
+    returnLocationId: i.returnLocationId ?? null,
   }
 }
 
 function isFieldKey(f: string): f is FieldKey {
-  return ['slug', 'returnWindowDays', 'logoUrl', 'brandColor', 'policyText'].includes(f)
+  return ['slug', 'returnWindowDays', 'logoUrl', 'brandColor', 'policyText', 'returnLocationId'].includes(f)
 }

@@ -1,0 +1,66 @@
+{
+  "success": true,
+  "message": "Done successfully.",
+  "data": [
+    {
+      "cityId": "FceDyHXwpSYYF9zGW",
+      "cityName": "Cairo",
+      "cityOtherName": "القاهرة",
+      "cityCode": "EG-01",
+      "districts": [
+        {
+          "zoneId": "g3jl3V8FMN",
+          "zoneName": "New Cairo",
+          "zoneOtherName": "القاهره الجديده",
+          "districtId": "wY_JL43TilR",
+          "districtName": "1st Settlement - District 10",
+          "districtOtherName": "التجمع الاول - الحي 10",
+          "pickupAvailability": true,
+          "dropOffAvailability": true
+        },
+        {
+          "zoneId": "g3jl3V8FMN",
+          "zoneName": "New Cairo",
+          "zoneOtherName": "القاهره الجديده",
+          "districtId": "_jLhFsfVsLu",
+          "districtName": "1st Settlement - District 11",
+          "districtOtherName": "التجمع الاول - الحي 11",
+          "pickupAvailability": false,
+          "dropOffAvailability": true
+        },
+        {
+          "zoneId": "qWckBs-T7",
+          "zoneName": "Nasr City",
+          "zoneOtherName": "مدينة نصر",
+          "districtId": "Iy7-lFD0BE0",
+          "districtName": "Nasr City - 7th District",
+          "districtOtherName": "مدينة نصر - الحي السابع",
+          "pickupAvailability": true,
+          "dropOffAvailability": true
+        }
+      ],
+      "pickupAvailability": true,
+      "dropOffAvailability": true
+    },
+    {
+      "cityId": "Jrb6X6ucjiYgMP4T7",
+      "cityName": "Alexandria",
+      "cityOtherName": "الإسكندرية",
+      "cityCode": "EG-02",
+      "districts": [
+        {
+          "zoneId": "9mih4NXL1GF",
+          "zoneName": "Abu Yousef",
+          "zoneOtherName": "ابو يوسف",
+          "districtId": "zoJP71_5Ca1",
+          "districtName": "Abu Yousef",
+          "districtOtherName": "ابو يوسف",
+          "pickupAvailability": true,
+          "dropOffAvailability": true
+        }
+      ],
+      "pickupAvailability": false,
+      "dropOffAvailability": true
+    }
+  ]
+}

@@ -22,10 +22,13 @@ public class ReturnRequestService {
     private static final Set<String> STATUSES = Set.of(
         "requested", "approved", "rejected", "pickup_booked", "received", "refund_pending", "refunded", "cancelled");
 
-    private final JdbcTemplate jdbc;
+    private final JdbcTemplate      jdbc;
+    private final PickupAreaService pickupAreas;
 
     public ReturnRequestService(JdbcTemplate jdbc) {
-        this.jdbc = jdbc;
+        this.jdbc        = jdbc;
+        // Same JdbcTemplate (not injected), so an app_user-constructed instance reads on it too.
+        this.pickupAreas = new PickupAreaService(jdbc);
     }
 
     @Transactional(readOnly = true)
@@ -75,6 +78,8 @@ public class ReturnRequestService {
             "       rr.type, rr.status::text AS status, rr.customer_email, rr.customer_note, rr.created_at, " +
             "       rr.decided_at, rr.decided_by, u.name AS decided_by_name, rr.rejection_reason, rr.return_shipment_id, " +
             "       o.customer_phone, o.address->>'city' AS address_city, o.address->>'zone' AS address_zone, " +
+            "       rr.pickup_city_id, rr.pickup_city_name, rr.pickup_district_id, rr.pickup_district_name, " +
+            "       rr.pickup_district_name_ar, " +
             "       (SELECT s.delivered_at FROM shipments s " +
             "         WHERE s.order_id = rr.order_id AND s.tenant_id = rr.tenant_id " +
             "           AND s.shipment_leg = 'forward' AND s.delivered_at IS NOT NULL " +
@@ -114,6 +119,13 @@ public class ReturnRequestService {
         d.put("deliveredAt", r.get("delivered_at"));
         d.put("pickupCity", r.get("address_city"));
         d.put("pickupZone", r.get("address_zone"));
+        // Step 4c-2: the pickup area snapshot (null when none was chosen — the drawer then
+        // falls back to pickupCity / pickupZone from the order address above).
+        d.put("pickupCityId", r.get("pickup_city_id"));
+        d.put("pickupCityName", r.get("pickup_city_name"));
+        d.put("pickupDistrictId", r.get("pickup_district_id"));
+        d.put("pickupDistrictName", r.get("pickup_district_name"));
+        d.put("pickupDistrictNameAr", r.get("pickup_district_name_ar"));
         d.put("createdAt", r.get("created_at"));
         d.put("decidedAt", r.get("decided_at"));
         d.put("decidedBy", r.get("decided_by"));
@@ -154,6 +166,77 @@ public class ReturnRequestService {
         if (updated != 1) throw notRequested(id, tenantId);
         jdbc.update("UPDATE return_request_items SET active = false WHERE request_id = ? AND tenant_id = ?",
             id, tenantId);
+    }
+
+    // ── Step 4c-2: pickup area ───────────────────────────────────────────────
+
+    private static final Set<String> AREA_EDITABLE = Set.of("requested", "approved");
+
+    /**
+     * GET /return-requests/{id}/pickup-areas — the pickup-available districts of the request's
+     * city (its snapshot city, else the city the order was delivered to). Empty districts when
+     * the city is unknown or has none. Does not depend on the tenant's booking switch.
+     */
+    @Transactional(readOnly = true)
+    public Map<String, Object> pickupAreas(UUID id) {
+        UUID tenantId = TenantContext.require();
+        Map<String, Object> rr = requireRequest(id, tenantId);
+        Optional<PickupAreaService.CityAreas> areas = cityAreas(tenantId, rr);
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("cityId", areas.map(PickupAreaService.CityAreas::cityId).orElse(null));
+        body.put("cityName", areas.map(PickupAreaService.CityAreas::cityName).orElse(null));
+        body.put("cityNameAr", areas.map(PickupAreaService.CityAreas::cityNameAr).orElse(null));
+        body.put("districts", areas.map(a -> a.districts().stream().map(PickupAreaService.District::toJson).toList())
+            .orElse(List.of()));
+        body.put("selectedDistrictId", rr.get("pickup_district_id"));
+        body.put("editable", AREA_EDITABLE.contains((String) rr.get("status")));
+        return body;
+    }
+
+    /**
+     * PUT /return-requests/{id}/pickup-area — while requested or approved only (409 otherwise);
+     * the district must be pickup-available in the request's city (400 otherwise). Stores the
+     * same snapshot fields the portal submission does.
+     */
+    @Transactional
+    public void setPickupArea(UUID id, String districtId) {
+        UUID tenantId = TenantContext.require();
+        Map<String, Object> rr = requireRequest(id, tenantId);
+        if (!AREA_EDITABLE.contains((String) rr.get("status"))) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                "The pickup area can only be changed while the request is awaiting a decision or approved.");
+        }
+        if (districtId == null || districtId.isBlank()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "districtId is required");
+        }
+        PickupAreaService.CityAreas areas = cityAreas(tenantId, rr).orElseThrow(() ->
+            new ResponseStatusException(HttpStatus.BAD_REQUEST, "No pickup areas are available for this order's city."));
+        PickupAreaService.District d = areas.find(districtId.trim()).orElseThrow(() ->
+            new ResponseStatusException(HttpStatus.BAD_REQUEST, "That area isn't available for pickup in this city."));
+        int updated = jdbc.update(
+            "UPDATE return_requests SET pickup_city_id = ?, pickup_city_name = ?, pickup_district_id = ?, " +
+            "    pickup_district_name = ?, pickup_district_name_ar = ? " +
+            "WHERE id = ? AND tenant_id = ? AND status IN ('requested', 'approved')",
+            areas.cityId(), areas.cityName(), d.id(), d.name(), d.nameAr(), id, tenantId);
+        if (updated != 1) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                "The pickup area can only be changed while the request is awaiting a decision or approved.");
+        }
+    }
+
+    private Map<String, Object> requireRequest(UUID id, UUID tenantId) {
+        return jdbc.queryForList(
+            "SELECT id, order_id, status::text AS status, pickup_city_id, pickup_district_id " +
+            "FROM return_requests WHERE id = ? AND tenant_id = ?", id, tenantId)
+            .stream().findFirst()
+            .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Return request not found"));
+    }
+
+    private Optional<PickupAreaService.CityAreas> cityAreas(UUID tenantId, Map<String, Object> rr) {
+        String snapshotCity = (String) rr.get("pickup_city_id");
+        return snapshotCity != null
+            ? pickupAreas.forCity(snapshotCity, null)
+            : pickupAreas.forOrder(tenantId, (UUID) rr.get("order_id"));
     }
 
     private ResponseStatusException notRequested(UUID id, UUID tenantId) {

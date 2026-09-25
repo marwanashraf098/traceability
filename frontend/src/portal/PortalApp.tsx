@@ -1,7 +1,7 @@
 import { CSSProperties, FormEvent, ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Trans, useTranslation } from 'react-i18next'
 import {
-  getConfig, lookup, submit, LookupResult, PortalConfig, SubmitResult,
+  getConfig, lookup, submit, LookupResult, PickupDistrict, PortalConfig, SubmitResult,
 } from './api'
 import { palette } from './brand'
 import { applyDocumentLanguage, PortalLang, saveLanguage } from './i18n'
@@ -13,6 +13,11 @@ import { applyDocumentLanguage, PortalLang, saveLanguage } from './i18n'
  *
  * Self-contained: talks only to the three public portal endpoints (./api), uses its own
  * i18n instance and plain CSS — nothing from the merchant app.
+ *
+ * Step 4c-2: when lookup offers a pickup area (the store books Bosta pickups and the delivery
+ * city is known), P3's Pickup card shows the City (read-only) and a required Area select,
+ * grouped by zone, names in the current language — as in the P3 mockup. Send stays disabled
+ * until an area is chosen. Without an offer, P3 keeps its previous copy.
  */
 
 export const NOTE_MAX = 300
@@ -28,6 +33,18 @@ interface Selection { qty: number; reason: string }
 export function slugFromPath(pathname: string): string | null {
   const first = pathname.split('/').filter(Boolean)[0]
   return first ? decodeURIComponent(first) : null
+}
+
+/** Consecutive districts sharing a zone (the backend sorts by zone), labelled in the current language. */
+export function groupByZone(districts: PickupDistrict[], lang: string) {
+  const groups: { zone: string | null; districts: PickupDistrict[] }[] = []
+  for (const d of districts) {
+    const zone = (lang === 'ar' ? d.zoneNameAr || d.zoneName : d.zoneName) || null
+    const last = groups[groups.length - 1]
+    if (last && last.zone === zone) last.districts.push(d)
+    else groups.push({ zone, districts: [d] })
+  }
+  return groups
 }
 
 /** "mona@example.com" → "m•••@example.com". */
@@ -62,6 +79,7 @@ export default function PortalApp({ slug }: { slug: string | null }) {
   const [order, setOrder] = useState<LookupResult | null>(null)
   const [selections, setSelections] = useState<Record<string, Selection>>({})
 
+  const [areaId, setAreaId] = useState('')
   const [note, setNote] = useState('')
   const [email, setEmail] = useState('')
   const [emailError, setEmailError] = useState(false)
@@ -131,6 +149,7 @@ export default function PortalApp({ slug }: { slug: string | null }) {
     if (res.ok) {
       setOrder(res.data)
       setSelections({})
+      setAreaId(res.data.pickup?.preselectedDistrictId ?? '')
       setStartBanner(null)
       setThrottledOrder(null)
       setSendBanner(null)
@@ -157,8 +176,11 @@ export default function PortalApp({ slug }: { slug: string | null }) {
   }
 
   // ── P3 ────────────────────────────────────────────────────────────────────
+  const pickup = order?.pickup ?? null
+  const areaMissing = pickup != null && !areaId
+
   async function send() {
-    if (!slug || !order || sendingRef.current) return
+    if (!slug || !order || sendingRef.current || areaMissing) return
     const trimmedEmail = email.trim()
     if (trimmedEmail && (trimmedEmail.length > 254 || !EMAIL_RE.test(trimmedEmail))) {
       setEmailError(true)
@@ -173,6 +195,7 @@ export default function PortalApp({ slug }: { slug: string | null }) {
       })),
       ...(trimmedEmail ? { email: trimmedEmail } : {}),
       ...(note.trim() ? { note } : {}),
+      ...(pickup && areaId ? { districtId: areaId } : {}),
     })
     sendingRef.current = false
     setSending(false)
@@ -344,7 +367,35 @@ export default function PortalApp({ slug }: { slug: string | null }) {
 
         <section className="pp-card">
           <div className="pp-eyebrow">{t('p3.pickup')}</div>
-          <p className="pp-muted pp-small">{t(config.pickupBooking ? 'p3.pickupTextBooking' : 'p3.pickupText')}</p>
+          <p className="pp-muted pp-small">{t(config.pickupBooking || pickup ? 'p3.pickupTextBooking' : 'p3.pickupText')}</p>
+          {pickup && (
+            <>
+              <div className="pp-field">
+                <label htmlFor="pp-city" className="pp-label">{t('p3.cityLabel')}</label>
+                <input
+                  id="pp-city" className="pp-input pp-input--readonly" type="text" readOnly
+                  value={lang === 'ar' ? pickup.cityNameAr || pickup.cityName : pickup.cityName}
+                />
+              </div>
+              <div className="pp-field">
+                <label htmlFor="pp-area" className="pp-label">{t('p3.areaLabel')}</label>
+                <select
+                  id="pp-area" className="pp-input" required
+                  aria-invalid={areaMissing}
+                  value={areaId}
+                  onChange={e => setAreaId(e.target.value)}
+                >
+                  <option value="" disabled>{t('p3.areaPlaceholder')}</option>
+                  {groupByZone(pickup.districts, lang).map(g => {
+                    const options = g.districts.map(d => (
+                      <option key={d.id} value={d.id}>{lang === 'ar' ? d.nameAr || d.name : d.name}</option>
+                    ))
+                    return g.zone ? <optgroup key={g.zone} label={g.zone}>{options}</optgroup> : options
+                  })}
+                </select>
+              </div>
+            </>
+          )}
         </section>
 
         <div className="pp-field">
@@ -378,7 +429,7 @@ export default function PortalApp({ slug }: { slug: string | null }) {
           </div>
         )}
 
-        <button type="button" className="pp-btn pp-btn--primary" disabled={sending} aria-busy={sending} onClick={send}>
+        <button type="button" className="pp-btn pp-btn--primary" disabled={sending || areaMissing} aria-busy={sending} onClick={send}>
           {sending ? t('p3.sending') : t('p3.send')}
         </button>
 

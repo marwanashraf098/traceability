@@ -26,11 +26,29 @@ export interface LookupLine {
   nonReturnable: boolean
 }
 
+export interface PickupDistrict {
+  id: string
+  name: string
+  nameAr: string | null
+  zoneName: string | null
+  zoneNameAr: string | null
+}
+
+/** Offered only when the store books Bosta pickups and the delivery city is known. */
+export interface PickupOffer {
+  cityId: string
+  cityName: string
+  cityNameAr: string | null
+  districts: PickupDistrict[]
+  preselectedDistrictId: string | null
+}
+
 export interface LookupResult {
   token: string
   orderNumber: string
   deliveredAt: string
   lines: LookupLine[]
+  pickup: PickupOffer | null
 }
 
 export interface SubmitLine {
@@ -104,7 +122,7 @@ export async function lookup(slug: string, orderNumber: string, phone: string): 
 export async function submit(
   slug: string,
   token: string,
-  request: { lines: SubmitLine[]; email?: string; note?: string },
+  request: { lines: SubmitLine[]; email?: string; note?: string; districtId?: string },
 ): Promise<Outcome<SubmitResult>> {
   try {
     const { status, body } = await call(`/${encodeURIComponent(slug)}/requests`, {

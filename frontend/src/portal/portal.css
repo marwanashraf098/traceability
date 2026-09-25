@@ -130,6 +130,8 @@ body {
   color: #141821;
 }
 .pp-input--lg { font-size: 17px; }
+/* P3 City (read-only) — mockup: lighter border, grey fill, muted text. */
+.pp-input--readonly { border-color: #E3E5E8; background: #F1F2EF; color: #3A404C; }
 .pp-input::placeholder { color: #8A8F98; }
 [dir="rtl"] .pp-input[dir="ltr"] { text-align: right; }
 .pp-input:focus { outline: 2px solid var(--brand); outline-offset: 1px; border-color: transparent; }

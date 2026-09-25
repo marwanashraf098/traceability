@@ -35,11 +35,18 @@ public class PortalSettingsService {
     /**
      * PUT body. Full replace: a branding field that is absent or blank is stored as NULL.
      * The 4-argument constructor is the Step 4b shape (no branding).
+     * returnLocationId (Step 4c-2): the Bosta pickup location returns go back to. Unlike the
+     * branding fields it is NOT full-replace — absent/blank leaves the saved location as it is.
      */
     public record Settings(String slug, Boolean enabled, Boolean autoApprove, Integer returnWindowDays,
-                           String logoUrl, String brandColor, String policyText) {
+                           String logoUrl, String brandColor, String policyText, String returnLocationId) {
         public Settings(String slug, Boolean enabled, Boolean autoApprove, Integer returnWindowDays) {
-            this(slug, enabled, autoApprove, returnWindowDays, null, null, null);
+            this(slug, enabled, autoApprove, returnWindowDays, null, null, null, null);
+        }
+
+        public Settings(String slug, Boolean enabled, Boolean autoApprove, Integer returnWindowDays,
+                        String logoUrl, String brandColor, String policyText) {
+            this(slug, enabled, autoApprove, returnWindowDays, logoUrl, brandColor, policyText, null);
         }
     }
 
@@ -52,7 +59,7 @@ public class PortalSettingsService {
         private final String field;
         private final String code;
 
-        FieldException(HttpStatus status, String field, String code, String message) {
+        public FieldException(HttpStatus status, String field, String code, String message) {
             super(status, message);
             this.field = field;
             this.code = code;
@@ -73,8 +80,12 @@ public class PortalSettingsService {
         UUID tenantId = TenantContext.require();
         Map<String, Object> t = jdbc.queryForMap(
             "SELECT portal_slug, portal_enabled, portal_auto_approve, customer_return_window_days, " +
-            "       portal_logo_url, portal_brand_color, portal_policy_text " +
+            "       portal_logo_url, portal_brand_color, portal_policy_text, portal_pickup_booking " +
             "FROM tenants WHERE id = ?", tenantId);
+        Map<String, Object> location = jdbc.queryForList(
+            "SELECT return_business_location_id, return_business_location_name FROM courier_accounts " +
+            "WHERE tenant_id = ? AND provider = 'bosta' AND status = 'active' LIMIT 1", tenantId)
+            .stream().findFirst().orElse(Map.of());
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("slug", t.get("portal_slug"));
         body.put("enabled", t.get("portal_enabled"));
@@ -83,13 +94,27 @@ public class PortalSettingsService {
         body.put("logoUrl", t.get("portal_logo_url"));
         body.put("brandColor", t.get("portal_brand_color"));
         body.put("policyText", t.get("portal_policy_text"));
-        // Read-only: lets the merchant UI word the approve footer (no Bosta pickup before Step 4c).
-        body.put("pickupBooking", PortalService.PICKUP_BOOKING);
+        // Read-only (no switch yet): tenants.portal_pickup_booking. "pickupBooking" is the key the
+        // merchant UI already reads for its approve-footer copy; "portalPickupBooking" is the
+        // Step 4c-2 name for the same value.
+        body.put("pickupBooking", t.get("portal_pickup_booking"));
+        body.put("portalPickupBooking", t.get("portal_pickup_booking"));
+        body.put("returnLocationId", location.get("return_business_location_id"));
+        body.put("returnLocationName", location.get("return_business_location_name"));
         return body;
     }
 
     @Transactional
     public Map<String, Object> update(Settings s) {
+        return update(s, null);
+    }
+
+    /**
+     * {@code returnLocation}: already validated against Bosta by ReturnLocationService (outside
+     * this transaction), or null to leave the saved return location unchanged.
+     */
+    @Transactional
+    public Map<String, Object> update(Settings s, ReturnLocationService.Location returnLocation) {
         UUID tenantId = TenantContext.require();
         if (s == null || s.enabled() == null || s.autoApprove() == null || s.returnWindowDays() == null) {
             throw bad(null, "REQUIRED", "enabled, autoApprove and returnWindowDays are required.");
@@ -131,6 +156,12 @@ public class PortalSettingsService {
                 throw new FieldException(HttpStatus.CONFLICT, "slug", "SLUG_TAKEN", "That address is already taken.");
             }
             throw e;
+        }
+        if (returnLocation != null) {
+            jdbc.update(
+                "UPDATE courier_accounts SET return_business_location_id = ?, return_business_location_name = ? " +
+                "WHERE tenant_id = ? AND provider = 'bosta' AND status = 'active'",
+                returnLocation.id(), returnLocation.name(), tenantId);
         }
         return get();
     }

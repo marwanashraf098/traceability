@@ -2,7 +2,8 @@ import { ReactNode, useCallback, useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { X } from 'lucide-react'
 import {
-  approveReturnRequest, getPortalSettings, getReturnRequest, rejectReturnRequest, ReturnRequestDetail,
+  approveReturnRequest, getPortalSettings, getReturnRequest, getReturnRequestPickupAreas, rejectReturnRequest,
+  setReturnRequestPickupArea, PickupDistrict, ReturnRequestDetail, ReturnRequestPickupAreas,
 } from '../../api'
 import { Alert, Badge, Button, ProductThumb, Skeleton, cn, useToast } from '../../components/ui'
 import { reasonLabel, requestStatusTone, sentLabel, shortCustomerName, shortDate } from './requestFormat'
@@ -18,6 +19,11 @@ export const REJECT_REASON_MAX = 300
  * Footer copy: until Step 4c (pickupBooking false) approving does NOT book a Bosta pickup, so
  * the mockup's "Approving books a Bosta pickup…" line is replaced by "After approving, book
  * the pickup in Bosta."
+ *
+ * Step 4c-2: Pickup shows the request's chosen area (city · district, in the UI language),
+ * falling back to the order address city · zone. "Change area" (not in the M2 mockup) opens an
+ * inline select of the city's pickup-available districts, grouped by zone — offered while the
+ * request is requested or approved (the backend enforces the same).
  */
 export default function ReturnRequestDrawer({
   requestId,
@@ -86,6 +92,7 @@ function DrawerContent({
   const [reasonError, setReasonError] = useState(false)
   const [busy, setBusy] = useState<'approve' | 'reject' | null>(null)
   const [conflict, setConflict] = useState(false)
+  const [editingArea, setEditingArea] = useState(false)
 
   const load = useCallback(async () => {
     setLoadError(false)
@@ -183,7 +190,13 @@ function DrawerContent({
     )
   }
 
-  const pickup = [detail.pickupCity, detail.pickupZone].filter(Boolean).join(' · ')
+  const districtName = i18n.language === 'ar'
+    ? (detail.pickupDistrictNameAr || detail.pickupDistrictName)
+    : detail.pickupDistrictName
+  const pickup = districtName
+    ? [detail.pickupCityName, districtName].filter(Boolean).join(' · ')
+    : [detail.pickupCity, detail.pickupZone].filter(Boolean).join(' · ')
+  const areaEditable = detail.status === 'requested' || detail.status === 'approved'
   const isRequested = detail.status === 'requested'
   const reasonLength = reason.length
 
@@ -219,9 +232,18 @@ function DrawerContent({
           <Field label={t('exchangesRefunds.requests.drawer.sent')}>
             {sentLabel(t, i18n.language, detail.createdAt)}
           </Field>
-          {pickup && (
+          {(pickup || areaEditable) && (
             <Field label={t('exchangesRefunds.requests.drawer.pickup')}>
-              <bdi>{pickup}</bdi>
+              <span data-testid="request-pickup"><bdi>{pickup || '—'}</bdi></span>
+              {areaEditable && !editingArea && (
+                <button
+                  type="button"
+                  className="block text-small font-medium text-trace-blue hover:underline mt-0.5"
+                  onClick={() => setEditingArea(true)}
+                >
+                  {t('exchangesRefunds.requests.drawer.changeArea')}
+                </button>
+              )}
             </Field>
           )}
           {detail.email && (
@@ -230,6 +252,18 @@ function DrawerContent({
             </Field>
           )}
         </dl>
+
+        {editingArea && areaEditable && (
+          <AreaEditor
+            requestId={requestId}
+            onCancel={() => setEditingArea(false)}
+            onSaved={async () => {
+              setEditingArea(false)
+              await load()
+              onChanged()
+            }}
+          />
+        )}
 
         <section>
           <h3 className="text-caption font-semibold text-muted uppercase tracking-wider mb-2">
@@ -332,6 +366,97 @@ function DrawerContent({
       )}
     </>
   )
+}
+
+/** Inline "Change area": the request city's pickup-available districts, grouped by zone. */
+function AreaEditor({
+  requestId, onCancel, onSaved,
+}: { requestId: string; onCancel: () => void; onSaved: () => Promise<void> }) {
+  const { t, i18n } = useTranslation()
+  const { toast } = useToast()
+  const [areas, setAreas] = useState<ReturnRequestPickupAreas | null>(null)
+  const [loadError, setLoadError] = useState(false)
+  const [districtId, setDistrictId] = useState('')
+  const [saving, setSaving] = useState(false)
+  const ar = i18n.language === 'ar'
+
+  useEffect(() => {
+    let cancelled = false
+    getReturnRequestPickupAreas(requestId)
+      .then(a => { if (!cancelled) { setAreas(a); setDistrictId(a.selectedDistrictId ?? '') } })
+      .catch(() => { if (!cancelled) setLoadError(true) })
+    return () => { cancelled = true }
+  }, [requestId])
+
+  async function save() {
+    if (!districtId) return
+    setSaving(true)
+    try {
+      await setReturnRequestPickupArea(requestId, districtId)
+      toast({ tone: 'success', message: t('exchangesRefunds.requests.drawer.areaSaved') })
+      await onSaved()
+    } catch (e) {
+      const conflict = e instanceof Error && e.message.startsWith('409')
+      toast({ tone: 'error', message: t(conflict ? 'exchangesRefunds.requests.drawer.areaConflict' : 'exchangesRefunds.requests.drawer.areaFailed') })
+      if (conflict) await onSaved()
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const name = (d: PickupDistrict) => (ar ? d.nameAr || d.name : d.name)
+  const groups = groupByZone(areas?.districts ?? [], ar)
+
+  return (
+    <section className="card p-4 space-y-3" data-testid="area-editor">
+      {loadError ? (
+        <p className="text-small text-critical" role="alert">{t('exchangesRefunds.requests.drawer.areaLoadFailed')}</p>
+      ) : !areas ? (
+        <Skeleton className="h-10 w-full" />
+      ) : areas.districts.length === 0 ? (
+        <p className="text-small text-muted">{t('exchangesRefunds.requests.drawer.areaNone')}</p>
+      ) : (
+        <div className="space-y-1.5">
+          <label htmlFor="request-area" className="text-body font-medium text-primary block">
+            {t('exchangesRefunds.requests.drawer.areaLabel')}
+            {areas.cityName && <span className="font-normal text-muted"> · <bdi>{ar ? areas.cityNameAr || areas.cityName : areas.cityName}</bdi></span>}
+          </label>
+          <select id="request-area" className="input w-full" value={districtId} onChange={e => setDistrictId(e.target.value)}>
+            <option value="" disabled>{t('exchangesRefunds.requests.drawer.areaPlaceholder')}</option>
+            {groups.map(g => g.zone
+              ? (
+                <optgroup key={g.zone} label={g.zone}>
+                  {g.districts.map(d => <option key={d.id} value={d.id}>{name(d)}</option>)}
+                </optgroup>
+              )
+              : g.districts.map(d => <option key={d.id} value={d.id}>{name(d)}</option>))}
+          </select>
+        </div>
+      )}
+      <div className="flex justify-end gap-2">
+        <Button variant="outline" size="sm" disabled={saving} onClick={onCancel}>
+          {t('exchangesRefunds.requests.drawer.cancel')}
+        </Button>
+        {areas && areas.districts.length > 0 && (
+          <Button size="sm" loading={saving} disabled={!districtId || saving} onClick={save}>
+            {t('exchangesRefunds.requests.drawer.areaSave')}
+          </Button>
+        )}
+      </div>
+    </section>
+  )
+}
+
+/** Consecutive districts sharing a zone (the backend sorts by zone), labelled in the UI language. */
+function groupByZone(districts: PickupDistrict[], ar: boolean) {
+  const groups: { zone: string | null; districts: PickupDistrict[] }[] = []
+  for (const d of districts) {
+    const zone = (ar ? d.zoneNameAr || d.zoneName : d.zoneName) || null
+    const last = groups[groups.length - 1]
+    if (last && last.zone === zone) last.districts.push(d)
+    else groups.push({ zone, districts: [d] })
+  }
+  return groups
 }
 
 function Field({ label, children }: { label: string; children: ReactNode }) {
