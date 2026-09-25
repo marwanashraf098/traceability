@@ -120,7 +120,7 @@ finished leg in the slot).
 - **Gotcha:** a spec's revert tests can prove a rule wrong — here the literal Rule 2 failed the
   spec's own m2; run the revert before trusting the wording.
 
-**App Store reviewer fixes — built 2026-09-25 on branch `fix/reviewer-embedded-crash` (off `landing-webp`; 3 commits, not deployed, NOT yet on top of origin/main — see below).**
+**App Store reviewer fixes — built 2026-09-25 on branch `fix/reviewer-embedded-crash` (rebased onto origin/main `b0447b1`; 4 commits + the landing-webp Bosta-API docs commit; not deployed).**
 - **A — embedded white page:** `EmbeddedController.exceptions()` read `exceptionType`/`subjectKey`; ExceptionService rows carry
   `type`/`subject_key` → every embedded exception had type=null → `fmtLabel(null).replace` crashed the Overview (reviewer2 tenant's
   on-hold #1291 = one `blocked_customer`). Keys fixed (response names unchanged); `fmtLabel`/`statusLabel` null → "—";
@@ -137,11 +137,15 @@ finished leg in the slot).
   button calling PickScreen's own `handleScan` — no second scan path, refocus/scan handlers untouched. Station-mode worker
   tokens get 403 there → helper silently absent. Verified live (local jar + throwaway Postgres): demo start → #DEMO-Q1 → 2 scans
   via buttons → Complete → order `packed`.
-- **Remaining demo dead end (not built — needs approval):** Complete opens the mandatory post-Complete "Scan AWB Barcode"
-  dialog; a visitor doesn't know the seeded tracking number (999000000001…). Typing it finishes the flow (→ awaiting_pickup).
-- **Prod is NOT on landing-webp:** landing-webp = origin/main minus the 6 portal 4c-1…4c-3 commits (+1 docs commit). Prod's
-  main bundle carries 18/33 origin/main-only strings (4c-2/4c-3 pickup-area copy). Rebase this branch onto origin/main
-  before deploying. `main-*.js` hashes can't be compared (VITE_CALENDLY_SETUP_URL is baked in at build time).
+- **Demo AWB helper (approved):** in `AwbLinkDialog`, demo tenant only, "Use this AWB" shows THIS order's own forward
+  `tracking_number` (already on the `/fulfill/{id}` detail — `shipment_leg='forward'` join, tenant-scoped) and submits via
+  the dialog's own `handleLink` → `POST /fulfill/{id}/link` (server AWB_MISMATCH/conflict checks unchanged). No skip; the
+  dialog's input focus/refocus untouched. Live: queue → scan via helper → Complete → Use this AWB → "Order complete" →
+  `orders.status = awaiting_pickup`. The drawer reads **"Label created"** (OrderStatusDeriver maps a `created` shipment to
+  label_created — by design, not raw orders.status).
+- **Prod was not on landing-webp:** landing-webp = origin/main minus the 6 portal 4c-1…4c-3 commits (+1 docs commit); prod's
+  main bundle carries 18/33 origin/main-only strings. This branch is now rebased onto origin/main (only PROGRESS.md
+  conflicted; both entries kept). `main-*.js` hashes can't be compared (VITE_CALENDLY_SETUP_URL is baked in at build time).
 - **Findings:** reviewer2 (`8mqr0k-qs`) and reviewer3 stores were disconnected by Shopify `app/uninstalled` webhooks
   (2026-09-25 17:02:22 and 2026-09-24 20:14:33 + `shop/redact`). Demo tenant: 10 pickable Bosta-linked orders reseeded every
   30 min; the pick screen never shows a scannable barcode, so a demo visitor has to look one up elsewhere (not browser-verified).

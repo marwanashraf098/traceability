@@ -200,10 +200,17 @@ function AwbLinkDialog({
   orderId,
   onLinked,
   variant = 'modal',
+  demoTracking = null,
 }: {
   orderId: string
   onLinked: (result: { tracking: string; shipmentId: string }) => void
   variant?: 'modal' | 'inline'
+  /** Demo tenant ONLY (caller passes null otherwise): THIS order's own linked forward
+   *  tracking number, from the order detail PickScreen already holds. Offered as a
+   *  "Use this AWB" button that submits through handleLink — the same path as a typed
+   *  or scanned AWB, so the server's AWB_MISMATCH/conflict checks still apply. It is
+   *  not a skip: the dialog stays mandatory and the input is untouched. */
+  demoTracking?: string | null
 }) {
   const { t } = useTranslation()
   const inputRef = useRef<HTMLInputElement>(null)
@@ -330,6 +337,24 @@ function AwbLinkDialog({
           }}
         />
       </div>
+
+      {demoTracking && (
+        <div className="flex items-center justify-between gap-2 mb-3 bg-elevated border border-dashed border-line rounded-lg px-3 py-2"
+             data-testid="demo-awb-helper">
+          <div className="min-w-0">
+            <p className="text-caption text-muted">{t('fulfill.demoAwb.hint')}</p>
+            <p className="text-small font-mono text-primary" dir="ltr">{demoTracking}</p>
+          </div>
+          <button
+            type="button"
+            disabled={linking}
+            onClick={() => handleLink(demoTracking)}
+            className="btn-brand btn text-small flex-shrink-0"
+          >
+            {t('fulfill.demoAwb.use')}
+          </button>
+        </div>
+      )}
 
       {hasError && (
         <div className="flex items-start gap-2 mb-3">
@@ -1355,6 +1380,7 @@ function PickScreen({
             <AwbLinkDialog
               orderId={orderId}
               variant="inline"
+              demoTracking={isDemoTenant ? order.tracking_number : null}
               onLinked={() => { setShowPreCompleteLink(false); loadOrder() }}
             />
           )}
@@ -1366,7 +1392,11 @@ function PickScreen({
           call site), landing directly on PickScreen's single completion card — no
           intermediate "AWB linked" screen of its own. */}
       {showAwbDialog && (
-        <AwbLinkDialog orderId={orderId} onLinked={() => { setShowAwbDialog(false); setCompleted(true) }} />
+        <AwbLinkDialog
+          orderId={orderId}
+          demoTracking={isDemoTenant ? order.tracking_number : null}
+          onLinked={() => { setShowAwbDialog(false); setCompleted(true) }}
+        />
       )}
     </div>
   )

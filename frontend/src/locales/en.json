@@ -638,6 +638,10 @@
       "scan": "Scan",
       "scanAria": "Scan {{barcode}}"
     },
+    "demoAwb": {
+      "hint": "Demo: this order's waybill",
+      "use": "Use this AWB"
+    },
     "selfPickup": "Self-Pickup",
     "selfPickupBadge": "Self-Pickup",
     "handoverTitle": "Confirm Customer Collection",

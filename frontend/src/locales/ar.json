@@ -641,6 +641,10 @@
       "scan": "مسح",
       "scanAria": "مسح {{barcode}}"
     },
+    "demoAwb": {
+      "hint": "تجربة: بوليصة هذا الطلب",
+      "use": "استخدم هذه البوليصة"
+    },
     "selfPickup": "استلام شخصي",
     "selfPickupBadge": "استلام شخصي",
     "handoverTitle": "تأكيد تسليم العميل",
