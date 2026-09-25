@@ -30,8 +30,10 @@ export const STATUS_LABELS: Record<string, string> = {
   'status.needs_attention':     'Needs attention',
 }
 
-/** Falls back to a de-namespaced/underscore-stripped rendering of an unknown key — never a blank badge. */
-export function statusLabel(key: string): string {
+/** Falls back to a de-namespaced/underscore-stripped rendering of an unknown key — never a
+ *  blank badge. null/undefined → "—" rather than throwing mid-render. */
+export function statusLabel(key: string | null | undefined): string {
+  if (key == null) return '—'
   return STATUS_LABELS[key] ?? key.replace(/^status\./, '').replace(/_/g, ' ')
 }
 

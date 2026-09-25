@@ -159,9 +159,11 @@ public class EmbeddedController {
         List<Map<String, Object>> trimmed = items.stream()
                 .map(ex -> {
                     Map<String, Object> t = new LinkedHashMap<>();
-                    t.put("type",       ex.get("exceptionType"));
+                    // ExceptionService rows carry the detector SQL's own column aliases
+                    // ("type", "subject_key") — the response keeps its camelCase names.
+                    t.put("type",       ex.get("type"));
                     t.put("severity",   ex.get("severity"));
-                    t.put("subjectKey", ex.get("subjectKey"));
+                    t.put("subjectKey", ex.get("subject_key"));
                     return t;
                 })
                 .toList();

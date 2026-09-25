@@ -44,7 +44,7 @@ interface StoreRow {
 interface StatusCount { status: string; count: number }
 interface InventorySummary { groupA: StatusCount[]; groupB: StatusCount[] }
 interface DayCount { date: string; count: number }
-interface ExceptionRow { type: string; severity: string; subjectKey: string }
+interface ExceptionRow { type: string | null; severity: string; subjectKey: string | null }
 interface ExceptionsData { count: number; exceptions: ExceptionRow[] }
 
 // GET /api/v1/embedded/orders/funnel — mirrors OrderController.funnel()'s FunnelCounts shape.
@@ -91,7 +91,9 @@ function useAuthFetch() {
 
 // ── Formatting helpers ────────────────────────────────────────────────────
 
-function fmtLabel(s: string): string {
+/** null/undefined → "—": a missing field renders a dash, never throws mid-render. */
+function fmtLabel(s: string | null | undefined): string {
+  if (s == null) return '—'
   return s.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())
 }
 
