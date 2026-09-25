@@ -22,13 +22,21 @@ public class ReturnRequestService {
     private static final Set<String> STATUSES = Set.of(
         "requested", "approved", "rejected", "pickup_booked", "received", "refund_pending", "refunded", "cancelled");
 
-    private final JdbcTemplate      jdbc;
-    private final PickupAreaService pickupAreas;
+    private final JdbcTemplate           jdbc;
+    private final PickupAreaService      pickupAreas;
+    private final PickupBookingScheduler bookingScheduler;
 
+    /** Without a scheduler (tests on an app_user connection): approving never enqueues a booking. */
     public ReturnRequestService(JdbcTemplate jdbc) {
-        this.jdbc        = jdbc;
+        this(jdbc, null);
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public ReturnRequestService(JdbcTemplate jdbc, PickupBookingScheduler bookingScheduler) {
+        this.jdbc             = jdbc;
         // Same JdbcTemplate (not injected), so an app_user-constructed instance reads on it too.
-        this.pickupAreas = new PickupAreaService(jdbc);
+        this.pickupAreas      = new PickupAreaService(jdbc);
+        this.bookingScheduler = bookingScheduler;
     }
 
     @Transactional(readOnly = true)
@@ -40,7 +48,7 @@ public class ReturnRequestService {
         String statusFilter = status == null || status.isBlank() ? null : status;
         List<Map<String, Object>> rows = jdbc.query(
             "SELECT rr.id, rr.reference, o.number AS order_number, o.customer_name, rr.status::text AS status, " +
-            "       rr.created_at, " +
+            "       rr.created_at, rr.booking_status, " +
             "       (SELECT COUNT(*) FROM return_request_items i WHERE i.request_id = rr.id) AS item_count, " +
             "       (SELECT array_agg(DISTINCT i.reason_code ORDER BY i.reason_code) " +
             "          FROM return_request_items i WHERE i.request_id = rr.id) AS reason_codes " +
@@ -57,6 +65,7 @@ public class ReturnRequestService {
                 java.sql.Array codes = rs.getArray("reason_codes");
                 row.put("reasonCodes", codes == null ? List.of() : Arrays.asList((String[]) codes.getArray()));
                 row.put("status", rs.getString("status"));
+                row.put("bookingStatus", rs.getString("booking_status"));
                 row.put("createdAt", rs.getTimestamp("created_at").toInstant().toString());
                 return row;
             },
@@ -79,7 +88,8 @@ public class ReturnRequestService {
             "       rr.decided_at, rr.decided_by, u.name AS decided_by_name, rr.rejection_reason, rr.return_shipment_id, " +
             "       o.customer_phone, o.address->>'city' AS address_city, o.address->>'zone' AS address_zone, " +
             "       rr.pickup_city_id, rr.pickup_city_name, rr.pickup_district_id, rr.pickup_district_name, " +
-            "       rr.pickup_district_name_ar, " +
+            "       rr.pickup_district_name_ar, rr.booking_status, rr.booking_error, rr.bosta_tracking_number, " +
+            "       rr.booking_attempted_at, rr.booking_verified_at, " +
             "       (SELECT s.delivered_at FROM shipments s " +
             "         WHERE s.order_id = rr.order_id AND s.tenant_id = rr.tenant_id " +
             "           AND s.shipment_leg = 'forward' AND s.delivered_at IS NOT NULL " +
@@ -126,6 +136,12 @@ public class ReturnRequestService {
         d.put("pickupDistrictId", r.get("pickup_district_id"));
         d.put("pickupDistrictName", r.get("pickup_district_name"));
         d.put("pickupDistrictNameAr", r.get("pickup_district_name_ar"));
+        // Step 4c-3: the Bosta return pickup booking.
+        d.put("bookingStatus", r.get("booking_status"));
+        d.put("bookingError", r.get("booking_error"));
+        d.put("bostaTrackingNumber", r.get("bosta_tracking_number"));
+        d.put("bookingAttemptedAt", r.get("booking_attempted_at"));
+        d.put("bookingVerifiedAt", r.get("booking_verified_at"));
         d.put("createdAt", r.get("created_at"));
         d.put("decidedAt", r.get("decided_at"));
         d.put("decidedBy", r.get("decided_by"));
@@ -136,7 +152,11 @@ public class ReturnRequestService {
         return d;
     }
 
-    /** requested → approved. Anything else → 409 (unknown id → 404). */
+    /**
+     * requested → approved. Anything else → 409 (unknown id → 404). Step 4c-3: when the tenant
+     * books Bosta pickups, the booking job is enqueued only AFTER this transaction commits —
+     * a rollback means no job.
+     */
     @Transactional
     public void approve(UUID id, UUID actorUserId) {
         UUID tenantId = TenantContext.require();
@@ -145,6 +165,10 @@ public class ReturnRequestService {
             "WHERE id = ? AND tenant_id = ? AND status = 'requested'",
             actorUserId, id, tenantId);
         if (updated != 1) throw notRequested(id, tenantId);
+        if (bookingScheduler != null && Boolean.TRUE.equals(jdbc.queryForObject(
+                "SELECT portal_pickup_booking FROM tenants WHERE id = ?", Boolean.class, tenantId))) {
+            bookingScheduler.enqueueAfterCommit(id, tenantId);
+        }
     }
 
     /**
@@ -171,6 +195,8 @@ public class ReturnRequestService {
     // ── Step 4c-2: pickup area ───────────────────────────────────────────────
 
     private static final Set<String> AREA_EDITABLE = Set.of("requested", "approved");
+    /** Step 4c-3: once a pickup is booked (or being booked) the area is Bosta's, not ours to change. */
+    private static final Set<String> AREA_LOCKED_BOOKING = Set.of("pending", "booked", "needs_review");
 
     /**
      * GET /return-requests/{id}/pickup-areas — the pickup-available districts of the request's
@@ -189,7 +215,8 @@ public class ReturnRequestService {
         body.put("districts", areas.map(a -> a.districts().stream().map(PickupAreaService.District::toJson).toList())
             .orElse(List.of()));
         body.put("selectedDistrictId", rr.get("pickup_district_id"));
-        body.put("editable", AREA_EDITABLE.contains((String) rr.get("status")));
+        body.put("editable", AREA_EDITABLE.contains((String) rr.get("status"))
+            && !areaLockedByBooking(rr));
         return body;
     }
 
@@ -202,7 +229,8 @@ public class ReturnRequestService {
     public void setPickupArea(UUID id, String districtId) {
         UUID tenantId = TenantContext.require();
         Map<String, Object> rr = requireRequest(id, tenantId);
-        if (!AREA_EDITABLE.contains((String) rr.get("status"))) {
+        if (!AREA_EDITABLE.contains((String) rr.get("status"))
+                || areaLockedByBooking(rr)) {
             throw new ResponseStatusException(HttpStatus.CONFLICT,
                 "The pickup area can only be changed while the request is awaiting a decision or approved.");
         }
@@ -216,7 +244,8 @@ public class ReturnRequestService {
         int updated = jdbc.update(
             "UPDATE return_requests SET pickup_city_id = ?, pickup_city_name = ?, pickup_district_id = ?, " +
             "    pickup_district_name = ?, pickup_district_name_ar = ? " +
-            "WHERE id = ? AND tenant_id = ? AND status IN ('requested', 'approved')",
+            "WHERE id = ? AND tenant_id = ? AND status IN ('requested', 'approved') " +
+            "  AND (booking_status IS NULL OR booking_status IN ('failed', 'failed_ambiguous'))",
             areas.cityId(), areas.cityName(), d.id(), d.name(), d.nameAr(), id, tenantId);
         if (updated != 1) {
             throw new ResponseStatusException(HttpStatus.CONFLICT,
@@ -224,9 +253,14 @@ public class ReturnRequestService {
         }
     }
 
+    private static boolean areaLockedByBooking(Map<String, Object> rr) {
+        Object b = rr.get("booking_status");   // Set.of().contains(null) would throw
+        return b != null && AREA_LOCKED_BOOKING.contains((String) b);
+    }
+
     private Map<String, Object> requireRequest(UUID id, UUID tenantId) {
         return jdbc.queryForList(
-            "SELECT id, order_id, status::text AS status, pickup_city_id, pickup_district_id " +
+            "SELECT id, order_id, status::text AS status, pickup_city_id, pickup_district_id, booking_status " +
             "FROM return_requests WHERE id = ? AND tenant_id = ?", id, tenantId)
             .stream().findFirst()
             .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Return request not found"));

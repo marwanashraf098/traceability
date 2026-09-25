@@ -1,5 +1,6 @@
 import { ReactNode, useCallback, useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import { useSearchParams } from 'react-router-dom'
 import { getExchanges, getRefunds, getReturnRequests, getRoleFromToken } from '../api'
 import { Badge, DataTable, DataTableColumn, StatCard, Tabs } from '../components/ui'
 import { MergedRow, FilterTab, normalizeExchange, normalizeRefund, matchesFilter } from './exchangesRefunds/normalize'
@@ -31,7 +32,10 @@ export default function ExchangesRefunds() {
   const [rows, setRows] = useState<MergedRow[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(false)
-  const [tab, setTab] = useState<PageTab>('all')
+  // Step 4c-3: /exchanges?tab=requests&request=<id> (the pickup_booking_problem exception's link).
+  const [searchParams] = useSearchParams()
+  const linkedRequest = searchParams.get('tab') === 'requests' ? searchParams.get('request') : null
+  const [tab, setTab] = useState<PageTab>(searchParams.get('tab') === 'requests' ? 'requests' : 'all')
   const [selected, setSelected] = useState<MergedRow | null>(null)
 
   // Returns portal Step 4e-A — customer return requests, owner and manager only (the API
@@ -197,7 +201,7 @@ export default function ExchangesRefunds() {
         <Tabs tabs={tabs} activeKey={tab} onChange={key => setTab(key as PageTab)} />
 
         {tab === 'requests' ? (
-          <RequestsPanel onDecided={loadNewRequests} />
+          <RequestsPanel onDecided={loadNewRequests} initialRequestId={linkedRequest} />
         ) : error ? (
           <div className="card p-10 flex flex-col items-center gap-3 text-center" data-testid="load-error">
             <p className="text-body font-semibold text-primary">{t('exchangesRefunds.errorTitle')}</p>

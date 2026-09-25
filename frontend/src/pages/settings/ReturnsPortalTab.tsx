@@ -27,7 +27,7 @@ export function isValidLogoUrl(url: string): boolean {
 
 const HEX = /^#[0-9A-Fa-f]{6}$/
 
-type FieldKey = 'slug' | 'returnWindowDays' | 'logoUrl' | 'brandColor' | 'policyText' | 'returnLocationId'
+type FieldKey = 'slug' | 'returnWindowDays' | 'logoUrl' | 'brandColor' | 'policyText' | 'returnLocationId' | 'pickupBooking'
 
 /**
  * Returns portal Step 4e-A (M4) — the merchant's portal settings, owner and manager (the
@@ -40,6 +40,10 @@ type FieldKey = 'slug' | 'returnWindowDays' | 'logoUrl' | 'brandColor' | 'policy
  * Step 4c-2: "Returns go back to" — the tenant's Bosta pickup locations, fetched live. Not in
  * the M4 mockup; it is a row of the first card styled like the return-window row. With nothing
  * saved yet, Bosta's default location is preselected (so Save becomes available to store it).
+ *
+ * Step 4c-3: "Book Bosta pickups when I approve" (tenants.portal_pickup_booking). It can only be
+ * switched ON once Bosta is connected and a return location is SAVED (the backend enforces the
+ * same); the reason is shown under it. Sent in the PUT only when it changed.
  */
 export default function ReturnsPortalTab() {
   const { t } = useTranslation()
@@ -51,6 +55,7 @@ export default function ReturnsPortalTab() {
   const [saving, setSaving] = useState(false)
   const [errors, setErrors] = useState<Partial<Record<FieldKey, string>>>({})
   const [copied, setCopied] = useState(false)
+  const [bookingOn, setBookingOn] = useState(false)
 
   const load = useCallback(async () => {
     setLoadError(false)
@@ -59,6 +64,7 @@ export default function ReturnsPortalTab() {
       setSaved(s)
       setForm(toInput(s))
       setWindowText(String(s.returnWindowDays))
+      setBookingOn(!!s.portalPickupBooking)
     } catch {
       setLoadError(true)
     }
@@ -70,7 +76,8 @@ export default function ReturnsPortalTab() {
     if (!saved || !form) return false
     const a = toInput(saved)
     return JSON.stringify(normalize(a)) !== JSON.stringify(normalize({ ...form, returnWindowDays: Number(windowText) }))
-  }, [saved, form, windowText])
+      || bookingOn !== !!saved.portalPickupBooking
+  }, [saved, form, windowText, bookingOn])
 
   if (loadError) {
     return (
@@ -119,11 +126,13 @@ export default function ReturnsPortalTab() {
         logoUrl: form.logoUrl?.trim() ? form.logoUrl.trim() : null,
         brandColor: form.brandColor?.trim() ? form.brandColor.trim() : null,
         policyText: form.policyText?.trim() ? form.policyText : null,
+        ...(bookingOn !== !!saved?.portalPickupBooking ? { pickupBooking: bookingOn } : {}),
       }
       const s = await savePortalSettings(body)
       setSaved(s)
       setForm(toInput(s))
       setWindowText(String(s.returnWindowDays))
+      setBookingOn(!!s.portalPickupBooking)
       toast({ tone: 'success', message: t('settings.portal.saved') })
     } catch (e) {
       if (e instanceof PortalSettingsError && e.field && isFieldKey(e.field)) {
@@ -227,6 +236,18 @@ export default function ReturnsPortalTab() {
           value={form.returnLocationId}
           onChange={id => update('returnLocationId', id)}
           error={errors.returnLocationId}
+        />
+
+        <SwitchRow
+          title={t('settings.portal.booking.title')}
+          description={t('settings.portal.booking.description')}
+          checked={bookingOn}
+          disabled={!bookingOn && !(saved.bostaConnected && saved.returnLocationId)}
+          note={!bookingOn && !saved.bostaConnected
+            ? t('settings.portal.booking.needsBosta')
+            : !bookingOn && !saved.returnLocationId ? t('settings.portal.booking.needsLocation') : undefined}
+          error={errors.pickupBooking}
+          onChange={v => { setBookingOn(v); setErrors(e => ({ ...e, pickupBooking: undefined })) }}
         />
 
         <NonReturnableList />
@@ -407,19 +428,24 @@ function ReturnLocationRow({
 }
 
 function SwitchRow({
-  title, description, checked, onChange,
-}: { title: string; description: string; checked: boolean; onChange: (v: boolean) => void }) {
+  title, description, checked, onChange, disabled, note, error,
+}: {
+  title: string; description: string; checked: boolean; onChange: (v: boolean) => void
+  disabled?: boolean; note?: string; error?: string
+}) {
   const { t } = useTranslation()
   return (
     <div className="p-6 flex items-start gap-4">
       <div className="flex-1 min-w-0">
         <p className="text-body font-medium text-primary">{title}</p>
         <p className="text-small text-muted mt-0.5">{description}</p>
+        {note && <p className="text-small text-warning-text mt-1.5" data-testid="switch-note">{note}</p>}
+        {error && <p className="text-small text-critical mt-1.5" role="alert" data-testid="error-pickupBooking">{error}</p>}
       </div>
       <span className={cn('text-small font-medium mt-0.5', checked ? 'text-primary' : 'text-muted')} aria-hidden="true">
         {checked ? t('settings.portal.on') : t('settings.portal.off')}
       </span>
-      <Toggle checked={checked} onChange={onChange} ariaLabel={title} />
+      <Toggle checked={checked} onChange={onChange} ariaLabel={title} disabled={disabled} />
     </div>
   )
 }
@@ -564,5 +590,5 @@ function normalize(i: PortalSettingsInput) {
 }
 
 function isFieldKey(f: string): f is FieldKey {
-  return ['slug', 'returnWindowDays', 'logoUrl', 'brandColor', 'policyText', 'returnLocationId'].includes(f)
+  return ['slug', 'returnWindowDays', 'logoUrl', 'brandColor', 'policyText', 'returnLocationId', 'pickupBooking'].includes(f)
 }

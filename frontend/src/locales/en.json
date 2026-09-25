@@ -1069,7 +1069,7 @@
         "decidedBy": "Decided by {{name}} · {{date}}",
         "decidedAuto": "Approved automatically · {{date}}",
         "helperManual": "After approving, book the pickup in Bosta.",
-        "helperBooking": "Approving books a Bosta pickup from the customer's address.",
+        "helperBooking": "Approving books a Bosta pickup from the customer's area.",
         "approve": "Approve",
         "reject": "Reject",
         "cancel": "Cancel",
@@ -1090,8 +1090,25 @@
         "areaFailed": "Couldn't change the area. Please try again.",
         "areaConflict": "The area can't be changed at this stage.",
         "areaNone": "No pickup areas are available for this city.",
-        "areaLoadFailed": "Couldn't load the pickup areas."
-      }
+        "areaLoadFailed": "Couldn't load the pickup areas.",
+        "bookingLabel": "Bosta pickup",
+        "bookingPending": "Booking…",
+        "bookingBooked": "Booked · {{tracking}}",
+        "bookingFailed": "Failed: {{reason}}",
+        "bookingRetry": "Retry",
+        "bookingRetried": "Booking again…",
+        "bookingAmbiguous": "Check in Bosta: we couldn't confirm whether this pickup was booked. Look for it in Bosta before doing anything else.",
+        "bookingNotBooked": "It wasn't booked — retry",
+        "bookingWasBooked": "It was booked — enter tracking number",
+        "bookingTrackingLabel": "Bosta tracking number",
+        "bookingConfirm": "Confirm",
+        "bookingConfirmed": "Pickup marked as booked",
+        "bookingConfirmInvalid": "Bosta doesn't show that number as a return pickup for this order created after this booking attempt.",
+        "bookingConfirmConflict": "That tracking number is already on another request, or the request changed.",
+        "bookingReview": "Check in Bosta: {{reason}}",
+        "bookingActionFailed": "Couldn't do that. Please try again."
+      },
+      "attention": "Attention"
     }
   },
   "common": {
@@ -1595,7 +1612,9 @@
         "RETURN_LOCATION_UNKNOWN": "That location isn't in your Bosta account. Choose another.",
         "BOSTA_KEY_REFUSED": "Bosta didn't accept the connected API key for locations",
         "NO_BOSTA_ACCOUNT": "Connect Bosta to choose where returns go.",
-        "BOSTA_UNAVAILABLE": "Couldn't reach Bosta. Please try again."
+        "BOSTA_UNAVAILABLE": "Couldn't reach Bosta. Please try again.",
+        "BOOKING_NEEDS_BOSTA": "Connect Bosta before turning on pickup booking.",
+        "BOOKING_NEEDS_RETURN_LOCATION": "Choose where returns go back to and save before turning on pickup booking."
       },
       "returnLocation": {
         "label": "Returns go back to",
@@ -1611,6 +1630,12 @@
           "BOSTA_UNAVAILABLE": "Couldn't reach Bosta. Please try again.",
           "generic": "Couldn't load your Bosta locations."
         }
+      },
+      "booking": {
+        "title": "Book Bosta pickups when I approve",
+        "description": "When on, approving a request books a Bosta courier to collect it from the customer's area. With automatic approval on, the pickup is booked as soon as the request is sent.",
+        "needsBosta": "Connect Bosta first.",
+        "needsLocation": "Choose where returns go back to and save first."
       }
     }
   },

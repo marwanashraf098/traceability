@@ -37,16 +37,25 @@ public class PortalSettingsService {
      * The 4-argument constructor is the Step 4b shape (no branding).
      * returnLocationId (Step 4c-2): the Bosta pickup location returns go back to. Unlike the
      * branding fields it is NOT full-replace — absent/blank leaves the saved location as it is.
+     * pickupBooking (Step 4c-3): "Book Bosta pickups when I approve". Also not full-replace —
+     * absent leaves it as it is. Switching it on needs an active Bosta account and a saved
+     * return location.
      */
     public record Settings(String slug, Boolean enabled, Boolean autoApprove, Integer returnWindowDays,
-                           String logoUrl, String brandColor, String policyText, String returnLocationId) {
+                           String logoUrl, String brandColor, String policyText, String returnLocationId,
+                           Boolean pickupBooking) {
         public Settings(String slug, Boolean enabled, Boolean autoApprove, Integer returnWindowDays) {
-            this(slug, enabled, autoApprove, returnWindowDays, null, null, null, null);
+            this(slug, enabled, autoApprove, returnWindowDays, null, null, null, null, null);
         }
 
         public Settings(String slug, Boolean enabled, Boolean autoApprove, Integer returnWindowDays,
                         String logoUrl, String brandColor, String policyText) {
-            this(slug, enabled, autoApprove, returnWindowDays, logoUrl, brandColor, policyText, null);
+            this(slug, enabled, autoApprove, returnWindowDays, logoUrl, brandColor, policyText, null, null);
+        }
+
+        public Settings(String slug, Boolean enabled, Boolean autoApprove, Integer returnWindowDays,
+                        String logoUrl, String brandColor, String policyText, String returnLocationId) {
+            this(slug, enabled, autoApprove, returnWindowDays, logoUrl, brandColor, policyText, returnLocationId, null);
         }
     }
 
@@ -85,7 +94,7 @@ public class PortalSettingsService {
         Map<String, Object> location = jdbc.queryForList(
             "SELECT return_business_location_id, return_business_location_name FROM courier_accounts " +
             "WHERE tenant_id = ? AND provider = 'bosta' AND status = 'active' LIMIT 1", tenantId)
-            .stream().findFirst().orElse(Map.of());
+            .stream().findFirst().map(m -> (Map<String, Object>) new HashMap<>(m)).orElse(Map.of());
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("slug", t.get("portal_slug"));
         body.put("enabled", t.get("portal_enabled"));
@@ -101,6 +110,8 @@ public class PortalSettingsService {
         body.put("portalPickupBooking", t.get("portal_pickup_booking"));
         body.put("returnLocationId", location.get("return_business_location_id"));
         body.put("returnLocationName", location.get("return_business_location_name"));
+        // Step 4c-3: lets the merchant UI say why the booking switch is disabled.
+        body.put("bostaConnected", !location.isEmpty());
         return body;
     }
 
@@ -163,7 +174,35 @@ public class PortalSettingsService {
                 "WHERE tenant_id = ? AND provider = 'bosta' AND status = 'active'",
                 returnLocation.id(), returnLocation.name(), tenantId);
         }
+        if (s.pickupBooking() != null) setPickupBooking(tenantId, s.pickupBooking());
         return get();
+    }
+
+    /**
+     * Step 4c-3 — the booking switch. On needs an active Bosta account with a saved return
+     * location (checked after this PUT's own location change). Switching it on stamps
+     * portal_pickup_booking_since, so the booking sweeper only picks up approvals from then on.
+     */
+    private void setPickupBooking(UUID tenantId, boolean on) {
+        if (on) {
+            Map<String, Object> account = jdbc.queryForList(
+                "SELECT return_business_location_id FROM courier_accounts " +
+                "WHERE tenant_id = ? AND provider = 'bosta' AND status = 'active' LIMIT 1", tenantId)
+                .stream().findFirst().orElse(null);
+            if (account == null) {
+                throw new FieldException(HttpStatus.CONFLICT, "pickupBooking", "BOOKING_NEEDS_BOSTA",
+                    "Connect Bosta before turning on pickup booking.");
+            }
+            if (account.get("return_business_location_id") == null) {
+                throw new FieldException(HttpStatus.CONFLICT, "pickupBooking", "BOOKING_NEEDS_RETURN_LOCATION",
+                    "Choose where returns go back to before turning on pickup booking.");
+            }
+        }
+        jdbc.update(
+            "UPDATE tenants SET portal_pickup_booking = ?, " +
+            "    portal_pickup_booking_since = CASE WHEN ? AND NOT portal_pickup_booking THEN now() " +
+            "                                       ELSE portal_pickup_booking_since END " +
+            "WHERE id = ?", on, on, tenantId);
     }
 
     /**

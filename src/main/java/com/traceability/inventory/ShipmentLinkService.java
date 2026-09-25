@@ -1056,6 +1056,7 @@ public class ShipmentLinkService {
                 }
             }
             clearReconcileFlag(orderId, tenantId);
+            linkReturnRequest(tenantId, trackingNumber, existing);
             return existing;
         }
 
@@ -1084,7 +1085,20 @@ public class ShipmentLinkService {
             afr.courierName(), afr.courierPhone(),
             rawJson, bostaId);
         clearReconcileFlag(orderId, tenantId);
+        linkReturnRequest(tenantId, trackingNumber, id);
         return id;
+    }
+
+    /**
+     * Step 4c-3 — a return request whose Bosta booking produced this tracking number gets its
+     * return_shipment_id. The booking side does the reverse (links an already-existing shipment
+     * when it saves the tracking number), so webhook-first and booking-first both converge.
+     */
+    private void linkReturnRequest(UUID tenantId, String trackingNumber, UUID shipmentId) {
+        jdbc.update(
+            "UPDATE return_requests SET return_shipment_id = ? " +
+            "WHERE tenant_id = ? AND bosta_tracking_number = ? AND return_shipment_id IS NULL",
+            shipmentId, tenantId, trackingNumber);
     }
 
     private void resolveUnlinked(UUID tenantId, String trackingNumber) {

@@ -169,6 +169,7 @@ public class ExceptionService {
         all.addAll(detectVoidHoldSyncFailed(tenantId));
         all.addAll(detectReturnLegUnscanned(tenantId, returnUnscannedDays));
         all.addAll(detectReturnToReceive(tenantId));
+        all.addAll(detectPickupBookingProblem(tenantId));
 
         // Enrich with descriptions and action hints
         all.forEach(this::enrich);
@@ -295,6 +296,31 @@ public class ExceptionService {
             "JOIN orders o ON o.id = s.order_id AND o.tenant_id = s.tenant_id " +
             "LEFT JOIN users u ON u.id = s.return_intake_by " +
             "WHERE s.tenant_id = ? AND " + ShipmentLinkService.RETURN_TO_RECEIVE_OPEN_SQL,
+            tid);
+    }
+
+    /**
+     * Step 4c-3 — the Bosta return pickup for an approved return request needs a person:
+     * 'failed' (not booked — fix and retry), 'failed_ambiguous' (may or may not be in Bosta —
+     * check there) or 'needs_review' (booked, but Bosta's details differ). HIGH. The subject
+     * key carries the attempt time, so a new failure after a retry is a new exception even if
+     * the previous one was resolved.
+     */
+    private List<Map<String, Object>> detectPickupBookingProblem(UUID tid) {
+        return jdbc.queryForList(
+            "SELECT 'pickup_booking_problem' AS type, 'HIGH' AS severity, 'return_request' AS subject_type, " +
+            "       rr.id AS request_id, rr.reference, rr.booking_status, rr.bosta_tracking_number AS tracking_number, " +
+            "       o.id AS order_id, o.number AS order_number, " +
+            "       COALESCE(rr.booking_attempted_at, rr.decided_at) AS occurred_at, " +
+            "       'pickup_booking_problem:' || rr.id || ':' || " +
+            "           COALESCE(floor(extract(epoch FROM rr.booking_attempted_at))::bigint::text, '0') AS subject_key " +
+            "FROM return_requests rr " +
+            "JOIN orders o ON o.id = rr.order_id AND o.tenant_id = rr.tenant_id " +
+            "WHERE rr.tenant_id = ? AND rr.booking_status IN ('failed', 'failed_ambiguous', 'needs_review') " +
+            "  AND NOT EXISTS (SELECT 1 FROM exception_resolutions er " +
+            "      WHERE er.tenant_id = rr.tenant_id AND er.exception_type = 'pickup_booking_problem' " +
+            "        AND er.subject_key = 'pickup_booking_problem:' || rr.id || ':' || " +
+            "            COALESCE(floor(extract(epoch FROM rr.booking_attempted_at))::bigint::text, '0'))",
             tid);
     }
 
@@ -1076,6 +1102,37 @@ public class ExceptionService {
                     "أضف القطعة في جلسة الاستلام القادمة، أو عالِج هذا التنبيه إذا لن تعود إلى المخزون.");
                 item.put("suggestedAction", "add_in_receiving");
                 item.put("actionUrl", "/receiving");
+            }
+            case "pickup_booking_problem" -> {
+                String ref = str(item, "reference");
+                String n = str(item, "order_number");
+                Object t = item.get("tracking_number");
+                String tEn = t != null ? " (tracking " + t + ")" : "";
+                String tAr = t != null ? " (رقم التتبع " + t + ")" : "";
+                switch (String.valueOf(item.get("booking_status"))) {
+                    case "failed_ambiguous" -> {
+                        item.put("descriptionEn", "Return request " + ref + " for order " + n +
+                            ": the Bosta pickup may or may not have been booked — check in Bosta before retrying");
+                        item.put("descriptionAr", "طلب الإرجاع " + ref + " للطلب " + n +
+                            ": ربما تم حجز استلام بوسطة وربما لا — تحقّق في بوسطة قبل إعادة المحاولة");
+                        item.put("suggestedAction", "check_in_bosta");
+                    }
+                    case "needs_review" -> {
+                        item.put("descriptionEn", "Return request " + ref + " for order " + n + tEn +
+                            ": the Bosta pickup was booked but its details differ from the request — review it in Bosta");
+                        item.put("descriptionAr", "طلب الإرجاع " + ref + " للطلب " + n + tAr +
+                            ": تم حجز استلام بوسطة لكن تفاصيله تختلف عن الطلب — راجعه في بوسطة");
+                        item.put("suggestedAction", "review_in_bosta");
+                    }
+                    default -> {
+                        item.put("descriptionEn", "Return request " + ref + " for order " + n +
+                            ": the Bosta pickup couldn't be booked — fix the reason and retry");
+                        item.put("descriptionAr", "طلب الإرجاع " + ref + " للطلب " + n +
+                            ": تعذّر حجز استلام بوسطة — عالِج السبب وأعد المحاولة");
+                        item.put("suggestedAction", "retry_booking");
+                    }
+                }
+                item.put("actionUrl", "/exchanges?tab=requests&request=" + item.get("request_id"));
             }
             case "exchange_needs_mapping" -> {
                 String t = str(item, "tracking_number");

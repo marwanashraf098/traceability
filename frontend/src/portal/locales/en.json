@@ -29,7 +29,7 @@
     "windowNote": "Returns are accepted within {{count}} day of delivery.",
     "windowNote_other": "Returns are accepted within {{count}} days of delivery.",
     "pickupNote": "The store will arrange a courier to collect the item from your address.",
-    "pickupNoteBooking": "A Bosta courier collects the item from your address.",
+    "pickupNoteBooking": "After approval, a Bosta courier collects the item from the area you choose.",
     "orderMissing": "Enter your order number.",
     "phoneMissing": "Enter the phone number you used when ordering."
   },
@@ -92,6 +92,7 @@
     "title": "Request sent",
     "review": "{{store}} will review your return request.",
     "approved": "Your return is approved. A courier will contact you to collect it.",
+    "approvedBooking": "Your return is approved. We're booking a Bosta courier to collect it.",
     "reference": "Your reference",
     "copy": "Copy",
     "copied": "Copied",
@@ -99,7 +100,7 @@
     "nextTitle": "What happens next",
     "stepReview": "{{store}} reviews your request.",
     "stepCollect": "{{store}} arranges a courier to collect the item from your address.",
-    "stepCollectBooking": "A Bosta courier collects the item from your address.",
+    "stepCollectBooking": "After approval, a Bosta courier collects the item from the area you chose.",
     "stepRefund": "Your refund is sent once the item has been checked.",
     "email": "We'll email updates to {{email}}."
   }

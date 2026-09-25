@@ -700,7 +700,9 @@ function SentScreen({
           </svg>
         </div>
         <h1 className="pp-h1" tabIndex={-1} ref={headingRef}>{t('p4.title')}</h1>
-        <p className="pp-lead" data-testid="sent-lead">{approved ? t('p4.approved') : t('p4.review', { store })}</p>
+        <p className="pp-lead" data-testid="sent-lead">
+          {approved ? t(pickupBooking ? 'p4.approvedBooking' : 'p4.approved') : t('p4.review', { store })}
+        </p>
       </div>
 
       <section className="pp-card pp-ref">

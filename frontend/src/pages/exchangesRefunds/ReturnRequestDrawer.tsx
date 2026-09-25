@@ -2,8 +2,9 @@ import { ReactNode, useCallback, useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { X } from 'lucide-react'
 import {
-  approveReturnRequest, getPortalSettings, getReturnRequest, getReturnRequestPickupAreas, rejectReturnRequest,
-  setReturnRequestPickupArea, PickupDistrict, ReturnRequestDetail, ReturnRequestPickupAreas,
+  approveReturnRequest, confirmBooking, getPortalSettings, getReturnRequest, getReturnRequestPickupAreas,
+  markBookingNotBooked, rejectReturnRequest, retryBooking, setReturnRequestPickupArea,
+  PickupDistrict, ReturnRequestDetail, ReturnRequestPickupAreas,
 } from '../../api'
 import { Alert, Badge, Button, ProductThumb, Skeleton, cn, useToast } from '../../components/ui'
 import { reasonLabel, requestStatusTone, sentLabel, shortCustomerName, shortDate } from './requestFormat'
@@ -24,6 +25,11 @@ export const REJECT_REASON_MAX = 300
  * falling back to the order address city · zone. "Change area" (not in the M2 mockup) opens an
  * inline select of the city's pickup-available districts, grouped by zone — offered while the
  * request is requested or approved (the backend enforces the same).
+ *
+ * Step 4c-3: a "Bosta pickup" row shows the booking — Booking… / Booked · tracking / Failed:
+ * reason + Retry / Check in Bosta (ambiguous: "It wasn't booked — retry" or "It was booked —
+ * enter tracking number") / Check in Bosta: details differ. "Change area" is offered only
+ * while nothing is booked.
  */
 export default function ReturnRequestDrawer({
   requestId,
@@ -196,7 +202,10 @@ function DrawerContent({
   const pickup = districtName
     ? [detail.pickupCityName, districtName].filter(Boolean).join(' · ')
     : [detail.pickupCity, detail.pickupZone].filter(Boolean).join(' · ')
-  const areaEditable = detail.status === 'requested' || detail.status === 'approved'
+  const bookingLocksArea = detail.bookingStatus === 'pending' || detail.bookingStatus === 'booked'
+    || detail.bookingStatus === 'needs_review'
+  const areaEditable = (detail.status === 'requested' || detail.status === 'approved') && !bookingLocksArea
+  const showBooking = detail.bookingStatus != null || (detail.status === 'approved' && pickupBooking)
   const isRequested = detail.status === 'requested'
   const reasonLength = reason.length
 
@@ -245,6 +254,14 @@ function DrawerContent({
                 </button>
               )}
             </Field>
+          )}
+          {showBooking && (
+            <div className="col-span-2 min-w-0" data-testid="booking-row">
+              <dt className="text-caption text-muted mb-0.5">{t('exchangesRefunds.requests.drawer.bookingLabel')}</dt>
+              <dd className="text-body text-primary">
+                <BookingState detail={detail} onChanged={async () => { await load(); onChanged() }} />
+              </dd>
+            </div>
           )}
           {detail.email && (
             <Field label={t('exchangesRefunds.requests.drawer.email')}>
@@ -366,6 +383,117 @@ function DrawerContent({
       )}
     </>
   )
+}
+
+/** Step 4c-3 — the booking row's state and actions. */
+function BookingState({ detail, onChanged }: { detail: ReturnRequestDetail; onChanged: () => Promise<void> }) {
+  const { t } = useTranslation()
+  const { toast } = useToast()
+  const [busy, setBusy] = useState<'retry' | 'notBooked' | 'confirm' | null>(null)
+  const [entering, setEntering] = useState(false)
+  const [tracking, setTracking] = useState('')
+  const [confirmError, setConfirmError] = useState<string | null>(null)
+  const status = detail.bookingStatus ?? 'pending'
+
+  async function run(kind: 'retry' | 'notBooked') {
+    setBusy(kind)
+    try {
+      if (kind === 'retry') await retryBooking(detail.id)
+      else await markBookingNotBooked(detail.id)
+      toast({ tone: 'success', message: t('exchangesRefunds.requests.drawer.bookingRetried') })
+      await onChanged()
+    } catch {
+      toast({ tone: 'error', message: t('exchangesRefunds.requests.drawer.bookingActionFailed') })
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  async function confirm() {
+    const tn = tracking.replace(/\s+/g, '')
+    if (!tn) return
+    setBusy('confirm')
+    setConfirmError(null)
+    try {
+      await confirmBooking(detail.id, tn)
+      toast({ tone: 'success', message: t('exchangesRefunds.requests.drawer.bookingConfirmed') })
+      setEntering(false)
+      await onChanged()
+    } catch (e) {
+      const code = e instanceof Error ? e.message.slice(0, 3) : ''
+      setConfirmError(t(code === '400' ? 'exchangesRefunds.requests.drawer.bookingConfirmInvalid'
+        : code === '409' ? 'exchangesRefunds.requests.drawer.bookingConfirmConflict'
+          : 'exchangesRefunds.requests.drawer.bookingActionFailed'))
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  if (status === 'booked') {
+    return (
+      <span data-testid="booking-booked">
+        {t('exchangesRefunds.requests.drawer.bookingBooked', { tracking: '' })}
+        <bdi className="font-mono" dir="ltr">{detail.bostaTrackingNumber}</bdi>
+      </span>
+    )
+  }
+  if (status === 'failed') {
+    return (
+      <div className="space-y-2" data-testid="booking-failed">
+        <p className="text-critical">{t('exchangesRefunds.requests.drawer.bookingFailed', { reason: detail.bookingError ?? '' })}</p>
+        <Button size="sm" variant="outline" loading={busy === 'retry'} disabled={busy != null} onClick={() => run('retry')}>
+          {t('exchangesRefunds.requests.drawer.bookingRetry')}
+        </Button>
+      </div>
+    )
+  }
+  if (status === 'needs_review') {
+    return (
+      <div className="space-y-1" data-testid="booking-review">
+        <p className="text-warning-text">{t('exchangesRefunds.requests.drawer.bookingReview', { reason: detail.bookingError ?? '' })}</p>
+        {detail.bostaTrackingNumber && <p className="font-mono text-small" dir="ltr"><bdi>{detail.bostaTrackingNumber}</bdi></p>}
+      </div>
+    )
+  }
+  if (status === 'failed_ambiguous') {
+    return (
+      <div className="space-y-2" data-testid="booking-ambiguous">
+        <p className="text-warning-text">{t('exchangesRefunds.requests.drawer.bookingAmbiguous')}</p>
+        {!entering ? (
+          <div className="flex flex-wrap gap-2">
+            <Button size="sm" variant="outline" loading={busy === 'notBooked'} disabled={busy != null} onClick={() => run('notBooked')}>
+              {t('exchangesRefunds.requests.drawer.bookingNotBooked')}
+            </Button>
+            <Button size="sm" variant="outline" disabled={busy != null} onClick={() => { setEntering(true); setConfirmError(null) }}>
+              {t('exchangesRefunds.requests.drawer.bookingWasBooked')}
+            </Button>
+          </div>
+        ) : (
+          <div className="space-y-1.5">
+            <label htmlFor="booking-tracking" className="text-small font-medium text-primary block">
+              {t('exchangesRefunds.requests.drawer.bookingTrackingLabel')}
+            </label>
+            <div className="flex gap-2">
+              <input
+                id="booking-tracking" className={cn('input flex-1 font-mono', confirmError && 'border-critical')} dir="ltr"
+                inputMode="numeric" autoComplete="off" value={tracking}
+                aria-invalid={!!confirmError}
+                onChange={e => { setTracking(e.target.value); setConfirmError(null) }}
+              />
+              <Button size="sm" loading={busy === 'confirm'} disabled={busy != null || !tracking.trim()} onClick={confirm}>
+                {t('exchangesRefunds.requests.drawer.bookingConfirm')}
+              </Button>
+              <Button size="sm" variant="outline" disabled={busy != null} onClick={() => setEntering(false)}>
+                {t('exchangesRefunds.requests.drawer.cancel')}
+              </Button>
+            </div>
+            {confirmError && <p className="text-small text-critical" role="alert">{confirmError}</p>}
+          </div>
+        )}
+      </div>
+    )
+  }
+  return <span className="text-muted" data-testid="booking-pending">{t('exchangesRefunds.requests.drawer.bookingPending')}</span>
 }
 
 /** Inline "Change area": the request city's pickup-available districts, grouped by zone. */

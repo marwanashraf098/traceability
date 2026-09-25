@@ -64,6 +64,7 @@ const TYPE_LABELS: Record<string, { en: string; ar: string }> = {
   cancelled_but_delivered: { en: 'Cancelled · Delivered',     ar: 'ملغي · تم التوصيل' },
   return_leg_unscanned:    { en: 'Return Not Scanned',        ar: 'مرتجع لم يُمسح' },
   return_to_receive:       { en: 'Return To Receive',         ar: 'مرتجع بانتظار الاستلام' },
+  pickup_booking_problem:  { en: 'Bosta Pickup Booking',      ar: 'حجز استلام بوسطة' },
 }
 
 const ALL_TYPES      = Object.keys(TYPE_LABELS)

@@ -2052,6 +2052,9 @@ export type ReturnRequestStatus =
   | 'requested' | 'approved' | 'rejected' | 'pickup_booked' | 'received'
   | 'refund_pending' | 'refunded' | 'cancelled'
 
+/** Step 4c-3 — the Bosta return pickup booking (null = never attempted). */
+export type BookingStatus = 'pending' | 'booked' | 'failed' | 'failed_ambiguous' | 'needs_review'
+
 export interface ReturnRequestRow {
   id: string
   reference: string
@@ -2060,6 +2063,7 @@ export interface ReturnRequestRow {
   itemCount: number
   reasonCodes: string[]
   status: ReturnRequestStatus
+  bookingStatus?: BookingStatus | null
   createdAt: string
 }
 
@@ -2102,6 +2106,12 @@ export interface ReturnRequestDetail {
   pickupDistrictId: string | null
   pickupDistrictName: string | null
   pickupDistrictNameAr: string | null
+  /** Step 4c-3 — the Bosta return pickup booking. */
+  bookingStatus?: BookingStatus | null
+  bookingError?: string | null
+  bostaTrackingNumber?: string | null
+  bookingAttemptedAt?: string | null
+  bookingVerifiedAt?: string | null
   decidedAt: string | null
   decidedBy: string | null
   decidedByName: string | null
@@ -2126,6 +2136,21 @@ export function approveReturnRequest(id: string) {
 
 export function rejectReturnRequest(id: string, reason: string) {
   return request<void>(`/return-requests/${id}/reject`, { method: 'POST', body: JSON.stringify({ reason }) })
+}
+
+/** 'failed' → book again. */
+export function retryBooking(id: string) {
+  return request<void>(`/return-requests/${id}/booking/retry`, { method: 'POST' })
+}
+
+/** "It wasn't booked — retry": 'failed_ambiguous' → 'failed' → book again. */
+export function markBookingNotBooked(id: string) {
+  return request<void>(`/return-requests/${id}/booking/not-booked`, { method: 'POST' })
+}
+
+/** "It was booked — enter tracking number" (checked against Bosta by the backend). */
+export function confirmBooking(id: string, trackingNumber: string) {
+  return request<void>(`/return-requests/${id}/booking/confirm`, { method: 'POST', body: JSON.stringify({ trackingNumber }) })
 }
 
 export interface PickupDistrict {
@@ -2169,10 +2194,17 @@ export interface PortalSettings {
   /** The Bosta pickup location returns go back to (null until chosen). */
   returnLocationId: string | null
   returnLocationName: string | null
+  /** Step 4c-3 — an active Bosta account exists (the booking switch needs it). */
+  bostaConnected?: boolean
 }
 
-/** returnLocationId: sent to change it; null/absent leaves the saved one as it is. */
-export type PortalSettingsInput = Omit<PortalSettings, 'pickupBooking' | 'portalPickupBooking' | 'returnLocationName'>
+/**
+ * returnLocationId: sent to change it; null/absent leaves the saved one as it is.
+ * pickupBooking (Step 4c-3): sent only when the switch changed; absent leaves it as it is.
+ */
+export type PortalSettingsInput =
+  Omit<PortalSettings, 'pickupBooking' | 'portalPickupBooking' | 'returnLocationName' | 'bostaConnected'>
+  & { pickupBooking?: boolean }
 
 export interface BostaReturnLocation {
   id: string

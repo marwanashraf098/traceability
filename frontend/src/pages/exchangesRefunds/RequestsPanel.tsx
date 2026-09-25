@@ -15,14 +15,20 @@ export const REQUESTS_PAGE_SIZE = 25
  * from the exchange/refund feeds, which it never touches. onDecided lets the parent refresh
  * the "{n} new" badge after an approve/reject.
  */
-export default function RequestsPanel({ onDecided }: { onDecided: () => void }) {
+/** Step 4c-3 — booking states that need the merchant (the "Attention" badge). */
+export const BOOKING_ATTENTION = new Set(['failed', 'failed_ambiguous', 'needs_review'])
+
+export default function RequestsPanel({
+  onDecided, initialRequestId = null,
+}: { onDecided: () => void; initialRequestId?: string | null }) {
   const { t, i18n } = useTranslation()
   const [page, setPage] = useState(0)
   const [rows, setRows] = useState<ReturnRequestRow[]>([])
   const [total, setTotal] = useState(0)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(false)
-  const [selectedId, setSelectedId] = useState<string | null>(null)
+  // An exception's "Go" link opens the request directly (?tab=requests&request=<id>).
+  const [selectedId, setSelectedId] = useState<string | null>(initialRequestId)
 
   const load = useCallback(async (p: number) => {
     setLoading(true)
@@ -77,7 +83,14 @@ export default function RequestsPanel({ onDecided }: { onDecided: () => void }) 
     {
       key: 'status', header: t('exchangesRefunds.requests.columns.status'),
       render: row => (
-        <Badge tone={requestStatusTone(row.status)} label={t(`exchangesRefunds.requests.status.${row.status}`)} />
+        <span className="inline-flex flex-wrap items-center gap-1.5">
+          <Badge tone={requestStatusTone(row.status)} label={t(`exchangesRefunds.requests.status.${row.status}`)} />
+          {row.bookingStatus && BOOKING_ATTENTION.has(row.bookingStatus) && (
+            <span data-testid="attention-badge">
+              <Badge tone="critical" label={t('exchangesRefunds.requests.attention')} />
+            </span>
+          )}
+        </span>
       ),
     },
   ]

@@ -23,12 +23,42 @@ public class ReturnsPortalAdminController {
     private final ReturnRequestService  requests;
     private final PortalSettingsService settings;
     private final ReturnLocationService returnLocations;
+    private final ReturnPickupBookingService booking;
 
     public ReturnsPortalAdminController(ReturnRequestService requests, PortalSettingsService settings,
-                                        ReturnLocationService returnLocations) {
+                                        ReturnLocationService returnLocations, ReturnPickupBookingService booking) {
         this.requests        = requests;
         this.settings        = settings;
         this.returnLocations = returnLocations;
+        this.booking         = booking;
+    }
+
+    // ── Step 4c-3: Bosta return pickup booking ───────────────────────────────
+
+    /** 'failed' → book again (the job re-claims). 409 otherwise. */
+    @PostMapping("/return-requests/{id}/booking/retry")
+    @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
+    @ResponseStatus(HttpStatus.ACCEPTED)
+    public void retryBooking(@PathVariable UUID id) {
+        booking.retry(id);
+    }
+
+    /** "It wasn't booked — retry": 'failed_ambiguous' → 'failed' → book again. 409 otherwise. */
+    @PostMapping("/return-requests/{id}/booking/not-booked")
+    @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
+    @ResponseStatus(HttpStatus.ACCEPTED)
+    public void markNotBooked(@PathVariable UUID id) {
+        booking.markNotBooked(id);
+    }
+
+    public record ConfirmBookingRequest(String trackingNumber) {}
+
+    /** "It was booked — enter tracking number": checked against Bosta, then booked + verified. */
+    @PostMapping("/return-requests/{id}/booking/confirm")
+    @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void confirmBooking(@PathVariable UUID id, @RequestBody(required = false) ConfirmBookingRequest body) {
+        booking.confirmBooked(id, body == null ? null : body.trackingNumber());
     }
 
     // ── Return requests ──────────────────────────────────────────────────────

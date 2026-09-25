@@ -45,8 +45,17 @@ public class PortalService {
     private final TransactionTemplate tx;
     private final PortalTokenService  tokens;
     private final PickupAreaService   pickupAreas;
+    private final PickupBookingScheduler bookingScheduler;
 
+    /** Without a scheduler (tests on an app_user connection): auto-approval never enqueues a booking. */
     public PortalService(JdbcTemplate jdbc, PlatformTransactionManager txm, PortalTokenService tokens) {
+        this(jdbc, txm, tokens, null);
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public PortalService(JdbcTemplate jdbc, PlatformTransactionManager txm, PortalTokenService tokens,
+                         PickupBookingScheduler bookingScheduler) {
+        this.bookingScheduler = bookingScheduler;
         this.jdbc        = jdbc;
         this.tx          = new TransactionTemplate(txm);
         this.tokens      = tokens;
@@ -269,6 +278,10 @@ public class PortalService {
         try {
             Map<String, Object> body = TenantContext.runAs(tenantId,
                 () -> tx.execute(s -> submitInTenant(tenantId, orderId, req)));
+            // Step 4c-3: the transaction above has committed. An auto-approved request of a tenant
+            // that books Bosta pickups gets its booking job now (the client never sees the id).
+            UUID bookRequestId = (UUID) body.remove("_bookRequestId");
+            if (bookRequestId != null && bookingScheduler != null) bookingScheduler.enqueue(bookRequestId, tenantId);
             return Optional.of(new SubmitResult(SubmitOutcome.CREATED, body));
         } catch (InvalidSubmission e) {
             return Optional.of(new SubmitResult(SubmitOutcome.INVALID, null));
@@ -349,6 +362,10 @@ public class PortalService {
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("reference", reference);
         body.put("status", autoApprove ? "approved" : "requested");
+        if (autoApprove && Boolean.TRUE.equals(jdbc.queryForObject(
+                "SELECT portal_pickup_booking FROM tenants WHERE id = ?", Boolean.class, tenantId))) {
+            body.put("_bookRequestId", requestId);   // internal — removed before the response
+        }
         return body;
     }
 
