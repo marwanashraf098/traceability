@@ -234,6 +234,12 @@ Built 2026-08-15 on branch `returns-rebuild`, single cutover, not yet merged. Mo
 - [ ] RP.11 [M] Bosta pickup booking on approval — pickupBooking true (Step 4c)
 - [x] RP.13 [M] More than one courier-return (CRP) leg per order — V104 forward-only active index; canonical per-leg scan-evidence rule (`ShipmentLinkService.returnLegScanEvidenceSql`) used by close() stamping, `resolveReturnLegIfComplete`, awaiting-scan / `return_leg_unscanned` (Step 4c-1)
 - [ ] RP.14 [S] Follow-up (4d): per-leg `listCrpReturns` pending_inspection_count and parcel-card scanned-item grouping for multi-leg orders
+- [x] RP.15 [M] Bosta reference data: global `bosta_districts` (V105, app_user SELECT only) refreshed daily + on empty startup from `getAllDistricts` (no auth, owner connection) (Step 4c-2)
+- [x] RP.16 [M] Return warehouse: `GET /tenant/bosta/return-locations` (tenant key, v2 read) + validated `returnLocationId` in portal settings + Settings "Returns go back to" select (Step 4c-2)
+- [x] RP.17 [M] Per-tenant `tenants.portal_pickup_booking` replaces the global PICKUP_BOOKING constant (no UI switch yet) (Step 4c-2)
+- [x] RP.18 [M] Portal pickup area: lookup `pickup` offer, required district on submit, snapshot on the request, P3 City + Area (EN/AR) (Step 4c-2)
+- [x] RP.19 [M] Merchant drawer: pickup area from the snapshot + "Change area" (requested/approved, owner/manager) (Step 4c-2)
+- [ ] RP.20 [S] Follow-up: a Settings switch for `portal_pickup_booking` (arrives with the booking itself, RP.11)
 - [x] RS.18 [M] Return session parcel cards (per scanned AWB), feedback strip, footer summary
 - [x] RS.19 [M] Untracked courier return: mark received / undo (no stock change), V101 intake outcome + actor
 - [x] RS.20 [M] `return_to_receive` exception (MEDIUM) + E&R "Received · not tracked"

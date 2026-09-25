@@ -4,6 +4,46 @@
 
 ## Current state
 
+**Step 4c-2 — Bosta reference data, return warehouse, pickup area in the portal (no booking) — built 2026-09-25 on branch `feature/portal-4c2` (from origin/main `cd1ec79`; not merged, not deployed).**
+No Bosta writes. Two new Bosta v2 READS in `BostaV2Client` (v0 client and `bosta.api-version` untouched).
+- **V105:** `bosta_districts` (global, no tenant_id/RLS, app_user SELECT only — INSERT/UPDATE/DELETE/TRUNCATE
+  revoked; PK district_id, index city_id); `tenants.portal_pickup_booking` (default false); `courier_accounts.
+  return_business_location_id/_name`; `return_requests.pickup_city_id/_name, pickup_district_id/_name/_name_ar`.
+  MigrationSmokeTest only checks its explicit TENANT_SCOPED_TABLES list, so a table without tenant_id is simply
+  not checked (like bosta_state_mappings); the grants are proven in `BostaDistrictsRefreshTest` on app_user.
+- **Districts refresh:** `BostaDistrictsRefreshService` — getAllDistricts with NO Authorization header, one owner-pool
+  transaction: upsert all (stamped with the run time), then `pickup_available = false` on rows not touched; never
+  deletes; empty/failed fetch changes nothing; 401/403 logs "needs auth" and stops (never a tenant key). A district is
+  pickup-available only when both it and its city say so. `BostaDistrictsRefreshJob`: daily 04:00 Africa/Cairo +
+  enqueued at startup when empty (fail-soft). Approved owner-connection use, this table only (CLAUDE.md).
+- **Return warehouse:** `GET /api/v1/tenant/bosta/return-locations` (owner/manager) → [{id,name,isDefault,cityName}]
+  via the tenant's decrypted key (raw header); errors with a body: 409 NO_BOSTA_ACCOUNT, 422 BOSTA_KEY_REFUSED
+  ("Bosta didn't accept the connected API key for locations"), 502 BOSTA_UNAVAILABLE. PUT portal-settings accepts
+  `returnLocationId`: checked against a fresh fetch BEFORE the settings transaction (400 RETURN_LOCATION_UNKNOWN);
+  the already-saved id is accepted without calling Bosta; absent/blank leaves it unchanged (not full-replace).
+  GET adds `returnLocationId/Name` and `portalPickupBooking` (existing `pickupBooking` kept, same value).
+- **Portal:** config `pickupBooking` = the tenant column. Lookup always has `pickup` — {cityId, cityName, cityNameAr,
+  districts[{id,name,nameAr,zoneName,zoneNameAr}] (pickup-available, by zone then name), preselectedDistrictId (the
+  forward leg's district when in the list)} or null (booking off / city unknown / none available). Submit re-derives
+  the offer; when offered, `districtId` must be in it (else the generic 400) and is snapshotted; otherwise ignored.
+  `PickupAreaService` (city = newest delivered forward leg's raw.dropOffAddress.city._id) is shared by lookup, submit
+  and the drawer; it is built from each service's own JdbcTemplate so app_user-constructed tests read on it too.
+- **Merchant:** drawer Pickup = snapshot "city · district" (Arabic district in AR), else the order address; "Change
+  area" (requested/approved) → `GET /return-requests/{id}/pickup-areas`, `PUT .../pickup-area {districtId}` (409 other
+  statuses, 400 not available, owner/manager). Settings: "Returns go back to" native select (default preselected
+  when nothing saved; error text + saved name + retry on failure). Neither control is in the M2/M4 mockups.
+- **Tests:** backend `BostaV2ClientTest` (real JDK HttpServer: no Authorization header, raw key, 401s, Arabic +
+  pickup=false parsing), `BostaDistrictsRefreshTest` (upsert/deactivate/empty/401, app_user grants),
+  `PortalPickupAreaTest` (13: lookup, submit, drawer + app_user cross-tenant, return locations, settings, config);
+  `PortalLookupTest` exact-key list + "pickup" (pre-approved); `RlsCoverageTest` COVERED + two tests for the new
+  GETs (approved): pickup-areas own 200 / other tenant 404; return-locations uses only this tenant's decrypted key. Frontend `portalPickupArea`, `returnRequestArea`,
+  `returnsPortalWarehouse` (13). Fixtures follow the vendor spec's documented shapes, not live captures.
+- **Not verified live:** getAllDistricts really being unauthenticated, and v2 pickup-locations accepting the raw
+  v0-style key — both need a staging check before the booking step relies on them.
+- **Gotchas:** `mvn test`/`vite build` output under src/main/resources/static is tracked — restore it after a build.
+  `renderWithProviders` uses its own English-only i18n; to test Arabic, nest `<I18nextProvider i18n={appI18n}>`.
+  Postgres permission errors surface from Spring as BadSqlGrammarException (SQLState 42501) — assert on the cause.
+
 **Step 4c-1 — more than one courier-return (CRP) leg per order — built 2026-09-25 on branch `feature/multi-return-legs` (from origin/main; not merged, not deployed).**
 Before: V43's `ux_active_shipment_per_order_leg` let a finished return leg hold the order's only
 return slot forever, so a second CRP (second portal request, or one after a dashboard CRP) was
