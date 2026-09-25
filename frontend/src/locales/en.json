@@ -633,6 +633,11 @@
       "mandatoryNote": "Mandatory — this step is required."
     },
     "noPiecesScanned": "No pieces scanned yet",
+    "demoScan": {
+      "hint": "Demo: no scanner needed — tap Scan on a piece",
+      "scan": "Scan",
+      "scanAria": "Scan {{barcode}}"
+    },
     "selfPickup": "Self-Pickup",
     "selfPickupBadge": "Self-Pickup",
     "handoverTitle": "Confirm Customer Collection",

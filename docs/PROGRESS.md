@@ -120,6 +120,34 @@ finished leg in the slot).
 - **Gotcha:** a spec's revert tests can prove a rule wrong — here the literal Rule 2 failed the
   spec's own m2; run the revert before trusting the wording.
 
+**App Store reviewer fixes — built 2026-09-25 on branch `fix/reviewer-embedded-crash` (off `landing-webp`; 3 commits, not deployed, NOT yet on top of origin/main — see below).**
+- **A — embedded white page:** `EmbeddedController.exceptions()` read `exceptionType`/`subjectKey`; ExceptionService rows carry
+  `type`/`subject_key` → every embedded exception had type=null → `fmtLabel(null).replace` crashed the Overview (reviewer2 tenant's
+  on-hold #1291 = one `blocked_customer`). Keys fixed (response names unchanged); `fmtLabel`/`statusLabel` null → "—";
+  `components/ErrorBoundary.tsx` (self-contained, inline DS v1.0 values, EN/AR from `<html lang>`) wraps both roots.
+- **B — Pick & Pack:** `GET /fulfill/queue/awaiting-waybill-count` → `{count}` (open, not held, 30d, not self-pickup, NO forward
+  shipment; a moved-on shipment is not counted). PICKABLE_ORDERS_FILTER untouched; base predicates restated, equivalence pinned by
+  `AwaitingWaybillCountTest`. Empty queue shows the pluralized waybill message (+ Connect Bosta when `/connections` says not
+  connected; workers get no link). OrderDrawer: "No Bosta waybill yet" under a disabled View shipment.
+- **C — Overview:** fresh-tenant card now also requires `orders/summary.total === 0`; its Shopify step reads `/connections`.
+- **Approved test edits applied:** `RlsCoverageTest` EXEMPT entry for the new endpoint; `overview.test.tsx` ov11/ov19 get
+  `ordersSummary: ZERO_ORDERS_SUMMARY`. Backend 1464 run, only the 3 known reds; vitest 421/421.
+- **Demo first-scan helper:** pick screen, demo tenant only (JWT `tenant` claim === `DEMO_TENANT_ID`, same check as
+  StationGate): each unfinished line lists ≤3 available barcodes (existing `GET /inventory/pieces`, OWNER/MANAGER) with a Scan
+  button calling PickScreen's own `handleScan` — no second scan path, refocus/scan handlers untouched. Station-mode worker
+  tokens get 403 there → helper silently absent. Verified live (local jar + throwaway Postgres): demo start → #DEMO-Q1 → 2 scans
+  via buttons → Complete → order `packed`.
+- **Remaining demo dead end (not built — needs approval):** Complete opens the mandatory post-Complete "Scan AWB Barcode"
+  dialog; a visitor doesn't know the seeded tracking number (999000000001…). Typing it finishes the flow (→ awaiting_pickup).
+- **Prod is NOT on landing-webp:** landing-webp = origin/main minus the 6 portal 4c-1…4c-3 commits (+1 docs commit). Prod's
+  main bundle carries 18/33 origin/main-only strings (4c-2/4c-3 pickup-area copy). Rebase this branch onto origin/main
+  before deploying. `main-*.js` hashes can't be compared (VITE_CALENDLY_SETUP_URL is baked in at build time).
+- **Findings:** reviewer2 (`8mqr0k-qs`) and reviewer3 stores were disconnected by Shopify `app/uninstalled` webhooks
+  (2026-09-25 17:02:22 and 2026-09-24 20:14:33 + `shop/redact`). Demo tenant: 10 pickable Bosta-linked orders reseeded every
+  30 min; the pick screen never shows a scannable barcode, so a demo visitor has to look one up elsewhere (not browser-verified).
+- **Gotcha:** `mvn test` runs the frontend build into the tracked `src/main/resources/static/` — `git checkout` it afterwards
+  unless shipping a build. Layout has no mobile sidebar handling (fixed 224px) — pre-existing, seen at 375px.
+
 **Proxy trust hardening — built 2026-09-24 on branch `fix/proxy-trust` (not merged, not deployed).**
 Follows the Step 0 diagnosis (no Cloudflare; Spring trusted client-sent forwarded headers).
 - **Spring:** `server.forward-headers-strategy: native` (Tomcat `RemoteIpValve`) replaces `framework`.

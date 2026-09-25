@@ -8,7 +8,8 @@ import {
 import { Badge, Button, Skeleton, EmptyState } from '../components/ui'
 import Layout from '../components/Layout'
 import { getAccessToken, clearAccessToken } from '../auth'
-import { TransferCommandError } from '../api'
+import { TransferCommandError, getTenantIdFromToken } from '../api'
+import { DEMO_TENANT_ID } from '../demoConstants'
 
 const BASE = '/api/v1'
 
@@ -784,6 +785,72 @@ function GuidedUnpackPanel({
 
 // ── Pick screen ────────────────────────────────────────────────────────────────
 
+// ── Demo-only first-scan helper ───────────────────────────────────────────────
+//
+// A public demo visitor has no physical labels to scan, and the pick screen never shows
+// an unscanned piece's barcode. For the demo tenant ONLY (JWT tenant claim ===
+// DEMO_TENANT_ID — same check StationGate uses), each unfinished line lists up to 3
+// available barcodes for its variant with a Scan button. The button calls PickScreen's
+// own handleScan — the exact path a real HID scan takes; there is no second scan path.
+// Barcodes come from the existing GET /inventory/pieces (OWNER/MANAGER — the demo
+// visitor's own session). Any failure (e.g. a station-mode worker token → 403) renders
+// nothing. Refetches whenever the line's allocated count changes, since a scanned piece
+// leaves 'available'.
+
+interface DemoPiece { id: string; barcode: string }
+
+function DemoScanHelper({
+  variantId,
+  refreshKey,
+  disabled,
+  onScan,
+}: {
+  variantId: string
+  refreshKey: number
+  disabled: boolean
+  onScan: (barcode: string) => void
+}) {
+  const { t } = useTranslation()
+  const [pieces, setPieces] = useState<DemoPiece[]>([])
+
+  useEffect(() => {
+    let cancelled = false
+    api<{ items: DemoPiece[] }>(
+      `/inventory/pieces?status=available&variantId=${encodeURIComponent(variantId)}&size=3`,
+    )
+      .then(({ data, status }) => {
+        if (cancelled) return
+        setPieces(status === 200 && Array.isArray(data?.items) ? data.items.slice(0, 3) : [])
+      })
+      .catch(() => { if (!cancelled) setPieces([]) })
+    return () => { cancelled = true }
+  }, [variantId, refreshKey])
+
+  if (pieces.length === 0) return null
+  return (
+    <div className="mt-2.5 pt-2.5 border-t border-dashed border-line" data-testid="demo-scan-helper">
+      <p className="text-caption text-muted mb-1.5">{t('fulfill.demoScan.hint')}</p>
+      <div className="flex flex-wrap gap-1.5">
+        {pieces.map(p => (
+          <div key={p.id} className="flex items-center gap-1.5 bg-elevated border border-line rounded-full ps-2.5 pe-1 py-0.5">
+            <span className="text-caption font-mono text-primary" dir="ltr">{p.barcode.slice(-10)}</span>
+            <button
+              type="button"
+              disabled={disabled}
+              onClick={() => onScan(p.barcode)}
+              className="text-caption font-semibold text-white bg-brand hover:bg-brand-hover rounded-full px-2.5 py-0.5
+                         disabled:opacity-[0.35] disabled:cursor-not-allowed transition-colors"
+              aria-label={t('fulfill.demoScan.scanAria', { barcode: p.barcode })}
+            >
+              {t('fulfill.demoScan.scan')}
+            </button>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 function PickScreen({
   orderId,
   onBack,
@@ -797,6 +864,7 @@ function PickScreen({
 }) {
   const { t, i18n } = useTranslation()
   const DesktopBackIcon = i18n.language === 'ar' ? ArrowRight : ArrowLeft
+  const isDemoTenant = getTenantIdFromToken() === DEMO_TENANT_ID
   const [order, setOrder] = useState<OrderDetail | null>(null)
   const [loading, setLoading] = useState(true)
   const [flash, setFlash] = useState<FlashState>('idle')
@@ -1039,6 +1107,14 @@ function PickScreen({
               </div>
             ) : (
               <p className="text-caption text-muted">{t('fulfill.noPiecesScanned')}</p>
+            )}
+            {isDemoTenant && !complete && !hasCancelRequest && (
+              <DemoScanHelper
+                variantId={item.variant_id}
+                refreshKey={item.allocated}
+                disabled={scanning}
+                onScan={handleScan}
+              />
             )}
           </div>
         )

@@ -636,6 +636,11 @@
       "mandatoryNote": "إلزامي — هذه الخطوة مطلوبة."
     },
     "noPiecesScanned": "لا توجد قطع ممسوحة بعد",
+    "demoScan": {
+      "hint": "تجربة: لا حاجة لقارئ باركود — اضغط «مسح» على أي قطعة",
+      "scan": "مسح",
+      "scanAria": "مسح {{barcode}}"
+    },
     "selfPickup": "استلام شخصي",
     "selfPickupBadge": "استلام شخصي",
     "handoverTitle": "تأكيد تسليم العميل",
