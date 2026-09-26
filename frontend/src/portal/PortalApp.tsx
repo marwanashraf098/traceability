@@ -1,7 +1,7 @@
 import { CSSProperties, FormEvent, ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Trans, useTranslation } from 'react-i18next'
 import {
-  getConfig, lookup, submit, LookupResult, PickupDistrict, PortalConfig, SubmitResult,
+  getConfig, lookup, submit, ExchangeOption, LookupLine, LookupResult, PickupDistrict, PortalConfig, SubmitResult,
 } from './api'
 import { palette } from './brand'
 import { applyDocumentLanguage, PortalLang, saveLanguage } from './i18n'
@@ -18,13 +18,20 @@ import { applyDocumentLanguage, PortalLang, saveLanguage } from './i18n'
  * city is known), P3's Pickup card shows the City (read-only) and a required Area select,
  * grouped by zone, names in the current language — as in the P3 mockup. Send stays disabled
  * until an area is chosen. Without an offer, P3 keeps its previous copy.
+ *
+ * Step 5b (X1–X3): when config.exchangesEnabled, step 1 starts with Return / Exchange. Exchange
+ * mode picks ONE item (radio) and its reason, then X2 chooses the new size / colour from the
+ * line's exchangeOptions (out of stock disabled, the customer's own variant marked "yours") with a
+ * pre-ticked refund-fallback checkbox, then the same P3 as step 3 of 3, then X3. Hidden entirely
+ * when the flag is absent. Refund mode is the unchanged P2 → P3 → P4.
  */
 
 export const NOTE_MAX = 300
 // Same rule as PortalService.EMAIL on the backend.
 export const EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/
 
-type Step = 'start' | 'items' | 'details' | 'sent'
+type Step = 'start' | 'items' | 'variant' | 'details' | 'sent'
+type Mode = 'refund' | 'exchange'
 type StartBanner = 'notFound' | 'throttled' | 'generic' | 'expired' | 'conflict'
 type SendBanner = 'invalid' | 'generic' | 'submitThrottled'
 interface Selection { qty: number; reason: string }
@@ -45,6 +52,50 @@ export function groupByZone(districts: PickupDistrict[], lang: string) {
     else groups.push({ zone, districts: [d] })
   }
   return groups
+}
+
+/** "White / M" style option values → "White · M" (the title when no values are known). */
+export function optionLabel(options: string[] | undefined, title: string | null): string {
+  return options && options.length > 0 ? options.join(' · ') : (title ?? '')
+}
+
+/** The exchange option whose option values equal {@code values}, if any. */
+export function findOption(line: LookupLine, values: string[]): ExchangeOption | undefined {
+  return (line.exchangeOptions ?? []).find(o => o.options.length === values.length && o.options.every((v, i) => v === values[i]))
+}
+
+/**
+ * X2 starting selection: the customer's own values, with the size axis (else the last axis)
+ * left open — the mockup keeps "White" chosen and marks "M · yours" on the size row.
+ */
+export function initialValues(line: LookupLine): string[] {
+  const current = line.currentOptions ?? []
+  const axes = line.optionAxes ?? []
+  if (current.length === 0) return []
+  const sizeAxis = axes.findIndex(a => a.kind === 'size')
+  const open = sizeAxis >= 0 ? sizeAxis : current.length - 1
+  return current.map((v, i) => (i === open ? '' : v))
+}
+
+const SIZE_ORDER = ['xxs', 'xs', 's', 'small', 'm', 'medium', 'l', 'large', 'xl', 'xxl', '2xl', 'xxxl', '3xl', '4xl', '5xl']
+
+/** Sizes in wearing order (XS < S < M < L < XL…), numbers by value, anything else last. */
+export function sizeRank(value: string): number {
+  const v = value.trim().toLowerCase()
+  const n = Number(v)
+  if (v !== '' && !Number.isNaN(n)) return 1000 + n
+  const i = SIZE_ORDER.indexOf(v)
+  return i >= 0 ? i : 100000
+}
+
+/** Options matching every chosen ('' = open) value. */
+export function matchingOptions(line: LookupLine, values: string[]): ExchangeOption[] {
+  return (line.exchangeOptions ?? []).filter(o => values.every((v, i) => v === '' || o.options[i] === v))
+}
+
+/** Lines the customer could exchange: returnable, with at least one sibling variant. */
+export function exchangeable(line: LookupLine): boolean {
+  return !line.nonReturnable && line.returnableQuantity > 0 && (line.exchangeOptions?.length ?? 0) > 0
 }
 
 /** "mona@example.com" → "m•••@example.com". */
@@ -78,6 +129,14 @@ export default function PortalApp({ slug }: { slug: string | null }) {
 
   const [order, setOrder] = useState<LookupResult | null>(null)
   const [selections, setSelections] = useState<Record<string, Selection>>({})
+
+  // Step 5b — exchange mode.
+  const [mode, setMode] = useState<Mode>('refund')
+  const [exchangeLineId, setExchangeLineId] = useState<string | null>(null)
+  const [exchangeReason, setExchangeReason] = useState('')
+  const [exchangeValues, setExchangeValues] = useState<string[]>([])
+  const [exchangeTargetId, setExchangeTargetId] = useState<string | null>(null)
+  const [fallbackOk, setFallbackOk] = useState(true)
 
   const [areaId, setAreaId] = useState('')
   const [note, setNote] = useState('')
@@ -149,6 +208,11 @@ export default function PortalApp({ slug }: { slug: string | null }) {
     if (res.ok) {
       setOrder(res.data)
       setSelections({})
+      setMode('refund')
+      setExchangeLineId(null)
+      setExchangeReason('')
+      setExchangeTargetId(null)
+      setFallbackOk(true)
       setAreaId(res.data.pickup?.preselectedDistrictId ?? '')
       setStartBanner(null)
       setThrottledOrder(null)
@@ -175,6 +239,27 @@ export default function PortalApp({ slug }: { slug: string | null }) {
     setSelections(s => ({ ...s, [variantId]: { qty: s[variantId]?.qty ?? 0, reason } }))
   }
 
+  // ── X1 / X2 (Step 5b) ─────────────────────────────────────────────────────
+  const exchangesOn = config?.exchangesEnabled === true
+  const exchangeMode = exchangesOn && mode === 'exchange'
+  const exchangeLine = order?.lines.find(l => l.variantId === exchangeLineId) ?? null
+  const exchangeTarget = exchangeLine?.exchangeOptions?.find(o => o.variantId === exchangeTargetId) ?? null
+
+  function chooseExchangeLine(line: LookupLine) {
+    setExchangeLineId(line.variantId)
+    setExchangeValues(initialValues(line))
+    setExchangeTargetId(null)
+  }
+
+  function pickValue(axis: number, value: string) {
+    if (!exchangeLine) return
+    const next = [...exchangeValues]
+    next[axis] = value
+    setExchangeValues(next)
+    const option = findOption(exchangeLine, next)
+    setExchangeTargetId(option && option.inStock ? option.variantId : null)
+  }
+
   // ── P3 ────────────────────────────────────────────────────────────────────
   const pickup = order?.pickup ?? null
   const areaMissing = pickup != null && !areaId
@@ -190,9 +275,18 @@ export default function PortalApp({ slug }: { slug: string | null }) {
     setSending(true)
     setSendBanner(null)
     const res = await submit(slug, order.token, {
-      lines: selectedLines.map(l => ({
-        variantId: l.variantId, quantity: selections[l.variantId].qty, reasonCode: selections[l.variantId].reason,
-      })),
+      ...(exchangeMode && exchangeLine && exchangeTarget
+        ? {
+            mode: 'exchange' as const,
+            lines: [{ variantId: exchangeLine.variantId, quantity: 1, reasonCode: exchangeReason }],
+            replacementVariantId: exchangeTarget.variantId,
+            refundFallbackOk: fallbackOk,
+          }
+        : {
+            lines: selectedLines.map(l => ({
+              variantId: l.variantId, quantity: selections[l.variantId].qty, reasonCode: selections[l.variantId].reason,
+            })),
+          }),
       ...(trimmedEmail ? { email: trimmedEmail } : {}),
       ...(note.trim() ? { note } : {}),
       ...(pickup && areaId ? { districtId: areaId } : {}),
@@ -248,6 +342,131 @@ export default function PortalApp({ slug }: { slug: string | null }) {
     return <Shell style={rootStyle} header={header()}><div aria-busy="true" className="pp-loading" /></Shell>
   }
 
+  if (step === 'items' && order && exchangeMode) {
+    const canContinueExchange = exchangeLine != null && !!exchangeReason
+    return (
+      <Shell
+        style={rootStyle}
+        header={header(() => setStep('start'))}
+        footer={(
+          <div className="pp-bar">
+            <button type="button" className="pp-btn pp-btn--primary pp-btn--block" disabled={!canContinueExchange}
+              onClick={() => setStep('variant')}>
+              {t('p2.continue')}
+            </button>
+          </div>
+        )}
+        hidePowered
+      >
+        <div className="pp-stephead">
+          <div className="pp-eyebrow">{t('p2.step', { step: 1, total: 3 })}</div>
+          <h1 className="pp-h2" tabIndex={-1} ref={headingRef}>{t('x1.title')}</h1>
+          <div className="pp-muted">
+            {t('p2.orderLine', { number: '⁨' + order.orderNumber + '⁩', date: shortDate(order.deliveredAt, lang) })}
+          </div>
+        </div>
+        <ModeChoice mode={mode} onChange={setMode} />
+        <fieldset className="pp-fieldset">
+          <legend className="pp-label pp-legend">{t('x1.whichItem')}</legend>
+          {order.lines.map(line => {
+            const can = exchangeable(line)
+            const selected = exchangeLineId === line.variantId
+            if (!can) {
+              return (
+                <div key={line.variantId} className="pp-item pp-item--disabled" data-testid="exchange-line">
+                  <Thumb src={line.imageUrl} muted />
+                  <div className="pp-item__text">
+                    <div className="pp-item__title"><bdi>{line.productTitle}</bdi></div>
+                    <div className="pp-item__sub">
+                      {line.variantTitle && <><bdi>{optionLabel(line.currentOptions, line.variantTitle)}</bdi> · </>}
+                      {line.nonReturnable ? t('p2.cantReturn')
+                        : line.returnableQuantity <= 0 ? t('p2.alreadyRequested') : t('x1.cantExchange')}
+                    </div>
+                  </div>
+                </div>
+              )
+            }
+            return (
+              <div key={line.variantId} className={'pp-item' + (selected ? ' pp-item--selected' : '')} data-testid="exchange-line">
+                <label className="pp-radioitem">
+                  <input type="radio" name="pp-exchange-item" checked={selected} onChange={() => chooseExchangeLine(line)} />
+                  <Thumb src={line.imageUrl} />
+                  <span className="pp-item__text">
+                    <span className="pp-item__title"><bdi>{line.productTitle}</bdi></span>
+                    <span className="pp-item__sub"><bdi>{optionLabel(line.currentOptions, line.variantTitle)}</bdi></span>
+                  </span>
+                </label>
+                {selected && (
+                  <div className="pp-field">
+                    <label htmlFor="pp-exchange-reason" className="pp-label">{t('x1.reasonLabel')}</label>
+                    <select
+                      id="pp-exchange-reason" className="pp-input" required aria-invalid={!exchangeReason}
+                      value={exchangeReason} onChange={e => setExchangeReason(e.target.value)}
+                    >
+                      <option value="" disabled>{t('p2.reasonPlaceholder')}</option>
+                      {config.reasonCodes.map(code => (
+                        <option key={code} value={code}>{t(`reasons.${code}`, { defaultValue: code })}</option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+              </div>
+            )
+          })}
+        </fieldset>
+        <p className="pp-muted pp-small">{t('x1.oneItem')}</p>
+      </Shell>
+    )
+  }
+
+  if (step === 'variant' && order && exchangeMode && exchangeLine) {
+    return (
+      <Shell
+        style={rootStyle}
+        header={header(() => setStep('items'))}
+        footer={(
+          <div className="pp-bar">
+            <button type="button" className="pp-btn pp-btn--primary pp-btn--block" disabled={!exchangeTarget}
+              onClick={() => setStep('details')}>
+              {t('p2.continue')}
+            </button>
+          </div>
+        )}
+        hidePowered
+      >
+        <div className="pp-stephead">
+          <div className="pp-eyebrow">{t('p2.step', { step: 2, total: 3 })}</div>
+          <h1 className="pp-h2" tabIndex={-1} ref={headingRef}>{t('x2.title')}</h1>
+        </div>
+        <section className="pp-card" data-testid="exchange-have">
+          <div className="pp-item__head">
+            <Thumb src={exchangeLine.imageUrl} small />
+            <div className="pp-item__text">
+              <div className="pp-item__title"><bdi>{exchangeLine.productTitle}</bdi></div>
+              <div className="pp-item__sub">
+                {t('x2.youHave', { variant: '' })}<bdi>{optionLabel(exchangeLine.currentOptions, exchangeLine.variantTitle)}</bdi>
+              </div>
+            </div>
+          </div>
+        </section>
+        <VariantPicker line={exchangeLine} values={exchangeValues} targetId={exchangeTargetId}
+          onPickValue={pickValue} onPickOption={o => setExchangeTargetId(o.variantId)} />
+        {exchangeTarget && (
+          <section className="pp-card" data-testid="exchange-summary">
+            <div className="pp-item__title pp-item__title--sm">
+              <bdi>{exchangeLine.productTitle} · {optionLabel(exchangeTarget.options, exchangeTarget.title)}</bdi>
+            </div>
+            <div className="pp-success-text pp-small">{t('x2.inStockSamePrice')}</div>
+          </section>
+        )}
+        <label className="pp-check">
+          <input type="checkbox" checked={fallbackOk} onChange={e => setFallbackOk(e.target.checked)} />
+          <span>{t('x2.fallback')}</span>
+        </label>
+      </Shell>
+    )
+  }
+
   if (step === 'items' && order) {
     return (
       <Shell
@@ -269,11 +488,12 @@ export default function PortalApp({ slug }: { slug: string | null }) {
       >
         <div className="pp-stephead">
           <div className="pp-eyebrow">{t('p2.step', { step: 1, total: 2 })}</div>
-          <h1 className="pp-h2" tabIndex={-1} ref={headingRef}>{t('p2.title')}</h1>
+          <h1 className="pp-h2" tabIndex={-1} ref={headingRef}>{t(exchangesOn ? 'x1.title' : 'p2.title')}</h1>
           <div className="pp-muted">
             {t('p2.orderLine', { number: '⁨' + order.orderNumber + '⁩', date: shortDate(order.deliveredAt, lang) })}
           </div>
         </div>
+        {exchangesOn && <ModeChoice mode={mode} onChange={setMode} />}
         {order.lines.map(line => {
           const sel = selections[line.variantId] ?? { qty: 0, reason: '' }
           const disabled = line.nonReturnable || line.returnableQuantity <= 0
@@ -339,12 +559,30 @@ export default function PortalApp({ slug }: { slug: string | null }) {
 
   if (step === 'details' && order) {
     return (
-      <Shell style={rootStyle} header={header(() => setStep('items'))}>
+      <Shell style={rootStyle} header={header(() => setStep(exchangeMode ? 'variant' : 'items'))}>
         <div className="pp-stephead">
-          <div className="pp-eyebrow">{t('p2.step', { step: 2, total: 2 })}</div>
+          <div className="pp-eyebrow">{exchangeMode ? t('p2.step', { step: 3, total: 3 }) : t('p2.step', { step: 2, total: 2 })}</div>
           <h1 className="pp-h2" tabIndex={-1} ref={headingRef}>{t('p3.title')}</h1>
         </div>
 
+        {exchangeMode && exchangeLine && exchangeTarget ? (
+          <section className="pp-card">
+            <div className="pp-card__head">
+              <div className="pp-eyebrow">{t('x3.exchanging')}</div>
+              <button type="button" className="pp-link" onClick={() => setStep('variant')}>{t('p3.edit')}</button>
+            </div>
+            <div className="pp-item__head" data-testid="summary-line">
+              <Thumb src={exchangeLine.imageUrl} small />
+              <div className="pp-item__text">
+                <div className="pp-item__title pp-item__title--sm">
+                  <bdi>{exchangeLine.productTitle} · {optionLabel(exchangeLine.currentOptions, exchangeLine.variantTitle)}</bdi>
+                  {' → '}<bdi>{optionLabel(exchangeTarget.options, exchangeTarget.title)}</bdi>
+                </div>
+                <div className="pp-item__sub">{t(`reasons.${exchangeReason}`)}</div>
+              </div>
+            </div>
+          </section>
+        ) : (
         <section className="pp-card">
           <div className="pp-card__head">
             <div className="pp-eyebrow">{t('p3.returning')}</div>
@@ -364,6 +602,7 @@ export default function PortalApp({ slug }: { slug: string | null }) {
             </div>
           ))}
         </section>
+        )}
 
         <section className="pp-card">
           <div className="pp-eyebrow">{t('p3.pickup')}</div>
@@ -447,6 +686,11 @@ export default function PortalApp({ slug }: { slug: string | null }) {
           result={result}
           email={sentEmail}
           pickupBooking={config.pickupBooking}
+          exchange={exchangeMode && exchangeLine && exchangeTarget ? {
+            product: exchangeLine.productTitle,
+            from: optionLabel(exchangeLine.currentOptions, exchangeLine.variantTitle),
+            to: optionLabel(exchangeTarget.options, exchangeTarget.title),
+          } : null}
         />
       </Shell>
     )
@@ -558,6 +802,104 @@ function Header({
   )
 }
 
+/** X1 — Return (get a refund) or Exchange (another size or colour). */
+function ModeChoice({ mode, onChange }: { mode: Mode; onChange: (m: Mode) => void }) {
+  const { t } = useTranslation()
+  return (
+    <fieldset className="pp-modes">
+      <legend className="pp-visually-hidden">{t('x1.modeLegend')}</legend>
+      {(['refund', 'exchange'] as Mode[]).map(m => (
+        <label key={m} className={'pp-mode' + (mode === m ? ' pp-mode--selected' : '')}>
+          <input type="radio" name="pp-mode" checked={mode === m} onChange={() => onChange(m)} />
+          <span>
+            <span className="pp-mode__title">{t(m === 'refund' ? 'x1.return' : 'x1.exchange')}</span>
+            <span className="pp-mode__sub">{t(m === 'refund' ? 'x1.returnSub' : 'x1.exchangeSub')}</span>
+          </span>
+        </label>
+      ))}
+    </fieldset>
+  )
+}
+
+/**
+ * X2 — one chip group per option axis. A value is offered when the resulting combination is
+ * another variant of the product; out of stock → disabled "· out of stock"; the customer's own
+ * combination → disabled "· yours"; no such variant → not shown. Without parsed options, the
+ * other variants are listed by title.
+ */
+function VariantPicker({
+  line, values, targetId, onPickValue, onPickOption,
+}: {
+  line: LookupLine
+  values: string[]
+  targetId: string | null
+  onPickValue: (axis: number, value: string) => void
+  onPickOption: (o: ExchangeOption) => void
+}) {
+  const { t } = useTranslation()
+  const axes = line.optionAxes ?? []
+  const current = line.currentOptions ?? []
+  const options = line.exchangeOptions ?? []
+  const usable = axes.length > 0 && current.length === axes.length && options.every(o => o.options.length === axes.length)
+
+  if (!usable) {
+    return (
+      <fieldset className="pp-fieldset">
+        <legend className="pp-label pp-legend">{t('x2.newVariant')}</legend>
+        <div className="pp-chips">
+          {options.map(o => (
+            <label key={o.variantId} className={'pp-chip' + (targetId === o.variantId ? ' pp-chip--selected' : '') + (o.inStock ? '' : ' pp-chip--disabled')}>
+              <input type="radio" name="pp-variant" disabled={!o.inStock} checked={targetId === o.variantId}
+                onChange={() => onPickOption(o)} />
+              <span><bdi>{o.title}</bdi>{!o.inStock && ` · ${t('x2.outOfStock')}`}</span>
+            </label>
+          ))}
+        </div>
+      </fieldset>
+    )
+  }
+
+  return (
+    <>
+      {axes.map((axis, i) => {
+        const valuesOnAxis: string[] = []
+        for (const v of [current, ...options.map(o => o.options)]) {
+          if (!valuesOnAxis.includes(v[i])) valuesOnAxis.push(v[i])
+        }
+        if (axis.kind === 'size') valuesOnAxis.sort((a, b) => sizeRank(a) - sizeRank(b))
+        const label = axis.kind === 'colour' ? t('x2.colour') : axis.kind === 'size' ? t('x2.size') : (axis.name ?? t('x2.option'))
+        return (
+          <fieldset key={i} className="pp-fieldset">
+            <legend className="pp-label pp-legend">{label}</legend>
+            <div className="pp-chips">
+              {valuesOnAxis.map(value => {
+                const candidate = values.map((v, j) => (j === i ? value : v))
+                const isCurrent = candidate.every((v, j) => v === current[j])
+                const matches = isCurrent ? [] : matchingOptions(line, candidate)
+                const disabled = isCurrent || !matches.some(o => o.inStock)
+                const soldOut = !isCurrent && matches.length > 0 && disabled
+                const chosen = values[i] === value
+                return (
+                  <label key={value} className={'pp-chip' + (chosen && !disabled ? ' pp-chip--selected' : '')
+                    + (disabled ? ' pp-chip--disabled' : '')}>
+                    <input type="radio" name={`pp-axis-${i}`} disabled={disabled}
+                      checked={chosen && !disabled} onChange={() => onPickValue(i, value)} />
+                    <span>
+                      <bdi>{value}</bdi>
+                      {isCurrent && ` · ${t('x2.yours')}`}
+                      {soldOut && ` · ${t('x2.outOfStock')}`}
+                    </span>
+                  </label>
+                )
+              })}
+            </div>
+          </fieldset>
+        )
+      })}
+    </>
+  )
+}
+
 function Thumb({ src, muted, small }: { src: string | null; muted?: boolean; small?: boolean }) {
   const [failed, setFailed] = useState(false)
   const cls = 'pp-thumb' + (muted ? ' pp-thumb--muted' : '') + (small ? ' pp-thumb--sm' : '')
@@ -657,13 +999,14 @@ function PolicyDialog({ text, onClose }: { text: string; onClose: () => void }) 
 }
 
 function SentScreen({
-  headingRef, store, result, email, pickupBooking,
+  headingRef, store, result, email, pickupBooking, exchange,
 }: {
   headingRef: React.RefObject<HTMLHeadingElement>
   store: string
   result: SubmitResult
   email: string | null
   pickupBooking: boolean
+  exchange: { product: string; from: string; to: string } | null
 }) {
   const { t } = useTranslation()
   const [copied, setCopied] = useState(false)
@@ -685,11 +1028,13 @@ function SentScreen({
     }
   }
 
-  const steps = [
-    ...(approved ? [] : [t('p4.stepReview', { store })]),
-    pickupBooking ? t('p4.stepCollectBooking') : t('p4.stepCollect', { store }),
-    t('p4.stepRefund'),
-  ]
+  const steps = exchange
+    ? [t('x3.stepReview', { store }), t('x3.stepCourier'), t('x3.stepReady')]
+    : [
+        ...(approved ? [] : [t('p4.stepReview', { store })]),
+        pickupBooking ? t('p4.stepCollectBooking') : t('p4.stepCollect', { store }),
+        t('p4.stepRefund'),
+      ]
 
   return (
     <>
@@ -699,10 +1044,16 @@ function SentScreen({
             <path d="M5 12.5l4.5 4.5L19 7.5" />
           </svg>
         </div>
-        <h1 className="pp-h1" tabIndex={-1} ref={headingRef}>{t('p4.title')}</h1>
-        <p className="pp-lead" data-testid="sent-lead">
-          {approved ? t(pickupBooking ? 'p4.approvedBooking' : 'p4.approved') : t('p4.review', { store })}
-        </p>
+        <h1 className="pp-h1" tabIndex={-1} ref={headingRef}>{t(exchange ? 'x3.title' : 'p4.title')}</h1>
+        {exchange ? (
+          <p className="pp-lead" data-testid="sent-lead">
+            <bdi>{exchange.product} · {exchange.from}</bdi>{' → '}<strong><bdi>{exchange.to}</bdi></strong>
+          </p>
+        ) : (
+          <p className="pp-lead" data-testid="sent-lead">
+            {approved ? t(pickupBooking ? 'p4.approvedBooking' : 'p4.approved') : t('p4.review', { store })}
+          </p>
+        )}
       </div>
 
       <section className="pp-card pp-ref">

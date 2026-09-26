@@ -14,6 +14,22 @@ export interface PortalConfig {
   policyText: string | null
   autoApprove: boolean
   pickupBooking: boolean
+  /** Step 5b — present (true) only when the store offers size/colour exchanges. */
+  exchangesEnabled?: boolean
+}
+
+/** Step 5b — one axis of a product's options (colour, size, …). */
+export interface OptionAxis {
+  name: string | null
+  kind: 'colour' | 'size' | 'option'
+}
+
+/** Step 5b — another variant of the same product a line could be exchanged for. */
+export interface ExchangeOption {
+  variantId: string
+  title: string
+  options: string[]
+  inStock: boolean
 }
 
 export interface LookupLine {
@@ -24,6 +40,10 @@ export interface LookupLine {
   deliveredQuantity: number
   returnableQuantity: number
   nonReturnable: boolean
+  /** Step 5b — only when the store offers exchanges. */
+  optionAxes?: OptionAxis[]
+  currentOptions?: string[]
+  exchangeOptions?: ExchangeOption[]
 }
 
 export interface PickupDistrict {
@@ -122,7 +142,10 @@ export async function lookup(slug: string, orderNumber: string, phone: string): 
 export async function submit(
   slug: string,
   token: string,
-  request: { lines: SubmitLine[]; email?: string; note?: string; districtId?: string },
+  request: {
+    lines: SubmitLine[]; email?: string; note?: string; districtId?: string
+    mode?: 'refund' | 'exchange'; replacementVariantId?: string; refundFallbackOk?: boolean
+  },
 ): Promise<Outcome<SubmitResult>> {
   try {
     const { status, body } = await call(`/${encodeURIComponent(slug)}/requests`, {

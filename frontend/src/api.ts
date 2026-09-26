@@ -2079,6 +2079,8 @@ export interface ReturnRequestRow {
   refundOverdueDays?: number | null
   /** A product that isn't part of the request came back (unexpected_item_received). */
   unexpectedItem?: boolean
+  /** Step 5b — 'exchange' for a same-product size/colour exchange. Absent on older responses. */
+  type?: 'refund' | 'exchange'
 }
 
 export interface ReturnRequestPage {
@@ -2098,6 +2100,11 @@ export interface ReturnRequestItem {
   active: boolean
   /** Step 4d-1/4d-2 — item lifecycle and its inspection outcome. Absent on older responses. */
   itemStatus?: 'awaiting' | 'arrived' | 'done' | 'not_coming'
+  /** Step 5b — the variant an exchange sends out, with its live stock at render time. */
+  replacementVariantId?: string | null
+  replacementVariantTitle?: string | null
+  replacementAvailable?: number
+  replacementInStock?: boolean
   disposition?: 'pending' | 'restocked' | 'damaged' | 'mismatch' | null
   damageReason?: string | null
 }
@@ -2206,6 +2213,8 @@ export interface ReturnRequestDetail {
   returnTrackingNumber?: string | null
   unexpectedItems?: Array<{ pieceId: string; shortCode: string; productTitle: string; variantTitle: string | null }>
   linkableParcels?: LinkableParcel[]
+  /** Step 5b — the customer agreed to a refund if the replacement sells out first. */
+  refundFallbackOk?: boolean
 }
 
 export function getReturnRequests(page = 0, size = 25, status?: ReturnRequestStatus) {
@@ -2261,6 +2270,11 @@ export function recordRefund(id: string, body: RecordRefundBody) {
 
 export function voidRefund(id: string, refundId: string, note?: string) {
   return request<void>(`/return-requests/${id}/refunds/${refundId}/void`, { method: 'POST', body: JSON.stringify({ note }) })
+}
+
+/** Step 5b (X6) — exchange → refund (the customer agreed), then approve. */
+export function switchExchangeToRefund(id: string) {
+  return request<void>(`/return-requests/${id}/switch-to-refund`, { method: 'POST' })
 }
 
 export function markReturnRequestRefunded(id: string) {

@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { getReturnRequests, ReturnRequestRow } from '../../api'
 import { Badge, Button, DataTable, DataTableColumn } from '../../components/ui'
 import { displayStatus, displayStatusTone, formatMoney, reasonLabel, sentLabel, shortCustomerName } from './requestFormat'
-import ReturnRequestDrawer from './ReturnRequestDrawer'
+import ReturnRequestDrawer, { ExchangePill } from './ReturnRequestDrawer'
 
 export const REQUESTS_PAGE_SIZE = 25
 
@@ -84,6 +84,7 @@ export default function RequestsPanel({
       key: 'status', header: t('exchangesRefunds.requests.columns.status'),
       render: row => (
         <span className="inline-flex flex-wrap items-center gap-1.5">
+          {row.type === 'exchange' && <span data-testid="exchange-type-pill"><ExchangePill /></span>}
           <StatusPill row={row} />
           {row.refundOverdueDays != null && (
             <span data-testid="overdue-badge">

@@ -1261,6 +1261,25 @@
         "conflict": "That parcel or request is already linked.",
         "prompt": "A courier return on this order isn't linked to a request yet:",
         "open": "Link parcel…"
+      },
+      "exchange": {
+        "pill": "Exchange",
+        "area": "Area",
+        "comingBack": "Coming back",
+        "goingOut": "Going out",
+        "inStock": "{{count}} in stock",
+        "inStock_other": "{{count}} in stock",
+        "outOfStock": "Out of stock",
+        "soldOutTitle": "{{variant}} sold out since the customer asked",
+        "soldOutFallback": "The customer agreed to a refund instead. Switching it makes this a normal return: Bosta collects the {{variant}} and you refund once it's checked.",
+        "soldOutNoFallback": "The customer didn't agree to a refund instead, so this exchange can only be rejected.",
+        "fallback": "The customer agreed to a refund if the new size sells out first.",
+        "approveHelper": "Approving confirms the exchange; you'll book the courier.",
+        "approve": "Approve exchange",
+        "switch": "Switch to refund and approve",
+        "approved": "Exchange approved",
+        "switched": "Switched to a refund and approved",
+        "approveConflict": "The new size or colour just sold out. The request is shown as it is now."
       }
     }
   },

@@ -8,6 +8,7 @@ import {
 } from '../../api'
 import { Alert, Badge, Button, ProductThumb, Skeleton, cn, useToast } from '../../components/ui'
 import { displayStatus, displayStatusTone, reasonLabel, sentLabel, shortCustomerName, shortDate } from './requestFormat'
+import ExchangeRequestView from './ExchangeRequestView'
 import {
   arrivedCount, CloseDialog, HistoryTimeline, ItemsWithOutcome, LinkParcelDialog, RefundForm, RefundsList, UnexpectedItems,
 } from './RequestLifecycle'
@@ -221,6 +222,9 @@ function DrawerContent({
       {detail ? (
         <>
           <span className="text-body-lg font-semibold font-mono text-primary"><bdi>{detail.reference}</bdi></span>
+          {detail.type === 'exchange' && (
+            <span data-testid="exchange-pill"><ExchangePill /></span>
+          )}
           <Badge tone={displayStatusTone(shownStatus(detail))} label={t(`exchangesRefunds.requests.status.${shownStatus(detail)}`)} />
         </>
       ) : <Skeleton className="h-6 w-32" />}
@@ -273,10 +277,64 @@ function DrawerContent({
   const isRequested = detail.status === 'requested'
   const reasonLength = reason.length
 
+  function rejectForm() {
+    return (
+        <div className="p-5 border-t border-line space-y-2" data-testid="reject-form">
+          <label htmlFor="reject-reason" className="text-body font-medium text-primary block">
+            {t('exchangesRefunds.requests.drawer.rejectLabel')}{' '}
+            <span className="font-normal text-muted">{t('exchangesRefunds.requests.drawer.rejectVisible')}</span>
+          </label>
+          <textarea
+            id="reject-reason"
+            rows={3}
+            dir="auto"
+            maxLength={REJECT_REASON_MAX}
+            aria-invalid={reasonError}
+            aria-describedby="reject-reason-count"
+            className={cn('input resize-none w-full', reasonError && 'border-critical')}
+            value={reason}
+            onChange={e => { setReason(e.target.value); setReasonError(false) }}
+          />
+          <div className="flex items-center justify-between gap-3">
+            <span className="text-small text-critical" role={reasonError ? 'alert' : undefined}>
+              {reasonError ? t('exchangesRefunds.requests.drawer.rejectRequired') : ''}
+            </span>
+            <span id="reject-reason-count" className="text-small text-muted tabular-nums" dir="ltr">
+              {reasonLength} / {REJECT_REASON_MAX}
+            </span>
+          </div>
+          <div className="flex justify-end gap-2 pt-1">
+            <Button variant="outline" disabled={busy != null} onClick={() => { setMode('view'); setReasonError(false) }}>
+              {t('exchangesRefunds.requests.drawer.cancel')}
+            </Button>
+            <Button variant="danger" loading={busy === 'reject'} disabled={busy != null} onClick={() => decide('reject')}>
+              {t('exchangesRefunds.requests.drawer.rejectConfirm')}
+            </Button>
+          </div>
+        </div>
+    )
+  }
+
   // Step 4d-2 — the lifecycle layout (R1–R3).
   const arrived = arrivedCount(detail.items)
   const partly = shownStatus(detail) === 'partly_received'
   const lifecycle = arrived > 0 || refundStage
+
+  // Step 5b — an exchange before anything came back (X4 / X6).
+  if (detail.type === 'exchange' && !lifecycle && detail.status !== 'rejected' && detail.status !== 'closed') {
+    return (
+      <>
+        {header}
+        <ExchangeRequestView
+          detail={detail}
+          onReload={async () => { await load(); onChanged() }}
+          onReject={() => { setMode('reject'); setReasonError(false) }}
+          footerExtra={isRequested && mode === 'reject' ? rejectForm() : undefined}
+        />
+      </>
+    )
+  }
+
   if (lifecycle) {
     const refunds = detail.refunds ?? []
     const activeRefunds = refunds.filter(r => !r.voided)
@@ -553,42 +611,18 @@ function DrawerContent({
         </div>
       )}
 
-      {isRequested && mode === 'reject' && (
-        <div className="p-5 border-t border-line space-y-2" data-testid="reject-form">
-          <label htmlFor="reject-reason" className="text-body font-medium text-primary block">
-            {t('exchangesRefunds.requests.drawer.rejectLabel')}{' '}
-            <span className="font-normal text-muted">{t('exchangesRefunds.requests.drawer.rejectVisible')}</span>
-          </label>
-          <textarea
-            id="reject-reason"
-            rows={3}
-            dir="auto"
-            maxLength={REJECT_REASON_MAX}
-            aria-invalid={reasonError}
-            aria-describedby="reject-reason-count"
-            className={cn('input resize-none w-full', reasonError && 'border-critical')}
-            value={reason}
-            onChange={e => { setReason(e.target.value); setReasonError(false) }}
-          />
-          <div className="flex items-center justify-between gap-3">
-            <span className="text-small text-critical" role={reasonError ? 'alert' : undefined}>
-              {reasonError ? t('exchangesRefunds.requests.drawer.rejectRequired') : ''}
-            </span>
-            <span id="reject-reason-count" className="text-small text-muted tabular-nums" dir="ltr">
-              {reasonLength} / {REJECT_REASON_MAX}
-            </span>
-          </div>
-          <div className="flex justify-end gap-2 pt-1">
-            <Button variant="outline" disabled={busy != null} onClick={() => { setMode('view'); setReasonError(false) }}>
-              {t('exchangesRefunds.requests.drawer.cancel')}
-            </Button>
-            <Button variant="danger" loading={busy === 'reject'} disabled={busy != null} onClick={() => decide('reject')}>
-              {t('exchangesRefunds.requests.drawer.rejectConfirm')}
-            </Button>
-          </div>
-        </div>
-      )}
+      {isRequested && mode === 'reject' && rejectForm()}
     </>
+  )
+}
+
+/** Step 5b — the "Exchange" type pill (drawer header and Requests list). */
+export function ExchangePill() {
+  const { t } = useTranslation()
+  return (
+    <span className="badge border bg-[#EFEAFD] text-[#5B3FC4] border-[#D9D0F7]">
+      {t('exchangesRefunds.requests.exchange.pill')}
+    </span>
   )
 }
 

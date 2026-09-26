@@ -103,5 +103,36 @@
     "stepCollectBooking": "After approval, a Bosta courier collects the item from the area you chose.",
     "stepRefund": "Your refund is sent once the item has been checked.",
     "email": "We'll email updates to {{email}}."
+  },
+  "x1": {
+    "title": "What would you like to do?",
+    "modeLegend": "What would you like to do?",
+    "return": "Return",
+    "returnSub": "Get a refund",
+    "exchange": "Exchange",
+    "exchangeSub": "Another size or colour",
+    "whichItem": "Which item?",
+    "cantExchange": "Can't be exchanged",
+    "reasonLabel": "Why are you exchanging it?",
+    "oneItem": "One item per exchange. To exchange another, send a new request afterwards."
+  },
+  "x2": {
+    "title": "Choose your new size or colour",
+    "youHave": "You have: ",
+    "colour": "Colour",
+    "size": "Size",
+    "option": "Option",
+    "newVariant": "New size or colour",
+    "yours": "yours",
+    "outOfStock": "out of stock",
+    "inStockSamePrice": "In stock · same price, nothing extra to pay",
+    "fallback": "If my new size sells out before approval, I'm happy to get a refund instead."
+  },
+  "x3": {
+    "exchanging": "Exchanging",
+    "title": "Exchange requested",
+    "stepReview": "{{store}} reviews your request.",
+    "stepCourier": "One Bosta courier brings your new size and takes the old one in the same visit.",
+    "stepReady": "Keep the old item ready, unworn and with its tags. Nothing to pay."
   }
 }
