@@ -243,6 +243,13 @@ Built 2026-08-15 on branch `returns-rebuild`, single cutover, not yet merged. Mo
 - [x] RP.21 [M] `pickup_booking_problem` exception (HIGH) + drawer booking states/actions + Requests "Attention" badge (Step 4c-3)
 - [ ] RP.22 [S] Follow-up: store the district's Arabic city name on the request snapshot (the AR drawer shows the English city)
 - [ ] RP.23 [S] Follow-up: staging check of the v2 create against live Bosta (field names, cod 0 on type 25, rearrangement)
+- [x] RP.24 [M] Reservation release: finished request items (done / not_coming) set `active = false` (V108 CHECK keeps them in step) — a restocked piece is returnable again on a later order (Step 4d-1)
+- [x] RP.25 [M] Link return legs to requests: tracking-number link, sweeper race repair, hand-booked auto-match (exactly one candidate), `return_link_ambiguous` exception (MEDIUM), `POST /return-requests/{id}/link-leg`; one request per leg (partial UNIQUE) (Step 4d-1)
+- [x] RP.26 [M] Intake attribution: approved-request pieces accepted outside the window, same-variant substitutes swap the binding, other variants noted (`unexpected_item_received`), `return_kind = request_return`, request ids in `return_received` metadata + `return_session_items.request_item_id` (Step 4d-1)
+- [x] RP.27 [M] Canonical rule gains the request clause (`returnLegScanEvidenceSql`: a `return_received` carrying the leg's request id) — exact per-leg evidence (Step 4d-1)
+- [x] RP.28 [M] Request lifecycle: received / refund_pending derived from items; `rest-not-coming`; `close` (no_refund / other); status `closed` (V107); `return_request_events` history for every transition; status pills EN/AR (Step 4d-1)
+- [ ] RP.29 [M] Recording refunds + `refunded` status + refund screens (Step 4d-2)
+- [ ] RP.30 [S] Follow-up: Rule 2 can still count another leg's request-attributed scan as evidence for a leg with no request on the same order (the request clause only ADDS evidence)
 - [x] RS.18 [M] Return session parcel cards (per scanned AWB), feedback strip, footer summary
 - [x] RS.19 [M] Untracked courier return: mark received / undo (no stock change), V101 intake outcome + actor
 - [x] RS.20 [M] `return_to_receive` exception (MEDIUM) + E&R "Received · not tracked"

@@ -4,6 +4,53 @@
 
 ## Current state
 
+**Step 4d-1 — link returned parcels to requests, attribute and reconcile items, request lifecycle, history — built 2026-09-26 on branch `feature/portal-4d1` (from origin/main `55e5333`; not merged, not deployed).**
+Backend + status labels only (screens are 4d-2). No Shopify writes, no Bosta writes, no new piece statuses.
+- **V107:** `return_request_status` + `closed` (own migration — an added enum value can't be used in the same transaction).
+- **V108:** `return_requests` + `received_at`, `refund_pending_at`, `closed_at/_by`, `close_reason` (no_refund / rest_not_coming / other),
+  `close_note` (≤ 300), `link_source` (traced_booking / auto_matched / merchant_selected; existing links backfilled traced_booking),
+  partial UNIQUE on `return_shipment_id` (one request per leg). `return_request_items.item_status` (awaiting / arrived / done /
+  not_coming) + `arrived_at` / `done_at`; backfill awaiting-if-active else not_coming; CHECK `active = item_status IN (awaiting, arrived)`.
+  `return_session_items.request_item_id` (FK ON DELETE SET NULL). `return_request_events` (RLS NULLIF policy, app_user INSERT/SELECT only,
+  FK ON DELETE CASCADE from the request, `occurred_at DEFAULT clock_timestamp()` so events written in one transaction keep their
+  order); backfilled requested / approved / rejected / pickup_booked from the existing columns (`metadata.backfilled`).
+- **`ReturnRequestLifecycle` (portal package, NOT a bean — built from each caller's own JdbcTemplate, like PickupAreaService):** the only
+  writer of request events, item status and post-approval request status. Used by ReturnSessionService, ShipmentLinkService,
+  ReturnPickupBookingService, ReturnRequestService, PortalService — no constructor signatures changed.
+- **Linking:** `linkByTracking` (webhook side, replaces `linkReturnRequest`'s UPDATE; skips a leg another request holds);
+  `saveBooked` sets `link_source` and never takes a held leg; sweeper step (d) `repairTrackingLinks` fixes the booking/webhook race
+  (`SweepResult.linksRepaired`). Hand-booked: `autoMatchLeg` after the tracking link found nothing — candidates
+  `ReturnRequestLifecycle.linkCandidateSql` (same order, approved, no leg, no Traced tracking number, booking NULL/failed, created_at ≤
+  the leg's Bosta `raw.createdAt`); exactly 1 → linked auto_matched + pickup_booked; 0 → nothing; 2+ → nothing, and the
+  `return_link_ambiguous` detector (MEDIUM, subject = the leg, EN/AR text with the order and candidate references, deep link to the first
+  candidate) lists it. `POST /return-requests/{id}/link-leg {shipmentId}` (owner/manager): return leg (type 25 when raw says so) of the
+  same order, not held, request open and without a leg → merchant_selected (approved → pickup_booked).
+- **Scans (`scanPiece`, DELIVERED):** `attributionFor` — (1) the piece is bound to an awaiting item of an open request
+  (approved / pickup_booked / received) on its order, or (2) the piece is bound to no live item and an open request on the order has an
+  awaiting item of the same variant (oldest request first) → substitute, `item_substituted {from, to}`, piece_id swapped. Either →
+  accepted regardless of the window, item arrived, `request_id` / `request_item_id` in the `return_received` metadata and
+  `return_session_items.request_item_id`, `return_kind = request_return` (precedence exchange_match > request_return > crp_return >
+  customer_after_delivery). Accepted but unattributed (e.g. other variant) → `unexpected_item_received` on each open request of the order.
+- **Lifecycle (`reevaluate`, after every attributed scan, final disposition, link and merchant action):** received when no item is
+  awaiting and ≥ 1 arrived/done; refund_pending when additionally none is still arrived. A restocked/damaged disposition finishes its item
+  at once (done, active false); mismatch doesn't. `POST …/rest-not-coming` (awaiting → not_coming; nothing ever arrived → closed
+  rest_not_coming). `POST …/close {reason: no_refund|other, note}` from approved / pickup_booked / received / refund_pending (awaiting →
+  not_coming, arrived → done). Reject → items not_coming. `refunded` not set (4d-2). Detail adds lifecycle fields, item status and `events`.
+- **Canonical rule (approved change):** `returnLegScanEvidenceSql` checks first: a `return_received` carrying the request_id of the request
+  whose `return_shipment_id` is the leg. It only ADDS evidence; Rules 1–2 unchanged.
+- **Frontend:** `closed` pill (neutral), status label + close-reason labels EN/AR, drawer "Why it was closed" (+ note) when closed; the
+  `return_link_ambiguous` type label on the Exceptions page.
+- **Tests:** `ReturnRequestLifecycleTest` (22: L1–L7 linking, S1–S4 scans, C1–C5 lifecycle, E1–E2 history/detail, X1–X4 app_user
+  cross-tenant with positive controls), `ReturnReservationReleaseTest` (1), frontend `returnRequestLifecycle.test.tsx` (6).
+  Revert runs: the reservation test on origin/main fails (new customer's lookup shows 0 returnable); with the request clause disabled S4
+  fails. Pre-approved test edits: MigrationSmokeTest (107 migrations, + `return_request_events` in the tenant list),
+  NotTracedBackfillTest (52 pending after V56).
+- **Deviations:** auto-match is deferred while any request on the order has a Traced booking `pending` (its tracking number isn't saved
+  yet, so the leg may be its own); legs with an unreadable `raw.createdAt` are never auto-matched; close turns arrived items into done
+  (their pieces are already back); `cancelled` has no code path, so nothing releases on it; read-back counts items awaiting/arrived/done.
+- **Not done (still open):** `listCrpReturns` pending count and parcel-card grouping are still order-level (RP.14); Rule 2 can still use
+  another leg's request-attributed scan as evidence for a no-request leg (RP.30).
+
 **Step 4c-3 — book the Bosta customer return pickup (type 25) on approval — built 2026-09-25 on branch `feature/portal-4c3` (from origin/main `fb29db8`; not merged, not deployed).**
 MODE B AMENDMENT #2 implemented: create type 25 only, from an approved request, claim-before-call, businessReference = order
 number. No terminate, no edit, no other Bosta write.
