@@ -40,13 +40,16 @@ public class PickupSessionService {
     private final JdbcTemplate     jdbc;
     private final TransactionTemplate tx;
     private final InventoryLedger  ledger;
+    private final ShopifyInventoryService shopifyInventory;
 
     public PickupSessionService(JdbcTemplate jdbc,
                                  PlatformTransactionManager txm,
-                                 InventoryLedger ledger) {
+                                 InventoryLedger ledger,
+                                 ShopifyInventoryService shopifyInventory) {
         this.jdbc   = jdbc;
         this.tx     = new TransactionTemplate(txm);
         this.ledger = ledger;
+        this.shopifyInventory = shopifyInventory;
     }
 
     // ── Public types ──────────────────────────────────────────────────────────
@@ -406,6 +409,14 @@ public class PickupSessionService {
                             try {
                                 ledger.transition(pr.id(), current, PieceStatus.WITH_COURIER,
                                     "handed_to_courier", actorUserId, ctx);
+                                // Step 5a: the piece really left Traced custody — the Shopify
+                                // decrement for an internal exchange replacement runs once this
+                                // close commits (a no-op for any other order; once per piece).
+                                if (ShopifyInventoryService.leavesCustody(current, PieceStatus.WITH_COURIER)) {
+                                    String pieceId = pr.id();
+                                    ShopifyInventoryService.afterCommit(() ->
+                                        shopifyInventory.onExchangeReplacementDispatched(tenantId, pieceId));
+                                }
                             } catch (StateConflictException e) {
                                 if (e.getActual() == PieceStatus.WITH_COURIER) continue;
                                 raisePieceException(tenantId, pr.id(), actorUserId, pickupId,

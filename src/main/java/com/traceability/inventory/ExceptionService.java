@@ -460,7 +460,7 @@ public class ExceptionService {
             "          ELSE sia.trigger_id END) " +
             "    AND p.tenant_id = sia.tenant_id " +
             "WHERE sia.tenant_id = ? " +
-            "  AND sia.trigger_type IN ('void_correction', 'hold_enter') " +
+            "  AND sia.trigger_type IN ('void_correction', 'hold_enter', 'exchange_dispatch') " +
             "  AND sia.status = 'failed' " +
             "  AND NOT EXISTS ( " +
             "      SELECT 1 FROM exception_resolutions er " +
@@ -985,10 +985,13 @@ public class ExceptionService {
             case "void_hold_sync_failed" -> {
                 String b = str(item, "barcode");
                 String triggerType = str(item, "trigger_type");
-                String label = "hold_enter".equals(triggerType) ? "hold" : "void";
+                String label = "hold_enter".equals(triggerType) ? "hold"
+                    : "exchange_dispatch".equals(triggerType) ? "exchange replacement" : "void";
+                String labelAr = "hold_enter".equals(triggerType) ? "التعليق"
+                    : "exchange_dispatch".equals(triggerType) ? "خصم قطعة الاستبدال" : "الإلغاء";
                 item.put("descriptionEn", "Shopify " + label + " sync failed for piece " + b
                     + " — Traced and Shopify inventory have diverged");
-                item.put("descriptionAr", "فشلت مزامنة " + ("hold_enter".equals(triggerType) ? "التعليق" : "الإلغاء")
+                item.put("descriptionAr", "فشلت مزامنة " + labelAr
                     + " مع Shopify للقطعة " + b + " — تعارض بين مخزون Traced ومخزون Shopify");
                 item.put("suggestedAction", "manual_repush");
                 item.put("actionUrl", b != null ? "/lookup?q=" + b : "/lookup");

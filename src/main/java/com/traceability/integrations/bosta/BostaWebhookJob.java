@@ -73,6 +73,7 @@ public class BostaWebhookJob {
     private final MatcherVersionHolder matcherVersionHolder;
     private final com.traceability.inventory.ExchangeMatchService exchangeMatchService;
     private final com.traceability.inventory.ExchangeService exchangeService;
+    private final com.traceability.inventory.ShopifyInventoryService shopifyInventory;
 
     public BostaWebhookJob(JdbcTemplate jdbc,
                             PlatformTransactionManager txm,
@@ -87,7 +88,8 @@ public class BostaWebhookJob {
                             ExchangeStateInterpreter exchangeStateInterpreter,
                             MatcherVersionHolder matcherVersionHolder,
                             com.traceability.inventory.ExchangeMatchService exchangeMatchService,
-                            com.traceability.inventory.ExchangeService exchangeService) {
+                            com.traceability.inventory.ExchangeService exchangeService,
+                            com.traceability.inventory.ShopifyInventoryService shopifyInventory) {
         this.jdbc                = jdbc;
         this.tx                  = new TransactionTemplate(txm);
         this.bostaGateway        = bostaGateway;
@@ -102,6 +104,7 @@ public class BostaWebhookJob {
         this.matcherVersionHolder = matcherVersionHolder;
         this.exchangeMatchService = exchangeMatchService;
         this.exchangeService = exchangeService;
+        this.shopifyInventory = shopifyInventory;
     }
 
     // ---- private row types -------------------------------------------------
@@ -610,6 +613,14 @@ public class BostaWebhookJob {
                     ledger.transition(pr.id(), current, targetStatus, "courier_update", null, ctx);
                     log.debug("Piece {} {} → {} via webhook {}",
                         pr.id(), current, targetStatus, webhookEventId);
+                    // Step 5a: the piece really left Traced custody (Bosta picked it up, or
+                    // reported the doorstep swap first) — the Shopify decrement for an internal
+                    // exchange replacement (no-op for any other order; once per piece).
+                    if (com.traceability.inventory.ShopifyInventoryService.leavesCustody(current, targetStatus)) {
+                        String pieceId = pr.id();
+                        com.traceability.inventory.ShopifyInventoryService.afterCommit(() ->
+                            shopifyInventory.onExchangeReplacementDispatched(tenantId, pieceId));
+                    }
                 } catch (StateConflictException e) {
                     if (e.getActual() == targetStatus) {
                         // Concurrent duplicate already applied this transition.

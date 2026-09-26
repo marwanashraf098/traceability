@@ -15,8 +15,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 /**
  * FR-13.x / FR-21 §7 extension (CLAUDE.md, approved by Marawan 2026-08-23): Shopify decrements
  * are sanctioned ONLY through a named, closed set of dedicated single-attempt gateway methods —
- * pushStockTakeWriteOff, pushVoidCorrection, pushHoldEnter — each called from exactly ONE
- * approved site. Adding a fourth decrement method, or a second caller of any of these three,
+ * pushStockTakeWriteOff, pushVoidCorrection, pushHoldEnter and (Step 5a, approved 2026-09-26)
+ * pushExchangeDispatch — each called from exactly ONE approved site. Adding a fourth decrement method, or a second caller of any of these three,
  * requires the same explicit approval this set itself required.
  *
  * This is a SOURCE-TEXT SCAN, not reflection: reflection (see ShopifyInventoryTest si11) proves
@@ -40,7 +40,8 @@ class NamedDecrementSetGuardTest {
     private static final List<Rule> RULES = List.of(
         new Rule("shopify.pushStockTakeWriteOff(", "StockTakeShopifyPushJob.java"),
         new Rule("shopify.pushVoidCorrection(",     "ShopifyInventoryService.java"),
-        new Rule("shopify.pushHoldEnter(",          "ShopifyInventoryService.java")
+        new Rule("shopify.pushHoldEnter(",          "ShopifyInventoryService.java"),
+        new Rule("shopify.pushExchangeDispatch(",   "ShopifyInventoryService.java")
     );
 
     @Test

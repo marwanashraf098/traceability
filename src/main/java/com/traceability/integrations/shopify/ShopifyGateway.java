@@ -340,6 +340,28 @@ public interface ShopifyGateway {
                         String locationGid, int negativeDelta, String referenceDocumentUri,
                         String idempotencyKey);
 
+    /**
+     * Step 5a — the FOURTH member of the named set of sanctioned decrement methods (CLAUDE.md,
+     * FR-21 §7 extension, approved 2026-09-26). A replacement piece of an internal exchange
+     * order ('internal:exchange:%' — an order that never exists in Shopify) first leaves Traced
+     * custody with the courier: Shopify never saw that sale, so without this it stays one unit
+     * too high. Same self-contained, single-HTTP-attempt shape as {@link #pushVoidCorrection} /
+     * {@link #pushHoldEnter}; deliberately shares no code with them (no general-purpose
+     * decrement helper — CLAUDE.md invariant).
+     *
+     * @param negativeDelta        must be < 0 (always -1: one replacement piece)
+     * @param referenceDocumentUri traced://piece/{piece_id} — trace + manual-verify anchor
+     * @param idempotencyKey       the mutation-level @idempotent key — deterministic from the
+     *                             piece (a piece leaves custody for a given exchange only once)
+     * @throws IllegalArgumentException if negativeDelta >= 0 — checked BEFORE any network call
+     * @throws ShopifyException         definitive rejection — nothing was applied; safe to retry
+     * @throws ShopifyAmbiguousException no confirmed response reached this process — caller
+     *                                    must NOT auto-retry
+     */
+    void pushExchangeDispatch(String shopDomain, String token, String inventoryItemGid,
+                               String locationGid, int negativeDelta, String referenceDocumentUri,
+                               String idempotencyKey);
+
     /** One inventoryItem's current "available" quantity at a location (Part C reconcile read). */
     record InventoryLevel(String inventoryItemGid, int available) {}
 

@@ -14,6 +14,8 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.server.ResponseStatusException;
 
@@ -48,8 +50,9 @@ import java.util.concurrent.CompletableFuture;
  *   Write shapes used here, all targeting the Traced Main Warehouse GID only:
  *     - inventoryAdjustQuantities with a POSITIVE delta (triggers 1, 2, hold_exit).
  *     - inventoryMoveQuantities available->damaged (trigger 3).
- *     - pushVoidCorrection / pushHoldEnter — dedicated single-attempt NEGATIVE-delta gateway
- *       methods (FR-13.x; see CLAUDE.md FR-21 §7 extension for the full named set).
+ *     - pushVoidCorrection / pushHoldEnter / pushExchangeDispatch — dedicated single-attempt
+ *       NEGATIVE-delta gateway methods (FR-13.x, Step 5a; see CLAUDE.md FR-21 §7 extension for
+ *       the full named set).
  *   Trigger 1: receiving session close                → +N per variant.
  *   Trigger 2: return inspection → AVAILABLE           → +1 per piece.
  *              (return_pending_inspection → damaged does nothing — no call here.)
@@ -63,7 +66,13 @@ import java.util.concurrent.CompletableFuture;
  *              (applyIncrementAdjustment) — not a decrement, needs no new gateway method.
  *   on_hold->damaged|lost|destroyed makes NO Shopify call — the piece already left the
  *              sellable pool at hold_enter; a second decrement here would double-count.
- *   No courier/loss/order-driven decrement trigger — Shopify owns those.
+ *   Trigger exchange_dispatch (Step 5a, approved 2026-09-26): a replacement piece of an
+ *              INTERNAL exchange order ('internal:exchange:%' + its exchanges row) first leaves
+ *              Traced custody (packed/awaiting_pickup → with_courier or delivered) → -1, once per
+ *              piece (trigger_id = piece_id). Those orders never exist in Shopify, so Shopify
+ *              never saw the sale. If the replacement later comes back and is restocked, trigger
+ *              2's +1 nets it to zero.
+ *   No other courier/loss/order-driven decrement trigger — Shopify owns those.
  *
  * LOCATION-TARGET GUARD: the Shopify locationGid used in every mutation call is read
  * directly off the SAME location row that passed the is_fulfillment=true AND
@@ -224,6 +233,115 @@ public class ShopifyInventoryService {
         return CompletableFuture.completedFuture(null);
     }
 
+    // ── Trigger: Step 5a exchange dispatch (named decrement set — CLAUDE.md) ──
+
+    /**
+     * True for the first move of a piece out of Traced custody: packed / awaiting_pickup →
+     * with_courier (pickup handover, or Bosta "picked up") or straight to delivered (Bosta
+     * reported the doorstep swap before any pickup event). The two writers
+     * (PickupSessionService.closeSession, BostaWebhookJob.applyMappedState) call this only
+     * after a ledger transition actually happened — never on their "already there" branches.
+     */
+    public static boolean leavesCustody(PieceStatus from, PieceStatus to) {
+        return (from == PieceStatus.PACKED || from == PieceStatus.AWAITING_PICKUP)
+            && (to == PieceStatus.WITH_COURIER || to == PieceStatus.DELIVERED);
+    }
+
+    /**
+     * Runs {@code action} once the current transaction commits, or right away when no
+     * transaction is active (the ledger's own transaction has already committed). A rolled-back
+     * transition never reaches Shopify.
+     */
+    public static void afterCommit(Runnable action) {
+        if (TransactionSynchronizationManager.isSynchronizationActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override public void afterCommit() { action.run(); }
+            });
+        } else {
+            action.run();
+        }
+    }
+
+    /**
+     * Step 5a — called (after commit) when a piece first leaves Traced custody. Decrements
+     * Shopify by 1 only when the piece is the replacement of an internal exchange order:
+     * allocated (active/packed) to an order with external_id 'internal:exchange:%' that an
+     * exchanges row names as its outbound_order_id, and the piece's current location is a
+     * fulfillment location. Anything else — a Shopify order, a demo order — is a silent no-op.
+     */
+    @Async
+    public CompletableFuture<Void> onExchangeReplacementDispatched(UUID tenantId, String pieceId) {
+        TenantContext.runAs(tenantId, () -> {
+            try {
+                processExchangeDispatch(pieceId, null);
+            } catch (Exception e) {
+                log.error("Shopify inventory sync failed: trigger=exchange_dispatch piece={}", pieceId, e);
+            }
+        });
+        return CompletableFuture.completedFuture(null);
+    }
+
+    private record DispatchRow(UUID variantId, UUID locationId) {}
+
+    /** {@code storedLocationId}: the re-push path passes the location of the original attempt. */
+    private void processExchangeDispatch(String pieceId, UUID storedLocationId) {
+        UUID tenantId = TenantContext.require();
+        UUID batchId = UUID.randomUUID();
+
+        // The live trigger needs the piece's current allocation (active/packed). A re-push may
+        // run after the replacement came back and was restocked (allocation released) — the
+        // original departure still happened, so any allocation to the internal order counts.
+        String allocationStatuses = storedLocationId == null ? "('active', 'packed')" : "('active', 'packed', 'released')";
+        DispatchRow row = tx.execute(status -> jdbc.query(
+            "SELECT p.variant_id, p.current_location_id FROM pieces p " +
+            "WHERE p.id = ? AND p.tenant_id = ? " +
+            "  AND EXISTS (SELECT 1 FROM allocations a " +
+            "              JOIN order_items oi ON oi.id = a.order_item_id " +
+            "              JOIN orders o ON o.id = oi.order_id AND o.tenant_id = p.tenant_id " +
+            "              JOIN exchanges e ON e.outbound_order_id = o.id AND e.tenant_id = o.tenant_id " +
+            "              WHERE a.piece_id = p.id AND a.status IN " + allocationStatuses +
+            "                AND o.external_id LIKE 'internal:exchange:%')",
+            rs -> rs.next() ? new DispatchRow(rs.getObject(1, UUID.class), rs.getObject(2, UUID.class)) : null,
+            pieceId, tenantId));
+        if (row == null) return;   // not an internal exchange replacement — nothing to do
+
+        UUID locationId = storedLocationId != null ? storedLocationId : row.locationId();
+        if (locationId == null || !isFulfillmentLocation(tenantId, locationId, "exchange_dispatch", pieceId)) {
+            return;
+        }
+
+        ObjectNode initialPayload = mapper.createObjectNode().put("reason", "exchange_dispatch").put("delta", -1);
+        if (!claim(tenantId, batchId, row.variantId(), locationId, -1, "exchange_dispatch", pieceId, initialPayload)) {
+            log.debug("Shopify inventory: exchange_dispatch already claimed, skipping duplicate call piece={}", pieceId);
+            return;
+        }
+
+        Preconditions p = resolvePreconditions(tenantId, row.variantId(), locationId, "exchange_dispatch", pieceId);
+        if (p.error() != null) {
+            markResult(tenantId, "exchange_dispatch", pieceId, row.variantId(), locationId,
+                       p.shopifyInventoryItemId(), p.shopifyLocationId(), "failed", p.error());
+            return;
+        }
+
+        String status;
+        String error = null;
+        try {
+            String idempotencyKey = ShopifyGateway.idempotencyKey(
+                tenantId, "exchange_dispatch", pieceId, row.variantId(), locationId);
+            shopify.pushExchangeDispatch(p.shopDomain(), p.token(), p.shopifyInventoryItemId(),
+                                          p.shopifyLocationId(), -1, "traced://piece/" + pieceId, idempotencyKey);
+            status = "applied";
+        } catch (Exception e) {
+            status = "failed";
+            error = e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName();
+            log.warn("Shopify inventory exchange dispatch failed: piece={} variant={} error={}",
+                     pieceId, row.variantId(), error);
+        }
+
+        markResult(tenantId, "exchange_dispatch", pieceId, row.variantId(), locationId,
+                   p.shopifyInventoryItemId(), p.shopifyLocationId(), status, error);
+    }
+
     // ── Void correction processing ───────────────────────────────────────────
 
     private record PieceReceiptRow(UUID variantId, UUID receiptId) {}
@@ -348,8 +466,8 @@ public class ShopifyInventoryService {
     // ── Manual repush (FR-13.x exceptions center integration) ────────────────
 
     /**
-     * Manual, synchronous, one-shot re-attempt of a FAILED void_correction or hold_enter
-     * adjustment — a deliberate operator action after seeing the ExceptionService
+     * Manual, synchronous, one-shot re-attempt of a FAILED void_correction, hold_enter or
+     * (Step 5a) exchange_dispatch adjustment — a deliberate operator action after seeing the ExceptionService
      * 'void_hold_sync_failed' detector fire, not a hot path (same "manual action" reasoning
      * as ShopifyInventoryReconcileService.apply()). Full auto-repush parity (failed_ambiguous
      * classification, scheduled retry) is explicitly deferred — this is a single re-attempt.
@@ -363,9 +481,10 @@ public class ShopifyInventoryService {
      */
     public void repushFailedVoidOrHold(String triggerType, String triggerId) {
         UUID tenantId = TenantContext.require();
-        if (!"void_correction".equals(triggerType) && !"hold_enter".equals(triggerType)) {
+        if (!"void_correction".equals(triggerType) && !"hold_enter".equals(triggerType)
+                && !"exchange_dispatch".equals(triggerType)) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
-                "triggerType must be void_correction or hold_enter");
+                "triggerType must be void_correction, hold_enter or exchange_dispatch");
         }
 
         record FailedRow(UUID locationId, String status) {}
@@ -386,6 +505,9 @@ public class ShopifyInventoryService {
 
         if ("void_correction".equals(triggerType)) {
             processVoidCorrection(triggerId, row.locationId());
+        } else if ("exchange_dispatch".equals(triggerType)) {
+            // Same claim key → same deterministic idempotency key as the failed attempt.
+            processExchangeDispatch(triggerId, row.locationId());
         } else {
             String[] parts = triggerId.split(":", 2);
             if (parts.length != 2) {
