@@ -1051,7 +1051,13 @@
         "received": "Received",
         "refund_pending": "Refund pending",
         "refunded": "Refunded",
-        "cancelled": "Cancelled"
+        "cancelled": "Cancelled",
+        "closed": "Closed"
+      },
+      "closeReasons": {
+        "no_refund": "Closed without a refund",
+        "rest_not_coming": "Nothing came back",
+        "other": "Other"
       },
       "reasons": {
         "wrong_size": "Wrong size",
@@ -1080,6 +1086,7 @@
         "items": "Items ({{count}})",
         "note": "Customer's note",
         "rejectionReason": "Reason for rejecting",
+        "closeReason": "Why it was closed",
         "decidedBy": "Decided by {{name}} · {{date}}",
         "decidedAuto": "Approved automatically · {{date}}",
         "helperManual": "After approving, book the pickup in Bosta.",

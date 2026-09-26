@@ -14,6 +14,7 @@ const REQUEST_STATUS_TONE: Record<ReturnRequestStatus, BadgeTone> = {
   refund_pending: 'warning',
   refunded: 'success',
   cancelled: 'neutral',
+  closed: 'neutral',
 }
 
 export function requestStatusTone(status: ReturnRequestStatus): BadgeTone {

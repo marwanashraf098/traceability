@@ -2050,7 +2050,10 @@ export function getRefunds(page = 0, size = 100) {
 
 export type ReturnRequestStatus =
   | 'requested' | 'approved' | 'rejected' | 'pickup_booked' | 'received'
-  | 'refund_pending' | 'refunded' | 'cancelled'
+  | 'refund_pending' | 'refunded' | 'cancelled' | 'closed'
+
+/** Step 4d-1 — why a request was closed without a refund. */
+export type ReturnRequestCloseReason = 'no_refund' | 'rest_not_coming' | 'other'
 
 /** Step 4c-3 — the Bosta return pickup booking (null = never attempted). */
 export type BookingStatus = 'pending' | 'booked' | 'failed' | 'failed_ambiguous' | 'needs_review'
@@ -2117,6 +2120,11 @@ export interface ReturnRequestDetail {
   decidedByName: string | null
   rejectionReason: string | null
   returnShipmentId: string | null
+  /** Step 4d-1 — set when status is 'closed'. Absent on older responses. */
+  closeReason?: ReturnRequestCloseReason | null
+  closeNote?: string | null
+  closedAt?: string | null
+  closedByName?: string | null
   items: ReturnRequestItem[]
 }
 

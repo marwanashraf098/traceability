@@ -321,6 +321,20 @@ function DrawerContent({
           </section>
         )}
 
+        {detail.status === 'closed' && detail.closeReason && (
+          <section data-testid="request-close-reason">
+            <h3 className="text-caption font-semibold text-muted uppercase tracking-wider mb-2">
+              {t('exchangesRefunds.requests.drawer.closeReason')}
+            </h3>
+            <p className="text-body text-primary">
+              {t(`exchangesRefunds.requests.closeReasons.${detail.closeReason}`)}
+            </p>
+            {detail.closeNote && (
+              <p className="text-body text-secondary whitespace-pre-wrap mt-1" dir="auto">{detail.closeNote}</p>
+            )}
+          </section>
+        )}
+
         {detail.decidedAt && (
           <p className="text-small text-muted" data-testid="request-decided">
             {detail.decidedByName

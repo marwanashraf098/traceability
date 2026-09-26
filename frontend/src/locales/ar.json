@@ -1050,7 +1050,13 @@
         "received": "تم الاستلام",
         "refund_pending": "بانتظار الاسترداد",
         "refunded": "تم الاسترداد",
-        "cancelled": "ملغي"
+        "cancelled": "ملغي",
+        "closed": "مغلق"
+      },
+      "closeReasons": {
+        "no_refund": "أُغلق بدون استرداد",
+        "rest_not_coming": "لم يصل أي شيء",
+        "other": "سبب آخر"
       },
       "reasons": {
         "wrong_size": "مقاس غير مناسب",
@@ -1079,6 +1085,7 @@
         "items": "القطع ({{count}})",
         "note": "ملاحظة العميل",
         "rejectionReason": "سبب الرفض",
+        "closeReason": "سبب الإغلاق",
         "decidedBy": "قرار {{name}} · {{date}}",
         "decidedAuto": "قُبل تلقائيًا · {{date}}",
         "helperManual": "بعد القبول، احجز الاستلام من بوسطة.",
