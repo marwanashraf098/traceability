@@ -4,6 +4,42 @@
 
 ## Current state
 
+**Step 4d-2 — refunds, suggested amount, alerts, exact per-return displays, lifecycle screens (R1–R6) — built 2026-09-26 on branch `feature/portal-4d2` (from origin/main `f35464d`; not merged, not deployed).**
+No Shopify WRITES (one order READ for the suggestion), no Bosta writes, no piece-status writes.
+- **V109:** `return_refunds` (append-only: kind refund|void, `voids_refund_id`, method cash/instapay/wallet/bank_transfer/other,
+  amount numeric(12,2) > 0, currency default EGP, refunded_on, reference ≤ 100, note ≤ 300, recorded_by, created_at clock_timestamp;
+  shape CHECK; partial UNIQUE = a refund is voided once; RLS NULLIF; app_user INSERT/SELECT only; ON DELETE CASCADE from the request).
+  `return_requests.refunded_at/_by`. `tenants.refund_pending_window_days` (5), `return_arrival_window_days` (10) — no settings UI yet.
+- **Suggestion** `GET /return-requests/{id}/refund-suggestion` (owner/manager, `RefundSuggestionService`): items arrived/done (else awaiting),
+  per variant × quantity; sources in order `shopify` (new read-only `ShopifyOrderPriceGateway` → `order(id:)` `currencyCode`,
+  `lineItems.nodes.quantity / variant.id / discountedUnitPriceAfterAllDiscountsSet.shopMoney.amount`, validated against Admin GraphQL
+  2026-04 = the pinned `shopify.api-version`, scope read_orders), `stored_order` (orders.raw REST line: price − Σ discount_allocations /
+  quantity), `catalog` (variants.price, approximate). Shipping excluded. Any Shopify failure / disconnected store / unknown variant → next
+  source; nothing → amount null. Never logs the payload.
+- **Refunds (all in `ReturnRequestLifecycle`):** `POST …/refunds` (received / refund_pending; validation 400; currency = order's
+  raw currency else EGP; event refund_recorded), `POST …/refunds/{refundId}/void` (void row, once, not after refunded; event
+  refund_voided), `POST …/mark-refunded` (refund_pending + ≥ 1 non-voided refund → refunded, refunded_at/by; event refunded).
+  Detail adds `refunds` (void state), `refundTotal`, `currency`, `history` (newest first — `events` stays oldest first for 4d-1
+  callers), item `disposition`/`damageReason`, `unexpectedItems`, `returnTrackingNumber`, `linkableParcels` (+ candidate requests, for R5).
+  List adds arrived/awaiting counts, closeReason, currency, refundTotal, refundOverdueDays, unexpectedItem.
+- **Alerts:** `refund_pending_overdue` (HIGH, `ReturnRequestLifecycle.REFUND_OVERDUE_SQL`, shared with the list badge) and
+  `return_items_overdue` (MEDIUM, clock = latest pickup_booked event → booking attempt → approval; `ITEMS_OVERDUE_SQL`). EN/AR with the
+  RR reference + order number; link to the request; resolve via the usual note flow. `return_link_ambiguous` link now also carries
+  `&parcel=<shipmentId>`, which opens R5 by itself.
+- **Exact displays (RP.14 closed):** `listCrpReturns` — a request-linked leg counts its request's `arrived` items; legs without a request keep
+  the order-level count; rows add `request_reference` + `pending_inspection_count`. Parcel cards — a request-linked leg shows
+  `requestReference`, exactly its awaiting items as expected and the scans attributed to it; other legs unchanged. No money on worker screens.
+- **UI:** drawer 580px; lifecycle layout once anything came back or received/refund_pending/refunded (Customer / Order / Returned or
+  Parcel; items with outcome; different-product flag; R1 refund form with method chips, prefilled amount, date ≤ today, reference, note,
+  restock warning; R2 refunds list + void confirm + add another + history + Mark as refunded; R3 partial actions); R4 close dialog; R5
+  link dialog (drawer prompt + exception link); R6 pills/badges + "{n} awaiting refund". EN/AR, `<bdi>` for AWBs/references.
+- **Tests:** `ReturnRefundsTest` (15: suggestion ×4, refunds ×4, append-only, alerts ×2, displays, roles ×2 over HTTP, app_user cross-tenant),
+  RlsCoverageTest + refund-suggestion (approved), MigrationSmokeTest (108 + return_refunds), NotTracedBackfillTest (53);
+  frontend `returnRequestRefunds.test.tsx` (16). Renders R1/R2/R3/R6 EN+AR (session scratchpad).
+- **Decisions / deviations:** R6 keeps today's columns and tab order (Marawan, 2026-09-26) — only pills, badges and the tab badge
+  added; R1 keeps the customer's note (an existing 4d-1 test reads it) and adds the spec's optional Note field (not in the mockup);
+  R2 hides the customer/items block like the mockup; history `newest first` is a new `history` key; amounts shown with Latin digits.
+
 **Step 4d-1 — link returned parcels to requests, attribute and reconcile items, request lifecycle, history — built 2026-09-26 on branch `feature/portal-4d1` (from origin/main `55e5333`; not merged, not deployed).**
 Backend + status labels only (screens are 4d-2). No Shopify writes, no Bosta writes, no new piece statuses.
 - **V107:** `return_request_status` + `closed` (own migration — an added enum value can't be used in the same transaction).

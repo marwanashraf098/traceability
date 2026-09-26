@@ -233,7 +233,7 @@ Built 2026-08-15 on branch `returns-rebuild`, single cutover, not yet merged. Mo
 - [x] RP.12 [M] nginx: portal zone 30r/m burst 15 + JSON 429; returns port-80 block; returns port-443 block (separate commit, after certbot) (Step 4e-B)
 - [x] RP.11 [M] Bosta pickup booking on approval — type 25 create, claim-before-call, no retry, read-back, sweeper (Step 4c-3)
 - [x] RP.13 [M] More than one courier-return (CRP) leg per order — V104 forward-only active index; canonical per-leg scan-evidence rule (`ShipmentLinkService.returnLegScanEvidenceSql`) used by close() stamping, `resolveReturnLegIfComplete`, awaiting-scan / `return_leg_unscanned` (Step 4c-1)
-- [ ] RP.14 [S] Follow-up (4d): per-leg `listCrpReturns` pending_inspection_count and parcel-card scanned-item grouping for multi-leg orders
+- [x] RP.14 [S] Follow-up (4d): per-leg `listCrpReturns` pending_inspection_count and parcel-card scanned-item grouping for multi-leg orders (request-linked legs exact, Step 4d-2)
 - [x] RP.15 [M] Bosta reference data: global `bosta_districts` (V105, app_user SELECT only) refreshed daily + on empty startup from `getAllDistricts` (no auth, owner connection) (Step 4c-2)
 - [x] RP.16 [M] Return warehouse: `GET /tenant/bosta/return-locations` (tenant key, v2 read) + validated `returnLocationId` in portal settings + Settings "Returns go back to" select (Step 4c-2)
 - [x] RP.17 [M] Per-tenant `tenants.portal_pickup_booking` replaces the global PICKUP_BOOKING constant (no UI switch yet) (Step 4c-2)
@@ -248,8 +248,13 @@ Built 2026-08-15 on branch `returns-rebuild`, single cutover, not yet merged. Mo
 - [x] RP.26 [M] Intake attribution: approved-request pieces accepted outside the window, same-variant substitutes swap the binding, other variants noted (`unexpected_item_received`), `return_kind = request_return`, request ids in `return_received` metadata + `return_session_items.request_item_id` (Step 4d-1)
 - [x] RP.27 [M] Canonical rule gains the request clause (`returnLegScanEvidenceSql`: a `return_received` carrying the leg's request id) — exact per-leg evidence (Step 4d-1)
 - [x] RP.28 [M] Request lifecycle: received / refund_pending derived from items; `rest-not-coming`; `close` (no_refund / other); status `closed` (V107); `return_request_events` history for every transition; status pills EN/AR (Step 4d-1)
-- [ ] RP.29 [M] Recording refunds + `refunded` status + refund screens (Step 4d-2)
+- [x] RP.29 [M] Recording refunds + `refunded` status + refund screens (Step 4d-2)
 - [ ] RP.30 [S] Follow-up: Rule 2 can still count another leg's request-attributed scan as evidence for a leg with no request on the same order (the request clause only ADDS evidence)
+- [x] RP.31 [M] Suggested refund amount (Shopify read → stored REST payload → catalog, approximate flag) (Step 4d-2)
+- [x] RP.32 [M] `refund_pending_overdue` (HIGH) + `return_items_overdue` (MEDIUM) alerts, tenant windows (Step 4d-2)
+- [x] RP.33 [M] Lifecycle screens R1–R6 EN/AR: refund form, refunds + history, partial arrival, close dialog, link-parcel dialog, list pills (Step 4d-2)
+- [ ] RP.34 [S] Follow-up: settings UI for `refund_pending_window_days` / `return_arrival_window_days`
+- [ ] RP.35 [S] Follow-up: detect a refund made in Shopify on the same order (orders/updated `refunds[]`) and flag the double-restock risk
 - [x] RS.18 [M] Return session parcel cards (per scanned AWB), feedback strip, footer summary
 - [x] RS.19 [M] Untracked courier return: mark received / undo (no stock change), V101 intake outcome + actor
 - [x] RS.20 [M] `return_to_receive` exception (MEDIUM) + E&R "Received · not tracked"
