@@ -57,8 +57,26 @@ public class ReturnRequestService {
             "       rr.created_at, rr.booking_status, " +
             "       (SELECT COUNT(*) FROM return_request_items i WHERE i.request_id = rr.id) AS item_count, " +
             "       (SELECT array_agg(DISTINCT i.reason_code ORDER BY i.reason_code) " +
-            "          FROM return_request_items i WHERE i.request_id = rr.id) AS reason_codes " +
+            "          FROM return_request_items i WHERE i.request_id = rr.id) AS reason_codes, " +
+            // Step 4d-2 (R6): partly received, refunded total, close reason, overdue refund, unexpected item.
+            "       (SELECT COUNT(*) FROM return_request_items i WHERE i.request_id = rr.id " +
+            "          AND i.item_status IN ('arrived', 'done')) AS arrived_count, " +
+            "       (SELECT COUNT(*) FROM return_request_items i WHERE i.request_id = rr.id " +
+            "          AND i.item_status = 'awaiting') AS awaiting_count, " +
+            "       rr.close_reason, " +
+            "       COALESCE(NULLIF(o.raw->>'currency', ''), 'EGP') AS currency, " +
+            "       (SELECT COALESCE(SUM(r.amount), 0) FROM return_refunds r WHERE r.request_id = rr.id AND r.kind = 'refund' " +
+            "          AND NOT EXISTS (SELECT 1 FROM return_refunds v WHERE v.voids_refund_id = r.id AND v.kind = 'void')) AS refund_total, " +
+            "       CASE WHEN " + ReturnRequestLifecycle.REFUND_OVERDUE_SQL +
+            "             AND NOT EXISTS (SELECT 1 FROM exception_resolutions er WHERE er.tenant_id = rr.tenant_id " +
+            "                 AND er.exception_type = 'refund_pending_overdue' " +
+            "                 AND er.subject_key = " + ReturnRequestLifecycle.REFUND_OVERDUE_KEY_SQL + ") " +
+            "            THEN floor(extract(epoch FROM now() - rr.refund_pending_at) / 86400)::int END AS refund_overdue_days, " +
+            "       (rr.status::text IN ('approved', 'pickup_booked', 'received', 'refund_pending') AND EXISTS (" +
+            "          SELECT 1 FROM return_request_events e WHERE e.request_id = rr.id " +
+            "            AND e.event_type = 'unexpected_item_received')) AS unexpected_item " +
             "FROM return_requests rr JOIN orders o ON o.id = rr.order_id AND o.tenant_id = rr.tenant_id " +
+            "JOIN tenants t ON t.id = rr.tenant_id " +
             "WHERE rr.tenant_id = ? AND (?::text IS NULL OR rr.status::text = ?) " +
             "ORDER BY rr.created_at DESC, rr.id DESC LIMIT ? OFFSET ?",
             (rs, i) -> {
@@ -73,6 +91,13 @@ public class ReturnRequestService {
                 row.put("status", rs.getString("status"));
                 row.put("bookingStatus", rs.getString("booking_status"));
                 row.put("createdAt", rs.getTimestamp("created_at").toInstant().toString());
+                row.put("arrivedCount", rs.getInt("arrived_count"));
+                row.put("awaitingCount", rs.getInt("awaiting_count"));
+                row.put("closeReason", rs.getString("close_reason"));
+                row.put("currency", rs.getString("currency"));
+                row.put("refundTotal", rs.getBigDecimal("refund_total").setScale(2, java.math.RoundingMode.HALF_UP).toPlainString());
+                row.put("refundOverdueDays", rs.getObject("refund_overdue_days"));
+                row.put("unexpectedItem", rs.getBoolean("unexpected_item"));
                 return row;
             },
             tenantId, statusFilter, statusFilter, size, page * size);
@@ -97,7 +122,9 @@ public class ReturnRequestService {
             "       rr.pickup_district_name_ar, rr.booking_status, rr.booking_error, rr.bosta_tracking_number, " +
             "       rr.booking_attempted_at, rr.booking_verified_at, " +
             "       rr.received_at, rr.refund_pending_at, rr.closed_at, rr.closed_by, cu.name AS closed_by_name, " +
-            "       rr.close_reason, rr.close_note, rr.link_source, " +
+            "       rr.close_reason, rr.close_note, rr.link_source, rr.refunded_at, ru.name AS refunded_by_name, " +
+            "       (SELECT s.tracking_number FROM shipments s WHERE s.id = rr.return_shipment_id " +
+            "          AND s.tenant_id = rr.tenant_id) AS return_tracking_number, " +
             "       (SELECT s.delivered_at FROM shipments s " +
             "         WHERE s.order_id = rr.order_id AND s.tenant_id = rr.tenant_id " +
             "           AND s.shipment_leg = 'forward' AND s.delivered_at IS NOT NULL " +
@@ -106,6 +133,7 @@ public class ReturnRequestService {
             "JOIN orders o ON o.id = rr.order_id AND o.tenant_id = rr.tenant_id " +
             "LEFT JOIN users u ON u.id = rr.decided_by " +
             "LEFT JOIN users cu ON cu.id = rr.closed_by " +
+            "LEFT JOIN users ru ON ru.id = rr.refunded_by " +
             "WHERE rr.id = ? AND rr.tenant_id = ?",
             id, tenantId);
         if (rows.isEmpty()) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Return request not found");
@@ -115,7 +143,12 @@ public class ReturnRequestService {
             "SELECT i.id, i.piece_id AS \"pieceId\", p.short_code AS \"shortCode\", i.variant_id AS \"variantId\", " +
             "       pr.title AS \"productTitle\", v.title AS \"variantTitle\", pr.image_url AS \"imageUrl\", " +
             "       i.reason_code AS \"reasonCode\", i.active, i.item_status AS \"itemStatus\", " +
-            "       i.arrived_at AS \"arrivedAt\", i.done_at AS \"doneAt\" " +
+            "       i.arrived_at AS \"arrivedAt\", i.done_at AS \"doneAt\", " +
+            // Step 4d-2: the inspection outcome of the scan attributed to this item (latest).
+            "       (SELECT si.disposition FROM return_session_items si WHERE si.request_item_id = i.id " +
+            "          AND si.tenant_id = i.tenant_id ORDER BY si.scanned_at DESC, si.id DESC LIMIT 1) AS \"disposition\", " +
+            "       (SELECT si.damage_reason FROM return_session_items si WHERE si.request_item_id = i.id " +
+            "          AND si.tenant_id = i.tenant_id ORDER BY si.scanned_at DESC, si.id DESC LIMIT 1) AS \"damageReason\" " +
             "FROM return_request_items i " +
             "JOIN pieces p    ON p.id = i.piece_id " +
             "JOIN variants v  ON v.id = i.variant_id " +
@@ -169,6 +202,28 @@ public class ReturnRequestService {
         d.put("closeNote", r.get("close_note"));
         d.put("items", items);
         d.put("events", requests.events(tenantId, id));
+        // Step 4d-2: the same history newest first (R2 timeline), refunds, parcel, unexpected items.
+        List<Map<String, Object>> history = new ArrayList<>(requests.events(tenantId, id));
+        Collections.reverse(history);
+        d.put("history", history);
+        d.put("refunds", requests.refunds(tenantId, id));
+        d.put("refundTotal", requests.refundTotal(tenantId, id).setScale(2, java.math.RoundingMode.HALF_UP).toPlainString());
+        d.put("currency", jdbc.queryForObject(
+            "SELECT COALESCE(NULLIF(o.raw->>'currency', ''), 'EGP') FROM orders o WHERE o.id = ? AND o.tenant_id = ?",
+            String.class, r.get("order_id"), tenantId));
+        d.put("refundedAt", r.get("refunded_at"));
+        d.put("refundedByName", r.get("refunded_by_name"));
+        d.put("returnTrackingNumber", r.get("return_tracking_number"));
+        d.put("unexpectedItems", jdbc.queryForList(
+            "SELECT DISTINCT ON (p.id) p.id AS \"pieceId\", p.short_code AS \"shortCode\", pr.title AS \"productTitle\", " +
+            "       v.title AS \"variantTitle\" " +
+            "FROM return_request_events e " +
+            "JOIN pieces p    ON p.id = e.metadata->>'piece_id' AND p.tenant_id = e.tenant_id " +
+            "JOIN variants v  ON v.id = p.variant_id " +
+            "JOIN products pr ON pr.id = v.product_id " +
+            "WHERE e.request_id = ? AND e.tenant_id = ? AND e.event_type = 'unexpected_item_received' " +
+            "ORDER BY p.id, e.occurred_at", id, tenantId));
+        d.put("linkableParcels", linkableParcels(tenantId, r));
         return d;
     }
 
@@ -226,6 +281,69 @@ public class ReturnRequestService {
     @Transactional
     public void restNotComing(UUID id, UUID actorUserId) {
         requests.restNotComing(TenantContext.require(), id, actorUserId);
+    }
+
+    /**
+     * Step 4d-2 (R5): courier-return legs of this request's order that no request holds, each
+     * with the open requests on the order that could take it — only while this request is open
+     * and holds no leg itself. Empty otherwise.
+     */
+    private List<Map<String, Object>> linkableParcels(UUID tenantId, Map<String, Object> r) {
+        if (r.get("return_shipment_id") != null
+                || !ReturnRequestLifecycle.OPEN_STATUSES.contains((String) r.get("status"))) {
+            return List.of();
+        }
+        UUID orderId = (UUID) r.get("order_id");
+        List<Map<String, Object>> legs = jdbc.queryForList(
+            "SELECT s.id AS \"shipmentId\", s.tracking_number AS \"trackingNumber\", " +
+            "       (s.raw #>> '{returnSpecs,packageDetails,itemsCount}')::int AS \"itemsCount\", " +
+            "       s.raw #>> '{returnSpecs,packageDetails,description}' AS \"description\", " +
+            "       s.raw #>> '{returnSpecs,packageDetails,descriptionAr}' AS \"descriptionAr\" " +
+            "FROM shipments s WHERE s.tenant_id = ? AND s.order_id = ? AND s.shipment_leg = 'return' " +
+            "  AND s.internal_state NOT IN ('terminated', 'cancelled') " +
+            "  AND NOT EXISTS (SELECT 1 FROM return_requests h WHERE h.tenant_id = s.tenant_id AND h.return_shipment_id = s.id) " +
+            "ORDER BY s.created_at DESC, s.id DESC", tenantId, orderId);
+        if (legs.isEmpty()) return legs;
+        List<Map<String, Object>> candidates = jdbc.queryForList(
+            "SELECT rr.id::text AS \"id\", rr.reference AS \"reference\", rr.decided_at AS \"decidedAt\", " +
+            "       (SELECT COUNT(*) FROM return_request_items i WHERE i.request_id = rr.id " +
+            "          AND i.item_status <> 'not_coming') AS \"itemCount\", " +
+            "       (SELECT string_agg(pr.title || COALESCE(' · ' || v.title, ''), ', ' ORDER BY pr.title, v.title) " +
+            "          FROM return_request_items i JOIN variants v ON v.id = i.variant_id " +
+            "          JOIN products pr ON pr.id = v.product_id " +
+            "         WHERE i.request_id = rr.id AND i.item_status <> 'not_coming') AS \"itemSummary\" " +
+            "FROM return_requests rr WHERE rr.tenant_id = ? AND rr.order_id = ? " +
+            "  AND rr.status::text IN ('approved', 'pickup_booked', 'received') AND rr.return_shipment_id IS NULL " +
+            "ORDER BY rr.created_at, rr.id", tenantId, orderId);
+        List<Map<String, Object>> out = new ArrayList<>();
+        for (Map<String, Object> leg : legs) {
+            Map<String, Object> m = new LinkedHashMap<>(leg);
+            m.put("shipmentId", leg.get("shipmentId").toString());
+            m.put("candidates", candidates);
+            out.add(m);
+        }
+        return out;
+    }
+
+    // ── Step 4d-2: refunds (owner / manager) ─────────────────────────────────
+
+    /** POST /return-requests/{id}/refunds. Returns the new refund's id. */
+    @Transactional
+    public UUID recordRefund(UUID id, String method, java.math.BigDecimal amount, java.time.LocalDate refundedOn,
+                             String reference, String note, UUID actorUserId) {
+        return requests.recordRefund(TenantContext.require(), id, method, amount, refundedOn, reference, note, actorUserId);
+    }
+
+    /** POST /return-requests/{id}/refunds/{refundId}/void. */
+    @Transactional
+    public void voidRefund(UUID id, UUID refundId, String note, UUID actorUserId) {
+        requests.voidRefund(TenantContext.require(), id, refundId, note, actorUserId);
+    }
+
+    /** POST /return-requests/{id}/mark-refunded. */
+    @Transactional
+    public void markRefunded(UUID id, UUID actorUserId) {
+        requests.markRefunded(TenantContext.require(), id, actorUserId);
     }
 
     /** POST /return-requests/{id}/close {reason, note}. */

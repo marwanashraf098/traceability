@@ -171,6 +171,8 @@ public class ExceptionService {
         all.addAll(detectReturnToReceive(tenantId));
         all.addAll(detectPickupBookingProblem(tenantId));
         all.addAll(detectReturnLinkAmbiguous(tenantId));
+        all.addAll(detectRefundPendingOverdue(tenantId));
+        all.addAll(detectReturnItemsOverdue(tenantId));
 
         // Enrich with descriptions and action hints
         all.forEach(this::enrich);
@@ -352,6 +354,53 @@ public class ExceptionService {
             "  AND NOT EXISTS (SELECT 1 FROM exception_resolutions er " +
             "      WHERE er.tenant_id = s.tenant_id AND er.exception_type = 'return_link_ambiguous' " +
             "        AND er.subject_key = 'return_link_ambiguous:shipment:' || s.id)",
+            tid);
+    }
+
+    /**
+     * Step 4d-2 — a return request waiting for its refund longer than
+     * tenants.refund_pending_window_days (predicate shared with the Requests list badge:
+     * ReturnRequestLifecycle.REFUND_OVERDUE_SQL). HIGH. Ends when the request leaves
+     * refund_pending, or when resolved with a note.
+     */
+    private List<Map<String, Object>> detectRefundPendingOverdue(UUID tid) {
+        return jdbc.queryForList(
+            "SELECT 'refund_pending_overdue' AS type, 'HIGH' AS severity, 'return_request' AS subject_type, " +
+            "       rr.id AS request_id, rr.reference, o.id AS order_id, o.number AS order_number, " +
+            "       floor(extract(epoch FROM now() - rr.refund_pending_at) / 86400)::int AS days, " +
+            "       rr.refund_pending_at AS occurred_at, " +
+            "       " + com.traceability.portal.ReturnRequestLifecycle.REFUND_OVERDUE_KEY_SQL + " AS subject_key " +
+            "FROM return_requests rr " +
+            "JOIN orders o  ON o.id = rr.order_id AND o.tenant_id = rr.tenant_id " +
+            "JOIN tenants t ON t.id = rr.tenant_id " +
+            "WHERE rr.tenant_id = ? AND " + com.traceability.portal.ReturnRequestLifecycle.REFUND_OVERDUE_SQL +
+            "  AND NOT EXISTS (SELECT 1 FROM exception_resolutions er " +
+            "      WHERE er.tenant_id = rr.tenant_id AND er.exception_type = 'refund_pending_overdue' " +
+            "        AND er.subject_key = " + com.traceability.portal.ReturnRequestLifecycle.REFUND_OVERDUE_KEY_SQL + ")",
+            tid);
+    }
+
+    /**
+     * Step 4d-2 — an approved / courier-booked return request whose items still haven't all
+     * arrived tenants.return_arrival_window_days after the booking (or the approval when no
+     * courier was booked) — ReturnRequestLifecycle.ITEMS_OVERDUE_SQL. MEDIUM. Ends when the
+     * items arrive, the rest is marked not coming, the request is closed, or resolved with a note.
+     */
+    private List<Map<String, Object>> detectReturnItemsOverdue(UUID tid) {
+        return jdbc.queryForList(
+            "SELECT 'return_items_overdue' AS type, 'MEDIUM' AS severity, 'return_request' AS subject_type, " +
+            "       rr.id AS request_id, rr.reference, o.id AS order_id, o.number AS order_number, " +
+            "       (SELECT COUNT(*) FROM return_request_items i WHERE i.request_id = rr.id " +
+            "          AND i.tenant_id = rr.tenant_id AND i.item_status = 'awaiting') AS awaiting, " +
+            "       " + com.traceability.portal.ReturnRequestLifecycle.ITEMS_OVERDUE_ANCHOR_SQL + " AS occurred_at, " +
+            "       'return_items_overdue:' || rr.id AS subject_key " +
+            "FROM return_requests rr " +
+            "JOIN orders o  ON o.id = rr.order_id AND o.tenant_id = rr.tenant_id " +
+            "JOIN tenants t ON t.id = rr.tenant_id " +
+            "WHERE rr.tenant_id = ? AND " + com.traceability.portal.ReturnRequestLifecycle.ITEMS_OVERDUE_SQL +
+            "  AND NOT EXISTS (SELECT 1 FROM exception_resolutions er " +
+            "      WHERE er.tenant_id = rr.tenant_id AND er.exception_type = 'return_items_overdue' " +
+            "        AND er.subject_key = 'return_items_overdue:' || rr.id)",
             tid);
     }
 
@@ -1165,6 +1214,28 @@ public class ExceptionService {
                 }
                 item.put("actionUrl", "/exchanges?tab=requests&request=" + item.get("request_id"));
             }
+            case "refund_pending_overdue" -> {
+                String ref = str(item, "reference");
+                String n = str(item, "order_number");
+                Object days = item.get("days");
+                item.put("descriptionEn", "Return request " + ref + " for order " + n +
+                    " has been waiting for its refund for " + days + " days");
+                item.put("descriptionAr", "طلب الإرجاع " + ref + " للطلب " + n +
+                    " بانتظار الاسترداد منذ " + days + " يوم");
+                item.put("suggestedAction", "record_refund");
+                item.put("actionUrl", "/exchanges?tab=requests&request=" + item.get("request_id"));
+            }
+            case "return_items_overdue" -> {
+                String ref = str(item, "reference");
+                String n = str(item, "order_number");
+                Object awaiting = item.get("awaiting");
+                item.put("descriptionEn", "Return request " + ref + " for order " + n + ": " + awaiting +
+                    (Integer.valueOf(1).equals(toInt(awaiting)) ? " item hasn't" : " items haven't") + " come back yet");
+                item.put("descriptionAr", "طلب الإرجاع " + ref + " للطلب " + n + ": لم يصل بعد " + awaiting +
+                    (Integer.valueOf(1).equals(toInt(awaiting)) ? " منتج" : " منتجات"));
+                item.put("suggestedAction", "check_return");
+                item.put("actionUrl", "/exchanges?tab=requests&request=" + item.get("request_id"));
+            }
             case "return_link_ambiguous" -> {
                 String t = str(item, "tracking_number");
                 String n = str(item, "order_number");
@@ -1174,7 +1245,8 @@ public class ExceptionService {
                 item.put("descriptionAr", "المرتجع " + t + " للطلب " + n +
                     " قد يخص أكثر من طلب إرجاع (" + refs + ") — اختر الطلب الصحيح");
                 item.put("suggestedAction", "link_return_request");
-                item.put("actionUrl", "/exchanges?tab=requests&request=" + item.get("request_id"));
+                item.put("actionUrl", "/exchanges?tab=requests&request=" + item.get("request_id")
+                    + "&parcel=" + item.get("shipment_id"));
             }
             case "exchange_needs_mapping" -> {
                 String t = str(item, "tracking_number");
@@ -1201,6 +1273,10 @@ public class ExceptionService {
         if (val instanceof Timestamp ts) return ts.toInstant();
         if (val instanceof Instant i)    return i;
         return fallback;
+    }
+
+    private static Integer toInt(Object v) {
+        return v instanceof Number n ? n.intValue() : null;
     }
 
     private static String str(Map<String, Object> m, String key) {

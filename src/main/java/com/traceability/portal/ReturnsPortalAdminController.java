@@ -25,13 +25,16 @@ public class ReturnsPortalAdminController {
     private final PortalSettingsService settings;
     private final ReturnLocationService returnLocations;
     private final ReturnPickupBookingService booking;
+    private final RefundSuggestionService suggestions;
 
     public ReturnsPortalAdminController(ReturnRequestService requests, PortalSettingsService settings,
-                                        ReturnLocationService returnLocations, ReturnPickupBookingService booking) {
+                                        ReturnLocationService returnLocations, ReturnPickupBookingService booking,
+                                        RefundSuggestionService suggestions) {
         this.requests        = requests;
         this.settings        = settings;
         this.returnLocations = returnLocations;
         this.booking         = booking;
+        this.suggestions     = suggestions;
     }
 
     // ── Step 4c-3: Bosta return pickup booking ───────────────────────────────
@@ -114,6 +117,46 @@ public class ReturnsPortalAdminController {
     @ResponseStatus(HttpStatus.NO_CONTENT)
     public void restNotComing(@PathVariable UUID id, @AuthenticationPrincipal CustomUserDetails principal) {
         requests.restNotComing(id, principal.userId());
+    }
+
+    // ── Step 4d-2: refunds (owner / manager; a worker gets 403) ──────────────
+
+    @GetMapping("/return-requests/{id}/refund-suggestion")
+    @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
+    public Map<String, Object> refundSuggestion(@PathVariable UUID id) {
+        return suggestions.suggest(id);
+    }
+
+    public record RecordRefundRequest(String method, java.math.BigDecimal amount, java.time.LocalDate refundedOn,
+                                      String reference, String note) {}
+
+    @PostMapping("/return-requests/{id}/refunds")
+    @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
+    @ResponseStatus(HttpStatus.CREATED)
+    public Map<String, Object> recordRefund(@PathVariable UUID id, @RequestBody(required = false) RecordRefundRequest body,
+                                            @AuthenticationPrincipal CustomUserDetails principal) {
+        RecordRefundRequest b = body == null ? new RecordRefundRequest(null, null, null, null, null) : body;
+        UUID refundId = requests.recordRefund(id, b.method(), b.amount(), b.refundedOn(), b.reference(), b.note(),
+            principal.userId());
+        return Map.of("id", refundId.toString());
+    }
+
+    public record VoidRefundRequest(String note) {}
+
+    @PostMapping("/return-requests/{id}/refunds/{refundId}/void")
+    @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void voidRefund(@PathVariable UUID id, @PathVariable UUID refundId,
+                           @RequestBody(required = false) VoidRefundRequest body,
+                           @AuthenticationPrincipal CustomUserDetails principal) {
+        requests.voidRefund(id, refundId, body == null ? null : body.note(), principal.userId());
+    }
+
+    @PostMapping("/return-requests/{id}/mark-refunded")
+    @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void markRefunded(@PathVariable UUID id, @AuthenticationPrincipal CustomUserDetails principal) {
+        requests.markRefunded(id, principal.userId());
     }
 
     public record CloseRequest(String reason, String note) {}

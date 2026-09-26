@@ -494,14 +494,21 @@ public class ShipmentLinkService {
             // that method in this same class so the two can't silently drift; a plain
             // '?'-parameterized reuse isn't possible here since this one is correlated
             // per row (sh.order_id/sh.tenant_id) instead of invoked per-call.
-            // TODO(4d): order-level, not per leg — with several return legs on one order
-            // (V104) every leg of the order reports the same count.
-            "       (SELECT COUNT(*) FROM pieces p WHERE p.current_order_id = sh.order_id " +
+            // Step 4d-2: a leg linked to a return request counts exactly its request's items
+            // that arrived and still await a final disposition (item_status 'arrived' — the
+            // scan attributed to them moved the piece to return_pending_inspection). A leg with
+            // no request keeps the order-level count (every leg of that order reports it).
+            "       CASE WHEN rq.id IS NOT NULL THEN " +
+            "         (SELECT COUNT(*) FROM return_request_items ri WHERE ri.request_id = rq.id " +
+            "            AND ri.tenant_id = sh.tenant_id AND ri.item_status = 'arrived') " +
+            "       ELSE (SELECT COUNT(*) FROM pieces p WHERE p.current_order_id = sh.order_id " +
             "          AND p.tenant_id = sh.tenant_id " +
             "          AND p.status = 'return_pending_inspection'::piece_status" +
-            "       ) AS pending_inspection_count " +
+            "       ) END AS pending_inspection_count, " +
+            "       rq.reference AS request_reference " +
             "FROM shipments sh " +
             "JOIN orders o ON o.id = sh.order_id AND o.tenant_id = sh.tenant_id " +
+            "LEFT JOIN return_requests rq ON rq.return_shipment_id = sh.id AND rq.tenant_id = sh.tenant_id " +
             "WHERE sh.tenant_id = ? AND sh.shipment_leg = 'return' " +
             "ORDER BY sh.created_at DESC, sh.id DESC LIMIT ? OFFSET ?",
             (rs, i) -> {
@@ -535,6 +542,8 @@ public class ShipmentLinkService {
                 row.put("inspection_state", inspectionState);
                 row.put("awaiting_receiving", rs.getBoolean("awaiting_receiving"));
                 row.put("leg_status", OrderStatusDeriver.deriveLegStatus(internalState));
+                row.put("request_reference", rs.getString("request_reference"));
+                row.put("pending_inspection_count", rs.getInt("pending_inspection_count"));
                 return row;
             },
             tenantId, size, page * size);

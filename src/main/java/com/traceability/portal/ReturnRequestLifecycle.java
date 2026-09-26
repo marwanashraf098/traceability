@@ -6,8 +6,12 @@ import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.web.server.ResponseStatusException;
 
+import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.sql.Timestamp;
 import java.time.Instant;
+import java.time.LocalDate;
+import java.time.ZoneId;
 import java.util.*;
 
 /**
@@ -31,7 +35,10 @@ import java.util.*;
  *
  * Request states derived by {@link #reevaluate}: from approved / pickup_booked, 'received'
  * once every item that isn't not_coming has arrived (or is done) and at least one did;
- * then 'refund_pending' once every such item is done. 'refunded' is not set here (4d-2).
+ * then 'refund_pending' once every such item is done.
+ *
+ * Step 4d-2: also the only writer of return_refunds (append-only — a refund is cancelled by a
+ * 'void' row, never updated or deleted) and of 'refunded' ({@link #markRefunded}).
  */
 public class ReturnRequestLifecycle {
 
@@ -412,6 +419,182 @@ public class ReturnRequestLifecycle {
             "UPDATE return_request_items SET item_status = 'not_coming', active = false " +
             "WHERE request_id = ? AND tenant_id = ? AND item_status IN ('awaiting', 'arrived')",
             requestId, tenantId);
+    }
+
+    // ── Step 4d-2: refunds (append-only ledger) ──────────────────────────────
+
+    public static final Set<String> REFUND_METHODS = Set.of("cash", "instapay", "wallet", "bank_transfer", "other");
+    static final Set<String> REFUNDABLE = Set.of("received", "refund_pending");
+    static final int REFUND_REFERENCE_MAX = 100;
+    static final int REFUND_NOTE_MAX = 300;
+    static final BigDecimal REFUND_AMOUNT_MAX = new BigDecimal("9999999999.99");
+    /** Refund dates are the merchant's calendar day; Traced's tenants are in Egypt. */
+    static final ZoneId BUSINESS_ZONE = ZoneId.of("Africa/Cairo");
+
+    /**
+     * THE predicate "the refund of this request is overdue" (aliases {@code rr} = return_requests,
+     * {@code t} = its tenant): refund_pending for longer than tenants.refund_pending_window_days.
+     * Shared by ExceptionService's refund_pending_overdue detector and the Requests list badge.
+     */
+    public static final String REFUND_OVERDUE_SQL =
+        "rr.status = 'refund_pending' AND rr.refund_pending_at IS NOT NULL " +
+        "AND rr.refund_pending_at < now() - (interval '1 day' * t.refund_pending_window_days) ";
+
+    /** The resolution key of the refund_pending_overdue exception for request {@code rr}. */
+    public static final String REFUND_OVERDUE_KEY_SQL = "'refund_pending_overdue:' || rr.id";
+
+    /**
+     * When the return_items_overdue clock starts (alias {@code rr}): the courier booking
+     * (the latest pickup_booked event, else the booking attempt) for a pickup_booked request,
+     * else the approval.
+     */
+    public static final String ITEMS_OVERDUE_ANCHOR_SQL =
+        "(CASE WHEN rr.status = 'pickup_booked' THEN COALESCE(" +
+        "    (SELECT MAX(e.occurred_at) FROM return_request_events e " +
+        "      WHERE e.request_id = rr.id AND e.tenant_id = rr.tenant_id AND e.event_type = 'pickup_booked'), " +
+        "    rr.booking_attempted_at, rr.decided_at) " +
+        " ELSE rr.decided_at END)";
+
+    /**
+     * THE predicate "items of this request are overdue" (aliases {@code rr}, {@code t}): approved
+     * or pickup_booked, at least one item still awaited, and the clock
+     * ({@link #ITEMS_OVERDUE_ANCHOR_SQL}) older than tenants.return_arrival_window_days.
+     */
+    public static final String ITEMS_OVERDUE_SQL =
+        "rr.status::text IN ('approved', 'pickup_booked') " +
+        "AND EXISTS (SELECT 1 FROM return_request_items i WHERE i.request_id = rr.id " +
+        "            AND i.tenant_id = rr.tenant_id AND i.item_status = 'awaiting') " +
+        "AND " + ITEMS_OVERDUE_ANCHOR_SQL + " < now() - (interval '1 day' * t.return_arrival_window_days) ";
+
+    /**
+     * POST /return-requests/{id}/refunds — records a refund the merchant made (Traced moves no
+     * money). Allowed in received and refund_pending. The currency is the order's (its stored
+     * Shopify payload), else EGP. Event refund_recorded {amount, method}.
+     */
+    public UUID recordRefund(UUID tenantId, UUID requestId, String method, BigDecimal amount, LocalDate refundedOn,
+                             String reference, String note, UUID actor) {
+        if (method == null || !REFUND_METHODS.contains(method)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Choose how the refund was paid.");
+        }
+        if (amount == null || amount.signum() <= 0 || amount.scale() > 2 && amount.stripTrailingZeros().scale() > 2
+                || amount.compareTo(REFUND_AMOUNT_MAX) > 0) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Enter an amount greater than 0.");
+        }
+        if (refundedOn == null || refundedOn.isAfter(LocalDate.now(BUSINESS_ZONE))) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "The refund date can't be in the future.");
+        }
+        String ref = blankToNull(reference), n = blankToNull(note);
+        if (ref != null && ref.length() > REFUND_REFERENCE_MAX) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "The reference can be at most " + REFUND_REFERENCE_MAX + " characters.");
+        }
+        if (n != null && n.length() > REFUND_NOTE_MAX) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "The note can be at most " + REFUND_NOTE_MAX + " characters.");
+        }
+        Map<String, Object> rr = lockRequest(tenantId, requestId);
+        if (!REFUNDABLE.contains((String) rr.get("status"))) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "A refund can be recorded once the return has been received.");
+        }
+        String currency = jdbc.queryForObject(
+            "SELECT COALESCE(NULLIF(o.raw->>'currency', ''), 'EGP') FROM orders o WHERE o.id = ? AND o.tenant_id = ?",
+            String.class, rr.get("order_id"), tenantId);
+        BigDecimal value = amount.setScale(2, RoundingMode.HALF_UP);
+        UUID id = jdbc.queryForObject(
+            "INSERT INTO return_refunds (tenant_id, request_id, kind, method, amount, currency, refunded_on, reference, note, recorded_by) " +
+            "VALUES (?, ?, 'refund', ?, ?, ?, ?, ?, ?, ?) RETURNING id",
+            UUID.class, tenantId, requestId, method, value, currency, java.sql.Date.valueOf(refundedOn), ref, n, actor);
+        event(tenantId, requestId, "refund_recorded", actor, meta("refund_id", id.toString(),
+            "amount", value.toPlainString(), "currency", currency, "method", method));
+        return id;
+    }
+
+    /**
+     * POST /return-requests/{id}/refunds/{refundId}/void — cancels a recorded refund with a
+     * 'void' row (never an UPDATE). Once per refund; not after the request is refunded.
+     */
+    public void voidRefund(UUID tenantId, UUID requestId, UUID refundId, String note, UUID actor) {
+        String n = blankToNull(note);
+        if (n != null && n.length() > REFUND_NOTE_MAX) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "The note can be at most " + REFUND_NOTE_MAX + " characters.");
+        }
+        Map<String, Object> rr = lockRequest(tenantId, requestId);
+        List<Map<String, Object>> refund = jdbc.queryForList(
+            "SELECT id, amount, currency FROM return_refunds WHERE id = ? AND request_id = ? AND tenant_id = ? AND kind = 'refund'",
+            refundId, requestId, tenantId);
+        if (refund.isEmpty()) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Refund not found");
+        if (!REFUNDABLE.contains((String) rr.get("status"))) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Refunds can't be changed once the request is closed.");
+        }
+        Boolean voided = jdbc.queryForObject(
+            "SELECT EXISTS (SELECT 1 FROM return_refunds WHERE voids_refund_id = ? AND tenant_id = ? AND kind = 'void')",
+            Boolean.class, refundId, tenantId);
+        if (Boolean.TRUE.equals(voided)) throw new ResponseStatusException(HttpStatus.CONFLICT, "This refund was already voided.");
+        Map<String, Object> r = refund.get(0);
+        jdbc.update(
+            "INSERT INTO return_refunds (tenant_id, request_id, kind, voids_refund_id, currency, note, recorded_by) " +
+            "VALUES (?, ?, 'void', ?, ?, ?, ?)",
+            tenantId, requestId, refundId, r.get("currency"), n, actor);
+        event(tenantId, requestId, "refund_voided", actor, meta("refund_id", refundId.toString(),
+            "amount", ((BigDecimal) r.get("amount")).toPlainString(), "currency", r.get("currency")));
+    }
+
+    /** POST /return-requests/{id}/mark-refunded — from refund_pending, with ≥ 1 refund that isn't voided. */
+    public void markRefunded(UUID tenantId, UUID requestId, UUID actor) {
+        Map<String, Object> rr = lockRequest(tenantId, requestId);
+        if (!"refund_pending".equals(rr.get("status"))) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Only a request waiting for its refund can be marked refunded.");
+        }
+        BigDecimal total = refundTotal(tenantId, requestId);
+        if (total.signum() <= 0) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Record the refund before marking the request refunded.");
+        }
+        jdbc.update(
+            "UPDATE return_requests SET status = 'refunded', refunded_at = now(), refunded_by = ? WHERE id = ? AND tenant_id = ?",
+            actor, requestId, tenantId);
+        event(tenantId, requestId, "refunded", actor, meta("total", total.toPlainString()));
+    }
+
+    /** Sum of the request's refunds that are not voided (0 when none). */
+    public BigDecimal refundTotal(UUID tenantId, UUID requestId) {
+        return jdbc.queryForObject(
+            "SELECT COALESCE(SUM(r.amount), 0) FROM return_refunds r WHERE r.request_id = ? AND r.tenant_id = ? " +
+            "AND r.kind = 'refund' AND NOT EXISTS (SELECT 1 FROM return_refunds v " +
+            "    WHERE v.voids_refund_id = r.id AND v.tenant_id = r.tenant_id AND v.kind = 'void')",
+            BigDecimal.class, requestId, tenantId);
+    }
+
+    /** The request's refunds, oldest first, each with its void state. */
+    public List<Map<String, Object>> refunds(UUID tenantId, UUID requestId) {
+        return jdbc.query(
+            "SELECT r.id, r.method, r.amount, r.currency, r.refunded_on, r.reference, r.note, r.created_at, " +
+            "       u.name AS recorded_by_name, v.created_at AS voided_at, vu.name AS voided_by_name, v.note AS void_note " +
+            "FROM return_refunds r " +
+            "LEFT JOIN users u ON u.id = r.recorded_by " +
+            "LEFT JOIN return_refunds v ON v.voids_refund_id = r.id AND v.tenant_id = r.tenant_id AND v.kind = 'void' " +
+            "LEFT JOIN users vu ON vu.id = v.recorded_by " +
+            "WHERE r.request_id = ? AND r.tenant_id = ? AND r.kind = 'refund' ORDER BY r.created_at, r.id",
+            (rs, i) -> {
+                Map<String, Object> m = new LinkedHashMap<>();
+                m.put("id", rs.getObject("id").toString());
+                m.put("method", rs.getString("method"));
+                m.put("amount", rs.getBigDecimal("amount").toPlainString());
+                m.put("currency", rs.getString("currency"));
+                m.put("refundedOn", rs.getDate("refunded_on").toLocalDate().toString());
+                m.put("reference", rs.getString("reference"));
+                m.put("note", rs.getString("note"));
+                m.put("recordedByName", rs.getString("recorded_by_name"));
+                m.put("createdAt", rs.getTimestamp("created_at").toInstant().toString());
+                Timestamp voidedAt = rs.getTimestamp("voided_at");
+                m.put("voided", voidedAt != null);
+                m.put("voidedAt", voidedAt == null ? null : voidedAt.toInstant().toString());
+                m.put("voidedByName", rs.getString("voided_by_name"));
+                m.put("voidNote", rs.getString("void_note"));
+                return m;
+            },
+            requestId, tenantId);
+    }
+
+    private static String blankToNull(String s) {
+        return s == null || s.isBlank() ? null : s.trim();
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────

@@ -735,11 +735,12 @@ public class ReturnSessionService {
             "       s.raw #>> '{returnSpecs,packageDetails,descriptionAr}' AS description_ar, " +
             "       " + ShipmentLinkService.orderUntrackedSql("s.order_id") + " AS untracked, " +
             "       s.return_intake_outcome, s.return_intake_completed_at, s.return_intake_session_id, " +
-            "       u.name AS marked_by " +
+            "       u.name AS marked_by, rq.id AS request_id, rq.reference AS request_reference " +
             "FROM return_session_shipments rss " +
             "JOIN shipments s ON s.tracking_number = rss.awb AND s.tenant_id = rss.tenant_id " +
             "JOIN orders o    ON o.id = s.order_id AND o.tenant_id = s.tenant_id " +
             "LEFT JOIN users u ON u.id = s.return_intake_by " +
+            "LEFT JOIN return_requests rq ON rq.return_shipment_id = s.id AND rq.tenant_id = s.tenant_id " +
             "WHERE rss.session_id = ? AND rss.tenant_id = ? " +
             "ORDER BY rss.linked_at DESC, rss.id DESC",
             sessionId, tenantId);
@@ -757,26 +758,63 @@ public class ReturnSessionService {
             (org.springframework.jdbc.core.RowCallbackHandler) rs -> itemOrder.put(rs.getObject("id"), rs.getObject("order_id")),
             sessionId.toString(), sessionId, tenantId);
 
+        // Step 4d-2: scans attributed to a return request (return_session_items.request_item_id)
+        // belong to the parcel card of the leg linked to that request — exactly, per leg.
+        Map<Object, Object> itemRequest = new HashMap<>();
+        jdbc.query(
+            "SELECT i.id, ri.request_id FROM return_session_items i " +
+            "JOIN return_request_items ri ON ri.id = i.request_item_id AND ri.tenant_id = i.tenant_id " +
+            "WHERE i.session_id = ? AND i.tenant_id = ?",
+            (org.springframework.jdbc.core.RowCallbackHandler) rs -> itemRequest.put(rs.getObject("id"), rs.getObject("request_id")),
+            sessionId, tenantId);
+        Set<Object> linkedRequests = new HashSet<>();
+        for (Map<String, Object> leg : legs) if (leg.get("request_id") != null) linkedRequests.add(leg.get("request_id"));
+
         List<Map<String, Object>> parcels = new ArrayList<>();
         Set<Object> ordersTaken = new HashSet<>();
         Set<Object> itemsTaken = new HashSet<>();
+        for (Map<String, Object> it : items) {
+            if (linkedRequests.contains(itemRequest.get(it.get("id")))) itemsTaken.add(it.get("id"));
+        }
         Set<Object> expectedTaken = new HashSet<>();
         for (Map<String, Object> leg : legs) {
             Object orderId = leg.get("order_id");
             String awb = (String) leg.get("awb");
-            // TODO(4d): scanned items go to the order's FIRST parcel card only — with several
-            // return legs on one order (V104) the other cards show none of them.
-            boolean firstParcelForOrder = ordersTaken.add(orderId);
+            Object requestId = leg.get("request_id");
 
             List<Map<String, Object>> parcelExpected = new ArrayList<>();
-            for (Map<String, Object> e : expected) {
-                if (awb.equals(e.get("awb")) && expectedTaken.add(e.get("id"))) parcelExpected.add(e);
-            }
             List<Map<String, Object>> scanned = new ArrayList<>();
-            if (firstParcelForOrder) {
+            if (requestId != null) {
+                // Linked to a request: exactly its items — still-awaited ones as expected, the
+                // scans attributed to it as scanned.
+                parcelExpected.addAll(jdbc.queryForList(
+                    "SELECT p.id, p.barcode, p.status::text AS status, v.title AS variant_title, " +
+                    "       pr.title AS product_title, v.sku, ?::text AS awb " +
+                    "FROM return_request_items ri " +
+                    "JOIN pieces p    ON p.id = ri.piece_id AND p.tenant_id = ri.tenant_id " +
+                    "JOIN variants v  ON v.id = p.variant_id " +
+                    "JOIN products pr ON pr.id = v.product_id " +
+                    "WHERE ri.request_id = ? AND ri.tenant_id = ? AND ri.item_status = 'awaiting' " +
+                    "  AND NOT EXISTS (SELECT 1 FROM return_session_items si " +
+                    "                  WHERE si.session_id = ? AND si.piece_id = p.id) " +
+                    "ORDER BY pr.title, v.title, p.id",
+                    awb, requestId, tenantId, sessionId));
                 for (Map<String, Object> it : items) {
-                    if (orderId != null && orderId.equals(itemOrder.get(it.get("id"))) && itemsTaken.add(it.get("id"))) {
-                        scanned.add(it);
+                    if (requestId.equals(itemRequest.get(it.get("id")))) scanned.add(it);
+                }
+            } else {
+                // A leg with no request: the order-level grouping — scanned items go to the order's
+                // first such parcel card.
+                boolean firstParcelForOrder = ordersTaken.add(orderId);
+
+                for (Map<String, Object> e : expected) {
+                    if (awb.equals(e.get("awb")) && expectedTaken.add(e.get("id"))) parcelExpected.add(e);
+                }
+                if (firstParcelForOrder) {
+                    for (Map<String, Object> it : items) {
+                        if (orderId != null && orderId.equals(itemOrder.get(it.get("id"))) && itemsTaken.add(it.get("id"))) {
+                            scanned.add(it);
+                        }
                     }
                 }
             }
@@ -790,6 +828,7 @@ public class ReturnSessionService {
             parcel.put("awb", awb);
             parcel.put("leg", leg.get("shipment_leg"));
             parcel.put("orderNumber", leg.get("order_number"));
+            parcel.put("requestReference", leg.get("request_reference"));
             parcel.put("customerShortName", shortName((String) leg.get("customer_name")));
             parcel.put("returnedAt", leg.get("returned_at"));
             if ("return".equals(leg.get("shipment_leg"))) {

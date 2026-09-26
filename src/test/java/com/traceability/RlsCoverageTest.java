@@ -117,6 +117,7 @@ class RlsCoverageTest {
             "/api/v1/return-requests",
             "/api/v1/return-requests/{id}",
             "/api/v1/return-requests/{id}/pickup-areas",
+            "/api/v1/return-requests/{id}/refund-suggestion",
             "/api/v1/tenant/portal-settings",
             "/api/v1/tenant/bosta/return-locations",
             "/api/v1/variants",
@@ -555,6 +556,29 @@ class RlsCoverageTest {
             assertThat(own.getStatusCode()).as("same-tenant positive control").isEqualTo(HttpStatus.OK);
             assertThat(own.getBody()).containsKeys("cityId", "districts", "selectedDistrictId", "editable");
             assertThat(get("/api/v1/return-requests/" + theirs + "/pickup-areas", Map.class).getStatusCode())
+                .isEqualTo(HttpStatus.NOT_FOUND);
+        } finally {
+            jdbc.update("DELETE FROM return_request_items WHERE tenant_id IN (?, ?)", tenantId, otherTenant);
+            jdbc.update("DELETE FROM return_requests WHERE tenant_id IN (?, ?)", tenantId, otherTenant);
+            jdbc.update("DELETE FROM orders WHERE tenant_id = ?", otherTenant);
+            jdbc.update("DELETE FROM stores WHERE tenant_id = ?", otherTenant);
+            jdbc.update("DELETE FROM tenants WHERE id = ?", otherTenant);
+        }
+    }
+
+    @Test
+    void returnRequestRefundSuggestion_crossTenantIsolated_withSameTenantPositiveControl() {
+        UUID mine = seedReturnRequest(tenantId, storeId, "RR-CVGR4F");
+        UUID otherTenant = UUID.randomUUID(), otherStore = UUID.randomUUID();
+        jdbc.update("INSERT INTO tenants (id, name) VALUES (?, 'Cov Refund Other')", otherTenant);
+        jdbc.update("INSERT INTO stores (id, tenant_id, platform, shop_domain, status) " +
+                    "VALUES (?, ?, 'shopify', 'cov-refund-other.myshopify.com', 'disconnected')", otherStore, otherTenant);
+        UUID theirs = seedReturnRequest(otherTenant, otherStore, "RR-CVGR5H");
+        try {
+            ResponseEntity<Map> own = get("/api/v1/return-requests/" + mine + "/refund-suggestion", Map.class);
+            assertThat(own.getStatusCode()).as("same-tenant positive control").isEqualTo(HttpStatus.OK);
+            assertThat(own.getBody()).containsKeys("amount", "currency", "source", "approximate", "lines");
+            assertThat(get("/api/v1/return-requests/" + theirs + "/refund-suggestion", Map.class).getStatusCode())
                 .isEqualTo(HttpStatus.NOT_FOUND);
         } finally {
             jdbc.update("DELETE FROM return_request_items WHERE tenant_id IN (?, ?)", tenantId, otherTenant);
