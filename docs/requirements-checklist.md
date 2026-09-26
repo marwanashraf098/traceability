@@ -255,6 +255,8 @@ Built 2026-08-15 on branch `returns-rebuild`, single cutover, not yet merged. Mo
 - [x] RP.33 [M] Lifecycle screens R1–R6 EN/AR: refund form, refunds + history, partial arrival, close dialog, link-parcel dialog, list pills (Step 4d-2)
 - [ ] RP.34 [S] Follow-up: settings UI for `refund_pending_window_days` / `return_arrival_window_days`
 - [ ] RP.35 [S] Follow-up: detect a refund made in Shopify on the same order (orders/updated `refunds[]`) and flag the double-restock risk
+- [x] EX.1 [M] Step 5a: Shopify decrement (`pushExchangeDispatch`, 4th named decrement) when an internal exchange replacement piece first leaves Traced custody — once per piece, both writers, V110
+- [ ] EX.2 [S] Follow-up: merchant one-time correction of past exchange drift in Shopify (per-variant count from the 5a diagnosis SQL)
 - [x] RS.18 [M] Return session parcel cards (per scanned AWB), feedback strip, footer summary
 - [x] RS.19 [M] Untracked courier return: mark received / undo (no stock change), V101 intake outcome + actor
 - [x] RS.20 [M] `return_to_receive` exception (MEDIUM) + E&R "Received · not tracked"

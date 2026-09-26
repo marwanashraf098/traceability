@@ -4,6 +4,28 @@
 
 ## Current state
 
+**Step 5a — Shopify decrement when an exchange replacement leaves Traced custody — built 2026-09-26 on branch `feature/exchange-dispatch-decrement` (from origin/main `3fa7770`; not merged, not deployed).**
+Approved 2026-09-26: the fourth named decrement. Internal exchange orders (`internal:exchange:%`) never exist in Shopify, so every
+exchange left Shopify one unit too high.
+- **Gateway:** `ShopifyGateway.pushExchangeDispatch()` / `ShopifyHttpGateway` — own mutation constant, single attempt, negative-delta
+  guard before any network call, `changeFromQuantity: null`, `referenceDocumentUri traced://piece/{id}`; no shared code with the other
+  three. `adjustInventoryQuantities` untouched.
+- **Service:** `ShopifyInventoryService.onExchangeReplacementDispatched(tenantId, pieceId)` (@Async) → `processExchangeDispatch` — eligibility
+  (active/packed allocation to an `internal:exchange:%` order named by an `exchanges` row; piece at the fulfillment location) → claim
+  `exchange_dispatch`/piece id → preconditions → one call → markResult. Static helpers `leavesCustody(from, to)` and `afterCommit(Runnable)`.
+  Re-push: `repushFailedVoidOrHold` accepts `exchange_dispatch` (released allocations accepted there, so a re-push after a restock still works).
+- **Hooks:** `PickupSessionService.closeSession()` — inside the `try`, right after `ledger.transition(..., WITH_COURIER, "handed_to_courier")`,
+  registered after-commit (the close runs in one transaction). `BostaWebhookJob.applyMappedState()` — inside the piece loop's `try`, right after
+  `ledger.transition(..., "courier_update")` (no outer transaction there, so it runs at once); catch blocks untouched.
+- **V110:** widens `shopify_inventory_adjustments_trigger_type_check` with `exchange_dispatch` (approved mid-build — the spec hadn't listed it).
+- **Exceptions:** `void_hold_sync_failed` now also covers `exchange_dispatch` (CRITICAL, EN/AR "exchange replacement"). No frontend change.
+- **Tests:** `ExchangeDispatchDecrementTest` (16: exactly once ×5 incl. pickup→webhook, webhook→pickup, duplicates, packed→delivered;
+  never ×6 incl. Shopify order, demo order, pack, unpick, no-op, non-fulfillment location; reversal ×2; failure + re-push with the same key;
+  both guards; app_user cross-tenant). Revert: webhook hook disabled → e2/e3/e4 fail. Edited: NamedDecrementSetGuardTest (+rule, pre-approved),
+  MigrationSmokeTest 109, NotTracedBackfillTest 54 (approved with V110).
+- **Past drift is NOT corrected** (stock take can't — those pieces aren't missing); merchants lower Shopify by the per-variant count from the
+  5a diagnosis SQL, once, after deploy.
+
 **Step 4d-2 — refunds, suggested amount, alerts, exact per-return displays, lifecycle screens (R1–R6) — built 2026-09-26 on branch `feature/portal-4d2` (from origin/main `f35464d`; not merged, not deployed).**
 No Shopify WRITES (one order READ for the suggestion), no Bosta writes, no piece-status writes.
 - **V109:** `return_refunds` (append-only: kind refund|void, `voids_refund_id`, method cash/instapay/wallet/bank_transfer/other,
