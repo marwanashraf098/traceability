@@ -4,6 +4,37 @@
 
 ## Current state
 
+**Step 5b — portal exchange requests (another variant of the same product, same price) up to approval — built 2026-09-27 on branch `feature/portal-exchanges-5b` (from origin/main; not merged, not deployed).**
+No Bosta writes, no Shopify writes, no piece-status writes. Committed inventory stays derived; PICKABLE_ORDERS_FILTER untouched.
+- **V111:** `return_requests.type` CHECK ('refund','exchange'); `return_requests.refund_fallback_ok` (NOT NULL default false);
+  `return_request_items.replacement_variant_id` (FK variants, NULL for refunds, cleared on switch); `tenants.portal_exchanges_enabled`
+  (default false, **no Settings switch yet** — set by SQL until 5c).
+- **Lookup / config:** only when the tenant has exchanges on — config adds `exchangesEnabled: true`, each lookup line adds `optionAxes`
+  [{name, kind colour|size|option}], `currentOptions`, `exchangeOptions` [{variantId, title, options, inStock}] (the other variants of
+  the same product; `inStock` = VariantStockService `available > 0`). Keys are absent otherwise, so PortalBrandingTest / PortalLookupTest
+  exact-key assertions are unchanged. `ExchangeOptions` (portal, not a bean): option values from `variants.raw.option1..3` (REST,
+  webhook-ingested variants) with axis names from `products.raw.options[].name`; otherwise parsed from the title split on " / "
+  ("Default Title" → none); axis kind from the name (color/colour/لون, size/مقاس), else all-values-look-like-sizes → size, and with
+  two axes the other one → colour.
+- **Submit `mode:'exchange'`:** exactly one line, quantity 1, a valid reason, `replacementVariantId` a different variant of the same
+  product and in stock (re-checked server-side), `refundFallbackOk`; stored as type 'exchange'; never auto-approved (portal_auto_approve
+  ignored). Refund mode unchanged. 'requested' event metadata carries type + replacement.
+- **Merchant:** list/detail carry `type`; detail adds `refundFallbackOk` and per item `replacementVariantId/Title/Available/InStock`
+  (live). `approve()` on an exchange locks the row, re-checks stock → 409 `REPLACEMENT_OUT_OF_STOCK`, else approved with **no booking
+  enqueue**. `POST /return-requests/{id}/switch-to-refund` (owner/manager): requested + exchange + refund_fallback_ok, else 409 → type
+  refund, replacement cleared, event `switched_to_refund`, then the normal refund approve (booking as for any refund).
+- **CRP guard (not in the spec, required):** `ReturnPickupBookingService` never books a type-25 CRP for an exchange — `bookInTenant`
+  returns early and the sweeper's orphan query adds `rr.type = 'refund'`. 5c books the single Bosta EXCHANGE trip.
+- **UI:** portal X1 (Return / Exchange cards, one-item radio + reason select under the chosen item), X2 (colour / size chips, own
+  combination "· yours", out-of-stock disabled, sizes in wearing order, summary, refund-fallback checkbox pre-ticked), P3 as step 3 of 3
+  with an "Exchanging" card, X3 confirmation; hidden unless config says enabled. Merchant drawer X4 / X6 (`ExchangeRequestView`) and the
+  Exchange pill (drawer header + Requests list). EN/AR.
+- **Tests:** `PortalExchangeTest` (11: lookup ×3, submit ×3, approve / 409 / switch / detail ×4 incl. no CRP booking or sweep, app_user
+  cross-tenant for approve + switch with a same-tenant control); MigrationSmokeTest 110, NotTracedBackfillTest 55 (standing approval).
+  Frontend `portalExchanges.test.tsx` (5), `exchangeRequestDrawer.test.tsx` (8).
+- **Next (5c):** Settings switch for `portal_exchanges_enabled`; approving an exchange puts the replacement in Pick & Pack and books one
+  Bosta EXCHANGE (type 30) trip — needs its own Mode-B amendment; the approve helper copy then becomes the mockup's.
+
 **Step 5a — Shopify decrement when an exchange replacement leaves Traced custody — built 2026-09-26 on branch `feature/exchange-dispatch-decrement` (from origin/main `3fa7770`; not merged, not deployed).**
 Approved 2026-09-26: the fourth named decrement. Internal exchange orders (`internal:exchange:%`) never exist in Shopify, so every
 exchange left Shopify one unit too high.
