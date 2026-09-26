@@ -43,14 +43,21 @@ export default function ExchangesRefunds() {
   const role = getRoleFromToken()
   const canSeeRequests = role === 'owner' || role === 'manager'
   const [newRequests, setNewRequests] = useState(0)
+  // Step 4d-2 (R6): "{n} awaiting refund" beside the "{n} new" badge.
+  const [awaitingRefund, setAwaitingRefund] = useState(0)
+  const linkedParcel = linkedRequest ? searchParams.get('parcel') : null
 
   const loadNewRequests = useCallback(async () => {
     if (!canSeeRequests) return
     try {
-      const res = await getReturnRequests(0, 1, 'requested')
-      setNewRequests(res.total)
+      const [fresh, refunds] = await Promise.all([
+        getReturnRequests(0, 1, 'requested'),
+        getReturnRequests(0, 1, 'refund_pending'),
+      ])
+      setNewRequests(fresh.total)
+      setAwaitingRefund(refunds.total)
     } catch {
-      // The badge is a hint only — the tab itself shows its own load error.
+      // The badges are a hint only — the tab itself shows its own load error.
     }
   }, [canSeeRequests])
 
@@ -169,11 +176,20 @@ export default function ExchangesRefunds() {
     ...(canSeeRequests ? [{
       key: 'requests' as const,
       label: t('exchangesRefunds.tabs.requests'),
-      badge: newRequests > 0
+      badge: newRequests > 0 || awaitingRefund > 0
         ? (
-          <span data-testid="requests-new-badge">
-            <Badge tone="warning" label={t('exchangesRefunds.requests.newBadge', { count: newRequests })} />
-          </span>
+          <>
+            {newRequests > 0 && (
+              <span data-testid="requests-new-badge">
+                <Badge tone="warning" label={t('exchangesRefunds.requests.newBadge', { count: newRequests })} />
+              </span>
+            )}
+            {awaitingRefund > 0 && (
+              <span data-testid="requests-refund-badge">
+                <Badge tone="warning" label={t('exchangesRefunds.requests.awaitingRefundBadge', { count: awaitingRefund })} />
+              </span>
+            )}
+          </>
         )
         : undefined,
     }] : []),
@@ -201,7 +217,7 @@ export default function ExchangesRefunds() {
         <Tabs tabs={tabs} activeKey={tab} onChange={key => setTab(key as PageTab)} />
 
         {tab === 'requests' ? (
-          <RequestsPanel onDecided={loadNewRequests} initialRequestId={linkedRequest} />
+          <RequestsPanel onDecided={loadNewRequests} initialRequestId={linkedRequest} initialParcelId={linkedParcel} />
         ) : error ? (
           <div className="card p-10 flex flex-col items-center gap-3 text-center" data-testid="load-error">
             <p className="text-body font-semibold text-primary">{t('exchangesRefunds.errorTitle')}</p>

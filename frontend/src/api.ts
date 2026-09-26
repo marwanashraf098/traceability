@@ -2068,6 +2068,17 @@ export interface ReturnRequestRow {
   status: ReturnRequestStatus
   bookingStatus?: BookingStatus | null
   createdAt: string
+  /** Step 4d-2 (R6). Absent on older responses. */
+  arrivedCount?: number
+  awaitingCount?: number
+  closeReason?: ReturnRequestCloseReason | null
+  currency?: string
+  /** Sum of refunds that aren't voided, e.g. "640.00". */
+  refundTotal?: string
+  /** Days waiting for the refund while the refund_pending_overdue alert is open; null otherwise. */
+  refundOverdueDays?: number | null
+  /** A product that isn't part of the request came back (unexpected_item_received). */
+  unexpectedItem?: boolean
 }
 
 export interface ReturnRequestPage {
@@ -2085,6 +2096,64 @@ export interface ReturnRequestItem {
   imageUrl: string | null
   reasonCode: string
   active: boolean
+  /** Step 4d-1/4d-2 — item lifecycle and its inspection outcome. Absent on older responses. */
+  itemStatus?: 'awaiting' | 'arrived' | 'done' | 'not_coming'
+  disposition?: 'pending' | 'restocked' | 'damaged' | 'mismatch' | null
+  damageReason?: string | null
+}
+
+/** Step 4d-2 — one entry of the request history (return_request_events). */
+export interface ReturnRequestEvent {
+  type: string
+  actorId: string | null
+  actorName: string | null
+  occurredAt: string
+  metadata: Record<string, unknown> | null
+}
+
+export type RefundMethod = 'cash' | 'instapay' | 'wallet' | 'bank_transfer' | 'other'
+
+export interface ReturnRefund {
+  id: string
+  method: RefundMethod
+  amount: string
+  currency: string
+  refundedOn: string
+  reference: string | null
+  note: string | null
+  recordedByName: string | null
+  createdAt: string
+  voided: boolean
+  voidedAt: string | null
+  voidedByName: string | null
+  voidNote: string | null
+}
+
+export interface LinkCandidate {
+  id: string
+  reference: string
+  decidedAt: string | null
+  itemCount: number
+  itemSummary: string | null
+}
+
+/** A courier return on the request's order that no request holds yet (R5). */
+export interface LinkableParcel {
+  shipmentId: string
+  trackingNumber: string
+  itemsCount: number | null
+  description: string | null
+  descriptionAr: string | null
+  candidates: LinkCandidate[]
+}
+
+export interface RefundSuggestion {
+  amount: string | null
+  currency: string
+  source: 'shopify' | 'stored_order' | 'catalog' | null
+  approximate: boolean
+  lines: Array<{ variantId: string; productTitle: string; variantTitle: string | null; quantity: number;
+    unitPrice: string | null; lineTotal: string | null }>
 }
 
 export interface ReturnRequestDetail {
@@ -2126,6 +2195,17 @@ export interface ReturnRequestDetail {
   closedAt?: string | null
   closedByName?: string | null
   items: ReturnRequestItem[]
+  /** Step 4d-2. Absent on older responses. */
+  receivedAt?: string | null
+  history?: ReturnRequestEvent[]
+  refunds?: ReturnRefund[]
+  refundTotal?: string
+  currency?: string
+  refundedAt?: string | null
+  refundedByName?: string | null
+  returnTrackingNumber?: string | null
+  unexpectedItems?: Array<{ pieceId: string; shortCode: string; productTitle: string; variantTitle: string | null }>
+  linkableParcels?: LinkableParcel[]
 }
 
 export function getReturnRequests(page = 0, size = 25, status?: ReturnRequestStatus) {
@@ -2159,6 +2239,44 @@ export function markBookingNotBooked(id: string) {
 /** "It was booked — enter tracking number" (checked against Bosta by the backend). */
 export function confirmBooking(id: string, trackingNumber: string) {
   return request<void>(`/return-requests/${id}/booking/confirm`, { method: 'POST', body: JSON.stringify({ trackingNumber }) })
+}
+
+// ── Step 4d-2: lifecycle actions and refunds (owner / manager) ───────────────
+
+export function getRefundSuggestion(id: string) {
+  return request<RefundSuggestion>(`/return-requests/${id}/refund-suggestion`)
+}
+
+export interface RecordRefundBody {
+  method: RefundMethod
+  amount: string
+  refundedOn: string
+  reference?: string
+  note?: string
+}
+
+export function recordRefund(id: string, body: RecordRefundBody) {
+  return request<{ id: string }>(`/return-requests/${id}/refunds`, { method: 'POST', body: JSON.stringify(body) })
+}
+
+export function voidRefund(id: string, refundId: string, note?: string) {
+  return request<void>(`/return-requests/${id}/refunds/${refundId}/void`, { method: 'POST', body: JSON.stringify({ note }) })
+}
+
+export function markReturnRequestRefunded(id: string) {
+  return request<void>(`/return-requests/${id}/mark-refunded`, { method: 'POST' })
+}
+
+export function closeReturnRequest(id: string, reason: 'no_refund' | 'other', note?: string) {
+  return request<void>(`/return-requests/${id}/close`, { method: 'POST', body: JSON.stringify({ reason, note }) })
+}
+
+export function markRestNotComing(id: string) {
+  return request<void>(`/return-requests/${id}/rest-not-coming`, { method: 'POST' })
+}
+
+export function linkReturnLeg(id: string, shipmentId: string) {
+  return request<void>(`/return-requests/${id}/link-leg`, { method: 'POST', body: JSON.stringify({ shipmentId }) })
 }
 
 export interface PickupDistrict {

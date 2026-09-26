@@ -66,6 +66,8 @@ const TYPE_LABELS: Record<string, { en: string; ar: string }> = {
   return_to_receive:       { en: 'Return To Receive',         ar: 'مرتجع بانتظار الاستلام' },
   pickup_booking_problem:  { en: 'Bosta Pickup Booking',      ar: 'حجز استلام بوسطة' },
   return_link_ambiguous:   { en: 'Return · Which Request?',   ar: 'مرتجع · أي طلب؟' },
+  refund_pending_overdue:  { en: 'Refund Overdue',            ar: 'استرداد متأخر' },
+  return_items_overdue:    { en: 'Return Items Late',         ar: 'منتجات مرتجعة متأخرة' },
 }
 
 const ALL_TYPES      = Object.keys(TYPE_LABELS)

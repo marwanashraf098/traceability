@@ -153,6 +153,8 @@ interface Parcel {
   awb: string
   leg: 'return' | 'forward'
   orderNumber: string | null
+  /** Step 4d-2: the return request this courier return is linked to (its items are the expected ones). */
+  requestReference?: string | null
   customerShortName: string | null
   returnedAt: string | null
   bosta: { itemsCount: number | null; description: string | null; descriptionAr: string | null } | null
@@ -1174,6 +1176,10 @@ function ParcelCard({ parcel, expanded, onToggle, busy, onMarkReceived, onUndo, 
         </div>
         <div className="flex gap-8 flex-1 min-w-0">
           <ParcelFact label={t('returns.openSession.parcel.order')} value={<bdi>{order}</bdi>} />
+          {parcel.requestReference && (
+            <ParcelFact label={t('returns.openSession.parcel.request')}
+              value={<bdi className="font-mono" data-testid="parcel-request">{parcel.requestReference}</bdi>} />
+          )}
           {parcel.customerShortName && (
             <ParcelFact label={t('returns.openSession.parcel.customer')} value={<bdi>{parcel.customerShortName}</bdi>} />
           )}

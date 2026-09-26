@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { getReturnRequests, ReturnRequestRow } from '../../api'
 import { Badge, Button, DataTable, DataTableColumn } from '../../components/ui'
-import { reasonLabel, requestStatusTone, sentLabel, shortCustomerName } from './requestFormat'
+import { displayStatus, displayStatusTone, formatMoney, reasonLabel, sentLabel, shortCustomerName } from './requestFormat'
 import ReturnRequestDrawer from './ReturnRequestDrawer'
 
 export const REQUESTS_PAGE_SIZE = 25
@@ -19,8 +19,8 @@ export const REQUESTS_PAGE_SIZE = 25
 export const BOOKING_ATTENTION = new Set(['failed', 'failed_ambiguous', 'needs_review'])
 
 export default function RequestsPanel({
-  onDecided, initialRequestId = null,
-}: { onDecided: () => void; initialRequestId?: string | null }) {
+  onDecided, initialRequestId = null, initialParcelId = null,
+}: { onDecided: () => void; initialRequestId?: string | null; initialParcelId?: string | null }) {
   const { t, i18n } = useTranslation()
   const [page, setPage] = useState(0)
   const [rows, setRows] = useState<ReturnRequestRow[]>([])
@@ -84,7 +84,17 @@ export default function RequestsPanel({
       key: 'status', header: t('exchangesRefunds.requests.columns.status'),
       render: row => (
         <span className="inline-flex flex-wrap items-center gap-1.5">
-          <Badge tone={requestStatusTone(row.status)} label={t(`exchangesRefunds.requests.status.${row.status}`)} />
+          <StatusPill row={row} />
+          {row.refundOverdueDays != null && (
+            <span data-testid="overdue-badge">
+              <Badge tone="critical" label={t('exchangesRefunds.requests.overdue', { days: row.refundOverdueDays })} />
+            </span>
+          )}
+          {row.unexpectedItem && (
+            <span data-testid="check-item-badge">
+              <Badge tone="warning" label={t('exchangesRefunds.requests.checkItem')} />
+            </span>
+          )}
           {row.bookingStatus && BOOKING_ATTENTION.has(row.bookingStatus) && (
             <span data-testid="attention-badge">
               <Badge tone="critical" label={t('exchangesRefunds.requests.attention')} />
@@ -135,9 +145,26 @@ export default function RequestsPanel({
 
       <ReturnRequestDrawer
         requestId={selectedId}
+        initialParcelId={selectedId === initialRequestId ? initialParcelId : null}
         onClose={() => setSelectedId(null)}
         onChanged={refresh}
       />
     </>
   )
+}
+
+/**
+ * Step 4d-2 (R6) — the status pill: "Partly received" (display only), "Refunded · EGP 640",
+ * "Closed · no refund"; every other status as before.
+ */
+function StatusPill({ row }: { row: ReturnRequestRow }) {
+  const { t } = useTranslation()
+  const shown = displayStatus(row.status, row.arrivedCount ?? 0)
+  let label = t(`exchangesRefunds.requests.status.${shown}`)
+  if (row.status === 'refunded' && row.refundTotal && Number(row.refundTotal) > 0) {
+    label = t('exchangesRefunds.requests.refundedAmount', { amount: formatMoney(row.refundTotal, row.currency) })
+  } else if (row.status === 'closed' && row.closeReason) {
+    label = t('exchangesRefunds.requests.closedReason', { reason: t(`exchangesRefunds.requests.closeReasonsShort.${row.closeReason}`) })
+  }
+  return <Badge tone={displayStatusTone(shown)} label={label} />
 }

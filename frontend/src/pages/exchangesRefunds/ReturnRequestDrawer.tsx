@@ -2,12 +2,15 @@ import { ReactNode, useCallback, useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { X } from 'lucide-react'
 import {
-  approveReturnRequest, confirmBooking, getPortalSettings, getReturnRequest, getReturnRequestPickupAreas,
-  markBookingNotBooked, rejectReturnRequest, retryBooking, setReturnRequestPickupArea,
-  PickupDistrict, ReturnRequestDetail, ReturnRequestPickupAreas,
+  approveReturnRequest, confirmBooking, getPortalSettings, getRefundSuggestion, getReturnRequest, getReturnRequestPickupAreas,
+  markBookingNotBooked, markRestNotComing, markReturnRequestRefunded, rejectReturnRequest, retryBooking, setReturnRequestPickupArea,
+  LinkableParcel, PickupDistrict, RefundSuggestion, ReturnRequestDetail, ReturnRequestPickupAreas,
 } from '../../api'
 import { Alert, Badge, Button, ProductThumb, Skeleton, cn, useToast } from '../../components/ui'
-import { reasonLabel, requestStatusTone, sentLabel, shortCustomerName, shortDate } from './requestFormat'
+import { displayStatus, displayStatusTone, reasonLabel, sentLabel, shortCustomerName, shortDate } from './requestFormat'
+import {
+  arrivedCount, CloseDialog, HistoryTimeline, ItemsWithOutcome, LinkParcelDialog, RefundForm, RefundsList, UnexpectedItems,
+} from './RequestLifecycle'
 
 export const REJECT_REASON_MAX = 300
 
@@ -30,13 +33,22 @@ export const REJECT_REASON_MAX = 300
  * reason + Retry / Check in Bosta (ambiguous: "It wasn't booked — retry" or "It was booked —
  * enter tracking number") / Check in Bosta: details differ. "Change area" is offered only
  * while nothing is booked.
+ *
+ * Step 4d-2 (R1–R5): once anything came back (or the request is received / refund pending /
+ * refunded) the drawer switches to the lifecycle layout — Customer / Order / Returned (or
+ * Parcel while partly received), items with their outcome, the "different product" flag, the
+ * refund form (R1), the refunds list + history (R2), and the partial-arrival actions (R3).
+ * Close (R4) and Link parcel (R5) open as dialogs. "Partly received" is a display label only.
  */
 export default function ReturnRequestDrawer({
   requestId,
+  initialParcelId = null,
   onClose,
   onChanged,
 }: {
   requestId: string | null
+  /** Opens the R5 dialog for this parcel once the request loads (the return_link_ambiguous exception's link). */
+  initialParcelId?: string | null
   onClose: () => void
   onChanged: () => void
 }) {
@@ -58,7 +70,7 @@ export default function ReturnRequestDrawer({
         aria-label={detail ? t('exchangesRefunds.requests.drawer.label', { reference: detail.reference }) : undefined}
         data-testid="return-request-drawer"
         className={cn(
-          'fixed top-0 end-0 h-screen w-[480px] max-w-[92vw] bg-surface border-s border-line z-modal',
+          'fixed top-0 end-0 h-screen w-[580px] max-w-[92vw] bg-surface border-s border-line z-modal',
           'flex flex-col shadow-e4 transition-transform duration-200',
           open ? 'translate-x-0' : 'ltr:translate-x-full rtl:-translate-x-full'
         )}
@@ -67,6 +79,7 @@ export default function ReturnRequestDrawer({
           <DrawerContent
             key={requestId}
             requestId={requestId}
+            initialParcelId={initialParcelId}
             onClose={onClose}
             onChanged={onChanged}
             onLoaded={setDetail}
@@ -79,11 +92,13 @@ export default function ReturnRequestDrawer({
 
 function DrawerContent({
   requestId,
+  initialParcelId,
   onClose,
   onChanged,
   onLoaded,
 }: {
   requestId: string
+  initialParcelId: string | null
   onClose: () => void
   onChanged: () => void
   onLoaded: (d: ReturnRequestDetail | null) => void
@@ -99,6 +114,13 @@ function DrawerContent({
   const [busy, setBusy] = useState<'approve' | 'reject' | null>(null)
   const [conflict, setConflict] = useState(false)
   const [editingArea, setEditingArea] = useState(false)
+  // Step 4d-2
+  const [suggestion, setSuggestion] = useState<RefundSuggestion | null>(null)
+  const [addingRefund, setAddingRefund] = useState(false)
+  const [closing, setClosing] = useState(false)
+  const [linking, setLinking] = useState<LinkableParcel | null>(null)
+  const [autoLinkDone, setAutoLinkDone] = useState(false)
+  const [lifecycleBusy, setLifecycleBusy] = useState<'refunded' | 'restNotComing' | null>(null)
 
   const load = useCallback(async () => {
     setLoadError(false)
@@ -117,6 +139,48 @@ function DrawerContent({
   useEffect(() => {
     getPortalSettings().then(s => setPickupBooking(!!s?.pickupBooking)).catch(() => {})
   }, [])
+
+  // Step 4d-2: the suggested amount, once the request has something to refund. Never blocks
+  // the drawer — no suggestion just leaves the amount empty.
+  const refundStage = detail != null && ['received', 'refund_pending', 'refunded'].includes(detail.status)
+  useEffect(() => {
+    if (!refundStage) return
+    let cancelled = false
+    getRefundSuggestion(requestId)
+      .then(s => { if (!cancelled) setSuggestion(s && typeof s === 'object' ? s : null) })
+      .catch(() => { if (!cancelled) setSuggestion(null) })
+    return () => { cancelled = true }
+  }, [refundStage, requestId])
+
+  // The return_link_ambiguous exception opens the drawer with ?parcel=<shipmentId>.
+  useEffect(() => {
+    if (!detail || autoLinkDone || !initialParcelId) return
+    const parcel = (detail.linkableParcels ?? []).find(p => p.shipmentId === initialParcelId)
+    if (parcel) setLinking(parcel)
+    setAutoLinkDone(true)
+  }, [detail, initialParcelId, autoLinkDone])
+
+  const reloadAll = useCallback(async () => {
+    setAddingRefund(false)
+    await load()
+    onChanged()
+  }, [load, onChanged])
+
+  async function lifecycleAction(kind: 'refunded' | 'restNotComing') {
+    setLifecycleBusy(kind)
+    try {
+      if (kind === 'refunded') await markReturnRequestRefunded(requestId)
+      else await markRestNotComing(requestId)
+      toast({ tone: 'success', message: t(kind === 'refunded' ? 'exchangesRefunds.requests.refund.markedRefunded' : 'exchangesRefunds.requests.drawer.restNotComingDone') })
+      await reloadAll()
+    } catch (e) {
+      const conflict = e instanceof Error && e.message.startsWith('409')
+      toast({ tone: 'error', message: t(conflict ? 'exchangesRefunds.requests.drawer.conflict' : 'exchangesRefunds.requests.drawer.actionFailed') })
+      if (conflict) await reloadAll()
+    } finally {
+      setLifecycleBusy(null)
+    }
+  }
 
   async function decide(kind: 'approve' | 'reject') {
     if (kind === 'reject') {
@@ -157,7 +221,7 @@ function DrawerContent({
       {detail ? (
         <>
           <span className="text-body-lg font-semibold font-mono text-primary"><bdi>{detail.reference}</bdi></span>
-          <Badge tone={requestStatusTone(detail.status)} label={t(`exchangesRefunds.requests.status.${detail.status}`)} />
+          <Badge tone={displayStatusTone(shownStatus(detail))} label={t(`exchangesRefunds.requests.status.${shownStatus(detail)}`)} />
         </>
       ) : <Skeleton className="h-6 w-32" />}
       <div className="flex-1" />
@@ -208,6 +272,122 @@ function DrawerContent({
   const showBooking = detail.bookingStatus != null || (detail.status === 'approved' && pickupBooking)
   const isRequested = detail.status === 'requested'
   const reasonLength = reason.length
+
+  // Step 4d-2 — the lifecycle layout (R1–R3).
+  const arrived = arrivedCount(detail.items)
+  const partly = shownStatus(detail) === 'partly_received'
+  const lifecycle = arrived > 0 || refundStage
+  if (lifecycle) {
+    const refunds = detail.refunds ?? []
+    const activeRefunds = refunds.filter(r => !r.voided)
+    const refundable = detail.status === 'received' || detail.status === 'refund_pending'
+    const showForm = refundable && (activeRefunds.length === 0 || addingRefund)
+    const showRefunds = refunds.length > 0
+    const canClose = ['approved', 'pickup_booked', 'received', 'refund_pending'].includes(detail.status)
+    return (
+      <>
+        {header}
+        <div className="flex-1 overflow-y-auto p-6 space-y-5" data-testid="return-request-drawer-body">
+          {!showRefunds && (
+            <dl className="grid grid-cols-3 gap-x-5 gap-y-3">
+              <Field label={t('exchangesRefunds.requests.drawer.customer')}>
+                <span className="font-semibold"><bdi>{shortCustomerName(detail.customerName)}</bdi></span>
+              </Field>
+              <Field label={t('exchangesRefunds.requests.drawer.order')}>
+                <span className="font-semibold"><bdi>{detail.orderNumber}</bdi></span>
+              </Field>
+              {partly && detail.returnTrackingNumber ? (
+                <Field label={t('exchangesRefunds.requests.drawer.parcel')}>
+                  <span className="font-mono" dir="ltr"><bdi>{detail.returnTrackingNumber}</bdi></span>
+                </Field>
+              ) : detail.receivedAt ? (
+                <Field label={t('exchangesRefunds.requests.drawer.returned')}>
+                  {shortDate(i18n.language, detail.receivedAt)}
+                </Field>
+              ) : null}
+            </dl>
+          )}
+
+          {!showRefunds && <ItemsWithOutcome items={detail.items} showReason={partly || detail.status === 'received'} />}
+
+          {detail.status !== 'refunded' && detail.status !== 'closed' && <UnexpectedItems detail={detail} />}
+
+          {!showRefunds && detail.note && (
+            <section>
+              <h3 className="text-body font-semibold text-primary mb-2">{t('exchangesRefunds.requests.drawer.note')}</h3>
+              <p className="text-body text-primary whitespace-pre-wrap rounded-lg bg-elevated px-3.5 py-3" dir="auto">{detail.note}</p>
+            </section>
+          )}
+
+          <LinkParcelPrompt detail={detail} onLink={setLinking} />
+
+          {showRefunds && (
+            <RefundsList detail={detail} suggestion={suggestion} canChange={refundable} onChanged={reloadAll} />
+          )}
+          {showRefunds && refundable && !addingRefund && (
+            <button type="button" className="text-body font-semibold text-trace-blue hover:underline"
+              onClick={() => setAddingRefund(true)} data-testid="add-refund">
+              {t('exchangesRefunds.requests.refund.addAnother')}
+            </button>
+          )}
+          {showForm && (
+            <RefundForm detail={detail} suggestion={suggestion} onSaved={reloadAll}
+              onCancel={addingRefund ? () => setAddingRefund(false) : undefined} />
+          )}
+
+          {detail.status === 'closed' && detail.closeReason && (
+            <section data-testid="request-close-reason">
+              <h3 className="text-caption font-semibold text-muted uppercase tracking-wider mb-2">
+                {t('exchangesRefunds.requests.drawer.closeReason')}
+              </h3>
+              <p className="text-body text-primary">{t(`exchangesRefunds.requests.closeReasons.${detail.closeReason}`)}</p>
+              {detail.closeNote && <p className="text-body text-secondary whitespace-pre-wrap mt-1" dir="auto">{detail.closeNote}</p>}
+            </section>
+          )}
+
+          {(showRefunds || detail.status === 'refunded' || detail.status === 'closed') && <HistoryTimeline detail={detail} />}
+        </div>
+
+        {detail.status === 'refund_pending' && activeRefunds.length > 0 && (
+          <div className="px-6 py-4 border-t border-line space-y-3" data-testid="refunded-footer">
+            <p className="text-small text-secondary">{t('exchangesRefunds.requests.refund.markHint')}</p>
+            <Button className="w-full" loading={lifecycleBusy === 'refunded'} disabled={lifecycleBusy != null}
+              onClick={() => lifecycleAction('refunded')}>
+              {t('exchangesRefunds.requests.refund.markRefunded')}
+            </Button>
+          </div>
+        )}
+        {refundable && activeRefunds.length === 0 && (
+          <div className="px-6 py-4 border-t border-line flex items-center justify-between gap-3" data-testid="close-footer">
+            <p className="text-small text-secondary">{t('exchangesRefunds.requests.drawer.notRefunding')}</p>
+            <Button variant="outline" className="!border-critical/40 !text-critical hover:!bg-critical/5" onClick={() => setClosing(true)}>{t('exchangesRefunds.requests.drawer.closeWithoutRefund')}</Button>
+          </div>
+        )}
+        {partly && (
+          <div className="px-6 py-4 border-t border-line space-y-3" data-testid="partial-footer">
+            <p className="text-small text-secondary">{t('exchangesRefunds.requests.drawer.laterArrivals')}</p>
+            <div className="flex gap-3">
+              <Button variant="outline" className="flex-1" loading={lifecycleBusy === 'restNotComing'} disabled={lifecycleBusy != null}
+                onClick={() => lifecycleAction('restNotComing')}>
+                {t('exchangesRefunds.requests.drawer.restNotComing')}
+              </Button>
+              <Button variant="outline" className="flex-1 !border-critical/40 !text-critical hover:!bg-critical/5" disabled={lifecycleBusy != null} onClick={() => setClosing(true)}>
+                {t('exchangesRefunds.requests.drawer.closeRequest')}
+              </Button>
+            </div>
+          </div>
+        )}
+
+        {closing && canClose && <CloseDialog detail={detail} onClose={() => setClosing(false)} onDone={reloadAll} />}
+        {linking && (
+          <LinkParcelDialog parcel={linking} orderNumber={detail.orderNumber} preselect={detail.id}
+            onClose={() => setLinking(null)} onDone={reloadAll} />
+        )}
+      </>
+    )
+  }
+
+  const closableEarly = detail.status === 'approved' || detail.status === 'pickup_booked'
 
   return (
     <>
@@ -335,6 +515,8 @@ function DrawerContent({
           </section>
         )}
 
+        <LinkParcelPrompt detail={detail} onLink={setLinking} />
+
         {detail.decidedAt && (
           <p className="text-small text-muted" data-testid="request-decided">
             {detail.decidedByName
@@ -343,6 +525,17 @@ function DrawerContent({
           </p>
         )}
       </div>
+
+      {closableEarly && (
+        <div className="p-5 border-t border-line flex justify-end" data-testid="close-footer">
+          <Button variant="outline" className="!border-critical/40 !text-critical hover:!bg-critical/5" onClick={() => setClosing(true)}>{t('exchangesRefunds.requests.drawer.closeRequest')}</Button>
+        </div>
+      )}
+      {closing && closableEarly && <CloseDialog detail={detail} onClose={() => setClosing(false)} onDone={reloadAll} />}
+      {linking && (
+        <LinkParcelDialog parcel={linking} orderNumber={detail.orderNumber} preselect={detail.id}
+          onClose={() => setLinking(null)} onDone={reloadAll} />
+      )}
 
       {isRequested && mode === 'view' && (
         <div className="p-5 border-t border-line space-y-3" data-testid="request-footer">
@@ -396,6 +589,30 @@ function DrawerContent({
         </div>
       )}
     </>
+  )
+}
+
+/** R3 / R6 display status: "Partly received" for an approved / booked request with items back. */
+function shownStatus(detail: ReturnRequestDetail) {
+  return displayStatus(detail.status, arrivedCount(detail.items))
+}
+
+/** Step 4d-2 (R5 entry point) — a courier return on this order that no request holds yet. */
+function LinkParcelPrompt({ detail, onLink }: { detail: ReturnRequestDetail; onLink: (p: LinkableParcel) => void }) {
+  const { t } = useTranslation()
+  const parcels = detail.linkableParcels ?? []
+  if (parcels.length === 0) return null
+  return (
+    <div className="space-y-2" data-testid="link-parcel-prompt">
+      {parcels.map(p => (
+        <div key={p.shipmentId} className="rounded-lg border border-info/30 bg-info/[0.08] px-4 py-3 flex items-center gap-3">
+          <p className="text-small text-primary flex-1 min-w-0">
+            {t('exchangesRefunds.requests.link.prompt')} <span className="font-mono" dir="ltr"><bdi>AWB {p.trackingNumber}</bdi></span>
+          </p>
+          <Button size="sm" variant="outline" onClick={() => onLink(p)}>{t('exchangesRefunds.requests.link.open')}</Button>
+        </div>
+      ))}
+    </div>
   )
 }
 
