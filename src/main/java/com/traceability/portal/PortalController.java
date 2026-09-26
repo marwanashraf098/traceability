@@ -87,7 +87,12 @@ public class PortalController {
             String email = n.hasNonNull("email") ? n.get("email").asText() : null;
             String note  = n.hasNonNull("note")  ? n.get("note").asText()  : null;
             String districtId = n.hasNonNull("districtId") ? n.get("districtId").asText() : null;
-            return new PortalService.SubmitRequest(lines, email, note, districtId);
+            // Step 5b: an exchange carries mode, the wanted variant and the refund-fallback choice.
+            String mode = n.hasNonNull("mode") ? n.get("mode").asText() : null;
+            UUID replacement = n.hasNonNull("replacementVariantId")
+                ? UUID.fromString(n.get("replacementVariantId").asText()) : null;
+            Boolean fallback = n.hasNonNull("refundFallbackOk") ? n.get("refundFallbackOk").asBoolean() : null;
+            return new PortalService.SubmitRequest(lines, email, note, districtId, mode, replacement, fallback);
         } catch (Exception e) {
             return null;
         }

@@ -54,7 +54,7 @@ public class ReturnRequestService {
         String statusFilter = status == null || status.isBlank() ? null : status;
         List<Map<String, Object>> rows = jdbc.query(
             "SELECT rr.id, rr.reference, o.number AS order_number, o.customer_name, rr.status::text AS status, " +
-            "       rr.created_at, rr.booking_status, " +
+            "       rr.created_at, rr.booking_status, rr.type, " +
             "       (SELECT COUNT(*) FROM return_request_items i WHERE i.request_id = rr.id) AS item_count, " +
             "       (SELECT array_agg(DISTINCT i.reason_code ORDER BY i.reason_code) " +
             "          FROM return_request_items i WHERE i.request_id = rr.id) AS reason_codes, " +
@@ -89,6 +89,7 @@ public class ReturnRequestService {
                 java.sql.Array codes = rs.getArray("reason_codes");
                 row.put("reasonCodes", codes == null ? List.of() : Arrays.asList((String[]) codes.getArray()));
                 row.put("status", rs.getString("status"));
+                row.put("type", rs.getString("type"));
                 row.put("bookingStatus", rs.getString("booking_status"));
                 row.put("createdAt", rs.getTimestamp("created_at").toInstant().toString());
                 row.put("arrivedCount", rs.getInt("arrived_count"));
@@ -123,6 +124,7 @@ public class ReturnRequestService {
             "       rr.booking_attempted_at, rr.booking_verified_at, " +
             "       rr.received_at, rr.refund_pending_at, rr.closed_at, rr.closed_by, cu.name AS closed_by_name, " +
             "       rr.close_reason, rr.close_note, rr.link_source, rr.refunded_at, ru.name AS refunded_by_name, " +
+            "       rr.refund_fallback_ok, " +
             "       (SELECT s.tracking_number FROM shipments s WHERE s.id = rr.return_shipment_id " +
             "          AND s.tenant_id = rr.tenant_id) AS return_tracking_number, " +
             "       (SELECT s.delivered_at FROM shipments s " +
@@ -144,6 +146,8 @@ public class ReturnRequestService {
             "       pr.title AS \"productTitle\", v.title AS \"variantTitle\", pr.image_url AS \"imageUrl\", " +
             "       i.reason_code AS \"reasonCode\", i.active, i.item_status AS \"itemStatus\", " +
             "       i.arrived_at AS \"arrivedAt\", i.done_at AS \"doneAt\", " +
+            // Step 5b: the variant an exchange sends out instead.
+            "       i.replacement_variant_id AS \"replacementVariantId\", rv.title AS \"replacementVariantTitle\", " +
             // Step 4d-2: the inspection outcome of the scan attributed to this item (latest).
             "       (SELECT si.disposition FROM return_session_items si WHERE si.request_item_id = i.id " +
             "          AND si.tenant_id = i.tenant_id ORDER BY si.scanned_at DESC, si.id DESC LIMIT 1) AS \"disposition\", " +
@@ -153,6 +157,7 @@ public class ReturnRequestService {
             "JOIN pieces p    ON p.id = i.piece_id " +
             "JOIN variants v  ON v.id = i.variant_id " +
             "JOIN products pr ON pr.id = v.product_id " +
+            "LEFT JOIN variants rv ON rv.id = i.replacement_variant_id AND rv.tenant_id = i.tenant_id " +
             "WHERE i.request_id = ? AND i.tenant_id = ? " +
             "ORDER BY pr.title, v.title, p.created_at, i.id",
             id, tenantId);
@@ -200,6 +205,19 @@ public class ReturnRequestService {
         d.put("closedByName", r.get("closed_by_name"));
         d.put("closeReason", r.get("close_reason"));
         d.put("closeNote", r.get("close_note"));
+        // Step 5b: live stock of each replacement at render time (VariantStockService).
+        if (items.stream().anyMatch(it -> it.get("replacementVariantId") != null)) {
+            com.traceability.inventory.VariantStockService stockService = new com.traceability.inventory.VariantStockService(jdbc);
+            Map<UUID, com.traceability.inventory.VariantStockService.VariantStock> stock = stockService.computeAll();
+            for (Map<String, Object> it : items) {
+                Object rv = it.get("replacementVariantId");
+                if (rv == null) continue;
+                long available = stockService.forVariant(stock, (UUID) rv).available();
+                it.put("replacementAvailable", available);
+                it.put("replacementInStock", available > 0);
+            }
+        }
+        d.put("refundFallbackOk", Boolean.TRUE.equals(r.get("refund_fallback_ok")));
         d.put("items", items);
         d.put("events", requests.events(tenantId, id));
         // Step 4d-2: the same history newest first (R2 timeline), refunds, parcel, unexpected items.
@@ -235,6 +253,14 @@ public class ReturnRequestService {
     @Transactional
     public void approve(UUID id, UUID actorUserId) {
         UUID tenantId = TenantContext.require();
+        // Step 5b: an exchange is approved only while its replacement is in stock (re-checked
+        // here, never trusted from the drawer). It books no Bosta pickup in this step.
+        String type = jdbc.query("SELECT type FROM return_requests WHERE id = ? AND tenant_id = ?",
+            rs -> rs.next() ? rs.getString(1) : null, id, tenantId);
+        if ("exchange".equals(type)) {
+            approveExchange(id, tenantId, actorUserId);
+            return;
+        }
         int updated = jdbc.update(
             "UPDATE return_requests SET status = 'approved', decided_at = now(), decided_by = ? " +
             "WHERE id = ? AND tenant_id = ? AND status = 'requested'",
@@ -245,6 +271,50 @@ public class ReturnRequestService {
                 "SELECT portal_pickup_booking FROM tenants WHERE id = ?", Boolean.class, tenantId))) {
             bookingScheduler.enqueueAfterCommit(id, tenantId);
         }
+    }
+
+    public static final String REPLACEMENT_OUT_OF_STOCK = "REPLACEMENT_OUT_OF_STOCK";
+
+    private void approveExchange(UUID id, UUID tenantId, UUID actorUserId) {
+        List<Map<String, Object>> rows = jdbc.queryForList(
+            "SELECT rr.status::text AS status, i.replacement_variant_id FROM return_requests rr " +
+            "JOIN return_request_items i ON i.request_id = rr.id AND i.tenant_id = rr.tenant_id " +
+            "WHERE rr.id = ? AND rr.tenant_id = ? FOR UPDATE OF rr", id, tenantId);
+        if (rows.isEmpty() || !"requested".equals(rows.get(0).get("status"))) throw notRequested(id, tenantId);
+        UUID replacement = (UUID) rows.get(0).get("replacement_variant_id");
+        com.traceability.inventory.VariantStockService stock = new com.traceability.inventory.VariantStockService(jdbc);
+        if (replacement == null || stock.forVariant(stock.computeAll(), replacement).available() <= 0) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                REPLACEMENT_OUT_OF_STOCK + ": the replacement is out of stock.");
+        }
+        jdbc.update(
+            "UPDATE return_requests SET status = 'approved', decided_at = now(), decided_by = ? " +
+            "WHERE id = ? AND tenant_id = ? AND status = 'requested'", actorUserId, id, tenantId);
+        requests.event(tenantId, id, "approved", actorUserId, ReturnRequestLifecycle.meta("type", "exchange"));
+    }
+
+    /**
+     * Step 5b (X6) — the replacement sold out and the customer agreed to a refund instead:
+     * the exchange becomes a refund (replacement cleared), then is approved like any refund.
+     * Only a requested exchange with refund_fallback_ok. Events for both steps.
+     */
+    @Transactional
+    public void switchToRefundAndApprove(UUID id, UUID actorUserId) {
+        UUID tenantId = TenantContext.require();
+        Map<String, Object> rr = jdbc.queryForList(
+            "SELECT status::text AS status, type, refund_fallback_ok FROM return_requests " +
+            "WHERE id = ? AND tenant_id = ? FOR UPDATE", id, tenantId).stream().findFirst()
+            .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Return request not found"));
+        if (!"requested".equals(rr.get("status")) || !"exchange".equals(rr.get("type"))
+                || !Boolean.TRUE.equals(rr.get("refund_fallback_ok"))) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                "Only a requested exchange whose customer agreed to a refund can be switched.");
+        }
+        jdbc.update("UPDATE return_requests SET type = 'refund' WHERE id = ? AND tenant_id = ?", id, tenantId);
+        jdbc.update("UPDATE return_request_items SET replacement_variant_id = NULL WHERE request_id = ? AND tenant_id = ?",
+            id, tenantId);
+        requests.event(tenantId, id, "switched_to_refund", actorUserId, null);
+        approve(id, actorUserId);
     }
 
     /**

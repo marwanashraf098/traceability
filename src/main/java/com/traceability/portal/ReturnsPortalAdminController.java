@@ -88,6 +88,14 @@ public class ReturnsPortalAdminController {
         requests.approve(id, principal.userId());
     }
 
+    /** Step 5b (X6): exchange → refund (customer agreed), then approve. */
+    @PostMapping("/return-requests/{id}/switch-to-refund")
+    @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void switchToRefund(@PathVariable UUID id, @AuthenticationPrincipal CustomUserDetails principal) {
+        requests.switchToRefundAndApprove(id, principal.userId());
+    }
+
     public record RejectRequest(String reason) {}
 
     @PostMapping("/return-requests/{id}/reject")

@@ -97,6 +97,8 @@ public class ReturnPickupBookingService {
         Context c = tx.execute(s -> loadContext(requestId, tenantId));
         if (c == null) return;                                       // not this tenant's / gone
         if (c.bookingStatus != null && !"failed".equals(c.bookingStatus)) return;
+        // Step 5b: exchanges never book a CRP (type 25) — their courier trip comes in 5c.
+        if (c.exchange) return;
 
         String failure = precondition(c);
         if (failure != null) {
@@ -402,7 +404,7 @@ public class ReturnPickupBookingService {
             List<UUID> orphans = tx.execute(s -> jdbc.queryForList(
                 "SELECT rr.id FROM return_requests rr JOIN tenants t ON t.id = rr.tenant_id " +
                 "WHERE rr.tenant_id = ? AND t.portal_pickup_booking AND t.portal_pickup_booking_since IS NOT NULL " +
-                "  AND rr.status = 'approved' AND rr.booking_status IS NULL " +
+                "  AND rr.status = 'approved' AND rr.booking_status IS NULL AND rr.type = 'refund' " +
                 "  AND rr.decided_at < now() - (interval '1 second' * ?) " +
                 "  AND rr.decided_at >= t.portal_pickup_booking_since " +
                 "ORDER BY rr.decided_at, rr.id",
@@ -439,7 +441,7 @@ public class ReturnPickupBookingService {
 
     private static final class Context {
         UUID requestId; String status; String bookingStatus; String reference; String orderNumber;
-        boolean redacted; boolean bookingOn;
+        boolean redacted; boolean bookingOn; boolean exchange;
         String apiKeyEncrypted; String returnLocationId;
         String districtId; String cityName; Boolean districtAvailable;
         JsonNode drop; JsonNode receiver; String customerName; String customerPhone;
@@ -448,7 +450,7 @@ public class ReturnPickupBookingService {
 
     private Context loadContext(UUID requestId, UUID tenantId) {
         List<Map<String, Object>> rows = jdbc.queryForList(
-            "SELECT rr.status::text AS status, rr.booking_status, rr.reference, rr.order_id, rr.pickup_district_id, " +
+            "SELECT rr.status::text AS status, rr.booking_status, rr.reference, rr.order_id, rr.pickup_district_id, rr.type, " +
             "       o.number, o.customer_name, o.customer_phone, o.pii_redacted_at, t.portal_pickup_booking, " +
             "       d.city_name, d.pickup_available " +
             "FROM return_requests rr " +
@@ -461,6 +463,7 @@ public class ReturnPickupBookingService {
         Context c = new Context();
         c.requestId = requestId;
         c.status = (String) r.get("status");
+        c.exchange = "exchange".equals(r.get("type"));
         c.bookingStatus = (String) r.get("booking_status");
         c.reference = (String) r.get("reference");
         c.orderNumber = (String) r.get("number");

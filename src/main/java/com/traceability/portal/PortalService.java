@@ -68,6 +68,11 @@ public class PortalService {
     /** Step 4d-1: request history, on this service's own JdbcTemplate. */
     private final ReturnRequestLifecycle requests;
 
+    private boolean exchangesEnabled(UUID tenantId) {
+        return Boolean.TRUE.equals(jdbc.queryForObject(
+            "SELECT portal_exchanges_enabled FROM tenants WHERE id = ?", Boolean.class, tenantId));
+    }
+
     /** Hatch #14. Null for an unknown or disabled slug. */
     public UUID resolveTenant(String slug) {
         if (slug == null || slug.isBlank()) return null;
@@ -81,7 +86,8 @@ public class PortalService {
         return Optional.ofNullable(TenantContext.runAs(tenantId, () -> tx.execute(s -> {
             Map<String, Object> t = jdbc.queryForMap(
                 "SELECT name, customer_return_window_days, portal_auto_approve, " +
-                "       portal_logo_url, portal_brand_color, portal_policy_text, portal_pickup_booking " +
+                "       portal_logo_url, portal_brand_color, portal_policy_text, portal_pickup_booking, " +
+                "       portal_exchanges_enabled " +
                 "FROM tenants WHERE id = ?", tenantId);
             Map<String, Object> body = new LinkedHashMap<>();
             body.put("storeName", t.get("name"));
@@ -92,6 +98,9 @@ public class PortalService {
             body.put("policyText", t.get("portal_policy_text"));
             body.put("autoApprove", t.get("portal_auto_approve"));
             body.put("pickupBooking", t.get("portal_pickup_booking"));
+            // Step 5b: present only when the store offers exchanges (absent, not false, otherwise —
+            // stores without exchanges get exactly the pre-5b config).
+            if (Boolean.TRUE.equals(t.get("portal_exchanges_enabled"))) body.put("exchangesEnabled", true);
             return body;
         })));
     }
@@ -130,6 +139,16 @@ public class PortalService {
         UUID orderId = (UUID) order.get("id");
         List<Map<String, Object>> lines = returnableLines(tenantId, orderId);
         recordAttempt(tenantId, orderKey, true);
+        // Step 5b: when the store offers exchanges, each line also carries what it could be
+        // exchanged for (siblings of the same product, in stock or not) — absent otherwise.
+        if (exchangesEnabled(tenantId)) {
+            Map<UUID, com.traceability.inventory.VariantStockService.VariantStock> stock =
+                new com.traceability.inventory.VariantStockService(jdbc).computeAll();
+            ExchangeOptions options = new ExchangeOptions(jdbc);
+            for (Map<String, Object> line : lines) {
+                line.putAll(options.forVariant(tenantId, UUID.fromString((String) line.get("variantId")), stock));
+            }
+        }
 
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("token",       tokens.issue(tenantId, orderId));
@@ -238,11 +257,19 @@ public class PortalService {
 
     public record SubmitLine(UUID variantId, Integer quantity, String reasonCode) {}
 
-    /** districtId: the chosen pickup area — required when lookup offered one, ignored otherwise. */
-    public record SubmitRequest(List<SubmitLine> lines, String email, String note, String districtId) {
+    /**
+     * districtId: the chosen pickup area — required when lookup offered one, ignored otherwise.
+     * Step 5b: mode 'exchange' (default 'refund') with replacementVariantId and refundFallbackOk.
+     */
+    public record SubmitRequest(List<SubmitLine> lines, String email, String note, String districtId,
+                                String mode, UUID replacementVariantId, Boolean refundFallbackOk) {
+        public SubmitRequest(List<SubmitLine> lines, String email, String note, String districtId) {
+            this(lines, email, note, districtId, null, null, null);
+        }
         public SubmitRequest(List<SubmitLine> lines, String email, String note) {
             this(lines, email, note, null);
         }
+        boolean exchange() { return "exchange".equals(mode); }
     }
 
     public record SubmitResult(SubmitOutcome outcome, Map<String, Object> body) {}
@@ -310,6 +337,8 @@ public class PortalService {
             "SELECT id FROM orders WHERE id = ? AND tenant_id = ? AND pii_redacted_at IS NULL",
             orderId, tenantId);
         if (order.isEmpty() || deliveredWithinWindow(tenantId, orderId) == null) throw new InvalidSubmission();
+        if (req.mode() != null && !"refund".equals(req.mode()) && !req.exchange()) throw new InvalidSubmission();
+        UUID replacement = req.exchange() ? validExchange(tenantId, req) : null;
 
         // Bind pieces line by line (the same variant may appear on two lines with different reasons).
         Set<String> bound = new HashSet<>();
@@ -342,28 +371,33 @@ public class PortalService {
             district = offer.get().find(req.districtId()).orElseThrow(InvalidSubmission::new);
         }
 
-        boolean autoApprove = Boolean.TRUE.equals(jdbc.queryForObject(
+        // Step 5b: exchanges always wait for the merchant — auto-approve applies to refunds only.
+        boolean autoApprove = replacement == null && Boolean.TRUE.equals(jdbc.queryForObject(
             "SELECT portal_auto_approve FROM tenants WHERE id = ?", Boolean.class, tenantId));
         String reference = newReference(tenantId);
         UUID requestId = jdbc.queryForObject(
             "INSERT INTO return_requests (tenant_id, order_id, type, status, reference, customer_email, customer_note, " +
             "    decided_at, pickup_city_id, pickup_city_name, pickup_district_id, pickup_district_name, " +
-            "    pickup_district_name_ar) " +
-            "VALUES (?, ?, 'refund', ?::return_request_status, ?, ?, ?, CASE WHEN ? THEN now() END, ?, ?, ?, ?, ?) RETURNING id",
-            UUID.class, tenantId, orderId, autoApprove ? "approved" : "requested", reference, email, note, autoApprove,
+            "    pickup_district_name_ar, refund_fallback_ok) " +
+            "VALUES (?, ?, ?, ?::return_request_status, ?, ?, ?, CASE WHEN ? THEN now() END, ?, ?, ?, ?, ?, ?) RETURNING id",
+            UUID.class, tenantId, orderId, replacement == null ? "refund" : "exchange",
+            autoApprove ? "approved" : "requested", reference, email, note, autoApprove,
             district == null ? null : offer.get().cityId(),
             district == null ? null : offer.get().cityName(),
             district == null ? null : district.id(),
             district == null ? null : district.name(),
-            district == null ? null : district.nameAr());
+            district == null ? null : district.nameAr(),
+            replacement != null && Boolean.TRUE.equals(req.refundFallbackOk()));
         for (Object[] it : items) {
             jdbc.update(
-                "INSERT INTO return_request_items (tenant_id, request_id, piece_id, variant_id, reason_code) " +
-                "VALUES (?, ?, ?, ?, ?)",
-                tenantId, requestId, it[0], it[1], it[2]);
+                "INSERT INTO return_request_items (tenant_id, request_id, piece_id, variant_id, reason_code, " +
+                "    replacement_variant_id) VALUES (?, ?, ?, ?, ?, ?)",
+                tenantId, requestId, it[0], it[1], it[2], replacement);
         }
-        requests.event(tenantId, requestId, "requested", null,
-            ReturnRequestLifecycle.meta("items", items.size()));
+        requests.event(tenantId, requestId, "requested", null, replacement == null
+            ? ReturnRequestLifecycle.meta("items", items.size())
+            : ReturnRequestLifecycle.meta("items", items.size(), "type", "exchange",
+                "replacement_variant_id", replacement.toString()));
         if (autoApprove) {
             requests.event(tenantId, requestId, "approved", null, ReturnRequestLifecycle.meta("auto", true));
         }
@@ -376,6 +410,31 @@ public class PortalService {
             body.put("_bookRequestId", requestId);   // internal — removed before the response
         }
         return body;
+    }
+
+    /**
+     * Step 5b — an exchange submission: the store offers exchanges; exactly one line of
+     * quantity 1; a replacement variant that is a DIFFERENT variant of the SAME product and is in
+     * stock now (VariantStockService, recomputed here — never trusted from lookup). Returns the
+     * replacement variant id; anything else is the generic invalid-submission 400.
+     */
+    private UUID validExchange(UUID tenantId, SubmitRequest req) {
+        if (!exchangesEnabled(tenantId)) throw new InvalidSubmission();
+        if (req.lines().size() != 1) throw new InvalidSubmission();
+        SubmitLine line = req.lines().get(0);
+        UUID replacement = req.replacementVariantId();
+        if (line == null || line.variantId() == null || line.quantity() == null || line.quantity() != 1
+                || replacement == null || replacement.equals(line.variantId())) {
+            throw new InvalidSubmission();
+        }
+        Boolean sameProduct = jdbc.queryForObject(
+            "SELECT EXISTS (SELECT 1 FROM variants r JOIN variants o ON o.product_id = r.product_id " +
+            "               WHERE r.id = ? AND o.id = ? AND r.tenant_id = ? AND o.tenant_id = ?)",
+            Boolean.class, replacement, line.variantId(), tenantId, tenantId);
+        if (!Boolean.TRUE.equals(sameProduct)) throw new InvalidSubmission();
+        com.traceability.inventory.VariantStockService stock = new com.traceability.inventory.VariantStockService(jdbc);
+        if (stock.forVariant(stock.computeAll(), replacement).available() <= 0) throw new InvalidSubmission();
+        return replacement;
     }
 
     /** RR- + 6 characters from an unambiguous alphabet, unused within this tenant. */
