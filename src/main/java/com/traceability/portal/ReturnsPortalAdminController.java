@@ -14,7 +14,8 @@ import java.util.UUID;
 
 /**
  * Returns portal Step 4b — merchant endpoints (owner and manager only): return requests
- * (list / detail / approve / reject), portal settings, and the per-variant non-returnable flag.
+ * (list / detail / approve / reject; 4d-1: link-leg / rest-not-coming / close), portal
+ * settings, and the per-variant non-returnable flag.
  */
 @RestController
 @RequestMapping("/api/v1")
@@ -92,6 +93,38 @@ public class ReturnsPortalAdminController {
     public void reject(@PathVariable UUID id, @RequestBody(required = false) RejectRequest body,
                        @AuthenticationPrincipal CustomUserDetails principal) {
         requests.reject(id, body == null ? null : body.reason(), principal.userId());
+    }
+
+    // ── Step 4d-1: return request lifecycle ──────────────────────────────────
+
+    public record LinkLegRequest(UUID shipmentId) {}
+
+    /** Link a courier-return (type 25) leg of the same order to this request. */
+    @PostMapping("/return-requests/{id}/link-leg")
+    @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void linkLeg(@PathVariable UUID id, @RequestBody(required = false) LinkLegRequest body,
+                        @AuthenticationPrincipal CustomUserDetails principal) {
+        requests.linkLeg(id, body == null ? null : body.shipmentId(), principal.userId());
+    }
+
+    /** Every item still awaited → not coming; nothing ever arrived → the request closes. */
+    @PostMapping("/return-requests/{id}/rest-not-coming")
+    @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void restNotComing(@PathVariable UUID id, @AuthenticationPrincipal CustomUserDetails principal) {
+        requests.restNotComing(id, principal.userId());
+    }
+
+    public record CloseRequest(String reason, String note) {}
+
+    /** Close without a refund: reason no_refund | other, optional note (≤ 300). */
+    @PostMapping("/return-requests/{id}/close")
+    @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void close(@PathVariable UUID id, @RequestBody(required = false) CloseRequest body,
+                      @AuthenticationPrincipal CustomUserDetails principal) {
+        requests.close(id, body == null ? null : body.reason(), body == null ? null : body.note(), principal.userId());
     }
 
     public record PickupAreaRequest(String districtId) {}

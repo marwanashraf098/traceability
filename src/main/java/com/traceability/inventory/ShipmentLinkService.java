@@ -7,6 +7,7 @@ import com.traceability.integrations.bosta.BostaDelivery;
 import com.traceability.integrations.bosta.BostaGateway;
 import com.traceability.integrations.bosta.BostaStateMapper;
 import com.traceability.fulfillment.OrderStatusDeriver;
+import com.traceability.portal.ReturnRequestLifecycle;
 import com.traceability.security.EncryptionService;
 import com.traceability.tenancy.TenantContext;
 import org.slf4j.Logger;
@@ -77,7 +78,11 @@ public class ShipmentLinkService {
         this.mapper               = mapper;
         this.notTracedTagger      = notTracedTagger;
         this.exchangeMatchService = exchangeMatchService;
+        this.requests             = new ReturnRequestLifecycle(jdbc);
     }
+
+    /** Step 4d-1: return-request linking, on this service's own JdbcTemplate. */
+    private final ReturnRequestLifecycle requests;
 
     /**
      * Result returned by tryMatchDelivery().
@@ -816,6 +821,14 @@ public class ShipmentLinkService {
      *              them; they never held V43's per-order slot either).
      * Otherwise the leg has no scan evidence — never guess between legs.
      *
+     * Request rule (Step 4d-1, approved 2026-09-26), checked first: the leg has evidence when a
+     *          return_received piece event carries the request_id of the return request whose
+     *          return_shipment_id is this leg (ReturnSessionService.scanPiece writes it when the
+     *          scan was attributed to that request's item). This is exact per leg — it needs
+     *          neither an AWB scan nor timing. It only ever ADDS evidence: a leg with no
+     *          request, or whose request has no attributed scan, is decided by Rules 1–2
+     *          exactly as before.
+     *
      * Single-leg orders: Rule 2 is exactly the pre-V104 order-wide check.
      *
      * {@code sessionIdExpr}: null → evidence from any session (Rule 1: any non-abandoned
@@ -826,7 +839,15 @@ public class ShipmentLinkService {
     public static String returnLegScanEvidenceSql(String sessionIdExpr) {
         String rule1Session = sessionIdExpr == null ? "" : "AND rss_ev.session_id = " + sessionIdExpr + " ";
         String rule2Session = sessionIdExpr == null ? "" : "AND pe_ev.metadata->>'session_id' = (" + sessionIdExpr + ")::text ";
+        String requestSession = sessionIdExpr == null ? "" : "AND pe_rq.metadata->>'session_id' = (" + sessionIdExpr + ")::text ";
         return "(" +
+            // Request rule (4d-1)
+            "EXISTS (SELECT 1 FROM return_requests rr_ev " +
+            "        JOIN piece_events pe_rq ON pe_rq.tenant_id = rr_ev.tenant_id AND pe_rq.order_id = rr_ev.order_id " +
+            "                               AND pe_rq.event_type = 'return_received' " +
+            "                               AND pe_rq.metadata->>'request_id' = rr_ev.id::text " +
+            "        WHERE rr_ev.tenant_id = s.tenant_id AND rr_ev.return_shipment_id = s.id " + requestSession + ") " +
+            "OR " +
             // Rule 1
             "EXISTS (SELECT 1 FROM return_session_shipments rss_ev " +
             "        JOIN return_sessions rs_ev ON rs_ev.id = rss_ev.session_id AND rs_ev.tenant_id = rss_ev.tenant_id " +
@@ -1056,7 +1077,7 @@ public class ShipmentLinkService {
                 }
             }
             clearReconcileFlag(orderId, tenantId);
-            linkReturnRequest(tenantId, trackingNumber, existing);
+            linkReturnRequest(tenantId, orderId, trackingNumber, existing, delivery);
             return existing;
         }
 
@@ -1085,20 +1106,26 @@ public class ShipmentLinkService {
             afr.courierName(), afr.courierPhone(),
             rawJson, bostaId);
         clearReconcileFlag(orderId, tenantId);
-        linkReturnRequest(tenantId, trackingNumber, id);
+        linkReturnRequest(tenantId, orderId, trackingNumber, id, delivery);
         return id;
     }
 
     /**
      * Step 4c-3 — a return request whose Bosta booking produced this tracking number gets its
      * return_shipment_id. The booking side does the reverse (links an already-existing shipment
-     * when it saves the tracking number), so webhook-first and booking-first both converge.
+     * when it saves the tracking number), so webhook-first and booking-first both converge; the
+     * booking sweeper repairs the one interleaving where both miss (4d-1).
+     *
+     * Step 4d-1 — when no request holds this tracking number, a leg the merchant booked by hand
+     * in Bosta is matched to the order's single eligible approved request
+     * ({@link ReturnRequestLifecycle#autoMatchLeg}); the tracking-number link always wins.
      */
-    private void linkReturnRequest(UUID tenantId, String trackingNumber, UUID shipmentId) {
-        jdbc.update(
-            "UPDATE return_requests SET return_shipment_id = ? " +
-            "WHERE tenant_id = ? AND bosta_tracking_number = ? AND return_shipment_id IS NULL",
-            shipmentId, tenantId, trackingNumber);
+    private void linkReturnRequest(UUID tenantId, UUID orderId, String trackingNumber, UUID shipmentId,
+                                   BostaDelivery delivery) {
+        requests.linkByTracking(tenantId, trackingNumber, shipmentId);
+        requests.autoMatchLeg(tenantId, orderId, shipmentId, trackingNumber,
+            ReturnRequestLifecycle.parseInstant(
+                delivery != null && delivery.raw() != null ? delivery.raw().path("createdAt").asText(null) : null));
     }
 
     private void resolveUnlinked(UUID tenantId, String trackingNumber) {

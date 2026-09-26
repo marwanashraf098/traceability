@@ -62,7 +62,11 @@ public class PortalService {
         // Built on the same JdbcTemplate (not injected) so a test that constructs this service
         // on an app_user connection gets pickup-area reads on that connection too.
         this.pickupAreas = new PickupAreaService(jdbc);
+        this.requests    = new ReturnRequestLifecycle(jdbc);
     }
+
+    /** Step 4d-1: request history, on this service's own JdbcTemplate. */
+    private final ReturnRequestLifecycle requests;
 
     /** Hatch #14. Null for an unknown or disabled slug. */
     public UUID resolveTenant(String slug) {
@@ -357,6 +361,11 @@ public class PortalService {
                 "INSERT INTO return_request_items (tenant_id, request_id, piece_id, variant_id, reason_code) " +
                 "VALUES (?, ?, ?, ?, ?)",
                 tenantId, requestId, it[0], it[1], it[2]);
+        }
+        requests.event(tenantId, requestId, "requested", null,
+            ReturnRequestLifecycle.meta("items", items.size()));
+        if (autoApprove) {
+            requests.event(tenantId, requestId, "approved", null, ReturnRequestLifecycle.meta("auto", true));
         }
 
         Map<String, Object> body = new LinkedHashMap<>();

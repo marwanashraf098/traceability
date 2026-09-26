@@ -170,6 +170,7 @@ public class ExceptionService {
         all.addAll(detectReturnLegUnscanned(tenantId, returnUnscannedDays));
         all.addAll(detectReturnToReceive(tenantId));
         all.addAll(detectPickupBookingProblem(tenantId));
+        all.addAll(detectReturnLinkAmbiguous(tenantId));
 
         // Enrich with descriptions and action hints
         all.forEach(this::enrich);
@@ -321,6 +322,36 @@ public class ExceptionService {
             "      WHERE er.tenant_id = rr.tenant_id AND er.exception_type = 'pickup_booking_problem' " +
             "        AND er.subject_key = 'pickup_booking_problem:' || rr.id || ':' || " +
             "            COALESCE(floor(extract(epoch FROM rr.booking_attempted_at))::bigint::text, '0'))",
+            tid);
+    }
+
+    /**
+     * Step 4d-1 — a courier-return leg (probably booked by hand in Bosta) that no request holds
+     * and whose tracking number no request booked, while TWO OR MORE requests on its order are
+     * candidates under {@link com.traceability.portal.ReturnRequestLifecycle#linkCandidateSql}.
+     * Traced never guesses: the merchant links it (POST /return-requests/{id}/link-leg), which
+     * takes the leg out of this list. MEDIUM; subject = the leg.
+     */
+    private List<Map<String, Object>> detectReturnLinkAmbiguous(UUID tid) {
+        String cand = com.traceability.portal.ReturnRequestLifecycle.linkCandidateSql(
+            "s.tenant_id", "s.order_id", com.traceability.portal.ReturnRequestLifecycle.LEG_BOSTA_CREATED_AT_SQL);
+        return jdbc.queryForList(
+            "SELECT 'return_link_ambiguous' AS type, 'MEDIUM' AS severity, 'shipment' AS subject_type, " +
+            "       s.id AS shipment_id, s.tracking_number, o.id AS order_id, o.number AS order_number, " +
+            "       c.refs AS candidate_references, c.first_id AS request_id, " +
+            "       s.created_at AS occurred_at, 'return_link_ambiguous:shipment:' || s.id AS subject_key " +
+            "FROM shipments s " +
+            "JOIN orders o ON o.id = s.order_id AND o.tenant_id = s.tenant_id " +
+            "CROSS JOIN LATERAL (SELECT COUNT(*) AS n, " +
+            "       string_agg(rr.reference, ', ' ORDER BY rr.created_at, rr.id) AS refs, " +
+            "       (array_agg(rr.id ORDER BY rr.created_at, rr.id))[1] AS first_id " +
+            "    FROM return_requests rr WHERE " + cand + ") c " +
+            "WHERE s.tenant_id = ? AND s.shipment_leg = 'return' AND c.n >= 2 " +
+            "  AND NOT EXISTS (SELECT 1 FROM return_requests h WHERE h.tenant_id = s.tenant_id " +
+            "                  AND (h.return_shipment_id = s.id OR h.bosta_tracking_number = s.tracking_number)) " +
+            "  AND NOT EXISTS (SELECT 1 FROM exception_resolutions er " +
+            "      WHERE er.tenant_id = s.tenant_id AND er.exception_type = 'return_link_ambiguous' " +
+            "        AND er.subject_key = 'return_link_ambiguous:shipment:' || s.id)",
             tid);
     }
 
@@ -1132,6 +1163,17 @@ public class ExceptionService {
                         item.put("suggestedAction", "retry_booking");
                     }
                 }
+                item.put("actionUrl", "/exchanges?tab=requests&request=" + item.get("request_id"));
+            }
+            case "return_link_ambiguous" -> {
+                String t = str(item, "tracking_number");
+                String n = str(item, "order_number");
+                String refs = str(item, "candidate_references");
+                item.put("descriptionEn", "Return " + t + " for order " + n +
+                    " could belong to more than one return request (" + refs + ") — choose which one it is");
+                item.put("descriptionAr", "المرتجع " + t + " للطلب " + n +
+                    " قد يخص أكثر من طلب إرجاع (" + refs + ") — اختر الطلب الصحيح");
+                item.put("suggestedAction", "link_return_request");
                 item.put("actionUrl", "/exchanges?tab=requests&request=" + item.get("request_id"));
             }
             case "exchange_needs_mapping" -> {

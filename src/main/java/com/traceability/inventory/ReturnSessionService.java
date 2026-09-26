@@ -1,5 +1,6 @@
 package com.traceability.inventory;
 
+import com.traceability.portal.ReturnRequestLifecycle;
 import com.traceability.tenancy.TenantContext;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -62,6 +63,8 @@ public class ReturnSessionService {
     private final ReturnService      returnService;
     private final ShipmentLinkService shipmentLinkService;
     private final Clock              clock;
+    /** Step 4d-1: return-request attribution + lifecycle, on this service's own JdbcTemplate. */
+    private final ReturnRequestLifecycle requests;
 
     public ReturnSessionService(JdbcTemplate jdbc, InventoryLedger ledger,
                                 ReturnService returnService, ShipmentLinkService shipmentLinkService,
@@ -71,6 +74,7 @@ public class ReturnSessionService {
         this.returnService       = returnService;
         this.shipmentLinkService = shipmentLinkService;
         this.clock               = clock;
+        this.requests            = new ReturnRequestLifecycle(jdbc);
     }
 
     // ── Create / open ─────────────────────────────────────────────────────────
@@ -173,6 +177,8 @@ public class ReturnSessionService {
         String metaSuffix     = "\"session_id\":\"" + sessionId + "\"";
         boolean legal;
         boolean unexpected = false;
+        // Step 4d-1: the open return-request item this scan was attributed to (DELIVERED only).
+        ReturnRequestLifecycle.Attribution attribution = null;
 
         switch (current) {
             case RETURN_IN_TRANSIT -> {
@@ -199,6 +205,12 @@ public class ReturnSessionService {
                     "return_received", actorUserId, new TransitionContext(orderId, shipmentId, locationId, orderId, meta));
             }
             case DELIVERED -> {
+                // Step 4d-1: a piece bound to an 'awaiting' item of an open return request on
+                // this order (approved / pickup_booked / received) — or a same-variant
+                // substitute for one — is expected back regardless of the return window: the
+                // merchant approved this specific return. Anything else is never attached.
+                UUID variantId = (UUID) piece.get("variant_id");
+                attribution = requests.attributionFor(tenantId, orderId, pieceId, variantId);
                 boolean inWindow = withinReturnWindow(pieceId, tenantId);
                 // Step 3C: a matched exchange's old item is expected back regardless of the
                 // generic customer-return window — the merchant already confirmed this
@@ -213,25 +225,36 @@ public class ReturnSessionService {
                 // pieces. Return-leg courier states no longer move pieces, so this scan is
                 // the ONLY way such a piece reaches return_pending_inspection.
                 boolean crpAwaitingIntake = shipmentLinkService.hasReturnLegAwaitingIntake(orderId, tenantId);
-                if (inWindow || matchedExchangeCover || crpAwaitingIntake) {
+                if (attribution != null || inWindow || matchedExchangeCover || crpAwaitingIntake) {
                     legal = true;
                     // Label = what actually covers the piece, independent of the window
                     // (acceptance above is unchanged). Precedence:
-                    // exchange_match > crp_return > customer_after_delivery.
+                    // exchange_match > request_return > crp_return > customer_after_delivery.
                     //   exchange_match — a matched exchange on this order.
+                    //   request_return — attributed to an open return-request item (4d-1).
                     //   crp_return     — a return leg, non-terminal or awaiting intake
                     //                    (hasReturnLegAwaitingIntake covers both).
-                    //   customer_after_delivery — in window, neither of the above.
+                    //   customer_after_delivery — in window, none of the above.
                     String returnKind = shipmentLinkService.hasMatchedExchange(orderId, tenantId) ? "exchange_match"
+                        : attribution != null ? "request_return"
                         : crpAwaitingIntake ? "crp_return"
                         : "customer_after_delivery";
-                    String meta = "{\"return_kind\":\"" + returnKind + "\"," + metaSuffix + "}";
+                    String requestMeta = attribution == null ? ""
+                        : ",\"request_id\":\"" + attribution.requestId() + "\",\"request_item_id\":\"" + attribution.itemId() + "\"";
+                    String meta = "{\"return_kind\":\"" + returnKind + "\"," + metaSuffix + requestMeta + "}";
                     ledger.transition(pieceId, PieceStatus.DELIVERED, PieceStatus.RETURN_PENDING_INSPECTION,
                         "return_received", actorUserId, new TransitionContext(orderId, shipmentId, locationId, orderId, meta));
+                    if (attribution != null) {
+                        requests.markArrived(tenantId, attribution, pieceId, actorUserId, sessionId);
+                    } else {
+                        // Accepted by today's rules but part of no request item (e.g. a different
+                        // variant): noted on the order's open requests, never bound to them.
+                        requests.noteUnexpected(tenantId, orderId, pieceId, variantId, actorUserId, sessionId);
+                    }
                 } else {
                     // Outside the customer return window and no active return leg / matched
-                    // exchange / return leg awaiting intake covers it: ours, but no longer
-                    // return-eligible. Illegal-state
+                    // exchange / return leg awaiting intake / open request item covers it:
+                    // ours, but no longer return-eligible. Illegal-state
                     // fork — no transition, mismatch-only.
                     legal = false; unexpected = true;
                     log.warn("Illegal-state return scan (delivered, out of window): piece={} session={}", pieceId, sessionId);
@@ -260,9 +283,12 @@ public class ReturnSessionService {
 
         UUID itemId = UUID.randomUUID();
         jdbc.update(
-            "INSERT INTO return_session_items (id, tenant_id, session_id, piece_id, scanned_by, scan_source, unexpected) " +
-            "VALUES (?, ?, ?, ?, ?, 'barcode', ?)",
-            itemId, tenantId, sessionId, pieceId, actorUserId, unexpected);
+            "INSERT INTO return_session_items (id, tenant_id, session_id, piece_id, scanned_by, scan_source, unexpected, " +
+            "    request_item_id) " +
+            "VALUES (?, ?, ?, ?, ?, 'barcode', ?, ?)",
+            itemId, tenantId, sessionId, pieceId, actorUserId, unexpected,
+            attribution == null ? null : attribution.itemId());
+        if (attribution != null) requests.reevaluate(tenantId, attribution.requestId(), actorUserId);
 
         return itemRow(itemId, tenantId);
     }
@@ -342,6 +368,16 @@ public class ReturnSessionService {
             "UPDATE return_session_items SET disposition = ?, disposition_at = now(), disposition_by = ?, damage_reason = ? " +
             "WHERE session_id = ? AND piece_id = ? AND tenant_id = ?",
             stored, actorUserId, "damaged".equals(disposition) ? reason : null, sessionId, pieceId, tenantId);
+
+        // Step 4d-1: a FINAL disposition (restocked / damaged — never mismatch) of a scan
+        // attributed to a return-request item finishes that item and releases its piece now.
+        if (!"mismatch".equals(stored)) {
+            UUID requestItemId = jdbc.query(
+                "SELECT request_item_id FROM return_session_items WHERE session_id = ? AND piece_id = ? AND tenant_id = ?",
+                rs -> rs.next() ? rs.getObject("request_item_id", UUID.class) : null,
+                sessionId, pieceId, tenantId);
+            requests.onFinalDisposition(tenantId, requestItemId, stored, actorUserId);
+        }
 
         return fetchItemByPiece(sessionId, pieceId, tenantId);
     }
@@ -924,7 +960,7 @@ public class ReturnSessionService {
 
     private Map<String, Object> fetchPieceByScan(String scan, UUID tenantId) {
         return jdbc.query(
-            "SELECT p.id, p.status::text AS status, " +
+            "SELECT p.id, p.status::text AS status, p.variant_id, " +
             "       p.current_order_id AS order_id, s.id AS shipment_id " +
             "FROM pieces p " +
             "LEFT JOIN orders o    ON o.id = p.current_order_id AND o.tenant_id = ? " +
@@ -935,6 +971,7 @@ public class ReturnSessionService {
                 Map<String, Object> m = new LinkedHashMap<>();
                 m.put("id",         rs.getString("id"));
                 m.put("status",     rs.getString("status"));
+                m.put("variant_id", rs.getObject("variant_id", UUID.class));
                 m.put("order_id",   rs.getObject("order_id",   UUID.class));
                 m.put("shipment_id", rs.getObject("shipment_id", UUID.class));
                 return m;

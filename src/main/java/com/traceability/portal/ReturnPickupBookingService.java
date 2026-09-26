@@ -61,7 +61,8 @@ public class ReturnPickupBookingService {
     static final String AMBIGUOUS_STUCK =
         "The booking may or may not have reached Bosta — check in Bosta.";
 
-    public record SweepResult(int enqueued, int markedAmbiguous, int verifyAttempts) {}
+    /** {@code linksRepaired} (4d-1): requests whose return leg the sweeper linked by tracking number. */
+    public record SweepResult(int enqueued, int markedAmbiguous, int verifyAttempts, int linksRepaired) {}
 
     private final JdbcTemplate           jdbc;
     private final TransactionTemplate    tx;
@@ -70,6 +71,8 @@ public class ReturnPickupBookingService {
     private final EncryptionService      encryption;
     private final PickupBookingScheduler scheduler;
     private final ObjectMapper           mapper;
+    /** Step 4d-1: request history + leg linking, on this service's own JdbcTemplate. */
+    private final ReturnRequestLifecycle requests;
 
     public ReturnPickupBookingService(JdbcTemplate jdbc, PlatformTransactionManager txm, BostaV2Client bosta,
                                       BostaGateway gateway, EncryptionService encryption,
@@ -81,6 +84,7 @@ public class ReturnPickupBookingService {
         this.encryption = encryption;
         this.scheduler  = scheduler;
         this.mapper     = mapper;
+        this.requests   = new ReturnRequestLifecycle(jdbc);
     }
 
     // ── The job ───────────────────────────────────────────────────────────────
@@ -96,10 +100,15 @@ public class ReturnPickupBookingService {
 
         String failure = precondition(c);
         if (failure != null) {
-            tx.execute(s -> jdbc.update(
-                "UPDATE return_requests SET booking_status = 'failed', booking_error = ?, booking_attempted_at = now() " +
-                "WHERE id = ? AND tenant_id = ? AND (booking_status IS NULL OR booking_status = 'failed')",
-                failure, requestId, tenantId));
+            tx.execute(s -> {
+                int n = jdbc.update(
+                    "UPDATE return_requests SET booking_status = 'failed', booking_error = ?, booking_attempted_at = now() " +
+                    "WHERE id = ? AND tenant_id = ? AND (booking_status IS NULL OR booking_status = 'failed')",
+                    failure, requestId, tenantId);
+                if (n == 1) requests.event(tenantId, requestId, "booking_failed", null,
+                    ReturnRequestLifecycle.meta("error", failure));
+                return n;
+            });
             log.info("Return pickup booking request={} outcome=PRECONDITION_FAILED", requestId);
             return;
         }
@@ -120,14 +129,24 @@ public class ReturnPickupBookingService {
                     verifyInTenant(requestId, tenantId);
                 }
             }
-            case NOT_CREATED -> tx.execute(s -> jdbc.update(
-                "UPDATE return_requests SET booking_status = 'failed', booking_error = ? " +
-                "WHERE id = ? AND tenant_id = ? AND booking_status = 'pending'",
-                r.message(), requestId, tenantId));
-            case AMBIGUOUS -> tx.execute(s -> jdbc.update(
-                "UPDATE return_requests SET booking_status = 'failed_ambiguous', booking_error = ? " +
-                "WHERE id = ? AND tenant_id = ? AND booking_status = 'pending'",
-                r.message() + " Check in Bosta before retrying.", requestId, tenantId));
+            case NOT_CREATED -> tx.execute(s -> {
+                int n = jdbc.update(
+                    "UPDATE return_requests SET booking_status = 'failed', booking_error = ? " +
+                    "WHERE id = ? AND tenant_id = ? AND booking_status = 'pending'",
+                    r.message(), requestId, tenantId);
+                if (n == 1) requests.event(tenantId, requestId, "booking_failed", null,
+                    ReturnRequestLifecycle.meta("error", r.message()));
+                return n;
+            });
+            case AMBIGUOUS -> tx.execute(s -> {
+                int n = jdbc.update(
+                    "UPDATE return_requests SET booking_status = 'failed_ambiguous', booking_error = ? " +
+                    "WHERE id = ? AND tenant_id = ? AND booking_status = 'pending'",
+                    r.message() + " Check in Bosta before retrying.", requestId, tenantId);
+                if (n == 1) requests.event(tenantId, requestId, "booking_ambiguous", null,
+                    ReturnRequestLifecycle.meta("error", r.message()));
+                return n;
+            });
         }
     }
 
@@ -140,22 +159,47 @@ public class ReturnPickupBookingService {
      */
     private boolean saveBooked(UUID requestId, UUID tenantId, String deliveryId, String tracking,
                                boolean verified, String fromStatus) {
+        // Step 4d-1: a leg already held by another request (one request per leg) is never taken.
+        String legSql =
+            "(SELECT s.id FROM shipments s WHERE s.tenant_id = ? AND s.tracking_number = ? " +
+            "   AND s.shipment_leg = 'return' " +
+            "   AND NOT EXISTS (SELECT 1 FROM return_requests o WHERE o.return_shipment_id = s.id))";
         try {
-            Integer n = tx.execute(s -> jdbc.update(
-                "UPDATE return_requests SET booking_status = 'booked', booking_error = NULL, " +
-                "    bosta_delivery_id = ?, bosta_tracking_number = ?, status = 'pickup_booked', " +
-                "    booking_verified_at = CASE WHEN ? THEN now() END, " +
-                "    return_shipment_id = COALESCE(return_shipment_id, " +
-                "        (SELECT s.id FROM shipments s WHERE s.tenant_id = ? AND s.tracking_number = ? " +
-                "           AND s.shipment_leg = 'return')) " +
-                "WHERE id = ? AND tenant_id = ? AND booking_status = ?",
-                deliveryId, tracking, verified, tenantId, tracking, requestId, tenantId, fromStatus));
+            Integer n = tx.execute(s -> {
+                int updated = jdbc.update(
+                    "UPDATE return_requests SET booking_status = 'booked', booking_error = NULL, " +
+                    "    bosta_delivery_id = ?, bosta_tracking_number = ?, status = 'pickup_booked', " +
+                    "    booking_verified_at = CASE WHEN ? THEN now() END, " +
+                    "    link_source = CASE WHEN return_shipment_id IS NULL AND " + legSql + " IS NOT NULL " +
+                    "                       THEN 'traced_booking' ELSE link_source END, " +
+                    "    return_shipment_id = COALESCE(return_shipment_id, " + legSql + ") " +
+                    "WHERE id = ? AND tenant_id = ? AND booking_status = ?",
+                    deliveryId, tracking, verified, tenantId, tracking, tenantId, tracking,
+                    requestId, tenantId, fromStatus);
+                if (updated == 1) {
+                    requests.event(tenantId, requestId, "pickup_booked", null,
+                        ReturnRequestLifecycle.meta("source", "traced_booking", "tracking_number", tracking));
+                    UUID leg = jdbc.queryForObject(
+                        "SELECT return_shipment_id FROM return_requests WHERE id = ? AND tenant_id = ?",
+                        UUID.class, requestId, tenantId);
+                    if (leg != null) requests.event(tenantId, requestId, "leg_linked", null,
+                        ReturnRequestLifecycle.meta("source", "traced_booking", "shipment_id", leg.toString(),
+                            "tracking_number", tracking));
+                }
+                return updated;
+            });
             return n != null && n == 1;
         } catch (DuplicateKeyException e) {
-            tx.execute(s -> jdbc.update(
-                "UPDATE return_requests SET booking_status = 'needs_review', " +
-                "    booking_error = 'Bosta returned a tracking number that is already on another request.' " +
-                "WHERE id = ? AND tenant_id = ? AND booking_status = ?", requestId, tenantId, fromStatus));
+            tx.execute(s -> {
+                int n = jdbc.update(
+                    "UPDATE return_requests SET booking_status = 'needs_review', " +
+                    "    booking_error = 'Bosta returned a tracking number that is already on another request.' " +
+                    "WHERE id = ? AND tenant_id = ? AND booking_status = ?", requestId, tenantId, fromStatus);
+                if (n == 1) requests.event(tenantId, requestId, "booking_needs_review", null,
+                    ReturnRequestLifecycle.meta("error", "tracking number already on another request",
+                        "tracking_number", tracking));
+                return n;
+            });
             return false;
         }
     }
@@ -172,7 +216,9 @@ public class ReturnPickupBookingService {
     private void verifyInTenant(UUID requestId, UUID tenantId) {
         Map<String, Object> r = tx.execute(s -> jdbc.queryForList(
             "SELECT rr.bosta_tracking_number, rr.pickup_district_id, o.number, " +
-            "       (SELECT COUNT(*) FROM return_request_items i WHERE i.request_id = rr.id AND i.active) AS items, " +
+            // 4d-1: items that were booked — a finished (done) item is no longer active but was in the parcel.
+            "       (SELECT COUNT(*) FROM return_request_items i WHERE i.request_id = rr.id " +
+            "          AND i.item_status IN ('awaiting', 'arrived', 'done')) AS items, " +
             "       (SELECT ca.api_key_encrypted FROM courier_accounts ca WHERE ca.tenant_id = rr.tenant_id " +
             "          AND ca.provider = 'bosta' AND ca.status = 'active' LIMIT 1) AS api_key " +
             "FROM return_requests rr JOIN orders o ON o.id = rr.order_id AND o.tenant_id = rr.tenant_id " +
@@ -201,14 +247,23 @@ public class ReturnPickupBookingService {
         if (!Objects.equals(customerDistrictId(raw), r.get("pickup_district_id"))) diffs.add("district");
 
         if (diffs.isEmpty()) {
-            tx.execute(s -> jdbc.update(
-                "UPDATE return_requests SET booking_verified_at = now() " +
-                "WHERE id = ? AND tenant_id = ? AND booking_status = 'booked'", requestId, tenantId));
+            tx.execute(s -> {
+                int n = jdbc.update(
+                    "UPDATE return_requests SET booking_verified_at = now() " +
+                    "WHERE id = ? AND tenant_id = ? AND booking_status = 'booked'", requestId, tenantId);
+                if (n == 1) requests.event(tenantId, requestId, "booking_verified", null, null);
+                return n;
+            });
         } else {
             String error = "Bosta's delivery differs from the request: " + String.join(", ", diffs) + ".";
-            tx.execute(s -> jdbc.update(
-                "UPDATE return_requests SET booking_status = 'needs_review', booking_error = ? " +
-                "WHERE id = ? AND tenant_id = ? AND booking_status = 'booked'", error, requestId, tenantId));
+            tx.execute(s -> {
+                int n = jdbc.update(
+                    "UPDATE return_requests SET booking_status = 'needs_review', booking_error = ? " +
+                    "WHERE id = ? AND tenant_id = ? AND booking_status = 'booked'", error, requestId, tenantId);
+                if (n == 1) requests.event(tenantId, requestId, "booking_needs_review", null,
+                    ReturnRequestLifecycle.meta("fields", diffs));
+                return n;
+            });
         }
         log.info("Return pickup read-back request={} outcome={}", requestId, diffs.isEmpty() ? "VERIFIED" : "NEEDS_REVIEW");
     }
@@ -249,10 +304,15 @@ public class ReturnPickupBookingService {
     public void markNotBooked(UUID requestId) {
         UUID tenantId = TenantContext.require();
         requireRequest(requestId, tenantId);
-        Integer n = tx.execute(s -> jdbc.update(
-            "UPDATE return_requests SET booking_status = 'failed', " +
-            "    booking_error = 'Checked in Bosta: it was not booked.' " +
-            "WHERE id = ? AND tenant_id = ? AND booking_status = 'failed_ambiguous'", requestId, tenantId));
+        Integer n = tx.execute(s -> {
+            int updated = jdbc.update(
+                "UPDATE return_requests SET booking_status = 'failed', " +
+                "    booking_error = 'Checked in Bosta: it was not booked.' " +
+                "WHERE id = ? AND tenant_id = ? AND booking_status = 'failed_ambiguous'", requestId, tenantId);
+            if (updated == 1) requests.event(tenantId, requestId, "booking_failed", null,
+                ReturnRequestLifecycle.meta("error", "Checked in Bosta: it was not booked."));
+            return updated;
+        });
         if (n == null || n != 1) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Only a booking waiting to be checked in Bosta can be marked not booked.");
         }
@@ -334,7 +394,8 @@ public class ReturnPickupBookingService {
     /**
      * (a) approved requests with no booking yet, decided > 2 min ago and after booking was
      *     switched on → enqueue; (b) 'pending' for > 15 min → 'failed_ambiguous';
-     * (c) 'booked' but unverified → read-back again.
+     * (c) 'booked' but unverified → read-back again; (d) Step 4d-1: link return legs the
+     *     booking/webhook race left unlinked ({@link ReturnRequestLifecycle#repairTrackingLinks}).
      */
     public SweepResult sweepTenant(UUID tenantId) {
         return TenantContext.runAs(tenantId, () -> {
@@ -348,11 +409,16 @@ public class ReturnPickupBookingService {
                 UUID.class, tenantId, ORPHAN_AGE.toSeconds()));
             for (UUID id : orphans) scheduler.enqueue(id, tenantId);
 
-            Integer stuck = tx.execute(s -> jdbc.update(
-                "UPDATE return_requests SET booking_status = 'failed_ambiguous', booking_error = ? " +
-                "WHERE tenant_id = ? AND booking_status = 'pending' " +
-                "  AND booking_attempted_at < now() - (interval '1 second' * ?)",
-                AMBIGUOUS_STUCK, tenantId, STUCK_PENDING.toSeconds()));
+            Integer stuck = tx.execute(s -> {
+                List<UUID> ids = jdbc.queryForList(
+                    "UPDATE return_requests SET booking_status = 'failed_ambiguous', booking_error = ? " +
+                    "WHERE tenant_id = ? AND booking_status = 'pending' " +
+                    "  AND booking_attempted_at < now() - (interval '1 second' * ?) RETURNING id",
+                    UUID.class, AMBIGUOUS_STUCK, tenantId, STUCK_PENDING.toSeconds());
+                for (UUID id : ids) requests.event(tenantId, id, "booking_ambiguous", null,
+                    ReturnRequestLifecycle.meta("error", AMBIGUOUS_STUCK));
+                return ids.size();
+            });
 
             List<UUID> unverified = tx.execute(s -> jdbc.queryForList(
                 "SELECT id FROM return_requests WHERE tenant_id = ? AND booking_status = 'booked' " +
@@ -360,7 +426,12 @@ public class ReturnPickupBookingService {
                 UUID.class, tenantId));
             for (UUID id : unverified) verifyInTenant(id, tenantId);
 
-            return new SweepResult(orphans.size(), stuck == null ? 0 : stuck, unverified.size());
+            // (d) Step 4d-1: repair the booking/webhook race — a booked request whose return leg
+            // exists but whose return_shipment_id is still NULL gets it.
+            Integer repaired = tx.execute(s -> requests.repairTrackingLinks(tenantId));
+
+            return new SweepResult(orphans.size(), stuck == null ? 0 : stuck, unverified.size(),
+                repaired == null ? 0 : repaired);
         });
     }
 

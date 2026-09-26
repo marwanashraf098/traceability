@@ -14,17 +14,22 @@ import java.util.*;
  * approve, reject. Tenant-scoped by TenantContext (request filter) + RLS, with explicit
  * tenant_id filters as defence in depth. No pieces move here; a rejected request only
  * deactivates its items so those pieces are returnable again.
+ *
+ * Step 4d-1: after approval the lifecycle (leg linking, rest-not-coming, close, request
+ * history) is {@link ReturnRequestLifecycle}'s; this service only exposes it.
  */
 @Service
 public class ReturnRequestService {
 
     static final int REASON_MAX = 300;
     private static final Set<String> STATUSES = Set.of(
-        "requested", "approved", "rejected", "pickup_booked", "received", "refund_pending", "refunded", "cancelled");
+        "requested", "approved", "rejected", "pickup_booked", "received", "refund_pending", "refunded", "cancelled",
+        "closed");
 
     private final JdbcTemplate           jdbc;
     private final PickupAreaService      pickupAreas;
     private final PickupBookingScheduler bookingScheduler;
+    private final ReturnRequestLifecycle requests;
 
     /** Without a scheduler (tests on an app_user connection): approving never enqueues a booking. */
     public ReturnRequestService(JdbcTemplate jdbc) {
@@ -37,6 +42,7 @@ public class ReturnRequestService {
         // Same JdbcTemplate (not injected), so an app_user-constructed instance reads on it too.
         this.pickupAreas      = new PickupAreaService(jdbc);
         this.bookingScheduler = bookingScheduler;
+        this.requests         = new ReturnRequestLifecycle(jdbc);
     }
 
     @Transactional(readOnly = true)
@@ -90,6 +96,8 @@ public class ReturnRequestService {
             "       rr.pickup_city_id, rr.pickup_city_name, rr.pickup_district_id, rr.pickup_district_name, " +
             "       rr.pickup_district_name_ar, rr.booking_status, rr.booking_error, rr.bosta_tracking_number, " +
             "       rr.booking_attempted_at, rr.booking_verified_at, " +
+            "       rr.received_at, rr.refund_pending_at, rr.closed_at, rr.closed_by, cu.name AS closed_by_name, " +
+            "       rr.close_reason, rr.close_note, rr.link_source, " +
             "       (SELECT s.delivered_at FROM shipments s " +
             "         WHERE s.order_id = rr.order_id AND s.tenant_id = rr.tenant_id " +
             "           AND s.shipment_leg = 'forward' AND s.delivered_at IS NOT NULL " +
@@ -97,6 +105,7 @@ public class ReturnRequestService {
             "FROM return_requests rr " +
             "JOIN orders o ON o.id = rr.order_id AND o.tenant_id = rr.tenant_id " +
             "LEFT JOIN users u ON u.id = rr.decided_by " +
+            "LEFT JOIN users cu ON cu.id = rr.closed_by " +
             "WHERE rr.id = ? AND rr.tenant_id = ?",
             id, tenantId);
         if (rows.isEmpty()) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Return request not found");
@@ -105,7 +114,8 @@ public class ReturnRequestService {
         List<Map<String, Object>> items = jdbc.queryForList(
             "SELECT i.id, i.piece_id AS \"pieceId\", p.short_code AS \"shortCode\", i.variant_id AS \"variantId\", " +
             "       pr.title AS \"productTitle\", v.title AS \"variantTitle\", pr.image_url AS \"imageUrl\", " +
-            "       i.reason_code AS \"reasonCode\", i.active " +
+            "       i.reason_code AS \"reasonCode\", i.active, i.item_status AS \"itemStatus\", " +
+            "       i.arrived_at AS \"arrivedAt\", i.done_at AS \"doneAt\" " +
             "FROM return_request_items i " +
             "JOIN pieces p    ON p.id = i.piece_id " +
             "JOIN variants v  ON v.id = i.variant_id " +
@@ -148,7 +158,17 @@ public class ReturnRequestService {
         d.put("decidedByName", r.get("decided_by_name"));
         d.put("rejectionReason", r.get("rejection_reason"));
         d.put("returnShipmentId", r.get("return_shipment_id"));
+        // Step 4d-1: lifecycle, close outcome, how the return leg was linked, history.
+        d.put("linkSource", r.get("link_source"));
+        d.put("receivedAt", r.get("received_at"));
+        d.put("refundPendingAt", r.get("refund_pending_at"));
+        d.put("closedAt", r.get("closed_at"));
+        d.put("closedBy", r.get("closed_by"));
+        d.put("closedByName", r.get("closed_by_name"));
+        d.put("closeReason", r.get("close_reason"));
+        d.put("closeNote", r.get("close_note"));
         d.put("items", items);
+        d.put("events", requests.events(tenantId, id));
         return d;
     }
 
@@ -165,6 +185,7 @@ public class ReturnRequestService {
             "WHERE id = ? AND tenant_id = ? AND status = 'requested'",
             actorUserId, id, tenantId);
         if (updated != 1) throw notRequested(id, tenantId);
+        requests.event(tenantId, id, "approved", actorUserId, null);
         if (bookingScheduler != null && Boolean.TRUE.equals(jdbc.queryForObject(
                 "SELECT portal_pickup_booking FROM tenants WHERE id = ?", Boolean.class, tenantId))) {
             bookingScheduler.enqueueAfterCommit(id, tenantId);
@@ -188,8 +209,29 @@ public class ReturnRequestService {
             "WHERE id = ? AND tenant_id = ? AND status = 'requested'",
             actorUserId, r, id, tenantId);
         if (updated != 1) throw notRequested(id, tenantId);
-        jdbc.update("UPDATE return_request_items SET active = false WHERE request_id = ? AND tenant_id = ?",
-            id, tenantId);
+        // 4d-1: items → not_coming (active false — V108 keeps the two in step).
+        requests.releaseAllOnReject(tenantId, id);
+        requests.event(tenantId, id, "rejected", actorUserId, ReturnRequestLifecycle.meta("reason", r));
+    }
+
+    // ── Step 4d-1: lifecycle actions (owner / manager) ───────────────────────
+
+    /** POST /return-requests/{id}/link-leg {shipmentId}. */
+    @Transactional
+    public void linkLeg(UUID id, UUID shipmentId, UUID actorUserId) {
+        requests.linkLegByMerchant(TenantContext.require(), id, shipmentId, actorUserId);
+    }
+
+    /** POST /return-requests/{id}/rest-not-coming. */
+    @Transactional
+    public void restNotComing(UUID id, UUID actorUserId) {
+        requests.restNotComing(TenantContext.require(), id, actorUserId);
+    }
+
+    /** POST /return-requests/{id}/close {reason, note}. */
+    @Transactional
+    public void close(UUID id, String reason, String note, UUID actorUserId) {
+        requests.close(TenantContext.require(), id, reason, note, actorUserId);
     }
 
     // ── Step 4c-2: pickup area ───────────────────────────────────────────────
