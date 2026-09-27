@@ -534,8 +534,13 @@ public class ShipmentLinkService {
                 //   intake scan means "not scanned yet", not "resolved".
                 // Step 5: a parcel marked received from an order Traced never tracked is its
                 // own state — received, but no pieces were inspected or restocked.
-                String inspectionState = "received_untracked".equals(rs.getString("return_intake_outcome"))
+                // Step 6b: intake completed by the linked request's items (per-item Arrived) — received,
+                // whatever Bosta says yet; still "needs_inspection" while a scanned piece awaits a decision.
+                String intakeOutcome = rs.getString("return_intake_outcome");
+                String inspectionState = "received_untracked".equals(intakeOutcome)
                         ? "received_untracked"
+                    : "request_items_arrived".equals(intakeOutcome)
+                        ? (rs.getInt("pending_inspection_count") > 0 ? "needs_inspection" : "resolved")
                     : !"returned".equals(internalState) ? "in_transit"
                     : rs.getTimestamp("return_intake_completed_at") == null ? "needs_inspection"
                     : rs.getInt("pending_inspection_count") > 0 ? "needs_inspection" : "resolved";
