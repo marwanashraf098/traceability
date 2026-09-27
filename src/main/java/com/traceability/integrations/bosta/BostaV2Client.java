@@ -100,8 +100,22 @@ public class BostaV2Client {
         AMBIGUOUS
     }
 
+    /**
+     * {@code bostaErrorCode}: Bosta's own errorCode from a non-2xx body, when it sent one (for the
+     * WARN log only — never the body itself).
+     */
     public record CreateResult(CreateOutcome outcome, String deliveryId, String trackingNumber,
-                               int httpStatus, String message) {}
+                               int httpStatus, String message, String bostaErrorCode) {
+        public CreateResult(CreateOutcome outcome, String deliveryId, String trackingNumber, int httpStatus, String message) {
+            this(outcome, deliveryId, trackingNumber, httpStatus, message, null);
+        }
+    }
+
+    /** At most this much of Bosta's error fields is recorded in booking_error. */
+    static final int BOSTA_ERROR_MAX = 300;
+    /** A non-JSON body snippet is recorded only when short and free of long digit runs (phone numbers). */
+    static final int NON_JSON_SNIPPET_MAX = 120;
+    private static final java.util.regex.Pattern LONG_DIGITS = java.util.regex.Pattern.compile("\\d{7,}");
 
     private static final Logger log = LoggerFactory.getLogger(BostaV2Client.class);
 
@@ -140,6 +154,7 @@ public class BostaV2Client {
         CreateResult result = postCreate(apiKey, returnPickupPayload(mapper, p).toString());
         log.info("Bosta createReturnPickup request={} outcome={} status={}",
             p.uniqueBusinessReference(), result.outcome(), result.httpStatus());
+        warnIfRejected("createReturnPickup", p.uniqueBusinessReference(), result);
         return result;
     }
 
@@ -151,7 +166,15 @@ public class BostaV2Client {
         CreateResult result = postCreate(apiKey, exchangePayload(mapper, e).toString());
         log.info("Bosta createExchange request={} outcome={} status={}",
             e.uniqueBusinessReference(), result.outcome(), result.httpStatus());
+        warnIfRejected("createExchange", e.uniqueBusinessReference(), result);
         return result;
+    }
+
+    /** Non-2xx answer: request id, HTTP status and Bosta's errorCode only — never the payload or body. */
+    private static void warnIfRejected(String call, String requestId, CreateResult r) {
+        if (r.httpStatus() > 0 && (r.httpStatus() < 200 || r.httpStatus() >= 300)) {
+            log.warn("Bosta {} rejected request={} status={} errorCode={}", call, requestId, r.httpStatus(), r.bostaErrorCode());
+        }
     }
 
     /** The one-attempt create transport shared by both builders. Never logs the body. */
@@ -165,7 +188,10 @@ public class BostaV2Client {
                 .body(json.getBytes(StandardCharsets.UTF_8))
                 .exchange((req, resp) -> {
                     int status = resp.getStatusCode().value();
-                    byte[] raw = resp.getBody().readAllBytes();
+                    // A status arrived: an unreadable / missing body (e.g. an empty 5xx, which the JDK
+                    // client can't open) is an empty body, never "no answer".
+                    byte[] raw;
+                    try { raw = resp.getBody().readAllBytes(); } catch (java.io.IOException e) { raw = new byte[0]; }
                     return interpret(status, raw);
                 });
         } catch (ResourceAccessException e) {
@@ -194,17 +220,71 @@ public class BostaV2Client {
             }
             return new CreateResult(CreateOutcome.CREATED, text(data, "_id"), tracking, status, null);
         }
+        // Any non-2xx: Bosta's own error fields (message, errorCode, validation messages — nothing
+        // else from the body) go into the message, so booking_error says why. Outcome mapping
+        // unchanged: 429 / other 4xx → NOT_CREATED, 5xx → AMBIGUOUS (never re-sent).
+        BostaError err = bostaError(body, raw);
         if (status == 429) {
             return new CreateResult(CreateOutcome.NOT_CREATED, null, null, status,
-                "Bosta is rate-limiting requests. Try again in a few minutes.");
+                "Bosta is rate-limiting requests. Try again in a few minutes." + err.suffix(false), err.code());
         }
         if (status >= 400 && status < 500) {
-            String msg = body == null ? null : text(body, "message");
+            String base = err.message() != null ? err.message() : "Bosta rejected the request (HTTP " + status + ").";
             return new CreateResult(CreateOutcome.NOT_CREATED, null, null, status,
-                msg != null ? truncate(msg, 300) : "Bosta rejected the request (HTTP " + status + ").");
+                truncate(base, BOSTA_ERROR_MAX) + err.suffix(err.message() != null), err.code());
         }
         return new CreateResult(CreateOutcome.AMBIGUOUS, null, null, status,
-            "Bosta answered with a server error (HTTP " + status + ").");
+            "Bosta answered with a server error (HTTP " + status + ")." + err.suffix(false), err.code());
+    }
+
+    /**
+     * Bosta's error fields from a non-2xx body. {@code message}, {@code errorCode} and validation
+     * messages (errors[] / details[] / validationErrors[] items' message or msg, or the string
+     * itself; a string {@code error}) — nothing else. Not JSON → "non-JSON body", plus its first
+     * 120 characters only when they hold no run of 7+ digits (a phone number could hide there).
+     */
+    record BostaError(String message, String code, List<String> validation, String nonJson) {
+        /** " Bosta said: …" (or, when the base already is Bosta's message, just its code / validation), ≤ 300 chars. */
+        String suffix(boolean messageAlreadyShown) {
+            List<String> parts = new ArrayList<>();
+            if (nonJson != null) parts.add(nonJson);
+            if (!messageAlreadyShown && message != null) parts.add(message);
+            parts.addAll(validation);
+            String codePart = code == null ? "" : " (Bosta error " + code + ")";
+            if (parts.isEmpty() && codePart.isEmpty()) return "";
+            String detail = truncate(String.join("; ", parts) + codePart, BOSTA_ERROR_MAX).trim();
+            return parts.isEmpty() ? " " + detail : " Bosta said: " + detail;
+        }
+    }
+
+    static BostaError bostaError(JsonNode body, byte[] raw) {
+        if (body == null || !body.isObject()) {
+            String text = raw == null ? "" : new String(raw, StandardCharsets.UTF_8).replaceAll("\\s+", " ").trim();
+            String snippet = text.length() > NON_JSON_SNIPPET_MAX ? text.substring(0, NON_JSON_SNIPPET_MAX) : text;
+            String nonJson = snippet.isEmpty() || LONG_DIGITS.matcher(snippet).find()
+                ? "non-JSON body" : "non-JSON body: " + snippet;
+            return new BostaError(null, null, List.of(), nonJson);
+        }
+        String message = text(body, "message");
+        JsonNode codeNode = body.path("errorCode");
+        String code = codeNode.isMissingNode() || codeNode.isNull() || codeNode.asText().isBlank() ? null : codeNode.asText().trim();
+        List<String> validation = new ArrayList<>();
+        for (String field : List.of("errors", "details", "validationErrors")) {
+            JsonNode v = body.path(field);
+            if (v.isArray()) {
+                for (JsonNode e : v) {
+                    String m = e.isTextual() ? e.asText() : e.hasNonNull("message") ? e.get("message").asText()
+                        : e.hasNonNull("msg") ? e.get("msg").asText() : null;
+                    if (m != null && !m.isBlank()) validation.add(m.trim());
+                }
+            } else if (v.isTextual() && !v.asText().isBlank()) {
+                validation.add(v.asText().trim());
+            }
+        }
+        JsonNode error = body.path("error");
+        if (error.isTextual() && !error.asText().isBlank()) validation.add(error.asText().trim());
+        validation.remove(message);
+        return new BostaError(message, code, validation, null);
     }
 
     /**

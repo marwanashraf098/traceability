@@ -361,7 +361,7 @@ class ReturnPickupBookingTest {
         Req r1 = approvedRequest(a, "#4001", 1);
         booking.book(r1.id(), a.id());
         assertThat(row(r1.id())).containsEntry("booking_status", "failed")
-            .containsEntry("booking_error", "Invalid district for the given city");
+            .containsEntry("booking_error", "Invalid district for the given city (Bosta error 3004)");
 
         CREATE.set(Create.RATE_LIMITED);
         Req r2 = approvedRequest(a, "#4002", 1);
