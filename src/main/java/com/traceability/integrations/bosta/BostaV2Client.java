@@ -40,7 +40,9 @@ import java.util.List;
  *
  * Step 4c-3 — the ONE Bosta write this class makes, under MODE B AMENDMENT #2:
  *   POST /api/v2/deliveries?apiVersion=1 — create a type 25 CUSTOMER_RETURN_PICKUP, from an
- *       approved return request, with the tenant's raw key. {@link #createReturnPickup}.
+ *       approved return request, with the tenant's raw key. {@link #createReturnPickup}. The
+ *       customer's address is sent as pickupAddress (evidence: RR-B4BUBE, 2026-09-28).
+ *       A type 30 exchange keeps the customer on dropOffAddress.
  *       Exactly ONE HTTP attempt: no retry decorator, no internal retry, its own timeouts
  *       (connect 5 s, read 20 s). A duplicate POST would book a second courier, so anything
  *       that might have reached Bosta is reported AMBIGUOUS and never re-sent automatically.
@@ -288,15 +290,18 @@ public class BostaV2Client {
     }
 
     /**
-     * The exact type 25 create body. Customer on dropOffAddress (the spec's contract — Bosta
-     * stores it as pickupAddress on a CRP). Never pickupAddress, returnAddress,
+     * The exact type 25 create body. The CUSTOMER's address is sent as pickupAddress — that is
+     * where Bosta keeps it on a CRP (every dashboard-made CRP stores the customer in pickupAddress
+     * and the merchant in dropOffAddress), and sending it as dropOffAddress made Bosta fail with
+     * HTTP 500 "Cannot read properties of undefined (reading 'city')" (RR-B4BUBE, 2026-09-28).
+     * The merchant side comes from businessLocationId. Never dropOffAddress, returnAddress,
      * allowToOpenPackage or webhookUrl.
      */
     public static ObjectNode returnPickupPayload(ObjectMapper mapper, ReturnPickup p) {
         ObjectNode b = mapper.createObjectNode();
         b.put("type", 25);
         b.put("cod", 0);
-        ObjectNode drop = b.putObject("dropOffAddress");
+        ObjectNode drop = b.putObject("pickupAddress");
         drop.put("firstLine", p.firstLine());
         putIfPresent(drop, "secondLine", p.secondLine());
         putIfPresent(drop, "buildingNumber", p.buildingNumber());

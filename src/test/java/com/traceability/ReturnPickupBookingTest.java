@@ -147,7 +147,7 @@ class ReturnPickupBookingTest {
         try (OutputStream os = ex.getResponseBody()) { os.write(out); }
     }
 
-    /** What Bosta stores for a CRP created from {@code body}: customer moved to pickupAddress. */
+    /** What Bosta stores for a CRP created from {@code body}: the customer (sent as pickupAddress) on pickupAddress. */
     static ObjectNode rearranged(JsonNode body, String tn) {
         ObjectNode d = M.createObjectNode();
         d.put("_id", "del-" + tn);
@@ -158,8 +158,8 @@ class ReturnPickupBookingTest {
         d.put("cod", body.path("cod").asInt());
         d.set("returnSpecs", body.path("returnSpecs").deepCopy());
         ObjectNode pickup = d.putObject("pickupAddress");
-        pickup.put("firstLine", body.path("dropOffAddress").path("firstLine").asText());
-        pickup.putObject("district").put("_id", body.path("dropOffAddress").path("districtId").asText()).put("name", "Nasr City");
+        pickup.put("firstLine", body.path("pickupAddress").path("firstLine").asText());
+        pickup.putObject("district").put("_id", body.path("pickupAddress").path("districtId").asText()).put("name", "Nasr City");
         ObjectNode drop = d.putObject("dropOffAddress");
         drop.put("firstLine", "Merchant warehouse street");
         drop.putObject("district").put("_id", "MERCHANT-DISTRICT").put("name", "Maadi");
@@ -267,19 +267,19 @@ class ReturnPickupBookingTest {
         assertThat(POSTS).hasSize(1);
         assertThat(POST_AUTH).containsExactly(KEY_A);
         JsonNode p = POSTS.get(0);
-        assertThat(fieldNames(p)).containsExactlyInAnyOrder("type", "cod", "dropOffAddress", "businessLocationId",
+        assertThat(fieldNames(p)).containsExactlyInAnyOrder("type", "cod", "pickupAddress", "businessLocationId",
             "receiver", "businessReference", "uniqueBusinessReference", "returnSpecs", "returnNotes");
         assertThat(p.path("type").asInt()).isEqualTo(25);
         assertThat(p.path("cod").isInt() && p.path("cod").asInt() == 0).isTrue();
-        assertThat(fieldNames(p.path("dropOffAddress"))).containsExactlyInAnyOrder(
+        assertThat(fieldNames(p.path("pickupAddress"))).containsExactlyInAnyOrder(
             "firstLine", "secondLine", "buildingNumber", "floor", "apartment", "city", "districtId");
-        assertThat(p.path("dropOffAddress").path("firstLine").asText()).isEqualTo("12 Placeholder Street, Block 4");
-        assertThat(p.path("dropOffAddress").path("secondLine").asText()).isEqualTo("Near the pharmacy");
-        assertThat(p.path("dropOffAddress").path("buildingNumber").asText()).isEqualTo("12");
-        assertThat(p.path("dropOffAddress").path("floor").asText()).isEqualTo("3");
-        assertThat(p.path("dropOffAddress").path("apartment").asText()).isEqualTo("7");
-        assertThat(p.path("dropOffAddress").path("city").asText()).isEqualTo("Cairo");
-        assertThat(p.path("dropOffAddress").path("districtId").asText()).isEqualTo(NASR);
+        assertThat(p.path("pickupAddress").path("firstLine").asText()).isEqualTo("12 Placeholder Street, Block 4");
+        assertThat(p.path("pickupAddress").path("secondLine").asText()).isEqualTo("Near the pharmacy");
+        assertThat(p.path("pickupAddress").path("buildingNumber").asText()).isEqualTo("12");
+        assertThat(p.path("pickupAddress").path("floor").asText()).isEqualTo("3");
+        assertThat(p.path("pickupAddress").path("apartment").asText()).isEqualTo("7");
+        assertThat(p.path("pickupAddress").path("city").asText()).isEqualTo("Cairo");
+        assertThat(p.path("pickupAddress").path("districtId").asText()).isEqualTo(NASR);
         assertThat(p.path("businessLocationId").asText()).isEqualTo("loc-snouts-4c3");
         assertThat(fieldNames(p.path("receiver"))).containsExactlyInAnyOrder("firstName", "lastName", "phone");
         assertThat(p.path("receiver").path("firstName").asText()).isEqualTo("Mona");
@@ -292,7 +292,7 @@ class ReturnPickupBookingTest {
         assertThat(p.path("returnSpecs").path("packageDetails").path("description").asText())
             .isEqualTo(r.reference() + ": Linen Shirt / Sand · M × 2");
         assertThat(p.path("returnNotes").asText()).isEqualTo("Traced return request " + r.reference());
-        for (String forbidden : List.of("pickupAddress", "returnAddress", "allowToOpenPackage", "webhookUrl", "specs")) {
+        for (String forbidden : List.of("dropOffAddress", "returnAddress", "allowToOpenPackage", "webhookUrl", "specs")) {
             assertThat(p.has(forbidden)).as(forbidden).isFalse();
         }
 
