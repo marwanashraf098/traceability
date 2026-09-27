@@ -23,10 +23,12 @@ const PACKED_ORDER = ['packed', 'awaiting_pickup', 'with_courier', 'delivered']
 const LEFT_SHIPMENT = ['with_courier', 'delivered', 'returning', 'returned', 'exception', 'lost']
 
 export default function ExchangeProgressView({
-  detail, onReload,
+  detail, onReload, onBookingStarted,
 }: {
   detail: ReturnRequestDetail
   onReload: () => Promise<void>
+  /** The drawer's "Booking…" refresh, started after Book now / Retry / confirm. */
+  onBookingStarted?: () => void
 }) {
   const { t, i18n } = useTranslation()
   const { toast } = useToast()
@@ -69,14 +71,17 @@ export default function ExchangeProgressView({
 
   async function bookNow() {
     setBooking(true)
+    let started = false
     try {
       await bookExchangeNow(detail.id)
       toast({ tone: 'success', message: t('exchangesRefunds.requests.exchange.progress.bookNowDone') })
+      started = onBookingStarted != null
+      onBookingStarted?.()
     } catch {
       toast({ tone: 'error', message: t('exchangesRefunds.requests.drawer.actionFailed') })
     } finally {
       setBooking(false)
-      await onReload()
+      if (!started) await onReload()
     }
   }
 
@@ -141,8 +146,8 @@ export default function ExchangeProgressView({
           <section className="text-body" data-testid="exchange-booking">
             <h3 className="text-body font-semibold text-primary mb-1.5">{t('exchangesRefunds.requests.exchange.progress.bookingLabel')}</h3>
             {detail.bookingStatus === 'pending'
-              ? <p className="text-secondary">{t('exchangesRefunds.requests.drawer.bookingPending')}</p>
-              : <BookingState detail={detail} onChanged={onReload} />}
+              ? <p className="text-secondary" data-testid="booking-pending">{t('exchangesRefunds.requests.drawer.bookingPending')}</p>
+              : <BookingState detail={detail} onChanged={onReload} onBookingStarted={onBookingStarted} />}
           </section>
         )}
 

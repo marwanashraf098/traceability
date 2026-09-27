@@ -1,4 +1,4 @@
-import { ReactNode, useCallback, useEffect, useState } from 'react'
+import { ReactNode, useCallback, useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { X } from 'lucide-react'
 import {
@@ -168,6 +168,41 @@ function DrawerContent({
     onChanged()
   }, [load, onChanged])
 
+  // After Retry / Book now / "It wasn't booked — retry" / confirm-by-tracking: show "Booking…" at
+  // once, then refresh the request (now, then every 2 s, up to ~30 s) until the booking settles —
+  // no longer 'pending' AND either a new attempt was recorded (booking_attempted_at moved; a
+  // retry's first refresh can still show the old 'failed' before the job claims it) or it is
+  // booked / needs review. The Requests list is refreshed at the start and when it settles.
+  // Stops when the drawer closes (unmount) or another request opens.
+  const pollToken = useRef(0)
+  useEffect(() => () => { pollToken.current++ }, [requestId])
+  const startBookingPoll = useCallback(() => {
+    const token = ++pollToken.current
+    const before = detail?.bookingAttemptedAt ?? null
+    setDetail(d => (d ? { ...d, bookingStatus: 'pending', bookingError: null, bookNowAvailable: false } : d))
+    onChanged()
+    let attempts = 0
+    const tick = async () => {
+      if (pollToken.current !== token) return
+      attempts++
+      let d: ReturnRequestDetail | null = null
+      try { d = await getReturnRequest(requestId) } catch { /* try again on the next tick */ }
+      if (pollToken.current !== token) return
+      const settled = d != null && d.bookingStatus !== 'pending'
+        && ((d.bookingAttemptedAt ?? null) !== before || d.bookingStatus === 'booked' || d.bookingStatus === 'needs_review')
+      if (d && (settled || attempts >= BOOKING_POLL_MAX)) {
+        setDetail(d)
+        onLoaded(d)
+      }
+      if (settled || attempts >= BOOKING_POLL_MAX) {
+        onChanged()
+        return
+      }
+      setTimeout(tick, BOOKING_POLL_MS)
+    }
+    void tick()
+  }, [detail?.bookingAttemptedAt, requestId, onChanged, onLoaded])
+
   async function lifecycleAction(kind: 'refunded' | 'restNotComing') {
     setLifecycleBusy(kind)
     try {
@@ -326,7 +361,8 @@ function DrawerContent({
     return (
       <>
         {header}
-        <ExchangeProgressView detail={detail} onReload={async () => { await load(); onChanged() }} />
+        <ExchangeProgressView detail={detail} onReload={async () => { await load(); onChanged() }}
+          onBookingStarted={startBookingPoll} />
       </>
     )
   }
@@ -509,7 +545,8 @@ function DrawerContent({
             <div className="col-span-2 min-w-0" data-testid="booking-row">
               <dt className="text-caption text-muted mb-0.5">{t('exchangesRefunds.requests.drawer.bookingLabel')}</dt>
               <dd className="text-body text-primary">
-                <BookingState detail={detail} onChanged={async () => { await load(); onChanged() }} />
+                <BookingState detail={detail} onChanged={async () => { await load(); onChanged() }}
+                  onBookingStarted={startBookingPoll} />
               </dd>
             </div>
           )}
@@ -665,7 +702,16 @@ function LinkParcelPrompt({ detail, onLink }: { detail: ReturnRequestDetail; onL
 }
 
 /** Step 4c-3 — the booking row's state and actions (Step 5c: also the exchange trip's). */
-export function BookingState({ detail, onChanged }: { detail: ReturnRequestDetail; onChanged: () => Promise<void> }) {
+/** Booking refresh after a booking action: every 2 s, at most 15 refreshes (~30 s). */
+const BOOKING_POLL_MS = 2000
+const BOOKING_POLL_MAX = 15
+
+export function BookingState({ detail, onChanged, onBookingStarted }: {
+  detail: ReturnRequestDetail
+  onChanged: () => Promise<void>
+  /** When given, a successful booking action hands over to the drawer's "Booking…" refresh instead of one reload. */
+  onBookingStarted?: () => void
+}) {
   const { t } = useTranslation()
   const { toast } = useToast()
   const [busy, setBusy] = useState<'retry' | 'notBooked' | 'confirm' | null>(null)
@@ -680,7 +726,8 @@ export function BookingState({ detail, onChanged }: { detail: ReturnRequestDetai
       if (kind === 'retry') await retryBooking(detail.id)
       else await markBookingNotBooked(detail.id)
       toast({ tone: 'success', message: t('exchangesRefunds.requests.drawer.bookingRetried') })
-      await onChanged()
+      if (onBookingStarted) onBookingStarted()
+      else await onChanged()
     } catch {
       toast({ tone: 'error', message: t('exchangesRefunds.requests.drawer.bookingActionFailed') })
     } finally {
@@ -697,7 +744,8 @@ export function BookingState({ detail, onChanged }: { detail: ReturnRequestDetai
       await confirmBooking(detail.id, tn)
       toast({ tone: 'success', message: t('exchangesRefunds.requests.drawer.bookingConfirmed') })
       setEntering(false)
-      await onChanged()
+      if (onBookingStarted) onBookingStarted()
+      else await onChanged()
     } catch (e) {
       const code = e instanceof Error ? e.message.slice(0, 3) : ''
       setConfirmError(t(code === '400' ? 'exchangesRefunds.requests.drawer.bookingConfirmInvalid'
