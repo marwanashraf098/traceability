@@ -175,6 +175,26 @@ public class ReturnsPortalAdminController {
         requests.markRefunded(id, principal.userId());
     }
 
+    public record ItemArrivedRequest(String condition) {}
+
+    /** Step 6a — an untracked item arrived (sellable / damaged). Owner / manager. */
+    @PostMapping("/return-requests/{id}/items/{itemId}/arrived")
+    @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void itemArrived(@PathVariable UUID id, @PathVariable UUID itemId,
+                            @RequestBody(required = false) ItemArrivedRequest body,
+                            @AuthenticationPrincipal CustomUserDetails principal) {
+        requests.itemArrived(id, itemId, body == null ? null : body.condition(), principal.userId());
+    }
+
+    @PostMapping("/return-requests/{id}/items/{itemId}/arrived/undo")
+    @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void undoItemArrived(@PathVariable UUID id, @PathVariable UUID itemId,
+                                @AuthenticationPrincipal CustomUserDetails principal) {
+        requests.undoItemArrived(id, itemId, principal.userId());
+    }
+
     public record CloseRequest(String reason, String note) {}
 
     /** Close without a refund: reason no_refund | other, optional note (≤ 300). */

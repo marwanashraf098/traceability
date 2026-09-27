@@ -146,6 +146,9 @@ public class ReturnRequestService {
             "       pr.title AS \"productTitle\", v.title AS \"variantTitle\", pr.image_url AS \"imageUrl\", " +
             "       i.reason_code AS \"reasonCode\", i.active, i.item_status AS \"itemStatus\", " +
             "       i.arrived_at AS \"arrivedAt\", i.done_at AS \"doneAt\", " +
+            // Step 6a: an untracked item binds a unit of an order line instead of a piece.
+            "       (i.piece_id IS NOT NULL) AS \"tracked\", i.order_item_id AS \"orderItemId\", " +
+            "       i.unit_no AS \"unitNo\", i.arrived_condition AS \"arrivedCondition\", " +
             // Step 5b: the variant an exchange sends out instead.
             "       i.replacement_variant_id AS \"replacementVariantId\", rv.title AS \"replacementVariantTitle\", " +
             // Step 4d-2: the inspection outcome of the scan attributed to this item (latest).
@@ -154,12 +157,12 @@ public class ReturnRequestService {
             "       (SELECT si.damage_reason FROM return_session_items si WHERE si.request_item_id = i.id " +
             "          AND si.tenant_id = i.tenant_id ORDER BY si.scanned_at DESC, si.id DESC LIMIT 1) AS \"damageReason\" " +
             "FROM return_request_items i " +
-            "JOIN pieces p    ON p.id = i.piece_id " +
+            "LEFT JOIN pieces p ON p.id = i.piece_id " +
             "JOIN variants v  ON v.id = i.variant_id " +
             "JOIN products pr ON pr.id = v.product_id " +
             "LEFT JOIN variants rv ON rv.id = i.replacement_variant_id AND rv.tenant_id = i.tenant_id " +
             "WHERE i.request_id = ? AND i.tenant_id = ? " +
-            "ORDER BY pr.title, v.title, p.created_at, i.id",
+            "ORDER BY pr.title, v.title, COALESCE(p.created_at, i.created_at), i.unit_no NULLS FIRST, i.id",
             id, tenantId);
 
         Map<String, Object> d = new LinkedHashMap<>();
@@ -430,6 +433,20 @@ public class ReturnRequestService {
             out.add(m);
         }
         return out;
+    }
+
+    // ── Step 6a: untracked items — "Arrived" from the drawer (owner / manager) ──
+
+    /** POST /return-requests/{id}/items/{itemId}/arrived {condition}. */
+    @Transactional
+    public void itemArrived(UUID id, UUID itemId, String condition, UUID actorUserId) {
+        requests.arrivedUntracked(TenantContext.require(), id, itemId, condition, actorUserId, null);
+    }
+
+    /** POST /return-requests/{id}/items/{itemId}/arrived/undo. */
+    @Transactional
+    public void undoItemArrived(UUID id, UUID itemId, UUID actorUserId) {
+        requests.undoArrivedUntracked(TenantContext.require(), id, itemId, actorUserId, null);
     }
 
     // ── Step 4d-2: refunds (owner / manager) ─────────────────────────────────

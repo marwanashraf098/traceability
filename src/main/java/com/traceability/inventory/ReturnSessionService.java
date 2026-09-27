@@ -589,6 +589,15 @@ public class ReturnSessionService {
             throw new ResponseStatusException(HttpStatus.CONFLICT,
                 "This parcel's intake is already complete.");
         }
+        // Step 6a: a leg linked to a return request is received item by item (Arrived on its
+        // untracked items, scans for its tracked pieces) — never as a whole parcel.
+        String linkedReference = jdbc.queryForList(
+            "SELECT reference FROM return_requests WHERE return_shipment_id = ? AND tenant_id = ?",
+            String.class, shipmentId, tenantId).stream().findFirst().orElse(null);
+        if (linkedReference != null) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                "This parcel belongs to return request " + linkedReference + " — mark its items Arrived instead.");
+        }
         if (!shipmentLinkService.isOrderUntracked((UUID) leg.get("order_id"), tenantId)) {
             throw new ResponseStatusException(HttpStatus.CONFLICT,
                 "This order has tracked items — scan them instead.");
@@ -626,6 +635,52 @@ public class ReturnSessionService {
             throw new ResponseStatusException(HttpStatus.CONFLICT,
                 "Only a parcel marked received in this session can be undone.");
         }
+    }
+
+    // ── Step 6a: untracked request items — "Arrived" in a return session ─────────
+
+    /**
+     * POST /returns/sessions/{sessionId}/request-items/{itemId}/arrived {condition}: an untracked
+     * request item arrived in this parcel. Only while the session is open AND the parcel's AWB was
+     * scanned here — the request's linked courier-return leg, or for an exchange the Bosta
+     * exchange AWB. The effect is ReturnRequestLifecycle.arrivedUntracked (the only writer).
+     * Another tenant's item is a plain 404.
+     */
+    @Transactional
+    public void requestItemArrived(UUID sessionId, UUID itemId, String condition, UUID actorUserId) {
+        UUID tenantId = TenantContext.require();
+        requireOpen(sessionId, tenantId);
+        UUID requestId = requireItemParcelScanned(sessionId, itemId, tenantId);
+        requests.arrivedUntracked(tenantId, requestId, itemId, condition, actorUserId, sessionId);
+    }
+
+    /** POST /returns/sessions/{sessionId}/request-items/{itemId}/arrived/undo — same guards. */
+    @Transactional
+    public void undoRequestItemArrived(UUID sessionId, UUID itemId, UUID actorUserId) {
+        UUID tenantId = TenantContext.require();
+        requireOpen(sessionId, tenantId);
+        UUID requestId = requireItemParcelScanned(sessionId, itemId, tenantId);
+        requests.undoArrivedUntracked(tenantId, requestId, itemId, actorUserId, sessionId);
+    }
+
+    /** The item's request (404 when not this tenant's), provided its parcel AWB was scanned in this session (else 409). */
+    private UUID requireItemParcelScanned(UUID sessionId, UUID itemId, UUID tenantId) {
+        List<Map<String, Object>> rows = jdbc.queryForList(
+            "SELECT ri.request_id, " +
+            "       EXISTS (SELECT 1 FROM return_session_shipments rss " +
+            "               WHERE rss.session_id = ? AND rss.tenant_id = ri.tenant_id " +
+            "                 AND (rss.awb = (SELECT s.tracking_number FROM shipments s WHERE s.id = rr.return_shipment_id " +
+            "                                 AND s.tenant_id = rr.tenant_id) " +
+            "                  OR rss.awb = (SELECT e.tracking_number FROM exchanges e WHERE e.return_request_id = rr.id " +
+            "                                 AND e.tenant_id = rr.tenant_id))) AS scanned_here " +
+            "FROM return_request_items ri JOIN return_requests rr ON rr.id = ri.request_id AND rr.tenant_id = ri.tenant_id " +
+            "WHERE ri.id = ? AND ri.tenant_id = ?",
+            sessionId, itemId, tenantId);
+        if (rows.isEmpty()) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Request item not found");
+        if (!Boolean.TRUE.equals(rows.get(0).get("scanned_here"))) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Scan this parcel's AWB in this session first.");
+        }
+        return (UUID) rows.get(0).get("request_id");
     }
 
     /** The shipment (this tenant, else 404) whose AWB was scanned in this session (else 409). */
@@ -735,12 +790,18 @@ public class ReturnSessionService {
             "       s.raw #>> '{returnSpecs,packageDetails,descriptionAr}' AS description_ar, " +
             "       " + ShipmentLinkService.orderUntrackedSql("s.order_id") + " AS untracked, " +
             "       s.return_intake_outcome, s.return_intake_completed_at, s.return_intake_session_id, " +
-            "       u.name AS marked_by, rq.id AS request_id, rq.reference AS request_reference " +
+            "       u.name AS marked_by, rq.id AS request_id, rq.reference AS request_reference, " +
+            // Step 6a: the return request whose items this parcel carries — the linked courier-return
+            // leg's request, or for a Traced-booked exchange AWB the exchange's request.
+            "       COALESCE(rq.id, xrq.id) AS items_request_id, COALESCE(rq.reference, xrq.reference) AS items_request_reference " +
             "FROM return_session_shipments rss " +
             "JOIN shipments s ON s.tracking_number = rss.awb AND s.tenant_id = rss.tenant_id " +
             "JOIN orders o    ON o.id = s.order_id AND o.tenant_id = s.tenant_id " +
             "LEFT JOIN users u ON u.id = s.return_intake_by " +
             "LEFT JOIN return_requests rq ON rq.return_shipment_id = s.id AND rq.tenant_id = s.tenant_id " +
+            "LEFT JOIN exchanges xe ON xe.tracking_number = s.tracking_number AND xe.tenant_id = s.tenant_id " +
+            "                      AND xe.return_request_id IS NOT NULL " +
+            "LEFT JOIN return_requests xrq ON xrq.id = xe.return_request_id AND xrq.tenant_id = s.tenant_id " +
             "WHERE rss.session_id = ? AND rss.tenant_id = ? " +
             "ORDER BY rss.linked_at DESC, rss.id DESC",
             sessionId, tenantId);
@@ -822,6 +883,19 @@ public class ReturnSessionService {
             boolean anyPending = scanned.stream().anyMatch(it -> "pending".equals(it.get("disposition")));
             boolean complete = outcome != null
                 || (!scanned.isEmpty() && parcelExpected.isEmpty() && !anyPending);
+            // Step 6a: every item of the request this parcel carries, untracked ones included
+            // (tracked:false + the item id, for the per-item Arrived action). A request with
+            // untracked items is complete once none of them is still awaited.
+            Object itemsRequestId = leg.get("items_request_id");
+            List<Map<String, Object>> requestItems = itemsRequestId == null ? List.of() : requestItems(itemsRequestId, tenantId);
+            long untrackedAwaiting = requestItems.stream()
+                .filter(ri -> Boolean.FALSE.equals(ri.get("tracked")) && "awaiting".equals(ri.get("itemStatus"))).count();
+            long untrackedArrived = requestItems.stream()
+                .filter(ri -> Boolean.FALSE.equals(ri.get("tracked")) && ri.get("arrivedCondition") != null).count();
+            if (untrackedAwaiting + untrackedArrived > 0) {
+                complete = outcome != null || (parcelExpected.isEmpty() && !anyPending && untrackedAwaiting == 0
+                    && (!scanned.isEmpty() || untrackedArrived > 0));
+            }
 
             Map<String, Object> parcel = new LinkedHashMap<>();
             parcel.put("shipmentId", leg.get("shipment_id").toString());
@@ -852,6 +926,9 @@ public class ReturnSessionService {
             counts.put("scanned", scanned.size());
             parcel.put("counts", counts);
             parcel.put("complete", complete);
+            parcel.put("itemsRequestId", itemsRequestId == null ? null : itemsRequestId.toString());
+            parcel.put("itemsRequestReference", leg.get("items_request_reference"));
+            parcel.put("requestItems", requestItems);
             parcels.add(parcel);
         }
 
@@ -862,6 +939,21 @@ public class ReturnSessionService {
         result.put("parcels", parcels);
         result.put("otherItems", otherItems);
         result.put("lastScan", lastScan(sessionId, tenantId, items, legs));
+    }
+
+    /** Step 6a — a request's items for its parcel card: tracked (piece) and untracked (order-line unit) alike. */
+    private List<Map<String, Object>> requestItems(Object requestId, UUID tenantId) {
+        return jdbc.queryForList(
+            "SELECT ri.id::text AS \"id\", (ri.piece_id IS NOT NULL) AS \"tracked\", ri.piece_id AS \"pieceId\", " +
+            "       p.short_code AS \"shortCode\", ri.order_item_id::text AS \"orderItemId\", ri.unit_no AS \"unitNo\", " +
+            "       pr.title AS \"productTitle\", v.title AS \"variantTitle\", ri.item_status AS \"itemStatus\", " +
+            "       ri.arrived_condition AS \"arrivedCondition\", ri.arrived_at AS \"arrivedAt\" " +
+            "FROM return_request_items ri " +
+            "LEFT JOIN pieces p ON p.id = ri.piece_id " +
+            "JOIN variants v ON v.id = ri.variant_id JOIN products pr ON pr.id = v.product_id " +
+            "WHERE ri.request_id = ? AND ri.tenant_id = ? AND ri.item_status <> 'not_coming' " +
+            "ORDER BY pr.title, v.title, ri.created_at, ri.unit_no NULLS FIRST, ri.id",
+            requestId, tenantId);
     }
 
     /** Newest of: piece scan, AWB scan, mark-received in this session. Null when nothing yet. */

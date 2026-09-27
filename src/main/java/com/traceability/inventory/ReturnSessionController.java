@@ -115,6 +115,32 @@ public class ReturnSessionController {
         sessionService.undoMarkReceived(sessionId, shipmentId, principal.userId());
     }
 
+    // ── Untracked request items (Step 6a) ────────────────────────────────────
+
+    public record ItemArrivedRequest(String condition) {}
+
+    /**
+     * An untracked item of a return request arrived in a parcel scanned in this session. Same role
+     * gate as scanning (owner, manager, worker). No piece, no stock, no Shopify — see
+     * ReturnSessionService.requestItemArrived().
+     */
+    @PostMapping("/sessions/{sessionId}/request-items/{itemId}/arrived")
+    @PreAuthorize("isAuthenticated()")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void requestItemArrived(@PathVariable UUID sessionId, @PathVariable UUID itemId,
+                                   @RequestBody(required = false) ItemArrivedRequest body,
+                                   @AuthenticationPrincipal CustomUserDetails principal) {
+        sessionService.requestItemArrived(sessionId, itemId, body == null ? null : body.condition(), principal.userId());
+    }
+
+    @PostMapping("/sessions/{sessionId}/request-items/{itemId}/arrived/undo")
+    @PreAuthorize("isAuthenticated()")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void undoRequestItemArrived(@PathVariable UUID sessionId, @PathVariable UUID itemId,
+                                       @AuthenticationPrincipal CustomUserDetails principal) {
+        sessionService.undoRequestItemArrived(sessionId, itemId, principal.userId());
+    }
+
     // ── Scan / disposition ───────────────────────────────────────────────────
 
     @PostMapping("/sessions/{sessionId}/scan")

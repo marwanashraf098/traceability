@@ -837,6 +837,12 @@ public class ShipmentLinkService {
      *          neither an AWB scan nor timing. It only ever ADDS evidence: a leg with no
      *          request, or whose request has no attributed scan, is decided by Rules 1–2
      *          exactly as before.
+     *          Untracked-arrival clause (Step 6a, approved 2026-09-27): the leg ALSO has
+     *          evidence when its linked request has an UNTRACKED item (order_item_id set, no
+     *          piece) that is currently marked arrived (arrived_at set, via the per-item Arrived
+     *          action) at/after the leg's created_at. Session-scoped: the arrival's
+     *          item_arrived_untracked event carries this session's id. Legs with no request:
+     *          unchanged.
      *
      * Single-leg orders: Rule 2 is exactly the pre-V104 order-wide check.
      *
@@ -849,6 +855,11 @@ public class ShipmentLinkService {
         String rule1Session = sessionIdExpr == null ? "" : "AND rss_ev.session_id = " + sessionIdExpr + " ";
         String rule2Session = sessionIdExpr == null ? "" : "AND pe_ev.metadata->>'session_id' = (" + sessionIdExpr + ")::text ";
         String requestSession = sessionIdExpr == null ? "" : "AND pe_rq.metadata->>'session_id' = (" + sessionIdExpr + ")::text ";
+        String untrackedSession = sessionIdExpr == null ? ""
+            : "AND EXISTS (SELECT 1 FROM return_request_events e_ut WHERE e_ut.request_id = rr_ut.id " +
+              "            AND e_ut.tenant_id = rr_ut.tenant_id AND e_ut.event_type = 'item_arrived_untracked' " +
+              "            AND e_ut.metadata->>'item_id' = ri_ut.id::text " +
+              "            AND e_ut.metadata->>'session_id' = (" + sessionIdExpr + ")::text) ";
         return "(" +
             // Request rule (4d-1)
             "EXISTS (SELECT 1 FROM return_requests rr_ev " +
@@ -856,6 +867,13 @@ public class ShipmentLinkService {
             "                               AND pe_rq.event_type = 'return_received' " +
             "                               AND pe_rq.metadata->>'request_id' = rr_ev.id::text " +
             "        WHERE rr_ev.tenant_id = s.tenant_id AND rr_ev.return_shipment_id = s.id " + requestSession + ") " +
+            "OR " +
+            // Request rule, untracked-arrival clause (6a)
+            "EXISTS (SELECT 1 FROM return_requests rr_ut " +
+            "        JOIN return_request_items ri_ut ON ri_ut.request_id = rr_ut.id AND ri_ut.tenant_id = rr_ut.tenant_id " +
+            "        WHERE rr_ut.tenant_id = s.tenant_id AND rr_ut.return_shipment_id = s.id " +
+            "          AND ri_ut.order_item_id IS NOT NULL AND ri_ut.arrived_at IS NOT NULL " +
+            "          AND ri_ut.arrived_at >= s.created_at " + untrackedSession + ") " +
             "OR " +
             // Rule 1
             "EXISTS (SELECT 1 FROM return_session_shipments rss_ev " +

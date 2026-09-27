@@ -38,6 +38,10 @@ import java.util.*;
  * then 'refund_pending' once every such item is done. Step 5c: an EXCHANGE request goes to
  * 'exchanged' instead — it never enters refund_pending and takes no refunds.
  *
+ * Step 6a: an UNTRACKED item (order_item_id + unit_no, no piece) has no scan — the per-item
+ * "Arrived" action ({@link #arrivedUntracked}) takes it straight to 'done' with its condition;
+ * {@link #undoArrivedUntracked} reverses it while nothing final happened.
+ *
  * Step 4d-2: also the only writer of return_refunds (append-only — a refund is cancelled by a
  * 'void' row, never updated or deleted) and of 'refunded' ({@link #markRefunded}).
  */
@@ -265,7 +269,9 @@ public class ReturnRequestLifecycle {
         List<Map<String, Object>> sub = jdbc.queryForList(
             "SELECT i.id, i.request_id, i.piece_id FROM return_request_items i " +
             "JOIN return_requests rr ON rr.id = i.request_id AND rr.tenant_id = i.tenant_id " +
-            "WHERE i.tenant_id = ? AND i.variant_id = ? AND i.item_status = 'awaiting' " +
+            // Step 6a: only TRACKED items (bound to a piece) can take a substitute piece — an
+            // untracked item binds an order-line unit and arrives via the Arrived action.
+            "WHERE i.tenant_id = ? AND i.variant_id = ? AND i.item_status = 'awaiting' AND i.piece_id IS NOT NULL " +
             "  AND rr.order_id = ? AND rr.status::text IN ('approved', 'pickup_booked', 'received') " +
             "ORDER BY rr.created_at, rr.id, i.created_at, i.id LIMIT 1 FOR UPDATE OF i",
             tenantId, variantId, orderId);
@@ -327,6 +333,104 @@ public class ReturnRequestLifecycle {
         event(tenantId, requestId, "item_done", actor, meta("item_id", requestItemId.toString(),
             "piece_id", done.get(0).get("piece_id"), "disposition", disposition));
         reevaluate(tenantId, requestId, actor);
+    }
+
+    // ── Step 6a: untracked items ("Arrived") ──────────────────────────────────
+
+    public static final Set<String> ARRIVED_CONDITIONS = Set.of("sellable", "damaged");
+    /** Undo is refused once the request reached one of these. */
+    static final Set<String> UNDO_BLOCKED = Set.of("refunded", "exchanged", "closed", "rejected", "cancelled");
+
+    /**
+     * The per-item "Arrived" action for an UNTRACKED item (no piece to scan): awaiting → done at
+     * once (arrived_at, done_at, arrived_condition, arrived_by; active false), event
+     * item_arrived_untracked {item_id, condition, session_id}, then re-evaluation. A request-
+     * linked exchange whose old item this is → exchanges row return_received. Only for an
+     * untracked item still awaited, on an open request (approved / pickup_booked / received).
+     * Never moves a piece, never touches stock or Shopify — a sellable item enters stock only
+     * through Receiving (the request_item_to_receive exception asks for it).
+     */
+    public void arrivedUntracked(UUID tenantId, UUID requestId, UUID itemId, String condition, UUID actor, UUID sessionId) {
+        if (condition == null || !ARRIVED_CONDITIONS.contains(condition)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "condition must be sellable or damaged");
+        }
+        Map<String, Object> rr = lockRequest(tenantId, requestId);
+        Map<String, Object> item = untrackedItem(tenantId, requestId, itemId);
+        if (!OPEN_STATUSES.contains((String) rr.get("status"))) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Only an open request's items can be marked arrived.");
+        }
+        if (!"awaiting".equals(item.get("item_status"))) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "This item isn't waiting to arrive.");
+        }
+        jdbc.update(
+            "UPDATE return_request_items SET item_status = 'done', active = false, arrived_at = clock_timestamp(), " +
+            "    done_at = clock_timestamp(), arrived_condition = ?, arrived_by = ? " +
+            "WHERE id = ? AND tenant_id = ? AND item_status = 'awaiting'",
+            condition, actor, itemId, tenantId);
+        event(tenantId, requestId, "item_arrived_untracked", actor, meta("item_id", itemId.toString(),
+            "condition", condition, "session_id", sessionId == null ? null : sessionId.toString()));
+        if ("exchange".equals(rr.get("type"))) {
+            // Step 6a (F): the untracked old item of a Traced-booked exchange came back.
+            jdbc.update(
+                "UPDATE exchanges SET status = 'return_received', updated_at = now() " +
+                "WHERE return_request_id = ? AND tenant_id = ? AND status = 'matched'", requestId, tenantId);
+        }
+        reevaluate(tenantId, requestId, actor);
+    }
+
+    /**
+     * Reverses {@link #arrivedUntracked} while the request is not refunded / exchanged / closed
+     * and no refund was recorded on it: the item → awaiting (arrival fields cleared, active
+     * again — which also takes it out of the request_item_to_receive exception), event
+     * item_arrival_undone, and the request steps back from received / refund_pending to
+     * pickup_booked (a courier leg or Traced booking exists) or approved.
+     */
+    public void undoArrivedUntracked(UUID tenantId, UUID requestId, UUID itemId, UUID actor, UUID sessionId) {
+        Map<String, Object> rr = lockRequest(tenantId, requestId);
+        Map<String, Object> item = untrackedItem(tenantId, requestId, itemId);
+        if (UNDO_BLOCKED.contains((String) rr.get("status"))) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "This request is finished — the arrival can't be undone.");
+        }
+        Boolean refunded = jdbc.queryForObject(
+            "SELECT EXISTS (SELECT 1 FROM return_refunds WHERE request_id = ? AND tenant_id = ? AND kind = 'refund')",
+            Boolean.class, requestId, tenantId);
+        if (Boolean.TRUE.equals(refunded)) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "A refund was recorded — the arrival can't be undone.");
+        }
+        if (!"done".equals(item.get("item_status")) || item.get("arrived_condition") == null) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "This item wasn't marked arrived.");
+        }
+        jdbc.update(
+            "UPDATE return_request_items SET item_status = 'awaiting', active = true, arrived_at = NULL, " +
+            "    done_at = NULL, arrived_condition = NULL, arrived_by = NULL " +
+            "WHERE id = ? AND tenant_id = ? AND item_status = 'done'", itemId, tenantId);
+        jdbc.update(
+            "UPDATE return_requests SET status = CASE WHEN return_shipment_id IS NOT NULL " +
+            "        OR booking_status IN ('booked', 'needs_review') THEN 'pickup_booked'::return_request_status " +
+            "        ELSE 'approved'::return_request_status END, " +
+            "    received_at = NULL, refund_pending_at = NULL " +
+            "WHERE id = ? AND tenant_id = ? AND status::text IN ('received', 'refund_pending')", requestId, tenantId);
+        if ("exchange".equals(rr.get("type"))) {
+            jdbc.update(
+                "UPDATE exchanges SET status = 'matched', updated_at = now() " +
+                "WHERE return_request_id = ? AND tenant_id = ? AND status = 'return_received'", requestId, tenantId);
+        }
+        event(tenantId, requestId, "item_arrival_undone", actor, meta("item_id", itemId.toString(),
+            "session_id", sessionId == null ? null : sessionId.toString()));
+        reevaluate(tenantId, requestId, actor);
+    }
+
+    /** The request's UNTRACKED item (404 when not this request's; 409 when it has a piece). */
+    private Map<String, Object> untrackedItem(UUID tenantId, UUID requestId, UUID itemId) {
+        Map<String, Object> item = jdbc.queryForList(
+            "SELECT id, item_status, order_item_id, arrived_condition FROM return_request_items " +
+            "WHERE id = ? AND request_id = ? AND tenant_id = ? FOR UPDATE", itemId, requestId, tenantId)
+            .stream().findFirst()
+            .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Request item not found"));
+        if (item.get("order_item_id") == null) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "This item is tracked — scan it in a return session instead.");
+        }
+        return item;
     }
 
     // ── Status derivation ─────────────────────────────────────────────────────

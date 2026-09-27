@@ -169,6 +169,7 @@ public class ExceptionService {
         all.addAll(detectVoidHoldSyncFailed(tenantId));
         all.addAll(detectReturnLegUnscanned(tenantId, returnUnscannedDays));
         all.addAll(detectReturnToReceive(tenantId));
+        all.addAll(detectRequestItemToReceive(tenantId));
         all.addAll(detectPickupBookingProblem(tenantId));
         all.addAll(detectReturnLinkAmbiguous(tenantId));
         all.addAll(detectRefundPendingOverdue(tenantId));
@@ -286,6 +287,33 @@ public class ExceptionService {
      * listCrpReturns' awaitingReceiving); subject_key = the shipment id. A resolution only
      * counts if made at/after the marking, so undo + re-mark re-opens it.
      */
+    /**
+     * Step 6a: an UNTRACKED return-request item marked Arrived as sellable. Traced has no piece
+     * for it and never adds stock by itself — a manager adds it in their next Receiving session
+     * (or resolves this if it won't go back into stock). MEDIUM; subject = the request item.
+     * The key carries the arrival time, so undo (which clears the arrival) removes it and a new
+     * arrival is a new exception.
+     */
+    private List<Map<String, Object>> detectRequestItemToReceive(UUID tid) {
+        return jdbc.queryForList(
+            "SELECT 'request_item_to_receive' AS type, 'MEDIUM' AS severity, 'return_request_item' AS subject_type, " +
+            "       ri.id AS request_item_id, rr.id AS request_id, rr.reference, o.id AS order_id, o.number AS order_number, " +
+            "       pr.title AS product_title, v.title AS variant_title, ri.arrived_at AS occurred_at, " +
+            "       'request_item_to_receive:' || ri.id || ':' || floor(extract(epoch FROM ri.arrived_at))::bigint::text AS subject_key " +
+            "FROM return_request_items ri " +
+            "JOIN return_requests rr ON rr.id = ri.request_id AND rr.tenant_id = ri.tenant_id " +
+            "JOIN orders o ON o.id = rr.order_id AND o.tenant_id = rr.tenant_id " +
+            "JOIN variants v ON v.id = ri.variant_id " +
+            "JOIN products pr ON pr.id = v.product_id " +
+            "WHERE ri.tenant_id = ? AND ri.order_item_id IS NOT NULL AND ri.item_status = 'done' " +
+            "  AND ri.arrived_condition = 'sellable' AND ri.arrived_at IS NOT NULL " +
+            "  AND NOT EXISTS (SELECT 1 FROM exception_resolutions er WHERE er.tenant_id = ri.tenant_id " +
+            "      AND er.exception_type = 'request_item_to_receive' " +
+            "      AND er.subject_key = 'request_item_to_receive:' || ri.id || ':' || " +
+            "          floor(extract(epoch FROM ri.arrived_at))::bigint::text)",
+            tid);
+    }
+
     private List<Map<String, Object>> detectReturnToReceive(UUID tid) {
         return jdbc.queryForList(
             "SELECT 'return_to_receive' AS type, 'MEDIUM' AS severity, 'shipment' AS subject_type, " +
@@ -1185,6 +1213,18 @@ public class ExceptionService {
                 item.put("descriptionAr",
                     "وصل المرتجع " + t + " للطلب " + n + "، لكن Traced لم يتتبّع هذا الطلب. " +
                     "أضف القطعة في جلسة الاستلام القادمة، أو عالِج هذا التنبيه إذا لن تعود إلى المخزون.");
+                item.put("suggestedAction", "add_in_receiving");
+                item.put("actionUrl", "/receiving");
+            }
+            case "request_item_to_receive" -> {
+                String ref = str(item, "reference");
+                String n = str(item, "order_number");
+                Object vt = item.get("variant_title");
+                String product = str(item, "product_title") + (vt != null ? " / " + vt : "");
+                item.put("descriptionEn", "Return request " + ref + " for order " + n + ": " + product +
+                    " came back sellable, but Traced never tracked it. Add it in your next Receiving session.");
+                item.put("descriptionAr", "طلب الإرجاع " + ref + " للطلب " + n + ": عاد " + product +
+                    " صالحًا للبيع، لكن Traced لم يتتبّعه. أضفه في جلسة الاستلام القادمة.");
                 item.put("suggestedAction", "add_in_receiving");
                 item.put("actionUrl", "/receiving");
             }

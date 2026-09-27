@@ -80,9 +80,12 @@ public class PortalController {
             JsonNode n = mapper.readTree(raw);
             List<PortalService.SubmitLine> lines = new ArrayList<>();
             for (JsonNode l : n.path("lines")) {
-                UUID variantId = UUID.fromString(l.path("variantId").asText());
+                // Step 6a: an untracked order line is referenced by orderItemId (variantId optional).
+                UUID orderItemId = l.hasNonNull("orderItemId") ? UUID.fromString(l.get("orderItemId").asText()) : null;
+                UUID variantId = orderItemId != null && !l.hasNonNull("variantId") ? null
+                    : UUID.fromString(l.path("variantId").asText());
                 Integer quantity = l.path("quantity").isInt() ? l.path("quantity").asInt() : null;
-                lines.add(new PortalService.SubmitLine(variantId, quantity, l.path("reasonCode").asText(null)));
+                lines.add(new PortalService.SubmitLine(variantId, quantity, l.path("reasonCode").asText(null), orderItemId));
             }
             String email = n.hasNonNull("email") ? n.get("email").asText() : null;
             String note  = n.hasNonNull("note")  ? n.get("note").asText()  : null;

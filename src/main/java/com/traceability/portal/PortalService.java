@@ -138,6 +138,8 @@ public class PortalService {
 
         UUID orderId = (UUID) order.get("id");
         List<Map<String, Object>> lines = returnableLines(tenantId, orderId);
+        // Step 6a: the order's UNTRACKED lines (no allocation of any status) — keyed by order line.
+        lines.addAll(untrackedLines(tenantId, orderId));
         recordAttempt(tenantId, orderKey, true);
         // Step 5b: when the store offers exchanges, each line also carries what it could be
         // exchanged for (siblings of the same product, in stock or not) — absent otherwise.
@@ -258,11 +260,74 @@ public class PortalService {
             tenantId, orderId);
     }
 
+    /**
+     * Step 6a — THE per-line form of ShipmentLinkService.orderUntrackedSql (alias {@code oi}):
+     * the order line has NO allocation row of any status. Released allocations count as tracked,
+     * and so does a partially allocated line (piece-level only).
+     */
+    static final String LINE_UNTRACKED_SQL =
+        "NOT EXISTS (SELECT 1 FROM allocations a_ln WHERE a_ln.order_item_id = oi.id) ";
+
+    /**
+     * Step 6a — how many units of an untracked order line a request can still take: the line's
+     * quantity, capped by the Shopify REST {@code current_quantity} when the stored line has one
+     * (Shopify-side removals / refunds), minus units already in a request that isn't released
+     * (awaiting, arrived or done — a unit that came back is not returnable again).
+     */
+    private static final String UNTRACKED_CAP_SQL =
+        "(CASE WHEN (oi.raw->>'current_quantity') ~ '^[0-9]+$' " +
+        "      THEN LEAST(oi.quantity, (oi.raw->>'current_quantity')::int) ELSE oi.quantity END)";
+
+    private static final String UNTRACKED_TAKEN_SQL =
+        "(SELECT COUNT(*) FROM return_request_items rri WHERE rri.order_item_id = oi.id " +
+        "   AND rri.tenant_id = oi.tenant_id AND rri.item_status <> 'not_coming')";
+
+    /**
+     * Step 6a — the order's untracked lines, one per order line (the same variant can also be
+     * a tracked line on a mixed order, so the key is orderItemId). Same title / image sources as
+     * tracked lines. Only these lines carry orderItemId / tracked:false.
+     */
+    private List<Map<String, Object>> untrackedLines(UUID tenantId, UUID orderId) {
+        return jdbc.query(
+            "SELECT oi.id AS order_item_id, v.id AS variant_id, pr.title AS product_title, v.title AS variant_title, " +
+            "       pr.image_url, v.non_returnable, " + UNTRACKED_CAP_SQL + " AS cap, " + UNTRACKED_TAKEN_SQL + " AS taken " +
+            "FROM order_items oi " +
+            "JOIN variants v  ON v.id  = oi.variant_id " +
+            "JOIN products pr ON pr.id = v.product_id " +
+            "WHERE oi.tenant_id = ? AND oi.order_id = ? AND " + LINE_UNTRACKED_SQL +
+            "ORDER BY pr.title, v.title, oi.id",
+            (rs, i) -> {
+                boolean nonReturnable = rs.getBoolean("non_returnable");
+                int cap = Math.max(0, rs.getInt("cap"));
+                int free = Math.max(0, cap - rs.getInt("taken"));
+                Map<String, Object> line = new LinkedHashMap<>();
+                line.put("orderItemId",        rs.getObject("order_item_id", UUID.class).toString());
+                line.put("tracked",            false);
+                line.put("variantId",          rs.getObject("variant_id", UUID.class).toString());
+                line.put("productTitle",       rs.getString("product_title"));
+                line.put("variantTitle",       rs.getString("variant_title"));
+                line.put("imageUrl",           rs.getString("image_url"));
+                line.put("deliveredQuantity",  cap);
+                line.put("returnableQuantity", nonReturnable ? 0 : free);
+                line.put("nonReturnable",      nonReturnable);
+                return line;
+            },
+            tenantId, orderId);
+    }
+
     // ── Step 4b: customer submission ─────────────────────────────────────────────
 
     public enum SubmitOutcome { CREATED, UNAUTHORIZED, INVALID, CONFLICT }
 
-    public record SubmitLine(UUID variantId, Integer quantity, String reasonCode) {}
+    /**
+     * A tracked line (variantId — today's shape, orderItemId null) or, Step 6a, an untracked
+     * order line (orderItemId; variantId optional and, when sent, must be that line's variant).
+     */
+    public record SubmitLine(UUID variantId, Integer quantity, String reasonCode, UUID orderItemId) {
+        public SubmitLine(UUID variantId, Integer quantity, String reasonCode) {
+            this(variantId, quantity, reasonCode, null);
+        }
+    }
 
     /**
      * districtId: the chosen pickup area — required when lookup offered one, ignored otherwise.
@@ -288,6 +353,8 @@ public class PortalService {
     private static final java.util.regex.Pattern EMAIL =
         java.util.regex.Pattern.compile("^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$");
     private static final String ACTIVE_PIECE_INDEX = "return_request_items_one_active_per_piece";
+    /** Step 6a: the per-unit twin of ACTIVE_PIECE_INDEX (untracked order lines). */
+    private static final String ACTIVE_UNIT_INDEX = "return_request_items_one_active_per_unit";
 
     /** Thrown inside the submission transaction to roll it back and answer 400. */
     private static final class InvalidSubmission extends RuntimeException {
@@ -325,7 +392,8 @@ public class PortalService {
             return Optional.of(new SubmitResult(SubmitOutcome.INVALID, null));
         } catch (org.springframework.dao.DuplicateKeyException e) {
             // A concurrent submission took one of these pieces first (one active item per piece).
-            if (String.valueOf(e.getMessage()).contains(ACTIVE_PIECE_INDEX)) {
+            if (String.valueOf(e.getMessage()).contains(ACTIVE_PIECE_INDEX)
+                    || String.valueOf(e.getMessage()).contains(ACTIVE_UNIT_INDEX)) {
                 return Optional.of(new SubmitResult(SubmitOutcome.CONFLICT, null));
             }
             throw e;
@@ -345,16 +413,23 @@ public class PortalService {
             orderId, tenantId);
         if (order.isEmpty() || deliveredWithinWindow(tenantId, orderId) == null) throw new InvalidSubmission();
         if (req.mode() != null && !"refund".equals(req.mode()) && !req.exchange()) throw new InvalidSubmission();
-        UUID replacement = req.exchange() ? validExchange(tenantId, req) : null;
+        UUID replacement = req.exchange() ? validExchange(tenantId, orderId, req) : null;
 
         // Bind pieces line by line (the same variant may appear on two lines with different reasons).
+        // Step 6a: an untracked order line binds unit numbers instead (one item row per unit).
         Set<String> bound = new HashSet<>();
+        Map<UUID, Set<Integer>> boundUnits = new HashMap<>();
         List<Object[]> items = new ArrayList<>();
         for (SubmitLine line : req.lines()) {
-            if (line == null || line.variantId() == null || line.quantity() == null || line.quantity() < 1
+            if (line == null || line.quantity() == null || line.quantity() < 1
                     || !REASON_CODES.contains(line.reasonCode())) {
                 throw new InvalidSubmission();
             }
+            if (line.orderItemId() != null) {
+                bindUntrackedUnits(tenantId, orderId, line, boundUnits, items);
+                continue;
+            }
+            if (line.variantId() == null) throw new InvalidSubmission();
             List<String> free = jdbc.queryForList(
                 "SELECT p.id FROM pieces p JOIN variants v ON v.id = p.variant_id " +
                 "WHERE p.tenant_id = ? AND p.current_order_id = ? AND p.variant_id = ? " +
@@ -367,7 +442,7 @@ public class PortalService {
             if (free.size() < line.quantity()) throw new InvalidSubmission();
             for (String pieceId : free.subList(0, line.quantity())) {
                 bound.add(pieceId);
-                items.add(new Object[]{pieceId, line.variantId(), line.reasonCode()});
+                items.add(new Object[]{pieceId, line.variantId(), line.reasonCode(), null, null});
             }
         }
 
@@ -402,8 +477,8 @@ public class PortalService {
         for (Object[] it : items) {
             jdbc.update(
                 "INSERT INTO return_request_items (tenant_id, request_id, piece_id, variant_id, reason_code, " +
-                "    replacement_variant_id) VALUES (?, ?, ?, ?, ?, ?)",
-                tenantId, requestId, it[0], it[1], it[2], replacement);
+                "    replacement_variant_id, order_item_id, unit_no) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                tenantId, requestId, it[0], it[1], it[2], replacement, it[3], it[4]);
         }
         requests.event(tenantId, requestId, "requested", null, replacement == null
             ? ReturnRequestLifecycle.meta("items", items.size())
@@ -429,23 +504,66 @@ public class PortalService {
      * stock now (VariantStockService, recomputed here — never trusted from lookup). Returns the
      * replacement variant id; anything else is the generic invalid-submission 400.
      */
-    private UUID validExchange(UUID tenantId, SubmitRequest req) {
+    private UUID validExchange(UUID tenantId, UUID orderId, SubmitRequest req) {
         if (!exchangesEnabled(tenantId)) throw new InvalidSubmission();
         if (req.lines().size() != 1) throw new InvalidSubmission();
         SubmitLine line = req.lines().get(0);
         UUID replacement = req.replacementVariantId();
-        if (line == null || line.variantId() == null || line.quantity() == null || line.quantity() != 1
-                || replacement == null || replacement.equals(line.variantId())) {
+        // Step 6a: the exchanged unit may be an untracked order line — its variant is the line's.
+        UUID lineVariant = line == null ? null
+            : line.orderItemId() != null ? untrackedLineVariant(tenantId, orderId, line.orderItemId()) : line.variantId();
+        if (line == null || lineVariant == null || line.quantity() == null || line.quantity() != 1
+                || replacement == null || replacement.equals(lineVariant)) {
             throw new InvalidSubmission();
         }
         Boolean sameProduct = jdbc.queryForObject(
             "SELECT EXISTS (SELECT 1 FROM variants r JOIN variants o ON o.product_id = r.product_id " +
             "               WHERE r.id = ? AND o.id = ? AND r.tenant_id = ? AND o.tenant_id = ?)",
-            Boolean.class, replacement, line.variantId(), tenantId, tenantId);
+            Boolean.class, replacement, lineVariant, tenantId, tenantId);
         if (!Boolean.TRUE.equals(sameProduct)) throw new InvalidSubmission();
         com.traceability.inventory.VariantStockService stock = new com.traceability.inventory.VariantStockService(jdbc);
         if (stock.forVariant(stock.computeAll(), replacement).available() <= 0) throw new InvalidSubmission();
         return replacement;
+    }
+
+    /** Step 6a — the variant of an untracked, returnable line of this order; null otherwise. */
+    private UUID untrackedLineVariant(UUID tenantId, UUID orderId, UUID orderItemId) {
+        return jdbc.queryForList(
+            "SELECT oi.variant_id FROM order_items oi JOIN variants v ON v.id = oi.variant_id " +
+            "WHERE oi.id = ? AND oi.tenant_id = ? AND oi.order_id = ? AND v.non_returnable = false AND " + LINE_UNTRACKED_SQL,
+            UUID.class, orderItemId, tenantId, orderId).stream().findFirst().orElse(null);
+    }
+
+    /**
+     * Step 6a — binds {@code line.quantity()} units of an untracked order line: the first free
+     * unit numbers in 1..cap (cap as in lookup). A unit is taken when an item of it isn't
+     * released (not_coming), or when this submission already bound it. A concurrent submission
+     * choosing the same unit collides on return_request_items_one_active_per_unit → 409.
+     */
+    private void bindUntrackedUnits(UUID tenantId, UUID orderId, SubmitLine line,
+                                    Map<UUID, Set<Integer>> boundUnits, List<Object[]> items) {
+        List<Map<String, Object>> rows = jdbc.queryForList(
+            "SELECT oi.variant_id, " + UNTRACKED_CAP_SQL + " AS cap " +
+            "FROM order_items oi JOIN variants v ON v.id = oi.variant_id " +
+            "WHERE oi.id = ? AND oi.tenant_id = ? AND oi.order_id = ? AND v.non_returnable = false AND " + LINE_UNTRACKED_SQL,
+            line.orderItemId(), tenantId, orderId);
+        if (rows.isEmpty()) throw new InvalidSubmission();
+        UUID variantId = (UUID) rows.get(0).get("variant_id");
+        if (line.variantId() != null && !line.variantId().equals(variantId)) throw new InvalidSubmission();
+        int cap = ((Number) rows.get(0).get("cap")).intValue();
+        Set<Integer> taken = new HashSet<>(jdbc.queryForList(
+            "SELECT unit_no::int FROM return_request_items WHERE order_item_id = ? AND tenant_id = ? " +
+            "  AND item_status <> 'not_coming'", Integer.class, line.orderItemId(), tenantId));
+        Set<Integer> mine = boundUnits.computeIfAbsent(line.orderItemId(), k -> new HashSet<>());
+        List<Integer> free = new ArrayList<>();
+        for (int unit = 1; unit <= cap && free.size() < line.quantity(); unit++) {
+            if (!taken.contains(unit) && !mine.contains(unit)) free.add(unit);
+        }
+        if (free.size() < line.quantity()) throw new InvalidSubmission();
+        for (Integer unit : free) {
+            mine.add(unit);
+            items.add(new Object[]{null, variantId, line.reasonCode(), line.orderItemId(), unit});
+        }
     }
 
     /** RR- + 6 characters from an unambiguous alphabet, unused within this tenant. */
