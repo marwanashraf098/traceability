@@ -4,6 +4,13 @@
 
 ## Current state
 
+**Step 6b — screens for untracked request items + the drawer-arrival intake gap — built 2026-09-27 on branch `feature/untracked-returns-6b` (from `feature/untracked-returns-6a` `8bef912`; 6a + 6b ship together; not merged, not deployed).**
+- **V115 / D:** shipments.return_intake_outcome + 'request_items_arrived'. ReturnRequestLifecycle stamps the request's linked courier-return leg (completed_at, outcome, by, session) when an Arrived action leaves no item awaited — no return_to_receive; undo back to awaiting clears it. listCrpReturns: request_items_arrived → resolved (needs_inspection while a scanned piece is still undecided).
+- **Portal:** `lineKey()` = orderItemId for untracked lines, variantId otherwise; submit sends orderItemId for untracked lines (exchange too). No visible difference for the customer.
+- **Parcel card (Returns.tsx):** request reference from requestReference ?? itemsRequestReference; `UntrackedItemRow` per untracked request item (Not tracked, Arrived · sellable / Arrived · damaged → outcome + Undo, 6a session endpoints); counts/pill include untracked items; no whole-parcel mark-received on request-linked cards; a completed card collapses like a scanned one.
+- **Drawer:** `UntrackedArrivedControls` (RequestLifecycle.tsx) in the item list, the lifecycle list and the X5 exchange view (untracked old item); Undo hidden once a refund exists or the request is finished (backend re-checks).
+- **Tests:** backend `UntrackedLegIntakeTest` (2); frontend `untrackedPortal` (3), `untrackedParcelCards` (4), `untrackedDrawer` (4). MigrationSmokeTest 114, NotTracedBackfillTest 59. Renders in the session scratchpad `renders6b/`.
+
 **Step 6a — portal returns / exchanges for UNTRACKED order lines (backend + null-safety) — built 2026-09-27 on branch `feature/untracked-returns-6a` (from origin/main `5f327c6`; not merged, not deployed — 6b adds the screens).**
 No new Shopify or Bosta writes; InventoryLedger stays the only piece-status writer; tracked lines unchanged.
 - **V114:** return_request_items — piece_id NULLable, order_item_id (FK) + unit_no, CHECK exactly one binding, partial UNIQUE (order_item_id, unit_no) WHERE active (per-piece index kept), arrived_condition (sellable|damaged), arrived_by.
