@@ -260,7 +260,7 @@ Built 2026-08-15 on branch `returns-rebuild`, single cutover, not yet merged. Mo
 - [x] EX.3 [M] Step 5b: portal exchange requests (same product, another variant, same price) up to approval — X1–X4, X6, EN/AR, V111, no Bosta/Shopify writes
 - [x] EX.4 [S] Settings switch for `portal_exchanges_enabled` (Step 5c)
 - [x] EX.5 [M] Step 5c: approved exchange → one Bosta EXCHANGE trip (Mode B amendment #3) + replacement in Pick & Pack; request finishes 'exchanged'
-- [ ] EX.6 [S] Follow-up: merchant "Change area" list for exchanges shows pickup-only districts (booking precondition catches it)
+- [x] EX.6 [S] Merchant "Change area" for exchanges offers and accepts only districts that are pickup- AND drop-off-available (Step 5c)
 - [x] RS.18 [M] Return session parcel cards (per scanned AWB), feedback strip, footer summary
 - [x] RS.19 [M] Untracked courier return: mark received / undo (no stock change), V101 intake outcome + actor
 - [x] RS.20 [M] `return_to_receive` exception (MEDIUM) + E&R "Received · not tracked"

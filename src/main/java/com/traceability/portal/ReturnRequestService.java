@@ -527,7 +527,7 @@ public class ReturnRequestService {
 
     private Map<String, Object> requireRequest(UUID id, UUID tenantId) {
         return jdbc.queryForList(
-            "SELECT id, order_id, status::text AS status, pickup_city_id, pickup_district_id, booking_status " +
+            "SELECT id, order_id, status::text AS status, pickup_city_id, pickup_district_id, booking_status, type " +
             "FROM return_requests WHERE id = ? AND tenant_id = ?", id, tenantId)
             .stream().findFirst()
             .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Return request not found"));
@@ -535,9 +535,16 @@ public class ReturnRequestService {
 
     private Optional<PickupAreaService.CityAreas> cityAreas(UUID tenantId, Map<String, Object> rr) {
         String snapshotCity = (String) rr.get("pickup_city_id");
-        return snapshotCity != null
+        Optional<PickupAreaService.CityAreas> areas = snapshotCity != null
             ? pickupAreas.forCity(snapshotCity, null)
             : pickupAreas.forOrder(tenantId, (UUID) rr.get("order_id"));
+        if (!"exchange".equals(rr.get("type"))) return areas;
+        // Step 5c (EX.6): an exchange courier delivers AND collects — only districts that allow both.
+        return areas.map(a -> {
+            List<String> both = pickupAreas.exchangeDistrictIds(a.cityId());
+            return new PickupAreaService.CityAreas(a.cityId(), a.cityName(), a.cityNameAr(),
+                a.districts().stream().filter(d -> both.contains(d.id())).toList(), a.forwardDistrictId());
+        });
     }
 
     private ResponseStatusException notRequested(UUID id, UUID tenantId) {

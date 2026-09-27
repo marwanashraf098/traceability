@@ -681,6 +681,28 @@ class PortalExchangeBookingTest {
             "exchange", a.replacement(), true)).orElseThrow().outcome()).isEqualTo(PortalService.SubmitOutcome.CREATED);
     }
 
+    @Test
+    @SuppressWarnings("unchecked")
+    void w2_changeArea_exchangeOffersAndAcceptsOnlyPickupAndDropoff_refundUnchanged() {
+        Req exchange = approved(a, "#10101", 1);
+        Req refund = approvedRefund(a, "#10102");
+        TenantContext.set(a.id());
+        try {
+            assertThat((List<Map<String, Object>>) requests.pickupAreas(exchange.id()).get("districts"))
+                .extracting(m -> m.get("id")).containsExactly(NASR);
+            assertStatus(400, () -> requests.setPickupArea(exchange.id(), PICKUP_ONLY));
+            requests.setPickupArea(exchange.id(), NASR);
+
+            assertThat((List<Map<String, Object>>) requests.pickupAreas(refund.id()).get("districts"))
+                .extracting(m -> m.get("id")).containsExactlyInAnyOrder(NASR, PICKUP_ONLY);
+            requests.setPickupArea(refund.id(), PICKUP_ONLY);
+        } finally {
+            TenantContext.clear();
+        }
+        assertThat(jdbc.queryForObject("SELECT pickup_district_id FROM return_requests WHERE id = ?", String.class, exchange.id())).isEqualTo(NASR);
+        assertThat(jdbc.queryForObject("SELECT pickup_district_id FROM return_requests WHERE id = ?", String.class, refund.id())).isEqualTo(PICKUP_ONLY);
+    }
+
     // ── S: settings switch ───────────────────────────────────────────────────
 
     @Test
