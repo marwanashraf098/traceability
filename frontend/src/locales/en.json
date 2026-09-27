@@ -1144,7 +1144,8 @@
         "laterArrivals": "Items that arrive later can still be scanned in.",
         "restNotComing": "The rest isn't coming",
         "restNotComingDone": "Marked: the rest isn't coming.",
-        "closeRequest": "Close request…"
+        "closeRequest": "Close request…",
+        "notTracked": "Not tracked"
       },
       "attention": "Attention",
       "overdue": "Overdue · {{days}}d",
@@ -1164,7 +1165,8 @@
         "damaged": "Damaged",
         "toInspect": "Arrived · to inspect",
         "notArrived": "Not arrived",
-        "notComing": "Not coming"
+        "notComing": "Not coming",
+        "toReceive": "Arrived · to receive"
       },
       "refund": {
         "title": "Record the refund",

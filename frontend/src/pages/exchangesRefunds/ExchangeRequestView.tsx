@@ -4,6 +4,7 @@ import { AlertCircle, ArrowRight } from 'lucide-react'
 import { approveReturnRequest, switchExchangeToRefund, ReturnRequestDetail } from '../../api'
 import { Button, cn, useToast } from '../../components/ui'
 import { reasonLabel, shortCustomerName } from './requestFormat'
+import { PieceCode } from './RequestLifecycle'
 
 /**
  * Step 5b — the request drawer for an exchange (mockups X4 / X6): what comes back → what goes
@@ -94,7 +95,7 @@ export default function ExchangeRequestView({
             <div className="flex-1 rounded-lg bg-elevated px-3 py-2.5" data-testid="exchange-coming-back">
               <p className="text-caption text-muted">{t('exchangesRefunds.requests.exchange.comingBack')}</p>
               <p className="text-body font-semibold text-primary"><bdi>{item.variantTitle}</bdi></p>
-              {!soldOut && <p className="text-small text-muted font-mono" dir="ltr"><bdi>{item.shortCode}</bdi></p>}
+              {!soldOut && <p className="text-small text-muted"><PieceCode item={item} /></p>}
             </div>
             <div className="flex items-center text-muted" aria-hidden="true">
               <ArrowRight size={18} className="rtl:rotate-180" />

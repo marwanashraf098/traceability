@@ -26,11 +26,21 @@ export function arrivedCount(items: ReturnRequestItem[]): number {
 }
 
 function itemOutcome(item: ReturnRequestItem): { key: string; tone: BadgeTone } {
+  // Step 6a: an untracked item has no scan / disposition — its Arrived condition decides.
+  if (item.itemStatus === 'done' && item.arrivedCondition === 'damaged') return { key: 'damaged', tone: 'critical' }
+  if (item.itemStatus === 'done' && item.arrivedCondition === 'sellable') return { key: 'toReceive', tone: 'info' }
   if (item.itemStatus === 'done' && item.disposition === 'damaged') return { key: 'damaged', tone: 'critical' }
   if (item.itemStatus === 'done') return { key: 'restocked', tone: 'success' }
   if (item.itemStatus === 'arrived') return { key: 'toInspect', tone: 'info' }
   if (item.itemStatus === 'not_coming') return { key: 'notComing', tone: 'neutral' }
   return { key: 'notArrived', tone: 'neutral' }
+}
+
+/** A request item's piece code, or "Not tracked" for an item of an untracked order line (Step 6a). */
+export function PieceCode({ item }: { item: Pick<ReturnRequestItem, 'shortCode'> }) {
+  const { t } = useTranslation()
+  if (!item.shortCode) return <span data-testid="not-tracked">{t('exchangesRefunds.requests.drawer.notTracked')}</span>
+  return <span className="font-mono" dir="ltr"><bdi>{item.shortCode}</bdi></span>
 }
 
 /** R1 / R3 — the items with their state on the right. `showReason`: R3 shows the customer's reason. */
@@ -58,7 +68,7 @@ export function ItemsWithOutcome({ items, showReason }: { items: ReturnRequestIt
                 <p className="text-body font-medium text-primary truncate">{item.productTitle}</p>
                 <p className="text-small text-muted truncate">
                   {item.variantTitle}
-                  {back && <>{item.variantTitle && ' · '}<span className="font-mono" dir="ltr"><bdi>{item.shortCode}</bdi></span></>}
+                  {back && <>{item.variantTitle && ' · '}<PieceCode item={item} /></>}
                   {extra && <>{(item.variantTitle || back) && ' · '}<bdi>{extra}</bdi></>}
                 </p>
               </div>

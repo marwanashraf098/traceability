@@ -1143,7 +1143,8 @@
         "laterArrivals": "يمكن مسح المنتجات التي تصل لاحقًا.",
         "restNotComing": "الباقي لن يصل",
         "restNotComingDone": "تم التسجيل: الباقي لن يصل.",
-        "closeRequest": "إغلاق الطلب…"
+        "closeRequest": "إغلاق الطلب…",
+        "notTracked": "غير متتبَّع"
       },
       "attention": "يحتاج انتباه",
       "overdue": "متأخر · {{days}} يوم",
@@ -1163,7 +1164,8 @@
         "damaged": "تالف",
         "toInspect": "وصل · بانتظار الفحص",
         "notArrived": "لم يصل",
-        "notComing": "لن يصل"
+        "notComing": "لن يصل",
+        "toReceive": "وصل · بانتظار الاستلام"
       },
       "refund": {
         "title": "تسجيل الاسترداد",

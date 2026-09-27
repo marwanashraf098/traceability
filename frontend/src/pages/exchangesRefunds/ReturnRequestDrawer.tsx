@@ -11,7 +11,7 @@ import { displayStatus, displayStatusTone, reasonLabel, sentLabel, shortCustomer
 import ExchangeRequestView from './ExchangeRequestView'
 import ExchangeProgressView from './ExchangeProgressView'
 import {
-  arrivedCount, CloseDialog, HistoryTimeline, ItemsWithOutcome, LinkParcelDialog, RefundForm, RefundsList, UnexpectedItems,
+  arrivedCount, CloseDialog, PieceCode, HistoryTimeline, ItemsWithOutcome, LinkParcelDialog, RefundForm, RefundsList, UnexpectedItems,
 } from './RequestLifecycle'
 
 export const REJECT_REASON_MAX = 300
@@ -543,7 +543,7 @@ function DrawerContent({
                   <p className="text-body font-medium text-primary truncate">{item.productTitle}</p>
                   <p className="text-small text-muted truncate">
                     {item.variantTitle && <>{item.variantTitle} · </>}
-                    <span className="font-mono" dir="ltr"><bdi>{item.shortCode}</bdi></span>
+                    <PieceCode item={item} />
                   </p>
                 </div>
                 <Badge tone="neutral" label={reasonLabel(t, item.reasonCode)} />

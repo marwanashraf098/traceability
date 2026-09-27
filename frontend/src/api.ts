@@ -2090,8 +2090,8 @@ export interface ReturnRequestPage {
 
 export interface ReturnRequestItem {
   id: string
-  pieceId: string
-  shortCode: string
+  pieceId: string | null
+  shortCode: string | null
   variantId: string
   productTitle: string
   variantTitle: string | null
@@ -2101,6 +2101,12 @@ export interface ReturnRequestItem {
   /** Step 4d-1/4d-2 — item lifecycle and its inspection outcome. Absent on older responses. */
   itemStatus?: 'awaiting' | 'arrived' | 'done' | 'not_coming'
   arrivedAt?: string | null
+  /** Step 6a — false for an item of an UNTRACKED order line (no piece: pieceId / shortCode null). */
+  tracked?: boolean
+  orderItemId?: string | null
+  unitNo?: number | null
+  /** Step 6a — set when an untracked item was marked Arrived. */
+  arrivedCondition?: 'sellable' | 'damaged' | null
   /** Step 5b — the variant an exchange sends out, with its live stock at render time. */
   replacementVariantId?: string | null
   replacementVariantTitle?: string | null
