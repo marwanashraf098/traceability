@@ -93,6 +93,19 @@ export function matchingOptions(line: LookupLine, values: string[]): ExchangeOpt
   return (line.exchangeOptions ?? []).filter(o => values.every((v, i) => v === '' || o.options[i] === v))
 }
 
+/**
+ * Step 6b — a line's key: an untracked line (Step 6a) is its order line (the same variant can
+ * also be a tracked line on a mixed order); a tracked line is its variant, as before.
+ */
+export function lineKey(line: Pick<LookupLine, 'variantId' | 'orderItemId'>): string {
+  return line.orderItemId ?? line.variantId
+}
+
+/** What a submit line references: the order line for an untracked line, else the variant. */
+function lineRef(line: LookupLine): { variantId: string } | { orderItemId: string } {
+  return line.orderItemId ? { orderItemId: line.orderItemId } : { variantId: line.variantId }
+}
+
 /** Lines the customer could exchange: returnable, with at least one sibling variant. */
 export function exchangeable(line: LookupLine): boolean {
   return !line.nonReturnable && line.returnableQuantity > 0 && (line.exchangeOptions?.length ?? 0) > 0
@@ -226,27 +239,27 @@ export default function PortalApp({ slug }: { slug: string | null }) {
   }
 
   // ── P2 ────────────────────────────────────────────────────────────────────
-  const selectedLines = order ? order.lines.filter(l => (selections[l.variantId]?.qty ?? 0) > 0) : []
-  const selectedCount = selectedLines.reduce((n, l) => n + selections[l.variantId].qty, 0)
-  const missingReason = selectedLines.some(l => !selections[l.variantId].reason)
+  const selectedLines = order ? order.lines.filter(l => (selections[lineKey(l)]?.qty ?? 0) > 0) : []
+  const selectedCount = selectedLines.reduce((n, l) => n + selections[lineKey(l)].qty, 0)
+  const missingReason = selectedLines.some(l => !selections[lineKey(l)].reason)
   const canContinue = selectedLines.length > 0 && !missingReason
 
-  function setQty(variantId: string, qty: number) {
-    setSelections(s => ({ ...s, [variantId]: { qty, reason: s[variantId]?.reason ?? '' } }))
+  function setQty(key: string, qty: number) {
+    setSelections(s => ({ ...s, [key]: { qty, reason: s[key]?.reason ?? '' } }))
   }
 
-  function setReason(variantId: string, reason: string) {
-    setSelections(s => ({ ...s, [variantId]: { qty: s[variantId]?.qty ?? 0, reason } }))
+  function setReason(key: string, reason: string) {
+    setSelections(s => ({ ...s, [key]: { qty: s[key]?.qty ?? 0, reason } }))
   }
 
   // ── X1 / X2 (Step 5b) ─────────────────────────────────────────────────────
   const exchangesOn = config?.exchangesEnabled === true
   const exchangeMode = exchangesOn && mode === 'exchange'
-  const exchangeLine = order?.lines.find(l => l.variantId === exchangeLineId) ?? null
+  const exchangeLine = order?.lines.find(l => lineKey(l) === exchangeLineId) ?? null
   const exchangeTarget = exchangeLine?.exchangeOptions?.find(o => o.variantId === exchangeTargetId) ?? null
 
   function chooseExchangeLine(line: LookupLine) {
-    setExchangeLineId(line.variantId)
+    setExchangeLineId(lineKey(line))
     setExchangeValues(initialValues(line))
     setExchangeTargetId(null)
   }
@@ -285,13 +298,13 @@ export default function PortalApp({ slug }: { slug: string | null }) {
       ...(exchangeMode && exchangeLine && exchangeTarget
         ? {
             mode: 'exchange' as const,
-            lines: [{ variantId: exchangeLine.variantId, quantity: 1, reasonCode: exchangeReason }],
+            lines: [{ ...lineRef(exchangeLine), quantity: 1, reasonCode: exchangeReason }],
             replacementVariantId: exchangeTarget.variantId,
             refundFallbackOk: fallbackOk,
           }
         : {
             lines: selectedLines.map(l => ({
-              variantId: l.variantId, quantity: selections[l.variantId].qty, reasonCode: selections[l.variantId].reason,
+              ...lineRef(l), quantity: selections[lineKey(l)].qty, reasonCode: selections[lineKey(l)].reason,
             })),
           }),
       ...(trimmedEmail ? { email: trimmedEmail } : {}),
@@ -377,10 +390,10 @@ export default function PortalApp({ slug }: { slug: string | null }) {
           <legend className="pp-label pp-legend">{t('x1.whichItem')}</legend>
           {order.lines.map(line => {
             const can = exchangeable(line)
-            const selected = exchangeLineId === line.variantId
+            const selected = exchangeLineId === lineKey(line)
             if (!can) {
               return (
-                <div key={line.variantId} className="pp-item pp-item--disabled" data-testid="exchange-line">
+                <div key={lineKey(line)} className="pp-item pp-item--disabled" data-testid="exchange-line">
                   <Thumb src={line.imageUrl} muted />
                   <div className="pp-item__text">
                     <div className="pp-item__title"><bdi>{line.productTitle}</bdi></div>
@@ -394,7 +407,7 @@ export default function PortalApp({ slug }: { slug: string | null }) {
               )
             }
             return (
-              <div key={line.variantId} className={'pp-item' + (selected ? ' pp-item--selected' : '')} data-testid="exchange-line">
+              <div key={lineKey(line)} className={'pp-item' + (selected ? ' pp-item--selected' : '')} data-testid="exchange-line">
                 <label className="pp-radioitem">
                   <input type="radio" name="pp-exchange-item" checked={selected} onChange={() => chooseExchangeLine(line)} />
                   <Thumb src={line.imageUrl} />
@@ -502,12 +515,12 @@ export default function PortalApp({ slug }: { slug: string | null }) {
         </div>
         {exchangesOn && <ModeChoice mode={mode} onChange={setMode} />}
         {order.lines.map(line => {
-          const sel = selections[line.variantId] ?? { qty: 0, reason: '' }
+          const sel = selections[lineKey(line)] ?? { qty: 0, reason: '' }
           const disabled = line.nonReturnable || line.returnableQuantity <= 0
-          const reasonId = `reason-${line.variantId}`
+          const reasonId = `reason-${lineKey(line)}`
           if (disabled) {
             return (
-              <section key={line.variantId} className="pp-item pp-item--disabled" data-testid="portal-line">
+              <section key={lineKey(line)} className="pp-item pp-item--disabled" data-testid="portal-line">
                 <Thumb src={line.imageUrl} muted />
                 <div className="pp-item__text">
                   <div className="pp-item__title"><bdi>{line.productTitle}</bdi></div>
@@ -520,7 +533,7 @@ export default function PortalApp({ slug }: { slug: string | null }) {
             )
           }
           return (
-            <section key={line.variantId} className={'pp-item' + (sel.qty > 0 ? ' pp-item--selected' : '')} data-testid="portal-line">
+            <section key={lineKey(line)} className={'pp-item' + (sel.qty > 0 ? ' pp-item--selected' : '')} data-testid="portal-line">
               <div className="pp-item__head">
                 <Thumb src={line.imageUrl} />
                 <div className="pp-item__text">
@@ -532,12 +545,12 @@ export default function PortalApp({ slug }: { slug: string | null }) {
                 <div className="pp-qty__label">{t('p2.quantity')}</div>
                 <button
                   type="button" className="pp-stepbtn" aria-label={t('p2.decrease')}
-                  disabled={sel.qty <= 0} onClick={() => setQty(line.variantId, sel.qty - 1)}
+                  disabled={sel.qty <= 0} onClick={() => setQty(lineKey(line), sel.qty - 1)}
                 >−</button>
                 <div className="pp-qty__value" aria-live="polite">{sel.qty}</div>
                 <button
                   type="button" className="pp-stepbtn" aria-label={t('p2.increase')}
-                  disabled={sel.qty >= line.returnableQuantity} onClick={() => setQty(line.variantId, sel.qty + 1)}
+                  disabled={sel.qty >= line.returnableQuantity} onClick={() => setQty(lineKey(line), sel.qty + 1)}
                 >+</button>
                 <div className="pp-muted pp-qty__of">{t('p2.of', { count: line.returnableQuantity })}</div>
               </div>
@@ -548,7 +561,7 @@ export default function PortalApp({ slug }: { slug: string | null }) {
                     id={reasonId} className="pp-input" required
                     aria-invalid={!sel.reason}
                     value={sel.reason}
-                    onChange={e => setReason(line.variantId, e.target.value)}
+                    onChange={e => setReason(lineKey(line), e.target.value)}
                   >
                     <option value="" disabled>{t('p2.reasonPlaceholder')}</option>
                     {config.reasonCodes.map(code => (
@@ -596,14 +609,14 @@ export default function PortalApp({ slug }: { slug: string | null }) {
             <button type="button" className="pp-link" onClick={() => setStep('items')}>{t('p3.edit')}</button>
           </div>
           {selectedLines.map(l => (
-            <div key={l.variantId} className="pp-item__head" data-testid="summary-line">
+            <div key={lineKey(l)} className="pp-item__head" data-testid="summary-line">
               <Thumb src={l.imageUrl} small />
               <div className="pp-item__text">
                 <div className="pp-item__title pp-item__title--sm">
                   <bdi>{l.productTitle}{l.variantTitle && ` · ${l.variantTitle}`}</bdi>
                 </div>
                 <div className="pp-item__sub">
-                  {t('p3.lineQty', { count: selections[l.variantId].qty, reason: t(`reasons.${selections[l.variantId].reason}`) })}
+                  {t('p3.lineQty', { count: selections[lineKey(l)].qty, reason: t(`reasons.${selections[lineKey(l)].reason}`) })}
                 </div>
               </div>
             </div>

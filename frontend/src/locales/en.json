@@ -885,7 +885,15 @@
         "dispDamaged": "damaged",
         "dispMismatch": "mismatch",
         "expand": "Show parcel",
-        "request": "Return request"
+        "request": "Return request",
+        "untracked": {
+          "notTracked": "Not tracked",
+          "arrivedSellable": "Arrived · sellable",
+          "arrivedDamagedAction": "Arrived · damaged",
+          "arrivedToReceive": "Arrived · to receive",
+          "arrivedDamaged": "Arrived · damaged",
+          "undo": "Undo"
+        }
       },
       "footer": {
         "parcels": "{{count}} parcel",
@@ -1311,6 +1319,15 @@
             "current": "in progress"
           }
         }
+      },
+      "untracked": {
+        "arrivedSellable": "Arrived · sellable",
+        "arrivedDamaged": "Arrived · damaged",
+        "undo": "Undo arrival",
+        "marked": "Marked arrived",
+        "undone": "Arrival undone",
+        "oldItem": "Old item (not tracked)",
+        "notTrackedHint": "No label to scan — mark it arrived when it comes back."
       }
     }
   },

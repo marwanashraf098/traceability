@@ -2,7 +2,7 @@ import { FormEvent, ReactNode, useEffect, useId, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { AlertCircle, Check, Info } from 'lucide-react'
 import {
-  closeReturnRequest, linkReturnLeg, recordRefund, voidRefund,
+  closeReturnRequest, linkReturnLeg, markRequestItemArrived, recordRefund, undoRequestItemArrived, voidRefund,
   LinkableParcel, RefundMethod, RefundSuggestion, ReturnRefund, ReturnRequestDetail, ReturnRequestEvent, ReturnRequestItem,
 } from '../../api'
 import { Badge, BadgeTone, Button, cn, useToast } from '../../components/ui'
@@ -44,7 +44,69 @@ export function PieceCode({ item }: { item: Pick<ReturnRequestItem, 'shortCode'>
 }
 
 /** R1 / R3 — the items with their state on the right. `showReason`: R3 shows the customer's reason. */
-export function ItemsWithOutcome({ items, showReason }: { items: ReturnRequestItem[]; showReason: boolean }) {
+const ARRIVED_OPEN = ['approved', 'pickup_booked', 'received']
+const UNDO_BLOCKED = ['refunded', 'exchanged', 'closed', 'rejected', 'cancelled']
+
+/**
+ * Step 6b — an untracked item (no piece to scan) in the drawer: "Arrived · sellable" /
+ * "Arrived · damaged" while it's awaited on an open request, then Undo while the request isn't
+ * finished and no refund was recorded (the 6a drawer endpoints re-check both).
+ */
+export function UntrackedArrivedControls({ detail, item, onChanged }: {
+  detail: ReturnRequestDetail
+  item: ReturnRequestItem
+  onChanged: () => Promise<void>
+}) {
+  const { t } = useTranslation()
+  const { toast } = useToast()
+  const [busy, setBusy] = useState<'sellable' | 'damaged' | 'undo' | null>(null)
+  if (item.tracked !== false) return null
+  const canArrive = item.itemStatus === 'awaiting' && ARRIVED_OPEN.includes(detail.status)
+  const canUndo = item.arrivedCondition != null && !UNDO_BLOCKED.includes(detail.status) && (detail.refunds ?? []).length === 0
+  if (!canArrive && !canUndo) return null
+
+  async function run(action: 'sellable' | 'damaged' | 'undo') {
+    setBusy(action)
+    try {
+      if (action === 'undo') await undoRequestItemArrived(detail.id, item.id)
+      else await markRequestItemArrived(detail.id, item.id, action)
+      toast({ tone: 'success', message: t(action === 'undo'
+        ? 'exchangesRefunds.requests.untracked.undone' : 'exchangesRefunds.requests.untracked.marked') })
+    } catch {
+      toast({ tone: 'error', message: t('exchangesRefunds.requests.drawer.actionFailed') })
+    } finally {
+      setBusy(null)
+      await onChanged()
+    }
+  }
+
+  return (
+    <div className="basis-full flex flex-wrap justify-end gap-2" data-testid={`untracked-controls-${item.id}`}>
+      {canArrive ? (
+        <>
+          <Button size="sm" loading={busy === 'sellable'} disabled={busy != null} onClick={() => run('sellable')}>
+            {t('exchangesRefunds.requests.untracked.arrivedSellable')}
+          </Button>
+          <Button size="sm" variant="outline" loading={busy === 'damaged'} disabled={busy != null} onClick={() => run('damaged')}>
+            {t('exchangesRefunds.requests.untracked.arrivedDamaged')}
+          </Button>
+        </>
+      ) : (
+        <Button size="sm" variant="outline" loading={busy === 'undo'} disabled={busy != null} onClick={() => run('undo')}>
+          {t('exchangesRefunds.requests.untracked.undo')}
+        </Button>
+      )}
+    </div>
+  )
+}
+
+export function ItemsWithOutcome({ items, showReason, detail, onChanged }: {
+  items: ReturnRequestItem[]
+  showReason: boolean
+  /** Step 6b — when given, untracked items get their Arrived / Undo controls. */
+  detail?: ReturnRequestDetail
+  onChanged?: () => Promise<void>
+}) {
   const { t } = useTranslation()
   const arrived = arrivedCount(items)
   const counted = items.filter(i => i.itemStatus !== 'not_coming').length
@@ -63,7 +125,7 @@ export function ItemsWithOutcome({ items, showReason }: { items: ReturnRequestIt
             ? item.damageReason
             : showReason ? reasonLabel(t, item.reasonCode) : null
           return (
-            <li key={item.id} className="card px-3.5 py-3 flex items-center gap-3" data-testid="request-item">
+            <li key={item.id} className="card px-3.5 py-3 flex flex-wrap items-center gap-3" data-testid="request-item">
               <div className="min-w-0 flex-1">
                 <p className="text-body font-medium text-primary truncate">{item.productTitle}</p>
                 <p className="text-small text-muted truncate">
@@ -75,6 +137,7 @@ export function ItemsWithOutcome({ items, showReason }: { items: ReturnRequestIt
               <span data-testid="item-outcome">
                 <Badge tone={outcome.tone} label={t(`exchangesRefunds.requests.outcome.${outcome.key}`)} />
               </span>
+              {detail && onChanged && <UntrackedArrivedControls detail={detail} item={item} onChanged={onChanged} />}
             </li>
           )
         })}

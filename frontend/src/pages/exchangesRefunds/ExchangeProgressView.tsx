@@ -4,7 +4,7 @@ import { Check } from 'lucide-react'
 import { bookExchangeNow, ReturnRequestDetail } from '../../api'
 import { Button, cn, useToast } from '../../components/ui'
 import { dateTimeLabel } from './requestFormat'
-import { CloseDialog } from './RequestLifecycle'
+import { CloseDialog, UntrackedArrivedControls } from './RequestLifecycle'
 import { BookingState } from './ReturnRequestDrawer'
 
 /**
@@ -110,6 +110,21 @@ export default function ExchangeProgressView({
                 )}
               </p>
             )}
+          </section>
+        )}
+
+        {/* Step 6b — an untracked old item has no label to scan: it's marked Arrived here (or on the parcel card). */}
+        {item && item.tracked === false && (item.itemStatus === 'awaiting' || item.arrivedCondition != null) && (
+          <section className="rounded-lg border border-line px-4 py-3 flex flex-wrap items-center gap-3" data-testid="exchange-untracked-old-item">
+            <div className="flex-1 min-w-0">
+              <p className="text-body font-semibold text-primary">{t('exchangesRefunds.requests.untracked.oldItem')}</p>
+              <p className="text-small text-muted">
+                {item.arrivedCondition
+                  ? t(item.arrivedCondition === 'damaged' ? 'exchangesRefunds.requests.outcome.damaged' : 'exchangesRefunds.requests.outcome.toReceive')
+                  : t('exchangesRefunds.requests.untracked.notTrackedHint')}
+              </p>
+            </div>
+            <UntrackedArrivedControls detail={detail} item={item} onChanged={onReload} />
           </section>
         )}
 

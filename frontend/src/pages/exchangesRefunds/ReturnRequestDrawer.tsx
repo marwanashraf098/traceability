@@ -11,7 +11,7 @@ import { displayStatus, displayStatusTone, reasonLabel, sentLabel, shortCustomer
 import ExchangeRequestView from './ExchangeRequestView'
 import ExchangeProgressView from './ExchangeProgressView'
 import {
-  arrivedCount, CloseDialog, PieceCode, HistoryTimeline, ItemsWithOutcome, LinkParcelDialog, RefundForm, RefundsList, UnexpectedItems,
+  arrivedCount, CloseDialog, PieceCode, UntrackedArrivedControls, HistoryTimeline, ItemsWithOutcome, LinkParcelDialog, RefundForm, RefundsList, UnexpectedItems,
 } from './RequestLifecycle'
 
 export const REJECT_REASON_MAX = 300
@@ -377,7 +377,8 @@ function DrawerContent({
             </dl>
           )}
 
-          {!showRefunds && <ItemsWithOutcome items={detail.items} showReason={partly || detail.status === 'received'} />}
+          {!showRefunds && <ItemsWithOutcome items={detail.items} showReason={partly || detail.status === 'received'}
+            detail={detail} onChanged={reloadAll} />}
 
           {detail.status !== 'refunded' && detail.status !== 'closed' && <UnexpectedItems detail={detail} />}
 
@@ -537,7 +538,7 @@ function DrawerContent({
           </h3>
           <ul className="space-y-2">
             {detail.items.map(item => (
-              <li key={item.id} className="card p-3 flex items-center gap-3" data-testid="request-item">
+              <li key={item.id} className="card p-3 flex flex-wrap items-center gap-3" data-testid="request-item">
                 <ProductThumb src={item.imageUrl} alt={item.productTitle} size={40} />
                 <div className="min-w-0 flex-1">
                   <p className="text-body font-medium text-primary truncate">{item.productTitle}</p>
@@ -547,6 +548,7 @@ function DrawerContent({
                   </p>
                 </div>
                 <Badge tone="neutral" label={reasonLabel(t, item.reasonCode)} />
+                <UntrackedArrivedControls detail={detail} item={item} onChanged={reloadAll} />
               </li>
             ))}
           </ul>

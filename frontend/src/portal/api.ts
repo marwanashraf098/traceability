@@ -34,6 +34,9 @@ export interface ExchangeOption {
 
 export interface LookupLine {
   variantId: string
+  /** Step 6a — present only on a line Traced didn't track: submit it by orderItemId. */
+  orderItemId?: string
+  tracked?: false
   productTitle: string
   variantTitle: string | null
   imageUrl: string | null
@@ -73,8 +76,10 @@ export interface LookupResult {
   pickup: PickupOffer | null
 }
 
+/** A tracked line by variantId, or (Step 6a) an untracked line by orderItemId. */
 export interface SubmitLine {
-  variantId: string
+  variantId?: string
+  orderItemId?: string
   quantity: number
   reasonCode: string
 }

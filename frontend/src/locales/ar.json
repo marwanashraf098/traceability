@@ -883,7 +883,15 @@
         "dispDamaged": "تالف",
         "dispMismatch": "غير مطابق",
         "expand": "عرض الشحنة",
-        "request": "طلب الإرجاع"
+        "request": "طلب الإرجاع",
+        "untracked": {
+          "notTracked": "غير متتبَّع",
+          "arrivedSellable": "وصل · صالح للبيع",
+          "arrivedDamagedAction": "وصل · تالف",
+          "arrivedToReceive": "وصل · بانتظار الاستلام",
+          "arrivedDamaged": "وصل · تالف",
+          "undo": "تراجع"
+        }
       },
       "footer": {
         "parcels": "{{count}} شحنة",
@@ -1310,6 +1318,15 @@
             "current": "قيد التنفيذ"
           }
         }
+      },
+      "untracked": {
+        "arrivedSellable": "وصل · صالح للبيع",
+        "arrivedDamaged": "وصل · تالف",
+        "undo": "التراجع عن الوصول",
+        "marked": "تم تسجيل الوصول",
+        "undone": "تم التراجع عن الوصول",
+        "oldItem": "المنتج القديم (غير متتبَّع)",
+        "notTrackedHint": "لا توجد بطاقة للمسح — سجّل وصوله عند عودته."
       }
     }
   },

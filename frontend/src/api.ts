@@ -2311,6 +2311,15 @@ export function markReturnRequestRefunded(id: string) {
   return request<void>(`/return-requests/${id}/mark-refunded`, { method: 'POST' })
 }
 
+/** Step 6a — an untracked request item arrived (sellable / damaged); owner / manager. */
+export function markRequestItemArrived(id: string, itemId: string, condition: 'sellable' | 'damaged') {
+  return request<void>(`/return-requests/${id}/items/${itemId}/arrived`, { method: 'POST', body: JSON.stringify({ condition }) })
+}
+
+export function undoRequestItemArrived(id: string, itemId: string) {
+  return request<void>(`/return-requests/${id}/items/${itemId}/arrived/undo`, { method: 'POST' })
+}
+
 export function closeReturnRequest(id: string, reason: 'no_refund' | 'other' | 'exchange_failed', note?: string) {
   return request<void>(`/return-requests/${id}/close`, { method: 'POST', body: JSON.stringify({ reason, note }) })
 }

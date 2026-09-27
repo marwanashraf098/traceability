@@ -159,7 +159,7 @@ interface Parcel {
   returnedAt: string | null
   bosta: { itemsCount: number | null; description: string | null; descriptionAr: string | null } | null
   tracked: boolean
-  intakeOutcome: 'scanned' | 'received_untracked' | null
+  intakeOutcome: 'scanned' | 'received_untracked' | 'request_items_arrived' | null
   markedBy: string | null
   markedAt: string | null
   markedInThisSession: boolean
@@ -167,6 +167,23 @@ interface Parcel {
   scannedItems: SessionItem[]
   counts: { expected: number; scanned: number }
   complete: boolean
+  /** Step 6a — the return request whose items this parcel carries (its courier-return leg, or a
+   *  Traced-booked exchange AWB) and all of them, untracked ones included. Absent on older responses. */
+  itemsRequestId?: string | null
+  itemsRequestReference?: string | null
+  requestItems?: ParcelRequestItem[]
+}
+
+/** Step 6a — one request item on a parcel card. Untracked items (tracked:false) have no piece. */
+interface ParcelRequestItem {
+  id: string
+  tracked: boolean
+  pieceId: string | null
+  shortCode: string | null
+  productTitle: string
+  variantTitle: string | null
+  itemStatus: 'awaiting' | 'arrived' | 'done' | 'not_coming'
+  arrivedCondition: 'sellable' | 'damaged' | null
 }
 
 interface LastScan {
@@ -709,6 +726,22 @@ function OpenSessionScreen({ sessionId, onExit, onStartNew }: {
     }
   }
 
+  // Step 6b — "Arrived" for an untracked request item (6a session endpoint), and its undo.
+  const [itemBusy, setItemBusy] = useState<string | null>(null)
+  const requestItemAction = async (itemId: string, action: 'sellable' | 'damaged' | 'undo') => {
+    if (itemBusy) return
+    setItemBusy(itemId)
+    try {
+      await api(`/returns/sessions/${sessionId}/request-items/${itemId}/arrived${action === 'undo' ? '/undo' : ''}`,
+        { method: 'POST', ...(action === 'undo' ? {} : { body: JSON.stringify({ condition: action }) }) })
+      await load()
+    } catch (e: unknown) {
+      setError((e as Error).message || t('common.error'))
+    } finally {
+      setItemBusy(null)
+    }
+  }
+
   const abandon = async () => {
     setAbandoning(true)
     try {
@@ -1008,6 +1041,8 @@ function OpenSessionScreen({ sessionId, onExit, onStartNew }: {
             busy={parcelBusy === parcel.shipmentId}
             onMarkReceived={() => parcelAction(parcel.shipmentId, 'mark-received')}
             onUndo={() => parcelAction(parcel.shipmentId, 'undo-mark-received')}
+            itemBusy={itemBusy}
+            onItemAction={requestItemAction}
             renderExpected={renderExpected}
             renderItem={renderItem}
           />
@@ -1092,7 +1127,8 @@ function OpenSessionScreen({ sessionId, onExit, onStartNew }: {
 // render through the SAME row renderers as before (renderItem / renderExpected), so the
 // restock / damaged / mismatch and reprint controls are the existing ones, unchanged. ──
 
-function ParcelCard({ parcel, expanded, onToggle, busy, onMarkReceived, onUndo, renderExpected, renderItem }: {
+function ParcelCard({ parcel, expanded, onToggle, busy, onMarkReceived, onUndo, renderExpected, renderItem,
+  itemBusy = null, onItemAction }: {
   parcel: Parcel
   expanded: boolean
   onToggle: (expand: boolean) => void
@@ -1101,23 +1137,35 @@ function ParcelCard({ parcel, expanded, onToggle, busy, onMarkReceived, onUndo, 
   onUndo: () => void
   renderExpected: (p: ExpectedPiece) => React.ReactNode
   renderItem: (item: SessionItem) => React.ReactNode
+  itemBusy?: string | null
+  onItemAction?: (itemId: string, action: 'sellable' | 'damaged' | 'undo') => void
 }) {
   const { t, i18n } = useTranslation()
   const lang = i18n.language
   const isAr = lang === 'ar'
   const received = parcel.intakeOutcome === 'received_untracked'
-  const untrackedOpen = parcel.leg === 'return' && !parcel.tracked && !parcel.intakeOutcome
+  // Step 6b: the untracked items of the request this parcel carries — each gets its own Arrived
+  // action, so a request-linked parcel is never marked received as a whole.
+  const untrackedItems = (parcel.requestItems ?? []).filter(ri => !ri.tracked)
+  const untrackedArrived = untrackedItems.filter(ri => ri.arrivedCondition != null).length
+  const untrackedOpen = parcel.leg === 'return' && !parcel.tracked && !parcel.intakeOutcome && untrackedItems.length === 0
   const awaiting = parcel.expectedPieces.length
   const nothingToScan = parcel.tracked && awaiting === 0 && parcel.scannedItems.length === 0 && !parcel.intakeOutcome
+    && untrackedItems.length === 0
+  const shownCounts = {
+    expected: parcel.counts.expected + untrackedItems.length,
+    scanned: parcel.counts.scanned + untrackedArrived,
+  }
+  const requestReference = parcel.requestReference ?? parcel.itemsRequestReference ?? null
 
   const pill: { tone: 'success' | 'warning' | 'neutral'; label: string } | null =
     received ? { tone: 'neutral', label: t('returns.openSession.parcel.receivedNotTracked') }
     : untrackedOpen ? { tone: 'neutral', label: t('returns.openSession.parcel.notTracked') }
     : parcel.complete ? { tone: 'success', label: expanded
-        ? t('returns.openSession.parcel.allIn', { count: parcel.counts.scanned })
+        ? t('returns.openSession.parcel.allIn', { count: shownCounts.scanned })
         : t('returns.openSession.parcel.allInShort') }
-    : parcel.counts.expected > 0 ? { tone: 'warning', label: t('returns.openSession.parcel.progress',
-        { scanned: parcel.counts.scanned, count: parcel.counts.expected }) }
+    : shownCounts.expected > 0 ? { tone: 'warning', label: t('returns.openSession.parcel.progress',
+        { scanned: shownCounts.scanned, count: shownCounts.expected }) }
     : null
 
   const order = parcel.orderNumber ?? '—'
@@ -1139,7 +1187,7 @@ function ParcelCard({ parcel, expanded, onToggle, busy, onMarkReceived, onUndo, 
         : d === 'damaged' ? 'returns.openSession.parcel.dispDamaged' : 'returns.openSession.parcel.dispMismatch'))
     const summary = !parcel.tracked
       ? t('returns.openSession.parcel.collapsedNotTracked', { order: isolatedOrder })
-      : [t('returns.openSession.parcel.collapsedItems', { order: isolatedOrder, count: parcel.counts.expected }), ...dispositions].join(' · ')
+      : [t('returns.openSession.parcel.collapsedItems', { order: isolatedOrder, count: shownCounts.expected }), ...dispositions].join(' · ')
     return (
       <button
         type="button"
@@ -1176,9 +1224,9 @@ function ParcelCard({ parcel, expanded, onToggle, busy, onMarkReceived, onUndo, 
         </div>
         <div className="flex gap-8 flex-1 min-w-0">
           <ParcelFact label={t('returns.openSession.parcel.order')} value={<bdi>{order}</bdi>} />
-          {parcel.requestReference && (
+          {requestReference && (
             <ParcelFact label={t('returns.openSession.parcel.request')}
-              value={<bdi className="font-mono" data-testid="parcel-request">{parcel.requestReference}</bdi>} />
+              value={<bdi className="font-mono" data-testid="parcel-request">{requestReference}</bdi>} />
           )}
           {parcel.customerShortName && (
             <ParcelFact label={t('returns.openSession.parcel.customer')} value={<bdi>{parcel.customerShortName}</bdi>} />
@@ -1262,10 +1310,64 @@ function ParcelCard({ parcel, expanded, onToggle, busy, onMarkReceived, onUndo, 
           <div className="px-5 pb-4 space-y-2.5">
             {parcel.scannedItems.map(renderItem)}
             {parcel.expectedPieces.map(renderExpected)}
+            {untrackedItems.map(ri => (
+              <UntrackedItemRow key={ri.id} item={ri} busy={itemBusy === ri.id}
+                onAction={action => onItemAction?.(ri.id, action)} />
+            ))}
           </div>
         </div>
       )}
     </section>
+  )
+}
+
+/**
+ * Step 6b — an untracked request item on a parcel card: no label to scan, so the worker marks
+ * it Arrived as sellable or damaged (the 6a session endpoint). Afterwards: the outcome + Undo.
+ */
+function UntrackedItemRow({ item, busy, onAction }: {
+  item: ParcelRequestItem
+  busy: boolean
+  onAction: (action: 'sellable' | 'damaged' | 'undo') => void
+}) {
+  const { t } = useTranslation()
+  const arrived = item.arrivedCondition != null
+  return (
+    <div className="border border-line rounded-xl px-3.5 py-3 flex flex-wrap items-center gap-3" data-testid={`untracked-item-${item.id}`}>
+      <span className={cn('w-2 h-2 rounded-full shrink-0', arrived ? 'bg-success' : 'bg-info')} />
+      <div className="flex-1 min-w-0">
+        <p className="text-small font-semibold text-primary truncate"><bdi>{item.productTitle}</bdi></p>
+        <p className="text-caption text-muted truncate">
+          {item.variantTitle && <><bdi>{item.variantTitle}</bdi> · </>}
+          {t('returns.openSession.parcel.untracked.notTracked')}
+        </p>
+      </div>
+      {arrived ? (
+        <>
+          <span data-testid="untracked-outcome">
+            <Badge tone={item.arrivedCondition === 'damaged' ? 'critical' : 'info'}
+              label={t(item.arrivedCondition === 'damaged'
+                ? 'returns.openSession.parcel.untracked.arrivedDamaged'
+                : 'returns.openSession.parcel.untracked.arrivedToReceive')} />
+          </span>
+          <button className="btn-outline btn" disabled={busy} onClick={() => onAction('undo')} data-testid="untracked-undo">
+            {busy && <Spinner size={16} />}
+            {t('returns.openSession.parcel.untracked.undo')}
+          </button>
+        </>
+      ) : item.itemStatus === 'awaiting' ? (
+        <div className="flex gap-2">
+          {/* raw <button>s — Button doesn't spread data-testid */}
+          <button className="btn-brand" disabled={busy} onClick={() => onAction('sellable')} data-testid="untracked-arrived-sellable">
+            {busy && <Spinner size={16} />}
+            {t('returns.openSession.parcel.untracked.arrivedSellable')}
+          </button>
+          <button className="btn-outline btn" disabled={busy} onClick={() => onAction('damaged')} data-testid="untracked-arrived-damaged">
+            {t('returns.openSession.parcel.untracked.arrivedDamagedAction')}
+          </button>
+        </div>
+      ) : null}
+    </div>
   )
 }
 
