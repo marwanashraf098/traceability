@@ -86,7 +86,8 @@
     "send": "Send return request",
     "sending": "Sending…",
     "policy": "By sending, you agree to {{store}}'s <policy>return policy</policy>.",
-    "policyTitle": "Return policy"
+    "policyTitle": "Return policy",
+    "pickupTextExchange": "One Bosta courier brings your new size and collects the old item from the address this order was delivered to."
   },
   "p4": {
     "title": "Request sent",

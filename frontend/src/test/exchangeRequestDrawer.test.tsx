@@ -138,7 +138,7 @@ describe('Drawer X4 — in stock', () => {
     expect(within(drawer).getByTestId('exchange-fallback'))
       .toHaveTextContent('The customer agreed to a refund if the new size sells out first.')
     expect(within(drawer).getByTestId('exchange-approve-helper'))
-      .toHaveTextContent("Approving confirms the exchange; you'll book the courier.")
+      .toHaveTextContent('Approving books one Bosta exchange trip and adds the new size to Pick & Pack.')
     expect(within(drawer).queryByRole('button', { name: 'Switch to refund and approve' })).toBeNull()
   })
 

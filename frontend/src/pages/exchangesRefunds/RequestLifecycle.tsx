@@ -458,7 +458,9 @@ export function CloseDialog({ detail, onClose, onDone }: { detail: ReturnRequest
   const { t } = useTranslation()
   const { toast } = useToast()
   const id = useId()
-  const [reason, setReason] = useState<'no_refund' | 'other'>('no_refund')
+  // Step 5c: an exchange closes as "Exchange failed" (or Other) — it never has a refund.
+  const exchange = detail.type === 'exchange'
+  const [reason, setReason] = useState<'no_refund' | 'other' | 'exchange_failed'>(exchange ? 'exchange_failed' : 'no_refund')
   const [note, setNote] = useState('')
   const [busy, setBusy] = useState(false)
 
@@ -484,12 +486,17 @@ export function CloseDialog({ detail, onClose, onDone }: { detail: ReturnRequest
           <h2 id={`${id}-title`} className="text-h3 text-primary">
             {t('exchangesRefunds.requests.close.title')} <span className="font-mono"><bdi>{detail.reference}</bdi></span>
           </h2>
-          <p className="text-body text-secondary">{t('exchangesRefunds.requests.close.body')}</p>
+          <p className="text-body text-secondary">{t(exchange ? 'exchangesRefunds.requests.close.bodyExchange' : 'exchangesRefunds.requests.close.body')}</p>
         </div>
         <fieldset className="space-y-2">
           <legend className="text-body font-semibold text-primary mb-2">{t('exchangesRefunds.requests.close.reason')}</legend>
-          <ChoiceCard name={`${id}-reason`} checked={reason === 'no_refund'} onChange={() => setReason('no_refund')}
-            title={t('exchangesRefunds.requests.close.noRefund')} hint={t('exchangesRefunds.requests.close.noRefundHint')} />
+          {exchange ? (
+            <ChoiceCard name={`${id}-reason`} checked={reason === 'exchange_failed'} onChange={() => setReason('exchange_failed')}
+              title={t('exchangesRefunds.requests.close.exchangeFailed')} hint={t('exchangesRefunds.requests.close.exchangeFailedHint')} />
+          ) : (
+            <ChoiceCard name={`${id}-reason`} checked={reason === 'no_refund'} onChange={() => setReason('no_refund')}
+              title={t('exchangesRefunds.requests.close.noRefund')} hint={t('exchangesRefunds.requests.close.noRefundHint')} />
+          )}
           <ChoiceCard name={`${id}-reason`} checked={reason === 'other'} onChange={() => setReason('other')}
             title={t('exchangesRefunds.requests.close.other')} hint={t('exchangesRefunds.requests.close.otherHint')} />
         </fieldset>

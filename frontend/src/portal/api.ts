@@ -61,6 +61,8 @@ export interface PickupOffer {
   cityNameAr: string | null
   districts: PickupDistrict[]
   preselectedDistrictId: string | null
+  /** Step 5c — present when the store allows exchanges: the districts Bosta both delivers to and collects from. */
+  exchangeDistrictIds?: string[]
 }
 
 export interface LookupResult {

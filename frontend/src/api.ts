@@ -2050,10 +2050,10 @@ export function getRefunds(page = 0, size = 100) {
 
 export type ReturnRequestStatus =
   | 'requested' | 'approved' | 'rejected' | 'pickup_booked' | 'received'
-  | 'refund_pending' | 'refunded' | 'cancelled' | 'closed'
+  | 'refund_pending' | 'refunded' | 'cancelled' | 'closed' | 'exchanged'
 
 /** Step 4d-1 — why a request was closed without a refund. */
-export type ReturnRequestCloseReason = 'no_refund' | 'rest_not_coming' | 'other'
+export type ReturnRequestCloseReason = 'no_refund' | 'rest_not_coming' | 'other' | 'exchange_failed'
 
 /** Step 4c-3 — the Bosta return pickup booking (null = never attempted). */
 export type BookingStatus = 'pending' | 'booked' | 'failed' | 'failed_ambiguous' | 'needs_review'
@@ -2100,6 +2100,7 @@ export interface ReturnRequestItem {
   active: boolean
   /** Step 4d-1/4d-2 — item lifecycle and its inspection outcome. Absent on older responses. */
   itemStatus?: 'awaiting' | 'arrived' | 'done' | 'not_coming'
+  arrivedAt?: string | null
   /** Step 5b — the variant an exchange sends out, with its live stock at render time. */
   replacementVariantId?: string | null
   replacementVariantTitle?: string | null
@@ -2215,6 +2216,24 @@ export interface ReturnRequestDetail {
   linkableParcels?: LinkableParcel[]
   /** Step 5b — the customer agreed to a refund if the replacement sells out first. */
   refundFallbackOk?: boolean
+  /** Step 5c (X5) — the exchange Traced booked for this request; null until it exists. Exchange requests only. */
+  exchange?: ExchangeProgress | null
+  /** Step 5c — approved before "Allow exchanges" was switched on and never booked: "Book now". */
+  bookNowAvailable?: boolean
+}
+
+/** Step 5c — what the X5 progress is derived from (ReturnRequestService.exchangeProgress). */
+export interface ExchangeProgress {
+  trackingNumber: string
+  exchangeStatus: string
+  orderId: string | null
+  orderNumber: string | null
+  /** The internal replacement order's status (new → … → awaiting_pickup). */
+  orderStatus: string | null
+  /** Its forward leg's internal_state (created / with_courier / delivered / …). */
+  shipmentState: string | null
+  deliveredAt: string | null
+  withCourierAt: string | null
 }
 
 export function getReturnRequests(page = 0, size = 25, status?: ReturnRequestStatus) {
@@ -2233,6 +2252,11 @@ export function approveReturnRequest(id: string) {
 
 export function rejectReturnRequest(id: string, reason: string) {
   return request<void>(`/return-requests/${id}/reject`, { method: 'POST', body: JSON.stringify({ reason }) })
+}
+
+/** Step 5c — an approved exchange that was never booked → book it now. */
+export function bookExchangeNow(id: string) {
+  return request<void>(`/return-requests/${id}/booking/book-now`, { method: 'POST' })
 }
 
 /** 'failed' → book again. */
@@ -2281,7 +2305,7 @@ export function markReturnRequestRefunded(id: string) {
   return request<void>(`/return-requests/${id}/mark-refunded`, { method: 'POST' })
 }
 
-export function closeReturnRequest(id: string, reason: 'no_refund' | 'other', note?: string) {
+export function closeReturnRequest(id: string, reason: 'no_refund' | 'other' | 'exchange_failed', note?: string) {
   return request<void>(`/return-requests/${id}/close`, { method: 'POST', body: JSON.stringify({ reason, note }) })
 }
 
@@ -2336,6 +2360,9 @@ export interface PortalSettings {
   returnLocationName: string | null
   /** Step 4c-3 — an active Bosta account exists (the booking switch needs it). */
   bostaConnected?: boolean
+  /** Step 5c — "Allow exchanges" (needs pickup booking, Bosta and a return location). */
+  exchangesEnabled?: boolean
+  exchangesSince?: string | null
 }
 
 /**
@@ -2343,8 +2370,9 @@ export interface PortalSettings {
  * pickupBooking (Step 4c-3): sent only when the switch changed; absent leaves it as it is.
  */
 export type PortalSettingsInput =
-  Omit<PortalSettings, 'pickupBooking' | 'portalPickupBooking' | 'returnLocationName' | 'bostaConnected'>
-  & { pickupBooking?: boolean }
+  Omit<PortalSettings, 'pickupBooking' | 'portalPickupBooking' | 'returnLocationName' | 'bostaConnected'
+    | 'exchangesEnabled' | 'exchangesSince'>
+  & { pickupBooking?: boolean; exchangesEnabled?: boolean }
 
 export interface BostaReturnLocation {
   id: string

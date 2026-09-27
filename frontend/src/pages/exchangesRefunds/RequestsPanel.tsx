@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { getReturnRequests, ReturnRequestRow } from '../../api'
 import { Badge, Button, DataTable, DataTableColumn } from '../../components/ui'
-import { displayStatus, displayStatusTone, formatMoney, reasonLabel, sentLabel, shortCustomerName } from './requestFormat'
+import { displayStatus, displayStatusTone, formatMoney, reasonLabel, sentLabel, shortCustomerName, statusLabelKey } from './requestFormat'
 import ReturnRequestDrawer, { ExchangePill } from './ReturnRequestDrawer'
 
 export const REQUESTS_PAGE_SIZE = 25
@@ -160,8 +160,8 @@ export default function RequestsPanel({
  */
 function StatusPill({ row }: { row: ReturnRequestRow }) {
   const { t } = useTranslation()
-  const shown = displayStatus(row.status, row.arrivedCount ?? 0)
-  let label = t(`exchangesRefunds.requests.status.${shown}`)
+  const shown = row.type === 'exchange' ? row.status : displayStatus(row.status, row.arrivedCount ?? 0)
+  let label = t(statusLabelKey(shown, row.type))
   if (row.status === 'refunded' && row.refundTotal && Number(row.refundTotal) > 0) {
     label = t('exchangesRefunds.requests.refundedAmount', { amount: formatMoney(row.refundTotal, row.currency) })
   } else if (row.status === 'closed' && row.closeReason) {

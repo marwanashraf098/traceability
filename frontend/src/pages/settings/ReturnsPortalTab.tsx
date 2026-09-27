@@ -28,6 +28,7 @@ export function isValidLogoUrl(url: string): boolean {
 const HEX = /^#[0-9A-Fa-f]{6}$/
 
 type FieldKey = 'slug' | 'returnWindowDays' | 'logoUrl' | 'brandColor' | 'policyText' | 'returnLocationId' | 'pickupBooking'
+  | 'exchangesEnabled'
 
 /**
  * Returns portal Step 4e-A (M4) — the merchant's portal settings, owner and manager (the
@@ -56,6 +57,7 @@ export default function ReturnsPortalTab() {
   const [errors, setErrors] = useState<Partial<Record<FieldKey, string>>>({})
   const [copied, setCopied] = useState(false)
   const [bookingOn, setBookingOn] = useState(false)
+  const [exchangesOn, setExchangesOn] = useState(false)
 
   const load = useCallback(async () => {
     setLoadError(false)
@@ -65,6 +67,7 @@ export default function ReturnsPortalTab() {
       setForm(toInput(s))
       setWindowText(String(s.returnWindowDays))
       setBookingOn(!!s.portalPickupBooking)
+      setExchangesOn(!!s.exchangesEnabled)
     } catch {
       setLoadError(true)
     }
@@ -77,7 +80,8 @@ export default function ReturnsPortalTab() {
     const a = toInput(saved)
     return JSON.stringify(normalize(a)) !== JSON.stringify(normalize({ ...form, returnWindowDays: Number(windowText) }))
       || bookingOn !== !!saved.portalPickupBooking
-  }, [saved, form, windowText, bookingOn])
+      || exchangesOn !== !!saved.exchangesEnabled
+  }, [saved, form, windowText, bookingOn, exchangesOn])
 
   if (loadError) {
     return (
@@ -127,12 +131,14 @@ export default function ReturnsPortalTab() {
         brandColor: form.brandColor?.trim() ? form.brandColor.trim() : null,
         policyText: form.policyText?.trim() ? form.policyText : null,
         ...(bookingOn !== !!saved?.portalPickupBooking ? { pickupBooking: bookingOn } : {}),
+        ...(exchangesOn !== !!saved?.exchangesEnabled ? { exchangesEnabled: exchangesOn } : {}),
       }
       const s = await savePortalSettings(body)
       setSaved(s)
       setForm(toInput(s))
       setWindowText(String(s.returnWindowDays))
       setBookingOn(!!s.portalPickupBooking)
+      setExchangesOn(!!s.exchangesEnabled)
       toast({ tone: 'success', message: t('settings.portal.saved') })
     } catch (e) {
       if (e instanceof PortalSettingsError && e.field && isFieldKey(e.field)) {
@@ -247,7 +253,28 @@ export default function ReturnsPortalTab() {
             ? t('settings.portal.booking.needsBosta')
             : !bookingOn && !saved.returnLocationId ? t('settings.portal.booking.needsLocation') : undefined}
           error={errors.pickupBooking}
-          onChange={v => { setBookingOn(v); setErrors(e => ({ ...e, pickupBooking: undefined })) }}
+          onChange={v => {
+            setBookingOn(v)
+            // Exchanges are booked through pickup booking — switching it off switches them off.
+            if (!v) setExchangesOn(false)
+            setErrors(e => ({ ...e, pickupBooking: undefined }))
+          }}
+        />
+
+        {/* Step 5c — "Allow exchanges": only with pickup booking on, Bosta connected and a return location. */}
+        <SwitchRow
+          title={t('settings.portal.exchanges.title')}
+          description={t('settings.portal.exchanges.description')}
+          checked={exchangesOn}
+          disabled={!exchangesOn && !(bookingOn && saved.bostaConnected && saved.returnLocationId)}
+          note={exchangesOn ? undefined
+            : !saved.bostaConnected ? t('settings.portal.exchanges.needsBosta')
+              : !saved.returnLocationId ? t('settings.portal.exchanges.needsLocation')
+                : !bookingOn ? t('settings.portal.exchanges.needsBooking') : undefined}
+          noteTestId="exchanges-note"
+          error={errors.exchangesEnabled}
+          errorTestId="error-exchangesEnabled"
+          onChange={v => { setExchangesOn(v); setErrors(e => ({ ...e, exchangesEnabled: undefined })) }}
         />
 
         <NonReturnableList />
@@ -428,10 +455,10 @@ function ReturnLocationRow({
 }
 
 function SwitchRow({
-  title, description, checked, onChange, disabled, note, error,
+  title, description, checked, onChange, disabled, note, error, noteTestId = 'switch-note', errorTestId = 'error-pickupBooking',
 }: {
   title: string; description: string; checked: boolean; onChange: (v: boolean) => void
-  disabled?: boolean; note?: string; error?: string
+  disabled?: boolean; note?: string; error?: string; noteTestId?: string; errorTestId?: string
 }) {
   const { t } = useTranslation()
   return (
@@ -439,8 +466,8 @@ function SwitchRow({
       <div className="flex-1 min-w-0">
         <p className="text-body font-medium text-primary">{title}</p>
         <p className="text-small text-muted mt-0.5">{description}</p>
-        {note && <p className="text-small text-warning-text mt-1.5" data-testid="switch-note">{note}</p>}
-        {error && <p className="text-small text-critical mt-1.5" role="alert" data-testid="error-pickupBooking">{error}</p>}
+        {note && <p className="text-small text-warning-text mt-1.5" data-testid={noteTestId}>{note}</p>}
+        {error && <p className="text-small text-critical mt-1.5" role="alert" data-testid={errorTestId}>{error}</p>}
       </div>
       <span className={cn('text-small font-medium mt-0.5', checked ? 'text-primary' : 'text-muted')} aria-hidden="true">
         {checked ? t('settings.portal.on') : t('settings.portal.off')}
@@ -590,5 +617,6 @@ function normalize(i: PortalSettingsInput) {
 }
 
 function isFieldKey(f: string): f is FieldKey {
-  return ['slug', 'returnWindowDays', 'logoUrl', 'brandColor', 'policyText', 'returnLocationId', 'pickupBooking'].includes(f)
+  return ['slug', 'returnWindowDays', 'logoUrl', 'brandColor', 'policyText', 'returnLocationId', 'pickupBooking',
+    'exchangesEnabled'].includes(f)
 }

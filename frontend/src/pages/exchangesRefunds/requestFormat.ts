@@ -15,6 +15,7 @@ const REQUEST_STATUS_TONE: Record<ReturnRequestStatus, BadgeTone> = {
   refunded: 'success',
   cancelled: 'neutral',
   closed: 'neutral',
+  exchanged: 'success',
 }
 
 export function requestStatusTone(status: ReturnRequestStatus): BadgeTone {
@@ -92,4 +93,13 @@ export function todayIso(now: Date = new Date()): string {
   const parts = new Intl.DateTimeFormat('en-CA', { timeZone: 'Africa/Cairo', year: 'numeric', month: '2-digit', day: '2-digit' })
     .format(now)
   return parts
+}
+
+/**
+ * Step 5c — the status label's i18n key: an exchange whose Bosta trip is booked reads
+ * "Exchange booked" (the stored status is pickup_booked, shared with courier-return pickups).
+ */
+export function statusLabelKey(status: RequestDisplayStatus, type?: string | null): string {
+  if (type === 'exchange' && status === 'pickup_booked') return 'exchangesRefunds.requests.exchange.statusBooked'
+  return `exchangesRefunds.requests.status.${status}`
 }

@@ -10,8 +10,8 @@ import { reasonLabel, shortCustomerName } from './requestFormat'
  * out, with the replacement's live stock (VariantStockService at render time).
  *
  * X4 (in stock): Customer / Order / Area, the swap card, the customer's note, the refund-fallback
- * line, and Reject / Approve exchange. The approve line says the courier is booked in the next
- * step (5c replaces it with the mockup's "books one Bosta trip" copy).
+ * line, and Reject / Approve exchange. The approve line says approving books one Bosta exchange
+ * trip (Step 5c — the booking itself runs after the approval commits).
  * X6 (sold out): the swap card with "Out of stock", a warning, and — only when the customer agreed
  * to a refund — "Switch to refund and approve"; otherwise Reject only.
  *

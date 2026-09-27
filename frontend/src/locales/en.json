@@ -1054,12 +1054,14 @@
         "refunded": "Refunded",
         "cancelled": "Cancelled",
         "closed": "Closed",
-        "partly_received": "Partly received"
+        "partly_received": "Partly received",
+        "exchanged": "Exchanged"
       },
       "closeReasons": {
         "no_refund": "Closed without a refund",
         "rest_not_coming": "Nothing came back",
-        "other": "Other"
+        "other": "Other",
+        "exchange_failed": "Exchange failed"
       },
       "reasons": {
         "wrong_size": "Wrong size",
@@ -1152,7 +1154,8 @@
       "closeReasonsShort": {
         "no_refund": "no refund",
         "rest_not_coming": "nothing came back",
-        "other": "other"
+        "other": "other",
+        "exchange_failed": "exchange failed"
       },
       "awaitingRefundBadge": "{{count}} awaiting refund",
       "awaitingRefundBadge_other": "{{count}} awaiting refund",
@@ -1243,7 +1246,10 @@
         "otherHint": "Explain in the note.",
         "confirm": "Close request",
         "done": "Request closed.",
-        "conflict": "This request can't be closed any more."
+        "conflict": "This request can't be closed any more.",
+        "bodyExchange": "The exchange ends here. Any items still reserved are released.",
+        "exchangeFailed": "Exchange failed",
+        "exchangeFailedHint": "For example, the customer refused the new size at the door."
       },
       "link": {
         "title": "Which request is this parcel for?",
@@ -1274,12 +1280,35 @@
         "soldOutFallback": "The customer agreed to a refund instead. Switching it makes this a normal return: Bosta collects the {{variant}} and you refund once it's checked.",
         "soldOutNoFallback": "The customer didn't agree to a refund instead, so this exchange can only be rejected.",
         "fallback": "The customer agreed to a refund if the new size sells out first.",
-        "approveHelper": "Approving confirms the exchange; you'll book the courier.",
+        "approveHelper": "Approving books one Bosta exchange trip and adds the new size to Pick & Pack.",
         "approve": "Approve exchange",
         "switch": "Switch to refund and approve",
         "approved": "Exchange approved",
         "switched": "Switched to a refund and approved",
-        "approveConflict": "The new size or colour just sold out. The request is shown as it is now."
+        "approveConflict": "The new size or colour just sold out. The request is shown as it is now.",
+        "statusBooked": "Exchange booked",
+        "progress": {
+          "title": "Progress",
+          "approved": "Approved",
+          "booked": "Exchange trip booked",
+          "packing": "Replacement being packed",
+          "packingNow": "In Pick & Pack now",
+          "withCourier": "Replacement with courier",
+          "swapped": "Swapped at the customer's door",
+          "scanned": "Old item scanned back in",
+          "exchanged": "Exchanged",
+          "byTraced": "Traced",
+          "trip": "Exchange trip",
+          "order": "replacement order",
+          "bookNow": "Book now",
+          "bookNowHint": "Approved before exchanges were switched on, so Traced won't book it by itself.",
+          "bookNowDone": "Booking the exchange trip…",
+          "bookingLabel": "Bosta exchange trip",
+          "state": {
+            "done": "done",
+            "current": "in progress"
+          }
+        }
       }
     }
   },
@@ -1786,7 +1815,10 @@
         "NO_BOSTA_ACCOUNT": "Connect Bosta to choose where returns go.",
         "BOSTA_UNAVAILABLE": "Couldn't reach Bosta. Please try again.",
         "BOOKING_NEEDS_BOSTA": "Connect Bosta before turning on pickup booking.",
-        "BOOKING_NEEDS_RETURN_LOCATION": "Choose where returns go back to and save before turning on pickup booking."
+        "BOOKING_NEEDS_RETURN_LOCATION": "Choose where returns go back to and save before turning on pickup booking.",
+        "EXCHANGES_NEEDS_BOSTA": "Connect Bosta first.",
+        "EXCHANGES_NEEDS_RETURN_LOCATION": "Choose where returns go back to and save first.",
+        "EXCHANGES_NEEDS_BOOKING": "Turn on \"Book Bosta pickups when I approve\" and save first."
       },
       "returnLocation": {
         "label": "Returns go back to",
@@ -1808,6 +1840,13 @@
         "description": "When on, approving a request books a Bosta courier to collect it from the customer's area. With automatic approval on, the pickup is booked as soon as the request is sent.",
         "needsBosta": "Connect Bosta first.",
         "needsLocation": "Choose where returns go back to and save first."
+      },
+      "exchanges": {
+        "title": "Allow exchanges",
+        "description": "Customers can ask for another size or colour of the same product. Approving books one Bosta exchange trip: the courier brings the new item and collects the old one.",
+        "needsBosta": "Connect Bosta first.",
+        "needsLocation": "Choose where returns go back to and save first.",
+        "needsBooking": "Turn on \"Book Bosta pickups when I approve\" and save first."
       }
     }
   },

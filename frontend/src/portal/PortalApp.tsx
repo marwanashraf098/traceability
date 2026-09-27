@@ -262,7 +262,14 @@ export default function PortalApp({ slug }: { slug: string | null }) {
 
   // ── P3 ────────────────────────────────────────────────────────────────────
   const pickup = order?.pickup ?? null
-  const areaMissing = pickup != null && !areaId
+  // Step 5c: an exchange courier delivers the new item and collects the old one in one visit, so
+  // in exchange mode only districts that allow both are offered.
+  const areaDistricts = pickup == null ? []
+    : exchangeMode && pickup.exchangeDistrictIds
+      ? pickup.districts.filter(d => pickup.exchangeDistrictIds!.includes(d.id))
+      : pickup.districts
+  const chosenArea = areaDistricts.some(d => d.id === areaId) ? areaId : ''
+  const areaMissing = pickup != null && !chosenArea
 
   async function send() {
     if (!slug || !order || sendingRef.current || areaMissing) return
@@ -289,7 +296,7 @@ export default function PortalApp({ slug }: { slug: string | null }) {
           }),
       ...(trimmedEmail ? { email: trimmedEmail } : {}),
       ...(note.trim() ? { note } : {}),
-      ...(pickup && areaId ? { districtId: areaId } : {}),
+      ...(pickup && chosenArea ? { districtId: chosenArea } : {}),
     })
     sendingRef.current = false
     setSending(false)
@@ -606,7 +613,9 @@ export default function PortalApp({ slug }: { slug: string | null }) {
 
         <section className="pp-card">
           <div className="pp-eyebrow">{t('p3.pickup')}</div>
-          <p className="pp-muted pp-small">{t(config.pickupBooking || pickup ? 'p3.pickupTextBooking' : 'p3.pickupText')}</p>
+          <p className="pp-muted pp-small">
+            {t(exchangeMode ? 'p3.pickupTextExchange' : config.pickupBooking || pickup ? 'p3.pickupTextBooking' : 'p3.pickupText')}
+          </p>
           {pickup && (
             <>
               <div className="pp-field">
@@ -621,11 +630,11 @@ export default function PortalApp({ slug }: { slug: string | null }) {
                 <select
                   id="pp-area" className="pp-input" required
                   aria-invalid={areaMissing}
-                  value={areaId}
+                  value={chosenArea}
                   onChange={e => setAreaId(e.target.value)}
                 >
                   <option value="" disabled>{t('p3.areaPlaceholder')}</option>
-                  {groupByZone(pickup.districts, lang).map(g => {
+                  {groupByZone(areaDistricts, lang).map(g => {
                     const options = g.districts.map(d => (
                       <option key={d.id} value={d.id}>{lang === 'ar' ? d.nameAr || d.name : d.name}</option>
                     ))

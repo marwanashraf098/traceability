@@ -7,8 +7,9 @@ import {
   LinkableParcel, PickupDistrict, RefundSuggestion, ReturnRequestDetail, ReturnRequestPickupAreas,
 } from '../../api'
 import { Alert, Badge, Button, ProductThumb, Skeleton, cn, useToast } from '../../components/ui'
-import { displayStatus, displayStatusTone, reasonLabel, sentLabel, shortCustomerName, shortDate } from './requestFormat'
+import { displayStatus, displayStatusTone, reasonLabel, sentLabel, shortCustomerName, shortDate, statusLabelKey } from './requestFormat'
 import ExchangeRequestView from './ExchangeRequestView'
+import ExchangeProgressView from './ExchangeProgressView'
 import {
   arrivedCount, CloseDialog, HistoryTimeline, ItemsWithOutcome, LinkParcelDialog, RefundForm, RefundsList, UnexpectedItems,
 } from './RequestLifecycle'
@@ -143,7 +144,7 @@ function DrawerContent({
 
   // Step 4d-2: the suggested amount, once the request has something to refund. Never blocks
   // the drawer — no suggestion just leaves the amount empty.
-  const refundStage = detail != null && ['received', 'refund_pending', 'refunded'].includes(detail.status)
+  const refundStage = detail != null && detail.type !== 'exchange' && ['received', 'refund_pending', 'refunded'].includes(detail.status)
   useEffect(() => {
     if (!refundStage) return
     let cancelled = false
@@ -225,7 +226,7 @@ function DrawerContent({
           {detail.type === 'exchange' && (
             <span data-testid="exchange-pill"><ExchangePill /></span>
           )}
-          <Badge tone={displayStatusTone(shownStatus(detail))} label={t(`exchangesRefunds.requests.status.${shownStatus(detail)}`)} />
+          <Badge tone={displayStatusTone(shownStatus(detail))} label={t(statusLabelKey(shownStatus(detail), detail.type))} />
         </>
       ) : <Skeleton className="h-6 w-32" />}
       <div className="flex-1" />
@@ -320,8 +321,18 @@ function DrawerContent({
   const partly = shownStatus(detail) === 'partly_received'
   const lifecycle = arrived > 0 || refundStage
 
-  // Step 5b — an exchange before anything came back (X4 / X6).
-  if (detail.type === 'exchange' && !lifecycle && detail.status !== 'rejected' && detail.status !== 'closed') {
+  // Step 5c — an approved exchange: the Bosta exchange trip and its progress (X5).
+  if (detail.type === 'exchange' && detail.status !== 'requested' && detail.status !== 'rejected') {
+    return (
+      <>
+        {header}
+        <ExchangeProgressView detail={detail} onReload={async () => { await load(); onChanged() }} />
+      </>
+    )
+  }
+
+  // Step 5b — an exchange awaiting a decision (X4 / X6).
+  if (detail.type === 'exchange' && detail.status === 'requested') {
     return (
       <>
         {header}
@@ -628,7 +639,8 @@ export function ExchangePill() {
 
 /** R3 / R6 display status: "Partly received" for an approved / booked request with items back. */
 function shownStatus(detail: ReturnRequestDetail) {
-  return displayStatus(detail.status, arrivedCount(detail.items))
+  // Step 5c: an exchange shows its own progress — never "Partly received".
+  return detail.type === 'exchange' ? detail.status : displayStatus(detail.status, arrivedCount(detail.items))
 }
 
 /** Step 4d-2 (R5 entry point) — a courier return on this order that no request holds yet. */
@@ -650,8 +662,8 @@ function LinkParcelPrompt({ detail, onLink }: { detail: ReturnRequestDetail; onL
   )
 }
 
-/** Step 4c-3 — the booking row's state and actions. */
-function BookingState({ detail, onChanged }: { detail: ReturnRequestDetail; onChanged: () => Promise<void> }) {
+/** Step 4c-3 — the booking row's state and actions (Step 5c: also the exchange trip's). */
+export function BookingState({ detail, onChanged }: { detail: ReturnRequestDetail; onChanged: () => Promise<void> }) {
   const { t } = useTranslation()
   const { toast } = useToast()
   const [busy, setBusy] = useState<'retry' | 'notBooked' | 'confirm' | null>(null)
