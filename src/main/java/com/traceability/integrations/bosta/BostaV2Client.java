@@ -46,6 +46,15 @@ import java.util.List;
  *       that might have reached Bosta is reported AMBIGUOUS and never re-sent automatically.
  *       Never logs the payload or the response body (customer PII) — request id, outcome and
  *       HTTP status only.
+ *
+ * Step 5c — the SECOND Bosta write, under MODE B AMENDMENT #3:
+ *   POST /api/v2/deliveries?apiVersion=1 — create a type 30 EXCHANGE, only from an approved
+ *       exchange request, with the tenant's raw key. {@link #createExchange}, called from ONE
+ *       place (ReturnPickupBookingService's exchange booking). Its own payload builder
+ *       ({@link #exchangePayload}) — the type 25 builder can never produce a type 30 and vice
+ *       versa. Same endpoint, same create client (connect 5 s, read 20 s), same one-attempt
+ *       transport and CREATED / NOT_CREATED / AMBIGUOUS mapping; no retry of any kind. Never
+ *       logs the payload or the response body. Still no terminate, no edit, no other write.
  */
 @Component
 public class BostaV2Client {
@@ -74,6 +83,13 @@ public class BostaV2Client {
                                String apartment, String city, String districtId,
                                String receiverFirstName, String receiverLastName, String receiverPhone,
                                int itemsCount, String description, String returnNotes) {}
+
+    /** Everything the type 30 create sends (see {@link #exchangePayload}). */
+    public record Exchange(String uniqueBusinessReference, String businessReference, String businessLocationId,
+                           String firstLine, String secondLine, String buildingNumber, String floor,
+                           String apartment, String city, String districtId,
+                           String receiverFirstName, String receiverLastName, String receiverPhone,
+                           String outboundDescription, String returnDescription, String returnNotes) {}
 
     public enum CreateOutcome {
         /** Bosta answered 2xx with a tracking number. */
@@ -121,8 +137,26 @@ public class BostaV2Client {
      * unreadable 2xx → AMBIGUOUS.
      */
     public CreateResult createReturnPickup(String apiKey, ReturnPickup p) {
+        CreateResult result = postCreate(apiKey, returnPickupPayload(mapper, p).toString());
+        log.info("Bosta createReturnPickup request={} outcome={} status={}",
+            p.uniqueBusinessReference(), result.outcome(), result.httpStatus());
+        return result;
+    }
+
+    /**
+     * Step 5c — POST {base}/api/v2/deliveries?apiVersion=1 with a type 30 EXCHANGE body. ONE
+     * attempt, never retried here; outcome mapping as {@link #createReturnPickup}.
+     */
+    public CreateResult createExchange(String apiKey, Exchange e) {
+        CreateResult result = postCreate(apiKey, exchangePayload(mapper, e).toString());
+        log.info("Bosta createExchange request={} outcome={} status={}",
+            e.uniqueBusinessReference(), result.outcome(), result.httpStatus());
+        return result;
+    }
+
+    /** The one-attempt create transport shared by both builders. Never logs the body. */
+    private CreateResult postCreate(String apiKey, String json) {
         String url = baseUrl + "/api/v2/deliveries?apiVersion=1";
-        String json = returnPickupPayload(mapper, p).toString();
         CreateResult result;
         try {
             result = createClient.post().uri(url)
@@ -145,8 +179,6 @@ public class BostaV2Client {
         } catch (RuntimeException e) {
             result = new CreateResult(CreateOutcome.AMBIGUOUS, null, null, 0, "Unexpected error talking to Bosta.");
         }
-        log.info("Bosta createReturnPickup request={} outcome={} status={}",
-            p.uniqueBusinessReference(), result.outcome(), result.httpStatus());
         return result;
     }
 
@@ -203,6 +235,41 @@ public class BostaV2Client {
         details.put("itemsCount", p.itemsCount());
         details.put("description", p.description());
         b.put("returnNotes", p.returnNotes());
+        return b;
+    }
+
+    /**
+     * The exact type 30 create body: customer on dropOffAddress, the merchant's return location
+     * as businessLocationId, one item each way (specs = the replacement going out, returnSpecs =
+     * the item coming back), cod 0. Never pickupAddress, returnAddress, allowToOpenPackage,
+     * webhookUrl, goodsInfo or productInfo.
+     */
+    public static ObjectNode exchangePayload(ObjectMapper mapper, Exchange e) {
+        ObjectNode b = mapper.createObjectNode();
+        b.put("type", 30);
+        b.put("cod", 0);
+        ObjectNode drop = b.putObject("dropOffAddress");
+        drop.put("firstLine", e.firstLine());
+        putIfPresent(drop, "secondLine", e.secondLine());
+        putIfPresent(drop, "buildingNumber", e.buildingNumber());
+        putIfPresent(drop, "floor", e.floor());
+        putIfPresent(drop, "apartment", e.apartment());
+        drop.put("city", e.city());
+        drop.put("districtId", e.districtId());
+        b.put("businessLocationId", e.businessLocationId());
+        ObjectNode receiver = b.putObject("receiver");
+        receiver.put("firstName", e.receiverFirstName());
+        putIfPresent(receiver, "lastName", e.receiverLastName());
+        receiver.put("phone", e.receiverPhone());
+        b.put("businessReference", e.businessReference());
+        b.put("uniqueBusinessReference", e.uniqueBusinessReference());
+        ObjectNode out = b.putObject("specs").putObject("packageDetails");
+        out.put("itemsCount", 1);
+        out.put("description", e.outboundDescription());
+        ObjectNode back = b.putObject("returnSpecs").putObject("packageDetails");
+        back.put("itemsCount", 1);
+        back.put("description", e.returnDescription());
+        b.put("returnNotes", e.returnNotes());
         return b;
     }
 

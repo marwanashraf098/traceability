@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.traceability.integrations.bosta.BostaDelivery;
 import com.traceability.integrations.bosta.BostaGateway;
 import com.traceability.integrations.bosta.BostaV2Client;
+import com.traceability.inventory.ExchangeService;
 import com.traceability.inventory.ShipmentLinkService;
 import com.traceability.inventory.TrackingNumberNormalizer;
 import com.traceability.security.EncryptionService;
@@ -47,6 +48,14 @@ import java.util.*;
  *
  * Programmatic transactions (not @Transactional) so tests can construct this service on a
  * real app_user connection. Never logs customer data.
+ *
+ * Step 5c — MODE B AMENDMENT #3: an approved EXCHANGE request books a Bosta type 30 exchange
+ * through the same framework (claim row, statuses, sweeper, read-back, retry / not-booked /
+ * confirm-by-tracking), dispatched by request type: its own preconditions, its own payload
+ * ({@link BostaV2Client#createExchange} — this class is its only caller), its own read-back
+ * checks. On CREATED the exchange is created in Traced right away
+ * ({@link ExchangeService#attachForRequest}: exchanges row + internal replacement order +
+ * forward leg), so the replacement goes to Pick & Pack without waiting for Bosta's webhook.
  */
 @Service
 public class ReturnPickupBookingService {
@@ -61,8 +70,12 @@ public class ReturnPickupBookingService {
     static final String AMBIGUOUS_STUCK =
         "The booking may or may not have reached Bosta — check in Bosta.";
 
-    /** {@code linksRepaired} (4d-1): requests whose return leg the sweeper linked by tracking number. */
-    public record SweepResult(int enqueued, int markedAmbiguous, int verifyAttempts, int linksRepaired) {}
+    /**
+     * {@code linksRepaired} (4d-1): requests whose return leg the sweeper linked by tracking number.
+     * {@code exchangesAttached} (5c): booked exchanges whose Traced exchange the sweeper created.
+     */
+    public record SweepResult(int enqueued, int markedAmbiguous, int verifyAttempts, int linksRepaired,
+                              int exchangesAttached) {}
 
     private final JdbcTemplate           jdbc;
     private final TransactionTemplate    tx;
@@ -73,10 +86,22 @@ public class ReturnPickupBookingService {
     private final ObjectMapper           mapper;
     /** Step 4d-1: request history + leg linking, on this service's own JdbcTemplate. */
     private final ReturnRequestLifecycle requests;
+    /** Step 5c: creates the Traced exchange for a booked exchange request. Null only in refund-only test wiring. */
+    private final ExchangeService        exchanges;
 
+    /** Refund-only wiring (no exchange attach) — kept for existing callers constructing it by hand. */
     public ReturnPickupBookingService(JdbcTemplate jdbc, PlatformTransactionManager txm, BostaV2Client bosta,
                                       BostaGateway gateway, EncryptionService encryption,
                                       PickupBookingScheduler scheduler, ObjectMapper mapper) {
+        this(jdbc, txm, bosta, gateway, encryption, scheduler, mapper, null);
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public ReturnPickupBookingService(JdbcTemplate jdbc, PlatformTransactionManager txm, BostaV2Client bosta,
+                                      BostaGateway gateway, EncryptionService encryption,
+                                      PickupBookingScheduler scheduler, ObjectMapper mapper,
+                                      ExchangeService exchanges) {
+        this.exchanges  = exchanges;
         this.jdbc       = jdbc;
         this.tx         = new TransactionTemplate(txm);
         this.bosta      = bosta;
@@ -97,10 +122,9 @@ public class ReturnPickupBookingService {
         Context c = tx.execute(s -> loadContext(requestId, tenantId));
         if (c == null) return;                                       // not this tenant's / gone
         if (c.bookingStatus != null && !"failed".equals(c.bookingStatus)) return;
-        // Step 5b: exchanges never book a CRP (type 25) — their courier trip comes in 5c.
-        if (c.exchange) return;
 
-        String failure = precondition(c);
+        // Step 5c: dispatched by request type — an exchange books a type 30, never a type 25.
+        String failure = c.exchange ? exchangePrecondition(c) : precondition(c);
         if (failure != null) {
             tx.execute(s -> {
                 int n = jdbc.update(
@@ -123,11 +147,14 @@ public class ReturnPickupBookingService {
         if (claimed == null || claimed != 1) return;                 // someone else holds the claim
 
         // The ONE POST — no transaction open, no retry.
-        BostaV2Client.CreateResult r = bosta.createReturnPickup(encryption.decrypt(c.apiKeyEncrypted), payload(c));
+        BostaV2Client.CreateResult r = c.exchange
+            ? bosta.createExchange(encryption.decrypt(c.apiKeyEncrypted), exchangePayload(c))
+            : bosta.createReturnPickup(encryption.decrypt(c.apiKeyEncrypted), payload(c));
 
         switch (r.outcome()) {
             case CREATED -> {
                 if (saveBooked(requestId, tenantId, r.deliveryId(), r.trackingNumber(), false, "pending")) {
+                    if (c.exchange) attachExchange(requestId, tenantId, r.trackingNumber());
                     verifyInTenant(requestId, tenantId);
                 }
             }
@@ -206,6 +233,39 @@ public class ReturnPickupBookingService {
         }
     }
 
+    /**
+     * Step 5c — creates the Traced exchange for a booked exchange request (exchanges row,
+     * internal replacement order, forward leg). Idempotent (ExchangeService.attachForRequest).
+     * A failure after Bosta booked the trip → needs_review naming it; the booking itself stands.
+     * Returns true when the exchange exists afterwards.
+     */
+    private boolean attachExchange(UUID requestId, UUID tenantId, String tracking) {
+        if (exchanges == null) return false;
+        String error = null;
+        try {
+            ExchangeService.AttachOutcome o = exchanges.attachForRequest(tenantId, requestId, tracking);
+            if (o == ExchangeService.AttachOutcome.ATTACHED) return true;
+            if (o == ExchangeService.AttachOutcome.CONFLICT) {
+                error = "Bosta booked the exchange, but its tracking number is already on another exchange in Traced.";
+            }
+        } catch (RuntimeException e) {
+            log.warn("Exchange booking request={} attach failed ({})", requestId, e.getClass().getSimpleName());
+            error = "Bosta booked the exchange, but Traced couldn't add the replacement to Pick & Pack.";
+        }
+        if (error != null) {
+            String err = error;
+            tx.execute(s -> {
+                int n = jdbc.update(
+                    "UPDATE return_requests SET booking_status = 'needs_review', booking_error = ? " +
+                    "WHERE id = ? AND tenant_id = ? AND booking_status = 'booked'", err, requestId, tenantId);
+                if (n == 1) requests.event(tenantId, requestId, "booking_needs_review", null,
+                    ReturnRequestLifecycle.meta("error", err));
+                return n;
+            });
+        }
+        return false;
+    }
+
     // ── Read-back ─────────────────────────────────────────────────────────────
 
     /**
@@ -217,7 +277,7 @@ public class ReturnPickupBookingService {
      */
     private void verifyInTenant(UUID requestId, UUID tenantId) {
         Map<String, Object> r = tx.execute(s -> jdbc.queryForList(
-            "SELECT rr.bosta_tracking_number, rr.pickup_district_id, o.number, " +
+            "SELECT rr.bosta_tracking_number, rr.pickup_district_id, o.number, rr.type, " +
             // 4d-1: items that were booked — a finished (done) item is no longer active but was in the parcel.
             "       (SELECT COUNT(*) FROM return_request_items i WHERE i.request_id = rr.id " +
             "          AND i.item_status IN ('awaiting', 'arrived', 'done')) AS items, " +
@@ -240,6 +300,16 @@ public class ReturnPickupBookingService {
 
         List<String> diffs = new ArrayList<>();
         JsonNode raw = d.raw();
+        if ("exchange".equals(r.get("type"))) {
+            // Step 5c — type 30: one item each way, cod 0, and the customer on dropOffAddress
+            // (on an exchange pickupAddress is the merchant — never read it for the customer).
+            if (d.typeCode() != 30) diffs.add("type");
+            if (!sameReference(raw.path("businessReference").asText(null), (String) r.get("number"))) diffs.add("businessReference");
+            if (raw.path("cod").asDouble(0) != 0) diffs.add("cod");
+            if (raw.path("specs").path("packageDetails").path("itemsCount").asInt(-1) != 1) diffs.add("itemsCount");
+            if (raw.path("returnSpecs").path("packageDetails").path("itemsCount").asInt(-1) != 1) diffs.add("returnItemsCount");
+            if (!Objects.equals(districtId(raw.path("dropOffAddress")), r.get("pickup_district_id"))) diffs.add("district");
+        } else {
         if (d.typeCode() != 25) diffs.add("type");
         if (!sameReference(raw.path("businessReference").asText(null), (String) r.get("number"))) diffs.add("businessReference");
         if (raw.path("cod").asDouble(0) != 0) diffs.add("cod");
@@ -247,6 +317,7 @@ public class ReturnPickupBookingService {
         if (count.isMissingNode() || count.isNull()) count = raw.path("specs").path("packageDetails").path("itemsCount");
         if (count.asInt(-1) != ((Number) r.get("items")).intValue()) diffs.add("itemsCount");
         if (!Objects.equals(customerDistrictId(raw), r.get("pickup_district_id"))) diffs.add("district");
+        }
 
         if (diffs.isEmpty()) {
             tx.execute(s -> {
@@ -331,7 +402,7 @@ public class ReturnPickupBookingService {
         String tracking = rawTracking == null ? null : TrackingNumberNormalizer.normalize(rawTracking.replaceAll("\\s+", ""));
         if (tracking == null) throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Enter a valid Bosta tracking number.");
         Map<String, Object> r = tx.execute(s -> jdbc.queryForList(
-            "SELECT rr.booking_status, rr.booking_attempted_at, o.number, " +
+            "SELECT rr.booking_status, rr.booking_attempted_at, o.number, rr.type, " +
             "       (SELECT ca.api_key_encrypted FROM courier_accounts ca WHERE ca.tenant_id = rr.tenant_id " +
             "          AND ca.provider = 'bosta' AND ca.status = 'active' LIMIT 1) AS api_key " +
             "FROM return_requests rr JOIN orders o ON o.id = rr.order_id AND o.tenant_id = rr.tenant_id " +
@@ -353,7 +424,11 @@ public class ReturnPickupBookingService {
         if (d == null || d.raw() == null) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Bosta has no delivery with that tracking number.");
         }
-        if (d.typeCode() != 25) {
+        boolean exchange = "exchange".equals(r.get("type"));
+        if (exchange && d.typeCode() != 30) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "That delivery isn't a Bosta exchange.");
+        }
+        if (!exchange && d.typeCode() != 25) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "That delivery isn't a customer return pickup.");
         }
         if (!sameReference(d.raw().path("businessReference").asText(null), (String) r.get("number"))) {
@@ -374,6 +449,24 @@ public class ReturnPickupBookingService {
         if (!saveBooked(requestId, tenantId, deliveryId, tracking, true, "failed_ambiguous")) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "That tracking number is already on another request, or the request changed.");
         }
+        if (exchange) attachExchange(requestId, tenantId, tracking);
+    }
+
+    /**
+     * Step 5c — "Book now": an approved exchange with no booking yet (typically approved before
+     * "Allow exchanges" was switched on, which the sweeper deliberately leaves alone). Enqueues
+     * the same job; the job's own claim (NULL → pending) is the guard. 409 otherwise.
+     */
+    public void bookNow(UUID requestId) {
+        UUID tenantId = TenantContext.require();
+        Map<String, Object> r = tx.execute(s -> jdbc.queryForList(
+            "SELECT status::text AS status, booking_status, type FROM return_requests WHERE id = ? AND tenant_id = ?",
+            requestId, tenantId).stream().findFirst().orElse(null));
+        if (r == null) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Return request not found");
+        if (!"exchange".equals(r.get("type")) || !"approved".equals(r.get("status")) || r.get("booking_status") != null) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Only an approved exchange that was never booked can be booked now.");
+        }
+        scheduler.enqueue(requestId, tenantId);
     }
 
     private static Instant parseInstant(String s) {
@@ -401,12 +494,16 @@ public class ReturnPickupBookingService {
      */
     public SweepResult sweepTenant(UUID tenantId) {
         return TenantContext.runAs(tenantId, () -> {
+            // Refunds: decided after pickup booking was switched on. Step 5c — exchanges: decided
+            // after "Allow exchanges" was switched on (older ones get "Book now" instead).
             List<UUID> orphans = tx.execute(s -> jdbc.queryForList(
                 "SELECT rr.id FROM return_requests rr JOIN tenants t ON t.id = rr.tenant_id " +
                 "WHERE rr.tenant_id = ? AND t.portal_pickup_booking AND t.portal_pickup_booking_since IS NOT NULL " +
-                "  AND rr.status = 'approved' AND rr.booking_status IS NULL AND rr.type = 'refund' " +
+                "  AND rr.status = 'approved' AND rr.booking_status IS NULL " +
                 "  AND rr.decided_at < now() - (interval '1 second' * ?) " +
-                "  AND rr.decided_at >= t.portal_pickup_booking_since " +
+                "  AND ((rr.type = 'refund' AND rr.decided_at >= t.portal_pickup_booking_since) " +
+                "    OR (rr.type = 'exchange' AND t.portal_exchanges_enabled AND t.portal_exchanges_since IS NOT NULL " +
+                "        AND rr.decided_at >= t.portal_exchanges_since)) " +
                 "ORDER BY rr.decided_at, rr.id",
                 UUID.class, tenantId, ORPHAN_AGE.toSeconds()));
             for (UUID id : orphans) scheduler.enqueue(id, tenantId);
@@ -432,8 +529,24 @@ public class ReturnPickupBookingService {
             // exists but whose return_shipment_id is still NULL gets it.
             Integer repaired = tx.execute(s -> requests.repairTrackingLinks(tenantId));
 
+            // (e) Step 5c: a booked exchange whose Traced exchange doesn't exist yet (the attach
+            // right after booking failed or never ran) gets it.
+            int attached = 0;
+            if (exchanges != null) {
+                List<Map<String, Object>> missing = tx.execute(s -> jdbc.queryForList(
+                    "SELECT rr.id, rr.bosta_tracking_number FROM return_requests rr " +
+                    "WHERE rr.tenant_id = ? AND rr.type = 'exchange' AND rr.booking_status = 'booked' " +
+                    "  AND rr.bosta_tracking_number IS NOT NULL " +
+                    "  AND NOT EXISTS (SELECT 1 FROM exchanges e WHERE e.return_request_id = rr.id " +
+                    "                  AND e.outbound_order_id IS NOT NULL) " +
+                    "ORDER BY rr.booking_attempted_at, rr.id", tenantId));
+                for (Map<String, Object> m : missing) {
+                    if (attachExchange((UUID) m.get("id"), tenantId, (String) m.get("bosta_tracking_number"))) attached++;
+                }
+            }
+
             return new SweepResult(orphans.size(), stuck == null ? 0 : stuck, unverified.size(),
-                repaired == null ? 0 : repaired);
+                repaired == null ? 0 : repaired, attached);
         });
     }
 
@@ -442,6 +555,9 @@ public class ReturnPickupBookingService {
     private static final class Context {
         UUID requestId; String status; String bookingStatus; String reference; String orderNumber;
         boolean redacted; boolean bookingOn; boolean exchange;
+        // Step 5c (exchange): the switch, drop-off availability and the one item each way.
+        boolean exchangesOn; Boolean dropoffAvailable; boolean replacementInStock;
+        String product; String originalVariant; String replacementVariant; UUID replacementVariantId;
         String apiKeyEncrypted; String returnLocationId;
         String districtId; String cityName; Boolean districtAvailable;
         JsonNode drop; JsonNode receiver; String customerName; String customerPhone;
@@ -452,7 +568,7 @@ public class ReturnPickupBookingService {
         List<Map<String, Object>> rows = jdbc.queryForList(
             "SELECT rr.status::text AS status, rr.booking_status, rr.reference, rr.order_id, rr.pickup_district_id, rr.type, " +
             "       o.number, o.customer_name, o.customer_phone, o.pii_redacted_at, t.portal_pickup_booking, " +
-            "       d.city_name, d.pickup_available " +
+            "       t.portal_exchanges_enabled, d.city_name, d.pickup_available, d.dropoff_available " +
             "FROM return_requests rr " +
             "JOIN orders o  ON o.id = rr.order_id AND o.tenant_id = rr.tenant_id " +
             "JOIN tenants t ON t.id = rr.tenant_id " +
@@ -472,6 +588,8 @@ public class ReturnPickupBookingService {
         c.districtId = (String) r.get("pickup_district_id");
         c.cityName = (String) r.get("city_name");
         c.districtAvailable = (Boolean) r.get("pickup_available");
+        c.exchangesOn = Boolean.TRUE.equals(r.get("portal_exchanges_enabled"));
+        c.dropoffAvailable = (Boolean) r.get("dropoff_available");
         c.customerName = (String) r.get("customer_name");
         c.customerPhone = (String) r.get("customer_phone");
 
@@ -507,6 +625,28 @@ public class ReturnPickupBookingService {
                 c.itemLines.add(rs.getString("product") + (variant != null && !variant.isBlank() ? " / " + variant : "") + " × " + qty);
             },
             requestId, tenantId);
+
+        if (c.exchange) {
+            // Step 5c: the one exchanged item — what comes back and what goes out — and whether
+            // the replacement is still in stock (VariantStockService, the one stock derivation).
+            jdbc.query(
+                "SELECT pr.title AS product, v.title AS variant, rv.id AS replacement_id, rv.title AS replacement " +
+                "FROM return_request_items i JOIN variants v ON v.id = i.variant_id " +
+                "JOIN products pr ON pr.id = v.product_id " +
+                "LEFT JOIN variants rv ON rv.id = i.replacement_variant_id AND rv.tenant_id = i.tenant_id " +
+                "WHERE i.request_id = ? AND i.tenant_id = ? AND i.active ORDER BY i.created_at, i.id LIMIT 1",
+                (org.springframework.jdbc.core.RowCallbackHandler) rs -> {
+                    c.product = rs.getString("product");
+                    c.originalVariant = rs.getString("variant");
+                    c.replacementVariantId = rs.getObject("replacement_id", UUID.class);
+                    c.replacementVariant = rs.getString("replacement");
+                },
+                requestId, tenantId);
+            if (c.replacementVariantId != null) {
+                com.traceability.inventory.VariantStockService stock = new com.traceability.inventory.VariantStockService(jdbc);
+                c.replacementInStock = stock.forVariant(stock.computeAll(), c.replacementVariantId).available() > 0;
+            }
+        }
         return c;
     }
 
@@ -529,6 +669,62 @@ public class ReturnPickupBookingService {
         if (name[0] == null || receiverPhone(c) == null) return "The customer's name or phone number is missing.";
         if (c.itemsCount == 0) return "The request has no items.";
         return null;
+    }
+
+    /**
+     * Step 5c — null when every exchange precondition holds; otherwise the booking_error. Same
+     * shape as {@link #precondition}; checked fresh on every attempt.
+     */
+    private String exchangePrecondition(Context c) {
+        if (!"approved".equals(c.status)) return "The request isn't approved.";
+        if (!c.exchangesOn) return "Exchanges are switched off in Settings → Returns portal.";
+        if (!c.bookingOn) return "Bosta pickup booking is switched off in Settings → Returns portal.";
+        if (c.apiKeyEncrypted == null) return "There is no active Bosta account.";
+        if (c.returnLocationId == null) return "Choose where returns go back to in Settings → Returns portal.";
+        if (c.districtId == null) return "Choose the customer's area.";
+        if (!Boolean.TRUE.equals(c.districtAvailable) || !Boolean.TRUE.equals(c.dropoffAvailable) || c.cityName == null) {
+            return "Bosta can't both deliver to and collect from the chosen area — choose another.";
+        }
+        if (c.replacementVariantId == null) return "The request has no replacement.";
+        if (!c.replacementInStock) return "The replacement is out of stock.";
+        if (c.redacted) return "The customer's data was deleted for this order (privacy request).";
+        String firstLine = c.drop == null ? null : c.drop.path("firstLine").asText(null);
+        if (firstLine == null || firstLine.trim().length() <= 5) {
+            return "The delivery address on the order's Bosta shipment is missing or too short.";
+        }
+        String[] name = receiverName(c);
+        if (name[0] == null || receiverPhone(c) == null) return "The customer's name or phone number is missing.";
+        return null;
+    }
+
+    /** "RR-XXXXXX: {product} / {replacement variant}" — what goes out (specs). Shared with ExchangeService. */
+    public static String exchangeOutboundDescription(String reference, String product, String replacementVariant) {
+        return truncate(reference + ": " + titled(product, replacementVariant));
+    }
+
+    /** "{product} / {original variant}" — what comes back (returnSpecs). Shared with ExchangeService. */
+    public static String exchangeReturnDescription(String product, String originalVariant) {
+        return truncate(titled(product, originalVariant));
+    }
+
+    private static String titled(String product, String variant) {
+        return (product == null ? "" : product) + (variant != null && !variant.isBlank() ? " / " + variant : "");
+    }
+
+    private static String truncate(String s) {
+        return s.length() > DESCRIPTION_MAX ? s.substring(0, DESCRIPTION_MAX) : s;
+    }
+
+    private BostaV2Client.Exchange exchangePayload(Context c) {
+        String[] name = receiverName(c);
+        return new BostaV2Client.Exchange(
+            c.requestId.toString(), c.orderNumber, c.returnLocationId,
+            c.drop.path("firstLine").asText().trim(), opt(c.drop, "secondLine"), opt(c.drop, "buildingNumber"),
+            opt(c.drop, "floor"), opt(c.drop, "apartment"), c.cityName, c.districtId,
+            name[0], name[1], receiverPhone(c),
+            exchangeOutboundDescription(c.reference, c.product, c.replacementVariant),
+            exchangeReturnDescription(c.product, c.originalVariant),
+            "Traced exchange request " + c.reference);
     }
 
     private BostaV2Client.ReturnPickup payload(Context c) {

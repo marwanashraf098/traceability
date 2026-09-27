@@ -231,6 +231,25 @@ public class BostaWebhookJob {
                     trackingNumber));
 
                 if (existingForward == null) {
+                    // Step 5c: an exchange Traced booked from a return request never enters the
+                    // dashboard lane's gates or guessers — the row is kept (linked when the
+                    // request is known) and the booking attaches it. See findOwnExchange().
+                    com.traceability.inventory.ExchangeService.OwnExchange own =
+                        exchangeService.findOwnExchange(tenantId, trackingNumber, delivery.raw());
+                    if (own != null) {
+                        exchangeIngestService.upsertOwn(tenantId, trackingNumber, delivery, own.requestId());
+                        markProcessed(webhookEventId, idemKey, "exchange_own: " + trackingNumber);
+                        if (own.requestId() != null) {
+                            try {
+                                exchangeService.attachForRequest(tenantId, own.requestId(), trackingNumber);
+                            } catch (RuntimeException e) {
+                                // Left for the booking's own attach / the sweeper; never fails the webhook.
+                                log.warn("Exchange {}: attach to its request deferred ({})", trackingNumber,
+                                    e.getClass().getSimpleName());
+                            }
+                        }
+                        return;
+                    }
                     ExchangeIngestService.IngestOutcome outcome =
                         exchangeIngestService.upsertFromDelivery(tenantId, trackingNumber, delivery);
                     switch (outcome) {
@@ -297,6 +316,9 @@ public class BostaWebhookJob {
                     markProcessed(webhookEventId, idemKey,
                         "unlinked:exchange_unmapped_state: " + trackingNumber);
                 }
+                // Step 5c: a request-linked exchange row keeps Bosta's latest raw too (no-op for
+                // dashboard-made rows).
+                exchangeIngestService.refreshOwnRaw(tenantId, trackingNumber, delivery.raw());
                 // Step 3 Part B: raw refreshed above either way — returnSpecs may have newly
                 // populated on THIS webhook even though it hadn't before Phase 2 mapping.
                 exchangeMatchService.attemptMatch(trackingNumber);

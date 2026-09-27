@@ -24,7 +24,7 @@ public class ReturnRequestService {
     static final int REASON_MAX = 300;
     private static final Set<String> STATUSES = Set.of(
         "requested", "approved", "rejected", "pickup_booked", "received", "refund_pending", "refunded", "cancelled",
-        "closed");
+        "closed", "exchanged");
 
     private final JdbcTemplate           jdbc;
     private final PickupAreaService      pickupAreas;
@@ -242,7 +242,38 @@ public class ReturnRequestService {
             "WHERE e.request_id = ? AND e.tenant_id = ? AND e.event_type = 'unexpected_item_received' " +
             "ORDER BY p.id, e.occurred_at", id, tenantId));
         d.put("linkableParcels", linkableParcels(tenantId, r));
+        if ("exchange".equals(r.get("type"))) {
+            d.put("exchange", exchangeProgress(tenantId, id));
+            // Step 5c: "Book now" — approved, never booked, and approved before "Allow exchanges"
+            // was (last) switched on, so the sweeper won't book it by itself.
+            d.put("bookNowAvailable", Boolean.TRUE.equals(jdbc.queryForObject(
+                "SELECT rr.status = 'approved' AND rr.booking_status IS NULL " +
+                "   AND (t.portal_exchanges_since IS NULL OR rr.decided_at < t.portal_exchanges_since) " +
+                "FROM return_requests rr JOIN tenants t ON t.id = rr.tenant_id WHERE rr.id = ? AND rr.tenant_id = ?",
+                Boolean.class, id, tenantId)));
+        }
         return d;
+    }
+
+    /**
+     * Step 5c (X5) — what the drawer derives the exchange's progress from: the Traced exchange
+     * booked for this request (its internal replacement order and that order's forward leg).
+     * Null until the exchange exists. Read-only; the stages themselves are derived in the UI.
+     */
+    private Map<String, Object> exchangeProgress(UUID tenantId, UUID requestId) {
+        return jdbc.queryForList(
+            "SELECT e.tracking_number AS \"trackingNumber\", e.status AS \"exchangeStatus\", " +
+            "       o.id AS \"orderId\", o.number AS \"orderNumber\", o.status::text AS \"orderStatus\", " +
+            "       s.internal_state::text AS \"shipmentState\", s.delivered_at AS \"deliveredAt\", " +
+            "       (SELECT MIN(h.occurred_at) FROM shipment_status_history h WHERE h.shipment_id = s.id " +
+            "          AND h.internal_state = 'with_courier') AS \"withCourierAt\" " +
+            "FROM exchanges e " +
+            "LEFT JOIN orders o ON o.id = e.outbound_order_id AND o.tenant_id = e.tenant_id " +
+            "LEFT JOIN LATERAL (SELECT id, internal_state, delivered_at FROM shipments " +
+            "    WHERE order_id = o.id AND tenant_id = e.tenant_id AND shipment_leg = 'forward' " +
+            "    ORDER BY created_at DESC, id DESC LIMIT 1) s ON true " +
+            "WHERE e.tenant_id = ? AND e.return_request_id = ?", tenantId, requestId)
+            .stream().findFirst().orElse(null);
     }
 
     /**
@@ -291,6 +322,12 @@ public class ReturnRequestService {
             "UPDATE return_requests SET status = 'approved', decided_at = now(), decided_by = ? " +
             "WHERE id = ? AND tenant_id = ? AND status = 'requested'", actorUserId, id, tenantId);
         requests.event(tenantId, id, "approved", actorUserId, ReturnRequestLifecycle.meta("type", "exchange"));
+        // Step 5c: book the Bosta exchange only AFTER this approval commits (a rollback → no job),
+        // when the tenant books pickups and allows exchanges.
+        if (bookingScheduler != null && Boolean.TRUE.equals(jdbc.queryForObject(
+                "SELECT portal_pickup_booking AND portal_exchanges_enabled FROM tenants WHERE id = ?", Boolean.class, tenantId))) {
+            bookingScheduler.enqueueAfterCommit(id, tenantId);
+        }
     }
 
     /**

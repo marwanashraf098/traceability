@@ -43,7 +43,14 @@ public class PortalSettingsService {
      */
     public record Settings(String slug, Boolean enabled, Boolean autoApprove, Integer returnWindowDays,
                            String logoUrl, String brandColor, String policyText, String returnLocationId,
-                           Boolean pickupBooking) {
+                           Boolean pickupBooking, Boolean exchangesEnabled) {
+        public Settings(String slug, Boolean enabled, Boolean autoApprove, Integer returnWindowDays,
+                        String logoUrl, String brandColor, String policyText, String returnLocationId,
+                        Boolean pickupBooking) {
+            this(slug, enabled, autoApprove, returnWindowDays, logoUrl, brandColor, policyText, returnLocationId,
+                pickupBooking, null);
+        }
+
         public Settings(String slug, Boolean enabled, Boolean autoApprove, Integer returnWindowDays) {
             this(slug, enabled, autoApprove, returnWindowDays, null, null, null, null, null);
         }
@@ -89,7 +96,8 @@ public class PortalSettingsService {
         UUID tenantId = TenantContext.require();
         Map<String, Object> t = jdbc.queryForMap(
             "SELECT portal_slug, portal_enabled, portal_auto_approve, customer_return_window_days, " +
-            "       portal_logo_url, portal_brand_color, portal_policy_text, portal_pickup_booking " +
+            "       portal_logo_url, portal_brand_color, portal_policy_text, portal_pickup_booking, " +
+            "       portal_exchanges_enabled, portal_exchanges_since " +
             "FROM tenants WHERE id = ?", tenantId);
         Map<String, Object> location = jdbc.queryForList(
             "SELECT return_business_location_id, return_business_location_name FROM courier_accounts " +
@@ -112,6 +120,9 @@ public class PortalSettingsService {
         body.put("returnLocationName", location.get("return_business_location_name"));
         // Step 4c-3: lets the merchant UI say why the booking switch is disabled.
         body.put("bostaConnected", !location.isEmpty());
+        // Step 5c: "Allow exchanges" and when it was last switched on ("Book now" for older approvals).
+        body.put("exchangesEnabled", t.get("portal_exchanges_enabled"));
+        body.put("exchangesSince", t.get("portal_exchanges_since"));
         return body;
     }
 
@@ -175,6 +186,7 @@ public class PortalSettingsService {
                 returnLocation.id(), returnLocation.name(), tenantId);
         }
         if (s.pickupBooking() != null) setPickupBooking(tenantId, s.pickupBooking());
+        if (s.exchangesEnabled() != null) setExchanges(tenantId, s.exchangesEnabled());
         return get();
     }
 
@@ -198,10 +210,44 @@ public class PortalSettingsService {
                     "Choose where returns go back to before turning on pickup booking.");
             }
         }
+        // Step 5c: exchanges are booked through pickup booking — switching it off switches them off.
+        if (!on) jdbc.update("UPDATE tenants SET portal_exchanges_enabled = false WHERE id = ?", tenantId);
         jdbc.update(
             "UPDATE tenants SET portal_pickup_booking = ?, " +
             "    portal_pickup_booking_since = CASE WHEN ? AND NOT portal_pickup_booking THEN now() " +
             "                                       ELSE portal_pickup_booking_since END " +
+            "WHERE id = ?", on, on, tenantId);
+    }
+
+    /**
+     * Step 5c — "Allow exchanges". On needs Bosta pickup booking on (after this PUT's own booking
+     * change), an active Bosta account and a saved return location. Switching it on stamps
+     * portal_exchanges_since, so the booking sweeper books only exchanges approved from then on.
+     */
+    private void setExchanges(UUID tenantId, boolean on) {
+        if (on) {
+            Map<String, Object> account = jdbc.queryForList(
+                "SELECT return_business_location_id FROM courier_accounts " +
+                "WHERE tenant_id = ? AND provider = 'bosta' AND status = 'active' LIMIT 1", tenantId)
+                .stream().findFirst().orElse(null);
+            if (account == null) {
+                throw new FieldException(HttpStatus.CONFLICT, "exchangesEnabled", "EXCHANGES_NEEDS_BOSTA",
+                    "Connect Bosta before allowing exchanges.");
+            }
+            if (account.get("return_business_location_id") == null) {
+                throw new FieldException(HttpStatus.CONFLICT, "exchangesEnabled", "EXCHANGES_NEEDS_RETURN_LOCATION",
+                    "Choose where returns go back to before allowing exchanges.");
+            }
+            if (!Boolean.TRUE.equals(jdbc.queryForObject(
+                    "SELECT portal_pickup_booking FROM tenants WHERE id = ?", Boolean.class, tenantId))) {
+                throw new FieldException(HttpStatus.CONFLICT, "exchangesEnabled", "EXCHANGES_NEEDS_BOOKING",
+                    "Turn on Bosta pickup booking before allowing exchanges.");
+            }
+        }
+        jdbc.update(
+            "UPDATE tenants SET portal_exchanges_enabled = ?, " +
+            "    portal_exchanges_since = CASE WHEN ? AND NOT portal_exchanges_enabled THEN now() " +
+            "                                  ELSE portal_exchanges_since END " +
             "WHERE id = ?", on, on, tenantId);
     }
 

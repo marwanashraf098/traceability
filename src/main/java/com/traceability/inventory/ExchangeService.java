@@ -166,8 +166,11 @@ public class ExchangeService {
     public void tryAutoMap(String trackingNumber) {
         UUID tenantId = TenantContext.require();
 
+        // Step 5c: an exchange Traced booked from a return request (return_request_id set) is
+        // never guessed — its outbound variant is the request's replacement (attachForRequest).
         ExchangeStub ex = jdbc.query(
-            "SELECT id, status, outbound_description FROM exchanges WHERE tenant_id = ? AND tracking_number = ?",
+            "SELECT id, status, outbound_description FROM exchanges " +
+            "WHERE tenant_id = ? AND tracking_number = ? AND return_request_id IS NULL",
             rs -> rs.next() ? new ExchangeStub(rs.getObject("id", UUID.class), rs.getString("status"),
                 rs.getString("outbound_description")) : null,
             tenantId, trackingNumber);
@@ -289,6 +292,146 @@ public class ExchangeService {
         result.put("orderId", orderId.toString());
         result.put("variantId", newVariantId.toString());
         return result;
+    }
+
+    // ── Step 5c: exchanges Traced booked from an approved exchange request ─────
+
+    /** Outcome of {@link #attachForRequest}. */
+    public enum AttachOutcome {
+        /** The row is linked, mapped from the request and matched to the request's order (now or already). */
+        ATTACHED,
+        /** The request isn't booked with this tracking number (yet) — nothing done. */
+        NOT_READY,
+        /** The tracking number's row belongs to another request, or can't be mapped any more. */
+        CONFLICT
+    }
+
+    /**
+     * Step 5c — a type 30 delivery arriving with no forward shipment yet is "ours" when:
+     *   (a) an exchanges row for this tracking number is already linked to a request, or an
+     *       exchange request was booked with this tracking number; or
+     *   (b) its businessReference is the order number of an exchange request whose Traced
+     *       booking is in flight ('pending', tracking not saved yet) — dashboard-made exchanges
+     *       carry no businessReference at all. Its uniqueBusinessReference picks the request
+     *       when present; otherwise exactly one candidate → that request; two or more → ours,
+     *       but unlinked (the booking attaches it when its result is saved).
+     * Returns null when the delivery isn't ours (the dashboard lane, unchanged).
+     */
+    public record OwnExchange(UUID requestId) {}
+
+    @Transactional(readOnly = true)
+    public OwnExchange findOwnExchange(UUID tenantId, String trackingNumber, JsonNode raw) {
+        List<UUID> linked = jdbc.queryForList(
+            "SELECT return_request_id FROM exchanges WHERE tenant_id = ? AND tracking_number = ? " +
+            "  AND return_request_id IS NOT NULL", UUID.class, tenantId, trackingNumber);
+        if (!linked.isEmpty()) return new OwnExchange(linked.get(0));
+        List<UUID> booked = jdbc.queryForList(
+            "SELECT id FROM return_requests WHERE tenant_id = ? AND type = 'exchange' AND bosta_tracking_number = ?",
+            UUID.class, tenantId, trackingNumber);
+        if (!booked.isEmpty()) return new OwnExchange(booked.get(0));
+
+        String reference = raw == null ? null : raw.path("businessReference").asText(null);
+        if (reference == null || reference.isBlank()) return null;
+        String bare = reference.trim().startsWith("#") ? reference.trim().substring(1) : reference.trim();
+        List<UUID> pending = jdbc.queryForList(
+            "SELECT rr.id FROM return_requests rr JOIN orders o ON o.id = rr.order_id AND o.tenant_id = rr.tenant_id " +
+            "WHERE rr.tenant_id = ? AND rr.type = 'exchange' AND rr.booking_status = 'pending' " +
+            "  AND (o.number = ? OR ltrim(o.number, '#') = ?) " +
+            "  AND NOT EXISTS (SELECT 1 FROM exchanges e WHERE e.return_request_id = rr.id) " +
+            "ORDER BY rr.created_at, rr.id",
+            UUID.class, tenantId, reference.trim(), bare);
+        if (pending.isEmpty()) return null;
+        String unique = raw.path("uniqueBusinessReference").asText(null);
+        if (unique != null) {
+            for (UUID id : pending) if (id.toString().equals(unique.trim())) return new OwnExchange(id);
+        }
+        return new OwnExchange(pending.size() == 1 ? pending.get(0) : null);
+    }
+
+    /**
+     * Step 5c — the exchange for a return request Traced booked with {@code trackingNumber}.
+     * Creates the exchanges row (or attaches the one a webhook already created), maps it from
+     * the request through the existing {@link #claim} + {@link #commit} (internal order
+     * internal:exchange:&lt;AWB&gt; + forward leg via linkAtMapTime — the replacement becomes
+     * pickable and committed), and matches it to the request's order exactly
+     * (match_method 'reference', status matched). No guessing: tryAutoMap / attemptMatch skip
+     * rows with return_request_id.
+     *
+     * Idempotent: the row is unique per tracking number and per request, it is locked before
+     * anything is decided, and commit() only runs while it has no outbound order — a repeated
+     * call (booking result, read-back, webhook, sweeper) finds it done. The row starts with an
+     * empty raw ({}); the first webhook for the delivery fills it. The internal order's
+     * customer details come from the original order's delivered forward leg (the same customer
+     * and address the booking sent), fill-only-if-null as always.
+     */
+    @Transactional
+    public AttachOutcome attachForRequest(UUID tenantId, UUID requestId, String trackingNumber) {
+        Map<String, Object> rq = jdbc.queryForList(
+            "SELECT rr.order_id, rr.reference, i.variant_id, i.replacement_variant_id, " +
+            "       pr.title AS product, v.title AS variant, rv.title AS replacement " +
+            "FROM return_requests rr " +
+            "JOIN return_request_items i ON i.request_id = rr.id AND i.tenant_id = rr.tenant_id " +
+            "JOIN variants v ON v.id = i.variant_id JOIN products pr ON pr.id = v.product_id " +
+            "LEFT JOIN variants rv ON rv.id = i.replacement_variant_id " +
+            "WHERE rr.id = ? AND rr.tenant_id = ? AND rr.type = 'exchange' AND rr.bosta_tracking_number = ? " +
+            "  AND rr.booking_status IN ('booked', 'needs_review') " +
+            "ORDER BY i.created_at, i.id LIMIT 1",
+            requestId, tenantId, trackingNumber).stream().findFirst().orElse(null);
+        if (rq == null || rq.get("replacement_variant_id") == null) return AttachOutcome.NOT_READY;
+
+        UUID originalOrderId = (UUID) rq.get("order_id");
+        UUID inboundVariantId = (UUID) rq.get("variant_id");
+        UUID outboundVariantId = (UUID) rq.get("replacement_variant_id");
+        String outboundDesc = com.traceability.portal.ReturnPickupBookingService.exchangeOutboundDescription(
+            (String) rq.get("reference"), (String) rq.get("product"), (String) rq.get("replacement"));
+        String inboundDesc = com.traceability.portal.ReturnPickupBookingService.exchangeReturnDescription(
+            (String) rq.get("product"), (String) rq.get("variant"));
+
+        try {
+            jdbc.update(
+                "INSERT INTO exchanges (tenant_id, tracking_number, status, return_request_id, " +
+                "    outbound_description, inbound_description, raw) " +
+                "VALUES (?, ?, 'needs_mapping', ?, ?, ?, '{}'::jsonb) " +
+                "ON CONFLICT (tenant_id, tracking_number) DO UPDATE SET " +
+                "    return_request_id    = COALESCE(exchanges.return_request_id, EXCLUDED.return_request_id), " +
+                "    outbound_description = COALESCE(exchanges.outbound_description, EXCLUDED.outbound_description), " +
+                "    inbound_description  = COALESCE(exchanges.inbound_description, EXCLUDED.inbound_description), " +
+                "    updated_at = now()",
+                tenantId, trackingNumber, requestId, outboundDesc, inboundDesc);
+        } catch (DuplicateKeyException e) {
+            return AttachOutcome.CONFLICT;   // this request already holds a different exchange row
+        }
+
+        Map<String, Object> ex = jdbc.queryForList(
+            "SELECT id, status, return_request_id, outbound_order_id FROM exchanges " +
+            "WHERE tenant_id = ? AND tracking_number = ? FOR UPDATE",
+            tenantId, trackingNumber).get(0);
+        if (!requestId.equals(ex.get("return_request_id"))) return AttachOutcome.CONFLICT;
+        UUID exchangeId = (UUID) ex.get("id");
+
+        if (ex.get("outbound_order_id") == null) {
+            if (claim(exchangeId, tenantId) == 0) return AttachOutcome.CONFLICT;
+            Map<String, Object> made = commit(exchangeId, tenantId, outboundVariantId, inboundVariantId, false);
+            UUID orderId = UUID.fromString((String) made.get("orderId"));
+            String forwardRaw = jdbc.queryForList(
+                "SELECT raw::text FROM shipments WHERE tenant_id = ? AND order_id = ? AND shipment_leg = 'forward' " +
+                "  AND delivered_at IS NOT NULL AND raw IS NOT NULL ORDER BY created_at DESC, id DESC LIMIT 1",
+                String.class, tenantId, originalOrderId).stream().findFirst().orElse(null);
+            if (forwardRaw != null) {
+                try {
+                    shipmentLinkService.populateConsigneePiiFromRaw(orderId, tenantId, mapper.readTree(forwardRaw));
+                } catch (Exception ignored) { /* no customer details — the order still works */ }
+            }
+        }
+
+        jdbc.update(
+            "UPDATE exchanges SET matched_order_id = ?, match_method = 'reference', " +
+            "    matched_at = COALESCE(matched_at, now()), inbound_variant_id = COALESCE(inbound_variant_id, ?), " +
+            "    status = CASE WHEN status IN ('needs_mapping', 'mapped', 'unmatched', 'needs_confirmation') " +
+            "                  THEN 'matched' ELSE status END, updated_at = now() " +
+            "WHERE id = ? AND tenant_id = ?",
+            originalOrderId, inboundVariantId, exchangeId, tenantId);
+        return AttachOutcome.ATTACHED;
     }
 
     private int claim(UUID exchangeId, UUID tenantId) {

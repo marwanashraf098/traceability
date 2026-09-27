@@ -256,11 +256,16 @@ class PortalExchangeTest {
         assertThat(status(r)).isEqualTo("approved");
         assertThat(eventTypes(r)).endsWith("approved");
 
-        // No Bosta CRP for an exchange: neither the booking job nor the sweeper touches it.
+        // No Bosta CRP (type 25) for an exchange. Since Step 5c the booking job takes the exchange
+        // path (type 30 — PortalExchangeBookingTest), which here stops at its preconditions: this
+        // fixture has no Bosta account. No return leg exists either way.
         booking.book(r, tenantId);
         jdbc.update("UPDATE return_requests SET decided_at = now() - interval '5 minutes' WHERE id = ?", r);
         booking.sweepTenant(tenantId);
-        assertThat(jdbc.queryForObject("SELECT booking_status FROM return_requests WHERE id = ?", String.class, r)).isNull();
+        assertThat(jdbc.queryForObject("SELECT booking_status FROM return_requests WHERE id = ?", String.class, r)).isEqualTo("failed");
+        assertThat(status(r)).isEqualTo("approved");
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM shipments WHERE tenant_id = ? AND shipment_leg = 'return'",
+            Integer.class, tenantId)).isZero();
     }
 
     @Test

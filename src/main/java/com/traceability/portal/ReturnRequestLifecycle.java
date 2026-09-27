@@ -35,7 +35,8 @@ import java.util.*;
  *
  * Request states derived by {@link #reevaluate}: from approved / pickup_booked, 'received'
  * once every item that isn't not_coming has arrived (or is done) and at least one did;
- * then 'refund_pending' once every such item is done.
+ * then 'refund_pending' once every such item is done. Step 5c: an EXCHANGE request goes to
+ * 'exchanged' instead — it never enters refund_pending and takes no refunds.
  *
  * Step 4d-2: also the only writer of return_refunds (append-only — a refund is cancelled by a
  * 'void' row, never updated or deleted) and of 'refunded' ({@link #markRefunded}).
@@ -46,7 +47,9 @@ public class ReturnRequestLifecycle {
     public static final Set<String> OPEN_STATUSES = Set.of("approved", "pickup_booked", "received");
     /** Statuses the merchant may close from. */
     static final Set<String> CLOSABLE = Set.of("approved", "pickup_booked", "received", "refund_pending");
-    static final Set<String> CLOSE_REASONS = Set.of("no_refund", "other");
+    static final Set<String> CLOSE_REASONS = Set.of("no_refund", "other", "exchange_failed");
+    /** Step 5c: 'exchange_failed' closes exchange requests only. */
+    static final String EXCHANGE_FAILED = "exchange_failed";
     static final int CLOSE_NOTE_MAX = 300;
 
     private static final ObjectMapper JSON = new ObjectMapper();
@@ -346,6 +349,14 @@ public class ReturnRequestLifecycle {
             event(tenantId, requestId, "received", actor, meta("items", arrived + done));
         }
         if (arrived == 0) {
+            if ("exchange".equals(rr.get("type"))) {
+                // Step 5c: the old item got its final disposition (restocked or damaged) — the
+                // exchange is finished. Its items are already done and released.
+                jdbc.update("UPDATE return_requests SET status = 'exchanged' WHERE id = ? AND tenant_id = ?",
+                    requestId, tenantId);
+                event(tenantId, requestId, "exchanged", actor, meta("items", done));
+                return;
+            }
             jdbc.update(
                 "UPDATE return_requests SET status = 'refund_pending', refund_pending_at = now() " +
                 "WHERE id = ? AND tenant_id = ?", requestId, tenantId);
@@ -381,7 +392,7 @@ public class ReturnRequestLifecycle {
     /** POST /return-requests/{id}/close {reason: no_refund|other, note}. */
     public void close(UUID tenantId, UUID requestId, String reason, String note, UUID actor) {
         if (reason == null || !CLOSE_REASONS.contains(reason)) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "reason must be no_refund or other");
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "reason must be no_refund, other or exchange_failed");
         }
         String n = note == null || note.isBlank() ? null : note.trim();
         if (n != null && n.length() > CLOSE_NOTE_MAX) {
@@ -390,6 +401,9 @@ public class ReturnRequestLifecycle {
         Map<String, Object> rr = lockRequest(tenantId, requestId);
         if (!CLOSABLE.contains((String) rr.get("status"))) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "This request can't be closed.");
+        }
+        if (EXCHANGE_FAILED.equals(reason) && !"exchange".equals(rr.get("type"))) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Only an exchange can be closed as a failed exchange.");
         }
         closeInternal(tenantId, requestId, reason, n, actor);
     }
@@ -491,6 +505,7 @@ public class ReturnRequestLifecycle {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "The note can be at most " + REFUND_NOTE_MAX + " characters.");
         }
         Map<String, Object> rr = lockRequest(tenantId, requestId);
+        rejectExchange(rr);
         if (!REFUNDABLE.contains((String) rr.get("status"))) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "A refund can be recorded once the return has been received.");
         }
@@ -517,6 +532,7 @@ public class ReturnRequestLifecycle {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "The note can be at most " + REFUND_NOTE_MAX + " characters.");
         }
         Map<String, Object> rr = lockRequest(tenantId, requestId);
+        rejectExchange(rr);
         List<Map<String, Object>> refund = jdbc.queryForList(
             "SELECT id, amount, currency FROM return_refunds WHERE id = ? AND request_id = ? AND tenant_id = ? AND kind = 'refund'",
             refundId, requestId, tenantId);
@@ -540,6 +556,7 @@ public class ReturnRequestLifecycle {
     /** POST /return-requests/{id}/mark-refunded — from refund_pending, with ≥ 1 refund that isn't voided. */
     public void markRefunded(UUID tenantId, UUID requestId, UUID actor) {
         Map<String, Object> rr = lockRequest(tenantId, requestId);
+        rejectExchange(rr);
         if (!"refund_pending".equals(rr.get("status"))) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Only a request waiting for its refund can be marked refunded.");
         }
@@ -599,9 +616,16 @@ public class ReturnRequestLifecycle {
 
     // ── Helpers ───────────────────────────────────────────────────────────────
 
+    /** Step 5c: an exchange takes no refunds (409). */
+    private static void rejectExchange(Map<String, Object> rr) {
+        if ("exchange".equals(rr.get("type"))) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "An exchange has no refund.");
+        }
+    }
+
     private Map<String, Object> lockRequest(UUID tenantId, UUID requestId) {
         return jdbc.queryForList(
-            "SELECT id, order_id, status::text AS status, return_shipment_id FROM return_requests " +
+            "SELECT id, order_id, status::text AS status, return_shipment_id, type FROM return_requests " +
             "WHERE id = ? AND tenant_id = ? FOR UPDATE", requestId, tenantId)
             .stream().findFirst()
             .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Return request not found"));

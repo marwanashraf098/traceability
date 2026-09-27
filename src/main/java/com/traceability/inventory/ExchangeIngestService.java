@@ -127,6 +127,49 @@ public class ExchangeIngestService {
         return IngestOutcome.ROUTED;
     }
 
+    /**
+     * Step 5c — a type 30 delivery Traced booked from a return request (ExchangeService.
+     * findOwnExchange). Upserts the row WITHOUT the first-sighting gates (no HELD, no
+     * MULTI_ITEM — we sent one item each way) and links it to {@code requestId} when known.
+     * The caller never runs tryAutoMap / attemptMatch for it; the booking attaches it.
+     */
+    @Transactional
+    public void upsertOwn(UUID tenantId, String trackingNumber, BostaDelivery delivery, UUID requestId) {
+        JsonNode raw = delivery.raw();
+        JsonNode outbound = raw == null ? null : raw.path("specs").path("packageDetails");
+        JsonNode inbound  = raw == null ? null : raw.path("returnSpecs").path("packageDetails");
+        jdbc.update(
+            "INSERT INTO exchanges " +
+            "(tenant_id, tracking_number, status, return_request_id, outbound_description, inbound_description, " +
+            " inbound_description_ar, cod, goods_value, raw) " +
+            "VALUES (?, ?, 'needs_mapping', ?, ?, ?, ?, ?, ?, ?::jsonb) " +
+            "ON CONFLICT (tenant_id, tracking_number) DO UPDATE SET " +
+            "    raw = EXCLUDED.raw, " +
+            "    return_request_id = COALESCE(exchanges.return_request_id, EXCLUDED.return_request_id), " +
+            "    updated_at = now()",
+            tenantId, trackingNumber, requestId,
+            outbound == null ? null : outbound.path("description").asText(null),
+            inbound == null ? null : inbound.path("description").asText(null),
+            inbound == null ? null : inbound.path("descriptionAr").asText(null),
+            raw == null ? null : parseDecimal(raw.path("cod")),
+            raw == null ? null : parseDecimal(raw.path("goodsInfo").path("amount")),
+            raw == null ? "{}" : raw.toString());
+    }
+
+    /**
+     * Step 5c — keeps a request-linked exchange row's raw current once its forward shipment
+     * exists (the post-pack webhook branch otherwise refreshes only the shipment). Dashboard-
+     * made rows (return_request_id NULL) are untouched, exactly as before.
+     */
+    @Transactional
+    public void refreshOwnRaw(UUID tenantId, String trackingNumber, JsonNode raw) {
+        if (raw == null) return;
+        jdbc.update(
+            "UPDATE exchanges SET raw = ?::jsonb, updated_at = now() " +
+            "WHERE tenant_id = ? AND tracking_number = ? AND return_request_id IS NOT NULL",
+            raw.toString(), tenantId, trackingNumber);
+    }
+
     private static BigDecimal parseDecimal(JsonNode node) {
         if (node == null || node.isMissingNode() || node.isNull()) return null;
         try {

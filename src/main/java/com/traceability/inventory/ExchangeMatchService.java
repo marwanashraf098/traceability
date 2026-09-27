@@ -119,9 +119,11 @@ public class ExchangeMatchService {
     public void attemptMatch(String trackingNumber) {
         UUID tenantId = TenantContext.require();
 
+        // Step 5c: an exchange booked from a return request is matched exactly at booking
+        // (ExchangeService.attachForRequest) — never phone-matched here.
         ExchangeRow ex = jdbc.query(
             "SELECT id, status, inbound_description, outbound_order_id, raw::text AS raw " +
-            "FROM exchanges WHERE tenant_id = ? AND tracking_number = ?",
+            "FROM exchanges WHERE tenant_id = ? AND tracking_number = ? AND return_request_id IS NULL",
             rs -> rs.next() ? new ExchangeRow(
                 rs.getObject("id", UUID.class), rs.getString("status"),
                 rs.getString("inbound_description"),
@@ -387,9 +389,20 @@ public class ExchangeMatchService {
     public void resolveIfDispositionedPieceMatches(UUID orderId, UUID tenantId, String dispositionedPieceId) {
         if (orderId == null || dispositionedPieceId == null) return;
 
+        // Step 5c: an exchange booked from a return request resolves on exactly its request
+        // item's piece — no candidate re-derivation.
+        jdbc.update(
+            "UPDATE exchanges e SET status = 'return_received', updated_at = now() " +
+            "WHERE e.matched_order_id = ? AND e.tenant_id = ? AND e.status = 'matched' " +
+            "  AND e.return_request_id IS NOT NULL " +
+            "  AND EXISTS (SELECT 1 FROM return_request_items i WHERE i.request_id = e.return_request_id " +
+            "              AND i.tenant_id = e.tenant_id AND i.piece_id = ?)",
+            orderId, tenantId, dispositionedPieceId);
+
         ExchangeRow ex = jdbc.query(
             "SELECT id, status, inbound_description, outbound_order_id, raw::text AS raw " +
-            "FROM exchanges WHERE matched_order_id = ? AND tenant_id = ? AND status = 'matched'",
+            "FROM exchanges WHERE matched_order_id = ? AND tenant_id = ? AND status = 'matched' " +
+            "  AND return_request_id IS NULL",
             rs -> rs.next() ? new ExchangeRow(
                 rs.getObject("id", UUID.class), rs.getString("status"),
                 rs.getString("inbound_description"),

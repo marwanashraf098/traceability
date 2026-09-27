@@ -52,13 +52,15 @@ public class RefundSuggestionService {
     public Map<String, Object> suggest(UUID requestId) {
         UUID tenantId = TenantContext.require();
         Map<String, Object> rr = jdbc.queryForList(
-            "SELECT rr.id, o.id AS order_id, o.external_id, o.store_id, o.raw::text AS raw, s.shop_domain, " +
+            "SELECT rr.id, rr.type, o.id AS order_id, o.external_id, o.store_id, o.raw::text AS raw, s.shop_domain, " +
             "       s.status::text AS store_status " +
             "FROM return_requests rr JOIN orders o ON o.id = rr.order_id AND o.tenant_id = rr.tenant_id " +
             "LEFT JOIN stores s ON s.id = o.store_id AND s.tenant_id = o.tenant_id " +
             "WHERE rr.id = ? AND rr.tenant_id = ?", requestId, tenantId)
             .stream().findFirst()
             .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Return request not found"));
+        // Step 5c: an exchange has no refund.
+        if ("exchange".equals(rr.get("type"))) throw new ResponseStatusException(HttpStatus.CONFLICT, "An exchange has no refund.");
 
         // Items that came back; before anything arrived, the items still expected.
         List<Line> lines = lines(tenantId, requestId, "('arrived', 'done')");

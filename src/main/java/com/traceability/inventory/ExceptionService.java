@@ -313,6 +313,7 @@ public class ExceptionService {
         return jdbc.queryForList(
             "SELECT 'pickup_booking_problem' AS type, 'HIGH' AS severity, 'return_request' AS subject_type, " +
             "       rr.id AS request_id, rr.reference, rr.booking_status, rr.bosta_tracking_number AS tracking_number, " +
+            "       rr.type AS request_type, " +
             "       o.id AS order_id, o.number AS order_number, " +
             "       COALESCE(rr.booking_attempted_at, rr.decided_at) AS occurred_at, " +
             "       'pickup_booking_problem:' || rr.id || ':' || " +
@@ -914,7 +915,8 @@ public class ExceptionService {
             "       e.created_at AS occurred_at, " +
             "       'exchange_needs_mapping:' || e.id AS subject_key " +
             "FROM exchanges e " +
-            "WHERE e.tenant_id = ? AND e.status = 'needs_mapping'",
+            // Step 5c: a row Traced booked from a return request is mapped by the booking itself.
+            "WHERE e.tenant_id = ? AND e.status = 'needs_mapping' AND e.return_request_id IS NULL",
             tid);
     }
 
@@ -1192,6 +1194,35 @@ public class ExceptionService {
                 Object t = item.get("tracking_number");
                 String tEn = t != null ? " (tracking " + t + ")" : "";
                 String tAr = t != null ? " (رقم التتبع " + t + ")" : "";
+                // Step 5c: an exchange request's Bosta trip is an exchange, not a return pickup.
+                boolean exchange = "exchange".equals(item.get("request_type"));
+                if (exchange) {
+                    switch (String.valueOf(item.get("booking_status"))) {
+                        case "failed_ambiguous" -> {
+                            item.put("descriptionEn", "Exchange request " + ref + " for order " + n +
+                                ": the Bosta exchange may or may not have been booked — check in Bosta before retrying");
+                            item.put("descriptionAr", "طلب الاستبدال " + ref + " للطلب " + n +
+                                ": ربما تم حجز استبدال بوسطة وربما لا — تحقّق في بوسطة قبل إعادة المحاولة");
+                            item.put("suggestedAction", "check_in_bosta");
+                        }
+                        case "needs_review" -> {
+                            item.put("descriptionEn", "Exchange request " + ref + " for order " + n + tEn +
+                                ": the Bosta exchange was booked but its details differ from the request — review it in Bosta");
+                            item.put("descriptionAr", "طلب الاستبدال " + ref + " للطلب " + n + tAr +
+                                ": تم حجز استبدال بوسطة لكن تفاصيله تختلف عن الطلب — راجعه في بوسطة");
+                            item.put("suggestedAction", "review_in_bosta");
+                        }
+                        default -> {
+                            item.put("descriptionEn", "Exchange request " + ref + " for order " + n +
+                                ": the Bosta exchange couldn't be booked — fix the reason and retry");
+                            item.put("descriptionAr", "طلب الاستبدال " + ref + " للطلب " + n +
+                                ": تعذّر حجز استبدال بوسطة — عالِج السبب وأعد المحاولة");
+                            item.put("suggestedAction", "retry_booking");
+                        }
+                    }
+                    item.put("actionUrl", "/exchanges?tab=requests&request=" + item.get("request_id"));
+                    break;
+                }
                 switch (String.valueOf(item.get("booking_status"))) {
                     case "failed_ambiguous" -> {
                         item.put("descriptionEn", "Return request " + ref + " for order " + n +

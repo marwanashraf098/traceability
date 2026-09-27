@@ -157,7 +157,14 @@ public class PortalService {
         body.put("lines",       lines);
         // Step 4c-2: the pickup area choice — only when this tenant books Bosta pickups and
         // the delivery city has pickup-available districts. City and district names only.
-        body.put("pickup", pickupOffer(tenantId, orderId).map(a -> a.toJson(true)).orElse(null));
+        Optional<PickupAreaService.CityAreas> offer = pickupOffer(tenantId, orderId);
+        Map<String, Object> pickup = offer.map(a -> a.toJson(true)).orElse(null);
+        // Step 5c: in exchange mode only districts Bosta can deliver to AND collect from — the
+        // key exists only when the tenant allows exchanges (exact-key tests rely on that).
+        if (pickup != null && exchangesEnabled(tenantId)) {
+            pickup.put("exchangeDistrictIds", pickupAreas.exchangeDistrictIds(offer.get().cityId()));
+        }
+        body.put("pickup", pickup);
         return new LookupResult(Outcome.SUCCESS, body);
     }
 
@@ -369,6 +376,10 @@ public class PortalService {
         PickupAreaService.District district = null;
         if (offer.isPresent()) {
             district = offer.get().find(req.districtId()).orElseThrow(InvalidSubmission::new);
+            // Step 5c: an exchange courier delivers and collects — the district must allow both.
+            if (replacement != null && !pickupAreas.exchangeDistrictIds(offer.get().cityId()).contains(district.id())) {
+                throw new InvalidSubmission();
+            }
         }
 
         // Step 5b: exchanges always wait for the merchant — auto-approve applies to refunds only.

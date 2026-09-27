@@ -55,6 +55,14 @@ public class ReturnsPortalAdminController {
         booking.markNotBooked(id);
     }
 
+    /** Step 5c — "Book now": an approved exchange that was never booked → book it (same claim path). 409 otherwise. */
+    @PostMapping("/return-requests/{id}/booking/book-now")
+    @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
+    @ResponseStatus(HttpStatus.ACCEPTED)
+    public void bookNow(@PathVariable UUID id) {
+        booking.bookNow(id);
+    }
+
     public record ConfirmBookingRequest(String trackingNumber) {}
 
     /** "It was booked — enter tracking number": checked against Bosta, then booked + verified. */

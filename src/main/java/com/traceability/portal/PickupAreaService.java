@@ -81,6 +81,17 @@ public class PickupAreaService {
         return forCity((String) leg.get(0).get("city_id"), (String) leg.get(0).get("district_id"));
     }
 
+    /**
+     * Step 5c — the districts of {@code cityId} Bosta can both deliver to and collect from (an
+     * exchange courier does both in one visit): pickup_available AND dropoff_available.
+     */
+    public List<String> exchangeDistrictIds(String cityId) {
+        if (cityId == null || cityId.isBlank()) return List.of();
+        return jdbc.queryForList(
+            "SELECT district_id FROM bosta_districts WHERE city_id = ? AND pickup_available AND dropoff_available " +
+            "ORDER BY zone_name NULLS LAST, district_name, district_id", String.class, cityId);
+    }
+
     /** A city's pickup-available districts (zone, then district name); empty when none. */
     public Optional<CityAreas> forCity(String cityId, String forwardDistrictId) {
         if (cityId == null || cityId.isBlank()) return Optional.empty();
