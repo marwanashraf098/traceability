@@ -4,6 +4,19 @@
 
 ## Current state
 
+**Landing hero — CTAs no longer hidden by the device mockup (2026-09-27, pushed to main, not deployed).**
+`marketing/index.html` only. Root cause: the laptop+phone image (`#rig`) was sized from a guess (`--stage-h: 100vh − 470px`)
+while the text block above it grows with vw, so on wide-but-short viewports (1536×864 = 1920×1080 @125%, 1600×900,
+1920×960/1016) the bottom-anchored image overflowed its area upward over "Start free"/"View demo" and stole their clicks.
+Fix: `.stage` is a `container-type:size` box; `#rig` width = `min(100cqw − 2·gutter, 100cqh·1787/875, 1180px)` so it can
+never exceed the stage; stage top margin `max(42px,3.2vh)` (= 28px clearance + the 14px the hero text keeps from its stuck
+`[data-r]` translateY — that stuck transform is pre-existing and left alone); h1 max 80px, sub max 17px. "Returned · Not
+cleaned" card moved inside `#rig` (`left:78%; bottom:calc(77% + 8px)`, above the phone) with `--fy:0` so its inactive pose
+no longer drops onto the phone. Verified by headless sweep (12 desktop viewports × 4 carousel steps: 0 CTA/stage overlap,
+CTAs hit-test to themselves, 0 card/phone overlap, ≥28px clearance) + auto-cycle, swipe, resize→scroll handoff (lands
+identically to before). Gotcha: `#hero .card{opacity:var(--fade)!important}` keeps inactive cards fully visible in their
+offset pose — measure every step, not just the active one. Landing is EN-only by design (no AR/RTL).
+
 **Step 5c — Traced books the Bosta exchange (type 30) on approval; the replacement goes to Pick & Pack; exchange requests finish as "Exchanged" — built 2026-09-27 on branch `feature/portal-exchanges-5c` (from origin/main `e9f0696`; not merged, not deployed).**
 MODE B AMENDMENT #3 (CLAUDE.md, BostaV2Client class doc). No new Shopify writes (5a's decrement + trigger 2 cover it); committed stays derived; PICKABLE_ORDERS_FILTER untouched.
 - **V112** `return_request_status` + 'exchanged' (own migration). **V113** `tenants.portal_exchanges_since`, `exchanges.return_request_id` (FK, partial UNIQUE), close_reason + 'exchange_failed'.

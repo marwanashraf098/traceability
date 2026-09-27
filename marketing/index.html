@@ -896,7 +896,7 @@ body[data-layout="d"] .right{margin-inline-start:auto}
 .cine{position:relative}
 #hero{position:sticky!important;top:0;height:100vh;min-height:0!important;overflow:hidden;z-index:1}
 #hero .stage{overflow:visible}
-.rig{width:min(calc(100% - 2 * var(--gutter)),calc((var(--stage-h) - 40px) * 2.04),1180px)!important}
+.rig{width:min(calc(100cqw - 2 * var(--gutter)),calc(100cqh * 1787 / 875),1180px)!important}
 .rig{transition:none;z-index:7;backface-visibility:hidden;pointer-events:none}
 .rig .glass.ready,.rig .dots,.rig .card{pointer-events:auto}
 #hero .stage{z-index:6}
@@ -984,9 +984,9 @@ section p{max-width:44ch;font-size:16px;line-height:1.6;margin:0;opacity:.7}
   box-shadow:0 0 0 1px rgba(17,19,21,.08),0 1px 0 rgba(255,255,255,.9) inset,0 8px 20px -14px rgba(17,19,21,.3)}
 #hero .kicker i{width:6px;height:6px;border-radius:50%;background:#1E5BFF;box-shadow:0 0 0 3px rgba(30,91,255,.14);animation:ping 2.8s ease-out infinite}
 @keyframes ping{0%{box-shadow:0 0 0 0 rgba(30,91,255,.35)}70%,100%{box-shadow:0 0 0 7px rgba(30,91,255,0)}}
-#hero h1:not(.tk h1){position:relative;font-size:clamp(36px,min(5.6vw,7.6vh),108px);line-height:1.02;letter-spacing:-.04em;font-weight:500;margin:0;max-width:14ch;text-wrap:balance}
+#hero h1:not(.tk h1){position:relative;font-size:clamp(36px,min(5.6vw,7.6vh),80px);line-height:1.02;letter-spacing:-.04em;font-weight:500;margin:0;max-width:14ch;text-wrap:balance}
 #hero h1 em{font-style:normal;color:#5F656E}
-#hero .sub:not(.tk .sub){position:relative;font-size:clamp(14px,1.1vw,22px);line-height:1.45;color:#5F656E;max-width:40ch;margin:clamp(12px,1vw,20px) 0 clamp(16px,1.3vw,26px);text-wrap:pretty}
+#hero .sub:not(.tk .sub){position:relative;font-size:clamp(14px,1.1vw,17px);line-height:1.45;color:#5F656E;max-width:40ch;margin:clamp(12px,1vw,20px) 0 clamp(16px,1.3vw,26px);text-wrap:pretty}
 #hero .ctas{position:relative;display:flex;align-items:center;gap:18px}
 /* hook button: solid Trace Blue for contrast, still */
 .cta.solid{padding:0;background:none;animation:none;box-shadow:0 8px 24px -10px rgba(30,91,255,.55)}
@@ -1006,7 +1006,8 @@ section p{max-width:44ch;font-size:16px;line-height:1.6;margin:0;opacity:.7}
 @keyframes rise{to{opacity:1;transform:none}}
 
 /* stage: devices + cards */
-.stage{position:relative;width:min(1180px,100%);height:auto;flex:1 1 auto;min-height:160px;max-height:520px;margin:max(28px,3.2vh) 0 28px}
+.stage{position:relative;width:min(1180px,100%);height:auto;flex:1 1 auto;min-height:160px;max-height:520px;margin:max(42px,3.2vh) 0 28px;container-type:size}
+/* 42px = 28px of clearance + the 14px the hero text block keeps from its [data-r] translateY */
 #hero .ctas{margin-bottom:0}
 .dev{position:absolute;z-index:1;background:#0F1113;border-radius:22px;box-shadow:0 30px 80px -30px rgba(17,19,21,.45),0 0 0 1px rgba(17,19,21,.12)}
 .lap::before{content:"";position:absolute;left:50%;top:0;translate:-50% 0;width:11%;height:9px;border-radius:0 0 7px 7px;background:#0F1113;z-index:2}
@@ -1166,7 +1167,7 @@ section p{max-width:44ch;font-size:16px;line-height:1.6;margin:0;opacity:.7}
 .card.fly{opacity:0;transform:translate(var(--fx,0),var(--fy,40px)) scale(.9);animation:none;transition:opacity .8s var(--ease),transform .9s var(--ease)}
 .card.fly.on{opacity:1;transform:none;animation:bob 6s ease-in-out infinite}
 .card.fly.old{opacity:.55;transform:none;animation:bob 6s ease-in-out infinite}
-.card.fly[data-i="2"]{--fx:-40px}
+.card.fly[data-i="2"]{--fx:-40px;--fy:0px}
 /* dots */
 .dots{position:absolute;left:50%;translate:-50% 0;bottom:-26px;display:flex;gap:8px;z-index:5}
 .dots button{width:22px;height:18px;padding:0;background:none;border:0;cursor:pointer;display:grid;place-items:center}
@@ -1368,8 +1369,8 @@ main section:not(#hero):not(.feat):not(.ucd){position:relative;z-index:2}
       <div class="card fly" data-i="1" style="left:calc(-1 * var(--gutter) + 4px);top:14%"><span class="ic "><svg viewBox="0 0 24 24"><path d="M3 7h11v9H3zM14 10h4l3 3v3h-7"/><circle cx="7" cy="18" r="1.6"/><circle cx="17" cy="18" r="1.6"/></svg></span><span><b>Shipped · Bosta</b><small>Omar · Mon 13:40</small></span></div>
       <div class="card fly" data-i="0" style="left:calc(-1 * var(--gutter) + 10px);top:44%"><span class="ic "><svg viewBox="0 0 24 24"><path d="M4 7V5a1 1 0 0 1 1-1h2M17 4h2a1 1 0 0 1 1 1v2M20 17v2a1 1 0 0 1-1 1h-2M7 20H5a1 1 0 0 1-1-1v-2M8 9v6M12 9v6M16 9v6"/></svg></span><span><b>Received · Shelf B3</b><small>Omar · Mon 09:14</small></span></div>
       <div class="card fly" data-i="3" style="left:calc(-1 * var(--gutter) + 16px);top:74%"><span class="ic g"><svg viewBox="0 0 24 24"><path d="m5 12.5 4.5 4.5L19 7.5"/></svg></span><span><b>Cleaned · Back in stock</b><small>Sara · Fri 16:30</small></span></div>
+      <div class="card fly" data-i="2" style="left:78%;bottom:calc(77% + 8px)"><span class="ic "><svg viewBox="0 0 24 24"><path d="M9 14 4 9l5-5M4 9h10a6 6 0 0 1 0 12h-3"/></svg></span><span><b>Returned · Not cleaned</b><small>Sara · Tue 11:02</small></span></div>
     </div>
-    <div class="card fly" data-i="2" style="right:0;top:-6px"><span class="ic "><svg viewBox="0 0 24 24"><path d="M9 14 4 9l5-5M4 9h10a6 6 0 0 1 0 12h-3"/></svg></span><span><b>Returned · Not cleaned</b><small>Sara · Tue 11:02</small></span></div>
     <div class="dots" role="tablist" aria-label="Demo steps"><button role="tab" data-i="0" aria-label="Received"></button><button role="tab" data-i="1" aria-label="Shipped"></button><button role="tab" data-i="2" aria-label="Returned"></button><button role="tab" data-i="3" aria-label="Cleaned"></button></div>
   </div>
   <div class="trust">
