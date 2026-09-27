@@ -4,6 +4,14 @@
 
 ## Current state
 
+**Meta Pixel on the marketing site (2026-09-28, branch `landing-view-demo`, committed, not deployed).**
+`marketing/index.html` + `marketing/mobile.html` only. Pixel 1837033837461823: base code in `assets/js/meta-pixel.js`
+(PageView), Lead on any click of a `calendly.com` link via one delegated listener in `assets/js/meta-pixel-lead.js`.
+External files, not inline — the tracedtech.com CSP is `script-src 'self'`. Base code sits right AFTER the
+desktop/mobile route script so a redirected load doesn't double-count PageView. **Not live until the CSP is widened**
+(script-src + https://connect.facebook.net; img-src/connect-src + https://www.facebook.com https://connect.facebook.net)
+— proposed, awaiting Marawan's approval, not applied.
+
 **Step 6b — screens for untracked request items + the drawer-arrival intake gap — built 2026-09-27 on branch `feature/untracked-returns-6b` (from `feature/untracked-returns-6a` `8bef912`; 6a + 6b ship together; not merged, not deployed).**
 - **V115 / D:** shipments.return_intake_outcome + 'request_items_arrived'. ReturnRequestLifecycle stamps the request's linked courier-return leg (completed_at, outcome, by, session) when an Arrived action leaves no item awaited — no return_to_receive; undo back to awaiting clears it. listCrpReturns: request_items_arrived → resolved (needs_inspection while a scanned piece is still undecided).
 - **Portal:** `lineKey()` = orderItemId for untracked lines, variantId otherwise; submit sends orderItemId for untracked lines (exchange too). No visible difference for the customer.
