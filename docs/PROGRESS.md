@@ -4,6 +4,17 @@
 
 ## Current state
 
+**Step 6a — portal returns / exchanges for UNTRACKED order lines (backend + null-safety) — built 2026-09-27 on branch `feature/untracked-returns-6a` (from origin/main `5f327c6`; not merged, not deployed — 6b adds the screens).**
+No new Shopify or Bosta writes; InventoryLedger stays the only piece-status writer; tracked lines unchanged.
+- **V114:** return_request_items — piece_id NULLable, order_item_id (FK) + unit_no, CHECK exactly one binding, partial UNIQUE (order_item_id, unit_no) WHERE active (per-piece index kept), arrived_condition (sellable|damaged), arrived_by.
+- **Lookup/submit (PortalService):** `LINE_UNTRACKED_SQL` (per-line orderUntrackedSql); untracked lines carry orderItemId + tracked:false (only they); cap = min(quantity, REST current_quantity) − units in non-released items (a unit that came back is not offered again); exchangeOptions as for tracked lines. SubmitLine gains orderItemId (4-arg; 3-arg kept); units bound 1..cap first-free; the unit index maps to the existing 409; exchange may use an untracked line.
+- **Arrived (ReturnRequestLifecycle.arrivedUntracked / undoArrivedUntracked):** drawer + session entry points (guards: untracked, awaiting, open request; session open + linked leg / exchange AWB scanned). Sellable → `request_item_to_receive` exception (MEDIUM, /receiving; key carries arrived_at so undo removes it). Undo → awaiting, status back to pickup_booked/approved, exchanges row back to matched. Leg-level mark-received refuses request-linked legs.
+- **Canonical rule:** returnLegScanEvidenceSql request clause + untracked-arrival clause (session-scoped via the item_arrived_untracked event). Revert check: clause disabled → e1 fails.
+- **Read paths:** detail LEFT JOIN pieces (tracked, orderItemId, unitNo, arrivedCondition); parcel cards add itemsRequestId / itemsRequestReference / requestItems (incl. untracked; also for a Traced-booked exchange AWB) and treat a request with untracked items as complete once none is awaited. Refund suggestion, booking itemsCount/descriptions, read-back, list counts unchanged (variant_id kept, one row per unit).
+- **Fix found while building:** tracked-scan attribution could substitute a piece onto an untracked item (CHECK violation) → substitute only among tracked items.
+- **Frontend (null-safety only):** item piece code shows "Not tracked"; outcome "Arrived · to receive" for sellable untracked items; Exceptions label for request_item_to_receive. The portal UI does not yet submit orderItemId (6b).
+- **Tests:** `UntrackedReturnsTest` (11). MigrationSmokeTest 113, NotTracedBackfillTest 58.
+
 **Landing hero — CTAs no longer hidden by the device mockup (2026-09-27, pushed to main, not deployed).**
 `marketing/index.html` only. Root cause: the laptop+phone image (`#rig`) was sized from a guess (`--stage-h: 100vh − 470px`)
 while the text block above it grows with vw, so on wide-but-short viewports (1536×864 = 1920×1080 @125%, 1600×900,
