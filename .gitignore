@@ -5,3 +5,6 @@ dist/
 *.log
 .idea/
 .vscode/
+
+# Vite build output (frontend/vite.config outDir) — built by the Dockerfile / Maven frontend plugin, never committed
+src/main/resources/static/
