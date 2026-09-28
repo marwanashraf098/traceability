@@ -4,7 +4,7 @@
 
 ## Current state
 
-**Meta Pixel on the marketing site (2026-09-28, branch `landing-view-demo`, committed, not deployed).**
+**Meta Pixel on the marketing site (2026-09-28, on main, not deployed).**
 `marketing/index.html` + `marketing/mobile.html` only. Pixel 1837033837461823: base code in `assets/js/meta-pixel.js`
 (PageView), Lead on any click of a `calendly.com` link via one delegated listener in `assets/js/meta-pixel-lead.js`.
 External files, not inline — the tracedtech.com CSP is `script-src 'self'`. Base code sits right AFTER the
