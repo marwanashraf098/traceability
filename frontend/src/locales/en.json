@@ -2293,18 +2293,16 @@
   },
   "transfers": {
     "title": "Transfers",
-    "new": "New Transfer",
+    "new": "New transfer",
     "empty": "No transfers yet",
     "relocate": {
-      "action": "Relocate",
-      "title": "Relocate Stock",
+      "title": "Move to another location",
       "description": "Move stock to another location permanently — no reconcile step, no scan-back. Close once every piece has been scanned out.",
-      "submit": "Start Relocate"
+      "submit": "Start move"
     },
     "return": {
-      "action": "Return",
-      "title": "Return Stock",
-      "description": "Bring relocated stock back to your fulfillment warehouse — scan it out at the source, then scan it back on arrival.",
+      "title": "Bring back",
+      "description": "Bring stock you moved earlier back to your fulfillment warehouse — scan it out at the source, then scan it back on arrival.",
       "from": "From",
       "fromPlaceholder": "Select source location…",
       "to": "To",
@@ -2313,9 +2311,9 @@
       "sourceRequired": "Select a source location",
       "pieces": "Pieces at this location",
       "selectAll": "Select all",
-      "noPieces": "No relocated pieces at this location",
-      "submit": "Start Return",
-      "scanOutSubtitle": "Return — send out"
+      "noPieces": "No moved pieces at this location",
+      "submit": "Start bringing back",
+      "scanOutSubtitle": "Bring back — send out"
     },
     "view": {
       "open": "Open",
@@ -2352,7 +2350,7 @@
       "daysAgo": "{{count}}d ago"
     },
     "create": {
-      "title": "New Transfer",
+      "title": "Send out and back",
       "destination": "Destination",
       "destinationPlaceholder": "Select destination location…",
       "noDestinations": "No external locations available — add one in Locations first",
@@ -2394,7 +2392,7 @@
       "continueReconcile": "Continue Reconcile",
       "closeOneWay": "Close",
       "closeOneWayDisabledTooltip": "No outstanding pieces to close",
-      "closeOneWayConfirmTitle": "Close this relocate transfer?",
+      "closeOneWayConfirmTitle": "Close this move?",
       "closeOneWayConfirmBody": "Every outstanding piece will move to the new location permanently and can no longer be picked from here. This cannot be undone from this screen.",
       "closeOneWayConfirmButton": "Confirm Close",
       "reprintOutstanding": "Reprint Outstanding Labels",
@@ -2445,6 +2443,13 @@
       "closeConfirmBody": "This transfer will move to closed and can no longer be reconciled.",
       "closeConfirmButton": "Confirm Close",
       "closedRedirect": "Transfer closed"
+    },
+    "chooser": {
+      "title": "What do you want to do?",
+      "roundTripTitle": "Send out and back",
+      "roundTripDescription": "Stock goes to a showroom, cleaner or repair shop and comes back. You check it in when it returns.",
+      "relocateDescription": "Stock moves to another location and stays there. It can't be sold from your main warehouse until you bring it back.",
+      "returnDescription": "Return stock you moved earlier to your main warehouse, then check it in."
     }
   },
   "status": {

@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
-import { Badge, Button, EmptyState, Input, Select, StatCard, TableSkeleton, Alert, Checkbox, SegmentedControl } from '../components/ui'
+import { Badge, Button, EmptyState, Input, Modal, Select, StatCard, TableSkeleton, Alert, Checkbox, SegmentedControl } from '../components/ui'
 import {
   listOpenTransfers, listTransferDestinations, listLocations, createTransfer, listReturnablePieces,
   TransferSummary, TransferType, TRANSFER_TYPES, LocationOption, TransferCommandError,
@@ -36,6 +36,16 @@ function relativeTime(iso: string, t: (k: string, o?: Record<string, unknown>) =
   return t('transfers.time.daysAgo', { count: days })
 }
 
+// Relocate / Bring back always carry transfer_type='other' (see FR-22.10 note above), so the
+// Type column names the mode for those two instead; round trips keep their chosen category.
+function typeLabel(tr: TransferSummary, t: (k: string) => string): string {
+  if (tr.transfer_mode === 'relocate_out') return t('transfers.relocate.title')
+  if (tr.transfer_mode === 'relocate_return') return t('transfers.return.title')
+  return t(`transfers.type.${tr.transfer_type}`)
+}
+
+type CreateView = 'create' | 'relocate' | 'return'
+
 // ── List + Create ────────────────────────────────────────────────────────────
 
 export default function Transfers() {
@@ -58,6 +68,7 @@ export default function Transfers() {
   // Return screen's own picker is the real source of truth once a location is chosen
   // (same pattern CreateTransferForm already uses for an empty destination list).
   const [everRelocated, setEverRelocated] = useState<boolean | null>(null)
+  const [chooserOpen, setChooserOpen] = useState(false)
 
   useEffect(() => {
     load('open')
@@ -77,6 +88,28 @@ export default function Transfers() {
   function changeStatusView(next: TransferListView) {
     setStatusView(next)
     load(next)
+  }
+
+  // One "+ New transfer" entry point (header + empty state). Gating rules are the ones the
+  // three separate header buttons used: round trip always; relocate needs a destination;
+  // bring back additionally needs a relocate to have ever existed.
+  const checksLoading = destinationCount === null || everRelocated === null
+  const hasDestination = destinationCount !== null && destinationCount > 0
+  const createOptions: CreateView[] = [
+    'create',
+    ...(hasDestination ? ['relocate' as const] : []),
+    ...(hasDestination && everRelocated ? ['return' as const] : []),
+  ]
+
+  function startNewTransfer() {
+    if (checksLoading) return
+    if (createOptions.length === 1) setView(createOptions[0])
+    else setChooserOpen(true)
+  }
+
+  function chooseOption(next: CreateView) {
+    setChooserOpen(false)
+    setView(next)
   }
 
   function openRow(tr: TransferSummary) {
@@ -118,23 +151,18 @@ export default function Transfers() {
     <div className="space-y-4">
       <div className="flex items-center justify-between gap-2">
         <h1 className="text-h1 text-primary">{t('transfers.title')}</h1>
-        <div className="flex items-center gap-2">
-          {/* Single-location pilots never see this — no second location to relocate to. */}
-          {destinationCount !== null && destinationCount > 0 && (
-            <Button size="sm" variant="secondary" onClick={() => setView('relocate')}>
-              {t('transfers.relocate.action')}
-            </Button>
-          )}
-          {destinationCount !== null && destinationCount > 0 && everRelocated && (
-            <Button size="sm" variant="secondary" onClick={() => setView('return')}>
-              {t('transfers.return.action')}
-            </Button>
-          )}
-          <Button size="sm" onClick={() => setView('create')}>
-            + {t('transfers.new')}
-          </Button>
-        </div>
+        <Button size="sm" loading={checksLoading} onClick={startNewTransfer}>
+          + {t('transfers.new')}
+        </Button>
       </div>
+
+      {chooserOpen && (
+        <NewTransferChooser
+          options={createOptions}
+          onChoose={chooseOption}
+          onClose={() => setChooserOpen(false)}
+        />
+      )}
 
       <SegmentedControl
         value={statusView}
@@ -166,7 +194,7 @@ export default function Transfers() {
         <EmptyState
           message={t('transfers.empty')}
           icon="📦"
-          action={{ label: '+ ' + t('transfers.new'), onClick: () => setView('create') }}
+          action={{ label: '+ ' + t('transfers.new'), onClick: startNewTransfer, loading: checksLoading }}
         />
       ) : (
         <div className="card overflow-hidden">
@@ -183,7 +211,7 @@ export default function Transfers() {
               {transfers.map(tr => (
                 <tr key={tr.id} className="tbl-row cursor-pointer" onClick={() => openRow(tr)}>
                   <td className="tbl-cell text-primary">{tr.destination_location_name}</td>
-                  <td className="tbl-cell text-muted">{t(`transfers.type.${tr.transfer_type}`)}</td>
+                  <td className="tbl-cell text-muted">{typeLabel(tr, t)}</td>
                   <td className="tbl-cell">
                     <Badge tone={transferTone(tr.status)} label={t(`transfers.status.${tr.status}`)} />
                   </td>
@@ -196,6 +224,38 @@ export default function Transfers() {
         </div>
       )}
     </div>
+  )
+}
+
+// ── New transfer chooser ────────────────────────────────────────────────────
+
+const CHOOSER_COPY: Record<CreateView, { title: string; description: string }> = {
+  create:   { title: 'transfers.chooser.roundTripTitle', description: 'transfers.chooser.roundTripDescription' },
+  relocate: { title: 'transfers.relocate.title',         description: 'transfers.chooser.relocateDescription' },
+  return:   { title: 'transfers.return.title',           description: 'transfers.chooser.returnDescription' },
+}
+
+function NewTransferChooser({ options, onChoose, onClose }: {
+  options: CreateView[]; onChoose: (v: CreateView) => void; onClose: () => void
+}) {
+  const { t } = useTranslation()
+  return (
+    <Modal title={t('transfers.chooser.title')} onClose={onClose}>
+      <div className="space-y-3" data-testid="new-transfer-chooser">
+        {options.map(opt => (
+          <button
+            key={opt}
+            type="button"
+            data-testid={`chooser-option-${opt}`}
+            onClick={() => onChoose(opt)}
+            className="w-full text-start rounded-xl border border-line p-4 transition-colors hover:border-trace-blue focus-visible:border-trace-blue"
+          >
+            <p className="text-body font-semibold text-primary">{t(CHOOSER_COPY[opt].title)}</p>
+            <p className="text-small text-muted mt-1">{t(CHOOSER_COPY[opt].description)}</p>
+          </button>
+        ))}
+      </div>
+    </Modal>
   )
 }
 
