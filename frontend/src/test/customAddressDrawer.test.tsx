@@ -91,7 +91,7 @@ async function openDrawer() {
   await user.click(await screen.findByRole('button', { name: /Requests/ }))
   await user.click(await screen.findByText('RR-7K3F9M'))
   const drawer = screen.getByTestId('return-request-drawer')
-  await within(drawer).findByText('It runs small.')
+  await within(drawer).findByText('Linen Shirt')
   return { user, drawer }
 }
 
@@ -118,13 +118,31 @@ describe('Drawer → custom pickup address', () => {
     expect(within(drawer).queryByTestId('custom-address')).not.toBeInTheDocument()
   })
 
-  test('redacted: the label stays, the address is gone', async () => {
-    withBooking('requested', null, { pickupAddressSource: 'custom', customAddress: {
+  test('redacted: the label stays, the address is gone; one line says the details were removed', async () => {
+    withBooking('requested', null, { piiRedacted: true, email: null, note: null, pickupAddressSource: 'custom', customAddress: {
       firstLine: null, secondLine: null, buildingNumber: null, floor: null, apartment: null, redacted: true } })
     const { drawer } = await openDrawer()
     const block = within(drawer).getByTestId('custom-address')
     expect(block).toHaveTextContent('The address was removed after a privacy request.')
     expect(block).not.toHaveTextContent('Fouad')
+
+    expect(within(drawer).getByTestId('pii-removed'))
+      .toHaveTextContent("The customer's email, note and any typed pickup address were removed after a privacy request.")
+  })
+
+  test('no privacy note when not redacted', async () => {
+    withBooking('requested', null, { piiRedacted: false })
+    const { drawer } = await openDrawer()
+    expect(within(drawer).queryByTestId('pii-removed')).not.toBeInTheDocument()
+  })
+
+  test('privacy note on a redacted delivery-address request, in Arabic too', async () => {
+    withBooking('requested', null, { piiRedacted: true, email: null, note: null, pickupAddressSource: 'order' })
+    const { drawer } = await openDrawer()
+    expect(within(drawer).getByTestId('pii-removed')).toBeInTheDocument()
+    await i18n.changeLanguage('ar')
+    await waitFor(() => expect(within(drawer).getByTestId('pii-removed'))
+      .toHaveTextContent('حُذف البريد الإلكتروني للعميل وملاحظته وأي عنوان استلام كتبه بعد طلب خصوصية.'))
   })
 
   test('exchange requests show it too', async () => {

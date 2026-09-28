@@ -5,7 +5,7 @@ import { approveReturnRequest, switchExchangeToRefund, ReturnRequestDetail } fro
 import { Button, cn, useToast } from '../../components/ui'
 import { reasonLabel, shortCustomerName } from './requestFormat'
 import { PieceCode } from './RequestLifecycle'
-import CustomAddressBlock from './CustomAddressBlock'
+import CustomAddressBlock, { PiiRemovedNote } from './CustomAddressBlock'
 
 /**
  * Step 5b — the request drawer for an exchange (mockups X4 / X6): what comes back → what goes
@@ -86,6 +86,7 @@ export default function ExchangeRequestView({
                 <CustomAddressBlock detail={detail} />
               </Field>
             )}
+            <PiiRemovedNote detail={detail} />
           </dl>
         )}
 

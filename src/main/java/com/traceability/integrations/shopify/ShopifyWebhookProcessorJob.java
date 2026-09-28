@@ -93,37 +93,41 @@ public class ShopifyWebhookProcessorJob {
             WHERE tenant_id = ?
             """;
 
-    // V117: the pickup address a customer typed in the returns portal is customer PII too —
-    // cleared on the redacted orders' return requests (the street, landmark, building, floor,
-    // apartment), stamped custom_address_redacted_at. The source stays 'custom' so the drawer can
-    // say an address was entered and removed; the area snapshot (city / district names) stays.
-    private static final String REDACT_CUSTOM_PICKUP_ADDRESS_BY_ORDER_IDS = """
+    // GDPR: a return request carries customer PII of its own — the email and note typed in the
+    // returns portal and (V117) a typed pickup address. Cleared on the redacted orders' requests,
+    // stamped pii_redacted_at so the drawer can say the details were removed. The area snapshot
+    // (city / district names), items and history stay. return_request_events and the exception
+    // detectors hold no copy of these fields (asserted in PortalCustomAddressTest), so nothing
+    // else needs clearing.
+    private static final String REDACT_RETURN_REQUESTS_BY_ORDER_IDS = """
             UPDATE return_requests rr
-            SET custom_first_line = NULL,
+            SET customer_email = NULL,
+                customer_note = NULL,
+                custom_first_line = NULL,
                 custom_second_line = NULL,
                 custom_building_number = NULL,
                 custom_floor = NULL,
                 custom_apartment = NULL,
-                custom_address_redacted_at = now()
+                pii_redacted_at = now()
             FROM orders o
             WHERE o.id = rr.order_id AND o.tenant_id = rr.tenant_id
               AND rr.tenant_id = ?
-              AND rr.pickup_address_source = 'custom'
-              AND rr.custom_address_redacted_at IS NULL
+              AND rr.pii_redacted_at IS NULL
               AND o.external_id = ANY(?)
             """;
 
-    private static final String REDACT_ALL_CUSTOM_PICKUP_ADDRESSES_FOR_TENANT = """
+    private static final String REDACT_ALL_RETURN_REQUESTS_FOR_TENANT = """
             UPDATE return_requests
-            SET custom_first_line = NULL,
+            SET customer_email = NULL,
+                customer_note = NULL,
+                custom_first_line = NULL,
                 custom_second_line = NULL,
                 custom_building_number = NULL,
                 custom_floor = NULL,
                 custom_apartment = NULL,
-                custom_address_redacted_at = now()
+                pii_redacted_at = now()
             WHERE tenant_id = ?
-              AND pickup_address_source = 'custom'
-              AND custom_address_redacted_at IS NULL
+              AND pii_redacted_at IS NULL
             """;
 
     private final JdbcTemplate jdbc;
@@ -466,9 +470,9 @@ public class ShopifyWebhookProcessorJob {
                 ps.setArray(2, con.createArrayOf("text", idArray));
                 return ps;
             });
-            // V117: same transaction — the portal pickup address typed on those orders' requests.
+            // Same transaction — the return requests' own PII (email, note, typed pickup address).
             jdbc.update(con -> {
-                PreparedStatement ps = con.prepareStatement(REDACT_CUSTOM_PICKUP_ADDRESS_BY_ORDER_IDS);
+                PreparedStatement ps = con.prepareStatement(REDACT_RETURN_REQUESTS_BY_ORDER_IDS);
                 ps.setObject(1, tenantId);
                 ps.setArray(2, con.createArrayOf("text", idArray));
                 return ps;
@@ -484,7 +488,7 @@ public class ShopifyWebhookProcessorJob {
         // piece_events is INSERT-only and holds NO customer PII — must not be touched.
         int updated = tx.execute(s -> {
             int orders = jdbc.update(REDACT_ALL_CUSTOMERS_FOR_TENANT, tenantId);
-            jdbc.update(REDACT_ALL_CUSTOM_PICKUP_ADDRESSES_FOR_TENANT, tenantId);
+            jdbc.update(REDACT_ALL_RETURN_REQUESTS_FOR_TENANT, tenantId);
             return orders;
         });
         log.info("shop/redact: erased all customer PII for tenant={} shop={} — {} order(s) updated",

@@ -33,3 +33,14 @@ export default function CustomAddressBlock({ detail }: { detail: ReturnRequestDe
     </div>
   )
 }
+
+/** GDPR — one line saying the customer's own details on this request were removed. */
+export function PiiRemovedNote({ detail }: { detail: ReturnRequestDetail }) {
+  const { t } = useTranslation()
+  if (!detail.piiRedacted) return null
+  return (
+    <p className="col-span-full text-small text-muted" data-testid="pii-removed">
+      {t('exchangesRefunds.requests.drawer.piiRemoved')}
+    </p>
+  )
+}

@@ -125,7 +125,7 @@ public class ReturnRequestService {
             "       rr.received_at, rr.refund_pending_at, rr.closed_at, rr.closed_by, cu.name AS closed_by_name, " +
             "       rr.close_reason, rr.close_note, rr.link_source, rr.refunded_at, ru.name AS refunded_by_name, " +
             "       rr.refund_fallback_ok, rr.pickup_address_source, rr.custom_first_line, rr.custom_second_line, " +
-            "       rr.custom_building_number, rr.custom_floor, rr.custom_apartment, rr.custom_address_redacted_at, " +
+            "       rr.custom_building_number, rr.custom_floor, rr.custom_apartment, rr.pii_redacted_at, " +
             "       (SELECT s.tracking_number FROM shipments s WHERE s.id = rr.return_shipment_id " +
             "          AND s.tenant_id = rr.tenant_id) AS return_tracking_number, " +
             "       (SELECT s.delivered_at FROM shipments s " +
@@ -176,6 +176,8 @@ public class ReturnRequestService {
         d.put("status", r.get("status"));
         d.put("email", r.get("customer_email"));
         d.put("note", r.get("customer_note"));
+        // GDPR: email, note and a typed pickup address were cleared after a privacy request.
+        d.put("piiRedacted", r.get("pii_redacted_at") != null);
         // Step 4e-A (M2): phone, delivery date and pickup area for the merchant's drawer.
         d.put("customerPhone", r.get("customer_phone"));
         d.put("deliveredAt", r.get("delivered_at"));
@@ -198,7 +200,7 @@ public class ReturnRequestService {
             custom.put("buildingNumber", r.get("custom_building_number"));
             custom.put("floor", r.get("custom_floor"));
             custom.put("apartment", r.get("custom_apartment"));
-            custom.put("redacted", r.get("custom_address_redacted_at") != null);
+            custom.put("redacted", r.get("pii_redacted_at") != null);
             d.put("customAddress", custom);
         }
         // Step 4c-3: the Bosta return pickup booking.

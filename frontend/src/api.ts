@@ -2208,6 +2208,8 @@ export interface ReturnRequestDetail {
   pickupAddressSource?: 'order' | 'custom'
   /** V117 — present only when pickupAddressSource is 'custom'. */
   customAddress?: CustomPickupAddress
+  /** GDPR — the customer's email, note and typed pickup address were removed after a privacy request. */
+  piiRedacted?: boolean
   /** Step 4c-3 — the Bosta return pickup booking. */
   bookingStatus?: BookingStatus | null
   bookingError?: string | null

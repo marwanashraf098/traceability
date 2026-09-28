@@ -42,7 +42,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  * (street required and > 5 characters, district of the chosen city, pickup-only district
  * refused for an exchange) with the 'order' path unchanged; the merchant drawer's
  * pickupAddressSource / customAddress, cross-tenant on a real app_user connection with a
- * same-tenant positive control; and GDPR customers/redact + shop/redact clearing custom_*.
+ * same-tenant positive control; GDPR customers/redact + shop/redact clearing the request's email,
+ * note and custom_* (marker pii_redacted_at); and that no event / exception holds a copy.
  *
  * Booking payloads for custom addresses: ReturnPickupBookingTest (type 25 → pickupAddress)
  * and PortalExchangeBookingTest (type 30 → dropOffAddress).
@@ -308,41 +309,94 @@ class PortalCustomAddressTest {
 
     // ── Privacy ───────────────────────────────────────────────────────────────
 
+    static final String EMAIL = "mona.customer@example.com";
+    static final String NOTE = "Please call before coming, the bell is broken";
+
     @Test
-    void customersRedact_clearsCustomAddressOnThatOrdersRequests_only() {
+    @SuppressWarnings("unchecked")
+    void customersRedact_clearsEmailNoteAndCustomAddress_onThatOrdersRequests_only() {
         Order redacted = deliveredOrder(a, "#6001", CAIRO, NASR);
         Order kept     = deliveredOrder(a, "#6002", CAIRO, NASR);
-        UUID gone = customRequest(a, redacted);
-        UUID stay = customRequest(a, kept);
+        UUID gone      = customRequest(a, redacted);
+        UUID goneOrder = orderRequest(a, redacted);          // a second, delivery-address request on the same order
+        UUID stay      = customRequest(a, kept);
+        jdbc.update("UPDATE return_requests SET customer_email = ?, customer_note = ? WHERE tenant_id = ?", EMAIL, NOTE, a.id());
 
         String numeric = redacted.externalId().substring("gid://shopify/Order/".length());
-        UUID event = event(a, "customers/redact", "{\"orders_to_redact\":[{\"id\":" + numeric + "}]}");
-        processorJob.process(event, a.id());
+        processorJob.process(event(a, "customers/redact", "{\"orders_to_redact\":[{\"id\":" + numeric + "}]}"), a.id());
 
-        Map<String, Object> g = jdbc.queryForMap("SELECT * FROM return_requests WHERE id = ?", gone);
-        for (String c : List.of("custom_first_line", "custom_second_line", "custom_building_number", "custom_floor", "custom_apartment")) {
-            assertThat(g.get(c)).as(c).isNull();
+        for (UUID id : List.of(gone, goneOrder)) {
+            Map<String, Object> g = jdbc.queryForMap("SELECT * FROM return_requests WHERE id = ?", id);
+            for (String c : List.of("customer_email", "customer_note", "custom_first_line", "custom_second_line",
+                                    "custom_building_number", "custom_floor", "custom_apartment")) {
+                assertThat(g.get(c)).as(id + " " + c).isNull();
+            }
+            assertThat(g.get("pii_redacted_at")).isNotNull();
         }
-        assertThat(g.get("custom_address_redacted_at")).isNotNull();
-        assertThat(g).containsEntry("pickup_address_source", "custom").containsEntry("pickup_district_id", ALEX_D);
-        assertThat(jdbc.queryForObject("SELECT custom_first_line FROM return_requests WHERE id = ?", String.class, stay))
-            .as("another order's request untouched").isEqualTo(NEW_STREET);
+        Map<String, Object> g = jdbc.queryForMap("SELECT * FROM return_requests WHERE id = ?", gone);
+        assertThat(g).as("source and area snapshot stay").containsEntry("pickup_address_source", "custom")
+            .containsEntry("pickup_district_id", ALEX_D);
+        assertThat(jdbc.queryForMap("SELECT customer_email, customer_note, custom_first_line, pii_redacted_at FROM return_requests WHERE id = ?", stay))
+            .as("another order's request untouched").containsEntry("customer_email", EMAIL).containsEntry("customer_note", NOTE)
+            .containsEntry("custom_first_line", NEW_STREET).containsEntry("pii_redacted_at", null);
 
-        assertThat(get("/api/v1/return-requests/" + gone, ownerA).getBody().get("customAddress"))
-            .asInstanceOf(org.assertj.core.api.InstanceOfAssertFactories.MAP).containsEntry("redacted", true).containsEntry("firstLine", null);
+        Map<String, Object> d = get("/api/v1/return-requests/" + gone, ownerA).getBody();
+        assertThat(d).containsEntry("email", null).containsEntry("note", null).containsEntry("piiRedacted", true);
+        assertThat((Map<String, Object>) d.get("customAddress")).containsEntry("redacted", true).containsEntry("firstLine", null);
+        assertThat(get("/api/v1/return-requests/" + stay, ownerA).getBody()).containsEntry("piiRedacted", false)
+            .containsEntry("email", EMAIL);
+
+        // A second delivery is a no-op (the marker keeps its first time).
+        Object first = jdbc.queryForObject("SELECT pii_redacted_at FROM return_requests WHERE id = ?", Object.class, gone);
+        processorJob.process(event(a, "customers/redact", "{\"orders_to_redact\":[{\"id\":" + numeric + "}]}"), a.id());
+        assertThat(jdbc.queryForObject("SELECT pii_redacted_at FROM return_requests WHERE id = ?", Object.class, gone)).isEqualTo(first);
     }
 
     @Test
-    void shopRedact_clearsEveryCustomAddressOfTheTenant_notOtherTenants() {
+    void shopRedact_clearsEveryRequestsEmailNoteAndCustomAddress_ofTheTenant_notOtherTenants() {
         UUID a1 = customRequest(a, deliveredOrder(a, "#7001", CAIRO, NASR));
-        UUID a2 = customRequest(a, deliveredOrder(a, "#7002", CAIRO, NASR));
+        UUID a2 = orderRequest(a, deliveredOrder(a, "#7002", CAIRO, NASR));
         UUID b1 = customRequest(b, deliveredOrder(b, "#7001", CAIRO, NASR));
+        jdbc.update("UPDATE return_requests SET customer_email = ?, customer_note = ? WHERE id IN (?, ?, ?)", EMAIL, NOTE, a1, a2, b1);
 
         processorJob.process(event(a, "shop/redact", "{}"), a.id());
 
-        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM return_requests WHERE id IN (?, ?) AND custom_first_line IS NULL " +
-            "AND custom_address_redacted_at IS NOT NULL", Integer.class, a1, a2)).isEqualTo(2);
-        assertThat(jdbc.queryForObject("SELECT custom_first_line FROM return_requests WHERE id = ?", String.class, b1)).isEqualTo(NEW_STREET);
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM return_requests WHERE id IN (?, ?) AND customer_email IS NULL " +
+            "AND customer_note IS NULL AND custom_first_line IS NULL AND pii_redacted_at IS NOT NULL", Integer.class, a1, a2)).isEqualTo(2);
+        assertThat(jdbc.queryForMap("SELECT customer_email, customer_note, custom_first_line FROM return_requests WHERE id = ?", b1))
+            .containsEntry("customer_email", EMAIL).containsEntry("customer_note", NOTE).containsEntry("custom_first_line", NEW_STREET);
+    }
+
+    /**
+     * Nothing else holds a copy: after a real portal submission with email, note and a typed address,
+     * and the merchant's approve / reject path, no return_request_events metadata and no exception
+     * payload contains any of them — so the redaction above is complete.
+     */
+    @Test
+    void noCopies_inRequestEvents_orExceptions() throws Exception {
+        String token = token(a, deliveredOrder(a, "#9001", CAIRO, NASR));
+        Map<String, Object> body = custom(ALEX, ALEX_D, NEW_STREET, "Next to the club", "7B", "3", "12");
+        body.put("email", EMAIL);
+        body.put("note", NOTE);
+        assertThat(submit(a, token, body, null).getStatusCode()).isEqualTo(HttpStatus.CREATED);
+        UUID id = jdbc.queryForObject("SELECT id FROM return_requests WHERE tenant_id = ?", UUID.class, a.id());
+        // Make the request show up in the exception detectors (a failed booking) and give it history.
+        jdbc.update("UPDATE return_requests SET status = 'approved', decided_at = now(), booking_status = 'failed', " +
+                    "booking_error = 'Invalid district for the given city (Bosta error 3004)', booking_attempted_at = now() " +
+                    "WHERE id = ?", id);
+        jdbc.update("INSERT INTO return_request_events (tenant_id, request_id, event_type, metadata) " +
+                    "VALUES (?, ?, 'approved', '{}'::jsonb)", a.id(), id);
+
+        String events = String.join("\n", jdbc.queryForList(
+            "SELECT COALESCE(metadata::text, '') FROM return_request_events WHERE request_id = ?", String.class, id));
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM return_request_events WHERE request_id = ?", Integer.class, id))
+            .as("history exists").isGreaterThanOrEqualTo(2);
+        String exceptions = mapper.writeValueAsString(get("/api/v1/exceptions", ownerA).getBody());
+        assertThat(exceptions).as("positive control: the request is in the exceptions list").contains("pickup_booking_problem");
+        for (String pii : List.of(EMAIL, NOTE, NEW_STREET, "Next to the club")) {
+            assertThat(events).as("events: " + pii).doesNotContain(pii);
+            assertThat(exceptions).as("exceptions: " + pii).doesNotContain(pii);
+        }
     }
 
     @Test

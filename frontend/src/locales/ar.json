@@ -1157,7 +1157,8 @@
         "customBuilding": "عقار {{value}}",
         "customFloor": "الدور {{value}}",
         "customApartment": "شقة {{value}}",
-        "customAddressRedacted": "حُذف العنوان بعد طلب خصوصية."
+        "customAddressRedacted": "حُذف العنوان بعد طلب خصوصية.",
+        "piiRemoved": "حُذف البريد الإلكتروني للعميل وملاحظته وأي عنوان استلام كتبه بعد طلب خصوصية."
       },
       "attention": "يحتاج انتباه",
       "overdue": "متأخر · {{days}} يوم",

@@ -9,7 +9,7 @@ import {
 import { Alert, Badge, Button, ProductThumb, Skeleton, cn, useToast } from '../../components/ui'
 import { displayStatus, displayStatusTone, reasonLabel, sentLabel, shortCustomerName, shortDate, statusLabelKey } from './requestFormat'
 import ExchangeRequestView from './ExchangeRequestView'
-import CustomAddressBlock from './CustomAddressBlock'
+import CustomAddressBlock, { PiiRemovedNote } from './CustomAddressBlock'
 import ExchangeProgressView from './ExchangeProgressView'
 import {
   arrivedCount, CloseDialog, PieceCode, UntrackedArrivedControls, HistoryTimeline, ItemsWithOutcome, LinkParcelDialog, RefundForm, RefundsList, UnexpectedItems,
@@ -585,6 +585,7 @@ function DrawerContent({
               <span dir="ltr" className="break-all">{detail.email}</span>
             </Field>
           )}
+          <PiiRemovedNote detail={detail} />
         </dl>
 
         {editingArea && areaEditable && (

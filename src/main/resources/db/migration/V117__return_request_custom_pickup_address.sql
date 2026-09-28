@@ -13,7 +13,8 @@
 -- city/area for BOTH sources.
 --
 -- custom_* is customer PII: never returned by a public endpoint, never logged, and cleared by
--- the GDPR customers/redact and shop/redact handlers, which stamp custom_address_redacted_at.
+-- the GDPR customers/redact and shop/redact handlers — together with customer_email and
+-- customer_note — which stamp pii_redacted_at (the drawer says the details were removed).
 -- A 'custom' row therefore has a street longer than 5 characters, unless it was redacted (then
 -- the street is NULL).
 -- ============================================================
@@ -25,7 +26,7 @@ ALTER TABLE return_requests
     ADD COLUMN custom_building_number     text,
     ADD COLUMN custom_floor               text,
     ADD COLUMN custom_apartment           text,
-    ADD COLUMN custom_address_redacted_at timestamptz;
+    ADD COLUMN pii_redacted_at            timestamptz;
 
 ALTER TABLE return_requests
     ADD CONSTRAINT return_requests_pickup_address_source_check
@@ -48,7 +49,7 @@ ALTER TABLE return_requests
             AND custom_floor IS NULL AND custom_apartment IS NULL)
         OR (pickup_address_source = 'custom'
             AND (char_length(btrim(custom_first_line)) > 5
-                 OR (custom_address_redacted_at IS NOT NULL AND custom_first_line IS NULL
+                 OR (pii_redacted_at IS NOT NULL AND custom_first_line IS NULL
                      AND custom_second_line IS NULL AND custom_building_number IS NULL
                      AND custom_floor IS NULL AND custom_apartment IS NULL)))
     );

@@ -1158,7 +1158,8 @@
         "customBuilding": "Building {{value}}",
         "customFloor": "Floor {{value}}",
         "customApartment": "Apt {{value}}",
-        "customAddressRedacted": "The address was removed after a privacy request."
+        "customAddressRedacted": "The address was removed after a privacy request.",
+        "piiRemoved": "The customer's email, note and any typed pickup address were removed after a privacy request."
       },
       "attention": "Attention",
       "overdue": "Overdue · {{days}}d",
