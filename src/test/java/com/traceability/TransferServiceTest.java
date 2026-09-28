@@ -170,7 +170,7 @@ class TransferServiceTest {
             "FROM transfers WHERE id = ?", transferId);
         assertThat(row.get("transfer_type")).isEqualTo("showroom");
         assertThat(row.get("destination_location_id").toString()).isEqualTo(destinationLocationId.toString());
-        assertThat(row.get("status")).isEqualTo("open");
+        assertThat(row.get("status")).isEqualTo("preparing");
         assertThat(row.get("note")).isEqualTo("Downtown consignment");
         assertThat(row.get("created_by").toString()).isEqualTo(actorId.toString());
     }
@@ -226,7 +226,7 @@ class TransferServiceTest {
 
     @Test
     void scanOut_success_transitionsPieceAndUpdatesLocationAndLine() {
-        UUID transferId = insertTransfer("open");
+        UUID transferId = insertTransfer("preparing");
         String pieceId = insertPiece(PieceStatus.AVAILABLE);
         String barcode = "PC-" + pieceId;
 
@@ -267,7 +267,7 @@ class TransferServiceTest {
 
     @Test
     void scanOut_secondPieceSameVariant_incrementsSameLine() {
-        UUID transferId = insertTransfer("open");
+        UUID transferId = insertTransfer("preparing");
         String piece1 = insertPiece(PieceStatus.AVAILABLE);
         String piece2 = insertPiece(PieceStatus.AVAILABLE);
 
@@ -287,7 +287,7 @@ class TransferServiceTest {
 
     @Test
     void scanOut_pieceNotFound_rejectsAndWritesNoEvent() {
-        UUID transferId = insertTransfer("open");
+        UUID transferId = insertTransfer("preparing");
 
         TransferService.ScanOutResult result = transferSvc.scanOut(transferId, "PC-DOESNOTEXIST", actorId);
 
@@ -299,7 +299,7 @@ class TransferServiceTest {
 
     @Test
     void scanOut_wrongStatus_rejectsAndDoesNotTransition() {
-        UUID transferId = insertTransfer("open");
+        UUID transferId = insertTransfer("preparing");
         String pieceId = insertPiece(PieceStatus.RESERVED);
 
         TransferService.ScanOutResult result = transferSvc.scanOut(transferId, "PC-" + pieceId, actorId);
@@ -364,7 +364,7 @@ class TransferServiceTest {
 
     @Test
     void sendOutRace_samePiece_exactlyOneWinsExactlyOneEvent() throws InterruptedException {
-        UUID transferId = insertTransfer("open");
+        UUID transferId = insertTransfer("preparing");
         String pieceId = insertPiece(PieceStatus.AVAILABLE);
         String barcode = "PC-" + pieceId;
 

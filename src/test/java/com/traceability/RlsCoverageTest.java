@@ -1311,7 +1311,7 @@ class RlsCoverageTest {
             destId, tenantId);
         jdbc.update(
             "INSERT INTO transfers (id, tenant_id, transfer_type, destination_location_id, status, created_by) " +
-            "VALUES (?, ?, 'showroom', ?, 'open', ?)",
+            "VALUES (?, ?, 'showroom', ?, 'preparing', ?)",
             transferId, tenantId, destId, ownerUserId);
 
         ResponseEntity<List> resp = get("/api/v1/transfers", List.class);
@@ -1332,7 +1332,7 @@ class RlsCoverageTest {
             destId, tenantId);
         jdbc.update(
             "INSERT INTO transfers (id, tenant_id, transfer_type, destination_location_id, status, created_by) " +
-            "VALUES (?, ?, 'showroom', ?, 'open', ?)",
+            "VALUES (?, ?, 'showroom', ?, 'preparing', ?)",
             transferId, tenantId, destId, ownerUserId);
 
         ResponseEntity<Map> resp = get("/api/v1/transfers/" + transferId, Map.class);

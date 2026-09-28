@@ -736,7 +736,7 @@
       "sold_offbook": "تم تحديدها كمباعة خارج السجل لدى الجهة الخارجية",
       "lost_at_vendor": "تم تحديدها كمفقودة لدى الجهة الخارجية",
       "label_reprinted": "تمت إعادة طباعة الملصق",
-      "relocated_out": "تم نقلها نهائيًا إلى {{location}} — لم تعد قابلة للاختيار",
+      "relocated_out": "نُقلت إلى {{location}} — لا يمكن اختيارها حتى تتم إعادتها",
       "return_transfer_out": "أُرسلت في عملية إرجاع إلى {{location}}",
       "voided": "أُلغيت — أُزيلت من المخزون القابل للبيع",
       "held": "تم تعليقها",
@@ -2308,8 +2308,7 @@
       "toLocked": "مستودع التنفيذ",
       "noFulfillmentLocation": "لم يتم العثور على مستودع تنفيذ",
       "sourceRequired": "اختر موقع المصدر",
-      "pieces": "القطع في هذا الموقع",
-      "selectAll": "تحديد الكل",
+      "pieces": "القطع في هذا الموقع — امسح القطع التي ستعيدها في الخطوة التالية.",
       "noPieces": "لا توجد قطع منقولة في هذا الموقع",
       "submit": "بدء الإرجاع",
       "scanOutSubtitle": "إرجاع للمخزن الرئيسي — إرسال"
@@ -2320,7 +2319,7 @@
       "all": "الكل"
     },
     "summary": {
-      "open": "مفتوحة",
+      "sent": "مُرسلة",
       "reconciling": "قيد المطابقة",
       "outstanding": "قطع معلّقة"
     },
@@ -2332,9 +2331,11 @@
       "outstanding": "معلّقة"
     },
     "status": {
-      "open": "مفتوحة",
+      "preparing": "قيد التجهيز",
+      "sent": "مُرسلة",
       "reconciling": "قيد المطابقة",
-      "closed": "مغلقة"
+      "closed": "مغلقة",
+      "cancelled": "ملغاة"
     },
     "type": {
       "showroom": "معرض عرض",
@@ -2365,7 +2366,7 @@
       "title": "إرسال",
       "placeholder": "امسح باركود القطعة…",
       "notFound": "لم يتم العثور على عملية النقل",
-      "notOpenTitle": "عملية النقل هذه لم تعد مفتوحة للإرسال",
+      "notOpenTitle": "عملية النقل هذه لم تعد تقبل المسح.",
       "viewTransfer": "عرض عملية النقل",
       "progress": "تقدم الإرسال",
       "recent": "آخر عمليات المسح",
@@ -2387,7 +2388,6 @@
       "closedTitle": "عملية النقل هذه مغلقة",
       "scanOutMore": "إرسال المزيد",
       "beginReconcile": "بدء المطابقة",
-      "beginReconcileDisabledTooltip": "لا توجد قطع معلّقة للمطابقة",
       "continueReconcile": "متابعة المطابقة",
       "closeOneWay": "إغلاق",
       "closeOneWayDisabledTooltip": "لا توجد قطع معلّقة للإغلاق",
@@ -2407,7 +2407,14 @@
         "sold": "مباع",
         "lost": "مفقود",
         "outstanding": "معلّق"
-      }
+      },
+      "markSent": "تأكيد الإرسال",
+      "markSentDisabledTooltip": "امسح قطعة واحدة على الأقل أولاً",
+      "markSentDone": "تم تأكيد الإرسال",
+      "cancelTransfer": "إلغاء عملية النقل",
+      "cancelConfirmBody": "إلغاء عملية النقل هذه؟ لم يتم مسح أي قطعة عليها.",
+      "cancelKeep": "إبقاؤها",
+      "cancelledTitle": "تم إلغاء عملية النقل هذه."
     },
     "reconcile": {
       "title": "المطابقة",

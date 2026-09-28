@@ -264,6 +264,11 @@ class TransferControllerTest {
         rest.exchange(base() + "/api/v1/transfers/" + transferId + "/scan-out", HttpMethod.POST,
             new HttpEntity<>(Map.of("barcode", "PC-" + pieceId), authJson(ownerToken)), Map.class);
 
+        ResponseEntity<Void> sentResp = rest.exchange(
+            base() + "/api/v1/transfers/" + transferId + "/mark-sent", HttpMethod.POST,
+            new HttpEntity<>(null, authJson(ownerToken)), Void.class);
+        assertThat(sentResp.getStatusCode()).isEqualTo(HttpStatus.NO_CONTENT);
+
         ResponseEntity<Void> beginResp = rest.exchange(
             base() + "/api/v1/transfers/" + transferId + "/begin-reconcile", HttpMethod.POST,
             new HttpEntity<>(null, authJson(ownerToken)), Void.class);
@@ -329,6 +334,8 @@ class TransferControllerTest {
         String pieceId = insertAvailablePiece();
         rest.exchange(base() + "/api/v1/transfers/" + transferId + "/scan-out", HttpMethod.POST,
             new HttpEntity<>(Map.of("barcode", "PC-" + pieceId), authJson(ownerToken)), Map.class);
+        rest.exchange(base() + "/api/v1/transfers/" + transferId + "/mark-sent", HttpMethod.POST,
+            new HttpEntity<>(null, authJson(ownerToken)), Void.class);
         rest.exchange(base() + "/api/v1/transfers/" + transferId + "/begin-reconcile", HttpMethod.POST,
             new HttpEntity<>(null, authJson(ownerToken)), Void.class);
 

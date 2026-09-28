@@ -38,6 +38,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  *   4. TransferController.scanOut()
  *   5. TransferController.listOpen()
  *   6. TransferController.getTransfer()
+ *   6a/6b. TransferController.markSent() / cancel() (V118 lifecycle, added as built)
  *   7. StockTakeController.getSession()
  *   8. StockTakeController.scan()
  *   9. StockTakeController.unscan()
@@ -278,6 +279,55 @@ class WorkerPermissionGuardTest {
             url, HttpMethod.GET, new HttpEntity<>(bearerHeaders(ownerToken)), Map.class);
         assertThat(ownerResp.getStatusCode()).isEqualTo(HttpStatus.OK);
         assertThat(ownerResp.getBody().get("id")).isEqualTo(transferId.toString());
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // 6a. Transfer mark-sent (V118) — worker 403, owner succeeds
+    // ─────────────────────────────────────────────────────────────────────────
+    @Test
+    void transferMarkSent_workerForbidden_ownerSucceeds() {
+        UUID transferId = createTransfer();
+        String pieceId = createPiece("available", null);
+        ResponseEntity<Map> scan = rest.exchange(
+            base() + "/api/v1/transfers/" + transferId + "/scan-out", HttpMethod.POST,
+            new HttpEntity<>(Map.of("barcode", "PC-" + pieceId), bearerHeaders(ownerToken)), Map.class);
+        assertThat(scan.getBody().get("success")).as("fixture scan-out").isEqualTo(true);
+        String url = base() + "/api/v1/transfers/" + transferId + "/mark-sent";
+
+        ResponseEntity<String> workerResp = rest.exchange(
+            url, HttpMethod.POST, new HttpEntity<>(bearerHeaders(workerToken)), String.class);
+        assertThat(workerResp.getStatusCode().value())
+            .as("worker must be rejected (403) — transfers are Owner/Manager-tier per blueprint.md")
+            .isEqualTo(403);
+
+        ResponseEntity<String> ownerResp = rest.exchange(
+            url, HttpMethod.POST, new HttpEntity<>(bearerHeaders(ownerToken)), String.class);
+        assertThat(ownerResp.getStatusCode()).isEqualTo(HttpStatus.NO_CONTENT);
+        assertThat(jdbc.queryForObject("SELECT status FROM transfers WHERE id = ?", String.class, transferId))
+            .isEqualTo("sent");
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // 6b. Transfer cancel (V118) — worker 403, owner succeeds
+    // ─────────────────────────────────────────────────────────────────────────
+    @Test
+    void transferCancel_workerForbidden_ownerSucceeds() {
+        UUID transferId = createTransfer();
+        String url = base() + "/api/v1/transfers/" + transferId + "/cancel";
+
+        ResponseEntity<String> workerResp = rest.exchange(
+            url, HttpMethod.POST, new HttpEntity<>(bearerHeaders(workerToken)), String.class);
+        assertThat(workerResp.getStatusCode().value())
+            .as("worker must be rejected (403) — transfers are Owner/Manager-tier per blueprint.md")
+            .isEqualTo(403);
+        assertThat(jdbc.queryForObject("SELECT status FROM transfers WHERE id = ?", String.class, transferId))
+            .as("a rejected worker call changes nothing").isEqualTo("preparing");
+
+        ResponseEntity<String> ownerResp = rest.exchange(
+            url, HttpMethod.POST, new HttpEntity<>(bearerHeaders(ownerToken)), String.class);
+        assertThat(ownerResp.getStatusCode()).isEqualTo(HttpStatus.NO_CONTENT);
+        assertThat(jdbc.queryForObject("SELECT status FROM transfers WHERE id = ?", String.class, transferId))
+            .isEqualTo("cancelled");
     }
 
     // ─────────────────────────────────────────────────────────────────────────

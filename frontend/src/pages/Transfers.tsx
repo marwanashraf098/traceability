@@ -1,11 +1,11 @@
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
-import { Badge, Button, EmptyState, Input, Modal, Select, StatCard, TableSkeleton, Alert, Checkbox, SegmentedControl } from '../components/ui'
+import { Badge, BadgeTone, Button, EmptyState, Input, Modal, Select, StatCard, TableSkeleton, Alert, SegmentedControl } from '../components/ui'
 import {
   listOpenTransfers, listTransferDestinations, listLocations, createTransfer, listReturnablePieces,
   TransferSummary, TransferType, TRANSFER_TYPES, LocationOption, TransferCommandError,
-  TransferListView, ReturnablePiece,
+  TransferListView, ReturnablePiece, TransferStatus,
 } from '../api'
 
 // FR-22.10 — Relocate is a distinct top-level create action, not a TRANSFER_TYPES radio
@@ -19,10 +19,17 @@ import {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-function transferTone(status: string): 'warning' | 'success' | 'neutral' {
-  if (status === 'open') return 'warning'
-  if (status === 'reconciling') return 'warning'
-  return 'neutral'
+// Lifecycle reads grey → amber → blue → green: preparing (still here) → sent (stock is away)
+// → reconciling (checking it back in) → closed. Cancelled is grey. Only the DS's five
+// semantic tones exist and red is reserved for problems, so preparing shares grey with
+// cancelled — the label tells them apart.
+export function transferStatusTone(status: TransferStatus): BadgeTone {
+  switch (status) {
+    case 'sent':        return 'warning'
+    case 'reconciling': return 'info'
+    case 'closed':      return 'success'
+    default:            return 'neutral'   // preparing, cancelled
+  }
 }
 
 function relativeTime(iso: string, t: (k: string, o?: Record<string, unknown>) => string): string {
@@ -37,8 +44,12 @@ function relativeTime(iso: string, t: (k: string, o?: Record<string, unknown>) =
 }
 
 // Relocate / Bring back always carry transfer_type='other' (see FR-22.10 note above), so the
-// Type column names the mode for those two instead; round trips keep their chosen category.
-function typeLabel(tr: TransferSummary, t: (k: string) => string): string {
+// Type column (and the detail page's subtitle) names the mode for those two instead; round
+// trips keep their chosen category.
+export function typeLabel(
+  tr: Pick<TransferSummary, 'transfer_mode' | 'transfer_type'>,
+  t: (k: string) => string,
+): string {
   if (tr.transfer_mode === 'relocate_out') return t('transfers.relocate.title')
   if (tr.transfer_mode === 'relocate_return') return t('transfers.return.title')
   return t(`transfers.type.${tr.transfer_type}`)
@@ -143,7 +154,7 @@ export default function Transfers() {
     )
   }
 
-  const openCount = transfers.filter(tr => tr.status === 'open').length
+  const sentCount = transfers.filter(tr => tr.status === 'sent').length
   const reconcilingCount = transfers.filter(tr => tr.status === 'reconciling').length
   const outstandingTotal = transfers.reduce((sum, tr) => sum + tr.outstanding_count, 0)
 
@@ -174,12 +185,12 @@ export default function Transfers() {
         ]}
       />
 
-      {/* Summary tiles — derived client-side from the already-fetched open+reconciling
+      {/* Summary tiles — derived client-side from the already-fetched preparing+sent+reconciling
           set (listOpenTransfers() returns the full set with a per-row outstanding_count,
           not paginated), so no extra fetch is needed. Containers stay neutral (StatCard's
           default); tone lives on the number only. */}
       <div className="grid grid-cols-3 gap-3" data-testid="transfers-summary">
-        <StatCard label={t('transfers.summary.open')} value={openCount} tone="neutral" />
+        <StatCard label={t('transfers.summary.sent')} value={sentCount} tone="neutral" />
         <StatCard label={t('transfers.summary.reconciling')} value={reconcilingCount} tone="warning" />
         <StatCard label={t('transfers.summary.outstanding')} value={outstandingTotal} tone="warning" />
       </div>
@@ -213,7 +224,7 @@ export default function Transfers() {
                   <td className="tbl-cell text-primary">{tr.destination_location_name}</td>
                   <td className="tbl-cell text-muted">{typeLabel(tr, t)}</td>
                   <td className="tbl-cell">
-                    <Badge tone={transferTone(tr.status)} label={t(`transfers.status.${tr.status}`)} />
+                    <Badge tone={transferStatusTone(tr.status)} label={t(`transfers.status.${tr.status}`)} />
                   </td>
                   <td className="tbl-cell text-muted text-small">{relativeTime(tr.created_at, t)}</td>
                   <td className="tbl-cell text-primary">{tr.outstanding_count}</td>
@@ -468,6 +479,9 @@ function RelocateTransferForm({ onCreated, onCancel }: {
 // every other transfer type's scanOut), matching the "identity break-and-reissue" model
 // (transfers-build-spec.md). Selecting here just lets the operator confirm what they expect
 // to scan on the next screen; Create only opens the transfer shell (source + destination).
+// The list is read-only (no checkboxes): a selection here was never sent anywhere, and
+// merchants took ticking pieces for having moved them. The scan is the only thing that
+// puts a piece on a transfer.
 
 function ReturnTransferForm({ onCreated, onCancel }: {
   onCreated: (id: string) => void; onCancel: () => void
@@ -480,7 +494,6 @@ function ReturnTransferForm({ onCreated, onCancel }: {
   const [fulfillmentLocation, setFulfillmentLocation] = useState<LocationOption | null>(null)
   const [pieces, setPieces] = useState<ReturnablePiece[]>([])
   const [loadingPieces, setLoadingPieces] = useState(false)
-  const [selected, setSelected] = useState<Set<string>>(new Set())
   const [note, setNote] = useState('')
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -499,25 +512,13 @@ function ReturnTransferForm({ onCreated, onCancel }: {
   }, [])
 
   useEffect(() => {
-    if (!sourceId) { setPieces([]); setSelected(new Set()); return }
+    if (!sourceId) { setPieces([]); return }
     setLoadingPieces(true)
     listReturnablePieces(sourceId)
-      .then(rows => { setPieces(rows); setSelected(new Set(rows.map(p => p.id))) })
+      .then(setPieces)
       .catch(() => setPieces([]))
       .finally(() => setLoadingPieces(false))
   }, [sourceId])
-
-  function toggleOne(id: string) {
-    setSelected(prev => {
-      const next = new Set(prev)
-      if (next.has(id)) next.delete(id); else next.add(id)
-      return next
-    })
-  }
-
-  function toggleAll() {
-    setSelected(prev => prev.size === pieces.length ? new Set() : new Set(pieces.map(p => p.id)))
-  }
 
   async function submit(e: React.FormEvent) {
     e.preventDefault()
@@ -575,26 +576,15 @@ function ReturnTransferForm({ onCreated, onCancel }: {
 
         {sourceId && (
           <div className="space-y-1.5">
-            <div className="flex items-center justify-between">
-              <label className="text-small text-muted">{t('transfers.return.pieces')}</label>
-              {pieces.length > 0 && (
-                <Checkbox
-                  checked={selected.size === pieces.length}
-                  indeterminate={selected.size > 0 && selected.size < pieces.length}
-                  onChange={toggleAll}
-                  label={t('transfers.return.selectAll')}
-                />
-              )}
-            </div>
+            <label className="text-small text-muted">{t('transfers.return.pieces')}</label>
             {loadingPieces ? (
               <p className="text-small text-muted">{t('common.loading')}</p>
             ) : pieces.length === 0 ? (
               <Alert tone="info" title={t('transfers.return.noPieces')} />
             ) : (
-              <div className="card overflow-hidden max-h-64 overflow-y-auto">
+              <div className="card overflow-hidden max-h-64 overflow-y-auto" data-testid="returnable-pieces">
                 {pieces.map(p => (
                   <div key={p.id} className="tbl-row flex items-center gap-2 px-3 py-2">
-                    <Checkbox checked={selected.has(p.id)} onChange={() => toggleOne(p.id)} />
                     <span className="text-small text-primary">
                       {p.product_title} · {p.variant_title}
                       {p.sku && <span className="font-mono text-caption text-muted ms-2">{p.sku}</span>}

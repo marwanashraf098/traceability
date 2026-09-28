@@ -122,7 +122,7 @@ export default function TransferReconcile() {
   if (!canManage) {
     return <Alert tone="critical" title={t('transfers.reconcile.accessDenied')} />
   }
-  if (transfer.status === 'open') {
+  if (transfer.status === 'preparing' || transfer.status === 'sent') {
     return (
       <div className="space-y-4">
         <Alert tone="warning" title={t('transfers.reconcile.notReconcilingTitle')} />
@@ -132,10 +132,11 @@ export default function TransferReconcile() {
       </div>
     )
   }
-  if (transfer.status === 'closed') {
+  if (transfer.status === 'closed' || transfer.status === 'cancelled') {
     return (
       <div className="space-y-4">
-        <Alert tone="info" title={t('transfers.reconcile.closedRedirect')} />
+        <Alert tone="info" title={t(transfer.status === 'cancelled'
+          ? 'transfers.detail.cancelledTitle' : 'transfers.reconcile.closedRedirect')} />
         <Button variant="secondary" onClick={() => navigate(`/transfers/${id}`)}>
           {t('transfers.reconcile.goToDetail')}
         </Button>

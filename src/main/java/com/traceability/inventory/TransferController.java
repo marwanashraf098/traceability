@@ -105,6 +105,26 @@ public class TransferController {
         return transferSvc.getTransfer(transferId);
     }
 
+    // ── Mark as sent / cancel ────────────────────────────────────────────────
+
+    /** preparing → sent (round_trip / relocate_return, >= 1 scanned piece). */
+    @PostMapping("/{transferId}/mark-sent")
+    @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void markSent(@PathVariable UUID transferId,
+                         @AuthenticationPrincipal CustomUserDetails principal) {
+        transferSvc.markSent(transferId, principal.userId());
+    }
+
+    /** preparing → cancelled, only when no piece was ever scanned onto the transfer. */
+    @PostMapping("/{transferId}/cancel")
+    @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void cancel(@PathVariable UUID transferId,
+                       @AuthenticationPrincipal CustomUserDetails principal) {
+        transferSvc.cancel(transferId, principal.userId());
+    }
+
     // ── Reconcile ────────────────────────────────────────────────────────────
 
     @PostMapping("/{transferId}/begin-reconcile")
@@ -146,7 +166,7 @@ public class TransferController {
 
     // ── One-shot close (Relocate, FR-22.10) ─────────────────────────────────
 
-    /** relocate_out only — open → closed directly, no reconcile stage. Mirrors close's shape. */
+    /** relocate_out only — preparing → closed directly, no reconcile stage. Mirrors close's shape. */
     @PostMapping("/{transferId}/close-one-way")
     @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
     @ResponseStatus(HttpStatus.NO_CONTENT)

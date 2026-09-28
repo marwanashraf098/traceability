@@ -56,6 +56,16 @@ import java.util.UUID;
  * StateConflictException is not expected to fire; it is deliberately left UNCAUGHT so
  * that if it ever does (a genuinely different, unrelated concurrent mutation), the whole
  * transaction rolls back cleanly rather than leaving an inconsistent claim behind.
+ *
+ * Transfer-row locking (V118 lifecycle). Every scan-out reads its transfer row FOR SHARE;
+ * every status change (markSent, cancel, beginReconcile, closeOneWay) locks it FOR UPDATE
+ * first and only then re-reads transfer_pieces in a NEW statement. Under READ COMMITTED that
+ * statement sees any scan that committed while we waited for the lock, so a concurrent scan
+ * either lands before the status change (and the re-check sees its piece) or waits and then
+ * sees the new status and is rejected. Without this a scan could insert a piece after a
+ * cancel or one-way close committed, leaving it out_on_transfer on a finished transfer with
+ * outcome NULL forever. A single UPDATE ... AND NOT EXISTS (...) is NOT equivalent: its
+ * re-check after a lock wait does not see rows committed by the other transaction.
  */
 @Service
 public class TransferService {
@@ -80,6 +90,17 @@ public class TransferService {
 
     private static final Set<String> VALID_TRANSFER_MODES =
         Set.of("round_trip", "relocate_out", "relocate_return");
+
+    /** Modes that come back through reconcile: preparing → sent → reconciling → closed.
+     *  relocate_out instead goes preparing → closed through closeOneWay(). */
+    private static final Set<String> RETURNING_MODES = Set.of("round_trip", "relocate_return");
+
+    /** Shown for every wrong-status / wrong-mode refusal of the lifecycle actions: the screen
+     *  only offers an action in the right state, so reaching one means the page is stale. */
+    private static final String GENERIC_UNAVAILABLE_EN =
+        "This action isn't available for this transfer right now. Refresh the page.";
+    private static final String GENERIC_UNAVAILABLE_AR =
+        "هذا الإجراء غير متاح لعملية النقل هذه حاليًا. حدّث الصفحة.";
 
     /** Existing 5-arg signature, unchanged — every pre-Relocate caller keeps compiling and
      *  keeps creating ordinary round-trip transfers with no behavior change. */
@@ -212,9 +233,11 @@ public class TransferService {
     public ScanOutResult scanOut(UUID transferId, String barcode, UUID actorUserId) {
         UUID tenantId = TenantContext.require();
 
-        // 1. Transfer must exist (tenant-scoped via RLS + explicit predicate) and be open.
+        // 1. Transfer must exist (tenant-scoped via RLS + explicit predicate) and be preparing.
+        //    FOR SHARE: held until this scan commits, so markSent/cancel/closeOneWay (FOR UPDATE)
+        //    can't change the status underneath it — see the class javadoc.
         List<Map<String, Object>> transferRows = jdbc.queryForList(
-            "SELECT status, destination_location_id, transfer_type FROM transfers WHERE id = ? AND tenant_id = ?",
+            "SELECT status, destination_location_id, transfer_type FROM transfers WHERE id = ? AND tenant_id = ? FOR SHARE",
             transferId, tenantId);
         if (transferRows.isEmpty()) {
             return ScanOutResult.rejected("TRANSFER_NOT_FOUND",
@@ -223,10 +246,10 @@ public class TransferService {
         }
         Map<String, Object> transfer = transferRows.get(0);
         String transferStatus = (String) transfer.get("status");
-        if (!"open".equals(transferStatus)) {
+        if (!"preparing".equals(transferStatus)) {
             return ScanOutResult.rejected("TRANSFER_NOT_OPEN",
-                "Transfer is not open for send-out (status: " + transferStatus + ")",
-                "عملية النقل ليست مفتوحة للإرسال (الحالة الحالية: " + transferStatus + ")");
+                "This transfer isn't accepting scans anymore.",
+                "عملية النقل هذه لم تعد تقبل المسح.");
         }
         UUID   destinationLocationId = (UUID)   transfer.get("destination_location_id");
         String transferType          = (String) transfer.get("transfer_type");
@@ -333,10 +356,11 @@ public class TransferService {
     public ScanOutResult returnScanOut(UUID transferId, String barcode, UUID actorUserId) {
         UUID tenantId = TenantContext.require();
 
-        // 1. Transfer must exist, be open, and be a relocate_return transfer.
+        // 1. Transfer must exist, be preparing, and be a relocate_return transfer. FOR SHARE,
+        //    same reason as scanOut().
         List<Map<String, Object>> transferRows = jdbc.queryForList(
             "SELECT status, transfer_mode, destination_location_id, source_location_id, transfer_type " +
-            "FROM transfers WHERE id = ? AND tenant_id = ?",
+            "FROM transfers WHERE id = ? AND tenant_id = ? FOR SHARE",
             transferId, tenantId);
         if (transferRows.isEmpty()) {
             return ScanOutResult.rejected("TRANSFER_NOT_FOUND",
@@ -351,10 +375,10 @@ public class TransferService {
                 "This transfer is not a return transfer (mode: " + transferMode + ")",
                 "عملية النقل هذه ليست عملية إرجاع (النمط: " + transferMode + ")");
         }
-        if (!"open".equals(transferStatus)) {
+        if (!"preparing".equals(transferStatus)) {
             return ScanOutResult.rejected("TRANSFER_NOT_OPEN",
-                "Transfer is not open for send-out (status: " + transferStatus + ")",
-                "عملية النقل ليست مفتوحة للإرسال (الحالة الحالية: " + transferStatus + ")");
+                "This transfer isn't accepting scans anymore.",
+                "عملية النقل هذه لم تعد تقبل المسح.");
         }
         UUID   destinationLocationId = (UUID)   transfer.get("destination_location_id");
         UUID   sourceLocationId      = (UUID)   transfer.get("source_location_id");
@@ -458,10 +482,81 @@ public class TransferService {
             sourceLocationId, tenantId);
     }
 
+    // ── Mark as sent ─────────────────────────────────────────────────────────
+
+    /**
+     * preparing → sent, returning modes only (round_trip, relocate_return), and only once at
+     * least one piece has been scanned out. Locks further scan-out (scanOut() accepts only
+     * preparing) and unlocks Begin Reconcile. Writes no piece events — the pieces already
+     * moved to out_on_transfer when they were scanned.
+     */
+    @Transactional(isolation = Isolation.READ_COMMITTED)
+    public void markSent(UUID transferId, UUID actorUserId) {
+        UUID tenantId = TenantContext.require();
+
+        Map<String, Object> transfer = lockTransfer(transferId, tenantId);
+        String status = (String) transfer.get("status");
+        String mode   = (String) transfer.get("transfer_mode");
+        if (!RETURNING_MODES.contains(mode)) {
+            throw wrongMode(mode);
+        }
+        if (!"preparing".equals(status)) {
+            throw transferNotPreparing(status);
+        }
+        // Fresh statement AFTER the lock — sees any scan that committed while we waited.
+        if (piecesEverScanned(transferId, tenantId) == 0) {
+            throw new TransferException(TransferException.Code.TRANSFER_EMPTY,
+                "Scan at least one piece before marking as sent.",
+                "امسح قطعة واحدة على الأقل قبل تأكيد الإرسال.",
+                HttpStatus.UNPROCESSABLE_ENTITY);
+        }
+        int rows = jdbc.update(
+            "UPDATE transfers SET status = 'sent', sent_at = now(), sent_by = ? " +
+            "WHERE id = ? AND tenant_id = ? AND status = 'preparing'",
+            actorUserId, transferId, tenantId);
+        if (rows == 0) {
+            throw statusRaceConflict();
+        }
+    }
+
+    // ── Cancel ───────────────────────────────────────────────────────────────
+
+    /**
+     * preparing → cancelled, any mode, only while NO piece has ever been scanned onto the
+     * transfer (transfer_pieces rows are never deleted, so zero rows means never scanned).
+     * Touches no pieces and writes no piece events — there are none to touch.
+     */
+    @Transactional(isolation = Isolation.READ_COMMITTED)
+    public void cancel(UUID transferId, UUID actorUserId) {
+        UUID tenantId = TenantContext.require();
+
+        Map<String, Object> transfer = lockTransfer(transferId, tenantId);
+        String status = (String) transfer.get("status");
+        if (!"preparing".equals(status)) {
+            throw transferNotPreparing(status);
+        }
+        // Fresh statement AFTER the lock — see markSent().
+        int pieces = piecesEverScanned(transferId, tenantId);
+        if (pieces > 0) {
+            throw new TransferException(TransferException.Code.TRANSFER_HAS_PIECES,
+                "Pieces were scanned on this transfer, so it can't be cancelled.",
+                "تم مسح قطع على عملية النقل هذه، لذلك لا يمكن إلغاؤها.",
+                HttpStatus.UNPROCESSABLE_ENTITY);
+        }
+        int rows = jdbc.update(
+            "UPDATE transfers SET status = 'cancelled', cancelled_at = now(), cancelled_by = ? " +
+            "WHERE id = ? AND tenant_id = ? AND status = 'preparing'",
+            actorUserId, transferId, tenantId);
+        if (rows == 0) {
+            throw statusRaceConflict();
+        }
+    }
+
     // ── Reconcile: begin ─────────────────────────────────────────────────────
 
     /**
-     * open → reconciling. Role gate (MANAGER/OWNER) is enforced at the controller
+     * sent → reconciling, returning modes only (a relocate_out transfer never reconciles — it
+     * closes through closeOneWay()). Role gate (MANAGER/OWNER) is enforced at the controller
      * (FR-22.6) — not here, matching every other role-gated action in this codebase
      * (@PreAuthorize on the endpoint, never inside the service layer).
      */
@@ -469,19 +564,24 @@ public class TransferService {
     public void beginReconcile(UUID transferId, UUID actorUserId) {
         UUID tenantId = TenantContext.require();
 
-        // Atomic conditional UPDATE doubles as its own race guard (two concurrent
-        // beginReconcile calls on the same transfer → exactly one wins), same pattern
-        // as InventoryLedger.transition()'s race-guard UPDATE.
+        Map<String, Object> transfer = lockTransfer(transferId, tenantId);
+        String status = (String) transfer.get("status");
+        String mode   = (String) transfer.get("transfer_mode");
+        if (!RETURNING_MODES.contains(mode)) {
+            throw wrongMode(mode);
+        }
+        if (!"sent".equals(status)) {
+            throw new TransferException(TransferException.Code.TRANSFER_NOT_SENT,
+                GENERIC_UNAVAILABLE_EN,
+                GENERIC_UNAVAILABLE_AR,
+                HttpStatus.UNPROCESSABLE_ENTITY);
+        }
         int rows = jdbc.update(
-            "UPDATE transfers SET status = 'reconciling' WHERE id = ? AND tenant_id = ? AND status = 'open'",
-            transferId, tenantId);
+            "UPDATE transfers SET status = 'reconciling', reconcile_started_at = now(), reconcile_started_by = ? " +
+            "WHERE id = ? AND tenant_id = ? AND status = 'sent'",
+            actorUserId, transferId, tenantId);
         if (rows == 0) {
-            List<String> statusRows = jdbc.queryForList(
-                "SELECT status FROM transfers WHERE id = ? AND tenant_id = ?", String.class, transferId, tenantId);
-            if (statusRows.isEmpty()) {
-                throw transferNotFound();
-            }
-            throw transferNotOpen(statusRows.get(0));
+            throw statusRaceConflict();
         }
     }
 
@@ -786,7 +886,7 @@ public class TransferService {
     // ── One-shot close (Relocate, FR-22.10) ─────────────────────────────────
 
     /**
-     * open → closed directly, NO reconciling stage — the structural opposite of
+     * preparing → closed directly, NO reconciling stage — the structural opposite of
      * closeTransfer(): that method GATES on outcome-IS-NULL == 0 (rejects while anything is
      * outstanding); this method ACTS ON the outcome-IS-NULL rows (there is no scan-back step
      * to wait for in a one-way relocate — the send-out scan is the only physical evidence
@@ -811,7 +911,7 @@ public class TransferService {
      * FOR UPDATE lock on the outstanding rows gives this the same race behavior as
      * classifyShortfall(): a concurrent second call blocks on the row lock, then (after the
      * first commits) re-reads and finds outcome already set, so its own SELECT returns an
-     * empty set — harmless no-op loop — and its closing UPDATE (status='open' guard) then
+     * empty set — harmless no-op loop — and its closing UPDATE (status='preparing' guard) then
      * naturally affects 0 rows, surfacing TRANSFER_CLOSE_RACE_CONFLICT instead of double-
      * processing anything.
      */
@@ -819,14 +919,11 @@ public class TransferService {
     public void closeOneWay(UUID transferId, UUID actorUserId) {
         UUID tenantId = TenantContext.require();
 
-        List<Map<String, Object>> transferRows = jdbc.queryForList(
-            "SELECT status, transfer_mode FROM transfers WHERE id = ? AND tenant_id = ?",
-            transferId, tenantId);
-        if (transferRows.isEmpty()) {
-            throw transferNotFound();
-        }
-        String status = (String) transferRows.get(0).get("status");
-        String mode   = (String) transferRows.get(0).get("transfer_mode");
+        // Transfer row FOR UPDATE first (class javadoc): a scan in flight finishes before the
+        // outstanding-rows SELECT below runs, so its piece is relocated too, never stranded.
+        Map<String, Object> transfer = lockTransfer(transferId, tenantId);
+        String status = (String) transfer.get("status");
+        String mode   = (String) transfer.get("transfer_mode");
 
         if (!"relocate_out".equals(mode)) {
             throw new TransferException(TransferException.Code.TRANSFER_NOT_RELOCATE_OUT,
@@ -834,8 +931,8 @@ public class TransferService {
                 "عملية النقل هذه ليست عملية نقل نهائي (النمط: " + mode + ") — استخدم الإغلاق العادي بدلاً من ذلك",
                 HttpStatus.UNPROCESSABLE_ENTITY);
         }
-        if (!"open".equals(status)) {
-            throw transferNotOpen(status);
+        if (!"preparing".equals(status)) {
+            throw transferNotPreparing(status);
         }
 
         // FIFO claim: lock every outstanding row on this transfer — mirrors
@@ -867,7 +964,7 @@ public class TransferService {
 
         int rows = jdbc.update(
             "UPDATE transfers SET status = 'closed', closed_by = ?, closed_at = now() " +
-            "WHERE id = ? AND tenant_id = ? AND status = 'open'",
+            "WHERE id = ? AND tenant_id = ? AND status = 'preparing'",
             actorUserId, transferId, tenantId);
         if (rows == 0) {
             throw new TransferException(TransferException.Code.TRANSFER_CLOSE_RACE_CONFLICT,
@@ -940,22 +1037,23 @@ public class TransferService {
 
     private static final Set<String> VALID_STATUS_FILTERS = Set.of("open", "closed", "all");
 
-    /** "What's outside our walls, with whom, since when" — open + reconciling transfers.
-     *  Default view, unchanged from before the closed-view toggle. */
+    /** "What's outside our walls, with whom, since when" — preparing + sent + reconciling.
+     *  Default view. */
     @Transactional(readOnly = true)
     public List<Map<String, Object>> listOpen() {
         return listOpen("open");
     }
 
-    /** statusFilter: "open" (open+reconciling, the historical default) | "closed" | "all". */
+    /** statusFilter: "open" (preparing + sent + reconciling, the default) | "closed" (closed +
+     *  cancelled) | "all". The filter keeps its "open" name — it's the wire value clients send. */
     @Transactional(readOnly = true)
     public List<Map<String, Object>> listOpen(String statusFilter) {
         UUID tenantId = TenantContext.require();
         String filter = VALID_STATUS_FILTERS.contains(statusFilter) ? statusFilter : "open";
         String statusPredicate = switch (filter) {
-            case "closed" -> "t.status = 'closed'";
+            case "closed" -> "t.status IN ('closed', 'cancelled')";
             case "all"    -> "TRUE";
-            default       -> "t.status IN ('open', 'reconciling')";
+            default       -> "t.status IN ('preparing', 'sent', 'reconciling')";
         };
         return jdbc.queryForList(
             "SELECT t.id, t.transfer_type, t.transfer_mode, t.status, t.note, t.expected_return_at, " +
@@ -976,6 +1074,8 @@ public class TransferService {
         List<Map<String, Object>> rows = jdbc.queryForList(
             "SELECT t.id, t.transfer_type, t.transfer_mode, t.status, t.note, t.expected_return_at, " +
             "       t.created_by, t.created_at, t.closed_by, t.closed_at, " +
+            "       t.sent_at, t.sent_by, t.cancelled_at, t.cancelled_by, " +
+            "       t.reconcile_started_at, t.reconcile_started_by, " +
             "       t.destination_location_id, loc.name AS destination_location_name, " +
             "       t.source_location_id, srcloc.name AS source_location_name " +
             "FROM transfers t " +
@@ -999,6 +1099,9 @@ public class TransferService {
         transfer.put("outstandingCount", jdbc.queryForObject(
             "SELECT COUNT(*) FROM transfer_pieces WHERE transfer_id = ? AND tenant_id = ? AND outcome IS NULL",
             Integer.class, transferId, tenantId));
+        // Every piece ever scanned onto the transfer, whatever its outcome — decides whether
+        // Mark as sent (>= 1) and Cancel (0) are offered.
+        transfer.put("piecesEverCount", piecesEverScanned(transferId, tenantId));
         return transfer;
     }
 
@@ -1011,11 +1114,48 @@ public class TransferService {
             HttpStatus.NOT_FOUND);
     }
 
-    private TransferException transferNotOpen(String status) {
-        return new TransferException(TransferException.Code.TRANSFER_NOT_OPEN,
-            "Transfer is not open (status: " + status + ")",
-            "عملية النقل ليست مفتوحة (الحالة الحالية: " + status + ")",
+    private TransferException transferNotPreparing(String status) {
+        return new TransferException(TransferException.Code.TRANSFER_NOT_PREPARING,
+            GENERIC_UNAVAILABLE_EN,
+            GENERIC_UNAVAILABLE_AR,
             HttpStatus.UNPROCESSABLE_ENTITY);
+    }
+
+    private TransferException wrongMode(String mode) {
+        return new TransferException(TransferException.Code.TRANSFER_WRONG_MODE,
+            GENERIC_UNAVAILABLE_EN,
+            GENERIC_UNAVAILABLE_AR,
+            HttpStatus.UNPROCESSABLE_ENTITY);
+    }
+
+    /** The conditional UPDATE matched 0 rows despite the FOR UPDATE lock — not expected;
+     *  kept as a defensive, retryable answer rather than a silent no-op. */
+    private TransferException statusRaceConflict() {
+        return new TransferException(TransferException.Code.TRANSFER_CLOSE_RACE_CONFLICT,
+            "Transfer status changed concurrently — reload and retry",
+            "تغيرت حالة عملية النقل في نفس الوقت — يرجى إعادة التحميل والمحاولة مرة أخرى",
+            HttpStatus.CONFLICT);
+    }
+
+    /** SELECT … FOR UPDATE on the transfer row — the first step of every status change
+     *  (see the class javadoc). Throws TRANSFER_NOT_FOUND when absent. */
+    private Map<String, Object> lockTransfer(UUID transferId, UUID tenantId) {
+        List<Map<String, Object>> rows = jdbc.queryForList(
+            "SELECT status, transfer_mode FROM transfers WHERE id = ? AND tenant_id = ? FOR UPDATE",
+            transferId, tenantId);
+        if (rows.isEmpty()) {
+            throw transferNotFound();
+        }
+        return rows.get(0);
+    }
+
+    /** transfer_pieces rows are never deleted (only given an outcome), so this is every piece
+     *  ever scanned onto the transfer. */
+    private int piecesEverScanned(UUID transferId, UUID tenantId) {
+        Integer n = jdbc.queryForObject(
+            "SELECT COUNT(*) FROM transfer_pieces WHERE transfer_id = ? AND tenant_id = ?",
+            Integer.class, transferId, tenantId);
+        return n == null ? 0 : n;
     }
 
     private TransferException transferNotReconciling(String status) {

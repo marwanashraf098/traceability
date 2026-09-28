@@ -5,17 +5,17 @@ import {
   Badge, Button, Card, Modal, Spinner, Alert, useToast,
 } from '../components/ui'
 import {
-  getTransfer, getRoleFromToken, beginReconcileTransfer, closeOneWayTransfer,
-  reprintTransferOutstanding, TransferCommandError, TransferDetail as TransferDetailType,
+  getTransfer, getRoleFromToken, beginReconcileTransfer, closeOneWayTransfer, markTransferSent,
+  cancelTransfer, reprintTransferOutstanding, TransferCommandError, TransferDetail as TransferDetailType,
 } from '../api'
+import { transferStatusTone, typeLabel } from './Transfers'
 
-// FR-22.9 — Transfer detail: header + lines table + status-gated actions
-// (scan-out-more / begin-reconcile / reprint-outstanding / continue-reconcile).
-
-function tone(status: string): 'warning' | 'success' | 'neutral' {
-  if (status === 'open' || status === 'reconciling') return 'warning'
-  return 'neutral'
-}
+// FR-22.9 — Transfer detail: header + lines table + status-gated actions.
+//   preparing   — Scan out more; Mark as sent (round trip / bring back); Close (move);
+//                 Cancel (only while nothing was ever scanned)
+//   sent        — Begin Reconcile, Reprint
+//   reconciling — Continue reconcile, Reprint
+//   closed / cancelled — read-only banner
 
 export default function TransferDetail() {
   const { id } = useParams<{ id: string }>()
@@ -34,6 +34,10 @@ export default function TransferDetail() {
   const [showCloseOneWayConfirm, setShowCloseOneWayConfirm] = useState(false)
   const [closingOneWay, setClosingOneWay] = useState(false)
   const [closeOneWayError, setCloseOneWayError] = useState<string | null>(null)
+  const [markingSent, setMarkingSent] = useState(false)
+  const [showCancelConfirm, setShowCancelConfirm] = useState(false)
+  const [cancelling, setCancelling] = useState(false)
+  const [cancelError, setCancelError] = useState<string | null>(null)
 
   const load = useCallback(async () => {
     if (!id) return
@@ -56,6 +60,39 @@ export default function TransferDetail() {
       toast({ tone: 'error', message: msg })
     } finally {
       setBeginning(false)
+    }
+  }
+
+  function commandMessage(e: unknown): string {
+    return e instanceof TransferCommandError ? (isAr ? e.messageAr : e.messageEn)
+      : e instanceof Error ? e.message : String(e)
+  }
+
+  async function handleMarkSent() {
+    if (!id) return
+    setMarkingSent(true)
+    try {
+      await markTransferSent(id)
+      toast({ tone: 'success', message: t('transfers.detail.markSentDone') })
+      await load()
+    } catch (e: unknown) {
+      toast({ tone: 'error', message: commandMessage(e) })
+    } finally {
+      setMarkingSent(false)
+    }
+  }
+
+  async function handleCancel() {
+    if (!id) return
+    setCancelling(true); setCancelError(null)
+    try {
+      await cancelTransfer(id)
+      setShowCancelConfirm(false)
+      await load()
+    } catch (e: unknown) {
+      setCancelError(commandMessage(e))
+    } finally {
+      setCancelling(false)
     }
   }
 
@@ -97,6 +134,11 @@ export default function TransferDetail() {
   }
 
   const outstanding = transfer.outstandingCount
+  const piecesEver = transfer.piecesEverCount
+  const preparing = transfer.status === 'preparing'
+  const sent = transfer.status === 'sent'
+  const reconciling = transfer.status === 'reconciling'
+  const returning = transfer.transfer_mode === 'round_trip' || transfer.transfer_mode === 'relocate_return'
 
   return (
     <div className="space-y-4">
@@ -113,10 +155,10 @@ export default function TransferDetail() {
             {transfer.transfer_mode === 'relocate_return' && transfer.source_location_name
               ? `${transfer.source_location_name} → ${transfer.destination_location_name}`
               : transfer.destination_location_name}
-            <Badge tone={tone(transfer.status)} label={t(`transfers.status.${transfer.status}`)} />
+            <Badge tone={transferStatusTone(transfer.status)} label={t(`transfers.status.${transfer.status}`)} />
           </h1>
           <p className="text-small text-muted mt-1">
-            {t(`transfers.type.${transfer.transfer_type}`)}
+            {typeLabel(transfer, t)}
             {transfer.expected_return_at && (
               <> · {t('transfers.detail.expectedReturn')}: {new Date(transfer.expected_return_at).toLocaleDateString()}</>
             )}
@@ -132,12 +174,16 @@ export default function TransferDetail() {
       {transfer.status === 'closed' && (
         <Alert tone="info" title={t('transfers.detail.closedTitle')} />
       )}
+      {transfer.status === 'cancelled' && (
+        <Alert tone="info" title={t('transfers.detail.cancelledTitle')} />
+      )}
 
       {/* Lines — relocate_out gets a reduced, relocation-framed table (no reconcile
           concepts: a one-way relocate has no returned/condemned/sold/lost, those
           columns stay permanently 0 and would be meaningless clutter). Round-trip
-          renders the full existing table, byte-identical to before. */}
-      {transfer.transfer_mode === 'relocate_out' ? (
+          renders the full existing table, byte-identical to before. A cancelled transfer never
+          had a piece scanned, so it shows no table — the banner says it all. */}
+      {transfer.status === 'cancelled' ? null : transfer.transfer_mode === 'relocate_out' ? (
         // Card (components/ui.tsx) only destructures children/className/interactive/
         // hoverable — it does not forward arbitrary props, so data-testid must live on a
         // plain element this component controls directly, not on <Card> itself.
@@ -215,49 +261,77 @@ export default function TransferDetail() {
       )}
 
       {/* Actions */}
-      {transfer.status !== 'closed' && (
-        <Card className="flex flex-wrap gap-3">
-          {transfer.status === 'open' && (
-            <Button onClick={() => navigate(`/transfers/${id}/scan-out`)}>
-              {t('transfers.detail.scanOutMore')}
-            </Button>
-          )}
-
-          {/* relocate_out: one-shot close, no reconcile stage — replaces Begin Reconcile
-              entirely (a relocate transfer never reaches 'reconciling'). */}
-          {canManage && transfer.status === 'open' && transfer.transfer_mode === 'relocate_out' && (
-            <span title={outstanding === 0 ? t('transfers.detail.closeOneWayDisabledTooltip') : undefined}>
-              <Button variant="destructive" disabled={outstanding === 0} onClick={() => setShowCloseOneWayConfirm(true)}>
-                {t('transfers.detail.closeOneWay')}
+      {(preparing || sent || reconciling) && (
+        <div data-testid="transfer-actions">
+          <Card className="flex flex-wrap gap-3">
+            {preparing && (
+              <Button onClick={() => navigate(`/transfers/${id}/scan-out`)}>
+                {t('transfers.detail.scanOutMore')}
               </Button>
-            </span>
-          )}
+            )}
 
-          {canManage && transfer.status === 'open' && transfer.transfer_mode !== 'relocate_out' && (
-            <span title={outstanding === 0 ? t('transfers.detail.beginReconcileDisabledTooltip') : undefined}>
-              <Button variant="secondary" loading={beginning} disabled={outstanding === 0} onClick={handleBeginReconcile}>
+            {canManage && preparing && returning && (
+              <span title={piecesEver === 0 ? t('transfers.detail.markSentDisabledTooltip') : undefined}>
+                <Button variant="secondary" loading={markingSent} disabled={piecesEver === 0} onClick={handleMarkSent}>
+                  {t('transfers.detail.markSent')}
+                </Button>
+              </span>
+            )}
+
+            {/* relocate_out: one-shot close, no reconcile stage (a move never reaches sent). */}
+            {canManage && preparing && transfer.transfer_mode === 'relocate_out' && (
+              <span title={outstanding === 0 ? t('transfers.detail.closeOneWayDisabledTooltip') : undefined}>
+                <Button variant="destructive" disabled={outstanding === 0} onClick={() => setShowCloseOneWayConfirm(true)}>
+                  {t('transfers.detail.closeOneWay')}
+                </Button>
+              </span>
+            )}
+
+            {canManage && preparing && piecesEver === 0 && (
+              <Button variant="secondary" onClick={() => { setCancelError(null); setShowCancelConfirm(true) }}>
+                {t('transfers.detail.cancelTransfer')}
+              </Button>
+            )}
+
+            {canManage && sent && (
+              <Button variant="secondary" loading={beginning} onClick={handleBeginReconcile}>
                 {t('transfers.detail.beginReconcile')}
               </Button>
-            </span>
-          )}
+            )}
 
-          {canManage && transfer.status === 'reconciling' && (
-            <Button variant="secondary" onClick={() => navigate(`/transfers/${id}/reconcile`)}>
-              {t('transfers.detail.continueReconcile')}
-            </Button>
-          )}
-
-          {canManage && (
-            <span title={outstanding === 0 ? t('transfers.detail.reprintNoneTooltip') : undefined}>
-              <Button variant="secondary" loading={reprinting} disabled={outstanding === 0} onClick={handleReprint}>
-                {t('transfers.detail.reprintOutstanding')}
+            {canManage && reconciling && (
+              <Button variant="secondary" onClick={() => navigate(`/transfers/${id}/reconcile`)}>
+                {t('transfers.detail.continueReconcile')}
               </Button>
-            </span>
-          )}
-        </Card>
+            )}
+
+            {canManage && (sent || reconciling) && (
+              <span title={outstanding === 0 ? t('transfers.detail.reprintNoneTooltip') : undefined}>
+                <Button variant="secondary" loading={reprinting} disabled={outstanding === 0} onClick={handleReprint}>
+                  {t('transfers.detail.reprintOutstanding')}
+                </Button>
+              </span>
+            )}
+          </Card>
+        </div>
       )}
 
       {closeOneWayError && <Alert tone="critical" title={closeOneWayError} />}
+
+      {showCancelConfirm && (
+        <Modal title={t('transfers.detail.cancelTransfer')} onClose={() => setShowCancelConfirm(false)}>
+          <div className="space-y-4">
+            <p className="text-body text-primary">{t('transfers.detail.cancelConfirmBody')}</p>
+            {cancelError && <Alert tone="critical" title={cancelError} />}
+            <div className="flex gap-3 justify-end">
+              <Button variant="secondary" onClick={() => setShowCancelConfirm(false)}>{t('transfers.detail.cancelKeep')}</Button>
+              <Button variant="destructive" loading={cancelling} onClick={handleCancel}>
+                {t('transfers.detail.cancelTransfer')}
+              </Button>
+            </div>
+          </div>
+        </Modal>
+      )}
 
       {showCloseOneWayConfirm && (
         <Modal title={t('transfers.detail.closeOneWayConfirmTitle')} onClose={() => setShowCloseOneWayConfirm(false)}>

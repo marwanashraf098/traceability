@@ -23,7 +23,7 @@ vi.mock('../api', async (importOriginal) => {
 
 function summary(overrides: Partial<api.TransferSummary>): api.TransferSummary {
   return {
-    id: 't1', transfer_type: 'other', transfer_mode: 'round_trip', status: 'open',
+    id: 't1', transfer_type: 'other', transfer_mode: 'round_trip', status: 'preparing',
     note: null, expected_return_at: null, created_by: 'u1', created_at: new Date().toISOString(),
     destination_location_id: 'd1', destination_location_name: 'Vendor A', outstanding_count: 0,
     ...overrides,
