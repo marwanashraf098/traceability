@@ -1,6 +1,6 @@
 # Privacy Policy
 
-**Version 1.1 — Effective 17 September 2026**
+**Version 1.2 — Effective 28 September 2026**
 
 > ⚠️ **Template — not legal advice.** Fill every `[PLACEHOLDER]` and have a qualified lawyer review this before publishing, especially the processor / sub-processor sections. Keep the `Version` and `Effective` lines accurate — the signup consent record stores the version a user accepted.
 
@@ -25,7 +25,7 @@ Traced, a company established in Egypt, located at North Investors Area, Cairo, 
 
 ## 4. How we use data
 
-We use data only to provide and secure the Service: tracking item location and state, generating and printing labels, linking shipments, handling returns, surfacing exceptions and analytics, authenticating users, preventing abuse, and meeting legal obligations. We do **not** sell personal data, and we do **not** use your end customers' data for our own purposes.
+We use data only to provide and secure the Service: tracking item location and state, generating and printing labels, linking shipments, handling returns, surfacing exceptions and analytics, authenticating users, preventing abuse, and meeting legal obligations. We do **not** sell personal data, and we do **not** use your end customers' data for our own purposes. The one exception to "only to provide and secure the Service" is measuring our own ads on our website and signup page, described in Section 10.
 
 ## 5. Legal bases (where GDPR applies)
 
@@ -43,6 +43,7 @@ The Service is hosted in the European Union. We rely on the following sub-proces
 | Sentry | Error monitoring (PII-scrubbed) | Egypt |
 | Shopify | Source of order/product data (your connected store) | per Shopify |
 | Bosta | Courier integration (delivery data) | Egypt |
+| Meta Platforms | Advertising measurement (Meta Pixel on tracedtech.com and the app signup page only) | United States / Ireland |
 
 Data may be transferred between Egypt and the EU to operate the Service. Where personal data is transferred out of the EEA, we rely on an appropriate transfer mechanism such as the European Commission's Standard Contractual Clauses or an adequacy decision.
 
@@ -60,9 +61,20 @@ Depending on your location, you may have rights to access, correct, export, dele
 
 For **end-customer** requests, because we act as your processor, requests are handled through you as the controller. We support Shopify's data-request, customer-redact, and shop-redact webhooks: a valid redaction erases the relevant end-customer personal data from orders and stored raw payloads, while the tamper-evident custody log (which holds no end-customer personal data) is preserved.
 
-## 10. Cookies
+## 10. Cookies and advertising measurement
 
-We use only the cookies and local mechanisms necessary to sign you in and keep your session secure. We do not use advertising cookies.
+**Inside the app.** Once you are signed in, we use only the cookies and local storage needed to sign you in and keep your session secure.
+
+**On our website and signup page.** On tracedtech.com and on the app's signup page, we use the Meta Pixel, a tool from Meta Platforms, to measure and improve our ads. It sets Meta's cookies (such as `_fbp` and `_fbc`) and records:
+
+- the pages you view;
+- when you click to book a demo or create an account;
+- Meta's cookie identifiers, and the ad you clicked to reach us, if any;
+- basic browser information, such as your browser type and IP address.
+
+When you create an account, we store these identifiers and the ad campaign details with your account, so we can later tell Meta when an account that came from an ad connects a store. We never share your password, your store's data, or your customers' data with Meta.
+
+The Meta Pixel is never loaded inside the signed-in app, inside the Shopify admin, or on your customers' returns page. Meta handles this data under its own privacy policy (https://www.facebook.com/privacy/policy). You can block these cookies in your browser settings or with an ad blocker; Traced works the same without them.
 
 ## 11. Children
 
