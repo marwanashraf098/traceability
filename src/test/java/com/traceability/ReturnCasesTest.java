@@ -290,6 +290,53 @@ class ReturnCasesTest {
             .containsEntry("customerName", null).containsEntry("orderNumber", "#R5");
     }
 
+    /**
+     * LABELLING GUARD (moved here from the deleted frontend exchangesRefundsNormalize.test.ts): a
+     * dashboard exchange's order is matched_order_id — the customer's ORIGINAL order — never the
+     * synthetic replacement order in outbound_order_id. With both set to different orders the case
+     * shows the matched one; with only outbound_order_id set it shows no order ("Not found").
+     */
+    @Test
+    void labellingGuard_dashboardExchangeOrder_isMatchedOrderId_neverOutboundOrderId() {
+        Order original = order("#ORIG-1");
+        Order synthetic = order("#OUT-99");
+        UUID both = exchange(tracking(), "matched", null, original.id());
+        jdbc.update("UPDATE exchanges SET outbound_order_id = ? WHERE id = ?", synthetic.id(), both);
+        UUID outboundOnly = exchange(tracking(), "mapped", null, null);
+        jdbc.update("UPDATE exchanges SET outbound_order_id = ? WHERE id = ?", synthetic.id(), outboundOnly);
+
+        Map<String, Map<String, Object>> byId = allCases(a).stream().collect(Collectors.toMap(c -> (String) c.get("id"), c -> c));
+        assertThat(byId.get(both.toString())).containsEntry("orderNumber", "#ORIG-1");
+        assertThat(byId.get(outboundOnly.toString())).as("outbound order never shown as the customer's order")
+            .containsEntry("orderNumber", null);
+        assertThat(allCases(a)).as("the synthetic order is never a case of its own")
+            .noneMatch(c -> "#OUT-99".equals(c.get("orderNumber")));
+    }
+
+    /** Step 2 read-only display inputs: refunded total, close reason, the request's AWB, C's inspection state + leg badge. */
+    @Test
+    @SuppressWarnings("unchecked")
+    void displayInputs_refundTotal_closeReason_tracking_inspectionState_legStatus() {
+        UUID refunded = request(order("#V1"), "refund", "refunded", "booked", "done");
+        jdbc.update("INSERT INTO return_refunds (tenant_id, request_id, kind, method, amount, currency, refunded_on, recorded_by) " +
+                    "VALUES (?, ?, 'refund', 'instapay', 850.00, 'EGP', current_date, ?)", a.id(), refunded, a.owner());
+        UUID closed = request(order("#V2"), "refund", "closed", null, "not_coming");
+        jdbc.update("UPDATE return_requests SET close_reason = 'no_refund' WHERE id = ?", closed);
+        UUID booked = request(order("#V3"), "refund", "pickup_booked", "booked", "awaiting");
+        jdbc.update("UPDATE return_requests SET bosta_tracking_number = '6035202593' WHERE id = ?", booked);
+        UUID legId = leg(order("#V4"), "returned", null, null, 1);
+
+        Map<String, Map<String, Object>> byId = allCases(a).stream().collect(Collectors.toMap(c -> (String) c.get("id"), c -> c));
+        assertThat((Map<String, Object>) byId.get(refunded.toString()).get("reason"))
+            .containsEntry("refundTotal", "850.00").containsEntry("currency", "EGP");
+        assertThat((Map<String, Object>) byId.get(closed.toString()).get("reason")).containsEntry("closeReason", "no_refund");
+        assertThat((Map<String, Object>) byId.get(booked.toString()).get("reason")).containsEntry("trackingNumber", "6035202593");
+        Map<String, Object> c = byId.get(legId.toString());
+        assertThat((Map<String, Object>) c.get("reason")).containsEntry("inspectionState", "needs_inspection");
+        assertThat(c.get("legStatus")).isNotNull();
+        assertThat(byId.get(booked.toString()).get("legStatus")).as("A has no leg badge").isNull();
+    }
+
     // ── De-dup ───────────────────────────────────────────────────────────────────
 
     @Test

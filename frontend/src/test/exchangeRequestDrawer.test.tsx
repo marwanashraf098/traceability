@@ -96,34 +96,15 @@ beforeEach(async () => {
 
 afterEach(async () => { await i18n.changeLanguage('en') })
 
-async function openList() {
-  const user = userEvent.setup()
-  renderWithProviders(<I18nextProvider i18n={i18n}><ExchangesRefunds /></I18nextProvider>)
-  await user.click(await screen.findByRole('button', { name: /Requests/ }))
-  await screen.findByText('RR-7K3F9M')
-  return user
-}
-
 async function openDrawer() {
-  const user = await openList()
-  await user.click(screen.getByText('RR-7K3F9M'))
-  const drawer = screen.getByTestId('return-request-drawer')
+  const user = userEvent.setup()
+  // Step 2: the Requests tab is gone — the drawer opens through the alerts' deep link.
+  renderWithProviders(<I18nextProvider i18n={i18n}><ExchangesRefunds /></I18nextProvider>,
+    { initialEntries: ['/exchanges?tab=requests&request=rr-1'] })
+  const drawer = await screen.findByTestId('return-request-drawer')
   await within(drawer).findByTestId('exchange-swap')
   return { user, drawer }
 }
-
-describe('Requests list', () => {
-  test('an exchange row carries the Exchange pill', async () => {
-    await openList()
-    expect(screen.getByTestId('exchange-type-pill')).toHaveTextContent('Exchange')
-  })
-
-  test('refund rows have no pill', async () => {
-    detail = { ...detail, type: 'refund' }
-    await openList()
-    expect(screen.queryByTestId('exchange-type-pill')).toBeNull()
-  })
-})
 
 describe('Drawer X4 — in stock', () => {
   test('pill, coming back → going out with live stock, note, fallback line, approve copy', async () => {
@@ -190,13 +171,11 @@ describe('Drawer X6 — sold out', () => {
 describe('Arabic', () => {
   test('pill, swap labels and actions', async () => {
     await i18n.changeLanguage('ar')
-    const user = userEvent.setup()
-    renderWithProviders(<I18nextProvider i18n={i18n}><ExchangesRefunds /></I18nextProvider>)
-    await user.click(await screen.findByRole('button', { name: /الطلبات/ }))
-    await user.click(await screen.findByText('RR-7K3F9M'))
-    const drawer = screen.getByTestId('return-request-drawer')
+    // Step 2: the Requests tab is gone — the drawer opens through the alerts' deep link.
+    renderWithProviders(<I18nextProvider i18n={i18n}><ExchangesRefunds /></I18nextProvider>,
+      { initialEntries: ['/exchanges?tab=requests&request=rr-1'] })
+    const drawer = await screen.findByTestId('return-request-drawer')
     await within(drawer).findByTestId('exchange-swap')
-    expect(screen.getByTestId('exchange-type-pill')).toHaveTextContent('استبدال')
     expect(within(drawer).getByTestId('exchange-coming-back')).toHaveTextContent('يرجع')
     expect(within(drawer).getByTestId('exchange-going-out')).toHaveTextContent('يخرج')
     expect(within(drawer).getByRole('button', { name: 'الموافقة على الاستبدال' })).toBeInTheDocument()

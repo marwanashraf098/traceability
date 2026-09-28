@@ -140,7 +140,7 @@ const STAT_DEFS: {
 }[] = [
   { metric: 'orders',     labelKey: 'nav.orders',                  color: INFO },
   { metric: 'delivered',  labelKey: 'orders.pipeline.delivered',   color: SUCCESS },
-  { metric: 'returns',    labelKey: 'nav.returns',                 color: WARNING },
+  { metric: 'returns',    labelKey: 'overview.stats.returns',      color: WARNING },
   { metric: 'exchanges',  labelKey: 'overview.stats.exchanges',    color: TRACE_BLUE },
   { metric: 'exceptions', labelKey: 'nav.exceptions',              color: CRITICAL },
 ]

@@ -90,9 +90,9 @@ beforeEach(async () => {
 async function openDrawer() {
   const user = userEvent.setup()
   // The app's own i18n instance (with Arabic), nested inside the test providers — as returnsCourierReturn.test does.
-  renderWithProviders(<I18nextProvider i18n={i18n}><ExchangesRefunds /></I18nextProvider>)
-  await user.click(await screen.findByRole('button', { name: /Requests/ }))
-  await user.click(await screen.findByText('RR-7K3F9M'))
+  // Step 2: the Requests tab is gone — the drawer opens through the alerts' deep link.
+  renderWithProviders(<I18nextProvider i18n={i18n}><ExchangesRefunds /></I18nextProvider>,
+    { initialEntries: ['/exchanges?tab=requests&request=rr-1'] })
   const drawer = screen.getByTestId('return-request-drawer')
   await within(drawer).findByText('It runs small.')
   return { user, drawer }

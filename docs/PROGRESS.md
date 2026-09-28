@@ -4,6 +4,24 @@
 
 ## Current state
 
+**Returns & exchanges — Step 2: the new page, renames, old page removed (2026-09-28, branch `feature/returns-cases-2`, not merged, not deployed).**
+- **/exchanges** (URL unchanged) = one "Returns & exchanges" list on GET /returns-exchanges + /counts: tiles (hidden at 0,
+  click → To do + removable chip), tabs All · To do · In progress · Done with counts (To do badge amber), type select +
+  debounced search (list AND counts), All grouped under stage headers ("— showing n" while more pages exist), Show more
+  (cursor), tone pills in the mockup's exact colours, overdue age red + bold, redacted "—", "Not found". Row → drawer by
+  target: request → ReturnRequestDrawer; dashboard exchange / courier return → ExchangeRefundDrawer (own row type now).
+  Drawer changes reload list + counts. Deep link `?tab=requests&request=<id>[&parcel=<id>]` still opens the drawer.
+- **Renames (EN/AR):** sidebar + title "Returns & exchanges" / "المرتجعات والاستبدال"; scanning page "Scan returns" /
+  "مسح المرتجعات" (sidebar all roles, page heading, worker home tile, Overview "awaiting inspection" line, refund drawer
+  link). The Overview stat tile that COUNTS returns keeps "Returns" (own key `overview.stats.returns`).
+- **Removed:** old tabs/cards/merged feed (`normalize.ts`), `RequestsPanel.tsx`. Kept: all drawers, `statusTone.ts` (drawer
+  uses it), every backend endpoint. Now unused by the frontend: GET /refunds, GET /return-requests (list).
+- **Backend (read-only additions to the case list):** reason.trackingNumber, refundTotal, currency, closeReason,
+  inspectionState (C) and legStatus (C) — for the pill/reason texts and the courier-return drawer.
+- Tests: returnsExchanges (13), exchangeRefundDrawer (5, drawer tests moved from the old page file), returnsExchangesNav (6);
+  ReturnCasesTest +2 (labelling guard moved from the deleted exchangesRefundsNormalize.test.ts; display inputs).
+  Drawer tests navigate via the deep link (approved). Frontend 557 (baseline 573: old-page tests removed/replaced).
+
 **Returns & exchanges — Step 1 backend: one case list + counts on shared rules (2026-09-28, branch `feature/returns-cases-1`, not merged, not deployed).**
 - **`ReturnCaseRules`** (`com.traceability.returncases`) — THE single source of the return-alert predicates AND the case
   stages: booking problem (+ key), exchange needs mapping, return_link_ambiguous (candidate lateral + "not held by a

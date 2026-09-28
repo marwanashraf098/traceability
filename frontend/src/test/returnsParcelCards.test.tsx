@@ -281,37 +281,3 @@ describe('Return session — parcel cards (Step 5)', () => {
     expect(card.querySelector('bdi')).not.toBeNull()
   })
 })
-
-describe('Exchanges & Refunds — received_untracked', () => {
-  beforeEach(() => {
-    vi.clearAllMocks()
-    mockFetch = vi.fn()
-    stubFetchWithShellDefaults(mockFetch)
-    vi.stubGlobal('localStorage', { getItem: vi.fn().mockReturnValue(null), setItem: vi.fn(), removeItem: vi.fn() })
-  })
-  afterEach(() => { vi.unstubAllGlobals() })
-
-  test('er1 counted under Received (not Needs action), pill + "Waiting to be added in Receiving"', async () => {
-    const refund = (id: string, state: string, awaiting = false) => ({
-      id, tracking_number: id === 'r1' ? '6136538746' : '2493716277', internal_state: 'returned',
-      order_id: 'o-' + id, order_number: '#0988', customer_name: 'Omar K.', customer_phone: null,
-      created_at: '2026-09-20T10:00:00Z', inspection_state: state, awaiting_receiving: awaiting,
-      leg_status: { primaryKey: 'returned', tone: 'success' },
-    })
-    mockFetch.mockImplementation((url: string) => {
-      if (String(url).includes('/exchanges')) return jsonOk([])
-      if (String(url).includes('/refunds')) return jsonOk([refund('r1', 'received_untracked', true), refund('r2', 'resolved')])
-      return jsonOk({})
-    })
-    const user = userEvent.setup()
-    renderWithProviders(<ExchangesRefunds />)
-    const badges = await screen.findAllByTestId('refund-inspection-badge')
-    expect(badges[0]).toHaveTextContent('Received · not tracked')
-    expect(within(badges[0]).getByTestId('refund-awaiting-receiving')).toHaveTextContent('Waiting to be added in Receiving')
-
-    await user.click(screen.getByRole('button', { name: /^Needs action/i }))
-    expect(screen.queryAllByTestId('refund-inspection-badge')).toHaveLength(0)
-    await user.click(screen.getByRole('button', { name: /^Received/i }))
-    expect(screen.getAllByTestId('refund-inspection-badge')).toHaveLength(2)
-  })
-})

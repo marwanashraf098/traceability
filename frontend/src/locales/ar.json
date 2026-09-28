@@ -10,8 +10,8 @@
     "logout": "تسجيل الخروج",
     "switchLock": "تبديل / قفل",
     "lookup": "بحث باركود أو رقم شحنة…",
-    "returns": "المرتجعات",
-    "exchangesRefunds": "الاستبدال والاسترجاع",
+    "returns": "مسح المرتجعات",
+    "exchangesRefunds": "المرتجعات والاستبدال",
     "exceptions": "الاستثناءات",
     "connections": "الاتصالات",
     "users": "الفريق",
@@ -44,7 +44,7 @@
     "needsAttention": {
       "title": "يحتاج إلى اهتمام",
       "pendingPicks": "انتقاء معلّق · التجهيز",
-      "awaitingInspection": "بانتظار الفحص · المرتجعات",
+      "awaitingInspection": "بانتظار الفحص · مسح المرتجعات",
       "openExceptions": "استثناءات مفتوحة",
       "openExceptionsBreakdown": "{{critical}} حرجة · {{warning}} تحذير",
       "lowStock": "مخزون منخفض · الكتالوج",
@@ -98,7 +98,8 @@
       "daysAgo": "منذ {{count}} يوم"
     },
     "stats": {
-      "exchanges": "الاستبدالات"
+      "exchanges": "الاستبدالات",
+      "returns": "المرتجعات"
     },
     "dateRange": {
       "today": "اليوم",
@@ -761,7 +762,7 @@
     }
   },
   "returns": {
-    "title": "المرتجعات",
+    "title": "مسح المرتجعات",
     "landing": {
       "openSession": "فتح جلسة إرجاع",
       "resumeSession": "استئناف الجلسة {{id}}",
@@ -944,7 +945,7 @@
     "badge": "استبدال"
   },
   "exchangesRefunds": {
-    "title": "الاستبدال والاسترجاع",
+    "title": "المرتجعات والاستبدال",
     "tabs": {
       "all": "الكل",
       "needsAction": "يحتاج إجراء",
@@ -1011,8 +1012,8 @@
         "originalOrder": "الطلب الأصلي",
         "lifecycle": "الحالة",
         "inspection": "الفحص",
-        "resolutionNote": "قرارات إعادة التخزين أو التلف للقطعة المرتجعة تتم من شاشة المرتجعات.",
-        "goToReturns": "فتح في المرتجعات"
+        "resolutionNote": "قرارات إعادة التخزين أو التلف للقطعة المرتجعة تتم من صفحة مسح المرتجعات.",
+        "goToReturns": "فتح في مسح المرتجعات"
       },
       "exchange": {
         "replacementSection": "البديل (الصادر)",
@@ -2520,7 +2521,7 @@
         "desc": "امسح وجهّز الطلبات في قائمة الانتظار"
       },
       "returns": {
-        "title": "المرتجعات",
+        "title": "مسح المرتجعات",
         "desc": "افتح جلسة وامسح المنتجات المرتجعة"
       },
       "pickups": {
@@ -2532,5 +2533,203 @@
         "desc": "ابحث عن طلب بالباركود أو رقم الشحنة"
       }
     }
+  },
+  "returnsExchanges": {
+    "title": "المرتجعات والاستبدال",
+    "subtitle": "كل ما يرجعه العملاء، من صفحة المرتجعات ومن بوسطة.",
+    "tilesLabel": "يحتاج انتباهك",
+    "tiles": {
+      "toApprove": {
+        "label": "بانتظار موافقتك",
+        "sub": "طلبات العملاء"
+      },
+      "replacementToChoose": {
+        "label": "اختر القطعة البديلة",
+        "sub": "استبدال بانتظار المقاس"
+      },
+      "toLinkOrder": {
+        "label": "اربطها بطلب",
+        "sub": "الطلب الأصلي غير معروف"
+      },
+      "refundToRecord": {
+        "label": "سجّل الاسترداد",
+        "sub": "القطع رجعت وتم فحصها"
+      },
+      "bookingProblem": {
+        "label": "مشكلة في الحجز",
+        "sub": "بوسطة لم تؤكد"
+      }
+    },
+    "removeFilter": "إزالة الفلتر",
+    "stageLabel": "المرحلة",
+    "tabs": {
+      "all": "الكل",
+      "to_do": "مطلوب منك",
+      "in_progress": "جارية",
+      "done": "مكتملة"
+    },
+    "type": {
+      "label": "النوع",
+      "all": "الاسترداد والاستبدال",
+      "refund": "الاسترداد",
+      "exchange": "الاستبدال"
+    },
+    "search": {
+      "label": "بحث",
+      "placeholder": "طلب، عميل، بوليصة أو RR-…"
+    },
+    "columns": {
+      "return": "المرتجع",
+      "customer": "العميل",
+      "order": "الطلب",
+      "items": "القطع",
+      "next": "الخطوة التالية",
+      "updated": "آخر تحديث"
+    },
+    "kind": {
+      "refund": "استرداد",
+      "exchange": "استبدال"
+    },
+    "source": {
+      "returns_page": "صفحة المرتجعات",
+      "bosta": "محجوز في بوسطة"
+    },
+    "notFound": "غير معروف",
+    "group": "{{stage}} · {{count}}",
+    "showing": "— يظهر {{count}}",
+    "showMore": "عرض المزيد",
+    "empty": {
+      "all": "لا توجد مرتجعات أو استبدالات بعد",
+      "to_do": "لا شيء مطلوب منك",
+      "in_progress": "لا شيء في الطريق",
+      "done": "لا شيء مكتمل بعد",
+      "filtered": "لا نتائج لهذه الفلاتر"
+    },
+    "errorTitle": "تعذّر تحميل المرتجعات والاستبدال",
+    "retry": "حاول مرة أخرى",
+    "time": {
+      "justNow": "الآن",
+      "minutes": "منذ {{count}} دقيقة",
+      "hours": "منذ {{count}} ساعة",
+      "yesterday": "أمس",
+      "days_zero": "اليوم",
+      "days_one": "منذ يوم",
+      "days_two": "منذ يومين",
+      "days_few": "منذ {{count}} أيام",
+      "days_many": "منذ {{count}} يومًا",
+      "days_other": "منذ {{count}} يوم"
+    },
+    "next": {
+      "approve": {
+        "label": "وافق أو ارفض",
+        "reasonExchange": "البديل متوفر",
+        "reason_zero": "لا قطع",
+        "reason_one": "قطعة واحدة",
+        "reason_two": "قطعتان",
+        "reason_few": "{{count}} قطع",
+        "reason_many": "{{count}} قطعة",
+        "reason_other": "{{count}} قطعة"
+      },
+      "choose_replacement": {
+        "label": "اختر القطعة البديلة",
+        "reasonSoldOut": "البديل نفد — حوّله لاسترداد أو ارفض",
+        "reasonBosta": "استبدال محجوز في بوسطة — اختر المقاسات"
+      },
+      "link_order": {
+        "label": "اربطها بطلب",
+        "reasonNone": "لا يوجد طلب مطابق لهذا العميل",
+        "reasonSeveral": "أكثر من طلب محتمل — اختر واحدًا"
+      },
+      "link_request": {
+        "label": "اربطها بطلب إرجاع",
+        "reason_zero": "لا طلبات محتملة",
+        "reason_one": "طلب واحد محتمل: {{refs}}",
+        "reason_two": "طلبان محتملان: {{refs}}",
+        "reason_few": "{{count}} طلبات محتملة: {{refs}}",
+        "reason_many": "{{count}} طلبًا محتملًا: {{refs}}",
+        "reason_other": "{{count}} طلب محتمل: {{refs}}"
+      },
+      "record_refund": {
+        "label": "سجّل الاسترداد",
+        "reason": "القطع رجعت وتم فحصها",
+        "reasonOverdue": "متأخر"
+      },
+      "booking_problem": {
+        "label": "مشكلة في الحجز",
+        "reason_failed": "بوسطة لم تحجزه — راجع وأعد المحاولة",
+        "reason_failed_ambiguous": "بوسطة لم تؤكد — راجع وأعد المحاولة",
+        "reason_needs_review": "بيانات بوسطة مختلفة — راجعها في بوسطة"
+      },
+      "inspect": {
+        "label": "افحص القطع",
+        "reasonLeg": "تم المسح — أعد التخزين أو سجّلها تالفة",
+        "reason_zero": "لا قطع رجعت",
+        "reason_one": "قطعة واحدة رجعت — أعد تخزينها أو سجّلها تالفة",
+        "reason_two": "قطعتان رجعتا — أعد تخزينهما أو سجّلهما تالفتين",
+        "reason_few": "{{count}} قطع رجعت — أعد تخزينها أو سجّلها تالفة",
+        "reason_many": "{{count}} قطعة رجعت — أعد تخزينها أو سجّلها تالفة",
+        "reason_other": "{{count}} قطعة رجعت — أعد تخزينها أو سجّلها تالفة"
+      },
+      "scan": {
+        "label": "رجعت — بانتظار المسح",
+        "reason": "امسحها من مسح المرتجعات"
+      },
+      "add_in_receiving": {
+        "label": "أضفها في الاستلام",
+        "reason": "رجعت بدون قطعة مسجّلة — أضفها للمخزون"
+      },
+      "booking": {
+        "label": "جارٍ حجز المندوب",
+        "reason": "يتم حجز استلام بوسطة"
+      },
+      "awaiting_items": {
+        "label": "بانتظار القطع",
+        "reason": "احجز الاستلام في بوسطة"
+      },
+      "on_the_way": {
+        "label_refund": "المندوب في الطريق للاستلام",
+        "label_exchange": "الاستبدال في الطريق",
+        "label_leg": "في طريق العودة",
+        "reasonTracking": "بوسطة {{tracking}}"
+      },
+      "refunded": {
+        "label": "تم الاسترداد",
+        "labelAmount": "تم الاسترداد · {{amount}}"
+      },
+      "exchanged": {
+        "label": "تم الاستبدال",
+        "reason": "القطعة القديمة رجعت"
+      },
+      "received": {
+        "label": "تم الاستلام",
+        "reason": "رجعت وتم فحصها"
+      },
+      "returned_no_exchange": {
+        "label": "رجعت بدون استبدال"
+      },
+      "rejected": {
+        "label": "مرفوض"
+      },
+      "closed": {
+        "label": "مغلق",
+        "labelReason": "مغلق · {{reason}}"
+      },
+      "cancelled": {
+        "label": "أُلغي"
+      },
+      "dismissed": {
+        "label": "تم تجاهله"
+      },
+      "lost": {
+        "label": "فقدها المندوب",
+        "reason": "راجع بوسطة"
+      }
+    },
+    "overdueAge_zero": "اليوم",
+    "overdueAge_one": "منذ يوم",
+    "overdueAge_two": "منذ يومين",
+    "overdueAge_few": "منذ {{count}} أيام",
+    "overdueAge_many": "منذ {{count}} يومًا",
+    "overdueAge_other": "منذ {{count}} يوم"
   }
 }

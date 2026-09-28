@@ -106,7 +106,12 @@ public class ReturnCaseService {
         "            ORDER BY ex.created_at DESC, ex.id DESC LIMIT 1)], NULL) AS trackings, " +
         "       GREATEST(rr.created_at, (SELECT MAX(ev.occurred_at) FROM return_request_events ev " +
         "            WHERE ev.request_id = rr.id AND ev.tenant_id = rr.tenant_id)) AS updated_at, " +
-        "       rr.id AS request_id, NULL::uuid AS exchange_id, rr.return_shipment_id AS shipment_id " +
+        "       rr.id AS request_id, NULL::uuid AS exchange_id, rr.return_shipment_id AS shipment_id, " +
+        // Step 2 (read-only display inputs): refunded total + currency, close reason, inspection state (C only).
+        "       (SELECT COALESCE(SUM(rf.amount), 0) FROM return_refunds rf WHERE rf.request_id = rr.id AND rf.tenant_id = rr.tenant_id " +
+        "          AND rf.kind = 'refund' AND NOT EXISTS (SELECT 1 FROM return_refunds v WHERE v.voids_refund_id = rf.id " +
+        "          AND v.kind = 'void')) AS refund_total, " +
+        "       COALESCE(NULLIF(o.raw->>'currency', ''), 'EGP') AS currency, rr.close_reason, NULL::text AS inspection_state " +
         "FROM return_requests rr " +
         "JOIN orders o  ON o.id = rr.order_id AND o.tenant_id = rr.tenant_id " +
         "JOIN tenants t ON t.id = rr.tenant_id " +
@@ -145,7 +150,8 @@ public class ReturnCaseService {
         "                  THEN ipr.title || COALESCE(' ' || NULLIF(iv.title, ''), '') || ' ← ' || COALESCE(ov.title, '') " +
         "                  ELSE COALESCE(NULLIF(e.inbound_description_ar, ''), NULLIF(e.inbound_description, ''), '?') || ' ← ' " +
         "                       || COALESCE(NULLIF(e.outbound_description, ''), '?') END], " +
-        "       false, ARRAY[e.tracking_number], e.updated_at, NULL::uuid, e.id, NULL::uuid " +
+        "       false, ARRAY[e.tracking_number], e.updated_at, NULL::uuid, e.id, NULL::uuid, " +
+        "       NULL::numeric, NULL::text, NULL::text, NULL::text " +
         "FROM exchanges e " +
         // Labelling guard: the customer's order is matched_order_id, never outbound_order_id.
         "LEFT JOIN orders mo ON mo.id = e.matched_order_id AND mo.tenant_id = e.tenant_id " +
@@ -181,7 +187,7 @@ public class ReturnCaseService {
         "       NULL::text[], (s.return_intake_completed_at IS NULL AND s.internal_state::text NOT IN ('lost', 'terminated', 'cancelled')), " +
         "       ARRAY[s.tracking_number], " +
         "       GREATEST(s.created_at, s.last_synced_at, s.returned_at, s.return_intake_completed_at), " +
-        "       NULL::uuid, NULL::uuid, s.id " +
+        "       NULL::uuid, NULL::uuid, s.id, NULL::numeric, NULL::text, NULL::text, st.state " +
         "FROM shipments s " +
         "JOIN orders o  ON o.id = s.order_id AND o.tenant_id = s.tenant_id " +
         "JOIN tenants t ON t.id = s.tenant_id " +
@@ -351,6 +357,9 @@ public class ReturnCaseService {
         m.put("tone", r.get("tone"));
         m.put("overdueDays", r.get("overdue_days"));
         m.put("status", r.get("status"));
+        // C only: the courier-state badge the courier-return drawer shows (same derivation as listCrpReturns).
+        m.put("legStatus", "C".equals(r.get("case_type"))
+            ? com.traceability.fulfillment.OrderStatusDeriver.deriveLegStatus((String) r.get("status")) : null);
         Map<String, Object> reason = new LinkedHashMap<>();
         reason.put("bookingStatus", r.get("booking_status"));
         reason.put("bookingError", r.get("booking_error"));
@@ -359,6 +368,15 @@ public class ReturnCaseService {
         reason.put("awaitingCount", r.get("awaiting_n"));
         reason.put("candidateCount", r.get("candidate_n"));
         reason.put("candidateReferences", r.get("candidate_refs"));
+        // Step 2 display inputs (read-only).
+        List<String> trackings = labels(r.get("trackings"));
+        reason.put("trackingNumber", trackings.isEmpty() ? null : trackings.get(0));
+        Object total = r.get("refund_total");
+        reason.put("refundTotal", total == null ? null
+            : ((java.math.BigDecimal) total).setScale(2, java.math.RoundingMode.HALF_UP).toPlainString());
+        reason.put("currency", r.get("currency"));
+        reason.put("closeReason", r.get("close_reason"));
+        reason.put("inspectionState", r.get("inspection_state"));
         m.put("reason", reason);
         List<String> alerts = new ArrayList<>();
         if (Boolean.TRUE.equals(r.get("a_booking"))) alerts.add("pickup_booking_problem");

@@ -4,10 +4,9 @@ import { Link } from 'react-router-dom'
 import { X } from 'lucide-react'
 import {
   getExchangeDetail, getExchangeCandidates, attachExchange, acceptExchangeBareReturn,
-  dismissExchange, overrideOutboundVariant, ExchangeSummary, ExchangeCandidate, CatalogVariant,
+  dismissExchange, overrideOutboundVariant, ExchangeSummary, ExchangeCandidate, CatalogVariant, DerivedTone,
 } from '../../api'
 import { Badge, Button, EmptyState, Input, LegStatusBadge, Skeleton, Spinner, cn, useToast } from '../../components/ui'
-import { MergedRow } from './normalize'
 import { exchangeStatusTone, inspectionStateTone } from './statusTone'
 import ExchangeVariantPicker from '../exchanges/ExchangeVariantPicker'
 
@@ -22,12 +21,27 @@ import ExchangeVariantPicker from '../exchanges/ExchangeVariantPicker'
  * disposition route with. Both branches below link out to the Returns scan flow
  * instead of faking a disposition UI with nothing behind it.
  */
+/**
+ * What the drawer shows about a dashboard exchange (B) or a courier return no request holds (C).
+ * Built by the Returns & exchanges page from a case row (sourceId = the exchange / shipment id).
+ */
+export interface ExchangeRefundDrawerRow {
+  kind: 'exchange' | 'refund'
+  sourceId: string
+  trackingNumber: string
+  orderNumber: string | null
+  customerName: string | null
+  customerPhone?: string | null
+  legStatus?: { primaryKey: string; tone: DerivedTone } | null
+  inspectionState?: 'in_transit' | 'needs_inspection' | 'resolved' | 'received_untracked' | null
+}
+
 export default function ExchangeRefundDrawer({
   row,
   onClose,
   onChanged,
 }: {
-  row: MergedRow | null
+  row: ExchangeRefundDrawerRow | null
   onClose: () => void
   onChanged: () => void
 }) {
@@ -85,7 +99,7 @@ export default function ExchangeRefundDrawer({
 // ── Refund body — everything it needs is already on the list row; no detail
 // endpoint exists for a CRP leg (Step 4 diagnosis §2), so nothing more to fetch. ──
 
-function RefundDrawerBody({ row }: { row: MergedRow }) {
+function RefundDrawerBody({ row }: { row: ExchangeRefundDrawerRow }) {
   const { t } = useTranslation()
   return (
     <div className="space-y-5" data-testid="refund-drawer-body">

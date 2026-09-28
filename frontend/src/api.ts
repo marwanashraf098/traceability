@@ -2067,6 +2067,86 @@ export function getRefunds(page = 0, size = 100) {
   return request<RefundLeg[]>(`/refunds?page=${page}&size=${size}`)
 }
 
+// ── Returns & exchanges — one row per real-world return (Step 1 API, Step 2 UI) ──
+
+export type CaseStage = 'to_do' | 'in_progress' | 'done'
+export type CaseTone = 'action' | 'problem' | 'moving' | 'done_good' | 'done_closed'
+export type CaseTile = 'toApprove' | 'replacementToChoose' | 'toLinkOrder' | 'refundToRecord' | 'bookingProblem'
+
+export interface ReturnCase {
+  /** A portal request · B dashboard exchange · C courier return no request holds. */
+  caseType: 'A' | 'B' | 'C'
+  id: string
+  kind: 'refund' | 'exchange'
+  /** RR reference (A) or Bosta tracking number (B, C). */
+  reference: string
+  source: 'returns_page' | 'bosta'
+  /** Null when redacted (shown as "—"). */
+  customerName: string | null
+  /** Null = not found. */
+  orderNumber: string | null
+  stage: CaseStage
+  nextStep: string
+  tone: CaseTone
+  overdueDays: number | null
+  /** A: request status · B: exchange status · C: courier internal state. */
+  status: string | null
+  reason: {
+    bookingStatus: string | null
+    bookingError: string | null
+    itemsCount: number | null
+    arrivedCount: number | null
+    awaitingCount: number | null
+    candidateCount: number | null
+    candidateReferences: string | null
+    trackingNumber: string | null
+    refundTotal: string | null
+    currency: string | null
+    closeReason: string | null
+    inspectionState: 'in_transit' | 'needs_inspection' | 'resolved' | 'received_untracked' | null
+  }
+  alerts: string[]
+  itemsSummary: string
+  itemsSummaryAr: string
+  notScanned: boolean
+  updatedAt: string
+  /** C only. */
+  legStatus: { primaryKey: string; tone: DerivedTone } | null
+  target: { requestId: string | null; exchangeId: string | null; shipmentId: string | null }
+}
+
+export interface ReturnCasePage { items: ReturnCase[]; nextCursor: string | null }
+
+export interface ReturnCaseCounts {
+  stages: { all: number; to_do: number; in_progress: number; done: number }
+  tiles: Record<CaseTile, number>
+}
+
+export interface ReturnCaseFilter {
+  stage?: CaseStage | 'all'
+  type?: 'refund' | 'exchange'
+  tile?: CaseTile
+  q?: string
+}
+
+export function getReturnCases(filter: ReturnCaseFilter, cursor?: string | null, limit = 25) {
+  const params = new URLSearchParams({ limit: String(limit) })
+  if (filter.stage) params.set('stage', filter.stage)
+  if (filter.type) params.set('type', filter.type)
+  if (filter.tile) params.set('tile', filter.tile)
+  if (filter.q) params.set('q', filter.q)
+  if (cursor) params.set('cursor', cursor)
+  return request<ReturnCasePage>(`/returns-exchanges?${params.toString()}`)
+}
+
+export function getReturnCaseCounts(type?: 'refund' | 'exchange', q?: string) {
+  const params = new URLSearchParams()
+  if (type) params.set('type', type)
+  if (q) params.set('q', q)
+  const qs = params.toString()
+  return request<ReturnCaseCounts>(`/returns-exchanges/counts${qs ? `?${qs}` : ''}`)
+}
+
 // ── Returns portal — merchant side (Step 4b API, Step 4e-A UI) ─────────────────
 
 export type ReturnRequestStatus =

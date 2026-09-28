@@ -106,9 +106,9 @@ afterEach(async () => { await i18n.changeLanguage('en') })
 
 async function openDrawer() {
   const user = userEvent.setup()
-  renderWithProviders(<I18nextProvider i18n={i18n}><ExchangesRefunds /></I18nextProvider>)
-  await user.click(await screen.findByRole('button', { name: /Requests|الطلبات/ }))
-  await user.click(await screen.findByText('RR-8J4M2Q'))
+  // Step 2: the Requests tab is gone — the drawer opens through the alerts' deep link.
+  renderWithProviders(<I18nextProvider i18n={i18n}><ExchangesRefunds /></I18nextProvider>,
+    { initialEntries: ['/exchanges?tab=requests&request=rr-1'] })
   const drawer = screen.getByTestId('return-request-drawer')
   return { user, drawer }
 }
@@ -243,15 +243,3 @@ describe('Drawer — X5 progress', () => {
   })
 })
 
-describe('Requests list pills', () => {
-  test('"Exchange booked" and "Exchanged"', async () => {
-    rows = [ROW, { ...ROW, id: 'rr-2', reference: 'RR-2', status: 'exchanged' }, { ...ROW, id: 'rr-3', reference: 'RR-3', type: 'refund' }]
-    renderWithProviders(<I18nextProvider i18n={i18n}><ExchangesRefunds /></I18nextProvider>)
-    await userEvent.setup().click(await screen.findByRole('button', { name: /Requests/ }))
-    const table = await screen.findByText('RR-8J4M2Q')
-    expect(table).toBeInTheDocument()
-    expect(screen.getByText('Exchange booked')).toBeInTheDocument()
-    expect(screen.getByText('Exchanged')).toBeInTheDocument()
-    expect(screen.getByText('Pickup booked')).toBeInTheDocument()   // a refund's courier pickup keeps its label
-  })
-})

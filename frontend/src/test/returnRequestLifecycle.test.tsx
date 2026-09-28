@@ -78,39 +78,15 @@ beforeEach(async () => {
 
 afterEach(async () => { await i18n.changeLanguage('en') })
 
-async function openRequests() {
-  const user = userEvent.setup()
-  renderWithProviders(<I18nextProvider i18n={i18n}><ExchangesRefunds /></I18nextProvider>)
-  await user.click(await screen.findByRole('button', { name: /Requests/ }))
-  await screen.findByText('RR-CLSD44')
-  return user
+/** Step 2: the Requests tab is gone — the drawer opens through the alerts' deep link. */
+async function openClosedDrawer() {
+  renderWithProviders(<I18nextProvider i18n={i18n}><ExchangesRefunds /></I18nextProvider>,
+    { initialEntries: ['/exchanges?tab=requests&request=rr-2'] })
 }
-
-function rowOf(reference: string): HTMLElement {
-  return screen.getByText(reference).closest('tr') as HTMLElement
-}
-
-describe('Requests list → 4d-1 status pills', () => {
-  test('EN: Received, Refund pending, Closed', async () => {
-    await openRequests()
-    expect(within(rowOf('RR-RCVD22')).getByText('Received')).toBeInTheDocument()
-    expect(within(rowOf('RR-PEND33')).getByText('Refund pending')).toBeInTheDocument()
-    expect(within(rowOf('RR-CLSD44')).getByText('Closed')).toBeInTheDocument()
-  })
-
-  test('AR: تم الاستلام، بانتظار الاسترداد، مغلق', async () => {
-    await openRequests()
-    await act(async () => { await i18n.changeLanguage('ar') })
-    expect(within(rowOf('RR-RCVD22')).getByText('تم الاستلام')).toBeInTheDocument()
-    expect(within(rowOf('RR-PEND33')).getByText('بانتظار الاسترداد')).toBeInTheDocument()
-    expect(within(rowOf('RR-CLSD44')).getByText('مغلق')).toBeInTheDocument()
-  })
-})
 
 describe('Drawer → closed request', () => {
   test('EN: Closed pill and why it was closed, with the note', async () => {
-    const user = await openRequests()
-    await user.click(screen.getByText('RR-CLSD44'))
+    await openClosedDrawer()
     const drawer = screen.getByTestId('return-request-drawer')
     await within(drawer).findByText('It runs small.')
     expect(within(drawer).getByText('Closed')).toBeInTheDocument()
@@ -122,15 +98,13 @@ describe('Drawer → closed request', () => {
 
   test('EN: closed without a refund', async () => {
     closedDetail({ closeReason: 'no_refund', closeNote: null })
-    const user = await openRequests()
-    await user.click(screen.getByText('RR-CLSD44'))
+    await openClosedDrawer()
     const drawer = screen.getByTestId('return-request-drawer')
     expect(await within(drawer).findByTestId('request-close-reason')).toHaveTextContent('Closed without a refund')
   })
 
   test('AR: سبب الإغلاق', async () => {
-    const user = await openRequests()
-    await user.click(screen.getByText('RR-CLSD44'))
+    await openClosedDrawer()
     const drawer = screen.getByTestId('return-request-drawer')
     await within(drawer).findByText('It runs small.')
     await act(async () => { await i18n.changeLanguage('ar') })
@@ -142,8 +116,7 @@ describe('Drawer → closed request', () => {
 
   test('a request that is not closed shows no close reason', async () => {
     closedDetail({ status: 'refund_pending', closeReason: null })
-    const user = await openRequests()
-    await user.click(screen.getByText('RR-CLSD44'))
+    await openClosedDrawer()
     const drawer = screen.getByTestId('return-request-drawer')
     await within(drawer).findByText('It runs small.')
     expect(within(drawer).getByText('Refund pending')).toBeInTheDocument()

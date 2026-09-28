@@ -139,13 +139,10 @@ beforeEach(async () => {
 
 afterEach(async () => { await i18n.changeLanguage('en') })
 
-async function openDrawer(initialEntries?: string[]) {
+async function openDrawer(initialEntries: string[] = ['/exchanges?tab=requests&request=rr-1']) {
   const user = userEvent.setup()
+  // Step 2: the Requests tab is gone — the drawer opens through the alerts' deep link.
   renderWithProviders(<I18nextProvider i18n={i18n}><ExchangesRefunds /></I18nextProvider>, { initialEntries })
-  if (!initialEntries) {
-    await user.click(await screen.findByRole('button', { name: /Requests/ }))
-    await user.click(await screen.findByText('RR-7K3F9M'))
-  }
   const drawer = await screen.findByTestId('return-request-drawer')
   await within(drawer).findByTestId('return-request-drawer-body')
   return { user, drawer }
@@ -376,46 +373,3 @@ describe('R5 — link a parcel to its request', () => {
   })
 })
 
-describe('R6 — Requests list', () => {
-  beforeEach(() => {
-    rows = [
-      row('rr-a', 'RR-M4ZP6W', 'refund_pending', { refundOverdueDays: 7 }),
-      row('rr-b', 'RR-7K3F9M', 'refund_pending'),
-      row('rr-c', 'RR-Q2WX8T', 'pickup_booked', { arrivedCount: 1, awaitingCount: 1, unexpectedItem: true }),
-      row('rr-d', 'RR-D8KT3B', 'refunded', { refundTotal: '640.00' }),
-      row('rr-e', 'RR-X9KD3F', 'closed', { closeReason: 'no_refund' }),
-    ]
-  })
-
-  function rowOf(reference: string) {
-    return screen.getByText(reference, { selector: 'td bdi' }).closest('tr') as HTMLElement
-  }
-
-  test('status pills, badges and the awaiting-refund tab badge', async () => {
-    const user = userEvent.setup()
-    renderWithProviders(<I18nextProvider i18n={i18n}><ExchangesRefunds /></I18nextProvider>)
-    expect(await screen.findByTestId('requests-refund-badge')).toHaveTextContent('2 awaiting refund')
-    await user.click(screen.getByRole('button', { name: /Requests/ }))
-    await screen.findByText('RR-M4ZP6W')
-    expect(within(rowOf('RR-M4ZP6W')).getByText('Refund pending')).toBeInTheDocument()
-    expect(within(rowOf('RR-M4ZP6W')).getByTestId('overdue-badge')).toHaveTextContent('Overdue · 7d')
-    expect(within(rowOf('RR-7K3F9M')).queryByTestId('overdue-badge')).not.toBeInTheDocument()
-    expect(within(rowOf('RR-Q2WX8T')).getByText('Partly received')).toBeInTheDocument()
-    expect(within(rowOf('RR-Q2WX8T')).getByTestId('check-item-badge')).toHaveTextContent('Check item')
-    expect(within(rowOf('RR-D8KT3B')).getByText('Refunded · EGP 640')).toBeInTheDocument()
-    expect(within(rowOf('RR-X9KD3F')).getByText('Closed · no refund')).toBeInTheDocument()
-  })
-
-  test('AR: pills and the tab badge in Arabic', async () => {
-    const user = userEvent.setup()
-    renderWithProviders(<I18nextProvider i18n={i18n}><ExchangesRefunds /></I18nextProvider>)
-    await user.click(await screen.findByRole('button', { name: /Requests/ }))
-    await screen.findByText('RR-M4ZP6W')
-    await toArabic()
-    expect(screen.getByTestId('requests-refund-badge')).toHaveTextContent('2 بانتظار الاسترداد')
-    expect(within(rowOf('RR-M4ZP6W')).getByTestId('overdue-badge')).toHaveTextContent('متأخر · 7 يوم')
-    expect(within(rowOf('RR-Q2WX8T')).getByText('وصل جزء منه')).toBeInTheDocument()
-    expect(within(rowOf('RR-D8KT3B')).getByText('تم الاسترداد · EGP 640')).toBeInTheDocument()
-    expect(within(rowOf('RR-X9KD3F')).getByText('مغلق · بدون استرداد')).toBeInTheDocument()
-  })
-})
