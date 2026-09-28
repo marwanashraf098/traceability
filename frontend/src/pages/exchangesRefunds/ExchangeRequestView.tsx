@@ -5,6 +5,7 @@ import { approveReturnRequest, switchExchangeToRefund, ReturnRequestDetail } fro
 import { Button, cn, useToast } from '../../components/ui'
 import { reasonLabel, shortCustomerName } from './requestFormat'
 import { PieceCode } from './RequestLifecycle'
+import CustomAddressBlock from './CustomAddressBlock'
 
 /**
  * Step 5b — the request drawer for an exchange (mockups X4 / X6): what comes back → what goes
@@ -82,6 +83,7 @@ export default function ExchangeRequestView({
             {area && (
               <Field label={t('exchangesRefunds.requests.exchange.area')}>
                 <bdi>{area}</bdi>
+                <CustomAddressBlock detail={detail} />
               </Field>
             )}
           </dl>

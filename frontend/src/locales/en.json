@@ -1153,7 +1153,12 @@
         "restNotComing": "The rest isn't coming",
         "restNotComingDone": "Marked: the rest isn't coming.",
         "closeRequest": "Close request…",
-        "notTracked": "Not tracked"
+        "notTracked": "Not tracked",
+        "customAddressLabel": "Customer entered a new address",
+        "customBuilding": "Building {{value}}",
+        "customFloor": "Floor {{value}}",
+        "customApartment": "Apt {{value}}",
+        "customAddressRedacted": "The address was removed after a privacy request."
       },
       "attention": "Attention",
       "overdue": "Overdue · {{days}}d",

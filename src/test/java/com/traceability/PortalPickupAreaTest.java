@@ -161,7 +161,7 @@ class PortalPickupAreaTest {
         ResponseEntity<Map> r = lookup(a, o);
 
         Map<String, Object> pickup = (Map<String, Object>) r.getBody().get("pickup");
-        assertThat(pickup.keySet()).containsExactlyInAnyOrder("cityId", "cityName", "cityNameAr", "districts", "preselectedDistrictId");
+        assertThat(pickup.keySet()).containsExactlyInAnyOrder("cityId", "cityName", "cityNameAr", "districts", "preselectedDistrictId", "cities");
         assertThat(pickup.get("cityId")).isEqualTo(CAIRO);
         assertThat(pickup.get("cityName")).isEqualTo("Cairo");
         assertThat(pickup.get("cityNameAr")).isEqualTo("القاهرة");

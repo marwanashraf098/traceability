@@ -561,6 +561,8 @@ public class ReturnPickupBookingService {
         String apiKeyEncrypted; String returnLocationId;
         String districtId; String cityName; Boolean districtAvailable;
         JsonNode drop; JsonNode receiver; String customerName; String customerPhone;
+        /** V117: true when the customer typed a different pickup address (drop = that address). */
+        boolean customAddress;
         int itemsCount; List<String> itemLines = new ArrayList<>();
     }
 
@@ -568,7 +570,9 @@ public class ReturnPickupBookingService {
         List<Map<String, Object>> rows = jdbc.queryForList(
             "SELECT rr.status::text AS status, rr.booking_status, rr.reference, rr.order_id, rr.pickup_district_id, rr.type, " +
             "       o.number, o.customer_name, o.customer_phone, o.pii_redacted_at, t.portal_pickup_booking, " +
-            "       t.portal_exchanges_enabled, d.city_name, d.pickup_available, d.dropoff_available " +
+            "       t.portal_exchanges_enabled, d.city_name, d.pickup_available, d.dropoff_available, " +
+            "       rr.pickup_address_source, rr.custom_first_line, rr.custom_second_line, rr.custom_building_number, " +
+            "       rr.custom_floor, rr.custom_apartment " +
             "FROM return_requests rr " +
             "JOIN orders o  ON o.id = rr.order_id AND o.tenant_id = rr.tenant_id " +
             "JOIN tenants t ON t.id = rr.tenant_id " +
@@ -611,6 +615,20 @@ public class ReturnPickupBookingService {
                 c.drop = n.path("dropOffAddress");
                 c.receiver = n.path("receiver");
             } catch (Exception ignored) { /* treated as no address below */ }
+        }
+        // V117: a different pickup address the customer typed replaces the delivery address as
+        // the address block — same field names, so both payload builders are unchanged. The
+        // receiver (name, phone) still comes from the forward leg / the order. The city and
+        // district are the request's snapshot either way.
+        c.customAddress = "custom".equals(r.get("pickup_address_source"));
+        if (c.customAddress) {
+            com.fasterxml.jackson.databind.node.ObjectNode a = mapper.createObjectNode();
+            putText(a, "firstLine", (String) r.get("custom_first_line"));
+            putText(a, "secondLine", (String) r.get("custom_second_line"));
+            putText(a, "buildingNumber", (String) r.get("custom_building_number"));
+            putText(a, "floor", (String) r.get("custom_floor"));
+            putText(a, "apartment", (String) r.get("custom_apartment"));
+            c.drop = a;
         }
 
         jdbc.query(
@@ -663,7 +681,9 @@ public class ReturnPickupBookingService {
         if (c.redacted) return "The customer's data was deleted for this order (privacy request).";
         String firstLine = c.drop == null ? null : c.drop.path("firstLine").asText(null);
         if (firstLine == null || firstLine.trim().length() <= 5) {
-            return "The delivery address on the order's Bosta shipment is missing or too short.";
+            return c.customAddress
+                ? "The pickup address the customer entered is missing or too short."
+                : "The delivery address on the order's Bosta shipment is missing or too short.";
         }
         String[] name = receiverName(c);
         if (name[0] == null || receiverPhone(c) == null) return "The customer's name or phone number is missing.";
@@ -690,7 +710,9 @@ public class ReturnPickupBookingService {
         if (c.redacted) return "The customer's data was deleted for this order (privacy request).";
         String firstLine = c.drop == null ? null : c.drop.path("firstLine").asText(null);
         if (firstLine == null || firstLine.trim().length() <= 5) {
-            return "The delivery address on the order's Bosta shipment is missing or too short.";
+            return c.customAddress
+                ? "The pickup address the customer entered is missing or too short."
+                : "The delivery address on the order's Bosta shipment is missing or too short.";
         }
         String[] name = receiverName(c);
         if (name[0] == null || receiverPhone(c) == null) return "The customer's name or phone number is missing.";
@@ -760,6 +782,10 @@ public class ReturnPickupBookingService {
     private static String receiverPhone(Context c) {
         String p = c.receiver == null ? null : ShipmentLinkService.normalizePhone(opt(c.receiver, "phone"));
         return p != null ? p : ShipmentLinkService.normalizePhone(c.customerPhone);
+    }
+
+    private static void putText(com.fasterxml.jackson.databind.node.ObjectNode n, String field, String value) {
+        if (value != null) n.put(field, value);
     }
 
     private static String opt(JsonNode n, String field) {

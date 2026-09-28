@@ -1152,7 +1152,12 @@
         "restNotComing": "الباقي لن يصل",
         "restNotComingDone": "تم التسجيل: الباقي لن يصل.",
         "closeRequest": "إغلاق الطلب…",
-        "notTracked": "غير متتبَّع"
+        "notTracked": "غير متتبَّع",
+        "customAddressLabel": "أدخل العميل عنوانًا جديدًا",
+        "customBuilding": "عقار {{value}}",
+        "customFloor": "الدور {{value}}",
+        "customApartment": "شقة {{value}}",
+        "customAddressRedacted": "حُذف العنوان بعد طلب خصوصية."
       },
       "attention": "يحتاج انتباه",
       "overdue": "متأخر · {{days}} يوم",

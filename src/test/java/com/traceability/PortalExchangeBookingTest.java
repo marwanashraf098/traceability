@@ -309,6 +309,36 @@ class PortalExchangeBookingTest {
     }
 
     @Test
+    void p1b_customAddress_sentAsDropOffAddress_restUnchanged() {
+        // V117: the customer typed a different address — on an exchange it is the drop-off (and
+        // collection) address; pickupAddress is still never sent.
+        Req r = approved(a, "#1048", 2);
+        jdbc.update("UPDATE return_requests SET pickup_address_source = 'custom', custom_first_line = '7 New Street, Heliopolis', " +
+                    "custom_second_line = NULL, custom_building_number = '7B', custom_floor = '2', custom_apartment = NULL " +
+                    "WHERE id = ?", r.id());
+
+        booking.book(r.id(), a.id());
+
+        assertThat(POSTS).hasSize(1);
+        JsonNode p = POSTS.get(0);
+        assertThat(names(p)).containsExactlyInAnyOrder("type", "cod", "dropOffAddress", "businessLocationId",
+            "receiver", "businessReference", "uniqueBusinessReference", "specs", "returnSpecs", "returnNotes");
+        assertThat(p.path("type").asInt()).isEqualTo(30);
+        assertThat(names(p.path("dropOffAddress")))
+            .containsExactlyInAnyOrder("firstLine", "buildingNumber", "floor", "city", "districtId");
+        assertThat(p.path("dropOffAddress").path("firstLine").asText()).isEqualTo("7 New Street, Heliopolis");
+        assertThat(p.path("dropOffAddress").path("buildingNumber").asText()).isEqualTo("7B");
+        assertThat(p.path("dropOffAddress").path("floor").asText()).isEqualTo("2");
+        assertThat(p.path("dropOffAddress").path("city").asText()).isEqualTo("Cairo");
+        assertThat(p.path("dropOffAddress").path("districtId").asText()).isEqualTo(NASR);
+        assertThat(p.toString()).doesNotContain("Placeholder Street");
+        assertThat(p.has("pickupAddress")).isFalse();
+        assertThat(p.path("receiver").path("phone").asText()).isEqualTo("01000000001");
+        assertThat(row(r.id())).containsEntry("booking_status", "booked");
+        assertThat(row(r.id()).get("booking_verified_at")).as("read-back: customer district on dropOffAddress").isNotNull();
+    }
+
+    @Test
     void p2_theTwoBuildersNeverProduceEachOthersType() {
         ObjectNode crp = BostaV2Client.returnPickupPayload(M, new BostaV2Client.ReturnPickup("u", "#1", "loc", "12 Street, Block", null,
             null, null, null, "Cairo", NASR, "Mona", null, "01000000001", 3, "d", "n"));

@@ -9,6 +9,7 @@ import {
 import { Alert, Badge, Button, ProductThumb, Skeleton, cn, useToast } from '../../components/ui'
 import { displayStatus, displayStatusTone, reasonLabel, sentLabel, shortCustomerName, shortDate, statusLabelKey } from './requestFormat'
 import ExchangeRequestView from './ExchangeRequestView'
+import CustomAddressBlock from './CustomAddressBlock'
 import ExchangeProgressView from './ExchangeProgressView'
 import {
   arrivedCount, CloseDialog, PieceCode, UntrackedArrivedControls, HistoryTimeline, ItemsWithOutcome, LinkParcelDialog, RefundForm, RefundsList, UnexpectedItems,
@@ -558,6 +559,7 @@ function DrawerContent({
           {(pickup || areaEditable) && (
             <Field label={t('exchangesRefunds.requests.drawer.pickup')}>
               <span data-testid="request-pickup"><bdi>{pickup || '—'}</bdi></span>
+              <CustomAddressBlock detail={detail} />
               {areaEditable && !editingArea && (
                 <button
                   type="button"

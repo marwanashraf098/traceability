@@ -124,7 +124,8 @@ public class ReturnRequestService {
             "       rr.booking_attempted_at, rr.booking_verified_at, " +
             "       rr.received_at, rr.refund_pending_at, rr.closed_at, rr.closed_by, cu.name AS closed_by_name, " +
             "       rr.close_reason, rr.close_note, rr.link_source, rr.refunded_at, ru.name AS refunded_by_name, " +
-            "       rr.refund_fallback_ok, " +
+            "       rr.refund_fallback_ok, rr.pickup_address_source, rr.custom_first_line, rr.custom_second_line, " +
+            "       rr.custom_building_number, rr.custom_floor, rr.custom_apartment, rr.custom_address_redacted_at, " +
             "       (SELECT s.tracking_number FROM shipments s WHERE s.id = rr.return_shipment_id " +
             "          AND s.tenant_id = rr.tenant_id) AS return_tracking_number, " +
             "       (SELECT s.delivered_at FROM shipments s " +
@@ -187,6 +188,19 @@ public class ReturnRequestService {
         d.put("pickupDistrictId", r.get("pickup_district_id"));
         d.put("pickupDistrictName", r.get("pickup_district_name"));
         d.put("pickupDistrictNameAr", r.get("pickup_district_name_ar"));
+        // V117: 'order' (the delivery address) or 'custom' (the customer typed a different pickup
+        // address — shown in full to the merchant; null fields once redacted).
+        d.put("pickupAddressSource", r.get("pickup_address_source"));
+        if ("custom".equals(r.get("pickup_address_source"))) {
+            Map<String, Object> custom = new LinkedHashMap<>();
+            custom.put("firstLine", r.get("custom_first_line"));
+            custom.put("secondLine", r.get("custom_second_line"));
+            custom.put("buildingNumber", r.get("custom_building_number"));
+            custom.put("floor", r.get("custom_floor"));
+            custom.put("apartment", r.get("custom_apartment"));
+            custom.put("redacted", r.get("custom_address_redacted_at") != null);
+            d.put("customAddress", custom);
+        }
         // Step 4c-3: the Bosta return pickup booking.
         d.put("bookingStatus", r.get("booking_status"));
         d.put("bookingError", r.get("booking_error"));

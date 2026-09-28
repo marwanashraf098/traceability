@@ -140,6 +140,10 @@ class RlsCoverageTest {
                     "public returns portal, slug-resolved via hatch #14 then TenantContext.runAs + RLS; " +
                     "returns no tenant data beyond the store name, window days and static reason codes " +
                     "(covered by PortalLookupTest / PortalLookupRlsTest)"),
+            entry("/api/v1/portal/{slug}/districts",
+                    "public returns portal, token-gated (the lookup token must carry the slug's tenant, " +
+                    "else 401); returns reference data only — Bosta districts of one city from the global " +
+                    "bosta_districts table, no tenant rows and no street address (covered by PortalCustomAddressTest)"),
             entry("/api/v1/orders",
                     "uses tx.execute(); empty valid for new tenant; covered by FulfillTest"),
             entry("/api/v1/orders/{orderId}",

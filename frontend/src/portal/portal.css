@@ -414,3 +414,9 @@ img.pp-thumb--muted { opacity: 0.6; }
 .pp-check { display: flex; gap: 12px; align-items: flex-start; font-size: 15px; line-height: 1.5; cursor: pointer; }
 .pp-check input { width: 20px; height: 20px; margin: 2px 0 0; flex-shrink: 0; accent-color: var(--brand); }
 .pp-success-text { color: #1F6B3A; }
+
+/* V117 — a different pickup address. */
+.pp-address { display: flex; flex-direction: column; gap: 14px; margin-top: 14px; }
+.pp-row3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.pp-row3 .pp-optional { display: block; }
+.pp-addresschoice { margin-bottom: 14px; }

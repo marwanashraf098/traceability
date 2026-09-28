@@ -60,7 +60,30 @@ public class PickupAreaService {
         }
     }
 
+    /** A Bosta city (id and names only). */
+    public record City(String id, String name, String nameAr) {
+        Map<String, Object> toJson() {
+            Map<String, Object> m = new LinkedHashMap<>();
+            m.put("id", id);
+            m.put("name", name);
+            m.put("nameAr", nameAr);
+            return m;
+        }
+    }
+
     private final JdbcTemplate jdbc;
+
+    /**
+     * Portal custom address (V117) — every Bosta city with at least one pickup-available
+     * district, by name. Reference data only (bosta_districts is global).
+     */
+    public List<City> pickupCities() {
+        return jdbc.query(
+            "SELECT city_id, MIN(city_name) AS city_name, MIN(city_name_ar) AS city_name_ar " +
+            "FROM bosta_districts WHERE pickup_available GROUP BY city_id " +
+            "ORDER BY MIN(city_name) NULLS LAST, city_id",
+            (rs, i) -> new City(rs.getString("city_id"), rs.getString("city_name"), rs.getString("city_name_ar")));
+    }
 
     public PickupAreaService(JdbcTemplate jdbc) {
         this.jdbc = jdbc;
@@ -94,10 +117,19 @@ public class PickupAreaService {
 
     /** A city's pickup-available districts (zone, then district name); empty when none. */
     public Optional<CityAreas> forCity(String cityId, String forwardDistrictId) {
+        return forCity(cityId, forwardDistrictId, false);
+    }
+
+    /**
+     * A city's pickup-available districts — and, when {@code exchange}, only those Bosta can also
+     * deliver to (pickup_available AND dropoff_available, as {@link #exchangeDistrictIds}).
+     */
+    public Optional<CityAreas> forCity(String cityId, String forwardDistrictId, boolean exchange) {
         if (cityId == null || cityId.isBlank()) return Optional.empty();
         List<Map<String, Object>> rows = jdbc.queryForList(
             "SELECT district_id, district_name, district_name_ar, zone_name, zone_name_ar, city_name, city_name_ar " +
             "FROM bosta_districts WHERE city_id = ? AND pickup_available " +
+            (exchange ? "AND dropoff_available " : "") +
             "ORDER BY zone_name NULLS LAST, district_name, district_id",
             cityId);
         if (rows.isEmpty()) return Optional.empty();

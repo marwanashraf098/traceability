@@ -95,10 +95,42 @@ public class PortalController {
             UUID replacement = n.hasNonNull("replacementVariantId")
                 ? UUID.fromString(n.get("replacementVariantId").asText()) : null;
             Boolean fallback = n.hasNonNull("refundFallbackOk") ? n.get("refundFallbackOk").asBoolean() : null;
-            return new PortalService.SubmitRequest(lines, email, note, districtId, mode, replacement, fallback);
+            // V117: the pickup address — 'order' (default: the delivery address) or 'custom'.
+            String addressSource = n.hasNonNull("addressSource") ? n.get("addressSource").asText() : null;
+            PortalService.CustomAddress custom = "custom".equals(addressSource)
+                ? new PortalService.CustomAddress(text(n, "cityId"), text(n, "districtId"), text(n, "firstLine"),
+                    text(n, "secondLine"), text(n, "buildingNumber"), text(n, "floor"), text(n, "apartment"))
+                : null;
+            return new PortalService.SubmitRequest(lines, email, note, districtId, mode, replacement, fallback,
+                addressSource, custom);
         } catch (Exception e) {
             return null;
         }
+    }
+
+    private static String text(JsonNode n, String field) {
+        return n.hasNonNull(field) ? n.get(field).asText() : null;
+    }
+
+    /**
+     * V117 — a city's districts for a different pickup address. Auth = the lookup token as a
+     * Bearer header (401 with the generic session message otherwise). mode=exchange keeps only
+     * districts Bosta can also deliver to. Reference data only — never a street address.
+     */
+    @GetMapping("/{slug}/districts")
+    public ResponseEntity<Map<String, Object>> districts(@PathVariable String slug,
+                                                         @RequestHeader(value = "Authorization", required = false) String authorization,
+                                                         @RequestParam(value = "cityId", required = false) String cityId,
+                                                         @RequestParam(value = "mode", required = false) String mode) {
+        String token = authorization != null && authorization.startsWith("Bearer ")
+            ? authorization.substring("Bearer ".length()).trim() : null;
+        return portal.districts(slug, token, cityId, "exchange".equals(mode))
+            .map(r -> switch (r.outcome()) {
+                case OK           -> ResponseEntity.ok(r.body());
+                case UNAUTHORIZED -> ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                                         .body(Map.<String, Object>of("message", UNAUTHORIZED_MESSAGE));
+            })
+            .orElseGet(() -> ResponseEntity.notFound().build());
     }
 
     public record LookupRequest(String orderNumber, String phone) {}

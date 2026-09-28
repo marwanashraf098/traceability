@@ -263,6 +263,7 @@ Built 2026-08-15 on branch `returns-rebuild`, single cutover, not yet merged. Mo
 - [x] EX.6 [S] Merchant "Change area" for exchanges offers and accepts only districts that are pickup- AND drop-off-available (Step 5c)
 - [x] UT.1 [M] Step 6a: portal returns/exchanges for untracked order lines — unit-bound request items (V114), per-item Arrived (drawer + session) with undo, request_item_to_receive, canonical rule clause (backend)
 - [x] UT.2 [M] Step 6b: screens — portal untracked lines, Arrived buttons on parcel cards and the drawer; drawer-arrival leg intake (V115)
+- [x] RP.21 [M] Portal: customer chooses the delivery address or a different pickup address (V117) — districts endpoint, custom address in both booking types, drawer display, GDPR redaction
 - [x] RS.18 [M] Return session parcel cards (per scanned AWB), feedback strip, footer summary
 - [x] RS.19 [M] Untracked courier return: mark received / undo (no stock change), V101 intake outcome + actor
 - [x] RS.20 [M] `return_to_receive` exception (MEDIUM) + E&R "Received · not tracked"

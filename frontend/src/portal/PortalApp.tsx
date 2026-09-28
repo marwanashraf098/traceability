@@ -1,7 +1,7 @@
 import { CSSProperties, FormEvent, ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Trans, useTranslation } from 'react-i18next'
 import {
-  getConfig, lookup, submit, ExchangeOption, LookupLine, LookupResult, PickupDistrict, PortalConfig, SubmitResult,
+  getConfig, getDistricts, lookup, submit, ExchangeOption, LookupLine, LookupResult, PickupDistrict, PortalConfig, SubmitResult,
 } from './api'
 import { palette } from './brand'
 import { applyDocumentLanguage, PortalLang, saveLanguage } from './i18n'
@@ -24,9 +24,19 @@ import { applyDocumentLanguage, PortalLang, saveLanguage } from './i18n'
  * line's exchangeOptions (out of stock disabled, the customer's own variant marked "yours") with a
  * pre-ticked refund-fallback checkbox, then the same P3 as step 3 of 3, then X3. Hidden entirely
  * when the flag is absent. Refund mode is the unchanged P2 → P3 → P4.
+ *
+ * V117: when the offer lists cities, P3's Pickup card starts with a "Pickup address" choice —
+ * the delivery address (default; today's City + Area) or a different address: governorate
+ * (pickup.cities), area (GET /districts for that city, mode=exchange in exchange mode, grouped by
+ * zone), street (required, more than 5 characters), building, floor, apartment, landmark. Send
+ * stays disabled until the chosen address is complete. The 'order' submission is unchanged.
  */
 
 export const NOTE_MAX = 300
+/** V117 — same caps and street minimum as PortalService on the backend. */
+export const STREET_MIN = 6
+export const LINE_MAX = 250
+export const SHORT_MAX = 20
 // Same rule as PortalService.EMAIL on the backend.
 export const EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/
 
@@ -34,6 +44,8 @@ type Step = 'start' | 'items' | 'variant' | 'details' | 'sent'
 type Mode = 'refund' | 'exchange'
 type StartBanner = 'notFound' | 'throttled' | 'generic' | 'expired' | 'conflict'
 type SendBanner = 'invalid' | 'generic' | 'submitThrottled'
+type AddressSource = 'order' | 'custom'
+interface CustomDistricts { key: string; state: 'loading' | 'ok' | 'error'; districts: PickupDistrict[] }
 interface Selection { qty: number; reason: string }
 
 /** Slug = first path segment. */
@@ -152,6 +164,18 @@ export default function PortalApp({ slug }: { slug: string | null }) {
   const [fallbackOk, setFallbackOk] = useState(true)
 
   const [areaId, setAreaId] = useState('')
+  // V117 — a different pickup address.
+  const [addressSource, setAddressSource] = useState<AddressSource>('order')
+  const [customCityId, setCustomCityId] = useState('')
+  const [customAreaId, setCustomAreaId] = useState('')
+  const [street, setStreet] = useState('')
+  const [streetTouched, setStreetTouched] = useState(false)
+  const [building, setBuilding] = useState('')
+  const [floor, setFloor] = useState('')
+  const [apartment, setApartment] = useState('')
+  const [landmark, setLandmark] = useState('')
+  const [customDistricts, setCustomDistricts] = useState<CustomDistricts | null>(null)
+  const [districtsAttempt, setDistrictsAttempt] = useState(0)
   const [note, setNote] = useState('')
   const [email, setEmail] = useState('')
   const [emailError, setEmailError] = useState(false)
@@ -227,6 +251,16 @@ export default function PortalApp({ slug }: { slug: string | null }) {
       setExchangeTargetId(null)
       setFallbackOk(true)
       setAreaId(res.data.pickup?.preselectedDistrictId ?? '')
+      setAddressSource('order')
+      setCustomCityId('')
+      setCustomAreaId('')
+      setStreet('')
+      setStreetTouched(false)
+      setBuilding('')
+      setFloor('')
+      setApartment('')
+      setLandmark('')
+      setCustomDistricts(null)
       setStartBanner(null)
       setThrottledOrder(null)
       setSendBanner(null)
@@ -284,8 +318,53 @@ export default function PortalApp({ slug }: { slug: string | null }) {
   const chosenArea = areaDistricts.some(d => d.id === areaId) ? areaId : ''
   const areaMissing = pickup != null && !chosenArea
 
+  // V117 — a different pickup address: offered only when lookup lists the cities.
+  const cities = pickup?.cities ?? []
+  const addressChoice = pickup != null && cities.length > 0
+  const customChosen = addressChoice && addressSource === 'custom'
+  const districtsKey = customChosen && customCityId ? `${customCityId}|${exchangeMode ? 'exchange' : 'refund'}` : null
+  const loadedDistricts = customDistricts && customDistricts.key === districtsKey ? customDistricts : null
+
+  useEffect(() => {
+    if (!districtsKey || !slug || !order) return
+    let live = true
+    setCustomDistricts({ key: districtsKey, state: 'loading', districts: [] })
+    getDistricts(slug, order.token, customCityId, exchangeMode).then(res => {
+      if (!live) return
+      if (res.ok) {
+        setCustomDistricts({ key: districtsKey, state: 'ok', districts: res.data.districts })
+      } else if (res.failure === 'unauthorized') {
+        setOrder(null)
+        setSelections({})
+        setStartBanner('expired')
+        setStep('start')
+      } else {
+        setCustomDistricts({ key: districtsKey, state: 'error', districts: [] })
+      }
+    })
+    return () => { live = false }
+    // customCityId and exchangeMode are both part of districtsKey.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [districtsKey, districtsAttempt, slug, order?.token])
+
+  const customArea = loadedDistricts?.state === 'ok' && loadedDistricts.districts.some(d => d.id === customAreaId)
+    ? customAreaId : ''
+  const streetTrim = street.trim()
+  const streetError: 'streetMissing' | 'streetShort' | null =
+    !streetTrim ? 'streetMissing' : streetTrim.length < STREET_MIN ? 'streetShort' : null
+  const customIncomplete = customChosen && (!customCityId || !customArea || streetError != null)
+  const addressMissing = customChosen ? customIncomplete : areaMissing
+
+  /** "Nasr City, Cairo" — the delivery area when one is chosen, else just the city. */
+  function samePlace(): string {
+    if (!pickup) return ''
+    const city = lang === 'ar' ? pickup.cityNameAr || pickup.cityName : pickup.cityName
+    const area = areaDistricts.find(d => d.id === chosenArea)
+    return area ? t('p3.place', { area: lang === 'ar' ? area.nameAr || area.name : area.name, city }) : city
+  }
+
   async function send() {
-    if (!slug || !order || sendingRef.current || areaMissing) return
+    if (!slug || !order || sendingRef.current || addressMissing) return
     const trimmedEmail = email.trim()
     if (trimmedEmail && (trimmedEmail.length > 254 || !EMAIL_RE.test(trimmedEmail))) {
       setEmailError(true)
@@ -309,7 +388,18 @@ export default function PortalApp({ slug }: { slug: string | null }) {
           }),
       ...(trimmedEmail ? { email: trimmedEmail } : {}),
       ...(note.trim() ? { note } : {}),
-      ...(pickup && chosenArea ? { districtId: chosenArea } : {}),
+      ...(customChosen
+        ? {
+            addressSource: 'custom' as const,
+            cityId: customCityId,
+            districtId: customArea,
+            firstLine: streetTrim,
+            ...(landmark.trim() ? { secondLine: landmark.trim() } : {}),
+            ...(building.trim() ? { buildingNumber: building.trim() } : {}),
+            ...(floor.trim() ? { floor: floor.trim() } : {}),
+            ...(apartment.trim() ? { apartment: apartment.trim() } : {}),
+          }
+        : pickup && chosenArea ? { districtId: chosenArea } : {}),
     })
     sendingRef.current = false
     setSending(false)
@@ -627,9 +717,102 @@ export default function PortalApp({ slug }: { slug: string | null }) {
         <section className="pp-card">
           <div className="pp-eyebrow">{t('p3.pickup')}</div>
           <p className="pp-muted pp-small">
-            {t(exchangeMode ? 'p3.pickupTextExchange' : config.pickupBooking || pickup ? 'p3.pickupTextBooking' : 'p3.pickupText')}
+            {t(customChosen
+              ? (exchangeMode ? 'p3.pickupTextExchangeCustom' : 'p3.pickupTextCustom')
+              : exchangeMode ? 'p3.pickupTextExchange' : config.pickupBooking || pickup ? 'p3.pickupTextBooking' : 'p3.pickupText')}
           </p>
-          {pickup && (
+          {pickup && addressChoice && (
+            <fieldset className="pp-fieldset pp-addresschoice" data-testid="address-choice">
+              <legend className="pp-label pp-legend">{t('p3.addressLegend')}</legend>
+              <label className="pp-check">
+                <input type="radio" name="pp-address" checked={addressSource === 'order'} onChange={() => setAddressSource('order')} />
+                <span>{t('p3.addressSame', { place: samePlace() })}</span>
+              </label>
+              <label className="pp-check">
+                <input type="radio" name="pp-address" checked={addressSource === 'custom'} onChange={() => setAddressSource('custom')} />
+                <span>{t('p3.addressDifferent')}</span>
+              </label>
+            </fieldset>
+          )}
+          {customChosen && (
+            <div className="pp-address" data-testid="custom-address">
+              <div className="pp-field">
+                <label htmlFor="pp-gov" className="pp-label">{t('p3.governorateLabel')}</label>
+                <select
+                  id="pp-gov" className="pp-input" required aria-invalid={!customCityId}
+                  value={customCityId}
+                  onChange={e => { setCustomCityId(e.target.value); setCustomAreaId('') }}
+                >
+                  <option value="" disabled>{t('p3.governoratePlaceholder')}</option>
+                  {cities.map(c => (
+                    <option key={c.id} value={c.id}>{lang === 'ar' ? c.nameAr || c.name : c.name}</option>
+                  ))}
+                </select>
+              </div>
+              <div className="pp-field">
+                <label htmlFor="pp-custom-area" className="pp-label">{t('p3.areaLabel')}</label>
+                <select
+                  id="pp-custom-area" className="pp-input" required
+                  aria-invalid={!!customCityId && !customArea}
+                  aria-busy={loadedDistricts?.state === 'loading'}
+                  disabled={!customCityId || loadedDistricts?.state !== 'ok' || loadedDistricts.districts.length === 0}
+                  value={customArea}
+                  onChange={e => setCustomAreaId(e.target.value)}
+                >
+                  <option value="" disabled>
+                    {!customCityId ? t('p3.areaChooseGovernorate')
+                      : loadedDistricts?.state === 'ok' ? t('p3.areaPlaceholder') : t('p3.areaLoading')}
+                  </option>
+                  {loadedDistricts?.state === 'ok' && groupByZone(loadedDistricts.districts, lang).map(g => {
+                    const options = g.districts.map(d => (
+                      <option key={d.id} value={d.id}>{lang === 'ar' ? d.nameAr || d.name : d.name}</option>
+                    ))
+                    return g.zone ? <optgroup key={g.zone} label={g.zone}>{options}</optgroup> : options
+                  })}
+                </select>
+                {loadedDistricts?.state === 'error' && (
+                  <p className="pp-fielderror" role="alert">
+                    {t('p3.areaLoadError')}{' '}
+                    <button type="button" className="pp-inlinelink" onClick={() => setDistrictsAttempt(n => n + 1)}>
+                      {t('p3.areaRetry')}
+                    </button>
+                  </p>
+                )}
+                {loadedDistricts?.state === 'ok' && loadedDistricts.districts.length === 0 && (
+                  <p className="pp-fielderror" role="alert">{t('p3.areaNone')}</p>
+                )}
+              </div>
+              <div className="pp-field">
+                <label htmlFor="pp-street" className="pp-label">{t('p3.streetLabel')}</label>
+                <input
+                  id="pp-street" className="pp-input" type="text" autoComplete="address-line1" dir="auto" required
+                  maxLength={LINE_MAX} placeholder={t('p3.streetPlaceholder')}
+                  aria-invalid={streetTouched && streetError != null}
+                  aria-describedby={streetTouched && streetError ? 'pp-street-error' : undefined}
+                  value={street} onChange={e => setStreet(e.target.value)} onBlur={() => setStreetTouched(true)}
+                />
+                {streetTouched && streetError && (
+                  <p id="pp-street-error" className="pp-fielderror">{t(`p3.${streetError}`)}</p>
+                )}
+              </div>
+              <div className="pp-row3">
+                <ShortField id="pp-building" label={t('p3.buildingLabel')} value={building} onChange={setBuilding} />
+                <ShortField id="pp-floor" label={t('p3.floorLabel')} value={floor} onChange={setFloor} />
+                <ShortField id="pp-apartment" label={t('p3.apartmentLabel')} value={apartment} onChange={setApartment} />
+              </div>
+              <div className="pp-field">
+                <label htmlFor="pp-landmark" className="pp-label">
+                  {t('p3.landmarkLabel')} <span className="pp-optional">{t('common.optional')}</span>
+                </label>
+                <input
+                  id="pp-landmark" className="pp-input" type="text" autoComplete="address-line2" dir="auto"
+                  maxLength={LINE_MAX} placeholder={t('p3.landmarkPlaceholder')}
+                  value={landmark} onChange={e => setLandmark(e.target.value)}
+                />
+              </div>
+            </div>
+          )}
+          {pickup && !customChosen && (
             <>
               <div className="pp-field">
                 <label htmlFor="pp-city" className="pp-label">{t('p3.cityLabel')}</label>
@@ -690,7 +873,7 @@ export default function PortalApp({ slug }: { slug: string | null }) {
           </div>
         )}
 
-        <button type="button" className="pp-btn pp-btn--primary" disabled={sending || areaMissing} aria-busy={sending} onClick={send}>
+        <button type="button" className="pp-btn pp-btn--primary" disabled={sending || addressMissing} aria-busy={sending} onClick={send}>
           {sending ? t('p3.sending') : t('p3.send')}
         </button>
 
@@ -919,6 +1102,20 @@ function VariantPicker({
         )
       })}
     </>
+  )
+}
+
+/** V117 — building / floor / apartment: short, optional. */
+function ShortField({ id, label, value, onChange }: { id: string; label: string; value: string; onChange: (v: string) => void }) {
+  const { t } = useTranslation()
+  return (
+    <div className="pp-field">
+      <label htmlFor={id} className="pp-label">
+        {label} <span className="pp-optional">{t('common.optional')}</span>
+      </label>
+      <input id={id} className="pp-input" type="text" dir="auto" maxLength={SHORT_MAX}
+        value={value} onChange={e => onChange(e.target.value)} />
+    </div>
   )
 }
 

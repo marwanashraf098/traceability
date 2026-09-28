@@ -166,6 +166,12 @@ public class PortalService {
         if (pickup != null && exchangesEnabled(tenantId)) {
             pickup.put("exchangeDistrictIds", pickupAreas.exchangeDistrictIds(offer.get().cityId()));
         }
+        // V117: the cities a customer can choose for a different pickup address — every Bosta city
+        // with a pickup-available district (names and ids only; the districts come per city from
+        // GET /portal/{slug}/districts). Never a street address.
+        if (pickup != null) {
+            pickup.put("cities", pickupAreas.pickupCities().stream().map(PickupAreaService.City::toJson).toList());
+        }
         body.put("pickup", pickup);
         return new LookupResult(Outcome.SUCCESS, body);
     }
@@ -179,6 +185,38 @@ public class PortalService {
         boolean booking = Boolean.TRUE.equals(jdbc.queryForObject(
             "SELECT portal_pickup_booking FROM tenants WHERE id = ?", Boolean.class, tenantId));
         return booking ? pickupAreas.forOrder(tenantId, orderId) : Optional.empty();
+    }
+
+    // ── V117: districts for a different pickup address ─────────────────────────────
+
+    public enum DistrictsOutcome { OK, UNAUTHORIZED }
+
+    public record DistrictsResult(DistrictsOutcome outcome, Map<String, Object> body) {}
+
+    /**
+     * GET /api/v1/portal/{slug}/districts?cityId=…[&mode=exchange] — a city's pickup-available
+     * districts (and, for an exchange, only those Bosta can also deliver to), grouped by zone in
+     * order. Auth = the lookup token for this slug's tenant. Reference data only (bosta_districts);
+     * an unknown city, or a store that doesn't book pickups, gets an empty list. Empty Optional for
+     * an unknown/disabled slug.
+     */
+    public Optional<DistrictsResult> districts(String slug, String bearerToken, String cityId, boolean exchange) {
+        UUID tenantId = resolveTenant(slug);
+        if (tenantId == null) return Optional.empty();
+        if (tokens.verify(bearerToken, tenantId).isEmpty()) {
+            return Optional.of(new DistrictsResult(DistrictsOutcome.UNAUTHORIZED, null));
+        }
+        return Optional.of(new DistrictsResult(DistrictsOutcome.OK, TenantContext.runAs(tenantId, () -> tx.execute(s -> {
+            boolean booking = Boolean.TRUE.equals(jdbc.queryForObject(
+                "SELECT portal_pickup_booking FROM tenants WHERE id = ?", Boolean.class, tenantId));
+            Optional<PickupAreaService.CityAreas> areas = booking
+                ? pickupAreas.forCity(cityId, null, exchange) : Optional.empty();
+            Map<String, Object> body = new LinkedHashMap<>();
+            body.put("cityId", cityId);
+            body.put("districts", areas.map(a -> a.districts().stream().map(PickupAreaService.District::toJson).toList())
+                .orElse(List.of()));
+            return body;
+        }))));
     }
 
     /**
@@ -334,7 +372,12 @@ public class PortalService {
      * Step 5b: mode 'exchange' (default 'refund') with replacementVariantId and refundFallbackOk.
      */
     public record SubmitRequest(List<SubmitLine> lines, String email, String note, String districtId,
-                                String mode, UUID replacementVariantId, Boolean refundFallbackOk) {
+                                String mode, UUID replacementVariantId, Boolean refundFallbackOk,
+                                String addressSource, CustomAddress customAddress) {
+        public SubmitRequest(List<SubmitLine> lines, String email, String note, String districtId,
+                             String mode, UUID replacementVariantId, Boolean refundFallbackOk) {
+            this(lines, email, note, districtId, mode, replacementVariantId, refundFallbackOk, null, null);
+        }
         public SubmitRequest(List<SubmitLine> lines, String email, String note, String districtId) {
             this(lines, email, note, districtId, null, null, null);
         }
@@ -342,7 +385,20 @@ public class PortalService {
             this(lines, email, note, null);
         }
         boolean exchange() { return "exchange".equals(mode); }
+        boolean customAddressChosen() { return "custom".equals(addressSource); }
     }
+
+    /**
+     * V117 — a different pickup address typed by the customer: the city and area (validated
+     * against bosta_districts like the order's area) plus the street (required, more than 5
+     * characters) and optional landmark (secondLine), building, floor and apartment. PII —
+     * never logged, never returned by a public endpoint.
+     */
+    public record CustomAddress(String cityId, String districtId, String firstLine, String secondLine,
+                                String buildingNumber, String floor, String apartment) {}
+
+    static final int CUSTOM_LINE_MAX = 250;
+    static final int CUSTOM_SHORT_MAX = 20;
 
     public record SubmitResult(SubmitOutcome outcome, Map<String, Object> body) {}
 
@@ -447,9 +503,18 @@ public class PortalService {
         }
 
         // Step 4c-2: the pickup area, re-derived from scratch (never trusted from the lookup).
-        Optional<PickupAreaService.CityAreas> offer = pickupOffer(tenantId, orderId);
+        // V117: or the city + area of a different address the customer typed.
+        if (req.addressSource() != null && !"order".equals(req.addressSource()) && !req.customAddressChosen()) {
+            throw new InvalidSubmission();
+        }
+        Optional<PickupAreaService.CityAreas> offer = req.customAddressChosen()
+            ? customAddressArea(tenantId, req, replacement != null) : pickupOffer(tenantId, orderId);
+        CustomAddress custom = req.customAddressChosen() ? cleanCustomAddress(req.customAddress()) : null;
         PickupAreaService.District district = null;
-        if (offer.isPresent()) {
+        if (custom != null) {
+            // Already filtered to pickup (and, for an exchange, drop-off) available districts.
+            district = offer.get().find(custom.districtId()).orElseThrow(InvalidSubmission::new);
+        } else if (offer.isPresent()) {
             district = offer.get().find(req.districtId()).orElseThrow(InvalidSubmission::new);
             // Step 5c: an exchange courier delivers and collects — the district must allow both.
             if (replacement != null && !pickupAreas.exchangeDistrictIds(offer.get().cityId()).contains(district.id())) {
@@ -464,8 +529,10 @@ public class PortalService {
         UUID requestId = jdbc.queryForObject(
             "INSERT INTO return_requests (tenant_id, order_id, type, status, reference, customer_email, customer_note, " +
             "    decided_at, pickup_city_id, pickup_city_name, pickup_district_id, pickup_district_name, " +
-            "    pickup_district_name_ar, refund_fallback_ok) " +
-            "VALUES (?, ?, ?, ?::return_request_status, ?, ?, ?, CASE WHEN ? THEN now() END, ?, ?, ?, ?, ?, ?) RETURNING id",
+            "    pickup_district_name_ar, refund_fallback_ok, pickup_address_source, custom_first_line, " +
+            "    custom_second_line, custom_building_number, custom_floor, custom_apartment) " +
+            "VALUES (?, ?, ?, ?::return_request_status, ?, ?, ?, CASE WHEN ? THEN now() END, ?, ?, ?, ?, ?, ?, " +
+            "        ?, ?, ?, ?, ?, ?) RETURNING id",
             UUID.class, tenantId, orderId, replacement == null ? "refund" : "exchange",
             autoApprove ? "approved" : "requested", reference, email, note, autoApprove,
             district == null ? null : offer.get().cityId(),
@@ -473,7 +540,13 @@ public class PortalService {
             district == null ? null : district.id(),
             district == null ? null : district.name(),
             district == null ? null : district.nameAr(),
-            replacement != null && Boolean.TRUE.equals(req.refundFallbackOk()));
+            replacement != null && Boolean.TRUE.equals(req.refundFallbackOk()),
+            custom == null ? "order" : "custom",
+            custom == null ? null : custom.firstLine(),
+            custom == null ? null : custom.secondLine(),
+            custom == null ? null : custom.buildingNumber(),
+            custom == null ? null : custom.floor(),
+            custom == null ? null : custom.apartment());
         for (Object[] it : items) {
             jdbc.update(
                 "INSERT INTO return_request_items (tenant_id, request_id, piece_id, variant_id, reason_code, " +
@@ -496,6 +569,43 @@ public class PortalService {
             body.put("_bookRequestId", requestId);   // internal — removed before the response
         }
         return body;
+    }
+
+    /**
+     * V117 — the chosen city's areas for a different address: only when the store books Bosta
+     * pickups; pickup-available districts, and for an exchange also drop-off-available (the same
+     * rule as the order's area). An unknown city, or a city with none, is invalid.
+     */
+    private Optional<PickupAreaService.CityAreas> customAddressArea(UUID tenantId, SubmitRequest req, boolean exchange) {
+        CustomAddress a = req.customAddress();
+        if (a == null || a.cityId() == null || a.districtId() == null) throw new InvalidSubmission();
+        boolean booking = Boolean.TRUE.equals(jdbc.queryForObject(
+            "SELECT portal_pickup_booking FROM tenants WHERE id = ?", Boolean.class, tenantId));
+        if (!booking) throw new InvalidSubmission();
+        Optional<PickupAreaService.CityAreas> areas = pickupAreas.forCity(a.cityId().trim(), null, exchange);
+        if (areas.isEmpty()) throw new InvalidSubmission();
+        return areas;
+    }
+
+    /** V117 — trimmed, blanks to null; street required and longer than 5 characters; length caps. */
+    private static CustomAddress cleanCustomAddress(CustomAddress a) {
+        String first = blankToNull(a.firstLine());
+        if (first == null || first.length() <= 5 || first.length() > CUSTOM_LINE_MAX) throw new InvalidSubmission();
+        String second = blankToNull(a.secondLine());
+        String building = blankToNull(a.buildingNumber());
+        String floor = blankToNull(a.floor());
+        String apartment = blankToNull(a.apartment());
+        if (second != null && second.length() > CUSTOM_LINE_MAX) throw new InvalidSubmission();
+        for (String shortField : new String[]{building, floor, apartment}) {
+            if (shortField != null && shortField.length() > CUSTOM_SHORT_MAX) throw new InvalidSubmission();
+        }
+        return new CustomAddress(a.cityId().trim(), a.districtId().trim(), first, second, building, floor, apartment);
+    }
+
+    private static String blankToNull(String s) {
+        if (s == null) return null;
+        String t = s.trim();
+        return t.isEmpty() ? null : t;
     }
 
     /**

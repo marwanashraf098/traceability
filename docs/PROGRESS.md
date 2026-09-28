@@ -4,6 +4,31 @@
 
 ## Current state
 
+**Portal custom pickup address — V117 (2026-09-28, branch `feature/portal-custom-address`, not merged, not deployed).**
+The customer chooses the delivery address (default, unchanged) or "A different address" (refunds and exchanges).
+- **V117:** `return_requests.pickup_address_source` ('order' | 'custom', default 'order') + `custom_first_line`,
+  `custom_second_line` (landmark), `custom_building_number`, `custom_floor`, `custom_apartment`, `custom_address_redacted_at`.
+  Shape CHECK: 'order' rows carry no custom_*; 'custom' rows need a street > 5 chars unless redacted (then all NULL).
+  pickup_city_* / pickup_district_* keep holding the chosen area for both sources. MigrationSmokeTest 116, NotTracedBackfillTest 61.
+- **Public API:** lookup `pickup.cities` (every Bosta city with a pickup-available district — only inside the existing
+  `pickup` object, i.e. when booking is on AND the delivery city was offered). New `GET /portal/{slug}/districts?cityId=…
+  [&mode=exchange]` (lookup token as Bearer; 401 without / other tenant's token; empty when booking off or unknown city;
+  RlsCoverageTest EXEMPT). Submit `addressSource` 'custom' + cityId/districtId/firstLine (+ secondLine/buildingNumber/
+  floor/apartment): booking must be on, district of that city, pickup-available (+ drop-off for an exchange), street
+  6–250 chars, short fields ≤ 20. 'order' / absent = today's path.
+- **Booking:** `loadContext` swaps the address block for the custom_* columns (same field names) — type 25 pickupAddress,
+  type 30 dropOffAddress; receiver, city/district, everything else unchanged; missing-street message names the typed address.
+- **Drawer:** detail `pickupAddressSource` + `customAddress` (only for 'custom'); `CustomAddressBlock` under Pickup (refund)
+  and Area (exchange view), "Customer entered a new address"; "Change area" unchanged (area within the snapshot city only).
+- **GDPR:** customers/redact (same transaction, by orders_to_redact) and shop/redact (tenant-wide) clear custom_* and stamp
+  custom_address_redacted_at. Note: they still do not clear return_requests.customer_email / customer_note (pre-existing;
+  not in scope — flagged).
+- **Portal P3:** "Pickup address" radio (shown only when pickup.cities is present) → governorate / area (by zone) / street /
+  building / floor / apartment / landmark; Send disabled until complete; 401 on districts → back to start ("expired").
+- Tests: PortalCustomAddressTest (12, incl. app_user cross-tenant + positive control, redaction, schema), new booking tests in
+  ReturnPickupBookingTest / PortalExchangeBookingTest, PortalPickupAreaTest key list + "cities" (approved);
+  portalCustomAddress.test.tsx (7), customAddressDrawer.test.tsx (5). Frontend 548/548.
+
 **Transfers "+ New transfer" chooser (2026-09-28, branch `feature/transfers-new-chooser`, uncommitted, not deployed).** UX only — no backend, createTransfer, mode, scan-out, reconcile or close change. `Transfers.tsx`: Relocate / Return header buttons removed; one "+ New transfer" (header + empty state) is `loading`/disabled until the destination + ever-relocated checks resolve, then opens `NewTransferChooser` (existing `Modal`) with the unchanged gating (Send out and back always; Move to another location if a destination exists; Bring back if also a relocate_out ever existed) — one visible option skips the modal. Type column: relocate_out → "Move to another location", relocate_return → "Bring back", round_trip → its category. i18n: `transfers.new` "New transfer"; `transfers.relocate/return.action` removed; relocate/return title, submit and scanOutSubtitle renamed; new `transfers.chooser.*` (EN+AR). `EmptyState` action gained optional `loading`. tl1 edited (approved) to go through the chooser and wait for the checks; new `transfersNewChooser.test.tsx` (6, revert-checked). Frontend 542/542, tsc + build clean. Screenshots EN/AR taken headless against `vite preview` with mocked API. Noticed (not fixed, likely pre-existing): the Modal backdrop leaves a ~16px uncovered strip at the top of the viewport. Next (separate Step 0): cancel/void for empty transfers (3 stuck in prod), Bring-back piece checkboxes, Modal accessibility. Copy follow-up (same day): `transfers.create.title` → "Send out and back" / "إرسال واسترجاع"; relocate close-confirm → "Close this move?" / "إغلاق عملية النقل هذه؟"; EN `transfers.return.description` / `noPieces` no longer say "relocated". Left as is (not Transfers page): `lookup.phrase.relocated_out` "Relocated to {{location}} — no longer pickable". Still 542/542, tsc + build clean.
 
 **Meta pixel SPA fix (2026-09-28, merged to main, not deployed).** Live bug: after

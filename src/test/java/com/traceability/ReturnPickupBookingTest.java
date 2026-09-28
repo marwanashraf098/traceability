@@ -316,6 +316,40 @@ class ReturnPickupBookingTest {
         }
     }
 
+    @Test
+    void payload_customAddress_sentAsPickupAddress_restUnchanged_readBackVerified() {
+        // V117: the customer typed a different pickup address in the portal.
+        Req r = approvedRequest(a, "#1049", 1);
+        jdbc.update("UPDATE return_requests SET pickup_address_source = 'custom', custom_first_line = '7 New Street, Heliopolis', " +
+                    "custom_second_line = 'Behind the mosque', custom_building_number = '7B', custom_floor = NULL, " +
+                    "custom_apartment = '12' WHERE id = ?", r.id());
+
+        booking.book(r.id(), a.id());
+
+        assertThat(POSTS).hasSize(1);
+        JsonNode p = POSTS.get(0);
+        assertThat(fieldNames(p)).containsExactlyInAnyOrder("type", "cod", "pickupAddress", "businessLocationId",
+            "receiver", "businessReference", "uniqueBusinessReference", "returnSpecs", "returnNotes");
+        assertThat(p.path("type").asInt()).isEqualTo(25);
+        assertThat(fieldNames(p.path("pickupAddress"))).as("floor left empty is not sent")
+            .containsExactlyInAnyOrder("firstLine", "secondLine", "buildingNumber", "apartment", "city", "districtId");
+        assertThat(p.path("pickupAddress").path("firstLine").asText()).isEqualTo("7 New Street, Heliopolis");
+        assertThat(p.path("pickupAddress").path("secondLine").asText()).isEqualTo("Behind the mosque");
+        assertThat(p.path("pickupAddress").path("buildingNumber").asText()).isEqualTo("7B");
+        assertThat(p.path("pickupAddress").path("apartment").asText()).isEqualTo("12");
+        assertThat(p.path("pickupAddress").path("city").asText()).isEqualTo("Cairo");
+        assertThat(p.path("pickupAddress").path("districtId").asText()).isEqualTo(NASR);
+        assertThat(p.toString()).as("the delivery address is not sent").doesNotContain("Placeholder Street");
+        assertThat(p.path("receiver").path("firstName").asText()).isEqualTo("Mona");
+        assertThat(p.path("receiver").path("phone").asText()).isEqualTo("01000000001");
+        assertThat(p.path("businessReference").asText()).isEqualTo("#1049");
+        assertThat(p.has("dropOffAddress")).isFalse();
+
+        Map<String, Object> row = row(r.id());
+        assertThat(row).containsEntry("booking_status", "booked");
+        assertThat(row.get("booking_verified_at")).as("read-back district check unchanged").isNotNull();
+    }
+
     // ── Idempotency ───────────────────────────────────────────────────────────
 
     @Test

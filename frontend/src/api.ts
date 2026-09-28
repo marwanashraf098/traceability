@@ -2172,6 +2172,16 @@ export interface RefundSuggestion {
     unitPrice: string | null; lineTotal: string | null }>
 }
 
+/** V117 — a pickup address typed in the portal. Fields are null once removed for a privacy request. */
+export interface CustomPickupAddress {
+  firstLine: string | null
+  secondLine: string | null
+  buildingNumber: string | null
+  floor: string | null
+  apartment: string | null
+  redacted: boolean
+}
+
 export interface ReturnRequestDetail {
   id: string
   reference: string
@@ -2194,6 +2204,10 @@ export interface ReturnRequestDetail {
   pickupDistrictId: string | null
   pickupDistrictName: string | null
   pickupDistrictNameAr: string | null
+  /** V117 — 'order' (the delivery address) or 'custom' (the customer typed a different address). */
+  pickupAddressSource?: 'order' | 'custom'
+  /** V117 — present only when pickupAddressSource is 'custom'. */
+  customAddress?: CustomPickupAddress
   /** Step 4c-3 — the Bosta return pickup booking. */
   bookingStatus?: BookingStatus | null
   bookingError?: string | null
