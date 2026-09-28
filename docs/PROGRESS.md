@@ -4,7 +4,19 @@
 
 ## Current state
 
-**Meta Pixel on the marketing site (2026-09-28, on main, not deployed).**
+**Meta signup attribution — Build A (2026-09-28, on main, not deployed).** Marketing + legal only.
+- `route-desktop.js` / `route-mobile.js` keep `location.search` (+ hash) on the desktop↔mobile redirect — previously a phone
+  visitor from an ad lost `fbclid` before the pixel ran, so `_fbc` was never set.
+- `assets/js/signup-params.js` (both pages, external — CSP `script-src 'self'`): one delegated click/auxclick listener copies
+  `fbclid` + `utm_source|medium|campaign|term|content` from the page URL onto any `https://app.tracedtech.com/signup` link at
+  click time (covers the JS-rendered pricing buttons; never overwrites a param already on the link).
+- Privacy policy §4/§6/§10 draft (Meta Pixel disclosure, Meta Platforms in the sub-processor table) — in the working tree,
+  NOT committed, awaiting Marawan's review. `PolicyVersions.PRIVACY` NOT bumped (his decision): a bump only changes the version
+  stored for NEW signups + shown in Settings → Business → consent; there is no re-consent prompt anywhere.
+- Next: Build B (app CSP widen, metaPixel.ts on Signup only + CompleteRegistration eventID `reg-<tenantId>`, V116
+  `tenant_ad_attribution`; client_ip/user_agent retention = clear after ShopifyConnected sent or 90 days — design only).
+
+**Meta Pixel on the marketing site (2026-09-28, on main, DEPLOYED 2026-09-28 — verified in Events Manager).**
 `marketing/index.html` + `marketing/mobile.html` only. Pixel 1837033837461823: base code in `assets/js/meta-pixel.js`
 (PageView), Lead on any click of a `calendly.com` link via one delegated listener in `assets/js/meta-pixel-lead.js`.
 External files, not inline — the tracedtech.com CSP is `script-src 'self'`. Base code sits right AFTER the
