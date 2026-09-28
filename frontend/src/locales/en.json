@@ -738,7 +738,7 @@
       "sold_offbook": "Marked sold off-book at vendor",
       "lost_at_vendor": "Marked lost at vendor",
       "label_reprinted": "Label reprinted",
-      "relocated_out": "Relocated to {{location}} — no longer pickable",
+      "relocated_out": "Moved to {{location}} — can't be picked until brought back",
       "return_transfer_out": "Sent out on return to {{location}}",
       "voided": "Voided — removed from sellable stock",
       "held": "Placed on hold",
@@ -2315,8 +2315,7 @@
       "toLocked": "Fulfillment warehouse",
       "noFulfillmentLocation": "No fulfillment warehouse found",
       "sourceRequired": "Select a source location",
-      "pieces": "Pieces at this location",
-      "selectAll": "Select all",
+      "pieces": "Pieces at this location — scan the ones you're bringing back next.",
       "noPieces": "No moved pieces at this location",
       "submit": "Start bringing back",
       "scanOutSubtitle": "Bring back — send out"
@@ -2327,7 +2326,7 @@
       "all": "All"
     },
     "summary": {
-      "open": "Open",
+      "sent": "Sent",
       "reconciling": "Reconciling",
       "outstanding": "Pieces Outstanding"
     },
@@ -2339,9 +2338,11 @@
       "outstanding": "Outstanding"
     },
     "status": {
-      "open": "Open",
+      "preparing": "Preparing",
+      "sent": "Sent",
       "reconciling": "Reconciling",
-      "closed": "Closed"
+      "closed": "Closed",
+      "cancelled": "Cancelled"
     },
     "type": {
       "showroom": "Showroom",
@@ -2372,7 +2373,7 @@
       "title": "Send Out",
       "placeholder": "Scan piece barcode…",
       "notFound": "Transfer not found",
-      "notOpenTitle": "This transfer is no longer open for send-out",
+      "notOpenTitle": "This transfer isn't accepting scans anymore.",
       "viewTransfer": "View transfer",
       "progress": "Send-out progress",
       "recent": "Recent scans",
@@ -2394,7 +2395,6 @@
       "closedTitle": "This transfer is closed",
       "scanOutMore": "Scan Out More",
       "beginReconcile": "Begin Reconcile",
-      "beginReconcileDisabledTooltip": "No outstanding pieces to reconcile",
       "continueReconcile": "Continue Reconcile",
       "closeOneWay": "Close",
       "closeOneWayDisabledTooltip": "No outstanding pieces to close",
@@ -2414,7 +2414,14 @@
         "sold": "Sold",
         "lost": "Lost",
         "outstanding": "Outstanding"
-      }
+      },
+      "markSent": "Mark as sent",
+      "markSentDisabledTooltip": "Scan at least one piece first",
+      "markSentDone": "Marked as sent",
+      "cancelTransfer": "Cancel transfer",
+      "cancelConfirmBody": "Cancel this transfer? Nothing was scanned on it.",
+      "cancelKeep": "Keep it",
+      "cancelledTitle": "This transfer was cancelled."
     },
     "reconcile": {
       "title": "Reconcile",

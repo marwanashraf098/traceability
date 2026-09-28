@@ -221,6 +221,7 @@ class TransferRelocateTest {
             "showroom", destinationLocationId, null, "control", actorId);
         String pieceId = insertAvailablePiece();
         transferSvc.scanOut(transferId, "PC-" + pieceId, actorId);
+        transferSvc.markSent(transferId, actorId);
         transferSvc.beginReconcile(transferId, actorId);
         transferSvc.reconcileScanBack(transferId, "PC-" + pieceId, "good", actorId);
         transferSvc.closeTransfer(transferId, actorId);

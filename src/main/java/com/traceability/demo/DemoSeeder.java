@@ -861,7 +861,7 @@ public class DemoSeeder {
      * "transferred_out", reconcileScanBack()'s "returned_from_transfer"/
      * "condemned_at_vendor", outcome values 'returned_good'/'condemned').
      *
-     * Transfer 1 — open, showroom: 2 pieces still out (outcome NULL, status
+     * Transfer 1 — sent (V118; was 'open'), showroom: 2 pieces still out (outcome NULL, status
      * out_on_transfer, current_location_id = the showroom) — this is what
      * transfer_pieces_one_active (UNIQUE (piece_id) WHERE outcome IS NULL) protects, and
      * why these pieces are never touched by any other insert method.
@@ -875,14 +875,16 @@ public class DemoSeeder {
         UUID creator = workerIds.get(0);
         UUID closer = workerIds.get(1);
 
-        // Transfer 1 — open, round_trip, 2 pieces still out.
+        // Transfer 1 — sent, round_trip, 2 pieces still out. Explicit status: the column
+        // default is 'preparing' (V118), which is only right for a transfer with nothing out.
         UUID openTransferId = UUID.randomUUID();
         ojdbc.update(
                 "INSERT INTO transfers (id, tenant_id, transfer_type, transfer_mode, " +
-                "                       destination_location_id, note, created_by, created_at) " +
-                "VALUES (?, ?, 'showroom', 'round_trip', ?, 'Window display rotation', ?, " +
-                "        now() - interval '3 days')",
-                openTransferId, tenantId, destinationLocationId, creator);
+                "                       destination_location_id, status, note, created_by, created_at, " +
+                "                       sent_at, sent_by) " +
+                "VALUES (?, ?, 'showroom', 'round_trip', ?, 'sent', 'Window display rotation', ?, " +
+                "        now() - interval '3 days', now() - interval '3 days', ?)",
+                openTransferId, tenantId, destinationLocationId, creator, creator);
 
         for (int i = 0; i < 2; i++) {
             UUID variantId = variantIds.get(i);

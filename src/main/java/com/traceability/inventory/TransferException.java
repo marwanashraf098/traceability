@@ -12,8 +12,12 @@ public class TransferException extends RuntimeException {
 
     public enum Code {
         TRANSFER_NOT_FOUND,
-        TRANSFER_NOT_OPEN,
+        TRANSFER_NOT_PREPARING,
+        TRANSFER_NOT_SENT,
         TRANSFER_NOT_RECONCILING,
+        TRANSFER_HAS_PIECES,
+        TRANSFER_EMPTY,
+        TRANSFER_WRONG_MODE,
         TRANSFER_LINE_NOT_FOUND,
         SHORTFALL_INVALID_COUNTS,
         SHORTFALL_EMPTY_REQUEST,

@@ -186,6 +186,7 @@ class TransferReprintTest {
         String resolvedPieceId = jdbc.queryForObject(
             "SELECT piece_id FROM transfer_pieces WHERE transfer_id = ? ORDER BY created_at ASC LIMIT 1",
             String.class, transferId);
+        transferSvc.markSent(transferId, ownerId);
         transferSvc.beginReconcile(transferId, ownerId);
         transferSvc.reconcileScanBack(transferId, "PC-" + resolvedPieceId, "good", ownerId);
 
@@ -211,6 +212,7 @@ class TransferReprintTest {
         UUID transferId = openTransferWithOutstanding(1);
         String pieceId = jdbc.queryForObject(
             "SELECT piece_id FROM transfer_pieces WHERE transfer_id = ?", String.class, transferId);
+        transferSvc.markSent(transferId, ownerId);
         transferSvc.beginReconcile(transferId, ownerId);
         transferSvc.reconcileScanBack(transferId, "PC-" + pieceId, "good", ownerId);
 

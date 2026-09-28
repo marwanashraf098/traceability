@@ -1645,7 +1645,7 @@ async function transferCommandRequest<T>(path: string, opts: RequestInit = {}): 
   return res.json()
 }
 
-export type TransferStatus = 'open' | 'reconciling' | 'closed'
+export type TransferStatus = 'preparing' | 'sent' | 'reconciling' | 'closed' | 'cancelled'
 export type TransferType = 'showroom' | 'dryclean' | 'repair' | 'other'
 export const TRANSFER_TYPES: TransferType[] = ['showroom', 'dryclean', 'repair', 'other']
 export type TransferCondition = 'good' | 'condemned'
@@ -1792,7 +1792,7 @@ export interface TransferSummary {
 
 export type TransferListView = 'open' | 'closed' | 'all'
 
-/** view: 'open' (open+reconciling, the default) | 'closed' | 'all' — the closed-view toggle. */
+/** view: 'open' (preparing + sent + reconciling, the default) | 'closed' (closed + cancelled) | 'all'. */
 export function listOpenTransfers(view: TransferListView = 'open') {
   return request<TransferSummary[]>(`/transfers?status=${view}`)
 }
@@ -1821,6 +1821,12 @@ export interface TransferDetail {
   created_at: string
   closed_by: string | null
   closed_at: string | null
+  sent_at: string | null
+  sent_by: string | null
+  cancelled_at: string | null
+  cancelled_by: string | null
+  reconcile_started_at: string | null
+  reconcile_started_by: string | null
   destination_location_id: string
   destination_location_name: string
   /** Set only for transfer_mode='relocate_return' — the return's origin B. */
@@ -1828,10 +1834,23 @@ export interface TransferDetail {
   source_location_name: string | null
   lines: TransferLine[]
   outstandingCount: number
+  /** Every piece ever scanned onto the transfer, whatever its outcome — Mark as sent needs
+   *  at least 1, Cancel needs 0. */
+  piecesEverCount: number
 }
 
 export function getTransfer(transferId: string) {
   return request<TransferDetail>(`/transfers/${transferId}`)
+}
+
+/** preparing → sent (round_trip / relocate_return, at least one piece scanned). */
+export function markTransferSent(transferId: string) {
+  return transferCommandRequest<void>(`/transfers/${transferId}/mark-sent`, { method: 'POST' })
+}
+
+/** preparing → cancelled, only while nothing was ever scanned onto the transfer. */
+export function cancelTransfer(transferId: string) {
+  return transferCommandRequest<void>(`/transfers/${transferId}/cancel`, { method: 'POST' })
 }
 
 export function beginReconcileTransfer(transferId: string) {
@@ -1853,7 +1872,7 @@ export function closeTransferSession(transferId: string) {
   return transferCommandRequest<void>(`/transfers/${transferId}/close`, { method: 'POST' })
 }
 
-/** relocate_out only — open → closed directly, no reconcile stage. */
+/** relocate_out only — preparing → closed directly, no reconcile stage. */
 export function closeOneWayTransfer(transferId: string) {
   return transferCommandRequest<void>(`/transfers/${transferId}/close-one-way`, { method: 'POST' })
 }

@@ -156,6 +156,7 @@ class TransferReconcileTest {
     void beginReconcile_openTransfer_movesToReconciling() {
         UUID transferId = openTransferWithOutstanding(1);
 
+        transferSvc.markSent(transferId, actorId);
         transferSvc.beginReconcile(transferId, actorId);
 
         String status = jdbc.queryForObject("SELECT status FROM transfers WHERE id = ?", String.class, transferId);
@@ -165,6 +166,7 @@ class TransferReconcileTest {
     @Test
     void beginReconcile_alreadyReconciling_rejectsWithNoStateChange() {
         UUID transferId = openTransferWithOutstanding(1);
+        transferSvc.markSent(transferId, actorId);
         transferSvc.beginReconcile(transferId, actorId);
 
         assertThatThrownBy(() -> transferSvc.beginReconcile(transferId, actorId))
@@ -188,6 +190,7 @@ class TransferReconcileTest {
     void reconcileScanBack_good_setsAvailableAndFulfillmentLocationAndVerifiedMetadata() {
         UUID transferId = openTransferWithOutstanding(1);
         String pieceId = outstandingPieceId(transferId);
+        transferSvc.markSent(transferId, actorId);
         transferSvc.beginReconcile(transferId, actorId);
 
         TransferService.ScanBackResult result =
@@ -224,6 +227,7 @@ class TransferReconcileTest {
     void reconcileScanBack_condemned_setsDamagedWithVendorAttribution() {
         UUID transferId = openTransferWithOutstanding(1);
         String pieceId = outstandingPieceId(transferId);
+        transferSvc.markSent(transferId, actorId);
         transferSvc.beginReconcile(transferId, actorId);
 
         TransferService.ScanBackResult result =
@@ -255,7 +259,9 @@ class TransferReconcileTest {
 
     @Test
     void reconcileScanBack_pieceNotOutstandingOnThisTransfer_cleanErrorNoMutation() {
-        UUID transferId = openTransferWithOutstanding(0);
+        // One piece of its own: an empty transfer can't be marked sent (V118), so it can't reconcile.
+        UUID transferId = openTransferWithOutstanding(1);
+        transferSvc.markSent(transferId, actorId);
         transferSvc.beginReconcile(transferId, actorId);
         // A piece that exists but was never sent out on ANY transfer.
         String pieceId = insertAvailablePiece();
@@ -275,7 +281,9 @@ class TransferReconcileTest {
     void reconcileScanBack_pieceOutstandingOnAnotherTransfer_cleanErrorNoMutation() {
         UUID transferA = openTransferWithOutstanding(1);
         String pieceId = outstandingPieceId(transferA);
-        UUID transferB = openTransferWithOutstanding(0);
+        // One piece of its own: an empty transfer can't be marked sent (V118), so it can't reconcile.
+        UUID transferB = openTransferWithOutstanding(1);
+        transferSvc.markSent(transferB, actorId);
         transferSvc.beginReconcile(transferB, actorId);
 
         TransferService.ScanBackResult result =
@@ -290,7 +298,7 @@ class TransferReconcileTest {
     void reconcileScanBack_transferNotReconciling_rejects() {
         UUID transferId = openTransferWithOutstanding(1);
         String pieceId = outstandingPieceId(transferId);
-        // Still 'open' — beginReconcile never called.
+        // Still 'preparing' — beginReconcile never called.
 
         TransferService.ScanBackResult result =
             transferSvc.reconcileScanBack(transferId, "PC-" + pieceId, "good", actorId);
@@ -315,6 +323,7 @@ class TransferReconcileTest {
         String third  = insertAvailablePiece();
         transferSvc.scanOut(transferId, "PC-" + third, actorId);
 
+        transferSvc.markSent(transferId, actorId);
         transferSvc.beginReconcile(transferId, actorId);
         UUID lineId = lineIdFor(transferId);
 
@@ -331,6 +340,7 @@ class TransferReconcileTest {
     void classifyShortfall_lost_setsLostWithUnverifiedVendorAttribution() {
         UUID transferId = openTransferWithOutstanding(1);
         String pieceId = outstandingPieceId(transferId);
+        transferSvc.markSent(transferId, actorId);
         transferSvc.beginReconcile(transferId, actorId);
         UUID lineId = lineIdFor(transferId);
 
@@ -359,6 +369,7 @@ class TransferReconcileTest {
     void classifyShortfall_condemnedNotReturned_setsDamagedUnverified() {
         UUID transferId = openTransferWithOutstanding(1);
         String pieceId = outstandingPieceId(transferId);
+        transferSvc.markSent(transferId, actorId);
         transferSvc.beginReconcile(transferId, actorId);
         UUID lineId = lineIdFor(transferId);
 
@@ -379,6 +390,7 @@ class TransferReconcileTest {
         // the Phase-3 vendor-loss report. lost/condemned_not_returned DO carry it (above).
         UUID transferId = openTransferWithOutstanding(1);
         String pieceId = outstandingPieceId(transferId);
+        transferSvc.markSent(transferId, actorId);
         transferSvc.beginReconcile(transferId, actorId);
         UUID lineId = lineIdFor(transferId);
 
@@ -400,7 +412,7 @@ class TransferReconcileTest {
     void classifyShortfall_transferNotReconciling_rejects() {
         UUID transferId = openTransferWithOutstanding(1);
         UUID lineId = lineIdFor(transferId);
-        // Still 'open' — beginReconcile never called.
+        // Still 'preparing' — beginReconcile never called.
 
         assertThatThrownBy(() -> transferSvc.classifyShortfall(transferId, lineId,
                 new TransferService.ShortfallCounts(1, 0, 0), actorId))
@@ -415,6 +427,7 @@ class TransferReconcileTest {
     @Test
     void classifyShortfall_exceedsRemainingOutstanding_rejectsWithNoMutation() {
         UUID transferId = openTransferWithOutstanding(2);
+        transferSvc.markSent(transferId, actorId);
         transferSvc.beginReconcile(transferId, actorId);
         UUID lineId = lineIdFor(transferId);
 
@@ -432,6 +445,7 @@ class TransferReconcileTest {
     void classifyShortfall_accountsForAlreadyScannedBackPieces() {
         UUID transferId = openTransferWithOutstanding(3);
         String scannedBackPiece = outstandingPieceId(transferId);
+        transferSvc.markSent(transferId, actorId);
         transferSvc.beginReconcile(transferId, actorId);
         transferSvc.reconcileScanBack(transferId, "PC-" + scannedBackPiece, "good", actorId);
         UUID lineId = lineIdFor(transferId);
@@ -458,6 +472,7 @@ class TransferReconcileTest {
     @Test
     void closeTransfer_withOutstandingPieces_rejects() {
         UUID transferId = openTransferWithOutstanding(1);
+        transferSvc.markSent(transferId, actorId);
         transferSvc.beginReconcile(transferId, actorId);
 
         assertThatThrownBy(() -> transferSvc.closeTransfer(transferId, actorId))
@@ -470,6 +485,7 @@ class TransferReconcileTest {
     @Test
     void closeTransfer_dryclean_fullReturn_allGoodClosesCleanly() {
         UUID transferId = openTransferWithOutstanding(3);
+        transferSvc.markSent(transferId, actorId);
         transferSvc.beginReconcile(transferId, actorId);
 
         for (int i = 0; i < 3; i++) {
@@ -495,6 +511,7 @@ class TransferReconcileTest {
         // Showroom scenario from the spec's test list: out 10 -> 6 good + 1 condemned
         // (scanned back) + 3 sold (classified) -> line balances, transfer closes.
         UUID transferId = openTransferWithOutstanding(10);
+        transferSvc.markSent(transferId, actorId);
         transferSvc.beginReconcile(transferId, actorId);
 
         for (int i = 0; i < 6; i++) {
@@ -533,6 +550,7 @@ class TransferReconcileTest {
         UUID openTransferId = openTransferWithOutstanding(1);
 
         UUID reconcilingTransferId = openTransferWithOutstanding(5);
+        transferSvc.markSent(reconcilingTransferId, actorId);
         transferSvc.beginReconcile(reconcilingTransferId, actorId);
         // Resolve 2 of 5 mid-reconcile — outstanding_count must reflect exactly 3 remaining,
         // not the original qty_out and not zero.
@@ -542,6 +560,7 @@ class TransferReconcileTest {
         }
 
         UUID closedTransferId = openTransferWithOutstanding(1);
+        transferSvc.markSent(closedTransferId, actorId);
         transferSvc.beginReconcile(closedTransferId, actorId);
         String onlyPieceId = outstandingPieceId(closedTransferId);
         transferSvc.reconcileScanBack(closedTransferId, "PC-" + onlyPieceId, "good", actorId);
@@ -579,6 +598,7 @@ class TransferReconcileTest {
             assertThat(n).isEqualTo(1);
         }
 
+        transferSvc.markSent(transferId, actorId);
         transferSvc.beginReconcile(transferId, actorId);
         transferSvc.reconcileScanBack(transferId, "PC-" + pieceIds.get(0), "good", actorId);
         transferSvc.reconcileScanBack(transferId, "PC-" + pieceIds.get(1), "condemned", actorId);
@@ -624,6 +644,7 @@ class TransferReconcileTest {
         assertThat(transferPieceOutcome(transferId, pieceId))
             .as("transfer_pieces row must stay unresolved, not orphaned").isNull();
 
+        transferSvc.markSent(transferId, actorId);
         transferSvc.beginReconcile(transferId, actorId);
         assertThatThrownBy(() -> transferSvc.closeTransfer(transferId, actorId))
             .as("closeTransfer must still correctly block on the still-outstanding piece")
@@ -646,6 +667,7 @@ class TransferReconcileTest {
         assertThat(transferPieceOutcome(transferId, pieceId))
             .as("transfer_pieces row must stay unresolved, not orphaned").isNull();
 
+        transferSvc.markSent(transferId, actorId);
         transferSvc.beginReconcile(transferId, actorId);
         assertThatThrownBy(() -> transferSvc.closeTransfer(transferId, actorId))
             .isInstanceOf(TransferException.class)
@@ -667,6 +689,7 @@ class TransferReconcileTest {
         assertThat(transferPieceOutcome(transferId, pieceId))
             .as("transfer_pieces row must stay unresolved, not orphaned").isNull();
 
+        transferSvc.markSent(transferId, actorId);
         transferSvc.beginReconcile(transferId, actorId);
         assertThatThrownBy(() -> transferSvc.closeTransfer(transferId, actorId))
             .isInstanceOf(TransferException.class)

@@ -34,6 +34,7 @@ vi.mock('../api', async (importOriginal) => {
     createTransfer: vi.fn(),
     getTransfer: vi.fn(),
     scanOutTransferPiece: vi.fn(),
+    markTransferSent: vi.fn(),
     beginReconcileTransfer: vi.fn(),
     scanBackTransferPiece: vi.fn(),
     classifyTransferShortfall: vi.fn(),
@@ -55,7 +56,8 @@ function resetState() {
   state = {
     id: TRANSFER_ID,
     transfer_type: 'repair',
-    status: 'open',
+    transfer_mode: 'round_trip',
+    status: 'preparing',
     note: null,
     expected_return_at: null,
     created_by: 'user-1',
@@ -66,6 +68,7 @@ function resetState() {
     destination_location_name: 'Vendor A',
     lines: [],
     outstandingCount: 0,
+    piecesEverCount: 0,
   }
 }
 
@@ -95,7 +98,7 @@ describe('FR-22.9 — Transfers full lifecycle', () => {
     vi.mocked(api.getTransfer).mockImplementation(() => Promise.resolve(structuredClone(state)))
 
     vi.mocked(api.createTransfer).mockImplementation(async () => {
-      state.status = 'open'
+      state.status = 'preparing'
       return { id: TRANSFER_ID }
     })
 
@@ -111,12 +114,17 @@ describe('FR-22.9 — Transfers full lifecycle', () => {
       }
       line.qty_out += 1
       state.outstandingCount += 1
+      state.piecesEverCount += 1
       pieceCounter += 1
       return {
         success: true, code: 'SCANNED', message_en: null, message_ar: null,
         pieceId: `piece-${pieceCounter}`, barcode, variantId: VARIANT_ID,
         lineId: LINE_ID, qtyOut: line.qty_out,
       }
+    })
+
+    vi.mocked(api.markTransferSent).mockImplementation(async () => {
+      state.status = 'sent'
     })
 
     vi.mocked(api.beginReconcileTransfer).mockImplementation(async () => {
@@ -196,9 +204,15 @@ describe('FR-22.9 — Transfers full lifecycle', () => {
     const doneBtn = screen.getByText('Done — View Transfer')
     await user.click(doneBtn)
 
-    // ── 3. Detail: begin reconcile ───────────────────────────────────────────
+    // ── 3. Detail: mark as sent, then begin reconcile ────────────────────────
     await waitFor(() => expect(screen.getByTestId('outstanding-headline')).toHaveTextContent('3'))
-    const beginBtn = screen.getByText('Begin Reconcile')
+    expect(screen.queryByText('Begin Reconcile')).not.toBeInTheDocument()
+    await user.click(screen.getByText('Mark as sent'))
+    await waitFor(() => expect(api.markTransferSent).toHaveBeenCalledWith(TRANSFER_ID))
+    expect(state.status).toBe('sent')
+
+    const beginBtn = await screen.findByText('Begin Reconcile')
+    expect(screen.queryByText('Scan Out More')).not.toBeInTheDocument()
     expect(beginBtn.closest('button')).not.toBeDisabled()
     await user.click(beginBtn)
 
@@ -256,12 +270,12 @@ describe('Transfers summary tiles', () => {
     vi.mocked(api.getRoleFromToken).mockReturnValue('owner')
   })
 
-  test('ts1 — tiles derive open/reconciling/outstanding from the already-fetched list, zero renders as 0', async () => {
+  test('ts1 — tiles derive sent/reconciling/outstanding from the already-fetched list, zero renders as 0', async () => {
     vi.mocked(api.listOpenTransfers).mockResolvedValue([
-      { id: 't1', transfer_type: 'showroom', status: 'open', note: null, expected_return_at: null,
+      { id: 't1', transfer_type: 'showroom', status: 'sent', note: null, expected_return_at: null,
         created_by: 'u1', created_at: new Date().toISOString(),
         destination_location_id: 'd1', destination_location_name: 'Vendor A', outstanding_count: 3 },
-      { id: 't2', transfer_type: 'repair', status: 'open', note: null, expected_return_at: null,
+      { id: 't2', transfer_type: 'repair', status: 'sent', note: null, expected_return_at: null,
         created_by: 'u1', created_at: new Date().toISOString(),
         destination_location_id: 'd2', destination_location_name: 'Vendor B', outstanding_count: 2 },
       { id: 't3', transfer_type: 'dryclean', status: 'reconciling', note: null, expected_return_at: null,
@@ -275,8 +289,8 @@ describe('Transfers summary tiles', () => {
     )
 
     const tiles = await screen.findByTestId('transfers-summary')
-    expect(within(tiles).getByText('Open')).toBeInTheDocument()
-    expect(within(tiles).getByText('2')).toBeInTheDocument() // open count
+    expect(within(tiles).getByText('Sent')).toBeInTheDocument()
+    expect(within(tiles).getByText('2')).toBeInTheDocument() // sent count
     expect(within(tiles).getByText('Reconciling')).toBeInTheDocument()
     expect(within(tiles).getAllByText('1').length).toBeGreaterThan(0) // reconciling count
     expect(within(tiles).getByText('Pieces Outstanding')).toBeInTheDocument()
@@ -302,7 +316,7 @@ describe('Transfers summary tiles', () => {
   test('ts3 RTL layout — tiles render without crash under dir=rtl', async () => {
     await i18n.changeLanguage('ar')
     vi.mocked(api.listOpenTransfers).mockResolvedValue([
-      { id: 't1', transfer_type: 'showroom', status: 'open', note: null, expected_return_at: null,
+      { id: 't1', transfer_type: 'showroom', status: 'sent', note: null, expected_return_at: null,
         created_by: 'u1', created_at: new Date().toISOString(),
         destination_location_id: 'd1', destination_location_name: 'Vendor A', outstanding_count: 5 },
     ])
@@ -330,7 +344,7 @@ describe('Transfer detail — relocate line table (FR-22.10)', () => {
       id: 'transfer-x',
       transfer_type: 'other',
       transfer_mode: 'round_trip',
-      status: 'open',
+      status: 'preparing',
       note: null,
       expected_return_at: null,
       created_by: 'u1',
@@ -345,6 +359,7 @@ describe('Transfer detail — relocate line table (FR-22.10)', () => {
         qty_out: 5, qty_returned_good: 0, qty_condemned: 0, qty_sold: 0, qty_lost: 0,
       }],
       outstandingCount: 5,
+      piecesEverCount: 5,
       ...overrides,
     }
   }

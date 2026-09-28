@@ -76,7 +76,7 @@ export default function TransferScanOut() {
     )
   }
 
-  if (transfer.status !== 'open') {
+  if (transfer.status !== 'preparing') {
     return (
       <div className="flex flex-col items-center justify-center h-screen bg-base gap-4 px-6 text-center">
         <p className="text-danger text-body">{t('transfers.scanOut.notOpenTitle')}</p>

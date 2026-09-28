@@ -193,6 +193,7 @@ class TransferRelocateReturnTest {
         assertThat(returnScanOut.success()).as("returnScanOut must accept a transferred_out piece at its own source").isTrue();
         assertThat(fetchStatus(pieceId)).isEqualTo("out_on_transfer");
 
+        transferSvc.markSent(returnTransferId, ownerId);
         transferSvc.beginReconcile(returnTransferId, ownerId);
         TransferService.ScanBackResult scanBack =
             transferSvc.reconcileScanBack(returnTransferId, "PC-" + pieceId, "good", ownerId);
