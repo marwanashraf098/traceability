@@ -155,8 +155,18 @@ describe('FR-22.9 — Transfers full lifecycle', () => {
     renderApp(['/transfers'])
 
     // ── 1. Create ──────────────────────────────────────────────────────────
-    const newBtn = await screen.findByText('+ New Transfer')
-    await user.click(newBtn)
+    // "+ New transfer" stays disabled until the destination / ever-relocated checks
+    // resolve; wait for that explicitly. With one destination and no relocate history
+    // there are two options, so it opens the chooser — pick "Send out and back".
+    // The list is empty, so the empty state carries the same button; the header's
+    // comes first in the DOM.
+    await waitFor(() => {
+      const btns = screen.getAllByRole('button', { name: '+ New transfer' })
+      expect(btns).toHaveLength(2)
+      btns.forEach(b => expect(b).not.toBeDisabled())
+    })
+    await user.click(screen.getAllByRole('button', { name: '+ New transfer' })[0])
+    await user.click(await screen.findByTestId('chooser-option-create'))
 
     const destTrigger = await screen.findByText('Select destination location…')
     await user.click(destTrigger)

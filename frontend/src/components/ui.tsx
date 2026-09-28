@@ -558,7 +558,7 @@ export function EmptyState({
 }: {
   message: string
   icon?: string
-  action?: { label: string; onClick: () => void }
+  action?: { label: string; onClick: () => void; loading?: boolean }
 }) {
   return (
     <div className="flex flex-col items-center justify-center py-16 gap-3 text-center">
@@ -567,7 +567,7 @@ export function EmptyState({
       </div>
       <p className="text-body font-semibold text-primary">{message}</p>
       {action && (
-        <Button variant="primary" size="sm" onClick={action.onClick} className="mt-1">
+        <Button variant="primary" size="sm" onClick={action.onClick} loading={action.loading} className="mt-1">
           {action.label}
         </Button>
       )}
