@@ -1,4 +1,5 @@
 import { clearAccessToken, getAccessToken, setAccessToken } from './auth'
+import type { SignupAttribution } from './metaPixel'
 
 const BASE = '/api/v1'
 
@@ -523,11 +524,12 @@ export function getJwtExpiry(token: string): number | null {
 // ── Auth: signup ──────────────────────────────────────────────────────────────
 
 export function signup(
-  tenantName: string, name: string, email: string, phone: string, password: string, consent: boolean
+  tenantName: string, name: string, email: string, phone: string, password: string, consent: boolean,
+  attribution?: SignupAttribution
 ) {
   return request<{ accessToken: string }>('/auth/signup', {
     method: 'POST',
-    body: JSON.stringify({ tenantName, name, email, phone, password, consent }),
+    body: JSON.stringify({ tenantName, name, email, phone, password, consent, attribution }),
   })
 }
 

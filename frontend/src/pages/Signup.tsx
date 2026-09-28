@@ -1,10 +1,11 @@
 import { useState, FormEvent, useEffect } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
-import { signup } from '../api'
+import { signup, getTenantIdFromToken } from '../api'
 import { setAccessToken } from '../auth'
 import AuthLayout from '../components/AuthLayout'
 import { Input, Button, Checkbox } from '../components/ui'
+import { loadMetaPixel, readSignupAttribution, trackCompleteRegistration, isInternalEmail } from '../metaPixel'
 
 // Local Egyptian mobile subscriber number, entered after the fixed "+20" prefix
 // (no leading zero, e.g. "1012345678").
@@ -31,6 +32,8 @@ export default function Signup() {
   const [loading,      setLoading]      = useState(false)
 
   useEffect(() => { localStorage.removeItem('token') }, [])
+  // Meta Pixel lives on this page only (never the signed-in app, embedded app or portal).
+  useEffect(() => { loadMetaPixel() }, [])
 
   const phoneDigits = phone.replace(/\s+/g, '').replace(/^0+/, '')
   const phoneValid = EGYPT_LOCAL_MOBILE.test(phoneDigits)
@@ -50,9 +53,13 @@ export default function Signup() {
     setLoading(true)
     try {
       const res = await signup(
-        businessName.trim(), ownerName.trim(), email.trim(), toE164(phone), password, consent
+        businessName.trim(), ownerName.trim(), email.trim(), toE164(phone), password, consent,
+        readSignupAttribution()
       )
       setAccessToken(res.accessToken)
+      // Fires only here, after a successful signup — never on refresh or re-login.
+      const tenantId = getTenantIdFromToken()
+      if (tenantId && !isInternalEmail(email)) trackCompleteRegistration(tenantId)
       navigate('/overview')
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : ''

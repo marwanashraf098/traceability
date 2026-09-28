@@ -8,6 +8,7 @@ import com.traceability.identity.model.PinRequest;
 import com.traceability.identity.model.ResetPasswordRequest;
 import com.traceability.identity.model.SignupRequest;
 import com.traceability.identity.model.TokenResponse;
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
@@ -42,8 +43,9 @@ public class AuthController {
 
     @PostMapping("/signup")
     @ResponseStatus(HttpStatus.CREATED)
-    public AccessTokenResponse signup(@RequestBody SignupRequest req, HttpServletResponse response) {
-        TokenResponse tokens = authService.signup(req);
+    public AccessTokenResponse signup(@RequestBody SignupRequest req, HttpServletRequest request,
+                                      HttpServletResponse response) {
+        TokenResponse tokens = authService.signup(req, request.getRemoteAddr(), request.getHeader(HttpHeaders.USER_AGENT));
         setRefreshCookie(response, tokens.refreshToken(), COOKIE_MAX_AGE);
         return new AccessTokenResponse(tokens.accessToken());
     }

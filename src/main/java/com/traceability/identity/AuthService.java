@@ -1,6 +1,7 @@
 package com.traceability.identity;
 
 import com.traceability.identity.model.LoginRequest;
+import com.traceability.identity.model.SignupAttribution;
 import com.traceability.identity.model.SignupRequest;
 import com.traceability.identity.model.TokenResponse;
 import com.traceability.notifications.WelcomeEmailJob;
@@ -56,6 +57,11 @@ public class AuthService {
     // ---- signup ----
 
     public TokenResponse signup(SignupRequest req) {
+        return signup(req, null, null);
+    }
+
+    /** clientIp / userAgent are only stored with Meta ad attribution (never for @tracedtech.com). */
+    public TokenResponse signup(SignupRequest req, String clientIp, String userAgent) {
         if (req.email() == null || req.password() == null || req.tenantName() == null) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "tenantName, email, password required");
         }
@@ -75,6 +81,9 @@ public class AuthService {
         UUID userId    = UUID.randomUUID();
         String hash    = encoder.encode(req.password());
         Timestamp acceptedAt = Timestamp.from(Instant.now(clock));
+        // Our own team's accounts (App Store reviewers, internal tests) are never attributed.
+        SignupAttribution attribution = isInternalEmail(req.email())
+                ? null : SignupAttribution.from(req.attribution(), clientIp, userAgent);
 
         // runAs sets TenantContext so the @Transactional createTenantWithOwner fires GUC.
         // A rollback (e.g. duplicate email) throws out of runAs, so the enqueue below is
@@ -82,12 +91,16 @@ public class AuthService {
         TokenResponse tokens = TenantContext.runAs(tenantId, () -> {
             repo.createTenantWithOwner(tenantId, req.tenantName(), userId,
                     req.name(), req.email(), phone, hash,
-                    PolicyVersions.PRIVACY, PolicyVersions.TERMS, acceptedAt);
+                    PolicyVersions.PRIVACY, PolicyVersions.TERMS, acceptedAt, attribution);
             String refresh = repo.storeRefreshToken(userId, tenantId);
             return new TokenResponse(jwt.issueAccessToken(userId, tenantId, "owner"), refresh);
         });
         jobScheduler.enqueue(() -> welcomeEmailJob.run(req.email(), req.name()));
         return tokens;
+    }
+
+    static boolean isInternalEmail(String email) {
+        return email != null && email.trim().toLowerCase(java.util.Locale.ROOT).endsWith("@tracedtech.com");
     }
 
     /**

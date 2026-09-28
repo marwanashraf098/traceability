@@ -1,8 +1,13 @@
 package com.traceability.identity;
 
+import com.traceability.identity.model.SignupAttribution;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
+import org.springframework.transaction.TransactionStatus;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.interceptor.TransactionAspectSupport;
 
 import java.security.MessageDigest;
 import java.security.SecureRandom;
@@ -24,6 +29,7 @@ import java.util.UUID;
 @Repository
 public class AuthRepository {
 
+    private static final Logger log = LoggerFactory.getLogger(AuthRepository.class);
     private static final SecureRandom RANDOM = new SecureRandom();
 
     private final JdbcTemplate jdbc;
@@ -36,13 +42,17 @@ public class AuthRepository {
         this.refreshTokenDays = refreshTokenDays;
     }
 
-    /** Creates tenant + owner user + default Main Warehouse in one transaction. */
+    /**
+     * Creates tenant + owner user + default Main Warehouse in one transaction, plus the
+     * tenant's Meta ad attribution row when there is one (null = none).
+     */
     @Transactional
     public UUID createTenantWithOwner(UUID tenantId, String tenantName,
                                       UUID userId, String name, String email, String phone,
                                       String passwordHash,
                                       String privacyVersion, String termsVersion,
-                                      java.sql.Timestamp acceptedAt) {
+                                      java.sql.Timestamp acceptedAt,
+                                      SignupAttribution attribution) {
         jdbc.update(
                 "INSERT INTO tenants (id, name, plan, status) VALUES (?, ?, 'trial', 'trial')",
                 tenantId, tenantName);
@@ -57,7 +67,29 @@ public class AuthRepository {
                 "INSERT INTO locations (id, tenant_id, name, type, is_default, is_fulfillment) " +
                 "VALUES (gen_random_uuid(), ?, 'Main Warehouse', 'warehouse', true, true)",
                 tenantId);
+        if (attribution != null) insertAttribution(tenantId, attribution);
         return userId;
+    }
+
+    /**
+     * Behind a savepoint: attribution data must never fail a signup, so a failed insert is
+     * rolled back on its own and the tenant/user/location above still commit.
+     */
+    private void insertAttribution(UUID tenantId, SignupAttribution a) {
+        TransactionStatus tx = TransactionAspectSupport.currentTransactionStatus();
+        Object savepoint = tx.createSavepoint();
+        try {
+            jdbc.update(
+                    "INSERT INTO tenant_ad_attribution " +
+                    "(tenant_id, fbp, fbc, fbclid, utm_source, utm_medium, utm_campaign, utm_term, utm_content, " +
+                    " client_ip, client_user_agent) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    tenantId, a.fbp(), a.fbc(), a.fbclid(), a.utmSource(), a.utmMedium(), a.utmCampaign(),
+                    a.utmTerm(), a.utmContent(), a.clientIp(), a.clientUserAgent());
+            tx.releaseSavepoint(savepoint);
+        } catch (RuntimeException e) {
+            tx.rollbackToSavepoint(savepoint);
+            log.warn("Signup ad attribution not stored for tenant {}: {}", tenantId, e.getClass().getSimpleName());
+        }
     }
 
     /** Stores a new refresh token; returns the raw (un-hashed) token string. */
