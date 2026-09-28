@@ -4,7 +4,7 @@
 
 ## Current state
 
-**Meta signup attribution — Build B (2026-09-28, branch `feature/meta-signup-attribution`, not merged, not deployed).**
+**Meta signup attribution — Build B (2026-09-28, merged to main, not deployed).**
 - **nginx:** app.tracedtech.com CSP + `https://connect.facebook.net` (script-src) and `https://www.facebook.com
   https://connect.facebook.net` (img-src, connect-src). `'unsafe-inline'` untouched (still there — separate change).
 - **Frontend:** `src/metaPixel.ts`, imported ONLY by `pages/Signup.tsx`: loads fbevents.js on mount (init + PageView, no
@@ -20,8 +20,9 @@
   **Retention (design only):** clear client_ip + client_user_agent once `connected_event_sent_at` is set or 90 days after
   `captured_at`, whichever first. `SignupAdAttributionTest` (7, incl. app_user RLS + same-tenant positive control).
   MigrationSmokeTest 115, NotTracedBackfillTest 60.
-- **Gotcha:** `AuthIntegrationTest.signupWithConsentPersistsVersionsAndTimestamp` hard-codes `"1.0"` for both versions —
-  red since bd4babc (1.0→1.1), not from the 1.2 bump. Awaiting approval to point it at `PolicyVersions.*`.
+- **Fixed (approved):** `AuthIntegrationTest.signupWithConsentPersistsVersionsAndTimestamp` hard-coded `"1.0"` (red since
+  bd4babc) — now compares against `PolicyVersions.PRIVACY/TERMS`. `tenant_ad_attribution` added to MigrationSmokeTest's
+  tenant-table list. Full suite: 1624 run, only the known reds remain (ExchangeBackfillTest, ShopifyMagicLinkTest).
 - Next: ShopifyConnected Conversions API job (reads this table, stamps connected_event_sent_at) + the retention sweep.
 
 **Meta signup attribution — Build A (2026-09-28, on main `440c480` + `dbf1974`, pushed, not deployed).** Marketing + legal only.

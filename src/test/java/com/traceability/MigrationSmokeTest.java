@@ -59,7 +59,8 @@ class MigrationSmokeTest {
             "return_refunds",
             "portal_lookup_attempts",
             "exchanges",
-            "order_notes"
+            "order_notes",
+            "tenant_ad_attribution"
     );
 
     @Test
