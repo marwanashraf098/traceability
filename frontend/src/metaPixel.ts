@@ -15,6 +15,7 @@ type Fbq = ((...args: unknown[]) => void) & {
   push: Fbq
   loaded: boolean
   version: string
+  disablePushState?: boolean
 }
 
 declare global {
@@ -44,6 +45,12 @@ export function loadMetaPixel(): void {
     s.src = SCRIPT_SRC
     document.head.appendChild(s)
   }
+  // The pixel must stay on the signup page only. fbevents.js otherwise (1) fires a PageView on
+  // every SPA history change — so it kept tracking into /overview after signup — and (2) runs
+  // automatic events / button-click detection. Both are switched off before init; the only
+  // events sent are this explicit PageView and CompleteRegistration.
+  window.fbq!.disablePushState = true
+  window.fbq!('set', 'autoConfig', false, PIXEL_ID)
   window.fbq!('init', PIXEL_ID)
   window.fbq!('track', 'PageView')
 }
