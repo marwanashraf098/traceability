@@ -10,9 +10,11 @@ import type { BookingStatus, PortalSettings, ReturnRequestDetail, ReturnRequestR
 
 // The drawer's booking refresh: after Retry / Book now / "It wasn't booked — retry" /
 // confirm-by-tracking it shows "Booking…" at once, then refreshes the request (now, then every
-// 2 s, at most 15 times) until the booking settles — not 'pending' and either a new attempt was
-// recorded (bookingAttemptedAt moved) or it is booked / needs review — refreshing the Requests
-// list at the start and at the end, and stops when the drawer closes. Fake timers.
+// 2 s, at most 23 times, ~45 s) until the booking settles — not 'pending' and either a new attempt
+// was recorded (bookingAttemptedAt moved) or it is booked / needs review. Giving up before the job
+// started (bookingAttemptedAt unchanged) keeps "Booking…". The Requests list is refreshed at the
+// start, when the booking status changes, at the end, and once when the drawer closes mid-refresh;
+// the refresh stops when the drawer closes. Fake timers.
 
 vi.mock('../api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../api')>()
@@ -80,6 +82,8 @@ function withBooking(status: ReturnRequestDetail['status'], bookingStatus: Booki
 
 const detailGets = () => calls.filter(c => c.method === 'GET' && c.url.endsWith('/return-requests/rr-1')).length
 const listGets = () => calls.filter(c => c.method === 'GET' && c.url.includes('/return-requests?')).length
+/** The Requests table's own fetch — a list refresh also re-fetches the two size=1 header counts. */
+const tableGets = () => calls.filter(c => c.method === 'GET' && c.url.includes('/return-requests?') && !/[?&]size=1(&|$)/.test(c.url)).length
 
 beforeEach(async () => {
   vi.useFakeTimers({ shouldAdvanceTime: true })
@@ -136,16 +140,29 @@ describe('Drawer → booking refresh after an action', () => {
     expect(listAtEnd).toBeGreaterThanOrEqual(listBefore + 2)              // … and refreshed the list again at the end
   })
 
-  test('stays pending → gives up after 15 refreshes (~30 s)', async () => {
+  test('stays pending → gives up after 23 refreshes (~45 s)', async () => {
     script = [withBooking('approved', 'pending')]
     const { user, drawer } = await openDrawer()
     const before = detailGets()
     await user.click(within(drawer).getByRole('button', { name: 'Retry' }))
     await within(drawer).findByTestId('booking-pending')
-    await tick(40000)
-    expect(detailGets() - before).toBe(15)
+    await tick(60000)
+    expect(detailGets() - before).toBe(23)
     await tick(10000)
-    expect(detailGets() - before).toBe(15)
+    expect(detailGets() - before).toBe(23)
+  })
+
+  test('gives up before the job started → still Booking…, never the pre-retry failure', async () => {
+    script = [detail]   // the stale 'failed' with the same bookingAttemptedAt: the job never ran
+    const { user, drawer } = await openDrawer()
+    const before = detailGets()
+    await user.click(within(drawer).getByRole('button', { name: 'Retry' }))
+    await within(drawer).findByTestId('booking-pending')
+    await tick(60000)
+    expect(detailGets() - before).toBe(23)
+    expect(within(drawer).getByTestId('booking-pending')).toHaveTextContent('Booking…')
+    expect(within(drawer).queryByTestId('booking-failed')).toBeNull()
+    expect(within(drawer).queryByText(/HTTP 500/)).toBeNull()
   })
 
   test('closing the drawer stops the refresh', async () => {
@@ -159,6 +176,42 @@ describe('Drawer → booking refresh after an action', () => {
     const atClose = detailGets()
     await tick(20000)
     expect(detailGets()).toBe(atClose)
+  })
+
+  test('closing the drawer mid-refresh refreshes the Requests list once', async () => {
+    script = [detail]
+    const { user, drawer } = await openDrawer()
+    await user.click(within(drawer).getByRole('button', { name: 'Retry' }))
+    await within(drawer).findByTestId('booking-pending')
+    await tick()
+    const tableBeforeClose = tableGets()
+    await user.click(within(drawer).getByRole('button', { name: 'Close' }))
+    await waitFor(() => expect(tableGets()).toBe(tableBeforeClose + 1))
+    await tick(20000)
+    expect(tableGets()).toBe(tableBeforeClose + 1)
+  })
+
+  test('the Requests list refreshes when the booking status changes, not on every refresh', async () => {
+    const pending = withBooking('approved', 'pending', { bookingAttemptedAt: '2026-09-28T09:05:00Z' })
+    script = [detail, detail, pending, pending, pending,
+      withBooking('pickup_booked', 'booked', { bostaTrackingNumber: '5100000011', bookingAttemptedAt: '2026-09-28T09:05:00Z' })]
+    const { user, drawer } = await openDrawer()
+    const tableBefore = tableGets()
+    await user.click(within(drawer).getByRole('button', { name: 'Retry' }))
+    await within(drawer).findByTestId('booking-pending')
+    await waitFor(() => expect(tableGets()).toBe(tableBefore + 1))           // start
+    await tick()                                                          // still the stale 'failed'
+    expect(tableGets()).toBe(tableBefore + 1)
+    await tick()                                                          // failed → pending: the job started
+    await waitFor(() => expect(tableGets()).toBe(tableBefore + 2))
+    await tick()
+    await tick()                                                          // still pending
+    expect(tableGets()).toBe(tableBefore + 2)
+    await tick()                                                          // booked: the end refresh
+    expect(await within(drawer).findByTestId('booking-booked')).toHaveTextContent('Booked · 5100000011')
+    await waitFor(() => expect(tableGets()).toBe(tableBefore + 3))
+    await tick(10000)
+    expect(tableGets()).toBe(tableBefore + 3)
   })
 
   test('"It wasn\'t booked — retry": Booking… until the new attempt fails, then its reason', async () => {

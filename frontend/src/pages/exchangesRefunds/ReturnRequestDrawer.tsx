@@ -169,17 +169,37 @@ function DrawerContent({
   }, [load, onChanged])
 
   // After Retry / Book now / "It wasn't booked — retry" / confirm-by-tracking: show "Booking…" at
-  // once, then refresh the request (now, then every 2 s, up to ~30 s) until the booking settles —
-  // no longer 'pending' AND either a new attempt was recorded (booking_attempted_at moved; a
-  // retry's first refresh can still show the old 'failed' before the job claims it) or it is
-  // booked / needs review. The Requests list is refreshed at the start and when it settles.
-  // Stops when the drawer closes (unmount) or another request opens.
+  // once, then refresh the request (now, then every 2 s, up to ~45 s) until the booking settles.
+  //
+  // "Started" is read from booking_attempted_at, never from the status or error text: the booking
+  // job writes it on every run (its claim → 'pending', or a precondition failure → 'failed'), so
+  // while it still equals the value from before the action the job hasn't run and a 'failed' /
+  // empty status is the stale pre-action one. Confirm-by-tracking is synchronous and lands as
+  // booked / needs review. Settled = not 'pending' AND (started OR booked / needs review).
+  // Giving up while not started keeps "Booking…" (the other fields are still refreshed).
+  //
+  // The Requests list is refreshed at the start, whenever the server's booking status changes
+  // during the refresh, when it settles or gives up, and once if the drawer closes (or another
+  // request opens) mid-refresh.
   const pollToken = useRef(0)
-  useEffect(() => () => { pollToken.current++ }, [requestId])
+  const pollActive = useRef(false)
+  const onChangedRef = useRef(onChanged)
+  onChangedRef.current = onChanged
+  useEffect(() => () => {
+    pollToken.current++
+    if (pollActive.current) {
+      pollActive.current = false
+      onChangedRef.current()
+    }
+  }, [requestId])
   const startBookingPoll = useCallback(() => {
     const token = ++pollToken.current
+    pollActive.current = true
     const before = detail?.bookingAttemptedAt ?? null
-    setDetail(d => (d ? { ...d, bookingStatus: 'pending', bookingError: null, bookNowAvailable: false } : d))
+    let lastStatus = detail?.bookingStatus ?? null
+    const showBooking = (x: ReturnRequestDetail): ReturnRequestDetail =>
+      ({ ...x, bookingStatus: 'pending', bookingError: null, bookNowAvailable: false })
+    setDetail(d => (d ? showBooking(d) : d))
     onChanged()
     let attempts = 0
     const tick = async () => {
@@ -188,20 +208,28 @@ function DrawerContent({
       let d: ReturnRequestDetail | null = null
       try { d = await getReturnRequest(requestId) } catch { /* try again on the next tick */ }
       if (pollToken.current !== token) return
+      const started = d != null && (d.bookingAttemptedAt ?? null) !== before
       const settled = d != null && d.bookingStatus !== 'pending'
-        && ((d.bookingAttemptedAt ?? null) !== before || d.bookingStatus === 'booked' || d.bookingStatus === 'needs_review')
-      if (d && (settled || attempts >= BOOKING_POLL_MAX)) {
-        setDetail(d)
-        onLoaded(d)
+        && (started || d.bookingStatus === 'booked' || d.bookingStatus === 'needs_review')
+      const done = settled || attempts >= BOOKING_POLL_MAX
+      if (d && done) {
+        const shown = settled || started ? d : showBooking(d)
+        setDetail(shown)
+        onLoaded(shown)
       }
-      if (settled || attempts >= BOOKING_POLL_MAX) {
+      if (done) {
+        pollActive.current = false
         onChanged()
         return
+      }
+      if (d && (d.bookingStatus ?? null) !== lastStatus) {
+        lastStatus = d.bookingStatus ?? null
+        onChanged()
       }
       setTimeout(tick, BOOKING_POLL_MS)
     }
     void tick()
-  }, [detail?.bookingAttemptedAt, requestId, onChanged, onLoaded])
+  }, [detail?.bookingAttemptedAt, detail?.bookingStatus, requestId, onChanged, onLoaded])
 
   async function lifecycleAction(kind: 'refunded' | 'restNotComing') {
     setLifecycleBusy(kind)
@@ -702,9 +730,9 @@ function LinkParcelPrompt({ detail, onLink }: { detail: ReturnRequestDetail; onL
 }
 
 /** Step 4c-3 — the booking row's state and actions (Step 5c: also the exchange trip's). */
-/** Booking refresh after a booking action: every 2 s, at most 15 refreshes (~30 s). */
+/** Booking refresh after a booking action: every 2 s, at most 23 refreshes (~45 s). */
 const BOOKING_POLL_MS = 2000
-const BOOKING_POLL_MAX = 15
+const BOOKING_POLL_MAX = 23
 
 export function BookingState({ detail, onChanged, onBookingStarted }: {
   detail: ReturnRequestDetail
