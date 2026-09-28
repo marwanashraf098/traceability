@@ -289,10 +289,10 @@ class AuthIntegrationTest {
 
         assertThat(row.get("privacy"))
                 .as("accepted_privacy_version must equal PolicyVersions.PRIVACY")
-                .isEqualTo("1.0");
+                .isEqualTo(com.traceability.identity.PolicyVersions.PRIVACY);
         assertThat(row.get("terms"))
                 .as("accepted_terms_version must equal PolicyVersions.TERMS")
-                .isEqualTo("1.0");
+                .isEqualTo(com.traceability.identity.PolicyVersions.TERMS);
         assertThat(row.get("acceptedAt"))
                 .as("accepted_at must be set")
                 .isNotNull();

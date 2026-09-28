@@ -4,15 +4,37 @@
 
 ## Current state
 
-**Meta signup attribution — Build A (2026-09-28, on main, not deployed).** Marketing + legal only.
+**Meta signup attribution — Build B (2026-09-28, merged to main, not deployed).**
+- **nginx:** app.tracedtech.com CSP + `https://connect.facebook.net` (script-src) and `https://www.facebook.com
+  https://connect.facebook.net` (img-src, connect-src). `'unsafe-inline'` untouched (still there — separate change).
+- **Frontend:** `src/metaPixel.ts`, imported ONLY by `pages/Signup.tsx`: loads fbevents.js on mount (init + PageView, no
+  inline script); signup body gains `attribution` {fbp, fbc (cookies), fbclid, utmSource..utmContent (URL)}; after a
+  successful signup `CompleteRegistration` with eventID `reg-<tenant claim>`, skipped for @tracedtech.com, once per load.
+  `metaPixelEntries.test.ts` walks embedded.html / portal.html import graphs (positive control: index.html reaches it;
+  revert-checked); `signupMetaPixel.test.tsx` (4). Built bundles: only `main-*.js` contains connect.facebook.net.
+- **Backend:** V116 `tenant_ad_attribution` (PK/FK tenant_id ON DELETE CASCADE, RLS NULLIF policy, app_user DELETE/TRUNCATE
+  revoked). `SignupRequest.attribution` is untyped JsonNode (6-arg ctor kept); `SignupAttribution.from()` validates
+  (fbp/fbc/fbclid regex, utm ≤ 200, UA ≤ 512, control chars stripped) → bad values null; row only when there is an ad
+  signal; never for @tracedtech.com. Inserted in `createTenantWithOwner` behind a SAVEPOINT (insert failure → account still
+  created; revert-checked). client_ip = `getRemoteAddr()` (forward-headers native), UA header.
+  **Retention (design only):** clear client_ip + client_user_agent once `connected_event_sent_at` is set or 90 days after
+  `captured_at`, whichever first. `SignupAdAttributionTest` (7, incl. app_user RLS + same-tenant positive control).
+  MigrationSmokeTest 115, NotTracedBackfillTest 60.
+- **Fixed (approved):** `AuthIntegrationTest.signupWithConsentPersistsVersionsAndTimestamp` hard-coded `"1.0"` (red since
+  bd4babc) — now compares against `PolicyVersions.PRIVACY/TERMS`. `tenant_ad_attribution` added to MigrationSmokeTest's
+  tenant-table list. Full suite: 1624 run, only the known reds remain (ExchangeBackfillTest, ShopifyMagicLinkTest).
+- Next: ShopifyConnected Conversions API job (reads this table, stamps connected_event_sent_at) + the retention sweep.
+
+**Meta signup attribution — Build A (2026-09-28, on main `440c480` + `dbf1974`, pushed, not deployed).** Marketing + legal only.
 - `route-desktop.js` / `route-mobile.js` keep `location.search` (+ hash) on the desktop↔mobile redirect — previously a phone
   visitor from an ad lost `fbclid` before the pixel ran, so `_fbc` was never set.
 - `assets/js/signup-params.js` (both pages, external — CSP `script-src 'self'`): one delegated click/auxclick listener copies
   `fbclid` + `utm_source|medium|campaign|term|content` from the page URL onto any `https://app.tracedtech.com/signup` link at
   click time (covers the JS-rendered pricing buttons; never overwrites a param already on the link).
-- Privacy policy §4/§6/§10 draft (Meta Pixel disclosure, Meta Platforms in the sub-processor table) — in the working tree,
-  NOT committed, awaiting Marawan's review. `PolicyVersions.PRIVACY` NOT bumped (his decision): a bump only changes the version
-  stored for NEW signups + shown in Settings → Business → consent; there is no re-consent prompt anywhere.
+- Privacy policy 1.2 (effective 28 September 2026): §4/§6/§10 Meta Pixel disclosure, Meta Platforms in the sub-processor
+  table; `PolicyVersions.PRIVACY` = "1.2". A bump only changes the version stored for NEW signups + shown in
+  Settings → Business → consent; there is no re-consent prompt anywhere. Live only with the next APP deploy (Privacy.tsx
+  bundles the markdown).
 - Next: Build B (app CSP widen, metaPixel.ts on Signup only + CompleteRegistration eventID `reg-<tenantId>`, V116
   `tenant_ad_attribution`; client_ip/user_agent retention = clear after ShopifyConnected sent or 90 days — design only).
 
