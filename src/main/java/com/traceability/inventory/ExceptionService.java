@@ -1,5 +1,6 @@
 package com.traceability.inventory;
 
+import com.traceability.returncases.ReturnCaseRules;
 import com.traceability.tenancy.TenantContext;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
@@ -299,18 +300,13 @@ public class ExceptionService {
             "SELECT 'request_item_to_receive' AS type, 'MEDIUM' AS severity, 'return_request_item' AS subject_type, " +
             "       ri.id AS request_item_id, rr.id AS request_id, rr.reference, o.id AS order_id, o.number AS order_number, " +
             "       pr.title AS product_title, v.title AS variant_title, ri.arrived_at AS occurred_at, " +
-            "       'request_item_to_receive:' || ri.id || ':' || floor(extract(epoch FROM ri.arrived_at))::bigint::text AS subject_key " +
+            "       " + ReturnCaseRules.REQUEST_ITEM_TO_RECEIVE_KEY_SQL + " AS subject_key " +
             "FROM return_request_items ri " +
             "JOIN return_requests rr ON rr.id = ri.request_id AND rr.tenant_id = ri.tenant_id " +
             "JOIN orders o ON o.id = rr.order_id AND o.tenant_id = rr.tenant_id " +
             "JOIN variants v ON v.id = ri.variant_id " +
             "JOIN products pr ON pr.id = v.product_id " +
-            "WHERE ri.tenant_id = ? AND ri.order_item_id IS NOT NULL AND ri.item_status = 'done' " +
-            "  AND ri.arrived_condition = 'sellable' AND ri.arrived_at IS NOT NULL " +
-            "  AND NOT EXISTS (SELECT 1 FROM exception_resolutions er WHERE er.tenant_id = ri.tenant_id " +
-            "      AND er.exception_type = 'request_item_to_receive' " +
-            "      AND er.subject_key = 'request_item_to_receive:' || ri.id || ':' || " +
-            "          floor(extract(epoch FROM ri.arrived_at))::bigint::text)",
+            "WHERE ri.tenant_id = ? AND " + ReturnCaseRules.REQUEST_ITEM_TO_RECEIVE_OPEN_SQL,
             tid);
     }
 
@@ -326,7 +322,7 @@ public class ExceptionService {
             "FROM shipments s " +
             "JOIN orders o ON o.id = s.order_id AND o.tenant_id = s.tenant_id " +
             "LEFT JOIN users u ON u.id = s.return_intake_by " +
-            "WHERE s.tenant_id = ? AND " + ShipmentLinkService.RETURN_TO_RECEIVE_OPEN_SQL,
+            "WHERE s.tenant_id = ? AND " + ReturnCaseRules.RETURN_TO_RECEIVE_OPEN_SQL,
             tid);
     }
 
@@ -344,15 +340,11 @@ public class ExceptionService {
             "       rr.type AS request_type, " +
             "       o.id AS order_id, o.number AS order_number, " +
             "       COALESCE(rr.booking_attempted_at, rr.decided_at) AS occurred_at, " +
-            "       'pickup_booking_problem:' || rr.id || ':' || " +
-            "           COALESCE(floor(extract(epoch FROM rr.booking_attempted_at))::bigint::text, '0') AS subject_key " +
+            "       " + ReturnCaseRules.BOOKING_PROBLEM_KEY_SQL + " AS subject_key " +
             "FROM return_requests rr " +
             "JOIN orders o ON o.id = rr.order_id AND o.tenant_id = rr.tenant_id " +
-            "WHERE rr.tenant_id = ? AND rr.booking_status IN ('failed', 'failed_ambiguous', 'needs_review') " +
-            "  AND NOT EXISTS (SELECT 1 FROM exception_resolutions er " +
-            "      WHERE er.tenant_id = rr.tenant_id AND er.exception_type = 'pickup_booking_problem' " +
-            "        AND er.subject_key = 'pickup_booking_problem:' || rr.id || ':' || " +
-            "            COALESCE(floor(extract(epoch FROM rr.booking_attempted_at))::bigint::text, '0'))",
+            "WHERE rr.tenant_id = ? AND " + ReturnCaseRules.BOOKING_PROBLEM_SQL +
+            "  AND " + ReturnCaseRules.notResolved("pickup_booking_problem", ReturnCaseRules.BOOKING_PROBLEM_KEY_SQL, "rr.tenant_id"),
             tid);
     }
 
@@ -364,25 +356,16 @@ public class ExceptionService {
      * takes the leg out of this list. MEDIUM; subject = the leg.
      */
     private List<Map<String, Object>> detectReturnLinkAmbiguous(UUID tid) {
-        String cand = com.traceability.portal.ReturnRequestLifecycle.linkCandidateSql(
-            "s.tenant_id", "s.order_id", com.traceability.portal.ReturnRequestLifecycle.LEG_BOSTA_CREATED_AT_SQL);
         return jdbc.queryForList(
             "SELECT 'return_link_ambiguous' AS type, 'MEDIUM' AS severity, 'shipment' AS subject_type, " +
             "       s.id AS shipment_id, s.tracking_number, o.id AS order_id, o.number AS order_number, " +
             "       c.refs AS candidate_references, c.first_id AS request_id, " +
-            "       s.created_at AS occurred_at, 'return_link_ambiguous:shipment:' || s.id AS subject_key " +
+            "       s.created_at AS occurred_at, " + ReturnCaseRules.LINK_AMBIGUOUS_KEY_SQL + " AS subject_key " +
             "FROM shipments s " +
             "JOIN orders o ON o.id = s.order_id AND o.tenant_id = s.tenant_id " +
-            "CROSS JOIN LATERAL (SELECT COUNT(*) AS n, " +
-            "       string_agg(rr.reference, ', ' ORDER BY rr.created_at, rr.id) AS refs, " +
-            "       (array_agg(rr.id ORDER BY rr.created_at, rr.id))[1] AS first_id " +
-            "    FROM return_requests rr WHERE " + cand + ") c " +
-            "WHERE s.tenant_id = ? AND s.shipment_leg = 'return' AND c.n >= 2 " +
-            "  AND NOT EXISTS (SELECT 1 FROM return_requests h WHERE h.tenant_id = s.tenant_id " +
-            "                  AND (h.return_shipment_id = s.id OR h.bosta_tracking_number = s.tracking_number)) " +
-            "  AND NOT EXISTS (SELECT 1 FROM exception_resolutions er " +
-            "      WHERE er.tenant_id = s.tenant_id AND er.exception_type = 'return_link_ambiguous' " +
-            "        AND er.subject_key = 'return_link_ambiguous:shipment:' || s.id)",
+            ReturnCaseRules.linkCandidatesLateral("c") +
+            "WHERE s.tenant_id = ? AND " + ReturnCaseRules.LINK_AMBIGUOUS_SQL +
+            "  AND " + ReturnCaseRules.notResolved("return_link_ambiguous", ReturnCaseRules.LINK_AMBIGUOUS_KEY_SQL, "s.tenant_id"),
             tid);
     }
 
@@ -398,14 +381,12 @@ public class ExceptionService {
             "       rr.id AS request_id, rr.reference, o.id AS order_id, o.number AS order_number, " +
             "       floor(extract(epoch FROM now() - rr.refund_pending_at) / 86400)::int AS days, " +
             "       rr.refund_pending_at AS occurred_at, " +
-            "       " + com.traceability.portal.ReturnRequestLifecycle.REFUND_OVERDUE_KEY_SQL + " AS subject_key " +
+            "       " + ReturnCaseRules.REFUND_OVERDUE_KEY_SQL + " AS subject_key " +
             "FROM return_requests rr " +
             "JOIN orders o  ON o.id = rr.order_id AND o.tenant_id = rr.tenant_id " +
             "JOIN tenants t ON t.id = rr.tenant_id " +
-            "WHERE rr.tenant_id = ? AND " + com.traceability.portal.ReturnRequestLifecycle.REFUND_OVERDUE_SQL +
-            "  AND NOT EXISTS (SELECT 1 FROM exception_resolutions er " +
-            "      WHERE er.tenant_id = rr.tenant_id AND er.exception_type = 'refund_pending_overdue' " +
-            "        AND er.subject_key = " + com.traceability.portal.ReturnRequestLifecycle.REFUND_OVERDUE_KEY_SQL + ")",
+            "WHERE rr.tenant_id = ? AND " + ReturnCaseRules.REFUND_OVERDUE_SQL +
+            "  AND " + ReturnCaseRules.notResolved("refund_pending_overdue", ReturnCaseRules.REFUND_OVERDUE_KEY_SQL, "rr.tenant_id"),
             tid);
     }
 
@@ -421,15 +402,13 @@ public class ExceptionService {
             "       rr.id AS request_id, rr.reference, o.id AS order_id, o.number AS order_number, " +
             "       (SELECT COUNT(*) FROM return_request_items i WHERE i.request_id = rr.id " +
             "          AND i.tenant_id = rr.tenant_id AND i.item_status = 'awaiting') AS awaiting, " +
-            "       " + com.traceability.portal.ReturnRequestLifecycle.ITEMS_OVERDUE_ANCHOR_SQL + " AS occurred_at, " +
-            "       'return_items_overdue:' || rr.id AS subject_key " +
+            "       " + ReturnCaseRules.ITEMS_OVERDUE_ANCHOR_SQL + " AS occurred_at, " +
+            "       " + ReturnCaseRules.ITEMS_OVERDUE_KEY_SQL + " AS subject_key " +
             "FROM return_requests rr " +
             "JOIN orders o  ON o.id = rr.order_id AND o.tenant_id = rr.tenant_id " +
             "JOIN tenants t ON t.id = rr.tenant_id " +
-            "WHERE rr.tenant_id = ? AND " + com.traceability.portal.ReturnRequestLifecycle.ITEMS_OVERDUE_SQL +
-            "  AND NOT EXISTS (SELECT 1 FROM exception_resolutions er " +
-            "      WHERE er.tenant_id = rr.tenant_id AND er.exception_type = 'return_items_overdue' " +
-            "        AND er.subject_key = 'return_items_overdue:' || rr.id)",
+            "WHERE rr.tenant_id = ? AND " + ReturnCaseRules.ITEMS_OVERDUE_SQL +
+            "  AND " + ReturnCaseRules.notResolved("return_items_overdue", ReturnCaseRules.ITEMS_OVERDUE_KEY_SQL, "rr.tenant_id"),
             tid);
     }
 
@@ -439,19 +418,14 @@ public class ExceptionService {
             "       s.id AS shipment_id, s.tracking_number, " +
             "       o.id AS order_id, o.number AS order_number, " +
             "       x.entered_returned_at AS occurred_at, " +
-            "       'return_leg_unscanned:shipment:' || s.id AS subject_key " +
+            "       " + ReturnCaseRules.RETURN_LEG_UNSCANNED_KEY_SQL + " AS subject_key " +
             "FROM shipments s " +
             "JOIN orders o ON o.id = s.order_id AND o.tenant_id = s.tenant_id " +
-            "CROSS JOIN LATERAL (SELECT " + ShipmentLinkService.RETURN_LEG_ENTERED_RETURNED_AT_SQL +
+            "CROSS JOIN LATERAL (SELECT " + ReturnCaseRules.RETURN_LEG_ENTERED_RETURNED_AT_SQL +
             "    AS entered_returned_at) x " +
             "WHERE s.tenant_id = ? " +
-            "  AND " + ShipmentLinkService.RETURN_LEG_AWAITING_SCAN_SQL +
-            "  AND x.entered_returned_at < now() - (interval '1 day' * ?) " +
-            "  AND NOT EXISTS ( " +
-            "      SELECT 1 FROM exception_resolutions er " +
-            "      WHERE er.tenant_id = s.tenant_id " +
-            "        AND er.exception_type = 'return_leg_unscanned' " +
-            "        AND er.subject_key = 'return_leg_unscanned:shipment:' || s.id) ",
+            "  AND " + ReturnCaseRules.returnLegUnscannedSql("x.entered_returned_at", "?") +
+            "  AND " + ReturnCaseRules.notResolved("return_leg_unscanned", ReturnCaseRules.RETURN_LEG_UNSCANNED_KEY_SQL, "s.tenant_id"),
             tid, windowDays);
     }
 
@@ -882,22 +856,16 @@ public class ExceptionService {
             "JOIN order_items oi ON oi.id            = a.order_item_id " +
             "JOIN orders o       ON o.id             = oi.order_id " +
             "JOIN shipments s    ON s.order_id       = o.id AND s.shipment_leg = 'forward' " +
-            "WHERE p.status     = 'return_in_transit'::piece_status " +
-            "  AND p.tenant_id  = ? " +
-            "  AND p.last_event_at < now() - (interval '1 day' * ?) " +
+            "WHERE p.tenant_id  = ? " +
             "  AND s.tenant_id  = ? " +
-            "  AND NOT EXISTS ( " +
-            "      SELECT 1 FROM piece_events pe " +
-            "      WHERE pe.piece_id   = p.id " +
-            "        AND pe.event_type = 'return_received' " +
-            "        AND pe.tenant_id  = ?) " +
+            "  AND " + ReturnCaseRules.returnInTransitStuckSql("?", "?") +
             "  AND NOT EXISTS ( " +
             "      SELECT 1 FROM exception_resolutions er " +
             "      WHERE er.tenant_id      = p.tenant_id " +
             "        AND er.exception_type = 'return_in_transit_stuck' " +
             "        AND er.subject_key    = 'return_in_transit_stuck:piece:' || p.id " +
             "        AND er.resolved_at    > now() - interval '7 days') ",
-            tid, stuckDays, tid, tid);
+            tid, tid, stuckDays, tid);
     }
 
     /**
@@ -944,7 +912,7 @@ public class ExceptionService {
             "       'exchange_needs_mapping:' || e.id AS subject_key " +
             "FROM exchanges e " +
             // Step 5c: a row Traced booked from a return request is mapped by the booking itself.
-            "WHERE e.tenant_id = ? AND e.status = 'needs_mapping' AND e.return_request_id IS NULL",
+            "WHERE e.tenant_id = ? AND " + ReturnCaseRules.EXCHANGE_NEEDS_MAPPING_SQL,
             tid);
     }
 

@@ -4,6 +4,26 @@
 
 ## Current state
 
+**Returns & exchanges — Step 1 backend: one case list + counts on shared rules (2026-09-28, branch `feature/returns-cases-1`, not merged, not deployed).**
+- **`ReturnCaseRules`** (`com.traceability.returncases`) — THE single source of the return-alert predicates AND the case
+  stages: booking problem (+ key), exchange needs mapping, return_link_ambiguous (candidate lateral + "not held by a
+  request"), return leg unscanned, return_to_receive open, request_item_to_receive open (+ key), return in transit stuck, the
+  leg inspection-state expression (was Java in listCrpReturns), `notResolved()`; REFUND_OVERDUE / ITEMS_OVERDUE and the
+  ShipmentLinkService leg predicates are re-exported, never copied. ExceptionService detectors and listCrpReturns now read
+  it (pure refactor — their tests unchanged and green).
+- **`ReturnCaseService`** — one CTE (`UNION ALL` of A portal requests, B dashboard exchanges with no request, C return legs no
+  request holds) → next step code → stage / tone / overdue / open alerts. De-dup: a request absorbs its leg (id or booked
+  tracking number) and its exchanges row. Sold-out exchange check = `VariantStockService.computeAll()` once per call, only
+  when the tenant has a requested exchange, passed as a uuid[] of in-stock variants. Keyset cursor
+  (stage rank, updated µs, case key). A resolved alert clears the red/overdue flag, never the stage; resolving
+  return_to_receive / request_item_to_receive IS how those tasks end (their open-ness has always included it).
+- **Endpoints (owner/manager):** `GET /api/v1/returns-exchanges?stage&type&tile&q&cursor&limit≤50` → {items, nextCursor};
+  `GET /api/v1/returns-exchanges/counts?type&q` → {stages, tiles}. Search: exact RR reference / tracking number (incl. a
+  request's absorbed leg and exchange AWBs), contains on order number / customer name; no new index.
+- Tests: `ReturnCasesTest` (9: mapping table, row content, de-dup (revert-checked), tiles, filters/search, paging with equal
+  timestamps, agreement with all 8 related detectors incl. resolved ones, app_user cross-tenant, HTTP roles);
+  RlsCoverageTest COVERED + 2 tests. Current page and endpoints untouched until Step 2.
+
 **Transfer lifecycle — Stage 1 backend + Stage 2 frontend (2026-09-28, merged to main, not deployed; both ship together).**
 - **V118** (V117 = portal custom pickup address, merged first; counts now MigrationSmokeTest 117, NotTracedBackfillTest 62): status CHECK preparing|sent|reconciling|closed|cancelled, default preparing; sent_at/by, cancelled_at/by, reconcile_started_at/by; CHECK cancelled ⇒ cancelled_at. Backfill: open + no transfer_pieces → preparing; open + pieces → sent (round_trip/relocate_return) / preparing (relocate_out). Prod effect: the 3 empty stuck transfers → preparing (cancellable once the UI ships), demo open showroom → sent.
 - **TransferService:** scanOut/returnScanOut read the transfer FOR SHARE and need preparing; new markSent (returning modes, ≥ 1 piece) and cancel (preparing, 0 transfer_pieces ever) lock FOR UPDATE then re-count in a fresh statement; beginReconcile FOR UPDATE, needs sent + returning mode (server-side now); closeOneWay locks the transfer row first, needs preparing — this also closes the old scan-vs-close race. listOpen "open" = preparing+sent+reconciling, "closed" = closed+cancelled; getTransfer adds the new stamps + piecesEverCount. Codes: TRANSFER_NOT_OPEN (enum) replaced by TRANSFER_NOT_PREPARING, + NOT_SENT, HAS_PIECES, EMPTY, WRONG_MODE; scan rejections keep the string "TRANSFER_NOT_OPEN". No piece events, no ledger change.

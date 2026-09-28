@@ -498,17 +498,21 @@ public class ShipmentLinkService {
             // that arrived and still await a final disposition (item_status 'arrived' — the
             // scan attributed to them moved the piece to return_pending_inspection). A leg with
             // no request keeps the order-level count (every leg of that order reports it).
-            "       CASE WHEN rq.id IS NOT NULL THEN " +
+            "       pc.n AS pending_inspection_count, " +
+            // The leg's inspection state — one SQL expression shared with the Returns & exchanges
+            // case list (ReturnCaseRules.inspectionStateSql); see the comment in the row mapper.
+            "       " + com.traceability.returncases.ReturnCaseRules.inspectionStateSql("sh", "pc.n") + " AS inspection_state, " +
+            "       rq.reference AS request_reference " +
+            "FROM shipments sh " +
+            "JOIN orders o ON o.id = sh.order_id AND o.tenant_id = sh.tenant_id " +
+            "LEFT JOIN return_requests rq ON rq.return_shipment_id = sh.id AND rq.tenant_id = sh.tenant_id " +
+            "CROSS JOIN LATERAL (SELECT CASE WHEN rq.id IS NOT NULL THEN " +
             "         (SELECT COUNT(*) FROM return_request_items ri WHERE ri.request_id = rq.id " +
             "            AND ri.tenant_id = sh.tenant_id AND ri.item_status = 'arrived') " +
             "       ELSE (SELECT COUNT(*) FROM pieces p WHERE p.current_order_id = sh.order_id " +
             "          AND p.tenant_id = sh.tenant_id " +
             "          AND p.status = 'return_pending_inspection'::piece_status" +
-            "       ) END AS pending_inspection_count, " +
-            "       rq.reference AS request_reference " +
-            "FROM shipments sh " +
-            "JOIN orders o ON o.id = sh.order_id AND o.tenant_id = sh.tenant_id " +
-            "LEFT JOIN return_requests rq ON rq.return_shipment_id = sh.id AND rq.tenant_id = sh.tenant_id " +
+            "       ) END AS n) pc " +
             "WHERE sh.tenant_id = ? AND sh.shipment_leg = 'return' " +
             "ORDER BY sh.created_at DESC, sh.id DESC LIMIT ? OFFSET ?",
             (rs, i) -> {
@@ -536,15 +540,8 @@ public class ShipmentLinkService {
                 // own state — received, but no pieces were inspected or restocked.
                 // Step 6b: intake completed by the linked request's items (per-item Arrived) — received,
                 // whatever Bosta says yet; still "needs_inspection" while a scanned piece awaits a decision.
-                String intakeOutcome = rs.getString("return_intake_outcome");
-                String inspectionState = "received_untracked".equals(intakeOutcome)
-                        ? "received_untracked"
-                    : "request_items_arrived".equals(intakeOutcome)
-                        ? (rs.getInt("pending_inspection_count") > 0 ? "needs_inspection" : "resolved")
-                    : !"returned".equals(internalState) ? "in_transit"
-                    : rs.getTimestamp("return_intake_completed_at") == null ? "needs_inspection"
-                    : rs.getInt("pending_inspection_count") > 0 ? "needs_inspection" : "resolved";
-                row.put("inspection_state", inspectionState);
+                // Computed in SQL by ReturnCaseRules.inspectionStateSql (the single definition).
+                row.put("inspection_state", rs.getString("inspection_state"));
                 row.put("awaiting_receiving", rs.getBoolean("awaiting_receiving"));
                 row.put("leg_status", OrderStatusDeriver.deriveLegStatus(internalState));
                 row.put("request_reference", rs.getString("request_reference"));

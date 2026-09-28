@@ -113,6 +113,8 @@ class RlsCoverageTest {
             "/api/v1/exchanges/{id}/candidates",
             "/api/v1/exchanges/{id}/outbound-candidates",
             "/api/v1/refunds",
+            "/api/v1/returns-exchanges",
+            "/api/v1/returns-exchanges/counts",
             "/api/v1/returns/awaiting-scan",
             "/api/v1/return-requests",
             "/api/v1/return-requests/{id}",
@@ -1544,6 +1546,65 @@ class RlsCoverageTest {
     private String base() { return "http://localhost:" + port; }
 
     @SuppressWarnings("unchecked")
+    /** Returns & exchanges Step 1: seeds one courier-return leg for this tenant and one for another. */
+    private UUID[] seedReturnCaseLegs(String suffix) {
+        UUID orderId = UUID.randomUUID();
+        jdbc.update("INSERT INTO orders (id, tenant_id, store_id, external_id, number, status, payment_method, placed_at, on_hold) " +
+                    "VALUES (?, ?, ?, ?, ?, 'delivered'::order_status, 'cod', now(), false)",
+                    orderId, tenantId, storeId, "EXT-CVG-RC-" + suffix, "#CVG-RC-" + suffix);
+        jdbc.update("INSERT INTO shipments (tenant_id, order_id, provider, tracking_number, internal_state, shipment_leg) " +
+                    "VALUES (?, ?, 'bosta', ?, 'with_courier'::shipment_internal_state, 'return')", tenantId, orderId, "55510" + suffix + "1");
+        UUID otherTenant = UUID.randomUUID(), otherStore = UUID.randomUUID(), otherOrder = UUID.randomUUID();
+        jdbc.update("INSERT INTO tenants (id, name) VALUES (?, 'Cov RC Other')", otherTenant);
+        jdbc.update("INSERT INTO stores (id, tenant_id, platform, shop_domain, status) VALUES (?, ?, 'shopify', ?, 'disconnected')",
+                    otherStore, otherTenant, "cov-rc-" + suffix + ".myshopify.com");
+        jdbc.update("INSERT INTO orders (id, tenant_id, store_id, external_id, number, status, payment_method, placed_at, on_hold) " +
+                    "VALUES (?, ?, ?, ?, ?, 'delivered'::order_status, 'cod', now(), false)",
+                    otherOrder, otherTenant, otherStore, "EXT-CVG-RC-B-" + suffix, "#CVG-RC-B-" + suffix);
+        jdbc.update("INSERT INTO shipments (tenant_id, order_id, provider, tracking_number, internal_state, shipment_leg) " +
+                    "VALUES (?, ?, 'bosta', ?, 'with_courier'::shipment_internal_state, 'return')", otherTenant, otherOrder, "55510" + suffix + "2");
+        return new UUID[]{orderId, otherTenant};
+    }
+
+    private void cleanReturnCaseLegs(UUID[] seeded) {
+        jdbc.update("DELETE FROM shipments WHERE order_id = ?", seeded[0]);
+        jdbc.update("DELETE FROM orders WHERE id = ?", seeded[0]);
+        jdbc.update("DELETE FROM shipments WHERE tenant_id = ?", seeded[1]);
+        jdbc.update("DELETE FROM orders    WHERE tenant_id = ?", seeded[1]);
+        jdbc.update("DELETE FROM stores    WHERE tenant_id = ?", seeded[1]);
+        jdbc.update("DELETE FROM tenants   WHERE id = ?", seeded[1]);
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void returnsExchanges_list_crossTenantIsolated_withSameTenantPositiveControl() {
+        UUID[] seeded = seedReturnCaseLegs("7");
+        try {
+            ResponseEntity<Map> resp = get("/api/v1/returns-exchanges", Map.class);
+            assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.OK);
+            List<Map<String, Object>> items = (List<Map<String, Object>>) resp.getBody().get("items");
+            assertThat(items).as("same-tenant positive control").anyMatch(r -> "5551071".equals(r.get("reference")));
+            assertThat(items).as("other tenant's leg must never appear").noneMatch(r -> "5551072".equals(r.get("reference")));
+        } finally {
+            cleanReturnCaseLegs(seeded);
+        }
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void returnsExchanges_counts_crossTenantIsolated_withSameTenantPositiveControl() {
+        UUID[] seeded = seedReturnCaseLegs("8");
+        try {
+            ResponseEntity<Map> mine = get("/api/v1/returns-exchanges/counts?q=5551081", Map.class);
+            assertThat(mine.getStatusCode()).isEqualTo(HttpStatus.OK);
+            assertThat((Map<String, Object>) mine.getBody().get("stages")).as("positive control").containsEntry("all", 1);
+            ResponseEntity<Map> theirs = get("/api/v1/returns-exchanges/counts?q=5551082", Map.class);
+            assertThat((Map<String, Object>) theirs.getBody().get("stages")).as("other tenant's leg is never counted").containsEntry("all", 0);
+        } finally {
+            cleanReturnCaseLegs(seeded);
+        }
+    }
+
     private <T> ResponseEntity<T> get(String path, Class<T> type) {
         HttpHeaders headers = new HttpHeaders();
         headers.setBearerAuth(ownerToken);
