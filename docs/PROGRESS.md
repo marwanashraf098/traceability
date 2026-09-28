@@ -4,13 +4,13 @@
 
 ## Current state
 
-**Meta pixel SPA fix (2026-09-28, branch `fix/meta-pixel-spa-autoevents`, not merged, not deployed).** Live bug: after
+**Meta pixel SPA fix (2026-09-28, merged to main, not deployed).** Live bug: after
 signup the pixel stayed loaded into /overview; fbevents.js fired a PageView on every SPA history change (one landed with
 CompleteRegistration) and would run automatic button-click events in the signed-in app. `metaPixel.ts` now sets
 `fbq.disablePushState = true` and `fbq('set','autoConfig',false,ID)` before init; marketing `meta-pixel.js` gets the same
 autoConfig line (no more SubscribedButtonClick; PageView + Lead kept). New `signupMetaPixelNavigation.test.tsx` (2,
-revert-checked). **Pending approval:** `signupMetaPixel.test.tsx` test 1 asserts the exact old queue
-([init, PageView]) and is red until its expectation gains the leading `['set','autoConfig',false,ID]`.
+revert-checked). `signupMetaPixel.test.tsx` test 1 expectation now starts with `['set','autoConfig',false,ID]`
+(approved). Frontend 536/536. Live check after deploy: one PageView + one CompleteRegistration, none after signup.
 
 **Meta signup attribution — Build B (2026-09-28, merged to main, not deployed).**
 - **nginx:** app.tracedtech.com CSP + `https://connect.facebook.net` (script-src) and `https://www.facebook.com

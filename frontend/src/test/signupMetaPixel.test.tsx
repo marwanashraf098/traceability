@@ -86,7 +86,7 @@ describe('Signup page Meta Pixel', () => {
   test('loads fbevents.js once with init + PageView on mount', () => {
     renderSignup()
     expect(document.head.querySelectorAll('script[src="https://connect.facebook.net/en_US/fbevents.js"]')).toHaveLength(1)
-    expect(pixelCalls()).toEqual([['init', '1837033837461823'], ['track', 'PageView']])
+    expect(pixelCalls()).toEqual([['set', 'autoConfig', false, '1837033837461823'], ['init', '1837033837461823'], ['track', 'PageView']])
   })
 
   test('sends cookies + URL attribution and fires CompleteRegistration once with reg-<tenant>', async () => {
