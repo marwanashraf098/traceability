@@ -556,7 +556,7 @@ public class ReturnPickupBookingService {
         UUID requestId; String status; String bookingStatus; String reference; String orderNumber;
         boolean redacted; boolean bookingOn; boolean exchange;
         // Step 5c (exchange): the switch, drop-off availability and the one item each way.
-        boolean exchangesOn; Boolean dropoffAvailable; boolean replacementInStock;
+        boolean exchangesOn; Boolean dropoffAvailable; boolean replacementInStock; boolean replacementActive;
         String product; String originalVariant; String replacementVariant; UUID replacementVariantId;
         String apiKeyEncrypted; String returnLocationId;
         String districtId; String cityName; Boolean districtAvailable;
@@ -663,6 +663,7 @@ public class ReturnPickupBookingService {
             if (c.replacementVariantId != null) {
                 com.traceability.inventory.VariantStockService stock = new com.traceability.inventory.VariantStockService(jdbc);
                 c.replacementInStock = stock.forVariant(stock.computeAll(), c.replacementVariantId).available() > 0;
+                c.replacementActive = ReturnRequestService.replacementProductActive(jdbc, c.replacementVariantId, tenantId);
             }
         }
         return c;
@@ -706,6 +707,7 @@ public class ReturnPickupBookingService {
             return "Bosta can't both deliver to and collect from the chosen area — choose another.";
         }
         if (c.replacementVariantId == null) return "The request has no replacement.";
+        if (!c.replacementActive) return "The replacement's product is no longer active in Shopify.";
         if (!c.replacementInStock) return "The replacement is out of stock.";
         if (c.redacted) return "The customer's data was deleted for this order (privacy request).";
         String firstLine = c.drop == null ? null : c.drop.path("firstLine").asText(null);

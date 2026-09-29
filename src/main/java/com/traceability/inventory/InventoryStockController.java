@@ -84,7 +84,7 @@ public class InventoryStockController {
         long onHand, Long committed, long available, String shopifySync) {}
 
     public record StockProduct(
-        String id, String title, String imageUrl,
+        String id, String title, String imageUrl, String status,
         long onHand, Long committed, long available,
         List<StockVariant> variants) {}
 
@@ -163,7 +163,7 @@ public class InventoryStockController {
                 "SELECT p.variant_id, COUNT(*) AS available_count FROM pieces p " +
                 "WHERE p.tenant_id = ? AND p.status = 'available'::piece_status " + availLocPredicate + " " +
                 "GROUP BY p.variant_id) " +
-                "SELECT DISTINCT pr.id, pr.title, pr.image_url FROM products pr " +
+                "SELECT DISTINCT pr.id, pr.title, pr.image_url, pr.status FROM products pr " +
                 "JOIN variants v ON v.product_id = pr.id " +
                 "LEFT JOIN avail a ON a.variant_id = v.id " +
                 "WHERE pr.tenant_id = ? " + qPredicate + " " + lowStockPredicate + " " + cursorPredicate + " " +
@@ -295,7 +295,7 @@ public class InventoryStockController {
                 }
 
                 out.add(new StockProduct(
-                    productId.toString(), (String) pr.get("title"), (String) pr.get("image_url"),
+                    productId.toString(), (String) pr.get("title"), (String) pr.get("image_url"), (String) pr.get("status"),
                     sumOnHand, sumCommitted, sumAvailable, variants));
             }
 

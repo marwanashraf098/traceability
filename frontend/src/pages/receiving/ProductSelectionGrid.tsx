@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { Search } from 'lucide-react'
 import { getCatalog, CatalogProduct, CatalogVariant } from '../../api'
 import {
-  Alert, Button, Checkbox, Input, Modal, ProductThumb, Skeleton, Toggle, cn,
+  Alert, Button, Checkbox, Input, Modal, ProductStatusBadge, ProductThumb, Skeleton, Toggle, cn,
 } from '../../components/ui'
 import { api, Line } from '../Receiving'
 
@@ -389,6 +389,7 @@ function CompactProductCard({ product, groups, onOpen }: {
         <div className="text-[10px] font-mono text-muted">
           {t('receiving.grid.variantMeta', { count: product.variants.length })}
         </div>
+        <ProductStatusBadge status={product.status} className="mt-0.5" />
       </div>
     </button>
   )

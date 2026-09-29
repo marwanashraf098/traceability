@@ -4,6 +4,26 @@
 
 ## Current state
 
+**Import every Shopify product status (2026-09-29, branch `feature/import-all-product-statuses`, committed, not deployed).**
+- **Import:** `query: "status:active"` removed from `ShopifyHttpGateway.PRODUCTS_QUERY` — ACTIVE, DRAFT, ARCHIVED and UNLISTED
+  (in the 2026-04 `ProductStatus` enum) all import, stored lowercase in `products.status` (free text, no CHECK, no migration).
+  Nested variants no longer stop at 50: when a product's `variants.pageInfo.hasNextPage` is true, `fetchRemainingVariants`
+  runs `ProductVariantsPage(product(id).variants(first: 250, after))` through the same throttle-aware `executeGraphQL`.
+  The products/create|update webhook already stored draft/archived before this change; `products/delete` is still not subscribed (by decision).
+- **Portal exchanges = ACTIVE products only:** `ExchangeOptions.forVariant` returns an empty `exchangeOptions` list (keys kept)
+  when the line's product isn't 'active'; `PortalService.validExchange` requires `p.status = 'active'` (→ 400); merchant approve
+  of an exchange → 409 `REPLACEMENT_NOT_ACTIVE` (no job, no Bosta call); the booking job's `exchangePrecondition` also refuses
+  ("The replacement's product is no longer active in Shopify.") so an archive between approval and booking never reaches Bosta.
+  Refunds, lookup lines, receiving, labels and inventory sync are unchanged (no status filter).
+- **Badge:** `ProductStatusBadge` (ui.tsx) — active → nothing, draft/archived → `productStatus.*` (EN/AR), else the raw value.
+  Used in Inventory Stock tab (`/inventory/stock` gained `status` on each product), Receiving grid card, merchant ExchangeVariantPicker (badge only, not blocking).
+- **Tests:** new `ShopifyHttpGatewayProductsTest` (3, p1/p2 RED on old code), `ShopifyProductStatusImportTest` (4, i1–i3 RED on old
+  code; w1 webhook guard), `PortalExchangeActiveProductTest` (7, l1/l2/s1/a1/b1 RED with the predicates removed; a2/r1 controls),
+  `productStatusBadge.test.tsx` (5, psb5 RED without the picker badge). No existing test edited.
+- **Next (Part B, Step 0 only — reported, not built):** automatic one-time catalog backfill for already-connected stores
+  (proposal: `stores.catalog_backfilled_at` V119 marker + ApplicationReadyEvent → one serial JobRunr job; catalog-only import;
+  activate only newly inserted variants). Until then, existing stores pick up drafts/archived only on reconnect or `POST /stores/{id}/sync`.
+
 **Transfer lifecycle — Stage 1 backend + Stage 2 frontend (2026-09-28, merged to main, not deployed; both ship together).**
 - **V118** (V117 = portal custom pickup address, merged first; counts now MigrationSmokeTest 117, NotTracedBackfillTest 62): status CHECK preparing|sent|reconciling|closed|cancelled, default preparing; sent_at/by, cancelled_at/by, reconcile_started_at/by; CHECK cancelled ⇒ cancelled_at. Backfill: open + no transfer_pieces → preparing; open + pieces → sent (round_trip/relocate_return) / preparing (relocate_out). Prod effect: the 3 empty stuck transfers → preparing (cancellable once the UI ships), demo open showroom → sent.
 - **TransferService:** scanOut/returnScanOut read the transfer FOR SHARE and need preparing; new markSent (returning modes, ≥ 1 piece) and cancel (preparing, 0 transfer_pieces ever) lock FOR UPDATE then re-count in a fresh statement; beginReconcile FOR UPDATE, needs sent + returning mode (server-side now); closeOneWay locks the transfer row first, needs preparing — this also closes the old scan-vs-close race. listOpen "open" = preparing+sent+reconciling, "closed" = closed+cancelled; getTransfer adds the new stamps + piecesEverCount. Codes: TRANSFER_NOT_OPEN (enum) replaced by TRANSFER_NOT_PREPARING, + NOT_SENT, HAS_PIECES, EMPTY, WRONG_MODE; scan rejections keep the string "TRANSFER_NOT_OPEN". No piece events, no ledger change.

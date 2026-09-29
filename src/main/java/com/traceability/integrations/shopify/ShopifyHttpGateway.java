@@ -46,19 +46,38 @@ class ShopifyHttpGateway implements ShopifyGateway {
     private static final int MAX_THROTTLE_RETRIES = 5;
     private static final int THROTTLE_MIN_WAIT_MS = 500;
 
+    // No status filter: every product status is imported (ACTIVE, DRAFT, ARCHIVED, and
+    // UNLISTED, which 2026-04 returns as its own value). The status is stored lowercase and
+    // only the portal's exchange option reads it (ExchangeOptions / PortalService).
     private static final String PRODUCTS_QUERY = """
             query ProductsPage($cursor: String) {
-              products(first: 50, after: $cursor, query: "status:active") {
+              products(first: 50, after: $cursor) {
                 pageInfo { hasNextPage endCursor }
                 edges {
                   node {
                     id title status
                     featuredImage { url }
                     variants(first: 50) {
+                      pageInfo { hasNextPage endCursor }
                       edges {
                         node { id sku title price }
                       }
                     }
+                  }
+                }
+              }
+            }
+            """;
+
+    // Follow-up for a product whose first 50 variants didn't cover all of them — fetched per
+    // product through the same throttle-aware executeGraphQL until its variants are exhausted.
+    private static final String PRODUCT_VARIANTS_QUERY = """
+            query ProductVariantsPage($id: ID!, $cursor: String) {
+              product(id: $id) {
+                variants(first: 250, after: $cursor) {
+                  pageInfo { hasNextPage endCursor }
+                  edges {
+                    node { id sku title price }
                   }
                 }
               }
@@ -267,8 +286,37 @@ class ShopifyHttpGateway implements ShopifyGateway {
         if (cursor != null) vars.put("cursor", cursor);
         JsonNode data = executeGraphQL(shopDomain, token, PRODUCTS_QUERY, vars);
         JsonNode conn = data.path("products");
-        return new ProductPage(parseProducts(conn), conn.path("pageInfo").path("hasNextPage").asBoolean(),
+        List<Product> products = new ArrayList<>();
+        for (JsonNode edge : conn.path("edges")) {
+            JsonNode node = edge.path("node");
+            List<Variant> variants = parseVariants(node.path("variants"));
+            JsonNode variantsPageInfo = node.path("variants").path("pageInfo");
+            if (variantsPageInfo.path("hasNextPage").asBoolean(false)) {
+                variants.addAll(fetchRemainingVariants(shopDomain, token, node.path("id").asText(),
+                        variantsPageInfo.path("endCursor").asText(null)));
+            }
+            products.add(new Product(
+                    node.path("id").asText(),
+                    node.path("title").asText(""),
+                    node.path("status").asText("active").toLowerCase(),
+                    node.path("featuredImage").path("url").asText(null),
+                    variants));
+        }
+        return new ProductPage(products, conn.path("pageInfo").path("hasNextPage").asBoolean(),
                 conn.path("pageInfo").path("endCursor").asText(null));
+    }
+
+    private List<Variant> fetchRemainingVariants(String shopDomain, String token, String productGid, String cursor) {
+        List<Variant> out = new ArrayList<>();
+        while (cursor != null) {
+            ObjectNode vars = mapper.createObjectNode().put("id", productGid).put("cursor", cursor);
+            JsonNode conn = executeGraphQL(shopDomain, token, PRODUCT_VARIANTS_QUERY, vars)
+                    .path("product").path("variants");
+            out.addAll(parseVariants(conn));
+            cursor = conn.path("pageInfo").path("hasNextPage").asBoolean(false)
+                    ? conn.path("pageInfo").path("endCursor").asText(null) : null;
+        }
+        return out;
     }
 
     @Override
@@ -1234,28 +1282,18 @@ class ShopifyHttpGateway implements ShopifyGateway {
 
     // ---- response parsing -----------------------------------------------
 
-    private List<Product> parseProducts(JsonNode conn) {
-        List<Product> out = new ArrayList<>();
-        for (JsonNode edge : conn.path("edges")) {
-            JsonNode node = edge.path("node");
-            List<Variant> variants = new ArrayList<>();
-            for (JsonNode ve : node.path("variants").path("edges")) {
-                JsonNode vn = ve.path("node");
-                String priceStr = vn.path("price").asText(null);
-                variants.add(new Variant(
-                        vn.path("id").asText(),
-                        nullableText(vn, "sku"),
-                        vn.path("title").asText(""),
-                        priceStr != null ? new BigDecimal(priceStr) : null));
-            }
-            out.add(new Product(
-                    node.path("id").asText(),
-                    node.path("title").asText(""),
-                    node.path("status").asText("active").toLowerCase(),
-                    node.path("featuredImage").path("url").asText(null),
-                    variants));
+    private List<Variant> parseVariants(JsonNode conn) {
+        List<Variant> variants = new ArrayList<>();
+        for (JsonNode ve : conn.path("edges")) {
+            JsonNode vn = ve.path("node");
+            String priceStr = vn.path("price").asText(null);
+            variants.add(new Variant(
+                    vn.path("id").asText(),
+                    nullableText(vn, "sku"),
+                    vn.path("title").asText(""),
+                    priceStr != null ? new BigDecimal(priceStr) : null));
         }
-        return out;
+        return variants;
     }
 
     private List<Order> parseOrders(JsonNode conn) {

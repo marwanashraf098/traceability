@@ -6,7 +6,7 @@ import {
   getInventoryStock, listLocations, InventoryStockProduct, InventoryStockVariant,
   LocationRow, ShopifySyncStatus,
 } from '../../api'
-import { Badge, EmptyState, ProductThumb, Select, Spinner, Tooltip, cn } from '../../components/ui'
+import { Badge, EmptyState, ProductStatusBadge, ProductThumb, Select, Spinner, Tooltip, cn } from '../../components/ui'
 import VariantDrawer from './VariantDrawer'
 
 const SYNC_TONE: Record<ShopifySyncStatus, 'success' | 'warning' | 'critical' | 'neutral'> = {
@@ -208,6 +208,7 @@ export default function StockTab() {
                               <div className="text-primary font-medium truncate">{product.title}</div>
                               <div className="text-caption text-muted">
                                 {t('inventory.stock.variantCount', { count: product.variants.length })}
+                                <ProductStatusBadge status={product.status} className="ms-1.5" />
                               </div>
                             </div>
                           </div>

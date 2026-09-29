@@ -1336,6 +1336,10 @@
       }
     }
   },
+  "productStatus": {
+    "draft": "مسودة",
+    "archived": "مؤرشف"
+  },
   "common": {
     "loading": "جارٍ التحميل...",
     "error": "حدث خطأ ما",
