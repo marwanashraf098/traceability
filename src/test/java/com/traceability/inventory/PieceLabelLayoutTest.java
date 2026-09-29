@@ -117,13 +117,76 @@ class PieceLabelLayoutTest {
     }
 
     @Test
-    void l7_arabicLinesRightAligned_latinLeftAligned_codeCentred() {
-        PieceLabelLayout.Layout l = PieceLabelLayout.layout(PieceLabelLayout.Spec.of(50, 25), "P002221", "بلوزة قطنية", "Red / M", "BLZ-1");
-        float right = l.pageWidth() - 2f * PieceLabelLayout.MM;
-        PieceLabelLayout.TextLine code = l.lines().get(0), title = l.lines().get(1), variant = l.lines().get(2);
-        assertThat(code.x() + code.width() / 2f).isCloseTo(l.pageWidth() / 2f, org.assertj.core.data.Offset.offset(0.01f));
-        assertThat(title.x() + title.width()).isCloseTo(right, org.assertj.core.data.Offset.offset(0.01f));
-        assertThat(variant.x()).isCloseTo(2f * PieceLabelLayout.MM, org.assertj.core.data.Offset.offset(0.01f));
+    void l7_everyRowCentredWithinTheTextWidth_regardlessOfScript() {
+        for (PieceLabelLayout.Spec spec : SIZES) {
+            for (String[] f : FIXTURES) {
+                PieceLabelLayout.Layout l = PieceLabelLayout.layout(spec, f[0], f[1], f[2], f[3]);
+                float left = 2f * PieceLabelLayout.MM, right = l.pageWidth() - 2f * PieceLabelLayout.MM;
+                for (PieceLabelLayout.TextLine t : l.lines()) {
+                    float centre = t.box().x() + t.box().w() / 2f;
+                    assertThat(centre).as("%s %s '%s'", spec, t.row(), t.logical())
+                        .isCloseTo((left + right) / 2f, org.assertj.core.data.Offset.offset(0.5f));
+                    assertThat(t.box().x()).isGreaterThanOrEqualTo(left - 0.001f);
+                    assertThat(t.box().x() + t.box().w()).isLessThanOrEqualTo(right + 0.001f);
+                }
+            }
+        }
+    }
+
+    @Test
+    void l8_consecutiveArabicLines_glyphInkBoxes_includingDotsAndHamza_neverIntersect() {
+        String[][] arabic = {
+            {"P1", LabelTextFitterTest.LONG_AR, "أحمر / مقاس كبير", "BLZ-AR-RED-L"},
+            {"P2", "إصدار الخريف المحدود — بلوزة قطنية واسعة بأكمام طويلة", "أزرق / صغير", "SKU-2"},
+            {"P3", "بِسْمِ اللَّهِ الرَّحْمَنِ الرَّحِيمِ عطر", "ٱلْأَحْمَر", "SKU-3"},   // harakat above/below
+        };
+        for (PieceLabelLayout.Spec spec : SIZES) {
+            for (String[] f : arabic) {
+                PieceLabelLayout.Layout l = PieceLabelLayout.layout(spec, f[0], f[1], f[2], f[3]);
+                assertSound(l, spec + " " + f[1]);
+                for (int i = 0; i + 1 < l.lines().size(); i++) {
+                    PieceLabelLayout.TextLine a = l.lines().get(i), b = l.lines().get(i + 1);
+                    float aBottom = a.baseline() + LabelFonts.ink(a.runs())[1] * a.size();
+                    float bTop = b.baseline() + LabelFonts.ink(b.runs())[0] * b.size();
+                    assertThat(bTop).as("%s: ink of '%s' vs '%s'", spec, a.logical(), b.logical())
+                        .isLessThanOrEqualTo(aBottom + 0.001f);
+                }
+            }
+        }
+    }
+
+    @Test
+    void l9_arabicLineHeight_isTheLettersInkEnvelope_latinStays1point1() {
+        assertThat(LabelFonts.ARABIC_LETTER_INK[0]).isCloseTo(1.010f, org.assertj.core.data.Offset.offset(0.001f));
+        assertThat(LabelFonts.ARABIC_LETTER_INK[1]).isCloseTo(-0.421f, org.assertj.core.data.Offset.offset(0.001f));
+        PieceLabelLayout.Layout l = PieceLabelLayout.layout(PieceLabelLayout.Spec.of(50, 25), "P1", "بلوزة قطنية", "Red / M", "SKU-1");
+        PieceLabelLayout.TextLine ar = l.lines().get(1), lat = l.lines().get(2);
+        assertThat(ar.height()).isCloseTo(1.431f, org.assertj.core.data.Offset.offset(0.001f));
+        assertThat(lat.height()).isEqualTo(1.1f);
+    }
+
+    @Test
+    void l10_stepsFired_areReported_inOrder() {
+        String twoLines = "Organic Cotton Oversized Heavyweight Hoodie Grey";
+        assertThat(PieceLabelLayout.layout(PieceLabelLayout.Spec.of(40, 25), "P1", "Linen Shirt", "White / M", "LIN").steps()).isEmpty();
+        assertThat(PieceLabelLayout.layout(new PieceLabelLayout.Spec(40, 25, 12), "P1", twoLines, "Grey / XL", "SKU-1").steps())
+            .containsExactly(PieceLabelLayout.Step.TITLE_TO_FLOOR, PieceLabelLayout.Step.VARIANT_TO_FLOOR, PieceLabelLayout.Step.DROP_VARIANT);
+        assertThat(PieceLabelLayout.layout(new PieceLabelLayout.Spec(40, 25, 16), "P1", twoLines, "Grey / XL", "SKU-1").steps())
+            .containsExactly(PieceLabelLayout.Step.TITLE_TO_FLOOR, PieceLabelLayout.Step.VARIANT_TO_FLOOR,
+                PieceLabelLayout.Step.DROP_VARIANT, PieceLabelLayout.Step.TITLE_ONE_LINE, PieceLabelLayout.Step.DROP_SKU);
+    }
+
+    @Test
+    void l11_shortMixedVariant_fullTextNoEllipsis() {
+        for (PieceLabelLayout.Spec spec : SIZES) {
+            for (String variant : List.of("S / أحمر", "Red / أحمر", "أحمر / S", "S / أحمر…")) {
+                PieceLabelLayout.Layout l = PieceLabelLayout.layout(spec, "P1", "عطر ورد & عود", variant, "PERF-ROSE-S");
+                assertThat(l.lines()).filteredOn(t -> t.row() == PieceLabelLayout.Row.VARIANT).singleElement()
+                    .satisfies(t -> assertThat(t.logical()).isEqualTo(variant));
+                assertThat(l.ellipsized()).isFalse();
+                assertThat(l.steps()).isEmpty();
+            }
+        }
     }
 
     static void assertSound(PieceLabelLayout.Layout l, String what) {

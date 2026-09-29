@@ -130,6 +130,39 @@ class LabelTextFitterTest {
         assertThat(LabelTextFitter.fit(null, R, 5f, 5f, 1, W50).lines()).isEmpty();
     }
 
+    @Test
+    void t10_shortMixedArabicLatin_noEllipsis_fullTextRendered_bothWidths() {
+        for (float w : List.of(W50, W40)) {
+            for (String v : List.of("S / أحمر", "Red / أحمر", "أحمر / S", "M / أزرق & أخضر")) {
+                LabelTextFitter.Fit f = LabelTextFitter.fit(v, R, 5.5f, 5f, 1, w);
+                assertThat(f.ellipsized()).as(v).isFalse();
+                assertThat(f.size()).isEqualTo(5.5f);
+                assertThat(f.lines()).singleElement().satisfies(l -> {
+                    assertThat(l.logical()).isEqualTo(v);
+                    String drawn = l.runs().stream().map(LabelFonts.Run::text).reduce("", String::concat);
+                    assertThat(drawn).isEqualTo(LabelTextFitter.display(v)).doesNotContain(LabelTextFitter.ELLIPSIS);
+                });
+            }
+        }
+    }
+
+    @Test
+    void t11_ellipsisInTheDataIsKept_noneAdded() {
+        // The sample fixture "S / أحمر…" carries its own U+2026 — nothing is cut, nothing is added.
+        LabelTextFitter.Fit f = LabelTextFitter.fit("S / أحمر…", R, 5.5f, 5f, 1, W40);
+        assertThat(f.ellipsized()).isFalse();
+        assertThat(f.lines().get(0).logical()).isEqualTo("S / أحمر…");
+    }
+
+    @Test
+    void t12_addedEllipsis_displaysAtTheVisualEndOfItsLine() {
+        LabelTextFitter.Fit ltr = LabelTextFitter.fit(LONG_EN + " " + LONG_EN, R, 6f, 5f, 2, W40);
+        LabelTextFitter.Fit rtl = LabelTextFitter.fit(LONG_AR + " " + LONG_AR, R, 6f, 5f, 2, W40);
+        List<LabelFonts.Run> l = ltr.lines().get(1).runs(), r = rtl.lines().get(1).runs();
+        assertThat(l.get(l.size() - 1).text()).as("LTR: rightmost").endsWith(LabelTextFitter.ELLIPSIS);
+        assertThat(r.get(0).text()).as("RTL: leftmost").startsWith(LabelTextFitter.ELLIPSIS);
+    }
+
     static void assertWithin(LabelTextFitter.Fit f, float maxWidth) {
         for (LabelTextFitter.Line l : f.lines()) {
             float measured = LabelFonts.width(l.runs(), f.size());

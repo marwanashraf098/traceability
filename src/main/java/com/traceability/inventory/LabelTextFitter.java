@@ -27,10 +27,8 @@ public final class LabelTextFitter {
     /** One display line: the logical text it came from, its font runs in visual order, its width. */
     public record Line(String logical, List<LabelFonts.Run> runs, float width, boolean rtl) {}
 
-    /** The fitted lines at {@code size}; {@code ellipsized} when text had to be cut. */
-    public record Fit(List<Line> lines, float size, boolean ellipsized) {
-        public float height(float lineHeightFactor) { return lines.size() * size * lineHeightFactor; }
-    }
+    /** The fitted lines at {@code size}; {@code ellipsized} only when text was actually removed. */
+    public record Fit(List<Line> lines, float size, boolean ellipsized) {}
 
     /**
      * Wrap into at most {@code maxLines} lines of {@code maxWidth}, starting at {@code start} pt and
@@ -43,10 +41,13 @@ public final class LabelTextFitter {
             if (lines.size() <= maxLines) return new Fit(toLines(lines, latin, size), size, false);
         }
         List<String> lines = wrap(text, latin, floor, maxWidth);
+        // Still more lines than allowed at the floor: text has to go. The "…" is added at the
+        // logical end of what's kept (bidi shows it at the visual end for the line's direction).
         List<String> kept = new ArrayList<>(lines.subList(0, maxLines - 1));
         String rest = String.join(" ", lines.subList(maxLines - 1, lines.size()));
-        kept.add(ellipsize(rest, latin, floor, maxWidth));
-        return new Fit(toLines(kept, latin, floor), floor, true);
+        String last = ellipsize(rest, latin, floor, maxWidth);
+        kept.add(last);
+        return new Fit(toLines(kept, latin, floor), floor, !last.equals(rest));
     }
 
     /** Arabic shaping (contextual forms) + bidi reordering to visual left-to-right order. */

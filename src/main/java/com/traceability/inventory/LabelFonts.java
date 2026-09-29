@@ -40,7 +40,8 @@ public final class LabelFonts {
         Face.BOLD,    "fonts/NotoSans-Bold.ttf",
         Face.ARABIC,  "fonts/NotoSansArabic-Regular.ttf");
 
-    private record Metrics(byte[] bytes, CmapLookup cmap, int[] advances, int unitsPerEm) {}
+    /** Per glyph: advance and ink top/bottom (glyf bounding box), all in font units. */
+    private record Metrics(byte[] bytes, CmapLookup cmap, int[] advances, int[] inkTop, int[] inkBottom, int unitsPerEm) {}
 
     private static final Map<Face, Metrics> METRICS = new EnumMap<>(Face.class);
 
@@ -50,9 +51,17 @@ public final class LabelFonts {
                 byte[] bytes = in.readAllBytes();
                 TrueTypeFont ttf = new TTFParser().parse(new RandomAccessReadBuffer(bytes));
                 int glyphs = ttf.getNumberOfGlyphs();
-                int[] adv = new int[glyphs];
-                for (int g = 0; g < glyphs; g++) adv[g] = ttf.getAdvanceWidth(g);
-                METRICS.put(f, new Metrics(bytes, ttf.getUnicodeCmapLookup(), adv, ttf.getUnitsPerEm()));
+                int[] adv = new int[glyphs], top = new int[glyphs], bottom = new int[glyphs];
+                org.apache.fontbox.ttf.GlyphTable glyf = ttf.getGlyph();
+                for (int g = 0; g < glyphs; g++) {
+                    adv[g] = ttf.getAdvanceWidth(g);
+                    org.apache.fontbox.ttf.GlyphData d = glyf.getGlyph(g);
+                    if (d != null) {
+                        top[g] = (int) Math.ceil(d.getBoundingBox().getUpperRightY());
+                        bottom[g] = (int) Math.floor(d.getBoundingBox().getLowerLeftY());
+                    }
+                }
+                METRICS.put(f, new Metrics(bytes, ttf.getUnicodeCmapLookup(), adv, top, bottom, ttf.getUnitsPerEm()));
             } catch (IOException e) {
                 throw new UncheckedIOException("Label font missing: " + FILES.get(f), e);
             }
@@ -75,6 +84,43 @@ public final class LabelFonts {
         int gid = m.cmap().getGlyphId(codePoint);
         if (gid <= 0 || gid >= m.advances().length) return 0f;
         return m.advances()[gid] * 1000f / m.unitsPerEm();
+    }
+
+    /**
+     * Ink top / bottom (em, bottom negative) of the glyphs in these runs; {0, 0} when nothing
+     * is inked (spaces only).
+     */
+    public static float[] ink(List<Run> runs) {
+        float top = 0f, bottom = 0f;
+        for (Run r : runs) {
+            Metrics m = METRICS.get(r.face());
+            for (int i = 0; i < r.text().length(); ) {
+                int cp = r.text().codePointAt(i);
+                i += Character.charCount(cp);
+                int gid = m.cmap().getGlyphId(cp);
+                if (gid <= 0 || gid >= m.advances().length) continue;
+                top = Math.max(top, m.inkTop()[gid] / (float) m.unitsPerEm());
+                bottom = Math.min(bottom, m.inkBottom()[gid] / (float) m.unitsPerEm());
+            }
+        }
+        return new float[]{top, bottom};
+    }
+
+    /**
+     * The Arabic letters' ink envelope (em): every letter U+0621–U+064A and every presentation
+     * form that isn't a combining mark — hamza and dots included, optional harakat excluded.
+     * NotoSansArabic: +1.010 / −0.421 (1.431 em). The font's declared ascent/descent (1.374 /
+     * −0.738, 2.112 em) reserves room for stacked Quranic marks.
+     */
+    public static final float[] ARABIC_LETTER_INK = arabicLetterInk();
+
+    private static float[] arabicLetterInk() {
+        StringBuilder letters = new StringBuilder();
+        for (int cp = 0x0621; cp <= 0x064A; cp++) letters.appendCodePoint(cp);
+        for (int cp = 0xFE70; cp <= 0xFEFC; cp++) {
+            if (Character.getType(cp) != Character.NON_SPACING_MARK) letters.appendCodePoint(cp);
+        }
+        return ink(List.of(new Run(letters.toString(), Face.ARABIC)));
     }
 
     public static boolean isArabicScript(int cp) {
