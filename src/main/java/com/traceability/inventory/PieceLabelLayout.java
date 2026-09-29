@@ -20,7 +20,8 @@ import java.util.List;
  *   product      Regular 6 pt → floor 5 pt, max 2 lines
  *   variant      Regular 5.5 → 5 pt, 1 line  (omitted when blank or "Default Title")
  *   SKU          Regular 5 pt, 1 line        (omitted when blank)
- * Every line is fitted to the text width (LabelTextFitter: wrap, shrink, "…") and centred;
+ * Every line is fitted to the text width (LabelTextFitter: wrap, shrink, "…" after the last whole
+ * word for product and variant, at a grapheme for the SKU) and centred;
  * each line keeps its own bidi order.
  *
  * When the rows don't fit vertically, in this order until they do:
@@ -114,7 +115,7 @@ public final class PieceLabelLayout {
         LabelTextFitter.Fit v = variant.isEmpty() ? null
             : LabelTextFitter.fit(variant, LabelFonts.Face.REGULAR, VARIANT_START, VARIANT_FLOOR, 1, textW);
         LabelTextFitter.Fit s = skuText.isEmpty() ? null
-            : LabelTextFitter.fit(skuText, LabelFonts.Face.REGULAR, SKU_SIZE, SKU_SIZE, 1, textW);
+            : LabelTextFitter.fit(skuText, LabelFonts.Face.REGULAR, SKU_SIZE, SKU_SIZE, 1, textW, LabelTextFitter.Cut.GRAPHEME);
         List<Row> dropped = new ArrayList<>();
         List<Step> steps = new ArrayList<>();
 

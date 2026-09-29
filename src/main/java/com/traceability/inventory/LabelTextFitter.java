@@ -27,6 +27,9 @@ public final class LabelTextFitter {
     /** One display line: the logical text it came from, its font runs in visual order, its width. */
     public record Line(String logical, List<LabelFonts.Run> runs, float width, boolean rtl) {}
 
+    /** Where a "…" cut may fall: after a whole word (title, variant) or at any grapheme (SKU). */
+    public enum Cut { WORD, GRAPHEME }
+
     /** The fitted lines at {@code size}; {@code ellipsized} only when text was actually removed. */
     public record Fit(List<Line> lines, float size, boolean ellipsized) {}
 
@@ -35,6 +38,11 @@ public final class LabelTextFitter {
      * shrinking by 0.5 pt down to {@code floor}; at the floor, the last line ends with "…".
      */
     public static Fit fit(String logical, LabelFonts.Face latin, float start, float floor, int maxLines, float maxWidth) {
+        return fit(logical, latin, start, floor, maxLines, maxWidth, Cut.WORD);
+    }
+
+    public static Fit fit(String logical, LabelFonts.Face latin, float start, float floor, int maxLines, float maxWidth,
+                          Cut cut) {
         String text = normalize(logical);
         for (float size = start; size >= floor - 0.001f; size -= STEP) {
             List<String> lines = wrap(text, latin, size, maxWidth);
@@ -45,7 +53,7 @@ public final class LabelTextFitter {
         // logical end of what's kept (bidi shows it at the visual end for the line's direction).
         List<String> kept = new ArrayList<>(lines.subList(0, maxLines - 1));
         String rest = String.join(" ", lines.subList(maxLines - 1, lines.size()));
-        String last = ellipsize(rest, latin, floor, maxWidth);
+        String last = ellipsize(rest, latin, floor, maxWidth, cut);
         kept.add(last);
         return new Fit(toLines(kept, latin, floor), floor, !last.equals(rest));
     }
@@ -110,11 +118,45 @@ public final class LabelTextFitter {
         return lines;
     }
 
-    /** {@code text} if it fits, else its longest grapheme prefix + "…" that fits. */
-    static String ellipsize(String text, LabelFonts.Face latin, float size, float maxWidth) {
+    /**
+     * {@code text} if it fits. Otherwise, for WORD: the longest prefix ending at a line-break
+     * opportunity (ICU — Arabic and Latin), trailing spaces and separators (— – - , ، / & ; :)
+     * removed, + "…"; if even the first word doesn't fit, a grapheme cut. For GRAPHEME: the
+     * longest grapheme prefix + "…".
+     */
+    static String ellipsize(String text, LabelFonts.Face latin, float size, float maxWidth, Cut cut) {
         if (measure(text, latin, size) <= maxWidth) return text;
-        int cut = longestFittingPrefix(text, ELLIPSIS, latin, size, maxWidth);
-        return text.substring(0, cut).stripTrailing() + ELLIPSIS;
+        if (cut == Cut.WORD) {
+            BreakIterator it = BreakIterator.getLineInstance();
+            it.setText(text);
+            String best = null;
+            for (int b = it.first(); b != BreakIterator.DONE; b = it.next()) {
+                String kept = stripTrailingSeparators(text.substring(0, b));
+                if (kept.isEmpty() || b == text.length()) continue;
+                if (measure(kept + ELLIPSIS, latin, size) <= maxWidth) best = kept;
+                else break;
+            }
+            if (best != null) return best + ELLIPSIS;
+        }
+        int end = longestFittingPrefix(text, ELLIPSIS, latin, size, maxWidth);
+        return text.substring(0, end).stripTrailing() + ELLIPSIS;
+    }
+
+    private static final String SEPARATORS = ",،/&;؛:·|+";
+
+    /** Drops trailing whitespace, dashes and list separators so a cut never reads "إصدار —…". */
+    static String stripTrailingSeparators(String s) {
+        int end = s.length();
+        while (end > 0) {
+            int cp = s.codePointBefore(end);
+            if (Character.isWhitespace(cp) || Character.getType(cp) == Character.DASH_PUNCTUATION
+                    || SEPARATORS.indexOf(cp) >= 0) {
+                end -= Character.charCount(cp);
+            } else {
+                break;
+            }
+        }
+        return s.substring(0, end);
     }
 
     /** Largest grapheme boundary b such that text[0,b) (trimmed) + suffix fits; binary search. */

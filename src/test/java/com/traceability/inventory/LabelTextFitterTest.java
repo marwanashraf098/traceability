@@ -163,6 +163,77 @@ class LabelTextFitterTest {
         assertThat(r.get(0).text()).as("RTL: leftmost").startsWith(LabelTextFitter.ELLIPSIS);
     }
 
+    @Test
+    void t13_longTitles_arabicAndEnglish_cutAfterAWholeWord_bothSizes_andInTheLayout() {
+        for (float w : List.of(W50, W40)) {
+            for (String src : List.of(LONG_EN + " " + LONG_EN, LONG_AR + " " + LONG_AR)) {
+                LabelTextFitter.Fit f = LabelTextFitter.fit(src, R, 6f, 5f, 2, w);
+                assertThat(f.ellipsized()).isTrue();
+                assertEndsOnWholeWord(src, f);
+                LabelTextFitter.Fit one = LabelTextFitter.fit(src, R, 5f, 5f, 1, w);
+                assertEndsOnWholeWord(src, one);
+            }
+        }
+        for (PieceLabelLayout.Spec spec : List.of(PieceLabelLayout.Spec.of(50, 25), PieceLabelLayout.Spec.of(40, 25))) {
+            PieceLabelLayout.Layout l = PieceLabelLayout.layout(spec, "P000003", LONG_AR, "أحمر / مقاس كبير", "BLZ-AR-RED-L");
+            String title = l.lines().get(1).logical();
+            assertThat(title).endsWith(ELL);
+            String kept = title.substring(0, title.length() - 1);
+            assertThat(LONG_AR).startsWith(kept);
+            assertThat(Character.isWhitespace(LONG_AR.charAt(kept.length()))).as("%s: next char after the cut is a space", spec).isTrue();
+        }
+    }
+
+    @Test
+    void t14_trailingDashAndSeparators_strippedBeforeTheEllipsis() {
+        for (String sep : List.of(" —", " -", ",", " /", " &", "،")) {
+            String kept = "إصدار الخريف" + sep;
+            String src = kept + " المحدود جدا جدا جدا";
+            float width = LabelTextFitter.measure(kept + " " + ELL, R, 5f) + 0.2f;   // room for the separator, not the next word
+            String out = LabelTextFitter.ellipsize(src, R, 5f, width, LabelTextFitter.Cut.WORD);
+            assertThat(out).as("sep '%s'", sep).isEqualTo("إصدار الخريف" + ELL);
+        }
+        String en = LabelTextFitter.ellipsize("Organic Cotton — Limited Edition Autumn", R, 5f,
+            LabelTextFitter.measure("Organic Cotton — " + ELL, R, 5f) + 0.2f, LabelTextFitter.Cut.WORD);
+        assertThat(en).isEqualTo("Organic Cotton" + ELL);
+    }
+
+    @Test
+    void t15_firstWordAloneTooWide_fallsBackToAGraphemeCut() {
+        String word = "Supercalifragilisticexpialidocious";
+        String out = LabelTextFitter.ellipsize(word + " Hoodie", R, 5f, LabelTextFitter.measure("Supercali" + ELL, R, 5f) + 0.2f,
+            LabelTextFitter.Cut.WORD);
+        assertThat(out).isEqualTo("Supercali" + ELL);
+    }
+
+    @Test
+    void t16_skuUsesGraphemeCut_notWord() {
+        String sku = "ABCD EFGHIJKLMNOP";
+        float width = LabelTextFitter.measure("ABCD EFG" + ELL, R, 5f) + 0.2f;
+        assertThat(LabelTextFitter.ellipsize(sku, R, 5f, width, LabelTextFitter.Cut.GRAPHEME)).isEqualTo("ABCD EFG" + ELL);
+        assertThat(LabelTextFitter.ellipsize(sku, R, 5f, width, LabelTextFitter.Cut.WORD)).isEqualTo("ABCD" + ELL);
+        PieceLabelLayout.Layout l = PieceLabelLayout.layout(PieceLabelLayout.Spec.of(40, 25), "P1", "Tee", null,
+            "HOOD-ORG-CHAR-XXL-RELAXED-2026-EXTRA LONG SKU VALUE-2");
+        String skuLine = l.lines().get(l.lines().size() - 1).logical();
+        assertThat(skuLine).endsWith(ELL);
+        assertThat(skuLine.charAt(skuLine.length() - 2)).as("cut inside a token, not at a space").isNotEqualTo(' ');
+    }
+
+    static final String ELL = LabelTextFitter.ELLIPSIS;
+
+    static void assertEndsOnWholeWord(String src, LabelTextFitter.Fit f) {
+        String joined = String.join(" ", f.lines().stream().map(LabelTextFitter.Line::logical).toList());
+        assertThat(joined).endsWith(ELL);
+        String kept = joined.substring(0, joined.length() - 1);
+        assertThat(src).as("kept text is a prefix of the source").startsWith(kept);
+        char next = src.charAt(kept.length());
+        assertThat(Character.isWhitespace(next) || "—-,،/&".indexOf(next) >= 0)
+            .as("cut after a whole word, next char '%s' in '%s'", next, kept).isTrue();
+        char lastKept = kept.charAt(kept.length() - 1);
+        assertThat(Character.isWhitespace(lastKept) || "—-,،/&".indexOf(lastKept) >= 0)
+            .as("no trailing separator before the …: '%s'", kept).isFalse();
+    }
+
     static void assertWithin(LabelTextFitter.Fit f, float maxWidth) {
         for (LabelTextFitter.Line l : f.lines()) {
             float measured = LabelFonts.width(l.runs(), f.size());
