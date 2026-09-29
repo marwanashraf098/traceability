@@ -12,12 +12,7 @@ import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.pdmodel.PDPage;
 import org.apache.pdfbox.pdmodel.PDPageContentStream;
 import org.apache.pdfbox.pdmodel.common.PDRectangle;
-import org.apache.pdfbox.pdmodel.font.PDFont;
-import org.apache.pdfbox.pdmodel.font.PDType0Font;
-import org.apache.pdfbox.pdmodel.font.PDType1Font;
-import org.apache.pdfbox.pdmodel.font.Standard14Fonts;
 import org.apache.pdfbox.pdmodel.graphics.image.PDImageXObject;
-import org.springframework.core.io.ClassPathResource;
 import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
@@ -27,8 +22,6 @@ import javax.imageio.ImageIO;
 import java.awt.image.BufferedImage;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
-import java.io.InputStream;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -41,12 +34,13 @@ import org.springframework.transaction.annotation.Transactional;
  * Generates thermal label PDFs (Code 128 barcode, piece ID, SKU, variant name).
  *
  * Default label size: 50×25mm — configurable per tenant via receipts.location_id→tenants.
- * Noto Sans Arabic is embedded for correct Arabic glyph rendering (FR-6.4).
+ * Fonts: embedded Noto Sans (Latin) + Noto Sans Arabic, chosen glyph by glyph (LabelFonts, FR-6.4).
  *
  * Arabic text handling:
  *   1. ICU4J ArabicShaping converts isolated code points to contextual letter forms.
  *   2. ICU4J Bidi reverses the visual order for RTL presentation.
- *   3. PDType0Font renders the shaped string using embedded NotoSansArabic glyphs.
+ *   3. LabelFonts.runs picks the font per glyph: Arabic script → NotoSansArabic, everything
+ *      else (Latin, digits, "/", "&", "…") → NotoSans.
  */
 @Service
 public class LabelService {
@@ -224,15 +218,10 @@ public class LabelService {
         float hPt = heightMm * MM_TO_PT;
         PDRectangle pageSize = new PDRectangle(wPt, hPt);
 
-        try (PDDocument doc = new PDDocument();
-             InputStream fontStream =
-                 new ClassPathResource("fonts/NotoSansArabic-Regular.ttf").getInputStream()) {
+        try (PDDocument doc = new PDDocument()) {
 
-            // Latin fields (piece ID, SKU, barcode human-readable) — always ASCII;
-            // use the built-in Helvetica so no embedding is needed.
-            PDFont latinFont  = new PDType1Font(Standard14Fonts.FontName.HELVETICA);
-            // Arabic/mixed variant titles — embed Noto Sans Arabic.
-            PDType0Font arabicFont = PDType0Font.load(doc, fontStream, true);
+            // Every face is embedded (LabelFonts) — no Standard-14 font on a label.
+            LabelFonts.Loaded fonts = new LabelFonts.Loaded(doc);
 
             for (Map<String, Object> piece : pieces) {
                 String shortCode    = (String) piece.get("short_code");
@@ -252,8 +241,7 @@ public class LabelService {
                 doc.addPage(page);
 
                 try (PDPageContentStream cs = new PDPageContentStream(doc, page)) {
-                    drawLabel(cs, doc, latinFont, arabicFont, shortCode, sku,
-                              labelName, wPt, hPt);
+                    drawLabel(cs, doc, fonts, shortCode, sku, labelName, wPt, hPt);
                 }
             }
 
@@ -263,8 +251,7 @@ public class LabelService {
         }
     }
 
-    private void drawLabel(PDPageContentStream cs, PDDocument doc,
-                           PDFont latinFont, PDType0Font arabicFont,
+    private void drawLabel(PDPageContentStream cs, PDDocument doc, LabelFonts.Loaded fonts,
                            String shortCode, String sku, String variantTitle,
                            float wPt, float hPt) throws IOException {
 
@@ -288,73 +275,45 @@ public class LabelService {
         float fontSize2 = 6.5f;
 
         // Row 1: short code as human-readable caption — matches what is encoded in the barcode.
-        drawCenteredText(cs, latinFont, fontSize1, shortCode, wPt, barcodeY - 1.5f * MM_TO_PT);
+        drawCenteredText(cs, fonts, fontSize1, shortCode, wPt, barcodeY - 1.5f * MM_TO_PT);
 
-        // Row 2: SKU left (ASCII → Helvetica), variant name right (may be Arabic)
+        // Row 2: SKU left, variant name right (may be Arabic)
         float row2Y = barcodeY - 1.5f * MM_TO_PT - fontSize1 - 2f;
-        drawTextRow(cs, latinFont, arabicFont, fontSize2, sku, variantTitle, wPt, row2Y);
+        drawTextRow(cs, fonts, fontSize2, sku, variantTitle, wPt, row2Y);
     }
 
     // ── Text helpers ──────────────────────────────────────────────────────────
 
-    private void drawCenteredText(PDPageContentStream cs, PDFont font,
+    private void drawCenteredText(PDPageContentStream cs, LabelFonts.Loaded fonts,
                                   float size, String text, float pageWidth, float y)
             throws IOException {
-        float tw;
-        try {
-            tw = font.getStringWidth(text) / 1000f * size;
-        } catch (Exception e) {
-            tw = 0;
-        }
-        float x = (pageWidth - tw) / 2f;
-        cs.beginText();
-        cs.setFont(font, size);
-        cs.newLineAtOffset(x, y);
-        cs.showText(text);
-        cs.endText();
+        List<LabelFonts.Run> runs = LabelFonts.runs(text, LabelFonts.Face.REGULAR);
+        drawRuns(cs, fonts, runs, size, (pageWidth - LabelFonts.width(runs, size)) / 2f, y);
     }
 
-    /**
-     * Draws left text in latinFont and right text in the appropriate font:
-     * arabicFont if the string contains Arabic; latinFont otherwise.
-     */
-    private void drawTextRow(PDPageContentStream cs, PDFont latinFont, PDType0Font arabicFont,
+    /** Left text (SKU) and right text (the name, possibly Arabic), each split glyph by glyph into font runs. */
+    private void drawTextRow(PDPageContentStream cs, LabelFonts.Loaded fonts,
                              float size, String left, String right, float pageWidth, float y)
             throws IOException {
-        // Left text (SKU — always ASCII)
         if (!left.isEmpty()) {
-            cs.beginText();
-            cs.setFont(latinFont, size);
-            cs.newLineAtOffset(MARGIN, y);
-            cs.showText(left);
-            cs.endText();
+            drawRuns(cs, fonts, LabelFonts.runs(left, LabelFonts.Face.REGULAR), size, MARGIN, y);
         }
-
-        // Right text: per-run rendering — Helvetica for Latin runs, NotoSansArabic for Arabic runs.
-        // shapeForDisplay reorders the whole string to visual LTR first, then segmentRuns splits
-        // into contiguous font-homogeneous spans. This handles pure-Latin, pure-Arabic, and mixed
-        // strings like "Vanilla Whey 1KG - بروتين واي" without a missing-glyph exception.
         if (!right.isEmpty()) {
-            String displayRight = containsArabic(right) ? shapeForDisplay(right) : right;
-            List<TextRun> runs = segmentRuns(displayRight);
-            float totalWidth = 0f;
-            float[] runWidths = new float[runs.size()];
-            for (int i = 0; i < runs.size(); i++) {
-                PDFont f = runs.get(i).arabic() ? arabicFont : latinFont;
-                try { runWidths[i] = f.getStringWidth(runs.get(i).text()) / 1000f * size; }
-                catch (Exception ignored) { runWidths[i] = 0f; }
-                totalWidth += runWidths[i];
-            }
-            float rx = pageWidth - MARGIN - totalWidth;
-            for (int i = 0; i < runs.size(); i++) {
-                PDFont f = runs.get(i).arabic() ? arabicFont : latinFont;
-                cs.beginText();
-                cs.setFont(f, size);
-                cs.newLineAtOffset(rx, y);
-                cs.showText(runs.get(i).text());
-                cs.endText();
-                rx += runWidths[i];
-            }
+            String displayRight = LabelFonts.containsArabic(right) ? shapeForDisplay(right) : right;
+            List<LabelFonts.Run> runs = LabelFonts.runs(displayRight, LabelFonts.Face.REGULAR);
+            drawRuns(cs, fonts, runs, size, pageWidth - MARGIN - LabelFonts.width(runs, size), y);
+        }
+    }
+
+    private static void drawRuns(PDPageContentStream cs, LabelFonts.Loaded fonts, List<LabelFonts.Run> runs,
+                                 float size, float x, float y) throws IOException {
+        for (LabelFonts.Run run : runs) {
+            cs.beginText();
+            cs.setFont(fonts.font(run.face()), size);
+            cs.newLineAtOffset(x, y);
+            cs.showText(run.text());
+            cs.endText();
+            x += LabelFonts.width(List.of(run), size);
         }
     }
 
@@ -364,7 +323,7 @@ public class LabelService {
      */
     public static String shapeForDisplay(String text) {
         if (text == null || text.isBlank()) return "";
-        if (!containsArabic(text)) return text;
+        if (!LabelFonts.containsArabic(text)) return text;
         try {
             // 1. Shape: convert isolated Unicode code points to contextual letter forms
             ArabicShaping shaping = new ArabicShaping(
@@ -378,74 +337,6 @@ public class LabelService {
         } catch (ArabicShapingException e) {
             return text; // fallback: unshaped but won't show boxes (font has glyphs)
         }
-    }
-
-    private static boolean containsArabic(String text) {
-        for (char c : text.toCharArray()) {
-            if (isArabicChar(c)) return true;
-        }
-        return false;
-    }
-
-    /**
-     * Returns true for any character that belongs to an Arabic Unicode block.
-     * Covers the main Arabic block (U+0600–U+06FF) AND the Presentation Forms blocks
-     * (U+FB50–U+FDFF, U+FE70–U+FEFF) because ICU4J ArabicShaping.LETTERS_SHAPE outputs
-     * Presentation Forms — the shaped string no longer has chars in the main Arabic block.
-     */
-    private static boolean isArabicChar(char c) {
-        Character.UnicodeBlock b = Character.UnicodeBlock.of(c);
-        return b == Character.UnicodeBlock.ARABIC
-            || b == Character.UnicodeBlock.ARABIC_PRESENTATION_FORMS_A
-            || b == Character.UnicodeBlock.ARABIC_PRESENTATION_FORMS_B
-            || b == Character.UnicodeBlock.ARABIC_SUPPLEMENT
-            || b == Character.UnicodeBlock.ARABIC_EXTENDED_A;
-    }
-
-    private record TextRun(String text, boolean arabic) {}
-
-    /**
-     * Segments {@code text} into contiguous runs by Unicode script.
-     * Arabic chars (including ICU4J-shaped Presentation Forms) → arabic=true (NotoSansArabic);
-     * everything else → arabic=false (Helvetica).
-     * Neutral chars (space, hyphen, digits, punctuation) attach to the preceding run.
-     * NotoSansArabic-Regular covers space/hyphen/digits, so they are safe in an Arabic run.
-     */
-    private List<TextRun> segmentRuns(String text) {
-        if (text == null || text.isEmpty()) return List.of();
-        List<TextRun> runs = new ArrayList<>();
-        StringBuilder current = new StringBuilder();
-        Boolean prevArabic = null;
-
-        for (char c : text.toCharArray()) {
-            boolean arabic;
-            if (isArabicChar(c)) {
-                arabic = true;
-            } else if (isNeutral(c)) {
-                arabic = prevArabic != null ? prevArabic : false;
-            } else {
-                arabic = false;
-            }
-
-            if (prevArabic == null) prevArabic = arabic;
-
-            if (arabic == prevArabic) {
-                current.append(c);
-            } else {
-                runs.add(new TextRun(current.toString(), prevArabic));
-                current = new StringBuilder(String.valueOf(c));
-                prevArabic = arabic;
-            }
-        }
-        if (current.length() > 0) runs.add(new TextRun(current.toString(), prevArabic));
-        return runs;
-    }
-
-    private static boolean isNeutral(char c) {
-        return c == ' ' || c == '-' || Character.isDigit(c)
-            || Character.getType(c) == Character.CONNECTOR_PUNCTUATION
-            || Character.getType(c) == Character.DASH_PUNCTUATION
-            || Character.getType(c) == Character.OTHER_PUNCTUATION;
     }
 
     // ── Barcode rendering ─────────────────────────────────────────────────────
