@@ -285,9 +285,8 @@ public class FulfillService {
             List<String> orderNumbers = arr != null
                 ? Arrays.asList((String[]) arr.getArray())
                 : List.of();
-            // Same composition LabelService uses for the physical piece label — see
-            // ProductDisplayName; the gather Item column must read identically to what's
-            // printed under the barcode.
+            // "product - variant" (ProductDisplayName). The piece label prints the same two
+            // parts on separate rows (PieceLabelLayout).
             String displayName = ProductDisplayName.compose(
                 rs.getString("product_title"), rs.getString("name"));
             return new GatherRow(
@@ -1261,9 +1260,9 @@ public class FulfillService {
 
     /** needed = remaining-to-gather (order_item quantity minus active+packed allocations
      *  already scanned for it), not the raw order quantity — see getGatherList() javadoc.
-     *  displayName = ProductDisplayName.compose(product, variant) — the same "product -
-     *  variant" string LabelService prints under the physical piece barcode; name/sku are
-     *  kept as the raw variant fields alongside it. */
+     *  displayName = ProductDisplayName.compose(product, variant) — "product - variant" (the
+     *  piece label prints the same two parts on separate rows); name/sku are kept as the raw
+     *  variant fields alongside it. */
     public record GatherRow(
             UUID         variantId,
             String       name,
