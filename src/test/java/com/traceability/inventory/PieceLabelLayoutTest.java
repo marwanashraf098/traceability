@@ -78,34 +78,73 @@ class PieceLabelLayoutTest {
     }
 
     @Test
-    void l5_verticalFitOrder_titleShrinks_thenVariantShrinks_thenVariantDropped_thenTitleOneLine_thenSkuDropped() {
+    void l5_verticalFitOrder_titleShrinks_variantShrinks_titleOneLine_thenSkuDropped_variantLast() {
         String twoLines = "Organic Cotton Oversized Heavyweight Hoodie Grey";
-        // 12 mm barcode: budget ≈ 27.3 pt; 2-line title at 5 pt + code + sku doesn't leave room for the variant.
+        // 12 mm barcode: budget ≈ 27.3 pt — cutting the title to one line is enough; the variant stays.
         PieceLabelLayout.Layout at12 = PieceLabelLayout.layout(new PieceLabelLayout.Spec(40, 25, 12), "P1", twoLines, "Grey / XL", "SKU-1");
-        assertThat(at12.dropped()).containsExactly(PieceLabelLayout.Row.VARIANT);
-        assertThat(at12.lines()).filteredOn(t -> t.row() == PieceLabelLayout.Row.TITLE).hasSize(2).allMatch(t -> t.size() == 5f);
+        assertThat(at12.dropped()).isEmpty();
+        assertThat(at12.lines()).extracting(PieceLabelLayout.TextLine::row).containsExactly(
+            PieceLabelLayout.Row.CODE, PieceLabelLayout.Row.TITLE, PieceLabelLayout.Row.VARIANT, PieceLabelLayout.Row.SKU);
+        assertThat(at12.lines()).filteredOn(t -> t.row() == PieceLabelLayout.Row.TITLE).singleElement()
+            .satisfies(t -> assertThat(t.logical()).endsWith(LabelTextFitter.ELLIPSIS));
         assertSound(at12, "12 mm");
 
-        // 14 mm barcode: the title is cut to one line with "…" before the SKU goes.
+        // 14 mm barcode: the SKU goes next — the variant is still kept.
         PieceLabelLayout.Layout at14 = PieceLabelLayout.layout(new PieceLabelLayout.Spec(40, 25, 14), "P1", twoLines, "Grey / XL", "SKU-1");
-        assertThat(at14.dropped()).containsExactly(PieceLabelLayout.Row.VARIANT);
-        assertThat(at14.lines()).filteredOn(t -> t.row() == PieceLabelLayout.Row.TITLE).hasSize(1)
-            .allMatch(t -> t.logical().endsWith(LabelTextFitter.ELLIPSIS));
-        assertThat(at14.lines()).anyMatch(t -> t.row() == PieceLabelLayout.Row.SKU);
+        assertThat(at14.dropped()).containsExactly(PieceLabelLayout.Row.SKU);
+        assertThat(at14.lines()).extracting(PieceLabelLayout.TextLine::row).containsExactly(
+            PieceLabelLayout.Row.CODE, PieceLabelLayout.Row.TITLE, PieceLabelLayout.Row.VARIANT);
         assertSound(at14, "14 mm");
 
-        // 16 mm barcode: last resort — the SKU goes; piece code + one title line always kept.
+        // 16 mm barcode: last resort — the variant goes; piece code + one title line always kept.
         PieceLabelLayout.Layout at16 = PieceLabelLayout.layout(new PieceLabelLayout.Spec(40, 25, 16), "P1", twoLines, "Grey / XL", "SKU-1");
-        assertThat(at16.dropped()).containsExactly(PieceLabelLayout.Row.VARIANT, PieceLabelLayout.Row.SKU);
+        assertThat(at16.dropped()).containsExactly(PieceLabelLayout.Row.SKU, PieceLabelLayout.Row.VARIANT);
         assertThat(at16.lines()).extracting(PieceLabelLayout.TextLine::row)
             .containsExactly(PieceLabelLayout.Row.CODE, PieceLabelLayout.Row.TITLE);
         assertSound(at16, "16 mm");
     }
 
     @Test
+    void l12_variantDroppedOnlyAfterSku_andAfterTheTitleIsOneLine_acrossBarcodeHeightsAndFixtures() {
+        int variantDrops = 0;
+        for (float w : new float[]{50f, 40f}) {
+            for (float bh = 10f; bh <= 17f; bh += 0.25f) {
+                for (String[] f : FIXTURES) {
+                    PieceLabelLayout.Layout l = PieceLabelLayout.layout(new PieceLabelLayout.Spec(w, 25, bh), f[0], f[1], f[2], f[3]);
+                    if (!l.dropped().contains(PieceLabelLayout.Row.VARIANT)) continue;
+                    variantDrops++;
+                    String what = w + "x25 @" + bh + " mm " + f[1];
+                    assertThat(l.steps()).as(what).endsWith(PieceLabelLayout.Step.DROP_VARIANT);
+                    if (f[3] != null) {
+                        assertThat(l.dropped()).as(what + ": SKU went first").containsExactly(PieceLabelLayout.Row.SKU, PieceLabelLayout.Row.VARIANT);
+                    }
+                    assertThat(l.lines()).as(what + ": title already one line")
+                        .filteredOn(t -> t.row() == PieceLabelLayout.Row.TITLE).hasSize(1);
+                    assertThat(l.steps()).as(what).contains(PieceLabelLayout.Step.TITLE_ONE_LINE);
+                    assertSound(l, what);
+                }
+            }
+        }
+        assertThat(variantDrops).as("the sweep reaches the variant-drop case").isGreaterThan(0);
+    }
+
+    @Test
+    void l13_P000003_longArabic_keepsCode_oneTitleLineWithEllipsis_variant_andSku_bothSizes() {
+        for (PieceLabelLayout.Spec spec : SIZES) {
+            PieceLabelLayout.Layout l = PieceLabelLayout.layout(spec, "P000003", LabelTextFitterTest.LONG_AR, "أحمر / مقاس كبير", "BLZ-AR-RED-L");
+            assertThat(l.lines()).extracting(PieceLabelLayout.TextLine::row).as(spec.toString()).containsExactly(
+                PieceLabelLayout.Row.CODE, PieceLabelLayout.Row.TITLE, PieceLabelLayout.Row.VARIANT, PieceLabelLayout.Row.SKU);
+            assertThat(l.lines().get(1).logical()).endsWith(LabelTextFitter.ELLIPSIS);
+            assertThat(l.lines().get(2).logical()).isEqualTo("أحمر / مقاس كبير");
+            assertThat(l.dropped()).isEmpty();
+            assertSound(l, spec.toString());
+        }
+    }
+
+    @Test
     void l6_variantShrinksToFloor_beforeItIsDropped() {
         // Budget ≈ 25.0 pt: code 8.25 + title 5.5 (at 5 pt) + SKU 5.5 leave room for the variant at
-        // 5 pt (5.5) but not at 5.5 pt (6.05) — so step 2 applies and step 3 doesn't.
+        // 5 pt (5.5) but not at 5.5 pt (6.05) — so step 2 applies and nothing after it.
         PieceLabelLayout.Spec tight = new PieceLabelLayout.Spec(50, 25, 12.83f);
         PieceLabelLayout.Layout l = PieceLabelLayout.layout(tight, "P1", "Linen Shirt", "Grey / XL", "SKU-1");
         assertThat(l.dropped()).isEmpty();
@@ -170,10 +209,10 @@ class PieceLabelLayoutTest {
         String twoLines = "Organic Cotton Oversized Heavyweight Hoodie Grey";
         assertThat(PieceLabelLayout.layout(PieceLabelLayout.Spec.of(40, 25), "P1", "Linen Shirt", "White / M", "LIN").steps()).isEmpty();
         assertThat(PieceLabelLayout.layout(new PieceLabelLayout.Spec(40, 25, 12), "P1", twoLines, "Grey / XL", "SKU-1").steps())
-            .containsExactly(PieceLabelLayout.Step.TITLE_TO_FLOOR, PieceLabelLayout.Step.VARIANT_TO_FLOOR, PieceLabelLayout.Step.DROP_VARIANT);
+            .containsExactly(PieceLabelLayout.Step.TITLE_TO_FLOOR, PieceLabelLayout.Step.VARIANT_TO_FLOOR, PieceLabelLayout.Step.TITLE_ONE_LINE);
         assertThat(PieceLabelLayout.layout(new PieceLabelLayout.Spec(40, 25, 16), "P1", twoLines, "Grey / XL", "SKU-1").steps())
             .containsExactly(PieceLabelLayout.Step.TITLE_TO_FLOOR, PieceLabelLayout.Step.VARIANT_TO_FLOOR,
-                PieceLabelLayout.Step.DROP_VARIANT, PieceLabelLayout.Step.TITLE_ONE_LINE, PieceLabelLayout.Step.DROP_SKU);
+                PieceLabelLayout.Step.TITLE_ONE_LINE, PieceLabelLayout.Step.DROP_SKU, PieceLabelLayout.Step.DROP_VARIANT);
     }
 
     @Test

@@ -24,8 +24,9 @@ import java.util.List;
  * each line keeps its own bidi order.
  *
  * When the rows don't fit vertically, in this order until they do:
- *   1. product → 5 pt   2. variant → 5 pt   3. drop the variant row
- *   4. product → 1 line with "…"   5. drop the SKU row.
+ *   1. product → 5 pt   2. variant → 5 pt   3. product → 1 line with "…"
+ *   4. drop the SKU row   5. drop the variant row (last resort — the variant outranks the
+ *      second product line and the SKU).
  * The piece code and one product line are always kept, and no two boxes ever overlap. The steps
  * that fired are listed in {@link Layout#steps()}.
  */
@@ -70,7 +71,7 @@ public final class PieceLabelLayout {
     public enum Row { CODE, TITLE, VARIANT, SKU }
 
     /** The vertical-fit steps, in the order they are tried. */
-    public enum Step { TITLE_TO_FLOOR, VARIANT_TO_FLOOR, DROP_VARIANT, TITLE_ONE_LINE, DROP_SKU }
+    public enum Step { TITLE_TO_FLOOR, VARIANT_TO_FLOOR, TITLE_ONE_LINE, DROP_SKU, DROP_VARIANT }
 
     /** One positioned line: draw {@code runs} at (x, baseline) in {@code size}; ascent/height in em. */
     public record TextLine(Row row, List<LabelFonts.Run> runs, String logical, float size, float x, float baseline,
@@ -125,12 +126,12 @@ public final class PieceLabelLayout {
             v = LabelTextFitter.fit(variant, LabelFonts.Face.REGULAR, VARIANT_FLOOR, VARIANT_FLOOR, 1, textW);
             steps.add(Step.VARIANT_TO_FLOOR);
         }
-        if (height(code, t, v, s) > budget && v != null) { v = null; dropped.add(Row.VARIANT); steps.add(Step.DROP_VARIANT); }
         if (height(code, t, v, s) > budget && t != null) {
             t = LabelTextFitter.fit(title, LabelFonts.Face.REGULAR, TITLE_FLOOR, TITLE_FLOOR, 1, textW);
             steps.add(Step.TITLE_ONE_LINE);
         }
         if (height(code, t, v, s) > budget && s != null) { s = null; dropped.add(Row.SKU); steps.add(Step.DROP_SKU); }
+        if (height(code, t, v, s) > budget && v != null) { v = null; dropped.add(Row.VARIANT); steps.add(Step.DROP_VARIANT); }
 
         List<TextLine> lines = new ArrayList<>();
         float top = barcode.y() - BARCODE_GAP;
