@@ -107,44 +107,20 @@ beforeEach(() => {
   stubFetchWithShellDefaults(vi.fn(backend))
 })
 
+// Step 2: the Requests tab is gone — the drawer opens through the alerts' deep link.
 async function openRequestsTab() {
   const user = userEvent.setup()
-  renderWithProviders(<ExchangesRefunds />)
-  const tab = await screen.findByRole('button', { name: /Requests/ })
-  await user.click(tab)
-  await screen.findByText('RR-7K3F9M')
+  renderWithProviders(<ExchangesRefunds />, { initialEntries: ['/exchanges?tab=requests&request=rr-1'] })
   return user
 }
 
-async function openDrawer(user: ReturnType<typeof userEvent.setup>, reference = 'RR-7K3F9M') {
-  await user.click(screen.getByText(reference))
-  const drawer = screen.getByTestId('return-request-drawer')
+async function openDrawer(_user: ReturnType<typeof userEvent.setup>) {
+  const drawer = await screen.findByTestId('return-request-drawer')
   await within(drawer).findByText('It runs small.')
   return drawer
 }
 
-describe('Requests tab', () => {
-  test('badge shows the count of requested requests', async () => {
-    renderWithProviders(<ExchangesRefunds />)
-    const badge = await screen.findByTestId('requests-new-badge')
-    expect(badge).toHaveTextContent('2 new')
-  })
-
-  test('list renders M1 columns: reference, short customer, order, items, reasons, sent, status', async () => {
-    await openRequestsTab()
-    const row = screen.getByText('RR-Q8HT2C').closest('tr')!
-    expect(within(row).getByText('Omar K.')).toBeInTheDocument()
-    expect(within(row).getByText('#1039')).toBeInTheDocument()
-    expect(within(row).getByText('2')).toBeInTheDocument()
-    expect(within(row).getByText('Damaged or faulty, Wrong size')).toBeInTheDocument()
-    expect(within(row).getByText('Requested')).toBeInTheDocument()
-    const today = screen.getByText('RR-7K3F9M').closest('tr')!
-    expect(within(today).getByText(/^Today, /)).toBeInTheDocument()
-    expect(within(screen.getByText('RR-M4ZP6W').closest('tr')!).getByText('Approved')).toBeInTheDocument()
-    // Own paginated fetch.
-    expect(calls.some(c => c.method === 'GET' && c.url.includes('/return-requests?page=0&size=25'))).toBe(true)
-  })
-
+describe('Request drawer (opened from the deep link)', () => {
   test('row opens the drawer with all detail fields, items with short codes and reason, and the note', async () => {
     const user = await openRequestsTab()
     const drawer = await openDrawer(user)
@@ -168,17 +144,17 @@ describe('Requests tab', () => {
     expect(within(drawer).queryByText(/Approving books a Bosta pickup/)).not.toBeInTheDocument()
   })
 
-  test('Approve calls the endpoint, the drawer shows Approved, and the list and badge refresh', async () => {
+  test('Approve calls the endpoint, the drawer shows Approved, and the list refreshes', async () => {
     const user = await openRequestsTab()
     const drawer = await openDrawer(user)
+    const listBefore = calls.filter(c => c.url.includes('/returns-exchanges?')).length
     await user.click(within(drawer).getByRole('button', { name: 'Approve' }))
 
     await waitFor(() => expect(calls.some(c => c.method === 'POST' && c.url.endsWith('/return-requests/rr-1/approve'))).toBe(true))
     await waitFor(() => expect(within(drawer).getByText('Approved')).toBeInTheDocument())
     expect(within(drawer).queryByRole('button', { name: 'Approve' })).not.toBeInTheDocument()
-    await waitFor(() => expect(screen.getByTestId('requests-new-badge')).toHaveTextContent('1 new'))
-    const row = screen.getByText('RR-7K3F9M', { selector: 'td bdi' }).closest('tr')!
-    await waitFor(() => expect(within(row).getByText('Approved')).toBeInTheDocument())
+    // Step 2: the Requests badge and row are gone — the Returns & exchanges list refreshes instead.
+    await waitFor(() => expect(calls.filter(c => c.url.includes('/returns-exchanges?')).length).toBeGreaterThan(listBefore))
   })
 
   test('Reject requires a reason, shows the live counter, then calls the endpoint', async () => {
@@ -226,18 +202,4 @@ describe('Requests tab', () => {
     await waitFor(() => expect(within(drawer).getByText('Approved')).toBeInTheDocument())
   })
 
-  test('manager sees the Requests tab', async () => {
-    role = 'manager'
-    renderWithProviders(<ExchangesRefunds />)
-    expect(await screen.findByRole('button', { name: /Requests/ })).toBeInTheDocument()
-  })
-
-  test('worker does not see the Requests tab and never calls the endpoint', async () => {
-    role = 'worker'
-    renderWithProviders(<ExchangesRefunds />)
-    await screen.findByRole('button', { name: /All/ })
-    await waitFor(() => expect(calls.some(c => c.url.includes('/refunds'))).toBe(true))
-    expect(screen.queryByRole('button', { name: /Requests/ })).not.toBeInTheDocument()
-    expect(calls.some(c => c.url.includes('/return-requests'))).toBe(false)
-  })
 })

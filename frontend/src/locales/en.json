@@ -10,8 +10,8 @@
     "logout": "Log out",
     "switchLock": "Switch / Lock",
     "lookup": "Search barcode or AWB…",
-    "returns": "Returns",
-    "exchangesRefunds": "Exchanges & Refunds",
+    "returns": "Scan returns",
+    "exchangesRefunds": "Returns & exchanges",
     "exceptions": "Exceptions",
     "connections": "Connections",
     "users": "Team",
@@ -44,7 +44,7 @@
     "needsAttention": {
       "title": "Needs attention",
       "pendingPicks": "Pending picks · Fulfill",
-      "awaitingInspection": "Awaiting inspection · Returns",
+      "awaitingInspection": "Awaiting inspection · Scan returns",
       "openExceptions": "Open exceptions",
       "openExceptionsBreakdown": "{{critical}} critical · {{warning}} warning",
       "lowStock": "Low-stock variants · Catalog",
@@ -98,7 +98,8 @@
       "daysAgo": "{{count}}d ago"
     },
     "stats": {
-      "exchanges": "Exchanges"
+      "exchanges": "Exchanges",
+      "returns": "Returns"
     },
     "dateRange": {
       "today": "Today",
@@ -763,7 +764,7 @@
     }
   },
   "returns": {
-    "title": "Returns",
+    "title": "Scan returns",
     "landing": {
       "openSession": "Open return session",
       "resumeSession": "Resume session {{id}}",
@@ -945,7 +946,7 @@
     "badge": "Exchange"
   },
   "exchangesRefunds": {
-    "title": "Exchanges & Refunds",
+    "title": "Returns & exchanges",
     "tabs": {
       "all": "All",
       "needsAction": "Needs action",
@@ -1012,8 +1013,8 @@
         "originalOrder": "Original order",
         "lifecycle": "Lifecycle",
         "inspection": "Inspection",
-        "resolutionNote": "Restock/damage decisions for the returned item happen in Returns.",
-        "goToReturns": "Open in Returns"
+        "resolutionNote": "Restock/damage decisions for the returned item happen in Scan returns.",
+        "goToReturns": "Open in Scan returns"
       },
       "exchange": {
         "replacementSection": "Replacement (outbound)",
@@ -2525,7 +2526,7 @@
         "desc": "Scan and pack orders in the queue"
       },
       "returns": {
-        "title": "Returns",
+        "title": "Scan returns",
         "desc": "Open a session and scan returned items"
       },
       "pickups": {
@@ -2535,6 +2536,184 @@
       "lookup": {
         "title": "Look up",
         "desc": "Find an order by barcode or AWB"
+      }
+    }
+  },
+  "returnsExchanges": {
+    "title": "Returns & exchanges",
+    "subtitle": "Everything customers are sending back, from your returns page and from Bosta.",
+    "tilesLabel": "Needs your attention",
+    "tiles": {
+      "toApprove": {
+        "label": "To approve",
+        "sub": "Customer requests"
+      },
+      "replacementToChoose": {
+        "label": "Replacement to choose",
+        "sub": "Exchanges waiting for a size"
+      },
+      "toLinkOrder": {
+        "label": "To link to an order",
+        "sub": "Original order not found"
+      },
+      "refundToRecord": {
+        "label": "Refund to record",
+        "sub": "Items back and checked"
+      },
+      "bookingProblem": {
+        "label": "Booking problem",
+        "sub": "Bosta didn't confirm"
+      }
+    },
+    "removeFilter": "Remove filter",
+    "stageLabel": "Stage",
+    "tabs": {
+      "all": "All",
+      "to_do": "To do",
+      "in_progress": "In progress",
+      "done": "Done"
+    },
+    "type": {
+      "label": "Type",
+      "all": "Refunds and exchanges",
+      "refund": "Refunds",
+      "exchange": "Exchanges"
+    },
+    "search": {
+      "label": "Search",
+      "placeholder": "Order, customer, AWB or RR-…"
+    },
+    "columns": {
+      "return": "Return",
+      "customer": "Customer",
+      "order": "Order",
+      "items": "Items",
+      "next": "What's next",
+      "updated": "Updated"
+    },
+    "kind": {
+      "refund": "Refund",
+      "exchange": "Exchange"
+    },
+    "source": {
+      "returns_page": "Returns page",
+      "bosta": "Booked in Bosta"
+    },
+    "notFound": "Not found",
+    "group": "{{stage}} · {{count}}",
+    "showing": "— showing {{count}}",
+    "showMore": "Show more",
+    "empty": {
+      "all": "No returns or exchanges yet",
+      "to_do": "Nothing to do",
+      "in_progress": "Nothing on the way",
+      "done": "Nothing finished yet",
+      "filtered": "Nothing matches these filters"
+    },
+    "errorTitle": "Couldn't load returns and exchanges",
+    "retry": "Try again",
+    "overdueAge_one": "{{count}} day ago",
+    "overdueAge_other": "{{count}} days ago",
+    "time": {
+      "justNow": "Just now",
+      "minutes": "{{count}}m ago",
+      "hours": "{{count}}h ago",
+      "yesterday": "Yesterday",
+      "days_one": "{{count}} day ago",
+      "days_other": "{{count}} days ago"
+    },
+    "next": {
+      "approve": {
+        "label": "Approve or reject",
+        "reasonExchange": "Replacement in stock",
+        "reason_one": "{{count}} item",
+        "reason_other": "{{count}} items"
+      },
+      "choose_replacement": {
+        "label": "Choose the replacement",
+        "reasonSoldOut": "Replacement sold out — switch to refund or reject",
+        "reasonBosta": "Exchange booked in Bosta — choose the sizes"
+      },
+      "link_order": {
+        "label": "Link to an order",
+        "reasonNone": "No order matched this customer",
+        "reasonSeveral": "Several possible orders — pick one"
+      },
+      "link_request": {
+        "label": "Link to a request",
+        "reason_one": "{{count}} request could match: {{refs}}",
+        "reason_other": "{{count}} requests could match: {{refs}}"
+      },
+      "record_refund": {
+        "label": "Record the refund",
+        "reason": "Items back and checked",
+        "reasonOverdue": "Overdue"
+      },
+      "booking_problem": {
+        "label": "Booking problem",
+        "reason_failed": "Bosta didn't book it — check and retry",
+        "reason_failed_ambiguous": "Bosta didn't confirm — check and retry",
+        "reason_needs_review": "Bosta's details differ — check in Bosta"
+      },
+      "inspect": {
+        "label": "Check the items",
+        "reason_one": "{{count}} item back — restock or mark damaged",
+        "reason_other": "{{count}} items back — restock or mark damaged",
+        "reasonLeg": "Scanned — restock or mark damaged"
+      },
+      "scan": {
+        "label": "Back — waiting to be scanned",
+        "reason": "Scan it in Scan returns"
+      },
+      "add_in_receiving": {
+        "label": "Add it in Receiving",
+        "reason": "Came back without a Traced piece — add it to stock"
+      },
+      "booking": {
+        "label": "Booking the courier",
+        "reason": "Bosta pickup being booked"
+      },
+      "awaiting_items": {
+        "label": "Waiting for the items",
+        "reason": "Book the pickup in Bosta"
+      },
+      "on_the_way": {
+        "label_refund": "Courier collecting",
+        "label_exchange": "Exchange on the way",
+        "label_leg": "Coming back",
+        "reasonTracking": "Bosta {{tracking}}"
+      },
+      "refunded": {
+        "label": "Refunded",
+        "labelAmount": "Refunded · {{amount}}"
+      },
+      "exchanged": {
+        "label": "Exchanged",
+        "reason": "Old item back"
+      },
+      "received": {
+        "label": "Received",
+        "reason": "Back and checked"
+      },
+      "returned_no_exchange": {
+        "label": "Returned, no exchange"
+      },
+      "rejected": {
+        "label": "Rejected"
+      },
+      "closed": {
+        "label": "Closed",
+        "labelReason": "Closed · {{reason}}"
+      },
+      "cancelled": {
+        "label": "Cancelled"
+      },
+      "dismissed": {
+        "label": "Dismissed"
+      },
+      "lost": {
+        "label": "Lost by the courier",
+        "reason": "Check with Bosta"
       }
     }
   }

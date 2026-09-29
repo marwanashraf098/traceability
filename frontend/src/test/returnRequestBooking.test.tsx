@@ -87,9 +87,9 @@ afterEach(async () => { await i18n.changeLanguage('en') })
 
 async function openDrawer() {
   const user = userEvent.setup()
-  renderWithProviders(<I18nextProvider i18n={i18n}><ExchangesRefunds /></I18nextProvider>)
-  await user.click(await screen.findByRole('button', { name: /Requests/ }))
-  await user.click(await screen.findByText('RR-7K3F9M'))
+  // Step 2: the Requests tab is gone — the drawer opens through the alerts' deep link.
+  renderWithProviders(<I18nextProvider i18n={i18n}><ExchangesRefunds /></I18nextProvider>,
+    { initialEntries: ['/exchanges?tab=requests&request=rr-1'] })
   const drawer = screen.getByTestId('return-request-drawer')
   await within(drawer).findByText('It runs small.')
   return { user, drawer }
@@ -167,16 +167,3 @@ describe('Drawer → Bosta pickup', () => {
   })
 })
 
-describe('Requests list', () => {
-  test('Attention badge for failed / failed_ambiguous / needs_review only', async () => {
-    for (const [status, shown] of [['failed', true], ['failed_ambiguous', true], ['needs_review', true], ['booked', false], [null, false]] as const) {
-      withBooking('approved', status)
-      const view = renderWithProviders(<I18nextProvider i18n={i18n}><ExchangesRefunds /></I18nextProvider>)
-      await userEvent.setup().click(await screen.findByRole('button', { name: /Requests/ }))
-      await screen.findByText('RR-7K3F9M')
-      if (shown) expect(screen.getByTestId('attention-badge')).toHaveTextContent('Attention')
-      else expect(screen.queryByTestId('attention-badge')).not.toBeInTheDocument()
-      view.unmount()
-    }
-  })
-})

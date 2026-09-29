@@ -81,9 +81,11 @@ function withBooking(status: ReturnRequestDetail['status'], bookingStatus: Booki
 }
 
 const detailGets = () => calls.filter(c => c.method === 'GET' && c.url.endsWith('/return-requests/rr-1')).length
-const listGets = () => calls.filter(c => c.method === 'GET' && c.url.includes('/return-requests?')).length
-/** The Requests table's own fetch — a list refresh also re-fetches the two size=1 header counts. */
-const tableGets = () => calls.filter(c => c.method === 'GET' && c.url.includes('/return-requests?') && !/[?&]size=1(&|$)/.test(c.url)).length
+// Step 2 (approved): the list is now the Returns & exchanges list (GET /returns-exchanges?…); its
+// counts (/returns-exchanges/counts) are fetched alongside and are not counted here.
+const listGets = () => calls.filter(c => c.method === 'GET' && c.url.includes('/returns-exchanges?')).length
+/** The list's own fetch — one per refresh. */
+const tableGets = () => calls.filter(c => c.method === 'GET' && c.url.includes('/returns-exchanges?')).length
 
 beforeEach(async () => {
   vi.useFakeTimers({ shouldAdvanceTime: true })
@@ -102,9 +104,9 @@ afterEach(async () => {
 
 async function openDrawer() {
   const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime })
-  renderWithProviders(<I18nextProvider i18n={i18n}><ExchangesRefunds /></I18nextProvider>)
-  await user.click(await screen.findByRole('button', { name: /Requests|الطلبات/ }))
-  await user.click(await screen.findByText('RR-7K3F9M'))
+  // Step 2: the Requests tab is gone — the drawer opens through the alerts' deep link.
+  renderWithProviders(<I18nextProvider i18n={i18n}><ExchangesRefunds /></I18nextProvider>,
+    { initialEntries: ['/exchanges?tab=requests&request=rr-1'] })
   const drawer = screen.getByTestId('return-request-drawer')
   await within(drawer).findByText('RR-7K3F9M')
   return { user, drawer }

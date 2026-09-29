@@ -87,9 +87,9 @@ afterEach(async () => { await i18n.changeLanguage('en') })
 
 async function openDrawer() {
   const user = userEvent.setup()
-  renderWithProviders(<I18nextProvider i18n={i18n}><ExchangesRefunds /></I18nextProvider>)
-  await user.click(await screen.findByRole('button', { name: /Requests/ }))
-  await user.click(await screen.findByText('RR-7K3F9M'))
+  // Step 2: the Requests tab is gone — the drawer opens through the alerts' deep link.
+  renderWithProviders(<I18nextProvider i18n={i18n}><ExchangesRefunds /></I18nextProvider>,
+    { initialEntries: ['/exchanges?tab=requests&request=rr-1'] })
   const drawer = screen.getByTestId('return-request-drawer')
   await within(drawer).findByText('Linen Shirt')
   return { user, drawer }

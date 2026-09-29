@@ -4,7 +4,13 @@ import { renderWithProviders, screen, waitFor, within } from './renderWithProvid
 import { stubFetchWithShellDefaults } from './mockShellFetch'
 import Layout from '../components/Layout'
 import ExchangesRefunds from '../pages/ExchangesRefunds'
-import type { ExchangeSummary, RefundLeg } from '../api'
+import type { ExchangeSummary, RefundLeg, ReturnCase } from '../api'
+
+// ExchangeRefundDrawer — a dashboard exchange (B) or a courier return no request holds (C), opened
+// from a row of the Returns & exchanges list (Step 2). Moved here from the deleted
+// exchangesRefunds.test.tsx (the old merged list): every drawer assertion is kept; the two that
+// looked at the old list (the "Matched" row after attach, the Auto-matched row marker) are replaced
+// by "the list refreshes" / dropped (the new list has no auto-matched marker; the drawer's banner stays).
 
 // ── Fixtures ──────────────────────────────────────────────────────────────────
 
@@ -127,8 +133,20 @@ let overrideVariantCalls: Array<{ id: string; body: unknown }> = []
 let exchangesOverride: ExchangeSummary[] | null = null
 let refundsOverride: RefundLeg[] | null = null
 
+let listFetches = 0
+
 function backendFetch(url: string, opts: RequestInit = {}) {
   const method = (opts.method ?? 'GET').toUpperCase()
+
+  if (url.includes('/returns-exchanges/counts')) {
+    return fakeResponse({ stages: { all: 0, to_do: 0, in_progress: 0, done: 0 },
+      tiles: { toApprove: 0, replacementToChoose: 0, toLinkOrder: 0, refundToRecord: 0, bookingProblem: 0 } })
+  }
+  if (url.includes('/returns-exchanges?')) {
+    listFetches++
+    const ex = exchangesOverride ?? [MATCHED_EXCHANGE, NEEDS_CONFIRMATION_EXCHANGE, UNMATCHED_EXCHANGE]
+    return fakeResponse({ items: [...ex.map(caseOf), ...(refundsOverride ?? [REFUND]).map(caseOfLeg)], nextCursor: null })
+  }
 
   if (url.includes('/api/v1/exchanges/') && url.includes('/candidates')) {
     return fakeResponse([
@@ -174,6 +192,32 @@ function backendFetch(url: string, opts: RequestInit = {}) {
   return fakeResponse({})
 }
 
+
+/** The Returns & exchanges rows for the fixtures above (B = exchange, C = courier return). */
+function caseOf(e: ExchangeSummary): ReturnCase {
+  return {
+    caseType: 'B', id: e.id, kind: 'exchange', reference: e.tracking_number, source: 'bosta',
+    customerName: e.customer_name, orderNumber: null, stage: 'to_do', nextStep: 'link_order', tone: 'action',
+    overdueDays: null, status: e.status,
+    reason: { bookingStatus: null, bookingError: null, itemsCount: 1, arrivedCount: 0, awaitingCount: 0, candidateCount: 0,
+      candidateReferences: null, trackingNumber: e.tracking_number, refundTotal: null, currency: null, closeReason: null,
+      inspectionState: null },
+    alerts: [], itemsSummary: 'Red hat → Yellow hat', itemsSummaryAr: 'Red hat ← Yellow hat', notScanned: false,
+    updatedAt: new Date().toISOString(), legStatus: null,
+    target: { requestId: null, exchangeId: e.id, shipmentId: null },
+  }
+}
+
+function caseOfLeg(r: RefundLeg): ReturnCase {
+  return {
+    ...caseOf(MATCHED_EXCHANGE), caseType: 'C', id: r.id, kind: 'refund', reference: r.tracking_number,
+    customerName: r.customer_name, orderNumber: r.order_number, stage: 'in_progress', nextStep: 'on_the_way', tone: 'moving',
+    status: r.internal_state, legStatus: r.leg_status,
+    reason: { ...caseOf(MATCHED_EXCHANGE).reason, inspectionState: r.inspection_state },
+    target: { requestId: null, exchangeId: null, shipmentId: r.id },
+  }
+}
+
 let mockFetch: ReturnType<typeof vi.fn>
 
 function renderScreen() {
@@ -188,141 +232,37 @@ beforeEach(() => {
   overrideVariantCalls = []
   exchangesOverride = null
   refundsOverride = null
+  listFetches = 0
   mockFetch = vi.fn(backendFetch)
   stubFetchWithShellDefaults(mockFetch)
 })
 
-describe('Exchanges & Refunds — list', () => {
-  test('renders both feeds merged, one row shape', async () => {
-    renderScreen()
-    await screen.findByText('Maya Mostafa')
-    expect(screen.getByText('Omar Said')).toBeInTheDocument()
-    expect(screen.getByText('Lina Fathy')).toBeInTheDocument()
-    expect(screen.getByText('Nour Adel')).toBeInTheDocument()
-    expect(screen.getByText('910000001')).toBeInTheDocument()
-    expect(screen.getByText('RFD-TN-001')).toBeInTheDocument()
-  })
-
-  test('a refund row shows the real courier badge; an exchange row shows a status pill, never a fake courier stepper', async () => {
-    renderScreen()
-    await screen.findByText('Nour Adel')
-
-    const refundRow = screen.getByText('Nour Adel').closest('tr')!
-    // Step 4-close Part 2: the STATUS cell now renders inspectionState, not the raw
-    // courier leg_status badge.
-    expect(within(refundRow).getByText(/in transit/i)).toBeInTheDocument()
-
-    const exchangeRow = screen.getByText('Maya Mostafa').closest('tr')!
-    // Exchange status vocabulary pill — "Matched" — never a courier word like
-    // "in transit"/"delivered"/"out for delivery" (HONESTY CONSTRAINT 2: no
-    // fabricated inbound-leg courier progress for exchanges).
-    expect(within(exchangeRow).getByText(/matched/i)).toBeInTheDocument()
-    expect(within(exchangeRow).queryByText(/in transit/i)).not.toBeInTheDocument()
-    expect(within(exchangeRow).queryByText(/delivered/i)).not.toBeInTheDocument()
-  })
-
-  test('filter tabs filter correctly — refunds tab hides exchange rows, exchanges tab hides refund rows', async () => {
+describe('Exchange / courier-return drawer (opened from the Returns & exchanges list)', () => {
+  test('needs_confirmation exchange → open drawer → candidates load → Confirm calls POST /attach with the chosen order → the list refreshes', async () => {
     const user = userEvent.setup()
     renderScreen()
-    await screen.findByText('Nour Adel')
+    await screen.findByText('Omar S.')
 
-    await user.click(screen.getByRole('button', { name: /^Refunds/i }))
-    expect(screen.getByText('Nour Adel')).toBeInTheDocument()
-    expect(screen.queryByText('Maya Mostafa')).not.toBeInTheDocument()
-
-    await user.click(screen.getByRole('button', { name: /^Exchanges/i }))
-    expect(screen.getByText('Maya Mostafa')).toBeInTheDocument()
-    expect(screen.queryByText('Nour Adel')).not.toBeInTheDocument()
-
-    await user.click(screen.getByRole('button', { name: /^In transit/i }))
-    expect(screen.getByText('Nour Adel')).toBeInTheDocument()
-    expect(screen.queryByText('Maya Mostafa')).not.toBeInTheDocument()
-    expect(screen.queryByText('Omar Said')).not.toBeInTheDocument()
-  })
-
-  test('labelling: an exchange row renders matched_order_id as the mapped order, never outbound_order_id', async () => {
-    renderScreen()
-    await screen.findByText('Maya Mostafa')
-    const exchangeRow = screen.getByText('Maya Mostafa').closest('tr')!
-    // matched_order_id = 'order-original-1' → short id "ORDERORI" (first 8 chars,
-    // dashes stripped, uppercased) — see ExchangesRefunds.tsx's shortId().
-    expect(within(exchangeRow).getByText('ORDERORI')).toBeInTheDocument()
-  })
-
-  // Step 4-close Part 2 — a returned-but-undispositioned refund reads "Needs inspection"
-  // and shows up under Needs action.
-  test('a returned refund with an undispositioned piece shows "Needs inspection" and appears under Needs action', async () => {
-    const user = userEvent.setup()
-    refundsOverride = [REFUND, NEEDS_INSPECTION_REFUND]
-    renderScreen()
-    await screen.findByText('Sara Kamal')
-
-    const needsInspectionRow = screen.getByText('Sara Kamal').closest('tr')!
-    expect(within(needsInspectionRow).getByText(/needs inspection/i)).toBeInTheDocument()
-
-    await user.click(screen.getByRole('button', { name: /^Needs action/i }))
-    expect(screen.getByText('Sara Kamal')).toBeInTheDocument()
-    expect(screen.queryByText('Nour Adel')).not.toBeInTheDocument()
-  })
-
-  // Once the backend reports inspection_state='resolved' (piece dispositioned), the SAME
-  // row reads "Resolved" and no longer appears under Needs action — proven with a fresh
-  // render at the resolved state (the backend integration test, RefundListTest.java, is
-  // what proves the real before/after transition against a live database; this proves the
-  // frontend renders each reported state correctly).
-  test('once resolved, the row reads "Resolved" and does not appear under Needs action', async () => {
-    const user = userEvent.setup()
-    refundsOverride = [REFUND, { ...NEEDS_INSPECTION_REFUND, inspection_state: 'resolved' }]
-    renderScreen()
-    await screen.findByText('Sara Kamal')
-
-    const resolvedRow = screen.getByText('Sara Kamal').closest('tr')!
-    expect(within(resolvedRow).getByText(/resolved/i)).toBeInTheDocument()
-    expect(within(resolvedRow).queryByText(/needs inspection/i)).not.toBeInTheDocument()
-
-    await user.click(screen.getByRole('button', { name: /^Needs action/i }))
-    expect(screen.queryByText('Sara Kamal')).not.toBeInTheDocument()
-  })
-})
-
-describe('Exchanges & Refunds — drawer', () => {
-  test('needs_confirmation exchange → open drawer → candidates load → Confirm calls POST /attach with the chosen order → row reflects matched', async () => {
-    const user = userEvent.setup()
-    renderScreen()
-    await screen.findByText('Omar Said')
-
-    await user.click(screen.getByText('Omar Said'))
+    await user.click(screen.getByText('Omar S.'))
     await screen.findByTestId('candidate-picker')
     await screen.findByTestId('candidate-piece-a')
-
-    // After confirming, the drawer's own refetch flips this exchange to 'matched' —
-    // simulate that server-side state change so the list reload reflects it.
-    exchangesOverride = [
-      MATCHED_EXCHANGE,
-      { ...NEEDS_CONFIRMATION_EXCHANGE, status: 'matched', matched_order_id: 'order-candidate-a', match_method: 'manual' },
-      UNMATCHED_EXCHANGE,
-    ]
+    const before = listFetches
 
     await user.click(within(screen.getByTestId('candidate-piece-a')).getByRole('button', { name: /confirm match/i }))
 
     await waitFor(() => {
       expect(attachCalls).toEqual([{ id: 'exc-needs-confirmation', body: { orderId: 'order-candidate-a' } }])
     })
-
-    // Drawer refetches its own detail + tells the list to reload — the row for
-    // this exchange should now read "Matched" instead of "Needs confirmation".
-    await waitFor(() => {
-      const row = screen.getByText('Omar Said').closest('tr')!
-      expect(within(row).getByText(/matched/i)).toBeInTheDocument()
-    })
+    // Step 2: the drawer tells the page to reload — the Returns & exchanges list is fetched again.
+    await waitFor(() => expect(listFetches).toBeGreaterThan(before))
   })
 
   test('unmatched exchange → bare-return calls the bare-return route', async () => {
     const user = userEvent.setup()
     renderScreen()
-    await screen.findByText('Lina Fathy')
+    await screen.findByText('Lina F.')
 
-    await user.click(screen.getByText('Lina Fathy'))
+    await user.click(screen.getByText('Lina F.'))
     await screen.findByTestId('unmatched-actions')
     await user.click(screen.getByTestId('bare-return-button'))
 
@@ -332,51 +272,36 @@ describe('Exchanges & Refunds — drawer', () => {
   test('unmatched exchange → dismiss calls the dismiss route', async () => {
     const user = userEvent.setup()
     renderScreen()
-    await screen.findByText('Lina Fathy')
+    await screen.findByText('Lina F.')
 
-    await user.click(screen.getByText('Lina Fathy'))
+    await user.click(screen.getByText('Lina F.'))
     await screen.findByTestId('unmatched-actions')
     await user.click(screen.getByTestId('dismiss-button'))
 
     await waitFor(() => expect(dismissCalls).toEqual(['exc-unmatched']))
   })
 
-  test('refund drawer shows the original order + lifecycle, and links to Returns instead of reimplementing disposition', async () => {
+  test('refund drawer shows the original order + lifecycle, and links to Scan returns instead of reimplementing disposition', async () => {
     const user = userEvent.setup()
     renderScreen()
-    await screen.findByText('Nour Adel')
+    await screen.findByText('Nour A.')
 
-    await user.click(screen.getByText('Nour Adel'))
+    await user.click(screen.getByText('Nour A.'))
     const body = await screen.findByTestId('refund-drawer-body')
     expect(within(body).getByText('#RFD-1001')).toBeInTheDocument()
-    // Both the lifecycle (legStatus) badge and the Step 4-close Part 2 inspection facet
-    // read "In transit" for this fixture — two separate, additive sections, not a
-    // duplicate render of the same thing.
+    // Both the lifecycle (legStatus) badge and the inspection facet read "In transit" for this
+    // fixture — two separate, additive sections, not a duplicate render of the same thing.
     expect(within(body).getAllByText(/in transit/i)).toHaveLength(2)
-    expect(within(body).getByRole('link', { name: /open in returns/i })).toHaveAttribute('href', '/returns')
-  })
-})
-
-describe('Exchanges & Refunds — outbound auto-commit review (build task Part B/C)', () => {
-  test('an auto-matched exchange row carries the Auto-matched marker', async () => {
-    exchangesOverride = [MATCHED_EXCHANGE, AUTO_MATCHED_EXCHANGE]
-    renderScreen()
-    await screen.findByText('Yara Adly')
-
-    const row = screen.getByText('Yara Adly').closest('tr')!
-    expect(within(row).getByTestId('exchange-auto-matched-row-badge')).toBeInTheDocument()
-
-    const matchedRow = screen.getByText('Maya Mostafa').closest('tr')!
-    expect(within(matchedRow).queryByTestId('exchange-auto-matched-row-badge')).not.toBeInTheDocument()
+    expect(within(body).getByRole('link', { name: /open in scan returns/i })).toHaveAttribute('href', '/returns')
   })
 
-  test('drawer shows the review banner and Change variant lets the operator override the auto-pick', async () => {
+  test('auto-matched exchange: the drawer shows the review banner and Change variant overrides the auto-pick', async () => {
     const user = userEvent.setup()
     exchangesOverride = [MATCHED_EXCHANGE, AUTO_MATCHED_EXCHANGE]
     renderScreen()
-    await screen.findByText('Yara Adly')
+    await screen.findByText('Yara A.')
 
-    await user.click(screen.getByText('Yara Adly'))
+    await user.click(screen.getByText('Yara A.'))
     const banner = await screen.findByTestId('exchange-auto-matched-banner')
     expect(within(banner).getByText(/auto-matched/i)).toBeInTheDocument()
 
