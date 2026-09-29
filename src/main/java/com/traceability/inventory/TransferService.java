@@ -986,8 +986,8 @@ public class TransferService {
      * this reprints the SAME piece IDs, it never mints new ones). Deliberately does NOT reuse
      * ReturnSessionController's per-piece reprint endpoint: that one is hard-gated to pieces in
      * return_pending_inspection/damaged status and would reject an out_on_transfer piece
-     * outright. Loops LabelService.generatePieceLabel() (one page per piece) merged into a
-     * single multi-page PDF, and InventoryLedger.recordLabelReprinted() (the existing
+     * outright. LabelService.generatePieceLabels() renders every piece into ONE PDF document
+     * (one page per piece, no page merging), then InventoryLedger.recordLabelReprinted() (the existing
      * no-status-change event writer — 4th piece_events write path, already established) per
      * piece, all under one @Transactional so all N reprint events are written under the same
      * tenant GUC in one transaction.
