@@ -4,7 +4,7 @@
 
 ## Current state
 
-**Import every Shopify product status (2026-09-29, branch `feature/import-all-product-statuses`, committed, not deployed).**
+**Import every Shopify product status + one-time catalog backfill (2026-09-29, merged to main as 84a7911, not deployed).** Zero-variant store in the backfill: `total() > 0` guard → marker set, job does not throw (checked by a throwaway test; guard removed → it errors).
 - **Import:** `query: "status:active"` removed from `ShopifyHttpGateway.PRODUCTS_QUERY` — ACTIVE, DRAFT, ARCHIVED and UNLISTED
   (in the 2026-04 `ProductStatus` enum) all import, stored lowercase in `products.status` (free text, no CHECK, no migration).
   Nested variants no longer stop at 50: when a product's `variants.pageInfo.hasNextPage` is true, `fetchRemainingVariants`
@@ -20,7 +20,7 @@
 - **Tests:** new `ShopifyHttpGatewayProductsTest` (3, p1/p2 RED on old code), `ShopifyProductStatusImportTest` (4, i1–i3 RED on old
   code; w1 webhook guard), `PortalExchangeActiveProductTest` (7, l1/l2/s1/a1/b1 RED with the predicates removed; a2/r1 controls),
   `productStatusBadge.test.tsx` (5, psb5 RED without the picker badge). No existing test edited.
-- **Part B — one-time catalog backfill (built, same branch, not deployed):**
+- **Part B — one-time catalog backfill:**
   - **V119** `stores.catalog_backfilled_at timestamptz NULL` (column only; RLS policy unchanged). MigrationSmokeTest 118,
     NotTracedBackfillTest 63 (approved bumps).
   - A successful `ShopifyImportJob` (connect / reconnect / sync) sets the marker — never backfilled afterwards.
