@@ -30,7 +30,7 @@ import java.util.UUID;
  * inside TenantContext.runAs(tenantId) on the app_user pool (RLS):
  *   a. ShopifySyncService.importCatalogOnly() — products + variants only; no location setup,
  *      no on-hand seed, no order import;
- *   b. ShopifyCatalogActivationService.activateAll() — every variant of the store, idempotent
+ *   b. ShopifyCatalogActivationService.activateAll() — every variant of an ACTIVE product (draft / archived are activated lazily before their first increment), idempotent
  *      (also covers variants that came in by webhook and were never activated);
  *   c. catalog_backfilled_at = now() once a succeeded and b didn't fail at STORE level.
  * Store-level activation failure (token, location, the call throwing, or EVERY variant

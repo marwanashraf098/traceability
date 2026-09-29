@@ -17,7 +17,10 @@ import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
+import java.util.List;
+import java.util.Map;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.*;
@@ -93,6 +96,31 @@ class ShopifyCatalogActivationTest {
             locationId, tenantId, TRACED_GID);
 
         when(tokenProvider.getValidToken(storeId)).thenReturn("test-token");
+        // Batch activation: every requested item succeeds unless a test says otherwise.
+        when(shopifyGateway.activateInventoryItems(any(), any(), any(), anyList())).thenAnswer(inv -> {
+            List<ShopifyGateway.ActivationRequest> reqs = inv.getArgument(3);
+            return reqs.stream().map(r -> new ShopifyGateway.ActivationResult(r.inventoryItemGid(), null)).toList();
+        });
+    }
+
+    /** Batch resolve stub: answers the requested variant GIDs found in this map (others absent). */
+    private void stubResolveItems(String domain, String token, Map<String, String> itemByVariant) {
+        when(shopifyGateway.resolveInventoryItemIds(eq(domain), eq(token), anyList())).thenAnswer(inv -> {
+            List<String> gids = inv.getArgument(2);
+            return gids.stream().filter(itemByVariant::containsKey)
+                .collect(Collectors.toMap(g -> g, itemByVariant::get));
+        });
+    }
+
+    /** Item GIDs passed to activateInventoryItems, per call, for this shop + location. */
+    @SuppressWarnings("unchecked")
+    private List<java.util.Set<String>> activatedItemsPerCall(String domain, String token, String locationGid) {
+        org.mockito.ArgumentCaptor<List<ShopifyGateway.ActivationRequest>> captor =
+            org.mockito.ArgumentCaptor.forClass((Class) List.class);
+        verify(shopifyGateway, atLeast(0)).activateInventoryItems(eq(domain), eq(token), eq(locationGid), captor.capture());
+        return captor.getAllValues().stream()
+            .map(reqs -> reqs.stream().map(ShopifyGateway.ActivationRequest::inventoryItemGid)
+                .collect(Collectors.toSet())).toList();
     }
 
     @AfterEach
@@ -118,10 +146,9 @@ class ShopifyCatalogActivationTest {
         UUID v1 = seedVariant("gid://shopify/ProductVariant/pb1");
         UUID v2 = seedVariant("gid://shopify/ProductVariant/pb2");
 
-        when(shopifyGateway.resolveInventoryItemId(eq(SHOP_DOMAIN), eq("test-token"), eq("gid://shopify/ProductVariant/pb1")))
-            .thenReturn("gid://shopify/InventoryItem/pb1");
-        when(shopifyGateway.resolveInventoryItemId(eq(SHOP_DOMAIN), eq("test-token"), eq("gid://shopify/ProductVariant/pb2")))
-            .thenReturn("gid://shopify/InventoryItem/pb2");
+        stubResolveItems(SHOP_DOMAIN, "test-token", Map.of(
+            "gid://shopify/ProductVariant/pb1", "gid://shopify/InventoryItem/pb1",
+            "gid://shopify/ProductVariant/pb2", "gid://shopify/InventoryItem/pb2"));
 
         TenantContext.set(tenantId);
         try {
@@ -133,20 +160,18 @@ class ShopifyCatalogActivationTest {
             TenantContext.clear();
         }
 
-        verify(shopifyGateway).activateInventoryItem(
-            eq(SHOP_DOMAIN), eq("test-token"), eq("gid://shopify/InventoryItem/pb1"), eq(TRACED_GID), any());
-        verify(shopifyGateway).activateInventoryItem(
-            eq(SHOP_DOMAIN), eq("test-token"), eq("gid://shopify/InventoryItem/pb2"), eq(TRACED_GID), any());
+        assertThat(activatedItemsPerCall(SHOP_DOMAIN, "test-token", TRACED_GID))
+            .containsExactly(java.util.Set.of("gid://shopify/InventoryItem/pb1", "gid://shopify/InventoryItem/pb2"));
         // Never any other locationId.
         verify(shopifyGateway, never())
-            .activateInventoryItem(any(), any(), any(), argThat(loc -> !TRACED_GID.equals(loc)), any());
+            .activateInventoryItems(any(), any(), argThat(loc -> !TRACED_GID.equals(loc)), anyList());
     }
 
     @Test
     void pb2_reRunning_isTolerated() {
         UUID v1 = seedVariant("gid://shopify/ProductVariant/pb3");
-        when(shopifyGateway.resolveInventoryItemId(any(), any(), anyString()))
-            .thenReturn("gid://shopify/InventoryItem/pb3");
+        stubResolveItems(SHOP_DOMAIN, "test-token", Map.of(
+            "gid://shopify/ProductVariant/pb3", "gid://shopify/InventoryItem/pb3"));
         // No exception stubbed for activateInventoryItem on the second call — mirrors the
         // gateway's own "already active" tolerance (void method, no throw either way).
 
@@ -159,8 +184,8 @@ class ShopifyCatalogActivationTest {
         } finally {
             TenantContext.clear();
         }
-        verify(shopifyGateway, times(2)).activateInventoryItem(
-            eq(SHOP_DOMAIN), eq("test-token"), eq("gid://shopify/InventoryItem/pb3"), eq(TRACED_GID), any());
+        assertThat(activatedItemsPerCall(SHOP_DOMAIN, "test-token", TRACED_GID))
+            .containsExactly(java.util.Set.of("gid://shopify/InventoryItem/pb3"), java.util.Set.of("gid://shopify/InventoryItem/pb3"));
     }
 
     @Test
@@ -168,10 +193,9 @@ class ShopifyCatalogActivationTest {
         UUID good = seedVariant("gid://shopify/ProductVariant/pb-good");
         UUID bad  = seedVariant("gid://shopify/ProductVariant/pb-bad");
 
-        when(shopifyGateway.resolveInventoryItemId(eq(SHOP_DOMAIN), eq("test-token"), eq("gid://shopify/ProductVariant/pb-good")))
-            .thenReturn("gid://shopify/InventoryItem/pb-good");
-        when(shopifyGateway.resolveInventoryItemId(eq(SHOP_DOMAIN), eq("test-token"), eq("gid://shopify/ProductVariant/pb-bad")))
-            .thenThrow(new ShopifyException("productVariant not found"));
+        // pb-bad: Shopify doesn't return it from nodes(ids:) (productVariant not found).
+        stubResolveItems(SHOP_DOMAIN, "test-token", Map.of(
+            "gid://shopify/ProductVariant/pb-good", "gid://shopify/InventoryItem/pb-good"));
 
         TenantContext.set(tenantId);
         try {
@@ -183,8 +207,8 @@ class ShopifyCatalogActivationTest {
         } finally {
             TenantContext.clear();
         }
-        verify(shopifyGateway).activateInventoryItem(
-            eq(SHOP_DOMAIN), eq("test-token"), eq("gid://shopify/InventoryItem/pb-good"), eq(TRACED_GID), any());
+        assertThat(activatedItemsPerCall(SHOP_DOMAIN, "test-token", TRACED_GID))
+            .containsExactly(java.util.Set.of("gid://shopify/InventoryItem/pb-good"));
     }
 
     @Test
@@ -216,8 +240,8 @@ class ShopifyCatalogActivationTest {
         when(tokenProvider.getValidToken(activeStoreId)).thenReturn("active-token");
 
         UUID v1 = seedVariant("gid://shopify/ProductVariant/pb5");
-        when(shopifyGateway.resolveInventoryItemId(eq(activeDomain), eq("active-token"), anyString()))
-            .thenReturn("gid://shopify/InventoryItem/pb5");
+        stubResolveItems(activeDomain, "active-token", Map.of(
+            "gid://shopify/ProductVariant/pb5", "gid://shopify/InventoryItem/pb5"));
 
         TenantContext.set(tenantId);
         try {
@@ -226,9 +250,10 @@ class ShopifyCatalogActivationTest {
         } finally {
             TenantContext.clear();
         }
-        verify(shopifyGateway).activateInventoryItem(
-            eq(activeDomain), eq("active-token"), eq("gid://shopify/InventoryItem/pb5"), eq(TRACED_GID), any());
+        assertThat(activatedItemsPerCall(activeDomain, "active-token", TRACED_GID))
+            .containsExactly(java.util.Set.of("gid://shopify/InventoryItem/pb5"));
         verify(shopifyGateway, never()).resolveInventoryItemId(eq(SHOP_DOMAIN), any(), anyString());
+        verify(shopifyGateway, never()).resolveInventoryItemIds(eq(SHOP_DOMAIN), any(), anyList());
 
         jdbc.update("DELETE FROM stores WHERE id = ?", activeStoreId);
     }

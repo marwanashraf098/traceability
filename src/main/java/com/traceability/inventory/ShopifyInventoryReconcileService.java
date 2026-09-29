@@ -62,6 +62,7 @@ public class ShopifyInventoryReconcileService {
     private final ObjectMapper mapper;
     private final AuditService auditService;
     private final StoreRepository storeRepository;
+    private final InventoryItemIdService itemIds;
 
     public ShopifyInventoryReconcileService(JdbcTemplate jdbc, PlatformTransactionManager txm,
                                              ShopifyGateway shopify, ShopifyTokenProvider tokenProvider,
@@ -74,6 +75,7 @@ public class ShopifyInventoryReconcileService {
         this.mapper        = mapper;
         this.auditService  = auditService;
         this.storeRepository = storeRepository;
+        this.itemIds       = new InventoryItemIdService(jdbc, txm, shopify);
     }
 
     private record Context(UUID storeId, String shopDomain, UUID tracedLocationId, String tracedGid, String token) {}
@@ -106,12 +108,13 @@ public class ShopifyInventoryReconcileService {
     public ReconcileReport reconcile() {
         UUID tenantId = TenantContext.require();
         Context ctx = resolveContext(tenantId);
-        return buildReport(tenantId, ctx);
+        List<Map<String, Object>> variants = loadVariants(tenantId, false);
+        return buildReport(tenantId, ctx, variants, resolveItemIds(tenantId, ctx, variants));
     }
 
-    private ReconcileReport buildReport(UUID tenantId, Context ctx) {
-        // Traced on_hand per variant — pieces present and sellable, scoped to is_fulfillment=true
-        // locations (same formula as CatalogController.list()'s on_hand(V)).
+    /** Traced on_hand per variant — pieces present and sellable, scoped to is_fulfillment=true
+     *  locations (same formula as CatalogController.list()'s on_hand(V)). */
+    private Map<UUID, Long> tracedOnHand(UUID tenantId) {
         Map<UUID, Long> tracedOnHand = new HashMap<>();
         tx.execute(s -> {
             jdbc.query(
@@ -127,27 +130,59 @@ public class ShopifyInventoryReconcileService {
                 tenantId, tenantId);
             return null;
         });
+        return tracedOnHand;
+    }
 
-        List<Map<String, Object>> variants = tx.execute(s -> jdbc.queryForList(
-            "SELECT id, external_id, sku, title FROM variants WHERE tenant_id = ?", tenantId));
-
-        // Resolve each variant's inventoryItem GID, then batch-read Shopify's current
-        // "available" at the Traced location for all of them in one call.
-        Map<UUID, String> variantToItemGid = new LinkedHashMap<>();
-        for (Map<String, Object> v : variants) {
-            UUID variantId = (UUID) v.get("id");
-            String variantGid = (String) v.get("external_id");
-            try {
-                variantToItemGid.put(variantId,
-                    shopify.resolveInventoryItemId(ctx.shopDomain(), ctx.token(), variantGid));
-            } catch (ShopifyException e) {
-                log.warn("Reconcile: could not resolve inventoryItem for variant={} error={}", variantId, e.getMessage());
-            }
+    /** Every variant (the report), or — for the seed — only the candidates: Traced on_hand > 0 at
+     *  the fulfillment location. A variant with on_hand 0 can never be a seed row, so the seed never
+     *  reads Shopify for it. */
+    private List<Map<String, Object>> loadVariants(UUID tenantId, boolean candidatesOnly) {
+        String sql = "SELECT id, external_id, sku, title, shopify_inventory_item_id FROM variants v WHERE tenant_id = ?";
+        if (candidatesOnly) {
+            sql += " AND EXISTS (SELECT 1 FROM pieces p WHERE p.variant_id = v.id AND p.tenant_id = v.tenant_id" +
+                   "  AND p.status IN ('available','reserved','packed','awaiting_pickup')" +
+                   "  AND p.current_location_id IN (SELECT id FROM locations WHERE tenant_id = ? AND is_fulfillment = true))";
+            String finalSql = sql;
+            return tx.execute(s -> jdbc.queryForList(finalSql, tenantId, tenantId));
         }
+        String finalSql = sql;
+        return tx.execute(s -> jdbc.queryForList(finalSql, tenantId));
+    }
 
+    /** Item ids for these variants: stored first, misses through nodes(ids:) and written back. A
+     *  failed read leaves those variants unresolved (the report shows them at 0 and the seed records
+     *  them as failed — the same outcome the per-variant resolve had). */
+    private Map<UUID, String> resolveItemIds(UUID tenantId, Context ctx, List<Map<String, Object>> variants) {
+        List<InventoryItemIdService.VariantRef> refs = new ArrayList<>();
+        for (Map<String, Object> v : variants) {
+            refs.add(new InventoryItemIdService.VariantRef((UUID) v.get("id"),
+                (String) v.get("external_id"), (String) v.get("shopify_inventory_item_id")));
+        }
+        try {
+            return itemIds.resolveAll(tenantId, refs, ctx.shopDomain(), ctx.token());
+        } catch (ShopifyException e) {
+            log.warn("Reconcile: could not resolve inventoryItems tenant={} error={}", tenantId, e.getMessage());
+            Map<UUID, String> stored = new LinkedHashMap<>();
+            for (InventoryItemIdService.VariantRef r : refs) {
+                if (r.inventoryItemGid() != null && !r.inventoryItemGid().isBlank()) stored.put(r.id(), r.inventoryItemGid());
+            }
+            return stored;
+        }
+    }
+
+    private ReconcileReport buildReport(UUID tenantId, Context ctx, List<Map<String, Object>> variants,
+                                        Map<UUID, String> variantToItemGid) {
+        Map<UUID, Long> tracedOnHand = tracedOnHand(tenantId);
+
+        // Batch-read Shopify's current "available" at the Traced location (≤250 ids per read).
         Map<String, Integer> availableByItemGid = new HashMap<>();
+        List<String> itemGids = new ArrayList<>();
+        for (Map<String, Object> v : variants) {
+            String itemGid = variantToItemGid.get((UUID) v.get("id"));
+            if (itemGid != null) itemGids.add(itemGid);
+        }
         List<ShopifyGateway.InventoryLevel> levels = shopify.fetchAvailableQuantities(
-            ctx.shopDomain(), ctx.token(), ctx.tracedGid(), new ArrayList<>(variantToItemGid.values()));
+            ctx.shopDomain(), ctx.token(), ctx.tracedGid(), itemGids);
         for (ShopifyGateway.InventoryLevel level : levels) {
             availableByItemGid.put(level.inventoryItemGid(), level.available());
         }
@@ -179,8 +214,8 @@ public class ShopifyInventoryReconcileService {
     // ---- guarded write ---------------------------------------------------
 
     /**
-     * Serialized per tenant via pg_advisory_xact_lock, held for the ENTIRE operation
-     * (recompute + every per-variant Shopify write) — deliberately different from Part D's
+     * Serialized per tenant via pg_advisory_xact_lock, held for the compute + write section
+     * (the live recompute + every per-variant Shopify write) — deliberately different from Part D's
      * triggers, which release their DB transaction before the Shopify HTTP call. apply() is
      * a manual, one-shot, one-tenant-at-a-time operator action (never a hot path), so tying
      * up one connection for its duration is the right trade to make two operators calling
@@ -188,6 +223,16 @@ public class ShopifyInventoryReconcileService {
      * A second concurrent apply() blocks on the lock until the first's transaction commits,
      * then recomputes and sees the now-non-zero Shopify values via the existing
      * ACTION_SKIP_NONZERO guard — never a double-add.
+     *
+     * Fetch-only preparation runs BEFORE the lock and transaction: the candidate variants (Traced
+     * on_hand > 0 — a variant at 0 can never be seeded) and their inventory item ids (stored, or
+     * resolved through nodes(ids:) and written back). An item id is a fixed Shopify mapping, so
+     * resolving it early changes no write decision. Under the lock the seed recomputes Traced
+     * on_hand and reads Shopify's live "available" for the candidates (the double-add guard needs
+     * that read under the lock), then writes. A variant that became a candidate after the
+     * preparation and has no stored item id is recorded as failed (no Shopify call under the lock);
+     * the next run seeds it. Variants that aren't candidates count as noop — they were never
+     * written before either.
      *
      * Trade-off, stated explicitly: wrapping the whole batch in one transaction means an
      * unexpected exception escaping the per-variant try/catch below (not an ordinary Shopify
@@ -201,29 +246,37 @@ public class ShopifyInventoryReconcileService {
      */
     public ApplyResult apply(UUID actorUserId) {
         UUID tenantId = TenantContext.require();
+        Context ctx = resolveContext(tenantId);
+        Map<UUID, String> preResolved = resolveItemIds(tenantId, ctx, loadVariants(tenantId, true));
+
         return tx.execute(outerStatus -> {
             acquireTenantLock(tenantId);
 
-            Context ctx = resolveContext(tenantId);
             // Recompute live — never trust a stale client-held report for a write decision.
-            ReconcileReport report = buildReport(tenantId, ctx);
+            List<Map<String, Object>> candidates = loadVariants(tenantId, true);
+            Map<UUID, String> variantToItemGid = new HashMap<>(preResolved);
+            for (Map<String, Object> v : candidates) {
+                String stored = (String) v.get("shopify_inventory_item_id");
+                if (stored != null && !stored.isBlank()) variantToItemGid.putIfAbsent((UUID) v.get("id"), stored);
+            }
+            ReconcileReport report = buildReport(tenantId, ctx, candidates, variantToItemGid);
 
-            int seeded = 0, skippedNonZero = 0, noop = 0, failed = 0;
+            int seeded = 0, skippedNonZero = 0, failed = 0;
             List<Map<String, String>> failures = new ArrayList<>();
 
             for (VariantReconcileRow row : report.rows()) {
                 switch (row.action()) {
                     case ACTION_SKIP_NONZERO -> skippedNonZero++;
-                    case ACTION_NOOP -> noop++;
+                    case ACTION_NOOP -> { /* not reachable for a candidate; counted below */ }
                     case ACTION_SEED -> {
                         try {
                             // action=seed implies shopifyAvailable==0, so this call is always a
                             // strictly-positive delta from 0 — never a decrement.
-                            String variantGid = jdbc.query(
-                                "SELECT external_id FROM variants WHERE id = ? AND tenant_id = ?",
-                                rs -> rs.next() ? rs.getString(1) : null,
-                                row.variantId(), tenantId);
-                            String itemGid = shopify.resolveInventoryItemId(ctx.shopDomain(), ctx.token(), variantGid);
+                            String itemGid = variantToItemGid.get(row.variantId());
+                            if (itemGid == null) {
+                                throw new ShopifyException("Could not resolve the Shopify inventoryItem for variant "
+                                    + row.variantId() + " — it will be seeded on the next run");
+                            }
                             String idempotencyKey = ShopifyGateway.idempotencyKey(tenantId, "initial_seed",
                                 row.variantId().toString(), row.variantId(), ctx.tracedLocationId());
                             shopify.adjustInventoryQuantities(ctx.shopDomain(), ctx.token(), itemGid,
@@ -246,6 +299,9 @@ public class ShopifyInventoryReconcileService {
                     default -> throw new IllegalStateException("Unknown reconcile action: " + row.action());
                 }
             }
+            Integer allVariants = jdbc.queryForObject(
+                "SELECT COUNT(*) FROM variants WHERE tenant_id = ?", Integer.class, tenantId);
+            int noop = (allVariants == null ? 0 : allVariants) - report.rows().size();
 
             log.info("Initial seed applied: tenant={} seeded={} skippedNonZero={} noop={} failed={}",
                 tenantId, seeded, skippedNonZero, noop, failed);

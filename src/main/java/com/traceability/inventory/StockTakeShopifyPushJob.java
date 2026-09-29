@@ -45,6 +45,7 @@ public class StockTakeShopifyPushJob {
     private final ShopifyTokenProvider tokenProvider;
     private final ObjectMapper         mapper;
     private final StoreRepository      storeRepository;
+    private final InventoryItemIdService itemIds;
 
     public StockTakeShopifyPushJob(JdbcTemplate jdbc, PlatformTransactionManager txm,
                                    ShopifyGateway shopify, ShopifyTokenProvider tokenProvider,
@@ -55,6 +56,7 @@ public class StockTakeShopifyPushJob {
         this.tokenProvider = tokenProvider;
         this.mapper        = mapper;
         this.storeRepository = storeRepository;
+        this.itemIds       = new InventoryItemIdService(jdbc, txm, shopify);
     }
 
     @Job(name = "Stock-take Shopify push — session %0")
@@ -195,7 +197,7 @@ public class StockTakeShopifyPushJob {
             }
             String inventoryItemGid;
             try {
-                inventoryItemGid = shopify.resolveInventoryItemId(store.shopDomain(), token, variantGid);
+                inventoryItemGid = itemIds.resolve(tenantId, entry.getKey(), variantGid, store.shopDomain(), token);
             } catch (ShopifyException e) {
                 return err("Failed to resolve inventoryItem for variant " + entry.getKey() + ": " + e.getMessage());
             }

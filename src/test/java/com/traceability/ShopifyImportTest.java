@@ -164,6 +164,18 @@ class ShopifyImportTest {
                 .thenReturn("gid://shopify/InventoryItem/red");
         when(shopifyGateway.resolveInventoryItemId(eq(shopDomain), eq(RAW_TOKEN), eq("gid://shopify/ProductVariant/11")))
                 .thenReturn("gid://shopify/InventoryItem/blue");
+        java.util.Map<String, String> itemByVariant = java.util.Map.of(
+                "gid://shopify/ProductVariant/10", "gid://shopify/InventoryItem/red",
+                "gid://shopify/ProductVariant/11", "gid://shopify/InventoryItem/blue");
+        when(shopifyGateway.resolveInventoryItemIds(eq(shopDomain), eq(RAW_TOKEN), anyList())).thenAnswer(inv -> {
+            List<String> gids = inv.getArgument(2);
+            return gids.stream().filter(itemByVariant::containsKey)
+                    .collect(java.util.stream.Collectors.toMap(g -> g, itemByVariant::get));
+        });
+        when(shopifyGateway.activateInventoryItems(eq(shopDomain), eq(RAW_TOKEN), anyString(), anyList())).thenAnswer(inv -> {
+            List<ShopifyGateway.ActivationRequest> reqs = inv.getArgument(3);
+            return reqs.stream().map(r -> new ShopifyGateway.ActivationResult(r.inventoryItemGid(), null)).toList();
+        });
         // apply() runs on EVERY importJob.run() call, including run 1 (before any pieces
         // exist) — so the FIRST invocation of fetchAvailableQuantities happens during run 1
         // (everything on_hand=0, reads as empty regardless). The SECOND invocation is run 2
@@ -215,6 +227,7 @@ class ShopifyImportTest {
                 any(), any(), eq("gid://shopify/InventoryItem/blue"), any(), anyInt(), any(), any());
         // No write of any kind (activate, adjust) ever targets a locationId other than the Traced GID.
         verify(shopifyGateway, never()).activateInventoryItem(any(), any(), any(), argThat(loc -> !tracedGid.equals(loc)), any());
+        verify(shopifyGateway, never()).activateInventoryItems(any(), any(), argThat(loc -> !tracedGid.equals(loc)), anyList());
         verify(shopifyGateway, never()).adjustInventoryQuantities(any(), any(), any(), argThat(loc -> !tracedGid.equals(loc)), anyInt(), any(), any());
 
         String locationStatus = jdbc.queryForObject(
