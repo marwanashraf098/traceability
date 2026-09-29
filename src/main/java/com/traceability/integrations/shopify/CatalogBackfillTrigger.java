@@ -13,14 +13,18 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
 
 import javax.sql.DataSource;
+import java.time.Clock;
+import java.time.LocalDate;
+import java.time.ZoneId;
+import java.util.UUID;
 
 /**
- * At startup, enqueues CatalogBackfillJob once when any connected store still has no
- * catalog_backfilled_at — under the fixed CatalogBackfillJob.JOB_ID, so repeated starts
- * collapse into one job: JobRunr 7.3 treats an enqueue under an id that already exists as a
- * no-op (AbstractJobScheduler.saveJob swallows the ConcurrentJobModificationException), in any
- * state — so after a job has ended FAILED, a later start doesn't re-enqueue it until that job is
- * deleted in the JobRunr dashboard. Kill switch: traced.catalog-backfill.enabled.
+ * At startup, enqueues CatalogBackfillJob when any connected store still has no
+ * catalog_backfilled_at — under CatalogBackfillJob.jobIdFor(today in Africa/Cairo). JobRunr 7.3
+ * treats an enqueue under an id that already exists as a no-op in any state
+ * (AbstractJobScheduler.saveJob swallows the ConcurrentJobModificationException), so starts on
+ * the same day collapse into one job, and a job that ended FAILED is followed by a fresh one on
+ * the next day's first start. Kill switch: traced.catalog-backfill.enabled.
  *
  * FAIL-SOFT at startup (same pattern as BostaDistrictsRefreshJob): an exception escaping an
  * ApplicationReadyEvent listener aborts the whole application — everything here is caught.
@@ -37,18 +41,26 @@ public class CatalogBackfillTrigger {
     private final JdbcTemplate ownerJdbc;
     private final JobScheduler jobScheduler;
     private final boolean enabled;
+    private final Clock clock;
+
+    static final ZoneId CAIRO = ZoneId.of("Africa/Cairo");
 
     @Autowired
     public CatalogBackfillTrigger(@FlywayDataSource DataSource ownerDs,
                                   JobScheduler jobScheduler,
                                   @Value("${traced.catalog-backfill.enabled:true}") boolean enabled) {
-        this(new JdbcTemplate(ownerDs), jobScheduler, enabled);
+        this(new JdbcTemplate(ownerDs), jobScheduler, enabled, Clock.system(CAIRO));
     }
 
     CatalogBackfillTrigger(JdbcTemplate ownerJdbc, JobScheduler jobScheduler, boolean enabled) {
+        this(ownerJdbc, jobScheduler, enabled, Clock.system(CAIRO));
+    }
+
+    CatalogBackfillTrigger(JdbcTemplate ownerJdbc, JobScheduler jobScheduler, boolean enabled, Clock clock) {
         this.ownerJdbc    = ownerJdbc;
         this.jobScheduler = jobScheduler;
         this.enabled      = enabled;
+        this.clock        = clock;
     }
 
     @EventListener(ApplicationReadyEvent.class)
@@ -70,8 +82,10 @@ public class CatalogBackfillTrigger {
             "SELECT EXISTS (SELECT 1 FROM stores WHERE status = 'connected' AND catalog_backfilled_at IS NULL)",
             Boolean.class);
         if (!Boolean.TRUE.equals(pending)) return false;
-        jobScheduler.<CatalogBackfillJob>enqueue(CatalogBackfillJob.JOB_ID, job -> job.run());
-        log.info("Catalog backfill enqueue requested (job {} — kept as is if it already exists)", CatalogBackfillJob.JOB_ID);
+        LocalDate today = LocalDate.now(clock.withZone(CAIRO));
+        UUID jobId = CatalogBackfillJob.jobIdFor(today);
+        jobScheduler.<CatalogBackfillJob>enqueue(jobId, job -> job.run());
+        log.info("Catalog backfill enqueue requested for {} (job {} — kept as is if it already exists)", today, jobId);
         return true;
     }
 }

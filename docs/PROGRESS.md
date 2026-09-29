@@ -25,21 +25,24 @@
     NotTracedBackfillTest 63 (approved bumps).
   - A successful `ShopifyImportJob` (connect / reconnect / sync) sets the marker — never backfilled afterwards.
   - `CatalogBackfillTrigger` (ApplicationReadyEvent, fail-soft, only when the JobRunr server is on) enqueues
-    `CatalogBackfillJob` under the fixed `JOB_ID` when a connected store has a NULL marker. **JobRunr 7.3 makes a
-    repeat enqueue under an existing id a silent no-op in ANY state** (`AbstractJobScheduler.saveJob` swallows
-    `ConcurrentJobModificationException`) — so if the job ends FAILED after JobRunr's retries, later starts don't
-    re-enqueue it until that job is deleted in the JobRunr dashboard. Kill switch `traced.catalog-backfill.enabled`
-    (env `TRACED_CATALOG_BACKFILL_ENABLED`, default true), checked by the trigger and the job.
+    `CatalogBackfillJob` under `CatalogBackfillJob.jobIdFor(today in Africa/Cairo)` (UUID of "catalog-backfill-<date>")
+    when a connected store has a NULL marker. **JobRunr 7.3 makes a repeat enqueue under an existing id a silent
+    no-op in ANY state** (`AbstractJobScheduler.saveJob` swallows `ConcurrentJobModificationException`) — so same-day
+    starts collapse into one job, and a job that ended FAILED is followed by a new one on the next day's first start.
+    Kill switch `traced.catalog-backfill.enabled` (env `TRACED_CATALOG_BACKFILL_ENABLED`, default true), checked by the trigger and the job.
   - `CatalogBackfillJob`: one owner-pool read of eligible stores (same listing as ShopifyReconcileJob), then per store in
-    `TenantContext.runAs`: `importCatalogOnly()` → `activateAll()` (any failed variant = store failed) → marker. Never
-    writes import_status / last_sync_at / status. Failed stores → the job throws at the end → JobRunr retry; done stores skipped.
+    `TenantContext.runAs`: `importCatalogOnly()` → `activateAll()` → marker. Marker rule: import fails → no marker, store
+    failed; activation fails at STORE level (activateAll throws — token / no linked location / no store — or EVERY
+    variant rejected, which is how a missing scope or unreachable shop shows up) → no marker, store failed; only SOME
+    variants rejected → WARN with store id + rejected variant ids + reasons, marker SET, store not failed. Never writes
+    import_status / last_sync_at / status. Failed stores → the job throws at the end → JobRunr retry; done stores skipped.
   - **Webhook activation gap closed:** confirmed in code that only `activateAll()` (connect import + manual endpoint)
     ever activated — a variant added in Shopify after connect was never activated at the Traced location (not observed in
     prod's failed-adjustment rows, which are all location-link / scope errors). `ingestProductWebhook` now returns the
     newly inserted variant ids (before/after diff for that one product); `ShopifyWebhookProcessorJob` activates just those
     via `ShopifyCatalogActivationService.activateVariants()` after the upsert commits; failures are logged, never fail the upsert.
-  - Tests: `CatalogBackfillJobTest` (14; revert-checked: marker guard → bf2/bf3/im1, webhook activation → wh1/wh2,
-    before/after diff → wh1/wh2, import marker → im1). Headless-Chromium screenshots of the Stock tab EN/LTR + AR/RTL with
+  - Tests: `CatalogBackfillJobTest` (16; revert-checked: marker guard → bf2/bf3/im1, webhook activation → wh1/wh2,
+    before/after diff → wh1/wh2, import marker → im1, old any-variant-fails rule → bf6, date-free job id → tr3). Headless-Chromium screenshots of the Stock tab EN/LTR + AR/RTL with
     draft + archived badges (scratchpad, mocked API).
   - Prod at build time: 14 connected stores eligible (10 custom_app_cc, 4 oauth — 2 with import_status failed).
 

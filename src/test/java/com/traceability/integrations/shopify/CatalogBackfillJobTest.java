@@ -26,7 +26,16 @@ import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
+import org.slf4j.LoggerFactory;
+
 import javax.sql.DataSource;
+import java.time.Clock;
+import java.time.LocalDate;
+import java.time.ZoneId;
 import java.math.BigDecimal;
 import java.sql.Timestamp;
 import java.util.*;
@@ -45,7 +54,8 @@ import static org.mockito.Mockito.*;
  * and first marks any store left by an earlier test as done, so only its own stores are eligible.
  *
  * Revert-checked: bf2 (marker guard dropped from ELIGIBLE_STORES → re-import), wh1/wh2
- * (webhook activation removed → no call).
+ * (webhook activation removed → no call), bf6 (any rejected variant failing the store → no
+ * marker, job throws), tr3 (a fixed, date-free job id → no new job on the next day).
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.NONE)
 @Testcontainers
@@ -185,6 +195,51 @@ class CatalogBackfillJobTest {
     }
 
     @Test
+    void bf6_oneVariantAlwaysRejected_markerSet_jobDoesNotThrow_rejectedIdLogged() {
+        Store a = store("bf6-a", "connected");
+        String rejectedGid = "gid://shopify/ProductVariant/" + a.shop() + "-21";
+        doThrow(new ShopifyException("inventoryActivate failed: variant is not tracked"))
+            .when(shopifyGateway).activateInventoryItem(eq(a.shop()), anyString(),
+                eq("gid://shopify/InventoryItem/for-" + rejectedGid), anyString(), anyString());
+        ListAppender<ILoggingEvent> logs = captureLogs();
+
+        backfill.run();   // does not throw
+
+        assertThat(marker(a)).isNotNull();
+        assertThat(activationCalls(a)).isEqualTo(3);
+        UUID rejectedId = jdbc.queryForObject("SELECT id FROM variants WHERE external_id = ?", UUID.class, rejectedGid);
+        assertThat(logs.list).anySatisfy(e -> {
+            assertThat(e.getLevel()).isEqualTo(Level.WARN);
+            assertThat(e.getFormattedMessage()).contains(a.id().toString()).contains(rejectedId.toString())
+                .contains("variant is not tracked").contains("1 of 3");
+        });
+        releaseLogs(logs);
+    }
+
+    @Test
+    void bf7_storeLevelActivationError_locationNotLinked_markerNull_jobThrows() {
+        Store a = store("bf7-a", "connected");
+        jdbc.update("UPDATE locations SET shopify_sync_status = 'error' WHERE tenant_id = ?", a.tenant());
+
+        assertThatThrownBy(() -> backfill.run()).isInstanceOf(IllegalStateException.class)
+            .hasMessageContaining(a.id().toString());
+        assertThat(marker(a)).isNull();
+        assertThat(products(a)).as("the catalog import itself ran").hasSize(2);
+        verify(shopifyGateway, never()).activateInventoryItem(anyString(), anyString(), anyString(), anyString(), anyString());
+    }
+
+    private ListAppender<ILoggingEvent> captureLogs() {
+        ListAppender<ILoggingEvent> appender = new ListAppender<>();
+        appender.start();
+        ((Logger) LoggerFactory.getLogger(CatalogBackfillJob.class)).addAppender(appender);
+        return appender;
+    }
+
+    private void releaseLogs(ListAppender<ILoggingEvent> appender) {
+        ((Logger) LoggerFactory.getLogger(CatalogBackfillJob.class)).detachAppender(appender);
+    }
+
+    @Test
     void bf5_killSwitchOff_jobDoesNothing() {
         Store a = store("bf5-a", "connected");
         CatalogBackfillJob off = new CatalogBackfillJob(dataSource, jdbc, txm, syncService, tokenProvider, activationService, false);
@@ -208,34 +263,57 @@ class CatalogBackfillJobTest {
 
     @Test
     @SuppressWarnings("unchecked")
-    void tr2_eligibleStore_enqueuedUnderTheFixedId_nothingEligible_notEnqueued() {
+    void tr2_eligibleStore_enqueuedUnderTodaysId_nothingEligible_notEnqueued() {
         JobScheduler scheduler = mock(JobScheduler.class);
         assertThat(new CatalogBackfillTrigger(jdbc, scheduler, true).enqueueIfNeeded()).as("no eligible store").isFalse();
         verifyNoInteractions(scheduler);
 
         store("tr2-a", "connected");
         assertThat(new CatalogBackfillTrigger(jdbc, scheduler, true).enqueueIfNeeded()).isTrue();
-        verify(scheduler).enqueue(eq(CatalogBackfillJob.JOB_ID), any(IocJobLambda.class));
+        verify(scheduler).enqueue(eq(CatalogBackfillJob.jobIdFor(LocalDate.now(ZoneId.of("Africa/Cairo")))), any(IocJobLambda.class));
     }
 
     @Test
-    void tr3_repeatedStarts_collapseIntoOneJob_realJobRunrStorage() {
-        store("tr3-a", "connected");
-        jdbc.update("DELETE FROM jobrunr_jobs WHERE id = ?", CatalogBackfillJob.JOB_ID.toString());
-        CatalogBackfillTrigger trigger = new CatalogBackfillTrigger(jdbc, jobScheduler, true);
+    void tr3_perCairoDay_sameDayTwiceOneJob_nextDayUnmarkedNewJob_nextDayAllMarkedNothing() {
+        LocalDate d1 = LocalDate.of(2026, 10, 1), d2 = d1.plusDays(1), d3 = d1.plusDays(2);
+        for (LocalDate d : List.of(d1, d2, d3)) {
+            jdbc.update("DELETE FROM jobrunr_jobs WHERE id = ?", CatalogBackfillJob.jobIdFor(d).toString());
+        }
+        Store a = store("tr3-a", "connected");
 
-        assertThat(trigger.enqueueIfNeeded()).isTrue();
-        Map<String, Object> first = jdbc.queryForMap("SELECT state, version, createdAt FROM jobrunr_jobs WHERE id = ?",
-            CatalogBackfillJob.JOB_ID.toString());
-
-        trigger.enqueueIfNeeded();        // a second start
-        trigger.onApplicationReady();     // and a third, through the fail-soft listener
-
-        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM jobrunr_jobs WHERE id = ?", Integer.class,
-            CatalogBackfillJob.JOB_ID.toString())).isEqualTo(1);
-        assertThat(jdbc.queryForMap("SELECT state, version, createdAt FROM jobrunr_jobs WHERE id = ?",
-            CatalogBackfillJob.JOB_ID.toString())).as("the existing job is left exactly as it was").isEqualTo(first);
+        // Day 1, 23:30 Cairo — twice (and once more through the fail-soft listener).
+        CatalogBackfillTrigger day1 = new CatalogBackfillTrigger(jdbc, jobScheduler, true, cairo(d1, 23, 30));
+        assertThat(day1.enqueueIfNeeded()).isTrue();
+        Map<String, Object> first = jobRow(d1);
+        day1.enqueueIfNeeded();
+        day1.onApplicationReady();
+        assertThat(jobRows(d1)).as("same day: one job").isEqualTo(1);
+        assertThat(jobRow(d1)).as("the existing job is left exactly as it was").isEqualTo(first);
         assertThat(first.get("state")).isEqualTo("ENQUEUED");
+
+        // Day 2, 00:30 Cairo (still day 1 in UTC) — the store is still unmarked → a new job.
+        assertThat(new CatalogBackfillTrigger(jdbc, jobScheduler, true, cairo(d2, 0, 30)).enqueueIfNeeded()).isTrue();
+        assertThat(jobRows(d2)).as("next day, store unmarked: a new job").isEqualTo(1);
+        assertThat(jobRows(d1)).isEqualTo(1);
+
+        // Day 3 — every connected store marked → nothing enqueued.
+        jdbc.update("UPDATE stores SET catalog_backfilled_at = now() WHERE id = ?", a.id());
+        assertThat(new CatalogBackfillTrigger(jdbc, jobScheduler, true, cairo(d3, 9, 0)).enqueueIfNeeded()).isFalse();
+        assertThat(jobRows(d3)).as("next day, all marked: nothing").isZero();
+    }
+
+    private static Clock cairo(LocalDate day, int hour, int minute) {
+        return Clock.fixed(day.atTime(hour, minute).atZone(ZoneId.of("Africa/Cairo")).toInstant(), ZoneId.of("UTC"));
+    }
+
+    private int jobRows(LocalDate day) {
+        return jdbc.queryForObject("SELECT COUNT(*) FROM jobrunr_jobs WHERE id = ?", Integer.class,
+            CatalogBackfillJob.jobIdFor(day).toString());
+    }
+
+    private Map<String, Object> jobRow(LocalDate day) {
+        return jdbc.queryForMap("SELECT state, version, createdAt FROM jobrunr_jobs WHERE id = ?",
+            CatalogBackfillJob.jobIdFor(day).toString());
     }
 
     // ── IM: the normal import sets the marker ─────────────────────────────────

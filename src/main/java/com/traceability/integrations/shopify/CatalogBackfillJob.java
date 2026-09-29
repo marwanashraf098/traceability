@@ -14,6 +14,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 
 import javax.sql.DataSource;
 import java.nio.charset.StandardCharsets;
+import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -31,7 +32,11 @@ import java.util.UUID;
  *      no on-hand seed, no order import;
  *   b. ShopifyCatalogActivationService.activateAll() — every variant of the store, idempotent
  *      (also covers variants that came in by webhook and were never activated);
- *   c. catalog_backfilled_at = now(), only after a and b both succeeded.
+ *   c. catalog_backfilled_at = now() once a succeeded and b didn't fail at STORE level.
+ * Store-level activation failure (token, location, the call throwing, or EVERY variant
+ * rejected — how a missing scope or an unreachable shop shows up) → no marker, store failed.
+ * Only some variants rejected → those ids and reasons are logged, the marker IS set and the
+ * store counts as done (one variant Shopify always rejects must not keep the job retrying).
  * It never writes import_status, last_sync_at or stores.status — nothing the merchant sees.
  *
  * One store failing never stops the rest; if any failed, the run throws at the end so JobRunr
@@ -42,9 +47,13 @@ public class CatalogBackfillJob {
 
     private static final Logger log = LoggerFactory.getLogger(CatalogBackfillJob.class);
 
-    /** Deterministic JobRunr id — repeated application starts collapse into this one job. */
-    public static final UUID JOB_ID = UUID.nameUUIDFromBytes(
-        "traced:catalog-backfill:v1".getBytes(StandardCharsets.UTF_8));
+    /**
+     * Deterministic JobRunr id for one Cairo calendar day — starts on the same day collapse into
+     * one job; the next day's first start enqueues a new one if a store is still unmarked.
+     */
+    public static UUID jobIdFor(LocalDate cairoDay) {
+        return UUID.nameUUIDFromBytes(("catalog-backfill-" + cairoDay).getBytes(StandardCharsets.UTF_8));
+    }
 
     static final String ELIGIBLE_STORES =
         "SELECT id, tenant_id, shop_domain FROM stores " +
@@ -120,9 +129,13 @@ public class CatalogBackfillJob {
         long[] after = counts(storeId);
 
         ShopifyCatalogActivationService.ActivationOutcome activation = activationService.activateAll();
+        if (activation.total() > 0 && activation.failed() == activation.total()) {
+            throw new IllegalStateException("activation failed for every variant (" + activation.total()
+                + ") — store-level: " + activation.failures());
+        }
         if (activation.failed() > 0) {
-            throw new IllegalStateException("activation failed for " + activation.failed() + " of "
-                + activation.total() + " variant(s): " + activation.failures());
+            log.warn("Catalog backfill store {} ({}): {} of {} variant(s) rejected by Shopify — marker set anyway: {}",
+                storeId, shopDomain, activation.failed(), activation.total(), activation.failures());
         }
 
         tx.execute(s -> jdbc.update(
