@@ -259,4 +259,43 @@ class TransferReprintTest {
             .as("WORKER role must receive 403 on reprint-outstanding")
             .isEqualTo(HttpStatus.FORBIDDEN);
     }
+
+    // ── Every page's barcode (the "labels print with text but no barcode" bug) ──
+
+    @Test
+    void reprintOutstanding_everyPageBarcodeDecodesToItsPiece_fontsEmbedded() throws Exception {
+        UUID transferId = openTransferWithOutstanding(3);
+
+        ResponseEntity<byte[]> resp = rest.exchange(
+            base() + "/api/v1/transfers/" + transferId + "/reprint-outstanding",
+            HttpMethod.POST, new HttpEntity<>(authHeaders(ownerToken)), byte[].class);
+
+        assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.OK);
+        List<String> codes = jdbc.queryForList(
+            "SELECT p.short_code FROM transfer_pieces tp JOIN pieces p ON p.id = tp.piece_id " +
+            "WHERE tp.transfer_id = ? ORDER BY tp.created_at", String.class, transferId);
+        // Rasterizes every page and decodes its Code 128 — a page count alone stayed green
+        // while every merged page had lost its barcode image.
+        LabelEndpointsTest.assertLabels(resp.getBody(), codes, 50f, 25f);
+    }
+
+    @Test
+    void reprintOutstanding_barcodeImageIsOwnedByTheReturnedDocument() throws Exception {
+        UUID transferId = openTransferWithOutstanding(2);
+
+        ResponseEntity<byte[]> resp = rest.exchange(
+            base() + "/api/v1/transfers/" + transferId + "/reprint-outstanding",
+            HttpMethod.POST, new HttpEntity<>(authHeaders(ownerToken)), byte[].class);
+
+        try (PDDocument doc = Loader.loadPDF(resp.getBody())) {
+            for (int i = 0; i < doc.getNumberOfPages(); i++) {
+                org.apache.pdfbox.pdmodel.PDResources res = doc.getPage(i).getResources();
+                int images = 0;
+                for (org.apache.pdfbox.cos.COSName n : res.getXObjectNames()) {
+                    if (res.getXObject(n) instanceof org.apache.pdfbox.pdmodel.graphics.image.PDImageXObject) images++;
+                }
+                assertThat(images).as("page %d has its barcode image", i + 1).isEqualTo(1);
+            }
+        }
+    }
 }

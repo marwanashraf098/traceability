@@ -91,6 +91,40 @@ public class LabelService {
             labelH_mm  != null ? labelH_mm  : DEFAULT_HEIGHT_MM);
     }
 
+    /**
+     * One PDF for several pieces, in the given order — rendered into a single document (never
+     * a merge of single-page PDFs, whose images died with their closed source documents). Any
+     * id not found for this tenant → 404.
+     */
+    @Transactional(readOnly = true)
+    public byte[] generatePieceLabels(List<String> pieceIds, Float labelW_mm, Float labelH_mm)
+            throws IOException {
+        UUID tenantId = TenantContext.require();
+        Map<String, Map<String, Object>> byId = new java.util.HashMap<>();
+        for (Map<String, Object> row : jdbc.query(con -> {
+                var ps = con.prepareStatement(
+                    "SELECT p.id, p.barcode, p.short_code, v.sku, v.title AS variant_title, pr.title AS product_title " +
+                    "FROM pieces p " +
+                    "JOIN variants v ON v.id = p.variant_id " +
+                    "JOIN products pr ON pr.id = v.product_id " +
+                    "WHERE p.id = ANY(?) AND p.tenant_id = ?");
+                ps.setArray(1, con.createArrayOf("text", pieceIds.toArray()));
+                ps.setObject(2, tenantId);
+                return ps;
+            }, new org.springframework.jdbc.core.ColumnMapRowMapper())) {
+            byId.put((String) row.get("id"), row);
+        }
+        List<Map<String, Object>> pieces = new java.util.ArrayList<>();
+        for (String id : pieceIds) {
+            Map<String, Object> row = byId.get(id);
+            if (row == null) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Piece not found");
+            pieces.add(row);
+        }
+        return renderPdf(pieces,
+            labelW_mm  != null ? labelW_mm  : DEFAULT_WIDTH_MM,
+            labelH_mm  != null ? labelH_mm  : DEFAULT_HEIGHT_MM);
+    }
+
     /** Logs a reprint event and returns the PDF bytes. */
     @Transactional
     public byte[] reprint(UUID sessionId, UUID actorUserId, String note,

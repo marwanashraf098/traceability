@@ -4,9 +4,6 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.traceability.tenancy.TenantContext;
-import org.apache.pdfbox.Loader;
-import org.apache.pdfbox.pdmodel.PDDocument;
-import org.apache.pdfbox.pdmodel.PDPage;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -14,7 +11,6 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.sql.Timestamp;
 import java.time.Instant;
@@ -1017,20 +1013,13 @@ public class TransferService {
                 HttpStatus.UNPROCESSABLE_ENTITY);
         }
 
-        try (PDDocument merged = new PDDocument()) {
-            for (String pieceId : outstandingPieceIds) {
-                byte[] pagePdf = labelService.generatePieceLabel(pieceId, null, null);
-                try (PDDocument single = Loader.loadPDF(pagePdf)) {
-                    for (PDPage page : single.getPages()) {
-                        merged.importPage(page);
-                    }
-                }
-                ledger.recordLabelReprinted(pieceId, actorUserId, null, null, null);
-            }
-            ByteArrayOutputStream out = new ByteArrayOutputStream();
-            merged.save(out);
-            return out.toByteArray();
+        // One document for every outstanding piece — no page merging (merging single-page PDFs
+        // lost every barcode image once the source documents were closed).
+        byte[] pdf = labelService.generatePieceLabels(outstandingPieceIds, null, null);
+        for (String pieceId : outstandingPieceIds) {
+            ledger.recordLabelReprinted(pieceId, actorUserId, null, null, null);
         }
+        return pdf;
     }
 
     // ── List / get (consignment view) ───────────────────────────────────────

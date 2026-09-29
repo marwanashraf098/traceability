@@ -6,8 +6,10 @@ import com.google.zxing.client.j2se.BufferedImageLuminanceSource;
 import com.google.zxing.common.HybridBinarizer;
 import com.google.zxing.oned.Code128Reader;
 import com.traceability.identity.model.AccessTokenResponse;
+import com.traceability.inventory.LabelService;
 import com.traceability.inventory.ReceivingService;
 import com.traceability.inventory.ReturnSessionService;
+import com.traceability.inventory.TransferService;
 import com.traceability.tenancy.TenantContext;
 import org.apache.pdfbox.Loader;
 import org.apache.pdfbox.cos.COSName;
@@ -94,6 +96,8 @@ class LabelEndpointsTest {
     @Autowired JdbcTemplate jdbc;
     @Autowired ReceivingService receiving;
     @Autowired ReturnSessionService returnSessions;
+    @Autowired TransferService transfers;
+    @Autowired LabelService labels;
     @Autowired PasswordEncoder passwordEncoder;
     @MockBean JobScheduler jobScheduler;
 
@@ -223,6 +227,40 @@ class LabelEndpointsTest {
             }
         } finally {
             jdbc.update("UPDATE pieces SET status = 'available'::piece_status WHERE id = ?", piece);
+        }
+    }
+
+    @Test
+    void e7_transferReprintOutstanding_everyFixture_everyPageDecodes() throws Exception {
+        UUID showroom = UUID.randomUUID();
+        jdbc.update("INSERT INTO locations (id, tenant_id, name, type, is_default, is_fulfillment) " +
+            "VALUES (?, ?, 'Showroom', 'showroom', false, false)", showroom, tenantId);
+        List<String> pieces = new ArrayList<>();
+        UUID transfer = TenantContext.runAs(tenantId, () -> {
+            UUID t = transfers.createTransfer("showroom", showroom, null, "labels", ownerId);
+            for (UUID v : variantIds) {
+                String piece = pieceOf(sessionId, v);
+                transfers.scanOut(t, jdbc.queryForObject("SELECT barcode FROM pieces WHERE id = ?", String.class, piece), ownerId);
+                pieces.add(piece);
+            }
+            return t;
+        });
+        try {
+            ResponseEntity<byte[]> resp = post("/api/v1/transfers/" + transfer + "/reprint-outstanding", null);
+            assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.OK);
+            assertLabels(resp.getBody(), pieces.stream().map(this::shortCode).toList(), 50f, 25f);
+            sample("transfer-reprint-outstanding", new float[]{50f, 25f}, resp.getBody());
+
+            // The endpoint prints the default 50×25 (the tenant size isn't wired yet); the same
+            // one-document call it uses, at 40×25:
+            byte[] at40 = TenantContext.runAs(tenantId, () -> labels.generatePieceLabels(pieces, 40f, 25f));
+            assertLabels(at40, pieces.stream().map(this::shortCode).toList(), 40f, 25f);
+            sample("transfer-reprint-outstanding", new float[]{40f, 25f}, at40);
+        } finally {
+            jdbc.update("DELETE FROM piece_events WHERE piece_id = ANY(?) AND event_type <> 'received'",
+                (Object) pieces.toArray(new String[0]));
+            jdbc.update("DELETE FROM transfer_pieces WHERE transfer_id = ?", transfer);
+            jdbc.update("UPDATE pieces SET status = 'available'::piece_status WHERE id = ANY(?)", (Object) pieces.toArray(new String[0]));
         }
     }
 
