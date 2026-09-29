@@ -1075,6 +1075,7 @@ export interface InventoryStockProduct {
   id: string
   title: string
   imageUrl: string | null
+  status?: string | null
   onHand: number
   committed: number | null
   available: number

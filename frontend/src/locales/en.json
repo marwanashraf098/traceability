@@ -1337,6 +1337,10 @@
       }
     }
   },
+  "productStatus": {
+    "draft": "Draft",
+    "archived": "Archived"
+  },
   "common": {
     "loading": "Loading...",
     "error": "Something went wrong",

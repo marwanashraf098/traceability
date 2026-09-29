@@ -610,7 +610,7 @@ public class PortalService {
 
     /**
      * Step 5b — an exchange submission: the store offers exchanges; exactly one line of
-     * quantity 1; a replacement variant that is a DIFFERENT variant of the SAME product and is in
+     * quantity 1; a replacement variant that is a DIFFERENT variant of the SAME, ACTIVE product and is in
      * stock now (VariantStockService, recomputed here — never trusted from lookup). Returns the
      * replacement variant id; anything else is the generic invalid-submission 400.
      */
@@ -628,7 +628,9 @@ public class PortalService {
         }
         Boolean sameProduct = jdbc.queryForObject(
             "SELECT EXISTS (SELECT 1 FROM variants r JOIN variants o ON o.product_id = r.product_id " +
-            "               WHERE r.id = ? AND o.id = ? AND r.tenant_id = ? AND o.tenant_id = ?)",
+            "               JOIN products p ON p.id = r.product_id AND p.tenant_id = r.tenant_id " +
+            "               WHERE r.id = ? AND o.id = ? AND r.tenant_id = ? AND o.tenant_id = ? " +
+            "                 AND p.status = 'active')",
             Boolean.class, replacement, lineVariant, tenantId, tenantId);
         if (!Boolean.TRUE.equals(sameProduct)) throw new InvalidSubmission();
         com.traceability.inventory.VariantStockService stock = new com.traceability.inventory.VariantStockService(jdbc);

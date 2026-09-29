@@ -39,6 +39,12 @@ public class ExchangeOptions {
 
     /** The line's exchange data: {optionAxes, currentOptions, exchangeOptions}. */
     public Map<String, Object> forVariant(UUID tenantId, UUID variantId, Map<UUID, VariantStockService.VariantStock> stock) {
+        // Only an ACTIVE product is offered for exchange — draft / archived / unlisted products are
+        // imported (and still refundable) but never offered to a customer as a replacement.
+        List<String> status = jdbc.queryForList(
+            "SELECT p.status FROM variants v JOIN products p ON p.id = v.product_id AND p.tenant_id = v.tenant_id " +
+            "WHERE v.id = ? AND v.tenant_id = ?", String.class, variantId, tenantId);
+        boolean offerable = !status.isEmpty() && "active".equals(status.get(0));
         List<Variant> family = jdbc.query(
             "SELECT v.id, v.title, v.raw::text AS raw, p.raw::text AS product_raw " +
             "FROM variants v JOIN products p ON p.id = v.product_id AND p.tenant_id = v.tenant_id " +
@@ -56,7 +62,7 @@ public class ExchangeOptions {
         out.put("currentOptions", current);
         List<Map<String, Object>> options = new ArrayList<>();
         for (Variant v : family) {
-            if (v.id().equals(variantId)) continue;
+            if (!offerable || v.id().equals(variantId)) continue;
             VariantStockService.VariantStock s = stock.get(v.id());
             Map<String, Object> m = new LinkedHashMap<>();
             m.put("variantId", v.id().toString());

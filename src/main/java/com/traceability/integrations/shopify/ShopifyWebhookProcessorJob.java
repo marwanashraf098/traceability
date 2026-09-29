@@ -4,6 +4,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.traceability.inventory.FulfillService;
+import com.traceability.inventory.ShopifyCatalogActivationService;
 import com.traceability.tenancy.TenantContext;
 import org.jobrunr.jobs.annotations.Job;
 import org.slf4j.Logger;
@@ -134,17 +135,20 @@ public class ShopifyWebhookProcessorJob {
     private final ObjectMapper mapper;
     private final ShopifySyncService syncService;
     private final FulfillService fulfillService;
+    private final ShopifyCatalogActivationService activationService;
     private final TransactionTemplate tx;
 
     public ShopifyWebhookProcessorJob(JdbcTemplate jdbc,
                                        ObjectMapper mapper,
                                        ShopifySyncService syncService,
                                        FulfillService fulfillService,
+                                       ShopifyCatalogActivationService activationService,
                                        PlatformTransactionManager txm) {
         this.jdbc           = jdbc;
         this.mapper         = mapper;
         this.syncService    = syncService;
         this.fulfillService = fulfillService;
+        this.activationService = activationService;
         this.tx             = new TransactionTemplate(txm);
     }
 
@@ -421,7 +425,23 @@ public class ShopifyWebhookProcessorJob {
             log.warn("products webhook: store not found or disconnected shop={} tenant={}", shopDomain, tenantId);
             return;
         }
-        syncService.ingestProductWebhook(storeId, tenantId, payload);
+        List<UUID> newVariants = syncService.ingestProductWebhook(storeId, tenantId, payload);
+        // A variant added in Shopify after connect is otherwise never activated at the Traced
+        // location (only the connect import activates), so its first receiving increment would
+        // fail. Activate just the newly inserted ones — after the upsert has committed; a failure
+        // is logged and never fails the product upsert.
+        if (!newVariants.isEmpty()) {
+            try {
+                ShopifyCatalogActivationService.ActivationOutcome outcome = activationService.activateVariants(newVariants);
+                if (outcome.failed() > 0) {
+                    log.warn("products webhook: activation failed for {} of {} new variant(s) shop={}: {}",
+                        outcome.failed(), outcome.total(), shopDomain, outcome.failures());
+                }
+            } catch (Exception e) {
+                log.warn("products webhook: could not activate {} new variant(s) at the Traced location shop={}: {}",
+                    newVariants.size(), shopDomain, e.getMessage());
+            }
+        }
     }
 
     private void handleAppUninstalled(UUID tenantId, String shopDomain) {

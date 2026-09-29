@@ -126,6 +126,9 @@ public class ShopifyImportJob {
                     "variants",      result.variants(),
                     "orders",        result.orders(),
                     "flaggedOrders", result.flaggedOrders())));
+                // Every product status was imported — this store never needs CatalogBackfillJob.
+                tx.execute(s -> jdbc.update(
+                    "UPDATE stores SET catalog_backfilled_at = now() WHERE id = ?", storeId));
 
                 log.info("Shopify import completed for store {}: {} products, {} orders",
                     storeId, result.products(), result.orders());

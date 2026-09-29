@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Search, X } from 'lucide-react'
 import { getCatalog, CatalogProduct, CatalogVariant } from '../../api'
-import { Alert, Input, Modal, ProductThumb, Skeleton, cn } from '../../components/ui'
+import { Alert, Input, Modal, ProductStatusBadge, ProductThumb, Skeleton, cn } from '../../components/ui'
 
 /**
  * FR-EXCHANGE Phase 2 — single-variant picker. Reuses the SAME data source
@@ -118,6 +118,7 @@ export default function ExchangeVariantPicker({ onSelect, onClose }: Props) {
                   <div className="text-[10px] font-mono text-muted">
                     {t('receiving.grid.variantMeta', { count: product.variants.length })}
                   </div>
+                  <ProductStatusBadge status={product.status} className="mt-0.5" />
                 </div>
               </button>
             ))}

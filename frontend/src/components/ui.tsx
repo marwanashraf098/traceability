@@ -85,6 +85,27 @@ export function Badge({
   )
 }
 
+// ── ProductStatusBadge ────────────────────────────────────────────────────────
+
+const PRODUCT_STATUS_TONE: Record<string, BadgeTone> = {
+  draft:    'info',
+  archived: 'neutral',
+}
+
+/** A Shopify product's status. Active → nothing; draft / archived → labelled; anything else → the raw value. */
+export function ProductStatusBadge({ status, className = '' }: { status?: string | null; className?: string }) {
+  const { t } = useTranslation()
+  if (typeof status !== 'string' || status === '' || status.toLowerCase() === 'active') return null
+  const key = status.toLowerCase()
+  const known = key in PRODUCT_STATUS_TONE
+  return (
+    <span className={cn('badge border', TONE_STYLE[PRODUCT_STATUS_TONE[key] ?? 'neutral'], className)}
+          data-testid="product-status-badge">
+      {known ? t(`productStatus.${key}`) : status}
+    </span>
+  )
+}
+
 // ── OrderBadge ────────────────────────────────────────────────────────────────
 
 const ORDER_STATUS_KEY: Record<string, string> = {

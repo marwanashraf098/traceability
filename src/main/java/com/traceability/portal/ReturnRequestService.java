@@ -324,6 +324,7 @@ public class ReturnRequestService {
     }
 
     public static final String REPLACEMENT_OUT_OF_STOCK = "REPLACEMENT_OUT_OF_STOCK";
+    public static final String REPLACEMENT_NOT_ACTIVE = "REPLACEMENT_NOT_ACTIVE";
 
     private void approveExchange(UUID id, UUID tenantId, UUID actorUserId) {
         List<Map<String, Object>> rows = jdbc.queryForList(
@@ -332,6 +333,11 @@ public class ReturnRequestService {
             "WHERE rr.id = ? AND rr.tenant_id = ? FOR UPDATE OF rr", id, tenantId);
         if (rows.isEmpty() || !"requested".equals(rows.get(0).get("status"))) throw notRequested(id, tenantId);
         UUID replacement = (UUID) rows.get(0).get("replacement_variant_id");
+        // The product may have been archived / set to draft in Shopify since the customer asked.
+        if (replacement != null && !replacementProductActive(replacement, tenantId)) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, REPLACEMENT_NOT_ACTIVE
+                + ": the replacement's product is no longer active in Shopify, so it can't be sent.");
+        }
         com.traceability.inventory.VariantStockService stock = new com.traceability.inventory.VariantStockService(jdbc);
         if (replacement == null || stock.forVariant(stock.computeAll(), replacement).available() <= 0) {
             throw new ResponseStatusException(HttpStatus.CONFLICT,
@@ -347,6 +353,18 @@ public class ReturnRequestService {
                 "SELECT portal_pickup_booking AND portal_exchanges_enabled FROM tenants WHERE id = ?", Boolean.class, tenantId))) {
             bookingScheduler.enqueueAfterCommit(id, tenantId);
         }
+    }
+
+    /** True when the replacement variant's product is 'active' (draft / archived / unlisted aren't). */
+    static boolean replacementProductActive(JdbcTemplate jdbc, UUID variantId, UUID tenantId) {
+        return Boolean.TRUE.equals(jdbc.queryForObject(
+            "SELECT EXISTS (SELECT 1 FROM variants v JOIN products p ON p.id = v.product_id AND p.tenant_id = v.tenant_id " +
+            "               WHERE v.id = ? AND v.tenant_id = ? AND p.status = 'active')",
+            Boolean.class, variantId, tenantId));
+    }
+
+    private boolean replacementProductActive(UUID variantId, UUID tenantId) {
+        return replacementProductActive(jdbc, variantId, tenantId);
     }
 
     /**
