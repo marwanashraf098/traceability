@@ -3,7 +3,8 @@ import { useTranslation } from 'react-i18next'
 import { Search } from 'lucide-react'
 import { getCatalog, CatalogProduct, CatalogVariant } from '../../api'
 import {
-  Alert, Button, Checkbox, Input, Modal, ProductStatusBadge, ProductThumb, Skeleton, Toggle, cn,
+  Alert, Button, Checkbox, DEFAULT_PRODUCT_STATUSES, Input, Modal, ProductStatusBadge, ProductStatusFilter,
+  ProductStatusOption, ProductThumb, Skeleton, Toggle, cn, productStatusParam,
 } from '../../components/ui'
 import { api, Line } from '../Receiving'
 
@@ -24,6 +25,9 @@ function groupLinesByVariant(lines: Line[]): Map<string, VariantGroup> {
   return map
 }
 
+// One page of the server-side catalog (search + status filter + keyset "load more").
+const PAGE_SIZE = 48
+
 interface Props {
   sessionId: string
   lines: Line[]
@@ -36,20 +40,91 @@ export default function ProductSelectionGrid({
   sessionId, lines, onRefresh, onFinalizeClick, finalizing,
 }: Props) {
   const { t } = useTranslation()
-  const [catalog, setCatalog]         = useState<CatalogProduct[] | null>(null)
+  // The grid never loads the whole catalog: `results` is the current server-side
+  // page(s) for the search + status filter; `known` keeps every product seen so far
+  // (pages, plus the products of variants already in this session) so the selected
+  // summary, totals and the variant modal keep working when a product isn't in the
+  // current results.
+  const [results, setResults]         = useState<CatalogProduct[] | null>(null)
+  const [nextCursor, setNextCursor]   = useState<string | null>(null)
+  const [loadingMore, setLoadingMore] = useState(false)
+  const [known, setKnown]             = useState<Map<string, CatalogProduct>>(() => new Map())
   const [loadError, setLoadError]     = useState<string | null>(null)
   const [gridError, setGridError]     = useState<string | null>(null)
   const [query, setQuery]             = useState('')
+  const [qDebounced, setQDebounced]   = useState('')
+  const [statuses, setStatuses]       = useState<ProductStatusOption[]>(DEFAULT_PRODUCT_STATUSES)
   const [showSelectedOnly, setShowSelectedOnly] = useState(false)
   const [modalProductId, setModalProductId]     = useState<string | null>(null)
 
+  function remember(products: CatalogProduct[]) {
+    if (products.length === 0) return
+    setKnown(prev => {
+      const next = new Map(prev)
+      for (const p of products) next.set(p.id, p)
+      return next
+    })
+  }
+
   useEffect(() => {
-    getCatalog()
-      .then(r => setCatalog(r.products))
-      .catch(() => setLoadError(t('common.error')))
-  }, [t])
+    const id = setTimeout(() => setQDebounced(query.trim()), 300)
+    return () => clearTimeout(id)
+  }, [query])
+
+  // Latest request wins — a slow response for an older search never overwrites a newer one.
+  const requestRef = useRef(0)
+  useEffect(() => {
+    const id = ++requestRef.current
+    getCatalog({ q: qDebounced || undefined, status: productStatusParam(statuses), limit: PAGE_SIZE })
+      .then(r => {
+        if (id !== requestRef.current) return
+        setResults(r.products)
+        setNextCursor(r.nextCursor ?? null)
+        remember(r.products)
+      })
+      .catch(() => { if (id === requestRef.current) setLoadError(t('common.error')) })
+  }, [qDebounced, statuses, t])
+
+  async function loadMore() {
+    if (!nextCursor) return
+    const id = requestRef.current
+    setLoadingMore(true)
+    try {
+      const r = await getCatalog({
+        q: qDebounced || undefined, status: productStatusParam(statuses), cursor: nextCursor, limit: PAGE_SIZE,
+      })
+      if (id !== requestRef.current) return
+      setResults(prev => [...(prev ?? []), ...r.products])
+      setNextCursor(r.nextCursor ?? null)
+      remember(r.products)
+    } catch {
+      setGridError(t('common.error'))
+    } finally {
+      setLoadingMore(false)
+    }
+  }
 
   const groups = useMemo(() => groupLinesByVariant(lines), [lines])
+
+  // Session lines whose product hasn't been seen yet (a resumed session, or a product
+  // outside the current filter): load exactly those products, every status, once.
+  const knownVariantIds = useMemo(() => {
+    const ids = new Set<string>()
+    for (const p of known.values()) for (const v of p.variants) ids.add(v.id)
+    return ids
+  }, [known])
+  const requestedVariantsRef = useRef<Set<string>>(new Set())
+  const missingVariantIds = [...groups.entries()]
+    .filter(([variantId, g]) => g.qty > 0 && !knownVariantIds.has(variantId) && !requestedVariantsRef.current.has(variantId))
+    .map(([variantId]) => variantId)
+  // Waits for the first page: most selected products are on it, no extra request needed.
+  const missingKey = results === null ? '' : missingVariantIds.join(',')
+  useEffect(() => {
+    if (missingKey === '') return
+    for (const v of missingVariantIds) requestedVariantsRef.current.add(v)
+    getCatalog({ variantIds: missingVariantIds }).then(r => remember(r.products)).catch(() => {})
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [missingKey])
   // Always-fresh ref: commitQty must read the LATEST groups even when invoked
   // from a queued/recursive continuation whose closure predates the most
   // recent onRefresh() — see commitQty's doc comment below.
@@ -167,19 +242,11 @@ export default function ProductSelectionGrid({
     }
   }
 
-  const filteredProducts = useMemo(() => {
-    if (!catalog) return []
-    const q = query.trim().toLowerCase()
-    return catalog.filter(p => {
-      if (showSelectedOnly) {
-        const hasQty = p.variants.some(v => (groups.get(v.id)?.qty ?? 0) > 0)
-        if (!hasQty) return false
-      }
-      if (q.length === 0) return true
-      if (p.title.toLowerCase().includes(q)) return true
-      return p.variants.some(v => v.sku?.toLowerCase().includes(q))
-    })
-  }, [catalog, query, showSelectedOnly, groups])
+  // Every product seen so far, in title order (the server's order) — the selected
+  // summary and totals read this, never just the current results page.
+  const knownProducts = useMemo(
+    () => [...known.values()].sort((a, b) => a.title.localeCompare(b.title) || a.id.localeCompare(b.id)),
+    [known])
 
   const totals = useMemo(() => {
     let variants = 0, units = 0
@@ -189,14 +256,12 @@ export default function ProductSelectionGrid({
     return { variants, units }
   }, [groups])
 
-  const productCountWithQty = useMemo(() => {
-    if (!catalog) return 0
-    return catalog.filter(p => p.variants.some(v => (groups.get(v.id)?.qty ?? 0) > 0)).length
-  }, [catalog, groups])
+  const productCountWithQty = useMemo(
+    () => knownProducts.filter(p => p.variants.some(v => (groups.get(v.id)?.qty ?? 0) > 0)).length,
+    [knownProducts, groups])
 
   const selectedProducts = useMemo(() => {
-    if (!catalog) return []
-    return catalog
+    return knownProducts
       .map(product => {
         const rows = product.variants
           .map(variant => ({ variant, qty: groups.get(variant.id)?.qty ?? 0 }))
@@ -205,9 +270,13 @@ export default function ProductSelectionGrid({
         return { product, rows, subtotal: rows.reduce((s, r) => s + r.qty, 0) }
       })
       .filter((x): x is { product: CatalogProduct; rows: { variant: CatalogVariant; qty: number }[]; subtotal: number } => x !== null)
-  }, [catalog, groups])
+  }, [knownProducts, groups])
 
-  const modalProduct = modalProductId ? (catalog?.find(p => p.id === modalProductId) ?? null) : null
+  // "Show selected only" lists the selected products themselves (whatever page or
+  // filter they came from); otherwise the grid shows the server-side results.
+  const gridProducts = showSelectedOnly ? selectedProducts.map(s => s.product) : (results ?? [])
+
+  const modalProduct = modalProductId ? (known.get(modalProductId) ?? null) : null
 
   if (loadError) return <Alert tone="critical" title={loadError} />
 
@@ -226,6 +295,7 @@ export default function ProductSelectionGrid({
               placeholder={t('receiving.grid.searchPlaceholder')}
             />
           </div>
+          <ProductStatusFilter value={statuses} onChange={setStatuses} />
           <label className="flex items-center gap-2 flex-shrink-0">
             <span className="text-small text-muted whitespace-nowrap">
               {t('receiving.grid.showSelectedOnly')}
@@ -234,21 +304,23 @@ export default function ProductSelectionGrid({
           </label>
         </div>
 
-        {catalog === null ? (
+        {results === null && !showSelectedOnly ? (
           <div className="grid grid-cols-3 sm:grid-cols-4 lg:grid-cols-5 gap-2.5 max-h-[380px] overflow-y-auto p-0.5">
             {Array.from({ length: 10 }).map((_, i) => <Skeleton key={i} className="h-24 rounded-xl" />)}
           </div>
-        ) : filteredProducts.length === 0 ? (
+        ) : gridProducts.length === 0 ? (
           <p className="text-small text-muted text-center py-8">
-            {catalog.length === 0 ? t('receiving.grid.emptyCatalog') : t('receiving.grid.noResults')}
+            {!showSelectedOnly && qDebounced === '' && productStatusParam(statuses) === undefined
+              ? t('receiving.grid.emptyCatalog') : t('receiving.grid.noResults')}
           </p>
         ) : (
           // Height-capped to ~3 card rows and internally scrollable — search/toggle
           // stay above (outside this div) since they filter the whole grid; the
           // selected-summary and Finalize below stay visible without page scroll.
           // A short (sub-cap) catalog naturally shrinks to fit — no forced min-height.
+          <>
           <div className="grid grid-cols-3 sm:grid-cols-4 lg:grid-cols-5 gap-2.5 max-h-[380px] overflow-y-auto p-0.5">
-            {filteredProducts.map(product => (
+            {gridProducts.map(product => (
               <CompactProductCard
                 key={product.id}
                 product={product}
@@ -257,6 +329,14 @@ export default function ProductSelectionGrid({
               />
             ))}
           </div>
+          {!showSelectedOnly && nextCursor && (
+            <div className="flex justify-center" data-testid="receiving-grid-load-more">
+              <Button variant="secondary" size="sm" loading={loadingMore} onClick={() => void loadMore()}>
+                {t('receiving.grid.loadMore')}
+              </Button>
+            </div>
+          )}
+          </>
         )}
       </div>
 

@@ -6,7 +6,10 @@ import {
   getInventoryStock, listLocations, InventoryStockProduct, InventoryStockVariant,
   LocationRow, ShopifySyncStatus,
 } from '../../api'
-import { Badge, EmptyState, ProductStatusBadge, ProductThumb, Select, Spinner, Tooltip, cn } from '../../components/ui'
+import {
+  Badge, DEFAULT_PRODUCT_STATUSES, EmptyState, ProductStatusBadge, ProductStatusFilter, ProductStatusOption,
+  ProductThumb, Select, Spinner, Tooltip, cn, productStatusParam,
+} from '../../components/ui'
 import VariantDrawer from './VariantDrawer'
 
 const SYNC_TONE: Record<ShopifySyncStatus, 'success' | 'warning' | 'critical' | 'neutral'> = {
@@ -54,6 +57,7 @@ export default function StockTab() {
   const [qDebounced, setQDebounced] = useState('')
   const [locationId, setLocationId] = useState<string>('')
   const [lowStockOnly, setLowStockOnly] = useState(() => searchParams.get('lowStockOnly') === 'true')
+  const [statuses, setStatuses] = useState<ProductStatusOption[]>(DEFAULT_PRODUCT_STATUSES)
   const [locations, setLocations] = useState<LocationRow[]>([])
 
   const [items, setItems] = useState<InventoryStockProduct[]>([])
@@ -85,6 +89,7 @@ export default function StockTab() {
         q: qDebounced || undefined,
         locationId: locationId || undefined,
         lowStockOnly,
+        status: productStatusParam(statuses),
         cursor,
         size: PAGE_SIZE,
       })
@@ -105,7 +110,7 @@ export default function StockTab() {
     }
   }
 
-  useEffect(() => { load.current(true) }, [qDebounced, locationId, lowStockOnly])
+  useEffect(() => { load.current(true) }, [qDebounced, locationId, lowStockOnly, statuses])
 
   function toggleProduct(id: string) {
     setExpanded(prev => {
@@ -152,6 +157,7 @@ export default function StockTab() {
           <AlertTriangle size={15} strokeWidth={2} />
           {t('inventory.stock.lowStock')}
         </button>
+        <ProductStatusFilter value={statuses} onChange={setStatuses} />
       </div>
 
       {loading ? (

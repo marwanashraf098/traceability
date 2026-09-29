@@ -106,6 +106,60 @@ export function ProductStatusBadge({ status, className = '' }: { status?: string
   )
 }
 
+// ── ProductStatusFilter ───────────────────────────────────────────────────────
+// Shared multi-select (Active / Draft / Archived) for product lists — Inventory
+// Stock tab and the Receiving grid. All three selected means no filter at all
+// (productStatusParam → undefined), so any other Shopify status (e.g. unlisted)
+// is included too. The last selected option can't be cleared.
+
+export const PRODUCT_STATUS_OPTIONS = ['active', 'draft', 'archived'] as const
+export type ProductStatusOption = typeof PRODUCT_STATUS_OPTIONS[number]
+export const DEFAULT_PRODUCT_STATUSES: ProductStatusOption[] = ['active', 'draft']
+
+export function productStatusParam(selected: ProductStatusOption[]): string[] | undefined {
+  return PRODUCT_STATUS_OPTIONS.every(s => selected.includes(s)) ? undefined : [...selected]
+}
+
+export function ProductStatusFilter({ value, onChange, className = '' }: {
+  value: ProductStatusOption[]
+  onChange: (next: ProductStatusOption[]) => void
+  className?: string
+}) {
+  const { t } = useTranslation()
+  function toggle(option: ProductStatusOption) {
+    const on = value.includes(option)
+    if (on && value.length === 1) return
+    onChange(PRODUCT_STATUS_OPTIONS.filter(o => (o === option ? !on : value.includes(o))))
+  }
+  return (
+    <div
+      role="group"
+      aria-label={t('productStatus.filterLabel')}
+      className={cn('inline-flex items-center h-[37px] rounded-xl border border-line bg-elevated p-0.5 flex-shrink-0', className)}
+      data-testid="product-status-filter"
+    >
+      {PRODUCT_STATUS_OPTIONS.map(option => {
+        const on = value.includes(option)
+        return (
+          <button
+            key={option}
+            type="button"
+            aria-pressed={on}
+            onClick={() => toggle(option)}
+            className={cn(
+              'h-full px-3 rounded-[10px] text-small transition-colors whitespace-nowrap',
+              on ? 'bg-brand/[0.14] text-trace-blue font-medium' : 'text-muted hover:text-primary'
+            )}
+            data-testid={`product-status-filter-${option}`}
+          >
+            {t(`productStatus.${option}`)}
+          </button>
+        )
+      })}
+    </div>
+  )
+}
+
 // ── OrderBadge ────────────────────────────────────────────────────────────────
 
 const ORDER_STATUS_KEY: Record<string, string> = {

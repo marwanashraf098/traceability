@@ -96,8 +96,18 @@ public class InventoryStockController {
             @RequestParam(required = false) String q,
             @RequestParam(required = false) UUID locationId,
             @RequestParam(defaultValue = "false") boolean lowStockOnly,
+            @RequestParam(name = "status", required = false) List<String> statusParam,
             @RequestParam(required = false) String cursor,
             @RequestParam(defaultValue = "20") int size) {
+
+        // Product status filter (repeat the param or comma-separate); absent = every status.
+        // The Stock tab sends Active + Draft by default.
+        List<String> statuses = new ArrayList<>();
+        if (statusParam != null) {
+            for (String v : statusParam) for (String part : v.split(",")) {
+                if (!part.isBlank()) statuses.add(part.trim().toLowerCase());
+            }
+        }
 
         int pageSize = Math.min(Math.max(size, 1), 100);
 
@@ -147,6 +157,12 @@ public class InventoryStockController {
                 qPredicate.append("AND (pr.title ILIKE ? OR v.title ILIKE ? OR v.sku ILIKE ?)");
                 params.add(qLike); params.add(qLike); params.add(qLike);
             }
+            StringBuilder statusPredicate = new StringBuilder();
+            if (!statuses.isEmpty()) {
+                statusPredicate.append("AND pr.status IN (")
+                    .append(String.join(", ", java.util.Collections.nCopies(statuses.size(), "?"))).append(")");
+                params.addAll(statuses);
+            }
             StringBuilder lowStockPredicate = new StringBuilder();
             if (lowStockOnly) {
                 lowStockPredicate.append("AND COALESCE(a.available_count, 0) < ?");
@@ -166,7 +182,7 @@ public class InventoryStockController {
                 "SELECT DISTINCT pr.id, pr.title, pr.image_url, pr.status FROM products pr " +
                 "JOIN variants v ON v.product_id = pr.id " +
                 "LEFT JOIN avail a ON a.variant_id = v.id " +
-                "WHERE pr.tenant_id = ? " + qPredicate + " " + lowStockPredicate + " " + cursorPredicate + " " +
+                "WHERE pr.tenant_id = ? " + qPredicate + " " + statusPredicate + " " + lowStockPredicate + " " + cursorPredicate + " " +
                 "ORDER BY pr.title ASC, pr.id ASC LIMIT ?";
 
             List<Map<String, Object>> productRows = jdbc.queryForList(sql, params.toArray());

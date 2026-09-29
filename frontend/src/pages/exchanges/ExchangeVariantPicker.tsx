@@ -1,8 +1,8 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Search, X } from 'lucide-react'
 import { getCatalog, CatalogProduct, CatalogVariant } from '../../api'
-import { Alert, Input, Modal, ProductStatusBadge, ProductThumb, Skeleton, cn } from '../../components/ui'
+import { Alert, Button, Input, Modal, ProductStatusBadge, ProductThumb, Skeleton, Toggle, cn } from '../../components/ui'
 
 /**
  * FR-EXCHANGE Phase 2 — single-variant picker. Reuses the SAME data source
@@ -13,6 +13,8 @@ import { Alert, Input, Modal, ProductStatusBadge, ProductThumb, Skeleton, cn } f
  * per exchange leg." Not a reimplementation of the catalog API or design system,
  * only of the modal row's click behavior.
  */
+const PAGE_SIZE = 48
+
 interface Props {
   onSelect: (variant: CatalogVariant, product: CatalogProduct) => void
   onClose: () => void
@@ -20,25 +22,53 @@ interface Props {
 
 export default function ExchangeVariantPicker({ onSelect, onClose }: Props) {
   const { t } = useTranslation()
+  // Server-side search + status filter + keyset "load more" — the picker never loads the
+  // whole catalog. Active products only by default (the replacement a customer can be sent);
+  // the toggle widens it to every status, and the badge still marks draft / archived.
   const [catalog, setCatalog]       = useState<CatalogProduct[] | null>(null)
+  const [nextCursor, setNextCursor] = useState<string | null>(null)
+  const [loadingMore, setLoadingMore] = useState(false)
   const [loadError, setLoadError]   = useState<string | null>(null)
   const [query, setQuery]           = useState('')
+  const [qDebounced, setQDebounced] = useState('')
+  const [showAllStatuses, setShowAllStatuses] = useState(false)
   const [openProductId, setOpenProductId] = useState<string | null>(null)
 
   useEffect(() => {
-    getCatalog()
-      .then(r => setCatalog(r.products))
-      .catch(() => setLoadError(t('common.error')))
-  }, [t])
+    const id = setTimeout(() => setQDebounced(query.trim()), 300)
+    return () => clearTimeout(id)
+  }, [query])
 
-  const filteredProducts = useMemo(() => {
-    if (!catalog) return []
-    const q = query.trim().toLowerCase()
-    if (q.length === 0) return catalog
-    return catalog.filter(p =>
-      p.title.toLowerCase().includes(q) || p.variants.some(v => v.sku?.toLowerCase().includes(q)))
-  }, [catalog, query])
+  const status = showAllStatuses ? undefined : ['active']
+  const requestRef = useRef(0)
+  useEffect(() => {
+    const id = ++requestRef.current
+    getCatalog({ q: qDebounced || undefined, status: showAllStatuses ? undefined : ['active'], limit: PAGE_SIZE })
+      .then(r => {
+        if (id !== requestRef.current) return
+        setCatalog(r.products)
+        setNextCursor(r.nextCursor ?? null)
+      })
+      .catch(() => { if (id === requestRef.current) setLoadError(t('common.error')) })
+  }, [qDebounced, showAllStatuses, t])
 
+  async function loadMore() {
+    if (!nextCursor) return
+    const id = requestRef.current
+    setLoadingMore(true)
+    try {
+      const r = await getCatalog({ q: qDebounced || undefined, status, cursor: nextCursor, limit: PAGE_SIZE })
+      if (id !== requestRef.current) return
+      setCatalog(prev => [...(prev ?? []), ...r.products])
+      setNextCursor(r.nextCursor ?? null)
+    } catch {
+      setLoadError(t('common.error'))
+    } finally {
+      setLoadingMore(false)
+    }
+  }
+
+  const filteredProducts = catalog ?? []
   const openProduct = openProductId ? (catalog?.find(p => p.id === openProductId) ?? null) : null
 
   // The per-product variant list (below) is a SECOND `fixed` overlay (the shared
@@ -74,12 +104,20 @@ export default function ExchangeVariantPicker({ onSelect, onClose }: Props) {
           </button>
         </div>
 
-        <Input
-          iconStart={Search}
-          value={query}
-          onChange={e => setQuery(e.target.value)}
-          placeholder={t('receiving.grid.searchPlaceholder')}
-        />
+        <div className="flex gap-2.5 items-center flex-wrap">
+          <div className="flex-1 min-w-[200px]">
+            <Input
+              iconStart={Search}
+              value={query}
+              onChange={e => setQuery(e.target.value)}
+              placeholder={t('receiving.grid.searchPlaceholder')}
+            />
+          </div>
+          <label className="flex items-center gap-2 flex-shrink-0" data-testid="exchange-picker-show-all">
+            <span className="text-small text-muted whitespace-nowrap">{t('exchange.picker.showAllStatuses')}</span>
+            <Toggle size="sm" checked={showAllStatuses} onChange={setShowAllStatuses} />
+          </label>
+        </div>
 
         {loadError ? (
           <Alert tone="critical" title={loadError} />
@@ -89,9 +127,10 @@ export default function ExchangeVariantPicker({ onSelect, onClose }: Props) {
           </div>
         ) : filteredProducts.length === 0 ? (
           <p className="text-small text-muted text-center py-8">
-            {catalog.length === 0 ? t('receiving.grid.emptyCatalog') : t('receiving.grid.noResults')}
+            {qDebounced === '' && showAllStatuses ? t('receiving.grid.emptyCatalog') : t('receiving.grid.noResults')}
           </p>
         ) : (
+          <>
           <div className="grid grid-cols-3 sm:grid-cols-4 gap-2.5 max-h-[420px] overflow-y-auto p-0.5">
             {filteredProducts.map(product => (
               <button
@@ -123,6 +162,14 @@ export default function ExchangeVariantPicker({ onSelect, onClose }: Props) {
               </button>
             ))}
           </div>
+          {nextCursor && (
+            <div className="flex justify-center" data-testid="exchange-picker-load-more">
+              <Button variant="secondary" size="sm" loading={loadingMore} onClick={() => void loadMore()}>
+                {t('exchange.picker.loadMore')}
+              </Button>
+            </div>
+          )}
+          </>
         )}
       </div>
     </div>
