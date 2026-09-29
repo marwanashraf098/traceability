@@ -1,66 +1,32 @@
 package com.traceability.inventory;
 
-import com.google.zxing.BarcodeFormat;
-import com.google.zxing.EncodeHintType;
-import com.google.zxing.client.j2se.MatrixToImageWriter;
-import com.google.zxing.common.BitMatrix;
-import com.google.zxing.oned.Code128Writer;
-import com.ibm.icu.text.ArabicShaping;
-import com.ibm.icu.text.ArabicShapingException;
-import com.ibm.icu.text.Bidi;
-import org.apache.pdfbox.pdmodel.PDDocument;
-import org.apache.pdfbox.pdmodel.PDPage;
-import org.apache.pdfbox.pdmodel.PDPageContentStream;
-import org.apache.pdfbox.pdmodel.common.PDRectangle;
-import org.apache.pdfbox.pdmodel.font.PDFont;
-import org.apache.pdfbox.pdmodel.font.PDType0Font;
-import org.apache.pdfbox.pdmodel.font.PDType1Font;
-import org.apache.pdfbox.pdmodel.font.Standard14Fonts;
-import org.apache.pdfbox.pdmodel.graphics.image.PDImageXObject;
-import org.springframework.core.io.ClassPathResource;
 import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.web.server.ResponseStatusException;
 
-import javax.imageio.ImageIO;
-import java.awt.image.BufferedImage;
-import java.io.ByteArrayOutputStream;
 import java.io.IOException;
-import java.io.InputStream;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
-import java.util.EnumMap;
 
 import com.traceability.tenancy.TenantContext;
 import org.springframework.transaction.annotation.Transactional;
 
 /**
- * Generates thermal label PDFs (Code 128 barcode, piece ID, SKU, variant name).
+ * Piece label PDFs for every feature (Receiving session / variant print + reprint, Returns
+ * reprint, Transfer reprint-outstanding): the queries, the label_reprints log and the size
+ * defaults live here; the layout is PieceLabelLayout and the drawing LabelPdfRenderer.
  *
- * Default label size: 50×25mm — configurable per tenant via receipts.location_id→tenants.
- * Noto Sans Arabic is embedded for correct Arabic glyph rendering (FR-6.4).
- *
- * Arabic text handling:
- *   1. ICU4J ArabicShaping converts isolated code points to contextual letter forms.
- *   2. ICU4J Bidi reverses the visual order for RTL presentation.
- *   3. PDType0Font renders the shaped string using embedded NotoSansArabic glyphs.
+ * Size: 50×25 mm unless the caller passes widthMm/heightMm. The tenant's Settings value
+ * (tenants.label_width_mm / label_height_mm) is not read yet — the layout fully supports 40×25.
  */
 @Service
 public class LabelService {
 
-    // 1 point = 1/72 inch; 1 mm = 72/25.4 pt
-    private static final float MM_TO_PT = 72f / 25.4f;
-
     // Default label size
     static final float DEFAULT_WIDTH_MM  = 50f;
     static final float DEFAULT_HEIGHT_MM = 25f;
-
-    private static final float MARGIN        = 3f  * MM_TO_PT;   // 3mm margin
-    private static final float BARCODE_H_MM  = 12f;
-    private static final int   DPI           = 203;
 
     private final JdbcTemplate jdbc;
 
@@ -120,6 +86,40 @@ public class LabelService {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Piece not found");
         }
 
+        return renderPdf(pieces,
+            labelW_mm  != null ? labelW_mm  : DEFAULT_WIDTH_MM,
+            labelH_mm  != null ? labelH_mm  : DEFAULT_HEIGHT_MM);
+    }
+
+    /**
+     * One PDF for several pieces, in the given order — rendered into a single document (never
+     * a merge of single-page PDFs, whose images died with their closed source documents). Any
+     * id not found for this tenant → 404.
+     */
+    @Transactional(readOnly = true)
+    public byte[] generatePieceLabels(List<String> pieceIds, Float labelW_mm, Float labelH_mm)
+            throws IOException {
+        UUID tenantId = TenantContext.require();
+        Map<String, Map<String, Object>> byId = new java.util.HashMap<>();
+        for (Map<String, Object> row : jdbc.query(con -> {
+                var ps = con.prepareStatement(
+                    "SELECT p.id, p.barcode, p.short_code, v.sku, v.title AS variant_title, pr.title AS product_title " +
+                    "FROM pieces p " +
+                    "JOIN variants v ON v.id = p.variant_id " +
+                    "JOIN products pr ON pr.id = v.product_id " +
+                    "WHERE p.id = ANY(?) AND p.tenant_id = ?");
+                ps.setArray(1, con.createArrayOf("text", pieceIds.toArray()));
+                ps.setObject(2, tenantId);
+                return ps;
+            }, new org.springframework.jdbc.core.ColumnMapRowMapper())) {
+            byId.put((String) row.get("id"), row);
+        }
+        List<Map<String, Object>> pieces = new java.util.ArrayList<>();
+        for (String id : pieceIds) {
+            Map<String, Object> row = byId.get(id);
+            if (row == null) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Piece not found");
+            pieces.add(row);
+        }
         return renderPdf(pieces,
             labelW_mm  != null ? labelW_mm  : DEFAULT_WIDTH_MM,
             labelH_mm  != null ? labelH_mm  : DEFAULT_HEIGHT_MM);
@@ -220,261 +220,22 @@ public class LabelService {
 
     private byte[] renderPdf(List<Map<String, Object>> pieces,
                              float widthMm, float heightMm) throws IOException {
-        float wPt = widthMm  * MM_TO_PT;
-        float hPt = heightMm * MM_TO_PT;
-        PDRectangle pageSize = new PDRectangle(wPt, hPt);
-
-        try (PDDocument doc = new PDDocument();
-             InputStream fontStream =
-                 new ClassPathResource("fonts/NotoSansArabic-Regular.ttf").getInputStream()) {
-
-            // Latin fields (piece ID, SKU, barcode human-readable) — always ASCII;
-            // use the built-in Helvetica so no embedding is needed.
-            PDFont latinFont  = new PDType1Font(Standard14Fonts.FontName.HELVETICA);
-            // Arabic/mixed variant titles — embed Noto Sans Arabic.
-            PDType0Font arabicFont = PDType0Font.load(doc, fontStream, true);
-
-            for (Map<String, Object> piece : pieces) {
-                String shortCode    = (String) piece.get("short_code");
-                String sku          = nullSafe(piece.get("sku"));
-                String productTitle = truncate(nullSafe(piece.get("product_title")), 28);
-                String variantTitle = nullSafe(piece.get("variant_title"));
-                // Show variant only when it carries real info (not the Shopify placeholder).
-                // Composition delegated to ProductDisplayName (shared with the FR-8.7 gather
-                // list) — the 32-char truncation stays here since it's a physical label-width
-                // constraint, not part of the shared naming format.
-                String composedName = ProductDisplayName.compose(productTitle, variantTitle);
-                String labelName = (productTitle.isEmpty() || "Default Title".equalsIgnoreCase(variantTitle))
-                    ? composedName
-                    : truncate(composedName, 32);
-
-                PDPage page = new PDPage(pageSize);
-                doc.addPage(page);
-
-                try (PDPageContentStream cs = new PDPageContentStream(doc, page)) {
-                    drawLabel(cs, doc, latinFont, arabicFont, shortCode, sku,
-                              labelName, wPt, hPt);
-                }
-            }
-
-            ByteArrayOutputStream out = new ByteArrayOutputStream();
-            doc.save(out);
-            return out.toByteArray();
-        }
-    }
-
-    private void drawLabel(PDPageContentStream cs, PDDocument doc,
-                           PDFont latinFont, PDType0Font arabicFont,
-                           String shortCode, String sku, String variantTitle,
-                           float wPt, float hPt) throws IOException {
-
-        // ── Barcode image ────────────────────────────────────────────────────
-        // Compute draw dimensions first so renderBarcode gets the exact target width —
-        // the bitmap pixel count must match the drawn pt width at DPI, not the full label.
-        float barcodeW = wPt - 2 * MARGIN;
-        float barcodeH = BARCODE_H_MM * MM_TO_PT;
-        float barcodeY = hPt - MARGIN - barcodeH;
-
-        // Encode the short code (e.g. "P000001", 7 chars) — 132 total modules at MARGIN=10
-        // → 0.333mm/module on a 44mm label, well above the 0.191mm GS1 general-use minimum.
-        BufferedImage barcodeImg = renderBarcode(shortCode, barcodeW, barcodeH);
-        PDImageXObject barcodeXObj = PDImageXObject.createFromByteArray(
-            doc, toPngBytes(barcodeImg), "barcode");
-
-        cs.drawImage(barcodeXObj, MARGIN, barcodeY, barcodeW, barcodeH);
-
-        // ── Text rows ────────────────────────────────────────────────────────
-        float fontSize1 = 5.5f;
-        float fontSize2 = 6.5f;
-
-        // Row 1: short code as human-readable caption — matches what is encoded in the barcode.
-        drawCenteredText(cs, latinFont, fontSize1, shortCode, wPt, barcodeY - 1.5f * MM_TO_PT);
-
-        // Row 2: SKU left (ASCII → Helvetica), variant name right (may be Arabic)
-        float row2Y = barcodeY - 1.5f * MM_TO_PT - fontSize1 - 2f;
-        drawTextRow(cs, latinFont, arabicFont, fontSize2, sku, variantTitle, wPt, row2Y);
-    }
-
-    // ── Text helpers ──────────────────────────────────────────────────────────
-
-    private void drawCenteredText(PDPageContentStream cs, PDFont font,
-                                  float size, String text, float pageWidth, float y)
-            throws IOException {
-        float tw;
-        try {
-            tw = font.getStringWidth(text) / 1000f * size;
-        } catch (Exception e) {
-            tw = 0;
-        }
-        float x = (pageWidth - tw) / 2f;
-        cs.beginText();
-        cs.setFont(font, size);
-        cs.newLineAtOffset(x, y);
-        cs.showText(text);
-        cs.endText();
+        List<LabelPdfRenderer.Piece> labels = pieces.stream()
+            .map(p -> new LabelPdfRenderer.Piece(
+                (String) p.get("short_code"),
+                (String) p.get("product_title"),
+                (String) p.get("variant_title"),
+                (String) p.get("sku")))
+            .toList();
+        return LabelPdfRenderer.render(labels, PieceLabelLayout.Spec.of(widthMm, heightMm));
     }
 
     /**
-     * Draws left text in latinFont and right text in the appropriate font:
-     * arabicFont if the string contains Arabic; latinFont otherwise.
-     */
-    private void drawTextRow(PDPageContentStream cs, PDFont latinFont, PDType0Font arabicFont,
-                             float size, String left, String right, float pageWidth, float y)
-            throws IOException {
-        // Left text (SKU — always ASCII)
-        if (!left.isEmpty()) {
-            cs.beginText();
-            cs.setFont(latinFont, size);
-            cs.newLineAtOffset(MARGIN, y);
-            cs.showText(left);
-            cs.endText();
-        }
-
-        // Right text: per-run rendering — Helvetica for Latin runs, NotoSansArabic for Arabic runs.
-        // shapeForDisplay reorders the whole string to visual LTR first, then segmentRuns splits
-        // into contiguous font-homogeneous spans. This handles pure-Latin, pure-Arabic, and mixed
-        // strings like "Vanilla Whey 1KG - بروتين واي" without a missing-glyph exception.
-        if (!right.isEmpty()) {
-            String displayRight = containsArabic(right) ? shapeForDisplay(right) : right;
-            List<TextRun> runs = segmentRuns(displayRight);
-            float totalWidth = 0f;
-            float[] runWidths = new float[runs.size()];
-            for (int i = 0; i < runs.size(); i++) {
-                PDFont f = runs.get(i).arabic() ? arabicFont : latinFont;
-                try { runWidths[i] = f.getStringWidth(runs.get(i).text()) / 1000f * size; }
-                catch (Exception ignored) { runWidths[i] = 0f; }
-                totalWidth += runWidths[i];
-            }
-            float rx = pageWidth - MARGIN - totalWidth;
-            for (int i = 0; i < runs.size(); i++) {
-                PDFont f = runs.get(i).arabic() ? arabicFont : latinFont;
-                cs.beginText();
-                cs.setFont(f, size);
-                cs.newLineAtOffset(rx, y);
-                cs.showText(runs.get(i).text());
-                cs.endText();
-                rx += runWidths[i];
-            }
-        }
-    }
-
-    /**
-     * Applies ICU4J Arabic shaping so letter forms connect properly and text reads
-     * left-to-right in visual (rendered) order. Latin text passes through unchanged.
+     * Arabic shaping (contextual letter forms) + bidi reordering to visual left-to-right order;
+     * Latin text passes through unchanged. Delegates to LabelTextFitter.display.
      */
     public static String shapeForDisplay(String text) {
-        if (text == null || text.isBlank()) return "";
-        if (!containsArabic(text)) return text;
-        try {
-            // 1. Shape: convert isolated Unicode code points to contextual letter forms
-            ArabicShaping shaping = new ArabicShaping(
-                ArabicShaping.LETTERS_SHAPE | ArabicShaping.TEXT_DIRECTION_VISUAL_LTR);
-            String shaped = shaping.shape(text);
-
-            // 2. Reorder: apply Unicode Bidi algorithm to get visual left-to-right order
-            Bidi bidi = new Bidi();
-            bidi.setPara(shaped, Bidi.RTL, null);
-            return bidi.writeReordered(Bidi.DO_MIRRORING);
-        } catch (ArabicShapingException e) {
-            return text; // fallback: unshaped but won't show boxes (font has glyphs)
-        }
-    }
-
-    private static boolean containsArabic(String text) {
-        for (char c : text.toCharArray()) {
-            if (isArabicChar(c)) return true;
-        }
-        return false;
-    }
-
-    /**
-     * Returns true for any character that belongs to an Arabic Unicode block.
-     * Covers the main Arabic block (U+0600–U+06FF) AND the Presentation Forms blocks
-     * (U+FB50–U+FDFF, U+FE70–U+FEFF) because ICU4J ArabicShaping.LETTERS_SHAPE outputs
-     * Presentation Forms — the shaped string no longer has chars in the main Arabic block.
-     */
-    private static boolean isArabicChar(char c) {
-        Character.UnicodeBlock b = Character.UnicodeBlock.of(c);
-        return b == Character.UnicodeBlock.ARABIC
-            || b == Character.UnicodeBlock.ARABIC_PRESENTATION_FORMS_A
-            || b == Character.UnicodeBlock.ARABIC_PRESENTATION_FORMS_B
-            || b == Character.UnicodeBlock.ARABIC_SUPPLEMENT
-            || b == Character.UnicodeBlock.ARABIC_EXTENDED_A;
-    }
-
-    private record TextRun(String text, boolean arabic) {}
-
-    /**
-     * Segments {@code text} into contiguous runs by Unicode script.
-     * Arabic chars (including ICU4J-shaped Presentation Forms) → arabic=true (NotoSansArabic);
-     * everything else → arabic=false (Helvetica).
-     * Neutral chars (space, hyphen, digits, punctuation) attach to the preceding run.
-     * NotoSansArabic-Regular covers space/hyphen/digits, so they are safe in an Arabic run.
-     */
-    private List<TextRun> segmentRuns(String text) {
-        if (text == null || text.isEmpty()) return List.of();
-        List<TextRun> runs = new ArrayList<>();
-        StringBuilder current = new StringBuilder();
-        Boolean prevArabic = null;
-
-        for (char c : text.toCharArray()) {
-            boolean arabic;
-            if (isArabicChar(c)) {
-                arabic = true;
-            } else if (isNeutral(c)) {
-                arabic = prevArabic != null ? prevArabic : false;
-            } else {
-                arabic = false;
-            }
-
-            if (prevArabic == null) prevArabic = arabic;
-
-            if (arabic == prevArabic) {
-                current.append(c);
-            } else {
-                runs.add(new TextRun(current.toString(), prevArabic));
-                current = new StringBuilder(String.valueOf(c));
-                prevArabic = arabic;
-            }
-        }
-        if (current.length() > 0) runs.add(new TextRun(current.toString(), prevArabic));
-        return runs;
-    }
-
-    private static boolean isNeutral(char c) {
-        return c == ' ' || c == '-' || Character.isDigit(c)
-            || Character.getType(c) == Character.CONNECTOR_PUNCTUATION
-            || Character.getType(c) == Character.DASH_PUNCTUATION
-            || Character.getType(c) == Character.OTHER_PUNCTUATION;
-    }
-
-    // ── Barcode rendering ─────────────────────────────────────────────────────
-
-    private BufferedImage renderBarcode(String content, float drawWidthPt, float drawHeightPt) {
-        // Generate bitmap at the exact draw-area size so PDFBox draws it 1:1 (no scale).
-        int pixelW = Math.round(drawWidthPt  * DPI / 72f);
-        int pixelH = Math.round(drawHeightPt * DPI / 72f);
-        EnumMap<EncodeHintType, Object> hints = new EnumMap<>(EncodeHintType.class);
-        // 10 quiet-zone modules each side — ISO/IEC 15417 minimum; without this scanners
-        // cannot locate the start/stop guard bars and the symbol is undecodable.
-        hints.put(EncodeHintType.MARGIN, 10);
-        BitMatrix matrix = new Code128Writer().encode(content, BarcodeFormat.CODE_128,
-            pixelW, pixelH, hints);
-        return MatrixToImageWriter.toBufferedImage(matrix);
-    }
-
-    private byte[] toPngBytes(BufferedImage img) throws IOException {
-        ByteArrayOutputStream out = new ByteArrayOutputStream();
-        ImageIO.write(img, "PNG", out);
-        return out.toByteArray();
-    }
-
-    // ── Misc helpers ──────────────────────────────────────────────────────────
-
-    private String nullSafe(Object o) { return o != null ? o.toString() : ""; }
-
-    private String truncate(String s, int max) {
-        return s != null && s.length() > max ? s.substring(0, max) : (s != null ? s : "");
+        return LabelTextFitter.display(text);
     }
 
     private int countPieces(UUID sessionId, UUID tenantId) {

@@ -4,6 +4,35 @@
 
 ## Current state
 
+**Label layout rework (2026-09-29, branch `feature/label-layout`, 4 commits, not merged, not deployed).** Every piece
+label PDF (Receiving session/variant print + reprint, Returns reprint-label + gated /pieces/{id}/label, Transfer
+reprint-outstanding) now goes LabelService (queries, label_reprints, 50×25 default) → LabelPdfRenderer → PieceLabelLayout
+→ LabelTextFitter → LabelFonts.
+- **Fonts (a):** embedded NotoSans-Regular/-Bold + real NotoSansArabic-Regular (the old file was the THIN weight), OFL.txt in
+  resources/fonts; no Standard-14 Helvetica. Per-glyph fallback: Arabic script → NotoSansArabic, everything else ("/", "&",
+  "…", Latin, Cyrillic, digits) → NotoSans, unknown → "?". Fixed the 500 on Arabic + "/" ("No glyph for U+002F").
+- **Layout (b/c):** barcode 12 → 10 mm (x 3 mm, width W−6 mm, module width + quiet zones unchanged; top margin now 1.5 mm).
+  Rows: piece code Bold 7.5 · product 6→5 pt, 2 lines · variant 5.5→5 pt (omitted blank / "Default Title") · SKU 5 pt
+  (omitted blank). Width-measured wrap → shrink → "…" (only when text was actually removed, after the floor; product + variant cut
+  after the last whole word via ICU line breaks with trailing — – - , ، / & ; : stripped, grapheme cut only when the first word
+  alone is too wide; the SKU keeps a grapheme cut); vertical fit
+  (reordered after review — the variant outranks the 2nd title line and the SKU): title 5 → variant 5 → title 1 line "…" →
+  drop SKU → drop variant (`Layout.steps()` lists what fired). **All rows centred**
+  (review follow-up), each line keeps its own bidi order. **Line height:** Latin-only 1.1 × size; lines with Arabic use the
+  Arabic letters' ink envelope computed from the font (`LabelFonts.ARABIC_LETTER_INK` = +1.010 / −0.421 em → 1.431 ×), or the
+  line's own ink if taller (harakat). The font's declared ascent/descent (1.374 / −0.738 = 2.112 ×) is NOT used — it reserves
+  room for stacked Quranic marks and would drop the variant on nearly every Arabic label. Sample fixture "S / أحمر…" carries
+  its own U+2026 (test data for the glyph fallback) — not a truncation.
+- **Arabic shaping bug found + fixed:** the old `TEXT_DIRECTION_VISUAL_LTR` flag on logical text gave ISOLATED letter forms —
+  Arabic printed unjoined. Now `TEXT_DIRECTION_LOGICAL` (LabelTextFitterTest.t5; `shapeForDisplay` delegates).
+- **Transfer "no barcode" (d):** `LabelService.generatePieceLabels(List<pieceId>)` renders one document; the page merge in
+  `TransferService.reprintOutstandingLabels` is deleted.
+- Tests: LabelFontsTest 5, LabelTextFitterTest 16, PieceLabelLayoutTest 13, LabelEndpointsTest 8 (every endpoint, 50×25 + 40×25,
+  every page decoded, fonts embedded; r1 = Arabic "/" regression), TransferReprintTest +2 (every page decoded / owns its image).
+  No existing test edited.
+- **TODO (decided 2026-09-29, not built):** wire the tenant label size (Settings → `tenants.label_width_mm/height_mm`) into
+  LabelService's size defaults. The layout and tests already cover 40×25 — it's a one-line change where the defaults resolve.
+
 **Import every Shopify product status + one-time catalog backfill (2026-09-29, merged to main as 84a7911, not deployed).** Zero-variant store in the backfill: `total() > 0` guard → marker set, job does not throw (checked by a throwaway test; guard removed → it errors).
 - **Import:** `query: "status:active"` removed from `ShopifyHttpGateway.PRODUCTS_QUERY` — ACTIVE, DRAFT, ARCHIVED and UNLISTED
   (in the 2026-04 `ProductStatus` enum) all import, stored lowercase in `products.status` (free text, no CHECK, no migration).
