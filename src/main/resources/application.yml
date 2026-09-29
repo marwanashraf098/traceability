@@ -73,6 +73,12 @@ app:
 portal:
   token-secret: ${PORTAL_TOKEN_SECRET:}
 
+# One-time all-statuses catalog re-import for stores connected before 2026-09-29
+# (CatalogBackfillJob). Kill switch: TRACED_CATALOG_BACKFILL_ENABLED=false.
+traced:
+  catalog-backfill:
+    enabled: ${TRACED_CATALOG_BACKFILL_ENABLED:true}
+
 shopify:
   # Pin the API version — never use "latest" in code paths.
   api-version: ${SHOPIFY_API_VERSION:2026-04}

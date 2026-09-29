@@ -18,6 +18,7 @@ import org.springframework.web.server.ResponseStatusException;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
@@ -359,6 +360,14 @@ public class ShopifySyncService {
         return new ImportResult(catalogCounts[0], catalogCounts[1], orderCounts[0], orderCounts[1]);
     }
 
+    /**
+     * Catalog only — products + variants, every status — with none of runImport()'s order
+     * import or last_sync_at stamp. Used by CatalogBackfillJob. Returns {products, variants}.
+     */
+    public int[] importCatalogOnly(UUID storeId, UUID tenantId, String shopDomain, String rawToken) {
+        return importCatalog(storeId, tenantId, shopDomain, rawToken);
+    }
+
     // ---- webhook ingestion (REST payload format) -----------------------
 
     /**
@@ -477,12 +486,14 @@ public class ShopifySyncService {
 
     /**
      * Upserts a product + variants from a Shopify REST webhook payload (products/create, products/update).
+     * Returns the ids of the variants this upsert newly INSERTED (before/after diff scoped to this
+     * one product) — the caller activates only those at the Traced location.
      */
-    public void ingestProductWebhook(UUID storeId, UUID tenantId, JsonNode payload) {
+    public List<UUID> ingestProductWebhook(UUID storeId, UUID tenantId, JsonNode payload) {
         String gid = payload.path("admin_graphql_api_id").asText(null);
         if (gid == null || gid.isBlank()) {
             log.warn("products webhook missing admin_graphql_api_id, store={}", storeId);
-            return;
+            return List.of();
         }
         String title    = payload.path("title").asText("");
         String status   = payload.path("status").asText("active").toLowerCase();
@@ -491,11 +502,14 @@ public class ShopifySyncService {
         // featuredImage — kept in sync here so live edits don't go stale between imports.
         String imageUrl = payload.path("image").path("src").asText(null);
 
-        tx.execute(s -> {
+        List<UUID> inserted = tx.execute(s -> {
+            List<UUID> before = jdbc.queryForList(
+                "SELECT v.id FROM variants v JOIN products p ON p.id = v.product_id " +
+                "WHERE p.store_id = ? AND p.external_id = ?", UUID.class, storeId, gid);
             UUID productId = jdbc.query(UPSERT_PRODUCT,
                 rs -> rs.next() ? rs.getObject("id", UUID.class) : null,
                 tenantId, storeId, gid, title, status, imageUrl, toJson(payload));
-            if (productId == null) return null;
+            if (productId == null) return List.<UUID>of();
 
             for (JsonNode v : payload.path("variants")) {
                 String variantGid = v.path("admin_graphql_api_id").asText(null);
@@ -508,9 +522,13 @@ public class ShopifySyncService {
                 BigDecimal price = priceStr != null ? new BigDecimal(priceStr) : null;
                 jdbc.update(UPSERT_VARIANT, tenantId, productId, variantGid, sku, vTitle, price, toJson(v));
             }
-            return null;
+            List<UUID> after = jdbc.queryForList("SELECT id FROM variants WHERE product_id = ?", UUID.class, productId);
+            List<UUID> added = new java.util.ArrayList<>(after);
+            added.removeAll(before);
+            return added;
         });
-        log.debug("Webhook product upsert: gid={} store={}", gid, storeId);
+        log.debug("Webhook product upsert: gid={} store={} newVariants={}", gid, storeId, inserted == null ? 0 : inserted.size());
+        return inserted == null ? List.of() : inserted;
     }
 
     // ---- catalog import -------------------------------------------------

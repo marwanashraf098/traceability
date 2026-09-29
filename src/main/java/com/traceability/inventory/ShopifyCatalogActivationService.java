@@ -51,6 +51,26 @@ public class ShopifyCatalogActivationService {
 
     public ActivationOutcome activateAll() {
         UUID tenantId = TenantContext.require();
+        return activate(tenantId, tx.execute(s -> jdbc.queryForList(
+            "SELECT id, external_id FROM variants WHERE tenant_id = ?", tenantId)));
+    }
+
+    /**
+     * The same activation, for just these variants — the products webhook activates only the
+     * variants its upsert newly inserted. Same call, same idempotency key, same error handling.
+     */
+    public ActivationOutcome activateVariants(java.util.Collection<UUID> variantIds) {
+        UUID tenantId = TenantContext.require();
+        if (variantIds.isEmpty()) return new ActivationOutcome(0, 0, 0, List.of());
+        return activate(tenantId, tx.execute(s -> jdbc.query(con -> {
+            var ps = con.prepareStatement("SELECT id, external_id FROM variants WHERE tenant_id = ? AND id = ANY(?)");
+            ps.setObject(1, tenantId);
+            ps.setArray(2, con.createArrayOf("uuid", variantIds.toArray()));
+            return ps;
+        }, new org.springframework.jdbc.core.ColumnMapRowMapper())));
+    }
+
+    private ActivationOutcome activate(UUID tenantId, List<Map<String, Object>> variants) {
 
         // FR-3.1 follow-up — StoreRepository.findActiveStoreByTenant() is the single
         // canonical pick shared by every job/service (never a disconnected row).
@@ -70,9 +90,6 @@ public class ShopifyCatalogActivationService {
         }
 
         String token = tokenProvider.getValidToken(store.id());
-
-        List<Map<String, Object>> variants = tx.execute(s -> jdbc.queryForList(
-            "SELECT id, external_id FROM variants WHERE tenant_id = ?", tenantId));
 
         int succeeded = 0;
         int failed = 0;

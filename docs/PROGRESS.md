@@ -20,9 +20,28 @@
 - **Tests:** new `ShopifyHttpGatewayProductsTest` (3, p1/p2 RED on old code), `ShopifyProductStatusImportTest` (4, i1–i3 RED on old
   code; w1 webhook guard), `PortalExchangeActiveProductTest` (7, l1/l2/s1/a1/b1 RED with the predicates removed; a2/r1 controls),
   `productStatusBadge.test.tsx` (5, psb5 RED without the picker badge). No existing test edited.
-- **Next (Part B, Step 0 only — reported, not built):** automatic one-time catalog backfill for already-connected stores
-  (proposal: `stores.catalog_backfilled_at` V119 marker + ApplicationReadyEvent → one serial JobRunr job; catalog-only import;
-  activate only newly inserted variants). Until then, existing stores pick up drafts/archived only on reconnect or `POST /stores/{id}/sync`.
+- **Part B — one-time catalog backfill (built, same branch, not deployed):**
+  - **V119** `stores.catalog_backfilled_at timestamptz NULL` (column only; RLS policy unchanged). MigrationSmokeTest 118,
+    NotTracedBackfillTest 63 (approved bumps).
+  - A successful `ShopifyImportJob` (connect / reconnect / sync) sets the marker — never backfilled afterwards.
+  - `CatalogBackfillTrigger` (ApplicationReadyEvent, fail-soft, only when the JobRunr server is on) enqueues
+    `CatalogBackfillJob` under the fixed `JOB_ID` when a connected store has a NULL marker. **JobRunr 7.3 makes a
+    repeat enqueue under an existing id a silent no-op in ANY state** (`AbstractJobScheduler.saveJob` swallows
+    `ConcurrentJobModificationException`) — so if the job ends FAILED after JobRunr's retries, later starts don't
+    re-enqueue it until that job is deleted in the JobRunr dashboard. Kill switch `traced.catalog-backfill.enabled`
+    (env `TRACED_CATALOG_BACKFILL_ENABLED`, default true), checked by the trigger and the job.
+  - `CatalogBackfillJob`: one owner-pool read of eligible stores (same listing as ShopifyReconcileJob), then per store in
+    `TenantContext.runAs`: `importCatalogOnly()` → `activateAll()` (any failed variant = store failed) → marker. Never
+    writes import_status / last_sync_at / status. Failed stores → the job throws at the end → JobRunr retry; done stores skipped.
+  - **Webhook activation gap closed:** confirmed in code that only `activateAll()` (connect import + manual endpoint)
+    ever activated — a variant added in Shopify after connect was never activated at the Traced location (not observed in
+    prod's failed-adjustment rows, which are all location-link / scope errors). `ingestProductWebhook` now returns the
+    newly inserted variant ids (before/after diff for that one product); `ShopifyWebhookProcessorJob` activates just those
+    via `ShopifyCatalogActivationService.activateVariants()` after the upsert commits; failures are logged, never fail the upsert.
+  - Tests: `CatalogBackfillJobTest` (14; revert-checked: marker guard → bf2/bf3/im1, webhook activation → wh1/wh2,
+    before/after diff → wh1/wh2, import marker → im1). Headless-Chromium screenshots of the Stock tab EN/LTR + AR/RTL with
+    draft + archived badges (scratchpad, mocked API).
+  - Prod at build time: 14 connected stores eligible (10 custom_app_cc, 4 oauth — 2 with import_status failed).
 
 **Transfer lifecycle — Stage 1 backend + Stage 2 frontend (2026-09-28, merged to main, not deployed; both ship together).**
 - **V118** (V117 = portal custom pickup address, merged first; counts now MigrationSmokeTest 117, NotTracedBackfillTest 62): status CHECK preparing|sent|reconciling|closed|cancelled, default preparing; sent_at/by, cancelled_at/by, reconcile_started_at/by; CHECK cancelled ⇒ cancelled_at. Backfill: open + no transfer_pieces → preparing; open + pieces → sent (round_trip/relocate_return) / preparing (relocate_out). Prod effect: the 3 empty stuck transfers → preparing (cancellable once the UI ships), demo open showroom → sent.
