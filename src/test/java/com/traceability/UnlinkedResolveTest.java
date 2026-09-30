@@ -184,8 +184,8 @@ class UnlinkedResolveTest {
         Long unlinkedId = jdbc.queryForObject(
             "INSERT INTO unlinked_bosta_deliveries " +
             "  (tenant_id, tracking_number, business_reference, bosta_state_code, " +
-            "   bosta_order_type, match_reason, resolved) " +
-            "VALUES (?, ?, '#UL-002', 45, 'SEND', 'NO_MATCH', false) RETURNING id",
+            "   bosta_order_type, match_reason, resolved, raw) " +
+            "VALUES (?, ?, '#UL-002', 45, 'SEND', 'NO_MATCH', false, '{\"type\":{\"code\":10,\"value\":\"Send\"}}'::jsonb) RETURNING id",
             Long.class, tenantId, tracking);
 
         // manualLink is @Transactional — same code path as BostaOrderReconcileJob.processOrder().

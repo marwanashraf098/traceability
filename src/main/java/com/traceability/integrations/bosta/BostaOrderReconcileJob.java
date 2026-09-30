@@ -152,11 +152,13 @@ public class BostaOrderReconcileJob {
         // Candidate rows (2026-09-30 hardening):
         //   - forward-linkable type only (SEND / RETURN TO ORIGIN) — a CRP or exchange row
         //     is never turned into a forward leg here;
-        //   - never a row the matcher already found ambiguous (AMBIGUOUS_MULTI /
-        //     COD_ONLY_AMBIGUOUS) — this per-order lookup must not break the tie;
-        //   - and the row's reference must match exactly ONE order in the tenant, the same
+        //   - and the row's reference must match exactly ONE order in the tenant NOW, the same
         //     rule as ShipmentLinkService.matchByBusinessReference (as-is, '#'-stripped,
-        //     '#'-prefixed, or external_id). Two stores with the same order number → skipped.
+        //     '#'-prefixed, or external_id). Two stores with the same order number → skipped,
+        //     so this per-order lookup never breaks a tie.
+        //   match_reason is deliberately NOT consulted: AMBIGUOUS_MULTI / COD_ONLY_AMBIGUOUS
+        //   can come from the phone+COD fallback, which only runs when the reference matched
+        //   nothing at arrival — such a row must still link once its order is ingested.
         Long unlinkedId = tx.execute(txs -> jdbc.query(
             "SELECT u.id FROM unlinked_bosta_deliveries u " +
             "WHERE u.tenant_id = NULLIF(current_setting('app.current_tenant', true), '')::uuid " +
@@ -164,8 +166,6 @@ public class BostaOrderReconcileJob {
             "  AND (u.business_reference = ? OR u.business_reference = ? " +
             "    OR u.business_reference = ? OR u.business_reference = ?) " +
             "  AND " + ShipmentLinkService.forwardLinkableTypeSql("u") + " " +
-            "  AND COALESCE(u.match_reason, '') NOT IN ('" + ShipmentLinkService.REASON_AMBIGUOUS_MULTI +
-            "', '" + ShipmentLinkService.REASON_COD_ONLY + "') " +
             "  AND (SELECT COUNT(*) FROM orders o2 " +
             "       WHERE o2.tenant_id = u.tenant_id " +
             "         AND (o2.number = u.business_reference " +

@@ -206,7 +206,9 @@ class NotCreatedFlagRecoveryTest {
         Long wid = insertWebhookEvent("NC-TN-02");
 
         BostaDelivery delivery = new BostaDelivery(
-            "NC-TN-02", 45, "SEND", 0, "#NC-002", null, mapper.createObjectNode());
+            "NC-TN-02", 45, "SEND", 0, "#NC-002", null,
+            mapper.createObjectNode().set("type",
+                mapper.createObjectNode().put("code", 10).put("value", "Send")));
 
         // First arrival: flag cleared, unlinked row created.
         TenantContext.runAs(tenantId, () ->

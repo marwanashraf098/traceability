@@ -22,22 +22,25 @@ off main 1447d64, not merged, not deployed).**
     `manualLink()` (reconcile AND the owner/manager `POST /shipments/unlinked/{id}/link`) refuses anything else — null /
     missing type included — BEFORE any write with `UnlinkedDeliveryTypeException` (422
     `UNLINKED_DELIVERY_TYPE_NOT_LINKABLE`, EN/AR body). No UI calls that endpoint today. `tryMatchDelivery` unchanged.
-  - Reconcile never breaks a tie: skips `AMBIGUOUS_MULTI` / `COD_ONLY_AMBIGUOUS` rows and links only when the row's
-    reference matches exactly ONE order in the tenant (same variants as matchByBusinessReference). Was RED: two stores
-    with the same order number → `recordUnlinked` cleared BOTH orders' flag and reconcile linked the oldest.
+  - Reconcile never breaks a tie: it links a row only when the row's reference matches exactly ONE order in the tenant
+    at reconcile time (same variants as matchByBusinessReference). Was RED: two stores with the same order number →
+    `recordUnlinked` cleared BOTH orders' flag and reconcile linked the oldest.
+  - **Decision (Marawan, 2026-09-30): `match_reason` is NOT consulted by reconcile** (a first cut skipped
+    AMBIGUOUS_MULTI / COD_ONLY_AMBIGUOUS rows; dropped). Those reasons can come from the phone+COD fallback, which only
+    runs when the reference matched nothing at arrival — skipping them would strand a delivery that arrived before its
+    order was ingested. The exactly-one-order check alone covers every ambiguity case (h3, h3b); h3c proves a
+    COD_ONLY_AMBIGUOUS row links once its order arrives (RED with the reason clause restored).
   - Double-link (second SEND for an order with an active forward leg) was already GREEN — the V104 conflict is caught
     (`ShipmentLinkService` tryMatchDelivery createOrFindShipment catch), the aborted transaction's COMMIT is a silent
     server ROLLBACK under pgjdbc 42.7.4 defaults, and only reads preceded the INSERT in that tx. Locked in by a test.
-  - Tests: `BostaLinkingHardeningTest` h1–h6 (+h3b, h4b). No migration.
+  - Tests: `BostaLinkingHardeningTest` h1–h6 (+h3b, h3c, h4b). No migration.
 - **Gotcha:** the order-side allow-list keys on `raw.type.code`; a hand-inserted unlinked row with NULL raw is refused
-  by reconcile/manualLink. **8 existing tests are RED on this branch for exactly that reason, NOT edited (awaiting
-  approval):** BostaOrderReconcileTest r3/r4/r7, NotCreatedFlagRecoveryTest nc2, UnlinkedResolveTest ul2,
-  TransferModeBGuardTest manualLink_outOnTransferPiece…, Day11Test d_unmatchedDelivery…, NotTracedDetectorTest
-  e_manualLink_bornTerminal… — each builds its unlinked row with raw NULL / `{}`. Proposed fix: add
-  `{"type":{"code":10,"value":"Send"}}` to each fixture's raw. Full suite otherwise: 1,808 run, known reds only
-  (ShopifyMagicLinkTest, ExchangeBackfillTest).
-- **Open decision:** the `COD_ONLY_AMBIGUOUS` / phone-fallback `AMBIGUOUS_MULTI` skip also blocks a row whose reference
-  matched nothing at arrival but uniquely matches a later-ingested order (0 such rows in prod ever).
+  by reconcile/manualLink. Any test fixture that builds an unlinked row for reconcile/manualLink must give it a `raw`
+  with `type.code`. Approved fixture fix (no assertion changes) applied to the 8 tests that built raw NULL / `{}`:
+  BostaOrderReconcileTest r3/r4/r7 (r7 merged into its existing raw), NotCreatedFlagRecoveryTest nc2,
+  UnlinkedResolveTest ul2, TransferModeBGuardTest manualLink_outOnTransferPiece…, Day11Test d_unmatchedDelivery…
+  (merged into the mocked raw), NotTracedDetectorTest e_manualLink_bornTerminal….
+- **Suite (branch head):** 1,809 run, 2 failures — only the known ShopifyMagicLinkTest + ExchangeBackfillTest.
 - **Not done (out of scope):** not_created badge semantics, the 10-attempt window, reconcile LIMIT/ordering, row 5540,
   Jumi backlog, a `bosta_link_flagged_at` column, BROEK webhook setup.
 

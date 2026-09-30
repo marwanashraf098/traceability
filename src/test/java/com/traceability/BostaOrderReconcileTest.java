@@ -148,8 +148,8 @@ class BostaOrderReconcileTest {
         jdbc.update(
             "INSERT INTO unlinked_bosta_deliveries " +
             "  (tenant_id, tracking_number, business_reference, bosta_state_code, " +
-            "   bosta_order_type, match_reason, resolved) " +
-            "VALUES (?, ?, '#R-003', 45, 'SEND', 'NO_MATCH', false)",
+            "   bosta_order_type, match_reason, resolved, raw) " +
+            "VALUES (?, ?, '#R-003', 45, 'SEND', 'NO_MATCH', false, '{\"type\":{\"code\":10,\"value\":\"Send\"}}'::jsonb)",
             tenantId, tracking);
 
         reconcileJob.reconcileAll();
@@ -181,8 +181,8 @@ class BostaOrderReconcileTest {
         Long unlinkedId = jdbc.queryForObject(
             "INSERT INTO unlinked_bosta_deliveries " +
             "  (tenant_id, tracking_number, business_reference, bosta_state_code, " +
-            "   bosta_order_type, match_reason, resolved) " +
-            "VALUES (?, ?, '#R-004', 45, 'SEND', 'NO_MATCH', false) RETURNING id",
+            "   bosta_order_type, match_reason, resolved, raw) " +
+            "VALUES (?, ?, '#R-004', 45, 'SEND', 'NO_MATCH', false, '{\"type\":{\"code\":10,\"value\":\"Send\"}}'::jsonb) RETURNING id",
             Long.class, tenantId, tracking);
 
         // Link via manualLink — createOrFindShipment() calls clearReconcileFlag() internally.
@@ -243,6 +243,7 @@ class BostaOrderReconcileTest {
 
         String rawJson = """
             {
+              "type": {"code": 10, "value": "Send"},
               "receiver": {
                 "fullName": "Manual Link Customer",
                 "phone": "01055556666"

@@ -248,6 +248,41 @@ class BostaLinkingHardeningTest {
         assertThat(unresolvedCount(tenantA, tn)).isEqualTo(1);
     }
 
+    /**
+     * The reference matched nothing when the delivery arrived (order not ingested yet) and
+     * Bosta had no receiver phone, so the phone+COD fallback recorded COD_ONLY_AMBIGUOUS.
+     * That reason describes the fallback, not the reference — once the order is ingested
+     * with a matching number, reconcile must link it.
+     */
+    @Test
+    void h3c_codOnlyRow_orderIngestedLater_reconcileLinks() {
+        String tn = "5141584932";
+        ObjectNode r = raw(tn, 10, 10, "Send", "BRK-44825-EG");
+        r.remove("receiver");
+        when(bostaGateway.fetchDelivery(anyString(), eq(tn)))
+            .thenReturn(BostaDelivery.fromRaw(tn, r));
+        Long wid = jdbc.queryForObject(
+            "INSERT INTO webhook_events (source, tenant_id, topic, payload, status, received_at) " +
+            "VALUES ('bosta', ?, 'delivery_update', ?::jsonb, 'pending', now()) RETURNING id",
+            Long.class, tenantA,
+            String.format("{\"trackingNumber\":\"%s\",\"state\":10,\"type\":\"SEND\"," +
+                "\"updatedAt\":\"2026-09-30T09:30:00.000Z\"}", tn));
+        webhookJob.process(wid, tenantA);
+
+        assertThat(jdbc.queryForObject(
+            "SELECT match_reason FROM unlinked_bosta_deliveries WHERE tenant_id = ? AND tracking_number = ?",
+            String.class, tenantA, tn)).isEqualTo("COD_ONLY_AMBIGUOUS");
+
+        UUID orderId = insertOrder(tenantA, storeA1, "BRK-44825-EG");
+        reconcileJob.reconcileAll();
+
+        Map<String, Object> ship = jdbc.queryForMap(
+            "SELECT order_id, shipment_leg FROM shipments WHERE tracking_number = ?", tn);
+        assertThat(ship.get("order_id")).isEqualTo(orderId);
+        assertThat(ship.get("shipment_leg")).isEqualTo("forward");
+        assertThat(unresolvedCount(tenantA, tn)).isZero();
+    }
+
     // ── h4: reconcile / manualLink never create a forward leg for type 25 / 30 / no type ───
 
     @Test
