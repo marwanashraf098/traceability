@@ -82,6 +82,7 @@ class CatalogBackfillJobTest {
     }
 
     private static final ObjectMapper M = new ObjectMapper();
+    private static final String INVENTORY_SCOPES = "read_products,write_inventory,read_inventory,read_locations,write_locations";
     private static final Timestamp OLD_SYNC = Timestamp.valueOf("2026-01-01 10:00:00");
 
     @Autowired JdbcTemplate jdbc;
@@ -234,16 +235,50 @@ class CatalogBackfillJobTest {
     }
 
     @Test
-    void bf7_storeLevelActivationError_locationNotLinked_markerNull_jobThrows() {
+    void bf7_setupReason_locationNotLinked_markerSet_jobDoesNotThrow_warnOnce() {
         Store a = store("bf7-a", "connected");
         jdbc.update("UPDATE locations SET shopify_sync_status = 'error' WHERE tenant_id = ?", a.tenant());
+        ListAppender<ILoggingEvent> logs = captureLogs();
+
+        backfill.run();   // does not throw
+
+        assertThat(marker(a)).isNotNull();
+        assertThat(products(a)).as("the catalog import itself ran").hasSize(2);
+        assertThat(logs.list.stream().filter(e -> e.getLevel() == Level.WARN
+            && e.getFormattedMessage().contains(a.id().toString()) && e.getFormattedMessage().contains("LOCATION_NOT_LINKED")))
+            .hasSize(1);
+        releaseLogs(logs);
+        verify(shopifyGateway, never()).activateInventoryItem(anyString(), anyString(), anyString(), anyString(), anyString());
+        verify(shopifyGateway, never()).activateInventoryItems(anyString(), anyString(), anyString(), anyList());
+    }
+
+    @Test
+    void bf8_setupReason_missingScope_everyVariantRejected_markerSet_jobDoesNotThrow() {
+        Store a = store("bf8-a", "connected");
+        jdbc.update("UPDATE stores SET access_token_scopes = 'read_orders,read_products' WHERE id = ?", a.id());
+        when(shopifyGateway.activateInventoryItems(eq(a.shop()), anyString(), anyString(), anyList()))
+            .thenAnswer(inv -> results(inv.getArgument(3), r -> "Access denied for inventoryActivate field"));
+        ListAppender<ILoggingEvent> logs = captureLogs();
+
+        backfill.run();   // does not throw
+
+        assertThat(marker(a)).isNotNull();
+        assertThat(logs.list).anySatisfy(e -> {
+            assertThat(e.getLevel()).isEqualTo(Level.WARN);
+            assertThat(e.getFormattedMessage()).contains(a.id().toString()).contains("MISSING_SCOPE");
+        });
+        releaseLogs(logs);
+    }
+
+    @Test
+    void bf9_tokenReauthFailure_catalogNotImported_stillAFailure() {
+        Store a = store("bf9-a", "connected");
+        when(tokenProvider.getValidToken(a.id())).thenThrow(new ShopifyStoreNeedsReauthException(a.shop(), "needs reauth"));
 
         assertThatThrownBy(() -> backfill.run()).isInstanceOf(IllegalStateException.class)
             .hasMessageContaining(a.id().toString());
         assertThat(marker(a)).isNull();
-        assertThat(products(a)).as("the catalog import itself ran").hasSize(2);
-        verify(shopifyGateway, never()).activateInventoryItem(anyString(), anyString(), anyString(), anyString(), anyString());
-        verify(shopifyGateway, never()).activateInventoryItems(anyString(), anyString(), anyString(), anyList());
+        verify(shopifyGateway, never()).activateInventoryItems(eq(a.shop()), anyString(), anyString(), anyList());
     }
 
     private ListAppender<ILoggingEvent> captureLogs() {
@@ -499,8 +534,8 @@ class CatalogBackfillJobTest {
         UUID tenant = UUID.randomUUID(), store = UUID.randomUUID();
         String shop = name + "-" + tenant.toString().substring(0, 6) + ".myshopify.com";
         jdbc.update("INSERT INTO tenants (id, name) VALUES (?, ?)", tenant, "Tenant " + name);
-        jdbc.update("INSERT INTO stores (id, tenant_id, platform, shop_domain, status, import_status, last_sync_at) " +
-                    "VALUES (?, ?, 'shopify', ?, ?::store_status, 'completed', ?)", store, tenant, shop, status, OLD_SYNC);
+        jdbc.update("INSERT INTO stores (id, tenant_id, platform, shop_domain, status, import_status, last_sync_at, access_token_scopes) " +
+                    "VALUES (?, ?, 'shopify', ?, ?::store_status, 'completed', ?, ?)", store, tenant, shop, status, OLD_SYNC, INVENTORY_SCOPES);
         jdbc.update("INSERT INTO locations (id, tenant_id, name, shopify_location_id, shopify_sync_status, is_fulfillment) " +
                     "VALUES (gen_random_uuid(), ?, 'Main Warehouse', ?, 'linked', true)", tenant, "gid://shopify/Location/" + shop);
         return new Store(tenant, store, shop);

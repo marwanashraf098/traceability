@@ -878,8 +878,8 @@ public class ShopifyInventoryService {
             attemptIncrement(tenantId, c.variantId(), c.locationId(), c.delta(), c.triggerType(), c.triggerId(),
                 reasonFor(c.triggerType()), c.sentKey() != null ? c.sentKey() : claimKey, null, false);
         } else {
-            // rejected — and, only through the confirmed manual repush, an expired ambiguous or a
-            // legacy/unclassified claim: a NEW key, fresh baseline, the original delta.
+            // rejected — and, only through the confirmed manual repush, an expired ambiguous claim:
+            // a NEW key, fresh baseline, the original delta.
             attemptIncrement(tenantId, c.variantId(), c.locationId(), c.delta(), c.triggerType(), c.triggerId(),
                 reasonFor(c.triggerType()),
                 IncrementRecoveryRules.retryKey(tenantId, c.triggerType(), c.triggerId(), c.variantId(), c.locationId(), attemptNo),
@@ -897,10 +897,11 @@ public class ShopifyInventoryService {
     }
 
     /**
-     * Manual repush of one failed increment claim (receiving_session / return_inspection / hold_exit),
-     * legacy included — the reconciliation path. Requires confirmOld when the claim's first attempt is
-     * more than 24 h old, or when it is ambiguous past the identical-resend window (the person has
-     * checked Shopify). 404 no such claim, 409 not failed / needs confirmation / setup problem.
+     * Manual repush of one failed increment claim (receiving_session / return_inspection / hold_exit).
+     * Legacy claims are NOT repushable (409 LEGACY_NOT_REPUSHABLE) — they are reconciled by hand and
+     * cleared by resolving the exception. Requires confirmOld when the claim's first attempt is more
+     * than 24 h old, or when it is ambiguous past the identical-resend window (the person has checked
+     * Shopify). 404 no such claim, 409 not failed / legacy / needs confirmation / setup problem.
      */
     public void repushFailedIncrement(String triggerType, String triggerId, UUID variantId, boolean confirmOld) {
         UUID tenantId = TenantContext.require();
@@ -922,6 +923,13 @@ public class ShopifyInventoryService {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Adjustment is not in 'failed' status");
         }
         FailedClaim c = rows.get(0);
+        if (c.legacy()) {
+            // The pre-recovery backlog is reconciled by hand, never replayed: Shopify may have been
+            // corrected since, and the seed pushes CURRENT stock — a replay would double count.
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                "LEGACY_NOT_REPUSHABLE: this update failed before automatic recovery existed — reconcile it " +
+                "manually in Shopify and resolve the exception; it is never replayed");
+        }
         if ((c.olderThanConfirm() || c.ambiguousExpired()) && !confirmOld) {
             throw new ResponseStatusException(HttpStatus.CONFLICT,
                 "CONFIRMATION_REQUIRED: this update is more than 24 hours old (or its first send may have landed) — " +
@@ -934,7 +942,7 @@ public class ShopifyInventoryService {
         // A manual resend of an expired-ambiguous claim is a deliberate NEW send after the person's check.
         FailedClaim toSend = c.ambiguousExpired()
             ? new FailedClaim(c.variantId(), c.locationId(), c.delta(), c.triggerType(), c.triggerId(), "rejected",
-                c.changeFromQuantity(), c.sentKey(), c.attemptCount(), true, c.olderThanConfirm(), c.legacy())
+                c.changeFromQuantity(), c.sentKey(), c.attemptCount(), true, c.olderThanConfirm(), false)
             : c;
         if (!retryClaim(tenantId, toSend, true)) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Adjustment is already being retried");

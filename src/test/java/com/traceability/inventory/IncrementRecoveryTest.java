@@ -49,6 +49,7 @@ import static org.mockito.Mockito.*;
  *   r8 — backoff 10 min, 1 h, 6 h, 24 h, then stop after 5 attempts (alert "gave_up").
  *   r9 — the delta is never recomputed: every retry sends the claim's original delta.
  *   r10 — manual repush: 409 CONFIRMATION_REQUIRED past 24 h; with confirm it sends (new key).
+ *   r11 — manual repush of a LEGACY claim: 409 LEGACY_NOT_REPUSHABLE, no Shopify call; non-legacy works.
  *   x1 — cross-tenant on app_user: tenant A's pass never touches B's claim; A's own retry works.
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.NONE)
@@ -237,7 +238,8 @@ class IncrementRecoveryTest {
         List<Map<String, Object>> alerts = alerts(t);
         assertThat(alerts).hasSize(1);
         assertThat((String) alerts.get(0).get("descriptionEn"))
-            .isEqualTo("10 units across 2 variants received in Traced never reached Shopify (since 2026-07-21)");
+            .isEqualTo("10 units across 2 variants received in Traced never reached Shopify (since 2026-07-21). "
+                + "Reconcile manually — do not replay; the seed pushes current stock.");
         assertThat((List<?>) alerts.get(0).get("variants")).hasSize(2);
         assertThat(row(t, s2, b).get("attempt_count")).isEqualTo(1);
     }
@@ -294,7 +296,7 @@ class IncrementRecoveryTest {
         T t = tenant("r10"); V v = variant(t, "r10");
         failNextAdjustWith(FailureClass.REJECTED, 0);
         UUID s = receive(t, v, 2);
-        jdbc.update("UPDATE shopify_inventory_adjustments SET first_attempt_at = now() - interval '30 hours', legacy = true " +
+        jdbc.update("UPDATE shopify_inventory_adjustments SET first_attempt_at = now() - interval '30 hours' " +
             "WHERE tenant_id = ?", t.tenant());
 
         TenantContext.set(t.tenant());
@@ -309,6 +311,28 @@ class IncrementRecoveryTest {
         assertThat(keys).hasSize(2);
         assertThat(keys.get(1)).isEqualTo(IncrementRecoveryRules.retryKey(t.tenant(), "receiving_session", s.toString(), v.id(), t.location(), 2));
         assertThat(row(t, s, v).get("status")).isEqualTo("applied");
+    }
+
+    @Test
+    void r11_manualRepush_legacyClaim_409_noShopifyCall_nonLegacyStillWorks() throws Exception {
+        T t = tenant("r11"); V old = variant(t, "r11old"); V fresh = variant(t, "r11new");
+        failNextAdjustWith(FailureClass.REJECTED, 0);
+        UUID sOld = receive(t, old, 5);
+        failNextAdjustWith(FailureClass.REJECTED, 0);
+        UUID sNew = receive(t, fresh, 2);
+        jdbc.update("UPDATE shopify_inventory_adjustments SET legacy = true WHERE tenant_id = ? AND trigger_id = ?",
+            t.tenant(), sOld.toString());
+        clearInvocations(shopifyGateway);
+
+        TenantContext.set(t.tenant());
+        assertThatThrownBy(() -> inventory.repushFailedIncrement("receiving_session", sOld.toString(), old.id(), true))
+            .isInstanceOf(ResponseStatusException.class).hasMessageContaining("LEGACY_NOT_REPUSHABLE");
+        verifyNoInteractions(shopifyGateway);
+        assertThat(row(t, sOld, old)).containsEntry("status", "failed").containsEntry("attempt_count", 1);
+
+        inventory.repushFailedIncrement("receiving_session", sNew.toString(), fresh.id(), false);
+        TenantContext.clear();
+        assertThat(row(t, sNew, fresh).get("status")).isEqualTo("applied");
     }
 
     // ── x1: cross-tenant on a real app_user connection ─────────────────────────

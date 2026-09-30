@@ -482,7 +482,8 @@ public class ExceptionService {
      *             location not linked / no store): names the fix and the count of blocked updates.
      *             Gone once the problem is fixed and the retries clear the failed claims.
      *   gave_up — retries exhausted, or an ambiguous send past the 20 h identical-resend window.
-     *   legacy  — the backlog that failed before automatic recovery existed (never auto-retried).
+     *   legacy  — the backlog that failed before automatic recovery existed: never retried, not
+     *             repushable; reconciled by hand and cleared only by resolving this exception.
      * subject_key carries the newest claim id, so a dismissed row returns when a NEW failure appears.
      */
     private List<Map<String, Object>> detectIncrementSyncFailed(UUID tid) {
@@ -1073,9 +1074,11 @@ public class ExceptionService {
                     item.put("actionUrl", "/inventory?tab=ledger");
                 } else {
                     item.put("descriptionEn", units + " units across " + variants
-                        + " variants received in Traced never reached Shopify (since " + since + ")");
+                        + " variants received in Traced never reached Shopify (since " + since + "). "
+                        + "Reconcile manually — do not replay; the seed pushes current stock.");
                     item.put("descriptionAr", units + " وحدة عبر " + variants
-                        + " متغيرات استُلمت في Traced ولم تصل إلى Shopify (منذ " + since + ")");
+                        + " متغيرات استُلمت في Traced ولم تصل إلى Shopify (منذ " + since + "). "
+                        + "سوِّها يدويًا — لا تُعِد إرسالها؛ الإعداد الأولي يرسل المخزون الحالي.");
                     item.put("suggestedAction", "manual_reconcile");
                     item.put("actionUrl", "/inventory?tab=ledger");
                 }
