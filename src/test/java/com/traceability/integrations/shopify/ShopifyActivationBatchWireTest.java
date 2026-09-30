@@ -37,6 +37,8 @@ import static org.assertj.core.api.Assertions.assertThat;
  *   bw6 — fetchAvailableQuantities: 600 item GIDs → 3 nodes(ids:) reads of ≤250.
  *   bw7 — the products import query asks for inventoryItem { id } and the parsed Variant carries it
  *         (main query and the follow-up variants page).
+ *   bw8 — a batch that exhausts the THROTTLED retries is sent again (same keys) instead of failing
+ *         its 25 variants.
  */
 class ShopifyActivationBatchWireTest {
 
@@ -264,5 +266,22 @@ class ShopifyActivationBatchWireTest {
             assertThat(r.path("query").asText()).contains("inventoryItem { id }"));
         assertThat(page.products().get(0).variants()).extracting(ShopifyGateway.Variant::inventoryItemGid)
             .containsExactly("gid://shopify/InventoryItem/10", "gid://shopify/InventoryItem/20");
+    }
+
+    @Test
+    void bw8_batchThrottledPastTheRetryCap_isResent_notFailed() {
+        AtomicInteger calls = new AtomicInteger();
+        String throttled = "{\"errors\":[{\"message\":\"Throttled\",\"extensions\":{\"code\":\"THROTTLED\"}}]," +
+            "\"extensions\":{\"cost\":{\"requestedQueryCost\":1,\"actualQueryCost\":0," +
+            "\"throttleStatus\":{\"maximumAvailable\":1000,\"currentlyAvailable\":1000,\"restoreRate\":1000}}}}";
+        // 6 THROTTLED answers = the first send exhausts its 5 throttle retries; the resend succeeds.
+        FakeShopify fake = new FakeShopify(req -> calls.incrementAndGet() <= 6 ? throttled : activationResponse(req, i -> null), 0);
+
+        List<ShopifyGateway.ActivationResult> results = fake.gateway().activateInventoryItems(SHOP, "tok", LOC, requests(3));
+
+        assertThat(results).hasSize(3).allMatch(ShopifyGateway.ActivationResult::ok);
+        assertThat(fake.requests).hasSize(7);
+        assertThat(fake.requests.stream().map(r -> r.path("variables").toString()).distinct())
+            .as("every send carries the same items and keys").hasSize(1);
     }
 }

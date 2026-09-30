@@ -44,6 +44,9 @@ class ShopifyHttpGateway implements ShopifyGateway {
     private static final Logger log = LoggerFactory.getLogger(ShopifyHttpGateway.class);
 
     private static final int MAX_THROTTLE_RETRIES = 5;
+    // inventoryActivate: 10 (mutation) + 1 (inventoryLevel) requested points per alias.
+    private static final int ACTIVATION_COST_PER_ALIAS = 11;
+    private static final int ACTIVATION_THROTTLE_ATTEMPTS = 3;
     private static final int THROTTLE_MIN_WAIT_MS = 500;
 
     // No status filter: every product status is imported (ACTIVE, DRAFT, ARCHIVED, and
@@ -1276,11 +1279,22 @@ class ShopifyHttpGateway implements ShopifyGateway {
             vars.put("i" + i, batch.get(i).inventoryItemGid());
             vars.put("k" + i, batch.get(i).idempotencyKey());
         }
-        JsonNode response;
-        try {
-            response = postGraphQL(shopDomain, token, batchActivateMutation(batch.size()), vars);
-        } catch (RuntimeException e) {
-            return failAll(batch, messageOf(e));
+        // Reserve the batch's own cost (~10 per mutation + its selection) so consecutive batches
+        // are paced to fit. Two in flight can still collide; a batch that exhausts the THROTTLED
+        // retries is sent again (inventoryActivate is idempotent — same keys, same parameters).
+        int reserve = ACTIVATION_COST_PER_ALIAS * batch.size();
+        JsonNode response = null;
+        for (int attempt = 1; response == null; attempt++) {
+            try {
+                response = postGraphQL(shopDomain, token, batchActivateMutation(batch.size()), vars, reserve);
+            } catch (ShopifyException e) {
+                boolean throttled = e.getMessage() != null && e.getMessage().startsWith("Shopify API throttled");
+                if (!throttled || attempt >= ACTIVATION_THROTTLE_ATTEMPTS) return failAll(batch, messageOf(e));
+                log.warn("Batch activation throttled — resending batch of {} (attempt {}/{})",
+                    batch.size(), attempt + 1, ACTIVATION_THROTTLE_ATTEMPTS);
+            } catch (RuntimeException e) {
+                return failAll(batch, messageOf(e));
+            }
         }
 
         // Path-scoped errors belong to one alias; an error without a path belongs to the request.
@@ -1379,6 +1393,16 @@ class ShopifyHttpGateway implements ShopifyGateway {
      * can attribute a path-scoped error to its own alias instead of failing the others.
      */
     private JsonNode postGraphQL(String shopDomain, String token, String query, JsonNode variables) {
+        return postGraphQL(shopDomain, token, query, variables, 200);
+    }
+
+    /**
+     * @param reserveCost the proactive slow-down waits until at least this many cost points are
+     *                    back in the bucket (never below 200). A caller that sends a run of
+     *                    same-sized expensive requests (batch activation: ~11 points per alias)
+     *                    passes that request's cost, so the next one fits instead of throttling.
+     */
+    private JsonNode postGraphQL(String shopDomain, String token, String query, JsonNode variables, int reserveCost) {
         String url = "https://" + shopDomain + "/admin/api/" + apiVersion + "/graphql.json";
         ObjectNode body = mapper.createObjectNode().put("query", query).set("variables", variables);
 
@@ -1438,8 +1462,9 @@ class ShopifyHttpGateway implements ShopifyGateway {
             if (!throttle.isMissingNode()) {
                 double available = throttle.path("currentlyAvailable").asDouble(1000);
                 double restoreRate = throttle.path("restoreRate").asDouble(50);
-                if (available < 200 && restoreRate > 0) {
-                    long waitMs = (long) ((200 - available) / restoreRate * 1000) + THROTTLE_MIN_WAIT_MS;
+                double reserve = Math.max(200, reserveCost);
+                if (available < reserve && restoreRate > 0) {
+                    long waitMs = (long) ((reserve - available) / restoreRate * 1000) + THROTTLE_MIN_WAIT_MS;
                     log.debug("Shopify cost bucket low ({} available) — sleeping {}ms", (long) available, waitMs);
                     sleep(waitMs);
                 }
