@@ -4,6 +4,37 @@
 
 ## Current state
 
+**RTO@20 false "exception" — Step 1 (2026-09-30, branch `fix/rto-route-assigned` off main d2d9d19, not merged,
+not deployed).**
+- **Problem:** Bosta relabels a SEND as type 20 "Return to Origin" on the way back (same AWB, still the forward leg).
+  RTO@20 ("Route assigned") fell through to `20:ALL` → `'created'`, and the monotonic guard turned it into
+  `'exception'` ("Needs attention") until state 46. Prod: 56 legs went through it after the guard (Jumi 47, Snouts 9);
+  2 Jumi legs stuck (2017084040, 3338348731). RTO@41 matched nothing — the seeded `41:RTO` row is keyed "RTO" but the
+  mapper key is the fetched `type.value` uppercased, `"RETURN TO ORIGIN"` → unknown code, webhook failed (1 prod event,
+  219203, 2026-08-26; its leg reached returned@46 the same day, not behind).
+- **Mapper key confirmed fetch-only:** `BostaWebhookJob.java:330` (delivery from `fetchDelivery`, :187),
+  `BostaIngestionHelper.java:106` (:92), `ShipmentLinkService.java:437` (stored `bosta_order_type`, written from the
+  fetched `delivery.type()` at `BostaWebhookJob.java:808`; prod never holds "RTO"). Type string built at
+  `BostaHttpGateway.java:225-228` / `BostaDelivery.fromRaw`. The webhook body's `type` is never read.
+- **V122 (data only):** `(20,'RETURN TO ORIGIN')` and `(41,'RETURN TO ORIGIN')` → `'returning'`, piece NULL (the dead
+  41:RTO row stays; its return_in_transit move is NOT copied). Guarded repair UPDATE (forward, exception,
+  provider_state 20, raw type.code 20 → returning; history untouched) — prod dry-run 2026-09-30: 2 rows, both Jumi.
+  CLAUDE.md monotonic paragraph amended (the "no mapping migration for 10/11/20" sentence now carries the RTO exception).
+- **Tests:** `RtoRouteAssignedTest` r1, r1b, r2–r6 (+ one `@Disabled` CRP demonstration). Revert-checked: rows removed →
+  r1/r1b/r4/r5 RED; repair UPDATE's type guard removed → r6 RED (2 rows repaired, not 1). Count edits (pre-approved):
+  MigrationSmokeTest 120→121 files / V1–V122, mapping rows 26→28; NotTracedBackfillTest 65→66.
+- **Gotcha:** a repaired leg shows "In transit", not "Returning" — its history still says created@20 and the label is
+  max-over-history. A leg that takes RTO@20 live after V122 records `returning@20` and shows "Returning" (and keeps it
+  through later RTO@24/30).
+- **Known gap (not fixed, read-only finding):** CRP return legs also hit the guard (CRP@20 after progress → exception),
+  and `'exception'` is in `RETURN_LEG_TERMINAL_STATES` (`ShipmentLinkService.java:798-801`), so
+  `hasReturnLegAwaitingIntake` (:830) is false while a leg sits there; `ReturnSessionService.scanPiece` (:227-266) then
+  refuses a DELIVERED piece's scan unless it's in the return window or attributed to a request item. Prod today: 0 CRP
+  legs at exception (all 9 returned@46). Demonstrated by the `@Disabled` test. A mapping row is not the fix (CRP@20
+  before pickup is genuinely created).
+- **Out of scope, untouched:** SEND@20 guard behaviour (prod: 35 legs, all normal re-routes), keying the mapper by
+  type.code, the 20:ALL packed→awaiting_pickup side effect, deleting 41:RTO.
+
 **Bosta late-booking linking — Step 0 diagnosis + Step 1 hardening (2026-09-30, branch `fix/bosta-linking-hardening`
 off main 1447d64, not merged, not deployed).**
 - **Step 0 (read-only, prod SELECTs):** the suspected "late booking is abandoned" gap does NOT exist. Delivery-side
