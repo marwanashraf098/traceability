@@ -44,6 +44,9 @@ class ShopifyHttpGateway implements ShopifyGateway {
     private static final Logger log = LoggerFactory.getLogger(ShopifyHttpGateway.class);
 
     private static final int MAX_THROTTLE_RETRIES = 5;
+    // inventoryActivate: 10 (mutation) + 1 (inventoryLevel) requested points per alias.
+    private static final int ACTIVATION_COST_PER_ALIAS = 11;
+    private static final int ACTIVATION_THROTTLE_ATTEMPTS = 3;
     private static final int THROTTLE_MIN_WAIT_MS = 500;
 
     // No status filter: every product status is imported (ACTIVE, DRAFT, ARCHIVED, and
@@ -60,7 +63,7 @@ class ShopifyHttpGateway implements ShopifyGateway {
                     variants(first: 50) {
                       pageInfo { hasNextPage endCursor }
                       edges {
-                        node { id sku title price }
+                        node { id sku title price inventoryItem { id } }
                       }
                     }
                   }
@@ -77,7 +80,7 @@ class ShopifyHttpGateway implements ShopifyGateway {
                 variants(first: 250, after: $cursor) {
                   pageInfo { hasNextPage endCursor }
                   edges {
-                    node { id sku title price }
+                    node { id sku title price inventoryItem { id } }
                   }
                 }
               }
@@ -1150,15 +1153,23 @@ class ShopifyHttpGateway implements ShopifyGateway {
     public List<InventoryLevel> fetchAvailableQuantities(String shopDomain, String token,
                                                           String locationGid, List<String> inventoryItemGids) {
         List<InventoryLevel> out = new ArrayList<>();
-        if (inventoryItemGids.isEmpty()) return out;
+        // nodes(ids:) takes at most 250 ids (Shopify: every input array is capped at 250 —
+        // https://shopify.dev/docs/api/usage/limits "Input limits"); one read per chunk.
+        for (List<String> chunk : chunks(inventoryItemGids, MAX_INPUT_ARRAY)) {
+            fetchAvailableQuantitiesChunk(shopDomain, token, locationGid, chunk, out);
+        }
+        return out;
+    }
 
+    private void fetchAvailableQuantitiesChunk(String shopDomain, String token, String locationGid,
+                                               List<String> inventoryItemGids, List<InventoryLevel> out) {
         ObjectNode vars = mapper.createObjectNode();
         vars.set("ids", mapper.valueToTree(inventoryItemGids));
         vars.put("locationId", locationGid);
 
         JsonNode data = executeGraphQL(shopDomain, token, INVENTORY_LEVELS_QUERY, vars);
         JsonNode nodes = data.path("nodes");
-        if (!nodes.isArray()) return out;
+        if (!nodes.isArray()) return;
         for (JsonNode node : nodes) {
             if (node.isNull() || node.isMissingNode()) continue;
             String itemGid = node.path("id").asText(null);
@@ -1174,7 +1185,161 @@ class ShopifyHttpGateway implements ShopifyGateway {
             }
             out.add(new InventoryLevel(itemGid, available));
         }
+    }
+
+    static <T> List<List<T>> chunks(List<T> items, int size) {
+        List<List<T>> out = new ArrayList<>();
+        for (int i = 0; i < items.size(); i += size) {
+            out.add(items.subList(i, Math.min(items.size(), i + size)));
+        }
         return out;
+    }
+
+    // ---- batch item-id resolution + batch activation (activation perf) -----
+
+    private static final String VARIANT_INVENTORY_ITEMS_QUERY = """
+            query VariantInventoryItems($ids: [ID!]!) {
+              nodes(ids: $ids) {
+                ... on ProductVariant { id inventoryItem { id } }
+              }
+            }
+            """;
+
+    @Override
+    public Map<String, String> resolveInventoryItemIds(String shopDomain, String token, List<String> variantGids) {
+        Map<String, String> out = new java.util.LinkedHashMap<>();
+        for (List<String> chunk : chunks(variantGids, MAX_INPUT_ARRAY)) {
+            ObjectNode vars = mapper.createObjectNode();
+            vars.set("ids", mapper.valueToTree(chunk));
+            JsonNode nodes = executeGraphQL(shopDomain, token, VARIANT_INVENTORY_ITEMS_QUERY, vars).path("nodes");
+            for (JsonNode node : nodes) {
+                if (node == null || node.isNull()) continue;
+                String variantGid = node.path("id").asText(null);
+                String itemGid = nullableText(node.path("inventoryItem"), "id");
+                if (variantGid != null && itemGid != null) out.put(variantGid, itemGid);
+            }
+        }
+        return out;
+    }
+
+    /**
+     * N aliased inventoryActivate fields in one mutation document. Each alias has its own item
+     * variable and its own @idempotent key variable; the location is shared. No quantity argument
+     * (available / onHand) is ever part of the document — activation only creates the level at 0.
+     */
+    static String batchActivateMutation(int n) {
+        StringBuilder sb = new StringBuilder("mutation BatchInventoryActivate($locationId: ID!");
+        for (int i = 0; i < n; i++) sb.append(", $i").append(i).append(": ID!, $k").append(i).append(": String!");
+        sb.append(") {\n");
+        for (int i = 0; i < n; i++) {
+            sb.append("  a").append(i).append(": inventoryActivate(inventoryItemId: $i").append(i)
+              .append(", locationId: $locationId) @idempotent(key: $k").append(i).append(") {")
+              .append(" inventoryLevel { id } userErrors { field message } }\n");
+        }
+        return sb.append("}\n").toString();
+    }
+
+    @Override
+    public List<ActivationResult> activateInventoryItems(String shopDomain, String token, String locationGid,
+                                                         List<ActivationRequest> requests) {
+        List<List<ActivationRequest>> batches = chunks(requests, ACTIVATION_BATCH_SIZE);
+        if (batches.size() <= 1) {
+            return batches.isEmpty() ? List.of() : activateBatch(shopDomain, token, locationGid, batches.get(0));
+        }
+        java.util.concurrent.ExecutorService pool = java.util.concurrent.Executors.newFixedThreadPool(
+            Math.min(ACTIVATION_CONCURRENCY, batches.size()));
+        try {
+            List<java.util.concurrent.Future<List<ActivationResult>>> futures = new ArrayList<>();
+            for (List<ActivationRequest> batch : batches) {
+                futures.add(pool.submit(() -> activateBatch(shopDomain, token, locationGid, batch)));
+            }
+            List<ActivationResult> out = new ArrayList<>(requests.size());
+            for (int b = 0; b < futures.size(); b++) {
+                try {
+                    out.addAll(futures.get(b).get());
+                } catch (java.util.concurrent.ExecutionException e) {
+                    // activateBatch never throws; kept so an unexpected error still yields one
+                    // result per request instead of losing the whole batch's accounting.
+                    out.addAll(failAll(batches.get(b), messageOf(e.getCause())));
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    throw new ShopifyException("Interrupted during batch activation", e);
+                }
+            }
+            return out;
+        } finally {
+            pool.shutdownNow();
+        }
+    }
+
+    private List<ActivationResult> activateBatch(String shopDomain, String token, String locationGid,
+                                                 List<ActivationRequest> batch) {
+        ObjectNode vars = mapper.createObjectNode().put("locationId", locationGid);
+        for (int i = 0; i < batch.size(); i++) {
+            vars.put("i" + i, batch.get(i).inventoryItemGid());
+            vars.put("k" + i, batch.get(i).idempotencyKey());
+        }
+        // Reserve the batch's own cost (~10 per mutation + its selection) so consecutive batches
+        // are paced to fit. Two in flight can still collide; a batch that exhausts the THROTTLED
+        // retries is sent again (inventoryActivate is idempotent — same keys, same parameters).
+        int reserve = ACTIVATION_COST_PER_ALIAS * batch.size();
+        JsonNode response = null;
+        for (int attempt = 1; response == null; attempt++) {
+            try {
+                response = postGraphQL(shopDomain, token, batchActivateMutation(batch.size()), vars, reserve);
+            } catch (ShopifyException e) {
+                boolean throttled = e.getMessage() != null && e.getMessage().startsWith("Shopify API throttled");
+                if (!throttled || attempt >= ACTIVATION_THROTTLE_ATTEMPTS) return failAll(batch, messageOf(e));
+                log.warn("Batch activation throttled — resending batch of {} (attempt {}/{})",
+                    batch.size(), attempt + 1, ACTIVATION_THROTTLE_ATTEMPTS);
+            } catch (RuntimeException e) {
+                return failAll(batch, messageOf(e));
+            }
+        }
+
+        // Path-scoped errors belong to one alias; an error without a path belongs to the request.
+        Map<String, String> aliasErrors = new java.util.HashMap<>();
+        String requestError = null;
+        for (JsonNode err : response.path("errors")) {
+            JsonNode path = err.path("path");
+            String msg = err.path("message").asText("unknown error");
+            if (path.isArray() && !path.isEmpty()) aliasErrors.putIfAbsent(path.get(0).asText(), msg);
+            else if (requestError == null) requestError = msg;
+        }
+        JsonNode data = response.path("data");
+
+        List<ActivationResult> out = new ArrayList<>(batch.size());
+        for (int i = 0; i < batch.size(); i++) {
+            String item = batch.get(i).inventoryItemGid();
+            String alias = "a" + i;
+            JsonNode node = data.path(alias);
+            String error;
+            if (aliasErrors.containsKey(alias)) {
+                error = "inventoryActivate failed: " + aliasErrors.get(alias);
+            } else if (node.isMissingNode() || node.isNull()) {
+                error = requestError != null ? "Shopify GraphQL error: " + requestError
+                                             : "inventoryActivate returned no result";
+            } else {
+                JsonNode userErrors = node.path("userErrors");
+                String msg = userErrors.isArray() && !userErrors.isEmpty()
+                    ? userErrors.get(0).path("message").asText("unknown error") : null;
+                // Same tolerance as the single form: "already active" is success.
+                error = msg == null || msg.toLowerCase().contains("already") ? null
+                      : "inventoryActivate failed: " + msg;
+            }
+            out.add(new ActivationResult(item, error));
+        }
+        return out;
+    }
+
+    private static List<ActivationResult> failAll(List<ActivationRequest> batch, String error) {
+        List<ActivationResult> out = new ArrayList<>(batch.size());
+        for (ActivationRequest r : batch) out.add(new ActivationResult(r.inventoryItemGid(), error));
+        return out;
+    }
+
+    private static String messageOf(Throwable e) {
+        return e == null ? "unknown error" : e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName();
     }
 
     @Override
@@ -1211,6 +1376,33 @@ class ShopifyHttpGateway implements ShopifyGateway {
     }
 
     private JsonNode executeGraphQL(String shopDomain, String token, String query, JsonNode variables) {
+        JsonNode response = postGraphQL(shopDomain, token, query, variables);
+        JsonNode errors = response.get("errors");
+        if (errors != null && errors.isArray() && errors.size() > 0) {
+            throw new ShopifyException("Shopify GraphQL error: " + errors.get(0).path("message").asText());
+        }
+        JsonNode data = response.get("data");
+        if (data == null) throw new ShopifyException("Shopify GraphQL response has no data field");
+        return data;
+    }
+
+    /**
+     * The transport under executeGraphQL(): HTTP (Resilience4j retry on connection errors), 4xx/5xx
+     * translation, THROTTLED sleep-and-retry, and the proactive slow-down when the cost bucket runs
+     * low. Returns the WHOLE response (data + errors) so a caller that sends several aliased fields
+     * can attribute a path-scoped error to its own alias instead of failing the others.
+     */
+    private JsonNode postGraphQL(String shopDomain, String token, String query, JsonNode variables) {
+        return postGraphQL(shopDomain, token, query, variables, 200);
+    }
+
+    /**
+     * @param reserveCost the proactive slow-down waits until at least this many cost points are
+     *                    back in the bucket (never below 200). A caller that sends a run of
+     *                    same-sized expensive requests (batch activation: ~11 points per alias)
+     *                    passes that request's cost, so the next one fits instead of throttling.
+     */
+    private JsonNode postGraphQL(String shopDomain, String token, String query, JsonNode variables, int reserveCost) {
         String url = "https://" + shopDomain + "/admin/api/" + apiVersion + "/graphql.json";
         ObjectNode body = mapper.createObjectNode().put("query", query).set("variables", variables);
 
@@ -1246,7 +1438,8 @@ class ShopifyHttpGateway implements ShopifyGateway {
 
             // Check for THROTTLED error before inspecting data.
             JsonNode errors = response.get("errors");
-            if (errors != null && errors.isArray() && errors.size() > 0) {
+            boolean hasErrors = errors != null && errors.isArray() && errors.size() > 0;
+            if (hasErrors) {
                 String code = errors.get(0).path("extensions").path("code").asText("");
                 if ("THROTTLED".equals(code)) {
                     if (attempt == MAX_THROTTLE_RETRIES) {
@@ -1257,7 +1450,10 @@ class ShopifyHttpGateway implements ShopifyGateway {
                     sleep(waitMs);
                     continue;
                 }
-                throw new ShopifyException("Shopify GraphQL error: " + errors.get(0).path("message").asText());
+                // A plain error response (no data) goes straight back to the caller, unpaced —
+                // exactly as before this method was split out of executeGraphQL().
+                JsonNode data = response.get("data");
+                if (data == null || data.isNull()) return response;
             }
 
             // Proactively slow down if the cost bucket is running low (< 200 units remaining).
@@ -1266,16 +1462,14 @@ class ShopifyHttpGateway implements ShopifyGateway {
             if (!throttle.isMissingNode()) {
                 double available = throttle.path("currentlyAvailable").asDouble(1000);
                 double restoreRate = throttle.path("restoreRate").asDouble(50);
-                if (available < 200 && restoreRate > 0) {
-                    long waitMs = (long) ((200 - available) / restoreRate * 1000) + THROTTLE_MIN_WAIT_MS;
+                double reserve = Math.max(200, reserveCost);
+                if (available < reserve && restoreRate > 0) {
+                    long waitMs = (long) ((reserve - available) / restoreRate * 1000) + THROTTLE_MIN_WAIT_MS;
                     log.debug("Shopify cost bucket low ({} available) — sleeping {}ms", (long) available, waitMs);
                     sleep(waitMs);
                 }
             }
-
-            JsonNode data = response.get("data");
-            if (data == null) throw new ShopifyException("Shopify GraphQL response has no data field");
-            return data;
+            return response;
         }
         throw new ShopifyException("Unreachable: throttle retry loop exhausted");
     }
@@ -1291,7 +1485,8 @@ class ShopifyHttpGateway implements ShopifyGateway {
                     vn.path("id").asText(),
                     nullableText(vn, "sku"),
                     vn.path("title").asText(""),
-                    priceStr != null ? new BigDecimal(priceStr) : null));
+                    priceStr != null ? new BigDecimal(priceStr) : null,
+                    nullableText(vn.path("inventoryItem"), "id")));
         }
         return variants;
     }

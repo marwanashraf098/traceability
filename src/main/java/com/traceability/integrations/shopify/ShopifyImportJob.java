@@ -22,7 +22,7 @@ import java.util.UUID;
  * FR-17 v2 go-live — also runs the full Traced-owned-location inventory sync bootstrap as
  * ONE automatic flow on every connect/reconnect, with no manual approval gate:
  *   Part A: ensure + link the Traced Main Warehouse (ShopifyLocationProvisioningService).
- *   Part B: inventoryActivate the catalog at that GID (ShopifyCatalogActivationService),
+ *   Part B: inventoryActivate ACTIVE products' variants at that GID (ShopifyCatalogActivationService),
  *           run AFTER catalog import since it needs variants to already exist.
  *   Part C: seed on_hand — a positive-delta-only write from 0, computed live, skipping
  *           any variant already non-zero in Shopify (ShopifyInventoryReconcileService.apply(),
@@ -133,8 +133,9 @@ public class ShopifyImportJob {
                 log.info("Shopify import completed for store {}: {} products, {} orders",
                     storeId, result.products(), result.orders());
 
-                // Parts B+C (FR-17 v2): activate the catalog at the Traced GID, then seed
-                // on_hand — fully automatic, no manual approval gate. Must run AFTER
+                // Parts B+C (FR-17 v2): activate ACTIVE products' variants at the Traced GID
+                // (batched; draft / archived variants are activated lazily before their first
+                // increment), then seed on_hand — fully automatic, no manual approval gate. Must run AFTER
                 // syncService.runImport() above, since both need variants to already exist.
                 // Both are non-fatal here (a failure just means the next reconnect/import
                 // retries) and both are idempotent/re-runnable — activateInventoryItem

@@ -6,6 +6,7 @@ import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 /**
@@ -23,7 +24,12 @@ public interface ShopifyGateway {
 
     record Product(String gid, String title, String status, String imageUrl, List<Variant> variants) {}
 
-    record Variant(String gid, String sku, String title, BigDecimal price) {}
+    /** inventoryItemGid: the variant's InventoryItem GID when the query returned it (V120), else null. */
+    record Variant(String gid, String sku, String title, BigDecimal price, String inventoryItemGid) {
+        public Variant(String gid, String sku, String title, BigDecimal price) {
+            this(gid, sku, title, price, null);
+        }
+    }
 
     record OrderPage(List<Order> orders, boolean hasNextPage, String endCursor) {}
 
@@ -226,6 +232,38 @@ public interface ShopifyGateway {
      */
     void activateInventoryItem(String shopDomain, String token, String inventoryItemGid,
                                 String locationGid, String idempotencyKey);
+
+    /**
+     * Batch form of {@link #resolveInventoryItemId}: one nodes(ids:) read per chunk of at most
+     * {@link #MAX_INPUT_ARRAY} variant GIDs (Shopify caps every input array at 250 —
+     * https://shopify.dev/docs/api/usage/limits, "Input limits"). Returns variantGid →
+     * inventoryItem GID for the variants Shopify returned with an inventoryItem; a variant
+     * that is missing (deleted, wrong store) is simply absent from the map.
+     */
+    Map<String, String> resolveInventoryItemIds(String shopDomain, String token, List<String> variantGids);
+
+    /** One inventoryActivate to send: the item and its own @idempotent key. */
+    record ActivationRequest(String inventoryItemGid, String idempotencyKey) {}
+
+    /** The outcome for one item: error == null means active (or already active) at the location. */
+    record ActivationResult(String inventoryItemGid, String error) {
+        public boolean ok() { return error == null; }
+    }
+
+    /**
+     * Batch form of {@link #activateInventoryItem}: {@link #ACTIVATION_BATCH_SIZE} aliased
+     * inventoryActivate mutations per request, at most {@link #ACTIVATION_CONCURRENCY} requests in
+     * flight, each through the throttle-aware transport. Every alias carries only inventoryItemId +
+     * locationId (never a quantity) and its own @idempotent key. One alias's error never fails the
+     * others: the result has one entry per request, in order, with that item's error (or null).
+     * "Already active" counts as success, same as the single form.
+     */
+    List<ActivationResult> activateInventoryItems(String shopDomain, String token, String locationGid,
+                                                  List<ActivationRequest> requests);
+
+    int MAX_INPUT_ARRAY = 250;
+    int ACTIVATION_BATCH_SIZE = 25;
+    int ACTIVATION_CONCURRENCY = 2;
 
     /**
      * Adjusts on_hand at a location by a POSITIVE delta only, via inventoryAdjustQuantities.

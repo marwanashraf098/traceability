@@ -91,6 +91,7 @@ public class ShopifyInventoryService {
     private final ShopifyTokenProvider tokenProvider;
     private final ObjectMapper         mapper;
     private final StoreRepository      storeRepository;
+    private final InventoryItemIdService itemIds;
 
     public ShopifyInventoryService(JdbcTemplate jdbc,
                                    PlatformTransactionManager txm,
@@ -104,6 +105,7 @@ public class ShopifyInventoryService {
         this.tokenProvider = tokenProvider;
         this.mapper        = mapper;
         this.storeRepository = storeRepository;
+        this.itemIds       = new InventoryItemIdService(jdbc, txm, shopify);
     }
 
     // ── Trigger 1: receiving session close ───────────────────────────────────
@@ -659,7 +661,7 @@ public class ShopifyInventoryService {
                 } else {
                     shopDomain = store.shopDomain();
                     token = tokenProvider.getValidToken(store.id());
-                    shopifyInventoryItemId = shopify.resolveInventoryItemId(shopDomain, token, variantGid);
+                    shopifyInventoryItemId = itemIds.resolve(tenantId, variantId, variantGid, shopDomain, token);
                 }
             }
         } catch (ShopifyException e) {
@@ -706,6 +708,26 @@ public class ShopifyInventoryService {
         if (p.error() != null) {
             markResult(tenantId, triggerType, triggerId, variantId, locationId,
                        p.shopifyInventoryItemId(), p.shopifyLocationId(), "failed", p.error());
+            return;
+        }
+
+        // Lazy activation: only ACTIVE products' variants are activated at connect, so a draft or
+        // archived variant may reach its first increment without an inventory level at the Traced
+        // location. Ensure it first — inventoryActivate carries no quantity (it only creates the
+        // level at 0, "already active" tolerated), and it uses the same idempotency key as the
+        // catalog activation for this variant + location. If it fails, the adjust is NOT sent and
+        // the claim is 'failed' (the adjust never reached Shopify, so a later retry is safe).
+        try {
+            shopify.activateInventoryItem(p.shopDomain(), p.token(), p.shopifyInventoryItemId(),
+                p.shopifyLocationId(),
+                ShopifyCatalogActivationService.activationKey(tenantId, variantId, p.shopifyLocationId()));
+        } catch (Exception e) {
+            String msg = e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName();
+            log.warn("Shopify inventory: activation before increment failed — adjust not sent " +
+                     "trigger={} triggerId={} variant={} error={}", triggerType, triggerId, variantId, msg);
+            markResult(tenantId, triggerType, triggerId, variantId, locationId,
+                       p.shopifyInventoryItemId(), p.shopifyLocationId(), "failed",
+                       "Activation at the Traced location failed (adjust not sent): " + msg);
             return;
         }
 

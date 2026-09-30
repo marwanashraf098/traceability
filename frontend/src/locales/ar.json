@@ -576,7 +576,8 @@
       "summaryColVariants": "المتغيرات المحددة",
       "summaryColUnits": "الوحدات",
       "edit": "تعديل",
-      "remove": "إزالة"
+      "remove": "إزالة",
+      "loadMore": "تحميل المزيد"
     }
   },
   "fulfill": {
@@ -940,7 +941,9 @@
     },
     "picker": {
       "title": "اختيار متغير",
-      "close": "إغلاق"
+      "close": "إغلاق",
+      "showAllStatuses": "عرض المسودات والمؤرشفة",
+      "loadMore": "تحميل المزيد"
     },
     "badge": "استبدال"
   },
@@ -1338,8 +1341,10 @@
     }
   },
   "productStatus": {
+    "active": "نشط",
     "draft": "مسودة",
-    "archived": "مؤرشف"
+    "archived": "مؤرشف",
+    "filterLabel": "حالة المنتج"
   },
   "common": {
     "loading": "جارٍ التحميل...",

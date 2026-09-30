@@ -120,14 +120,17 @@ public class ShopifySyncService {
     // variant conflict target is (product_id, external_id) — the real UNIQUE constraint from V1.
     // product_id is our internal UUID, resolved from the product upsert RETURNING within the
     // same transaction, so FK is always satisfied before variants are inserted.
+    // shopify_inventory_item_id (V120): taken from the import / webhook when present; a payload
+    // without it never clears a stored value (COALESCE).
     private static final String UPSERT_VARIANT = """
-            INSERT INTO variants (tenant_id, product_id, external_id, sku, title, price, raw)
-            VALUES (?, ?, ?, ?, ?, ?, ?::jsonb)
+            INSERT INTO variants (tenant_id, product_id, external_id, sku, title, price, raw, shopify_inventory_item_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?::jsonb, ?)
             ON CONFLICT (product_id, external_id) DO UPDATE SET
                 sku   = EXCLUDED.sku,
                 title = EXCLUDED.title,
                 price = EXCLUDED.price,
-                raw   = EXCLUDED.raw
+                raw   = EXCLUDED.raw,
+                shopify_inventory_item_id = COALESCE(EXCLUDED.shopify_inventory_item_id, variants.shopify_inventory_item_id)
             """;
 
     // status, on_hold, and hold_reason are intentionally omitted from the SET list:
@@ -520,7 +523,10 @@ public class ShopifySyncService {
                 String vTitle = v.path("title").asText("");
                 String priceStr = v.path("price").asText(null);
                 BigDecimal price = priceStr != null ? new BigDecimal(priceStr) : null;
-                jdbc.update(UPSERT_VARIANT, tenantId, productId, variantGid, sku, vTitle, price, toJson(v));
+                // REST payload: numeric inventory_item_id → the GraphQL GID the rest of the code uses.
+                long itemId = v.path("inventory_item_id").asLong(0);
+                String itemGid = itemId > 0 ? "gid://shopify/InventoryItem/" + itemId : null;
+                jdbc.update(UPSERT_VARIANT, tenantId, productId, variantGid, sku, vTitle, price, toJson(v), itemGid);
             }
             List<UUID> after = jdbc.queryForList("SELECT id FROM variants WHERE product_id = ?", UUID.class, productId);
             List<UUID> added = new java.util.ArrayList<>(after);
@@ -559,7 +565,7 @@ public class ShopifySyncService {
             int variantCount = 0;
             for (ShopifyGateway.Variant v : p.variants()) {
                 jdbc.update(UPSERT_VARIANT,
-                        tenantId, productId, v.gid(), v.sku(), v.title(), v.price(), toJson(v));
+                        tenantId, productId, v.gid(), v.sku(), v.title(), v.price(), toJson(v), v.inventoryItemGid());
                 variantCount++;
             }
             return new int[]{variantCount};

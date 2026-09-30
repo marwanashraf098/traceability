@@ -112,6 +112,14 @@ class CatalogBackfillJobTest {
             .thenReturn(new ShopifyGateway.OrderPage(List.of(), false, null));
         when(shopifyGateway.resolveInventoryItemId(anyString(), anyString(), anyString()))
             .thenAnswer(inv -> "gid://shopify/InventoryItem/for-" + inv.getArgument(2));
+        when(shopifyGateway.resolveInventoryItemIds(anyString(), anyString(), anyList())).thenAnswer(inv -> {
+            List<String> gids = inv.getArgument(2);
+            Map<String, String> out = new HashMap<>();
+            for (String g : gids) out.put(g, "gid://shopify/InventoryItem/for-" + g);
+            return out;
+        });
+        when(shopifyGateway.activateInventoryItems(anyString(), anyString(), anyString(), anyList()))
+            .thenAnswer(inv -> results(inv.getArgument(3), r -> null));
     }
 
     @AfterEach
@@ -140,10 +148,16 @@ class CatalogBackfillJobTest {
         verify(shopifyGateway, never()).fetchProductsPage(eq(off.shop()), anyString(), any());
         verify(shopifyGateway, never()).fetchOrdersPage(anyString(), anyString(), any(), anyString());
 
-        // ALL variants of each store: the 3 imported + A's never-activated webhook variant.
-        assertThat(activationCalls(a)).isEqualTo(4);
-        assertThat(activationCalls(b)).isEqualTo(3);
+        // Every ACTIVE product's variant of each store: the 2 imported active ones + A's
+        // never-activated webhook variant (its product is active). The draft one is never sent.
+        assertThat(activationCalls(a)).isEqualTo(3);
+        assertThat(activationCalls(b)).isEqualTo(2);
         assertThat(activationCalls(off)).isZero();
+        assertThat(activatedItems(a)).containsExactlyInAnyOrder(
+            item(a, "-11"), item(a, "-12"), item(a, "-webhook-only"));
+        assertThat(activatedItems(b)).containsExactlyInAnyOrder(item(b, "-11"), item(b, "-12"));
+        assertThat(activatedItems(a)).doesNotContain(item(a, "-21"));
+        assertThat(activatedItems(b)).doesNotContain(item(b, "-21"));
         assertThat(merchantState(a, b, off)).as("import_status / last_sync_at / status unchanged").isEqualTo(before);
     }
 
@@ -158,6 +172,7 @@ class CatalogBackfillJobTest {
 
         verify(shopifyGateway, never()).fetchProductsPage(anyString(), anyString(), any());
         verify(shopifyGateway, never()).activateInventoryItem(anyString(), anyString(), anyString(), anyString(), anyString());
+        verify(shopifyGateway, never()).activateInventoryItems(anyString(), anyString(), anyString(), anyList());
         assertThat(marker(a)).isEqualTo(first);
     }
 
@@ -187,8 +202,8 @@ class CatalogBackfillJobTest {
     @Test
     void bf4_activationFailure_leavesMarkerNull() {
         Store a = store("bf4-a", "connected");
-        doThrow(new ShopifyException("inventoryActivate failed: boom"))
-            .when(shopifyGateway).activateInventoryItem(eq(a.shop()), anyString(), anyString(), anyString(), anyString());
+        when(shopifyGateway.activateInventoryItems(eq(a.shop()), anyString(), anyString(), anyList()))
+            .thenAnswer(inv -> results(inv.getArgument(3), r -> "inventoryActivate failed: boom"));
 
         assertThatThrownBy(() -> backfill.run()).isInstanceOf(IllegalStateException.class);
         assertThat(marker(a)).isNull();
@@ -197,21 +212,23 @@ class CatalogBackfillJobTest {
     @Test
     void bf6_oneVariantAlwaysRejected_markerSet_jobDoesNotThrow_rejectedIdLogged() {
         Store a = store("bf6-a", "connected");
-        String rejectedGid = "gid://shopify/ProductVariant/" + a.shop() + "-21";
-        doThrow(new ShopifyException("inventoryActivate failed: variant is not tracked"))
-            .when(shopifyGateway).activateInventoryItem(eq(a.shop()), anyString(),
-                eq("gid://shopify/InventoryItem/for-" + rejectedGid), anyString(), anyString());
+        String rejectedGid = "gid://shopify/ProductVariant/" + a.shop() + "-12";
+        when(shopifyGateway.activateInventoryItems(eq(a.shop()), anyString(), anyString(), anyList()))
+            .thenAnswer(inv -> results(inv.getArgument(3), r ->
+                r.inventoryItemGid().equals("gid://shopify/InventoryItem/for-" + rejectedGid)
+                    ? "inventoryActivate failed: variant is not tracked" : null));
         ListAppender<ILoggingEvent> logs = captureLogs();
 
         backfill.run();   // does not throw
 
         assertThat(marker(a)).isNotNull();
-        assertThat(activationCalls(a)).isEqualTo(3);
+        assertThat(activationCalls(a)).isEqualTo(2);
+        assertThat(activatedItems(a)).as("the draft variant is never sent").doesNotContain(item(a, "-21"));
         UUID rejectedId = jdbc.queryForObject("SELECT id FROM variants WHERE external_id = ?", UUID.class, rejectedGid);
         assertThat(logs.list).anySatisfy(e -> {
             assertThat(e.getLevel()).isEqualTo(Level.WARN);
             assertThat(e.getFormattedMessage()).contains(a.id().toString()).contains(rejectedId.toString())
-                .contains("variant is not tracked").contains("1 of 3");
+                .contains("variant is not tracked").contains("1 of 2");
         });
         releaseLogs(logs);
     }
@@ -226,6 +243,7 @@ class CatalogBackfillJobTest {
         assertThat(marker(a)).isNull();
         assertThat(products(a)).as("the catalog import itself ran").hasSize(2);
         verify(shopifyGateway, never()).activateInventoryItem(anyString(), anyString(), anyString(), anyString(), anyString());
+        verify(shopifyGateway, never()).activateInventoryItems(anyString(), anyString(), anyString(), anyList());
     }
 
     private ListAppender<ILoggingEvent> captureLogs() {
@@ -388,10 +406,9 @@ class CatalogBackfillJobTest {
 
         process(a, "products/create", webhookProduct(900, 901, 902));
         assertThat(activationCalls(a)).isEqualTo(2);
-        verify(shopifyGateway).activateInventoryItem(eq(a.shop()), anyString(),
-            eq("gid://shopify/InventoryItem/for-gid://shopify/ProductVariant/901"), anyString(), anyString());
-        verify(shopifyGateway).activateInventoryItem(eq(a.shop()), anyString(),
-            eq("gid://shopify/InventoryItem/for-gid://shopify/ProductVariant/902"), anyString(), anyString());
+        assertThat(activatedItems(a)).containsExactlyInAnyOrder(
+            "gid://shopify/InventoryItem/for-gid://shopify/ProductVariant/901",
+            "gid://shopify/InventoryItem/for-gid://shopify/ProductVariant/902");
 
         clearInvocations(shopifyGateway);
         process(a, "products/create", webhookProduct(900, 901, 902));   // Shopify redelivery
@@ -408,8 +425,8 @@ class CatalogBackfillJobTest {
         process(a, "products/update", webhookProduct(910, 911, 912));
 
         assertThat(activationCalls(a)).isEqualTo(1);
-        verify(shopifyGateway).activateInventoryItem(eq(a.shop()), anyString(),
-            eq("gid://shopify/InventoryItem/for-gid://shopify/ProductVariant/912"), anyString(), anyString());
+        assertThat(activatedItems(a)).containsExactly(
+            "gid://shopify/InventoryItem/for-gid://shopify/ProductVariant/912");
     }
 
     @Test
@@ -418,6 +435,8 @@ class CatalogBackfillJobTest {
         jdbc.update("UPDATE stores SET catalog_backfilled_at = now() WHERE id = ?", a.id());
         doThrow(new ShopifyException("inventoryActivate failed: boom"))
             .when(shopifyGateway).activateInventoryItem(anyString(), anyString(), anyString(), anyString(), anyString());
+        when(shopifyGateway.activateInventoryItems(anyString(), anyString(), anyString(), anyList()))
+            .thenThrow(new ShopifyException("inventoryActivate failed: boom"));
 
         UUID event = process(a, "products/create", webhookProduct(920, 921));
 
@@ -428,7 +447,53 @@ class CatalogBackfillJobTest {
         assertThat(ev.get("process_error")).isNull();
     }
 
+    @Test
+    void wh4_draftProductWebhook_newVariant_zeroActivations() {
+        Store a = store("wh4-a", "connected");
+        jdbc.update("UPDATE stores SET catalog_backfilled_at = now() WHERE id = ?", a.id());
+
+        process(a, "products/create", webhookProduct("draft", 930, 931));
+
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM variants WHERE external_id = ?", Integer.class,
+            "gid://shopify/ProductVariant/931")).as("the variant is stored").isEqualTo(1);
+        assertThat(activationCalls(a)).as("a draft product's new variant is activated lazily, not here").isZero();
+        verify(shopifyGateway, never()).activateInventoryItems(anyString(), anyString(), anyString(), anyList());
+    }
+
+    @Test
+    void wh5_archivedProductWebhook_newVariant_zeroActivations() {
+        Store a = store("wh5-a", "connected");
+        jdbc.update("UPDATE stores SET catalog_backfilled_at = now() WHERE id = ?", a.id());
+
+        process(a, "products/create", webhookProduct("archived", 940, 941));
+
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM variants WHERE external_id = ?", Integer.class,
+            "gid://shopify/ProductVariant/941")).as("the variant is stored").isEqualTo(1);
+        assertThat(activationCalls(a)).isZero();
+        verify(shopifyGateway, never()).activateInventoryItems(anyString(), anyString(), anyString(), anyList());
+    }
+
     // ── helpers ───────────────────────────────────────────────────────────────
+
+    private static List<ShopifyGateway.ActivationResult> results(
+            List<ShopifyGateway.ActivationRequest> reqs,
+            java.util.function.Function<ShopifyGateway.ActivationRequest, String> errorFor) {
+        return reqs.stream().map(r -> new ShopifyGateway.ActivationResult(r.inventoryItemGid(), errorFor.apply(r))).toList();
+    }
+
+    private static String item(Store s, String suffix) {
+        return "gid://shopify/InventoryItem/for-gid://shopify/ProductVariant/" + s.shop() + suffix;
+    }
+
+    /** Every item GID sent to activateInventoryItems for this shop, across all batch calls. */
+    @SuppressWarnings("unchecked")
+    private List<String> activatedItems(Store s) {
+        return Mockito.mockingDetails(shopifyGateway).getInvocations().stream()
+            .filter(i -> i.getMethod().getName().equals("activateInventoryItems") && s.shop().equals(i.getArgument(0)))
+            .flatMap(i -> ((List<ShopifyGateway.ActivationRequest>) i.getArgument(3)).stream())
+            .map(ShopifyGateway.ActivationRequest::inventoryItemGid)
+            .toList();
+    }
 
     private Store store(String name, String status) {
         UUID tenant = UUID.randomUUID(), store = UUID.randomUUID();
@@ -462,9 +527,13 @@ class CatalogBackfillJobTest {
     }
 
     private static ObjectNode webhookProduct(long productId, long... variantIds) {
+        return webhookProduct("active", productId, variantIds);
+    }
+
+    private static ObjectNode webhookProduct(String status, long productId, long... variantIds) {
         ObjectNode p = M.createObjectNode().put("id", productId)
             .put("admin_graphql_api_id", "gid://shopify/Product/" + productId)
-            .put("title", "Webhook product " + productId).put("status", "draft");
+            .put("title", "Webhook product " + productId).put("status", status);
         ArrayNode vs = p.putArray("variants");
         for (long id : variantIds) {
             vs.addObject().put("id", id).put("admin_graphql_api_id", "gid://shopify/ProductVariant/" + id)
@@ -482,10 +551,9 @@ class CatalogBackfillJobTest {
         return event;
     }
 
+    /** Variant activations sent for this shop — items across every activateInventoryItems batch. */
     private int activationCalls(Store s) {
-        return (int) Mockito.mockingDetails(shopifyGateway).getInvocations().stream()
-            .filter(i -> i.getMethod().getName().equals("activateInventoryItem") && s.shop().equals(i.getArgument(0)))
-            .count();
+        return activatedItems(s).size();
     }
 
     private Timestamp marker(Store s) {

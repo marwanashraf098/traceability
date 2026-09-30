@@ -426,11 +426,13 @@ public class ShopifyWebhookProcessorJob {
             return;
         }
         List<UUID> newVariants = syncService.ingestProductWebhook(storeId, tenantId, payload);
-        // A variant added in Shopify after connect is otherwise never activated at the Traced
-        // location (only the connect import activates), so its first receiving increment would
-        // fail. Activate just the newly inserted ones — after the upsert has committed; a failure
-        // is logged and never fails the product upsert.
-        if (!newVariants.isEmpty()) {
+        // A variant added in Shopify after connect is activated at the Traced location right away
+        // when its product is ACTIVE (the same policy as the connect import) — after the upsert has
+        // committed; a failure is logged and never fails the product upsert. A draft / archived
+        // product's new variants are activated lazily, before their first increment
+        // (ShopifyInventoryService.applyIncrementAdjustment).
+        boolean productActive = "active".equals(payload.path("status").asText("active").toLowerCase());
+        if (!newVariants.isEmpty() && productActive) {
             try {
                 ShopifyCatalogActivationService.ActivationOutcome outcome = activationService.activateVariants(newVariants);
                 if (outcome.failed() > 0) {

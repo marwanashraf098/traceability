@@ -576,7 +576,8 @@
       "summaryColVariants": "Selected variants",
       "summaryColUnits": "Units",
       "edit": "Edit",
-      "remove": "Remove"
+      "remove": "Remove",
+      "loadMore": "Load more"
     }
   },
   "fulfill": {
@@ -941,7 +942,9 @@
     },
     "picker": {
       "title": "Select a variant",
-      "close": "Close"
+      "close": "Close",
+      "showAllStatuses": "Show draft & archived",
+      "loadMore": "Load more"
     },
     "badge": "Exchange"
   },
@@ -1339,8 +1342,10 @@
     }
   },
   "productStatus": {
+    "active": "Active",
     "draft": "Draft",
-    "archived": "Archived"
+    "archived": "Archived",
+    "filterLabel": "Product status"
   },
   "common": {
     "loading": "Loading...",

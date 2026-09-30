@@ -138,7 +138,20 @@ class ShopifyInventoryReconcileTest {
         }
         when(shopifyGateway.resolveInventoryItemId(eq(SHOP_DOMAIN), eq("test-token"), eq(externalId)))
             .thenReturn(itemGid);
+        itemByVariant.put(externalId, itemGid);
+        stubBatchResolve();
         return variantId;
+    }
+
+    /** Batch resolve (nodes(ids:)): answers every requested variant GID registered above. */
+    private final java.util.Map<String, String> itemByVariant = new java.util.HashMap<>();
+
+    private void stubBatchResolve() {
+        when(shopifyGateway.resolveInventoryItemIds(eq(SHOP_DOMAIN), eq("test-token"), anyList())).thenAnswer(inv -> {
+            List<String> gids = inv.getArgument(2);
+            return gids.stream().filter(itemByVariant::containsKey)
+                .collect(java.util.stream.Collectors.toMap(g -> g, itemByVariant::get));
+        });
     }
 
     // ── pc1: reconcile is read-only ──────────────────────────────────────────
@@ -368,6 +381,7 @@ class ShopifyInventoryReconcileTest {
         reset(shopifyGateway);
         when(shopifyGateway.resolveInventoryItemId(eq(SHOP_DOMAIN), eq("test-token"), eq("gid://shopify/ProductVariant/pc6")))
             .thenReturn("gid://shopify/InventoryItem/pc6");
+        stubBatchResolve();
         when(shopifyGateway.fetchAvailableQuantities(eq(SHOP_DOMAIN), eq("test-token"), eq(TRACED_GID), anyList()))
             .thenReturn(List.of());
         // adjustInventoryQuantities left unstubbed on the reset mock -> succeeds (no-op) by default.

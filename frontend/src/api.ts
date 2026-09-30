@@ -373,10 +373,29 @@ export interface CatalogProduct {
 
 export interface CatalogResponse {
   products: CatalogProduct[]
+  nextCursor?: string | null
 }
 
-export function getCatalog() {
-  return request<CatalogResponse>('/catalog')
+/**
+ * GET /catalog — server-side filters: q (title or SKU), status (omit = every status),
+ * variantIds (the products holding those variants). With limit, one keyset page
+ * (title, id) and nextCursor continues it; without, the whole match set.
+ */
+export function getCatalog(params: {
+  q?: string
+  status?: string[]
+  variantIds?: string[]
+  cursor?: string | null
+  limit?: number
+} = {}) {
+  const q = new URLSearchParams()
+  if (params.q)                  q.set('q', params.q)
+  if (params.status?.length)     q.set('status', params.status.join(','))
+  if (params.variantIds?.length) q.set('variantIds', params.variantIds.join(','))
+  if (params.cursor)             q.set('cursor', params.cursor)
+  if (params.limit != null)      q.set('limit', String(params.limit))
+  const qs = q.toString()
+  return request<CatalogResponse>(qs ? `/catalog?${qs}` : '/catalog')
 }
 
 export interface ShopifyStore {
@@ -1091,6 +1110,7 @@ export function getInventoryStock(params: {
   q?: string
   locationId?: string
   lowStockOnly?: boolean
+  status?: string[]
   cursor?: string
   size?: number
 }) {
@@ -1098,6 +1118,7 @@ export function getInventoryStock(params: {
   if (params.q)            q.set('q', params.q)
   if (params.locationId)   q.set('locationId', params.locationId)
   if (params.lowStockOnly) q.set('lowStockOnly', 'true')
+  if (params.status?.length) q.set('status', params.status.join(','))
   if (params.cursor)       q.set('cursor', params.cursor)
   if (params.size != null) q.set('size', String(params.size))
   return request<InventoryStockPage>(`/inventory/stock?${q}`)
