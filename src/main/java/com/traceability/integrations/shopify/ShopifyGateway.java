@@ -261,6 +261,17 @@ public interface ShopifyGateway {
     List<ActivationResult> activateInventoryItems(String shopDomain, String token, String locationGid,
                                                   List<ActivationRequest> requests);
 
+    /**
+     * Failed-increment recovery (Part D) — an IDENTICAL resend of an adjust whose first attempt was
+     * ambiguous: same positive delta, same idempotency key, and the SAME changeFromQuantity that was
+     * sent the first time (no fresh read), so Shopify either replays the original result (it applied)
+     * or processes it once (it never arrived). Positive delta only, validated before any network
+     * call; one HTTP attempt path, same failure classification as adjustInventoryQuantities.
+     */
+    void resendInventoryAdjustment(String shopDomain, String token, String inventoryItemGid,
+                                   String locationGid, int positiveDelta, String reason,
+                                   String idempotencyKey, Integer changeFromQuantity);
+
     int MAX_INPUT_ARRAY = 250;
     int ACTIVATION_BATCH_SIZE = 25;
     int ACTIVATION_CONCURRENCY = 2;

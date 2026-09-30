@@ -69,6 +69,7 @@ const TYPE_LABELS: Record<string, { en: string; ar: string }> = {
   return_link_ambiguous:   { en: 'Return · Which Request?',   ar: 'مرتجع · أي طلب؟' },
   refund_pending_overdue:  { en: 'Refund Overdue',            ar: 'استرداد متأخر' },
   return_items_overdue:    { en: 'Return Items Late',         ar: 'منتجات مرتجعة متأخرة' },
+  inventory_increment_sync_failed: { en: 'Stock Not In Shopify', ar: 'مخزون لم يصل إلى Shopify' },
 }
 
 const ALL_TYPES      = Object.keys(TYPE_LABELS)
