@@ -149,13 +149,30 @@ public class BostaOrderReconcileJob {
         String stripped = (num != null && num.startsWith("#")) ? num.substring(1) : num;
         String hashed   = (stripped != null) ? "#" + stripped : null;
 
+        // Candidate rows (2026-09-30 hardening):
+        //   - forward-linkable type only (SEND / RETURN TO ORIGIN) — a CRP or exchange row
+        //     is never turned into a forward leg here;
+        //   - never a row the matcher already found ambiguous (AMBIGUOUS_MULTI /
+        //     COD_ONLY_AMBIGUOUS) — this per-order lookup must not break the tie;
+        //   - and the row's reference must match exactly ONE order in the tenant, the same
+        //     rule as ShipmentLinkService.matchByBusinessReference (as-is, '#'-stripped,
+        //     '#'-prefixed, or external_id). Two stores with the same order number → skipped.
         Long unlinkedId = tx.execute(txs -> jdbc.query(
-            "SELECT id FROM unlinked_bosta_deliveries " +
-            "WHERE tenant_id = NULLIF(current_setting('app.current_tenant', true), '')::uuid " +
-            "  AND resolved = false " +
-            "  AND (business_reference = ? OR business_reference = ? " +
-            "    OR business_reference = ? OR business_reference = ?) " +
-            "ORDER BY first_seen_at ASC LIMIT 1",
+            "SELECT u.id FROM unlinked_bosta_deliveries u " +
+            "WHERE u.tenant_id = NULLIF(current_setting('app.current_tenant', true), '')::uuid " +
+            "  AND u.resolved = false " +
+            "  AND (u.business_reference = ? OR u.business_reference = ? " +
+            "    OR u.business_reference = ? OR u.business_reference = ?) " +
+            "  AND " + ShipmentLinkService.forwardLinkableTypeSql("u") + " " +
+            "  AND COALESCE(u.match_reason, '') NOT IN ('" + ShipmentLinkService.REASON_AMBIGUOUS_MULTI +
+            "', '" + ShipmentLinkService.REASON_COD_ONLY + "') " +
+            "  AND (SELECT COUNT(*) FROM orders o2 " +
+            "       WHERE o2.tenant_id = u.tenant_id " +
+            "         AND (o2.number = u.business_reference " +
+            "           OR o2.number = regexp_replace(u.business_reference, '^#', '') " +
+            "           OR o2.number = '#' || regexp_replace(u.business_reference, '^#', '') " +
+            "           OR o2.external_id = u.business_reference)) = 1 " +
+            "ORDER BY u.first_seen_at ASC LIMIT 1",
             rs -> rs.next() ? rs.getLong("id") : null,
             num, stripped, hashed, order.externalId()));
 

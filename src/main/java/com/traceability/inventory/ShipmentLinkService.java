@@ -50,6 +50,29 @@ public class ShipmentLinkService {
     public static final String REASON_AMBIGUOUS_MULTI = "AMBIGUOUS_MULTI";
     public static final String REASON_COD_ONLY        = "COD_ONLY_AMBIGUOUS";
 
+    /**
+     * Bosta delivery types (raw.type.code) the order-side path — manualLink() and
+     * BostaOrderReconcileJob — may turn into an order's FORWARD leg: 10 SEND, and 20 RETURN
+     * TO ORIGIN (a SEND that Bosta re-labels on its way back, same tracking number; 113 of
+     * the prod forward legs on 2026-09-30). Everything else is refused there: 25 CRP stays on
+     * tryMatchDelivery's return-leg path, 30 EXCHANGE is never linked here, and a row with no
+     * stored type is refused. The delivery-side path (tryMatchDelivery) is not gated by this.
+     */
+    public static final Set<Integer> FORWARD_LINKABLE_TYPE_CODES = Set.of(10, 20);
+
+    /** SQL form of {@link #FORWARD_LINKABLE_TYPE_CODES} over an unlinked_bosta_deliveries alias. */
+    public static String forwardLinkableTypeSql(String alias) {
+        return "(" + alias + ".raw -> 'type' ->> 'code') IN (" +
+            FORWARD_LINKABLE_TYPE_CODES.stream().sorted().map(c -> "'" + c + "'")
+                .collect(java.util.stream.Collectors.joining(",")) + ")";
+    }
+
+    static boolean isForwardLinkable(JsonNode raw) {
+        if (raw == null) return false;
+        JsonNode code = raw.path("type").path("code");
+        return code.canConvertToInt() && FORWARD_LINKABLE_TYPE_CODES.contains(code.asInt());
+    }
+
     private final JdbcTemplate         jdbc;
     private final InventoryLedger      ledger;
     private final BostaStateMapper     stateMapper;
@@ -398,8 +421,20 @@ public class ShipmentLinkService {
         }
 
         String trackingNumber = (String) row[0];
-        BostaStateMapper.MappedState mapped = stateMapper.map((Integer) row[1], (String) row[2]);
         String rawJson = (String) row[3];
+
+        // Type allow-list, checked before any write: only a SEND (or a SEND Bosta has
+        // re-labelled RETURN TO ORIGIN) may become this order's forward leg.
+        JsonNode rawNode = null;
+        if (rawJson != null) {
+            try { rawNode = mapper.readTree(rawJson); }
+            catch (Exception e) { rawNode = null; }
+        }
+        if (!isForwardLinkable(rawNode)) {
+            throw new UnlinkedDeliveryTypeException(trackingNumber);
+        }
+
+        BostaStateMapper.MappedState mapped = stateMapper.map((Integer) row[1], (String) row[2]);
 
         // Swapped-AWB check applies to manual link too
         handleSwappedAwbCheck(trackingNumber, tenantId, orderId, null);
@@ -432,13 +467,10 @@ public class ShipmentLinkService {
         // Populate PII from the stored raw payload (receiver.fullName / receiver.phone /
         // dropOffAddress). Uses the same COALESCE-on-null logic as tryMatchDelivery's
         // populateConsigneePii() path — fill-only-if-null, GDPR guard included.
-        if (rawJson != null) {
-            try {
-                JsonNode rawNode = mapper.readTree(rawJson);
-                populateConsigneePiiFromRaw(orderId, tenantId, rawNode);
-            } catch (Exception e) {
-                log.warn("manualLink: could not parse raw for PII backfill on order {}: {}", orderId, e.getMessage());
-            }
+        try {
+            populateConsigneePiiFromRaw(orderId, tenantId, rawNode);
+        } catch (Exception e) {
+            log.warn("manualLink: could not backfill PII from raw on order {}: {}", orderId, e.getMessage());
         }
 
         jdbc.update(
