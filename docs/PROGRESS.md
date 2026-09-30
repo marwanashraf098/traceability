@@ -4,6 +4,31 @@
 
 ## Current state
 
+**Activation perf + seed fix + catalog filters (2026-09-30, branch `feature/activation-and-catalog-perf`, 4 commits, not merged, not deployed).**
+- **A (dcd0203 + 422516a):** V120 `variants.shopify_inventory_item_id` (column only). Import (both product queries) and the
+  products webhook (REST `inventory_item_id`) store it; `InventoryItemIdService` (not a bean — built from the caller's
+  JdbcTemplate) reads the column first, resolves + writes back on a miss — used by increments, stock-take push, seed,
+  activation. Batch activation: `ShopifyGateway.resolveInventoryItemIds` (nodes ≤250) + `activateInventoryItems`
+  (25 aliased `inventoryActivate`, ≤2 in flight, per-alias errors, never a quantity arg, batch reserves its own cost in
+  the pacing, a batch that exhausts THROTTLED retries is resent ≤3×). **Policy:** connect / backfill / manual activation
+  = ACTIVE products only; draft/archived activated lazily in `applyIncrementAdjustment` (activate → adjust; activation
+  fails → claim 'failed', adjust not sent); webhook activates new variants only for an active product.
+- **B:** seed candidates = Traced on-hand > 0; item ids resolved BEFORE the advisory lock; `fetchAvailableQuantities`
+  chunked to 250 (the old single nodes() call with every id broke for >250 variants). The Shopify "available" read stays
+  under the lock (double-add guard). Writes proven identical by `SeedGoldenTest` (recorded on the old code). `noop` now
+  counts every non-candidate variant.
+- **C (5da8734, cherry-picks onto main alone):** `/catalog` one variants query per page (N+1 gone), optional q / status /
+  variantIds / cursor+limit, keyset **title ASC, id ASC** (spec said created_at DESC — products have no created_at and
+  no migration was approved), no params = old whole-catalog response + `nextCursor`. `/inventory/stock` optional status.
+  Shared `ProductStatusFilter` (ui.tsx). Receiving grid + Stock tab default Active + Draft; exchange picker Active only +
+  "Show draft & archived".
+- Approved test edits: re-stubs in ShopifyCatalogActivationTest, CatalogBackfillJobTest (+ policy updates bf1/bf6/wh1/wh2,
+  new wh4/wh5), ShopifyImportTest, ShopifyInventoryReconcileTest; MigrationSmokeTest 119, NotTracedBackfillTest 64.
+- Simulated Shopify (260 ms latency, bucket 1000 / 100 pts/s): 1,000 variants 101 s activation (+13 s resolve when the
+  column is empty), 6,121 in 613 s (+116 s resolve); old serial path 0.53 s/variant (≈ 9 min / 1,000, ≈ 54 min / 6,121).
+- **Next (Part D, diagnosed only):** automatic retry of failed increment claims — see the report of 2026-09-30.
+- **Gotcha:** `mvn test` runs npm install + vite build unless `-Dskip.frontend=true`.
+
 **Import every Shopify product status + one-time catalog backfill (2026-09-29, merged to main as 84a7911, not deployed).** Zero-variant store in the backfill: `total() > 0` guard → marker set, job does not throw (checked by a throwaway test; guard removed → it errors).
 - **Import:** `query: "status:active"` removed from `ShopifyHttpGateway.PRODUCTS_QUERY` — ACTIVE, DRAFT, ARCHIVED and UNLISTED
   (in the 2026-04 `ProductStatus` enum) all import, stored lowercase in `products.status` (free text, no CHECK, no migration).
