@@ -277,6 +277,17 @@ public class ShopifyInventoryReconcileService {
                                 throw new ShopifyException("Could not resolve the Shopify inventoryItem for variant "
                                     + row.variantId() + " — it will be seeded on the next run");
                             }
+                            // Connect activates ACTIVE products' variants only — a draft/archived
+                            // candidate may have no level at the Traced location yet. Same lazy
+                            // activation as an increment (no quantity, "already active" tolerated,
+                            // same key as the catalog activation); if it fails, no adjust is sent.
+                            try {
+                                shopify.activateInventoryItem(ctx.shopDomain(), ctx.token(), itemGid, ctx.tracedGid(),
+                                    ShopifyCatalogActivationService.activationKey(tenantId, row.variantId(), ctx.tracedGid()));
+                            } catch (Exception e) {
+                                throw new ShopifyException("Activation at the Traced location failed (adjust not sent): "
+                                    + (e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName()));
+                            }
                             String idempotencyKey = ShopifyGateway.idempotencyKey(tenantId, "initial_seed",
                                 row.variantId().toString(), row.variantId(), ctx.tracedLocationId());
                             shopify.adjustInventoryQuantities(ctx.shopDomain(), ctx.token(), itemGid,

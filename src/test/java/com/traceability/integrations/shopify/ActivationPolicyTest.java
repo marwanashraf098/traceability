@@ -42,6 +42,9 @@ import static org.mockito.Mockito.*;
  *   ap5 — item id missing → resolved exactly once and written back; the next increment for the
  *         same variant reads it from the column.
  *   ap6 — the products webhook stores the REST payload's inventory_item_id as the GID.
+ *   ap7 — seed: a DRAFT variant with Traced stock (never activated at connect) is activated at the
+ *         Traced location right before its seed adjust, in that order.
+ *   ap8 — seed: that activation fails → no adjust, the initial_seed row is 'failed'.
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.NONE)
 @Testcontainers
@@ -74,6 +77,7 @@ class ActivationPolicyTest {
     @Autowired ShopifyImportJob importJob;
     @Autowired ShopifyInventoryService inventoryService;
     @Autowired ShopifyWebhookProcessorJob webhookProcessor;
+    @Autowired com.traceability.inventory.ShopifyInventoryReconcileService seedService;
     @MockBean ShopifyGateway shopifyGateway;
     @MockBean ShopifyTokenProvider tokenProvider;
     @MockBean ShopifyLocationGateway shopifyLocations;
@@ -198,6 +202,51 @@ class ActivationPolicyTest {
 
         assertThat(jdbc.queryForObject("SELECT shopify_inventory_item_id FROM variants WHERE tenant_id = ? AND external_id = ?",
             String.class, s.tenant(), "gid://shopify/ProductVariant/778")).isEqualTo("gid://shopify/InventoryItem/4242");
+    }
+
+    @Test
+    void ap7_seed_draftCandidate_activatedBeforeItsAdjust() {
+        Store s = store("ap7");
+        UUID variant = variantRow(s, "draft", "ap7-v", "gid://shopify/InventoryItem/ap7");
+        piece(s, variant, "ap7-1"); piece(s, variant, "ap7-2");
+
+        TenantContext.set(s.tenant());
+        var result = seedService.apply(null);
+        TenantContext.clear();
+
+        assertThat(result.seeded()).isEqualTo(1);
+        InOrder order = inOrder(shopifyGateway);
+        order.verify(shopifyGateway).activateInventoryItem(eq(s.shop()), eq("tok"), eq("gid://shopify/InventoryItem/ap7"),
+            eq(s.tracedGid()), eq(ShopifyCatalogActivationService.activationKey(s.tenant(), variant, s.tracedGid())));
+        order.verify(shopifyGateway).adjustInventoryQuantities(eq(s.shop()), eq("tok"), eq("gid://shopify/InventoryItem/ap7"),
+            eq(s.tracedGid()), eq(2), anyString(), anyString());
+    }
+
+    @Test
+    void ap8_seed_activationFails_noAdjust_rowFailed() {
+        Store s = store("ap8");
+        UUID variant = variantRow(s, "archived", "ap8-v", "gid://shopify/InventoryItem/ap8");
+        piece(s, variant, "ap8-1");
+        doThrow(new ShopifyException("inventoryActivate failed: Inventory item does not exist"))
+            .when(shopifyGateway).activateInventoryItem(anyString(), anyString(), anyString(), anyString(), anyString());
+
+        TenantContext.set(s.tenant());
+        var result = seedService.apply(null);
+        TenantContext.clear();
+
+        assertThat(result.seeded()).isZero();
+        assertThat(result.failed()).isEqualTo(1);
+        verify(shopifyGateway, never()).adjustInventoryQuantities(any(), any(), any(), any(), anyInt(), any(), any());
+        assertThat(jdbc.queryForObject("SELECT status || '|' || error FROM shopify_inventory_adjustments " +
+            "WHERE trigger_type = 'initial_seed' AND variant_id = ?", String.class, variant))
+            .startsWith("failed|").contains("adjust not sent");
+    }
+
+    private void piece(Store s, UUID variant, String key) {
+        String id = String.format("01AP%022d", Math.abs((long) (s.shop() + key).hashCode()));
+        jdbc.update("INSERT INTO pieces (id, tenant_id, variant_id, status, barcode, short_code, current_location_id) " +
+            "VALUES (?, ?, ?, 'available'::piece_status, ?, ?, ?)",
+            id, s.tenant(), variant, "AP-" + id, "A" + id.substring(id.length() - 6), s.location());
     }
 
     // ── helpers ───────────────────────────────────────────────────────────────
