@@ -4,6 +4,46 @@
 
 ## Current state
 
+**Bosta late-booking linking — Step 0 diagnosis + Step 1 hardening (2026-09-30, branch `fix/bosta-linking-hardening`
+off main 1447d64, not merged, not deployed).**
+- **Step 0 (read-only, prod SELECTs):** the suspected "late booking is abandoned" gap does NOT exist. Delivery-side
+  matching (`ShipmentLinkService.matchByBusinessReference`) never filters on `bosta_link_status`, so a SEND booked hours
+  after the order still links on first sight (discovery poll / webhook / backfill → `tryMatchDelivery`) and
+  `clearReconcileFlag` resets the order to NULL / 0 attempts. Proof: BROEK BRK-44803…44808-EG linked 1.5–2.5 h after
+  placement (att 0, last_check NULL). "Zero orders linked after 10 attempts" was an artefact of that reset.
+  `BostaOrderReconcileJob` makes NO Bosta calls — it only searches local `unlinked_bosta_deliveries`; the ~48 min =
+  10 ticks of `*/5`. BROEK's 15 open SEND rows are pre-connect orders (BRK-44742…44802, before the FR-18 cutoff);
+  BROEK has never received a Bosta webhook (discovery poll only). Jumi's open row 5540 is a type-30 EXCHANGE_MULTI_ITEM
+  on an order linked since 09-04 (exchange lane, out of scope); Jumi's 87 not_created are the June–July backlog.
+- **Step 1 (this branch):**
+  - Order-side type allow-list `ShipmentLinkService.FORWARD_LINKABLE_TYPE_CODES = {10 SEND, 20 RETURN TO ORIGIN}`
+    keyed on the stored `raw.type.code` (prod 2026-09-30: forward legs 245×10, 113×20 = SENDs Bosta re-labels on the way
+    back, 5×30 all internal exchange orders, 16 no raw). Reconcile only considers allow-listed rows;
+    `manualLink()` (reconcile AND the owner/manager `POST /shipments/unlinked/{id}/link`) refuses anything else — null /
+    missing type included — BEFORE any write with `UnlinkedDeliveryTypeException` (422
+    `UNLINKED_DELIVERY_TYPE_NOT_LINKABLE`, EN/AR body). No UI calls that endpoint today. `tryMatchDelivery` unchanged.
+  - Reconcile never breaks a tie: it links a row only when the row's reference matches exactly ONE order in the tenant
+    at reconcile time (same variants as matchByBusinessReference). Was RED: two stores with the same order number →
+    `recordUnlinked` cleared BOTH orders' flag and reconcile linked the oldest.
+  - **Decision (Marawan, 2026-09-30): `match_reason` is NOT consulted by reconcile** (a first cut skipped
+    AMBIGUOUS_MULTI / COD_ONLY_AMBIGUOUS rows; dropped). Those reasons can come from the phone+COD fallback, which only
+    runs when the reference matched nothing at arrival — skipping them would strand a delivery that arrived before its
+    order was ingested. The exactly-one-order check alone covers every ambiguity case (h3, h3b); h3c proves a
+    COD_ONLY_AMBIGUOUS row links once its order arrives (RED with the reason clause restored).
+  - Double-link (second SEND for an order with an active forward leg) was already GREEN — the V104 conflict is caught
+    (`ShipmentLinkService` tryMatchDelivery createOrFindShipment catch), the aborted transaction's COMMIT is a silent
+    server ROLLBACK under pgjdbc 42.7.4 defaults, and only reads preceded the INSERT in that tx. Locked in by a test.
+  - Tests: `BostaLinkingHardeningTest` h1–h6 (+h3b, h3c, h4b). No migration.
+- **Gotcha:** the order-side allow-list keys on `raw.type.code`; a hand-inserted unlinked row with NULL raw is refused
+  by reconcile/manualLink. Any test fixture that builds an unlinked row for reconcile/manualLink must give it a `raw`
+  with `type.code`. Approved fixture fix (no assertion changes) applied to the 8 tests that built raw NULL / `{}`:
+  BostaOrderReconcileTest r3/r4/r7 (r7 merged into its existing raw), NotCreatedFlagRecoveryTest nc2,
+  UnlinkedResolveTest ul2, TransferModeBGuardTest manualLink_outOnTransferPiece…, Day11Test d_unmatchedDelivery…
+  (merged into the mocked raw), NotTracedDetectorTest e_manualLink_bornTerminal….
+- **Suite (branch head):** 1,809 run, 2 failures — only the known ShopifyMagicLinkTest + ExchangeBackfillTest.
+- **Not done (out of scope):** not_created badge semantics, the 10-attempt window, reconcile LIMIT/ordering, row 5540,
+  Jumi backlog, a `bosta_link_flagged_at` column, BROEK webhook setup.
+
 **Failed-increment recovery — Part D (2026-09-30, branch `feature/increment-recovery` off main 8b31c06, not merged, not deployed).**
 - V121 claim-row columns: `failure_class` (never_sent / rejected / ambiguous), `change_from_quantity` (baseline SENT),
   `sent_idempotency_key` + `sent_key_first_at`, `attempt_count`, `first/last/next_attempt_at`, `legacy`. Every increment

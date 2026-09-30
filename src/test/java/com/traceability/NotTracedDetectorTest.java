@@ -250,8 +250,8 @@ class NotTracedDetectorTest {
         Long unlinkedId = jdbc.queryForObject(
             "INSERT INTO unlinked_bosta_deliveries " +
             "  (tenant_id, tracking_number, business_reference, bosta_state_code, " +
-            "   bosta_order_type, match_reason, resolved) " +
-            "VALUES (?, ?, ?, 45, 'SEND', 'NO_MATCH', false) RETURNING id",
+            "   bosta_order_type, match_reason, resolved, raw) " +
+            "VALUES (?, ?, ?, 45, 'SEND', 'NO_MATCH', false, '{\"type\":{\"code\":10,\"value\":\"Send\"}}'::jsonb) RETURNING id",
             Long.class, tenantId, tracking, orderNum);
 
         TenantContext.runAs(tenantId, () ->

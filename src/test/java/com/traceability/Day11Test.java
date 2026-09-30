@@ -242,6 +242,7 @@ class Day11Test {
 
         // Mock: delivery has a businessReference that matches NO order
         ObjectNode raw = mapper.createObjectNode();
+        raw.putObject("type").put("code", 10).put("value", "Send");
         when(bostaGateway.fetchDelivery(eq("d11-api-key"), eq(tracking)))
             .thenReturn(new BostaDelivery(tracking, 41, "SEND", 0, "UNKNOWN-999", null, raw));
 
