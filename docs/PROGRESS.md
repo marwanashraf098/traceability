@@ -4,6 +4,33 @@
 
 ## Current state
 
+**Failed-increment recovery — Part D (2026-09-30, branch `feature/increment-recovery` off main 8b31c06, not merged, not deployed).**
+- V121 claim-row columns: `failure_class` (never_sent / rejected / ambiguous), `change_from_quantity` (baseline SENT),
+  `sent_idempotency_key` + `sent_key_first_at`, `attempt_count`, `first/last/next_attempt_at`, `legacy`. Every increment
+  claim failed at deploy time → `legacy = true` (prod at 2026-09-30: The Snouts 32 claims / 1,040 units, Jumi 22 / 119,
+  two test tenants) — never auto-retried.
+- Gateway: `ShopifyAdjustFailedException` (class + sent baseline); `resendInventoryAdjustment` = identical resend (same key,
+  stored baseline, no fresh read, positive only). Rules in `IncrementRecoveryRules` (single source, like ReturnCaseRules).
+- `IncrementRetryJob` every 10 min → `ShopifyInventoryService.retryDueIncrements()`: existing claim path, original delta,
+  Traced location only. never_sent → same key; rejected → claim key + ":attempt:n" (Shopify docs are unclear whether a
+  failed response is cached under the key — assumed yes); ambiguous → identical resend while the sent key is < 20 h old,
+  then no retry. Backoff 10 min / 1 h / 6 h / 24 h, max 5 attempts. A setup problem (no store / missing
+  read_products+write_inventory / Traced location not linked) blocks the pass, no attempt spent.
+- `inventory_increment_sync_failed` (HIGH): setup (names the fix + blocked count; gone once fixed and retried), gave_up,
+  legacy ("N units across M variants received in Traced never reached Shopify (since …). Reconcile manually — do not
+  replay; the seed pushes current stock.", variant list). Manual repush
+  `POST /exceptions/increment-sync/repush {triggerType, triggerId, variantId, confirmOld}` — 409 CONFIRMATION_REQUIRED
+  past 24 h; **legacy claims are never repushable (409 LEGACY_NOT_REPUSHABLE)** — cleared only by resolving the exception
+  (API only, no UI yet — same as the void/hold repush).
+- **Snouts / Jumi (Part E, read-only):** neither token has write_locations; Snouts has read_locations (can link a location
+  the merchant names exactly "Traced Main Warehouse"), Jumi has no inventory/location scope at all. Relink = ShopifyImportJob
+  (Sync / reconnect) → activation → seed. The seed would push +949 (Snouts, 20 variants) / +105 (Jumi, 4) at a NEW
+  location — confirm the merchants' Shopify counts first (their existing location likely already counts those units).
+- **CatalogBackfillJob:** catalog imported + activation failed for a SETUP reason (Traced location not linked, or every
+  variant rejected while the token lacks inventory scope) → marker set, one WARN naming the fix, store not failed (was: the
+  7 unlinked stores retried forever). Token/reauth failure (import fails) and every-variant-rejected with the setup in place
+  stay failures.
+
 **Activation perf + seed fix + catalog filters (2026-09-30, `feature/activation-and-catalog-perf` merged to main, not deployed).**
 - **A (dcd0203 + 422516a):** V120 `variants.shopify_inventory_item_id` (column only). Import (both product queries) and the
   products webhook (REST `inventory_item_id`) store it; `InventoryItemIdService` (not a bean — built from the caller's

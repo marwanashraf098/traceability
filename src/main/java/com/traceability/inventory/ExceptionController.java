@@ -8,6 +8,7 @@ import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 
 /**
  * Exceptions center (FR-15.3).
@@ -74,6 +75,17 @@ public class ExceptionController {
     public record ResolveRequest(String exceptionType, String subjectKey, String note) {}
 
     public record RepushRequest(String triggerType, String triggerId) {}
+
+    public record IncrementRepushRequest(String triggerType, String triggerId, UUID variantId, boolean confirmOld) {}
+
+    /** Manual repush of a failed increment (receiving_session / return_inspection / hold_exit),
+     *  legacy included. 409 CONFIRMATION_REQUIRED for a claim older than 24 h until confirmOld. */
+    @PostMapping("/increment-sync/repush")
+    @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void repushIncrementSync(@RequestBody IncrementRepushRequest req) {
+        shopifyInventory.repushFailedIncrement(req.triggerType(), req.triggerId(), req.variantId(), req.confirmOld());
+    }
 
     @PostMapping("/void-hold-sync/repush")
     @PreAuthorize("hasAnyRole('OWNER','MANAGER')")

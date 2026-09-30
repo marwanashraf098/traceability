@@ -2,6 +2,7 @@ package com.traceability.inventory;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.traceability.integrations.shopify.ShopifyAdjustFailedException;
 import com.traceability.integrations.shopify.ShopifyException;
 import com.traceability.integrations.shopify.ShopifyGateway;
 import com.traceability.integrations.shopify.ShopifyTokenProvider;
@@ -20,6 +21,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.time.Instant;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
@@ -703,11 +705,25 @@ public class ShopifyInventoryService {
             return;
         }
 
+        attemptIncrement(tenantId, variantId, locationId, delta, triggerType, triggerId, reason,
+            ShopifyGateway.idempotencyKey(tenantId, triggerType, triggerId, variantId, locationId), null, false);
+    }
+
+    /**
+     * One increment attempt after a successful claim: preconditions, lazy activation, the adjust —
+     * every outcome recorded with its failure class (Part D). keyToSend is the idempotency key for
+     * this attempt; resendBaseline is used (identical resend) when resend is true, otherwise the
+     * gateway reads a fresh baseline.
+     */
+    private void attemptIncrement(UUID tenantId, UUID variantId, UUID locationId, int delta,
+                                  String triggerType, String triggerId, String reason,
+                                  String keyToSend, Integer resendBaseline, boolean resend) {
         Preconditions p = resolvePreconditions(tenantId, variantId, locationId, triggerType, triggerId);
 
         if (p.error() != null) {
-            markResult(tenantId, triggerType, triggerId, variantId, locationId,
-                       p.shopifyInventoryItemId(), p.shopifyLocationId(), "failed", p.error());
+            markIncrementResult(tenantId, triggerType, triggerId, variantId, locationId,
+                p.shopifyInventoryItemId(), p.shopifyLocationId(), "failed", p.error(),
+                ShopifyAdjustFailedException.FailureClass.NEVER_SENT, null, null);
             return;
         }
 
@@ -725,29 +741,212 @@ public class ShopifyInventoryService {
             String msg = e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName();
             log.warn("Shopify inventory: activation before increment failed — adjust not sent " +
                      "trigger={} triggerId={} variant={} error={}", triggerType, triggerId, variantId, msg);
-            markResult(tenantId, triggerType, triggerId, variantId, locationId,
-                       p.shopifyInventoryItemId(), p.shopifyLocationId(), "failed",
-                       "Activation at the Traced location failed (adjust not sent): " + msg);
+            markIncrementResult(tenantId, triggerType, triggerId, variantId, locationId,
+                p.shopifyInventoryItemId(), p.shopifyLocationId(), "failed",
+                "Activation at the Traced location failed (adjust not sent): " + msg,
+                ShopifyAdjustFailedException.FailureClass.NEVER_SENT, null, null);
             return;
         }
 
-        String status;
-        String error = null;
         try {
-            String idempotencyKey = ShopifyGateway.idempotencyKey(
-                tenantId, triggerType, triggerId, variantId, locationId);
-            shopify.adjustInventoryQuantities(p.shopDomain(), p.token(), p.shopifyInventoryItemId(),
-                                              p.shopifyLocationId(), delta, reason, idempotencyKey);
-            status = "applied";
+            if (resend) {
+                shopify.resendInventoryAdjustment(p.shopDomain(), p.token(), p.shopifyInventoryItemId(),
+                    p.shopifyLocationId(), delta, reason, keyToSend, resendBaseline);
+            } else {
+                shopify.adjustInventoryQuantities(p.shopDomain(), p.token(), p.shopifyInventoryItemId(),
+                    p.shopifyLocationId(), delta, reason, keyToSend);
+            }
+            markIncrementResult(tenantId, triggerType, triggerId, variantId, locationId,
+                p.shopifyInventoryItemId(), p.shopifyLocationId(), "applied", null, null, null, keyToSend);
         } catch (Exception e) {
-            status = "failed";
-            error = e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName();
-            log.warn("Shopify inventory adjust failed: trigger={} triggerId={} variant={} error={}",
-                     triggerType, triggerId, variantId, error);
+            String error = e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName();
+            ShopifyAdjustFailedException.FailureClass cls;
+            Integer sentBaseline = null;
+            String sentKey = keyToSend;
+            if (e instanceof ShopifyAdjustFailedException f) {
+                cls = f.failureClass();
+                sentBaseline = f.changeFromQuantity();
+            } else if (e instanceof IllegalArgumentException) {
+                cls = ShopifyAdjustFailedException.FailureClass.NEVER_SENT;   // rejected before any call
+            } else if (e instanceof ShopifyException) {
+                cls = ShopifyAdjustFailedException.FailureClass.REJECTED;
+            } else {
+                cls = ShopifyAdjustFailedException.FailureClass.AMBIGUOUS;    // unknown — assume it may have landed
+            }
+            if (cls == ShopifyAdjustFailedException.FailureClass.NEVER_SENT) sentKey = null;
+            if (resend && sentBaseline == null) sentBaseline = resendBaseline;
+            log.warn("Shopify inventory adjust failed: trigger={} triggerId={} variant={} class={} error={}",
+                     triggerType, triggerId, variantId, cls.db(), error);
+            markIncrementResult(tenantId, triggerType, triggerId, variantId, locationId,
+                p.shopifyInventoryItemId(), p.shopifyLocationId(), "failed", error, cls, sentBaseline, sentKey);
+        }
+    }
+
+    // ── Failed-increment recovery (Part D) ──────────────────────────────────────
+
+    public record RetryResult(int due, int attempted, int applied, int skippedAmbiguousExpired,
+                              IncrementRecoveryRules.SetupProblem blockedBy) {}
+
+    private record FailedClaim(UUID variantId, UUID locationId, int delta, String triggerType, String triggerId,
+                               String failureClass, Integer changeFromQuantity, String sentKey,
+                               int attemptCount, boolean ambiguousExpired, boolean olderThanConfirm, boolean legacy) {}
+
+    private static final String FAILED_CLAIM_COLUMNS =
+        "SELECT sia.variant_id, sia.location_id, sia.delta, sia.trigger_type, sia.trigger_id, sia.failure_class, " +
+        "       sia.change_from_quantity, sia.sent_idempotency_key, sia.attempt_count, " +
+        "       COALESCE(" + IncrementRecoveryRules.AMBIGUOUS_EXPIRED_SQL + ", false) AS ambiguous_expired, " +
+        "       COALESCE(sia.first_attempt_at, sia.created_at) < now() - interval '" +
+                IncrementRecoveryRules.CONFIRM_AFTER_HOURS + " hours' AS older_than_confirm, sia.legacy " +
+        "FROM shopify_inventory_adjustments sia ";
+
+    private static FailedClaim failedClaim(java.sql.ResultSet rs) throws java.sql.SQLException {
+        return new FailedClaim(rs.getObject("variant_id", UUID.class), rs.getObject("location_id", UUID.class),
+            rs.getInt("delta"), rs.getString("trigger_type"), rs.getString("trigger_id"), rs.getString("failure_class"),
+            (Integer) rs.getObject("change_from_quantity"), rs.getString("sent_idempotency_key"),
+            rs.getInt("attempt_count"), rs.getBoolean("ambiguous_expired"), rs.getBoolean("older_than_confirm"),
+            rs.getBoolean("legacy"));
+    }
+
+    /**
+     * The retry job's per-tenant pass (TenantContext set by the caller): every failed, non-legacy
+     * increment claim whose next attempt is due. A tenant-level setup problem blocks the whole pass —
+     * no attempt is spent (the inventory_increment_sync_failed exception names the fix). Each retry
+     * goes through the existing claim (failed → pending) and resends the claim's ORIGINAL positive
+     * delta — never recomputed — to the Traced location:
+     *   never_sent → same key, fresh baseline;
+     *   rejected   → new key (claim key + attempt number), fresh baseline;
+     *   ambiguous  → identical resend (same key, same sent baseline) while the key is < 20 h old;
+     *                after that, no retry (alert only).
+     */
+    public RetryResult retryDueIncrements() {
+        UUID tenantId = TenantContext.require();
+        List<FailedClaim> due = tx.execute(st -> jdbc.query(
+            FAILED_CLAIM_COLUMNS + "WHERE sia.tenant_id = ? AND " + IncrementRecoveryRules.DUE_SQL +
+            " ORDER BY sia.next_attempt_at LIMIT 200",
+            (rs, i) -> failedClaim(rs), tenantId));
+        if (due == null || due.isEmpty()) return new RetryResult(0, 0, 0, 0, null);
+
+        IncrementRecoveryRules.SetupProblem blocked = tx.execute(st -> IncrementRecoveryRules.setupProblem(jdbc, tenantId));
+        if (blocked != null) {
+            log.info("Increment retry: tenant={} {} due claim(s) blocked by {} — no attempt spent",
+                tenantId, due.size(), blocked);
+            return new RetryResult(due.size(), 0, 0, 0, blocked);
         }
 
-        markResult(tenantId, triggerType, triggerId, variantId, locationId,
-                   p.shopifyInventoryItemId(), p.shopifyLocationId(), status, error);
+        int attempted = 0, applied = 0, expired = 0;
+        for (FailedClaim c : due) {
+            if (c.ambiguousExpired()) {
+                // Too late to resend identically — stop scheduling; the detector alerts.
+                tx.execute(st -> jdbc.update(
+                    "UPDATE shopify_inventory_adjustments SET next_attempt_at = NULL " +
+                    "WHERE tenant_id = ? AND trigger_type = ? AND trigger_id = ? AND variant_id = ? AND location_id = ?",
+                    tenantId, c.triggerType(), c.triggerId(), c.variantId(), c.locationId()));
+                expired++;
+                continue;
+            }
+            if (retryClaim(tenantId, c, false)) {
+                attempted++;
+                String status = tx.execute(st -> jdbc.queryForObject(
+                    "SELECT status FROM shopify_inventory_adjustments " +
+                    "WHERE tenant_id = ? AND trigger_type = ? AND trigger_id = ? AND variant_id = ? AND location_id = ?",
+                    String.class, tenantId, c.triggerType(), c.triggerId(), c.variantId(), c.locationId()));
+                if ("applied".equals(status)) applied++;
+            }
+        }
+        return new RetryResult(due.size(), attempted, applied, expired, null);
+    }
+
+    /** Reclaims (failed → pending, the existing claim path) and attempts one retry; false when the
+     *  claim was not reclaimable (someone else holds it, or it's no longer failed). */
+    private boolean retryClaim(UUID tenantId, FailedClaim c, boolean manual) {
+        ObjectNode payload = mapper.createObjectNode()
+            .put("reason", reasonFor(c.triggerType())).put("delta", c.delta())
+            .put("retryAttempt", c.attemptCount() + 1).put("manual", manual);
+        if (!claim(tenantId, UUID.randomUUID(), c.variantId(), c.locationId(), c.delta(),
+                   c.triggerType(), c.triggerId(), payload)) {
+            return false;
+        }
+        int attemptNo = c.attemptCount() + 1;
+        String claimKey = ShopifyGateway.idempotencyKey(tenantId, c.triggerType(), c.triggerId(), c.variantId(), c.locationId());
+        ShopifyAdjustFailedException.FailureClass cls = ShopifyAdjustFailedException.FailureClass.fromDb(c.failureClass());
+
+        if (cls == ShopifyAdjustFailedException.FailureClass.AMBIGUOUS && !c.ambiguousExpired() && c.sentKey() != null) {
+            attemptIncrement(tenantId, c.variantId(), c.locationId(), c.delta(), c.triggerType(), c.triggerId(),
+                reasonFor(c.triggerType()), c.sentKey(), c.changeFromQuantity(), true);
+        } else if (cls == ShopifyAdjustFailedException.FailureClass.NEVER_SENT) {
+            // Nothing ever reached Shopify under the key this claim last used — the same key is safe.
+            attemptIncrement(tenantId, c.variantId(), c.locationId(), c.delta(), c.triggerType(), c.triggerId(),
+                reasonFor(c.triggerType()), c.sentKey() != null ? c.sentKey() : claimKey, null, false);
+        } else {
+            // rejected — and, only through the confirmed manual repush, an expired ambiguous claim:
+            // a NEW key, fresh baseline, the original delta.
+            attemptIncrement(tenantId, c.variantId(), c.locationId(), c.delta(), c.triggerType(), c.triggerId(),
+                reasonFor(c.triggerType()),
+                IncrementRecoveryRules.retryKey(tenantId, c.triggerType(), c.triggerId(), c.variantId(), c.locationId(), attemptNo),
+                null, false);
+        }
+        return true;
+    }
+
+    private static String reasonFor(String triggerType) {
+        return switch (triggerType) {
+            case "receiving_session" -> "received";
+            case "hold_exit" -> "hold_exit";
+            default -> "restock";
+        };
+    }
+
+    /**
+     * Manual repush of one failed increment claim (receiving_session / return_inspection / hold_exit).
+     * Legacy claims are NOT repushable (409 LEGACY_NOT_REPUSHABLE) — they are reconciled by hand and
+     * cleared by resolving the exception. Requires confirmOld when the claim's first attempt is more
+     * than 24 h old, or when it is ambiguous past the identical-resend window (the person has checked
+     * Shopify). 404 no such claim, 409 not failed / legacy / needs confirmation / setup problem.
+     */
+    public void repushFailedIncrement(String triggerType, String triggerId, UUID variantId, boolean confirmOld) {
+        UUID tenantId = TenantContext.require();
+        if (!IncrementRecoveryRules.INCREMENT_TRIGGERS.contains(triggerType)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                "triggerType must be receiving_session, return_inspection or hold_exit");
+        }
+        List<FailedClaim> rows = tx.execute(st -> jdbc.query(
+            FAILED_CLAIM_COLUMNS + "WHERE sia.tenant_id = ? AND sia.trigger_type = ? AND sia.trigger_id = ? " +
+            "  AND sia.variant_id = ? AND sia.status = 'failed'",
+            (rs, i) -> failedClaim(rs), tenantId, triggerType, triggerId, variantId));
+        if (rows == null || rows.isEmpty()) {
+            Integer exists = tx.execute(st -> jdbc.queryForObject(
+                "SELECT COUNT(*) FROM shopify_inventory_adjustments WHERE tenant_id = ? AND trigger_type = ? " +
+                "AND trigger_id = ? AND variant_id = ?", Integer.class, tenantId, triggerType, triggerId, variantId));
+            if (exists == null || exists == 0) {
+                throw new ResponseStatusException(HttpStatus.NOT_FOUND, "No adjustment found for " + triggerType + "/" + triggerId);
+            }
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Adjustment is not in 'failed' status");
+        }
+        FailedClaim c = rows.get(0);
+        if (c.legacy()) {
+            // The pre-recovery backlog is reconciled by hand, never replayed: Shopify may have been
+            // corrected since, and the seed pushes CURRENT stock — a replay would double count.
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                "LEGACY_NOT_REPUSHABLE: this update failed before automatic recovery existed — reconcile it " +
+                "manually in Shopify and resolve the exception; it is never replayed");
+        }
+        if ((c.olderThanConfirm() || c.ambiguousExpired()) && !confirmOld) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                "CONFIRMATION_REQUIRED: this update is more than 24 hours old (or its first send may have landed) — " +
+                "check the variant's quantity in Shopify, then confirm to send it");
+        }
+        IncrementRecoveryRules.SetupProblem blocked = tx.execute(st -> IncrementRecoveryRules.setupProblem(jdbc, tenantId));
+        if (blocked != null) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, blocked.fixEn);
+        }
+        // A manual resend of an expired-ambiguous claim is a deliberate NEW send after the person's check.
+        FailedClaim toSend = c.ambiguousExpired()
+            ? new FailedClaim(c.variantId(), c.locationId(), c.delta(), c.triggerType(), c.triggerId(), "rejected",
+                c.changeFromQuantity(), c.sentKey(), c.attemptCount(), true, c.olderThanConfirm(), false)
+            : c;
+        if (!retryClaim(tenantId, toSend, true)) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Adjustment is already being retried");
+        }
     }
 
     // ── Trigger 3 core: available→damaged move ───────────────────────────────
@@ -859,6 +1058,43 @@ public class ShopifyInventoryService {
             tenantId, batchId, variantId, locationId, delta, triggerType, triggerId, finalPayloadJson));
 
         return rows != null && rows > 0;
+    }
+
+    /** markResult() for an increment attempt (Part D): also records the failure class, the baseline
+     *  and key that were SENT (null when nothing was sent), and the attempt bookkeeping + backoff. */
+    private void markIncrementResult(UUID tenantId, String triggerType, String triggerId,
+                                     UUID variantId, UUID locationId,
+                                     String shopifyInventoryItemId, String shopifyLocationId,
+                                     String status, String error,
+                                     ShopifyAdjustFailedException.FailureClass failureClass,
+                                     Integer sentBaseline, String sentKey) {
+        boolean failed = "failed".equals(status);
+        tx.execute(txStatus -> jdbc.update(
+            "UPDATE shopify_inventory_adjustments SET " +
+            "  status = ?, error = ?, " +
+            "  shopify_inventory_item_id = COALESCE(?, shopify_inventory_item_id), " +
+            "  shopify_location_id = COALESCE(?, shopify_location_id), " +
+            "  failure_class = ?, " +
+            "  change_from_quantity = CASE WHEN ?::text IS NOT NULL THEN ?::int ELSE change_from_quantity END, " +
+            "  sent_key_first_at = CASE WHEN ?::text IS NOT NULL AND ?::text IS DISTINCT FROM sent_idempotency_key " +
+            "                           THEN now() ELSE sent_key_first_at END, " +
+            "  sent_idempotency_key = COALESCE(?::text, sent_idempotency_key), " +
+            "  first_attempt_at = COALESCE(first_attempt_at, now()), " +
+            "  last_attempt_at = now(), " +
+            "  next_attempt_at = " + (failed ? IncrementRecoveryRules.NEXT_ATTEMPT_AFTER_FAILURE_SQL : "NULL") + ", " +
+            "  attempt_count = attempt_count + 1, " +
+            "  applied_at = CASE WHEN ? = 'applied' THEN now() ELSE applied_at END " +
+            "WHERE tenant_id = ? AND trigger_type = ? AND trigger_id = ? " +
+            "  AND variant_id = ? AND location_id = ?",
+            status, error, shopifyInventoryItemId, shopifyLocationId,
+            failed && failureClass != null ? failureClass.db() : null,
+            sentKey, sentBaseline, sentKey, sentKey, sentKey, status,
+            tenantId, triggerType, triggerId, variantId, locationId));
+
+        if (failed) {
+            log.warn("Shopify inventory adjustment recorded as failed: trigger={} triggerId={} variant={} class={} error={}",
+                     triggerType, triggerId, variantId, failureClass == null ? null : failureClass.db(), error);
+        }
     }
 
     /** Follow-up write after the Shopify call (or after a precondition failure) — a plain

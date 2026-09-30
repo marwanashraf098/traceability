@@ -638,8 +638,34 @@ class ShopifyHttpGateway implements ShopifyGateway {
         // our read and this write causes a clean CHANGE_FROM_QUANTITY_STALE userError (handled
         // by the existing generic error path below, recorded 'failed', retried next reconnect)
         // instead of silently layering our delta on a number we never actually observed.
-        Integer changeFromQuantity = currentAvailableQuantityOrNull(shopDomain, token, locationGid, inventoryItemGid);
+        Integer changeFromQuantity;
+        try {
+            changeFromQuantity = currentAvailableQuantityOrNull(shopDomain, token, locationGid, inventoryItemGid);
+        } catch (RuntimeException e) {
+            throw new ShopifyAdjustFailedException(ShopifyAdjustFailedException.FailureClass.NEVER_SENT, null,
+                "Could not read the current quantity before the adjust (adjust not sent): " + messageOf(e), e);
+        }
+        sendAdjust(shopDomain, token, inventoryItemGid, locationGid, positiveDelta, reason, idempotencyKey,
+            changeFromQuantity);
+    }
 
+    @Override
+    public void resendInventoryAdjustment(String shopDomain, String token, String inventoryItemGid,
+                                          String locationGid, int positiveDelta, String reason,
+                                          String idempotencyKey, Integer changeFromQuantity) {
+        // Same FR-17 v2 guard as adjustInventoryQuantities — before any network call.
+        if (positiveDelta <= 0) {
+            throw new IllegalArgumentException(
+                "resendInventoryAdjustment requires a positive delta (FR-17 v2 increment-only); got " + positiveDelta);
+        }
+        sendAdjust(shopDomain, token, inventoryItemGid, locationGid, positiveDelta, reason, idempotencyKey,
+            changeFromQuantity);
+    }
+
+    /** The inventoryAdjustQuantities mutation itself, every failure classified (see
+     *  ShopifyAdjustFailedException) and carrying the changeFromQuantity that was sent. */
+    private void sendAdjust(String shopDomain, String token, String inventoryItemGid, String locationGid,
+                            int positiveDelta, String reason, String idempotencyKey, Integer changeFromQuantity) {
         ObjectNode change = buildInventoryChange(inventoryItemGid, locationGid, positiveDelta, changeFromQuantity);
         ObjectNode input = mapper.createObjectNode()
             .put("reason", reason)
@@ -649,17 +675,42 @@ class ShopifyHttpGateway implements ShopifyGateway {
         vars.set("input", input);
         vars.put("idempotencyKey", idempotencyKey);
 
-        JsonNode data = executeGraphQL(shopDomain, token, INVENTORY_ADJUST_QUANTITIES_MUTATION, vars);
+        JsonNode data;
+        try {
+            data = executeGraphQL(shopDomain, token, INVENTORY_ADJUST_QUANTITIES_MUTATION, vars);
+        } catch (RuntimeException e) {
+            throw new ShopifyAdjustFailedException(classifyAdjustFailure(e), changeFromQuantity, messageOf(e), e);
+        }
         JsonNode userErrors = data.path("inventoryAdjustQuantities").path("userErrors");
         if (userErrors.isArray() && !userErrors.isEmpty()) {
             String msg = userErrors.get(0).path("message").asText("unknown error");
-            throw new ShopifyException("inventoryAdjustQuantities failed: " + msg);
+            throw new ShopifyAdjustFailedException(ShopifyAdjustFailedException.FailureClass.REJECTED,
+                changeFromQuantity, "inventoryAdjustQuantities failed: " + msg, null);
         }
     }
 
-    /** Pure, network-free: builds one InventoryChangeInput entry. Package-private so
-     *  ShopifyHttpGatewayInventoryTest can assert the exact JSON shape sent to Shopify without
-     *  needing to fake an HTTP round trip for this part of the payload. */
+    /** A 4xx or a GraphQL error means Shopify answered and did not apply it; a 5xx, a read
+     *  timeout, a reset or anything unexpected may have been processed; a connection that was
+     *  never made (refused, unknown host, connect timeout) never sent anything. */
+    static ShopifyAdjustFailedException.FailureClass classifyAdjustFailure(Throwable e) {
+        if (e instanceof ShopifyTransientException || e instanceof ShopifyAmbiguousException) {
+            return ShopifyAdjustFailedException.FailureClass.AMBIGUOUS;
+        }
+        if (e instanceof ResourceAccessException) {
+            for (Throwable c = e.getCause(); c != null; c = c.getCause()) {
+                if (c instanceof java.net.ConnectException || c instanceof java.net.UnknownHostException
+                        || c instanceof java.net.NoRouteToHostException
+                        || (c instanceof java.net.SocketTimeoutException
+                            && c.getMessage() != null && c.getMessage().toLowerCase().contains("connect timed out"))) {
+                    return ShopifyAdjustFailedException.FailureClass.NEVER_SENT;
+                }
+            }
+            return ShopifyAdjustFailedException.FailureClass.AMBIGUOUS;
+        }
+        if (e instanceof ShopifyException) return ShopifyAdjustFailedException.FailureClass.REJECTED;
+        return ShopifyAdjustFailedException.FailureClass.AMBIGUOUS;
+    }
+
     ObjectNode buildInventoryChange(String inventoryItemGid, String locationGid,
                                      int positiveDelta, Integer changeFromQuantity) {
         ObjectNode change = mapper.createObjectNode()

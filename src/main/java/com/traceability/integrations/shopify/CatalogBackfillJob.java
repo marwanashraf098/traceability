@@ -1,5 +1,6 @@
 package com.traceability.integrations.shopify;
 
+import com.traceability.inventory.IncrementRecoveryRules;
 import com.traceability.inventory.ShopifyCatalogActivationService;
 import com.traceability.tenancy.TenantContext;
 import org.jobrunr.jobs.annotations.Job;
@@ -33,8 +34,11 @@ import java.util.UUID;
  *   b. ShopifyCatalogActivationService.activateAll() — every variant of an ACTIVE product (draft / archived are activated lazily before their first increment), idempotent
  *      (also covers variants that came in by webhook and were never activated);
  *   c. catalog_backfilled_at = now() once a succeeded and b didn't fail at STORE level.
- * Store-level activation failure (token, location, the call throwing, or EVERY variant
- * rejected — how a missing scope or an unreachable shop shows up) → no marker, store failed.
+ * Activation failing for a SETUP reason (Traced location not linked, or every variant rejected while
+ * the token lacks inventory scope) → marker SET, one WARN naming the fix, store NOT failed (the merchant
+ * fixes it; activation follows). Any other store-level activation failure (every variant rejected with
+ * the setup in place, an unreachable shop) → no marker, store failed. A token/reauth failure fails the
+ * import itself → no marker, store failed.
  * Only some variants rejected → those ids and reasons are logged, the marker IS set and the
  * store counts as done (one variant Shopify always rejects must not keep the job retrying).
  * It never writes import_status, last_sync_at or stores.status — nothing the merchant sees.
@@ -128,8 +132,28 @@ public class CatalogBackfillJob {
         syncService.importCatalogOnly(storeId, tenantId, shopDomain, token);
         long[] after = counts(storeId);
 
-        ShopifyCatalogActivationService.ActivationOutcome activation = activationService.activateAll();
+        // Activation failing for a SETUP reason (Traced location not linked, token without inventory
+        // scope) is not the backfill's problem: the catalog IS imported, activation happens once the
+        // merchant fixes the setup (the next import, or lazily before an increment), and the
+        // inventory_increment_sync_failed exception already names the fix. Marker set, WARN once, not
+        // failed — otherwise the job retries these stores forever. A token/reauth failure (the import
+        // above throws) and every variant rejected with the setup in place stay failures.
+        ShopifyCatalogActivationService.ActivationOutcome activation;
+        try {
+            activation = activationService.activateAll();
+        } catch (RuntimeException e) {
+            IncrementRecoveryRules.SetupProblem problem = setupProblem(tenantId);
+            if (problem == null) throw e;
+            markDoneWithSetupProblem(storeId, tenantId, shopDomain, before, after, problem, e.getMessage());
+            return;
+        }
         if (activation.total() > 0 && activation.failed() == activation.total()) {
+            IncrementRecoveryRules.SetupProblem problem = setupProblem(tenantId);
+            if (problem != null) {
+                markDoneWithSetupProblem(storeId, tenantId, shopDomain, before, after, problem,
+                    "every variant rejected (" + activation.total() + ")");
+                return;
+            }
             throw new IllegalStateException("activation failed for every variant (" + activation.total()
                 + ") — store-level: " + activation.failures());
         }
@@ -142,6 +166,23 @@ public class CatalogBackfillJob {
             "UPDATE stores SET catalog_backfilled_at = now() WHERE id = ? AND tenant_id = ?", storeId, tenantId));
         log.info("Catalog backfill store {} ({}): products {} → {}, variants {} → {}, variants activated {}",
             storeId, shopDomain, before[0], after[0], before[1], after[1], activation.succeeded());
+    }
+
+    /** LOCATION_NOT_LINKED or MISSING_SCOPE only — the setup reasons a merchant fixes (a missing store
+     *  is not one: the import above already proved the store is there). */
+    private IncrementRecoveryRules.SetupProblem setupProblem(UUID tenantId) {
+        IncrementRecoveryRules.SetupProblem p = tx.execute(s -> IncrementRecoveryRules.setupProblem(jdbc, tenantId));
+        return p == IncrementRecoveryRules.SetupProblem.LOCATION_NOT_LINKED
+            || p == IncrementRecoveryRules.SetupProblem.MISSING_SCOPE ? p : null;
+    }
+
+    private void markDoneWithSetupProblem(UUID storeId, UUID tenantId, String shopDomain, long[] before, long[] after,
+                                          IncrementRecoveryRules.SetupProblem problem, String detail) {
+        tx.execute(s -> jdbc.update(
+            "UPDATE stores SET catalog_backfilled_at = now() WHERE id = ? AND tenant_id = ?", storeId, tenantId));
+        log.warn("Catalog backfill store {} ({}): catalog imported (products {} → {}, variants {} → {}); activation " +
+                "skipped — setup: {} ({}). Marker set; activation happens once the merchant fixes it: {}",
+            storeId, shopDomain, before[0], after[0], before[1], after[1], problem, detail, problem.fixEn);
     }
 
     private long[] counts(UUID storeId) {

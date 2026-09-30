@@ -168,6 +168,7 @@ public class ExceptionService {
         all.addAll(detectExchangeNeedsMapping(tenantId));
         all.addAll(detectExchangeUnmappedState(tenantId));
         all.addAll(detectVoidHoldSyncFailed(tenantId));
+        all.addAll(detectIncrementSyncFailed(tenantId));
         all.addAll(detectReturnLegUnscanned(tenantId, returnUnscannedDays));
         all.addAll(detectReturnToReceive(tenantId));
         all.addAll(detectRequestItemToReceive(tenantId));
@@ -472,6 +473,58 @@ public class ExceptionService {
             "        AND er.subject_key = 'void_hold_sync_failed:' || sia.trigger_type || ':' || sia.trigger_id) " +
             "ORDER BY sia.created_at ASC",
             tid);
+    }
+
+    /**
+     * inventory_increment_sync_failed (HIGH) — at most one row per tenant per kind, predicates from
+     * IncrementRecoveryRules (never re-derived here):
+     *   setup   — failed live increment claims are blocked by a setup problem (missing scope / Traced
+     *             location not linked / no store): names the fix and the count of blocked updates.
+     *             Gone once the problem is fixed and the retries clear the failed claims.
+     *   gave_up — retries exhausted, or an ambiguous send past the 20 h identical-resend window.
+     *   legacy  — the backlog that failed before automatic recovery existed: never retried, not
+     *             repushable; reconciled by hand and cleared only by resolving this exception.
+     * subject_key carries the newest claim id, so a dismissed row returns when a NEW failure appears.
+     */
+    private List<Map<String, Object>> detectIncrementSyncFailed(UUID tid) {
+        List<Map<String, Object>> out = new ArrayList<>();
+        IncrementRecoveryRules.SetupProblem problem = IncrementRecoveryRules.setupProblem(jdbc, tid);
+
+        if (problem != null) {
+            out.addAll(incrementRow(tid, "setup", IncrementRecoveryRules.FAILED_LIVE_SQL, problem.name()));
+        }
+        out.addAll(incrementRow(tid, "gave_up", IncrementRecoveryRules.GAVE_UP_SQL, null));
+        out.addAll(incrementRow(tid, "legacy", IncrementRecoveryRules.LEGACY_SQL, null));
+        return out;
+    }
+
+    private List<Map<String, Object>> incrementRow(UUID tid, String kind, String predicate, String problem) {
+        String keyPrefix = "inventory_increment_sync_failed:" + kind + (problem != null ? ":" + problem : "") + ":";
+        List<Map<String, Object>> rows = jdbc.queryForList(
+            "SELECT 'inventory_increment_sync_failed' AS type, 'HIGH' AS severity, 'tenant' AS subject_type, " +
+            "       ? AS kind, ? AS problem, COUNT(*) AS claim_count, COALESCE(SUM(sia.delta), 0) AS units, " +
+            "       COUNT(DISTINCT sia.variant_id) AS variant_count, MIN(sia.created_at) AS occurred_at, " +
+            "       ? || MAX(sia.id) AS subject_key " +
+            "FROM shopify_inventory_adjustments sia " +
+            "WHERE sia.tenant_id = ? AND " + predicate + " " +
+            "HAVING COUNT(*) > 0 " +
+            "   AND NOT EXISTS (SELECT 1 FROM exception_resolutions er WHERE er.tenant_id = ? " +
+            "       AND er.exception_type = 'inventory_increment_sync_failed' " +
+            "       AND er.subject_key = ? || MAX(sia.id))",
+            kind, problem, keyPrefix, tid, tid, keyPrefix);
+        if (!"setup".equals(kind)) {
+            for (Map<String, Object> row : rows) {
+                // The variants to reconcile by hand: title, SKU and units that never reached Shopify.
+                row.put("variants", jdbc.queryForList(
+                    "SELECT v.id AS variant_id, v.sku, p.title AS product_title, v.title AS variant_title, " +
+                    "       SUM(sia.delta) AS units, MIN(sia.created_at) AS since " +
+                    "FROM shopify_inventory_adjustments sia " +
+                    "JOIN variants v ON v.id = sia.variant_id JOIN products p ON p.id = v.product_id " +
+                    "WHERE sia.tenant_id = ? AND " + predicate + " " +
+                    "GROUP BY v.id, v.sku, p.title, v.title ORDER BY units DESC", tid));
+            }
+        }
+        return rows;
     }
 
     private List<Map<String, Object>> detectNeverReceived(UUID tid, int windowDays) {
@@ -993,6 +1046,42 @@ public class ExceptionService {
                     + " مع Shopify للقطعة " + b + " — تعارض بين مخزون Traced ومخزون Shopify");
                 item.put("suggestedAction", "manual_repush");
                 item.put("actionUrl", b != null ? "/lookup?q=" + b : "/lookup");
+            }
+            case "inventory_increment_sync_failed" -> {
+                String kind = str(item, "kind");
+                long units = ((Number) item.get("units")).longValue();
+                long variants = ((Number) item.get("variant_count")).longValue();
+                long claims = ((Number) item.get("claim_count")).longValue();
+                String since = item.get("occurred_at") != null
+                    ? item.get("occurred_at").toString().substring(0, 10) : "";
+                if ("setup".equals(kind)) {
+                    IncrementRecoveryRules.SetupProblem problem =
+                        IncrementRecoveryRules.SetupProblem.valueOf(str(item, "problem"));
+                    item.put("descriptionEn", problem.fixEn + " — " + claims + " stock update(s) (" + units
+                        + " units) are waiting to reach Shopify");
+                    item.put("descriptionAr", problem.fixAr + " — " + claims + " تحديث مخزون (" + units
+                        + " وحدة) بانتظار الوصول إلى Shopify");
+                    item.put("suggestedAction", problem == IncrementRecoveryRules.SetupProblem.LOCATION_NOT_LINKED
+                        ? "link_shopify_location" : "reconnect_shopify");
+                    item.put("actionUrl", problem == IncrementRecoveryRules.SetupProblem.LOCATION_NOT_LINKED
+                        ? "/settings?tab=locations" : "/settings?tab=connections");
+                } else if ("gave_up".equals(kind)) {
+                    item.put("descriptionEn", units + " units across " + variants
+                        + " variants could not be sent to Shopify after retrying — check these variants in Shopify");
+                    item.put("descriptionAr", "تعذّر إرسال " + units + " وحدة عبر " + variants
+                        + " متغيرات إلى Shopify بعد إعادة المحاولة — راجع هذه المتغيرات في Shopify");
+                    item.put("suggestedAction", "manual_repush");
+                    item.put("actionUrl", "/inventory?tab=ledger");
+                } else {
+                    item.put("descriptionEn", units + " units across " + variants
+                        + " variants received in Traced never reached Shopify (since " + since + "). "
+                        + "Reconcile manually — do not replay; the seed pushes current stock.");
+                    item.put("descriptionAr", units + " وحدة عبر " + variants
+                        + " متغيرات استُلمت في Traced ولم تصل إلى Shopify (منذ " + since + "). "
+                        + "سوِّها يدويًا — لا تُعِد إرسالها؛ الإعداد الأولي يرسل المخزون الحالي.");
+                    item.put("suggestedAction", "manual_reconcile");
+                    item.put("actionUrl", "/inventory?tab=ledger");
+                }
             }
             case "never_received" -> {
                 String b = str(item, "barcode");
