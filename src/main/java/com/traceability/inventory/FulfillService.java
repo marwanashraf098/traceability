@@ -354,7 +354,17 @@ public class FulfillService {
             "           SELECT 1 FROM pack_print_batch_items bi " +
             "           WHERE bi.shipment_id = s.id AND bi.tenant_id = o.tenant_id)) AS \"awbPrinted\" " +
             "FROM orders o " +
-            "LEFT JOIN shipments s ON s.order_id = o.id AND s.tenant_id = o.tenant_id AND s.shipment_leg = 'forward' " +
+            // One forward leg, deterministically: an active one (not terminated / cancelled) before
+            // an ended one, newest first. A plain join returned one row per forward leg and
+            // rows.get(0) picked an arbitrary one once an order had an old terminated leg.
+            // UUIDv4 is not time-ordered — order by created_at, never id (see CLAUDE.md invariant)
+            "LEFT JOIN LATERAL ( " +
+            "    SELECT fs.id, fs.tracking_number FROM shipments fs " +
+            "    WHERE fs.order_id = o.id AND fs.tenant_id = o.tenant_id AND fs.shipment_leg = 'forward' " +
+            "    ORDER BY (fs.internal_state IN ('terminated', 'cancelled')) ASC, " +
+            "             fs.created_at DESC, fs.id DESC " +
+            "    LIMIT 1 " +
+            ") s ON true " +
             // Badge derivation only (FR-EXCHANGE Phase 3/4 §0e) — no new orders column.
             "LEFT JOIN exchanges e ON e.outbound_order_id = o.id AND e.tenant_id = o.tenant_id " +
             "WHERE o.id = ? AND o.tenant_id = ?",
