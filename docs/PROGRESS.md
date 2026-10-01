@@ -4,6 +4,35 @@
 
 ## Current state
 
+**Pick & Pack S3 — waybill scan mode, PART 1 of 2 (2026-10-01, branch `feat/pack-waybill-session` off main 3b8a503;
+pushed, not merged). STOPPED at the complete+link gate — commits 5 (session API) and 6 (frontend) not built.**
+- **Gate finding (needs Marawan):** no `TenantContext.runAs` anywhere under `FulfillService.complete()` /
+  `ShipmentLinkService.linkByAwbScan()` / `completeLink()` / `InventoryLedger.transition()`. But
+  `linkTrackingNumberToOrder()` makes a SYNCHRONOUS Bosta call inside the transaction:
+  `fetchAndStoreProviderDeliveryId()` → `bostaGateway.fetchDelivery()` (ShipmentLinkService :260-261 → :737), only on
+  the new-shipment branch (no forward shipment and the tracking number in no shipments row). Waybill mode always
+  links a waybill that the resolver found in `shipments`, so it takes the verify branch (:222-227) or the swapped-AWB
+  idempotent branch (:237) — the fetch is unreachable from the wrapper, but it is inside the method.
+- **Commit 1** `getOrder()` forward leg: LATERAL, active (not terminated/cancelled) before ended, created_at DESC, id
+  DESC. `GetOrderForwardLegTest` (3; reverted → 2 RED).
+- **Commit 2 V126:** `tenants.pick_pack_mode` (default order_queue), `pack_sessions` (one open per tenant+user, partial
+  unique), `pack_session_orders` (outcome packed/set_aside/rejected, order_id nullable, ON DELETE CASCADE like V125).
+  RLS NULLIF + FORCE; app_user sessions S/I/U, outcomes S/I. `PackSessionSchemaTest` (4). MigrationSmokeTest 124→125,
+  NotTracedBackfillTest 69→70.
+- **Commit 3 mode:** PUT /tenant/settings `{pickPackMode}` (owner-only, validated, audited; the record keeps a 5-arg
+  constructor so TenantSettingsTest compiles unedited); GET /api/v1/fulfill/mode `{mode}` (isAuthenticated);
+  Settings › Pick & Pack tab (owner edits, manager read-only, worker never). `PickPackModeTest` (3),
+  `pickPackSettings.test.tsx` (3). Pick & Pack route switch not wired yet (comes with commit 6).
+  **RlsCoverageTest NOT edited** (standing rule) — its coverage audit fails on the new GET /api/v1/fulfill/mode until
+  approved.
+- **Commit 4:** `WaybillResolver` (codes OPEN, CANCELLED [Shopify cancel time only when orders.raw has it],
+  ALREADY_PACKED [latest 'pack' event's actor + time], CLAIMED_BY_OTHER, RETURN_WAYBILL, EXCHANGE_NOT_MAPPED, TOO_OLD,
+  NOT_FOUND [+ 'unlinked' when unlinked_bosta_deliveries has it], NOT_A_WAYBILL, plus two not in the spec: ON_HOLD and
+  NOT_PACKABLE [old/ended leg, shipment moving, self-pickup]). Reuses PICKABLE_SHIPMENT_GATE read-only + the 30-day
+  window; type-30 internal exchange orders open. `PackClaim` (orders.locked_by/locked_at): atomic conditional take,
+  refresh, release, stale after 10 min (NULL locked_at = stale). Q2: shared `FulfillService.scan()` returns
+  CLAIMED_BY_OTHER while another packer's claim is live (server-side; PickScreen untouched; EN/AR copy keys added).
+  `WaybillResolverTest` (11; Q2 check removed → RED, unconditional take → RED).
 **Scanner fix — no lost scans (2026-10-01, branch `fix/scanner-no-lost-scans` off main 3b8a503; pushed, not merged,
 not deployed).** Marawan approved editing the SAFETY-CRITICAL blocks of `hooks/useScanner.ts` and
 `components/ScanShell.tsx` for exactly this change (2026-10-01). Screens: StockTakeScan, TransferScanOut,
