@@ -364,7 +364,11 @@ function CloseSummaryCard({ session, totalCounted, totalVariance }: {
   totalVariance: number
 }) {
   const { t } = useTranslation()
-  const writtenOff = (session.shopifySync?.deltas ?? []).reduce((sum, d) => sum + Math.abs(d.delta), 0)
+  // Written off = every write-off in Traced; pushed = what actually reached Shopify (damaged /
+  // on-hold write-offs never do, and a push that hasn't applied counts 0).
+  const writtenOff = session.writtenOff
+    ?? (session.shopifySync?.deltas ?? []).reduce((sum, d) => sum + Math.abs(d.delta), 0)
+  const pushedToShopify = session.pushedToShopify ?? 0
 
   return (
     <Card className="flex flex-col items-center gap-3 text-center py-8" data-testid="close-summary">
@@ -374,6 +378,7 @@ function CloseSummaryCard({ session, totalCounted, totalVariance }: {
         <SummaryStat value={totalCounted} label={t('stocktake.review.closeSummary.counted')} />
         <SummaryStat value={totalVariance} label={t('stocktake.review.closeSummary.variance')} tone={totalVariance > 0 ? 'danger' : 'success'} />
         <SummaryStat value={writtenOff} label={t('stocktake.review.closeSummary.writtenOff')} tone={writtenOff > 0 ? 'danger' : 'success'} />
+        <SummaryStat value={pushedToShopify} label={t('stocktake.review.closeSummary.pushedToShopify')} />
       </div>
       <div className="w-full max-w-xs border-t border-line mt-2 pt-3 flex flex-col gap-1.5 text-start">
         <div className="flex justify-between text-small">

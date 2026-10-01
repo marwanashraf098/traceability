@@ -4,8 +4,8 @@
 
 ## Current state
 
-**Stock-take finalize applies the count (2026-10-01, branch `feature/stocktake-finalize-applies` off main 8f53628 —
-NOT merged: 15 existing tests need approved edits, see below).**
+**Stock-take finalize applies the count (2026-10-01, branch `feature/stocktake-finalize-applies` off main 8f53628;
+merged, not deployed).**
 - Decisions (Marawan, 2026-10-01): (a) finalize applies the count in one transaction under the session lock — unscanned
   free stock (available / damaged / on_hold at open, still in that status = drift guard) → lost; scanned damaged on a
   live-available piece → damaged (PieceAdjustService); push enqueued after commit; per-row resolve stays.
@@ -24,9 +24,21 @@ NOT merged: 15 existing tests need approved edits, see below).**
 - Push job: proceeds only from pending / failed (a superseded or nothing_to_push claim used to fall through and push);
   a late result can't flip superseded back; a late success records pushed + WARN.
 - Tests: `StockTakeFinalizeAppliesTest` (13) and `frontend/src/test/stocktakeFinalize.test.tsx` (5), all revert-checked.
-- **Blocked on approval (existing tests):** 13 tests finalize with 0 scans (StockTakeFinalizeTest sft1–sft8,
-  StockTakeOpsTest ops3, StockTakePushAfterCommitTest pc1–pc4); st1 / srt1 assert the old full-population snapshot;
-  sft1 asserts delta 2 (now 1 — damaged excluded); frontend st8 asserts '-3' (now '3').
+- **Second round (Marawan, 2026-10-01):** found piece +1 also when (i) the write-off was from on_hold and that hold
+  cycle's hold-enter decrement applied, or (ii) the write-off's push was superseded by the seed and the write-off was at /
+  before the seed's snapshot (`superseded_snapshot_at`). Partial supersede: covered variants leave `payload.deltas` for
+  `payload.superseded`, revision+1 → the push job sends with key `session:rev:n`; only when the push can't have reached
+  Shopify ('failed', or 'pending' with `send_started_at` NULL — the job now claims the row as pending + send_started_at
+  before anything else). 'failed_ambiguous' / already-sending pushes are never rewritten: `payload.seedOverlap` +
+  `inventory_increment_sync_failed` kind `stock_take_seed_overlap` (HIGH, cleared by resolving). Close summary: "written
+  off" = all write-offs in Traced (`writtenOff`), plus "pushed to Shopify" (`pushedToShopify`). Typed confirmation never
+  asked at 0 write-offs (test c1).
+- Approved existing-test edits: a brand-new on-shelf piece scanned in the 13 zero-scan tests (sft1–8 via
+  `openAllScope`, ops3, pc1–4 via `sessionWithOneWriteOff`); sft1 delta 2→1; sft8 'pushed'→'nothing_to_push'; st1 / srt1
+  narrowed snapshot; StockTakeOpsTest cleanup deletes stock_take_scans before sessions; frontend st8 → the row's variance
+  cell shows 3 as a shortage (text-danger).
+- **Gotcha:** `Card` (components/ui) doesn't forward `data-testid` — `close-summary` was never in the DOM; tests find the
+  summary by its title.
 
 **Stock-take push enqueued after commit (2026-10-01, branch `fix/stocktake-push-after-commit` off main 6795cac;
 merged, not deployed).** `StockTakeReconciliationService.finalizeSession` and `repushSync` now enqueue

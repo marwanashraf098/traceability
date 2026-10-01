@@ -59,6 +59,13 @@ import static org.mockito.Mockito.*;
  *   h1  — unlinked store finalizes with a write-off → push held (failed) → link + seed → the push is
  *         superseded, Shopify gets only the seed delta, the push job then does nothing.
  *   x1  — cross-tenant on app_user: A's finalize never touches B's pieces; A's write-off applies.
+ *   g3/g4 — on_hold write-off then found: +1 only when its hold-enter decrement applied.
+ *   g5/g6 — write-off whose push the seed superseded, then found: +1 only when the write-off was at or
+ *           before that seed's snapshot.
+ *   p1  — partial supersede: the seed covered only some variants → those leave the push, the rest is
+ *         sent under a NEW idempotency key.
+ *   p2/p3 — ambiguous / already-sending push overlapping the seed: never rewritten, alert raised.
+ *   c1  — coverage < 80% with 0 write-offs: finalize needs no typed confirmation.
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.NONE)
 @Testcontainers
@@ -99,22 +106,29 @@ class StockTakeFinalizeAppliesTest {
     @Autowired ShopifyInventoryService        shopifyInventory;
     @Autowired ShopifyInventoryReconcileService seed;
     @Autowired AuditService                   auditService;
+    @Autowired PieceAdjustService             pieceAdjust;
+    @Autowired ExceptionService               exceptions;
 
     record T(UUID tenant, UUID store, String shop, UUID location, String traced, UUID user) {}
     record V(UUID id, String item) {}
 
     final List<JobLambda> enqueued = new CopyOnWriteArrayList<>();
     final AtomicInteger seq = new AtomicInteger();
+    /** Shopify "available" at the Traced location by inventory item (default 0). */
+    final Map<String, Integer> shopifyAvailable = new java.util.concurrent.ConcurrentHashMap<>();
 
     @BeforeEach
     void stubs() {
         Mockito.reset(jobScheduler, shopifyGateway, tokenProvider);
         enqueued.clear();
+        shopifyAvailable.clear();
         when(tokenProvider.getValidToken(any())).thenReturn("tok");
         when(jobScheduler.enqueue(any(JobLambda.class))).thenAnswer(inv -> { enqueued.add(inv.getArgument(0)); return null; });
         when(shopifyGateway.fetchAvailableQuantities(any(), any(), any(), any())).thenAnswer(inv -> {
             List<ShopifyGateway.InventoryLevel> out = new ArrayList<>();
-            for (Object item : (List<?>) inv.getArgument(3)) out.add(new ShopifyGateway.InventoryLevel((String) item, 0));
+            for (Object item : (List<?>) inv.getArgument(3)) {
+                out.add(new ShopifyGateway.InventoryLevel((String) item, shopifyAvailable.getOrDefault((String) item, 0)));
+            }
             return out;
         });
     }
@@ -167,6 +181,9 @@ class StockTakeFinalizeAppliesTest {
         assertThat(deltas.getValue().get(0).negativeDelta()).isEqualTo(-2);
         assertThat(claim(s)).containsEntry("status", "pushed");
         assertThat(claim(s).get("pushed_at")).isNotNull();
+        Map<String, Object> detail = TenantContext.runAs(t.tenant(), () -> stockTake.getSessionDetail(s));
+        assertThat(detail).as("close summary: all write-offs in Traced, and what reached Shopify")
+            .containsEntry("writtenOff", 3).containsEntry("pushedToShopify", 2);
         verify(shopifyGateway, timeout(5000)).moveAvailableToDamaged(any(), any(), eq(a.item()), any(), eq(1), any(), any());
     }
 
@@ -439,7 +456,226 @@ class StockTakeFinalizeAppliesTest {
         assertThat(sessionStatus(sb)).isEqualTo("open");
     }
 
+
+    // ── g3/g4: on_hold write-off then found ───────────────────────────────────────
+
+    @Test
+    void g3_onHoldWriteOff_holdEnterApplied_foundPlusOne() throws Exception {
+        T t = tenant("g3", true);
+        V a = variant(t, "g3");
+        String held = piece(t, a, "available");
+        String other = piece(t, a, "available");
+        TenantContext.runAs(t.tenant(), () -> pieceAdjust.hold(held, "quality_check", null, t.user()));
+        awaitClaim(t, "hold_enter", "applied");
+
+        UUID s1 = open(t);
+        scan(t, s1, other, "good");
+        attest(t, s1);
+        finalize(t, s1, 1);                                     // held → lost (Traced only)
+        assertThat(status(held)).isEqualTo("lost");
+        assertThat(claim(s1)).containsEntry("status", "nothing_to_push");
+
+        UUID s2 = open(t);
+        scan(t, s2, other, "good"); scan(t, s2, held, "good");
+        attest(t, s2);
+        assertThat(finalizePlan(t, s2)).containsEntry("foundIncrements", 1L);
+        finalize(t, s2, null);
+        awaitClaim(t, "stock_take_found", "applied");
+    }
+
+    @Test
+    void g4_onHoldWriteOff_holdEnterNeverApplied_noPlusOne() throws Exception {
+        T t = tenant("g4", true);
+        V a = variant(t, "g4");
+        String held = piece(t, a, "available");
+        String other = piece(t, a, "available");
+        doThrow(new ShopifyException("rejected")).when(shopifyGateway)
+            .pushHoldEnter(any(), any(), any(), any(), anyInt(), any(), any());
+        TenantContext.runAs(t.tenant(), () -> pieceAdjust.hold(held, "quality_check", null, t.user()));
+        awaitClaim(t, "hold_enter", "failed");
+
+        UUID s1 = open(t);
+        scan(t, s1, other, "good");
+        attest(t, s1);
+        finalize(t, s1, 1);
+
+        UUID s2 = open(t);
+        scan(t, s2, other, "good"); scan(t, s2, held, "good");
+        attest(t, s2);
+        assertThat(finalizePlan(t, s2)).containsEntry("founds", 1).containsEntry("foundIncrements", 0L);
+        finalize(t, s2, null);
+        assertThat(status(held)).isEqualTo("available");
+        Thread.sleep(1000);
+        assertThat(claimCountOf(t, "stock_take_found")).isZero();
+    }
+
+    // ── g5/g6: write-off push superseded by the seed, then found ──────────────────
+
+    @Test
+    void g5_writeOffSupersededBySeed_foundPlusOne() throws Exception {
+        T t = tenant("g5", false);
+        V a = variant(t, "g5");
+        List<String> ps = pieces(t, a, 3, "available");
+        UUID s1 = writeOffLastOfThree(t, ps);
+        assertThatThrownBy(() -> enqueued.get(0).run()).isInstanceOf(IllegalStateException.class);
+        link(t);
+        TenantContext.runAs(t.tenant(), () -> seed.apply(null));
+        assertThat(claim(s1)).containsEntry("status", "superseded_by_seed");
+
+        UUID s2 = open(t);
+        ps.forEach(p -> scan(t, s2, p, "good"));
+        attest(t, s2);
+        assertThat(finalizePlan(t, s2)).containsEntry("foundIncrements", 1L);
+        finalize(t, s2, null);
+        awaitClaim(t, "stock_take_found", "applied");
+    }
+
+    @Test
+    void g6_writeOffAfterTheSeedSnapshot_noPlusOne() throws Exception {
+        T t = tenant("g6", false);
+        V a = variant(t, "g6");
+        List<String> ps = pieces(t, a, 3, "available");
+        UUID s1 = writeOffLastOfThree(t, ps);
+        assertThatThrownBy(() -> enqueued.get(0).run()).isInstanceOf(IllegalStateException.class);
+        link(t);
+        TenantContext.runAs(t.tenant(), () -> seed.apply(null));
+        assertThat(claim(s1)).containsEntry("status", "superseded_by_seed");
+        // The write-off is dated after the seed's snapshot: the seed's count still included the piece.
+        jdbc.update("UPDATE piece_events SET occurred_at = (SELECT superseded_snapshot_at + interval '1 minute' " +
+            "FROM stock_take_shopify_syncs WHERE session_id = ?) WHERE piece_id = ? AND to_status = 'lost'", s1, ps.get(2));
+
+        UUID s2 = open(t);
+        ps.forEach(p -> scan(t, s2, p, "good"));
+        attest(t, s2);
+        assertThat(finalizePlan(t, s2)).containsEntry("founds", 1).containsEntry("foundIncrements", 0L);
+        finalize(t, s2, null);
+        Thread.sleep(1000);
+        assertThat(claimCountOf(t, "stock_take_found")).isZero();
+    }
+
+    // ── p1: partial supersede ─────────────────────────────────────────────────────
+
+    @Test
+    void p1_partialSupersede_onlyUncoveredVariantsSent_newKey() throws Exception {
+        T t = tenant("p1", false);
+        V a = variant(t, "p1a"), b = variant(t, "p1b");
+        List<String> pa = pieces(t, a, 10, "available");
+        List<String> pb = pieces(t, b, 10, "available");
+        UUID s = open(t);
+        for (int i = 0; i < 9; i++) { scan(t, s, pa.get(i), "good"); scan(t, s, pb.get(i), "good"); }
+        attest(t, s);
+        finalize(t, s, 2);                                       // A −1, B −1
+        assertThatThrownBy(() -> enqueued.get(0).run()).isInstanceOf(IllegalStateException.class);
+        assertThat(claim(s)).containsEntry("status", "failed");
+
+        link(t);
+        shopifyAvailable.put(b.item(), 5);                        // B already counted in Shopify: skip_nonzero
+        TenantContext.runAs(t.tenant(), () -> seed.apply(null));
+
+        assertThat(claim(s)).containsEntry("status", "failed");
+        assertThat(jdbc.queryForObject("SELECT payload->'deltas'::text FROM stock_take_shopify_syncs WHERE session_id = ?",
+            String.class, s)).isEqualTo("{\"" + b.id() + "\": 1}");
+        assertThat(jdbc.queryForObject("SELECT (payload->>'revision')::int FROM stock_take_shopify_syncs WHERE session_id = ?",
+            Integer.class, s)).isEqualTo(1);
+
+        enqueued.get(0).run();                                    // the retry
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<ShopifyGateway.InventoryDelta>> deltas = ArgumentCaptor.forClass(List.class);
+        ArgumentCaptor<String> key = ArgumentCaptor.forClass(String.class);
+        verify(shopifyGateway).pushStockTakeWriteOff(any(), any(), deltas.capture(), eq(t.traced()), any(), key.capture());
+        assertThat(deltas.getValue()).extracting(ShopifyGateway.InventoryDelta::inventoryItemGid).containsExactly(b.item());
+        assertThat(deltas.getValue().get(0).negativeDelta()).isEqualTo(-1);
+        assertThat(key.getValue()).as("payload changed → new idempotency key")
+            .isEqualTo(ShopifyGateway.idempotencyKey(t.tenant(), "stock_take_finalize", s + ":rev:1", null, t.traced()));
+        assertThat(claim(s)).containsEntry("status", "pushed");
+    }
+
+    // ── p2/p3: a push that may already have reached Shopify is never rewritten ────
+
+    @Test
+    void p2_ambiguousPushOverlappingSeed_notRewritten_alert() throws Exception {
+        T t = tenant("p2", true);
+        V a = variant(t, "p2");
+        List<String> ps = pieces(t, a, 10, "available");
+        UUID s = open(t);
+        for (int i = 0; i < 9; i++) scan(t, s, ps.get(i), "good");
+        attest(t, s);
+        finalize(t, s, null);
+        doThrow(new com.traceability.integrations.shopify.ShopifyAmbiguousException("timeout")).when(shopifyGateway)
+            .pushStockTakeWriteOff(any(), any(), any(), any(), any(), any());
+        enqueued.get(0).run();
+        assertThat(claim(s)).containsEntry("status", "failed_ambiguous");
+        String before = jdbc.queryForObject("SELECT payload->'deltas'::text FROM stock_take_shopify_syncs WHERE session_id = ?",
+            String.class, s);
+
+        TenantContext.runAs(t.tenant(), () -> seed.apply(null));     // relink: the seed covers variant A
+
+        assertThat(claim(s)).containsEntry("status", "failed_ambiguous");
+        assertThat(jdbc.queryForObject("SELECT payload->'deltas'::text FROM stock_take_shopify_syncs WHERE session_id = ?",
+            String.class, s)).isEqualTo(before);
+        assertThat(overlapAlert(t)).as("alert raised").isNotNull();
+    }
+
+    @Test
+    void p3_pushAlreadySending_notRewritten_alert() throws Exception {
+        T t = tenant("p3", true);
+        V a = variant(t, "p3");
+        List<String> ps = pieces(t, a, 10, "available");
+        UUID s = open(t);
+        for (int i = 0; i < 9; i++) scan(t, s, ps.get(i), "good");
+        attest(t, s);
+        finalize(t, s, null);                                    // pending, job not run yet
+        jdbc.update("UPDATE stock_take_shopify_syncs SET send_started_at = now() WHERE session_id = ?", s);
+
+        TenantContext.runAs(t.tenant(), () -> seed.apply(null));
+
+        assertThat(claim(s)).containsEntry("status", "pending");
+        assertThat(overlapAlert(t)).isNotNull();
+    }
+
+    // ── c1: low coverage, nothing written off ─────────────────────────────────────
+
+    @Test
+    void c1_lowCoverage_zeroWriteOffs_noTypedConfirmation() {
+        T t = tenant("c1", true);
+        V a = variant(t, "c1");
+        List<String> ps = pieces(t, a, 10, "available");
+        UUID s = open(t);
+        for (int i = 0; i < 7; i++) scan(t, s, ps.get(i), "good");   // 70% < 80%
+        attest(t, s);
+        TenantContext.runAs(t.tenant(), () -> reconciliation.resolve(s, List.of(
+            new StockTakeReconciliationService.ResolveItem(ps.get(7), "lost"),
+            new StockTakeReconciliationService.ResolveItem(ps.get(8), "lost"),
+            new StockTakeReconciliationService.ResolveItem(ps.get(9), "lost")), t.user()));
+        assertThat(finalizePlan(t, s)).containsEntry("writeOffs", 0).containsEntry("requiresTypedConfirmation", false);
+
+        Map<String, Object> result = finalize(t, s, null);
+
+        assertThat(result).containsEntry("status", "finalized");
+    }
+
     // ── helpers ──────────────────────────────────────────────────────────────────
+
+    /** Session over 3 available pieces: the first two scanned, the third written off (typed 1). */
+    private UUID writeOffLastOfThree(T t, List<String> ps) {
+        UUID s = open(t);
+        scan(t, s, ps.get(0), "good"); scan(t, s, ps.get(1), "good");
+        attest(t, s);
+        finalize(t, s, 1);
+        return s;
+    }
+
+    private int claimCountOf(T t, String triggerType) {
+        return jdbc.queryForObject("SELECT COUNT(*) FROM shopify_inventory_adjustments WHERE tenant_id = ? " +
+            "AND trigger_type = ?", Integer.class, t.tenant(), triggerType);
+    }
+
+    private Map<String, Object> overlapAlert(T t) {
+        return TenantContext.runAs(t.tenant(), () -> exceptions.detectAllOpen()).stream()
+            .filter(e -> "inventory_increment_sync_failed".equals(e.get("type"))
+                && "stock_take_seed_overlap".equals(e.get("kind")))
+            .findFirst().orElse(null);
+    }
 
     private T tenant(String name, boolean linked) {
         UUID tenant = UUID.randomUUID(), store = UUID.randomUUID(), location = UUID.randomUUID(), user = UUID.randomUUID();

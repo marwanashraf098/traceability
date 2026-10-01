@@ -357,7 +357,19 @@ public class StockTakeService {
         if (row == null) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Stock take session not found");
         }
-        row.put("shopifySync", loadShopifySync(sessionId, tenantId));
+        Map<String, Object> sync = loadShopifySync(sessionId, tenantId);
+        row.put("shopifySync", sync);
+        // Close summary (2026-10-01): every write-off in Traced (any origin), and separately what
+        // actually reached Shopify — damaged / on-hold write-offs never do.
+        row.put("writtenOff", jdbc.queryForObject(
+            "SELECT COUNT(*) FROM piece_events WHERE tenant_id = ? AND to_status = 'lost'::piece_status " +
+            "  AND metadata->>'reason' = 'stock_take_missing' AND metadata->>'session_id' = ?",
+            Integer.class, tenantId, sessionId.toString()));
+        List<Integer> pushed = jdbc.queryForList(
+            "SELECT COALESCE((SELECT SUM(value::int) FROM jsonb_each_text(payload->'deltas')), 0)::int " +
+            "FROM stock_take_shopify_syncs WHERE session_id = ? AND tenant_id = ? AND status = 'pushed'",
+            Integer.class, sessionId, tenantId);
+        row.put("pushedToShopify", pushed.isEmpty() ? 0 : pushed.get(0));
         return row;
     }
 

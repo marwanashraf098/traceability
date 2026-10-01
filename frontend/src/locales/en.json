@@ -2297,6 +2297,7 @@
         "counted": "counted",
         "variance": "variance",
         "writtenOff": "written off",
+        "pushedToShopify": "pushed to Shopify",
         "attestedBy": "Attested by",
         "finalizedBy": "Finalized by",
         "duration": "Duration",

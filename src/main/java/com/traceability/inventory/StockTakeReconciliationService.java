@@ -551,47 +551,60 @@ public class StockTakeReconciliationService {
     }
 
     /**
-     * A found piece gets +1 in Shopify only when the transition that made it 'lost' had itself
-     * taken a unit out of Shopify "available": its latest →lost event is a stock-take write-off
-     * FROM 'available' (reason stock_take_missing), and that session's push actually applied —
-     * stock_take_shopify_syncs status 'pushed' with pushed_at set and the piece's variant in the
-     * pushed deltas. Anything else (a manual lost adjustment, a damaged / on_hold / with_courier
-     * write-off, a push that failed, is pending, was superseded by the seed or is ambiguous) never
-     * reached Shopify for this unit, so no +1.
+     * A found piece gets +1 in Shopify only when the unit really left Shopify "available" when the
+     * piece went lost. Its latest →lost event decides:
+     *   - from 'available', a stock-take write-off (reason stock_take_missing), and that session's push
+     *       a) applied — status 'pushed', pushed_at set, the variant in the pushed deltas; or
+     *       b) was superseded by the seed (wholly, or this variant moved to payload.superseded) and the
+     *          write-off happened at or before that seed's snapshot — the seed set Shopify to an on-hand
+     *          that already excluded the piece (Marawan, 2026-10-01);
+     *   - from 'on_hold' (any reason): the hold-enter decrement of the hold cycle the piece was in when
+     *     it went lost was applied (shopify_inventory_adjustments hold_enter, piece:hold_event_id).
+     * Anything else — a manual lost adjustment, a damaged / with_courier write-off, a push that failed,
+     * is pending or is ambiguous, a hold-enter that never applied — never reached Shopify, so no +1.
      */
     private boolean foundIncrementEligible(String pieceId, UUID tenantId) {
-        Boolean eligible = jdbc.query(
-            "SELECT (pe.from_status = 'available'::piece_status " +
-            "        AND pe.metadata->>'reason' = 'stock_take_missing' " +
-            "        AND EXISTS (SELECT 1 FROM stock_take_shopify_syncs y " +
-            "                    WHERE y.tenant_id = pe.tenant_id AND y.session_id::text = pe.metadata->>'session_id' " +
-            "                      AND y.status = 'pushed' AND y.pushed_at IS NOT NULL " +
-            "                      AND jsonb_exists(y.payload->'deltas', p.variant_id::text))) AS eligible " +
+        Map<String, Object> lost = jdbc.query(
+            "SELECT pe.id, pe.from_status::text AS from_status, pe.metadata->>'reason' AS reason, " +
+            "       pe.metadata->>'session_id' AS session_id, pe.occurred_at, p.variant_id " +
             "FROM piece_events pe JOIN pieces p ON p.id = pe.piece_id AND p.tenant_id = pe.tenant_id " +
             "WHERE pe.piece_id = ? AND pe.tenant_id = ? AND pe.to_status = 'lost'::piece_status " +
             "ORDER BY pe.occurred_at DESC, pe.id DESC LIMIT 1",
-            rs -> rs.next() && rs.getBoolean("eligible"),
+            rs -> rs.next() ? Map.<String, Object>of(
+                "id", rs.getLong("id"), "from", String.valueOf(rs.getString("from_status")),
+                "reason", String.valueOf(rs.getString("reason")), "session", String.valueOf(rs.getString("session_id")),
+                "at", rs.getTimestamp("occurred_at"), "variant", rs.getObject("variant_id", UUID.class)) : null,
             pieceId, tenantId);
-        return Boolean.TRUE.equals(eligible);
+        if (lost == null) return false;
+
+        if ("available".equals(lost.get("from")) && "stock_take_missing".equals(lost.get("reason"))) {
+            Boolean reached = jdbc.query(
+                "SELECT (y.status = 'pushed' AND y.pushed_at IS NOT NULL " +
+                "        AND jsonb_exists(y.payload->'deltas', ?)) " +
+                "    OR (y.superseded_snapshot_at IS NOT NULL AND ? <= y.superseded_snapshot_at " +
+                "        AND ((y.status = 'superseded_by_seed' AND jsonb_exists(y.payload->'deltas', ?)) " +
+                "             OR jsonb_exists(COALESCE(y.payload->'superseded', '{}'::jsonb), ?))) AS reached " +
+                "FROM stock_take_shopify_syncs y WHERE y.tenant_id = ? AND y.session_id::text = ?",
+                rs -> rs.next() && rs.getBoolean("reached"),
+                lost.get("variant").toString(), lost.get("at"), lost.get("variant").toString(),
+                lost.get("variant").toString(), tenantId, lost.get("session"));
+            return Boolean.TRUE.equals(reached);
+        }
+        if ("on_hold".equals(lost.get("from"))) {
+            Boolean applied = jdbc.query(
+                "SELECT EXISTS (SELECT 1 FROM shopify_inventory_adjustments sia " +
+                "  WHERE sia.tenant_id = ? AND sia.trigger_type = 'hold_enter' AND sia.status = 'applied' " +
+                "    AND sia.trigger_id = ? || ':' || (" +
+                "      SELECT h.metadata->>'hold_event_id' FROM piece_events h " +
+                "      WHERE h.piece_id = ? AND h.tenant_id = ? AND h.to_status = 'on_hold'::piece_status " +
+                "        AND h.id < ? ORDER BY h.occurred_at DESC, h.id DESC LIMIT 1)) AS applied",
+                rs -> rs.next() && rs.getBoolean("applied"),
+                tenantId, pieceId, pieceId, tenantId, lost.get("id"));
+            return Boolean.TRUE.equals(applied);
+        }
+        return false;
     }
 
-    /**
-     * Applies the count, then claims the Shopify push — one transaction under the session lock
-     * (Marawan, 2026-10-01; FR-21 Step 5 previously only pushed per-row write-offs).
-     *
-     *   1. Lock the session row (FOR UPDATE) and every piece it may touch (fixed order).
-     *   2. Refuse: 0 piece scans → 400 ZERO_SCANS; write-offs without the full-coverage attestation
-     *      → 409 ATTESTATION_REQUIRED; typed confirmation required (StockTakeFinalizePolicy) and
-     *      confirmWriteOffs != the planned write-off count → 409 CONFIRMATION_REQUIRED. Nothing
-     *      has changed when any of these throws.
-     *   3. Write-offs (InventoryLedger.transition, expectedStatus = status at open — still equal,
-     *      the pieces are locked), damage corrections (PieceAdjustService.adjustPiece → its own
-     *      damage-move trigger after commit), founds (lost → available back at the session's
-     *      location; +1 increment after commit when eligible).
-     *   4. Flip open → finalized; per-variant delta = this session's stock_take_missing write-offs
-     *      FROM 'available' only; claim 'pending' (push enqueued after commit) or 'nothing_to_push'.
-     * Contains NO Shopify HTTP call — StockTakeShopifyPushJob pushes after commit.
-     */
     /** Finalize without a typed confirmation — refused (409) whenever the plan requires one. */
     @Transactional
     public Map<String, Object> finalizeSession(UUID sessionId, UUID actorUserId) {

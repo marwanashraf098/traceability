@@ -166,4 +166,21 @@ describe('Stock take finalize applies the count', () => {
     expect(screen.getByText('Nothing to send')).toBeInTheDocument()
     expect(screen.queryByText('Pushed to Shopify')).not.toBeInTheDocument()
   })
+
+  test('sf6 — close summary: written off counts every write-off in Traced; pushed to Shopify is separate', async () => {
+    vi.mocked(api.getStockTakeReconciliation).mockResolvedValue(reconciliation(undefined, { status: 'finalized' }))
+    vi.mocked(api.getStockTakeSession).mockResolvedValue(session({
+      status: 'finalized', finalizedBy: 'user-1', finalizedByName: 'Owner', finalizedAt: new Date().toISOString(),
+      writtenOff: 3, pushedToShopify: 2,
+      shopifySync: { status: 'pushed', deltas: [{ variantId: 'va', variantTitle: 'Blue / M', sku: 'A', delta: -2 }],
+        pushedAt: new Date().toISOString(), error: null, referenceDocumentUri: 'traced://stock-take/x' },
+    }))
+    renderReview()
+
+    await screen.findByText('Count finalized')
+    // Each summary stat is <p>value</p><p>label</p>.
+    const stat = (label: string) => screen.getByText(label, { selector: 'p' }).previousElementSibling!.textContent
+    expect(stat('written off')).toBe('3')
+    expect(stat('pushed to Shopify')).toBe('2')
+  })
 })

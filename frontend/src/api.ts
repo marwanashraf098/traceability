@@ -1446,6 +1446,10 @@ export interface StockTakeSessionDetail {
   finalizedAt: string | null
   note: string | null
   shopifySync: StockTakeShopifySync | null
+  /** Every piece this session wrote off in Traced (any origin). */
+  writtenOff?: number
+  /** Units actually decremented in Shopify by this session's push (0 until it is pushed). */
+  pushedToShopify?: number
 }
 
 export function getStockTakeSession(sessionId: string) {

@@ -495,7 +495,41 @@ public class ExceptionService {
         }
         out.addAll(incrementRow(tid, "gave_up", IncrementRecoveryRules.GAVE_UP_SQL, null));
         out.addAll(incrementRow(tid, "legacy", IncrementRecoveryRules.LEGACY_SQL, null));
+        out.addAll(stockTakeSeedOverlapRows(tid));
         return out;
+    }
+
+    /**
+     * kind stock_take_seed_overlap — a stock-take write-off push that may already have reached Shopify
+     * (failed_ambiguous, or pending and being sent) when the initial seed covered some of its variants
+     * (ShopifyInventoryReconcileService.supersedeStockTakePushes records payload.seedOverlap and never
+     * rewrites such a push). Shopify may count those write-offs twice; a person checks. One row per
+     * push, cleared by resolving the exception.
+     */
+    private List<Map<String, Object>> stockTakeSeedOverlapRows(UUID tid) {
+        List<Map<String, Object>> rows = jdbc.queryForList(
+            "SELECT 'inventory_increment_sync_failed' AS type, 'HIGH' AS severity, 'tenant' AS subject_type, " +
+            "       'stock_take_seed_overlap' AS kind, NULL AS problem, 1 AS claim_count, " +
+            "       COALESCE((SELECT SUM(value::int) FROM jsonb_each_text(y.payload->'seedOverlap'->'variants')), 0) AS units, " +
+            "       (SELECT COUNT(*) FROM jsonb_object_keys(y.payload->'seedOverlap'->'variants')) AS variant_count, " +
+            "       y.created_at AS occurred_at, y.session_id, " +
+            "       'inventory_increment_sync_failed:stock_take_seed_overlap:' || y.id AS subject_key " +
+            "FROM stock_take_shopify_syncs y " +
+            "WHERE y.tenant_id = ? AND jsonb_exists(y.payload, 'seedOverlap') " +
+            "  AND NOT EXISTS (SELECT 1 FROM exception_resolutions er WHERE er.tenant_id = y.tenant_id " +
+            "      AND er.exception_type = 'inventory_increment_sync_failed' " +
+            "      AND er.subject_key = 'inventory_increment_sync_failed:stock_take_seed_overlap:' || y.id)",
+            tid);
+        for (Map<String, Object> row : rows) {
+            row.put("variants", jdbc.queryForList(
+                "SELECT v.id AS variant_id, v.sku, p.title AS product_title, v.title AS variant_title, " +
+                "       o.value::int AS units " +
+                "FROM stock_take_shopify_syncs y, jsonb_each_text(y.payload->'seedOverlap'->'variants') o " +
+                "JOIN variants v ON v.id = o.key::uuid JOIN products p ON p.id = v.product_id " +
+                "WHERE y.tenant_id = ? AND y.session_id = ? ORDER BY units DESC",
+                tid, row.get("session_id")));
+        }
+        return rows;
     }
 
     private List<Map<String, Object>> incrementRow(UUID tid, String kind, String predicate, String problem) {
@@ -1072,6 +1106,15 @@ public class ExceptionService {
                         + " متغيرات إلى Shopify بعد إعادة المحاولة — راجع هذه المتغيرات في Shopify");
                     item.put("suggestedAction", "manual_repush");
                     item.put("actionUrl", "/inventory?tab=ledger");
+                } else if ("stock_take_seed_overlap".equals(kind)) {
+                    item.put("descriptionEn", "A stock-take write-off of " + units + " units across " + variants
+                        + " variants may already have reached Shopify when the warehouse was linked and the stock "
+                        + "seed ran — Shopify may count those write-offs twice. Check these variants in Shopify.");
+                    item.put("descriptionAr", "قد يكون شطب الجرد لـ " + units + " وحدة عبر " + variants
+                        + " متغيرات قد وصل إلى Shopify عند ربط المستودع وتشغيل المزامنة الأولية للمخزون — قد يُحتسب "
+                        + "الشطب مرتين في Shopify. راجع هذه المتغيرات في Shopify.");
+                    item.put("suggestedAction", "manual_reconcile");
+                    item.put("actionUrl", "/stock-take/" + item.get("session_id") + "/review");
                 } else {
                     item.put("descriptionEn", units + " units across " + variants
                         + " variants received in Traced never reached Shopify (since " + since + "). "

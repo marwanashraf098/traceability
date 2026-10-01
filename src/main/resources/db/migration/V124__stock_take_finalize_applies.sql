@@ -21,6 +21,16 @@ ALTER TABLE stock_take_shopify_syncs
 ALTER TABLE stock_take_shopify_syncs
     ADD COLUMN superseded_at timestamptz NULL;
 
+-- superseded_snapshot_at  the on-hand snapshot of the seed that superseded this push (wholly, or
+--                         some of its variants — those move to payload.superseded). A piece written
+--                         off before it and found later gets +1 (the seed's count excluded it).
+-- send_started_at         set, committed, right before the push's HTTP call; cleared by a definitive
+--                         failure. A 'pending' push with it set may already have reached Shopify, so
+--                         the seed never rewrites it (it raises an alert instead).
+ALTER TABLE stock_take_shopify_syncs
+    ADD COLUMN superseded_snapshot_at timestamptz NULL,
+    ADD COLUMN send_started_at timestamptz NULL;
+
 ALTER TABLE shopify_inventory_adjustments
     DROP CONSTRAINT shopify_inventory_adjustments_trigger_type_check;
 

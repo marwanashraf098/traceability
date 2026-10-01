@@ -134,7 +134,7 @@ describe('FR-21 Stock-take landing (Returns-pattern restyle)', () => {
     expect(band).not.toHaveTextContent('0%')
   })
 
-  // st8: finalized row shows a variance figure (counted - expected), derived from the
+  // st8: finalized row shows a variance figure (expected - counted: positive = short), derived from the
   // existing per-row payload — no new fetch.
   test('st8 — finalized row shows variance; cancelled row shows a dash', async () => {
     vi.mocked(api.listStockTakeSessions).mockResolvedValue([
@@ -144,7 +144,10 @@ describe('FR-21 Stock-take landing (Returns-pattern restyle)', () => {
     renderLanding()
 
     await screen.findByText('ST-3333')
-    expect(screen.getByText('-3')).toBeInTheDocument()
+    // The variance cell of THIS row (the page shows other 3s): 3 pieces short, styled as a shortage.
+    const varianceCell = screen.getByText('ST-3333').closest('tr')!.querySelector('span.font-mono.font-semibold')!
+    expect(varianceCell).toHaveTextContent('3')
+    expect(varianceCell).toHaveClass('text-danger')
     expect(screen.getByText('—')).toBeInTheDocument()
   })
 
