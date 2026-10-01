@@ -12,6 +12,29 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 // returns whether it counts as a "success" flash/beep or a "fail" flash/beep —
 // stock-take's classification (match/mismatch/unexpected/unknown) collapses
 // onto this same success/fail signal the same way PickScreen's ScanResult does.
+//
+// NO LOST SCANS (approved by Marawan, 2026-10-01 — explicit approval to edit the
+// SAFETY-CRITICAL blocks below for exactly this change). The original copy disabled
+// the input while a scan was in flight and called focus() in `finally`, before
+// React re-enabled it: every keystroke of a scan arriving during the request was
+// dropped silently (no beep, no server trace — in stock-take, a piece physically
+// scanned could then be written off at finalize), and on desktop Chrome focus left
+// the input for good, so every later scan was lost until a tap. Now:
+//   • the input is never disabled for scanning (ScanShell) — keystrokes always land;
+//   • Enter pushes the trimmed code onto a FIFO queue and clears the input at once;
+//   • one worker processes the queue strictly in order, one onScan at a time, each
+//     with its own beep/flash/recent-scan entry exactly as before — no parallel
+//     requests, no reordering, no dedup (servers already handle repeats). The worker
+//     runs from an effect, so each queued scan uses the onScan of the latest render
+//     (a screen whose onScan depends on what the previous scan changed sees it);
+//   • at most MAX_QUEUED_SCANS waiting — beyond that the scan is refused loudly
+//     (error beep + flash + `queueFull` notice), never silently;
+//   • `clearQueue()` drops waiting scans (screens call it when queued scans must not
+//     be applied); unmounting drops them too; `pending` = how many are waiting;
+//   • focus returns to the input after every scan and when the queue drains — only
+//     ever while the input is enabled and the screen hasn't paused focus (an open
+//     dialog: `focusPaused`). The click-to-refocus listener is unchanged.
+// PickScreen still has the old disabled-during-scan pattern — separate, gated fix.
 
 export type FlashState = 'idle' | 'success' | 'error'
 
@@ -37,14 +60,29 @@ export interface RecentScan {
 export interface UseScannerOptions {
   onScan: (barcode: string) => Promise<ScanOutcome>
   recentScansLimit?: number
+  /** True while the screen shows a dialog / overlay: the hook won't pull focus back
+   *  to the scan input (the click-to-refocus listener is unaffected — dialogs keep
+   *  their clicks by stopping propagation, as Modal already does). */
+  focusPaused?: boolean
 }
+
+/** Scans that may wait behind the one in flight; one more is refused loudly. */
+export const MAX_QUEUED_SCANS = 20
 
 export interface UseScannerResult {
   inputRef: React.RefObject<HTMLInputElement>
   flash: FlashState
+  /** A scan is being processed (onScan in flight). */
   scanning: boolean
+  /** Scans waiting behind the one in flight. */
+  pending: number
+  /** The last scan was refused because MAX_QUEUED_SCANS were already waiting. */
+  queueFull: boolean
   recentScans: RecentScan[]
+  /** Queues a scan (trimmed; empty ignored) and clears the input. Resolves once queued. */
   handleScan: (barcode: string) => Promise<void>
+  /** Drops every waiting scan (not the one in flight). */
+  clearQueue: () => void
   removeRecentScan: (key: string) => void
   clearRecentScans: () => void
 }
@@ -69,11 +107,32 @@ function playBeep(success: boolean) {
   }
 }
 
-export function useScanner({ onScan, recentScansLimit = 20 }: UseScannerOptions): UseScannerResult {
+/** Another place the person may be typing — the scanner never steals focus from it. */
+function isTextEntry(el: HTMLElement): boolean {
+  if (el.isContentEditable) return true
+  if (el instanceof HTMLTextAreaElement || el instanceof HTMLSelectElement) return true
+  if (el instanceof HTMLInputElement) {
+    return !['button', 'submit', 'reset', 'checkbox', 'radio', 'range', 'color', 'file', 'image'].includes(el.type)
+  }
+  return false
+}
+
+export function useScanner({ onScan, recentScansLimit = 20, focusPaused = false }: UseScannerOptions): UseScannerResult {
   const inputRef = useRef<HTMLInputElement>(null)
   const [flash, setFlash] = useState<FlashState>('idle')
   const [scanning, setScanning] = useState(false)
   const [recentScans, setRecentScans] = useState<RecentScan[]>([])
+  // FIFO of scans waiting behind the one in flight. The ref is the source of truth
+  // (read synchronously by handleScan and the worker); `pending` mirrors its length
+  // for rendering and to wake the worker effect.
+  const queueRef = useRef<string[]>([])
+  const [pending, setPending] = useState(0)
+  const [queueFull, setQueueFull] = useState(false)
+  const mountedRef = useRef(true)
+  useEffect(() => {
+    mountedRef.current = true
+    return () => { mountedRef.current = false; queueRef.current = [] }
+  }, [])
 
   // SAFETY-CRITICAL — HID refocus: re-focuses scan input on any click; copied
   // verbatim from PickScreen (there it re-runs on `[order]`; here there is no
@@ -94,37 +153,86 @@ export function useScanner({ onScan, recentScansLimit = 20 }: UseScannerOptions)
     setTimeout(() => setFlash('idle'), 600)
   }, [])
 
-  // SAFETY-CRITICAL — scan handler shape (trim/guard/scanning-lock/beep/flash/
-  // refocus-and-clear-on-finally) copied verbatim from PickScreen.handleScan().
-  // The one deliberate difference: PickScreen calls its own inline api() fetch
-  // helper directly; this hook calls the caller-supplied onScan() instead, so
-  // it never does network I/O itself (transport-agnostic, per 6.2).
+  // SAFETY-CRITICAL — scan handler: trim / ignore empty / beep / flash per scan, as
+  // copied from PickScreen.handleScan() (calling the caller-supplied onScan instead of
+  // a fetch — transport-agnostic, per 6.2). Changed 2026-10-01 (approved, see header):
+  // the "scanning" guard that dropped a scan arriving mid-request is replaced by a FIFO
+  // queue; the input is cleared on Enter, not in `finally` (clearing there would wipe a
+  // scan being typed meanwhile); and focus is restored by the effect below, never on a
+  // still-disabled input.
   const handleScan = useCallback(async (barcode: string) => {
+    if (inputRef.current) inputRef.current.value = ''
     const trimmed = barcode.trim()
-    if (!trimmed || scanning) return
-    setScanning(true)
-    try {
-      const result = await onScan(trimmed)
-      if (result.success) {
-        playBeep(true)
-        triggerFlash('success')
-      } else {
-        playBeep(false)
-        triggerFlash('error')
-      }
-      setRecentScans(prev =>
-        [{ key: `${Date.now()}-${trimmed}`, barcode: trimmed, success: result.success,
-           label: result.label, data: result.data }, ...prev]
-          .slice(0, recentScansLimit)
-      )
-    } catch {
+    if (!trimmed) return
+    if (queueRef.current.length >= MAX_QUEUED_SCANS) {
       playBeep(false)
       triggerFlash('error')
-    } finally {
-      setScanning(false)
-      if (inputRef.current) { inputRef.current.value = ''; inputRef.current.focus() }
+      setQueueFull(true)
+      return
     }
-  }, [scanning, onScan, triggerFlash, recentScansLimit])
+    setQueueFull(false)
+    queueRef.current.push(trimmed)
+    setPending(queueRef.current.length)
+  }, [triggerFlash])
+
+  // SAFETY-CRITICAL — the single scan worker: takes the oldest waiting scan when none is
+  // in flight, runs onScan, gives that scan its own beep/flash/recent entry. Runs after
+  // each render, so `onScan` is always the latest render's.
+  useEffect(() => {
+    if (scanning || queueRef.current.length === 0) return
+    const code = queueRef.current.shift()!
+    setPending(queueRef.current.length)
+    setScanning(true)
+    ;(async () => {
+      try {
+        const result = await onScan(code)
+        if (!mountedRef.current) return
+        if (result.success) {
+          playBeep(true)
+          triggerFlash('success')
+        } else {
+          playBeep(false)
+          triggerFlash('error')
+        }
+        setRecentScans(prev =>
+          [{ key: `${Date.now()}-${code}`, barcode: code, success: result.success,
+             label: result.label, data: result.data }, ...prev]
+            .slice(0, recentScansLimit)
+        )
+      } catch {
+        if (!mountedRef.current) return
+        playBeep(false)
+        triggerFlash('error')
+      } finally {
+        if (mountedRef.current) setScanning(false)
+      }
+    })()
+  }, [scanning, pending, onScan, triggerFlash, recentScansLimit])
+
+  // SAFETY-CRITICAL — keep the scan input focused: after every scan and when the queue
+  // drains, but only on an ENABLED input (focus() on a disabled one is a no-op — the
+  // original bug), never while the screen has a dialog open (focusPaused), and never
+  // out of another text field the person is typing in (e.g. TransferReconcile's
+  // shortfall quantities) — a finishing scan must not yank their cursor away.
+  useEffect(() => {
+    const input = inputRef.current
+    if (!input || input.disabled || focusPaused) return
+    const active = document.activeElement
+    if (active === input) return
+    if (active instanceof HTMLElement && active !== document.body && isTextEntry(active)) return
+    input.focus()
+  }, [scanning, pending, focusPaused])
+
+  // The "too many waiting" notice stays until the queue has drained (or the next scan is accepted).
+  useEffect(() => {
+    if (!scanning && pending === 0) setQueueFull(false)
+  }, [scanning, pending])
+
+  const clearQueue = useCallback(() => {
+    queueRef.current = []
+    setPending(0)
+    setQueueFull(false)
+  }, [])
 
   function removeRecentScan(key: string) {
     setRecentScans(prev => prev.filter(s => s.key !== key))
@@ -134,5 +242,6 @@ export function useScanner({ onScan, recentScansLimit = 20 }: UseScannerOptions)
     setRecentScans([])
   }
 
-  return { inputRef, flash, scanning, recentScans, handleScan, removeRecentScan, clearRecentScans }
+  return { inputRef, flash, scanning, pending, queueFull, recentScans, handleScan, clearQueue,
+           removeRecentScan, clearRecentScans }
 }

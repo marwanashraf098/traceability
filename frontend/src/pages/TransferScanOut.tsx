@@ -32,6 +32,7 @@ export default function TransferScanOut() {
     load().finally(() => setLoading(false))
   }, [load])
 
+  // Queued scans are dropped by useScanner when this screen unmounts (leaving it).
   const scanner = useScanner({
     onScan: async (barcode) => {
       if (!id) return { success: false }

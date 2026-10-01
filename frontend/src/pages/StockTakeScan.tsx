@@ -71,7 +71,9 @@ export default function StockTakeScan() {
       .finally(() => setLoading(false))
   }, [id])
 
+  // Queued scans are dropped by useScanner when this screen unmounts (leaving it).
   const scanner = useScanner({
+    focusPaused: showAbandon,
     onScan: async (barcode) => {
       if (!id) return { success: false }
       const result = await scanStockTakePiece(id, barcode, condition)

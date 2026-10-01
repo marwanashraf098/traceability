@@ -8,3 +8,7 @@ dist/
 
 # Vite build output (frontend/vite.config outDir) — built by the Dockerfile / Maven frontend plugin, never committed
 src/main/resources/static/
+
+# Vitest browser mode (npm run test:browser): failure screenshots / attachments
+frontend/.vitest-attachments/
+frontend/src/test-browser/__screenshots__/

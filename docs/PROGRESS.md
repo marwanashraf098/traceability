@@ -4,6 +4,44 @@
 
 ## Current state
 
+**Scanner fix — no lost scans (2026-10-01, branch `fix/scanner-no-lost-scans` off main 3b8a503; pushed, not merged,
+not deployed).** Marawan approved editing the SAFETY-CRITICAL blocks of `hooks/useScanner.ts` and
+`components/ScanShell.tsx` for exactly this change (2026-10-01). Screens: StockTakeScan, TransferScanOut,
+TransferReconcile. PickScreen untouched. S3's PackSessionScreen is not on main yet — see follow-up.
+- **Bug:** ScanShell disabled the input while `scanning`; useScanner called `focus()` in `finally` before React
+  re-enabled it. Every keystroke of a scan arriving mid-request was dropped (no beep, no server trace — a piece
+  physically scanned in a stock take could be written off at V124 finalize and decremented in Shopify), and in
+  Chromium focus never came back: every later scan lost until a tap.
+- **Fix:** input never disabled for scanning (only the screen's own `disabled`); spinner + `aria-busy` instead. Enter →
+  trimmed code onto a FIFO queue, input cleared at once. One effect-driven worker, one `onScan` at a time, strictly in
+  order, own beep/flash/recent entry per scan, no dedup; each queued scan runs with the latest render's `onScan`.
+  `MAX_QUEUED_SCANS = 20` waiting → the next is refused with error beep + flash + "Too many scans waiting — slow down".
+  `pending` ("N scans waiting" under the input), `queueFull`, `clearQueue()`; queue dropped on unmount (= leaving the
+  screen — no extra call sites needed on the three screens). Focus effect: after every scan / when the queue drains,
+  only on an enabled input, not while `focusPaused` (StockTakeScan abandon dialog, TransferReconcile close confirm),
+  and never out of another text field (TransferReconcile shortfall inputs). Click-to-refocus unchanged. beep / click
+  refocus / flash trigger / flash overlay blocks byte-identical to main.
+- **Tests:** jsdom `useScannerQueue.test.tsx` (7: no focus() on a disabled input + ends focused; 6 scans with the first
+  held → 6 calls in order, one at a time; 21st waiting refused visibly; clearQueue; unmount; latest onScan; focus not
+  stolen / paused). Real browser `src/test-browser/scannerBurst.browser.test.tsx` — Vitest browser mode + Playwright,
+  Chromium AND WebKit, 20 scanner bursts (Playwright keyboard, 4 ms/key, no clicks) with 300 ms per request on all three
+  screens → exactly 20 requests in order, max 1 in flight, input focused: 6/6 pass; with main's useScanner/ScanShell
+  6/6 FAIL (Chromium 1 of 20 arrive, WebKit 1–3 of 20). Run: `cd frontend && npx playwright install chromium webkit`
+  (once) then `npm run test:browser`. Not part of `npm test` / the Docker build.
+- **Deps:** devDependencies `@vitest/browser-playwright@^4.1.10` (matches vitest 4.1.10) + `playwright@^1.56.1` (no
+  install script — `npm ci` downloads no browsers). Lock regenerated inside node:22-alpine (linux/amd64) from main's
+  lock: +107 entries, nothing removed; postcss 8.5.19→8.5.28, nanoid 3.3.16→3.3.19, lightningcss 1.32→1.33 (dev,
+  in range). Docker-image `npm ci` + `npm run build` verified. `src/test-browser` excluded from `tsc` like `src/test`.
+- **Suite:** vitest 585/585 (578 + 7), browser 6/6, tsc + build clean; backend 1,882 run, 4 skipped, only the 2 known reds.
+- **S3 follow-up (PackSessionScreen, after rebase onto this):** call `scanner.clearQueue()` on a waybill rejection
+  (`setRejection(r)`), on complete_failed (`setFailed(...)`), when opening the set-aside dialog, and before
+  `endPackSession`/`onEnded`; pass `focusPaused: setAsideOpen`; remove its own screen-level refocus effect (the hook
+  now does it) and the "drops a scan while one is in flight" comment; keep `if (setAsideOpen) return {success:false}`
+  as a guard; add PackSessionScreen to the browser burst test (waybill then 19 pieces, each request 300 ms).
+- **Follow-up:** PickScreen still disables its scan input during a scan (`Fulfill.tsx:1218`) and its marked refocus
+  effect re-runs only on `[order]` (:956-963) — fast scans dropped and, after a rejected scan, focus likely lost.
+  Separate gated fix (SAFETY-CRITICAL).
+
 **Pick & Pack S2 — batch waybill printing, queue mode (2026-10-01, branch `feat/pack-print-batches`, rebased on main
 abf62ba; pushed, not merged, not deployed).** Mockup `design/pick-pack-waybill-mockup/PrintDialog.html`.
 - **V125** `pack_print_batches` (batch_no per tenant, paper, sort, scope, waybill_count, order_guaranteed) +

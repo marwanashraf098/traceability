@@ -2799,5 +2799,10 @@
     "overdueAge_few": "منذ {{count}} أيام",
     "overdueAge_many": "منذ {{count}} يومًا",
     "overdueAge_other": "منذ {{count}} يوم"
+  },
+  "scanner": {
+    "waiting_one": "مسح واحد في الانتظار",
+    "waiting_other": "{{count}} عمليات مسح في الانتظار",
+    "queueFull": "عمليات مسح كثيرة في الانتظار — أبطئ قليلاً"
   }
 }

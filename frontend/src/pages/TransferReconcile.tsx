@@ -54,7 +54,9 @@ export default function TransferReconcile() {
 
   useEffect(() => { load().finally(() => setLoading(false)) }, [load])
 
+  // Queued scans are dropped by useScanner when this screen unmounts (leaving it).
   const scanner = useScanner({
+    focusPaused: showCloseConfirm,
     onScan: async (barcode) => {
       if (!id) return { success: false }
       const result = await scanBackTransferPiece(id, barcode, condition)

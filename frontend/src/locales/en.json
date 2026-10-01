@@ -2780,5 +2780,10 @@
         "reason": "Check with Bosta"
       }
     }
+  },
+  "scanner": {
+    "waiting_one": "{{count}} scan waiting",
+    "waiting_other": "{{count}} scans waiting",
+    "queueFull": "Too many scans waiting — slow down"
   }
 }
