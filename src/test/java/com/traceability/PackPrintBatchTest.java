@@ -8,6 +8,7 @@ import com.traceability.inventory.FulfillService;
 import com.traceability.inventory.PackPrintBatchService;
 import com.traceability.inventory.PackPrintBatchService.PrintBatchResult;
 import com.traceability.inventory.PackPrintBatchStore;
+import com.traceability.inventory.WaybillPdfAssembler;
 import com.traceability.security.EncryptionService;
 import com.traceability.tenancy.TenantAwareDataSource;
 import com.traceability.tenancy.TenantContext;
@@ -191,28 +192,75 @@ class PackPrintBatchTest {
 
     @Test
     @SuppressWarnings("unchecked")
-    void sendOrder_matchesSortedOrder_acrossChunkBoundary_andAllPagesMerged() throws Exception {
-        Fixture f = fixture("Chunks");
+    void cap_130Candidates_prints49InSortedOrder_remaining81_nextNewPrintsNext49() throws Exception {
+        Fixture f = fixture("Cap");
         f.courier();
         List<String> expected = new ArrayList<>();
-        for (int i = 0; i < 60; i++) {
-            UUID o = f.order("C" + i, minutesAgo(60 - i), false, false);   // created oldest → newest, all in window
+        for (int i = 0; i < 130; i++) {
+            UUID o = f.order("C" + i, minutesAgo(200 - i), false, false);   // created oldest → newest, all in window
             expected.add(f.forward(o, "created"));
         }
-        // Make DB order differ from sort order: newest-first print.
+        // Newest first, so the sorted order differs from insertion / DB order.
         Collections.reverse(expected);
 
-        PrintBatchResult r = as(f.tenant, () -> printService.print("all", "A4", "newest", f.owner));
+        PrintBatchResult first = as(f.tenant, () -> printService.print("new", "A6", "newest", f.owner));
+        assertThat(first.waybillCount()).isEqualTo(PackPrintBatchService.MAX_WAYBILLS_PER_PRINT).isEqualTo(49);
+        assertThat(first.candidateCount()).isEqualTo(130);
+        assertThat(first.remainingCount()).isEqualTo(81);
+        assertThat(first.orderGuaranteed()).isTrue();
+        assertThat(pagesOf(first)).containsExactlyElementsOf(expected.subList(0, 49));
+        assertThat(positionsOf(first.batchId())).containsExactlyElementsOf(expected.subList(0, 49));
+
+        PrintBatchResult second = as(f.tenant, () -> printService.print("new", "A6", "newest", f.owner));
+        assertThat(second.batchNo()).isEqualTo(first.batchNo() + 1);
+        assertThat(second.candidateCount()).isEqualTo(81);
+        assertThat(second.remainingCount()).isEqualTo(32);
+        assertThat(positionsOf(second.batchId())).containsExactlyElementsOf(expected.subList(49, 98));
+
+        // Exactly one Bosta request per print, each ≤ 49 tracking numbers, in sorted order.
+        ArgumentCaptor<List<String>> sent = ArgumentCaptor.forClass(List.class);
+        verify(bostaGateway, times(2)).printMassAwb(anyString(), sent.capture(), eq("A6"), anyString());
+        assertThat(sent.getAllValues().get(0)).containsExactlyElementsOf(expected.subList(0, 49));
+        assertThat(sent.getAllValues().get(1)).containsExactlyElementsOf(expected.subList(49, 98));
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void bostaRequest_neverCarriesMoreThan49TrackingNumbers_singleOrderPathToo() {
+        Fixture f = fixture("Max49");
+        f.courier();
+        List<UUID> ids = new ArrayList<>();
+        List<String> tns = new ArrayList<>();
+        for (int i = 0; i < 100; i++) {
+            UUID o = f.order("M" + i, minutesAgo(200 - i), false, false);
+            String tn = f.forward(o, "created");
+            tns.add(tn);
+            ids.add(jdbc.queryForObject("SELECT id FROM shipments WHERE tracking_number = ?", UUID.class, tn));
+        }
+        // BostaController's path (printAwb), any number of shipments: chunks of ≤ 49, in the given order.
+        BostaAwbService.AwbBatchResult r = awbService.printAwb(f.tenant, ids, null, null);
+        assertThat(r.pdfBase64List()).hasSize(3);
 
         ArgumentCaptor<List<String>> sent = ArgumentCaptor.forClass(List.class);
-        verify(bostaGateway, times(2)).printMassAwb(anyString(), sent.capture(), eq("A4"), anyString());
-        assertThat(sent.getAllValues().get(0)).containsExactlyElementsOf(expected.subList(0, 50));
-        assertThat(sent.getAllValues().get(1)).containsExactlyElementsOf(expected.subList(50, 60));
+        verify(bostaGateway, times(3)).printMassAwb(anyString(), sent.capture(), anyString(), anyString());
+        assertThat(sent.getAllValues()).allSatisfy(chunk -> assertThat(chunk).hasSizeLessThanOrEqualTo(49));
+        assertThat(sent.getAllValues().stream().flatMap(List::stream).toList()).containsExactlyElementsOf(tns);
+    }
 
-        assertThat(r.waybillCount()).isEqualTo(60);
-        assertThat(r.orderGuaranteed()).isTrue();
-        assertThat(pagesOf(r)).containsExactlyElementsOf(expected);
-        assertThat(positionsOf(r.batchId())).containsExactlyElementsOf(expected);
+    @Test
+    void assembler_mergesEveryChunkPdf_inOneDocument() throws Exception {
+        List<String> tns = new ArrayList<>();
+        for (int i = 0; i < 60; i++) tns.add(String.valueOf(5_000_000_000L + i));
+        byte[] chunk1 = pdf(tns.subList(0, 49), false);
+        byte[] chunk2 = pdf(tns.subList(49, 60), false);
+
+        WaybillPdfAssembler.Assembled a = WaybillPdfAssembler.assemble(List.of(chunk1, chunk2), tns);
+
+        assertThat(a.pageCount()).isEqualTo(60);
+        assertThat(a.orderGuaranteed()).isTrue();
+        try (PDDocument doc = Loader.loadPDF(a.pdf())) {
+            assertThat(doc.getNumberOfPages()).isEqualTo(60);
+        }
     }
 
     @Test

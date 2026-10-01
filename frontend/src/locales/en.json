@@ -703,6 +703,8 @@
       "nothingReady": "No waybills to print.",
       "nothingPrinted": "No waybills were printed.",
       "orderNotGuaranteed": "Waybills may not be in the order you chose.",
+      "remaining_one": "Printed the first {{printed}}. Print again to get the remaining {{count}}.",
+      "remaining_other": "Printed the first {{printed}}. Print again to get the remaining {{count}}.",
       "excludedTitle_one": "{{count}} waybill not printed",
       "excludedTitle_other": "{{count}} waybills not printed",
       "reason": {

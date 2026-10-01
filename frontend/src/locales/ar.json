@@ -704,6 +704,8 @@
       "nothingReady": "لا توجد بوالص للطباعة.",
       "nothingPrinted": "لم تُطبع أي بوالص.",
       "orderNotGuaranteed": "قد لا تكون البوالص بالترتيب الذي اخترته.",
+      "remaining_one": "طُبعت أول {{printed}}. اطبع مرة أخرى للحصول على المتبقية ({{count}}).",
+      "remaining_other": "طُبعت أول {{printed}}. اطبع مرة أخرى للحصول على المتبقية ({{count}}).",
       "excludedTitle_one": "{{count}} بوليصة لم تُطبع",
       "excludedTitle_other": "{{count}} بوالص لم تُطبع",
       "reason": {

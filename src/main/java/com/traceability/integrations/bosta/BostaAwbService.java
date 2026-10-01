@@ -24,7 +24,8 @@ import java.util.stream.Stream;
  * Exclusions are written to shipments.awb_print_failed_reason so the exceptions
  * center can surface them as missing_awb exceptions.
  *
- * Batching: ≤50 tracking numbers per Bosta call (their inline-PDF limit).
+ * Batching: ≤49 tracking numbers per Bosta call — from 50 up, Bosta stops returning the PDF
+ * inline and emails the labels instead (see BATCH_SIZE).
  * Results from multiple batches are returned as a list of base64 strings so
  * the caller can print each in sequence.
  */
@@ -32,7 +33,9 @@ import java.util.stream.Stream;
 public class BostaAwbService {
 
     private static final Logger log = LoggerFactory.getLogger(BostaAwbService.class);
-    static final int BATCH_SIZE = 50;
+    /** Bosta mass-awb answers with an inline PDF only below 50 tracking numbers; from 50 up it
+     *  emails the labels instead. 49 keeps every request on the inline path, for every caller. */
+    static final int BATCH_SIZE = 49;
 
     // Shipment internal states that are terminal / already-done — no AWB reprinting needed.
     // Note: "awaiting_pickup" is an order_status, NOT a shipment_internal_state; shipments
@@ -68,7 +71,7 @@ public class BostaAwbService {
     /**
      * Result of a print request.
      *
-     * pdfBase64List: one entry per successful batch (usually 1 for pilot ≤50 shipments).
+     * pdfBase64List: one entry per successful batch (≤{@link #BATCH_SIZE} shipments each).
      * emailMessage:  non-null if Bosta returned an email-path response for any batch.
      * exceptions:    tracking numbers excluded from printing + reason codes.
      */
@@ -217,7 +220,7 @@ public class BostaAwbService {
             }
         }
 
-        // 4. Batch into ≤50 chunks, call Bosta for each
+        // 4. Batch into ≤BATCH_SIZE (49) chunks, call Bosta for each
         List<AwbChunk> chunks = new ArrayList<>();
 
         for (int i = 0; i < printable.size(); i += BATCH_SIZE) {

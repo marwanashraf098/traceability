@@ -12,12 +12,19 @@ abf62ba; pushed, not merged, not deployed).** Mockup `design/pick-pack-waybill-m
   test cleanups working without editing DemoSeeder). Rebased onto main abf62ba (V124 stock-take finalize already
   there), so V125 follows it in order.
 - **POST /api/v1/fulfill/print-batches** `{scope new|all, paper A6|A4, sort oldest|newest}` → JSON `{batchId, batchNo,
-  waybillCount, candidateCount, orderGuaranteed, pdfBase64 (one merged PDF), excluded[], message}`;
+  waybillCount, candidateCount, remainingCount, orderGuaranteed, pdfBase64 (one merged PDF), excluded[], message}`;
   **GET …/print-batches/options** → `{defaultPaper}`. `isAuthenticated()` (all roles, as every Fulfill endpoint).
   `PackPrintBatchService` (no tx) → `PackPrintBatchStore.candidates` (read tx) → `BostaAwbService.printAwbDetailed`
   (≤50/call, sorted order) → `WaybillPdfAssembler` → `PackPrintBatchStore.record` (write tx).
 - **Candidates** = `PICKABLE_ORDERS_FILTER` (made package-private, visibility only) − self-pickup, latest forward
   shipment 'created'; 'new' = no batch item for that shipment. Sort created_at then id, same direction.
+- **49 per print (`PackPrintBatchService.MAX_WAYBILLS_PER_PRINT`):** from 50 tracking numbers up Bosta mass-awb stops
+  returning the PDF and emails the labels instead. Each print takes the first 49 in the chosen order — exactly one Bosta
+  request — and returns `remainingCount`; the dialog shows real totals, the button "Print 49 waybills", and after
+  printing "Printed the first 49. Print again to get the remaining N." ("New only" picks them up). Safety net for every
+  caller: `BostaAwbService.BATCH_SIZE` 50 → 49 (only used inside that class), chunking + email-path handling kept.
+- **Single-order reprint:** PickScreen's Print Waybill button renders whenever the order has a tracking number
+  (`Fulfill.tsx` PRINTABLE branch), independent of `awbPrinted` — a lost label can always be reprinted; no UI change.
 - **Finding 4 fixed:** `printAwbDetailed` sends tracking numbers in the caller's order (rows re-ordered in Java after the
   IN load); `printAwb()` keeps its exact result contract on top of it. **Finding 3:** batch path merges every chunk
   PDF server-side (PickScreen's single-order path still opens `pdfBase64List[0]`, always 1 shipment).
@@ -34,9 +41,9 @@ abf62ba; pushed, not merged, not deployed).** Mockup `design/pick-pack-waybill-m
   request (keeps fulfill.test.tsx's sequential mocks in sync). Gather list `?batchId=` (page `?batch=`).
 - **UI:** Print waybills button + dialog (Modal/Radio/SegmentedControl/Checkbox/Alert), merged PDF opened in a tab
   pre-opened on click; pick list = "Open pick list" button in the result (a second automatic tab is popup-blocked).
-- **Tests:** `PackPrintBatchTest` (13), revert-checked: DB send order → 2 RED; no advisory lock → concurrency RED;
-  never reorder → reorder RED. RlsCoverageTest + options test (own A6, other tenant's A6 never read). Frontend
-  `fulfillPrintBatches.test.tsx` (4; awbPrinted effect revert → RED). Count bumps (on top of V124's):
+- **Tests:** `PackPrintBatchTest` (15), revert-checked: DB send order → RED; no advisory lock → concurrency RED;
+  never reorder → reorder RED; no cap → cap test RED; BATCH_SIZE 50 → max-49 test RED. RlsCoverageTest + options test (own A6, other tenant's A6 never read). Frontend
+  `fulfillPrintBatches.test.tsx` (5; awbPrinted effect revert → RED). Count bumps (on top of V124's):
   MigrationSmokeTest 123→124, NotTracedBackfillTest 68→69.
   Full suite (rebased on abf62ba): 1,880 run, 4 skipped, only the 2 known reds (ShopifyMagicLinkTest.
   provisionWiring_path2NewInstall_…, ExchangeBackfillTest). Vitest 577/577, tsc + build clean.

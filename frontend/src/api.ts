@@ -1736,6 +1736,8 @@ export interface PrintBatchResult {
   batchNo: number | null
   waybillCount: number
   candidateCount: number
+  /** Ready waybills left out by the per-print cap (49) — the next print picks them up. */
+  remainingCount: number
   orderGuaranteed: boolean
   /** One merged PDF, base64 — null when nothing was printed. */
   pdfBase64: string | null

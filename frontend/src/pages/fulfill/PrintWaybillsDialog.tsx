@@ -11,6 +11,10 @@ import { Alert, Button, Checkbox, Modal, Radio, SegmentedControl, cn } from '../
 // and copy). Counts come from the queue already on screen, so opening the page makes no extra
 // request; the paper default is fetched only when this dialog opens.
 
+/** Same cap as the server (PackPrintBatchService.MAX_WAYBILLS_PER_PRINT): from 50 waybills up
+ *  Bosta emails the labels instead of returning the PDF, so one print = at most 49. */
+const MAX_WAYBILLS_PER_PRINT = 49
+
 function openPdf(win: Window | null, base64: string) {
   const bytes = atob(base64)
   const arr = new Uint8Array(bytes.length)
@@ -48,7 +52,8 @@ export default function PrintWaybillsDialog({
     return () => { cancelled = true }
   }, [])
 
-  const count = scope === 'new' ? newCount : allCount
+  // The options show the real totals; the button says how many this print will actually send.
+  const count = Math.min(scope === 'new' ? newCount : allCount, MAX_WAYBILLS_PER_PRINT)
 
   async function print() {
     if (printing || count === 0) return
@@ -92,6 +97,12 @@ export default function PrintWaybillsDialog({
             <p className="text-body text-primary">
               {result.candidateCount === 0 ? t('fulfill.printBatch.nothingReady') : t('fulfill.printBatch.nothingPrinted')}
             </p>
+          )}
+          {result.batchId && result.remainingCount > 0 && (
+            <Alert
+              tone="info"
+              title={t('fulfill.printBatch.remaining', { printed: result.waybillCount, count: result.remainingCount })}
+            />
           )}
           {result.batchId && !result.orderGuaranteed && (
             <Alert tone="warning" title={t('fulfill.printBatch.orderNotGuaranteed')} />

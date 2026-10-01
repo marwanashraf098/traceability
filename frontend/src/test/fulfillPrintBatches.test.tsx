@@ -38,7 +38,7 @@ const QUEUE = [
 ]
 
 const RESULT = {
-  batchId: 'batch-9', batchNo: 4, waybillCount: 1, candidateCount: 2, orderGuaranteed: false,
+  batchId: 'batch-9', batchNo: 4, waybillCount: 1, candidateCount: 2, remainingCount: 0, orderGuaranteed: false,
   pdfBase64: btoa('%PDF-1.4 fake'),
   excluded: [{ orderNumber: '#1003', trackingNumber: '777', reason: 'BOSTA_EMAIL_PATH' }],
   message: null,
@@ -56,11 +56,11 @@ const DETAIL = {
 
 let fetchFn: ReturnType<typeof vi.fn>
 
-function makeFetch() {
+function makeFetch(queue: unknown[] = QUEUE, result: unknown = RESULT) {
   return vi.fn((url: string, opts?: RequestInit) => {
-    if (url.endsWith('/fulfill/queue')) return json(QUEUE)
+    if (url.endsWith('/fulfill/queue')) return json(queue)
     if (url.endsWith('/fulfill/print-batches/options')) return json({ defaultPaper: 'A6' })
-    if (url.endsWith('/fulfill/print-batches') && opts?.method === 'POST') return json(RESULT)
+    if (url.endsWith('/fulfill/print-batches') && opts?.method === 'POST') return json(result)
     if (url.endsWith('/fulfill/o1')) return json(DETAIL)
     if (url.includes('/fulfill/gather')) return json({ generatedAt: new Date().toISOString(), orderCount: 1, rows: [] })
     return json({})
@@ -119,11 +119,32 @@ describe('Pick & Pack — batch waybill printing', () => {
     expect(window.open).toHaveBeenLastCalledWith('/fulfill/gather?batch=batch-9', '_blank')
   })
 
-  test('a batch-printed order shows Complete without asking for a reprint', async () => {
+  test('a batch-printed order shows Complete without asking for a reprint, and can still reprint', async () => {
     const user = userEvent.setup()
     renderWithProviders(<Fulfill />)
     await user.click(await screen.findByText('#1001'))
     expect(await screen.findByRole('button', { name: /Complete/ })).toBeInTheDocument()
+    // Lost / torn label: the single-order print stays available.
+    const reprint = screen.getByTestId('btn-print-awb')
+    expect(reprint).toBeEnabled()
+    expect(reprint).toHaveTextContent('Print Waybill')
+  })
+
+  test('more than 49 ready: totals shown, button capped at 49, result says how many remain', async () => {
+    const big = Array.from({ length: 60 }, (_, i) => row(`b${i}`, `#2${String(i).padStart(3, '0')}`))
+    fetchFn = makeFetch(big, { ...RESULT, waybillCount: 49, candidateCount: 60, remainingCount: 11, orderGuaranteed: true })
+    stubFetchWithShellDefaults(fetchFn)
+    const user = userEvent.setup()
+    renderWithProviders(<Fulfill />)
+    await user.click(await screen.findByRole('button', { name: /Print waybills/ }))
+
+    const dialog = await screen.findByTestId('print-batch-dialog')
+    expect(within(dialog).getByText('New only').closest('label')).toHaveTextContent('60')
+    await user.click(within(dialog).getByRole('button', { name: 'Print 49 waybills' }))
+
+    const result = await screen.findByTestId('print-batch-result')
+    expect(within(result).getByText('Printed the first 49. Print again to get the remaining 11.')).toBeInTheDocument()
+    expect(within(result).queryByText('Waybills may not be in the order you chose.')).not.toBeInTheDocument()
   })
 
   test('GatherList ?batch=<id> requests that batch only', async () => {

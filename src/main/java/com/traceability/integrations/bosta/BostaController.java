@@ -394,10 +394,10 @@ public class BostaController {
      * Print AWB labels for the given shipment IDs.
      *
      * Pre-filters non-printable shipments (terminal state, unlinked, CRP/CASH_COLLECTION type)
-     * and routes them to the missing-AWB exception. Calls Bosta mass-awb in ≤50-item batches.
+     * and routes them to the missing-AWB exception. Calls Bosta mass-awb in ≤49-item batches.
      *
      * Response:
-     *   pdfBase64List  — one base64-encoded PDF per batch (usually 1 for pilot ≤50 shipments)
+     *   pdfBase64List  — one base64-encoded PDF per batch (≤49 shipments each)
      *   emailMessage   — set if Bosta returned the async email-path response
      *   exceptions     — tracking numbers excluded from printing + reason codes
      */

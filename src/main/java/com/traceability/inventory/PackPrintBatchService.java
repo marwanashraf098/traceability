@@ -31,14 +31,23 @@ public class PackPrintBatchService {
     static final Set<String> PAPERS = Set.of("A6", "A4");
     static final Set<String> SORTS  = Set.of("oldest", "newest");
 
+    /**
+     * At most 49 waybills per print, so every print is ONE Bosta mass-awb request: from 50
+     * tracking numbers up Bosta stops returning the PDF and emails the labels instead (the same
+     * threshold as BostaAwbService.BATCH_SIZE). Applied after sorting — the first 49 in the
+     * chosen order; "New only" then picks up the rest on the next print.
+     */
+    public static final int MAX_WAYBILLS_PER_PRINT = 49;
+
     public record Excluded(String orderNumber, String trackingNumber, String reason) {}
 
     /**
      * batchId / batchNo / pdfBase64 are null when nothing was printed. waybillCount = pages
-     * printed and recorded; candidateCount = waybills that were ready to print.
+     * printed and recorded; candidateCount = waybills that were ready to print (all of them);
+     * remainingCount = candidates left out by {@link #MAX_WAYBILLS_PER_PRINT}, for the next print.
      */
     public record PrintBatchResult(UUID batchId, Integer batchNo, int waybillCount, int candidateCount,
-                                   boolean orderGuaranteed, String pdfBase64,
+                                   int remainingCount, boolean orderGuaranteed, String pdfBase64,
                                    List<Excluded> excluded, String message) {}
 
     public record PrintOptions(String defaultPaper) {}
@@ -62,12 +71,15 @@ public class PackPrintBatchService {
                 "scope must be new|all, paper A6|A4, sort oldest|newest");
         }
 
-        // a) Sorted candidates (own read-only transaction).
-        List<PackPrintBatchStore.Candidate> candidates = store.candidates(scope, sort);
-        if (candidates.isEmpty()) {
-            return new PrintBatchResult(null, null, 0, 0, true, null, List.of(),
+        // a) Sorted candidates (own read-only transaction), capped to one Bosta request.
+        List<PackPrintBatchStore.Candidate> all = store.candidates(scope, sort);
+        if (all.isEmpty()) {
+            return new PrintBatchResult(null, null, 0, 0, 0, true, null, List.of(),
                 "No waybills to print.");
         }
+        List<PackPrintBatchStore.Candidate> candidates =
+            all.subList(0, Math.min(MAX_WAYBILLS_PER_PRINT, all.size()));
+        int remaining = all.size() - candidates.size();
 
         // b, c) Bosta, in sorted order, ≤50 per call — outside any transaction.
         AwbDetailedResult bosta = awbService.printAwbDetailed(
@@ -99,7 +111,7 @@ public class PackPrintBatchService {
             .map(c -> new PackPrintBatchStore.PrintedItem(c.orderId(), c.shipmentId(), c.trackingNumber()))
             .toList();
         if (printed.isEmpty()) {
-            return new PrintBatchResult(null, null, 0, candidates.size(), true, null, excluded,
+            return new PrintBatchResult(null, null, 0, all.size(), remaining, true, null, excluded,
                 "Bosta didn't return any waybills to print.");
         }
 
@@ -122,8 +134,8 @@ public class PackPrintBatchService {
         PackPrintBatchStore.RecordedBatch batch = TenantContext.runAs(tenantId, () ->
             store.record(actorUserId, paper, sort, scope, pdf.orderGuaranteed(), printed));
 
-        return new PrintBatchResult(batch.batchId(), batch.batchNo(), printed.size(), candidates.size(),
-            pdf.orderGuaranteed(), Base64.getEncoder().encodeToString(pdf.pdf()), excluded, null);
+        return new PrintBatchResult(batch.batchId(), batch.batchNo(), printed.size(), all.size(),
+            remaining, pdf.orderGuaranteed(), Base64.getEncoder().encodeToString(pdf.pdf()), excluded, null);
     }
 
     private static Excluded excludedFor(Map<String, PackPrintBatchStore.Candidate> byTracking,
