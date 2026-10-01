@@ -1864,6 +1864,70 @@ export function getFulfillQueue() {
   return request<FulfillQueueRow[]>('/fulfill/queue')
 }
 
+// ── Pick & Pack S4: waybill-mode lists + session summary ─────────────────────
+
+export interface PrintBatchToday {
+  batchId: string
+  batchNo: number
+  printedAt: string
+  printedByName: string | null
+  waybillCount: number
+  packed: number
+  setAside: number
+  cancelled: number
+  waiting: number
+}
+
+export type NotPackedStatus = 'cancelled' | 'packing' | 'set_aside' | 'waiting'
+
+export interface NotPackedRow {
+  orderId: string
+  orderNumber: string | null
+  customerName: string | null
+  shipmentId: string
+  trackingNumber: string
+  batchId: string
+  batchNo: number
+  batchPrintedAt: string
+  status: NotPackedStatus
+  packerName: string | null
+  setAsideReason: string | null
+  /** pack_cancelled_after_print / pack_set_aside — opens the exception (owner/manager). */
+  exceptionType: string | null
+  subjectKey: string | null
+}
+
+export interface SessionSummary {
+  sessionId: string
+  workerName: string | null
+  startedAt: string
+  endedAt: string | null
+  durationSeconds: number
+  packed: number
+  setAside: number
+  rejected: number
+  needsManager: Array<{ orderId: string | null; orderNumber: string | null; customerName: string | null;
+    kind: 'set_aside' | 'cancelled'; reason: string | null; rawScan: string | null; at: string }>
+  unscannedFromTodaysBatches: number
+}
+
+export function getPrintBatchesToday() {
+  return request<PrintBatchToday[]>('/fulfill/print-batches/today')
+}
+
+export function getPrintedNotPacked() {
+  return request<NotPackedRow[]>('/fulfill/printed-not-packed')
+}
+
+/** Regenerates a batch's PDF in its stored order — no new batch. Same result shape as printing. */
+export function reprintPrintBatch(batchId: string) {
+  return transferCommandRequest<PrintBatchResult>(`/fulfill/print-batches/${batchId}/reprint`, { method: 'POST' })
+}
+
+export function getPackSessionSummary(sessionId: string) {
+  return transferCommandRequest<SessionSummary>(`/pack-sessions/${sessionId}/summary`)
+}
+
 export function getPackSummary() {
   return request<{ packedToday: number; openSessionId: string | null }>('/pack-sessions/summary')
 }

@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useRef, useState, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { request, releaseOrderHold, cancelOrder as apiCancelOrder } from '../api'
@@ -70,6 +70,9 @@ const TYPE_LABELS: Record<string, { en: string; ar: string }> = {
   refund_pending_overdue:  { en: 'Refund Overdue',            ar: 'استرداد متأخر' },
   return_items_overdue:    { en: 'Return Items Late',         ar: 'منتجات مرتجعة متأخرة' },
   inventory_increment_sync_failed: { en: 'Stock Not In Shopify', ar: 'مخزون لم يصل إلى Shopify' },
+  // Pick & Pack S4 — waybill mode
+  pack_set_aside:             { en: 'Set Aside While Packing',  ar: 'وُضع جانباً أثناء التغليف' },
+  pack_cancelled_after_print: { en: 'Cancelled After Print',    ar: 'أُلغي بعد الطباعة' },
 }
 
 const ALL_TYPES      = Object.keys(TYPE_LABELS)
@@ -135,14 +138,28 @@ function ResolveDialog({ item, onClose, onResolved }: { item: ExceptionItem; onC
 
 // ── Exception row ─────────────────────────────────────────────────────────────
 
-function ExceptionRow({ item, onAck, onAction }: { item: ExceptionItem; onAck: (item: ExceptionItem) => void; onAction?: () => void }) {
+function ExceptionRow({ item, onAck, onAction, highlighted = false }: {
+  item: ExceptionItem
+  onAck: (item: ExceptionItem) => void
+  onAction?: () => void
+  /** Opened via /exceptions?type=…&key=<subject_key> (e.g. from the Pick & Pack lists). */
+  highlighted?: boolean
+}) {
   const { t, i18n } = useTranslation()
   const isAr = i18n.language === 'ar'
   const navigate = useNavigate()
   const typeLabel = TYPE_LABELS[item.type]
+  const rowRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (highlighted) rowRef.current?.scrollIntoView?.({ block: 'center' })
+  }, [highlighted])
 
   return (
-    <div className="card p-4 flex items-start gap-4">
+    <div
+      ref={rowRef}
+      className={`card p-4 flex items-start gap-4 ${highlighted ? 'border-trace-blue shadow-ring-accent' : ''}`}
+      data-testid={highlighted ? 'exception-highlighted' : undefined}
+    >
       {/*
         Severity dot — colours aligned with SEV_TONE in ui.tsx:
         CRITICAL→bg-danger, HIGH→bg-warning, MEDIUM→bg-info, LOW→bg-muted
@@ -257,6 +274,8 @@ export default function ExceptionsPage() {
   const [searchParams] = useSearchParams()
   const [data,          setData]          = useState<ExceptionPage | null>(null)
   const [typeFilter,    setTypeFilter]    = useState(() => searchParams.get('type') ?? '')
+  // ?key=<subject_key> highlights that one exception (e.g. a row clicked on the Pick & Pack page).
+  const highlightKey = searchParams.get('key')
   const [sevFilter,     setSevFilter]     = useState('')
   const [page,          setPage]          = useState(0)
   const [loading,       setLoading]       = useState(false)
@@ -366,7 +385,8 @@ export default function ExceptionsPage() {
       ) : (
         <div className="space-y-3">
           {data?.items.map((item, i) => (
-            <ExceptionRow key={i} item={item} onAck={setResolvingItem} onAction={load} />
+            <ExceptionRow key={i} item={item} onAck={setResolvingItem} onAction={load}
+              highlighted={!!highlightKey && item.subject_key === highlightKey} />
           ))}
         </div>
       )}

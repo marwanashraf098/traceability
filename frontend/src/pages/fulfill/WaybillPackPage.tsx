@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useSearchParams } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { ChevronRight, Printer, ScanLine } from 'lucide-react'
 import Layout from '../../components/Layout'
@@ -10,17 +10,51 @@ import {
 } from '../../api'
 import PrintWaybillsDialog from './PrintWaybillsDialog'
 import PackSessionScreen from './PackSessionScreen'
+import SessionSummaryScreen from './SessionSummaryScreen'
+import { PrintBatchesToday, PrintedNotPacked } from './PackLists'
 
-// Pick & Pack S3 — the Pick & Pack page in waybill-scan mode (design/pick-pack-waybill-mockup/
-// Main.html, header + tiles only; batch lists and "printed but not packed" are S4/S5).
-// Two internal views: the page itself (inside <Layout>) and the pack session (full-screen
-// immersive, no <Layout> — the active scan loop, per the worker-screen rule).
+// Pick & Pack S3/S4 — the Pick & Pack page in waybill-scan mode (design/pick-pack-waybill-mockup/
+// Main.html: header, tiles, print batches today, printed but not packed). Three internal views:
+// the page itself (inside <Layout>), the pack session and its end-of-session summary (both
+// full-screen, no <Layout>). The summary's session id is kept in the URL (?summary=<id>) so a
+// reload lands on it again.
 
 export default function WaybillPackPage() {
+  const { i18n, t } = useTranslation()
   const [session, setSession] = useState<PackSessionView | null>(null)
+  const [searchParams, setSearchParams] = useSearchParams()
+  const summaryId = searchParams.get('summary')
+  const [starting, setStarting] = useState(false)
+  const [startError, setStartError] = useState<string | null>(null)
 
   if (session) {
-    return <PackSessionScreen initial={session} onEnded={() => setSession(null)} />
+    const endedId = session.id
+    return <PackSessionScreen initial={session} onEnded={() => { setSession(null); setSearchParams({ summary: endedId }) }} />
+  }
+  if (summaryId) {
+    return (
+      <SessionSummaryScreen
+        sessionId={summaryId}
+        starting={starting}
+        startError={startError}
+        onBack={() => { setStartError(null); setSearchParams({}) }}
+        onNewSession={async () => {
+          if (starting) return
+          setStarting(true)
+          setStartError(null)
+          try {
+            const s = await startPackSession()
+            setSearchParams({})
+            setSession(s)
+          } catch (e) {
+            setStartError(e instanceof TransferCommandError
+              ? (i18n.language === 'ar' ? e.messageAr : e.messageEn) : t('fulfill.waybill.session.error'))
+          } finally {
+            setStarting(false)
+          }
+        }}
+      />
+    )
   }
   return <WaybillMain onSession={setSession} />
 }
@@ -33,6 +67,7 @@ function WaybillMain({ onSession }: { onSession: (s: PackSessionView) => void })
   const [showPrint, setShowPrint] = useState(false)
   const [starting, setStarting] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [listsKey, setListsKey] = useState(0)
   const isOwner = getRoleFromToken() === 'owner'
 
   const load = useCallback(async () => {
@@ -127,13 +162,16 @@ function WaybillMain({ onSession }: { onSession: (s: PackSessionView) => void })
             <ChevronRight size={16} strokeWidth={2} className="text-muted rtl:rotate-180" />
           </Link>
         )}
+
+        <PrintBatchesToday refreshKey={listsKey} />
+        <PrintedNotPacked refreshKey={listsKey} />
       </div>
 
       {showPrint && (
         <PrintWaybillsDialog
           newCount={ready.length - printed}
           allCount={ready.length}
-          onClose={didPrint => { setShowPrint(false); if (didPrint) load() }}
+          onClose={didPrint => { setShowPrint(false); if (didPrint) { load(); setListsKey(k => k + 1) } }}
         />
       )}
     </Layout>

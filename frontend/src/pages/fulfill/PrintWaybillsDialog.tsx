@@ -15,7 +15,8 @@ import { Alert, Button, Checkbox, Modal, Radio, SegmentedControl, cn } from '../
  *  Bosta emails the labels instead of returning the PDF, so one print = at most 49. */
 const MAX_WAYBILLS_PER_PRINT = 49
 
-function openPdf(win: Window | null, base64: string) {
+/** Shows a base64 PDF in the tab opened during the click (popup blockers), or a new one. */
+export function openPdf(win: Window | null, base64: string) {
   const bytes = atob(base64)
   const arr = new Uint8Array(bytes.length)
   for (let i = 0; i < bytes.length; i++) arr[i] = bytes.charCodeAt(i)
