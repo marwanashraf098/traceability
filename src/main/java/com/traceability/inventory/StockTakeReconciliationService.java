@@ -387,7 +387,9 @@ public class StockTakeReconciliationService {
      * FR-21 Step 5, Phase A — claim (one committed transaction, mandatory shape). Guards
      * the open->finalized flip, computes the per-variant write-off delta from this
      * session's committed piece_events, inserts the pending claim row, and enqueues the
-     * push job (Phase B). Contains NO Shopify HTTP call — that's
+     * push job (Phase B) once this transaction has COMMITTED (ShopifyInventoryService.afterCommit —
+     * a rolled-back finalize enqueues nothing, and the job never runs before the claim is
+     * visible). Contains NO Shopify HTTP call — that's
      * StockTakeShopifyPushJob.push(), running later on a JobRunr worker with no DB
      * transaction around the call (same lesson as resolve()'s srt7 fix, one level up).
      * Internal -> lost transitions already committed per-item at Step 4 resolve() time;
@@ -448,12 +450,10 @@ public class StockTakeReconciliationService {
             tenantId, sessionId, claimStatus, payload.toString());
 
         if (!deltaRows.isEmpty()) {
-            // Claim-before-call: this enqueue only ever fires after the claim INSERT above
-            // has been issued in this same transaction. JobRunr's own storage isn't
-            // Spring-transaction-aware, but its worker polls on an interval — ample
-            // separation from this transaction's commit. Matches the established pattern
-            // elsewhere in this codebase (BostaIngestionHelper, ShopifyOAuthService).
-            jobScheduler.enqueue(() -> pushJob.push(sessionId, tenantId));
+            // Claim-before-call, enqueued after commit: JobRunr's storage isn't Spring-
+            // transaction-aware, so an enqueue inside this transaction would survive a rollback
+            // and could run before the claim row is visible.
+            ShopifyInventoryService.afterCommit(() -> jobScheduler.enqueue(() -> pushJob.push(sessionId, tenantId)));
         }
 
         auditService.record(actorUserId, "stock_take_finalize",
@@ -508,7 +508,9 @@ public class StockTakeReconciliationService {
 
     /**
      * Operator asserts the decrement did NOT apply — re-enqueues exactly one fresh
-     * single-attempt push. Resets the SAME claim row to 'pending' rather than inserting a
+     * single-attempt push, after this transaction commits (a rolled-back repush leaves the row
+     * 'failed'/'failed_ambiguous' and enqueues nothing — the job would otherwise treat 'failed'
+     * as retryable and push anyway). Resets the SAME claim row to 'pending' rather than inserting a
      * second (UNIQUE(session_id) stays intact by construction — this is an UPDATE, not an
      * INSERT). StockTakeShopifyPushJob.push() falls through its own guard for 'pending'
      * (same as a first attempt), so this needs no changes on the Phase B side at all.
@@ -529,7 +531,7 @@ public class StockTakeReconciliationService {
 
         auditService.record(actorUserId, "stock_take_sync_repush",
             "stock_take_session", sessionId.toString(), null);
-        jobScheduler.enqueue(() -> pushJob.push(sessionId, tenantId));
+        ShopifyInventoryService.afterCommit(() -> jobScheduler.enqueue(() -> pushJob.push(sessionId, tenantId)));
         return Map.of("sessionId", sessionId, "status", "pending");
     }
 
