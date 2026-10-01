@@ -4,6 +4,21 @@
 
 ## Current state
 
+**Stock-take push enqueued after commit (2026-10-01, branch `fix/stocktake-push-after-commit` off main 6795cac;
+merged, not deployed).** `StockTakeReconciliationService.finalizeSession` and `repushSync` now enqueue
+`StockTakeShopifyPushJob` through `ShopifyInventoryService.afterCommit` (a rolled-back repush used to leave the row
+'failed', which the job treats as retryable, so it pushed anyway). `StockTakePushAfterCommitTest` pc1–pc4,
+revert-checked (both enqueues back inside the tx → 4/4 RED).
+
+**Stock-take finalize changes nothing — Step 0 findings (2026-10-01, read-only, no code).** By design (FR-21 spec
+Step 4/5) finalize only pushes write-offs a manager already made per piece via `POST /resolve` ("Mark lost", gated on
+attest-complete); it never applies the count itself. Prod: Snouts 620cc645 attested + finalized 9 s apart with 0 scans
+(932 uncounted on-shelf, no resolves) — the finalize modal told the user "{{count}} piece(s) will be written off" anyway.
+Traced Demo Store fc63b584 is a DemoSeeder fixture (raw SQL), never went through finalize. Also found: review-page
+variance sign inverted (backend expected−counted, UI treats negative as shortfall); zero-delta claim is 'pushed' with
+pushed_at NULL; damaged:lost write-offs are counted into the Shopify 'available' decrement. Fix proposal awaiting
+Marawan's decision — see the Step 0 report in the session.
+
 **All six Shopify inventory triggers fire after commit (2026-10-01, branch `fix/decrement-triggers-after-commit` off
 main ea0f071; merged, not deployed).**
 - `PieceAdjustService.adjustPiece` (damage_move), `voidPiece` (void_correction), `hold` (hold_enter) now register their
