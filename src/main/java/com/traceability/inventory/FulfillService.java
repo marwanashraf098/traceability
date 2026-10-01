@@ -447,6 +447,15 @@ public class FulfillService {
                 "This order's shipment has already left 'created' — pick/pack is no longer possible");
         }
 
+        // 0b. Pick & Pack S3 (Q2): another packer holds a live claim on this order (waybill
+        //     mode opened it) — refuse, in queue mode too. Queue mode never takes claims itself;
+        //     a stale claim (PackClaim.STALE_AFTER_MINUTES) no longer blocks.
+        PackClaim.Holder holder = PackClaim.heldByOther(jdbc, orderId, tenantId, actorUserId);
+        if (holder != null) {
+            return ScanResult.rejected("CLAIMED_BY_OTHER",
+                "Being packed by " + (holder.name() != null ? holder.name() : "another packer"));
+        }
+
         // 1. Look up piece by barcode — accept both:
         //    • new label format: scanner returns the raw ULID (matches p.id)
         //    • old label format: scanner returns "PC-<ULID>" (matches p.barcode)
