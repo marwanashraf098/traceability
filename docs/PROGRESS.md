@@ -4,6 +4,25 @@
 
 ## Current state
 
+**Pick & Pack S1 — product images on pack lines, queue mode (2026-10-01, branch `feat/pack-line-images` off
+main 8f53628; pushed, not merged, not deployed).** First slice of the waybill-mode feature (mockup
+`design/pick-pack-waybill-mockup/`, Step 0 report in session).
+- **Backend:** `FulfillService.getItemsWithAllocations()` selects `p.image_url AS "imageUrl"` (V69 products.image_url,
+  product-level, nullable). Only caller is `getOrder()` → `GET /fulfill/{id}`; each line gains `imageUrl`, nothing
+  else changes shape. Read-only, no Shopify call.
+- **Frontend:** `PickScreen` itemsList renders `ProductThumb size={88} cdnWidth={176}` left of name/variant/SKU;
+  name and SKU now wrap (`break-words`, was `truncate` on the name). No SAFETY-CRITICAL code touched; ProductThumb
+  defaults unchanged (missing/broken → Package placeholder, fixed 88px tile, no layout shift).
+- **Tests:** `PackLineImageTest` a/b/c (image set, null, cross-tenant 404 as app_user with same-tenant control) —
+  revert-checked (SELECT line removed → a, b RED). Full suite: 1,845 run, 4 skipped, only the 2 known reds
+  (ShopifyMagicLinkTest.provisionWiring_path2NewInstall_…, ExchangeBackfillTest). Vitest 567/567, tsc + build clean.
+  Layout checked at 1280×800 and 360px (static harness of the real markup + built CSS): no horizontal overflow,
+  long names/SKUs wrap.
+- **Not in S1:** variant images (not stored — GraphQL import captures product featuredImage only); initials placeholder
+  (mockup) — still the Package icon, needs a new ProductThumb prop if wanted.
+- **Mass-AWB > 50 (Step 0 finding 3) is not live:** the only caller of `POST /bosta/awb/print` is PickScreen's
+  `printAwbPdf`, always one shipment. It becomes live with S2 batch printing.
+
 **Stock-take push enqueued after commit (2026-10-01, branch `fix/stocktake-push-after-commit` off main 6795cac;
 merged, not deployed).** `StockTakeReconciliationService.finalizeSession` and `repushSync` now enqueue
 `StockTakeShopifyPushJob` through `ShopifyInventoryService.afterCommit` (a rolled-back repush used to leave the row

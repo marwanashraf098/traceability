@@ -5,7 +5,7 @@ import {
   X, ArrowLeft, ArrowRight, CheckCircle2, AlertTriangle, ScanLine,
   Lock, Layers, RefreshCw, ChevronRight,
 } from 'lucide-react'
-import { Badge, Button, Skeleton, EmptyState } from '../components/ui'
+import { Badge, Button, Skeleton, EmptyState, ProductThumb } from '../components/ui'
 import Layout from '../components/Layout'
 import { getAccessToken, clearAccessToken } from '../auth'
 import { TransferCommandError, getTenantIdFromToken } from '../api'
@@ -66,6 +66,8 @@ interface OrderItem {
   variant_title: string
   product_title: string
   quantity: number
+  /** Product image (products.image_url, Shopify CDN) — null when the product has none. */
+  imageUrl: string | null
   allocated: number
   allocatedPieces: AllocatedPiece[]
 }
@@ -1090,57 +1092,69 @@ function PickScreen({
         return (
           <div
             key={item.id}
-            className={`card p-3.5 ${complete ? 'border-success/40' : ''}`}
+            className={`card p-3.5 flex items-start gap-3 md:gap-4 ${complete ? 'border-success/40' : ''}`}
           >
-            <div className="flex items-start justify-between gap-3 mb-2.5">
-              <div className="min-w-0">
-                <p className="text-body font-semibold text-primary truncate">
-                  {item.product_title}
-                  {item.variant_title && item.variant_title !== 'Default Title' && (
-                    <span className="text-muted font-normal"> · {item.variant_title}</span>
-                  )}
-                </p>
-                {/* SKU — font-mono per spec */}
-                {item.sku && <p className="text-caption text-muted font-mono">{item.sku}</p>}
-              </div>
-              <span className={`text-body font-mono font-semibold flex-shrink-0 ${
-                complete ? 'text-success-text' : 'text-muted'
-              }`}>
-                {item.allocated}/{item.quantity}
-              </span>
-            </div>
-            {item.allocatedPieces.length > 0 ? (
-              <div className="flex flex-wrap gap-1.5">
-                {item.allocatedPieces.map(p => (
-                  <div
-                    key={p.piece_id}
-                    className="flex items-center gap-1.5 bg-elevated border border-line rounded-full px-2 py-1"
-                  >
-                    {/* Barcode — font-mono per spec */}
-                    <span className="text-caption font-mono text-primary">{p.barcode.slice(-10)}</span>
-                    {!hasCancelRequest && p.allocation_status === 'active' && (
-                      <button
-                        onClick={() => handleUnscan(p.piece_id)}
-                        className="text-muted hover:text-critical-text transition-colors"
-                        title={t('fulfill.unscan')}
-                      >
-                        <X size={10} strokeWidth={2.5} />
-                      </button>
+            {/* Product image (S1) — fixed 88px tile in every state (image / none / failed),
+                so a line never shifts; a missing or broken image shows ProductThumb's
+                Package placeholder. Lazy-loaded <img>, never focusable — the scan input
+                keeps focus. */}
+            <ProductThumb
+              src={item.imageUrl}
+              alt={item.product_title}
+              size={88}
+              cdnWidth={176}
+            />
+            <div className="flex-1 min-w-0">
+              <div className="flex items-start justify-between gap-3 mb-2.5">
+                <div className="min-w-0">
+                  <p className="text-body font-semibold text-primary break-words">
+                    {item.product_title}
+                    {item.variant_title && item.variant_title !== 'Default Title' && (
+                      <span className="text-muted font-normal"> · {item.variant_title}</span>
                     )}
-                  </div>
-                ))}
+                  </p>
+                  {/* SKU — font-mono per spec */}
+                  {item.sku && <p className="text-caption text-muted font-mono break-words">{item.sku}</p>}
+                </div>
+                <span className={`text-body font-mono font-semibold flex-shrink-0 ${
+                  complete ? 'text-success-text' : 'text-muted'
+                }`}>
+                  {item.allocated}/{item.quantity}
+                </span>
               </div>
-            ) : (
-              <p className="text-caption text-muted">{t('fulfill.noPiecesScanned')}</p>
-            )}
-            {isDemoTenant && !complete && !hasCancelRequest && (
-              <DemoScanHelper
-                variantId={item.variant_id}
-                refreshKey={item.allocated}
-                disabled={scanning}
-                onScan={handleScan}
-              />
-            )}
+              {item.allocatedPieces.length > 0 ? (
+                <div className="flex flex-wrap gap-1.5">
+                  {item.allocatedPieces.map(p => (
+                    <div
+                      key={p.piece_id}
+                      className="flex items-center gap-1.5 bg-elevated border border-line rounded-full px-2 py-1"
+                    >
+                      {/* Barcode — font-mono per spec */}
+                      <span className="text-caption font-mono text-primary">{p.barcode.slice(-10)}</span>
+                      {!hasCancelRequest && p.allocation_status === 'active' && (
+                        <button
+                          onClick={() => handleUnscan(p.piece_id)}
+                          className="text-muted hover:text-critical-text transition-colors"
+                          title={t('fulfill.unscan')}
+                        >
+                          <X size={10} strokeWidth={2.5} />
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-caption text-muted">{t('fulfill.noPiecesScanned')}</p>
+              )}
+              {isDemoTenant && !complete && !hasCancelRequest && (
+                <DemoScanHelper
+                  variantId={item.variant_id}
+                  refreshKey={item.allocated}
+                  disabled={scanning}
+                  onScan={handleScan}
+                />
+              )}
+            </div>
           </div>
         )
       })}

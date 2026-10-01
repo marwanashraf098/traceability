@@ -1098,6 +1098,9 @@ public class FulfillService {
         List<Map<String, Object>> items = jdbc.queryForList(
             "SELECT oi.id, oi.variant_id, v.sku, v.title AS variant_title, " +
             "       p.title AS product_title, oi.quantity, " +
+            // Pack-line image: V69 products.image_url (Shopify CDN URL, one per product,
+            // nullable). Quoted alias keeps the camelCase key. No Shopify call at pack time.
+            "       p.image_url AS \"imageUrl\", " +
             "       COALESCE((" +
             "           SELECT COUNT(*) FROM allocations a " +
             "           WHERE a.order_item_id = oi.id AND a.status IN ('active','packed')" +
