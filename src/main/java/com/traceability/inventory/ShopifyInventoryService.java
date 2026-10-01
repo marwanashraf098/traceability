@@ -156,8 +156,8 @@ public class ShopifyInventoryService {
     // ── Trigger 3: currently-sellable piece damaged in the warehouse ────────
 
     /**
-     * Called after PieceAdjustService.adjustPiece() commits an available→damaged
-     * transition. NOT called for return_pending_inspection→damaged (ReturnService.markDamaged
+     * Called once PieceAdjustService.adjustPiece()'s available→damaged transition has committed
+     * ({@link #afterCommit}). NOT called for return_pending_inspection→damaged (ReturnService.markDamaged
      * has no call here — that verdict was never sellable in Shopify, so nothing moves).
      */
     @Async
@@ -175,7 +175,8 @@ public class ShopifyInventoryService {
     // ── Trigger: FR-13.x void correction (named decrement set — CLAUDE.md) ──
 
     /**
-     * Called after PieceAdjustService.voidPiece() commits an available→voided transition.
+     * Called once PieceAdjustService.voidPiece()'s available→voided transition has committed
+     * ({@link #afterCommit}).
      * Decrements only if the piece's originating receiving increment actually applied
      * (checked against shopify_inventory_adjustments for that piece's receipt session) —
      * see processVoidCorrection() for the exact query. If the increment never fired, the
@@ -197,7 +198,8 @@ public class ShopifyInventoryService {
     // ── Trigger: FR-13.x hold enter (named decrement set — CLAUDE.md) ───────
 
     /**
-     * Called after PieceAdjustService.hold() commits an available→on_hold transition.
+     * Called once PieceAdjustService.hold()'s available→on_hold transition has committed
+     * ({@link #afterCommit}).
      * holdEventId scopes the trigger to THIS hold cycle — a piece can be held, released, and
      * held again, so piece_id alone would collide with a prior cycle's already-'applied' claim
      * row (the UNIQUE(trigger_type, trigger_id, variant_id, location_id) constraint only

@@ -4,6 +4,23 @@
 
 ## Current state
 
+**All six Shopify inventory triggers fire after commit (2026-10-01, branch `fix/decrement-triggers-after-commit` off
+main ea0f071; merged, not deployed).**
+- `PieceAdjustService.adjustPiece` (damage_move), `voidPiece` (void_correction), `hold` (hold_enter) now register their
+  `@Async` job through `ShopifyInventoryService.afterCommit(...)`, like receiving / restock / unhold did since ea0f071;
+  javadocs corrected. No other behaviour change — same named decrement set, Traced-location-only, same claims.
+- `AfterCommitTriggersTest` (restock, unhold, damage, void, hold × committed / rolled back): with the commit delayed the
+  Shopify call sees the piece's new status committed; a rolled-back caller → no claim, no Shopify call. Revert-checked:
+  all five call sites back inside the tx → 10/10 RED. Receiving: `SeedSupersedesClaimsTest` a1/a2.
+- **Audit:** `ShopifyInventoryService` holds the only `@Async` methods; `onExchangeReplacementDispatched` already used
+  afterCommit. Every non-inventory Shopify/Bosta JobRunr enqueue (Bosta webhook/poll/backfill ingest, Shopify
+  webhooks/import/OAuth, pickup booking) runs after its own transaction commits — nothing to report there.
+  **Still inside a transaction (inventory, not changed):** `StockTakeReconciliationService.finalizeSession` (:456) and
+  `repushSync` (:532) enqueue the stock-take push job from inside `@Transactional` (comment relies on JobRunr's poll
+  interval to separate it from the commit). A rollback still leaves the job enqueued: after a rolled-back finalize the
+  job finds no claim row and no-ops (`StockTakeShopifyPushJob.push` :67-70); after a rolled-back repush the row is
+  still 'failed', which the job treats as retryable (:71-79), so it pushes anyway.
+
 **Seed supersedes redundant increment claims (2026-10-01, branch `fix/seed-supersedes-increment-claims` off main
 41c1a9d; merged, not deployed).** Must ship before any blocked store's location is linked.
 - **Bug:** the seed (`ShopifyInventoryReconcileService.apply`) pushes Traced's CURRENT on-hand; unapplied increment

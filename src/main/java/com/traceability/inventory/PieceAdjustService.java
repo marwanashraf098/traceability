@@ -162,8 +162,11 @@ public class PieceAdjustService {
         // must NOT call this a second time, or on_hand would be double-decremented. Damaged
         // pieces reaching DAMAGED via return_pending_inspection go through ReturnService.
         // markDamaged() instead — a separate method with no call here.
+        // After commit — a rolled-back adjustment never reaches Shopify; the move job never runs
+        // before the piece's 'damaged' commit.
         if (current == PieceStatus.AVAILABLE && toStatus == PieceStatus.DAMAGED) {
-            shopifyInventory.onSellablePieceDamaged(tenantId, pieceId, currentLocationId);
+            ShopifyInventoryService.afterCommit(() ->
+                shopifyInventory.onSellablePieceDamaged(tenantId, pieceId, currentLocationId));
         }
 
         if (toStatus == PieceStatus.DAMAGED) {
@@ -243,7 +246,9 @@ public class PieceAdjustService {
         ledger.transition(pieceId, PieceStatus.AVAILABLE, PieceStatus.VOIDED, "voided", actorUserId,
             new TransitionContext(null, null, null, null, metadata));
 
-        shopifyInventory.onPieceVoided(tenantId, pieceId, currentLocationId);
+        // After commit — a rolled-back void never reaches Shopify; the job never runs before the commit.
+        ShopifyInventoryService.afterCommit(() ->
+            shopifyInventory.onPieceVoided(tenantId, pieceId, currentLocationId));
 
         Map<String, Object> auditMeta = new LinkedHashMap<>();
         auditMeta.put("from",   current.db);
@@ -328,7 +333,9 @@ public class PieceAdjustService {
         ledger.transition(pieceId, PieceStatus.AVAILABLE, PieceStatus.ON_HOLD, "held", actorUserId,
             new TransitionContext(null, null, null, null, metadata));
 
-        shopifyInventory.onHoldEnter(tenantId, pieceId, currentLocationId, holdEventId);
+        // After commit — a rolled-back hold never reaches Shopify; the job never runs before the commit.
+        ShopifyInventoryService.afterCommit(() ->
+            shopifyInventory.onHoldEnter(tenantId, pieceId, currentLocationId, holdEventId));
 
         Map<String, Object> auditMeta = new LinkedHashMap<>();
         auditMeta.put("from",        current.db);
