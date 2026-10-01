@@ -127,6 +127,16 @@ export default function PackSessionScreen({ initial, onEnded }: {
 
   const scanner = useScanner({ onScan })
 
+  // Keep the scan input focused between scans. useScanner disables the input while a scan is in
+  // flight and calls focus() in its finally — before React re-enables it — so that focus() is a
+  // no-op and a hardware scanner's next scan would go nowhere. Refocus here once the scan has
+  // settled (and whenever the screen state changes), instead of touching useScanner's copied
+  // safety-critical code. Never while the set-aside dialog is open (no input there to steal from,
+  // but its radios should keep the click).
+  useEffect(() => {
+    if (!scanner.scanning && !setAsideOpen) scanner.inputRef.current?.focus()
+  }, [scanner.scanning, scanner.inputRef, order, rejection, failed, setAsideOpen])
+
   async function retry() {
     if (!order || busy) return
     setBusy(true)
