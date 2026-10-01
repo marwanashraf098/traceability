@@ -4,8 +4,8 @@
 
 ## Current state
 
-**Pick & Pack S3 — waybill scan mode (2026-10-01, branch `feat/pack-waybill-session` off main 3b8a503; pushed, not
-merged, not deployed).** Commits: getOrder fix · V126 · mode setting · resolver/claim · session API · frontend · refocus.
+**Pick & Pack S3 — waybill scan mode (2026-10-01, branch `feat/pack-waybill-session`, rebased onto main 938a39a — the
+scanner fix; pushed, not merged, not deployed).** Commits: getOrder fix · V126 · mode setting · resolver/claim · session API · frontend · refocus.
 - **Gate (resolved, option a):** no `TenantContext.runAs` under complete()/linkByAwbScan()/completeLink()/ledger.
   `PackCompleter.completeAndLink` (one transaction, after the scan transaction committed) guards first: the
   normalized opening waybill must be a FORWARD shipment row on this order, else `CompleteFailed WAYBILL_NOT_ON_ORDER`
@@ -38,16 +38,20 @@ merged, not deployed).** Commits: getOrder fix · V126 · mode setting · resolv
 - **Frontend:** waybill page (mode chip, Print waybills, Start/Resume, tiles, self-pickup entry) and `PackSessionScreen`
   on useScanner + ScanShell (waiting → order card with 88px images → auto-complete flash; rejection screen per code;
   complete_failed + Try again; Undo only while open; set aside with required reason; End disabled while open). EN+AR.
-  **Gotcha:** useScanner disables the input during a scan and calls focus() before React re-enables it → focus lost
-  after every scan (seen in Chrome; jsdom can't show it). The session screen refocuses itself. StockTakeScan /
-  TransferScanOut use the same hook without their own refocus — likely the same problem, not verified, not changed.
+  **After the rebase onto the scanner fix (938a39a):** S3 doesn't change useScanner / ScanShell. PackSessionScreen's own
+  refocus effect is gone (the hook keeps focus); `focusPaused: setAsideOpen`; `scanner.clearQueue()` on a waybill
+  rejection, on complete_failed, when the set-aside dialog opens and before ending the session (via a ref from inside
+  onScan); the `if (setAsideOpen) return {success:false}` guard stays. Queued scans run with the latest onScan, so a
+  piece queued behind its waybill goes to the piece endpoint.
 - **Tests:** PackSessionTest 12, WaybillResolverTest 12, PackSessionSchemaTest 4, PickPackModeTest 3,
   GetOrderForwardLegTest 3; RlsCoverageTest registers /fulfill/mode, /pack-sessions/{id}, /pack-sessions/summary
-  (approved). Frontend packWaybillSession 7, pickPackSettings 3. Full suite: 1,918 run, only the 2 known reds.
-  Vitest 588/588, tsc + build clean.
+  (approved). Frontend packWaybillSession 8 (incl. a rejection with 2 scans queued behind it → both dropped, never
+  applied to the next waybill; reverted → RED), pickPackSettings 3. Browser (npm run test:browser): PackSessionScreen
+  added — one waybill then 19 pieces at 300 ms each → 20 requests in order, max 1 in flight, auto-completes, input
+  focused, Chromium + WebKit (8/8 total). After the rebase: vitest 596/596, tsc + build clean; backend 1,918 run, 4 skipped, only the 2 known reds.
 - **Follow-ups:** (1) pre-existing synchronous Bosta HTTP call inside the link transaction on the new-shipment branch —
   `ShipmentLinkService.linkTrackingNumberToOrder` → `fetchAndStoreProviderDeliveryId` → `fetchDelivery` (main 3b8a503:
-  :260-261 → :737; this branch: :273-274 → :754), the queue-mode AWB link path; out of scope here. (2) useScanner focus loss on the other scan screens (above).
+  :260-261 → :737; this branch: :273-274 → :754), the queue-mode AWB link path; out of scope here. (2) ~~useScanner focus loss on the other scan screens~~ — fixed on main by the scanner fix (938a39a).
 **Scanner fix — no lost scans (2026-10-01, branch `fix/scanner-no-lost-scans` off main 3b8a503; pushed, not merged,
 not deployed).** Marawan approved editing the SAFETY-CRITICAL blocks of `hooks/useScanner.ts` and
 `components/ScanShell.tsx` for exactly this change (2026-10-01). Screens: StockTakeScan, TransferScanOut,
@@ -77,7 +81,7 @@ TransferReconcile. PickScreen untouched. S3's PackSessionScreen is not on main y
   lock: +107 entries, nothing removed; postcss 8.5.19→8.5.28, nanoid 3.3.16→3.3.19, lightningcss 1.32→1.33 (dev,
   in range). Docker-image `npm ci` + `npm run build` verified. `src/test-browser` excluded from `tsc` like `src/test`.
 - **Suite:** vitest 585/585 (578 + 7), browser 6/6, tsc + build clean; backend 1,882 run, 4 skipped, only the 2 known reds.
-- **S3 follow-up (PackSessionScreen, after rebase onto this):** call `scanner.clearQueue()` on a waybill rejection
+- **S3 follow-up (PackSessionScreen, after rebase onto this) — DONE on feat/pack-waybill-session after its rebase:** call `scanner.clearQueue()` on a waybill rejection
   (`setRejection(r)`), on complete_failed (`setFailed(...)`), when opening the set-aside dialog, and before
   `endPackSession`/`onEnded`; pass `focusPaused: setAsideOpen`; remove its own screen-level refocus effect (the hook
   now does it) and the "drops a scan while one is in flight" comment; keep `if (setAsideOpen) return {success:false}`

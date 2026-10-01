@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { CheckCircle2, OctagonAlert, PackageCheck, Undo2 } from 'lucide-react'
 import { ScanShell } from '../../components/ScanShell'
@@ -15,8 +15,10 @@ import {
 // SessionScanning, Rejected, SetAside). Full-screen immersive — no <Layout>. Built on the shared
 // useScanner + ScanShell (PickScreen and its safety-critical handlers are not touched): one scan
 // input; the state machine lives in onScan — waiting for a waybill → scanning the open order's
-// pieces → back to waiting when the order auto-completes or is set aside. useScanner drops a scan
-// while one is in flight; keyboard scans are deliberately not queued.
+// pieces → back to waiting when the order auto-completes or is set aside. useScanner queues scans
+// that arrive while one is in flight and runs them in order; this screen drops the waiting ones
+// (scanner.clearQueue) whenever they must not be applied — a waybill rejection, complete_failed,
+// the set-aside dialog, ending the session.
 
 type PackedFlash = { number: string | null; customer: string | null; pieces: number }
 type Failed = { code: string; message: string | null }
@@ -42,6 +44,8 @@ export default function PackSessionScreen({ initial, onEnded }: {
   const [setAsideOpen, setSetAsideOpen] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  // useScanner's clearQueue, reachable from onScan (which useScanner itself needs first).
+  const clearQueueRef = useRef<() => void>(() => {})
 
   // Worker shown in the header: the PIN-switched station worker, else /me.
   useEffect(() => {
@@ -75,6 +79,7 @@ export default function PackSessionScreen({ initial, onEnded }: {
     }
     if (r.order) setOrder(r.order)
     if (r.status === 'complete_failed') {
+      clearQueueRef.current()                  // nothing queued may land on a half-closed order
       setFailed({ code: r.failCode ?? 'COMPLETE_ERROR', message: r.failMessage })
       return { success: false }
     }
@@ -107,6 +112,7 @@ export default function PackSessionScreen({ initial, onEnded }: {
           setOrder(r.order)
           return { success: true }
         }
+        clearQueueRef.current()                // queued scans were meant for the rejected waybill
         setRejection(r)
         refresh()
         return { success: false }
@@ -125,17 +131,15 @@ export default function PackSessionScreen({ initial, onEnded }: {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [order, view.id, setAsideOpen, refresh, t, ar])
 
-  const scanner = useScanner({ onScan })
+  // useScanner keeps the input focused between scans itself; focusPaused while the set-aside
+  // dialog is open so its radios keep the click.
+  const scanner = useScanner({ onScan, focusPaused: setAsideOpen })
+  clearQueueRef.current = scanner.clearQueue
 
-  // Keep the scan input focused between scans. useScanner disables the input while a scan is in
-  // flight and calls focus() in its finally — before React re-enables it — so that focus() is a
-  // no-op and a hardware scanner's next scan would go nowhere. Refocus here once the scan has
-  // settled (and whenever the screen state changes), instead of touching useScanner's copied
-  // safety-critical code. Never while the set-aside dialog is open (no input there to steal from,
-  // but its radios should keep the click).
-  useEffect(() => {
-    if (!scanner.scanning && !setAsideOpen) scanner.inputRef.current?.focus()
-  }, [scanner.scanning, scanner.inputRef, order, rejection, failed, setAsideOpen])
+  function openSetAside() {
+    scanner.clearQueue()                       // scans waiting must not land on an order being set aside
+    setSetAsideOpen(true)
+  }
 
   async function retry() {
     if (!order || busy) return
@@ -175,6 +179,7 @@ export default function PackSessionScreen({ initial, onEnded }: {
   async function end() {
     if (order || busy) return
     setBusy(true)
+    scanner.clearQueue()
     try { await endPackSession(view.id); onEnded() }
     catch (e) { setError(apiError(e)); setBusy(false) }
   }
@@ -234,7 +239,7 @@ export default function PackSessionScreen({ initial, onEnded }: {
               fmtTime={fmtTime}
               onUndo={undo}
               onRetry={retry}
-              onSetAside={() => setSetAsideOpen(true)}
+              onSetAside={openSetAside}
             />
           ) : (
             <div className="flex-1 flex flex-col items-center justify-center gap-5 text-center" data-testid="session-waiting">

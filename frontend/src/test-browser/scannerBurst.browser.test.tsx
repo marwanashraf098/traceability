@@ -7,6 +7,7 @@ import * as api from '../api'
 import StockTakeScan from '../pages/StockTakeScan'
 import TransferScanOut from '../pages/TransferScanOut'
 import TransferReconcile from '../pages/TransferReconcile'
+import PackSessionScreen from '../pages/fulfill/PackSessionScreen'
 
 // No lost scans, in a real browser (Chromium + WebKit): 20 scanner-like bursts typed back to
 // back — no clicks, a few ms between keys — while every scan request takes ~300 ms. Each
@@ -29,6 +30,10 @@ vi.mock('../api', async (importOriginal) => {
     getTransfer: vi.fn(),
     scanOutTransferPiece: vi.fn(),
     scanBackTransferPiece: vi.fn(),
+    getMe: vi.fn(),
+    getPackSession: vi.fn(),
+    scanPackWaybill: vi.fn(),
+    scanPackPiece: vi.fn(),
   }
 })
 
@@ -107,6 +112,57 @@ describe('scanner bursts with ~300 ms latency — no lost scans', () => {
     renderWithProviders(<Routes><Route path="/transfers/:id/reconcile" element={<TransferReconcile />} /></Routes>,
       { initialEntries: ['/transfers/t1/reconcile'] })
     await burstAndCheck(s.seen, s.maxInFlight, codes('R'))
+  })
+})
+
+describe('pack session — one waybill then 19 pieces, ~300 ms each', () => {
+  test('PackSessionScreen', async () => {
+    const PIECES = SCANS - 1
+    const card = (allocated: number) => ({
+      id: 'order-1', number: '#1047', customer_name: 'Youssef Adel', payment_method: 'cod', cod_amount: '1250.00',
+      tracking_number: '74821903', area: 'Nasr City, Cairo', courierType: 'delivery', batchNo: null, batchPrintedAt: null,
+      items: [{ id: 'line-1', variant_id: 'v1', sku: 'S-1', variant_title: 'M', product_title: 'Shirt', imageUrl: null,
+        quantity: PIECES, allocated, allocatedPieces: [] }],
+    }) as unknown as api.PackOrderCard
+    const view = { id: 'sess-1', mode: 'waybill_scan', status: 'open', startedAt: new Date().toISOString(),
+      workerName: 'Ahmed', counters: { packed: 0, setAside: 0, rejected: 0, left: 0 }, recent: [], openOrder: null,
+    } as api.PackSessionView
+
+    // One recorder across both endpoints: order and overlap are checked over the whole burst.
+    const seen: string[] = []
+    let inFlight = 0, maxInFlight = 0, pieces = 0
+    const slow = async <T,>(code: string, result: () => T) => {
+      seen.push(code)
+      inFlight++
+      maxInFlight = Math.max(maxInFlight, inFlight)
+      await new Promise(r => setTimeout(r, LATENCY_MS))
+      inFlight--
+      return result()
+    }
+    vi.mocked(api.getMe).mockResolvedValue({ name: 'Ahmed', email: null, role: 'worker' })
+    vi.mocked(api.getPackSession).mockResolvedValue(view)
+    vi.mocked(api.scanPackWaybill).mockImplementation((_id, code) =>
+      slow(code, () => ({ result: 'opened', order: card(0), code: null, subReason: null, orderNumber: '#1047',
+        who: null, at: null, state: null, messageEn: null, messageAr: null }) as api.WaybillOutcome))
+    vi.mocked(api.scanPackPiece).mockImplementation((_id, _orderId, code) =>
+      slow(code, () => {
+        pieces++
+        return (pieces < PIECES
+          ? { status: 'scanned', scan: { success: true, code: 'SCANNED', message: null, pieceId: `p${pieces}`,
+              barcode: code, allocatedCount: pieces, requiredQuantity: PIECES, allComplete: false },
+              order: card(pieces), packed: null, failCode: null, failMessage: null }
+          : { status: 'completed', scan: { success: true, code: 'SCANNED', message: null, pieceId: `p${pieces}`,
+              barcode: code, allocatedCount: pieces, requiredQuantity: PIECES, allComplete: true },
+              order: null, packed: { orderId: 'order-1', orderNumber: '#1047', customerName: 'Youssef Adel', pieces },
+              failCode: null, failMessage: null }) as api.PackScanResponse
+      }))
+
+    renderWithProviders(<PackSessionScreen initial={view} onEnded={() => {}} />)
+    const sent = ['D-07-74821903', ...codes('P').slice(0, PIECES)]
+    await burstAndCheck(seen, () => maxInFlight, sent)
+    expect(vi.mocked(api.scanPackWaybill)).toHaveBeenCalledTimes(1)
+    expect(vi.mocked(api.scanPackPiece)).toHaveBeenCalledTimes(PIECES)
+    await expect.poll(() => document.querySelector('[data-testid="packed-flash"]')).toBeTruthy()  // auto-completed
   })
 })
 

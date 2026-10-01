@@ -50,6 +50,8 @@ let mode: string
 let calls: Array<{ method: string; url: string; body?: unknown }>
 let pieceScans: number
 let pieceResponses: Array<() => unknown>
+/** Resolves a held waybill response (code 'SLOW-BAD') — lets scans queue behind it. */
+let releaseHeld: (() => void) | null
 
 function backend(url: string, opts: RequestInit = {}) {
   const method = (opts.method ?? 'GET').toUpperCase()
@@ -68,6 +70,13 @@ function backend(url: string, opts: RequestInit = {}) {
   if (url.endsWith('/pack-sessions') && method === 'POST') return json(view())
   if (url.endsWith('/pack-sessions/sess-1') && method === 'GET') return json(view(null, pieceScans >= 2 ? 1 : 0))
   if (url.endsWith('/sess-1/waybill')) {
+    if (body.code === 'SLOW-BAD') {
+      return new Promise(resolve => {
+        releaseHeld = () => resolve(json({ result: 'rejected', order: null, code: 'NOT_FOUND', subReason: null,
+          orderNumber: null, who: null, at: null, state: null,
+          messageEn: 'No order in this store uses this waybill.', messageAr: 'x' }))
+      }).then(r => r)
+    }
     if (body.code === 'BAD') {
       return json({ result: 'rejected', order: null, code: 'CANCELLED', subReason: null, orderNumber: '#1039', who: null,
         at: '2026-10-01T08:05:00Z', state: null,
@@ -101,6 +110,7 @@ beforeEach(() => {
   calls = []
   pieceScans = 0
   pieceResponses = [scanned, completed]
+  releaseHeld = null
   stubFetchWithShellDefaults(vi.fn(backend))
 })
 afterEach(() => { vi.unstubAllGlobals() })
@@ -197,6 +207,27 @@ describe('Pick & Pack — waybill scan mode', () => {
     await user.click(within(box).getByRole('button', { name: 'Try again' }))
     expect(await screen.findByTestId('packed-flash')).toBeInTheDocument()
     expect(calls.some(c => c.url.endsWith('/orders/order-1/complete') && c.method === 'POST')).toBe(true)
+  })
+
+  test('a waybill rejection drops scans queued behind it — never applied to the next waybill', async () => {
+    const user = await startSession()
+    await scan(user, 'SLOW-BAD')                          // held in flight
+    await waitFor(() => expect(releaseHeld).not.toBeNull())
+    await user.keyboard('74821903{Enter}P000001{Enter}')  // queued behind it, no clicks
+    expect(await screen.findByTestId('scan-pending')).toHaveTextContent('2 scans waiting')
+
+    releaseHeld!()
+    expect(await screen.findByTestId('session-rejected')).toBeInTheDocument()
+    await new Promise(r => setTimeout(r, 50))
+    const waybillCalls = calls.filter(c => c.url.endsWith('/sess-1/waybill')).map(c => (c.body as { code: string }).code)
+    expect(waybillCalls).toEqual(['SLOW-BAD'])            // the queued waybill was discarded
+    expect(calls.some(c => c.url.includes('/orders/order-1/scan'))).toBe(false)
+    expect(screen.queryByTestId('scan-pending')).not.toBeInTheDocument()
+
+    // The next waybill the packer scans opens normally, with nothing applied to it.
+    await scan(user, '74821903')
+    expect(await screen.findByTestId('order-card')).toBeInTheDocument()
+    expect(pieceScans).toBe(0)
   })
 
   test('set aside needs a reason, then returns to waiting', async () => {
