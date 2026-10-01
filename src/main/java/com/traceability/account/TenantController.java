@@ -48,8 +48,15 @@ public class TenantController {
         String pickupAddress,
         String labelSize,       // "40x25" or "50x25"
         String defaultLanguage, // "ar" or "en"
-        String timezone
-    ) {}
+        String timezone,
+        String pickPackMode     // "order_queue" or "waybill_scan" (Pick & Pack S3)
+    ) {
+        /** Pre-S3 shape — every field but the packing mode. */
+        public TenantSettingsRequest(String name, String pickupAddress, String labelSize,
+                                     String defaultLanguage, String timezone) {
+            this(name, pickupAddress, labelSize, defaultLanguage, timezone, null);
+        }
+    }
 
     /** GET /api/v1/tenant/settings */
     @GetMapping("/settings")
@@ -61,7 +68,7 @@ public class TenantController {
             tx.execute(s -> {
                 Map<String, Object> m = jdbc.query(
                     "SELECT name, label_width_mm, label_height_mm, " +
-                    "       default_language, timezone, pickup_address " +
+                    "       default_language, timezone, pickup_address, pick_pack_mode " +
                     "FROM tenants WHERE id = ?",
                     rs -> {
                         if (!rs.next()) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Tenant not found");
@@ -75,6 +82,7 @@ public class TenantController {
                         result.put("labelSize",       labelSize);
                         result.put("defaultLanguage", rs.getString("default_language"));
                         result.put("timezone",        rs.getString("timezone"));
+                        result.put("pickPackMode",    rs.getString("pick_pack_mode"));
                         return result;
                     }, tenantId);
 
@@ -120,6 +128,12 @@ public class TenantController {
                 "defaultLanguage must be 'ar' or 'en'");
         }
 
+        if (req.pickPackMode() != null
+                && !Set.of("order_queue", "waybill_scan").contains(req.pickPackMode())) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                "pickPackMode must be 'order_queue' or 'waybill_scan'");
+        }
+
         final Double finalW = labelW, finalH = labelH;
 
         // Build audit metadata before the transaction — depends only on request fields.
@@ -129,6 +143,7 @@ public class TenantController {
         if (req.labelSize()       != null) meta.put("labelSize",       req.labelSize());
         if (req.defaultLanguage() != null) meta.put("defaultLanguage", req.defaultLanguage());
         if (req.timezone()        != null) meta.put("timezone",        req.timezone());
+        if (req.pickPackMode()    != null) meta.put("pickPackMode",    req.pickPackMode());
 
         // audit.record() MUST be inside tx.execute(). The GUC (app.current_tenant) is set by
         // TenantAwareConnection.setAutoCommit(false) and only remains active for the transaction.
@@ -142,11 +157,12 @@ public class TenantController {
                     label_width_mm   = COALESCE(?, label_width_mm),
                     label_height_mm  = COALESCE(?, label_height_mm),
                     default_language = COALESCE(?, default_language),
-                    timezone         = COALESCE(?, timezone)
+                    timezone         = COALESCE(?, timezone),
+                    pick_pack_mode   = COALESCE(?, pick_pack_mode)
                 WHERE id = ?
                 """,
                 req.name(), req.pickupAddress(), finalW, finalH,
-                req.defaultLanguage(), req.timezone(), tenantId);
+                req.defaultLanguage(), req.timezone(), req.pickPackMode(), tenantId);
             if (!meta.isEmpty()) {
                 audit.record(principal.userId(), "tenant_settings_update", "tenant",
                     tenantId.toString(), meta);

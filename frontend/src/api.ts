@@ -837,9 +837,18 @@ export interface TenantSettings {
   labelSize: '40x25' | '50x25'
   defaultLanguage: 'ar' | 'en'
   timezone: string
+  /** Pick & Pack S3 — how the store packs; owner-only to change. */
+  pickPackMode: PickPackMode
   consentPrivacyVersion: string | null
   consentTermsVersion: string | null
   consentAcceptedAt: string | null
+}
+
+export type PickPackMode = 'order_queue' | 'waybill_scan'
+
+/** Readable by every role (workers can't read /tenant/settings). */
+export function getPickPackMode() {
+  return request<{ mode: PickPackMode }>('/fulfill/mode')
 }
 
 export function getTenantSettings() {

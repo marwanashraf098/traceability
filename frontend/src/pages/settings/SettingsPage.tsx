@@ -7,9 +7,10 @@ import ConnectionsTab from './ConnectionsTab'
 import UsersTab from './UsersTab'
 import LocationsTab from './LocationsTab'
 import ReturnsPortalTab from './ReturnsPortalTab'
+import PickPackTab from './PickPackTab'
 
-type TabKey = 'business' | 'connections' | 'users' | 'locations' | 'portal'
-const ALL_TABS: TabKey[] = ['business', 'connections', 'users', 'locations', 'portal']
+type TabKey = 'business' | 'connections' | 'users' | 'locations' | 'pickpack' | 'portal'
+const ALL_TABS: TabKey[] = ['business', 'connections', 'users', 'locations', 'pickpack', 'portal']
 
 /**
  * The consolidated Settings screen — one page, four tabs, replacing the four
@@ -29,6 +30,9 @@ const ALL_TABS: TabKey[] = ['business', 'connections', 'users', 'locations', 'po
  *
  * Returns portal Step 4e-A adds a fifth tab, "Returns portal" (?tab=portal) — owner and
  * manager, both editable (PUT /tenant/portal-settings allows both); never a worker.
+ *
+ * Pick & Pack S3 adds "Pick & Pack" (?tab=pickpack) — the packing mode. Owner edits; manager
+ * read-only (PUT /tenant/settings is owner-only server-side); never a worker.
  */
 export default function SettingsPage() {
   const { t } = useTranslation()
@@ -66,6 +70,7 @@ export default function SettingsPage() {
         {activeTab === 'connections' && <ConnectionsTab readOnly={!isOwner} />}
         {activeTab === 'users' && <UsersTab />}
         {activeTab === 'locations' && <LocationsTab />}
+        {activeTab === 'pickpack' && <PickPackTab isOwner={isOwner} />}
         {activeTab === 'portal' && <ReturnsPortalTab />}
       </div>
     </div>

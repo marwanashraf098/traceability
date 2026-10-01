@@ -1779,6 +1779,7 @@
       "locations": "Locations",
       "usersSubtitle": "Team",
       "locationsSubtitle": "Warehouses & locations",
+      "pickpack": "Pick & Pack",
       "portal": "Returns portal"
     },
     "sections": {
@@ -1925,6 +1926,20 @@
         "needsLocation": "Choose where returns go back to and save first.",
         "needsBooking": "Turn on \"Book Bosta pickups when I approve\" and save first."
       }
+    },
+    "pickPack": {
+      "title": "Packing mode",
+      "subtitle": "How your team packs orders. Applies to every worker in this store.",
+      "ownersOnly": "Owners only",
+      "queueTitle": "Order queue",
+      "queueLine1": "Pick an order from the list, scan its pieces, then scan its waybill.",
+      "queueLine2": "Best when waybills are printed one by one.",
+      "waybillTitle": "Waybill scan",
+      "waybillLine1": "Print all waybills first. Scan a waybill to open its order, scan the pieces, and the order closes by itself.",
+      "waybillLine2": "Best for busy days and batch printing.",
+      "selfPickupNote": "Self-pickup orders have no waybill, so they always stay in the order queue.",
+      "sessionsNote": "Pack sessions already open finish in their current mode. The change applies to the next session.",
+      "error": "Couldn't save the packing mode. Try again."
     }
   },
   "users": {
