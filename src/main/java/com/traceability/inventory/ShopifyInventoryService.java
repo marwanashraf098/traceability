@@ -85,6 +85,9 @@ import java.util.concurrent.CompletableFuture;
 @Service
 public class ShopifyInventoryService {
 
+    /** Claim status set by the initial seed (V123) — never retried, repushed or reclaimed. */
+    public static final String SUPERSEDED_BY_SEED = "superseded_by_seed";
+
     private static final Logger log = LoggerFactory.getLogger(ShopifyInventoryService.class);
 
     private final JdbcTemplate         jdbc;
@@ -113,7 +116,9 @@ public class ShopifyInventoryService {
     // ── Trigger 1: receiving session close ───────────────────────────────────
 
     /**
-     * Called after ReceivingService.finalize() commits.
+     * Called once ReceivingService.finalize()'s transaction has committed (registered through
+     * {@link #afterCommit}) — the claim this creates never predates its pieces, which the initial
+     * seed's claim cutoff relies on.
      * variantDeltaMap: variantId → total units received in this session.
      */
     @Async
@@ -132,7 +137,8 @@ public class ShopifyInventoryService {
     // ── Trigger 2: return inspection → AVAILABLE ────────────────────────────
 
     /**
-     * Called after ReturnService.restock() — piece transitioned to AVAILABLE.
+     * Called once ReturnService.restock()'s transaction has committed ({@link #afterCommit}) —
+     * piece transitioned to AVAILABLE.
      * Damaged pieces are NOT routed here (guard is in ReturnService.markDamaged()).
      */
     @Async
@@ -212,7 +218,8 @@ public class ShopifyInventoryService {
     // ── Trigger: FR-13.x hold exit — EXISTING positive path, not a decrement ─
 
     /**
-     * Called after PieceAdjustService.unhold() commits an on_hold→available transition.
+     * Called once PieceAdjustService.unhold()'s on_hold→available transition has committed
+     * ({@link #afterCommit}).
      * Reuses the SAME positive-delta path as receiving/return-inspection (applyIncrementAdjustment)
      * — this is an increment, not part of the named decrement set, needs no new gateway method.
      * holdEventId must be the SAME id used by the onHoldEnter() call for this cycle so the two
@@ -920,6 +927,15 @@ public class ShopifyInventoryService {
             if (exists == null || exists == 0) {
                 throw new ResponseStatusException(HttpStatus.NOT_FOUND, "No adjustment found for " + triggerType + "/" + triggerId);
             }
+            Integer superseded = tx.execute(st -> jdbc.queryForObject(
+                "SELECT COUNT(*) FROM shopify_inventory_adjustments WHERE tenant_id = ? AND trigger_type = ? " +
+                "AND trigger_id = ? AND variant_id = ? AND status = '" + SUPERSEDED_BY_SEED + "'",
+                Integer.class, tenantId, triggerType, triggerId, variantId));
+            if (superseded != null && superseded > 0) {
+                throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "SUPERSEDED_BY_SEED: the stock seed already pushed this variant's current quantity to Shopify " +
+                    "— sending this update again would count those units twice");
+            }
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Adjustment is not in 'failed' status");
         }
         FailedClaim c = rows.get(0);
@@ -1069,29 +1085,51 @@ public class ShopifyInventoryService {
                                      ShopifyAdjustFailedException.FailureClass failureClass,
                                      Integer sentBaseline, String sentKey) {
         boolean failed = "failed".equals(status);
-        tx.execute(txStatus -> jdbc.update(
-            "UPDATE shopify_inventory_adjustments SET " +
-            "  status = ?, error = ?, " +
-            "  shopify_inventory_item_id = COALESCE(?, shopify_inventory_item_id), " +
-            "  shopify_location_id = COALESCE(?, shopify_location_id), " +
-            "  failure_class = ?, " +
-            "  change_from_quantity = CASE WHEN ?::text IS NOT NULL THEN ?::int ELSE change_from_quantity END, " +
-            "  sent_key_first_at = CASE WHEN ?::text IS NOT NULL AND ?::text IS DISTINCT FROM sent_idempotency_key " +
-            "                           THEN now() ELSE sent_key_first_at END, " +
-            "  sent_idempotency_key = COALESCE(?::text, sent_idempotency_key), " +
-            "  first_attempt_at = COALESCE(first_attempt_at, now()), " +
-            "  last_attempt_at = now(), " +
-            "  next_attempt_at = " + (failed ? IncrementRecoveryRules.NEXT_ATTEMPT_AFTER_FAILURE_SQL : "NULL") + ", " +
-            "  attempt_count = attempt_count + 1, " +
-            "  applied_at = CASE WHEN ? = 'applied' THEN now() ELSE applied_at END " +
-            "WHERE tenant_id = ? AND trigger_type = ? AND trigger_id = ? " +
-            "  AND variant_id = ? AND location_id = ?",
-            status, error, shopifyInventoryItemId, shopifyLocationId,
-            failed && failureClass != null ? failureClass.db() : null,
-            sentKey, sentBaseline, sentKey, sentKey, sentKey, status,
-            tenantId, triggerType, triggerId, variantId, locationId));
+        Boolean recorded = tx.execute(txStatus -> {
+            // The seed may have superseded this claim while its attempt was in flight (it was 'pending').
+            // A late failure never brings it back to 'failed' (that would re-arm a retry the seed made
+            // redundant); a late success is recorded as the truth, loudly, because Shopify may now count
+            // those units twice.
+            Map<String, Object> current = jdbc.query(
+                "SELECT status, delta FROM shopify_inventory_adjustments " +
+                "WHERE tenant_id = ? AND trigger_type = ? AND trigger_id = ? AND variant_id = ? AND location_id = ? " +
+                "FOR UPDATE",
+                rs -> rs.next() ? Map.<String, Object>of("status", rs.getString(1), "delta", rs.getInt(2)) : null,
+                tenantId, triggerType, triggerId, variantId, locationId);
+            if (current != null && SUPERSEDED_BY_SEED.equals(current.get("status"))) {
+                if (failed) {
+                    log.info("Shopify inventory: late failure ignored — claim already superseded by the seed " +
+                             "trigger={} triggerId={} variant={}", triggerType, triggerId, variantId);
+                    return false;
+                }
+                log.warn("Shopify inventory: applied after superseded by seed — possible double count of {} units " +
+                         "for variant {} (trigger={} triggerId={} location={})",
+                         current.get("delta"), variantId, triggerType, triggerId, locationId);
+            }
+            return jdbc.update(
+                "UPDATE shopify_inventory_adjustments SET " +
+                "  status = ?, error = ?, " +
+                "  shopify_inventory_item_id = COALESCE(?, shopify_inventory_item_id), " +
+                "  shopify_location_id = COALESCE(?, shopify_location_id), " +
+                "  failure_class = ?, " +
+                "  change_from_quantity = CASE WHEN ?::text IS NOT NULL THEN ?::int ELSE change_from_quantity END, " +
+                "  sent_key_first_at = CASE WHEN ?::text IS NOT NULL AND ?::text IS DISTINCT FROM sent_idempotency_key " +
+                "                           THEN now() ELSE sent_key_first_at END, " +
+                "  sent_idempotency_key = COALESCE(?::text, sent_idempotency_key), " +
+                "  first_attempt_at = COALESCE(first_attempt_at, now()), " +
+                "  last_attempt_at = now(), " +
+                "  next_attempt_at = " + (failed ? IncrementRecoveryRules.NEXT_ATTEMPT_AFTER_FAILURE_SQL : "NULL") + ", " +
+                "  attempt_count = attempt_count + 1, " +
+                "  applied_at = CASE WHEN ? = 'applied' THEN now() ELSE applied_at END " +
+                "WHERE tenant_id = ? AND trigger_type = ? AND trigger_id = ? " +
+                "  AND variant_id = ? AND location_id = ?",
+                status, error, shopifyInventoryItemId, shopifyLocationId,
+                failed && failureClass != null ? failureClass.db() : null,
+                sentKey, sentBaseline, sentKey, sentKey, sentKey, status,
+                tenantId, triggerType, triggerId, variantId, locationId) > 0;
+        });
 
-        if (failed) {
+        if (failed && Boolean.TRUE.equals(recorded)) {
             log.warn("Shopify inventory adjustment recorded as failed: trigger={} triggerId={} variant={} class={} error={}",
                      triggerType, triggerId, variantId, failureClass == null ? null : failureClass.db(), error);
         }

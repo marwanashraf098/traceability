@@ -52,8 +52,9 @@ public class ShopifyInventoryReconcileService {
 
     public record ReconcileReport(String tracedLocationGid, List<VariantReconcileRow> rows) {}
 
+    /** superseded = unapplied increment claims this seed made redundant (see supersedeIncrementClaims). */
     public record ApplyResult(int seeded, int skippedNonZero, int noop, int failed,
-                               List<Map<String, String>> failures) {}
+                               List<Map<String, String>> failures, int superseded) {}
 
     private final JdbcTemplate jdbc;
     private final TransactionTemplate tx;
@@ -172,7 +173,11 @@ public class ShopifyInventoryReconcileService {
 
     private ReconcileReport buildReport(UUID tenantId, Context ctx, List<Map<String, Object>> variants,
                                         Map<UUID, String> variantToItemGid) {
-        Map<UUID, Long> tracedOnHand = tracedOnHand(tenantId);
+        return buildReport(ctx, variants, variantToItemGid, tracedOnHand(tenantId));
+    }
+
+    private ReconcileReport buildReport(Context ctx, List<Map<String, Object>> variants,
+                                        Map<UUID, String> variantToItemGid, Map<UUID, Long> tracedOnHand) {
 
         // Batch-read Shopify's current "available" at the Traced location (≤250 ids per read).
         Map<String, Integer> availableByItemGid = new HashMap<>();
@@ -259,10 +264,16 @@ public class ShopifyInventoryReconcileService {
                 String stored = (String) v.get("shopify_inventory_item_id");
                 if (stored != null && !stored.isBlank()) variantToItemGid.putIfAbsent((UUID) v.get("id"), stored);
             }
-            ReconcileReport report = buildReport(tenantId, ctx, candidates, variantToItemGid);
+            // The on-hand snapshot: the cutoff is read under the lock immediately before Traced on_hand.
+            // An increment claim created at or before it is covered by this snapshot (the increment
+            // triggers fire after their pieces commit, so a claim never predates its own pieces).
+            java.sql.Timestamp snapshotAt = jdbc.queryForObject("SELECT clock_timestamp()", java.sql.Timestamp.class);
+            Map<UUID, Long> onHandAtSnapshot = tracedOnHand(tenantId);
+            ReconcileReport report = buildReport(ctx, candidates, variantToItemGid, onHandAtSnapshot);
 
             int seeded = 0, skippedNonZero = 0, failed = 0;
             List<Map<String, String>> failures = new ArrayList<>();
+            List<UUID> seededVariants = new ArrayList<>();
 
             for (VariantReconcileRow row : report.rows()) {
                 switch (row.action()) {
@@ -294,6 +305,7 @@ public class ShopifyInventoryReconcileService {
                                 ctx.tracedGid(), (int) row.tracedOnHand(), "correction", idempotencyKey);
                             recordAudit(tenantId, row.variantId(), ctx.tracedLocationId(), row.tracedOnHand(),
                                 "applied", null);
+                            seededVariants.add(row.variantId());
                             seeded++;
                         } catch (Exception e) {
                             String msg = e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName();
@@ -314,15 +326,61 @@ public class ShopifyInventoryReconcileService {
                 "SELECT COUNT(*) FROM variants WHERE tenant_id = ?", Integer.class, tenantId);
             int noop = (allVariants == null ? 0 : allVariants) - report.rows().size();
 
-            log.info("Initial seed applied: tenant={} seeded={} skippedNonZero={} noop={} failed={}",
-                tenantId, seeded, skippedNonZero, noop, failed);
+            int superseded = supersedeIncrementClaims(tenantId, ctx.tracedLocationId(), snapshotAt,
+                seededVariants, onHandAtSnapshot.keySet());
+
+            log.info("Initial seed applied: tenant={} seeded={} skippedNonZero={} noop={} failed={} superseded={}",
+                tenantId, seeded, skippedNonZero, noop, failed, superseded);
 
             auditService.record(actorUserId, "shopify_inventory_initial_seed", "location",
                 ctx.tracedLocationId().toString(),
-                Map.of("seeded", seeded, "skippedNonZero", skippedNonZero, "noop", noop, "failed", failed));
+                Map.of("seeded", seeded, "skippedNonZero", skippedNonZero, "noop", noop, "failed", failed,
+                       "superseded", superseded));
 
-            return new ApplyResult(seeded, skippedNonZero, noop, failed, failures);
+            return new ApplyResult(seeded, skippedNonZero, noop, failed, failures, superseded);
         });
+    }
+
+    /**
+     * Marks 'superseded_by_seed' every increment claim (receiving_session / return_inspection /
+     * hold_exit — legacy or not) at the Traced location that never applied ('failed' or 'pending')
+     * and was created at or before the on-hand snapshot, for a variant this run either
+     *   - SEEDED: Shopify now holds Traced's on-hand, which already counts the claim's units (or
+     *     they have since left on-hand) — a retry would double count; or
+     *   - had Traced on-hand 0 at the snapshot: the claim's pieces have all left on-hand, so
+     *     replaying them would overstate Shopify.
+     * skip_nonzero and failed-seed variants are left alone: the seed wrote nothing for them, so
+     * their claims are still owed and stay retryable. A claim created after the snapshot is never
+     * touched. Runs in the seed's transaction (under its lock), so it commits with the seed's
+     * writes or not at all. claim() reclaims only 'failed' rows, so a superseded claim is never
+     * retried or repushed; see ShopifyInventoryService.markIncrementResult for an in-flight
+     * 'pending' claim whose result arrives later.
+     */
+    private int supersedeIncrementClaims(UUID tenantId, UUID tracedLocationId, java.sql.Timestamp snapshotAt,
+                                         List<UUID> seededVariants, java.util.Set<UUID> onHandPositive) {
+        Integer rows = jdbc.execute((org.springframework.jdbc.core.ConnectionCallback<Integer>) con -> {
+            try (var ps = con.prepareStatement(
+                    "UPDATE shopify_inventory_adjustments SET status = 'superseded_by_seed', " +
+                    "       superseded_at = now(), next_attempt_at = NULL " +
+                    "WHERE tenant_id = ? AND location_id = ? " +
+                    "  AND trigger_type IN " + IncrementRecoveryRules.INCREMENT_TRIGGERS_SQL +
+                    "  AND status IN ('failed', 'pending') " +
+                    "  AND created_at <= ? " +
+                    "  AND (variant_id = ANY(?) OR NOT (variant_id = ANY(?)))")) {
+                ps.setObject(1, tenantId);
+                ps.setObject(2, tracedLocationId);
+                ps.setTimestamp(3, snapshotAt);
+                ps.setArray(4, con.createArrayOf("uuid", seededVariants.toArray()));
+                ps.setArray(5, con.createArrayOf("uuid", onHandPositive.toArray()));
+                return ps.executeUpdate();
+            }
+        });
+        int n = rows == null ? 0 : rows;
+        if (n > 0) {
+            log.info("Initial seed superseded {} unapplied increment claim(s): tenant={} location={} snapshot={}",
+                n, tenantId, tracedLocationId, snapshotAt);
+        }
+        return n;
     }
 
     /** pg_advisory_xact_lock is transaction-scoped — automatically released when the

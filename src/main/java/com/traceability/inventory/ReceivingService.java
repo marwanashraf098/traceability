@@ -159,8 +159,10 @@ public class ReceivingService {
             sessionId, tenantId);
 
         // Build variant→qty delta map and kick off async Shopify shadow sync (Trigger 1).
-        // Runs on a new thread after this method returns; TenantContext.runAs() is the
-        // outer wrapper inside onReceivingSessionClose — ThreadLocal does not propagate.
+        // Fired AFTER this transaction commits (a rolled-back finalize never reaches Shopify, and
+        // the claim is never created before its pieces are visible — the seed's cutoff relies on
+        // that). Runs on a new thread; TenantContext.runAs() is the outer wrapper inside
+        // onReceivingSessionClose — ThreadLocal does not propagate.
         Map<UUID, Integer> variantDeltaMap = new java.util.LinkedHashMap<>();
         for (Map<String, Object> line : lines) {
             UUID variantId = (UUID) line.get("variant_id");
@@ -168,7 +170,8 @@ public class ReceivingService {
             variantDeltaMap.merge(variantId, qty, Integer::sum);
         }
         if (shopifyInventory != null) {
-            shopifyInventory.onReceivingSessionClose(tenantId, sessionId, locationId, variantDeltaMap);
+            ShopifyInventoryService.afterCommit(() ->
+                shopifyInventory.onReceivingSessionClose(tenantId, sessionId, locationId, variantDeltaMap));
         }
 
         return specs.size();

@@ -384,7 +384,9 @@ public class PieceAdjustService {
         ledger.transition(pieceId, PieceStatus.ON_HOLD, PieceStatus.AVAILABLE, "unheld", actorUserId,
             new TransitionContext(null, null, null, null, null));
 
-        shopifyInventory.onHoldExit(tenantId, pieceId, currentLocationId, holdEventId);
+        // After commit — a rolled-back unhold never reaches Shopify; the claim never predates the commit.
+        ShopifyInventoryService.afterCommit(() ->
+            shopifyInventory.onHoldExit(tenantId, pieceId, currentLocationId, holdEventId));
 
         auditService.record(actorUserId, "piece_unhold", "piece", pieceId,
             Map.of("holdEventId", holdEventId.toString()));

@@ -4,6 +4,39 @@
 
 ## Current state
 
+**Seed supersedes redundant increment claims (2026-10-01, branch `fix/seed-supersedes-increment-claims` off main
+41c1a9d; merged, not deployed).** Must ship before any blocked store's location is linked.
+- **Bug:** the seed (`ShopifyInventoryReconcileService.apply`) pushes Traced's CURRENT on-hand; unapplied increment
+  claims from before it would then retry on top → double count.
+- **V123:** status `superseded_by_seed` (CHECK widened) + `superseded_at`. Inside the seed's transaction, under its
+  tenant advisory lock: cutoff = `clock_timestamp()` read immediately before the Traced on-hand read; after the writes,
+  every increment claim (receiving_session / return_inspection / hold_exit, legacy or not) at the Traced location in
+  'failed' or 'pending' with `created_at <= cutoff` is superseded — for variants the seed WROTE in this run, and for
+  variants with Traced on-hand 0 at the snapshot (Marawan, 2026-10-01: scope 3). skip_nonzero and failed-seed variants
+  stay retryable (the seed wrote nothing for them). `ApplyResult.superseded` + audit field.
+- **Never retried/repushed:** every `IncrementRecoveryRules` predicate is `status = 'failed'`, `claim()` reclaims only
+  'failed' → retry job and claim path skip them; repush answers 409 `SUPERSEDED_BY_SEED`; the setup / gave_up / legacy
+  alerts drop them (auto-resolve). Stock-screen sync health treats them as synced.
+- **In flight:** `markIncrementResult` locks the row; a superseded claim never goes back to 'failed'; a late success is
+  recorded 'applied' with WARN "applied after superseded by seed — possible double count of N units for variant X".
+- **Trigger firing fixed (root cause of the cutoff ambiguity):** the three increment triggers fired `@Async` from INSIDE
+  their `@Transactional` callers, so a claim could exist before its pieces committed (and a rolled-back finalize still
+  reached Shopify). Now `ShopifyInventoryService.afterCommit(...)`: `ReceivingService.finalize` (receiving_session),
+  `ReturnService.restock` (return_inspection), `PieceAdjustService.unhold` (hold_exit); javadocs corrected.
+  **Same pattern, NOT changed (decrements / moves, out of scope):** `PieceAdjustService.adjustPiece` → damage_move,
+  `voidPiece` → void_correction, `hold` → hold_enter.
+- **Residual window:** a trigger whose pieces committed before the on-hand read but whose async claim row is inserted
+  after the cutoff — the claim is treated as owed and sends +N on top of the seed. Width = after-commit dispatch →
+  async executor pickup → claim INSERT (milliseconds; longer only if the executor queue is backed up), and only for a
+  trigger landing in the same instant as a seed (link/relink only).
+- **Tests:** `SeedSupersedesClaimsTest` s1–s7, s2b, x1 (app_user), a1, a2 — revert-checked: no supersede step → s1/s3/s4/
+  s7/x1 RED; seeded-only → s4 RED; every variant → s5/s6 RED; no cutoff → s2b RED; no in-flight guard → s7 RED;
+  receiving trigger inside the tx → a1/a2 RED. Count bumps: MigrationSmokeTest 121→122 (V1–V123), NotTracedBackfillTest
+  66→67.
+- **Prod (read-only, 2026-10-01):** unapplied non-legacy increment claims — only The Snouts, 2 never_sent receiving
+  claims / 20 units / 2 variants (location `error`). Legacy unapplied: Snouts 32/1,040, Jumi 22/119, tesloc 8/312,
+  TracedLocations 6/44 (+1 'shadow' row, untouched).
+
 **RTO@20 false "exception" — Step 1 (2026-09-30, branch `fix/rto-route-assigned` off main d2d9d19, not merged,
 not deployed).**
 - **Problem:** Bosta relabels a SEND as type 20 "Return to Origin" on the way back (same AWB, still the forward leg).

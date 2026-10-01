@@ -16,6 +16,10 @@ import java.util.UUID;
  * next_attempt_at has come; an ambiguous one only while its sent key is < 20 h old (Shopify keeps
  * idempotency keys 24 h). A tenant-level setup problem (no store, missing scope, Traced location
  * not linked) blocks every retry — no attempt is spent until it is fixed.
+ *
+ * A claim the initial seed made redundant is 'superseded_by_seed' (V123, set by
+ * ShopifyInventoryReconcileService) — every predicate here is status = 'failed', so it is never
+ * retried, never counted by an alert, and claim() never reclaims it.
  */
 public final class IncrementRecoveryRules {
 
