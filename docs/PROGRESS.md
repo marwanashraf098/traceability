@@ -4,35 +4,50 @@
 
 ## Current state
 
-**Pick & Pack S3 — waybill scan mode, PART 1 of 2 (2026-10-01, branch `feat/pack-waybill-session` off main 3b8a503;
-pushed, not merged). STOPPED at the complete+link gate — commits 5 (session API) and 6 (frontend) not built.**
-- **Gate finding (needs Marawan):** no `TenantContext.runAs` anywhere under `FulfillService.complete()` /
-  `ShipmentLinkService.linkByAwbScan()` / `completeLink()` / `InventoryLedger.transition()`. But
-  `linkTrackingNumberToOrder()` makes a SYNCHRONOUS Bosta call inside the transaction:
-  `fetchAndStoreProviderDeliveryId()` → `bostaGateway.fetchDelivery()` (ShipmentLinkService :260-261 → :737), only on
-  the new-shipment branch (no forward shipment and the tracking number in no shipments row). Waybill mode always
-  links a waybill that the resolver found in `shipments`, so it takes the verify branch (:222-227) or the swapped-AWB
-  idempotent branch (:237) — the fetch is unreachable from the wrapper, but it is inside the method.
-- **Commit 1** `getOrder()` forward leg: LATERAL, active (not terminated/cancelled) before ended, created_at DESC, id
-  DESC. `GetOrderForwardLegTest` (3; reverted → 2 RED).
-- **Commit 2 V126:** `tenants.pick_pack_mode` (default order_queue), `pack_sessions` (one open per tenant+user, partial
-  unique), `pack_session_orders` (outcome packed/set_aside/rejected, order_id nullable, ON DELETE CASCADE like V125).
-  RLS NULLIF + FORCE; app_user sessions S/I/U, outcomes S/I. `PackSessionSchemaTest` (4). MigrationSmokeTest 124→125,
-  NotTracedBackfillTest 69→70.
-- **Commit 3 mode:** PUT /tenant/settings `{pickPackMode}` (owner-only, validated, audited; the record keeps a 5-arg
-  constructor so TenantSettingsTest compiles unedited); GET /api/v1/fulfill/mode `{mode}` (isAuthenticated);
-  Settings › Pick & Pack tab (owner edits, manager read-only, worker never). `PickPackModeTest` (3),
-  `pickPackSettings.test.tsx` (3). Pick & Pack route switch not wired yet (comes with commit 6).
-  **RlsCoverageTest NOT edited** (standing rule) — its coverage audit fails on the new GET /api/v1/fulfill/mode until
-  approved.
-- **Commit 4:** `WaybillResolver` (codes OPEN, CANCELLED [Shopify cancel time only when orders.raw has it],
-  ALREADY_PACKED [latest 'pack' event's actor + time], CLAIMED_BY_OTHER, RETURN_WAYBILL, EXCHANGE_NOT_MAPPED, TOO_OLD,
-  NOT_FOUND [+ 'unlinked' when unlinked_bosta_deliveries has it], NOT_A_WAYBILL, plus two not in the spec: ON_HOLD and
-  NOT_PACKABLE [old/ended leg, shipment moving, self-pickup]). Reuses PICKABLE_SHIPMENT_GATE read-only + the 30-day
-  window; type-30 internal exchange orders open. `PackClaim` (orders.locked_by/locked_at): atomic conditional take,
-  refresh, release, stale after 10 min (NULL locked_at = stale). Q2: shared `FulfillService.scan()` returns
-  CLAIMED_BY_OTHER while another packer's claim is live (server-side; PickScreen untouched; EN/AR copy keys added).
-  `WaybillResolverTest` (11; Q2 check removed → RED, unconditional take → RED).
+**Pick & Pack S3 — waybill scan mode (2026-10-01, branch `feat/pack-waybill-session` off main 3b8a503; pushed, not
+merged, not deployed).** Commits: getOrder fix · V126 · mode setting · resolver/claim · session API · frontend · refocus.
+- **Gate (resolved, option a):** no `TenantContext.runAs` under complete()/linkByAwbScan()/completeLink()/ledger.
+  `PackCompleter.completeAndLink` (one transaction, after the scan transaction committed) guards first: the
+  normalized opening waybill must be a FORWARD shipment row on this order, else `CompleteFailed WAYBILL_NOT_ON_ORDER`
+  (rollback; claim and open order kept). Proven: `PackSessionTest` asserts `bostaGateway.fetchDelivery` is never
+  called on the success path, the terminated-leg path and the guard path; guard removed → 2 RED.
+- **V126:** `tenants.pick_pack_mode` (default order_queue); `pack_sessions` (one open per tenant+user; the open order
+  + its opening raw scan live on the session: `current_order_id` ON DELETE SET NULL, `current_waybill_scan`,
+  `current_opened_at`); `pack_session_orders` (packed / set_aside / rejected + raw_scan + reason). RLS NULLIF + FORCE;
+  app_user sessions S/I/U, outcomes S/I. MigrationSmokeTest 124→125, NotTracedBackfillTest 69→70.
+- **Mode:** PUT /tenant/settings `{pickPackMode}` owner-only; GET /api/v1/fulfill/mode every role; Settings › Pick &
+  Pack tab (owner edits, manager read-only). `/fulfill` → `FulfillRoute`: order_queue = existing page unchanged;
+  waybill_scan = waybill page; `?view=self-pickup` = existing queue filtered to self-pickup.
+- **Resolver** (`WaybillResolver`): OPEN, CANCELLED (Shopify cancel time only when known), ALREADY_PACKED (latest 'pack'
+  event's actor + time), CLAIMED_BY_OTHER, RETURN_WAYBILL, EXCHANGE_NOT_MAPPED, TOO_OLD (30-day window), NOT_FOUND
+  (+ 'unlinked'), NOT_A_WAYBILL, ON_HOLD, NOT_PACKABLE with sub-reason in `detail`: LEG_ENDED, ALREADY_MOVING (+ state;
+  live or ever in shipment_status_history), SELF_PICKUP, OTHER (gate refuses: confirmed/picking status, or the newest
+  forward leg ended while an older one is active). A "not the current waybill" reason can't occur (V104 allows one
+  non-ended forward leg). Type-30 internal exchange orders open. PICKABLE_SHIPMENT_GATE reused verbatim.
+- **Claim** (`PackClaim`, orders.locked_by/locked_at): atomic conditional take on open, refreshed on every piece
+  scan/undo, stale after 10 min (NULL locked_at = stale), released on auto-complete / set aside / session end (all of
+  the packer's claims). Q2: shared `FulfillService.scan()` refuses CLAIMED_BY_OTHER while another packer's claim is
+  live — queue mode too (server-side only; PickScreen untouched).
+- **Session API** `/api/v1/pack-sessions`: POST (start / resume; refused MODE_NOT_WAYBILL in order_queue mode; mode
+  copied onto the session), GET /summary, GET /{id}, POST /{id}/waybill, POST /{id}/orders/{o}/scan (scanned / rejected
+  / completed / complete_failed), POST …/complete (retry), DELETE …/scan/{piece} (undo, only while open), POST
+  …/set-aside {reason} (existing unscan for every active allocation), POST /{id}/end (refused while an order is open).
+  Owner-only-by-user: another packer → 403 SESSION_NOT_YOURS; another tenant → 404. Errors are ApiException
+  `{code, message_en, message_ar}`. tracking_linked events carry the opening raw scan + `{"pack_session_id": …}`
+  (new `linkByAwbScan` overload; the 3-arg form passes null as before).
+- **Frontend:** waybill page (mode chip, Print waybills, Start/Resume, tiles, self-pickup entry) and `PackSessionScreen`
+  on useScanner + ScanShell (waiting → order card with 88px images → auto-complete flash; rejection screen per code;
+  complete_failed + Try again; Undo only while open; set aside with required reason; End disabled while open). EN+AR.
+  **Gotcha:** useScanner disables the input during a scan and calls focus() before React re-enables it → focus lost
+  after every scan (seen in Chrome; jsdom can't show it). The session screen refocuses itself. StockTakeScan /
+  TransferScanOut use the same hook without their own refocus — likely the same problem, not verified, not changed.
+- **Tests:** PackSessionTest 12, WaybillResolverTest 12, PackSessionSchemaTest 4, PickPackModeTest 3,
+  GetOrderForwardLegTest 3; RlsCoverageTest registers /fulfill/mode, /pack-sessions/{id}, /pack-sessions/summary
+  (approved). Frontend packWaybillSession 7, pickPackSettings 3. Full suite: 1,918 run, only the 2 known reds.
+  Vitest 588/588, tsc + build clean.
+- **Follow-ups:** (1) pre-existing synchronous Bosta HTTP call inside the link transaction on the new-shipment branch —
+  `ShipmentLinkService.linkTrackingNumberToOrder` → `fetchAndStoreProviderDeliveryId` → `fetchDelivery` (main 3b8a503:
+  :260-261 → :737; this branch: :273-274 → :754), the queue-mode AWB link path; out of scope here. (2) useScanner focus loss on the other scan screens (above).
 **Scanner fix — no lost scans (2026-10-01, branch `fix/scanner-no-lost-scans` off main 3b8a503; pushed, not merged,
 not deployed).** Marawan approved editing the SAFETY-CRITICAL blocks of `hooks/useScanner.ts` and
 `components/ScanShell.tsx` for exactly this change (2026-10-01). Screens: StockTakeScan, TransferScanOut,
