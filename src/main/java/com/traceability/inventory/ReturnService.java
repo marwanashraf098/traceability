@@ -94,7 +94,10 @@ public class ReturnService {
 
         // Async Shopify shadow sync — Trigger 2 (return_inspection → AVAILABLE).
         // Damaged pieces are NOT routed here; markDamaged() has no sync call — invariant preserved.
-        shopifyInventory.onReturnInspectionAvailable(tenantId, pieceId, locationId);
+        // Fired after commit: a rolled-back restock never reaches Shopify, and the claim never
+        // predates the piece's own 'available' commit.
+        ShopifyInventoryService.afterCommit(() ->
+            shopifyInventory.onReturnInspectionAvailable(tenantId, pieceId, locationId));
 
         // Close out the order's return leg if this was its last outstanding piece — see
         // ShipmentLinkService.resolveReturnLegIfComplete() javadoc for why this must run

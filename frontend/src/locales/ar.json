@@ -2132,7 +2132,8 @@
       "shadow": "تجريبي",
       "pending": "قيد الانتظار",
       "applied": "مُطبَّق",
-      "failed": "فشل"
+      "failed": "فشل",
+      "superseded_by_seed": "مشمول في مزامنة المخزون الأولية"
     },
     "trigger": {
       "receiving_session": "استلام",

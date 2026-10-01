@@ -2081,7 +2081,8 @@
       "shadow": "Shadow",
       "pending": "Pending",
       "applied": "Applied",
-      "failed": "Failed"
+      "failed": "Failed",
+      "superseded_by_seed": "Covered by stock seed"
     },
     "trigger": {
       "receiving_session": "Receiving",
