@@ -4,6 +4,30 @@
 
 ## Current state
 
+**Pick & Pack S4 — waybill mode: batch lists, printed-but-not-packed, manager exceptions, session summary (2026-10-02,
+branch `feat/pack-lists-summary` off origin/main; pushed, not merged, not deployed).** No migration (`exception_type`
+has no CHECK; nothing new to store — resolutions reuse `exception_resolutions`).
+- **`PackListRules`** (inventory) is the single source of the predicates: not-yet-packed, cancelled (status or
+  cancel_requested_at), latest deciding pack outcome (packed / set_aside, `created_at DESC, id DESC`), open set-aside,
+  open cancelled-after-print, batch item state. Detectors, both lists and the summary read it — never inline.
+- **Exceptions (MEDIUM → daily 08:00 digest only; the immediate alert job is CRITICAL/HIGH):** `pack_set_aside`
+  (subject `pack_set_aside:<pack_session_orders.id>` — a new set-aside after a resolve re-opens; auto-clears when the
+  order is packed or cancelled) and `pack_cancelled_after_print` (subject `pack_cancelled_after_print:<shipment id>`;
+  printed waybill + cancelled order; resolve = "waybill discarded"). actionUrl `/fulfill`.
+- **Endpoints (any signed-in user, tenant RLS):** GET `/fulfill/print-batches/today` (Cairo day, newest first, counts
+  packed / setAside / cancelled / waiting — "packing now" counts as waiting); POST `/fulfill/print-batches/{id}/reprint`
+  (stored position order, one Bosta call, no new batch row, cancelled orders skipped as ORDER_CANCELLED); GET
+  `/fulfill/printed-not-packed` (latest batch per shipment, no time window; status cancelled > packing > set_aside >
+  waiting; packed and resolved-cancelled drop out; sorted cancelled, set_aside, packing, waiting, then printed_at,
+  batch, position); GET `/pack-sessions/{id}/summary` (own sessions only — 403 otherwise).
+- **Frontend:** `PackLists.tsx` (both lists; owner/manager rows with an exception open `/exceptions?type=&key=`,
+  workers read-only), `SessionSummaryScreen.tsx` (after End session; `?summary=<id>` keeps it on reload), Exceptions
+  `?key=` highlights + scrolls to the row.
+- **Tests:** `PackListsTest` (8), RlsCoverageTest +3 GETs (56/56), `packListsSummary.test.tsx` (6). Backend 1,936 run, 4 skipped,
+  only the 2 known reds; vitest 605/605, browser 8/8, tsc + build clean.
+- **Deviations:** reprint also skips cancelled orders (beyond Bosta's own exclusions); batch progress folds "packing now"
+  into waiting.
+
 **Hotfix — waybill top barcode with spaces (2026-10-01, branch `fix/awb-barcode-spaces` off main 76c56b8; pushed, not
 merged, not deployed).** Production, Jumi 2026-10-01: two pack-session rejections had raw_scan
 "G - 0 2 - 8 4 8 4 8 0 5 6 9 9" — Bosta's TOP waybill barcode encodes a space between every character; the bottom
