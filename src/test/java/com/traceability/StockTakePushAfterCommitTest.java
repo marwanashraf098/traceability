@@ -187,6 +187,13 @@ class StockTakePushAfterCommitTest {
             piece, tenantId, variantId, "PC-" + piece, piece, locationId);
         return TenantContext.runAs(tenantId, () -> {
             UUID session = (UUID) stockTake.openSession("all", null, locationId, null, actorId).get("sessionId");
+            // Finalize refuses a session with no scans (2026-10-01): a brand-new on-shelf piece,
+            // scanned — the fixture's write-off stays exactly one.
+            String counted = UlidGenerator.generate();
+            jdbc.update("INSERT INTO pieces (id, tenant_id, variant_id, barcode, short_code, status, current_location_id) " +
+                "VALUES (?, ?, ?, ?, 'S' || LPAD((abs(hashtext(?)) % 999999 + 1)::text, 6, '0'), 'available', ?)",
+                counted, tenantId, variantId, "PC-" + counted, counted, locationId);
+            stockTake.scan(session, "PC-" + counted, "good", actorId);
             reconciliation.attestComplete(session, actorId);
             reconciliation.resolve(session, List.of(new StockTakeReconciliationService.ResolveItem(piece, "lost")), actorId);
             return session;

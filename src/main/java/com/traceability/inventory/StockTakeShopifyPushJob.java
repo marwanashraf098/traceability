@@ -62,31 +62,40 @@ public class StockTakeShopifyPushJob {
     @Job(name = "Stock-take Shopify push — session %0")
     public void push(UUID sessionId, UUID tenantId) {
         TenantContext.runAs(tenantId, () -> {
-            // ── committed read #1: load the claim ────────────────────────────
-            ClaimRow claim = tx.execute(s -> loadClaim(sessionId, tenantId));
+            // ── committed claim #1: take the row for sending ─────────────────
+            // Atomically 'pending' + send_started_at, only from pending / failed, and read the payload
+            // this attempt will send. From here the seed treats the push as possibly sent and never
+            // rewrites it (ShopifyInventoryReconcileService.supersedeStockTakePushes takes the same
+            // row lock); a definitive failure clears send_started_at again.
+            ClaimRow claim = tx.execute(s -> claimForSend(sessionId, tenantId));
+            if (claim == null) {
+                claim = tx.execute(s -> loadClaim(sessionId, tenantId));
+            }
             if (claim == null) {
                 log.warn("stock-take push: no claim row session={} tenant={}", sessionId, tenantId);
                 return;
             }
-            if ("pushed".equals(claim.status()) || "failed_ambiguous".equals(claim.status())) {
-                // 'pushed' is terminal (success). 'failed_ambiguous' requires a HUMAN to
-                // verify against Shopify before anything re-pushes — a JobRunr auto-retry
-                // must never silently re-attempt it. 'pending' (first attempt) and 'failed'
-                // (a definitive rejection JobRunr is retrying) both fall through and proceed.
+            final ClaimRow sending = claim;
+            if (!"pending".equals(claim.status()) && !"failed".equals(claim.status())) {
+                // Only 'pending' (first attempt) and 'failed' (a definitive rejection JobRunr is
+                // retrying) proceed. 'pushed' is terminal; 'failed_ambiguous' requires a HUMAN to
+                // verify against Shopify first; 'nothing_to_push' has nothing to send;
+                // 'superseded_by_seed' (V124) — the seed already pushed current on-hand, which
+                // reflects these write-offs, so sending them would count them twice.
                 log.debug("stock-take push: claim already resolved status={} session={} — no-op",
                     claim.status(), sessionId);
                 return;
             }
             if (claim.deltasByVariant().isEmpty()) {
                 // Nothing to push — Phase A already handles the zero-delta case by marking
-                // the claim 'pushed' directly and never enqueueing this job, but guard here
-                // too in case of a stray/duplicate enqueue.
-                markResult(sessionId, tenantId, "pushed", null);
+                // the claim 'nothing_to_push' and never enqueueing this job, but guard here
+                // too in case of a stray/duplicate enqueue. pushed_at stays NULL (no real push).
+                markResult(sessionId, tenantId, "nothing_to_push", null);
                 return;
             }
 
             // ── committed read #2: resolve preconditions ─────────────────────
-            Preconditions p = tx.execute(s -> resolvePreconditions(tenantId, claim));
+            Preconditions p = tx.execute(s -> resolvePreconditions(tenantId, sending));
 
             if (p.error() != null) {
                 markResult(sessionId, tenantId, "failed", p.error());
@@ -96,8 +105,10 @@ public class StockTakeShopifyPushJob {
 
             // ── THE HTTP CALL — no DB transaction around this ────────────────
             String referenceDocumentUri = "traced://stock-take/" + sessionId;
-            String idempotencyKey = ShopifyGateway.idempotencyKey(
-                tenantId, "stock_take_finalize", sessionId.toString(), null, p.locationGid());
+            // A payload the seed rewrote (revision > 0) is a different mutation — a NEW key.
+            String idempotencyKey = ShopifyGateway.idempotencyKey(tenantId, "stock_take_finalize",
+                sending.revision() > 0 ? sessionId + ":rev:" + sending.revision() : sessionId.toString(),
+                null, p.locationGid());
 
             try {
                 shopify.pushStockTakeWriteOff(p.shopDomain(), p.token(), p.deltas(),
@@ -118,32 +129,45 @@ public class StockTakeShopifyPushJob {
 
     // ── committed reads ───────────────────────────────────────────────────────
 
-    record ClaimRow(String status, UUID locationId, Map<UUID, Integer> deltasByVariant) {}
+    record ClaimRow(String status, UUID locationId, Map<UUID, Integer> deltasByVariant, int revision) {}
+
+    /** pending / failed → pending + send_started_at, returning what this attempt sends; null when the
+     *  claim is in any other status (or absent). */
+    private ClaimRow claimForSend(UUID sessionId, UUID tenantId) {
+        return jdbc.query(
+            "UPDATE stock_take_shopify_syncs SET status = 'pending', send_started_at = now() " +
+            "WHERE session_id = ? AND tenant_id = ? AND status IN ('pending', 'failed') " +
+            "RETURNING status, payload",
+            this::claimRow, sessionId, tenantId);
+    }
 
     private ClaimRow loadClaim(UUID sessionId, UUID tenantId) {
         return jdbc.query(
             "SELECT status, payload FROM stock_take_shopify_syncs WHERE session_id = ? AND tenant_id = ?",
-            rs -> {
-                if (!rs.next()) return null;
-                String status = rs.getString("status");
-                String payloadJson = rs.getString("payload");
-                UUID locationId = null;
-                Map<UUID, Integer> deltas = new LinkedHashMap<>();
-                try {
-                    JsonNode payload = mapper.readTree(payloadJson);
-                    String locStr = payload.path("locationId").asText(null);
-                    if (locStr != null) locationId = UUID.fromString(locStr);
-                    Iterator<Map.Entry<String, JsonNode>> fields = payload.path("deltas").fields();
-                    while (fields.hasNext()) {
-                        Map.Entry<String, JsonNode> field = fields.next();
-                        deltas.put(UUID.fromString(field.getKey()), field.getValue().asInt());
-                    }
-                } catch (Exception e) {
-                    log.error("stock-take push: failed to parse claim payload session={}", sessionId, e);
-                }
-                return new ClaimRow(status, locationId, deltas);
-            },
-            sessionId, tenantId);
+            this::claimRow, sessionId, tenantId);
+    }
+
+    private ClaimRow claimRow(java.sql.ResultSet rs) throws java.sql.SQLException {
+        if (!rs.next()) return null;
+        String status = rs.getString("status");
+        String payloadJson = rs.getString("payload");
+        UUID locationId = null;
+        Map<UUID, Integer> deltas = new LinkedHashMap<>();
+        int revision = 0;
+        try {
+            JsonNode payload = mapper.readTree(payloadJson);
+            revision = payload.path("revision").asInt(0);
+            String locStr = payload.path("locationId").asText(null);
+            if (locStr != null) locationId = UUID.fromString(locStr);
+            Iterator<Map.Entry<String, JsonNode>> fields = payload.path("deltas").fields();
+            while (fields.hasNext()) {
+                Map.Entry<String, JsonNode> field = fields.next();
+                deltas.put(UUID.fromString(field.getKey()), field.getValue().asInt());
+            }
+        } catch (Exception e) {
+            log.error("stock-take push: failed to parse claim payload", e);
+        }
+        return new ClaimRow(status, locationId, deltas, revision);
     }
 
     /**
@@ -214,16 +238,35 @@ public class StockTakeShopifyPushJob {
 
     // ── committed write ───────────────────────────────────────────────────────
 
+    /**
+     * The seed may supersede the claim while this push is in flight. A late failure never brings a
+     * superseded claim back (that would re-arm the retry the seed made redundant); a late success is
+     * recorded as the truth, with a WARN, because Shopify may now count those write-offs twice.
+     */
     private void markResult(UUID sessionId, UUID tenantId, String status, String error) {
-        tx.execute(s -> {
+        Boolean recorded = tx.execute(s -> {
+            String current = jdbc.query(
+                "SELECT status FROM stock_take_shopify_syncs WHERE session_id = ? AND tenant_id = ? FOR UPDATE",
+                rs -> rs.next() ? rs.getString(1) : null, sessionId, tenantId);
+            if ("superseded_by_seed".equals(current)) {
+                if (!"pushed".equals(status)) {
+                    log.info("stock-take push: late {} ignored — claim already superseded by the seed session={}",
+                        status, sessionId);
+                    return false;
+                }
+                log.warn("stock-take push: applied after superseded by seed — possible double count of the " +
+                    "write-offs in session {}", sessionId);
+            }
             jdbc.update(
                 "UPDATE stock_take_shopify_syncs SET status = ?, error = ?, " +
-                "  pushed_at = CASE WHEN ? = 'pushed' THEN now() ELSE pushed_at END " +
+                "  pushed_at = CASE WHEN ? = 'pushed' THEN now() ELSE pushed_at END, " +
+                // a definitive failure never reached Shopify — the seed may rewrite it again
+                "  send_started_at = CASE WHEN ? = 'failed' THEN NULL ELSE send_started_at END " +
                 "WHERE session_id = ? AND tenant_id = ?",
-                status, error, status, sessionId, tenantId);
-            return null;
+                status, error, status, status, sessionId, tenantId);
+            return true;
         });
-        if (!"pushed".equals(status)) {
+        if (Boolean.TRUE.equals(recorded) && !"pushed".equals(status)) {
             log.warn("stock-take push recorded as {}: session={} error={}", status, sessionId, error);
         }
     }

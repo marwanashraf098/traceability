@@ -1018,10 +1018,11 @@ public class DemoSeeder {
      * population at the fulfillment location (scope_type='all', mirroring
      * StockTakeService.snapshotExpectedPopulation()'s own query exactly, so the snapshot
      * is never a hand-picked subset that could drift from what the fixture actually
-     * contains). Session 1 — finalized, complete_count=true, ~92% counted, 0 write-offs
-     * (StockTakeReconciliationService.finalizeSession() lands a 0-delta claim straight at
-     * 'pushed' with no JobRunr job enqueued — this fixture mirrors that exact terminal
-     * shape). Session 2 — open, ~40% counted, in progress.
+     * contains). Session 1 — finalized, complete_count=true, every free piece counted, so
+     * 0 write-offs (StockTakeReconciliationService.finalizeSession() applies the count and lands
+     * a 0-delta claim at 'nothing_to_push' with no JobRunr job enqueued — this fixture mirrors
+     * that exact terminal shape; a partly-counted finalized session would have written the rest
+     * off). Session 2 — open, ~40% counted, in progress.
      */
     private void insertStockTake(JdbcTemplate ojdbc, UUID tenantId, UUID locationId, List<UUID> workerIds) {
         UUID opener = workerIds.get(0);
@@ -1036,10 +1037,10 @@ public class DemoSeeder {
                 "        now() - interval '1 day', 'Monthly full count')",
                 finalizedSessionId, tenantId, locationId, opener, closer);
         snapshotAllPiecesAtLocation(ojdbc, tenantId, finalizedSessionId, locationId);
-        scanFractionOfExpected(ojdbc, tenantId, finalizedSessionId, closer, 92);
+        scanFractionOfExpected(ojdbc, tenantId, finalizedSessionId, closer, 100);
         ojdbc.update(
                 "INSERT INTO stock_take_shopify_syncs (id, tenant_id, session_id, status, payload) " +
-                "VALUES (gen_random_uuid(), ?, ?, 'pushed', ?::jsonb)",
+                "VALUES (gen_random_uuid(), ?, ?, 'nothing_to_push', ?::jsonb)",
                 tenantId, finalizedSessionId, "{\"locationId\":\"" + locationId + "\",\"deltas\":{}}");
 
         UUID openSessionId = UUID.randomUUID();
@@ -1056,7 +1057,8 @@ public class DemoSeeder {
         ojdbc.update(
                 "INSERT INTO stock_take_expected (tenant_id, session_id, piece_id, variant_id, status_at_open) " +
                 "SELECT ?, ?, p.id, p.variant_id, p.status::text " +
-                "FROM pieces p WHERE p.tenant_id = ? AND p.current_location_id = ?",
+                "FROM pieces p WHERE p.tenant_id = ? AND p.current_location_id = ? " +
+                "  AND p.status::text IN " + com.traceability.inventory.StockTakeService.PHYSICALLY_PRESENT_STATUSES_SQL,
                 tenantId, sessionId, tenantId, locationId);
     }
 

@@ -327,7 +327,9 @@ public class ShopifyInventoryReconcileService {
             int noop = (allVariants == null ? 0 : allVariants) - report.rows().size();
 
             int superseded = supersedeIncrementClaims(tenantId, ctx.tracedLocationId(), snapshotAt,
-                seededVariants, onHandAtSnapshot.keySet());
+                seededVariants, onHandAtSnapshot.keySet())
+                + supersedeStockTakePushes(tenantId, ctx.tracedLocationId(), snapshotAt,
+                    seededVariants, onHandAtSnapshot.keySet());
 
             log.info("Initial seed applied: tenant={} seeded={} skippedNonZero={} noop={} failed={} superseded={}",
                 tenantId, seeded, skippedNonZero, noop, failed, superseded);
@@ -379,6 +381,95 @@ public class ShopifyInventoryReconcileService {
         if (n > 0) {
             log.info("Initial seed superseded {} unapplied increment claim(s): tenant={} location={} snapshot={}",
                 n, tenantId, tracedLocationId, snapshotAt);
+        }
+        return n;
+    }
+
+    /**
+     * Stock-take write-off pushes (stock_take_shopify_syncs) at the Traced location created at or
+     * before the on-hand snapshot: the seed pushed current on-hand, which already reflects their
+     * write-offs for every variant it covered (seeded in this run, or on-hand 0 at the snapshot).
+     *   - Rewritable only when the push can't have reached Shopify: 'failed' (a definitive rejection
+     *     or a precondition failure — never sent) or 'pending' with send_started_at NULL.
+     *       all variants covered  → 'superseded_by_seed' (superseded_at, superseded_snapshot_at)
+     *       some variants covered → those move from payload.deltas to payload.superseded, revision+1
+     *                               (the push job sends with a NEW idempotency key — the payload
+     *                               changed), superseded_snapshot_at set; still owed for the rest
+     *   - 'failed_ambiguous', or 'pending' already being sent: never rewritten. payload.seedOverlap
+     *     records the covered variants and the inventory_increment_sync_failed alert (kind
+     *     stock_take_seed_overlap) asks a person to check Shopify.
+     */
+    private int supersedeStockTakePushes(UUID tenantId, UUID tracedLocationId, java.sql.Timestamp snapshotAt,
+                                         List<UUID> seededVariants, java.util.Set<UUID> onHandPositive) {
+        List<Map<String, Object>> rows = jdbc.queryForList(
+            "SELECT id, session_id, status, send_started_at, payload::text AS payload FROM stock_take_shopify_syncs " +
+            "WHERE tenant_id = ? AND status IN ('pending', 'failed', 'failed_ambiguous') AND created_at <= ? " +
+            "  AND payload->>'locationId' = ? FOR UPDATE",
+            tenantId, snapshotAt, tracedLocationId.toString());
+        java.util.Set<String> seeded = new java.util.HashSet<>();
+        for (UUID v : seededVariants) seeded.add(v.toString());
+        java.util.Set<String> positive = new java.util.HashSet<>();
+        for (UUID v : onHandPositive) positive.add(v.toString());
+
+        int n = 0;
+        for (Map<String, Object> row : rows) {
+            ObjectNode payload;
+            try {
+                payload = (ObjectNode) mapper.readTree((String) row.get("payload"));
+            } catch (Exception e) {
+                log.warn("Initial seed: unreadable stock-take push payload, left as is (session {})", row.get("session_id"));
+                continue;
+            }
+            com.fasterxml.jackson.databind.JsonNode deltas = payload.path("deltas");
+            ObjectNode covered = mapper.createObjectNode();
+            ObjectNode remaining = mapper.createObjectNode();
+            deltas.fields().forEachRemaining(f -> {
+                boolean isCovered = seeded.contains(f.getKey()) || !positive.contains(f.getKey());
+                (isCovered ? covered : remaining).set(f.getKey(), f.getValue());
+            });
+            if (covered.isEmpty()) continue;
+
+            String status = (String) row.get("status");
+            boolean neverSent = "failed".equals(status) || ("pending".equals(status) && row.get("send_started_at") == null);
+            if (!neverSent) {
+                ObjectNode overlap = mapper.createObjectNode();
+                overlap.set("variants", covered);
+                overlap.put("snapshotAt", snapshotAt.toInstant().toString());
+                payload.set("seedOverlap", overlap);
+                jdbc.update("UPDATE stock_take_shopify_syncs SET payload = ?::jsonb WHERE id = ?",
+                    payload.toString(), row.get("id"));
+                log.warn("Initial seed: stock-take push for session {} may already have reached Shopify (status {}) " +
+                    "and overlaps the seed for {} variant(s) — not rewritten, flagged for review",
+                    row.get("session_id"), status, covered.size());
+                continue;
+            }
+
+            ObjectNode superseded = payload.has("superseded") && payload.get("superseded").isObject()
+                ? (ObjectNode) payload.get("superseded") : mapper.createObjectNode();
+            covered.fields().forEachRemaining(f -> superseded.set(f.getKey(), f.getValue()));
+            if (remaining.isEmpty()) {
+                payload.set("superseded", superseded);
+                n += jdbc.update(
+                    "UPDATE stock_take_shopify_syncs SET status = 'superseded_by_seed', superseded_at = now(), " +
+                    "       superseded_snapshot_at = ?, payload = ?::jsonb " +
+                    "WHERE id = ? AND status IN ('pending', 'failed')",
+                    snapshotAt, payload.toString(), row.get("id"));
+            } else {
+                payload.set("deltas", remaining);
+                payload.set("superseded", superseded);
+                payload.put("revision", payload.path("revision").asInt(0) + 1);
+                n += jdbc.update(
+                    "UPDATE stock_take_shopify_syncs SET superseded_snapshot_at = ?, payload = ?::jsonb " +
+                    "WHERE id = ? AND status IN ('pending', 'failed')",
+                    snapshotAt, payload.toString(), row.get("id"));
+                log.info("Initial seed: stock-take push for session {} — {} variant(s) covered by the seed removed, " +
+                    "{} still owed (revision {})", row.get("session_id"), covered.size(), remaining.size(),
+                    payload.get("revision").asInt());
+            }
+        }
+        if (n > 0) {
+            log.info("Initial seed superseded {} unapplied stock-take push(es), wholly or in part: tenant={} location={} " +
+                "snapshot={}", n, tenantId, tracedLocationId, snapshotAt);
         }
         return n;
     }

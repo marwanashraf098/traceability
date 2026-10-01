@@ -4,6 +4,42 @@
 
 ## Current state
 
+**Stock-take finalize applies the count (2026-10-01, branch `feature/stocktake-finalize-applies` off main 8f53628;
+merged, not deployed).**
+- Decisions (Marawan, 2026-10-01): (a) finalize applies the count in one transaction under the session lock — unscanned
+  free stock (available / damaged / on_hold at open, still in that status = drift guard) → lost; scanned damaged on a
+  live-available piece → damaged (PieceAdjustService); push enqueued after commit; per-row resolve stays.
+  (b) 0 piece scans → 400 ZERO_SCANS; typed confirmation (the write-off count) when coverage < 80% or write-offs > 10% of
+  expected free stock — `StockTakeFinalizePolicy`; never asked when nothing is written off (refinement found while
+  building). Write-offs still need the attestation (409 ATTESTATION_REQUIRED). (c) expected set = physically present
+  statuses (`StockTakeService.PHYSICALLY_PRESENT_STATUSES_SQL`; DemoSeeder mirrors it), new sessions only.
+  (d) V124: 'nothing_to_push' (pushed_at only on a real push) + 'superseded_by_seed' + superseded_at; trigger_type
+  'stock_take_found'. (e) variance positive = short everywhere; the finalize modal shows `reconciliation.finalizePlan`
+  — the SAME `plan()` finalize runs. (f) damaged → lost / on_hold → lost excluded from the push (delta = from 'available'
+  only). (g) 4th increment trigger `stock_take_found` (+1 when the piece's latest →lost was a stock-take write-off from
+  available whose push applied — `foundIncrementEligible`). (h) the seed supersedes pending/failed stock-take pushes at
+  the location created ≤ its snapshot when every variant in the push was seeded or on-hand 0 (all-or-nothing);
+  stock_take_found claims ride the increment supersede. CLAUDE.md FR-17 v2 (trigger 4) + FR-21 §7 (from available)
+  amended.
+- Push job: proceeds only from pending / failed (a superseded or nothing_to_push claim used to fall through and push);
+  a late result can't flip superseded back; a late success records pushed + WARN.
+- Tests: `StockTakeFinalizeAppliesTest` (13) and `frontend/src/test/stocktakeFinalize.test.tsx` (5), all revert-checked.
+- **Second round (Marawan, 2026-10-01):** found piece +1 also when (i) the write-off was from on_hold and that hold
+  cycle's hold-enter decrement applied, or (ii) the write-off's push was superseded by the seed and the write-off was at /
+  before the seed's snapshot (`superseded_snapshot_at`). Partial supersede: covered variants leave `payload.deltas` for
+  `payload.superseded`, revision+1 → the push job sends with key `session:rev:n`; only when the push can't have reached
+  Shopify ('failed', or 'pending' with `send_started_at` NULL — the job now claims the row as pending + send_started_at
+  before anything else). 'failed_ambiguous' / already-sending pushes are never rewritten: `payload.seedOverlap` +
+  `inventory_increment_sync_failed` kind `stock_take_seed_overlap` (HIGH, cleared by resolving). Close summary: "written
+  off" = all write-offs in Traced (`writtenOff`), plus "pushed to Shopify" (`pushedToShopify`). Typed confirmation never
+  asked at 0 write-offs (test c1).
+- Approved existing-test edits: a brand-new on-shelf piece scanned in the 13 zero-scan tests (sft1–8 via
+  `openAllScope`, ops3, pc1–4 via `sessionWithOneWriteOff`); sft1 delta 2→1; sft8 'pushed'→'nothing_to_push'; st1 / srt1
+  narrowed snapshot; StockTakeOpsTest cleanup deletes stock_take_scans before sessions; frontend st8 → the row's variance
+  cell shows 3 as a shortage (text-danger).
+- **Gotcha:** `Card` (components/ui) doesn't forward `data-testid` — `close-summary` was never in the DOM; tests find the
+  summary by its title.
+
 **Pick & Pack S1 — product images on pack lines, queue mode (2026-10-01, branch `feat/pack-line-images` off
 main 8f53628; pushed, not merged, not deployed).** First slice of the waybill-mode feature (mockup
 `design/pick-pack-waybill-mockup/`, Step 0 report in session).

@@ -90,9 +90,19 @@ public class StockTakeService {
     }
 
     /**
-     * One batched INSERT ... SELECT — the full piece population at the resolved location,
-     * every status included (Fork 2: committed/gone pieces are counted-if-scanned, not
-     * excluded from the snapshot; only the write-off decision at Step 4 restricts by status).
+     * Statuses of a piece that is physically in the warehouse — the only pieces a count can expect
+     * on the shelf (Marawan, 2026-10-01; was every status under Fork 2). current_location_id is not
+     * cleared when a piece ships, so without this a count expected delivered / with_courier / lost /
+     * destroyed pieces too. Applies to sessions opened from now on; existing snapshots are kept.
+     * DemoSeeder.snapshotAllPiecesAtLocation mirrors this list.
+     */
+    public static final String PHYSICALLY_PRESENT_STATUSES_SQL =
+        "('available', 'damaged', 'on_hold', 'reserved', 'packed', 'awaiting_pickup', 'return_pending_inspection')";
+
+    /**
+     * One batched INSERT ... SELECT — the pieces physically present at the resolved location
+     * ({@link #PHYSICALLY_PRESENT_STATUSES_SQL}), each with its status at open. Committed pieces
+     * are counted-if-scanned; only free stock is ever written off at finalize.
      */
     private int snapshotExpectedPopulation(UUID sessionId, UUID tenantId, UUID locationId,
                                             boolean variantSubset, List<UUID> variantIds) {
@@ -104,7 +114,8 @@ public class StockTakeService {
                     "(tenant_id, session_id, piece_id, variant_id, status_at_open) " +
                     "SELECT ?, ?, p.id, p.variant_id, p.status::text " +
                     "FROM pieces p " +
-                    "WHERE p.tenant_id = ? AND p.current_location_id = ? AND p.variant_id = ANY(?)");
+                    "WHERE p.tenant_id = ? AND p.current_location_id = ? AND p.variant_id = ANY(?) " +
+                    "  AND p.status::text IN " + PHYSICALLY_PRESENT_STATUSES_SQL);
                 ps.setObject(1, tenantId);
                 ps.setObject(2, sessionId);
                 ps.setObject(3, tenantId);
@@ -118,7 +129,8 @@ public class StockTakeService {
             "(tenant_id, session_id, piece_id, variant_id, status_at_open) " +
             "SELECT ?, ?, p.id, p.variant_id, p.status::text " +
             "FROM pieces p " +
-            "WHERE p.tenant_id = ? AND p.current_location_id = ?",
+            "WHERE p.tenant_id = ? AND p.current_location_id = ? " +
+            "  AND p.status::text IN " + PHYSICALLY_PRESENT_STATUSES_SQL,
             tenantId, sessionId, tenantId, locationId);
     }
 
@@ -345,7 +357,19 @@ public class StockTakeService {
         if (row == null) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Stock take session not found");
         }
-        row.put("shopifySync", loadShopifySync(sessionId, tenantId));
+        Map<String, Object> sync = loadShopifySync(sessionId, tenantId);
+        row.put("shopifySync", sync);
+        // Close summary (2026-10-01): every write-off in Traced (any origin), and separately what
+        // actually reached Shopify — damaged / on-hold write-offs never do.
+        row.put("writtenOff", jdbc.queryForObject(
+            "SELECT COUNT(*) FROM piece_events WHERE tenant_id = ? AND to_status = 'lost'::piece_status " +
+            "  AND metadata->>'reason' = 'stock_take_missing' AND metadata->>'session_id' = ?",
+            Integer.class, tenantId, sessionId.toString()));
+        List<Integer> pushed = jdbc.queryForList(
+            "SELECT COALESCE((SELECT SUM(value::int) FROM jsonb_each_text(payload->'deltas')), 0)::int " +
+            "FROM stock_take_shopify_syncs WHERE session_id = ? AND tenant_id = ? AND status = 'pushed'",
+            Integer.class, sessionId, tenantId);
+        row.put("pushedToShopify", pushed.isEmpty() ? 0 : pushed.get(0));
         return row;
     }
 

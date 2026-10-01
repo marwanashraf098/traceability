@@ -246,6 +246,34 @@ public class ShopifyInventoryService {
         return CompletableFuture.completedFuture(null);
     }
 
+    // ── Trigger 4: a piece found in a stock take (+1) ───────────────────────────
+
+    /**
+     * Called once stock-take finalize's lost → available transition has committed
+     * ({@link #afterCommit}) — only for a piece whose earlier stock-take write-off was pushed to
+     * Shopify (StockTakeReconciliationService decides; see foundIncrementEligible there). +1 at the
+     * Traced location through the same claim path as every increment (approved 2026-10-01 as the
+     * fourth increment trigger). trigger_id = piece + session, so a piece found again in a later
+     * count claims its own row.
+     */
+    @Async
+    public CompletableFuture<Void> onStockTakeFound(UUID tenantId, String pieceId, UUID sessionId, UUID locationId) {
+        TenantContext.runAs(tenantId, () -> {
+            try {
+                UUID variantId = resolveVariantForPiece(pieceId);
+                if (variantId == null) {
+                    log.warn("Shopify inventory sync: piece not found piece={}", pieceId);
+                    return;
+                }
+                applyIncrementAdjustment(UUID.randomUUID(), variantId, locationId, 1,
+                    "stock_take_found", pieceId + ":" + sessionId, "correction");
+            } catch (Exception e) {
+                log.error("Shopify inventory sync failed: trigger=stock_take_found piece={}", pieceId, e);
+            }
+        });
+        return CompletableFuture.completedFuture(null);
+    }
+
     // ── Trigger: Step 5a exchange dispatch (named decrement set — CLAUDE.md) ──
 
     /**
@@ -901,6 +929,7 @@ public class ShopifyInventoryService {
         return switch (triggerType) {
             case "receiving_session" -> "received";
             case "hold_exit" -> "hold_exit";
+            case "stock_take_found" -> "correction";
             default -> "restock";
         };
     }
@@ -916,7 +945,7 @@ public class ShopifyInventoryService {
         UUID tenantId = TenantContext.require();
         if (!IncrementRecoveryRules.INCREMENT_TRIGGERS.contains(triggerType)) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
-                "triggerType must be receiving_session, return_inspection or hold_exit");
+                "triggerType must be receiving_session, return_inspection, hold_exit or stock_take_found");
         }
         List<FailedClaim> rows = tx.execute(st -> jdbc.query(
             FAILED_CLAIM_COLUMNS + "WHERE sia.tenant_id = ? AND sia.trigger_type = ? AND sia.trigger_id = ? " +

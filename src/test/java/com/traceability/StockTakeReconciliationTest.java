@@ -169,16 +169,20 @@ class StockTakeReconciliationTest {
         assertThat(pieceIds(buckets, "on_shelf_uncounted")).contains(onShelfUncounted);
         assertThat(pieceIds(buckets, "damaged")).contains(damagedCounted);
         assertThat(pieceIds(buckets, "committed_to_orders")).contains(committed);
-        assertThat(pieceIds(buckets, "with_courier_or_delivered")).contains(withCourier);
         assertThat(pieceIds(buckets, "returns_bench")).contains(returnsBench);
-        assertThat(pieceIds(buckets, "previously_written_off")).contains(writtenOff);
+        // 2026-10-01: with_courier and lost pieces aren't physically present, so they are no
+        // longer in the snapshot — they appear in no bucket at all.
+        for (String bucket : List.of("on_shelf_counted", "on_shelf_uncounted", "committed_to_orders",
+                "with_courier_or_delivered", "returns_bench", "damaged", "previously_written_off", "unexpected_finds")) {
+            assertThat(pieceIds(buckets, bucket)).doesNotContain(withCourier, writtenOff);
+        }
 
         @SuppressWarnings("unchecked")
         List<Map<String, Object>> rollup = (List<Map<String, Object>>) report.get("variantRollup");
         Map<String, Object> variantRow = rollup.stream()
             .filter(r -> variantA.toString().equals(r.get("variantId").toString()))
             .findFirst().orElseThrow();
-        assertThat(variantRow.get("totalKnown")).isEqualTo(7);
+        assertThat(variantRow.get("totalKnown")).as("7 seeded, minus with_courier and lost").isEqualTo(5);
         assertThat(((Number) report.get("coveragePercent")).doubleValue()).isGreaterThan(0);
     }
 

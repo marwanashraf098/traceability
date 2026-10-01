@@ -142,6 +142,8 @@ class StockTakeOpsTest {
         jdbc.update("DELETE FROM stock_take_shopify_syncs WHERE tenant_id IN (?, ?)", tenantId, tenantB);
         jdbc.update("DELETE FROM stock_take_expected WHERE tenant_id IN (?, ?)",       tenantId, tenantB);
         jdbc.update("DELETE FROM stock_take_scope_variants WHERE tenant_id IN (?, ?)", tenantId, tenantB);
+        // Finalize needs a scan since 2026-10-01 — scan rows reference the session.
+        jdbc.update("DELETE FROM stock_take_scans WHERE tenant_id IN (?, ?)",          tenantId, tenantB);
         jdbc.update("DELETE FROM stock_take_sessions WHERE tenant_id IN (?, ?)",       tenantId, tenantB);
         jdbc.update("DELETE FROM audit_log WHERE tenant_id IN (?, ?)",                 tenantId, tenantB);
     }
@@ -285,6 +287,10 @@ class StockTakeOpsTest {
                 tenantId, pieceId, actorId,
                 "{\"session_id\":\"" + sessionId + "\",\"reason\":\"stock_take_missing\"}");
             jdbc.update("UPDATE stock_take_sessions SET complete_count = true WHERE id = ?", sessionId);
+            // Finalize refuses a session with no scans (2026-10-01): a brand-new on-shelf piece,
+            // scanned — no fixture piece touched, write-off count unchanged.
+            String counted = seedPiece("available");
+            stockTake.scan(sessionId, "PC-" + counted, "good", actorId);
 
             reconciliation.finalizeSession(sessionId, actorId);
 

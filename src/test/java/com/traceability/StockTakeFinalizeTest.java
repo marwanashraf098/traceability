@@ -193,7 +193,8 @@ class StockTakeFinalizeTest {
         Integer deltaBefore = jdbc.queryForObject(
             "SELECT (payload->'deltas'->>?)::int FROM stock_take_shopify_syncs WHERE session_id = ?",
             Integer.class, variantA.toString(), sessionId);
-        assertThat(deltaBefore).as("delta must be exactly 2 (the two lost pieces), never 3").isEqualTo(2);
+        // 2026-10-01: only the AVAILABLE write-off is pushed — the damaged one changes Traced only.
+        assertThat(deltaBefore).as("delta must be exactly 1 (the available lost piece), never 2 or 3").isEqualTo(1);
 
         pushJob.push(sessionId, tenantId);
 
@@ -203,8 +204,8 @@ class StockTakeFinalizeTest {
             eq("traced://stock-take/" + sessionId), any());
         List<ShopifyGateway.InventoryDelta> deltas = deltasCaptor.getValue();
         assertThat(deltas).hasSize(1);
-        assertThat(deltas.get(0).negativeDelta()).as("negative delta = -2, independent of the committed piece")
-            .isEqualTo(-2);
+        assertThat(deltas.get(0).negativeDelta()).as("negative delta = -1 (the available write-off only), independent of the committed piece")
+            .isEqualTo(-1);
 
         // Dedicated-method-only: the increment-only path must never be touched.
         verify(shopifyGateway, never()).adjustInventoryQuantities(any(), any(), any(), any(), anyInt(), any(), any());
@@ -443,7 +444,7 @@ class StockTakeFinalizeTest {
 
         String status = jdbc.queryForObject(
             "SELECT status FROM stock_take_shopify_syncs WHERE session_id = ?", String.class, sessionId);
-        assertThat(status).isEqualTo("pushed");
+        assertThat(status).as("zero deltas: nothing to push (2026-10-01), not a fake push").isEqualTo("nothing_to_push");
 
         verify(jobScheduler, never()).enqueue(any(org.jobrunr.jobs.lambdas.JobLambda.class));
         verify(shopifyGateway, never()).pushStockTakeWriteOff(any(), any(), any(), any(), any(), any());
@@ -458,6 +459,11 @@ class StockTakeFinalizeTest {
             Map<String, Object> result = stockTake.openSession(
                 "all", null, fulfillmentLocationId, null, actorId);
             sessionId = (UUID) result.get("sessionId");
+            // Finalize refuses a session with no scans (2026-10-01). A brand-new on-shelf piece,
+            // added after the snapshot and scanned, gives it one without touching any fixture
+            // piece — write-off counts stay exactly as each test sets them up.
+            String counted = seedPiece("available", variantA);
+            stockTake.scan(sessionId, "PC-" + counted, "good", actorId);
         } finally {
             TenantContext.clear();
         }

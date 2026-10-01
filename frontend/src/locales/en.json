@@ -2278,7 +2278,18 @@
       "attested": "Count attested complete — write-offs unlocked",
       "finalizeButton": "Finalize",
       "finalizeConfirmTitle": "Finalize stock take?",
-      "finalizeConfirmBody": "{{count}} piece(s) will be written off. Shopify will decrement stock for: {{variants}}. This cannot be undone.",
+      "finalize": {
+        "summary": "{{count}} piece(s) not found on the shelf will be written off in Traced. Shopify stock at the Traced location goes down by {{shopify}}. This cannot be undone.",
+        "variantLine": "−{{writeOffs}} (Shopify −{{shopify}})",
+        "tracedOnly": "{{count}} damaged or on-hold piece(s) are written off in Traced only — Shopify doesn't count them as available stock.",
+        "damageCorrections": "{{count}} piece(s) scanned as damaged will be marked damaged.",
+        "founds": "{{count}} lost piece(s) were found and go back into stock (Shopify +{{shopify}}).",
+        "driftSkipped": "{{count}} piece(s) changed status during the count and are left as they are.",
+        "typedPrompt": "Coverage is {{coverage}}% (below {{minCoverage}}%) or more than {{maxShare}}% of the stock would be written off. Type {{count}} to confirm.",
+        "typedLabel": "Number of pieces to write off",
+        "zeroScans": "Nothing was scanned in this count — it can't be finalized. Scan the shelf first, or cancel the count.",
+        "attestationRequired": "Attest that the count covered the full scope before finalizing write-offs."
+      },
       "finalizeUnderstand": "I understand this permanently decrements Shopify inventory.",
       "finalizeConfirmButton": "Finalize + Push to Shopify",
       "closeSummary": {
@@ -2286,6 +2297,7 @@
         "counted": "counted",
         "variance": "variance",
         "writtenOff": "written off",
+        "pushedToShopify": "pushed to Shopify",
         "attestedBy": "Attested by",
         "finalizedBy": "Finalized by",
         "duration": "Duration",
@@ -2294,7 +2306,9 @@
         "syncPending": "Pending",
         "syncPushed": "Pushed",
         "syncFailed": "Failed",
-        "syncAmbiguous": "Needs verification"
+        "syncAmbiguous": "Needs verification",
+        "syncNothingToPush": "Nothing to send",
+        "syncSuperseded": "Covered by stock seed"
       }
     },
     "sync": {
@@ -2305,7 +2319,9 @@
       "ambiguousTitle": "Shopify sync needs verification",
       "ambiguousBody": "The decrement may or may not have applied. Check Shopify inventory for {{variants}} (ref: {{ref}}), then mark resolved or re-push.",
       "markResolved": "Mark resolved",
-      "repush": "Re-push"
+      "repush": "Re-push",
+      "nothingToPush": "Nothing to send to Shopify — no available stock was written off",
+      "superseded": "Covered by the stock seed — Shopify was set to the current count when the warehouse was linked"
     }
   },
   "transfers": {

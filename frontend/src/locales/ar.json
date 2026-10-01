@@ -2277,13 +2277,25 @@
       "attested": "تم اعتماد اكتمال الجرد — تم تفعيل عمليات الشطب",
       "finalizeButton": "إنجاز",
       "finalizeConfirmTitle": "إنجاز الجرد؟",
-      "finalizeConfirmBody": "سيتم شطب {{count}} قطعة. سيخصم Shopify المخزون لـ: {{variants}}. لا يمكن التراجع عن هذا الإجراء.",
+      "finalize": {
+        "summary": "سيتم شطب {{count}} قطعة لم يُعثر عليها على الرف في Traced. سينخفض مخزون Shopify في موقع Traced بمقدار {{shopify}}. لا يمكن التراجع عن هذا الإجراء.",
+        "variantLine": "−{{writeOffs}} (Shopify −{{shopify}})",
+        "tracedOnly": "{{count}} قطعة تالفة أو موقوفة تُشطب في Traced فقط — لا يحسبها Shopify ضمن المخزون المتاح.",
+        "damageCorrections": "{{count}} قطعة مُسحت على أنها تالفة وسيتم تسجيلها تالفة.",
+        "founds": "تم العثور على {{count}} قطعة مفقودة وستعود إلى المخزون (Shopify +{{shopify}}).",
+        "driftSkipped": "{{count}} قطعة تغيّرت حالتها أثناء الجرد وستبقى كما هي.",
+        "typedPrompt": "نسبة التغطية {{coverage}}% (أقل من {{minCoverage}}%) أو سيُشطب أكثر من {{maxShare}}% من المخزون. اكتب {{count}} للتأكيد.",
+        "typedLabel": "عدد القطع التي ستُشطب",
+        "zeroScans": "لم يُمسح أي شيء في هذا الجرد — لا يمكن إنهاؤه. امسح الرف أولاً أو ألغِ الجرد.",
+        "attestationRequired": "أكّد أن الجرد غطّى النطاق بالكامل قبل إنهاء الشطب."
+      },
       "finalizeUnderstand": "أدرك أن هذا سيخصم مخزون Shopify بشكل دائم.",
       "finalizeConfirmButton": "إنجاز + دفع إلى Shopify",
       "closeSummary": {
         "title": "تم إنجاز الجرد",
         "counted": "تم جردها",
         "variance": "الفارق",
+        "pushedToShopify": "أُرسلت إلى Shopify",
         "writtenOff": "مشطوبة",
         "attestedBy": "اعتمده",
         "finalizedBy": "أنجزه",
@@ -2293,7 +2305,9 @@
         "syncPending": "قيد الانتظار",
         "syncPushed": "تم الدفع",
         "syncFailed": "فشلت",
-        "syncAmbiguous": "تحتاج إلى تحقق"
+        "syncAmbiguous": "تحتاج إلى تحقق",
+        "syncNothingToPush": "لا شيء للإرسال",
+        "syncSuperseded": "مشمول في مزامنة المخزون الأولية"
       }
     },
     "sync": {
@@ -2304,7 +2318,9 @@
       "ambiguousTitle": "مزامنة Shopify تحتاج إلى تحقق",
       "ambiguousBody": "قد يكون الخصم قد تم أو لم يتم. تحقق من مخزون Shopify لـ {{variants}} (المرجع: {{ref}})، ثم اختر وضع علامة تم الحل أو إعادة الدفع.",
       "markResolved": "وضع علامة تم الحل",
-      "repush": "إعادة الدفع"
+      "repush": "إعادة الدفع",
+      "nothingToPush": "لا شيء لإرساله إلى Shopify — لم يُشطب أي مخزون متاح",
+      "superseded": "مشمول في مزامنة المخزون الأولية — ضُبط Shopify على العدد الحالي عند ربط المستودع"
     }
   },
   "transfers": {

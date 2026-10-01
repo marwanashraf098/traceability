@@ -203,9 +203,10 @@ function CoverageOrVarianceCell({ session }: { session: StockTakeSessionSummary 
     return <>{session.coveragePercent}% ({session.counted}/{session.expected})</>
   }
   if (session.status === 'finalized') {
-    const variance = session.counted - session.expected
+    // Positive = pieces short (expected − counted), the same sign as the review screen.
+    const variance = session.expected - session.counted
     return (
-      <span className={`font-mono font-semibold ${variance < 0 ? 'text-danger' : 'text-success'}`}>
+      <span className={`font-mono font-semibold ${variance > 0 ? 'text-danger' : variance < 0 ? 'text-warning' : 'text-success'}`}>
         {variance}
       </span>
     )
