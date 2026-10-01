@@ -91,6 +91,9 @@ class RlsCoverageTest {
             "/api/v1/lookup",
             "/api/v1/fulfill/gather",
             "/api/v1/fulfill/print-batches/options",
+            "/api/v1/fulfill/mode",
+            "/api/v1/pack-sessions/{id}",
+            "/api/v1/pack-sessions/summary",
             "/api/v1/catalog",
             "/api/v1/locations/shopify-junk-report",
             "/api/v1/shopify/inventory/reconcile",
@@ -944,6 +947,40 @@ class RlsCoverageTest {
         } finally {
             jdbc.update("DELETE FROM courier_accounts WHERE id IN (?, ?)", ownAccount, otherAccount);
             jdbc.update("DELETE FROM tenants WHERE id = ?", otherTenant);
+        }
+    }
+
+    @Test
+    void fulfillMode_returnsOwnTenantsMode() {
+        // Pick & Pack S3: the store's packing mode, readable by every role.
+        jdbc.update("UPDATE tenants SET pick_pack_mode = 'waybill_scan' WHERE id = ?", tenantId);
+        try {
+            ResponseEntity<Map> resp = get("/api/v1/fulfill/mode", Map.class);
+            assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.OK);
+            assertThat(resp.getBody().get("mode")).isEqualTo("waybill_scan");
+        } finally {
+            jdbc.update("UPDATE tenants SET pick_pack_mode = 'order_queue' WHERE id = ?", tenantId);
+        }
+    }
+
+    @Test
+    void packSessionAndSummary_returnOwnSession() {
+        // Pick & Pack S3: a pack session (and the page summary naming it) — the caller's own,
+        // in this tenant.
+        UUID sessionId = jdbc.queryForObject(
+            "INSERT INTO pack_sessions (tenant_id, user_id, mode) VALUES (?, ?, 'waybill_scan') RETURNING id",
+            UUID.class, tenantId, ownerUserId);
+        try {
+            ResponseEntity<Map> session = get("/api/v1/pack-sessions/" + sessionId, Map.class);
+            assertThat(session.getStatusCode()).isEqualTo(HttpStatus.OK);
+            assertThat(session.getBody().get("id")).isEqualTo(sessionId.toString());
+            assertThat(session.getBody().get("status")).isEqualTo("open");
+
+            ResponseEntity<Map> summary = get("/api/v1/pack-sessions/summary", Map.class);
+            assertThat(summary.getStatusCode()).isEqualTo(HttpStatus.OK);
+            assertThat(summary.getBody().get("openSessionId")).isEqualTo(sessionId.toString());
+        } finally {
+            jdbc.update("DELETE FROM pack_sessions WHERE id = ?", sessionId);
         }
     }
 

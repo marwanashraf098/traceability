@@ -199,20 +199,68 @@ class WaybillResolverTest {
         jdbc.update("UPDATE orders SET on_hold = true, hold_reason = 'x' WHERE id = ?", held);
         assertThat(resolve(f, f.forward(held), me).code()).isEqualTo(Code.ON_HOLD);
 
-        UUID relabelled = f.order("#L1", 1);
-        String oldLeg = f.leg(relabelled, "forward", "terminated", null);
-        jdbc.update("UPDATE shipments SET created_at = now() - interval '1 day' WHERE tracking_number = ?", oldLeg);
-        String newLeg = f.forward(relabelled);
-        assertThat(resolve(f, oldLeg, me).code()).isEqualTo(Code.NOT_PACKABLE);
-        assertThat(resolve(f, newLeg, me).code()).isEqualTo(Code.OPEN);
-
-        UUID selfPickup = f.order("#S1", 1);
-        jdbc.update("UPDATE orders SET is_self_pickup = true WHERE id = ?", selfPickup);
-        assertThat(resolve(f, f.forward(selfPickup), me).code()).isEqualTo(Code.NOT_PACKABLE);
-
         String unmapped = PackFixtures.nextTracking();
         jdbc.update("INSERT INTO exchanges (tenant_id, tracking_number, status, raw) VALUES (?, ?, 'needs_mapping', '{}'::jsonb)", f.tenant, unmapped);
         assertThat(resolve(f, unmapped, me).code()).isEqualTo(Code.EXCHANGE_NOT_MAPPED);
+    }
+
+    @Test
+    void notPackable_eachSubReason_withItsOwnMessage() {
+        PackFixtures f = new PackFixtures(jdbc, "NotPackable");
+        UUID me = f.user("Ahmed", "worker");
+
+        // LEG_ENDED — the scanned forward leg was terminated at Bosta (and is still the newest).
+        UUID ended = f.order("#E1", 1);
+        String endedLeg = f.leg(ended, "forward", "terminated", null);
+        Resolution le = resolve(f, endedLeg, me);
+        assertNotPackable(le, "LEG_ENDED");
+        assertThat(le.state()).isEqualTo("terminated");
+        assertThat(le.messageEn()).contains("terminated at Bosta");
+
+        // ALREADY_MOVING — live state past 'created' …
+        UUID moving = f.order("#M1", 1);
+        String movingLeg = f.leg(moving, "forward", "with_courier", null);
+        Resolution am = resolve(f, movingLeg, me);
+        assertNotPackable(am, "ALREADY_MOVING");
+        assertThat(am.state()).isEqualTo("with_courier");
+        assertThat(am.messageEn()).contains("Bosta: with_courier");
+        // … or back at 'created' after having moved (history), the 2026-08-23 rewind case.
+        UUID rewound = f.order("#M2", 1);
+        String rewoundLeg = f.forward(rewound);
+        jdbc.update("INSERT INTO shipment_status_history (tenant_id, shipment_id, internal_state) " +
+                    "SELECT tenant_id, id, 'with_courier' FROM shipments WHERE tracking_number = ?", rewoundLeg);
+        Resolution rw = resolve(f, rewoundLeg, me);
+        assertNotPackable(rw, "ALREADY_MOVING");
+        assertThat(rw.state()).isEqualTo("with_courier");
+
+        // SELF_PICKUP — a self-pickup order that also carries a waybill.
+        UUID selfPickup = f.order("#S1", 1);
+        jdbc.update("UPDATE orders SET is_self_pickup = true WHERE id = ?", selfPickup);
+        Resolution sp = resolve(f, f.forward(selfPickup), me);
+        assertNotPackable(sp, "SELF_PICKUP");
+        assertThat(sp.messageEn()).contains("self-pickup");
+
+        // OTHER — a status the queue never picks from ('confirmed') …
+        UUID confirmed = f.orderWith("#O1", "confirmed", 1, "EXT-" + UUID.randomUUID());
+        Resolution ot = resolve(f, f.forward(confirmed), me);
+        assertNotPackable(ot, "OTHER");
+        // … or the active older leg while the order's NEWEST forward leg ended (the gate looks at the newest).
+        UUID relabelled = f.order("#L1", 1);
+        String olderActive = f.forward(relabelled);
+        jdbc.update("UPDATE shipments SET created_at = now() - interval '1 day' WHERE tracking_number = ?", olderActive);
+        f.leg(relabelled, "forward", "terminated", null);
+        assertNotPackable(resolve(f, olderActive, me), "OTHER");
+
+        // Every sub-reason has its own EN and AR text.
+        assertThat(List.of(le, am, sp, ot).stream().map(Resolution::messageEn).distinct()).hasSize(4);
+        assertThat(List.of(le, am, sp, ot).stream().map(Resolution::messageAr).distinct()).hasSize(4);
+    }
+
+    private static void assertNotPackable(Resolution r, String sub) {
+        assertThat(r.code()).isEqualTo(Code.NOT_PACKABLE);
+        assertThat(r.detail()).isEqualTo(sub);
+        assertThat(r.messageEn()).isNotBlank();
+        assertThat(r.messageAr()).isNotBlank();
     }
 
     @Test

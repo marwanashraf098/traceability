@@ -4,12 +4,15 @@
 -- tenants.pick_pack_mode   — how the store packs: 'order_queue' (default — every existing store
 --                            keeps today's behaviour) or 'waybill_scan'. Owner-only write.
 -- pack_sessions            — one packer's session; the mode is copied in at start so an owner
---                            switching mid-shift doesn't change a session already open.
+--                            switching mid-shift doesn't change a session already open. Holds the
+--                            order currently open in it (at most one) and the waybill scan that
+--                            opened it.
 -- pack_session_orders      — what happened in a session: packed / set_aside / rejected, with the
 --                            raw scan and the rejection code or set-aside reason.
 --
 -- Tenant RLS (NULLIF pattern) + FORCE on both new tables. app_user: sessions SELECT/INSERT/UPDATE
--- (UPDATE only to end one); session orders SELECT/INSERT (history — never edited).
+-- (UPDATE to open / close an order in it and to end it); session orders SELECT/INSERT (history —
+-- never edited).
 -- ============================================================
 
 ALTER TABLE tenants
@@ -24,6 +27,12 @@ CREATE TABLE pack_sessions (
     status      text        NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'ended')),
     started_at  timestamptz NOT NULL DEFAULT now(),
     ended_at    timestamptz,
+    -- The order this session's waybill scan opened, and that raw scan (linked as the
+    -- tracking_linked raw_scan when the order completes). NULL while waiting for a waybill.
+    -- ON DELETE SET NULL: production never deletes orders (DemoSeeder.reseed / test cleanups do).
+    current_order_id      uuid        REFERENCES orders(id) ON DELETE SET NULL,
+    current_waybill_scan  text,
+    current_opened_at     timestamptz,
     CHECK ((status = 'ended') = (ended_at IS NOT NULL))
 );
 

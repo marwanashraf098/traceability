@@ -23,8 +23,8 @@ import java.util.UUID;
  * forward leg, so they open like any order.
  *
  * Checks run most-specific first: not a waybill → unknown → return leg → cancelled → already
- * packed → on hold → not packable (old leg / shipment moving / self-pickup) → too old → claimed
- * by someone else → OPEN.
+ * packed → on hold → not packable ({@link NotPackable}: self-pickup / leg ended / shipment moved /
+ * not the current waybill / gate refuses) → too old → claimed by someone else → OPEN.
  */
 @Component
 public class WaybillResolver {
@@ -34,20 +34,37 @@ public class WaybillResolver {
         TOO_OLD, NOT_FOUND, NOT_A_WAYBILL,
         /** Order on hold (manual or blocked customer). Not in the original list — see report. */
         ON_HOLD,
-        /** The order exists but this waybill can't be packed: an older/ended leg, the shipment is
-         *  already moving, or a self-pickup order. Not in the original list — see report. */
+        /** The order exists but this waybill can't be packed; {@code detail} carries the
+         *  sub-reason ({@link NotPackable}). */
         NOT_PACKABLE
+    }
+
+    /** Why a NOT_PACKABLE waybill can't be packed — each has its own message. */
+    public enum NotPackable {
+        /** The scanned forward leg is terminated / cancelled. */
+        LEG_ENDED,
+        /** The shipment has moved past 'created' (now, or at any point in its history). */
+        ALREADY_MOVING,
+        /** A self-pickup order that also carries a waybill — self-pickup stays in the queue. */
+        SELF_PICKUP,
+        /** The pickable gate refuses it for a reason none of the above name: a status the queue
+         *  doesn't pick from (confirmed / picking), or a newer forward leg that ended while this
+         *  older one is still active. (An older 'created' leg next to a newer active one can't
+         *  exist — V104's ux_active_forward_shipment_per_order — so there is no separate
+         *  "not the current waybill" reason.) */
+        OTHER
     }
 
     /**
      * code + what the packer needs to see. orderId/shipmentId/trackingNumber are set whenever the
      * waybill matched an order. who/at: ALREADY_PACKED (packer, pack time), CLAIMED_BY_OTHER
      * (holder), CANCELLED (at = Shopify cancel time, only when known). detail: NOT_FOUND
-     * 'unlinked' when Bosta knows the waybill but no order is linked yet.
+     * 'unlinked' when Bosta knows the waybill but no order is linked yet; NOT_PACKABLE the
+     * {@link NotPackable} name. state: ALREADY_MOVING's shipment state.
      */
     public record Resolution(Code code, UUID orderId, String orderNumber, UUID shipmentId,
                              String trackingNumber, String who, Instant at, String detail,
-                             String messageEn, String messageAr) {}
+                             String state, String messageEn, String messageAr) {}
 
     private final JdbcTemplate jdbc;
     private final int          lookbackDays;
@@ -115,12 +132,8 @@ public class WaybillResolver {
                 "الطلب " + label + " موقوف. سلّم البوليصة للمدير.");
         }
 
-        if (!passesGateOnThisWaybill(orderId, shipmentId, tenantId)) {
-            return of(Code.NOT_PACKABLE, orderId, number, shipmentId, tn, null, null, null,
-                "Order " + label + " can't be packed with this waybill — it isn't the order's current waybill, " +
-                "or the shipment has already moved. Give it to a manager.",
-                "لا يمكن تغليف الطلب " + label + " بهذه البوليصة — ليست البوليصة الحالية للطلب، أو تحركت الشحنة بالفعل. سلّمها للمدير.");
-        }
+        Resolution notPackable = notPackable(r, orderId, number, label, shipmentId, tn, tenantId);
+        if (notPackable != null) return notPackable;
 
         if (!Boolean.TRUE.equals(r.get("in_window"))) {
             return of(Code.TOO_OLD, orderId, number, shipmentId, tn, null, null, null,
@@ -140,20 +153,61 @@ public class WaybillResolver {
     }
 
     /**
-     * The queue's own gate for this order, plus "the scanned waybill IS the order's latest forward
-     * leg" (the gate's LATERAL looks at that leg's state only). Self-pickup passes the gate without
-     * a shipment, so it's excluded here explicitly — self-pickup stays in the order queue.
+     * Why this (forward, not cancelled, not yet packed, not on hold) waybill can't be packed, or
+     * null when it can. Named sub-reasons first, then the queue's own gate as the backstop:
+     * self-pickup → leg ended → shipment moved (now, or ever per shipment_status_history — the
+     * same evidence complete()'s ALREADY_SHIPPED guard reads) → {@link FulfillService#PICKABLE_SHIPMENT_GATE}
+     * (reused verbatim; its LATERAL looks at the order's newest forward leg) refuses → OTHER.
      */
-    private boolean passesGateOnThisWaybill(UUID orderId, UUID shipmentId, UUID tenantId) {
-        Boolean ok = jdbc.queryForObject(
-            "SELECT EXISTS (SELECT 1 FROM orders o " + FulfillService.PICKABLE_SHIPMENT_GATE +
-            "  AND o.id = ? AND o.is_self_pickup = false " +
-            "  AND ? = (SELECT s.id FROM shipments s " +
-            "           WHERE s.order_id = o.id AND s.tenant_id = o.tenant_id AND s.shipment_leg = 'forward' " +
-            // UUIDv4 is not time-ordered — order by created_at, never id (see CLAUDE.md invariant)
-            "           ORDER BY s.created_at DESC, s.id DESC LIMIT 1))",
-            Boolean.class, tenantId, orderId, shipmentId);
-        return Boolean.TRUE.equals(ok);
+    private Resolution notPackable(Map<String, Object> r, UUID orderId, String number, String label,
+                                   UUID shipmentId, String tn, UUID tenantId) {
+        String state = (String) r.get("state");
+
+        if (Boolean.TRUE.equals(r.get("is_self_pickup"))) {
+            return np(NotPackable.SELF_PICKUP, null, orderId, number, shipmentId, tn,
+                "Order " + label + " is a self-pickup order. The customer collects it — pack it from the order queue.",
+                "الطلب " + label + " استلام من المتجر. العميل سيستلمه بنفسه — جهّزه من قائمة الطلبات.");
+        }
+        if ("terminated".equals(state) || "cancelled".equals(state)) {
+            return np(NotPackable.LEG_ENDED, state, orderId, number, shipmentId, tn,
+                "This waybill for " + label + " was " + state + " at Bosta. Don't use it — give it to a manager.",
+                "هذه البوليصة للطلب " + label + " " + ("terminated".equals(state) ? "أُنهيت" : "أُلغيت") +
+                " في Bosta. لا تستخدمها — سلّمها للمدير.");
+        }
+        String moved = movedState(orderId, tenantId, state);
+        if (moved != null) {
+            return np(NotPackable.ALREADY_MOVING, moved, orderId, number, shipmentId, tn,
+                "The shipment for " + label + " has already moved (Bosta: " + moved + "). It can't be packed again.",
+                "شحنة الطلب " + label + " تحركت بالفعل (Bosta: " + moved + "). لا يمكن تغليفها مرة أخرى.");
+        }
+        Boolean gate = jdbc.queryForObject(
+            "SELECT EXISTS (SELECT 1 FROM orders o " + FulfillService.PICKABLE_SHIPMENT_GATE + "  AND o.id = ?)",
+            Boolean.class, tenantId, orderId);
+        if (!Boolean.TRUE.equals(gate)) {
+            return np(NotPackable.OTHER, null, orderId, number, shipmentId, tn,
+                "Order " + label + " can't be packed right now. Give the waybill to a manager.",
+                "لا يمكن تغليف الطلب " + label + " الآن. سلّم البوليصة للمدير.");
+        }
+        return null;
+    }
+
+    /** The shipment's state if it has left 'created' — live, or ever in a forward leg's history. */
+    private String movedState(UUID orderId, UUID tenantId, String liveState) {
+        if (liveState != null && !"created".equals(liveState)) return liveState;
+        List<String> past = jdbc.queryForList(
+            "SELECT h.internal_state FROM shipment_status_history h " +
+            "JOIN shipments s ON s.id = h.shipment_id " +
+            "WHERE s.order_id = ? AND s.tenant_id = ? AND s.shipment_leg = 'forward' " +
+            "  AND h.internal_state <> 'created' " +
+            // history id is a bigserial (insert-ordered); occurred_at first, id only as the tie-break
+            "ORDER BY h.occurred_at DESC, h.id DESC LIMIT 1",
+            String.class, orderId, tenantId);
+        return past.isEmpty() ? null : past.get(0);
+    }
+
+    private static Resolution np(NotPackable why, String state, UUID orderId, String number, UUID shipmentId,
+                                 String tn, String en, String ar) {
+        return new Resolution(Code.NOT_PACKABLE, orderId, number, shipmentId, tn, null, null, why.name(), state, en, ar);
     }
 
     private Resolution notLinked(String tn, UUID tenantId) {
@@ -196,6 +250,6 @@ public class WaybillResolver {
 
     private static Resolution of(Code code, UUID orderId, String number, UUID shipmentId, String tn,
                                  String who, Instant at, String detail, String en, String ar) {
-        return new Resolution(code, orderId, number, shipmentId, tn, who, at, detail, en, ar);
+        return new Resolution(code, orderId, number, shipmentId, tn, who, at, detail, null, en, ar);
     }
 }

@@ -133,6 +133,17 @@ public class ShipmentLinkService {
 
     @Transactional(isolation = Isolation.READ_COMMITTED)
     public Map<String, Object> linkByAwbScan(UUID orderId, String rawScan, UUID actorUserId) {
+        return linkByAwbScan(orderId, rawScan, actorUserId, null);
+    }
+
+    /**
+     * Same as {@link #linkByAwbScan(UUID, String, UUID)}, plus {@code eventMetadataJson} written
+     * as the metadata of each piece's 'tracking_linked' event (Pick &amp; Pack S3: the pack session
+     * id). The 3-argument form passes null — exactly what it wrote before this overload existed.
+     */
+    @Transactional(isolation = Isolation.READ_COMMITTED)
+    public Map<String, Object> linkByAwbScan(UUID orderId, String rawScan, UUID actorUserId,
+                                             String eventMetadataJson) {
         UUID tenantId = TenantContext.require();
 
         // 1. Verify order exists and is in a linkable state (unchanged gate) — the
@@ -151,7 +162,7 @@ public class ShipmentLinkService {
                 "Order must be in 'packed' state to link an AWB (current: " + orderStatus + ")");
         }
 
-        return linkTrackingNumberToOrder(orderId, orderNumber, rawScan, tenantId, actorUserId);
+        return linkTrackingNumberToOrder(orderId, orderNumber, rawScan, tenantId, actorUserId, eventMetadataJson);
     }
 
     /**
@@ -187,7 +198,7 @@ public class ShipmentLinkService {
                 "Order must be unpicked ('new'/'ready_to_pick') to auto-link at map-time (current: " + orderStatus + ")");
         }
 
-        return linkTrackingNumberToOrder(orderId, orderNumber, trackingNumber, tenantId, actorUserId);
+        return linkTrackingNumberToOrder(orderId, orderNumber, trackingNumber, tenantId, actorUserId, null);
     }
 
     /**
@@ -197,7 +208,8 @@ public class ShipmentLinkService {
      * reaching here.
      */
     private Map<String, Object> linkTrackingNumberToOrder(UUID orderId, String orderNumber, String rawScan,
-                                                            UUID tenantId, UUID actorUserId) {
+                                                            UUID tenantId, UUID actorUserId,
+                                                            String eventMetadataJson) {
         // Normalize the raw scan — single source of truth, used everywhere below.
         String trackingNumber = TrackingNumberNormalizer.normalize(rawScan);
         if (trackingNumber == null) {
@@ -224,7 +236,8 @@ public class ShipmentLinkService {
             if (trackingNumber.equals(existingTracking)) {
                 // VERIFIED: scan matches the ingested forward shipment — no INSERT.
                 UUID shipmentId = UUID.fromString((String) existingFwd[0]);
-                return completeLink(orderId, orderNumber, shipmentId, trackingNumber, tenantId, actorUserId, rawScan);
+                return completeLink(orderId, orderNumber, shipmentId, trackingNumber, tenantId, actorUserId, rawScan,
+                    eventMetadataJson);
             }
             // AWB_MISMATCH: the scan is a valid tracking number but it isn't this order's.
             // Throw immediately — no INSERT is reachable from this branch.
@@ -261,14 +274,15 @@ public class ShipmentLinkService {
             fetchAndStoreProviderDeliveryId(shipmentId, trackingNumber, tenantId);
         }
 
-        return completeLink(orderId, orderNumber, shipmentId, trackingNumber, tenantId, actorUserId, rawScan);
+        return completeLink(orderId, orderNumber, shipmentId, trackingNumber, tenantId, actorUserId, rawScan,
+            eventMetadataJson);
     }
 
     /** Shared tail of the link path: piece transitions, order advance, cleanup, response. */
     private Map<String, Object> completeLink(UUID orderId, String orderNumber, UUID shipmentId,
                                               String trackingNumber, UUID tenantId, UUID actorUserId,
-                                              String rawScan) {
-        int linked = transitionPackedPieces(orderId, shipmentId, tenantId, actorUserId, rawScan);
+                                              String rawScan, String eventMetadataJson) {
+        int linked = transitionPackedPieces(orderId, shipmentId, tenantId, actorUserId, rawScan, eventMetadataJson);
 
         jdbc.update(
             "UPDATE orders SET status = 'awaiting_pickup' " +
@@ -367,7 +381,7 @@ public class ShipmentLinkService {
             }
         }
 
-        transitionPackedPieces(orderId, shipmentId, tenantId, null, null);
+        transitionPackedPieces(orderId, shipmentId, tenantId, null, null, null);
 
         // Advance order if it is currently packed
         jdbc.update(
@@ -448,7 +462,7 @@ public class ShipmentLinkService {
                 "Order already has an active shipment — resolve it before manually linking");
         }
 
-        transitionPackedPieces(orderId, shipmentId, tenantId, actorUserId, null);
+        transitionPackedPieces(orderId, shipmentId, tenantId, actorUserId, null, null);
 
         // Queue-gating-not-traced (build spec finding A): a shipment linked here can be
         // born already in a terminal state (mapped from the bosta_state_code stored on the
@@ -619,9 +633,12 @@ public class ShipmentLinkService {
      *
      * @param rawScan the verbatim scanner output (e.g. "D-07-2944282510") written to
      *                piece_events.raw_scan as custody evidence; null for non-scan paths
+     * @param eventMetadataJson piece_events.metadata for each event; null everywhere except the
+     *                Pick &amp; Pack waybill-session link (its pack session id)
      */
     private int transitionPackedPieces(UUID orderId, UUID shipmentId,
-                                        UUID tenantId, UUID actorUserId, String rawScan) {
+                                        UUID tenantId, UUID actorUserId, String rawScan,
+                                        String eventMetadataJson) {
         // Also filter by pieces.status = 'packed' so that idempotent re-scans (where
         // the allocation still says 'packed' but the piece is already at 'awaiting_pickup')
         // don't call ledger.transition unnecessarily. The StateConflictException catch
@@ -643,7 +660,7 @@ public class ShipmentLinkService {
                 ledger.transition(pieceId,
                     PieceStatus.PACKED, PieceStatus.AWAITING_PICKUP,
                     "tracking_linked", actorUserId,
-                    new TransitionContext(orderId, shipmentId, null, orderId, null)
+                    new TransitionContext(orderId, shipmentId, null, orderId, eventMetadataJson)
                         .withRawScan(rawScan));
                 count++;
             } catch (StateConflictException e) {
