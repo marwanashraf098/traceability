@@ -176,6 +176,9 @@ public class ExceptionService {
         all.addAll(detectReturnLinkAmbiguous(tenantId));
         all.addAll(detectRefundPendingOverdue(tenantId));
         all.addAll(detectReturnItemsOverdue(tenantId));
+        // Pick & Pack S4 — waybill mode (rules in PackListRules, shared with the page lists).
+        all.addAll(detectPackSetAside(tenantId));
+        all.addAll(detectPackCancelledAfterPrint(tenantId));
 
         // Enrich with descriptions and action hints
         all.forEach(this::enrich);
@@ -296,6 +299,54 @@ public class ExceptionService {
      * The key carries the arrival time, so undo (which clears the arrival) removes it and a new
      * arrival is a new exception.
      */
+    /**
+     * Pick &amp; Pack S4 — an order a packer set aside in a waybill session (piece missing, damaged
+     * piece, waybill damaged, other) that's still not packed and not cancelled. MEDIUM (daily
+     * digest, no immediate email). Auto-resolves when the order is packed or cancelled; a manager
+     * can resolve it too. Subject = the set-aside event, so setting it aside again re-opens it.
+     */
+    private List<Map<String, Object>> detectPackSetAside(UUID tid) {
+        return jdbc.queryForList(
+            "SELECT 'pack_set_aside' AS type, 'MEDIUM' AS severity, 'order' AS subject_type, " +
+            "       o.id AS order_id, o.number AS order_number, o.customer_name, fs.tracking_number, " +
+            "       ps.reason AS set_aside_reason, u.name AS set_aside_by_name, ps.created_at AS occurred_at, " +
+            "       " + PackListRules.SET_ASIDE_KEY_SQL + " AS subject_key " +
+            "FROM orders o " +
+            PackListRules.LATEST_PACK_OUTCOME_LATERAL +
+            "LEFT JOIN pack_sessions pss ON pss.id = ps.session_id " +
+            "LEFT JOIN users u ON u.id = pss.user_id " +
+            "LEFT JOIN LATERAL ( " +
+            "    SELECT tracking_number FROM shipments " +
+            "    WHERE order_id = o.id AND tenant_id = o.tenant_id AND shipment_leg = 'forward' " +
+            // UUIDv4 is not time-ordered — order by created_at, never id (see CLAUDE.md invariant)
+            "    ORDER BY created_at DESC, id DESC LIMIT 1 " +
+            ") fs ON true " +
+            "WHERE o.tenant_id = ? AND " + PackListRules.SET_ASIDE_OPEN_SQL,
+            tid);
+    }
+
+    /**
+     * Pick &amp; Pack S4 — a printed waybill (in a print batch) whose order is cancelled: the paper
+     * label must not be packed or handed to the courier. MEDIUM. Resolved by a manager marking
+     * the waybill discarded (resolution). One per printed shipment, latest batch shown.
+     */
+    private List<Map<String, Object>> detectPackCancelledAfterPrint(UUID tid) {
+        return jdbc.queryForList(
+            "SELECT DISTINCT ON (s.id) 'pack_cancelled_after_print' AS type, 'MEDIUM' AS severity, " +
+            "       'shipment' AS subject_type, o.id AS order_id, o.number AS order_number, o.customer_name, " +
+            "       s.id AS shipment_id, s.tracking_number, b.batch_no, b.created_at AS printed_at, " +
+            "       COALESCE(o.cancel_requested_at, o.shopify_cancel_requested_at, b.created_at) AS occurred_at, " +
+            "       " + PackListRules.CANCELLED_AFTER_PRINT_KEY_SQL + " AS subject_key " +
+            "FROM pack_print_batch_items bi " +
+            "JOIN pack_print_batches b ON b.id = bi.batch_id AND b.tenant_id = bi.tenant_id " +
+            "JOIN shipments s ON s.id = bi.shipment_id AND s.tenant_id = bi.tenant_id " +
+            "JOIN orders o ON o.id = bi.order_id AND o.tenant_id = bi.tenant_id " +
+            "WHERE bi.tenant_id = ? AND " + PackListRules.CANCELLED_AFTER_PRINT_OPEN_SQL + " " +
+            // latest batch per shipment (UUIDv4 is not time-ordered — created_at, id only as tie-break)
+            "ORDER BY s.id, b.created_at DESC, b.id DESC",
+            tid);
+    }
+
     private List<Map<String, Object>> detectRequestItemToReceive(UUID tid) {
         return jdbc.queryForList(
             "SELECT 'request_item_to_receive' AS type, 'MEDIUM' AS severity, 'return_request_item' AS subject_type, " +
@@ -1399,6 +1450,28 @@ public class ExceptionService {
                 item.put("suggestedAction", "record_refund");
                 item.put("actionUrl", "/exchanges?tab=requests&request=" + item.get("request_id"));
             }
+            case "pack_set_aside" -> {
+                String n = str(item, "order_number");
+                String reason = str(item, "set_aside_reason");
+                String by = str(item, "set_aside_by_name");
+                item.put("descriptionEn", "Order " + n + " was set aside while packing (" + setAsideReasonEn(reason) + ")"
+                    + (by != null ? " by " + by : "") + ". Sort it out, then it can be packed again.");
+                item.put("descriptionAr", "تم وضع الطلب " + n + " جانباً أثناء التغليف (" + setAsideReasonAr(reason) + ")"
+                    + (by != null ? " بواسطة " + by : "") + ". عالج المشكلة ثم يمكن تغليفه مرة أخرى.");
+                item.put("suggestedAction", "check_set_aside");
+                item.put("actionUrl", "/fulfill");
+            }
+            case "pack_cancelled_after_print" -> {
+                String n = str(item, "order_number");
+                String t = str(item, "tracking_number");
+                Object batch = item.get("batch_no");
+                item.put("descriptionEn", "Order " + n + " was cancelled after its waybill " + t + " was printed (batch #"
+                    + batch + "). Find the printed waybill and throw it away, then mark it discarded.");
+                item.put("descriptionAr", "أُلغي الطلب " + n + " بعد طباعة بوليصته " + t + " (الدفعة رقم "
+                    + batch + "). ابحث عن البوليصة المطبوعة وتخلّص منها، ثم سجّلها كمُتلَفة.");
+                item.put("suggestedAction", "discard_waybill");
+                item.put("actionUrl", "/fulfill");
+            }
             case "return_items_overdue" -> {
                 String ref = str(item, "reference");
                 String n = str(item, "order_number");
@@ -1451,6 +1524,26 @@ public class ExceptionService {
 
     private static Integer toInt(Object v) {
         return v instanceof Number n ? n.intValue() : null;
+    }
+
+    private static String setAsideReasonEn(String r) {
+        if (r == null) return "no reason";
+        return switch (r) {
+            case "piece_missing"   -> "piece missing on the shelf";
+            case "damaged_piece"   -> "damaged piece";
+            case "waybill_damaged" -> "waybill damaged or unreadable";
+            default                -> "other";
+        };
+    }
+
+    private static String setAsideReasonAr(String r) {
+        if (r == null) return "بدون سبب";
+        return switch (r) {
+            case "piece_missing"   -> "القطعة غير موجودة على الرف";
+            case "damaged_piece"   -> "قطعة تالفة";
+            case "waybill_damaged" -> "البوليصة تالفة أو غير مقروءة";
+            default                -> "أخرى";
+        };
     }
 
     private static String str(Map<String, Object> m, String key) {

@@ -94,6 +94,9 @@ class RlsCoverageTest {
             "/api/v1/fulfill/mode",
             "/api/v1/pack-sessions/{id}",
             "/api/v1/pack-sessions/summary",
+            "/api/v1/fulfill/print-batches/today",
+            "/api/v1/fulfill/printed-not-packed",
+            "/api/v1/pack-sessions/{sessionId}/summary",
             "/api/v1/catalog",
             "/api/v1/locations/shopify-junk-report",
             "/api/v1/shopify/inventory/reconcile",
@@ -960,6 +963,43 @@ class RlsCoverageTest {
             assertThat(resp.getBody().get("mode")).isEqualTo("waybill_scan");
         } finally {
             jdbc.update("UPDATE tenants SET pick_pack_mode = 'order_queue' WHERE id = ?", tenantId);
+        }
+    }
+
+    @Test
+    void packListsAndSessionSummary_returnOwnTenantsData() {
+        // Pick & Pack S4: today's print batches, printed-but-not-packed, a session summary — this
+        // tenant's own rows.
+        UUID orderId = UUID.randomUUID();
+        jdbc.update("INSERT INTO orders (id, tenant_id, store_id, external_id, number, status, on_hold, placed_at) " +
+                    "VALUES (?, ?, ?, 'EXT-CVG-PACKLIST', '#CVG-PL', 'new'::order_status, false, now())",
+                    orderId, tenantId, storeId);
+        UUID shipmentId = jdbc.queryForObject(
+            "INSERT INTO shipments (tenant_id, order_id, provider, tracking_number, internal_state, shipment_leg) " +
+            "VALUES (?, ?, 'bosta', 'TN-CVG-PACKLIST', 'created'::shipment_internal_state, 'forward') RETURNING id",
+            UUID.class, tenantId, orderId);
+        UUID batchId = jdbc.queryForObject(
+            "INSERT INTO pack_print_batches (tenant_id, batch_no, printed_by, paper, sort, scope, waybill_count, order_guaranteed) " +
+            "VALUES (?, 1, ?, 'A6', 'oldest', 'new', 1, true) RETURNING id", UUID.class, tenantId, ownerUserId);
+        jdbc.update("INSERT INTO pack_print_batch_items (batch_id, tenant_id, order_id, shipment_id, tracking_number, position) " +
+                    "VALUES (?, ?, ?, ?, 'TN-CVG-PACKLIST', 1)", batchId, tenantId, orderId, shipmentId);
+        UUID sessionId = jdbc.queryForObject(
+            "INSERT INTO pack_sessions (tenant_id, user_id, mode) VALUES (?, ?, 'waybill_scan') RETURNING id",
+            UUID.class, tenantId, ownerUserId);
+        try {
+            ResponseEntity<List> today = get("/api/v1/fulfill/print-batches/today", List.class);
+            assertThat(today.getStatusCode()).isEqualTo(HttpStatus.OK);
+            assertThat(today.getBody()).hasSize(1);
+            ResponseEntity<List> notPacked = get("/api/v1/fulfill/printed-not-packed", List.class);
+            assertThat(notPacked.getStatusCode()).isEqualTo(HttpStatus.OK);
+            assertThat(notPacked.getBody()).extracting(r -> ((Map<?, ?>) r).get("trackingNumber")).containsExactly("TN-CVG-PACKLIST");
+            ResponseEntity<Map> summary = get("/api/v1/pack-sessions/" + sessionId + "/summary", Map.class);
+            assertThat(summary.getStatusCode()).isEqualTo(HttpStatus.OK);
+            assertThat(summary.getBody().get("sessionId")).isEqualTo(sessionId.toString());
+        } finally {
+            jdbc.update("DELETE FROM pack_sessions WHERE id = ?", sessionId);
+            jdbc.update("DELETE FROM pack_print_batch_items WHERE batch_id = ?", batchId);
+            jdbc.update("DELETE FROM pack_print_batches WHERE id = ?", batchId);
         }
     }
 
