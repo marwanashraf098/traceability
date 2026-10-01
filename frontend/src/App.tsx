@@ -12,6 +12,10 @@ const StyleGuide = import.meta.env.DEV
   ? lazy(() => import('./pages/StyleGuide'))
   : null
 import Login from './pages/Login'
+// TEMPORARY — camera-scan spike (public, no API calls). Delete after S6 with
+// pages/ScanSpike.tsx and the @zxing/* deps — see docs/PROGRESS.md follow-up.
+// Lazy so @zxing stays in the spike's own chunk, never in the main bundle.
+const ScanSpike = lazy(() => import('./pages/ScanSpike'))
 import Signup from './pages/Signup'
 import DemoLanding from './pages/DemoLanding'
 import { DEMO_SESSION_MARKER, DEMO_ACCESS_TOKEN_KEY } from './demoConstants'
@@ -227,6 +231,8 @@ export default function App() {
         <Route path="/refund"  element={<Refund />} />
         <Route path="/contact" element={<Contact />} />
         <Route path="/login"   element={<Login />} />
+        {/* TEMPORARY — camera-scan spike; outside RequireAuth and Layout. Delete after S6. */}
+        <Route path="/scan-spike" element={<Suspense fallback={null}><ScanSpike /></Suspense>} />
         <Route path="/signup" element={<Signup />} />
         <Route path="/demo"   element={<DemoLanding />} />
         <Route path="/forgot-password" element={<ForgotPassword />} />

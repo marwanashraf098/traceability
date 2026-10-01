@@ -4,6 +4,23 @@
 
 ## Current state
 
+**SPIKE — phone camera barcode reading (2026-10-02, branch `spike/camera-scan` off main edb8ce4; pushed, not merged,
+not deployed). TEMPORARY — FOLLOW-UP: delete after S6** (`frontend/src/pages/ScanSpike.tsx`, the `/scan-spike` route +
+lazy import in `App.tsx`, `src/test/scanSpike.test.tsx`, and `@zxing/browser` + `@zxing/library` from package.json —
+regenerate the lockfile in docker).
+- Public `/scan-spike` (lazy, outside RequireAuth / Layout, next to /login). No API calls, stores nothing, English only.
+  Spring already serves any dotless path as the SPA (SecurityConfig permitAll + SpaController) — no backend change.
+- Rear camera (environment, ideal 1920×1080, falls back to any camera), continuous autofocus / torch where the track
+  exposes them. Engines switchable: native BarcodeDetector (when present) and @zxing/browser (pure JS, no wasm). Formats
+  Code 128 / QR / EAN-13, or "all formats" to learn Bosta's symbology. Same code within 2 s counted once; log of the
+  last 50 (raw text with visible spaces / control chars), Copy log, counters, Start test, vibrate + beep.
+- Headers: app.tracedtech.com sets no Permissions-Policy (camera allowed for the page's own origin); CSP has no
+  media-src (default-src 'self' doesn't govern a MediaStream on srcObject); zxing needs no wasm / worker. Nothing loosened.
+- Bundle: zxing only in the ScanSpike chunk (464 KB, 120 KB gzip). main.js +1.3 KB (route + lazy loader), main.css
+  +0.6 KB (spike-only utility classes).
+- Tests: scanSpike.test.tsx (2). vitest 607/607, tsc + build clean, browser 8/8 (one earlier run 7/8 — scannerBurst
+  "expected 2 to be 1", not reproduced in 3 re-runs; pre-existing flake, unrelated). No backend change, no backend run.
+
 **Pick & Pack S4 — waybill mode: batch lists, printed-but-not-packed, manager exceptions, session summary (2026-10-02,
 branch `feat/pack-lists-summary` off origin/main; pushed, not merged, not deployed).** No migration (`exception_type`
 has no CHECK; nothing new to store — resolutions reuse `exception_resolutions`).
