@@ -1801,6 +1801,8 @@ export interface PackSessionRecent {
   customerName: string | null
   outcome: 'packed' | 'set_aside' | 'rejected'
   reason: string | null
+  /** What was scanned — shown for rejected rows (which usually have no order). */
+  rawScan: string | null
   at: string
 }
 

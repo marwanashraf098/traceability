@@ -794,6 +794,7 @@
         "TOO_OLD": "Order too old to pack here",
         "NOT_FOUND": "Waybill not found",
         "NOT_A_WAYBILL": "That's a piece, not a waybill",
+        "UNRECOGNISED_BARCODE": "Not a waybill we recognise",
         "ON_HOLD": "Order on hold",
         "NOT_PACKABLE": "Can't pack this waybill",
         "cancelledAt": "Cancelled at {{time}}",

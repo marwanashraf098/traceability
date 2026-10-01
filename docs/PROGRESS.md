@@ -4,6 +4,28 @@
 
 ## Current state
 
+**Hotfix — waybill top barcode with spaces (2026-10-01, branch `fix/awb-barcode-spaces` off main 76c56b8; pushed, not
+merged, not deployed).** Production, Jumi 2026-10-01: two pack-session rejections had raw_scan
+"G - 0 2 - 8 4 8 4 8 0 5 6 9 9" — Bosta's TOP waybill barcode encodes a space between every character; the bottom
+barcode "8484805699" packed fine.
+- **`TrackingNumberNormalizer.normalize()`** now removes every whitespace character (Character.isWhitespace + Unicode
+  space separators — no-break, thin, narrow no-break, ideographic) before the unchanged prefix strip and digits-only
+  check. Callers (none relied on spaced input being rejected; two already stripped whitespace themselves):
+  ShipmentLinkService.linkTrackingNumberToOrder, WaybillResolver.resolve, PackCompleter.completeAndLink (guard),
+  PackSessionStore.scanPiece (waybill-while-packing check), PickupSessionService.scan, ReturnSessionService.scan
+  (pre-strips), LookupService.lookupTracking, ReturnPickupBookingService.confirmBooked (pre-strips).
+- **Resolver:** a scan that doesn't normalize is NOT_A_WAYBILL only when it looks like a piece code (P + 6+ digits,
+  "PC-" + alphanumerics, or a 26-char Crockford ULID); anything else is the new **UNRECOGNISED_BARCODE** — "This
+  barcode isn't a waybill we recognise. Try the barcode at the bottom of the waybill (Tracking Number)." (EN + AR;
+  screen title "Not a waybill we recognise").
+- **Side list:** rejected rows show the raw scan (monospace, truncated to 22 chars, full value on hover) instead of
+  "—"; the session view's recent rows carry `rawScan`.
+- **Tests:** `TrackingNumberSpacesTest` (6), `AwbSpacedBarcodeTest` (3: spaced barcode resolves; piece vs unrecognised;
+  spaced barcode packs end to end, tracking_linked raw_scan = the spaced scan, no Bosta call) — main's normalizer → 4
+  RED; `packSessionAwbCopy.test.tsx` (3). Existing tests unedited (TrackingNumberNormalizerTest 22,
+  WaybillResolverTest 12, PackSessionTest 12 green). Backend 1,927 run, 4 skipped, only the 2 known reds; vitest
+  599/599, browser 8/8, tsc + build clean.
+
 **Pick & Pack S3 — waybill scan mode (2026-10-01, branch `feat/pack-waybill-session`, rebased onto main 938a39a — the
 scanner fix; pushed, not merged, not deployed).** Commits: getOrder fix · V126 · mode setting · resolver/claim · session API · frontend · refocus.
 - **Gate (resolved, option a):** no `TenantContext.runAs` under complete()/linkByAwbScan()/completeLink()/ledger.

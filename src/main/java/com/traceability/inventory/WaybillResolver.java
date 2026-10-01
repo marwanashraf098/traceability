@@ -31,7 +31,13 @@ public class WaybillResolver {
 
     public enum Code {
         OPEN, CANCELLED, ALREADY_PACKED, CLAIMED_BY_OTHER, RETURN_WAYBILL, EXCHANGE_NOT_MAPPED,
-        TOO_OLD, NOT_FOUND, NOT_A_WAYBILL,
+        TOO_OLD, NOT_FOUND,
+        /** Doesn't normalize to a tracking number and looks like a piece code (a piece label
+         *  scanned while waiting for a waybill). */
+        NOT_A_WAYBILL,
+        /** Doesn't normalize to a tracking number and isn't a piece code either — some other
+         *  barcode (an unrecognised waybill barcode, a product barcode, …). */
+        UNRECOGNISED_BARCODE,
         /** Order on hold (manual or blocked customer). Not in the original list — see report. */
         ON_HOLD,
         /** The order exists but this waybill can't be packed; {@code detail} carries the
@@ -81,9 +87,14 @@ public class WaybillResolver {
 
         String tn = TrackingNumberNormalizer.normalize(rawScan);
         if (tn == null) {
-            return of(Code.NOT_A_WAYBILL, null, null, null, null, null, null, null,
-                "That's not a waybill. Scan the waybill first to open an order.",
-                "هذا ليس باركود بوليصة. امسح البوليصة أولاً لفتح الطلب.");
+            if (looksLikePieceCode(rawScan)) {
+                return of(Code.NOT_A_WAYBILL, null, null, null, null, null, null, null,
+                    "That's not a waybill. Scan the waybill first to open an order.",
+                    "هذا ليس باركود بوليصة. امسح البوليصة أولاً لفتح الطلب.");
+            }
+            return of(Code.UNRECOGNISED_BARCODE, null, null, null, null, null, null, null,
+                "This barcode isn't a waybill we recognise. Try the barcode at the bottom of the waybill (Tracking Number).",
+                "هذا الباركود ليس بوليصة نعرفها. جرّب الباركود الموجود أسفل البوليصة (رقم التتبع).");
         }
 
         List<Map<String, Object>> rows = jdbc.queryForList(
@@ -150,6 +161,16 @@ public class WaybillResolver {
         }
 
         return of(Code.OPEN, orderId, number, shipmentId, tn, null, null, null, null, null);
+    }
+
+    /** The piece-label formats FulfillService.scan() accepts: short code (P + 6+ digits), barcode
+     *  ("PC-" + piece id — any "PC-" code is our piece-label family) or the raw ULID piece id
+     *  (26 Crockford base-32 chars). Format only — no lookup. */
+    private static final java.util.regex.Pattern PIECE_CODE = java.util.regex.Pattern.compile(
+        "^(P[0-9]{6,}|PC-[0-9A-Za-z]+|[0-9A-HJKMNP-TV-Z]{26})$");
+
+    static boolean looksLikePieceCode(String rawScan) {
+        return rawScan != null && PIECE_CODE.matcher(rawScan.strip()).matches();
     }
 
     /**

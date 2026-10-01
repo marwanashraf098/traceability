@@ -31,8 +31,9 @@ public class PackSessionStore {
 
     public record Counters(int packed, int setAside, int rejected, int left) {}
 
+    /** rawScan: what was scanned — shown for rejected rows, which usually have no order. */
     public record RecentRow(UUID orderId, String orderNumber, String customerName, String outcome,
-                            String reason, Instant at) {}
+                            String reason, String rawScan, Instant at) {}
 
     public record SessionView(UUID id, String mode, String status, Instant startedAt, String workerName,
                               Counters counters, List<RecentRow> recent, Map<String, Object> openOrder) {}
@@ -112,14 +113,14 @@ public class PackSessionStore {
             Integer.class, tenantId);
 
         List<RecentRow> recent = jdbc.query(
-            "SELECT so.order_id, o.number, o.customer_name, so.outcome, so.reason, so.created_at " +
+            "SELECT so.order_id, o.number, o.customer_name, so.outcome, so.reason, so.raw_scan, so.created_at " +
             "FROM pack_session_orders so LEFT JOIN orders o ON o.id = so.order_id " +
             "WHERE so.session_id = ? AND so.tenant_id = ? " +
             // UUIDv4 is not time-ordered — order by created_at, never id (see CLAUDE.md invariant)
             "ORDER BY so.created_at DESC, so.id DESC LIMIT 30",
             (rs, i) -> new RecentRow(rs.getObject("order_id", UUID.class), rs.getString("number"),
                 rs.getString("customer_name"), rs.getString("outcome"), rs.getString("reason"),
-                rs.getTimestamp("created_at").toInstant()),
+                rs.getString("raw_scan"), rs.getTimestamp("created_at").toInstant()),
             sessionId, tenantId);
 
         Map<String, Object> started = jdbc.queryForMap(

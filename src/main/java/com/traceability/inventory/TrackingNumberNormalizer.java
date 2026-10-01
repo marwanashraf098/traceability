@@ -7,6 +7,11 @@ package com.traceability.inventory;
  * {@code D-07-2944282510} where {@code D-07} is the Mansoura-Talkha hub code. The prefix
  * varies per hub and must never be hardcoded. Stripping after the last {@code -} is
  * unambiguous because no stored tracking number contains a dash.
+ *
+ * Bosta's TOP waybill barcode encodes a space between every character, e.g.
+ * {@code "G - 0 2 - 8 4 8 4 8 0 5 6 9 9"} (seen in production, Jumi 2026-10-01), so every
+ * whitespace character — ASCII, tab / newline, no-break space, any Unicode space separator —
+ * is removed before the prefix strip and the digits-only check. Nothing else changes.
  */
 public final class TrackingNumberNormalizer {
 
@@ -19,8 +24,9 @@ public final class TrackingNumberNormalizer {
     public static String normalize(String raw) {
         if (raw == null) return null;
 
-        // Strip zero-width and non-printing characters a scanner may inject, then trim.
-        String s = raw.replaceAll("[\\p{Cf}\\p{Cc}&&[^\t\n\r]]", "").trim();
+        // Strip zero-width and non-printing characters a scanner may inject, then every
+        // whitespace character anywhere (not just the ends) — see the class comment.
+        String s = removeWhitespace(raw.replaceAll("[\\p{Cf}\\p{Cc}&&[^\t\n\r]]", ""));
         if (s.isEmpty()) return null;
 
         // If the string contains a dash, the tracking number follows the last one.
@@ -33,5 +39,16 @@ public final class TrackingNumberNormalizer {
         if (!s.matches("^[0-9]+$")) return null;
 
         return s;
+    }
+
+    /** Character.isWhitespace (ASCII space, tab, newlines, …) plus no-break / other Unicode space separators. */
+    private static String removeWhitespace(String in) {
+        StringBuilder b = new StringBuilder(in.length());
+        for (int i = 0; i < in.length(); ) {
+            int cp = in.codePointAt(i);
+            if (!Character.isWhitespace(cp) && !Character.isSpaceChar(cp)) b.appendCodePoint(cp);
+            i += Character.charCount(cp);
+        }
+        return b.toString();
     }
 }

@@ -24,6 +24,11 @@ type PackedFlash = { number: string | null; customer: string | null; pieces: num
 type Failed = { code: string; message: string | null }
 type LastScan = { pieceId: string; name: string; barcode: string } | null
 
+/** A raw scan for the side list: at most 22 characters, with an ellipsis. */
+function truncateScan(raw: string): string {
+  return raw.length > 22 ? `${raw.slice(0, 21)}…` : raw
+}
+
 const SET_ASIDE_REASONS: SetAsideReason[] = ['piece_missing', 'damaged_piece', 'waybill_damaged', 'other']
 
 export default function PackSessionScreen({ initial, onEnded }: {
@@ -286,7 +291,16 @@ export default function PackSessionScreen({ initial, onEnded }: {
               {view.recent.map((r, i) => (
                 <li key={`${r.at}-${i}`} className="flex items-center justify-between gap-2 text-small">
                   <span className="min-w-0">
-                    <span className="font-mono font-semibold text-primary">{r.orderNumber ?? '—'}</span>
+                    {r.orderNumber ? (
+                      <span className="font-mono font-semibold text-primary">{r.orderNumber}</span>
+                    ) : r.outcome === 'rejected' && r.rawScan ? (
+                      // No order: show what was scanned, so a manager can see it (truncated).
+                      <span className="font-mono text-primary" title={r.rawScan} data-testid="recent-raw-scan">
+                        {truncateScan(r.rawScan)}
+                      </span>
+                    ) : (
+                      <span className="font-mono font-semibold text-primary">—</span>
+                    )}
                     {r.customerName && <span className="text-muted"> {r.customerName}</span>}
                   </span>
                   <span className="flex items-center gap-2 flex-shrink-0">
