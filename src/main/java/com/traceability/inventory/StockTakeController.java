@@ -117,8 +117,10 @@ public class StockTakeController {
     @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
     public Map<String, Object> finalizeSession(
             @PathVariable UUID sessionId,
+            @RequestBody(required = false) FinalizeRequest body,
             @AuthenticationPrincipal CustomUserDetails principal) {
-        return reconciliation.finalizeSession(sessionId, principal.userId());
+        return reconciliation.finalizeSession(sessionId, principal.userId(),
+            body == null ? null : body.confirmWriteOffs());
     }
 
     @PostMapping("/sessions/{sessionId}/cancel")
@@ -152,4 +154,7 @@ public class StockTakeController {
         String scopeType, List<String> variantIds, String locationId, String note) {}
 
     public record ScanRequest(String barcode, String condition) {}
+
+    /** confirmWriteOffs: the write-off count the user typed, when the finalize plan requires it. */
+    public record FinalizeRequest(Integer confirmWriteOffs) {}
 }

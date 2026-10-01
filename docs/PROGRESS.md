@@ -4,6 +4,30 @@
 
 ## Current state
 
+**Stock-take finalize applies the count (2026-10-01, branch `feature/stocktake-finalize-applies` off main 8f53628 —
+NOT merged: 15 existing tests need approved edits, see below).**
+- Decisions (Marawan, 2026-10-01): (a) finalize applies the count in one transaction under the session lock — unscanned
+  free stock (available / damaged / on_hold at open, still in that status = drift guard) → lost; scanned damaged on a
+  live-available piece → damaged (PieceAdjustService); push enqueued after commit; per-row resolve stays.
+  (b) 0 piece scans → 400 ZERO_SCANS; typed confirmation (the write-off count) when coverage < 80% or write-offs > 10% of
+  expected free stock — `StockTakeFinalizePolicy`; never asked when nothing is written off (refinement found while
+  building). Write-offs still need the attestation (409 ATTESTATION_REQUIRED). (c) expected set = physically present
+  statuses (`StockTakeService.PHYSICALLY_PRESENT_STATUSES_SQL`; DemoSeeder mirrors it), new sessions only.
+  (d) V124: 'nothing_to_push' (pushed_at only on a real push) + 'superseded_by_seed' + superseded_at; trigger_type
+  'stock_take_found'. (e) variance positive = short everywhere; the finalize modal shows `reconciliation.finalizePlan`
+  — the SAME `plan()` finalize runs. (f) damaged → lost / on_hold → lost excluded from the push (delta = from 'available'
+  only). (g) 4th increment trigger `stock_take_found` (+1 when the piece's latest →lost was a stock-take write-off from
+  available whose push applied — `foundIncrementEligible`). (h) the seed supersedes pending/failed stock-take pushes at
+  the location created ≤ its snapshot when every variant in the push was seeded or on-hand 0 (all-or-nothing);
+  stock_take_found claims ride the increment supersede. CLAUDE.md FR-17 v2 (trigger 4) + FR-21 §7 (from available)
+  amended.
+- Push job: proceeds only from pending / failed (a superseded or nothing_to_push claim used to fall through and push);
+  a late result can't flip superseded back; a late success records pushed + WARN.
+- Tests: `StockTakeFinalizeAppliesTest` (13) and `frontend/src/test/stocktakeFinalize.test.tsx` (5), all revert-checked.
+- **Blocked on approval (existing tests):** 13 tests finalize with 0 scans (StockTakeFinalizeTest sft1–sft8,
+  StockTakeOpsTest ops3, StockTakePushAfterCommitTest pc1–pc4); st1 / srt1 assert the old full-population snapshot;
+  sft1 asserts delta 2 (now 1 — damaged excluded); frontend st8 asserts '-3' (now '3').
+
 **Stock-take push enqueued after commit (2026-10-01, branch `fix/stocktake-push-after-commit` off main 6795cac;
 merged, not deployed).** `StockTakeReconciliationService.finalizeSession` and `repushSync` now enqueue
 `StockTakeShopifyPushJob` through `ShopifyInventoryService.afterCommit` (a rolled-back repush used to leave the row

@@ -1387,7 +1387,8 @@ export type StockTakeCondition = 'good' | 'damaged'
 export type StockTakeClassification =
   | 'match' | 'condition_mismatch' | 'unexpected_resurfaced' | 'out_of_scope' | 'unknown'
 export type StockTakeResolveAction = 'found' | 'lost' | 'mark_damaged'
-export type StockTakeSyncStatus = 'pending' | 'pushed' | 'failed' | 'failed_ambiguous'
+export type StockTakeSyncStatus =
+  'pending' | 'pushed' | 'failed' | 'failed_ambiguous' | 'nothing_to_push' | 'superseded_by_seed'
 
 export interface StockTakeSessionSummary {
   sessionId: string
@@ -1518,13 +1519,50 @@ export interface StockTakeVariantRollup {
   damagedCount: number
 }
 
+/** One variant of the finalize plan: what finalize will write off for it. shopifyDecrement counts
+ *  available write-offs only (damaged / on-hold ones change Traced only). */
+export interface StockTakeFinalizeVariant {
+  variantId: string
+  variantTitle: string
+  sku: string | null
+  available: number
+  damaged: number
+  onHold: number
+  alreadyWrittenOff: number
+  driftSkipped: number
+  shopifyDecrement: number
+}
+
+/** What finalize will do right now — computed by the same backend method finalize runs. */
+export interface StockTakeFinalizePlan {
+  scans: number
+  expectedFree: number
+  scannedFree: number
+  coveragePercent: number
+  writeOffs: number
+  damageCorrections: number
+  founds: number
+  foundIncrements: number
+  driftSkipped: number
+  alreadyWrittenOff: number
+  shopifyDecrement: number
+  byVariant: StockTakeFinalizeVariant[]
+  requiresTypedConfirmation: boolean
+  minCoveragePercent: number
+  maxWriteOffPercent: number
+  blockedReason: 'ZERO_SCANS' | 'ATTESTATION_REQUIRED' | null
+}
+
 export interface StockTakeReconciliation {
   sessionId: string
   status: StockTakeStatus
   completeCount: boolean
   coveragePercent: number
   buckets: Record<string, StockTakePieceRow[]>
+  /** variance = expectedOnShelf − counted: positive means pieces are short. */
   variantRollup: StockTakeVariantRollup[]
+  /** Present while the session is open. */
+  finalizePlan?: StockTakeFinalizePlan
 }
 
 export function getStockTakeReconciliation(sessionId: string) {
@@ -1597,9 +1635,15 @@ export interface FinalizeStockTakeResult {
   variantDeltas: Array<{ variant_id: string; qty: number }>
 }
 
-export function finalizeStockTake(sessionId: string) {
+/** confirmWriteOffs: the write-off count the user typed, when the finalize plan requires it. */
+export function finalizeStockTake(sessionId: string, confirmWriteOffs?: number) {
+  if (confirmWriteOffs === undefined) {
+    return request<FinalizeStockTakeResult>(
+      `/stock-takes/sessions/${sessionId}/finalize`, { method: 'POST' })
+  }
   return request<FinalizeStockTakeResult>(
-    `/stock-takes/sessions/${sessionId}/finalize`, { method: 'POST' })
+    `/stock-takes/sessions/${sessionId}/finalize`,
+    { method: 'POST', body: JSON.stringify({ confirmWriteOffs }) })
 }
 
 export function cancelStockTake(sessionId: string) {

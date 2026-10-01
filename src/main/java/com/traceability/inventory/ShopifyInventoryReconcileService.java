@@ -327,7 +327,9 @@ public class ShopifyInventoryReconcileService {
             int noop = (allVariants == null ? 0 : allVariants) - report.rows().size();
 
             int superseded = supersedeIncrementClaims(tenantId, ctx.tracedLocationId(), snapshotAt,
-                seededVariants, onHandAtSnapshot.keySet());
+                seededVariants, onHandAtSnapshot.keySet())
+                + supersedeStockTakePushes(tenantId, ctx.tracedLocationId(), snapshotAt,
+                    seededVariants, onHandAtSnapshot.keySet());
 
             log.info("Initial seed applied: tenant={} seeded={} skippedNonZero={} noop={} failed={} superseded={}",
                 tenantId, seeded, skippedNonZero, noop, failed, superseded);
@@ -378,6 +380,51 @@ public class ShopifyInventoryReconcileService {
         int n = rows == null ? 0 : rows;
         if (n > 0) {
             log.info("Initial seed superseded {} unapplied increment claim(s): tenant={} location={} snapshot={}",
+                n, tenantId, tracedLocationId, snapshotAt);
+        }
+        return n;
+    }
+
+    /**
+     * Stock-take write-off pushes (stock_take_shopify_syncs) at the Traced location that haven't
+     * applied ('pending' or 'failed' — never 'failed_ambiguous', which may have landed and needs a
+     * person) and were created at or before the on-hand snapshot: the seed pushes current on-hand,
+     * which already reflects those write-offs. Same variant rule as the increment claims — a push
+     * is superseded only when EVERY variant in its deltas was seeded in this run or had on-hand 0
+     * at the snapshot; a push that also carries a skip_nonzero / failed-seed variant is left owed
+     * (all-or-nothing: it is one Shopify mutation) and logged.
+     */
+    private int supersedeStockTakePushes(UUID tenantId, UUID tracedLocationId, java.sql.Timestamp snapshotAt,
+                                         List<UUID> seededVariants, java.util.Set<UUID> onHandPositive) {
+        List<Map<String, Object>> rows = jdbc.queryForList(
+            "SELECT id, session_id, payload::text AS payload FROM stock_take_shopify_syncs " +
+            "WHERE tenant_id = ? AND status IN ('pending', 'failed') AND created_at <= ? " +
+            "  AND payload->>'locationId' = ? FOR UPDATE",
+            tenantId, snapshotAt, tracedLocationId.toString());
+        java.util.Set<UUID> seeded = new java.util.HashSet<>(seededVariants);
+        int n = 0;
+        for (Map<String, Object> row : rows) {
+            boolean allCovered = true;
+            try {
+                var deltas = mapper.readTree((String) row.get("payload")).path("deltas").fieldNames();
+                while (deltas.hasNext()) {
+                    UUID variant = UUID.fromString(deltas.next());
+                    if (!seeded.contains(variant) && onHandPositive.contains(variant)) { allCovered = false; break; }
+                }
+            } catch (Exception e) {
+                allCovered = false;
+            }
+            if (!allCovered) {
+                log.warn("Initial seed: stock-take push for session {} carries a variant the seed did not cover — " +
+                    "left owed (tenant={})", row.get("session_id"), tenantId);
+                continue;
+            }
+            n += jdbc.update(
+                "UPDATE stock_take_shopify_syncs SET status = 'superseded_by_seed', superseded_at = now() " +
+                "WHERE id = ? AND status IN ('pending', 'failed')", row.get("id"));
+        }
+        if (n > 0) {
+            log.info("Initial seed superseded {} unapplied stock-take push(es): tenant={} location={} snapshot={}",
                 n, tenantId, tracedLocationId, snapshotAt);
         }
         return n;

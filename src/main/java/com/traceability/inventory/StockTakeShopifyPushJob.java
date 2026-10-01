@@ -68,20 +68,21 @@ public class StockTakeShopifyPushJob {
                 log.warn("stock-take push: no claim row session={} tenant={}", sessionId, tenantId);
                 return;
             }
-            if ("pushed".equals(claim.status()) || "failed_ambiguous".equals(claim.status())) {
-                // 'pushed' is terminal (success). 'failed_ambiguous' requires a HUMAN to
-                // verify against Shopify before anything re-pushes — a JobRunr auto-retry
-                // must never silently re-attempt it. 'pending' (first attempt) and 'failed'
-                // (a definitive rejection JobRunr is retrying) both fall through and proceed.
+            if (!"pending".equals(claim.status()) && !"failed".equals(claim.status())) {
+                // Only 'pending' (first attempt) and 'failed' (a definitive rejection JobRunr is
+                // retrying) proceed. 'pushed' is terminal; 'failed_ambiguous' requires a HUMAN to
+                // verify against Shopify first; 'nothing_to_push' has nothing to send;
+                // 'superseded_by_seed' (V124) — the seed already pushed current on-hand, which
+                // reflects these write-offs, so sending them would count them twice.
                 log.debug("stock-take push: claim already resolved status={} session={} — no-op",
                     claim.status(), sessionId);
                 return;
             }
             if (claim.deltasByVariant().isEmpty()) {
                 // Nothing to push — Phase A already handles the zero-delta case by marking
-                // the claim 'pushed' directly and never enqueueing this job, but guard here
-                // too in case of a stray/duplicate enqueue.
-                markResult(sessionId, tenantId, "pushed", null);
+                // the claim 'nothing_to_push' and never enqueueing this job, but guard here
+                // too in case of a stray/duplicate enqueue. pushed_at stays NULL (no real push).
+                markResult(sessionId, tenantId, "nothing_to_push", null);
                 return;
             }
 
@@ -214,16 +215,33 @@ public class StockTakeShopifyPushJob {
 
     // ── committed write ───────────────────────────────────────────────────────
 
+    /**
+     * The seed may supersede the claim while this push is in flight. A late failure never brings a
+     * superseded claim back (that would re-arm the retry the seed made redundant); a late success is
+     * recorded as the truth, with a WARN, because Shopify may now count those write-offs twice.
+     */
     private void markResult(UUID sessionId, UUID tenantId, String status, String error) {
-        tx.execute(s -> {
+        Boolean recorded = tx.execute(s -> {
+            String current = jdbc.query(
+                "SELECT status FROM stock_take_shopify_syncs WHERE session_id = ? AND tenant_id = ? FOR UPDATE",
+                rs -> rs.next() ? rs.getString(1) : null, sessionId, tenantId);
+            if ("superseded_by_seed".equals(current)) {
+                if (!"pushed".equals(status)) {
+                    log.info("stock-take push: late {} ignored — claim already superseded by the seed session={}",
+                        status, sessionId);
+                    return false;
+                }
+                log.warn("stock-take push: applied after superseded by seed — possible double count of the " +
+                    "write-offs in session {}", sessionId);
+            }
             jdbc.update(
                 "UPDATE stock_take_shopify_syncs SET status = ?, error = ?, " +
                 "  pushed_at = CASE WHEN ? = 'pushed' THEN now() ELSE pushed_at END " +
                 "WHERE session_id = ? AND tenant_id = ?",
                 status, error, status, sessionId, tenantId);
-            return null;
+            return true;
         });
-        if (!"pushed".equals(status)) {
+        if (Boolean.TRUE.equals(recorded) && !"pushed".equals(status)) {
             log.warn("stock-take push recorded as {}: session={} error={}", status, sessionId, error);
         }
     }

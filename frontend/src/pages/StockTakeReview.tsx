@@ -3,14 +3,14 @@ import { useParams, useNavigate, Link } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { Lock, ClipboardCheck } from 'lucide-react'
 import {
-  Badge, Button, Card, Spinner, Alert, Modal, EmptyState, Checkbox,
+  Badge, Button, Card, Spinner, Alert, Modal, EmptyState, Checkbox, Input,
 } from '../components/ui'
 import {
   getStockTakeReconciliation, getStockTakeSession, resolveStockTake,
   attestStockTakeComplete, finalizeStockTake, releasePieceForAdjust,
   markStockTakeSyncResolved, repushStockTakeSync,
   StockTakeCommittedError, StockTakeReconciliation, StockTakeSessionDetail,
-  StockTakePieceRow, PieceCommittedError,
+  StockTakePieceRow, PieceCommittedError, StockTakeFinalizePlan,
 } from '../api'
 
 // FR-21 Step 6.3, screen 4 + 5 — reconciliation/disposition + sync panel.
@@ -39,6 +39,9 @@ export default function StockTakeReview() {
   // action in the product that removes real sellable stock; the friction must gate, not
   // decorate. Reset on every open/close so a stale "understood" never survives a re-open.
   const [understood, setUnderstood] = useState(false)
+  // Typed confirmation (StockTakeFinalizePolicy): the user types the write-off count when the
+  // plan asks for it. Reset on every open, like the checkbox.
+  const [typedCount, setTypedCount] = useState('')
 
   const load = useCallback(async () => {
     if (!id) return
@@ -72,7 +75,12 @@ export default function StockTakeReview() {
     if (!id) return
     setFinalizing(true)
     try {
-      await finalizeStockTake(id)
+      const plan = reconciliation?.finalizePlan
+      if (plan?.requiresTypedConfirmation) {
+        await finalizeStockTake(id, Number(typedCount))
+      } else {
+        await finalizeStockTake(id)
+      }
       setShowFinalizeConfirm(false)
       await load()
     } catch (e: unknown) {
@@ -117,7 +125,7 @@ export default function StockTakeReview() {
             {t('stocktake.review.countedOfExpected', { counted: totalCounted, expected: totalExpected })}
           </p>
         </div>
-        <div className={`text-end ${totalVariance < 0 ? 'text-danger' : 'text-success'}`}>
+        <div className={`text-end ${varianceTone(totalVariance)}`}>
           <p className="text-caption uppercase tracking-widest">{t('stocktake.review.variance')}</p>
           <p className="text-h2 font-mono" data-testid="variance-headline">{totalVariance}</p>
         </div>
@@ -146,7 +154,7 @@ export default function StockTakeReview() {
                   <td className="tbl-cell text-primary">{r.totalKnown}</td>
                   <td className="tbl-cell text-primary">{r.expectedOnShelf}</td>
                   <td className="tbl-cell text-primary">{r.counted}</td>
-                  <td className={`tbl-cell font-semibold ${r.variance < 0 ? 'text-danger' : 'text-success'}`}>{r.variance}</td>
+                  <td className={`tbl-cell font-semibold ${varianceTone(r.variance)}`}>{r.variance}</td>
                   <td className="tbl-cell text-muted">{r.committed}</td>
                   <td className="tbl-cell text-muted">{r.gone}</td>
                   <td className="tbl-cell text-muted">{r.damagedCount}</td>
@@ -184,7 +192,7 @@ export default function StockTakeReview() {
           ) : (
             <>
               <p className="text-body text-success font-medium">{t('stocktake.review.attested')}</p>
-              <Button variant="destructive" onClick={() => { setUnderstood(false); setShowFinalizeConfirm(true) }}>
+              <Button variant="destructive" onClick={() => { setUnderstood(false); setTypedCount(''); setShowFinalizeConfirm(true) }}>
                 {t('stocktake.review.finalizeButton')}
               </Button>
             </>
@@ -192,47 +200,18 @@ export default function StockTakeReview() {
         </Card>
       )}
 
-      {showFinalizeConfirm && (() => {
-        const negativeRollup = rollup.filter(r => r.variance < 0)
-        return (
-          <Modal title={t('stocktake.review.finalizeConfirmTitle')} onClose={() => setShowFinalizeConfirm(false)}>
-            <div className="space-y-4">
-              <p className="text-body text-primary">
-                {t('stocktake.review.finalizeConfirmBody', {
-                  count: reconciliation.buckets.on_shelf_uncounted?.length ?? 0,
-                  variants: negativeRollup.map(r => r.variantTitle).join(', ') || t('common.na'),
-                })}
-              </p>
-              {negativeRollup.length > 0 && (
-                <div className="rounded-lg border border-line bg-elevated p-3 space-y-1.5">
-                  {negativeRollup.map(r => (
-                    <div key={r.variantId} className="flex items-center justify-between text-small">
-                      <span className="text-muted">{r.variantTitle}</span>
-                      <span className="font-mono font-semibold text-danger">{r.variance}</span>
-                    </div>
-                  ))}
-                </div>
-              )}
-              <Checkbox
-                checked={understood}
-                onChange={setUnderstood}
-                label={t('stocktake.review.finalizeUnderstand')}
-              />
-              <div className="flex gap-3 justify-end">
-                <Button variant="secondary" onClick={() => setShowFinalizeConfirm(false)}>{t('common.cancel')}</Button>
-                <Button
-                  variant="destructive"
-                  loading={finalizing}
-                  disabled={!understood}
-                  onClick={handleFinalize}
-                >
-                  {t('stocktake.review.finalizeConfirmButton')}
-                </Button>
-              </div>
-            </div>
-          </Modal>
-        )
-      })()}
+      {showFinalizeConfirm && (
+        <FinalizeModal
+          plan={reconciliation.finalizePlan}
+          understood={understood}
+          onUnderstood={setUnderstood}
+          typedCount={typedCount}
+          onTypedCount={setTypedCount}
+          finalizing={finalizing}
+          onCancel={() => setShowFinalizeConfirm(false)}
+          onFinalize={handleFinalize}
+        />
+      )}
 
       {/* Sync panel */}
       {isFinalized && <SyncPanel sessionId={id} shopifySync={session.shopifySync} onChanged={load} />}
@@ -256,7 +235,118 @@ function syncStatusKey(status: string | undefined): string {
   if (status === 'pushed') return 'syncPushed'
   if (status === 'failed') return 'syncFailed'
   if (status === 'failed_ambiguous') return 'syncAmbiguous'
+  if (status === 'nothing_to_push') return 'syncNothingToPush'
+  if (status === 'superseded_by_seed') return 'syncSuperseded'
   return 'syncNotStarted'
+}
+
+/** variance = expected − counted: positive means pieces are short. */
+function varianceTone(variance: number): string {
+  if (variance > 0) return 'text-danger'
+  if (variance < 0) return 'text-warning'
+  return 'text-success'
+}
+
+// ── Finalize modal ───────────────────────────────────────────────────────────
+// Every number here is the backend's finalize plan (StockTakeReconciliationService.plan — the
+// same method finalize runs), so what the modal says is exactly what finalize will do.
+
+function FinalizeModal({
+  plan, understood, onUnderstood, typedCount, onTypedCount, finalizing, onCancel, onFinalize,
+}: {
+  plan: StockTakeFinalizePlan | undefined
+  understood: boolean
+  onUnderstood: (v: boolean) => void
+  typedCount: string
+  onTypedCount: (v: string) => void
+  finalizing: boolean
+  onCancel: () => void
+  onFinalize: () => void
+}) {
+  const { t } = useTranslation()
+  const blocked = plan?.blockedReason ?? null
+  const typedOk = !plan?.requiresTypedConfirmation || typedCount.trim() === String(plan.writeOffs)
+  const tracedOnly = plan ? plan.byVariant.reduce((n, v) => n + v.damaged + v.onHold, 0) : 0
+
+  return (
+    <Modal title={t('stocktake.review.finalizeConfirmTitle')} onClose={onCancel}>
+      <div className="space-y-4">
+        {blocked === 'ZERO_SCANS' && (
+          <Alert tone="critical" title={t('stocktake.review.finalize.zeroScans')} />
+        )}
+        {blocked === 'ATTESTATION_REQUIRED' && (
+          <Alert tone="warning" title={t('stocktake.review.finalize.attestationRequired')} />
+        )}
+        {plan && !blocked && (
+          <>
+            <p className="text-body text-primary" data-testid="finalize-summary">
+              {t('stocktake.review.finalize.summary', { count: plan.writeOffs, shopify: plan.shopifyDecrement })}
+            </p>
+            {plan.byVariant.length > 0 && (
+              <div className="rounded-lg border border-line bg-elevated p-3 space-y-1.5" data-testid="finalize-variants">
+                {plan.byVariant.map(v => (
+                  <div key={v.variantId} className="flex items-center justify-between gap-3 text-small">
+                    <span className="text-muted">{v.variantTitle}</span>
+                    <span className="font-mono text-danger">
+                      {t('stocktake.review.finalize.variantLine', {
+                        writeOffs: v.available + v.damaged + v.onHold, shopify: v.shopifyDecrement,
+                      })}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+            {tracedOnly > 0 && (
+              <p className="text-small text-muted">{t('stocktake.review.finalize.tracedOnly', { count: tracedOnly })}</p>
+            )}
+            {plan.damageCorrections > 0 && (
+              <p className="text-small text-muted">{t('stocktake.review.finalize.damageCorrections', { count: plan.damageCorrections })}</p>
+            )}
+            {plan.founds > 0 && (
+              <p className="text-small text-muted">
+                {t('stocktake.review.finalize.founds', { count: plan.founds, shopify: plan.foundIncrements })}
+              </p>
+            )}
+            {plan.driftSkipped > 0 && (
+              <p className="text-small text-muted">{t('stocktake.review.finalize.driftSkipped', { count: plan.driftSkipped })}</p>
+            )}
+            {plan.requiresTypedConfirmation && (
+              <label className="block space-y-1.5">
+                <span className="text-small text-warning font-medium">
+                  {t('stocktake.review.finalize.typedPrompt', {
+                    coverage: plan.coveragePercent, minCoverage: plan.minCoveragePercent,
+                    maxShare: plan.maxWriteOffPercent, count: plan.writeOffs,
+                  })}
+                </span>
+                <Input
+                  className="font-mono"
+                  inputMode="numeric"
+                  value={typedCount}
+                  onChange={e => onTypedCount(e.target.value)}
+                  aria-label={t('stocktake.review.finalize.typedLabel')}
+                  data-testid="finalize-typed-count"
+                />
+              </label>
+            )}
+          </>
+        )}
+        {!blocked && (
+          <Checkbox checked={understood} onChange={onUnderstood} label={t('stocktake.review.finalizeUnderstand')} />
+        )}
+        <div className="flex gap-3 justify-end">
+          <Button variant="secondary" onClick={onCancel}>{t('common.cancel')}</Button>
+          <Button
+            variant="destructive"
+            loading={finalizing}
+            disabled={!!blocked || !understood || !typedOk}
+            onClick={onFinalize}
+          >
+            {t('stocktake.review.finalizeConfirmButton')}
+          </Button>
+        </div>
+      </div>
+    </Modal>
+  )
 }
 
 function formatDuration(openedAt: string, finalizedAt: string): string {
@@ -282,7 +372,7 @@ function CloseSummaryCard({ session, totalCounted, totalVariance }: {
       <h2 className="text-h2 text-primary">{t('stocktake.review.closeSummary.title')}</h2>
       <div className="flex gap-6 mt-1">
         <SummaryStat value={totalCounted} label={t('stocktake.review.closeSummary.counted')} />
-        <SummaryStat value={totalVariance} label={t('stocktake.review.closeSummary.variance')} tone={totalVariance < 0 ? 'danger' : 'success'} />
+        <SummaryStat value={totalVariance} label={t('stocktake.review.closeSummary.variance')} tone={totalVariance > 0 ? 'danger' : 'success'} />
         <SummaryStat value={writtenOff} label={t('stocktake.review.closeSummary.writtenOff')} tone={writtenOff > 0 ? 'danger' : 'success'} />
       </div>
       <div className="w-full max-w-xs border-t border-line mt-2 pt-3 flex flex-col gap-1.5 text-start">
@@ -585,6 +675,14 @@ function SyncPanel({ sessionId, shopifySync, onChanged }: {
 
   if (shopifySync.status === 'failed') {
     return <Alert tone="warning" title={t('stocktake.sync.failed')} />
+  }
+
+  if (shopifySync.status === 'nothing_to_push') {
+    return <Alert tone="info" title={t('stocktake.sync.nothingToPush')} />
+  }
+
+  if (shopifySync.status === 'superseded_by_seed') {
+    return <Alert tone="info" title={t('stocktake.sync.superseded')} />
   }
 
   // failed_ambiguous
