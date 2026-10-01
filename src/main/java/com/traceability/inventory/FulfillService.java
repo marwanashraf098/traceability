@@ -118,7 +118,10 @@ public class FulfillService {
     private static final String PICKABLE_LOOKBACK_CLAUSE =
         "  AND o.placed_at > now() - (? * INTERVAL '1 day') ";
 
-    private static final String PICKABLE_ORDERS_FILTER =
+    /** Package-private (visibility only, S2) — {@link PackPrintBatchService} builds the
+     *  "ready to print" candidate set on exactly this queue predicate. Same binding rules:
+     *  alias orders as {@code o}, bind (tenantId, lookbackDays) first. */
+    static final String PICKABLE_ORDERS_FILTER =
         PICKABLE_SHIPMENT_GATE + PICKABLE_LOOKBACK_CLAUSE;
 
     /**
@@ -138,7 +141,17 @@ public class FulfillService {
             "           SELECT COUNT(*) FROM allocations a " +
             "           JOIN order_items oi2 ON oi2.id = a.order_item_id " +
             "           WHERE oi2.order_id = o.id AND a.status IN ('active','packed') " +
-            "       ), 0) AS scanned_units " +
+            "       ), 0) AS scanned_units, " +
+            // S2: has the order's latest forward shipment been in any print batch? Same
+            // latest-forward-shipment rule as the gate (created_at DESC, id DESC).
+            "       EXISTS ( " +
+            "           SELECT 1 FROM pack_print_batch_items bi " +
+            "           WHERE bi.tenant_id = o.tenant_id AND bi.shipment_id = ( " +
+            "               SELECT s2.id FROM shipments s2 " +
+            "               WHERE s2.order_id = o.id AND s2.tenant_id = o.tenant_id " +
+            "                 AND s2.shipment_leg = 'forward' " +
+            "               ORDER BY s2.created_at DESC, s2.id DESC LIMIT 1) " +
+            "       ) AS awb_printed " +
             "FROM orders o " +
             "LEFT JOIN order_items oi ON oi.order_id = o.id " +
             // Badge derivation only (FR-EXCHANGE Phase 3/4 §0e) — no new orders column.
@@ -233,17 +246,30 @@ public class FulfillService {
      */
     @Transactional(readOnly = true)
     public GatherListResponse getGatherList(Integer limit) {
+        return getGatherList(limit, null);
+    }
+
+    /**
+     * S2: {@code batchId} (optional) narrows the same pickable set to the orders printed in
+     * that print batch — the pick list for one batch. RLS hides another tenant's batch, so a
+     * foreign or unknown id yields an empty list. Null = unscoped, unchanged.
+     */
+    @Transactional(readOnly = true)
+    public GatherListResponse getGatherList(Integer limit, UUID batchId) {
         UUID tenantId = TenantContext.require();
 
-        List<Map<String, Object>> eligibleOrders = limit != null
-            ? jdbc.queryForList(
-                "SELECT o.id FROM orders o " + PICKABLE_ORDERS_FILTER +
-                "ORDER BY o.created_at ASC LIMIT ?",
-                tenantId, lookbackDays, limit)
-            : jdbc.queryForList(
-                "SELECT o.id FROM orders o " + PICKABLE_ORDERS_FILTER +
-                "ORDER BY o.created_at ASC",
-                tenantId, lookbackDays);
+        String batchClause = batchId != null
+            ? "  AND o.id IN (SELECT bi.order_id FROM pack_print_batch_items bi " +
+              "               WHERE bi.batch_id = ? AND bi.tenant_id = o.tenant_id) "
+            : "";
+        List<Object> params = new ArrayList<>(List.of(tenantId, lookbackDays));
+        if (batchId != null) params.add(batchId);
+        if (limit != null)   params.add(limit);
+
+        List<Map<String, Object>> eligibleOrders = jdbc.queryForList(
+            "SELECT o.id FROM orders o " + PICKABLE_ORDERS_FILTER + batchClause +
+            "ORDER BY o.created_at ASC" + (limit != null ? " LIMIT ?" : ""),
+            params.toArray());
 
         if (eligibleOrders.isEmpty()) {
             return new GatherListResponse(Instant.now(), 0, List.of());
@@ -321,7 +347,12 @@ public class FulfillService {
             "       (s.id IS NOT NULL AND EXISTS (" +
             "           SELECT 1 FROM courier_accounts ca " +
             "           WHERE ca.tenant_id = o.tenant_id AND ca.provider = 'bosta' " +
-            "             AND ca.status = 'active')) AS shipment_has_courier " +
+            "             AND ca.status = 'active')) AS shipment_has_courier, " +
+            // S2: the forward shipment's waybill was printed in a print batch — PickScreen
+            // then doesn't ask for a reprint before Complete.
+            "       (s.id IS NOT NULL AND EXISTS (" +
+            "           SELECT 1 FROM pack_print_batch_items bi " +
+            "           WHERE bi.shipment_id = s.id AND bi.tenant_id = o.tenant_id)) AS \"awbPrinted\" " +
             "FROM orders o " +
             "LEFT JOIN shipments s ON s.order_id = o.id AND s.tenant_id = o.tenant_id AND s.shipment_leg = 'forward' " +
             // Badge derivation only (FR-EXCHANGE Phase 3/4 §0e) — no new orders column.

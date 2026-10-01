@@ -4,6 +4,42 @@
 
 ## Current state
 
+**Pick & Pack S2 — batch waybill printing, queue mode (2026-10-01, branch `feat/pack-print-batches`, rebased on main
+abf62ba; pushed, not merged, not deployed).** Mockup `design/pick-pack-waybill-mockup/PrintDialog.html`.
+- **V125** `pack_print_batches` (batch_no per tenant, paper, sort, scope, waybill_count, order_guaranteed) +
+  `pack_print_batch_items` (order, shipment, tracking, position). Tenant RLS (NULLIF) + FORCE, app_user SELECT/INSERT
+  only. Item FKs to orders/shipments are ON DELETE CASCADE (prod never deletes either; keeps DemoSeeder.reseed and
+  test cleanups working without editing DemoSeeder). Rebased onto main abf62ba (V124 stock-take finalize already
+  there), so V125 follows it in order.
+- **POST /api/v1/fulfill/print-batches** `{scope new|all, paper A6|A4, sort oldest|newest}` → JSON `{batchId, batchNo,
+  waybillCount, candidateCount, orderGuaranteed, pdfBase64 (one merged PDF), excluded[], message}`;
+  **GET …/print-batches/options** → `{defaultPaper}`. `isAuthenticated()` (all roles, as every Fulfill endpoint).
+  `PackPrintBatchService` (no tx) → `PackPrintBatchStore.candidates` (read tx) → `BostaAwbService.printAwbDetailed`
+  (≤50/call, sorted order) → `WaybillPdfAssembler` → `PackPrintBatchStore.record` (write tx).
+- **Candidates** = `PICKABLE_ORDERS_FILTER` (made package-private, visibility only) − self-pickup, latest forward
+  shipment 'created'; 'new' = no batch item for that shipment. Sort created_at then id, same direction.
+- **Finding 4 fixed:** `printAwbDetailed` sends tracking numbers in the caller's order (rows re-ordered in Java after the
+  IN load); `printAwb()` keeps its exact result contract on top of it. **Finding 3:** batch path merges every chunk
+  PDF server-side (PickScreen's single-order path still opens `pdfBase64List[0]`, always 1 shipment).
+- **Page order:** per-page text → batch tracking numbers (digit runs, Arabic-Indic folded, spaced groups joined). All
+  pages map 1:1 → pages reordered to batch order, `orderGuaranteed=true`; else Bosta's order kept, false. Logged
+  without PII. Bosta's own ordering still unverified live (/tmp/awb-order-test script).
+- **batch_no:** per-tenant `pg_advisory_xact_lock("pack_print_batch:"+tenant)` around MAX+1, write tx only;
+  UNIQUE(tenant_id, batch_no) backstop. Two simultaneous "new" prints can still both print the same waybills (no lock
+  across Bosta calls) — two batches, both recorded.
+- **Gotcha:** `TenantContext.runAs` CLEARS the context when it finishes (doesn't restore). Anything that runs after a
+  `BostaAwbService` call on the same thread has no tenant — `PackPrintBatchService` re-wraps its write in runAs.
+- **Single-order gate:** GET /fulfill/{id} `awbPrinted`; PickScreen sets `awbPrintedOnce` from it (new effect, nothing
+  marked touched). Queue rows carry `awb_printed` → header "Waybills: N printed · M not printed yet" with no extra
+  request (keeps fulfill.test.tsx's sequential mocks in sync). Gather list `?batchId=` (page `?batch=`).
+- **UI:** Print waybills button + dialog (Modal/Radio/SegmentedControl/Checkbox/Alert), merged PDF opened in a tab
+  pre-opened on click; pick list = "Open pick list" button in the result (a second automatic tab is popup-blocked).
+- **Tests:** `PackPrintBatchTest` (13), revert-checked: DB send order → 2 RED; no advisory lock → concurrency RED;
+  never reorder → reorder RED. RlsCoverageTest + options test (own A6, other tenant's A6 never read). Frontend
+  `fulfillPrintBatches.test.tsx` (4; awbPrinted effect revert → RED). Count bumps (on top of V124's):
+  MigrationSmokeTest 123→124, NotTracedBackfillTest 68→69.
+  Full suite (rebased on abf62ba): 1,880 run, 4 skipped, only the 2 known reds (ShopifyMagicLinkTest.
+  provisionWiring_path2NewInstall_…, ExchangeBackfillTest). Vitest 577/577, tsc + build clean.
 **Stock-take finalize applies the count (2026-10-01, branch `feature/stocktake-finalize-applies` off main 8f53628;
 merged, not deployed).**
 - Decisions (Marawan, 2026-10-01): (a) finalize applies the count in one transaction under the session lock — unscanned

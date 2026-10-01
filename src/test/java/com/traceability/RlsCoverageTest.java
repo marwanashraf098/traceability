@@ -90,6 +90,7 @@ class RlsCoverageTest {
             "/api/v1/orders/daily-counts",
             "/api/v1/lookup",
             "/api/v1/fulfill/gather",
+            "/api/v1/fulfill/print-batches/options",
             "/api/v1/catalog",
             "/api/v1/locations/shopify-junk-report",
             "/api/v1/shopify/inventory/reconcile",
@@ -918,6 +919,32 @@ class RlsCoverageTest {
         ResponseEntity<Map> resp = get("/api/v1/lookup?q=PC-" + pieceId, Map.class);
         assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.OK);
         assertThat(resp.getBody().get("type")).isEqualTo("piece");
+    }
+
+    @Test
+    void fulfillPrintBatchOptions_readsOwnTenantsPaper_neverAnotherTenants() {
+        // Pick & Pack S2: the print dialog's default paper comes from THIS tenant's Bosta
+        // awb_format. The other tenant has A6 too, so once our own account is gone the answer
+        // must fall back to A4 — proving the other tenant's row is never read.
+        UUID otherTenant = UUID.randomUUID();
+        jdbc.update("INSERT INTO tenants (id, name) VALUES (?, 'Cov Print Other')", otherTenant);
+        UUID ownAccount = UUID.randomUUID(), otherAccount = UUID.randomUUID();
+        jdbc.update("INSERT INTO courier_accounts (id, tenant_id, provider, api_key_encrypted, webhook_secret, status, awb_format) " +
+                    "VALUES (?, ?, 'bosta', ?, 'cov-print-own', 'active', 'A6')", ownAccount, tenantId, encryption.encrypt("cov-print-own"));
+        jdbc.update("INSERT INTO courier_accounts (id, tenant_id, provider, api_key_encrypted, webhook_secret, status, awb_format) " +
+                    "VALUES (?, ?, 'bosta', ?, 'cov-print-other', 'active', 'A6')", otherAccount, otherTenant, encryption.encrypt("cov-print-other"));
+        try {
+            ResponseEntity<Map> own = get("/api/v1/fulfill/print-batches/options", Map.class);
+            assertThat(own.getStatusCode()).isEqualTo(HttpStatus.OK);
+            assertThat(own.getBody().get("defaultPaper")).isEqualTo("A6");
+
+            jdbc.update("DELETE FROM courier_accounts WHERE id = ?", ownAccount);
+            ResponseEntity<Map> none = get("/api/v1/fulfill/print-batches/options", Map.class);
+            assertThat(none.getBody().get("defaultPaper")).isEqualTo("A4");
+        } finally {
+            jdbc.update("DELETE FROM courier_accounts WHERE id IN (?, ?)", ownAccount, otherAccount);
+            jdbc.update("DELETE FROM tenants WHERE id = ?", otherTenant);
+        }
     }
 
     @Test

@@ -46,8 +46,9 @@ public class FulfillController {
     @GetMapping("/gather")
     @PreAuthorize("isAuthenticated()")
     public FulfillService.GatherListResponse gather(
-            @RequestParam(required = false) Integer limit) {
-        return svc.getGatherList(limit);
+            @RequestParam(required = false) Integer limit,
+            @RequestParam(required = false) UUID batchId) {
+        return svc.getGatherList(limit, batchId);
     }
 
     @GetMapping("/{orderId}")

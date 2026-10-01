@@ -3,10 +3,11 @@ import { useNavigate, Link } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import {
   X, ArrowLeft, ArrowRight, CheckCircle2, AlertTriangle, ScanLine,
-  Lock, Layers, RefreshCw, ChevronRight,
+  Lock, Layers, RefreshCw, ChevronRight, Printer,
 } from 'lucide-react'
 import { Badge, Button, Skeleton, EmptyState, ProductThumb } from '../components/ui'
 import Layout from '../components/Layout'
+import PrintWaybillsDialog from './fulfill/PrintWaybillsDialog'
 import { getAccessToken, clearAccessToken } from '../auth'
 import { TransferCommandError, getTenantIdFromToken } from '../api'
 import { DEMO_TENANT_ID } from '../demoConstants'
@@ -50,6 +51,8 @@ interface QueueOrder {
   locked_at: string | null
   is_self_pickup: boolean
   is_exchange: boolean
+  /** S2 — the order's latest forward shipment is in a print batch. */
+  awb_printed?: boolean
 }
 
 interface AllocatedPiece {
@@ -87,6 +90,8 @@ interface OrderDetail {
   shipment_id: string | null
   tracking_number: string | null
   shipment_has_courier: boolean
+  /** S2 — this shipment's waybill was printed in a print batch. */
+  awbPrinted?: boolean
   items: OrderItem[]
 }
 
@@ -554,6 +559,7 @@ function QueueView({
 }) {
   const { t } = useTranslation()
   const navigate = useNavigate()
+  const [showPrint, setShowPrint] = useState(false)
 
   // Empty-queue hint: open orders held out of the queue ONLY because no Bosta waybill
   // exists yet (PICKABLE_ORDERS_FILTER requires a 'created' forward shipment). Fetched
@@ -580,6 +586,9 @@ function QueueView({
 
   const pickQueue     = queue.filter(o => o.status !== 'self_pickup_pending')
   const handoverQueue = queue.filter(o => o.status === 'self_pickup_pending')
+  // S2 — waybills that can be printed: the queue minus self-pickup (same set the server prints).
+  const printable     = queue.filter(o => !o.is_self_pickup && o.status !== 'self_pickup_pending')
+  const printedCount  = printable.filter(o => o.awb_printed).length
 
   function paymentPill(order: QueueOrder) {
     if (order.payment_method === 'cod' && order.cod_amount) {
@@ -615,8 +624,22 @@ function QueueView({
   return (
     <div data-testid="fulfill-queue">
       <div className="flex items-center justify-between mb-6">
-        <h1 className="text-h1 text-primary">{t('fulfill.title')}</h1>
+        <div>
+          <h1 className="text-h1 text-primary">{t('fulfill.title')}</h1>
+          {printable.length > 0 && (
+            <p className="text-small text-muted mt-1" data-testid="waybill-status-line">
+              {t('fulfill.printBatch.statusLine', {
+                printed: printedCount, notPrinted: printable.length - printedCount,
+              })}
+            </p>
+          )}
+        </div>
         <div className="flex items-center gap-3">
+          {printable.length > 0 && (
+            <Button size="sm" iconStart={Printer} onClick={() => setShowPrint(true)}>
+              {t('fulfill.printBatch.button')}
+            </Button>
+          )}
           <Button variant="secondary" size="sm" iconStart={Layers} onClick={() => navigate('/fulfill/gather')}>
             {t('fulfill.gatherBtn')}
           </Button>
@@ -723,6 +746,14 @@ function QueueView({
             })}
           </div>
         </>
+      )}
+
+      {showPrint && (
+        <PrintWaybillsDialog
+          newCount={printable.length - printedCount}
+          allCount={printable.length}
+          onClose={printed => { setShowPrint(false); if (printed) loadQueue() }}
+        />
       )}
     </div>
   )
@@ -916,6 +947,10 @@ function PickScreen({
   }, [orderId])
 
   useEffect(() => { loadOrder() }, [loadOrder])
+
+  // S2 — a waybill already printed in a print batch counts as printed: Complete doesn't ask
+  // for a reprint. Only ever turns the flag on.
+  useEffect(() => { if (order?.awbPrinted) setAwbPrintedOnce(true) }, [order?.awbPrinted])
 
   // SAFETY-CRITICAL — HID refocus: re-focuses scan input on any click; do not modify
   useEffect(() => {

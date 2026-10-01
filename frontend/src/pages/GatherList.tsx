@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { RefreshCw, Printer, ArrowLeft, ArrowRight } from 'lucide-react'
 import { getGatherList, GatherListResponse } from '../api'
@@ -9,6 +9,9 @@ export default function GatherList() {
   const { t, i18n } = useTranslation()
   const navigate = useNavigate()
   const BackIcon = i18n.language === 'ar' ? ArrowRight : ArrowLeft
+  // S2 — ?batch=<id> narrows the list to one print batch's orders.
+  const [searchParams] = useSearchParams()
+  const batchId = searchParams.get('batch') ?? undefined
 
   const [data, setData] = useState<GatherListResponse | null>(null)
   const [loading, setLoading] = useState(true)
@@ -18,14 +21,14 @@ export default function GatherList() {
     setLoading(true)
     setError('')
     try {
-      const resp = await getGatherList()
+      const resp = await getGatherList(undefined, batchId)
       setData(resp)
     } catch {
       setError(t('common.error'))
     } finally {
       setLoading(false)
     }
-  }, [t])
+  }, [t, batchId])
 
   useEffect(() => { load() }, [load])
 
@@ -101,6 +104,7 @@ export default function GatherList() {
 
       {data && (
         <p className="text-small text-muted mb-6">
+          {batchId && <>{t('fulfill.printBatch.pickListForBatch')}{' · '}</>}
           {t('fulfill.gather.subtitle', { count: data.orderCount })}
           {' · '}
           {t('fulfill.gather.generatedAt', { time: new Date(data.generatedAt).toLocaleTimeString() })}

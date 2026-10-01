@@ -79,13 +79,59 @@ public class BostaAwbService {
     ) {}
 
     /**
+     * One Bosta mass-awb call: the tracking numbers sent (in send order) and what came back —
+     * exactly one of {@code pdf} (inline PDF), {@code emailMessage} (Bosta went to its
+     * email-instead-of-PDF path) or {@code rejectedReason} (Bosta rejected the chunk).
+     */
+    public record AwbChunk(List<String> trackingNumbers, byte[] pdf,
+                           String emailMessage, String rejectedReason) {}
+
+    /**
+     * Per-chunk result of a print request. {@code exclusions} are the shipments the
+     * pre-filter kept away from Bosta (unlinked, terminal state, CRP), in input order.
+     * {@code format} is the paper actually requested (override or the account default).
+     */
+    public record AwbDetailedResult(List<AwbChunk> chunks, List<AwbException> exclusions,
+                                    String format) {}
+
+    /**
      * Print AWB labels for the given shipment IDs.
      *
      * formatOverride / langOverride: if null, falls back to tenant's awb_format / awb_lang
-     * from courier_accounts.
+     * from courier_accounts. Contract unchanged by S2; it is now built on
+     * {@link #printAwbDetailed}, so tracking numbers reach Bosta in the order the ids were
+     * given (previously database order).
      */
     public AwbBatchResult printAwb(UUID tenantId, List<UUID> shipmentIds,
                                     String formatOverride, String langOverride) {
+        AwbDetailedResult detailed = printAwbDetailed(tenantId, shipmentIds, formatOverride, langOverride);
+
+        List<String>       pdfBase64List = new ArrayList<>();
+        List<AwbException> exceptions    = new ArrayList<>(detailed.exclusions());
+        String             emailMessage  = null;
+        for (AwbChunk chunk : detailed.chunks()) {
+            if (chunk.pdf() != null) {
+                pdfBase64List.add(Base64.getEncoder().encodeToString(chunk.pdf()));
+            } else if (chunk.emailMessage() != null) {
+                emailMessage = chunk.emailMessage();
+            } else {
+                for (String tn : chunk.trackingNumbers()) {
+                    exceptions.add(new AwbException(tn, chunk.rejectedReason()));
+                }
+            }
+        }
+        return new AwbBatchResult(pdfBase64List, emailMessage, exceptions);
+    }
+
+    /**
+     * Print AWB labels for the given shipment IDs, keeping every chunk's own result.
+     *
+     * Send order: tracking numbers go to Bosta in the order {@code shipmentIds} lists them
+     * (duplicates dropped, ids not visible to this tenant skipped), chunked by
+     * {@link #BATCH_SIZE}. Bosta's own page order inside a returned PDF is not assumed.
+     */
+    public AwbDetailedResult printAwbDetailed(UUID tenantId, List<UUID> shipmentIds,
+                                              String formatOverride, String langOverride) {
 
         // 1. Load tenant's API key + label settings
         Map<String, Object> account = TenantContext.runAs(tenantId, () ->
@@ -114,13 +160,13 @@ public class BostaAwbService {
         if (lang   == null) lang   = "ar";
 
         // 2. Load shipments (RLS enforced by TenantContext)
-        final List<UUID> ids = shipmentIds;
-        if (ids.isEmpty()) return new AwbBatchResult(List.of(), null, List.of());
+        final List<UUID> ids = new ArrayList<>(new LinkedHashSet<>(shipmentIds));
+        if (ids.isEmpty()) return new AwbDetailedResult(List.of(), List.of(), format);
 
         String placeholders = ids.stream().map(id -> "?::uuid").collect(Collectors.joining(","));
         Object[] params = Stream.concat(ids.stream(), Stream.of(tenantId)).toArray();
 
-        List<Map<String, Object>> rows = TenantContext.runAs(tenantId, () ->
+        List<Map<String, Object>> loaded = TenantContext.runAs(tenantId, () ->
             tx.execute(s -> jdbc.queryForList(
                 // raw->>'type' would return the JSON object as text — never "CRP".
                 // Extract the numeric code instead: (raw->'type'->>'code')::int
@@ -129,9 +175,16 @@ public class BostaAwbService {
                 "FROM shipments WHERE id IN (" + placeholders + ") AND tenant_id = ?",
                 params)));
 
+        // IN (...) returns rows in no particular order — put them back in the caller's order
+        // so the send order to Bosta is the order asked for (Step 0 finding 4).
+        Map<UUID, Map<String, Object>> byId = new HashMap<>();
+        for (Map<String, Object> row : loaded) byId.put((UUID) row.get("id"), row);
+        List<Map<String, Object>> rows = ids.stream()
+            .map(byId::get).filter(Objects::nonNull).toList();
+
         // 3. Pre-filter: separate printable from non-printable
         List<String>       printable  = new ArrayList<>();
-        List<AwbException> exceptions = new ArrayList<>();
+        List<AwbException> exclusions = new ArrayList<>();
 
         // Build an id→tracking map for Bosta-rejection lookups later
         Map<String, UUID> trackingToId = new HashMap<>();
@@ -155,7 +208,7 @@ public class BostaAwbService {
             }
 
             if (exclusionReason != null) {
-                exceptions.add(new AwbException(tracking, exclusionReason));
+                exclusions.add(new AwbException(tracking, exclusionReason));
                 markFailed(tenantId, id, exclusionReason);
                 log.debug("AWB excluded: tracking={} reason={}", tracking, exclusionReason);
             } else if (tracking != null) {
@@ -164,23 +217,18 @@ public class BostaAwbService {
             }
         }
 
-        if (printable.isEmpty()) {
-            return new AwbBatchResult(List.of(), null, exceptions);
-        }
-
         // 4. Batch into ≤50 chunks, call Bosta for each
-        List<String> pdfBase64List = new ArrayList<>();
-        String emailMessage = null;
+        List<AwbChunk> chunks = new ArrayList<>();
 
         for (int i = 0; i < printable.size(); i += BATCH_SIZE) {
-            List<String> chunk = printable.subList(i, Math.min(i + BATCH_SIZE, printable.size()));
+            List<String> chunk = List.copyOf(printable.subList(i, Math.min(i + BATCH_SIZE, printable.size())));
             try {
                 AwbPrintResult result = bostaGateway.printMassAwb(apiKey, chunk, format, lang);
                 if (result.isInline()) {
-                    pdfBase64List.add(Base64.getEncoder().encodeToString(result.pdfBytes()));
+                    chunks.add(new AwbChunk(chunk, result.pdfBytes(), null, null));
                 } else {
                     // Bosta went async — surface message, treat chunk as un-printable
-                    emailMessage = result.emailMessage();
+                    chunks.add(new AwbChunk(chunk, null, result.emailMessage(), null));
                     log.info("mass-awb returned email-path for chunk of {} trackings", chunk.size());
                 }
             } catch (BostaException e) {
@@ -191,15 +239,15 @@ public class BostaAwbService {
                 //   hits Bosta and we can reliably extract the rejection cause code.
                 String rejectedReason = "BOSTA_REJECTED:" + truncate(e.getMessage(), 120);
                 log.warn("mass-awb rejected chunk of {} trackings: {}", chunk.size(), e.getMessage());
+                chunks.add(new AwbChunk(chunk, null, null, rejectedReason));
                 for (String tn : chunk) {
-                    exceptions.add(new AwbException(tn, rejectedReason));
                     UUID sid = trackingToId.get(tn);
                     if (sid != null) markFailed(tenantId, sid, rejectedReason);
                 }
             }
         }
 
-        return new AwbBatchResult(pdfBase64List, emailMessage, exceptions);
+        return new AwbDetailedResult(chunks, exclusions, format);
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────

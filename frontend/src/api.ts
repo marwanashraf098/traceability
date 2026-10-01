@@ -332,8 +332,12 @@ export interface GatherListResponse {
   rows: GatherRow[]
 }
 
-export function getGatherList(limit?: number) {
-  return request<GatherListResponse>(`/fulfill/gather${limit ? `?limit=${limit}` : ''}`)
+export function getGatherList(limit?: number, batchId?: string) {
+  const params = new URLSearchParams()
+  if (limit) params.set('limit', String(limit))
+  if (batchId) params.set('batchId', batchId)
+  const qs = params.toString()
+  return request<GatherListResponse>(`/fulfill/gather${qs ? `?${qs}` : ''}`)
 }
 
 export interface PieceCounts {
@@ -1713,6 +1717,42 @@ async function transferCommandRequest<T>(path: string, opts: RequestInit = {}): 
   }
   if (res.status === 204 || res.headers.get('content-length') === '0') return null as T
   return res.json()
+}
+
+// ── Pick & Pack S2: batch waybill printing ────────────────────────────────────
+
+export type PrintScope = 'new' | 'all'
+export type PrintPaper = 'A6' | 'A4'
+export type PrintSort = 'oldest' | 'newest'
+
+export interface PrintBatchExcluded {
+  orderNumber: string | null
+  trackingNumber: string
+  reason: string
+}
+
+export interface PrintBatchResult {
+  batchId: string | null
+  batchNo: number | null
+  waybillCount: number
+  candidateCount: number
+  orderGuaranteed: boolean
+  /** One merged PDF, base64 — null when nothing was printed. */
+  pdfBase64: string | null
+  excluded: PrintBatchExcluded[]
+  message: string | null
+}
+
+export function getPrintBatchOptions() {
+  return request<{ defaultPaper: PrintPaper }>('/fulfill/print-batches/options')
+}
+
+/** Typed {code, message_en, message_ar} failures (e.g. no Bosta account) throw TransferCommandError. */
+export function printWaybillBatch(body: { scope: PrintScope; paper: PrintPaper; sort: PrintSort }) {
+  return transferCommandRequest<PrintBatchResult>('/fulfill/print-batches', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  })
 }
 
 export type TransferStatus = 'preparing' | 'sent' | 'reconciling' | 'closed' | 'cancelled'
