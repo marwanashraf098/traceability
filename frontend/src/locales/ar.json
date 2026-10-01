@@ -720,6 +720,112 @@
       "done": "تم",
       "error": "تعذّرت طباعة البوالص. حاول مرة أخرى.",
       "pickListForBatch": "قائمة التجميع لهذه الدفعة"
+    },
+    "waybill": {
+      "modeChip": "وضع مسح البوليصة",
+      "changeInSettings": "التغيير من الإعدادات › التجميع",
+      "startSession": "ابدأ جلسة تغليف",
+      "resumeSession": "تابع جلسة التغليف",
+      "tiles": {
+        "ready": "جاهز للتغليف",
+        "printed": "بوليصة مطبوعة",
+        "notPrinted": "لم تُطبع بعد",
+        "packedToday": "غُلّف اليوم"
+      },
+      "selfPickup_one": "طلبات الاستلام من المتجر ({{count}})",
+      "selfPickup_other": "طلبات الاستلام من المتجر ({{count}})",
+      "selfPickupHint": "بدون بوليصة — تُجهَّز من قائمة الطلبات",
+      "backToWaybill": "العودة لتغليف البوالص",
+      "session": {
+        "title": "جلسة التغليف",
+        "mode": "مسح البوليصة",
+        "packed": "{{count}} مغلّف",
+        "setAside": "{{count}} جانباً",
+        "left": "{{count}} متبقٍ في الدفعات",
+        "end": "إنهاء الجلسة",
+        "endDisabled": "أكمل الطلب المفتوح أو ضعه جانباً أولاً",
+        "scanWaybill": "امسح بوليصة",
+        "scanWaybillHint": "امسح باركود بوليصة Bosta لفتح طلبها.",
+        "waybillPlaceholder": "باركود البوليصة",
+        "piecePlaceholder": "باركود القطعة",
+        "packedFlash": "تم تغليف الطلب {{number}}",
+        "packedFlashDetail_one": "{{customer}} · قطعة واحدة · جاهز لاستلام Bosta",
+        "packedFlashDetail_other": "{{customer}} · {{count}} قطع · جاهز لاستلام Bosta",
+        "thisSession": "هذه الجلسة",
+        "nothingYet": "لم يُغلَّف شيء بعد في هذه الجلسة.",
+        "outcome": {
+          "packed": "مغلّف",
+          "set_aside": "جانباً",
+          "rejected": "مرفوض"
+        },
+        "order": "الطلب",
+        "waybill": "البوليصة {{tracking}}",
+        "courier": {
+          "delivery": "شركة الشحن Bosta · توصيل",
+          "exchange": "شركة الشحن Bosta · استبدال",
+          "return_to_origin": "شركة الشحن Bosta · مرتجع للمرسل"
+        },
+        "cod": "الدفع عند الاستلام {{amount}} جنيه",
+        "prepaid": "مدفوع مسبقاً",
+        "batch": "الدفعة رقم {{no}} · طُبعت {{time}}",
+        "notInBatch": "ليست في دفعة طباعة",
+        "setAsideButton": "ضع هذا الطلب جانباً",
+        "scanPieces": "امسح القطع",
+        "scanPiecesHint": "يُغلق الطلب تلقائياً عند مسح آخر قطعة.",
+        "progress": "{{done}} من {{total}}",
+        "more_one": "{{count}} متبقية",
+        "more_other": "{{count}} متبقية",
+        "lastScan": "آخر مسح",
+        "undo": "تراجع",
+        "loading": "جارٍ بدء جلسة التغليف…",
+        "error": "حدث خطأ. حاول مرة أخرى."
+      },
+      "pieceReject": {
+        "WAYBILL_WHILE_PACKING": "هذه بوليصة. أكمل هذا الطلب أو ضعه جانباً أولاً.",
+        "ALREADY_SHIPPED": "شحنة هذا الطلب تحركت بالفعل — لا يمكن تغليفه",
+        "CLAIMED_BY_OTHER": "موظف آخر يجهّز هذا الطلب الآن"
+      },
+      "rejected": {
+        "OPEN": "",
+        "CANCELLED": "لا تغلّف هذا الطلب",
+        "ALREADY_PACKED": "مغلّف بالفعل",
+        "CLAIMED_BY_OTHER": "شخص آخر يجهّزه",
+        "RETURN_WAYBILL": "ليست بوليصة طلب",
+        "EXCHANGE_NOT_MAPPED": "الاستبدال غير جاهز بعد",
+        "TOO_OLD": "الطلب أقدم من أن يُغلَّف هنا",
+        "NOT_FOUND": "البوليصة غير موجودة",
+        "NOT_A_WAYBILL": "هذه قطعة وليست بوليصة",
+        "ON_HOLD": "الطلب موقوف",
+        "NOT_PACKABLE": "لا يمكن تغليف هذه البوليصة",
+        "cancelledAt": "أُلغي الساعة {{time}}",
+        "packedAt": "غُلّف الساعة {{time}}",
+        "ok": "حسناً، امسح البوليصة التالية",
+        "waybill": "البوليصة {{tracking}}"
+      },
+      "setAside": {
+        "title": "وضع الطلب {{number}} جانباً؟",
+        "body_one": "القطعة الممسوحة تعود إلى المخزون. ضع البوليصة جانباً — سيرى المدير هذا الطلب في «مطبوع ولم يُغلَّف».",
+        "body_other": "القطع الممسوحة ({{count}}) تعود إلى المخزون. ضع البوليصة جانباً — سيرى المدير هذا الطلب في «مطبوع ولم يُغلَّف».",
+        "bodyNone": "ضع البوليصة جانباً — سيرى المدير هذا الطلب في «مطبوع ولم يُغلَّف».",
+        "reason": "السبب",
+        "reasons": {
+          "piece_missing": "القطعة غير موجودة على الرف",
+          "damaged_piece": "قطعة تالفة",
+          "waybill_damaged": "البوليصة تالفة أو غير مقروءة",
+          "other": "أخرى"
+        },
+        "keep": "تابع التغليف",
+        "confirm": "ضعه جانباً"
+      },
+      "completeFailed": {
+        "title": "لم يُغلق الطلب",
+        "WAYBILL_NOT_ON_ORDER": "البوليصة التي فتحت هذا الطلب لم تعد بوليصته. سلّمها للمدير أو ضع الطلب جانباً.",
+        "COMPLETE_REFUSED": "لا يمكن إغلاق الطلب: {{message}}",
+        "AWB_MISMATCH": "هذه البوليصة لا تطابق شحنة الطلب. سلّمها للمدير.",
+        "NOT_LINKED": "غُلّف الطلب لكن تعذّر ربطه ببوليصته. حاول مرة أخرى.",
+        "COMPLETE_ERROR": "حدث خطأ أثناء إغلاق الطلب. حاول مرة أخرى.",
+        "retry": "حاول مرة أخرى"
+      }
     }
   },
   "lookup": {

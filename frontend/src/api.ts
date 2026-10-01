@@ -1766,6 +1766,144 @@ export function printWaybillBatch(body: { scope: PrintScope; paper: PrintPaper; 
   })
 }
 
+// ── Pick & Pack S3: waybill pack sessions ─────────────────────────────────────
+
+export interface PackOrderLine {
+  id: string
+  variant_id: string
+  sku: string | null
+  variant_title: string
+  product_title: string
+  imageUrl: string | null
+  quantity: number
+  allocated: number
+  allocatedPieces: Array<{ piece_id: string; barcode: string; allocation_status: string; piece_status: string }>
+}
+
+/** GET /fulfill/{id}'s shape plus area / courierType / batch. */
+export interface PackOrderCard {
+  id: string
+  number: string | null
+  customer_name: string | null
+  payment_method: string | null
+  cod_amount: string | number | null
+  tracking_number: string | null
+  area: string | null
+  courierType: 'delivery' | 'exchange' | 'return_to_origin'
+  batchNo: number | null
+  batchPrintedAt: string | null
+  items: PackOrderLine[]
+}
+
+export interface PackSessionRecent {
+  orderId: string | null
+  orderNumber: string | null
+  customerName: string | null
+  outcome: 'packed' | 'set_aside' | 'rejected'
+  reason: string | null
+  at: string
+}
+
+export interface PackSessionView {
+  id: string
+  mode: PickPackMode
+  status: 'open' | 'ended'
+  startedAt: string
+  workerName: string | null
+  counters: { packed: number; setAside: number; rejected: number; left: number }
+  recent: PackSessionRecent[]
+  openOrder: PackOrderCard | null
+}
+
+export interface WaybillOutcome {
+  result: 'opened' | 'rejected'
+  order: PackOrderCard | null
+  code: string | null
+  subReason: string | null
+  orderNumber: string | null
+  who: string | null
+  at: string | null
+  state: string | null
+  messageEn: string | null
+  messageAr: string | null
+}
+
+export interface PackScanResult {
+  success: boolean
+  code: string
+  message: string | null
+  pieceId: string | null
+  barcode: string | null
+  allocatedCount: number
+  requiredQuantity: number
+  allComplete: boolean
+}
+
+export interface PackScanResponse {
+  status: 'scanned' | 'rejected' | 'completed' | 'complete_failed'
+  scan: PackScanResult | null
+  order: PackOrderCard | null
+  packed: { orderId: string; orderNumber: string | null; customerName: string | null; pieces: number } | null
+  failCode: string | null
+  failMessage: string | null
+}
+
+export type SetAsideReason = 'piece_missing' | 'damaged_piece' | 'waybill_damaged' | 'other'
+
+/** Queue rows the waybill page needs for its tiles (same GET /fulfill/queue the queue page reads). */
+export interface FulfillQueueRow {
+  id: string
+  status: string
+  is_self_pickup: boolean
+  awb_printed?: boolean
+}
+
+export function getFulfillQueue() {
+  return request<FulfillQueueRow[]>('/fulfill/queue')
+}
+
+export function getPackSummary() {
+  return request<{ packedToday: number; openSessionId: string | null }>('/pack-sessions/summary')
+}
+
+export function startPackSession() {
+  return transferCommandRequest<PackSessionView>('/pack-sessions', { method: 'POST' })
+}
+
+export function getPackSession(id: string) {
+  return transferCommandRequest<PackSessionView>(`/pack-sessions/${id}`)
+}
+
+export function scanPackWaybill(id: string, code: string) {
+  return transferCommandRequest<WaybillOutcome>(`/pack-sessions/${id}/waybill`, {
+    method: 'POST', body: JSON.stringify({ code }),
+  })
+}
+
+export function scanPackPiece(id: string, orderId: string, code: string) {
+  return transferCommandRequest<PackScanResponse>(`/pack-sessions/${id}/orders/${orderId}/scan`, {
+    method: 'POST', body: JSON.stringify({ code }),
+  })
+}
+
+export function retryPackComplete(id: string, orderId: string) {
+  return transferCommandRequest<PackScanResponse>(`/pack-sessions/${id}/orders/${orderId}/complete`, { method: 'POST' })
+}
+
+export function undoPackPiece(id: string, orderId: string, pieceId: string) {
+  return transferCommandRequest<void>(`/pack-sessions/${id}/orders/${orderId}/scan/${pieceId}`, { method: 'DELETE' })
+}
+
+export function setAsidePackOrder(id: string, orderId: string, reason: SetAsideReason) {
+  return transferCommandRequest<{ piecesReturned: number }>(`/pack-sessions/${id}/orders/${orderId}/set-aside`, {
+    method: 'POST', body: JSON.stringify({ reason }),
+  })
+}
+
+export function endPackSession(id: string) {
+  return transferCommandRequest<void>(`/pack-sessions/${id}/end`, { method: 'POST' })
+}
+
 export type TransferStatus = 'preparing' | 'sent' | 'reconciling' | 'closed' | 'cancelled'
 export type TransferType = 'showroom' | 'dryclean' | 'repair' | 'other'
 export const TRANSFER_TYPES: TransferType[] = ['showroom', 'dryclean', 'repair', 'other']

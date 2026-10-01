@@ -1458,7 +1458,11 @@ type View =
   | { type: 'pick'; orderId: string }
   | { type: 'handover'; order: QueueOrder }
 
-export default function Fulfill() {
+export default function Fulfill({ selfPickupOnly = false }: {
+  /** Pick & Pack S3 — waybill mode's "Self-pickup orders" entry: the same queue, self-pickup only. */
+  selfPickupOnly?: boolean
+} = {}) {
+  const { t } = useTranslation()
   const [view, setView] = useState<View>({ type: 'queue' })
   const [queue, setQueue] = useState<QueueOrder[]>([])
   const [queueLoading, setQueueLoading] = useState(true)
@@ -1468,11 +1472,11 @@ export default function Fulfill() {
     setQueueLoading(true)
     try {
       const { data } = await api<QueueOrder[]>('/fulfill/queue')
-      setQueue(data)
+      setQueue(selfPickupOnly ? data.filter(o => o.is_self_pickup || o.status === 'self_pickup_pending') : data)
     } finally {
       setQueueLoading(false)
     }
-  }, [])
+  }, [selfPickupOnly])
 
   useEffect(() => { loadQueue() }, [loadQueue])
 
@@ -1523,6 +1527,12 @@ export default function Fulfill() {
   // mockup's in-shell queue. pick/handover above stay full-screen immersive.
   return (
     <Layout>
+      {selfPickupOnly && (
+        <Link to="/fulfill" className="inline-flex items-center gap-1.5 text-small font-semibold text-trace-blue mb-4">
+          <ArrowLeft size={14} strokeWidth={2} className="rtl:rotate-180" />
+          {t('fulfill.waybill.backToWaybill')}
+        </Link>
+      )}
       <QueueView
         queue={queue}
         loading={queueLoading}

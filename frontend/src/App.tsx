@@ -20,7 +20,7 @@ import ResetPassword from './pages/ResetPassword'
 import Overview from './pages/Overview'
 import Orders from './pages/Orders'
 import Receiving from './pages/Receiving'
-import Fulfill from './pages/Fulfill'
+import FulfillRoute from './pages/fulfill/FulfillRoute'
 import GatherList from './pages/GatherList'
 import StockTake from './pages/StockTake'
 import StockTakeScan from './pages/StockTakeScan'
@@ -292,7 +292,7 @@ export default function App() {
           path="/fulfill"
           element={
             <RequireAuth>
-              <Fulfill />
+              <FulfillRoute />
             </RequireAuth>
           }
         />

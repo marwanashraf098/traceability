@@ -719,6 +719,112 @@
       "done": "Done",
       "error": "Couldn't print waybills. Try again.",
       "pickListForBatch": "Pick list for this print batch"
+    },
+    "waybill": {
+      "modeChip": "Waybill scan mode",
+      "changeInSettings": "Change in Settings › Pick & Pack",
+      "startSession": "Start pack session",
+      "resumeSession": "Resume pack session",
+      "tiles": {
+        "ready": "Ready to pack",
+        "printed": "Waybill printed",
+        "notPrinted": "Not printed yet",
+        "packedToday": "Packed today"
+      },
+      "selfPickup_one": "Self-pickup orders ({{count}})",
+      "selfPickup_other": "Self-pickup orders ({{count}})",
+      "selfPickupHint": "No waybill — packed from the order queue",
+      "backToWaybill": "Back to waybill packing",
+      "session": {
+        "title": "Pack session",
+        "mode": "Waybill scan",
+        "packed": "{{count}} packed",
+        "setAside": "{{count}} set aside",
+        "left": "{{count}} left in batches",
+        "end": "End session",
+        "endDisabled": "Finish or set aside the open order first",
+        "scanWaybill": "Scan a waybill",
+        "scanWaybillHint": "Scan the barcode on the Bosta waybill to open its order.",
+        "waybillPlaceholder": "Waybill barcode",
+        "piecePlaceholder": "Piece barcode",
+        "packedFlash": "Order {{number}} packed",
+        "packedFlashDetail_one": "{{customer}} · {{count}} piece · ready for Bosta pickup",
+        "packedFlashDetail_other": "{{customer}} · {{count}} pieces · ready for Bosta pickup",
+        "thisSession": "This session",
+        "nothingYet": "Nothing packed yet in this session.",
+        "outcome": {
+          "packed": "Packed",
+          "set_aside": "Set aside",
+          "rejected": "Rejected"
+        },
+        "order": "Order",
+        "waybill": "Waybill {{tracking}}",
+        "courier": {
+          "delivery": "Courier Bosta · Delivery",
+          "exchange": "Courier Bosta · Exchange",
+          "return_to_origin": "Courier Bosta · Return to origin"
+        },
+        "cod": "Cash on delivery EGP {{amount}}",
+        "prepaid": "Prepaid",
+        "batch": "Batch #{{no}} · printed {{time}}",
+        "notInBatch": "Not in a print batch",
+        "setAsideButton": "Set aside this order",
+        "scanPieces": "Scan the pieces",
+        "scanPiecesHint": "The order closes by itself when the last piece is scanned.",
+        "progress": "{{done}} of {{total}}",
+        "more_one": "{{count}} more",
+        "more_other": "{{count}} more",
+        "lastScan": "Last scan",
+        "undo": "Undo",
+        "loading": "Starting your pack session…",
+        "error": "Something went wrong. Try again."
+      },
+      "pieceReject": {
+        "WAYBILL_WHILE_PACKING": "That's a waybill. Finish or set aside this order first.",
+        "ALREADY_SHIPPED": "This order's shipment has already moved — it can't be packed",
+        "CLAIMED_BY_OTHER": "Another packer is packing this order right now"
+      },
+      "rejected": {
+        "OPEN": "",
+        "CANCELLED": "Don't pack this one",
+        "ALREADY_PACKED": "Already packed",
+        "CLAIMED_BY_OTHER": "Someone else is packing it",
+        "RETURN_WAYBILL": "Not an order waybill",
+        "EXCHANGE_NOT_MAPPED": "Exchange not ready yet",
+        "TOO_OLD": "Order too old to pack here",
+        "NOT_FOUND": "Waybill not found",
+        "NOT_A_WAYBILL": "That's a piece, not a waybill",
+        "ON_HOLD": "Order on hold",
+        "NOT_PACKABLE": "Can't pack this waybill",
+        "cancelledAt": "Cancelled at {{time}}",
+        "packedAt": "Packed at {{time}}",
+        "ok": "OK, scan the next waybill",
+        "waybill": "Waybill {{tracking}}"
+      },
+      "setAside": {
+        "title": "Set aside order {{number}}?",
+        "body_one": "The {{count}} piece already scanned goes back to stock. Put the waybill to one side — a manager will see this order in “Printed but not packed”.",
+        "body_other": "The {{count}} pieces already scanned go back to stock. Put the waybill to one side — a manager will see this order in “Printed but not packed”.",
+        "bodyNone": "Put the waybill to one side — a manager will see this order in “Printed but not packed”.",
+        "reason": "Reason",
+        "reasons": {
+          "piece_missing": "Piece missing on the shelf",
+          "damaged_piece": "Damaged piece",
+          "waybill_damaged": "Waybill damaged or unreadable",
+          "other": "Other"
+        },
+        "keep": "Keep packing",
+        "confirm": "Set aside"
+      },
+      "completeFailed": {
+        "title": "The order didn't close",
+        "WAYBILL_NOT_ON_ORDER": "The waybill that opened this order is no longer this order's waybill. Give it to a manager, or set the order aside.",
+        "COMPLETE_REFUSED": "The order can't be closed: {{message}}",
+        "AWB_MISMATCH": "This waybill doesn't match the order's shipment. Give it to a manager.",
+        "NOT_LINKED": "The order was packed but couldn't be linked to its waybill. Try again.",
+        "COMPLETE_ERROR": "Something went wrong closing the order. Try again.",
+        "retry": "Try again"
+      }
     }
   },
   "lookup": {
