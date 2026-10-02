@@ -2974,5 +2974,32 @@
     "waiting_one": "{{count}} scan waiting",
     "waiting_other": "{{count}} scans waiting",
     "queueFull": "Too many scans waiting — slow down"
+  },
+  "scanPair": {
+    "connecting": "Connecting…",
+    "offline": "Can't reach Traced — check the connection.",
+    "retry": "Try again",
+    "connectedTo": "Connected to {{worker}}'s station",
+    "order": "Order {{number}} · {{customer}} · {{scanned}}/{{required}} pieces",
+    "noOrder": "Waiting for a waybill",
+    "start": "Start scanning",
+    "pointCamera": "Point the camera at a waybill or a piece label.",
+    "cameraStarting": "Starting camera…",
+    "torchOn": "Torch on",
+    "torchOff": "Torch off",
+    "sending": "Sending…",
+    "accepted": "Done",
+    "rejected": "Not accepted",
+    "unconfirmed": "Not confirmed — check the tablet",
+    "notSent": "Not sent — scan again",
+    "endedTitle": "Disconnected — pairing ended",
+    "invalidTitle": "This code was already used or has expired",
+    "scanAgain": "Scan the QR code on the tablet again to connect this phone.",
+    "camera": {
+      "insecure": "The camera needs a secure (https) page.",
+      "unsupported": "This browser can't use the camera.",
+      "denied": "Camera access was refused. Allow it in the browser settings, then tap Start scanning.",
+      "failed": "The camera couldn't start. Tap Start scanning to try again."
+    }
   }
 }

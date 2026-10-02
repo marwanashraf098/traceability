@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { CheckCircle2, OctagonAlert, PackageCheck, Undo2 } from 'lucide-react'
 import { ScanShell } from '../../components/ScanShell'
@@ -12,7 +12,9 @@ import {
   PackOrderCard, PackScanResponse, PackSessionView, ScanPairingCreated, ScanPairingStatus, SetAsideReason,
   WaybillOutcome,
 } from '../../api'
-import { PhoneControl, PhonePairModal } from './PhonePairing'
+import { PhoneControl } from './PhonePairing'
+// Lazy: the QR library loads only when a worker taps "Use phone".
+const PhonePairModal = lazy(() => import('./PhonePairModal'))
 import { openRelayStream } from './relayStream'
 
 // Pick & Pack S3 — the waybill pack session (design/pick-pack-waybill-mockup/SessionWaiting,
@@ -437,8 +439,10 @@ export default function PackSessionScreen({ initial, onEnded }: {
       </div>
 
       {pairOpen && (
-        <PhonePairModal offer={pairOffer} starting={pairBusy} error={pairError}
-          onNewCode={startPhonePairing} onCancel={unpair} />
+        <Suspense fallback={null}>
+          <PhonePairModal offer={pairOffer} starting={pairBusy} error={pairError}
+            onNewCode={startPhonePairing} onCancel={unpair} />
+        </Suspense>
       )}
       {setAsideOpen && order && (
         <SetAsideDialog

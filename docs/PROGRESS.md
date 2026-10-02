@@ -23,10 +23,11 @@ pushed, not merged, not deployed). Edit to the SAFETY-CRITICAL worker block appr
   on the ref-only variant) and `packSessionSequencing.browser.test.tsx` (2 × Chromium/WebKit; both fail on main). vitest
   607/607, tsc + build clean, `npm run test:browser` 18/18 five runs in a row.
 
-**SPIKE — phone camera barcode reading (2026-10-02, branch `spike/camera-scan` off main edb8ce4; pushed, not merged,
-not deployed). TEMPORARY — FOLLOW-UP: delete after S6** (`frontend/src/pages/ScanSpike.tsx`, the `/scan-spike` route +
-lazy import in `App.tsx`, `src/test/scanSpike.test.tsx`, and `@zxing/browser` + `@zxing/library` from package.json —
-regenerate the lockfile in docker).
+**SPIKE — phone camera barcode reading (2026-10-02, merged at 28bf0e7). FOLLOW-UP DONE in S6 (2026-10-02):** the
+`/scan-spike` page, its route and its test are removed; `@zxing/browser` + `@zxing/library` stay — the S6 phone page
+(`/scan/:pairCode`, `pages/scanpair/CameraReader.tsx`) uses them. Spike results that shaped S6: iPhone Safari has no
+BarcodeDetector (zxing there), zxing reads our Code 128 piece labels and Bosta waybills fast, the waybill QR holds
+"BOSTA_<digits>", the camera reads the top barcode without spaces.
 - Public `/scan-spike` (lazy, outside RequireAuth / Layout, next to /login). No API calls, stores nothing, English only.
   Spring already serves any dotless path as the SPA (SecurityConfig permitAll + SpaController) — no backend change.
 - Rear camera (environment, ideal 1920×1080, falls back to any camera), continuous autofocus / torch where the track
