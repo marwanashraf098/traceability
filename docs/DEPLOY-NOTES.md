@@ -636,6 +636,28 @@ curl -sI https://tracedtech.com/ | head -1                         # 200
 curl -s -o /dev/null -w '%{http_code}\n' -H 'Host: nope.example' http://[SERVER_IP]/   # 000 (444)
 ```
 
+**S6 phone as scanner — nginx change (manual, once).** S6 adds a `scanpair` rate-limit zone
+(10 r/s per IP, burst 10) on `location ^~ /api/v1/scan-pair/`, and an unbuffered location for the
+tablet's Server-Sent Events stream (`~ ^/api/v1/pack-sessions/[^/]+/relay-stream$`:
+`proxy_buffering off`, read timeout 120 s against the app's 20 s heartbeat). `up -d --build app`
+does **not** load them — nginx keeps the file it started with:
+```bash
+cd /home/traced/traceability
+git pull
+sudo docker compose -f deploy/docker-compose.yml up -d --build app
+sudo docker run --rm --network deploy_internal \
+  -v "$PWD/deploy/nginx.conf:/etc/nginx/nginx.conf:ro" \
+  -v /etc/letsencrypt:/etc/letsencrypt:ro \
+  nginx:1.27-alpine nginx -t
+# only if "test is successful":
+sudo docker compose -f deploy/docker-compose.yml restart nginx
+# check: public path reachable without login (401 PAIRING_ENDED for a made-up code), stream unbuffered
+curl -s -X POST -H 'Content-Type: application/json' -d '{"pairCode":"x"}' https://app.tracedtech.com/api/v1/scan-pair/claim
+```
+Until nginx is restarted, phone scanning still works but the stream is buffered by the generic
+`/api/` block (events reach the tablet late or only when the 16 k buffer fills) — so do the
+restart in the same deploy.
+
 ---
 
 ## Quick reference

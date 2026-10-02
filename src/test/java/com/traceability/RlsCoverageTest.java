@@ -137,7 +137,10 @@ class RlsCoverageTest {
             "/api/v1/inventory/variants/{variantId}/breakdown",
             "/api/v1/inventory/breakdown",
             "/api/v1/inventory/pieces",
-            "/api/v1/inventory/movements"
+            "/api/v1/inventory/movements",
+            // S6 phone as scanner — phoneScannerPairing_returnsOwnPairing below
+            "/api/v1/pack-sessions/{id}/pairings/current",
+            "/api/v1/scan-pair/status"
     );
 
     // ── Patterns consciously excluded, with reasons ────────────────────────────
@@ -149,6 +152,17 @@ class RlsCoverageTest {
                     "public returns portal, slug-resolved via hatch #14 then TenantContext.runAs + RLS; " +
                     "returns no tenant data beyond the store name, window days and static reason codes " +
                     "(covered by PortalLookupTest / PortalLookupRlsTest)"),
+            entry("/api/v1/pack-sessions/{id}/relay-stream",
+                    "S6 Server-Sent Events stream (text/event-stream, held open) — not a JSON GET this " +
+                    "class can seed and read; owner-only and tenant-isolated, proven as app_user with a " +
+                    "same-tenant positive control by ScanPairingTest." +
+                    "relayStream_isolation_asAppUser_otherTenantsSessionRefused_otherTenantsEventsNeverDelivered " +
+                    "(another tenant's session id → 404; no event of another tenant's pairing is ever delivered)"),
+            entry("/api/v1/scan-pair/scan/{eventId}",
+                    "S6 public phone endpoint (no login; X-Device-Secret resolved via hatch #15, then that " +
+                    "pairing's tenant for the request + RLS); returns one relay event's status/message, only " +
+                    "for the caller's own pairing — proven as app_user with a same-tenant positive control by " +
+                    "ScanPairingTest.wholeFlowAsAppUser_grantsSuffice_tenantIsolated_withSameTenantPositiveControl"),
             entry("/api/v1/portal/{slug}/districts",
                     "public returns portal, token-gated (the lookup token must carry the slug's tenant, " +
                     "else 401); returns reference data only — Bosta districts of one city from the global " +
@@ -1000,6 +1014,41 @@ class RlsCoverageTest {
             jdbc.update("DELETE FROM pack_sessions WHERE id = ?", sessionId);
             jdbc.update("DELETE FROM pack_print_batch_items WHERE batch_id = ?", batchId);
             jdbc.update("DELETE FROM pack_print_batches WHERE id = ?", batchId);
+        }
+    }
+
+    @Test
+    void phoneScannerPairing_returnsOwnPairing() throws Exception {
+        // S6: the tablet's view of its own session's phone pairing, and the phone's own status
+        // (device secret → this tenant's pairing via hatch #15) — this tenant's rows.
+        UUID sessionId = jdbc.queryForObject(
+            "INSERT INTO pack_sessions (tenant_id, user_id, mode) VALUES (?, ?, 'waybill_scan') RETURNING id",
+            UUID.class, tenantId, ownerUserId);
+        String deviceSecret = "cvg-device-secret-" + UUID.randomUUID();
+        java.security.MessageDigest sha = java.security.MessageDigest.getInstance("SHA-256");
+        String secretHash = java.util.HexFormat.of().formatHex(sha.digest(deviceSecret.getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+        UUID pairingId = jdbc.queryForObject(
+            "INSERT INTO scan_pairings (tenant_id, pack_session_id, station_user_id, pair_code_hash, device_secret_hash, " +
+            "                           pair_code_expires_at, claimed_at, expires_at, device_label) " +
+            "VALUES (?, ?, ?, ?, ?, now() + interval '2 minutes', now(), now() + interval '12 hours', 'iPhone · Safari') RETURNING id",
+            UUID.class, tenantId, sessionId, ownerUserId, "cvg-pair-" + UUID.randomUUID(), secretHash);
+        try {
+            ResponseEntity<Map> current = get("/api/v1/pack-sessions/" + sessionId + "/pairings/current", Map.class);
+            assertThat(current.getStatusCode()).isEqualTo(HttpStatus.OK);
+            assertThat(current.getBody().get("status")).isEqualTo("connected");
+            assertThat(current.getBody().get("pairingId")).isEqualTo(pairingId.toString());
+
+            HttpHeaders phone = new HttpHeaders();
+            phone.set("X-Device-Secret", deviceSecret);
+            ResponseEntity<Map> status = rest.exchange(base() + "/api/v1/scan-pair/status", HttpMethod.GET,
+                new HttpEntity<>(phone), Map.class);
+            assertThat(status.getStatusCode()).isEqualTo(HttpStatus.OK);
+            assertThat(status.getBody().get("state")).isEqualTo("connected");
+            assertThat(status.getBody().get("workerName")).isEqualTo(
+                jdbc.queryForObject("SELECT name FROM users WHERE id = ?", String.class, ownerUserId));
+        } finally {
+            jdbc.update("DELETE FROM scan_pairings WHERE pack_session_id = ?", sessionId);
+            jdbc.update("DELETE FROM pack_sessions WHERE id = ?", sessionId);
         }
     }
 

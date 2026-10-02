@@ -89,7 +89,10 @@ public class SecurityConfig {
                 //   ERROR   — sendError(404) dispatching to /error can't become a 401
                 // This is the correct Spring Security 6 fix for the sendError→ERROR→401
                 // pattern documented in CLAUDE.md (same class of bug as ResponseStatusException).
-                .dispatcherTypeMatchers(DispatcherType.FORWARD, DispatcherType.ERROR).permitAll()
+                //   ASYNC   — S6: the relay stream (SseEmitter) finishes on an ASYNC dispatch of a
+                //             request that was already authorized on its REQUEST dispatch; the
+                //             JWT filter doesn't re-run there, so re-checking would deny it.
+                .dispatcherTypeMatchers(DispatcherType.FORWARD, DispatcherType.ERROR, DispatcherType.ASYNC).permitAll()
                 // Static assets + SPA entry points — always public, no auth.
                 // /assets/** covers all Vite-hashed bundles (.js, .css).
                 // These have dots in their names so the SPA fallback matcher below
@@ -124,7 +127,11 @@ public class SecurityConfig {
                     "/api/v1/public/demo/start",
                     // Returns portal (Step 4a) — unauthenticated, slug-resolved via hatch #14
                     // (resolve_tenant_by_portal_slug), then TenantContext.runAs + RLS.
-                    "/api/v1/portal/**"
+                    "/api/v1/portal/**",
+                    // S6 phone as scanner — the phone has no login: a one-time pair code, then a
+                    // device secret, each resolved via hatch #15 (resolve_scan_pairing), then the
+                    // pairing's tenant for that request only + RLS (ScanPairPublicController).
+                    "/api/v1/scan-pair/**"
                 ).permitAll()
                 // SPA shell fallback: any path without a dot (not a static file) that doesn't
                 // start with /api/, /auth/, /webhooks/, or /actuator/ is a client-side route.

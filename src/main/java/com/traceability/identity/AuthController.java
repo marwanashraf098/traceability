@@ -8,8 +8,11 @@ import com.traceability.identity.model.PinRequest;
 import com.traceability.identity.model.ResetPasswordRequest;
 import com.traceability.identity.model.SignupRequest;
 import com.traceability.identity.model.TokenResponse;
+import com.traceability.inventory.ScanPairingService;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseCookie;
@@ -30,15 +33,19 @@ public class AuthController {
     private static final ForgotPasswordResponse FORGOT_PASSWORD_RESPONSE =
             new ForgotPasswordResponse("If that email is registered, a reset code has been sent.");
 
+    private static final Logger log = LoggerFactory.getLogger(AuthController.class);
+
     private final AuthService authService;
     private final PinService  pinService;
     private final PasswordResetService passwordResetService;
+    private final ScanPairingService   scanPairings;
 
     public AuthController(AuthService authService, PinService pinService,
-                          PasswordResetService passwordResetService) {
+                          PasswordResetService passwordResetService, ScanPairingService scanPairings) {
         this.authService          = authService;
         this.pinService           = pinService;
         this.passwordResetService = passwordResetService;
+        this.scanPairings         = scanPairings;
     }
 
     @PostMapping("/signup")
@@ -97,6 +104,18 @@ public class AuthController {
                                          @CookieValue(value = COOKIE_NAME, required = false) String rawRefreshToken,
                                          HttpServletResponse response) {
         TokenResponse tokens = pinService.switchPin(principal.tenantId(), req, rawRefreshToken);
+        // S6: the station now belongs to another worker — the outgoing worker's paired phone
+        // must stop scanning into their session.
+        // A failure here mustn't strand the switch (its tokens are already minted): a leftover
+        // pairing can only post into the outgoing worker's session, which no tablet now streams,
+        // so its scans expire undelivered.
+        if (req.userId() != null && !req.userId().equals(principal.userId().toString())) {
+            try {
+                scanPairings.revokeForUser(principal.userId(), "worker_switched");
+            } catch (RuntimeException e) {
+                log.warn("PIN switch: couldn't revoke the outgoing worker's phone pairings: {}", e.toString());
+            }
+        }
         setRefreshCookie(response, tokens.refreshToken(), COOKIE_MAX_AGE);
         return new AccessTokenResponse(tokens.accessToken());
     }
