@@ -4,6 +4,61 @@
 
 ## Current state
 
+**Bosta discovery hardening + pre-connect filter + fulfillment tracking capture + visibility check
+(2026-10-02, branch `fix/bosta-discovery-preconnect` rebased onto origin/main 08c94dd; merged to main).**
+- Step 0 finding (prod, read-only): BROEK's 32 "late-booked" orders are not a late-booking problem — Bosta
+  creates BROEK deliveries through the day and Traced links them within ~1 min; the 6 PM batch is the
+  Shopify fulfillment write-back. The 32 tracking numbers have never been visible to BROEK's connected
+  key (0 webhook_events; discovery mark unmoved since 10-01 16:55). Likely a second Bosta account —
+  Slice 5's check answers it.
+- **Migrations renumbered after two rebases:** `bosta_discovery_failures` → **V128**,
+  `order_fulfillment_tracking` → **V129** (main's V125 pack_print_batches, V126 pack_waybill_sessions,
+  V127 phone_scanner_pairing come first). MigrationSmokeTest 126→128 files (V1–V129),
+  NotTracedBackfillTest 71→73.
+- **Slice 1 (V128):** a per-item discovery fetch failure (5xx/IO, "Delivery not found", unexpected) goes on a
+  retry list retried by tracking number at the start of every cycle (independent of the 150-item window);
+  success deletes the row (and clears the exception). A 429 records the item without counting, stops the
+  cycle and holds the mark. At `bosta.poll.discovery-max-item-failures` (10) the row escalates →
+  `bosta_discovery_failed` (HIGH) and is retried every `discovery-slow-retry-minutes` (60) until
+  `discovery-retry-cap-hours` (48) after the first failure; then `retries_stopped_at`, exception stays open
+  until the delivery reaches Traced or it's resolved. The mark never waits on a failed item.
+  Tests `BostaDiscoveryRetryTest` dr1–dr5.
+- **Slice 2 (`PreConnectDeliveryFilter`, BostaWebhookJob step 6.2 — every ingest source):** ignores a
+  delivery (any type) whose reference resolves to no Traced order (as sent, '#'±, external_id, parts
+  before AND after ':', shopifyInfo.orderId) when every store of the tenant has a non-null
+  `orders_ingest_from` and (Bosta createdAt < cutoff, or the number part has the tenant's order-number
+  shape and is below its lowest). Never: Traced-owned (shipments row / exchanges.return_request_id /
+  return_requests.bosta_tracking_number), Jumi (NULL cutoff), NULL reference created after the cutoff.
+  Note `ignored_pre_connect: <tn>`, nothing else written; step-4 dedup blocks redeliveries.
+  Bosta connect no longer enqueues a backfill (`POST /bosta/sync` stays, filtered);
+  BostaBackfillTest test renamed `connect_doesNotEnqueueBackfill` (approved). Tests `PreConnectFilterTest`
+  pf1–pf11.
+- **Slice 3:** `scripts/ops/2026-10-02-bosta-preconnect-cleanup.sql` (BEGIN … ROLLBACK, run manually after
+  deploy): BROEK's 4 EXC- orders deleted (guarded), 7577553206 dismissed, 44 unlinked rows resolved (BROEK
+  21 + Femine 23); the 7 post-cutoff NULL-reference rows stay unresolved. exception_resolutions has no
+  system actor (resolved_by NOT NULL → users), so audit rows use the tenant owner + note "Ops cleanup by
+  Traced (pre-connect, 2026-10-02)". Read-only checks in `…-predeploy-checks.sql`. Test
+  `OpsPreConnectCleanupScriptTest` oc1–oc3.
+- **Slice 4 (V129):** orders/updated REST fulfillments[] → one row per (order, tracking number);
+  carrier_class bosta / other_known (Wijha) / unknown ("Other", null — Jumi's Bosta says "Other");
+  TrackingNumberNormalizer only for 'bosta', every other carrier stored as sent minus whitespace
+  ("WJ-12345" stays). Cancelled → status 'cancelled', never deleted. GraphQL path never touches it; nothing
+  reads it yet. Tests `FulfillmentTrackingCaptureTest` ft1–ft8.
+- **Slice 5 (`BostaVisibilityCheckService`):** read-only; owner `POST /api/v1/bosta/visibility-check` or ops
+  `BOSTA_VISIBILITY_CHECK_ON_STARTUP=<tenant ids>|all` (startup, one-shot). Logs `BOSTA_VISIBILITY` /
+  `BOSTA_VISIBILITY_SUMMARY`. Tests `BostaVisibilityCheckTest` vc1–vc4.
+- **Gotcha:** blnco's Bosta references are `blncoeg:#515956` (order number AFTER the ':'); BROEK exchanges
+  are `BRK-44719-EG:BRK-44719-EG-R1` (BEFORE). Order numbers are stored as Bosta sends them: BROEK
+  `BRK-44841-EG` (with -EG), Femine `70370`, Jumi/Snouts/blnco `#…`.
+- **Gotcha:** after renaming a migration, `mvn clean` (or delete target/classes/db/migration) — the stale
+  copy in target/ makes Flyway fail with "more than one migration with version".
+- **Prod pre-deploy check (2026-10-02 15:40):** filter would ignore BROEK 21 + exchange 7577553206, Femine 23,
+  blnco 10 (pre-connect), Snouts 1 (5470, pre-connect RTO); cleanup targets unchanged; new Femine rows
+  5658/5659 (NULL ref, post-cutoff) kept.
+- **Suite:** 1,967 run, 4 skipped, only the 2 known reds (ShopifyMagicLinkTest, ExchangeBackfillTest).
+- **Deploy order:** deploy (V128, V129) → Slice 5 check (BROEK, then all) → cleanup script (ROLLBACK, compare,
+  COMMIT).
+
 **Pick & Pack S6 — phone as scanner, waybill mode (2026-10-02, branch `feat/phone-scanner` off main 69c54e7; pushed, not
 merged, not deployed). Approved: hatch #15 and an additive meta argument in useScanner's marked blocks.**
 - **Normalizer:** `BOSTA_<digits>` (Bosta's waybill QR, prefix case-insensitive) → the digits; anything else after the

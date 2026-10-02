@@ -49,6 +49,7 @@ public class BostaController {
     private final BostaAwbService     awbService;
     private final BostaPickupService  pickupService;
     private final int                 defaultBackfillMaxPages;
+    private final BostaVisibilityCheckService visibilityCheck;
 
     public BostaController(BostaGateway bostaGateway,
                             EncryptionService encryptionService,
@@ -60,7 +61,8 @@ public class BostaController {
                             PlatformTransactionManager txm,
                             BostaAwbService awbService,
                             BostaPickupService pickupService,
-                            @Value("${bosta.backfill.max-pages:20}") int defaultBackfillMaxPages) {
+                            @Value("${bosta.backfill.max-pages:20}") int defaultBackfillMaxPages,
+                            BostaVisibilityCheckService visibilityCheck) {
         this.bostaGateway           = bostaGateway;
         this.encryptionService      = encryptionService;
         this.jdbc                   = jdbc;
@@ -72,6 +74,7 @@ public class BostaController {
         this.awbService             = awbService;
         this.pickupService          = pickupService;
         this.defaultBackfillMaxPages = defaultBackfillMaxPages;
+        this.visibilityCheck        = visibilityCheck;
     }
 
     // ---- Request / response records ----------------------------------------
@@ -199,6 +202,27 @@ public class BostaController {
         Map<String, String> resp = new LinkedHashMap<>();
         resp.put("jobId",   jobId != null ? jobId.asUUID().toString() : "enqueued");
         resp.put("message", "Backfill enqueued — " + maxPages + " pages max");
+        return resp;
+    }
+
+    // ---- POST /api/v1/bosta/visibility-check (OWNER — one-off, read-only) ----
+
+    /**
+     * Enqueues the read-only Bosta visibility check for the caller's tenant: for every order
+     * Shopify says shipped with a Bosta tracking number but that has no forward shipment, is
+     * that tracking number visible to this tenant's own Bosta key? Writes nothing; the result
+     * is logged as BOSTA_VISIBILITY / BOSTA_VISIBILITY_SUMMARY lines (calls are ~3 s apart,
+     * too slow for a synchronous response). See BostaVisibilityCheckService.
+     */
+    @PostMapping("/bosta/visibility-check")
+    @ResponseStatus(HttpStatus.ACCEPTED)
+    @PreAuthorize("hasRole('OWNER')")
+    public Map<String, String> visibilityCheck(@AuthenticationPrincipal CustomUserDetails principal) {
+        UUID tenantId = principal.tenantId();
+        JobId jobId = jobScheduler.enqueue(() -> visibilityCheck.runAndLog(tenantId));
+        Map<String, String> resp = new LinkedHashMap<>();
+        resp.put("jobId",   jobId != null ? jobId.asUUID().toString() : "enqueued");
+        resp.put("message", "Visibility check enqueued — results in the logs (BOSTA_VISIBILITY)");
         return resp;
     }
 
