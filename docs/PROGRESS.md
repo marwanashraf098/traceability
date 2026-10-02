@@ -4,6 +4,41 @@
 
 ## Current state
 
+**Pick & Pack S6 — phone as scanner, waybill mode (2026-10-02, branch `feat/phone-scanner` off main 69c54e7; pushed, not
+merged, not deployed). Approved: hatch #15 and an additive meta argument in useScanner's marked blocks.**
+- **Normalizer:** `BOSTA_<digits>` (Bosta's waybill QR, prefix case-insensitive) → the digits; anything else after the
+  prefix → null. All 8 callers re-checked; none relied on it being rejected.
+- **V127:** `scan_pairings` — credential table: REVOKE ALL from app_user, then INSERT + column-scoped SELECT (never the two
+  hashes) + UPDATE of the claim / revoke columns; forced tenant RLS; one unrevoked pairing per pack session.
+  `scan_relay_events` — tenant RLS, UNIQUE(pairing_id, seq), app_user SELECT/INSERT + UPDATE(status, message, outcome_at).
+  **Hatch #15 `resolve_scan_pairing(kind, hash)`** → (tenant_id, pairing_id) only for a live pairing on an open session
+  (registered in blueprint §16.1 and CLAUDE.md — 15 hatches). Count tests bumped (126 / 71).
+- **API:** tablet (session owner): POST/GET/DELETE `/pack-sessions/{id}/pairings[/current]`, DELETE
+  `/pack-sessions/pairings/mine`, GET `/pack-sessions/{id}/relay-stream` (SSE: `pairing` + `scan` events, heartbeat 20 s,
+  one stream per session, events < 5 s delivered, older expired — never replayed), POST
+  `/pack-sessions/{id}/relay-events/{eventId}/outcome`. Phone (public `/api/v1/scan-pair/**`, X-Device-Secret): POST
+  `/claim`, POST `/scan` (idempotent on seq, 10/s per pairing), GET `/scan/{eventId}`, GET `/status`; every dead secret →
+  401 PAIRING_ENDED (one reason — hatch #15 has no oracle). Tenant set per request in a finally, never runAs.
+- **Revocation:** new pairing (`ScanPairingService.java:96`), unpair (`:116`), session end (`PackSessionStore.java:245`),
+  worker switch (`AuthController.java:114` on PIN switch + `StationProvider.signOutWorker` → `DELETE pairings/mine`),
+  12 h expiry (hatch).
+- **SecurityConfig:** `/api/v1/scan-pair/**` public; DispatcherType.ASYNC permitted (an SSE emitter's completion dispatch
+  was AccessDenied → "response already committed" errors without it — verified).
+- **nginx (MANUAL on deploy — DEPLOY-NOTES):** `scanpair` zone 10 r/s burst 10 on `^~ /api/v1/scan-pair/`; unbuffered
+  relay-stream location (proxy_buffering off, read timeout 120 s). Needs `nginx -t` in a one-off container + `restart nginx`.
+- **Frontend:** useScanner `handleScan(code, meta?)` → `onScan(code, meta)`; `clearQueue()` returns dropped metas.
+  PackSessionScreen: "Use phone" (QR modal, lazy chunk, qrcode-generator SVG), connected chip + Unpair, fetch-based SSE
+  client (Bearer token; EventSource can't send it) with reconnect + "reconnecting" after 5 s; one outcome per phone scan;
+  dropped scans answered "Not applied — scan again"; a phone scan never wipes a keyboard scan being typed. Phone page
+  `/scan/:pairCode` (lazy, public): claim once, secret in sessionStorage, camera (BarcodeDetector or zxing, Code 128 + QR,
+  torch), 2 s duplicate suppression, poll ≤ 4 s, accepted / rejected / not confirmed / not sent / disconnected. Spike removed.
+- **Tests:** TrackingNumberBostaQrTest 13, ScanPairingSchemaTest 5, ScanPairingTest 13 (incl. the relay-stream app_user
+  isolation test named in RlsCoverageTest's EXEMPT), RlsCoverageTest 57 (+1 covered test, approved). Backend 1,968 run,
+  4 skipped, only the 2 known reds. vitest 620/620, browser 20/20, tsc + build clean.
+- **Known limits:** a phone scan refused because the tablet queue is full (20 waiting) gets no outcome (phone shows "Not
+  confirmed"); phone scans still queued when the tablet leaves the screen likewise; the relay hub is in-memory (one app
+  instance — fine today).
+
 **Fix — useScanner: never more than one scan in flight (2026-10-02, branch `fix/scanner-single-flight` off main 28bf0e7;
 pushed, not merged, not deployed). Edit to the SAFETY-CRITICAL worker block approved by Marawan 2026-10-02.**
 - **Race:** the worker guarded on the render-time `scanning` state. React 18 gives updates made inside an effect at most
