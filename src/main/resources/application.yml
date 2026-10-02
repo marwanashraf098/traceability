@@ -151,6 +151,13 @@ bosta:
     # exceeds it, the cycle processes what it can and resumes next cycle — see
     # BostaDiscoveryPollJob javadoc for why nothing is dropped.
     discovery-max-items-per-cycle: 150
+    # V128 retry list: a tracking number whose per-item fetch fails is retried by tracking
+    # number every cycle; after this many counted failures (429s don't count) it raises the
+    # bosta_discovery_failed exception (10 ≈ 20 min at the */2 prod cadence) and is then retried
+    # every discovery-slow-retry-minutes, until discovery-retry-cap-hours after its first failure.
+    discovery-max-item-failures: 10
+    discovery-slow-retry-minutes: 60
+    discovery-retry-cap-hours: 48
     # Shared throttle — 2s between individual fetchDelivery calls (increased after 429 incident).
     # With 16 shipments × 2s = 32s per cycle. Webhook re-fetch adds ~16 parallel calls.
     # If Bosta rate-limits again, BostaRateLimitException sets per-tenant backoff in ConcurrentHashMap.

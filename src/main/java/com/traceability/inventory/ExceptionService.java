@@ -147,6 +147,7 @@ public class ExceptionService {
         all.addAll(detectLost(tenantId));
         all.addAll(detectNeverReceived(tenantId, neverReceivedDays));
         all.addAll(detectUnmatched(tenantId));
+        all.addAll(detectDiscoveryFailed(tenantId));
         all.addAll(detectBlocked(tenantId));
         all.addAll(detectStuck(tenantId, stuckDays));
         all.addAll(detectUnexpectedReturn(tenantId));
@@ -665,6 +666,32 @@ public class ExceptionService {
             "      WHERE er.tenant_id = u.tenant_id " +
             "        AND er.exception_type = 'unmatched_delivery' " +
             "        AND er.subject_key = 'unmatched:' || u.id) ",
+            tid);
+    }
+
+    /**
+     * V128 — a Bosta delivery the discovery poll could not fetch after
+     * bosta.poll.discovery-max-item-failures attempts (BostaDiscoveryPollJob retry list).
+     * Clears by itself once the tracking number reaches Traced some other way (a shipment or
+     * an unlinked row), or when resolved.
+     */
+    private List<Map<String, Object>> detectDiscoveryFailed(UUID tid) {
+        return jdbc.queryForList(
+            "SELECT 'bosta_discovery_failed' AS type, 'HIGH' AS severity, 'delivery' AS subject_type, " +
+            "       f.tracking_number, f.attempts, f.last_error, f.escalated_at AS occurred_at, " +
+            "       f.retries_stopped_at, " +
+            "       'discovery_failed:' || f.id AS subject_key " +
+            "FROM bosta_discovery_failures f " +
+            "WHERE f.tenant_id = ? AND f.escalated_at IS NOT NULL " +
+            "  AND NOT EXISTS (SELECT 1 FROM shipments s " +
+            "                  WHERE s.tenant_id = f.tenant_id AND s.tracking_number = f.tracking_number) " +
+            "  AND NOT EXISTS (SELECT 1 FROM unlinked_bosta_deliveries u " +
+            "                  WHERE u.tenant_id = f.tenant_id AND u.tracking_number = f.tracking_number) " +
+            "  AND NOT EXISTS ( " +
+            "      SELECT 1 FROM exception_resolutions er " +
+            "      WHERE er.tenant_id = f.tenant_id " +
+            "        AND er.exception_type = 'bosta_discovery_failed' " +
+            "        AND er.subject_key = 'discovery_failed:' || f.id) ",
             tid);
     }
 
@@ -1189,6 +1216,15 @@ public class ExceptionService {
                 item.put("descriptionEn", "Bosta delivery " + t + " could not be matched to an order");
                 item.put("descriptionAr", "شحنة بوسطة " + t + " لم يتم ربطها بطلب");
                 item.put("suggestedAction", "manual_link");
+                item.put("actionUrl", "/shipments/unlinked");
+            }
+            case "bosta_discovery_failed" -> {
+                String t = str(item, "tracking_number");
+                item.put("descriptionEn", "Bosta delivery " + t
+                    + " could not be fetched from Bosta after repeated tries — it has not reached Traced");
+                item.put("descriptionAr", "تعذّر جلب شحنة بوسطة " + t
+                    + " من بوسطة بعد عدة محاولات — لم تصل إلى Traced");
+                item.put("suggestedAction", "check_in_bosta");
                 item.put("actionUrl", "/shipments/unlinked");
             }
             case "blocked_customer" -> {

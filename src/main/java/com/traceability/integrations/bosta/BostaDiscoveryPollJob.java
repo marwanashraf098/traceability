@@ -83,6 +83,16 @@ import java.util.stream.Collectors;
  * discoveryPages remains a hard page-count safety valve (unchanged default) — a
  * circuit breaker against a runaway/buggy page walk, independent of the ceiling.
  *
+ * Per-item failures (V128 retry list, 2026-10-02): a delivery whose fetch fails (5xx / IO,
+ * 429, "Delivery not found", anything unexpected) is written to bosta_discovery_failures and
+ * retried by tracking number at the start of every cycle — never just skipped while the mark
+ * moves past it. A 429 also stops the cycle and holds the mark. After
+ * bosta.poll.discovery-max-item-failures (10) counted failures the row escalates: the
+ * bosta_discovery_failed exception is raised and the row is retried only every
+ * bosta.poll.discovery-slow-retry-minutes (60), until bosta.poll.discovery-retry-cap-hours (48)
+ * after its first failure. A success at any point deletes the row and clears the exception. The
+ * mark is never held for a failed item.
+ *
  * Per-tenant advisory lock: discoverTenant() runs many short-lived transactions
  * internally (one tx.execute() per DB touch inside BostaIngestionHelper), so a single
  * pg_advisory_xact_lock would release after the first of those commits — long before
@@ -121,6 +131,9 @@ public class BostaDiscoveryPollJob {
     private final int                  maxNewItemsPerCycle;
     private final long                 interFetchDelayMs;
     private final boolean              discoveryEnabled;
+    private final int                  maxItemFailures;
+    private final int                  slowRetryMinutes;
+    private final int                  retryCapHours;
 
     public BostaDiscoveryPollJob(
             @FlywayDataSource DataSource ownerDs,
@@ -133,7 +146,10 @@ public class BostaDiscoveryPollJob {
             @Value("${bosta.backfill.page-size:50}") int pageSize,
             @Value("${bosta.poll.discovery-max-items-per-cycle:150}") int maxNewItemsPerCycle,
             @Value("${bosta.poll.inter-fetch-delay-ms:100}") long interFetchDelayMs,
-            @Value("${bosta.poll.discovery-enabled:true}") boolean discoveryEnabled) {
+            @Value("${bosta.poll.discovery-enabled:true}") boolean discoveryEnabled,
+            @Value("${bosta.poll.discovery-max-item-failures:10}") int maxItemFailures,
+            @Value("${bosta.poll.discovery-slow-retry-minutes:60}") int slowRetryMinutes,
+            @Value("${bosta.poll.discovery-retry-cap-hours:48}") int retryCapHours) {
         this.ownerJdbc           = new JdbcTemplate(ownerDs);
         this.jdbc                = jdbc;
         this.tx                  = new TransactionTemplate(txm);
@@ -145,6 +161,9 @@ public class BostaDiscoveryPollJob {
         this.maxNewItemsPerCycle = maxNewItemsPerCycle;
         this.interFetchDelayMs   = interFetchDelayMs;
         this.discoveryEnabled    = discoveryEnabled;
+        this.maxItemFailures     = maxItemFailures;
+        this.slowRetryMinutes    = slowRetryMinutes;
+        this.retryCapHours       = retryCapHours;
     }
 
     // Cron is config-wired (bosta.poll.discovery-cron) but defaults to the same */20 as
@@ -229,14 +248,37 @@ public class BostaDiscoveryPollJob {
             boolean ceilingHit      = false;
             boolean reachedMark     = false;
             boolean transientError  = false;
+            boolean rateLimited     = false;
             String topOfListTracking = null;
 
+            // Retry pass (V128): every delivery whose fetch failed in an earlier cycle is
+            // retried here by tracking number, BEFORE the list walk and independent of the
+            // newest-first window — a failed item can sit any distance below the mark or
+            // past discoveryPages×pageSize and is still retried. Counts toward the ceiling.
+            Set<String> handledThisCycle = new HashSet<>();
+            stopExpiredRetries(tenantId);
+            List<String> retries = tx.execute(s -> jdbc.query(
+                "SELECT tracking_number FROM bosta_discovery_failures " +
+                "WHERE tenant_id = ? AND retries_stopped_at IS NULL " +
+                "  AND (escalated_at IS NULL OR next_retry_at IS NULL OR next_retry_at <= now()) " +
+                "ORDER BY first_failed_at, id LIMIT ?",
+                (rs, i) -> rs.getString(1), tenantId, maxNewItemsPerCycle));
+            for (String tn : retries) {
+                attempted++;
+                handledThisCycle.add(tn);
+                ItemOutcome outcome = ingestTracked(tenantId, apiKey, tn);
+                if (outcome == ItemOutcome.ENQUEUED) enqueued++;
+                if (outcome == ItemOutcome.RATE_LIMITED) { rateLimited = true; break; }
+                if (!pause()) { transientError = true; break; }
+                if (attempted >= maxNewItemsPerCycle) { ceilingHit = true; break; }
+            }
+
             outer:
-            for (int page = 1; page <= discoveryPages; page++) {
+            for (int page = 1; page <= discoveryPages && !rateLimited && !ceilingHit && !transientError; page++) {
                 List<BostaGateway.SlimDelivery> items;
                 try {
                     items = bostaGateway.listDeliveriesPage(apiKey, page, pageSize);
-                } catch (BostaTransientException e) {
+                } catch (BostaTransientException | BostaRateLimitException e) {
                     log.warn("Discovery poll tenant {}: transient error on page {} — stopping: {}",
                         tenantId, page, e.getMessage());
                     transientError = true;
@@ -245,8 +287,9 @@ public class BostaDiscoveryPollJob {
 
                 if (items.isEmpty()) break;
 
-                Set<String> linked = alreadyLinkedTrackingNumbers(tenantId,
-                    items.stream().map(BostaGateway.SlimDelivery::trackingNumber).toList());
+                List<String> pageTracking = items.stream().map(BostaGateway.SlimDelivery::trackingNumber).toList();
+                Set<String> linked   = alreadyLinkedTrackingNumbers(tenantId, pageTracking);
+                Set<String> recorded = failureRowTrackingNumbers(tenantId, pageTracking);
 
                 for (BostaGateway.SlimDelivery slim : items) {
                     total++;
@@ -277,6 +320,14 @@ public class BostaDiscoveryPollJob {
                         continue;
                     }
 
+                    // Already handled by the retry pass this cycle, or on the retry list
+                    // (the retry pass owns it, at its own pace — fast, slow, or stopped).
+                    // Never fetched twice in one cycle.
+                    if (handledThisCycle.contains(slim.trackingNumber())
+                            || recorded.contains(slim.trackingNumber())) {
+                        continue;
+                    }
+
                     // Genuinely unresolved: brand new, or still-unlinked from an
                     // earlier cycle (Guard 3 in BostaIngestionHelper keeps deciding
                     // whether to re-enqueue it — unchanged). If this item IS the
@@ -284,25 +335,16 @@ public class BostaDiscoveryPollJob {
                     // through to here too — re-attempted exactly like any other
                     // unresolved item, not treated as "caught up".
                     attempted++;
-                    try {
-                        if (ingestionHelper.ingestDelivery(
-                                tenantId, apiKey, slim.trackingNumber(), "bosta_poll_discovery")) {
-                            enqueued++;
-                        }
-                    } catch (BostaTransientException e) {
-                        log.warn("Discovery poll tenant {}: transient error on {} — skipping: {}",
-                            tenantId, slim.trackingNumber(), e.getMessage());
-                    } catch (Exception e) {
-                        log.error("Discovery poll tenant {}: unexpected error on {} — skipping",
-                            tenantId, slim.trackingNumber(), e);
-                    }
-
-                    try {
-                        if (interFetchDelayMs > 0) Thread.sleep(interFetchDelayMs);
-                    } catch (InterruptedException e) {
-                        Thread.currentThread().interrupt();
+                    ItemOutcome outcome = ingestTracked(tenantId, apiKey, slim.trackingNumber());
+                    if (outcome == ItemOutcome.ENQUEUED) enqueued++;
+                    if (outcome == ItemOutcome.RATE_LIMITED) {
+                        // Stop the cycle; the item is on the retry list and the mark is held,
+                        // so nothing after it on this page is lost either.
+                        rateLimited = true;
                         break outer;
                     }
+
+                    if (!pause()) { transientError = true; break outer; }
 
                     if (attempted >= maxNewItemsPerCycle) {
                         ceilingHit = true;
@@ -313,22 +355,18 @@ public class BostaDiscoveryPollJob {
                 if (reachedMark || ceilingHit) break;
             }
 
-            // Advance the mark on any fully clean cycle: no transient error and the
-            // ceiling wasn't hit. Deliberately NOT gated on (reachedMark || cleanEnd) —
+            // Advance the mark on any fully clean cycle: no transient error, no rate limit
+            // and the ceiling wasn't hit. Deliberately NOT gated on (reachedMark || cleanEnd) —
             // those two only control whether the scan got to break out early; a cycle
             // that instead exhausts discoveryPages while every page was already-linked
             // filler (isLinked skip — doesn't count toward the ceiling) is just as
             // clean and must advance too, or a tenant whose linked history alone spans
             // more than discoveryPages×pageSize never writes a mark (the from-null,
             // page-exhaustion bug — see class javadoc and BostaPollJobTest p19).
-            // Advancing is safe even when the newest item is itself still unresolved
-            // (just enqueued this cycle, not yet linked) — the isLinked check above
-            // means a stale mark pointing at a not-yet-linked item simply gets
-            // re-attempted next cycle instead of wrongly short-circuiting, so nothing
-            // gets silently buried. On ceilingHit or a transient error, the mark is
-            // left exactly as it was; the next cycle re-walks the same span and
-            // (thanks to the per-item shipments skip-check above) that's cheap.
-            if (!transientError && !ceilingHit
+            // A per-item fetch failure does NOT block the advance any more: the failed
+            // tracking number is on the retry list (V128) and is retried by tracking number
+            // until it ingests or the retry cap passes — the mark passing it loses nothing.
+            if (!transientError && !ceilingHit && !rateLimited
                     && topOfListTracking != null && !topOfListTracking.equals(storedMark)) {
                 advanceHighWaterMark(tenantId, topOfListTracking);
             }
@@ -341,6 +379,117 @@ public class BostaDiscoveryPollJob {
                 log.debug("Discovery poll tenant {}: {} seen, nothing new", tenantId, total);
             }
         });
+    }
+
+    private enum ItemOutcome { ENQUEUED, SKIPPED, FAILED, RATE_LIMITED }
+
+    /**
+     * One delivery through BostaIngestionHelper. Success (enqueued or a legitimate skip)
+     * clears any retry-list row; a 429 records the item without counting an attempt; any
+     * other exception (5xx / IO, "Delivery not found", unexpected) counts one attempt.
+     */
+    private ItemOutcome ingestTracked(UUID tenantId, String apiKey, String trackingNumber) {
+        try {
+            boolean enq = ingestionHelper.ingestDelivery(
+                tenantId, apiKey, trackingNumber, "bosta_poll_discovery");
+            clearFailure(tenantId, trackingNumber);
+            return enq ? ItemOutcome.ENQUEUED : ItemOutcome.SKIPPED;
+        } catch (BostaRateLimitException e) {
+            log.warn("Discovery poll tenant {}: rate limited on {} — stopping this cycle",
+                tenantId, trackingNumber);
+            recordFailure(tenantId, trackingNumber, true, "rate limited (retry after "
+                + e.getRetryAfterSeconds() + "s)");
+            return ItemOutcome.RATE_LIMITED;
+        } catch (Exception e) {
+            log.warn("Discovery poll tenant {}: fetch failed for {} — on the retry list: {}",
+                tenantId, trackingNumber, e.toString());
+            recordFailure(tenantId, trackingNumber, false, e.getClass().getSimpleName()
+                + (e.getMessage() != null ? ": " + e.getMessage() : ""));
+            return ItemOutcome.FAILED;
+        }
+    }
+
+    /** Sleeps the inter-fetch delay; false if interrupted. */
+    private boolean pause() {
+        try {
+            if (interFetchDelayMs > 0) Thread.sleep(interFetchDelayMs);
+            return true;
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return false;
+        }
+    }
+
+    private void recordFailure(UUID tenantId, String trackingNumber, boolean rateLimited, String error) {
+        String err = error.length() > 500 ? error.substring(0, 500) : error;
+        Boolean escalated = tx.execute(s -> {
+            jdbc.update(
+                "INSERT INTO bosta_discovery_failures " +
+                "    (tenant_id, tracking_number, attempts, rate_limited_count, last_error) " +
+                "VALUES (?, ?, ?, ?, ?) " +
+                "ON CONFLICT (tenant_id, tracking_number) DO UPDATE SET " +
+                "    attempts           = bosta_discovery_failures.attempts + EXCLUDED.attempts, " +
+                "    rate_limited_count = bosta_discovery_failures.rate_limited_count + EXCLUDED.rate_limited_count, " +
+                "    last_failed_at     = now(), " +
+                "    last_error         = EXCLUDED.last_error",
+                tenantId, trackingNumber, rateLimited ? 0 : 1, rateLimited ? 1 : 0, err);
+            // An escalated row waits the slow interval before its next retry.
+            jdbc.update(
+                "UPDATE bosta_discovery_failures " +
+                "SET next_retry_at = now() + (? * INTERVAL '1 minute') " +
+                "WHERE tenant_id = ? AND tracking_number = ? AND escalated_at IS NOT NULL",
+                slowRetryMinutes, tenantId, trackingNumber);
+            // Escalate at N counted failures: raises bosta_discovery_failed; retries continue
+            // at the slow interval until the cap.
+            return jdbc.update(
+                "UPDATE bosta_discovery_failures " +
+                "SET escalated_at = now(), next_retry_at = now() + (? * INTERVAL '1 minute') " +
+                "WHERE tenant_id = ? AND tracking_number = ? AND escalated_at IS NULL AND attempts >= ?",
+                slowRetryMinutes, tenantId, trackingNumber, maxItemFailures) > 0;
+        });
+        if (Boolean.TRUE.equals(escalated)) {
+            log.warn("Discovery poll tenant {}: {} failed {} times — raised as bosta_discovery_failed; " +
+                "retrying every {} min until {} h after the first failure",
+                tenantId, trackingNumber, maxItemFailures, slowRetryMinutes, retryCapHours);
+        }
+    }
+
+    /**
+     * Rows whose first failure is older than the cap stop being retried (escalated too if they
+     * never reached N — e.g. only 429s — so the exception is raised either way).
+     */
+    private void stopExpiredRetries(UUID tenantId) {
+        Integer stopped = tx.execute(s -> jdbc.update(
+            "UPDATE bosta_discovery_failures " +
+            "SET retries_stopped_at = now(), escalated_at = COALESCE(escalated_at, now()) " +
+            "WHERE tenant_id = ? AND retries_stopped_at IS NULL " +
+            "  AND first_failed_at <= now() - (? * INTERVAL '1 hour')",
+            tenantId, retryCapHours));
+        if (stopped != null && stopped > 0) {
+            log.warn("Discovery poll tenant {}: stopped retrying {} delivery(ies) {} h after their first " +
+                "failed fetch — bosta_discovery_failed stays open", tenantId, stopped, retryCapHours);
+        }
+    }
+
+    private void clearFailure(UUID tenantId, String trackingNumber) {
+        tx.execute(s -> jdbc.update(
+            "DELETE FROM bosta_discovery_failures WHERE tenant_id = ? AND tracking_number = ?",
+            tenantId, trackingNumber));
+    }
+
+    /** Of these tracking numbers, which have a retry-list row (any state)? */
+    private Set<String> failureRowTrackingNumbers(UUID tenantId, List<String> trackingNumbers) {
+        if (trackingNumbers.isEmpty()) return Set.of();
+        String placeholders = trackingNumbers.stream().map(t -> "?").collect(Collectors.joining(","));
+        List<Object> args = new ArrayList<>();
+        args.add(tenantId);
+        args.addAll(trackingNumbers);
+        List<String> found = tx.execute(s -> jdbc.query(
+            "SELECT tracking_number FROM bosta_discovery_failures " +
+            "WHERE tenant_id = ? AND tracking_number IN (" + placeholders + ")",
+            (rs, i) -> rs.getString(1),
+            args.toArray()));
+        return new HashSet<>(found);
     }
 
     /**
