@@ -4,6 +4,36 @@
 
 ## Current state
 
+**Prod purge of non-merchant tenants (2026-10-02, ops only — no code change; committed in prod by Marawan).**
+- Purged 23 test / reviewer / screencast tenants and every tenant-scoped row (54 `tenant_id` tables, catalog-derived
+  coverage check), in one REPEATABLE READ transaction run as postgres via psql through the session pooler (5432).
+  Prod after: 18 tenants — 6 merchants (Jumi, The Snouts, blnco, BROEK, High line, Femine), the demo tenant
+  91c6027e (kept: DemoSeeder's fixed id, re-bootstraps itself anyway), 10 real signups with no store, and Mody 2004.
+- **Purge rule:** purge = tenants NOT in an explicit 18-id keep list AND `created_at < 2026-10-02 12:37:51 UTC` (the
+  pg_dump archive's "Archive created at" — the snapshot time). Anything created after the dump was kept
+  automatically; purge count asserted = 23. The purge list was never hand-typed. Guards: keep ids exist,
+  Jumi/Snouts/demo in keep, isolation = repeatable read, keep counts + md5 of every keep row unchanged per table,
+  0 purge rows left. Rehearsed (rollback + real commit + abort test) on a local restore, dry-run on prod first.
+- **Backup:** `~/Documents/traced-backups/traced-prod-pre-purge-2026-10-02.dump` (pg_dump 17, `-n public -Fc`, 20 MB),
+  local only, restore verified. Same folder: `purge_commit.sql`, `verify.sql`. postgres password rotated afterwards.
+- **Cross-tenant FK (Jumi/test2):** 5 resolved Jumi `unlinked_bosta_deliveries` rows pointed at `webhook_events`
+  owned by test2 (both tenants had polled the same Bosta account in July). Fixed by setting `webhook_event_id = NULL`
+  on those 5 rows only (option a); they were the only keep-tenant rows the purge modified.
+- Cleanup: 64 JobRunr jobs (60 FAILED test1, 4 DELETED Reviewer) referencing purged ids deleted; a stale
+  earlier pg_dump session (idle in transaction, AccessShare on 235 tables) terminated; local rehearsal container
+  and its data volume removed.
+- Freed for reuse (global uniques): `reviewer*@tracedtech.com` and Marawan's two emails (`users_email_unique`), the
+  review / dev shop domains (`stores_shop_domain_key`), portal slug `test`. Purged dev stores still have the app
+  installed: the embedded app shows NotLinked, their webhooks are acked and dropped.
+- **Follow-ups (not done):**
+  a. `webhook_events_idem` is UNIQUE (source, external_event_id) with no tenant_id, and the Bosta key is
+     content-derived (`sha256(tracking:state:updatedAt)`) — two tenants on the same Bosta account collide (root
+     cause of the Jumi/test2 tangle). Never share a Bosta account across tenants until fixed; `shipments.tracking_number`
+     is also globally unique.
+  b. `DemoSeeder.DELETE_ORDER` is missing `return_request_events`, `return_refunds`, `return_request_items`,
+     `return_requests` (and `portal_lookup_attempts`): a demo visitor's return request would make the next reseed
+     fail on `return_requests → orders`.
+
 **Bosta discovery hardening + pre-connect filter + fulfillment tracking capture + visibility check
 (2026-10-02, branch `fix/bosta-discovery-preconnect` rebased onto origin/main 08c94dd; merged to main).**
 - Step 0 finding (prod, read-only): BROEK's 32 "late-booked" orders are not a late-booking problem — Bosta
