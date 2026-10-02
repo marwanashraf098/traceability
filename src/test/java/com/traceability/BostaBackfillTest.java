@@ -565,11 +565,11 @@ class BostaBackfillTest {
         assertThat(enqueued).isZero();
     }
 
-    // ── (12) Connect endpoint triggers backfill job ───────────────────────────
+    // ── (12) Connect endpoint no longer enqueues a backfill (2026-10-02) ──────
 
     @Test
     @SuppressWarnings("unchecked")
-    void connect_triggersBackfillJob() {
+    void connect_doesNotEnqueueBackfill() {
         when(bostaGateway.fetchBusinessProfile(anyString())).thenReturn("BF Business");
 
         HttpHeaders h = new HttpHeaders();
@@ -579,8 +579,8 @@ class BostaBackfillTest {
             new HttpEntity<>(Map.of("apiKey", "bf-connect-key"), h), Map.class);
 
         assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.CREATED);
-        // JobScheduler.enqueue() must have been called at least once (for the backfill job)
-        verify(jobScheduler, atLeastOnce()).enqueue(any(JobLambda.class));
+        // No backfill on connect — Traced tracks only post-connect orders; discovery takes over.
+        verify(jobScheduler, never()).enqueue(any(JobLambda.class));
     }
 
     // ── (13) Match precedence: strong businessRef not vetoed by ambiguous phone+COD ──

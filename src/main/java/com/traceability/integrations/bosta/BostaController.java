@@ -136,10 +136,10 @@ public class BostaController {
                 rs -> rs.next() ? rs.getObject("id", UUID.class) : null,
                 tenantId, encryptedApiKey, storedHash)));
 
-        // Trigger one-time backfill for historical deliveries (async, fire-and-forget).
-        // Runs after the account is persisted so the job can find the api_key_encrypted row.
-        final UUID backfillTenantId = tenantId;
-        jobScheduler.enqueue(() -> backfillJob.run(backfillTenantId, defaultBackfillMaxPages));
+        // No backfill on connect (2026-10-02): Traced tracks only orders placed after the
+        // Shopify connection, and the discovery poll picks up new deliveries from here on.
+        // POST /bosta/sync still runs a backfill on demand; its deliveries go through the
+        // pre-connect filter in BostaWebhookJob like every other ingest.
 
         return new BostaConnectResponse(accountId.toString(), rawHex);
     }

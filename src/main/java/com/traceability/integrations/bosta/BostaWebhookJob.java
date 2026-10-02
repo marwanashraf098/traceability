@@ -74,6 +74,7 @@ public class BostaWebhookJob {
     private final com.traceability.inventory.ExchangeMatchService exchangeMatchService;
     private final com.traceability.inventory.ExchangeService exchangeService;
     private final com.traceability.inventory.ShopifyInventoryService shopifyInventory;
+    private final PreConnectDeliveryFilter preConnectFilter;
 
     public BostaWebhookJob(JdbcTemplate jdbc,
                             PlatformTransactionManager txm,
@@ -89,7 +90,8 @@ public class BostaWebhookJob {
                             MatcherVersionHolder matcherVersionHolder,
                             com.traceability.inventory.ExchangeMatchService exchangeMatchService,
                             com.traceability.inventory.ExchangeService exchangeService,
-                            com.traceability.inventory.ShopifyInventoryService shopifyInventory) {
+                            com.traceability.inventory.ShopifyInventoryService shopifyInventory,
+                            PreConnectDeliveryFilter preConnectFilter) {
         this.jdbc                = jdbc;
         this.tx                  = new TransactionTemplate(txm);
         this.bostaGateway        = bostaGateway;
@@ -105,6 +107,7 @@ public class BostaWebhookJob {
         this.exchangeMatchService = exchangeMatchService;
         this.exchangeService = exchangeService;
         this.shopifyInventory = shopifyInventory;
+        this.preConnectFilter = preConnectFilter;
     }
 
     // ---- private row types -------------------------------------------------
@@ -196,6 +199,21 @@ public class BostaWebhookJob {
 
             if (delivery == null) {
                 markFailed(webhookEventId, "Delivery not found: " + trackingNumber);
+                return;
+            }
+
+            // 6.2 — Pre-connect filter (2026-10-02): a delivery, CRP, exchange or RTO whose
+            // reference resolves to no Traced order and which belongs to before the tenant
+            // connected Shopify is ignored — no unlinked row, no exchanges row, no EXC- order.
+            // Traced-booked legs and anything already a shipment are never ignored; tenants with
+            // a NULL cutoff (Jumi) are never filtered. See PreConnectDeliveryFilter. The
+            // 'ignored_pre_connect:' note is not 'unlinked:%', so step 4 dedups redeliveries.
+            final BostaDelivery fetched = delivery;
+            if (Boolean.TRUE.equals(tx.execute(s ->
+                    preConnectFilter.shouldIgnore(tenantId, trackingNumber, fetched)))) {
+                log.info("Webhook {}: tracking {} ignored — pre-connect (ref='{}')",
+                    webhookEventId, trackingNumber, delivery.businessReference());
+                markProcessed(webhookEventId, idemKey, "ignored_pre_connect: " + trackingNumber);
                 return;
             }
 
