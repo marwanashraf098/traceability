@@ -12,10 +12,16 @@ package com.traceability.inventory;
  * {@code "G - 0 2 - 8 4 8 4 8 0 5 6 9 9"} (seen in production, Jumi 2026-10-01), so every
  * whitespace character — ASCII, tab / newline, no-break space, any Unicode space separator —
  * is removed before the prefix strip and the digits-only check. Nothing else changes.
+ *
+ * Bosta's waybill QR code holds {@code "BOSTA_<tracking number>"} (camera spike, 2026-10-02):
+ * after whitespace removal a case-insensitive {@code BOSTA_} prefix is dropped and the rest must
+ * be all digits — {@code "BOSTA_8484805699"} → {@code "8484805699"}, anything else → null.
  */
 public final class TrackingNumberNormalizer {
 
     private TrackingNumberNormalizer() {}
+
+    private static final String BOSTA_QR_PREFIX = "BOSTA_";
 
     /**
      * @return the bare digits, or {@code null} if the input cannot be reduced to a valid
@@ -28,6 +34,12 @@ public final class TrackingNumberNormalizer {
         // whitespace character anywhere (not just the ends) — see the class comment.
         String s = removeWhitespace(raw.replaceAll("[\\p{Cf}\\p{Cc}&&[^\t\n\r]]", ""));
         if (s.isEmpty()) return null;
+
+        // Bosta waybill QR: "BOSTA_<digits>" (prefix case-insensitive) — see the class comment.
+        if (s.regionMatches(true, 0, BOSTA_QR_PREFIX, 0, BOSTA_QR_PREFIX.length())) {
+            String rest = s.substring(BOSTA_QR_PREFIX.length());
+            return rest.matches("^[0-9]+$") ? rest : null;
+        }
 
         // If the string contains a dash, the tracking number follows the last one.
         int lastDash = s.lastIndexOf('-');
