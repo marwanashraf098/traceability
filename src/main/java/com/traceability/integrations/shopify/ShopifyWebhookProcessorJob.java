@@ -137,19 +137,22 @@ public class ShopifyWebhookProcessorJob {
     private final FulfillService fulfillService;
     private final ShopifyCatalogActivationService activationService;
     private final TransactionTemplate tx;
+    private final FulfillmentTrackingCapture fulfillmentTracking;
 
     public ShopifyWebhookProcessorJob(JdbcTemplate jdbc,
                                        ObjectMapper mapper,
                                        ShopifySyncService syncService,
                                        FulfillService fulfillService,
                                        ShopifyCatalogActivationService activationService,
-                                       PlatformTransactionManager txm) {
+                                       PlatformTransactionManager txm,
+                                       FulfillmentTrackingCapture fulfillmentTracking) {
         this.jdbc           = jdbc;
         this.mapper         = mapper;
         this.syncService    = syncService;
         this.fulfillService = fulfillService;
         this.activationService = activationService;
         this.tx             = new TransactionTemplate(txm);
+        this.fulfillmentTracking = fulfillmentTracking;
     }
 
     @Job(name = "Shopify webhook processor — event %0")
@@ -260,6 +263,7 @@ public class ShopifyWebhookProcessorJob {
         if (preEdit == null) {
             // Order not known locally yet — treat as create
             syncService.ingestOrderWebhook(storeId, tenantId, payload);
+            captureFulfillmentTracking(storeId, externalId, payload);
             return;
         }
 
@@ -304,6 +308,19 @@ public class ShopifyWebhookProcessorJob {
 
         // Always upsert the order + line items (metadata, raw JSON etc.)
         syncService.ingestOrderWebhook(storeId, tenantId, payload);
+        captureFulfillmentTracking(storeId, externalId, payload);
+    }
+
+    /**
+     * V129 — store the fulfillments' tracking numbers (store only; nothing reads them yet).
+     * A failure here never fails the order update itself, which has already been applied.
+     */
+    private void captureFulfillmentTracking(UUID storeId, String externalId, JsonNode payload) {
+        try {
+            fulfillmentTracking.capture(storeId, externalId, payload);
+        } catch (RuntimeException e) {
+            log.warn("orders/updated: fulfillment tracking capture failed for {} — {}", externalId, e.toString());
+        }
     }
 
     // ── Line-item diff helpers ────────────────────────────────────────────────
