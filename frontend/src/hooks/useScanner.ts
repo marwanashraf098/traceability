@@ -49,6 +49,12 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 // completion — the same render that holds the finished onScan's own state updates — so
 // each queued scan runs with the onScan built from the previous scan's result.
 // useScannerRace.browser.test.tsx reproduces the race deterministically.
+//
+// SCAN METADATA (approved by Marawan, 2026-10-02 — S6 phone as scanner; an additive change to
+// the SAFETY-CRITICAL scan handler and worker for exactly this): handleScan(code, meta?) queues
+// `meta` with the code and the worker passes it to onScan(code, meta) untouched — the hook never
+// reads it. A keyboard / HID scan has no meta and behaves exactly as before. clearQueue() (not
+// marked) returns the meta of the scans it drops so the screen can answer for them.
 
 export type FlashState = 'idle' | 'success' | 'error'
 
@@ -71,8 +77,12 @@ export interface RecentScan {
   data?: unknown
 }
 
+/** Caller metadata for one scan (e.g. S6's phone relay event id), carried through the queue to
+ *  onScan untouched — the hook never reads it. A keyboard / HID scan has none. */
+export type ScanMeta = Readonly<Record<string, unknown>>
+
 export interface UseScannerOptions {
-  onScan: (barcode: string) => Promise<ScanOutcome>
+  onScan: (barcode: string, meta?: ScanMeta) => Promise<ScanOutcome>
   recentScansLimit?: number
   /** True while the screen shows a dialog / overlay: the hook won't pull focus back
    *  to the scan input (the click-to-refocus listener is unaffected — dialogs keep
@@ -93,10 +103,12 @@ export interface UseScannerResult {
   /** The last scan was refused because MAX_QUEUED_SCANS were already waiting. */
   queueFull: boolean
   recentScans: RecentScan[]
-  /** Queues a scan (trimmed; empty ignored) and clears the input. Resolves once queued. */
-  handleScan: (barcode: string) => Promise<void>
-  /** Drops every waiting scan (not the one in flight). */
-  clearQueue: () => void
+  /** Queues a scan (trimmed; empty ignored) and clears the input. Resolves once queued.
+   *  `meta` (optional) reaches onScan with that scan, untouched. */
+  handleScan: (barcode: string, meta?: ScanMeta) => Promise<void>
+  /** Drops every waiting scan (not the one in flight); returns the meta of each dropped scan
+   *  that had one, so the caller can answer for it (S6: a phone scan must get an outcome). */
+  clearQueue: () => ScanMeta[]
   removeRecentScan: (key: string) => void
   clearRecentScans: () => void
 }
@@ -139,7 +151,7 @@ export function useScanner({ onScan, recentScansLimit = 20, focusPaused = false 
   // FIFO of scans waiting behind the one in flight. The ref is the source of truth
   // (read synchronously by handleScan and the worker); `pending` mirrors its length
   // for rendering and to wake the worker effect.
-  const queueRef = useRef<string[]>([])
+  const queueRef = useRef<{ code: string; meta?: ScanMeta }[]>([])
   const [pending, setPending] = useState(0)
   const [queueFull, setQueueFull] = useState(false)
   // Single flight: busyRef is the in-flight guard (set synchronously when a scan starts);
@@ -180,7 +192,7 @@ export function useScanner({ onScan, recentScansLimit = 20, focusPaused = false 
   // queue; the input is cleared on Enter, not in `finally` (clearing there would wipe a
   // scan being typed meanwhile); and focus is restored by the effect below, never on a
   // still-disabled input.
-  const handleScan = useCallback(async (barcode: string) => {
+  const handleScan = useCallback(async (barcode: string, meta?: ScanMeta) => {
     if (inputRef.current) inputRef.current.value = ''
     const trimmed = barcode.trim()
     if (!trimmed) return
@@ -191,7 +203,7 @@ export function useScanner({ onScan, recentScansLimit = 20, focusPaused = false 
       return
     }
     setQueueFull(false)
-    queueRef.current.push(trimmed)
+    queueRef.current.push({ code: trimmed, meta })
     setPending(queueRef.current.length)
   }, [triggerFlash])
 
@@ -210,12 +222,12 @@ export function useScanner({ onScan, recentScansLimit = 20, focusPaused = false 
     if (queueRef.current.length === 0) return
     busyRef.current = true
     const seq = ++startedRef.current
-    const code = queueRef.current.shift()!
+    const { code, meta } = queueRef.current.shift()!
     setPending(queueRef.current.length)
     setScanning(true)
     ;(async () => {
       try {
-        const result = await onScan(code)
+        const result = await onScan(code, meta)
         if (!mountedRef.current) return
         if (result.success) {
           playBeep(true)
@@ -261,10 +273,12 @@ export function useScanner({ onScan, recentScansLimit = 20, focusPaused = false 
     if (!scanning && pending === 0) setQueueFull(false)
   }, [scanning, pending])
 
-  const clearQueue = useCallback(() => {
+  const clearQueue = useCallback((): ScanMeta[] => {
+    const dropped = queueRef.current.flatMap(q => (q.meta ? [q.meta] : []))
     queueRef.current = []
     setPending(0)
     setQueueFull(false)
+    return dropped
   }, [])
 
   function removeRecentScan(key: string) {

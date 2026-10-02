@@ -18,6 +18,13 @@ async function doRefresh(): Promise<string> {
   return data.accessToken
 }
 
+/** One shared token refresh (same de-dup as request()'s 401 path) for a caller that can't go
+ *  through request() — S6's relay stream, which reads a streaming response. */
+export function refreshAccessToken(): Promise<string> {
+  if (!refreshPromise) refreshPromise = doRefresh().finally(() => { refreshPromise = null })
+  return refreshPromise
+}
+
 // Symbol flag on retried requests so the interceptor never loops.
 const RETRY_FLAG = Symbol('retry')
 type RetryOpts = RequestInit & { [RETRY_FLAG]?: true }
@@ -1968,6 +1975,112 @@ export function setAsidePackOrder(id: string, orderId: string, reason: SetAsideR
 
 export function endPackSession(id: string) {
   return transferCommandRequest<void>(`/pack-sessions/${id}/end`, { method: 'POST' })
+}
+
+// ── S6 — phone as scanner ─────────────────────────────────────────────────────
+
+export type ScanPairingState = 'none' | 'waiting' | 'connected' | 'expired'
+
+export interface ScanPairingStatus {
+  status: ScanPairingState
+  pairingId: string | null
+  deviceLabel: string | null
+  pairCodeExpiresAt: string | null
+  claimedAt: string | null
+  expiresAt: string | null
+  /** Why it ended (unpaired / replaced / session_ended / worker_switched), on a 'none' pushed by the stream. */
+  reason: string | null
+}
+
+export interface ScanPairingCreated {
+  pairingId: string
+  /** What the QR encodes: https://app.tracedtech.com/scan/<pairCode>. */
+  pairUrl: string
+  pairCodeExpiresAt: string
+  expiresAt: string
+}
+
+/** One phone scan pushed on the relay stream. */
+export interface RelayScanEvent {
+  id: string
+  seq: number
+  code: string
+  createdAt: string
+}
+
+export function createScanPairing(sessionId: string) {
+  return transferCommandRequest<ScanPairingCreated>(`/pack-sessions/${sessionId}/pairings`, { method: 'POST' })
+}
+
+export function getScanPairing(sessionId: string) {
+  return transferCommandRequest<ScanPairingStatus>(`/pack-sessions/${sessionId}/pairings/current`)
+}
+
+export function unpairScanPairing(sessionId: string) {
+  return transferCommandRequest<void>(`/pack-sessions/${sessionId}/pairings/current`, { method: 'DELETE' })
+}
+
+/** The station is handed to another worker: end every phone pairing this worker holds. Best-effort. */
+export function unpairMyPhones() {
+  return request<void>('/pack-sessions/pairings/mine', { method: 'DELETE' })
+}
+
+/** The tablet's verdict on a phone scan; `message` is one line shown on the phone. */
+export function postRelayOutcome(sessionId: string, eventId: string, result: 'accepted' | 'rejected', message: string) {
+  return transferCommandRequest<void>(`/pack-sessions/${sessionId}/relay-events/${eventId}/outcome`, {
+    method: 'POST', body: JSON.stringify({ result, message }),
+  })
+}
+
+// Phone side — public, no login: never sends the access token, never refreshes on a 401
+// (a 401 here means the pairing ended).
+
+export interface PhoneOrderContext { number: string | null; customerName: string | null; scanned: number; required: number }
+export interface PhoneContext { state: 'connected'; workerName: string | null; order: PhoneOrderContext | null; expiresAt: string }
+export type PhoneEventStatus = 'pending' | 'delivered' | 'accepted' | 'rejected' | 'expired'
+
+/** A phone request that didn't go through: 'ended' (401 — pairing ended), 'network', 'other'. */
+export class PhonePairError extends Error {
+  constructor(public readonly kind: 'ended' | 'network' | 'too_fast' | 'other', message: string) { super(message) }
+}
+
+async function phoneRequest<T>(path: string, secret: string | null, init: RequestInit = {}): Promise<T> {
+  let res: Response
+  try {
+    res = await fetch(BASE + '/scan-pair' + path, {
+      ...init,
+      credentials: 'omit',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(secret ? { 'X-Device-Secret': secret } : {}),
+        ...init.headers,
+      },
+    })
+  } catch {
+    throw new PhonePairError('network', 'network')
+  }
+  if (res.status === 401) throw new PhonePairError('ended', 'ended')
+  if (res.status === 429) throw new PhonePairError('too_fast', 'too_fast')
+  if (!res.ok) throw new PhonePairError('other', String(res.status))
+  return res.json() as Promise<T>
+}
+
+export function claimScanPair(pairCode: string) {
+  return phoneRequest<{ deviceSecret: string; context: PhoneContext }>('/claim', null, {
+    method: 'POST', body: JSON.stringify({ pairCode }),
+  })
+}
+
+export function sendPhoneScan(secret: string, seq: number, code: string) {
+  return phoneRequest<{ eventId: string }>('/scan', secret, { method: 'POST', body: JSON.stringify({ seq, code }) })
+}
+
+export function getPhoneScan(secret: string, eventId: string) {
+  return phoneRequest<{ eventId: string; status: PhoneEventStatus; message: string | null }>(`/scan/${eventId}`, secret)
+}
+
+export function getPhoneStatus(secret: string) {
+  return phoneRequest<PhoneContext>('/status', secret)
 }
 
 export type TransferStatus = 'preparing' | 'sent' | 'reconciling' | 'closed' | 'cancelled'

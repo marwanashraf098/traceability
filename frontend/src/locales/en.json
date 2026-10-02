@@ -872,6 +872,25 @@
         "unscanned_other": "{{count}} printed waybills from today's batches haven't been scanned yet.",
         "back": "Back to Pick & Pack",
         "newSession": "Start a new session"
+      },
+      "phone": {
+        "usePhone": "Use phone",
+        "modalTitle": "Scan with your phone camera",
+        "modalBody": "Open your phone's camera and point it at this code. Your phone becomes this station's scanner until the session ends.",
+        "starting": "Making a code…",
+        "expiresIn": "Code expires in {{seconds}} s",
+        "expired": "This code expired.",
+        "newCode": "New code",
+        "cancel": "Cancel",
+        "connected": "Phone connected · {{device}}",
+        "waiting": "Waiting for the phone…",
+        "unpair": "Unpair",
+        "reconnecting": "Phone link reconnecting…",
+        "createError": "Couldn't make a pairing code. Try again.",
+        "opened": "Order {{number}} opened",
+        "packed": "Packed {{number}}",
+        "completeFailed": "Couldn't finish {{number}} — see the tablet",
+        "notApplied": "Not applied — scan again"
       }
     }
   },

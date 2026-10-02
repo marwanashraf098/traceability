@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useState, ReactNode } from 'react'
-import type { Me } from '../api'
+import { unpairMyPhones, type Me } from '../api'
 
 const STATION_MODE_KEY = 'stationMode'
 
@@ -54,6 +54,10 @@ export function StationProvider({ children }: { children: ReactNode }) {
   }, [])
 
   const signOutWorker = useCallback(() => {
+    // S6: the outgoing worker's paired phone must stop scanning into their pack session — ask
+    // the server while their token is still this tablet's (best-effort; the server also revokes
+    // it when the next worker's PIN switch arrives).
+    unpairMyPhones().catch(() => {})
     setCurrentWorker(null)
   }, [])
 
