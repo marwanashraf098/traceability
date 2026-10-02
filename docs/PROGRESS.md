@@ -10,8 +10,8 @@ pushed, not merged, not deployed). Edit to the SAFETY-CRITICAL worker block appr
   Default priority (react-dom flushPassiveEffects) but an Enter keydown's `setPending` Sync priority, and renders the Sync
   update first without the Default ones — two Enters right after a scan started (or one Enter plus any screen state change
   when onScan is a new function each render: StockTakeScan, TransferScanOut, TransferReconcile) gave a render with
-  `scanning` still false, and the worker started a second onScan. Behind the WebKit-only scannerBurst flake (3 of ~200
-  WebKit test runs: StockTakeScan ×2, PackSessionScreen ×1). On PackSessionScreen it sent pieces to the waybill endpoint
+  `scanning` still false, and the worker started a second onScan. Behind the WebKit-only scannerBurst flake (3 failures in
+  60 WebKit test results over 14 suite runs: StockTakeScan ×2, PackSessionScreen ×1). On PackSessionScreen it sent pieces to the waybill endpoint
   while the order was opening (rejection → queue cleared) or the next waybill to the old order. Servers were safe (pack:
   session row FOR UPDATE; stock-take: ON CONFLICT DO NOTHING).
 - **Fix:** an in-flight ref (`busyRef`) set before the next code is taken; it is released only by the render that commits
