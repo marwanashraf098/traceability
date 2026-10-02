@@ -35,6 +35,20 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 //     ever while the input is enabled and the screen hasn't paused focus (an open
 //     dialog: `focusPaused`). The click-to-refocus listener is unchanged.
 // PickScreen still has the old disabled-during-scan pattern — separate, gated fix.
+//
+// SINGLE FLIGHT (approved by Marawan, 2026-10-02 — explicit approval to edit the
+// SAFETY-CRITICAL worker block for exactly this change). The worker used to guard on the
+// render-time `scanning` state. React gives updates made inside an effect at most Default
+// priority, but an Enter keydown's at Sync priority, and renders the Sync update first
+// without the Default ones: two Enters right after the worker started a scan produced a
+// render where `scanning` was still false and `pending` had changed, so the worker started
+// the next scan while the first was in flight (2 at once — the WebKit scannerBurst flake).
+// On PackSessionScreen that sent a piece scan to the waybill endpoint (order not open yet)
+// or a waybill to the old order. Now an in-flight ref is the guard, set before the next
+// code is taken, and it is released only by the render that commits the scan's
+// completion — the same render that holds the finished onScan's own state updates — so
+// each queued scan runs with the onScan built from the previous scan's result.
+// useScannerRace.browser.test.tsx reproduces the race deterministically.
 
 export type FlashState = 'idle' | 'success' | 'error'
 
@@ -128,6 +142,12 @@ export function useScanner({ onScan, recentScansLimit = 20, focusPaused = false 
   const queueRef = useRef<string[]>([])
   const [pending, setPending] = useState(0)
   const [queueFull, setQueueFull] = useState(false)
+  // Single flight: busyRef is the in-flight guard (set synchronously when a scan starts);
+  // startedRef numbers the scans started, `completed` is the number of the last one whose
+  // completion has been rendered. `scanning` above is for display only.
+  const busyRef = useRef(false)
+  const startedRef = useRef(0)
+  const [completed, setCompleted] = useState(0)
   const mountedRef = useRef(true)
   useEffect(() => {
     mountedRef.current = true
@@ -176,10 +196,20 @@ export function useScanner({ onScan, recentScansLimit = 20, focusPaused = false 
   }, [triggerFlash])
 
   // SAFETY-CRITICAL — the single scan worker: takes the oldest waiting scan when none is
-  // in flight, runs onScan, gives that scan its own beep/flash/recent entry. Runs after
-  // each render, so `onScan` is always the latest render's.
+  // in flight, runs onScan, gives that scan its own beep/flash/recent entry.
+  // SINGLE FLIGHT (approved by Marawan 2026-10-02, see header): busyRef — not the
+  // render-time `scanning` — says a scan is running. It is set synchronously before the
+  // next code is taken and stays set until the render that commits the scan's
+  // completion (`completed === startedRef`). That render also holds every state update
+  // the finished onScan made, so the next onScan is the one built from that state.
   useEffect(() => {
-    if (scanning || queueRef.current.length === 0) return
+    if (busyRef.current) {
+      if (completed !== startedRef.current) return     // in flight, or its result not rendered yet
+      busyRef.current = false
+    }
+    if (queueRef.current.length === 0) return
+    busyRef.current = true
+    const seq = ++startedRef.current
     const code = queueRef.current.shift()!
     setPending(queueRef.current.length)
     setScanning(true)
@@ -204,10 +234,13 @@ export function useScanner({ onScan, recentScansLimit = 20, focusPaused = false 
         playBeep(false)
         triggerFlash('error')
       } finally {
-        if (mountedRef.current) setScanning(false)
+        if (mountedRef.current) {
+          setScanning(false)
+          setCompleted(seq)                              // wakes the worker once this is rendered
+        }
       }
     })()
-  }, [scanning, pending, onScan, triggerFlash, recentScansLimit])
+  }, [completed, pending, onScan, triggerFlash, recentScansLimit])
 
   // SAFETY-CRITICAL — keep the scan input focused: after every scan and when the queue
   // drains, but only on an ENABLED input (focus() on a disabled one is a no-op — the

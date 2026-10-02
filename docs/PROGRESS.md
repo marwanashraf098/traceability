@@ -4,6 +4,25 @@
 
 ## Current state
 
+**Fix — useScanner: never more than one scan in flight (2026-10-02, branch `fix/scanner-single-flight` off main 28bf0e7;
+pushed, not merged, not deployed). Edit to the SAFETY-CRITICAL worker block approved by Marawan 2026-10-02.**
+- **Race:** the worker guarded on the render-time `scanning` state. React 18 gives updates made inside an effect at most
+  Default priority (react-dom flushPassiveEffects) but an Enter keydown's `setPending` Sync priority, and renders the Sync
+  update first without the Default ones — two Enters right after a scan started (or one Enter plus any screen state change
+  when onScan is a new function each render: StockTakeScan, TransferScanOut, TransferReconcile) gave a render with
+  `scanning` still false, and the worker started a second onScan. Behind the WebKit-only scannerBurst flake (3 of ~200
+  WebKit test runs: StockTakeScan ×2, PackSessionScreen ×1). On PackSessionScreen it sent pieces to the waybill endpoint
+  while the order was opening (rejection → queue cleared) or the next waybill to the old order. Servers were safe (pack:
+  session row FOR UPDATE; stock-take: ON CONFLICT DO NOTHING).
+- **Fix:** an in-flight ref (`busyRef`) set before the next code is taken; it is released only by the render that commits
+  the scan's completion (`completed` counter state === `startedRef`), the same render that holds the finished onScan's own
+  state updates, so the next onScan is built from that state. A ref cleared in `finally` alone is not enough: an Enter
+  between the response and its render would run the next scan with the old onScan (proved by a test). `scanning` is
+  display-only. Screens unchanged.
+- **Tests:** `useScannerRace.browser.test.tsx` (3 × Chromium/WebKit; overlap cases fail on main, latest-state case fails
+  on the ref-only variant) and `packSessionSequencing.browser.test.tsx` (2 × Chromium/WebKit; both fail on main). vitest
+  607/607, tsc + build clean, `npm run test:browser` 18/18 five runs in a row.
+
 **SPIKE — phone camera barcode reading (2026-10-02, branch `spike/camera-scan` off main edb8ce4; pushed, not merged,
 not deployed). TEMPORARY — FOLLOW-UP: delete after S6** (`frontend/src/pages/ScanSpike.tsx`, the `/scan-spike` route +
 lazy import in `App.tsx`, `src/test/scanSpike.test.tsx`, and `@zxing/browser` + `@zxing/library` from package.json —
