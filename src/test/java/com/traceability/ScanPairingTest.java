@@ -240,6 +240,49 @@ class ScanPairingTest {
         assertEnded(call(HttpMethod.GET, "/api/v1/scan-pair/status", null, phone(null)));
     }
 
+    /**
+     * The claim is one conditional UPDATE (… WHERE claimed_at IS NULL …): two phones claiming the
+     * same code at the same instant — exactly one gets a device secret, the other 401. 10 rounds.
+     */
+    @Test
+    void concurrentClaimsOfOneCode_exactlyOneWins() throws Exception {
+        java.util.concurrent.ExecutorService pool = java.util.concurrent.Executors.newFixedThreadPool(2);
+        try {
+            for (int round = 0; round < 10; round++) {
+                Station s = station("Race " + round);
+                String code = pair(s);
+                java.util.concurrent.CountDownLatch go = new java.util.concurrent.CountDownLatch(1);
+                java.util.concurrent.Callable<ResponseEntity<String>> claimIt = () -> {
+                    go.await();
+                    return call(HttpMethod.POST, "/api/v1/scan-pair/claim", Map.of("pairCode", code), phone(null));
+                };
+                java.util.concurrent.Future<ResponseEntity<String>> a = pool.submit(claimIt);
+                java.util.concurrent.Future<ResponseEntity<String>> b = pool.submit(claimIt);
+                go.countDown();
+                List<ResponseEntity<String>> both = List.of(a.get(30, TimeUnit.SECONDS), b.get(30, TimeUnit.SECONDS));
+
+                List<ResponseEntity<String>> won = both.stream().filter(r -> r.getStatusCode() == HttpStatus.OK).toList();
+                List<ResponseEntity<String>> lost = both.stream().filter(r -> r.getStatusCode() == HttpStatus.UNAUTHORIZED).toList();
+                assertThat(won).as("round " + round + ": exactly one claim wins").hasSize(1);
+                assertThat(lost).as("round " + round + ": the other gets 401").hasSize(1);
+                assertThat(body(lost.get(0)).get("code").asText()).isEqualTo("PAIRING_ENDED");
+
+                String secret = body(won.get(0)).get("deviceSecret").asText();
+                assertThat(jdbc.queryForObject("SELECT device_secret_hash FROM scan_pairings WHERE pack_session_id = ?",
+                    String.class, s.session)).as("the stored hash is the winner's").isEqualTo(sha256Hex(secret));
+                assertThat(call(HttpMethod.GET, "/api/v1/scan-pair/status", null, phone(secret)).getStatusCode())
+                    .isEqualTo(HttpStatus.OK);
+            }
+        } finally {
+            pool.shutdownNow();
+        }
+    }
+
+    private static String sha256Hex(String s) throws Exception {
+        return java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256")
+            .digest(s.getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+    }
+
     @Test
     void expiredPairCode_and12hExpiry_endThePairing() throws Exception {
         Station s = station("Expiry");
