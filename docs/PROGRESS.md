@@ -19,6 +19,20 @@
   immediate job → m4; digest job → m5; ShopifyInventoryService → m6; StockTakeReconciliationService → m7).
 - **Activation + location seed (added to S4 on Marawan's review):** `ShopifyCatalogActivationService.activateAll` and `ShopifyInventoryReconcileService.loadVariants` (report + seed) leave a simulated tenant's non-gid variants out BEFORE the batch item-id read, so a seeded variant can never fail that read for the reviewer's real variants. Real tenants: no filter (a non-gid variant on a real tenant still fails as before). Tests `SimulatedActivationSeedTest` v1–v4 (v2 / v4 real-tenant controls) — revert-checked: activation → v1; seed → v3.
 
+**Bosta v2 delivery-search probe (2026-10-03, branch `feat/bosta-search-probe` off main bf880c1; committed, not merged,
+not deployed).**
+- Marawan found the dashboard's working paging contract (The Snouts account): `POST /api/v2/deliveries/search`
+  `{"stateCodes":[],"limit":50,"page":N,"sortBy":"-updatedAt"}` → `data.deliveries` (page / limit honoured,
+  `count` always 0). The dashboard uses a session token — the probe proves whether our API key works.
+- `BostaV2Client.searchDeliveries` (read-only query as a POST body; raw key as Authorization like every v2 call;
+  shared rate limiter, BACKGROUND; never retried) + `BostaSearchProbe`, run by the visibility check's startup
+  trigger after its report: (a) `-createdAt` and (b) `-updatedAt`, limit 50, pages 1–2; (c) `createdAt:-1` and
+  `-creationTimestamp` only if (a) fails. One `BOSTA_SEARCH_PROBE {json}` line per call: status, items, first/last
+  tracking + createdAt / creationTimestamp / updatedAt, newestCreatedFirst, overlapWithPage1, response / data /
+  item keys, count / echoed page and limit. Writes nothing.
+- Stop-gap until discovery switches (config only, not applied): `BOSTA_POLL_DISCOVERY_MAX_PAGES=1`.
+- Tests `BostaSearchProbeTest` sp1–sp4 (mutations: body key, limiter bypass, fallbacks always, overlap — each RED).
+
 **Bosta discovery paging + shared per-key rate limit (2026-10-03, branch `fix/bosta-discovery-paging`, rebased onto main
 cf92cf6 after S3; not merged, not deployed).**
 - **Cause:** Bosta's `GET /api/v0/deliveries` returns at most 10 items per page whatever pageSize asks for

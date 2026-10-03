@@ -69,6 +69,12 @@ public class BostaVisibilityCheckService {
     private final long                maxBackoffMs;
     private final int                 maxRateLimitRetries;
     private final int                 listPageSize;
+    private BostaSearchProbe          searchProbe;   // optional (2026-10-03 v2 search probe)
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setSearchProbe(BostaSearchProbe searchProbe) {
+        this.searchProbe = searchProbe;
+    }
 
     public BostaVisibilityCheckService(JdbcTemplate jdbc,
                                        PlatformTransactionManager txm,
@@ -119,6 +125,23 @@ public class BostaVisibilityCheckService {
             log.info("BOSTA_VISIBILITY_LIST_SUMMARY {}", json(listSummary));
         }
         log.info("BOSTA_VISIBILITY_SUMMARY {}", json(summary));
+
+        // Read-only v2 search probe (BOSTA_SEARCH_PROBE lines): does the dashboard's paged search work
+        // with this tenant's own API key?
+        if (searchProbe != null) {
+            try {
+                String apiKey = TenantContext.runAs(tenantId, () -> {
+                    String enc = tx.execute(s -> jdbc.query(
+                        "SELECT api_key_encrypted FROM courier_accounts " +
+                        "WHERE tenant_id = ? AND provider = 'bosta' AND status = 'active' LIMIT 1",
+                        rs -> rs.next() ? rs.getString(1) : null, tenantId));
+                    return enc == null ? null : encryptionService.decrypt(enc);
+                });
+                if (apiKey != null) searchProbe.probe(tenantId, report.tenant(), apiKey);
+            } catch (RuntimeException e) {
+                log.warn("BOSTA_SEARCH_PROBE tenant {} failed: {}", tenantId, e.toString());
+            }
+        }
     }
 
     public Report check(UUID tenantId) {

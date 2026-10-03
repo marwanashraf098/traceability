@@ -411,6 +411,47 @@ public class BostaV2Client {
         }
     }
 
+    /** A raw search answer for diagnostics: HTTP status (0 = no answer), parsed body or null, error text. */
+    public record SearchResponse(int status, JsonNode body, String error) {}
+
+    /**
+     * POST {base}/api/v2/deliveries/search — the dashboard's paged delivery search, READ-ONLY (a
+     * query sent as a POST body; it creates and changes nothing). Body exactly as the dashboard
+     * sends it: {"stateCodes": [], "limit": …, "page": …, "sortBy": …}. The tenant's raw key as the
+     * Authorization header, like every other v2 call here. Diagnostics only (BostaSearchProbe) until
+     * discovery is switched over. Never retried; a 429 blocks the key in the shared limiter.
+     */
+    public SearchResponse searchDeliveries(String apiKey, int page, int limit, String sortBy) {
+        try {
+            limiter.acquire(apiKey, BostaRateLimiter.Priority.BACKGROUND);
+        } catch (BostaRateLimitException e) {
+            return new SearchResponse(0, null, "rate limited before sending (retry after " + e.getRetryAfterSeconds() + "s)");
+        }
+        String url = baseUrl + "/api/v2/deliveries/search";
+        com.fasterxml.jackson.databind.node.ObjectNode body = mapper.createObjectNode();
+        body.putArray("stateCodes");
+        body.put("limit", limit);
+        body.put("page", page);
+        body.put("sortBy", sortBy);
+        try {
+            String resp = restClient.post().uri(url)
+                .header("Authorization", apiKey)
+                .contentType(MediaType.APPLICATION_JSON)
+                .body(body.toString().getBytes(StandardCharsets.UTF_8))
+                .retrieve()
+                .body(String.class);
+            return new SearchResponse(200, resp == null ? null : mapper.readTree(resp), null);
+        } catch (RestClientResponseException e) {
+            int status = e.getStatusCode().value();
+            if (status == 429) limiter.onRateLimited(apiKey, 60);
+            JsonNode errBody = null;
+            try { errBody = mapper.readTree(e.getResponseBodyAsString()); } catch (Exception ignored) { /* not JSON */ }
+            return new SearchResponse(status, errBody, "HTTP " + status);
+        } catch (Exception e) {
+            return new SearchResponse(0, null, e.getClass().getSimpleName() + (e.getMessage() != null ? ": " + e.getMessage() : ""));
+        }
+    }
+
     public List<PickupLocation> listPickupLocations(String apiKey) {
         limiter.acquire(apiKey, BostaRateLimiter.Priority.USER_FACING);
         String url = baseUrl + "/api/v2/pickup-locations";
