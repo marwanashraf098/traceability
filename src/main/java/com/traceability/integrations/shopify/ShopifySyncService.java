@@ -1,5 +1,6 @@
 package com.traceability.integrations.shopify;
 
+import com.traceability.integrations.bosta.SimulatedShipments;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -482,6 +483,10 @@ public class ShopifySyncService {
             // FR-7.8a: blocklist gate — runs only when phone is available (pre-PCD: null → skipped)
             blocklist.checkAndHoldIfBlocked(orderId, customerPhone, tenantId);
 
+            // Review mode (S3): a simulated-courier tenant's order gets its forward shipment here, in
+            // the same transaction. No-op for real tenants, cancelled orders and an existing leg.
+            SimulatedShipments.ensureForwardShipment(jdbc, tenantId, orderId);
+
             return needsHold;
         });
         log.debug("Webhook order upsert: gid={} store={} flagged={}", gid, storeId, flagged);
@@ -647,6 +652,9 @@ public class ShopifySyncService {
 
             // FR-7.8a: blocklist gate — runs only when phone is available (pre-PCD: null → skipped)
             blocklist.checkAndHoldIfBlocked(orderId, o.customerPhone(), tenantId);
+
+            // Review mode (S3): same as ingestOrderWebhook — import / reconcile / missing-order path.
+            SimulatedShipments.ensureForwardShipment(jdbc, tenantId, orderId);
 
             return needsHold;
         }));

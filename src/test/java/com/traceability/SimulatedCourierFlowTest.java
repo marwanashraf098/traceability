@@ -120,7 +120,7 @@ class SimulatedCourierFlowTest {
             variant = f.variant("Shirt", "S-" + name, null);
             order = f.order("#" + name, 1);
             f.item(order, variant, 1);
-            tracking = String.valueOf(TRACKING.incrementAndGet());
+            tracking = simulated ? String.valueOf(TRACKING.incrementAndGet()) : PackFixtures.nextTracking();
             shipment = jdbc.queryForObject(
                 "INSERT INTO shipments (tenant_id, order_id, provider, tracking_number, internal_state, shipment_leg) " +
                 "VALUES (?, ?, 'bosta', ?, 'created', 'forward') RETURNING id", UUID.class, f.tenant, order, tracking);

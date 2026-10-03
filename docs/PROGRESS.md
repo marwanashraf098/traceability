@@ -4,6 +4,35 @@
 
 ## Current state
 
+**Review mode S3 — auto-shipment on order ingest (2026-10-03, branch `feat/review-simulated-courier-s3` off main
+690b4ce, worktree `.claude/worktrees/review-s3`; not merged, not deployed). Migration V132.**
+- **V132:** `simulated_tracking_seq` (7770000000001–7779999999999, app_user USAGE) + INVOKER trigger
+  `shipments_reserved_tracking_simulated_only` (a `^777\d{10}$` tracking number on a real tenant → check_violation).
+- `SimulatedShipments.ensureForwardShipment(jdbc, tenant, order)` — one INSERT … SELECT … ON CONFLICT DO NOTHING:
+  simulated tenant only, order not cancelled (Traced status or REST `cancelled_at`; the GraphQL import fetches no cancel
+  field), no active forward leg; provider bosta, 'created', the order's COD. Called in `ShopifySyncService.ingestOrderWebhook`
+  and `upsertOrder` (import / reconcile / missing order) right after the blocklist gate, inside the order transaction.
+- Behaviour: edits / replays / reconcile → no second shipment, same number, no sequence consumed; cancelled later →
+  shipment untouched, order leaves the queue; on hold → shipment created, order held until released; self-pickup is an
+  operator conversion later (shipment left alone); FR-18 pre-connect orders never ingested; fulfillment-link skips
+  ("active forward leg") before any Bosta call; packing the existing shipment never runs the provider-id fetch.
+- **Would fire for a simulated tenant → S4 mute list:** `ExceptionService.detectStuck` (`stuck_shipment`, HIGH — a
+  'created' / 'with_courier' simulated leg never syncs, so after `stuck_shipment_days` it fires) and
+  `detectCancelledWithLiveShipment` (`cancelled_live_shipment`, HIGH — a cancelled order keeps its 'created' simulated leg).
+  Both are HIGH → `ExceptionImmediateAlertJob` emails + the daily digest. Checked and silent: discovery / status poll /
+  order reconcile / visibility (active courier rows only), fulfillment-link (skips: active leg / no account; its
+  `fulfillment_link_problem` needs conflict / gave_up), `missing_provider_id` (only for a shipment CREATED by an AWB link —
+  never ours), `delivery_limbo` / NDR / high attempts (Bosta state data), `missing_awb` (same exclusions as real),
+  `bosta_discovery_failed` (no discovery), not-traced tagging (Bosta webhooks only).
+- Tests `SimulatedAutoShipmentTest` a1–a11 + a9b — all revert-checked: no webhook hook → a1 a2 a6 a7 a8 a9 a9b a11; no
+  import hook → a3; no flag check → a4; no cancel check → a5; no NOT EXISTS → a2 (sequence consumed); no trigger → a10.
+  a9 asserts the order in GET /fulfill/queue (the endpoint both Pick & Pack modes read — Fulfill.tsx queue view and
+  WaybillPackPage tiles) with the tenant in `order_queue` AND `waybill_scan`, awaiting-waybill count 0, then print →
+  decoded top barcode → waybill-scan session → packed.
+- Approved existing-test edits: MigrationSmokeTest 130 → 131 files, NotTracedBackfillTest 75 → 76; `SimulatedCourierFlowTest` fixture line 123 — real tenants now get `PackFixtures.nextTracking()` (the V132 trigger correctly refused the 777… numbers it gave them), no assertion changed.
+- **S4 mute list (decided by Marawan 2026-10-03): skipped for simulated-courier tenants** — `stuck_shipment` (`ExceptionService.detectStuck`), `cancelled_live_shipment` (`detectCancelledWithLiveShipment`), and exception emails (`ExceptionImmediateAlertJob` immediate CRITICAL/HIGH + `ExceptionDigestJob` daily digest).
+- **Gotcha:** `tenants.pick_pack_mode` values are `order_queue` / `waybill_scan` (V126 CHECK), not `queue`.
+
 **Review mode S2 — simulated waybills, pickups, booking refusal (2026-10-03, branch
 `feat/review-simulated-courier-s2` off main 94c4a4c, worktree `.claude/worktrees/review-s2`; not merged, not deployed).
 No migration (the next review migration, S3's tracking sequence, takes V132).**
