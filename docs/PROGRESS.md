@@ -34,8 +34,10 @@ seeded variants; frontend helpers) → S6 (reset ops script).
 - Approved existing-test edits: `ShopifySameShopGuardTest.initiate_tenantOwnsOnlyDisconnectedDifferentShop_rejected`
   and `CustomAppConnectTest.sameShopGuard_onlyDisconnectedRow_differentShop_rejected409` (flipped from allowsSwitch);
   `MigrationSmokeTest` 128→129 files, `NotTracedBackfillTest` 73→74; `ConnectionsOnboardingTest` c7 comment only.
-- **Migration numbers:** S1 = V130; the parallel fulfillment-link work (`feat/bosta-fulfillment-link`, worktree
-  `~/Documents/traceability-bosta-link`) = V131. Whichever merges second re-bumps the two migration-count tests.
+- **Migration numbers:** S1 = V130 (merged first, so it reaches prod before V131 — Flyway refuses out-of-order).
+  **fulfillment-link must rebase onto main and take V131 after V130; re-bump MigrationSmokeTest / NotTracedBackfillTest
+  counts** (to 130 files / 75 pending). Branch `feat/bosta-fulfillment-link`, worktree `~/Documents/traceability-bosta-link`.
+  Review mode S2 then takes V132 if it needs a migration.
 - **Gotcha (process):** two sessions once edited the same working tree (~/Documents/traceability) at the same time and
   both created a V130. Every build now runs in its own worktree; the main checkout stays on main.
 - **S6 note:** the reset script (and any future purge) must include `tenant_courier_simulation`.
