@@ -122,10 +122,15 @@ public class BostaWebhookJob {
         TenantContext.runAs(tenantId, (Runnable) () -> {
 
             // 1. Load payload (pending); transactional so GUC is set and RLS applies.
+            //    The source is read too: only a 'shopify_fulfillment' event (inserted solely by
+            //    BostaFulfillmentLinkService, never by a Bosta-facing endpoint) may carry the
+            //    order hint used in step 8.5.
+            final String[] sourceHolder = new String[1];
             JsonNode payload = tx.execute(s -> jdbc.query(
-                "SELECT payload FROM webhook_events WHERE id = ? AND status = 'pending'",
+                "SELECT payload, source::text AS source FROM webhook_events WHERE id = ? AND status = 'pending'",
                 rs -> {
                     if (!rs.next()) return null;
+                    sourceHolder[0] = rs.getString("source");
                     try { return mapper.readTree(rs.getString("payload")); }
                     catch (Exception e) { throw new RuntimeException(e); }
                 }, webhookEventId));
@@ -373,9 +378,14 @@ public class BostaWebhookJob {
                 // matchByBusinessReference() queries orders. Without a transaction GUC='', RLS
                 // filters every orders row, and even an exact string match returns NO_MATCH.
                 // This is the 6th occurrence of the pattern — see TenantAwareConnection javadoc.
-                ShipmentLinkService.LinkResult linkResult = tx.execute(s ->
-                    shipmentLinkService.tryMatchDelivery(
-                        tenantId, trackingNumber, delivery, mapped));
+                // Fulfillment-driven link (2026-10-02): the order is already known — Shopify's
+                // fulfillment on it carries this tracking number and the delivery's reference /
+                // Shopify id were checked against it before this event was written.
+                UUID hintedOrder = FULFILLMENT_SOURCE.equals(sourceHolder[0])
+                    ? parseUuid(payload.path("orderId").asText(null)) : null;
+                ShipmentLinkService.LinkResult linkResult = tx.execute(s -> hintedOrder != null
+                    ? shipmentLinkService.linkDeliveryToOrder(tenantId, hintedOrder, trackingNumber, delivery, mapped)
+                    : shipmentLinkService.tryMatchDelivery(tenantId, trackingNumber, delivery, mapped));
 
                 if (linkResult.orderId() != null) {
                     // Successfully matched — re-fetch shipment for steps 9–10.
@@ -783,6 +793,14 @@ public class BostaWebhookJob {
     }
 
     // ---- helpers -----------------------------------------------------------
+
+    /** webhook_events.source written only by BostaFulfillmentLinkService. */
+    public static final String FULFILLMENT_SOURCE = "shopify_fulfillment";
+
+    private static UUID parseUuid(String s) {
+        if (s == null || s.isBlank()) return null;
+        try { return UUID.fromString(s.trim()); } catch (IllegalArgumentException e) { return null; }
+    }
 
     // Package-private so NotCreatedFlagRecoveryTest can call it directly.
     void recordUnlinked(UUID tenantId, String trackingNumber,

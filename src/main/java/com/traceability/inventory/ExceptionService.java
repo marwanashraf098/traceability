@@ -148,6 +148,7 @@ public class ExceptionService {
         all.addAll(detectNeverReceived(tenantId, neverReceivedDays));
         all.addAll(detectUnmatched(tenantId));
         all.addAll(detectDiscoveryFailed(tenantId));
+        all.addAll(detectFulfillmentLinkProblem(tenantId));
         all.addAll(detectBlocked(tenantId));
         all.addAll(detectStuck(tenantId, stuckDays));
         all.addAll(detectUnexpectedReturn(tenantId));
@@ -695,6 +696,30 @@ public class ExceptionService {
             tid);
     }
 
+    /**
+     * V131 — a Bosta tracking number on an order's Shopify fulfillment that Traced will not link by
+     * itself (BostaFulfillmentLinkService): 'conflict' (reference / Shopify id point elsewhere or are
+     * both missing, not a forward type, number already on another order) or 'gave_up' (not found in
+     * Bosta for 24 h). Clears once the order has a shipment with that number, or when resolved.
+     */
+    private List<Map<String, Object>> detectFulfillmentLinkProblem(UUID tid) {
+        return jdbc.queryForList(
+            "SELECT 'fulfillment_link_problem' AS type, 'HIGH' AS severity, 'order' AS subject_type, " +
+            "       o.id AS order_id, o.number AS order_number, t.tracking_number, t.link_status, " +
+            "       t.link_reason, t.link_checked_at AS occurred_at, " +
+            "       'fulfillment_link:' || t.id AS subject_key " +
+            "FROM order_fulfillment_tracking t JOIN orders o ON o.id = t.order_id AND o.tenant_id = t.tenant_id " +
+            "WHERE t.tenant_id = ? AND t.link_status IN ('conflict', 'gave_up') " +
+            "  AND NOT EXISTS (SELECT 1 FROM shipments s WHERE s.tenant_id = t.tenant_id " +
+            "                    AND s.order_id = t.order_id AND s.tracking_number = t.tracking_number) " +
+            "  AND NOT EXISTS ( " +
+            "      SELECT 1 FROM exception_resolutions er " +
+            "      WHERE er.tenant_id = t.tenant_id " +
+            "        AND er.exception_type = 'fulfillment_link_problem' " +
+            "        AND er.subject_key = 'fulfillment_link:' || t.id) ",
+            tid);
+    }
+
     private List<Map<String, Object>> detectBlocked(UUID tid) {
         return jdbc.queryForList(
             "SELECT 'blocked_customer' AS type, 'LOW' AS severity, 'order' AS subject_type, " +
@@ -1226,6 +1251,18 @@ public class ExceptionService {
                     + " من بوسطة بعد عدة محاولات — لم تصل إلى Traced");
                 item.put("suggestedAction", "check_in_bosta");
                 item.put("actionUrl", "/shipments/unlinked");
+            }
+            case "fulfillment_link_problem" -> {
+                String n = str(item, "order_number");
+                String t = str(item, "tracking_number");
+                String r = str(item, "link_reason");
+                boolean gaveUp = "gave_up".equals(str(item, "link_status"));
+                item.put("descriptionEn", "Order " + n + ": Shopify says it shipped with Bosta " + t
+                    + (gaveUp ? ", but Bosta can't find that delivery" : ", but Traced won't link it: " + r));
+                item.put("descriptionAr", "الطلب " + n + ": شوبيفاي يقول إنه شُحن مع بوسطة " + t
+                    + (gaveUp ? "، لكن بوسطة لا تجد هذه الشحنة" : "، لكن Traced لن يربطها: " + r));
+                item.put("suggestedAction", "check_in_bosta");
+                item.put("actionUrl", ordersUrl(item));
             }
             case "blocked_customer" -> {
                 String n = str(item, "order_number");

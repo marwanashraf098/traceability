@@ -352,6 +352,29 @@ public class ShipmentLinkService {
             return new LinkResult(null, unlinkedReason);
         }
 
+        return linkMatchedDelivery(tenantId, orderId, trackingNumber, delivery, mapped);
+    }
+
+    /**
+     * Fulfillment-driven linking (2026-10-02): link a fetched delivery to an order the caller
+     * has ALREADY identified — Shopify's own fulfillment on that order carries this tracking
+     * number and BostaFulfillmentLinkService has checked the delivery's businessReference /
+     * shopifyInfo.orderId point at it. Same body as tryMatchDelivery()'s step 3 onward
+     * ({@link #linkMatchedDelivery}), so the shipment, PII, blocklist check, unlinked-row
+     * resolution and reconcile-flag clearing are exactly what a discovery link does. Called only
+     * from BostaWebhookJob for a 'shopify_fulfillment' event carrying the order hint.
+     */
+    public LinkResult linkDeliveryToOrder(UUID tenantId, UUID orderId, String trackingNumber,
+                                          BostaDelivery delivery, BostaStateMapper.MappedState mapped) {
+        UUID found = jdbc.query("SELECT id FROM orders WHERE id = ? AND tenant_id = ?",
+            rs -> rs.next() ? rs.getObject(1, UUID.class) : null, orderId, tenantId);
+        if (found == null) return new LinkResult(null, REASON_NO_MATCH);
+        return linkMatchedDelivery(tenantId, orderId, trackingNumber, delivery, mapped);
+    }
+
+    /** tryMatchDelivery()'s step 3 onward, shared with {@link #linkDeliveryToOrder}. */
+    private LinkResult linkMatchedDelivery(UUID tenantId, UUID orderId, String trackingNumber,
+                                           BostaDelivery delivery, BostaStateMapper.MappedState mapped) {
         // Step 3 — create/find shipment and link.
         // CRP (type.code=25) is a separate Bosta delivery (new tracking number) created
         // by the customer initiating a return. It gets shipment_leg='return' so it can

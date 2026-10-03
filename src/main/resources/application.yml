@@ -119,6 +119,16 @@ shopify:
   webhook-base-url: ${SHOPIFY_WEBHOOK_BASE_URL:http://localhost:8080}
 
 bosta:
+  # Fulfillment-driven linking (V131, BostaFulfillmentLinkService): a Bosta tracking number on an
+  # order's Shopify fulfillment is linked to that order. Not-found / errors retry with backoff for
+  # retry-window-hours, then raise fulfillment_link_problem. Catch-up: one-off, never scheduled —
+  # BOSTA_FULFILLMENT_LINK_CATCH_UP_ON_STARTUP=<tenant ids>|all (+ _APPLY=true to link).
+  fulfillment-link:
+    retry-window-hours: 24
+    catch-up:
+      delay-ms: 3000
+      on-startup: ""
+      apply: false
   # Base URL: prod=https://app.bosta.co, staging=https://stg-app.bosta.co
   base-url: ${BOSTA_BASE_URL:https://app.bosta.co}
   api-version: v0
