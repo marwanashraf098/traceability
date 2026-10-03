@@ -4,6 +4,25 @@
 
 ## Current state
 
+**Review mode S4 — mute list (2026-10-03, branch `feat/review-simulated-courier-s4` off main cf92cf6, worktree
+`.claude/worktrees/review-s4`; not merged, not deployed). No migration. Built BEFORE S5 (Marawan's reorder).**
+- `ExceptionService.detectAllOpen`: `detectStuck` and `detectCancelledWithLiveShipment` skipped for a simulated-courier
+  tenant (`CourierSimulation.isSimulated`); every other detector unchanged.
+- `ExceptionImmediateAlertJob` / `ExceptionDigestJob`: tenant list = `is_demo = false AND NOT EXISTS
+  tenant_courier_simulation` (owner pool) — no exception email ever goes to a simulated tenant.
+- `ShopifyInventoryService.claim()`: simulated tenant + variant whose external_id isn't `gid://shopify/…` → returns false
+  before the INSERT (no claim row → no Shopify call → no failed-claim alert); callers already treat false as "nothing to
+  do". Covers every per-piece and increment trigger (receiving, restock, hold exit, damage move, void, hold enter,
+  exchange dispatch, stock-take found, retries). `StockTakeReconciliationService.finalizeSession`: same rule in the
+  per-variant delta query (a write-off of only fixture variants → `nothing_to_push`).
+- Tests `ReviewModeMuteTest` m1–m7, each with a real-tenant control — all revert-checked (ExceptionService → m1 m2;
+  immediate job → m4; digest job → m5; ShopifyInventoryService → m6; StockTakeReconciliationService → m7).
+- **Found, NOT changed (needs a decision):** `ShopifyCatalogActivationService.activateAll` (store connect / catalog backfill
+  / Settings button) selects every variant of an active product — a simulated tenant's fixture variants included — and
+  resolves item ids in ONE batch read; a malformed id can fail that read for the reviewer's real variants too. Same
+  exposure in the location seed (`ShopifyInventoryReconcileService.loadVariants`). Only reachable once the Traced location
+  is linked (activation 409s otherwise). Proposed: filter non-gid variants of simulated tenants in both (S5 or S4b).
+
 **Bosta discovery paging + shared per-key rate limit (2026-10-03, branch `fix/bosta-discovery-paging`, rebased onto main
 cf92cf6 after S3; not merged, not deployed).**
 - **Cause:** Bosta's `GET /api/v0/deliveries` returns at most 10 items per page whatever pageSize asks for

@@ -1090,6 +1090,20 @@ public class ShopifyInventoryService {
      */
     private boolean claim(UUID tenantId, UUID batchId, UUID variantId, UUID locationId, int delta,
                           String triggerType, String triggerId, ObjectNode initialPayload) {
+        // Review mode S4 (V130): a simulated-courier tenant's own fixture variants (seeded, not from
+        // Shopify — external_id isn't a gid://shopify/ id) are never synced: no claim row, so no
+        // Shopify call and no failed claim / alert. Its real Shopify variants (the reviewer's store)
+        // sync exactly as for any tenant. Callers treat "not claimed" as "nothing to do".
+        if (Boolean.TRUE.equals(tx.execute(status -> jdbc.queryForObject(
+                "SELECT EXISTS (SELECT 1 FROM tenant_courier_simulation WHERE tenant_id = ?) " +
+                "   AND EXISTS (SELECT 1 FROM variants WHERE id = ? AND tenant_id = ? " +
+                "                 AND external_id NOT LIKE 'gid://shopify/%')",
+                Boolean.class, tenantId, variantId, tenantId)))) {
+            log.info("Review mode: skipped Shopify inventory claim for non-Shopify variant {} " +
+                     "(trigger={} triggerId={})", variantId, triggerType, triggerId);
+            return false;
+        }
+
         String payloadJsonTmp;
         try { payloadJsonTmp = mapper.writeValueAsString(initialPayload); }
         catch (Exception e) { payloadJsonTmp = "{}"; }

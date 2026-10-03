@@ -686,6 +686,11 @@ public class StockTakeReconciliationService {
             "WHERE pe.tenant_id = ? AND pe.event_type = 'adjusted' AND pe.to_status = 'lost'::piece_status " +
             "  AND pe.from_status = 'available'::piece_status " +
             "  AND pe.metadata->>'session_id' = ? AND pe.metadata->>'reason' = 'stock_take_missing' " +
+            // Review mode S4 (V130): a simulated-courier tenant's fixture variants (not from Shopify)
+            // are never pushed — same rule as ShopifyInventoryService.claim(). Real tenants: no-op.
+            "  AND NOT (EXISTS (SELECT 1 FROM tenant_courier_simulation sim WHERE sim.tenant_id = pe.tenant_id) " +
+            "           AND EXISTS (SELECT 1 FROM variants v WHERE v.id = p.variant_id AND v.tenant_id = p.tenant_id " +
+            "                         AND v.external_id NOT LIKE 'gid://shopify/%')) " +
             "GROUP BY p.variant_id",
             tenantId, sessionId.toString());
 

@@ -1,5 +1,6 @@
 package com.traceability.inventory;
 
+import com.traceability.integrations.bosta.CourierSimulation;
 import com.traceability.returncases.ReturnCaseRules;
 import com.traceability.tenancy.TenantContext;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -142,6 +143,10 @@ public class ExceptionService {
         int returnInTransitStuckDays = ((Number) cfg.get("return_in_transit_stuck_days")).intValue();
         int returnUnscannedDays      = ((Number) cfg.get("return_unscanned_window_days")).intValue();
 
+        // Review mode S4 (V130): a simulated-courier tenant's shipments never get a Bosta update, so
+        // the two shipment-progress detectors that assume one are muted for it (PROGRESS: S4 mute list).
+        boolean simulated = CourierSimulation.isSimulated(jdbc, tenantId);
+
         // Collect all open exceptions
         List<Map<String, Object>> all = new ArrayList<>();
         all.addAll(detectLost(tenantId));
@@ -150,7 +155,7 @@ public class ExceptionService {
         all.addAll(detectDiscoveryFailed(tenantId));
         all.addAll(detectFulfillmentLinkProblem(tenantId));
         all.addAll(detectBlocked(tenantId));
-        all.addAll(detectStuck(tenantId, stuckDays));
+        if (!simulated) all.addAll(detectStuck(tenantId, stuckDays));   // muted: simulated legs never sync
         all.addAll(detectUnexpectedReturn(tenantId));
         all.addAll(detectDeliveryLimbo(tenantId));
         all.addAll(detectNdr(tenantId));
@@ -160,7 +165,7 @@ public class ExceptionService {
         // shopify_cancel_vs_inflight (status=awaiting_pickup) is mutually exclusive with
         // the two below (status=cancelled), so none of the three can double-fire.
         all.addAll(detectShopifyCancelVsInflight(tenantId));
-        all.addAll(detectCancelledWithLiveShipment(tenantId));
+        if (!simulated) all.addAll(detectCancelledWithLiveShipment(tenantId));   // muted: nothing ever terminates a simulated leg
         all.addAll(detectCancelledButDelivered(tenantId));
         all.addAll(detectMissingProviderId(tenantId));
         all.addAll(detectHighAttempts(tenantId));

@@ -81,9 +81,12 @@ public class ExceptionDigestJob {
     @Job(name = "Exception daily digest")
     public void run() {
         // FR-DEMO: the shared demo tenant produces zero real-world side effects —
-        // never emails, per the is_demo guard contract.
+        // never emails, per the is_demo guard contract. Review mode S4 (V130): neither does a
+        // simulated-courier (App Store review) tenant — PROGRESS: S4 mute list.
         List<UUID> tenantIds = ownerJdbc.queryForList(
-                "SELECT id FROM tenants WHERE is_demo = false", UUID.class);
+                "SELECT t.id FROM tenants t WHERE t.is_demo = false " +
+                "AND NOT EXISTS (SELECT 1 FROM tenant_courier_simulation sim WHERE sim.tenant_id = t.id)",
+                UUID.class);
         for (UUID tenantId : tenantIds) {
             try {
                 processTenant(tenantId);
