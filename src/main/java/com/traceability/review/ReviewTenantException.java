@@ -24,8 +24,8 @@ public class ReviewTenantException extends ApiException {
 
     static ReviewTenantException fixtureExists() {
         return new ReviewTenantException("FIXTURE_EXISTS",
-            "This tenant already holds the review fixture.",
-            "هذا الحساب يحتوي بالفعل على بيانات المراجعة.", HttpStatus.CONFLICT);
+            "This tenant isn't empty (a previous seed or a reviewer's data) — reset it first.",
+            "هذا الحساب ليس فارغًا (بيانات مراجعة سابقة أو بيانات المراجع) — أعد ضبطه أولًا.", HttpStatus.CONFLICT);
     }
 
     static ReviewTenantException missingUsers() {

@@ -81,10 +81,13 @@ public class ReviewTenantService {
             Boolean.TRUE.equals(tx.execute(s -> CourierSimulation.isSimulated(jdbc, tenantId))));
         if (!simulated) throw ReviewTenantException.notSimulated();
 
+        // Seeds only a clean tenant — a new one, or one the reset script cleared (which keeps the
+        // placeholder store, reused by the seeder). Any catalog, order, piece or receipt (a previous
+        // seed, a partial one, or a reviewer's own shop data) → reset first.
         boolean exists = TenantContext.runAs(tenantId, () -> Boolean.TRUE.equals(tx.execute(s -> jdbc.queryForObject(
-            "SELECT EXISTS (SELECT 1 FROM orders WHERE tenant_id = ? AND external_id LIKE 'review-fixture:%') " +
-            "    OR EXISTS (SELECT 1 FROM stores WHERE tenant_id = ? AND shop_domain = ?)",
-            Boolean.class, tenantId, tenantId, ReviewTenantSeeder.PLACEHOLDER_SHOP))));
+            "SELECT EXISTS (SELECT 1 FROM products WHERE tenant_id = ?) OR EXISTS (SELECT 1 FROM orders WHERE tenant_id = ?) " +
+            "    OR EXISTS (SELECT 1 FROM pieces WHERE tenant_id = ?) OR EXISTS (SELECT 1 FROM receipts WHERE tenant_id = ?)",
+            Boolean.class, tenantId, tenantId, tenantId, tenantId))));
         if (exists) throw ReviewTenantException.fixtureExists();
 
         UUID owner  = firstUser(tenantId, "owner");

@@ -109,9 +109,15 @@ public class ReviewTenantSeeder {
             // One fulfillment location per tenant (V61 unique index) — the signup's default.
             "SELECT id FROM locations WHERE tenant_id = ? AND is_fulfillment",
             UUID.class, tenant)));
-        UUID store = step(tenant, "placeholder store", () -> as(tenant, () -> jdbc.queryForObject(
-            "INSERT INTO stores (tenant_id, platform, shop_domain, status) " +
-            "VALUES (?, 'shopify', ?, 'disconnected') RETURNING id", UUID.class, tenant, PLACEHOLDER_SHOP)));
+        // The reset script (scripts/ops/review-tenant-reset.sql) keeps the placeholder store: reuse it.
+        UUID store = step(tenant, "placeholder store", () -> as(tenant, () -> {
+            List<UUID> kept = jdbc.queryForList("SELECT id FROM stores WHERE tenant_id = ? AND shop_domain = ?",
+                UUID.class, tenant, PLACEHOLDER_SHOP);
+            return kept.isEmpty()
+                ? jdbc.queryForObject("INSERT INTO stores (tenant_id, platform, shop_domain, status) " +
+                      "VALUES (?, 'shopify', ?, 'disconnected') RETURNING id", UUID.class, tenant, PLACEHOLDER_SHOP)
+                : kept.get(0);
+        }));
 
         List<UUID> variants = step(tenant, "catalog", () -> catalog(tenant, store));
         step(tenant, "receive stock", () -> { receiveStock(tenant, location, worker, variants); return null; });
@@ -173,7 +179,7 @@ public class ReviewTenantSeeder {
             return body.get();
         } catch (RuntimeException e) {
             log.error("Review seed FAILED at step '{}' (tenant {}): the fixture is PARTIAL — reset the tenant " +
-                "before seeding again", label, tenant, e);
+                "(scripts/ops/review-tenant-reset.sql) before seeding again", label, tenant, e);
             throw e;
         }
     }

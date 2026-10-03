@@ -4,6 +4,30 @@
 
 ## Current state
 
+**Review mode S6 — reset the review tenant (2026-10-04, branch `feat/review-tenant-s6` off main bdb7036, worktree
+`.claude/worktrees/review-s6`; not merged, not deployed). No migration.**
+- `scripts/ops/review-tenant-reset.sql`: `psql "<conn>" -v ON_ERROR_STOP=1 -v tenant_id=<id> [-v commit=yes] -f …` —
+  DRY RUN (ROLLBACK) unless `-v commit=yes`. Guards: not Jumi / Snouts / demo / is_demo; exists; flagged; the ONLY row in
+  `tenant_courier_simulation`; owner reviewer@tracedtech.com; no courier account. Keeps the tenants row, users,
+  locations (Shopify link cleared — provisioning only links a location whose shopify_location_id IS NULL, so a kept link
+  would point the next reviewer's inventory writes at the old shop), the placeholder store and the flag row; deletes
+  every other tenant-scoped row of the tenant (incl. the reviewer's own store rows, refresh tokens, audit log) in
+  repeated FK passes, aborting on no progress. Then proves: no tenant row left outside the kept set, kept rows intact,
+  every other tenant's rows + every global table (JobRunr's excepted) unchanged (row counts, same transaction).
+- Seeder: reuses the kept placeholder store; seed requires a CLEAN tenant (no products / orders / pieces / receipts —
+  FIXTURE_EXISTS otherwise; replaces the old review-fixture-order-or-placeholder check).
+- `ReviewTenantResetTest` r1–r5 (the real file through real psql in the container): guards refuse + DB unchanged; dry
+  run rolls back; commit keeps exactly the kept set, locations unlinked, others unchanged; re-seed = the whole fixture on
+  the same placeholder store; not clean → FIXTURE_EXISTS. Revert-checked: protected guard off → r1; one-flagged guard
+  off → r1; placeholder deleted → r2–r4; unlink off → r3; dry run commits → r2; stray delete of another tenant's rows →
+  the script's own check aborts (r2–r4); seeder doesn't reuse the store → r4–r5; old store-based clean check → r4.
+- **Rehearsed** on a local restore of the 2026-10-02 dump with the prod purge applied (17 tenants) and migrated to V134:
+  step A (service) → step B (flag script, psql) → step C + a reviewer round's data → reset refused for Jumi, Snouts and a
+  real merchant even with commit=yes → dry run (3 FK passes, rolled back) → commit → re-seed → second reset + re-seed.
+  A content hash of every row outside the review tenant (65 tables) identical before, during and after all of it.
+- Runbook per round: reset dry run → read NOTICEs → `-v commit=yes` → step C (seed) → hand the reviewer the login.
+  A JobRunr job still queued for the old reviewer store finds its rows gone (global tables untouched by design).
+
 **Review mode S5 — the review tenant (2026-10-03, branch `feat/review-tenant-s5` off main 836ffd0, worktree
 `.claude/worktrees/review-s5`; not merged, not deployed). No migration. Needs `TRACED_OPS_SECRET` in the server .env.**
 - **Ops endpoints** (`review` package): `POST /api/v1/ops/review-tenant` (step A) and `POST /api/v1/ops/review-tenant/{id}/seed`
