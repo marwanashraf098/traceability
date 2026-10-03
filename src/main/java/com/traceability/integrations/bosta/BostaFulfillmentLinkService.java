@@ -54,8 +54,9 @@ import java.util.UUID;
  * ShipmentLinkService.linkDeliveryToOrder() and applyMappedState()) — no parallel linking code.
  *
  * Bosta 404 / "Delivery not found", 5xx or network errors → 'retry' with backoff (15 min doubling,
- * at most 2 h) for up to 24 h after the first failure, then 'gave_up' (exception). A 429 backs off
- * by Bosta's retry-after and never counts toward the 24 h. The fulfillment-link-retry sweeper runs
+ * at most 2 h) for up to 24 h after the first failure, then 'gave_up' (exception). A 429 is retried
+ * within the run (Bosta's retry-after, bounded); one that doesn't clear becomes 'retry' at the
+ * retry-after and never counts toward the 24 h. The fulfillment-link-retry sweeper runs
  * every 10 minutes.
  */
 @Service
@@ -81,6 +82,12 @@ public class BostaFulfillmentLinkService {
     private final BostaWebhookJob     webhookJob;
     private final JobScheduler        jobScheduler;
     private final int                 retryWindowHours;
+
+    // Field-injected so the constructor keeps its signature; defaults apply to hand-wired instances.
+    @Value("${bosta.fulfillment-link.rate-limit-retries:3}")
+    private int  rateLimitRetries = 3;
+    @Value("${bosta.fulfillment-link.max-backoff-ms:60000}")
+    private long maxBackoffMs = 60_000;
 
     public BostaFulfillmentLinkService(JdbcTemplate jdbc,
                                        @FlywayDataSource DataSource ownerDs,
@@ -205,7 +212,7 @@ public class BostaFulfillmentLinkService {
         // 2. Fetch.
         BostaDelivery delivery;
         try {
-            delivery = bostaGateway.fetchDelivery(apiKey, tn);
+            delivery = fetchHonouringRateLimit(apiKey, tn);
         } catch (DeliveryNotFoundException e) {
             delivery = null;
         } catch (BostaRateLimitException e) {
@@ -240,8 +247,15 @@ public class BostaFulfillmentLinkService {
             try {
                 webhookJob.process(eventId, tenantId);
             } catch (RuntimeException e) {
+                TenantContext.set(tenantId);
                 markRetry(tenantId, orderId, tn, "link pipeline error: " + e.getClass().getSimpleName(), 0, true);
                 return Result.skip("link pipeline error: " + e.getClass().getSimpleName(), delivery);
+            } finally {
+                // Hotfix 2026-10-03: process() runs in its own TenantContext.runAs, whose finally
+                // CLEARS the context instead of restoring ours. Without this, every query below ran
+                // with no tenant: under app_user RLS the shipment just committed was invisible and
+                // the webhook_events read threw EmptyResultDataAccessException (prod, 16:12).
+                TenantContext.set(tenantId);
             }
         }
         boolean linked = Boolean.TRUE.equals(tx.execute(s -> jdbc.queryForObject(
@@ -256,6 +270,28 @@ public class BostaFulfillmentLinkService {
                 String.class, eventId));
         markRetry(tenantId, orderId, tn, "not linked yet: " + note, 0, true);
         return Result.skip("not linked yet: " + note, delivery);
+    }
+
+    /**
+     * fetchDelivery, retried within this run on a 429: waits Bosta's retry-after (capped at
+     * bosta.fulfillment-link.max-backoff-ms) up to bosta.fulfillment-link.rate-limit-retries times,
+     * then lets the last 429 through (→ the 'retry' state, picked up by the sweeper).
+     */
+    private BostaDelivery fetchHonouringRateLimit(String apiKey, String tn) {
+        for (int attempt = 0; ; attempt++) {
+            try {
+                return bostaGateway.fetchDelivery(apiKey, tn);
+            } catch (BostaRateLimitException e) {
+                if (attempt >= rateLimitRetries) throw e;
+                long waitMs = Math.min(e.getRetryAfterSeconds() * 1000L, maxBackoffMs);
+                log.info("Fulfillment link: rate limited on {} — waiting {} ms (retry {}/{})",
+                    tn, waitMs, attempt + 1, rateLimitRetries);
+                if (waitMs > 0) {
+                    try { Thread.sleep(waitMs); }
+                    catch (InterruptedException ie) { Thread.currentThread().interrupt(); throw e; }
+                }
+            }
+        }
     }
 
     /**

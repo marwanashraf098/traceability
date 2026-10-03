@@ -4,6 +4,33 @@
 
 ## Current state
 
+**HOTFIX — fulfillment link failed after linking (2026-10-03, branch `fix/fulfillment-link-tenant-context` off
+main 94c4a4c; committed, not merged, not deployed).**
+- **Prod:** every link job and both catch-up applies threw `EmptyResultDataAccessException` at
+  BostaFulfillmentLinkService:255 (`SELECT … FROM webhook_events WHERE id = ?`) right after the link committed.
+- **Root cause:** `BostaWebhookJob.process()` wraps itself in `TenantContext.runAs`, whose `finally` CLEARS the
+  ThreadLocal instead of restoring the caller's tenant. Back in the link service (inside its own `runAs`) every
+  later query ran with no tenant → under app_user RLS the just-committed shipment was invisible (EXISTS false)
+  and the webhook_events read returned 0 rows. Tests never saw it: they run the services on the postgres
+  (BYPASSRLS) connection.
+- **Fix:** the link service re-sets its tenant after `process()` (finally, and before the error path's
+  markRetry); the catch-up stores a raw-only fulfillment in its own transaction; each catch-up row is
+  isolated (exception → verdict ERROR, run continues, summary always logged); a 429 is retried within the run
+  (retry-after capped by `bosta.fulfillment-link.max-backoff-ms`, at most `rate-limit-retries` 3) before the
+  'retry' state.
+- **Gotcha:** `TenantContext.runAs` does not nest — the inner call leaves NO tenant behind. Any code that calls a
+  `runAs`-wrapped method (e.g. `BostaWebhookJob.process`) from inside its own `runAs` must re-set the tenant
+  afterwards. Not changed globally in this hotfix (follow-up: make `runAs` restore the previous value).
+- **Prod damage (read-only):** 5 shipments linked through this path 16:10–16:14 (BROEK 44876, 44839, 44889, 44866;
+  Femine 70607). process() completed for all (shipment, status history, not_traced_at, reconcile flag); only
+  markLinked was lost on 4 tracking rows (44876's was marked by the sweeper). Repair:
+  `scripts/ops/2026-10-03-fulfillment-link-repair.sql` (4 rows → 'linked', ROLLBACK by default). 97 pre-deploy
+  Bosta tracking rows (BROEK 19, Femine 78) never got a job — rerun the catch-up apply after the hotfix.
+  JobRunr: 2 link jobs + 2 catch-ups FAILED, `retries = 0` → nothing scheduled; a retry would hit "already
+  linked" before process() (clean no-op, proven by rr3).
+- Tests `FulfillmentLinkRlsTest` rr1–rr5 (services over app_user, like prod): RED on 94c4a4c (rr1–rr4 with prod's
+  exact EmptyResultDataAccessException).
+
 **Bosta link from Shopify fulfillment (A) + catch-up (C) + discovery Step 0 (2026-10-03, branch
 `feat/bosta-fulfillment-link`, own worktree ~/Documents/traceability-bosta-link, rebased onto origin/main
 17613ca after S1 merged; not deployed).**

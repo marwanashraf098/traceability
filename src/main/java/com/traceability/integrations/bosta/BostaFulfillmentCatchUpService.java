@@ -27,7 +27,8 @@ import java.util.UUID;
  * entry in orders.raw) and no forward shipment with that tracking number goes through
  * {@link BostaFulfillmentLinkService#attempt} — the exact Part 2 decision.
  *
- * Dry run (the default) writes nothing: verdict WOULD_LINK or SKIP + reason, fetched with the
+ * Dry run (the default) writes nothing: verdict WOULD_LINK or SKIP + reason (or ERROR + message when a
+ * row throws — the run continues and the summary is always logged), fetched with the
  * tenant's own key. Apply first stores a raw-only fulfillment as a tracking row (upsert only, no
  * job), then runs the same attempt: LINKED or SKIP + reason. Rerunning apply is idempotent — a
  * linked order is no longer a candidate, a repeated attempt finds the shipment.
@@ -68,37 +69,62 @@ public class BostaFulfillmentCatchUpService {
 
     @Job(name = "Bosta fulfillment-link catch-up — tenant %0 (apply=%1)", retries = 0)
     public void runAndLog(UUID tenantId, boolean apply) {
-        List<Row> rows = run(tenantId, apply);
         Map<String, Integer> byVerdict = new LinkedHashMap<>();
-        for (Row r : rows) {
-            log.info("BOSTA_CATCHUP {}", json(r));
-            byVerdict.merge(r.verdict(), 1, Integer::sum);
+        int[] count = {0};
+        String error = null;
+        try {
+            run(tenantId, apply, r -> {
+                log.info("BOSTA_CATCHUP {}", json(r));   // each row as soon as it's decided
+                byVerdict.merge(r.verdict(), 1, Integer::sum);
+                count[0]++;
+            });
+        } catch (RuntimeException e) {
+            error = e.getClass().getSimpleName() + (e.getMessage() != null ? ": " + e.getMessage() : "");
+            log.error("Bosta fulfillment-link catch-up tenant {} stopped: {}", tenantId, error, e);
+        } finally {
+            Map<String, Object> summary = new LinkedHashMap<>();
+            summary.put("tenantId", tenantId.toString());
+            summary.put("apply", apply);
+            summary.put("rows", count[0]);
+            summary.put("verdicts", byVerdict);
+            if (error != null) summary.put("error", error);
+            log.info("BOSTA_CATCHUP_SUMMARY {}", json(summary));
         }
-        Map<String, Object> summary = new LinkedHashMap<>();
-        summary.put("tenantId", tenantId.toString());
-        summary.put("apply", apply);
-        summary.put("rows", rows.size());
-        summary.put("verdicts", byVerdict);
-        log.info("BOSTA_CATCHUP_SUMMARY {}", json(summary));
     }
 
     public List<Row> run(UUID tenantId, boolean apply) {
+        List<Row> out = new ArrayList<>();
+        run(tenantId, apply, out::add);
+        return out;
+    }
+
+    /**
+     * Each row is isolated: an exception on one row becomes verdict ERROR with its message and the
+     * run continues with the next row.
+     */
+    private void run(UUID tenantId, boolean apply, java.util.function.Consumer<Row> sink) {
         String tenantName = TenantContext.runAs(tenantId, () -> tx.execute(s ->
             jdbc.queryForObject("SELECT name FROM tenants WHERE id = ?", String.class, tenantId)));
         List<Candidate> candidates = TenantContext.runAs(tenantId, () -> candidates(tenantId));
-        List<Row> out = new ArrayList<>();
         boolean first = true;
         for (Candidate c : candidates) {
             if (!first) sleep(delayMs);
             first = false;
-            if (apply && "orders_raw".equals(c.source())) {
-                TenantContext.runAs(tenantId, () -> capture.upsertOnly(c.storeId(), c.externalId(), c.raw()));
+            try {
+                if (apply && "orders_raw".equals(c.source())) {
+                    // Own transaction: the tenant GUC is applied at transaction begin (TenantAwareDataSource).
+                    TenantContext.runAs(tenantId, () ->
+                        tx.execute(s -> capture.upsertOnly(c.storeId(), c.externalId(), c.raw())));
+                }
+                BostaFulfillmentLinkService.Result r = linkService.attempt(tenantId, c.orderId(), c.trackingNumber(), !apply);
+                sink.accept(new Row(tenantName, c.orderNumber(), c.trackingNumber(), c.source(),
+                    r.typeCode(), r.state(), r.verdict().name(), r.reason()));
+            } catch (RuntimeException e) {
+                log.warn("Catch-up row {} / {} failed: {}", c.orderNumber(), c.trackingNumber(), e.toString());
+                sink.accept(new Row(tenantName, c.orderNumber(), c.trackingNumber(), c.source(), null, null,
+                    "ERROR", e.getClass().getSimpleName() + (e.getMessage() != null ? ": " + e.getMessage() : "")));
             }
-            BostaFulfillmentLinkService.Result r = linkService.attempt(tenantId, c.orderId(), c.trackingNumber(), !apply);
-            out.add(new Row(tenantName, c.orderNumber(), c.trackingNumber(), c.source(),
-                r.typeCode(), r.state(), r.verdict().name(), r.reason()));
         }
-        return out;
     }
 
     /** Orders with a non-cancelled Bosta fulfillment and no forward shipment with that number. */

@@ -125,6 +125,9 @@ bosta:
   # BOSTA_FULFILLMENT_LINK_CATCH_UP_ON_STARTUP=<tenant ids>|all (+ _APPLY=true to link).
   fulfillment-link:
     retry-window-hours: 24
+    # A 429 is retried within the run: Bosta's retry-after, capped, at most this many times.
+    rate-limit-retries: 3
+    max-backoff-ms: 60000
     catch-up:
       delay-ms: 3000
       on-startup: ""
