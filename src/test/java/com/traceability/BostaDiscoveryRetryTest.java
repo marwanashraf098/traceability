@@ -39,7 +39,9 @@ import static org.mockito.Mockito.*;
  *   dr4 — a success during slow retry ingests the delivery, it links, and the exception clears
  *   dr5 — 48 h after the first failure retries stop; the exception stays open
  *
- * Realistic fixtures: bare numeric tracking numbers, BROEK-style references.
+ * Realistic fixtures: bare numeric tracking numbers, BROEK-style references. Since discovery reads the
+ * v2 search (2026-10-03) the failing items' list entries carry no updatedAt, so discovery falls back to
+ * one fetch for them — the path that can fail; complete items are ingested without a fetch.
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.NONE)
 @Testcontainers
@@ -76,6 +78,7 @@ class BostaDiscoveryRetryTest {
     @Autowired ExceptionService      exceptionService;
     @Autowired BostaWebhookJob       webhookJob;
     @MockBean  BostaGateway          bostaGateway;
+    @MockBean  BostaV2Client         bostaV2;
     @MockBean  JobScheduler          jobScheduler;
 
     private UUID tenantId;
@@ -93,6 +96,7 @@ class BostaDiscoveryRetryTest {
                     "VALUES (?, 'bosta', ?, 'test-hash', 'active')",
                     tenantId, encryptionService.encrypt("dr-key"));
         reset(bostaGateway);
+        reset(bostaV2);
     }
 
     @AfterEach
@@ -109,11 +113,11 @@ class BostaDiscoveryRetryTest {
         String b = "9432163061";   // mid-page: fetch fails (5xx) on the first run
         String c = "2251220237";   // older: ingests fine
 
-        when(bostaGateway.listDeliveriesPage(anyString(), eq(1), anyInt())).thenReturn(List.of(
-            new BostaGateway.SlimDelivery(a, 10, "SEND", T0.plusSeconds(3)),
-            new BostaGateway.SlimDelivery(b, 10, "SEND", T0.plusSeconds(2)),
-            new BostaGateway.SlimDelivery(c, 10, "SEND", T0.plusSeconds(1))));
-        when(bostaGateway.listDeliveriesPage(anyString(), eq(2), anyInt())).thenReturn(List.of());
+        when(bostaV2.searchDeliveriesPage(anyString(), eq(1), anyInt(), anyString())).thenReturn(BostaSearchItems.page(
+            BostaSearchItems.item(a, 10, T0.plusSeconds(3)),
+            BostaSearchItems.needsFetch(b, 10, T0.plusSeconds(2)),
+            BostaSearchItems.item(c, 10, T0.plusSeconds(1))));
+        when(bostaV2.searchDeliveriesPage(anyString(), eq(2), anyInt(), anyString())).thenReturn(List.of());
         when(bostaGateway.fetchDelivery(anyString(), eq(a))).thenReturn(send(a, "BRK-44871-EG"));
         when(bostaGateway.fetchDelivery(anyString(), eq(c))).thenReturn(send(c, "BRK-44842-EG"));
         when(bostaGateway.fetchDelivery(anyString(), eq(b)))
@@ -143,10 +147,10 @@ class BostaDiscoveryRetryTest {
         String top = "8948149267";
         String bad = "563601351";   // bare 9-digit tracking number
 
-        when(bostaGateway.listDeliveriesPage(anyString(), eq(1), anyInt())).thenReturn(List.of(
-            new BostaGateway.SlimDelivery(top, 10, "SEND", T0.plusSeconds(2)),
-            new BostaGateway.SlimDelivery(bad, 10, "SEND", T0.plusSeconds(1))));
-        when(bostaGateway.listDeliveriesPage(anyString(), eq(2), anyInt())).thenReturn(List.of());
+        when(bostaV2.searchDeliveriesPage(anyString(), eq(1), anyInt(), anyString())).thenReturn(BostaSearchItems.page(
+            BostaSearchItems.item(top, 10, T0.plusSeconds(2)),
+            BostaSearchItems.needsFetch(bad, 10, T0.plusSeconds(1))));
+        when(bostaV2.searchDeliveriesPage(anyString(), eq(2), anyInt(), anyString())).thenReturn(List.of());
         when(bostaGateway.fetchDelivery(anyString(), eq(top))).thenReturn(send(top, "BRK-44866-EG"));
         when(bostaGateway.fetchDelivery(anyString(), eq(bad)))
             .thenThrow(new DeliveryNotFoundException(bad));
@@ -192,7 +196,7 @@ class BostaDiscoveryRetryTest {
         escalatedRow(tn, "now() - INTERVAL '5 hours'", "now() - INTERVAL '1 minute'");
         assertThat(openDiscoveryExceptions()).hasSize(1);
 
-        when(bostaGateway.listDeliveriesPage(anyString(), anyInt(), anyInt())).thenReturn(List.of());
+        when(bostaV2.searchDeliveriesPage(anyString(), anyInt(), anyInt(), anyString())).thenReturn(List.of());
         when(bostaGateway.fetchDelivery(anyString(), eq(tn))).thenReturn(send(tn, "BRK-44898-EG"));
 
         discoveryPollJob.discoverAll();
@@ -215,7 +219,7 @@ class BostaDiscoveryRetryTest {
     void dr5_after48h_retriesStop_exceptionStaysOpen() {
         String tn = "5360015612";
         escalatedRow(tn, "now() - INTERVAL '49 hours'", "now() - INTERVAL '1 minute'");
-        when(bostaGateway.listDeliveriesPage(anyString(), anyInt(), anyInt())).thenReturn(List.of());
+        when(bostaV2.searchDeliveriesPage(anyString(), anyInt(), anyInt(), anyString())).thenReturn(List.of());
         when(bostaGateway.fetchDelivery(anyString(), eq(tn))).thenThrow(new DeliveryNotFoundException(tn));
 
         discoveryPollJob.discoverAll();
@@ -235,11 +239,11 @@ class BostaDiscoveryRetryTest {
         String x  = "209760032";    // 429 on the first run
         String n2 = "6212045934";
 
-        when(bostaGateway.listDeliveriesPage(anyString(), eq(1), anyInt())).thenReturn(List.of(
-            new BostaGateway.SlimDelivery(n1, 10, "SEND", T0.plusSeconds(3)),
-            new BostaGateway.SlimDelivery(x, 10, "SEND", T0.plusSeconds(2)),
-            new BostaGateway.SlimDelivery(n2, 10, "SEND", T0.plusSeconds(1))));
-        when(bostaGateway.listDeliveriesPage(anyString(), eq(2), anyInt())).thenReturn(List.of());
+        when(bostaV2.searchDeliveriesPage(anyString(), eq(1), anyInt(), anyString())).thenReturn(BostaSearchItems.page(
+            BostaSearchItems.item(n1, 10, T0.plusSeconds(3)),
+            BostaSearchItems.needsFetch(x, 10, T0.plusSeconds(2)),
+            BostaSearchItems.item(n2, 10, T0.plusSeconds(1))));
+        when(bostaV2.searchDeliveriesPage(anyString(), eq(2), anyInt(), anyString())).thenReturn(List.of());
         when(bostaGateway.fetchDelivery(anyString(), eq(n1))).thenReturn(send(n1, "BRK-44881-EG"));
         when(bostaGateway.fetchDelivery(anyString(), eq(n2))).thenReturn(send(n2, "BRK-44890-EG"));
         when(bostaGateway.fetchDelivery(anyString(), eq(x)))
@@ -292,7 +296,8 @@ class BostaDiscoveryRetryTest {
     }
 
     /** A batch created "now-ish": newer than the first paged run's seed (now − 7 days). */
-    private static final java.time.Instant T0 = java.time.Instant.now().minus(java.time.Duration.ofHours(1));
+    private static final java.time.Instant T0 = java.time.Instant.now().minus(java.time.Duration.ofHours(1))
+        .truncatedTo(java.time.temporal.ChronoUnit.MILLIS);   // v2 creationTimestamp is epoch ms
 
     private java.time.Instant markAt() {
         java.sql.Timestamp ts = jdbc.queryForObject(

@@ -1,5 +1,6 @@
 package com.traceability.integrations.bosta;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.jobrunr.scheduling.JobScheduler;
@@ -139,6 +140,55 @@ public class BostaIngestionHelper {
         payload.put("type",           type);
         payload.put("updatedAt",      updatedAt);
 
+        return insertAndEnqueue(tenantId, delivery.trackingNumber(), fetchedState, updatedAt, payload, source);
+    }
+
+    /**
+     * Discovery (2026-10-03): one item of the v2 delivery search, ingested from the list item itself —
+     * no per-delivery fetch here — when it carries what the synthesized payload needs: trackingNumber,
+     * state code, type and updatedAt, with a (state, type) the mapper knows. businessReference,
+     * uniqueBusinessReference, shopifyInfo.orderId and creationTimestamp ride along in the payload.
+     * Anything else falls back to {@link #ingestDelivery} (one fetch) — an unmappable list item is
+     * never dropped on the list's word (the v2 list's type labels may differ from the v0 fetch's).
+     * BostaWebhookJob still verifies by fetch when it processes the event, as for every source.
+     *
+     * Same guards, idem key and insert as {@link #ingestDelivery}. Callers MUST be inside
+     * TenantContext.runAs(tenantId).
+     *
+     * @return true if enqueued
+     */
+    public boolean ingestListItem(UUID tenantId, String apiKey, JsonNode item, String source) {
+        BostaDelivery d = BostaDelivery.fromRaw(null, item);
+        String tn = d.trackingNumber();
+        if (tn == null || tn.isBlank()) return false;
+        String updatedAt = item.path("updatedAt").asText("");
+        boolean complete = d.stateCode() >= 0
+            && item.hasNonNull("type")
+            && !updatedAt.isBlank();
+        if (complete && stateMapper.map(d.stateCode(), d.type()).unknownCode()) complete = false;
+        if (!complete) {
+            log.debug("{}: list item {} lacks what ingest needs (state/type/updatedAt or a mapped state) — fetching",
+                source, tn);
+            return ingestDelivery(tenantId, apiKey, tn, source, null);
+        }
+
+        ObjectNode payload = mapper.createObjectNode();
+        payload.put("trackingNumber", tn);
+        payload.put("state",          d.stateCode());
+        payload.put("type",           d.type());
+        payload.put("updatedAt",      updatedAt);
+        if (d.businessReference() != null) payload.put("businessReference", d.businessReference());
+        String unique = item.path("uniqueBusinessReference").asText(null);
+        if (unique != null && !unique.isBlank()) payload.put("uniqueBusinessReference", unique);
+        if (d.shopifyOrderId() != null) payload.put("shopifyOrderId", d.shopifyOrderId());
+        if (item.hasNonNull("creationTimestamp")) payload.set("creationTimestamp", item.get("creationTimestamp"));
+
+        return insertAndEnqueue(tenantId, tn, d.stateCode(), updatedAt, payload, source);
+    }
+
+    /** Guard 3, the idem-keyed insert and the enqueue — shared by the fetch and list-item paths. */
+    private boolean insertAndEnqueue(UUID tenantId, String trackingNumber, int fetchedState, String updatedAt,
+                                     ObjectNode payload, String source) {
         String payloadJson;
         try {
             payloadJson = mapper.writeValueAsString(payload);
@@ -179,7 +229,7 @@ public class BostaIngestionHelper {
         // events reach BostaWebhookJob concurrently and the second one's markProcessed() throws
         // DuplicateKeyException.
         String idemKey = BostaWebhookJob.sha256(
-            delivery.trackingNumber() + ":" + fetchedState + ":" + updatedAt);
+            trackingNumber + ":" + fetchedState + ":" + updatedAt);
 
         final String fPayload = payloadJson;
         final String fIdemKey = idemKey;

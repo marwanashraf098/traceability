@@ -2,6 +2,7 @@ package com.traceability;
 
 import com.traceability.integrations.bosta.BostaDiscoveryPollJob;
 import com.traceability.integrations.bosta.BostaGateway;
+import com.traceability.integrations.bosta.BostaV2Client;
 import org.jobrunr.scheduling.JobScheduler;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -61,6 +62,7 @@ class BostaDiscoveryKillSwitchTest {
 
     @Autowired BostaDiscoveryPollJob discoveryPollJob;
     @MockBean  BostaGateway          bostaGateway;
+    @MockBean  BostaV2Client         bostaV2;
     @MockBean  JobScheduler          jobScheduler;
 
     @Test
@@ -70,6 +72,7 @@ class BostaDiscoveryKillSwitchTest {
         discoveryPollJob.discoverAll();
 
         verify(bostaGateway, never()).listDeliveriesPage(anyString(), anyInt(), anyInt());
+        verify(bostaV2, never()).searchDeliveriesPage(anyString(), anyInt(), anyInt(), anyString());
         verify(bostaGateway, never()).fetchDelivery(anyString(), anyString());
     }
 }

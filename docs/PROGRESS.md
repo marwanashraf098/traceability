@@ -4,6 +4,43 @@
 
 ## Current state
 
+**Bosta discovery on the v2 delivery search (2026-10-03, branch `feat/bosta-discovery-v2-search` off main c41c299;
+not merged, not deployed). V134.**
+- Probe passed in prod (20:38, BROEK + Femine): `POST /api/v2/deliveries/search` with the tenant key → 200,
+  `data.deliveries`, page / limit honoured, count always "0"; `-createdAt` newest created first, page 2 exactly after
+  page 1; `-updatedAt` contiguous too. Femine created 50 deliveries within 06:18:49–06:19:44 UTC — batches are real.
+- `BostaV2Client.searchDeliveriesPage` (sortBy, limit; shared limiter BACKGROUND; 429 → blocks the key for its
+  retry-after + BostaRateLimitException; 5xx / IO / no data.deliveries → BostaTransientException; other 4xx →
+  BostaException; never retried). `BostaDiscoveryPollJob` walks it: `-createdAt`, `bosta.poll.discovery-page-limit`
+  (50), until items created before the mark minus the overlap, an empty or short page, or
+  `bosta.poll.discovery-max-pages` (default now 10 = 500 deliveries; env BOSTA_POLL_DISCOVERY_MAX_PAGES) / the item
+  ceiling. Mark advances only on a complete walk; capped walk resumes (head first, then shifted by the new ones).
+- Repeat-page guard: same first/last tracking as the page before, or every item already seen this run → WARN, stop,
+  nothing saved (mark kept, no walk position).
+- V134 clears `discovery_walk_page` / `discovery_walk_newest_at` (a v0 position means nothing on v2) — the first v2
+  run starts at page 1 and walks back to the existing `discovery_mark_at`. `discovery_short_page_logged_on` is left
+  in place, unused (the short-page warning is retired with v0 paging).
+- List items used directly: `BostaIngestionHelper.ingestListItem` builds the event from the item — trackingNumber,
+  state, type, updatedAt (idem key), plus businessReference, uniqueBusinessReference, shopifyInfo.orderId
+  (`shopifyOrderId`), creationTimestamp in the payload — no per-delivery fetch in discovery. An item without
+  state / type / updatedAt, or with a (state, type) the mapper doesn't know (the v2 list's labels may differ from
+  v0's), falls back to one fetch — never dropped. Pre-connect filter, status mapping, retry list, Guard 3, idem
+  key and limiter unchanged. The 2 s inter-fetch pause no longer applies to list items (retry pass keeps it).
+- **Still one v0 fetch per NEW delivery:** BostaWebhookJob's verify-by-fetch is untouched (its v0 response becomes
+  `shipments.raw`, which PickupAreaService / booking read in v0 shape). Dropping it for discovery-sourced events is a
+  separate decision once the v2 item is confirmed to carry the same fields.
+- Tests: new `BostaV2SearchPageTest` sq1–sq3, `BostaDiscoveryPagingTest` rewritten to the v2 contract (v1–v10);
+  `BostaPollJobTest` p6–p8/p15–p20, `BostaDiscoveryRetryTest` dr1–dr5 and `BostaDiscoveryKillSwitchTest` moved from
+  the v0 list stub to the search stub (fetch-count proxies → discovery-event counts; dr1–dr3's failing items lack
+  updatedAt so they take the fallback fetch); `BostaSearchItems` fixture helper; migration counts 133 / 78.
+  Revert-checked (each RED): no repeat guard → v4,v5; V134 a no-op → v6; always fetch → v7,v8,p15–p17; short page not
+  the end → v1; mark advanced on an incomplete walk → v2–v5,v9,v10; wrong sort → v1; 429 not blocking the key → sq2;
+  unmappable item dropped → v8,dr1–dr3; extra field dropped → v7.
+- **Not built (noted):** (1) status poll via `-updatedAt` search — one walk down to the last poll's updatedAt
+  instead of one fetch per in-flight shipment: ~730 req/h → ~20–60 req/h for a big tenant (~95% less);
+  (2) BostaBackfillJob (on connect / Sync button) still pages the v0 list with the 10-per-page cap — same blind
+  spots as old discovery; (3) BostaSearchProbe can be removed once this is live.
+
 **Review mode S4 — mute list (2026-10-03, branch `feat/review-simulated-courier-s4` off main cf92cf6, worktree
 `.claude/worktrees/review-s4`; not merged, not deployed). No migration. Built BEFORE S5 (Marawan's reorder).**
 - `ExceptionService.detectAllOpen`: `detectStuck` and `detectCancelledWithLiveShipment` skipped for a simulated-courier

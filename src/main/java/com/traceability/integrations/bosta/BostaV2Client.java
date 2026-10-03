@@ -452,6 +452,73 @@ public class BostaV2Client {
         }
     }
 
+    /**
+     * One page of the v2 delivery search, for discovery (2026-10-03). Same request as
+     * {@link #searchDeliveries} (READ-ONLY; shared rate limiter, BACKGROUND; never retried here).
+     * Contract proven in prod by BostaSearchProbe (BROEK + Femine, 2026-10-03): HTTP 200,
+     * {@code data.deliveries}, page / limit honoured, {@code count} always "0" (so the end of the list is
+     * an empty or short page, never a total). Returns the raw items in Bosta's order.
+     *
+     * @throws BostaRateLimitException a 429 (the key is blocked in the limiter for its retry-after) or
+     *         a limiter wait longer than its maximum
+     * @throws BostaTransientException 5xx, timeout / IO, or a 2xx without data.deliveries
+     * @throws BostaException any other 4xx (e.g. the key refused)
+     */
+    public List<JsonNode> searchDeliveriesPage(String apiKey, int page, int limit, String sortBy) {
+        limiter.acquire(apiKey, BostaRateLimiter.Priority.BACKGROUND);
+        String url = baseUrl + "/api/v2/deliveries/search";
+        ObjectNode body = mapper.createObjectNode();
+        body.putArray("stateCodes");
+        body.put("limit", limit);
+        body.put("page", page);
+        body.put("sortBy", sortBy);
+        String resp;
+        try {
+            resp = restClient.post().uri(url)
+                .header("Authorization", apiKey)
+                .contentType(MediaType.APPLICATION_JSON)
+                .body(body.toString().getBytes(StandardCharsets.UTF_8))
+                .retrieve()
+                .body(String.class);
+        } catch (RestClientResponseException e) {
+            int status = e.getStatusCode().value();
+            if (status == 429) {
+                long retryAfter = retryAfterSeconds(e);
+                limiter.onRateLimited(apiKey, retryAfter);
+                throw new BostaRateLimitException(retryAfter);
+            }
+            if (status >= 500) throw new BostaTransientException("Bosta delivery search page " + page + " answered " + status);
+            throw new BostaException("Bosta delivery search page " + page + " answered " + status);
+        } catch (Exception e) {
+            throw new BostaTransientException("Bosta delivery search page " + page + " failed: " + e.getClass().getSimpleName(), e);
+        }
+        JsonNode items;
+        try {
+            items = resp == null ? null : mapper.readTree(resp).path("data").path("deliveries");
+        } catch (Exception e) {
+            throw new BostaTransientException("Unreadable Bosta delivery search page " + page, e);
+        }
+        if (items == null || !items.isArray()) {
+            throw new BostaTransientException("Bosta delivery search page " + page + " has no data.deliveries");
+        }
+        List<JsonNode> out = new ArrayList<>(items.size());
+        items.forEach(out::add);
+        return out;
+    }
+
+    /** Retry-After header, else the body's retryAfter, else 60 s. */
+    private long retryAfterSeconds(RestClientResponseException e) {
+        try {
+            String h = e.getResponseHeaders() == null ? null : e.getResponseHeaders().getFirst("Retry-After");
+            if (h != null) return Math.max(1, Long.parseLong(h.trim()));
+        } catch (Exception ignored) { /* not a number */ }
+        try {
+            long b = mapper.readTree(e.getResponseBodyAsString()).path("retryAfter").asLong(0);
+            if (b > 0) return b;
+        } catch (Exception ignored) { /* not JSON */ }
+        return 60;
+    }
+
     public List<PickupLocation> listPickupLocations(String apiKey) {
         limiter.acquire(apiKey, BostaRateLimiter.Priority.USER_FACING);
         String url = baseUrl + "/api/v2/pickup-locations";

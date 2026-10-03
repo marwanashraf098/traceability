@@ -1,5 +1,6 @@
 package com.traceability.integrations.bosta;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import com.traceability.security.EncryptionService;
 import com.traceability.tenancy.TenantContext;
 import org.jobrunr.jobs.annotations.Job;
@@ -43,26 +44,29 @@ import java.util.stream.Collectors;
  * Tier 2 is the lightweight ongoing discovery pass covering the most recently created
  * deliveries that may have arrived since the last cycle.
  *
- * Paging (V133, 2026-10-03): Bosta returns at most 10 items per page whatever pageSize asks for
- * (prod: pageSize=50 → 10 items, the next page offset by 50). The old walk — pages 1–3 of "50" —
- * therefore saw items 1–10, 51–60, 101–110 and never 11–50 / 61–100, which is how BROEK's batch of
- * 32 and Femine's burst of 79 were missed. Discovery now asks for bosta.poll.discovery-page-size
- * (10) and walks pages 1, 2, 3 … newest first, de-duplicated by tracking number, until:
+ * Paging (v2 search, 2026-10-03; supersedes V133's v0 paging). Bosta's v0 list capped pages at 10
+ * items whatever pageSize asked for, offset by the requested size, so pages were walked blind. Discovery
+ * now reads POST /api/v2/deliveries/search (BostaV2Client.searchDeliveriesPage) — the dashboard's own
+ * search, proven in prod by BostaSearchProbe: sortBy "-createdAt", limit bosta.poll.discovery-page-limit
+ * (50) honoured, page 2 continues exactly after page 1, count always 0. It walks pages 1, 2, 3 …
+ * newest created first, de-duplicated by tracking number, until:
  *   - it reaches a delivery created before courier_accounts.discovery_mark_at minus
  *     bosta.poll.discovery-overlap-minutes (10) — the walk is complete; or
- *   - an empty page — the end of the list, complete; or
- *   - bosta.poll.discovery-max-pages (30) pages, or the per-cycle fetch ceiling — incomplete.
+ *   - an empty page, or one shorter than the limit — the end of the list, complete; or
+ *   - bosta.poll.discovery-max-pages (10), or the per-cycle item ceiling — incomplete.
  * Only a complete walk advances the mark (to the newest creation time it saw). An incomplete walk
  * keeps the old mark, stores the next page (discovery_walk_page) and the newest creation time at its
  * start (discovery_walk_newest_at), logs a WARN, and the next run first catches up on deliveries
- * created since then, then continues the walk shifted by their number. A page shorter than
- * pageSize mid-list is logged once per tenant per day (Bosta changing its page size again).
- * The first run after V133 walks back to the earlier of the old tracking mark's creation time and
- * now − bosta.poll.discovery-recovery-days (7), never before the Shopify connection cutoff.
+ * created since then, then continues the walk shifted by their number. Repeat-page guard: a page with
+ * the same first and last tracking number as the page before, or whose items were all already seen
+ * this run, means Bosta isn't paging — the walk stops with a WARN and nothing is saved (mark kept).
+ * V134 cleared the v0 walk state, so the first v2 run starts at page 1 and walks back to the mark.
+ * Each list item is ingested from its own fields (BostaIngestionHelper.ingestListItem — no
+ * per-delivery fetch here); an item missing what ingest needs falls back to one fetch.
  * Already-linked deliveries are skipped without a Bosta call; ingest stays idempotent.
  *
- * Per-item failures (V128 retry list, 2026-10-02): a delivery whose fetch fails (5xx / IO,
- * 429, "Delivery not found", anything unexpected) is written to bosta_discovery_failures and
+ * Per-item failures (V128 retry list, 2026-10-02): a delivery whose ingest fails (a fallback fetch's
+ * 5xx / IO, 429, "Delivery not found", anything unexpected) is written to bosta_discovery_failures and
  * retried by tracking number at the start of every cycle — never just skipped while the mark
  * moves past it. A 429 also stops the cycle and holds the mark. After
  * bosta.poll.discovery-max-item-failures (10) counted failures the row escalates: the
@@ -98,14 +102,17 @@ public class BostaDiscoveryPollJob {
     // collides with any other pg_advisory_lock use elsewhere in the codebase.
     private static final int LOCK_NAMESPACE = "bosta-discovery-lock".hashCode();
 
+    /** Newest created first — proven by BostaSearchProbe (page 2 continues exactly after page 1). */
+    static final String SORT_NEWEST_CREATED = "-createdAt";
+
     private final JdbcTemplate        ownerJdbc;
     private final JdbcTemplate        jdbc;
     private final TransactionTemplate  tx;
-    private final BostaGateway         bostaGateway;
+    private final BostaV2Client        bostaV2;
     private final EncryptionService    encryptionService;
     private final BostaIngestionHelper ingestionHelper;
     private final int                  maxPages;
-    private final int                  pageSize;
+    private final int                  pageLimit;
     private final int                  overlapMinutes;
     private final int                  recoveryDays;
     private final int                  maxNewItemsPerCycle;
@@ -119,11 +126,11 @@ public class BostaDiscoveryPollJob {
             @FlywayDataSource DataSource ownerDs,
             JdbcTemplate jdbc,
             PlatformTransactionManager txm,
-            BostaGateway bostaGateway,
+            BostaV2Client bostaV2,
             EncryptionService encryptionService,
             BostaIngestionHelper ingestionHelper,
-            @Value("${bosta.poll.discovery-max-pages:30}") int maxPages,
-            @Value("${bosta.poll.discovery-page-size:10}") int pageSize,
+            @Value("${bosta.poll.discovery-max-pages:10}") int maxPages,
+            @Value("${bosta.poll.discovery-page-limit:50}") int pageLimit,
             @Value("${bosta.poll.discovery-max-items-per-cycle:150}") int maxNewItemsPerCycle,
             @Value("${bosta.poll.inter-fetch-delay-ms:100}") long interFetchDelayMs,
             @Value("${bosta.poll.discovery-enabled:true}") boolean discoveryEnabled,
@@ -135,11 +142,11 @@ public class BostaDiscoveryPollJob {
         this.ownerJdbc           = new JdbcTemplate(ownerDs);
         this.jdbc                = jdbc;
         this.tx                  = new TransactionTemplate(txm);
-        this.bostaGateway        = bostaGateway;
+        this.bostaV2             = bostaV2;
         this.encryptionService   = encryptionService;
         this.ingestionHelper     = ingestionHelper;
         this.maxPages            = maxPages;
-        this.pageSize            = pageSize;
+        this.pageLimit           = pageLimit;
         this.overlapMinutes      = overlapMinutes;
         this.recoveryDays        = recoveryDays;
         this.maxNewItemsPerCycle = maxNewItemsPerCycle;
@@ -256,11 +263,10 @@ public class BostaDiscoveryPollJob {
                 if (attempted >= maxNewItemsPerCycle) { ceilingHit = true; break; }
             }
 
-            // List walk (V133). Bosta caps a page at 10 items whatever pageSize asks for, so
-            // discovery asks for pageSize (10) and walks pages 1, 2, 3 … newest first, de-duplicated
-            // by tracking number within the run, until it reaches deliveries created before the last
-            // complete run's mark (minus an overlap), the end of the list, or the page cap. A capped
-            // walk keeps the old mark and continues next run from where it stopped.
+            // List walk (v2 search). Newest created first, LIMIT per page, de-duplicated by tracking
+            // number within the run, until it reaches deliveries created before the last complete run's
+            // mark (minus an overlap), the end of the list (empty or short page), or the page cap. A
+            // capped walk keeps the old mark and continues next run from where it stopped.
             WalkState state = loadState(tenantId);
             Instant stopBefore = state.markAt().minus(Duration.ofMinutes(overlapMinutes));
             boolean resuming = state.walkPage() != null && state.walkNewestAt() != null;
@@ -270,85 +276,107 @@ public class BostaDiscoveryPollJob {
             boolean inHead = resuming;   // resuming: first catch up on deliveries created since the walk began
             int newSinceWalk = 0;
             Instant newestSeen = null;
-            boolean reachedMark = false, endOfList = false;
+            boolean reachedMark = false, endOfList = false, repeatedPage = false;
             int page = 1;
             Set<String> seen = new HashSet<>();
+            String prevFirst = null, prevLast = null;
 
             outer:
             while (!rateLimited && !ceilingHit && !transientError) {
                 if (pagesRead >= maxPages) break;
-                List<BostaGateway.SlimDelivery> items;
+                List<JsonNode> items;
                 try {
-                    items = bostaGateway.listDeliveriesPage(apiKey, page, pageSize);
+                    items = bostaV2.searchDeliveriesPage(apiKey, page, pageLimit, SORT_NEWEST_CREATED);
                 } catch (BostaRateLimitException e) {
                     log.warn("Discovery poll tenant {}: rate limited on page {} — stopping", tenantId, page);
                     rateLimited = true;
                     break;
-                } catch (BostaTransientException e) {
-                    log.warn("Discovery poll tenant {}: transient error on page {} — stopping: {}",
+                } catch (BostaException e) {
+                    log.warn("Discovery poll tenant {}: search page {} failed — stopping, mark kept: {}",
                         tenantId, page, e.getMessage());
                     transientError = true;
                     break;
                 }
                 pagesRead++;
                 if (items.isEmpty()) { endOfList = true; break; }
-                if (items.size() < pageSize) noteShortPage(tenantId, page, items.size());
 
-                List<String> pageTracking = items.stream().map(BostaGateway.SlimDelivery::trackingNumber).toList();
+                List<String> pageTracking = new ArrayList<>(items.size());
+                for (JsonNode it : items) {
+                    String tn = trackingNumber(it);
+                    if (tn != null) pageTracking.add(tn);
+                }
+                // Repeat-page guard: Bosta answering the same page again (page ignored), or a page of
+                // nothing new, means the walk can't trust its position — stop, don't move the mark.
+                String first = pageTracking.isEmpty() ? null : pageTracking.get(0);
+                String last  = pageTracking.isEmpty() ? null : pageTracking.get(pageTracking.size() - 1);
+                boolean samePage = first != null && first.equals(prevFirst) && last.equals(prevLast);
+                if (samePage || (!pageTracking.isEmpty() && seen.containsAll(pageTracking))) {
+                    log.warn("Discovery poll tenant {}: Bosta search page {} repeats the walk ({}…{}) — " +
+                        "stopping, mark {} kept", tenantId, page, first, last, state.markAt());
+                    repeatedPage = true;
+                    break;
+                }
+                prevFirst = first;
+                prevLast  = last;
+
                 Set<String> linked   = alreadyLinkedTrackingNumbers(tenantId, pageTracking);
                 Set<String> recorded = failureRowTrackingNumbers(tenantId, pageTracking);
                 boolean leftHead = false;
 
-                for (BostaGateway.SlimDelivery slim : items) {
-                    Instant created = slim.createdAt();
+                for (JsonNode item : items) {
+                    String tn = trackingNumber(item);
+                    if (tn == null) continue;
+                    Instant created = BostaHttpGateway.createdAt(item);
                     if (created != null && (newestSeen == null || created.isAfter(newestSeen))) newestSeen = created;
                     if (created != null && created.isBefore(stopBefore)) reachedMark = true;
                     if (inHead) {
                         if (created != null && !created.isAfter(headNewest)) leftHead = true;
                         else newSinceWalk++;
                     }
-                    if (!seen.add(slim.trackingNumber())) continue;   // dedup within the run
+                    if (!seen.add(tn)) continue;   // dedup within the run
                     total++;
 
-                    if (linked.contains(slim.trackingNumber())) continue;   // Tier 1 owns it
+                    if (linked.contains(tn)) continue;   // Tier 1 owns it
                     // Handled by the retry pass this cycle, or on the retry list (the retry pass
-                    // owns it, at its own pace). Never fetched twice in one cycle.
-                    if (handledThisCycle.contains(slim.trackingNumber())
-                            || recorded.contains(slim.trackingNumber())) continue;
+                    // owns it, at its own pace). Never ingested twice in one cycle.
+                    if (handledThisCycle.contains(tn) || recorded.contains(tn)) continue;
 
                     attempted++;
-                    ItemOutcome outcome = ingestTracked(tenantId, apiKey, slim.trackingNumber());
+                    ItemOutcome outcome = ingestListed(tenantId, apiKey, tn, item);
                     if (outcome == ItemOutcome.ENQUEUED) enqueued++;
                     if (outcome == ItemOutcome.RATE_LIMITED) { rateLimited = true; break outer; }
-                    if (!pause()) { transientError = true; break outer; }
+                    if (Thread.currentThread().isInterrupted()) { transientError = true; break outer; }
                     if (attempted >= maxNewItemsPerCycle) { ceilingHit = true; break outer; }
                 }
 
                 if (reachedMark) break;
+                if (items.size() < pageLimit) { endOfList = true; break; }
                 if (inHead && leftHead) {
                     // Caught up on the head: jump back into the interrupted walk, shifted by the
                     // deliveries created since it began (one page earlier for overlap; dedup and
                     // idempotent ingest absorb the repeats).
                     inHead = false;
-                    page = Math.max(page + 1, state.walkPage() + newSinceWalk / pageSize - 1);
+                    page = Math.max(page + 1, state.walkPage() + newSinceWalk / pageLimit - 1);
+                    prevFirst = prevLast = null;   // a jump is not a repeat
                     continue;
                 }
                 page++;
             }
 
-            boolean complete = (reachedMark || endOfList) && !rateLimited && !transientError && !ceilingHit;
+            boolean complete = (reachedMark || endOfList) && !rateLimited && !transientError && !ceilingHit
+                && !repeatedPage;
             if (complete) {
                 Instant newMark = latest(state.markAt(), latest(newestSeen, resuming ? state.walkNewestAt() : null));
                 saveState(tenantId, newMark, null, null);
-            } else if (!rateLimited && !transientError) {
-                // Page cap or fetch ceiling: keep the old mark, continue from here next run.
+            } else if (!rateLimited && !transientError && !repeatedPage) {
+                // Page cap or item ceiling: keep the old mark, continue from here next run.
                 Instant walkNewest = resuming ? latest(state.walkNewestAt(), newestSeen) : newestSeen;
-                // `page` is the next unread page after the page cap, or the page the fetch ceiling
+                // `page` is the next unread page after the page cap, or the page the item ceiling
                 // interrupted (redone next run; its handled items are idempotent no-ops).
                 saveState(tenantId, state.markAt(), page, walkNewest != null ? walkNewest : state.markAt());
                 log.warn("Discovery poll tenant {}: walk not finished — {} page(s) read{}, mark {} kept, " +
                     "continuing from page {} next run", tenantId, pagesRead,
-                    ceilingHit ? " (fetch ceiling)" : " (page cap)", state.markAt(), page);
+                    ceilingHit ? " (item ceiling)" : " (page cap)", state.markAt(), page);
             } else if (state.seeded()) {
                 saveState(tenantId, state.markAt(), state.walkPage(), state.walkNewestAt());   // persist the seed
             }
@@ -411,19 +439,6 @@ public class BostaDiscoveryPollJob {
             walkNewest == null ? null : Timestamp.from(walkNewest), tenantId));
     }
 
-    /** A page shorter than requested while the walk goes on — logged at most once per tenant per day. */
-    private void noteShortPage(UUID tenantId, int page, int got) {
-        Integer updated = tx.execute(s -> jdbc.update(
-            "UPDATE courier_accounts SET discovery_short_page_logged_on = current_date " +
-            "WHERE tenant_id = ? AND provider = 'bosta' " +
-            "  AND discovery_short_page_logged_on IS DISTINCT FROM current_date", tenantId));
-        if (updated != null && updated > 0) {
-            log.warn("Discovery poll tenant {}: Bosta returned {} item(s) on page {} for pageSize {} — " +
-                "a short page mid-list means Bosta's page size changed (logged once per tenant per day)",
-                tenantId, got, page, pageSize);
-        }
-    }
-
     private static Instant toInstant(Object o) {
         if (o == null) return null;
         if (o instanceof Timestamp ts) return ts.toInstant();
@@ -463,6 +478,35 @@ public class BostaDiscoveryPollJob {
                 + (e.getMessage() != null ? ": " + e.getMessage() : ""));
             return ItemOutcome.FAILED;
         }
+    }
+
+    /** One search-list item through BostaIngestionHelper.ingestListItem — same outcome handling as ingestTracked. */
+    private ItemOutcome ingestListed(UUID tenantId, String apiKey, String trackingNumber, JsonNode item) {
+        try {
+            boolean enq = ingestionHelper.ingestListItem(tenantId, apiKey, item, "bosta_poll_discovery");
+            clearFailure(tenantId, trackingNumber);
+            return enq ? ItemOutcome.ENQUEUED : ItemOutcome.SKIPPED;
+        } catch (BostaRateLimitException e) {
+            log.warn("Discovery poll tenant {}: rate limited on {} — stopping this cycle",
+                tenantId, trackingNumber);
+            recordFailure(tenantId, trackingNumber, true, "rate limited (retry after "
+                + e.getRetryAfterSeconds() + "s)");
+            return ItemOutcome.RATE_LIMITED;
+        } catch (Exception e) {
+            log.warn("Discovery poll tenant {}: ingest failed for {} — on the retry list: {}",
+                tenantId, trackingNumber, e.toString());
+            recordFailure(tenantId, trackingNumber, false, e.getClass().getSimpleName()
+                + (e.getMessage() != null ? ": " + e.getMessage() : ""));
+            return ItemOutcome.FAILED;
+        }
+    }
+
+    /** A search item's tracking number as text (Bosta sends it as a number or a string), or null. */
+    private static String trackingNumber(JsonNode item) {
+        JsonNode t = item.path("trackingNumber");
+        if (t.isMissingNode() || t.isNull()) return null;
+        String s = t.asText();
+        return s.isBlank() ? null : s;
     }
 
     /** Sleeps the inter-fetch delay; false if interrupted. */

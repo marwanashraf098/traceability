@@ -94,6 +94,8 @@ class BostaPollJobTest {
         // Small ceiling + page size for p16 (burst > ceiling, resumable in 2 cycles)
         r.add("bosta.poll.discovery-max-items-per-cycle", () -> "3");
         r.add("bosta.backfill.page-size",                 () -> "3");
+        // v2 search pages of 3, so p16/p19's three-item pages are full pages (a short page ends the walk)
+        r.add("bosta.poll.discovery-page-limit",          () -> "3");
     }
 
     @Autowired JdbcTemplate          jdbc;
@@ -105,6 +107,7 @@ class BostaPollJobTest {
     @Autowired BostaIngestionHelper  ingestionHelper;
     @Autowired MatcherVersionHolder  matcherVersionHolder;
     @MockBean  BostaGateway          bostaGateway;
+    @MockBean  BostaV2Client         bostaV2;
     @MockBean  JobScheduler          jobScheduler;
 
     // app_user datasource — RLS enforced (no BYPASSRLS), used to prove GUC is active
@@ -160,6 +163,7 @@ class BostaPollJobTest {
         jdbc.execute("DELETE FROM webhook_events");
         jdbc.execute("DELETE FROM courier_accounts");
         reset(bostaGateway);
+        reset(bostaV2);
     }
 
     // ── p1: Tier 1 — changed state → full pipeline execution ──────────────────
@@ -308,6 +312,7 @@ class BostaPollJobTest {
         // Second poll cycle: previously polled (last_polled_at set) come last → the 2
         // un-polled ones go first, plus 1 from the old batch
         reset(bostaGateway);
+        reset(bostaV2);
         for (String t : trackings) {
             when(bostaGateway.fetchDelivery(anyString(), eq(t))).thenReturn(null);
         }
@@ -422,11 +427,11 @@ class BostaPollJobTest {
             rawWithUpdatedAt(updatedAt));
 
         when(bostaGateway.fetchDelivery(anyString(), eq(tracking))).thenReturn(delivery);
-        when(bostaGateway.listDeliveriesPage(anyString(), eq(1), anyInt()))
-            .thenReturn(List.of(new BostaGateway.SlimDelivery(tracking, 45, "SEND")));
-        when(bostaGateway.listDeliveriesPage(anyString(), eq(2), anyInt()))
+        when(bostaV2.searchDeliveriesPage(anyString(), eq(1), anyInt(), anyString())).thenReturn(BostaSearchItems.page(
+            BostaSearchItems.item(tracking, 45, null)));
+        when(bostaV2.searchDeliveriesPage(anyString(), eq(2), anyInt(), anyString()))
             .thenReturn(List.of());
-        when(bostaGateway.listDeliveriesPage(anyString(), eq(3), anyInt()))
+        when(bostaV2.searchDeliveriesPage(anyString(), eq(3), anyInt(), anyString()))
             .thenReturn(List.of());
 
         // Both Tier 1 and Tier 2 fire for the same, already-linked delivery.
@@ -459,11 +464,11 @@ class BostaPollJobTest {
 
         setupCourierAccount("poll-key-p7");
 
-        when(bostaGateway.listDeliveriesPage(anyString(), eq(1), anyInt()))
-            .thenReturn(List.of(new BostaGateway.SlimDelivery(tracking, 41, "SEND")));
-        when(bostaGateway.listDeliveriesPage(anyString(), eq(2), anyInt()))
+        when(bostaV2.searchDeliveriesPage(anyString(), eq(1), anyInt(), anyString())).thenReturn(BostaSearchItems.page(
+            BostaSearchItems.item(tracking, 41, null)));
+        when(bostaV2.searchDeliveriesPage(anyString(), eq(2), anyInt(), anyString()))
             .thenReturn(List.of());
-        when(bostaGateway.listDeliveriesPage(anyString(), eq(3), anyInt()))
+        when(bostaV2.searchDeliveriesPage(anyString(), eq(3), anyInt(), anyString()))
             .thenReturn(List.of());
         when(bostaGateway.fetchDelivery(anyString(), eq(tracking)))
             .thenReturn(new BostaDelivery(tracking, 41, "SEND", 0, "REF-P7", null,
@@ -487,11 +492,11 @@ class BostaPollJobTest {
 
         setupCourierAccount("poll-key-p8");
 
-        when(bostaGateway.listDeliveriesPage(anyString(), eq(1), anyInt()))
-            .thenReturn(List.of(new BostaGateway.SlimDelivery(tracking, 41, "SEND")));
-        when(bostaGateway.listDeliveriesPage(anyString(), eq(2), anyInt()))
+        when(bostaV2.searchDeliveriesPage(anyString(), eq(1), anyInt(), anyString())).thenReturn(BostaSearchItems.page(
+            BostaSearchItems.item(tracking, 41, null)));
+        when(bostaV2.searchDeliveriesPage(anyString(), eq(2), anyInt(), anyString()))
             .thenReturn(List.of());
-        when(bostaGateway.listDeliveriesPage(anyString(), eq(3), anyInt()))
+        when(bostaV2.searchDeliveriesPage(anyString(), eq(3), anyInt(), anyString()))
             .thenReturn(List.of());
         when(bostaGateway.fetchDelivery(anyString(), eq(tracking)))
             .thenReturn(new BostaDelivery(tracking, 41, "SEND", 0, "REF-P8", null,
@@ -848,10 +853,9 @@ class BostaPollJobTest {
         jdbc.update("UPDATE courier_accounts SET discovery_mark_at = ? WHERE tenant_id = ?",
             java.sql.Timestamp.from(markAt), tenantId);
 
-        when(bostaGateway.listDeliveriesPage(anyString(), eq(1), anyInt()))
-            .thenReturn(List.of(
-                new BostaGateway.SlimDelivery(fresh, 41, "SEND", freshAt),
-                new BostaGateway.SlimDelivery(older, 24, "SEND", olderAt)));
+        when(bostaV2.searchDeliveriesPage(anyString(), eq(1), anyInt(), anyString())).thenReturn(BostaSearchItems.page(
+            BostaSearchItems.item(fresh, 41, freshAt),
+                BostaSearchItems.item(older, 24, olderAt)));
         when(bostaGateway.fetchDelivery(anyString(), eq(fresh)))
             .thenReturn(new BostaDelivery(fresh, 41, "SEND", 0, "REF-P15", null,
                 rawWithUpdatedAt("2026-08-01T10:00:00.000Z")));
@@ -859,9 +863,11 @@ class BostaPollJobTest {
         // Cycle 1: one genuinely new delivery above the mark.
         discoveryPollJob.discoverAll();
 
-        verify(bostaGateway, times(1)).listDeliveriesPage(anyString(), eq(1), anyInt());
-        verify(bostaGateway, never()).listDeliveriesPage(anyString(), eq(2), anyInt());
-        verify(bostaGateway, times(1)).fetchDelivery(anyString(), eq(fresh));
+        verify(bostaV2, times(1)).searchDeliveriesPage(anyString(), eq(1), anyInt(), anyString());
+        verify(bostaV2, never()).searchDeliveriesPage(anyString(), eq(2), anyInt(), anyString());
+        // v2: ingested from the list item itself — no per-delivery fetch.
+        verify(bostaGateway, never()).fetchDelivery(anyString(), eq(fresh));
+        assertThat(discoveryEvents(fresh)).isEqualTo(1);
 
         java.sql.Timestamp markAfterCycle1 = jdbc.queryForObject(
             "SELECT discovery_mark_at FROM courier_accounts WHERE tenant_id = ?",
@@ -874,16 +880,16 @@ class BostaPollJobTest {
         createShipment(fresh, "with_courier");
 
         reset(bostaGateway);
-        when(bostaGateway.listDeliveriesPage(anyString(), eq(1), anyInt()))
-            .thenReturn(List.of(
-                new BostaGateway.SlimDelivery(fresh, 41, "SEND", freshAt),
-                new BostaGateway.SlimDelivery(older, 24, "SEND", olderAt)));
+        reset(bostaV2);
+        when(bostaV2.searchDeliveriesPage(anyString(), eq(1), anyInt(), anyString())).thenReturn(BostaSearchItems.page(
+            BostaSearchItems.item(fresh, 41, freshAt),
+                BostaSearchItems.item(older, 24, olderAt)));
 
         // Cycle 2: nothing new arrived, and "fresh" is now confirmed linked.
         discoveryPollJob.discoverAll();
 
-        verify(bostaGateway, times(1)).listDeliveriesPage(anyString(), eq(1), anyInt());
-        verify(bostaGateway, never()).listDeliveriesPage(anyString(), eq(2), anyInt());
+        verify(bostaV2, times(1)).searchDeliveriesPage(anyString(), eq(1), anyInt(), anyString());
+        verify(bostaV2, never()).searchDeliveriesPage(anyString(), eq(2), anyInt(), anyString());
         verify(bostaGateway, never()).fetchDelivery(anyString(), any());
     }
 
@@ -901,24 +907,25 @@ class BostaPollJobTest {
                 .thenReturn(new BostaDelivery(t, 41, "SEND", 0, "REF-" + t, null,
                     rawWithUpdatedAt("2026-08-02T09:00:00.000Z")));
         }
-        when(bostaGateway.listDeliveriesPage(anyString(), eq(1), anyInt())).thenReturn(List.of(
-            new BostaGateway.SlimDelivery(tracking[0], 41, "SEND"),
-            new BostaGateway.SlimDelivery(tracking[1], 41, "SEND"),
-            new BostaGateway.SlimDelivery(tracking[2], 41, "SEND")));
-        when(bostaGateway.listDeliveriesPage(anyString(), eq(2), anyInt())).thenReturn(List.of(
-            new BostaGateway.SlimDelivery(tracking[3], 41, "SEND"),
-            new BostaGateway.SlimDelivery(tracking[4], 41, "SEND"),
-            new BostaGateway.SlimDelivery(tracking[5], 41, "SEND")));
-        when(bostaGateway.listDeliveriesPage(anyString(), eq(3), anyInt())).thenReturn(List.of());
+        when(bostaV2.searchDeliveriesPage(anyString(), eq(1), anyInt(), anyString())).thenReturn(BostaSearchItems.page(
+            BostaSearchItems.item(tracking[0], 41, null),
+            BostaSearchItems.item(tracking[1], 41, null),
+            BostaSearchItems.item(tracking[2], 41, null)));
+        when(bostaV2.searchDeliveriesPage(anyString(), eq(2), anyInt(), anyString())).thenReturn(BostaSearchItems.page(
+            BostaSearchItems.item(tracking[3], 41, null),
+            BostaSearchItems.item(tracking[4], 41, null),
+            BostaSearchItems.item(tracking[5], 41, null)));
+        when(bostaV2.searchDeliveriesPage(anyString(), eq(3), anyInt(), anyString())).thenReturn(List.of());
 
         // Cycle 1: ceiling (3, test-configured) reached at the end of page 1 — page 2
         // is never fetched even though the mock has an answer ready for it.
         discoveryPollJob.discoverAll();
 
-        verify(bostaGateway, times(1)).listDeliveriesPage(anyString(), eq(1), anyInt());
-        verify(bostaGateway, never()).listDeliveriesPage(anyString(), eq(2), anyInt());
-        for (int i = 0; i < 3; i++) verify(bostaGateway, times(1)).fetchDelivery(anyString(), eq(tracking[i]));
-        for (int i = 3; i < 6; i++) verify(bostaGateway, never()).fetchDelivery(anyString(), eq(tracking[i]));
+        verify(bostaV2, times(1)).searchDeliveriesPage(anyString(), eq(1), anyInt(), anyString());
+        verify(bostaV2, never()).searchDeliveriesPage(anyString(), eq(2), anyInt(), anyString());
+        for (int i = 0; i < 3; i++) assertThat(discoveryEvents(tracking[i])).isEqualTo(1);
+        for (int i = 3; i < 6; i++) assertThat(discoveryEvents(tracking[i])).isZero();
+        verify(bostaGateway, never()).fetchDelivery(anyString(), any());
 
         String markAfterCycle1 = jdbc.queryForObject(
             "SELECT discovery_high_water_tracking FROM courier_accounts WHERE tenant_id = ?",
@@ -929,27 +936,28 @@ class BostaPollJobTest {
         for (int i = 0; i < 3; i++) createShipment(tracking[i], "with_courier");
 
         reset(bostaGateway);
+        reset(bostaV2);
         for (String t : tracking) {
             when(bostaGateway.fetchDelivery(anyString(), eq(t)))
                 .thenReturn(new BostaDelivery(t, 41, "SEND", 0, "REF-" + t, null,
                     rawWithUpdatedAt("2026-08-02T09:00:00.000Z")));
         }
-        when(bostaGateway.listDeliveriesPage(anyString(), eq(1), anyInt())).thenReturn(List.of(
-            new BostaGateway.SlimDelivery(tracking[0], 41, "SEND"),
-            new BostaGateway.SlimDelivery(tracking[1], 41, "SEND"),
-            new BostaGateway.SlimDelivery(tracking[2], 41, "SEND")));
-        when(bostaGateway.listDeliveriesPage(anyString(), eq(2), anyInt())).thenReturn(List.of(
-            new BostaGateway.SlimDelivery(tracking[3], 41, "SEND"),
-            new BostaGateway.SlimDelivery(tracking[4], 41, "SEND"),
-            new BostaGateway.SlimDelivery(tracking[5], 41, "SEND")));
-        when(bostaGateway.listDeliveriesPage(anyString(), eq(3), anyInt())).thenReturn(List.of());
+        when(bostaV2.searchDeliveriesPage(anyString(), eq(1), anyInt(), anyString())).thenReturn(BostaSearchItems.page(
+            BostaSearchItems.item(tracking[0], 41, null),
+            BostaSearchItems.item(tracking[1], 41, null),
+            BostaSearchItems.item(tracking[2], 41, null)));
+        when(bostaV2.searchDeliveriesPage(anyString(), eq(2), anyInt(), anyString())).thenReturn(BostaSearchItems.page(
+            BostaSearchItems.item(tracking[3], 41, null),
+            BostaSearchItems.item(tracking[4], 41, null),
+            BostaSearchItems.item(tracking[5], 41, null)));
+        when(bostaV2.searchDeliveriesPage(anyString(), eq(3), anyInt(), anyString())).thenReturn(List.of());
 
         // Cycle 2: items 1–3 skipped cheaply (already linked, no Bosta call); items
         // 4–6 are genuinely still unresolved and get drained.
         discoveryPollJob.discoverAll();
 
-        for (int i = 0; i < 3; i++) verify(bostaGateway, never()).fetchDelivery(anyString(), eq(tracking[i]));
-        for (int i = 3; i < 6; i++) verify(bostaGateway, times(1)).fetchDelivery(anyString(), eq(tracking[i]));
+        for (int i = 3; i < 6; i++) assertThat(discoveryEvents(tracking[i])).isEqualTo(1);
+        verify(bostaGateway, never()).fetchDelivery(anyString(), any());
 
         // Nothing dropped, nothing double-enqueued: exactly one webhook_events row per
         // tracking number across both cycles combined.
@@ -976,22 +984,25 @@ class BostaPollJobTest {
         jdbc.update("UPDATE courier_accounts SET discovery_mark_at = ? WHERE tenant_id = ?",
             java.sql.Timestamp.from(markAt), tenantId);
 
-        when(bostaGateway.listDeliveriesPage(anyString(), eq(1), anyInt())).thenReturn(List.of(
-            new BostaGateway.SlimDelivery(aboveMark, 41, "SEND", markAt.plusSeconds(3600)),
-            new BostaGateway.SlimDelivery(atMark, 24, "SEND", markAt),
-            new BostaGateway.SlimDelivery(belowMark, 45, "SEND", markAt.minusSeconds(3600))));
+        when(bostaV2.searchDeliveriesPage(anyString(), eq(1), anyInt(), anyString())).thenReturn(BostaSearchItems.page(
+            BostaSearchItems.item(aboveMark, 41, markAt.plusSeconds(3600)),
+            BostaSearchItems.item(atMark, 24, markAt),
+            BostaSearchItems.item(belowMark, 45, markAt.minusSeconds(3600))));
         when(bostaGateway.fetchDelivery(anyString(), eq(aboveMark)))
             .thenReturn(new BostaDelivery(aboveMark, 41, "SEND", 0, "REF-P17", null,
                 rawWithUpdatedAt("2026-08-04T09:00:00.000Z")));
 
         discoveryPollJob.discoverAll();
 
-        verify(bostaGateway, times(1)).fetchDelivery(anyString(), eq(aboveMark));
+        assertThat(discoveryEvents(aboveMark)).isEqualTo(1);
+        assertThat(discoveryEvents(atMark)).isZero();
+        assertThat(discoveryEvents(belowMark)).isZero();
+        verify(bostaGateway, never()).fetchDelivery(anyString(), eq(aboveMark));
         verify(bostaGateway, never()).fetchDelivery(anyString(), eq(atMark));
         verify(bostaGateway, never()).fetchDelivery(anyString(), eq(belowMark));
         // The scan stops the instant it hits the mark — a second page (where belowMark
         // would live in a real, longer list) is never even requested.
-        verify(bostaGateway, never()).listDeliveriesPage(anyString(), eq(2), anyInt());
+        verify(bostaV2, never()).searchDeliveriesPage(anyString(), eq(2), anyInt(), anyString());
     }
 
     // ── p18: Tier 2 advisory lock — held elsewhere → this run skips cleanly ───
@@ -1001,8 +1012,8 @@ class BostaPollJobTest {
         String tracking = "BOS-P18";
         setupCourierAccount("poll-key-p18");
 
-        when(bostaGateway.listDeliveriesPage(anyString(), eq(1), anyInt()))
-            .thenReturn(List.of(new BostaGateway.SlimDelivery(tracking, 41, "SEND")));
+        when(bostaV2.searchDeliveriesPage(anyString(), eq(1), anyInt(), anyString())).thenReturn(BostaSearchItems.page(
+            BostaSearchItems.item(tracking, 41, null)));
         when(bostaGateway.fetchDelivery(anyString(), eq(tracking)))
             .thenReturn(new BostaDelivery(tracking, 41, "SEND", 0, "REF-P18", null,
                 rawWithUpdatedAt("2026-08-03T09:00:00.000Z")));
@@ -1020,7 +1031,7 @@ class BostaPollJobTest {
 
             discoveryPollJob.discoverAll();
 
-            verify(bostaGateway, never()).listDeliveriesPage(anyString(), anyInt(), anyInt());
+            verify(bostaV2, never()).searchDeliveriesPage(anyString(), anyInt(), anyInt(), anyString());
             verify(bostaGateway, never()).fetchDelivery(anyString(), any());
 
             try (PreparedStatement ps = lockConn.prepareStatement("SELECT pg_advisory_unlock(?, ?)")) {
@@ -1033,8 +1044,8 @@ class BostaPollJobTest {
         // Lock is free again — this run proceeds normally.
         discoveryPollJob.discoverAll();
 
-        verify(bostaGateway, times(1)).listDeliveriesPage(anyString(), eq(1), anyInt());
-        verify(bostaGateway, times(1)).fetchDelivery(anyString(), eq(tracking));
+        verify(bostaV2, times(1)).searchDeliveriesPage(anyString(), eq(1), anyInt(), anyString());
+        assertThat(discoveryEvents(tracking)).isEqualTo(1);
     }
 
     // ── p19: Tier 2 high-water mark — from-null first cycle, page-exhaustion ──
@@ -1060,18 +1071,18 @@ class BostaPollJobTest {
         // (attempted-only) never fires either.
         for (String t : tracking) createShipment(t, "with_courier");
 
-        when(bostaGateway.listDeliveriesPage(anyString(), eq(1), anyInt())).thenReturn(List.of(
-            new BostaGateway.SlimDelivery(tracking[0], 41, "SEND"),
-            new BostaGateway.SlimDelivery(tracking[1], 41, "SEND"),
-            new BostaGateway.SlimDelivery(tracking[2], 41, "SEND")));
-        when(bostaGateway.listDeliveriesPage(anyString(), eq(2), anyInt())).thenReturn(List.of(
-            new BostaGateway.SlimDelivery(tracking[3], 41, "SEND"),
-            new BostaGateway.SlimDelivery(tracking[4], 41, "SEND"),
-            new BostaGateway.SlimDelivery(tracking[5], 41, "SEND")));
-        when(bostaGateway.listDeliveriesPage(anyString(), eq(3), anyInt())).thenReturn(List.of(
-            new BostaGateway.SlimDelivery(tracking[6], 41, "SEND"),
-            new BostaGateway.SlimDelivery(tracking[7], 41, "SEND"),
-            new BostaGateway.SlimDelivery(tracking[8], 41, "SEND")));
+        when(bostaV2.searchDeliveriesPage(anyString(), eq(1), anyInt(), anyString())).thenReturn(BostaSearchItems.page(
+            BostaSearchItems.item(tracking[0], 41, null),
+            BostaSearchItems.item(tracking[1], 41, null),
+            BostaSearchItems.item(tracking[2], 41, null)));
+        when(bostaV2.searchDeliveriesPage(anyString(), eq(2), anyInt(), anyString())).thenReturn(BostaSearchItems.page(
+            BostaSearchItems.item(tracking[3], 41, null),
+            BostaSearchItems.item(tracking[4], 41, null),
+            BostaSearchItems.item(tracking[5], 41, null)));
+        when(bostaV2.searchDeliveriesPage(anyString(), eq(3), anyInt(), anyString())).thenReturn(BostaSearchItems.page(
+            BostaSearchItems.item(tracking[6], 41, null),
+            BostaSearchItems.item(tracking[7], 41, null),
+            BostaSearchItems.item(tracking[8], 41, null)));
 
         // V132: discovery_mark_at starts NULL (never set for this tenant).
         Object markBefore = jdbc.queryForObject(
@@ -1083,9 +1094,9 @@ class BostaPollJobTest {
 
         // V132: the walk goes on until the end of the list (page 4 is empty — no creation times
         // here, so nothing older than the mark is ever reached).
-        verify(bostaGateway, times(1)).listDeliveriesPage(anyString(), eq(3), anyInt());
-        verify(bostaGateway, times(1)).listDeliveriesPage(anyString(), eq(4), anyInt());
-        verify(bostaGateway, never()).listDeliveriesPage(anyString(), eq(5), anyInt());
+        verify(bostaV2, times(1)).searchDeliveriesPage(anyString(), eq(3), anyInt(), anyString());
+        verify(bostaV2, times(1)).searchDeliveriesPage(anyString(), eq(4), anyInt(), anyString());
+        verify(bostaV2, never()).searchDeliveriesPage(anyString(), eq(5), anyInt(), anyString());
         verify(bostaGateway, never()).fetchDelivery(anyString(), any());
 
         Map<String, Object> after = jdbc.queryForMap(
@@ -1115,9 +1126,9 @@ class BostaPollJobTest {
 
         setupCourierAccount("poll-key-p20");
 
-        when(bostaGateway.listDeliveriesPage(anyString(), eq(1), anyInt()))
-            .thenReturn(List.of(new BostaGateway.SlimDelivery(top, 41, "SEND")));
-        when(bostaGateway.listDeliveriesPage(anyString(), eq(2), anyInt()))
+        when(bostaV2.searchDeliveriesPage(anyString(), eq(1), anyInt(), anyString())).thenReturn(BostaSearchItems.page(
+            BostaSearchItems.item(top, 41, null)));
+        when(bostaV2.searchDeliveriesPage(anyString(), eq(2), anyInt(), anyString()))
             .thenReturn(List.of());
         when(bostaGateway.fetchDelivery(anyString(), eq(top)))
             .thenReturn(new BostaDelivery(top, 41, "SEND", 0, "REF-P20-TOP", null,
@@ -1130,7 +1141,7 @@ class BostaPollJobTest {
         // match hasn't run yet.
         discoveryPollJob.discoverAll();
 
-        verify(bostaGateway, times(1)).fetchDelivery(anyString(), eq(top));
+        assertThat(discoveryEvents(top)).isEqualTo(1);
 
         Object markAfterCycle1 = jdbc.queryForObject(
             "SELECT discovery_mark_at FROM courier_accounts WHERE tenant_id = ?",
@@ -1146,10 +1157,11 @@ class BostaPollJobTest {
         // and "older", strictly behind it in the newest-first list, would never be
         // fetched at all.
         reset(bostaGateway);
-        when(bostaGateway.listDeliveriesPage(anyString(), eq(1), anyInt())).thenReturn(List.of(
-            new BostaGateway.SlimDelivery(new2, 41, "SEND"),
-            new BostaGateway.SlimDelivery(top, 41, "SEND"),
-            new BostaGateway.SlimDelivery(older, 41, "SEND")));
+        reset(bostaV2);
+        when(bostaV2.searchDeliveriesPage(anyString(), eq(1), anyInt(), anyString())).thenReturn(BostaSearchItems.page(
+            BostaSearchItems.item(new2, 41, null),
+            BostaSearchItems.item(top, 41, null),
+            BostaSearchItems.item(older, 41, null)));
         when(bostaGateway.fetchDelivery(anyString(), eq(new2)))
             .thenReturn(new BostaDelivery(new2, 41, "SEND", 0, "REF-P20-NEW2", null,
                 rawWithUpdatedAt("2026-08-05T09:05:00.000Z")));
@@ -1165,8 +1177,8 @@ class BostaPollJobTest {
         // The scan must not latch onto "top" — it has to fall through and reach
         // "older", proving nothing between the mark and the true end of this cycle's
         // scan was silently skipped.
-        verify(bostaGateway, times(1)).fetchDelivery(anyString(), eq(new2));
-        verify(bostaGateway, times(1)).fetchDelivery(anyString(), eq(older));
+        assertThat(discoveryEvents(new2)).isEqualTo(1);
+        assertThat(discoveryEvents(older)).isEqualTo(1);
 
         // "top" is re-attempted (harmless retry, not a skip) but must land exactly
         // one webhook_events row — content-derived idem key (tracking+state+
@@ -1180,6 +1192,12 @@ class BostaPollJobTest {
     }
 
     // ── helpers ───────────────────────────────────────────────────────────────
+
+    private int discoveryEvents(String tracking) {
+        return jdbc.queryForObject(
+            "SELECT COUNT(*) FROM webhook_events WHERE payload->>'trackingNumber' = ? " +
+            "AND source::text = 'bosta_poll_discovery'", Integer.class, tracking);
+    }
 
     private void setupCourierAccount(String rawApiKey) {
         jdbc.update(

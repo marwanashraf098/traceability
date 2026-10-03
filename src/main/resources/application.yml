@@ -163,17 +163,18 @@ bosta:
     # Hard page-count safety valve (circuit breaker), independent of the ceiling below —
     # protects against a runaway/buggy page walk. NOT the normal per-cycle work bound
     # any more (that's discovery-max-items-per-cycle) — see BostaDiscoveryPollJob javadoc.
-    # V133 paging: Bosta returns at most 10 items per page whatever pageSize asks for. Discovery
-    # asks for 10 and walks pages 1, 2, 3 … until it reaches the last complete run's mark (minus the
-    # overlap), the end of the list, or max-pages (then it continues next run, mark kept).
-    discovery-page-size: 10
-    discovery-max-pages: 30
+    # Discovery pages Bosta's v2 delivery search (2026-10-03, V134): newest created first, page-limit
+    # per page, walking pages 1, 2, 3 … until it reaches the last complete run's mark (minus the
+    # overlap), an empty or short page, or max-pages (then it continues next run, mark kept).
+    # Env: BOSTA_POLL_DISCOVERY_MAX_PAGES.
+    discovery-page-limit: 50
+    discovery-max-pages: 10
     discovery-overlap-minutes: 10
     # First run after V133: walk back this many days (or to the old mark if older), never before the
     # Shopify connection cutoff.
     discovery-recovery-days: 7
     # Per-cycle cap on genuinely unresolved items (brand new, or still-unlinked from an
-    # earlier cycle) that get a real Bosta fetchDelivery call — the current effective
+    # earlier cycle) that discovery ingests (from the list item; a fetch only as fallback) — the current effective
     # discovery-pages × backfill.page-size bound (3 × 50). Already-linked items are
     # skipped via a cheap local shipments check and don't count toward this. If a burst
     # exceeds it, the cycle processes what it can and resumes next cycle — see
