@@ -19,6 +19,17 @@
   R1004 with_courier, R1005 delivered, R1006 delivered + approved refund request RR-REVW2, R1007 on hold, R1008–R1013 ready
   (R1008 / R1011 two units). Each step sets the tenant itself (runAs doesn't nest); not one transaction — a partial run is
   refused next time (FIXTURE_EXISTS) → S6 reset. Queue-mode packing leaves orders `packed` (not awaiting_pickup).
+- **Fail fast:** every seed step is named (`step(label)`: "create #R1004", "pack #R1002", "pickup scan #R1004", …);
+  a throw logs `Review seed FAILED at step '<label>' (tenant …): the fixture is PARTIAL` and rethrows. A partial
+  fixture stays inside the tenant: every write is app_user under that tenant (RLS WITH CHECK), the placeholder
+  domain is `.invalid` (reserved, never a real shop), the only global side effect is `simulated_tracking_seq`.
+- **`ReviewTenantRlsTest` (o4b, o4c):** the seeder + its whole service chain hand-wired over an app_user
+  TenantAwareDataSource (the *RlsTest pattern) with @Transactional proxies on the app_user tx manager — o4b =
+  o4's assertions (shared `ReviewFixtureAssertions`) + app_user with no / another tenant sees none of it; o4c = a
+  failing step is logged with step + order and rethrown, other tenants' rows and global tables unchanged, the next
+  seed refuses (FIXTURE_EXISTS). Nested `TenantContext.runAs` did NOT lose the tenant in any step (each step's
+  GUC is set at its transaction's begin). Revert-checked: variant inserts outside a transaction (no GUC) → o4b
+  red on RLS 42501 while postgres-run o4 stays green; step logging removed → o4c red.
 - Tests `OpsSecretGuardTest`, `ReviewTenantTest` o1–o6 + o8 (random password + secret per run; none in the log), static
   `ReviewTenantSeederGuardTest` (o7) — all revert-checked: no secret check → o1 + guard test; no email check → o1; no flag
   check → o3 (o4, o6); no fixture marker → o5; raw piece inserts → o4 + o7; owner-pool reference → o7; SQL protected-tenant

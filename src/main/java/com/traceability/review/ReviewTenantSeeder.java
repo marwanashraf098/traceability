@@ -11,6 +11,8 @@ import com.traceability.inventory.UlidGenerator;
 import com.traceability.portal.ReturnRequestLifecycle;
 import com.traceability.portal.ReturnRequestService;
 import com.traceability.tenancy.TenantContext;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
@@ -47,6 +49,8 @@ import java.util.function.Supplier;
  */
 @Component
 public class ReviewTenantSeeder {
+
+    private static final Logger log = LoggerFactory.getLogger(ReviewTenantSeeder.class);
 
     public static final String PLACEHOLDER_SHOP = "review-tracedtech.myshopify.invalid";
     static final String REFERENCE = "RR-REVW2";
@@ -101,37 +105,43 @@ public class ReviewTenantSeeder {
     }
 
     public Map<String, Object> seed(UUID tenant, UUID owner, UUID worker) {
-        UUID location = as(tenant, () -> jdbc.queryForObject(
+        UUID location = step(tenant, "fulfillment location", () -> as(tenant, () -> jdbc.queryForObject(
             // One fulfillment location per tenant (V61 unique index) — the signup's default.
             "SELECT id FROM locations WHERE tenant_id = ? AND is_fulfillment",
-            UUID.class, tenant));
-        UUID store = as(tenant, () -> jdbc.queryForObject(
+            UUID.class, tenant)));
+        UUID store = step(tenant, "placeholder store", () -> as(tenant, () -> jdbc.queryForObject(
             "INSERT INTO stores (tenant_id, platform, shop_domain, status) " +
-            "VALUES (?, 'shopify', ?, 'disconnected') RETURNING id", UUID.class, tenant, PLACEHOLDER_SHOP));
+            "VALUES (?, 'shopify', ?, 'disconnected') RETURNING id", UUID.class, tenant, PLACEHOLDER_SHOP)));
 
-        List<UUID> variants = catalog(tenant, store);
-        receiveStock(tenant, location, worker, variants);
+        List<UUID> variants = step(tenant, "catalog", () -> catalog(tenant, store));
+        step(tenant, "receive stock", () -> { receiveStock(tenant, location, worker, variants); return null; });
 
         // R1001–R1003 first, alone in the queue, so batch #1 holds exactly them.
         List<UUID> orders = new ArrayList<>();
-        for (int i = 0; i < 3; i++) orders.add(order(tenant, store, i, variants, 1));
-        as(tenant, () -> printBatches.print("new", "A4", "oldest", owner));
-        pack(tenant, orders.get(0), worker);                     // R1001 packed
-        pack(tenant, orders.get(1), worker);                     // R1002 packed (R1003 printed only)
+        for (int i = 0; i < 3; i++) orders.add(createOrder(tenant, store, i, variants, 1));
+        step(tenant, "print batch #1 (#R1001–#R1003)", () -> as(tenant, () -> printBatches.print("new", "A4", "oldest", owner)));
+        packOrder(tenant, orders, 0, worker);                    // R1001 packed
+        packOrder(tenant, orders, 1, worker);                    // R1002 packed (R1003 printed only)
 
         // R1004–R1006: packed, handed to the courier in one pickup session.
-        for (int i = 3; i < 6; i++) { orders.add(order(tenant, store, i, variants, 1)); pack(tenant, orders.get(i), worker); }
-        UUID pickup = pickups.openSession(tenant, worker, LocalDate.now(), null, "Review fixture");
-        for (int i = 3; i < 6; i++) pickups.scan(tenant, pickup, worker, tracking(tenant, orders.get(i)));
-        pickups.closeSession(tenant, pickup, worker);
-        deliver(tenant, orders.get(4));                          // R1005 delivered
-        deliver(tenant, orders.get(5));                          // R1006 delivered …
-        UUID request = returnRequest(tenant, orders.get(5), owner);   // … + approved return request
+        for (int i = 3; i < 6; i++) { orders.add(createOrder(tenant, store, i, variants, 1)); packOrder(tenant, orders, i, worker); }
+        UUID pickup = step(tenant, "pickup session open",
+            () -> pickups.openSession(tenant, worker, LocalDate.now(), null, "Review fixture"));
+        for (int i = 3; i < 6; i++) {
+            UUID order = orders.get(i);
+            step(tenant, "pickup scan " + number(i), () -> pickups.scan(tenant, pickup, worker, tracking(tenant, order)));
+        }
+        step(tenant, "pickup session close", () -> pickups.closeSession(tenant, pickup, worker));
+        step(tenant, "deliver " + number(4), () -> { deliver(tenant, orders.get(4)); return null; });   // R1005 delivered
+        step(tenant, "deliver " + number(5), () -> { deliver(tenant, orders.get(5)); return null; });   // R1006 delivered …
+        UUID request = step(tenant, "return request " + number(5),
+            () -> returnRequest(tenant, orders.get(5), owner));                                      // … + approved request
 
-        orders.add(order(tenant, store, 6, variants, 1));        // R1007 on hold
-        as(tenant, () -> { fulfill.holdOrder(orders.get(6), owner, "Customer asked to deliver next week"); return null; });
+        orders.add(createOrder(tenant, store, 6, variants, 1));  // R1007 on hold
+        step(tenant, "hold " + number(6), () -> as(tenant, () -> {
+            fulfill.holdOrder(orders.get(6), owner, "Customer asked to deliver next week"); return null; }));
 
-        for (int i = 7; i < 13; i++) orders.add(order(tenant, store, i, variants, (i == 7 || i == 10) ? 2 : 1));
+        for (int i = 7; i < 13; i++) orders.add(createOrder(tenant, store, i, variants, (i == 7 || i == 10) ? 2 : 1));
 
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("tenantId", tenant.toString());
@@ -142,6 +152,30 @@ public class ReviewTenantSeeder {
         out.put("pickupId", pickup.toString());
         out.put("returnRequestId", request.toString());
         return out;
+    }
+
+    private UUID createOrder(UUID tenant, UUID store, int i, List<UUID> variants, int units) {
+        return step(tenant, "create " + number(i), () -> order(tenant, store, i, variants, units));
+    }
+
+    private void packOrder(UUID tenant, List<UUID> orders, int i, UUID worker) {
+        step(tenant, "pack " + number(i), () -> { pack(tenant, orders.get(i), worker); return null; });
+    }
+
+    private static String number(int i) { return "#R" + (1001 + i); }
+
+    /**
+     * Fail fast and loudly: the seed is a chain of separate transactions, so a failure leaves a
+     * PARTIAL fixture (the next seed refuses it: FIXTURE_EXISTS). Name the step and order, rethrow.
+     */
+    private <T> T step(UUID tenant, String label, Supplier<T> body) {
+        try {
+            return body.get();
+        } catch (RuntimeException e) {
+            log.error("Review seed FAILED at step '{}' (tenant {}): the fixture is PARTIAL — reset the tenant " +
+                "before seeding again", label, tenant, e);
+            throw e;
+        }
     }
 
     // ── steps ────────────────────────────────────────────────────────────────
