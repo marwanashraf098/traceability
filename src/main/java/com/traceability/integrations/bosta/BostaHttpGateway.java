@@ -132,6 +132,31 @@ class BostaHttpGateway implements BostaGateway {
     }
 
     @Override
+    public JsonNode listDeliveriesPageRaw(String apiKey, int pageNumber, int pageSize) {
+        String url = baseUrl + "/api/" + apiVersion + "/deliveries?pageNumber=" + pageNumber + "&pageSize=" + pageSize;
+        try {
+            return Retry.decorateSupplier(retry, () ->
+                restClient.get()
+                    .uri(url)
+                    .header("Authorization", apiKey)
+                    .retrieve()
+                    .body(JsonNode.class)
+            ).get();
+        } catch (ResourceAccessException e) {
+            throw new BostaTransientException("Network error listing deliveries page " + pageNumber, e);
+        } catch (RestClientResponseException e) {
+            if (e.getStatusCode().value() == 429) {
+                throw new BostaRateLimitException(parseRetryAfter(e.getResponseBodyAsString(), 120L));
+            }
+            if (e.getStatusCode().is5xxServerError()) {
+                throw new BostaTransientException("Bosta 5xx listing deliveries page " + pageNumber, e);
+            }
+            throw new BostaException(
+                "Bosta list deliveries error (" + e.getStatusCode() + "): " + e.getMessage(), e);
+        }
+    }
+
+    @Override
     public String fetchBusinessProfile(String apiKey) {
         // /api/v0/business-profile and /api/v2/business-profile both return 404 — phantom endpoint.
         // Use the deliveries list instead: same base path as the confirmed-working fetchDelivery,

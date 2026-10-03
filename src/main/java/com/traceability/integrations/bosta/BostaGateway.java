@@ -37,6 +37,13 @@ public interface BostaGateway {
     List<SlimDelivery> listDeliveriesPage(String apiKey, int pageNumber, int pageSize);
 
     /**
+     * Read-only diagnostics (2026-10-03): the SAME GET /api/v0/deliveries?pageNumber&pageSize call
+     * the discovery poll makes, returning Bosta's response body untouched (null when empty). Used
+     * only by the visibility check's list sample — never by ingest.
+     */
+    JsonNode listDeliveriesPageRaw(String apiKey, int pageNumber, int pageSize);
+
+    /**
      * Validates an API key against the Bosta v0 deliveries list endpoint.
      * Returns "connected" on success (callers use this only for logging).
      * Throws ResponseStatusException(422) for 401/403 (invalid key — caller gets clean UI error).

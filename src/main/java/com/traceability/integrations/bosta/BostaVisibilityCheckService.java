@@ -32,7 +32,10 @@ import java.util.UUID;
  *
  * Writes nothing: no shipments, unlinked rows, orders, tracking rows, webhook_events. The
  * result is returned and logged, one {@code BOSTA_VISIBILITY {json}} line per order plus a
- * {@code BOSTA_VISIBILITY_SUMMARY} line. Never scheduled — run by the owner endpoint
+ * {@code BOSTA_VISIBILITY_SUMMARY} line. Since 2026-10-03 a FOUND row also carries
+ * {@code details} (createdAt / updatedAt / creationSrc / sender / pickup location …, never customer
+ * PII), and the run ends with page 1 of the delivery list exactly as discovery fetches it:
+ * {@code BOSTA_VISIBILITY_LIST {json}} per item + {@code BOSTA_VISIBILITY_LIST_SUMMARY}. Never scheduled — run by the owner endpoint
  * (POST /api/v1/bosta/visibility-check) or the ops startup trigger
  * (bosta.visibility-check.on-startup). Only ever uses the tenant's own decrypted key.
  */
@@ -45,9 +48,17 @@ public class BostaVisibilityCheckService {
 
     public record Row(String tenant, String orderNumber, String trackingNumber, String carrierRaw,
                       String source, String result, Integer typeCode, Integer state,
-                      String businessReference, String shopifyOrderId, String error) {}
+                      String businessReference, String shopifyOrderId, String error,
+                      Map<String, Object> details) {}
 
-    public record Report(UUID tenantId, String tenant, Map<String, Integer> candidatesBySource, List<Row> rows) {}
+    /**
+     * Page 1 of the delivery list exactly as discovery fetches it (pageNumber=1, discovery's page
+     * size): Bosta's reported total and, per item, the same fields as {@link Row#details()}.
+     */
+    public record ListSample(Integer reportedCount, List<Map<String, Object>> items, String error) {}
+
+    public record Report(UUID tenantId, String tenant, Map<String, Integer> candidatesBySource, List<Row> rows,
+                         ListSample listSample) {}
 
     private final JdbcTemplate        jdbc;
     private final TransactionTemplate tx;
@@ -57,6 +68,7 @@ public class BostaVisibilityCheckService {
     private final long                delayMs;
     private final long                maxBackoffMs;
     private final int                 maxRateLimitRetries;
+    private final int                 listPageSize;
 
     public BostaVisibilityCheckService(JdbcTemplate jdbc,
                                        PlatformTransactionManager txm,
@@ -65,7 +77,8 @@ public class BostaVisibilityCheckService {
                                        ObjectMapper mapper,
                                        @Value("${bosta.visibility-check.delay-ms:3000}") long delayMs,
                                        @Value("${bosta.visibility-check.max-backoff-ms:60000}") long maxBackoffMs,
-                                       @Value("${bosta.visibility-check.rate-limit-retries:3}") int maxRateLimitRetries) {
+                                       @Value("${bosta.visibility-check.rate-limit-retries:3}") int maxRateLimitRetries,
+                                       @Value("${bosta.backfill.page-size:50}") int listPageSize) {
         this.jdbc = jdbc;
         this.tx = new TransactionTemplate(txm);
         this.tx.setReadOnly(true);
@@ -75,6 +88,7 @@ public class BostaVisibilityCheckService {
         this.delayMs = delayMs;
         this.maxBackoffMs = maxBackoffMs;
         this.maxRateLimitRetries = maxRateLimitRetries;
+        this.listPageSize = listPageSize;
     }
 
     /** JobRunr entry point — logs the report. */
@@ -91,6 +105,19 @@ public class BostaVisibilityCheckService {
         Map<String, Integer> byResult = new LinkedHashMap<>();
         for (Row r : report.rows()) byResult.merge(r.result(), 1, Integer::sum);
         summary.put("results", byResult);
+        ListSample sample = report.listSample();
+        if (sample != null) {
+            for (Map<String, Object> item : sample.items()) log.info("BOSTA_VISIBILITY_LIST {}", json(item));
+            Map<String, Object> listSummary = new LinkedHashMap<>();
+            listSummary.put("tenantId", tenantId.toString());
+            listSummary.put("tenant", report.tenant());
+            listSummary.put("pageNumber", 1);
+            listSummary.put("pageSize", listPageSize);
+            listSummary.put("itemsReturned", sample.items().size());
+            listSummary.put("reportedCount", sample.reportedCount());
+            listSummary.put("error", sample.error());
+            log.info("BOSTA_VISIBILITY_LIST_SUMMARY {}", json(listSummary));
+        }
         log.info("BOSTA_VISIBILITY_SUMMARY {}", json(summary));
     }
 
@@ -114,7 +141,7 @@ public class BostaVisibilityCheckService {
                 for (Candidate c : candidates) {
                     rows.add(row(tenantName, c, "ERROR", null, "no active Bosta account for this tenant"));
                 }
-                return new Report(tenantId, tenantName, bySource, rows);
+                return new Report(tenantId, tenantName, bySource, rows, null);
             }
             String apiKey = encryptionService.decrypt(encryptedKey);
 
@@ -124,7 +151,8 @@ public class BostaVisibilityCheckService {
                 first = false;
                 rows.add(fetch(tenantName, apiKey, c));
             }
-            return new Report(tenantId, tenantName, bySource, rows);
+            if (!candidates.isEmpty()) sleep(delayMs);
+            return new Report(tenantId, tenantName, bySource, rows, listSample(apiKey));
         });
     }
 
@@ -134,7 +162,8 @@ public class BostaVisibilityCheckService {
                 BostaDelivery d = bostaGateway.fetchDelivery(apiKey, c.trackingNumber());
                 if (d == null) return row(tenantName, c, "NOT_FOUND", null, null);
                 return new Row(tenantName, c.orderNumber(), c.trackingNumber(), c.carrierRaw(), c.source(),
-                    "FOUND", d.typeCode(), d.stateCode(), d.businessReference(), d.shopifyOrderId(), null);
+                    "FOUND", d.typeCode(), d.stateCode(), d.businessReference(), d.shopifyOrderId(), null,
+                    details(d.raw()));
             } catch (DeliveryNotFoundException e) {
                 return row(tenantName, c, "NOT_FOUND", null, null);
             } catch (BostaRateLimitException e) {
@@ -214,7 +243,75 @@ public class BostaVisibilityCheckService {
 
     private static Row row(String tenant, Candidate c, String result, Integer type, String error) {
         return new Row(tenant, c.orderNumber(), c.trackingNumber(), c.carrierRaw(), c.source(),
-            result, type, null, null, null, error);
+            result, type, null, null, null, error, null);
+    }
+
+    /** Read-only: page 1 of the list, the call discovery makes. Never throws. */
+    private ListSample listSample(String apiKey) {
+        try {
+            com.fasterxml.jackson.databind.JsonNode body = bostaGateway.listDeliveriesPageRaw(apiKey, 1, listPageSize);
+            if (body == null) return new ListSample(null, List.of(), null);
+            com.fasterxml.jackson.databind.JsonNode items = body.path("deliveries");
+            if (!items.isArray()) {
+                items = body.path("data");
+                if (items.isObject()) items = items.path("data");
+            }
+            Integer count = body.has("count") ? body.path("count").asInt()
+                : body.path("data").has("count") ? body.path("data").path("count").asInt() : null;
+            List<Map<String, Object>> out = new ArrayList<>();
+            if (items.isArray()) {
+                int pos = 0;
+                for (com.fasterxml.jackson.databind.JsonNode item : items) {
+                    Map<String, Object> m = new LinkedHashMap<>();
+                    m.put("position", ++pos);
+                    m.put("trackingNumber", item.path("trackingNumber").asText(null));
+                    m.put("typeCode", item.path("type").isObject() ? item.path("type").path("code").asInt() : null);
+                    m.put("state", item.path("state").isObject() ? item.path("state").path("code").asInt()
+                        : item.path("state").isNumber() ? item.path("state").asInt() : null);
+                    m.put("businessReference", item.path("businessReference").asText(null));
+                    m.putAll(details(item));
+                    out.add(m);
+                }
+            }
+            return new ListSample(count, out, null);
+        } catch (RuntimeException e) {
+            return new ListSample(null, List.of(), e.getClass().getSimpleName()
+                + (e.getMessage() != null ? ": " + e.getMessage() : ""));
+        }
+    }
+
+    /**
+     * When / how / from where Bosta created the delivery — never customer PII (no receiver, no
+     * drop-off address). Absent fields are omitted.
+     */
+    static Map<String, Object> details(com.fasterxml.jackson.databind.JsonNode raw) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        if (raw == null) return m;
+        put(m, "createdAt", raw.path("createdAt"));
+        put(m, "updatedAt", raw.path("updatedAt"));
+        put(m, "creationTimestamp", raw.path("creationTimestamp"));
+        put(m, "creationSrc", raw.path("creationSrc"));
+        put(m, "senderId", raw.path("sender").path("_id"));
+        put(m, "senderName", raw.path("sender").path("name"));
+        put(m, "businessId", raw.path("business").path("_id"));
+        put(m, "businessLocationId", raw.path("businessLocationId"));
+        put(m, "pickupAddressId", raw.path("pickupAddress").path("_id"));
+        put(m, "pickupCity", raw.path("pickupAddress").path("city").path("name"));
+        put(m, "pickupZone", raw.path("pickupAddress").path("zone").path("name"));
+        put(m, "pickupDistrict", raw.path("pickupAddress").path("district").path("name"));
+        put(m, "pickupLocationName", raw.path("pickupAddress").path("locationName"));
+        put(m, "pickupRequestId", raw.path("pickupRequestId"));
+        put(m, "pickupRequestType", raw.path("pickupRequestType"));
+        put(m, "isExternalFulfillmentOrder", raw.path("isExternalFulfillmentOrder"));
+        put(m, "assignedHub", raw.path("assignedHub").path("name"));
+        if (raw.has("flexShippingInfo")) m.put("hasFlexShippingInfo", true);
+        if (raw.has("shopifyInfo") || raw.has("shopifyOrderId")) m.put("hasShopifyInfo", true);
+        return m;
+    }
+
+    private static void put(Map<String, Object> m, String key, com.fasterxml.jackson.databind.JsonNode v) {
+        if (v == null || v.isMissingNode() || v.isNull()) return;
+        m.put(key, v.isNumber() ? v.numberValue() : v.isBoolean() ? v.booleanValue() : v.asText());
     }
 
     private String json(Object o) {
