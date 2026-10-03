@@ -5,6 +5,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.traceability.integrations.bosta.BostaDelivery;
 import com.traceability.integrations.bosta.BostaGateway;
 import com.traceability.integrations.bosta.BostaV2Client;
+import com.traceability.integrations.bosta.CourierSimulation;
+import com.traceability.integrations.bosta.ReviewModeUnavailableException;
 import com.traceability.inventory.ExchangeService;
 import com.traceability.inventory.ShipmentLinkService;
 import com.traceability.inventory.TrackingNumberNormalizer;
@@ -119,6 +121,9 @@ public class ReturnPickupBookingService {
     }
 
     private void bookInTenant(UUID requestId, UUID tenantId) {
+        // Review mode (V130) backstop: a simulated-courier tenant never books a real Bosta trip.
+        // The manual entry points refuse first (REVIEW_MODE_UNAVAILABLE); nothing is claimed here.
+        if (Boolean.TRUE.equals(tx.execute(s -> CourierSimulation.isSimulated(jdbc, tenantId)))) return;
         Context c = tx.execute(s -> loadContext(requestId, tenantId));
         if (c == null) return;                                       // not this tenant's / gone
         if (c.bookingStatus != null && !"failed".equals(c.bookingStatus)) return;
@@ -366,6 +371,7 @@ public class ReturnPickupBookingService {
     /** 'failed' → re-enqueue; the job re-claims from 'failed'. 409 otherwise. */
     public void retry(UUID requestId) {
         UUID tenantId = TenantContext.require();
+        refuseInReviewMode(tenantId);
         Map<String, Object> r = requireRequest(requestId, tenantId);
         if (!"failed".equals(r.get("booking_status")) || !"approved".equals(r.get("status"))) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Only a failed booking of an approved request can be retried.");
@@ -376,6 +382,7 @@ public class ReturnPickupBookingService {
     /** "It wasn't booked — retry": 'failed_ambiguous' → 'failed', then retry. 409 otherwise. */
     public void markNotBooked(UUID requestId) {
         UUID tenantId = TenantContext.require();
+        refuseInReviewMode(tenantId);
         requireRequest(requestId, tenantId);
         Integer n = tx.execute(s -> {
             int updated = jdbc.update(
@@ -399,6 +406,7 @@ public class ReturnPickupBookingService {
      */
     public void confirmBooked(UUID requestId, String rawTracking) {
         UUID tenantId = TenantContext.require();
+        refuseInReviewMode(tenantId);
         String tracking = rawTracking == null ? null : TrackingNumberNormalizer.normalize(rawTracking.replaceAll("\\s+", ""));
         if (tracking == null) throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Enter a valid Bosta tracking number.");
         Map<String, Object> r = tx.execute(s -> jdbc.queryForList(
@@ -459,6 +467,7 @@ public class ReturnPickupBookingService {
      */
     public void bookNow(UUID requestId) {
         UUID tenantId = TenantContext.require();
+        refuseInReviewMode(tenantId);
         Map<String, Object> r = tx.execute(s -> jdbc.queryForList(
             "SELECT status::text AS status, booking_status, type FROM return_requests WHERE id = ? AND tenant_id = ?",
             requestId, tenantId).stream().findFirst().orElse(null));
@@ -796,5 +805,12 @@ public class ReturnPickupBookingService {
         if (v.isMissingNode() || v.isNull()) return null;
         String s = v.asText().trim();
         return s.isEmpty() ? null : s;
+    }
+
+    /** Review mode (V130): booking a real Bosta trip is refused before anything is claimed or enqueued. */
+    private void refuseInReviewMode(UUID tenantId) {
+        if (Boolean.TRUE.equals(tx.execute(s -> CourierSimulation.isSimulated(jdbc, tenantId)))) {
+            throw new ReviewModeUnavailableException();
+        }
     }
 }

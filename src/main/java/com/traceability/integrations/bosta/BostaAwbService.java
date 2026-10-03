@@ -136,6 +136,14 @@ public class BostaAwbService {
     public AwbDetailedResult printAwbDetailed(UUID tenantId, List<UUID> shipmentIds,
                                               String formatOverride, String langOverride) {
 
+        // Review mode (V130): a simulated-courier tenant has no Bosta account and is never sent
+        // to Bosta — its waybills are rendered locally, before the account lookup below (which
+        // would throw NoBostaAccountException). Same result shape, so single and batch print
+        // (PackPrintBatchService / WaybillPdfAssembler) work unchanged.
+        boolean simulated = TenantContext.runAs(tenantId, () ->
+            Boolean.TRUE.equals(tx.execute(s -> CourierSimulation.isSimulated(jdbc, tenantId))));
+        if (simulated) return printSimulated(tenantId, shipmentIds, formatOverride);
+
         // 1. Load tenant's API key + label settings
         Map<String, Object> account = TenantContext.runAs(tenantId, () ->
             tx.execute(s -> jdbc.query(
@@ -162,10 +170,110 @@ public class BostaAwbService {
         if (format == null) format = "A4";
         if (lang   == null) lang   = "ar";
 
-        // 2. Load shipments (RLS enforced by TenantContext)
+        // 2–3. Load the shipments in the caller's order and pre-filter (shared with review mode)
         final List<UUID> ids = new ArrayList<>(new LinkedHashSet<>(shipmentIds));
         if (ids.isEmpty()) return new AwbDetailedResult(List.of(), List.of(), format);
+        Printable p = loadPrintable(tenantId, ids);
+        List<String>       printable    = p.trackings();
+        List<AwbException> exclusions   = p.exclusions();
+        Map<String, UUID>  trackingToId = p.trackingToId();
 
+        // 4. Batch into ≤BATCH_SIZE (49) chunks, call Bosta for each
+        List<AwbChunk> chunks = new ArrayList<>();
+
+        for (int i = 0; i < printable.size(); i += BATCH_SIZE) {
+            List<String> chunk = List.copyOf(printable.subList(i, Math.min(i + BATCH_SIZE, printable.size())));
+            try {
+                AwbPrintResult result = bostaGateway.printMassAwb(apiKey, chunk, format, lang);
+                if (result.isInline()) {
+                    chunks.add(new AwbChunk(chunk, result.pdfBytes(), null, null));
+                } else {
+                    // Bosta went async — surface message, treat chunk as un-printable
+                    chunks.add(new AwbChunk(chunk, null, result.emailMessage(), null));
+                    log.info("mass-awb returned email-path for chunk of {} trackings", chunk.size());
+                }
+            } catch (BostaException e) {
+                // Bosta rejected the entire chunk — route each to missing-AWB exception.
+                // TODO (gate-c FR-7.8): if rejection reason indicates a blocked consignee,
+                //   raise blocked_customer exception + offer to add phone to blocklist
+                //   (source=bosta_rejected). Deferred — wire when Mode-A / AWB-create
+                //   hits Bosta and we can reliably extract the rejection cause code.
+                String rejectedReason = "BOSTA_REJECTED:" + truncate(e.getMessage(), 120);
+                log.warn("mass-awb rejected chunk of {} trackings: {}", chunk.size(), e.getMessage());
+                chunks.add(new AwbChunk(chunk, null, null, rejectedReason));
+                for (String tn : chunk) {
+                    UUID sid = trackingToId.get(tn);
+                    if (sid != null) markFailed(tenantId, sid, rejectedReason);
+                }
+            }
+        }
+
+        return new AwbDetailedResult(chunks, exclusions, format);
+    }
+
+    // ── Review mode ───────────────────────────────────────────────────────────
+
+    /**
+     * Review mode: the simulated print. Same pre-filter as the Bosta path (loadPrintable), then
+     * SimulatedWaybillRenderer per ≤BATCH_SIZE chunk instead of mass-awb — one page per tracking
+     * number, in send order. Paper: the override, else A4 (there is no courier row to hold an
+     * awb_format). Never touches BostaGateway.
+     */
+    private AwbDetailedResult printSimulated(UUID tenantId, List<UUID> shipmentIds, String formatOverride) {
+        String format = "A6".equalsIgnoreCase(formatOverride) ? "A6" : "A4";
+        final List<UUID> ids = new ArrayList<>(new LinkedHashSet<>(shipmentIds));
+        if (ids.isEmpty()) return new AwbDetailedResult(List.of(), List.of(), format);
+        Printable p = loadPrintable(tenantId, ids);
+
+        Map<String, SimulatedWaybillRenderer.Waybill> details = new HashMap<>();
+        if (!p.trackings().isEmpty()) {
+            List<UUID> printableIds = p.trackings().stream().map(p.trackingToId()::get).toList();
+            String placeholders = printableIds.stream().map(id -> "?::uuid").collect(Collectors.joining(","));
+            Object[] params = Stream.concat(printableIds.stream(), Stream.of(tenantId)).toArray();
+            TenantContext.runAs(tenantId, () -> tx.execute(s -> {
+                jdbc.query(
+                    "SELECT s.tracking_number, o.number, o.customer_name, o.customer_phone, " +
+                    "       concat_ws(', ', o.address ->> 'address1', o.address ->> 'city') AS address_line, " +
+                    "       COALESCE(s.cod_amount, o.cod_amount) AS cod " +
+                    "FROM shipments s JOIN orders o ON o.id = s.order_id AND o.tenant_id = s.tenant_id " +
+                    "WHERE s.id IN (" + placeholders + ") AND s.tenant_id = ?",
+                    rs -> {
+                        String address = rs.getString("address_line");
+                        details.put(rs.getString("tracking_number"), new SimulatedWaybillRenderer.Waybill(
+                            rs.getString("tracking_number"), rs.getString("number"),
+                            rs.getString("customer_name"), rs.getString("customer_phone"),
+                            address == null || address.isBlank() ? null : address,
+                            rs.getBigDecimal("cod")));
+                    },
+                    params);
+                return null;
+            }));
+        }
+
+        List<AwbChunk> chunks = new ArrayList<>();
+        for (int i = 0; i < p.trackings().size(); i += BATCH_SIZE) {
+            List<String> chunk = List.copyOf(p.trackings().subList(i, Math.min(i + BATCH_SIZE, p.trackings().size())));
+            List<SimulatedWaybillRenderer.Waybill> pages = chunk.stream()
+                .map(tn -> details.getOrDefault(tn, new SimulatedWaybillRenderer.Waybill(tn, null, null, null, null, null)))
+                .toList();
+            chunks.add(new AwbChunk(chunk, SimulatedWaybillRenderer.render(pages, format), null, null));
+        }
+        log.info("Review mode: rendered {} simulated waybill(s) for tenant {}", p.trackings().size(), tenantId);
+        return new AwbDetailedResult(chunks, p.exclusions(), format);
+    }
+
+    // ── Helpers ───────────────────────────────────────────────────────────────
+
+    /** Printable tracking numbers (caller's order), their shipment ids, and the exclusions. */
+    private record Printable(List<String> trackings, Map<String, UUID> trackingToId,
+                             List<AwbException> exclusions) {}
+
+    /**
+     * Steps 2–3 of a print, shared by the Bosta path and review mode's simulated path so both
+     * apply the exact same pre-filter: load the shipments (RLS enforced by TenantContext) in the
+     * caller's order, exclude unlinked / terminal-state / CRP ones (marking them failed).
+     */
+    private Printable loadPrintable(UUID tenantId, List<UUID> ids) {
         String placeholders = ids.stream().map(id -> "?::uuid").collect(Collectors.joining(","));
         Object[] params = Stream.concat(ids.stream(), Stream.of(tenantId)).toArray();
 
@@ -220,40 +328,9 @@ public class BostaAwbService {
             }
         }
 
-        // 4. Batch into ≤BATCH_SIZE (49) chunks, call Bosta for each
-        List<AwbChunk> chunks = new ArrayList<>();
-
-        for (int i = 0; i < printable.size(); i += BATCH_SIZE) {
-            List<String> chunk = List.copyOf(printable.subList(i, Math.min(i + BATCH_SIZE, printable.size())));
-            try {
-                AwbPrintResult result = bostaGateway.printMassAwb(apiKey, chunk, format, lang);
-                if (result.isInline()) {
-                    chunks.add(new AwbChunk(chunk, result.pdfBytes(), null, null));
-                } else {
-                    // Bosta went async — surface message, treat chunk as un-printable
-                    chunks.add(new AwbChunk(chunk, null, result.emailMessage(), null));
-                    log.info("mass-awb returned email-path for chunk of {} trackings", chunk.size());
-                }
-            } catch (BostaException e) {
-                // Bosta rejected the entire chunk — route each to missing-AWB exception.
-                // TODO (gate-c FR-7.8): if rejection reason indicates a blocked consignee,
-                //   raise blocked_customer exception + offer to add phone to blocklist
-                //   (source=bosta_rejected). Deferred — wire when Mode-A / AWB-create
-                //   hits Bosta and we can reliably extract the rejection cause code.
-                String rejectedReason = "BOSTA_REJECTED:" + truncate(e.getMessage(), 120);
-                log.warn("mass-awb rejected chunk of {} trackings: {}", chunk.size(), e.getMessage());
-                chunks.add(new AwbChunk(chunk, null, null, rejectedReason));
-                for (String tn : chunk) {
-                    UUID sid = trackingToId.get(tn);
-                    if (sid != null) markFailed(tenantId, sid, rejectedReason);
-                }
-            }
-        }
-
-        return new AwbDetailedResult(chunks, exclusions, format);
+        return new Printable(printable, trackingToId, exclusions);
     }
 
-    // ── Helpers ───────────────────────────────────────────────────────────────
 
     private void markFailed(UUID tenantId, UUID shipmentId, String reason) {
         TenantContext.runAs(tenantId, () ->

@@ -1,7 +1,7 @@
 import { ReactNode, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Check } from 'lucide-react'
-import { bookExchangeNow, ReturnRequestDetail } from '../../api'
+import { bookExchangeNow, ReturnRequestDetail, TransferCommandError } from '../../api'
 import { Button, cn, useToast } from '../../components/ui'
 import { dateTimeLabel } from './requestFormat'
 import { CloseDialog, UntrackedArrivedControls } from './RequestLifecycle'
@@ -77,8 +77,11 @@ export default function ExchangeProgressView({
       toast({ tone: 'success', message: t('exchangesRefunds.requests.exchange.progress.bookNowDone') })
       started = onBookingStarted != null
       onBookingStarted?.()
-    } catch {
-      toast({ tone: 'error', message: t('exchangesRefunds.requests.drawer.actionFailed') })
+    } catch (e) {
+      // A typed refusal (e.g. REVIEW_MODE_UNAVAILABLE) says why; anything else stays generic.
+      toast({ tone: 'error', message: e instanceof TransferCommandError
+        ? (i18n.language === 'ar' ? e.messageAr : e.messageEn)
+        : t('exchangesRefunds.requests.drawer.actionFailed') })
     } finally {
       setBooking(false)
       if (!started) await onReload()

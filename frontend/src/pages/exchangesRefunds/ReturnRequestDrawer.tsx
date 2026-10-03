@@ -4,7 +4,7 @@ import { X } from 'lucide-react'
 import {
   approveReturnRequest, confirmBooking, getPortalSettings, getRefundSuggestion, getReturnRequest, getReturnRequestPickupAreas,
   markBookingNotBooked, markRestNotComing, markReturnRequestRefunded, rejectReturnRequest, retryBooking, setReturnRequestPickupArea,
-  LinkableParcel, PickupDistrict, RefundSuggestion, ReturnRequestDetail, ReturnRequestPickupAreas,
+  LinkableParcel, PickupDistrict, RefundSuggestion, ReturnRequestDetail, ReturnRequestPickupAreas, TransferCommandError,
 } from '../../api'
 import { Alert, Badge, Button, ProductThumb, Skeleton, cn, useToast } from '../../components/ui'
 import { displayStatus, displayStatusTone, reasonLabel, sentLabel, shortCustomerName, shortDate, statusLabelKey } from './requestFormat'
@@ -743,7 +743,7 @@ export function BookingState({ detail, onChanged, onBookingStarted }: {
   /** When given, a successful booking action hands over to the drawer's "Booking…" refresh instead of one reload. */
   onBookingStarted?: () => void
 }) {
-  const { t } = useTranslation()
+  const { t, i18n } = useTranslation()
   const { toast } = useToast()
   const [busy, setBusy] = useState<'retry' | 'notBooked' | 'confirm' | null>(null)
   const [entering, setEntering] = useState(false)
@@ -759,8 +759,10 @@ export function BookingState({ detail, onChanged, onBookingStarted }: {
       toast({ tone: 'success', message: t('exchangesRefunds.requests.drawer.bookingRetried') })
       if (onBookingStarted) onBookingStarted()
       else await onChanged()
-    } catch {
-      toast({ tone: 'error', message: t('exchangesRefunds.requests.drawer.bookingActionFailed') })
+    } catch (e) {
+      toast({ tone: 'error', message: e instanceof TransferCommandError
+        ? (i18n.language === 'ar' ? e.messageAr : e.messageEn)
+        : t('exchangesRefunds.requests.drawer.bookingActionFailed') })
     } finally {
       setBusy(null)
     }
@@ -778,6 +780,10 @@ export function BookingState({ detail, onChanged, onBookingStarted }: {
       if (onBookingStarted) onBookingStarted()
       else await onChanged()
     } catch (e) {
+      if (e instanceof TransferCommandError) {
+        setConfirmError(i18n.language === 'ar' ? e.messageAr : e.messageEn)
+        return
+      }
       const code = e instanceof Error ? e.message.slice(0, 3) : ''
       setConfirmError(t(code === '400' ? 'exchangesRefunds.requests.drawer.bookingConfirmInvalid'
         : code === '409' ? 'exchangesRefunds.requests.drawer.bookingConfirmConflict'

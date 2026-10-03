@@ -344,10 +344,14 @@ public class FulfillService {
             // "Has courier" == "Print Waybill can succeed": the same account resolution as
             // BostaAwbService.printAwb() (tenant's bosta row, status 'active'). NOT
             // shipments.courier_account_id — no ingest path ever populates that column.
-            "       (s.id IS NOT NULL AND EXISTS (" +
+            // Review mode (V130): a simulated-courier tenant has no courier row but its print
+            // succeeds (BostaAwbService renders the waybill locally), so it "has courier" too.
+            "       (s.id IS NOT NULL AND (EXISTS (" +
             "           SELECT 1 FROM courier_accounts ca " +
             "           WHERE ca.tenant_id = o.tenant_id AND ca.provider = 'bosta' " +
-            "             AND ca.status = 'active')) AS shipment_has_courier, " +
+            "             AND ca.status = 'active') " +
+            "        OR EXISTS (SELECT 1 FROM tenant_courier_simulation sim " +
+            "           WHERE sim.tenant_id = o.tenant_id))) AS shipment_has_courier, " +
             // S2: the forward shipment's waybill was printed in a print batch — PickScreen
             // then doesn't ask for a reprint before Complete.
             "       (s.id IS NOT NULL AND EXISTS (" +

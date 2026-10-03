@@ -79,7 +79,11 @@ public class PackPrintBatchStore {
             tenantId, lookbackDays);
     }
 
-    /** The paper the print dialog preselects: the store's Bosta awb_format, else A4 (BostaAwbService's own fallback). */
+    /**
+     * The paper the print dialog preselects: the store's Bosta awb_format, else A4 (BostaAwbService's own fallback).
+     * Review mode (V130): a simulated-courier tenant has no courier row → A4, which the simulated
+     * renderer prints (A6 when the dialog asks for it) — no change needed here.
+     */
     @Transactional(readOnly = true)
     public String defaultPaper() {
         UUID tenantId = TenantContext.require();

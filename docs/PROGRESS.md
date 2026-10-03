@@ -4,6 +4,36 @@
 
 ## Current state
 
+**Review mode S2 — simulated waybills, pickups, booking refusal (2026-10-03, branch
+`feat/review-simulated-courier-s2` off main 94c4a4c, worktree `.claude/worktrees/review-s2`; not merged, not deployed).
+No migration (the next review migration, S3's tracking sequence, takes V132).**
+- **Waybills:** `SimulatedWaybillRenderer` (PDFBox + ZXing, A4/A6, one page per tracking number): TOP Code 128 in Bosta's
+  real shape `G - 0 2 - ` + spaced digits (fixture `AwbSpacedBarcodeTest.spaced()` / `TrackingNumberSpacesTest`), plain
+  bottom Code 128, QR `BOSTA_<tn>`, tracking number as extractable text, order / customer / phone / address / COD,
+  "SIMULATED — not a Bosta shipment" banner (EN + AR, shaped via LabelTextFitter). `BostaAwbService.printAwbDetailed`
+  short-circuits for a simulated tenant before the account lookup → `printSimulated`; steps 2–3 extracted to
+  `loadPrintable` so both paths share the pre-filter. Single + batch print unchanged for callers (batch: orderGuaranteed).
+- `FulfillService` `shipment_has_courier` OR simulated → Print Waybill offered. `PackPrintBatchStore.defaultPaper` unchanged
+  (no courier row → A4; comment added).
+- **Pickups:** `BostaPickupService.schedulePickup` → `scheduleSimulated`: same awaiting-pickup query (now the shared
+  `AWAITING_PICKUP_SQL`), pickup with `courier_account_id` NULL, `provider_pickup_id` `SIM-PU-` + 12 hex, mode SIMULATED,
+  never `createPickup`. Audit: no query joins pickups to courier_accounts; every pickup list / detail / manifest uses
+  LEFT JOIN users only, and pickup sessions already have NULL couriers — nothing else needed. Pickup sessions (open → scan
+  the simulated label → close → shipment + pieces with_courier) work unchanged.
+- **Booking:** `ReturnPickupBookingService` book-now / retry / not-booked / confirm → 409 `REVIEW_MODE_UNAVAILABLE`
+  ("Not available in review mode." / "غير متاح في وضع المراجعة."); `book()` (the job) returns before any claim. Frontend:
+  the four booking calls use `transferCommandRequest`; ExchangeProgressView + ReturnRequestDrawer show the typed message.
+- **Phone-as-scanner (S6):** the phone POSTs to /scan-pair/scan; the relay stores the code (edge-trimmed, ≤ 200 chars) and
+  the tablet applies it through the same `onScan` → the same /pack-sessions/{id}/waybill endpoint. e3 proves the relay keeps
+  the decoded top barcode byte-for-byte and that it opens the order.
+- Tests: `SimulatedWaybillRendererTest` w0–w4, `SimulatedCourierFlowTest` e1–e3 / p1–p4 / k1–k3 (e1 decodes the rendered
+  top barcode with ZXing at 300 dpi → normalizer → WaybillResolver AND the real waybill-scan session), `ReviewModeBookingTest`
+  r1–r3, `frontend/src/test/reviewModeBooking.test.tsx` — all revert-checked (no text layer → w1–w4; plain-digit top barcode
+  → e1–e3, k3; no QR → same; no print short-circuit → e1–e3, p1, p2, k3; FulfillService + no pickup branch → p3, k1; booking
+  guards → r1, r2; frontend → the Book-now test). Sample A4 waybill: `target/simulated-waybill-sample-A4.pdf` (p1).
+- **Gotcha (tests):** a revert check that removes a constant a test references fails to COMPILE and leaves the previous
+  surefire report in place — delete the report first, or revert behaviour only.
+
 **HOTFIX — fulfillment link failed after linking (2026-10-03, branch `fix/fulfillment-link-tenant-context` off
 main 94c4a4c; committed, not merged, not deployed).**
 - **Prod:** every link job and both catch-up applies threw `EmptyResultDataAccessException` at

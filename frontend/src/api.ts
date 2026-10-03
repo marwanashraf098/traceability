@@ -2817,24 +2817,28 @@ export function rejectReturnRequest(id: string, reason: string) {
   return request<void>(`/return-requests/${id}/reject`, { method: 'POST', body: JSON.stringify({ reason }) })
 }
 
+// Booking actions use transferCommandRequest so a typed refusal (e.g. REVIEW_MODE_UNAVAILABLE in review
+// mode) reaches the caller as a TransferCommandError with its EN/AR message; any other failure is the
+// same "<status>: <text>" Error as request().
+
 /** Step 5c — an approved exchange that was never booked → book it now. */
 export function bookExchangeNow(id: string) {
-  return request<void>(`/return-requests/${id}/booking/book-now`, { method: 'POST' })
+  return transferCommandRequest<void>(`/return-requests/${id}/booking/book-now`, { method: 'POST' })
 }
 
 /** 'failed' → book again. */
 export function retryBooking(id: string) {
-  return request<void>(`/return-requests/${id}/booking/retry`, { method: 'POST' })
+  return transferCommandRequest<void>(`/return-requests/${id}/booking/retry`, { method: 'POST' })
 }
 
 /** "It wasn't booked — retry": 'failed_ambiguous' → 'failed' → book again. */
 export function markBookingNotBooked(id: string) {
-  return request<void>(`/return-requests/${id}/booking/not-booked`, { method: 'POST' })
+  return transferCommandRequest<void>(`/return-requests/${id}/booking/not-booked`, { method: 'POST' })
 }
 
 /** "It was booked — enter tracking number" (checked against Bosta by the backend). */
 export function confirmBooking(id: string, trackingNumber: string) {
-  return request<void>(`/return-requests/${id}/booking/confirm`, { method: 'POST', body: JSON.stringify({ trackingNumber }) })
+  return transferCommandRequest<void>(`/return-requests/${id}/booking/confirm`, { method: 'POST', body: JSON.stringify({ trackingNumber }) })
 }
 
 // ── Step 4d-2: lifecycle actions and refunds (owner / manager) ───────────────

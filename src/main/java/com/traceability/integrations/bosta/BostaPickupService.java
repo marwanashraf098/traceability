@@ -48,6 +48,26 @@ public class BostaPickupService {
     private final ObjectMapper        mapper;
     private final Clock               clock;
 
+    /** Forward shipments of awaiting_pickup orders not already in a live pickup (shared by both paths). */
+    private static final String AWAITING_PICKUP_SQL =
+        "SELECT s.id, s.tracking_number, s.cod_amount, " +
+        "       o.number AS order_number " +
+        "FROM shipments s " +
+        "JOIN orders o ON o.id = s.order_id " +
+        "WHERE s.tenant_id    = ? " +
+        "  AND s.shipment_leg = 'forward' " +
+        "  AND o.status       = 'awaiting_pickup'::order_status " +
+        "  AND NOT EXISTS ( " +
+        "      SELECT 1 FROM pickup_shipments ps " +
+        "      JOIN pickups p ON p.id = ps.pickup_id " +
+        "      WHERE ps.shipment_id = s.id " +
+        "        AND ps.tenant_id   = ? " +
+        "        AND p.session_status NOT IN ('cancelled') " +
+        "  )";
+
+    /** Review mode: the reserved prefix of a simulated pickup's provider_pickup_id (never numeric). */
+    public static final String SIMULATED_PICKUP_PREFIX = "SIM-PU-";
+
     public BostaPickupService(JdbcTemplate jdbc,
                                PlatformTransactionManager txm,
                                BostaGateway bostaGateway,
@@ -100,6 +120,12 @@ public class BostaPickupService {
                 "Bosta does not schedule pickups on Fridays (error 1080)");
         }
 
+        // Review mode (V130): a simulated-courier tenant schedules locally — no courier account,
+        // never createPickup. Date validation above still applies.
+        boolean simulated = TenantContext.runAs(tenantId, () ->
+            Boolean.TRUE.equals(tx.execute(s -> CourierSimulation.isSimulated(jdbc, tenantId))));
+        if (simulated) return scheduleSimulated(tenantId, scheduledDate);
+
         // 2. Load courier account (API key + settings)
         record AccountRow(String apiKeyEncrypted, String pickupMode,
                           String locationId, JsonNode contactPerson) {}
@@ -132,22 +158,7 @@ public class BostaPickupService {
         //    "Awaiting pickup" = order.status = 'awaiting_pickup' (order_status enum).
         //    Shipments remain in 'created' internal state until Bosta state 21 fires.
         List<Map<String, Object>> shipmentRows = TenantContext.runAs(tenantId, () ->
-            tx.execute(s -> jdbc.queryForList(
-                "SELECT s.id, s.tracking_number, s.cod_amount, " +
-                "       o.number AS order_number " +
-                "FROM shipments s " +
-                "JOIN orders o ON o.id = s.order_id " +
-                "WHERE s.tenant_id    = ? " +
-                "  AND s.shipment_leg = 'forward' " +
-                "  AND o.status       = 'awaiting_pickup'::order_status " +
-                "  AND NOT EXISTS ( " +
-                "      SELECT 1 FROM pickup_shipments ps " +
-                "      JOIN pickups p ON p.id = ps.pickup_id " +
-                "      WHERE ps.shipment_id = s.id " +
-                "        AND ps.tenant_id   = ? " +
-                "        AND p.session_status NOT IN ('cancelled') " +
-                "  )",
-                tenantId, tenantId)));
+            tx.execute(s -> jdbc.queryForList(AWAITING_PICKUP_SQL, tenantId, tenantId)));
 
         // 4. Create pickup record + link shipments (before calling Bosta API, so manifest
         //    exists regardless of TRACED_MANAGED API result)
@@ -250,6 +261,46 @@ public class BostaPickupService {
     }
 
     /** Re-fetch a manifest for an already-created pickup (for GET endpoint). */
+    /**
+     * Review mode: the simulated schedule. Same awaiting-pickup selection and pickup + link rows as
+     * the real path, but courier_account_id NULL (nullable — pickup sessions never set it either)
+     * and provider_pickup_id = SIM-PU- + 12 hex of the pickup id (a reserved, never-numeric prefix,
+     * so it can't collide with a real Bosta pickup id). Mode "SIMULATED"; Bosta is never called.
+     */
+    private PickupManifest scheduleSimulated(UUID tenantId, LocalDate scheduledDate) {
+        List<Map<String, Object>> shipmentRows = TenantContext.runAs(tenantId, () ->
+            tx.execute(s -> jdbc.queryForList(AWAITING_PICKUP_SQL, tenantId, tenantId)));
+
+        record Created(UUID id, String providerId) {}
+        Created created = TenantContext.runAs(tenantId, () ->
+            tx.execute(s -> {
+                UUID pid = jdbc.queryForObject(
+                    "INSERT INTO pickups (tenant_id, courier_account_id, scheduled_date, session_status) " +
+                    "VALUES (?, NULL, ?, 'closed') RETURNING id",
+                    UUID.class, tenantId, java.sql.Date.valueOf(scheduledDate));
+                String providerId = SIMULATED_PICKUP_PREFIX + pid.toString().replace("-", "").substring(0, 12);
+                jdbc.update("UPDATE pickups SET provider_pickup_id = ? WHERE id = ?", providerId, pid);
+                for (Map<String, Object> row : shipmentRows) {
+                    jdbc.update(
+                        "INSERT INTO pickup_shipments (pickup_id, shipment_id, tenant_id) VALUES (?, ?, ?)",
+                        pid, row.get("id"), tenantId);
+                }
+                return new Created(pid, providerId);
+            }));
+
+        List<ManifestLine> lines = shipmentRows.stream()
+            .map(r -> new ManifestLine(
+                (String) r.get("tracking_number"),
+                (String) r.get("order_number"),
+                r.get("cod_amount") != null ? (BigDecimal) r.get("cod_amount") : BigDecimal.ZERO))
+            .toList();
+        BigDecimal total = lines.stream().map(ManifestLine::cod).reduce(BigDecimal.ZERO, BigDecimal::add);
+        log.info("Review mode: simulated pickup {} scheduled for tenant {} on {} ({} parcel(s))",
+            created.providerId(), tenantId, scheduledDate, lines.size());
+        return new PickupManifest(created.id(), scheduledDate.toString(), "SIMULATED", created.providerId(),
+            null, lines, total, lines.size());
+    }
+
     public PickupManifest getManifest(UUID tenantId, UUID pickupId) {
         Map<String, Object> pickup = TenantContext.runAs(tenantId, () ->
             tx.execute(s -> jdbc.query(
