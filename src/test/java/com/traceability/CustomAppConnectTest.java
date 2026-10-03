@@ -859,13 +859,13 @@ class CustomAppConnectTest {
     }
 
     // -----------------------------------------------------------------------
-    // FR-3.1 follow-up (a variant) — disconnect-then-switch on the custom-app path: a
-    // tenant whose only row is status='disconnected' may connect a DIFFERENT shop. This
-    // creates a second row (the old disconnected one is not deleted) — proves the guard
-    // change, not that rows get merged.
+    // Shop binding rule on the custom-app path (review mode S1, 2026-10-03 — reverses the
+    // FR-3.1 follow-up's disconnect-then-switch): a real tenant whose only row is
+    // status='disconnected' may NOT connect a different shop — 409 naming the linked shop,
+    // no second row. A store switch for a real merchant is a manual ops script, on request.
     // -----------------------------------------------------------------------
     @Test @Order(28)
-    void sameShopGuard_onlyDisconnectedRow_differentShop_allowsSwitch() {
+    void sameShopGuard_onlyDisconnectedRow_differentShop_rejected409() {
         doCustomConnect(SHOP_DOMAIN, CLIENT_ID, CLIENT_SECRET);
         jdbc.update("UPDATE stores SET status = 'disconnected' WHERE tenant_id = ? AND shop_domain = ?",
             ownerTenantId, SHOP_DOMAIN);
@@ -874,17 +874,18 @@ class CustomAppConnectTest {
         var resp = doCustomConnect(newShop, CLIENT_ID, CLIENT_SECRET);
 
         assertThat(resp.getStatusCode())
-            .as("a tenant with only a disconnected row must be allowed to connect a different shop")
-            .isEqualTo(HttpStatus.ACCEPTED);
+            .as("a disconnected row still binds a real tenant to its shop")
+            .isEqualTo(HttpStatus.CONFLICT);
+        assertThat(resp.getBody()).containsEntry("code", "SHOPIFY_SHOP_MISMATCH");
+        assertThat((String) resp.getBody().get("message_en")).contains(SHOP_DOMAIN);
 
         Integer totalRows = jdbc.queryForObject(
             "SELECT COUNT(*) FROM stores WHERE tenant_id = ?", Integer.class, ownerTenantId);
-        assertThat(totalRows).as("old disconnected row is kept, not merged/deleted").isEqualTo(2);
+        assertThat(totalRows).as("no second row for the other shop").isEqualTo(1);
 
-        String newShopStatus = jdbc.queryForObject(
-            "SELECT status::text FROM stores WHERE tenant_id = ? AND shop_domain = ?",
-            String.class, ownerTenantId, newShop);
-        assertThat(newShopStatus).isEqualTo("connected");
+        Integer newShopRows = jdbc.queryForObject(
+            "SELECT COUNT(*) FROM stores WHERE shop_domain = ?", Integer.class, newShop);
+        assertThat(newShopRows).isEqualTo(0);
     }
 
     // -----------------------------------------------------------------------

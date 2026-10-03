@@ -1842,7 +1842,8 @@
         "INSTALL_FAILED": "Couldn't connect your Shopify store. Please try again.",
         "generic": "Couldn't connect your Shopify store. Please try again.",
         "dismiss": "Dismiss"
-      }
+      },
+      "linkedShop": "This account is linked to {{shop}}. Only that store can be reconnected."
     },
     "bosta": {
       "title": "Bosta",
@@ -1904,6 +1905,10 @@
           "title": "Copy your API key",
           "body": "Copy the key Bosta shows you, then paste it below to connect your account."
         }
+      },
+      "simulated": {
+        "badge": "Simulated (review mode)",
+        "body": "This is a review account. Shipments, waybills and pickups are simulated — nothing is sent to Bosta, and Bosta can't be connected here."
       }
     },
     "never": "Never"
@@ -2114,7 +2119,8 @@
       "selfPickupNote": "Self-pickup orders have no waybill, so they always stay in the order queue.",
       "sessionsNote": "Pack sessions already open finish in their current mode. The change applies to the next session.",
       "error": "Couldn't save the packing mode. Try again."
-    }
+    },
+    "awbFormatSimulated": "Waybills are simulated in review mode."
   },
   "users": {
     "title": "Team",

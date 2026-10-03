@@ -221,10 +221,13 @@ public class ShopifyOAuthService {
     }
 
     /**
-     * Layer 1 of the same-shop-only guard: a tenant with ANY existing stores row (regardless
-     * of status — connected, disconnected, needs_reauth) may only initiate OAuth against a
-     * shop_domain it already owns. Zero existing rows means first connect — any valid shop
-     * is allowed. Own-tenant shop only, in the message — never leaks another tenant's domain.
+     * Layer 1 of the shop binding rule (ShopifySameShopGuard): a real tenant with ANY existing
+     * stores row (regardless of status — connected, disconnected, needs_reauth) may only
+     * initiate OAuth against a shop_domain it already owns; a simulated-courier (review mode)
+     * tenant's disconnected rows don't bind it. Nothing binding means first connect — any
+     * valid shop is allowed. Rejected BEFORE any state nonce is written or the merchant is
+     * sent to Shopify. Own-tenant shop only, in the message — never leaks another tenant's
+     * domain.
      *
      * Delegates the assertion itself to the shared ShopifySameShopGuard (also used by the
      * custom-app connect paths in ShopifySyncService) — this method's own job is just to
@@ -551,12 +554,12 @@ public class ShopifyOAuthService {
 
     /** Layer 2 backstop check — see path1()'s owner==null branch. */
     private boolean tenantOwnsDifferentShop(UUID tenantId, String shop) {
+        // Same predicate as initiate (ShopifySameShopGuard.boundShopDomains): for a real
+        // tenant every row binds — exactly as strict as this backstop always was; a
+        // simulated-courier tenant's disconnected rows don't.
         TenantContext.set(tenantId);
         try {
-            Boolean exists = tx.execute(s -> jdbc.query(
-                "SELECT EXISTS(SELECT 1 FROM stores WHERE tenant_id = ? AND shop_domain <> ?)",
-                rs -> rs.next() && rs.getBoolean(1), tenantId, shop));
-            return Boolean.TRUE.equals(exists);
+            return sameShopGuard.isDifferentShop(tenantId, shop);
         } finally {
             TenantContext.clear();
         }

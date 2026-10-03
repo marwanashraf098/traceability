@@ -23,6 +23,11 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
+ * Review mode (V130): no method here takes a tracking number (the creates send
+ * businessReference / uniqueBusinessReference; read-backs go through
+ * BostaHttpGateway.fetchDelivery), so the reserved simulated range ({@link SimulatedTracking})
+ * is guarded there, not here. A simulated tenant never has a courier key to reach this class.
+ *
  * Returns portal Step 4c-2 — the two Bosta v2 READS, kept apart from {@link BostaHttpGateway}
  * so the global {@code bosta.api-version} (v0) and every existing v0 call stay untouched.
  * Both URLs are built here as {base}/api/v2/…; the base is the same {@code BOSTA_BASE_URL}.

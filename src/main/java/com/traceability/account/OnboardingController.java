@@ -1,6 +1,7 @@
 package com.traceability.account;
 
 import com.traceability.identity.CustomUserDetails;
+import com.traceability.integrations.bosta.CourierSimulation;
 import com.traceability.tenancy.TenantContext;
 import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -80,11 +81,13 @@ public class OnboardingController {
                 "SELECT EXISTS(SELECT 1 FROM stores WHERE tenant_id = ? AND status = 'connected')",
                 Boolean.class, tenantId));
 
-            // ② Bosta connected
+            // ② Bosta connected — or, review mode (V130), the courier is simulated: such a
+            // tenant can't connect Bosta, so the step must not stay open forever.
             boolean bostaAuto = Boolean.TRUE.equals(jdbc.queryForObject(
                 "SELECT EXISTS(SELECT 1 FROM courier_accounts " +
                 "WHERE tenant_id = ? AND provider = 'bosta' AND status = 'active')",
-                Boolean.class, tenantId));
+                Boolean.class, tenantId))
+                || CourierSimulation.isSimulated(jdbc, tenantId);
 
             // ③ At least one location exists
             boolean locationAuto = Boolean.TRUE.equals(jdbc.queryForObject(

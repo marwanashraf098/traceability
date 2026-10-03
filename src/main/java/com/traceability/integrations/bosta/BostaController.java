@@ -113,6 +113,10 @@ public class BostaController {
             @RequestBody BostaConnectRequest req,
             @AuthenticationPrincipal CustomUserDetails principal) {
 
+        // Review mode: refused BEFORE fetchBusinessProfile — that call already reaches Bosta.
+        // The V130 trigger on courier_accounts is the DB-level backstop.
+        refuseIfSimulated(principal.tenantId());
+
         String businessName = bostaGateway.fetchBusinessProfile(req.apiKey());
         log.info("Bosta connect: tenant={} business={}", principal.tenantId(), businessName);
 
@@ -196,6 +200,7 @@ public class BostaController {
             @AuthenticationPrincipal CustomUserDetails principal) {
 
         UUID tenantId = principal.tenantId();
+        refuseIfSimulated(tenantId);
         int maxPages = (req != null && req.maxPages() != null && req.maxPages() > 0)
             ? req.maxPages() : defaultBackfillMaxPages;
         JobId jobId = jobScheduler.enqueue(() -> backfillJob.run(tenantId, maxPages));
@@ -219,6 +224,7 @@ public class BostaController {
     @PreAuthorize("hasRole('OWNER')")
     public Map<String, String> visibilityCheck(@AuthenticationPrincipal CustomUserDetails principal) {
         UUID tenantId = principal.tenantId();
+        refuseIfSimulated(tenantId);
         JobId jobId = jobScheduler.enqueue(() -> visibilityCheck.runAndLog(tenantId));
         Map<String, String> resp = new LinkedHashMap<>();
         resp.put("jobId",   jobId != null ? jobId.asUUID().toString() : "enqueued");
@@ -541,6 +547,13 @@ public class BostaController {
         int count = updated != null ? updated : 0;
         log.info("bosta/backfill-pii: tenant={} → {} order(s) updated", tenantId, count);
         return ResponseEntity.ok(Map.of("updatedOrders", count));
+    }
+
+    /** Review mode (V130): a simulated-courier tenant never connects / syncs / checks real Bosta. */
+    private void refuseIfSimulated(UUID tenantId) {
+        boolean simulated = TenantContext.runAs(tenantId, () ->
+            Boolean.TRUE.equals(tx.execute(s -> CourierSimulation.isSimulated(jdbc, tenantId))));
+        if (simulated) throw new CourierSimulatedException();
     }
 
     private static String sha256Hex(String input) {

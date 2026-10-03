@@ -113,6 +113,7 @@ export default function BusinessTab({ isOwner }: { isOwner: boolean }) {
 
   // Bosta AWB settings — stored in courier_accounts, loaded separately
   const [bostaConnected, setBostaConnected] = useState(false)
+  const [bostaSimulated, setBostaSimulated] = useState(false)
   const [awbFormat,      setAwbFormat]      = useState<'A4' | 'A6'>('A4')
   const [awbLang,        setAwbLang]        = useState<'ar' | 'en'>('ar')
 
@@ -143,7 +144,11 @@ export default function BusinessTab({ isOwner }: { isOwner: boolean }) {
           consentAcceptedAt:     s.consentAcceptedAt,
         })
 
-        setBostaConnected(conn.bosta.connected)
+        // Review mode: a simulated courier reports connected but has no Bosta account to
+        // save AWB preferences on (PUT /bosta/settings would update nothing) — keep the
+        // fields disabled, with their own note.
+        setBostaSimulated(conn.bosta.simulated === true)
+        setBostaConnected(conn.bosta.connected && conn.bosta.simulated !== true)
         const awbFields: AwbFields = {
           awbFormat: conn.bosta.awbFormat ?? 'A4',
           awbLang:   conn.bosta.awbLang === 'en' ? 'en' : 'ar',
@@ -321,7 +326,9 @@ export default function BusinessTab({ isOwner }: { isOwner: boolean }) {
                   : t('settings.awbFormatA4')}
               </p>
               {!bostaConnected && (
-                <p className="text-caption text-muted mt-0.5 opacity-60">{t('settings.awbFormatNotConnected')}</p>
+                <p className="text-caption text-muted mt-0.5 opacity-60">
+                  {bostaSimulated ? t('settings.awbFormatSimulated') : t('settings.awbFormatNotConnected')}
+                </p>
               )}
             </SettingsRow>
 

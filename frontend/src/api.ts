@@ -673,6 +673,8 @@ export interface ConnectionsStatus {
     pickupMode: string | null
     awbFormat: 'A4' | 'A6' | null
     awbLang: string | null
+    /** Review mode (V130): the courier is simulated — connected is true with no Bosta account. */
+    simulated?: boolean
   }
   customAppAvailable: boolean
   oauthAvailable: boolean

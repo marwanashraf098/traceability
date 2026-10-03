@@ -114,6 +114,28 @@ function WebhookSecretReveal({ secret, onDone }: { secret: string; onDone: () =>
 
 type BostaUiState = 'disconnected' | 'wizard' | 'connected'
 
+// Review mode (V130): the courier is simulated — read-only card, no connect wizard, no
+// sync / secret / disconnect controls (the backend refuses them with COURIER_SIMULATED).
+function SimulatedBostaCard() {
+  const { t } = useTranslation()
+  return (
+    <div className="card p-5 space-y-3" data-testid="bosta-simulated-card">
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 rounded-xl bg-accent/10 border border-accent/20 flex items-center justify-center flex-shrink-0">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--color-accent, #f59e0b)" strokeWidth="1.75">
+              <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/>
+            </svg>
+          </div>
+          <h2 className="text-h3 text-primary">{t('connections.bosta.title')}</h2>
+        </div>
+        <ConnectedBadge label={t('connections.bosta.simulated.badge')} />
+      </div>
+      <p className="text-small text-muted">{t('connections.bosta.simulated.body')}</p>
+    </div>
+  )
+}
+
 function BostaCard({ bosta, onConnected }: { bosta: ConnectionsStatus['bosta']; onConnected: () => Promise<void> }) {
   const { t } = useTranslation()
   const [override,       setOverride]      = useState<'wizard' | null>(null)
@@ -377,7 +399,9 @@ export default function ConnectionsTab({ readOnly }: { readOnly: boolean }) {
               shopifySetup={status.shopifySetup}
               reload={load}
             />
-            <BostaCard bosta={status.bosta} onConnected={load} />
+            {status.bosta.simulated
+              ? <SimulatedBostaCard />
+              : <BostaCard bosta={status.bosta} onConnected={load} />}
           </div>
         </fieldset>
       )}

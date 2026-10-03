@@ -4,6 +4,42 @@
 
 ## Current state
 
+**Review mode S1 — simulated-courier flag + shop binding rule (2026-10-03, branch
+`feat/review-simulated-courier-s1` off main 6ce8cd8, worktree `.claude/worktrees/review-s1`; not merged, not deployed).**
+Goal of review mode: one Shopify App Store review tenant with seeded demo data, simulated Bosta (never calls Bosta),
+connectable to the reviewer's own store. Slices: S1 → S2 (simulated waybills + pickups) → S3 (auto-shipment on
+Shopify ingest) → S5 (seeder, reviewer@tracedtech.com) → S4 + S7 (mute shipment exceptions/emails, Shopify writes for
+seeded variants; frontend helpers) → S6 (reset ops script).
+- **V130 `tenant_courier_simulation`** (tenant_id PK, created_at, note): a row = simulated courier; app_user SELECT only,
+  RLS own row; two INVOKER triggers keep it and `courier_accounts` mutually exclusive. `CourierSimulation.isSimulated`.
+- Bosta connect / sync / visibility-check → 409 `COURIER_SIMULATED` before any Bosta call. `/connections` →
+  `bosta.simulated` (connected, no account) and, for a simulated tenant, disconnected Shopify rows hidden. Onboarding's
+  Bosta step counts as done. Frontend: read-only "Simulated (review mode)" Bosta card; Business-tab AWB fields stay
+  disabled with "Waybills are simulated".
+- **Reserved tracking range** `^777\d{10}$` (`SimulatedTracking`); `BostaHttpGateway.fetchDelivery` / `printMassAwb`
+  refuse it before any HTTP. BostaV2Client takes no tracking numbers (comment only).
+- **Shop binding rule** (`ShopifySameShopGuard.boundShopDomains`, used by initiate + callback backstop + custom-app
+  paths): real tenant bound by every row incl. disconnected (409 names the linked shop, pre-redirect); simulated tenant
+  bound only by non-disconnected rows. Frontend: disconnected card shows "linked to X" and prefills the shop.
+- **"Bosta connected" consumers for a simulated tenant** (classified a/b/c): gated now — Bosta card, Business AWB
+  fields, onboarding step, connect/sync/visibility-check; S2 — `FulfillService` shipment_has_courier (Print button),
+  `BostaAwbService` print (single + batch), `PackPrintBatchStore` default paper, `BostaPickupService`, return-request
+  booking "Book now" (refuse cleanly "Not available in review mode"); already off — portal pickup booking / exchanges
+  toggles (`PortalSettingsService` reads courier_accounts → BOOKING_NEEDS_BOSTA), return locations (V2 client needs a key);
+  fine — Fulfill "Connect Bosta" hint hidden, regenerate-secret 404, poll jobs / webhooks (active courier rows only).
+- Tests: `ShopBindingRuleTest` b1–b5 (initiate AND callback), `CourierSimulationTest` cs1–cs7 (incl. app_user RLS +
+  grants), `SimulatedTrackingGuardTest` sg1–sg4, `frontend/src/test/shopifyLinkedShop.test.tsx` f1–f3 — all
+  revert-checked (shop rule → b1, b3 red; backstop only → b3; controllers → cs1, cs4, cs5, cs7; triggers + REVOKE →
+  cs2, cs3, cs6; gateway guard → sg1, sg2; frontend → f1, f3).
+- Approved existing-test edits: `ShopifySameShopGuardTest.initiate_tenantOwnsOnlyDisconnectedDifferentShop_rejected`
+  and `CustomAppConnectTest.sameShopGuard_onlyDisconnectedRow_differentShop_rejected409` (flipped from allowsSwitch);
+  `MigrationSmokeTest` 128→129 files, `NotTracedBackfillTest` 73→74; `ConnectionsOnboardingTest` c7 comment only.
+- **Migration numbers:** S1 = V130; the parallel fulfillment-link work (`feat/bosta-fulfillment-link`, worktree
+  `~/Documents/traceability-bosta-link`) = V131. Whichever merges second re-bumps the two migration-count tests.
+- **Gotcha (process):** two sessions once edited the same working tree (~/Documents/traceability) at the same time and
+  both created a V130. Every build now runs in its own worktree; the main checkout stays on main.
+- **S6 note:** the reset script (and any future purge) must include `tenant_courier_simulation`.
+
 **Prod purge of non-merchant tenants (2026-10-02, ops only — no code change; committed in prod by Marawan).**
 - Purged 23 test / reviewer / screencast tenants and every tenant-scoped row (54 `tenant_id` tables, catalog-derived
   coverage check), in one REPEATABLE READ transaction run as postgres via psql through the session pooler (5432).
@@ -5391,6 +5427,12 @@ Provision Hetzner VPS, set up Docker Compose (app + Postgres or Supabase connect
 ---
 
 ## Decisions made
+
+- **Store switch for a real merchant = manual ops script, on request. There's no in-app path, by design** (Marawan,
+  2026-10-03). A real tenant stays bound to its shop_domain even after disconnecting (`ShopifySameShopGuard`); only a
+  simulated-courier (review mode) tenant ignores its disconnected rows. No script exists yet — written when first needed.
+- **Review mode uses its own flag (`tenant_courier_simulation`, V130), never `is_demo`** (2026-10-03) — DemoSeeder
+  asserts exactly one is_demo tenant. Reset (S6) and any future purge must include the table.
 
 - **Runtime role is `app_user` / Flyway runs as owner** — app connects as unprivileged `app_user` so RLS is always enforced; Flyway runs as `postgres`, which carries the `BYPASSRLS` attribute (not a superuser — verified via `SELECT rolbypassrls FROM pg_roles WHERE rolname='postgres'`; returns `true`). `FORCE ROW LEVEL SECURITY` binds the table owner just like any role without `BYPASSRLS`; Flyway succeeds because DDL statements (CREATE TABLE, ALTER TABLE, CREATE INDEX) are never subject to RLS, and V2 seeds only the tenant-unscoped lookup tables (`bosta_state_mappings`, `ndr_codes`) which have no RLS policy.
 - **Webhook idempotency via partial unique index + app-side key for Bosta** — `UNIQUE NULLS NOT DISTINCT (source, external_event_id)` in DB handles Shopify (which sends an event ID header); for Bosta (no HMAC, no event ID) we generate a deterministic key app-side and verify authenticity by re-fetching the event from the Bosta API.

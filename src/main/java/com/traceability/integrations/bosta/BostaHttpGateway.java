@@ -162,6 +162,7 @@ class BostaHttpGateway implements BostaGateway {
 
     @Override
     public BostaDelivery fetchDelivery(String apiKey, String trackingNumber) {
+        refuseReserved(trackingNumber);
         String url = baseUrl + "/api/" + apiVersion + "/deliveries/" + trackingNumber;
         try {
             JsonNode body = Retry.decorateSupplier(retry, () ->
@@ -265,6 +266,17 @@ class BostaHttpGateway implements BostaGateway {
         }
     }
 
+    /**
+     * Review mode: a tracking number in the reserved simulated range (SimulatedTracking) is
+     * never sent to Bosta — refused before any URL is built or HTTP attempt / retry is made.
+     */
+    private static void refuseReserved(String trackingNumber) {
+        if (SimulatedTracking.isReserved(trackingNumber)) {
+            throw new BostaException("Reserved simulated tracking number " + trackingNumber
+                + " — never sent to Bosta");
+        }
+    }
+
     /** Throws BostaRateLimitException if the body signals a 429 rate-limit response. */
     private void detectRateLimit(JsonNode body, String context) {
         if (!body.path("success").asBoolean(true)) {
@@ -304,6 +316,7 @@ class BostaHttpGateway implements BostaGateway {
     @Override
     public AwbPrintResult printMassAwb(String apiKey, List<String> trackingNumbers,
                                         String awbFormat, String lang) {
+        if (trackingNumbers != null) trackingNumbers.forEach(BostaHttpGateway::refuseReserved);
         // v0 endpoint — same version as list/fetch, confirmed working with raw apiKey auth.
         // requestedAwbType (A4|A6) is accepted on v0 (live-verified Day 38).
         String url = baseUrl + "/api/" + apiVersion + "/deliveries/mass-awb";

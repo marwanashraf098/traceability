@@ -246,9 +246,12 @@ class ConnectionsOnboardingTest {
         assertThat(scopes).isNotEmpty();
     }
 
-    // FR-3.1 follow-up (e) — disconnect-then-switch: tenant holds one disconnected (old)
-    // row and one active (new) row. /connections must surface the active one, not
-    // whichever the plain ORDER BY last_sync_at would have picked.
+    // A tenant holding one disconnected (old) row and one active (new) row — since the
+    // 2026-10-03 shop binding rule only a simulated-courier (review mode) tenant can reach
+    // this state through a connect (a real merchant is bound to its shop; a switch is a
+    // manual ops script). Rows are inserted directly here, so the rule isn't exercised; what
+    // this proves is the pick: /connections must surface the active row, not whichever the
+    // plain ORDER BY last_sync_at would have picked.
     @Test
     void c7_disconnectThenSwitch_connectionsReturnsActiveRowNotDisconnected() {
         jdbc.update("UPDATE stores SET status = 'disconnected' WHERE id = ?", storeId);

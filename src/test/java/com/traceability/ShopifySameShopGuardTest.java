@@ -238,14 +238,13 @@ class ShopifySameShopGuardTest {
     }
 
     // -----------------------------------------------------------------------
-    // FR-3.1 follow-up — disconnect-then-switch: tenant's ONLY row for SHOP_X is
-    // disconnected, initiates for a DIFFERENT shop SHOP_Y → must proceed normally, not
-    // SHOPIFY_SHOP_MISMATCH. This is the behavior change from Layer 1a's old assertion
-    // (this same fixture used to expect 409 — see git history) — a merchant who connected
-    // the wrong store and disconnected it must be able to connect the right one.
+    // Shop binding rule (review mode S1, 2026-10-03 — reverses the FR-3.1 follow-up's
+    // disconnect-then-switch): tenant's ONLY row for SHOP_X is disconnected, initiates for a
+    // DIFFERENT shop SHOP_Y → SHOPIFY_SHOP_MISMATCH pre-consent, naming SHOP_X; no state row.
+    // A real merchant stays bound to its shop; a switch is a manual ops script, on request.
     // -----------------------------------------------------------------------
     @Test
-    void initiate_tenantOwnsOnlyDisconnectedDifferentShop_allowsSwitch() {
+    void initiate_tenantOwnsOnlyDisconnectedDifferentShop_rejected() {
         Signup owner = signupOwner("SameShopGuard Switch Corp", "ssg_switch_owner", "ssg_switch@test.com");
 
         jdbc.update(
@@ -263,14 +262,15 @@ class ShopifySameShopGuardTest {
             Map.class);
 
         assertThat(resp.getStatusCode())
-            .as("a tenant with only a disconnected different-shop row must be allowed to switch")
-            .isEqualTo(HttpStatus.OK);
-        assertThat(resp.getBody()).containsKey("consentUrl");
+            .as("a disconnected row still binds a real tenant to its shop")
+            .isEqualTo(HttpStatus.CONFLICT);
+        assertThat(resp.getBody()).containsEntry("code", "SHOPIFY_SHOP_MISMATCH");
+        assertThat((String) resp.getBody().get("message_en")).contains(SHOP_X);
 
         Integer stateCount = jdbc.queryForObject(
             "SELECT COUNT(*) FROM shopify_oauth_state WHERE shop_domain = ? AND tenant_id = ?",
             Integer.class, SHOP_Y, owner.tenantId());
-        assertThat(stateCount).as("state nonce written for the new shop").isEqualTo(1);
+        assertThat(stateCount).as("no state nonce written for the other shop").isEqualTo(0);
     }
 
     // -----------------------------------------------------------------------

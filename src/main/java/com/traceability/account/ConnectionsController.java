@@ -1,6 +1,7 @@
 package com.traceability.account;
 
 import com.traceability.identity.CustomUserDetails;
+import com.traceability.integrations.bosta.CourierSimulation;
 import com.traceability.integrations.shopify.StoreRepository;
 import com.traceability.tenancy.TenantContext;
 import org.springframework.beans.factory.annotation.Value;
@@ -70,7 +71,8 @@ public class ConnectionsController {
      *                "connectionType": "oauth"|"custom_app"|"custom_app_cc"|null,
      *                "status": "connected"|"needs_reauth"|"error"|"disconnected",
      *                "importStatus": str|null, "lastSyncAt": str|null },
-     *   "bosta":   { "connected": bool, "businessName": str|null, "pickupMode": str|null },
+     *   "bosta":   { "connected": bool, "businessName": str|null, "pickupMode": str|null,
+     *                "awbFormat": str|null, "awbLang": str|null, "simulated": bool },
      *   "customAppAvailable": bool,
      *   "oauthAvailable": bool,
      *   "shopifySetup": { "appUrl": str, "redirectUrl": str, "webhookApiVersion": str, "scopes": [str] }
@@ -83,15 +85,16 @@ public class ConnectionsController {
      * connected. This endpoint now picks the tenant's single row directly, in every
      * connection_type — with ShopifySameShopGuard as the write-side invariant.
      *
-     * FR-3.1 follow-up: the guard now allows a distinct shop_domain once the tenant's
-     * existing row(s) are all status='disconnected' (disconnect-then-switch — see
-     * ShopifySameShopGuard), so a tenant can legitimately hold one disconnected (old) row
-     * and one active (new) row at once. The pick below is ORDER BY (status <>
-     * 'disconnected') DESC — i.e. any non-disconnected row wins outright over a
-     * disconnected one — THEN last_sync_at DESC NULLS LAST as the tiebreak among rows of
-     * the same "active-ness". This is no longer pure defense-in-depth (as it was when one
-     * row per tenant was closer to guaranteed): it is the primary mechanism that keeps a
-     * stale disconnected row from ever shadowing the real active connection.
+     * Shop binding (review mode S1, 2026-10-03): a real tenant is bound to its shop for good —
+     * even after disconnecting, it can only reconnect that same shop_domain
+     * (ShopifySameShopGuard), so it holds at most one row. Only a simulated-courier tenant
+     * (review mode) may hold disconnected old rows next to an active one. The pick below is
+     * ORDER BY (status <> 'disconnected') DESC — any non-disconnected row wins outright over a
+     * disconnected one — THEN last_sync_at DESC NULLS LAST as the tiebreak, which keeps such a
+     * stale row from ever shadowing the active connection.
+     *
+     * Review mode: "bosta.simulated" is true for a simulated-courier tenant (V130), which then
+     * reports connected without any courier row; disconnected Shopify rows are hidden for it.
      */
     @GetMapping
     @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
@@ -99,6 +102,9 @@ public class ConnectionsController {
         UUID tenantId = principal.tenantId();
 
         return TenantContext.runAs(tenantId, () -> tx.execute(s -> {
+            // Review mode (V130): a simulated-courier tenant.
+            boolean simulated = CourierSimulation.isSimulated(jdbc, tenantId);
+
             // Shopify — the tenant's single row (StoreRepository.findByTenant: preferring
             // status='connected', then any other non-disconnected row, then a disconnected
             // one last — any connection_type). Uses the SAME pick as
@@ -109,6 +115,12 @@ public class ConnectionsController {
             // disconnected/attention state with the stale domain when that's the only row.
             Map<String, Object> shopify = new LinkedHashMap<>();
             Optional<StoreRepository.Store> storeOpt = storeRepository.findByTenant(tenantId);
+            // Review mode: a simulated tenant's disconnected rows (its placeholder store, past
+            // review rounds' stores) don't bind it (ShopifySameShopGuard), so they aren't shown
+            // either — the card shows the plain "connect a store" state.
+            if (simulated && storeOpt.isPresent() && "disconnected".equals(storeOpt.get().status())) {
+                storeOpt = Optional.empty();
+            }
             if (storeOpt.isEmpty()) {
                 shopify.put("connected",      false);
                 shopify.put("storeId",        null);
@@ -128,8 +140,9 @@ public class ConnectionsController {
                 shopify.put("lastSyncAt",     store.lastSyncAt() != null ? Timestamp.from(store.lastSyncAt()) : null);
             }
 
-            // Bosta — active courier account
-            Map<String, Object> bosta = jdbc.query(
+            // Bosta — active courier account. Review mode: a simulated tenant has no courier
+            // row (V130 trigger) and reports connected + simulated, never touching Bosta.
+            Map<String, Object> bosta = simulated ? simulatedBosta() : jdbc.query(
                 "SELECT business_ref, pickup_mode, awb_format, awb_lang, status " +
                 "FROM courier_accounts " +
                 "WHERE tenant_id = ? AND provider = 'bosta' AND status = 'active' LIMIT 1",
@@ -148,6 +161,7 @@ public class ConnectionsController {
                         m.put("awbFormat",    rs.getString("awb_format"));
                         m.put("awbLang",      rs.getString("awb_lang"));
                     }
+                    m.put("simulated", false);
                     return m;
                 }, tenantId);
 
@@ -165,5 +179,16 @@ public class ConnectionsController {
             result.put("shopifySetup",       shopifySetup);
             return result;
         }));
+    }
+
+    private static Map<String, Object> simulatedBosta() {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("connected",    true);
+        m.put("businessName", null);
+        m.put("pickupMode",   null);
+        m.put("awbFormat",    null);
+        m.put("awbLang",      null);
+        m.put("simulated",    true);
+        return m;
     }
 }

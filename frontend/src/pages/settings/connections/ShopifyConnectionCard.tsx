@@ -278,6 +278,17 @@ export default function ShopifyConnectionCard({
 
   const uiState: UiState = override ?? deriveUiState(shopify)
 
+  // Shop binding rule (ShopifySameShopGuard): a tenant whose store is disconnected can only
+  // reconnect that same shop — /connections still returns its domain (a simulated review
+  // tenant gets none). Shown as a notice and prefilled into both connect forms; a different
+  // shop is refused by the backend with a message naming this one.
+  const linkedShop = !shopify.connected && shopify.status === 'disconnected' ? shopify.shopDomain : null
+  useEffect(() => {
+    if (!linkedShop) return
+    setReviewerShop(prev => prev || linkedShop)
+    setWizardShopDomain(prev => prev || linkedShop)
+  }, [linkedShop])
+
   // Reopens the wizard preserving whatever the merchant already typed — used only by
   // handleWizardSubmit's catch branch (a failed submit lands back on step 10 with the
   // same values and an error, not a blank form).
@@ -293,7 +304,7 @@ export default function ShopifyConnectionCard({
   // previous session (there shouldn't be any at this point, but this is the one path
   // that's explicitly "starting over", so it's the right place to guarantee it).
   function openFreshWizard(startStep: number) {
-    setWizardShopDomain('')
+    setWizardShopDomain(linkedShop ?? '')
     setWizardClientId('')
     setWizardClientSecret('')
     openWizard(startStep)
@@ -302,7 +313,7 @@ export default function ShopifyConnectionCard({
   // Leaving the wizard back to "choose" (Back at step 1) — clears the fields, matching
   // "clear only on success or on leaving the wizard".
   function closeWizard() {
-    setWizardShopDomain('')
+    setWizardShopDomain(linkedShop ?? '')
     setWizardClientId('')
     setWizardClientSecret('')
     setOverride('choose')
@@ -421,6 +432,11 @@ export default function ShopifyConnectionCard({
 
       {uiState === 'disconnected' && (
         <div className="space-y-3">
+          {linkedShop && (
+            <p className="text-small text-muted rounded-xl border border-line bg-elevated px-4 py-3" data-testid="shopify-linked-shop">
+              {t('connections.shopify.linkedShop', { shop: linkedShop })}
+            </p>
+          )}
           {customAppAvailable && (
             <div className="rounded-xl border border-brand/20 bg-brand/5 p-4 space-y-2">
               <span className="inline-block text-xs font-semibold text-brand bg-brand/10 rounded px-2 py-0.5">
