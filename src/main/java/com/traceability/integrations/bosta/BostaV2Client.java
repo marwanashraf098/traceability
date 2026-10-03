@@ -202,7 +202,7 @@ public class BostaV2Client {
                 "Bosta rate limit for this account — nothing was sent, try again shortly");
         }
         CreateResult r = postCreateOnce(apiKey, json);
-        if (r.httpStatus() == 429) limiter.onRateLimited(apiKey, 60);
+        if (r.httpStatus() == 429) limiter.onRateLimited(apiKey, 60, "v2 create");
         return r;
     }
 
@@ -443,7 +443,7 @@ public class BostaV2Client {
             return new SearchResponse(200, resp == null ? null : mapper.readTree(resp), null);
         } catch (RestClientResponseException e) {
             int status = e.getStatusCode().value();
-            if (status == 429) limiter.onRateLimited(apiKey, 60);
+            if (status == 429) limiter.onRateLimited(apiKey, 60, "v2 deliveries/search probe");
             JsonNode errBody = null;
             try { errBody = mapper.readTree(e.getResponseBodyAsString()); } catch (Exception ignored) { /* not JSON */ }
             return new SearchResponse(status, errBody, "HTTP " + status);
@@ -484,7 +484,7 @@ public class BostaV2Client {
             int status = e.getStatusCode().value();
             if (status == 429) {
                 long retryAfter = retryAfterSeconds(e);
-                limiter.onRateLimited(apiKey, retryAfter);
+                limiter.onRateLimited(apiKey, retryAfter, "v2 deliveries/search page " + page);
                 throw new BostaRateLimitException(retryAfter);
             }
             if (status >= 500) throw new BostaTransientException("Bosta delivery search page " + page + " answered " + status);
@@ -528,6 +528,11 @@ public class BostaV2Client {
         } catch (RestClientResponseException e) {
             int status = e.getStatusCode().value();
             if (status == 401 || status == 403) throw new KeyRefusedException(status);
+            if (status == 429) {
+                long retryAfter = retryAfterSeconds(e);
+                limiter.onRateLimited(apiKey, retryAfter, "v2 pickup-locations");
+                throw new BostaRateLimitException(retryAfter);
+            }
             if (e.getStatusCode().is5xxServerError()) throw new BostaTransientException("Bosta 5xx on pickup-locations", e);
             throw new BostaException("Bosta pickup-locations error (" + status + ")", e);
         } catch (ResourceAccessException e) {

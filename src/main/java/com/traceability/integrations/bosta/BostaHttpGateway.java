@@ -117,7 +117,7 @@ class BostaHttpGateway implements BostaGateway {
         try {
             return call.get();
         } catch (BostaRateLimitException e) {
-            limiter.onRateLimited(apiKey, e.getRetryAfterSeconds());
+            limiter.onRateLimited(apiKey, e.getRetryAfterSeconds(), "v0");
             throw e;
         }
     }

@@ -26,6 +26,10 @@ import java.util.UUID;
  * Same mechanism for the fulfillment-link catch-up (BostaFulfillmentCatchUpService):
  * {@code BOSTA_FULFILLMENT_LINK_CATCH_UP_ON_STARTUP=<tenant ids>|all}, dry run unless
  * {@code BOSTA_FULFILLMENT_LINK_CATCH_UP_APPLY=true}. Remove both after the run.
+ *
+ * And for the re-process of webhook events that failed on a Bosta rate limit
+ * (BostaRateLimitedReprocessService): {@code BOSTA_REPROCESS_RATE_LIMITED_ON_STARTUP=<tenant ids>|all},
+ * dry run unless {@code BOSTA_REPROCESS_RATE_LIMITED_APPLY=true}. Remove both after the run.
  */
 @Component
 public class BostaVisibilityCheckTrigger {
@@ -39,6 +43,9 @@ public class BostaVisibilityCheckTrigger {
     private final BostaFulfillmentCatchUpService catchUp;
     private final String catchUpOnStartup;
     private final boolean catchUpApply;
+    private final BostaRateLimitedReprocessService reprocess;
+    private final String reprocessOnStartup;
+    private final boolean reprocessApply;
 
     public BostaVisibilityCheckTrigger(@FlywayDataSource DataSource ownerDs,
                                        JobScheduler jobScheduler,
@@ -46,7 +53,10 @@ public class BostaVisibilityCheckTrigger {
                                        @Value("${bosta.visibility-check.on-startup:}") String onStartup,
                                        BostaFulfillmentCatchUpService catchUp,
                                        @Value("${bosta.fulfillment-link.catch-up.on-startup:}") String catchUpOnStartup,
-                                       @Value("${bosta.fulfillment-link.catch-up.apply:false}") boolean catchUpApply) {
+                                       @Value("${bosta.fulfillment-link.catch-up.apply:false}") boolean catchUpApply,
+                                       BostaRateLimitedReprocessService reprocess,
+                                       @Value("${bosta.reprocess-rate-limited.on-startup:}") String reprocessOnStartup,
+                                       @Value("${bosta.reprocess-rate-limited.apply:false}") boolean reprocessApply) {
         this.ownerJdbc = new JdbcTemplate(ownerDs);
         this.jobScheduler = jobScheduler;
         this.service = service;
@@ -54,6 +64,9 @@ public class BostaVisibilityCheckTrigger {
         this.catchUp = catchUp;
         this.catchUpOnStartup = catchUpOnStartup;
         this.catchUpApply = catchUpApply;
+        this.reprocess = reprocess;
+        this.reprocessOnStartup = reprocessOnStartup;
+        this.reprocessApply = reprocessApply;
     }
 
     @EventListener(ApplicationReadyEvent.class)
@@ -70,6 +83,14 @@ public class BostaVisibilityCheckTrigger {
             final UUID t = tenantId;
             jobScheduler.enqueue(() -> catchUp.runAndLog(t, apply));
             log.info("Bosta fulfillment-link catch-up enqueued for tenant {} (apply={})", t, apply);
+        }
+        // Rate-limited events re-process (2026-10-04): BOSTA_REPROCESS_RATE_LIMITED_ON_STARTUP=<ids>|all,
+        // dry run unless BOSTA_REPROCESS_RATE_LIMITED_APPLY=true. One-shot per startup.
+        final boolean reApply = reprocessApply;
+        for (UUID tenantId : tenants(reprocessOnStartup)) {
+            final UUID t = tenantId;
+            jobScheduler.enqueue(() -> reprocess.runAndLog(t, reApply));
+            log.info("Bosta rate-limited re-process enqueued for tenant {} (apply={})", t, reApply);
         }
     }
 

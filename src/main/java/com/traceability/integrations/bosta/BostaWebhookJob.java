@@ -110,6 +110,27 @@ public class BostaWebhookJob {
         this.preConnectFilter = preConnectFilter;
     }
 
+    // Rate limit → reschedule (2026-10-04, V135). Setter-injected so hand-built instances keep working.
+    private org.jobrunr.scheduling.JobScheduler jobScheduler;
+    private int  rateLimitMaxRetries      = 8;
+    private long rateLimitMaxDelaySeconds = 1800;
+    private long rateLimitJitterSeconds   = 60;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setJobScheduler(org.jobrunr.scheduling.JobScheduler jobScheduler) {
+        this.jobScheduler = jobScheduler;
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public void setRateLimitRetry(
+            @org.springframework.beans.factory.annotation.Value("${bosta.webhook.rate-limit-max-retries:8}") int maxRetries,
+            @org.springframework.beans.factory.annotation.Value("${bosta.webhook.rate-limit-max-delay-seconds:1800}") long maxDelaySeconds,
+            @org.springframework.beans.factory.annotation.Value("${bosta.webhook.rate-limit-jitter-seconds:60}") long jitterSeconds) {
+        this.rateLimitMaxRetries      = maxRetries;
+        this.rateLimitMaxDelaySeconds = maxDelaySeconds;
+        this.rateLimitJitterSeconds   = jitterSeconds;
+    }
+
     // ---- private row types -------------------------------------------------
 
     private record ShipmentRow(UUID id, UUID orderId) {}
@@ -197,6 +218,12 @@ public class BostaWebhookJob {
                 log.warn("Transient Bosta fetch error for tracking {} — will retry: {}",
                     trackingNumber, e.getMessage());
                 throw e;
+            } catch (BostaRateLimitException e) {
+                // A rate limit (Bosta's 429, or the shared limiter refusing a wait over its max) is
+                // never a failure: the event stays pending and runs again after the retry-after.
+                // A failed event would keep its idem key and strand the delivery (2026-10-04, V135).
+                rescheduleRateLimited(webhookEventId, tenantId, trackingNumber, e.getRetryAfterSeconds());
+                return;
             } catch (BostaException e) {
                 markFailed(webhookEventId, "Bosta fetch error: " + e.getMessage());
                 return;
@@ -872,6 +899,45 @@ public class BostaWebhookJob {
             }
             return null;
         });
+    }
+
+    /**
+     * Rate limit → reschedule (2026-10-04, V135). Counts the reschedule on the still-pending event and
+     * schedules process() again after max(retry-after, 60 s × 2^(n−1)) capped at
+     * bosta.webhook.rate-limit-max-delay-seconds, plus a random jitter that grows with n so a burst of
+     * events doesn't all come back in the same second. After bosta.webhook.rate-limit-max-retries
+     * reschedules the event is marked failed (the error names the cause).
+     */
+    private void rescheduleRateLimited(long id, UUID tenantId, String trackingNumber, long retryAfterSeconds) {
+        Integer n = tx.execute(s -> jdbc.query(
+            "UPDATE webhook_events SET rate_limit_retries = rate_limit_retries + 1 " +
+            "WHERE id = ? AND status = 'pending' RETURNING rate_limit_retries",
+            rs -> rs.next() ? rs.getInt(1) : null, id));
+        if (n == null) return;   // no longer pending — nothing to reschedule
+        if (n > rateLimitMaxRetries || jobScheduler == null) {
+            markFailed(id, "Bosta fetch error: Bosta rate limit — gave up after " + (n - 1)
+                + " reschedules (retry after " + retryAfterSeconds + "s)");
+            log.warn("Webhook {}: tracking {} still rate limited after {} reschedules — marked failed",
+                id, trackingNumber, n - 1);
+            return;
+        }
+        long backoff = Math.min(rateLimitMaxDelaySeconds,
+            Math.max(Math.max(1, retryAfterSeconds), 60L << Math.min(n - 1, 10)));
+        long jitter = rateLimitJitterSeconds <= 0 ? 0
+            : java.util.concurrent.ThreadLocalRandom.current().nextLong(rateLimitJitterSeconds * Math.min(n, 5) + 1);
+        long delay = backoff + jitter;
+        java.time.Instant at = java.time.Instant.now().plusSeconds(delay);
+        tx.execute(s -> jdbc.update(
+            "UPDATE webhook_events SET rate_limited_until = ?, error = ? WHERE id = ? AND status = 'pending'",
+            java.sql.Timestamp.from(at),
+            "rate_limited: retry " + n + " of " + rateLimitMaxRetries + " in " + delay + "s (retry after "
+                + retryAfterSeconds + "s)", id));
+        final BostaWebhookJob self = this;
+        final long eventId = id;
+        final UUID tenant = tenantId;
+        jobScheduler.schedule(at, () -> self.process(eventId, tenant));
+        log.info("Webhook {}: tracking {} rate limited — rescheduled in {}s (retry {} of {})",
+            id, trackingNumber, delay, n, rateLimitMaxRetries);
     }
 
     private void markFailed(long id, String error) {

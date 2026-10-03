@@ -61,6 +61,47 @@
 - **Deploy order:** add `TRACED_OPS_SECRET=<long random>` to the server .env → deploy → step A (curl with X-Ops-Secret) →
   step B (psql) → step C (curl) → log in as reviewer@tracedtech.com.
 
+**Bosta global rate limit + rate-limit-as-reschedule + re-process + discovery pre-connect skip (2026-10-04, branch
+`feat/bosta-global-limit`, rebased on main 0fabeef; not merged, not deployed). V135.**
+- Cause (prod 2026-10-04 00:28:59): the first v2 discovery run enqueued 130 webhook jobs; their verify-by-fetches (≈2 req/s
+  combined, ~1.5 req/s with discovery) tripped Bosta's server-wide limit (~60–90/min) → 429 retry-after 300 s for EVERY
+  key (BROEK + Femine in the same second; idle blnco / Jumi refused on their first call; all let back in together at
+  ~00:33:59). The per-key limiter turned each block into instant refusals (countdown 300…288 s) and the webhook job
+  marked every one failed — 78 deliveries stranded behind their idem keys (+87 older rate-limited failures since July).
+- `BostaRateLimiter`: a GLOBAL bucket on top of the per-key one — `bosta.rate-limit.global-per-second` 0.75,
+  `global-burst` 3, `background-reserve` 0.2 (background takes a global token only while ≥ 20% of the burst stays for
+  user-facing calls; USER_FACING also jumps the queue). A 429 on ANY key blocks that key and the global bucket for its
+  retry-after; `onRateLimited(key, secs, context)` logs every 429 (`Bosta 429 (<context>): retry after Ns — key <8 hex>
+  and ALL keys blocked until …`), v2 search / create / pickup-locations / v0 included. The 3-arg constructor stays
+  per-key only (hand-wired tests); test `application.properties` sets `global-per-second=0` so one test's simulated 429
+  can't block the shared Spring context — the global layer is tested directly.
+- `BostaWebhookJob`: a BostaRateLimitException at verify-by-fetch (Bosta's 429 or the limiter's > max-wait refusal) keeps
+  the event 'pending', counts `rate_limit_retries` (V135), and schedules process() again after max(retry-after,
+  60 s × 2^(n−1)) capped at `bosta.webhook.rate-limit-max-delay-seconds` (1800) + jitter (≤ 60 s × min(n,5)); failed
+  only after `rate-limit-max-retries` (8), naming the cause.
+- `BostaRateLimitedReprocessService`: failed events with error `Bosta fetch error: Bosta rate limit…`, per tenant (RLS,
+  tenant-bound): SKIP (no active account / superseded by a later processed-or-pending event) | dry run WOULD_REPROCESS |
+  apply claims failed→pending and runs BostaWebhookJob.process() → REPROCESSED <outcome> / RESCHEDULED / FAILED.
+  Logs `BOSTA_REPROCESS {json}` + `BOSTA_REPROCESS_SUMMARY`. Owner `POST /api/v1/bosta/reprocess-rate-limited?apply=`
+  or startup `BOSTA_REPROCESS_RATE_LIMITED_ON_STARTUP=<ids>|all` (+ `BOSTA_REPROCESS_RATE_LIMITED_APPLY=true`).
+- Discovery pre-connect: `ingestListItem` runs `PreConnectDeliveryFilter.shouldIgnore` on the list item (same rules —
+  both sides of ':', shopifyInfo.orderId, createdAt vs cutoff, NULL cutoff never) before anything else: an ignored
+  delivery gets ONE processed `ignored_pre_connect: <tn>` row (its idem key, no job, no fetch); once it has one (any
+  source), later states write nothing. Note: the webhook_events idem index is global (source, key) — fine, Bosta
+  tracking numbers are unique.
+- Tests: BostaGlobalRateLimitTest g1–g6, BostaWebhookRateLimitRescheduleTest rs1–rs3, BostaRateLimitedReprocessTest
+  rp1–rp5, BostaDiscoveryPreConnectTest pc1–pc4; migration counts 134 / 79. Revert-checked (each RED): no global layer;
+  429 not global; no user priority; no reserve; rate limit → failed; unbounded; no backoff; dry run applies; no
+  superseded check; candidates not tenant-scoped; trigger not wired; no discovery pre-connect; no already-ignored check;
+  already-ignored not per tenant.
+- **(b)/(c) field check (not built):** v2 list item → BostaDelivery.fromRaw reads trackingNumber, state.code, type.value
+  (+ type.code), numberOfAttempts, businessReference, shopifyInfo.orderId — all present. PickupAreaService reads
+  dropOffAddress.city._id (present) and district._id / districtId (only when resolved — same as v0). Booking read-back
+  uses _id, businessReference, createdAt (present). Matcher: receiver.fullName (first; firstName/lastName fallback),
+  receiver.phone, cod — present. exceptionCode: BostaWebhookJob (raw.exceptionCode) and ExceptionService
+  (raw->>'exceptionCode') read it top-level — v2 has none: use state.lastExceptionCode there.
+- **Next (proposed, not built):** status poll via a `-updatedAt` search walk.
+
 **Bosta discovery on the v2 delivery search (2026-10-03, branch `feat/bosta-discovery-v2-search` off main c41c299;
 not merged, not deployed). V134.**
 - Probe passed in prod (20:38, BROEK + Femine): `POST /api/v2/deliveries/search` with the tenant key → 200,
@@ -5745,7 +5786,6 @@ Provision Hetzner VPS, set up Docker Compose (app + Postgres or Supabase connect
 - **Shopify Protected Customer Data (PCD) is gated separately from `read_customers` scope** — `shippingAddress` and `customer` fields on Order are blocked even with `read_customers` granted until PCD is approved. Currently `customer_name`, `customer_phone`, `address` are null-populated; full data is preserved in `orders.raw` (jsonb) for backfill once approved. See pending human tasks for what to do.
 - **A caught exception from a nested `@Transactional` call still poisons the whole shared transaction** — hit twice building FR-21 (`StockTakeReconciliationService.resolve()`'s `srt7` fix, then `StockTakeShopifyPushJob`'s Phase A/B split one level up). Under Spring's default REQUIRED propagation, a `@Transactional` method called from within another `@Transactional` method joins the SAME physical transaction. If the inner call throws a RuntimeException, Spring's `TransactionInterceptor` marks that shared transaction `rollback-only` on the way out — even if the OUTER method catches the exception in a try/catch. The outer method's eventual commit then throws `UnexpectedRollbackException`, taking down everything else that ran in that transaction (e.g. every other item in a batch loop) even though it "handled" the error. Fix: don't wrap the outer operation in `@Transactional` at all when it needs to catch-and-continue past a nested call that might throw — let each independent unit commit on its own (a nested `@Transactional` call creates its own transaction when none is active). Same root cause as the general rule "never wrap an external HTTP call in a DB transaction" — both are really "don't let something outside your control decide whether your transaction commits."
 
-
 - **Docker Desktop M3 + Testcontainers API v1.41 override**: Docker Desktop on Mac M3 rejects docker-java's default v1.24 version-negotiation request with HTTP 400. Fix: `DockerDesktopMacStrategy` in `src/test/java/com/traceability/` overrides `test()`, `getClient()`, *and* `getDockerClient()` (all three are required — Testcontainers calls `getDockerClient()` after `test()` passes, and the base implementation re-does version negotiation) to force API v1.41. Strategy is loaded via `~/.testcontainers.properties` AND `src/test/resources/testcontainers.properties`. **Do not delete or "clean up" this class.** On CI (Linux Docker socket) version negotiation works fine; the class is inert there because the built-in `UnixSocketClientProviderStrategy` wins first.
 - **`pg_class` RLS flag column is `relrowsecurity`** — not `rowsecurity`. Fixed in `MigrationSmokeTest.java` line ~90.
 - **`FORCE ROW LEVEL SECURITY` binds the table owner too** — any future Flyway migration that needs to INSERT into a tenant-scoped table (e.g., seed a default location for a new tenant) must do so as `postgres` (which holds `BYPASSRLS` and therefore bypasses RLS unconditionally — confirmed `rolbypassrls=true, rolsuper=false` on Supabase) or with a `SECURITY DEFINER` helper. `app_user` will be blocked regardless.
@@ -5772,7 +5812,6 @@ Full rebuild of `/overview` from a mockup (`design/Traced Overview Dashboard.dc.
 - **`RlsCoverageTest` (`coverageAudit_allGetEndpointsAreCoveredOrExempt`) fails the WHOLE test suite the moment a new `@GetMapping` is added anywhere, until it's placed in that test's `COVERED` or `EXEMPT` set.** Easy to miss if you're only running the specific feature's tests — always run the full suite (or at least `RlsCoverageTest` itself) after adding any new GET endpoint.
 - **Inventory-value's "N of M variants costed" caveat is not optional polish — M=0 must render a distinct "not set up" state, never `EGP 0`.** Zero variants costed and zero actual value are different facts; collapsing them would read as a false "your inventory is worthless" on day one for both pilots (nothing costed yet). Covered by `overview.test.tsx` ov6/ov7, verified to actually catch a regression by temporarily breaking the gate and re-running (see also the fresh-tenant and onboarding-visibility gates — same revert-and-confirm-red check was done for those two).
 - **The fresh-tenant empty-state gate and the "zero-value" gates are easy to accidentally collide in tests** — both key off `totalPieces === 0`, so a test writing zero `statusCounts` to check a widget's own calm empty state will instead trigger the *fresh-tenant full-page replacement* (which hides that widget entirely) unless `onboarding.allDone` is also set to escape the fresh-tenant condition.
-
 
 ---
 

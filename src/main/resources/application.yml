@@ -125,10 +125,30 @@ bosta:
   # One request budget per Bosta API key, shared by every caller (BostaRateLimiter). A 429's
   # retry-after blocks the key; user-facing calls (print, booking, pickup) go before polling.
   rate-limit:
-    # Bosta's real limit is unknown; the earlier 429 incident came at ~0.5–1 req/s summed across jobs.
+    # Per API key (= tenant). Bosta's real limit is unknown; the earlier 429 incident came at ~0.5–1 req/s
+    # summed across jobs.
     per-second: 1
     burst: 2
     max-wait-ms: 60000
+    # Global — ALL keys share it (2026-10-04): Bosta's limit is per server, not per key (prod 00:28:59 —
+    # tripped at ~1.5 req/s combined, ~60–90/min, then a 300 s penalty for every key). Background work
+    # only spends a global token while background-reserve × global-burst tokens stay for user-facing
+    # calls (waybill print, booking, pickup, connect). A 429 on any key blocks every key.
+    global-per-second: 0.75
+    global-burst: 3
+    background-reserve: 0.2
+  # A rate-limited webhook event is rescheduled, never failed (V135): after max(retry-after, 60 s × 2^(n−1))
+  # capped at max-delay, plus jitter up to jitter × min(n, 5) s; failed only after max-retries.
+  webhook:
+    rate-limit-max-retries: 8
+    rate-limit-max-delay-seconds: 1800
+    rate-limit-jitter-seconds: 60
+  # One-time re-process of webhook events that failed on a Bosta rate limit (BostaRateLimitedReprocessService).
+  # Env BOSTA_REPROCESS_RATE_LIMITED_ON_STARTUP=<tenant ids>|all; dry run unless
+  # BOSTA_REPROCESS_RATE_LIMITED_APPLY=true. Remove both after the run.
+  reprocess-rate-limited:
+    on-startup: ""
+    apply: false
   # Fulfillment-driven linking (V131, BostaFulfillmentLinkService): a Bosta tracking number on an
   # order's Shopify fulfillment is linked to that order. Not-found / errors retry with backoff for
   # retry-window-hours, then raise fulfillment_link_problem. Catch-up: one-off, never scheduled —

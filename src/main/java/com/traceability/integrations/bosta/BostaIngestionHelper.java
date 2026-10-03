@@ -46,6 +46,7 @@ public class BostaIngestionHelper {
     private final JobScheduler        jobScheduler;
     private final BostaWebhookJob     webhookJob;
     private final MatcherVersionHolder matcherVersionHolder;
+    private final PreConnectDeliveryFilter preConnectFilter;
 
     public BostaIngestionHelper(JdbcTemplate jdbc,
                                  PlatformTransactionManager txm,
@@ -54,7 +55,8 @@ public class BostaIngestionHelper {
                                  ObjectMapper mapper,
                                  JobScheduler jobScheduler,
                                  BostaWebhookJob webhookJob,
-                                 MatcherVersionHolder matcherVersionHolder) {
+                                 MatcherVersionHolder matcherVersionHolder,
+                                 PreConnectDeliveryFilter preConnectFilter) {
         this.jdbc                = jdbc;
         this.tx                  = new TransactionTemplate(txm);
         this.bostaGateway        = bostaGateway;
@@ -63,6 +65,7 @@ public class BostaIngestionHelper {
         this.jobScheduler        = jobScheduler;
         this.webhookJob          = webhookJob;
         this.matcherVersionHolder = matcherVersionHolder;
+        this.preConnectFilter     = preConnectFilter;
     }
 
     /**
@@ -162,6 +165,16 @@ public class BostaIngestionHelper {
         String tn = d.trackingNumber();
         if (tn == null || tn.isBlank()) return false;
         String updatedAt = item.path("updatedAt").asText("");
+
+        // Pre-connect filter on the list item itself (2026-10-04): the same rules as the webhook job's
+        // (PreConnectDeliveryFilter — both sides of ':' in the reference, shopifyInfo.orderId, Bosta's
+        // createdAt vs the cutoff, never for a NULL cutoff), decided here so an ignored delivery costs
+        // no fetch at all. It gets ONE processed "ignored_pre_connect" row; once it has one, later
+        // states of the same delivery write nothing more.
+        if (Boolean.TRUE.equals(tx.execute(s -> preConnectFilter.shouldIgnore(tenantId, tn, d)))) {
+            recordIgnoredPreConnect(tenantId, tn, d, updatedAt, source);
+            return false;
+        }
         boolean complete = d.stateCode() >= 0
             && item.hasNonNull("type")
             && !updatedAt.isBlank();
@@ -184,6 +197,43 @@ public class BostaIngestionHelper {
         if (item.hasNonNull("creationTimestamp")) payload.set("creationTimestamp", item.get("creationTimestamp"));
 
         return insertAndEnqueue(tenantId, tn, d.stateCode(), updatedAt, payload, source);
+    }
+
+    /**
+     * A pre-connect delivery seen on the list: one processed webhook_events row noting it (the same
+     * 'ignored_pre_connect: tn' note the webhook job writes), with the idem key the event would have
+     * had, and no job. Nothing at all when the delivery already has such a row (any source, any state).
+     */
+    private void recordIgnoredPreConnect(UUID tenantId, String tn, BostaDelivery d, String updatedAt, String source) {
+        tx.execute(s -> {
+            Boolean already = jdbc.queryForObject(
+                "SELECT EXISTS (SELECT 1 FROM webhook_events WHERE tenant_id = ? AND payload->>'trackingNumber' = ? " +
+                "  AND status = 'processed' AND error LIKE 'ignored_pre_connect:%')",
+                Boolean.class, tenantId, tn);
+            if (Boolean.TRUE.equals(already)) return null;
+            String upd = updatedAt.isBlank() ? "backfill-epoch" : updatedAt;
+            ObjectNode payload = mapper.createObjectNode();
+            payload.put("trackingNumber", tn);
+            payload.put("state",          d.stateCode());
+            payload.put("type",           d.type());
+            payload.put("updatedAt",      upd);
+            if (d.businessReference() != null) payload.put("businessReference", d.businessReference());
+            if (d.shopifyOrderId() != null) payload.put("shopifyOrderId", d.shopifyOrderId());
+            String idemKey = BostaWebhookJob.sha256(tn + ":" + d.stateCode() + ":" + upd);
+            try {
+                jdbc.update(
+                    "INSERT INTO webhook_events (source, tenant_id, topic, payload, status, received_at, processed_at, " +
+                    "    external_event_id, error, matcher_version) " +
+                    "VALUES (?::webhook_source, ?, 'delivery_update', ?::jsonb, 'processed', now(), now(), ?, ?, ?) " +
+                    "ON CONFLICT (source, external_event_id) WHERE external_event_id IS NOT NULL DO NOTHING",
+                    source, tenantId, mapper.writeValueAsString(payload), idemKey,
+                    "ignored_pre_connect: " + tn, matcherVersionHolder.get());
+            } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
+                throw new RuntimeException("Failed to serialize payload for " + tn, e);
+            }
+            return null;
+        });
+        log.debug("{}: {} ignored — pre-connect (decided on the list item, no fetch)", source, tn);
     }
 
     /** Guard 3, the idem-keyed insert and the enqueue — shared by the fetch and list-item paths. */

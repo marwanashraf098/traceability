@@ -51,6 +51,12 @@ public class BostaController {
     private final int                 defaultBackfillMaxPages;
     private final BostaVisibilityCheckService visibilityCheck;
     private final BostaFulfillmentCatchUpService catchUp;
+    private BostaRateLimitedReprocessService reprocess;
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public void setReprocess(BostaRateLimitedReprocessService reprocess) {
+        this.reprocess = reprocess;
+    }
 
     public BostaController(BostaGateway bostaGateway,
                             EncryptionService encryptionService,
@@ -253,6 +259,27 @@ public class BostaController {
         Map<String, String> resp = new LinkedHashMap<>();
         resp.put("jobId",   jobId != null ? jobId.asUUID().toString() : "enqueued");
         resp.put("message", (apply ? "Catch-up (APPLY)" : "Catch-up dry run") + " enqueued — results in the logs (BOSTA_CATCHUP)");
+        return resp;
+    }
+
+    // ---- POST /api/v1/bosta/reprocess-rate-limited (OWNER — one-off) --------
+
+    /**
+     * Enqueues the re-process of this tenant's webhook events that failed on a Bosta rate limit: dry
+     * run unless {@code apply=true}. Results are logged as BOSTA_REPROCESS / BOSTA_REPROCESS_SUMMARY
+     * lines. See BostaRateLimitedReprocessService.
+     */
+    @PostMapping("/bosta/reprocess-rate-limited")
+    @ResponseStatus(HttpStatus.ACCEPTED)
+    @PreAuthorize("hasRole('OWNER')")
+    public Map<String, String> reprocessRateLimited(
+            @RequestParam(name = "apply", defaultValue = "false") boolean apply,
+            @AuthenticationPrincipal CustomUserDetails principal) {
+        UUID tenantId = principal.tenantId();
+        JobId jobId = jobScheduler.enqueue(() -> reprocess.runAndLog(tenantId, apply));
+        Map<String, String> resp = new LinkedHashMap<>();
+        resp.put("jobId",   jobId != null ? jobId.asUUID().toString() : "enqueued");
+        resp.put("message", (apply ? "Re-process (APPLY)" : "Re-process dry run") + " enqueued — results in the logs (BOSTA_REPROCESS)");
         return resp;
     }
 
