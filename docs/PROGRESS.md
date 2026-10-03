@@ -31,6 +31,7 @@ No migration (the next review migration, S3's tracking sequence, takes V132).**
   r1–r3, `frontend/src/test/reviewModeBooking.test.tsx` — all revert-checked (no text layer → w1–w4; plain-digit top barcode
   → e1–e3, k3; no QR → same; no print short-circuit → e1–e3, p1, p2, k3; FulfillService + no pickup branch → p3, k1; booking
   guards → r1, r2; frontend → the Book-now test). Sample A4 waybill: `target/simulated-waybill-sample-A4.pdf` (p1).
+- **Real-path regression guard:** `RealPrintPathRegressionTest` g1 (single print: exact tracking numbers in caller order — ids passed in reverse insertion order — duplicates dropped, other-tenant / unknown ids skipped, chunks 49 + 3, account A6 / ar, exclusions delivered / returned / CRP in input order and recorded on the rows, result shape) and g2 (batch print: one call, oldest-first order, requested paper, result shape). Passes unchanged against the pre-S2 BostaAwbService (main 94c4a4c) — the loadPrintable refactor changed no real-path behaviour. Mutation-checked: database order → g1 + g2; chunk size 50 → g1; CRP printable → g1. The UNLINKED exclusion is unreachable (shipments.order_id NOT NULL), before and after.
 - **Gotcha (tests):** a revert check that removes a constant a test references fails to COMPILE and leaves the previous
   surefire report in place — delete the report first, or revert behaviour only.
 
