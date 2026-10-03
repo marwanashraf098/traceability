@@ -131,7 +131,10 @@ public class SecurityConfig {
                     // S6 phone as scanner — the phone has no login: a one-time pair code, then a
                     // device secret, each resolved via hatch #15 (resolve_scan_pairing), then the
                     // pairing's tenant for that request only + RLS (ScanPairPublicController).
-                    "/api/v1/scan-pair/**"
+                    "/api/v1/scan-pair/**",
+                    // Review mode S5 — ops endpoints carry no JWT: OpsSecretGuard checks the
+                    // X-Ops-Secret header (404 when TRACED_OPS_SECRET is unset, 403 when wrong).
+                    "/api/v1/ops/**"
                 ).permitAll()
                 // SPA shell fallback: any path without a dot (not a static file) that doesn't
                 // start with /api/, /auth/, /webhooks/, or /actuator/ is a client-side route.

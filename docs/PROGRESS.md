@@ -4,6 +4,28 @@
 
 ## Current state
 
+**Review mode S5 — the review tenant (2026-10-03, branch `feat/review-tenant-s5` off main 836ffd0, worktree
+`.claude/worktrees/review-s5`; not merged, not deployed). No migration. Needs `TRACED_OPS_SECRET` in the server .env.**
+- **Ops endpoints** (`review` package): `POST /api/v1/ops/review-tenant` (step A) and `POST /api/v1/ops/review-tenant/{id}/seed`
+  (step C), behind `OpsSecretGuard` — read from `traced.ops-secret: ${TRACED_OPS_SECRET:}` (application.yml); unset/blank →
+  404, missing/wrong `X-Ops-Secret` → 403 (MessageDigest.isEqual). `/api/v1/ops/**` permitted in SecurityConfig (no JWT).
+- **Step A:** `AuthService.signup` (owner password from the request, never logged / echoed — `CreateRequest.toString` redacts;
+  default fulfillment location; `@tracedtech.com` → no attribution) + `UserService.create` worker with PIN. Non-@tracedtech.com → 400.
+- **Step B:** `scripts/ops/review-tenant-flag.sql` (`psql -v ON_ERROR_STOP=1 -v tenant_id=<id> -f …`): refuses Jumi / Snouts /
+  demo / unknown / owner ≠ reviewer@tracedtech.com / courier row / non-disconnected store; already flagged → NOTICE.
+- **Step C (`ReviewTenantSeeder`):** placeholder store, 5 products × 3 variants (images: 5 generated flat illustrations,
+  `frontend/public/assets/review/*.webp`, generator `scripts/dev/make_review_assets.py`), receipt + 45 pieces via
+  `InventoryLedger.batchReceive` (counters advance), 13 orders: R1001–R1002 in print batch #1 + packed, R1003 in batch #1 only,
+  R1004 with_courier, R1005 delivered, R1006 delivered + approved refund request RR-REVW2, R1007 on hold, R1008–R1013 ready
+  (R1008 / R1011 two units). Each step sets the tenant itself (runAs doesn't nest); not one transaction — a partial run is
+  refused next time (FIXTURE_EXISTS) → S6 reset. Queue-mode packing leaves orders `packed` (not awaiting_pickup).
+- Tests `OpsSecretGuardTest`, `ReviewTenantTest` o1–o6 + o8 (random password + secret per run; none in the log), static
+  `ReviewTenantSeederGuardTest` (o7) — all revert-checked: no secret check → o1 + guard test; no email check → o1; no flag
+  check → o3 (o4, o6); no fixture marker → o5; raw piece inserts → o4 + o7; owner-pool reference → o7; SQL protected-tenant
+  guard off → o8.
+- **Deploy order:** add `TRACED_OPS_SECRET=<long random>` to the server .env → deploy → step A (curl with X-Ops-Secret) →
+  step B (psql) → step C (curl) → log in as reviewer@tracedtech.com.
+
 **Bosta discovery on the v2 delivery search (2026-10-03, branch `feat/bosta-discovery-v2-search` off main c41c299;
 not merged, not deployed). V134.**
 - Probe passed in prod (20:38, BROEK + Femine): `POST /api/v2/deliveries/search` with the tenant key → 200,

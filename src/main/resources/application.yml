@@ -78,6 +78,9 @@ portal:
 traced:
   catalog-backfill:
     enabled: ${TRACED_CATALOG_BACKFILL_ENABLED:true}
+  # Review mode S5 — shared secret for the ops endpoints (/api/v1/ops/**, X-Ops-Secret header,
+  # constant-time compare). Blank / unset → every ops endpoint answers 404 (they don't exist).
+  ops-secret: ${TRACED_OPS_SECRET:}
 
 shopify:
   # Pin the API version — never use "latest" in code paths.
