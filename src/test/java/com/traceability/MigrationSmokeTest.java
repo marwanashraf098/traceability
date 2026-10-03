@@ -78,8 +78,8 @@ class MigrationSmokeTest {
                 .as("Flyway migrations must succeed")
                 .isTrue();
         assertThat(result.migrationsExecuted)
-                .as("all migrations V1–V132 must execute (V38 was never used — 131 files, not 132)")
-                .isEqualTo(131);
+                .as("all migrations V1–V133 must execute (V38 was never used — 132 files, not 133)")
+                .isEqualTo(132);
 
         try (Connection conn = DriverManager.getConnection(
                 POSTGRES.getJdbcUrl(),

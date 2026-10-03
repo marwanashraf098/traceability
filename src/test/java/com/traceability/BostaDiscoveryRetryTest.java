@@ -110,9 +110,9 @@ class BostaDiscoveryRetryTest {
         String c = "2251220237";   // older: ingests fine
 
         when(bostaGateway.listDeliveriesPage(anyString(), eq(1), anyInt())).thenReturn(List.of(
-            new BostaGateway.SlimDelivery(a, 10, "SEND"),
-            new BostaGateway.SlimDelivery(b, 10, "SEND"),
-            new BostaGateway.SlimDelivery(c, 10, "SEND")));
+            new BostaGateway.SlimDelivery(a, 10, "SEND", T0.plusSeconds(3)),
+            new BostaGateway.SlimDelivery(b, 10, "SEND", T0.plusSeconds(2)),
+            new BostaGateway.SlimDelivery(c, 10, "SEND", T0.plusSeconds(1))));
         when(bostaGateway.listDeliveriesPage(anyString(), eq(2), anyInt())).thenReturn(List.of());
         when(bostaGateway.fetchDelivery(anyString(), eq(a))).thenReturn(send(a, "BRK-44871-EG"));
         when(bostaGateway.fetchDelivery(anyString(), eq(c))).thenReturn(send(c, "BRK-44842-EG"));
@@ -126,7 +126,8 @@ class BostaDiscoveryRetryTest {
         // A and C link (their webhook jobs ran); the mark moved to A, so B sits below the mark.
         linkShipment(a);
         linkShipment(c);
-        assertThat(mark()).isEqualTo(a);
+        assertThat(markAt()).as("V132: a complete walk advances the mark to the newest creation time")
+            .isEqualTo(T0.plusSeconds(3));
 
         discoveryPollJob.discoverAll();
 
@@ -143,15 +144,15 @@ class BostaDiscoveryRetryTest {
         String bad = "563601351";   // bare 9-digit tracking number
 
         when(bostaGateway.listDeliveriesPage(anyString(), eq(1), anyInt())).thenReturn(List.of(
-            new BostaGateway.SlimDelivery(top, 10, "SEND"),
-            new BostaGateway.SlimDelivery(bad, 10, "SEND")));
+            new BostaGateway.SlimDelivery(top, 10, "SEND", T0.plusSeconds(2)),
+            new BostaGateway.SlimDelivery(bad, 10, "SEND", T0.plusSeconds(1))));
         when(bostaGateway.listDeliveriesPage(anyString(), eq(2), anyInt())).thenReturn(List.of());
         when(bostaGateway.fetchDelivery(anyString(), eq(top))).thenReturn(send(top, "BRK-44866-EG"));
         when(bostaGateway.fetchDelivery(anyString(), eq(bad)))
             .thenThrow(new DeliveryNotFoundException(bad));
 
         discoveryPollJob.discoverAll();
-        assertThat(mark()).as("the mark moves on even though one item failed").isEqualTo(top);
+        assertThat(markAt()).as("the mark moves on even though one item failed").isEqualTo(T0.plusSeconds(2));
         discoveryPollJob.discoverAll();
         discoveryPollJob.discoverAll();   // 3rd counted failure → escalated
 
@@ -235,9 +236,9 @@ class BostaDiscoveryRetryTest {
         String n2 = "6212045934";
 
         when(bostaGateway.listDeliveriesPage(anyString(), eq(1), anyInt())).thenReturn(List.of(
-            new BostaGateway.SlimDelivery(n1, 10, "SEND"),
-            new BostaGateway.SlimDelivery(x, 10, "SEND"),
-            new BostaGateway.SlimDelivery(n2, 10, "SEND")));
+            new BostaGateway.SlimDelivery(n1, 10, "SEND", T0.plusSeconds(3)),
+            new BostaGateway.SlimDelivery(x, 10, "SEND", T0.plusSeconds(2)),
+            new BostaGateway.SlimDelivery(n2, 10, "SEND", T0.plusSeconds(1))));
         when(bostaGateway.listDeliveriesPage(anyString(), eq(2), anyInt())).thenReturn(List.of());
         when(bostaGateway.fetchDelivery(anyString(), eq(n1))).thenReturn(send(n1, "BRK-44881-EG"));
         when(bostaGateway.fetchDelivery(anyString(), eq(n2))).thenReturn(send(n2, "BRK-44890-EG"));
@@ -247,7 +248,8 @@ class BostaDiscoveryRetryTest {
 
         discoveryPollJob.discoverAll();
 
-        assertThat(mark()).as("a 429 holds the mark").isNull();
+        assertThat(markAt()).as("a 429 holds the mark (still the first run's seed, before the batch)")
+            .isBefore(T0);
         verify(bostaGateway, never()).fetchDelivery(anyString(), eq(n2));
         Map<String, Object> row = jdbc.queryForMap(
             "SELECT attempts, rate_limited_count FROM bosta_discovery_failures WHERE tenant_id = ? AND tracking_number = ?",
@@ -287,6 +289,16 @@ class BostaDiscoveryRetryTest {
             "INSERT INTO shipments (tenant_id, order_id, provider, tracking_number, internal_state) " +
             "VALUES (?, ?, 'bosta', ?, 'created'::shipment_internal_state)",
             tenantId, orderId, tracking);
+    }
+
+    /** A batch created "now-ish": newer than the first paged run's seed (now − 7 days). */
+    private static final java.time.Instant T0 = java.time.Instant.now().minus(java.time.Duration.ofHours(1));
+
+    private java.time.Instant markAt() {
+        java.sql.Timestamp ts = jdbc.queryForObject(
+            "SELECT discovery_mark_at FROM courier_accounts WHERE tenant_id = ? AND provider = 'bosta'",
+            java.sql.Timestamp.class, tenantId);
+        return ts == null ? null : ts.toInstant();
     }
 
     private String mark() {

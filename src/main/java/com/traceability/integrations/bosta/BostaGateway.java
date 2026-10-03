@@ -20,7 +20,12 @@ public interface BostaGateway {
      * fetchDelivery(apiKey, trackingNumber) to obtain the full delivery shape
      * (businessReference, shopifyOrderId, numberOfAttempts, raw JSON, etc.).
      */
-    record SlimDelivery(String trackingNumber, int stateCode, String type) {}
+    record SlimDelivery(String trackingNumber, int stateCode, String type, java.time.Instant createdAt) {
+        /** No creation time known (fixtures, odd items): never used to stop or advance discovery. */
+        public SlimDelivery(String trackingNumber, int stateCode, String type) {
+            this(trackingNumber, stateCode, type, null);
+        }
+    }
 
     /**
      * Returns one page of slim delivery items from GET /api/v0/deliveries.

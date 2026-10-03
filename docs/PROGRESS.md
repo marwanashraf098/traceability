@@ -4,6 +4,38 @@
 
 ## Current state
 
+**Bosta discovery paging + shared per-key rate limit (2026-10-03, branch `fix/bosta-discovery-paging`, rebased onto main
+cf92cf6 after S3; not merged, not deployed).**
+- **Cause:** Bosta's `GET /api/v0/deliveries` returns at most 10 items per page whatever pageSize asks for
+  (prod BROEK: pageSize=50 → 10 items, reportedCount 45,498), next page offset by the requested size. Discovery read
+  pages 1–3 of "50" → items 1–10, 51–60, 101–110; 11–50 and 61–100 were never seen (BROEK's 32 from the 09-30 / 10-01
+  Shopify-app batches, Femine's burst of 79). The "stuck" BROEK mark (5829813860, 10-01 16:55 → 10-03 ~10:29) was
+  simply no new delivery at the head; it moved once BROEK created new ones (mark 1177840993 on 10-03).
+- **Paging (V133):** pageSize 10, pages 1, 2, 3 … newest first, dedup by tracking within the run; complete when it
+  reaches a delivery created before `discovery_mark_at` − 10 min overlap, or an empty page; cap 30 pages (or the
+  fetch ceiling) → incomplete: mark kept, `discovery_walk_page` / `discovery_walk_newest_at` stored, WARN; next run
+  takes the new head first (exact compare with walk_newest_at — a same-second batch must not trap the head pass),
+  then continues shifted by the number of new deliveries (one page earlier for overlap). Short page mid-list →
+  WARN once per tenant per day (`discovery_short_page_logged_on`). First run after V133 walks back to
+  max(connect cutoff, min(old mark's createdAt, now − 7 days)). Retry list unchanged. List items carry
+  `creationTimestamp` / `createdAt` (`SlimDelivery.createdAt`, 3-arg constructor kept).
+- **Rate limit:** `BostaRateLimiter` — one token bucket per API key (hashed), default 1 req/s burst 2, used by
+  every call in BostaHttpGateway (list / fetch = background; mass-awb, pickup, connect = user-facing) and
+  BostaV2Client (create, pickup-locations = user-facing). A 429 blocks the key for its retry-after for everyone;
+  user-facing waiters go first; a wait over 60 s becomes a BostaRateLimitException. One JVM (prod runs one).
+- **Tests:** `BostaDiscoveryPagingTest` pg1–pg7 (all RED on 690b4ce's job), `BostaRateLimiterTest` rl1–rl6.
+  Existing tests changed only for the marker contract (tracking → creation time): BostaPollJobTest p15, p17, p19,
+  p20; BostaDiscoveryRetryTest dr1, dr2, dr3 (+ markAt helper, fixture creation times). MigrationSmokeTest 132 files,
+  NotTracedBackfillTest 77.
+- **Migration number:** S3 merged first with V132__simulated_tracking; this is V133__bosta_discovery_paging.
+- **EXC-8854860251 (read-only):** a BROEK type-30 exchange created through Bosta's API (10-03 10:47 UTC),
+  businessReference `BRK-44868-EG:BRK-44868-EG-R1` (post-connect order BRK-44868-EG, delivered). By design an
+  exchange's replacement ships as its own internal order (tryAutoMap committed it, map-time leg) — that's the EXC-
+  order, not a mislink. Its link to the original order is ExchangeMatchService's phone/description match, which
+  can't work for BROEK (no phones) → `unmatched`. The ':' reference is never used there. Proposal (not built):
+  match_method 'reference' when the part before ':' resolves to exactly one post-connect order. No other
+  post-connect reference-bearing EXC- placeholders (3 Snouts dashboard exchanges have no reference).
+
 **Review mode S3 — auto-shipment on order ingest (2026-10-03, branch `feat/review-simulated-courier-s3` off main
 690b4ce, worktree `.claude/worktrees/review-s3`; not merged, not deployed). Migration V132.**
 - **V132:** `simulated_tracking_seq` (7770000000001–7779999999999, app_user USAGE) + INVOKER trigger

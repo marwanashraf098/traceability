@@ -24,6 +24,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.sql.Timestamp;
+import java.time.Duration;
+import java.time.Instant;
 import java.util.stream.Collectors;
 
 /**
@@ -40,48 +43,23 @@ import java.util.stream.Collectors;
  * Tier 2 is the lightweight ongoing discovery pass covering the most recently created
  * deliveries that may have arrived since the last cycle.
  *
- * High-water-mark cursor (courier_accounts.discovery_high_water_tracking, V96):
- * each cycle pages from the top and stops as soon as it reaches a tracking number that
- * (a) equals the mark stored from a previous cycle AND (b) already has a shipments row
- * (is linked). A per-page batched check against `shipments` additionally skips (no
- * Bosta call, doesn't count toward the per-cycle ceiling) any item that's already
- * linked — Tier 1 owns its ongoing state from here on. Only genuinely unresolved items
- * (brand new, or still-unlinked from an earlier cycle — Guard 3 in BostaIngestionHelper
- * keeps governing those exactly as before) are actually fetched from Bosta.
- *
- * The mark advances to the newest item seen (page 1's first item, topOfListTracking)
- * at the end of ANY cycle that hit no transient error and didn't run into the
- * per-cycle ceiling — regardless of whether the scan actually reached the old mark
- * or the true end of the list. Reaching the mark or an empty page lets the scan
- * break out early (cheaper), but neither is required for the write: a cycle that
- * simply runs out of discoveryPages while every page it saw was already-linked
- * filler (isLinked skip, doesn't touch the ceiling) is just as "clean" as one that
- * hit an empty page, and must advance too — otherwise a tenant whose linked history
- * alone exceeds discoveryPages×pageSize never writes a mark at all (confirmed in
- * prod 2026-09-21: discovery_high_water_tracking stayed null forever for a tenant
- * with 205 linked shipments, even though the job "succeeded" every cycle). See
- * BostaPollJobTest p19 for the from-null, page-exhaustion regression case.
- *
- * This advances the mark even when the newest item is itself still unresolved (its
- * ingest was only just enqueued this cycle; BostaWebhookJob decides whether it
- * links, asynchronously, later). That's why requirement (b) above matters: if the
- * mark's own item still hasn't linked by the next cycle, the equality match alone is
- * NOT treated as "caught up" — it falls through to the unresolved branch and gets
- * retried, exactly like any other still-unlinked delivery, instead of the scan
- * wrongly stopping there and burying it. A tenant with a persistently-unlinked
- * delivery therefore keeps re-fetching it every cycle indefinitely — matching today's
- * behavior for anything within the scanned window — rather than the mark silently
- * making it invisible to future cycles. See BostaPollJobTest p15/p17 for the worked
- * trace of both the steady-state fast path and this retry-until-linked behavior.
- *
- * Per-cycle ceiling (bosta.poll.discovery-max-items-per-cycle, default 150 — the
- * current effective discoveryPages×pageSize bound): caps how many genuinely unresolved
- * items get a real Bosta fetchDelivery call in one cycle. If a burst is larger than
- * the ceiling, the cycle processes what it can and does NOT advance the mark — the
- * next cycle resumes, cheaply skipping everything already linked via the batched
- * shipments check, and picks up exactly where this one left off. Nothing is dropped.
- * discoveryPages remains a hard page-count safety valve (unchanged default) — a
- * circuit breaker against a runaway/buggy page walk, independent of the ceiling.
+ * Paging (V133, 2026-10-03): Bosta returns at most 10 items per page whatever pageSize asks for
+ * (prod: pageSize=50 → 10 items, the next page offset by 50). The old walk — pages 1–3 of "50" —
+ * therefore saw items 1–10, 51–60, 101–110 and never 11–50 / 61–100, which is how BROEK's batch of
+ * 32 and Femine's burst of 79 were missed. Discovery now asks for bosta.poll.discovery-page-size
+ * (10) and walks pages 1, 2, 3 … newest first, de-duplicated by tracking number, until:
+ *   - it reaches a delivery created before courier_accounts.discovery_mark_at minus
+ *     bosta.poll.discovery-overlap-minutes (10) — the walk is complete; or
+ *   - an empty page — the end of the list, complete; or
+ *   - bosta.poll.discovery-max-pages (30) pages, or the per-cycle fetch ceiling — incomplete.
+ * Only a complete walk advances the mark (to the newest creation time it saw). An incomplete walk
+ * keeps the old mark, stores the next page (discovery_walk_page) and the newest creation time at its
+ * start (discovery_walk_newest_at), logs a WARN, and the next run first catches up on deliveries
+ * created since then, then continues the walk shifted by their number. A page shorter than
+ * pageSize mid-list is logged once per tenant per day (Bosta changing its page size again).
+ * The first run after V133 walks back to the earlier of the old tracking mark's creation time and
+ * now − bosta.poll.discovery-recovery-days (7), never before the Shopify connection cutoff.
+ * Already-linked deliveries are skipped without a Bosta call; ingest stays idempotent.
  *
  * Per-item failures (V128 retry list, 2026-10-02): a delivery whose fetch fails (5xx / IO,
  * 429, "Delivery not found", anything unexpected) is written to bosta_discovery_failures and
@@ -112,7 +90,7 @@ public class BostaDiscoveryPollJob {
     private static final Logger log = LoggerFactory.getLogger(BostaDiscoveryPollJob.class);
 
     private static final String ACTIVE_BOSTA_TENANTS =
-        "SELECT ca.tenant_id, ca.api_key_encrypted, ca.discovery_high_water_tracking " +
+        "SELECT ca.tenant_id, ca.api_key_encrypted " +
         "FROM courier_accounts ca " +
         "WHERE ca.provider = 'bosta' AND ca.status = 'active'";
 
@@ -126,8 +104,10 @@ public class BostaDiscoveryPollJob {
     private final BostaGateway         bostaGateway;
     private final EncryptionService    encryptionService;
     private final BostaIngestionHelper ingestionHelper;
-    private final int                  discoveryPages;
+    private final int                  maxPages;
     private final int                  pageSize;
+    private final int                  overlapMinutes;
+    private final int                  recoveryDays;
     private final int                  maxNewItemsPerCycle;
     private final long                 interFetchDelayMs;
     private final boolean              discoveryEnabled;
@@ -142,22 +122,26 @@ public class BostaDiscoveryPollJob {
             BostaGateway bostaGateway,
             EncryptionService encryptionService,
             BostaIngestionHelper ingestionHelper,
-            @Value("${bosta.poll.discovery-pages:3}") int discoveryPages,
-            @Value("${bosta.backfill.page-size:50}") int pageSize,
+            @Value("${bosta.poll.discovery-max-pages:30}") int maxPages,
+            @Value("${bosta.poll.discovery-page-size:10}") int pageSize,
             @Value("${bosta.poll.discovery-max-items-per-cycle:150}") int maxNewItemsPerCycle,
             @Value("${bosta.poll.inter-fetch-delay-ms:100}") long interFetchDelayMs,
             @Value("${bosta.poll.discovery-enabled:true}") boolean discoveryEnabled,
             @Value("${bosta.poll.discovery-max-item-failures:10}") int maxItemFailures,
             @Value("${bosta.poll.discovery-slow-retry-minutes:60}") int slowRetryMinutes,
-            @Value("${bosta.poll.discovery-retry-cap-hours:48}") int retryCapHours) {
+            @Value("${bosta.poll.discovery-retry-cap-hours:48}") int retryCapHours,
+            @Value("${bosta.poll.discovery-overlap-minutes:10}") int overlapMinutes,
+            @Value("${bosta.poll.discovery-recovery-days:7}") int recoveryDays) {
         this.ownerJdbc           = new JdbcTemplate(ownerDs);
         this.jdbc                = jdbc;
         this.tx                  = new TransactionTemplate(txm);
         this.bostaGateway        = bostaGateway;
         this.encryptionService   = encryptionService;
         this.ingestionHelper     = ingestionHelper;
-        this.discoveryPages      = discoveryPages;
+        this.maxPages            = maxPages;
         this.pageSize            = pageSize;
+        this.overlapMinutes      = overlapMinutes;
+        this.recoveryDays        = recoveryDays;
         this.maxNewItemsPerCycle = maxNewItemsPerCycle;
         this.interFetchDelayMs   = interFetchDelayMs;
         this.discoveryEnabled    = discoveryEnabled;
@@ -192,10 +176,9 @@ public class BostaDiscoveryPollJob {
         for (Map<String, Object> row : accounts) {
             UUID tenantId        = (UUID) row.get("tenant_id");
             String encryptedKey  = (String) row.get("api_key_encrypted");
-            String highWaterMark = (String) row.get("discovery_high_water_tracking");
             try {
                 String apiKey = encryptionService.decrypt(encryptedKey);
-                tryDiscoverTenant(tenantId, apiKey, highWaterMark);
+                tryDiscoverTenant(tenantId, apiKey);
             } catch (Exception e) {
                 log.warn("Discovery poll failed for tenant {}: {}", tenantId, e.getMessage());
             }
@@ -208,7 +191,7 @@ public class BostaDiscoveryPollJob {
      * returning it to the pool. See the class javadoc for why this is session-level
      * try-lock rather than pg_advisory_xact_lock, and why it skips rather than blocks.
      */
-    private void tryDiscoverTenant(UUID tenantId, String apiKey, String highWaterMark) {
+    private void tryDiscoverTenant(UUID tenantId, String apiKey) {
         int tenantKey = tenantId.hashCode();
         try (Connection lockConn = jdbc.getDataSource().getConnection()) {
             boolean acquired;
@@ -228,7 +211,7 @@ public class BostaDiscoveryPollJob {
             }
 
             try {
-                discoverTenant(tenantId, apiKey, highWaterMark);
+                discoverTenant(tenantId, apiKey);
             } finally {
                 try (PreparedStatement ps = lockConn.prepareStatement("SELECT pg_advisory_unlock(?, ?)")) {
                     ps.setInt(1, LOCK_NAMESPACE);
@@ -241,20 +224,20 @@ public class BostaDiscoveryPollJob {
         }
     }
 
-    private void discoverTenant(UUID tenantId, String apiKey, String storedMark) {
+    /** Per-tenant discovery state (V133). */
+    private record WalkState(Instant markAt, Integer walkPage, Instant walkNewestAt, boolean seeded) {}
+
+    private void discoverTenant(UUID tenantId, String apiKey) {
         TenantContext.runAs(tenantId, (Runnable) () -> {
 
-            int total = 0, enqueued = 0, attempted = 0;
+            int total = 0, enqueued = 0, attempted = 0, pagesRead = 0;
             boolean ceilingHit      = false;
-            boolean reachedMark     = false;
             boolean transientError  = false;
             boolean rateLimited     = false;
-            String topOfListTracking = null;
 
             // Retry pass (V128): every delivery whose fetch failed in an earlier cycle is
             // retried here by tracking number, BEFORE the list walk and independent of the
-            // newest-first window — a failed item can sit any distance below the mark or
-            // past discoveryPages×pageSize and is still retried. Counts toward the ceiling.
+            // list window. Counts toward the ceiling.
             Set<String> handledThisCycle = new HashSet<>();
             stopExpiredRetries(tenantId);
             List<String> retries = tx.execute(s -> jdbc.query(
@@ -273,112 +256,185 @@ public class BostaDiscoveryPollJob {
                 if (attempted >= maxNewItemsPerCycle) { ceilingHit = true; break; }
             }
 
+            // List walk (V133). Bosta caps a page at 10 items whatever pageSize asks for, so
+            // discovery asks for pageSize (10) and walks pages 1, 2, 3 … newest first, de-duplicated
+            // by tracking number within the run, until it reaches deliveries created before the last
+            // complete run's mark (minus an overlap), the end of the list, or the page cap. A capped
+            // walk keeps the old mark and continues next run from where it stopped.
+            WalkState state = loadState(tenantId);
+            Instant stopBefore = state.markAt().minus(Duration.ofMinutes(overlapMinutes));
+            boolean resuming = state.walkPage() != null && state.walkNewestAt() != null;
+            // Head = deliveries created after the interrupted walk's newest item (exact — no overlap
+            // here: a same-second batch must not keep the run in the head forever).
+            Instant headNewest = resuming ? state.walkNewestAt() : null;
+            boolean inHead = resuming;   // resuming: first catch up on deliveries created since the walk began
+            int newSinceWalk = 0;
+            Instant newestSeen = null;
+            boolean reachedMark = false, endOfList = false;
+            int page = 1;
+            Set<String> seen = new HashSet<>();
+
             outer:
-            for (int page = 1; page <= discoveryPages && !rateLimited && !ceilingHit && !transientError; page++) {
+            while (!rateLimited && !ceilingHit && !transientError) {
+                if (pagesRead >= maxPages) break;
                 List<BostaGateway.SlimDelivery> items;
                 try {
                     items = bostaGateway.listDeliveriesPage(apiKey, page, pageSize);
-                } catch (BostaTransientException | BostaRateLimitException e) {
+                } catch (BostaRateLimitException e) {
+                    log.warn("Discovery poll tenant {}: rate limited on page {} — stopping", tenantId, page);
+                    rateLimited = true;
+                    break;
+                } catch (BostaTransientException e) {
                     log.warn("Discovery poll tenant {}: transient error on page {} — stopping: {}",
                         tenantId, page, e.getMessage());
                     transientError = true;
                     break;
                 }
-
-                if (items.isEmpty()) break;
+                pagesRead++;
+                if (items.isEmpty()) { endOfList = true; break; }
+                if (items.size() < pageSize) noteShortPage(tenantId, page, items.size());
 
                 List<String> pageTracking = items.stream().map(BostaGateway.SlimDelivery::trackingNumber).toList();
                 Set<String> linked   = alreadyLinkedTrackingNumbers(tenantId, pageTracking);
                 Set<String> recorded = failureRowTrackingNumbers(tenantId, pageTracking);
+                boolean leftHead = false;
 
                 for (BostaGateway.SlimDelivery slim : items) {
+                    Instant created = slim.createdAt();
+                    if (created != null && (newestSeen == null || created.isAfter(newestSeen))) newestSeen = created;
+                    if (created != null && created.isBefore(stopBefore)) reachedMark = true;
+                    if (inHead) {
+                        if (created != null && !created.isAfter(headNewest)) leftHead = true;
+                        else newSinceWalk++;
+                    }
+                    if (!seen.add(slim.trackingNumber())) continue;   // dedup within the run
                     total++;
-                    if (topOfListTracking == null) topOfListTracking = slim.trackingNumber();
 
-                    boolean isLinked = linked.contains(slim.trackingNumber());
-
-                    // The mark advances to "the newest item this cycle" unconditionally
-                    // (see the advance-check below) — including when that item is still
-                    // unresolved at the moment the mark is set (ingest was just enqueued
-                    // this cycle; whether it ends up linked is decided later, async, by
-                    // BostaWebhookJob). So a plain string match against the mark is NOT
-                    // proof of "caught up" by itself: requiring isLinked too means that
-                    // if the mark's own item still hasn't resolved by the next cycle, it
-                    // falls through to the unresolved branch below and gets retried —
-                    // exactly like any other still-unlinked delivery — instead of the
-                    // scan wrongly treating "same tracking number as last time" as done
-                    // and burying it. See BostaPollJobTest p15/p17 for the worked trace.
-                    if (slim.trackingNumber().equals(storedMark) && isLinked) {
-                        reachedMark = true;
-                        break;
-                    }
-
-                    if (isLinked) {
-                        // Already linked (shipments row exists) in an earlier cycle —
-                        // Tier 1 owns its ongoing state from here on. Cheap skip: no
-                        // Bosta call, doesn't count toward the per-cycle ceiling.
-                        continue;
-                    }
-
-                    // Already handled by the retry pass this cycle, or on the retry list
-                    // (the retry pass owns it, at its own pace — fast, slow, or stopped).
-                    // Never fetched twice in one cycle.
+                    if (linked.contains(slim.trackingNumber())) continue;   // Tier 1 owns it
+                    // Handled by the retry pass this cycle, or on the retry list (the retry pass
+                    // owns it, at its own pace). Never fetched twice in one cycle.
                     if (handledThisCycle.contains(slim.trackingNumber())
-                            || recorded.contains(slim.trackingNumber())) {
-                        continue;
-                    }
+                            || recorded.contains(slim.trackingNumber())) continue;
 
-                    // Genuinely unresolved: brand new, or still-unlinked from an
-                    // earlier cycle (Guard 3 in BostaIngestionHelper keeps deciding
-                    // whether to re-enqueue it — unchanged). If this item IS the
-                    // stored mark (set last cycle before it had linked yet) it falls
-                    // through to here too — re-attempted exactly like any other
-                    // unresolved item, not treated as "caught up".
                     attempted++;
                     ItemOutcome outcome = ingestTracked(tenantId, apiKey, slim.trackingNumber());
                     if (outcome == ItemOutcome.ENQUEUED) enqueued++;
-                    if (outcome == ItemOutcome.RATE_LIMITED) {
-                        // Stop the cycle; the item is on the retry list and the mark is held,
-                        // so nothing after it on this page is lost either.
-                        rateLimited = true;
-                        break outer;
-                    }
-
+                    if (outcome == ItemOutcome.RATE_LIMITED) { rateLimited = true; break outer; }
                     if (!pause()) { transientError = true; break outer; }
-
-                    if (attempted >= maxNewItemsPerCycle) {
-                        ceilingHit = true;
-                        break;
-                    }
+                    if (attempted >= maxNewItemsPerCycle) { ceilingHit = true; break outer; }
                 }
 
-                if (reachedMark || ceilingHit) break;
+                if (reachedMark) break;
+                if (inHead && leftHead) {
+                    // Caught up on the head: jump back into the interrupted walk, shifted by the
+                    // deliveries created since it began (one page earlier for overlap; dedup and
+                    // idempotent ingest absorb the repeats).
+                    inHead = false;
+                    page = Math.max(page + 1, state.walkPage() + newSinceWalk / pageSize - 1);
+                    continue;
+                }
+                page++;
             }
 
-            // Advance the mark on any fully clean cycle: no transient error, no rate limit
-            // and the ceiling wasn't hit. Deliberately NOT gated on (reachedMark || cleanEnd) —
-            // those two only control whether the scan got to break out early; a cycle
-            // that instead exhausts discoveryPages while every page was already-linked
-            // filler (isLinked skip — doesn't count toward the ceiling) is just as
-            // clean and must advance too, or a tenant whose linked history alone spans
-            // more than discoveryPages×pageSize never writes a mark (the from-null,
-            // page-exhaustion bug — see class javadoc and BostaPollJobTest p19).
-            // A per-item fetch failure does NOT block the advance any more: the failed
-            // tracking number is on the retry list (V128) and is retried by tracking number
-            // until it ingests or the retry cap passes — the mark passing it loses nothing.
-            if (!transientError && !ceilingHit && !rateLimited
-                    && topOfListTracking != null && !topOfListTracking.equals(storedMark)) {
-                advanceHighWaterMark(tenantId, topOfListTracking);
+            boolean complete = (reachedMark || endOfList) && !rateLimited && !transientError && !ceilingHit;
+            if (complete) {
+                Instant newMark = latest(state.markAt(), latest(newestSeen, resuming ? state.walkNewestAt() : null));
+                saveState(tenantId, newMark, null, null);
+            } else if (!rateLimited && !transientError) {
+                // Page cap or fetch ceiling: keep the old mark, continue from here next run.
+                Instant walkNewest = resuming ? latest(state.walkNewestAt(), newestSeen) : newestSeen;
+                // `page` is the next unread page after the page cap, or the page the fetch ceiling
+                // interrupted (redone next run; its handled items are idempotent no-ops).
+                saveState(tenantId, state.markAt(), page, walkNewest != null ? walkNewest : state.markAt());
+                log.warn("Discovery poll tenant {}: walk not finished — {} page(s) read{}, mark {} kept, " +
+                    "continuing from page {} next run", tenantId, pagesRead,
+                    ceilingHit ? " (fetch ceiling)" : " (page cap)", state.markAt(), page);
+            } else if (state.seeded()) {
+                saveState(tenantId, state.markAt(), state.walkPage(), state.walkNewestAt());   // persist the seed
             }
 
             if (enqueued > 0) {
-                log.info("Discovery poll tenant {}: {} seen, {} new deliveries enqueued{}",
-                    tenantId, total, enqueued,
-                    ceilingHit ? " (ceiling reached — resumes next cycle)" : "");
+                log.info("Discovery poll tenant {}: {} page(s), {} seen, {} new deliveries enqueued",
+                    tenantId, pagesRead, total, enqueued);
             } else {
-                log.debug("Discovery poll tenant {}: {} seen, nothing new", tenantId, total);
+                log.debug("Discovery poll tenant {}: {} page(s), {} seen, nothing new", tenantId, pagesRead, total);
             }
         });
+    }
+
+    private static Instant latest(Instant a, Instant b) {
+        if (a == null) return b;
+        if (b == null) return a;
+        return a.isAfter(b) ? a : b;
+    }
+
+    /**
+     * The tenant's discovery state. First run after V133 (no discovery_mark_at): seed the mark so the
+     * walk goes back over the window the old 50-per-page reads missed — the earlier of the old
+     * tracking-number mark's creation time and now − recovery-days, never before the tenant's Shopify
+     * connection cutoff (pre-connect deliveries are ignored anyway).
+     */
+    private WalkState loadState(UUID tenantId) {
+        Map<String, Object> row = tx.execute(s -> jdbc.queryForMap(
+            "SELECT discovery_mark_at, discovery_walk_page, discovery_walk_newest_at, discovery_high_water_tracking " +
+            "FROM courier_accounts WHERE tenant_id = ? AND provider = 'bosta'", tenantId));
+        Instant mark = toInstant(row.get("discovery_mark_at"));
+        Integer walkPage = row.get("discovery_walk_page") == null ? null : ((Number) row.get("discovery_walk_page")).intValue();
+        Instant walkNewest = toInstant(row.get("discovery_walk_newest_at"));
+        if (mark != null) return new WalkState(mark, walkPage, walkNewest, false);
+
+        Instant seed = Instant.now().minus(Duration.ofDays(recoveryDays));
+        String oldTracking = (String) row.get("discovery_high_water_tracking");
+        if (oldTracking != null) {
+            String raw = tx.execute(s -> jdbc.query(
+                "SELECT raw::text FROM shipments WHERE tenant_id = ? AND tracking_number = ? AND raw IS NOT NULL " +
+                "UNION ALL SELECT raw::text FROM unlinked_bosta_deliveries WHERE tenant_id = ? AND tracking_number = ? " +
+                "  AND raw IS NOT NULL LIMIT 1",
+                rs -> rs.next() ? rs.getString(1) : null, tenantId, oldTracking, tenantId, oldTracking));
+            Instant oldTs = raw == null ? null : PreConnectDeliveryFilter.parseCreatedAt(readTree(raw));
+            if (oldTs != null && oldTs.isBefore(seed)) seed = oldTs;
+        }
+        Object cutoff = tx.execute(s -> jdbc.queryForObject(
+            "SELECT CASE WHEN bool_or(orders_ingest_from IS NULL) THEN NULL ELSE MIN(orders_ingest_from) END " +
+            "FROM stores WHERE tenant_id = ?", Object.class, tenantId));
+        Instant cut = toInstant(cutoff);
+        if (cut != null && cut.isAfter(seed)) seed = cut;
+        log.info("Discovery poll tenant {}: first paged run — walking back to {}", tenantId, seed);
+        return new WalkState(seed, null, null, true);
+    }
+
+    private void saveState(UUID tenantId, Instant mark, Integer walkPage, Instant walkNewest) {
+        tx.execute(s -> jdbc.update(
+            "UPDATE courier_accounts SET discovery_mark_at = ?, discovery_walk_page = ?, discovery_walk_newest_at = ? " +
+            "WHERE tenant_id = ? AND provider = 'bosta'",
+            mark == null ? null : Timestamp.from(mark), walkPage,
+            walkNewest == null ? null : Timestamp.from(walkNewest), tenantId));
+    }
+
+    /** A page shorter than requested while the walk goes on — logged at most once per tenant per day. */
+    private void noteShortPage(UUID tenantId, int page, int got) {
+        Integer updated = tx.execute(s -> jdbc.update(
+            "UPDATE courier_accounts SET discovery_short_page_logged_on = current_date " +
+            "WHERE tenant_id = ? AND provider = 'bosta' " +
+            "  AND discovery_short_page_logged_on IS DISTINCT FROM current_date", tenantId));
+        if (updated != null && updated > 0) {
+            log.warn("Discovery poll tenant {}: Bosta returned {} item(s) on page {} for pageSize {} — " +
+                "a short page mid-list means Bosta's page size changed (logged once per tenant per day)",
+                tenantId, got, page, pageSize);
+        }
+    }
+
+    private static Instant toInstant(Object o) {
+        if (o == null) return null;
+        if (o instanceof Timestamp ts) return ts.toInstant();
+        if (o instanceof java.time.OffsetDateTime odt) return odt.toInstant();
+        if (o instanceof Instant i) return i;
+        return null;
+    }
+
+    private static com.fasterxml.jackson.databind.JsonNode readTree(String raw) {
+        try { return new com.fasterxml.jackson.databind.ObjectMapper().readTree(raw); }
+        catch (Exception e) { return null; }
     }
 
     private enum ItemOutcome { ENQUEUED, SKIPPED, FAILED, RATE_LIMITED }
@@ -511,16 +567,6 @@ public class BostaDiscoveryPollJob {
             (rs, i) -> rs.getString(1),
             args.toArray()));
         return new HashSet<>(found);
-    }
-
-    private void advanceHighWaterMark(UUID tenantId, String newMark) {
-        tx.execute(s -> {
-            jdbc.update(
-                "UPDATE courier_accounts SET discovery_high_water_tracking = ? " +
-                "WHERE tenant_id = ? AND provider = 'bosta'",
-                newMark, tenantId);
-            return null;
-        });
     }
 
     /**

@@ -119,6 +119,13 @@ shopify:
   webhook-base-url: ${SHOPIFY_WEBHOOK_BASE_URL:http://localhost:8080}
 
 bosta:
+  # One request budget per Bosta API key, shared by every caller (BostaRateLimiter). A 429's
+  # retry-after blocks the key; user-facing calls (print, booking, pickup) go before polling.
+  rate-limit:
+    # Bosta's real limit is unknown; the earlier 429 incident came at ~0.5–1 req/s summed across jobs.
+    per-second: 1
+    burst: 2
+    max-wait-ms: 60000
   # Fulfillment-driven linking (V131, BostaFulfillmentLinkService): a Bosta tracking number on an
   # order's Shopify fulfillment is linked to that order. Not-found / errors retry with backoff for
   # retry-window-hours, then raise fulfillment_link_problem. Catch-up: one-off, never scheduled —
@@ -156,7 +163,15 @@ bosta:
     # Hard page-count safety valve (circuit breaker), independent of the ceiling below —
     # protects against a runaway/buggy page walk. NOT the normal per-cycle work bound
     # any more (that's discovery-max-items-per-cycle) — see BostaDiscoveryPollJob javadoc.
-    discovery-pages: 3
+    # V133 paging: Bosta returns at most 10 items per page whatever pageSize asks for. Discovery
+    # asks for 10 and walks pages 1, 2, 3 … until it reaches the last complete run's mark (minus the
+    # overlap), the end of the list, or max-pages (then it continues next run, mark kept).
+    discovery-page-size: 10
+    discovery-max-pages: 30
+    discovery-overlap-minutes: 10
+    # First run after V133: walk back this many days (or to the old mark if older), never before the
+    # Shopify connection cutoff.
+    discovery-recovery-days: 7
     # Per-cycle cap on genuinely unresolved items (brand new, or still-unlinked from an
     # earlier cycle) that get a real Bosta fetchDelivery call — the current effective
     # discovery-pages × backfill.page-size bound (3 × 50). Already-linked items are

@@ -842,13 +842,16 @@ class BostaPollJobTest {
 
         setupCourierAccount("poll-key-p15");
         createShipment(older, "with_courier");
-        jdbc.update("UPDATE courier_accounts SET discovery_high_water_tracking = ? WHERE tenant_id = ?",
-            older, tenantId);
+        // V132: the mark is a creation time; "older" was created an hour before it.
+        java.time.Instant markAt = java.time.Instant.parse("2026-07-31T10:00:00Z");
+        java.time.Instant olderAt = markAt.minusSeconds(3600), freshAt = java.time.Instant.parse("2026-08-01T10:00:00Z");
+        jdbc.update("UPDATE courier_accounts SET discovery_mark_at = ? WHERE tenant_id = ?",
+            java.sql.Timestamp.from(markAt), tenantId);
 
         when(bostaGateway.listDeliveriesPage(anyString(), eq(1), anyInt()))
             .thenReturn(List.of(
-                new BostaGateway.SlimDelivery(fresh, 41, "SEND"),
-                new BostaGateway.SlimDelivery(older, 24, "SEND")));
+                new BostaGateway.SlimDelivery(fresh, 41, "SEND", freshAt),
+                new BostaGateway.SlimDelivery(older, 24, "SEND", olderAt)));
         when(bostaGateway.fetchDelivery(anyString(), eq(fresh)))
             .thenReturn(new BostaDelivery(fresh, 41, "SEND", 0, "REF-P15", null,
                 rawWithUpdatedAt("2026-08-01T10:00:00.000Z")));
@@ -860,11 +863,11 @@ class BostaPollJobTest {
         verify(bostaGateway, never()).listDeliveriesPage(anyString(), eq(2), anyInt());
         verify(bostaGateway, times(1)).fetchDelivery(anyString(), eq(fresh));
 
-        String markAfterCycle1 = jdbc.queryForObject(
-            "SELECT discovery_high_water_tracking FROM courier_accounts WHERE tenant_id = ?",
-            String.class, tenantId);
-        assertThat(markAfterCycle1).as("clean cycle — mark advances to the new top of the list")
-            .isEqualTo(fresh);
+        java.sql.Timestamp markAfterCycle1 = jdbc.queryForObject(
+            "SELECT discovery_mark_at FROM courier_accounts WHERE tenant_id = ?",
+            java.sql.Timestamp.class, tenantId);
+        assertThat(markAfterCycle1.toInstant()).as("complete walk — mark advances to the newest creation time")
+            .isEqualTo(freshAt);
 
         // Simulate the async pipeline finishing between cron fires — exactly what a real
         // 20-minute gap gives BostaWebhookJob to link this delivery before the next poll.
@@ -873,8 +876,8 @@ class BostaPollJobTest {
         reset(bostaGateway);
         when(bostaGateway.listDeliveriesPage(anyString(), eq(1), anyInt()))
             .thenReturn(List.of(
-                new BostaGateway.SlimDelivery(fresh, 41, "SEND"),
-                new BostaGateway.SlimDelivery(older, 24, "SEND")));
+                new BostaGateway.SlimDelivery(fresh, 41, "SEND", freshAt),
+                new BostaGateway.SlimDelivery(older, 24, "SEND", olderAt)));
 
         // Cycle 2: nothing new arrived, and "fresh" is now confirmed linked.
         discoveryPollJob.discoverAll();
@@ -969,13 +972,14 @@ class BostaPollJobTest {
         setupCourierAccount("poll-key-p17");
         createShipment(atMark, "with_courier");
         createShipment(belowMark, "delivered");
-        jdbc.update("UPDATE courier_accounts SET discovery_high_water_tracking = ? WHERE tenant_id = ?",
-            atMark, tenantId);
+        java.time.Instant markAt = java.time.Instant.parse("2026-08-04T08:00:00Z");   // V132: a creation time
+        jdbc.update("UPDATE courier_accounts SET discovery_mark_at = ? WHERE tenant_id = ?",
+            java.sql.Timestamp.from(markAt), tenantId);
 
         when(bostaGateway.listDeliveriesPage(anyString(), eq(1), anyInt())).thenReturn(List.of(
-            new BostaGateway.SlimDelivery(aboveMark, 41, "SEND"),
-            new BostaGateway.SlimDelivery(atMark, 24, "SEND"),
-            new BostaGateway.SlimDelivery(belowMark, 45, "SEND")));
+            new BostaGateway.SlimDelivery(aboveMark, 41, "SEND", markAt.plusSeconds(3600)),
+            new BostaGateway.SlimDelivery(atMark, 24, "SEND", markAt),
+            new BostaGateway.SlimDelivery(belowMark, 45, "SEND", markAt.minusSeconds(3600))));
         when(bostaGateway.fetchDelivery(anyString(), eq(aboveMark)))
             .thenReturn(new BostaDelivery(aboveMark, 41, "SEND", 0, "REF-P17", null,
                 rawWithUpdatedAt("2026-08-04T09:00:00.000Z")));
@@ -1069,27 +1073,27 @@ class BostaPollJobTest {
             new BostaGateway.SlimDelivery(tracking[7], 41, "SEND"),
             new BostaGateway.SlimDelivery(tracking[8], 41, "SEND")));
 
-        // discovery_high_water_tracking starts NULL (never set for this tenant).
-        String markBefore = jdbc.queryForObject(
-            "SELECT discovery_high_water_tracking FROM courier_accounts WHERE tenant_id = ?",
-            String.class, tenantId);
+        // V132: discovery_mark_at starts NULL (never set for this tenant).
+        Object markBefore = jdbc.queryForObject(
+            "SELECT discovery_mark_at FROM courier_accounts WHERE tenant_id = ?",
+            Object.class, tenantId);
         assertThat(markBefore).isNull();
 
         discoveryPollJob.discoverAll();
 
-        // discoveryPages defaults to 3 — the walk exhausts its page budget without
-        // ever seeing an empty page or matching a (null) stored mark.
+        // V132: the walk goes on until the end of the list (page 4 is empty — no creation times
+        // here, so nothing older than the mark is ever reached).
         verify(bostaGateway, times(1)).listDeliveriesPage(anyString(), eq(3), anyInt());
-        verify(bostaGateway, never()).listDeliveriesPage(anyString(), eq(4), anyInt());
+        verify(bostaGateway, times(1)).listDeliveriesPage(anyString(), eq(4), anyInt());
+        verify(bostaGateway, never()).listDeliveriesPage(anyString(), eq(5), anyInt());
         verify(bostaGateway, never()).fetchDelivery(anyString(), any());
 
-        String markAfter = jdbc.queryForObject(
-            "SELECT discovery_high_water_tracking FROM courier_accounts WHERE tenant_id = ?",
-            String.class, tenantId);
-        assertThat(markAfter)
-            .as("from-null first cycle over an all-linked burst must still advance the "
-                + "mark to the newest item seen (page 1's first item), not stay null")
-            .isEqualTo(tracking[0]);
+        Map<String, Object> after = jdbc.queryForMap(
+            "SELECT discovery_mark_at, discovery_walk_page FROM courier_accounts WHERE tenant_id = ?", tenantId);
+        assertThat(after.get("discovery_mark_at"))
+            .as("from-null first cycle over an all-linked burst completes and stores a mark, not null")
+            .isNotNull();
+        assertThat(after.get("discovery_walk_page")).as("walk complete").isNull();
     }
 
     // ── p20: Tier 2 high-water mark — mark can land on a still-unresolved item; ──
@@ -1128,12 +1132,12 @@ class BostaPollJobTest {
 
         verify(bostaGateway, times(1)).fetchDelivery(anyString(), eq(top));
 
-        String markAfterCycle1 = jdbc.queryForObject(
-            "SELECT discovery_high_water_tracking FROM courier_accounts WHERE tenant_id = ?",
-            String.class, tenantId);
+        Object markAfterCycle1 = jdbc.queryForObject(
+            "SELECT discovery_mark_at FROM courier_accounts WHERE tenant_id = ?",
+            Object.class, tenantId);
         assertThat(markAfterCycle1)
-            .as("mark is allowed to land on a still-unresolved item — see class javadoc")
-            .isEqualTo(top);
+            .as("V132: the walk completes and stores a mark although its item is still unresolved")
+            .isNotNull();
 
         // Cycle 2: a newer item ("new2") and an older one ("older") appear around the
         // mark. Both are ALSO left unresolved. If the isLinked gate on the equality

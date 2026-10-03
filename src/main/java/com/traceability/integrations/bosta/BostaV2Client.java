@@ -130,6 +130,13 @@ public class BostaV2Client {
     private final RestClient createClient;
     private final ObjectMapper mapper;
     private final String baseUrl;
+    // Shared per-key Bosta budget (2026-10-03). Optional so hand-wired clients (tests) stay unlimited.
+    private BostaRateLimiter limiter = BostaRateLimiter.unlimited();
+
+    @Autowired(required = false)
+    public void setRateLimiter(BostaRateLimiter limiter) {
+        if (limiter != null) this.limiter = limiter;
+    }
 
     public BostaV2Client(ObjectMapper mapper, String baseUrl) {
         this(mapper, baseUrl, Duration.ofSeconds(20));
@@ -186,6 +193,20 @@ public class BostaV2Client {
 
     /** The one-attempt create transport shared by both builders. Never logs the body. */
     private CreateResult postCreate(String apiKey, String json) {
+        // Waits for the key's budget BEFORE the one attempt — never a second POST.
+        try {
+            limiter.acquire(apiKey, BostaRateLimiter.Priority.USER_FACING);
+        } catch (BostaRateLimitException e) {
+            // Nothing was sent: NOT_CREATED with status 0, like a connection that was never made.
+            return new CreateResult(CreateOutcome.NOT_CREATED, null, null, 0,
+                "Bosta rate limit for this account — nothing was sent, try again shortly");
+        }
+        CreateResult r = postCreateOnce(apiKey, json);
+        if (r.httpStatus() == 429) limiter.onRateLimited(apiKey, 60);
+        return r;
+    }
+
+    private CreateResult postCreateOnce(String apiKey, String json) {
         String url = baseUrl + "/api/v2/deliveries?apiVersion=1";
         CreateResult result;
         try {
@@ -391,6 +412,7 @@ public class BostaV2Client {
     }
 
     public List<PickupLocation> listPickupLocations(String apiKey) {
+        limiter.acquire(apiKey, BostaRateLimiter.Priority.USER_FACING);
         String url = baseUrl + "/api/v2/pickup-locations";
         try {
             String body = restClient.get().uri(url).header("Authorization", apiKey).retrieve().body(String.class);

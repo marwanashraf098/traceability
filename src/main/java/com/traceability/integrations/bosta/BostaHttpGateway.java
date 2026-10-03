@@ -50,10 +50,19 @@ class BostaHttpGateway implements BostaGateway {
     private final String baseUrl;
     private final String apiVersion;
     private final Retry retry;
+    private final BostaRateLimiter limiter;
 
+    /** Hand-wired (tests): no rate limit. */
+    BostaHttpGateway(RestClient.Builder builder, ObjectMapper mapper, String baseUrl, String apiVersion) {
+        this(builder, mapper, baseUrl, apiVersion, BostaRateLimiter.unlimited());
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired
     BostaHttpGateway(RestClient.Builder builder, ObjectMapper mapper,
                      @Value("${bosta.base-url}") String baseUrl,
-                     @Value("${bosta.api-version}") String apiVersion) {
+                     @Value("${bosta.api-version}") String apiVersion,
+                     BostaRateLimiter limiter) {
+        this.limiter    = limiter;
         this.restClient = builder.build();
         this.mapper     = mapper;
         this.baseUrl    = baseUrl;
@@ -66,8 +75,54 @@ class BostaHttpGateway implements BostaGateway {
             .build());
     }
 
+    
+    // ---- every call goes through the per-key rate limiter (2026-10-03) ------------------------
+
     @Override
     public List<SlimDelivery> listDeliveriesPage(String apiKey, int pageNumber, int pageSize) {
+        return limited(apiKey, BostaRateLimiter.Priority.BACKGROUND, () -> listDeliveriesPage0(apiKey, pageNumber, pageSize));
+    }
+
+    @Override
+    public JsonNode listDeliveriesPageRaw(String apiKey, int pageNumber, int pageSize) {
+        return limited(apiKey, BostaRateLimiter.Priority.BACKGROUND, () -> listDeliveriesPageRaw0(apiKey, pageNumber, pageSize));
+    }
+
+    @Override
+    public String fetchBusinessProfile(String apiKey) {
+        return limited(apiKey, BostaRateLimiter.Priority.USER_FACING, () -> fetchBusinessProfile0(apiKey));
+    }
+
+    @Override
+    public BostaDelivery fetchDelivery(String apiKey, String trackingNumber) {
+        return limited(apiKey, BostaRateLimiter.Priority.BACKGROUND, () -> fetchDelivery0(apiKey, trackingNumber));
+    }
+
+    @Override
+    public AwbPrintResult printMassAwb(String apiKey, List<String> trackingNumbers, String awbFormat, String lang) {
+        return limited(apiKey, BostaRateLimiter.Priority.USER_FACING,
+            () -> printMassAwb0(apiKey, trackingNumbers, awbFormat, lang));
+    }
+
+    @Override
+    public String createPickup(String apiKey, String scheduledDate, String businessLocationId,
+                               JsonNode contactPerson, int numberOfParcels) {
+        return limited(apiKey, BostaRateLimiter.Priority.USER_FACING,
+            () -> createPickup0(apiKey, scheduledDate, businessLocationId, contactPerson, numberOfParcels));
+    }
+
+    /** Waits for this key's budget, then calls; a 429 blocks the key for its retry-after. */
+    private <T> T limited(String apiKey, BostaRateLimiter.Priority priority, java.util.function.Supplier<T> call) {
+        limiter.acquire(apiKey, priority);
+        try {
+            return call.get();
+        } catch (BostaRateLimitException e) {
+            limiter.onRateLimited(apiKey, e.getRetryAfterSeconds());
+            throw e;
+        }
+    }
+
+    private List<SlimDelivery> listDeliveriesPage0(String apiKey, int pageNumber, int pageSize) {
         String url = baseUrl + "/api/" + apiVersion + "/deliveries?pageNumber=" + pageNumber + "&pageSize=" + pageSize;
         try {
             JsonNode body = Retry.decorateSupplier(retry, () ->
@@ -110,7 +165,7 @@ class BostaHttpGateway implements BostaGateway {
                     ? typeNode.path("value").asText("SEND").toUpperCase(Locale.ROOT)
                     : typeNode.asText("SEND").toUpperCase(Locale.ROOT);
 
-                result.add(new SlimDelivery(tn, stateCode, type));
+                result.add(new SlimDelivery(tn, stateCode, type, createdAt(item)));
             }
             return result;
         } catch (BostaRateLimitException e) {
@@ -131,8 +186,8 @@ class BostaHttpGateway implements BostaGateway {
         }
     }
 
-    @Override
-    public JsonNode listDeliveriesPageRaw(String apiKey, int pageNumber, int pageSize) {
+    
+    private JsonNode listDeliveriesPageRaw0(String apiKey, int pageNumber, int pageSize) {
         String url = baseUrl + "/api/" + apiVersion + "/deliveries?pageNumber=" + pageNumber + "&pageSize=" + pageSize;
         try {
             return Retry.decorateSupplier(retry, () ->
@@ -156,8 +211,19 @@ class BostaHttpGateway implements BostaGateway {
         }
     }
 
-    @Override
-    public String fetchBusinessProfile(String apiKey) {
+    /**
+     * A list item's creation time: creationTimestamp (epoch ms) when present, else createdAt (ISO or
+     * the JS Date.toString() Bosta's v0 API returns). Null when neither is readable.
+     */
+    static java.time.Instant createdAt(JsonNode item) {
+        JsonNode ct = item.path("creationTimestamp");
+        if (ct.isNumber()) return java.time.Instant.ofEpochMilli(ct.asLong());
+        if (ct.isTextual() && ct.asText().matches("\\d{10,}")) return java.time.Instant.ofEpochMilli(Long.parseLong(ct.asText()));
+        return PreConnectDeliveryFilter.parseCreatedAt(item);
+    }
+
+    
+    private String fetchBusinessProfile0(String apiKey) {
         // /api/v0/business-profile and /api/v2/business-profile both return 404 — phantom endpoint.
         // Use the deliveries list instead: same base path as the confirmed-working fetchDelivery,
         // page-size=1 to minimise payload. 200 = valid key; 401/403 = bad key → 422 to caller.
@@ -185,8 +251,8 @@ class BostaHttpGateway implements BostaGateway {
         }
     }
 
-    @Override
-    public BostaDelivery fetchDelivery(String apiKey, String trackingNumber) {
+    
+    private BostaDelivery fetchDelivery0(String apiKey, String trackingNumber) {
         refuseReserved(trackingNumber);
         String url = baseUrl + "/api/" + apiVersion + "/deliveries/" + trackingNumber;
         try {
@@ -338,8 +404,7 @@ class BostaHttpGateway implements BostaGateway {
      * Legacy/documented shape: {"success":true,"data":{"pdf":"<base64>"}}
      * Email path shape: {"success":true,"message":"AWB has been exported to your email"}
      */
-    @Override
-    public AwbPrintResult printMassAwb(String apiKey, List<String> trackingNumbers,
+    private AwbPrintResult printMassAwb0(String apiKey, List<String> trackingNumbers,
                                         String awbFormat, String lang) {
         if (trackingNumbers != null) trackingNumbers.forEach(BostaHttpGateway::refuseReserved);
         // v0 endpoint — same version as list/fetch, confirmed working with raw apiKey auth.
@@ -408,8 +473,7 @@ class BostaHttpGateway implements BostaGateway {
      * Success response: {"success":true,"data":{"_id":"BOSTA_PICKUP_ID",...}}
      * Error response: {"success":false,"code":1078,"message":"..."}
      */
-    @Override
-    public String createPickup(String apiKey, String scheduledDate, String businessLocationId,
+    private String createPickup0(String apiKey, String scheduledDate, String businessLocationId,
                                 JsonNode contactPerson, int numberOfParcels) {
         String url = baseUrl + "/api/" + apiVersion + "/pickups";
 
