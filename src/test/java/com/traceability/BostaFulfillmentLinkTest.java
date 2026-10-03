@@ -83,6 +83,8 @@ class BostaFulfillmentLinkTest {
         r.add("spring.flyway.url",          POSTGRES::getJdbcUrl);
         r.add("spring.flyway.user",         POSTGRES::getUsername);
         r.add("spring.flyway.password",     POSTGRES::getPassword);
+        // fl11: a 429 is now retried within the run (hotfix c7514f2) — no real waiting in tests.
+        r.add("bosta.fulfillment-link.max-backoff-ms", () -> "0");
     }
 
     static final String CREATED = "Thu Oct 01 2026 15:20:00 GMT+0000 (Coordinated Universal Time)";
