@@ -27,6 +27,15 @@ cf92cf6 after S3; not merged, not deployed).**
   Existing tests changed only for the marker contract (tracking → creation time): BostaPollJobTest p15, p17, p19,
   p20; BostaDiscoveryRetryTest dr1, dr2, dr3 (+ markAt helper, fixture creation times). MigrationSmokeTest 132 files,
   NotTracedBackfillTest 77.
+- **Steady-state load (prod 2026-10-03, read-only):** poll set BROEK 97, Femine 97, blnco 25, Jumi 3, Snouts 4,
+  demo 13 shipments. The status poll fetches each with a 2 s inter-fetch delay, tenants one after another, so a
+  run takes ~4.5 min on average (cron */3 — overlapping fires are skipped) and a shipment is re-polled every
+  ~4–20 min. Per key per hour: status poll ≈ 700–750 (BROEK, Femine) / ≈ 20–200 (others), webhook verify-fetch
+  ≈ 10, discovery ≈ 30–60 list pages + a few fetches, link jobs ≈ 5–7 → ≈ 800/h ≈ 0.22 req/s of the 1 req/s
+  budget (≈ 4.5× headroom). The limiter isn't the status poll's bottleneck — the fixed 2 s delay and the
+  sequential tenant loop are: interval ≈ 2 s × Σ min(active, 200) over all tenants (today ≈ 8 min). Grows
+  linearly with active shipments; not a problem until several hundred are active. Follow-up if needed: drop the
+  inter-fetch delay to ~1 s (the limiter now enforces the per-key rate) or poll tenants in parallel.
 - **Migration number:** S3 merged first with V132__simulated_tracking; this is V133__bosta_discovery_paging.
 - **EXC-8854860251 (read-only):** a BROEK type-30 exchange created through Bosta's API (10-03 10:47 UTC),
   businessReference `BRK-44868-EG:BRK-44868-EG-R1` (post-connect order BRK-44868-EG, delivered). By design an
