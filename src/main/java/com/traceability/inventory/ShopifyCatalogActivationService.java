@@ -71,7 +71,12 @@ public class ShopifyCatalogActivationService {
         return activate(tenantId, tx.execute(s -> jdbc.queryForList(
             "SELECT v.id, v.external_id, v.shopify_inventory_item_id FROM variants v " +
             "JOIN products p ON p.id = v.product_id " +
-            "WHERE v.tenant_id = ? AND p.status = 'active'", tenantId)));
+            "WHERE v.tenant_id = ? AND p.status = 'active' " +
+            // Review mode S4 (V130): a simulated-courier tenant's fixture variants (external_id not a
+            // Shopify gid) are left out BEFORE the batch item-id read, so they can never fail it for
+            // the reviewer's real variants. Real tenants: no filter at all.
+            "  AND NOT (EXISTS (SELECT 1 FROM tenant_courier_simulation sim WHERE sim.tenant_id = v.tenant_id) " +
+            "           AND v.external_id NOT LIKE 'gid://shopify/%')", tenantId)));
     }
 
     /**

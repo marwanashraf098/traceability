@@ -138,7 +138,11 @@ public class ShopifyInventoryReconcileService {
      *  the fulfillment location. A variant with on_hand 0 can never be a seed row, so the seed never
      *  reads Shopify for it. */
     private List<Map<String, Object>> loadVariants(UUID tenantId, boolean candidatesOnly) {
-        String sql = "SELECT id, external_id, sku, title, shopify_inventory_item_id FROM variants v WHERE tenant_id = ?";
+        // Review mode S4 (V130): a simulated-courier tenant's fixture variants (external_id not a Shopify
+        // gid) are left out of the report and the seed, before any batch item-id read. Real tenants: no filter.
+        String sql = "SELECT id, external_id, sku, title, shopify_inventory_item_id FROM variants v WHERE tenant_id = ?" +
+                     " AND NOT (EXISTS (SELECT 1 FROM tenant_courier_simulation sim WHERE sim.tenant_id = v.tenant_id)" +
+                     "          AND v.external_id NOT LIKE 'gid://shopify/%')";
         if (candidatesOnly) {
             sql += " AND EXISTS (SELECT 1 FROM pieces p WHERE p.variant_id = v.id AND p.tenant_id = v.tenant_id" +
                    "  AND p.status IN ('available','reserved','packed','awaiting_pickup')" +

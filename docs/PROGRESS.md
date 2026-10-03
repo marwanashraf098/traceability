@@ -17,11 +17,7 @@
   per-variant delta query (a write-off of only fixture variants → `nothing_to_push`).
 - Tests `ReviewModeMuteTest` m1–m7, each with a real-tenant control — all revert-checked (ExceptionService → m1 m2;
   immediate job → m4; digest job → m5; ShopifyInventoryService → m6; StockTakeReconciliationService → m7).
-- **Found, NOT changed (needs a decision):** `ShopifyCatalogActivationService.activateAll` (store connect / catalog backfill
-  / Settings button) selects every variant of an active product — a simulated tenant's fixture variants included — and
-  resolves item ids in ONE batch read; a malformed id can fail that read for the reviewer's real variants too. Same
-  exposure in the location seed (`ShopifyInventoryReconcileService.loadVariants`). Only reachable once the Traced location
-  is linked (activation 409s otherwise). Proposed: filter non-gid variants of simulated tenants in both (S5 or S4b).
+- **Activation + location seed (added to S4 on Marawan's review):** `ShopifyCatalogActivationService.activateAll` and `ShopifyInventoryReconcileService.loadVariants` (report + seed) leave a simulated tenant's non-gid variants out BEFORE the batch item-id read, so a seeded variant can never fail that read for the reviewer's real variants. Real tenants: no filter (a non-gid variant on a real tenant still fails as before). Tests `SimulatedActivationSeedTest` v1–v4 (v2 / v4 real-tenant controls) — revert-checked: activation → v1; seed → v3.
 
 **Bosta discovery paging + shared per-key rate limit (2026-10-03, branch `fix/bosta-discovery-paging`, rebased onto main
 cf92cf6 after S3; not merged, not deployed).**
