@@ -50,6 +50,7 @@ public class BostaController {
     private final BostaPickupService  pickupService;
     private final int                 defaultBackfillMaxPages;
     private final BostaVisibilityCheckService visibilityCheck;
+    private final BostaFulfillmentCatchUpService catchUp;
 
     public BostaController(BostaGateway bostaGateway,
                             EncryptionService encryptionService,
@@ -62,7 +63,8 @@ public class BostaController {
                             BostaAwbService awbService,
                             BostaPickupService pickupService,
                             @Value("${bosta.backfill.max-pages:20}") int defaultBackfillMaxPages,
-                            BostaVisibilityCheckService visibilityCheck) {
+                            BostaVisibilityCheckService visibilityCheck,
+                            BostaFulfillmentCatchUpService catchUp) {
         this.bostaGateway           = bostaGateway;
         this.encryptionService      = encryptionService;
         this.jdbc                   = jdbc;
@@ -75,6 +77,7 @@ public class BostaController {
         this.pickupService          = pickupService;
         this.defaultBackfillMaxPages = defaultBackfillMaxPages;
         this.visibilityCheck        = visibilityCheck;
+        this.catchUp                = catchUp;
     }
 
     // ---- Request / response records ----------------------------------------
@@ -229,6 +232,27 @@ public class BostaController {
         Map<String, String> resp = new LinkedHashMap<>();
         resp.put("jobId",   jobId != null ? jobId.asUUID().toString() : "enqueued");
         resp.put("message", "Visibility check enqueued — results in the logs (BOSTA_VISIBILITY)");
+        return resp;
+    }
+
+    // ---- POST /api/v1/bosta/fulfillment-link/catch-up (OWNER — one-off) ------
+
+    /**
+     * Enqueues the fulfillment-link catch-up for the caller's tenant: dry run unless
+     * {@code apply=true}. Results are logged as BOSTA_CATCHUP / BOSTA_CATCHUP_SUMMARY lines.
+     * See BostaFulfillmentCatchUpService.
+     */
+    @PostMapping("/bosta/fulfillment-link/catch-up")
+    @ResponseStatus(HttpStatus.ACCEPTED)
+    @PreAuthorize("hasRole('OWNER')")
+    public Map<String, String> fulfillmentLinkCatchUp(
+            @RequestParam(name = "apply", defaultValue = "false") boolean apply,
+            @AuthenticationPrincipal CustomUserDetails principal) {
+        UUID tenantId = principal.tenantId();
+        JobId jobId = jobScheduler.enqueue(() -> catchUp.runAndLog(tenantId, apply));
+        Map<String, String> resp = new LinkedHashMap<>();
+        resp.put("jobId",   jobId != null ? jobId.asUUID().toString() : "enqueued");
+        resp.put("message", (apply ? "Catch-up (APPLY)" : "Catch-up dry run") + " enqueued — results in the logs (BOSTA_CATCHUP)");
         return resp;
     }
 

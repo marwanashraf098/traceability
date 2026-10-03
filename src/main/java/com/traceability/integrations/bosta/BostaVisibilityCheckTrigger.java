@@ -22,6 +22,10 @@ import java.util.UUID;
  * account), and restart. One job per tenant is enqueued once at startup; it is never
  * scheduled. Leave the property empty (the default) otherwise — every restart with it set
  * runs the check again (harmless: read-only, but it spends Bosta calls).
+ *
+ * Same mechanism for the fulfillment-link catch-up (BostaFulfillmentCatchUpService):
+ * {@code BOSTA_FULFILLMENT_LINK_CATCH_UP_ON_STARTUP=<tenant ids>|all}, dry run unless
+ * {@code BOSTA_FULFILLMENT_LINK_CATCH_UP_APPLY=true}. Remove both after the run.
  */
 @Component
 public class BostaVisibilityCheckTrigger {
@@ -32,15 +36,24 @@ public class BostaVisibilityCheckTrigger {
     private final JobScheduler jobScheduler;
     private final BostaVisibilityCheckService service;
     private final String onStartup;
+    private final BostaFulfillmentCatchUpService catchUp;
+    private final String catchUpOnStartup;
+    private final boolean catchUpApply;
 
     public BostaVisibilityCheckTrigger(@FlywayDataSource DataSource ownerDs,
                                        JobScheduler jobScheduler,
                                        BostaVisibilityCheckService service,
-                                       @Value("${bosta.visibility-check.on-startup:}") String onStartup) {
+                                       @Value("${bosta.visibility-check.on-startup:}") String onStartup,
+                                       BostaFulfillmentCatchUpService catchUp,
+                                       @Value("${bosta.fulfillment-link.catch-up.on-startup:}") String catchUpOnStartup,
+                                       @Value("${bosta.fulfillment-link.catch-up.apply:false}") boolean catchUpApply) {
         this.ownerJdbc = new JdbcTemplate(ownerDs);
         this.jobScheduler = jobScheduler;
         this.service = service;
         this.onStartup = onStartup;
+        this.catchUp = catchUp;
+        this.catchUpOnStartup = catchUpOnStartup;
+        this.catchUpApply = catchUpApply;
     }
 
     @EventListener(ApplicationReadyEvent.class)
@@ -50,10 +63,22 @@ public class BostaVisibilityCheckTrigger {
             jobScheduler.enqueue(() -> service.runAndLog(t));
             log.info("Bosta visibility check enqueued for tenant {} (bosta.visibility-check.on-startup)", t);
         }
+        // Fulfillment-link catch-up (2026-10-03): BOSTA_FULFILLMENT_LINK_CATCH_UP_ON_STARTUP=<ids>|all,
+        // dry run unless BOSTA_FULFILLMENT_LINK_CATCH_UP_APPLY=true. One-shot per startup.
+        final boolean apply = catchUpApply;
+        for (UUID tenantId : tenants(catchUpOnStartup)) {
+            final UUID t = tenantId;
+            jobScheduler.enqueue(() -> catchUp.runAndLog(t, apply));
+            log.info("Bosta fulfillment-link catch-up enqueued for tenant {} (apply={})", t, apply);
+        }
     }
 
     List<UUID> tenantsToCheck() {
-        String v = onStartup == null ? "" : onStartup.trim();
+        return tenants(onStartup);
+    }
+
+    List<UUID> tenants(String setting) {
+        String v = setting == null ? "" : setting.trim();
         if (v.isEmpty()) return List.of();
         if (v.equalsIgnoreCase("all")) {
             return ownerJdbc.queryForList(

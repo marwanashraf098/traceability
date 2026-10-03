@@ -4,6 +4,42 @@
 
 ## Current state
 
+**Bosta link from Shopify fulfillment (A) + catch-up (C) + discovery Step 0 (2026-10-03, branch
+`feat/bosta-fulfillment-link`, own worktree ~/Documents/traceability-bosta-link, rebased onto origin/main
+17613ca after S1 merged; not deployed).**
+- **Shared-tree incident:** another session (review mode S1) was editing the same working tree and also added a
+  V130. Split per Marawan: S1 = V130__tenant_courier_simulation (merged first), this work =
+  V131__fulfillment_link, rebased after it. MigrationSmokeTest 129→130 files (V1–V131), NotTracedBackfillTest
+  74→75.
+- **Step 0 (read-only):** discovery lists `GET /api/v0/deliveries?pageNumber=1..3&pageSize=50` — no sort, no
+  filter, no date. BROEK: lock free, 0 retry-list rows, 0 discovery events and mark 5829813860 unmoved since
+  10-01 16:55, yet the 32 are FOUND by tracking with the same key. Ranked: (1) the v0 list doesn't return them
+  (default filter by channel / location / business — the 09-30 batch was absent from the 10-01 13:08 listing
+  that held newer and older items); (2) BROEK's list call failing since 16:55 (non-transient error → only a WARN
+  "Discovery poll failed for tenant d6e1ffe7…"); updatedAt sort, marker and ceiling ruled out. The enriched
+  visibility check now logs createdAt / updatedAt / creationSrc / sender / pickup fields for FOUND rows and
+  page 1 of the list as discovery fetches it (BOSTA_VISIBILITY_LIST*). Unlinked 5658/5659/5660/5666/5667 are
+  Femine BUSINESS_APP deliveries, post-connect, null reference and no Shopify id — kept by the filter; no link
+  possible (0 of 311 Femine orders have a phone; Femine's Shopify fulfillments are Wijha only).
+- **A (`BostaFulfillmentLinkService`, V131):** capture enqueues one job per (order, tracking) — after commit,
+  deterministic id — for a 'bosta' row, not cancelled, link_status NULL, no forward shipment. Job: tenant's own
+  key; links only type 10/20 whose reference (both sides of ':') or shopifyInfo.orderId is THIS order and
+  nothing else, no active forward leg, number not on another order. Link = a 'shopify_fulfillment'
+  webhook_events row with the order hint → BostaWebhookJob.process (hint honoured for that source only) →
+  ShipmentLinkService.linkDeliveryToOrder (tryMatchDelivery's step 3, shared) + applyMappedState. Late link
+  = BRK-44871 outcome: order stays 'new', no pieces/allocations, not_traced_at set, Bosta state + history.
+  Conflict (reference/Shopify id elsewhere, both null, non-forward type, number on another order) →
+  'conflict' + `fulfillment_link_problem` (HIGH). 404/errors → 'retry' (15 min doubling ≤ 2 h, sweeper
+  `fulfillment-link-retry` */10) for 24 h then 'gave_up' + exception; 429 → retry-after, not counted.
+  Tests `BostaFulfillmentLinkTest` fl1–fl15.
+- **C (`BostaFulfillmentCatchUpService`):** candidates = 'bosta' tracking rows or REST fulfillments in
+  orders.raw, not cancelled, no forward shipment; dry run (default) writes nothing; apply stores raw-only
+  fulfillments as tracking rows then runs the same attempt(). Owner `POST /api/v1/bosta/fulfillment-link/
+  catch-up?apply=…` or `BOSTA_FULFILLMENT_LINK_CATCH_UP_ON_STARTUP=<ids>|all` (+ `…_APPLY=true`). Logs
+  BOSTA_CATCHUP / BOSTA_CATCHUP_SUMMARY. Tests `BostaFulfillmentCatchUpTest` cu1–cu3; enrichment
+  `BostaVisibilityEnrichmentTest` ve1–ve3.
+- **Suite:** 2,021 run, 4 skipped, only the 2 known reds.
+
 **Review mode S1 — simulated-courier flag + shop binding rule (2026-10-03, branch
 `feat/review-simulated-courier-s1` off main 6ce8cd8, worktree `.claude/worktrees/review-s1`; not merged, not deployed).**
 Goal of review mode: one Shopify App Store review tenant with seeded demo data, simulated Bosta (never calls Bosta),
