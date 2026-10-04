@@ -298,7 +298,6 @@ public class ShopifyWebhookProcessorJob {
             final UUID fOrderId = orderId;
             final String fStatus = orderStatus;
             tx.execute(s -> {
-                TenantContext.set(tenantId);
                 fulfillService.handleShopifyLineItemEdit(
                     fOrderId, fStatus, diffJson,
                     diff.removed(), diff.releaseCountByExternalId());

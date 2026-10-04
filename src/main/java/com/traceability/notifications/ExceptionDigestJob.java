@@ -97,8 +97,7 @@ public class ExceptionDigestJob {
     }
 
     private void processTenant(UUID tenantId) {
-        TenantContext.set(tenantId);
-        try {
+        TenantContext.runAs(tenantId, () -> {
             List<Map<String, Object>> allOpen = exceptionService.detectAllOpen();
             if (allOpen.isEmpty()) return;
 
@@ -150,9 +149,7 @@ public class ExceptionDigestJob {
                 }
                 return null;
             });
-        } finally {
-            TenantContext.clear();
-        }
+        });
     }
 
     private static String itemKey(Map<String, Object> item) {

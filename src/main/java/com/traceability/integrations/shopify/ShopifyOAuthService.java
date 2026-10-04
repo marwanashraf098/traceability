@@ -236,12 +236,7 @@ public class ShopifyOAuthService {
      * controller deliberately does not touch TenantContext — see ShopifyOAuthController).
      */
     private void assertBoundShop(UUID tenantId, String requestedShop) {
-        TenantContext.set(tenantId);
-        try {
-            sameShopGuard.assertBoundShop(tenantId, requestedShop);
-        } finally {
-            TenantContext.clear();
-        }
+        TenantContext.runAs(tenantId, () -> sameShopGuard.assertBoundShop(tenantId, requestedShop));
     }
 
     /**
@@ -503,19 +498,14 @@ public class ShopifyOAuthService {
         if (tokens.refreshToken() != null) {
             Timestamp accessExpiresAt  = Timestamp.from(Instant.now().plusSeconds(tokens.expiresIn()));
             Timestamp refreshExpiresAt = Timestamp.from(Instant.now().plusSeconds(tokens.refreshTokenExpiresIn()));
-            TenantContext.set(row.tenantId());
-            try {
-                tx.execute(s -> {
+            TenantContext.runAs(row.tenantId(), () -> tx.execute(s -> {
                     jdbc.update(UPDATE_PROVISION_REFRESH_FIELDS,
                         encryptionService.encrypt(tokens.refreshToken()),
                         accessExpiresAt,
                         refreshExpiresAt,
                         row.storeId());
                     return null;
-                });
-            } finally {
-                TenantContext.clear();
-            }
+                }));
         }
 
         magicLinkService.issueMagicLink(row.ownerId(), row.tenantId());
@@ -557,21 +547,14 @@ public class ShopifyOAuthService {
         // Same predicate as initiate (ShopifySameShopGuard.boundShopDomains): for a real
         // tenant every row binds — exactly as strict as this backstop always was; a
         // simulated-courier tenant's disconnected rows don't.
-        TenantContext.set(tenantId);
-        try {
-            return sameShopGuard.isDifferentShop(tenantId, shop);
-        } finally {
-            TenantContext.clear();
-        }
+        return TenantContext.runAs(tenantId, () -> sameShopGuard.isDifferentShop(tenantId, shop));
     }
 
     private UUID insertStore(UUID tenantId, String shop, ShopifyGateway.TokenResponse tokens) {
         Timestamp accessExpiresAt  = Timestamp.from(Instant.now().plusSeconds(tokens.expiresIn()));
         Timestamp refreshExpiresAt = tokens.refreshToken() != null
             ? Timestamp.from(Instant.now().plusSeconds(tokens.refreshTokenExpiresIn())) : null;
-        TenantContext.set(tenantId);
-        try {
-            return tx.execute(s ->
+        return TenantContext.runAs(tenantId, () -> tx.execute(s ->
                 jdbc.query(INSERT_STORE,
                     rs -> rs.next() ? rs.getObject("id", UUID.class) : null,
                     tenantId, shop,
@@ -579,19 +562,14 @@ public class ShopifyOAuthService {
                     accessExpiresAt,
                     tokens.refreshToken() != null ? encryptionService.encrypt(tokens.refreshToken()) : null,
                     refreshExpiresAt,
-                    tokens.grantedScopes()));
-        } finally {
-            TenantContext.clear();
-        }
+                    tokens.grantedScopes())));
     }
 
     private UUID updateStoreToken(UUID tenantId, String shop, ShopifyGateway.TokenResponse tokens) {
         Timestamp accessExpiresAt  = Timestamp.from(Instant.now().plusSeconds(tokens.expiresIn()));
         Timestamp refreshExpiresAt = tokens.refreshToken() != null
             ? Timestamp.from(Instant.now().plusSeconds(tokens.refreshTokenExpiresIn())) : null;
-        TenantContext.set(tenantId);
-        try {
-            return tx.execute(s ->
+        return TenantContext.runAs(tenantId, () -> tx.execute(s ->
                 jdbc.query(UPDATE_STORE_TOKEN,
                     rs -> rs.next() ? rs.getObject("id", UUID.class) : null,
                     encryptionService.encrypt(tokens.accessToken()),
@@ -599,10 +577,7 @@ public class ShopifyOAuthService {
                     tokens.refreshToken() != null ? encryptionService.encrypt(tokens.refreshToken()) : null,
                     refreshExpiresAt,
                     tokens.grantedScopes(),
-                    shop, tenantId));
-        } finally {
-            TenantContext.clear();
-        }
+                    shop, tenantId)));
     }
 
     private void enqueueImport(UUID storeId, UUID tenantId) {
@@ -653,9 +628,7 @@ public class ShopifyOAuthService {
         record StoreSnap(UUID id, Instant expiresAt, String status, String importStatus,
                          String accessTokenScopes, String connectionType) {}
         StoreSnap snap;
-        TenantContext.set(tenantId);
-        try {
-            snap = tx.execute(s ->
+        snap = TenantContext.runAs(tenantId, () -> tx.execute(s ->
                 jdbc.query(
                     "SELECT id, access_token_expires_at, status::text, import_status::text, " +
                     "       access_token_scopes, connection_type " +
@@ -668,10 +641,7 @@ public class ShopifyOAuthService {
                         rs.getString("import_status"),
                         rs.getString("access_token_scopes"),
                         rs.getString("connection_type")) : null,
-                    tenantId, shopDomain));
-        } finally {
-            TenantContext.clear();
-        }
+                    tenantId, shopDomain)));
 
         if (snap == null) {
             log.warn("Token exchange: store not found tenant={} shop={}", tenantId, shopDomain);
@@ -755,9 +725,7 @@ public class ShopifyOAuthService {
         Timestamp accessExpiresAt  = Timestamp.from(Instant.now().plusSeconds(tokens.expiresIn()));
         Timestamp refreshExpiresAt = tokens.refreshToken() != null
             ? Timestamp.from(Instant.now().plusSeconds(tokens.refreshTokenExpiresIn())) : null;
-        TenantContext.set(tenantId);
-        try {
-            return tx.execute(s ->
+        return TenantContext.runAs(tenantId, () -> tx.execute(s ->
                 jdbc.query(EXCHANGE_SESSION_TOKEN_UPDATE,
                     rs -> rs.next() ? rs.getObject("id", UUID.class) : null,
                     encryptionService.encrypt(tokens.accessToken()),
@@ -765,10 +733,7 @@ public class ShopifyOAuthService {
                     tokens.refreshToken() != null ? encryptionService.encrypt(tokens.refreshToken()) : null,
                     refreshExpiresAt,
                     tokens.grantedScopes(),
-                    shop, tenantId));
-        } finally {
-            TenantContext.clear();
-        }
+                    shop, tenantId)));
     }
 
     // ---- private: scope comparison ------------------------------------

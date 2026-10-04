@@ -279,3 +279,8 @@ sentry:
   traces-sample-rate: 0.0
   environment: ${SENTRY_ENVIRONMENT:production}
   send-default-pii: false
+
+tenancy:
+  # TenantContext.runAs switching to a DIFFERENT tenant while a transaction is already active
+  # (the GUC can't change mid-transaction): warn = log and carry on, throw = fail (tests).
+  runas-switch-guard: ${TENANCY_RUNAS_SWITCH_GUARD:warn}

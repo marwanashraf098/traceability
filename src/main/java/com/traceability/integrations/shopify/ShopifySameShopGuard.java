@@ -44,8 +44,10 @@ import java.util.UUID;
  *   - ShopifySyncService's connect paths rely on the request-filter-set AMBIENT context
  *     (see that class's javadoc) and must keep it set for their own subsequent upsert —
  *     this guard must never clear it out from under them.
- *   - ShopifyOAuthService.initiateOAuth() / tenantOwnsDifferentShop() have no ambient
- *     context and set/clear their own scope around the call.
+ *   - ShopifyOAuthService.initiateOAuth() / tenantOwnsDifferentShop() wrap the call in
+ *     TenantContext.runAs(tenantId). initiateOAuth() runs inside the OWNER's authenticated
+ *     request, so the request's tenant IS already set there (TenantContextFilter); runAs
+ *     restores it afterwards. The OAuth callback path has no ambient tenant.
  * With no / another tenant set, RLS hides the flag row, so the tenant reads as REAL — the
  * strict case.
  */

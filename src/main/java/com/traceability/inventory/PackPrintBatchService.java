@@ -128,11 +128,10 @@ public class PackPrintBatchService {
         log.info("print batch: tenant={} waybills={} pages={} chunks={} orderVerified={} unmatchedPages={}",
             tenantId, printed.size(), pdf.pageCount(), pdfs.size(), pdf.orderGuaranteed(), pdf.unmatchedPages());
 
-        // f) Record only after the PDF exists — own short transaction. Wrapped in runAs because
-        //    BostaAwbService's own TenantContext.runAs(...) blocks CLEAR the context when they
-        //    finish (they don't restore it), so this thread has no tenant any more.
-        PackPrintBatchStore.RecordedBatch batch = TenantContext.runAs(tenantId, () ->
-            store.record(actorUserId, paper, sort, scope, pdf.orderGuaranteed(), printed));
+        // f) Record only after the PDF exists — own short transaction. (The S2 runAs wrapper here
+        //    is gone: TenantContext.runAs now restores the request's tenant after BostaAwbService.)
+        PackPrintBatchStore.RecordedBatch batch =
+            store.record(actorUserId, paper, sort, scope, pdf.orderGuaranteed(), printed);
 
         return new PrintBatchResult(batch.batchId(), batch.batchNo(), printed.size(), all.size(),
             remaining, pdf.orderGuaranteed(), Base64.getEncoder().encodeToString(pdf.pdf()), excluded, null);

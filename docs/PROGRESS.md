@@ -4,6 +4,30 @@
 
 ## Current state
 
+**Fix — TenantContext.runAs restores the previous tenant (2026-10-04, branch `fix/tenantctx-restore` off main 4c1c8d1;
+pushed, not merged, not deployed). No migration.**
+- **runAs** (both overloads, `TenantContext.java:78/92`): save the thread's tenant → set → finally restore it (remove when
+  there was none); RuntimeExceptions as-is, checked wrapped as before. It used to CLEAR: a runAs nested in a request, a job
+  or another runAs left the rest of that work with no tenant (new transactions without GUC → RLS reads empty / UPDATEs hit
+  nothing; require() throws). It broke S2's batch recording (worked around) and the Bosta fulfillment link in production
+  (2026-10-03, hotfixed with re-sets in `BostaFulfillmentLinkService:250/258`).
+- **Switch guard** (`enter`, `:101`): runAs to a DIFFERENT tenant while a transaction is active (the GUC is fixed per
+  transaction, so the switch can't apply to it) → `tenancy.runas-switch-guard` = `warn` (default; one WARN with both
+  tenants' short ids and the caller, then continue) or `throw` (tests: `src/test/resources/application.properties` and
+  the global JUnit extension). Same tenant → no-op. Set by `TenantContextSettings`.
+- **Converted to runAs** (mechanical, bodies untouched): the 7 ShopifyOAuthService set/clear blocks, ExceptionDigestJob,
+  ExceptionImmediateAlertJob, ShopifyReconcileJob. Removed the redundant set in ShopifyWebhookProcessorJob.handleOrderUpdated,
+  the S2 workaround in PackPrintBatchService, and fixed ShopifySameShopGuard's "no ambient context" comment.
+  TenantContextFilter's finally-clear and ScanPairPublicController's guard unchanged.
+- **Tests:** global `TenantContextTestExtension` (META-INF/services + junit-platform.properties autodetection) clears the
+  context after every test and resets the guard to THROW. `TenantContextTest` (10) and `TenantContextRestoreTrapsTest` (5
+  traps — print batch over HTTP, PIN switch revoke, digest detection, status poll stamping, Shopify OAuth leaves the
+  request tenant; all 5 fail with clear-on-exit, checked). No existing test relied on clear-on-exit and none tripped the
+  guard (full suite: only the 2 known reds).
+- **Follow-ups:** (1) the TEMPORARY "SCOPE-CHECK-DIAG" log at `ShopifyInventoryService:679` (2026-07-31) is still in —
+  remove once the scope-check question is closed (separate change). (2) `BostaFulfillmentLinkService:250/258` re-set the
+  tenant after `webhookJob.process()` — now redundant (harmless); the Bosta-linking owner can drop them.
+
 **Review mode S7 — click-to-scan helpers + reviewer connect path + ops hardening (2026-10-04, branch
 `feat/review-tenant-s7` off main 9518feb, worktree `.claude/worktrees/review-s7`; not merged, not deployed). No migration.**
 - Capability: `ReviewCapabilities` (scanHelpers = is_demo OR simulated; demoMode = is_demo); `/me` carries both.

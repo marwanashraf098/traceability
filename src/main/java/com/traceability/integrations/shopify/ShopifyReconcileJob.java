@@ -91,8 +91,7 @@ public class ShopifyReconcileJob {
         // TenantContext must be set BEFORE getValidToken — ShopifyTokenProvider uses the
         // app_user datasource (RLS-gated). Without the GUC, the store SELECT returns zero
         // rows and getValidToken throws "Store not found or not visible under current tenant".
-        TenantContext.set(tenantId);
-        try {
+        TenantContext.runAs(tenantId, () -> {
             String rawToken    = tokenProvider.getValidToken(storeId);
             // FR-18: effective floor = max(30-min rolling window, connection cutoff).
             // For stores with NULL cutoff (Jumi), loadCutoff() returns empty and rollingFloor wins.
@@ -124,8 +123,6 @@ public class ShopifyReconcileJob {
             if (ingested > 0) {
                 log.info("Reconcile: ingested {} missing order(s) for store {} ({})", ingested, storeId, shopDomain);
             }
-        } finally {
-            TenantContext.clear();
-        }
+        });
     }
 }
