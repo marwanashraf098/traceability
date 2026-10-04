@@ -238,6 +238,11 @@ class BostaHttpGateway implements BostaGateway {
      * A list item's creation time: creationTimestamp (epoch ms) when present, else createdAt (ISO or
      * the JS Date.toString() Bosta's v0 API returns). Null when neither is readable.
      */
+    /** A list item's last-update time (updatedAt, ISO or JS Date string), or null. */
+    static java.time.Instant updatedAt(JsonNode item) {
+        return PreConnectDeliveryFilter.parseBostaTime(item.path("updatedAt").asText(null));
+    }
+
     static java.time.Instant createdAt(JsonNode item) {
         JsonNode ct = item.path("creationTimestamp");
         if (ct.isNumber()) return java.time.Instant.ofEpochMilli(ct.asLong());

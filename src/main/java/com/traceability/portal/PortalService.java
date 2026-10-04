@@ -699,4 +699,10 @@ public class PortalService {
             "INSERT INTO portal_lookup_attempts (tenant_id, order_key, success) VALUES (?, ?, ?)",
             tenantId, orderKey, success);
     }
+
+    /** Lazy v0 for the delivery-city lookup (2026-10-04) — forwarded to this service's PickupAreaService. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setRawRefresher(com.traceability.integrations.bosta.ShipmentRawRefresher rawRefresher) {
+        pickupAreas.setRawRefresher(rawRefresher);
+    }
 }

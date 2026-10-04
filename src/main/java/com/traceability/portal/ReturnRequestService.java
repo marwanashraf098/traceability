@@ -606,4 +606,10 @@ public class ReturnRequestService {
             ? new ResponseStatusException(HttpStatus.CONFLICT, "Only a request awaiting a decision can be approved or rejected.")
             : new ResponseStatusException(HttpStatus.NOT_FOUND, "Return request not found");
     }
+
+    /** Lazy v0 for the delivery-city lookup (2026-10-04) — forwarded to this service's PickupAreaService. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setRawRefresher(com.traceability.integrations.bosta.ShipmentRawRefresher rawRefresher) {
+        pickupAreas.setRawRefresher(rawRefresher);
+    }
 }

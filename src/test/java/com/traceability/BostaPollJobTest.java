@@ -92,6 +92,10 @@ class BostaPollJobTest {
         r.add("bosta.poll.inter-fetch-delay-ms",     () -> "0");
         // Small cap for p4 (cap/rotation test)
         r.add("bosta.poll.status-max-per-cycle",     () -> "3");
+        // V138: the per-shipment fetch is now the safety net (every 4 h by default). These p-tests cover that
+        // path, so it runs every cycle here, as the whole poll did before; the -updatedAt walk is tested in
+        // BostaStatusPollWalkTest.
+        r.add("bosta.poll.status-safety-net-hours",  () -> "0");
         // Small ceiling + page size for p16 (burst > ceiling, resumable in 2 cycles)
         r.add("bosta.poll.discovery-max-items-per-cycle", () -> "3");
         r.add("bosta.backfill.page-size",                 () -> "3");
@@ -440,9 +444,10 @@ class BostaPollJobTest {
         discoveryPollJob.discoverAll();
 
         // Discovery's list call still happens (it always lists page 1 first), but the
-        // only fetchDelivery call for this tracking number is Tier 1's — Tier 2 skips
-        // it via the shipments check without ever touching Bosta.
-        verify(bostaGateway, times(1)).fetchDelivery(anyString(), eq(tracking));
+        // only Tier 1 acts on this tracking number — Tier 2 skips it via the shipments check.
+        // V138 (2026-10-04): Tier 1 now sees it in its -updatedAt search walk (the stub answers any sort)
+        // and ingests the list item, so nobody fetches it at all (before: one Tier 1 fetch).
+        verify(bostaGateway, never()).fetchDelivery(anyString(), eq(tracking));
 
         // Exactly one webhook_events row — Tier 1's. Tier 2 produced none.
         List<Map<String, Object>> rows = jdbc.queryForList(

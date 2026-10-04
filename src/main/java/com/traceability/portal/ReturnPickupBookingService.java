@@ -117,7 +117,29 @@ public class ReturnPickupBookingService {
     // ── The job ───────────────────────────────────────────────────────────────
 
     public void book(UUID requestId, UUID tenantId) {
+        refreshForwardLegRaw(requestId, tenantId);
         TenantContext.runAs(tenantId, () -> bookInTenant(requestId, tenantId));
+    }
+
+    // Lazy v0 (2026-10-04): the booking payload copies the forward leg's address block, which needs Bosta's
+    // full v0 shape — a v2 search copy is refreshed first, before any transaction is open.
+    private com.traceability.integrations.bosta.ShipmentRawRefresher rawRefresher;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setRawRefresher(com.traceability.integrations.bosta.ShipmentRawRefresher rawRefresher) {
+        this.rawRefresher = rawRefresher;
+    }
+
+    private void refreshForwardLegRaw(UUID requestId, UUID tenantId) {
+        if (rawRefresher == null) return;
+        try {
+            UUID orderId = TenantContext.runAs(tenantId, () -> tx.execute(s -> jdbc.query(
+                "SELECT order_id FROM return_requests WHERE id = ? AND tenant_id = ?",
+                rs -> rs.next() ? rs.getObject(1, UUID.class) : null, requestId, tenantId)));
+            if (orderId != null) rawRefresher.refreshDeliveredForwardLeg(tenantId, orderId);
+        } catch (RuntimeException e) {
+            log.warn("Booking {}: forward-leg v0 refresh failed — using the stored copy: {}", requestId, e.toString());
+        }
     }
 
     private void bookInTenant(UUID requestId, UUID tenantId) {

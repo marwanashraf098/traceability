@@ -28,6 +28,33 @@ SAFETY-CRITICAL scan handler, refocus effect and scan input approved by Marawan 
 - **Deviation:** Pickups now beeps on scan (useScanner's beep); Scan returns beeps once from the hook (its own playBeep
   call removed from the scan path, still used by dispositions).
 
+**Bosta status poll on the v2 -updatedAt search + (b) list items instead of a second v0 fetch (2026-10-04, branch
+`feat/bosta-status-poll-v2` off main 9ffcdc2; not merged, not deployed). V138.**
+- Status poll (BostaStatusPollJob): per tenant, a walk of `POST /api/v2/deliveries/search` sortBy `-updatedAt`, limit 50 —
+  until items updated before `poll_mark_at` minus 10 min, an empty/short page, or `status-max-pages` (10); mark advances
+  only on a complete walk, a capped walk resumes (head first, then shifted — discovery's mechanics), repeat-page guard.
+  First run walks back `status-safety-net-hours`. Only this tenant's in-flight shipments are ingested (ingestListItem,
+  source `bosta_poll`; idem key drops unchanged) and stamped last_polled_at. Safety net: the old per-shipment v0 fetch,
+  now only for in-flight shipments unchecked for 4 h (never one this cycle's walk just checked). No sleeping in the
+  worker (status poll and discovery's retry pass no longer sleep inter-fetch-delay-ms; the limiter paces).
+- (b) BostaWebhookJob: an event Traced wrote from a fresh search item (`bosta_poll_discovery` / `bosta_poll`, item kept
+  in memory ≤ 10 min by BostaListItemCache — never persisted: it carries the customer's address/phone) is applied from
+  that item, no v0 fetch — only for forward deliveries (type 10/20) and only while numberOfAttempts equals the stored
+  raw's (a new attempt's history/reason lives in v0 attempts[] → fetch). Fields the item lacks are carried over from
+  the stored raw (except old exception fields); raw is marked `_tracedRawShape: v2-list`. Exception code falls back to
+  `state.lastExceptionCode` (job + ExceptionService NDR SQL). A real Bosta webhook (source `bosta`) always fetches.
+- Lazy v0 (ShipmentRawRefresher, USER_FACING): PickupAreaService.forOrder when the forward leg is a v2 copy without the
+  city; ReturnPickupBookingService.book() refreshes the delivered forward leg before its transaction (address block).
+- Tests: BostaStatusPollWalkTest sw1–sw9; BostaPollJobTest: `status-safety-net-hours=0` (its p-tests cover the
+  per-shipment path, now the safety net) and p6's fetch assertion updated (the walk now handles it — no fetch);
+  migration counts 137 / 82. Revert-checked: 14 mutations, each RED (W4 re-run with a correct mutation).
+- Load (prod 2026-10-04: 312 in-flight — Femine 181, BROEK 91, blnco 26, Jumi 10, Snouts 4; status poll ran only 3×/h,
+  each ~20 min): before ≈ 3 × 312 = ~940 status fetches/h + ~150 discovery pages/h + ~55 verify fetches/h ≈ 1,150/h
+  (0.32 req/s, Femine alone ~590/h). After ≈ 100 walk pages/h (20 cycles × 5 tenants) + ~80 safety-net fetches/h
+  (312 / 4 h) + ~150 discovery pages/h + ~20 verify fetches/h ≈ 350/h (~0.1 req/s, 13% of the 0.75/s budget; Femine ~100/h).
+  Status-update latency: before, each shipment re-checked once per ~20-min cycle; after, a change shows on the next
+  3-minute cycle (p50 ≈ 1.5 min, worst ≈ 3 min + 5 s pickup) — assuming Bosta bumps updatedAt on every change.
+
 **P1 — PickScreen (queue mode) on useScanner (2026-10-04, branch `fix/pickscreen-scanner` off main 484192e; pushed, not
 merged, not deployed). Frontend only — backend untouched, useScanner unchanged. Edits to PickScreen's SAFETY-CRITICAL
 scan handler, refocus effect and scan input approved by Marawan 2026-10-04.**

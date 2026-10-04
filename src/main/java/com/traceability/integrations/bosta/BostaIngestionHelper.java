@@ -47,6 +47,12 @@ public class BostaIngestionHelper {
     private final BostaWebhookJob     webhookJob;
     private final MatcherVersionHolder matcherVersionHolder;
     private final PreConnectDeliveryFilter preConnectFilter;
+    private BostaListItemCache listItemCache;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setListItemCache(BostaListItemCache listItemCache) {
+        this.listItemCache = listItemCache;
+    }
 
     public BostaIngestionHelper(JdbcTemplate jdbc,
                                  PlatformTransactionManager txm,
@@ -143,7 +149,7 @@ public class BostaIngestionHelper {
         payload.put("type",           type);
         payload.put("updatedAt",      updatedAt);
 
-        return insertAndEnqueue(tenantId, delivery.trackingNumber(), fetchedState, updatedAt, payload, source);
+        return insertAndEnqueue(tenantId, delivery.trackingNumber(), fetchedState, updatedAt, payload, source, null);
     }
 
     /**
@@ -196,7 +202,7 @@ public class BostaIngestionHelper {
         if (d.shopifyOrderId() != null) payload.put("shopifyOrderId", d.shopifyOrderId());
         if (item.hasNonNull("creationTimestamp")) payload.set("creationTimestamp", item.get("creationTimestamp"));
 
-        return insertAndEnqueue(tenantId, tn, d.stateCode(), updatedAt, payload, source);
+        return insertAndEnqueue(tenantId, tn, d.stateCode(), updatedAt, payload, source, item);
     }
 
     /**
@@ -238,7 +244,7 @@ public class BostaIngestionHelper {
 
     /** Guard 3, the idem-keyed insert and the enqueue — shared by the fetch and list-item paths. */
     private boolean insertAndEnqueue(UUID tenantId, String trackingNumber, int fetchedState, String updatedAt,
-                                     ObjectNode payload, String source) {
+                                     ObjectNode payload, String source, JsonNode listItem) {
         String payloadJson;
         try {
             payloadJson = mapper.writeValueAsString(payload);
@@ -302,6 +308,8 @@ public class BostaIngestionHelper {
         }
 
         final long eventId = webhookEventId;
+        // The list item behind this event, for BostaWebhookJob to use instead of a v0 fetch (in memory only).
+        if (listItem != null && listItemCache != null) listItemCache.put(eventId, listItem);
         jobScheduler.enqueue(() -> webhookJob.process(eventId, tenantId));
         log.debug("{}: enqueued event {} for {}", source, webhookEventId, trackingNumber);
         return true;
