@@ -3,7 +3,7 @@ import { Link, useParams } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { Check } from 'lucide-react'
 import { getOrder, OrderDetail as IOrderDetail, ShipmentDetail, AttemptEntry, DeliveryHistoryEntry, holdOrder, releaseOrderHold, updateOrderCod } from '../api'
-import { Alert, Badge, Button, DeliveryBadge, LegStatusBadge, Modal, OrderStatus, Skeleton, cn } from '../components/ui'
+import { Alert, Badge, Button, DeliveryBadge, LegStatusBadge, Modal, OrderStatus, ShippingBadge, Skeleton, cn } from '../components/ui'
 
 export default function OrderDetail() {
   const { t } = useTranslation()
@@ -217,16 +217,23 @@ export default function OrderDetail() {
               <h2 className="text-caption text-muted uppercase tracking-widest mb-3">
                 {t('orderDetail.shipment')}
               </h2>
-              {order.bostaLinkStatus === 'not_created' ? (
-                <Badge tone="critical" label={t('delivery.state.not_created')} />
+              {/* V139: the server-derived shipping badge replaced the reconcile job's
+                  'not_created' flag (red "Shipment not created" on Wijha / not-yet-booked orders). */}
+              {order.shippingBadge && order.shippingBadge.state !== 'linked' ? (
+                <ShippingBadge badge={order.shippingBadge} />
               ) : (
                 <DeliveryBadge state={null} />
               )}
             </section>
           ) : (
-            order.shipments.map(shipment => (
-              <ShipmentCard key={shipment.id} shipment={shipment} />
-            ))
+            <>
+              {order.shippingBadge && order.shippingBadge.state !== 'linked' && (
+                <ShippingBadge badge={order.shippingBadge} />
+              )}
+              {order.shipments.map(shipment => (
+                <ShipmentCard key={shipment.id} shipment={shipment} />
+              ))}
+            </>
           )}
         </div>
 

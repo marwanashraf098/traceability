@@ -371,13 +371,14 @@ public class OverviewService {
         Timestamp cutoff24 = Timestamp.from(now.minusSeconds(24 * 3600L));
         Timestamp cutoff48 = Timestamp.from(now.minusSeconds(48 * 3600L));
 
-        record Candidate(String orderStatus, Timestamp placedAt, OrderStatusDeriver.DerivedOrderStatus derived) {}
+        record Candidate(String orderStatus, Timestamp placedAt, OrderStatusDeriver.DerivedOrderStatus derived,
+                         boolean shippedElsewhere) {}
 
         // placed_at < cutoff24 (the older of the two cutoffs) bounds the fetch to only
         // candidates that could possibly count toward either number — over48 is a strict
         // subset of overdue's placed_at threshold, never a wider one.
         List<Candidate> candidates = jdbc.query("""
-            SELECT o.status, o.placed_at, o.not_traced_at,
+            SELECT o.status, o.placed_at, o.not_traced_at, o.shipping_carrier_class,
                    s.internal_state            AS delivery_state,
                    COALESCE(s.failed_delivery_attempts, 0) AS failed_delivery_attempts,
                    COALESCE(s.number_of_attempts, 0)       AS number_of_attempts,
@@ -430,35 +431,21 @@ public class OverviewService {
                     rs.getObject("is_delayed", Boolean.class),
                     rs.getObject("sla_breached", Boolean.class),
                     notTracedAt != null);
-                return new Candidate(orderStatus, rs.getTimestamp("placed_at"), derived);
+                return new Candidate(orderStatus, rs.getTimestamp("placed_at"), derived,
+                    com.traceability.fulfillment.OrderShippingBadge.isShippedElsewhere(
+                        rs.getString("shipping_carrier_class"), rs.getString("delivery_state")));
             },
             tid, cutoff24);
 
         int overdue = 0, over48 = 0;
         for (Candidate c : candidates) {
-            if (!isStillPrePack(c.orderStatus(), c.derived())) continue;
+            // V139: shipped with another carrier → not waiting to be packed.
+            if (c.shippedElsewhere()) continue;
+            if (!OrderStatusDeriver.isPrePack(c.orderStatus(), c.derived())) continue;
             if (c.placedAt().before(cutoff24)) overdue++;
             if (c.placedAt().before(cutoff48)) over48++;
         }
         return new LateToPack(overdue, over48);
-    }
-
-    // Mirrors funnel()'s New+Picking classification exactly (OrderController.funnel()) —
-    // both must agree on what "not yet packed" means. A shipment record existing
-    // (status.awaiting_courier / status.label_created) is not proof packing happened;
-    // when packedConfirmed is false, the order is still pre-pack regardless of what
-    // rank the shipment itself reached.
-    private static boolean isStillPrePack(String orderStatus, OrderStatusDeriver.DerivedOrderStatus derived) {
-        String primaryKey = derived.primaryKey();
-        boolean isCourierAwbState =
-            "status.awaiting_courier".equals(primaryKey) || "status.label_created".equals(primaryKey);
-        if (isCourierAwbState && !derived.packedConfirmed()) {
-            return true;
-        }
-        return switch (primaryKey) {
-            case "status.new", "status.confirmed", "status.ready_to_pick", "status.picking" -> true;
-            default -> false;
-        };
     }
 
     // ── Top-selling SKUs ─────────────────────────────────────────────────────

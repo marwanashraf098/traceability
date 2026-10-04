@@ -388,6 +388,12 @@ function FlowStrip({ counts }: { counts: FunnelCounts }) {
           {t('overview.flow.completed')} <b className="text-primary font-mono">{completed}</b>
         </span>
       </div>
+      {/* V139: shipped with another carrier — not "New", shown on its own, quietly. */}
+      {counts.shippedElsewhere > 0 && (
+        <p className="text-caption text-muted mt-2" data-testid="flow-shipped-elsewhere">
+          {t('overview.funnel.shippedElsewhere')} <b className="text-primary font-mono">{counts.shippedElsewhere}</b>
+        </p>
+      )}
     </div>
   )
 }

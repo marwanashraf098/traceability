@@ -32,8 +32,11 @@ import java.util.UUID;
  * For each eligible order it searches unlinked_bosta_deliveries by the order number
  * variants (raw, stripped, hashed) and external_id. If a match is found it calls
  * ShipmentLinkService.manualLink() to link it. If no match is found the attempt
- * counter is incremented; after max-attempts cycles the order is flagged
- * bosta_link_status = 'not_created' so the merchant sees a distinct badge.
+ * counter is incremented; after max-attempts cycles the order is no longer a candidate
+ * (bosta_link_attempts < max-attempts). Since 2026-10-05 (V139) the job never sets
+ * bosta_link_status = 'not_created' any more — the order's shipping badge is derived when it is read
+ * (OrderShippingBadge: awaiting booking / not booked for n days / Bosta tracking not linked) — and it
+ * skips orders shipped with another carrier (orders.shipping_carrier_class = 'other_known') entirely.
  *
  * The flag is cleared automatically whenever any path (webhook, backfill, reconcile,
  * AWB scan) creates a shipment for the order via ShipmentLinkService.createOrFindShipment().
@@ -107,6 +110,8 @@ public class BostaOrderReconcileJob {
                 "FROM orders o " +
                 "WHERE o.tenant_id = NULLIF(current_setting('app.current_tenant', true), '')::uuid " +
                 "  AND o.bosta_link_status IS NULL " +
+                "  AND o.shipping_carrier_class IS DISTINCT FROM 'other_known' " +   // V139: shipped with another carrier
+                "  AND o.bosta_link_attempts < ? " +
                 "  AND o.placed_at >= NOW() - (? * INTERVAL '1 day') " +
                 "  AND o.status NOT IN ('delivered','returned','lost','cancelled') " +
                 "  AND (o.bosta_link_last_check IS NULL " +
@@ -124,7 +129,7 @@ public class BostaOrderReconcileJob {
                     rs.getString("number"),
                     rs.getString("external_id"),
                     rs.getInt("bosta_link_attempts")),
-                lookbackDays, batchSize));
+                maxAttempts, lookbackDays, batchSize));
 
             if (orders == null || orders.isEmpty()) {
                 log.debug("BostaOrderReconcileJob: tenant {} — no eligible orders", tenantId);
@@ -186,29 +191,17 @@ public class BostaOrderReconcileJob {
         } else {
             int newAttempts = order.attempts() + 1;
             tx.execute(txs -> {
-                if (newAttempts >= maxAttempts) {
-                    jdbc.update(
-                        "UPDATE orders " +
-                        "SET bosta_link_attempts = ?, " +
-                        "    bosta_link_last_check = NOW(), " +
-                        "    bosta_link_status = 'not_created' " +
-                        "WHERE id = ? " +
-                        "  AND tenant_id = NULLIF(current_setting('app.current_tenant', true), '')::uuid " +
-                        "  AND bosta_link_status IS NULL",
-                        newAttempts, order.id());
-                    log.info("BostaOrderReconcileJob: flagged order {} as not_created after {} attempts",
-                        order.number(), newAttempts);
-                } else {
-                    jdbc.update(
-                        "UPDATE orders " +
-                        "SET bosta_link_attempts = ?, " +
-                        "    bosta_link_last_check = NOW() " +
-                        "WHERE id = ? " +
-                        "  AND tenant_id = NULLIF(current_setting('app.current_tenant', true), '')::uuid",
-                        newAttempts, order.id());
-                    log.debug("BostaOrderReconcileJob: order {} attempt {}/{}",
-                        order.number(), newAttempts, maxAttempts);
-                }
+                // V139: no 'not_created' flag any more — after max-attempts the order just leaves the
+                // candidate set (bosta_link_attempts < max-attempts); its badge is derived at read time.
+                jdbc.update(
+                    "UPDATE orders " +
+                    "SET bosta_link_attempts = ?, " +
+                    "    bosta_link_last_check = NOW() " +
+                    "WHERE id = ? " +
+                    "  AND tenant_id = NULLIF(current_setting('app.current_tenant', true), '')::uuid",
+                    newAttempts, order.id());
+                log.debug("BostaOrderReconcileJob: order {} attempt {}/{}",
+                    order.number(), newAttempts, maxAttempts);
                 return null;
             });
         }

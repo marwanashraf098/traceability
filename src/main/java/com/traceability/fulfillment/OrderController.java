@@ -30,6 +30,24 @@ public class OrderController {
     private final TransactionTemplate tx;
     private final OrderNotesService notesService;
     private final FulfillService fulfillService;
+    private int badgeOverdueDays = 3;
+    private int badgeLinkGraceMinutes = 60;
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public void setShippingBadgeConfig(
+            @org.springframework.beans.factory.annotation.Value("${orders.shipping-badge.overdue-days:3}") int overdueDays,
+            @org.springframework.beans.factory.annotation.Value("${orders.shipping-badge.link-grace-minutes:60}") int graceMinutes) {
+        this.badgeOverdueDays = overdueDays;
+        this.badgeLinkGraceMinutes = graceMinutes;
+    }
+
+    /** Whether "awaiting Bosta booking" can apply at all: the tenant ships with Bosta (or a simulated courier). */
+    private boolean tenantShipsWithBosta(UUID tenantId) {
+        return Boolean.TRUE.equals(jdbc.queryForObject(
+            "SELECT EXISTS (SELECT 1 FROM courier_accounts WHERE tenant_id = ? AND provider = 'bosta' AND status = 'active') " +
+            "    OR EXISTS (SELECT 1 FROM tenant_courier_simulation WHERE tenant_id = ?)",
+            Boolean.class, tenantId, tenantId));
+    }
 
     public OrderController(JdbcTemplate jdbc, ObjectMapper mapper,
                            PlatformTransactionManager txm, OrderNotesService notesService,
@@ -50,7 +68,9 @@ public class OrderController {
         String deliveryState, String exceptionReason, String bostaLinkStatus,
         int failedDeliveryAttempts, Boolean isDelayed, Boolean slaBreached,
         Instant notTracedAt, boolean isExchange,
-        OrderStatusDeriver.DerivedOrderStatus derivedStatus) {}
+        OrderStatusDeriver.DerivedOrderStatus derivedStatus,
+        // V139 (2026-10-05): derived shipping badge — see OrderShippingBadge. Null = no badge.
+        OrderShippingBadge shippingBadge) {}
 
     public record OrderPage(List<OrderSummary> items, int page, int size, long total) {}
 
@@ -102,11 +122,14 @@ public class OrderController {
         // history-based). Server still returns 409 on a forced call; this field only lets
         // the drawer disable Hold/Cancel proactively without a second (client-side)
         // derivation of the same query.
-        boolean physicallyWithCourier) {}
+        boolean physicallyWithCourier,
+        // V139 (2026-10-05): derived shipping badge — see OrderShippingBadge. Null = no badge.
+        OrderShippingBadge shippingBadge) {}
 
     // ── fulfillment funnel — today (Overview dashboard) ─────────────────────
 
-    public record FunnelCounts(int newCount, int picking, int packed, int courier, int delivered) {}
+    public record FunnelCounts(int newCount, int picking, int packed, int courier, int delivered,
+                               int shippedElsewhere) {}
 
     /**
      * FR-Overview §1.3 — bucket counts of TODAY's orders by their derived status.
@@ -146,10 +169,10 @@ public class OrderController {
     @PreAuthorize("hasAnyRole('OWNER', 'MANAGER')")
     @Transactional(readOnly = true)
     public FunnelCounts funnel() {
-        record StatusRow(String orderStatus, OrderStatusDeriver.DerivedOrderStatus derived) {}
+        record StatusRow(String orderStatus, OrderStatusDeriver.DerivedOrderStatus derived, boolean shippedElsewhere) {}
 
         List<StatusRow> rows = jdbc.query("""
-            SELECT o.status, o.not_traced_at,
+            SELECT o.status, o.not_traced_at, o.shipping_carrier_class,
                    s.internal_state            AS delivery_state,
                    COALESCE(s.failed_delivery_attempts, 0) AS failed_delivery_attempts,
                    COALESCE(s.number_of_attempts, 0)       AS number_of_attempts,
@@ -217,12 +240,19 @@ public class OrderController {
                     rs.getObject("is_delayed", Boolean.class),
                     rs.getObject("sla_breached", Boolean.class),
                     notTracedAt != null);
-                return new StatusRow(orderStatus, derived);
+                return new StatusRow(orderStatus, derived,
+                    OrderShippingBadge.isShippedElsewhere(rs.getString("shipping_carrier_class"), rs.getString("delivery_state")));
             });
 
-        int newCount = 0, picking = 0, packed = 0, courier = 0, delivered = 0;
+        int newCount = 0, picking = 0, packed = 0, courier = 0, delivered = 0, shippedElsewhere = 0;
         for (StatusRow row : rows) {
             String primaryKey = row.derived().primaryKey();
+            // V139: shipped with another carrier and still pre-pack in Traced → not "New" (or "Picking");
+            // counted on its own as "Shipped elsewhere".
+            if (row.shippedElsewhere() && OrderStatusDeriver.isPrePack(row.orderStatus(), row.derived())) {
+                shippedElsewhere++;
+                continue;
+            }
             boolean isCourierAwbState =
                 "status.awaiting_courier".equals(primaryKey) || "status.label_created".equals(primaryKey);
             if (isCourierAwbState && !row.derived().packedConfirmed()) {
@@ -241,7 +271,7 @@ public class OrderController {
                 default -> { /* outside the forward-pipeline funnel — not counted */ }
             }
         }
-        return new FunnelCounts(newCount, picking, packed, courier, delivered);
+        return new FunnelCounts(newCount, picking, packed, courier, delivered, shippedElsewhere);
     }
 
     // ── orders summary — all-time, 5-tile calm row (Orders list) ────────────
@@ -544,6 +574,10 @@ public class OrderController {
         pageParams.add(size);
         pageParams.add(offset);
 
+        final Instant badgeNow = Instant.now();
+        final boolean shipsWithBosta = Boolean.TRUE.equals(
+            tx.execute(txs -> tenantShipsWithBosta(TenantContext.require())));
+
         List<OrderSummary> items = tx.execute(txs -> jdbc.query(
             """
             SELECT o.id, o.number, o.customer_name, o.customer_phone,
@@ -559,7 +593,10 @@ public class OrderController {
                    s.is_delayed,
                    s.sla_breached,
                    o.not_traced_at,
-                   (e.id IS NOT NULL) AS is_exchange
+                   (e.id IS NOT NULL) AS is_exchange,
+                   o.is_self_pickup, o.shipping_carrier_class, o.shipping_carrier_name,
+                   """ + OrderShippingBadge.bostaLinkProblemSql(badgeLinkGraceMinutes) + """
+                   AS bosta_link_problem
             """ + baseJoin + """
              ORDER BY o.placed_at DESC NULLS LAST, o.created_at DESC
              LIMIT ? OFFSET ?
@@ -595,7 +632,12 @@ public class OrderController {
                     rs.getObject("sla_breached", Boolean.class),
                     notTracedAt,
                     rs.getBoolean("is_exchange"),
-                    derived
+                    derived,
+                    OrderShippingBadge.derive(rs.getString("status"), rs.getBoolean("is_self_pickup"),
+                        rs.getString("delivery_state"), rs.getString("shipping_carrier_class"),
+                        rs.getString("shipping_carrier_name"), rs.getBoolean("bosta_link_problem"),
+                        rs.getTimestamp("placed_at") != null ? rs.getTimestamp("placed_at").toInstant() : null,
+                        badgeNow, badgeOverdueDays, shipsWithBosta)
                 );
             },
             pageParams.toArray()));
@@ -651,7 +693,8 @@ public class OrderController {
                         rs.getBoolean("is_exchange"),
                         null,  // derivedStatus filled below
                         buildShopifyOrderUrl(rs.getString("shop_domain"), rs.getString("external_id")),
-                        false  // physicallyWithCourier filled below
+                        false,  // physicallyWithCourier filled below
+                        null    // shippingBadge filled below
                     );
                 }, orderId);
 
@@ -843,8 +886,27 @@ public class OrderController {
                 order.status(), order.onHold(), order.holdReason(),
                 order.placedAt(), order.createdAt(),
                 items, shipments, order.bostaLinkStatus(), order.notTracedAt(),
-                order.isExchange(), derived, order.shopifyOrderUrl(), physicallyWithCourier);
+                order.isExchange(), derived, order.shopifyOrderUrl(), physicallyWithCourier,
+                shippingBadge(orderId));
         });
+    }
+
+    /** V139: the detail page's shipping badge — same inputs and derivation as the list. */
+    private OrderShippingBadge shippingBadge(UUID orderId) {
+        UUID tenantId = TenantContext.require();
+        boolean shipsWithBosta = tenantShipsWithBosta(tenantId);
+        return jdbc.query(
+            "SELECT o.status, o.is_self_pickup, o.shipping_carrier_class, o.shipping_carrier_name, o.placed_at, " +
+            "       (SELECT sh.internal_state FROM shipments sh WHERE sh.order_id = o.id AND sh.tenant_id = o.tenant_id " +
+            "          AND sh.shipment_leg = 'forward' ORDER BY sh.created_at DESC, sh.id DESC LIMIT 1) AS forward_state, " +
+            "       " + OrderShippingBadge.bostaLinkProblemSql(badgeLinkGraceMinutes) + " AS bosta_link_problem " +
+            "FROM orders o WHERE o.id = ? AND o.tenant_id = ?",
+            rs -> rs.next() ? OrderShippingBadge.derive(rs.getString("status"), rs.getBoolean("is_self_pickup"),
+                rs.getString("forward_state"), rs.getString("shipping_carrier_class"), rs.getString("shipping_carrier_name"),
+                rs.getBoolean("bosta_link_problem"),
+                rs.getTimestamp("placed_at") != null ? rs.getTimestamp("placed_at").toInstant() : null,
+                Instant.now(), badgeOverdueDays, shipsWithBosta) : null,
+            orderId, tenantId);
     }
 
     // ── merged trace timeline — GET /orders/{id}/timeline (Orders rebuild pass (b)) ────

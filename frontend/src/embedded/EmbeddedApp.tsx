@@ -48,7 +48,7 @@ interface ExceptionRow { type: string | null; severity: string; subjectKey: stri
 interface ExceptionsData { count: number; exceptions: ExceptionRow[] }
 
 // GET /api/v1/embedded/orders/funnel — mirrors OrderController.funnel()'s FunnelCounts shape.
-interface FunnelCounts { newCount: number; picking: number; packed: number; courier: number; delivered: number }
+interface FunnelCounts { newCount: number; picking: number; packed: number; courier: number; delivered: number; shippedElsewhere?: number }
 
 // GET /api/v1/embedded/overview/late-to-pack — mirrors OverviewService.LateToPack.
 interface LateToPack { overdue: number; over48: number }

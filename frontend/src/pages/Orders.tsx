@@ -7,7 +7,7 @@ import {
 } from '../api'
 import {
   Alert, Avatar, Badge, Button, DataTable, type DataTableColumn,
-  EmptyState, LegStatusBadge, Tabs, TableSkeleton,
+  EmptyState, LegStatusBadge, ShippingBadge, Tabs, TableSkeleton,
 } from '../components/ui'
 import OrderDrawer from '../components/OrderDrawer'
 
@@ -124,6 +124,11 @@ export default function Orders() {
 
   function renderDelivery(order: OrderItem) {
     if (!order.deliveryState) {
+      // V139: the server-derived shipping badge (awaiting booking / not booked for n days /
+      // shipped with {carrier} / Bosta tracking not linked / cancelled) when there is one.
+      if (order.shippingBadge && order.shippingBadge.state !== 'linked') {
+        return <ShippingBadge badge={order.shippingBadge} />
+      }
       return <LegStatusBadge legStatus={{ primaryKey: 'orders.delivery.notShipped', tone: 'NEUTRAL' }} />
     }
     // Cell-level label override ONLY — status.label_created itself is untouched (the

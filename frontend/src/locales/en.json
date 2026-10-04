@@ -70,7 +70,8 @@
       "picking": "Picking",
       "packed": "Packed",
       "courier": "Courier",
-      "empty": "No orders yet"
+      "empty": "No orders yet",
+      "shippedElsewhere": "Shipped elsewhere"
     },
     "severity": {
       "title": "Exceptions by severity",
@@ -484,6 +485,14 @@
         "cancelled": "Return Cancelled",
         "lost": "Return Lost"
       }
+    },
+    "shippingBadge": {
+      "shipped_elsewhere": "Shipped with {{carrier}}",
+      "shipped_elsewhere_unnamed": "Shipped with another carrier",
+      "awaiting_booking": "Awaiting Bosta booking",
+      "not_booked_overdue": "Not booked in Bosta for {{days}} days",
+      "bosta_tracking_not_linked": "Bosta tracking not linked",
+      "cancelled": "Cancelled"
     }
   },
   "catalog": {

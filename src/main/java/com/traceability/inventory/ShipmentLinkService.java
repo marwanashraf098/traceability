@@ -759,6 +759,8 @@ public class ShipmentLinkService {
             "    bosta_link_last_check = NULL " +
             "WHERE id = ? AND tenant_id = ? AND bosta_link_status IS NOT NULL",
             orderId, tenantId);
+        // V139: a linked Bosta shipment makes the order's carrier Bosta (it wins over any other).
+        com.traceability.fulfillment.OrderCarrier.recompute(jdbc, tenantId, orderId);
     }
 
     private void scheduleProviderDeliveryIdFetch(UUID shipmentId, String trackingNumber, UUID tenantId) {

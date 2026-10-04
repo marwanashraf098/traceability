@@ -4,6 +4,43 @@
 
 ## Current state
 
+**Order shipping badge + carrier on the order (2026-10-05, branch `feat/order-shipping-carrier-badge` off main 0c6ebe9; not
+merged, not pushed, not deployed). V139. Replaces the reconcile job's red "Shipment not created" badge (bosta_link_status =
+'not_created'), which fired on every order not linked within ~48 min — including Femine's Wijha orders (268 of 378 flagged in
+30 days) and orders simply not booked yet. Option (d) — what happens to Wijha orders' stock / pickability — is DEFERRED
+(status quo; Marawan decides b vs c after talking to the merchant). Pickable gate and Bosta linking untouched.**
+- **Carrier on the order (V139):** `orders.shipping_carrier_class` ('bosta' / 'other_known' / 'unknown' / NULL) +
+  `shipping_carrier_name`, from ONE SQL function `shipping_carrier_of(order)`: non-cancelled fulfillments in
+  `order_fulfillment_tracking` AND in `orders.raw.fulfillments` (the pre-V129 Wijha orders), plus a live (not
+  cancelled/terminated) Bosta forward shipment; Bosta wins, then other_known, then unknown; cancelled fulfillments ignored, so
+  a cancelled Bosta fulfillment flips the order back. The named carriers in the SQL must match
+  `FulfillmentTrackingCapture.OTHER_KNOWN_CARRIERS` (Wijha). Jumi's "Other" stays 'unknown' → Bosta-eligible. Backfilled in
+  the migration. Kept current by `OrderCarrier.recompute()` (only writes on change) from `FulfillmentTrackingCapture.capture()`
+  / `upsertOnly()` (every orders/updated, after the raw order is upserted) and `ShipmentLinkService.clearReconcileFlag()` (every
+  link path).
+- **Badge, derived at read time (`OrderShippingBadge`)** — API field `shippingBadge {state, carrier, days}` on the order list
+  and detail; null = no badge. Precedence: cancelled → linked (live Bosta forward shipment; UI keeps its existing delivery
+  badge) → none (self-pickup, tenant without an active Bosta account or simulated courier, delivered/returned/lost) →
+  bosta_tracking_not_linked (red: a non-cancelled Bosta fulfillment whose tracking number isn't a shipment of the order, with
+  link_status conflict/gave_up or first seen > `orders.shipping-badge.link-grace-minutes` (60) ago) → shipped_elsewhere
+  (neutral, "Shipped with {carrier}") → not_booked_overdue (warning, ≥ `orders.shipping-badge.overdue-days` (3) since placed)
+  → awaiting_booking (neutral). EN + AR labels under `delivery.shippingBadge.*`. Shown on OrderDetail, the order drawer's
+  Shipment tab, and the Orders list's Delivery cell when there's no shipment.
+- **Reconcile:** `BostaOrderReconcileJob` skips other_known orders entirely and never sets 'not_created' any more; at
+  max-attempts an order simply leaves the candidate set (`bosta_link_attempts < max`). The column stays; existing flags in
+  prod stay as they are and nothing displays them (the link paths still clear them).
+- **Funnel / Overview:** `OrderShippingBadge.isShippedElsewhere` (other_known, no live forward shipment) — such orders are
+  not "New" (nor Picking) in `OrderController.funnel()` / `EmbeddedController.ordersFunnel()` and not late-to-pack in
+  `OverviewService.lateToPack()`; `FunnelCounts.shippedElsewhere` is shown as a small line under the Overview flow strip.
+  `OverviewService.isStillPrePack` moved to `OrderStatusDeriver.isPrePack` (shared, same logic).
+- **Tests:** `OrderShippingCarrierTest` (c1–c5 carrier/backfill/reconcile, b1–b7 every badge state through list() AND
+  detail(), f1 funnel + embedded + late-to-pack, i1 app_user cross-tenant isolation); `orderShippingBadge.test.tsx` (every
+  label EN + AR, tones, OrderDetail, Overview count). Revert-checked: 24 backend + 7 frontend mutations, each red.
+  **Existing tests changed:** `BostaOrderReconcileTest.r2` (was "flagged not_created at max" → now "not flagged, no longer a
+  candidate" — the approved behaviour change); `MigrationSmokeTest` 137→138, `NotTracedBackfillTest` 82→83 (+V139).
+- **After deploy (read-only check):** `SELECT shipping_carrier_class, count(*) FROM orders WHERE placed_at > now() -
+  interval '30 days' GROUP BY 1;` — Femine's Wijha orders should read other_known.
+
 **R1 — Scan returns + Pickups on useScanner (2026-10-04, branch `fix/returns-pickups-scanner` off main 9ffcdc2; pushed,
 not merged, not deployed). Frontend only — backend untouched, useScanner unchanged, no migrations. Edits to Scan returns'
 SAFETY-CRITICAL scan handler, refocus effect and scan input approved by Marawan 2026-10-04; Pickups has no marked blocks.**

@@ -369,4 +369,21 @@ public final class OrderStatusDeriver {
         if (CONFLICT_LIVE_STATES.contains(shipmentInternalState)) return "status.conflict.live_shipment";
         return null;
     }
+
+    /**
+     * "Not yet packed" = the funnel's New + Picking buckets (OrderController.funnel(), the embedded funnel and
+     * OverviewService.lateToPack all agree on it). A shipment record existing (status.awaiting_courier /
+     * status.label_created) is not proof packing happened: when packedConfirmed is false the order is still
+     * pre-pack whatever rank the shipment reached. (Moved here from OverviewService.isStillPrePack, V139.)
+     */
+    public static boolean isPrePack(String orderStatus, DerivedOrderStatus derived) {
+        String primaryKey = derived.primaryKey();
+        boolean isCourierAwbState =
+            "status.awaiting_courier".equals(primaryKey) || "status.label_created".equals(primaryKey);
+        if (isCourierAwbState && !derived.packedConfirmed()) return true;
+        return switch (primaryKey) {
+            case "status.new", "status.confirmed", "status.ready_to_pick", "status.picking" -> true;
+            default -> false;
+        };
+    }
 }

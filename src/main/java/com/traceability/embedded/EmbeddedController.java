@@ -1,5 +1,6 @@
 package com.traceability.embedded;
 
+import com.traceability.fulfillment.OrderShippingBadge;
 import com.traceability.fulfillment.OrderStatusDeriver;
 import com.traceability.inventory.ExceptionService;
 import com.traceability.overview.OverviewService;
@@ -174,7 +175,8 @@ public class EmbeddedController {
 
     // ── GET /api/v1/embedded/orders/funnel ────────────────────────────────────
 
-    public record FunnelCounts(int newCount, int picking, int packed, int courier, int delivered) {}
+    public record FunnelCounts(int newCount, int picking, int packed, int courier, int delivered,
+                               int shippedElsewhere) {}
 
     /**
      * Read-only mirror of {@code OrderController.funnel()} (today's orders bucketed via
@@ -189,10 +191,10 @@ public class EmbeddedController {
     @GetMapping("/orders/funnel")
     @PreAuthorize("hasRole('SHOPIFY_EMBEDDED')")
     public FunnelCounts ordersFunnel() {
-        record StatusRow(String orderStatus, OrderStatusDeriver.DerivedOrderStatus derived) {}
+        record StatusRow(String orderStatus, OrderStatusDeriver.DerivedOrderStatus derived, boolean shippedElsewhere) {}
 
         List<StatusRow> rows = tx.execute(txs -> jdbc.query("""
-                SELECT o.status, o.not_traced_at,
+                SELECT o.status, o.not_traced_at, o.shipping_carrier_class,
                        s.internal_state            AS delivery_state,
                        COALESCE(s.failed_delivery_attempts, 0) AS failed_delivery_attempts,
                        COALESCE(s.number_of_attempts, 0)       AS number_of_attempts,
@@ -246,12 +248,19 @@ public class EmbeddedController {
                             rs.getObject("is_delayed", Boolean.class),
                             rs.getObject("sla_breached", Boolean.class),
                             notTracedAt != null);
-                    return new StatusRow(orderStatus, derived);
+                    return new StatusRow(orderStatus, derived,
+                    OrderShippingBadge.isShippedElsewhere(rs.getString("shipping_carrier_class"), rs.getString("delivery_state")));
                 }));
 
-        int newCount = 0, picking = 0, packed = 0, courier = 0, delivered = 0;
+        int newCount = 0, picking = 0, packed = 0, courier = 0, delivered = 0, shippedElsewhere = 0;
         for (StatusRow row : rows) {
             String primaryKey = row.derived().primaryKey();
+            // V139: shipped with another carrier and still pre-pack in Traced → not "New" (or "Picking");
+            // counted on its own as "Shipped elsewhere".
+            if (row.shippedElsewhere() && OrderStatusDeriver.isPrePack(row.orderStatus(), row.derived())) {
+                shippedElsewhere++;
+                continue;
+            }
             boolean isCourierAwbState =
                     "status.awaiting_courier".equals(primaryKey) || "status.label_created".equals(primaryKey);
             if (isCourierAwbState && !row.derived().packedConfirmed()) {
@@ -267,7 +276,7 @@ public class EmbeddedController {
                 default -> { /* outside the forward-pipeline funnel — not counted */ }
             }
         }
-        return new FunnelCounts(newCount, picking, packed, courier, delivered);
+        return new FunnelCounts(newCount, picking, packed, courier, delivered, shippedElsewhere);
     }
 
     // ── GET /api/v1/embedded/overview/late-to-pack ─────────────────────────────
