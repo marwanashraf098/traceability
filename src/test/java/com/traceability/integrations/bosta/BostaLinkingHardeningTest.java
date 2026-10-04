@@ -300,11 +300,15 @@ class BostaLinkingHardeningTest {
             .as("reconcile must not link a CRP row").isZero();
         assertThat(unresolvedCount(tenantA, "9371680874")).isEqualTo(1);
         // The CRP row is not a reconcile candidate at all: the order goes through its normal
-        // attempts and is flagged — rather than reconcile picking the row every tick, having
-        // manualLink refuse it, and never advancing the counter.
+        // attempts up to max-attempts — rather than reconcile picking the row every tick, having
+        // manualLink refuse it, and never advancing the counter. (V139, 2026-10-05: the job no
+        // longer flags 'not_created' at max-attempts; the order just leaves the candidate set.)
+        assertThat(jdbc.queryForObject(
+            "SELECT bosta_link_attempts FROM orders WHERE id = ?", Integer.class, orderId))
+            .as("CRP row is never a reconcile candidate").isEqualTo(MAX_ATTEMPTS);
         assertThat(jdbc.queryForObject(
             "SELECT bosta_link_status FROM orders WHERE id = ?", String.class, orderId))
-            .as("CRP row is never a reconcile candidate").isEqualTo("not_created");
+            .as("V139: never flagged 'not_created'").isNull();
 
         assertManualLinkRefused(crpRowId, orderId, "9371680874");
     }

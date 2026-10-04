@@ -37,7 +37,8 @@ merged, not pushed, not deployed). V139. Replaces the reconcile job's red "Shipm
   detail(), f1 funnel + embedded + late-to-pack, i1 app_user cross-tenant isolation); `orderShippingBadge.test.tsx` (every
   label EN + AR, tones, OrderDetail, Overview count). Revert-checked: 24 backend + 7 frontend mutations, each red.
   **Existing tests changed:** `BostaOrderReconcileTest.r2` (was "flagged not_created at max" → now "not flagged, no longer a
-  candidate" — the approved behaviour change); `MigrationSmokeTest` 137→138, `NotTracedBackfillTest` 82→83 (+V139).
+  candidate" — the approved behaviour change); `BostaLinkingHardeningTest.h4` (asserted 'not_created' after max
+  attempts → now attempts = max and no flag, same change); `MigrationSmokeTest` 137→138, `NotTracedBackfillTest` 82→83 (+V139).
 - **After deploy (read-only check):** `SELECT shipping_carrier_class, count(*) FROM orders WHERE placed_at > now() -
   interval '30 days' GROUP BY 1;` — Femine's Wijha orders should read other_known.
 
