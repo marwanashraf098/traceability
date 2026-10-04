@@ -4,6 +4,30 @@
 
 ## Current state
 
+**R1 — Scan returns + Pickups on useScanner (2026-10-04, branch `fix/returns-pickups-scanner` off main 9ffcdc2; pushed,
+not merged, not deployed). Frontend only — backend untouched, useScanner unchanged, no migrations. Edits to Scan returns'
+SAFETY-CRITICAL scan handler, refocus effect and scan input approved by Marawan 2026-10-04; Pickups has no marked blocks.**
+- **Bugs fixed:** Scan returns disabled its input while a scan was in flight (keystrokes of the next hardware scan dropped —
+  1–4 of 20 sent in a browser burst) and focused the still-disabled input after a 422, so focus was lost until a click;
+  its unconditional click-refocus pulled focus out of the damage-reason field on every click. Pickups returned early while
+  a scan was in flight, leaving the next code in its controlled input — 4–5 of 20 sent, and two back-to-back scans sent
+  ONE request (the second concatenated onto the next).
+- **Scan returns now:** `onScan` (Returns.tsx:650-680) strips all whitespace, POSTs, triggers the screen's own flash,
+  reloads the session; 422 → rejected-scan banner 4 s, other errors → message. Marked flash trigger (:644-647) and overlay
+  unchanged. `useScanner` (:682) with focusPaused while the damage-reason field or abandon modal is open; the reason field
+  gets its own later-mounted click-refocus (:684-697, AwbLinkDialog template). Old refocus effect removed (:638-642 note).
+  Input (:1011-1022): useScanner's ref, never disabled, aria-busy. Waiting scans dropped on abandon (:768) and close (:781).
+  Chips go through handleScan, disabled while scanning.
+- **Pickups now:** `onScan` (PickupSessions.tsx:230-269) = the old handler (optimistic row, rollback, ACCEPTED 1.5 s,
+  outcome banners); `useScanner` (:271) focusPaused while the close confirm is open. Input (:377-386) uncontrolled,
+  useScanner's ref, cleared on Enter; onBlur refocus kept. Waiting scans dropped on Close session (:468) and confirm (:311).
+- **Tests:** `test-browser/returnsPickupsScanner.browser.test.tsx` (6 × Chromium/WebKit — Returns burst / focus after 422 /
+  damage-reason focus; Pickups burst / two back-to-back / focus after reject; all but Pickups reject-focus fail on
+  origin/main — Pickups never disabled its input), `test/returnsPickupsScanner.test.tsx` (8 jsdom must-survive). Existing
+  tests unchanged (no mock edits). vitest 664/664, tsc + build clean, test:browser 38/38 three runs.
+- **Deviation:** Pickups now beeps on scan (useScanner's beep); Scan returns beeps once from the hook (its own playBeep
+  call removed from the scan path, still used by dispositions).
+
 **P1 — PickScreen (queue mode) on useScanner (2026-10-04, branch `fix/pickscreen-scanner` off main 484192e; pushed, not
 merged, not deployed). Frontend only — backend untouched, useScanner unchanged. Edits to PickScreen's SAFETY-CRITICAL
 scan handler, refocus effect and scan input approved by Marawan 2026-10-04.**
