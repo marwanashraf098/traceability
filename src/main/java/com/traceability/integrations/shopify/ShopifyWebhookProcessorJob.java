@@ -29,6 +29,17 @@ import org.springframework.web.server.ResponseStatusException;
  *   #4 — persist raw, ack fast, process async, idempotent (handled by controller + UNIQUE constraint).
  *   #2 — piece_events is INSERT-only: redaction handlers MUST NOT touch piece_events.
  *   #8 — no silent drops: unmapped/unknown topics raise an exception, never silently skip.
+ *
+ * Retry and ordering (2026-10-04, V136):
+ *   - an event already processed is a no-op (the sweeper / a JobRunr retry / the re-process may run it again);
+ *   - ordering safety, before applying orders/create, orders/updated, products/create, products/update:
+ *     if a LATER event for the same order / product has been processed, or Traced's stored copy is
+ *     strictly newer (raw.updated_at), the event is marked superseded (processed_at + superseded_at) and
+ *     NOT applied — an old payload never overwrites newer data;
+ *   - a transient DB failure (no connection) is rethrown: JobRunr retries the job (3 times, seconds apart);
+ *   - any other failure is stored (process_error) with retry_count + 1 and next_retry_at on a backoff
+ *     (1, 5, 15, 60, 240 min) for ShopifyWebhookRetrySweeper — after shopify.webhook.retry.max-attempts the
+ *     error stays and next_retry_at is cleared.
  */
 @Component
 public class ShopifyWebhookProcessorJob {
@@ -36,16 +47,32 @@ public class ShopifyWebhookProcessorJob {
     private static final Logger log = LoggerFactory.getLogger(ShopifyWebhookProcessorJob.class);
 
     private static final String LOAD_EVENT = """
-            SELECT swe.tenant_id, swe.topic, swe.shop_domain, swe.payload_raw::text
+            SELECT swe.tenant_id, swe.topic, swe.shop_domain, swe.payload_raw::text, swe.received_at,
+                   swe.processed_at, swe.retry_count
             FROM shopify_webhook_events swe
             WHERE swe.id = ?
             """;
 
     private static final String MARK_PROCESSED =
-        "UPDATE shopify_webhook_events SET processed_at = now(), process_error = NULL WHERE id = ?";
+        "UPDATE shopify_webhook_events SET processed_at = now(), process_error = NULL, next_retry_at = NULL WHERE id = ?";
 
+    private static final String MARK_SUPERSEDED =
+        "UPDATE shopify_webhook_events SET processed_at = now(), superseded_at = now(), process_error = NULL, " +
+        "next_retry_at = NULL WHERE id = ?";
+
+    /** Failure: the error, one more attempt counted, and the next sweeper attempt (NULL once out of attempts). */
     private static final String MARK_ERROR =
-        "UPDATE shopify_webhook_events SET process_error = ? WHERE id = ?";
+        "UPDATE shopify_webhook_events SET process_error = ?, retry_count = retry_count + 1, " +
+        "  next_retry_at = CASE WHEN retry_count + 1 >= ? THEN NULL " +
+        "                       ELSE now() + (? * INTERVAL '1 minute') END " +
+        "WHERE id = ?";
+
+    /** Backoff in minutes after the n-th failure (n = retry_count before this failure). */
+    static final int[] RETRY_BACKOFF_MINUTES = {1, 5, 15, 60, 240};
+
+    /** Topics whose handler upserts the resource from the payload — the ones ordering safety covers. */
+    static final java.util.Set<String> ORDER_UPSERT_TOPICS = java.util.Set.of("orders/create", "orders/updated");
+    static final java.util.Set<String> PRODUCT_UPSERT_TOPICS = java.util.Set.of("products/create", "products/update");
 
     private static final String DISCONNECT_STORE =
         "UPDATE stores SET status = 'disconnected' WHERE shop_domain = ? AND tenant_id = ?";
@@ -138,6 +165,12 @@ public class ShopifyWebhookProcessorJob {
     private final ShopifyCatalogActivationService activationService;
     private final TransactionTemplate tx;
     private final FulfillmentTrackingCapture fulfillmentTracking;
+    private int maxAttempts = 5;
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public void setMaxAttempts(@org.springframework.beans.factory.annotation.Value("${shopify.webhook.retry.max-attempts:5}") int maxAttempts) {
+        this.maxAttempts = maxAttempts;
+    }
 
     public ShopifyWebhookProcessorJob(JdbcTemplate jdbc,
                                        ObjectMapper mapper,
@@ -155,7 +188,7 @@ public class ShopifyWebhookProcessorJob {
         this.fulfillmentTracking = fulfillmentTracking;
     }
 
-    @Job(name = "Shopify webhook processor — event %0")
+    @Job(name = "Shopify webhook processor — event %0", retries = 3)
     public void process(UUID eventId, UUID tenantId) {
         // tenantId is passed from the controller (which resolved it) so the GUC is set
         // before the first SELECT. Without it, shopify_webhook_events RLS returns no rows.
@@ -166,7 +199,9 @@ public class ShopifyWebhookProcessorJob {
                     return new Object[]{
                         rs.getString("topic"),
                         rs.getString("shop_domain"),
-                        rs.getString("payload_raw")
+                        rs.getString("payload_raw"),
+                        rs.getTimestamp("received_at"),
+                        rs.getTimestamp("processed_at")
                     };
                 }, eventId));
 
@@ -178,20 +213,88 @@ public class ShopifyWebhookProcessorJob {
             String topic      = (String) row[0];
             String shopDomain = (String) row[1];
             String payloadStr = (String) row[2];
+            java.sql.Timestamp receivedAt = (java.sql.Timestamp) row[3];
+            if (row[4] != null) {
+                log.debug("Webhook event {} already processed — nothing to do", eventId);
+                return;
+            }
 
             try {
                 JsonNode payload = mapper.readTree(payloadStr);
+                String superseded = supersededReason(tenantId, eventId, topic, payload, receivedAt);
+                if (superseded != null) {
+                    tx.execute(s -> { jdbc.update(MARK_SUPERSEDED, eventId); return null; });
+                    log.info("Webhook event {} ({} shop={}) superseded — not applied: {}", eventId, topic, shopDomain, superseded);
+                    return;
+                }
                 dispatch(tenantId, topic, shopDomain, payload);
                 tx.execute(s -> { jdbc.update(MARK_PROCESSED, eventId); return null; });
             } catch (Exception e) {
+                if (isTransientDbFailure(e)) {
+                    // No connection: let JobRunr retry the whole job in a few seconds. If that runs out,
+                    // the row stays unprocessed and ShopifyWebhookRetrySweeper picks it up.
+                    log.warn("Webhook processor: no DB connection for event {} ({}) — JobRunr will retry: {}",
+                        eventId, topic, e.toString());
+                    throw e instanceof RuntimeException re ? re : new IllegalStateException(e);
+                }
                 log.error("Webhook processor failed: eventId={} topic={} shop={}", eventId, topic, shopDomain, e);
                 String errMsg = e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName();
+                String stored = errMsg.length() > 2000 ? errMsg.substring(0, 2000) : errMsg;
                 tx.execute(s -> {
-                    jdbc.update(MARK_ERROR, errMsg.length() > 2000 ? errMsg.substring(0, 2000) : errMsg, eventId);
+                    Integer done = jdbc.queryForObject("SELECT retry_count FROM shopify_webhook_events WHERE id = ?",
+                        Integer.class, eventId);
+                    int n = done == null ? 0 : done;
+                    int backoff = RETRY_BACKOFF_MINUTES[Math.min(n, RETRY_BACKOFF_MINUTES.length - 1)];
+                    jdbc.update(MARK_ERROR, stored, maxAttempts, backoff, eventId);
                     return null;
                 });
             }
         });
+    }
+
+    /**
+     * Ordering safety: why this order / product event must not be applied, or null. Only for the upsert
+     * topics. "Later" is received_at; "newer" is a strictly greater updated_at in Traced's stored raw.
+     */
+    String supersededReason(UUID tenantId, UUID eventId, String topic, JsonNode payload, java.sql.Timestamp receivedAt) {
+        boolean order = ORDER_UPSERT_TOPICS.contains(topic);
+        boolean product = PRODUCT_UPSERT_TOPICS.contains(topic);
+        if (!order && !product) return null;
+        String gid = payload.path("admin_graphql_api_id").asText(null);
+        if (gid == null || gid.isBlank()) return null;
+        java.util.Set<String> family = order ? ORDER_UPSERT_TOPICS : PRODUCT_UPSERT_TOPICS;
+        String later = tx.execute(s -> jdbc.query(
+            "SELECT topic || ' received ' || received_at FROM shopify_webhook_events " +
+            "WHERE tenant_id = ? AND id <> ? AND topic = ANY(?) AND payload_raw->>'admin_graphql_api_id' = ? " +
+            "  AND received_at > ? AND processed_at IS NOT NULL AND process_error IS NULL AND superseded_at IS NULL " +
+            "ORDER BY received_at DESC LIMIT 1",
+            rs -> rs.next() ? rs.getString(1) : null,
+            tenantId, eventId, family.toArray(new String[0]), gid, receivedAt));
+        if (later != null) return "a later event for " + gid + " was already applied (" + later + ")";
+        String updatedAt = payload.path("updated_at").asText(null);
+        if (updatedAt == null || updatedAt.isBlank()) return null;
+        String table = order ? "orders" : "products";
+        try {
+            Boolean newer = tx.execute(s -> jdbc.query(
+                "SELECT (raw->>'updated_at')::timestamptz > ?::timestamptz FROM " + table +
+                " WHERE tenant_id = ? AND external_id = ? AND raw->>'updated_at' IS NOT NULL",
+                rs -> rs.next() ? rs.getBoolean(1) : null, updatedAt, tenantId, gid));
+            if (Boolean.TRUE.equals(newer)) return "Traced already holds a newer " + gid + " (stored updated_at > " + updatedAt + ")";
+        } catch (org.springframework.dao.DataAccessException e) {
+            log.debug("Ordering check: unreadable updated_at for {} — applying: {}", gid, e.getMessage());
+        }
+        return null;
+    }
+
+    /** No DB connection (pool exhausted / DB unreachable) anywhere in the cause chain. */
+    static boolean isTransientDbFailure(Throwable e) {
+        for (Throwable t = e; t != null; t = t.getCause()) {
+            if (t instanceof java.sql.SQLTransientConnectionException
+                || t instanceof org.springframework.jdbc.CannotGetJdbcConnectionException
+                || t instanceof org.springframework.transaction.CannotCreateTransactionException) return true;
+            if (t.getCause() == t) break;
+        }
+        return false;
     }
 
     // ---- dispatch -------------------------------------------------------

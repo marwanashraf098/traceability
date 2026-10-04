@@ -129,6 +129,22 @@ shopify:
   # Base URL for webhook callback registration (must be the backend server URL, not the SPA).
   webhook-base-url: ${SHOPIFY_WEBHOOK_BASE_URL:http://localhost:8080}
 
+  # Shopify webhook processing reliability (2026-10-04).
+  webhook:
+    # The endpoint waits at most this long for the JobRunr enqueue; after that it still answers 200 and
+    # the saved event is left for the retry sweeper.
+    enqueue-timeout-ms: 2000
+    # V136: failed events retried with backoff (1, 5, 15, 60, 240 min) up to max-attempts; events never
+    # processed are swept after stale-minutes, within window-hours (ShopifyWebhookRetrySweeper).
+    retry:
+      max-attempts: 5
+      stale-minutes: 30
+      window-hours: 48
+    # One-time re-process of unapplied events (ShopifyWebhookReprocessService). Env
+    # SHOPIFY_WEBHOOK_REPROCESS_ON_STARTUP=<tenant ids>|all; dry run unless SHOPIFY_WEBHOOK_REPROCESS_APPLY=true.
+    reprocess:
+      on-startup: ""
+      apply: false
 bosta:
   # One request budget per Bosta API key, shared by every caller (BostaRateLimiter). A 429's
   # retry-after blocks the key; user-facing calls (print, booking, pickup) go before polling.
