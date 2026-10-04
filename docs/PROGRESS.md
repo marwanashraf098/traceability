@@ -4,6 +4,30 @@
 
 ## Current state
 
+**Review mode S7 — click-to-scan helpers + reviewer connect path + ops hardening (2026-10-04, branch
+`feat/review-tenant-s7` off main 9518feb, worktree `.claude/worktrees/review-s7`; not merged, not deployed). No migration.**
+- Capability: `ReviewCapabilities` (scanHelpers = is_demo OR simulated; demoMode = is_demo); `/me` carries both.
+  `GET /api/v1/scan-helpers/{context}` (pieces?variantId / waybills / pickup / returns / lookup) — 404 unless scanHelpers.
+- Screens (`ScanHelperChips` → the screen's own scan handler): pick screen (pieces + "Use this AWB"), waybill pack
+  session (waybills → pieces), pickup session, return session, Lookup. No-stock hint → Receiving. Station exit without
+  password: demo only. `DEMO_TENANT_ID` no longer read by any screen (constant kept for tests).
+- Fix A: NotLinked "Open Traced" → `/settings?tab=connections&shop=<shop>` (only *.myshopify.com) + "reload this page";
+  RequireAuth passes `state.from`, Login returns to it (in-app paths only, `loginReturnPath.ts`); the Shopify card
+  prefills the reviewer connect form from `?shop=` (validated). Fix B: the no-stock hint.
+- Ops: `OpsSecretFilter` before body parsing; `HttpMessageNotReadableException` → 400 BAD_REQUEST_BODY.
+- Tests: `ScanHelpersTest` h1–h6 (h4 = every candidate accepted by the real scan endpoint; h6 app_user + RLS),
+  `OpsHardeningTest`, `OpsSecretFilterTest`, frontend `scanHelperScreens` (11), `reviewerConnectPath` (7); edited with
+  approval: fulfillDemoScanHelper, fulfillDemoAwbHelper, stationExitDemo (+ review-tenant case), embeddedNotLinked (href),
+  RlsCoverageTest (EXEMPT entry). Revert-checked: 8 backend + 15 frontend mutations, each red.
+- **Review notes (reviewer steps):** install → NotLinked → Open Traced → sign in (reviewer@tracedtech.com) → lands on
+  Settings → Connections with the shop prefilled → "Connect" (For Shopify reviewers) → approve in Shopify → reload the
+  admin tab. Automatic after connect (ShopifyImportJob): "Traced Main Warehouse" location created in their store and
+  linked (Settings → Locations: Shopify sync = linked), products imported, active variants activated there. Then
+  Receiving → New Session → add 2 units of a product → Finalize (pieces + labels; +2 at the Traced location in Shopify)
+  → place an order in Shopify for it → it appears in Pick & Pack with a simulated waybill → open it → tap Scan on a
+  piece → Print waybill (simulated PDF; required before Complete) → Complete → "Use this AWB" → Pickups: new session →
+  tap Scan → Close.
+
 **Review mode S6 — reset the review tenant (2026-10-04, branch `feat/review-tenant-s6` off main bdb7036, worktree
 `.claude/worktrees/review-s6`; not merged, not deployed). No migration.**
 - `scripts/ops/review-tenant-reset.sql`: `psql "<conn>" -v ON_ERROR_STOP=1 -v tenant_id=<id> [-v commit=yes] -f …` —

@@ -7,6 +7,7 @@ import AuthLayout from '../components/AuthLayout'
 import { Input, Button } from '../components/ui'
 import { useStation } from '../components/StationProvider'
 import { DEMO_SESSION_MARKER, DEMO_ACCESS_TOKEN_KEY } from '../demoConstants'
+import { returnPath } from './loginReturnPath'
 
 export default function Login() {
   const { t }      = useTranslation()
@@ -39,7 +40,7 @@ export default function Login() {
       // sign in via the station PIN gate) — clear any persisted stationMode flag
       // so this device never lands back in the gate instead of the app.
       exitStationMode()
-      navigate('/overview')
+      navigate(returnPath(location.state) ?? '/overview')
     } catch {
       setError(t('login.error'))
     } finally {

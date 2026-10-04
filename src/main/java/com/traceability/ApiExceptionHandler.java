@@ -22,6 +22,7 @@ import org.springframework.dao.DataAccessException;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.jdbc.BadSqlGrammarException;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.core.Authentication;
@@ -259,6 +260,17 @@ public class ApiExceptionHandler {
     ResponseEntity<LookupNotFoundBody> handleLookupNotFound(LookupNotFoundException ex) {
         return ResponseEntity.status(HttpStatus.NOT_FOUND)
             .body(new LookupNotFoundBody(ex.getCode(), ex.getQuery()));
+    }
+
+    record UnreadableBodyBody(String error, String message) {}
+
+    // A missing or unreadable request body (malformed JSON, wrong type) is the caller's mistake →
+    // 400, not the catch-all 500. Never log or echo the body or the parser's message: it can carry
+    // what the caller sent (an ops request body carries a password).
+    @ExceptionHandler(HttpMessageNotReadableException.class)
+    ResponseEntity<UnreadableBodyBody> handleUnreadableBody(HttpMessageNotReadableException ex) {
+        return ResponseEntity.badRequest()
+            .body(new UnreadableBodyBody("BAD_REQUEST_BODY", "The request body is missing or not readable"));
     }
 
     @ExceptionHandler(ResponseStatusException.class)

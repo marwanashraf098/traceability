@@ -2,6 +2,8 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
 import { EmptyState, Spinner } from '../components/ui'
 import { getAccessToken, clearAccessToken } from '../auth'
+import { useCapabilities } from '../capabilities'
+import ScanHelperChips from '../components/scanHelpers/ScanHelperChips'
 
 const BASE = '/api/v1'
 function authHeaders() {
@@ -225,6 +227,7 @@ function SessionView({ session: initial, onRefresh, onBack }: {
   const feedbackTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const isOpen = session.sessionStatus === 'open'
+  const { scanHelpers } = useCapabilities()
 
   // Always refocus the input after any interaction.
   const refocus = useCallback(() => {
@@ -380,6 +383,12 @@ function SessionView({ session: initial, onRefresh, onBack }: {
             autoCorrect="off"
             spellCheck={false}
           />
+
+          {/* Review mode S7: click-to-scan chips (demo / review tenant only) — through handleScan. */}
+          {scanHelpers && (
+            <ScanHelperChips context="pickup" disabled={processing} onScan={handleScan}
+              refreshKey={scans.filter(s => !s.shipmentId.startsWith('optimistic-')).length} />
+          )}
 
           {/* Feedback banner */}
           {feedback && (

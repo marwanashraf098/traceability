@@ -12,6 +12,8 @@ import {
 } from '../api'
 import { Badge, Spinner } from '../components/ui'
 import OrderDrawer from '../components/OrderDrawer'
+import { useCapabilities } from '../capabilities'
+import ScanHelperChips from '../components/scanHelpers/ScanHelperChips'
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -639,6 +641,7 @@ export default function LookupPage() {
   const [notFound, setNotFound] = useState(false)
   // Raw ref kept here (same pattern as Layout search) — Input wraps in div, no forwardRef
   const inputRef = useRef<HTMLInputElement>(null)
+  const { scanHelpers } = useCapabilities()
 
   const doLookup = useCallback(async (q: string) => {
     const trimmed = q.trim()
@@ -679,6 +682,11 @@ export default function LookupPage() {
         hasResult={!!result}
         inputRef={inputRef}
       />
+
+      {/* Review mode S7: a few pieces worth tracing (demo / review tenant only). */}
+      {scanHelpers && !result && !loading && (
+        <ScanHelperChips context="lookup" onScan={code => { setQuery(code); doLookup(code) }} />
+      )}
 
       {loading && !result && (
         <div className="flex justify-center py-16">

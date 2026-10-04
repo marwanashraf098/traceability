@@ -3,14 +3,14 @@ import { useNavigate } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { Delete } from 'lucide-react'
 import {
-  getStationRoster, switchPin, getMe, login, getRoleFromToken, getTenantIdFromToken,
+  getStationRoster, switchPin, getMe, login, getRoleFromToken,
   StationRosterEntry,
 } from '../api'
 import { setAccessToken, clearAccessToken } from '../auth'
 import { useStation } from './StationProvider'
 import { Button, Input, cn } from './ui'
 import { Logo } from './Logo'
-import { DEMO_TENANT_ID } from '../demoConstants'
+import { useCapabilities } from '../capabilities'
 
 type Step = 'roster' | 'pin' | 'exit'
 
@@ -363,11 +363,13 @@ function ExitStep({ onCancel, onExited }: { onCancel: () => void; onExited: () =
   // value (DemoSeeder.randomUndisclosedPassword()) by design, same as any real
   // tenant's owner password would be unknown to a walk-up visitor. Real tenants
   // are unaffected: their owner/manager always knows their own credential, so the
-  // password re-auth flow below is untouched for them. getTenantIdFromToken()
-  // reads the CURRENT in-memory token — the one that got this visitor into
-  // station mode in the first place, still valid the whole time they're on the
-  // gate (entering station mode doesn't clear it).
-  const isDemoTenant = getTenantIdFromToken() === DEMO_TENANT_ID
+  // password re-auth flow below is untouched for them. /me is asked with the
+  // CURRENT in-memory token — the one that got this visitor into station mode in
+  // the first place, still valid the whole time they're on the gate (entering
+  // station mode doesn't clear it).
+  // Review mode S7: demoMode comes from /me (ReviewCapabilities) — the public demo only; a review
+  // tenant's owner knows the password and uses the normal exit.
+  const { demoMode: isDemoTenant } = useCapabilities()
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()

@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeEach, afterEach, vi } from 'vitest'
-import { screen, render, cleanup, fireEvent } from '@testing-library/react'
+import { screen, render, cleanup, fireEvent, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Routes, Route } from 'react-router-dom'
 import { I18nextProvider, initReactI18next } from 'react-i18next'
@@ -11,6 +11,7 @@ import { StationProvider } from '../components/StationProvider'
 import { setAccessToken, clearAccessToken } from '../auth'
 import { getTenantIdFromToken } from '../api'
 import { DEMO_TENANT_ID, DEMO_SESSION_MARKER } from '../demoConstants'
+import { resetCapabilitiesCache } from '../capabilities'
 
 const testI18n = i18next.createInstance()
 testI18n.use(initReactI18next).init({
@@ -36,10 +37,12 @@ function jsonResponse(status: number, body: unknown) {
   })
 }
 
-function mockFetchDefault() {
+function mockFetchDefault(me: unknown = null) {
   vi.stubGlobal('fetch', vi.fn((url: string) => {
     if (url.includes('/station/roster')) return jsonResponse(200, [])
     if (url.includes('/auth/refresh')) return jsonResponse(401, {})
+    // S7: the demo-only exit reads demoMode from /me (no /me answer → a real merchant).
+    if (me && url.endsWith('/me')) return jsonResponse(200, me)
     return jsonResponse(404, {})
   }))
 }
@@ -73,6 +76,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.unstubAllGlobals()
+  resetCapabilitiesCache()
   cleanup()
 })
 
@@ -105,11 +109,12 @@ describe('StationGate ExitStep — demo-only no-password bypass (FIX 3a)', () =>
   test('demo tenant token: "Exit demo" button appears and exits with no password', async () => {
     localStorage.setItem('stationMode', 'true')
     setAccessToken(fakeJwt({ role: 'owner', tenant: DEMO_TENANT_ID }))
+    mockFetchDefault({ name: 'Demo', email: null, role: 'owner', scanHelpers: true, demoMode: true })
 
     renderGated()
     await goToExitStep()
 
-    const demoExitButton = screen.getByRole('button', { name: 'Exit demo — no password needed' })
+    const demoExitButton = await screen.findByRole('button', { name: 'Exit demo — no password needed' })
     await userEvent.click(demoExitButton)
 
     // exitStationMode() fired directly — no login() call, no email/password
@@ -127,6 +132,21 @@ describe('StationGate ExitStep — demo-only no-password bypass (FIX 3a)', () =>
 
     expect(screen.queryByRole('button', { name: /exit demo/i })).not.toBeInTheDocument()
     // The real password-reauth form is still present and unchanged.
+    expect(screen.getByRole('button', { name: 'Exit' })).toBeInTheDocument()
+  })
+
+  test('review tenant (/me scanHelpers but not demoMode): no demo-exit button — the normal password exit (S7)', async () => {
+    localStorage.setItem('stationMode', 'true')
+    setAccessToken(fakeJwt({ role: 'owner', tenant: 'a-review-tenant-id' }))
+    const me = { name: 'Reviewer', email: 'reviewer@tracedtech.com', role: 'owner', scanHelpers: true, demoMode: false }
+    mockFetchDefault(me)
+
+    renderGated()
+    await goToExitStep()
+
+    await waitFor(() => expect((fetch as unknown as { mock: { calls: unknown[][] } }).mock.calls
+      .some(([u]) => String(u).endsWith('/me'))).toBe(true))
+    expect(screen.queryByRole('button', { name: /exit demo/i })).not.toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Exit' })).toBeInTheDocument()
   })
 

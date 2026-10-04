@@ -146,6 +146,9 @@ class RlsCoverageTest {
     // ── Patterns consciously excluded, with reasons ────────────────────────────
 
     private static final Map<String, String> EXEMPT = Map.ofEntries(
+            entry("/api/v1/scan-helpers/{context}",
+                    "capability-gated: 404 for every real tenant (the only kind this class seeds) — " +
+                    "candidates, the gate and RLS are covered by ScanHelpersTest h2/h3/h6 (h6 on app_user)"),
             entry("/api/v1/health",
                     "no DB query — returns static UP status"),
             entry("/api/v1/portal/{slug}/config",

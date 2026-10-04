@@ -521,6 +521,19 @@ function OrdersTable({ state }: { state: AsyncState<EmbeddedOrderRow[]> }) {
 
 // ── Section: Not linked to any Traced account ─────────────────────────────
 
+const SHOP_RE = /^[a-z0-9][a-z0-9-]*\.myshopify\.com$/
+
+/**
+ * Review mode S7 (fix A): "Open Traced" lands on Settings → Connections with this store's domain
+ * prefilled (Shopify loads the embedded app with ?shop=<domain>). Only a *.myshopify.com domain is
+ * passed on; otherwise the plain Connections page.
+ */
+export function notLinkedTracedUrl(search: string): string {
+  const shop = new URLSearchParams(search).get('shop')?.trim().toLowerCase() ?? ''
+  const base = `${SaaS}/settings?tab=connections`
+  return SHOP_RE.test(shop) ? `${base}&shop=${encodeURIComponent(shop)}` : base
+}
+
 /**
  * Option A (2026-09-04): a cold Shopify-side install no longer auto-provisions a tenant
  * (see ShopifyOAuthService.path2()). This renders instead of the dashboard whenever the
@@ -535,6 +548,7 @@ function OrdersTable({ state }: { state: AsyncState<EmbeddedOrderRow[]> }) {
  */
 export function NotLinked({ lang = 'en' }: { lang?: 'en' | 'ar' }) {
   const copy = notLinkedCopy[lang]
+  const openTracedUrl = notLinkedTracedUrl(window.location.search)
 
   useEffect(() => {
     document.documentElement.dir  = lang === 'ar' ? 'rtl' : 'ltr'
@@ -554,8 +568,9 @@ export function NotLinked({ lang = 'en' }: { lang?: 'en' | 'ar' }) {
             </Text>
             <Text as="p">
               {copy.existingAccount}{' '}
-              <Link url={SaaS} external>{copy.openTraced}</Link>
+              <Link url={openTracedUrl} external>{copy.openTraced}</Link>
             </Text>
+            <Text as="p" tone="subdued">{copy.reloadHint}</Text>
           </BlockStack>
         </BlockStack>
       </Card>

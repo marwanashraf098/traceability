@@ -1,4 +1,4 @@
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
+import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom'
 import { useState, useEffect, useRef, lazy, Suspense } from 'react'
 import { getAccessToken, setAccessToken, clearAccessToken } from './auth'
 import { getRoleFromToken, getJwtExpiry } from './api'
@@ -133,6 +133,7 @@ function AuthLoadingSpinner() {
 export function RequireAuth({ children }: { children: React.ReactNode }) {
   const state = useAuthRefresh()
   const { stationMode, currentWorker } = useStation()
+  const location = useLocation()
 
   if (state === 'loading') {
     return <AuthLoadingSpinner />
@@ -147,7 +148,9 @@ export function RequireAuth({ children }: { children: React.ReactNode }) {
     if (sessionStorage.getItem(DEMO_SESSION_MARKER) === '1') {
       return <Navigate to="/demo?expired=1" replace />
     }
-    return <Navigate to="/login" replace />
+    // Review mode S7 (fix A): come back here after signing in — e.g. the embedded app's
+    // "Open Traced" deep link to /settings?tab=connections&shop=… (Login checks it's ours).
+    return <Navigate to="/login" replace state={{ from: location.pathname + location.search }} />
   }
   // Worker Station Gate (Phase C): every fresh open (reload/reboot resets
   // currentWorker to null, in-memory only) lands on the gate whenever the

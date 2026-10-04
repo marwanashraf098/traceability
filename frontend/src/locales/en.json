@@ -636,13 +636,8 @@
       "mandatoryNote": "Mandatory — this step is required."
     },
     "noPiecesScanned": "No pieces scanned yet",
-    "demoScan": {
-      "hint": "Demo: no scanner needed — tap Scan on a piece",
-      "scan": "Scan",
-      "scanAria": "Scan {{barcode}}"
-    },
     "demoAwb": {
-      "hint": "Demo: this order's waybill",
+      "hint": "No scanner needed: this order's waybill",
       "use": "Use this AWB"
     },
     "selfPickup": "Self-Pickup",
@@ -3006,6 +3001,25 @@
       "unsupported": "This browser can't use the camera.",
       "denied": "Camera access was refused. Allow it in the browser settings, then tap Start scanning.",
       "failed": "The camera couldn't start. Tap Start scanning to try again."
+    }
+  },
+  "scanHelpers": {
+    "scan": "Scan",
+    "scanAria": "Scan {{code}}",
+    "hint": {
+      "pieces": "No scanner needed — tap Scan on a piece",
+      "waybills": "No scanner needed — tap Scan on a waybill to open its order",
+      "pickup": "No scanner needed — tap Scan on a packed waybill to hand it over",
+      "returns": "No scanner needed — tap Scan on a returned piece",
+      "lookup": "Try one — tap Scan to trace a piece"
+    },
+    "noStock": "No stock of this item in Traced yet — receive some first.",
+    "noStockLink": "Go to Receiving",
+    "status": {
+      "delivered": "Delivered",
+      "with_courier": "With courier",
+      "packed": "Packed",
+      "available": "In stock"
     }
   }
 }

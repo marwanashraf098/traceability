@@ -4,6 +4,7 @@ import { renderWithProviders, screen, waitFor } from './renderWithProviders'
 import { stubFetchWithShellDefaults } from './mockShellFetch'
 import { setAccessToken, clearAccessToken } from '../auth'
 import { DEMO_TENANT_ID } from '../demoConstants'
+import { resetCapabilitiesCache } from '../capabilities'
 import Fulfill from '../pages/Fulfill'
 
 /**
@@ -51,7 +52,7 @@ function makeFetch() {
       return jsonOk({ shipmentId: 'ship-1', trackingNumber: OWN_AWB, linkedPieces: 1, orderStatus: 'awaiting_pickup' })
     }
     if (url.endsWith('/fulfill/order-1')) return jsonOk(DETAIL)
-    if (url.includes('/inventory/pieces?')) return jsonOk({ items: [], nextCursor: null })
+    if (url.includes('/scan-helpers/')) return jsonOk({ items: [] })
     return jsonOk({})
   })
 }
@@ -71,13 +72,14 @@ describe('Post-Complete AWB dialog — demo AWB helper', () => {
   })
   afterEach(() => {
     clearAccessToken()
+    resetCapabilitiesCache()
     vi.unstubAllGlobals()
   })
 
   test('demo tenant → shows only this order\'s AWB; "Use this AWB" submits via the real link handler → Order complete', async () => {
     setAccessToken(tokenFor(DEMO_TENANT_ID))
     const fetchFn = makeFetch()
-    stubFetchWithShellDefaults(fetchFn)
+    stubFetchWithShellDefaults(fetchFn, { me: { name: 'Demo', email: null, role: 'owner', scanHelpers: true, demoMode: true } })
     const user = await completeOrder1()
 
     const helper = await screen.findByTestId('demo-awb-helper')
@@ -96,7 +98,7 @@ describe('Post-Complete AWB dialog — demo AWB helper', () => {
     expect(await screen.findByText('Order complete')).toBeInTheDocument()
   })
 
-  test('non-demo tenant → the dialog has no AWB helper', async () => {
+  test('real merchant (/me scanHelpers false) → the dialog has no AWB helper', async () => {
     setAccessToken(tokenFor('11111111-2222-3333-4444-555555555555'))
     stubFetchWithShellDefaults(makeFetch())
     await completeOrder1()

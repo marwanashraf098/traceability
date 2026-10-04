@@ -120,7 +120,7 @@ describe('EmbeddedApp — cold install (NOT_PROVISIONED)', () => {
     expect(newAccountLink).toHaveAttribute('href', 'https://tracedtech.com')
 
     const openTracedLink = screen.getByRole('link', { name: 'Open Traced →' })
-    expect(openTracedLink).toHaveAttribute('href', 'https://app.tracedtech.com')
+    expect(openTracedLink).toHaveAttribute('href', 'https://app.tracedtech.com/settings?tab=connections')
 
     // Real interaction path (not just a static assertion) — must not throw.
     await user.click(openTracedLink)

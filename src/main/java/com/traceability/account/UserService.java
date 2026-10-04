@@ -1,5 +1,6 @@
 package com.traceability.account;
 
+import com.traceability.review.ReviewCapabilities;
 import com.traceability.tenancy.TenantContext;
 import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -52,17 +53,22 @@ public class UserService {
     @Transactional(readOnly = true)
     public Map<String, Object> getSelf(UUID userId) {
         UUID tenantId = TenantContext.require();
-        return jdbc.query(
+        Map<String, Object> self = jdbc.query(
             "SELECT name, email, role FROM users WHERE id = ? AND tenant_id = ?",
             rs -> {
                 if (!rs.next()) return null;
-                Map<String, Object> self = new LinkedHashMap<>();
-                self.put("name",  rs.getString("name"));
-                self.put("email", rs.getString("email"));
-                self.put("role",  rs.getString("role"));
-                return self;
+                Map<String, Object> row = new LinkedHashMap<>();
+                row.put("name",  rs.getString("name"));
+                row.put("email", rs.getString("email"));
+                row.put("role",  rs.getString("role"));
+                return row;
             },
             userId, tenantId);
+        if (self == null) return null;
+        // Review mode S7 — the screens' capabilities (ReviewCapabilities is the one rule).
+        self.put("scanHelpers", ReviewCapabilities.scanHelpers(jdbc, tenantId));
+        self.put("demoMode",    ReviewCapabilities.demoMode(jdbc, tenantId));
+        return self;
     }
 
     // ── Create ────────────────────────────────────────────────────────────────

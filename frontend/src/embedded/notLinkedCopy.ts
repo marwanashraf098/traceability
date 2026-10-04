@@ -15,6 +15,7 @@ export interface NotLinkedCopy {
   newAccount: string
   existingAccount: string
   openTraced: string
+  reloadHint: string
 }
 
 export const notLinkedCopy: Record<'en' | 'ar', NotLinkedCopy> = {
@@ -25,6 +26,7 @@ export const notLinkedCopy: Record<'en' | 'ar', NotLinkedCopy> = {
     newAccount: 'New to Traced? Create your account at',
     existingAccount: 'Already have a Traced account? Open Traced and connect this store from Settings → Connections.',
     openTraced: 'Open Traced →',
+    reloadHint: 'After connecting this store in Traced, reload this page.',
   },
   ar: {
     pageTitle: 'Traced',
@@ -33,5 +35,6 @@ export const notLinkedCopy: Record<'en' | 'ar', NotLinkedCopy> = {
     newAccount: 'جديد على Traced؟ أنشئ حسابك على',
     existingAccount: 'لديك حساب Traced بالفعل؟ افتح Traced واربط هذا المتجر من الإعدادات ← الاتصالات.',
     openTraced: 'افتح Traced ←',
+    reloadHint: 'بعد ربط هذا المتجر في Traced، أعد تحميل هذه الصفحة.',
   },
 }

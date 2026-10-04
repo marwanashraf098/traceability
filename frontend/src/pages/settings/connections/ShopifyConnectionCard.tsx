@@ -289,6 +289,17 @@ export default function ShopifyConnectionCard({
     setWizardShopDomain(prev => prev || linkedShop)
   }, [linkedShop])
 
+  // Review mode S7 (fix A): the embedded app's "Open Traced" link carries ?shop=<the store it was
+  // opened from>. Prefill the connect forms with it — only a *.myshopify.com domain; anything else
+  // is ignored (the backend validates again on initiate).
+  const shopParam = searchParams.get('shop')?.trim().toLowerCase() ?? ''
+  const prefillShop = SHOP_RE.test(shopParam) ? shopParam : null
+  useEffect(() => {
+    if (!prefillShop || linkedShop) return
+    setReviewerShop(prev => prev || prefillShop)
+    setWizardShopDomain(prev => prev || prefillShop)
+  }, [prefillShop, linkedShop])
+
   // Reopens the wizard preserving whatever the merchant already typed — used only by
   // handleWizardSubmit's catch branch (a failed submit lands back on step 10 with the
   // same values and an error, not a blank form).

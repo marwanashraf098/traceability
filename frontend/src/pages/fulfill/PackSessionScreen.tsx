@@ -3,6 +3,8 @@ import { useTranslation } from 'react-i18next'
 import { CheckCircle2, OctagonAlert, PackageCheck, Undo2 } from 'lucide-react'
 import { ScanShell } from '../../components/ScanShell'
 import { useScanner, ScanMeta, ScanOutcome } from '../../hooks/useScanner'
+import { useCapabilities } from '../../capabilities'
+import ScanHelperChips from '../../components/scanHelpers/ScanHelperChips'
 import { useStation } from '../../components/StationProvider'
 import { Alert, Button, Modal, ProductThumb, Radio, cn } from '../../components/ui'
 import {
@@ -192,6 +194,10 @@ export default function PackSessionScreen({ initial, onEnded }: {
   // useScanner keeps the input focused between scans itself; focusPaused while the set-aside
   // dialog is open so its radios keep the click.
   const scanner = useScanner({ onScan, focusPaused: setAsideOpen || pairOpen })
+  // Review mode S7: click-to-scan chips (demo / review tenant only) — through scanner.handleScan,
+  // the same queue a real scan takes.
+  const { scanHelpers } = useCapabilities()
+  const helperScan = scanHelpers ? (code: string) => { scanner.handleScan(code) } : null
   // Every drop of waiting scans answers the phone scans among them — the phone never waits on one.
   clearQueueRef.current = () => {
     for (const meta of scanner.clearQueue()) tellPhone(meta, false, t('fulfill.waybill.phone.notApplied'))
@@ -364,6 +370,7 @@ export default function PackSessionScreen({ initial, onEnded }: {
               onUndo={undo}
               onRetry={retry}
               onSetAside={openSetAside}
+              onHelperScan={helperScan}
             />
           ) : (
             <div className="flex-1 flex flex-col items-center justify-center gap-5 text-center" data-testid="session-waiting">
@@ -386,6 +393,12 @@ export default function PackSessionScreen({ initial, onEnded }: {
                 <p className="text-h2 text-primary">{t('fulfill.waybill.session.scanWaybill')}</p>
                 <p className="text-body text-muted mt-1">{t('fulfill.waybill.session.scanWaybillHint')}</p>
               </div>
+              {helperScan && (
+                <div className="w-full max-w-xl text-start">
+                  <ScanHelperChips context="waybills" disabled={busy || setAsideOpen} onScan={helperScan}
+                    refreshKey={`${view.counters.packed}-${view.counters.setAside}-${view.counters.rejected}`} />
+                </div>
+              )}
             </div>
           )}
 
@@ -456,7 +469,7 @@ export default function PackSessionScreen({ initial, onEnded }: {
   )
 }
 
-function OrderPanel({ order, lastScan, pieceError, failed, busy, fmtTime, onUndo, onRetry, onSetAside }: {
+function OrderPanel({ order, lastScan, pieceError, failed, busy, fmtTime, onUndo, onRetry, onSetAside, onHelperScan }: {
   order: PackOrderCard
   lastScan: LastScan
   pieceError: string | null
@@ -466,6 +479,8 @@ function OrderPanel({ order, lastScan, pieceError, failed, busy, fmtTime, onUndo
   onUndo: () => void
   onRetry: () => void
   onSetAside: () => void
+  /** Review mode S7: set only for a scanHelpers tenant — piece chips per unfinished line. */
+  onHelperScan: ((code: string) => void) | null
 }) {
   const { t } = useTranslation()
   const total = order.items.reduce((n, i) => n + i.quantity, 0)
@@ -532,7 +547,8 @@ function OrderPanel({ order, lastScan, pieceError, failed, busy, fmtTime, onUndo
             const complete = item.allocated >= item.quantity
             const left = Math.max(item.quantity - item.allocated, 0)
             return (
-              <div key={item.id}
+              <div key={item.id}>
+              <div
                 className={cn('card p-3.5 flex items-center gap-4', complete ? 'border-success/40 bg-success/[0.06]' : '')}>
                 <ProductThumb src={item.imageUrl} alt={item.product_title} size={88} cdnWidth={176} />
                 <div className="flex-1 min-w-0">
@@ -552,6 +568,11 @@ function OrderPanel({ order, lastScan, pieceError, failed, busy, fmtTime, onUndo
                         {t('fulfill.waybill.session.more', { count: left })}
                       </span>}
                 </div>
+              </div>
+              {onHelperScan && !complete && (
+                <ScanHelperChips context="pieces" variantId={item.variant_id} refreshKey={item.allocated}
+                  disabled={busy} onScan={onHelperScan} showNoStock />
+              )}
               </div>
             )
           })}

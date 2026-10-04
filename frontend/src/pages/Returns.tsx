@@ -11,6 +11,8 @@ import Layout from '../components/Layout'
 import { getAccessToken, clearAccessToken } from '../auth'
 import { getRoleFromToken } from '../api'
 import { formatSessionStart } from './returns/sessionStart'
+import { useCapabilities } from '../capabilities'
+import ScanHelperChips from '../components/scanHelpers/ScanHelperChips'
 
 const BASE = '/api/v1'
 
@@ -603,6 +605,7 @@ function OpenSessionScreen({ sessionId, onExit, onStartNew }: {
   const role = getRoleFromToken()
   const canManage = role === 'owner' || role === 'manager'
   const scanRef = useRef<HTMLInputElement>(null)
+  const { scanHelpers } = useCapabilities()
 
   const [detail, setDetail] = useState<SessionDetail | null>(null)
   const [loading, setLoading] = useState(true)
@@ -996,6 +999,14 @@ function OpenSessionScreen({ sessionId, onExit, onStartNew }: {
         />
         <span className="text-caption text-muted hidden sm:inline">{t('returns.openSession.autoFocused')}</span>
       </div>
+
+      {/* Review mode S7: click-to-scan chips (demo / review tenant only) — through handleScan. */}
+      {scanHelpers && (
+        <div className="px-5" data-testid="returns-scan-helpers">
+          <ScanHelperChips context="returns" disabled={scanning} onScan={handleScan}
+            refreshKey={detail?.lastScan ? `${detail.lastScan.kind}:${detail.lastScan.code}` : ''} />
+        </div>
+      )}
 
       {detail?.lastScan && (
         <div className="px-5 pt-3 flex" data-testid="scan-feedback">

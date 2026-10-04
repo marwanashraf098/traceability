@@ -4,17 +4,22 @@ import { renderWithProviders, screen, waitFor } from './renderWithProviders'
 import { stubFetchWithShellDefaults } from './mockShellFetch'
 import { setAccessToken, clearAccessToken } from '../auth'
 import { DEMO_TENANT_ID } from '../demoConstants'
+import { resetCapabilitiesCache } from '../capabilities'
 import Fulfill from '../pages/Fulfill'
 
 /**
- * Demo-only first-scan helper on the pick screen. A demo visitor has no physical labels;
- * for the demo tenant only, each unfinished line lists available barcodes with a Scan
- * button that goes through PickScreen's real handleScan (POST /fulfill/{id}/scan).
- * Any other tenant: nothing renders and /inventory/pieces is never called.
+ * Click-to-scan helper on the pick screen. A demo visitor (or a review tenant) has no physical
+ * labels; for a tenant whose /me says scanHelpers (S7), each unfinished line lists available
+ * barcodes with a Scan button that goes through PickScreen's real handleScan
+ * (POST /fulfill/{id}/scan). Any other tenant: nothing renders and /scan-helpers is never called.
  */
 
 function jsonOk(data: unknown) {
-  return Promise.resolve({ ok: true, status: 200, json: async () => structuredClone(data) })
+  return Promise.resolve({
+    ok: true, status: 200,
+    headers: { get: (k: string) => (k.toLowerCase() === 'content-type' ? 'application/json' : null) },
+    json: async () => structuredClone(data),
+  })
 }
 
 /** Unsigned JWT-shaped token — the frontend only base64-decodes the payload. */
@@ -55,13 +60,10 @@ function makeFetch() {
                       allocatedCount: 1, requiredQuantity: 1, allComplete: true })
     }
     if (url.endsWith('/fulfill/order-1')) return jsonOk(detail(scanned ? 1 : 0))
-    if (url.includes('/inventory/pieces?')) {
-      return jsonOk({ items: [
-        { id: 'p1', barcode: 'TRC-DEMO-0000000001', variantTitle: 'M', sku: 'DEMO-SKU-1', productTitle: 'Demo Tee',
-          orderNumber: null, trackingNumber: null, locationName: 'Main', lastEventAt: null },
-        { id: 'p2', barcode: 'TRC-DEMO-0000000002', variantTitle: 'M', sku: 'DEMO-SKU-1', productTitle: 'Demo Tee',
-          orderNumber: null, trackingNumber: null, locationName: 'Main', lastEventAt: null },
-      ], nextCursor: null })
+    if (url.includes('/scan-helpers/pieces?variantId=var-1')) {
+      return jsonOk({ items: scanned
+        ? [{ code: 'TRC-DEMO-0000000002', label: '2' }]
+        : [{ code: 'TRC-DEMO-0000000001', label: '1' }, { code: 'TRC-DEMO-0000000002', label: '2' }] })
     }
     return jsonOk({})
   })
@@ -81,16 +83,17 @@ describe('Pick screen — demo first-scan helper', () => {
   })
   afterEach(() => {
     clearAccessToken()
+    resetCapabilitiesCache()
     vi.unstubAllGlobals()
   })
 
   test('demo tenant → barcodes render; Scan posts through the real scan handler; helper leaves once the line is done', async () => {
     setAccessToken(tokenFor(DEMO_TENANT_ID))
     const fetchFn = makeFetch()
-    stubFetchWithShellDefaults(fetchFn)
+    stubFetchWithShellDefaults(fetchFn, { me: { name: 'Demo', email: null, role: 'owner', scanHelpers: true, demoMode: true } })
     const user = await openPickScreen()
 
-    expect(await screen.findByTestId('demo-scan-helper')).toBeInTheDocument()
+    expect(await screen.findByTestId('scan-helper-pieces')).toBeInTheDocument()
     const buttons = screen.getAllByRole('button', { name: /^Scan TRC-DEMO-/ })
     expect(buttons).toHaveLength(2)
 
@@ -102,19 +105,19 @@ describe('Pick screen — demo first-scan helper', () => {
     expect(JSON.parse(String((scanCall![1] as RequestInit).body))).toEqual({ barcode: 'TRC-DEMO-0000000001' })
 
     // Real handler ran: the order reloaded, the line is 1/1, the helper is gone.
-    await waitFor(() => expect(screen.queryByTestId('demo-scan-helper')).toBeNull())
+    await waitFor(() => expect(screen.queryByTestId('scan-helper-pieces')).toBeNull())
     expect(screen.getByText('1/1')).toBeInTheDocument()
   })
 
-  test('non-demo tenant → no helper and /inventory/pieces is never requested', async () => {
+  test('real merchant (/me scanHelpers false) → no helper and /scan-helpers is never requested', async () => {
     setAccessToken(tokenFor('11111111-2222-3333-4444-555555555555'))
     const fetchFn = makeFetch()
     stubFetchWithShellDefaults(fetchFn)
     await openPickScreen()
 
     await screen.findByText('Demo Tee')
-    expect(screen.queryByTestId('demo-scan-helper')).toBeNull()
+    expect(screen.queryByTestId('scan-helper-pieces')).toBeNull()
     expect(screen.queryByRole('button', { name: /^Scan TRC-/ })).toBeNull()
-    expect(fetchFn.mock.calls.some(([u]) => String(u).includes('/inventory/pieces'))).toBe(false)
+    expect(fetchFn.mock.calls.some(([u]) => String(u).includes('/scan-helpers'))).toBe(false)
   })
 })
