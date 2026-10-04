@@ -58,7 +58,9 @@ import static org.mockito.Mockito.*;
  *       no new event, no exception
  *   rr4 catch-up isolates rows: a row that throws becomes ERROR, the later rows still run, the
  *       summary is logged
- *   rr5 a 429 is retried within the run (Bosta's retry-after, bounded) instead of a SKIP
+ *   rr5 (B4, 2026-10-04) a 429 never sleeps in the worker: one fetch, 'retry' at the retry-after (never
+ *       counted), and the sweeper links it later — replaces the 10-03 in-run retry
+ *   rr6 the link's webhook event rescheduled on a rate limit: 'retry', not counted, event pending
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.NONE)
 @Testcontainers
@@ -215,26 +217,56 @@ class FulfillmentLinkRlsTest {
     }
 
     @Test
-    void rr5_rateLimited_isRetriedWithinTheRun() {
+    void rr5_rateLimited_neverSleepsInTheWorker_retryStateThenLinks() {
+        // 2026-10-04 (B4): a 429 no longer waits inside the job — it becomes 'retry' at the
+        // retry-after (never counted toward the 24 h) and the sweeper links it later.
         String tn = tn("7");
         UUID order = order("BRK-44855-EG", "gid://shopify/Order/18914" + tn, "{}");
         tracking(order, tn);
         when(bostaGateway.fetchDelivery(eq("key-rr-" + tenant), eq(tn)))
-            .thenThrow(new BostaRateLimitException(1))
+            .thenThrow(new BostaRateLimitException(30))
             .thenReturn(delivery(tn, "BRK-44855-EG"));
+
+        long t0 = System.nanoTime();
+        BostaFulfillmentLinkService.Result r = beanLinkService.attempt(tenant, order, tn, false);
+        long ms = (System.nanoTime() - t0) / 1_000_000;
+
+        assertThat(r.reason()).isEqualTo("rate limited by Bosta");
+        assertThat(ms).as("no sleep in the worker (retry-after was 30 s)").isLessThan(2_000);
+        verify(bostaGateway, times(1)).fetchDelivery(anyString(), eq(tn));
+        assertThat(linkStatus(order, tn)).isEqualTo("retry");
+        assertThat(count("SELECT link_attempts FROM order_fulfillment_tracking WHERE tracking_number = '" + tn + "'"))
+            .as("a rate limit is never counted").isZero();
+
+        jdbc.update("UPDATE order_fulfillment_tracking SET link_next_retry_at = now() - INTERVAL '1 second' " +
+            "WHERE tracking_number = ?", tn);
+        beanLinkService.retryDue();
+
+        assertThat(linkStatus(order, tn)).isEqualTo("linked");
+        assertThat(shipments(tn)).isEqualTo(1);
+    }
+
+    @Test
+    void rr6_linkEventRescheduledOnARateLimit_isARetryNotAFailure() {
+        String tn = tn("8");
+        UUID order = order("BRK-44856-EG", "gid://shopify/Order/18915" + tn, "{}");
+        tracking(order, tn);
+        // The link's own fetch succeeds; the webhook job's verify-by-fetch is rate limited.
+        when(bostaGateway.fetchDelivery(anyString(), eq(tn)))
+            .thenReturn(delivery(tn, "BRK-44856-EG"))
+            .thenThrow(new BostaRateLimitException(120));
 
         BostaFulfillmentLinkService.Result r = beanLinkService.attempt(tenant, order, tn, false);
 
-        assertThat(r.verdict()).isEqualTo(BostaFulfillmentLinkService.Verdict.LINKED);
-
-        // Bounded: a 429 that never clears ends as the 'retry' state, not an endless loop.
-        String tn2 = tn("8");
-        UUID order2 = order("BRK-44856-EG", "gid://shopify/Order/18915" + tn, "{}");
-        tracking(order2, tn2);
-        when(bostaGateway.fetchDelivery(anyString(), eq(tn2))).thenThrow(new BostaRateLimitException(1));
-        assertThat(beanLinkService.attempt(tenant, order2, tn2, false).reason()).isEqualTo("rate limited by Bosta");
-        verify(bostaGateway, times(3)).fetchDelivery(anyString(), eq(tn2));
-        assertThat(linkStatus(order2, tn2)).isEqualTo("retry");
+        assertThat(r.reason()).isEqualTo("rate limited by Bosta");
+        assertThat(jdbc.queryForMap(
+            "SELECT link_status, link_attempts, link_first_failed_at, " +
+            "  link_next_retry_at > now() + INTERVAL '100 seconds' AS after_reschedule " +
+            "FROM order_fulfillment_tracking WHERE tracking_number = ?", tn))
+            .containsEntry("link_status", "retry").containsEntry("link_attempts", 0)
+            .containsEntry("link_first_failed_at", null).containsEntry("after_reschedule", true);
+        assertThat(jdbc.queryForObject("SELECT status::text FROM webhook_events WHERE payload->>'trackingNumber' = ?",
+            String.class, tn)).as("the event is pending, rescheduled — not failed").isEqualTo("pending");
     }
 
     // ── helpers ───────────────────────────────────────────────────────────────

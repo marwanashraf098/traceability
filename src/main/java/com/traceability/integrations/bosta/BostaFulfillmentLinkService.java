@@ -54,10 +54,11 @@ import java.util.UUID;
  * ShipmentLinkService.linkDeliveryToOrder() and applyMappedState()) — no parallel linking code.
  *
  * Bosta 404 / "Delivery not found", 5xx or network errors → 'retry' with backoff (15 min doubling,
- * at most 2 h) for up to 24 h after the first failure, then 'gave_up' (exception). A 429 is retried
- * within the run (Bosta's retry-after, bounded); one that doesn't clear becomes 'retry' at the
- * retry-after and never counts toward the 24 h. The fulfillment-link-retry sweeper runs
- * every 10 minutes.
+ * at most 2 h) for up to 24 h after the first failure, then 'gave_up' (exception). A rate limit
+ * (Bosta's 429, or the shared limiter refusing a wait) never sleeps in the worker (2026-10-04): the
+ * row becomes 'retry' at the retry-after — never counted toward the 24 h — and the
+ * fulfillment-link-retry sweeper (every 2 minutes) runs it again. So does a link whose webhook
+ * event was rescheduled on a rate limit.
  */
 @Service
 public class BostaFulfillmentLinkService {
@@ -82,12 +83,6 @@ public class BostaFulfillmentLinkService {
     private final BostaWebhookJob     webhookJob;
     private final JobScheduler        jobScheduler;
     private final int                 retryWindowHours;
-
-    // Field-injected so the constructor keeps its signature; defaults apply to hand-wired instances.
-    @Value("${bosta.fulfillment-link.rate-limit-retries:3}")
-    private int  rateLimitRetries = 3;
-    @Value("${bosta.fulfillment-link.max-backoff-ms:60000}")
-    private long maxBackoffMs = 60_000;
 
     public BostaFulfillmentLinkService(JdbcTemplate jdbc,
                                        @FlywayDataSource DataSource ownerDs,
@@ -137,7 +132,7 @@ public class BostaFulfillmentLinkService {
             tenantId, orderId, trackingNumber, r.verdict(), r.reason() == null ? "" : r.reason());
     }
 
-    @Recurring(id = "fulfillment-link-retry", cron = "*/10 * * * *")
+    @Recurring(id = "fulfillment-link-retry", cron = "*/2 * * * *")
     @Job(name = "Bosta fulfillment link — retry due")
     public void retryDue() {
         List<Map<String, Object>> due = ownerJdbc.queryForList(
@@ -212,7 +207,7 @@ public class BostaFulfillmentLinkService {
         // 2. Fetch.
         BostaDelivery delivery;
         try {
-            delivery = fetchHonouringRateLimit(apiKey, tn);
+            delivery = bostaGateway.fetchDelivery(apiKey, tn);
         } catch (DeliveryNotFoundException e) {
             delivery = null;
         } catch (BostaRateLimitException e) {
@@ -265,33 +260,23 @@ public class BostaFulfillmentLinkService {
             markLinked(tenantId, orderId, tn);
             return new Result(Verdict.LINKED, null, delivery.typeCode(), delivery.stateCode());
         }
+        if (eventId != null) {
+            // The link event's verify-by-fetch hit a rate limit: the event is pending, rescheduled
+            // (BostaWebhookJob). Come back after it — a rate limit, not a failure, never counted.
+            Long waitSeconds = tx.execute(s -> jdbc.query(
+                "SELECT GREATEST(1, ceil(extract(epoch FROM rate_limited_until - now())))::bigint FROM webhook_events " +
+                "WHERE id = ? AND status = 'pending' AND rate_limited_until IS NOT NULL",
+                rs -> rs.next() ? rs.getLong(1) : null, eventId));
+            if (waitSeconds != null) {
+                markRetry(tenantId, orderId, tn, "rate limited (link event rescheduled)", waitSeconds + 30, false);
+                return Result.skip("rate limited by Bosta", delivery);
+            }
+        }
         String note = eventId == null ? "an identical link event is already in flight"
             : tx.execute(s -> jdbc.queryForObject("SELECT coalesce(error, status::text) FROM webhook_events WHERE id = ?",
                 String.class, eventId));
         markRetry(tenantId, orderId, tn, "not linked yet: " + note, 0, true);
         return Result.skip("not linked yet: " + note, delivery);
-    }
-
-    /**
-     * fetchDelivery, retried within this run on a 429: waits Bosta's retry-after (capped at
-     * bosta.fulfillment-link.max-backoff-ms) up to bosta.fulfillment-link.rate-limit-retries times,
-     * then lets the last 429 through (→ the 'retry' state, picked up by the sweeper).
-     */
-    private BostaDelivery fetchHonouringRateLimit(String apiKey, String tn) {
-        for (int attempt = 0; ; attempt++) {
-            try {
-                return bostaGateway.fetchDelivery(apiKey, tn);
-            } catch (BostaRateLimitException e) {
-                if (attempt >= rateLimitRetries) throw e;
-                long waitMs = Math.min(e.getRetryAfterSeconds() * 1000L, maxBackoffMs);
-                log.info("Fulfillment link: rate limited on {} — waiting {} ms (retry {}/{})",
-                    tn, waitMs, attempt + 1, rateLimitRetries);
-                if (waitMs > 0) {
-                    try { Thread.sleep(waitMs); }
-                    catch (InterruptedException ie) { Thread.currentThread().interrupt(); throw e; }
-                }
-            }
-        }
     }
 
     /**

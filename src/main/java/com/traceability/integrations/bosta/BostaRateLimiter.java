@@ -34,6 +34,8 @@ import java.util.concurrent.ConcurrentHashMap;
  * the global bucket — every key — for its retry-after, and is logged with it. A caller that would wait
  * longer than {@code bosta.rate-limit.max-wait-ms} (60 s) gets a {@link BostaRateLimitException} with the
  * remaining wait instead — the same signal a real 429 gives; jobs reschedule on it, never fail.
+ * BACKGROUND callers get a much shorter wait, {@code bosta.rate-limit.background-max-wait-ms} (5 s,
+ * 2026-10-04): a job must not hold a worker for a minute waiting on Bosta — it reschedules instead.
  *
  * Keys are held as SHA-256 hashes, never raw (logs show the first 8 hex). One JVM: two app instances
  * would each have their own budget (prod runs one).
@@ -48,6 +50,7 @@ public class BostaRateLimiter {
     private final double perSecond;
     private final double burst;
     private final long   maxWaitMs;
+    private final long   backgroundMaxWaitMs;
     private final Map<String, Bucket> buckets = new ConcurrentHashMap<>();
     /** Null = no global layer (the 3-argument constructor, used by hand-wired tests). */
     private final Bucket global;
@@ -57,16 +60,24 @@ public class BostaRateLimiter {
         this(perSecond, burst, maxWaitMs, 0, 1, 0);
     }
 
+    /** Same max wait for both priorities. */
+    public BostaRateLimiter(double perSecond, double burst, long maxWaitMs,
+                            double globalPerSecond, double globalBurst, double backgroundReserve) {
+        this(perSecond, burst, maxWaitMs, globalPerSecond, globalBurst, backgroundReserve, maxWaitMs);
+    }
+
     @Autowired
     public BostaRateLimiter(@Value("${bosta.rate-limit.per-second:1}") double perSecond,
                             @Value("${bosta.rate-limit.burst:2}") double burst,
                             @Value("${bosta.rate-limit.max-wait-ms:60000}") long maxWaitMs,
                             @Value("${bosta.rate-limit.global-per-second:0.75}") double globalPerSecond,
                             @Value("${bosta.rate-limit.global-burst:3}") double globalBurst,
-                            @Value("${bosta.rate-limit.background-reserve:0.2}") double backgroundReserve) {
+                            @Value("${bosta.rate-limit.background-reserve:0.2}") double backgroundReserve,
+                            @Value("${bosta.rate-limit.background-max-wait-ms:5000}") long backgroundMaxWaitMs) {
         this.perSecond = perSecond;
         this.burst = Math.max(1, burst);
         this.maxWaitMs = maxWaitMs;
+        this.backgroundMaxWaitMs = Math.min(backgroundMaxWaitMs, maxWaitMs);
         double gBurst = Math.max(1, globalBurst);
         this.global = globalPerSecond > 0
             ? new Bucket(globalPerSecond, gBurst, Math.max(0, backgroundReserve) * gBurst)
@@ -104,7 +115,8 @@ public class BostaRateLimiter {
     public void acquire(String apiKey, Priority priority) {
         if (apiKey == null) return;
         if (PRIORITY_OVERRIDE.get() != null) priority = PRIORITY_OVERRIDE.get();
-        long deadline = System.nanoTime() + maxWaitMs * 1_000_000L;
+        long wait = priority == Priority.BACKGROUND ? backgroundMaxWaitMs : maxWaitMs;
+        long deadline = System.nanoTime() + wait * 1_000_000L;
         if (perSecond > 0) bucket(apiKey).acquire(priority, deadline);
         if (global != null) global.acquire(priority, deadline);
     }

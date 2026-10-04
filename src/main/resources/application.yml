@@ -145,6 +145,10 @@ bosta:
     global-per-second: 0.75
     global-burst: 3
     background-reserve: 0.2
+    # A BACKGROUND caller (poll, link, webhook job) waits at most this long, then gets a rate-limit
+    # signal and reschedules — no job holds a JobRunr worker for a minute waiting on Bosta (2026-10-04).
+    # USER_FACING callers keep max-wait-ms (60 s).
+    background-max-wait-ms: 5000
   # A rate-limited webhook event is rescheduled, never failed (V135): after max(retry-after, 60 s × 2^(n−1))
   # capped at max-delay, plus jitter up to jitter × min(n, 5) s; failed only after max-retries.
   webhook:
