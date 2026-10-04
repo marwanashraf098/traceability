@@ -8,7 +8,7 @@ import java.util.UUID;
 import java.util.function.Function;
 
 /**
- * S6 — the phone side of phone-as-scanner. PUBLIC (no login; SecurityConfig permits
+ * S6 / Q1 — the phone side of phone-as-scanner. PUBLIC (no login; SecurityConfig permits
  * /api/v1/scan-pair/**): the phone holds only its one-time pair code, then its device secret
  * (header {@code X-Device-Secret}). Each request resolves that secret through hatch #15 with no
  * tenant set, then sets the pairing's tenant for this request only — set here, cleared in a
@@ -51,7 +51,7 @@ public class ScanPairPublicController {
         return asPairing("device_secret", secret, r -> svc.eventStatus(r, eventId));
     }
 
-    /** Header context: connected to whose station, and the order open there. */
+    /** Header context: whose tablet it's paired with, and the scanning screen open there (Q1). */
     @GetMapping("/status")
     public ScanPairingService.PhoneContext status(@RequestHeader(value = DEVICE_SECRET_HEADER, required = false) String secret) {
         return asPairing("device_secret", secret, svc::phoneStatus);

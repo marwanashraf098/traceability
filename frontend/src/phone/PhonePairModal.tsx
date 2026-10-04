@@ -1,12 +1,13 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import qrcode from 'qrcode-generator'
-import { Alert, Button, Modal } from '../../components/ui'
-import type { ScanPairingCreated } from '../../api'
+import { Alert, Button, Modal } from '../components/ui'
+import type { ScanPairingCreated } from '../api'
 
-// S6 — phone as scanner: the QR the phone's camera opens (the pair URL), its countdown and
-// Cancel. Its own file, loaded lazily by PackSessionScreen, so the QR library stays out of the
-// main bundle until a worker taps "Use phone".
+// Phone as scanner (S6; per tablet since Q1): the QR the phone's camera opens (the pair URL), its
+// countdown and Cancel. Its own file, loaded lazily by the floating phone control
+// (PhoneScanProvider), so the QR library stays out of the main bundle until a worker taps
+// "Use phone".
 
 /** A QR code as an SVG drawn from qrcode-generator's module grid (pure JS — no canvas, no
  *  innerHTML, nothing CSP needs to allow). Quiet zone of 4 modules, error correction M. */

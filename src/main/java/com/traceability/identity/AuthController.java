@@ -87,6 +87,13 @@ public class AuthController {
     public void logout(@AuthenticationPrincipal CustomUserDetails principal,
                        HttpServletResponse response) {
         authService.logout(principal.userId());
+        // Q1: a full logout ends the user's paired phone (best-effort, like the PIN-switch hook —
+        // the logout itself must never fail on it; the 12 h expiry is the backstop).
+        try {
+            scanPairings.revokeForUser(principal.userId(), "signed_out");
+        } catch (RuntimeException e) {
+            log.warn("Logout: couldn't revoke the user's phone pairings: {}", e.toString());
+        }
         setRefreshCookie(response, "", 0); // Max-Age=0 expires the cookie immediately
     }
 
@@ -104,11 +111,12 @@ public class AuthController {
                                          @CookieValue(value = COOKIE_NAME, required = false) String rawRefreshToken,
                                          HttpServletResponse response) {
         TokenResponse tokens = pinService.switchPin(principal.tenantId(), req, rawRefreshToken);
-        // S6: the station now belongs to another worker — the outgoing worker's paired phone
-        // must stop scanning into their session.
+        // S6 / Q1: the station now belongs to another worker — the outgoing worker's paired phone
+        // must stop scanning into this tablet.
         // A failure here mustn't strand the switch (its tokens are already minted): a leftover
-        // pairing can only post into the outgoing worker's session, which no tablet now streams,
-        // so its scans expire undelivered.
+        // pairing can't reach the incoming worker — the relay stream is served only to the
+        // pairing's own worker (ScanPairingService.requireStreamable) — so its scans expire
+        // undelivered.
         if (req.userId() != null && !req.userId().equals(principal.userId().toString())) {
             try {
                 scanPairings.revokeForUser(principal.userId(), "worker_switched");

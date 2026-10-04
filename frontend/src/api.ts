@@ -1979,7 +1979,9 @@ export function endPackSession(id: string) {
   return transferCommandRequest<void>(`/pack-sessions/${id}/end`, { method: 'POST' })
 }
 
-// ── S6 — phone as scanner ─────────────────────────────────────────────────────
+// ── Phone as scanner (S6; per station since Q1) ──────────────────────────────
+// A pairing belongs to THIS tablet (deviceId — a random id kept in localStorage, a routing key,
+// not a secret) and the logged-in worker; it lasts the shift, across screens and pack sessions.
 
 export type ScanPairingState = 'none' | 'waiting' | 'connected' | 'expired'
 
@@ -1990,7 +1992,7 @@ export interface ScanPairingStatus {
   pairCodeExpiresAt: string | null
   claimedAt: string | null
   expiresAt: string | null
-  /** Why it ended (unpaired / replaced / session_ended / worker_switched), on a 'none' pushed by the stream. */
+  /** Why it ended (unpaired / replaced / worker_switched / station_locked / signed_out), on a 'none' pushed by the stream. */
   reason: string | null
 }
 
@@ -2010,26 +2012,41 @@ export interface RelayScanEvent {
   createdAt: string
 }
 
-export function createScanPairing(sessionId: string) {
-  return transferCommandRequest<ScanPairingCreated>(`/pack-sessions/${sessionId}/pairings`, { method: 'POST' })
+const deviceQuery = (deviceId: string) => `deviceId=${encodeURIComponent(deviceId)}`
+
+export function createStationPairing(deviceId: string) {
+  return transferCommandRequest<ScanPairingCreated>('/station/pairings', {
+    method: 'POST', body: JSON.stringify({ deviceId }),
+  })
 }
 
-export function getScanPairing(sessionId: string) {
-  return transferCommandRequest<ScanPairingStatus>(`/pack-sessions/${sessionId}/pairings/current`)
+export function getStationPairing(deviceId: string) {
+  return transferCommandRequest<ScanPairingStatus>(`/station/pairings/current?${deviceQuery(deviceId)}`)
 }
 
-export function unpairScanPairing(sessionId: string) {
-  return transferCommandRequest<void>(`/pack-sessions/${sessionId}/pairings/current`, { method: 'DELETE' })
+export function unpairStationPairing(deviceId: string) {
+  return transferCommandRequest<void>(`/station/pairings/current?${deviceQuery(deviceId)}`, { method: 'DELETE' })
 }
 
-/** The station is handed to another worker: end every phone pairing this worker holds. Best-effort. */
-export function unpairMyPhones() {
-  return request<void>('/pack-sessions/pairings/mine', { method: 'DELETE' })
+/** The scanning screen open on the tablet, shown in the phone header; null clears it. */
+export function putStationTarget(deviceId: string, label: string | null) {
+  return transferCommandRequest<void>(`/station/pairings/current/target?${deviceQuery(deviceId)}`, {
+    method: 'PUT', body: JSON.stringify({ label }),
+  })
+}
+
+/**
+ * End every phone pairing this worker holds: the station is handed to another worker (default,
+ * StationProvider.signOutWorker) or locked back to the PIN gate ('station_locked', StationGate).
+ * Best-effort.
+ */
+export function unpairMyPhones(reason?: 'station_locked') {
+  return request<void>('/pack-sessions/pairings/mine' + (reason ? `?reason=${reason}` : ''), { method: 'DELETE' })
 }
 
 /** The tablet's verdict on a phone scan; `message` is one line shown on the phone. */
-export function postRelayOutcome(sessionId: string, eventId: string, result: 'accepted' | 'rejected', message: string) {
-  return transferCommandRequest<void>(`/pack-sessions/${sessionId}/relay-events/${eventId}/outcome`, {
+export function postRelayOutcome(eventId: string, result: 'accepted' | 'rejected', message: string) {
+  return transferCommandRequest<void>(`/station/relay-events/${eventId}/outcome`, {
     method: 'POST', body: JSON.stringify({ result, message }),
   })
 }
@@ -2037,8 +2054,8 @@ export function postRelayOutcome(sessionId: string, eventId: string, result: 'ac
 // Phone side — public, no login: never sends the access token, never refreshes on a 401
 // (a 401 here means the pairing ended).
 
-export interface PhoneOrderContext { number: string | null; customerName: string | null; scanned: number; required: number }
-export interface PhoneContext { state: 'connected'; workerName: string | null; order: PhoneOrderContext | null; expiresAt: string }
+/** The phone header: whose tablet, and the scanning screen open there ("Pick & Pack · #1047"), if any. */
+export interface PhoneContext { state: 'connected'; workerName: string | null; target: string | null; expiresAt: string }
 export type PhoneEventStatus = 'pending' | 'delivered' | 'accepted' | 'rejected' | 'expired'
 
 /** A phone request that didn't go through: 'ended' (401 — pairing ended), 'network', 'other'. */

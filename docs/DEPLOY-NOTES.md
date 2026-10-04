@@ -658,6 +658,29 @@ Until nginx is restarted, phone scanning still works but the stream is buffered 
 `/api/` block (events reach the tablet late or only when the 16 k buffer fills) — so do the
 restart in the same deploy.
 
+**Q1 phone per station — nginx change (manual, once).** The tablet's stream moves from
+`/api/v1/pack-sessions/{id}/relay-stream` (retired — that path now 404s) to
+`/api/v1/station/relay-stream?deviceId=…`; the unbuffered location becomes
+`location = /api/v1/station/relay-stream` (same body: `proxy_buffering off`, read timeout 120 s,
+`api` zone). The `scanpair` zone and `location ^~ /api/v1/scan-pair/` are unchanged. V138 runs on
+app start and revokes every S6 pairing once (phones pair again from the floating "Use phone"
+control). Same steps as S6:
+```bash
+cd /home/traced/traceability
+git pull
+sudo docker compose -f deploy/docker-compose.yml up -d --build app
+sudo docker run --rm --network deploy_internal \
+  -v "$PWD/deploy/nginx.conf:/etc/nginx/nginx.conf:ro" \
+  -v /etc/letsencrypt:/etc/letsencrypt:ro \
+  nginx:1.27-alpine nginx -t
+# only if "test is successful":
+sudo docker compose -f deploy/docker-compose.yml restart nginx
+# check: the stream location answers through the app (401 without a token — not nginx's 404/502)
+curl -s -o /dev/null -w '%{http_code}\n' 'https://app.tracedtech.com/api/v1/station/relay-stream?deviceId=x'
+```
+Until nginx is restarted the new stream path falls under the generic `/api/` block and is
+buffered (phone scans reach the tablet late) — restart in the same deploy.
+
 ---
 
 ## Quick reference

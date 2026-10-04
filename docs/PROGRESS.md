@@ -4,6 +4,40 @@
 
 ## Current state
 
+**Q1 — Phone scanner per station: pairing to the tablet + worker; pack & pick (2026-10-05, branch `feat/station-phone`
+off main 07a21a4; pushed, not merged, not deployed). V138 + revised hatch #15 approved by Marawan 2026-10-04 (incl.
+revoking existing S6 pairings once, one live pairing per tablet AND per worker, retiring S6's per-session endpoints,
+the station GETs in RlsCoverageTest). useScanner unchanged; no marked block edited.**
+- **Model:** a pairing belongs to the tablet (`station_device_id`, random localStorage id — routing key, not a secret) and
+  the worker; it lasts the shift across screens and pack sessions. Hatch #15 (V138): "pack session open" → the worker is
+  an ACTIVE user of the tenant; still DEFINER, fixed search_path, returns only (tenant_id, pairing_id). V138 revoked every
+  live S6 pairing ('replaced') and expired their undelivered scans. Register updated (blueprint §16.1 row 15, CLAUDE.md).
+- **Endpoints (`StationPairingController`):** POST/GET/DELETE `/station/pairings[/current]` (deviceId), PUT
+  `/station/pairings/current/target {label}`, GET `/station/relay-stream?deviceId=` (pairing's worker only; 403
+  PAIRING_NOT_YOURS / 409 NO_PAIRING / 400 BAD_DEVICE), POST `/station/relay-events/{id}/outcome`; DELETE
+  `/pack-sessions/pairings/mine[?reason=station_locked]` kept. S6's `/pack-sessions/{id}/pairings…`, per-session stream
+  and outcome are gone. Hub keyed by pairing id (one stream per tablet; a second replaces the first).
+- **Revocation:** unpair; replaced (same tablet or same worker, `ScanPairingService.create`); PIN switch
+  (`AuthController.pinSwitch`); tablet sign-out (`StationProvider.signOutWorker`); station lock (`StationGate` mount →
+  `?reason=station_locked`); full logout (`AuthController.logout` → signed_out); worker deactivated (hatch); 12 h.
+  Ending a pack session no longer revokes (`PackSessionStore.end`).
+- **Frontend:** `phone/PhoneScanProvider` at the root (device id, status, the one stream, target stack, exactly-one-outcome
+  bookkeeping); `phone/PhoneControl` beside every authenticated page (RequireAuth), bottom-end; `phone/usePhoneScanTarget`
+  (`wrap` onScan + `attach` scanner — the attached clearQueue answers dropped phone scans). Targets: pack session
+  (paused by set-aside), PickScreen (paused by the cancel confirm), AwbLinkDialog on top while open (through its own
+  handleLink). No target → "No scanning screen open on the tablet"; paused → "Tablet busy — finish the dialog"; unmount /
+  clearQueue → "Not applied — scan again". Phone header shows `active_target` ("Pick & Pack · #1047").
+- **nginx (manual on deploy):** the unbuffered stream location is now `location = /api/v1/station/relay-stream`
+  (DEPLOY-NOTES, same steps as S6: `nginx -t` then restart nginx).
+- **Tests:** StationPairingMigrationTest (1), StationPhoneSchemaTest (9), StationPhoneTest (21), RlsCoverageTest
+  (station GET covered + stream EXEMPT naming the app_user test), migration counts bumped; frontend phoneStation.test (19),
+  phoneRelayInterleave.browser (pack session + PickScreen × Chromium/WebKit). Approved test edits: ScanPairingTest /
+  ScanPairingSchemaTest / phoneScannerTablet deleted (every case mapped), TenantContextRestoreTraps + SimulatedCourierFlow
+  e3 one fixture/call each, phoneScanPage header assertion, scanHelperScreens merchant test waits on /me. Backend 2206
+  (only the 2 known failures), vitest 677/677, tsc + build clean, test:browser 40/40 three runs.
+- **Gotcha:** `Button` (components/ui) doesn't forward extra props — a `data-testid` on it is silently dropped.
+- **Next:** Q1b (stock take / transfers with a "via phone" marker), Q2 returns wiring.
+
 **R1 — Scan returns + Pickups on useScanner (2026-10-04, branch `fix/returns-pickups-scanner` off main 9ffcdc2; pushed,
 not merged, not deployed). Frontend only — backend untouched, useScanner unchanged, no migrations. Edits to Scan returns'
 SAFETY-CRITICAL scan handler, refocus effect and scan input approved by Marawan 2026-10-04; Pickups has no marked blocks.**

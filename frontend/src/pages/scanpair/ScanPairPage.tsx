@@ -84,7 +84,7 @@ export default function ScanPairPage() {
 
   useEffect(() => { void connect() }, [connect])
 
-  // Header context (worker + open order), refreshed every few seconds while scanning.
+  // Header context (worker + the tablet's open scanning screen), refreshed every few seconds while scanning.
   const refreshStatus = useCallback(async () => {
     const secret = secretRef.current
     if (!secret) return
@@ -212,11 +212,9 @@ export default function ScanPairPage() {
               <Smartphone size={18} className="text-success" />
               {t('scanPair.connectedTo', { worker: context?.workerName ?? '' })}
             </p>
-            <p className="text-small text-muted" data-testid="pair-order">
-              {context?.order
-                ? t('scanPair.order', { number: context.order.number ?? '', customer: context.order.customerName ?? '',
-                    scanned: context.order.scanned, required: context.order.required })
-                : t('scanPair.noOrder')}
+            {/* Q1: the scanning screen open on the tablet ("Pick & Pack · #1047"), whatever it is. */}
+            <p className="text-small text-muted" data-testid="pair-target">
+              {context?.target ?? t('scanPair.noTarget')}
             </p>
           </>
         )}

@@ -1,12 +1,13 @@
-import { getAccessToken } from '../../auth'
-import { refreshAccessToken, RelayScanEvent, ScanPairingStatus } from '../../api'
+import { getAccessToken } from '../auth'
+import { refreshAccessToken, RelayScanEvent, ScanPairingStatus } from '../api'
 
-// S6 — the tablet's side of the phone relay: GET /pack-sessions/{id}/relay-stream as Server-Sent
-// Events. Read with fetch rather than EventSource because EventSource can't send the Bearer
-// token (the app keeps it in memory, not in a cookie). Behaves like EventSource: parses
+// The tablet's side of the phone relay (S6; one stream per tablet since Q1): GET
+// /station/relay-stream?deviceId=… as Server-Sent Events. Read with fetch rather than
+// EventSource because EventSource can't send the Bearer token (the app keeps it in memory, not
+// in a cookie). Behaves like EventSource: parses
 // `event:` / `data:` frames, ignores comments (the 20 s heartbeat), and reconnects on its own
 // (1 s, 2 s, 4 s … up to 10 s), refreshing the access token after a 401. Stops for good on a
-// 403 / 404 / 409 (not this worker's session, or the session ended).
+// 400 / 403 / 404 / 409 (bad tablet id, another worker's pairing, or no live pairing).
 
 export interface RelayHandlers {
   onScan: (event: RelayScanEvent) => void
@@ -15,10 +16,10 @@ export interface RelayHandlers {
   onConnection: (up: boolean) => void
 }
 
-const STOP_STATUSES = new Set([403, 404, 409])
+const STOP_STATUSES = new Set([400, 403, 404, 409])
 
 /** Opens the stream; returns a function that closes it. */
-export function openRelayStream(sessionId: string, handlers: RelayHandlers): () => void {
+export function openRelayStream(deviceId: string, handlers: RelayHandlers): () => void {
   let stopped = false
   let controller: AbortController | null = null
   let attempt = 0
@@ -30,7 +31,7 @@ export function openRelayStream(sessionId: string, handlers: RelayHandlers): () 
       controller = new AbortController()
       try {
         const token = getAccessToken()
-        const res = await fetch(`/api/v1/pack-sessions/${sessionId}/relay-stream`, {
+        const res = await fetch(`/api/v1/station/relay-stream?deviceId=${encodeURIComponent(deviceId)}`, {
           headers: { Accept: 'text/event-stream', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
           credentials: 'include',
           signal: controller.signal,

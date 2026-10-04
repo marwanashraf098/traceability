@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { Delete } from 'lucide-react'
 import {
-  getStationRoster, switchPin, getMe, login, getRoleFromToken,
+  getStationRoster, switchPin, getMe, login, getRoleFromToken, unpairMyPhones,
   StationRosterEntry,
 } from '../api'
 import { setAccessToken, clearAccessToken } from '../auth'
@@ -49,6 +49,11 @@ export default function StationGate() {
   }, [])
 
   useEffect(() => { loadRoster() }, [loadRoster])
+
+  // Q1: the station is locked (back at the PIN gate — after a sign-out, a reload or a reboot):
+  // the last worker's paired phone stops scanning into this tablet. Best-effort, with the token
+  // this tablet still holds (the last worker's); the 12 h expiry is the backstop.
+  useEffect(() => { unpairMyPhones('station_locked').catch(() => {}) }, [])
 
   function selectWorker(worker: StationRosterEntry) {
     if (worker.locked) return

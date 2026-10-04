@@ -6,7 +6,7 @@ import * as api from '../api'
 import ScanPairPage from '../pages/scanpair/ScanPairPage'
 
 // S6 — the phone page (/scan/:pairCode): claims the code once (device secret in sessionStorage),
-// shows whose station / which order, sends each read once with an increasing seq and shows the
+// shows whose station / which scanning screen is open there, sends each read once with an increasing seq and shows the
 // tablet's verdict — or exactly what went wrong; never queues or retries silently.
 
 vi.mock('../api', async (importOriginal) => {
@@ -26,7 +26,7 @@ vi.mock('../pages/scanpair/CameraReader', () => ({
 }))
 
 const CONTEXT: api.PhoneContext = { state: 'connected', workerName: 'Ahmed', expiresAt: '2026-10-02T19:00:00Z',
-  order: { number: '#1047', customerName: 'Youssef Adel', scanned: 1, required: 2 } }
+  target: 'Pick & Pack · #1047' }
 
 let storage: Map<string, string>
 
@@ -59,10 +59,10 @@ async function startScanning() {
 }
 
 describe('pairing', () => {
-  test('claims the code once, keeps the device secret for this tab, and shows whose station + the order', async () => {
+  test('claims the code once, keeps the device secret for this tab, and shows whose station + the screen open there', async () => {
     renderAt()
     expect(await screen.findByText("Connected to Ahmed's station")).toBeInTheDocument()
-    expect(screen.getByTestId('pair-order')).toHaveTextContent('Order #1047 · Youssef Adel · 1/2 pieces')
+    expect(screen.getByTestId('pair-target')).toHaveTextContent('Pick & Pack · #1047')
     expect(api.claimScanPair).toHaveBeenCalledWith('PAIRCODE123')
     expect(storage.get('scanPair.secret.PAIRCODE123')).toBe('secret-1')
   })

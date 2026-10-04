@@ -136,9 +136,11 @@ describe('Waybill-scan pack session (PackSessionScreen)', () => {
 
   test('real merchant: no chips, /scan-helpers never called', async () => {
     stubFetchWithShellDefaults(packBackend(), { me: MERCHANT_ME })
+    const shellFetch = vi.fn(globalThis.fetch)
+    vi.stubGlobal('fetch', shellFetch)
     renderWithProviders(<PackSessionScreen initial={VIEW} onEnded={vi.fn()} />)
     await screen.findByTestId('session-waiting')
-    await waitFor(() => expect(calls.length).toBeGreaterThan(0))
+    await waitFor(() => expect(shellFetch.mock.calls.some(c => String(c[0]).endsWith('/me'))).toBe(true))
     expect(screen.queryByTestId('scan-helper-waybills')).toBeNull()
     expect(helperCalls()).toHaveLength(0)
   })

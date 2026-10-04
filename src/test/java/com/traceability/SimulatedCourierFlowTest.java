@@ -177,7 +177,7 @@ class SimulatedCourierFlowTest {
         UUID session = UUID.fromString((String) packPost(s.workerToken, "", null).get("id"));
 
         // Tablet pairs a phone; phone claims and scans.
-        Map<String, Object> pairing = packPost(s.workerToken, "/" + session + "/pairings", null);
+        Map<String, Object> pairing = stationPost(s.workerToken, "/pairings", Map.of("deviceId", "e3Tablet000000000001"));
         String url = (String) pairing.get("pairUrl");
         String pairCode = url.substring(url.lastIndexOf('/') + 1);
         JsonNode claimed = phone(HttpMethod.POST, "/api/v1/scan-pair/claim", Map.of("pairCode", pairCode), null);
@@ -354,6 +354,13 @@ class SimulatedCourierFlowTest {
     @SuppressWarnings({"unchecked", "rawtypes"})
     private Map<String, Object> packPost(String token, String path, Object body) {
         ResponseEntity<Map> r = rest.exchange(base() + "/api/v1/pack-sessions" + path, HttpMethod.POST,
+            new HttpEntity<>(body, auth(token)), Map.class);
+        assertThat(r.getStatusCode()).as(path + " → " + r.getBody()).isEqualTo(HttpStatus.OK);
+        return r.getBody();
+    }
+
+    private Map<String, Object> stationPost(String token, String path, Object body) {
+        ResponseEntity<Map> r = rest.exchange(base() + "/api/v1/station" + path, HttpMethod.POST,
             new HttpEntity<>(body, auth(token)), Map.class);
         assertThat(r.getStatusCode()).as(path + " → " + r.getBody()).isEqualTo(HttpStatus.OK);
         return r.getBody();

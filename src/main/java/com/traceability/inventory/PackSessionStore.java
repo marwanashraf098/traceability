@@ -50,14 +50,11 @@ public class PackSessionStore {
     private final JdbcTemplate       jdbc;
     private final FulfillService     fulfill;
     private final WaybillResolver    resolver;
-    private final ScanPairingService scanPairings;
 
-    public PackSessionStore(JdbcTemplate jdbc, FulfillService fulfill, WaybillResolver resolver,
-                            ScanPairingService scanPairings) {
+    public PackSessionStore(JdbcTemplate jdbc, FulfillService fulfill, WaybillResolver resolver) {
         this.jdbc         = jdbc;
         this.fulfill      = fulfill;
         this.resolver     = resolver;
-        this.scanPairings = scanPairings;
     }
 
     // ── Start / resume ────────────────────────────────────────────────────────
@@ -230,7 +227,11 @@ public class PackSessionStore {
         return pieces.size();
     }
 
-    /** End the session — refused while an order is open; releases every claim this packer holds; unpairs its phone. */
+    /**
+     * End the session — refused while an order is open; releases every claim this packer holds.
+     * Q1: the worker's paired phone is NOT unpaired — a pairing belongs to the tablet and worker
+     * and lasts the shift (ScanPairingService).
+     */
     @Transactional
     public void end(UUID sessionId, UUID userId) {
         UUID tenantId = TenantContext.require();
@@ -240,9 +241,6 @@ public class PackSessionStore {
             tenantId, userId);
         jdbc.update("UPDATE pack_sessions SET status = 'ended', ended_at = now() WHERE id = ? AND tenant_id = ?",
             sessionId, tenantId);
-        // S6: the session's paired phone stops working with it (hatch #15 already refuses an
-        // ended session; this records why and tells the stream).
-        scanPairings.revokeForSession(sessionId, tenantId, "session_ended");
     }
 
     // ── Shared with PackCompleter ─────────────────────────────────────────────

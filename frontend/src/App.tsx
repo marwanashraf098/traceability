@@ -6,6 +6,8 @@ import { ToastProvider } from './components/ui'
 import Layout from './components/Layout'
 import { StationProvider, useStation } from './components/StationProvider'
 import StationGate from './components/StationGate'
+import { PhoneScanProvider } from './phone/PhoneScanProvider'
+import PhoneControl from './phone/PhoneControl'
 // StyleGuide is DEV-only — lazy import ensures Rollup dead-code-eliminates
 // the entire module when import.meta.env.DEV === false (production build).
 const StyleGuide = import.meta.env.DEV
@@ -159,7 +161,9 @@ export function RequireAuth({ children }: { children: React.ReactNode }) {
   if (stationMode && !currentWorker) {
     return <StationGate />
   }
-  return <>{children}</>
+  // Q1: the floating phone control sits beside every authenticated page — full-screen scan
+  // screens included (they render without Layout).
+  return <>{children}<PhoneControl /></>
 }
 
 /**
@@ -224,6 +228,9 @@ export default function App() {
     // StationProvider sits ABOVE the router so currentWorker survives route
     // navigation between worker screens — only a true reload resets it.
     <StationProvider>
+    {/* Q1: the tablet's phone scanner (pairing, the one relay stream, the target stack) —
+        also above the router, so a pairing and its stream survive navigation. */}
+    <PhoneScanProvider>
     <BrowserRouter>
       <ToastProvider>
       <Routes>
@@ -465,6 +472,7 @@ export default function App() {
       </Routes>
       </ToastProvider>
     </BrowserRouter>
+    </PhoneScanProvider>
     </StationProvider>
   )
 }

@@ -54,9 +54,9 @@ export function StationProvider({ children }: { children: ReactNode }) {
   }, [])
 
   const signOutWorker = useCallback(() => {
-    // S6: the outgoing worker's paired phone must stop scanning into their pack session — ask
-    // the server while their token is still this tablet's (best-effort; the server also revokes
-    // it when the next worker's PIN switch arrives).
+    // S6 / Q1: the outgoing worker's paired phone must stop scanning into this tablet — ask the
+    // server while their token is still this tablet's (best-effort; the gate this lands on also
+    // revokes it as 'station_locked', and the next worker's PIN switch does too).
     unpairMyPhones().catch(() => {})
     setCurrentWorker(null)
   }, [])

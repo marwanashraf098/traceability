@@ -150,10 +150,10 @@ class TenantContextRestoreTrapsTest {
             "INSERT INTO pack_sessions (tenant_id, user_id, mode) VALUES (?, ?, 'waybill_scan') RETURNING id",
             UUID.class, f.tenant, outgoing);
         UUID pairing = jdbc.queryForObject(
-            "INSERT INTO scan_pairings (tenant_id, pack_session_id, station_user_id, pair_code_hash, device_secret_hash, " +
+            "INSERT INTO scan_pairings (tenant_id, station_device_id, station_user_id, pair_code_hash, device_secret_hash, " +
             "                           pair_code_expires_at, claimed_at, expires_at) " +
             "VALUES (?, ?, ?, ?, ?, now() + interval '2 minutes', now(), now() + interval '12 hours') RETURNING id",
-            UUID.class, f.tenant, session, outgoing, "trap-pc-" + UUID.randomUUID(), "trap-ds-" + UUID.randomUUID());
+            UUID.class, f.tenant, "trapTablet0000000001", outgoing, "trap-pc-" + UUID.randomUUID(), "trap-ds-" + UUID.randomUUID());
         // A PinService that does its work inside a runAs — as any tenant-scoped lookup would.
         when(pinService.switchPin(any(), any(), any())).thenAnswer(inv -> {
             UUID tenant = inv.getArgument(0);

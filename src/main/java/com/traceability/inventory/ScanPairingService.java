@@ -2,6 +2,7 @@ package com.traceability.inventory;
 
 import com.traceability.tenancy.TenantContext;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
@@ -16,26 +17,32 @@ import java.security.SecureRandom;
 import java.sql.Timestamp;
 import java.time.Instant;
 import java.util.*;
+import java.util.regex.Pattern;
 
 /**
- * S6 — phone as scanner (waybill mode). A worker pairs a phone with their open waybill pack
- * session by scanning a QR on the tablet; the phone reads barcodes and relays them; the tablet
- * applies each one through its own scan path and reports the outcome back.
+ * Phone as scanner, per station (Q1, V138; S6 tied a pairing to one pack session). A worker pairs
+ * a phone with the TABLET they're working at by scanning a QR on it; the phone reads barcodes and
+ * relays them; the tablet hands each one to whichever scanning screen is open (or answers "no
+ * scanning screen open") and reports the outcome back. A pairing belongs to the tablet
+ * ({@code station_device_id}, a random per-tablet id from its localStorage — a routing key, not a
+ * secret) AND to the worker who made it; it survives pack sessions and screens.
  *
  * Credentials: a one-time pair code (in the QR, valid 2 min) is claimed for a device secret
  * (valid 12 h). Both are random (pair code 128-bit, device secret 256-bit), URL-safe, and only
  * their SHA-256 hashes are stored. A hash is matched to a pairing only through hatch #15
- * ({@code resolve_scan_pairing}); everything after that runs under app_user + RLS with the
- * pairing's tenant (the phone controller sets it for that request only).
+ * ({@code resolve_scan_pairing}, which also requires the worker to be an active user); everything
+ * after that runs under app_user + RLS with the pairing's tenant (the phone controller sets it for
+ * that request only).
  *
  * Relay: a phone scan is a {@code scan_relay_events} row (idempotent on the phone's seq). It is
  * delivered to the tablet's stream only while it is under 5 s old — claimed 'pending' →
  * 'delivered' before it is written, released back if the write fails — and an older pending
  * one is marked 'expired' and never delivered. No replay, ever.
  *
- * Revocation: a new pairing replaces the previous one; unpair; session end
- * ({@link PackSessionStore#end}); worker switch ({@code AuthController.pinSwitch}, and the
- * tablet's own sign-out); and the 12 h expiry (hatch #15 stops resolving it).
+ * Revocation: unpair; a new pairing on the same tablet or by the same worker ('replaced'); worker
+ * switch ({@code AuthController.pinSwitch}, and the tablet's own sign-out); the station locking
+ * (back at the PIN gate); full logout; the worker deactivated (hatch #15 stops resolving); and the
+ * 12 h expiry. Ending a pack session does NOT end the pairing.
  */
 @Service
 public class ScanPairingService {
@@ -48,6 +55,11 @@ public class ScanPairingService {
     static final int MAX_SCANS_PER_SECOND = 10;
     static final int MAX_CODE_LENGTH = 200;
     static final int MAX_MESSAGE_LENGTH = 200;
+    static final int MAX_TARGET_LENGTH = 80;
+    /** V138's CHECK on station_device_id. */
+    static final Pattern DEVICE_ID = Pattern.compile("^[A-Za-z0-9_-]{16,64}$");
+    /** Reasons a caller may give for revoking their own pairings (DELETE /pack-sessions/pairings/mine). */
+    public static final Set<String> SELF_REVOKE_REASONS = Set.of("worker_switched", "station_locked");
 
     public record PairingCreated(UUID pairingId, String pairUrl, Instant pairCodeExpiresAt, Instant expiresAt) {}
 
@@ -59,9 +71,8 @@ public class ScanPairingService {
 
     public record Resolved(UUID tenantId, UUID pairingId) {}
 
-    public record OrderContext(String number, String customerName, int scanned, int required) {}
-
-    public record PhoneContext(String state, String workerName, OrderContext order, Instant expiresAt) {}
+    /** The phone header: the worker it's paired with and the scanning screen open on their tablet. */
+    public record PhoneContext(String state, String workerName, String target, Instant expiresAt) {}
 
     public record Claimed(String deviceSecret, PhoneContext context) {}
 
@@ -85,119 +96,145 @@ public class ScanPairingService {
         this.appUrl = appUrl.endsWith("/") ? appUrl.substring(0, appUrl.length() - 1) : appUrl;
     }
 
-    // ── Tablet side (authenticated; the session owner only) ──────────────────
+    // ── Tablet side (authenticated; the caller's own pairing only) ───────────
 
-    /** New pairing for the caller's open waybill session; any previous one is revoked ('replaced'). */
-    public PairingCreated create(UUID sessionId, UUID userId) {
+    /**
+     * New pairing for this tablet and the caller. Any live pairing on the same tablet or held by
+     * the same worker is revoked ('replaced') first — one per tablet, one per worker (V138).
+     */
+    public PairingCreated create(String deviceId, UUID userId) {
+        requireDeviceId(deviceId);
         UUID tenantId = TenantContext.require();
         String pairCode = randomToken(PAIR_CODE_BYTES);
-        PairingCreated created = tx.execute(s -> {
-            requireOwnSession(sessionId, userId, tenantId, true);
-            revokeWhere("pack_session_id = ?", sessionId, tenantId, "replaced");
-            Map<String, Object> row = jdbc.queryForMap(
-                "INSERT INTO scan_pairings (tenant_id, pack_session_id, station_user_id, pair_code_hash, " +
-                "                           pair_code_expires_at, expires_at) " +
-                "VALUES (?, ?, ?, ?, now() + interval '" + PAIR_CODE_TTL + "', now() + interval '" + PAIRING_TTL + "') " +
-                "RETURNING id, pair_code_expires_at, expires_at",
-                tenantId, sessionId, userId, sha256(pairCode));
-            return new PairingCreated((UUID) row.get("id"), appUrl + "/scan/" + pairCode,
-                instant(row.get("pair_code_expires_at")), instant(row.get("expires_at")));
-        });
-        hub.sendStatus(sessionId, new PairingStatus("waiting", created.pairingId(), null,
-            created.pairCodeExpiresAt(), null, created.expiresAt(), null));
-        return created;
+        try {
+            return tx.execute(s -> {
+                revokeWhere("(station_device_id = ? OR station_user_id = ?)", new Object[] { deviceId, userId },
+                    tenantId, "replaced");
+                Map<String, Object> row = jdbc.queryForMap(
+                    "INSERT INTO scan_pairings (tenant_id, station_device_id, station_user_id, pair_code_hash, " +
+                    "                           pair_code_expires_at, expires_at) " +
+                    "VALUES (?, ?, ?, ?, now() + interval '" + PAIR_CODE_TTL + "', now() + interval '" + PAIRING_TTL + "') " +
+                    "RETURNING id, pair_code_expires_at, expires_at",
+                    tenantId, deviceId, userId, sha256(pairCode));
+                return new PairingCreated((UUID) row.get("id"), appUrl + "/scan/" + pairCode,
+                    instant(row.get("pair_code_expires_at")), instant(row.get("expires_at")));
+            });
+        } catch (DataIntegrityViolationException e) {
+            // A concurrent create on the same tablet / by the same worker won the one-active index.
+            throw ScanPairException.busy();
+        }
     }
 
-    /** Unpair the session's phone. */
-    public void unpair(UUID sessionId, UUID userId) {
+    /** Unpair the caller's phone on this tablet. */
+    public void unpair(String deviceId, UUID userId) {
+        requireDeviceId(deviceId);
         UUID tenantId = TenantContext.require();
-        tx.executeWithoutResult(s -> {
-            requireOwnSession(sessionId, userId, tenantId, false);
-            revokeWhere("pack_session_id = ?", sessionId, tenantId, "unpaired");
-        });
+        tx.executeWithoutResult(s -> revokeWhere("station_device_id = ? AND station_user_id = ?",
+            new Object[] { deviceId, userId }, tenantId, "unpaired"));
     }
 
-    public PairingStatus current(UUID sessionId, UUID userId) {
+    /** The caller's pairing on this tablet ('none' when there is none — or it's another worker's). */
+    public PairingStatus current(String deviceId, UUID userId) {
+        requireDeviceId(deviceId);
+        UUID tenantId = TenantContext.require();
+        return tx.execute(s -> statusOf(liveRow(deviceId, tenantId), userId));
+    }
+
+    /**
+     * The pairing this caller may stream on this tablet: the tablet's live pairing, which must be
+     * the caller's own (403 PAIRING_NOT_YOURS otherwise; 409 NO_PAIRING when there is none).
+     */
+    public UUID requireStreamable(String deviceId, UUID userId) {
+        requireDeviceId(deviceId);
         UUID tenantId = TenantContext.require();
         return tx.execute(s -> {
-            requireOwnSession(sessionId, userId, tenantId, false);
-            return statusOf(sessionId, tenantId);
+            Map<String, Object> row = liveRow(deviceId, tenantId);
+            if (row == null) throw ScanPairException.noPairing();
+            if (!userId.equals(row.get("station_user_id"))) throw ScanPairException.notYours();
+            return (UUID) row.get("id");
         });
-    }
-
-    /** Checks the caller may open this session's relay stream (own, open, waybill mode). */
-    public void requireStreamable(UUID sessionId, UUID userId) {
-        UUID tenantId = TenantContext.require();
-        tx.executeWithoutResult(s -> requireOwnSession(sessionId, userId, tenantId, true));
     }
 
     /**
      * The tablet's verdict on a delivered phone scan. Idempotent: an event that already has an
-     * outcome (or expired) is left as it is. 404 for an event that isn't this session's.
+     * outcome (or expired) is left as it is. 404 for an event that isn't the caller's pairing's.
      */
-    public void outcome(UUID sessionId, UUID userId, UUID eventId, String result, String message) {
+    public void outcome(UUID userId, UUID eventId, String result, String message) {
         if (!"accepted".equals(result) && !"rejected".equals(result)) throw ScanPairException.badOutcome();
         UUID tenantId = TenantContext.require();
         tx.executeWithoutResult(s -> {
-            requireOwnSession(sessionId, userId, tenantId, false);
             int n = jdbc.update(
                 "UPDATE scan_relay_events e SET status = ?, message = ?, outcome_at = now() " +
                 "FROM scan_pairings p " +
-                "WHERE e.id = ? AND e.tenant_id = ? AND p.id = e.pairing_id AND p.pack_session_id = ? " +
+                "WHERE e.id = ? AND e.tenant_id = ? AND p.id = e.pairing_id AND p.station_user_id = ? " +
                 "  AND e.status IN ('pending', 'delivered')",
-                result, oneLine(message), eventId, tenantId, sessionId);
+                result, oneLine(message), eventId, tenantId, userId);
             if (n == 0) {
                 Integer exists = jdbc.queryForObject(
                     "SELECT COUNT(*) FROM scan_relay_events e JOIN scan_pairings p ON p.id = e.pairing_id " +
-                    "WHERE e.id = ? AND e.tenant_id = ? AND p.pack_session_id = ?",
-                    Integer.class, eventId, tenantId, sessionId);
+                    "WHERE e.id = ? AND e.tenant_id = ? AND p.station_user_id = ?",
+                    Integer.class, eventId, tenantId, userId);
                 if (exists == null || exists == 0) throw ScanPairException.eventNotFound();
             }
         });
     }
 
-    /** Session end (PackSessionStore.end, inside its transaction). */
-    void revokeForSession(UUID sessionId, UUID tenantId, String reason) {
-        revokeWhere("pack_session_id = ?", sessionId, tenantId, reason);
+    /**
+     * The scanning screen open on the tablet ("Pick & Pack · #1047"), shown in the phone header;
+     * null / blank clears it. No-op when the caller has no live pairing on this tablet.
+     */
+    public void setTarget(String deviceId, UUID userId, String label) {
+        requireDeviceId(deviceId);
+        UUID tenantId = TenantContext.require();
+        String target = oneLine(label);
+        if (target != null && target.isEmpty()) target = null;
+        if (target != null && target.length() > MAX_TARGET_LENGTH) target = target.substring(0, MAX_TARGET_LENGTH);
+        String t = target;
+        tx.executeWithoutResult(s -> jdbc.update(
+            "UPDATE scan_pairings SET active_target = ?, active_target_at = now() " +
+            "WHERE tenant_id = ? AND station_device_id = ? AND station_user_id = ? AND revoked_at IS NULL",
+            t, tenantId, deviceId, userId));
     }
 
-    /** Worker switch: every live pairing the outgoing worker's stations hold. */
+    /**
+     * Every live pairing the user holds: worker switch, the tablet's sign-out, the station
+     * locking, full logout.
+     */
     public void revokeForUser(UUID userId, String reason) {
         UUID tenantId = TenantContext.require();
-        tx.executeWithoutResult(s -> revokeWhere("station_user_id = ?", userId, tenantId, reason));
+        tx.executeWithoutResult(s -> revokeWhere("station_user_id = ?", new Object[] { userId }, tenantId, reason));
     }
 
     // ── Relay delivery (tablet stream) ───────────────────────────────────────
 
     /**
-     * Writes every deliverable phone scan of the session to its open stream, oldest first:
+     * Writes every deliverable phone scan of the pairing to its open stream, oldest first:
      * pending ones older than 5 s are expired first (never delivered); each fresh one is claimed
      * 'delivered' before the write and released to 'pending' if the write fails. Called with the
-     * session's tenant set — from the stream request, or from the phone's scan request.
+     * pairing's tenant set — from the stream request, or from the phone's scan request.
      */
-    public void deliver(UUID sessionId) {
-        ScanRelayHub.Subscriber sub = hub.get(sessionId);
+    public void deliver(UUID pairingId) {
+        ScanRelayHub.Subscriber sub = hub.get(pairingId);
         if (sub == null) return;
         UUID tenantId = TenantContext.require();
         if (!tenantId.equals(sub.tenantId)) return;
         synchronized (sub.lock) {
             List<RelayEvent> claimed = tx.execute(s -> {
                 jdbc.update(
-                    "UPDATE scan_relay_events e SET status = 'expired', outcome_at = now() " +
-                    "FROM scan_pairings p " +
-                    "WHERE p.id = e.pairing_id AND p.pack_session_id = ? AND e.tenant_id = ? " +
-                    "  AND e.status = 'pending' AND e.created_at <= now() - interval '" + DELIVERY_WINDOW + "'",
-                    sessionId, tenantId);
+                    "UPDATE scan_relay_events SET status = 'expired', outcome_at = now() " +
+                    "WHERE pairing_id = ? AND tenant_id = ? " +
+                    "  AND status = 'pending' AND created_at <= now() - interval '" + DELIVERY_WINDOW + "'",
+                    pairingId, tenantId);
                 List<RelayEvent> rows = jdbc.query(
                     "UPDATE scan_relay_events e SET status = 'delivered' " +
                     "FROM scan_pairings p " +
-                    "WHERE p.id = e.pairing_id AND p.pack_session_id = ? AND p.revoked_at IS NULL " +
+                    "WHERE p.id = e.pairing_id AND p.id = ? AND p.revoked_at IS NULL " +
                     "  AND e.tenant_id = ? AND e.status = 'pending' " +
                     "  AND e.created_at > now() - interval '" + DELIVERY_WINDOW + "' " +
                     "RETURNING e.id, e.seq, e.code, e.created_at",
                     (rs, i) -> new RelayEvent(rs.getObject("id", UUID.class), rs.getLong("seq"),
                         rs.getString("code"), rs.getTimestamp("created_at").toInstant()),
-                    sessionId, tenantId);
+                    pairingId, tenantId);
                 List<RelayEvent> sorted = new ArrayList<>(rows);
                 sorted.sort(Comparator.comparing(RelayEvent::createdAt).thenComparingLong(RelayEvent::seq));
                 return sorted;
@@ -214,10 +251,15 @@ public class ScanPairingService {
         }
     }
 
-    /** The stream's first event: the session's pairing status. */
-    PairingStatus statusForStream(UUID sessionId) {
+    /** The stream's first event: the pairing's status. */
+    PairingStatus statusForStream(UUID pairingId) {
         UUID tenantId = TenantContext.require();
-        return tx.execute(s -> statusOf(sessionId, tenantId));
+        return tx.execute(s -> {
+            List<Map<String, Object>> rows = jdbc.queryForList(
+                "SELECT " + STATUS_COLUMNS + " FROM scan_pairings WHERE id = ? AND tenant_id = ? AND revoked_at IS NULL",
+                pairingId, tenantId);
+            return rows.isEmpty() ? PairingStatus.none(null) : statusOf(rows.get(0), null);
+        });
     }
 
     // ── Phone side (public; resolved through hatch #15) ──────────────────────
@@ -236,17 +278,15 @@ public class ScanPairingService {
     public Claimed claim(Resolved r, String deviceLabel) {
         String deviceSecret = randomToken(DEVICE_SECRET_BYTES);
         UUID tenantId = TenantContext.require();
-        UUID sessionId = tx.execute(s -> {
-            List<UUID> rows = jdbc.queryForList(
+        tx.executeWithoutResult(s -> {
+            int n = jdbc.update(
                 "UPDATE scan_pairings SET claimed_at = now(), device_secret_hash = ?, device_label = ? " +
                 "WHERE id = ? AND tenant_id = ? AND claimed_at IS NULL AND revoked_at IS NULL " +
-                "  AND now() < pair_code_expires_at AND now() < expires_at " +
-                "RETURNING pack_session_id",
-                UUID.class, sha256(deviceSecret), deviceLabel, r.pairingId(), tenantId);
-            if (rows.isEmpty()) throw ScanPairException.ended();       // lost a concurrent claim
-            return rows.get(0);
+                "  AND now() < pair_code_expires_at AND now() < expires_at",
+                sha256(deviceSecret), deviceLabel, r.pairingId(), tenantId);
+            if (n == 0) throw ScanPairException.ended();               // lost a concurrent claim
         });
-        hub.sendStatus(sessionId, tx.execute(s -> statusOf(sessionId, tenantId)));
+        hub.sendStatus(r.pairingId(), statusForStream(r.pairingId()));
         return new Claimed(deviceSecret, phoneStatus(r));
     }
 
@@ -259,21 +299,17 @@ public class ScanPairingService {
         if (seq == null || seq < 0 || code.isEmpty() || code.length() > MAX_CODE_LENGTH) throw ScanPairException.badScan();
         throttle(r.pairingId());
         UUID tenantId = TenantContext.require();
-        UUID[] sessionAndEvent = tx.execute(s -> {
-            UUID sessionId = jdbc.queryForObject(
-                "SELECT pack_session_id FROM scan_pairings WHERE id = ? AND tenant_id = ?",
-                UUID.class, r.pairingId(), tenantId);
+        UUID eventId = tx.execute(s -> {
             List<UUID> inserted = jdbc.queryForList(
                 "INSERT INTO scan_relay_events (tenant_id, pairing_id, seq, code) VALUES (?, ?, ?, ?) " +
                 "ON CONFLICT (pairing_id, seq) DO NOTHING RETURNING id",
                 UUID.class, tenantId, r.pairingId(), seq, code);
-            UUID eventId = !inserted.isEmpty() ? inserted.get(0) : jdbc.queryForObject(
+            return !inserted.isEmpty() ? inserted.get(0) : jdbc.queryForObject(
                 "SELECT id FROM scan_relay_events WHERE pairing_id = ? AND seq = ? AND tenant_id = ?",
                 UUID.class, r.pairingId(), seq, tenantId);
-            return new UUID[] { sessionId, eventId };
         });
-        deliver(sessionAndEvent[0]);
-        return sessionAndEvent[1];
+        deliver(r.pairingId());
+        return eventId;
     }
 
     /** The phone's poll: a pending event past the delivery window is expired here too. */
@@ -294,73 +330,71 @@ public class ScanPairingService {
         });
     }
 
-    /** The phone header: who it's connected to and the order open at the station. Tenant is set. */
+    /** The phone header: whose tablet it's paired with and the scanning screen open there. Tenant is set. */
     public PhoneContext phoneStatus(Resolved r) {
         UUID tenantId = TenantContext.require();
         return tx.execute(s -> {
             Map<String, Object> p = jdbc.queryForMap(
-                "SELECT sp.expires_at, u.name AS worker_name, ps.current_order_id " +
+                "SELECT sp.expires_at, sp.active_target, u.name AS worker_name " +
                 "FROM scan_pairings sp " +
-                "JOIN pack_sessions ps ON ps.id = sp.pack_session_id AND ps.tenant_id = sp.tenant_id " +
                 "LEFT JOIN users u ON u.id = sp.station_user_id " +
                 "WHERE sp.id = ? AND sp.tenant_id = ?",
                 r.pairingId(), tenantId);
-            UUID orderId = (UUID) p.get("current_order_id");
-            OrderContext order = null;
-            if (orderId != null) {
-                order = jdbc.query(
-                    "SELECT o.number, o.customer_name, " +
-                    "       COALESCE((SELECT SUM(oi.quantity) FROM order_items oi WHERE oi.order_id = o.id), 0) AS required, " +
-                    "       COALESCE((SELECT COUNT(*) FROM allocations a JOIN order_items oi2 ON oi2.id = a.order_item_id " +
-                    "                 WHERE oi2.order_id = o.id AND a.status IN ('active', 'packed')), 0) AS scanned " +
-                    "FROM orders o WHERE o.id = ? AND o.tenant_id = ?",
-                    rs -> rs.next() ? new OrderContext(rs.getString("number"), rs.getString("customer_name"),
-                        rs.getInt("scanned"), rs.getInt("required")) : null,
-                    orderId, tenantId);
-            }
-            return new PhoneContext("connected", (String) p.get("worker_name"), order, instant(p.get("expires_at")));
+            return new PhoneContext("connected", (String) p.get("worker_name"), (String) p.get("active_target"),
+                instant(p.get("expires_at")));
         });
     }
 
     // ── internals ─────────────────────────────────────────────────────────────
 
-    private void requireOwnSession(UUID sessionId, UUID userId, UUID tenantId, boolean requireOpen) {
-        List<Map<String, Object>> rows = jdbc.queryForList(
-            "SELECT user_id, status, mode FROM pack_sessions WHERE id = ? AND tenant_id = ?", sessionId, tenantId);
-        if (rows.isEmpty()) throw PackSessionException.notFound();
-        Map<String, Object> s = rows.get(0);
-        if (!userId.equals(s.get("user_id"))) throw PackSessionException.notYours();
-        if (requireOpen && !"open".equals(s.get("status"))) throw PackSessionException.ended();
-        if (!"waybill_scan".equals(s.get("mode"))) throw PackSessionException.modeNotWaybill();
+    private static void requireDeviceId(String deviceId) {
+        if (deviceId == null || !DEVICE_ID.matcher(deviceId).matches()) throw ScanPairException.badDevice();
     }
 
-    /** Revokes the live pairings matching {@code where} (+ their undelivered events); tells the streams. */
-    private void revokeWhere(String where, UUID arg, UUID tenantId, String reason) {
-        List<UUID[]> revoked = jdbc.query(
+    private static final String STATUS_COLUMNS =
+        "id, station_user_id, device_label, pair_code_expires_at, claimed_at, expires_at, " +
+        "(now() >= expires_at) AS expired, (now() >= pair_code_expires_at) AS code_expired";
+
+    /** The tablet's live (unrevoked) pairing, whoever's it is; null when none. */
+    private Map<String, Object> liveRow(String deviceId, UUID tenantId) {
+        List<Map<String, Object>> rows = jdbc.queryForList(
+            "SELECT " + STATUS_COLUMNS + " FROM scan_pairings " +
+            "WHERE tenant_id = ? AND station_device_id = ? AND revoked_at IS NULL",
+            tenantId, deviceId);
+        return rows.isEmpty() ? null : rows.get(0);
+    }
+
+    /**
+     * Revokes the live pairings matching {@code where} (+ their undelivered events); after commit
+     * tells each one's stream and closes it.
+     */
+    private void revokeWhere(String where, Object[] args, UUID tenantId, String reason) {
+        Object[] all = new Object[args.length + 2];
+        all[0] = reason;
+        all[1] = tenantId;
+        System.arraycopy(args, 0, all, 2, args.length);
+        List<UUID> revoked = jdbc.queryForList(
             "UPDATE scan_pairings SET revoked_at = now(), revoked_reason = ? " +
-            "WHERE tenant_id = ? AND revoked_at IS NULL AND " + where + " RETURNING id, pack_session_id",
-            (rs, i) -> new UUID[] { rs.getObject("id", UUID.class), rs.getObject("pack_session_id", UUID.class) },
-            reason, tenantId, arg);
+            "WHERE tenant_id = ? AND revoked_at IS NULL AND " + where + " RETURNING id",
+            UUID.class, all);
         if (revoked.isEmpty()) return;
-        for (UUID[] p : revoked) {
+        for (UUID id : revoked) {
             jdbc.update(
                 "UPDATE scan_relay_events SET status = 'expired', outcome_at = now() " +
                 "WHERE pairing_id = ? AND tenant_id = ? AND status = 'pending'",
-                p[0], tenantId);
+                id, tenantId);
         }
-        List<UUID> sessions = revoked.stream().map(p -> p[1]).distinct().toList();
         PairingStatus ended = PairingStatus.none(reason);
-        afterCommit(() -> sessions.forEach(sid -> hub.sendStatus(sid, ended)));
+        afterCommit(() -> revoked.forEach(id -> {
+            hub.sendStatus(id, ended);
+            hub.close(id);
+        }));
     }
 
-    private PairingStatus statusOf(UUID sessionId, UUID tenantId) {
-        List<Map<String, Object>> rows = jdbc.queryForList(
-            "SELECT id, device_label, pair_code_expires_at, claimed_at, expires_at, " +
-            "       (now() >= expires_at) AS expired, (now() >= pair_code_expires_at) AS code_expired " +
-            "FROM scan_pairings WHERE pack_session_id = ? AND tenant_id = ? AND revoked_at IS NULL",
-            sessionId, tenantId);
-        if (rows.isEmpty()) return PairingStatus.none(null);
-        Map<String, Object> p = rows.get(0);
+    /** A pairing row → its status; 'none' when there's no row or it isn't {@code userId}'s (null = anyone's). */
+    private static PairingStatus statusOf(Map<String, Object> p, UUID userId) {
+        if (p == null) return PairingStatus.none(null);
+        if (userId != null && !userId.equals(p.get("station_user_id"))) return PairingStatus.none(null);
         boolean claimed = p.get("claimed_at") != null;
         String status = Boolean.TRUE.equals(p.get("expired")) ? "expired"
             : claimed ? "connected"

@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { CheckCircle2, OctagonAlert, PackageCheck, Undo2 } from 'lucide-react'
 import { ScanShell } from '../../components/ScanShell'
@@ -8,16 +8,13 @@ import ScanHelperChips from '../../components/scanHelpers/ScanHelperChips'
 import { useStation } from '../../components/StationProvider'
 import { Alert, Button, Modal, ProductThumb, Radio, cn } from '../../components/ui'
 import {
-  createScanPairing, endPackSession, getMe, getPackSession, getScanPairing, postRelayOutcome,
-  retryPackComplete, scanPackPiece, scanPackWaybill, setAsidePackOrder, undoPackPiece, unpairScanPairing,
+  endPackSession, getMe, getPackSession,
+  retryPackComplete, scanPackPiece, scanPackWaybill, setAsidePackOrder, undoPackPiece,
   TransferCommandError,
-  PackOrderCard, PackScanResponse, PackSessionView, ScanPairingCreated, ScanPairingStatus, SetAsideReason,
+  PackOrderCard, PackScanResponse, PackSessionView, SetAsideReason,
   WaybillOutcome,
 } from '../../api'
-import { PhoneControl } from './PhonePairing'
-// Lazy: the QR library loads only when a worker taps "Use phone".
-const PhonePairModal = lazy(() => import('./PhonePairModal'))
-import { openRelayStream } from './relayStream'
+import { usePhoneScanTarget } from '../../phone/usePhoneScanTarget'
 
 // Pick & Pack S3 — the waybill pack session (design/pick-pack-waybill-mockup/SessionWaiting,
 // SessionScanning, Rejected, SetAside). Full-screen immersive — no <Layout>. Built on the shared
@@ -28,11 +25,13 @@ import { openRelayStream } from './relayStream'
 // (scanner.clearQueue) whenever they must not be applied — a waybill rejection, complete_failed,
 // the set-aside dialog, ending the session.
 //
-// S6 — phone as scanner: "Use phone" pairs a phone (QR); its reads arrive on the relay stream and
-// go through the very same queue and onScan as the station's own scanner (handleScan with
+// Phone as scanner (S6; per tablet since Q1): the tablet's paired phone (the floating control —
+// PhoneScanProvider) sends its reads to this screen while it's open: usePhoneScanTarget puts them
+// through the very same queue and onScan as the station's own scanner (handleScan with
 // {relayEventId}), so they are applied one at a time, in order, with the screen state the
-// previous scan produced. onScan answers each phone scan with one outcome (accepted / rejected
-// + one line); scans dropped from the queue (clearQueue) are answered "not applied".
+// previous scan produced. Each phone scan gets one outcome — the line onScan returns in
+// `data.phone`; scans dropped from the queue (clearQueue) are answered "not applied"; while the
+// set-aside dialog is open the provider answers "Tablet busy".
 
 type PackedFlash = { number: string | null; customer: string | null; pieces: number }
 type Failed = { code: string; message: string | null }
@@ -65,14 +64,6 @@ export default function PackSessionScreen({ initial, onEnded }: {
   const [error, setError] = useState<string | null>(null)
   // useScanner's clearQueue, reachable from onScan (which useScanner itself needs first).
   const clearQueueRef = useRef<() => void>(() => {})
-  // S6 — the paired phone.
-  const [pairing, setPairing] = useState<ScanPairingStatus | null>(null)
-  const [pairOpen, setPairOpen] = useState(false)
-  const [pairOffer, setPairOffer] = useState<ScanPairingCreated | null>(null)
-  const [pairBusy, setPairBusy] = useState(false)
-  const [pairError, setPairError] = useState<string | null>(null)
-  const [linkDownSince, setLinkDownSince] = useState<number | null>(null)
-  const [linkDownLong, setLinkDownLong] = useState(false)
 
   // Worker shown in the header: the PIN-switched station worker, else /me.
   useEffect(() => {
@@ -123,14 +114,11 @@ export default function PackSessionScreen({ initial, onEnded }: {
     return { success: true }
   }
 
-  /** S6: a phone scan's one outcome (no-op for the station's own scanner — no relayEventId). */
-  const tellPhone = useCallback((meta: ScanMeta | undefined, success: boolean, message: string) => {
-    const eventId = typeof meta?.relayEventId === 'string' ? meta.relayEventId : null
-    if (!eventId) return
-    postRelayOutcome(view.id, eventId, success ? 'accepted' : 'rejected', message).catch(() => {})
-  }, [view.id])
+  /** A scan's outcome, carrying the one line the phone shows (ignored for the station's own scanner). */
+  const out = (success: boolean, phone: string, base?: ScanOutcome): ScanOutcome =>
+    ({ ...(base ?? {}), success, data: { phone } })
 
-  /** S6: the one line the phone shows for a piece-scan response. */
+  /** The one line the phone shows for a piece-scan response. */
   function phoneMessage(r: PackScanResponse): string {
     if (r.status === 'completed') return t('fulfill.waybill.phone.packed', { number: r.packed?.orderNumber ?? '' })
     if (r.status === 'complete_failed') return t('fulfill.waybill.phone.completeFailed', { number: order?.number ?? '' })
@@ -146,11 +134,8 @@ export default function PackSessionScreen({ initial, onEnded }: {
       : `${r.scan?.allocatedCount ?? 0}/${r.scan?.requiredQuantity ?? 0}`
   }
 
-  const onScan = useCallback(async (code: string, meta?: ScanMeta): Promise<ScanOutcome> => {
-    if (setAsideOpen) {
-      tellPhone(meta, false, t('fulfill.waybill.phone.notApplied'))
-      return { success: false }
-    }
+  const onScan = useCallback(async (code: string, _meta?: ScanMeta): Promise<ScanOutcome> => {
+    if (setAsideOpen) return out(false, t('fulfill.waybill.phone.notApplied'))
     setError(null)
     setPieceError(null)
 
@@ -163,106 +148,46 @@ export default function PackSessionScreen({ initial, onEnded }: {
           setFailed(null)
           setLastScan(null)
           setOrder(r.order)
-          tellPhone(meta, true, t('fulfill.waybill.phone.opened', { number: r.order.number ?? r.orderNumber ?? '' }))
-          return { success: true }
+          return out(true, t('fulfill.waybill.phone.opened', { number: r.order.number ?? r.orderNumber ?? '' }))
         }
         clearQueueRef.current()                // queued scans were meant for the rejected waybill
         setRejection(r)
         refresh()
-        tellPhone(meta, false, t(`fulfill.waybill.rejected.${r.code}`, { defaultValue: r.code ?? '' }))
-        return { success: false }
+        return out(false, t(`fulfill.waybill.rejected.${r.code}`, { defaultValue: r.code ?? '' }))
       } catch (e) {
         setError(apiError(e))
-        tellPhone(meta, false, apiError(e))
-        return { success: false }
+        return out(false, apiError(e))
       }
     }
 
     try {
       const r = await scanPackPiece(view.id, order.id, code)
       const outcome = applyScanResponse(r)
-      tellPhone(meta, outcome.success, phoneMessage(r))
-      return outcome
+      return out(outcome.success, phoneMessage(r), outcome)
     } catch (e) {
       setError(apiError(e))
-      tellPhone(meta, false, apiError(e))
-      return { success: false }
+      return out(false, apiError(e))
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [order, view.id, setAsideOpen, refresh, t, ar, tellPhone])
+  }, [order, view.id, setAsideOpen, refresh, t, ar])
 
+  // Phone scans: this screen is the tablet's scan target while it's open (Q1). The set-aside
+  // dialog pauses it — phone scans meanwhile are answered "Tablet busy".
+  const phone = usePhoneScanTarget({
+    label: order ? t('phone.target.pack', { number: order.number ?? '' }) : t('phone.target.packWaiting'),
+    describe: (_code, o) => (o.data as { phone?: string } | undefined)?.phone,
+    paused: setAsideOpen,
+  })
   // useScanner keeps the input focused between scans itself; focusPaused while the set-aside
   // dialog is open so its radios keep the click.
-  const scanner = useScanner({ onScan, focusPaused: setAsideOpen || pairOpen })
+  const scanner = phone.attach(useScanner({ onScan: phone.wrap(onScan), focusPaused: setAsideOpen }))
   // Review mode S7: click-to-scan chips (demo / review tenant only) — through scanner.handleScan,
   // the same queue a real scan takes.
   const { scanHelpers } = useCapabilities()
   const helperScan = scanHelpers ? (code: string) => { scanner.handleScan(code) } : null
-  // Every drop of waiting scans answers the phone scans among them — the phone never waits on one.
-  clearQueueRef.current = () => {
-    for (const meta of scanner.clearQueue()) tellPhone(meta, false, t('fulfill.waybill.phone.notApplied'))
-  }
-  const scannerRef = useRef(scanner)
-  scannerRef.current = scanner
-
-  // ── S6: phone pairing + relay stream ──────────────────────────────────────
-  useEffect(() => {
-    getScanPairing(view.id).then(setPairing).catch(() => {})
-  }, [view.id])
-
-  const streamWanted = pairOpen || pairing?.status === 'waiting' || pairing?.status === 'connected'
-  useEffect(() => {
-    if (!streamWanted) { setLinkDownSince(null); return }
-    return openRelayStream(view.id, {
-      onScan: ev => {
-        const s = scannerRef.current
-        const input = s.inputRef.current
-        const typed = input?.value ?? ''
-        void s.handleScan(ev.code, { relayEventId: ev.id })
-        if (input && typed) input.value = typed       // a phone scan never wipes a scan being typed here
-      },
-      onPairing: status => setPairing(status),
-      onConnection: up => setLinkDownSince(prev => (up ? null : prev ?? Date.now())),
-    })
-  }, [view.id, streamWanted])
-
-  // "Phone link reconnecting…" only after 5 s down.
-  useEffect(() => {
-    if (linkDownSince === null) { setLinkDownLong(false); return }
-    const id = window.setTimeout(() => setLinkDownLong(true), Math.max(0, linkDownSince + 5000 - Date.now()))
-    return () => window.clearTimeout(id)
-  }, [linkDownSince])
-
-  // The phone claimed the code → close the QR.
-  useEffect(() => {
-    if (pairOpen && pairing?.status === 'connected') { setPairOpen(false); setPairOffer(null) }
-  }, [pairOpen, pairing?.status])
-
-  async function startPhonePairing() {
-    setPairOpen(true)
-    setPairError(null)
-    setPairBusy(true)
-    try {
-      const created = await createScanPairing(view.id)
-      setPairOffer(created)
-      setPairing({ status: 'waiting', pairingId: created.pairingId, deviceLabel: null,
-        pairCodeExpiresAt: created.pairCodeExpiresAt, claimedAt: null, expiresAt: created.expiresAt, reason: null })
-    } catch (e) {
-      setPairError(e instanceof TransferCommandError ? (ar ? e.messageAr : e.messageEn) : t('fulfill.waybill.phone.createError'))
-    } finally {
-      setPairBusy(false)
-    }
-  }
-
-  async function unpair() {
-    setPairBusy(true)
-    try { await unpairScanPairing(view.id) } catch { /* the server may already have ended it */ }
-    setPairing({ status: 'none', pairingId: null, deviceLabel: null, pairCodeExpiresAt: null, claimedAt: null,
-      expiresAt: null, reason: 'unpaired' })
-    setPairOpen(false)
-    setPairOffer(null)
-    setPairBusy(false)
-  }
+  // Every drop of waiting scans answers the phone scans among them (the attached clearQueue) —
+  // the phone never waits on one.
+  clearQueueRef.current = () => { scanner.clearQueue() }
 
   function openSetAside() {
     clearQueueRef.current()                    // scans waiting must not land on an order being set aside
@@ -336,8 +261,6 @@ export default function PackSessionScreen({ initial, onEnded }: {
           </span>
         </div>
         <div className="flex items-center gap-3">
-          <PhoneControl pairing={pairing} linkDown={linkDownLong} busy={pairBusy}
-            onUsePhone={startPhonePairing} onUnpair={unpair} />
           <span className="hidden sm:inline-flex items-center gap-2 text-small text-primary">
             <span className="w-7 h-7 rounded-full bg-trace-blue/15 text-trace-blue font-semibold flex items-center justify-center">
               {worker.slice(0, 1).toUpperCase()}
@@ -451,12 +374,6 @@ export default function PackSessionScreen({ initial, onEnded }: {
         </aside>
       </div>
 
-      {pairOpen && (
-        <Suspense fallback={null}>
-          <PhonePairModal offer={pairOffer} starting={pairBusy} error={pairError}
-            onNewCode={startPhonePairing} onCancel={unpair} />
-        </Suspense>
-      )}
       {setAsideOpen && order && (
         <SetAsideDialog
           order={order}

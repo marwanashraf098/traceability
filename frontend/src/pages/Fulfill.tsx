@@ -13,6 +13,7 @@ import { TransferCommandError } from '../api'
 import { useCapabilities } from '../capabilities'
 import ScanHelperChips from '../components/scanHelpers/ScanHelperChips'
 import { useScanner, ScanMeta, ScanOutcome } from '../hooks/useScanner'
+import { usePhoneScanRegistration, usePhoneScanTarget } from '../phone/usePhoneScanTarget'
 
 const BASE = '/api/v1'
 
@@ -207,12 +208,15 @@ async function printAwbPdf(shipmentId: string): Promise<'opened' | 'emailed'> {
 
 function AwbLinkDialog({
   orderId,
-  onLinked,
+  onLinked: onLinkedProp,
   variant = 'modal',
   demoTracking = null,
+  orderNumber = null,
 }: {
   orderId: string
   onLinked: (result: { tracking: string; shipmentId: string }) => void
+  /** Q1: shown in the paired phone's header while this step is open ("Link AWB · #1047"). */
+  orderNumber?: string | null
   variant?: 'modal' | 'inline'
   /** scanHelpers tenants ONLY — demo / review (caller passes null otherwise): THIS order's own linked forward
    *  tracking number, from the order detail PickScreen already holds. Offered as a
@@ -266,6 +270,52 @@ function AwbLinkDialog({
     setFlash(state)
     setTimeout(() => setFlash('idle'), 600)
   }
+
+  // Q1 — phone scans while this step is open. The dialog registers as the tablet's scan target ON
+  // TOP of PickScreen's (it mounts after it), and each phone scan goes through handleLink — the
+  // same path as a typed / scanned AWB, untouched. One at a time; one outcome each: "AWB linked"
+  // when handleLink reached onLinked; otherwise the error this step then shows (read after the
+  // render that holds it); "Tablet busy" if a link from the tablet itself is still in flight.
+  const linkedRef = useRef(false)
+  const onLinked = (result: { tracking: string; shipmentId: string }) => {
+    linkedRef.current = true
+    onLinkedProp(result)
+  }
+  const linkingRef = useRef(false)
+  linkingRef.current = linking
+  const phoneChain = useRef<Promise<void>>(Promise.resolve())
+  const phoneFailed = useRef<string[]>([])
+  const [phoneTick, setPhoneTick] = useState(0)
+  const phoneApi = usePhoneScanRegistration({
+    label: orderNumber ? t('phone.target.link', { number: orderNumber }) : t('fulfill.linkAwb.title'),
+    deliver: (code, eventId) => {
+      phoneChain.current = phoneChain.current.then(async () => {
+        const api = phoneApiRef.current
+        if (!api) return
+        if (linkingRef.current) { api.answer(eventId, false, t('phone.busy')); return }
+        api.started(eventId)
+        linkedRef.current = false
+        linkingRef.current = true
+        await handleLink(code)
+        if (linkedRef.current) { api.answer(eventId, true, t('phone.linked')); return }
+        phoneFailed.current.push(eventId)
+        setPhoneTick(n => n + 1)
+      })
+    },
+  })
+  const phoneApiRef = useRef(phoneApi)
+  phoneApiRef.current = phoneApi
+  const phoneError = conflictError ? t('fulfill.linkAwb.conflict')
+    : mismatchError ? t('fulfill.linkAwb.awbMismatch', { scanned: mismatchError.scanned, existing: mismatchError.existing })
+    : t('fulfill.linkAwb.error')
+  const phoneErrorRef = useRef(phoneError)
+  phoneErrorRef.current = phoneError
+  useEffect(() => {
+    for (const id of phoneFailed.current.splice(0)) phoneApiRef.current?.answer(id, false, phoneErrorRef.current)
+  }, [phoneTick])
+  useEffect(() => () => {
+    for (const id of phoneFailed.current.splice(0)) phoneApiRef.current?.answer(id, false, phoneErrorRef.current)
+  }, [])
 
   const handleLink = async (tracking: string) => {
     // Strip ALL whitespace, not just the ends — a pasted value can carry internal
@@ -939,9 +989,25 @@ function PickScreen({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [orderId, loadOrder, t])
 
+  // Q1 — phone scans: PickScreen is the tablet's scan target while it's open. The AWB link step /
+  // verify-scan registers its own target on top while open (AwbLinkDialog); the cancel confirm
+  // pauses this one (phone scans meanwhile are answered "Tablet busy"). The phone's line is the
+  // same result the screen shows (lastResult, read after the render that holds it). The attached
+  // scanner's clearQueue answers every phone scan it drops "Not applied" — so the calls below
+  // (Complete, cancel, the link step, completion) answer them unchanged.
+  const phone = usePhoneScanTarget({
+    label: order?.number ? t('phone.target.pick', { number: order.number }) : t('phone.target.pickNoOrder'),
+    describe: (code, o) => lastResult
+      ? (o.success
+          ? `${lastResult.barcode ?? code} · ${lastResult.allocatedCount}/${lastResult.requiredQuantity}`
+          : t(`fulfill.rejection.${lastResult.code}`, { defaultValue: lastResult.message ?? lastResult.code }))
+      : null,
+    paused: showCancelConfirm,
+  })
   // A dialog owns focus while it's open (the AWB link step, the verify-scan modal, the cancel
   // confirm). The link step's own click-refocus attaches after the hook's, so it wins clicks too.
-  const scanner = useScanner({ onScan, focusPaused: showPreCompleteLink || showAwbDialog || showCancelConfirm })
+  const scanner = phone.attach(useScanner({ onScan: phone.wrap(onScan),
+    focusPaused: showPreCompleteLink || showAwbDialog || showCancelConfirm }))
   const handleScan = scanner.handleScan
 
   // Scans still waiting are dropped (not sent) once the order moves past piece scanning.
@@ -1393,6 +1459,7 @@ function PickScreen({
           {showPreCompleteLink && allComplete && (
             <AwbLinkDialog
               orderId={orderId}
+              orderNumber={order.number}
               variant="inline"
               demoTracking={scanHelpers ? order.tracking_number : null}
               onLinked={() => { setShowPreCompleteLink(false); loadOrder() }}
@@ -1408,6 +1475,7 @@ function PickScreen({
       {showAwbDialog && (
         <AwbLinkDialog
           orderId={orderId}
+          orderNumber={order.number}
           demoTracking={scanHelpers ? order.tracking_number : null}
           onLinked={() => { setShowAwbDialog(false); setCompleted(true) }}
         />
