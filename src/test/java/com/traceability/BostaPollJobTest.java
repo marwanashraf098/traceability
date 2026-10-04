@@ -52,7 +52,8 @@ import static org.mockito.Mockito.*;
  *   p16 — Tier 2 burst > ceiling: resumes next cycle via the shipments skip-check,
  *         nothing dropped, nothing double-enqueued
  *   p17 — Tier 2 high-water mark: item above the mark always fetched, at/below never
- *   p18 — Tier 2 per-tenant advisory lock: held elsewhere → this run skips cleanly
+ *   p18 — Tier 2 per-tenant lease (V137): held elsewhere → this run skips cleanly; an expired lease is taken
+ *   p21 — no app connection is held while discovery talks to Bosta (the lease replaced the pinned lock connection)
  *   p19 — Tier 2 high-water mark: from-null first cycle, page-exhaustion — mark
  *         still advances even when the scan never reaches an empty page or matches
  *         a (null) stored mark
@@ -1005,10 +1006,12 @@ class BostaPollJobTest {
         verify(bostaV2, never()).searchDeliveriesPage(anyString(), eq(2), anyInt(), anyString());
     }
 
-    // ── p18: Tier 2 advisory lock — held elsewhere → this run skips cleanly ───
+    // ── p18: Tier 2 lease (V137) — held elsewhere → this run skips cleanly ───
 
     @Test
-    void p18_discoveryAdvisoryLock_heldByOther_skipsWithoutDuplicateWork() throws Exception {
+    void p18_discoveryLease_heldByOther_skipsWithoutDuplicateWork() {
+        // B2 (2026-10-04): the overlap guard is a lease on courier_accounts (V137), not a session-level
+        // advisory lock pinning a connection for the whole cycle.
         String tracking = "BOS-P18";
         setupCourierAccount("poll-key-p18");
 
@@ -1018,34 +1021,24 @@ class BostaPollJobTest {
             .thenReturn(new BostaDelivery(tracking, 41, "SEND", 0, "REF-P18", null,
                 rawWithUpdatedAt("2026-08-03T09:00:00.000Z")));
 
-        int[] lockKey = BostaDiscoveryPollJob.advisoryLockKeys(tenantId);
+        // A previous cycle for this tenant is still running: it holds the lease.
+        jdbc.update("UPDATE courier_accounts SET discovery_lease_until = now() + INTERVAL '10 minutes' WHERE tenant_id = ?",
+            tenantId);
 
-        try (Connection lockConn = jdbc.getDataSource().getConnection()) {
-            // Simulate a previous cycle for this tenant still being in progress by
-            // holding the exact same session-level advisory lock discoverAll() uses.
-            try (PreparedStatement ps = lockConn.prepareStatement("SELECT pg_advisory_lock(?, ?)")) {
-                ps.setInt(1, lockKey[0]);
-                ps.setInt(2, lockKey[1]);
-                ps.execute();
-            }
+        discoveryPollJob.discoverAll();
 
-            discoveryPollJob.discoverAll();
+        verify(bostaV2, never()).searchDeliveriesPage(anyString(), anyInt(), anyInt(), anyString());
+        verify(bostaGateway, never()).fetchDelivery(anyString(), any());
 
-            verify(bostaV2, never()).searchDeliveriesPage(anyString(), anyInt(), anyInt(), anyString());
-            verify(bostaGateway, never()).fetchDelivery(anyString(), any());
-
-            try (PreparedStatement ps = lockConn.prepareStatement("SELECT pg_advisory_unlock(?, ?)")) {
-                ps.setInt(1, lockKey[0]);
-                ps.setInt(2, lockKey[1]);
-                ps.execute();
-            }
-        }
-
-        // Lock is free again — this run proceeds normally.
+        // That run crashed: its lease expires and this run proceeds — and releases the lease after.
+        jdbc.update("UPDATE courier_accounts SET discovery_lease_until = now() - INTERVAL '1 second' WHERE tenant_id = ?",
+            tenantId);
         discoveryPollJob.discoverAll();
 
         verify(bostaV2, times(1)).searchDeliveriesPage(anyString(), eq(1), anyInt(), anyString());
         assertThat(discoveryEvents(tracking)).isEqualTo(1);
+        assertThat(jdbc.queryForObject("SELECT discovery_lease_until FROM courier_accounts WHERE tenant_id = ?",
+            Object.class, tenantId)).as("released when the cycle ends").isNull();
     }
 
     // ── p19: Tier 2 high-water mark — from-null first cycle, page-exhaustion ──
@@ -1189,6 +1182,26 @@ class BostaPollJobTest {
         assertThat(topEventCount)
             .as("re-attempting the still-unlinked mark item is idempotent, not duplicated")
             .isEqualTo(1);
+    }
+
+    // ── p21: no connection pinned across the cycle ────────────────────────────
+
+    @Autowired javax.sql.DataSource appDataSource;
+
+    @Test
+    void p21_discovery_holdsNoConnectionWhileTalkingToBosta() {
+        setupCourierAccount("poll-key-p21");
+        com.zaxxer.hikari.HikariDataSource pool = (com.zaxxer.hikari.HikariDataSource)
+            ((TenantAwareDataSource) appDataSource).getTargetDataSource();
+        java.util.concurrent.atomic.AtomicInteger activeDuringCall = new java.util.concurrent.atomic.AtomicInteger(-1);
+        when(bostaV2.searchDeliveriesPage(anyString(), eq(1), anyInt(), anyString())).thenAnswer(inv -> {
+            activeDuringCall.set(pool.getHikariPoolMXBean().getActiveConnections());
+            return List.of();
+        });
+
+        discoveryPollJob.discoverAll();
+
+        assertThat(activeDuringCall.get()).as("app connections in use during the Bosta call").isZero();
     }
 
     // ── helpers ───────────────────────────────────────────────────────────────

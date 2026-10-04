@@ -267,11 +267,12 @@ public class ShipmentLinkService {
             }
         }
 
-        // FR-4.6 prerequisite: fetch Bosta _id for future cancel capability.
-        // Non-blocking: if the fetch fails, the link still succeeds; flag is set for exception detector.
-        // Only fetch for newly created shipments — re-links that already have provider_delivery_id skip.
+        // FR-4.6 prerequisite: fetch Bosta _id for future cancel capability — AFTER this transaction
+        // commits, in ProviderDeliveryIdJob (2026-10-04, B1): no Bosta call (limiter wait + HTTP) while
+        // this transaction holds its DB connection. The link never depends on it; a failure sets the flag
+        // for the exception detector. Only for newly created shipments.
         if (isNewShipment) {
-            fetchAndStoreProviderDeliveryId(shipmentId, trackingNumber, tenantId);
+            scheduleProviderDeliveryIdFetch(shipmentId, trackingNumber, tenantId);
         }
 
         return completeLink(orderId, orderNumber, shipmentId, trackingNumber, tenantId, actorUserId, rawScan,
@@ -760,44 +761,25 @@ public class ShipmentLinkService {
             orderId, tenantId);
     }
 
-    private void fetchAndStoreProviderDeliveryId(UUID shipmentId, String trackingNumber, UUID tenantId) {
-        try {
-            String[] accountInfo = jdbc.query(
-                "SELECT api_key_encrypted FROM courier_accounts " +
-                "WHERE tenant_id = ? AND provider = 'bosta' AND status = 'active' LIMIT 1",
-                rs -> rs.next() ? new String[]{rs.getString(1)} : null,
-                tenantId);
-            if (accountInfo == null) {
-                log.warn("No active Bosta account for tenant {} — cannot fetch provider_delivery_id for {}",
-                    tenantId, trackingNumber);
-                jdbc.update("UPDATE shipments SET provider_id_fetch_failed = true WHERE id = ?", shipmentId);
-                return;
-            }
-            String rawApiKey = encryptionService.decrypt(accountInfo[0]);
-            // A packer is waiting on this (pack scan, pack completion, exchange mapping): user-facing in
-            // the shared Bosta limiter, ahead of polls (2026-10-04). Still inside the transaction —
-            // moving it after commit is the next change.
-            BostaDelivery delivery = com.traceability.integrations.bosta.BostaRateLimiter.userFacing(
-                () -> bostaGateway.fetchDelivery(rawApiKey, trackingNumber));
-            if (delivery != null && delivery.raw() != null) {
-                String bostaId = delivery.raw().path("_id").asText(null);
-                if (bostaId != null && !bostaId.isBlank()) {
-                    jdbc.update("UPDATE shipments SET provider_delivery_id = ? WHERE id = ?",
-                        bostaId, shipmentId);
-                    return;
-                }
-            }
-            log.warn("fetchDelivery for {} returned no _id — setting fetch-failed flag", trackingNumber);
-            jdbc.update("UPDATE shipments SET provider_id_fetch_failed = true WHERE id = ?", shipmentId);
-        } catch (Exception e) {
-            log.warn("fetchDelivery for {} failed — provider_delivery_id will be NULL: {}",
-                trackingNumber, e.getMessage());
-            try {
-                jdbc.update("UPDATE shipments SET provider_id_fetch_failed = true WHERE id = ?", shipmentId);
-            } catch (Exception ex) {
-                log.error("Failed to set provider_id_fetch_failed on shipment {}: {}", shipmentId, ex.getMessage());
-            }
+    private void scheduleProviderDeliveryIdFetch(UUID shipmentId, String trackingNumber, UUID tenantId) {
+        if (providerIdJob == null || jobScheduler == null) {
+            log.debug("provider_delivery_id fetch not wired (hand-built service) — skipped for {}", trackingNumber);
+            return;
         }
+        final ProviderDeliveryIdJob job = providerIdJob;
+        com.traceability.jobs.AfterCommit.runAsync(
+            () -> jobScheduler.enqueue(() -> job.fetch(tenantId, shipmentId, trackingNumber, 0)),
+            failure -> job.markFailed(tenantId, shipmentId));
+    }
+
+    // B1 (2026-10-04): setter-injected so hand-built instances (tests) keep their constructor.
+    private ProviderDeliveryIdJob providerIdJob;
+    private org.jobrunr.scheduling.JobScheduler jobScheduler;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setProviderIdFetch(ProviderDeliveryIdJob providerIdJob, org.jobrunr.scheduling.JobScheduler jobScheduler) {
+        this.providerIdJob = providerIdJob;
+        this.jobScheduler = jobScheduler;
     }
 
     /**

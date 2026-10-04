@@ -19,9 +19,8 @@ import java.util.UUID;
  * GUARD (approved 2026-10-01, Step 0 gate option a): before linking, the normalized tracking
  * number of the waybill scanned at open must be a FORWARD shipment row on this order. Then
  * linkByAwbScan always takes its verify branch (or the "already this order's shipment" branch
- * when the leg ended meanwhile) and never reaches its new-shipment branch, whose
- * fetchAndStoreProviderDeliveryId() makes a synchronous Bosta call inside the transaction
- * (ShipmentLinkService — pre-existing, out of scope, see PROGRESS Follow-ups). Guard fails →
+ * when the leg ended meanwhile) and never reaches its new-shipment branch (whose Bosta _id fetch
+ * runs after commit in ProviderDeliveryIdJob since 2026-10-04). Guard fails →
  * {@link CompleteFailed} WAYBILL_NOT_ON_ORDER, the transaction rolls back, nothing completes and
  * the claim stays with the packer.
  *

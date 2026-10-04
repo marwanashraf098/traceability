@@ -47,6 +47,40 @@ pushed, not merged, not deployed). No migration.**
   remove once the scope-check question is closed (separate change). (2) `BostaFulfillmentLinkService:250/258` re-set the
   tenant after `webhookJob.process()` — now redundant (harmless); the Bosta-linking owner can drop them.
 
+**DB / job reliability — Build 2 (2026-10-04, branch `fix/reliability-build-2` rebased on main da0a21a; not merged,
+not deployed). V136, V137. Three commits: B4, A, B1–B3.**
+- **B4** — no worker sleeps / waits long on Bosta. BostaFulfillmentLinkService: one fetch; a rate limit (429 or limiter
+  refusal) → 'retry' at the retry-after, never counted (no Thread.sleep in the worker); a link whose webhook event was
+  rescheduled on a rate limit → 'retry' too; the retry sweeper runs every 2 min (was 10). BostaRateLimiter:
+  `bosta.rate-limit.background-max-wait-ms` 5 s for BACKGROUND (USER_FACING keep 60 s) → jobs reschedule instead of
+  holding a worker. (Backfill on connect skips more items under contention — discovery covers post-connect anyway.)
+- **A** — Shopify webhook events (V136 retry_count / next_retry_at / superseded_at). Processor: already processed → no-op;
+  ordering safety for orders/create|updated, products/create|update (a LATER event for the same resource applied, or the
+  stored raw.updated_at strictly newer → superseded, never applied); no DB connection (CannotCreateTransactionException /
+  CannotGetJdbcConnectionException / SQLTransientConnectionException in the chain) → rethrown, JobRunr retries 3×; other
+  failures → retry_count + next_retry_at (1, 5, 15, 60, 240 min) up to `shopify.webhook.retry.max-attempts` 5.
+  ShopifyWebhookRetrySweeper (*/2): due failures + never-processed events older than 30 min within 48 h, ids listed on
+  the owner pool (as the link retry sweeper), claimed under the tenant with a 30-min lease, re-enqueued. Legacy failures
+  (pre-V136, next_retry_at NULL) only via ShopifyWebhookReprocessService: dry run (SUPERSEDED / WOULD_REPROCESS) by default,
+  apply through process(); `POST /api/v1/shopify/webhooks/reprocess?apply=` or `SHOPIFY_WEBHOOK_REPROCESS_ON_STARTUP` (+ `_APPLY`).
+- **B1** — the AWB scan / exchange mapping's Bosta _id fetch runs after commit in ProviderDeliveryIdJob (BACKGROUND;
+  rate limit → reschedule ≤ 6×; failure → provider_id_fetch_failed as before). `com.traceability.jobs.AfterCommit` hands
+  after-commit work to a virtual thread so the caller's connection isn't held while JobRunr waits on the owner pool; a
+  failed enqueue sets the flag. (PackCompleter's guard already kept pack completion off this path.)
+- **B2** — discovery overlap guard is a lease (V137 `courier_accounts.discovery_lease_until`, 15 min, released in finally,
+  expires on crash) instead of a session advisory lock pinning an app connection for the whole cycle.
+- **B3** — FulfillmentTrackingCapture's link-job enqueue goes through AfterCommit (virtual thread); a failed enqueue makes
+  the row 'retry' in 60 s (never counted).
+- Tests: BostaBackgroundWaitTest bw1–bw2; FulfillmentLinkRlsTest rr5 rewritten (no in-worker retry), rr6 new, rr1 waits
+  for the async enqueue; ShopifyWebhookRetryTest wr1–wr8 + rp1–rp2; ProviderDeliveryIdTest t2/t3 run the after-commit job;
+  PackScanFetchAfterCommitTest pa1–pa2 (replaces build 1's PackScanFetchPriorityTest); BostaPollJobTest p18 (lease) and
+  p21 (no connection held during Bosta calls); FulfillmentCaptureEnqueueTest ce1–ce2; migration counts 136 / 81.
+  Revert-checked: 4 (B4) + 11 (A) + 8 (B1–B3), each RED.
+- **8 workers after B4:** recurring jobs alone peaked at 12 concurrent in prod (36 h — the hourly alignment; ≥ 4 running 30%
+  of the time). Long ones: status poll (p50 215 s), discovery (~85 s), link-retry sweep, exception sweep (~30 s),
+  reconciliation (~25 s), daily digest (~65 s). With B4 nothing sleeps for minutes any more, so 8 leaves ≥ 2–4 workers for
+  webhooks even at the alignment; 10 gives more margin (≤ the 12-connection app pool; idle-waiting workers hold none).
+
 **Review mode S7 — click-to-scan helpers + reviewer connect path + ops hardening (2026-10-04, branch
 `feat/review-tenant-s7` off main 9518feb, worktree `.claude/worktrees/review-s7`; not merged, not deployed). No migration.**
 - Capability: `ReviewCapabilities` (scanHelpers = is_demo OR simulated; demoMode = is_demo); `/me` carries both.

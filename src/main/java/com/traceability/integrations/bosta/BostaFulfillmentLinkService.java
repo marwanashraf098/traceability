@@ -15,8 +15,6 @@ import org.springframework.boot.autoconfigure.flyway.FlywayDataSource;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
-import org.springframework.transaction.support.TransactionSynchronization;
-import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import javax.sql.DataSource;
@@ -112,17 +110,19 @@ public class BostaFulfillmentLinkService {
             .getBytes(StandardCharsets.UTF_8));
     }
 
-    /** Enqueues the link job once the caller's transaction commits (immediately when there is none). */
+    /**
+     * Enqueues the link job once the caller's transaction commits (now when there is none) — on a
+     * virtual thread (2026-10-04, B3): the capture's DB connection goes back to the pool instead of
+     * waiting while JobRunr's enqueue waits for an owner-pool connection. If the enqueue fails, the row
+     * becomes 'retry' in a minute (never counted) so the retry sweeper links it.
+     */
     public void enqueueAfterCommit(UUID tenantId, UUID orderId, String trackingNumber) {
-        Runnable enqueue = () -> jobScheduler.enqueue(jobId(tenantId, orderId, trackingNumber),
-            () -> run(tenantId, orderId, trackingNumber));
-        if (TransactionSynchronizationManager.isSynchronizationActive()) {
-            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
-                @Override public void afterCommit() { enqueue.run(); }
-            });
-        } else {
-            enqueue.run();
-        }
+        com.traceability.jobs.AfterCommit.runAsync(
+            () -> jobScheduler.enqueue(jobId(tenantId, orderId, trackingNumber),
+                () -> run(tenantId, orderId, trackingNumber)),
+            failure -> TenantContext.runAs(tenantId, (Runnable) () ->
+                markRetry(tenantId, orderId, trackingNumber, "link job enqueue failed: " + failure.getClass().getSimpleName(),
+                    60, false)));
     }
 
     @Job(name = "Bosta link from Shopify fulfillment — %2", retries = 0)

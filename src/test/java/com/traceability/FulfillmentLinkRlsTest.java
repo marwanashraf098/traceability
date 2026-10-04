@@ -144,7 +144,8 @@ class FulfillmentLinkRlsTest {
             capture.capture(store, gid, payload(tn))));
 
         ArgumentCaptor<JobLambda> job = ArgumentCaptor.forClass(JobLambda.class);
-        verify(jobScheduler).enqueue(eq(BostaFulfillmentLinkService.jobId(tenant, order, tn)), job.capture());
+        // B3 (2026-10-04): the enqueue runs after commit on a virtual thread — wait for it.
+        verify(jobScheduler, timeout(3_000)).enqueue(eq(BostaFulfillmentLinkService.jobId(tenant, order, tn)), job.capture());
         job.getValue().run();   // what JobRunr runs
 
         assertThat(shipments(tn)).isEqualTo(1);

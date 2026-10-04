@@ -32,8 +32,9 @@ import static org.mockito.Mockito.*;
  *
  * Matrix:
  *   t1 — Mode-B auto-match: provider_delivery_id set from raw._id; no gateway fetch
- *   t2 — AWB scan (new shipment): gateway called once; _id stored
- *   t3 — AWB scan fetch failure: link still succeeds; _id NULL; flag set; exception detected
+ *   t2 — AWB scan (new shipment): no Bosta call inside the scan; after commit the job fetches once; _id stored
+ *        (B1, 2026-10-04: the fetch moved out of the transaction into ProviderDeliveryIdJob)
+ *   t3 — AWB scan fetch failure (in the job): link still succeeds; _id NULL; flag set; exception detected
  *   t4 — Mode-B re-link (existing, NULL _id): idempotent backfill from raw
  *   t5 — V23 schema: provider_id_fetch_failed column exists with correct default
  */
@@ -140,9 +141,12 @@ class ProviderDeliveryIdTest {
         raw.put("_id", "BOSTA-ID-002");
         when(bostaGateway.fetchDelivery(eq("pd-api-key"), eq("5000000002")))
             .thenReturn(new BostaDelivery("5000000002", 41, "SEND", 0, null, null, raw));
+        reset(jobScheduler);
 
         linkSvc.linkByAwbScan(orderId, "5000000002", actorId);
 
+        verify(bostaGateway, never()).fetchDelivery(any(), any());   // not inside the scan's transaction
+        runEnqueuedProviderIdJob();
         verify(bostaGateway, times(1)).fetchDelivery("pd-api-key", "5000000002");
         assertThat(providerDeliveryId("5000000002")).isEqualTo("BOSTA-ID-002");
         assertThat(providerIdFetchFailed("5000000002")).isFalse();
@@ -156,8 +160,10 @@ class ProviderDeliveryIdTest {
 
         when(bostaGateway.fetchDelivery(eq("pd-api-key"), eq("5000000003")))
             .thenThrow(new BostaTransientException("network timeout"));
+        reset(jobScheduler);
 
         Map<String, Object> result = linkSvc.linkByAwbScan(orderId, "5000000003", actorId);
+        runEnqueuedProviderIdJob();
 
         // Link is the primary action — it must succeed regardless of fetch outcome
         assertThat(result.get("orderStatus")).isEqualTo("awaiting_pickup");
@@ -224,6 +230,15 @@ class ProviderDeliveryIdTest {
     }
 
     // ── helpers ───────────────────────────────────────────────────────────────
+
+    /** The job the scan enqueued after commit (on a virtual thread), run as JobRunr would. */
+    private void runEnqueuedProviderIdJob() {
+        org.mockito.ArgumentCaptor<org.jobrunr.jobs.lambdas.JobLambda> job =
+            org.mockito.ArgumentCaptor.forClass(org.jobrunr.jobs.lambdas.JobLambda.class);
+        verify(jobScheduler, timeout(3_000)).enqueue(job.capture());
+        try { job.getValue().run(); } catch (Exception e) { throw new RuntimeException(e); }
+        TenantContext.set(tenantId);   // the job's runAs clears the context on exit
+    }
 
     private UUID packedOrder(String number) {
         return jdbc.queryForObject(

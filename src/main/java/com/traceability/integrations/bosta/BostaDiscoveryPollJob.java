@@ -15,10 +15,6 @@ import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import javax.sql.DataSource;
-import java.sql.Connection;
-import java.sql.PreparedStatement;
-import java.sql.ResultSet;
-import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
@@ -75,15 +71,11 @@ import java.util.stream.Collectors;
  * after its first failure. A success at any point deletes the row and clears the exception. The
  * mark is never held for a failed item.
  *
- * Per-tenant advisory lock: discoverTenant() runs many short-lived transactions
- * internally (one tx.execute() per DB touch inside BostaIngestionHelper), so a single
- * pg_advisory_xact_lock would release after the first of those commits — long before
- * the cycle finishes. tryDiscoverTenant() instead pins ONE Connection for the whole
- * cycle and uses the session-level pg_try_advisory_lock/pg_advisory_unlock pair on it.
- * Non-blocking (try, not block-and-wait): if a previous cycle for this tenant is still
- * running when the next scheduled fire happens, waiting would just queue up an
- * ever-growing backlog of blocked runs once cadence rises. Skipping is self-healing —
- * the skipped cycle's mark is untouched, so the next fire retries from the same place.
+ * Per-tenant lease (V137, 2026-10-04 — replaces the session-level advisory lock, which pinned one app
+ * connection for the whole cycle): a conditional UPDATE sets courier_accounts.discovery_lease_until to
+ * now() + bosta.poll.discovery-lease-minutes (15) only while it is NULL or expired; the cycle clears it
+ * when done (finally), a crashed run's lease just expires. Non-blocking: a run that can't take the lease
+ * skips — the skipped cycle's mark is untouched, so the next fire retries from the same place.
  *
  * TenantContext: same pattern as BostaBackfillJob and BostaStatusPollJob — all per-tenant
  * work runs inside TenantContext.runAs(tenantId).
@@ -98,9 +90,6 @@ public class BostaDiscoveryPollJob {
         "FROM courier_accounts ca " +
         "WHERE ca.provider = 'bosta' AND ca.status = 'active'";
 
-    // Advisory-lock namespace: a fixed, arbitrary hash so this lock space never
-    // collides with any other pg_advisory_lock use elsewhere in the codebase.
-    private static final int LOCK_NAMESPACE = "bosta-discovery-lock".hashCode();
 
     /** Newest created first — proven by BostaSearchProbe (page 2 continues exactly after page 1). */
     static final String SORT_NEWEST_CREATED = "-createdAt";
@@ -121,6 +110,12 @@ public class BostaDiscoveryPollJob {
     private final int                  maxItemFailures;
     private final int                  slowRetryMinutes;
     private final int                  retryCapHours;
+    private int                        leaseMinutes = 15;
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public void setLeaseMinutes(@Value("${bosta.poll.discovery-lease-minutes:15}") int leaseMinutes) {
+        this.leaseMinutes = leaseMinutes;
+    }
 
     public BostaDiscoveryPollJob(
             @FlywayDataSource DataSource ownerDs,
@@ -193,42 +188,31 @@ public class BostaDiscoveryPollJob {
     }
 
     /**
-     * Acquires the per-tenant advisory lock on a single pinned Connection, runs
-     * discoverTenant() if acquired, and always releases on the same Connection before
-     * returning it to the pool. See the class javadoc for why this is session-level
-     * try-lock rather than pg_advisory_xact_lock, and why it skips rather than blocks.
+     * Takes the tenant's discovery lease (V137), runs discoverTenant() if taken, and always releases it.
+     * No connection is held across the cycle — each step uses its own short transaction.
      */
     private void tryDiscoverTenant(UUID tenantId, String apiKey) {
-        int tenantKey = tenantId.hashCode();
-        try (Connection lockConn = jdbc.getDataSource().getConnection()) {
-            boolean acquired;
-            try (PreparedStatement ps = lockConn.prepareStatement("SELECT pg_try_advisory_lock(?, ?)")) {
-                ps.setInt(1, LOCK_NAMESPACE);
-                ps.setInt(2, tenantKey);
-                try (ResultSet rs = ps.executeQuery()) {
-                    rs.next();
-                    acquired = rs.getBoolean(1);
-                }
-            }
-
-            if (!acquired) {
-                log.info("Discovery poll tenant {}: previous cycle still running — skipping this run",
-                    tenantId);
-                return;
-            }
-
-            try {
-                discoverTenant(tenantId, apiKey);
-            } finally {
-                try (PreparedStatement ps = lockConn.prepareStatement("SELECT pg_advisory_unlock(?, ?)")) {
-                    ps.setInt(1, LOCK_NAMESPACE);
-                    ps.setInt(2, tenantKey);
-                    ps.execute();
-                }
-            }
-        } catch (SQLException e) {
-            throw new RuntimeException("Discovery advisory lock error for tenant " + tenantId, e);
+        if (!claimLease(tenantId)) {
+            log.info("Discovery poll tenant {}: previous cycle still running (lease held) — skipping this run", tenantId);
+            return;
         }
+        try {
+            discoverTenant(tenantId, apiKey);
+        } finally {
+            TenantContext.runAs(tenantId, (Runnable) () -> tx.execute(s -> jdbc.update(
+                "UPDATE courier_accounts SET discovery_lease_until = NULL WHERE tenant_id = ? AND provider = 'bosta'",
+                tenantId)));
+        }
+    }
+
+    /** True when this run took the lease: NULL or expired → now() + lease minutes. */
+    boolean claimLease(UUID tenantId) {
+        Integer n = TenantContext.runAs(tenantId, () -> tx.execute(s -> jdbc.update(
+            "UPDATE courier_accounts SET discovery_lease_until = now() + (? * INTERVAL '1 minute') " +
+            "WHERE tenant_id = ? AND provider = 'bosta' " +
+            "  AND (discovery_lease_until IS NULL OR discovery_lease_until < now())",
+            leaseMinutes, tenantId)));
+        return n != null && n > 0;
     }
 
     /** Per-tenant discovery state (V133). */
@@ -613,11 +597,4 @@ public class BostaDiscoveryPollJob {
         return new HashSet<>(found);
     }
 
-    /**
-     * Exposed for tests only: lets a test acquire/release the exact same advisory
-     * lock this job uses, without duplicating the key derivation.
-     */
-    public static int[] advisoryLockKeys(UUID tenantId) {
-        return new int[]{LOCK_NAMESPACE, tenantId.hashCode()};
-    }
 }
