@@ -4,6 +4,7 @@ import { EmptyState, Spinner } from '../components/ui'
 import { getAccessToken, clearAccessToken } from '../auth'
 import { useCapabilities } from '../capabilities'
 import ScanHelperChips from '../components/scanHelpers/ScanHelperChips'
+import { useScanner, ScanMeta, ScanOutcome } from '../hooks/useScanner'
 
 const BASE = '/api/v1'
 function authHeaders() {
@@ -221,38 +222,17 @@ function SessionView({ session: initial, onRefresh, onBack }: {
   const [closing, setClosing]       = useState(false)
   const [showConfirm, setShowConfirm] = useState(false)
   const [closeMsg, setCloseMsg]     = useState<string | null>(null)
-  const [scanInput, setScanInput]   = useState('')
-  const [processing, setProcessing] = useState(false)
-  const inputRef = useRef<HTMLInputElement>(null)
   const feedbackTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const isOpen = session.sessionStatus === 'open'
   const { scanHelpers } = useCapabilities()
 
-  // Always refocus the input after any interaction.
-  const refocus = useCallback(() => {
-    setTimeout(() => inputRef.current?.focus(), 50)
-  }, [])
-
-  useEffect(() => {
-    if (isOpen) refocus()
-  }, [isOpen, refocus])
-
-  function showFeedback(outcome: FeedbackOutcome, tn: string) {
-    setFeedback(outcome)
-    setFeedbackTn(tn)
-    if (feedbackTimer.current) clearTimeout(feedbackTimer.current)
-    if (outcome === 'ACCEPTED') {
-      feedbackTimer.current = setTimeout(() => setFeedback(null), 1500)
-    }
-  }
-
-  async function handleScan(rawValue: string) {
-    const tn = rawValue.trim()
-    if (!tn || processing) return
-    setScanInput('')
-    setProcessing(true)
-
+  // R1: scans go through useScanner — queued while one is in flight and sent one at a time, in
+  // order; the input is uncontrolled and cleared on Enter, so a fast next scan never appends to
+  // the previous code. onScan is the old handleScan: optimistic row, rollback on failure,
+  // outcome feedback. Focus: useScanner's own (after every scan, any click), plus this screen's
+  // refocus on blur / after removing a scan, as before.
+  const onScan = useCallback(async (tn: string, _meta?: ScanMeta): Promise<ScanOutcome> => {
     // Optimistic: add a placeholder immediately so worker sees instant response.
     const optimisticEntry: ScanEntry = {
       shipmentId: 'optimistic-' + tn,
@@ -273,24 +253,46 @@ function SessionView({ session: initial, onRefresh, onBack }: {
         // Replace optimistic entry with real data.
         setScans(prev => [res.entry!, ...prev.filter(e => e.shipmentId !== optimisticEntry.shipmentId)])
         showFeedback('ACCEPTED', tn)
-      } else {
-        // Rollback optimistic entry.
-        setScans(prev => prev.filter(e => e.shipmentId !== optimisticEntry.shipmentId))
-        showFeedback(res.outcome as FeedbackOutcome, tn)
+        return { success: true }
       }
+      // Rollback optimistic entry.
+      setScans(prev => prev.filter(e => e.shipmentId !== optimisticEntry.shipmentId))
+      showFeedback(res.outcome as FeedbackOutcome, tn)
+      return { success: false }
     } catch {
       setScans(prev => prev.filter(e => e.shipmentId !== optimisticEntry.shipmentId))
       showFeedback('UNKNOWN_AWB', tn)
-    } finally {
-      setProcessing(false)
-      refocus()
+      return { success: false }
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session.id])
+
+  // The close confirm owns focus while it's open.
+  const scanner = useScanner({ onScan, focusPaused: showConfirm })
+  const handleScan = scanner.handleScan
+
+  // Always refocus the input after any interaction.
+  const refocus = useCallback(() => {
+    setTimeout(() => scanner.inputRef.current?.focus(), 50)
+  }, [scanner.inputRef])
+
+  useEffect(() => {
+    if (isOpen) refocus()
+  }, [isOpen, refocus])
+
+  function showFeedback(outcome: FeedbackOutcome, tn: string) {
+    setFeedback(outcome)
+    setFeedbackTn(tn)
+    if (feedbackTimer.current) clearTimeout(feedbackTimer.current)
+    if (outcome === 'ACCEPTED') {
+      feedbackTimer.current = setTimeout(() => setFeedback(null), 1500)
     }
   }
 
   function handleKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
     if (e.key === 'Enter') {
       e.preventDefault()
-      handleScan(scanInput)
+      handleScan(e.currentTarget.value)
     }
   }
 
@@ -306,6 +308,7 @@ function SessionView({ session: initial, onRefresh, onBack }: {
   }
 
   async function confirmClose() {
+    scanner.clearQueue()                       // nothing waiting may land on a closing session
     setClosing(true)
     try {
       const res = await api<{ shipmentsClosed: number; pieceExceptions: string[] }>(
@@ -372,9 +375,7 @@ function SessionView({ session: initial, onRefresh, onBack }: {
           </div>
 
           <input
-            ref={inputRef}
-            value={scanInput}
-            onChange={e => setScanInput(e.target.value)}
+            ref={scanner.inputRef}
             onKeyDown={handleKeyDown}
             onBlur={refocus}
             placeholder={t('pickups.scanPlaceholder')}
@@ -386,7 +387,7 @@ function SessionView({ session: initial, onRefresh, onBack }: {
 
           {/* Review mode S7: click-to-scan chips (demo / review tenant only) — through handleScan. */}
           {scanHelpers && (
-            <ScanHelperChips context="pickup" disabled={processing} onScan={handleScan}
+            <ScanHelperChips context="pickup" disabled={scanner.scanning} onScan={handleScan}
               refreshKey={scans.filter(s => !s.shipmentId.startsWith('optimistic-')).length} />
           )}
 
@@ -464,7 +465,7 @@ function SessionView({ session: initial, onRefresh, onBack }: {
       {isOpen && scans.length > 0 && (
         <div className="flex justify-end">
           <button
-            onClick={() => setShowConfirm(true)}
+            onClick={() => { scanner.clearQueue(); setShowConfirm(true) }}
             className="btn-brand btn text-small"
             disabled={closing}
           >

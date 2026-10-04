@@ -13,6 +13,7 @@ import { getRoleFromToken } from '../api'
 import { formatSessionStart } from './returns/sessionStart'
 import { useCapabilities } from '../capabilities'
 import ScanHelperChips from '../components/scanHelpers/ScanHelperChips'
+import { useScanner, ScanMeta, ScanOutcome } from '../hooks/useScanner'
 
 const BASE = '/api/v1'
 
@@ -604,13 +605,11 @@ function OpenSessionScreen({ sessionId, onExit, onStartNew }: {
   const { t, i18n } = useTranslation()
   const role = getRoleFromToken()
   const canManage = role === 'owner' || role === 'manager'
-  const scanRef = useRef<HTMLInputElement>(null)
   const { scanHelpers } = useCapabilities()
 
   const [detail, setDetail] = useState<SessionDetail | null>(null)
   const [loading, setLoading] = useState(true)
   const [flash, setFlash] = useState<FlashState>('idle')
-  const [scanning, setScanning] = useState(false)
   const [rejectedScan, setRejectedScan] = useState<string | null>(null)
   const [damageTarget, setDamageTarget] = useState<string | null>(null)
   const [damageReason, setDamageReason] = useState('')
@@ -637,34 +636,36 @@ function OpenSessionScreen({ sessionId, onExit, onStartNew }: {
 
   useEffect(() => { load() }, [load])
 
-  // SAFETY-CRITICAL scan input refocus — later-mounted input wins the click-refocus
-  // race; no other auto-focusing scan/text input is ever rendered alongside this one.
-  useEffect(() => {
-    const refocus = () => scanRef.current?.focus()
-    document.addEventListener('click', refocus)
-    scanRef.current?.focus()
-    return () => document.removeEventListener('click', refocus)
-  }, [])
+  // SAFETY-CRITICAL scan input refocus (R1, approved by Marawan 2026-10-04): this screen's own
+  // unconditional click-refocus is gone — useScanner's marked refocus replaces it (refocus on any
+  // click for the screen's lifetime; focus back on the input after every scan / when its queue
+  // drains, never while focusPaused and never out of another text field). The old one also pulled
+  // focus out of the damage-reason field on every click; focusPaused below keeps it there.
 
   // SAFETY-CRITICAL — do not modify
   const triggerFlash = (s: 'success' | 'error') => {
     setFlash(s); setTimeout(() => setFlash('idle'), 600)
   }
 
-  // SAFETY-CRITICAL scan handler — whitespace-strip, disabled-while-scanning,
-  // clear+refocus regardless of outcome: do not modify
-  const handleScan = useCallback(async (raw: string) => {
+  // SAFETY-CRITICAL scan handler (R1, approved by Marawan 2026-10-04): useScanner's onScan.
+  // Whitespace stripped (all of it), the scan POSTed, the session reloaded after every scan, 422 →
+  // the rejected-scan banner for 4 s, any other error → its message. useScanner queues scans that
+  // arrive while one is in flight and runs them one at a time, in order (the input is never
+  // disabled — no dropped keystrokes), clears the input on Enter and plays the beep (same tones);
+  // the flash stays this screen's own (its marked trigger + overlay, unchanged).
+  const onScan = useCallback(async (raw: string, _meta?: ScanMeta): Promise<ScanOutcome> => {
     const cleaned = raw.replace(/\s+/g, '')
-    if (!cleaned || scanning) return
-    setScanning(true); setRejectedScan(null)
+    if (!cleaned) return { success: false }
+    setRejectedScan(null)
     try {
       await api(`/returns/sessions/${sessionId}/scan`, {
         method: 'POST', body: JSON.stringify({ scan: cleaned, locationId: null }),
       })
-      playBeep(true); triggerFlash('success')
+      triggerFlash('success')
       await load()
+      return { success: true }
     } catch (e: unknown) {
-      playBeep(false); triggerFlash('error')
+      triggerFlash('error')
       const status = (e as { status?: number }).status
       if (status === 422) {
         setRejectedScan(cleaned)
@@ -672,11 +673,29 @@ function OpenSessionScreen({ sessionId, onExit, onStartNew }: {
       } else {
         setError((e as Error).message || t('common.error'))
       }
-    } finally {
-      setScanning(false)
-      if (scanRef.current) { scanRef.current.value = ''; scanRef.current.focus() }
+      return { success: false }
     }
-  }, [sessionId, scanning, load, t])
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessionId, load, t])
+
+  // A field or dialog owns focus while it's open: the damage-reason input, the abandon confirm.
+  const scanner = useScanner({ onScan, focusPaused: damageTarget !== null || showAbandonModal })
+  const handleScan = scanner.handleScan
+
+  // The damage-reason field holds focus while it's open: useScanner's click-refocus (marked)
+  // pulls focus back to the scan input on ANY click, so the later-mounted reason field gets the
+  // same click-refocus pattern — its listener attaches after the scanner's and so runs second and
+  // wins (the AwbLinkDialog template, CLAUDE.md). Closing it hands focus back to the scan input
+  // (focusPaused clears → useScanner refocuses).
+  const damageRef = useRef<HTMLInputElement>(null)
+  useEffect(() => {
+    if (damageTarget === null) return
+    const refocus = () => {
+      if (document.activeElement !== damageRef.current) damageRef.current?.focus()
+    }
+    document.addEventListener('click', refocus)
+    return () => document.removeEventListener('click', refocus)
+  }, [damageTarget])
 
   const disposition = async (pieceId: string, verdict: 'restock' | 'damaged' | 'mismatch', reason?: string) => {
     if (verdict === 'damaged' && !reason?.trim()) { setDamageReasonError(true); return }
@@ -746,6 +765,7 @@ function OpenSessionScreen({ sessionId, onExit, onStartNew }: {
   }
 
   const abandon = async () => {
+    scanner.clearQueue()                       // nothing waiting may land on an abandoned session
     setAbandoning(true)
     try {
       await api(`/returns/sessions/${sessionId}`, { method: 'DELETE' })
@@ -758,6 +778,7 @@ function OpenSessionScreen({ sessionId, onExit, onStartNew }: {
   }
 
   const close = async () => {
+    scanner.clearQueue()                       // nothing waiting may land on a closing session
     setClosing(true)
     try {
       const summary = await api<CloseSummary>(`/returns/sessions/${sessionId}/close`, { method: 'POST' })
@@ -891,6 +912,7 @@ function OpenSessionScreen({ sessionId, onExit, onStartNew }: {
               {damageTarget === item.piece_id && (
                 <div className="basis-full mt-2 pt-2.5 border-t border-warning/30 flex gap-2">
                   <input
+                    ref={damageRef}
                     type="text"
                     value={damageReason}
                     onChange={e => { setDamageReason(e.target.value); setDamageReasonError(false) }}
@@ -986,13 +1008,14 @@ function OpenSessionScreen({ sessionId, onExit, onStartNew }: {
 
       <div className="px-5 py-3.5 border-b border-line bg-base flex items-center gap-2.5 shrink-0">
         <ScanLine size={18} strokeWidth={2} className="text-trace-blue" />
-        {/* SAFETY-CRITICAL scan input — ref, autoFocus, onKeyDown, disabled: do not modify */}
+        {/* SAFETY-CRITICAL scan input — ref, autoFocus, onKeyDown: do not modify. R1 (approved by
+            Marawan 2026-10-04): useScanner's ref, never disabled while a scan is in flight. */}
         <input
-          ref={scanRef}
+          ref={scanner.inputRef}
           type="text"
           placeholder={t('returns.openSession.scanPlaceholder')}
           className="input-scan flex-1"
-          disabled={scanning}
+          aria-busy={scanner.scanning}
           onKeyDown={e => { if (e.key === 'Enter') handleScan((e.target as HTMLInputElement).value) }}
           autoFocus
           data-testid="scan-input"
@@ -1003,7 +1026,7 @@ function OpenSessionScreen({ sessionId, onExit, onStartNew }: {
       {/* Review mode S7: click-to-scan chips (demo / review tenant only) — through handleScan. */}
       {scanHelpers && (
         <div className="px-5" data-testid="returns-scan-helpers">
-          <ScanHelperChips context="returns" disabled={scanning} onScan={handleScan}
+          <ScanHelperChips context="returns" disabled={scanner.scanning} onScan={handleScan}
             refreshKey={detail?.lastScan ? `${detail.lastScan.kind}:${detail.lastScan.code}` : ''} />
         </div>
       )}
