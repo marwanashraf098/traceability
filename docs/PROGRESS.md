@@ -4,6 +4,25 @@
 
 ## Current state
 
+**P1 — PickScreen (queue mode) on useScanner (2026-10-04, branch `fix/pickscreen-scanner` off main 484192e; pushed, not
+merged, not deployed). Frontend only — backend untouched, useScanner unchanged. Edits to PickScreen's SAFETY-CRITICAL
+scan handler, refocus effect and scan input approved by Marawan 2026-10-04.**
+- **Bugs fixed:** the scan input was disabled while a scan was in flight (keystrokes of the next hardware scan dropped —
+  3 of 20 in a browser burst), and after a REJECTED scan focus() ran on the still-disabled input so focus was lost until a
+  click (a success only recovered via the [order] refocus). The AWB link step lost focus the same way after AWB_MISMATCH /
+  conflict / error. Unscanning with the link step open left it open on an incomplete order, and the [order] refocus pulled
+  focus out of it.
+- **Now:** `onScan` (Fulfill.tsx:914-941) posts the scan, sets lastResult, triggers PickScreen's own flash, awaits the
+  order reload on success; useScanner queues + single-flights, clears the input on Enter, beeps (same tones). Input
+  (:1166-1185): useScanner's ref, never disabled, autoFocus kept, aria-busy. Refocus: useScanner's (PickScreen's [order]
+  effect removed, :900). focusPaused while the link step / verify-scan modal / cancel confirm is open. Waiting scans dropped
+  on Complete (:963), cancel confirm (:1217) and cancel (:993), opening the link step (:1347) and the completion card (:949).
+  The link step only renders for a fully picked order and an unscan closes it (:953-954, :1393). AwbLinkDialog refocuses
+  when `linking` clears (:258-262). PickScreen's flash trigger / overlay (marked) unchanged and still drive the flash.
+- **Tests:** `pickScreenScanner.browser.test.tsx` (3 × Chromium/WebKit — burst, focus after reject, focus after
+  AWB_MISMATCH; all fail on origin/main), `pickScreenP1.test.tsx` (13). Existing fulfill* tests unchanged (no mock edits).
+  vitest 656/656, tsc + build clean, test:browser 26/26 three runs.
+
 **Fix — TenantContext.runAs restores the previous tenant (2026-10-04, branch `fix/tenantctx-restore` off main 4c1c8d1;
 pushed, not merged, not deployed). No migration.**
 - **runAs** (both overloads, `TenantContext.java:78/92`): save the thread's tenant → set → finally restore it (remove when

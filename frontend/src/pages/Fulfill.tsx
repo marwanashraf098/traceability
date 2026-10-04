@@ -12,6 +12,7 @@ import { getAccessToken, clearAccessToken } from '../auth'
 import { TransferCommandError } from '../api'
 import { useCapabilities } from '../capabilities'
 import ScanHelperChips from '../components/scanHelpers/ScanHelperChips'
+import { useScanner, ScanMeta, ScanOutcome } from '../hooks/useScanner'
 
 const BASE = '/api/v1'
 
@@ -249,6 +250,16 @@ function AwbLinkDialog({
     document.addEventListener('click', refocus)
     return () => document.removeEventListener('click', refocus)
   }, [])
+
+  // P1 (2026-10-04): refocus the input once a link attempt finishes. handleLink's own focus()
+  // calls run while `linking` still disables the input — a no-op — so after a 409 AWB_MISMATCH,
+  // a conflict, another error or a network failure focus was lost until the next click. On
+  // success the dialog closes (onLinked) and this never matters.
+  const wasLinking = useRef(false)
+  useEffect(() => {
+    if (wasLinking.current && !linking) inputRef.current?.focus()
+    wasLinking.current = linking
+  }, [linking])
 
   // SAFETY-CRITICAL — do not modify
   const triggerFlash = (state: 'success' | 'error') => {
@@ -863,7 +874,6 @@ function PickScreen({
   const [loading, setLoading] = useState(true)
   const [flash, setFlash] = useState<FlashState>('idle')
   const [lastResult, setLastResult] = useState<ScanResult | null>(null)
-  const [scanning, setScanning] = useState(false)
   const [completing, setCompleting] = useState(false)
   const [cancelling, setCancelling] = useState(false)
   const [showAwbDialog, setShowAwbDialog] = useState(false)
@@ -873,7 +883,6 @@ function PickScreen({
   const [showCancelConfirm, setShowCancelConfirm] = useState(false)
   const [awbPrinting, setAwbPrinting] = useState(false)
   const [awbMsg, setAwbMsg] = useState<AwbMsg>(null)
-  const inputRef = useRef<HTMLInputElement>(null)
   const autoBackTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const loadOrder = useCallback(async () => {
@@ -888,15 +897,13 @@ function PickScreen({
   // for a reprint. Only ever turns the flag on.
   useEffect(() => { if (order?.awbPrinted) setAwbPrintedOnce(true) }, [order?.awbPrinted])
 
-  // SAFETY-CRITICAL — HID refocus: re-focuses scan input on any click; do not modify
-  useEffect(() => {
-    const refocus = () => {
-      if (document.activeElement !== inputRef.current) inputRef.current?.focus()
-    }
-    document.addEventListener('click', refocus)
-    inputRef.current?.focus()
-    return () => document.removeEventListener('click', refocus)
-  }, [order])
+  // SAFETY-CRITICAL — HID refocus (P1, approved by Marawan 2026-10-04): PickScreen's own
+  // [order]-keyed click-refocus effect is gone. useScanner's marked refocus does the same job —
+  // refocus on any click for the screen's lifetime, and focus back on the ENABLED input after
+  // every scan / when its queue drains, never while a dialog has paused it (focusPaused) and
+  // never out of another text field. Re-running on [order] used to pull focus out of the AWB
+  // link step whenever the order reloaded (unscan), and after a rejected scan (no order change)
+  // nothing refocused at all.
 
   // SAFETY-CRITICAL — flash trigger: do not modify
   const triggerFlash = (state: 'success' | 'error') => {
@@ -904,33 +911,47 @@ function PickScreen({
     setTimeout(() => setFlash('idle'), 600)
   }
 
-  // SAFETY-CRITICAL — scan handler: do not modify
-  const handleScan = useCallback(async (barcode: string) => {
-    if (!barcode.trim() || scanning) return
-    setScanning(true)
+  // SAFETY-CRITICAL — scan handler (P1, approved by Marawan 2026-10-04): useScanner's onScan.
+  // The hook queues scans that arrive while one is in flight and runs them strictly one at a
+  // time, in order (no input disabling — no dropped keystrokes); it clears the input on Enter and
+  // plays the success / fail beep itself (same tones). The flash stays PickScreen's own (its
+  // marked trigger + overlay, unchanged). The same request, the same lastResult, the order
+  // reloaded after a success — awaited, so the next queued scan sees the reloaded order.
+  const onScan = useCallback(async (barcode: string, _meta?: ScanMeta): Promise<ScanOutcome> => {
     try {
       const { data: result } = await api<ScanResult>(`/fulfill/${orderId}/scan`, {
         method: 'POST',
-        body: JSON.stringify({ barcode: barcode.trim() }),
+        body: JSON.stringify({ barcode }),
       })
       setLastResult(result)
       if (result.success) {
-        playBeep(true)
         triggerFlash('success')
         await loadOrder()
-      } else {
-        playBeep(false)
-        triggerFlash('error')
+        return { success: true }
       }
+      triggerFlash('error')
+      return { success: false }
     } catch {
-      playBeep(false)
       triggerFlash('error')
       setLastResult({ success: false, code: 'ERROR', message: t('common.error'), pieceId: null, barcode: null, allocatedCount: 0, requiredQuantity: 0, allComplete: false })
-    } finally {
-      setScanning(false)
-      if (inputRef.current) { inputRef.current.value = ''; inputRef.current.focus() }
+      return { success: false }
     }
-  }, [orderId, scanning, loadOrder, t])
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [orderId, loadOrder, t])
+
+  // A dialog owns focus while it's open (the AWB link step, the verify-scan modal, the cancel
+  // confirm). The link step's own click-refocus attaches after the hook's, so it wins clicks too.
+  const scanner = useScanner({ onScan, focusPaused: showPreCompleteLink || showAwbDialog || showCancelConfirm })
+  const handleScan = scanner.handleScan
+
+  // Scans still waiting are dropped (not sent) once the order moves past piece scanning.
+  const { clearQueue } = scanner
+  useEffect(() => { if (completed) clearQueue() }, [completed, clearQueue])
+
+  // The link step belongs to a fully picked order: unscanning a piece closes it (re-tapping
+  // "Scan to link" opens it again once the order is complete).
+  const allPicked = !!order && order.items.every(i => i.allocated >= i.quantity)
+  useEffect(() => { if (!allPicked) setShowPreCompleteLink(false) }, [allPicked])
 
   const handleUnscan = async (pieceId: string) => {
     await api(`/fulfill/${orderId}/scan/${pieceId}`, { method: 'DELETE' })
@@ -939,6 +960,7 @@ function PickScreen({
 
   const handleComplete = async () => {
     if (completing) return
+    scanner.clearQueue()
     setCompleting(true)
     try {
       await api(`/fulfill/${orderId}/complete`, { method: 'POST' })
@@ -968,6 +990,7 @@ function PickScreen({
 
   const handleCancel = async () => {
     if (cancelling) return
+    scanner.clearQueue()
     setCancelling(true)
     setShowCancelConfirm(false)
     try {
@@ -1122,7 +1145,7 @@ function PickScreen({
                   context="pieces"
                   variantId={item.variant_id}
                   refreshKey={item.allocated}
-                  disabled={scanning}
+                  disabled={scanner.scanning}
                   onScan={handleScan}
                   showNoStock
                 />
@@ -1140,7 +1163,9 @@ function PickScreen({
       : `✗ ${t(`fulfill.rejection.${lastResult.code}`, { defaultValue: lastResult.message ?? lastResult.code })}`
   )
 
-  // SAFETY-CRITICAL scan input — ref, onKeyDown, disabled=scanning, autoFocus: do not modify.
+  // SAFETY-CRITICAL scan input — ref, onKeyDown, autoFocus: do not modify. P1 (approved by
+  // Marawan 2026-10-04): ref is useScanner's, Enter queues through useScanner, and the input is
+  // never disabled while a scan is in flight (that dropped the keystrokes of the next scan).
   // Rendered exactly once regardless of breakpoint; the surrounding layout repositions it
   // (mobile: top bar under the header; desktop: bottom of the right-hand scan panel).
   const scanInput = (
@@ -1149,11 +1174,11 @@ function PickScreen({
         <ScanLine size={18} strokeWidth={2} />
       </span>
       <input
-        ref={inputRef}
+        ref={scanner.inputRef}
         type="text"
         placeholder={t('fulfill.scanPlaceholder')}
         className="input-scan w-full ps-10"
-        disabled={scanning}
+        aria-busy={scanner.scanning}
         onKeyDown={e => {
           if (e.key === 'Enter') handleScan((e.target as HTMLInputElement).value)
         }}
@@ -1189,7 +1214,7 @@ function PickScreen({
         </p>
         {!hasCancelRequest && (
           <button
-            onClick={() => setShowCancelConfirm(true)}
+            onClick={() => { scanner.clearQueue(); setShowCancelConfirm(true) }}
             className="text-critical-text text-caption font-medium hover:opacity-80 transition-opacity flex-shrink-0"
           >
             {t('fulfill.cancelOrder')}
@@ -1319,7 +1344,7 @@ function PickScreen({
                PRINTABLE branch above fires first, exactly like any Mode-B order whose AWB
                was webhook-auto-matched before pack. No exchange-specific check needed. */
             <button
-              onClick={() => setShowPreCompleteLink(true)}
+              onClick={() => { scanner.clearQueue(); setShowPreCompleteLink(true) }}
               className="btn-brand btn text-small w-full"
               data-testid="btn-scan-to-link"
             >
@@ -1361,9 +1386,11 @@ function PickScreen({
             </Button>
           )}
 
-          {/* Pre-Complete link step — inline, not a blocking modal, so unscanning an item
-              (which flips allComplete back to false) simply removes this section again. */}
-          {showPreCompleteLink && (
+          {/* Pre-Complete link step — inline, not a blocking modal. Unscanning an item flips
+              allComplete back to false, which closes it (the allPicked effect above resets
+              showPreCompleteLink, so it doesn't reappear by itself when the order is complete
+              again — "Scan to link" opens it). */}
+          {showPreCompleteLink && allComplete && (
             <AwbLinkDialog
               orderId={orderId}
               variant="inline"
