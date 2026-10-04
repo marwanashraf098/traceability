@@ -29,7 +29,7 @@ SAFETY-CRITICAL scan handler, refocus effect and scan input approved by Marawan 
   call removed from the scan path, still used by dispositions).
 
 **Bosta status poll on the v2 -updatedAt search + (b) list items instead of a second v0 fetch (2026-10-04, branch
-`feat/bosta-status-poll-v2` off main 9ffcdc2; not merged, not deployed). V138.**
+`feat/bosta-status-poll-v2` rebased on main 07a21a4; not merged, not deployed). V138.**
 - Status poll (BostaStatusPollJob): per tenant, a walk of `POST /api/v2/deliveries/search` sortBy `-updatedAt`, limit 50 —
   until items updated before `poll_mark_at` minus 10 min, an empty/short page, or `status-max-pages` (10); mark advances
   only on a complete walk, a capped walk resumes (head first, then shifted — discovery's mechanics), repeat-page guard.
@@ -43,6 +43,10 @@ SAFETY-CRITICAL scan handler, refocus effect and scan input approved by Marawan 
   raw's (a new attempt's history/reason lives in v0 attempts[] → fetch). Fields the item lacks are carried over from
   the stored raw (except old exception fields); raw is marked `_tracedRawShape: v2-list`. Exception code falls back to
   `state.lastExceptionCode` (job + ExceptionService NDR SQL). A real Bosta webhook (source `bosta`) always fetches.
+- Observability (walk misses): when the safety-net fetch finds a state change on a shipment the walk hasn't shown for 4 h,
+  WARN `status walk missed change — tracking <tn> state <old>→<new> (Bosta updatedAt <t>)` (a shipment with no known
+  state yet isn't a miss); one INFO per tenant per cycle: `walk N page(s), M change(s) ingested; safety net F fetch(es),
+  C change(s) found (X missed by the walk)`. Prod check: `grep -c "status walk missed change"` should stay at / near 0.
 - Lazy v0 (ShipmentRawRefresher, USER_FACING): PickupAreaService.forOrder when the forward leg is a v2 copy without the
   city; ReturnPickupBookingService.book() refreshes the delivered forward leg before its transaction (address block).
 - Tests: BostaStatusPollWalkTest sw1–sw9; BostaPollJobTest: `status-safety-net-hours=0` (its p-tests cover the

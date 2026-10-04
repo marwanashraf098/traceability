@@ -47,10 +47,14 @@ import static org.mockito.Mockito.*;
  *   sw8 lazy v0: the pickup-area lookup and the booking job fetch Bosta's v0 delivery (user-facing) when the
  *       forward leg holds a v2 copy
  *   sw9 cross-tenant: a walk never ingests another tenant's shipment
+ *   sw10 observability: a state change only the safety net found logs "status walk missed change" (tenant,
+ *        tracking, old→new state, Bosta's updatedAt); an unchanged one doesn't; one INFO summary per tenant
+ *        per cycle (pages, walk changes, safety-net fetches / changes / missed)
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.NONE)
 @Testcontainers
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
+@org.junit.jupiter.api.extension.ExtendWith(org.springframework.boot.test.system.OutputCaptureExtension.class)
 class BostaStatusPollWalkTest {
 
     @Container
@@ -304,6 +308,26 @@ class BostaStatusPollWalkTest {
 
         assertThat(eventsFor(a, "8900000001")).isZero();
         assertThat(eventsFor(b, "8900000001")).isZero();
+    }
+
+    @Test
+    void sw10_missedChangeWarn_andCycleSummary(org.springframework.boot.test.system.CapturedOutput out) {
+        T t = tenant("sw10");
+        shipment(t, "8010000001", "with_courier", null);                                  // changed — the walk shows it
+        shipment(t, "8010000002", "with_courier", base.minus(5, ChronoUnit.HOURS));       // changed — the walk missed it
+        shipment(t, "8010000003", "with_courier", base.minus(5, ChronoUnit.HOURS));       // unchanged
+        jdbc.update("UPDATE shipments SET provider_state = 41 WHERE tracking_number IN ('8010000002', '8010000003')");
+        t.search.newestFirst.add(item("8010000001", 45, base));
+        when(bostaGateway.fetchDelivery(anyString(), eq("8010000002"))).thenReturn(v0("8010000002", 45, 0, "2026-10-04T11:00:00.000Z"));
+        when(bostaGateway.fetchDelivery(anyString(), eq("8010000003"))).thenReturn(v0("8010000003", 41, 0, "2026-10-04T07:00:00.000Z"));
+
+        poll.pollAll();
+
+        assertThat(out.getOut()).contains("Status poll tenant " + t.id + ": status walk missed change — tracking 8010000002 " +
+            "state 41→45 (Bosta updatedAt 2026-10-04T11:00:00.000Z)");
+        assertThat(out.getOut()).doesNotContain("missed change — tracking 8010000003");
+        assertThat(out.getOut()).contains("Status poll tenant " + t.id + ": walk 1 page(s), 1 change(s) ingested; " +
+            "safety net 2 fetch(es), 1 change(s) found (1 missed by the walk)");
     }
 
     // ── helpers ───────────────────────────────────────────────────────────────

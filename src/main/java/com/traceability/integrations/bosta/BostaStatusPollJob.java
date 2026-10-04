@@ -165,8 +165,10 @@ public class BostaStatusPollJob {
 
     private void pollTenant(UUID tenantId, String apiKey) {
         java.sql.Timestamp cycleStart = java.sql.Timestamp.from(java.time.Instant.now());
-        if (bostaV2 != null && !walkTenant(tenantId, apiKey)) return;   // rate limited — the tenant backs off
-        TenantContext.runAs(tenantId, (Runnable) () -> {
+        WalkResult walk = bostaV2 != null ? walkTenant(tenantId, apiKey) : new WalkResult(true, 0, 0);
+        // Observability (2026-10-04): {safety-net fetches, changes found, of which missed by the walk}.
+        int[] net = {0, 0, 0};
+        if (walk.ok()) TenantContext.runAs(tenantId, (Runnable) () -> {
 
             // Safety net (V138): in-flight shipments not checked for safety-net-hours, oldest first.
             // provider_state is the last known numeric Bosta code — used to skip re-enqueuing
@@ -185,10 +187,7 @@ public class BostaStatusPollJob {
                 "LIMIT ?",
                 tenantId, safetyNetHours, cycleStart, maxPerCycle));   // never what this cycle's walk just checked
 
-            if (shipments == null || shipments.isEmpty()) {
-                log.debug("Status poll tenant {}: no in-flight shipments", tenantId);
-                return;
-            }
+            if (shipments == null || shipments.isEmpty()) return;
 
             int seen = 0, enqueued = 0;
             for (Map<String, Object> row : shipments) {
@@ -197,12 +196,27 @@ public class BostaStatusPollJob {
                 // provider_state is nullable (NULL = never polled successfully before)
                 Integer currentProviderState = (Integer) row.get("provider_state");
                 seen++;
+                net[0]++;
 
                 try {
                     if (ingestionHelper.ingestDelivery(
                             tenantId, apiKey, trackingNumber, "bosta_poll",
                             currentProviderState)) {
                         enqueued++;
+                        net[1]++;
+                        // The walk should have caught this: a change on a shipment it hasn't shown for
+                        // safety-net-hours. (No known state yet → just the first one, not a miss.)
+                        if (currentProviderState != null) {
+                            net[2]++;
+                            Map<String, Object> ev = tx.execute(s -> jdbc.queryForMap(
+                                "SELECT payload->>'state' AS state, payload->>'updatedAt' AS updated_at FROM webhook_events " +
+                                "WHERE tenant_id = ? AND source = 'bosta_poll'::webhook_source " +
+                                "  AND payload->>'trackingNumber' = ? ORDER BY id DESC LIMIT 1",
+                                tenantId, trackingNumber));
+                            log.warn("Status poll tenant {}: status walk missed change — tracking {} state {}→{} " +
+                                "(Bosta updatedAt {})", tenantId, trackingNumber, currentProviderState,
+                                ev.get("state"), ev.get("updated_at"));
+                        }
                     }
                 } catch (DeliveryNotFoundException e) {
                     // FR-14: Bosta says this tracking number does not exist (HTTP 400 "Delivery not found").
@@ -251,13 +265,10 @@ public class BostaStatusPollJob {
                 if (Thread.currentThread().isInterrupted()) break;   // no sleep: the shared limiter paces the calls
             }
 
-            if (enqueued > 0) {
-                log.info("Status poll tenant {}: {} checked, {} state changes enqueued",
-                    tenantId, seen, enqueued);
-            } else {
-                log.debug("Status poll tenant {}: {} checked, no changes", tenantId, seen);
-            }
         });
+        log.info("Status poll tenant {}: walk {} page(s), {} change(s) ingested{}; safety net {} fetch(es), " +
+            "{} change(s) found ({} missed by the walk)", tenantId, walk.pages(), walk.ingested(),
+            walk.ok() ? "" : " (rate limited)", net[0], net[1], net[2]);
     }
 
     // ---- the -updatedAt walk (V138) ------------------------------------------------------------
@@ -265,8 +276,11 @@ public class BostaStatusPollJob {
     private record WalkState(java.time.Instant markAt, Integer walkPage, java.time.Instant walkNewestAt, boolean seeded) {}
 
     /** Walks the tenant's changed deliveries. False only when rate limited (the tenant then backs off). */
-    boolean walkTenant(UUID tenantId, String apiKey) {
-        Boolean ok = TenantContext.runAs(tenantId, () -> {
+    /** One cycle's walk: false {@code ok} = rate limited (the tenant then backs off and skips the safety net). */
+    record WalkResult(boolean ok, int pages, int ingested) {}
+
+    WalkResult walkTenant(UUID tenantId, String apiKey) {
+        WalkResult result = TenantContext.runAs(tenantId, () -> {
             WalkState state = loadState(tenantId);
             java.time.Instant stopBefore = state.markAt().minus(java.time.Duration.ofMinutes(overlapMinutes));
             boolean resuming = state.walkPage() != null && state.walkNewestAt() != null;
@@ -360,10 +374,9 @@ public class BostaStatusPollJob {
             } else if (state.seeded()) {
                 saveState(tenantId, state.markAt(), state.walkPage(), state.walkNewestAt());
             }
-            if (ingested > 0) log.info("Status poll tenant {}: walk {} page(s), {} change(s) enqueued", tenantId, pagesRead, ingested);
-            return !rateLimited;
+            return new WalkResult(!rateLimited, pagesRead, ingested);
         });
-        return Boolean.TRUE.equals(ok);
+        return result == null ? new WalkResult(true, 0, 0) : result;
     }
 
     private void backOff(UUID tenantId, long retryAfterSeconds) {
