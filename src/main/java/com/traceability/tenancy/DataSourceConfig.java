@@ -15,11 +15,18 @@ import java.util.regex.Pattern;
  * Declares two datasources:
  * <ul>
  *   <li>{@code dataSource} (@Primary) — {@link TenantAwareDataSource} wrapping a HikariPool
- *       of size 5 connecting as app_user. RLS is always enforced here.</li>
- *   <li>{@code ownerDataSource} (@FlywayDataSource) — HikariPool of size 2 connecting as the
- *       Flyway owner (postgres). Flyway migrations and JobRunr share this pool. Size 2 + 5 = 7
- *       total connections, comfortably within Supabase free plan's 15-connection cap.</li>
+ *       ({@code spring.datasource.hikari.maximum-pool-size}, 12) connecting as app_user. RLS is
+ *       always enforced here.</li>
+ *   <li>{@code ownerDataSource} (@FlywayDataSource) — HikariPool ({@code traced.owner-pool.size}, 4)
+ *       connecting as the Flyway owner (postgres). Flyway migrations, JobRunr's storage and the
+ *       owner-connection jobs share it.</li>
  * </ul>
+ * Budget (2026-10-04, Supabase Nano): Supavisor session mode allows 15 connections per user+db and
+ * Postgres max_connections is 60. These are the app's ONLY two pools — app_user 12 ≤ 15 and
+ * postgres 4 ≤ 15, each with headroom (the dashboard / mgmt-api's own postgres sessions are direct,
+ * not through Supavisor). Was 5 + 2: a 50-event Shopify burst (2026-10-03 06:18:55) released 56 jobs
+ * at once onto 5 connections and 9 failed on the 5 s connection timeout. Both pools log a leak
+ * warning for a connection held over {@code traced.datasource.leak-detection-ms} (20 s).
  */
 @Configuration
 public class DataSourceConfig {
@@ -32,7 +39,8 @@ public class DataSourceConfig {
             @Value("${spring.datasource.password}") String password,
             @Value("${spring.datasource.hikari.maximum-pool-size:5}") int poolSize,
             @Value("${spring.datasource.hikari.minimum-idle:1}") int minIdle,
-            @Value("${spring.datasource.hikari.connection-timeout:5000}") long timeoutMs) {
+            @Value("${spring.datasource.hikari.connection-timeout:5000}") long timeoutMs,
+            @Value("${traced.datasource.leak-detection-ms:20000}") long leakDetectionMs) {
 
         rejectTransactionPooler(url);
 
@@ -44,29 +52,37 @@ public class DataSourceConfig {
         raw.setMaximumPoolSize(poolSize);
         raw.setMinimumIdle(minIdle);
         raw.setConnectionTimeout(timeoutMs);
+        raw.setLeakDetectionThreshold(leakDetectionMs);
+        raw.setPoolName("app-pool");
         return new TenantAwareDataSource(raw);
     }
 
     /**
-     * Owner datasource — Flyway (DDL migrations) and JobRunr share this 2-connection pool.
-     * Declared as @FlywayDataSource so Spring Boot uses it instead of auto-creating a
-     * separate HikariPool (default size 10) from spring.flyway.url properties.
-     * Total connection budget with Supabase free plan (15 max):
-     *   owner-pool (2) + app_user pool (5) = 7 — leaves 8 slots for pgAdmin / psql.
+     * Owner datasource — Flyway (DDL migrations), JobRunr's storage and owner-connection jobs share
+     * this pool. Declared as @FlywayDataSource so Spring Boot uses it instead of auto-creating a
+     * separate HikariPool (default size 10) from spring.flyway.url properties — there is no other
+     * postgres pool in the app. Connection timeout {@code traced.owner-pool.connection-timeout-ms}
+     * (3 s): a JobRunr enqueue waiting on it must fail fast (the Shopify webhook endpoint answers
+     * within its deadline either way).
      */
     @Bean
     @FlywayDataSource
     public DataSource ownerDataSource(
             @Value("${spring.flyway.url}") String url,
             @Value("${spring.flyway.user}") String user,
-            @Value("${spring.flyway.password}") String password) {
+            @Value("${spring.flyway.password}") String password,
+            @Value("${traced.owner-pool.size:4}") int poolSize,
+            @Value("${traced.owner-pool.connection-timeout-ms:3000}") long timeoutMs,
+            @Value("${traced.datasource.leak-detection-ms:20000}") long leakDetectionMs) {
         HikariDataSource ds = new HikariDataSource();
         ds.setJdbcUrl(url);
         ds.setUsername(user);
         ds.setPassword(password);
         ds.setDriverClassName("org.postgresql.Driver");
-        ds.setMaximumPoolSize(2);
+        ds.setMaximumPoolSize(poolSize);
         ds.setMinimumIdle(1);
+        ds.setConnectionTimeout(timeoutMs);
+        ds.setLeakDetectionThreshold(leakDetectionMs);
         ds.setPoolName("owner-pool");
         return ds;
     }

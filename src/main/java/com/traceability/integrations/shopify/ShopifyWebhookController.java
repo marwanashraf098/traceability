@@ -31,7 +31,11 @@ import java.util.UUID;
  *   3. INSERT into shopify_webhook_events under the tenant GUC. UNIQUE on webhook_id
  *      provides idempotency across Shopify retries.
  *   4. ACK 200 immediately — never block the HTTP response on processing.
- *   5. Enqueue ShopifyWebhookProcessorJob to handle the event asynchronously.
+ *   5. Enqueue ShopifyWebhookProcessorJob to handle the event asynchronously. The enqueue (a JobRunr
+ *      write on the owner pool) is given {@code shopify.webhook.enqueue-timeout-ms} (2 s): if it fails
+ *      or hasn't finished by then the response is still 200 — the event row is saved, unprocessed, and
+ *      is logged for the sweeper to pick up (2026-10-04). Shopify must always get an answer well
+ *      under its ~5 s deadline; a slow enqueue never decides that.
  *
  * GDPR endpoints (customers/data_request, customers/redact, shop/redact) use the same
  * spine — they are declared in the Partner Dashboard, not registered via Part A's API call.
@@ -59,6 +63,14 @@ public class ShopifyWebhookController {
     private final TransactionTemplate tx;
     private final String clientSecret;
     private final EncryptionService encryptionService;
+    private long enqueueTimeoutMs = 2000;
+    private static final java.util.concurrent.ExecutorService ENQUEUE_EXECUTOR =
+        java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor();
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public void setEnqueueTimeoutMs(@Value("${shopify.webhook.enqueue-timeout-ms:2000}") long enqueueTimeoutMs) {
+        this.enqueueTimeoutMs = enqueueTimeoutMs;
+    }
 
     public ShopifyWebhookController(JdbcTemplate jdbc,
                                      ObjectMapper mapper,
@@ -132,8 +144,31 @@ public class ShopifyWebhookController {
         // tenantId is passed so the processor can set the GUC immediately — without it
         // the first SELECT would run without a GUC, which RLS blocks to zero rows.
         final UUID finalTenantId = tenantId;
-        jobScheduler.enqueue(() -> processorJob.process(eventId, finalTenantId));
+        enqueueWithin(eventId, finalTenantId, topic, shopDomain);
         return ResponseEntity.ok().build();
+    }
+
+    /**
+     * Enqueues the processor, waiting at most enqueueTimeoutMs. A failure or a timeout is logged (the
+     * row stays unprocessed — processed_at and process_error NULL — for the sweeper) and never changes
+     * the response. A timed-out enqueue keeps running in the background and may still land.
+     */
+    private void enqueueWithin(UUID eventId, UUID tenantId, String topic, String shopDomain) {
+        java.util.concurrent.Future<?> f = ENQUEUE_EXECUTOR.submit(
+            () -> jobScheduler.enqueue(() -> processorJob.process(eventId, tenantId)));
+        try {
+            f.get(enqueueTimeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS);
+        } catch (java.util.concurrent.TimeoutException e) {
+            log.warn("Shopify webhook {} ({} shop={}): enqueue not done within {} ms — answered 200, event saved " +
+                "unprocessed for the sweeper (the enqueue may still complete)", eventId, topic, shopDomain, enqueueTimeoutMs);
+        } catch (java.util.concurrent.ExecutionException e) {
+            log.warn("Shopify webhook {} ({} shop={}): enqueue failed — answered 200, event saved unprocessed " +
+                "for the sweeper: {}", eventId, topic, shopDomain, String.valueOf(e.getCause()));
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            log.warn("Shopify webhook {} ({} shop={}): interrupted while enqueueing — answered 200, event saved " +
+                "unprocessed for the sweeper", eventId, topic, shopDomain);
+        }
     }
 
     // ---- helpers --------------------------------------------------------

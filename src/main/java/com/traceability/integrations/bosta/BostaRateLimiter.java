@@ -73,6 +73,28 @@ public class BostaRateLimiter {
             : null;
     }
 
+    /**
+     * Priority for every Bosta call made inside {@code call} on this thread — so a user-facing path can
+     * go ahead of polls through a gateway method that is BACKGROUND by default (e.g. the pack scan's
+     * fetchDelivery, 2026-10-04). Only upgrades; restores the previous value after.
+     */
+    public static <T> T userFacing(java.util.function.Supplier<T> call) {
+        Priority prev = PRIORITY_OVERRIDE.get();
+        PRIORITY_OVERRIDE.set(Priority.USER_FACING);
+        try {
+            return call.get();
+        } finally {
+            if (prev == null) PRIORITY_OVERRIDE.remove(); else PRIORITY_OVERRIDE.set(prev);
+        }
+    }
+
+    /** The priority set by {@link #userFacing} on this thread, or null. */
+    public static Priority priorityOverride() {
+        return PRIORITY_OVERRIDE.get();
+    }
+
+    private static final ThreadLocal<Priority> PRIORITY_OVERRIDE = new ThreadLocal<>();
+
     /** No limit at all — for hand-wired gateways in tests. */
     public static BostaRateLimiter unlimited() {
         return new BostaRateLimiter(0, 1, 0);
@@ -81,6 +103,7 @@ public class BostaRateLimiter {
     /** Blocks until this key — and the server as a whole — may send one request. */
     public void acquire(String apiKey, Priority priority) {
         if (apiKey == null) return;
+        if (PRIORITY_OVERRIDE.get() != null) priority = PRIORITY_OVERRIDE.get();
         long deadline = System.nanoTime() + maxWaitMs * 1_000_000L;
         if (perSecond > 0) bucket(apiKey).acquire(priority, deadline);
         if (global != null) global.acquire(priority, deadline);

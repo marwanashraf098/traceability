@@ -774,7 +774,11 @@ public class ShipmentLinkService {
                 return;
             }
             String rawApiKey = encryptionService.decrypt(accountInfo[0]);
-            BostaDelivery delivery = bostaGateway.fetchDelivery(rawApiKey, trackingNumber);
+            // A packer is waiting on this (pack scan, pack completion, exchange mapping): user-facing in
+            // the shared Bosta limiter, ahead of polls (2026-10-04). Still inside the transaction —
+            // moving it after commit is the next change.
+            BostaDelivery delivery = com.traceability.integrations.bosta.BostaRateLimiter.userFacing(
+                () -> bostaGateway.fetchDelivery(rawApiKey, trackingNumber));
             if (delivery != null && delivery.raw() != null) {
                 String bostaId = delivery.raw().path("_id").asText(null);
                 if (bostaId != null && !bostaId.isBlank()) {

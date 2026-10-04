@@ -28,6 +28,33 @@
   piece → Print waybill (simulated PDF; required before Complete) → Complete → "Use this AWB" → Pickups: new session →
   tap Scan → Close.
 
+**DB / job reliability — Build 1 (2026-10-04, branch `fix/db-pool-jobrunr-timeouts` rebased on main 53e2b2a; not merged,
+not deployed). No migration.**
+- Step 0 (prod): 10-03 06:18:55 UTC, 50 Femine orders/updated in 8 s → JobRunr released 56 jobs in one poll onto a 5-connection
+  app pool (discovery pinning 1) → 9 failed "Could not open JDBC Connection" (5 s timeout). A failed event is caught, stored
+  with process_error, and the job ends SUCCEEDED — never retried; Shopify never redelivers (200). Lag p50 5.9 s / p95 13.6 s
+  is JobRunr pickup (15 s poll); processing p50 0.67 s. 38 failed in 30 d + 1 never-enqueued; all superseded except Jumi
+  #385329559470 (differs only in Shopify's shipment_status) — nothing missing.
+- Pools (`DataSourceConfig`, application.yml): app_user 5 → 12 (`app-pool`), owner (postgres) 2 → 4 with connection timeout 3 s
+  (`traced.owner-pool.*`), leak detection 20 s on both (`traced.datasource.leak-detection-ms`). Supavisor session mode: 15 per
+  user+db (Nano), max_connections 60 — these are the app's only two pools (DemoSeeder borrows from the owner pool).
+- JobRunr: `worker-count: 8` (was cores × 8 × 2 virtual threads), `poll-interval-in-seconds: 5` (was 15).
+- v0 `BostaHttpGateway`: Spring constructor sets a JDK request factory — connect `bosta.http.connect-timeout` 5 s, read
+  `bosta.http.read-timeout` 20 s (there was no read timeout). Resilience4j: 3 attempts, 1 s apart → one call ≤ 77 s. The
+  hand-wired constructors (tests bound to MockRestServiceServer) are unchanged. BostaV2Client already had its own (5 s / 30 s;
+  create 5 s / 20 s).
+- `BostaRateLimiter.userFacing(...)`: a per-thread priority override; ShipmentLinkService.fetchAndStoreProviderDeliveryId
+  (pack scan / pack completion / exchange mapping) now fetches USER_FACING. Still inside the transaction (Build 2).
+- Shopify webhook endpoint: the enqueue gets `shopify.webhook.enqueue-timeout-ms` (2 s) on a virtual thread; timeout or
+  failure → logged, still 200, the row stays unprocessed for Build 2's sweeper.
+- Tests: PoolAndJobRunrConfigTest cf1–cf4 (enables the job server for itself), BostaGatewayTimeoutTest gt1,
+  PackScanFetchPriorityTest pp1, ShopifyWebhookEnqueueDeadlineTest wd1–wd3. Revert-checked (each RED): pool 5 / owner 2 /
+  no owner timeout / no leak detection → cf1/cf2; default workers / poll → cf3; no gateway timeouts → cf4 + gt1; pack fetch
+  BACKGROUND → pp1; 60 s enqueue deadline → wd1; enqueue failure escaping → wd2.
+- **Open (8 workers can starve):** recurring + one-off jobs peaked at 11 concurrent; fulfillment-link jobs sleep in the worker
+  during 429 backoff (55 concurrent × ~180 s at 10-03 14:03 UTC). See the Build 2 plan (no worker ever sleeps or waits on the
+  limiter for long; reschedule instead).
+
 **Review mode S6 — reset the review tenant (2026-10-04, branch `feat/review-tenant-s6` off main bdb7036, worktree
 `.claude/worktrees/review-s6`; not merged, not deployed). No migration.**
 - `scripts/ops/review-tenant-reset.sql`: `psql "<conn>" -v ON_ERROR_STOP=1 -v tenant_id=<id> [-v commit=yes] -f …` —

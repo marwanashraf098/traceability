@@ -11,7 +11,9 @@ spring:
     password: ${APP_DB_PASSWORD:postgres}
     driver-class-name: org.postgresql.Driver
     hikari:
-      maximum-pool-size: 5
+      # app_user pool (DataSourceConfig). Supavisor session mode allows 15 per user+db (Nano); the
+      # owner (postgres) pool is traced.owner-pool.size below. Was 5 — see DataSourceConfig.
+      maximum-pool-size: 12
       minimum-idle: 1
       connection-timeout: 5000
 
@@ -76,6 +78,12 @@ portal:
 # One-time all-statuses catalog re-import for stores connected before 2026-09-29
 # (CatalogBackfillJob). Kill switch: TRACED_CATALOG_BACKFILL_ENABLED=false.
 traced:
+  # Owner (postgres) pool — Flyway, JobRunr storage, owner-connection jobs (DataSourceConfig).
+  owner-pool:
+    size: 4
+    connection-timeout-ms: 3000
+  datasource:
+    leak-detection-ms: 20000
   catalog-backfill:
     enabled: ${TRACED_CATALOG_BACKFILL_ENABLED:true}
   # Review mode S5 — shared secret for the ops endpoints (/api/v1/ops/**, X-Ops-Secret header,
@@ -236,6 +244,11 @@ org:
   jobrunr:
     background-job-server:
       enabled: true
+      # 2026-10-04: fixed, not JobRunr's default (cores × 8 × 2 virtual threads on Java 21 — 32+ workers
+      # against a 12-connection app pool). 8 workers leave the pool room for web requests. Poll every
+      # 5 s (the open-source minimum) instead of 15 s: webhook pickup lag was p50 5.9 s / p95 13.6 s.
+      worker-count: 8
+      poll-interval-in-seconds: 5
     # skip-create=true prevents the Spring Boot auto-config StorageProvider from running DDL.
     # Our custom JobRunrConfig @Bean creates PostgresStorageProvider(ownerDs) directly, which
     # ignores this property. V18 Flyway migration creates all JobRunr tables and pre-populates

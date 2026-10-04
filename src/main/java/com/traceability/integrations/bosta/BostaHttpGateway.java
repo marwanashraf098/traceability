@@ -57,10 +57,33 @@ class BostaHttpGateway implements BostaGateway {
         this(builder, mapper, baseUrl, apiVersion, BostaRateLimiter.unlimited());
     }
 
+    /**
+     * Spring's constructor (2026-10-04): explicit HTTP timeouts — connect
+     * {@code bosta.http.connect-timeout} (5 s), read {@code bosta.http.read-timeout} (20 s). Before, the
+     * builder's default factory had no read timeout, so a hung Bosta call could hold its caller (and
+     * any DB connection it held) forever. With the Resilience4j retry below (3 attempts, 1 s apart,
+     * only on network errors — a timeout is one) one call is bounded at 3 × (connect + read) + 2 s.
+     */
     @org.springframework.beans.factory.annotation.Autowired
     BostaHttpGateway(RestClient.Builder builder, ObjectMapper mapper,
                      @Value("${bosta.base-url}") String baseUrl,
                      @Value("${bosta.api-version}") String apiVersion,
+                     BostaRateLimiter limiter,
+                     @Value("${bosta.http.connect-timeout:5s}") Duration connectTimeout,
+                     @Value("${bosta.http.read-timeout:20s}") Duration readTimeout) {
+        this(builder.requestFactory(timeoutFactory(connectTimeout, readTimeout)), mapper, baseUrl, apiVersion, limiter);
+    }
+
+    static org.springframework.http.client.ClientHttpRequestFactory timeoutFactory(Duration connect, Duration read) {
+        java.net.http.HttpClient client = java.net.http.HttpClient.newBuilder().connectTimeout(connect).build();
+        org.springframework.http.client.JdkClientHttpRequestFactory f =
+            new org.springframework.http.client.JdkClientHttpRequestFactory(client);
+        f.setReadTimeout(read);
+        return f;
+    }
+
+    /** Hand-wired (tests): the builder as given (e.g. bound to a MockRestServiceServer), no extra timeouts. */
+    BostaHttpGateway(RestClient.Builder builder, ObjectMapper mapper, String baseUrl, String apiVersion,
                      BostaRateLimiter limiter) {
         this.limiter    = limiter;
         this.restClient = builder.build();
