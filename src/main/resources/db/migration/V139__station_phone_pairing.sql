@@ -1,5 +1,5 @@
 -- ============================================================
--- V138 — Q1 phone as scanner, per station: a pairing belongs to the worker and the tablet,
+-- V139 — Q1 phone as scanner, per station: a pairing belongs to the worker and the tablet,
 -- not to a pack session (approved by Marawan 2026-10-04, "phone everywhere" diagnosis §2).
 --
 -- A worker pairs their phone once per shift; it keeps working across pack sessions and scan
@@ -40,7 +40,7 @@ GRANT SELECT (station_device_id, active_target, active_target_at) ON scan_pairin
 GRANT UPDATE (active_target, active_target_at) ON scan_pairings TO app_user;
 
 COMMENT ON TABLE scan_pairings IS
-    'Phone-as-scanner pairings, one live per tablet (station_device_id) and per worker (V138; '
+    'Phone-as-scanner pairings, one live per tablet (station_device_id) and per worker (V139; '
     'V127 tied them to a pack session). pair_code_hash / device_secret_hash are SHA-256 of '
     'high-entropy one-time secrets; app_user can never SELECT them (column grants) — a hash '
     'resolves to a pairing only through resolve_scan_pairing (SECURITY DEFINER hatch #15).';

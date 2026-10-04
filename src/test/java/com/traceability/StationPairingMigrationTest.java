@@ -16,7 +16,7 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * Q1 — V138 on a database that already holds S6 pairings: every live S6 pairing is revoked once
+ * Q1 — V139 on a database that already holds S6 pairings: every live S6 pairing is revoked once
  * ('replaced') and its undelivered scans expired; an already-revoked one keeps its reason; the
  * revoked_reason CHECK V127 created under its default name is the one replaced; the per-session
  * index is gone and the per-tablet / per-worker ones exist.
@@ -33,7 +33,7 @@ class StationPairingMigrationTest {
 
     @Test
     void v138_revokesEveryLiveS6PairingOnce_expiresTheirScans_andSwapsTheIndexes() throws Exception {
-        MigrateResult r1 = flyway("137").migrate();
+        MigrateResult r1 = flyway("138").migrate();
         assertThat(r1.success).isTrue();
 
         UUID tenant = UUID.randomUUID(), user = UUID.randomUUID(), session = UUID.randomUUID();
@@ -41,7 +41,7 @@ class StationPairingMigrationTest {
         try (Connection c = conn()) {
             assertThat(scalar(c, "SELECT pg_get_constraintdef(oid) FROM pg_constraint " +
                 "WHERE conname = 'scan_pairings_revoked_reason_check'"))
-                .as("V127's inline CHECK, default name — the one V138 drops")
+                .as("V127's inline CHECK, default name — the one V139 drops")
                 .contains("unpaired").contains("replaced").contains("session_ended").contains("worker_switched")
                 .doesNotContain("station_locked");
             exec(c, "INSERT INTO tenants (id, name) VALUES (?, 'S6 shop')", tenant);
@@ -63,9 +63,9 @@ class StationPairingMigrationTest {
                     "VALUES (?, ?, ?, 2, 'P2', 'accepted', 'ok', now())", done, tenant, live);
         }
 
-        MigrateResult r2 = flyway("138").migrate();
+        MigrateResult r2 = flyway("139").migrate();
         assertThat(r2.success).isTrue();
-        assertThat(r2.migrationsExecuted).as("V138 only").isEqualTo(1);
+        assertThat(r2.migrationsExecuted).as("V139 only").isEqualTo(1);
 
         try (Connection c = conn()) {
             assertThat(scalar(c, "SELECT revoked_reason FROM scan_pairings WHERE id = '" + live + "'"))

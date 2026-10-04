@@ -5,12 +5,13 @@
 ## Current state
 
 **Q1 — Phone scanner per station: pairing to the tablet + worker; pack & pick (2026-10-05, branch `feat/station-phone`
-off main 07a21a4; pushed, not merged, not deployed). V138 + revised hatch #15 approved by Marawan 2026-10-04 (incl.
+off main 07a21a4, origin/main 0c6ebe9 merged in; pushed, not merged, not deployed). Migration V139 (V138 went to the Bosta
+status poll on main while this was built). V139 + revised hatch #15 approved by Marawan 2026-10-04 (incl.
 revoking existing S6 pairings once, one live pairing per tablet AND per worker, retiring S6's per-session endpoints,
 the station GETs in RlsCoverageTest). useScanner unchanged; no marked block edited.**
 - **Model:** a pairing belongs to the tablet (`station_device_id`, random localStorage id — routing key, not a secret) and
-  the worker; it lasts the shift across screens and pack sessions. Hatch #15 (V138): "pack session open" → the worker is
-  an ACTIVE user of the tenant; still DEFINER, fixed search_path, returns only (tenant_id, pairing_id). V138 revoked every
+  the worker; it lasts the shift across screens and pack sessions. Hatch #15 (V139): "pack session open" → the worker is
+  an ACTIVE user of the tenant; still DEFINER, fixed search_path, returns only (tenant_id, pairing_id). V139 revoked every
   live S6 pairing ('replaced') and expired their undelivered scans. Register updated (blueprint §16.1 row 15, CLAUDE.md).
 - **Endpoints (`StationPairingController`):** POST/GET/DELETE `/station/pairings[/current]` (deviceId), PUT
   `/station/pairings/current/target {label}`, GET `/station/relay-stream?deviceId=` (pairing's worker only; 403

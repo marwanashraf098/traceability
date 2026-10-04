@@ -659,10 +659,10 @@ Until nginx is restarted, phone scanning still works but the stream is buffered 
 restart in the same deploy.
 
 **Q1 phone per station — nginx change (manual, once).** The tablet's stream moves from
-`/api/v1/pack-sessions/{id}/relay-stream` (retired — that path now 404s) to
+`/api/v1/pack-sessions/{id}/relay-stream` (retired — no handler any more) to
 `/api/v1/station/relay-stream?deviceId=…`; the unbuffered location becomes
 `location = /api/v1/station/relay-stream` (same body: `proxy_buffering off`, read timeout 120 s,
-`api` zone). The `scanpair` zone and `location ^~ /api/v1/scan-pair/` are unchanged. V138 runs on
+`api` zone). The `scanpair` zone and `location ^~ /api/v1/scan-pair/` are unchanged. V139 runs on
 app start and revokes every S6 pairing once (phones pair again from the floating "Use phone"
 control). Same steps as S6:
 ```bash

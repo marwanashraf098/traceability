@@ -40,7 +40,7 @@ public class ScanPairException extends ApiException {
             "لم يتم العثور على المسح.", HttpStatus.NOT_FOUND);
     }
 
-    /** Q1: the tablet's id (localStorage) is missing or not V138's shape. */
+    /** Q1: the tablet's id (localStorage) is missing or not V139's shape. */
     static ScanPairException badDevice() {
         return new ScanPairException("BAD_DEVICE", "This tablet's id couldn't be read — reload the page.",
             "تعذّرت قراءة معرّف هذا الجهاز اللوحي — أعد تحميل الصفحة.", HttpStatus.BAD_REQUEST);
