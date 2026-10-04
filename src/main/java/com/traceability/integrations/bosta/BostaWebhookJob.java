@@ -131,6 +131,54 @@ public class BostaWebhookJob {
         this.rateLimitJitterSeconds   = jitterSeconds;
     }
 
+    /** Sources whose events Traced writes from its own v2 search walks. */
+    static final java.util.Set<String> OWN_LIST_SOURCES = java.util.Set.of("bosta_poll_discovery", "bosta_poll");
+
+    private BostaListItemCache listItemCache;
+
+    /** Stored v0 fields never carried into a v2 list delivery (they describe the past, not now). */
+    private static final java.util.Set<String> NOT_CARRIED_OVER =
+        java.util.Set.of("exceptionCode", "exceptionReason", "exceptionDetails", BostaListItemCache.SHAPE_FIELD);
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setListItemCache(BostaListItemCache listItemCache) {
+        this.listItemCache = listItemCache;
+    }
+
+    /**
+     * The delivery from a fresh v2 search item, or null → fetch v0 as usual. Used only for forward
+     * deliveries (SEND / RTO — exchanges, CRPs and the rest read fields only the v0 shape has), and only
+     * when no new delivery attempt happened since Traced's stored copy (the attempt history and failure
+     * reasons live in v0's attempts[], which the list item doesn't carry): same numberOfAttempts as the
+     * stored raw, or none at all for a delivery Traced hasn't stored. Fields the list item lacks
+     * (attempts, star, isDelayed, …) are carried over from the stored raw so nothing derived from them is
+     * blanked. The result is marked v2-list ({@link BostaListItemCache#SHAPE_FIELD}).
+     */
+    BostaDelivery fromListItem(UUID tenantId, String trackingNumber, JsonNode item) {
+        if (!(item instanceof com.fasterxml.jackson.databind.node.ObjectNode obj)) return null;
+        BostaDelivery d = BostaDelivery.fromRaw(trackingNumber, obj);
+        if (!com.traceability.inventory.ShipmentLinkService.FORWARD_LINKABLE_TYPE_CODES.contains(d.typeCode())) return null;
+        String stored = tx.execute(s -> jdbc.query(
+            "SELECT raw::text FROM shipments WHERE tenant_id = ? AND tracking_number = ? AND raw IS NOT NULL",
+            rs -> rs.next() ? rs.getString(1) : null, tenantId, trackingNumber));
+        com.fasterxml.jackson.databind.node.ObjectNode merged = obj.deepCopy();
+        int listAttempts = obj.path("numberOfAttempts").asInt(0);
+        if (stored != null) {
+            JsonNode s;
+            try { s = mapper.readTree(stored); } catch (Exception e) { return null; }
+            if (s.path("numberOfAttempts").asInt(0) != listAttempts) return null;   // a new attempt → v0
+            // Carry over what the list item lacks — but never an old exception: v2 gives the current one
+            // as state.lastExceptionCode, and a stale top-level exceptionCode would win over it.
+            s.fields().forEachRemaining(f -> {
+                if (!merged.has(f.getKey()) && !NOT_CARRIED_OVER.contains(f.getKey())) merged.set(f.getKey(), f.getValue());
+            });
+        } else if (listAttempts > 0) {
+            return null;
+        }
+        BostaListItemCache.mark(merged);
+        return BostaDelivery.fromRaw(trackingNumber, merged);
+    }
+
     // ---- private row types -------------------------------------------------
 
     private record ShipmentRow(UUID id, UUID orderId) {}
@@ -210,9 +258,18 @@ public class BostaWebhookJob {
 
             String rawApiKey = encryptionService.decrypt(accountInfo[0]);
 
-            // 6. Verify-by-fetch: payload is untrusted; always re-fetch authoritative state.
+            // 6. Verify-by-fetch: payload is untrusted; always re-fetch authoritative state —
+            //    except an event Traced itself wrote from a fresh v2 search item (discovery / status
+            //    poll, 2026-10-04): that item came from an authenticated Bosta call moments ago, so
+            //    the delivery is built from it (see fromListItem for when it still fetches).
+            BostaDelivery fromList = null;
+            if (listItemCache != null && OWN_LIST_SOURCES.contains(sourceHolder[0])) {
+                JsonNode item = listItemCache.take(webhookEventId);
+                if (item != null) fromList = fromListItem(tenantId, trackingNumber, item);
+            }
             BostaDelivery delivery;
-            try {
+            if (fromList != null) delivery = fromList;
+            else try {
                 delivery = bostaGateway.fetchDelivery(rawApiKey, trackingNumber);
             } catch (BostaTransientException e) {
                 log.warn("Transient Bosta fetch error for tracking {} — will retry: {}",
@@ -497,10 +554,20 @@ public class BostaWebhookJob {
         if (mapped.isException() && delivery.raw() != null) {
             JsonNode raw = delivery.raw();
             JsonNode codeNode = raw.path("exceptionCode");
+            // v2 list items carry no top-level exceptionCode: state.lastExceptionCode (2026-10-04).
+            if (!codeNode.isNumber()) codeNode = raw.path("state").path("lastExceptionCode");
             if (codeNode.isNumber()) exceptionCode = codeNode.asInt();
+            else if (codeNode.isTextual() && codeNode.asText().matches("\\d+")) exceptionCode = Integer.parseInt(codeNode.asText());
             exceptionReason = raw.path("exceptionReason").asText(null);
             if (exceptionReason == null || exceptionReason.isBlank()) {
                 exceptionReason = raw.path("exceptionDetails").asText(null);
+            }
+            if (exceptionReason == null || exceptionReason.isBlank()) {
+                JsonNode ex = raw.path("state").path("exception");
+                if (ex.isArray() && ex.size() > 0) {
+                    JsonNode lastEx = ex.get(ex.size() - 1);
+                    exceptionReason = lastEx.path("reason").asText(lastEx.path("value").asText(null));
+                }
             }
             if (exceptionCode != null) {
                 log.info("Tracking {} exception: code={} reason={}",

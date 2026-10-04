@@ -193,7 +193,11 @@ public class PreConnectDeliveryFilter {
     /** Bosta's createdAt: ISO-8601, or the JS Date.toString() shape the v0 API returns. Null if absent/unreadable. */
     static Instant parseCreatedAt(JsonNode raw) {
         if (raw == null) return null;
-        String s = raw.path("createdAt").asText(null);
+        return parseBostaTime(raw.path("createdAt").asText(null));
+    }
+
+    /** A Bosta timestamp: ISO-8601, or the JS Date.toString() shape (v0 and v2 lists). Null if absent/unreadable. */
+    static Instant parseBostaTime(String s) {
         if (s == null || s.isBlank()) return null;
         s = s.trim();
         try {

@@ -493,15 +493,12 @@ public class BostaDiscoveryPollJob {
         return s.isBlank() ? null : s;
     }
 
-    /** Sleeps the inter-fetch delay; false if interrupted. */
+    /**
+     * False if interrupted. No sleep any more (2026-10-04): the shared Bosta limiter paces every call, and
+     * a worker must not sleep (bosta.poll.inter-fetch-delay-ms is no longer used by discovery).
+     */
     private boolean pause() {
-        try {
-            if (interFetchDelayMs > 0) Thread.sleep(interFetchDelayMs);
-            return true;
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            return false;
-        }
+        return !Thread.currentThread().isInterrupted();
     }
 
     private void recordFailure(UUID tenantId, String trackingNumber, boolean rateLimited, String error) {

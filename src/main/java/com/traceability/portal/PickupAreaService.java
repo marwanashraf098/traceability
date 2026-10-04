@@ -89,10 +89,30 @@ public class PickupAreaService {
         this.jdbc = jdbc;
     }
 
+    // Lazy v0 (2026-10-04): set on the Spring-built services; hand-built instances (tests) have none.
+    private com.traceability.integrations.bosta.ShipmentRawRefresher rawRefresher;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setRawRefresher(com.traceability.integrations.bosta.ShipmentRawRefresher rawRefresher) {
+        this.rawRefresher = rawRefresher;
+    }
+
     /** The order's delivery city and its pickup-available districts; empty when unknown or none. */
     public Optional<CityAreas> forOrder(UUID tenantId, UUID orderId) {
-        List<Map<String, Object>> leg = jdbc.queryForList(
-            "SELECT s.raw->'dropOffAddress'->'city'->>'_id' AS city_id, " +
+        List<Map<String, Object>> leg = forwardLeg(tenantId, orderId);
+        if (leg.isEmpty()) return Optional.empty();
+        // A v2 search copy without the city (2026-10-04): fetch Bosta's v0 delivery once, then read again.
+        if (leg.get(0).get("city_id") == null && rawRefresher != null
+                && com.traceability.integrations.bosta.BostaListItemCache.SHAPE_V2.equals(leg.get(0).get("raw_shape"))
+                && rawRefresher.refreshV0(tenantId, (UUID) leg.get(0).get("id"))) {
+            leg = forwardLeg(tenantId, orderId);
+        }
+        return forCity((String) leg.get(0).get("city_id"), (String) leg.get(0).get("district_id"));
+    }
+
+    private List<Map<String, Object>> forwardLeg(UUID tenantId, UUID orderId) {
+        return jdbc.queryForList(
+            "SELECT s.id, s.raw->>'_tracedRawShape' AS raw_shape, s.raw->'dropOffAddress'->'city'->>'_id' AS city_id, " +
             "       COALESCE(s.raw->'dropOffAddress'->'district'->>'_id', " +
             "                s.raw->'dropOffAddress'->>'districtId') AS district_id " +
             "FROM shipments s " +
@@ -100,8 +120,6 @@ public class PickupAreaService {
             "  AND s.delivered_at IS NOT NULL " +
             "ORDER BY s.created_at DESC, s.id DESC LIMIT 1",
             tenantId, orderId);
-        if (leg.isEmpty()) return Optional.empty();
-        return forCity((String) leg.get(0).get("city_id"), (String) leg.get(0).get("district_id"));
     }
 
     /**

@@ -828,8 +828,8 @@ public class ExceptionService {
             "       'shipment' AS subject_type, " +
             "       s.id AS shipment_id, s.tracking_number, " +
             "       s.number_of_attempts, " +
-            "       CASE WHEN s.raw->>'exceptionCode' IS NOT NULL " +
-            "            THEN (s.raw->>'exceptionCode')::integer END AS ndr_code, " +
+            "       CASE WHEN COALESCE(s.raw->>'exceptionCode', s.raw->'state'->>'lastExceptionCode') IS NOT NULL " +
+            "            THEN (COALESCE(s.raw->>'exceptionCode', s.raw->'state'->>'lastExceptionCode'))::integer END AS ndr_code, " +
             "       nc.description AS ndr_description, " +
             "       nc.category AS ndr_category, " +
             "       o.id AS order_id, o.number AS order_number, " +
@@ -838,8 +838,8 @@ public class ExceptionService {
             "FROM shipments s " +
             "JOIN orders o ON o.id = s.order_id AND o.tenant_id = ? " +
             "LEFT JOIN ndr_codes nc " +
-            "    ON nc.code = CASE WHEN s.raw->>'exceptionCode' IS NOT NULL " +
-            "                      THEN (s.raw->>'exceptionCode')::integer END " +
+            "    ON nc.code = CASE WHEN COALESCE(s.raw->>'exceptionCode', s.raw->'state'->>'lastExceptionCode') IS NOT NULL " +
+            "                      THEN (COALESCE(s.raw->>'exceptionCode', s.raw->'state'->>'lastExceptionCode'))::integer END " +
             "WHERE s.provider_state = 47 " +
             "  AND s.internal_state = 'exception'::shipment_internal_state " +
             "  AND s.tenant_id = ? " +

@@ -165,6 +165,10 @@ bosta:
     # signal and reschedules — no job holds a JobRunr worker for a minute waiting on Bosta (2026-10-04).
     # USER_FACING callers keep max-wait-ms (60 s).
     background-max-wait-ms: 5000
+  # (b) 2026-10-04: discovery / status-poll events are applied from their v2 search item (kept in memory
+  # this long) instead of a second v0 fetch; a miss just fetches.
+  list-item:
+    max-age-seconds: 600
   # A rate-limited webhook event is rescheduled, never failed (V135): after max(retry-after, 60 s × 2^(n−1))
   # capped at max-delay, plus jitter up to jitter × min(n, 5) s; failed only after max-retries.
   webhook:
@@ -203,7 +207,15 @@ bosta:
     # Keeps current state without relying on the Bosta list order.
     status-enabled: true
     status-interval-minutes: 3   # cron hardcoded as */3 * * * * in BostaStatusPollJob
-    status-max-per-cycle: 200    # cap; rotation via last_polled_at ensures no starvation
+    status-max-per-cycle: 200    # cap for the safety-net fetch; rotation via last_polled_at
+    # V138 (2026-10-04): the poll walks Bosta's v2 search sorted -updatedAt (only changed deliveries),
+    # status-page-limit per page, until items updated before the mark minus status-overlap-minutes, an
+    # empty/short page, or status-max-pages; resumes a capped walk. Safety net: in-flight shipments not
+    # checked for status-safety-net-hours are fetched one by one (v0).
+    status-page-limit: 50
+    status-max-pages: 10
+    status-overlap-minutes: 10
+    status-safety-net-hours: 4
     # Tier 2 — Discovery poll: pages Bosta list for new deliveries not yet ingested.
     discovery-enabled: true
     # Config-wired (BostaDiscoveryPollJob's @Recurring reads this key) — NOT flipped by
