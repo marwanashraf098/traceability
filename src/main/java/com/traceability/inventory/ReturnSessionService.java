@@ -768,6 +768,8 @@ public class ReturnSessionService {
             "       v.title AS variant_title, pr.title AS product_title, v.sku, " +
             "       i.disposition, i.unexpected, i.scan_source, i.damage_reason, " +
             "       " + VIA_PHONE_SQL + " AS via_phone, " +
+            // Q2: the order the piece came back from — the phone's "Received · #1047" line.
+            "       (SELECT o.number FROM orders o WHERE o.id = p.current_order_id AND o.tenant_id = p.tenant_id) AS order_number, " +
             "       i.scanned_at, i.disposition_at, p.short_code " +
             "FROM return_session_items i " +
             "JOIN pieces p    ON p.id  = i.piece_id " +
@@ -1170,6 +1172,8 @@ public class ReturnSessionService {
             "       v.title AS variant_title, pr.title AS product_title, v.sku, " +
             "       i.disposition, i.unexpected, i.scan_source, i.damage_reason, " +
             "       " + VIA_PHONE_SQL + " AS via_phone, " +
+            // Q2: the order the piece came back from — the phone's "Received · #1047" line.
+            "       (SELECT o.number FROM orders o WHERE o.id = p.current_order_id AND o.tenant_id = p.tenant_id) AS order_number, " +
             "       i.scanned_at, i.disposition_at " +
             "FROM return_session_items i " +
             "JOIN pieces p    ON p.id  = i.piece_id " +
@@ -1187,6 +1191,8 @@ public class ReturnSessionService {
             "       v.title AS variant_title, pr.title AS product_title, v.sku, " +
             "       i.disposition, i.unexpected, i.scan_source, i.damage_reason, " +
             "       " + VIA_PHONE_SQL + " AS via_phone, " +
+            // Q2: the order the piece came back from — the phone's "Received · #1047" line.
+            "       (SELECT o.number FROM orders o WHERE o.id = p.current_order_id AND o.tenant_id = p.tenant_id) AS order_number, " +
             "       i.scanned_at, i.disposition_at " +
             "FROM return_session_items i " +
             "JOIN pieces p    ON p.id  = i.piece_id " +

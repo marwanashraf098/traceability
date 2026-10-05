@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, useCallback } from 'react'
 import { useTranslation, Trans } from 'react-i18next'
 import {
   X, ScanLine, Printer, RotateCcw, AlertTriangle, ClipboardCheck, WifiOff,
-  Inbox, ArrowRightCircle, XCircle, ChevronLeft, ChevronRight, CheckCircle2, Package,
+  Inbox, ArrowRightCircle, XCircle, ChevronLeft, ChevronRight, CheckCircle2, Package, Smartphone,
 } from 'lucide-react'
 import {
   Badge, Button, EmptyState, Skeleton, StatCard, Modal, Alert, Spinner, cn,
@@ -14,6 +14,9 @@ import { formatSessionStart } from './returns/sessionStart'
 import { useCapabilities } from '../capabilities'
 import ScanHelperChips from '../components/scanHelpers/ScanHelperChips'
 import { useScanner, ScanMeta, ScanOutcome } from '../hooks/useScanner'
+import { usePhoneScanTarget } from '../phone/usePhoneScanTarget'
+import { PhoneScanButton } from '../phone/PhoneScanButton'
+import { ViaPhoneTag } from '../phone/ViaPhoneTag'
 
 const BASE = '/api/v1'
 
@@ -124,6 +127,11 @@ interface SessionItem {
   id: string
   piece_id: string
   barcode: string
+  /** Q2: scanned on a paired phone (decided server-side from its return_received event). */
+  via_phone?: boolean
+  /** Q2: the order the piece came back from. */
+  order_number?: string | null
+  scanned_at?: string
   status: string
   variant_title: string
   product_title: string
@@ -212,6 +220,8 @@ interface SessionDetail {
   parcels?: Parcel[]
   otherItems?: SessionItem[]
   lastScan?: LastScan | null
+  /** Q2: pieces in this session scanned on a paired phone. */
+  phoneScanCount?: number
 }
 
 interface CloseSummary {
@@ -653,13 +663,15 @@ function OpenSessionScreen({ sessionId, onExit, onStartNew }: {
   // arrive while one is in flight and runs them one at a time, in order (the input is never
   // disabled — no dropped keystrokes), clears the input on Enter and plays the beep (same tones);
   // the flash stays this screen's own (its marked trigger + overlay, unchanged).
-  const onScan = useCallback(async (raw: string, _meta?: ScanMeta): Promise<ScanOutcome> => {
+  // Q2 (approved by Marawan 2026-10-05): exactly two lines changed — `meta` is read, and a phone
+  // scan's body carries its relayEventId (only when present: a keyboard scan's body is unchanged).
+  const onScan = useCallback(async (raw: string, meta?: ScanMeta): Promise<ScanOutcome> => {
     const cleaned = raw.replace(/\s+/g, '')
     if (!cleaned) return { success: false }
     setRejectedScan(null)
     try {
       await api(`/returns/sessions/${sessionId}/scan`, {
-        method: 'POST', body: JSON.stringify({ scan: cleaned, locationId: null }),
+        method: 'POST', body: JSON.stringify(typeof meta?.relayEventId === 'string' ? { scan: cleaned, locationId: null, relayEventId: meta.relayEventId } : { scan: cleaned, locationId: null }),
       })
       triggerFlash('success')
       await load()
@@ -678,8 +690,29 @@ function OpenSessionScreen({ sessionId, onExit, onStartNew }: {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId, load, t])
 
+  // Q2 — phone scans: Scan returns is the tablet's scan target while a session is open; paused
+  // (phone scans answered "Tablet busy") by the same flags that pause keyboard focus — the
+  // damage-reason field, the abandon dialog. The phone's line is read after the reload this scan
+  // triggered: "Received · #1047" / "Not expected" / the parcel's AWB / the rejection.
+  const phone = usePhoneScanTarget({
+    label: t('phone.target.returns', { ref: shortId(sessionId) }),
+    describe: (code, o) => {
+      if (!o.success) {
+        return rejectedScan !== null ? t('returns.openSession.rejectedTitle') : (error ?? null)
+      }
+      if (detail?.lastScan?.kind === 'awb') {
+        return `${t('returns.openSession.feedback.awbRecognised')} · ${detail.lastScan.code ?? code}`
+      }
+      const newest = [...(detail?.items ?? [])].sort((a, b) =>
+        String(b.scanned_at ?? '').localeCompare(String(a.scanned_at ?? '')))[0]
+      if (newest?.unexpected) return t('phone.notExpected')
+      return newest?.order_number ? t('phone.received', { order: newest.order_number }) : t('phone.receivedNoOrder')
+    },
+    paused: damageTarget !== null || showAbandonModal,
+  })
+
   // A field or dialog owns focus while it's open: the damage-reason input, the abandon confirm.
-  const scanner = useScanner({ onScan, focusPaused: damageTarget !== null || showAbandonModal })
+  const scanner = phone.attach(useScanner({ onScan: phone.wrap(onScan), focusPaused: damageTarget !== null || showAbandonModal }))
   const handleScan = scanner.handleScan
 
   // The damage-reason field holds focus while it's open: useScanner's click-refocus (marked)
@@ -871,6 +904,7 @@ function OpenSessionScreen({ sessionId, onExit, onStartNew }: {
                   {item.barcode}
                   {item.unexpected && !isIllegal && ` — ${t('returns.openSession.notOnManifest')}`}
                 </p>
+                {item.via_phone && <div className="mt-1"><ViaPhoneTag /></div>}
               </div>
               <Badge tone="warning" label={t('returns.openSession.needsDecision')} />
               <div className="flex gap-1.5 shrink-0">
@@ -995,6 +1029,8 @@ function OpenSessionScreen({ sessionId, onExit, onStartNew }: {
           </span>
         )}
         <div className="flex-1" />
+        {/* Phone as scanner — in the header flow, next to the header actions. */}
+        <PhoneScanButton />
         {canManage && (
           <button
             onClick={() => setShowAbandonModal(true)}
@@ -1102,6 +1138,13 @@ function OpenSessionScreen({ sessionId, onExit, onStartNew }: {
       </div>
 
       <div className="px-5 py-3.5 border-t border-line bg-surface shrink-0 flex flex-col gap-2">
+        {/* Q2 — informational: how many of this session's scans came from a paired phone. */}
+        {!!detail?.phoneScanCount && (
+          <p className="flex items-center justify-center gap-1.5 text-caption text-info" data-testid="returns-phone-scan-count">
+            <Smartphone size={13} />
+            {t('phone.returnsPhoneScans', { count: detail.phoneScanCount })}
+          </p>
+        )}
         {detail && (parcels.length > 0 || scannedCount > 0) && (
           <p className="text-caption text-muted text-center" data-testid="session-footer-summary">
             {canClose
@@ -1445,6 +1488,7 @@ function DispositionedItemRow({ item }: { item: SessionItem }) {
           {item.barcode}
           {item.damage_reason && ` · ${t('returns.openSession.reasonPrefix', { reason: item.damage_reason })}`}
         </p>
+        {item.via_phone && <div className="mt-1"><ViaPhoneTag /></div>}
       </div>
       <Badge
         tone={item.disposition === 'restocked' ? 'success' : item.disposition === 'damaged' ? 'critical' : 'warning'}

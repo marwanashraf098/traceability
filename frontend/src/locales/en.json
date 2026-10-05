@@ -3046,13 +3046,19 @@
       "link": "Link AWB · {{number}}",
       "stockTake": "Stock take · {{name}}",
       "transferOut": "Transfer out · {{ref}}",
-      "transferReconcile": "Transfer reconcile · {{ref}}"
+      "transferReconcile": "Transfer reconcile · {{ref}}",
+      "returns": "Scan returns · {{ref}}"
     },
     "viaPhone": "via phone",
     "counted": "Counted · {{label}}",
     "scannedOut": "Scanned out",
     "returned": "Returned · {{condition}}",
     "phoneScans": "{{count}} of {{total}} scans came from a phone",
-    "linePhoneScans": "via phone · {{count}}"
+    "linePhoneScans": "via phone · {{count}}",
+    "received": "Received · {{order}}",
+    "receivedNoOrder": "Received",
+    "notExpected": "Not expected",
+    "returnsPhoneScans_one": "{{count}} scan came from a phone",
+    "returnsPhoneScans_other": "{{count}} scans came from a phone"
   }
 }

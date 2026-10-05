@@ -2693,6 +2693,8 @@ export interface ReturnRequestItem {
   /** Step 4d-1/4d-2 — item lifecycle and its inspection outcome. Absent on older responses. */
   itemStatus?: 'awaiting' | 'arrived' | 'done' | 'not_coming'
   arrivedAt?: string | null
+  /** Q2: this item's piece was received through a scan on a paired phone. */
+  viaPhone?: boolean
   /** Step 6a — false for an item of an UNTRACKED order line (no piece: pieceId / shortCode null). */
   tracked?: boolean
   orderItemId?: string | null

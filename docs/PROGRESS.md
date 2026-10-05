@@ -4,6 +4,24 @@
 
 ## Current state
 
+**Q2 — Phone scanner on Scan returns, with a "via phone" marker (2026-10-05, branch `feat/phone-returns` off main
+7e31225; pushed, not merged, not deployed). No migration.**
+- **Source:** `POST /returns/sessions/{id}/scan` takes an optional `relayEventId`, checked by the unchanged
+  `PhoneScanSource` (`ReturnSessionController.java:155`). Recorded only as `{"via":"phone"}` on the scan's
+  `return_received` piece events (the shared metadata suffix, `ReturnSessionService` scanPiece) — no row column:
+  `return_session_items.scan_source` already means barcode vs AWB, and the screens derive the marker from the event.
+  Illegal-state scans write no event today, so a phone scan of one is not marked (unchanged behaviour).
+- **Exposed:** `via_phone` + `order_number` per session item (and parcel card), `phoneScanCount` per session,
+  `viaPhone` per return-request item (matched on the event's `request_item_id`).
+- **Frontend:** Scan returns is a phone target ("Scan returns · RT-…"), PhoneScanButton in the session header (in-shell,
+  so the top-bar icon also shows while paired — as TransferReconcile), paused by the damage-reason field / abandon
+  dialog; phone lines "Received · #1047" / "Not expected" / "Parcel label recognised · <awb>" / "Not recognized".
+  "via phone" tags on session items and on the case detail's piece code (PieceCode); footer "N scans came from a phone".
+- **Marked block:** exactly two lines inside Returns.tsx's SAFETY-CRITICAL scan handler changed (approved 2026-10-05):
+  `meta` is read, and the body adds `relayEventId` only for a phone scan — a keyboard scan's body is byte-identical
+  (asserted). Flash trigger / overlay / input untouched.
+- **Tests:** ReturnPhoneScanTest (4), phoneReturns.test (8), returnsPhoneInterleave.browser (Chromium + WebKit).
+
 **Q1b — Phone scanner on stock take + transfers, with a "via phone" marker (2026-10-05, branch
 `feat/phone-stocktake-transfers` off main ce6f9d6; pushed, not merged, not deployed). V141.**
 - **Source, decided server-side (`inventory/PhoneScanSource`):** a scan endpoint takes an optional `relayEventId`; the

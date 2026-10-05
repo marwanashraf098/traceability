@@ -7,6 +7,7 @@ import {
 } from '../../api'
 import { Badge, BadgeTone, Button, cn, useToast } from '../../components/ui'
 import { dateTimeLabel, formatMoney, reasonLabel, shortDate, todayIso } from './requestFormat'
+import { ViaPhoneTag } from '../../phone/ViaPhoneTag'
 
 /**
  * Returns Step 4d-2 — the request drawer's lifecycle pieces (mockups R1–R5): items with their
@@ -37,10 +38,12 @@ function itemOutcome(item: ReturnRequestItem): { key: string; tone: BadgeTone } 
 }
 
 /** A request item's piece code, or "Not tracked" for an item of an untracked order line (Step 6a). */
-export function PieceCode({ item }: { item: Pick<ReturnRequestItem, 'shortCode'> }) {
+export function PieceCode({ item }: { item: Pick<ReturnRequestItem, 'shortCode'> & { viaPhone?: boolean } }) {
   const { t } = useTranslation()
   if (!item.shortCode) return <span data-testid="not-tracked">{t('exchangesRefunds.requests.drawer.notTracked')}</span>
-  return <span className="font-mono" dir="ltr"><bdi>{item.shortCode}</bdi></span>
+  const code = <span className="font-mono" dir="ltr"><bdi>{item.shortCode}</bdi></span>
+  // Q2: received through a scan on a paired phone.
+  return item.viaPhone ? <>{code} <ViaPhoneTag /></> : code
 }
 
 /** R1 / R3 — the items with their state on the right. `showReason`: R3 shows the customer's reason. */

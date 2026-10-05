@@ -3065,13 +3065,23 @@
       "link": "ربط البوليصة · {{number}}",
       "stockTake": "جرد المخزون · {{name}}",
       "transferOut": "إرسال نقل · {{ref}}",
-      "transferReconcile": "مطابقة نقل · {{ref}}"
+      "transferReconcile": "مطابقة نقل · {{ref}}",
+      "returns": "مسح المرتجعات · {{ref}}"
     },
     "viaPhone": "عبر الهاتف",
     "counted": "تم العدّ · {{label}}",
     "scannedOut": "تم الإرسال",
     "returned": "تم الإرجاع · {{condition}}",
     "phoneScans": "{{count}} من {{total}} عمليات مسح تمت من هاتف",
-    "linePhoneScans": "عبر الهاتف · {{count}}"
+    "linePhoneScans": "عبر الهاتف · {{count}}",
+    "received": "تم الاستلام · {{order}}",
+    "receivedNoOrder": "تم الاستلام",
+    "notExpected": "غير متوقع",
+    "returnsPhoneScans_zero": "{{count}} عمليات مسح تمت من هاتف",
+    "returnsPhoneScans_one": "عملية مسح واحدة تمت من هاتف",
+    "returnsPhoneScans_two": "عمليتا مسح تمتا من هاتف",
+    "returnsPhoneScans_few": "{{count}} عمليات مسح تمت من هاتف",
+    "returnsPhoneScans_many": "{{count}} عملية مسح تمت من هاتف",
+    "returnsPhoneScans_other": "{{count}} عملية مسح تمت من هاتف"
   }
 }
