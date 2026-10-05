@@ -58,6 +58,13 @@ public class BostaController {
         this.reprocess = reprocess;
     }
 
+    private ExchangeReferenceCatchUpService referenceCatchUp;
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public void setReferenceCatchUp(ExchangeReferenceCatchUpService referenceCatchUp) {
+        this.referenceCatchUp = referenceCatchUp;
+    }
+
     public BostaController(BostaGateway bostaGateway,
                             EncryptionService encryptionService,
                             JdbcTemplate jdbc,
@@ -259,6 +266,29 @@ public class BostaController {
         Map<String, String> resp = new LinkedHashMap<>();
         resp.put("jobId",   jobId != null ? jobId.asUUID().toString() : "enqueued");
         resp.put("message", (apply ? "Catch-up (APPLY)" : "Catch-up dry run") + " enqueued — results in the logs (BOSTA_CATCHUP)");
+        return resp;
+    }
+
+    // ---- POST /api/v1/bosta/exchange-reference/catch-up (OWNER — one-off) ----
+
+    /**
+     * Enqueues the exchange / CRP reference catch-up for the caller's tenant: dry run unless
+     * {@code apply=true}. Results are logged as EXCHANGE_REF_CATCHUP / EXCHANGE_REF_CATCHUP_SUMMARY lines.
+     * See ExchangeReferenceCatchUpService.
+     */
+    @PostMapping("/bosta/exchange-reference/catch-up")
+    @ResponseStatus(HttpStatus.ACCEPTED)
+    @PreAuthorize("hasRole('OWNER')")
+    public Map<String, String> exchangeReferenceCatchUp(
+            @RequestParam(name = "apply", defaultValue = "false") boolean apply,
+            @AuthenticationPrincipal CustomUserDetails principal) {
+        UUID tenantId = principal.tenantId();
+        final ExchangeReferenceCatchUpService svc = referenceCatchUp;
+        JobId jobId = jobScheduler.enqueue(() -> svc.runAndLog(tenantId, apply));
+        Map<String, String> resp = new LinkedHashMap<>();
+        resp.put("jobId",   jobId != null ? jobId.asUUID().toString() : "enqueued");
+        resp.put("message", (apply ? "Reference catch-up (APPLY)" : "Reference catch-up dry run")
+            + " enqueued — results in the logs (EXCHANGE_REF_CATCHUP)");
         return resp;
     }
 

@@ -202,6 +202,12 @@ bosta:
       delay-ms: 3000
       on-startup: ""
       apply: false
+  # Exchange / CRP reference catch-up (ExchangeReferenceCatchUpService, 2026-10-05): one-off, never
+  # scheduled — BOSTA_EXCHANGE_REFERENCE_CATCH_UP_ON_STARTUP=<tenant ids>|all (+ _APPLY=true to write).
+  exchange-reference:
+    catch-up:
+      on-startup: ""
+      apply: false
   # Base URL: prod=https://app.bosta.co, staging=https://stg-app.bosta.co
   base-url: ${BOSTA_BASE_URL:https://app.bosta.co}
   api-version: v0

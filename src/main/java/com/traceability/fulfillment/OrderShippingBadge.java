@@ -70,6 +70,8 @@ public record OrderShippingBadge(String state, String carrier, Integer days) {
         return "EXISTS (SELECT 1 FROM order_fulfillment_tracking ft " +
                "  WHERE ft.order_id = o.id AND ft.tenant_id = o.tenant_id AND ft.carrier_class = 'bosta' " +
                "    AND lower(coalesce(ft.fulfillment_status, '')) <> 'cancelled' " +
+               // 2026-10-05: a fulfillment linked another way (e.g. "linked via exchange EXC-…") is no problem.
+               "    AND ft.link_status IS DISTINCT FROM 'linked' " +
                "    AND NOT EXISTS (SELECT 1 FROM shipments s2 WHERE s2.order_id = o.id AND s2.tenant_id = o.tenant_id " +
                "                      AND s2.tracking_number = ft.tracking_number) " +
                "    AND (ft.link_status IN ('conflict', 'gave_up') " +

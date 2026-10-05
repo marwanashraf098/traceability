@@ -542,15 +542,20 @@ public class ExchangeService {
         shipmentLinkService.populateConsigneePiiFromRaw(orderId, tenantId, raw);
 
         // Record the mapping decision on the exchange row itself.
+        // 2026-10-05: an exchange already matched to its original by reference (while it still needed
+        // mapping) goes straight to 'matched' once its replacement is mapped.
         jdbc.update(
             "UPDATE exchanges SET outbound_order_id = ?, outbound_variant_id = ?, inbound_variant_id = ?, " +
-            "    auto_matched = ? WHERE id = ? AND tenant_id = ?",
+            "    auto_matched = ?, " +
+            "    status = CASE WHEN status = 'mapped' AND matched_order_id IS NOT NULL THEN 'matched' ELSE status END " +
+            "WHERE id = ? AND tenant_id = ?",
             orderId, outboundVariantId, inboundVariantId, autoMatched, exchangeId, tenantId);
 
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("exchangeId", exchangeId.toString());
         result.put("orderId", orderId.toString());
-        result.put("status", "mapped");
+        result.put("status", jdbc.queryForObject(
+            "SELECT status FROM exchanges WHERE id = ? AND tenant_id = ?", String.class, exchangeId, tenantId));
         result.put("autoMatched", autoMatched);
         return result;
     }

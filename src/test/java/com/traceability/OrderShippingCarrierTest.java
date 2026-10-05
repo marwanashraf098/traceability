@@ -384,9 +384,13 @@ class OrderShippingCarrierTest {
     }
 
     private UUID order(UUID[] t, String gid, String number, String status, int daysAgo) {
+        // placed_at from the JVM's clock (the badge and late-to-pack compare against it), an hour
+        // past whole days so a Docker clock a little ahead of the Mac can't shift the day count.
+        java.time.Instant placed = daysAgo == 0 ? java.time.Instant.now()
+            : java.time.Instant.now().minus(java.time.Duration.ofDays(daysAgo).plusHours(1));
         return jdbc.queryForObject("INSERT INTO orders (tenant_id, store_id, external_id, number, status, placed_at) " +
-            "VALUES (?, ?, ?, ?, ?::order_status, now() - (? * INTERVAL '1 day')) RETURNING id",
-            UUID.class, t[0], t[1], gid, number, status, daysAgo);
+            "VALUES (?, ?, ?, ?, ?::order_status, ?) RETURNING id",
+            UUID.class, t[0], t[1], gid, number, status, java.sql.Timestamp.from(placed));
     }
 
     private void shipment(UUID[] t, UUID order, String tn, String state) {

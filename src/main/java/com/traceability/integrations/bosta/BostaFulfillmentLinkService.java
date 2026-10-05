@@ -183,6 +183,16 @@ public class BostaFulfillmentLinkService {
                 if (!dryRun) markLinked(tenantId, orderId, tn);
                 return Result.skip("already linked");
             }
+            // 2026-10-05: BROEK's plugin fulfills the ORIGINAL order with its exchange's AWB, which is the
+            // forward leg of the internal EXC-… replacement order. Matched to this order (or its
+            // reference resolves to it) → linked via the exchange: no new shipment, no exception.
+            String viaExchange = linkedViaExchange(tenantId, orderId, (UUID) existing.get("order_id"),
+                (String) existing.get("number"));
+            if (viaExchange != null) {
+                if (dryRun) return new Result(Verdict.WOULD_LINK, viaExchange, 30, null);
+                markLinked(tenantId, orderId, tn, viaExchange);
+                return new Result(Verdict.LINKED, viaExchange, 30, null);
+            }
             String reason = "tracking number is already a shipment on order " + existing.get("number");
             if (!dryRun) markConflict(tenantId, orderId, tn, reason);
             return Result.skip(reason);
@@ -280,6 +290,24 @@ public class BostaFulfillmentLinkService {
     }
 
     /**
+     * "linked via exchange EXC-…" when {@code shipmentOrderId} is an internal exchange order whose
+     * dashboard exchange is matched to {@code orderId}, or — not matched yet — whose Bosta reference
+     * resolves to exactly {@code orderId} (OrderReference, the shared rule); otherwise null.
+     */
+    private String linkedViaExchange(UUID tenantId, UUID orderId, UUID shipmentOrderId, String shipmentOrderNumber) {
+        Map<String, Object> ex = tx.execute(s -> jdbc.queryForList(
+            "SELECT e.matched_order_id, e.raw->>'businessReference' AS ref, e.raw->'shopifyInfo'->>'orderId' AS shopify_id " +
+            "FROM exchanges e JOIN orders o ON o.id = e.outbound_order_id AND o.tenant_id = e.tenant_id " +
+            "WHERE e.tenant_id = ? AND e.outbound_order_id = ? AND o.external_id LIKE 'internal:exchange:%'",
+            tenantId, shipmentOrderId).stream().findFirst().orElse(null));
+        if (ex == null) return null;
+        boolean ours = orderId.equals(ex.get("matched_order_id"))
+            || (ex.get("matched_order_id") == null && List.of(orderId).equals(tx.execute(s ->
+                OrderReference.resolve(jdbc, tenantId, (String) ex.get("ref"), (String) ex.get("shopify_id")))));
+        return ours ? "linked via exchange " + shipmentOrderNumber : null;
+    }
+
+    /**
      * Null when the delivery's reference / Shopify id identify THIS order and nothing else;
      * otherwise the reason it must not be linked.
      */
@@ -361,10 +389,14 @@ public class BostaFulfillmentLinkService {
     // ---- link state on the tracking row -------------------------------------------------------
 
     private void markLinked(UUID tenantId, UUID orderId, String tn) {
+        markLinked(tenantId, orderId, tn, null);
+    }
+
+    private void markLinked(UUID tenantId, UUID orderId, String tn, String reason) {
         tx.execute(s -> jdbc.update(
-            "UPDATE order_fulfillment_tracking SET link_status = 'linked', link_reason = NULL, " +
+            "UPDATE order_fulfillment_tracking SET link_status = 'linked', link_reason = ?, " +
             "    linked_at = coalesce(linked_at, now()), link_checked_at = now(), link_next_retry_at = NULL " +
-            "WHERE tenant_id = ? AND order_id = ? AND tracking_number = ?", tenantId, orderId, tn));
+            "WHERE tenant_id = ? AND order_id = ? AND tracking_number = ?", reason, tenantId, orderId, tn));
     }
 
     private void markConflict(UUID tenantId, UUID orderId, String tn, String reason) {

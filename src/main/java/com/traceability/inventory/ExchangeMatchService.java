@@ -119,6 +119,28 @@ public class ExchangeMatchService {
     public void attemptMatch(String trackingNumber) {
         UUID tenantId = TenantContext.require();
 
+        // 2026-10-05: the reference comes first — exactly one order → matched (needs_mapping rows
+        // too); more than one → never guess, left for the merchant; none → the phone matcher below.
+        ReferenceMatch byRef = matchByReference(tenantId, trackingNumber, false);
+        if (byRef.verdict() == ReferenceVerdict.MATCHED || byRef.verdict() == ReferenceVerdict.ALREADY_MATCHED) {
+            // A needs_mapping row matched by reference becomes 'matched' once its replacement is
+            // mapped (ExchangeService.commit); one mapped since then is moved here.
+            jdbc.update(
+                "UPDATE exchanges SET status = 'matched', updated_at = now() " +
+                "WHERE tenant_id = ? AND tracking_number = ? AND return_request_id IS NULL " +
+                "  AND status = 'mapped' AND matched_order_id IS NOT NULL",
+                tenantId, trackingNumber);
+            return;
+        }
+        if (byRef.verdict() == ReferenceVerdict.AMBIGUOUS) {
+            jdbc.update(
+                "UPDATE exchanges SET status = 'needs_confirmation', updated_at = now() " +
+                "WHERE tenant_id = ? AND tracking_number = ? AND return_request_id IS NULL " +
+                "  AND matched_order_id IS NULL AND status IN ('mapped', 'unmatched')",
+                tenantId, trackingNumber);
+            return;
+        }
+
         // Step 5c: an exchange booked from a return request is matched exactly at booking
         // (ExchangeService.attachForRequest) — never phone-matched here.
         ExchangeRow ex = jdbc.query(
@@ -164,6 +186,97 @@ public class ExchangeMatchService {
         } else {
             setStatus(ex.id(), tenantId, "needs_confirmation");
         }
+    }
+
+    // ── Reference match (2026-10-05) ─────────────────────────────────────────
+
+    /** Outcome of {@link #matchByReference}. */
+    public enum ReferenceVerdict {
+        /** Exactly one order: matched now. */
+        MATCHED,
+        /** Dry run: exactly one order, nothing written. */
+        WOULD_MATCH,
+        /** The row already has its original order (any method) — nothing to do. */
+        ALREADY_MATCHED,
+        /** Bosta sent no reference and no Shopify order id. */
+        NO_REFERENCE,
+        /** The reference matches no order (e.g. a pre-connect order) — the phone matcher decides. */
+        NO_MATCH,
+        /** More than one order — never guessed, left for the merchant. */
+        AMBIGUOUS,
+        /** No such dashboard exchange in a status that can be matched (or booked by Traced). */
+        NOT_ELIGIBLE
+    }
+
+    public record ReferenceMatch(ReferenceVerdict verdict, String reference, UUID orderId, String orderNumber) {}
+
+    /** Statuses whose original order may be set from the reference. needs_mapping included (approved
+     *  2026-10-05): matched_order_id is independent of the outbound mapping, so the status is left
+     *  alone there and map()'s claim (status = 'needs_mapping') is never raced. */
+    private static final String REFERENCE_ELIGIBLE_STATUSES = "('needs_mapping', 'mapped', 'unmatched', 'needs_confirmation')";
+
+    /**
+     * The exchange's original order from Bosta's businessReference (or shopifyInfo.orderId), through the
+     * shared {@link com.traceability.integrations.bosta.OrderReference} rule: exactly one tracked order of
+     * this tenant → matched_order_id, match_method 'reference', matched_at; status 'matched' unless the
+     * row still needs its replacement mapped (needs_mapping stays). Dashboard rows only — a row Traced
+     * booked from a return request (return_request_id) is never touched. Idempotent: a conditional
+     * UPDATE (matched_order_id IS NULL), so a repeat finds ALREADY_MATCHED. No pieces, no ledger.
+     */
+    @Transactional
+    public ReferenceMatch matchByReference(UUID tenantId, String trackingNumber, boolean dryRun) {
+        Map<String, Object> ex = jdbc.queryForList(
+            "SELECT id, status, matched_order_id, raw->>'businessReference' AS ref, " +
+            "       raw->'shopifyInfo'->>'orderId' AS shopify_order_id " +
+            "FROM exchanges WHERE tenant_id = ? AND tracking_number = ? AND return_request_id IS NULL",
+            tenantId, trackingNumber).stream().findFirst().orElse(null);
+        if (ex == null) return new ReferenceMatch(ReferenceVerdict.NOT_ELIGIBLE, null, null, null);
+        String ref = (String) ex.get("ref");
+        if (ex.get("matched_order_id") != null) {
+            return new ReferenceMatch(ReferenceVerdict.ALREADY_MATCHED, ref, (UUID) ex.get("matched_order_id"), null);
+        }
+        if (!REFERENCE_ELIGIBLE_STATUSES.contains("'" + ex.get("status") + "'")) {
+            return new ReferenceMatch(ReferenceVerdict.NOT_ELIGIBLE, ref, null, null);
+        }
+        String shopifyId = (String) ex.get("shopify_order_id");
+        if ((ref == null || ref.isBlank()) && (shopifyId == null || shopifyId.isBlank())) {
+            return new ReferenceMatch(ReferenceVerdict.NO_REFERENCE, ref, null, null);
+        }
+        List<UUID> ids = com.traceability.integrations.bosta.OrderReference.resolve(jdbc, tenantId, ref, shopifyId);
+        if (ids.isEmpty()) return new ReferenceMatch(ReferenceVerdict.NO_MATCH, ref, null, null);
+        if (ids.size() > 1) return new ReferenceMatch(ReferenceVerdict.AMBIGUOUS, ref, null, null);
+
+        UUID orderId = ids.get(0);
+        String number = jdbc.queryForObject("SELECT number FROM orders WHERE id = ? AND tenant_id = ?",
+            String.class, orderId, tenantId);
+        if (dryRun) return new ReferenceMatch(ReferenceVerdict.WOULD_MATCH, ref, orderId, number);
+
+        int updated = jdbc.update(
+            "UPDATE exchanges SET matched_order_id = ?, match_method = 'reference', matched_at = now(), " +
+            "    status = CASE WHEN status IN ('mapped', 'unmatched', 'needs_confirmation') THEN 'matched' ELSE status END, " +
+            "    updated_at = now() " +
+            "WHERE id = ? AND tenant_id = ? AND matched_order_id IS NULL AND return_request_id IS NULL " +
+            "  AND status IN " + REFERENCE_ELIGIBLE_STATUSES,
+            orderId, ex.get("id"), tenantId);
+        if (updated == 0) return new ReferenceMatch(ReferenceVerdict.ALREADY_MATCHED, ref, null, null);
+        markFulfillmentLinkedViaExchange(tenantId, orderId, trackingNumber);
+        return new ReferenceMatch(ReferenceVerdict.MATCHED, ref, orderId, number);
+    }
+
+    /**
+     * The original order's Shopify fulfillment carrying the exchange's AWB (BROEK's plugin fulfills the
+     * original with it) was skipped / flagged by fulfillment linking because the number is a shipment on
+     * the EXC-… order. Once the exchange is matched to that order it is linked via the exchange — no new
+     * shipment. Same verdict as BostaFulfillmentLinkService for a later attempt.
+     */
+    private void markFulfillmentLinkedViaExchange(UUID tenantId, UUID orderId, String trackingNumber) {
+        jdbc.update(
+            "UPDATE order_fulfillment_tracking SET link_status = 'linked', " +
+            "    link_reason = 'linked via exchange EXC-' || tracking_number, " +
+            "    linked_at = coalesce(linked_at, now()), link_checked_at = now(), link_next_retry_at = NULL " +
+            "WHERE tenant_id = ? AND order_id = ? AND tracking_number = ? " +
+            "  AND link_status IN ('skipped', 'conflict', 'gave_up', 'retry')",
+            tenantId, orderId, trackingNumber);
     }
 
     /**

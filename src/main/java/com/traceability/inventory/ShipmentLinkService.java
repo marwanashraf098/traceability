@@ -1318,44 +1318,18 @@ public class ShipmentLinkService {
      * immediately without falling through to phone+COD.
      */
     private StrongMatch matchByBusinessReference(UUID tenantId, String businessRef, String shopifyOrderId) {
-        // businessReference path: covers #-prefixed, stripped, and hashed variants plus external_id.
-        if (businessRef != null && !businessRef.isBlank()) {
-            String stripped = businessRef.startsWith("#") ? businessRef.substring(1) : businessRef;
-            String hashed   = "#" + stripped;
-            log.debug("matchByBusinessReference: tenant={} ref='{}' stripped='{}' hashed='{}'",
-                tenantId, businessRef, stripped, hashed);
-            List<UUID> ids = jdbc.query(
-                "SELECT id FROM orders " +
-                "WHERE tenant_id = ? " +
-                "  AND (number = ? OR number = ? OR number = ? OR external_id = ?) " +
-                "LIMIT 2",
-                (rs, i) -> rs.getObject("id", UUID.class),
-                tenantId, businessRef, stripped, hashed, businessRef);
-            log.debug("matchByBusinessReference: ref='{}' → {} row(s)", businessRef, ids.size());
-            if (ids.size() == 1) return StrongMatch.found(ids.get(0));
-            if (ids.size() > 1) {
-                log.warn("matchByBusinessReference: AMBIGUOUS — ref='{}' matched {} orders for tenant={}",
-                    businessRef, ids.size(), tenantId);
-                return StrongMatch.ambiguous();
-            }
-            // no match on businessRef — fall through to shopifyOrderId
-        }
-        // shopifyOrderId path: plugin-created deliveries carry Shopify numeric order ID
-        // in shopifyInfo.orderId; match against orders.external_id in GID format.
-        if (shopifyOrderId != null && !shopifyOrderId.isBlank()) {
-            String gid = "gid://shopify/Order/" + shopifyOrderId;
-            log.debug("matchByBusinessReference: shopifyOrderId='{}' gid='{}'", shopifyOrderId, gid);
-            List<UUID> ids = jdbc.query(
-                "SELECT id FROM orders WHERE tenant_id = ? AND external_id = ? LIMIT 2",
-                (rs, i) -> rs.getObject("id", UUID.class),
-                tenantId, gid);
-            log.debug("matchByBusinessReference: gid='{}' → {} row(s)", gid, ids.size());
-            if (ids.size() == 1) return StrongMatch.found(ids.get(0));
-            if (ids.size() > 1) {
-                log.warn("matchByBusinessReference: AMBIGUOUS — shopifyOrderId='{}' matched {} orders for tenant={}",
-                    shopifyOrderId, ids.size(), tenantId);
-                return StrongMatch.ambiguous();
-            }
+        // 2026-10-05: the shared reference rule (OrderReference) — as sent, '#'-stripped / '#'-prefixed,
+        // external_id, and both sides of a ':' (BROEK's "BRK-44903-EG:BRK-44903-EG-R1" customer-return
+        // pickups), then shopifyInfo.orderId as a Shopify GID; internal orders never match.
+        List<UUID> ids = com.traceability.integrations.bosta.OrderReference.resolve(
+            jdbc, tenantId, businessRef, shopifyOrderId);
+        log.debug("matchByBusinessReference: ref='{}' shopifyOrderId='{}' → {} row(s)",
+            businessRef, shopifyOrderId, ids.size());
+        if (ids.size() == 1) return StrongMatch.found(ids.get(0));
+        if (ids.size() > 1) {
+            log.warn("matchByBusinessReference: AMBIGUOUS — ref='{}' / shopifyOrderId='{}' matched {} orders for tenant={}",
+                businessRef, shopifyOrderId, ids.size(), tenantId);
+            return StrongMatch.ambiguous();
         }
         return StrongMatch.notFound();
     }

@@ -207,7 +207,11 @@ class PreConnectFilterTest {
     void pf11_shopHandleColonReference_resolvesThroughTheTail_isKept() {
         order(broek, broekStore, "#515960", "2026-09-30T10:00:00Z");
         long ev = process(broek, delivery("713968132", 10, "Send", 10, "blncoeg:#515960", BEFORE_BROEK));
-        assertThat(eventNote(ev)).doesNotStartWith("ignored_pre_connect");
+        // 2026-10-05: the matcher resolves the part after ':' too (OrderReference), so the kept delivery now
+        // links to #515960 (no note) instead of being recorded unlinked — either way, never ignored.
+        assertThat(eventNote(ev)).isNull();
+        assertThat(count("SELECT COUNT(*) FROM shipments WHERE tenant_id = ? AND tracking_number = ?",
+            broek, "713968132")).isEqualTo(1);
     }
 
     // ── helpers ────────────────────────────────────────────────────────────────
