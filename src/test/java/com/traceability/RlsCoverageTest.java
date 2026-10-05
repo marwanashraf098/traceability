@@ -133,6 +133,9 @@ class RlsCoverageTest {
             "/api/v1/overview/trends",
             "/api/v1/overview/late-to-pack",
             "/api/v1/overview/top-skus",
+            // Analytics slice 1 (owner only) — analyticsSales* below; app_user isolation in AnalyticsSalesTest
+            "/api/v1/analytics/sales/variants",
+            "/api/v1/analytics/sales/products",
             "/api/v1/inventory/stock",
             "/api/v1/inventory/variants/{variantId}/breakdown",
             "/api/v1/inventory/breakdown",
@@ -1458,6 +1461,34 @@ class RlsCoverageTest {
         ResponseEntity<List> resp = get("/api/v1/overview/top-skus", List.class);
         assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.OK);
         assertThat(resp.getBody()).isNotEmpty();
+
+        jdbc.update("DELETE FROM order_items WHERE order_id = ?", orderId);
+        jdbc.update("DELETE FROM orders WHERE id = ?", orderId);
+    }
+
+    @Test
+    void analyticsSalesVariantsAndProducts_reflectSeededSoldLine() {
+        UUID orderId = UUID.randomUUID();
+        jdbc.update(
+                "INSERT INTO orders (id, tenant_id, store_id, external_id, number, status, " +
+                "    payment_method, placed_at, on_hold) " +
+                "VALUES (?, ?, ?, 'EXT-CVG-ANALYTICS', '#CVG-ANALYTICS', 'new'::order_status, " +
+                "    'cod', now(), false)",
+                orderId, tenantId, storeId);
+        jdbc.update(
+                "INSERT INTO order_items (id, tenant_id, order_id, variant_id, quantity, raw) " +
+                "VALUES (gen_random_uuid(), ?, ?, ?, 2, '{\"price\":\"150.00\",\"quantity\":2}'::jsonb)",
+                tenantId, orderId, variantId);
+
+        ResponseEntity<Map> variants = get("/api/v1/analytics/sales/variants?period=today", Map.class);
+        assertThat(variants.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat((List<?>) variants.getBody().get("variants")).isNotEmpty();
+        assertThat(((Number) ((Map<?, ?>) variants.getBody().get("totals")).get("soldUnits")).longValue())
+                .isEqualTo(2);
+
+        ResponseEntity<Map> products = get("/api/v1/analytics/sales/products?period=today", Map.class);
+        assertThat(products.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat((List<?>) products.getBody().get("products")).isNotEmpty();
 
         jdbc.update("DELETE FROM order_items WHERE order_id = ?", orderId);
         jdbc.update("DELETE FROM orders WHERE id = ?", orderId);

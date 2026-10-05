@@ -330,3 +330,10 @@ tenancy:
   # TenantContext.runAs switching to a DIFFERENT tenant while a transaction is already active
   # (the GUC can't change mid-transaction): warn = log and carry on, throw = fail (tests).
   runas-switch-guard: ${TENANCY_RUNAS_SWITCH_GUARD:warn}
+
+analytics:
+  # Analytics floor for stores whose stores.orders_ingest_from is NULL (AnalyticsFloorOverrides):
+  # shop-domain=YYYY-MM-DD (a Cairo day; floor = 00:00 Africa/Cairo), comma-separated. Read ONLY by
+  # analytics — never by ingest. Jumi (mmi24e-fx) keeps its NULL cutoff permanently (CLAUDE.md FR-18);
+  # its analytics floor is its connect day, 2026-07-02 (approved).
+  floor-overrides: ${ANALYTICS_FLOOR_OVERRIDES:mmi24e-fx.myshopify.com=2026-07-02}
