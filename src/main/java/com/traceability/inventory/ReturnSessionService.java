@@ -50,6 +50,16 @@ import java.util.*;
 @Service
 public class ReturnSessionService {
 
+    /**
+     * Q2: a session item was scanned on a paired phone — its return_received event in this
+     * session carries {"via":"phone"} (piece_events stays the single history source).
+     * Illegal-state scans write no event and so are never marked.
+     */
+    static final String VIA_PHONE_SQL =
+        "EXISTS (SELECT 1 FROM piece_events pe WHERE pe.piece_id = i.piece_id AND pe.tenant_id = i.tenant_id " +
+        "        AND pe.event_type = 'return_received' AND pe.metadata->>'session_id' = i.session_id::text " +
+        "        AND pe.metadata->>'via' = 'phone')";
+
     private static final Logger log = LoggerFactory.getLogger(ReturnSessionService.class);
 
     /** Statuses from which a scan legally moves a piece into return_pending_inspection. */
@@ -129,6 +139,17 @@ public class ReturnSessionService {
 
     @Transactional(isolation = Isolation.READ_COMMITTED)
     public Map<String, Object> scan(UUID sessionId, String rawScan, UUID locationId, UUID actorUserId) {
+        return scan(sessionId, rawScan, locationId, actorUserId, false);
+    }
+
+    /**
+     * Q2: {@code viaPhone} — verified server-side by the caller (PhoneScanSource) — adds
+     * {"via":"phone"} to the metadata of every return_received event this scan writes (the
+     * history is the single source; no row of its own). Nothing else about the scan changes.
+     */
+    @Transactional(isolation = Isolation.READ_COMMITTED)
+    public Map<String, Object> scan(UUID sessionId, String rawScan, UUID locationId, UUID actorUserId,
+                                    boolean viaPhone) {
         UUID tenantId = TenantContext.require();
         requireOpen(sessionId, tenantId);
 
@@ -139,7 +160,7 @@ public class ReturnSessionService {
 
         Map<String, Object> piece = fetchPieceByScan(cleaned, tenantId);
         if (piece != null) {
-            return scanPiece(sessionId, tenantId, piece, locationId, actorUserId);
+            return scanPiece(sessionId, tenantId, piece, locationId, actorUserId, viaPhone);
         }
 
         String trackingNumber = TrackingNumberNormalizer.normalize(cleaned);
@@ -159,7 +180,7 @@ public class ReturnSessionService {
     }
 
     private Map<String, Object> scanPiece(UUID sessionId, UUID tenantId, Map<String, Object> piece,
-                                          UUID locationId, UUID actorUserId) {
+                                          UUID locationId, UUID actorUserId, boolean viaPhone) {
         String pieceId = (String) piece.get("id");
 
         // Idempotent re-scan: same piece already has an item row in this session — return
@@ -174,7 +195,7 @@ public class ReturnSessionService {
         PieceStatus current   = PieceStatus.fromDb((String) piece.get("status"));
         UUID orderId          = (UUID) piece.get("order_id");
         UUID shipmentId       = (UUID) piece.get("shipment_id");
-        String metaSuffix     = "\"session_id\":\"" + sessionId + "\"";
+        String metaSuffix     = "\"session_id\":\"" + sessionId + "\"" + (viaPhone ? ",\"via\":\"phone\"" : "");
         boolean legal;
         boolean unexpected = false;
         // Step 4d-1: the open return-request item this scan was attributed to (DELIVERED only).
@@ -746,6 +767,7 @@ public class ReturnSessionService {
             "SELECT i.id, i.piece_id, p.barcode, p.status::text AS status, " +
             "       v.title AS variant_title, pr.title AS product_title, v.sku, " +
             "       i.disposition, i.unexpected, i.scan_source, i.damage_reason, " +
+            "       " + VIA_PHONE_SQL + " AS via_phone, " +
             "       i.scanned_at, i.disposition_at, p.short_code " +
             "FROM return_session_items i " +
             "JOIN pieces p    ON p.id  = i.piece_id " +
@@ -759,6 +781,8 @@ public class ReturnSessionService {
         Map<String, Object> result = new LinkedHashMap<>(rows.get(0));
         result.put("items", items);
         result.put("expectedPieces", expected);
+        // Q2: how many of this session's pieces were scanned on a paired phone.
+        result.put("phoneScanCount", items.stream().filter(i -> Boolean.TRUE.equals(i.get("via_phone"))).count());
         // Re-read on every load (the scan handler reloads detail, it never keeps the scan
         // response), so the session view renders Bosta's parcel description from here.
         result.put("courierReturns", courierReturnInfo(
@@ -1145,6 +1169,7 @@ public class ReturnSessionService {
             "SELECT i.id, i.piece_id, p.barcode, p.status::text AS status, " +
             "       v.title AS variant_title, pr.title AS product_title, v.sku, " +
             "       i.disposition, i.unexpected, i.scan_source, i.damage_reason, " +
+            "       " + VIA_PHONE_SQL + " AS via_phone, " +
             "       i.scanned_at, i.disposition_at " +
             "FROM return_session_items i " +
             "JOIN pieces p    ON p.id  = i.piece_id " +
@@ -1161,6 +1186,7 @@ public class ReturnSessionService {
             "SELECT i.id, i.piece_id, p.barcode, p.status::text AS status, " +
             "       v.title AS variant_title, pr.title AS product_title, v.sku, " +
             "       i.disposition, i.unexpected, i.scan_source, i.damage_reason, " +
+            "       " + VIA_PHONE_SQL + " AS via_phone, " +
             "       i.scanned_at, i.disposition_at " +
             "FROM return_session_items i " +
             "JOIN pieces p    ON p.id  = i.piece_id " +

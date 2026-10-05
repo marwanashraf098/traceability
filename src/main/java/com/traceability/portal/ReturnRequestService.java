@@ -156,7 +156,12 @@ public class ReturnRequestService {
             "       (SELECT si.disposition FROM return_session_items si WHERE si.request_item_id = i.id " +
             "          AND si.tenant_id = i.tenant_id ORDER BY si.scanned_at DESC, si.id DESC LIMIT 1) AS \"disposition\", " +
             "       (SELECT si.damage_reason FROM return_session_items si WHERE si.request_item_id = i.id " +
-            "          AND si.tenant_id = i.tenant_id ORDER BY si.scanned_at DESC, si.id DESC LIMIT 1) AS \"damageReason\" " +
+            "          AND si.tenant_id = i.tenant_id ORDER BY si.scanned_at DESC, si.id DESC LIMIT 1) AS \"damageReason\", " +
+            // Q2: the item's piece was received through a scan on a paired phone (its return_received
+            // event — attributed to this item — carries {"via":"phone"}).
+            "       EXISTS (SELECT 1 FROM piece_events pe WHERE pe.tenant_id = i.tenant_id " +
+            "          AND pe.event_type = 'return_received' AND pe.metadata->>'request_item_id' = i.id::text " +
+            "          AND pe.metadata->>'via' = 'phone') AS \"viaPhone\" " +
             "FROM return_request_items i " +
             "LEFT JOIN pieces p ON p.id = i.piece_id " +
             "JOIN variants v  ON v.id = i.variant_id " +

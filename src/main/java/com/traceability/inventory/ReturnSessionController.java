@@ -19,12 +19,14 @@ public class ReturnSessionController {
     private final ReturnSessionService sessionService;
     private final LabelService         labelService;
     private final ShipmentLinkService  shipmentLinkService;
+    private final PhoneScanSource      phoneScanSource;
 
     public ReturnSessionController(ReturnSessionService sessionService, LabelService labelService,
-                                   ShipmentLinkService shipmentLinkService) {
+                                   ShipmentLinkService shipmentLinkService, PhoneScanSource phoneScanSource) {
         this.sessionService      = sessionService;
         this.labelService        = labelService;
         this.shipmentLinkService = shipmentLinkService;
+        this.phoneScanSource     = phoneScanSource;
     }
 
     // ── Courier returns awaiting scan ─────────────────────────────────────────
@@ -149,7 +151,9 @@ public class ReturnSessionController {
             @PathVariable UUID sessionId,
             @RequestBody ScanRequest req,
             @AuthenticationPrincipal CustomUserDetails principal) {
-        return sessionService.scan(sessionId, req.scan(), req.locationId(), principal.userId());
+        // Q2: 'phone' only when the relay event verifies as the caller's own (PhoneScanSource).
+        boolean viaPhone = phoneScanSource.isPhone(req.relayEventId(), req.scan(), principal.userId());
+        return sessionService.scan(sessionId, req.scan(), req.locationId(), principal.userId(), viaPhone);
     }
 
     @PostMapping("/sessions/{sessionId}/items/{pieceId}/disposition")
@@ -218,6 +222,7 @@ public class ReturnSessionController {
     // ── Request records ───────────────────────────────────────────────────────
 
     public record CreateSessionRequest(String note) {}
-    public record ScanRequest(String scan, UUID locationId) {}
+    /** relayEventId: optional — the phone relay event this scan arrived as (Q2); never trusted as-is. */
+    public record ScanRequest(String scan, UUID locationId, UUID relayEventId) {}
     public record DispositionRequest(String disposition, String reason, UUID locationId) {}
 }
