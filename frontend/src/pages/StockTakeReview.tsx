@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useParams, useNavigate, Link } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
-import { Lock, ClipboardCheck } from 'lucide-react'
+import { ViaPhoneTag } from '../phone/ViaPhoneTag'
+import { Lock, ClipboardCheck, Smartphone } from 'lucide-react'
 import {
   Badge, Button, Card, Spinner, Alert, Modal, EmptyState, Checkbox, Input,
 } from '../components/ui'
@@ -183,6 +184,8 @@ export default function StockTakeReview() {
       {/* Attest-complete / finalize */}
       {isOpen && (
         <Card className="space-y-3">
+          {/* Q1b — informational, not a guard: how many counts came from a paired phone. */}
+          <PhoneScanShare phone={reconciliation.phoneScanCount} total={reconciliation.scanCount} />
           {!session.completeCount ? (
             <>
               <p className="text-body text-primary font-medium">{t('stocktake.review.attestPrompt')}</p>
@@ -210,6 +213,8 @@ export default function StockTakeReview() {
           finalizing={finalizing}
           onCancel={() => setShowFinalizeConfirm(false)}
           onFinalize={handleFinalize}
+          phoneScanCount={reconciliation.phoneScanCount}
+          scanCount={reconciliation.scanCount}
         />
       )}
 
@@ -251,8 +256,21 @@ function varianceTone(variance: number): string {
 // Every number here is the backend's finalize plan (StockTakeReconciliationService.plan — the
 // same method finalize runs), so what the modal says is exactly what finalize will do.
 
+/** Q1b: "N of M scans came from a phone" — shown whenever N > 0; informational only. */
+function PhoneScanShare({ phone, total }: { phone?: number; total?: number }) {
+  const { t } = useTranslation()
+  if (!phone) return null
+  return (
+    <p className="flex items-center gap-1.5 text-small text-info" data-testid="phone-scan-share">
+      <Smartphone size={14} />
+      {t('phone.phoneScans', { count: phone, total: total ?? phone })}
+    </p>
+  )
+}
+
 function FinalizeModal({
   plan, understood, onUnderstood, typedCount, onTypedCount, finalizing, onCancel, onFinalize,
+  phoneScanCount, scanCount,
 }: {
   plan: StockTakeFinalizePlan | undefined
   understood: boolean
@@ -262,6 +280,8 @@ function FinalizeModal({
   finalizing: boolean
   onCancel: () => void
   onFinalize: () => void
+  phoneScanCount?: number
+  scanCount?: number
 }) {
   const { t } = useTranslation()
   const blocked = plan?.blockedReason ?? null
@@ -274,6 +294,7 @@ function FinalizeModal({
         {blocked === 'ZERO_SCANS' && (
           <Alert tone="critical" title={t('stocktake.review.finalize.zeroScans')} />
         )}
+        <PhoneScanShare phone={phoneScanCount} total={scanCount} />
         {blocked === 'ATTESTATION_REQUIRED' && (
           <Alert tone="warning" title={t('stocktake.review.finalize.attestationRequired')} />
         )}
@@ -537,6 +558,7 @@ function DispositionBucket({
                         {row.productTitle} · {row.variantTitle}
                       </Link>
                       {row.sku && <span className="font-mono text-caption text-muted ms-2">{row.sku}</span>}
+                      {row.scanDevice === 'phone' && <span className="ms-2"><ViaPhoneTag /></span>}
                     </div>
                   </div>
 

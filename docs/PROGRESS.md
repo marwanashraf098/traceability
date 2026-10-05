@@ -4,6 +4,28 @@
 
 ## Current state
 
+**Q1b — Phone scanner on stock take + transfers, with a "via phone" marker (2026-10-05, branch
+`feat/phone-stocktake-transfers` off main ce6f9d6; pushed, not merged, not deployed). V141.**
+- **Source, decided server-side (`inventory/PhoneScanSource`):** a scan endpoint takes an optional `relayEventId`; the
+  scan is 'phone' only when that relay event is in the caller's tenant, belongs to a pairing held by the caller that is
+  live (not revoked, not expired) and carries the same code (whitespace ignored). Anything else is a normal hardware
+  scan — never rejected, logged at INFO. A client "source" is never read. Runs in a (joined) transaction so the tenant
+  GUC applies under app_user.
+- **Stock take:** V141 adds `stock_take_scans.scan_device` ('hardware'|'phone', default 'hardware') — `source` was
+  already taken ('scan' / 'manager_found'). A re-scan keeps the first row's device. The scan response carries
+  `scanDevice`; the reconciliation adds `scanCount`, `phoneScanCount` and `scanDevice` per piece row.
+- **Transfers:** no new column — scan-out / return-scan-out / scan-back events get `{"via":"phone"}` in
+  `piece_events.metadata` (the single history source). The transfer detail adds `phone_scans` per line and
+  `phoneScanCount`.
+- **Frontend:** StockTakeScan, TransferScanOut, TransferReconcile are phone targets (usePhoneScanTarget) with
+  PhoneScanButton in their headers; labels "Stock take · <note or id>", "Transfer out · <location>", "Transfer
+  reconcile · <destination>"; phone lines "Counted · Match", "Scanned out", "Returned · Good" or the rejection text.
+  Paused by the abandon dialog / the close confirm / a focused shortfall quantity. relayEventId is sent only for phone
+  scans. "via phone" tags on the stock-take recent list, review rows and transfer detail lines; the review shows
+  "N of M scans came from a phone" (finalize card + modal, informational). The stock-take header wraps at narrow widths.
+- **Tests:** PhoneScanSourceTest (3), phoneStockTransfers.test (10), stockTakePhoneInterleave.browser (Chromium +
+  WebKit); migration counts bumped. Existing stock-take / transfer tests unchanged.
+
 **Phone control placement — no floating control (2026-10-05, branch `fix/phone-control-placement` off main 82f6bf5;
 pushed, not merged, not deployed). Frontend only, presentation only — PhoneScanProvider, routing and pairing unchanged.**
 - `phone/PhoneScanButton.tsx`: `PhoneScanButton` lives INSIDE a phone-capable scan screen's header, in its flow, next to

@@ -3,12 +3,15 @@ import { useParams, useNavigate } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import type { LucideIcon } from 'lucide-react'
 import { CheckCircle2, AlertTriangle, RotateCcw, CircleSlash, XCircle, Undo2 } from 'lucide-react'
-import { useScanner } from '../hooks/useScanner'
+import { useScanner, ScanMeta } from '../hooks/useScanner'
+import { usePhoneScanTarget } from '../phone/usePhoneScanTarget'
+import { PhoneScanButton } from '../phone/PhoneScanButton'
+import { ViaPhoneTag } from '../phone/ViaPhoneTag'
 import { ScanShell } from '../components/ScanShell'
 import { Button, Spinner, Modal } from '../components/ui'
 import {
   getStockTakeSession, scanStockTakePiece, unscanStockTakePiece, cancelStockTake,
-  StockTakeCondition, StockTakeClassification, StockTakeSessionDetail,
+  StockTakeCondition, StockTakeClassification, StockTakeSessionDetail, ScanDevice,
 } from '../api'
 
 // FR-21 Step 6.3, screen 3 — blind full-screen scan. NOT Layout-wrapped, matching
@@ -23,6 +26,8 @@ import {
 interface ScanData {
   pieceId: string | null
   classification: StockTakeClassification
+  /** Q1b: as recorded server-side ('phone' only for a verified phone scan). */
+  scanDevice?: ScanDevice
 }
 
 function isCounted(cls: StockTakeClassification): boolean {
@@ -71,12 +76,25 @@ export default function StockTakeScan() {
       .finally(() => setLoading(false))
   }, [id])
 
+  // Q1b — phone scans: this screen is the tablet's scan target while open (paused by the
+  // abandon dialog: phone scans then are answered "Tablet busy"). The phone's line is the
+  // screen's own feedback ("Counted · Match", "Unknown barcode").
+  const phone = usePhoneScanTarget({
+    label: t('phone.target.stockTake', { name: session?.note || (id ? id.slice(0, 8) : '') }),
+    describe: (_code, o) => (o.success ? t('phone.counted', { label: o.label }) : o.label),
+    paused: showAbandon,
+  })
+
   // Queued scans are dropped by useScanner when this screen unmounts (leaving it).
-  const scanner = useScanner({
+  const scanner = phone.attach(useScanner({
     focusPaused: showAbandon,
-    onScan: async (barcode) => {
+    onScan: phone.wrap(async (barcode: string, meta?: ScanMeta) => {
       if (!id) return { success: false }
-      const result = await scanStockTakePiece(id, barcode, condition)
+      // A phone scan names its relay event; the server decides whether it counts as one.
+      const relayEventId = typeof meta?.relayEventId === 'string' ? meta.relayEventId : undefined
+      const result = relayEventId
+        ? await scanStockTakePiece(id, barcode, condition, relayEventId)
+        : await scanStockTakePiece(id, barcode, condition)
       const cls = result.classification
       const success = isCounted(cls)
       const bucket = bucketOf(cls)
@@ -86,14 +104,14 @@ export default function StockTakeScan() {
         if (success) setCounted(c => c + 1)
       }
 
-      const data: ScanData = { pieceId: result.pieceId, classification: cls }
+      const data: ScanData = { pieceId: result.pieceId, classification: cls, scanDevice: result.scanDevice }
       return {
         success,
         label: t(`stocktake.scan.feedback.${bucket}`),
         data,
       }
-    },
-  })
+    }),
+  }))
 
   async function handleUnscan(key: string, data: ScanData | undefined) {
     if (!id || !data?.pieceId) { scanner.removeRecentScan(key); return }
@@ -139,7 +157,7 @@ export default function StockTakeScan() {
   return (
     <div className="flex flex-col h-screen bg-base" data-testid="stocktake-scan">
       {/* Header — back + condition mode toggle + abandon */}
-      <div className="bg-panel border-b border-line px-6 py-3 flex items-center justify-between gap-3">
+      <div className="bg-panel border-b border-line px-6 py-3 flex flex-wrap items-center justify-between gap-3">
         <Button variant="tertiary" size="sm" onClick={() => navigate('/stock-take')}>
           ← {t('stocktake.scan.back')}
         </Button>
@@ -170,6 +188,9 @@ export default function StockTakeScan() {
             {t('stocktake.scan.damaged')}
           </button>
         </div>
+        <div className="flex items-center gap-3">
+        {/* Phone as scanner — in the header flow, next to the header actions. */}
+        <PhoneScanButton />
         <button
           type="button"
           data-testid="abandon-link"
@@ -178,6 +199,7 @@ export default function StockTakeScan() {
         >
           {t('stocktake.scan.abandon')}
         </button>
+        </div>
       </div>
 
       {/* Scan input + flash overlay — all mechanics live in useScanner/ScanShell */}
@@ -243,6 +265,7 @@ export default function StockTakeScan() {
                   >
                     <Icon size={16} strokeWidth={2} className={`flex-shrink-0 ${style.text}`} />
                     <span className="font-mono text-small text-primary flex-1">{entry.barcode.slice(-10)}</span>
+                    {data?.scanDevice === 'phone' && <ViaPhoneTag />}
                     <span className={`text-caption font-semibold ${style.text}`}>
                       {entry.label}
                     </span>

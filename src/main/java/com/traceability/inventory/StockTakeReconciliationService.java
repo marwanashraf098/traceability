@@ -44,7 +44,7 @@ public class StockTakeReconciliationService {
     private static final String EXPECTED_QUERY =
         "SELECT se.piece_id, se.variant_id, v.title AS variant_title, v.sku, pr.title AS product_title, " +
         "       se.status_at_open, p.status::text AS live_status, " +
-        "       (ts.id IS NOT NULL) AS scanned, ts.scanned_condition, " +
+        "       (ts.id IS NOT NULL) AS scanned, ts.scanned_condition, ts.scan_device, " +
         "       o.id AS order_id, o.number AS order_number, " +
         "       s.id AS shipment_id, s.tracking_number " +
         "FROM stock_take_expected se " +
@@ -59,7 +59,7 @@ public class StockTakeReconciliationService {
 
     private static final String UNEXPECTED_QUERY =
         "SELECT ts.piece_id, p.variant_id, v.title AS variant_title, v.sku, pr.title AS product_title, " +
-        "       p.status::text AS live_status " +
+        "       p.status::text AS live_status, ts.scan_device " +
         "FROM stock_take_scans ts " +
         "JOIN pieces p ON p.id = ts.piece_id AND p.tenant_id = ts.tenant_id " +
         "JOIN variants v ON v.id = p.variant_id " +
@@ -139,6 +139,7 @@ public class StockTakeReconciliationService {
 
             String bucket = bucketFor(liveStatus, scanned, scannedCondition);
             Map<String, Object> summary = pieceSummary(row);
+            summary.put("scanDevice", row.get("scan_device"));             // Q1b: null when not scanned
             if ("on_shelf_uncounted".equals(bucket) && scanned) {
                 // scanned but condition disagreed with status_at_open — read-only flag,
                 // no one-tap resolution (see class doc: mark_available is out of scope).
@@ -150,6 +151,7 @@ public class StockTakeReconciliationService {
         for (Map<String, Object> row : unexpectedRows) {
             String liveStatus = (String) row.get("live_status");
             Map<String, Object> summary = pieceSummary(row);
+            summary.put("scanDevice", row.get("scan_device"));             // Q1b
             summary.put("reason", "lost".equals(liveStatus) ? "resurfaced_from_lost" : "out_of_scope");
             buckets.get("unexpected_finds").add(summary);
         }
@@ -173,6 +175,13 @@ public class StockTakeReconciliationService {
         out.put("coveragePercent", coveragePercent);
         out.put("buckets", buckets);
         out.put("variantRollup", rollupList);
+        // Q1b: "N of M scans came from a phone" on the review screen (informational, no guard).
+        Map<String, Object> devices = jdbc.queryForMap(
+            "SELECT COUNT(*) AS total, COUNT(*) FILTER (WHERE scan_device = 'phone') AS phone " +
+            "FROM stock_take_scans WHERE session_id = ? AND tenant_id = ? AND source = 'scan'",
+            sessionId, tenantId);
+        out.put("scanCount", ((Number) devices.get("total")).intValue());
+        out.put("phoneScanCount", ((Number) devices.get("phone")).intValue());
         // What finalize would do right now (open sessions only) — the review screen's finalize
         // modal shows exactly these numbers.
         if ("open".equals(session.status())) {

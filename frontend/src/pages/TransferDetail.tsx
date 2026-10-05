@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
+import { ViaPhoneTag } from '../phone/ViaPhoneTag'
 import {
   Badge, Button, Card, Modal, Spinner, Alert, useToast,
 } from '../components/ui'
@@ -213,6 +214,7 @@ export default function TransferDetail() {
                         <td className="tbl-cell text-primary">
                           {line.product_title} · {line.variant_title}
                           {line.sku && <span className="font-mono text-caption text-muted ms-2">{line.sku}</span>}
+                          {!!line.phone_scans && <span className="ms-2"><ViaPhoneTag count={line.phone_scans} /></span>}
                         </td>
                         <td className="tbl-cell text-primary">{line.qty_out}</td>
                         <td className={`tbl-cell font-semibold ${lineOutstanding > 0 ? 'text-warning' : 'text-success'}`}>{lineOutstanding}</td>
@@ -244,6 +246,7 @@ export default function TransferDetail() {
                       <td className="tbl-cell text-primary">
                         {line.product_title} · {line.variant_title}
                         {line.sku && <span className="font-mono text-caption text-muted ms-2">{line.sku}</span>}
+                        {!!line.phone_scans && <span className="ms-2"><ViaPhoneTag count={line.phone_scans} /></span>}
                       </td>
                       <td className="tbl-cell text-primary">{line.qty_out}</td>
                       <td className="tbl-cell text-muted">{line.qty_returned_good}</td>

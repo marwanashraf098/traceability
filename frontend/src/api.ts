@@ -1519,12 +1519,21 @@ export interface StockTakeScanResult {
   pieceId: string | null
   classification: StockTakeClassification
   alreadyScanned?: boolean
+  /** Q1b: decided server-side — 'phone' only for a verified relay event (the recorded one on a re-scan). */
+  scanDevice?: ScanDevice
 }
 
-export function scanStockTakePiece(sessionId: string, barcode: string, condition: StockTakeCondition) {
+/** Q1b: which device a scan came from — decided server-side, never by the client. */
+export type ScanDevice = 'hardware' | 'phone'
+
+/** Q1b: a scan's body carries the phone relay event it arrived as (a phone scan only). */
+const withRelay = <T extends object>(body: T, relayEventId?: string) =>
+  JSON.stringify(relayEventId ? { ...body, relayEventId } : body)
+
+export function scanStockTakePiece(sessionId: string, barcode: string, condition: StockTakeCondition, relayEventId?: string) {
   return request<StockTakeScanResult>(`/stock-takes/sessions/${sessionId}/scan`, {
     method: 'POST',
-    body: JSON.stringify({ barcode, condition }),
+    body: withRelay({ barcode, condition }, relayEventId),
   })
 }
 
@@ -1546,6 +1555,8 @@ export interface StockTakePieceRow {
   trackingNumber?: string
   flag?: string
   reason?: string
+  /** Q1b: the scan's device; null when the piece wasn't scanned. */
+  scanDevice?: ScanDevice | null
 }
 
 export interface StockTakeVariantRollup {
@@ -1605,6 +1616,9 @@ export interface StockTakeReconciliation {
   variantRollup: StockTakeVariantRollup[]
   /** Present while the session is open. */
   finalizePlan?: StockTakeFinalizePlan
+  /** Q1b: count scans in the session, and how many of them came from a paired phone. */
+  scanCount?: number
+  phoneScanCount?: number
 }
 
 export function getStockTakeReconciliation(sessionId: string) {
@@ -2200,18 +2214,18 @@ export interface TransferScanResult {
   qtyOut: number
 }
 
-export function scanOutTransferPiece(transferId: string, barcode: string) {
+export function scanOutTransferPiece(transferId: string, barcode: string, relayEventId?: string) {
   return request<TransferScanResult>(`/transfers/${transferId}/scan-out`, {
     method: 'POST',
-    body: JSON.stringify({ barcode }),
+    body: withRelay({ barcode }, relayEventId),
   })
 }
 
 /** relocate_return only — the return leg's send-out scan at the origin (B). */
-export function returnScanOutTransferPiece(transferId: string, barcode: string) {
+export function returnScanOutTransferPiece(transferId: string, barcode: string, relayEventId?: string) {
   return request<TransferScanResult>(`/transfers/${transferId}/return-scan-out`, {
     method: 'POST',
-    body: JSON.stringify({ barcode }),
+    body: withRelay({ barcode }, relayEventId),
   })
 }
 
@@ -2242,10 +2256,10 @@ export interface TransferScanBackResult {
   outcome: string | null
 }
 
-export function scanBackTransferPiece(transferId: string, barcode: string, condition: TransferCondition) {
+export function scanBackTransferPiece(transferId: string, barcode: string, condition: TransferCondition, relayEventId?: string) {
   return request<TransferScanBackResult>(`/transfers/${transferId}/scan-back`, {
     method: 'POST',
-    body: JSON.stringify({ barcode, condition }),
+    body: withRelay({ barcode, condition }, relayEventId),
   })
 }
 
@@ -2281,6 +2295,8 @@ export interface TransferLine {
   qty_condemned: number
   qty_sold: number
   qty_lost: number
+  /** Q1b: this line's scans (out and back) that came from a paired phone. */
+  phone_scans?: number
 }
 
 export interface TransferDetail {
@@ -2310,6 +2326,8 @@ export interface TransferDetail {
   /** Every piece ever scanned onto the transfer, whatever its outcome — Mark as sent needs
    *  at least 1, Cancel needs 0. */
   piecesEverCount: number
+  /** Q1b: scans on this transfer that came from a paired phone (sum of the lines' phone_scans). */
+  phoneScanCount?: number
 }
 
 export function getTransfer(transferId: string) {

@@ -227,6 +227,12 @@ public class TransferService {
 
     @Transactional(isolation = Isolation.READ_COMMITTED)
     public ScanOutResult scanOut(UUID transferId, String barcode, UUID actorUserId) {
+        return scanOut(transferId, barcode, actorUserId, false);
+    }
+
+    /** Q1b: {@code viaPhone} (verified by the caller — PhoneScanSource) adds {"via":"phone"} to the event's metadata. */
+    @Transactional(isolation = Isolation.READ_COMMITTED)
+    public ScanOutResult scanOut(UUID transferId, String barcode, UUID actorUserId, boolean viaPhone) {
         UUID tenantId = TenantContext.require();
 
         // 1. Transfer must exist (tenant-scoped via RLS + explicit predicate) and be preparing.
@@ -309,7 +315,7 @@ public class TransferService {
         //    orphaned.
         ledger.transition(pieceId, PieceStatus.AVAILABLE, PieceStatus.OUT_ON_TRANSFER,
             "transferred_out", actorUserId,
-            new TransitionContext(null, null, destinationLocationId, null, transferMeta(transferId, transferType)));
+            new TransitionContext(null, null, destinationLocationId, null, transferMeta(transferId, transferType, viaPhone)));
 
         // 7. Explicit location update — transition() does not touch current_location_id
         //    (same pattern as ReturnService).
@@ -324,13 +330,14 @@ public class TransferService {
         return ScanOutResult.success(pieceId, barcode, variantId, lineId, qtyOut);
     }
 
-    private String transferMeta(UUID transferId, String transferType) {
+    private String transferMeta(UUID transferId, String transferType, boolean viaPhone) {
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("transfer_id", transferId.toString());
         // "reason" the transition happened — the transfer's category (showroom/dryclean/
         // repair/other) is the only always-present, short, categorical field available;
         // the transfer's freeform note is not duplicated here (it's on the transfer row).
         m.put("reason", transferType);
+        if (viaPhone) m.put("via", "phone");                 // Q1b
         return writeJson(m);
     }
 
@@ -350,6 +357,12 @@ public class TransferService {
      */
     @Transactional(isolation = Isolation.READ_COMMITTED)
     public ScanOutResult returnScanOut(UUID transferId, String barcode, UUID actorUserId) {
+        return returnScanOut(transferId, barcode, actorUserId, false);
+    }
+
+    /** Q1b: {@code viaPhone} as scanOut(). */
+    @Transactional(isolation = Isolation.READ_COMMITTED)
+    public ScanOutResult returnScanOut(UUID transferId, String barcode, UUID actorUserId, boolean viaPhone) {
         UUID tenantId = TenantContext.require();
 
         // 1. Transfer must exist, be preparing, and be a relocate_return transfer. FOR SHARE,
@@ -442,7 +455,7 @@ public class TransferService {
         //    terminal. Left uncaught by design, same reasoning as scanOut()'s step 6.
         ledger.transition(pieceId, PieceStatus.TRANSFERRED_OUT, PieceStatus.OUT_ON_TRANSFER,
             "return_transfer_out", actorUserId,
-            new TransitionContext(null, null, destinationLocationId, null, transferMeta(transferId, transferType)));
+            new TransitionContext(null, null, destinationLocationId, null, transferMeta(transferId, transferType, viaPhone)));
 
         // 8. Explicit location update — transition() does not touch current_location_id
         //    (same pattern as scanOut()). The piece is physically still at B until it's
@@ -602,6 +615,13 @@ public class TransferService {
      */
     @Transactional(isolation = Isolation.READ_COMMITTED)
     public ScanBackResult reconcileScanBack(UUID transferId, String barcode, String condition, UUID actorUserId) {
+        return reconcileScanBack(transferId, barcode, condition, actorUserId, false);
+    }
+
+    /** Q1b: {@code viaPhone} (verified by the caller — PhoneScanSource) adds {"via":"phone"} to the event's metadata. */
+    @Transactional(isolation = Isolation.READ_COMMITTED)
+    public ScanBackResult reconcileScanBack(UUID transferId, String barcode, String condition, UUID actorUserId,
+                                            boolean viaPhone) {
         UUID tenantId = TenantContext.require();
 
         if (!VALID_CONDITIONS.contains(condition)) {
@@ -660,7 +680,7 @@ public class TransferService {
         UUID fulfillmentLocationId = fulfillmentLocationId(tenantId);
         ledger.transition(pieceId, PieceStatus.OUT_ON_TRANSFER, targetStatus,
             good ? "returned_from_transfer" : "condemned_at_vendor", actorUserId,
-            new TransitionContext(null, null, fulfillmentLocationId, null, reconcileScanMeta(good, transferId)));
+            new TransitionContext(null, null, fulfillmentLocationId, null, reconcileScanMeta(good, transferId, viaPhone)));
 
         // 5. Physical unit is back at the warehouse either way — move current_location_id.
         jdbc.update("UPDATE pieces SET current_location_id = ? WHERE id = ?",
@@ -684,12 +704,13 @@ public class TransferService {
             "SELECT id FROM locations WHERE tenant_id = ? AND is_fulfillment = true", UUID.class, tenantId);
     }
 
-    private String reconcileScanMeta(boolean good, UUID transferId) {
+    private String reconcileScanMeta(boolean good, UUID transferId, boolean viaPhone) {
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("transfer_id", transferId.toString());
         m.put("verified", true);
         m.put("reconciliation", "scan");
         if (!good) m.put("attributed_to", "vendor");
+        if (viaPhone) m.put("via", "phone");                 // Q1b
         return writeJson(m);
     }
 
@@ -1078,7 +1099,14 @@ public class TransferService {
         Map<String, Object> transfer = new LinkedHashMap<>(rows.get(0));
         transfer.put("lines", jdbc.queryForList(
             "SELECT tl.id, tl.variant_id, v.sku, v.title AS variant_title, pr.title AS product_title, " +
-            "       tl.qty_out, tl.qty_returned_good, tl.qty_condemned, tl.qty_sold, tl.qty_lost " +
+            "       tl.qty_out, tl.qty_returned_good, tl.qty_condemned, tl.qty_sold, tl.qty_lost, " +
+            // Q1b: how many of this line's scans (out and back) came from a paired phone —
+            // piece_events is the history; a phone scan's event carries {"via":"phone"}.
+            "       (SELECT COUNT(*) FROM piece_events pe " +
+            "        JOIN transfer_pieces tp ON tp.piece_id = pe.piece_id AND tp.transfer_id = tl.transfer_id " +
+            "                               AND tp.line_id = tl.id AND tp.tenant_id = tl.tenant_id " +
+            "        WHERE pe.tenant_id = tl.tenant_id AND pe.metadata->>'transfer_id' = tl.transfer_id::text " +
+            "          AND pe.metadata->>'via' = 'phone') AS phone_scans " +
             "FROM transfer_lines tl " +
             "JOIN variants v  ON v.id  = tl.variant_id " +
             "JOIN products pr ON pr.id = v.product_id " +
@@ -1091,6 +1119,9 @@ public class TransferService {
         // Every piece ever scanned onto the transfer, whatever its outcome — decides whether
         // Mark as sent (>= 1) and Cancel (0) are offered.
         transfer.put("piecesEverCount", piecesEverScanned(transferId, tenantId));
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> lines = (List<Map<String, Object>>) transfer.get("lines");
+        transfer.put("phoneScanCount", lines.stream().mapToLong(l -> ((Number) l.get("phone_scans")).longValue()).sum());
         return transfer;
     }
 

@@ -1,7 +1,9 @@
 import { useEffect, useState, useCallback } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
-import { useScanner } from '../hooks/useScanner'
+import { useScanner, ScanMeta } from '../hooks/useScanner'
+import { usePhoneScanTarget } from '../phone/usePhoneScanTarget'
+import { PhoneScanButton } from '../phone/PhoneScanButton'
 import { ScanShell } from '../components/ScanShell'
 import { Button, Spinner } from '../components/ui'
 import { getTransfer, scanOutTransferPiece, returnScanOutTransferPiece, TransferDetail } from '../api'
@@ -32,16 +34,29 @@ export default function TransferScanOut() {
     load().finally(() => setLoading(false))
   }, [load])
 
+  // The place the pieces leave from / go to — the header's reference for this transfer.
+  const ref = transfer
+    ? (transfer.transfer_mode === 'relocate_return' ? transfer.source_location_name : transfer.destination_location_name) ?? ''
+    : ''
+
+  // Q1b — phone scans: this screen is the tablet's scan target while open. The phone's line is
+  // "Scanned out", or the backend's own rejection text.
+  const phone = usePhoneScanTarget({
+    label: t('phone.target.transferOut', { ref }),
+    describe: (_code, o) => (o.success ? t('phone.scannedOut') : o.label),
+  })
+
   // Queued scans are dropped by useScanner when this screen unmounts (leaving it).
-  const scanner = useScanner({
-    onScan: async (barcode) => {
+  const scanner = phone.attach(useScanner({
+    onScan: phone.wrap(async (barcode: string, meta?: ScanMeta) => {
       if (!id) return { success: false }
+      // A phone scan names its relay event; the server decides whether it counts as one.
+      const relayEventId = typeof meta?.relayEventId === 'string' ? meta.relayEventId : undefined
+      const send = transfer?.transfer_mode === 'relocate_return' ? returnScanOutTransferPiece : scanOutTransferPiece
       // relocate_return's send-out leg pulls transferred_out pieces off the terminal at B
       // (a different backend precondition than every other transfer's available->out_on_transfer
       // scan) — same screen, different API call, mirroring TransferDetail's mode branching.
-      const result = transfer?.transfer_mode === 'relocate_return'
-        ? await returnScanOutTransferPiece(id, barcode)
-        : await scanOutTransferPiece(id, barcode)
+      const result = relayEventId ? await send(id, barcode, relayEventId) : await send(id, barcode)
 
       if (result.success) {
         // Refetch so the per-variant table (names + qty_out) stays authoritative —
@@ -55,8 +70,8 @@ export default function TransferScanOut() {
       // re-derive text from `code` on the frontend.
       const message = isAr ? result.message_ar : result.message_en
       return { success: false, label: message ?? result.code }
-    },
-  })
+    }),
+  }))
 
   if (loading) {
     return (
@@ -91,11 +106,14 @@ export default function TransferScanOut() {
   return (
     <div className="flex flex-col h-screen bg-base" data-testid="transfer-scan-out">
       {/* Header */}
-      <div className="bg-panel border-b border-line px-6 py-3 flex items-center justify-between">
+      <div className="bg-panel border-b border-line px-6 py-3 flex items-center justify-between gap-3">
         <Button variant="tertiary" size="sm" onClick={() => navigate(`/transfers/${id}`)}>
           ← {t('transfers.scanOut.back')}
         </Button>
-        <div className="text-end">
+        <div className="flex items-center gap-3 min-w-0">
+        {/* Phone as scanner — in the header flow, next to the header actions. */}
+        <PhoneScanButton />
+        <div className="text-end min-w-0">
           {/* relocate_return's send-out leg happens AT the origin B — showing the
               destination (always Main Warehouse for a return) here would be misleading. */}
           <p className="text-body font-medium text-primary">
@@ -108,6 +126,7 @@ export default function TransferScanOut() {
               ? t('transfers.return.scanOutSubtitle')
               : t(`transfers.type.${transfer.transfer_type}`)}
           </p>
+        </div>
         </div>
       </div>
 

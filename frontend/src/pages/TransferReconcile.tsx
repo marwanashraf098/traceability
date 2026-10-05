@@ -1,7 +1,9 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
-import { useScanner } from '../hooks/useScanner'
+import { useScanner, ScanMeta } from '../hooks/useScanner'
+import { usePhoneScanTarget } from '../phone/usePhoneScanTarget'
+import { PhoneScanButton } from '../phone/PhoneScanButton'
 import { ScanShell } from '../components/ScanShell'
 import {
   Alert, Badge, Button, Card, Input, Modal, Spinner,
@@ -45,6 +47,8 @@ export default function TransferReconcile() {
   const [showCloseConfirm, setShowCloseConfirm] = useState(false)
   const [closing, setClosing] = useState(false)
   const [closeError, setCloseError] = useState<string | null>(null)
+  // Q1b: a shortfall quantity field has focus — phone scans wait ("Tablet busy") meanwhile.
+  const [shortfallFocused, setShortfallFocused] = useState(false)
 
   const load = useCallback(async () => {
     if (!id) return
@@ -54,20 +58,33 @@ export default function TransferReconcile() {
 
   useEffect(() => { load().finally(() => setLoading(false)) }, [load])
 
+  // Q1b — phone scans: this screen is the tablet's scan target while open; paused while the
+  // close confirm is open or a shortfall quantity is being typed. The phone's line is
+  // "Returned · Good / Condemned", or the backend's own rejection text.
+  const phone = usePhoneScanTarget({
+    label: t('phone.target.transferReconcile', { ref: transfer?.destination_location_name ?? '' }),
+    describe: (_code, o) => (o.success ? t('phone.returned', { condition: o.label }) : o.label),
+    paused: showCloseConfirm || shortfallFocused,
+  })
+
   // Queued scans are dropped by useScanner when this screen unmounts (leaving it).
-  const scanner = useScanner({
+  const scanner = phone.attach(useScanner({
     focusPaused: showCloseConfirm,
-    onScan: async (barcode) => {
+    onScan: phone.wrap(async (barcode: string, meta?: ScanMeta) => {
       if (!id) return { success: false }
-      const result = await scanBackTransferPiece(id, barcode, condition)
+      // A phone scan names its relay event; the server decides whether it counts as one.
+      const relayEventId = typeof meta?.relayEventId === 'string' ? meta.relayEventId : undefined
+      const result = relayEventId
+        ? await scanBackTransferPiece(id, barcode, condition, relayEventId)
+        : await scanBackTransferPiece(id, barcode, condition)
       if (result.success) {
         await load()
         return { success: true, label: t(`transfers.reconcile.${condition}`) }
       }
       const message = isAr ? result.message_ar : result.message_en
       return { success: false, label: message ?? result.code }
-    },
-  })
+    }),
+  }))
 
   function setLineInput(lineId: string, field: keyof ShortfallInputs, value: string) {
     setShortfallInputs(prev => ({
@@ -159,11 +176,15 @@ export default function TransferReconcile() {
           {t('transfers.reconcile.title')}
           <Badge tone="warning" label={transfer.destination_location_name} />
         </h1>
+        <div className="flex items-center gap-4">
+        {/* Phone as scanner — in the header flow, next to the header actions. */}
+        <PhoneScanButton />
         <div className="text-end">
           <p className="text-caption uppercase tracking-widest text-muted">{t('transfers.detail.outstanding')}</p>
           <p className={`text-h2 font-mono ${allBalanced ? 'text-success' : 'text-warning'}`} data-testid="reconcile-outstanding">
             {transfer.outstandingCount}
           </p>
+        </div>
         </div>
       </div>
 
@@ -231,7 +252,8 @@ export default function TransferReconcile() {
             listener and steals focus straight back to the scan bar. useScanner.ts
             itself is SAFETY-CRITICAL and untouched; this scopes the fix to the one
             screen that puts other inputs next to a scan bar outside a modal. */}
-        <div className="overflow-x-auto" onClick={e => e.stopPropagation()}>
+        <div className="overflow-x-auto" onClick={e => e.stopPropagation()}
+          onFocus={() => setShortfallFocused(true)} onBlur={() => setShortfallFocused(false)}>
           <table className="min-w-full">
             <thead>
               <tr className="border-b border-line">

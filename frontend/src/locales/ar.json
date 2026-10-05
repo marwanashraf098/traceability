@@ -3062,7 +3062,16 @@
       "pickNoOrder": "التجهيز والتغليف",
       "pack": "تغليف البوالص · {{number}}",
       "packWaiting": "تغليف البوالص · امسح بوليصة",
-      "link": "ربط البوليصة · {{number}}"
-    }
+      "link": "ربط البوليصة · {{number}}",
+      "stockTake": "جرد المخزون · {{name}}",
+      "transferOut": "إرسال نقل · {{ref}}",
+      "transferReconcile": "مطابقة نقل · {{ref}}"
+    },
+    "viaPhone": "عبر الهاتف",
+    "counted": "تم العدّ · {{label}}",
+    "scannedOut": "تم الإرسال",
+    "returned": "تم الإرجاع · {{condition}}",
+    "phoneScans": "{{count}} من {{total}} عمليات مسح تمت من هاتف",
+    "linePhoneScans": "عبر الهاتف · {{count}}"
   }
 }

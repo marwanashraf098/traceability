@@ -23,11 +23,14 @@ public class StockTakeController {
 
     private final StockTakeService stockTake;
     private final StockTakeReconciliationService reconciliation;
+    private final PhoneScanSource phoneScanSource;
 
     public StockTakeController(StockTakeService stockTake,
-                               StockTakeReconciliationService reconciliation) {
+                               StockTakeReconciliationService reconciliation,
+                               PhoneScanSource phoneScanSource) {
         this.stockTake = stockTake;
         this.reconciliation = reconciliation;
+        this.phoneScanSource = phoneScanSource;
     }
 
     @PostMapping("/sessions")
@@ -74,7 +77,9 @@ public class StockTakeController {
             @PathVariable UUID sessionId,
             @RequestBody ScanRequest req,
             @AuthenticationPrincipal CustomUserDetails principal) {
-        return stockTake.scan(sessionId, req.barcode(), req.condition(), principal.userId());
+        // Q1b: 'phone' only when the relay event verifies as the caller's own (PhoneScanSource).
+        boolean viaPhone = phoneScanSource.isPhone(req.relayEventId(), req.barcode(), principal.userId());
+        return stockTake.scan(sessionId, req.barcode(), req.condition(), principal.userId(), viaPhone);
     }
 
     /**
@@ -153,7 +158,8 @@ public class StockTakeController {
     public record OpenSessionRequest(
         String scopeType, List<String> variantIds, String locationId, String note) {}
 
-    public record ScanRequest(String barcode, String condition) {}
+    /** relayEventId: optional — the phone relay event this scan arrived as (Q1b); never trusted as-is. */
+    public record ScanRequest(String barcode, String condition, UUID relayEventId) {}
 
     /** confirmWriteOffs: the write-off count the user typed, when the finalize plan requires it. */
     public record FinalizeRequest(Integer confirmWriteOffs) {}

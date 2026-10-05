@@ -31,9 +31,11 @@ import java.util.UUID;
 public class TransferController {
 
     private final TransferService transferSvc;
+    private final PhoneScanSource phoneScanSource;
 
-    public TransferController(TransferService transferSvc) {
+    public TransferController(TransferService transferSvc, PhoneScanSource phoneScanSource) {
         this.transferSvc = transferSvc;
+        this.phoneScanSource = phoneScanSource;
     }
 
     // ── Create ───────────────────────────────────────────────────────────────
@@ -62,7 +64,9 @@ public class TransferController {
             @PathVariable UUID transferId,
             @RequestBody ScanRequest req,
             @AuthenticationPrincipal CustomUserDetails principal) {
-        return transferSvc.scanOut(transferId, req.barcode(), principal.userId());
+        // Q1b: 'phone' only when the relay event verifies as the caller's own (PhoneScanSource).
+        boolean viaPhone = phoneScanSource.isPhone(req.relayEventId(), req.barcode(), principal.userId());
+        return transferSvc.scanOut(transferId, req.barcode(), principal.userId(), viaPhone);
     }
 
     // ── Return send-out scan (FR-22.11 / B2) ────────────────────────────────
@@ -75,7 +79,8 @@ public class TransferController {
             @PathVariable UUID transferId,
             @RequestBody ScanRequest req,
             @AuthenticationPrincipal CustomUserDetails principal) {
-        return transferSvc.returnScanOut(transferId, req.barcode(), principal.userId());
+        boolean viaPhone = phoneScanSource.isPhone(req.relayEventId(), req.barcode(), principal.userId());
+        return transferSvc.returnScanOut(transferId, req.barcode(), principal.userId(), viaPhone);
     }
 
     // ── Return piece picker (FR-22.11 / B2) ─────────────────────────────────
@@ -141,7 +146,8 @@ public class TransferController {
             @PathVariable UUID transferId,
             @RequestBody ScanBackRequest req,
             @AuthenticationPrincipal CustomUserDetails principal) {
-        return transferSvc.reconcileScanBack(transferId, req.barcode(), req.condition(), principal.userId());
+        boolean viaPhone = phoneScanSource.isPhone(req.relayEventId(), req.barcode(), principal.userId());
+        return transferSvc.reconcileScanBack(transferId, req.barcode(), req.condition(), principal.userId(), viaPhone);
     }
 
     @PostMapping("/{transferId}/classify")
@@ -203,9 +209,10 @@ public class TransferController {
         String transferType, String destinationLocationId, Instant expectedReturnAt, String note,
         String transferMode, String sourceLocationId) {}
 
-    public record ScanRequest(String barcode) {}
+    /** relayEventId (scan requests): optional — the phone relay event the scan arrived as (Q1b); never trusted as-is. */
+    public record ScanRequest(String barcode, UUID relayEventId) {}
 
-    public record ScanBackRequest(String barcode, String condition) {}
+    public record ScanBackRequest(String barcode, String condition, UUID relayEventId) {}
 
     public record ClassifyRequest(String lineId, int sold, int lost, int condemnedNotReturned) {}
 }

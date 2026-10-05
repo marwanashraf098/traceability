@@ -3043,7 +3043,16 @@
       "pickNoOrder": "Pick & Pack",
       "pack": "Waybill packing · {{number}}",
       "packWaiting": "Waybill packing · scan a waybill",
-      "link": "Link AWB · {{number}}"
-    }
+      "link": "Link AWB · {{number}}",
+      "stockTake": "Stock take · {{name}}",
+      "transferOut": "Transfer out · {{ref}}",
+      "transferReconcile": "Transfer reconcile · {{ref}}"
+    },
+    "viaPhone": "via phone",
+    "counted": "Counted · {{label}}",
+    "scannedOut": "Scanned out",
+    "returned": "Returned · {{condition}}",
+    "phoneScans": "{{count}} of {{total}} scans came from a phone",
+    "linePhoneScans": "via phone · {{count}}"
   }
 }

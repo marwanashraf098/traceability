@@ -176,7 +176,20 @@ public class StockTakeService {
      */
     @Transactional
     public Map<String, Object> scan(UUID sessionId, String barcode, String condition, UUID actorUserId) {
+        return scan(sessionId, barcode, condition, actorUserId, false);
+    }
+
+    /**
+     * Q1b: {@code viaPhone} — verified server-side by the caller (PhoneScanSource) — records the
+     * scan's device ('phone' / 'hardware', V141). A re-scan of a counted piece keeps the first
+     * scan's row, device included. The response carries {@code scanDevice} for the new row (the
+     * recorded one on a re-scan).
+     */
+    @Transactional
+    public Map<String, Object> scan(UUID sessionId, String barcode, String condition, UUID actorUserId,
+                                    boolean viaPhone) {
         UUID tenantId = TenantContext.require();
+        String device = viaPhone ? "phone" : "hardware";
         SessionRow session = requireOpenSession(sessionId, tenantId);
 
         if (barcode == null || barcode.isBlank()) {
@@ -201,9 +214,10 @@ public class StockTakeService {
         if (piece == null) {
             jdbc.update(
                 "INSERT INTO stock_take_scans " +
-                "(id, tenant_id, session_id, piece_id, raw_barcode, scanned_condition, source, actor_user_id) " +
-                "VALUES (gen_random_uuid(), ?, ?, NULL, ?, ?, 'scan', ?)",
-                tenantId, sessionId, barcode, condition, actorUserId);
+                "(id, tenant_id, session_id, piece_id, raw_barcode, scanned_condition, source, actor_user_id, scan_device) " +
+                "VALUES (gen_random_uuid(), ?, ?, NULL, ?, ?, 'scan', ?, ?)",
+                tenantId, sessionId, barcode, condition, actorUserId, device);
+            out.put("scanDevice", device);
             out.put("pieceId", null);
             out.put("classification", "unknown");
             return out;
@@ -215,10 +229,13 @@ public class StockTakeService {
         // computed fresh against current live state.
         int inserted = jdbc.update(
             "INSERT INTO stock_take_scans " +
-            "(id, tenant_id, session_id, piece_id, scanned_condition, source, actor_user_id) " +
-            "VALUES (gen_random_uuid(), ?, ?, ?, ?, 'scan', ?) " +
+            "(id, tenant_id, session_id, piece_id, scanned_condition, source, actor_user_id, scan_device) " +
+            "VALUES (gen_random_uuid(), ?, ?, ?, ?, 'scan', ?, ?) " +
             "ON CONFLICT (session_id, piece_id) WHERE piece_id IS NOT NULL DO NOTHING",
-            tenantId, sessionId, piece.id(), condition, actorUserId);
+            tenantId, sessionId, piece.id(), condition, actorUserId, device);
+        out.put("scanDevice", inserted == 1 ? device : jdbc.queryForObject(
+            "SELECT scan_device FROM stock_take_scans WHERE session_id = ? AND piece_id = ? AND tenant_id = ?",
+            String.class, sessionId, piece.id(), tenantId));
 
         out.put("pieceId", piece.id());
         out.put("alreadyScanned", inserted == 0);
