@@ -4,6 +4,21 @@
 
 ## Current state
 
+**Phone control placement — no floating control (2026-10-05, branch `fix/phone-control-placement` off main 82f6bf5;
+pushed, not merged, not deployed). Frontend only, presentation only — PhoneScanProvider, routing and pairing unchanged.**
+- `phone/PhoneScanButton.tsx`: `PhoneScanButton` lives INSIDE a phone-capable scan screen's header, in its flow, next to
+  the header actions — pack session (before the worker / End session) and PickScreen (before Cancel Order); every future
+  phone-capable screen uses the same component. "Use phone" → QR modal; "Waiting for the phone…" / "Phone connected ·
+  <device>" / "Phone link reconnecting…" → a menu with Unpair (Cancel while waiting). Below 640 px it is an icon button
+  in the same slot. `PhoneTopbarIcon` in Layout's top bar (beside the bell) shows ONLY while a phone is paired (status +
+  Unpair). Non-scanning pages show nothing phone-related unless paired.
+- `phone/PhoneControl.tsx` now renders nothing: it is only the authenticated-page signal (RequireAuth) that tells the
+  provider to load the pairing and open the stream. The floating placement logic is gone.
+- Tests: `phoneControlPlacement.browser.test` deleted (approved) → `phoneHeaderPlacement.browser.test` (header flow, no
+  overlap, icon below 640 px, top-bar icon, QR modal — 1280/768/390, Chromium + WebKit) and `phoneHeaderTopbar.test` (6).
+  `phoneStation.test`'s control tests render the header button instead of the floating control; the connected test
+  opens the button's menu before Unpair (assertions unchanged).
+
 **Q1 — Phone scanner per station: pairing to the tablet + worker; pack & pick (2026-10-05, branch `feat/station-phone`
 off main 07a21a4, origin/main 0462c48 merged in; pushed, not merged, not deployed). Migration V140 (V138 and V139 went
 to the Bosta status poll and the order shipping badge on main while this was built). V140 + revised hatch #15 approved by Marawan 2026-10-04 (incl.

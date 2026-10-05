@@ -15,6 +15,7 @@ import {
   WaybillOutcome,
 } from '../../api'
 import { usePhoneScanTarget } from '../../phone/usePhoneScanTarget'
+import { PhoneScanButton } from '../../phone/PhoneScanButton'
 
 // Pick & Pack S3 — the waybill pack session (design/pick-pack-waybill-mockup/SessionWaiting,
 // SessionScanning, Rejected, SetAside). Full-screen immersive — no <Layout>. Built on the shared
@@ -261,6 +262,8 @@ export default function PackSessionScreen({ initial, onEnded }: {
           </span>
         </div>
         <div className="flex items-center gap-3">
+          {/* Phone as scanner — in the header flow, next to the header actions. */}
+          <PhoneScanButton />
           <span className="hidden sm:inline-flex items-center gap-2 text-small text-primary">
             <span className="w-7 h-7 rounded-full bg-trace-blue/15 text-trace-blue font-semibold flex items-center justify-center">
               {worker.slice(0, 1).toUpperCase()}

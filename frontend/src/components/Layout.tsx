@@ -15,6 +15,7 @@ import { clearAccessToken } from '../auth'
 import { Logo } from './Logo'
 import { cn, MeProvider } from './ui'
 import { useStation } from './StationProvider'
+import { PhoneTopbarIcon } from '../phone/PhoneScanButton'
 
 // ── Nav link ──────────────────────────────────────────────────────────────────
 // Icon is passed as a component reference (not pre-rendered) so it can be
@@ -237,6 +238,8 @@ export default function Layout({ children }: { children: ReactNode }) {
           </form>
 
           <div className="flex items-center gap-4 flex-shrink-0">
+            {/* Phone as scanner — only while a phone is paired to this tablet: status + Unpair. */}
+            <PhoneTopbarIcon />
             {/* Notification bell — count = open exceptions, our single "needs attention"
                 surface. No badge on the Exceptions nav item — one number, one place.
                 Owner/Manager only, matching the backend endpoint's access control. */}

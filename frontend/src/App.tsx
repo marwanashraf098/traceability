@@ -161,8 +161,9 @@ export function RequireAuth({ children }: { children: React.ReactNode }) {
   if (stationMode && !currentWorker) {
     return <StationGate />
   }
-  // Q1: the floating phone control sits beside every authenticated page — full-screen scan
-  // screens included (they render without Layout).
+  // Phone as scanner: PhoneControl (renders nothing) tells PhoneScanProvider a signed-in page is
+  // showing — full-screen scan screens included. The visible controls live in the scan screens'
+  // headers (PhoneScanButton) and Layout's top bar (PhoneTopbarIcon, only while paired).
   return <>{children}<PhoneControl /></>
 }
 

@@ -14,6 +14,7 @@ import { useCapabilities } from '../capabilities'
 import ScanHelperChips from '../components/scanHelpers/ScanHelperChips'
 import { useScanner, ScanMeta, ScanOutcome } from '../hooks/useScanner'
 import { usePhoneScanRegistration, usePhoneScanTarget } from '../phone/usePhoneScanTarget'
+import { PhoneScanButton } from '../phone/PhoneScanButton'
 
 const BASE = '/api/v1'
 
@@ -1278,6 +1279,8 @@ function PickScreen({
             <Badge tone="info" label={t('exchange.badge')} />
           )}
         </p>
+        {/* Phone as scanner — in the header flow, next to the header actions. */}
+        <PhoneScanButton />
         {!hasCancelRequest && (
           <button
             onClick={() => { scanner.clearQueue(); setShowCancelConfirm(true) }}

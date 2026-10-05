@@ -9,6 +9,7 @@ import type { RelayHandlers } from '../phone/relayStream'
 import type { PackSessionView, ScanPairingStatus } from '../api'
 import { PhoneScanProvider } from '../phone/PhoneScanProvider'
 import PhoneControl from '../phone/PhoneControl'
+import { PhoneScanButton } from '../phone/PhoneScanButton'
 import PackSessionScreen from '../pages/fulfill/PackSessionScreen'
 import PickupSessions from '../pages/PickupSessions'
 import Fulfill from '../pages/Fulfill'
@@ -106,11 +107,11 @@ afterEach(() => { clearAccessToken(); vi.unstubAllGlobals(); vi.useRealTimers() 
 
 // ── the floating control ─────────────────────────────────────────────────────
 
-describe('floating control', () => {
+describe('header phone button', () => {
   test('"Use phone" shows the QR of the pair URL with its countdown; the stream opens; Cancel unpairs and closes it', async () => {
     pairing = NONE
     const user = userEvent.setup()
-    withPhone(<p>any page</p>)
+    withPhone(<header><PhoneScanButton /></header>)
     await user.click(await screen.findByRole('button', { name: 'Use phone' }))
     const modal = await screen.findByTestId('pair-modal')
     expect(screen.getByText('Scan with your phone camera')).toBeInTheDocument()
@@ -131,7 +132,7 @@ describe('floating control', () => {
   test('the phone claims the code → the QR closes and the chip shows "Phone connected · <device>"; Unpair', async () => {
     pairing = NONE
     const user = userEvent.setup()
-    withPhone(<p>any page</p>)
+    withPhone(<header><PhoneScanButton /></header>)
     await user.click(await screen.findByRole('button', { name: 'Use phone' }))
     await screen.findByTestId('pair-qr')
     await streaming()
@@ -139,14 +140,15 @@ describe('floating control', () => {
     await waitFor(() => expect(screen.queryByTestId('pair-modal')).toBeNull())
     expect(screen.getByTestId('phone-chip')).toHaveTextContent('Phone connected · iPhone · Safari')
 
-    await user.click(within(screen.getByTestId('phone-chip')).getByRole('button', { name: 'Unpair' }))
+    await user.click(screen.getByTestId('phone-chip'))
+    await user.click(within(screen.getByTestId('phone-button-menu')).getByRole('button', { name: 'Unpair' }))
     await waitFor(() => expect(screen.queryByTestId('phone-chip')).toBeNull())
     expect(screen.getByRole('button', { name: 'Use phone' })).toBeInTheDocument()
     expect(streamsClosed).toBeGreaterThan(0)
   })
 
   test('a link down for 5 s shows "Phone link reconnecting…"; back up clears it', async () => {
-    withPhone(<p>any page</p>)
+    withPhone(<header><PhoneScanButton /></header>)
     await streaming()
     await screen.findByText('Phone connected · iPhone · Safari')
     vi.useFakeTimers()
@@ -160,7 +162,7 @@ describe('floating control', () => {
   })
 
   test('the pairing ending (pushed on the stream) closes the stream and offers "Use phone" again', async () => {
-    withPhone(<p>any page</p>)
+    withPhone(<header><PhoneScanButton /></header>)
     await streaming()
     act(() => relay!.onPairing({ ...NONE, reason: 'worker_switched' }))
     await screen.findByRole('button', { name: 'Use phone' })
@@ -168,7 +170,7 @@ describe('floating control', () => {
   })
 
   test("the tablet's id: random, URL-safe, kept in localStorage and used for every call", async () => {
-    withPhone(<p>any page</p>)
+    withPhone(<header><PhoneScanButton /></header>)
     await streaming()
     const id = store.get('stationDeviceId')!
     expect(id).toMatch(/^[A-Za-z0-9_-]{16,64}$/)
