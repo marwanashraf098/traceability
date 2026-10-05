@@ -4,6 +4,30 @@
 
 ## Current state
 
+**Analytics slice 1 — owner-only sales by variant and by product, backend only (2026-10-06, branch `analytics/s1-sales`,
+merged to main; not deployed). No migration.** Step 0 / 0b / 0c diagnosis: most orders have no pieces, so analytics is
+built on Shopify order lines + Bosta shipments; no variant has a unit cost (no writer exists); Bosta per-shipment
+settlement (`wallet.cashCycle`, `wallet.cashout`) is in the delivery payload but stale in our snapshots — the spec has no
+payout endpoint (Step 0c live calls not made: SSH to prod was refused; pending).
+- **Endpoints (OWNER only — manager/worker/station worker 403):** `GET /api/v1/analytics/sales/variants` and
+  `/products` (`sort=units|revenue`, `limit` 1–100). Periods = Cairo calendar days (`AnalyticsPeriod`: today / 7d / 30d
+  ending today, or from/to, ≤ 366 days; boundaries via zone rules, never a fixed offset), counted by order `placed_at`.
+- **Sold line (`SalesAnalyticsService.soldLines`):** post-floor, not cancelled (`status` OR `raw->>'cancelled_at'` — 5
+  BROEK orders are cancelled in raw only), not `internal:exchange:%`, qty = `raw.current_quantity` else `quantity`, qty > 0.
+  Net unit price = `raw.price` − Σ `discount_allocations` / the ORIGINAL quantity (same as RefundSuggestionService); no
+  REST price → `variants.price`, counted in `approximateLines` (Jumi 39 / 242 post-floor lines, Snouts Jul–Sep).
+  `lastSoldAt` = all time post-floor. Wijha orders included.
+- **Analytics floor:** `stores.orders_ingest_from`, else `analytics.floor-overrides` (shop-domain=YYYY-MM-DD, 00:00 Cairo;
+  Jumi `mmi24e-fx.myshopify.com=2026-07-02`) — read ONLY by analytics. Jumi's column stays NULL: ingest
+  (`loadCutoff`) and the Bosta pre-connect filter / discovery read it.
+- **SQL:** one statement per endpoint, app_user + RLS + explicit tenant filters; `lines` CTE is MATERIALIZED (inlined, the
+  products sort carried line raw and spilled to disk). Prod timings swing with cache (`/variants` High line 54 ms warm,
+  1.6 s cold); `/variants` reads all post-floor lines for `lastSoldAt`, so it grows with history — an order_items
+  (tenant_id, variant_id) index or a non-raw cancelled flag is the later fix.
+- **Tests:** `AnalyticsSalesTest` (14, incl. DST day, app_user isolation, real `/auth/pin` station token), `RlsCoverageTest`
+  covers both. 12 revert checks, each red. Full suite at the baseline (known reds ShopifyMagicLinkTest, ExchangeBackfillTest).
+- **Next:** slice 2 (delivery outcomes + customer returns per variant and per city).
+
 **GDPR build A — /connect removed, redaction that sticks, real customers/data_request (2026-10-05, branch
 `feat/gdpr-build-a` off main b5b2157; not merged, not pushed, not deployed). Migration V143.** Context: trace-3 is
 approved on the App Store and protected customer data is approved for **Name, Phone, Address only — Email is NOT
