@@ -8,7 +8,7 @@ import {
   OrderDetail, TimelineItem, DerivedTone, OrderNote,
 } from '../api'
 import { ShipmentCard } from '../pages/OrderDetail'
-import { Badge, Button, EmptyState, Modal, OrderStatus, ProductThumb, Skeleton, cn } from './ui'
+import { Badge, Button, EmptyState, Modal, OrderStatus, ProductThumb, ShippingBadge, Skeleton, cn } from './ui'
 
 // ── Relative time — same pattern as Overview.tsx/StockTake.tsx/Transfers.tsx (each
 // page owns a small local formatter); reuses the existing generic overview.time.*
@@ -463,8 +463,11 @@ export default function OrderDrawer({
 
               {tab === 'shipment' && (
                 order.shipments.length === 0
-                  ? <EmptyState message={t('common.na')} />
+                  ? (order.shippingBadge && order.shippingBadge.state !== 'linked'
+                      ? <ShippingBadge badge={order.shippingBadge} />
+                      : <EmptyState message={t('common.na')} />)
                   : <div className="space-y-3">
+                      <ShippingBadge badge={order.shippingBadge} />
                       {order.shipments.map(s => <ShipmentCard key={s.id} shipment={s} />)}
                     </div>
               )}

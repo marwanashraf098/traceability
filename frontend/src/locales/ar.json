@@ -70,7 +70,8 @@
       "picking": "انتقاء",
       "packed": "معبأ",
       "courier": "مندوب الشحن",
-      "empty": "لا طلبات بعد"
+      "empty": "لا طلبات بعد",
+      "shippedElsewhere": "شُحن مع شركة أخرى"
     },
     "severity": {
       "title": "الاستثناءات حسب الخطورة",
@@ -484,6 +485,14 @@
         "cancelled": "ملغي",
         "lost": "مفقود"
       }
+    },
+    "shippingBadge": {
+      "shipped_elsewhere": "شُحن مع {{carrier}}",
+      "shipped_elsewhere_unnamed": "شُحن مع شركة شحن أخرى",
+      "awaiting_booking": "في انتظار الحجز في بوسطة",
+      "not_booked_overdue": "لم يُحجز في بوسطة منذ {{days}} أيام",
+      "bosta_tracking_not_linked": "رقم تتبع بوسطة غير مرتبط",
+      "cancelled": "ملغى"
     }
   },
   "catalog": {

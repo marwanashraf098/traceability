@@ -28,7 +28,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
- * Q1 — V139 schema and the revised hatch #15 (resolve_scan_pairing): a pairing is anchored to a
+ * Q1 — V140 schema and the revised hatch #15 (resolve_scan_pairing): a pairing is anchored to a
  * tablet and a worker, not a pack session; the hatch resolves only a live, matching, unexpired
  * pairing whose worker is active, and returns nothing but (tenant_id, pairing_id); one live
  * pairing per tablet and per worker; app_user still can never read a credential hash.
@@ -257,7 +257,7 @@ class StationPhoneSchemaTest {
     }
 
     @Test
-    void aLivePairingNeedsATablet_andTheTabletIdHasV139sShape() {
+    void aLivePairingNeedsATablet_andTheTabletIdHasV140sShape() {
         Station s = station("Anchor");
         assertThatThrownBy(() -> pairing(new Station(s.tenant, s.user, null), h("a")))
             .isInstanceOf(DataIntegrityViolationException.class).hasMessageContaining("scan_pairings_anchor");

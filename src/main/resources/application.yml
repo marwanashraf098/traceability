@@ -145,6 +145,14 @@ shopify:
     reprocess:
       on-startup: ""
       apply: false
+orders:
+  # Order shipping badge (OrderShippingBadge, V139): a Bosta-eligible order with no shipment reads
+  # "Not booked in Bosta for {n} days" from overdue-days on; a Bosta tracking number on a Shopify
+  # fulfillment still unlinked after link-grace-minutes reads "Bosta tracking not linked".
+  shipping-badge:
+    overdue-days: 3
+    link-grace-minutes: 60
+
 bosta:
   # One request budget per Bosta API key, shared by every caller (BostaRateLimiter). A 429's
   # retry-after blocks the key; user-facing calls (print, booking, pickup) go before polling.

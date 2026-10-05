@@ -58,6 +58,8 @@ public class FulfillmentTrackingCapture {
         UUID orderId = orderId(tenantId, storeId, orderExternalId);
         if (orderId == null) return 0;
         int rows = upsert(tenantId, orderId, payload);
+        // V139: the order's carrier, from these fulfillments (also a cancelled one flipping it back).
+        com.traceability.fulfillment.OrderCarrier.recompute(jdbc, tenantId, orderId);
         if (rows == 0) return 0;
         List<String> toLink = jdbc.queryForList(
             "SELECT t.tracking_number FROM order_fulfillment_tracking t " +
@@ -79,7 +81,10 @@ public class FulfillmentTrackingCapture {
     public UUID upsertOnly(UUID storeId, String orderExternalId, JsonNode payload) {
         UUID tenantId = TenantContext.require();
         UUID orderId = orderId(tenantId, storeId, orderExternalId);
-        if (orderId != null) upsert(tenantId, orderId, payload);
+        if (orderId != null) {
+            upsert(tenantId, orderId, payload);
+            com.traceability.fulfillment.OrderCarrier.recompute(jdbc, tenantId, orderId);
+        }
         return orderId;
     }
 

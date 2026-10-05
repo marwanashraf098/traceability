@@ -1488,3 +1488,34 @@ export function DataTable<T extends { id: string }>({
     </div>
   )
 }
+
+// ── Order shipping badge (V139) ─────────────────────────────────────────────
+// Server-derived (OrderShippingBadge) — never re-derived here. 'linked' renders nothing:
+// the existing delivery badge / shipment card already says it.
+const SHIPPING_BADGE_TONE: Record<import('../api').ShippingBadgeState, BadgeTone> = {
+  linked:                    'neutral',
+  shipped_elsewhere:         'neutral',
+  awaiting_booking:          'neutral',
+  not_booked_overdue:        'warning',
+  bosta_tracking_not_linked: 'critical',
+  cancelled:                 'neutral',
+}
+
+export function shippingBadgeLabel(badge: import('../api').OrderShippingBadge, t: (k: string, o?: Record<string, unknown>) => string): string {
+  if (badge.state === 'shipped_elsewhere' && !badge.carrier) return t('delivery.shippingBadge.shipped_elsewhere_unnamed')
+  return t(`delivery.shippingBadge.${badge.state}`, { carrier: badge.carrier ?? '', days: badge.days ?? 0 })
+}
+
+export function ShippingBadge({ badge, className }: { badge: import('../api').OrderShippingBadge | null | undefined; className?: string }) {
+  const { t } = useTranslation()
+  if (!badge || badge.state === 'linked') return null
+  return (
+    <span
+      data-testid="shipping-badge"
+      data-state={badge.state}
+      className={cn('badge border', TONE_STYLE[SHIPPING_BADGE_TONE[badge.state]], className)}
+    >
+      {shippingBadgeLabel(badge, t)}
+    </span>
+  )
+}

@@ -20,7 +20,7 @@ import java.util.*;
 import java.util.regex.Pattern;
 
 /**
- * Phone as scanner, per station (Q1, V139; S6 tied a pairing to one pack session). A worker pairs
+ * Phone as scanner, per station (Q1, V140; S6 tied a pairing to one pack session). A worker pairs
  * a phone with the TABLET they're working at by scanning a QR on it; the phone reads barcodes and
  * relays them; the tablet hands each one to whichever scanning screen is open (or answers "no
  * scanning screen open") and reports the outcome back. A pairing belongs to the tablet
@@ -56,7 +56,7 @@ public class ScanPairingService {
     static final int MAX_CODE_LENGTH = 200;
     static final int MAX_MESSAGE_LENGTH = 200;
     static final int MAX_TARGET_LENGTH = 80;
-    /** V139's CHECK on station_device_id. */
+    /** V140's CHECK on station_device_id. */
     static final Pattern DEVICE_ID = Pattern.compile("^[A-Za-z0-9_-]{16,64}$");
     /** Reasons a caller may give for revoking their own pairings (DELETE /pack-sessions/pairings/mine). */
     public static final Set<String> SELF_REVOKE_REASONS = Set.of("worker_switched", "station_locked");
@@ -100,7 +100,7 @@ public class ScanPairingService {
 
     /**
      * New pairing for this tablet and the caller. Any live pairing on the same tablet or held by
-     * the same worker is revoked ('replaced') first — one per tablet, one per worker (V139).
+     * the same worker is revoked ('replaced') first — one per tablet, one per worker (V140).
      */
     public PairingCreated create(String deviceId, UUID userId) {
         requireDeviceId(deviceId);

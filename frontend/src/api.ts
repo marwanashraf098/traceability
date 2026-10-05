@@ -154,6 +154,19 @@ export interface OrderSummary {
   notTracedAt: string | null
   isExchange: boolean
   derivedStatus: DerivedOrderStatus
+  shippingBadge: OrderShippingBadge | null
+}
+
+// The order's shipping badge (V139, OrderShippingBadge) — derived server-side when the order is
+// read; null = no badge. 'linked' keeps the existing delivery badge.
+export type ShippingBadgeState =
+  | 'linked' | 'shipped_elsewhere' | 'awaiting_booking' | 'not_booked_overdue'
+  | 'bosta_tracking_not_linked' | 'cancelled'
+
+export interface OrderShippingBadge {
+  state: ShippingBadgeState
+  carrier: string | null
+  days: number | null
 }
 
 export interface OrderPage {
@@ -247,6 +260,7 @@ export interface OrderDetail {
   // — server still enforces this with a 409 on Hold/Cancel; this field only lets the
   // drawer disable those actions proactively. Read as-is, never re-derived client-side.
   physicallyWithCourier: boolean
+  shippingBadge: OrderShippingBadge | null
 }
 
 export interface OrderListParams {
@@ -983,6 +997,8 @@ export interface FunnelCounts {
   packed: number
   courier: number
   delivered: number
+  // Shipped with another carrier and still pre-pack in Traced (V139) — not counted in newCount.
+  shippedElsewhere: number
 }
 
 export function getOrdersFunnel() {

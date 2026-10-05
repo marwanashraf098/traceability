@@ -26,7 +26,8 @@ import static org.assertj.core.api.Assertions.assertThat;
  *
  * Matrix:
  *   r1 — no unlinked match → attempt counter incremented, last_check set
- *   r2 — attempts reach max-attempts → bosta_link_status = 'not_created'
+ *   r2 — attempts reach max-attempts → NOT flagged (V139, 2026-10-05: the job no longer sets
+ *        'not_created'), and the order is no longer a candidate
  *   r3 — unlinked match found → order linked via manualLink, shipment created, row resolved
  *   r4 — 'not_created' flag clears when delivery is linked via createOrFindShipment
  *   r5 — order with active shipment → skipped by NOT EXISTS filter
@@ -116,10 +117,10 @@ class BostaOrderReconcileTest {
         assertThat(status).as("below max — not yet flagged").isNull();
     }
 
-    // ── r2: attempts reach max → not_created ─────────────────────────────────
+    // ── r2: attempts reach max → no flag, no further attempts (V139) ─────────
 
     @Test
-    void r2_attemptsReachMax_flaggedAsNotCreated() {
+    void r2_attemptsReachMax_notFlagged_noLongerCandidate() {
         setupCourierAccount();
         UUID orderId = insertOrder("#R-002");
         // Pre-seed to max-1 (max is 3)
@@ -132,8 +133,16 @@ class BostaOrderReconcileTest {
         Integer attempts = jdbc.queryForObject(
             "SELECT bosta_link_attempts FROM orders WHERE id = ?", Integer.class, orderId);
 
-        assertThat(status).as("order flagged as not_created at max attempts").isEqualTo("not_created");
+        assertThat(status).as("V139: never flagged 'not_created' any more").isNull();
         assertThat(attempts).as("counter at max (3)").isEqualTo(3);
+
+        // At max-attempts the order leaves the candidate set: another run (cooldown cleared) doesn't touch it.
+        jdbc.update("UPDATE orders SET bosta_link_last_check = NULL WHERE id = ?", orderId);
+        reconcileJob.reconcileAll();
+        assertThat(jdbc.queryForObject("SELECT bosta_link_attempts FROM orders WHERE id = ?", Integer.class, orderId))
+            .as("no attempt past max").isEqualTo(3);
+        assertThat(jdbc.queryForObject("SELECT bosta_link_last_check FROM orders WHERE id = ?", Object.class, orderId))
+            .as("not re-checked").isNull();
     }
 
     // ── r3: unlinked match found → order linked ───────────────────────────────
