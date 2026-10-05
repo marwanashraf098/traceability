@@ -4,9 +4,10 @@
 
 ## Current state
 
-**Station mode survives logins/logouts elsewhere — Build A (2026-10-05, branch `fix/session-device-logout` off main
-acae114; not merged, not pushed, not deployed). Migration V142 (V141 is claimed by unmerged
-`feat/phone-stocktake-transfers`). Build B (device-bound station credential) planned, not built.**
+**Station mode survives logins/logouts elsewhere — Build A (2026-10-05, branch `fix/session-device-logout`, rebased
+on main f7604e2; approved, not merged, not pushed, not deployed). Migration V142 (V141 = Q1b on main). Orphan cleanup
+approved — Marawan runs it after V142 deploys (dry run first). Build B approved in principle; starts only after Build A
+has run cleanly in prod for a day or two.**
 - **Step 0 diagnosis (read-only, prod + code):** station mode was only `localStorage.stationMode` — no server identity;
   the tablet ran on the owner's own refresh cookie (until a worker PINned in). `POST /auth/logout` revoked EVERY refresh
   token of the user (`AuthRepository.revokeAllRefreshTokens`), so an owner logging out at home killed an owner-held
@@ -38,8 +39,11 @@ acae114; not merged, not pushed, not deployed). Migration V142 (V141 is claimed 
     only superseded WORKER tokens (dry-run count 6); owner orphans are indistinguishable from real sessions and expire
     in ≤ 30 days.
 - **Tests:** `DeviceSessionTest` d1–d10 (backend) + `deviceSession.test.tsx` (7, frontend), each revert-checked (10
-  backend + 5 frontend mutations, each red on its own test). **Existing test now red, by design, NOT edited (needs
-  approval):** `workerExperienceFrontend.test.tsx (d)` asserts the old "login clears stationMode".
+  backend + 5 frontend mutations, each red on its own test). Existing tests updated (approved): `CookieAuthTest.ca5` and
+  `AuthIntegrationTest.refreshTokenRotates` (reuse within the grace → 200 + same token; after 31 s → 401),
+  `MigrationSmokeTest` / `NotTracedBackfillTest` counts for V142, `workerExperienceFrontend (d)` (a login keeps
+  station mode). Known reds already on main: `ShopifyMagicLinkTest.provisionWiring_path2NewInstall…`,
+  `ExchangeBackfillTest`.
 - **Build B (plan only):** see the Build A/B report 2026-10-05 — `station_devices` + `traced_station` cookie
   (`tenantId.stationId.secret`, verified by hash under RLS, no new hatch), /station/me|roster|pin|end, worker
   sessions tagged `station_device_id`, Active stations list with remote End, adopt existing tablets, audit
