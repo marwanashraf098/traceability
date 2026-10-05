@@ -60,7 +60,7 @@ Protected customer data: NAME, PHONE, ADDRESS approved — EMAIL NOT: no email c
   ("|null)';` (same for `shopify_webhook_events.payload_raw`), `SELECT count(*) FROM orders WHERE pii_source =
   'shopify';`. Committed batches stay. (2) Repair = remove the failed row (what `flyway repair` does):
   `DELETE FROM flyway_schema_history WHERE version = '145' AND success = false;` (psql as postgres on the session
-  pooler, port 5432) — or the CLI, from /opt/traced: `docker run --rm -v "$PWD/src/main/resources/db/migration:/flyway/sql"
+  pooler, port 5432) — or the CLI, from the server repo ~/traceability (/home/traced/traceability): `docker run --rm -v "$PWD/src/main/resources/db/migration:/flyway/sql"
   flyway/flyway:10.15.0 -url="$FLYWAY_DB_URL" -user="$FLYWAY_DB_USER" -password="$FLYWAY_DB_PASSWORD" -outOfOrder=true repair`.
   (3) Restart the app: V145 runs again and skips what's done (idempotent, verified). V144 is transactional — if it
   fails it rolls back completely and leaves no history row; just fix and restart.
