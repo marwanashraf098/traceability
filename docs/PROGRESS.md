@@ -37,6 +37,14 @@ the station GETs in RlsCoverageTest). useScanner unchanged; no marked block edit
   e3 one fixture/call each, phoneScanPage header assertion, scanHelperScreens merchant test waits on /me. Backend 2206
   (only the 2 known failures), vitest 677/677, tsc + build clean, test:browser 40/40 three runs.
 - **Gotcha:** `Button` (components/ui) doesn't forward extra props — a `data-testid` on it is silently dropped.
+- **Floating control placement (fix before merge):** it places itself clear of every visible actionable element (end
+  edge bottom-up, then start edge); collapses to a 40 px icon button when the chip fits nowhere
+  (`phoneControlPlacement.browser.test`: PickScreen / pack session / stock-take scan at 1280×800, 768×1024, 390×844).
+  It may sit over plain text (e.g. the pack session's "This session" list at 390 wide) — never over a control.
+- **Follow-ups:** (a) unmapped `/api` paths answer 500 — `ApiExceptionHandler`'s catch-all `Exception` handler swallows
+  Spring's `NoResourceFoundException`; should be 404 (e.g. S6's retired `/pack-sessions/{id}/pairings…`).
+  (b) `BostaPollJobTest.p6_pollAndDiscovery_alreadyLinkedDelivery_discoveryCheaplySkipsIt` is load-sensitive in the full
+  backend suite (from the Bosta status-poll work, not Q1) — passes when its class runs alone.
 - **Next:** Q1b (stock take / transfers with a "via phone" marker), Q2 returns wiring.
 
 **R1 — Scan returns + Pickups on useScanner (2026-10-04, branch `fix/returns-pickups-scanner` off main 9ffcdc2; pushed,
