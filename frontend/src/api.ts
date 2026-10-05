@@ -3096,3 +3096,46 @@ export function getPortalVariants(search: string, page = 0, size = 25) {
 export function setVariantNonReturnable(id: string, value: boolean) {
   return request<void>(`/variants/${id}/non-returnable`, { method: 'PUT', body: JSON.stringify({ value }) })
 }
+
+// ── Settings → Privacy: Shopify customer data requests (GDPR build A) ────────
+// Owner only (server @PreAuthorize). The list carries no customer data beyond Shopify's
+// customer id and the order count; the export is a JSON file built at download time.
+
+export interface CustomerDataRequest {
+  id: string
+  shopifyCustomerId: string | null
+  ordersRequested: number
+  status: 'ready' | 'downloaded'
+  createdAt: string
+  expiresAt: string
+  available: boolean
+  downloadedAt: string | null
+  notifiedAt: string | null
+  redacted: boolean
+}
+
+export function listCustomerDataRequests() {
+  return request<CustomerDataRequest[]>('/privacy/data-requests')
+}
+
+/** Downloads the export as a file. Throws Error('410') once the request has expired. */
+export async function downloadCustomerDataRequest(id: string): Promise<void> {
+  const path = `${BASE}/privacy/data-requests/${id}/export`
+  const go = (token: string | null) => fetch(path, {
+    credentials: 'include',
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  })
+  let res = await go(getAccessToken())
+  if (res.status === 401) res = await go(await refreshAccessToken())
+  if (!res.ok) throw new Error(String(res.status))
+  const disposition = res.headers.get('content-disposition') ?? ''
+  const name = /filename="?([^";]+)"?/.exec(disposition)?.[1] ?? `customer-data-request-${id}.json`
+  const url = URL.createObjectURL(await res.blob())
+  const a = document.createElement('a')
+  a.href = url
+  a.download = name
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  URL.revokeObjectURL(url)
+}

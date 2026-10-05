@@ -284,6 +284,7 @@ Built 2026-09-23 on branch `feature/returns-scan-as-truth`, not merged, not depl
 - [ ] OPS Bosta IP whitelisting ticket (static IP) · staging access (stg-app.bosta.co)
 - [x] N3a Proxy trust: nginx overwrites client identity headers on every app location, default servers drop unknown hosts (444 / TLS reject), Spring `forward-headers-strategy: native` with explicit internal proxies, Cloudflare real_ip removed
 - [x] N3b ShopifyEntryDiagFilter redacts id_token/hmac/session/code/state/signature and Authorization/Cookie (filter itself: remove after App Store approval)
+- [x] N3c GDPR build A (V143): admin-token paste connect removed · customers/redact + shop/redact clear every PII store (orders, return requests, shipments/exchanges/unlinked Bosta raw, stored Shopify webhooks, data requests; blocklist reason on customers/redact) and stay cleared (triggers + UPSERT_ORDER guard) · real customers/data_request (owner-only JSON export in Settings → Privacy for 30 days, owner email without customer data)
 
 ## Go-live acceptance (30 days, both pilots)
 - [ ] 100% new inventory labeled · ≥95% orders full scan path · every piece queryable end-to-end · all RTOs intaken + gaps caught · 300-piece count ≥99% match · zero isolation/custody incidents · ≥150 pieces/hr receiving, ≤4 min pick+pack · both pilots paying

@@ -4,6 +4,61 @@
 
 ## Current state
 
+**GDPR build A — /connect removed, redaction that sticks, real customers/data_request (2026-10-05, branch
+`feat/gdpr-build-a` off main b5b2157; not merged, not pushed, not deployed). Migration V143.** Context: trace-3 is
+approved on the App Store and protected customer data is approved for **Name, Phone, Address only — Email is NOT
+approved: never add an email column or read email into any column.** Builds B (customer name + PII precedence +
+backfill), C (OAuth go-live + pilot migration) and D (cold-install landing) are NOT started.
+- **Step 0 diagnosis (read-only, prod + code):** both ingest paths hardcode customer name/phone/address to null, but
+  the REST order webhooks already store full PII in `orders.raw` and `shopify_webhook_events.payload_raw` for every
+  custom_app_cc store; ~1,655 of the ~1,670 null-name orders are fillable from stored raw (B). Bosta-vs-Shopify name
+  differs 0 times in 761 overlapping orders. Jumi's 468 pre-connect nulls (May 4 – Jul 1) stay out of B's backfill
+  (floor 2026-07-02, approved). B decision: a separate `shopify_address` column; `orders.address` stays Bosta-owned.
+- **Removed:** `POST /api/v1/shopify/connect` (admin-token paste, no flag, 100-year expiry, left connection_type
+  untouched), `ShopifySyncService.connect()`, `UPSERT_STORE`, the dead `connectCustomApp()` / `UPSERT_STORE_CUSTOM_APP`.
+  `ShopifyGateway.validateShop` now has no production caller (still stubbed by other tests — left in place).
+- **V143:** `shopify_order_raw_redacted(jsonb)` / `bosta_raw_redacted(jsonb)` (INVOKER, IMMUTABLE — the ONE definition
+  of the PII part of a raw payload); `pii_redacted_at` on shipments / exchanges / unlinked_bosta_deliveries with
+  BEFORE INSERT/UPDATE triggers that re-strip raw on every later write (a new shipment on a redacted order is born
+  redacted); BEFORE INSERT trigger strips a stored `orders/*` webhook for a redacted order; partial index
+  `orders_redacted_by_external_id`; `customer_data_requests` (RLS + FORCE, NULLIF policy, app_user cannot DELETE,
+  UNIQUE webhook_event_id without FK so event pruning never blocks; expires_at = now() + 30 days — calendar days, so
+  across Egypt's DST change it's 30 days ± 1 h).
+- **UPSERT_ORDER:** on a row with `pii_redacted_at` set, customer_name / customer_phone / address keep their cleared
+  value and raw goes through `shopify_order_raw_redacted()` — so neither import nor orders/updated can restore PII.
+- **Redaction (`privacy/CustomerRedaction`, scope `privacy/CustomerSubject`):** customers/redact = orders_to_redact +
+  the internal replacement orders of their exchanges; clears orders, return requests (email, note, custom address —
+  the pickup AREA snapshot stays, per Marawan), shipments / exchanges raw (via the triggers), unlinked Bosta deliveries
+  matched by the orders' canonical phones, numbers or numeric Shopify ids, stored order webhooks, the customer's
+  email/phone inside `customers/*` payloads, and that customer's data requests' phone. shop/redact = all of it,
+  tenant-wide. Never touched: piece_events, return_request_events, Bosta `webhook_events` (status payloads only — no
+  PII, checked in prod).
+- **Blocklist on customers/redact (approved after review):** the customer's rows (phones from `CustomerSubject`) get
+  `reason = '[redacted]'` (the column is NOT NULL); phone_canonical, source, created_by, created_at and active stay, so
+  the block keeps holding orders (hold_reason reads `blocked_customer: [redacted]`). shop/redact leaves blocklist
+  reasons as they are (not in scope).
+- **data_request:** processor records one `customer_data_requests` row per event (customer id, phone as sent, orders
+  as GIDs — never the email), then emails the active owners "a customer data request is ready — Settings → Privacy"
+  with NO customer data (store domain, link, expiry date only; once, `notified_at`). Export (`GET
+  /api/v1/privacy/data-requests/{id}/export`, OWNER only, 404 other tenant, 410 expired) is built at download time:
+  orders (requested + phone-matched) with columns + the PII keys of raw, return requests, shipments / exchanges /
+  unlinked Bosta customer blocks, blocklist rows for the phones, stored Shopify payloads for those orders and this
+  customer. It includes whatever email Traced already holds (portal `customer_email`, raw payloads) because it
+  discloses what is stored — nothing new is written. Settings → Privacy tab (owner only): list + Download.
+- **Tests:** `GdprBuildATest` g1–g7 (g7 = blocklist reason cleared, block still holds — revert-checked) (app_user + RLS for every code path; g6 over HTTP for 403 / 404), revert-checked
+  (UPSERT guard removed → g1 red; shipments trigger no-op → g2 + g4 red; exchanges redact removed → g2 red; tenant
+  filter + RLS removed → g5 + g6 red). `privacyTab.test.tsx` (3). Existing tests changed (approved): `ShopifyImportTest`
+  seeds the store row directly; its "(c) encrypted token" and "(d) non-owner → 403" tested the removed endpoint and
+  are replaced by "admin-token connect removed → owner 404, no store row"; `MigrationSmokeTest` / `NotTracedBackfillTest`
+  counts for V143; `RlsCoverageTest` registers the two new GETs in COVERED with a seeded cross-tenant test (approved).
+  The removed-endpoint test asserts "refused, no store row" rather than 404: an unknown /api path answers **500**
+  today (ApiExceptionHandler's `Exception` catch-all takes Spring's NoResourceFoundException) — pre-existing, app-wide.
+- **Suite:** backend 2,260 run — reds = the two known on main (`ShopifyMagicLinkTest.provisionWiring_path2NewInstall…`,
+  `ExchangeBackfillTest`) + three fixed afterwards (RlsCoverageTest registry, ShopifyImportTest status, PickPackModeTest
+  container timeout — re-run green). Frontend 102 files / 727 tests green.
+- **Follow-ups:** unknown /api routes → 500 instead of 404 (map NoResourceFoundException → 404 above the catch-all); stored raw payloads still hold email for non-redacted orders (pre-existing,
+  verbatim storage — B/C to decide); `ShopifyGateway.validateShop` is dead in production.
+
 **Station mode survives logins/logouts elsewhere — Build A (2026-10-05, branch `fix/session-device-logout`, rebased
 on main f7604e2; approved, not merged, not pushed, not deployed). Migration V142 (V141 = Q1b on main). Orphan cleanup
 approved — Marawan runs it after V142 deploys (dry run first). Build B approved in principle; starts only after Build A

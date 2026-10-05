@@ -65,34 +65,16 @@ public class ShopifyController {
         this.disconnectService = disconnectService;
     }
 
-    public record ConnectRequest(String shopDomain, String adminToken) {}
+    // POST /connect (admin-token paste, 100-year expiry, no flag) was removed 2026-10-05 (GDPR
+    // build A): a store is connected only through OAuth or, while it's on, /custom-connect below.
     public record CustomConnectRequest(String shopDomain, String clientId, String clientSecret) {}
     public record ConnectResponse(String storeId, String importStatus) {}
     public record StoreStatusResponse(String storeId, String importStatus, Object importSummary) {}
-
-    /** Validates credentials + enqueues background import. Returns 202 immediately. */
-    @PostMapping("/connect")
-    @PreAuthorize("hasRole('OWNER')")
-    public ResponseEntity<ConnectResponse> connect(
-            @RequestBody ConnectRequest req,
-            @AuthenticationPrincipal CustomUserDetails principal) {
-
-        ShopifySyncService.ConnectResult result =
-            syncService.connect(principal.tenantId(), req.shopDomain(), req.adminToken());
-
-        UUID storeId  = result.storeId();
-        UUID tenantId = principal.tenantId();
-        jobScheduler.enqueue(() -> importJob.run(storeId, tenantId));
-
-        return ResponseEntity.accepted()
-            .body(new ConnectResponse(storeId.toString(), "pending"));
-    }
 
     /**
      * POST /api/v1/shopify/custom-connect — DEV/pilot custom-app CC connection path.
      *
      * Guarded by the app.custom-app-connect-enabled feature flag (default: false).
-     * The existing OAuth path (/connect) is NOT modified.
      *
      * Uses Shopify's client-credentials grant: POST /admin/oauth/access_token with
      * grant_type=client_credentials. Token lifetime ~24h; re-exchanged on expiry by

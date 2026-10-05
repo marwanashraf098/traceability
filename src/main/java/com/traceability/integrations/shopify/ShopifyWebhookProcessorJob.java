@@ -5,6 +5,9 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.traceability.inventory.FulfillService;
 import com.traceability.inventory.ShopifyCatalogActivationService;
+import com.traceability.privacy.CustomerDataRequestService;
+import com.traceability.privacy.CustomerRedaction;
+import com.traceability.privacy.CustomerSubject;
 import com.traceability.tenancy.TenantContext;
 import org.jobrunr.jobs.annotations.Job;
 import org.slf4j.Logger;
@@ -14,7 +17,6 @@ import org.springframework.stereotype.Component;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
-import java.sql.PreparedStatement;
 import java.util.*;
 import org.springframework.web.server.ResponseStatusException;
 
@@ -77,86 +79,8 @@ public class ShopifyWebhookProcessorJob {
     private static final String DISCONNECT_STORE =
         "UPDATE stores SET status = 'disconnected' WHERE shop_domain = ? AND tenant_id = ?";
 
-    // GDPR customers/redact: erase PII for specific orders listed in orders_to_redact.
-    // Scoped to tenant_id + external_id = ANY(array of GIDs) — never broader than what
-    // Shopify cleared. External IDs are stored as gid://shopify/Order/{id}.
-    // A2: client_details (browser IP/UA) and note_attributes (may carry name/phone)
-    // are added to the strip list. line_item properties are lower-priority (follow-up).
-    private static final String REDACT_CUSTOMER_ORDERS_BY_IDS = """
-            UPDATE orders
-            SET customer_name  = NULL,
-                customer_phone = NULL,
-                address        = NULL,
-                pii_source     = NULL,
-                pii_redacted_at = now(),
-                raw = raw
-                    - 'customer'
-                    - 'shipping_address'
-                    - 'billing_address'
-                    - 'email'
-                    - 'phone'
-                    - 'client_details'
-                    - 'note_attributes'
-            WHERE tenant_id   = ?
-              AND external_id = ANY(?)
-            """;
-
-    // GDPR shop/redact: erase ALL customer PII for this tenant (sent ~48h after uninstall).
-    // Intentionally tenant-wide — the shop is gone, all customer data must be cleared.
-    private static final String REDACT_ALL_CUSTOMERS_FOR_TENANT = """
-            UPDATE orders
-            SET customer_name  = NULL,
-                customer_phone = NULL,
-                address        = NULL,
-                pii_source     = NULL,
-                pii_redacted_at = now(),
-                raw = raw
-                    - 'customer'
-                    - 'shipping_address'
-                    - 'billing_address'
-                    - 'email'
-                    - 'phone'
-                    - 'client_details'
-                    - 'note_attributes'
-            WHERE tenant_id = ?
-            """;
-
-    // GDPR: a return request carries customer PII of its own — the email and note typed in the
-    // returns portal and (V117) a typed pickup address. Cleared on the redacted orders' requests,
-    // stamped pii_redacted_at so the drawer can say the details were removed. The area snapshot
-    // (city / district names), items and history stay. return_request_events and the exception
-    // detectors hold no copy of these fields (asserted in PortalCustomAddressTest), so nothing
-    // else needs clearing.
-    private static final String REDACT_RETURN_REQUESTS_BY_ORDER_IDS = """
-            UPDATE return_requests rr
-            SET customer_email = NULL,
-                customer_note = NULL,
-                custom_first_line = NULL,
-                custom_second_line = NULL,
-                custom_building_number = NULL,
-                custom_floor = NULL,
-                custom_apartment = NULL,
-                pii_redacted_at = now()
-            FROM orders o
-            WHERE o.id = rr.order_id AND o.tenant_id = rr.tenant_id
-              AND rr.tenant_id = ?
-              AND rr.pii_redacted_at IS NULL
-              AND o.external_id = ANY(?)
-            """;
-
-    private static final String REDACT_ALL_RETURN_REQUESTS_FOR_TENANT = """
-            UPDATE return_requests
-            SET customer_email = NULL,
-                customer_note = NULL,
-                custom_first_line = NULL,
-                custom_second_line = NULL,
-                custom_building_number = NULL,
-                custom_floor = NULL,
-                custom_apartment = NULL,
-                pii_redacted_at = now()
-            WHERE tenant_id = ?
-              AND pii_redacted_at IS NULL
-            """;
+    // GDPR (customers/redact, shop/redact, customers/data_request): the SQL lives in the privacy package —
+    // CustomerRedaction (every store of customer PII, V143) and CustomerDataRequestService.
 
     private final JdbcTemplate jdbc;
     private final ObjectMapper mapper;
@@ -165,6 +89,7 @@ public class ShopifyWebhookProcessorJob {
     private final ShopifyCatalogActivationService activationService;
     private final TransactionTemplate tx;
     private final FulfillmentTrackingCapture fulfillmentTracking;
+    private final CustomerDataRequestService dataRequests;
     private int maxAttempts = 5;
 
     @org.springframework.beans.factory.annotation.Autowired
@@ -178,7 +103,8 @@ public class ShopifyWebhookProcessorJob {
                                        FulfillService fulfillService,
                                        ShopifyCatalogActivationService activationService,
                                        PlatformTransactionManager txm,
-                                       FulfillmentTrackingCapture fulfillmentTracking) {
+                                       FulfillmentTrackingCapture fulfillmentTracking,
+                                       CustomerDataRequestService dataRequests) {
         this.jdbc           = jdbc;
         this.mapper         = mapper;
         this.syncService    = syncService;
@@ -186,6 +112,7 @@ public class ShopifyWebhookProcessorJob {
         this.activationService = activationService;
         this.tx             = new TransactionTemplate(txm);
         this.fulfillmentTracking = fulfillmentTracking;
+        this.dataRequests   = dataRequests;
     }
 
     @Job(name = "Shopify webhook processor — event %0", retries = 3)
@@ -227,7 +154,7 @@ public class ShopifyWebhookProcessorJob {
                     log.info("Webhook event {} ({} shop={}) superseded — not applied: {}", eventId, topic, shopDomain, superseded);
                     return;
                 }
-                dispatch(tenantId, topic, shopDomain, payload);
+                dispatch(tenantId, eventId, topic, shopDomain, payload);
                 tx.execute(s -> { jdbc.update(MARK_PROCESSED, eventId); return null; });
             } catch (Exception e) {
                 if (isTransientDbFailure(e)) {
@@ -299,14 +226,14 @@ public class ShopifyWebhookProcessorJob {
 
     // ---- dispatch -------------------------------------------------------
 
-    private void dispatch(UUID tenantId, String topic, String shopDomain, JsonNode payload) {
+    private void dispatch(UUID tenantId, UUID eventId, String topic, String shopDomain, JsonNode payload) {
         switch (topic) {
             case "orders/create"  -> handleOrderUpsert(tenantId, shopDomain, payload);
             case "orders/updated" -> handleOrderUpdated(tenantId, shopDomain, payload);
             case "orders/cancelled"                 -> handleOrderCancelled(tenantId, shopDomain, payload);
             case "products/create", "products/update" -> handleProductUpsert(tenantId, shopDomain, payload);
             case "app/uninstalled"                  -> handleAppUninstalled(tenantId, shopDomain);
-            case "customers/data_request"           -> handleDataRequest(tenantId, shopDomain, payload);
+            case "customers/data_request"           -> handleDataRequest(tenantId, eventId, shopDomain, payload);
             case "customers/redact"                 -> handleCustomersRedact(tenantId, shopDomain, payload);
             case "shop/redact"                      -> handleShopRedact(tenantId, shopDomain);
             default -> {
@@ -573,66 +500,41 @@ public class ShopifyWebhookProcessorJob {
         log.info("app/uninstalled: store disconnected shop={} tenant={}", shopDomain, tenantId);
     }
 
-    private void handleDataRequest(UUID tenantId, String shopDomain, JsonNode payload) {
-        // The event is already persisted in shopify_webhook_events — that IS the audit trail.
-        // Surface as a GDPR task for ops to respond to. Full automated data export is [S].
-        log.warn("GDPR data_request received: shop={} tenant={} customerId={}",
-            shopDomain, tenantId, payload.path("customer").path("id").asText("unknown"));
+    /**
+     * customers/data_request (GDPR build A): records the request (one per event — a re-process is a no-op),
+     * then emails the tenant's owners that it's ready to download in Settings → Privacy. The email holds
+     * no customer data; the export is built at download time.
+     */
+    private void handleDataRequest(UUID tenantId, UUID eventId, String shopDomain, JsonNode payload) {
+        CustomerDataRequestService.Recorded r = dataRequests.record(tenantId, eventId, shopDomain, payload);
+        log.info("GDPR data_request recorded: shop={} tenant={} request={} new={}", shopDomain, tenantId, r.id(), r.created());
+        dataRequests.notifyOwners(tenantId, r.id());
     }
 
     private void handleCustomersRedact(UUID tenantId, String shopDomain, JsonNode payload) {
-        // A1: Scope to orders_to_redact — Shopify deliberately excludes recent/in-flight
+        // A1: orders are scoped to orders_to_redact — Shopify deliberately excludes recent/in-flight
         // orders from this list. Broad customer-match would blank address on active orders.
         // piece_events is INSERT-only and holds NO customer PII — must not be touched.
-        JsonNode ordersNode = payload.path("orders_to_redact");
-        if (!ordersNode.isArray() || ordersNode.isEmpty()) {
-            log.info("customers/redact: orders_to_redact is empty — nothing to redact shop={} tenant={}",
+        List<String> gids = CustomerSubject.gidsOf(payload.path("orders_to_redact"));
+        if (gids.isEmpty()) {
+            log.info("customers/redact: orders_to_redact is empty — no orders to redact shop={} tenant={}",
                 shopDomain, tenantId);
-            return;
         }
-
-        List<String> externalIds = new ArrayList<>();
-        for (JsonNode order : ordersNode) {
-            long orderId = order.path("id").asLong(0);
-            if (orderId > 0) {
-                externalIds.add("gid://shopify/Order/" + orderId);
-            }
-        }
-        if (externalIds.isEmpty()) {
-            log.warn("customers/redact: no valid order IDs extracted shop={} tenant={}", shopDomain, tenantId);
-            return;
-        }
-
-        String[] idArray = externalIds.toArray(new String[0]);
-        int updated = tx.execute(s -> {
-            int orders = jdbc.update(con -> {
-                PreparedStatement ps = con.prepareStatement(REDACT_CUSTOMER_ORDERS_BY_IDS);
-                ps.setObject(1, tenantId);
-                ps.setArray(2, con.createArrayOf("text", idArray));
-                return ps;
-            });
-            // Same transaction — the return requests' own PII (email, note, typed pickup address).
-            jdbc.update(con -> {
-                PreparedStatement ps = con.prepareStatement(REDACT_RETURN_REQUESTS_BY_ORDER_IDS);
-                ps.setObject(1, tenantId);
-                ps.setArray(2, con.createArrayOf("text", idArray));
-                return ps;
-            });
-            return orders;
-        });
-        log.info("customers/redact: erased PII for {} GID(s) shop={} tenant={} — {} order(s) updated",
-            externalIds.size(), shopDomain, tenantId, updated);
+        String customerId = payload.path("customer").path("id").asText(null);
+        String phone = payload.path("customer").path("phone").asText(null);
+        CustomerRedaction.Result r = tx.execute(s ->
+            new CustomerRedaction(jdbc).redactCustomer(tenantId, gids, customerId, phone));
+        log.info("customers/redact: shop={} tenant={} gids={} — orders={} requests={} shipments={} exchanges={} " +
+                 "unlinked={} webhookEvents={} dataRequests={} blocklist={}", shopDomain, tenantId, gids.size(), r.orders(),
+            r.returnRequests(), r.shipments(), r.exchanges(), r.unlinked(), r.webhookEvents(), r.dataRequests(), r.blocklist());
     }
 
     private void handleShopRedact(UUID tenantId, String shopDomain) {
         // Sent ~48h after app/uninstalled: erase ALL customer PII for this tenant.
         // piece_events is INSERT-only and holds NO customer PII — must not be touched.
-        int updated = tx.execute(s -> {
-            int orders = jdbc.update(REDACT_ALL_CUSTOMERS_FOR_TENANT, tenantId);
-            jdbc.update(REDACT_ALL_RETURN_REQUESTS_FOR_TENANT, tenantId);
-            return orders;
-        });
-        log.info("shop/redact: erased all customer PII for tenant={} shop={} — {} order(s) updated",
-            tenantId, shopDomain, updated);
+        CustomerRedaction.Result r = tx.execute(s -> new CustomerRedaction(jdbc).redactShop(tenantId));
+        log.info("shop/redact: erased all customer PII for tenant={} shop={} — orders={} requests={} shipments={} " +
+                 "exchanges={} unlinked={} webhookEvents={} dataRequests={}", tenantId, shopDomain, r.orders(),
+            r.returnRequests(), r.shipments(), r.exchanges(), r.unlinked(), r.webhookEvents(), r.dataRequests());
     }
 }

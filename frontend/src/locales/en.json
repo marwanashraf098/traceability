@@ -1963,7 +1963,8 @@
       "usersSubtitle": "Team",
       "locationsSubtitle": "Warehouses & locations",
       "pickpack": "Pick & Pack",
-      "portal": "Returns portal"
+      "portal": "Returns portal",
+      "privacy": "Privacy"
     },
     "sections": {
       "businessDetails": "Business details",
@@ -2132,7 +2133,24 @@
       "sessionsNote": "Pack sessions already open finish in their current mode. The change applies to the next session.",
       "error": "Couldn't save the packing mode. Try again."
     },
-    "awbFormatSimulated": "Waybills are simulated in review mode."
+    "awbFormatSimulated": "Waybills are simulated in review mode.",
+    "privacy": {
+      "title": "Customer data requests",
+      "subtitle": "When a customer asks your store for a copy of their data, Shopify sends the request here. Download the file and send it to the customer yourself — Traced never contacts your customers. Each file is available for 30 days.",
+      "empty": "No customer data requests yet.",
+      "loadError": "Couldn't load data requests. Try again in a moment.",
+      "received": "Request received {{date}}",
+      "customer": "Shopify customer {{id}}",
+      "orders_one": "{{count}} order",
+      "orders_other": "{{count}} orders",
+      "availableUntil": "available until {{date}}",
+      "expiredOn": "expired {{date}}",
+      "expired": "Expired",
+      "downloaded": "Downloaded",
+      "download": "Download",
+      "downloadError": "Couldn't download the file. Try again.",
+      "expiredError": "This request expired after 30 days and can't be downloaded."
+    }
   },
   "users": {
     "title": "Team",

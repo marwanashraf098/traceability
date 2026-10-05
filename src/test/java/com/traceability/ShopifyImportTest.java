@@ -74,6 +74,7 @@ class ShopifyImportTest {
     @Autowired JwtService jwtService;
     @Autowired PasswordEncoder passwordEncoder;
     @Autowired ShopifyImportJob importJob;
+    @Autowired com.traceability.security.EncryptionService encryptionService;
     @MockBean  ShopifyGateway shopifyGateway;
     @MockBean  JobScheduler   jobScheduler;   // prevents real job scheduling
     @MockBean  ShopifyLocationGateway shopifyLocations;
@@ -264,53 +265,26 @@ class ShopifyImportTest {
     }
 
     // -------------------------------------------------------------------------
-    // (c) Encrypted token: stored value is NOT the raw token
+    // (d) The admin-token paste path is gone (GDPR build A, 2026-10-05): POST /shopify/connect
+    //     no longer exists — even an OWNER is refused (no 2xx) and no store row is written. (An unknown
+    //     /api path answers 500 today — ApiExceptionHandler's catch-all takes NoResourceFoundException;
+    //     pre-existing, app-wide, reported separately — so this asserts "refused", not a specific code.)
+    //     (Replaces "(c) encrypted token" and "(d) non-owner → 403", which tested that endpoint.)
     // -------------------------------------------------------------------------
     @Test
-    void encryptedToken_storedValueIsNotPlaintext() {
-        stubGateway("enc-shop.myshopify.com", PRODUCT_1, List.of());
-
-        connect("enc-shop.myshopify.com");
-
-        String stored = jdbc.queryForObject(
-                "SELECT access_token_encrypted FROM stores WHERE shop_domain = 'enc-shop.myshopify.com'",
-                String.class);
-        assertThat(stored).isNotNull().isNotEqualTo(RAW_TOKEN);
-        assertThat(stored.length()).isGreaterThan(RAW_TOKEN.length());
-    }
-
-    // -------------------------------------------------------------------------
-    // (d) Non-owner role → 403
-    // -------------------------------------------------------------------------
-    @Test
-    void nonOwnerRole_connectReturns403() {
-        UUID managerId    = UUID.randomUUID();
-        String managerEmail = "manager-" + managerId + "@test.com";
-        String hash = passwordEncoder.encode("managerpass");
-        jdbc.update(
-                "INSERT INTO users (id, tenant_id, name, email, password_hash, role, active) " +
-                "VALUES (?, ?, 'Mgr', ?, ?, 'manager', true)",
-                managerId, ownerTenantId, managerEmail, hash);
-
-        HttpHeaders loginHeaders = new HttpHeaders();
-        loginHeaders.setContentType(MediaType.APPLICATION_JSON);
-        ResponseEntity<TokenResponse> loginResp = rest.postForEntity(
-                base() + "/api/v1/auth/login",
-                new HttpEntity<>(Map.of("email", managerEmail, "password", "managerpass"), loginHeaders),
-                TokenResponse.class);
-        assertThat(loginResp.getStatusCode()).isEqualTo(HttpStatus.OK);
-        String managerToken = loginResp.getBody().accessToken();
-
+    void adminTokenConnect_removed_ownerRefused_noStoreWritten() {
         HttpHeaders headers = new HttpHeaders();
-        headers.setBearerAuth(managerToken);
+        headers.setBearerAuth(ownerToken);
         headers.setContentType(MediaType.APPLICATION_JSON);
         ResponseEntity<String> resp = rest.exchange(
                 base() + "/api/v1/shopify/connect",
                 HttpMethod.POST,
-                new HttpEntity<>(Map.of("shopDomain", "any.myshopify.com", "adminToken", RAW_TOKEN), headers),
+                new HttpEntity<>(Map.of("shopDomain", "gone.myshopify.com", "adminToken", RAW_TOKEN), headers),
                 String.class);
 
-        assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
+        assertThat(resp.getStatusCode().is2xxSuccessful()).as("status %s", resp.getStatusCode()).isFalse();
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM stores WHERE shop_domain = 'gone.myshopify.com'",
+                Integer.class)).isZero();
     }
 
     // -------------------------------------------------------------------------
@@ -318,8 +292,6 @@ class ShopifyImportTest {
     // -------------------------------------------------------------------------
     @Test
     void jobFailure_setsImportStatusFailed() {
-        when(shopifyGateway.validateShop(eq("fail-shop.myshopify.com"), eq(RAW_TOKEN)))
-            .thenReturn("Fail Shop");
         when(shopifyGateway.fetchProductsPage(eq("fail-shop.myshopify.com"), eq(RAW_TOKEN), isNull()))
             .thenThrow(new com.traceability.integrations.shopify.ShopifyException("API down"));
 
@@ -368,21 +340,18 @@ class ShopifyImportTest {
 
     private String base() { return "http://localhost:" + port; }
 
-    @SuppressWarnings("unchecked")
+    /**
+     * Seeds a connected store row directly — the shape the removed POST /shopify/connect used to write
+     * (encrypted token, far-future expiry so ShopifyTokenProvider treats it as fresh, import pending,
+     * FR-18 cutoff = now()). The import job under test is unchanged.
+     */
     private UUID connect(String shopDomain) {
-        HttpHeaders headers = new HttpHeaders();
-        headers.setBearerAuth(ownerToken);
-        headers.setContentType(MediaType.APPLICATION_JSON);
-        Map<String, String> body = Map.of("shopDomain", shopDomain, "adminToken", RAW_TOKEN);
-        ResponseEntity<Map> resp = rest.exchange(
-                base() + "/api/v1/shopify/connect",
-                HttpMethod.POST,
-                new HttpEntity<>(body, headers),
-                Map.class);
-        assertThat(resp.getStatusCode())
-                .as("connect should return 202 (status=%s body=%s)", resp.getStatusCode(), resp.getBody())
-                .isEqualTo(HttpStatus.ACCEPTED);
-        return UUID.fromString((String) resp.getBody().get("storeId"));
+        return jdbc.queryForObject(
+                "INSERT INTO stores (tenant_id, shop_domain, platform, access_token_encrypted, " +
+                "    access_token_expires_at, status, import_status, orders_ingest_from) " +
+                "VALUES (?, ?, 'shopify', ?, now() + interval '876000 hours', 'connected', 'pending', now()) " +
+                "RETURNING id",
+                UUID.class, ownerTenantId, shopDomain, encryptionService.encrypt(RAW_TOKEN));
     }
 
     private int countInTenant(String table) {
@@ -392,7 +361,6 @@ class ShopifyImportTest {
 
     private void stubGateway(String shopDomain, ShopifyGateway.Product product,
                               List<ShopifyGateway.Order> orders) {
-        when(shopifyGateway.validateShop(eq(shopDomain), eq(RAW_TOKEN))).thenReturn("Test Shop");
         when(shopifyGateway.fetchProductsPage(eq(shopDomain), eq(RAW_TOKEN), isNull()))
                 .thenReturn(new ShopifyGateway.ProductPage(List.of(product), false, null));
         when(shopifyGateway.fetchOrdersPage(eq(shopDomain), eq(RAW_TOKEN), isNull(), anyString()))

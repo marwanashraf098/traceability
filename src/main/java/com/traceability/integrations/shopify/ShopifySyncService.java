@@ -45,41 +45,6 @@ public class ShopifySyncService {
 
     // ---- SQL ------------------------------------------------------------
 
-    // DEV-ONLY connect path: sets access_token_expires_at far in the future so ShopifyTokenProvider
-    // treats the admin token as fresh. In production all stores are installed via OAuth which sets
-    // a real 1-hour expiry + rotating refresh token.
-    private static final String UPSERT_STORE = """
-            INSERT INTO stores (tenant_id, shop_domain, platform, access_token_encrypted,
-                                access_token_expires_at, status, import_status, orders_ingest_from)
-            VALUES (?, ?, 'shopify', ?, now() + interval '876000 hours', 'connected', 'pending', now())
-            ON CONFLICT (shop_domain) DO UPDATE SET
-                access_token_encrypted  = EXCLUDED.access_token_encrypted,
-                access_token_expires_at = EXCLUDED.access_token_expires_at,
-                status                  = 'connected',
-                import_status           = 'pending'
-            WHERE stores.tenant_id = EXCLUDED.tenant_id
-            RETURNING id
-            """;
-
-    // Custom-app connect path: stores connection_type='custom_app' and encrypts the per-store API secret.
-    // Uses the same 100-year expiry trick as UPSERT_STORE so ShopifyTokenProvider.isFresh()=true.
-    private static final String UPSERT_STORE_CUSTOM_APP = """
-            INSERT INTO stores (tenant_id, shop_domain, platform, access_token_encrypted,
-                                access_token_expires_at, status, import_status,
-                                connection_type, api_secret_encrypted, orders_ingest_from)
-            VALUES (?, ?, 'shopify', ?, now() + interval '876000 hours', 'connected', 'pending',
-                    'custom_app', ?, now())
-            ON CONFLICT (shop_domain) DO UPDATE SET
-                access_token_encrypted  = EXCLUDED.access_token_encrypted,
-                access_token_expires_at = EXCLUDED.access_token_expires_at,
-                api_secret_encrypted    = EXCLUDED.api_secret_encrypted,
-                status                  = 'connected',
-                import_status           = 'pending',
-                connection_type         = 'custom_app'
-            WHERE stores.tenant_id = EXCLUDED.tenant_id
-            RETURNING id
-            """;
-
     // CC connect path: stores connection_type='custom_app_cc', encrypts clientId (for re-exchange)
     // and clientSecret (also used as webhook signing key = api_secret_encrypted).
     // access_token_expires_at is set to now() + expiresInSeconds (not the 100-year trick)
@@ -150,13 +115,23 @@ public class ShopifySyncService {
                 -- would overwrite a Bosta-sourced value back to NULL ("flicker" bug).
                 -- COALESCE keeps any non-null value already present (from Shopify if PCD approved,
                 -- from Bosta receiver if populated by populateConsigneePii).
-                customer_name  = COALESCE(EXCLUDED.customer_name,  orders.customer_name),
-                customer_phone = COALESCE(EXCLUDED.customer_phone, orders.customer_phone),
-                address        = COALESCE(EXCLUDED.address,        orders.address),
+                -- GDPR (V143): a redacted order (pii_redacted_at set) never gets customer PII back —
+                -- the three columns keep their cleared value and the incoming raw is stripped by the
+                -- same shopify_order_raw_redacted() the redact handlers use.
+                customer_name  = CASE WHEN orders.pii_redacted_at IS NULL
+                                      THEN COALESCE(EXCLUDED.customer_name,  orders.customer_name)
+                                      ELSE orders.customer_name END,
+                customer_phone = CASE WHEN orders.pii_redacted_at IS NULL
+                                      THEN COALESCE(EXCLUDED.customer_phone, orders.customer_phone)
+                                      ELSE orders.customer_phone END,
+                address        = CASE WHEN orders.pii_redacted_at IS NULL
+                                      THEN COALESCE(EXCLUDED.address,        orders.address)
+                                      ELSE orders.address END,
                 payment_method = EXCLUDED.payment_method,
                 cod_amount     = EXCLUDED.cod_amount,
                 placed_at      = EXCLUDED.placed_at,
-                raw            = EXCLUDED.raw
+                raw            = CASE WHEN orders.pii_redacted_at IS NULL THEN EXCLUDED.raw
+                                      ELSE shopify_order_raw_redacted(EXCLUDED.raw) END
             RETURNING id
             """;
 
@@ -226,64 +201,6 @@ public class ShopifySyncService {
 
     public record ImportResult(int products, int variants, int orders, int flaggedOrders) {}
     public record ConnectResult(UUID storeId, String shopName) {}
-
-    /**
-     * Validates credentials, stores the encrypted token, sets import_status='pending'.
-     * Returns immediately — the actual import runs as a background JobRunr job.
-     */
-    public ConnectResult connect(UUID tenantId, String shopDomain, String rawToken) {
-        sameShopGuard.assertBoundShop(tenantId, shopDomain);
-        String shopName = shopifyGateway.validateShop(shopDomain, rawToken);
-        String encrypted = encryptionService.encrypt(rawToken);
-
-        UUID storeId = tx.execute(status -> {
-            UUID id = jdbc.query(UPSERT_STORE, rs -> rs.next() ? rs.getObject("id", UUID.class) : null,
-                    tenantId, shopDomain, encrypted);
-            if (id == null) {
-                throw new ResponseStatusException(HttpStatus.CONFLICT,
-                        "Shop domain is already connected to a different account");
-            }
-            return id;
-        });
-
-        return new ConnectResult(storeId, shopName);
-    }
-
-    /**
-     * Validates credentials, stores encrypted tokens for a custom-app (DEV/pilot) connection.
-     * Sets connection_type='custom_app' and stores the per-store API secret for webhook HMAC.
-     *
-     * Rotating-token guard: permanent custom-app admin tokens start with "shpat_".
-     * Tokens from the token-exchange flow (expiring) have a different prefix.
-     * Returns 400 if the token does not look like a permanent admin token.
-     */
-    public ConnectResult connectCustomApp(UUID tenantId, String shopDomain, String rawToken, String rawApiSecret) {
-        sameShopGuard.assertBoundShop(tenantId, shopDomain);
-        String shopName = shopifyGateway.validateShop(shopDomain, rawToken);
-        // Rotating/expiring token guard: permanent custom-app admin tokens start with "shpat_".
-        // Expiring tokens from the token-exchange flow have a different prefix.
-        if (!rawToken.startsWith("shpat_")) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
-                "This appears to be a rotating/expiring token (expected a permanent admin token " +
-                "starting with 'shpat_'). Please create a non-rotating custom app in Partner " +
-                "Dashboard and use its Admin API access token.");
-        }
-        String encryptedToken  = encryptionService.encrypt(rawToken);
-        String encryptedSecret = encryptionService.encrypt(rawApiSecret);
-
-        UUID storeId = tx.execute(status -> {
-            UUID id = jdbc.query(UPSERT_STORE_CUSTOM_APP,
-                rs -> rs.next() ? rs.getObject("id", UUID.class) : null,
-                tenantId, shopDomain, encryptedToken, encryptedSecret);
-            if (id == null) {
-                throw new ResponseStatusException(HttpStatus.CONFLICT,
-                    "Shop domain is already connected to a different account");
-            }
-            return id;
-        });
-
-        return new ConnectResult(storeId, shopName);
-    }
 
     /**
      * Stores a client-credentials custom-app connection (connection_type='custom_app_cc').

@@ -127,6 +127,8 @@ class RlsCoverageTest {
             "/api/v1/return-requests/{id}",
             "/api/v1/return-requests/{id}/pickup-areas",
             "/api/v1/return-requests/{id}/refund-suggestion",
+            "/api/v1/privacy/data-requests",
+            "/api/v1/privacy/data-requests/{id}/export",
             "/api/v1/tenant/portal-settings",
             "/api/v1/tenant/bosta/return-locations",
             "/api/v1/variants",
@@ -592,6 +594,30 @@ class RlsCoverageTest {
             jdbc.update("DELETE FROM return_requests WHERE tenant_id IN (?, ?)", tenantId, otherTenant);
             jdbc.update("DELETE FROM orders WHERE tenant_id = ?", otherTenant);
             jdbc.update("DELETE FROM stores WHERE tenant_id = ?", otherTenant);
+            jdbc.update("DELETE FROM tenants WHERE id = ?", otherTenant);
+        }
+    }
+
+    @Test
+    void privacyDataRequests_crossTenantIsolated_withSameTenantPositiveControl() {
+        UUID otherTenant = UUID.randomUUID();
+        jdbc.update("INSERT INTO tenants (id, name) VALUES (?, 'Cov Privacy Other')", otherTenant);
+        UUID mine = jdbc.queryForObject(
+            "INSERT INTO customer_data_requests (tenant_id, webhook_event_id, shop_domain, shopify_customer_id) " +
+            "VALUES (?, ?, 'cov-mine.myshopify.com', '111') RETURNING id", UUID.class, tenantId, UUID.randomUUID());
+        UUID theirs = jdbc.queryForObject(
+            "INSERT INTO customer_data_requests (tenant_id, webhook_event_id, shop_domain, shopify_customer_id) " +
+            "VALUES (?, ?, 'cov-other.myshopify.com', '222') RETURNING id", UUID.class, otherTenant, UUID.randomUUID());
+        try {
+            ResponseEntity<String> list = get("/api/v1/privacy/data-requests", String.class);
+            assertThat(list.getStatusCode()).as("same-tenant positive control").isEqualTo(HttpStatus.OK);
+            assertThat(list.getBody()).contains(mine.toString()).doesNotContain(theirs.toString());
+            assertThat(get("/api/v1/privacy/data-requests/" + mine + "/export", String.class).getStatusCode())
+                .as("same-tenant positive control").isEqualTo(HttpStatus.OK);
+            assertThat(get("/api/v1/privacy/data-requests/" + theirs + "/export", String.class).getStatusCode())
+                .isEqualTo(HttpStatus.NOT_FOUND);
+        } finally {
+            jdbc.update("DELETE FROM customer_data_requests WHERE tenant_id IN (?, ?)", tenantId, otherTenant);
             jdbc.update("DELETE FROM tenants WHERE id = ?", otherTenant);
         }
     }

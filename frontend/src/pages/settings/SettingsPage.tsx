@@ -8,8 +8,9 @@ import UsersTab from './UsersTab'
 import LocationsTab from './LocationsTab'
 import ReturnsPortalTab from './ReturnsPortalTab'
 import PickPackTab from './PickPackTab'
+import PrivacyTab from './PrivacyTab'
 
-type TabKey = 'business' | 'connections' | 'users' | 'locations' | 'pickpack' | 'portal'
+type TabKey = 'business' | 'connections' | 'users' | 'locations' | 'pickpack' | 'portal' | 'privacy'
 const ALL_TABS: TabKey[] = ['business', 'connections', 'users', 'locations', 'pickpack', 'portal']
 
 /**
@@ -33,6 +34,9 @@ const ALL_TABS: TabKey[] = ['business', 'connections', 'users', 'locations', 'pi
  *
  * Pick & Pack S3 adds "Pick & Pack" (?tab=pickpack) — the packing mode. Owner edits; manager
  * read-only (PUT /tenant/settings is owner-only server-side); never a worker.
+ *
+ * GDPR build A adds "Privacy" (?tab=privacy) — Shopify customer data requests to download.
+ * Owner only (every /privacy endpoint is owner-only server-side); managers don't see the tab.
  */
 export default function SettingsPage() {
   const { t } = useTranslation()
@@ -40,7 +44,7 @@ export default function SettingsPage() {
   const isOwner = role === 'owner'
   const isWorker = role === 'worker'
 
-  const visibleTabs: TabKey[] = isWorker ? [] : ALL_TABS
+  const visibleTabs: TabKey[] = isWorker ? [] : isOwner ? [...ALL_TABS, 'privacy'] : ALL_TABS
 
   const [searchParams, setSearchParams] = useSearchParams()
 
@@ -72,6 +76,7 @@ export default function SettingsPage() {
         {activeTab === 'locations' && <LocationsTab />}
         {activeTab === 'pickpack' && <PickPackTab isOwner={isOwner} />}
         {activeTab === 'portal' && <ReturnsPortalTab />}
+        {activeTab === 'privacy' && <PrivacyTab />}
       </div>
     </div>
   )
