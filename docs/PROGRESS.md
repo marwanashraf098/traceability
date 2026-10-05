@@ -21,6 +21,7 @@
   `meta` is read, and the body adds `relayEventId` only for a phone scan — a keyboard scan's body is byte-identical
   (asserted). Flash trigger / overlay / input untouched.
 - **Tests:** ReturnPhoneScanTest (4), phoneReturns.test (8), returnsPhoneInterleave.browser (Chromium + WebKit).
+- **Follow-up:** In-shell app pages keep the desktop sidebar at phone width (~390 px) and squeeze the content — responsive layout follow-up.
 
 **Q1b — Phone scanner on stock take + transfers, with a "via phone" marker (2026-10-05, branch
 `feat/phone-stocktake-transfers` off main ce6f9d6; pushed, not merged, not deployed). V141.**
