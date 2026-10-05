@@ -24,7 +24,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * CA2  signup → same
  * CA3  refresh with valid cookie → new access token + rotated Set-Cookie
  * CA4  refresh with no cookie → 401
- * CA5  refresh with revoked cookie → 401
+ * CA5  refresh with a rotated cookie → same successor within the 30 s grace, 401 after it
  * CA6  logout → cookie expired (Max-Age=0) + subsequent refresh → 401
  * CA7  refreshToken NEVER in login response body
  * CA8  refreshToken NEVER in signup response body
@@ -57,6 +57,7 @@ class CookieAuthTest {
 
     @LocalServerPort int port;
     @Autowired TestRestTemplate rest;
+    @Autowired org.springframework.jdbc.core.JdbcTemplate jdbc;
 
     private String base() { return "http://localhost:" + port; }
 
@@ -137,7 +138,8 @@ class CookieAuthTest {
     }
 
     // -----------------------------------------------------------------------
-    // CA5: Refresh with the already-rotated-away (revoked) cookie → 401
+    // CA5: Refresh with the already-rotated-away cookie: within the 30 s rotation grace (V142) →
+    //      200 with the SAME new token; after the grace → 401
     // -----------------------------------------------------------------------
     @Test @Order(5)
     void ca5_refresh_withRevokedCookie_returns401() {
@@ -150,7 +152,18 @@ class CookieAuthTest {
                 new HttpEntity<>(null, h), AccessTokenResponse.class);
         assertThat(rotateResp.getStatusCode()).isEqualTo(HttpStatus.OK);
 
-        // Now firstCookieValue is revoked — using it again must fail.
+        // Now firstCookieValue is rotated. Presented again within the grace (two tabs, a lost
+        // response) it gets the same successor, not a second one.
+        ResponseEntity<String> reuseInGrace = rest.exchange(
+                base() + "/api/v1/auth/refresh", HttpMethod.POST,
+                new HttpEntity<>(null, h), String.class);
+        assertThat(reuseInGrace.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(reuseInGrace.getHeaders().getFirst(HttpHeaders.SET_COOKIE).split(";")[0])
+                .isEqualTo(rotateResp.getHeaders().getFirst(HttpHeaders.SET_COOKIE).split(";")[0]);
+
+        // After the grace, using it again must fail.
+        jdbc.update("UPDATE refresh_tokens SET revoked_at = now() - interval '31 seconds' WHERE token_hash = ?",
+                com.traceability.identity.AuthRepository.sha256(firstCookieValue.substring("traced_refresh=".length())));
         ResponseEntity<String> reuse = rest.exchange(
                 base() + "/api/v1/auth/refresh", HttpMethod.POST,
                 new HttpEntity<>(null, h), String.class);

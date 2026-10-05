@@ -4,6 +4,46 @@
 
 ## Current state
 
+**Station mode survives logins/logouts elsewhere — Build A (2026-10-05, branch `fix/session-device-logout` off main
+acae114; not merged, not pushed, not deployed). Migration V142 (V141 is claimed by unmerged
+`feat/phone-stocktake-transfers`). Build B (device-bound station credential) planned, not built.**
+- **Step 0 diagnosis (read-only, prod + code):** station mode was only `localStorage.stationMode` — no server identity;
+  the tablet ran on the owner's own refresh cookie (until a worker PINned in). `POST /auth/logout` revoked EVERY refresh
+  token of the user (`AuthRepository.revokeAllRefreshTokens`), so an owner logging out at home killed an owner-held
+  tablet within ≤ 15 min → refresh 401 → `api.ts` hard-redirect to /login → whoever signed in there hit
+  `Login.tsx` `exitStationMode()` → station mode gone. A login alone never touched other sessions. Prod: Snouts owner
+  logout-all ×11 in 3 weeks (10 tokens in one statement on 2026-09-28 20:34:26), Jumi ×4. Other kick paths: rotation
+  with no grace + the reload refresh (App.tsx) not shared with api.ts's refreshPromise (two tabs / a lost rotation
+  response → 401). Side bug: the cookie path `/api/v1/auth/refresh` means `/auth/pin` never got the cookie, so every PIN
+  switch left the tablet's previous token live (prod: 6 superseded Snouts worker tokens). Prod couldn't attribute a
+  token to a device (no UA, no created/revoked reason, no rejection log).
+- **Build A:**
+  - Access JWTs carry `sid` = the refresh token's row id (`JwtService.issueAccessToken(…, sessionId)`, `sessionIdOf`).
+    That is how "this device" is known server-side WITHOUT widening the cookie path (existing tablet cookies keep
+    working at deploy; pre-V142 access tokens have no sid → a device logout just clears the cookie for ≤ 15 min).
+  - `POST /auth/logout` = this device only (sid + cookie if sent; phone pairing only for `?deviceId=` when given,
+    else the old all-pairings fallback). New `POST /auth/logout-all` = old revoke-all (+ pairings). Password reset keeps
+    revoke-all. Settings → Users: "Log out of all devices" card (two-step, no browser dialog).
+  - Rotation (`AuthRepository.rotate`): claim = conditional UPDATE to 'rotated' + successor INSERT in one tx; a token
+    presented again within 30 s gets the SAME successor — its raw value is derived, never stored:
+    HMAC(key derived from app.jwt.secret, predecessor raw); only while the successor is live. Outside → 401.
+  - `/auth/pin` revokes the tablet's previous token by sid (reason pin_switch) and stamps the UA on the new one.
+  - V142 `refresh_tokens`: `created_via` (login/refresh/pin/signup/magic_link), `revoked_reason`
+    (logout_device/logout_all/password_reset/rotated/pin_switch/orphan_cleanup), `user_agent` (≤512), `replaced_by`.
+    One `REFRESH_REJECTED reason=… token=<id8|hash:…> user=…` line per refusal; `LOGOUT_DEVICE` / `LOGOUT_ALL` lines.
+  - Frontend: `useAuthRefresh` uses api.ts `refreshAccessToken` (one shared refresh); /login tries a silent refresh
+    first (form renders meanwhile); `Login.tsx` no longer calls `exitStationMode()` — station mode ends only through
+    the gate's Exit step; Layout's logout sends `stationDeviceId()`.
+  - Prod orphans: `scripts/ops/refresh-token-orphan-cleanup.sql` (after V142; dry run unless `-v commit=yes`) revokes
+    only superseded WORKER tokens (dry-run count 6); owner orphans are indistinguishable from real sessions and expire
+    in ≤ 30 days.
+- **Tests:** `DeviceSessionTest` d1–d10 (backend) + `deviceSession.test.tsx` (7, frontend), each revert-checked (10
+  backend + 5 frontend mutations, each red on its own test). **Existing test now red, by design, NOT edited (needs
+  approval):** `workerExperienceFrontend.test.tsx (d)` asserts the old "login clears stationMode".
+- **Build B (plan only):** see the Build A/B report 2026-10-05 — `station_devices` + `traced_station` cookie
+  (`tenantId.stationId.secret`, verified by hash under RLS, no new hatch), /station/me|roster|pin|end, worker
+  sessions tagged `station_device_id`, Active stations list with remote End, adopt existing tablets, audit
+  station_started/station_ended.
 **Q2 — Phone scanner on Scan returns, with a "via phone" marker (2026-10-05, branch `feat/phone-returns` off main
 7e31225; pushed, not merged, not deployed). No migration.**
 - **Source:** `POST /returns/sessions/{id}/scan` takes an optional `relayEventId`, checked by the unchanged

@@ -245,7 +245,18 @@ class AuthIntegrationTest {
         assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.OK);
         assertThat(resp.getBody().accessToken()).isNotBlank();
 
-        // The rotated response has a new Set-Cookie; verify the OLD cookie is now rejected.
+        // The rotated response has a new Set-Cookie. The OLD cookie presented again within the
+        // 30 s rotation grace (V142) gets that same new token back — never a second one.
+        ResponseEntity<String> reuseInGrace = rest.exchange(
+                base() + "/api/v1/auth/refresh", HttpMethod.POST,
+                new HttpEntity<>(null, h), String.class);
+        assertThat(reuseInGrace.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(reuseInGrace.getHeaders().getFirst(HttpHeaders.SET_COOKIE).split(";")[0])
+                .isEqualTo(resp.getHeaders().getFirst(HttpHeaders.SET_COOKIE).split(";")[0]);
+
+        // After the grace the OLD cookie is rejected.
+        jdbc.update("UPDATE refresh_tokens SET revoked_at = now() - interval '31 seconds' WHERE token_hash = ?",
+                com.traceability.identity.AuthRepository.sha256(rawCookie.substring("traced_refresh=".length())));
         ResponseEntity<String> reuse = rest.exchange(
                 base() + "/api/v1/auth/refresh", HttpMethod.POST,
                 new HttpEntity<>(null, h), String.class);

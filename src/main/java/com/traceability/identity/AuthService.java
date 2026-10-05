@@ -7,6 +7,8 @@ import com.traceability.identity.model.TokenResponse;
 import com.traceability.notifications.WelcomeEmailJob;
 import com.traceability.tenancy.TenantContext;
 import org.jobrunr.scheduling.JobScheduler;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.dao.EmptyResultDataAccessException;
 import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -33,6 +35,8 @@ import java.util.UUID;
  */
 @Service
 public class AuthService {
+
+    private static final Logger log = LoggerFactory.getLogger(AuthService.class);
 
     private final JdbcTemplate jdbc;
     private final AuthRepository repo;
@@ -92,8 +96,8 @@ public class AuthService {
             repo.createTenantWithOwner(tenantId, req.tenantName(), userId,
                     req.name(), req.email(), phone, hash,
                     PolicyVersions.PRIVACY, PolicyVersions.TERMS, acceptedAt, attribution);
-            String refresh = repo.storeRefreshToken(userId, tenantId);
-            return new TokenResponse(jwt.issueAccessToken(userId, tenantId, "owner"), refresh);
+            AuthRepository.IssuedRefresh refresh = repo.issueRefreshToken(userId, tenantId, "signup", userAgent);
+            return new TokenResponse(jwt.issueAccessToken(userId, tenantId, "owner", refresh.id()), refresh.raw());
         });
         jobScheduler.enqueue(() -> welcomeEmailJob.run(req.email(), req.name()));
         return tokens;
@@ -129,53 +133,100 @@ public class AuthService {
     // ---- login ----
 
     public TokenResponse login(LoginRequest req) {
+        return login(req, null);
+    }
+
+    /** A login never touches the user's other sessions — it only adds this device's. */
+    public TokenResponse login(LoginRequest req, String userAgent) {
         // auth_lookup_user is SECURITY DEFINER — works with no GUC set.
         UserCredentials creds = lookupUser(req.email());
         if (!encoder.matches(req.password(), creds.passwordHash())) {
             throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Bad credentials");
         }
         return TenantContext.runAs(creds.tenantId(), () -> {
-            String refresh = repo.storeRefreshToken(creds.userId(), creds.tenantId());
+            AuthRepository.IssuedRefresh refresh =
+                    repo.issueRefreshToken(creds.userId(), creds.tenantId(), "login", userAgent);
             return new TokenResponse(
-                    jwt.issueAccessToken(creds.userId(), creds.tenantId(), creds.role()),
-                    refresh);
+                    jwt.issueAccessToken(creds.userId(), creds.tenantId(), creds.role(), refresh.id()),
+                    refresh.raw());
         });
     }
 
     // ---- refresh ----
 
     public TokenResponse refresh(String rawToken) {
-        // lookup_refresh_token is SECURITY DEFINER — works with no GUC.
-        RefreshRow row = lookupRefreshToken(AuthRepository.sha256(rawToken));
-        if (row.revokedAt() != null) {
-            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Token revoked");
+        return refresh(rawToken, null);
+    }
+
+    /**
+     * Rotates the device's refresh token (AuthRepository.rotate — a token presented again within
+     * the 30 s grace gets the same successor). Every refusal writes one REFRESH_REJECTED line
+     * with its reason and the token's id prefix (the hash prefix when the token is unknown).
+     */
+    public TokenResponse refresh(String rawToken, String userAgent) {
+        String hash = AuthRepository.sha256(rawToken);
+        RefreshRow row;
+        try {
+            // lookup_refresh_token is SECURITY DEFINER — works with no GUC.
+            row = lookupRefreshToken(hash);
+        } catch (ResponseStatusException e) {
+            throw rejected("unknown_token", "hash:" + hash.substring(0, 8), null);
         }
         if (row.expiresAt().before(new java.util.Date())) {
-            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Token expired");
+            throw rejected("expired", shortId(row.id()), row.userId());
         }
 
-        // All three repo calls run inside TenantContext so TenantAwareConnection fires
+        // All repo calls run inside TenantContext so TenantAwareConnection fires
         // SET LOCAL before each @Transactional method — findUserRole needs this for RLS.
         return TenantContext.runAs(row.tenantId(), () -> {
             String role;
             try {
                 role = repo.findUserRole(row.userId());
             } catch (EmptyResultDataAccessException e) {
-                throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "User not found or inactive");
+                throw rejected("user_inactive", shortId(row.id()), row.userId());
             }
-            repo.revokeRefreshToken(rawToken);
-            String newRefresh = repo.storeRefreshToken(row.userId(), row.tenantId());
+            AuthRepository.Rotation rotation = repo.rotate(row.id(), rawToken, userAgent);
+            if (!rotation.ok()) {
+                throw rejected(rotation.rejectReason(), shortId(row.id()), row.userId());
+            }
             return new TokenResponse(
-                    jwt.issueAccessToken(row.userId(), row.tenantId(), role),
-                    newRefresh);
+                    jwt.issueAccessToken(row.userId(), row.tenantId(), role, rotation.successor().id()),
+                    rotation.successor().raw());
         });
     }
 
-    // ---- logout-everywhere ----
+    private static ResponseStatusException rejected(String reason, String token, UUID userId) {
+        log.warn("REFRESH_REJECTED reason={} token={} user={}", reason, token,
+                userId == null ? "-" : shortId(userId));
+        return new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Refresh refused");
+    }
 
-    public void logout(UUID userId) {
+    private static String shortId(UUID id) {
+        return id.toString().substring(0, 8);
+    }
+
+    // ---- logout ----
+
+    /**
+     * "Log out" — THIS device only: revokes the refresh token of this device's session (the access
+     * token's sid) and, when the cookie reached us, the token it carries. The user's other devices
+     * — a warehouse tablet in station mode above all — keep working. Returns tokens revoked.
+     */
+    public int logoutDevice(UUID userId, UUID sessionId, String rawCookie) {
         // TenantContext already set by TenantContextFilter (request is authenticated).
-        repo.revokeAllRefreshTokens(userId);
+        int revoked = 0;
+        if (sessionId != null) revoked += repo.revokeRefreshTokenById(sessionId, userId, "logout_device");
+        if (rawCookie != null && !rawCookie.isBlank()) revoked += repo.revokeRefreshToken(rawCookie.trim(), "logout_device");
+        log.info("LOGOUT_DEVICE user={} session={} revoked={}", shortId(userId),
+                sessionId == null ? "-" : shortId(sessionId), revoked);
+        return revoked;
+    }
+
+    /** "Log out of all devices" — revokes every live refresh token of the user. */
+    public int logoutAll(UUID userId) {
+        int revoked = repo.revokeAllRefreshTokens(userId);
+        log.info("LOGOUT_ALL user={} revoked={}", shortId(userId), revoked);
+        return revoked;
     }
 
     // ---- private helpers ----

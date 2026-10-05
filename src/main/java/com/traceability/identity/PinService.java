@@ -118,13 +118,18 @@ public class PinService {
             // token this device currently holds (the original login's, if any) and mint a
             // fresh one for targetUserId — mirrors AuthService.refresh()'s revoke-and-replace,
             // just targeting the PIN-matched user instead of the stored row's original owner.
+            // The cookie only reaches /auth/pin when a caller sends it explicitly (its path is
+            // /api/v1/auth/refresh) — a browser's previous token is ended by AuthController from
+            // the access token's sid instead (V142).
             if (rawRefreshCookie != null && !rawRefreshCookie.isBlank()) {
-                authRepo.revokeRefreshToken(rawRefreshCookie);
+                authRepo.revokeRefreshToken(rawRefreshCookie, "pin_switch");
             }
-            String newRefresh = authRepo.storeRefreshToken(targetUserId, callerTenantId);
+            AuthRepository.IssuedRefresh newRefresh =
+                    authRepo.issueRefreshToken(targetUserId, callerTenantId, "pin", null);
 
             return new TokenResponse(
-                    jwtService.issueAccessToken(targetUserId, callerTenantId, role), newRefresh);
+                    jwtService.issueAccessToken(targetUserId, callerTenantId, role, newRefresh.id()),
+                    newRefresh.raw());
         }
 
         // Wrong PIN — increment the IDENTIFIED user's failure count. No guess-by-exclusion:

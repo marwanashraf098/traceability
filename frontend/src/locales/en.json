@@ -1970,6 +1970,14 @@
       "labelsPrinting": "Labels & printing",
       "localization": "Localization"
     },
+    "signOutAll": {
+      "title": "Log out of all devices",
+      "description": "Ends every signed-in session of your account — other browsers, phones, and any warehouse tablet that is signed in as you. Logging out from the menu only ends this device.",
+      "button": "Log out of all devices",
+      "confirm": "Yes, log out everywhere",
+      "cancel": "Cancel",
+      "error": "Couldn't log out of all devices. Try again."
+    },
     "stationMode": {
       "title": "Station mode",
       "description": "Turn this device into a shared worker station — workers sign in with a name and PIN instead of email and password.",

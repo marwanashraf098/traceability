@@ -133,6 +133,19 @@ public class ScanPairingService {
             new Object[] { deviceId, userId }, tenantId, "unpaired"));
     }
 
+    /**
+     * Ends the user's phone pairing on ONE device (a device-scoped logout): a logout on another
+     * device must never unpair the phone of a station tablet. Returns false — nothing done — when
+     * {@code deviceId} isn't a valid device id, so the caller can fall back to {@link #revokeForUser}.
+     */
+    public boolean revokeForUserOnDevice(String deviceId, UUID userId, String reason) {
+        if (deviceId == null || !DEVICE_ID.matcher(deviceId).matches()) return false;
+        UUID tenantId = TenantContext.require();
+        tx.executeWithoutResult(s -> revokeWhere("station_device_id = ? AND station_user_id = ?",
+            new Object[] { deviceId, userId }, tenantId, reason));
+        return true;
+    }
+
     /** The caller's pairing on this tablet ('none' when there is none — or it's another worker's). */
     public PairingStatus current(String deviceId, UUID userId) {
         requireDeviceId(deviceId);

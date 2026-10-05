@@ -1,11 +1,10 @@
 import { useState, FormEvent, useEffect } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
-import { login } from '../api'
+import { login, refreshAccessToken } from '../api'
 import { setAccessToken } from '../auth'
 import AuthLayout from '../components/AuthLayout'
 import { Input, Button } from '../components/ui'
-import { useStation } from '../components/StationProvider'
 import { DEMO_SESSION_MARKER, DEMO_ACCESS_TOKEN_KEY } from '../demoConstants'
 import { returnPath } from './loginReturnPath'
 
@@ -13,7 +12,6 @@ export default function Login() {
   const { t }      = useTranslation()
   const navigate   = useNavigate()
   const location   = useLocation()
-  const { exitStationMode } = useStation()
   const [email,        setEmail]        = useState('')
   const [password,     setPassword]     = useState('')
   const [showPassword, setShowPassword] = useState(false)
@@ -23,6 +21,20 @@ export default function Login() {
 
   // Remove any stale key left from the pre-cookie auth system.
   useEffect(() => { localStorage.removeItem('token') }, [])
+
+  // Silent refresh first: a device bounced here while its refresh cookie is still good (a lost
+  // rotation, a second tab, a one-off 401) goes straight back in — a station tablet lands on its
+  // PIN gate again instead of waiting for someone's password. A real logout cleared the cookie,
+  // so this 401s and the form below stays. The form renders meanwhile (no spinner).
+  useEffect(() => {
+    let cancelled = false
+    refreshAccessToken()
+      .then(token => {
+        if (!cancelled && token) navigate(returnPath(location.state) ?? '/overview', { replace: true })
+      })
+      .catch(() => {})
+    return () => { cancelled = true }
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault()
@@ -36,10 +48,9 @@ export default function Login() {
       // bounces to /login, not /demo, and no stale demo token lingers.
       sessionStorage.removeItem(DEMO_SESSION_MARKER)
       sessionStorage.removeItem(DEMO_ACCESS_TOKEN_KEY)
-      // A full email+password login is always an owner/manager action (workers
-      // sign in via the station PIN gate) — clear any persisted stationMode flag
-      // so this device never lands back in the gate instead of the app.
-      exitStationMode()
+      // Station mode is NOT cleared here: a station tablet that bounced to /login stays a
+      // station (RequireAuth shows its PIN gate). Station mode ends only through the gate's
+      // Exit step (StationGate ExitStep, owner/manager password).
       navigate(returnPath(location.state) ?? '/overview')
     } catch {
       setError(t('login.error'))

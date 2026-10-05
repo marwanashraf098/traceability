@@ -1,6 +1,8 @@
 import { useState, useEffect, FormEvent } from 'react'
 import { useTranslation } from 'react-i18next'
-import { listUsers, createUser, updateUser, deactivateUser, getRoleFromToken, User } from '../../api'
+import { listUsers, createUser, updateUser, deactivateUser, getRoleFromToken, logoutAllDevices, User } from '../../api'
+import { useNavigate } from 'react-router-dom'
+import { clearAccessToken } from '../../auth'
 import { Modal, Button } from '../../components/ui'
 import { useStation } from '../../components/StationProvider'
 
@@ -41,6 +43,56 @@ function StationModeCard() {
       {!stationMode && (
         <Button variant="secondary" onClick={enterStationMode} className="flex-shrink-0">
           {t('settings.stationMode.enter')}
+        </Button>
+      )}
+    </div>
+  )
+}
+
+// ── Log out of all devices ────────────────────────────────────────────────────
+// The menu's "Log out" ends THIS device only (so a station tablet running on the same
+// account keeps working). This is the deliberate everywhere-logout: every session of the
+// account ends, station tablets signed in as this user included. Two-step, no browser dialog.
+
+function SignOutAllCard() {
+  const { t } = useTranslation()
+  const navigate = useNavigate()
+  const [confirming, setConfirming] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState(false)
+
+  async function signOutAll() {
+    setBusy(true)
+    setError(false)
+    try {
+      await logoutAllDevices()
+      clearAccessToken()
+      navigate('/login')
+    } catch {
+      setError(true)
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="card p-4 flex items-center justify-between gap-4 flex-wrap">
+      <div className="min-w-0 flex-1">
+        <h3 className="text-body text-primary font-medium">{t('settings.signOutAll.title')}</h3>
+        <p className="text-small text-muted mt-0.5">{t('settings.signOutAll.description')}</p>
+        {error && <p role="alert" className="text-small text-critical mt-1">{t('settings.signOutAll.error')}</p>}
+      </div>
+      {confirming ? (
+        <div className="flex gap-2 flex-shrink-0">
+          <Button variant="secondary" onClick={() => setConfirming(false)} disabled={busy}>
+            {t('settings.signOutAll.cancel')}
+          </Button>
+          <Button variant="danger" onClick={signOutAll} loading={busy}>
+            {t('settings.signOutAll.confirm')}
+          </Button>
+        </div>
+      ) : (
+        <Button variant="secondary" onClick={() => setConfirming(true)} className="flex-shrink-0">
+          {t('settings.signOutAll.button')}
         </Button>
       )}
     </div>
@@ -425,6 +477,7 @@ export default function UsersTab() {
       </div>
 
       {(currentRole === 'owner' || currentRole === 'manager') && <StationModeCard />}
+      <SignOutAllCard />
 
       {error && (
         <div role="alert" className="text-small text-danger bg-danger/10 border border-danger/25 rounded px-3 py-2">

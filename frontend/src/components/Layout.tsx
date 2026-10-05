@@ -8,7 +8,7 @@ import {
   Settings, LogOut, Globe, Search, ChevronDown, Bell,
 } from 'lucide-react'
 import {
-  getRoleFromToken, request, getMe, getExceptionsCount, getOnboardingStatus,
+  getRoleFromToken, logoutThisDevice, getMe, getExceptionsCount, getOnboardingStatus,
   type Me, type OnboardingStatus,
 } from '../api'
 import { clearAccessToken } from '../auth'
@@ -16,6 +16,7 @@ import { Logo } from './Logo'
 import { cn, MeProvider } from './ui'
 import { useStation } from './StationProvider'
 import { PhoneTopbarIcon } from '../phone/PhoneScanButton'
+import { stationDeviceId } from '../phone/PhoneScanProvider'
 
 // ── Nav link ──────────────────────────────────────────────────────────────────
 // Icon is passed as a component reference (not pre-rendered) so it can be
@@ -72,7 +73,10 @@ export default function Layout({ children }: { children: ReactNode }) {
   const isWorkerAtStation = role === 'worker' && stationMode
 
   async function logout() {
-    try { await request<void>('/auth/logout', { method: 'POST' }) } catch { /* ignore */ }
+    // This device only — a station tablet running on the same account keeps working.
+    let deviceId: string | undefined
+    try { deviceId = stationDeviceId() } catch { deviceId = undefined }
+    try { await logoutThisDevice(deviceId) } catch { /* ignore */ }
     clearAccessToken()
     navigate('/login')
   }

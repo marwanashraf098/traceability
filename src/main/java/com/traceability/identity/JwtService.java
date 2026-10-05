@@ -21,7 +21,10 @@ import java.util.UUID;
 /**
  * Signs and verifies HS256 JWTs.
  *
- * Access token claims: sub=user_id, tenant=tenant_id, role=role, exp=+15min.
+ * Access token claims: sub=user_id, tenant=tenant_id, role=role, exp=+15min, and — on a token
+ * minted together with a refresh token — sid=that refresh token's row id (V142): the device's
+ * session, so "log out" and the PIN switch can end exactly this device's refresh token even
+ * though the refresh cookie is only ever sent to /auth/refresh.
  * The JWT secret must be ≥32 bytes; use JWT_SECRET env var in production.
  */
 @Service
@@ -47,15 +50,25 @@ public class JwtService {
      * longer-lived, access-only (no refresh) token (FR-DEMO Day 2).
      */
     public String issueAccessToken(UUID userId, UUID tenantId, String role, Duration ttl) {
+        return issueAccessToken(userId, tenantId, role, ttl, null);
+    }
+
+    /** An access token for the device session whose refresh token is row {@code sessionId}. */
+    public String issueAccessToken(UUID userId, UUID tenantId, String role, UUID sessionId) {
+        return issueAccessToken(userId, tenantId, role, Duration.ofMinutes(accessTokenMinutes), sessionId);
+    }
+
+    private String issueAccessToken(UUID userId, UUID tenantId, String role, Duration ttl, UUID sessionId) {
         try {
             Instant now = Instant.now();
-            JWTClaimsSet claims = new JWTClaimsSet.Builder()
+            JWTClaimsSet.Builder builder = new JWTClaimsSet.Builder()
                     .subject(userId.toString())
                     .claim("tenant", tenantId.toString())
                     .claim("role", role)
                     .issueTime(Date.from(now))
-                    .expirationTime(Date.from(now.plus(ttl)))
-                    .build();
+                    .expirationTime(Date.from(now.plus(ttl)));
+            if (sessionId != null) builder.claim("sid", sessionId.toString());
+            JWTClaimsSet claims = builder.build();
             JWSSigner signer = new MACSigner(secret);
             SignedJWT jwt = new SignedJWT(new JWSHeader(JWSAlgorithm.HS256), claims);
             jwt.sign(signer);
@@ -82,6 +95,20 @@ public class JwtService {
             throw e;
         } catch (Exception e) {
             throw new IllegalArgumentException("JWT verification failed: " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * The {@code sid} of a valid Bearer access token in {@code authorizationHeader}, or null (no
+     * header, invalid token, or a token minted without a session — demo, pre-V142).
+     */
+    public UUID sessionIdOf(String authorizationHeader) {
+        if (authorizationHeader == null || !authorizationHeader.startsWith("Bearer ")) return null;
+        try {
+            Object sid = verify(authorizationHeader.substring(7)).getClaim("sid");
+            return sid instanceof String s ? UUID.fromString(s) : null;
+        } catch (RuntimeException e) {
+            return null;
         }
     }
 

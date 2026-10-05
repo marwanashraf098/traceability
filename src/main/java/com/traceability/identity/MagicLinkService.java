@@ -135,8 +135,10 @@ public class MagicLinkService {
         }
 
         return TenantContext.runAs(row.tenantId(), () -> {
-            String access  = jwtService.issueAccessToken(row.userId(), row.tenantId(), role);
-            String refresh = authRepository.storeRefreshToken(row.userId(), row.tenantId());
+            AuthRepository.IssuedRefresh issued =
+                authRepository.issueRefreshToken(row.userId(), row.tenantId(), "magic_link", null);
+            String access  = jwtService.issueAccessToken(row.userId(), row.tenantId(), role, issued.id());
+            String refresh = issued.raw();
             log.info("Magic link consumed userId={} tenantId={}", row.userId(), row.tenantId());
             return new TokenResponse(access, refresh);
         });

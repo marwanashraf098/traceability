@@ -208,10 +208,12 @@ describe('(c) OwnerOnlyRoute — worker redirected off owner-only routes', () =>
   })
 })
 
-// ── (d) owner login with stationMode set lands in the app, not the gate ─────
+// ── (d) owner login on a station device keeps station mode (Build A, 2026-10-05) ─
+// Station mode ends only through the gate's Exit step — a /login bounce (a lost session) must not
+// take a warehouse tablet out of it.
 
-describe('(d) Login — exitStationMode clears a stale gate flag on real login', () => {
-  test('owner email+password login clears stationMode and lands on /overview, not the gate', async () => {
+describe('(d) Login — a real login no longer clears station mode', () => {
+  test('owner email+password login keeps stationMode and navigates on to /overview', async () => {
     localStorage.setItem('stationMode', 'true')
     vi.stubGlobal('fetch', vi.fn((url: string) => {
       if (url.includes('/auth/login')) return jsonResponse(200, { accessToken: fakeJwt('owner') })
@@ -239,6 +241,6 @@ describe('(d) Login — exitStationMode clears a stale gate flag on real login',
     await user.click(screen.getByRole('button', { name: en.login.submit }))
 
     expect(await screen.findByTestId('overview-page')).toBeInTheDocument()
-    await waitFor(() => expect(localStorage.getItem('stationMode')).toBeNull())
+    expect(localStorage.getItem('stationMode')).toBe('true')
   })
 })

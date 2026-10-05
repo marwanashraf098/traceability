@@ -932,6 +932,19 @@ export interface Me {
   role: 'owner' | 'manager' | 'worker'
 }
 
+/** "Log out" — THIS device only: ends this device's session (and its phone pairing when
+ *  {@code deviceId} — the browser's station device id — is given). Other devices, a station
+ *  tablet above all, keep working. */
+export function logoutThisDevice(deviceId?: string) {
+  const q = deviceId ? `?deviceId=${encodeURIComponent(deviceId)}` : ''
+  return request<void>(`/auth/logout${q}`, { method: 'POST' })
+}
+
+/** "Log out of all devices" — ends every session of this account, station tablets included. */
+export function logoutAllDevices() {
+  return request<void>('/auth/logout-all', { method: 'POST' })
+}
+
 export function getMe() {
   return request<Me>('/me')
 }

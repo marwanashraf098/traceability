@@ -21,6 +21,8 @@ import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
 
+import java.util.UUID;
+
 @RestController
 @RequestMapping("/api/v1/auth")
 public class AuthController {
@@ -39,13 +41,18 @@ public class AuthController {
     private final PinService  pinService;
     private final PasswordResetService passwordResetService;
     private final ScanPairingService   scanPairings;
+    private final JwtService           jwtService;
+    private final AuthRepository       authRepository;
 
     public AuthController(AuthService authService, PinService pinService,
-                          PasswordResetService passwordResetService, ScanPairingService scanPairings) {
+                          PasswordResetService passwordResetService, ScanPairingService scanPairings,
+                          JwtService jwtService, AuthRepository authRepository) {
         this.authService          = authService;
         this.pinService           = pinService;
         this.passwordResetService = passwordResetService;
         this.scanPairings         = scanPairings;
+        this.jwtService           = jwtService;
+        this.authRepository       = authRepository;
     }
 
     @PostMapping("/signup")
@@ -58,8 +65,9 @@ public class AuthController {
     }
 
     @PostMapping("/login")
-    public AccessTokenResponse login(@RequestBody LoginRequest req, HttpServletResponse response) {
-        TokenResponse tokens = authService.login(req);
+    public AccessTokenResponse login(@RequestBody LoginRequest req, HttpServletRequest request,
+                                     HttpServletResponse response) {
+        TokenResponse tokens = authService.login(req, request.getHeader(HttpHeaders.USER_AGENT));
         setRefreshCookie(response, tokens.refreshToken(), COOKIE_MAX_AGE);
         return new AccessTokenResponse(tokens.accessToken());
     }
@@ -68,33 +76,62 @@ public class AuthController {
      * Reads the refresh token from the httpOnly cookie, rotates it (revoke old, issue new),
      * writes the new cookie, and returns the new access token in the body.
      * Missing cookie → 401 directly (required=false avoids MissingRequestCookieException path).
+     * The same token presented again within 30 s of its rotation gets the same successor (V142).
      */
     @PostMapping("/refresh")
     public ResponseEntity<AccessTokenResponse> refresh(
             @CookieValue(value = COOKIE_NAME, required = false) String rawToken,
+            HttpServletRequest request,
             HttpServletResponse response) {
         if (rawToken == null || rawToken.isBlank()) {
             return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
         }
-        TokenResponse tokens = authService.refresh(rawToken.trim());
+        TokenResponse tokens = authService.refresh(rawToken.trim(), request.getHeader(HttpHeaders.USER_AGENT));
         setRefreshCookie(response, tokens.refreshToken(), COOKIE_MAX_AGE);
         return ResponseEntity.ok(new AccessTokenResponse(tokens.accessToken()));
     }
 
+    /**
+     * "Log out" — this device only (V142). Ends this device's refresh token (the access token's
+     * sid, plus the cookie when a caller sends it) and this device's phone pairing; the user's
+     * other sessions — a station tablet above all — are untouched. {@code deviceId} is the
+     * browser's station device id (localStorage); without it the user's pairings end as before.
+     */
     @PostMapping("/logout")
     @ResponseStatus(HttpStatus.NO_CONTENT)
     @PreAuthorize("isAuthenticated()")
     public void logout(@AuthenticationPrincipal CustomUserDetails principal,
+                       @CookieValue(value = COOKIE_NAME, required = false) String rawRefreshToken,
+                       @RequestParam(value = "deviceId", required = false) String deviceId,
+                       HttpServletRequest request,
                        HttpServletResponse response) {
-        authService.logout(principal.userId());
-        // Q1: a full logout ends the user's paired phone (best-effort, like the PIN-switch hook —
-        // the logout itself must never fail on it; the 12 h expiry is the backstop).
+        authService.logoutDevice(principal.userId(),
+                jwtService.sessionIdOf(request.getHeader(HttpHeaders.AUTHORIZATION)), rawRefreshToken);
+        // Q1: a logout ends the user's paired phone on this device (best-effort, like the
+        // PIN-switch hook — the logout itself must never fail on it; the 12 h expiry is the backstop).
         try {
-            scanPairings.revokeForUser(principal.userId(), "signed_out");
+            if (!scanPairings.revokeForUserOnDevice(deviceId, principal.userId(), "signed_out")) {
+                scanPairings.revokeForUser(principal.userId(), "signed_out");
+            }
         } catch (RuntimeException e) {
             log.warn("Logout: couldn't revoke the user's phone pairings: {}", e.toString());
         }
         setRefreshCookie(response, "", 0); // Max-Age=0 expires the cookie immediately
+    }
+
+    /** "Log out of all devices" — every refresh token and phone pairing of the user (today's revoke-all). */
+    @PostMapping("/logout-all")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    @PreAuthorize("isAuthenticated()")
+    public void logoutAll(@AuthenticationPrincipal CustomUserDetails principal,
+                          HttpServletResponse response) {
+        authService.logoutAll(principal.userId());
+        try {
+            scanPairings.revokeForUser(principal.userId(), "signed_out");
+        } catch (RuntimeException e) {
+            log.warn("Logout of all devices: couldn't revoke the user's phone pairings: {}", e.toString());
+        }
+        setRefreshCookie(response, "", 0);
     }
 
     /**
@@ -109,8 +146,22 @@ public class AuthController {
     public AccessTokenResponse pinSwitch(@RequestBody PinRequest req,
                                          @AuthenticationPrincipal CustomUserDetails principal,
                                          @CookieValue(value = COOKIE_NAME, required = false) String rawRefreshToken,
+                                         HttpServletRequest request,
                                          HttpServletResponse response) {
         TokenResponse tokens = pinService.switchPin(principal.tenantId(), req, rawRefreshToken);
+        // V142: the browser never sends the refresh cookie here (its path is /auth/refresh), so the
+        // token this tablet held until now is found by the access token's sid and ended — without
+        // this every PIN switch left a live orphan token behind. Best-effort, like the hook below:
+        // the new tokens are already minted.
+        try {
+            UUID previousSession = jwtService.sessionIdOf(request.getHeader(HttpHeaders.AUTHORIZATION));
+            if (previousSession != null) {
+                authRepository.revokeRefreshTokenById(previousSession, principal.userId(), "pin_switch");
+            }
+            authRepository.stampUserAgent(tokens.refreshToken(), request.getHeader(HttpHeaders.USER_AGENT));
+        } catch (RuntimeException e) {
+            log.warn("PIN switch: couldn't end the tablet's previous refresh token: {}", e.toString());
+        }
         // S6 / Q1: the station now belongs to another worker — the outgoing worker's paired phone
         // must stop scanning into this tablet.
         // A failure here mustn't strand the switch (its tokens are already minted): a leftover

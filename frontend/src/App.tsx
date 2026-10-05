@@ -1,7 +1,7 @@
 import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom'
 import { useState, useEffect, useRef, lazy, Suspense } from 'react'
 import { getAccessToken, setAccessToken, clearAccessToken } from './auth'
-import { getRoleFromToken, getJwtExpiry } from './api'
+import { getRoleFromToken, getJwtExpiry, refreshAccessToken } from './api'
 import { ToastProvider } from './components/ui'
 import Layout from './components/Layout'
 import { StationProvider, useStation } from './components/StationProvider'
@@ -110,13 +110,13 @@ function useAuthRefresh(): AuthRefreshState {
 
   useEffect(() => {
     if (state !== 'loading') return
-    fetch('/api/v1/auth/refresh', { method: 'POST', credentials: 'include' })
-      .then(res => {
-        if (!res.ok) { setState('unauthenticated'); return null }
-        return res.json() as Promise<{ accessToken: string }>
-      })
-      .then(data => {
-        if (data) { setAccessToken(data.accessToken); setState('authenticated') }
+    // The same shared refresh request()'s 401 path and the relay stream use (api.ts
+    // refreshAccessToken): concurrent callers on this page join ONE /auth/refresh, so a reload
+    // never rotates the cookie twice and loses the race to its own second call.
+    refreshAccessToken()
+      .then(token => {
+        if (token) { setAccessToken(token); setState('authenticated') }
+        else setState('unauthenticated')
       })
       .catch(() => setState('unauthenticated'))
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
