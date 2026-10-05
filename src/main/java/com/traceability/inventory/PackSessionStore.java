@@ -293,7 +293,9 @@ public class PackSessionStore {
             "SELECT NULLIF(concat_ws(', ', " +
             "         COALESCE(NULLIF(o.address ->> 'zone', ''), NULLIF(o.address ->> 'district', ''), " +
             "                  NULLIF(s.raw #>> '{dropOffAddress,zone,name}', '')), " +
-            "         COALESCE(NULLIF(o.address ->> 'city', ''), NULLIF(s.raw #>> '{dropOffAddress,city,name}', ''))), '') AS area, " +
+            "         COALESCE(NULLIF(o.address ->> 'city', ''), NULLIF(s.raw #>> '{dropOffAddress,city,name}', ''), " +
+            // Build B: Shopify's city only when the order has no (Bosta-owned) address at all.
+            "                  CASE WHEN o.address IS NULL THEN NULLIF(o.shopify_address ->> 'city', '') END)), '') AS area, " +
             "       s.raw -> 'type' ->> 'code' AS courier_type_code, " +
             "       (SELECT b.batch_no FROM pack_print_batch_items bi JOIN pack_print_batches b ON b.id = bi.batch_id " +
             "        WHERE bi.shipment_id = s.id AND bi.tenant_id = o.tenant_id " +

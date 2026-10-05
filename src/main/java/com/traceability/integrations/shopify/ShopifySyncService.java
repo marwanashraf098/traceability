@@ -103,37 +103,55 @@ public class ShopifySyncService {
     // re-importing must never downgrade a picked/packed order back to 'new' or clear
     // an operator-set hold. Post-pack field changes (cod_amount edits, address corrections)
     // arrive via D6 webhooks — the importer does not mutate shipped orders' COD.
+    // Build B (V144): customer PII comes from the payload itself, through the ONE precedence definition
+    // shared with the backfill — shopify_order_pii_name / _phone / _address (REST and GraphQL shapes):
+    //   name    shipping address name → customer first + last → billing address name
+    //   phone   shipping address phone → customer phone → billing address phone
+    //   address the shipping address block → orders.shopify_address
+    // FILL-ONLY: COALESCE(orders.x, EXCLUDED.x) — Shopify never overwrites a value already stored (Bosta's
+    // or anyone's), and a payload without PII never clears one ("flicker" bug). orders.address is
+    // Bosta-owned: Shopify never writes it. pii_source = 'shopify' only when Shopify filled the name or
+    // phone of a row with no pii_source yet. GDPR (V143): a redacted order (pii_redacted_at set) gets
+    // nothing back and its incoming raw is stripped by shopify_order_raw_redacted(). Email is stripped
+    // from raw by the V144 trigger on every write — never stored, never read into a column.
     private static final String UPSERT_ORDER = """
             INSERT INTO orders
-                (tenant_id, store_id, external_id, number, customer_name, customer_phone,
-                 address, payment_method, cod_amount, placed_at, raw)
-            VALUES (?, ?, ?, ?, ?, ?, ?::jsonb, ?::order_payment_method, ?, ?, ?::jsonb)
+                (tenant_id, store_id, external_id, number, customer_name, customer_phone, shopify_address,
+                 pii_source, payment_method, cod_amount, placed_at, raw)
+            SELECT ?, ?, ?, ?,
+                   shopify_order_pii_name(r.raw), shopify_order_pii_phone(r.raw), shopify_order_pii_address(r.raw),
+                   CASE WHEN shopify_order_pii_name(r.raw) IS NOT NULL OR shopify_order_pii_phone(r.raw) IS NOT NULL
+                        THEN 'shopify' END,
+                   ?::order_payment_method, ?, ?, r.raw
+            FROM (SELECT ?::jsonb AS raw) r
             ON CONFLICT (store_id, external_id) DO UPDATE SET
-                -- COALESCE for PCD-blocked fields: on Shopify Basic plan without PCD approval,
-                -- Shopify returns NULL for customer_name, customer_phone, and address.
-                -- Without COALESCE, every Shopify sync cycle (30-min reconcile + live webhooks)
-                -- would overwrite a Bosta-sourced value back to NULL ("flicker" bug).
-                -- COALESCE keeps any non-null value already present (from Shopify if PCD approved,
-                -- from Bosta receiver if populated by populateConsigneePii).
-                -- GDPR (V143): a redacted order (pii_redacted_at set) never gets customer PII back —
-                -- the three columns keep their cleared value and the incoming raw is stripped by the
-                -- same shopify_order_raw_redacted() the redact handlers use.
-                customer_name  = CASE WHEN orders.pii_redacted_at IS NULL
-                                      THEN COALESCE(EXCLUDED.customer_name,  orders.customer_name)
-                                      ELSE orders.customer_name END,
-                customer_phone = CASE WHEN orders.pii_redacted_at IS NULL
-                                      THEN COALESCE(EXCLUDED.customer_phone, orders.customer_phone)
-                                      ELSE orders.customer_phone END,
-                address        = CASE WHEN orders.pii_redacted_at IS NULL
-                                      THEN COALESCE(EXCLUDED.address,        orders.address)
-                                      ELSE orders.address END,
-                payment_method = EXCLUDED.payment_method,
-                cod_amount     = EXCLUDED.cod_amount,
-                placed_at      = EXCLUDED.placed_at,
-                raw            = CASE WHEN orders.pii_redacted_at IS NULL THEN EXCLUDED.raw
-                                      ELSE shopify_order_raw_redacted(EXCLUDED.raw) END
-            RETURNING id
+                customer_name   = CASE WHEN orders.pii_redacted_at IS NULL
+                                       THEN COALESCE(orders.customer_name,   EXCLUDED.customer_name)
+                                       ELSE orders.customer_name END,
+                customer_phone  = CASE WHEN orders.pii_redacted_at IS NULL
+                                       THEN COALESCE(orders.customer_phone,  EXCLUDED.customer_phone)
+                                       ELSE orders.customer_phone END,
+                shopify_address = CASE WHEN orders.pii_redacted_at IS NULL
+                                       THEN COALESCE(orders.shopify_address, EXCLUDED.shopify_address)
+                                       ELSE orders.shopify_address END,
+                pii_source      = CASE WHEN orders.pii_redacted_at IS NULL AND orders.pii_source IS NULL
+                                        AND ((orders.customer_name  IS NULL AND EXCLUDED.customer_name  IS NOT NULL)
+                                          OR (orders.customer_phone IS NULL AND EXCLUDED.customer_phone IS NOT NULL))
+                                       THEN 'shopify' ELSE orders.pii_source END,
+                payment_method  = EXCLUDED.payment_method,
+                cod_amount      = EXCLUDED.cod_amount,
+                placed_at       = EXCLUDED.placed_at,
+                raw             = CASE WHEN orders.pii_redacted_at IS NULL THEN EXCLUDED.raw
+                                       ELSE shopify_order_raw_redacted(EXCLUDED.raw) END
+            RETURNING id, customer_phone
             """;
+
+    /** UPSERT_ORDER's result: the order and the phone it now holds (the blocklist gate's input). */
+    private record Upserted(UUID id, String phone) {}
+
+    private static Upserted upserted(java.sql.ResultSet rs) throws java.sql.SQLException {
+        return rs.next() ? new Upserted(rs.getObject("id", UUID.class), rs.getString("customer_phone")) : null;
+    }
 
     // Partial unique index: ON CONFLICT target must match V4's index predicate exactly.
     // Hard-deletes of removed Shopify lines are a D6 webhook concern, not the importer's.
@@ -336,11 +354,6 @@ public class ShopifySyncService {
 
         String name = payload.path("name").asText("#?");
 
-        // Customer PII — null until PCD approval; raw column preserves full payload.
-        String customerName  = null;
-        String customerPhone = null;
-        JsonNode shippingAddr = null;
-
         String displayFinancialStatus = payload.path("financial_status").asText(null);
         java.util.List<String> gateways = new java.util.ArrayList<>();
         for (JsonNode gw : payload.path("payment_gateway_names")) gateways.add(gw.asText());
@@ -364,12 +377,11 @@ public class ShopifySyncService {
         final BigDecimal finalCodAmount = codAmount;
 
         Boolean flagged = tx.execute(s -> {
-            UUID orderId = jdbc.query(UPSERT_ORDER,
-                rs -> rs.next() ? rs.getObject("id", UUID.class) : null,
-                tenantId, storeId, finalGid, name, customerName, customerPhone,
-                toJson(shippingAddr), finalPaymentMethod, finalCodAmount,
+            Upserted up = jdbc.query(UPSERT_ORDER, ShopifySyncService::upserted,
+                tenantId, storeId, finalGid, name, finalPaymentMethod, finalCodAmount,
                 java.sql.Timestamp.from(finalCreatedAt), toJson(payload));
-            if (orderId == null) return false;
+            if (up == null) return false;
+            UUID orderId = up.id();
 
             boolean needsHold = false;
             for (JsonNode line : payload.path("line_items")) {
@@ -397,8 +409,9 @@ public class ShopifySyncService {
             }
             if (needsHold) jdbc.update(FLAG_ORDER_UNMAPPED, orderId);
 
-            // FR-7.8a: blocklist gate — runs only when phone is available (pre-PCD: null → skipped)
-            blocklist.checkAndHoldIfBlocked(orderId, customerPhone, tenantId);
+            // FR-7.8a: blocklist gate on the phone the order now holds (Shopify's at creation, or one stored
+            // before) — null (no phone, or a redacted order) → skipped.
+            blocklist.checkAndHoldIfBlocked(orderId, up.phone(), tenantId);
 
             // Review mode (S3): a simulated-courier tenant's order gets its forward shipment here, in
             // the same transaction. No-op for real tenants, cancelled orders and an existing leg.
@@ -537,11 +550,13 @@ public class ShopifySyncService {
             String paymentMethod = inferPaymentMethod(o.displayFinancialStatus(), o.paymentGateways());
             BigDecimal codAmount = "cod".equals(paymentMethod) ? o.totalPrice() : null;
 
-            UUID orderId = jdbc.query(UPSERT_ORDER, rs -> rs.next() ? rs.getObject("id", UUID.class) : null,
-                    tenantId, storeId, o.gid(), o.name(), o.customerName(), o.customerPhone(),
-                    toJson(o.shippingAddress()), paymentMethod, codAmount,
+            // PII is read from o.raw (the GraphQL node) by UPSERT_ORDER — the same SQL precedence as the
+            // webhook path; the record's customerName / customerPhone / shippingAddress are not used.
+            Upserted up = jdbc.query(UPSERT_ORDER, ShopifySyncService::upserted,
+                    tenantId, storeId, o.gid(), o.name(), paymentMethod, codAmount,
                     java.sql.Timestamp.from(o.createdAt()), toJson(o.raw()));
-            if (orderId == null) throw new ShopifyException("Order upsert returned no ID for GID " + o.gid());
+            if (up == null) throw new ShopifyException("Order upsert returned no ID for GID " + o.gid());
+            UUID orderId = up.id();
 
             boolean needsHold = false;
             for (ShopifyGateway.LineItem line : o.lineItems()) {
@@ -567,8 +582,8 @@ public class ShopifySyncService {
                 jdbc.update(FLAG_ORDER_UNMAPPED, orderId);
             }
 
-            // FR-7.8a: blocklist gate — runs only when phone is available (pre-PCD: null → skipped)
-            blocklist.checkAndHoldIfBlocked(orderId, o.customerPhone(), tenantId);
+            // FR-7.8a: blocklist gate on the phone the order now holds — null → skipped.
+            blocklist.checkAndHoldIfBlocked(orderId, up.phone(), tenantId);
 
             // Review mode (S3): same as ingestOrderWebhook — import / reconcile / missing-order path.
             SimulatedShipments.ensureForwardShipment(jdbc, tenantId, orderId);

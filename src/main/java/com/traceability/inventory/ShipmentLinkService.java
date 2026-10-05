@@ -1293,15 +1293,21 @@ public class ShipmentLinkService {
 
         if (fullName == null && phone == null && addressJson == null) return;
 
+        // Build B: pii_source becomes 'bosta' only when Bosta itself fills an empty field and no source is
+        // recorded yet — a Shopify-filled order keeps 'shopify' (and its name / phone: fill-only).
         jdbc.update(
             "UPDATE orders " +
             "SET customer_name  = COALESCE(customer_name,  ?), " +
             "    customer_phone = COALESCE(customer_phone, ?), " +
             "    address        = COALESCE(address,        ?::jsonb), " +
-            "    pii_source     = COALESCE(pii_source, 'bosta') " +
+            "    pii_source     = CASE WHEN pii_source IS NULL " +
+            "                           AND ((customer_name  IS NULL AND ?::text  IS NOT NULL) " +
+            "                             OR (customer_phone IS NULL AND ?::text  IS NOT NULL) " +
+            "                             OR (address        IS NULL AND ?::jsonb IS NOT NULL)) " +
+            "                          THEN 'bosta' ELSE pii_source END " +
             "WHERE id = ? AND tenant_id = ? " +
             "  AND pii_redacted_at IS NULL",
-            fullName, phone, addressJson, orderId, tenantId);
+            fullName, phone, addressJson, fullName, phone, addressJson, orderId, tenantId);
 
         log.debug("Populated consignee PII for order {} from Bosta receiver", orderId);
     }

@@ -87,7 +87,32 @@ class ShopifyHttpGateway implements ShopifyGateway {
             }
             """;
 
-    private static final String ORDERS_QUERY = """
+    // Build B: how much customer PII the orders import asks for, per store (see orderPiiTier).
+    //   FULL      shipping + billing address blocks AND customer { firstName lastName defaultPhoneNumber }
+    //             — customer needs read_customers;
+    //   ADDRESSES shipping + billing only (read_orders + approved protected customer data);
+    //   NONE      no PII fields at all — the pre-Build-B query.
+    // The precedence itself (shipping → customer → billing) is SQL: shopify_order_pii_* (V144). Email is
+    // never requested. Validated against the 2026-04 Admin schema (Customer.phone is deprecated — hence
+    // defaultPhoneNumber).
+    enum OrderPiiTier { FULL, ADDRESSES, NONE;
+        OrderPiiTier lower() { return this == FULL ? ADDRESSES : NONE; }
+    }
+
+    static String ordersQuery(OrderPiiTier tier) {
+        String pii = switch (tier) {
+            case FULL -> """
+                    shippingAddress { name phone address1 address2 city province zip country }
+                    billingAddress { name phone }
+                    customer { firstName lastName defaultPhoneNumber { phoneNumber } }
+                    """;
+            case ADDRESSES -> """
+                    shippingAddress { name phone address1 address2 city province zip country }
+                    billingAddress { name phone }
+                    """;
+            case NONE -> "";
+        };
+        return """
             query OrdersPage($cursor: String, $queryStr: String) {
               orders(first: 50, after: $cursor, query: $queryStr, sortKey: CREATED_AT) {
                 pageInfo { hasNextPage endCursor }
@@ -105,11 +130,25 @@ class ShopifyHttpGateway implements ShopifyGateway {
                     currentTotalPriceSet { shopMoney { amount } }
                     displayFinancialStatus displayFulfillmentStatus
                     paymentGatewayNames tags
+            """ + pii + """
                   }
                 }
               }
             }
             """;
+    }
+
+    private static final String ACCESS_SCOPES_QUERY =
+            "query AppAccessScopes { currentAppInstallation { accessScopes { handle } } }";
+
+    static final Duration PII_TIER_TTL = Duration.ofHours(1);
+    static final Duration PII_TIER_TTL_UNKNOWN = Duration.ofMinutes(5);
+
+    private record CachedTier(OrderPiiTier tier, Instant until) {}
+
+    /** Per shop domain — the token's scopes rarely change; a reconnect is picked up within the TTL. */
+    private final java.util.concurrent.ConcurrentHashMap<String, CachedTier> orderPiiTiers =
+            new java.util.concurrent.ConcurrentHashMap<>();
 
     private final RestClient restClient;
     // Separate client for token exchange / refresh — bounded 10 s read timeout so a Shopify
@@ -327,10 +366,69 @@ class ShopifyHttpGateway implements ShopifyGateway {
         ObjectNode vars = mapper.createObjectNode();
         if (cursor != null) vars.put("cursor", cursor);
         vars.put("queryStr", "created_at:>" + createdAfter);
-        JsonNode data = executeGraphQL(shopDomain, token, ORDERS_QUERY, vars);
+        OrderPiiTier tier = orderPiiTier(shopDomain, token);
+        JsonNode data;
+        while (true) {
+            JsonNode response = postGraphQL(shopDomain, token, ordersQuery(tier), vars);
+            if (tier != OrderPiiTier.NONE && hasAccessDenied(response)) {
+                // A missing scope / unapproved field must never fail or empty the import: ask for less.
+                OrderPiiTier lower = tier.lower();
+                log.warn("Shopify orders import: ACCESS_DENIED for customer data at tier {} on {} — retrying at {}",
+                         tier, shopDomain, lower);
+                orderPiiTiers.put(shopDomain, new CachedTier(lower, Instant.now().plus(PII_TIER_TTL)));
+                tier = lower;
+                continue;
+            }
+            JsonNode errors = response.get("errors");
+            if (errors != null && errors.isArray() && errors.size() > 0) {
+                throw new ShopifyException("Shopify GraphQL error: " + errors.get(0).path("message").asText());
+            }
+            data = response.get("data");
+            if (data == null) throw new ShopifyException("Shopify GraphQL response has no data field");
+            break;
+        }
         JsonNode conn = data.path("orders");
         return new OrderPage(parseOrders(conn), conn.path("pageInfo").path("hasNextPage").asBoolean(),
                 conn.path("pageInfo").path("endCursor").asText(null));
+    }
+
+    /**
+     * The tier this store's token can read, from its live scopes (currentAppInstallation.accessScopes —
+     * GraphQL, per App Store review 2.2.4), cached per shop domain for {@link #PII_TIER_TTL}. read_customers
+     * → FULL, otherwise ADDRESSES. Unknown (the scope query failed) → ADDRESSES for {@link #PII_TIER_TTL_UNKNOWN}:
+     * never ask for customer without knowing the scope is there. An ACCESS_DENIED at fetch time lowers the
+     * cached tier further (fetchOrdersPage).
+     */
+    OrderPiiTier orderPiiTier(String shopDomain, String token) {
+        CachedTier cached = orderPiiTiers.get(shopDomain);
+        if (cached != null && cached.until().isAfter(Instant.now())) return cached.tier();
+        OrderPiiTier tier;
+        Duration ttl = PII_TIER_TTL;
+        try {
+            JsonNode data = executeGraphQL(shopDomain, token, ACCESS_SCOPES_QUERY, mapper.createObjectNode());
+            List<String> handles = new ArrayList<>();
+            for (JsonNode s : data.path("currentAppInstallation").path("accessScopes")) {
+                handles.add(s.path("handle").asText());
+            }
+            tier = ShopifyGateway.isScopeGranted("read_customers", String.join(",", handles))
+                ? OrderPiiTier.FULL : OrderPiiTier.ADDRESSES;
+        } catch (RuntimeException e) {
+            log.warn("Shopify orders import: could not read access scopes for {} ({}) — not asking for customer data",
+                     shopDomain, e.getMessage());
+            tier = OrderPiiTier.ADDRESSES;
+            ttl = PII_TIER_TTL_UNKNOWN;
+        }
+        orderPiiTiers.put(shopDomain, new CachedTier(tier, Instant.now().plus(ttl)));
+        return tier;
+    }
+
+    private static boolean hasAccessDenied(JsonNode response) {
+        JsonNode errors = response.get("errors");
+        if (errors == null || !errors.isArray()) return false;
+        for (JsonNode e : errors) {
+            if ("ACCESS_DENIED".equals(e.path("extensions").path("code").asText())) return true;
+        }
+        return false;
     }
 
     private static final String WEBHOOK_REGISTER_MUTATION = """
@@ -1547,9 +1645,8 @@ class ShopifyHttpGateway implements ShopifyGateway {
         for (JsonNode edge : conn.path("edges")) {
             JsonNode node = edge.path("node");
 
-            // shippingAddress requires Protected Customer Data access (Shopify Partner Dashboard →
-            // App setup → Protected customer data). Set null until token is regenerated with PII scope;
-            // the raw column preserves the full Shopify response for later backfill.
+            // Build B: customer PII stays in the node (raw) — ShopifySyncService.UPSERT_ORDER reads it with
+            // the shared SQL precedence (V144). The record's three PII fields are left null.
             String phone = null;
             String customerName = null;
             JsonNode shippingAddr = null;
