@@ -609,7 +609,13 @@ public class BostaController {
                                      )
                                      ELSE NULL
                                    END),
-                  pii_source     = COALESCE(o.pii_source, 'bosta')
+                  -- Build B: 'bosta' only when this fills an empty field (the WHERE already requires
+                  -- pii_source IS NULL, so a Shopify-filled order is never touched).
+                  pii_source     = CASE WHEN (o.customer_name  IS NULL AND NULLIF(TRIM(s.raw#>>'{receiver,fullName}'), '') IS NOT NULL)
+                                          OR (o.customer_phone IS NULL AND s.raw#>>'{receiver,phone}' IS NOT NULL)
+                                          OR (o.address        IS NULL AND (NULLIF(TRIM(s.raw#>>'{dropOffAddress,firstLine}'), '') IS NOT NULL
+                                                                         OR NULLIF(TRIM(s.raw#>>'{dropOffAddress,city,name}'),  '') IS NOT NULL))
+                                         THEN 'bosta' ELSE o.pii_source END
                 FROM shipments s
                 WHERE s.order_id      = o.id
                   AND s.tenant_id     = o.tenant_id

@@ -118,7 +118,10 @@ public class ReturnRequestService {
             "SELECT rr.id, rr.reference, rr.order_id, o.number AS order_number, o.customer_name, " +
             "       rr.type, rr.status::text AS status, rr.customer_email, rr.customer_note, rr.created_at, " +
             "       rr.decided_at, rr.decided_by, u.name AS decided_by_name, rr.rejection_reason, rr.return_shipment_id, " +
-            "       o.customer_phone, o.address->>'city' AS address_city, o.address->>'zone' AS address_zone, " +
+            "       o.customer_phone, " +
+            // Build B: the Bosta address first; Shopify's city only when the order has no address at all.
+            "       COALESCE(o.address->>'city', CASE WHEN o.address IS NULL THEN o.shopify_address->>'city' END) AS address_city, " +
+            "       o.address->>'zone' AS address_zone, " +
             "       rr.pickup_city_id, rr.pickup_city_name, rr.pickup_district_id, rr.pickup_district_name, " +
             "       rr.pickup_district_name_ar, rr.booking_status, rr.booking_error, rr.bosta_tracking_number, " +
             "       rr.booking_attempted_at, rr.booking_verified_at, " +

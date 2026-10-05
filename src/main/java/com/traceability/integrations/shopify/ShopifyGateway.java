@@ -37,6 +37,9 @@ public interface ShopifyGateway {
      * shippingAddress is kept as a raw JsonNode — column type is jsonb and the
      * structure is Shopify-specific; mapping to a record adds no value here.
      * tags and raw are stored verbatim for auditing and future webhook reconciliation.
+     * Build B (V144): customerName / customerPhone / shippingAddress are NOT read — UPSERT_ORDER takes the
+     * customer's name, phone and address from {@code raw} with the shared SQL precedence. They stay in the
+     * record only so its existing callers compile; the HTTP gateway leaves them null.
      */
     record Order(
             String   gid,

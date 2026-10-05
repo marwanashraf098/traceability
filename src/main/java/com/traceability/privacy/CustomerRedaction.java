@@ -9,7 +9,7 @@ import java.util.UUID;
  * customers/redact and shop/redact — every store of customer PII Traced holds (GDPR build A, V143).
  *
  * <ul>
- *   <li>orders: customer_name / customer_phone / address / pii_source cleared, raw stripped by
+ *   <li>orders: customer_name / customer_phone / address / shopify_address (V144) / pii_source cleared, raw stripped by
  *       {@code shopify_order_raw_redacted()}, pii_redacted_at stamped (UPSERT_ORDER then never refills them);</li>
  *   <li>return requests on those orders: email, note, typed pickup address (the pickup AREA snapshot —
  *       city / district names — stays, as before);</li>
@@ -116,6 +116,7 @@ public final class CustomerRedaction {
             SET customer_name   = NULL,
                 customer_phone  = NULL,
                 address         = NULL,
+                shopify_address = NULL,
                 pii_source      = NULL,
                 pii_redacted_at = now(),
                 raw             = shopify_order_raw_redacted(raw)

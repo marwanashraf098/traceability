@@ -4,6 +4,67 @@
 
 ## Current state
 
+**Build B — customer name, phone and address on Shopify orders (2026-10-06, branch `feat/shopify-pii-ingest` off
+main 1c8539e; not committed, not merged, not deployed). Migrations V144 (schema) + V145 (data, non-transactional).**
+Protected customer data: NAME, PHONE, ADDRESS approved — EMAIL NOT: no email column, email stripped from stored payloads.
+- **One precedence, in SQL (V144):** `shopify_order_pii_name` (shipping name → customer first + last → billing name),
+  `_phone` (shipping phone → customer phone / GraphQL defaultPhoneNumber → billing phone), `_address` (shipping block →
+  new `orders.shopify_address`). REST + GraphQL shapes. Used by `UPSERT_ORDER` (webhook + import + reconcile) and the
+  backfill. The `ShopifyGateway.Order` record's three PII fields are no longer read (kept so callers compile).
+- **UPSERT_ORDER (`ShopifySyncService.java:117`):** INSERT … SELECT computes PII from the payload; DO UPDATE is
+  fill-only `COALESCE(orders.x, EXCLUDED.x)` for name / phone / shopify_address; `orders.address` is no longer written
+  by Shopify at all (Bosta-owned); pii_source 'shopify' only when Shopify filled the name/phone of a source-less row;
+  redacted rows get nothing (V143 guard extended to shopify_address); RETURNING customer_phone feeds the blocklist gate
+  (`:414`, `:586`) — orders are now held at creation for a blocked phone.
+- **Import tiers (`ShopifyHttpGateway.java:98-431`):** scopes from the token's live
+  `currentAppInstallation.accessScopes` (GraphQL — App Store review 2.2.4), cached per shop 1 h; read_customers → FULL
+  (shippingAddress + billingAddress + customer { firstName lastName defaultPhoneNumber { phoneNumber } }), else
+  ADDRESSES; lookup failure → ADDRESSES for 5 min; ACCESS_DENIED → step down and re-ask the same page (FULL → ADDRESSES
+  → NONE), so a missing scope never fails or empties the import. Query validated against the 2026-04 schema
+  (Customer.phone is deprecated → defaultPhoneNumber). Stored `stores.access_token_scopes` NOT used (can be stale;
+  plumbing it would change the gateway interface every mock depends on).
+- **Bosta:** `populateConsigneePiiFromRaw` (`ShipmentLinkService.java:1303`) and the one-off `/bosta/backfill-pii`
+  (`BostaController.java:614`) set 'bosta' only when they fill an empty field of a source-less row.
+- **Address readers:** simulated waybill reads `shopify_address.address1` (+ city, Bosta city fallback)
+  (`BostaAwbService.java:236`); pack card (`PackSessionStore.java:298`) and request drawer
+  (`ReturnRequestService.java:123`) keep Bosta first, Shopify city only when `orders.address` IS NULL. Also changed:
+  `CustomerRedaction` clears shopify_address; the data-request export includes it. Not changed (follow-up if wanted):
+  order detail / pick screens still show only `orders.address`.
+- **Email:** `shopify_raw_without_email()` (every `email` / `*_email` key holding a string or null, any depth; prod
+  has email, contact_email, customer.email — `customer.verified_email` is a boolean and stays) via BEFORE triggers on
+  `orders.raw` and `shopify_webhook_events.payload_raw`.
+- **Backfill (`shopify_pii_backfill(500)`, V145):** strips email from every order (3,087; 2,446 hold email) and stored
+  webhook (21,293; 15,251 hold email); fills from REST raw, fill-only, never redacted, never before the store's floor
+  (Jumi: 2026-07-02 Cairo). COMMIT per 500-row keyset batch; idempotent; never calls Shopify.
+  **Prod dry run (read-only, 2026-10-06), fill name / phone / shopify_address — skip before floor / skip no REST raw:**
+  High line 1052/1052/1052 — 0/0 · Femine 545/545/841 — 0/0 · Jumi 10/10/199 — 470/37 · BROEK 70/70/309 — 0/0 ·
+  The Snouts 0/0/7 — 0/99 · blnco 1/1/27 — 0/0 · Juno Babies 0/0/5 — 0/0 · Review store 0/0/0 — 0/1. 0 redacted.
+  Left without a name afterwards (no REST raw, no Shopify call): Snouts 2 (cancelled 2026-07-21), Review store 1.
+  The other 135 no-REST-raw orders (Snouts 97, Jumi 37 + Jumi's 470 pre-floor) already have names from Bosta.
+- **Tests:** `ShopifyPiiIngestTest` b1–b7 (app_user + RLS; the backfill CALLed as owner, like Flyway) and
+  `ShopifyHttpGatewayOrdersPiiTest` w1–w4 (real gateway, wire bodies) — revert-checked: fill-only reversed → b3;
+  email trigger removed → b1 + b7; floor dropped → b7; scopes ignored → w2; old Bosta pii_source → b4; blocklist on
+  null → b6. GdprBuildATest still green. Existing tests changed (approved): MigrationSmokeTest / NotTracedBackfillTest
+  counts for V144 + V145. Backend 2,275 run — reds = the baseline two (ShopifyMagicLinkTest, ExchangeBackfillTest).
+  Frontend 102 files / 727 tests green (no frontend change).
+- **Deploy notes (reviewed 2026-10-06):** local benchmark (Postgres 16, synthetic data at prod volume, 8.6 KB avg
+  vs prod 11 KB) — V144 < 1 s, V145 9 s first run, 1.5 s re-run. Estimate on Supabase: ~20–60 s, worst case ~2 min,
+  added to the normal boot (the app is down from container recreate until Flyway finishes). Supabase's server-wide
+  statement_timeout = 2 min applies to Flyway's postgres role and the CALL is one statement → V145 sets
+  `statement_timeout = 0` for its own session (verified: with a 1 s server timeout a bare CALL is cancelled, V145
+  completes). The procedure's email pre-filter matches only keys that really hold an email string/null, so a re-run
+  rewrites nothing.
+- **If V145 fails partway (runbook):** the app will not start (Flyway: "Detected failed migration to version 145").
+  (1) Where it stopped: `SELECT version, success, installed_on, execution_time FROM flyway_schema_history WHERE
+  version IN ('144','145');` and progress — `SELECT count(*) FROM orders WHERE raw::text ~* '"([a-z0-9_]*_)?email":
+  ("|null)';` (same for `shopify_webhook_events.payload_raw`), `SELECT count(*) FROM orders WHERE pii_source =
+  'shopify';`. Committed batches stay. (2) Repair = remove the failed row (what `flyway repair` does):
+  `DELETE FROM flyway_schema_history WHERE version = '145' AND success = false;` (psql as postgres on the session
+  pooler, port 5432) — or the CLI, from /opt/traced: `docker run --rm -v "$PWD/src/main/resources/db/migration:/flyway/sql"
+  flyway/flyway:10.15.0 -url="$FLYWAY_DB_URL" -user="$FLYWAY_DB_USER" -password="$FLYWAY_DB_PASSWORD" -outOfOrder=true repair`.
+  (3) Restart the app: V145 runs again and skips what's done (idempotent, verified). V144 is transactional — if it
+  fails it rolls back completely and leaves no history row; just fix and restart.
+
 **GDPR build A — /connect removed, redaction that sticks, real customers/data_request (2026-10-05, branch
 `feat/gdpr-build-a` off main b5b2157; not merged, not pushed, not deployed). Migration V143.** Context: trace-3 is
 approved on the App Store and protected customer data is approved for **Name, Phone, Address only — Email is NOT

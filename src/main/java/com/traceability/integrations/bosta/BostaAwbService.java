@@ -233,7 +233,8 @@ public class BostaAwbService {
             TenantContext.runAs(tenantId, () -> tx.execute(s -> {
                 jdbc.query(
                     "SELECT s.tracking_number, o.number, o.customer_name, o.customer_phone, " +
-                    "       concat_ws(', ', o.address ->> 'address1', o.address ->> 'city') AS address_line, " +
+                    "       concat_ws(', ', o.shopify_address ->> 'address1', " +
+                    "                 COALESCE(o.shopify_address ->> 'city', o.address ->> 'city')) AS address_line, " +
                     "       COALESCE(s.cod_amount, o.cod_amount) AS cod " +
                     "FROM shipments s JOIN orders o ON o.id = s.order_id AND o.tenant_id = s.tenant_id " +
                     "WHERE s.id IN (" + placeholders + ") AND s.tenant_id = ?",
