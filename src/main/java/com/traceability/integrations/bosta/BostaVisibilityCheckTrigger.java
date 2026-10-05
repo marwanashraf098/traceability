@@ -30,6 +30,10 @@ import java.util.UUID;
  * And for the re-process of webhook events that failed on a Bosta rate limit
  * (BostaRateLimitedReprocessService): {@code BOSTA_REPROCESS_RATE_LIMITED_ON_STARTUP=<tenant ids>|all},
  * dry run unless {@code BOSTA_REPROCESS_RATE_LIMITED_APPLY=true}. Remove both after the run.
+ *
+ * And for the exchange / CRP reference catch-up (ExchangeReferenceCatchUpService, 2026-10-05):
+ * {@code BOSTA_EXCHANGE_REFERENCE_CATCH_UP_ON_STARTUP=<tenant ids>|all}, dry run unless
+ * {@code BOSTA_EXCHANGE_REFERENCE_CATCH_UP_APPLY=true}. Remove both after the run.
  */
 @Component
 public class BostaVisibilityCheckTrigger {
@@ -46,6 +50,18 @@ public class BostaVisibilityCheckTrigger {
     private final BostaRateLimitedReprocessService reprocess;
     private final String reprocessOnStartup;
     private final boolean reprocessApply;
+    private ExchangeReferenceCatchUpService referenceCatchUp;
+    private String referenceCatchUpOnStartup = "";
+    private boolean referenceCatchUpApply;
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public void setReferenceCatchUp(ExchangeReferenceCatchUpService referenceCatchUp,
+                                    @Value("${bosta.exchange-reference.catch-up.on-startup:}") String onStartup,
+                                    @Value("${bosta.exchange-reference.catch-up.apply:false}") boolean apply) {
+        this.referenceCatchUp = referenceCatchUp;
+        this.referenceCatchUpOnStartup = onStartup;
+        this.referenceCatchUpApply = apply;
+    }
 
     public BostaVisibilityCheckTrigger(@FlywayDataSource DataSource ownerDs,
                                        JobScheduler jobScheduler,
@@ -91,6 +107,17 @@ public class BostaVisibilityCheckTrigger {
             final UUID t = tenantId;
             jobScheduler.enqueue(() -> reprocess.runAndLog(t, reApply));
             log.info("Bosta rate-limited re-process enqueued for tenant {} (apply={})", t, reApply);
+        }
+        // Exchange / CRP reference catch-up (2026-10-05): BOSTA_EXCHANGE_REFERENCE_CATCH_UP_ON_STARTUP=<ids>|all,
+        // dry run unless BOSTA_EXCHANGE_REFERENCE_CATCH_UP_APPLY=true. One-shot per startup.
+        final boolean refApply = referenceCatchUpApply;
+        if (referenceCatchUp != null) {
+            for (UUID tenantId : tenants(referenceCatchUpOnStartup)) {
+                final UUID t = tenantId;
+                final ExchangeReferenceCatchUpService svc = referenceCatchUp;
+                jobScheduler.enqueue(() -> svc.runAndLog(t, refApply));
+                log.info("Exchange reference catch-up enqueued for tenant {} (apply={})", t, refApply);
+            }
         }
     }
 

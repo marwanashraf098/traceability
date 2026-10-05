@@ -26,6 +26,37 @@
 - **Tests:** PhoneScanSourceTest (3), phoneStockTransfers.test (10), stockTakePhoneInterleave.browser (Chromium +
   WebKit); migration counts bumped. Existing stock-take / transfer tests unchanged.
 
+**Exchanges and customer-return pickups linked to their original order by reference (2026-10-05, branch
+`feat/exchange-reference-link` off main ce6f9d6; not merged, not pushed, not deployed). No migration.**
+- **One reference rule — `OrderReference.resolve`** (bosta package): the businessReference through
+  `PreConnectDeliveryFilter.referenceCandidates` (as sent, and both sides of a ':'), each '#'± and as external_id;
+  shopifyInfo.orderId as a Shopify GID only when the reference finds nothing; internal orders (EXC-…) never match;
+  at most 2 distinct ids — exactly one = the order, two = ambiguous (never guessed).
+- **Users:** `ShipmentLinkService.matchByBusinessReference` (SEND / RTO / CRP strong match) — BROEK's CRPs
+  ("BRK-44903-EG:BRK-44903-EG-R1") now link as return legs through the existing path;
+  `ExchangeMatchService.matchByReference` — new first step of `attemptMatch`: exactly one order →
+  matched_order_id, match_method 'reference' (status matched; a needs_mapping row keeps needs_mapping and becomes
+  matched when `ExchangeService.commit` maps it); ambiguous → needs_confirmation, nothing set; no match / no
+  reference → the phone matcher as before. Dashboard rows only — return_request_id rows never touched.
+- **Fulfillment linking:** a tracking number already a shipment on an internal exchange order whose exchange is
+  matched to this order (or whose reference resolves to it) → link_status 'linked', reason "linked via exchange
+  EXC-…", no Bosta call, no new shipment, no exception. The exchange step also marks that row linked when it
+  matches. The shipping badge's link-problem check now ignores `linked` rows.
+- **Catch-up (`ExchangeReferenceCatchUpService`):** owner POST /api/v1/bosta/exchange-reference/catch-up?apply=…
+  or BOSTA_EXCHANGE_REFERENCE_CATCH_UP_ON_STARTUP=<ids>|all (+ _APPLY=true). Kinds in order: exchanges without
+  an original; open unlinked CRPs whose reference resolves to one order (re-run through the normal pipeline with a
+  'bosta_backfill' event and its own idempotency key — no matcher-version bump); fulfillment rows in conflict /
+  skipped because of an EXC order. Dry run writes nothing and calls no Bosta API. One `EXCHANGE_REF_CATCHUP` line
+  per row (tenant, kind, tracking, reference, order, verdict, reason) + a summary. Prod expectation (2026-10-05
+  read-only diagnosis): BROEK 6 exchanges → matched, 2 CRPs (1332878806, 6394431795) → return legs, 6
+  fulfillment rows → linked via exchange; the multi-item exchange 7098606041 stays in the unlinked lane.
+- **Tests:** `ExchangeReferenceLinkTest` r1–r11; revert-checked (20 mutations + RLS disabled, each red).
+  **Existing tests changed:** `PreConnectFilterTest.pf11` ("blncoeg:#515960" now LINKS through the tail instead of
+  going unlinked — asserts the shipment); `OrderShippingCarrierTest` order fixture computes placed_at from the JVM
+  clock with a one-hour margin (b2 / f1 flaked when the Docker clock ran ahead).
+- **Later (out of scope, noted 2026-10-05):** (a) BROEK EXC orders sit as pickable 'new' orders in Fulfill;
+  (b) Snouts 9293360461: the EXC leg is stuck at 'created' while Bosta says "Returned to business"
+  (ExchangeStateInterpreter vocabulary gap); (c) Femine CRPs carry no reference — manual linking only.
 **Phone control placement — no floating control (2026-10-05, branch `fix/phone-control-placement` off main 82f6bf5;
 pushed, not merged, not deployed). Frontend only, presentation only — PhoneScanProvider, routing and pairing unchanged.**
 - `phone/PhoneScanButton.tsx`: `PhoneScanButton` lives INSIDE a phone-capable scan screen's header, in its flow, next to
