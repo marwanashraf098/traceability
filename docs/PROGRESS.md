@@ -4,6 +4,51 @@
 
 ## Current state
 
+**Build C — custom_app_cc → official OAuth upgrade, made safe (2026-10-06, branch `feat/oauth-upgrade` off main
+5cd15a9; merged to main; not pushed, not deployed). Migration V146. SHOPIFY_OAUTH_AVAILABLE unchanged (false).**
+- **Upgrade = an OAuth callback that re-links an existing custom-app row** (`ShopifyOAuthService.updateStoreToken`,
+  `:591`; used by Path-1 re-link, Path-2 existing link and the race re-link). Before the swap,
+  `LegacyWebhookCleanup` (new) deletes the OLD app's subscriptions that point at Traced with the old app's own token —
+  the stored one, or a client-credentials re-exchange with the stored Client ID / Secret when expired (not persisted);
+  works whatever the store's status; never throws. Then `UPDATE_STORE_TOKEN` (`:55-80`) sets oauth, clears
+  `api_secret_encrypted` / `client_id_encrypted`, and records the outcome (V146: `oauth_upgraded_from`,
+  `oauth_upgraded_at`, `legacy_webhook_cleanup_status` done|failed, `_detail` ≤ 500, `_at`). Logs `OAUTH_UPGRADE`,
+  `OAUTH_UPGRADE_CLEANUP`.
+- **Cleanup failure:** upgrade still completes, status `failed` + reason. No in-app retry (the custom-app credentials are
+  cleared on the flip, as asked): the leftover subscriptions only produce 401s; deleting the custom app removes them.
+- **Uninstall safety:** after the flip the old app's webhooks fail HMAC — phase B only applies to custom-app rows, so
+  the `connection_type` flip alone already blocks them; clearing the secret is defence in depth. Before the flip, a
+  deleted custom app's `app/uninstalled` disconnects the store (trap) — recovery is "Connect with Shopify".
+- **Scope cache:** `ShopifyGateway.forgetOrderPiiTier(shop)` (default no-op; `ShopifyHttpGateway:403`) on every
+  insert / re-link / session-token swap (`ShopifyOAuthService:567, 613, 763`), CC connect (`ShopifySyncService:239`)
+  and CC scope refresh (`ShopifyController:264`).
+- **Per-store rollout (added after review):** `SHOPIFY_OAUTH_UPGRADE_SHOPS` (`shopify.oauth-upgrade-shops`, default
+  empty). `GET /connections`' `oauthAvailable` — the upgrade banner's only input — is now per store
+  (`ConnectionsController.upgradeOffered`): flag on AND (list empty OR this shop listed; case / spaces ignored). Banner
+  only — `/oauth/initiate` is not gated. Documented in application.yml, .env.example, the runbook (add a shop, verify,
+  then the next). Tests: `UpgradeRolloutRuleTest` (3 cases), `OAuthUpgradeRolloutTest` (HTTP, listed vs unlisted),
+  `oauthUpgradeBanner.test.tsx` (banner follows oauthAvailable; neutral recovery copy) — revert-checked.
+- **Recovery card copy (added after review):** the disconnected card's OAuth section no longer says "For Shopify
+  reviewers": badge "Official app", title "Connect with Shopify", hint "Reconnect this store through the official
+  Traced app." (EN + AR; locale keys `connections.shopify.reviewer.*` kept, no behaviour change). No existing test
+  asserted the old copy.
+- **Runbook:** `docs/runbooks/upgrade-store-to-oauth.md` (pre-checks incl. SHOPIFY_APP_HANDLE=trace-3 and the global
+  banner flag, what the merchant clicks, SQL to verify, when to delete the custom app, the trap, rollback — note
+  `app/uninstalled` disconnects by shop domain whichever app sent it).
+- **Tests:** `OAuthUpgradeTest` u1–u4 — the WHOLE app on app_user (RLS everywhere, as prod; app_user is created with
+  its password before Spring starts, which unblocks what ShopifyConnectAmbientContextTest couldn't do) and a REAL
+  JobRunr background server running the enqueued import + webhook registration; mocked only ShopifyGateway,
+  ShopifyLocationGateway, BostaGateway, BostaV2Client, EmailGateway. `@DirtiesContext` closes that context (and its
+  job server) after the class. Revert-checked: no cleanup → u1/u3/u4; secrets kept → u1/u3; no cache clear → u1.
+  Existing tests changed (approved): MigrationSmokeTest / NotTracedBackfillTest counts for V146.
+  Suite: backend 2,298 run — reds = the baseline two (ShopifyMagicLinkTest, ExchangeBackfillTest); frontend 103 files /
+  730 tests green.
+- **Report-only findings:** no static navigation links in code (embedded app uses in-page Polaris tabs,
+  `EmbeddedApp.tsx:638/754`; the live app config has none) — check the Dev Dashboard's app navigation setting. The
+  upgrade banner shows only while SHOPIFY_OAUTH_AVAILABLE=true (global for every custom-app store); after consent the
+  browser goes to the embedded app URL built with SHOPIFY_APP_HANDLE. The disconnected card's OAuth button is labelled
+  "For Shopify reviewers" — misleading for a merchant recovering from the trap (for build D).
+
 **Build B — customer name, phone and address on Shopify orders (2026-10-06, branch `feat/shopify-pii-ingest` off
 main 1c8539e; merged to main; not pushed, not deployed). Migrations V144 (schema) + V145 (data, non-transactional).**
 Protected customer data: NAME, PHONE, ADDRESS approved — EMAIL NOT: no email column, email stripped from stored payloads.

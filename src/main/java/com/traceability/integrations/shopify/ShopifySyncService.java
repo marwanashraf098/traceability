@@ -236,6 +236,7 @@ public class ShopifySyncService {
                                             String clientId, String clientSecret,
                                             String accessToken, long expiresInSeconds) {
         sameShopGuard.assertBoundShop(tenantId, shopDomain);
+        shopifyGateway.forgetOrderPiiTier(shopDomain);   // Build C: a (re)connect starts from the token's real scopes
         String encryptedToken    = encryptionService.encrypt(accessToken);
         String encryptedClientId = encryptionService.encrypt(clientId);
         String encryptedSecret   = encryptionService.encrypt(clientSecret);

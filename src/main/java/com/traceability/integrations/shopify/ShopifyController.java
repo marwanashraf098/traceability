@@ -259,6 +259,9 @@ public class ShopifyController {
         }
 
         tokenProvider.forceReExchangeNow(storeId);
+        String shop = tx.execute(s -> jdbc.query("SELECT shop_domain FROM stores WHERE id = ?",
+            rs -> rs.next() ? rs.getString(1) : null, storeId));
+        shopifyGateway.forgetOrderPiiTier(shop);   // Build C: new scopes take effect on the next import
 
         String grantedScopes = tx.execute(s -> jdbc.query(
             "SELECT access_token_scopes FROM stores WHERE id = ?",

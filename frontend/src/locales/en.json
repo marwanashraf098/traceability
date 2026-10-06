@@ -1742,9 +1742,9 @@
         "cta": "Connect my store"
       },
       "reviewer": {
-        "badge": "For Shopify reviewers",
-        "title": "Use the official Traced app",
-        "body": "Reviewing Traced for the App Store? Install the official app the standard way.",
+        "badge": "Official app",
+        "title": "Connect with Shopify",
+        "body": "Reconnect this store through the official Traced app.",
         "cta": "Connect with Shopify"
       },
       "choose": {

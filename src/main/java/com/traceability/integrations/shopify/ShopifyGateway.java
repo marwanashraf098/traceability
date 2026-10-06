@@ -172,6 +172,13 @@ public interface ShopifyGateway {
     record WebhookSubscription(String gid, String topic, String callbackUrl) {}
 
     /**
+     * Build C: forget the cached orders-import PII tier for this shop (ShopifyHttpGateway caches the token's
+     * scopes for an hour). Called on every connect / reconnect / token swap, so an upgraded store gets the
+     * customer tier on its very next import. No-op for gateways without a cache.
+     */
+    default void forgetOrderPiiTier(String shopDomain) { }
+
+    /**
      * Lists all webhook subscriptions for the store (up to 100).
      * Used to detect stale subscriptions owned by a different app before re-registering.
      */

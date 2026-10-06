@@ -399,6 +399,11 @@ class ShopifyHttpGateway implements ShopifyGateway {
      * never ask for customer without knowing the scope is there. An ACCESS_DENIED at fetch time lowers the
      * cached tier further (fetchOrdersPage).
      */
+    @Override
+    public void forgetOrderPiiTier(String shopDomain) {
+        if (shopDomain != null) orderPiiTiers.remove(shopDomain);
+    }
+
     OrderPiiTier orderPiiTier(String shopDomain, String token) {
         CachedTier cached = orderPiiTiers.get(shopDomain);
         if (cached != null && cached.until().isAfter(Instant.now())) return cached.tier();

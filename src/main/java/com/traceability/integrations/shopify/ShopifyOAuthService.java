@@ -61,7 +61,17 @@ public class ShopifyOAuthService {
                    access_token_scopes      = ?,
                    connection_type          = 'oauth',
                    status                   = 'connected',
-                   import_status            = 'pending'
+                   import_status            = 'pending',
+                   -- Build C: an OAuth store keeps no custom-app secret — webhook phase-B HMAC is then
+                   -- impossible for the old app, so its app/uninstalled can never disconnect this store.
+                   api_secret_encrypted     = NULL,
+                   client_id_encrypted      = NULL,
+                   -- Recorded only when this re-link upgraded a custom app (V146); untouched otherwise.
+                   oauth_upgraded_from           = COALESCE(?, oauth_upgraded_from),
+                   oauth_upgraded_at             = CASE WHEN ?::text IS NOT NULL THEN now() ELSE oauth_upgraded_at END,
+                   legacy_webhook_cleanup_status = COALESCE(?, legacy_webhook_cleanup_status),
+                   legacy_webhook_cleanup_detail = COALESCE(?, legacy_webhook_cleanup_detail),
+                   legacy_webhook_cleanup_at     = CASE WHEN ?::text IS NOT NULL THEN now() ELSE legacy_webhook_cleanup_at END
              WHERE shop_domain = ?
                AND tenant_id   = ?
             RETURNING id
@@ -114,6 +124,7 @@ public class ShopifyOAuthService {
     private final RegisterShopifyWebhooksJob webhooksJob;
     private final MagicLinkService          magicLinkService;
     private final ShopifySameShopGuard      sameShopGuard;
+    private final LegacyWebhookCleanup      legacyWebhookCleanup;
     private final TransactionTemplate       tx;
     private final SecureRandom              rng = new SecureRandom();
 
@@ -133,6 +144,7 @@ public class ShopifyOAuthService {
             RegisterShopifyWebhooksJob webhooksJob,
             MagicLinkService magicLinkService,
             ShopifySameShopGuard sameShopGuard,
+            LegacyWebhookCleanup legacyWebhookCleanup,
             PlatformTransactionManager txm,
             @Value("${shopify.client-id}") String clientId,
             @Value("${shopify.client-secret}") String clientSecret,
@@ -148,6 +160,7 @@ public class ShopifyOAuthService {
         this.webhooksJob       = webhooksJob;
         this.magicLinkService  = magicLinkService;
         this.sameShopGuard     = sameShopGuard;
+        this.legacyWebhookCleanup = legacyWebhookCleanup;
         this.tx                = new TransactionTemplate(txm);
         this.clientId          = clientId;
         this.clientSecret      = clientSecret;
@@ -551,6 +564,7 @@ public class ShopifyOAuthService {
     }
 
     private UUID insertStore(UUID tenantId, String shop, ShopifyGateway.TokenResponse tokens) {
+        shopifyGateway.forgetOrderPiiTier(shop);   // Build C: a (re)connect starts from the token's real scopes
         Timestamp accessExpiresAt  = Timestamp.from(Instant.now().plusSeconds(tokens.expiresIn()));
         Timestamp refreshExpiresAt = tokens.refreshToken() != null
             ? Timestamp.from(Instant.now().plusSeconds(tokens.refreshTokenExpiresIn())) : null;
@@ -565,11 +579,28 @@ public class ShopifyOAuthService {
                     tokens.grantedScopes())));
     }
 
+    /**
+     * Re-link an existing stores row to the new OAuth token (same row, same tenant).
+     *
+     * Build C: when the row is still a custom app (custom_app_cc / custom_app) this is the upgrade to the
+     * official app. BEFORE the swap, the old app's webhook subscriptions to Traced are deleted with the old
+     * app's own credentials ({@link LegacyWebhookCleanup}); the outcome is recorded on the row (V146). A
+     * failed cleanup never blocks the upgrade. The swap clears the custom-app secrets, and the per-shop
+     * scope cache is dropped so the next import asks for the tier the new token allows.
+     */
     private UUID updateStoreToken(UUID tenantId, String shop, ShopifyGateway.TokenResponse tokens) {
+        LegacyWebhookCleanup.Result cleanup;
+        try {
+            cleanup = legacyWebhookCleanup.run(tenantId, shop);
+        } catch (RuntimeException e) {   // defensive — run() reports failures itself
+            log.warn("OAUTH_UPGRADE_CLEANUP shop={} tenant={} unexpected error — upgrade continues: {}", shop, tenantId, e.toString());
+            cleanup = new LegacyWebhookCleanup.Result("custom_app_cc", "failed", "unexpected error: " + e.getClass().getSimpleName());
+        }
+        final LegacyWebhookCleanup.Result c = cleanup;
         Timestamp accessExpiresAt  = Timestamp.from(Instant.now().plusSeconds(tokens.expiresIn()));
         Timestamp refreshExpiresAt = tokens.refreshToken() != null
             ? Timestamp.from(Instant.now().plusSeconds(tokens.refreshTokenExpiresIn())) : null;
-        return TenantContext.runAs(tenantId, () -> tx.execute(s ->
+        UUID storeId = TenantContext.runAs(tenantId, () -> tx.execute(s ->
                 jdbc.query(UPDATE_STORE_TOKEN,
                     rs -> rs.next() ? rs.getObject("id", UUID.class) : null,
                     encryptionService.encrypt(tokens.accessToken()),
@@ -577,7 +608,14 @@ public class ShopifyOAuthService {
                     tokens.refreshToken() != null ? encryptionService.encrypt(tokens.refreshToken()) : null,
                     refreshExpiresAt,
                     tokens.grantedScopes(),
+                    c.previousType(), c.previousType(), c.status(), c.detail(), c.status(),
                     shop, tenantId)));
+        shopifyGateway.forgetOrderPiiTier(shop);
+        if (c.isUpgrade()) {
+            log.info("OAUTH_UPGRADE shop={} tenant={} store={} from={} cleanup={}", shop, tenantId, storeId,
+                c.previousType(), c.status());
+        }
+        return storeId;
     }
 
     private void enqueueImport(UUID storeId, UUID tenantId) {
@@ -722,6 +760,7 @@ public class ShopifyOAuthService {
     }
 
     private UUID applyExchangedToken(UUID tenantId, String shop, ShopifyGateway.TokenResponse tokens) {
+        shopifyGateway.forgetOrderPiiTier(shop);   // Build C: new token, possibly new scopes
         Timestamp accessExpiresAt  = Timestamp.from(Instant.now().plusSeconds(tokens.expiresIn()));
         Timestamp refreshExpiresAt = tokens.refreshToken() != null
             ? Timestamp.from(Instant.now().plusSeconds(tokens.refreshTokenExpiresIn())) : null;

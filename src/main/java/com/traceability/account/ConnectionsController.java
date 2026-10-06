@@ -39,6 +39,29 @@ public class ConnectionsController {
     @Value("${shopify.oauth-available:false}")
     private boolean oauthAvailable;
 
+    // Build C — per-store upgrade rollout (SHOPIFY_OAUTH_UPGRADE_SHOPS): shop domains, comma-separated.
+    @Value("${shopify.oauth-upgrade-shops:}")
+    private String oauthUpgradeShops;
+
+    /**
+     * Whether this store is offered the custom-app → official OAuth upgrade (the frontend shows the upgrade
+     * banner on a connected custom-app store when this is true): SHOPIFY_OAUTH_AVAILABLE is on AND
+     * (SHOPIFY_OAUTH_UPGRADE_SHOPS is empty — everyone — OR this store's shop domain is listed). Display
+     * only: /oauth/initiate itself is not gated.
+     */
+    static boolean upgradeOffered(boolean oauthAvailable, String shopsCsv, String shopDomain) {
+        if (!oauthAvailable) return false;
+        java.util.Set<String> shops = new java.util.HashSet<>();
+        if (shopsCsv != null) {
+            for (String s : shopsCsv.split(",")) {
+                String t = s.trim().toLowerCase(java.util.Locale.ROOT);
+                if (!t.isEmpty()) shops.add(t);
+            }
+        }
+        return shops.isEmpty()
+            || (shopDomain != null && shops.contains(shopDomain.trim().toLowerCase(java.util.Locale.ROOT)));
+    }
+
     @Value("${shopify.app-url}")
     private String shopifyAppUrl;
 
@@ -74,7 +97,7 @@ public class ConnectionsController {
      *   "bosta":   { "connected": bool, "businessName": str|null, "pickupMode": str|null,
      *                "awbFormat": str|null, "awbLang": str|null, "simulated": bool },
      *   "customAppAvailable": bool,
-     *   "oauthAvailable": bool,
+     *   "oauthAvailable": bool,   // per store: SHOPIFY_OAUTH_AVAILABLE && rollout list (upgradeOffered)
      *   "shopifySetup": { "appUrl": str, "redirectUrl": str, "webhookApiVersion": str, "scopes": [str] }
      * }
      *
@@ -175,7 +198,8 @@ public class ConnectionsController {
             result.put("shopify",            shopify);
             result.put("bosta",              bosta);
             result.put("customAppAvailable", customAppConnectEnabled);
-            result.put("oauthAvailable",     oauthAvailable);
+            result.put("oauthAvailable",     upgradeOffered(oauthAvailable, oauthUpgradeShops,
+                                                               (String) shopify.get("shopDomain")));
             result.put("shopifySetup",       shopifySetup);
             return result;
         }));
