@@ -97,9 +97,13 @@ public class SalesAnalyticsService {
 
     public record ProductSalesResponse(AnalyticsPeriod.Range range, String sort, List<ProductSales> products) {}
 
-    /** successRate = delivered / (delivered + refused), null when both are 0. city is the raw Bosta name. */
-    public record CitySales(String city, long orders, long deliveredOrders, long refusedOrders,
-                            long inTransitOrders, long otherTerminalOrders, BigDecimal successRate) {}
+    /**
+     * successRate = delivered / (delivered + refused), null when both are 0. cityId = Bosta's
+     * city._id (null for the "Unknown" row); nameAr falls back to nameEn.
+     */
+    public record CitySales(String cityId, String nameEn, String nameAr, long orders, long deliveredOrders,
+                            long refusedOrders, long inTransitOrders, long otherTerminalOrders,
+                            BigDecimal successRate) {}
 
     public record CitySalesResponse(AnalyticsPeriod.Range range, List<CitySales> cities) {}
 
@@ -263,6 +267,7 @@ public class SalesAnalyticsService {
         ),
         order_outcomes AS MATERIALIZED (
             SELECT po.order_id, d.bosta_decides,
+                   CASE WHEN d.bosta_decides THEN leg.city_id END AS city_id,
                    CASE WHEN d.bosta_decides THEN leg.city END AS city,
                    CASE
                        WHEN NOT d.bosta_decides THEN
@@ -280,6 +285,7 @@ public class SalesAnalyticsService {
             LEFT JOIN LATERAL (
                 SELECT s.id AS shipment_id, s.internal_state,
                        s.raw->'type'->>'code'                   AS type_code,
+                       s.raw->'dropOffAddress'->'city'->>'_id'  AS city_id,
                        s.raw->'dropOffAddress'->'city'->>'name' AS city
                 FROM shipments s
                 WHERE s.order_id = po.order_id
@@ -306,11 +312,11 @@ public class SalesAnalyticsService {
 
     /*
      * Customer returns (after delivery; refused/RTO is separate) — appended after ORDER_OUTCOMES.
-     * Three more parameters: tenant id (piece events), tenant id (tracked portal items), tenant id
-     * (untracked portal items). A returned UNIT is identified by (order_item, piece) or
-     * (order_item, unit_no):
-     *   (1) piece_events return_received FROM delivered, not exchange_match and not attributed to an
-     *       exchange request — the piece's allocation on the order names the order_item;
+     * Four more parameters: tenant id (dashboard exchanges), tenant id (piece events), tenant id
+     * (tracked portal items), tenant id (untracked portal items). A returned UNIT is identified by
+     * (order_item, piece) or (order_item, unit_no):
+     *   (1) piece_events return_received FROM delivered — the piece's allocation on the order names
+     *       the order_item — minus the units that were EXCHANGED (below);
      *   (2) portal refund-request items arrived or done: a tracked item's piece (same allocation
      *       join; UNION with (1), so a piece in both counts once), an untracked item's unit_no;
      *   (3) Shopify 'return' refunds added back to the line (lines.shopify_returned) — units only,
@@ -318,23 +324,66 @@ public class SalesAnalyticsService {
      * Per line: returned = LEAST(qty, GREATEST(identified units, Shopify units)) — every identified
      * unit once, and Shopify only adds the units the scans / portal don't already account for, so a
      * unit present in all three sources counts once (precedence piece > portal > Shopify).
-     * Exchange-kind portal items and exchange inbound pieces are never returns here.
+     *
+     * Exchanged units are not returns (slice 6), and ONLY those units are left out — never every
+     * piece of an order that has an exchange (the scan labels every delivered piece of such an
+     * order 'exchange_match', so the label alone over-excludes):
+     *   portal exchange — the exchange request's own unit: a scan attributed to the request
+     *                     (metadata request_id) or the piece bound to its item; exchange items never
+     *                     enter (2), which reads refund requests only;
+     *   dashboard exchange (exchanges row with no request, matched to the order) — one unit per row:
+     *                     the order's 'exchange_match' scans are ranked (the exchange's inbound
+     *                     variant first, then piece id) and the first N are left out, N = the
+     *                     order's dashboard exchanges (dismissed / cancelled rows don't count).
      */
     private static final String LINE_RETURNS = """
-        , piece_units AS (
-            SELECT a.order_item_id, e.piece_id
+        , dashboard_exchanges AS (
+            SELECT x.matched_order_id AS order_id,
+                   COUNT(*)                                                         AS units,
+                   COALESCE(array_agg(x.inbound_variant_id)
+                            FILTER (WHERE x.inbound_variant_id IS NOT NULL), '{}')  AS variants
+            FROM exchanges x
+            JOIN period_orders po ON po.order_id = x.matched_order_id
+            WHERE x.tenant_id = ?
+              AND x.return_request_id IS NULL
+              AND x.status NOT IN ('dismissed', 'cancelled')
+            GROUP BY x.matched_order_id
+        ),
+        scanned AS (
+            SELECT DISTINCT a.order_item_id, e.piece_id, e.order_id, p.variant_id,
+                   COALESCE(e.metadata->>'return_kind', '') = 'exchange_match' AS exchange_labelled
             FROM piece_events e
             JOIN period_orders po ON po.order_id = e.order_id
+            JOIN pieces p         ON p.id = e.piece_id
             JOIN allocations a    ON a.piece_id = e.piece_id
             JOIN order_items oi2  ON oi2.id = a.order_item_id AND oi2.order_id = e.order_id
             WHERE e.tenant_id = ?
               AND e.event_type = 'return_received'
               AND e.from_status = 'delivered'
-              AND COALESCE(e.metadata->>'return_kind', '') <> 'exchange_match'
               AND NOT EXISTS (
                   SELECT 1 FROM return_requests xr
                   WHERE xr.tenant_id = e.tenant_id AND xr.type = 'exchange'
                     AND xr.id::text = e.metadata->>'request_id')
+              AND NOT EXISTS (
+                  SELECT 1 FROM return_request_items xi
+                  JOIN return_requests xr ON xr.id = xi.request_id
+                  WHERE xi.tenant_id = e.tenant_id AND xr.type = 'exchange'
+                    AND xr.order_id = e.order_id AND xi.piece_id = e.piece_id)
+        ),
+        scanned_ranked AS (
+            SELECT s.order_item_id, s.piece_id, s.exchange_labelled,
+                   COALESCE(dx.units, 0) AS exchanged_units,
+                   ROW_NUMBER() OVER (
+                       PARTITION BY s.order_id, s.exchange_labelled
+                       ORDER BY (s.variant_id = ANY (COALESCE(dx.variants, '{}'))) DESC, s.piece_id
+                   ) AS exchange_rank
+            FROM scanned s
+            LEFT JOIN dashboard_exchanges dx ON dx.order_id = s.order_id
+        ),
+        piece_units AS (
+            SELECT order_item_id, piece_id
+            FROM scanned_ranked
+            WHERE NOT (exchange_labelled AND exchange_rank <= exchanged_units)
             UNION
             SELECT a.order_item_id, rri.piece_id
             FROM return_request_items rri
@@ -427,18 +476,41 @@ public class SalesAnalyticsService {
         GROUP BY GROUPING SETS ((variant_id), ())
         """;
 
-    /** Per city of the deciding Bosta forward leg (dropOffAddress.city.name only — never other address fields). */
+    /*
+     * Per city of the deciding Bosta forward leg, keyed by Bosta's city._id (dropOffAddress.city —
+     * never any other address field). nameEn = the leg's city name; nameAr = bosta_districts'
+     * city_name_ar (Bosta's own reference data), falling back to nameEn. Legs with no city are one
+     * "Unknown" row (cityId null), never dropped.
+     */
     private static final String CITIES_SQL = soldLines(false) + ORDER_OUTCOMES + """
-        SELECT city,
-               COUNT(*)                                            AS orders,
-               COUNT(*) FILTER (WHERE outcome = 'delivered')       AS delivered_orders,
-               COUNT(*) FILTER (WHERE outcome = 'refused')         AS refused_orders,
-               COUNT(*) FILTER (WHERE outcome = 'in_transit')      AS in_transit_orders,
-               COUNT(*) FILTER (WHERE outcome = 'other_terminal')  AS other_terminal_orders
-        FROM order_outcomes
-        WHERE bosta_decides
-        GROUP BY city
-        ORDER BY orders DESC, city NULLS LAST
+        , per_city AS (
+            SELECT city_id,
+                   MAX(city)                                           AS leg_name,
+                   COUNT(*)                                            AS orders,
+                   COUNT(*) FILTER (WHERE outcome = 'delivered')       AS delivered_orders,
+                   COUNT(*) FILTER (WHERE outcome = 'refused')         AS refused_orders,
+                   COUNT(*) FILTER (WHERE outcome = 'in_transit')      AS in_transit_orders,
+                   COUNT(*) FILTER (WHERE outcome = 'other_terminal')  AS other_terminal_orders
+            FROM order_outcomes
+            WHERE bosta_decides
+            GROUP BY city_id
+        ),
+        city_names AS (
+            SELECT city_id, MAX(city_name) AS name_en, MAX(city_name_ar) AS name_ar
+            FROM bosta_districts
+            WHERE city_id IN (SELECT city_id FROM per_city)
+            GROUP BY city_id
+        )
+        SELECT pc.city_id,
+               CASE WHEN pc.city_id IS NULL THEN 'Unknown'
+                    ELSE COALESCE(pc.leg_name, cn.name_en, pc.city_id) END                  AS name_en,
+               CASE WHEN pc.city_id IS NULL THEN 'Unknown'
+                    ELSE COALESCE(cn.name_ar, pc.leg_name, cn.name_en, pc.city_id) END      AS name_ar,
+               pc.orders, pc.delivered_orders, pc.refused_orders, pc.in_transit_orders,
+               pc.other_terminal_orders
+        FROM per_city pc
+        LEFT JOIN city_names cn ON cn.city_id = pc.city_id
+        ORDER BY pc.orders DESC, (pc.city_id IS NULL), name_en
         """;
 
     private static String productsSql(Sort sort) {
@@ -495,7 +567,7 @@ public class SalesAnalyticsService {
         // Statement 2 (slice 2): outcomes + returns over the period's lines, keyed by variant.
         Map<UUID, Outcome> outcomes = new HashMap<>();
         Outcome[] totalOutcome = { Outcome.NONE };
-        jdbc.query(OUTCOMES_SQL, params(tid, period, 5, null), rs -> {
+        jdbc.query(OUTCOMES_SQL, params(tid, period, 6, null), rs -> {
             Outcome o = new Outcome(
                 rs.getLong("delivered_units"), rs.getLong("refused_units"), rs.getLong("in_transit_units"),
                 rs.getLong("wijha_units"), rs.getLong("not_shipped_units"), rs.getLong("other_terminal_units"),
@@ -572,7 +644,8 @@ public class SalesAnalyticsService {
         List<CitySales> rows = jdbc.query(CITIES_SQL, params(tid, period, 2, null), (rs, i) -> {
             long delivered = rs.getLong("delivered_orders");
             long refused = rs.getLong("refused_orders");
-            return new CitySales(rs.getString("city"), rs.getLong("orders"), delivered, refused,
+            return new CitySales(rs.getString("city_id"), rs.getString("name_en"), rs.getString("name_ar"),
+                rs.getLong("orders"), delivered, refused,
                 rs.getLong("in_transit_orders"), rs.getLong("other_terminal_orders"),
                 rate(delivered, delivered + refused));
         });

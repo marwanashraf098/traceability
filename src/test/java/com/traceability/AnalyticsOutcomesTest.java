@@ -149,8 +149,8 @@ class AnalyticsOutcomesTest {
 
         UUID shipment(UUID order, String leg, int typeCode, String state, String city, Instant createdAt) {
             UUID s = UUID.randomUUID();
-            String raw = "{\"type\":{\"code\":" + typeCode + "},\"dropOffAddress\":{\"city\":{\"name\":" +
-                         (city == null ? "null" : "\"" + city + "\"") + "}}}";
+            String raw = "{\"type\":{\"code\":" + typeCode + "},\"dropOffAddress\":" +
+                         (city == null ? "{}" : "{\"city\":{\"_id\":\"" + cityId(city) + "\",\"name\":\"" + city + "\"}}") + "}";
             jdbc.update("INSERT INTO shipments (id, tenant_id, order_id, tracking_number, internal_state, shipment_leg, " +
                         "raw, created_at) VALUES (?, ?, ?, ?, ?::shipment_internal_state, ?, ?::jsonb, ?)",
                         s, id, order, String.valueOf(SEQ.incrementAndGet()), state, leg, raw, Timestamp.from(createdAt));
@@ -173,6 +173,13 @@ class AnalyticsOutcomesTest {
             jdbc.update("INSERT INTO allocations (tenant_id, order_item_id, piece_id, status) VALUES (?, ?, ?, 'packed')",
                         id, orderItem, p);
             return p;
+        }
+
+        /** A dashboard exchange (no request) matched to the order, its inbound (old) variant given. */
+        void dashboardExchange(UUID order, UUID inboundVariant) {
+            jdbc.update("INSERT INTO exchanges (tenant_id, tracking_number, status, inbound_variant_id, matched_order_id, raw) " +
+                        "VALUES (?, ?, 'matched', ?, ?, '{}'::jsonb)",
+                        id, String.valueOf(SEQ.incrementAndGet()), inboundVariant, order);
         }
 
         void returnReceived(String piece, UUID order, String fromStatus, String metadata) {
@@ -199,6 +206,11 @@ class AnalyticsOutcomesTest {
                         "reason_code, active, item_status) VALUES (?, ?, ?, ?, ?, 'wrong_size', ?, ?)",
                         id, request, orderItem, unitNo, variant, itemStatus.equals("arrived"), itemStatus);
         }
+    }
+
+    /** A stable Bosta-like city._id per city name, for fixtures. */
+    static String cityId(String city) {
+        return "city-" + city.toLowerCase().replace(' ', '-');
     }
 
     static String reference() {
@@ -456,6 +468,7 @@ class AnalyticsOutcomesTest {
         UUID oi = t.line(o, v, 3);
         t.forward(o, 10, "delivered", "Cairo");
 
+        t.dashboardExchange(o, v);                     // the exchanged unit came back as exchange_match
         t.returnReceived(t.piece(v, oi), o, "delivered", "{\"return_kind\":\"exchange_match\"}");
         UUID exchangeReq = t.request(o, "exchange");
         String p2 = t.piece(v, oi);
@@ -469,6 +482,50 @@ class AnalyticsOutcomesTest {
         Map<String, Object> r = row(variants(t), v);
         assertThat(n(r, "deliveredUnits")).isEqualTo(3);
         assertThat(n(r, "returnedUnits")).isZero();
+    }
+
+    @Test
+    void exchangeExclusion_onlyTheExchangedUnit_notEveryPieceOfTheOrder() {
+        T t = new T("An2-ExchangedUnitOnly");
+
+        // One exchanged unit + one genuinely returned unit of the same variant. The scan labels BOTH
+        // 'exchange_match' (it's order-scoped); only one unit was exchanged → returned = 1.
+        UUID v = t.variant("Same", "100.00");
+        UUID o = t.order("bosta");
+        UUID oi = t.line(o, v, 2);
+        t.forward(o, 10, "delivered", "Cairo");
+        t.dashboardExchange(o, v);
+        t.returnReceived(t.piece(v, oi), o, "delivered", "{\"return_kind\":\"exchange_match\"}");
+        t.returnReceived(t.piece(v, oi), o, "delivered", "{\"return_kind\":\"exchange_match\"}");
+
+        // Different variants on one order: the exchange's inbound variant is the exchanged unit,
+        // the other variant's returned piece counts.
+        UUID exchanged = t.variant("ExchangedOld", "100.00");
+        UUID kept = t.variant("ReturnedOther", "100.00");
+        UUID o2 = t.order("bosta");
+        UUID oiA = t.line(o2, exchanged, 1);
+        UUID oiB = t.line(o2, kept, 1);
+        t.forward(o2, 10, "delivered", "Giza");
+        t.dashboardExchange(o2, exchanged);
+        t.returnReceived(t.piece(kept, oiB), o2, "delivered", "{\"return_kind\":\"exchange_match\"}");
+        t.returnReceived(t.piece(exchanged, oiA), o2, "delivered", "{\"return_kind\":\"exchange_match\"}");
+
+        // A dismissed exchange excludes nothing.
+        UUID dismissedVariant = t.variant("DismissedExchange", "100.00");
+        UUID o3 = t.order("bosta");
+        UUID oi3 = t.line(o3, dismissedVariant, 1);
+        t.forward(o3, 10, "delivered", "Cairo");
+        jdbc.update("INSERT INTO exchanges (tenant_id, tracking_number, status, inbound_variant_id, matched_order_id, raw) " +
+                    "VALUES (?, ?, 'dismissed', ?, ?, '{}'::jsonb)", t.id, String.valueOf(SEQ.incrementAndGet()),
+                    dismissedVariant, o3);
+        t.returnReceived(t.piece(dismissedVariant, oi3), o3, "delivered", "{\"return_kind\":\"exchange_match\"}");
+
+        Map<String, Object> body = variants(t);
+        assertThat(n(row(body, v), "returnedUnits")).as("one exchanged, one returned").isEqualTo(1);
+        assertThat(n(row(body, exchanged), "returnedUnits")).as("the exchanged variant").isZero();
+        assertThat(n(row(body, kept), "returnedUnits")).as("the other variant's return").isEqualTo(1);
+        assertThat(n(row(body, dismissedVariant), "returnedUnits")).isEqualTo(1);
+        assertThat(n(totals(body), "returnedUnits")).isEqualTo(3);
     }
 
     @Test
@@ -634,6 +691,21 @@ class AnalyticsOutcomesTest {
         t.forward(g, 10, "with_courier", "Giza");
         UUID wijha = t.order("other_known");     // no Bosta leg → not listed
         t.line(wijha, v, 1);
+        // Same Bosta city._id under another spelling → still the one Cairo row (keyed by id, not name).
+        UUID respelled = t.order("bosta");
+        t.line(respelled, v, 1);
+        jdbc.update("INSERT INTO shipments (tenant_id, order_id, tracking_number, internal_state, shipment_leg, raw, created_at) " +
+                    "VALUES (?, ?, ?, 'delivered', 'forward', ?::jsonb, ?)", t.id, respelled,
+                    String.valueOf(SEQ.incrementAndGet()),
+                    "{\"type\":{\"code\":10},\"dropOffAddress\":{\"city\":{\"_id\":\"" + cityId("Cairo") + "\",\"name\":\"Al Qahira\"}}}",
+                    Timestamp.from(SEPT_10.plusSeconds(60)));
+        UUID noCity = t.order("bosta");          // Bosta leg with no city → the "Unknown" row
+        t.line(noCity, v, 1);
+        t.forward(noCity, 10, "created", null);
+        // Bosta reference data: Arabic name for Cairo only (Giza falls back to its English name).
+        jdbc.update("INSERT INTO bosta_districts (district_id, city_id, city_name, city_name_ar, district_name) " +
+                    "VALUES (?, ?, 'Cairo', 'القاهرة', 'Maadi') ON CONFLICT DO NOTHING",
+                    "d-" + UUID.randomUUID(), cityId("Cairo"));
         UUID ov = other.variant("C", "100.00");
         for (int i = 0; i < 6; i++) {
             UUID o = other.order("bosta");
@@ -644,12 +716,19 @@ class AnalyticsOutcomesTest {
         ResponseEntity<Map> r = get(t.ownerToken, "/api/v1/analytics/sales/cities?" + SEPT);
         assertThat(r.getStatusCode()).isEqualTo(HttpStatus.OK);
         List<Map<String, Object>> cities = (List<Map<String, Object>>) r.getBody().get("cities");
-        assertThat(cities).extracting(c -> c.get("city")).containsExactly("Cairo", "Giza");
+        assertThat(cities).extracting(c -> c.get("nameEn")).containsExactly("Cairo", "Giza", "Unknown");
+        assertThat(cities).extracting(c -> c.get("cityId")).containsExactly(cityId("Cairo"), cityId("Giza"), null);
         Map<String, Object> cairo = cities.get(0);
-        assertThat(n(cairo, "orders")).isEqualTo(4);
-        assertThat(n(cairo, "deliveredOrders")).isEqualTo(3);
+        assertThat(cairo.get("nameAr")).isEqualTo("القاهرة");
+        assertThat(cities.get(1).get("nameAr")).as("no Arabic name → English").isEqualTo("Giza");
+        Map<String, Object> unknown = cities.get(2);
+        assertThat(unknown.get("nameAr")).isEqualTo("Unknown");
+        assertThat(n(unknown, "orders")).isEqualTo(1);
+        assertThat(n(unknown, "inTransitOrders")).isEqualTo(1);
+        assertThat(n(cairo, "orders")).isEqualTo(5);
+        assertThat(n(cairo, "deliveredOrders")).isEqualTo(4);
         assertThat(n(cairo, "refusedOrders")).isEqualTo(1);
-        assertThat(dec(cairo, "successRate")).isEqualByComparingTo("0.7500");
+        assertThat(dec(cairo, "successRate")).isEqualByComparingTo("0.8000");
         Map<String, Object> giza = cities.get(1);
         assertThat(n(giza, "inTransitOrders")).isEqualTo(1);
         assertThat(giza.get("successRate")).isNull();
@@ -665,7 +744,7 @@ class AnalyticsOutcomesTest {
         assertThat(asOther.cities()).hasSize(1);
         assertThat(asOther.cities().get(0).orders()).isEqualTo(6);
         TenantContext.set(t.id);
-        assertThat(tx.execute(s -> svc.cities(sept)).cities().get(0).orders()).isEqualTo(4);
+        assertThat(tx.execute(s -> svc.cities(sept)).cities().get(0).orders()).isEqualTo(5);
     }
 
     @Test
