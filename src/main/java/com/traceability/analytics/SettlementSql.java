@@ -74,15 +74,15 @@ final class SettlementSql {
 
     /**
      * The tenant's payout weekday (ISO, 1 = Monday) — the weekday shared by the most distinct
-     * cashout dates in the last 90 days, when at least two dates agree; else NULL. One parameter:
-     * tenant id.
+     * cashout dates in the 90 days before now, when at least two dates agree; else NULL. Parameters:
+     * tenant id, now (the caller's Clock — never the database clock, so tests can fix time).
      */
     static final String PAYOUT_WEEKDAY = """
         SELECT d FROM (
             SELECT EXTRACT(ISODOW FROM cashout_date)::int AS d, COUNT(DISTINCT cashout_date) AS n
             FROM shipments
             WHERE tenant_id = ? AND cashout_date IS NOT NULL
-              AND cashout_date > (now() AT TIME ZONE 'Africa/Cairo')::date - 90
+              AND cashout_date > (?::timestamptz AT TIME ZONE 'Africa/Cairo')::date - 90
             GROUP BY 1
         ) w
         WHERE n >= 2

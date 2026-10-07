@@ -123,11 +123,11 @@ public class MoneyAnalyticsService {
     // ── /pipeline ───────────────────────────────────────────────────────────
 
     /*
-     * City success rates over the tenant's orders placed in the last 90 days that went out with
+     * City success rates over the tenant's orders placed in the 90 days before now (the service Clock) that went out with
      * Bosta: each order's deciding forward leg (the s2 rule — SalesAnalyticsService.LEG_OUTCOME_WHENS,
      * Wijha-ended legs left out), rate = delivered ÷ (delivered + failed), failed = refused + other
-     * terminal (the one success-rate definition, 2026-10-08). And the overall rate. One parameter:
-     * tenant id.
+     * terminal (the one success-rate definition, 2026-10-08). And the overall rate. Parameters:
+     * tenant id, now.
      */
     private static final String RATES = """
         rates AS (
@@ -156,7 +156,7 @@ public class MoneyAnalyticsService {
                     FROM shipment_status_history hh
                     WHERE hh.shipment_id = leg.shipment_id
                 ) h ON true
-                WHERE o.tenant_id = ? AND o.placed_at > now() - interval '90 days'
+                WHERE o.tenant_id = ? AND o.placed_at > ?::timestamptz - interval '90 days'
             ) dl
             GROUP BY dl.city
         ),
@@ -215,6 +215,7 @@ public class MoneyAnalyticsService {
         Stage notFulfilled = jdbc.query(stagesSql, ps -> {
             int i = soldLineParams(ps, tid, open);
             ps.setObject(i++, tid);                       // rates
+            ps.setTimestamp(i++, Timestamp.from(now));
             ps.setObject(i++, tid);                       // leg
             ps.setArray(i++, ps.getConnection().createArrayOf("text", PROVINCE_TO_BOSTA_CITY.keySet().toArray(new String[0])));
             ps.setArray(i, ps.getConnection().createArrayOf("text", PROVINCE_TO_BOSTA_CITY.values().toArray(new String[0])));
@@ -242,9 +243,10 @@ public class MoneyAnalyticsService {
             """;
         Stage inTransit = jdbc.query(transitSql, ps -> {
             ps.setObject(1, tid);
-            ps.setArray(2, ps.getConnection().createArrayOf("text", overrides.shopDomains()));
-            ps.setArray(3, ps.getConnection().createArrayOf("text", overrides.days()));
-            ps.setObject(4, tid);
+            ps.setTimestamp(2, Timestamp.from(now));
+            ps.setArray(3, ps.getConnection().createArrayOf("text", overrides.shopDomains()));
+            ps.setArray(4, ps.getConnection().createArrayOf("text", overrides.days()));
+            ps.setObject(5, tid);
         }, rs -> {
             rs.next();
             return new Stage(rs.getLong("n"), money(rs.getBigDecimal("value")), moneyOrNull(rs.getBigDecimal("expected")));
@@ -491,7 +493,7 @@ public class MoneyAnalyticsService {
     public Stuck stuck() {
         UUID tid = TenantContext.require();
         Instant now = clock.instant();
-        Integer weekday = jdbc.query(SettlementSql.PAYOUT_WEEKDAY, rs -> rs.next() ? rs.getInt(1) : null, tid);
+        Integer weekday = jdbc.query(SettlementSql.PAYOUT_WEEKDAY, rs -> rs.next() ? rs.getInt(1) : null, tid, Timestamp.from(now));
 
         String base = " FROM shipments s" + SettlementSql.floorJoin("s") +
             " WHERE s.tenant_id = ? AND s.provider = 'bosta' AND fo.status <> 'cancelled'::order_status AND "
