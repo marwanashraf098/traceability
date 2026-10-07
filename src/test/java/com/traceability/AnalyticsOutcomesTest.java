@@ -334,7 +334,7 @@ class AnalyticsOutcomesTest {
         assertThat(n(r, "notShippedUnits")).isEqualTo(5);
         assertThat(n(r, "otherTerminalUnits")).isEqualTo(6);
         assertBucketsSumToSold(r);
-        assertThat(dec(r, "refusalRate")).isEqualByComparingTo("0.6000");    // 3 / (2 + 3)
+        assertThat(dec(r, "refusalRate")).isEqualByComparingTo("0.2727");    // 3 / (2 + 3 refused + 6 other terminal)
         assertThat(dec(r, "deliveredRevenue")).isEqualByComparingTo("200.00");
 
         Map<String, Object> tot = totals(body);
@@ -561,6 +561,10 @@ class AnalyticsOutcomesTest {
         UUID o = t.order("bosta");
         t.line(o, refusedOnly, 1);
         t.forward(o, 20, "returned", "Cairo");
+        UUID lostOnly = t.variant("LostOnly", "100.00");
+        UUID lo = t.order("bosta");
+        t.line(lo, lostOnly, 1);
+        t.forward(lo, 10, "lost", "Cairo");
 
         Map<String, Object> body = variants(t);
         Map<String, Object> a = row(body, notShipped);
@@ -569,6 +573,9 @@ class AnalyticsOutcomesTest {
         Map<String, Object> b = row(body, refusedOnly);
         assertThat(b.get("returnRate")).as("no delivered units").isNull();
         assertThat(dec(b, "refusalRate")).isEqualByComparingTo("1.0000");
+        // Lost only: a failure, but not a refusal → 0 (not null: the denominator counts it).
+        Map<String, Object> lostRow = row(body, lostOnly);
+        assertThat(dec(lostRow, "refusalRate")).isEqualByComparingTo("0.0000");
         assertThat(totals(body).get("returnRate")).isNull();
 
         T empty = new T("An2-Empty");
@@ -686,6 +693,9 @@ class AnalyticsOutcomesTest {
             t.line(o, v, 1);
             t.forward(o, state.equals("returned") ? 20 : 10, state, "Cairo");
         }
+        UUID lostCairo = t.order("bosta");       // lost: a failure in the success rate
+        t.line(lostCairo, v, 1);
+        t.forward(lostCairo, 10, "lost", "Cairo");
         UUID g = t.order("bosta");
         t.line(g, v, 1);
         t.forward(g, 10, "with_courier", "Giza");
@@ -725,10 +735,11 @@ class AnalyticsOutcomesTest {
         assertThat(unknown.get("nameAr")).isEqualTo("Unknown");
         assertThat(n(unknown, "orders")).isEqualTo(1);
         assertThat(n(unknown, "inTransitOrders")).isEqualTo(1);
-        assertThat(n(cairo, "orders")).isEqualTo(5);
+        assertThat(n(cairo, "orders")).isEqualTo(6);
+        assertThat(n(cairo, "otherTerminalOrders")).isEqualTo(1);
         assertThat(n(cairo, "deliveredOrders")).isEqualTo(4);
         assertThat(n(cairo, "refusedOrders")).isEqualTo(1);
-        assertThat(dec(cairo, "successRate")).isEqualByComparingTo("0.8000");
+        assertThat(dec(cairo, "successRate")).isEqualByComparingTo("0.6667");   // 4 / (4 + 1 refused + 1 lost)
         Map<String, Object> giza = cities.get(1);
         assertThat(n(giza, "inTransitOrders")).isEqualTo(1);
         assertThat(giza.get("successRate")).isNull();
@@ -744,7 +755,7 @@ class AnalyticsOutcomesTest {
         assertThat(asOther.cities()).hasSize(1);
         assertThat(asOther.cities().get(0).orders()).isEqualTo(6);
         TenantContext.set(t.id);
-        assertThat(tx.execute(s -> svc.cities(sept)).cities().get(0).orders()).isEqualTo(5);
+        assertThat(tx.execute(s -> svc.cities(sept)).cities().get(0).orders()).isEqualTo(6);
     }
 
     @Test

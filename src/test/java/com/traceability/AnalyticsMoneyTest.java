@@ -581,13 +581,14 @@ class AnalyticsMoneyTest {
         Instant recent = ago(Duration.ofDays(3));
         String cairoAddress = "{\"shipping_address\":{\"province_code\":\"C\"}}";
 
-        // City rate, Cairo: 3 delivered, 1 refused → 0.75. Delivered legs not settled: estimate cod − quote×1.14.
+        // City rate, Cairo: 3 delivered, 1 refused, 1 lost → 0.6. Delivered legs not settled: estimate cod − quote×1.14.
         for (int i = 0; i < 3; i++) {
             UUID o = t.order(recent, "new", "bosta", cairoAddress);
             t.line(o, v, 1, "100.00");
             t.leg(o, "forward", "delivered", sendRaw("Cairo", 500, 50));
         }
         t.leg(t.order(recent), "forward", "returned", typedRaw(20, "Cairo", 50));
+        t.leg(t.order(recent), "forward", "lost", typedRaw(10, "Cairo", 50));        // lost: failed too → 3 / 5
 
         // Not fulfilled: no leg (city from province code) + booked never picked up; Wijha left out.
         UUID unbooked = t.order(recent, "new", null, cairoAddress);
@@ -615,12 +616,12 @@ class AnalyticsMoneyTest {
         Map<String, Object> nf = m(body, "notFulfilled");
         assertThat(n(nf, "count")).isEqualTo(2);
         assertThat(dec(nf, "value")).isEqualByComparingTo("300.00");
-        assertThat(dec(nf, "expected")).isEqualByComparingTo("225.00");
+        assertThat(dec(nf, "expected")).isEqualByComparingTo("180.00");
 
         Map<String, Object> it = m(body, "inTransit");
         assertThat(n(it, "count")).isEqualTo(1);
         assertThat(dec(it, "value")).isEqualByComparingTo("1000.00");
-        assertThat(dec(it, "expected")).isEqualByComparingTo("750.00");
+        assertThat(dec(it, "expected")).isEqualByComparingTo("600.00");
 
         Map<String, Object> aw = m(body, "awaitingPayout");
         assertThat(n(aw, "count")).isEqualTo(2);
