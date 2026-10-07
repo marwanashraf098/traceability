@@ -66,6 +66,58 @@ public class AuthService {
 
     /** clientIp / userAgent are only stored with Meta ad attribution (never for @tracedtech.com). */
     public TokenResponse signup(SignupRequest req, String clientIp, String userAgent) {
+        String phone = validateSignup(req);
+        UUID tenantId  = UUID.randomUUID();
+        UUID userId    = UUID.randomUUID();
+        String hash    = encoder.encode(req.password());
+        Timestamp acceptedAt = Timestamp.from(Instant.now(clock));
+        SignupAttribution attribution = attributionFor(req, clientIp, userAgent);
+
+        // runAs sets TenantContext so the @Transactional createTenantWithOwner fires GUC.
+        // A rollback (e.g. duplicate email) throws out of runAs, so the enqueue below is
+        // only reached once createTenantWithOwner has actually committed.
+        TokenResponse tokens = TenantContext.runAs(tenantId, () -> {
+            repo.createTenantWithOwner(tenantId, req.tenantName(), userId,
+                    req.name(), req.email(), phone, hash,
+                    PolicyVersions.PRIVACY, PolicyVersions.TERMS, acceptedAt, attribution);
+            AuthRepository.IssuedRefresh refresh = repo.issueRefreshToken(userId, tenantId, "signup", userAgent);
+            return new TokenResponse(jwt.issueAccessToken(userId, tenantId, "owner", refresh.id()), refresh.raw());
+        });
+        jobScheduler.enqueue(() -> welcomeEmailJob.run(req.email(), req.name()));
+        return tokens;
+    }
+
+    /** A created account: the new tenant, its owner, and the id {@code createAccount}'s extra step returned. */
+    public record CreatedAccount(UUID tenantId, UUID userId, UUID extraId) {}
+
+    /**
+     * Build D (embedded onboarding): the same signup rules, rows and welcome email as
+     * {@link #signup}, with {@code inSameTransaction} (given the new tenant id; the store row) run
+     * in the SAME transaction as tenant + owner. Issues no session — the caller decides how the
+     * owner signs in. Validation must already have passed ({@link #validateSignup}); a duplicate
+     * email or store surfaces as the DuplicateKeyException of the rolled-back transaction.
+     */
+    public CreatedAccount createAccount(SignupRequest req, String phone, String clientIp, String userAgent,
+                                        java.util.function.Function<UUID, UUID> inSameTransaction) {
+        UUID tenantId  = UUID.randomUUID();
+        UUID userId    = UUID.randomUUID();
+        String hash    = encoder.encode(req.password());
+        Timestamp acceptedAt = Timestamp.from(Instant.now(clock));
+        SignupAttribution attribution = attributionFor(req, clientIp, userAgent);
+        UUID extraId = TenantContext.runAs(tenantId, () ->
+                repo.createTenantWithOwnerAnd(tenantId, req.tenantName(), userId,
+                        req.name(), req.email(), phone, hash,
+                        PolicyVersions.PRIVACY, PolicyVersions.TERMS, acceptedAt, attribution,
+                        () -> inSameTransaction.apply(tenantId)));
+        jobScheduler.enqueue(() -> welcomeEmailJob.run(req.email(), req.name()));
+        return new CreatedAccount(tenantId, userId, extraId);
+    }
+
+    /**
+     * The signup rules (shared by /auth/signup and embedded onboarding): tenant name, email and a
+     * password of 8+ (400), consent and an Egyptian mobile (422). Returns the phone as E.164.
+     */
+    public String validateSignup(SignupRequest req) {
         if (req.email() == null || req.password() == null || req.tenantName() == null) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "tenantName, email, password required");
         }
@@ -81,26 +133,12 @@ public class AuthService {
             throw new ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY,
                     "A valid Egyptian mobile number is required");
         }
-        UUID tenantId  = UUID.randomUUID();
-        UUID userId    = UUID.randomUUID();
-        String hash    = encoder.encode(req.password());
-        Timestamp acceptedAt = Timestamp.from(Instant.now(clock));
-        // Our own team's accounts (App Store reviewers, internal tests) are never attributed.
-        SignupAttribution attribution = isInternalEmail(req.email())
-                ? null : SignupAttribution.from(req.attribution(), clientIp, userAgent);
+        return phone;
+    }
 
-        // runAs sets TenantContext so the @Transactional createTenantWithOwner fires GUC.
-        // A rollback (e.g. duplicate email) throws out of runAs, so the enqueue below is
-        // only reached once createTenantWithOwner has actually committed.
-        TokenResponse tokens = TenantContext.runAs(tenantId, () -> {
-            repo.createTenantWithOwner(tenantId, req.tenantName(), userId,
-                    req.name(), req.email(), phone, hash,
-                    PolicyVersions.PRIVACY, PolicyVersions.TERMS, acceptedAt, attribution);
-            AuthRepository.IssuedRefresh refresh = repo.issueRefreshToken(userId, tenantId, "signup", userAgent);
-            return new TokenResponse(jwt.issueAccessToken(userId, tenantId, "owner", refresh.id()), refresh.raw());
-        });
-        jobScheduler.enqueue(() -> welcomeEmailJob.run(req.email(), req.name()));
-        return tokens;
+    // Our own team's accounts (App Store reviewers, internal tests) are never attributed.
+    private static SignupAttribution attributionFor(SignupRequest req, String clientIp, String userAgent) {
+        return isInternalEmail(req.email()) ? null : SignupAttribution.from(req.attribution(), clientIp, userAgent);
     }
 
     static boolean isInternalEmail(String email) {

@@ -41,10 +41,9 @@ import java.util.concurrent.atomic.AtomicInteger;
  *     exception on {@code tenants_pkey}). Writes raw SQL directly rather than routing through
  *     {@code AuthRepository.createTenantWithOwner()}/{@code UserService.create()} — both are
  *     shared with real signup/user-management and must keep their own random-id,
- *     throw-on-conflict semantics unchanged for those paths. Never
- *     {@code provision_tenant_from_shopify} (that hatch exists to solve a chicken-and-egg UUID
- *     problem this seeder doesn't have — the demo tenant id is a fixed, known constant — and it
- *     forces a Shopify {@code stores} row into existence, which the demo tenant must not carry).
+ *     throw-on-conflict semantics unchanged for those paths. (The old
+ *     {@code provision_tenant_from_shopify} hatch — dropped in V147 — was never an option either:
+ *     it forced a Shopify {@code stores} row into existence, which the demo tenant must not carry.)
  *   - {@link #reseed()} — deletes every mutable row for the demo tenant and reloads the
  *     golden fixture, in ONE transaction on the raw BYPASSRLS owner connection. Called by
  *     {@link DemoReseedJob} on both the very first tick (bootstrap already happened, the

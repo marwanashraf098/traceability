@@ -90,6 +90,24 @@ public class AuthRepository {
     }
 
     /**
+     * Build D (embedded onboarding): {@link #createTenantWithOwner} plus {@code inSameTransaction}
+     * (the Shopify store row) in ONE transaction — the account and its store commit or roll back
+     * together. Returns whatever {@code inSameTransaction} returns (the store id).
+     */
+    @Transactional
+    public UUID createTenantWithOwnerAnd(UUID tenantId, String tenantName,
+                                         UUID userId, String name, String email, String phone,
+                                         String passwordHash,
+                                         String privacyVersion, String termsVersion,
+                                         java.sql.Timestamp acceptedAt,
+                                         SignupAttribution attribution,
+                                         java.util.function.Supplier<UUID> inSameTransaction) {
+        createTenantWithOwner(tenantId, tenantName, userId, name, email, phone, passwordHash,
+                privacyVersion, termsVersion, acceptedAt, attribution);
+        return inSameTransaction.get();
+    }
+
+    /**
      * Behind a savepoint: attribution data must never fail a signup, so a failed insert is
      * rolled back on its own and the tenant/user/location above still commit.
      */

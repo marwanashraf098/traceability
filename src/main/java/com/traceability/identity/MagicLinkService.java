@@ -20,7 +20,8 @@ import java.util.Base64;
 import java.util.UUID;
 
 /**
- * Magic-link sign-in for Path-2 (Shopify-first) provisioned owners who have no password.
+ * Magic-link sign-in: one-time links consumed by GET /auth/magic (consume_magic_link DEFINER).
+ * Build D issues one with a successful embedded signup ({@link #issueSignInLink}).
  *
  * Security model:
  *   - Token: CSPRNG 128 bits, base64url. Raw token goes ONLY in the email link.
@@ -60,20 +61,52 @@ public class MagicLinkService {
         this.authRepository = authRepository;
     }
 
+    /** Build D: the "Open Traced" link issued with a successful embedded signup lives at most this long. */
+    public static final int SIGN_IN_LINK_TTL_MINUTES = 10;
+
     /**
      * Generates a magic-link token, persists its SHA-256 hash, and emails the raw token
-     * to the provisioned owner. The raw token never touches the database.
+     * to the owner. The raw token never touches the database.
      *
-     * Called from ShopifyOAuthService after a Path-2-new provision.
+     * No application caller since Build D removed Shopify-first auto-provisioning (the
+     * passwordless owner it served no longer exists); kept with its tests (ShopifyMagicLinkTest).
      */
     public void issueMagicLink(UUID userId, UUID tenantId) {
+        String rawToken = storeToken(userId, tenantId, ttlMinutes);
+
+        // Look up owner email under tenant context (users is RLS-protected). Inside a transaction:
+        // the tenant GUC is set only when one begins (TenantAwareConnection) — without it app_user
+        // sees no users row.
+        String email = TenantContext.runAs(tenantId, () -> tx.execute(s ->
+            jdbc.queryForObject(
+                "SELECT email FROM users WHERE id = ? AND tenant_id = ?",
+                String.class, userId, tenantId)));
+
+        String link = appUrl + "/auth/magic?token=" + rawToken;
+        emailGateway.sendMagicLink(email, link);
+        log.info("Magic link issued userId={} tenantId={}", userId, tenantId);
+    }
+
+    /**
+     * Build D: the one-time "Open Traced" sign-in link for the owner an embedded signup just
+     * created — returned to that signup response ONLY (EmbeddedOnboardingService.signup), never
+     * emailed and never issued anywhere else. Same table, same hash-at-rest, same single-use
+     * consume (/auth/magic → consume_magic_link) as {@link #issueMagicLink}; TTL
+     * {@value #SIGN_IN_LINK_TTL_MINUTES} minutes. Never log the returned URL.
+     */
+    public String issueSignInLink(UUID userId, UUID tenantId) {
+        String rawToken = storeToken(userId, tenantId, SIGN_IN_LINK_TTL_MINUTES);
+        log.info("Sign-in link issued after embedded signup userId={} tenantId={}", userId, tenantId);
+        return appUrl + "/auth/magic?token=" + rawToken;
+    }
+
+    /** CSPRNG 128-bit token; only its SHA-256 is stored. magic_link_tokens is not under RLS. */
+    private String storeToken(UUID userId, UUID tenantId, int ttl) {
         byte[] bytes = new byte[16]; // 128 bits
         RANDOM.nextBytes(bytes);
         String rawToken = Base64.getUrlEncoder().withoutPadding().encodeToString(bytes);
         String hash = AuthRepository.sha256(rawToken);
-        Instant expiresAt = Instant.now().plus(ttlMinutes, ChronoUnit.MINUTES);
-
-        // Insert hash only — magic_link_tokens is not under RLS, no GUC required.
+        Instant expiresAt = Instant.now().plus(ttl, ChronoUnit.MINUTES);
         tx.execute(s -> {
             jdbc.update(
                 "INSERT INTO magic_link_tokens (tenant_id, user_id, token_hash, expires_at) " +
@@ -81,16 +114,7 @@ public class MagicLinkService {
                 tenantId, userId, hash, Timestamp.from(expiresAt));
             return null;
         });
-
-        // Look up owner email under tenant context (users is RLS-protected).
-        String email = TenantContext.runAs(tenantId, () ->
-            jdbc.queryForObject(
-                "SELECT email FROM users WHERE id = ? AND tenant_id = ?",
-                String.class, userId, tenantId));
-
-        String link = appUrl + "/auth/magic?token=" + rawToken;
-        emailGateway.sendMagicLink(email, link);
-        log.info("Magic link issued userId={} tenantId={} expiresAt={}", userId, tenantId, expiresAt);
+        return rawToken;
     }
 
     /**
@@ -119,8 +143,9 @@ public class MagicLinkService {
             throw magicLinkInvalid();
         }
 
-        // Get current role under tenant RLS context.
-        String role = TenantContext.runAs(row.tenantId(), () -> {
+        // Get current role under tenant RLS context — inside a transaction, so the tenant GUC is set
+        // (Build D found this ran with no GUC: on app_user the role read empty and every link failed).
+        String role = TenantContext.runAs(row.tenantId(), () -> tx.execute(s -> {
             try {
                 return jdbc.queryForObject(
                     "SELECT role FROM users WHERE id = ? AND tenant_id = ? AND active = true",
@@ -128,7 +153,7 @@ public class MagicLinkService {
             } catch (org.springframework.dao.EmptyResultDataAccessException e) {
                 return null;
             }
-        });
+        }));
 
         if (role == null) {
             throw magicLinkInvalid();

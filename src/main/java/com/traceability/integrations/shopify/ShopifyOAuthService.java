@@ -1,6 +1,5 @@
 package com.traceability.integrations.shopify;
 
-import com.traceability.identity.MagicLinkService;
 import com.traceability.security.EncryptionService;
 import com.traceability.tenancy.TenantContext;
 import org.jobrunr.scheduling.JobScheduler;
@@ -27,9 +26,10 @@ import java.util.UUID;
  * State table (shopify_oauth_state) is not under tenant RLS — see V13 migration.
  * As of V87, app_user has INSERT only on it; consume goes through
  * consume_shopify_oauth_state (SECURITY DEFINER, 9th hatch) — enforced at the grant
- * level, not just by code discipline. The provisioning function
- * (provision_tenant_from_shopify) is a SECURITY DEFINER hatch — see V14 migration and
- * blueprint.md §16.
+ * level, not just by code discipline. No path here creates a tenant: a merchant without a
+ * Traced account signs up inside the embedded app (Build D, com.traceability.onboarding), which
+ * creates tenant + owner + store under app_user + RLS — the V14 provision_tenant_from_shopify
+ * hatch was dropped in V147.
  *
  * Critical ordering in linkOrProvision:
  *   resolve_tenant_by_shop_domain is called BEFORE any tenant GUC is set.
@@ -103,26 +103,12 @@ public class ShopifyOAuthService {
             RETURNING id
             """;
 
-    private static final String UPDATE_PROVISION_REFRESH_FIELDS = """
-            UPDATE stores
-               SET refresh_token_encrypted  = ?,
-                   access_token_expires_at  = ?,
-                   refresh_token_expires_at = ?
-             WHERE id = ?
-            """;
-
-    // Constraint name defined in V42__users_email_unique.sql — must stay in sync.
-    // Used to distinguish a users.email 23505 from a stores.shop_domain 23505 in the
-    // DuplicateKeyException handler inside provisionNewTenant().
-    static final String USERS_EMAIL_CONSTRAINT = "users_email_unique";
-
     private final JdbcTemplate              jdbc;
     private final ShopifyGateway            shopifyGateway;
     private final EncryptionService         encryptionService;
     private final JobScheduler              jobScheduler;
     private final ShopifyImportJob          importJob;
     private final RegisterShopifyWebhooksJob webhooksJob;
-    private final MagicLinkService          magicLinkService;
     private final ShopifySameShopGuard      sameShopGuard;
     private final LegacyWebhookCleanup      legacyWebhookCleanup;
     private final TransactionTemplate       tx;
@@ -142,7 +128,6 @@ public class ShopifyOAuthService {
             JobScheduler jobScheduler,
             ShopifyImportJob importJob,
             RegisterShopifyWebhooksJob webhooksJob,
-            MagicLinkService magicLinkService,
             ShopifySameShopGuard sameShopGuard,
             LegacyWebhookCleanup legacyWebhookCleanup,
             PlatformTransactionManager txm,
@@ -158,7 +143,6 @@ public class ShopifyOAuthService {
         this.jobScheduler      = jobScheduler;
         this.importJob         = importJob;
         this.webhooksJob       = webhooksJob;
-        this.magicLinkService  = magicLinkService;
         this.sameShopGuard     = sameShopGuard;
         this.legacyWebhookCleanup = legacyWebhookCleanup;
         this.tx                = new TransactionTemplate(txm);
@@ -181,15 +165,8 @@ public class ShopifyOAuthService {
 
     /** Outcome of the resolve-or-create decision tree on callback. */
     public enum LinkOutcome {
-        LINKED_NEW,           // Path-1 or Path-2: first-time link for this shop
+        LINKED_NEW,           // Path-1 or a confirmed pending link: first-time link for this shop
         LINKED_EXISTING,      // idempotent re-install (same tenant owns the shop)
-        // PROVISIONED retired from the live decision tree 2026-09-04 (Option A): cold
-        // Shopify-first installs no longer auto-provision a tenant — see NOT_LINKED below.
-        // Kept only because provisionNewTenant() (dead code, unreferenced by branch()/path2()
-        // as of this change) still returns it — removing it would not compile. Neither the
-        // enum value nor provisionNewTenant() is reachable from any live code path; both are
-        // retained pending a future claim-code mechanism (Option B, out of scope here).
-        PROVISIONED,           // dead: only provisionNewTenant() (now unreferenced) returns this
         NOT_LINKED,            // Path-2, no owner found: cold install — nothing created
         REJECTED_CROSS_TENANT, // shop already owned by a different tenant
         // Write-site backstop to assertBoundShop() (initiate()-time guard): the intended tenant
@@ -197,7 +174,7 @@ public class ShopifyOAuthService {
         REJECTED_SHOP_MISMATCH
     }
 
-    /** Result returned by linkOrProvision. */
+    /** Result returned by linkOrProvision / linkPendingShop. */
     public record LinkResult(UUID tenantId, UUID ownerUserId, LinkOutcome outcome) {}
 
     // ---- state lifecycle ----------------------------------------------
@@ -320,10 +297,11 @@ public class ShopifyOAuthService {
      *   owner != null      → UPDATE store token (idempotent)   → LINKED_EXISTING
      *   owner == null      → no write, nothing created         → NOT_LINKED
      *
-     * As of 2026-09-04 (Option A), a cold Shopify-first install (owner == null) no longer
-     * calls provisionNewTenant() — it creates NOTHING (no tenant, user, store, magic link)
-     * and enqueues NO jobs. Only Path-1 (an already-authenticated, already-paid Owner
-     * initiating from inside the SaaS) can link a store to a tenant. See
+     * A cold Shopify-first install (owner == null) creates NOTHING here (no tenant, user,
+     * store) and enqueues NO jobs: the callback sends the merchant back into the embedded app,
+     * where onboarding (Build D) either creates their Traced account with this store, or parks
+     * a pending link that a signed-in owner confirms on Traced. Traced is currently free and
+     * Shopify approved off-platform billing — neither path is a payment gate. See
      * ShopifyOAuthController.callback()'s NOT_LINKED case for the embedded re-entry redirect.
      * </pre>
      *
@@ -461,90 +439,13 @@ public class ShopifyOAuthService {
             log.info("OAuth Path-2 existing link: shop={} tenant={}", shop, owner);
             return new LinkResult(owner, null, LinkOutcome.LINKED_EXISTING);
         } else {
-            // Option A (2026-09-04): cold Shopify-first install, no owning tenant.
-            // Deliberately does NOT call provisionNewTenant() — creates nothing, enqueues
-            // nothing. The exchanged token (tokens) is discarded; nothing is persisted for
-            // this shop. Only Path-1 (authenticated Owner, already paid) may link a store.
+            // Cold Shopify-first install, no owning tenant: creates nothing, enqueues nothing;
+            // the exchanged token is discarded. The merchant lands back in the embedded app,
+            // whose onboarding signs them up or parks a pending link for their existing account
+            // (Build D) — a store is only ever linked to a tenant a person signed in to or created.
             log.info("OAuth Path-2 cold install, no linked tenant — nothing provisioned: shop={}", shop);
             return new LinkResult(null, null, LinkOutcome.NOT_LINKED);
         }
-    }
-
-    private LinkResult provisionNewTenant(String shop, ShopifyGateway.TokenResponse tokens) {
-        String rawToken      = tokens.accessToken();
-        String encryptedToken = encryptionService.encrypt(rawToken);
-        ShopifyGateway.ShopInfo shopInfo = shopifyGateway.fetchShop(shop, rawToken);
-        if (shopInfo.email() == null || shopInfo.email().isBlank()) {
-            throw new ShopifyOAuthException(
-                ShopifyOAuthException.Code.SHOPIFY_SHOP_EMAIL_MISSING,
-                "Shopify shop resource returned no owner email address",
-                "لم يُعِد Shopify بريد المالك الإلكتروني",
-                HttpStatus.BAD_GATEWAY);
-        }
-
-        // No TenantContext needed — SECURITY DEFINER bypasses RLS.
-        // DuplicateKeyException handling: provision_tenant_from_shopify does three INSERTs
-        // (tenants → users → stores). Two distinct 23505 paths exist:
-        //   • users.email (USERS_EMAIL_CONSTRAINT): fires on the second INSERT; all three
-        //     INSERTs roll back cleanly (no orphan tenant/store). The store was never written,
-        //     so resolveShopOwner(shop) returns null — raceRelink(null) would misfire as
-        //     SHOPIFY_STATE_INVALID. Catch here and throw a specific 409 instead.
-        //   • stores.shop_domain: fires on the third INSERT; all three INSERTs roll back.
-        //     resolveShopOwner(shop) returns the winning tenant — re-throw for linkOrProvision()
-        //     to handle via raceRelink().
-        record ProvRow(UUID tenantId, UUID ownerId, UUID storeId) {}
-        ProvRow row;
-        try {
-            row = tx.execute(s ->
-                jdbc.query(
-                    "SELECT tenant_id, owner_user_id, store_id " +
-                    "FROM provision_tenant_from_shopify(?,?,?,?,?)",
-                    rs -> rs.next()
-                        ? new ProvRow(
-                            rs.getObject("tenant_id",     UUID.class),
-                            rs.getObject("owner_user_id", UUID.class),
-                            rs.getObject("store_id",      UUID.class))
-                        : null,
-                    shop, shopInfo.email(), shopInfo.name(), shopInfo.timezone(), encryptedToken));
-        } catch (DuplicateKeyException e) {
-            if (e.getMessage() != null && e.getMessage().contains(USERS_EMAIL_CONSTRAINT)) {
-                throw new ShopifyOAuthException(
-                    ShopifyOAuthException.Code.SHOPIFY_EMAIL_ALREADY_REGISTERED,
-                    "An account already exists for this email address — please log in instead",
-                    "يوجد بالفعل حساب لهذا البريد الإلكتروني — يرجى تسجيل الدخول",
-                    HttpStatus.CONFLICT);
-            }
-            throw e; // stores.shop_domain collision — raceRelink() in linkOrProvision() handles it
-        }
-
-        if (row == null) {
-            throw new ShopifyOAuthException(
-                ShopifyOAuthException.Code.SHOPIFY_TOKEN_EXCHANGE_FAILED,
-                "Tenant provisioning returned no result",
-                "لم تُعِد وظيفة التهيئة أي نتيجة",
-                HttpStatus.INTERNAL_SERVER_ERROR);
-        }
-
-        // provision_tenant_from_shopify DEFINER receives only the access token — no change to its
-        // signature (would require a new approved DEFINER escape hatch). Write the refresh token
-        // fields via a normal UPDATE under tenant RLS immediately after provisioning.
-        if (tokens.refreshToken() != null) {
-            Timestamp accessExpiresAt  = Timestamp.from(Instant.now().plusSeconds(tokens.expiresIn()));
-            Timestamp refreshExpiresAt = Timestamp.from(Instant.now().plusSeconds(tokens.refreshTokenExpiresIn()));
-            TenantContext.runAs(row.tenantId(), () -> tx.execute(s -> {
-                    jdbc.update(UPDATE_PROVISION_REFRESH_FIELDS,
-                        encryptionService.encrypt(tokens.refreshToken()),
-                        accessExpiresAt,
-                        refreshExpiresAt,
-                        row.storeId());
-                    return null;
-                }));
-        }
-
-        magicLinkService.issueMagicLink(row.ownerId(), row.tenantId());
-        enqueueImport(row.storeId(), row.tenantId());
-        log.info("OAuth Path-2 provisioned: shop={} tenant={} owner={}", shop, row.tenantId(), row.ownerId());
-        return new LinkResult(row.tenantId(), row.ownerId(), LinkOutcome.PROVISIONED);
     }
 
     /** After a 23505 race, re-resolve and idempotently link to the winner. */
@@ -561,6 +462,77 @@ public class ShopifyOAuthService {
         enqueueImport(storeId, winner);
         log.info("OAuth race re-link: shop={} winner={}", shop, winner);
         return new LinkResult(winner, null, LinkOutcome.LINKED_EXISTING);
+    }
+
+    // ---- Build D: onboarding inside the embedded app ----------------------
+
+    /**
+     * Pending link (an existing Traced account connects the store it installed from Shopify):
+     * same rules as Path-1 — the same-shop rule (409 SHOPIFY_SHOP_MISMATCH naming the linked shop)
+     * and "a shop is linked to one tenant" (409 SHOP_LINKED_ELSEWHERE). Read-only; the confirm
+     * page calls it before anything is consumed, and {@link #linkPendingShop} re-checks at write.
+     */
+    public void assertPendingLinkAllowed(UUID tenantId, String shop) {
+        UUID owner = resolveShopOwner(shop);
+        if (owner != null && !owner.equals(tenantId)) throw shopLinkedElsewhere();
+        if (owner == null) TenantContext.runAs(tenantId, () -> sameShopGuard.assertBoundShop(tenantId, shop));
+    }
+
+    /**
+     * Links {@code shop} to {@code tenantId} with a token the embedded app already exchanged
+     * (pending link) — Path-1's decision tree and race backstop, without an auth-code exchange.
+     * Enqueues import + webhook registration exactly as Path-1 does.
+     */
+    public LinkResult linkPendingShop(UUID tenantId, String shop, ShopifyGateway.TokenResponse tokens) {
+        UUID owner = resolveShopOwner(shop);
+        try {
+            return path1(tenantId, shop, tokens, owner);
+        } catch (DuplicateKeyException ex) {
+            return raceRelink(new StateRecord(tenantId, shop, null), shop, tokens, resolveShopOwner(shop));
+        }
+    }
+
+    /** True when some tenant already owns {@code shop} (DEFINER lookup, no GUC). */
+    public boolean isShopLinked(String shop) {
+        return resolveShopOwner(shop) != null;
+    }
+
+    /**
+     * Embedded signup: inserts the new tenant's stores row inside the CALLER's transaction (the
+     * one creating tenant + owner, tenant GUC already set) — so the account and its store commit
+     * or roll back together. A concurrent install of the same shop fails here with 23505.
+     */
+    public UUID insertStoreInCurrentTransaction(UUID tenantId, String shop, ShopifyGateway.TokenResponse tokens) {
+        Timestamp accessExpiresAt  = Timestamp.from(Instant.now().plusSeconds(tokens.expiresIn()));
+        Timestamp refreshExpiresAt = tokens.refreshToken() != null
+            ? Timestamp.from(Instant.now().plusSeconds(tokens.refreshTokenExpiresIn())) : null;
+        return jdbc.query(INSERT_STORE,
+            rs -> rs.next() ? rs.getObject("id", UUID.class) : null,
+            tenantId, shop,
+            encryptionService.encrypt(tokens.accessToken()),
+            accessExpiresAt,
+            tokens.refreshToken() != null ? encryptionService.encrypt(tokens.refreshToken()) : null,
+            refreshExpiresAt,
+            tokens.grantedScopes());
+    }
+
+    /** After the signup transaction committed: first import + webhook registration. */
+    public void afterStoreCreated(UUID storeId, UUID tenantId, String shop) {
+        shopifyGateway.forgetOrderPiiTier(shop);
+        enqueueImport(storeId, tenantId);
+    }
+
+    /** The admin URL of this app for {@code shop}, flagged so the embedded app shows "connected". */
+    public String adminAppUrlAfterConnect(String shop) {
+        return buildAdminAppUrl(shop, null) + "?traced_connected=1";
+    }
+
+    public static ShopifyOAuthException shopLinkedElsewhere() {
+        return new ShopifyOAuthException(
+            ShopifyOAuthException.Code.SHOP_LINKED_ELSEWHERE,
+            "This Shopify store is already connected to a different Traced account. Sign in to that account to manage it.",
+            "متجر Shopify هذا مرتبط بالفعل بحساب Traced مختلف. سجّل الدخول إلى ذلك الحساب لإدارته.",
+            HttpStatus.CONFLICT);
     }
 
     // ---- private: DB helpers ------------------------------------------

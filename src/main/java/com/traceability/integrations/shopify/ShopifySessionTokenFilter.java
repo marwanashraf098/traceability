@@ -37,6 +37,11 @@ import java.util.regex.Pattern;
  *   4. shop domain → resolve_tenant_by_shop_domain SECURITY DEFINER → tenant_id.
  *      Returns null for unknown shops → 401. Fail closed on any DB exception.
  *   5. Only fires for /api/v1/embedded/** (shouldNotFilter guard).
+ *   7. Build D — /api/v1/embedded/onboarding/** ONLY: a verified token yields a TENANTLESS
+ *      SHOPIFY_ONBOARDING principal (tenantId null, shopDomain from the signed dest claim),
+ *      whether or not the shop is linked — the onboarding endpoints decide (they refuse a linked
+ *      shop). That role never satisfies hasRole('SHOPIFY_EMBEDDED'), and every other
+ *      /embedded/** path keeps the exact behaviour above (unknown shop → 401 NOT_PROVISIONED).
  *   6. If SecurityContext is already set (e.g. Traced JWT), passes through — the
  *      EmbeddedController's @PreAuthorize("hasRole('SHOPIFY_EMBEDDED')") then gates it (403).
  *
@@ -48,6 +53,10 @@ public class ShopifySessionTokenFilter extends OncePerRequestFilter {
     private static final Pattern SHOP_DOMAIN_RE =
             Pattern.compile("^[a-z0-9][a-z0-9-]*\\.myshopify\\.com$");
     private static final int CLOCK_SKEW_SECONDS = 10;
+
+    /** Build D: the only paths that accept a verified token for a shop no tenant owns yet. */
+    public static final String ONBOARDING_PREFIX = "/api/v1/embedded/onboarding/";
+    public static final String ONBOARDING_ROLE = "SHOPIFY_ONBOARDING";
 
     private final byte[] clientSecretBytes;
     private final String clientId;
@@ -154,6 +163,22 @@ public class ShopifySessionTokenFilter extends OncePerRequestFilter {
                 return;
             }
 
+            // Synthetic userId from Shopify GID — deterministic, never written to DB.
+            String sub = claims.getSubject();
+            byte[] subBytes = (sub != null ? sub : "shopify-unknown-sub")
+                    .getBytes(StandardCharsets.UTF_8);
+            UUID syntheticUserId = UUID.nameUUIDFromBytes(subBytes);
+
+            // Build D: onboarding endpoints get a tenantless principal — no tenant lookup here.
+            if (isOnboardingPath(request)) {
+                CustomUserDetails onboarding =
+                        new CustomUserDetails(syntheticUserId, null, ONBOARDING_ROLE, destHost);
+                SecurityContextHolder.getContext().setAuthentication(new UsernamePasswordAuthenticationToken(
+                        onboarding, null, onboarding.getAuthorities()));
+                chain.doFilter(request, response);
+                return;
+            }
+
             // shop domain → tenant (SECURITY DEFINER, no GUC needed).
             UUID tenantId;
             try {
@@ -170,12 +195,6 @@ public class ShopifySessionTokenFilter extends OncePerRequestFilter {
                 return;
             }
 
-            // Synthetic userId from Shopify GID — deterministic, never written to DB.
-            String sub = claims.getSubject();
-            byte[] subBytes = (sub != null ? sub : "shopify-unknown-sub")
-                    .getBytes(StandardCharsets.UTF_8);
-            UUID syntheticUserId = UUID.nameUUIDFromBytes(subBytes);
-
             // destHost is HMAC-verified (extracted from the signed dest claim above).
             // Carried in the principal so the token-exchange endpoint can resolve the shop
             // without re-parsing the JWT or accepting an attacker-supplied request param.
@@ -191,6 +210,10 @@ public class ShopifySessionTokenFilter extends OncePerRequestFilter {
             // Catch-all: parse errors, JOSE exceptions, etc. → fail closed.
             reject(response);
         }
+    }
+
+    private static boolean isOnboardingPath(HttpServletRequest request) {
+        return request.getRequestURI().startsWith(ONBOARDING_PREFIX);
     }
 
     private String extractIssDomain(String iss) {

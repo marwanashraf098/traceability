@@ -4,8 +4,6 @@ import userEvent from '@testing-library/user-event'
 import { MemoryRouter, Routes, Route, useLocation } from 'react-router-dom'
 import { I18nextProvider, initReactI18next } from 'react-i18next'
 import i18next from 'i18next'
-import { AppProvider as PolarisProvider } from '@shopify/polaris'
-import polarisEn from '@shopify/polaris/locales/en.json'
 import en from '../locales/en.json'
 import { renderWithProviders } from './renderWithProviders'
 import * as api from '../api'
@@ -15,13 +13,12 @@ import Login from '../pages/Login'
 import { returnPath } from '../pages/loginReturnPath'
 import { StationProvider } from '../components/StationProvider'
 import ConnectionsTab from '../pages/settings/ConnectionsTab'
-import { NotLinked, notLinkedTracedUrl } from '../embedded/EmbeddedApp'
 
 /**
- * Review mode S7, fix A — the reviewer's path from the embedded NotLinked card to connecting
- * THIS store: the card links to Settings → Connections with ?shop=<this store>; signing in comes
- * back to that page; the Shopify card prefills the connect form from ?shop= (a *.myshopify.com
- * domain only).
+ * Review mode S7, fix A — signing in comes back to the page RequireAuth sent us from, and the
+ * Shopify card prefills the connect form from ?shop= (a *.myshopify.com domain only). (The embedded
+ * "not connected" card's deep link here was replaced by Build D's pending link —
+ * embeddedOnboarding.test.tsx / connectShopify.test.tsx.)
  */
 
 vi.mock('../api', async (importOriginal) => {
@@ -48,26 +45,6 @@ afterEach(() => {
   clearAccessToken()
   vi.unstubAllGlobals()
   vi.clearAllMocks()
-})
-
-// ── the embedded card's link ──────────────────────────────────────────────────
-
-describe('NotLinked → Settings → Connections with this store', () => {
-  test('a *.myshopify.com ?shop= is carried to /settings?tab=connections&shop=…', () => {
-    expect(notLinkedTracedUrl('?shop=review-store.myshopify.com&host=abc'))
-      .toBe('https://app.tracedtech.com/settings?tab=connections&shop=review-store.myshopify.com')
-  })
-
-  test('anything else is dropped — plain Connections page', () => {
-    expect(notLinkedTracedUrl('')).toBe('https://app.tracedtech.com/settings?tab=connections')
-    expect(notLinkedTracedUrl('?shop=evil.example.com')).toBe('https://app.tracedtech.com/settings?tab=connections')
-    expect(notLinkedTracedUrl('?shop=a.myshopify.com.evil.io')).toBe('https://app.tracedtech.com/settings?tab=connections')
-  })
-
-  test('the card shows the reload hint', () => {
-    render(<PolarisProvider i18n={polarisEn}><NotLinked /></PolarisProvider>)
-    expect(screen.getByText('After connecting this store in Traced, reload this page.')).toBeInTheDocument()
-  })
 })
 
 // ── signing in comes back ─────────────────────────────────────────────────────

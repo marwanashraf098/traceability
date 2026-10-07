@@ -4,6 +4,54 @@
 
 ## Current state
 
+**Build D — onboarding inside the embedded Shopify app (2026-10-07, branch `feat/embedded-onboarding` off main 8862521;
+merged to main; NOT pushed, NOT deployed). Migration V147.** Mockup: `design/Traced_embedded_onboarding_dc.html` (amended: L1 = pending
+link + top-level navigation, L2 dropped). Built with Polaris like the rest of the embedded app.
+- **Filter:** `/api/v1/embedded/onboarding/**` only → tenantless `SHOPIFY_ONBOARDING` principal (shop from the verified
+  dest claim); every other `/embedded/**` path unchanged. Controllers in `com.traceability.onboarding` (the `embedded`
+  package stays read-only).
+- **Signup** (`EmbeddedOnboardingService.signup`): rate limit → shop unlinked → `AuthService.validateSignup` → token
+  exchange → ONE transaction (`AuthService.createAccount` / `AuthRepository.createTenantWithOwnerAnd`: tenant + owner +
+  Main Warehouse + attribution utm_source=shopify_app_store + stores row via
+  `ShopifyOAuthService.insertStoreInCurrentTransaction`, oauth, ingest floor now) → after commit import + webhooks +
+  welcome email; response carries the 10-minute one-time sign-in link (`MagicLinkService.issueSignInLink`, only caller).
+  Prefill = shop name + contact email (`fetchShop`). 409 EMAIL_TAKEN (web signup wording) / SHOP_LINKED_ELSEWHERE.
+- **Existing account = pending link** (amendment): `POST /embedded/onboarding/pending-link` → `shopify_pending_links`
+  (nonce hash, encrypted tokens, 15 min, single use) → `window.open(url, '_top')` → `/connect/shopify?link=` (new
+  `ConnectShopify` page, RequireAuth) → owner previews / confirms (`/api/v1/shopify/pending-link/{preview,confirm}`, body)
+  → same-shop + one-tenant-per-shop checked before the link is used → `linkPendingShop` → back to
+  `admin.shopify.com/store/<handle>/apps/<handle>?traced_connected=1` → embedded C1. No status endpoint, no polling.
+- **Removed:** `provisionNewTenant`, `LinkOutcome.PROVISIONED`, `/connect/setup-pending` branch,
+  `UPDATE_PROVISION_REFRESH_FIELDS`, `USERS_EMAIL_CONSTRAINT`, codes SHOPIFY_SHOP_EMAIL_MISSING /
+  SHOPIFY_EMAIL_ALREADY_REGISTERED (+ the SHOPIFY_SHOP_EMAIL_MISSING locale key), MagicLinkService dependency of the
+  OAuth service, `NotLinked` + `notLinkedCopy.ts`, test `ShopifyMagicLinkTest.provisionWiring_path2NewInstall` + its 3
+  helpers. Kept (still tested): `issueMagicLink` / `EmailGateway.sendMagicLink` (no app caller now).
+- **Review round (approved 2026-10-07), also in V147:** `provision_tenant_from_shopify` (hatch #5) DROPPED — its
+  direct tests went with it (EmailUniquenessProvisionTest eu1 deleted, setup rewritten with plain inserts;
+  ShopifyOAuthDay2Test.provisioningAtomicity deleted). Pending links: app_user may UPDATE only consumed_at /
+  consumed_by_tenant / the two token columns, the consume nulls both tokens in the same statement (CHECK enforces it).
+  **Hatch #16 `purge_onboarding_artifacts()`** (no parameters): deletes expired-or-consumed pending links and rate-limit
+  rows older than 24 h; `OnboardingPurgeJob` runs it nightly 03:30 Cairo; app_user has no DELETE on either table (the
+  rate limiter's own cleanup DELETE was removed). Recorded in CLAUDE.md and blueprint §16.1.
+- **Bug fixed on the way:** `/auth/magic` never worked on app_user — `MagicLinkService` read the role (and the email)
+  outside a transaction, so no tenant GUC → RLS hid the user → MAGIC_LINK_INVALID. Now inside `tx.execute`.
+- **Gotcha:** the revert-check script restoring a file with an OLDER mtime leaves Maven's mutant classes in place —
+  always `touch` restored sources.
+- **Tests:** `EmbeddedOnboardingTest` (15, whole app on app_user), `embeddedOnboarding.test.tsx` (19, EN + AR),
+  `connectShopify.test.tsx` (12, EN + AR). Approved existing-test changes: embeddedNotLinked (4 old-screen tests
+  deleted), embeddedTabs (welcome title), reviewerConnectPath (3 deep-link tests deleted), MigrationSmokeTest (146),
+  NotTracedBackfillTest (+V147), RlsCoverageTest (prefill exempt), plus the two provision-function tests above.
+- **Follow-ups (logged, not built):**
+  - `/auth/signup` answers a taken email with 400 CONSTRAINT_VIOLATION, not 409 — the web signup's "email taken"
+    message never shows (fixing it changes WelcomeEmailTest's 400 assertion).
+  - nginx access logs may record `?link=` / `?token=` query strings: strip query strings from the access log for
+    `/connect/shopify` and `/auth/magic`.
+  - "Install from the Shopify App Store" button for NEW merchants (Settings card → listing; after install the merchant
+    picks "I already have a Traced account" → pending link); reconnect via pending link (allow it when the shop's own
+    tenant has it disconnected + a Reconnect button on the embedded Disconnected screen); upgrade-on-install for
+    custom-app stores (the embedded token refresh skips custom-app rows today — would run Build C's cleanup + swap,
+    gated per store; decide whether opening the official app counts as consent).
+
 **"Find your store" — connect via the official app without knowing the .myshopify.com address (2026-10-07, branch
 `feat/shopify-store-finder` off main 77aa474; merged to main; not pushed, not deployed). No migration.** Signed-off mockup:
 `design/Traced_shopify_connect_wizard_dc.html` (website-address lookup dropped for v1; no "check couldn't run" state).

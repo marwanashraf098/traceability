@@ -2277,7 +2277,6 @@
         "SHOPIFY_PATH2_NOT_YET": "تسجيل التجار الجدد قادم قريباً.",
         "SHOPIFY_REQUEST_EXPIRED": "انتهت صلاحية هذا الرابط. يرجى بدء عملية الربط مرة أخرى.",
         "SHOPIFY_STORE_ALREADY_CONNECTED": "هذا المتجر مرتبط بحساب آخر بالفعل. تواصل مع الدعم إذا كنت تعتقد أن هذا خطأ.",
-        "SHOPIFY_SHOP_EMAIL_MISSING": "لا يوجد بريد إلكتروني للتواصل في متجر Shopify الخاص بك. يرجى إضافة بريد إلكتروني في لوحة تحكم Shopify والمحاولة مرة أخرى.",
         "MAGIC_LINK_INVALID": "رابط تسجيل الدخول غير صالح أو منتهي الصلاحية أو مستخدم مسبقاً. يرجى طلب رابط جديد.",
         "invalidDomain": "يرجى إدخال نطاق *.myshopify.com صالح."
       }
@@ -3159,5 +3158,20 @@
     "returnsPhoneScans_few": "{{count}} عمليات مسح تمت من هاتف",
     "returnsPhoneScans_many": "{{count}} عملية مسح تمت من هاتف",
     "returnsPhoneScans_other": "{{count}} عملية مسح تمت من هاتف"
+  },
+  "connectShopify": {
+    "title": "اربط متجر Shopify الخاص بك",
+    "loading": "جارٍ التحقق من الرابط القادم من Shopify…",
+    "question": "ربط {{shop}} بحساب {{business}}؟",
+    "explain": "سيستورد Traced منتجات هذا المتجر وطلباته ويحافظ على مزامنتها.",
+    "connect": "اربط هذا المتجر",
+    "cancel": "إلغاء",
+    "done": "تم ربط المتجر. نعيدك إلى Shopify…",
+    "invalidTitle": "انتهت صلاحية هذا الرابط أو تم استخدامه بالفعل.",
+    "invalidBody": "افتح Traced من لوحة تحكم Shopify واختر \"لديّ حساب على Traced بالفعل\" مرة أخرى.",
+    "startAgain": "ابدأ من جديد من Shopify",
+    "notOwnerTitle": "يمكن لمالك الحساب فقط ربط متجر.",
+    "notOwnerBody": "اطلب من مالك حساب Traced هذا تسجيل الدخول وربطه.",
+    "genericError": "تعذّر ربط متجرك. حاول مرة أخرى."
   }
 }

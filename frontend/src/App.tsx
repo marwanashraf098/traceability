@@ -47,6 +47,7 @@ import Privacy from './pages/Privacy'
 import Terms from './pages/Terms'
 import Refund from './pages/Refund'
 import Contact from './pages/Contact'
+import ConnectShopify from './pages/connect/ConnectShopify'
 
 type AuthRefreshState = 'loading' | 'authenticated' | 'unauthenticated'
 
@@ -459,6 +460,9 @@ export default function App() {
           }
         />
         {/* Absorbed into /settings — Settings consolidation. Old direct links keep resolving. */}
+        {/* Build D: confirm a pending link from the embedded app ("I already have a Traced account").
+            Any signed-in user reaches it; the API answers 403 to a non-owner and the page says so. */}
+        <Route path="/connect/shopify" element={<RequireAuth><ConnectShopify /></RequireAuth>} />
         <Route path="/connections" element={<Navigate to="/settings?tab=connections" replace />} />
         <Route path="/users"       element={<Navigate to="/settings?tab=users" replace />} />
         <Route path="/locations"   element={<Navigate to="/settings?tab=locations" replace />} />
