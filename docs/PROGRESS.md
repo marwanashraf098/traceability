@@ -84,7 +84,35 @@ link + top-level navigation, L2 dropped). Built with Polaris like the rest of th
   ShopifyMagicLinkTest). The first full run also had `BostaPollJobTest.p6` red (Bosta status-poll test, untouched by
   this build): it passed alone twice (21/21) and in the second full run — a timing flake. Frontend 104 files / 740 tests
   green. (Earlier runs on an out-of-memory machine stalled; no failures there.)
-**Analytics slice 3 — Bosta money, backend only (2026-10-07, branch `analytics/s3-money`, merged to main and pushed;
+**Analytics slice 5 — revenue & delivery breakdowns, backend only (2026-10-08, branch `analytics/s5-breakdowns`, merged
+to main; NOT deployed). No migration.** Owner-only; every response is `{range, previousRange, current, previous}`
+(previous = same length, right before).
+- `/api/v1/analytics/revenue/summary` (gross → code / automatic / other discounts → booked → realized; waterfall gross −
+  discounts − in transit − not shipped − other carrier (Wijha) − refused − other terminal − returns = net realized, exact
+  to the cent because money is rounded PER ORDER; funnel ordered → fulfilled (Shopify fulfillment, Bosta collected, or
+  delivered/refused) → delivered → paid to you (s3 cashout); booked + realized per Cairo day), `/revenue/breakdown?by=
+  channel|payment|governorate|productType`, `/revenue/discounts` (per code, case-insensitive, + one "Automatic
+  discounts" row), `/revenue/heatmap` (avg orders per Cairo weekday × hour), `/delivery/summary` (success, lost sales,
+  order→handed (collectedFromBusiness, else first with_courier) and handed→delivered hours with a Cairo/Giza split,
+  8-week trend by placed week, same-day / 1 / 2 / 3+ day buckets), `/delivery/failure-reasons` (6 groups + coverage),
+  `/products/extras` (ABC 80/95 — the variant crossing 80 % is A; most-failed ≥ 20 orders; size curve with returns and
+  exchanges, unparseable sizes excluded and counted; bought together ≥ 3 orders, top 10).
+- **Mapping tables** are Java (`AnalyticsMappings`, unit-tested): channel = draft order → Manual / DM; no source fields
+  (GraphQL-imported) → Unknown; referrer host BEFORE utm_source (stores put campaign names in utm_source); truncated Meta
+  utm "fa/fac/faceb…" → Facebook; the store's own domain → Direct. Payment COD / Card (Paymob, Kashier, card) / Manual /
+  Mixed / Other (gift cards are Other). Governorate = Bosta city of the deciding leg, else Shopify province → Bosta city
+  (lowest city id per name), else Unknown.
+- **One success-rate definition everywhere (approved 2026-10-08):** successRate = delivered ÷ (delivered + failed),
+  refusalRate = refused ÷ (delivered + failed), failed = refused + other_terminal (lost / terminated / cancelled deciding
+  leg). The rule is `SalesAnalyticsService.LEG_OUTCOME_WHENS`, shared by ORDER_OUTCOMES and the s3 pipeline's city rates
+  (now per order's deciding leg, orders placed in the last 90 days). s2 refusalRate / cities successRate and s5
+  failureRate changed accordingly.
+- **Performance:** `OrderFacts` is one per-order query (built on soldLines + ORDER_OUTCOMES + LINE_RETURNS, money
+  aggregated straight from line_facts) run ONCE per request over previous + current period (+ trend weeks), split in
+  Java. Prod Femine (1,130 orders, 60-day window): 2.1–2.6 s; the remaining cost is soldLines decompressing orders.raw
+  per line (slice 8).
+
+**Analytics slice 3 — Bosta money, backend only (2026-10-07, branch `analytics/s3-money`, merged to main;
 NOT deployed). Migration V148 (renumbered from V147 on 2026-10-08: Build D took V147).**
 - **V148** adds Bosta's per-delivery settlement to `shipments` (wallet.cashCycle + cashout): deposited_at/_amt,
   cod_settled, bosta_fees, shipping_fees, vat, opening_package / collection / insurance / flex_ship fees,
