@@ -19,13 +19,12 @@ import java.util.UUID;
  * Called once per Shopify connect/reconnect (from ShopifyImportJob, which fires on every
  * outcome of ShopifyOAuthService.linkOrProvision). Handles BOTH onboarding cases without
  * needing to know which one occurred:
- *   - standalone signup: AuthRepository.createTenantWithOwner already seeded a Main
- *     Warehouse row with is_fulfillment=true — ensureInternalLocation() finds it.
- *   - Shopify-first (provision_tenant_from_shopify, V14): zero locations exist yet —
- *     ensureInternalLocation() creates one, mirroring AuthRepository's exact seed shape.
- *     This does NOT touch provision_tenant_from_shopify itself — a plain INSERT under
- *     TenantContext after the DEFINER call returns, same pattern already used in
- *     ShopifyOAuthService.provisionNewTenant() for the refresh-token fields.
+ *   - signup (web or embedded — Build D): AuthRepository.createTenantWithOwner already seeded a
+ *     Main Warehouse row with is_fulfillment=true — ensureInternalLocation() finds it.
+ *   - any tenant without one (e.g. created before that seed existed): ensureInternalLocation()
+ *     creates one, mirroring AuthRepository's exact seed shape. (The Shopify-first
+ *     provision_tenant_from_shopify path that created tenants with zero locations was dropped
+ *     in V147.)
  *
  * Idempotent and re-runnable: guarded on is_fulfillment existing at all, then on a
  * claim-before-call conditional UPDATE (not a SELECT-then-act check) — see

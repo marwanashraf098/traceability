@@ -25,18 +25,20 @@ public class ShopifyOAuthException extends ApiException {
         // Day 2 codes
         SHOPIFY_REQUEST_EXPIRED,        // stale timestamp on install/callback
         SHOPIFY_STORE_ALREADY_CONNECTED, // shop owned by a different tenant (redirect, not JSON)
-        SHOPIFY_SHOP_EMAIL_MISSING,      // Shopify shop resource returned no owner email
         // Day 4 codes
         MAGIC_LINK_INVALID,              // not-found / expired / consumed — no oracle (all sub-conditions identical)
-        // V42 codes
-        SHOPIFY_EMAIL_ALREADY_REGISTERED, // provision_tenant_from_shopify 23505 on users_email_unique
         // Disconnect/reconnect hard rule: a tenant is permanently bound to its original
         // shop_domain — initiate() rejects a different shop pre-consent, before any write.
         SHOPIFY_SHOP_MISMATCH,
         // "Find your store": the input isn't a .myshopify.com address or a Shopify admin link
         // (ShopDomainNormalizer), and — before initiate — Shopify clearly says no such store exists.
         NOT_SHOPIFY_ADDRESS,
-        STORE_NOT_FOUND
+        STORE_NOT_FOUND,
+        // Build D (embedded onboarding / pending link): the shop is already linked to another tenant
+        // (same wording as the callback's SHOP_LINKED_ELSEWHERE redirect), and a pending link that is
+        // unknown / expired / used (one code for all three — no oracle).
+        SHOP_LINKED_ELSEWHERE,
+        PENDING_LINK_INVALID
     }
 
     private final Code code;

@@ -235,6 +235,10 @@ class RlsCoverageTest {
                     "uses tx.execute(); empty valid for no syncs"),
             entry("/api/v1/shopify-inventory/adjustments/export.csv",
                     "CSV download, not a JSON list"),
+            entry("/api/v1/embedded/onboarding/prefill",
+                    "Build D: tenantless SHOPIFY_ONBOARDING principal (verified session token, shop from its dest " +
+                    "claim); reads no tenant data — refuses a shop any tenant owns (409) and returns only the " +
+                    "store's own name / contact email from Shopify. Covered by EmbeddedOnboardingTest (app_user)"),
             entry("/api/v1/embedded/inventory/summary",
                     "uses embedded token auth; delegates to covered services"),
             entry("/api/v1/embedded/orders/daily-counts",

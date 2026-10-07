@@ -784,6 +784,23 @@ export function shopifyResolveStore(input: string) {
   })
 }
 
+// Build D — "I already have a Traced account": the pending link the embedded app parked in Shopify.
+// The nonce goes in the request body, never a URL of these calls. Errors: 410 PENDING_LINK_INVALID,
+// 409 SHOPIFY_SHOP_MISMATCH / SHOP_LINKED_ELSEWHERE (TransferCommandError), 403 for a non-owner.
+export function shopifyPendingLinkPreview(link: string) {
+  return transferCommandRequest<{ shopDomain: string; businessName: string }>('/shopify/pending-link/preview', {
+    method: 'POST',
+    body: JSON.stringify({ link }),
+  })
+}
+
+export function shopifyPendingLinkConfirm(link: string) {
+  return transferCommandRequest<{ shopDomain: string; redirectUrl: string }>('/shopify/pending-link/confirm', {
+    method: 'POST',
+    body: JSON.stringify({ link }),
+  })
+}
+
 export function shopifyInitiate(shop: string) {
   return transferCommandRequest<{ consentUrl: string }>('/shopify/oauth/initiate', {
     method: 'POST',

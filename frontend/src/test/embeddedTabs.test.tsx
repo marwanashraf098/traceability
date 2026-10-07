@@ -187,7 +187,7 @@ describe('EmbeddedApp — Overview/Orders tabs (linked)', () => {
   })
 })
 
-describe('EmbeddedApp — cold install still shows NotLinked, no tabs', () => {
+describe('EmbeddedApp — cold install shows onboarding, no tabs', () => {
   beforeEach(() => {
     ;(globalThis as unknown as { shopify: { idToken(): Promise<string> } }).shopify = {
       idToken: async () => 'fake-session-token',
@@ -200,11 +200,11 @@ describe('EmbeddedApp — cold install still shows NotLinked, no tabs', () => {
     delete (globalThis as unknown as { shopify?: unknown }).shopify
   })
 
-  test('NOT_PROVISIONED renders NotLinked, never the tabbed dashboard', async () => {
+  test('NOT_PROVISIONED renders onboarding, never the tabbed dashboard', async () => {
     mockFetchColdInstall()
     renderEmbedded()
 
-    expect(await screen.findByText("This store isn't connected to Traced")).toBeInTheDocument()
+    expect(await screen.findByText('Welcome to Traced')).toBeInTheDocument()
     expect(screen.queryByRole('tab', { name: 'Overview' })).not.toBeInTheDocument()
     expect(screen.queryByRole('tab', { name: 'Orders' })).not.toBeInTheDocument()
   })

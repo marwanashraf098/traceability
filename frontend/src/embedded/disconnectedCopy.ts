@@ -1,12 +1,7 @@
 /**
- * Local EN/AR copy for the embedded Disconnected empty state — same rationale as
- * notLinkedCopy.ts: no dependency on the shared i18next/locale tree (it added ~96.5KB
- * gzip to the embedded bundle to translate a single card).
- *
- * No signal in the embedded surface selects a language — embedded.html hardcodes
- * lang="en", no dir attribute, no locale meta tag, and PolarisProvider is hardcoded to
- * enTranslations. Disconnected therefore always renders 'en' in production; 'ar' exists
- * here for direct, explicit use (tests, visual verification) — never auto-detected.
+ * Local EN/AR copy for the embedded Disconnected empty state — no dependency on the shared
+ * i18next/locale tree (it added ~96.5KB gzip to the embedded bundle to translate a single card).
+ * The language comes from Shopify's `locale` parameter (embeddedLocale.ts, Build D).
  */
 export interface DisconnectedCopy {
   pageTitle: string

@@ -205,19 +205,13 @@ public class ShopifyOAuthController {
                 .location(URI.create(embeddedReturn))
                 .header("X-Store-Id", result.tenantId() != null ? result.tenantId().toString() : "")
                 .build();
-            // Option A (2026-09-04): cold install created nothing (see ShopifyOAuthService.path2()).
-            // Redirect back INTO the embedded app exactly like LINKED_NEW/LINKED_EXISTING — same
-            // embeddedReturn target — so App Bridge re-mounts, the embedded token-exchange call
-            // 401s with NOT_PROVISIONED again, and EmbeddedApp renders its NotLinked empty state.
-            // No off-platform paywall or pricing page is ever presented in this response.
+            // Cold install created nothing (see ShopifyOAuthService.path2()). Redirect back INTO
+            // the embedded app exactly like LINKED_NEW/LINKED_EXISTING — same embeddedReturn
+            // target — so App Bridge re-mounts, the embedded token-exchange call 401s with
+            // NOT_PROVISIONED again, and EmbeddedApp renders onboarding (Build D: sign up, or
+            // connect an existing Traced account). No payment step anywhere in this flow.
             case NOT_LINKED -> ResponseEntity.status(HttpStatus.FOUND)
                 .location(URI.create(embeddedReturn))
-                .build();
-            // PROVISIONED is dead as of Option A — provisionNewTenant() is unreferenced by any
-            // live call path (see ShopifyOAuthService.LinkOutcome). Branch kept only so this
-            // switch expression stays exhaustive over the enum.
-            case PROVISIONED -> ResponseEntity.status(HttpStatus.FOUND)
-                .location(URI.create(oauthService.getAppUrl() + "/connect/setup-pending"))
                 .build();
             case REJECTED_CROSS_TENANT -> errorRedirect(BrowserError.SHOP_LINKED_ELSEWHERE);
             // Write-site backstop to the initiate()-time assertBoundShop() guard — should not

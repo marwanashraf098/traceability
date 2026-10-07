@@ -43,8 +43,9 @@ import static org.mockito.Mockito.*;
 /**
  * OAuth Day 2 integration tests — FR-3.1 resolve-or-create decision tree.
  *
- * Tests 1–7: decision tree branches (Path-1 new, Path-1 existing, Path-1 cross-tenant,
- *             Path-2 new provisioning, Path-2 existing, race, atomicity).
+ * Tests 1–6: decision tree branches (Path-1 new, Path-1 existing, Path-1 cross-tenant,
+ *             Path-2 cold install, Path-2 existing, race). (Test 7, provision_tenant_from_shopify's
+ *             own atomicity, was deleted with that function — V147, Build D.)
  * Tests 8–10: A1 timestamp freshness, A2 state sweep, RLS opacity of cross-tenant detect.
  *
  * ShopifyGateway and JobScheduler are @MockBean — no real Shopify calls.
@@ -475,50 +476,6 @@ class ShopifyOAuthDay2Test {
         Integer storeCount = jdbc.queryForObject(
             "SELECT COUNT(*) FROM stores WHERE shop_domain = ?", Integer.class, SHOP_RACE);
         assertThat(storeCount).as("cold install creates no store, even under concurrency").isEqualTo(0);
-    }
-
-    // -----------------------------------------------------------------------
-    // 7. Provisioning atomicity: a forced stores 23505 inside the function
-    //    → zero orphan tenants, zero orphan owner users
-    // -----------------------------------------------------------------------
-    @Test
-    void provisioningAtomicity_storeConflict_noOrphanTenantOrUser() {
-        // Pre-seed a store row to cause 23505 when the function tries to INSERT it
-        jdbc.execute(
-            "INSERT INTO tenants (name) VALUES ('Pre-existing Tenant') ON CONFLICT DO NOTHING");
-        UUID preTenantId = jdbc.queryForObject(
-            "SELECT id FROM tenants WHERE name = 'Pre-existing Tenant'", UUID.class);
-        jdbc.update(
-            "INSERT INTO stores (tenant_id, shop_domain, platform, access_token_encrypted, status, import_status) " +
-            "VALUES (?, ?, 'shopify', 'some-token', 'connected', 'idle') ON CONFLICT DO NOTHING",
-            preTenantId, SHOP_ATOMIC);
-
-        // Directly call the provisioning function — expect 23505 → rolled back
-        boolean threw = false;
-        try {
-            jdbc.query(
-                "SELECT tenant_id FROM provision_tenant_from_shopify(?,?,?,?,?)",
-                rs -> null,
-                SHOP_ATOMIC, SHOP_PROV_EMAIL, SHOP_PROV_NAME, "Africa/Cairo", "encrypted-token-x");
-        } catch (Exception e) {
-            threw = true;
-            // expect duplicate key (23505) or similar
-        }
-        assertThat(threw).as("provision call must throw on duplicate shop_domain").isTrue();
-
-        // Zero orphan tenants for our test shop name
-        Integer orphanTenants = jdbc.queryForObject(
-            "SELECT COUNT(*) FROM tenants WHERE name = ?", Integer.class, SHOP_PROV_NAME);
-        assertThat(orphanTenants).as("no orphan tenants").isEqualTo(0);
-
-        // Zero orphan users for our test email
-        Integer orphanUsers = jdbc.queryForObject(
-            "SELECT COUNT(*) FROM users WHERE email = ?", Integer.class, SHOP_PROV_EMAIL);
-        assertThat(orphanUsers).as("no orphan users").isEqualTo(0);
-
-        // Cleanup
-        jdbc.update("DELETE FROM stores WHERE shop_domain = ?", SHOP_ATOMIC);
-        jdbc.execute("DELETE FROM tenants WHERE name = 'Pre-existing Tenant'");
     }
 
     // -----------------------------------------------------------------------
