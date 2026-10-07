@@ -179,6 +179,15 @@ public interface ShopifyGateway {
     default void forgetOrderPiiTier(String shopDomain) { }
 
     /**
+     * "Find your store" typo check for a normalised {@code <handle>.myshopify.com} (ShopifyStoreExistence):
+     * NOT_FOUND only on Shopify's clear 404; anything else — including null from a test mock — lets the
+     * merchant through.
+     */
+    default ShopifyStoreExistence.Result checkStoreExists(String shopDomain) {
+        return ShopifyStoreExistence.Result.INCONCLUSIVE;
+    }
+
+    /**
      * Lists all webhook subscriptions for the store (up to 100).
      * Used to detect stale subscriptions owned by a different app before re-registering.
      */

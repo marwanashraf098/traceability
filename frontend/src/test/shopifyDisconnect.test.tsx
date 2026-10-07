@@ -85,7 +85,7 @@ describe('ConnectionsTab — Shopify disconnect', () => {
     await waitFor(() => expect(api.shopifyDisconnect).toHaveBeenCalledWith(STORE_ID))
 
     // Refetch happened — card flips back to the connect form.
-    await screen.findByPlaceholderText('your-store.myshopify.com')
+    await screen.findByPlaceholderText('yourstore.myshopify.com or your Shopify admin link')
     expect(screen.queryByTestId('shopify-disconnect-btn')).toBeNull()
   })
 

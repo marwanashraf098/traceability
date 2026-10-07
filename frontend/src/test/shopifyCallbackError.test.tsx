@@ -117,7 +117,7 @@ describe('ShopifyConnectionCard — shopify_error from the OAuth redirect', () =
     renderAt('?tab=connections')
 
     // Card rendered (connect form visible) with no callback alert.
-    await screen.findByPlaceholderText('your-store.myshopify.com')
+    await screen.findByPlaceholderText('yourstore.myshopify.com or your Shopify admin link')
     expect(screen.queryByText(GENERIC)).toBeNull()
     expect(screen.queryByRole('button', { name: 'Dismiss' })).toBeNull()
   })

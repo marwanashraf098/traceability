@@ -1,6 +1,7 @@
-import { useState, FormEvent, ReactNode } from 'react'
+import { useState, FormEvent } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Button, Input, Progress } from '../../../components/ui'
+import { Button, Input } from '../../../components/ui'
+import { StepBody, WizardHeader } from './WizardStep'
 import { CopyRow } from './CopyRow'
 import type { ConnectionsStatus } from '../../../api'
 
@@ -27,17 +28,6 @@ function ToggleIndicator({ on, label }: { on: boolean; label: string }) {
   )
 }
 
-function StepBody({ title, body, children }: { title: string; body: string; children?: ReactNode }) {
-  return (
-    <div className="space-y-3">
-      <div>
-        <h4 className="text-body-lg font-semibold text-primary mb-1">{title}</h4>
-        <p className="text-body text-muted">{body}</p>
-      </div>
-      {children}
-    </div>
-  )
-}
 
 // ── Setup wizard — 10-step controlled flow, "Set it up myself" / custom_app_cc
 // reconnect path. Copyable config values (app URL, redirect URL, webhook API version,
@@ -113,14 +103,12 @@ export default function SetupWizard({
 
   return (
     <div className="space-y-4" data-testid="shopify-setup-wizard">
-      <h3 className="text-h4 text-primary">{t('connections.shopify.wizard.title')}</h3>
-
-      <div className="space-y-2">
-        <span className="text-small text-muted font-medium">
-          {t('connections.shopify.wizard.stepLabel', { current: step, total: TOTAL_STEPS })}
-        </span>
-        <Progress value={(step / TOTAL_STEPS) * 100} />
-      </div>
+      <WizardHeader
+        title={t('connections.shopify.wizard.title')}
+        stepLabel={t('connections.shopify.wizard.stepLabel', { current: step, total: TOTAL_STEPS })}
+        step={step}
+        total={TOTAL_STEPS}
+      />
 
       <div className="min-h-[140px]">
         {step === 1 && (

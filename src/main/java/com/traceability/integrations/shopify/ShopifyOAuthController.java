@@ -55,6 +55,8 @@ public class ShopifyOAuthController {
 
     public record InitiateRequest(String shop) {}
     public record InitiateResponse(String consentUrl) {}
+    public record ResolveStoreRequest(String input) {}
+    public record ResolveStoreResponse(String shopDomain, String source) {}
 
     /**
      * Path-1 initiate: authenticated Owner supplies shop domain, receives consent URL.
@@ -66,19 +68,39 @@ public class ShopifyOAuthController {
             @RequestBody InitiateRequest req,
             @AuthenticationPrincipal CustomUserDetails principal) {
 
-        String shop = req.shop();
-        if (shop == null || !shop.matches(SHOP_DOMAIN_PATTERN)) {
-            throw new ShopifyOAuthException(
-                ShopifyOAuthException.Code.SHOPIFY_STATE_INVALID,
-                "Invalid shop domain — must be *.myshopify.com",
-                "نطاق المتجر غير صالح — يجب أن يكون *.myshopify.com",
-                HttpStatus.BAD_REQUEST);
-        }
+        // "Find your store": normalise first (lowercase, admin link → handle) — the callback compares the
+        // shop Shopify sends back (always lowercase) with the one stored here, so "ABC.myshopify.com" used to
+        // pass this check and then fail the callback.
+        String shop = normalizedOrReject(req.shop()).shopDomain();
 
         // Path-1 is initiated from inside our own standalone SaaS (never embedded) — no host.
-        String nonce      = oauthService.initiateOAuth(principal.tenantId(), shop, null);
+        // initiateChecked: same-shop rule → store typo check (only a clear not-found blocks) → state nonce.
+        String nonce      = oauthService.initiateChecked(principal.tenantId(), shop, null);
         String consentUrl = oauthService.buildConsentUrl(shop, nonce);
         return ResponseEntity.ok(new InitiateResponse(consentUrl));
+    }
+
+    /**
+     * "Find your store" — turns what the owner pasted (a .myshopify.com address or a Shopify admin link)
+     * into {@code <handle>.myshopify.com} for the confirm step. Pure normalisation: no network, no tenant
+     * data, nothing stored. Anything else → 400 NOT_SHOPIFY_ADDRESS.
+     */
+    @PostMapping("/api/v1/shopify/resolve-store")
+    @PreAuthorize("hasRole('OWNER')")
+    public ResponseEntity<ResolveStoreResponse> resolveStore(@RequestBody ResolveStoreRequest req) {
+        ShopDomainNormalizer.Result r = normalizedOrReject(req.input());
+        return ResponseEntity.ok(new ResolveStoreResponse(r.shopDomain(), r.source().wire()));
+    }
+
+    private static ShopDomainNormalizer.Result normalizedOrReject(String input) {
+        try {
+            return ShopDomainNormalizer.normalize(input);
+        } catch (ShopDomainNormalizer.NotShopifyAddress e) {
+            throw new ShopifyOAuthException(ShopifyOAuthException.Code.NOT_SHOPIFY_ADDRESS,
+                "That's not a Shopify address. Paste the link from your Shopify admin.",
+                "هذا ليس عنوان Shopify. الصق الرابط من لوحة تحكم Shopify.",
+                HttpStatus.BAD_REQUEST);
+        }
     }
 
     /**

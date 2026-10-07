@@ -775,6 +775,15 @@ export function shopifyCustomConnect(shopDomain: string, clientId: string, clien
 // rejection here (tenant already bound to a different shop_domain) is the same
 // SHOPIFY_SHOP_MISMATCH shape.
 
+/** "Find your store" — a .myshopify.com address or Shopify admin link → <handle>.myshopify.com (owner only).
+ *  Throws TransferCommandError NOT_SHOPIFY_ADDRESS for anything else. */
+export function shopifyResolveStore(input: string) {
+  return transferCommandRequest<{ shopDomain: string; source: 'myshopify' | 'admin_link' }>('/shopify/resolve-store', {
+    method: 'POST',
+    body: JSON.stringify({ input }),
+  })
+}
+
 export function shopifyInitiate(shop: string) {
   return transferCommandRequest<{ consentUrl: string }>('/shopify/oauth/initiate', {
     method: 'POST',

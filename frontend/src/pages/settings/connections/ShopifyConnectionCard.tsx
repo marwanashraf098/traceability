@@ -1,9 +1,10 @@
-import { useState, useEffect, useCallback, FormEvent } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useSearchParams } from 'react-router-dom'
 import { Check, AlertTriangle, ArrowUpRight, X } from 'lucide-react'
-import { Badge, Button, Input, Spinner } from '../../../components/ui'
+import { Badge, Button, Spinner } from '../../../components/ui'
 import SetupWizard from './SetupWizard'
+import StoreFinder, { ErrorAlert, StoreNotFoundAlert } from './StoreFinder'
 import {
   shopifyInitiate, shopifyCustomConnect, shopifyDisconnect, TransferCommandError,
   listLocations, getShopifyInventoryReconcileReport, activateShopifyFulfillment,
@@ -250,9 +251,9 @@ export default function ShopifyConnectionCard({
   const [wizardClientId, setWizardClientId] = useState('')
   const [wizardClientSecret, setWizardClientSecret] = useState('')
 
-  const [reviewerShop, setReviewerShop] = useState('')
-  const [reviewerLoading, setReviewerLoading] = useState(false)
-  const [reviewerError, setReviewerError] = useState('')
+  // Reconnect (a linked, disconnected shop): no input — one button that runs initiate on that shop.
+  const [reconnecting, setReconnecting] = useState(false)
+  const [reconnectError, setReconnectError] = useState<{ notFound: true } | { text: string } | null>(null)
 
   const [upgrading, setUpgrading] = useState(false)
   const [upgradeError, setUpgradeError] = useState('')
@@ -285,7 +286,6 @@ export default function ShopifyConnectionCard({
   const linkedShop = !shopify.connected && shopify.status === 'disconnected' ? shopify.shopDomain : null
   useEffect(() => {
     if (!linkedShop) return
-    setReviewerShop(prev => prev || linkedShop)
     setWizardShopDomain(prev => prev || linkedShop)
   }, [linkedShop])
 
@@ -296,7 +296,6 @@ export default function ShopifyConnectionCard({
   const prefillShop = SHOP_RE.test(shopParam) ? shopParam : null
   useEffect(() => {
     if (!prefillShop || linkedShop) return
-    setReviewerShop(prev => prev || prefillShop)
     setWizardShopDomain(prev => prev || prefillShop)
   }, [prefillShop, linkedShop])
 
@@ -330,21 +329,20 @@ export default function ShopifyConnectionCard({
     setOverride('choose')
   }
 
-  async function handleReviewerConnect(e: FormEvent) {
-    e.preventDefault()
-    setReviewerError('')
-    const trimmed = reviewerShop.trim()
-    if (!SHOP_RE.test(trimmed)) {
-      setReviewerError(t('connections.shopify.domainInvalid'))
-      return
-    }
-    setReviewerLoading(true)
+  // Reconnect the linked shop through the official app: /oauth/initiate runs the same store check as the
+  // finder's "Connect this store" (only a clear not-found comes back as STORE_NOT_FOUND).
+  async function handleReconnect() {
+    if (!linkedShop) return
+    setReconnectError(null)
+    setReconnecting(true)
     try {
-      const res = await shopifyInitiate(trimmed)
+      const res = await shopifyInitiate(linkedShop)
       window.location.href = res.consentUrl
     } catch (err) {
-      setReviewerError(connectErrorMessage(err, isAr, t('connections.shopify.error')))
-      setReviewerLoading(false)
+      setReconnectError(err instanceof TransferCommandError && err.code === 'STORE_NOT_FOUND'
+        ? { notFound: true }
+        : { text: connectErrorMessage(err, isAr, t('connections.shopify.error')) })
+      setReconnecting(false)
     }
   }
 
@@ -461,35 +459,23 @@ export default function ShopifyConnectionCard({
             </div>
           )}
 
-          <div className="rounded-xl border border-line p-4 space-y-2">
-            <span className="inline-block text-xs font-semibold text-muted bg-elevated rounded px-2 py-0.5">
-              {t('connections.shopify.reviewer.badge')}
-            </span>
-            <h4 className="text-body-lg font-semibold text-primary">{t('connections.shopify.reviewer.title')}</h4>
-            <p className="text-small text-muted">{t('connections.shopify.reviewer.body')}</p>
-
-            {reviewerError && (
-              <div role="alert" className="text-small text-danger bg-danger/10 border border-danger/25 rounded px-3 py-2">
-                {reviewerError}
-              </div>
-            )}
-
-            <form onSubmit={handleReviewerConnect} className="space-y-2">
-              <Input
-                type="text"
-                value={reviewerShop}
-                onChange={e => setReviewerShop(e.target.value)}
-                placeholder={t('connections.shopify.shopPlaceholder')}
-                dir="ltr"
-                disabled={reviewerLoading}
-                autoComplete="off"
-                aria-label={t('connections.shopify.shopLabel')}
-              />
-              <Button type="submit" variant="outline" className="w-full" disabled={reviewerLoading || !reviewerShop.trim()}>
-                {reviewerLoading ? t('connections.shopify.connecting') : t('connections.shopify.reviewer.cta')}
+          {linkedShop ? (
+            <div className="space-y-2" data-testid="shopify-reconnect">
+              <span className="inline-block text-xs font-semibold text-brand bg-brand/10 rounded-full px-2.5 py-0.5">
+                {t('connections.shopify.reviewer.badge')}
+              </span>
+              <h4 className="text-body-lg font-semibold text-primary">{t('connections.shopify.reviewer.title')}</h4>
+              <p className="text-small text-muted">{t('connections.shopify.reviewer.body')}</p>
+              {reconnectError && ('notFound' in reconnectError
+                ? <StoreNotFoundAlert shop={linkedShop} />
+                : <ErrorAlert title={reconnectError.text} />)}
+              <Button variant="primary" className="w-full" onClick={() => void handleReconnect()} loading={reconnecting}>
+                {reconnecting ? t('connections.shopify.connecting') : t('connections.shopify.reviewer.cta')}
               </Button>
-            </form>
-          </div>
+            </div>
+          ) : (
+            <StoreFinder initialInput={prefillShop ?? ''} />
+          )}
         </div>
       )}
 

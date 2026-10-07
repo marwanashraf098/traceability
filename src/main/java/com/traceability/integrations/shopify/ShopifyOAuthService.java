@@ -211,6 +211,26 @@ public class ShopifyOAuthService {
      * @param host       Shopify's `host` param, if present at install time (null otherwise —
      *                   normal for a fresh/cold install; see buildAdminAppUrl()'s fallback)
      */
+    /**
+     * "Find your store" — the HTTP initiate path: same-shop rule (pre-consent, as before), then the store
+     * typo check, then {@link #initiateOAuth}. {@code shopDomain} is already normalised
+     * (ShopDomainNormalizer). Only Shopify's clear not-found blocks (STORE_NOT_FOUND); an inconclusive check
+     * (timeout, any other answer, or a mocked gateway's null) lets the merchant through.
+     */
+    public String initiateChecked(UUID tenantId, String shopDomain, String host) {
+        if (tenantId != null) assertBoundShop(tenantId, shopDomain);
+        ShopifyStoreExistence.Result check = shopifyGateway.checkStoreExists(shopDomain);
+        log.info("STORE_CHECK shop={} tenant={} result={}", shopDomain, tenantId,
+            check == null ? ShopifyStoreExistence.Result.INCONCLUSIVE : check);
+        if (check == ShopifyStoreExistence.Result.NOT_FOUND) {
+            throw new ShopifyOAuthException(ShopifyOAuthException.Code.STORE_NOT_FOUND,
+                "We couldn't find a store called " + shopDomain + ". Check the spelling.",
+                "لم نجد متجرًا باسم " + shopDomain + ". تحقق من الإملاء.",
+                HttpStatus.UNPROCESSABLE_ENTITY);
+        }
+        return initiateOAuth(tenantId, shopDomain, host);
+    }
+
     public String initiateOAuth(UUID tenantId, String shopDomain, String host) {
         // Hard rule: a tenant is permanently bound to its original shop_domain. Path-1 only
         // (tenantId != null) — Path-2 install has no authenticated tenant yet, nothing to bind.

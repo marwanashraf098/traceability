@@ -4,6 +4,39 @@
 
 ## Current state
 
+**"Find your store" — connect via the official app without knowing the .myshopify.com address (2026-10-07, branch
+`feat/shopify-store-finder` off main 77aa474; merged to main; not pushed, not deployed). No migration.** Signed-off mockup:
+`design/Traced_shopify_connect_wizard_dc.html` (website-address lookup dropped for v1; no "check couldn't run" state).
+- **Backend:** `ShopDomainNormalizer` (`:47`) — the ONE place a typed address becomes `<handle>.myshopify.com`
+  (lowercase; scheme, capitals, whitespace, invisible chars, trailing dot/slash, path; admin links
+  `admin.shopify.com/store/<handle>/…` and legacy `<handle>.myshopify.com/admin…`; credentials / port / anything else →
+  NOT_SHOPIFY_ADDRESS); no network. `/oauth/initiate` normalises first (`ShopifyOAuthController:74`) — fixes the capitals
+  bug (a capitalised shop used to pass the regex and fail the callback's shop match). New owner-only
+  `POST /api/v1/shopify/resolve-store {input}` → `{shopDomain, source: myshopify|admin_link}` (`:88`), pure
+  normalisation. `ShopifyOAuthService.initiateChecked` (`:220`, used only by the HTTP initiate): same-shop rule →
+  store typo check → `initiateOAuth` (unchanged; `TenantContextRestoreTrapsTest` still calls it directly, offline).
+  Store check `ShopifyStoreExistence` (`:40`), reached via `ShopifyGateway.checkStoreExists` (default / mock null =
+  inconclusive): GET `https://<handle>.myshopify.com/meta.json`, URL built only from a normalised domain (refused before
+  any I/O otherwise), https only, no redirects, 3 s timeouts, body discarded. Only a 404 blocks → 422 STORE_NOT_FOUND;
+  2xx/3xx, any other status, timeout, network error → through. Probed 2026-10-07: a non-existent handle → 404,
+  real stores → 200. New `ShopifyOAuthException` codes NOT_SHOPIFY_ADDRESS, STORE_NOT_FOUND (EN + AR messages).
+  RlsCoverageTest unchanged: it audits GET endpoints only and resolve-store is a POST reading no tenant data.
+- **Frontend:** never-connected tenant → `StoreFinder` (input with live recognition from `storeAddress.ts` — a preview of
+  the normaliser — format chips, "Find my store" → resolve → "We found your store" confirm, "That's not my store" keeps
+  the text, "Connect this store" → initiate; errors: not an address / not a Shopify address (by whether the text looks
+  like a domain) / store not found (+ "Change the address") / backend message as-is). Linked shop → reconnect: no input,
+  one "Connect with Shopify" running initiate on the linked shop (same check). `StoreFinderGuide`: 3 steps (open admin,
+  copy the address bar, paste) + "On your phone?" Settings › Domains. `WizardStep.tsx` (WizardHeader, StepBody) extracted
+  from SetupWizard, markup unchanged. EN + AR for every string (`connections.shopify.finder.*`, `.guide.*`).
+- **Tests:** ShopDomainNormalizerTest (39), ShopifyStoreExistenceTest (30), StoreFinderTest s1–s5 (HTTP; revert-checked:
+  no normalising → s2/s5, not-found ignored → s4), storeFinder.test.tsx (9). Existing tests changed (approved):
+  reviewerConnectPath (new input label), shopifyCallbackError + shopifyDisconnect (new placeholder), shopifyLinkedShop
+  f1 (reconnect: notice + button, no input) and f2 (reconnect calls initiate with the linked shop; backend error shown).
+- **Suites (2026-10-07, after memory was freed):** backend 2,372 run — reds = the baseline two (ExchangeBackfillTest,
+  ShopifyMagicLinkTest). The first full run also had `BostaPollJobTest.p6` red (Bosta status-poll test, untouched by
+  this build): it passed alone twice (21/21) and in the second full run — a timing flake. Frontend 104 files / 740 tests
+  green. (Earlier runs on an out-of-memory machine stalled; no failures there.)
+
 **Build C — custom_app_cc → official OAuth upgrade, made safe (2026-10-06, branch `feat/oauth-upgrade` off main
 5cd15a9; merged to main; not pushed, not deployed). Migration V146. SHOPIFY_OAUTH_AVAILABLE unchanged (false).**
 - **Upgrade = an OAuth callback that re-links an existing custom-app row** (`ShopifyOAuthService.updateStoreToken`,

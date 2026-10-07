@@ -32,7 +32,11 @@ public class ShopifyOAuthException extends ApiException {
         SHOPIFY_EMAIL_ALREADY_REGISTERED, // provision_tenant_from_shopify 23505 on users_email_unique
         // Disconnect/reconnect hard rule: a tenant is permanently bound to its original
         // shop_domain — initiate() rejects a different shop pre-consent, before any write.
-        SHOPIFY_SHOP_MISMATCH
+        SHOPIFY_SHOP_MISMATCH,
+        // "Find your store": the input isn't a .myshopify.com address or a Shopify admin link
+        // (ShopDomainNormalizer), and — before initiate — Shopify clearly says no such store exists.
+        NOT_SHOPIFY_ADDRESS,
+        STORE_NOT_FOUND
     }
 
     private final Code code;

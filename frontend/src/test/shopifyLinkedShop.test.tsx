@@ -57,10 +57,13 @@ describe('ConnectionsTab — review mode S1', () => {
 
     const notice = await screen.findByTestId('shopify-linked-shop')
     expect(notice.textContent).toContain(LINKED)
-    expect(screen.getByPlaceholderText('your-store.myshopify.com')).toHaveValue(LINKED)
+    // Reconnect: no input — the linked shop and one "Connect with Shopify" button (store finder build).
+    expect(screen.getByTestId('shopify-reconnect')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Connect with Shopify' })).toBeInTheDocument()
+    expect(screen.queryByRole('textbox')).toBeNull()
   })
 
-  test('f2: a different shop shows the backend mismatch message naming the linked shop', async () => {
+  test('f2: reconnect calls initiate with the linked shop; a backend error is shown as-is', async () => {
     vi.mocked(api.getConnections).mockResolvedValue(fixture({ shopDomain: LINKED }))
     vi.mocked(api.shopifyInitiate).mockRejectedValue(new api.TransferCommandError({
       code: 'SHOPIFY_SHOP_MISMATCH',
@@ -70,12 +73,10 @@ describe('ConnectionsTab — review mode S1', () => {
     const user = userEvent.setup()
     renderWithProviders(<ConnectionsTab readOnly={false} />)
 
-    const input = await screen.findByPlaceholderText('your-store.myshopify.com')
-    await user.clear(input)
-    await user.type(input, 'other-shop.myshopify.com')
-    await user.click(screen.getByRole('button', { name: 'Connect with Shopify' }))
+    // The reconnect card has no input (store finder build) — the only shop it can send is the linked one.
+    await user.click(await screen.findByRole('button', { name: 'Connect with Shopify' }))
 
-    expect(api.shopifyInitiate).toHaveBeenCalledWith('other-shop.myshopify.com')
+    expect(api.shopifyInitiate).toHaveBeenCalledWith(LINKED)
     const alert = await screen.findByRole('alert')
     expect(alert.textContent).toContain(`This account is linked to ${LINKED}`)
   })

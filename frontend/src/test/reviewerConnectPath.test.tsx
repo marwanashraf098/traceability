@@ -147,7 +147,7 @@ describe('Shopify card prefill from ?shop=', () => {
   test('anything else is ignored', async () => {
     renderWithProviders(<ConnectionsTab readOnly={false} />,
       { initialEntries: ['/settings?tab=connections&shop=evil.example.com'] })
-    const input = await screen.findByLabelText('Shop domain')
+    const input = await screen.findByLabelText('Store address or Shopify admin link')
     expect(input).toHaveValue('')
   })
 })
