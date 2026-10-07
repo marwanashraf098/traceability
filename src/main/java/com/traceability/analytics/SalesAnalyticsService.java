@@ -144,7 +144,7 @@ public class SalesAnalyticsService {
      *             refund lines are counted in unverified_no_restock. shopify_returned = the added-back
      *             'return' units (returns source 3); a 'no_restock' refund is a sale but not a return.
      */
-    private static String soldLines(boolean allTime) {
+    static String soldLines(boolean allTime) {
         return """
             WITH bounds AS (
                 SELECT ?::timestamptz AS p_start, ?::timestamptz AS p_end

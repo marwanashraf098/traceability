@@ -342,3 +342,10 @@ analytics:
   # analytics — never by ingest. Jumi (mmi24e-fx) keeps its NULL cutoff permanently (CLAUDE.md FR-18);
   # its analytics floor is its connect day, 2026-07-02 (approved).
   floor-overrides: ${ANALYTICS_FLOOR_OVERRIDES:mmi24e-fx.myshopify.com=2026-07-02}
+  # Slice 3 — Bosta money. SettlementRefreshJob re-reads finished Bosta legs (v0 GET, BACKGROUND
+  # priority) until paid; at most refresh-max-per-tenant legs per tenant per hourly run.
+  settlement:
+    refresh-enabled: ${ANALYTICS_SETTLEMENT_REFRESH_ENABLED:true}
+    refresh-max-per-tenant: ${ANALYTICS_SETTLEMENT_REFRESH_MAX_PER_TENANT:100}
+  money:
+    open-order-days: 60   # "Not fulfilled yet" looks back this many days of orders

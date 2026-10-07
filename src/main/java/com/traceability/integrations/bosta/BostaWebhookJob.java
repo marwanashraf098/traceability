@@ -412,6 +412,7 @@ public class BostaWebhookJob {
                         jdbc.update(
                             "UPDATE shipments SET raw = ?::jsonb, last_synced_at = now() WHERE id = ?",
                             delivery.raw().toString(), forward.id());
+                        ShipmentSettlement.apply(jdbc, forward.id(), delivery.raw());
                         return null;
                     });
                     log.warn("Exchange tracking {} at unrecognized state.value — no transition applied, " +
@@ -661,6 +662,8 @@ public class BostaWebhookJob {
                 delivery.raw().toString(), isReturnedState,
                 fExceptionCode, fExceptionReason,
                 resolvedShipment.id());
+            // Analytics slice 3: the payload's wallet → settlement columns (monotonic).
+            ShipmentSettlement.apply(jdbc, resolvedShipment.id(), delivery.raw());
 
             // 9.2 — Returns portal (V100): the forward leg's delivered timestamp, set ONCE —
             // never overwritten by a repeat or later 'delivered' event. Return legs and the

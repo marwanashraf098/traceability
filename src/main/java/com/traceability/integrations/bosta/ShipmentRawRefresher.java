@@ -61,10 +61,14 @@ public class ShipmentRawRefresher {
                 return false;
             }
             if (d == null || d.raw() == null) return false;
-            Integer n = tx.execute(s -> jdbc.update(
-                "UPDATE shipments SET raw = ?::jsonb WHERE id = ? AND tenant_id = ? " +
-                "  AND raw->>'" + BostaListItemCache.SHAPE_FIELD + "' = '" + BostaListItemCache.SHAPE_V2 + "'",
-                d.raw().toString(), shipmentId, tenantId));
+            Integer n = tx.execute(s -> {
+                int updated = jdbc.update(
+                    "UPDATE shipments SET raw = ?::jsonb WHERE id = ? AND tenant_id = ? " +
+                    "  AND raw->>'" + BostaListItemCache.SHAPE_FIELD + "' = '" + BostaListItemCache.SHAPE_V2 + "'",
+                    d.raw().toString(), shipmentId, tenantId);
+                if (updated > 0) ShipmentSettlement.apply(jdbc, shipmentId, d.raw());
+                return updated;
+            });
             return n != null && n > 0;
         }));
     }

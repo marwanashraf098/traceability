@@ -140,6 +140,13 @@ class RlsCoverageTest {
             "/api/v1/analytics/sales/variants",
             "/api/v1/analytics/sales/products",
             "/api/v1/analytics/sales/cities",
+            // Analytics slice 3 (owner only) — analyticsMoney_reflectSeededSettledLeg below; app_user
+            // isolation in AnalyticsMoneyTest
+            "/api/v1/analytics/money/pipeline",
+            "/api/v1/analytics/money/fees",
+            "/api/v1/analytics/money/fees/extra",
+            "/api/v1/analytics/money/stuck",
+            "/api/v1/analytics/money/payouts",
             "/api/v1/inventory/stock",
             "/api/v1/inventory/variants/{variantId}/breakdown",
             "/api/v1/inventory/breakdown",
@@ -1547,6 +1554,43 @@ class RlsCoverageTest {
         assertThat((List<?>) products.getBody().get("products")).isNotEmpty();
 
         jdbc.update("DELETE FROM order_items WHERE order_id = ?", orderId);
+        jdbc.update("DELETE FROM orders WHERE id = ?", orderId);
+    }
+
+    @Test
+    void analyticsMoney_reflectSeededSettledLeg() {
+        UUID orderId = UUID.randomUUID();
+        UUID shipmentId = UUID.randomUUID();
+        jdbc.update(
+                "INSERT INTO orders (id, tenant_id, store_id, external_id, number, status, " +
+                "    payment_method, placed_at, on_hold) " +
+                "VALUES (?, ?, ?, 'EXT-CVG-MONEY', '#CVG-MONEY', 'new'::order_status, 'cod', now(), false)",
+                orderId, tenantId, storeId);
+        jdbc.update(
+                "INSERT INTO shipments (id, tenant_id, order_id, tracking_number, internal_state, shipment_leg, raw, " +
+                "    delivered_at, settlement_status, deposited_at, deposited_amt, bosta_fees, cashout_txn_id, cashout_date) " +
+                "VALUES (?, ?, ?, 'CVG-MONEY-1', 'delivered', 'forward', '{\"type\":{\"code\":10}}'::jsonb, " +
+                "    now(), 'paid', now(), 400, 100, 'WEDCOD01JAN26', (now() AT TIME ZONE 'Africa/Cairo')::date)",
+                shipmentId, tenantId, orderId);
+
+        ResponseEntity<Map> fees = get("/api/v1/analytics/money/fees?period=today", Map.class);
+        assertThat(fees.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(((Number) ((Map<?, ?>) fees.getBody().get("shipping")).get("legs")).longValue()).isEqualTo(1);
+
+        ResponseEntity<Map> payouts = get("/api/v1/analytics/money/payouts?period=today", Map.class);
+        assertThat(payouts.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat((List<?>) payouts.getBody().get("payouts")).hasSize(1);
+
+        ResponseEntity<Map> pipeline = get("/api/v1/analytics/money/pipeline?period=today", Map.class);
+        assertThat(pipeline.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(((Number) ((Map<?, ?>) pipeline.getBody().get("inYourBank")).get("shipments")).longValue())
+                .isEqualTo(1);
+
+        assertThat(get("/api/v1/analytics/money/fees/extra?period=today&groupBy=awb", Map.class).getStatusCode())
+                .isEqualTo(HttpStatus.OK);
+        assertThat(get("/api/v1/analytics/money/stuck", Map.class).getStatusCode()).isEqualTo(HttpStatus.OK);
+
+        jdbc.update("DELETE FROM shipments WHERE id = ?", shipmentId);
         jdbc.update("DELETE FROM orders WHERE id = ?", orderId);
     }
 
