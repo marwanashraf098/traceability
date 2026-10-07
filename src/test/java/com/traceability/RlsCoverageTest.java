@@ -135,9 +135,11 @@ class RlsCoverageTest {
             "/api/v1/overview/trends",
             "/api/v1/overview/late-to-pack",
             "/api/v1/overview/top-skus",
-            // Analytics slice 1 (owner only) — analyticsSales* below; app_user isolation in AnalyticsSalesTest
+            // Analytics slices 1–2 (owner only) — analyticsSales* below; app_user isolation in
+            // AnalyticsSalesTest / AnalyticsOutcomesTest
             "/api/v1/analytics/sales/variants",
             "/api/v1/analytics/sales/products",
+            "/api/v1/analytics/sales/cities",
             "/api/v1/inventory/stock",
             "/api/v1/inventory/variants/{variantId}/breakdown",
             "/api/v1/inventory/breakdown",
@@ -1488,6 +1490,34 @@ class RlsCoverageTest {
         assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.OK);
         assertThat(resp.getBody()).isNotEmpty();
 
+        jdbc.update("DELETE FROM order_items WHERE order_id = ?", orderId);
+        jdbc.update("DELETE FROM orders WHERE id = ?", orderId);
+    }
+
+    @Test
+    void analyticsSalesCities_reflectSeededDeliveredOrder() {
+        UUID orderId = UUID.randomUUID();
+        UUID shipmentId = UUID.randomUUID();
+        jdbc.update(
+                "INSERT INTO orders (id, tenant_id, store_id, external_id, number, status, " +
+                "    payment_method, placed_at, on_hold) " +
+                "VALUES (?, ?, ?, 'EXT-CVG-CITIES', '#CVG-CITIES', 'new'::order_status, 'cod', now(), false)",
+                orderId, tenantId, storeId);
+        jdbc.update(
+                "INSERT INTO order_items (id, tenant_id, order_id, variant_id, quantity, raw) " +
+                "VALUES (gen_random_uuid(), ?, ?, ?, 1, '{\"price\":\"150.00\",\"quantity\":1}'::jsonb)",
+                tenantId, orderId, variantId);
+        jdbc.update(
+                "INSERT INTO shipments (id, tenant_id, order_id, tracking_number, internal_state, shipment_leg, raw) " +
+                "VALUES (?, ?, ?, 'CVG-CITIES-1', 'delivered', 'forward', " +
+                "    '{\"type\":{\"code\":10},\"dropOffAddress\":{\"city\":{\"name\":\"Cairo\"}}}'::jsonb)",
+                shipmentId, tenantId, orderId);
+
+        ResponseEntity<Map> cities = get("/api/v1/analytics/sales/cities?period=today", Map.class);
+        assertThat(cities.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat((List<?>) cities.getBody().get("cities")).isNotEmpty();
+
+        jdbc.update("DELETE FROM shipments WHERE id = ?", shipmentId);
         jdbc.update("DELETE FROM order_items WHERE order_id = ?", orderId);
         jdbc.update("DELETE FROM orders WHERE id = ?", orderId);
     }

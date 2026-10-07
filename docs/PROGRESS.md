@@ -36,6 +36,41 @@
   ShopifyMagicLinkTest). The first full run also had `BostaPollJobTest.p6` red (Bosta status-poll test, untouched by
   this build): it passed alone twice (21/21) and in the second full run — a timing flake. Frontend 104 files / 740 tests
   green. (Earlier runs on an out-of-memory machine stalled; no failures there.)
+**Analytics slice 2 — delivery outcomes, customer returns and cities, backend only (2026-10-07, branch
+`analytics/s2-outcomes`, merged to main and pushed; not deployed). No migration.**
+- **`/api/v1/analytics/sales/variants` new fields (slice-1 fields kept):** outcome units deliveredUnits / refusedUnits /
+  inTransitUnits / wijhaUnits / notShippedUnits / otherTerminalUnits (sum to soldUnits), returnedUnits, netSoldUnits,
+  returnRate (null when delivered = 0), refusalRate (null when delivered + refused = 0), deliveredRevenue /
+  returnedRevenue / netRevenue; totals add deliveredOrders / refusedOrders / wijhaOrders, returnsOnUndeliveredOrders
+  (returns on non-delivered outcomes, never in returnedUnits) and unverifiedNoRestockLines. Cohort = order placed_at.
+- **Order outcome = the deciding FORWARD leg** (never type 25 / 30): the one non-terminated/cancelled forward leg
+  (ux_active_forward_shipment_per_order), else the latest ended one. Order: no leg (or ended leg + carrier other_known)
+  → wijha / not_shipped; state delivered → delivered; type code 20 (RTO, even while with_courier) / returning /
+  returned / history returning before delivered → refused; history delivered → delivered; lost / terminated /
+  cancelled → other_terminal; else in_transit. No prod order has two forward legs today.
+- **Sold qty (approved 2026-10-06, applies to slice 1 too):** Shopify lowers current_quantity on refund, so refunded
+  units with restock_type 'return' / 'no_restock' are added back when the refund came AFTER a non-cancelled fulfillment
+  containing the line; before fulfillment (any type) and 'cancel' stay out; no fulfillments key → 'return' only, and the
+  'no_restock' lines are counted in unverifiedNoRestockLines. Prod: Jumi +7 units / +7,700 EGP; everyone else +0;
+  fallback lines 0.
+- **Customer returns (delivered outcomes only), one count per unit:** piece return_received FROM delivered ∪ portal
+  refund items arrived/done (tracked piece / untracked unit_no), Shopify 'return' refunds only add units the first two
+  don't identify (LEAST(qty, GREATEST(identified, shopify))). Exchanged units are left out — ONLY those: a portal
+  exchange's own unit, and per dashboard exchange row one 'exchange_match' scan (inbound variant first). Prod has no
+  post-delivery scans yet → returnedUnits 0 everywhere (frontend must say "No returns recorded yet", never 0%).
+- **`GET /api/v1/analytics/sales/cities` (OWNER):** per deciding Bosta forward leg, keyed by dropOffAddress.city._id →
+  cityId, nameEn, nameAr (bosta_districts.city_name_ar, fallback nameEn), orders / delivered / refused / in transit /
+  other terminal, successRate; legs with no city = one "Unknown" row. Prod names are clean (one English name per id,
+  25 cities).
+- **SQL performance:** the planner estimated the cohort at ~1 row (jsonb IS NULL default selectivity) and nested-looped
+  over CTEs (3.2 s Femine) — fixed: raw cancelled_at checked after materialising, leg + history via per-order LATERAL
+  index lookups, each raw read once via jsonb_to_record. Femine 366 d core ~0.7 s warm, ~3 s cold on prod. Grows with
+  history: extracted columns (migration) are the later fix.
+- **Tests:** `AnalyticsOutcomesTest` (14), `AnalyticsSalesTest` (14), `RlsCoverageTest` covers /cities. 30 revert checks
+  across both rounds, each red (one equivalent mutant: the NULL-raw COALESCE guard). Full suite on the merge: 2313 tests,
+  3 failures — the known reds ShopifyMagicLinkTest + ExchangeBackfillTest, plus BostaPollJobTest.p6 (the documented
+  load-sensitive one; its class passes 21/21 alone).
+- **Next:** the analytics mockup / frontend slice.
 
 **Build C — custom_app_cc → official OAuth upgrade, made safe (2026-10-06, branch `feat/oauth-upgrade` off main
 5cd15a9; merged to main; not pushed, not deployed). Migration V146. SHOPIFY_OAUTH_AVAILABLE unchanged (false).**

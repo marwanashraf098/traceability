@@ -9,7 +9,7 @@ import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.server.ResponseStatusException;
 
 /**
- * Analytics — sales (slice 1). OWNER only: managers and workers (station PIN sessions included)
+ * Analytics — sales, delivery outcomes, customer returns and cities (slices 1–2). OWNER only: managers and workers (station PIN sessions included)
  * get 403. Read-only; see {@link SalesAnalyticsService} for the sold-line rules and
  * {@link AnalyticsPeriod} for the period parameters (period=today|7d|30d, or from=&to=).
  */
@@ -30,6 +30,16 @@ public class SalesAnalyticsController {
             @RequestParam(required = false) String from,
             @RequestParam(required = false) String to) {
         return svc.variants(AnalyticsPeriod.resolve(period, from, to, svc.today()));
+    }
+
+    /** Per city of the order's deciding Bosta forward leg; orders with no Bosta leg aren't listed. */
+    @GetMapping("/cities")
+    @PreAuthorize("hasRole('OWNER')")
+    public SalesAnalyticsService.CitySalesResponse cities(
+            @RequestParam(required = false) String period,
+            @RequestParam(required = false) String from,
+            @RequestParam(required = false) String to) {
+        return svc.cities(AnalyticsPeriod.resolve(period, from, to, svc.today()));
     }
 
     @GetMapping("/products")
