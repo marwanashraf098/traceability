@@ -23,7 +23,8 @@ import {
   Tabs,
   DataTable,
 } from '@shopify/polaris'
-import { notLinkedCopy } from './notLinkedCopy'
+import Onboarding, { Connected, type SignupDone } from './Onboarding'
+import { embeddedLang, applyLang } from './embeddedLocale'
 import { disconnectedCopy } from './disconnectedCopy'
 import { statusLabel, polarisTone, type DerivedTone } from './statusLabels'
 
@@ -519,65 +520,6 @@ function OrdersTable({ state }: { state: AsyncState<EmbeddedOrderRow[]> }) {
   )
 }
 
-// ── Section: Not linked to any Traced account ─────────────────────────────
-
-const SHOP_RE = /^[a-z0-9][a-z0-9-]*\.myshopify\.com$/
-
-/**
- * Review mode S7 (fix A): "Open Traced" lands on Settings → Connections with this store's domain
- * prefilled (Shopify loads the embedded app with ?shop=<domain>). Only a *.myshopify.com domain is
- * passed on; otherwise the plain Connections page.
- */
-export function notLinkedTracedUrl(search: string): string {
-  const shop = new URLSearchParams(search).get('shop')?.trim().toLowerCase() ?? ''
-  const base = `${SaaS}/settings?tab=connections`
-  return SHOP_RE.test(shop) ? `${base}&shop=${encodeURIComponent(shop)}` : base
-}
-
-/**
- * Option A (2026-09-04): a cold Shopify-side install no longer auto-provisions a tenant
- * (see ShopifyOAuthService.path2()). This renders instead of the dashboard whenever the
- * embedded token-exchange call reports NOT_PROVISIONED — a neutral empty state, not a
- * redirect and not a paywall. Deliberately carries no pricing/payment copy: billing lives
- * entirely off-platform at tracedtech.com and must never be presented as a gate here.
- *
- * `lang` defaults to 'en' and is never auto-detected — no locale signal exists anywhere in
- * the embedded surface (embedded.html hardcodes lang="en", no dir attribute, no locale meta
- * tag). 'ar' is reachable only by an explicit caller (tests, visual verification), matching
- * the instruction not to invent a new locale-detection mechanism.
- */
-export function NotLinked({ lang = 'en' }: { lang?: 'en' | 'ar' }) {
-  const copy = notLinkedCopy[lang]
-  const openTracedUrl = notLinkedTracedUrl(window.location.search)
-
-  useEffect(() => {
-    document.documentElement.dir  = lang === 'ar' ? 'rtl' : 'ltr'
-    document.documentElement.lang = lang
-  }, [lang])
-
-  return (
-    <Page title={copy.pageTitle}>
-      <Card>
-        <BlockStack gap="400">
-          <Text as="h2" variant="headingMd">{copy.heading}</Text>
-          <Text as="p">{copy.body}</Text>
-          <BlockStack gap="200">
-            <Text as="p">
-              {copy.newAccount}{' '}
-              <Link url="https://tracedtech.com" external>tracedtech.com</Link>
-            </Text>
-            <Text as="p">
-              {copy.existingAccount}{' '}
-              <Link url={openTracedUrl} external>{copy.openTraced}</Link>
-            </Text>
-            <Text as="p" tone="subdued">{copy.reloadHint}</Text>
-          </BlockStack>
-        </BlockStack>
-      </Card>
-    </Page>
-  )
-}
-
 // ── Section: Disconnected (user paused sync from Traced settings) ─────────
 
 /**
@@ -590,7 +532,7 @@ export function NotLinked({ lang = 'en' }: { lang?: 'en' | 'ar' }) {
  * requires the OAuth-consent flow, which only runs from Traced settings, never from this
  * read-only embedded surface.
  *
- * `lang` defaults to 'en' and is never auto-detected — same rationale as NotLinked.
+ * `lang` comes from Shopify's `locale` parameter (embeddedLocale.ts); 'en' by default.
  */
 export function Disconnected({ lang = 'en' }: { lang?: 'en' | 'ar' }) {
   const copy = disconnectedCopy[lang]
@@ -621,10 +563,29 @@ export function Disconnected({ lang = 'en' }: { lang?: 'en' | 'ar' }) {
 
 // ── Root dashboard ────────────────────────────────────────────────────────
 
-type LinkStatus = 'checking' | 'linked' | 'not_linked' | 'disconnected'
+type LinkStatus = 'checking' | 'linked' | 'not_linked' | 'connected' | 'disconnected'
+
+/** Set by Traced when it sends the browser back after a confirmed pending link (Build D). */
+const CONNECTED_PARAM = 'traced_connected'
+
+function cameBackConnected(): boolean {
+  return new URLSearchParams(window.location.search).get(CONNECTED_PARAM) === '1'
+}
+
+/** Leaves C1 for the dashboard: drop the "just connected" flag, reload the data. */
+function showDashboard() {
+  const url = new URL(window.location.href)
+  url.searchParams.delete(CONNECTED_PARAM)
+  window.history.replaceState(null, '', url.toString())
+  window.location.reload()
+}
 
 export default function EmbeddedApp() {
   const authFetch = useAuthFetch()
+  const [lang] = useState(() => embeddedLang(window.location.search))
+  const [signup, setSignup] = useState<SignupDone | null>(null)
+
+  useEffect(() => { applyLang(lang) }, [lang])
 
   const [linkStatus,  setLinkStatus]      = useState<LinkStatus>('checking')
   const [storesState, setStoresState]     = useState<AsyncState<StoreRow[]>>(loading)
@@ -645,10 +606,8 @@ export default function EmbeddedApp() {
 
   useEffect(() => {
     // Token exchange fires in parallel with the four data fetches below (same round-trip
-    // cost as before — no added latency on the happy path). What changed (Option A,
-    // 2026-09-04) is what happens on NOT_PROVISIONED: previously a top-level redirect into
-    // the legacy install flow, which auto-provisioned a tenant with no human/payment step.
-    // Now: render the NotLinked empty state in place of the dashboard. linkStatus starts
+    // cost as before — no added latency on the happy path). On NOT_PROVISIONED (no Traced
+    // account owns this store) onboarding renders in place of the dashboard (Build D). linkStatus starts
     // 'checking' so the four sections never mount (and never flash their error Banners)
     // until we know which case we're in — the four fetches still run underneath and
     // populate their state regardless, so once linkStatus resolves to 'linked' the
@@ -673,8 +632,9 @@ export default function EmbeddedApp() {
           // An unrecognized 409 shape falls through to 'linked' below rather than
           // guessing — the dashboard's own per-section error Banners still apply.
         }
-        // 204 (success/skip), 502, 503 → dashboard renders normally.
-        setLinkStatus('linked')
+        // 204 (success/skip), 502, 503 → dashboard renders normally — or, right after Traced
+        // confirmed a pending link (?traced_connected=1), the "connected" screen first.
+        setLinkStatus(r.status === 204 && cameBackConnected() ? 'connected' : 'linked')
       })
       .catch(() => setLinkStatus('linked')) // network error on token-exchange itself → don't block the dashboard
 
@@ -732,11 +692,17 @@ export default function EmbeddedApp() {
   }
 
   if (linkStatus === 'not_linked') {
-    return <NotLinked />
+    // Build D: sign up here, or connect an existing Traced account (pending link).
+    return <Onboarding lang={lang} authFetch={authFetch}
+                       onSignedUp={done => { setSignup(done); setLinkStatus('connected') }} />
+  }
+
+  if (linkStatus === 'connected') {
+    return <Connected lang={lang} authFetch={authFetch} signup={signup} onDashboard={showDashboard} />
   }
 
   if (linkStatus === 'disconnected') {
-    return <Disconnected />
+    return <Disconnected lang={lang} />
   }
 
   return (

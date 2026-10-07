@@ -3,7 +3,6 @@ package com.traceability;
 import com.traceability.identity.JwtService;
 import com.traceability.identity.MagicLinkService;
 import com.traceability.integrations.shopify.ShopifyGateway;
-import com.traceability.integrations.shopify.ShopifyHmacUtil;
 import com.traceability.integrations.shopify.ShopifyImportJob;
 import com.traceability.notifications.EmailGateway;
 import com.traceability.security.EncryptionService;
@@ -46,7 +45,7 @@ import static org.mockito.Mockito.*;
  * #3 Expiry: expired token → MAGIC_LINK_INVALID.
  * #4 Forged: unknown token → MAGIC_LINK_INVALID.
  * #5 Hash at-rest: raw token not stored in magic_link_tokens.
- * #6 Provision wiring: Path-2 new install → emailGateway.sendMagicLink called with owner email + link.
+ * (#6, Path-2 provisioning wiring, was deleted with the dead provisionNewTenant() — Build D.)
  * #7 Cross-tenant: token for tenant A → JWT scoped to A only.
  *
  * EmailGateway is @MockBean — no real email sent.
@@ -279,56 +278,6 @@ class ShopifyMagicLinkTest {
     }
 
     // -----------------------------------------------------------------------
-    // 6. Provision wiring: Path-2 new install → emailGateway receives send call
-    //    with the owner's email and a link containing /auth/magic?token=
-    // -----------------------------------------------------------------------
-    @Test
-    @Order(6)
-    void provisionWiring_path2NewInstall_emailGatewayReceivesMagicLink() {
-        String newShop    = "magic-provision-test.myshopify.com";
-        String ownerEmail = "provision-owner@magic.test";
-        String rawToken   = "shpat_provision_token_abc";
-
-        when(shopifyGateway.exchangeCode(eq(newShop), any()))
-            .thenReturn(new ShopifyGateway.TokenResponse(rawToken, "shprt_refresh_magic", 3600L, 7776000L, null));
-        when(shopifyGateway.fetchShop(eq(newShop), eq(rawToken)))
-            .thenReturn(new ShopifyGateway.ShopInfo(ownerEmail, "Magic Provision Store", "Africa/Cairo"));
-
-        // Insert a null-tenant state (Path-2 — no existing owner)
-        String nonce = insertNullTenantState(newShop);
-
-        // Trigger callback with valid HMAC
-        Map<String, String> params = new LinkedHashMap<>();
-        params.put("code",      "provision-code");
-        params.put("shop",      newShop);
-        params.put("state",     nonce);
-        params.put("timestamp", String.valueOf(Instant.now().getEpochSecond()));
-        params.put("hmac",      computeHmac(params));
-
-        noRedirectRest.getForEntity(base() + "/auth/shopify/callback?" + queryString(params), Void.class);
-
-        // emailGateway must have been called exactly once with the owner email and a magic link
-        ArgumentCaptor<String> emailCaptor = ArgumentCaptor.forClass(String.class);
-        ArgumentCaptor<String> linkCaptor  = ArgumentCaptor.forClass(String.class);
-        verify(emailGateway, times(1)).sendMagicLink(emailCaptor.capture(), linkCaptor.capture());
-
-        assertThat(emailCaptor.getValue()).isEqualTo(ownerEmail);
-        assertThat(linkCaptor.getValue()).contains("/auth/magic?token=");
-
-        // Clean up the provisioned tenant
-        UUID provisionedTenantId = jdbc.queryForObject(
-            "SELECT id FROM tenants WHERE name = 'Magic Provision Store'", UUID.class);
-        if (provisionedTenantId != null) {
-            jdbc.update("DELETE FROM magic_link_tokens WHERE tenant_id = ?", provisionedTenantId);
-            jdbc.update("DELETE FROM refresh_tokens WHERE tenant_id = ?", provisionedTenantId);
-            jdbc.update("DELETE FROM stores WHERE tenant_id = ?", provisionedTenantId);
-            jdbc.update("DELETE FROM users WHERE tenant_id = ?", provisionedTenantId);
-            jdbc.update("DELETE FROM tenants WHERE id = ?", provisionedTenantId);
-        }
-        jdbc.update("DELETE FROM shopify_oauth_state WHERE shop_domain = ?", newShop);
-    }
-
-    // -----------------------------------------------------------------------
     // 7. Cross-tenant: token minted for tenant A → session scoped to A, never B
     // -----------------------------------------------------------------------
     @Test
@@ -393,46 +342,5 @@ class ShopifyMagicLinkTest {
             }
         }
         throw new AssertionError("Fragment key '" + key + "' not found in: " + location);
-    }
-
-    private String insertNullTenantState(String shopDomain) {
-        byte[] nonceBytes = new byte[16];
-        new java.security.SecureRandom().nextBytes(nonceBytes);
-        String nonce = Base64.getUrlEncoder().withoutPadding().encodeToString(nonceBytes);
-        jdbc.update(
-            "INSERT INTO shopify_oauth_state (nonce, tenant_id, shop_domain, created_at) VALUES (?, NULL, ?, now())",
-            nonce, shopDomain);
-        return nonce;
-    }
-
-    private String computeHmac(Map<String, String> params) {
-        TreeMap<String, String> sorted = new TreeMap<>(params);
-        sorted.remove("hmac");
-        StringBuilder canonical = new StringBuilder();
-        sorted.forEach((k, v) -> {
-            if (!canonical.isEmpty()) canonical.append('&');
-            canonical.append(k).append('=').append(v);
-        });
-        try {
-            javax.crypto.Mac mac = javax.crypto.Mac.getInstance("HmacSHA256");
-            mac.init(new javax.crypto.spec.SecretKeySpec(
-                clientSecret.getBytes(java.nio.charset.StandardCharsets.UTF_8), "HmacSHA256"));
-            byte[] raw = mac.doFinal(canonical.toString()
-                .getBytes(java.nio.charset.StandardCharsets.UTF_8));
-            StringBuilder hex = new StringBuilder(raw.length * 2);
-            for (byte b : raw) hex.append(String.format("%02x", b));
-            return hex.toString();
-        } catch (Exception e) {
-            throw new RuntimeException(e);
-        }
-    }
-
-    private String queryString(Map<String, String> params) {
-        StringBuilder sb = new StringBuilder();
-        params.forEach((k, v) -> {
-            if (!sb.isEmpty()) sb.append('&');
-            sb.append(k).append('=').append(v);
-        });
-        return sb.toString();
     }
 }

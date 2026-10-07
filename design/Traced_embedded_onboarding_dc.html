@@ -1,0 +1,438 @@
+<!doctype html>
+<html lang="en" dir="ltr" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Embedded Onboarding</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500&family=Cairo:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+/* Tokens: DESIGN.md (the shipped light system) — same set as Traced_shopify_connect_wizard_dc.html. */
+:root{
+  color-scheme: light;
+  --base:#F7F8FA; --panel:#FFFFFF; --elevated:#F2F4F7; --line:#E5E7EB;
+  --text:#111827; --muted:#5B6675;
+  --brand:#2563EB; --brand-hover:#1D4ED8;
+  --success:#16A34A; --success-text:#15803D;
+  --warning:#F59E0B; --warning-text:#B45309;
+  --danger:#DC2626; --danger-text:#B91C1C;
+  --info:#0EA5E9; --info-text:#0369A1;
+  --e1:0 1px 2px rgba(16,24,40,.06), 0 1px 3px rgba(16,24,40,.10);
+  --sans:'Geist', Inter, system-ui, sans-serif;
+  --mono:'Geist Mono', ui-monospace, monospace;
+  /* Shopify admin chrome (illustrative frame only) */
+  --sh-top:#1a1a1a; --sh-nav:#ebebeb; --sh-nav-text:#303030; --sh-bg:#f1f1f1;
+}
+[dir="rtl"]{ --sans:'Cairo', 'Geist', system-ui, sans-serif; font-family:var(--sans); }
+[dir="rtl"] .mono, [dir="rtl"] .input .v.mono{ font-family:var(--mono); }
+
+*{box-sizing:border-box}
+html,body{margin:0}
+body{background:var(--base);color:var(--text);font-family:var(--sans);font-size:14px;line-height:20px;-webkit-font-smoothing:antialiased}
+.page{max-width:1280px;margin:0 auto;padding:40px 24px 80px}
+@media (max-width:640px){.page{padding:24px 16px 56px}}
+
+.intro h1{font-size:32px;line-height:40px;font-weight:600;margin:0 0 8px;letter-spacing:-.01em}
+.intro p{color:var(--muted);margin:0;max-width:760px;font-size:15px;line-height:22px}
+section{margin-top:48px}
+.sec-head{display:flex;align-items:baseline;gap:12px;margin-bottom:16px;border-bottom:1px solid var(--line);padding-bottom:10px;flex-wrap:wrap}
+.sec-head h2{font-size:20px;line-height:28px;font-weight:600;margin:0}
+.sec-head span{color:var(--muted);font-size:13px}
+.grid{display:grid;gap:28px;grid-template-columns:repeat(auto-fill,minmax(560px,1fr))}
+@media (max-width:640px){.grid{grid-template-columns:1fr}}
+.frame{display:flex;flex-direction:column;gap:10px;min-width:0}
+.cap{display:flex;gap:10px;align-items:flex-start}
+.cap .tag{font-family:var(--mono);font-size:11px;line-height:16px;font-weight:500;color:var(--brand);background:rgba(37,99,235,.08);border:1px solid rgba(37,99,235,.18);border-radius:6px;padding:1px 6px;flex-shrink:0;margin-top:1px}
+.cap .t{font-weight:600}
+.cap .n{color:var(--muted);font-size:12px;line-height:17px;margin-top:2px}
+
+/* Shopify admin frame */
+.admin{border:1px solid #d4d4d4;border-radius:14px;overflow:hidden;background:var(--sh-bg);box-shadow:var(--e1)}
+.admin .top{height:44px;background:var(--sh-top);display:flex;align-items:center;gap:12px;padding:0 12px}
+.admin .top .logo{width:22px;height:22px;border-radius:6px;background:#95bf47;flex-shrink:0}
+.admin .top .search{flex:1;max-width:320px;height:26px;border-radius:8px;background:#303030;margin:0 auto}
+.admin .top .store{display:flex;align-items:center;gap:8px;color:#e3e3e3;font-size:12px}
+.admin .top .av{width:24px;height:24px;border-radius:7px;background:#3e8e6e;color:#fff;font-size:11px;font-weight:600;display:flex;align-items:center;justify-content:center}
+.admin .body{display:flex;min-height:520px}
+.admin .nav{width:150px;background:var(--sh-nav);padding:10px 8px;display:flex;flex-direction:column;gap:2px;flex-shrink:0}
+.admin .nav span{font-size:12px;color:var(--sh-nav-text);padding:5px 8px;border-radius:7px}
+.admin .nav .sec{color:#616161;font-size:11px;padding:10px 8px 4px;font-weight:600}
+.admin .nav .on{background:#fff;font-weight:600}
+.admin .main{flex:1;min-width:0;display:flex;flex-direction:column}
+.admin .appbar{height:44px;display:flex;align-items:center;gap:10px;padding:0 16px;border-bottom:1px solid #e1e1e1;background:#fafafa}
+.admin .appbar .ic{width:22px;height:22px;border-radius:6px;background:var(--brand);display:flex;align-items:center;justify-content:center}
+.admin .appbar b{font-size:13px}
+.admin .app{flex:1;background:var(--base);padding:24px 20px;display:flex;justify-content:center}
+.admin .app .col{width:100%;max-width:520px;display:flex;flex-direction:column;gap:16px}
+@media (max-width:640px){.admin .nav{display:none}}
+
+/* Traced content (DESIGN.md) */
+.card{background:var(--panel);border:1px solid var(--line);border-radius:16px;box-shadow:var(--e1);padding:20px;display:flex;flex-direction:column;gap:16px}
+.h3{font-size:24px;line-height:32px;font-weight:600;margin:0;letter-spacing:-.005em}
+.h4{font-size:16px;line-height:24px;font-weight:600;margin:0}
+.muted{color:var(--muted)}
+.small{font-size:12.5px;line-height:18px}
+.mono{font-family:var(--mono)}
+.shopchip{display:flex;align-items:center;gap:10px;border:1px solid var(--line);background:var(--elevated);border-radius:12px;padding:10px 12px}
+.shopchip .bag{width:30px;height:30px;border-radius:9px;background:rgba(90,49,244,.10);border:1px solid rgba(90,49,244,.20);display:flex;align-items:center;justify-content:center;flex-shrink:0}
+.shopchip .who{display:flex;flex-direction:column;min-width:0}
+.shopchip .who b{font-weight:600;font-size:13.5px}
+.shopchip .who span{font-family:var(--mono);font-size:12px;color:var(--muted)}
+.verified{margin-inline-start:auto;display:inline-flex;align-items:center;gap:5px;font-size:11.5px;font-weight:600;color:var(--success-text);white-space:nowrap}
+
+.choice{display:flex;align-items:flex-start;gap:12px;border:1px solid var(--line);border-radius:12px;padding:14px;background:var(--panel)}
+.choice.primary{border-color:rgba(37,99,235,.35);background:rgba(37,99,235,.04)}
+.choice .t{font-weight:600}
+.choice .d{color:var(--muted);font-size:12.5px;line-height:18px;margin-top:2px}
+.choice .go{margin-inline-start:auto;color:var(--muted);flex-shrink:0;margin-top:2px}
+
+.field{display:flex;flex-direction:column;gap:6px}
+.label{font-size:12px;line-height:16px;color:var(--muted);font-weight:500}
+.input{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:9px 12px;min-height:40px;display:flex;align-items:center;gap:8px}
+.input .v{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.input.ph .v{color:var(--muted)}
+.input.ro{background:var(--elevated)}
+.input.err{border-color:var(--danger);box-shadow:0 0 0 3px rgba(220,38,38,.12)}
+.input.focus{border-color:var(--brand);box-shadow:0 0 0 3px rgba(37,99,235,.20)}
+.ferr{font-size:12px;line-height:16px;color:var(--danger-text)}
+.fhint{font-size:12px;line-height:16px;color:var(--muted)}
+.two{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.check{display:flex;gap:10px;align-items:flex-start;font-size:12.5px;line-height:18px;color:var(--muted)}
+.box{width:16px;height:16px;border-radius:4px;border:1.5px solid #9AA4B2;flex-shrink:0;margin-top:1px;display:flex;align-items:center;justify-content:center}
+.box.on{background:var(--brand);border-color:var(--brand)}
+.box.bad{border-color:var(--danger)}
+.check a{color:var(--brand);text-decoration:none}
+
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;border-radius:12px;padding:9px 16px;font-family:var(--sans);font-size:14px;line-height:20px;font-weight:600;border:1px solid transparent;white-space:nowrap}
+.btn.primary{background:var(--brand);color:#fff}
+.btn.primary[disabled]{opacity:.55}
+.btn.outline{background:transparent;border-color:var(--line);color:var(--text)}
+.btn.ghost{background:transparent;color:var(--muted)}
+.btn.w{width:100%}
+.row{display:flex;gap:10px;align-items:center}
+.row .grow{flex:1}
+.link{color:var(--brand);font-weight:500;text-decoration:none;display:inline-flex;align-items:center;gap:6px;font-size:13px}
+
+.alert{display:flex;gap:10px;align-items:flex-start;border-radius:12px;padding:12px 14px;font-size:13px;line-height:19px;border:1px solid}
+.alert .ic{flex-shrink:0;margin-top:1px}
+.alert.danger{background:rgba(220,38,38,.06);border-color:rgba(220,38,38,.22)}
+.alert.danger .ic{color:var(--danger-text)}
+.alert.warning{background:rgba(245,158,11,.08);border-color:rgba(245,158,11,.28)}
+.alert.warning .ic{color:var(--warning-text)}
+.alert.info{background:rgba(14,165,233,.07);border-color:rgba(14,165,233,.25)}
+.alert.info .ic{color:var(--info-text)}
+.alert b{font-weight:600}
+.alert .sub{color:var(--muted);margin-top:4px}
+.alert .acts{margin-top:8px;display:flex;gap:14px;flex-wrap:wrap}
+
+.steps{display:flex;flex-direction:column;gap:12px}
+.step{display:flex;gap:12px;align-items:flex-start}
+.step .dot{width:22px;height:22px;border-radius:9999px;display:flex;align-items:center;justify-content:center;flex-shrink:0}
+.step .dot.done{background:rgba(22,163,74,.12);color:var(--success-text)}
+.step .dot.run{background:rgba(37,99,235,.10);color:var(--brand)}
+.step .dot.wait{background:var(--elevated);color:#9AA4B2}
+.step .t{font-weight:500}
+.step .s{font-size:12px;color:var(--muted)}
+.bar{height:6px;border-radius:9999px;background:rgba(0,0,0,.06);overflow:hidden;margin-top:6px}
+.bar i{display:block;height:100%;background:var(--brand);border-radius:9999px}
+.spin{animation:spin .9s linear infinite;transform-origin:50% 50%}
+@keyframes spin{to{transform:rotate(360deg)}}
+@media (prefers-reduced-motion:reduce){.spin{animation:none}}
+.hero{display:flex;flex-direction:column;align-items:center;text-align:center;gap:8px;padding:6px 0 2px}
+.hero .badge-ok{width:44px;height:44px;border-radius:9999px;background:rgba(22,163,74,.12);color:var(--success-text);display:flex;align-items:center;justify-content:center}
+.note{margin-top:12px;color:var(--muted);font-size:12.5px;line-height:18px;max-width:900px}
+.note code{font-family:var(--mono);font-size:12px;background:var(--elevated);padding:1px 5px;border-radius:5px;color:var(--text)}
+[dir="rtl"] .flip{transform:scaleX(-1)}
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="i-bag" viewBox="0 0 24 24"><path d="M6 2L3 6v14a2 2 0 002 2h14a2 2 0 002-2V6l-3-4z" fill="none" stroke="#5a31f4" stroke-width="1.75"/><line x1="3" y1="6" x2="21" y2="6" stroke="#5a31f4" stroke-width="1.75"/><path d="M16 10a4 4 0 01-8 0" fill="none" stroke="#5a31f4" stroke-width="1.75"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/><path d="M8 12.5l2.8 2.8L16 10" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-tick" viewBox="0 0 24 24"><path d="M6 12.5l4 4L18 8" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 3l7 3v5c0 4.5-3 8.3-7 10-4-1.7-7-5.5-7-10V6z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="M9 12l2 2 4-4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-alert" viewBox="0 0 24 24"><path d="M12 3l9.5 16.5h-19z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="M12 10v4" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><circle cx="12" cy="17" r="1.1" fill="currentColor"/></symbol>
+  <symbol id="i-x" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/><path d="M9 9l6 6M15 9l-6 6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
+  <symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 11v5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><circle cx="12" cy="7.8" r="1.1" fill="currentColor"/></symbol>
+  <symbol id="i-chev" viewBox="0 0 24 24"><path d="M9 6l6 6-6 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-ext" viewBox="0 0 24 24"><path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 01-1 1H5a1 1 0 01-1-1V7a1 1 0 011-1h5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-spin" viewBox="0 0 24 24"><path d="M12 3a9 9 0 109 9" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/></symbol>
+  <symbol id="i-user" viewBox="0 0 24 24"><circle cx="12" cy="8" r="4" fill="none" stroke="currentColor" stroke-width="2"/><path d="M4 21c1.5-4 4.5-6 8-6s6.5 2 8 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
+  <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
+  <symbol id="i-node" viewBox="0 0 24 24"><g stroke="#fff" stroke-width="1.6"><path d="M12 12L12 4M12 12l5.7-5.7M12 12h8M12 12l5.7 5.7M12 12v8M12 12l-5.7 5.7M12 12H4M12 12L6.3 6.3"/></g><circle cx="12" cy="12" r="2.3" fill="#fff"/></symbol>
+</svg>
+
+<div class="page">
+  <header class="intro">
+    <h1>Embedded onboarding: from App Store install to a connected store</h1>
+    <p>A merchant with no Traced account installs the app from the Shopify App Store. Inside Shopify admin they either create a Traced account, with the store taken from the verified Shopify session and never typed, or connect the store to the account they already have. The frame is an illustration of the Shopify admin; everything inside the app area uses DESIGN.md's light system, consistent with the store-finder mockup.</p>
+  </header>
+
+  <!-- ═════════════ 1. WELCOME ═════════════ -->
+  <section>
+    <div class="sec-head"><h2>1 · Welcome</h2><span>Shown instead of today's "This store isn't connected to Traced"</span></div>
+    <div class="grid">
+      <div class="frame">
+        <div class="cap"><span class="tag">O1</span><div><div class="t">New or existing</div><div class="n">The store comes from the verified session token (dest claim), shown as a fact, never an input.</div></div></div>
+        <div class="admin">
+          <div class="top"><div class="logo"></div><div class="search"></div><div class="store"><span>Mona's Linen</span><div class="av">ML</div></div></div>
+          <div class="body">
+            <div class="nav"><span>Home</span><span>Orders</span><span>Products</span><span>Customers</span><span>Analytics</span><span class="sec">Apps</span><span class="on">Traced</span></div>
+            <div class="main">
+              <div class="appbar"><div class="ic"><svg width="14" height="14"><use href="#i-node"/></svg></div><b>Traced</b></div>
+              <div class="app"><div class="col">
+                <div class="card">
+                  <div><p class="h3">Welcome to Traced</p><p class="muted" style="margin:4px 0 0">Track every piece from your shelf to your customer's door. Let's connect this store.</p></div>
+                  <div class="shopchip"><div class="bag"><svg width="16" height="16"><use href="#i-bag"/></svg></div><div class="who"><b>Mona's Linen</b><span>abc123.myshopify.com</span></div><span class="verified"><svg width="14" height="14"><use href="#i-shield"/></svg>From Shopify</span></div>
+                  <div class="choice primary"><svg width="20" height="20" style="color:var(--brand);flex-shrink:0;margin-top:1px"><use href="#i-plus"/></svg><div><div class="t">Create my Traced account</div><div class="d">Takes a minute. We'll connect this store and start importing your products and orders.</div></div><svg class="go flip" width="18" height="18"><use href="#i-chev"/></svg></div>
+                  <div class="choice"><svg width="20" height="20" style="color:var(--muted);flex-shrink:0;margin-top:1px"><use href="#i-user"/></svg><div><div class="t">I already have a Traced account</div><div class="d">Sign in and connect this store to it.</div></div><svg class="go flip" width="18" height="18"><use href="#i-chev"/></svg></div>
+                </div>
+              </div></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═════════════ 2. SIGNUP ═════════════ -->
+  <section>
+    <div class="sec-head"><h2>2 · Create an account</h2><span>The existing signup rules: business, name, email, Egyptian mobile, password of 8 or more, consent</span></div>
+    <div class="grid">
+      <div class="frame">
+        <div class="cap"><span class="tag">S1</span><div><div class="t">Signup form</div><div class="n">Business name and email are prefilled from the Shopify store (both editable). The store row is read-only.</div></div></div>
+        <div class="admin">
+          <div class="top"><div class="logo"></div><div class="search"></div><div class="store"><span>Mona's Linen</span><div class="av">ML</div></div></div>
+          <div class="body">
+            <div class="nav"><span>Home</span><span>Orders</span><span>Products</span><span>Customers</span><span>Analytics</span><span class="sec">Apps</span><span class="on">Traced</span></div>
+            <div class="main">
+              <div class="appbar"><div class="ic"><svg width="14" height="14"><use href="#i-node"/></svg></div><b>Traced</b></div>
+              <div class="app"><div class="col">
+                <div class="card">
+                  <div><p class="h4">Create your Traced account</p><p class="muted small" style="margin:2px 0 0">You'll use this email and password to sign in to Traced on your phone and in the warehouse.</p></div>
+                  <div class="field"><span class="label">Store</span><div class="input ro"><svg width="16" height="16"><use href="#i-bag"/></svg><span class="v mono">abc123.myshopify.com</span><span class="verified"><svg width="13" height="13"><use href="#i-shield"/></svg>From Shopify</span></div></div>
+                  <div class="field"><span class="label">Business name</span><div class="input"><span class="v">Mona's Linen</span></div></div>
+                  <div class="two">
+                    <div class="field"><span class="label">Your name</span><div class="input"><span class="v">Mona Adel</span></div></div>
+                    <div class="field"><span class="label">Mobile</span><div class="input"><span class="v mono">010 1234 5678</span></div></div>
+                  </div>
+                  <div class="field"><span class="label">Email</span><div class="input"><span class="v">mona@monaslinen.com</span></div><span class="fhint">From your Shopify store. Change it if you sign in with another email.</span></div>
+                  <div class="field"><span class="label">Password</span><div class="input focus"><span class="v mono">••••••••••</span></div><span class="fhint">At least 8 characters.</span></div>
+                  <div class="check"><span class="box on"><svg width="11" height="11" style="color:#fff"><use href="#i-tick"/></svg></span><span>I agree to the <a href="#">Terms of Service</a> and <a href="#">Privacy Policy</a>.</span></div>
+                  <div class="row"><button class="btn ghost">Back</button><button class="btn primary grow">Create account and connect</button></div>
+                </div>
+              </div></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="frame">
+        <div class="cap"><span class="tag">S2</span><div><div class="t">Validation errors</div><div class="n">Checked in the form and again on the server; nothing is created until everything passes.</div></div></div>
+        <div class="admin">
+          <div class="top"><div class="logo"></div><div class="search"></div><div class="store"><span>Mona's Linen</span><div class="av">ML</div></div></div>
+          <div class="body">
+            <div class="nav"><span>Home</span><span>Orders</span><span>Products</span><span>Customers</span><span>Analytics</span><span class="sec">Apps</span><span class="on">Traced</span></div>
+            <div class="main">
+              <div class="appbar"><div class="ic"><svg width="14" height="14"><use href="#i-node"/></svg></div><b>Traced</b></div>
+              <div class="app"><div class="col">
+                <div class="card">
+                  <div><p class="h4">Create your Traced account</p></div>
+                  <div class="field"><span class="label">Business name</span><div class="input err ph"><span class="v">Required</span></div><span class="ferr">Enter your business name.</span></div>
+                  <div class="two">
+                    <div class="field"><span class="label">Your name</span><div class="input"><span class="v">Mona Adel</span></div></div>
+                    <div class="field"><span class="label">Mobile</span><div class="input err"><span class="v mono">0123</span></div><span class="ferr">Enter an Egyptian mobile number, like 010 1234 5678.</span></div>
+                  </div>
+                  <div class="field"><span class="label">Email</span><div class="input err"><span class="v">mona@monaslinen</span></div><span class="ferr">Enter a valid email address.</span></div>
+                  <div class="field"><span class="label">Password</span><div class="input err"><span class="v mono">•••••</span></div><span class="ferr">Use at least 8 characters.</span></div>
+                  <div class="check"><span class="box bad"></span><span>I agree to the <a href="#">Terms of Service</a> and <a href="#">Privacy Policy</a>.<br><span class="ferr">Accept the terms to create an account.</span></span></div>
+                  <div class="row"><button class="btn ghost">Back</button><button class="btn primary grow">Create account and connect</button></div>
+                </div>
+              </div></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="frame">
+        <div class="cap"><span class="tag">S3</span><div><div class="t">Email already has an account</div><div class="n">Same 409 the public signup returns today, so nothing new is revealed. Offers the sign-in path.</div></div></div>
+        <div class="admin">
+          <div class="top"><div class="logo"></div><div class="search"></div><div class="store"><span>Mona's Linen</span><div class="av">ML</div></div></div>
+          <div class="body">
+            <div class="nav"><span>Home</span><span>Orders</span><span>Products</span><span>Customers</span><span>Analytics</span><span class="sec">Apps</span><span class="on">Traced</span></div>
+            <div class="main">
+              <div class="appbar"><div class="ic"><svg width="14" height="14"><use href="#i-node"/></svg></div><b>Traced</b></div>
+              <div class="app"><div class="col">
+                <div class="card">
+                  <div><p class="h4">Create your Traced account</p></div>
+                  <div class="field"><span class="label">Email</span><div class="input err"><span class="v">mona@monaslinen.com</span></div></div>
+                  <div class="alert info"><svg class="ic" width="18" height="18"><use href="#i-info"/></svg><div><b>There's already a Traced account with this email.</b><div class="sub">Sign in to connect this store to it, or use a different email.</div><div class="acts"><a class="link" href="#">Sign in instead</a><a class="link" href="#">Use a different email</a></div></div></div>
+                  <div class="row"><button class="btn ghost">Back</button><button class="btn primary grow">Create account and connect</button></div>
+                </div>
+              </div></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═════════════ 3. SIGN IN ═════════════ -->
+  <section>
+    <div class="sec-head"><h2>3 · I already have an account</h2><span>Amended: a pending link + top-level navigation to Traced — no pop-up, no new tab, no typed store</span></div>
+    <div class="grid">
+      <div class="frame">
+        <div class="cap"><span class="tag">L1</span><div><div class="t">Continue to Traced</div><div class="n">The server parks this store's token under a single-use 15-minute link; the whole window goes to app.tracedtech.com/connect/shopify, the owner signs in and confirms, and Traced sends them back here (C1).</div></div></div>
+        <div class="admin">
+          <div class="top"><div class="logo"></div><div class="search"></div><div class="store"><span>Mona's Linen</span><div class="av">ML</div></div></div>
+          <div class="body">
+            <div class="nav"><span>Home</span><span>Orders</span><span>Products</span><span>Customers</span><span>Analytics</span><span class="sec">Apps</span><span class="on">Traced</span></div>
+            <div class="main">
+              <div class="appbar"><div class="ic"><svg width="14" height="14"><use href="#i-node"/></svg></div><b>Traced</b></div>
+              <div class="app"><div class="col">
+                <div class="card">
+                  <div><p class="h4">Connect this store to your Traced account</p><p class="muted small" style="margin:2px 0 0">We'll take you to Traced to sign in. Confirm there, and you'll come straight back here.</p></div>
+                  <div class="shopchip"><div class="bag"><svg width="16" height="16"><use href="#i-bag"/></svg></div><div class="who"><b>Mona's Linen</b><span>abc123.myshopify.com</span></div><span class="verified"><svg width="14" height="14"><use href="#i-shield"/></svg>From Shopify</span></div>
+                  <button class="btn primary w">Continue to Traced</button>
+                  <div class="row"><button class="btn ghost">Back</button></div>
+                </div>
+              </div></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- ═════════════ 4. CONNECTED ═════════════ -->
+  <section>
+    <div class="sec-head"><h2>4 · Connected, first import</h2><span>Same screen after signup or after linking an existing account</span></div>
+    <div class="grid">
+      <div class="frame">
+        <div class="cap"><span class="tag">C1</span><div><div class="t">Store connected, import running</div><div class="n">Progress from the store's import status; "Open Traced" signs the owner in on a new tab with a one-time link (no password typed again).</div></div></div>
+        <div class="admin">
+          <div class="top"><div class="logo"></div><div class="search"></div><div class="store"><span>Mona's Linen</span><div class="av">ML</div></div></div>
+          <div class="body">
+            <div class="nav"><span>Home</span><span>Orders</span><span>Products</span><span>Customers</span><span>Analytics</span><span class="sec">Apps</span><span class="on">Traced</span></div>
+            <div class="main">
+              <div class="appbar"><div class="ic"><svg width="14" height="14"><use href="#i-node"/></svg></div><b>Traced</b></div>
+              <div class="app"><div class="col">
+                <div class="card">
+                  <div class="hero"><div class="badge-ok"><svg width="24" height="24"><use href="#i-check"/></svg></div><p class="h3" style="font-size:20px;line-height:28px">Your store is connected</p><p class="muted small" style="margin:0"><span class="mono">abc123.myshopify.com</span> is now linked to Mona's Linen on Traced.</p></div>
+                  <div class="steps">
+                    <div class="step"><span class="dot done"><svg width="13" height="13"><use href="#i-tick"/></svg></span><div><div class="t">Account created</div><div class="s">We sent a welcome email to mona@monaslinen.com.</div></div></div>
+                    <div class="step"><span class="dot done"><svg width="13" height="13"><use href="#i-tick"/></svg></span><div><div class="t">Store connected</div><div class="s">Orders placed from now on come in automatically.</div></div></div>
+                    <div class="step"><span class="dot run"><svg class="spin" width="13" height="13"><use href="#i-spin"/></svg></span><div style="flex:1"><div class="t">Importing your products</div><div class="s">This usually takes a few minutes. You can leave this page.</div><div class="bar"><i style="width:42%"></i></div></div></div>
+                    <div class="step"><span class="dot wait"><svg width="13" height="13"><use href="#i-tick"/></svg></span><div><div class="t" style="color:var(--muted)">Next: connect Bosta and label your stock</div><div class="s">In Traced, under Settings › Connections.</div></div></div>
+                  </div>
+                  <button class="btn primary w">Open Traced <svg width="16" height="16"><use href="#i-ext"/></svg></button>
+                </div>
+              </div></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═════════════ 5. ERRORS ═════════════ -->
+  <section>
+    <div class="sec-head"><h2>5 · Errors</h2><span>Nothing is ever half-created: the account, the owner and the store are written in one transaction</span></div>
+    <div class="grid">
+      <div class="frame">
+        <div class="cap"><span class="tag">X1</span><div><div class="t">Store already connected to another account</div><div class="n">Only reachable by a race (a linked store never sees onboarding). Same wording as today's callback banner, no names.</div></div></div>
+        <div class="admin">
+          <div class="top"><div class="logo"></div><div class="search"></div><div class="store"><span>Mona's Linen</span><div class="av">ML</div></div></div>
+          <div class="body">
+            <div class="nav"><span>Home</span><span>Orders</span><span>Products</span><span>Customers</span><span>Analytics</span><span class="sec">Apps</span><span class="on">Traced</span></div>
+            <div class="main">
+              <div class="appbar"><div class="ic"><svg width="14" height="14"><use href="#i-node"/></svg></div><b>Traced</b></div>
+              <div class="app"><div class="col">
+                <div class="card">
+                  <div class="alert warning"><svg class="ic" width="18" height="18"><use href="#i-alert"/></svg><div><b>This Shopify store is already connected to another Traced account.</b><div class="sub">Sign in to that account, or contact Traced support.</div><div class="acts"><a class="link" href="#">Sign in to Traced</a><a class="link" href="mailto:support@tracedtech.com">Contact support</a></div></div></div>
+                </div>
+              </div></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="frame">
+        <div class="cap"><span class="tag">X2</span><div><div class="t">Something went wrong</div><div class="n">Shopify unreachable, the session expired, or the app was uninstalled mid-signup. The form keeps what was typed.</div></div></div>
+        <div class="admin">
+          <div class="top"><div class="logo"></div><div class="search"></div><div class="store"><span>Mona's Linen</span><div class="av">ML</div></div></div>
+          <div class="body">
+            <div class="nav"><span>Home</span><span>Orders</span><span>Products</span><span>Customers</span><span>Analytics</span><span class="sec">Apps</span><span class="on">Traced</span></div>
+            <div class="main">
+              <div class="appbar"><div class="ic"><svg width="14" height="14"><use href="#i-node"/></svg></div><b>Traced</b></div>
+              <div class="app"><div class="col">
+                <div class="card">
+                  <div><p class="h4">Create your Traced account</p></div>
+                  <div class="alert danger"><svg class="ic" width="18" height="18"><use href="#i-x"/></svg><div><b>We couldn't connect your store.</b><div class="sub">Nothing was created. Check your connection and try again.</div><div class="acts"><a class="link" href="#">Try again</a><a class="link" href="mailto:support@tracedtech.com">Contact support</a></div></div></div>
+                  <div class="row"><button class="btn ghost">Back</button><button class="btn primary grow">Create account and connect</button></div>
+                </div>
+              </div></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═════════════ 6. ARABIC ═════════════ -->
+  <section>
+    <div class="sec-head"><h2>6 · Arabic (RTL)</h2><span>Picked from the locale Shopify passes to the app; identifiers stay LTR in Geist Mono</span></div>
+    <div class="grid" dir="rtl" lang="ar">
+      <div class="frame">
+        <div class="cap"><span class="tag" dir="ltr">AR1</span><div><div class="t">الترحيب</div><div class="n">جديد أو لديه حساب.</div></div></div>
+        <div class="admin">
+          <div class="top"><div class="logo"></div><div class="search"></div><div class="store"><span>Mona's Linen</span><div class="av">ML</div></div></div>
+          <div class="body">
+            <div class="nav"><span>الرئيسية</span><span>الطلبات</span><span>المنتجات</span><span>العملاء</span><span>التحليلات</span><span class="sec">التطبيقات</span><span class="on">Traced</span></div>
+            <div class="main">
+              <div class="appbar"><div class="ic"><svg width="14" height="14"><use href="#i-node"/></svg></div><b>Traced</b></div>
+              <div class="app"><div class="col">
+                <div class="card">
+                  <div><p class="h3">مرحبًا بك في Traced</p><p class="muted" style="margin:4px 0 0">تتبّع كل قطعة من الرف حتى باب عميلك. لنربط هذا المتجر.</p></div>
+                  <div class="shopchip"><div class="bag"><svg width="16" height="16"><use href="#i-bag"/></svg></div><div class="who"><b>Mona's Linen</b><span dir="ltr" style="text-align:end">abc123.myshopify.com</span></div><span class="verified"><svg width="14" height="14"><use href="#i-shield"/></svg>من Shopify</span></div>
+                  <div class="choice primary"><svg width="20" height="20" style="color:var(--brand);flex-shrink:0;margin-top:1px"><use href="#i-plus"/></svg><div><div class="t">أنشئ حسابي على Traced</div><div class="d">يستغرق دقيقة. سنربط هذا المتجر ونبدأ استيراد منتجاتك وطلباتك.</div></div><svg class="go flip" width="18" height="18"><use href="#i-chev"/></svg></div>
+                  <div class="choice"><svg width="20" height="20" style="color:var(--muted);flex-shrink:0;margin-top:1px"><use href="#i-user"/></svg><div><div class="t">لديّ حساب على Traced بالفعل</div><div class="d">سجّل الدخول واربط هذا المتجر به.</div></div><svg class="go flip" width="18" height="18"><use href="#i-chev"/></svg></div>
+                </div>
+              </div></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="frame">
+        <div class="cap"><span class="tag" dir="ltr">AR2</span><div><div class="t">تم الربط</div><div class="n">بدء الاستيراد الأول.</div></div></div>
+        <div class="admin">
+          <div class="top"><div class="logo"></div><div class="search"></div><div class="store"><span>Mona's Linen</span><div class="av">ML</div></div></div>
+          <div class="body">
+            <div class="nav"><span>الرئيسية</span><span>الطلبات</span><span>المنتجات</span><span>العملاء</span><span>التحليلات</span><span class="sec">التطبيقات</span><span class="on">Traced</span></div>
+            <div class="main">
+              <div class="appbar"><div class="ic"><svg width="14" height="14"><use href="#i-node"/></svg></div><b>Traced</b></div>
+              <div class="app"><div class="col">
+                <div class="card">
+                  <div class="hero"><div class="badge-ok"><svg width="24" height="24"><use href="#i-check"/></svg></div><p class="h3" style="font-size:20px;line-height:28px">تم ربط متجرك</p><p class="muted small" style="margin:0">أصبح <span class="mono" dir="ltr">abc123.myshopify.com</span> مرتبطًا بحساب Mona's Linen على Traced.</p></div>
+                  <div class="steps">
+                    <div class="step"><span class="dot done"><svg width="13" height="13"><use href="#i-tick"/></svg></span><div><div class="t">تم إنشاء الحساب</div></div></div>
+                    <div class="step"><span class="dot done"><svg width="13" height="13"><use href="#i-tick"/></svg></span><div><div class="t">تم ربط المتجر</div></div></div>
+                    <div class="step"><span class="dot run"><svg class="spin" width="13" height="13"><use href="#i-spin"/></svg></span><div style="flex:1"><div class="t">جارٍ استيراد منتجاتك</div><div class="bar"><i style="width:42%"></i></div></div></div>
+                  </div>
+                  <button class="btn primary w">افتح Traced <svg width="16" height="16"><use href="#i-ext"/></svg></button>
+                </div>
+              </div></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <p class="note">Mockup only, no app code. The Shopify admin chrome is illustrative. Today the embedded app renders Shopify Polaris components; this mockup uses Traced's DESIGN.md system inside the app area as requested, so the build needs a decision on which one the onboarding screens use.</p>
+</div>
+</body>
+</html>
