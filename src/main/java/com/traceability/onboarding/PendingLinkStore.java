@@ -3,6 +3,7 @@ package com.traceability.onboarding;
 import com.traceability.identity.AuthRepository;
 import com.traceability.integrations.shopify.ShopifyGateway;
 import com.traceability.integrations.shopify.ShopifyOAuthException;
+import com.traceability.integrations.shopify.ShopifyStoredToken;
 import com.traceability.security.EncryptionService;
 import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -52,7 +53,8 @@ public class PendingLinkStore {
         RANDOM.nextBytes(bytes);
         String nonce = Base64.getUrlEncoder().withoutPadding().encodeToString(bytes);
         String hash = AuthRepository.sha256(nonce);
-        Instant now = Instant.now();
+        // The same validated, encrypted columns the stores row gets — refuses a non-expiring token.
+        ShopifyStoredToken t = ShopifyStoredToken.of(shop, tokens, encryption);
         tx.executeWithoutResult(s -> {
             bind(hash);
             jdbc.update(
@@ -60,12 +62,10 @@ public class PendingLinkStore {
                 "  access_token_expires_at, refresh_token_encrypted, refresh_token_expires_at, " +
                 "  access_token_scopes, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                 hash, shop,
-                encryption.encrypt(tokens.accessToken()),
-                Timestamp.from(now.plusSeconds(tokens.expiresIn())),
-                tokens.refreshToken() != null ? encryption.encrypt(tokens.refreshToken()) : null,
-                tokens.refreshToken() != null ? Timestamp.from(now.plusSeconds(tokens.refreshTokenExpiresIn())) : null,
-                tokens.grantedScopes(),
-                Timestamp.from(now.plus(Duration.ofMinutes(TTL_MINUTES))));
+                t.accessTokenEncrypted(), t.accessTokenExpiresAt(),
+                t.refreshTokenEncrypted(), t.refreshTokenExpiresAt(),
+                t.scopes(),
+                Timestamp.from(Instant.now().plus(Duration.ofMinutes(TTL_MINUTES))));
         });
         return nonce;
     }

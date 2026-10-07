@@ -4,6 +4,30 @@
 
 ## Current state
 
+**Fix — embedded token exchange stored a NON-expiring token (2026-10-08, branch `fix/embedded-expiring-token` off main
+63308bb; merged to main; NOT pushed, NOT deployed). No migration.** Prod: embedded signup `test-oaozdwro` got a
+non-expiring offline token → import 403 "Non-expiring access tokens are no longer accepted".
+- **Root cause:** `ShopifyHttpGateway.exchangeSessionToken` sent `requested_token_type=offline` but no `expiring`;
+  Shopify defaults `expiring=0` → non-expiring token, no refresh token. The parser then defaulted `expires_in` to 3600,
+  so the row looked like a 1-hour token (access expiry set, refresh NULL). Every session-token exchange was affected:
+  embedded signup, pending link, and the embedded open's refresh (which could also have OVERWRITTEN a good pair).
+  `exchangeCode` (OAuth callback) always sent `expiring=1`.
+- **Fix:** `expiring: "1"` on the session-token exchange; both exchanges parse through one `expiringOfflineToken`
+  (no defaults). `ShopifyStoredToken` (new) is the ONE token → columns path (encrypt + both expiries) used by every
+  writer — insertStore (now delegates to insertStoreInCurrentTransaction), updateStoreToken (checked BEFORE the legacy
+  webhook cleanup), applyExchangedToken, embedded signup, pending links — and refuses a token without refresh token /
+  expiries (`ShopifyNonExpiringTokenException`, 502 SHOPIFY_TOKEN_NOT_EXPIRING, logged ERROR) before anything is written.
+- **Repair:** `acquireOrRefreshViaSessionToken` treats an OAuth row with no refresh token as never fresh — the next
+  embedded open re-exchanges (expiring pair stored) and re-enqueues import + webhooks. Prod affected (2026-10-08):
+  only `test-oaozdwro.myshopify.com` (tenant "testfromshop", connected, import failed); no live pending links.
+- **Tests:** `ShopifyTokenRequestTest` (3, the wire request), `EmbeddedOnboardingTest` e1–e4 (expiring pair stored,
+  non-expiring refused + nothing saved, no downgrade, repair). Revert-checked: no expiring=1 → t1; storage without the
+  check → e2 + e3; no repair trigger → e4. Existing test changed (approved): ShopifyTokenExchangeTest.te01 gives its
+  "fresh" store a refresh token (its fixture was exactly the broken state the repair now re-exchanges).
+- **Follow-up (not built):** Shopify's one-shot server-side migration (token exchange with the non-expiring offline
+  token as subject_token, expiring=1) could repair without the merchant opening the app — but it permanently retires the
+  old token and the docs say new public apps can't use non-expiring tokens at all, so it may not apply to us.
+
 **Build D — onboarding inside the embedded Shopify app (2026-10-07, branch `feat/embedded-onboarding` off main 8862521;
 merged to main; NOT pushed, NOT deployed). Migration V147.** Mockup: `design/Traced_embedded_onboarding_dc.html` (amended: L1 = pending
 link + top-level navigation, L2 dropped). Built with Polaris like the rest of the embedded app.

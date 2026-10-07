@@ -636,6 +636,114 @@ class EmbeddedOnboardingTest {
             Boolean.class)).isTrue();
     }
 
+    // ── e: expiring tokens (fix/embedded-expiring-token, 2026-10-08) ─────────────
+
+    @Autowired com.traceability.integrations.shopify.ShopifyOAuthService oauthService;
+    @Value("${shopify.scopes}") String appScopes;
+
+    @Test
+    void e1_signupAndPendingLink_storeAnExpiringTokenAndRefreshToken() throws Exception {
+        String shop = newShop("e1s");
+        assertThat(signup(shop, "e1-" + System.nanoTime() + "@onb.test", "E1 Co").getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertExpiringPair(shop);
+
+        String shop2 = newShop("e1p");
+        String nonce = pendingLink(shop2);
+        assertThat(owner.queryForObject(
+            "SELECT refresh_token_encrypted IS NOT NULL AND refresh_token_expires_at > now() + interval '89 days' " +
+            "FROM shopify_pending_links WHERE nonce_hash = ?", Boolean.class, AuthRepository.sha256(nonce))).isTrue();
+        UUID t = tenant("E1P Co");
+        assertThat(traced(login(user(t, "owner", "e1p-" + System.nanoTime() + "@onb.test")), "/confirm", nonce).getStatusCode())
+            .isEqualTo(HttpStatus.OK);
+        assertExpiringPair(shop2);
+    }
+
+    @Test
+    void e2_exchangeWithoutRefreshToken_isRefused_nothingSaved() throws Exception {
+        String shop = newShop("e2");
+        String mail = "e2-" + System.nanoTime() + "@onb.test";
+        when(shopify.exchangeSessionToken(eq(shop), anyString()))
+            .thenReturn(new ShopifyGateway.TokenResponse("shpat_forever", null, 3600L, 0L, SCOPES));
+        int tenants = owner.queryForObject("SELECT count(*) FROM tenants", Integer.class);
+        int links = owner.queryForObject("SELECT count(*) FROM shopify_pending_links", Integer.class);
+
+        ResponseEntity<Map> r = signup(shop, mail, "E2 Co");
+        assertThat(r.getStatusCode()).isEqualTo(HttpStatus.BAD_GATEWAY);
+        assertThat(r.getBody()).containsEntry("code", "SHOPIFY_TOKEN_NOT_EXPIRING");
+        assertThat(embedded(HttpMethod.POST, "/api/v1/embedded/onboarding/pending-link", shop, null).getStatusCode())
+            .isEqualTo(HttpStatus.BAD_GATEWAY);
+
+        assertThat(owner.queryForObject("SELECT count(*) FROM tenants", Integer.class)).isEqualTo(tenants);
+        assertThat(owner.queryForObject("SELECT count(*) FROM users WHERE email = ?", Integer.class, mail)).isZero();
+        assertThat(owner.queryForObject("SELECT count(*) FROM stores WHERE shop_domain = ?", Integer.class, shop)).isZero();
+        assertThat(owner.queryForObject("SELECT count(*) FROM shopify_pending_links", Integer.class)).isEqualTo(links);
+        verify(jobs, never()).enqueue(any(JobLambda.class));
+    }
+
+    @Test
+    void e3_aGoodExpiringTokenIsNeverDowngraded() throws Exception {
+        // A linked OAuth store with a good expiring pair, near expiry so the embedded open re-exchanges.
+        UUID t = tenant("E3 Co");
+        user(t, "owner", "e3-" + System.nanoTime() + "@onb.test");   // no orphan tenant (s4 checks)
+        String shop = newShop("e3");
+        UUID store = owner.queryForObject(
+            "INSERT INTO stores (tenant_id, shop_domain, status, import_status, connection_type, access_token_encrypted, " +
+            "  access_token_expires_at, refresh_token_encrypted, refresh_token_expires_at, access_token_scopes) " +
+            "VALUES (?, ?, 'connected', 'completed', 'oauth', ?, now() + interval '1 minute', ?, now() + interval '80 days', ?) RETURNING id",
+            UUID.class, t, shop, encryption.encrypt("shpat_good"), encryption.encrypt("shprt_good"), SCOPES);
+        Map<String, Object> before = owner.queryForMap(
+            "SELECT access_token_encrypted, access_token_expires_at, refresh_token_encrypted, refresh_token_expires_at FROM stores WHERE id = ?", store);
+
+        ShopifyGateway.TokenResponse nonExpiring = new ShopifyGateway.TokenResponse("shpat_forever", null, 3600L, 0L, SCOPES);
+        when(shopify.exchangeSessionToken(eq(shop), anyString())).thenReturn(nonExpiring);
+
+        // (a) the embedded open's token refresh
+        assertThat(embedded(HttpMethod.POST, "/api/v1/embedded/token-exchange", shop, null).getStatusCode())
+            .isEqualTo(HttpStatus.BAD_GATEWAY);
+        // (b) a re-link (OAuth callback / pending-link path) with a non-expiring token
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> oauthService.linkPendingShop(t, shop, nonExpiring))
+            .isInstanceOf(com.traceability.integrations.shopify.ShopifyNonExpiringTokenException.class);
+
+        assertThat(owner.queryForMap(
+            "SELECT access_token_encrypted, access_token_expires_at, refresh_token_encrypted, refresh_token_expires_at FROM stores WHERE id = ?", store))
+            .isEqualTo(before);
+        assertThat(encryption.decrypt((String) before.get("refresh_token_encrypted"))).isEqualTo("shprt_good");
+        verify(jobs, never()).enqueue(any(JobLambda.class));
+    }
+
+    @Test
+    void e4_repair_aStoreHoldingANonExpiringToken_isFixedOnTheNextEmbeddedOpen_andTheImportReruns() throws Exception {
+        // The prod state of test-oaozdwro: oauth, access expiry "fresh" (the old 3600 default), no refresh token,
+        // import failed on Shopify's 403.
+        UUID t = tenant("E4 Co");
+        user(t, "owner", "e4-" + System.nanoTime() + "@onb.test");   // no orphan tenant (s4 checks)
+        String shop = newShop("e4");
+        UUID store = owner.queryForObject(
+            "INSERT INTO stores (tenant_id, shop_domain, status, import_status, connection_type, access_token_encrypted, " +
+            "  access_token_expires_at, access_token_scopes) " +
+            "VALUES (?, ?, 'connected', 'failed', 'oauth', ?, now() + interval '50 minutes', ?) RETURNING id",
+            UUID.class, t, shop, encryption.encrypt("shpat_forever"), appScopes);   // fresh AND scopes match: only the repair forces it
+
+        assertThat(embedded(HttpMethod.POST, "/api/v1/embedded/token-exchange", shop, null).getStatusCode())
+            .isEqualTo(HttpStatus.NO_CONTENT);
+
+        verify(shopify).exchangeSessionToken(eq(shop), anyString());   // re-exchanged although "fresh"
+        assertExpiringPair(shop);
+        assertThat(owner.queryForObject("SELECT import_status::text FROM stores WHERE id = ?", String.class, store)).isEqualTo("pending");
+        verify(jobs, times(2)).enqueue(any(JobLambda.class));          // import + webhooks
+    }
+
+    private void assertExpiringPair(String shop) {
+        Map<String, Object> s = owner.queryForMap(
+            "SELECT access_token_encrypted, refresh_token_encrypted, " +
+            "  access_token_expires_at BETWEEN now() + interval '55 minutes' AND now() + interval '61 minutes' AS access_ok, " +
+            "  refresh_token_expires_at BETWEEN now() + interval '89 days' AND now() + interval '91 days' AS refresh_ok " +
+            "FROM stores WHERE shop_domain = ?", shop);
+        assertThat(encryption.decrypt((String) s.get("access_token_encrypted"))).isEqualTo(ACCESS);
+        assertThat(encryption.decrypt((String) s.get("refresh_token_encrypted"))).isEqualTo(REFRESH);
+        assertThat(s).containsEntry("access_ok", true).containsEntry("refresh_ok", true);
+    }
+
     // ── helpers ───────────────────────────────────────────────────────────────
 
     private String base() { return "http://localhost:" + port; }
