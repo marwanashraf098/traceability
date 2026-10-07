@@ -747,6 +747,8 @@ public class ShipmentLinkService {
             af.isDelayed(), af.slaBreached(), af.scheduledAt(),
             af.courierName(), af.courierPhone(),
             rawJson, bostaId);
+        com.traceability.integrations.bosta.ShipmentSettlement.apply(
+            jdbc, id, delivery != null ? delivery.raw() : null);
         clearReconcileFlag(orderId, tenantId);
         return id;
     }
@@ -1194,6 +1196,8 @@ public class ShipmentLinkService {
             afr.isDelayed(), afr.slaBreached(), afr.scheduledAt(),
             afr.courierName(), afr.courierPhone(),
             rawJson, bostaId);
+        com.traceability.integrations.bosta.ShipmentSettlement.apply(
+            jdbc, id, delivery != null ? delivery.raw() : null);
         clearReconcileFlag(orderId, tenantId);
         linkReturnRequest(tenantId, orderId, trackingNumber, id, delivery);
         return id;

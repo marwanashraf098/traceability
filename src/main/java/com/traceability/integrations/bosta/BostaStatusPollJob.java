@@ -291,6 +291,7 @@ public class BostaStatusPollJob {
             boolean reachedMark = false, endOfList = false, repeated = false, stopped = false, rateLimited = false;
             java.util.Set<String> seen = new java.util.HashSet<>();
             String prevFirst = null, prevLast = null;
+            int[] walletSeen = {0, 0};   // {items walked, items with wallet.cashCycle}
 
             while (pagesRead < maxPages) {
                 List<com.fasterxml.jackson.databind.JsonNode> items;
@@ -312,6 +313,10 @@ public class BostaStatusPollJob {
                 for (com.fasterxml.jackson.databind.JsonNode it : items) {
                     String tn = it.path("trackingNumber").asText("");
                     if (!tn.isBlank()) pageTracking.add(tn);
+                    // Analytics slice 3, passive observation only: does the v2 item carry a settled
+                    // wallet? Logged once per walk; nothing reads it.
+                    walletSeen[0]++;
+                    if (it.path("wallet").path("cashCycle").isObject()) walletSeen[1]++;
                 }
                 String first = pageTracking.isEmpty() ? null : pageTracking.get(0);
                 String last = pageTracking.isEmpty() ? null : pageTracking.get(pageTracking.size() - 1);
@@ -373,6 +378,10 @@ public class BostaStatusPollJob {
                     "continuing from page {} next cycle", tenantId, pagesRead, state.markAt(), page);
             } else if (state.seeded()) {
                 saveState(tenantId, state.markAt(), state.walkPage(), state.walkNewestAt());
+            }
+            if (walletSeen[0] > 0) {
+                log.info("Status poll tenant {}: v2 wallet check — cashCycle present on {} of {} walked item(s)",
+                    tenantId, walletSeen[1], walletSeen[0]);
             }
             return new WalkResult(!rateLimited, pagesRead, ingested);
         });
