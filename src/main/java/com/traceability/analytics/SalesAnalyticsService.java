@@ -63,8 +63,8 @@ public class SalesAnalyticsService {
     /**
      * Outcome units (deliveredUnits … otherTerminalUnits) sum to soldUnits. returnedUnits counts
      * customer returns on DELIVERED orders only; netSoldUnits = delivered − returned;
-     * returnRate = returned / delivered and refusalRate = refused / (delivered + refused), both null
-     * when the denominator is 0; returnedRevenue = returned units × the line's net unit price.
+     * returnRate = returned / delivered and refusalRate = refused / (delivered + refused + other
+     * terminal), both null when the denominator is 0; returnedRevenue = returned units × the line's net unit price.
      */
     public record VariantSales(UUID variantId, UUID productId, String productTitle, String variantTitle,
                                String sku, String imageUrl, long soldUnits, BigDecimal grossRevenue,
@@ -98,7 +98,7 @@ public class SalesAnalyticsService {
     public record ProductSalesResponse(AnalyticsPeriod.Range range, String sort, List<ProductSales> products) {}
 
     /**
-     * successRate = delivered / (delivered + refused), null when both are 0. cityId = Bosta's
+     * successRate = delivered / (delivered + refused + other terminal), null when all are 0. cityId = Bosta's
      * city._id (null for the "Unknown" row); nameAr falls back to nameEn.
      */
     public record CitySales(String cityId, String nameEn, String nameAr, long orders, long deliveredOrders,
@@ -287,6 +287,24 @@ public class SalesAnalyticsService {
      *     in_transit      — created / with_courier / exception
      *   bosta_decides = a Bosta leg decided the outcome (the cities endpoint counts only those).
      */
+    /**
+     * THE outcome of a deciding Bosta forward leg (alias leg: internal_state, type_code) given its
+     * history (alias h: first_delivered, first_return) — WHEN branches of a CASE, used by
+     * ORDER_OUTCOMES and by the money pipeline's city rates, so both read one rule. Rates built on it
+     * (approved 2026-10-08): successRate = delivered ÷ (delivered + failed), refusalRate = refused ÷
+     * (delivered + failed), failed = refused + other_terminal.
+     */
+    static final String LEG_OUTCOME_WHENS = """
+                       WHEN leg.internal_state = 'delivered' THEN 'delivered'
+                       WHEN leg.type_code = '20'
+                            OR leg.internal_state IN ('returning', 'returned')
+                            OR (h.first_return IS NOT NULL
+                                AND (h.first_delivered IS NULL OR h.first_return < h.first_delivered)) THEN 'refused'
+                       WHEN h.first_delivered IS NOT NULL THEN 'delivered'
+                       WHEN leg.internal_state IN ('lost', 'terminated', 'cancelled') THEN 'other_terminal'
+                       ELSE 'in_transit'
+        """;
+
     static final String ORDER_OUTCOMES = """
         , period_orders AS MATERIALIZED (
             SELECT DISTINCT order_id, carrier_class FROM lines
@@ -298,14 +316,7 @@ public class SalesAnalyticsService {
                    CASE
                        WHEN NOT d.bosta_decides THEN
                            CASE WHEN po.carrier_class = 'other_known' THEN 'wijha' ELSE 'not_shipped' END
-                       WHEN leg.internal_state = 'delivered' THEN 'delivered'
-                       WHEN leg.type_code = '20'
-                            OR leg.internal_state IN ('returning', 'returned')
-                            OR (h.first_return IS NOT NULL
-                                AND (h.first_delivered IS NULL OR h.first_return < h.first_delivered)) THEN 'refused'
-                       WHEN h.first_delivered IS NOT NULL THEN 'delivered'
-                       WHEN leg.internal_state IN ('lost', 'terminated', 'cancelled') THEN 'other_terminal'
-                       ELSE 'in_transit'
+            """ + LEG_OUTCOME_WHENS + """
                    END AS outcome
             FROM period_orders po
             LEFT JOIN LATERAL (
@@ -632,7 +643,7 @@ public class SalesAnalyticsService {
                 last == null ? null : last.toInstant(),
                 o.delivered(), o.refused(), o.inTransit(), o.wijha(), o.notShipped(), o.otherTerminal(),
                 o.returned(), o.delivered() - o.returned(),
-                rate(o.returned(), o.delivered()), rate(o.refused(), o.delivered() + o.refused()),
+                rate(o.returned(), o.delivered()), rate(o.refused(), o.delivered() + o.refused() + o.otherTerminal()),
                 money(o.deliveredRevenue()), money(o.returnedRevenue()),
                 money(o.deliveredRevenue()).subtract(money(o.returnedRevenue()))));
         });
@@ -644,7 +655,7 @@ public class SalesAnalyticsService {
         return new Totals(soldUnits, money(grossRevenue), orders, approximateLines,
             o.delivered(), o.refused(), o.inTransit(), o.wijha(), o.notShipped(), o.otherTerminal(),
             o.returned(), o.delivered() - o.returned(),
-            rate(o.returned(), o.delivered()), rate(o.refused(), o.delivered() + o.refused()),
+            rate(o.returned(), o.delivered()), rate(o.refused(), o.delivered() + o.refused() + o.otherTerminal()),
             money(o.deliveredRevenue()), money(o.returnedRevenue()),
             money(o.deliveredRevenue()).subtract(money(o.returnedRevenue())),
             o.deliveredOrders(), o.refusedOrders(), o.wijhaOrders(),
@@ -672,10 +683,11 @@ public class SalesAnalyticsService {
         List<CitySales> rows = jdbc.query(CITIES_SQL, params(tid, period, 2, null), (rs, i) -> {
             long delivered = rs.getLong("delivered_orders");
             long refused = rs.getLong("refused_orders");
+            long otherTerminal = rs.getLong("other_terminal_orders");
             return new CitySales(rs.getString("city_id"), rs.getString("name_en"), rs.getString("name_ar"),
                 rs.getLong("orders"), delivered, refused,
-                rs.getLong("in_transit_orders"), rs.getLong("other_terminal_orders"),
-                rate(delivered, delivered + refused));
+                rs.getLong("in_transit_orders"), otherTerminal,
+                rate(delivered, delivered + refused + otherTerminal));
         });
         return new CitySalesResponse(period.range(), rows);
     }

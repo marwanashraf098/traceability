@@ -123,26 +123,48 @@ public class MoneyAnalyticsService {
     // ── /pipeline ───────────────────────────────────────────────────────────
 
     /*
-     * City success rates (s2 rules: delivered vs turned RTO / returning / returned) over the
-     * tenant's forward legs of the last 90 days, and the overall rate. One parameter: tenant id.
+     * City success rates over the tenant's orders placed in the last 90 days that went out with
+     * Bosta: each order's deciding forward leg (the s2 rule — SalesAnalyticsService.LEG_OUTCOME_WHENS,
+     * Wijha-ended legs left out), rate = delivered ÷ (delivered + failed), failed = refused + other
+     * terminal (the one success-rate definition, 2026-10-08). And the overall rate. One parameter:
+     * tenant id.
      */
     private static final String RATES = """
         rates AS (
-            SELECT s.raw->'dropOffAddress'->'city'->>'name' AS city,
-                   COUNT(*) FILTER (WHERE s.internal_state = 'delivered')                       AS delivered,
-                   COUNT(*) FILTER (WHERE s.raw->'type'->>'code' = '20'
-                                       OR s.internal_state IN ('returning', 'returned'))       AS refused
-            FROM shipments s
-            WHERE s.tenant_id = ? AND s.shipment_leg = 'forward'
-              AND COALESCE(s.raw->'type'->>'code', '10') NOT IN ('25', '30')
-              AND s.created_at > now() - interval '90 days'
-            GROUP BY 1
+            SELECT dl.city,
+                   COUNT(*) FILTER (WHERE dl.outcome = 'delivered')                     AS delivered,
+                   COUNT(*) FILTER (WHERE dl.outcome IN ('refused', 'other_terminal'))  AS failed
+            FROM (
+                SELECT leg.city,
+                       CASE WHEN leg.internal_state IN ('terminated', 'cancelled')
+                                 AND o.shipping_carrier_class = 'other_known' THEN 'wijha'
+            """ + SalesAnalyticsService.LEG_OUTCOME_WHENS + """
+                       END AS outcome
+                FROM orders o
+                CROSS JOIN LATERAL (
+                    SELECT s.id AS shipment_id, s.internal_state, s.raw->'type'->>'code' AS type_code,
+                           s.raw->'dropOffAddress'->'city'->>'name' AS city
+                    FROM shipments s
+                    WHERE s.order_id = o.id AND s.tenant_id = o.tenant_id AND s.shipment_leg = 'forward'
+                      AND COALESCE(s.raw->'type'->>'code', '10') NOT IN ('25', '30')
+                    ORDER BY (s.internal_state IN ('terminated', 'cancelled')), s.created_at DESC, s.id DESC
+                    LIMIT 1
+                ) leg
+                LEFT JOIN LATERAL (
+                    SELECT MIN(hh.occurred_at) FILTER (WHERE hh.internal_state = 'delivered')                AS first_delivered,
+                           MIN(hh.occurred_at) FILTER (WHERE hh.internal_state IN ('returning', 'returned')) AS first_return
+                    FROM shipment_status_history hh
+                    WHERE hh.shipment_id = leg.shipment_id
+                ) h ON true
+                WHERE o.tenant_id = ? AND o.placed_at > now() - interval '90 days'
+            ) dl
+            GROUP BY dl.city
         ),
         overall AS (
-            SELECT SUM(delivered)::numeric / NULLIF(SUM(delivered + refused), 0) AS rate FROM rates
+            SELECT SUM(delivered)::numeric / NULLIF(SUM(delivered + failed), 0) AS rate FROM rates
         ),
         city_rate AS (
-            SELECT city, delivered::numeric / NULLIF(delivered + refused, 0) AS rate FROM rates
+            SELECT city, delivered::numeric / NULLIF(delivered + failed, 0) AS rate FROM rates
         )
         """;
 

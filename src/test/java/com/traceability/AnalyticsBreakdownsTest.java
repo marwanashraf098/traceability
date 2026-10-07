@@ -647,6 +647,9 @@ class AnalyticsBreakdownsTest {
             t.line(o, big, 1);
             t.leg(o, i < 5 ? 20 : 10, i < 5 ? "returned" : "delivered");
         }
+        UUID moving = t.order("{}");                 // still in transit: counts for the 20-order bar, not the rate
+        t.line(moving, big, 1);
+        t.leg(moving, 10, "with_courier");
         for (int i = 0; i < 19; i++) {
             UUID o = t.order("{}");
             t.line(o, small, 1);
@@ -662,8 +665,8 @@ class AnalyticsBreakdownsTest {
         Map<String, Object> cur = m(ok(t, "/api/v1/analytics/products/extras?" + SEPT), "current");
         List<Map<String, Object>> failed = list(cur, "mostFailed");
         assertThat(failed).extracting(f -> f.get("title")).containsExactly("Big");
-        assertThat(n(failed.get(0), "orders")).isEqualTo(20);
-        assertThat(dec(failed.get(0), "failureRate")).isEqualByComparingTo("0.25");
+        assertThat(n(failed.get(0), "orders")).isEqualTo(21);
+        assertThat(dec(failed.get(0), "failureRate")).isEqualByComparingTo("0.25");   // 5 / (15 + 5), not 5 / 21
 
         List<Map<String, Object>> pairs = list(cur, "boughtTogether");
         assertThat(pairs).hasSize(1);

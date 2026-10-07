@@ -102,11 +102,12 @@ public class ProductExtrasAnalyticsService {
         ) so ON true
         """;
 
-    /** Per product and period: orders and failed orders (refused + other terminal). Filtered in Java. */
+    /** Per product and period: orders, delivered and failed (refused + other terminal) orders. Filtered in Java. */
     private static final String FAILED_SQL = SalesAnalyticsService.soldLines(false)
         + SalesAnalyticsService.ORDER_OUTCOMES + SalesAnalyticsService.LINE_RETURNS + """
         SELECT lf.placed_at >= ?::timestamptz AS is_current, v.product_id, p.title,
                COUNT(DISTINCT lf.order_id)                                                          AS orders,
+               COUNT(DISTINCT lf.order_id) FILTER (WHERE lf.outcome = 'delivered')                    AS delivered,
                COUNT(DISTINCT lf.order_id) FILTER (WHERE lf.outcome IN ('refused', 'other_terminal')) AS failed
         FROM line_facts lf
         JOIN variants v ON v.id = lf.variant_id
@@ -168,10 +169,11 @@ public class ProductExtrasAnalyticsService {
             for (int k = 0; k < 6; k++) ps.setObject(i++, tid);
             ps.setTimestamp(i, curStart);
         }, rs -> {
-            long orders = rs.getLong("orders"), f = rs.getLong("failed");
+            long orders = rs.getLong("orders"), d = rs.getLong("delivered"), f = rs.getLong("failed");
             if (orders < MOST_FAILED_MIN_ORDERS) return;
+            // failureRate = failed ÷ (delivered + failed) — the one success / failure definition.
             failed.get(rs.getBoolean("is_current")).add(new FailedProduct(rs.getObject("product_id", UUID.class),
-                rs.getString("title"), orders, f, rate(f, orders)));
+                rs.getString("title"), orders, f, rate(f, d + f)));
         });
         Map<Boolean, List<Pair>> pairs = split();
         jdbc.query(PAIRS_SQL, ps -> {
