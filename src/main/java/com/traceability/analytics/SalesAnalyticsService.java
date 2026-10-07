@@ -134,7 +134,12 @@ public class SalesAnalyticsService {
      *             MATERIALIZED so the grouping works on these narrow rows — inlined, the planner
      *             carried each line's raw jsonb into the sort and spilled it to disk (prod EXPLAIN,
      *             Femine 366 days).
-     *   rf      — the line's Shopify refunds (slice 2, approved 2026-10-06). Shopify lowers
+     *   gross / disc_code / disc_auto (slice 5, period lines only) — qty × the pre-discount unit price
+ *             (raw price, else variants.price), and the part of the line's discount allocations that
+ *             came from a discount code / an automatic discount (discount_applications[index].type),
+ *             scaled like unit_price (÷ the original quantity). gross − revenue is the line's whole
+ *             discount; what is neither code nor automatic (manual / draft-order) is the remainder.
+ *   rf      — the line's Shopify refunds (slice 2, approved 2026-10-06). Shopify lowers
      *             current_quantity when a unit is refunded, so a unit sold, delivered and then
      *             refunded would vanish from sales. added_back = refunded units with restock_type
      *             'return' or 'no_restock' whose refund was created AFTER a (non-cancelled)
@@ -168,14 +173,15 @@ public class SalesAnalyticsService {
                        rf.shopify_returned, rf.unverified_no_restock,
                        ov.cancelled_at IS NULL AS not_cancelled,
                        up.unit_price,
-                       q.qty * up.unit_price AS revenue
+                       q.qty * up.unit_price AS revenue,
+                       dc.gross, dc.disc_code, dc.disc_auto
                 FROM order_items oi
                 JOIN orders o   ON o.id = oi.order_id
                 JOIN floors f   ON f.store_id = o.store_id
                 JOIN variants v ON v.id = oi.variant_id
                 CROSS JOIN bounds b
                 CROSS JOIN LATERAL jsonb_to_record(COALESCE(o.raw, '{}'::jsonb))
-                    AS ov(cancelled_at text, refunds jsonb, fulfillments jsonb)
+                    AS ov(cancelled_at text, refunds jsonb, fulfillments jsonb, discount_applications jsonb)
                 CROSS JOIN LATERAL jsonb_to_record(COALESCE(oi.raw, '{}'::jsonb))
                     AS li(price numeric, quantity int, current_quantity int, discount_allocations jsonb)
                 CROSS JOIN LATERAL (
@@ -225,6 +231,26 @@ public class SalesAnalyticsService {
                                END
                            END AS unit_price
                 ) up
+                CROSS JOIN LATERAL (
+                    SELECT CASE WHEN o.placed_at >= b.p_start AND o.placed_at < b.p_end
+                                THEN q.qty * COALESCE(q.raw_price, v.price, 0) END AS gross,
+                           CASE WHEN o.placed_at >= b.p_start AND o.placed_at < b.p_end THEN
+                               COALESCE(q.qty * a.code_amt / NULLIF(GREATEST(q.original_qty, q.qty), 0), 0) END AS disc_code,
+                           CASE WHEN o.placed_at >= b.p_start AND o.placed_at < b.p_end THEN
+                               COALESCE(q.qty * a.auto_amt / NULLIF(GREATEST(q.original_qty, q.qty), 0), 0) END AS disc_auto
+                    FROM (
+                        SELECT SUM((d->>'amount')::numeric) FILTER (WHERE da.type = 'discount_code') AS code_amt,
+                               SUM((d->>'amount')::numeric) FILTER (WHERE da.type = 'automatic')     AS auto_amt
+                        FROM jsonb_array_elements(
+                            CASE WHEN q.raw_price IS NOT NULL AND jsonb_typeof(li.discount_allocations) = 'array'
+                                 THEN li.discount_allocations ELSE '[]'::jsonb END) d
+                        CROSS JOIN LATERAL (
+                            SELECT CASE WHEN jsonb_typeof(ov.discount_applications) = 'array'
+                                        THEN ov.discount_applications -> ((d->>'discount_application_index')::int) ->> 'type'
+                                   END AS type
+                        ) da
+                    ) a
+                ) dc
                 WHERE oi.tenant_id = ?
                   AND o.tenant_id = ?
                   AND (f.floor_at IS NULL OR o.placed_at >= f.floor_at)
@@ -261,12 +287,12 @@ public class SalesAnalyticsService {
      *     in_transit      — created / with_courier / exception
      *   bosta_decides = a Bosta leg decided the outcome (the cities endpoint counts only those).
      */
-    private static final String ORDER_OUTCOMES = """
+    static final String ORDER_OUTCOMES = """
         , period_orders AS MATERIALIZED (
             SELECT DISTINCT order_id, carrier_class FROM lines
         ),
         order_outcomes AS MATERIALIZED (
-            SELECT po.order_id, d.bosta_decides,
+            SELECT po.order_id, d.bosta_decides, leg.shipment_id,
                    CASE WHEN d.bosta_decides THEN leg.city_id END AS city_id,
                    CASE WHEN d.bosta_decides THEN leg.city END AS city,
                    CASE
@@ -336,7 +362,7 @@ public class SalesAnalyticsService {
      *                     variant first, then piece id) and the first N are left out, N = the
      *                     order's dashboard exchanges (dismissed / cancelled rows don't count).
      */
-    private static final String LINE_RETURNS = """
+    static final String LINE_RETURNS = """
         , dashboard_exchanges AS (
             SELECT x.matched_order_id AS order_id,
                    COUNT(*)                                                         AS units,
@@ -415,7 +441,9 @@ public class SalesAnalyticsService {
         ),
         line_facts AS (
             SELECT l.variant_id, l.order_id, l.qty, l.unit_price, oo.outcome,
-                   LEAST(l.qty, GREATEST(COALESCE(i.units, 0), l.shopify_returned)) AS returned
+                   LEAST(l.qty, GREATEST(COALESCE(i.units, 0), l.shopify_returned)) AS returned,
+                   l.placed_at, l.gross, l.disc_code, l.disc_auto, l.approximate,
+                   oo.city_id, oo.city, oo.shipment_id
             FROM lines l
             JOIN order_outcomes oo ON oo.order_id = l.order_id
             LEFT JOIN identified i ON i.order_item_id = l.order_item_id
