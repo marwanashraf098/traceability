@@ -103,7 +103,10 @@ public final class ShipmentSettlement {
         return write(jdbc, shipmentId, f, false);
     }
 
-    /** As {@link #apply}, also stamping settlement_refreshed_at (the refresh job's read). */
+    /**
+     * As {@link #apply}, for a payload the refresh job just read successfully from Bosta: also
+     * stamps settlement_refreshed_at and settlement_verified_at.
+     */
     public static int applyRefreshed(JdbcTemplate jdbc, UUID shipmentId, JsonNode raw) {
         return write(jdbc, shipmentId, extract(raw), true);
     }
@@ -129,6 +132,7 @@ public final class ShipmentSettlement {
                 cashout_amount       = COALESCE(?, cashout_amount),
                 next_cashout_date    = COALESCE(?, next_cashout_date),
                 settlement_refreshed_at = CASE WHEN ? THEN now() ELSE settlement_refreshed_at END,
+                settlement_verified_at  = CASE WHEN ? THEN now() ELSE settlement_verified_at END,
                 settlement_status    = CASE
                     WHEN COALESCE(?, cashout_txn_id) IS NOT NULL THEN 'paid'
                     WHEN COALESCE(?::timestamptz, deposited_at) IS NOT NULL THEN 'deposited'
@@ -139,7 +143,7 @@ public final class ShipmentSettlement {
             f.vat(), f.openingPackageFees(), f.collectionFees(), f.insuranceFees(), f.flexShipFees(),
             f.promotionDiscount(), f.shipmentFeesQuoted(), f.cashCycleId(), f.cashoutTxnId(),
             sqlDate(f.cashoutDate()), f.cashoutAmount(), sqlDate(f.nextCashoutDate()),
-            refreshed, f.cashoutTxnId(), ts(f.depositedAt()), shipmentId);
+            refreshed, refreshed, f.cashoutTxnId(), ts(f.depositedAt()), shipmentId);
     }
 
     // ── parsing ─────────────────────────────────────────────────────────────

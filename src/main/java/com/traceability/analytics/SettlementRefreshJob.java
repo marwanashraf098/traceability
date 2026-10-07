@@ -2,6 +2,7 @@ package com.traceability.analytics;
 
 import com.traceability.integrations.bosta.BostaDelivery;
 import com.traceability.integrations.bosta.BostaGateway;
+import com.traceability.integrations.bosta.BostaIngestionHelper;
 import com.traceability.integrations.bosta.BostaRateLimitException;
 import com.traceability.integrations.bosta.DeliveryNotFoundException;
 import com.traceability.integrations.bosta.ShipmentSettlement;
@@ -34,14 +35,17 @@ import java.util.concurrent.ConcurrentHashMap;
  * Reads only (Mode B): the existing per-shipment v0 GET (BostaGateway.fetchDelivery), which runs
  * at BACKGROUND priority on the shared Bosta limiter; a rate limit stops the tenant's run and backs
  * the tenant off until the next run after retry-after (rate-limit-as-reschedule, like the status
- * poll). The settlement columns are the only thing written — never raw, never a state.
+ * poll). A payload whose state or type differs from the stored one goes through the status poll's
+ * pipeline (BostaIngestionHelper.ingestFetched → BostaWebhookJob: history, piece / order effects,
+ * monotonic rules); an unchanged one writes only the fresh raw + settlement columns.
  *
  * Eligible: the tenant's Bosta legs (any type) in a terminal state, on a post-floor order, not paid,
  * not 'unresolved', Bosta still knows the tracking number. Cadence:
  *   none      — every 12 h;
  *   deposited — once a day; when the tenant's payout weekday is known (the weekday most recent
  *               cashout dates share), only on the day after it, with an 8-day safety net;
- *   45 days after the leg finished with no payout → 'unresolved', no more refreshes.
+ *   'unresolved' (no more refreshes) only when a successful read made 45+ days after the leg
+ *               finished still shows no payout; such old legs are read first, oldest first.
  * At most {@code analytics.settlement.refresh-max-per-tenant} legs per tenant per run, the
  * least recently refreshed first.
  *
@@ -57,14 +61,21 @@ public class SettlementRefreshJob {
         "SELECT ca.tenant_id, ca.api_key_encrypted FROM courier_accounts ca " +
         "WHERE ca.provider = 'bosta' AND ca.status = 'active'";
 
-    public record RefreshResult(int markedUnresolved, int selected, int refreshed, int notFound,
-                                int failed, boolean rateLimited, Integer payoutWeekday) {}
+    /** A leg is 'unresolved' after a successful read this long after it finished, still unpaid. */
+    static final String UNRESOLVED_AFTER = "45 days";
+
+    public record RefreshResult(int markedUnresolved, int selected, int refreshed, int routed, int notFound,
+                                int failed, int newlyDeposited, int newlyPaid, boolean rateLimited,
+                                Integer payoutWeekday) {}
+
+    private record Leg(UUID id, String tn, Integer providerState, String typeValue, String status) {}
 
     private final JdbcTemplate ownerJdbc;
     private final JdbcTemplate jdbc;
     private final TransactionTemplate tx;
     private final EncryptionService encryption;
     private final BostaGateway bosta;
+    private final BostaIngestionHelper ingestion;
     private final AnalyticsFloorOverrides overrides;
     private final Clock clock;
     private final int maxPerTenant;
@@ -76,6 +87,7 @@ public class SettlementRefreshJob {
                                 PlatformTransactionManager txm,
                                 EncryptionService encryption,
                                 BostaGateway bosta,
+                                BostaIngestionHelper ingestion,
                                 AnalyticsFloorOverrides overrides,
                                 Clock clock,
                                 @Value("${analytics.settlement.refresh-max-per-tenant:100}") int maxPerTenant,
@@ -85,6 +97,7 @@ public class SettlementRefreshJob {
         this.tx = new TransactionTemplate(txm);
         this.encryption = encryption;
         this.bosta = bosta;
+        this.ingestion = ingestion;
         this.overrides = overrides;
         this.clock = clock;
         this.maxPerTenant = maxPerTenant;
@@ -103,34 +116,28 @@ public class SettlementRefreshJob {
                 continue;
             }
             try {
-                RefreshResult r = refreshTenant(tenantId, encryption.decrypt((String) row.get("api_key_encrypted")));
-                if (r.selected() > 0 || r.markedUnresolved() > 0) {
-                    log.info("Settlement refresh tenant {}: {}", tenantId, r);
-                }
+                refreshTenant(tenantId, encryption.decrypt((String) row.get("api_key_encrypted")));
             } catch (Exception e) {
                 log.warn("Settlement refresh failed for tenant {}: {}", tenantId, e.toString());
             }
         }
     }
 
-    /** One tenant's run (public for tests). */
+    /** One tenant's run (public for tests). Logs one INFO line per run. */
     public RefreshResult refreshTenant(UUID tenantId, String apiKey) {
         return TenantContext.runAs(tenantId, () -> {
-            Integer unresolved = tx.execute(s -> jdbc.update(
-                "UPDATE shipments s SET settlement_status = 'unresolved' " +
-                "WHERE s.tenant_id = ? AND s.provider = 'bosta' " +
-                "  AND s.settlement_status IN ('none', 'deposited') " +
-                "  AND s.internal_state IN " + SettlementSql.TERMINAL_STATES +
-                "  AND " + SettlementSql.terminalAt("s") + " < now() - interval '45 days'",
-                tenantId));
-
             Integer weekday = tx.execute(s -> jdbc.query(SettlementSql.PAYOUT_WEEKDAY,
                 rs -> rs.next() ? rs.getInt(1) : null, tenantId));
             int today = LocalDate.now(clock.withZone(AnalyticsPeriod.CAIRO)).getDayOfWeek().getValue();
             boolean dayAfterPayout = weekday == null || today == (weekday % 7) + 1;
 
-            List<Map<String, Object>> queue = tx.execute(s -> jdbc.query(
-                "SELECT s.id, s.tracking_number FROM shipments s" + SettlementSql.floorJoin("s") +
+            // Legs finished 45+ days ago go first (oldest first): they need one successful read
+            // before they may become 'unresolved'. Then the least recently refreshed.
+            List<Leg> queue = tx.execute(s -> jdbc.query(
+                "SELECT s.id, s.tracking_number, s.provider_state, s.raw->'type'->>'value' AS type_value, " +
+                "       s.settlement_status, t.terminal_at " +
+                "FROM shipments s" + SettlementSql.floorJoin("s") +
+                "CROSS JOIN LATERAL (SELECT " + SettlementSql.terminalAt("s") + " AS terminal_at) t " +
                 "WHERE s.tenant_id = ? AND s.provider = 'bosta' AND s.tracking_number IS NOT NULL " +
                 "  AND s.provider_not_found_at IS NULL " +
                 "  AND s.internal_state IN " + SettlementSql.TERMINAL_STATES +
@@ -141,7 +148,9 @@ public class SettlementRefreshJob {
                 "         AND (s.settlement_refreshed_at IS NULL " +
                 "              OR (? AND s.settlement_refreshed_at < now() - interval '20 hours') " +
                 "              OR s.settlement_refreshed_at < now() - interval '8 days')) ) " +
-                "ORDER BY s.settlement_refreshed_at ASC NULLS FIRST, s.created_at ASC " +
+                "ORDER BY (t.terminal_at < now() - interval '" + UNRESOLVED_AFTER + "') DESC, " +
+                "         CASE WHEN t.terminal_at < now() - interval '" + UNRESOLVED_AFTER + "' THEN t.terminal_at END ASC, " +
+                "         s.settlement_refreshed_at ASC NULLS FIRST, s.created_at ASC " +
                 "LIMIT ?",
                 ps -> {
                     ps.setArray(1, ps.getConnection().createArrayOf("text", overrides.shopDomains()));
@@ -150,38 +159,79 @@ public class SettlementRefreshJob {
                     ps.setBoolean(4, dayAfterPayout);
                     ps.setInt(5, maxPerTenant);
                 },
-                (rs, i) -> Map.<String, Object>of("id", rs.getObject("id"), "tn", rs.getString("tracking_number"))));
+                (rs, i) -> new Leg(rs.getObject("id", UUID.class), rs.getString("tracking_number"),
+                    (Integer) rs.getObject("provider_state"), rs.getString("type_value"),
+                    rs.getString("settlement_status"))));
             if (queue == null) queue = List.of();
 
-            int refreshed = 0, notFound = 0, failed = 0;
+            int refreshed = 0, routed = 0, notFound = 0, failed = 0, newlyDeposited = 0, newlyPaid = 0, limited = 0;
             boolean rateLimited = false;
-            for (Map<String, Object> leg : queue) {
-                UUID id = (UUID) leg.get("id");
-                String tn = (String) leg.get("tn");
+            for (Leg leg : queue) {
                 BostaDelivery d;
                 try {
-                    d = bosta.fetchDelivery(apiKey, tn);   // BACKGROUND priority on the shared limiter
+                    d = bosta.fetchDelivery(apiKey, leg.tn());   // BACKGROUND priority on the shared limiter
                 } catch (BostaRateLimitException e) {
                     retryUntilByTenant.put(tenantId,
                         System.currentTimeMillis() + (e.getRetryAfterSeconds() + 10) * 1000L);
                     rateLimited = true;
+                    limited++;
                     break;
                 } catch (DeliveryNotFoundException e) {
-                    notFound++;
-                    tx.execute(s -> jdbc.update(
-                        "UPDATE shipments SET settlement_refreshed_at = now() WHERE id = ?", id));
-                    continue;
+                    d = null;
                 } catch (Exception e) {
                     failed++;
-                    log.warn("Settlement refresh tenant {}: fetch of {} failed: {}", tenantId, tn, e.toString());
+                    log.warn("Settlement refresh tenant {}: fetch of {} failed: {}", tenantId, leg.tn(), e.toString());
+                    continue;
+                }
+                if (d == null || d.raw() == null) {
+                    // Not found: paced like any attempt, never a successful read (never 'unresolved' evidence).
+                    notFound++;
+                    tx.execute(s -> jdbc.update(
+                        "UPDATE shipments SET settlement_refreshed_at = now() WHERE id = ?", leg.id()));
                     continue;
                 }
                 final BostaDelivery fd = d;
-                tx.execute(s -> ShipmentSettlement.applyRefreshed(jdbc, id, fd == null ? null : fd.raw()));
+                boolean changed = leg.providerState() == null || leg.providerState() != fd.stateCode()
+                    || (leg.typeValue() != null && fd.type() != null && !leg.typeValue().equalsIgnoreCase(fd.type()));
+                if (changed) {
+                    // A status change: the status poll's own pipeline (webhook_events → BostaWebhookJob:
+                    // history, piece / order effects, monotonic rules, raw + settlement). Only the
+                    // settlement columns are written here (monotonic), never raw or a state.
+                    ingestion.ingestFetched(tenantId, fd, "bosta_poll", leg.providerState());
+                    routed++;
+                    tx.execute(s -> ShipmentSettlement.applyRefreshed(jdbc, leg.id(), fd.raw()));
+                } else {
+                    // Same state and type: the fresh payload and its settlement only.
+                    tx.execute(s -> {
+                        jdbc.update("UPDATE shipments SET raw = ?::jsonb WHERE id = ?", fd.raw().toString(), leg.id());
+                        return ShipmentSettlement.applyRefreshed(jdbc, leg.id(), fd.raw());
+                    });
+                }
                 refreshed++;
+                String after = tx.execute(s -> jdbc.queryForObject(
+                    "SELECT settlement_status FROM shipments WHERE id = ?", String.class, leg.id()));
+                if ("paid".equals(after) && !"paid".equals(leg.status())) newlyPaid++;
+                else if ("deposited".equals(after) && !"deposited".equals(leg.status())) newlyDeposited++;
             }
-            return new RefreshResult(unresolved == null ? 0 : unresolved, queue.size(), refreshed,
-                notFound, failed, rateLimited, weekday);
+
+            // 'unresolved' only on evidence: a successful read made 45+ days after the leg finished
+            // that still shows no payout. Stale raw, a not-found or a failed read never count.
+            Integer unresolved = tx.execute(s -> jdbc.update(
+                "UPDATE shipments s SET settlement_status = 'unresolved' " +
+                "WHERE s.tenant_id = ? AND s.provider = 'bosta' " +
+                "  AND s.settlement_status IN ('none', 'deposited') " +
+                "  AND s.internal_state IN " + SettlementSql.TERMINAL_STATES +
+                "  AND s.settlement_verified_at IS NOT NULL " +
+                "  AND s.settlement_verified_at >= " + SettlementSql.terminalAt("s") + " + interval '" + UNRESOLVED_AFTER + "'",
+                tenantId));
+
+            RefreshResult r = new RefreshResult(unresolved == null ? 0 : unresolved, queue.size(), refreshed,
+                routed, notFound, failed, newlyDeposited, newlyPaid, rateLimited, weekday);
+            log.info("Settlement refresh tenant {}: {} leg(s) refreshed of {} selected ({} status change(s) " +
+                "sent through the poll pipeline), {} newly deposited, {} newly paid, {} newly unresolved, " +
+                "{} not found, {} failed, {} rate limit(s) (429)", tenantId, refreshed, queue.size(), routed,
+                newlyDeposited, newlyPaid, r.markedUnresolved(), notFound, failed, limited);
+            return r;
         });
     }
 

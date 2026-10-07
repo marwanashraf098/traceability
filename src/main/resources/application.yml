@@ -346,6 +346,6 @@ analytics:
   # priority) until paid; at most refresh-max-per-tenant legs per tenant per hourly run.
   settlement:
     refresh-enabled: ${ANALYTICS_SETTLEMENT_REFRESH_ENABLED:true}
-    refresh-max-per-tenant: ${ANALYTICS_SETTLEMENT_REFRESH_MAX:100}
+    refresh-max-per-tenant: ${ANALYTICS_SETTLEMENT_REFRESH_MAX_PER_TENANT:100}
   money:
     open-order-days: 60   # "Not fulfilled yet" looks back this many days of orders

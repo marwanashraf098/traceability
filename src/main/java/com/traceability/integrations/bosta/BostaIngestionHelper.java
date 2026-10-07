@@ -104,7 +104,18 @@ public class BostaIngestionHelper {
             log.debug("{}: {} not found (404) — skipping", source, trackingNumber);
             return false;
         }
+        return ingestFetched(tenantId, delivery, source, currentProviderState);
+    }
 
+    /**
+     * The same pipeline as {@link #ingestDelivery} for a delivery the caller already fetched with
+     * the v0 GET (SettlementRefreshJob, analytics slice 3): guards → webhook_events row →
+     * BostaWebhookJob, which verifies by fetch and applies history, piece / order effects and the
+     * monotonic rules exactly as for a polled change. Callers MUST be inside TenantContext.runAs.
+     */
+    public boolean ingestFetched(UUID tenantId, BostaDelivery delivery, String source,
+                                 @Nullable Integer currentProviderState) {
+        String trackingNumber = delivery.trackingNumber();
         int fetchedState = delivery.stateCode();
 
         // Guard 1: never enqueue on an unmappable / extraction-failed state.

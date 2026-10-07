@@ -8,6 +8,7 @@ import com.traceability.analytics.SettlementRefreshJob;
 import com.traceability.identity.JwtService;
 import com.traceability.integrations.bosta.BostaDelivery;
 import com.traceability.integrations.bosta.BostaGateway;
+import com.traceability.integrations.bosta.BostaIngestionHelper;
 import com.traceability.integrations.bosta.BostaRateLimitException;
 import com.traceability.integrations.bosta.BostaRateLimiter;
 import com.traceability.integrations.bosta.DeliveryNotFoundException;
@@ -162,8 +163,9 @@ class AnalyticsMoneyTest {
         Leg leg(UUID order, String leg, String state, String raw) {
             UUID s = UUID.randomUUID();
             String tn = "8" + SEQ.incrementAndGet();
-            jdbc.update("INSERT INTO shipments (id, tenant_id, order_id, tracking_number, internal_state, shipment_leg, raw) " +
-                        "VALUES (?, ?, ?, ?, ?::shipment_internal_state, ?, ?::jsonb)", s, id, order, tn, state, leg, raw);
+            jdbc.update("INSERT INTO shipments (id, tenant_id, order_id, tracking_number, internal_state, shipment_leg, raw, " +
+                        "provider_state) VALUES (?, ?, ?, ?, ?::shipment_internal_state, ?, ?::jsonb, " +
+                        "(?::jsonb #>> '{state,code}')::int)", s, id, order, tn, state, leg, raw, raw);
             ShipmentSettlement.apply(jdbc, s, ShipmentSettlementTest.json(raw));
             return new Leg(s, tn);
         }
@@ -256,11 +258,18 @@ class AnalyticsMoneyTest {
     }
 
     final BostaGateway bosta = mock(BostaGateway.class);
+    final BostaIngestionHelper ingestion = mock(BostaIngestionHelper.class);
+
+    /** Bosta answers with exactly what we already hold for that tracking number (same state, type). */
+    BostaDelivery storedAnswer(String tn) {
+        String raw = jdbc.queryForObject("SELECT raw::text FROM shipments WHERE tracking_number = ?", String.class, tn);
+        return delivery(tn, raw);
+    }
 
     SettlementRefreshJob job(Clock clock, int cap) {
         return new SettlementRefreshJob(
             new DriverManagerDataSource(POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword()),
-            jdbc, txm, encryption, bosta, floorOverrides, clock, cap, true);
+            jdbc, txm, encryption, bosta, ingestion, floorOverrides, clock, cap, true);
     }
 
     static Clock clockOn(DayOfWeek day) {
@@ -349,33 +358,40 @@ class AnalyticsMoneyTest {
         Leg k = t.forward(recent, "delivered", SettlementPayloads.RTO_DEPOSITED);
         set(k, "settlement_refreshed_at = ?", ts(ago(Duration.ofHours(3))));                    // too soon
         Leg l = t.forward(recent, "returned", SettlementPayloads.DELIVERED_UNSETTLED);
-        set(l, "returned_at = ?", ts(ago(Duration.ofDays(50))));                                // 45 days → unresolved
+        set(l, "returned_at = ?", ts(ago(Duration.ofDays(50))));                                // 45+ days: read, then unresolved
         Leg l2 = t.forward(recent, "delivered", SettlementPayloads.RTO_DEPOSITED);
-        set(l2, "delivered_at = ?", ts(ago(Duration.ofDays(46))));                              // deposited 45 days → unresolved
+        set(l2, "delivered_at = ?", ts(ago(Duration.ofDays(46))));                              // deposited, 45+ days: same
         Leg l3 = t.forward(recent, "delivered", SettlementPayloads.DELIVERED_PAID);
         set(l3, "delivered_at = ?", ts(ago(Duration.ofDays(60))));                              // paid stays paid
         Leg mm = t.leg(t.order(recent, "cancelled", null, "{}"), "forward", "delivered",
                        SettlementPayloads.DELIVERED_UNSETTLED);                                  // cancelled order
         Leg crp = t.leg(t.order(recent), "return", "delivered",
-                        "{\"type\":{\"code\":25},\"shipmentFees\":93}");                         // return legs count too
+                        "{\"type\":{\"code\":25},\"state\":{\"code\":45},\"shipmentFees\":93}"); // return legs count too
 
         List<BostaRateLimiter.Priority> priorities = new CopyOnWriteArrayList<>();
         when(bosta.fetchDelivery(anyString(), anyString())).thenAnswer(inv -> {
             priorities.add(BostaRateLimiter.priorityOverride());
             String tn = inv.getArgument(1);
-            return tn.equals(a.tn()) ? delivery(tn, SettlementPayloads.DELIVERED_PAID) : null;
+            return tn.equals(a.tn()) ? delivery(tn, SettlementPayloads.DELIVERED_PAID) : storedAnswer(tn);
         });
 
         SettlementRefreshJob.RefreshResult r = job(Clock.system(CAIRO), 100).refreshTenant(t.id, "key");
 
-        assertThat(fetched()).containsExactlyInAnyOrder(a.tn(), c.tn(), i.tn(), j.tn(), crp.tn());
-        assertThat(r.selected()).isEqualTo(5);
-        assertThat(r.refreshed()).isEqualTo(5);
+        // The two legs finished 45+ days ago are read first, oldest first.
+        assertThat(fetched()).hasSize(7);
+        assertThat(fetched().subList(0, 2)).containsExactly(l.tn(), l2.tn());
+        assertThat(fetched()).containsExactlyInAnyOrder(a.tn(), c.tn(), i.tn(), j.tn(), crp.tn(), l.tn(), l2.tn());
+        assertThat(r.selected()).isEqualTo(7);
+        assertThat(r.refreshed()).isEqualTo(7);
+        assertThat(r.routed()).isZero();
+        assertThat(r.newlyPaid()).isEqualTo(1);
+        // Read successfully 45+ days after finishing, still unpaid → unresolved (on evidence, not stale raw).
         assertThat(r.markedUnresolved()).isEqualTo(2);
         assertThat(r.payoutWeekday()).isNull();
         verify(bosta, atLeastOnce()).fetchDelivery(eq("key"), anyString());
+        verifyNoInteractions(ingestion);
         // BACKGROUND: never upgraded to USER_FACING around the call (the gateway's default is BACKGROUND).
-        assertThat(priorities).hasSize(5).containsOnlyNulls();
+        assertThat(priorities).hasSize(7).containsOnlyNulls();
 
         assertThat(row(a.id()).get("settlement_status")).isEqualTo("paid");
         assertThat(row(a.id()).get("settlement_refreshed_at")).isNotNull();
@@ -459,12 +475,100 @@ class AnalyticsMoneyTest {
         assertThat(fetched()).containsExactly(l1.tn(), l2.tn());
         assertThat(row(l1.id()).get("settlement_refreshed_at")).as("not found: stamped, retried in 12 h").isNotNull();
         assertThat(row(l1.id()).get("settlement_status")).isEqualTo("none");
+        assertThat(row(l1.id()).get("settlement_verified_at")).as("a not-found is never a successful read").isNull();
         assertThat(row(l3.id()).get("settlement_refreshed_at")).as("after the 429: untouched").isEqualTo(l3Before);
 
         // The hourly run skips the backed-off tenant until retry-after passes.
         clearInvocations(bosta);
         job.refreshAll();
         assertThat(fetched()).doesNotContain(l1.tn(), l2.tn(), l3.tn());
+    }
+
+    @Test
+    void refresh_oldLegWithStaleRaw_becomesPaidAfterRefresh_notUnresolved() {
+        T t = new T("An3-OldPaid");
+        Leg old = t.forward(ago(Duration.ofDays(70)), "delivered", SettlementPayloads.DELIVERED_UNSETTLED);
+        set(old, "delivered_at = ?", ts(ago(Duration.ofDays(60))));
+        when(bosta.fetchDelivery(anyString(), anyString()))
+            .thenAnswer(inv -> delivery(inv.getArgument(1), SettlementPayloads.DELIVERED_PAID));
+
+        SettlementRefreshJob.RefreshResult r = job(Clock.system(CAIRO), 100).refreshTenant(t.id, "key");
+        assertThat(row(old.id()).get("settlement_status")).isEqualTo("paid");
+        assertThat(r.markedUnresolved()).isZero();
+        assertThat(r.newlyPaid()).isEqualTo(1);
+        assertThat(row(old.id()).get("settlement_verified_at")).isNotNull();
+    }
+
+    @Test
+    void refresh_oldLegNeverReadSuccessfully_isNeverUnresolved() {
+        T t = new T("An3-NeverRead");
+        Leg notFound = t.forward(ago(Duration.ofDays(70)), "delivered", SettlementPayloads.DELIVERED_UNSETTLED);
+        set(notFound, "delivered_at = ?", ts(ago(Duration.ofDays(60))));
+        Leg failing = t.forward(ago(Duration.ofDays(70)), "returned", SettlementPayloads.DELIVERED_UNSETTLED);
+        set(failing, "returned_at = ?", ts(ago(Duration.ofDays(55))));
+        // Old, attempted before (stamped) but never read successfully, and not due this run.
+        Leg attempted = t.forward(ago(Duration.ofDays(70)), "delivered", SettlementPayloads.RTO_DEPOSITED);
+        set(attempted, "delivered_at = ?, settlement_refreshed_at = ?", ts(ago(Duration.ofDays(50))),
+            ts(ago(Duration.ofHours(2))));
+        when(bosta.fetchDelivery(anyString(), anyString())).thenAnswer(inv -> {
+            String tn = inv.getArgument(1);
+            if (tn.equals(notFound.tn())) throw new DeliveryNotFoundException(tn);
+            throw new IllegalStateException("Bosta 500");
+        });
+
+        SettlementRefreshJob.RefreshResult r = job(Clock.system(CAIRO), 100).refreshTenant(t.id, "key");
+        assertThat(r.markedUnresolved()).isZero();
+        assertThat(fetched()).containsExactly(notFound.tn(), failing.tn());   // oldest finish first
+        for (Leg l : List.of(notFound, failing, attempted)) {
+            assertThat(row(l.id()).get("settlement_status")).as(l.tn()).isNotEqualTo("unresolved");
+            assertThat(row(l.id()).get("settlement_verified_at")).as(l.tn()).isNull();
+        }
+    }
+
+    @Test
+    void refresh_oldLegsFirst_oldestFinishFirst_withinTheCap() {
+        T t = new T("An3-OldFirst");
+        Leg recent = t.forward(ago(Duration.ofDays(5)), "delivered", SettlementPayloads.DELIVERED_UNSETTLED);
+        Leg old50 = t.forward(ago(Duration.ofDays(80)), "delivered", SettlementPayloads.DELIVERED_UNSETTLED);
+        set(old50, "delivered_at = ?, settlement_refreshed_at = ?", ts(ago(Duration.ofDays(50))),
+            ts(ago(Duration.ofHours(13))));
+        Leg old60 = t.forward(ago(Duration.ofDays(80)), "delivered", SettlementPayloads.DELIVERED_UNSETTLED);
+        set(old60, "delivered_at = ?", ts(ago(Duration.ofDays(60))));
+
+        job(Clock.system(CAIRO), 2).refreshTenant(t.id, "key");
+        assertThat(fetched()).containsExactly(old60.tn(), old50.tn());
+        assertThat(fetched()).doesNotContain(recent.tn());
+    }
+
+    @Test
+    void refresh_stateChanged_goesThroughThePollPipeline_unchanged_writesRawAndSettlementOnly() {
+        T t = new T("An3-Route");
+        Leg same = t.forward(ago(Duration.ofDays(5)), "delivered", SettlementPayloads.V2_ITEM_NULL_WALLET);
+        Leg moved = t.forward(ago(Duration.ofDays(5)), "delivered", SettlementPayloads.DELIVERED_UNSETTLED);
+        String rto = "{\"type\":{\"code\":20,\"value\":\"Return to Origin\"},\"state\":{\"code\":41},\"cod\":500," +
+                     "\"shipmentFees\":50,\"wallet\":{\"cashCycle\":null}}";
+        when(bosta.fetchDelivery(anyString(), anyString())).thenAnswer(inv -> {
+            String tn = inv.getArgument(1);
+            return tn.equals(moved.tn()) ? delivery(tn, rto) : delivery(tn, SettlementPayloads.DELIVERED_PAID);
+        });
+        Object movedRawBefore = jdbc.queryForObject("SELECT raw::text FROM shipments WHERE id = ?", String.class, moved.id());
+
+        SettlementRefreshJob.RefreshResult r = job(Clock.system(CAIRO), 100).refreshTenant(t.id, "key");
+        assertThat(r.routed()).isEqualTo(1);
+
+        // Changed (delivered SEND → RTO): handed to the poll pipeline with the stored state; nothing
+        // here writes its raw or state.
+        verify(ingestion).ingestFetched(eq(t.id), argThat(d -> d.trackingNumber().equals(moved.tn())),
+            eq("bosta_poll"), eq(45));
+        verifyNoMoreInteractions(ingestion);
+        assertThat(jdbc.queryForObject("SELECT raw::text FROM shipments WHERE id = ?", String.class, moved.id()))
+            .isEqualTo(movedRawBefore);
+        assertThat(row(moved.id()).get("internal_state").toString()).isEqualTo("delivered");
+
+        // Unchanged (45 → 45): the fresh v0 raw replaces the v2 item, settlement written.
+        String sameRaw = jdbc.queryForObject("SELECT raw::text FROM shipments WHERE id = ?", String.class, same.id());
+        assertThat(sameRaw).doesNotContain("_tracedRawShape").contains("WEDCOD09SEP26");
+        assertThat(row(same.id()).get("settlement_status")).isEqualTo("paid");
     }
 
     // ── /pipeline ────────────────────────────────────────────────────────────

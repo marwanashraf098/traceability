@@ -13,7 +13,11 @@
 --   settlement_status  'none'       no cashCycle seen yet
 --                      'deposited'  cashCycle seen (Bosta settled it into the wallet), no payout yet
 --                      'paid'       a cashout transaction id seen
---                      'unresolved' 45 days after the leg finished with no payout: refresh stops
+--                      'unresolved' a successful Bosta read made 45+ days after the leg finished
+--                                   still shows no payout: refresh stops
+--   settlement_refreshed_at  the refresh job's last attempt (any outcome) — paces the queue
+--   settlement_verified_at   its last SUCCESSFUL read (Bosta returned the delivery) — the only
+--                            evidence 'unresolved' may rest on (stale raw never counts)
 --   cashout_amount     Bosta's WHOLE payout batch total (all of the business's deliveries in
 --                      that transfer, tracked by Traced or not) — never compare it to one leg.
 --   shipment_fees_quoted  raw.shipmentFees (before VAT) — the estimate until a cashCycle exists.
@@ -37,6 +41,7 @@ ALTER TABLE shipments
     ADD COLUMN cashout_amount          numeric(14,2),
     ADD COLUMN next_cashout_date       date,
     ADD COLUMN settlement_refreshed_at timestamptz,
+    ADD COLUMN settlement_verified_at  timestamptz,
     ADD COLUMN settlement_status       text NOT NULL DEFAULT 'none'
         CONSTRAINT shipments_settlement_status_check
         CHECK (settlement_status IN ('none', 'deposited', 'paid', 'unresolved'));
