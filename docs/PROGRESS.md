@@ -37,8 +37,8 @@
   this build): it passed alone twice (21/21) and in the second full run — a timing flake. Frontend 104 files / 740 tests
   green. (Earlier runs on an out-of-memory machine stalled; no failures there.)
 **Analytics slice 3 — Bosta money, backend only (2026-10-07, branch `analytics/s3-money`, merged to main and pushed;
-NOT deployed). Migration V147.**
-- **V147** adds Bosta's per-delivery settlement to `shipments` (wallet.cashCycle + cashout): deposited_at/_amt,
+NOT deployed). Migration V148 (renumbered from V147 on 2026-10-08: Build D took V147).**
+- **V148** adds Bosta's per-delivery settlement to `shipments` (wallet.cashCycle + cashout): deposited_at/_amt,
   cod_settled, bosta_fees, shipping_fees, vat, opening_package / collection / insurance / flex_ship fees,
   promotion_discount, shipment_fees_quoted (raw.shipmentFees, the pre-VAT quote), cash_cycle_id, cashout_txn_id,
   cashout_date (transaction_date, else the txn id's DDMONYY: WEDCOD09SEP26 → 2026-09-09), cashout_amount (Bosta's WHOLE
@@ -65,7 +65,7 @@ NOT deployed). Migration V147.**
   "Stuck with Bosta", delivered-not-paid PER SHIPMENT: two payout weekdays after deposit + refreshed within 24 h),
   `payouts` (per txn: Traced's tracked shipments next to Bosta's batch total, never a difference). Wijha / non-Bosta never
   in money. Shared SQL in `SettlementSql` (fragments are space-padded: Java text blocks strip trailing spaces).
-- **Deploy checklist:** V147 runs on startup; rebuild with `--no-cache`; add
+- **Deploy checklist:** V148 runs on startup; rebuild with `--no-cache`; add
   `ANALYTICS_SETTLEMENT_REFRESH_MAX_PER_TENANT=30` to prod `.env` for day one, then remove it.
 
 **Analytics slice 2 — delivery outcomes, customer returns and cities, backend only (2026-10-07, branch

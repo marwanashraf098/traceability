@@ -20,9 +20,9 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * Analytics slice 3 — V147's backfill of the settlement columns from the payloads already held.
+ * Analytics slice 3 — V148's backfill of the settlement columns from the payloads already held.
  *
- * Flyway to V146, seed shipments with the real payload shapes, then migrate the rest so V147's
+ * Flyway to V147, seed shipments with the real payload shapes, then migrate the rest so V148's
  * UPDATE runs on pre-existing rows. Every backfilled row must equal what ShipmentSettlement.extract()
  * (the Java writer) produces from the same payload — one definition, two implementations.
  */
@@ -40,7 +40,7 @@ class SettlementBackfillTest {
     void backfill_matchesTheJavaExtractor_andSetsStatus() throws Exception {
         assertThat(Flyway.configure()
                 .dataSource(POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword())
-                .locations("classpath:db/migration").target("146").load().migrate().success).isTrue();
+                .locations("classpath:db/migration").target("147").load().migrate().success).isTrue();
 
         UUID tenant = UUID.randomUUID(), store = UUID.randomUUID();
         Map<String, String> payloads = new LinkedHashMap<>();

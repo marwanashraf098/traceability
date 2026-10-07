@@ -29,7 +29,7 @@ import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Analytics slice 3 — re-reads finished Bosta legs until Bosta has paid them, so the settlement
- * columns (V147) catch up with deposits and payouts that happen days after delivery (a status
+ * columns (V148) catch up with deposits and payouts that happen days after delivery (a status
  * webhook no longer fires by then).
  *
  * Reads only (Mode B): the existing per-shipment v0 GET (BostaGateway.fetchDelivery), which runs

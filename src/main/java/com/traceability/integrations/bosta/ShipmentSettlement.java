@@ -17,7 +17,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * Analytics slice 3 — THE extractor from a Bosta delivery payload's wallet to the V147 settlement
+ * Analytics slice 3 — THE extractor from a Bosta delivery payload's wallet to the V148 settlement
  * columns on shipments, and the one writer of those columns from a payload.
  *
  * Called on EVERY path that writes shipments.raw (webhook / poll / walk / discovery ingest, the
