@@ -1,0 +1,989 @@
+<!doctype html><html><head><meta charset=utf8><meta name=viewport content="width=device-width,initial-scale=1,viewport-fit=cover"><style>:root{color-scheme:light;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}html{scroll-padding-top:env(safe-area-inset-top,0px)}body{margin:0;padding:0;font:14px -apple-system,BlinkMacSystemFont,sans-serif;background:#faf9f5;color:#141413}img{max-width:100%}[hidden]:not([hidden=until-found i]){display:none!important}</style></head><body>
+<title>Traced Analytics</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Geist+Mono:wght@400;500;600&display=swap">
+<style>
+/* Layout: Traced app shell (dark sidebar with a collapsible Analytics group, sticky search bar), 12-col card grid; summary first, detail drawers on click. */
+:root{
+  /* Traced app is light-only: dark sidebar, light canvas, white cards, blue accent */
+  color-scheme:light;
+  --bg:#f6f6f7; --surface:#ffffff; --surface-2:#f2f3f5; --hover:rgba(37,99,235,.06);
+  --ink:#111318; --ink-2:#4b5059; --muted:#868b94; --line:#e7e8eb; --line-2:#d3d5da;
+  --accent:#2563eb; --accent-ink:#ffffff; --accent-soft:#e8effd;
+  --rail:#15171c; --rail-ink:#c4c7ce; --rail-muted:#7b808a; --rail-hover:#1f2228; --rail-active:#1c2535; --rail-line:#262a31;
+  --s1:#2a78d6; --s2:#eb6834; --s3:#1baf7a; --neg:#c3c5ca;
+  --o1:#86b6ef; --o2:#5598e7; --o3:#2a78d6; --o4:#1c5cab;
+  --q0:#eef4fc; --q1:#cde2fb; --q2:#9ec5f4; --q3:#5598e7; --q4:#256abf; --q5:#184f95;
+  --good:#0ca30c; --good-ink:#0a6b2c; --good-soft:#e5f5ea;
+  --warn:#fab219; --warn-ink:#8a5300; --warn-soft:#fdf1dc;
+  --serious:#ec835a; --serious-ink:#a3401b; --serious-soft:#fbe9e1;
+  --crit:#dc2626; --crit-ink:#b91c1c; --crit-soft:#fdeaea;
+  --info-ink:#1d4ed8; --info-soft:#e8effd;
+  --v2:#6b5fc7; --v2-soft:#eeecfa;
+  /* meaning colors: green = kept, blue = start totals, amber = waiting, red = lost, grey = given away */
+  --pos:#16a34a; --pos-ink:#15803d; --pos-soft:#e8f6ed;
+  --amber:#f59e0b; --amber-ink:#b45309; --amber-soft:#fef4e4;
+  --red:#e5484d; --red-ink:#c62a2f; --red-soft:#fdecec;
+  --blue:#2a78d6; --blue-ink:#1d4ed8; --blue-soft:#e8f0fb;
+  --grey-m:#b4b8c0; --grey-soft:#f0f1f3;
+  --shadow:0 1px 2px rgba(17,19,24,.04), 0 0 0 1px var(--line);
+  --font-ui:"Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono:"Geist Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+  --r:12px;
+}
+*{box-sizing:border-box}
+html,body{background:var(--bg);color:var(--ink)}
+body{font-family:var(--font-ui);font-size:14px;line-height:1.45;-webkit-font-smoothing:antialiased}
+button,input,select{font:inherit;color:inherit}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:6px}
+.mono{font-family:var(--font-mono);font-size:12px}
+.num{font-variant-numeric:tabular-nums}
+.muted{color:var(--muted)} .ink2{color:var(--ink-2)}
+
+/* shell: Traced sidebar */
+.app{display:grid;grid-template-columns:232px minmax(0,1fr);min-height:100vh}
+.rail{position:sticky;top:0;align-self:start;height:100vh;background:var(--rail);color:var(--rail-ink);display:flex;flex-direction:column;padding-top:env(safe-area-inset-top,0px)}
+.rail-top{display:flex;align-items:center;justify-content:space-between;padding:18px 18px 16px;border-bottom:1px solid var(--rail-line)}
+.wordmark{font-weight:700;font-size:19px;letter-spacing:-.03em;color:#fff;position:relative;padding-right:8px}
+.wordmark i{position:absolute;right:0;top:3px;width:5px;height:5px;border-radius:50%;background:#3b82f6}
+.menu{all:unset;display:none;cursor:pointer;color:#fff;font-size:13px;font-weight:600;padding:6px 10px;border:1px solid var(--rail-line);border-radius:8px}
+.nav{display:flex;flex-direction:column;gap:1px;padding:12px 0;overflow-y:auto;flex:1}
+.nav button{all:unset;cursor:pointer;display:flex;align-items:center;gap:12px;padding:9px 18px;color:var(--rail-ink);font-weight:500;font-size:14px;position:relative}
+.nav button svg{width:17px;height:17px;flex:none;stroke:currentColor;fill:none;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
+.nav button:hover{background:var(--rail-hover);color:#fff}
+.nav button:focus-visible{outline:2px solid #3b82f6;outline-offset:-2px}
+.nav .grp{color:#fff}
+.nav .grp .chev{margin-left:auto;width:14px;height:14px;transition:transform .15s}
+.nav .grp[aria-expanded="false"] .chev{transform:rotate(-90deg)}
+.nav .new{margin-left:6px;font-size:10px;font-weight:700;letter-spacing:.04em;color:#93b4ff;background:rgba(59,130,246,.18);padding:2px 6px;border-radius:4px}
+.nav .grp + .sub{display:flex;flex-direction:column;gap:1px;padding:2px 0 6px}
+.nav .grp[aria-expanded="false"] + .sub{display:none}
+.nav .sub button{padding:7px 18px 7px 47px;font-size:13.5px;color:var(--rail-ink)}
+.nav .sub button::before{content:"";position:absolute;left:26px;top:0;bottom:0;width:1px;background:var(--rail-line)}
+.nav .sub button[aria-current="page"]{background:var(--rail-active);color:#fff;box-shadow:inset 3px 0 0 #3b82f6}
+.nav .sub button[aria-current="page"]::before{background:#3b82f6}
+.navlabel{font-size:11px;font-weight:600;letter-spacing:.08em;color:var(--rail-muted);padding:14px 18px 6px;margin-top:8px;border-top:1px solid var(--rail-line)}
+.rail-user{display:flex;align-items:center;gap:10px;padding:14px 16px calc(14px + env(safe-area-inset-bottom,0px));border-top:1px solid var(--rail-line)}
+.rail-user b{display:block;color:#fff;font-weight:500;font-size:13px}
+.rail-user small{color:var(--rail-muted);font-size:12px}
+.av{width:30px;height:30px;border-radius:50%;background:var(--accent);color:#fff;display:grid;place-items:center;font-size:12px;font-weight:700;flex:none}
+.dot{width:7px;height:7px;border-radius:50%;background:var(--good);display:inline-block}
+
+.topbar{position:sticky;top:0;z-index:6;background:var(--bg);border-bottom:1px solid var(--line);display:flex;align-items:center;gap:12px;padding:10px 24px;padding-top:calc(10px + env(safe-area-inset-top,0px))}
+.search{display:flex;align-items:center;gap:8px;width:340px;max-width:100%;min-width:0;height:34px;padding:0 8px 0 12px;border:1px solid var(--line-2);border-radius:9px;background:var(--surface);color:var(--muted);font-size:13px;cursor:text}
+.search svg{width:15px;height:15px;stroke:currentColor;fill:none;stroke-width:1.8;flex:none}
+.search span{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.search kbd{font-family:var(--font-mono);font-size:11px;border:1px solid var(--line-2);border-radius:5px;padding:1px 5px;color:var(--muted);background:var(--surface-2)}
+.topbar .spacer{flex:1}
+.bell{all:unset;cursor:pointer;position:relative;width:32px;height:32px;display:grid;place-items:center;color:var(--ink-2)}
+.bell svg{width:18px;height:18px;stroke:currentColor;fill:none;stroke-width:1.7}
+.bell b{position:absolute;top:2px;right:1px;background:var(--crit);color:#fff;font-size:9.5px;font-weight:700;border-radius:8px;padding:0 4px;line-height:14px}
+.page{padding-inline:32px;padding-block:28px 56px}
+.phead{display:flex;flex-wrap:wrap;align-items:flex-start;gap:14px 24px;margin-bottom:14px}
+.phead > div:first-child{min-width:0;flex:1}
+.crumb{font-size:12.5px;color:var(--muted);font-weight:500;margin-bottom:2px}
+.phead h1{margin:0;font-size:38px;font-weight:800;letter-spacing:-.03em;line-height:1.1;text-wrap:balance}
+.phead .sub{color:var(--ink-2);font-size:14px;margin-top:6px}
+.dates{display:inline-flex;flex-wrap:wrap;gap:2px;padding:3px;border:1px solid var(--line);border-radius:10px;background:var(--surface-2)}
+.dates button{all:unset;cursor:pointer;padding:6px 11px;border-radius:7px;font-size:13px;color:var(--ink-2);font-weight:500}
+.dates button:hover{color:var(--ink)}
+.dates button[aria-pressed="true"]{background:var(--surface);color:var(--ink);box-shadow:0 1px 2px rgba(17,19,24,.08),0 0 0 1px var(--line)}
+.dates button:focus-visible{outline:2px solid var(--accent)}
+.subbar{display:flex;flex-wrap:wrap;align-items:center;gap:10px 16px;margin-bottom:20px}
+.subbar .spacer{flex:1}
+main{min-width:0}
+.tb-left{min-width:0;margin-right:auto}
+.controls{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.select,.seg,.btn{height:34px;border:1px solid var(--line-2);background:var(--surface);border-radius:8px}
+.select{padding:0 30px 0 10px;appearance:none;background-image:linear-gradient(45deg,transparent 50%,var(--muted) 50%),linear-gradient(135deg,var(--muted) 50%,transparent 50%);background-position:calc(100% - 15px) 15px,calc(100% - 10px) 15px;background-size:5px 5px;background-repeat:no-repeat;cursor:pointer}
+.seg{display:inline-flex;padding:2px;gap:2px}
+.seg button{all:unset;cursor:pointer;padding:0 10px;border-radius:6px;font-size:13px;font-weight:500;color:var(--ink-2);display:flex;align-items:center}
+.seg button[aria-pressed="true"]{background:var(--ink);color:var(--bg)}
+.seg button:focus-visible{outline:2px solid var(--accent)}
+.btn{padding:0 12px;cursor:pointer;font-weight:500;display:inline-flex;align-items:center;gap:6px}
+.btn:hover{background:var(--surface-2)}
+.btn.primary{background:var(--ink);color:var(--bg);border-color:var(--ink)}
+
+.banner{display:flex;gap:10px;align-items:flex-start;padding:10px 14px;border-radius:var(--r);background:var(--surface);border:1px dashed var(--line-2);color:var(--ink-2);font-size:13px;margin-bottom:22px}
+.banner b{color:var(--ink)}
+
+/* grid & cards */
+.tab[hidden]{display:none!important}
+.grid{display:grid;grid-template-columns:repeat(12,minmax(0,1fr));gap:16px}
+.s12{grid-column:span 12}.s8{grid-column:span 8}.s7{grid-column:span 7}.s6{grid-column:span 6}.s5{grid-column:span 5}.s4{grid-column:span 4}.s3{grid-column:span 3}
+.card{background:var(--surface);border-radius:var(--r);box-shadow:var(--shadow);padding:18px 18px 16px;min-width:0;display:flex;flex-direction:column;gap:14px}
+.card-h{display:flex;align-items:flex-start;gap:10px;flex-wrap:wrap}
+.card-h > div{min-width:0;flex:1}
+.card h3{margin:0;font-size:12.5px;font-weight:700;letter-spacing:.05em;text-transform:uppercase}
+.card .desc{margin:2px 0 0;color:var(--muted);font-size:12.5px}
+.chip{display:inline-flex;align-items:center;gap:4px;height:20px;padding:0 7px;border-radius:5px;font-size:11px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;white-space:nowrap}
+.chip.v2{background:var(--v2-soft);color:var(--v2)}
+.chip.src{background:var(--surface-2);color:var(--muted);text-transform:none;letter-spacing:0;font-weight:500}
+.section-title{grid-column:span 12;display:flex;align-items:baseline;gap:10px;margin-top:10px}
+.section-title h2{margin:0;font-size:13px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);font-weight:600}
+.section-title::after{content:"";flex:1;height:1px;background:var(--line)}
+
+/* kpis */
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:16px;grid-column:span 12}
+.kpi{background:var(--surface);border-radius:var(--r);box-shadow:var(--shadow);padding:14px 16px;display:flex;flex-direction:column;gap:4px;min-width:0}
+.kpi .lbl{font-size:12.5px;color:var(--ink-2);display:flex;gap:6px;align-items:center;justify-content:space-between}
+.kpi .val{overflow-wrap:anywhere;font-family:var(--font-mono);font-size:26px;font-weight:600;letter-spacing:-.02em;line-height:1.2}
+.kpi .foot{font-size:12px;color:var(--muted);display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+.delta{font-weight:600;font-size:12px}
+.delta.up{color:var(--good-ink)} .delta.down{color:var(--crit-ink)} .delta.flat{color:var(--muted)}
+.kpi.click{cursor:pointer} .kpi.click:hover{box-shadow:var(--shadow),0 0 0 1px var(--accent)}
+
+/* cash pipeline */
+.pipe{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:0;grid-column:span 12;background:var(--surface);border-radius:var(--r);box-shadow:var(--shadow);overflow:hidden}
+.stage{padding:16px 18px 16px 22px;position:relative;display:flex;flex-direction:column;gap:6px;min-width:0}
+.stage + .stage{border-left:1px solid var(--line)}
+.stage + .stage::before{content:"";position:absolute;left:-7px;top:50%;width:12px;height:12px;background:var(--surface);border-top:1px solid var(--line);border-right:1px solid var(--line);transform:translateY(-50%) rotate(45deg)}
+.stage .step{font-size:11.5px;text-transform:uppercase;letter-spacing:.07em;color:var(--muted);font-weight:600}
+.stage .amt{font-family:var(--font-mono);font-size:24px;font-weight:600;letter-spacing:-.02em;line-height:1.15}
+.stage .amt small{font-size:13px;color:var(--muted);font-weight:500;margin-right:4px}
+.stage .meta{font-size:12.5px;color:var(--ink-2)}
+.stage .calc{font-size:12px;color:var(--muted)}
+.stage .amt{color:var(--amber-ink)}
+.stage.bank{background:var(--pos-soft)}
+.stage.bank .step{color:var(--pos-ink)}
+.stage.bank .amt{color:var(--pos-ink);font-size:28px}
+.stage.bank + .stage::before{background:var(--pos-soft)}
+.bar-track{height:6px;border-radius:3px;background:var(--surface-2);overflow:hidden;margin-top:4px}
+.bar-track i{display:block;height:100%;border-radius:3px;background:var(--amber)}
+
+/* alerts */
+.alerts{display:flex;flex-direction:column;gap:8px}
+.alert{all:unset;cursor:pointer;display:grid;grid-template-columns:22px minmax(0,1fr) auto;gap:10px;align-items:start;padding:10px 12px;border-radius:8px;background:var(--surface-2)}
+.alert:hover{background:var(--hover)}
+.alert:focus-visible{outline:2px solid var(--accent)}
+.alert .ic{width:22px;height:22px;border-radius:6px;display:grid;place-items:center;font-weight:700;font-size:12px}
+.alert.crit .ic{background:var(--crit-soft);color:var(--crit-ink)}
+.alert.warn .ic{background:var(--warn-soft);color:var(--warn-ink)}
+.alert.info .ic{background:var(--info-soft);color:var(--info-ink)}
+.alert b{display:block;font-weight:600;font-size:13.5px}
+.alert span{color:var(--muted);font-size:12.5px}
+.alert .go{color:var(--accent);font-size:12.5px;font-weight:600;white-space:nowrap;align-self:center}
+
+/* pills */
+.pill{display:inline-flex;align-items:center;gap:5px;height:22px;padding:0 8px;border-radius:11px;font-size:12px;font-weight:600;white-space:nowrap}
+.pill i{font-style:normal;font-size:11px}
+.pill.good{background:var(--good-soft);color:var(--good-ink)}
+.pill.warn{background:var(--warn-soft);color:var(--warn-ink)}
+.pill.serious{background:var(--serious-soft);color:var(--serious-ink)}
+.pill.crit{background:var(--crit-soft);color:var(--crit-ink)}
+.pill.info{background:var(--info-soft);color:var(--info-ink)}
+.pill.neutral{background:var(--surface-2);color:var(--ink-2)}
+
+/* charts */
+.legend{display:flex;flex-wrap:wrap;gap:6px 16px;font-size:12.5px;color:var(--ink-2)}
+.legend span{display:inline-flex;align-items:center;gap:6px}
+.legend i{width:14px;height:3px;border-radius:2px;display:inline-block}
+.legend i.sq{width:10px;height:10px;border-radius:3px}
+svg.chart{width:100%;height:auto;display:block;overflow:visible}
+svg.chart text{fill:var(--muted);font-size:11px;font-family:var(--font-ui)}
+svg.chart text.val{fill:var(--ink-2);font-weight:600}
+svg.chart .grid line{stroke:var(--line);stroke-width:1}
+svg.chart .base{stroke:var(--line-2);stroke-width:1}
+svg.chart .hit{fill:transparent;cursor:crosshair}
+svg.chart .hit:hover{fill:var(--hover)}
+.hbars{display:flex;flex-direction:column;gap:9px}
+.hbar{display:grid;grid-template-columns:minmax(90px,30%) minmax(0,1fr) auto;gap:10px;align-items:center;font-size:13px}
+.hbar .l{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink-2)}
+.hbar .t{height:12px;position:relative}
+.hbar .t i{position:absolute;left:0;top:0;bottom:0;border-radius:0 4px 4px 0;background:var(--s1);min-width:2px}
+.hbar .v{text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums;display:flex;gap:8px;align-items:center;justify-content:flex-end}
+.hbar[data-tip]{cursor:default}
+.hbar[data-tip]:hover .l{color:var(--ink)}
+.funnel{display:flex;flex-direction:column;gap:6px}
+.fstep{display:grid;grid-template-columns:110px minmax(0,1fr);gap:12px;align-items:center}
+.fstep .l{font-size:13px;color:var(--ink-2)}
+.frow{display:flex;align-items:center;gap:10px;min-width:0}
+.frow span{font-weight:600;font-size:13px;white-space:nowrap;color:var(--ink-2);font-variant-numeric:tabular-nums}
+.fstep .bar{height:24px;border-radius:0 4px 4px 0;flex:none}
+.fconv{margin-left:122px;font-size:12px;color:var(--muted);display:flex;align-items:center;gap:6px}
+.fconv b{color:var(--ink-2)}
+.cols{display:flex;align-items:flex-end;gap:14px;height:170px;padding-top:18px;border-bottom:1px solid var(--line-2)}
+.cols .c{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;height:100%;gap:4px;min-width:0}
+.cols .c i{width:min(46px,100%);background:var(--s1);border-radius:4px 4px 0 0;display:block}
+.cols .c b{font-size:12px;font-weight:600;color:var(--ink-2);font-variant-numeric:tabular-nums}
+.cols-l{display:flex;gap:14px;font-size:12px;color:var(--muted)}
+.cols-l span{flex:1;text-align:center}
+.split{display:flex;height:14px;border-radius:4px;overflow:hidden;gap:2px}
+.split i{display:block;height:100%}
+.heat{display:grid;grid-template-columns:34px repeat(24,minmax(14px,1fr));gap:2px;font-size:10.5px;color:var(--muted);min-width:520px}
+.heat i{aspect-ratio:1.4;border-radius:2px;display:block}
+.heat span{display:flex;align-items:center}
+.scale{display:flex;align-items:center;gap:6px;font-size:11.5px;color:var(--muted)}
+.scale i{width:18px;height:10px;border-radius:2px;display:inline-block}
+
+/* tables */
+.tw{overflow-x:auto;margin-inline:-18px;padding-inline:18px}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th{text-align:left;font-weight:600;color:var(--muted);font-size:11.5px;text-transform:uppercase;letter-spacing:.05em;padding:0 10px 8px;border-bottom:1px solid var(--line);white-space:nowrap}
+td{padding:9px 10px;border-bottom:1px solid var(--line);white-space:nowrap;vertical-align:middle}
+th:first-child,td:first-child{padding-left:0} th:last-child,td:last-child{padding-right:0}
+td.r,th.r{text-align:right}
+td.r{font-variant-numeric:tabular-nums}
+tfoot td{border-bottom:0;border-top:1px solid var(--line-2)}
+tr.click{cursor:pointer}
+tr.click:hover td{background:var(--hover)}
+th.sort{cursor:pointer;user-select:none}
+th.sort:hover{color:var(--ink)}
+th.sort[aria-sort] {color:var(--ink)}
+.cell-main{font-weight:500}
+.cell-sub{color:var(--muted);font-size:12px}
+.spark{width:72px;height:22px;display:block}
+.abc{display:inline-grid;place-items:center;width:22px;height:22px;border-radius:6px;font-weight:700;font-size:12px;background:var(--surface-2);color:var(--ink-2)}
+.abc.A{background:var(--accent-soft);color:var(--accent)}
+
+.filters{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.fchip{all:unset;cursor:pointer;height:28px;padding:0 11px;border-radius:14px;border:1px solid var(--line-2);font-size:12.5px;font-weight:500;color:var(--ink-2);display:inline-flex;align-items:center;gap:6px}
+.fchip b{font-weight:600;color:var(--muted);font-size:11.5px}
+.fchip[aria-pressed="true"]{background:var(--ink);color:var(--bg);border-color:var(--ink)}
+.fchip[aria-pressed="true"] b{color:var(--bg);opacity:.7}
+.fchip:focus-visible{outline:2px solid var(--accent)}
+.search{height:32px;border:1px solid var(--line-2);background:var(--surface);border-radius:8px;padding:0 10px;min-width:0;width:220px;max-width:100%}
+
+.stat-row{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:12px}
+.mini{display:flex;flex-direction:column;gap:2px}
+.mini .lbl{font-size:12px;color:var(--muted)}
+.mini .val{font-size:18px;font-weight:600;letter-spacing:-.01em}
+.list{display:flex;flex-direction:column}
+.li{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:9px 0;border-bottom:1px solid var(--line);font-size:13px}
+.li:last-child{border-bottom:0}
+.li > div{min-width:0}
+.note{font-size:12px;color:var(--muted)}
+.link{all:unset;cursor:pointer;color:var(--accent);font-weight:600;font-size:12.5px}
+.link:hover{text-decoration:underline}
+
+/* drawer */
+.scrim{position:fixed;inset:0;background:rgba(10,10,10,.35);z-index:20}
+.drawer{position:fixed;top:0;right:0;bottom:0;width:min(560px,100%);background:var(--bg);z-index:21;overflow-y:auto;padding:calc(20px + env(safe-area-inset-top,0px)) 22px calc(28px + env(safe-area-inset-bottom,0px));box-shadow:-12px 0 32px rgba(0,0,0,.15);display:flex;flex-direction:column;gap:16px}
+.drawer-h{display:flex;gap:12px;align-items:flex-start}
+.drawer-h > div{flex:1;min-width:0}
+.drawer h2{margin:0;font-size:19px;letter-spacing:-.015em}
+.x{all:unset;cursor:pointer;width:32px;height:32px;border-radius:8px;display:grid;place-items:center;font-size:18px;color:var(--ink-2)}
+.x:hover{background:var(--surface-2)}
+.timeline{display:flex;flex-direction:column;gap:0;position:relative}
+.tl{display:grid;grid-template-columns:18px minmax(0,1fr) auto;gap:10px;padding-bottom:12px;position:relative;font-size:13px}
+.tl::before{content:"";position:absolute;left:8px;top:14px;bottom:0;width:2px;background:var(--line)}
+.tl:last-child::before{display:none}
+.tl i{width:10px;height:10px;border-radius:50%;margin:4px 0 0 4px;background:var(--line-2);box-shadow:0 0 0 2px var(--bg);position:relative;z-index:1}
+.tl.out i{background:var(--s1)} .tl.back i{background:var(--serious)} .tl.done i{background:var(--good)} .tl.in i{background:var(--ink-2)}
+
+.bignum{display:flex;flex-wrap:wrap;align-items:flex-end;gap:10px 28px;padding-bottom:4px}
+.bignum .big{color:var(--red-ink);font-family:var(--font-mono);font-size:34px;font-weight:600;letter-spacing:-.03em;line-height:1}
+.bignum .big small{font-size:15px;color:var(--muted);font-weight:500;margin-right:5px}
+.bignum .mini .val{font-size:17px}
+.kpi .open{color:var(--accent);font-weight:600}
+.kt{width:26px;height:26px;border-radius:7px;display:inline-grid;place-items:center;flex:none}
+.kt svg{width:15px;height:15px;stroke:currentColor;fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+.kt.good{background:var(--pos-soft);color:var(--pos-ink)} .kt.bad{background:var(--red-soft);color:var(--red-ink)} .kt.warn{background:var(--amber-soft);color:var(--amber-ink)} .kt.blue{background:var(--blue-soft);color:var(--blue-ink)} .kt.grey{background:var(--grey-soft);color:var(--ink-2)}
+.kpi .lbl .lt{display:flex;align-items:center;gap:8px;min-width:0}
+.kpi.t-good .val{color:var(--pos-ink)} .kpi.t-bad .val{color:var(--red-ink)} .kpi.t-warn .val{color:var(--amber-ink)}
+.kpi.t-good.hero{box-shadow:0 0 0 1.5px var(--pos), 0 1px 2px rgba(17,19,24,.04)}
+.wlegend{display:flex;flex-wrap:wrap;gap:6px 14px;font-size:12px;color:var(--ink-2)}
+.wlegend span{display:inline-flex;align-items:center;gap:6px}
+.wlegend i{width:10px;height:10px;border-radius:3px;display:inline-block}
+.minibar{display:inline-block;width:90px;height:8px;border-radius:4px;background:var(--grey-soft);overflow:hidden;vertical-align:middle;margin-right:8px}
+.minibar i{display:block;height:100%;border-radius:4px}
+.dtabs{display:inline-flex;gap:2px;padding:2px;border:1px solid var(--line-2);border-radius:8px;background:var(--surface)}
+.dtabs button{all:unset;cursor:pointer;padding:5px 12px;border-radius:6px;font-size:13px;font-weight:500;color:var(--ink-2)}
+.dtabs button[aria-pressed="true"]{background:var(--ink);color:var(--bg)}
+.dtabs button:focus-visible{outline:2px solid var(--accent)}
+.drawer.wide{width:min(760px,100%)}
+#tip{position:fixed;z-index:30;pointer-events:none;background:var(--ink);color:var(--bg);font-size:12px;line-height:1.45;padding:7px 10px;border-radius:7px;white-space:pre-line;max-width:260px;box-shadow:0 4px 14px rgba(0,0,0,.18)}
+#toast{position:fixed;left:50%;bottom:calc(20px + env(safe-area-inset-bottom,0px));transform:translateX(-50%);background:var(--ink);color:var(--bg);padding:10px 16px;border-radius:9px;font-size:13px;z-index:40;max-width:calc(100% - 32px)}
+
+@media (max-width:1100px){ .s8,.s7,.s6,.s5,.s4{grid-column:span 6} .s3{grid-column:span 6} .pipe{grid-template-columns:repeat(2,minmax(0,1fr))} .stage:nth-child(3){border-left:0} .stage:nth-child(3)::before{display:none} .stage:nth-child(n+3){border-top:1px solid var(--line)} }
+@media (max-width:860px){
+  .app{grid-template-columns:minmax(0,1fr)}
+  .rail{position:static;height:auto}
+  .rail-top{border-bottom:0}
+  .menu{display:inline-block}
+  .nav,.rail-user{display:none}
+  .rail.open .nav{display:flex;max-height:70vh;border-top:1px solid var(--rail-line)}
+  .topbar{position:static;padding-inline:16px}
+  .page{padding-inline:16px;padding-block:20px 48px}
+  .phead h1{font-size:30px}
+  .s8,.s7,.s6,.s5,.s4,.s3{grid-column:span 12}
+}
+@media (max-width:560px){
+  .pipe{grid-template-columns:minmax(0,1fr)}
+  .stage + .stage{border-left:0;border-top:1px solid var(--line)}
+  .stage + .stage::before{display:none}
+  .fstep{grid-template-columns:84px minmax(0,1fr)} .fconv{margin-left:96px}
+  .hbar{grid-template-columns:minmax(80px,34%) minmax(0,1fr) auto}
+}
+@media (prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+
+<div class="app">
+  <aside class="rail" id="rail">
+    <div class="rail-top"><div class="wordmark">traced<i></i></div><button class="menu" id="menuBtn" type="button" aria-expanded="false" aria-controls="nav">Menu</button></div>
+    <nav class="nav" aria-label="Traced" id="nav"></nav>
+    <div class="rail-user"><span class="av">DO</span><div><b>Demo Owner</b><small>Owner</small></div></div>
+  </aside>
+
+  <main>
+    <div class="topbar">
+      <div class="search" data-ext="Search"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg><span>Search barcode or AWB…</span><kbd>⌘K</kbd></div>
+      <span class="spacer"></span>
+      <button class="bell" type="button" data-ext="Notifications" aria-label="Notifications, 2 new"><svg viewBox="0 0 24 24"><path d="M6 8a6 6 0 1112 0c0 7 3 8 3 8H3s3-1 3-8"/><path d="M10 20a2 2 0 004 0"/></svg><b>2</b></button>
+      <span class="av" aria-hidden="true">DO</span>
+    </div>
+    <div class="page">
+    <div class="phead">
+      <div><div class="crumb">Analytics</div><h1 id="pageTitle">Summary</h1><div class="sub" id="pageSub"></div></div>
+      <div class="dates" role="group" aria-label="Date range" id="dates">
+        <button type="button" aria-pressed="false">Today</button><button type="button" aria-pressed="false">Yesterday</button><button type="button" aria-pressed="false">Last 7 days</button><button type="button" aria-pressed="true">Last 30 days</button><button type="button" aria-pressed="false">This month</button><button type="button" aria-pressed="false">Custom</button>
+      </div>
+    </div>
+    <div class="subbar">
+      <div class="seg" role="group" aria-label="Revenue basis">
+        <button type="button" id="mBooked" aria-pressed="false" data-tip="Booked: the value of every order placed, before delivery">Booked</button>
+        <button type="button" id="mReal" aria-pressed="true" data-tip="Realized: delivered and kept, after failed deliveries and returns">Realized</button>
+      </div>
+      <span class="spacer"></span>
+      <span class="note"><span class="dot"></span> Shopify + Bosta synced · 09:40</span>
+      <button class="btn" type="button" id="exportBtn">Export CSV</button>
+    </div>
+
+    <div class="banner"><span>ⓘ</span><div><b>Mockup with sample data.</b> All numbers are illustrative, for a store with about 1,400 orders a month that ships with Bosta. Items tagged <span class="chip v2">V2</span> are planned for the second release.</div></div>
+
+    <section class="tab" id="tab-overview"></section>
+    <section class="tab" id="tab-revenue" hidden></section>
+    <section class="tab" id="tab-products" hidden></section>
+    <section class="tab" id="tab-inventory" hidden></section>
+    <section class="tab" id="tab-delivery" hidden></section>
+    <section class="tab" id="tab-money" hidden></section>
+    <section class="tab" id="tab-customers" hidden></section>
+    <section class="tab" id="tab-orders" hidden></section>
+    </div>
+  </main>
+</div>
+
+<div id="tip" hidden></div>
+<div id="toast" hidden></div>
+<div class="scrim" id="scrim" hidden></div>
+<aside class="drawer" id="drawer" hidden aria-modal="true" role="dialog"></aside>
+
+<script>
+/* ---------- helpers ---------- */
+const $ = s => document.querySelector(s);
+const fmtN = n => Math.round(n).toLocaleString('en-US');
+const egp = n => 'EGP ' + fmtN(n);
+const egpK = n => { const a = Math.abs(n); const s = n < 0 ? '−' : ''; return a >= 1e6 ? s+'EGP '+(a/1e6).toFixed(2)+'M' : a >= 1e4 ? s+'EGP '+Math.round(a/1e3)+'k' : s+'EGP '+fmtN(a); };
+const axK = n => n >= 1e6 ? (n/1e6).toFixed(1)+'M' : n >= 1e3 ? Math.round(n/1e3)+'k' : String(Math.round(n));
+const pct = (n, d=1) => n.toFixed(d) + '%';
+const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+function niceMax(m){ const p = Math.pow(10, Math.floor(Math.log10(m))); for (const s of [1,1.2,1.5,2,2.5,3,4,5,6,8,10]) if (s*p >= m) return s*p; return 10*p; }
+function normalize(rows, key, total){ const s = rows.reduce((a,r)=>a+r[key],0); rows.forEach(r => r[key] = r[key]*total/s); return rows; }
+const state = { mode:'real', v2:true, tab:'overview', orderFilter:'All', orderQ:'', skuSort:{k:'rev',d:-1} };
+const rv = r => state.mode === 'real' ? r.real : r.booked;
+const modeLbl = () => state.mode === 'real' ? 'realized' : 'booked';
+
+function card(title, body, o={}){
+  return `<article class="card ${o.span||'s6'} ${o.v2?'v2only':''}" ${o.id?`id="${o.id}"`:''}>
+    <div class="card-h"><div><h3>${title}</h3>${o.desc?`<p class="desc">${o.desc}</p>`:''}</div>${o.v2?'<span class="chip v2">V2</span>':''}${o.right||''}</div>
+    ${body}</article>`;
+}
+const KI = {
+  cash:'<rect x="3" y="6" width="18" height="12" rx="2"/><circle cx="12" cy="12" r="2.5"/>', bag:'<path d="M5 8h14l-1 12H6z"/><path d="M9 8a3 3 0 016 0"/>',
+  tag:'<path d="M3 12V4h8l10 10-8 8z"/><circle cx="7.5" cy="8.5" r="1.2"/>', truck:'<path d="M3 7h11v9H3zM14 10h4l3 3v3h-7z"/><circle cx="7" cy="18" r="1.8"/><circle cx="17" cy="18" r="1.8"/>',
+  receipt:'<path d="M6 3h12v18l-3-2-3 2-3-2-3 2z"/><path d="M9 8h6M9 12h6"/>', clock:'<circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/>',
+  chart:'<path d="M4 20h16"/><path d="M7 16v-5M12 16V7M17 16v-8"/>', percent:'<path d="M5 19L19 5"/><circle cx="7" cy="7" r="2"/><circle cx="17" cy="17" r="2"/>',
+  box:'<path d="M12 3l8 4.5v9L12 21l-8-4.5v-9z"/><path d="M12 12l8-4.5M12 12L4 7.5M12 12v9"/>', star:'<path d="M12 3.5l2.6 5.3 5.9.9-4.3 4.1 1 5.8L12 16.8 6.8 19.6l1-5.8L3.5 9.7l5.9-.9z"/>',
+  alert:'<path d="M12 3l9.5 17h-19z"/><path d="M12 10v4M12 17.5v.01"/>', repeat:'<path d="M4 9h13l-3-3M20 15H7l3 3"/>', users:'<circle cx="9" cy="8" r="3.2"/><path d="M3 20c.7-3.4 3-5.2 6-5.2s5.3 1.8 6 5.2"/><path d="M16 5a3.2 3.2 0 010 6.3M18 14.6c1.7.7 2.7 2.4 3 5"/>'};
+const KTONE = {
+  'Net revenue':['good','cash'], 'Orders':['blue','bag'], 'Average order value':['blue','tag'], 'Delivery success rate':['good','truck'], 'Bosta cost per delivery':['grey','receipt'], 'Payout lag':['warn','clock'],
+  'Gross sales':['blue','chart'], 'Booked revenue':['blue','bag'], 'Net realized revenue':['good','cash'], 'Realized ÷ booked':['good','percent'], 'Gross margin':['good','percent'],
+  'Active SKUs':['blue','box'], 'Units sold':['blue','box'], 'Best SKU by true net':['good','star'], 'SKUs losing money':['bad','alert'],
+  'Pieces in warehouse':['blue','box'], 'Stock value at cost':['warn','cash'], 'Average days in stock':['warn','clock'], 'Pieces moved 4+ times':['bad','repeat'],
+  'Failed deliveries':['bad','alert'], 'Order → handed to Bosta':['blue','clock'], 'Handed to Bosta → delivered':['blue','truck'],
+  'Shipping fees':['grey','truck'], 'Failed, exchange and return shipping':['bad','repeat'], 'Other Bosta fees':['grey','receipt'], 'Cost per successful delivery':['grey','receipt'], 'Cost per unsuccessful delivery':['bad','alert'], 'Contribution profit':['good','cash'],
+  'Customers who ordered':['blue','users'], 'Repeat purchase rate':['good','repeat'], 'Days between orders':['blue','clock'], 'Revenue from returning customers':['good','users'],
+  'Realized revenue':['good','cash'], 'Stock left':['blue','box'], 'Returns · exchanges':['bad','repeat'], 'Failed delivery':['bad','alert'],
+  'Cost per failed delivery':['bad','alert'], 'Total cost':['bad','receipt'], 'Sales lost':['bad','alert'], 'Total extra shipping':['bad','repeat'], 'Exchanges':['bad','repeat'], 'Returns':['bad','repeat'], 'True net':['good','cash']};
+function kpi(lbl, val, foot='', o={}){
+  const key = Object.keys(KTONE).find(k => lbl === k || lbl.startsWith(k+' ('));
+  const [tone, ic] = o.tone ? [o.tone, o.ic || (KTONE[key]||[])[1] || 'chart'] : (KTONE[key] || ['grey','chart']);
+  return `<div class="kpi t-${tone} ${o.hero?'hero':''} ${o.click||o.drill?'click':''} ${o.v2?'v2only':''}" ${o.click?`data-go="${o.click}" tabindex="0" role="button"`:''} ${o.drill?`data-drill="${o.drill}" tabindex="0" role="button"`:''} ${o.tip?`data-tip="${esc(o.tip)}"`:''}>
+    <div class="lbl"><span class="lt"><span class="kt ${tone}" aria-hidden="true"><svg viewBox="0 0 24 24">${KI[ic]||KI.chart}</svg></span><span>${lbl}</span></span>${o.v2?'<span class="chip v2">V2</span>':''}</div><div class="val">${val}</div><div class="foot">${foot}</div></div>`;
+}
+const delta = (txt, dir) => `<span class="delta ${dir}">${dir==='up'?'▲':dir==='down'?'▼':'–'} ${txt}</span>`;
+const sec = t => `<div class="section-title"><h2>${t}</h2></div>`;
+function pill(kind, txt){ const ic = {good:'✓',warn:'!',serious:'↺',crit:'✕',info:'◷',neutral:'→'}[kind]; return `<span class="pill ${kind}"><i>${ic}</i>${txt}</span>`; }
+function ratePill(r, warnAt=78, critAt=68){ const k = r < critAt ? 'crit' : r < warnAt ? 'warn' : 'good'; return pill(k, pct(r)); }
+
+function hbars(rows, o={}){
+  const max = o.max || Math.max(...rows.map(r=>r.v));
+  return `<div class="hbars">${rows.map(r => `<div class="hbar" ${r.tip?`data-tip="${esc(r.tip)}"`:''}>
+    <span class="l" title="${esc(r.l)}">${r.l}</span><span class="t"><i style="width:${Math.max(.5, r.v/max*100)}%;${(r.c||o.color)?`background:${r.c||o.color}`:''}"></i></span>
+    <span class="v">${r.d}${r.x||''}</span></div>`).join('')}</div>`;
+}
+
+function lineChart({labels, series, fmtY=axK, H=230, every=5}){
+  const W=640, L=50, R=14, T=12, B=26, n=labels.length;
+  const max = niceMax(Math.max(...series.flatMap(s=>s.values)) * 1.04);
+  const x = i => L + (W-L-R) * i/(n-1), y = v => T + (H-T-B) * (1 - v/max);
+  let g = '<g class="grid">';
+  for (let t=0;t<=4;t++){ const v=max*t/4; g += `<line x1="${L}" x2="${W-R}" y1="${y(v)}" y2="${y(v)}"/><text x="${L-8}" y="${y(v)+4}" text-anchor="end">${fmtY(v)}</text>`; }
+  g += '</g>';
+  let xl = labels.map((l,i) => (i % every === 0 || i === n-1) ? `<text x="${x(i)}" y="${H-6}" text-anchor="middle">${l}</text>` : '').join('');
+  let paths = series.map(s => {
+    const d = s.values.map((v,i)=>`${i?'L':'M'}${x(i).toFixed(1)},${y(v).toFixed(1)}`).join('');
+    const area = s.area ? `<path d="${d}L${x(n-1)},${y(0)}L${x(0)},${y(0)}Z" style="fill:${s.color};opacity:.1"/>` : '';
+    const last = s.values[n-1];
+    return `${area}<path d="${d}" style="fill:none;stroke:${s.color};stroke-width:2;stroke-linejoin:round;stroke-linecap:round"/>
+      <circle cx="${x(n-1)}" cy="${y(last)}" r="4.5" style="fill:${s.color};stroke:var(--surface);stroke-width:2"/>`;
+  }).join('');
+  const bw = (W-L-R)/(n-1);
+  const hits = labels.map((l,i)=>`<rect class="hit" x="${x(i)-bw/2}" y="${T}" width="${bw}" height="${H-T-B}" data-tip="${esc(l+'\n'+series.map(s=>s.name+': '+(s.fmt||egp)(s.values[i])).join('\n'))}"/>`).join('');
+  const leg = series.length > 1 ? `<div class="legend">${series.map(s=>`<span><i style="background:${s.color}"></i>${s.name}</span>`).join('')}</div>` : '';
+  return `${leg}<svg class="chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(series.map(s=>s.name).join(', '))} over time">${g}<line class="base" x1="${L}" x2="${W-R}" y1="${y(0)}" y2="${y(0)}"/>${paths}${xl}${hits}</svg>`;
+}
+
+function waterfall(steps){
+  const W=640, H=250, L=8, R=8, T=26, B=40, n=steps.length;
+  let run=0; const bars = steps.map(s => { if (s.total){ const b={...s, from:0, to:s.v}; run=s.v; return b; } const b={...s, from:run+s.v, to:run}; run+=s.v; return b; });
+  const max = niceMax(Math.max(...bars.map(b=>Math.max(b.from,b.to))));
+  const slot=(W-L-R)/n, bw=Math.min(56, slot*.62);
+  const y = v => T + (H-T-B)*(1-v/max);
+  let out = '';
+  bars.forEach((b,i)=>{
+    const cx = L + slot*i + slot/2, top=y(Math.max(b.from,b.to)), h=Math.max(2, Math.abs(y(b.from)-y(b.to)));
+    const col = b.col || (b.total ? 'var(--blue)' : 'var(--grey-m)');
+    if (b.hero) out += `<rect x="${cx-slot/2+4}" y="${T-22}" width="${slot-8}" height="${H-T-B+22+36}" rx="8" style="fill:var(--pos-soft)"/>`;
+    out += `<rect x="${cx-bw/2}" y="${top}" width="${bw}" height="${h}" rx="3" style="fill:${col}"/>`;
+    if (i < n-1) { const yy = y(b.total ? b.to : b.from); out += `<line x1="${cx+bw/2}" x2="${cx+slot-bw/2}" y1="${yy}" y2="${yy}" style="stroke:var(--line-2);stroke-width:1"/>`; }
+    out += `<text class="val" x="${cx}" y="${top-7}" text-anchor="middle" style="${b.hero?'fill:var(--pos-ink);font-size:13px;font-weight:700':''}">${b.total?'':'−'}${axK(Math.abs(b.v))}</text>`;
+    const words = b.l.split(' '); const l1 = words.slice(0, Math.ceil(words.length/2)).join(' '), l2 = words.slice(Math.ceil(words.length/2)).join(' ');
+    const ls = b.hero ? ' style="fill:var(--pos-ink);font-weight:700"' : '';
+    out += `<text x="${cx}" y="${H-B+16}" text-anchor="middle"${ls}>${l1}</text><text x="${cx}" y="${H-B+30}" text-anchor="middle"${ls}>${l2}</text>`;
+    out += `<rect class="hit" x="${cx-slot/2}" y="${T-20}" width="${slot}" height="${H-T-B+20}" data-tip="${esc(b.l+'\n'+(b.total?'':'−')+egp(Math.abs(b.v))+(b.note?'\n'+b.note:''))}"/>`;
+  });
+  return `<svg class="chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="Revenue waterfall"><line class="base" x1="${L}" x2="${W-R}" y1="${y(0)}" y2="${y(0)}"/>${out}</svg>`;
+}
+
+function spark(vals, color='var(--s1)'){
+  const W=72,H=22,mx=Math.max(...vals),mn=Math.min(...vals),n=vals.length;
+  const pts = vals.map((v,i)=>`${(i/(n-1)*(W-4)+2).toFixed(1)},${(H-3-(v-mn)/((mx-mn)||1)*(H-6)).toFixed(1)}`);
+  return `<svg class="spark" viewBox="0 0 ${W} ${H}" aria-hidden="true"><polyline points="${pts.join(' ')}" style="fill:none;stroke:${color};stroke-width:1.6;stroke-linejoin:round"/><circle cx="${pts[n-1].split(',')[0]}" cy="${pts[n-1].split(',')[1]}" r="2.4" style="fill:${color}"/></svg>`;
+}
+function seeded(i){ const x = Math.sin(i*12.9898)*43758.5453; return x - Math.floor(x); }
+
+/* ---------- sample data ---------- */
+const T = { orders:1390, unfulfilled:88, transit:182, failed:168, delivered:952, paidOrders:781, aov:1150,
+  booked:1598500, discounts:92400, returns:61300, paid:898150, awaiting:196650, transitVal:209300, unfulVal:101200, failedVal:193200,
+  success:85.0, wRate:83.4, ship:78120, failCost:13245, other:16072, cogs:392700 };
+T.realized = T.delivered*T.aov - T.returns; // 1,033,500
+T.bosta = T.ship + T.failCost + T.other;
+
+const days = []; const start = new Date(2026, 8, 7);
+for (let i=0;i<30;i++){ const d = new Date(start); d.setDate(d.getDate()+i); days.push(d.toLocaleDateString('en-GB',{day:'numeric',month:'short'})); }
+const trendB = days.map((_,i)=> ({v: 1 + .2*Math.sin(i/7*2*Math.PI + 1.2) + (seeded(i)-.5)*.18 + i*.006}));
+const trendR = days.map((_,i)=> ({v: trendB[i].v * (i < 23 ? .67 + (seeded(i+40)-.5)*.06 : .67 * Math.max(.08, 1-(i-22)/8)) }));
+normalize(trendB,'v',T.booked); normalize(trendR,'v',T.realized);
+
+const channels = [
+  {l:'Instagram', booked:655400, real:421100, s:84.1}, {l:'Online store', booked:383600, real:271800, s:91.2},
+  {l:'TikTok', booked:303700, real:176400, s:76.0}, {l:'WhatsApp', booked:175800, real:121300, s:88.3}, {l:'Other', booked:80000, real:42900, s:82.9}];
+const payments = [
+  {l:'Cash on delivery', booked:1310800, real:806400, s:82.6, share:82}, {l:'Card', booked:175800, real:145300, s:97.1, share:11},
+  {l:'InstaPay', booked:79900, real:62600, s:98.4, share:5}, {l:'valU', booked:32000, real:19200, s:95.0, share:2}];
+const collections = [
+  {l:'Tees & tanks', booked:511500, real:338900, m:61.2}, {l:'Bottoms', booked:431600, real:281300, m:58.4},
+  {l:'Hoodies & sweats', booked:367700, real:236000, m:55.9}, {l:'Shirts & polos', booked:207800, real:127900, m:52.1}, {l:'Outerwear', booked:79900, real:49400, m:47.3}];
+const govs = [['Cairo',.34,89.6],['Giza',.22,87.9],['Alexandria',.13,84.1],['Qalyubia',.06,79.3],['Dakahlia',.05,77.0],['Sharqia',.04,74.2],['Gharbia',.035,76.4],['Monufia',.025,72.0],['Beheira',.02,70.3],['Red Sea',.015,81.2],['Assiut',.02,63.8],['Sohag',.015,60.5],['Other',.03,71.0]]
+  .map(([l,sh,s]) => ({l, booked:T.booked*sh, real:T.booked*sh*s/100*.93, s, orders:Math.round(T.orders*sh), failed:Math.round(T.orders*sh*(1-s/100)*.9)}));
+normalize(govs,'real',T.realized);
+const codes = [
+  {c:'WELCOME10', o:212, rev:243800, cost:24380, s:86.0}, {c:'SUMMER20', o:148, rev:170200, cost:34040, s:81.1},
+  {c:'TIKTOK15', o:96, rev:110400, cost:16560, s:71.9}, {c:'VIP25', o:31, rev:52600, cost:13150, s:96.8}, {c:'FREESHIP', o:70, rev:80500, cost:4270, s:88.6}];
+
+const SKUS = [
+  ['BXT-BLK-L','Boxy Tee','Black / L',650,212,38,7.1,18,3.8,6.1,9.4,210,2],
+  ['BXT-BLK-M','Boxy Tee','Black / M',650,188,22,6.3,15,3.1,7.4,10.2,210,1],
+  ['HWH-GRY-L','Heavyweight Hoodie','Grey / L',1450,131,64,4.4,27,5.2,8.8,12.6,520,3],
+  ['WLC-OLV-32','Wide-Leg Cargo','Olive / 32',1250,118,9,3.9,21,7.9,14.2,15.1,430,6],
+  ['BXT-WHT-L','Boxy Tee','White / L',650,104,71,3.5,33,4.4,5.0,11.0,210,1],
+  ['LNS-SND-M','Linen Shirt','Sand / M',1100,86,45,2.9,38,9.3,11.6,13.9,380,4],
+  ['TRK-BLK-M','Track Pants','Black / M',950,79,6,2.6,12,4.0,9.1,18.4,300,5],
+  ['RBT-WHT-S','Ribbed Tank','White / S',450,74,102,2.5,46,2.7,4.1,8.0,140,0],
+  ['KNP-NVY-L','Knit Polo','Navy / L',1050,52,58,1.7,52,11.5,17.3,16.7,370,4],
+  ['DNJ-IND-L','Denim Jacket','Indigo / L',1850,41,33,1.4,61,14.6,12.2,21.9,720,5],
+  ['WLC-OLV-30','Wide-Leg Cargo','Olive / 30',1250,38,4,1.3,19,6.0,15.8,14.0,430,2],
+  ['HWH-GRY-XL','Heavyweight Hoodie','Grey / XL',1450,33,87,1.1,71,6.1,18.2,12.1,520,2],
+  ['BBT-PNK-S','Baby Tee','Pink / S',550,9,96,0.3,94,0,11.1,22.2,170,1],
+  ['KNP-CRM-M','Knit Polo','Cream / M',1050,4,61,0.1,108,25,0,25,370,1],
+].map(([sku,name,v,price,sold,onHand,vel,age,ret,exch,fail,cogs,trips],i) => {
+  const booked = sold*price, delivered = sold*(1-fail/100), kept = delivered*(1-ret/100);
+  const real = kept*price, net = real - kept*cogs - sold*46 - sold*fail/100*45 - delivered*ret/100*45;
+  return {sku,name,v,price,sold,onHand,vel,age,ret,exch,fail,cogs,trips,booked,real,net,
+    days: onHand/vel, st: sold/(sold+onHand)*100, margin: net/real*100,
+    hist: Array.from({length:12},(_,k)=> Math.max(0, vel*(.7+seeded(i*13+k)*.6)*(1+(k-6)*.015)))};
+});
+{ const tot = SKUS.reduce((a,s)=>a+s.real,0); let acc=0; [...SKUS].sort((a,b)=>b.real-a.real).forEach(s=>{acc+=s.real; s.abc = acc/tot <= .8 ? 'A' : acc/tot <= .95 ? 'B' : 'C';}); }
+
+const ORDERS = [
+  ['#4871','6 Oct','Mariam A.','Cairo',2,1300,'COD','Out for delivery','Expected'],
+  ['#4866','6 Oct','Omar K.','Giza',1,1450,'Card','Unfulfilled','Expected'],
+  ['#4859','5 Oct','Nour H.','Alexandria',3,2550,'COD','In transit','Expected'],
+  ['#4842','4 Oct','Youssef M.','Sohag',1,1250,'COD','Refused, returning','Lost'],
+  ['#4830','3 Oct','Salma R.','Cairo',2,1700,'InstaPay','Delivered','Paid'],
+  ['#4811','2 Oct','Ahmed T.','Dakahlia',1,950,'COD','Delivered','Awaiting payout'],
+  ['#4797','1 Oct','Habiba S.','Giza',2,2100,'COD','Delivered','Awaiting payout'],
+  ['#4776','29 Sep','Karim F.','Cairo',1,1850,'COD','Delivered, returned','Refunded'],
+  ['#4752','27 Sep','Farida N.','Qalyubia',1,650,'COD','In transit (9 days)','Overdue'],
+  ['#4731','26 Sep','Mostafa E.','Assiut',2,2300,'COD','Unreachable, returning','Lost'],
+  ['#4720','25 Sep','Laila G.','Cairo',1,1100,'COD','Delivered','Paid'],
+  ['#4708','24 Sep','Hassan W.','Sharqia',3,2950,'COD','Delivered','Paid'],
+  ['#4699','24 Sep','Jana B.','Alexandria',1,1250,'COD','Exchange in progress','Expected'],
+  ['#4688','23 Sep','Tarek Z.','Monufia',1,1450,'COD','Delivered (13 days unpaid)','Overdue'],
+  ['#4671','22 Sep','Rana D.','Cairo',2,1300,'Card','Delivered','Paid'],
+  ['#4655','21 Sep','Ziad L.','Giza',1,650,'COD','Delivered','Paid'],
+].map(([id,date,cust,gov,items,total,pay,del,fin]) => ({id,date,cust,gov,items,total,pay,del,fin, fees: fin==='Lost' ? 105 : fin==='Refunded' ? 105 : pay==='COD' ? 60 + Math.round(total*.01) : 60}));
+const finKind = {Paid:'good','Awaiting payout':'info',Expected:'neutral',Lost:'crit',Refunded:'serious',Overdue:'warn'};
+
+/* ---------- tabs ---------- */
+const TABS = [
+  ['overview','Summary','Where your money is right now, and what needs attention','<path d="M3 13h4v8H3zM10 8h4v13h-4zM17 3h4v18h-4z"/>'],
+  ['revenue','Revenue','How much you sold, where it came from, and where it leaked','<path d="M3 17l6-6 4 4 8-8"/><path d="M15 7h6v6"/>'],
+  ['products','Products & SKUs','Performance of every variant, from sales to true profit','<path d="M20 7l-8-4-8 4 8 4 8-4z"/><path d="M4 7v10l8 4 8-4V7"/><path d="M12 11v10"/>'],
+  ['inventory','Stock health','Stock on hand, how long it sits, and what to reorder','<rect x="3" y="4" width="18" height="6" rx="1"/><rect x="3" y="14" width="18" height="6" rx="1"/>'],
+  ['delivery','Delivery','Bosta delivery success, failures and where they happen','<path d="M3 7h11v9H3zM14 10h4l3 3v3h-7z"/><circle cx="7" cy="18" r="2"/><circle cx="17" cy="18" r="2"/>'],
+  ['money','Bosta & payouts','What Bosta charged, what it paid, and what is missing','<rect x="3" y="6" width="18" height="13" rx="2"/><path d="M3 10h18M7 15h3"/>'],
+  ['customers','Customers','Who buys again, who refuses, and who is worth the most','<circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c.8-3.6 3.4-5.5 6.5-5.5s5.7 1.9 6.5 5.5"/><path d="M16 4.5a3.5 3.5 0 010 7M18 14.8c1.8.7 3 2.5 3.5 5.2"/>'],
+  ['orders','Order finances','Every order with its delivery and payment status','<path d="M6 3h12v18l-3-2-3 2-3-2-3 2z"/><path d="M9 8h6M9 12h6"/>'],
+];
+const IC = {
+  overview:'<rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/>',
+  analytics:'<path d="M3 20h18"/><path d="M6 16v-5M11 16V7M16 16v-8M21 16v-3"/>',
+  orders:'<path d="M5 7h14l-1.2 12.1a1 1 0 01-1 .9H7.2a1 1 0 01-1-.9z"/><path d="M9 7a3 3 0 016 0"/>',
+  inventory:'<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 10h18M3 15h18"/>',
+  receiving:'<path d="M3 13l2-7h14l2 7v6H3z"/><path d="M3 13h5l1 2h6l1-2h5"/>',
+  stock:'<rect x="5" y="3" width="14" height="18" rx="2"/><path d="M9 8h6M9 12h6M9 16h3"/>',
+  pick:'<path d="M12 3l8 4.5v9L12 21l-8-4.5v-9z"/><path d="M12 12l8-4.5M12 12L4 7.5M12 12v9"/>',
+  pickups:'<path d="M3 7h11v9H3zM14 10h4l3 3v3h-7z"/><circle cx="7" cy="18" r="2"/><circle cx="17" cy="18" r="2"/>',
+  transfers:'<path d="M4 8h14l-3-3M20 16H6l3 3"/>',
+  scan:'<path d="M9 14L4 9l5-5"/><path d="M4 9h10a6 6 0 010 12h-3"/>',
+  returns:'<path d="M4 8h14l-3-3M20 16H6l3 3"/>',
+  exceptions:'<path d="M12 3l9.5 17h-19z"/><path d="M12 10v4M12 17.5v.01"/>',
+  settings:'<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 00.3 1.8l.1.1a2 2 0 11-2.8 2.8l-.1-.1a1.7 1.7 0 00-1.8-.3 1.7 1.7 0 00-1 1.5V21a2 2 0 11-4 0v-.1a1.7 1.7 0 00-1.1-1.5 1.7 1.7 0 00-1.8.3l-.1.1a2 2 0 11-2.8-2.8l.1-.1a1.7 1.7 0 00.3-1.8 1.7 1.7 0 00-1.5-1H3a2 2 0 110-4h.1a1.7 1.7 0 001.5-1.1 1.7 1.7 0 00-.3-1.8l-.1-.1a2 2 0 112.8-2.8l.1.1a1.7 1.7 0 001.8.3H9a1.7 1.7 0 001-1.5V3a2 2 0 114 0v.1a1.7 1.7 0 001 1.5 1.7 1.7 0 001.8-.3l.1-.1a2 2 0 112.8 2.8l-.1.1a1.7 1.7 0 00-.3 1.8V9a1.7 1.7 0 001.5 1H21a2 2 0 110 4h-.1a1.7 1.7 0 00-1.5 1z"/>'};
+const ext = (label, ic) => `<button type="button" data-ext="${label}"><svg viewBox="0 0 24 24">${IC[ic]}</svg>${label}</button>`;
+let navOpen = true;
+try { navOpen = localStorage.getItem('traced-analytics-nav') !== 'closed'; } catch(e){}
+$('#nav').innerHTML = ext('Overview','overview')
+  + `<button type="button" class="grp" id="grpBtn" aria-expanded="${navOpen}" aria-controls="grpSub"><svg viewBox="0 0 24 24">${IC.analytics}</svg>Analytics<span class="new">NEW</span><svg class="chev" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg></button>
+     <div class="sub" id="grpSub">${TABS.map(([id,l]) => `<button type="button" id="nav-${id}" data-tab="${id}">${l}</button>`).join('')}</div>`
+  + ext('Orders','orders') + ext('Inventory','inventory') + ext('Receiving','receiving') + ext('Stock Take','stock') + ext('Pick & Pack','pick')
+  + ext('Pickups','pickups') + ext('Transfers','transfers') + ext('Scan returns','scan') + ext('Returns & exchanges','returns') + ext('Exceptions','exceptions')
+  + `<div class="navlabel">MANAGER</div>` + ext('Settings','settings');
+function setNavOpen(open){ navOpen = open; $('#grpBtn').setAttribute('aria-expanded', open); try { localStorage.setItem('traced-analytics-nav', open ? 'open' : 'closed'); } catch(e){} }
+
+function showTab(id){
+  if (!TABS.find(t=>t[0]===id)) id = 'overview';
+  state.tab = id;
+  TABS.forEach(([t,l,sub]) => { $('#tab-'+t).hidden = t!==id; const n = $('#nav-'+t); if (t===id) n.setAttribute('aria-current','page'); else n.removeAttribute('aria-current'); if (t===id){ $('#pageTitle').textContent = l; $('#pageSub').textContent = sub; } });
+  if (!navOpen) setNavOpen(true);
+  $('#rail').classList.remove('open'); $('#menuBtn').setAttribute('aria-expanded','false');
+  try { history.replaceState(null,'','#'+id); } catch(e){}
+  window.scrollTo({top:0});
+}
+
+/* ---------- OVERVIEW ---------- */
+function rOverview(){
+  const stages = [
+    {s:'Not yet fulfilled', a:84400, o:T.unfulfilled, m:`${T.unfulfilled} orders · face value ${egp(T.unfulVal)}`, c:`Expected at ${pct(T.wRate)} weighted success rate`, f:T.unfulVal},
+    {s:'In transit with Bosta', a:174600, o:T.transit, m:`${T.transit} shipments · COD ${egp(T.transitVal)}`, c:'Expected using each governorate’s success rate', f:T.transitVal},
+    {s:'Delivered, awaiting payout', a:T.awaiting, o:171, m:'171 orders · next payout Thu 8 Oct', c:'Collected by Bosta, not yet sent to you'},
+    {s:'In your bank', a:T.paid, o:T.paidOrders, m:`${T.paidOrders} orders · 4 payouts`, c:'Last transfer 6 Oct · 1 payout short by EGP 2,150', bank:true},
+  ];
+  const pipe = `<div class="pipe">${stages.map(s => `<div class="stage ${s.bank?'bank':''}" data-tip="${esc(s.s+'\n'+s.m+'\n'+s.c)}">
+     <span class="step">${s.s}</span><span class="amt"><small>EGP</small>${fmtN(s.a)}</span><span class="meta">${s.m}</span><span class="calc">${s.c}</span>
+     ${s.f ? `<div class="bar-track" aria-hidden="true"><i style="width:${s.a/s.f*100}%"></i></div>` : ''}</div>`).join('')}</div>`;
+
+  const alerts = [
+    ['crit','!','5 shipments stuck for more than 7 days','EGP 6,850 in COD, no update from Bosta','money'],
+    ['warn','!','Payout on 29 Sep was EGP 2,150 short','3 delivered orders missing from the transfer','money'],
+    ['warn','!','4 SKUs will sell out within 4 days','Wide-Leg Cargo 32 and 30, Track Pants M, Boxy Tee Black M','inventory'],
+    ['info','i','Sohag and Assiut deliver under 65%','Consider prepaid-only for these governorates','delivery'],
+  ].map(([k,ic,b,s,go]) => `<button class="alert ${k}" data-go="${go}"><span class="ic">${ic}</span><span><b>${b}</b><span>${s}</span></span><span class="go">View →</span></button>`).join('');
+
+  const top = [...SKUS].sort((a,b)=>b.real-a.real).slice(0,5);
+  const topRows = top.map(s => `<tr class="click" data-sku="${s.sku}"><td><div class="cell-main">${s.name}</div><div class="cell-sub">${s.v}</div></td><td>${spark(s.hist)}</td><td class="r">${fmtN(s.sold)}</td><td class="r">${egpK(rv(s))}</td><td class="r">${s.days<7?pill('warn',s.days.toFixed(0)+' d'):s.days.toFixed(0)+' d'}</td></tr>`).join('');
+
+  $('#tab-overview').innerHTML = `<div class="grid">
+    ${sec('Cash position: where your money is')}
+    ${pipe}
+    <div class="kpis">
+      ${kpi('Net revenue ('+modeLbl()+')', egpK(state.mode==='real'?T.realized:T.booked), delta('12.4%','up')+' vs prior 30 days', state.mode==='real' ? {click:'revenue', hero:true} : {click:'revenue', tone:'blue', ic:'bag'})}
+      ${kpi('Orders', fmtN(T.orders), delta('8.1%','up')+' vs prior 30 days')}
+      ${kpi('Average order value', egp(T.aov), delta('3.2%','up')+' after discounts')}
+      ${kpi('Delivery success rate', pct(T.success), delta('2.4 pts','up')+' delivered ÷ attempted', {click:'delivery'})}
+      ${kpi('Bosta cost per delivery', egp(T.bosta/T.delivered), delta('EGP 4','down')+' all fees ÷ delivered', {click:'money'})}
+      ${kpi('Payout lag', '4.2 days', delta('0.6 days','flat')+' delivered → paid', {click:'money'})}
+    </div>
+    ${card('Needs attention', `<div class="alerts">${alerts}</div>`, {span:'s5'})}
+    ${card('Revenue per day', lineChart({labels:days, series:[{name:'Booked',color:'var(--o1)',values:trendB.map(d=>d.v)},{name:'Realized',color:'var(--pos)',values:trendR.map(d=>d.v),area:true}]}) + `<p class="note">Realized falls off in the last week because those orders are still in transit. It catches up as Bosta delivers.</p>`, {span:'s7', desc:'Last 30 days, EGP'})}
+    ${card('Top SKUs', `<div class="tw"><table><thead><tr><th>SKU</th><th>Last 12 days</th><th class="r">Units</th><th class="r">Revenue</th><th class="r">Stock left</th></tr></thead><tbody>${topRows}</tbody></table></div>`, {span:'s7', desc:'By '+modeLbl()+' revenue. Click a row for the full SKU view.', right:'<button class="link" data-go="products">All SKUs →</button>'})}
+    ${card('Expected cash in', hbars([
+        {l:'Next 7 days', v:241300, d:egp(241300), tip:'Awaiting payout + in-transit orders likely delivered this week'},
+        {l:'8–14 days', v:118200, d:egp(118200), tip:'Remaining in-transit orders + fulfilled this week'},
+        {l:'15–30 days', v:62400, d:egp(62400), tip:'Unfulfilled orders, expected value'}], {color:'var(--amber)'}) + '<p class="note">Based on Bosta’s weekly payout cycle and each order’s expected success rate.</p>', {span:'s5', v2:true, desc:'Forecast of payouts reaching your bank'})}
+  </div>`;
+}
+
+/* ---------- REVENUE ---------- */
+function rRevenue(){
+  const wf = waterfall([
+    {l:'Gross sales', v:T.booked+T.discounts, total:true, col:'var(--blue)', note:'All orders, before discounts'},
+    {l:'Discounts', v:-T.discounts, col:'var(--grey-m)', note:'5 discount codes · money you chose to give away'},
+    {l:'Still in pipeline', v:-(T.transitVal+T.unfulVal), col:'var(--amber)', note:'In transit + not yet fulfilled · not here yet'},
+    {l:'Failed deliveries', v:-T.failedVal, col:'var(--red)', note:`${T.failed} orders refused or undeliverable · lost`},
+    {l:'Returns & refunds', v:-T.returns, col:'var(--red)', note:'52 orders · lost'},
+    {l:'Net realized', v:T.realized, total:true, hero:true, col:'var(--pos)', note:'Delivered and kept'}]) + `<div class="wlegend"><span><i style="background:var(--blue)"></i>Starting total</span><span><i style="background:var(--grey-m)"></i>Given away</span><span><i style="background:var(--amber)"></i>Not here yet</span><span><i style="background:var(--red)"></i>Lost</span><span><i style="background:var(--pos)"></i>Kept</span></div>`;
+  const fun = [['Ordered',T.orders,T.booked],['Fulfilled',T.orders-T.unfulfilled,T.booked-T.unfulVal],['Delivered',T.delivered,T.delivered*T.aov],['Paid to you',T.paidOrders,T.paid]];
+  const fcol = ['var(--o1)','var(--o2)','var(--o3)','var(--pos)'];
+  const funnel = `<div class="funnel">${fun.map((f,i)=> (i?`<div class="fconv">↓ <b>${pct(f[1]/fun[i-1][1]*100)}</b> of orders continue</div>`:'') + `<div class="fstep"><span class="l">${f[0]}</span><div class="frow" data-tip="${esc(f[0]+'\n'+fmtN(f[1])+' orders\n'+egp(f[2]))}"><div class="bar" style="width:${f[2]/fun[0][2]*68}%;background:${fcol[i]}"></div><span>${egpK(f[2])} · ${fmtN(f[1])}</span></div></div>`).join('')}</div>`;
+
+  const byRows = (arr, extra) => hbars([...arr].sort((a,b)=>rv(b)-rv(a)).map(r => ({l:r.l, v:rv(r), d:egpK(rv(r)), x:extra?extra(r):'', tip:`${r.l}\nBooked ${egp(r.booked)}\nRealized ${egp(r.real)}`+(r.s?`\nDelivery success ${pct(r.s)}`:'')})));
+  const codeRows = codes.map(c => `<tr><td class="mono">${c.c}</td><td class="r">${c.o}</td><td class="r">${egp(c.rev)}</td><td class="r">${egp(c.cost)}</td><td class="r">${ratePill(c.s)}</td><td class="r">${(c.rev/c.cost).toFixed(1)}×</td></tr>`).join('');
+
+  const hours = Array.from({length:24},(_,h)=>h);
+  const dows = ['Sat','Sun','Mon','Tue','Wed','Thu','Fri'];
+  const heatV = (d,h) => { const ev = Math.exp(-Math.pow((h-21.5)/3.2,2)) + .45*Math.exp(-Math.pow((h-14)/3,2)) + .05; const dw = [1,.85,.8,.82,.9,1.15,1.25][d]; return ev*dw*(.85+seeded(d*24+h)*.3); };
+  const hmax = Math.max(...dows.flatMap((_,d)=>hours.map(h=>heatV(d,h))));
+  const qcol = v => { const r=v/hmax; return r<.12?'var(--q0)':r<.3?'var(--q1)':r<.5?'var(--q2)':r<.7?'var(--q3)':r<.88?'var(--q4)':'var(--q5)'; };
+  const heat = `<div class="tw"><div class="heat"><span></span>${hours.map(h=>`<span style="justify-content:center">${h%3===0?h:''}</span>`).join('')}
+    ${dows.map((d,di)=>`<span>${d}</span>`+hours.map(h=>`<i style="background:${qcol(heatV(di,h))}" data-tip="${d} ${String(h).padStart(2,'0')}:00\n${Math.round(heatV(di,h)/hmax*22)} orders on average"></i>`).join('')).join('')}</div></div>
+    <div class="scale">Fewer <i style="background:var(--q0)"></i><i style="background:var(--q1)"></i><i style="background:var(--q2)"></i><i style="background:var(--q3)"></i><i style="background:var(--q4)"></i><i style="background:var(--q5)"></i> More orders</div>`;
+
+  const nv = state.mode==='real' ? [650800, 382700] : [1007100, 591400];
+  $('#tab-revenue').innerHTML = `<div class="grid">
+    <div class="kpis">
+      ${kpi('Gross sales', egpK(T.booked+T.discounts), delta('9.8%','up')+' before discounts')}
+      ${kpi('Booked revenue', egpK(T.booked), delta('8.1%','up')+' after discounts')}
+      ${kpi('Net realized revenue', egpK(T.realized), delta('12.4%','up')+' delivered and kept', {hero:true})}
+      ${kpi('Realized ÷ booked', pct(T.realized/T.booked*100), 'share of booked revenue you keep')}
+      ${kpi('Gross margin', '62.0%', 'needs cost per item in Shopify', {v2:true})}
+    </div>
+    ${card('From gross sales to money you keep', wf, {span:'s7', desc:'Last 30 days. Hover a bar for details.'})}
+    ${card('Order funnel', funnel, {span:'s5', desc:'Where orders and revenue drop off'})}
+    ${card('Revenue per day', lineChart({labels:days, series:[{name:'Booked',color:'var(--o1)',values:trendB.map(d=>d.v)},{name:'Realized',color:'var(--pos)',values:trendR.map(d=>d.v),area:true}]}), {span:'s12', desc:'Compared with the previous 30 days: booked +8.1%, realized +12.4%'})}
+    ${sec('Breakdowns · '+modeLbl()+' revenue')}
+    ${card('By sales channel', byRows(channels, r=>ratePill(r.s)), {span:'s6', desc:'Bar = revenue. Pill = delivery success rate.'})}
+    ${card('By payment method', byRows(payments, r=>ratePill(r.s)), {span:'s6', desc:'Prepaid orders almost never fail delivery'})}
+    ${card('By governorate', byRows(govs, r=>ratePill(r.s)), {span:'s6', desc:'High revenue with low success is where money leaks'})}
+    ${card('By collection', byRows(collections), {span:'s6', desc:'Click through to Products & SKUs for variant detail'})}
+    ${card('Discount codes', `<div class="tw"><table><thead><tr><th>Code</th><th class="r">Orders</th><th class="r">Revenue</th><th class="r">Discount cost</th><th class="r">Delivered</th><th class="r">Revenue ÷ cost</th></tr></thead><tbody>${codeRows}</tbody></table></div>`, {span:'s7', desc:'What each code brought in vs what it cost you'})}
+    ${card('New vs returning customers', `<div class="stat-row"><div class="mini"><span class="lbl">New customers</span><span class="val">${egpK(nv[0])}</span><span class="note">63% · 868 customers</span></div><div class="mini"><span class="lbl">Returning customers</span><span class="val">${egpK(nv[1])}</span><span class="note">37% · 240 customers</span></div></div>
+      <div class="split" role="img" aria-label="New 63%, returning 37%"><i style="width:63%;background:var(--s1)"></i><i style="width:37%;background:var(--s2)"></i></div>
+      <div class="legend"><span><i class="sq" style="background:var(--s1)"></i>New</span><span><i class="sq" style="background:var(--s2)"></i>Returning</span></div>
+      <p class="note">Returning customers deliver at 94% vs 82% for new ones.</p>`, {span:'s5'})}
+    ${card('When orders come in', heat, {span:'s7', v2:true, desc:'Average orders by day and hour. Useful for timing ads and drops.'})}
+    ${card('Gross margin by collection', hbars(collections.map(c=>({l:c.l, v:c.m, d:pct(c.m), tip:`${c.l}\nMargin after cost of goods ${pct(c.m)}`})), {max:100}), {span:'s5', v2:true, desc:'Needs cost per item filled in on Shopify'})}
+  </div>`;
+}
+
+/* ---------- PRODUCTS ---------- */
+function rProducts(){
+  const cols = [
+    ['sku','SKU',0],['sold','Units',1],['rev',state.mode==='real'?'Realized':'Booked',1],['net','True net',1],['st','Sell-through',1],['vel','Per day',1],['days','Stock left',1],['age','Avg age',1],['ret','Returns',1],['exch','Exch.',1],['fail','Failed',1],['abc','ABC',0,'v2only']];
+  const key = {rev: s=>rv(s), sku:s=>s.sku};
+  const k = state.skuSort.k, d = state.skuSort.d;
+  const sorted = [...SKUS].sort((a,b)=>{ const f = key[k] || (s=>s[k]); const A=f(a),B=f(b); return (A>B?1:A<B?-1:0)*d; });
+  const rateCell = (r, w, c) => r >= c ? pill('crit',pct(r)) : r >= w ? pill('warn',pct(r)) : pct(r);
+  const rows = sorted.map(s => `<tr class="click" data-sku="${s.sku}">
+    <td><div class="cell-main">${s.name} <span class="muted">· ${s.v}</span></div><div class="cell-sub mono">${s.sku}</div></td>
+    <td class="r">${fmtN(s.sold)}</td><td class="r">${egp(rv(s))}</td>
+    <td class="r">${s.net<0?pill('crit',egp(s.net)):`<span style="color:var(--pos-ink);font-weight:600">${egp(s.net)}</span>`}</td>
+    <td class="r">${pct(s.st,0)}</td><td class="r">${s.vel.toFixed(1)}</td>
+    <td class="r">${s.days<7?pill('warn',s.days.toFixed(0)+' d'):s.days>120?pill('neutral',fmtN(s.days)+' d'):s.days.toFixed(0)+' d'}</td>
+    <td class="r">${s.age} d</td><td class="r">${rateCell(s.ret,8,15)}</td><td class="r">${rateCell(s.exch,12,18)}</td><td class="r">${rateCell(s.fail,15,20)}</td>
+    <td class="v2only"><span class="abc ${s.abc}">${s.abc}</span></td></tr>`).join('');
+  const thead = cols.map(([k2,l,num,cls]) => `<th class="sort ${num?'r':''} ${cls||''}" data-sort="${k2}" ${k===k2?`aria-sort="${d>0?'ascending':'descending'}"`:''}>${l}${k===k2?(d>0?' ↑':' ↓'):''}</th>`).join('');
+
+  const sizes = [['XS',22,4.1,6.0],['S',118,4.4,7.2],['M',236,3.2,6.6],['L',344,4.0,6.0],['XL',91,6.8,12.4],['XXL',18,9.5,21.0]];
+  const smax = Math.max(...sizes.map(s=>s[1]));
+  const sizeCols = `<div class="cols">${sizes.map(s=>`<div class="c" data-tip="Boxy Tee · ${s[0]}\n${s[1]} units sold\nReturns ${s[2]}% · Exchanges ${s[3]}%"><b>${s[1]}</b><i style="height:${s[1]/smax*100}%"></i></div>`).join('')}</div><div class="cols-l">${sizes.map(s=>`<span>${s[0]}</span>`).join('')}</div>`;
+
+  const restock = SKUS.filter(s=>s.days<14).map(s=>({...s, q: Math.ceil(s.vel*35 - s.onHand)}));
+  $('#tab-products').innerHTML = `<div class="grid">
+    <div class="kpis">
+      ${kpi('Active SKUs', '86', '14 shown below · 9 with no sale in 60 days')}
+      ${kpi('Units sold', fmtN(1618), delta('6.5%','up')+' vs prior 30 days')}
+      ${kpi('Best SKU by true net', 'Boxy Tee · Black / L', egp(SKUS[0].net)+' after all costs')}
+      ${kpi('SKUs losing money', '2', 'after failed deliveries and returns', {tip:'Knit Polo Cream / M and Baby Tee Pink / S'})}
+    </div>
+    ${card('All SKUs', `<div class="tw"><table id="skuTable"><thead><tr>${thead}</tr></thead><tbody>${rows}</tbody></table></div>
+      <p class="note">True net = realized revenue − cost of goods − shipping − failed-delivery and return shipping for that SKU. Click a column to sort, or a row for the SKU detail page.</p>`, {span:'s12', desc:'Every variant (style + color + size). Showing 14 of 86.'})}
+    ${card('Size curve · Boxy Tee', sizeCols + '<p class="note">XL and XXL return twice as often as M and L. Check the size chart for larger sizes.</p>', {span:'s6', v2:true, desc:'Units sold by size, all colors'})}
+    ${card('Restock suggestions', `<div class="tw"><table><thead><tr><th>SKU</th><th class="r">On hand</th><th class="r">Per day</th><th class="r">Reorder</th></tr></thead><tbody>${restock.map(s=>`<tr class="click" data-sku="${s.sku}"><td><div class="cell-main">${s.name}</div><div class="cell-sub">${s.v}</div></td><td class="r">${s.onHand}</td><td class="r">${s.vel.toFixed(1)}</td><td class="r"><b>${s.q}</b></td></tr>`).join('')}</tbody></table></div><p class="note">Covers 35 days of sales at the current pace, assuming a 21-day supplier lead time.</p>`, {span:'s6', v2:true, desc:'Based on sales speed and lead time'})}
+    ${card('Product page conversion', hbars([
+       {l:'Boxy Tee', v:4.1, d:'4.1%', tip:'Boxy Tee\n12,400 views → 1,020 added to cart → 508 purchased'},
+       {l:'Wide-Leg Cargo', v:3.4, d:'3.4%', tip:'Wide-Leg Cargo\n4,620 views → 410 to cart → 157 purchased'},
+       {l:'Heavyweight Hoodie', v:2.6, d:'2.6%', tip:'Heavyweight Hoodie\n6,300 views → 480 to cart → 164 purchased'},
+       {l:'Linen Shirt', v:2.2, d:'2.2%', tip:'Linen Shirt\n3,900 views → 260 to cart → 86 purchased'},
+       {l:'Knit Polo', v:0.9, d:'0.9%', tip:'Knit Polo\n6,150 views → 240 to cart → 56 purchased'}]), {span:'s6', v2:true, desc:'Product page views → purchases, from Shopify analytics'})}
+    ${card('Frequently bought together', `<div class="list">${[['Boxy Tee Black','Wide-Leg Cargo Olive',96],['Heavyweight Hoodie Grey','Track Pants Black',61],['Boxy Tee White','Boxy Tee Black',58],['Ribbed Tank White','Linen Shirt Sand',33]].map(p=>`<div class="li"><div><div class="cell-main">${p[0]} + ${p[1]}</div><div class="cell-sub">${p[2]} orders together</div></div><span class="pill neutral">Bundle idea</span></div>`).join('')}</div>`, {span:'s6', v2:true, desc:'SKU pairs that appear in the same order'})}
+  </div>`;
+}
+
+/* ---------- INVENTORY ---------- */
+function rInventory(){
+  const age = [['0–30 days',1620],['31–60 days',980],['61–90 days',512],['90+ days',300]];
+  const amax = Math.max(...age.map(a=>a[1]));
+  const ageCols = `<div class="cols">${age.map(a=>`<div class="c" data-tip="${a[0]} in stock\n${fmtN(a[1])} pieces"><b>${fmtN(a[1])}</b><i style="height:${a[1]/amax*100}%;background:${{'0–30 days':'var(--pos)','31–60 days':'var(--amber)','61–90 days':'var(--amber)','90+ days':'var(--red)'}[a[0]]}"></i></div>`).join('')}</div><div class="cols-l">${age.map(a=>`<span>${a[0]}</span>`).join('')}</div>`;
+  const low = SKUS.filter(s=>s.days<7).sort((a,b)=>a.days-b.days);
+  const best = [...SKUS].sort((a,b)=>b.sold-a.sold).slice(0,6);
+  const exch = [...SKUS].filter(s=>s.sold>=20).sort((a,b)=>(b.ret+b.exch)-(a.ret+a.exch)).slice(0,6);
+  const dead = SKUS.filter(s=>s.days>60).sort((a,b)=>b.onHand*b.cogs-a.onHand*a.cogs);
+  $('#tab-inventory').innerHTML = `<div class="grid">
+    <div class="kpis">
+      ${kpi('Pieces in warehouse', fmtN(3412), '86 SKUs · 41 products')}
+      ${kpi('Stock value at cost', 'EGP 1.18M', 'cash tied up in inventory')}
+      ${kpi('Average days in stock', '41 days', delta('3 days','down')+' faster than last month')}
+      ${kpi('Pieces moved 4+ times', '37', '<button class="link" data-pieces="1">See the pieces →</button>', {tip:'Shipped and came back at least 4 times (failed, exchanged or returned)'})}
+    </div>
+    ${card('How long stock has been sitting', ageCols + '<div class="wlegend"><span><i style="background:var(--pos)"></i>Fresh</span><span><i style="background:var(--amber)"></i>Slowing</span><span><i style="background:var(--red)"></i>Stuck</span></div><p class="note">300 pieces have been in stock for more than 90 days.</p>', {span:'s6', desc:'Pieces in the warehouse by age'})}
+    ${card('Running low', `<div class="list">${low.map(s=>`<div class="li"><div><div class="cell-main">${s.name} · ${s.v}</div><div class="cell-sub">${s.onHand} left · sells ${s.vel.toFixed(1)} a day</div></div>${pill(s.days<3?'crit':'warn', s.days.toFixed(1)+' days left')}</div>`).join('')}</div>`, {span:'s6', desc:'Best sellers that sell out within 7 days at the current pace'})}
+    ${card('Best sellers: stock check', `<div class="tw"><table><thead><tr><th>SKU</th><th class="r">Sold</th><th class="r">In stock</th><th class="r">Days left</th><th class="r">Avg age</th></tr></thead><tbody>${best.map(s=>`<tr class="click" data-sku="${s.sku}"><td><div class="cell-main">${s.name}</div><div class="cell-sub">${s.v}</div></td><td class="r">${s.sold}</td><td class="r">${s.onHand}</td><td class="r">${s.days<7?pill('warn',s.days.toFixed(0)+' d'):s.days.toFixed(0)+' d'}</td><td class="r">${s.age} d</td></tr>`).join('')}</tbody></table></div>`, {span:'s6', desc:'Units sold vs stock on hand'})}
+    ${card('Most exchanged and returned', hbars(exch.map(s=>({l:`${s.name} · ${s.v}`, v:s.ret+s.exch, d:pct(s.ret+s.exch), tip:`${s.name} · ${s.v}\nReturns ${pct(s.ret)} · Exchanges ${pct(s.exch)}\nTop reason: ${s.exch>12?'Size too small':'Not as pictured'}`})), {color:'var(--red)'}) + '<p class="note">Top reason across these SKUs: wrong size (61% of exchanges).</p>', {span:'s6', desc:'Returns + exchanges as a share of orders (SKUs with 20+ orders)'})}
+    ${card('Dead stock', `<div class="tw"><table><thead><tr><th>SKU</th><th class="r">On hand</th><th class="r">Last sale</th><th class="r">Cash tied up</th></tr></thead><tbody>${dead.map((s,i)=>`<tr class="click" data-sku="${s.sku}"><td><div class="cell-main">${s.name}</div><div class="cell-sub">${s.v}</div></td><td class="r">${s.onHand}</td><td class="r">${[9,26,71][i]||40} days ago</td><td class="r">${egp(s.onHand*s.cogs)}</td></tr>`).join('')}</tbody></table></div><p class="note">Candidates for a discount, a bundle or a stop on reorders.</p>`, {span:'s6', v2:true, desc:'Slow or no sales, with the cash sitting in them'})}
+    ${card('Returns and exchanges by size', hbars([['XS',10.1],['S',11.6],['M',9.8],['L',10.0],['XL',19.2],['XXL',30.5]].map(([l,v])=>({l, v, d:pct(v), c: v>15 ? 'var(--red)' : 'var(--grey-m)', tip:`Size ${l}\n${pct(v)} returned or exchanged`}))), {span:'s6', v2:true, desc:'All products. Large sizes come back far more often.'})}
+  </div>`;
+}
+
+/* ---------- DELIVERY ---------- */
+function rDelivery(){
+  const weeks = ['11 Aug','18 Aug','25 Aug','1 Sep','8 Sep','15 Sep','22 Sep','29 Sep'];
+  const rates = [81.2,82.0,80.7,82.9,83.6,84.1,85.4,86.0];
+  const reasons = [['Customer refused',41],['Phone unreachable',27],['Wrong or incomplete address',13],['Rescheduled too many times',11],['Damaged or other',8]];
+  const failProd = [...SKUS].filter(s=>s.sold>=20).sort((a,b)=>b.fail-a.fail).slice(0,6);
+  const g = [...govs].sort((a,b)=>b.orders-a.orders);
+  $('#tab-delivery').innerHTML = `<div class="grid">
+    <div class="kpis">
+      ${kpi('Delivery success rate', pct(T.success), delta('2.4 pts','up')+` ${T.delivered} delivered of ${T.delivered+T.failed}`)}
+      ${kpi('Failed deliveries', fmtN(T.failed), egp(T.failedVal)+' in lost sales')}
+      ${kpi('Order → handed to Bosta', '1.6 days', delta('0.3 days','up')+' faster')}
+      ${kpi('Handed to Bosta → delivered', '2.9 days', 'Cairo 1.8 · Upper Egypt 4.6')}
+    </div>
+    ${card('Success rate by governorate', `<div class="tw"><table><thead><tr><th>Governorate</th><th class="r">Orders</th><th class="r">Failed</th><th class="r">Success</th><th class="r">${state.mode==='real'?'Realized':'Booked'}</th></tr></thead><tbody>${g.map(r=>`<tr><td>${r.l}</td><td class="r">${fmtN(r.orders)}</td><td class="r">${r.failed}</td><td class="r"><span class="minibar"><i style="width:${r.s}%;background:${r.s<68?'var(--red)':r.s<78?'var(--amber)':'var(--pos)'}"></i></span>${ratePill(r.s)}</td><td class="r">${egpK(rv(r))}</td></tr>`).join('')}</tbody></table></div>`, {span:'s7', desc:'Green 78%+ · amber 68–78% · red under 68%'})}
+    ${card('Why deliveries fail', hbars(reasons.map(([l,v])=>({l, v, d:pct(v,0), tip:`${l}\n${Math.round(v/100*T.failed)} of ${T.failed} failed orders`})), {color:'var(--red)'}), {span:'s5', desc:'Reasons Bosta logged on failed attempts'})}
+    ${card('Success rate by week', lineChart({labels:weeks, series:[{name:'Success rate',color:'var(--pos)',values:rates,area:true,fmt:v=>pct(v)}], fmtY:v=>v.toFixed(0)+'%', every:1, H:210}), {span:'s7', desc:'Week starting'})}
+    ${card('Most failed-to-deliver products', hbars(failProd.map(s=>({l:`${s.name} · ${s.v}`, v:s.fail, d:pct(s.fail), tip:`${s.name} · ${s.v}\n${Math.round(s.sold*s.fail/100)} of ${s.sold} orders failed`})), {color:'var(--red)'}), {span:'s5', desc:'By failure rate, SKUs with 20+ orders'})}
+    ${card('Customers to watch', `<div class="tw"><table><thead><tr><th>Customer</th><th>Governorate</th><th class="r">Orders</th><th class="r">Refused</th><th>Suggestion</th></tr></thead><tbody>${[['Mostafa E.','Assiut',4,3],['Youssef M.','Sohag',3,2],['Dina S.','Giza',5,2],['Ali R.','Beheira',2,2]].map(c=>`<tr><td>${c[0]}</td><td>${c[1]}</td><td class="r">${c[2]}</td><td class="r">${pill(c[3]>=3?'crit':'warn',c[3]+' refused')}</td><td>Ask for prepayment</td></tr>`).join('')}</tbody></table></div>`, {span:'s7', v2:true, desc:'Customers who refused 2 or more COD orders'})}
+    ${card('Fulfillment speed', hbars([['Same day',28],['1 day',41],['2 days',19],['3+ days',12]].map(([l,v])=>({l, v, d:pct(v,0), tip:`${l} from order to handover\n${pct(v,0)} of orders`}))) + '<p class="note">Orders handed over the same day deliver at 88% vs 79% for 3+ days.</p>', {span:'s5', v2:true, desc:'Time from order placed to handed to Bosta'})}
+  </div>`;
+}
+
+/* ---------- MONEY ---------- */
+function rMoney(){
+  const fees = [['Outbound shipping',T.ship],['Failed delivery return fees',7560],['Exchange shipping',3840],['Return shipping',1845],['COD collection fee (1%)',8982],['Flyers',3600],['Packaging',2350],['Extra weight',1140]];
+  const payouts = [
+    ['8 Sep','BST-P-20931',196,224300,224300],['15 Sep','BST-P-21388',201,231150,231150],['22 Sep','BST-P-21842',188,216900,216900],
+    ['29 Sep','BST-P-22297',196,227950,225800],['6 Oct','BST-P-22751',171,196650,null]];
+  const stuck = [['7139 2204','#4688','Delivered, not paid',13,1450],['7120 8813','#4673','In transit',12,1250],['7151 0937','#4721','Returning to origin',10,1300],['7166 4420','#4752','In transit',9,650],['7172 1180','#4760','Out for delivery',8,2200]];
+  $('#tab-money').innerHTML = `<div class="grid">
+    <div class="kpis">
+      ${kpi('Shipping fees', egp(T.ship), `${fmtN(T.orders-T.unfulfilled)} shipments`)}
+      ${kpi('Failed, exchange and return shipping', egp(T.failCost), 'shipping that brought in no revenue · <span class="open">Drill down →</span>', {drill:'extra'})}
+      ${kpi('Other Bosta fees', egp(T.other), 'COD fee, flyers, packaging, extra weight')}
+      ${kpi('Cost per successful delivery', egp(T.bosta/T.delivered), `${pct(T.bosta/T.realized*100)} of realized revenue`)}
+      ${kpi('Cost per unsuccessful delivery', egp(FAIL_FEE), `${T.failed} failed · ${egp(T.failed*FAIL_FEE)} total · <span class="open">Drill down →</span>`, {drill:'failed', tip:'Outbound fee + return-to-origin fee paid on each order that was not delivered'})}
+      ${kpi('Contribution profit', egpK(T.realized-T.cogs-T.bosta), `${pct((T.realized-T.cogs-T.bosta)/T.realized*100)} after cost of goods and Bosta`, {v2:true})}
+    </div>
+    ${card('Where Bosta costs go', hbars(fees.map(([l,v])=>({l, v, d:egp(v), c: /Failed|Exchange|Return/.test(l) ? 'var(--red)' : 'var(--grey-m)', tip:`${l}\n${egp(v)} · ${pct(v/T.bosta*100)} of Bosta costs`}))) + `<div class="wlegend"><span><i style="background:var(--red)"></i>Paid on orders that brought nothing</span><span><i style="background:var(--grey-m)"></i>Normal cost of shipping</span></div><p class="note">Total Bosta cost: <b>${egp(T.bosta)}</b>.</p>`, {span:'s5', desc:'Last 30 days, by fee type'})}
+    ${card('Payout check', `<div class="tw"><table><thead><tr><th>Payout</th><th>Reference</th><th class="r">Orders</th><th class="r">Expected</th><th class="r">Received</th><th class="r">Status</th></tr></thead><tbody>${payouts.map(p=>{
+      const diff = p[4]==null ? null : p[4]-p[3];
+      const st = p[4]==null ? pill('info','Scheduled') : diff===0 ? pill('good','Matches') : pill('crit',egp(diff));
+      return `<tr><td>${p[0]}</td><td class="mono">${p[1]}</td><td class="r">${p[2]}</td><td class="r">${egp(p[3])}</td><td class="r">${p[4]==null?'<span class="muted">Due 8 Oct</span>':egp(p[4])}</td><td class="r">${st}</td></tr>`;}).join('')}</tbody></table></div>
+      <p class="note">Expected = COD collected on delivered orders − Bosta fees on those orders. The 29 Sep payout is missing orders #4688, #4702 and #4715.</p>`, {span:'s7', desc:'What Bosta should have paid vs what reached your bank'})}
+    ${card('Shipments stuck for more than 7 days', `<div class="bignum"><span class="big"><small>EGP</small>${fmtN(stuck.reduce((a,x)=>a+x[4],0))}</span>
+        <div class="mini"><span class="lbl">Shipments</span><span class="val">${stuck.length}</span></div>
+        <div class="mini"><span class="lbl">Oldest</span><span class="val">${Math.max(...stuck.map(x=>x[3]))} days</span></div>
+        <div class="mini"><span class="lbl">Delivered, not paid</span><span class="val" style="color:var(--amber-ink)">${egp(stuck.filter(x=>x[2].startsWith('Delivered')).reduce((a,x)=>a+x[4],0))}</span></div></div>
+      <div class="tw"><table><thead><tr><th>Bosta tracking</th><th>Order</th><th>Last status</th><th class="r">Days</th><th class="r">COD</th><th></th></tr></thead><tbody>${stuck.map(s=>`<tr><td class="mono">${s[0]}</td><td>${s[1]}</td><td>${s[2]}</td><td class="r">${pill(s[3]>=10?'crit':'warn',s[3]+' days')}</td><td class="r">${egp(s[4])}</td><td class="r"><button class="link" data-toast="Opens a pre-filled ticket to Bosta support with the tracking number. Not wired up in the mockup.">Raise with Bosta</button></td></tr>`).join('')}</tbody></table></div>`, {span:'s12', desc:'Not delivered, not returned, or delivered but not paid after 7 days. Total COD at risk.'})}
+    ${card('Fee anomalies', `<div class="list">${[['#4733','Charged EGP 85, standard rate EGP 60','+EGP 25'],['#4741','Return fee charged twice','+EGP 45'],['#4768','Extra-weight fee on a 0.4 kg parcel','+EGP 20'],['#4790','Charged EGP 85, standard rate EGP 60','+EGP 25']].map(r=>`<div class="li"><div><div class="cell-main">${r[0]}</div><div class="cell-sub">${r[1]}</div></div>${pill('warn',r[2])}</div>`).join('')}</div>`, {span:'s12', v2:true, desc:'Orders charged above your contracted Bosta rate'})}
+  </div>`;
+}
+
+/* ---------- CUSTOMERS ---------- */
+function rCustomers(){
+  const cohorts = [['Jun 2026',412,[24,15,11]],['Jul 2026',455,[22,14,null]],['Aug 2026',398,[26,null,null]],['Sep 2026',431,[null,null,null]]];
+  const cc = v => v==null ? 'transparent' : v>=25?'var(--q4)':v>=20?'var(--q3)':v>=14?'var(--q2)':'var(--q1)';
+  $('#tab-customers').innerHTML = `<div class="grid">
+    <div class="kpis">
+      ${kpi('Customers who ordered', fmtN(1108), '868 new · 240 returning')}
+      ${kpi('Repeat purchase rate', '22.4%', delta('1.8 pts','up')+' ordered 2+ times')}
+      ${kpi('Days between orders', '41 days', 'median, for repeat customers')}
+      ${kpi('Revenue from returning customers', '37%', 'they deliver at 94%')}
+    </div>
+    ${card('Top customers', `<div class="tw"><table><thead><tr><th>Customer</th><th>Governorate</th><th class="r">Orders</th><th class="r">Realized</th><th class="r">Delivered</th></tr></thead><tbody>${[['Salma R.','Cairo',9,11850,100],['Hassan W.','Sharqia',7,10400,100],['Laila G.','Cairo',7,8950,86],['Rana D.','Cairo',6,8100,100],['Omar K.','Giza',5,7250,100]].map(c=>`<tr><td>${c[0]}</td><td>${c[1]}</td><td class="r">${c[2]}</td><td class="r">${egp(c[3])}</td><td class="r">${ratePill(c[4])}</td></tr>`).join('')}</tbody></table></div>`, {span:'s7', v2:true, desc:'Lifetime value, counting only delivered and kept orders'})}
+    ${card('Repeat customers by governorate', hbars([['Cairo',27.1],['Giza',24.0],['Alexandria',21.5],['Qalyubia',16.2],['Dakahlia',14.8],['Upper Egypt',9.3]].map(([l,v])=>({l,v,d:pct(v),tip:`${l}\n${pct(v)} of customers ordered again`}))), {span:'s5', desc:'Share of customers who came back'})}
+    ${card('Customers still buying, by first-order month', `<div class="tw"><table><thead><tr><th>First order</th><th class="r">Customers</th><th class="r">Month 1</th><th class="r">Month 2</th><th class="r">Month 3</th></tr></thead><tbody>${cohorts.map(c=>`<tr><td>${c[0]}</td><td class="r">${c[1]}</td>${c[2].map(v=>`<td class="r" style="background:${cc(v)};${v!=null&&v>=20?'color:#fff;font-weight:600':''}">${v==null?'<span class="muted">–</span>':v+'%'}</td>`).join('')}</tr>`).join('')}</tbody></table></div><p class="note">Share of each month’s new customers who ordered again 1, 2 and 3 months later.</p>`, {span:'s7', v2:true})}
+    ${card('Customer detail view', `<p class="note">Clicking a customer opens their orders, delivery success, refusals and returns, with a "prepaid only" toggle. Planned for V2.</p>`, {span:'s5', v2:true})}
+  </div>`;
+}
+
+/* ---------- ORDERS ---------- */
+function rOrders(){
+  const fins = ['All','Paid','Awaiting payout','Expected','Overdue','Lost','Refunded'];
+  const cnt = f => f==='All' ? ORDERS.length : ORDERS.filter(o=>o.fin===f).length;
+  const q = state.orderQ.trim().toLowerCase();
+  const list = ORDERS.filter(o => (state.orderFilter==='All' || o.fin===state.orderFilter) && (!q || (o.id+o.cust+o.gov).toLowerCase().includes(q)));
+  const rows = list.map(o => `<tr><td class="mono">${o.id}</td><td>${o.date}</td><td>${o.cust}</td><td>${o.gov}</td><td class="r">${o.items}</td><td class="r">${egp(o.total)}</td><td>${o.pay}</td><td>${o.del}</td><td>${pill(finKind[o.fin],o.fin)}</td><td class="r">${egp(o.fees)}</td><td class="r">${o.fin==='Lost'||o.fin==='Refunded'?pill('crit','−'+fmtN(o.fees)):o.fin==='Paid'||o.fin==='Awaiting payout'?egp(o.total-o.fees):'<span class="muted">pending</span>'}</td></tr>`).join('')
+    || `<tr><td colspan="11" class="muted" style="padding:24px 0;text-align:center">No orders match. Clear the search or pick another status.</td></tr>`;
+  $('#tab-orders').innerHTML = `<div class="grid">
+    ${card('Orders', `<div class="filters">${fins.map(f=>`<button class="fchip" data-fin="${f}" aria-pressed="${state.orderFilter===f}">${f} <b>${cnt(f)}</b></button>`).join('')}
+        <input class="search" id="orderQ" type="search" placeholder="Search order, customer, area" value="${esc(state.orderQ)}" aria-label="Search orders"></div>
+      <div class="tw"><table><thead><tr><th>Order</th><th>Date</th><th>Customer</th><th>Governorate</th><th class="r">Items</th><th class="r">Total</th><th>Payment</th><th>Delivery status</th><th>Financial status</th><th class="r">Bosta fees</th><th class="r">Net to you</th></tr></thead><tbody>${rows}</tbody></table></div>
+      <p class="note"><b>Financial status:</b> Paid = in your bank · Awaiting payout = delivered, Bosta holds the cash · Expected = not delivered yet · Overdue = no payout or update after 7 days · Lost = failed delivery, you paid the fees · Refunded = returned after delivery. Sample of 16 recent orders.</p>`, {span:'s12', desc:'Filter by financial status, governorate or product. Export sends this view to CSV for your accountant.'})}
+  </div>`;
+}
+
+/* ---------- drawers ---------- */
+function openDrawer(html){ const d=$('#drawer'); d.classList.remove('wide'); d.innerHTML=html; d.hidden=false; $('#scrim').hidden=false; d.querySelector('.x')?.focus(); }
+function closeDrawer(){ $('#drawer').hidden=true; $('#scrim').hidden=true; $('#drawer').classList.remove('wide'); }
+function skuDrawer(code){
+  const s = SKUS.find(x=>x.sku===code); if(!s) return;
+  const daily = Array.from({length:30},(_,i)=> Math.max(0, Math.round(s.vel*(.6+seeded(i+s.sold)*.8))));
+  const moves = [
+    ['in','Received from supplier','PO-0311 · 14 Aug',''],['out','Shipped · order #4402','Bosta 7032 1180 · 21 Aug','Giza'],['back','Refused at door, returned','26 Aug','RTO fee EGP 45'],
+    ['out','Shipped · order #4519','Bosta 7088 2201 · 2 Sep','Sharqia'],['back','Exchanged for size M','9 Sep','Exchange EGP 60'],
+    ['out','Shipped · order #4655','Bosta 7120 4410 · 21 Sep','Giza'],['done','Delivered and paid','24 Sep · payout 29 Sep','EGP 650']];
+  openDrawer(`<div class="drawer-h"><div><span class="mono muted">${s.sku}</span><h2>${s.name} · ${s.v}</h2><p class="desc muted" style="margin:2px 0 0">EGP ${fmtN(s.price)} · cost EGP ${s.cogs} · ABC class ${s.abc}</p></div><button class="x" aria-label="Close">✕</button></div>
+    <div class="kpis" style="grid-template-columns:repeat(auto-fit,minmax(140px,1fr))">
+      ${kpi('Units sold', s.sold, s.vel.toFixed(1)+' a day')}${kpi('Realized revenue', egpK(s.real), 'booked '+egpK(s.booked))}
+      ${kpi('True net', egpK(s.net), pct(s.margin,0)+' of realized', {tone: s.net<0?'bad':'good', ic:'cash'})}${kpi('Stock left', s.onHand, s.days.toFixed(0)+' days at this pace')}
+      ${kpi('Returns · exchanges', pct(s.ret)+' · '+pct(s.exch), 'top reason: size')}${kpi('Failed delivery', pct(s.fail), 'avg piece age '+s.age+' d')}
+    </div>
+    <div class="card s12">${'<div class="card-h"><div><h3>Units sold per day</h3><p class="desc">Last 30 days</p></div></div>'+lineChart({labels:days, series:[{name:'Units',color:'var(--s1)',values:daily,area:true,fmt:v=>v+' units'}], fmtY:v=>String(Math.round(v)), H:170, every:7})}</div>
+    <div class="card s12"><div class="card-h"><div><h3>Where its money went</h3></div></div>${hbars([
+      {l:'Realized revenue', v:s.real, d:egp(s.real), c:'var(--blue)'},{l:'Cost of goods', v:s.real-s.net-(s.sold*46)-(s.sold*s.fail/100*45), d:'−'+egp(s.real-s.net-(s.sold*46)-(s.sold*s.fail/100*45)), c:'var(--grey-m)'},
+      {l:'Shipping', v:s.sold*46, d:'−'+egp(s.sold*46), c:'var(--grey-m)'},{l:'Failed & return fees', v:s.sold*s.fail/100*45, d:'−'+egp(s.sold*s.fail/100*45), c:'var(--red)'},{l:'True net', v:Math.max(0,s.net), d:egp(s.net), c: s.net<0?'var(--red)':'var(--pos)'}], {max:s.real})}</div>
+    <div class="card s12"><div class="card-h"><div><h3>Piece history · ${s.sku}-0147</h3><p class="desc">This piece has made 3 trips. ${s.trips} pieces of this SKU have made 4 or more.</p></div></div>
+      <div class="timeline">${moves.map(m=>`<div class="tl ${m[0]}"><i></i><div><div class="cell-main">${m[1]}</div><div class="cell-sub">${m[2]}</div></div><span class="cell-sub">${m[3]}</span></div>`).join('')}</div></div>
+    <div class="card s12"><div class="card-h"><div><h3>Recent orders</h3></div></div><div class="tw"><table><tbody>${ORDERS.slice(4,9).map(o=>`<tr><td class="mono">${o.id}</td><td>${o.date}</td><td>${o.gov}</td><td>${pill(finKind[o.fin],o.fin)}</td></tr>`).join('')}</tbody></table></div></div>`);
+}
+/* failed / exchange / return drill-down */
+const FAIL_FEE = 105, EXCH_FEE = 60, RET_FEE = 45, RTO_FEE = 45, OUT_FEE = 60;
+const TOT = {failed:T.failed, exchange:64, ret:41};
+const DRILL_SKUS = (() => {
+  const raw = SKUS.map(s => ({s, f:s.sold*s.fail/100, e:s.sold*s.exch/100, r:s.sold*s.ret/100*(1-s.fail/100)}));
+  const sf = raw.reduce((a,x)=>a+x.f,0), se = raw.reduce((a,x)=>a+x.e,0), sr = raw.reduce((a,x)=>a+x.r,0);
+  const rows = raw.map(x => ({sku:x.s.sku, name:x.s.name, v:x.s.v, sold:x.s.sold, failRate:x.s.fail,
+    f:Math.round(x.f/sf*TOT.failed*.88), e:Math.round(x.e/se*TOT.exchange*.85), r:Math.round(x.r/sr*TOT.ret*.85),
+    reason: x.s.fail>18 ? 'Phone unreachable' : x.s.exch>14 ? 'Customer refused (size)' : 'Customer refused'}));
+  const o = {sku:'', name:'Other 72 SKUs', v:'', sold:0, failRate:null, reason:'Mixed',
+    f:TOT.failed-rows.reduce((a,x)=>a+x.f,0), e:TOT.exchange-rows.reduce((a,x)=>a+x.e,0), r:TOT.ret-rows.reduce((a,x)=>a+x.r,0)};
+  return [...rows, o];
+})();
+const SHIPS = (() => {
+  const reasons = {failed:['Customer refused','Phone unreachable','Wrong address','Rescheduled 3 times'], exchange:['Size too small','Size too big','Wrong color'], ret:['Not as pictured','Quality issue','Changed mind']};
+  const gs = ['Cairo','Giza','Alexandria','Qalyubia','Dakahlia','Sharqia','Assiut','Sohag','Monufia','Beheira'];
+  const types = [...Array(18).fill('failed'), ...Array(7).fill('exchange'), ...Array(5).fill('ret')];
+  return types.map((type,i) => {
+    const s = SKUS[Math.floor(seeded(i*7+3)*9)];
+    const d = new Date(2026, 8, 8 + Math.floor(seeded(i*5+1)*27));
+    return {awb: String(7000 + Math.floor(seeded(i+11)*1999)) + ' ' + String(1000 + Math.floor(seeded(i+29)*8999)), order:'#' + (4400 + Math.floor(seeded(i+5)*460)),
+      sku:s.sku, item:`${s.name} · ${s.v}`, gov: gs[Math.floor(seeded(i*3+2)*gs.length)], type,
+      reason: reasons[type][Math.floor(seeded(i*13+4)*reasons[type].length)],
+      out: OUT_FEE, back: type==='failed' ? RTO_FEE : type==='exchange' ? EXCH_FEE : RET_FEE,
+      date: d.toLocaleDateString('en-GB',{day:'numeric',month:'short'}), t:d.getTime()};
+  }).sort((a,b)=>b.t-a.t);
+})();
+const TYPE_LBL = {failed:'Failed delivery', exchange:'Exchange', ret:'Return'};
+const TYPE_PILL = {failed:'crit', exchange:'warn', ret:'serious'};
+let drillState = {kind:'extra', view:'sku'};
+function drillDrawer(kind, view){
+  drillState = {kind, view: view || drillState.view || 'sku'};
+  const failedOnly = kind === 'failed';
+  const title = failedOnly ? 'Cost per unsuccessful delivery' : 'Failed, exchange and return shipping';
+  const sub = failedOnly
+    ? `Each failed order costs the outbound fee (EGP ${OUT_FEE}) plus the return-to-origin fee (EGP ${RTO_FEE}) and brings in nothing.`
+    : 'Extra shipping paid on orders that came back. Outbound fees are counted in shipping fees.';
+  const extraOf = r => r.f*RTO_FEE + r.e*EXCH_FEE + r.r*RET_FEE;
+  const kpis = failedOnly
+    ? `${kpi('Cost per failed delivery', egp(FAIL_FEE), 'outbound + return fee')}${kpi('Failed deliveries', fmtN(T.failed), pct(100-T.success)+' of attempts')}${kpi('Total cost', egp(T.failed*FAIL_FEE), 'last 30 days')}${kpi('Sales lost', egpK(T.failedVal), 'order value not delivered')}`
+    : `${kpi('Total extra shipping', egp(T.failCost), `${TOT.failed+TOT.exchange+TOT.ret} shipments`)}${kpi('Failed deliveries', egp(TOT.failed*RTO_FEE), `${TOT.failed} × EGP ${RTO_FEE} return fee`)}${kpi('Exchanges', egp(TOT.exchange*EXCH_FEE), `${TOT.exchange} × EGP ${EXCH_FEE}`)}${kpi('Returns', egp(TOT.ret*RET_FEE), `${TOT.ret} × EGP ${RET_FEE}`)}`;
+  const tabs = `<div class="dtabs" role="group" aria-label="Group by"><button data-dview="sku" aria-pressed="${drillState.view==='sku'}">By SKU</button><button data-dview="awb" aria-pressed="${drillState.view==='awb'}">By shipment (AWB)</button></div>`;
+  let table;
+  if (drillState.view === 'sku') {
+    const rows = [...DRILL_SKUS].filter(r => failedOnly ? r.f>0 : (r.f+r.e+r.r)>0).sort((a,b)=> (b.sku?1:0)-(a.sku?1:0) || (failedOnly ? b.f-a.f : extraOf(b)-extraOf(a)));
+    table = failedOnly
+      ? `<table><thead><tr><th>SKU</th><th class="r">Failed</th><th class="r">Failure rate</th><th class="r">Cost</th><th>Top reason</th></tr></thead><tbody>${rows.map(r=>`<tr ${r.sku?`class="click" data-sku="${r.sku}"`:''}><td><div class="cell-main">${r.name}${r.v?` <span class="muted">· ${r.v}</span>`:''}</div>${r.sku?`<div class="cell-sub mono">${r.sku}</div>`:''}</td><td class="r">${r.f}</td><td class="r">${r.failRate==null?'–':r.failRate>=20?pill('crit',pct(r.failRate)):r.failRate>=15?pill('warn',pct(r.failRate)):pct(r.failRate)}</td><td class="r">${egp(r.f*FAIL_FEE)}</td><td>${r.reason}</td></tr>`).join('')}</tbody><tfoot><tr><td><b>Total</b></td><td class="r"><b>${T.failed}</b></td><td class="r">${pct(100-T.success)}</td><td class="r"><b>${egp(T.failed*FAIL_FEE)}</b></td><td></td></tr></tfoot></table>`
+      : `<table><thead><tr><th>SKU</th><th class="r">Failed</th><th class="r">Exchanges</th><th class="r">Returns</th><th class="r">Extra shipping</th></tr></thead><tbody>${rows.map(r=>`<tr ${r.sku?`class="click" data-sku="${r.sku}"`:''}><td><div class="cell-main">${r.name}${r.v?` <span class="muted">· ${r.v}</span>`:''}</div>${r.sku?`<div class="cell-sub mono">${r.sku}</div>`:''}</td><td class="r">${r.f}</td><td class="r">${r.e}</td><td class="r">${r.r}</td><td class="r">${egp(extraOf(r))}</td></tr>`).join('')}</tbody><tfoot><tr><td><b>Total</b></td><td class="r"><b>${TOT.failed}</b></td><td class="r"><b>${TOT.exchange}</b></td><td class="r"><b>${TOT.ret}</b></td><td class="r"><b>${egp(T.failCost)}</b></td></tr></tfoot></table>`;
+  } else {
+    const ships = SHIPS.filter(x => !failedOnly || x.type==='failed');
+    const total = failedOnly ? T.failed : TOT.failed+TOT.exchange+TOT.ret;
+    table = `<table><thead><tr><th>AWB</th><th>Order</th><th>SKU</th><th>Governorate</th>${failedOnly?'':'<th>Type</th>'}<th>Reason</th><th class="r">${failedOnly?'Out + back':'Fee'}</th><th>Date</th></tr></thead><tbody>${ships.map(x=>`<tr class="click" data-sku="${x.sku}"><td class="mono">${x.awb}</td><td>${x.order}</td><td><div class="cell-main">${x.item}</div></td><td>${x.gov}</td>${failedOnly?'':`<td>${pill(TYPE_PILL[x.type],TYPE_LBL[x.type])}</td>`}<td>${x.reason}</td><td class="r">${failedOnly?egp(x.out+x.back):egp(x.back)}</td><td>${x.date}</td></tr>`).join('')}</tbody></table>
+      <p class="note">Showing the ${ships.length} most recent of ${total} shipments. In the app this list pages through all of them and exports to CSV.</p>`;
+  }
+  const byType = failedOnly ? '' : `<div class="card s12"><div class="card-h"><div><h3>By type</h3></div></div>${hbars([
+      {l:'Failed delivery (return fee)', v:TOT.failed*RTO_FEE, d:egp(TOT.failed*RTO_FEE), tip:`${TOT.failed} shipments × EGP ${RTO_FEE}`},
+      {l:'Exchange shipping', v:TOT.exchange*EXCH_FEE, d:egp(TOT.exchange*EXCH_FEE), tip:`${TOT.exchange} shipments × EGP ${EXCH_FEE}`},
+      {l:'Return shipping', v:TOT.ret*RET_FEE, d:egp(TOT.ret*RET_FEE), tip:`${TOT.ret} shipments × EGP ${RET_FEE}`}], {color:'var(--red)'})}</div>`;
+  const byReason = failedOnly ? `<div class="card s12"><div class="card-h"><div><h3>Cost by failure reason</h3></div></div>${hbars([['Customer refused',41],['Phone unreachable',27],['Wrong or incomplete address',13],['Rescheduled too many times',11],['Damaged or other',8]].map(([l,v])=>{ const n=Math.round(v/100*T.failed); return {l, v:n*FAIL_FEE, d:egp(n*FAIL_FEE), tip:`${l}\n${n} failed orders`}; }), {color:'var(--red)'})}</div>` : '';
+  openDrawer(`<div class="drawer-h"><div><h2>${title}</h2><p class="desc muted" style="margin:2px 0 0">${sub}</p></div><button class="x" aria-label="Close">✕</button></div>
+    <div class="kpis" style="grid-template-columns:repeat(auto-fit,minmax(150px,1fr))">${kpis}</div>
+    ${byType}${byReason}
+    <div class="card s12"><div class="card-h"><div><h3>${drillState.view==='sku'?'By SKU':'By shipment'}</h3><p class="desc">Click a row to open the SKU.</p></div>${tabs}</div><div class="tw">${table}</div></div>`);
+  $('#drawer').classList.add('wide');
+}
+function piecesDrawer(){
+  const pieces = [['WLC-OLV-32-0042','Wide-Leg Cargo · Olive / 32',6,'Failed ×3, exchange ×2','In stock'],['TRK-BLK-M-0018','Track Pants · Black / M',5,'Failed ×4','In transit'],['DNJ-IND-L-0007','Denim Jacket · Indigo / L',5,'Return ×2, failed ×2','In stock'],
+    ['KNP-NVY-L-0031','Knit Polo · Navy / L',4,'Exchange ×2, failed ×1','In stock'],['LNS-SND-M-0056','Linen Shirt · Sand / M',4,'Return ×1, failed ×2','In stock'],['HWH-GRY-L-0090','Heavyweight Hoodie · Grey / L',4,'Failed ×3','Returning']];
+  openDrawer(`<div class="drawer-h"><div><h2>Pieces moved 4+ times</h2><p class="desc muted" style="margin:2px 0 0">37 pieces · each trip costs EGP 45–60 and wears the piece. Showing the top 6.</p></div><button class="x" aria-label="Close">✕</button></div>
+    <div class="card s12"><div class="tw"><table><thead><tr><th>Piece</th><th class="r">Trips</th><th>Why it came back</th><th>Now</th></tr></thead><tbody>${pieces.map(p=>`<tr class="click" data-sku="${p[0].split('-').slice(0,3).join('-')}"><td><div class="cell-main">${p[1]}</div><div class="cell-sub mono">${p[0]}</div></td><td class="r">${pill(p[2]>=5?'crit':'warn',p[2]+' trips')}</td><td>${p[3]}</td><td>${p[4]}</td></tr>`).join('')}</tbody></table></div>
+    <p class="note">Shipping spent on these 37 pieces: EGP 8,140. Consider a quality check or pulling them from sale.</p></div>`);
+}
+
+/* ---------- render & events ---------- */
+function renderAll(){ rOverview(); rRevenue(); rProducts(); rInventory(); rDelivery(); rMoney(); rCustomers(); rOrders(); }
+function toast(msg){ const t=$('#toast'); t.textContent=msg; t.hidden=false; clearTimeout(toast._t); toast._t=setTimeout(()=>t.hidden=true, 3200); }
+function setMode(m){ state.mode=m; $('#mBooked').setAttribute('aria-pressed', m==='booked'); $('#mReal').setAttribute('aria-pressed', m==='real'); renderAll(); }
+
+document.addEventListener('click', e => {
+  const t = e.target.closest('[data-tab],[data-go],[data-drill],[data-dview],[data-sku],[data-sort],[data-fin],[data-pieces],[data-toast],.x');
+  if (!t) return;
+  if (t.matches('.x')) return closeDrawer();
+  if (t.dataset.tab) return showTab(t.dataset.tab);
+  if (t.dataset.go) { closeDrawer(); return showTab(t.dataset.go); }
+  if (t.dataset.drill) return drillDrawer(t.dataset.drill, 'sku');
+  if (t.dataset.dview) return drillDrawer(drillState.kind, t.dataset.dview);
+  if (t.dataset.sku) return skuDrawer(t.dataset.sku);
+  if (t.dataset.pieces) return piecesDrawer();
+  if (t.dataset.toast) return toast(t.dataset.toast);
+  if (t.dataset.fin) { state.orderFilter = t.dataset.fin; rOrders(); return; }
+  if (t.dataset.sort) { const k=t.dataset.sort; state.skuSort = {k, d: state.skuSort.k===k ? -state.skuSort.d : (k==='sku'?1:-1)}; rProducts(); }
+});
+document.addEventListener('keydown', e => {
+  if (e.key==='Escape') closeDrawer();
+  if ((e.key==='Enter'||e.key===' ') && e.target.matches('.kpi[data-go]')) { e.preventDefault(); showTab(e.target.dataset.go); }
+  if ((e.key==='Enter'||e.key===' ') && e.target.matches('.kpi[data-drill]')) { e.preventDefault(); drillDrawer(e.target.dataset.drill, 'sku'); }
+});
+document.addEventListener('input', e => { if (e.target.id==='orderQ'){ state.orderQ=e.target.value; const pos=e.target.selectionStart; rOrders(); const i=$('#orderQ'); i.focus(); i.setSelectionRange(pos,pos);} });
+$('#scrim').addEventListener('click', closeDrawer);
+$('#mBooked').addEventListener('click', ()=>setMode('booked'));
+$('#mReal').addEventListener('click', ()=>setMode('real'));
+$('#dates').addEventListener('click', e => { const b = e.target.closest('button'); if (!b) return; $('#dates').querySelectorAll('button').forEach(x => x.setAttribute('aria-pressed', x===b)); toast(`The sample data covers the last 30 days. In the app, "${b.textContent}" reloads every number for that period.`); });
+$('#grpBtn').addEventListener('click', () => setNavOpen(!navOpen));
+$('#menuBtn').addEventListener('click', () => { const o = !$('#rail').classList.contains('open'); $('#rail').classList.toggle('open', o); $('#menuBtn').setAttribute('aria-expanded', o); });
+document.addEventListener('click', e => { const x = e.target.closest('[data-ext]'); if (x) toast(`${x.dataset.ext} is an existing part of Traced. This mockup only covers the new Analytics section.`); });
+$('#exportBtn').addEventListener('click', ()=>toast('Exports the current view as CSV for your accountant. Not wired up in the mockup.'));
+
+/* tooltip */
+const tip = $('#tip');
+document.addEventListener('mouseover', e => { const t=e.target.closest('[data-tip]'); if(!t){ tip.hidden=true; return; } tip.textContent=t.dataset.tip; tip.hidden=false; });
+document.addEventListener('mousemove', e => { if (tip.hidden) return; const w=tip.offsetWidth, h=tip.offsetHeight; let x=e.clientX+14, y=e.clientY+14; if (x+w>innerWidth-8) x=e.clientX-w-14; if (y+h>innerHeight-8) y=e.clientY-h-14; tip.style.left=x+'px'; tip.style.top=y+'px'; });
+document.addEventListener('scroll', ()=>{ tip.hidden=true; }, true);
+
+renderAll();
+showTab((location.hash||'').slice(1) || 'overview');
+</script>
+
+</body></html>
