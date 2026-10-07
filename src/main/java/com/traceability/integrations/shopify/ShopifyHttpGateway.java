@@ -162,12 +162,22 @@ class ShopifyHttpGateway implements ShopifyGateway {
     private final String clientSecret;
     private final Retry retry;
 
+    @org.springframework.beans.factory.annotation.Autowired
     ShopifyHttpGateway(
             RestClient.Builder builder,
             ObjectMapper mapper,
             @Value("${shopify.api-version}") String apiVersion,
             @Value("${shopify.client-id}") String clientId,
             @Value("${shopify.client-secret}") String clientSecret) {
+        this(builder, null, mapper, apiVersion, clientId, clientSecret);
+    }
+
+    /**
+     * Test seam: {@code tokenBuilder} replaces the token endpoint's client (null = the production one,
+     * 5 s connect / 10 s read) so a test can see the exact /admin/oauth/access_token request.
+     */
+    ShopifyHttpGateway(RestClient.Builder builder, RestClient.Builder tokenBuilder, ObjectMapper mapper,
+                       String apiVersion, String clientId, String clientSecret) {
         this.restClient   = builder.build();
         this.mapper       = mapper;
         this.apiVersion   = apiVersion;
@@ -183,7 +193,9 @@ class ShopifyHttpGateway implements ShopifyGateway {
         SimpleClientHttpRequestFactory tokenFactory = new SimpleClientHttpRequestFactory();
         tokenFactory.setConnectTimeout(Duration.ofSeconds(5));
         tokenFactory.setReadTimeout(Duration.ofSeconds(10));
-        this.tokenRestClient = RestClient.builder().requestFactory(tokenFactory).build();
+        this.tokenRestClient = tokenBuilder != null
+            ? tokenBuilder.build()
+            : RestClient.builder().requestFactory(tokenFactory).build();
     }
 
     // ---- public API -----------------------------------------------------
@@ -246,12 +258,23 @@ class ShopifyHttpGateway implements ShopifyGateway {
         if (resp == null || !resp.has("access_token")) {
             throw new ShopifyException("Token exchange response missing access_token from " + shopDomain);
         }
-        return new TokenResponse(
+        return expiringOfflineToken(shopDomain, resp);
+    }
+
+    /**
+     * Parses an expiring offline token response (OAuth code exchange and session-token exchange,
+     * both sent with expiring=1). No defaults: a missing refresh token or expiry means Shopify issued
+     * a NON-expiring token, which the Admin API rejects — refused here, before any caller can store it.
+     */
+    private static TokenResponse expiringOfflineToken(String shopDomain, JsonNode resp) {
+        TokenResponse t = new TokenResponse(
             resp.get("access_token").asText(),
-            resp.has("refresh_token") ? resp.get("refresh_token").asText() : null,
-            resp.path("expires_in").asLong(3600),
-            resp.path("refresh_token_expires_in").asLong(7776000),
+            resp.hasNonNull("refresh_token") ? resp.get("refresh_token").asText() : null,
+            resp.path("expires_in").asLong(0),
+            resp.path("refresh_token_expires_in").asLong(0),
             resp.path("scope").asText(null));
+        ShopifyStoredToken.requireExpiring(shopDomain, t);
+        return t;
     }
 
     @Override
@@ -465,22 +488,19 @@ class ShopifyHttpGateway implements ShopifyGateway {
                     "grant_type",           "urn:ietf:params:oauth:grant-type:token-exchange",
                     "subject_token",        sessionToken,
                     "subject_token_type",   "urn:ietf:params:oauth:token-type:id_token",
-                    // Request an expiring offline token (with refresh_token) — NOT the permanent
-                    // custom-app token that Shopify returns by default for unauthenticated exchanges.
-                    // Shopify now rejects permanent tokens (403) for all Admin API calls.
-                    "requested_token_type", "urn:shopify:params:oauth:token-type:offline-access-token"))
+                    "requested_token_type", "urn:shopify:params:oauth:token-type:offline-access-token",
+                    // expiring=1 → an EXPIRING offline token (1 h + a 90-day refresh token). Without it
+                    // Shopify defaults to expiring=0 and issues a NON-expiring token, which the Admin API
+                    // rejects with 403 ("Non-expiring access tokens are no longer accepted") — the Build D
+                    // prod bug (test-oaozdwro, 2026-10-08). Same flag exchangeCode() sends.
+                    "expiring",             "1"))
                 .retrieve()
                 .body(JsonNode.class);
             if (resp == null || !resp.has("access_token")) {
                 throw new ShopifyException(
                     "Session token exchange response missing access_token from " + shopDomain);
             }
-            return new TokenResponse(
-                resp.get("access_token").asText(),
-                resp.has("refresh_token") ? resp.get("refresh_token").asText() : null,
-                resp.path("expires_in").asLong(3600),
-                resp.path("refresh_token_expires_in").asLong(7776000),
-                resp.path("scope").asText(null));
+            return expiringOfflineToken(shopDomain, resp);
         } catch (HttpClientErrorException e) {
             log.warn("Shopify session-token exchange rejected ({}): shop={}", e.getStatusCode(), shopDomain);
             throw new ShopifySessionTokenExchangeException(shopDomain,
