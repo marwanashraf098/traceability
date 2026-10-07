@@ -36,6 +36,38 @@
   ShopifyMagicLinkTest). The first full run also had `BostaPollJobTest.p6` red (Bosta status-poll test, untouched by
   this build): it passed alone twice (21/21) and in the second full run — a timing flake. Frontend 104 files / 740 tests
   green. (Earlier runs on an out-of-memory machine stalled; no failures there.)
+**Analytics slice 3 — Bosta money, backend only (2026-10-07, branch `analytics/s3-money`, merged to main and pushed;
+NOT deployed). Migration V147.**
+- **V147** adds Bosta's per-delivery settlement to `shipments` (wallet.cashCycle + cashout): deposited_at/_amt,
+  cod_settled, bosta_fees, shipping_fees, vat, opening_package / collection / insurance / flex_ship fees,
+  promotion_discount, shipment_fees_quoted (raw.shipmentFees, the pre-VAT quote), cash_cycle_id, cashout_txn_id,
+  cashout_date (transaction_date, else the txn id's DDMONYY: WEDCOD09SEP26 → 2026-09-09), cashout_amount (Bosta's WHOLE
+  batch total — never compare to one leg), next_cashout_date, settlement_refreshed_at (last attempt),
+  settlement_verified_at (last SUCCESSFUL read), settlement_status none|deposited|paid|unresolved. Backfilled from stored
+  raw in the same migration (prod at build time: Femine 449/1/0, BROEK 337/7/0, Jumi 168/66/8, Snouts 66/40/9 —
+  none/deposited/paid). GDPR: bosta_raw_redacted never touches wallet; no PII in the columns.
+- **`ShipmentSettlement` (integrations.bosta) is THE extractor + writer**, monotonic (a stored value is never replaced by
+  a missing one; status only moves forward; 'unresolved' moves on only when money shows). Called after every
+  shipments.raw writer — `ShipmentSettlementWiringGuardTest` fails the build when a new raw writer forgets it.
+  `BostaStatusPollJob` logs the v2-walk wallet count (stored v2 items: 0 of 363 had a cashCycle).
+- **`SettlementRefreshJob`** (hourly :23 Cairo, owner-pool tenant list like the poll, per tenant in runAs): re-reads
+  terminal post-floor legs with the v0 GET (BACKGROUND) until paid — none every 12 h; deposited daily, only the day after
+  the tenant's payout weekday when known (8-day safety net); a 429 stops the tenant until retry-after. A payload whose
+  state/type differs from ours goes through the status poll's pipeline (`BostaIngestionHelper.ingestFetched` →
+  BostaWebhookJob); unchanged → raw + settlement only. **'unresolved' only on evidence:** a successful read made 45+ days
+  after the leg finished that still shows no payout (not-found / failed reads never count); such legs are read first,
+  oldest first. Cap `ANALYTICS_SETTLEMENT_REFRESH_MAX_PER_TENANT` (default 100; **deploy with 30 for the first day**,
+  see .env.example); kill switch `ANALYTICS_SETTLEMENT_REFRESH_ENABLED`. One INFO line per tenant run.
+- **Owner-only `/api/v1/analytics/money/`**: `pipeline` (not fulfilled / in transit with city-rate expected values,
+  awaiting payout incl. negative deposits, in your bank by cashout_date), `fees` (shipping / failed / exchange / return,
+  settled bosta_fees else quote × 1.14 with estimatedCount, settled components, cost per successful / unsuccessful
+  delivery, payout lag), `fees/extra?groupBy=awb|sku` (sku split by line value), `stuck` ("Booked, never picked up" vs
+  "Stuck with Bosta", delivered-not-paid PER SHIPMENT: two payout weekdays after deposit + refreshed within 24 h),
+  `payouts` (per txn: Traced's tracked shipments next to Bosta's batch total, never a difference). Wijha / non-Bosta never
+  in money. Shared SQL in `SettlementSql` (fragments are space-padded: Java text blocks strip trailing spaces).
+- **Deploy checklist:** V147 runs on startup; rebuild with `--no-cache`; add
+  `ANALYTICS_SETTLEMENT_REFRESH_MAX_PER_TENANT=30` to prod `.env` for day one, then remove it.
+
 **Analytics slice 2 — delivery outcomes, customer returns and cities, backend only (2026-10-07, branch
 `analytics/s2-outcomes`, merged to main and pushed; not deployed). No migration.**
 - **`/api/v1/analytics/sales/variants` new fields (slice-1 fields kept):** outcome units deliveredUnits / refusedUnits /
