@@ -1,4 +1,4 @@
--- V147 — Analytics slice 3: Bosta settlement columns on shipments.
+-- V148 — Analytics slice 3: Bosta settlement columns on shipments.
 --
 -- Bosta's per-delivery settlement record (wallet.cashCycle) and payout reference
 -- (wallet.cashout) live in the delivery payload. These columns hold them so money
