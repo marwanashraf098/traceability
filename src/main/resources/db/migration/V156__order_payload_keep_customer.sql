@@ -14,10 +14,18 @@
 --    has none of the group's keys with a non-null value, the stored payload's non-null keys of that
 --    group are kept. Everything else comes from the incoming payload. IMMUTABLE, INVOKER, total.
 --    Email is never a group (it is not approved data; the V144 trigger strips it from every write).
--- 2. One-off restore: each affected order (any tenant, never a GDPR-redacted one) gets the missing
---    groups back from the latest stored orders/* webhook payload for it — the same function, the
---    webhook payload as "stored". The fill-only PII columns are filled the way UPSERT_ORDER fills
---    them (never overwriting a value). Idempotent: a second run changes nothing.
+-- 2. shopify_order_updated_at(raw) — the payload's own Shopify updated time (REST updated_at /
+--    GraphQL updatedAt), NULL when absent or malformed. The import writes an existing order only when
+--    the incoming one is strictly newer, or the stored payload has none (UPSERT_ORDER_IMPORT).
+-- 3. One-off restore, from the latest stored orders/* webhook payload per order (any tenant, never a
+--    GDPR-redacted order):
+--      FULL     — the order's payload is an import's GraphQL node (lineItems, no line_items) and the
+--                 webhook payload's updated time is >= the node's (or the node has none): the whole
+--                 webhook payload comes back — refunds, fulfillments, discount allocations,
+--                 source_name… — still never poorer in customer data than the node;
+--      CUSTOMER — otherwise: only the customer groups the payload lacks (rule 1).
+--    The fill-only PII columns are filled the way UPSERT_ORDER fills them (never overwriting a value).
+--    Idempotent: a restored payload is a webhook payload, so a second run changes nothing.
 
 CREATE FUNCTION shopify_order_raw_keep_customer(stored jsonb, incoming jsonb) RETURNS jsonb
 LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
@@ -39,6 +47,12 @@ LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
     END
 $$;
 
+CREATE FUNCTION shopify_order_updated_at(raw jsonb) RETURNS timestamptz
+LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
+    SELECT CASE WHEN COALESCE(raw ->> 'updated_at', raw ->> 'updatedAt') ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}T'
+                THEN analytics_ts(COALESCE(raw ->> 'updated_at', raw ->> 'updatedAt')) END
+$$;
+
 WITH wh AS (
     SELECT DISTINCT ON (w.tenant_id, w.payload_raw ->> 'admin_graphql_api_id')
            w.tenant_id, w.payload_raw ->> 'admin_graphql_api_id' AS gid, w.payload_raw AS p
@@ -47,7 +61,14 @@ WITH wh AS (
     ORDER BY w.tenant_id, w.payload_raw ->> 'admin_graphql_api_id', w.received_at DESC, w.id DESC
 ),
 fix AS (
-    SELECT o.id, shopify_order_raw_keep_customer(wh.p, o.raw) AS raw
+    SELECT o.id,
+           CASE WHEN o.raw ? 'lineItems' AND NOT (o.raw ? 'line_items')
+                 AND shopify_order_updated_at(wh.p) IS NOT NULL
+                 AND (shopify_order_updated_at(o.raw) IS NULL
+                      OR shopify_order_updated_at(wh.p) >= shopify_order_updated_at(o.raw))
+                THEN shopify_order_raw_keep_customer(o.raw, wh.p)      -- FULL: the webhook payload
+                ELSE shopify_order_raw_keep_customer(wh.p, o.raw)      -- CUSTOMER groups only
+           END AS raw
     FROM orders o
     JOIN wh ON wh.tenant_id = o.tenant_id AND wh.gid = o.external_id
     WHERE o.pii_redacted_at IS NULL

@@ -105,11 +105,13 @@ class OrderPayloadDowngradeTest {
     // ── the import never downgrades ──────────────────────────────────────────
 
     @Test
-    void reImportAtAReducedTier_keepsTheWebhooksCustomerShippingAndBilling() throws Exception {
+    void aNewerReImportAtAReducedTier_keepsTheWebhooksCustomerShippingAndBilling() throws Exception {
         String gid = gid();
-        TenantContext.runAs(tenant, () -> appSync.ingestOrderWebhook(store, tenant, rest(gid, "#D101")));
-        // The pre-Build-B / NONE-tier GraphQL node: no customer, no addresses.
-        importOrder(gid, "#D101", "{\"id\":\"%s\",\"name\":\"#D101\",\"displayFinancialStatus\":\"PAID\"}");
+        TenantContext.runAs(tenant, () -> appSync.ingestOrderWebhook(store, tenant,
+            rest(gid, "#D101").put("updated_at", "2026-09-01T10:00:00+03:00")));
+        // A newer NONE-tier GraphQL node: no customer, no addresses.
+        importOrder(gid, "#D101", "{\"id\":\"%s\",\"name\":\"#D101\",\"displayFinancialStatus\":\"PAID\"," +
+                                  "\"updatedAt\":\"2026-09-02T10:00:00Z\"}");
 
         JsonNode raw = raw(gid);
         assertThat(raw.path("displayFinancialStatus").asText()).isEqualTo("PAID");          // the import's fields
@@ -142,6 +144,47 @@ class OrderPayloadDowngradeTest {
         assertThat(m.has("shipping_address")).isFalse();
         assertThat(m.path("shippingAddress").path("city").asText()).isEqualTo("Aswan");
         assertThat(m.path("customer").path("first_name").asText()).isEqualTo("Mona");
+    }
+
+    @Test
+    void aReImportThatIsNotNewer_writesNothingAtAll() throws Exception {
+        String gid = gid();
+        ObjectNode hook = rest(gid, "#D501").put("updated_at", "2026-09-10T12:00:00+03:00");
+        hook.putArray("refunds").addObject().put("id", 1);
+        hook.put("source_name", "web");
+        TenantContext.runAs(tenant, () -> appSync.ingestOrderWebhook(store, tenant, hook));
+        String before = jdbc.queryForObject("SELECT raw::text FROM orders WHERE external_id = ?", String.class, gid);
+        long items = jdbc.queryForObject("SELECT COUNT(*) FROM order_items oi JOIN orders o ON o.id = oi.order_id " +
+                                         "WHERE o.external_id = ?", Long.class, gid);
+        // Same instant (+03:00 vs Z), older, and no timestamp at all: the stored payload stays as it is.
+        for (String node : List.of("{\"id\":\"%s\",\"updatedAt\":\"2026-09-10T09:00:00Z\",\"lineItems\":{\"edges\":[]}}",
+                                   "{\"id\":\"%s\",\"updatedAt\":\"2026-09-01T09:00:00Z\"}",
+                                   "{\"id\":\"%s\"}")) {
+            importOrderWithLine(gid, "#D501", node);
+            assertThat(jdbc.queryForObject("SELECT raw::text FROM orders WHERE external_id = ?", String.class, gid)).isEqualTo(before);
+        }
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM order_items oi JOIN orders o ON o.id = oi.order_id " +
+                                       "WHERE o.external_id = ?", Long.class, gid)).isEqualTo(items);
+        JsonNode raw = raw(gid);
+        assertThat(raw.path("refunds").size()).isEqualTo(1);
+        assertThat(raw.path("source_name").asText()).isEqualTo("web");
+
+        // Strictly newer → written, with the customer merge.
+        importOrder(gid, "#D501", "{\"id\":\"%s\",\"updatedAt\":\"2026-09-10T09:00:01Z\",\"displayFinancialStatus\":\"PAID\"}");
+        JsonNode after = raw(gid);
+        assertThat(after.path("displayFinancialStatus").asText()).isEqualTo("PAID");
+        assertThat(after.path("customer").path("first_name").asText()).isEqualTo("Mona");
+    }
+
+    @Test
+    void storedPayloadWithoutATimestamp_anImportIsTreatedAsNewer() throws Exception {
+        String gid = gid();
+        importOrder(gid, "#D601", "{\"id\":\"%s\",\"customer\":{\"id\":\"gid://shopify/Customer/5\",\"firstName\":\"Hala\"}}");
+        importOrder(gid, "#D601", "{\"id\":\"%s\",\"displayFulfillmentStatus\":\"FULFILLED\"}");
+        JsonNode raw = raw(gid);
+        assertThat(raw.path("displayFulfillmentStatus").asText()).isEqualTo("FULFILLED");
+        assertThat(raw.path("customer").path("firstName").asText()).isEqualTo("Hala");
+        assertThat(customerKey(gid)).isEqualTo("c:5");
     }
 
     @Test
@@ -218,6 +261,50 @@ class OrderPayloadDowngradeTest {
     }
 
     @Test
+    void restore_fullWebhookPayloadWhenItIsAtLeastAsNew_customerGroupsOnlyOtherwise() throws Exception {
+        String full = gid(), newerNode = gid(), restOrder = gid();
+        // An import's node with no timestamp (as every node stored before V156) → the full webhook payload.
+        seed(full, ("{\"id\":\"%s\",\"lineItems\":{\"edges\":[]},\"customer\":{\"id\":\"gid://shopify/Customer/8\"," +
+                    "\"firstName\":\"Node\"}}").formatted(full), null, false);
+        ObjectNode hook = rest(full, "#F1").put("updated_at", "2026-09-05T10:00:00+03:00").put("source_name", "web");
+        hook.putArray("refunds").addObject().put("id", 11);
+        hook.putArray("fulfillments").addObject().put("tracking_number", "8123456789");
+        hook.putArray("discount_applications").addObject().put("type", "discount_code").put("code", "EID");
+        webhook(hook, "2026-09-05T10:00:00Z");
+        // A node NEWER than its webhook → customer groups only; the node's own fields stay.
+        seed(newerNode, ("{\"id\":\"%s\",\"lineItems\":{\"edges\":[]},\"updatedAt\":\"2026-09-20T10:00:00Z\"," +
+                         "\"displayFinancialStatus\":\"REFUNDED\"}").formatted(newerNode), null, false);
+        webhook(rest(newerNode, "#F2").put("updated_at", "2026-09-05T10:00:00+03:00"), "2026-09-05T10:00:00Z");
+        // Not overwritten (a REST payload missing billing) → customer groups only.
+        ObjectNode partialRest = rest(restOrder, "#F3").put("updated_at", "2026-09-01T10:00:00+03:00");
+        partialRest.remove("billing_address");
+        seed(restOrder, partialRest.toString(), null, false);
+        webhook(rest(restOrder, "#F3").put("updated_at", "2026-09-05T10:00:00+03:00").put("source_name", "pos"), "2026-09-05T10:00:00Z");
+
+        assertThat(restore()).isEqualTo(3);
+        JsonNode f = raw(full);
+        assertThat(f.has("lineItems")).isFalse();
+        assertThat(f.path("line_items").isArray()).isTrue();
+        assertThat(f.path("source_name").asText()).isEqualTo("web");
+        assertThat(f.path("refunds").size()).isEqualTo(1);
+        assertThat(f.path("fulfillments").get(0).path("tracking_number").asText()).isEqualTo("8123456789");
+        assertThat(f.path("customer").path("first_name").asText()).isEqualTo("Mona");            // the webhook's customer
+        assertThat(jdbc.queryForObject("SELECT source_name FROM orders WHERE external_id = ?", String.class, full)).isEqualTo("web");
+        assertThat(jdbc.queryForObject("SELECT discount_types::text FROM orders WHERE external_id = ?", String.class, full))
+            .isEqualTo("{discount_code}");
+        JsonNode n = raw(newerNode);
+        assertThat(n.path("displayFinancialStatus").asText()).isEqualTo("REFUNDED");
+        assertThat(n.has("line_items")).isFalse();
+        assertThat(n.path("customer").path("first_name").asText()).isEqualTo("Mona");
+        JsonNode r = raw(restOrder);
+        assertThat(r.path("billing_address").path("name").asText()).isEqualTo("Bill Name");
+        assertThat(r.has("source_name")).isFalse();                                                  // only customer groups
+        String snapshot = jdbc.queryForList("SELECT external_id, raw::text FROM orders ORDER BY external_id").toString();
+        assertThat(restore()).isZero();
+        assertThat(jdbc.queryForList("SELECT external_id, raw::text FROM orders ORDER BY external_id").toString()).isEqualTo(snapshot);
+    }
+
+    @Test
     void keepCustomer_isTotal() {
         assertThat(jdbc.queryForObject("SELECT shopify_order_raw_keep_customer(NULL, '{\"a\":1}'::jsonb)::text", String.class))
             .isEqualTo("{\"a\": 1}");
@@ -259,6 +346,15 @@ class OrderPayloadDowngradeTest {
         JsonNode node = mapper.readTree(nodeTemplate.formatted(gid));
         ShopifyGateway.Order o = new ShopifyGateway.Order(gid, number, null, null, null, "paid", List.of(),
             new BigDecimal("100.00"), List.of(), Instant.now(), node);
+        TenantContext.runAs(tenant, () -> appSync.ingestMissingOrder(store, tenant, o));
+    }
+
+    /** An import with one line item (an unmapped variant — the line is skipped, the order flagged). */
+    private void importOrderWithLine(String gid, String number, String nodeTemplate) throws Exception {
+        JsonNode node = mapper.readTree(nodeTemplate.formatted(gid));
+        ShopifyGateway.Order o = new ShopifyGateway.Order(gid, number, null, null, null, "paid", List.of(),
+            new BigDecimal("100.00"), List.of(new ShopifyGateway.LineItem("gid://shopify/LineItem/77", 1, "gid://shopify/ProductVariant/0")),
+            Instant.now(), node);
         TenantContext.runAs(tenant, () -> appSync.ingestMissingOrder(store, tenant, o));
     }
 

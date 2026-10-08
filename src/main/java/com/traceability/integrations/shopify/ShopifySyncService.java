@@ -148,19 +148,29 @@ public class ShopifySyncService {
 
     /**
      * UPSERT_ORDER for the GraphQL IMPORT paths (connect / reconnect / OAuth-upgrade re-import, the
-     * reconcile catch-up — upsertOrder): identical except that the stored payload's customer, shipping,
-     * billing and phone groups survive when the incoming payload has none of them
-     * (shopify_order_raw_keep_customer, V156) — a re-import at a lower PII tier, or the pre-Build-B
-     * query, must never make a stored payload poorer. Webhook payloads (ingestOrderWebhook) still
-     * replace raw as before.
+     * reconcile catch-up — upsertOrder), V156. Two rules on top of UPSERT_ORDER:
+     *   FRESHNESS — an existing order is touched ONLY when the incoming payload's Shopify updated time
+     *     (shopify_order_updated_at: REST updated_at / GraphQL updatedAt) is strictly newer than the
+     *     stored payload's, or the stored payload has none. Otherwise nothing is written at all (no
+     *     RETURNING row) — the 30-day lookback re-import must never replace a webhook payload's
+     *     REST-only blocks (refunds, fulfillments, discount allocations, source_name, landing_site…)
+     *     with an older GraphQL node.
+     *   KEEP CUSTOMER — when it does write, the stored customer / shipping / billing / phone groups the
+     *     incoming payload lacks survive (shopify_order_raw_keep_customer).
+     * Webhook payloads (ingestOrderWebhook) still replace raw as before.
      */
-    static final String UPSERT_ORDER_IMPORT = UPSERT_ORDER.replace(
-        "raw             = CASE WHEN orders.pii_redacted_at IS NULL THEN EXCLUDED.raw",
-        "raw             = CASE WHEN orders.pii_redacted_at IS NULL THEN shopify_order_raw_keep_customer(orders.raw, EXCLUDED.raw)");
+    static final String UPSERT_ORDER_IMPORT = UPSERT_ORDER
+        .replace("raw             = CASE WHEN orders.pii_redacted_at IS NULL THEN EXCLUDED.raw",
+                 "raw             = CASE WHEN orders.pii_redacted_at IS NULL THEN shopify_order_raw_keep_customer(orders.raw, EXCLUDED.raw)")
+        .replace("RETURNING id, customer_phone",
+                 "WHERE shopify_order_updated_at(orders.raw) IS NULL\n" +
+                 "   OR shopify_order_updated_at(EXCLUDED.raw) > shopify_order_updated_at(orders.raw)\n" +
+                 "RETURNING id, customer_phone");
 
     static {
-        if (UPSERT_ORDER_IMPORT.equals(UPSERT_ORDER)) {
-            throw new IllegalStateException("UPSERT_ORDER_IMPORT must keep the stored customer data — its raw line changed");
+        if (!UPSERT_ORDER_IMPORT.contains("shopify_order_raw_keep_customer(orders.raw, EXCLUDED.raw)")
+                || !UPSERT_ORDER_IMPORT.contains("shopify_order_updated_at(EXCLUDED.raw) > shopify_order_updated_at(orders.raw)")) {
+            throw new IllegalStateException("UPSERT_ORDER_IMPORT lost its freshness / keep-customer rule — UPSERT_ORDER changed");
         }
     }
 
@@ -575,7 +585,11 @@ public class ShopifySyncService {
             Upserted up = jdbc.query(UPSERT_ORDER_IMPORT, ShopifySyncService::upserted,
                     tenantId, storeId, o.gid(), o.name(), paymentMethod, codAmount,
                     java.sql.Timestamp.from(o.createdAt()), toJson(o.raw()));
-            if (up == null) throw new ShopifyException("Order upsert returned no ID for GID " + o.gid());
+            if (up == null) {
+                // The stored payload is as new or newer (V156 freshness): nothing written, nothing to redo.
+                log.debug("Order import: {} unchanged since the stored payload — not written", o.gid());
+                return false;
+            }
             UUID orderId = up.id();
 
             boolean needsHold = false;
