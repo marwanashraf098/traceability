@@ -1,7 +1,7 @@
 -- =============================================================================================
--- 2026-10-08 — transfers → Shopify repair (Issue 2). Deploy V155 first.
+-- 2026-10-08 — transfers → Shopify repair (Issue 2). Deploy V157 first.
 --
--- Before V155 no transfer ever touched Shopify. This script brings the stock that is OUT on a
+-- Before V157 no transfer ever touched Shopify. This script brings the stock that is OUT on a
 -- transfer today in line with the new model (sync by custody, mode 'remove' — every existing
 -- non-main location defaults to it). It never calls Shopify: it only writes transfer_shopify_syncs
 -- claim rows ('queued', source 'repair') that the app's TransferShopifySweepJob sends through

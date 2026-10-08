@@ -1,4 +1,4 @@
--- V155 — Transfers sync with Shopify (2026-10-08 diagnosis, Issue 2; approved: model (b), sync by
+-- V157 — Transfers sync with Shopify (2026-10-08 diagnosis, Issue 2; approved: model (b), sync by
 -- custody; a FIFTH named decrement, pushTransferOut; per-location mode 'remove' | 'leave'; no
 -- mirroring to other Shopify locations — Traced still writes only to the Traced Main Warehouse).
 --

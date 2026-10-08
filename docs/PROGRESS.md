@@ -5,13 +5,13 @@
 ## Current state
 
 **Issue 2 — transfers sync with Shopify (2026-10-08, branch `feat/transfer-shopify-sync` off main 9b648a6; NOT merged,
-NOT deployed). Migration V155. Repair script written + dry-run only (NOT executed).** Approved: model (b) sync by custody;
+NOT deployed). Migration V157. Repair script written + dry-run only (NOT executed).** Approved: model (b) sync by custody;
 a FIFTH named decrement `pushTransferOut`; per-location mode 'remove' (default) | 'leave'; no mirroring, no new Shopify
 locations — Traced still writes only to the Traced Main Warehouse.
-- **V155:** `locations.shopify_sync_mode`, `transfers.shopify_sync_mode` (snapshot at send), `transfer_pieces.from_location_id`
+- **V157:** `locations.shopify_sync_mode`, `transfers.shopify_sync_mode` (snapshot at send), `transfer_pieces.from_location_id`
   (recorded at scan-out), `transfer_shopify_syncs` (one claim per transfer: queued/pending/pushed/failed/failed_ambiguous/
-  skipped+reason; RLS + policy; app_user no DELETE), trigger type `transfer_return`. MigrationSmokeTest 154,
-  NotTracedBackfillTest 99.
+  skipped+reason; RLS + policy; app_user no DELETE), trigger type `transfer_return`. MigrationSmokeTest 156,
+  NotTracedBackfillTest 101 (renumbered V155 → V157 at merge: analytics slice 6 took V155, the payload fix V156).
 - **Send:** `TransferShopifySync.claimSend` in markSent (send-and-back / bring-back) and closeOneWay (permanent move):
   snapshot the governing mode; 'leave' → nothing; pieces that left the MAIN warehouse → one queued claim (−N per
   variant); else 'skipped' with reason (not_from_main_warehouse — every bring-back; main_warehouse_not_linked;
@@ -41,6 +41,51 @@ locations — Traced still writes only to the Traced Main Warehouse.
   unexpected error → failed_ambiguous, never re-sent. New tests ts12–ts16 + `TransferOutClassificationWireTest` (13),
   each revert-checked. Existing tests edited (approved): WorkerPermissionGuardTest cleanup (+ transfer_shopify_syncs),
   MigrationSmokeTest TENANT_SCOPED_TABLES (+ transfer_shopify_syncs).
+**Fix — order imports made stored payloads poorer (2026-10-08, branch `fix/order-payload-downgrade`, merged to main; NOT
+deployed). Migration V156.**
+- **Cause:** every GraphQL order import (connect / reconnect / OAuth upgrade re-import, reconcile catch-up) re-reads the
+  last 30 days (`SHOPIFY_IMPORT_LOOKBACK_DAYS`) and `UPSERT_ORDER` replaced `orders.raw` outright — so each import
+  overwrote the REST webhook payloads in its window with a GraphQL node: before Build B (2026-10-06) with no customer /
+  address fields at all, and never with refunds / fulfillments / discount allocations / source_name. Prod: The Snouts
+  111 orders, Jumi 37 (no other tenant). The ACCESS_DENIED step-down was not involved.
+- **Fix (`ShopifySyncService.UPSERT_ORDER_IMPORT`, import paths only — webhooks unchanged):** FRESHNESS — an existing
+  order is written only when the incoming `updatedAt` (`shopify_order_updated_at`: REST updated_at / GraphQL updatedAt;
+  the orders query now asks for `updatedAt`) is strictly newer than the stored payload's, or the stored one has none;
+  otherwise nothing is written (no items, no flags). KEEP CUSTOMER — when it writes, the stored customer / shipping /
+  billing / phone groups the node lacks (missing or null, either spelling) survive (`shopify_order_raw_keep_customer`).
+- **V156 restore** from each order's latest stored orders/* webhook (never a redacted order, fill-only PII columns,
+  idempotent): a GraphQL node whose webhook payload is at least as new → the FULL webhook payload (never poorer in
+  customer data); otherwise customer groups only. Prod dry run: Snouts 111 full, Jumi 37 full, 0 customer-only.
+- **Impact it repairs (prod 2026-10-08, overwritten orders):** channel lost on all 148 (source_name), discounts on 10,
+  refund add-back on 9; the REST fulfillments (tracking) that BostaFulfillmentCatchUpService / BostaVisibilityCheckService
+  read from `orders.raw` were missing on 138 (2 Snouts orders with a tracking number and no forward Bosta leg). Real-time
+  linking (FulfillmentTrackingCapture) reads the webhook payload and was never affected.
+- **Open (not done, needs an existing-test edit):** the FULL-tier query asks for `customer { firstName lastName … }` but
+  not `id`, so an imported order's `customer_key` is `p:<phone>` while a webhook order's is `c:<id>` — one customer can
+  appear twice in Analytics → Customers. Adding `id` breaks `ShopifyHttpGatewayOrdersPiiTest.w1` (exact substring).
+- Tests: `OrderPayloadDowngradeTest` (9), `OrdersQueryFieldsTest` (1).
+
+**Analytics slice 6 — customers since connect, backend only (2026-10-08, branch `analytics/s6-customers`, merged to
+main; NOT deployed). Migration V155 (`orders.customer_created_at`, renumbered from V154 — the other session took it).**
+- **Endpoints (`CustomerAnalyticsService`, owner-only):** `/customers/summary?period&compare` (customers who ordered;
+  new / existing / returning / unknown; repeat purchase rate = of them, 2+ orders since connect up to the period end;
+  median days between orders; orders without a customer; per class orders / booked / realized / success rate —
+  `byClass` is the Revenue page's "New vs returning" source), `/customers/top` (≤ 50, realized since connect),
+  `/customers/by-governorate` (repeat rate, < 10 customers → "Other"), `/customers/cohorts` (first-order month, % ordering
+  again in months 1–3; current month partial, future null), `/customers/watch` (2+ refused COD orders, "Ask for
+  prepayment", `blocked` from the blocklist — read-only, matched in SQL with `CustomerSubject.canonicalPhoneSql`).
+- **Rules:** identity = `orders.customer_key`, NEVER returned (can hold a phone); `customerRef` = HMAC-SHA256 of tenant +
+  key under **`ANALYTICS_REF_SECRET`** (`analytics.ref-secret`, ≥ 32 bytes; the app refuses to start without it —
+  **set it in prod `.env` before deploying**; changing it changes every ref). Display name = first name + last initial.
+  Connect = the store's analytics floor, else its first ingested order (Jumi). Order class: existing (customer created
+  before connect) / new (first order since connect) / unknown (first order, no created date) / returning (later
+  orders); a customer counts in the class of their first order in the period.
+- **The Snouts' keys (13 of 118 orders) — corrected by fix/order-payload-downgrade:** every GraphQL re-import re-reads
+  the last 30 days (`shopify.import.lookback-days`) and `UPSERT_ORDER` replaced raw, so each import overwrote the REST
+  webhook payloads (customer + phone) in its window. The 99 oldest (≤ 2026-09-06) were last written by imports BEFORE
+  Build B, whose orders query asked for no customer / address fields at all; the 2026-10-07 OAuth-upgrade import only
+  re-read orders after 2026-09-07 (12, at full tier). Not the ACCESS_DENIED step-down. Fixed and restored by V156.
+- Tests: `AnalyticsCustomersTest` (10), RlsCoverageTest +5.
 
 **Issue 1 — Scan returns: untracked parcel items, one row per unit (2026-10-08, branch `feat/untracked-parcel-units` off
 main 591c915; NOT merged, NOT deployed). Migration V154.** Design signed off 2026-10-08 (`design/returns-parcel-states`

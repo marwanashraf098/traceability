@@ -169,7 +169,7 @@ Built 2026-08-02 per `docs/fr-21-stock-taking-build-spec.md`, Steps 0.5–5, per
 - [x] 22.6 [M] `createTransfer`/`scanOut`/`listOpen`/`getTransfer`/reconcile* endpoints + role gates (send-out `isAuthenticated()`, reconcile/close `OWNER`/`MANAGER`) + i18n (`TransferException` + `ApiExceptionHandler`) + `LookupService` phraseKeys + `RlsCoverageTest` entries
 - [x] 22.7 [M] Inventory-summary "Out on transfer / At vendor" bucket (Group A) + `sold` windowed bucket (Group B) + pick/gather/on-hand/summary exclusion tests
 - [x] 22.7a [M] Inventory location selector: a non-main location shows every piece there (available + out_on_transfer + transferred_out) as "At location", available "—"; drawer too; main warehouse unchanged (2026-10-08)
-- [x] 22.9a [M] Transfers sync with Shopify (V155): per-location "While stock is here" (remove/leave), main-warehouse −N at send via pushTransferOut (5th named decrement, claim-before-call, ambiguous never re-sent), +1 on return when the departure left Shopify's count; repair script (dry-run: 0 claims)
+- [x] 22.9a [M] Transfers sync with Shopify (V157): per-location "While stock is here" (remove/leave), main-warehouse −N at send via pushTransferOut (5th named decrement, claim-before-call, ambiguous never re-sent), +1 on return when the departure left Shopify's count; repair script (dry-run: 0 claims)
 - [x] 22.8 [M] Mode B guard (Bosta webhook + manual link on `out_on_transfer` piece → no-op, no crash) + test
 - [x] 22.9 [M] Frontend: create/send-out scan screen, consignment list, reconcile screen (Manager/Owner), relabel-print action; RTL, ar+en
 
