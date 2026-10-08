@@ -79,13 +79,23 @@ public class InventoryStockController {
     // 1. GET /inventory/stock — Tab 1, grouped product → variants
     // ═══════════════════════════════════════════════════════════════════════
 
+    /**
+     * Piece statuses that count as "at" a location in a location-scoped view (2026-10-08). The
+     * main warehouse counts only 'available' (unchanged). Any other location is where transfers put
+     * pieces — a round trip leaves them out_on_transfer, a relocate transferred_out, neither ever
+     * 'available' there — so its "At location" count is these three and its available is null
+     * (nothing there can be picked; the screen shows a dash).
+     */
+    static final String AT_OTHER_LOCATION_STATUSES_SQL =
+        "('available', 'out_on_transfer', 'transferred_out')";
+
     public record StockVariant(
         String id, String title, String sku, BigDecimal price,
-        long onHand, Long committed, long available, String shopifySync) {}
+        long onHand, Long committed, Long available, String shopifySync) {}
 
     public record StockProduct(
         String id, String title, String imageUrl, String status,
-        long onHand, Long committed, long available,
+        long onHand, Long committed, Long available,
         List<StockVariant> variants) {}
 
     public record StockPage(List<StockProduct> items, String nextCursor) {}
@@ -122,6 +132,14 @@ public class InventoryStockController {
                     throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Unknown locationId");
                 }
             }
+            // A non-main location counts every piece physically there (AT_OTHER_LOCATION_STATUSES_SQL);
+            // the main warehouse and "All locations" count 'available' exactly as before.
+            boolean otherLocation = locationId != null && !Boolean.TRUE.equals(jdbc.queryForObject(
+                "SELECT is_fulfillment FROM locations WHERE id = ? AND tenant_id = ?",
+                Boolean.class, locationId, tenantId));
+            String pieceStatusPredicate = otherLocation
+                ? "status::text IN " + AT_OTHER_LOCATION_STATUSES_SQL
+                : "status = 'available'::piece_status";
 
             Integer threshold = jdbc.queryForObject(
                 "SELECT low_stock_threshold FROM tenants WHERE id = ?", Integer.class, tenantId);
@@ -177,7 +195,7 @@ public class InventoryStockController {
 
             String sql = "WITH avail AS (" +
                 "SELECT p.variant_id, COUNT(*) AS available_count FROM pieces p " +
-                "WHERE p.tenant_id = ? AND p.status = 'available'::piece_status " + availLocPredicate + " " +
+                "WHERE p.tenant_id = ? AND p." + pieceStatusPredicate + " " + availLocPredicate + " " +
                 "GROUP BY p.variant_id) " +
                 "SELECT DISTINCT pr.id, pr.title, pr.image_url, pr.status FROM products pr " +
                 "JOIN variants v ON v.product_id = pr.id " +
@@ -233,7 +251,7 @@ public class InventoryStockController {
                     var ps = con.prepareStatement(
                         "SELECT variant_id, COUNT(*) AS on_hand FROM pieces " +
                         "WHERE tenant_id = ? AND current_location_id = ? " +
-                        "  AND status = 'available'::piece_status AND variant_id = ANY(?) " +
+                        "  AND " + pieceStatusPredicate + " AND variant_id = ANY(?) " +
                         "GROUP BY variant_id");
                     ps.setObject(1, tenantId);
                     ps.setObject(2, locationId);
@@ -282,18 +300,18 @@ public class InventoryStockController {
 
                 List<StockVariant> variants = new ArrayList<>();
                 long sumOnHand = 0;
-                long sumAvailable = 0;
+                Long sumAvailable = otherLocation ? null : 0L;
                 Long sumCommitted = locationId == null ? 0L : null;
 
                 for (Map<String, Object> vr : prVariants) {
                     UUID varId = (UUID) vr.get("id");
                     long onHand;
                     Long committed;
-                    long available;
+                    Long available;
                     if (locationId != null) {
                         onHand    = locationOnHand.getOrDefault(varId, 0L);
                         committed = null;
-                        available = onHand;
+                        available = otherLocation ? null : onHand;
                     } else {
                         var stock = stockService.forVariant(tenantWide, varId);
                         onHand    = stock.onHand();
@@ -301,7 +319,7 @@ public class InventoryStockController {
                         available = stock.available();
                     }
                     sumOnHand    += onHand;
-                    sumAvailable += available;
+                    if (sumAvailable != null) sumAvailable += available;
                     if (sumCommitted != null) sumCommitted += committed;
 
                     variants.add(new StockVariant(
@@ -323,7 +341,8 @@ public class InventoryStockController {
     // 2. GET /inventory/variants/{variantId}/breakdown — drawer fetch
     // ═══════════════════════════════════════════════════════════════════════
 
-    public record LocationStock(String locationId, String locationName, long available, long onHand) {}
+    /** available is null for a non-main location — see AT_OTHER_LOCATION_STATUSES_SQL. */
+    public record LocationStock(String locationId, String locationName, Long available, long onHand) {}
 
     public record VariantMovement(
         String id, String triggerType, Integer delta, String status,
@@ -353,17 +372,20 @@ public class InventoryStockController {
             var totals = stockService.forVariant(stockService.computeAll(), variantId);
 
             // location × {available, onHand} — every tenant location, zero-filled.
-            // available == onHand at this scope; committed isn't location-scoped, shown
-            // once above instead (per the Phase A location-scoping rule).
+            // Main warehouse: available == onHand == its 'available' pieces. Any other location:
+            // onHand = every piece physically there (AT_OTHER_LOCATION_STATUSES_SQL), available null.
+            // committed isn't location-scoped, shown once above instead (Phase A rule).
             List<LocationStock> locations = jdbc.query(
                 """
-                SELECT l.id, l.name,
-                       COALESCE(cnt.on_hand, 0) AS on_hand
+                SELECT l.id, l.name, l.is_fulfillment,
+                       COALESCE(CASE WHEN l.is_fulfillment THEN cnt.available ELSE cnt.at_location END, 0) AS on_hand
                 FROM locations l
                 LEFT JOIN (
-                    SELECT current_location_id, COUNT(*) AS on_hand
+                    SELECT current_location_id,
+                           COUNT(*) FILTER (WHERE status = 'available'::piece_status) AS available,
+                           COUNT(*) AS at_location
                     FROM pieces
-                    WHERE tenant_id = ? AND variant_id = ? AND status = 'available'::piece_status
+                    WHERE tenant_id = ? AND variant_id = ? AND status::text IN """ + AT_OTHER_LOCATION_STATUSES_SQL + """
                     GROUP BY current_location_id
                 ) cnt ON cnt.current_location_id = l.id
                 WHERE l.tenant_id = ?
@@ -371,7 +393,8 @@ public class InventoryStockController {
                 """,
                 (rs, i) -> {
                     long onHand = rs.getLong("on_hand");
-                    return new LocationStock(rs.getString("id"), rs.getString("name"), onHand, onHand);
+                    return new LocationStock(rs.getString("id"), rs.getString("name"),
+                        rs.getBoolean("is_fulfillment") ? onHand : null, onHand);
                 },
                 tenantId, variantId, tenantId);
 

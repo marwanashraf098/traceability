@@ -120,6 +120,10 @@ export default function StockTab() {
     })
   }
 
+  // A location other than the main warehouse counts every piece physically there ("At location");
+  // nothing there can be picked, so the backend sends available: null and the cells show a dash.
+  const otherLocation = locations.some(l => l.id === locationId && !l.is_fulfillment)
+
   const locationOptions = [
     { value: '', label: t('inventory.stock.allLocations') },
     ...locations.map(l => ({ value: l.id, label: l.name })),
@@ -179,7 +183,9 @@ export default function StockTab() {
               <thead>
                 <tr className="border-b border-line">
                   <th className="tbl-header text-start">{t('inventory.stock.col.product')}</th>
-                  <th className="tbl-header text-end">{t('inventory.stock.col.onHand')}</th>
+                  <th className="tbl-header text-end">
+                    {t(otherLocation ? 'inventory.stock.col.atLocation' : 'inventory.stock.col.onHand')}
+                  </th>
                   <th className="tbl-header text-end">
                     <span className="inline-flex items-center gap-1 justify-end">
                       {t('inventory.stock.col.committed')}
@@ -223,7 +229,9 @@ export default function StockTab() {
                         <td className="tbl-cell text-end text-primary">
                           {product.committed == null ? <span className="text-muted">—</span> : product.committed.toLocaleString()}
                         </td>
-                        <td className="tbl-cell text-end font-medium text-primary">{product.available.toLocaleString()}</td>
+                        <td className="tbl-cell text-end font-medium text-primary">
+                          {product.available == null ? <span className="text-muted">—</span> : product.available.toLocaleString()}
+                        </td>
                         <td className="tbl-cell text-center">
                           <SyncChip status={rollupSync(product.variants)} />
                         </td>
@@ -245,8 +253,8 @@ export default function StockTab() {
                           <td className="tbl-cell text-end text-muted">
                             {variant.committed == null ? '—' : variant.committed.toLocaleString()}
                           </td>
-                          <td className={cn('tbl-cell text-end', variant.available < 0 ? 'text-critical font-semibold' : 'text-muted')}>
-                            {variant.available.toLocaleString()}
+                          <td className={cn('tbl-cell text-end', variant.available != null && variant.available < 0 ? 'text-critical font-semibold' : 'text-muted')}>
+                            {variant.available == null ? '—' : variant.available.toLocaleString()}
                           </td>
                           <td className="tbl-cell text-center">
                             <SyncChip status={variant.shopifySync} />

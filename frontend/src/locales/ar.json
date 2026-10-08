@@ -197,6 +197,7 @@
       "col": {
         "product": "المنتج",
         "onHand": "المتوفر",
+        "atLocation": "في الموقع",
         "committed": "محجوز",
         "available": "متاح",
         "shopify": "شوبيفاي"
