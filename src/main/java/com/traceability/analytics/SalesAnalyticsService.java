@@ -17,6 +17,7 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -662,6 +663,57 @@ public class SalesAnalyticsService {
                 rs.getInt("variant_count"),
                 topVariants(rs)));
         return new ProductSalesResponse(period.range(), sort.name().toLowerCase(), rows);
+    }
+
+    // ── /variants/daily ─────────────────────────────────────────────────────
+
+    /** At most this many variant ids per /variants/daily call. */
+    public static final int MAX_DAILY_VARIANTS = 20;
+
+    /** One variant's sold units per Cairo day of the period (dense: a 0 for every day without a sale). */
+    public record VariantDaily(UUID variantId, long totalUnits, List<Long> units) {}
+
+    public record VariantDailyResponse(AnalyticsPeriod.Range range, List<LocalDate> days, List<VariantDaily> variants) {}
+
+    /*
+     * Sold units (the slice-1 rule: soldLines — post-floor, not cancelled, not an internal exchange
+     * order, quantity after the refund add-back > 0) per variant and Cairo placed day. soldLines' 7
+     * parameters, then the variant ids (uuid[]).
+     */
+    private static final String VARIANT_DAILY_SQL = soldLines(false) + """
+        SELECT variant_id, (placed_at AT TIME ZONE 'Africa/Cairo')::date AS day, SUM(qty) AS units
+        FROM lines
+        WHERE variant_id = ANY (?::uuid[])
+        GROUP BY variant_id, day
+        """;
+
+    /** Sold units per day for the given variants, in the order asked; unknown ids get zeros. */
+    @Transactional(readOnly = true)
+    public VariantDailyResponse variantsDaily(AnalyticsPeriod period, List<UUID> ids) {
+        UUID tid = TenantContext.require();
+        List<LocalDate> days = new ArrayList<>();
+        for (LocalDate d = period.from(); !d.isAfter(period.to()); d = d.plusDays(1)) days.add(d);
+        Map<UUID, long[]> byVariant = new LinkedHashMap<>();
+        for (UUID id : ids) byVariant.putIfAbsent(id, new long[days.size()]);
+        jdbc.query(VARIANT_DAILY_SQL, ps -> {
+            int i = AnalyticsSql.bindSoldLines(ps, tid, period, overrides);
+            ps.setArray(i, ps.getConnection().createArrayOf("uuid", byVariant.keySet().toArray()));
+        }, rs -> {
+            long[] series = byVariant.get(rs.getObject("variant_id", UUID.class));
+            int idx = (int) java.time.temporal.ChronoUnit.DAYS.between(period.from(), rs.getDate("day").toLocalDate());
+            if (series != null && idx >= 0 && idx < series.length) series[idx] += rs.getLong("units");
+        });
+        List<VariantDaily> out = new ArrayList<>();
+        for (Map.Entry<UUID, long[]> e : byVariant.entrySet()) {
+            List<Long> units = new ArrayList<>(e.getValue().length);
+            long total = 0;
+            for (long u : e.getValue()) {
+                units.add(u);
+                total += u;
+            }
+            out.add(new VariantDaily(e.getKey(), total, units));
+        }
+        return new VariantDailyResponse(period.range(), days, out);
     }
 
     @Transactional(readOnly = true)

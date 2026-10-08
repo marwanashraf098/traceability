@@ -42,7 +42,7 @@ import java.util.concurrent.ConcurrentHashMap;
  * Eligible: the tenant's Bosta legs (any type) in a terminal state, on a post-floor order, not paid,
  * not 'unresolved', Bosta still knows the tracking number. Cadence:
  *   none      — every 12 h;
- *   deposited — once a day; when the tenant's payout weekday is known (the weekday most recent
+ *   deposited — once a day (never a zero cash cycle — SettlementSql.zeroCycle: nothing is owed); when the tenant's payout weekday is known (the weekday most recent
  *               cashout dates share), only on the day after it, with an 8-day safety net;
  *   'unresolved' (no more refreshes) only when a successful read made 45+ days after the leg
  *               finished still shows no payout; such old legs are read first, oldest first.
@@ -144,7 +144,7 @@ public class SettlementRefreshJob {
                 "  AND fo.status <> 'cancelled'::order_status AND " + SettlementSql.POST_FLOOR +
                 "  AND ( (s.settlement_status = 'none' " +
                 "         AND (s.settlement_refreshed_at IS NULL OR s.settlement_refreshed_at < now() - interval '12 hours')) " +
-                "     OR (s.settlement_status = 'deposited' " +
+                "     OR (s.settlement_status = 'deposited' AND NOT " + SettlementSql.zeroCycle("s") +
                 "         AND (s.settlement_refreshed_at IS NULL " +
                 "              OR (? AND s.settlement_refreshed_at < now() - interval '20 hours') " +
                 "              OR s.settlement_refreshed_at < now() - interval '8 days')) ) " +
@@ -220,6 +220,7 @@ public class SettlementRefreshJob {
                 "UPDATE shipments s SET settlement_status = 'unresolved' " +
                 "WHERE s.tenant_id = ? AND s.provider = 'bosta' " +
                 "  AND s.settlement_status IN ('none', 'deposited') " +
+                "  AND NOT " + SettlementSql.zeroCycle("s") +
                 "  AND s.internal_state IN " + SettlementSql.TERMINAL_STATES +
                 "  AND s.settlement_verified_at IS NOT NULL " +
                 "  AND s.settlement_verified_at >= " + SettlementSql.terminalAt("s") + " + interval '" + UNRESOLVED_AFTER + "'",
