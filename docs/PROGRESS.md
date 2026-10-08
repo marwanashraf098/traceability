@@ -26,7 +26,7 @@ locations — Traced still writes only to the Traced Main Warehouse.
 - **UI:** Settings → Locations "While stock is here: Remove from Shopify / Leave Shopify unchanged" + help line (EN/AR);
   `PUT /api/v1/locations/{id}/shopify-sync-mode` (owner/manager; 409 for the main warehouse).
 - **CLAUDE.md:** named decrement set now five (pushTransferOut) + the ISSUE 2 TRANSFER OUT paragraph.
-- **Tests:** `TransferShopifySyncTest` (16), `TransferOutClassificationWireTest` (10), `TransferRepairScriptTest` (3, real psql),
+- **Tests:** `TransferShopifySyncTest` (16), `TransferOutClassificationWireTest` (13), `TransferRepairScriptTest` (3, real psql),
   frontend `locationsSyncMode` (2).
   Revert-checked: no claim at markSent → 8 red; no one-sender guard → ts2; ambiguous as failed → ts3; no +1 → ts4/6/9;
   leave ignored → ts5/6; live mode instead of snapshot → ts6; no unlinked skip → ts7; no claim at closeOneWay → ts9;
@@ -36,9 +36,9 @@ locations — Traced still writes only to the Traced Main Warehouse.
   never counted them; each gets +1 on return). Sold/lost report: Snouts DBPINK-3 sold ×1 left before the seed → nothing
   to fix; Onboarding Videos sold ×2 / lost ×4 → linked but not seeded → the seed won't count them. Jumi + demo excluded.
 - **Review round (approved 2026-10-09):** linked-but-never-seeded = unlinked (send → skipped `not_seeded`; the +1 rule
-  requires an applied seed). `pushTransferOut` classification: definite ONLY HTTP 4xx / userErrors (sweep re-sends ≤ 5);
-  5xx, top-level GraphQL errors (incl. THROTTLED), timeouts, connection errors, empty/unreadable bodies and any
-  unexpected error → failed_ambiguous, never re-sent. New tests ts12–ts16 + `TransferOutClassificationWireTest` (10),
+  requires an applied seed). `pushTransferOut` classification: definite ONLY HTTP 4xx / userErrors / THROTTLED-only with no data
+  (sweep re-sends ≤ 5; THROTTLED approved 2026-10-09); 5xx, any other top-level GraphQL error (THROTTLED mixed or with data), timeouts, connection errors, empty/unreadable bodies and any
+  unexpected error → failed_ambiguous, never re-sent. New tests ts12–ts16 + `TransferOutClassificationWireTest` (13),
   each revert-checked. Existing tests edited (approved): WorkerPermissionGuardTest cleanup (+ transfer_shopify_syncs),
   MigrationSmokeTest TENANT_SCOPED_TABLES (+ transfer_shopify_syncs).
 

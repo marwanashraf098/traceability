@@ -22,9 +22,11 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  * Issue 2 (approved 2026-10-09) — how the REAL ShopifyHttpGateway.pushTransferOut classifies its one
  * attempt (fake network, the ShopifyAdjustClassificationWireTest harness). DEFINITE rejection
  * (ShopifyException — nothing applied; TransferShopifySync's sweep may re-send, ≤ 5 attempts) is ONLY:
- *   w1 HTTP 4xx                    w2 inventoryAdjustQuantities userErrors
+ *   w1 HTTP 4xx   w2 inventoryAdjustQuantities userErrors
+ *   w11 top-level errors that are ONLY extensions.code THROTTLED, with no data (Shopify didn't execute it)
  * Everything else is AMBIGUOUS (ShopifyAmbiguousException — failed_ambiguous, never re-sent):
- *   w3 HTTP 5xx   w4 top-level GraphQL errors (incl. THROTTLED)   w5 read timeout
+ *   w3 HTTP 5xx   w4 any other top-level GraphQL error   w12 THROTTLED mixed with another error
+ *   w13 THROTTLED with data   w5 read timeout
  *   w6 connection refused   w7 2xx with no data / null body   w8 unreadable body
  * w9 success; w10 a non-negative delta is refused before ANY request.
  */
@@ -75,8 +77,22 @@ class TransferOutClassificationWireTest {
 
     @Test void w3_http5xx_ambiguous() { ambiguous(() -> HttpStatus.BAD_GATEWAY); }
 
-    @Test void w4_topLevelGraphqlErrors_includingThrottled_ambiguous() {
-        ambiguous(() -> "{\"errors\":[{\"message\":\"Throttled\",\"extensions\":{\"code\":\"THROTTLED\"}}]}");
+    @Test void w4_otherTopLevelGraphqlError_ambiguous() {
+        ambiguous(() -> "{\"errors\":[{\"message\":\"Internal error\",\"extensions\":{\"code\":\"INTERNAL_SERVER_ERROR\"}}]}");
+    }
+
+    @Test void w11_throttledOnly_noData_definite() {
+        definite(() -> "{\"errors\":[{\"message\":\"Throttled\",\"extensions\":{\"code\":\"THROTTLED\"}}]}");
+    }
+
+    @Test void w12_throttledMixedWithAnotherError_ambiguous() {
+        ambiguous(() -> "{\"errors\":[{\"message\":\"Throttled\",\"extensions\":{\"code\":\"THROTTLED\"}}," +
+            "{\"message\":\"Internal error\"}]}");
+    }
+
+    @Test void w13_throttledWithData_ambiguous() {
+        ambiguous(() -> "{\"errors\":[{\"message\":\"Throttled\",\"extensions\":{\"code\":\"THROTTLED\"}}]," +
+            "\"data\":{\"inventoryAdjustQuantities\":null}}");
     }
 
     @Test void w5_readTimeout_ambiguous() { ambiguous(() -> new java.net.SocketTimeoutException("Read timed out")); }

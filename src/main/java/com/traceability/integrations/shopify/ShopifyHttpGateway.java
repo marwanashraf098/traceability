@@ -1127,8 +1127,18 @@ class ShopifyHttpGateway implements ShopifyGateway {
         }
         JsonNode errors = response.get("errors");
         if (errors != null && errors.isArray() && errors.size() > 0) {
-            // Top-level GraphQL errors (incl. THROTTLED) are neither a 4xx nor a userError — treated as
-            // AMBIGUOUS (conservative, approved 2026-10-09): a person checks Shopify, nothing re-sends.
+            // THROTTLED-only with no data: Shopify did not execute the request — DEFINITE (approved
+            // 2026-10-09), the sweep may re-send within its attempt limit.
+            boolean onlyThrottled = true;
+            for (JsonNode err : errors) {
+                if (!"THROTTLED".equals(err.path("extensions").path("code").asText(""))) { onlyThrottled = false; break; }
+            }
+            JsonNode throttledData = response.get("data");
+            if (onlyThrottled && (throttledData == null || throttledData.isNull())) {
+                throw new ShopifyException("Transfer out GraphQL error (THROTTLED): not executed by Shopify");
+            }
+            // Any other top-level GraphQL error (or THROTTLED mixed with another error / with data) is
+            // neither a 4xx nor a userError — AMBIGUOUS: a person checks Shopify, nothing re-sends.
             String code = errors.get(0).path("extensions").path("code").asText("");
             throw new ShopifyAmbiguousException("Transfer out GraphQL error"
                 + (code.isBlank() ? "" : " (" + code + ")") + ": "
