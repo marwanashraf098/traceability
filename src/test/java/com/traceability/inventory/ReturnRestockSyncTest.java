@@ -37,6 +37,8 @@ import static org.mockito.Mockito.*;
  *   rs4  a Shopify refund restock arriving AFTER Traced's +1 → HIGH restocked_twice, no Shopify write
  *   rs5  tenant with no main warehouse → restock refused, piece unchanged
  *   rs6  restock into a non-main location → recorded skipped_not_fulfillment_location row, nothing sent
+ *   rs7  the same refund delivered again (repeat orders/updated) → still ONE restocked_twice row and ONE
+ *        immediate alert email per owner, across repeated sweeps
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.NONE)
 @Testcontainers
@@ -69,6 +71,8 @@ class ReturnRestockSyncTest {
     @Autowired ExceptionService exceptions;
     @MockBean ShopifyGateway shopifyGateway;
     @MockBean ShopifyTokenProvider tokenProvider;
+    @Autowired javax.sql.DataSource dataSource;
+    @Autowired org.springframework.transaction.PlatformTransactionManager txm;
 
     record T(UUID tenant, UUID store, UUID main, UUID user, UUID variant, long shopifyVariantId) {}
 
@@ -198,6 +202,33 @@ class ReturnRestockSyncTest {
 
         awaitCount(t, "status = 'skipped_not_fulfillment_location' AND location_id = '" + showroom + "'", 1);
         verify(shopifyGateway, never()).adjustInventoryQuantities(any(), any(), any(), any(), anyInt(), any(), any());
+    }
+
+    // ── rs7: repeat webhooks for the same refund → one exception, one alert ─────
+
+    @Test
+    void rs7_repeatWebhooksForSameRefund_oneException_oneAlert() throws Exception {
+        T t = tenant("rs7", true);
+        UUID order = order(t, "{\"id\": 1, \"refunds\": []}");
+        String piece = returnedPiece(t, order, t.main());
+        TenantContext.runAs(t.tenant(), () -> returns.restock(piece, null, t.user()));
+        awaitCount(t, "status = 'applied'", 1);
+        // The real immediate sweep (built directly — its bean needs the JobRunr server), email mocked.
+        com.traceability.notifications.EmailGateway emailGateway = mock(com.traceability.notifications.EmailGateway.class);
+        var immediateAlerts = new com.traceability.notifications.ExceptionImmediateAlertJob(
+            dataSource, jdbc, exceptions, emailGateway, txm);
+        String owner = jdbc.queryForObject("SELECT email FROM users WHERE id = ?", String.class, t.user());
+
+        for (int delivery = 0; delivery < 3; delivery++) {
+            // orders/updated for the same refund, delivered again: raw is replaced with the same refunds.
+            jdbc.update("UPDATE orders SET raw = ?::jsonb WHERE id = ?", refundRaw(t, 1), order);
+            assertThat(restockedTwice(t)).hasSize(1);
+            immediateAlerts.run();
+        }
+
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM exception_notifications WHERE tenant_id = ? " +
+            "AND exception_type = 'restocked_twice' AND channel = 'immediate'", Integer.class, t.tenant())).isEqualTo(1);
+        verify(emailGateway, times(1)).send(eq(owner), anyString(), contains("Restocked twice"));
     }
 
     // ── helpers ──────────────────────────────────────────────────────────────────
