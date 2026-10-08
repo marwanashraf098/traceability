@@ -182,6 +182,37 @@ public class ProductExtrasAnalyticsService {
             prev == null ? null : extrasOf(variants.get(false), failed.get(false), pairs.get(false)));
     }
 
+    /**
+     * The per-variant rows of {@code period} only (sold / delivered / returned / exchanged units —
+     * the s2 returns and the s5 exchanges), for the stock slice's returns + exchanges rate. Same
+     * statement as /products/extras, so both read one definition.
+     */
+    @Transactional(readOnly = true)
+    public List<VariantRow> variantRows(AnalyticsPeriod period) {
+        UUID tid = TenantContext.require();
+        java.sql.Timestamp start = java.sql.Timestamp.from(period.startInclusive());
+        List<VariantRow> out = new ArrayList<>();
+        jdbc.query(EXTRAS_SQL, ps -> {
+            int i = AnalyticsSql.bindSoldLines(ps, tid, period, overrides);
+            for (int k = 0; k < 6; k++) ps.setObject(i++, tid);
+            ps.setTimestamp(i++, start);
+            ps.setObject(i++, tid);
+            ps.setObject(i++, tid);
+            ps.setTimestamp(i++, start);
+            ps.setTimestamp(i++, start);
+            ps.setTimestamp(i++, start);
+            ps.setInt(i, Integer.MAX_VALUE);                  // no pairs needed
+        }, rs -> {
+            if ("v".equals(rs.getString("kind")) && rs.getBoolean("is_current")) {
+                out.add(new VariantRow(rs.getObject("variant_id", UUID.class), rs.getLong("sold"),
+                    rs.getLong("delivered_units"), rs.getLong("returned"), rs.getBigDecimal("realized"),
+                    rs.getLong("exchanged"), rs.getString("sku"), rs.getString("variant_title"),
+                    rs.getString("product_title"), rs.getString("size_raw"), rs.getBoolean("has_size_option")));
+            }
+        });
+        return out;
+    }
+
     private static <T> Map<Boolean, List<T>> split() {
         Map<Boolean, List<T>> m = new HashMap<>();
         m.put(true, new ArrayList<>());
@@ -189,7 +220,7 @@ public class ProductExtrasAnalyticsService {
         return m;
     }
 
-    record VariantRow(UUID variantId, long sold, long deliveredUnits, long returned, BigDecimal realized,
+    public record VariantRow(UUID variantId, long sold, long deliveredUnits, long returned, BigDecimal realized,
                       long exchanged, String sku, String variantTitle, String productTitle, String sizeRaw,
                       boolean hasSizeOption) {}
 

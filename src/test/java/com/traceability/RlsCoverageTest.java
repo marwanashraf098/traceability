@@ -166,6 +166,14 @@ class RlsCoverageTest {
             "/api/v1/analytics/variants/{id}/orders",
             "/api/v1/analytics/alerts",
             "/api/v1/analytics/cash-forecast",
+            // Analytics slice 4 (owner only) — analyticsStock_reflectSeededPiece below; app_user isolation
+            // in AnalyticsStockTest
+            "/api/v1/analytics/stock/summary",
+            "/api/v1/analytics/stock/variants",
+            "/api/v1/analytics/stock/restock",
+            "/api/v1/analytics/settings",
+            "/api/v1/analytics/pieces/{id}/history",
+            "/api/v1/analytics/variants/{id}/pieces",
             "/api/v1/inventory/stock",
             "/api/v1/inventory/variants/{variantId}/breakdown",
             "/api/v1/inventory/breakdown",
@@ -1717,6 +1725,31 @@ class RlsCoverageTest {
         jdbc.update("DELETE FROM shipments WHERE id = ?", shipmentId);
         jdbc.update("DELETE FROM order_items WHERE order_id = ?", orderId);
         jdbc.update("DELETE FROM orders WHERE id = ?", orderId);
+    }
+
+    @Test
+    void analyticsStock_reflectSeededPiece() {
+        String pieceId = "CVG-S4-" + UUID.randomUUID().toString().substring(0, 8);
+        jdbc.update("INSERT INTO pieces (id, tenant_id, variant_id, barcode, short_code, status, current_location_id) " +
+                    "VALUES (?, ?, ?, ?, ?, 'available', ?)", pieceId, tenantId, variantId, "PC-" + pieceId,
+                    pieceId.substring(pieceId.length() - 6), locationId);
+
+        ResponseEntity<Map> summary = get("/api/v1/analytics/stock/summary?period=30d", Map.class);
+        assertThat(summary.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(summary.getBody().get("hasPieces")).isEqualTo(true);
+        assertThat(((Number) summary.getBody().get("inWarehouse")).longValue()).isGreaterThanOrEqualTo(1);
+        ResponseEntity<Map> history = get("/api/v1/analytics/pieces/" + pieceId + "/history", Map.class);
+        assertThat(history.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(history.getBody().get("pieceId")).isEqualTo(pieceId);
+        ResponseEntity<Map> pieces = get("/api/v1/analytics/variants/" + variantId + "/pieces", Map.class);
+        assertThat(pieces.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(((Number) pieces.getBody().get("total")).longValue()).isGreaterThanOrEqualTo(1);
+        for (String path : List.of("/api/v1/analytics/stock/variants", "/api/v1/analytics/stock/restock",
+                                   "/api/v1/analytics/settings")) {
+            assertThat(get(path, Map.class).getStatusCode()).as(path).isEqualTo(HttpStatus.OK);
+        }
+
+        jdbc.update("DELETE FROM pieces WHERE id = ?", pieceId);
     }
 
     @Test
