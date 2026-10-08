@@ -301,9 +301,10 @@ public class PortalService {
     /**
      * Step 6a — THE per-line form of ShipmentLinkService.orderUntrackedSql (alias {@code oi}):
      * the order line has NO allocation row of any status. Released allocations count as tracked,
-     * and so does a partially allocated line (piece-level only).
+     * and so does a partially allocated line (piece-level only). Also the Scan returns parcel view's
+     * rule for which lines get per-unit rows (UntrackedParcelUnits) — never re-derive it.
      */
-    static final String LINE_UNTRACKED_SQL =
+    public static final String LINE_UNTRACKED_SQL =
         "NOT EXISTS (SELECT 1 FROM allocations a_ln WHERE a_ln.order_item_id = oi.id) ";
 
     /**
@@ -312,7 +313,7 @@ public class PortalService {
      * (Shopify-side removals / refunds), minus units already in a request that isn't released
      * (awaiting, arrived or done — a unit that came back is not returnable again).
      */
-    private static final String UNTRACKED_CAP_SQL =
+    public static final String UNTRACKED_CAP_SQL =
         "(CASE WHEN (oi.raw->>'current_quantity') ~ '^[0-9]+$' " +
         "      THEN LEAST(oi.quantity, (oi.raw->>'current_quantity')::int) ELSE oi.quantity END)";
 

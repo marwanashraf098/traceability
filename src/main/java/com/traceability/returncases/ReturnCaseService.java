@@ -167,7 +167,7 @@ public class ReturnCaseService {
         "       CASE WHEN s.internal_state = 'lost'::shipment_internal_state THEN 'lost' " +
         "            WHEN s.internal_state::text IN ('terminated', 'cancelled') THEN 'cancelled' " +
         "            WHEN c.n >= 2 THEN 'link_request' " +
-        "            WHEN st.state = 'received_untracked' AND rtr.open THEN 'add_in_receiving' " +
+        "            WHEN (st.state = 'received_untracked' AND aw.open_rtr) OR aw.open_units THEN 'add_in_receiving' " +
         "            WHEN st.state = 'received_untracked' THEN 'received' " +
         "            WHEN st.state = 'in_transit' THEN 'on_the_way' " +
         "            WHEN aw.awaiting THEN 'scan' " +
@@ -197,8 +197,9 @@ public class ReturnCaseService {
         "CROSS JOIN LATERAL (SELECT " + ReturnCaseRules.inspectionStateSql("s", "pc.n") + " AS state) st " +
         "CROSS JOIN LATERAL (SELECT " + ReturnCaseRules.RETURN_LEG_ENTERED_RETURNED_AT_SQL + " AS entered_returned_at) x " +
         "CROSS JOIN LATERAL (SELECT (" + ReturnCaseRules.RETURN_LEG_AWAITING_SCAN_SQL + ") AS awaiting, " +
-        "       (" + ReturnCaseRules.RETURN_TO_RECEIVE_OPEN_SQL + ") AS open_rtr) aw " +
-        "CROSS JOIN LATERAL (SELECT aw.open_rtr AS open) rtr " +
+        "       (" + ReturnCaseRules.RETURN_TO_RECEIVE_OPEN_SQL + ") AS open_rtr, " +
+        "       (" + ReturnCaseRules.LEG_HAS_UNIT_TO_RECEIVE_SQL + ") AS open_units) aw " +
+        "CROSS JOIN LATERAL (SELECT aw.open_rtr OR aw.open_units AS open) rtr " +
         "CROSS JOIN LATERAL (SELECT (" + ReturnCaseRules.returnLegUnscannedSql("x.entered_returned_at", "t.return_unscanned_window_days") +
         "       AND " + ReturnCaseRules.notResolved("return_leg_unscanned", ReturnCaseRules.RETURN_LEG_UNSCANNED_KEY_SQL, "s.tenant_id") +
         "       ) AS alert) un " +

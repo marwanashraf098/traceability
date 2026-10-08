@@ -378,12 +378,28 @@ public class ExceptionService {
             "       s.raw #>> '{returnSpecs,packageDetails,description}' AS bosta_description, " +
             "       u.name AS marked_by_name, s.return_intake_session_id AS intake_session_id, " +
             "       s.return_intake_completed_at AS occurred_at, " +
-            "       s.id::text AS subject_key " +
+            "       s.id::text AS subject_key, NULL::uuid AS unit_intake_id, " +
+            "       NULL::text AS product_title, NULL::text AS variant_title " +
             "FROM shipments s " +
             "JOIN orders o ON o.id = s.order_id AND o.tenant_id = s.tenant_id " +
             "LEFT JOIN users u ON u.id = s.return_intake_by " +
-            "WHERE s.tenant_id = ? AND " + ReturnCaseRules.RETURN_TO_RECEIVE_OPEN_SQL,
-            tid);
+            "WHERE s.tenant_id = ? AND " + ReturnCaseRules.RETURN_TO_RECEIVE_OPEN_SQL +
+            // Issue 1 (V154): one per untracked unit marked Arrived · sellable in Scan returns.
+            "UNION ALL " +
+            "SELECT 'return_to_receive', 'MEDIUM', 'untracked_unit', " +
+            "       s.id, s.tracking_number, o.id, o.number, NULL::text, " +
+            "       mu.name, u.return_session_id, u.created_at, " +
+            "       " + ReturnCaseRules.UNIT_TO_RECEIVE_KEY_SQL + ", u.id, " +
+            "       COALESCE(pr.title, oi.raw->>'title'), v.title " +
+            "FROM untracked_unit_intakes u " +
+            "JOIN shipments s ON s.id = u.shipment_id AND s.tenant_id = u.tenant_id " +
+            "JOIN orders o ON o.id = u.order_id AND o.tenant_id = u.tenant_id " +
+            "JOIN order_items oi ON oi.id = u.order_item_id " +
+            "LEFT JOIN variants v ON v.id = oi.variant_id " +
+            "LEFT JOIN products pr ON pr.id = v.product_id " +
+            "LEFT JOIN users mu ON mu.id = u.actor_user_id " +
+            "WHERE u.tenant_id = ? AND " + ReturnCaseRules.UNIT_TO_RECEIVE_OPEN_SQL,
+            tid, tid);
     }
 
     /**
@@ -1475,6 +1491,20 @@ public class ExceptionService {
             case "return_to_receive" -> {
                 String t = str(item, "tracking_number");
                 String n = str(item, "order_number");
+                if (item.get("unit_intake_id") != null) {
+                    // Issue 1: one untracked unit marked Arrived · sellable in Scan returns.
+                    Object vt = item.get("variant_title");
+                    String product = str(item, "product_title") + (vt != null ? " / " + vt : "");
+                    item.put("descriptionEn",
+                        "Return " + t + " for order " + n + ": " + product + " came back sellable, but Traced never " +
+                        "tracked this order. Add it in your next Receiving session, or resolve this if it won't go back into stock.");
+                    item.put("descriptionAr",
+                        "المرتجع " + t + " للطلب " + n + ": عاد " + product + " صالحًا للبيع، لكن Traced لم يتتبّع هذا الطلب. " +
+                        "أضفه في جلسة الاستلام القادمة، أو عالِج هذا التنبيه إذا لن يعود إلى المخزون.");
+                    item.put("suggestedAction", "add_in_receiving");
+                    item.put("actionUrl", "/receiving");
+                    return;
+                }
                 item.put("descriptionEn",
                     "Return " + t + " for order " + n + " arrived, but Traced never tracked this order. " +
                     "Add the item in your next Receiving session, or resolve this if it won't go back into stock.");
