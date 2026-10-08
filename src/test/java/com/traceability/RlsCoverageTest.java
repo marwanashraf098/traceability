@@ -156,6 +156,13 @@ class RlsCoverageTest {
             "/api/v1/analytics/delivery/summary",
             "/api/v1/analytics/delivery/failure-reasons",
             "/api/v1/analytics/products/extras",
+            // Analytics slice 7 (owner only) — analyticsFinances_reflectSeededOrder below; app_user
+            // isolation in AnalyticsFinancesTest
+            "/api/v1/analytics/orders",
+            "/api/v1/analytics/orders/export.csv",
+            "/api/v1/analytics/variants/{id}/orders",
+            "/api/v1/analytics/alerts",
+            "/api/v1/analytics/cash-forecast",
             "/api/v1/inventory/stock",
             "/api/v1/inventory/variants/{variantId}/breakdown",
             "/api/v1/inventory/breakdown",
@@ -1642,6 +1649,46 @@ class RlsCoverageTest {
             assertThat(get(path, Map.class).getStatusCode()).as(path).isEqualTo(HttpStatus.OK);
         }
 
+        jdbc.update("DELETE FROM shipments WHERE id = ?", shipmentId);
+        jdbc.update("DELETE FROM order_items WHERE order_id = ?", orderId);
+        jdbc.update("DELETE FROM orders WHERE id = ?", orderId);
+    }
+
+    @Test
+    void analyticsFinances_reflectSeededOrder() {
+        UUID orderId = UUID.randomUUID();
+        UUID shipmentId = UUID.randomUUID();
+        jdbc.update(
+                "INSERT INTO orders (id, tenant_id, store_id, external_id, number, status, " +
+                "    payment_method, placed_at, on_hold, raw) " +
+                "VALUES (?, ?, ?, 'EXT-CVG-S7', '#CVG-S7', 'new'::order_status, 'cod', now(), false, " +
+                "    '{\"payment_gateway_names\":[\"Cash on Delivery (COD)\"]}'::jsonb)",
+                orderId, tenantId, storeId);
+        jdbc.update(
+                "INSERT INTO order_items (id, tenant_id, order_id, variant_id, quantity, raw) " +
+                "VALUES (gen_random_uuid(), ?, ?, ?, 1, '{\"price\":\"150.00\",\"quantity\":1}'::jsonb)",
+                tenantId, orderId, variantId);
+        jdbc.update(
+                "INSERT INTO shipments (id, tenant_id, order_id, tracking_number, internal_state, shipment_leg, raw) " +
+                "VALUES (?, ?, ?, 'CVG-S7-1', 'delivered', 'forward', '{\"type\":{\"code\":10}}'::jsonb)",
+                shipmentId, tenantId, orderId);
+
+        ResponseEntity<Map> orders = get("/api/v1/analytics/orders?period=today&q=CVG-S7", Map.class);
+        assertThat(orders.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(((Number) orders.getBody().get("total")).longValue()).isEqualTo(1);
+        assertThat(((Map<?, ?>) ((List<?>) orders.getBody().get("orders")).get(0)).get("financialStatus"))
+            .isEqualTo("awaiting_payout");
+        ResponseEntity<Map> drawer = get("/api/v1/analytics/variants/" + variantId + "/orders", Map.class);
+        assertThat(drawer.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat((List<?>) drawer.getBody().get("orders")).isNotEmpty();
+        ResponseEntity<String> csv = get("/api/v1/analytics/orders/export.csv?period=today&q=CVG-S7", String.class);
+        assertThat(csv.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(csv.getBody()).contains("#CVG-S7");
+        for (String path : List.of("/api/v1/analytics/alerts?period=today", "/api/v1/analytics/cash-forecast")) {
+            assertThat(get(path, Map.class).getStatusCode()).as(path).isEqualTo(HttpStatus.OK);
+        }
+
+        jdbc.update("DELETE FROM audit_log WHERE tenant_id = ? AND action = 'analytics_orders_export'", tenantId);
         jdbc.update("DELETE FROM shipments WHERE id = ?", shipmentId);
         jdbc.update("DELETE FROM order_items WHERE order_id = ?", orderId);
         jdbc.update("DELETE FROM orders WHERE id = ?", orderId);

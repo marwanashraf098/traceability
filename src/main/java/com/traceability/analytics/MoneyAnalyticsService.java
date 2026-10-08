@@ -129,7 +129,7 @@ public class MoneyAnalyticsService {
      * terminal (the one success-rate definition, 2026-10-08). And the overall rate. Parameters:
      * tenant id, now.
      */
-    private static final String RATES = """
+    static final String RATES = """
         rates AS (
             SELECT dl.city,
                    COUNT(*) FILTER (WHERE dl.outcome = 'delivered')                     AS delivered,
@@ -169,6 +169,28 @@ public class MoneyAnalyticsService {
             SELECT city, delivered::numeric / NULLIF(delivered + failed, 0) AS rate FROM rates
         )
         """;
+
+    /*
+     * In transit with Bosta (the pipeline's stage, shared with the cash forecast): forward legs picked
+     * up and still moving, not turned Return to Origin, post-floor, order not cancelled. Columns cod,
+     * city. Parameters: override domains, override days, tenant id.
+     */
+    static final String IN_TRANSIT_LEGS = """
+                SELECT """ + SettlementSql.cod("s") + """
+                        AS cod, s.city_name AS city
+                FROM shipments s""" + SettlementSql.floorJoin("s") + """
+                WHERE s.tenant_id = ? AND s.provider = 'bosta' AND s.shipment_leg = 'forward'
+                  AND COALESCE(s.type_code, '10') NOT IN ('20', '25', '30')
+                  AND s.internal_state IN ('with_courier', 'exception')
+                  AND fo.status <> 'cancelled'::order_status
+                  AND """ + SettlementSql.POST_FLOOR;
+
+    /** Awaiting payout, deposited: Bosta settled the leg into the wallet, no payout yet. */
+    static final String AWAITING_DEPOSITED = " (s.settlement_status = 'deposited') ";
+
+    /** Awaiting payout, not settled yet: a delivered forward leg with no cash cycle. */
+    static final String AWAITING_UNSETTLED =
+        " (s.settlement_status = 'none' AND s.internal_state = 'delivered' AND s.shipment_leg = 'forward') ";
 
     @Transactional(readOnly = true)
     public Pipeline pipeline(AnalyticsPeriod period) {
@@ -227,44 +249,17 @@ public class MoneyAnalyticsService {
         });
 
         // In transit with Bosta: forward legs picked up and still moving (not turned RTO).
-        String transitSql = "WITH " + RATES + """
-            SELECT COUNT(*) AS n,
-                   COALESCE(SUM(t.cod), 0) AS value,
-                   SUM(t.cod * COALESCE(cr.rate, (SELECT rate FROM overall))) AS expected
-            FROM (
-                SELECT """ + SettlementSql.cod("s") + """
-                        AS cod, s.city_name AS city
-                FROM shipments s""" + SettlementSql.floorJoin("s") + """
-                WHERE s.tenant_id = ? AND s.provider = 'bosta' AND s.shipment_leg = 'forward'
-                  AND COALESCE(s.type_code, '10') NOT IN ('20', '25', '30')
-                  AND s.internal_state IN ('with_courier', 'exception')
-                  AND fo.status <> 'cancelled'::order_status
-                  AND """ + SettlementSql.POST_FLOOR + """
-            ) t
-            LEFT JOIN city_rate cr ON cr.city = t.city
-            """;
-        Stage inTransit = jdbc.query(transitSql, ps -> {
-            ps.setObject(1, tid);
-            ps.setTimestamp(2, Timestamp.from(now));
-            ps.setArray(3, ps.getConnection().createArrayOf("text", overrides.shopDomains()));
-            ps.setArray(4, ps.getConnection().createArrayOf("text", overrides.days()));
-            ps.setObject(5, tid);
-        }, rs -> {
-            rs.next();
-            return new Stage(rs.getLong("n"), money(rs.getBigDecimal("value")), moneyOrNull(rs.getBigDecimal("expected")));
-        });
+        Stage inTransit = inTransit(tid, now);
 
         // Delivered, awaiting payout (deposited, no payout yet) + delivered legs Bosta hasn't settled.
         AwaitingPayout awaiting = jdbc.query(
-            "SELECT COUNT(*) FILTER (WHERE s.settlement_status = 'deposited') AS n, " +
-            "       COALESCE(SUM(s.deposited_amt) FILTER (WHERE s.settlement_status = 'deposited'), 0) AS deposited, " +
-            "       MIN(s.next_cashout_date) FILTER (WHERE s.settlement_status = 'deposited' " +
+            "SELECT COUNT(*) FILTER (WHERE " + AWAITING_DEPOSITED + ") AS n, " +
+            "       COALESCE(SUM(s.deposited_amt) FILTER (WHERE " + AWAITING_DEPOSITED + "), 0) AS deposited, " +
+            "       MIN(s.next_cashout_date) FILTER (WHERE " + AWAITING_DEPOSITED +
             "                                       AND s.next_cashout_date >= ?) AS next_cashout, " +
-            "       COUNT(*) FILTER (WHERE s.settlement_status = 'none' AND s.internal_state = 'delivered' " +
-            "                          AND s.shipment_leg = 'forward') AS unsettled, " +
+            "       COUNT(*) FILTER (WHERE " + AWAITING_UNSETTLED + ") AS unsettled, " +
             "       COALESCE(SUM(" + SettlementSql.cod("s") + " - COALESCE(" + SettlementSql.fee("s") + ", 0)) " +
-            "                FILTER (WHERE s.settlement_status = 'none' AND s.internal_state = 'delivered' " +
-            "                          AND s.shipment_leg = 'forward'), 0) AS unsettled_estimate " +
+            "                FILTER (WHERE " + AWAITING_UNSETTLED + "), 0) AS unsettled_estimate " +
             "FROM shipments s" + SettlementSql.floorJoin("s") +
             "WHERE s.tenant_id = ? AND s.provider = 'bosta' AND " + SettlementSql.POST_FLOOR,
             ps -> {
@@ -303,6 +298,28 @@ public class MoneyAnalyticsService {
             });
 
         return new Pipeline(period.range(), now, notFulfilled, inTransit, awaiting, bank, openOrderDays);
+    }
+
+    /** The pipeline's in-transit stage (IN_TRANSIT_LEGS) at the city success rates — shared with the cash forecast. */
+    Stage inTransit(UUID tid, Instant now) {
+        String transitSql = "WITH " + RATES + """
+            SELECT COUNT(*) AS n,
+                   COALESCE(SUM(t.cod), 0) AS value,
+                   SUM(t.cod * COALESCE(cr.rate, (SELECT rate FROM overall))) AS expected
+            FROM (""" + IN_TRANSIT_LEGS + """
+            ) t
+            LEFT JOIN city_rate cr ON cr.city = t.city
+            """;
+        return jdbc.query(transitSql, ps -> {
+            ps.setObject(1, tid);
+            ps.setTimestamp(2, Timestamp.from(now));
+            ps.setArray(3, ps.getConnection().createArrayOf("text", overrides.shopDomains()));
+            ps.setArray(4, ps.getConnection().createArrayOf("text", overrides.days()));
+            ps.setObject(5, tid);
+        }, rs -> {
+            rs.next();
+            return new Stage(rs.getLong("n"), money(rs.getBigDecimal("value")), moneyOrNull(rs.getBigDecimal("expected")));
+        });
     }
 
     // ── /fees ───────────────────────────────────────────────────────────────
@@ -510,8 +527,7 @@ public class MoneyAnalyticsService {
         List<StuckShipment> never = jdbc.query(
             "SELECT s.tracking_number, fo.number, s.internal_state::text AS st, " +
             "       EXTRACT(DAY FROM (?::timestamptz - s.created_at))::bigint AS days, " + SettlementSql.cod("s") + " AS cod" +
-            base + " AND s.shipment_leg = 'forward' AND s.internal_state = 'created' " +
-            "  AND s.created_at < ?::timestamptz - interval '7 days' " +
+            base + " AND " + SettlementSql.neverPickedUp("s", "?::timestamptz") +
             "ORDER BY s.created_at, s.tracking_number",
             ps -> stuckParams(ps, now, tid),
             (rs, n) -> new StuckShipment(rs.getString(1), rs.getString(2), "Booked, never picked up",
@@ -522,29 +538,20 @@ public class MoneyAnalyticsService {
             "       COALESCE(s.state_value, s.internal_state::text) AS st, " +
             "       EXTRACT(DAY FROM (?::timestamptz - lc.last_change))::bigint AS days, " + SettlementSql.cod("s") + " AS cod" +
             " FROM shipments s" + SettlementSql.floorJoin("s") +
-            " CROSS JOIN LATERAL (SELECT COALESCE((SELECT MAX(h.occurred_at) FROM shipment_status_history h " +
-            "                                       WHERE h.shipment_id = s.id), s.created_at) AS last_change) lc" +
+            " CROSS JOIN LATERAL (SELECT " + SettlementSql.lastChange("s") + " AS last_change) lc" +
             " WHERE s.tenant_id = ? AND s.provider = 'bosta' AND fo.status <> 'cancelled'::order_status AND "
             + SettlementSql.POST_FLOOR +
-            "  AND s.internal_state IN ('with_courier', 'returning', 'exception') " +
-            "  AND lc.last_change < ?::timestamptz - interval '7 days' " +
+            "  AND " + SettlementSql.stuckWithBosta("s", "lc.last_change", "?::timestamptz") +
             "ORDER BY lc.last_change, s.tracking_number",
             ps -> stuckParams(ps, now, tid),
             (rs, n) -> new StuckShipment(rs.getString(1), rs.getString(2), rs.getString("st"),
                 rs.getLong("days"), money(rs.getBigDecimal("cod"))));
 
-        // Delivered, not paid — per shipment only: deposited, refreshed within 24 h, and two of the
-        // tenant's payout weekdays have passed since the deposit (no known weekday: 14 days).
+        // Delivered, not paid — per shipment only (SettlementSql.deliveredNotPaid).
         List<NotPaidShipment> notPaid = jdbc.query(
             "SELECT s.tracking_number, fo.number, (s.deposited_at AT TIME ZONE 'Africa/Cairo')::date AS dep_day, " +
             "       s.deposited_amt, EXTRACT(DAY FROM (?::timestamptz - s.deposited_at))::bigint AS days" +
-            base + " AND s.settlement_status = 'deposited' AND s.deposited_at IS NOT NULL " +
-            "  AND s.settlement_refreshed_at > ?::timestamptz - interval '24 hours' " +
-            "  AND CASE WHEN ?::int IS NULL THEN s.deposited_at < ?::timestamptz - interval '14 days' " +
-            "           ELSE (SELECT COUNT(*) FROM generate_series((s.deposited_at AT TIME ZONE 'Africa/Cairo')::date + 1, " +
-            "                                                     (?::timestamptz AT TIME ZONE 'Africa/Cairo')::date, " +
-            "                                                     interval '1 day') g(d) " +
-            "                 WHERE EXTRACT(ISODOW FROM g.d) = ?::int) >= 2 END " +
+            base + " AND " + SettlementSql.deliveredNotPaid("s", "?::timestamptz", "?::int") +
             "ORDER BY s.deposited_at, s.tracking_number",
             ps -> {
                 Timestamp t = Timestamp.from(now);
