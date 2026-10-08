@@ -372,6 +372,26 @@ class AnalyticsGoldenTest {
                     ts(cairo(8, 6 + i * 4, 12, 0)), s);
             }
 
+            // ── Cancelled / terminated deciding legs, before and after pickup ──────
+            UUID tPre = order(cairo(9, 18, 10, 0), "new", "bosta", "{\"source_name\":\"web\"}");     // terminated, never collected
+            line(tPre, j30, 1, "800.00");
+            leg(tPre, "forward", "terminated", send(48, "g-cairo", "Cairo", null), cairo(9, 18, 11, 0));
+            UUID cPre = order(cairo(9, 19, 10, 0), "new", "bosta", "{\"source_name\":\"web\"}");     // cancelled, only 'created' history
+            line(cPre, s38, 1, "1200.00");
+            UUID cPreLeg = leg(cPre, "forward", "cancelled", send(49, "g-giza", "Giza", null), cairo(9, 19, 11, 0));
+            history(cPreLeg, "created", cairo(9, 19, 11, 30));
+            UUID wPre = order(cairo(9, 20, 10, 0), "new", "other_known", "{\"source_name\":\"web\"}"); // Wijha, Bosta leg cancelled
+            line(wPre, tm, 1, "300.00");
+            leg(wPre, "forward", "cancelled", send(49, "g-alx", "Alexandria", null), cairo(9, 20, 11, 0));
+            UUID tPost = order(cairo(9, 21, 10, 0), "new", "bosta", "{\"source_name\":\"web\"}");    // terminated after pickup (history)
+            line(tPost, j32, 1, "800.00");
+            UUID tPostLeg = leg(tPost, "forward", "terminated", send(48, "g-cairo", "Cairo", null), cairo(9, 21, 11, 0));
+            history(tPostLeg, "with_courier", cairo(9, 21, 18, 0));
+            UUID cPost = order(cairo(9, 22, 10, 0), "new", "bosta", "{\"source_name\":\"web\"}");    // cancelled after pickup (collected)
+            line(cPost, s39, 1, "1200.00");
+            leg(cPost, "forward", "cancelled", send(49, "g-giza", "Giza", "\"collectedFromBusiness\":\"2026-09-22T15:00:00.000Z\""),
+                cairo(9, 22, 11, 0));
+
             // ── Pre-floor (May) — never counted ────────────────────────────────────
             UUID pre = order(cairo(5, 20, 12, 0), "new", "bosta", "{}");
             line(pre, j30, 3, "800.00");
