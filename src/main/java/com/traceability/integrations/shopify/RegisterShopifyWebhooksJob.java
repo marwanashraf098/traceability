@@ -34,6 +34,9 @@ public class RegisterShopifyWebhooksJob {
         "orders/cancelled",
         "products/create",
         "products/update",
+        // Analytics slice 10: Shopify cost + stock, READ columns only (needs read_inventory, implied by write_inventory)
+        "inventory_items/update",
+        "inventory_levels/update",
         "app/uninstalled"
     );
 

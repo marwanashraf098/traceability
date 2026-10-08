@@ -97,6 +97,10 @@ public class StockAnalyticsService {
         }
     }
 
+    static final String SHOPIFY_FRESH_SOURCE =
+        "variants.stock_available_shopify_traced (Shopify available at the Traced location; slice-10 read pass + inventory_levels/update), "
+        + "else variants.shopify_inventory_quantity for variants not synced yet";
+
     static final String SHOPIFY_SOURCE =
         "variants.shopify_inventory_quantity (Shopify REST inventory_quantity, all locations, as of the variant's last products webhook)";
 
@@ -191,13 +195,24 @@ public class StockAnalyticsService {
             tid, tid, tid, Timestamp.from(now));
         long traced = 0, shopify = 0, compared = 0, mismatched = 0, units = 0, noFigure = 0;
         Instant oldest = null, newest = null;
+        // Slice 10: a variant the Shopify read pass (or inventory_levels/update) has synced compares the
+        // pieces available AT the Traced location with Shopify available at that same location
+        // (stock_available_shopify_traced); one not synced yet keeps the V153 figure (all locations).
         List<Map<String, Object>> rows = jdbc.queryForList(
-            "SELECT pc.available, v.shopify_inventory_quantity AS shopify, v.shopify_variant_updated_at AS updated " +
-            "FROM (SELECT variant_id, COUNT(*) FILTER (WHERE status = 'available') AS available FROM pieces " +
-            "      WHERE tenant_id = ? AND status <> 'voided'::piece_status GROUP BY variant_id) pc " +
-            "JOIN variants v ON v.id = pc.variant_id WHERE v.tenant_id = ?", tid, tid);
+            "SELECT pc.available, pc.available_at_traced, v.stock_synced_at IS NOT NULL AS fresh, " +
+            "       CASE WHEN v.stock_synced_at IS NOT NULL THEN v.stock_available_shopify_traced " +
+            "            ELSE v.shopify_inventory_quantity END AS shopify, " +
+            "       COALESCE(v.stock_synced_at, v.shopify_variant_updated_at) AS updated " +
+            "FROM (SELECT variant_id, COUNT(*) FILTER (WHERE status = 'available') AS available, " +
+            "             COUNT(*) FILTER (WHERE status = 'available' AND current_location_id = " +
+            "                 (SELECT id FROM locations WHERE tenant_id = ? AND is_fulfillment = true LIMIT 1)) AS available_at_traced " +
+            "      FROM pieces WHERE tenant_id = ? AND status <> 'voided'::piece_status GROUP BY variant_id) pc " +
+            "JOIN variants v ON v.id = pc.variant_id WHERE v.tenant_id = ?", tid, tid, tid);
+        boolean anyFresh = false;
         for (Map<String, Object> r : rows) {
-            long a = ((Number) r.get("available")).longValue();
+            boolean fresh = Boolean.TRUE.equals(r.get("fresh"));
+            anyFresh |= fresh;
+            long a = ((Number) r.get(fresh ? "available_at_traced" : "available")).longValue();
             if (r.get("shopify") == null) {
                 noFigure++;
                 continue;
@@ -219,7 +234,7 @@ public class StockAnalyticsService {
         String level = packedPct != null && packedPct.compareTo(HIGH_PACKED) >= 0
             && (share == null || share.compareTo(HIGH_MISMATCH) <= 0) ? "high" : "low";
         return new Trust(level, packedPct, packed[0], packed[1], traced, shopify, compared, mismatched, units, share,
-            noFigure, oldest, newest, SHOPIFY_SOURCE);
+            noFigure, oldest, newest, anyFresh ? SHOPIFY_FRESH_SOURCE : SHOPIFY_SOURCE);
     }
 
     // ── /stock/summary ──────────────────────────────────────────────────────
@@ -325,7 +340,8 @@ public class StockAnalyticsService {
             GROUP BY p.variant_id
         )
         SELECT v.id AS variant_id, pr.title AS product_title, v.title AS variant_title, v.sku, v.price, v.unit_cost,
-               v.shopify_inventory_quantity AS shopify,
+               CASE WHEN v.stock_synced_at IS NOT NULL THEN v.stock_available_shopify
+                    ELSE v.shopify_inventory_quantity END AS shopify,
                COALESCE(st.on_hand, 0) AS on_hand, COALESCE(st.coming_back, 0) AS coming_back, st.avg_age,
                COALESCE(s.sold, 0) AS sold, COALESCE(s.delivered, 0) AS delivered, ls.last_sold_at
         FROM variants v
@@ -335,7 +351,8 @@ public class StockAnalyticsService {
         LEFT JOIN last_sold ls ON ls.variant_id = v.id
         WHERE v.tenant_id = ?
           AND (COALESCE(st.on_hand, 0) > 0 OR COALESCE(st.coming_back, 0) > 0 OR COALESCE(s.sold, 0) > 0
-               OR (?::boolean AND COALESCE(v.shopify_inventory_quantity, 0) > 0))
+               OR (?::boolean AND COALESCE(CASE WHEN v.stock_synced_at IS NOT NULL THEN v.stock_available_shopify
+                                                ELSE v.shopify_inventory_quantity END, 0) > 0))
         """;
 
     /** Every stocked or selling variant with its stock figures (no sort / filter). */

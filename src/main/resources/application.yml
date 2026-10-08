@@ -347,6 +347,9 @@ analytics:
   floor-overrides: ${ANALYTICS_FLOOR_OVERRIDES:mmi24e-fx.myshopify.com=2026-07-02}
   # Slice 3 — Bosta money. SettlementRefreshJob re-reads finished Bosta legs (v0 GET, BACKGROUND
   # priority) until paid; at most refresh-max-per-tenant legs per tenant per hourly run.
+  inventory-sync:
+    # Slice 10: daily Shopify cost + stock READ pass (05:15 Cairo) — kill switch.
+    enabled: ${ANALYTICS_INVENTORY_SYNC_ENABLED:true}
   settlement:
     refresh-enabled: ${ANALYTICS_SETTLEMENT_REFRESH_ENABLED:true}
     refresh-max-per-tenant: ${ANALYTICS_SETTLEMENT_REFRESH_MAX_PER_TENANT:100}

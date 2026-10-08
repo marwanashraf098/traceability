@@ -181,6 +181,12 @@ class RlsCoverageTest {
             "/api/v1/analytics/customers/by-governorate",
             "/api/v1/analytics/customers/cohorts",
             "/api/v1/analytics/customers/watch",
+            // Analytics slice 10 (owner only) — analyticsProfitAndInventorySync_reflectSeededOrder below;
+            // app_user isolation in AnalyticsInventorySyncTest
+            "/api/v1/analytics/profit/summary",
+            "/api/v1/analytics/profit/by-product-type",
+            "/api/v1/analytics/profit/skus",
+            "/api/v1/analytics/inventory-sync/status",
             "/api/v1/inventory/stock",
             "/api/v1/inventory/variants/{variantId}/breakdown",
             "/api/v1/inventory/breakdown",
@@ -1784,6 +1790,36 @@ class RlsCoverageTest {
                                    "/api/v1/analytics/customers/watch")) {
             assertThat(get(path, Map.class).getStatusCode()).as(path).isEqualTo(HttpStatus.OK);
         }
+
+        jdbc.update("DELETE FROM order_items WHERE order_id = ?", orderId);
+        jdbc.update("DELETE FROM orders WHERE id = ?", orderId);
+    }
+
+    @Test
+    void analyticsProfitAndInventorySync_reflectSeededOrder() {
+        UUID orderId = UUID.randomUUID();
+        jdbc.update(
+                "INSERT INTO orders (id, tenant_id, store_id, external_id, number, status, " +
+                "    payment_method, placed_at, on_hold, raw) " +
+                "VALUES (?, ?, ?, 'EXT-CVG-S10', '#CVG-S10', 'new'::order_status, 'cod', now(), false, '{}'::jsonb)",
+                orderId, tenantId, storeId);
+        jdbc.update(
+                "INSERT INTO order_items (id, tenant_id, order_id, variant_id, quantity, raw) " +
+                "VALUES (gen_random_uuid(), ?, ?, ?, 1, '{\"price\":\"150.00\",\"quantity\":1}'::jsonb)",
+                tenantId, orderId, variantId);
+
+        ResponseEntity<Map> summary = get("/api/v1/analytics/profit/summary?period=today", Map.class);
+        assertThat(summary.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(((Number) ((Map<?, ?>) summary.getBody().get("coverage")).get("variantsSold")).longValue())
+                .isGreaterThanOrEqualTo(1);
+        ResponseEntity<Map> skus = get("/api/v1/analytics/profit/skus?period=today", Map.class);
+        assertThat(skus.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(((Number) skus.getBody().get("total")).longValue()).isGreaterThanOrEqualTo(1);
+        ResponseEntity<Map> status = get("/api/v1/analytics/inventory-sync/status", Map.class);
+        assertThat(status.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(((Number) status.getBody().get("variantsTotal")).longValue()).isGreaterThanOrEqualTo(1);
+        assertThat(get("/api/v1/analytics/profit/by-product-type?period=today", Map.class).getStatusCode())
+                .isEqualTo(HttpStatus.OK);
 
         jdbc.update("DELETE FROM order_items WHERE order_id = ?", orderId);
         jdbc.update("DELETE FROM orders WHERE id = ?", orderId);

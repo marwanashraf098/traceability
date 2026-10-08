@@ -104,7 +104,8 @@ public class ShopifyWebhookProcessorJob {
                                        ShopifyCatalogActivationService activationService,
                                        PlatformTransactionManager txm,
                                        FulfillmentTrackingCapture fulfillmentTracking,
-                                       CustomerDataRequestService dataRequests) {
+                                       CustomerDataRequestService dataRequests,
+                                       com.traceability.analytics.AnalyticsInventoryWebhookHandler inventoryReads) {
         this.jdbc           = jdbc;
         this.mapper         = mapper;
         this.syncService    = syncService;
@@ -113,7 +114,11 @@ public class ShopifyWebhookProcessorJob {
         this.tx             = new TransactionTemplate(txm);
         this.fulfillmentTracking = fulfillmentTracking;
         this.dataRequests   = dataRequests;
+        this.inventoryReads = inventoryReads;
     }
+
+    /** Analytics slice 10: inventory_items/update + inventory_levels/update refresh READ columns only. */
+    private final com.traceability.analytics.AnalyticsInventoryWebhookHandler inventoryReads;
 
     @Job(name = "Shopify webhook processor — event %0", retries = 3)
     public void process(UUID eventId, UUID tenantId) {
@@ -236,6 +241,8 @@ public class ShopifyWebhookProcessorJob {
             case "customers/data_request"           -> handleDataRequest(tenantId, eventId, shopDomain, payload);
             case "customers/redact"                 -> handleCustomersRedact(tenantId, shopDomain, payload);
             case "shop/redact"                      -> handleShopRedact(tenantId, shopDomain);
+            case "inventory_levels/update"          -> inventoryReads.onInventoryLevelUpdate(payload);
+            case "inventory_items/update"           -> inventoryReads.onInventoryItemUpdate(payload);
             default -> {
                 // Invariant #8: never a silent drop — log as exception so ops can see it.
                 log.error("Unhandled Shopify webhook topic={} shop={} — this topic has no registered handler",
