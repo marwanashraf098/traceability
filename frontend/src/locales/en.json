@@ -964,7 +964,8 @@
       "return_transfer_out": "Sent out on return to {{location}}",
       "voided": "Voided — removed from sellable stock",
       "held": "Placed on hold",
-      "unheld": "Released from hold — back to available"
+      "unheld": "Released from hold — back to available",
+      "location_corrected": "Location corrected to the main warehouse"
     },
     "pieceStatus": {
       "available": "Available",
