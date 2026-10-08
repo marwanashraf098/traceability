@@ -570,15 +570,111 @@ public class ShopifyInventoryService {
 
     // ── Return inspection processing ─────────────────────────────────────────
 
+    /**
+     * Trigger 2 (+1 per restock). Three things beyond a plain increment (2026-10-08):
+     *   - key: trigger_id = piece_id + ':' + restock_event_id (from the piece's newest 'restocked'
+     *     event), so a piece returned and restocked again claims its own row — like hold_enter.
+     *     A piece with no such event (a claim made before V150) keeps the bare piece_id.
+     *   - a non-fulfillment restock location is recorded ('skipped_not_fulfillment_location',
+     *     WARN), never a silent, row-less skip.
+     *   - the double-count guard: while the order's Shopify refunds restocked more units of this
+     *     variant than Traced restocks already counted for the order, this unit was restocked by
+     *     the merchant in Shopify — record 'skipped_shopify_restocked', send nothing. Decided and
+     *     claimed in ONE transaction under a per (order, variant) advisory lock, so two concurrent
+     *     restocks of the same order can't both read the same count.
+     */
     private void processReturnInspection(String pieceId, UUID locationId) {
-        UUID batchId = UUID.randomUUID();
+        UUID tenantId = TenantContext.require();
         UUID variantId = resolveVariantForPiece(pieceId);
         if (variantId == null) {
             log.warn("Shopify inventory sync: piece not found piece={}", pieceId);
             return;
         }
-        applyIncrementAdjustment(batchId, variantId, locationId, 1,
-                                  "return_inspection", pieceId, "restock");
+        RestockEvent ev = tx.execute(st -> jdbc.query(
+            "SELECT metadata->>'restock_event_id' AS restock_event_id, metadata->>'order_id' AS order_id " +
+            "FROM piece_events WHERE piece_id = ? AND tenant_id = ? AND event_type = 'restocked' " +
+            "ORDER BY occurred_at DESC, id DESC LIMIT 1",
+            rs -> rs.next() ? new RestockEvent(rs.getString("restock_event_id"), rs.getString("order_id")) : null,
+            pieceId, tenantId));
+        String restockEventId = ev == null ? null : ev.restockEventId();
+        UUID orderId = ev == null || ev.orderId() == null ? null : UUID.fromString(ev.orderId());
+        String triggerId = restockEventId != null ? pieceId + ":" + restockEventId : pieceId;
+        UUID batchId = UUID.randomUUID();
+
+        if (!isFulfillmentLocation(tenantId, locationId, "return_inspection", triggerId)) {
+            log.warn("Shopify restock +1 NOT sent: location {} is not the main warehouse (piece={} triggerId={})",
+                     locationId, pieceId, triggerId);
+            if (locationId != null) {
+                recordRestockSkip(tenantId, batchId, variantId, locationId, triggerId, orderId,
+                                  "skipped_not_fulfillment_location",
+                                  "Restocked into a location that isn't the main warehouse — nothing sent to Shopify");
+            }
+            return;
+        }
+
+        ObjectNode payload = mapper.createObjectNode().put("reason", "restock").put("delta", 1);
+        if (orderId != null) payload.put("order_id", orderId.toString());
+        String outcome = tx.execute(st -> {
+            if (orderId != null) {
+                jdbc.query("SELECT pg_advisory_xact_lock(hashtextextended(?, 0))",
+                    rs -> null, "restock:" + tenantId + ":" + orderId + ":" + variantId);
+                Map<String, Object> counts = jdbc.queryForMap(
+                    "SELECT COALESCE((SELECT shopify_refund_restocked_units(o.raw, v.external_id) " +
+                    "                 FROM orders o, variants v " +
+                    "                 WHERE o.id = ? AND o.tenant_id = ? AND v.id = ? AND v.tenant_id = ?), 0) AS shopify_units, " +
+                    "       (SELECT COUNT(*) FROM shopify_inventory_adjustments " +
+                    "        WHERE tenant_id = ? AND trigger_type = 'return_inspection' " +
+                    "          AND source_order_id = ? AND variant_id = ? AND trigger_id <> ?) AS traced_units",
+                    orderId, tenantId, variantId, tenantId, tenantId, orderId, variantId, triggerId);
+                long shopifyUnits = ((Number) counts.get("shopify_units")).longValue();
+                long tracedUnits  = ((Number) counts.get("traced_units")).longValue();
+                if (shopifyUnits > tracedUnits) {
+                    insertRestockSkipRow(tenantId, batchId, variantId, locationId, triggerId, orderId,
+                        "skipped_shopify_restocked",
+                        "Already restocked in Shopify by a refund (" + shopifyUnits + " unit(s) restocked, "
+                            + tracedUnits + " counted by Traced before this one) — nothing sent");
+                    return "skipped";
+                }
+            }
+            return claimInCurrentTx(tenantId, batchId, variantId, locationId, 1,
+                                    "return_inspection", triggerId, payload, orderId) ? "claimed" : "not_claimed";
+        });
+
+        if ("skipped".equals(outcome)) {
+            log.info("Shopify restock +1 skipped — the merchant already restocked this unit through a Shopify refund " +
+                     "(piece={} order={} variant={})", pieceId, orderId, variantId);
+            return;
+        }
+        if (!"claimed".equals(outcome)) {
+            log.debug("Shopify inventory: restock already claimed, skipping duplicate call triggerId={}", triggerId);
+            return;
+        }
+        attemptIncrement(tenantId, variantId, locationId, 1, "return_inspection", triggerId, "restock",
+            ShopifyGateway.idempotencyKey(tenantId, "return_inspection", triggerId, variantId, locationId), null, false);
+    }
+
+    private record RestockEvent(String restockEventId, String orderId) {}
+
+    private void recordRestockSkip(UUID tenantId, UUID batchId, UUID variantId, UUID locationId,
+                                   String triggerId, UUID orderId, String status, String reason) {
+        tx.execute(st -> {
+            insertRestockSkipRow(tenantId, batchId, variantId, locationId, triggerId, orderId, status, reason);
+            return null;
+        });
+    }
+
+    /** A recorded, terminal "nothing was sent" restock claim. ON CONFLICT DO NOTHING — a repeat of
+     *  the same restock trigger never rewrites an existing row. */
+    private void insertRestockSkipRow(UUID tenantId, UUID batchId, UUID variantId, UUID locationId,
+                                      String triggerId, UUID orderId, String status, String reason) {
+        jdbc.update(
+            "INSERT INTO shopify_inventory_adjustments " +
+            "(tenant_id, batch_id, variant_id, location_id, delta, trigger_type, trigger_id, payload, status, error, source_order_id) " +
+            "VALUES (?, ?, ?, ?, 1, 'return_inspection', ?, ?::jsonb, ?, ?, ?) " +
+            "ON CONFLICT (trigger_type, trigger_id, variant_id, location_id) DO NOTHING",
+            tenantId, batchId, variantId, locationId, triggerId,
+            mapper.createObjectNode().put("reason", "restock").put("delta", 1).toString(),
+            status, reason, orderId);
     }
 
     // ── Damage move processing ───────────────────────────────────────────────
@@ -1090,15 +1186,25 @@ public class ShopifyInventoryService {
      */
     private boolean claim(UUID tenantId, UUID batchId, UUID variantId, UUID locationId, int delta,
                           String triggerType, String triggerId, ObjectNode initialPayload) {
+        return Boolean.TRUE.equals(tx.execute(status -> claimInCurrentTx(
+            tenantId, batchId, variantId, locationId, delta, triggerType, triggerId, initialPayload, null)));
+    }
+
+    /** {@link #claim}'s body, on the caller's transaction — the restock path runs it under its
+     *  per (order, variant) lock, in the same transaction as the double-count guard's read.
+     *  sourceOrderId is set on the INSERT only (a reclaim never changes it). */
+    private boolean claimInCurrentTx(UUID tenantId, UUID batchId, UUID variantId, UUID locationId, int delta,
+                                     String triggerType, String triggerId, ObjectNode initialPayload,
+                                     UUID sourceOrderId) {
         // Review mode S4 (V130): a simulated-courier tenant's own fixture variants (seeded, not from
         // Shopify — external_id isn't a gid://shopify/ id) are never synced: no claim row, so no
         // Shopify call and no failed claim / alert. Its real Shopify variants (the reviewer's store)
         // sync exactly as for any tenant. Callers treat "not claimed" as "nothing to do".
-        if (Boolean.TRUE.equals(tx.execute(status -> jdbc.queryForObject(
+        if (Boolean.TRUE.equals(jdbc.queryForObject(
                 "SELECT EXISTS (SELECT 1 FROM tenant_courier_simulation WHERE tenant_id = ?) " +
                 "   AND EXISTS (SELECT 1 FROM variants WHERE id = ? AND tenant_id = ? " +
                 "                 AND external_id NOT LIKE 'gid://shopify/%')",
-                Boolean.class, tenantId, variantId, tenantId)))) {
+                Boolean.class, tenantId, variantId, tenantId))) {
             log.info("Review mode: skipped Shopify inventory claim for non-Shopify variant {} " +
                      "(trigger={} triggerId={})", variantId, triggerType, triggerId);
             return false;
@@ -1107,18 +1213,17 @@ public class ShopifyInventoryService {
         String payloadJsonTmp;
         try { payloadJsonTmp = mapper.writeValueAsString(initialPayload); }
         catch (Exception e) { payloadJsonTmp = "{}"; }
-        final String finalPayloadJson = payloadJsonTmp;
 
-        Integer rows = tx.execute(status -> jdbc.update(
+        int rows = jdbc.update(
             "INSERT INTO shopify_inventory_adjustments " +
-            "(tenant_id, batch_id, variant_id, location_id, delta, trigger_type, trigger_id, payload, status) " +
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?::jsonb, 'pending') " +
+            "(tenant_id, batch_id, variant_id, location_id, delta, trigger_type, trigger_id, payload, status, source_order_id) " +
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?::jsonb, 'pending', ?) " +
             "ON CONFLICT (trigger_type, trigger_id, variant_id, location_id) DO UPDATE " +
             "  SET status = 'pending', batch_id = EXCLUDED.batch_id, payload = EXCLUDED.payload " +
             "  WHERE shopify_inventory_adjustments.status = 'failed'",
-            tenantId, batchId, variantId, locationId, delta, triggerType, triggerId, finalPayloadJson));
+            tenantId, batchId, variantId, locationId, delta, triggerType, triggerId, payloadJsonTmp, sourceOrderId);
 
-        return rows != null && rows > 0;
+        return rows > 0;
     }
 
     /** markResult() for an increment attempt (Part D): also records the failure class, the baseline

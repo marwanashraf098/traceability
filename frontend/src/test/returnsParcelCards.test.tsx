@@ -244,7 +244,7 @@ describe('Return session — parcel cards (Step 5)', () => {
     await user.click(within(within(card).getByTestId('item-piece-1')).getByText('Restock'))
     await waitFor(() => expect(postCalls(`/returns/sessions/${SESSION}/items/piece-1/disposition`)).toHaveLength(1))
     const body = JSON.parse((postCalls(`/items/piece-1/disposition`)[0][1] as RequestInit).body as string)
-    expect(body).toEqual({ disposition: 'restock', reason: null, locationId: null })
+    expect(body).toEqual({ disposition: 'restock', reason: null })
   })
 
   test('pc7 footer summary + item-scanned feedback strip, singular/plural EN', async () => {

@@ -737,7 +737,8 @@ function OpenSessionScreen({ sessionId, onExit, onStartNew }: {
     try {
       await api(`/returns/sessions/${sessionId}/items/${pieceId}/disposition`, {
         method: 'POST',
-        body: JSON.stringify({ disposition: verdict, reason: reason ?? null, locationId: null }),
+        // No location: the backend restocks into the main warehouse (never a null location).
+        body: JSON.stringify({ disposition: verdict, reason: reason ?? null }),
       })
       playBeep(true)
       setDamageTarget(null); setDamageReason(''); setDamageReasonError(false)

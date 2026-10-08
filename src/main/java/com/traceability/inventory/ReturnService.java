@@ -1,6 +1,8 @@
 package com.traceability.inventory;
 
 import com.traceability.tenancy.TenantContext;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
@@ -20,6 +22,8 @@ import java.util.*;
  */
 @Service
 public class ReturnService {
+
+    private static final Logger log = LoggerFactory.getLogger(ReturnService.class);
 
     private final JdbcTemplate            jdbc;
     private final InventoryLedger         ledger;
@@ -71,14 +75,26 @@ public class ReturnService {
         // the order's return leg afterward.
         UUID orderId = piece.orderId();
 
-        TransitionContext ctx = new TransitionContext(null, null, locationId, null, null);
+        // Where the piece goes back on the shelf. The screens send no location — it defaults to
+        // the tenant's main warehouse here, never to NULL (a NULL current_location_id hid every
+        // restocked piece from stock counts and skipped its Shopify +1 — 2026-10-08). Resolved
+        // BEFORE the transition, so "no main warehouse" leaves the piece untouched.
+        UUID targetLocationId = restockLocation(locationId, tenantId);
+
+        // restock_event_id keys this restock's Shopify claim (one +1 per restock, so a piece
+        // returned twice gets two); order_id lets the claim count against the order's Shopify
+        // refund restocks (double-count guard) — current_order_id is cleared just below.
+        UUID restockEventId = UUID.randomUUID();
+        String meta = "{\"restock_event_id\":\"" + restockEventId + "\"" +
+            (orderId != null ? ",\"order_id\":\"" + orderId + "\"" : "") + "}";
+        TransitionContext ctx = new TransitionContext(null, null, targetLocationId, null, meta);
         ledger.transition(pieceId, PieceStatus.RETURN_PENDING_INSPECTION,
                 PieceStatus.AVAILABLE, "restocked", actorUserId, ctx);
 
         // Clear order link and set new location
         jdbc.update(
             "UPDATE pieces SET current_order_id = NULL, current_location_id = ? WHERE id = ?",
-            locationId, pieceId);
+            targetLocationId, pieceId);
 
         // Release the piece's stale allocation from its OLD order — without this, the row
         // stays 'packed' forever and FulfillService.scan()'s ALREADY_RESERVED guard (which
@@ -97,7 +113,7 @@ public class ReturnService {
         // Fired after commit: a rolled-back restock never reaches Shopify, and the claim never
         // predates the piece's own 'available' commit.
         ShopifyInventoryService.afterCommit(() ->
-            shopifyInventory.onReturnInspectionAvailable(tenantId, pieceId, locationId));
+            shopifyInventory.onReturnInspectionAvailable(tenantId, pieceId, targetLocationId));
 
         // Close out the order's return leg if this was its last outstanding piece — see
         // ShipmentLinkService.resolveReturnLegIfComplete() javadoc for why this must run
@@ -176,6 +192,32 @@ public class ReturnService {
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────
+
+    /**
+     * The location a restocked piece lands at: the one the caller named (it must be this
+     * tenant's), else the tenant's main warehouse (is_fulfillment). No main warehouse is an
+     * error, never a silent NULL location.
+     */
+    private UUID restockLocation(UUID requested, UUID tenantId) {
+        if (requested != null) {
+            Integer owned = jdbc.queryForObject(
+                "SELECT COUNT(*) FROM locations WHERE id = ? AND tenant_id = ?",
+                Integer.class, requested, tenantId);
+            if (owned == null || owned == 0) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Unknown locationId");
+            }
+            return requested;
+        }
+        List<UUID> main = jdbc.queryForList(
+            "SELECT id FROM locations WHERE tenant_id = ? AND is_fulfillment = true",
+            UUID.class, tenantId);
+        if (main.isEmpty()) {
+            log.error("Restock refused: tenant {} has no main warehouse (is_fulfillment location)", tenantId);
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                "NO_MAIN_WAREHOUSE: this account has no main warehouse to restock into — set one in Settings → Locations.");
+        }
+        return main.get(0);
+    }
 
     private record PieceStatusAndOrder(String status, UUID orderId) {}
 

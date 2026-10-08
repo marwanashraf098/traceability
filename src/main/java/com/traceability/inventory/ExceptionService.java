@@ -176,6 +176,7 @@ public class ExceptionService {
         all.addAll(detectExchangeUnmappedState(tenantId));
         all.addAll(detectVoidHoldSyncFailed(tenantId));
         all.addAll(detectIncrementSyncFailed(tenantId));
+        all.addAll(detectRestockedTwice(tenantId));
         all.addAll(detectReturnLegUnscanned(tenantId, returnUnscannedDays));
         all.addAll(detectReturnToReceive(tenantId));
         all.addAll(detectRequestItemToReceive(tenantId));
@@ -544,6 +545,44 @@ public class ExceptionService {
      *             repushable; reconciled by hand and cleared only by resolving this exception.
      * subject_key carries the newest claim id, so a dismissed row returns when a NEW failure appears.
      */
+    /**
+     * restocked_twice (HIGH, 2026-10-08) — the late case of the restock double-count guard: Traced
+     * already sent +1 for returned units of an order + variant, and the order's Shopify refunds
+     * (orders/updated) then restocked the same units again. Read-only — Traced never decrements
+     * for this; a manager lowers the quantity in Shopify and resolves.
+     * Per (order, variant): pushed = Traced restock claims 'applied'; offset = 'skipped_shopify_restocked'
+     * (units the guard already left to Shopify's refund); shopify = shopify_refund_restocked_units (V150,
+     * the one definition). Double-counted units = LEAST(pushed, shopify − offset) when > 0. The qty is
+     * in the subject key, so a resolved row comes back only if more units get double-counted.
+     */
+    private List<Map<String, Object>> detectRestockedTwice(UUID tid) {
+        return jdbc.queryForList(
+            "SELECT 'restocked_twice' AS type, 'HIGH' AS severity, 'order' AS subject_type, " +
+            "       o.id AS order_id, o.number AS order_number, v.id AS variant_id, v.sku, " +
+            "       pr.title AS product_title, v.title AS variant_title, x.qty, a.occurred_at, " +
+            "       'restocked_twice:' || o.id || ':' || v.id || ':' || x.qty AS subject_key " +
+            "FROM (SELECT sia.source_order_id, sia.variant_id, " +
+            "             COUNT(*) FILTER (WHERE sia.status = 'applied') AS pushed, " +
+            "             COUNT(*) FILTER (WHERE sia.status = 'skipped_shopify_restocked') AS offset_units, " +
+            "             MAX(sia.applied_at) AS occurred_at " +
+            "      FROM shopify_inventory_adjustments sia " +
+            "      WHERE sia.tenant_id = ? AND sia.trigger_type = 'return_inspection' " +
+            "        AND sia.source_order_id IS NOT NULL " +
+            "      GROUP BY sia.source_order_id, sia.variant_id " +
+            "      HAVING COUNT(*) FILTER (WHERE sia.status = 'applied') > 0) a " +
+            "JOIN orders o   ON o.id = a.source_order_id AND o.tenant_id = ? " +
+            "JOIN variants v ON v.id = a.variant_id " +
+            "JOIN products pr ON pr.id = v.product_id " +
+            "CROSS JOIN LATERAL (SELECT LEAST(a.pushed, " +
+            "    shopify_refund_restocked_units(o.raw, v.external_id) - a.offset_units) AS qty) x " +
+            "WHERE x.qty > 0 " +
+            "  AND NOT EXISTS (SELECT 1 FROM exception_resolutions er " +
+            "      WHERE er.tenant_id = o.tenant_id AND er.exception_type = 'restocked_twice' " +
+            "        AND er.subject_key = 'restocked_twice:' || o.id || ':' || v.id || ':' || x.qty) " +
+            "ORDER BY a.occurred_at ASC",
+            tid, tid);
+    }
+
     private List<Map<String, Object>> detectIncrementSyncFailed(UUID tid) {
         List<Map<String, Object>> out = new ArrayList<>();
         IncrementRecoveryRules.SetupProblem problem = IncrementRecoveryRules.setupProblem(jdbc, tid);
@@ -1444,6 +1483,20 @@ public class ExceptionService {
                     "أضف القطعة في جلسة الاستلام القادمة، أو عالِج هذا التنبيه إذا لن تعود إلى المخزون.");
                 item.put("suggestedAction", "add_in_receiving");
                 item.put("actionUrl", "/receiving");
+            }
+            case "restocked_twice" -> {
+                String n = str(item, "order_number");
+                Object vt = item.get("variant_title");
+                String product = str(item, "product_title") + (vt != null ? " / " + vt : "");
+                String qty = str(item, "qty");
+                item.put("descriptionEn", "Restocked twice — Shopify refund restock after Traced restock: order " + n +
+                    ", " + product + ", " + qty + " unit(s). Traced already added these returned units to Shopify, and the " +
+                    "Shopify refund restocked them again. Lower this item's quantity in Shopify by " + qty + ", then resolve.");
+                item.put("descriptionAr", "أُعيد للمخزون مرتين — استرداد في Shopify أعاد التخزين بعد Traced: الطلب " + n +
+                    "، " + product + "، " + qty + " قطعة. أضاف Traced هذه القطع المرتجعة إلى Shopify، ثم أعادها استرداد Shopify " +
+                    "إلى المخزون مرة أخرى. خفّض كمية هذا المنتج في Shopify بمقدار " + qty + "، ثم أغلق التنبيه.");
+                item.put("suggestedAction", "lower_shopify_quantity");
+                item.put("actionUrl", ordersUrl(item));
             }
             case "request_item_to_receive" -> {
                 String ref = str(item, "reference");
