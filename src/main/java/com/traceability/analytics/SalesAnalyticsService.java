@@ -107,7 +107,7 @@ public class SalesAnalyticsService {
 
     public record CitySalesResponse(AnalyticsPeriod.Range range, List<CitySales> cities) {}
 
-    /** One row of OUTCOMES_SQL. */
+    /** The outcome columns of one VARIANTS_SQL row. */
     private record Outcome(long delivered, long refused, long inTransit, long wijha, long notShipped,
                            long otherTerminal, long returned, BigDecimal deliveredRevenue,
                            BigDecimal returnedRevenue, long returnsOnUndelivered, long deliveredOrders,
@@ -422,57 +422,75 @@ public class SalesAnalyticsService {
         """;
 
     /*
-     * One pass over the lines, grouped per variant plus the grand-total row (GROUPING SETS ()),
-     * which carries the distinct order count across all variants. lastSoldAt = MAX(placed_at) over
-     * the variant's sold lines of all time (post-floor), not just the period; only variants with a
-     * line in the period are returned.
+     * Slices 1 + 2 in ONE statement over the period's lines (slice 8 — it used to be two, the first
+     * re-reading every line of all time): per variant plus the grand-total row (GROUPING SETS ()),
+     * which carries the distinct order count across all variants.
+     *   sales    — sold units, gross revenue, approximate lines, orders (slice 1);
+     *   outcomes — outcome units, returns, delivered / returned revenue (slice 2). Only a DELIVERED
+     *              order's returns count as customer returns; returns on any other outcome (e.g. a
+     *              Wijha order refunded in Shopify) are reported apart in returns_on_undelivered;
+     *   last_sold — lastSoldAt = MAX(placed_at) over the variant's sold lines of ALL time (post-floor,
+     *              not cancelled, not an internal exchange order, quantity after the refund add-back
+     *              > 0, not cancelled in raw — the same cohort as soldLines), for the period's
+     *              variants only, from the V149 columns (no prices needed). Two more tenant ids.
+     * Only variants with a line in the period are returned.
      */
-    private static final String VARIANTS_SQL = soldLines(true) + """
-        , per_variant AS (
+    private static final String VARIANTS_SQL = soldLines(false) + ORDER_OUTCOMES + LINE_RETURNS + """
+        , sales AS (
             SELECT GROUPING(variant_id) AS is_total, variant_id,
-                   MAX(placed_at)                                       AS last_sold_at,
-                   COALESCE(SUM(qty) FILTER (WHERE in_period), 0)       AS sold_units,
-                   COALESCE(SUM(revenue) FILTER (WHERE in_period), 0)   AS gross_revenue,
-                   COUNT(*) FILTER (WHERE in_period AND approximate)    AS approximate_lines,
-                   COUNT(DISTINCT order_id) FILTER (WHERE in_period)    AS orders,
-                   COUNT(*) FILTER (WHERE in_period)                    AS period_lines
+                   COALESCE(SUM(qty), 0)               AS sold_units,
+                   COALESCE(SUM(revenue), 0)           AS gross_revenue,
+                   COUNT(*) FILTER (WHERE approximate) AS approximate_lines,
+                   COUNT(DISTINCT order_id)            AS orders
             FROM lines
             GROUP BY GROUPING SETS ((variant_id), ())
+        ),
+        outcomes AS (
+            SELECT GROUPING(variant_id) AS is_total, variant_id,
+                   COALESCE(SUM(qty) FILTER (WHERE outcome = 'delivered'), 0)       AS delivered_units,
+                   COALESCE(SUM(qty) FILTER (WHERE outcome = 'refused'), 0)         AS refused_units,
+                   COALESCE(SUM(qty) FILTER (WHERE outcome = 'in_transit'), 0)      AS in_transit_units,
+                   COALESCE(SUM(qty) FILTER (WHERE outcome = 'wijha'), 0)           AS wijha_units,
+                   COALESCE(SUM(qty) FILTER (WHERE outcome = 'not_shipped'), 0)     AS not_shipped_units,
+                   COALESCE(SUM(qty) FILTER (WHERE outcome = 'other_terminal'), 0)  AS other_terminal_units,
+                   COALESCE(SUM(returned) FILTER (WHERE outcome = 'delivered'), 0)  AS returned_units,
+                   COALESCE(SUM(qty * unit_price) FILTER (WHERE outcome = 'delivered'), 0)      AS delivered_revenue,
+                   COALESCE(SUM(returned * unit_price) FILTER (WHERE outcome = 'delivered'), 0) AS returned_revenue,
+                   COALESCE(SUM(returned) FILTER (WHERE outcome <> 'delivered'), 0) AS returns_on_undelivered,
+                   COUNT(DISTINCT order_id) FILTER (WHERE outcome = 'delivered')    AS delivered_orders,
+                   COUNT(DISTINCT order_id) FILTER (WHERE outcome = 'refused')      AS refused_orders,
+                   COUNT(DISTINCT order_id) FILTER (WHERE outcome = 'wijha')        AS wijha_orders,
+                   (SELECT COALESCE(SUM(unverified_no_restock), 0) FROM all_lines WHERE not_cancelled)  AS unverified_no_restock
+            FROM line_facts
+            GROUP BY GROUPING SETS ((variant_id), ())
+        ),
+        last_sold AS (
+            SELECT oi.variant_id, MAX(o.placed_at) AS last_sold_at
+            FROM order_items oi
+            JOIN orders o ON o.id = oi.order_id
+            JOIN floors f ON f.store_id = o.store_id
+            WHERE oi.tenant_id = ? AND o.tenant_id = ?
+              AND oi.variant_id IN (SELECT variant_id FROM sales WHERE is_total = 0)
+              AND (f.floor_at IS NULL OR o.placed_at >= f.floor_at)
+              AND o.status <> 'cancelled'::order_status
+              AND o.external_id NOT LIKE 'internal:exchange:%'
+              AND NOT o.raw_cancelled
+              AND COALESCE(oi.current_qty, oi.quantity) + COALESCE((o.refund_lines -> oi.line_key ->> 0)::int, 0) > 0
+            GROUP BY oi.variant_id
         )
-        SELECT pv.is_total, pv.variant_id, v.product_id, p.title AS product_title,
-               v.title AS variant_title, v.sku, p.image_url, pv.last_sold_at,
-               pv.sold_units, pv.gross_revenue, pv.approximate_lines, pv.orders
-        FROM per_variant pv
-        LEFT JOIN variants v ON v.id = pv.variant_id
+        SELECT s.is_total, s.variant_id, v.product_id, p.title AS product_title,
+               v.title AS variant_title, v.sku, p.image_url, ls.last_sold_at,
+               s.sold_units, s.gross_revenue, s.approximate_lines, s.orders,
+               oc.delivered_units, oc.refused_units, oc.in_transit_units, oc.wijha_units, oc.not_shipped_units,
+               oc.other_terminal_units, oc.returned_units, oc.delivered_revenue, oc.returned_revenue,
+               oc.returns_on_undelivered, oc.delivered_orders, oc.refused_orders, oc.wijha_orders,
+               oc.unverified_no_restock
+        FROM sales s
+        LEFT JOIN outcomes oc ON oc.is_total = s.is_total AND oc.variant_id IS NOT DISTINCT FROM s.variant_id
+        LEFT JOIN last_sold ls ON ls.variant_id = s.variant_id
+        LEFT JOIN variants v ON v.id = s.variant_id
         LEFT JOIN products p ON p.id = v.product_id
-        WHERE pv.is_total = 1 OR pv.period_lines > 0
-        ORDER BY pv.is_total DESC, pv.sold_units DESC, pv.gross_revenue DESC, p.title, v.title
-        """;
-
-    /*
-     * Slice 2 — outcomes and returns per variant (+ grand total), merged into the slice-1 rows in
-     * Java: the slice-1 statement stays as it was, this one reads only the period's lines. Only a
-     * DELIVERED order's returns count as customer returns; returns on any other outcome (e.g. a Wijha
-     * order refunded in Shopify) are reported apart in returns_on_undelivered.
-     */
-    private static final String OUTCOMES_SQL = soldLines(false) + ORDER_OUTCOMES + LINE_RETURNS + """
-        SELECT GROUPING(variant_id) AS is_total, variant_id,
-               COALESCE(SUM(qty) FILTER (WHERE outcome = 'delivered'), 0)       AS delivered_units,
-               COALESCE(SUM(qty) FILTER (WHERE outcome = 'refused'), 0)         AS refused_units,
-               COALESCE(SUM(qty) FILTER (WHERE outcome = 'in_transit'), 0)      AS in_transit_units,
-               COALESCE(SUM(qty) FILTER (WHERE outcome = 'wijha'), 0)           AS wijha_units,
-               COALESCE(SUM(qty) FILTER (WHERE outcome = 'not_shipped'), 0)     AS not_shipped_units,
-               COALESCE(SUM(qty) FILTER (WHERE outcome = 'other_terminal'), 0)  AS other_terminal_units,
-               COALESCE(SUM(returned) FILTER (WHERE outcome = 'delivered'), 0)  AS returned_units,
-               COALESCE(SUM(qty * unit_price) FILTER (WHERE outcome = 'delivered'), 0)      AS delivered_revenue,
-               COALESCE(SUM(returned * unit_price) FILTER (WHERE outcome = 'delivered'), 0) AS returned_revenue,
-               COALESCE(SUM(returned) FILTER (WHERE outcome <> 'delivered'), 0) AS returns_on_undelivered,
-               COUNT(DISTINCT order_id) FILTER (WHERE outcome = 'delivered')    AS delivered_orders,
-               COUNT(DISTINCT order_id) FILTER (WHERE outcome = 'refused')      AS refused_orders,
-               COUNT(DISTINCT order_id) FILTER (WHERE outcome = 'wijha')        AS wijha_orders,
-               (SELECT COALESCE(SUM(unverified_no_restock), 0) FROM all_lines WHERE not_cancelled)  AS unverified_no_restock
-        FROM line_facts
-        GROUP BY GROUPING SETS ((variant_id), ())
+        ORDER BY s.is_total DESC, s.sold_units DESC, s.gross_revenue DESC, p.title, v.title
         """;
 
     /*
@@ -563,32 +581,23 @@ public class SalesAnalyticsService {
     public VariantSalesResponse variants(AnalyticsPeriod period) {
         UUID tid = TenantContext.require();
 
-        // Statement 2 (slice 2): outcomes + returns over the period's lines, keyed by variant.
-        Map<UUID, Outcome> outcomes = new HashMap<>();
-        Outcome[] totalOutcome = { Outcome.NONE };
-        jdbc.query(OUTCOMES_SQL, params(tid, period, 6, null), rs -> {
-            Outcome o = new Outcome(
+        // One statement (slice 8): sales, outcomes + returns, lastSoldAt.
+        List<VariantSales> rows = new ArrayList<>();
+        Totals[] totals = { totals(0, BigDecimal.ZERO, 0, 0, Outcome.NONE) };
+        jdbc.query(VARIANTS_SQL, params(tid, period, 8, null), rs -> {
+            Outcome o = rs.getObject("delivered_units") == null ? Outcome.NONE : new Outcome(
                 rs.getLong("delivered_units"), rs.getLong("refused_units"), rs.getLong("in_transit_units"),
                 rs.getLong("wijha_units"), rs.getLong("not_shipped_units"), rs.getLong("other_terminal_units"),
                 rs.getLong("returned_units"), rs.getBigDecimal("delivered_revenue"),
                 rs.getBigDecimal("returned_revenue"), rs.getLong("returns_on_undelivered"),
                 rs.getLong("delivered_orders"), rs.getLong("refused_orders"), rs.getLong("wijha_orders"),
                 rs.getLong("unverified_no_restock"));
-            if (rs.getInt("is_total") == 1) totalOutcome[0] = o;
-            else outcomes.put(rs.getObject("variant_id", UUID.class), o);
-        });
-
-        // Statement 1 (slice 1): sales, approximate lines, lastSoldAt (all time).
-        List<VariantSales> rows = new ArrayList<>();
-        Totals[] totals = { totals(0, BigDecimal.ZERO, 0, 0, totalOutcome[0]) };
-        jdbc.query(VARIANTS_SQL, params(tid, period, 0, null), rs -> {
             if (rs.getInt("is_total") == 1) {
                 totals[0] = totals(rs.getLong("sold_units"), rs.getBigDecimal("gross_revenue"),
-                    rs.getLong("orders"), rs.getLong("approximate_lines"), totalOutcome[0]);
+                    rs.getLong("orders"), rs.getLong("approximate_lines"), o);
                 return;
             }
             UUID variantId = rs.getObject("variant_id", UUID.class);
-            Outcome o = outcomes.getOrDefault(variantId, Outcome.NONE);
             Timestamp last = rs.getTimestamp("last_sold_at");
             rows.add(new VariantSales(
                 variantId,

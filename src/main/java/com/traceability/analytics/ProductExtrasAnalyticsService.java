@@ -41,16 +41,20 @@ public class ProductExtrasAnalyticsService {
     static final int PAIR_MIN_ORDERS = 3;
 
     /*
-     * One query per figure over previous + current period; is_current = the order was placed on or
-     * after the period start (the parameter after the shared 13 / 7).
-     *
-     * Per variant. Exchanged units: portal exchange requests' items (not rejected) and dashboard
-     * exchanges (no request, not dismissed / cancelled) — the old (inbound) variant — on the window's
-     * orders. size_raw = the variant's value of the product option named like "size"; has_size_option
-     * says the product has such an option at all. Parameters after the shared 13: period start,
-     * tenant id, tenant id, period start.
+     * ONE statement over previous + current period (slice 8 — it used to be three, each re-reading
+     * the lines and outcomes); is_current = the order was placed on or after the period start. Rows
+     * of three kinds share the CTEs:
+     *   'v' per variant — sold / delivered / returned units, realized revenue, exchanged units
+     *       (portal exchange requests' items, not rejected, and dashboard exchanges with no request,
+     *       not dismissed / cancelled — the old (inbound) variant), and the size: the variant's value
+     *       of the product option named like "size" (products.size_position / variants.option1-3);
+     *   'p' per product — orders, delivered and failed (refused + other terminal) orders, filtered
+     *       to MOST_FAILED_MIN_ORDERS in Java;
+     *   'x' variant pairs on the same order in at least PAIR_MIN_ORDERS orders.
+     * Parameters after the shared 13: period start, tenant id, tenant id, period start, period start,
+     * period start, pair minimum.
      */
-    private static final String VARIANTS_SQL = SalesAnalyticsService.soldLines(false)
+    private static final String EXTRAS_SQL = SalesAnalyticsService.soldLines(false)
         + SalesAnalyticsService.ORDER_OUTCOMES + SalesAnalyticsService.LINE_RETURNS + """
         , order_period AS (
             SELECT DISTINCT order_id, placed_at >= ?::timestamptz AS is_current FROM lines
@@ -83,33 +87,18 @@ public class ProductExtrasAnalyticsService {
                                                                                         AS realized
             FROM line_facts lf
             GROUP BY 1, 2
-        )
-        SELECT pv.is_current, pv.variant_id, pv.sold, pv.delivered_units, pv.returned, pv.realized,
-               COALESCE(ev.units, 0) AS exchanged, v.sku, v.title AS variant_title, p.title AS product_title,
-               CASE p.size_position WHEN 1 THEN v.option1 WHEN 2 THEN v.option2 WHEN 3 THEN v.option3 END AS size_raw,
-               p.size_position IS NOT NULL AS has_size_option
-        FROM per_variant pv
-        JOIN variants v ON v.id = pv.variant_id
-        JOIN products p ON p.id = v.product_id
-        LEFT JOIN exch_v ev ON ev.variant_id = pv.variant_id AND ev.is_current = pv.is_current
-        """;
-
-    /** Per product and period: orders, delivered and failed (refused + other terminal) orders. Filtered in Java. */
-    private static final String FAILED_SQL = SalesAnalyticsService.soldLines(false)
-        + SalesAnalyticsService.ORDER_OUTCOMES + SalesAnalyticsService.LINE_RETURNS + """
-        SELECT lf.placed_at >= ?::timestamptz AS is_current, v.product_id, p.title,
-               COUNT(DISTINCT lf.order_id)                                                          AS orders,
-               COUNT(DISTINCT lf.order_id) FILTER (WHERE lf.outcome = 'delivered')                    AS delivered,
-               COUNT(DISTINCT lf.order_id) FILTER (WHERE lf.outcome IN ('refused', 'other_terminal')) AS failed
-        FROM line_facts lf
-        JOIN variants v ON v.id = lf.variant_id
-        JOIN products p ON p.id = v.product_id
-        GROUP BY 1, v.product_id, p.title
-        """;
-
-    /** Variant pairs on the same order, per period, in at least PAIR_MIN_ORDERS orders. */
-    private static final String PAIRS_SQL = SalesAnalyticsService.soldLines(false) + """
-        , order_variants AS (
+        ),
+        per_product AS (
+            SELECT lf.placed_at >= ?::timestamptz AS is_current, v.product_id, p.title,
+                   COUNT(DISTINCT lf.order_id)                                                          AS orders,
+                   COUNT(DISTINCT lf.order_id) FILTER (WHERE lf.outcome = 'delivered')                    AS delivered,
+                   COUNT(DISTINCT lf.order_id) FILTER (WHERE lf.outcome IN ('refused', 'other_terminal')) AS failed
+            FROM line_facts lf
+            JOIN variants v ON v.id = lf.variant_id
+            JOIN products p ON p.id = v.product_id
+            GROUP BY 1, v.product_id, p.title
+        ),
+        order_variants AS (
             SELECT DISTINCT order_id, variant_id, placed_at >= ?::timestamptz AS is_current FROM lines
         ),
         pairs AS (
@@ -119,9 +108,24 @@ public class ProductExtrasAnalyticsService {
             GROUP BY a.is_current, a.variant_id, b.variant_id
             HAVING COUNT(*) >= ?
         )
-        SELECT pr.is_current, pr.va, pr.vb, pr.orders,
-               pa.title || ' — ' || COALESCE(va.title, '') AS title_a,
-               pb.title || ' — ' || COALESCE(vb.title, '') AS title_b
+        SELECT 'v' AS kind, pv.is_current, pv.variant_id, pv.sold, pv.delivered_units, pv.returned, pv.realized,
+               COALESCE(ev.units, 0) AS exchanged, v.sku, v.title AS variant_title, p.title AS product_title,
+               CASE p.size_position WHEN 1 THEN v.option1 WHEN 2 THEN v.option2 WHEN 3 THEN v.option3 END AS size_raw,
+               p.size_position IS NOT NULL AS has_size_option,
+               NULL::uuid AS product_id, NULL::text AS title, NULL::bigint AS orders, NULL::bigint AS delivered,
+               NULL::bigint AS failed, NULL::uuid AS vb, NULL::text AS title_a, NULL::text AS title_b
+        FROM per_variant pv
+        JOIN variants v ON v.id = pv.variant_id
+        JOIN products p ON p.id = v.product_id
+        LEFT JOIN exch_v ev ON ev.variant_id = pv.variant_id AND ev.is_current = pv.is_current
+        UNION ALL
+        SELECT 'p', pp.is_current, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
+               pp.product_id, pp.title, pp.orders, pp.delivered, pp.failed, NULL, NULL, NULL
+        FROM per_product pp
+        UNION ALL
+        SELECT 'x', pr.is_current, pr.va, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
+               NULL, NULL, pr.orders, NULL, NULL, pr.vb,
+               pa.title || ' — ' || COALESCE(va.title, ''), pb.title || ' — ' || COALESCE(vb.title, '')
         FROM pairs pr
         JOIN variants va ON va.id = pr.va JOIN products pa ON pa.id = va.product_id
         JOIN variants vb ON vb.id = pr.vb JOIN products pb ON pb.id = vb.product_id
@@ -142,39 +146,36 @@ public class ProductExtrasAnalyticsService {
         AnalyticsPeriod window = OrderFacts.span(prev, period);
         java.sql.Timestamp curStart = java.sql.Timestamp.from(period.startInclusive());
         Map<Boolean, List<VariantRow>> variants = split();
-        jdbc.query(VARIANTS_SQL, ps -> {
-            int i = AnalyticsSql.bindSoldLines(ps, tid, window, overrides);
-            for (int k = 0; k < 6; k++) ps.setObject(i++, tid);
-            ps.setTimestamp(i++, curStart);
-            ps.setObject(i++, tid);
-            ps.setObject(i++, tid);
-            ps.setTimestamp(i, curStart);
-        }, rs -> {
-            variants.get(rs.getBoolean("is_current")).add(new VariantRow(rs.getObject("variant_id", UUID.class),
-                rs.getLong("sold"), rs.getLong("delivered_units"), rs.getLong("returned"), rs.getBigDecimal("realized"),
-                rs.getLong("exchanged"), rs.getString("sku"), rs.getString("variant_title"),
-                rs.getString("product_title"), rs.getString("size_raw"), rs.getBoolean("has_size_option")));
-        });
         Map<Boolean, List<FailedProduct>> failed = split();
-        jdbc.query(FAILED_SQL, ps -> {
+        Map<Boolean, List<Pair>> pairs = split();
+        jdbc.query(EXTRAS_SQL, ps -> {
             int i = AnalyticsSql.bindSoldLines(ps, tid, window, overrides);
             for (int k = 0; k < 6; k++) ps.setObject(i++, tid);
-            ps.setTimestamp(i, curStart);
-        }, rs -> {
-            long orders = rs.getLong("orders"), d = rs.getLong("delivered"), f = rs.getLong("failed");
-            if (orders < MOST_FAILED_MIN_ORDERS) return;
-            // failureRate = failed ÷ (delivered + failed) — the one success / failure definition.
-            failed.get(rs.getBoolean("is_current")).add(new FailedProduct(rs.getObject("product_id", UUID.class),
-                rs.getString("title"), orders, f, rate(f, d + f)));
-        });
-        Map<Boolean, List<Pair>> pairs = split();
-        jdbc.query(PAIRS_SQL, ps -> {
-            int i = AnalyticsSql.bindSoldLines(ps, tid, window, overrides);
-            ps.setTimestamp(i++, curStart);
+            ps.setTimestamp(i++, curStart);          // order_period
+            ps.setObject(i++, tid);                  // exch: requests
+            ps.setObject(i++, tid);                  // exch: dashboard exchanges
+            ps.setTimestamp(i++, curStart);          // per_variant
+            ps.setTimestamp(i++, curStart);          // per_product
+            ps.setTimestamp(i++, curStart);          // order_variants
             ps.setInt(i, PAIR_MIN_ORDERS);
         }, rs -> {
-            pairs.get(rs.getBoolean("is_current")).add(new Pair(rs.getObject("va", UUID.class), rs.getString("title_a"),
-                rs.getObject("vb", UUID.class), rs.getString("title_b"), rs.getLong("orders")));
+            boolean current = rs.getBoolean("is_current");
+            switch (rs.getString("kind")) {
+                case "v" -> variants.get(current).add(new VariantRow(rs.getObject("variant_id", UUID.class),
+                    rs.getLong("sold"), rs.getLong("delivered_units"), rs.getLong("returned"), rs.getBigDecimal("realized"),
+                    rs.getLong("exchanged"), rs.getString("sku"), rs.getString("variant_title"),
+                    rs.getString("product_title"), rs.getString("size_raw"), rs.getBoolean("has_size_option")));
+                case "p" -> {
+                    long orders = rs.getLong("orders"), d = rs.getLong("delivered"), f = rs.getLong("failed");
+                    if (orders >= MOST_FAILED_MIN_ORDERS) {
+                        // failureRate = failed ÷ (delivered + failed) — the one success / failure definition.
+                        failed.get(current).add(new FailedProduct(rs.getObject("product_id", UUID.class),
+                            rs.getString("title"), orders, f, rate(f, d + f)));
+                    }
+                }
+                default -> pairs.get(current).add(new Pair(rs.getObject("variant_id", UUID.class), rs.getString("title_a"),
+                    rs.getObject("vb", UUID.class), rs.getString("title_b"), rs.getLong("orders")));
+            }
         });
         return new Compared<>(period.range(), prev.range(), extrasOf(variants.get(true), failed.get(true), pairs.get(true)),
             extrasOf(variants.get(false), failed.get(false), pairs.get(false)));

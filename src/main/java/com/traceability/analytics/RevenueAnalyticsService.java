@@ -251,57 +251,41 @@ public class RevenueAnalyticsService {
 
     // ── /revenue/discounts ──────────────────────────────────────────────────
 
-    /*
-     * kind 'alloc': one line discount allocation (its cost scaled like the line's unit price —
-     * qty ÷ the original quantity); kind 'app': the order used a discount code / automatic discount
-     * (any target, shipping included). Codes are grouped case-insensitively.
-     */
-    private static final String DISCOUNTS_SQL = SalesAnalyticsService.soldLines(false) + """
-        , line_allocs AS (
-            SELECT l.order_id, o.discount_types[al.idx + 1] AS type, o.discount_labels[al.idx + 1] AS code,
-                   l.qty * al.amt / NULLIF(GREATEST(COALESCE(oi.original_qty, oi.quantity), l.qty), 0) AS cost
-            FROM lines l
-            JOIN order_items oi ON oi.id = l.order_item_id
-            JOIN orders o       ON o.id = l.order_id
-            CROSS JOIN LATERAL unnest(CASE WHEN NOT l.approximate THEN oi.alloc_amounts END,
-                                      CASE WHEN NOT l.approximate THEN oi.alloc_indexes END) AS al(amt, idx)
-        ),
-        order_apps AS (
-            SELECT DISTINCT po.order_id, app.type, app.code
-            FROM (SELECT DISTINCT order_id FROM lines) po
-            JOIN orders o ON o.id = po.order_id
-            CROSS JOIN LATERAL unnest(o.discount_types, o.discount_labels) AS app(type, code)
-        )
-        SELECT 'alloc' AS kind, order_id, type, code, cost FROM line_allocs WHERE type IN ('discount_code', 'automatic')
-        UNION ALL
-        SELECT 'app', order_id, type, code, NULL FROM order_apps WHERE type IN ('discount_code', 'automatic')
-        """;
-
     @Transactional(readOnly = true)
     public Compared<Discounts> discounts(AnalyticsPeriod period) {
         UUID tid = TenantContext.require();
         AnalyticsPeriod prev = AnalyticsSql.previous(period);
-        AnalyticsPeriod window = OrderFacts.span(prev, period);
-        List<OrderFacts.Order> all = OrderFacts.load(jdbc, tid, window, overrides);
+        OrderFacts.WithDiscounts all = OrderFacts.loadWithDiscounts(jdbc, tid, OrderFacts.span(prev, period), overrides);
         Map<UUID, OrderFacts.Order> cur = new HashMap<>(), before = new HashMap<>();
-        for (OrderFacts.Order o : OrderFacts.within(all, period)) cur.put(o.orderId(), o);
-        for (OrderFacts.Order o : OrderFacts.within(all, prev)) before.put(o.orderId(), o);
+        for (OrderFacts.Order o : OrderFacts.within(all.orders(), period)) cur.put(o.orderId(), o);
+        for (OrderFacts.Order o : OrderFacts.within(all.orders(), prev)) before.put(o.orderId(), o);
         Map<String, DiscAcc> curCodes = new TreeMap<>(), prevCodes = new TreeMap<>();
         DiscAcc curAuto = new DiscAcc(null), prevAuto = new DiscAcc(null);
-        jdbc.query(DISCOUNTS_SQL, ps -> AnalyticsSql.bindSoldLines(ps, tid, window, overrides), rs -> {
-            UUID order = rs.getObject("order_id", UUID.class);
+        all.discounts().forEach((order, d) -> {
             boolean isCurrent = cur.containsKey(order);
             if (!isCurrent && !before.containsKey(order)) return;
-            boolean auto = "automatic".equals(rs.getString("type"));
-            String code = rs.getString("code");
-            DiscAcc acc = auto ? (isCurrent ? curAuto : prevAuto)
-                : (isCurrent ? curCodes : prevCodes).computeIfAbsent(code == null ? "" : code, DiscAcc::new);
-            acc.orders.add(order);
-            BigDecimal cost = rs.getBigDecimal("cost");
-            if (cost != null) acc.cost = acc.cost.add(cost);
+            Map<String, DiscAcc> codes = isCurrent ? curCodes : prevCodes;
+            DiscAcc auto = isCurrent ? curAuto : prevAuto;
+            // Line allocations: the order and the allocation's cost.
+            for (int i = 0; i < d.allocTypes().length; i++) {
+                DiscAcc acc = discAcc(d.allocTypes()[i], d.allocCodes()[i], codes, auto);
+                acc.orders.add(order);
+                if (d.allocCosts()[i] != null) acc.cost = acc.cost.add(d.allocCosts()[i]);
+            }
+            // Applications of any target (shipping included): the order used it.
+            for (int i = 0; i < d.appTypes().length; i++) {
+                String type = d.appTypes()[i];
+                if (!"discount_code".equals(type) && !"automatic".equals(type)) continue;
+                discAcc(type, d.appCodes()[i], codes, auto).orders.add(order);
+            }
         });
         return new Compared<>(period.range(), prev.range(), discountsOf(curCodes, curAuto, cur),
             discountsOf(prevCodes, prevAuto, before));
+    }
+
+    /** Codes are grouped case-insensitively (labels are upper-cased in SQL); one automatic row. */
+    private static DiscAcc discAcc(String type, String code, Map<String, DiscAcc> codes, DiscAcc auto) {
+        return "automatic".equals(type) ? auto : codes.computeIfAbsent(code == null ? "" : code, DiscAcc::new);
     }
 
     private static Discounts discountsOf(Map<String, DiscAcc> codes, DiscAcc automatic, Map<UUID, OrderFacts.Order> facts) {

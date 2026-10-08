@@ -37,7 +37,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  *     -p 55432:5432 postgres:16-alpine
  *   mvn test -Dtest=AnalyticsBenchmark -Dbench.url=jdbc:postgresql://localhost:55432/bench \
  *     -Dbench.label=before [-Dbench.cold=true -Dbench.container=traced-bench]
- *     [-Dbench.periods=30d,366d] [-Dbench.startAt="revenue/summary [366d]"]
+ *     [-Dbench.periods=30d,366d] [-Dbench.startAt="revenue/summary [366d]"] [-Dbench.only=sales/variants,...]
  *
  * The app connects as app_user (RLS on, as in prod). Warm: 3 warm-up calls, then 20 timed calls
  * per endpoint and period. Cold (-Dbench.cold=true): before each of 3 samples per endpoint, the
@@ -91,6 +91,11 @@ class AnalyticsBenchmark {
             }
         }
         endpoints.add(new String[] {"money/stuck", "/api/v1/analytics/money/stuck"});
+        String only = System.getProperty("bench.only");                // e.g. sales/variants,revenue/discounts
+        if (only != null) {
+            List<String> keep = List.of(only.split(","));
+            endpoints.removeIf(e -> keep.stream().noneMatch(k -> e[0].startsWith(k + " ") || e[0].equals(k)));
+        }
         String startAt = System.getProperty("bench.startAt");          // resume: skip endpoints before this one
         if (startAt != null) {
             int k = 0;
@@ -164,8 +169,12 @@ class AnalyticsBenchmark {
                 Thread.sleep(200);
             }
         }
-        for (HikariDataSource ds : ctx.getBeansOfType(HikariDataSource.class).values()) {
-            ds.getHikariPoolMXBean().softEvictConnections();
+        // Every pool, including the app pool wrapped inside TenantAwareDataSource: a connection from
+        // before the restart would fail with 57P01 on its first use.
+        for (javax.sql.DataSource ds : ctx.getBeansOfType(javax.sql.DataSource.class).values()) {
+            if (ds.isWrapperFor(HikariDataSource.class)) {
+                ds.unwrap(HikariDataSource.class).getHikariPoolMXBean().softEvictConnections();
+            }
         }
         DriverManagerDataSource probe = new DriverManagerDataSource(URL, "app_user", "x");
         probe.getConnection().close();

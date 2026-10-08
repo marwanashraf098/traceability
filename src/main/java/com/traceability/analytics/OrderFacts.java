@@ -109,6 +109,81 @@ final class OrderFacts {
         ) lg ON true
         """;
 
+    /*
+     * SQL plus each order's discounts, for /revenue/discounts (slice 8: one pass instead of the facts
+     * query and a second allocation query). alloc_* = the order's line discount allocations of type
+     * discount_code / automatic — type, code (code, else title; upper-cased, trimmed) and cost scaled
+     * like the line's unit price (qty ÷ the original quantity; lines with no raw price have none);
+     * discount_types / discount_labels = every discount application on the order (any target).
+     */
+    static final String SQL_WITH_DISCOUNTS = SQL
+        .replace("""
+        SELECT om.order_id, om.placed_at,""", """
+        , order_allocs AS (
+            SELECT l.order_id,
+                   array_agg(o.discount_types[al.idx + 1] ORDER BY l.order_item_id, al.ord)  AS alloc_types,
+                   array_agg(o.discount_labels[al.idx + 1] ORDER BY l.order_item_id, al.ord) AS alloc_codes,
+                   array_agg(l.qty * al.amt / NULLIF(GREATEST(COALESCE(oi.original_qty, oi.quantity), l.qty), 0)
+                             ORDER BY l.order_item_id, al.ord)                                AS alloc_costs
+            FROM lines l
+            JOIN order_items oi ON oi.id = l.order_item_id
+            JOIN orders o       ON o.id = l.order_id
+            CROSS JOIN LATERAL unnest(CASE WHEN NOT l.approximate THEN oi.alloc_amounts END,
+                                      CASE WHEN NOT l.approximate THEN oi.alloc_indexes END)
+                WITH ORDINALITY AS al(amt, idx, ord)
+            WHERE o.discount_types[al.idx + 1] IN ('discount_code', 'automatic')
+            GROUP BY l.order_id
+        )
+        SELECT om.order_id, om.placed_at,""")
+        .replace("""
+               lg.handed_at, lg.delivered_at, lg.settlement_status, lg.failure_category
+        FROM order_money om
+        JOIN orders o          ON o.id = om.order_id""", """
+               lg.handed_at, lg.delivered_at, lg.settlement_status, lg.failure_category,
+               oa.alloc_types, oa.alloc_codes, oa.alloc_costs, o.discount_types, o.discount_labels
+        FROM order_money om
+        JOIN orders o          ON o.id = om.order_id
+        LEFT JOIN order_allocs oa ON oa.order_id = om.order_id""");
+
+    /** An order's discounts (SQL_WITH_DISCOUNTS); arrays may be empty, elements may be null. */
+    record OrderDiscounts(String[] allocTypes, String[] allocCodes, BigDecimal[] allocCosts,
+                          String[] appTypes, String[] appCodes) {}
+
+    record WithDiscounts(List<Order> orders, Map<UUID, OrderDiscounts> discounts) {}
+
+    static WithDiscounts loadWithDiscounts(JdbcTemplate jdbc, UUID tid, AnalyticsPeriod period,
+                                           AnalyticsFloorOverrides overrides) {
+        Map<UUID, OrderDiscounts> discounts = new HashMap<>();
+        List<Order> orders = jdbc.query(SQL_WITH_DISCOUNTS, ps -> {
+            int i = AnalyticsSql.bindSoldLines(ps, tid, period, overrides);
+            for (int k = 0; k < 7; k++) ps.setObject(i++, tid);
+        }, (rs, n) -> {
+            Order o = row(rs);
+            discounts.put(o.orderId(), new OrderDiscounts(strings(rs.getArray("alloc_types")),
+                strings(rs.getArray("alloc_codes")), decimals(rs.getArray("alloc_costs")),
+                strings(rs.getArray("discount_types")), strings(rs.getArray("discount_labels"))));
+            return o;
+        });
+        if (!SQL_WITH_DISCOUNTS.contains("order_allocs")) throw new IllegalStateException("SQL_WITH_DISCOUNTS not built");
+        return new WithDiscounts(orders, discounts);
+    }
+
+    private static String[] strings(Array a) throws SQLException {
+        if (a == null) return new String[0];
+        Object[] v = (Object[]) a.getArray();
+        String[] out = new String[v.length];
+        for (int i = 0; i < v.length; i++) out[i] = (String) v[i];
+        return out;
+    }
+
+    private static BigDecimal[] decimals(Array a) throws SQLException {
+        if (a == null) return new BigDecimal[0];
+        Object[] v = (Object[]) a.getArray();
+        BigDecimal[] out = new BigDecimal[v.length];
+        for (int i = 0; i < v.length; i++) out[i] = (BigDecimal) v[i];
+        return out;
+    }
+
     private OrderFacts() {}
 
     static List<Order> load(JdbcTemplate jdbc, UUID tid, AnalyticsPeriod period, AnalyticsFloorOverrides overrides) {
