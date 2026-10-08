@@ -1,4 +1,4 @@
--- V154 — Analytics slice 6 (customers): when Shopify created the order's customer, as a STORED
+-- V155 — Analytics slice 6 (customers): when Shopify created the order's customer, as a STORED
 -- generated column (the V149 rule: total functions, no read-time raw parsing).
 --
 -- REST orders carry customer.created_at, GraphQL imports customer.createdAt. A customer created

@@ -36,7 +36,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 /**
  * Analytics slice 6 — customers since connect: new / existing / returning / unknown, repeat rate,
  * days between orders, revenue and success per class, top customers, repeat rate by governorate,
- * monthly cohorts, the refused-COD watch list (blocklist read-only), V154, no phone / key in any
+ * monthly cohorts, the refused-COD watch list (blocklist read-only), V155, no phone / key in any
  * response, roles and tenant isolation.
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
@@ -407,11 +407,11 @@ class AnalyticsCustomersTest {
         assertThat(n(cur, "newCustomers")).isEqualTo(1);
     }
 
-    // ── V154 ─────────────────────────────────────────────────────────────────
+    // ── V155 ─────────────────────────────────────────────────────────────────
 
     @Test
-    void v154_customerCreatedAt_restOrGraphql_garbageIsNull_redactionClearsIt() {
-        T t = new T("S6-V154");
+    void v155_customerCreatedAt_restOrGraphql_garbageIsNull_redactionClearsIt() {
+        T t = new T("S6-V155");
         UUID rest = t.order(t.customer("A B", "01000000001", Instant.parse("2025-03-04T05:06:07Z")), 3, "delivered");
         UUID gql = UUID.randomUUID();
         jdbc.update("INSERT INTO orders (id, tenant_id, store_id, external_id, number, status, placed_at, raw) " +

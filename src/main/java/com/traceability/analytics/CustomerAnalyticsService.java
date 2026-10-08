@@ -39,7 +39,7 @@ import static com.traceability.analytics.AnalyticsSql.rate;
  * else the floor override); a store with neither (Jumi) — its first ingested order.
  *
  * Every order of a known customer has ONE class:
- *   existing  — the customer was created in Shopify before connect (orders.customer_created_at, V154);
+ *   existing  — the customer was created in Shopify before connect (orders.customer_created_at, V155);
  *   new       — the customer's first order since connect, customer created on / after connect;
  *   unknown   — the customer's first order since connect, no creation date (e.g. phone-only orders);
  *   returning — a 2nd or later order since connect of a customer who isn't existing.
