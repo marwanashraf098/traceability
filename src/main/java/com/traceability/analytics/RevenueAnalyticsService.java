@@ -255,69 +255,36 @@ public class RevenueAnalyticsService {
     public Compared<Discounts> discounts(AnalyticsPeriod period) {
         UUID tid = TenantContext.require();
         AnalyticsPeriod prev = AnalyticsSql.previous(period);
-        OrderFacts.WithDiscounts all = OrderFacts.loadWithDiscounts(jdbc, tid, OrderFacts.span(prev, period), overrides);
-        Map<UUID, OrderFacts.Order> cur = new HashMap<>(), before = new HashMap<>();
-        for (OrderFacts.Order o : OrderFacts.within(all.orders(), period)) cur.put(o.orderId(), o);
-        for (OrderFacts.Order o : OrderFacts.within(all.orders(), prev)) before.put(o.orderId(), o);
-        Map<String, DiscAcc> curCodes = new TreeMap<>(), prevCodes = new TreeMap<>();
-        DiscAcc curAuto = new DiscAcc(null), prevAuto = new DiscAcc(null);
-        all.discounts().forEach((order, d) -> {
-            boolean isCurrent = cur.containsKey(order);
-            if (!isCurrent && !before.containsKey(order)) return;
-            Map<String, DiscAcc> codes = isCurrent ? curCodes : prevCodes;
-            DiscAcc auto = isCurrent ? curAuto : prevAuto;
-            // Line allocations: the order and the allocation's cost.
-            for (int i = 0; i < d.allocTypes().length; i++) {
-                DiscAcc acc = discAcc(d.allocTypes()[i], d.allocCodes()[i], codes, auto);
-                acc.orders.add(order);
-                if (d.allocCosts()[i] != null) acc.cost = acc.cost.add(d.allocCosts()[i]);
-            }
-            // Applications of any target (shipping included): the order used it.
-            for (int i = 0; i < d.appTypes().length; i++) {
-                String type = d.appTypes()[i];
-                if (!"discount_code".equals(type) && !"automatic".equals(type)) continue;
-                discAcc(type, d.appCodes()[i], codes, auto).orders.add(order);
-            }
+        Map<Boolean, List<DiscountRow>> codes = new HashMap<>(Map.of(true, new ArrayList<>(), false, new ArrayList<>()));
+        Map<Boolean, DiscountRow> automatic = new HashMap<>();
+        jdbc.query(OrderFacts.DISCOUNTS_SQL, ps -> {
+            int i = AnalyticsSql.bindSoldLines(ps, tid, OrderFacts.span(prev, period), overrides);
+            for (int k = 0; k < 6; k++) ps.setObject(i++, tid);
+            ps.setTimestamp(i, java.sql.Timestamp.from(period.startInclusive()));
+        }, rs -> {
+            boolean auto = rs.getBoolean("is_auto"), current = rs.getBoolean("is_current");
+            String code = rs.getString("code_key");
+            DiscountRow row = discountRow(auto ? null : code, auto ? "Automatic discounts" : code, rs.getLong("orders"),
+                rs.getBigDecimal("booked"), rs.getBigDecimal("cost"), rs.getLong("delivered"), rs.getLong("failed"));
+            if (auto) automatic.put(current, row);
+            else codes.get(current).add(row);
         });
-        return new Compared<>(period.range(), prev.range(), discountsOf(curCodes, curAuto, cur),
-            discountsOf(prevCodes, prevAuto, before));
+        return new Compared<>(period.range(), prev.range(), discountsOf(codes.get(true), automatic.get(true)),
+            discountsOf(codes.get(false), automatic.get(false)));
     }
 
-    /** Codes are grouped case-insensitively (labels are upper-cased in SQL); one automatic row. */
-    private static DiscAcc discAcc(String type, String code, Map<String, DiscAcc> codes, DiscAcc auto) {
-        return "automatic".equals(type) ? auto : codes.computeIfAbsent(code == null ? "" : code, DiscAcc::new);
+    private static DiscountRow discountRow(String code, String label, long orders, BigDecimal booked, BigDecimal cost,
+                                           long delivered, long failed) {
+        BigDecimal b = money(booked), c = money(cost);
+        return new DiscountRow(code, label, orders, b, c, delivered, failed, rate(delivered, delivered + failed),
+            c.signum() == 0 ? null : rate(b, c));
     }
 
-    private static Discounts discountsOf(Map<String, DiscAcc> codes, DiscAcc automatic, Map<UUID, OrderFacts.Order> facts) {
-        List<DiscountRow> rows = new ArrayList<>();
-        for (DiscAcc a : codes.values()) rows.add(a.row(facts, a.code, a.code));
+    private static Discounts discountsOf(List<DiscountRow> codes, DiscountRow automatic) {
+        List<DiscountRow> rows = new ArrayList<>(codes);
         rows.sort(Comparator.comparing(DiscountRow::orders).reversed().thenComparing(DiscountRow::code));
-        return new Discounts(rows, automatic.row(facts, null, "Automatic discounts"));
-    }
-
-    private static final class DiscAcc {
-        final String code;
-        final Set<UUID> orders = new HashSet<>();
-        BigDecimal cost = BigDecimal.ZERO;
-
-        DiscAcc(String code) {
-            this.code = code;
-        }
-
-        DiscountRow row(Map<UUID, OrderFacts.Order> facts, String code, String label) {
-            BigDecimal booked = BigDecimal.ZERO;
-            long delivered = 0, failed = 0;
-            for (UUID id : orders) {
-                OrderFacts.Order o = facts.get(id);
-                if (o == null) continue;
-                booked = booked.add(o.booked());
-                if (o.delivered()) delivered++;
-                if (o.failed()) failed++;
-            }
-            BigDecimal c = money(cost);
-            return new DiscountRow(code, label, orders.size(), money(booked), c, delivered, failed,
-                rate(delivered, delivered + failed), c.signum() == 0 ? null : rate(money(booked), c));
-        }
+        return new Discounts(rows, automatic != null ? automatic
+            : discountRow(null, "Automatic discounts", 0, BigDecimal.ZERO, BigDecimal.ZERO, 0, 0));
     }
 
     // ── /revenue/heatmap ────────────────────────────────────────────────────
