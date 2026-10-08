@@ -337,6 +337,9 @@ tenancy:
   runas-switch-guard: ${TENANCY_RUNAS_SWITCH_GUARD:warn}
 
 analytics:
+  # HMAC key for the customer references in /analytics/customers (env ANALYTICS_REF_SECRET, ≥ 32
+  # bytes). No default: the app refuses to start without it.
+  ref-secret: ${ANALYTICS_REF_SECRET:}
   # Analytics floor for stores whose stores.orders_ingest_from is NULL (AnalyticsFloorOverrides):
   # shop-domain=YYYY-MM-DD (a Cairo day; floor = 00:00 Africa/Cairo), comma-separated. Read ONLY by
   # analytics — never by ingest. Jumi (mmi24e-fx) keeps its NULL cutoff permanently (CLAUDE.md FR-18);
