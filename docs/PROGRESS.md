@@ -4,6 +4,24 @@
 
 ## Current state
 
+**Analytics B1 — small backend fixes (2026-10-08, branch `analytics/b1-fixes`, merged to main; NOT deployed).
+Migration V150.**
+- **`GET /api/v1/analytics/sales/variants/daily?ids=…&period`** (≤ 20 ids, owner-only): sold units per Cairo day (the
+  slice-1 sold-line rule), dense series, ids in the order asked, unknown / other-tenant ids → zeros. For the Top SKUs
+  sparklines and the SKU drawer chart.
+- **Order list `q`** also matches the customer DISPLAY name (first name + last initial) — never the stored full name.
+- **Payout lag — ONE definition (`SettlementSql.medianPayoutLag` / `payoutLagLeg`):** median of payout day − Cairo
+  delivery day over paid forward legs, post-floor. `/money/fees` (window: payout day in the period) and the cash
+  forecast (payout in the last 90 days) both use it; /money/fees used the average deposit → paid before. Prod (30 d):
+  BROEK 3.3 → 4 days, Snouts 11.1 → 6 days.
+- **Zero cash cycle (`SettlementSql.zeroCycle`):** Bosta settled the leg for exactly 0 (fee-free RTO, COD = fees) and no
+  cashout names it — nothing is owed and Bosta never sends a cashout (prod 2026-10-08: 9 of 10 zero cycles had none;
+  every negative deposit got one). Never 'unresolved', never delivered-not-paid / awaiting payout; the refresh job
+  stops re-reading it; on the order list a DELIVERED zero cycle is paid at 0 — the outcome still wins (a refused one
+  stays lost). **V150** puts zero cycles already marked 'unresolved' back to 'deposited' (prod: the 2 Snouts RTOs
+  2360263820, 445040939).
+- Tests: `AnalyticsB1Test` (8); approved edit to `AnalyticsMoneyTest` (payout lag 8.0 → 4.0, delivered → paid).
+
 **Analytics slice 7 — order finances, Summary alerts, cash forecast, backend only (2026-10-08, branch
 `analytics/s7-finances`, merged to main; NOT deployed). No migration.** Owner-only, same period / floor / RLS rules,
 V148/V149 columns only (no raw parsing).
