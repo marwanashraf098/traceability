@@ -91,9 +91,9 @@ class AnalyticsBenchmark {
             }
         }
         endpoints.add(new String[] {"money/stuck", "/api/v1/analytics/money/stuck"});
-        String only = System.getProperty("bench.only");                // e.g. sales/variants,revenue/discounts
-        if (only != null) {
-            List<String> keep = List.of(only.split(","));
+        String onlyEndpoints = System.getProperty("bench.only");       // e.g. sales/variants,revenue/discounts
+        if (onlyEndpoints != null) {
+            List<String> keep = List.of(onlyEndpoints.split(","));
             endpoints.removeIf(e -> keep.stream().noneMatch(k -> e[0].startsWith(k + " ") || e[0].equals(k)));
         }
         String startAt = System.getProperty("bench.startAt");          // resume: skip endpoints before this one
