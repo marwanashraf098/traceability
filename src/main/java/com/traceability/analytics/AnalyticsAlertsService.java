@@ -1,6 +1,5 @@
 package com.traceability.analytics;
 
-import com.traceability.inventory.VariantStockService;
 import com.traceability.tenancy.TenantContext;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
@@ -29,15 +28,24 @@ public class AnalyticsAlertsService {
 
     static final BigDecimal LOW_SUCCESS = new BigDecimal("0.65");
     static final int LOW_SUCCESS_MIN_ORDERS = 10;
-    static final int SELLS_OUT_DAYS = 7;
-    static final int SALES_RATE_DAYS = 30;
+    static final int SELLS_OUT_DAYS = 4;
+    static final int BEST_SELLERS = 20;
 
     public record AlertDetail(String key, String label, String labelAr, long orders, BigDecimal successRate,
                               BigDecimal failedValue) {}
 
     /** One "Needs attention" line: how many, how much (null when money doesn't apply), where to go. */
+    /** A best seller about to sell out (the sells-out-soon line). */
+    public record AlertSku(UUID variantId, String productTitle, String variantTitle, String sku, long onHand,
+                           BigDecimal daysOfCover, BigDecimal velocityPerDay) {}
+
+    /** One "Needs attention" line: how many, how much (null when money doesn't apply), where to go. */
     public record Alert(String key, String label, long count, BigDecimal amount, String link,
-                        List<AlertDetail> details) {}
+                        List<AlertDetail> details, List<AlertSku> skus) {
+        Alert(String key, String label, long count, BigDecimal amount, String link, List<AlertDetail> details) {
+            this(key, label, count, amount, link, details, null);
+        }
+    }
 
     public record Alerts(AnalyticsPeriod.Range range, Instant asOf, List<Alert> alerts) {}
 
@@ -61,10 +69,10 @@ public class AnalyticsAlertsService {
     private final Clock clock;
     private final AnalyticsFloorOverrides overrides;
     private final MoneyAnalyticsService money;
-    private final VariantStockService stock;
+    private final StockAnalyticsService stock;
 
     public AnalyticsAlertsService(JdbcTemplate jdbc, Clock clock, AnalyticsFloorOverrides overrides,
-                                  MoneyAnalyticsService money, VariantStockService stock) {
+                                  MoneyAnalyticsService money, StockAnalyticsService stock) {
         this.jdbc = jdbc;
         this.clock = clock;
         this.overrides = overrides;
@@ -98,8 +106,7 @@ public class AnalyticsAlertsService {
 
         out.add(lowSuccessGovernorates(tid, period));
 
-        Boolean hasPieces = jdbc.queryForObject("SELECT EXISTS (SELECT 1 FROM pieces WHERE tenant_id = ?)", Boolean.class, tid);
-        if (Boolean.TRUE.equals(hasPieces)) out.add(sellsOutSoon(tid));
+        if (stock.hasPieces(tid)) out.add(sellsOutSoon());
         return new Alerts(period.range(), now, out);
     }
 
@@ -138,25 +145,25 @@ public class AnalyticsAlertsService {
     }
 
     /**
-     * Sells out soon (the s4 version will replace this): variants with available stock > 0 that, at
-     * their sold units of the last 30 days (the s1 cohort), have at most 7 days of stock left.
+     * Sells out soon (slice 4): among the best sellers — the top {@value #BEST_SELLERS} variants by
+     * velocity (StockAnalyticsService: delivered units per day, last 30 days) — those with stock on
+     * hand and at most {@value #SELLS_OUT_DAYS} days of cover. Listed in {@code skus}, lowest cover first.
      */
-    private Alert sellsOutSoon(UUID tid) {
-        LocalDate today = today();
-        AnalyticsPeriod last30 = new AnalyticsPeriod(today.minusDays(SALES_RATE_DAYS - 1L), today);
-        Map<UUID, Long> sold = new HashMap<>();
-        jdbc.query(SalesAnalyticsService.soldLines(false) + "SELECT variant_id, SUM(qty) AS units FROM lines GROUP BY variant_id",
-            ps -> AnalyticsSql.bindSoldLines(ps, tid, last30, overrides),
-            rs -> { sold.put(rs.getObject("variant_id", UUID.class), rs.getLong("units")); });
-        Map<UUID, VariantStockService.VariantStock> all = stock.computeAll();
-        long count = 0;
-        for (Map.Entry<UUID, Long> e : sold.entrySet()) {
-            VariantStockService.VariantStock st = all.get(e.getKey());
-            if (st == null || st.available() <= 0 || e.getValue() <= 0) continue;
-            double perDay = e.getValue() / (double) SALES_RATE_DAYS;
-            if (st.available() / perDay <= SELLS_OUT_DAYS) count++;
+    private Alert sellsOutSoon() {
+        List<StockAnalyticsService.VariantStock> best = new ArrayList<>(
+            stock.variants("velocity", "all", Integer.MAX_VALUE).variants());
+        best.removeIf(v -> v.deliveredUnits30() == 0);
+        if (best.size() > BEST_SELLERS) best = new ArrayList<>(best.subList(0, BEST_SELLERS));
+        List<AlertSku> skus = new ArrayList<>();
+        for (StockAnalyticsService.VariantStock v : best) {
+            if (v.onHand() > 0 && v.daysOfCover() != null && v.daysOfCover().compareTo(BigDecimal.valueOf(SELLS_OUT_DAYS)) <= 0) {
+                skus.add(new AlertSku(v.variantId(), v.productTitle(), v.variantTitle(), v.sku(), v.onHand(),
+                    v.daysOfCover(), v.velocityPerDay()));
+            }
         }
-        return new Alert("sells_out_soon", "Sells out within 7 days", count, null, "/analytics/products?sort=daysLeft", null);
+        skus.sort(Comparator.comparing(AlertSku::daysOfCover).thenComparing(s -> s.variantId().toString()));
+        return new Alert("sells_out_soon", "Best sellers that sell out within 4 days", skus.size(), null,
+            "/analytics/stock?filter=running_low", null, skus);
     }
 
     // ── /cash-forecast ──────────────────────────────────────────────────────
