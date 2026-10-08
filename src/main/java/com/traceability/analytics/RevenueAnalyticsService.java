@@ -71,18 +71,19 @@ public class RevenueAnalyticsService {
     }
 
     /** One facts query over previous + current period, split by placed_at. */
-    private <T> Compared<T> compared(AnalyticsPeriod p, BiFunction<List<OrderFacts.Order>, AnalyticsPeriod, T> f) {
-        AnalyticsPeriod prev = AnalyticsSql.previous(p);
+    private <T> Compared<T> compared(AnalyticsPeriod p, boolean compare,
+                                     BiFunction<List<OrderFacts.Order>, AnalyticsPeriod, T> f) {
+        AnalyticsPeriod prev = AnalyticsSql.previousOrNull(p, compare);
         List<OrderFacts.Order> all = OrderFacts.load(jdbc, TenantContext.require(), OrderFacts.span(prev, p), overrides);
-        return new Compared<>(p.range(), prev.range(),
-            f.apply(OrderFacts.within(all, p), p), f.apply(OrderFacts.within(all, prev), prev));
+        return new Compared<>(p.range(), AnalyticsSql.rangeOf(prev),
+            f.apply(OrderFacts.within(all, p), p), prev == null ? null : f.apply(OrderFacts.within(all, prev), prev));
     }
 
     // ── /revenue/summary ────────────────────────────────────────────────────
 
     @Transactional(readOnly = true)
-    public Compared<Summary> summary(AnalyticsPeriod period) {
-        return compared(period, RevenueAnalyticsService::summarise);
+    public Compared<Summary> summary(AnalyticsPeriod period, boolean compare) {
+        return compared(period, compare, RevenueAnalyticsService::summarise);
     }
 
     static Summary summarise(List<OrderFacts.Order> orders, AnalyticsPeriod p) {
@@ -128,10 +129,10 @@ public class RevenueAnalyticsService {
     // ── /revenue/breakdown ──────────────────────────────────────────────────
 
     @Transactional(readOnly = true)
-    public Compared<Breakdown> breakdown(AnalyticsPeriod period, By by) {
-        if (by == By.PRODUCT_TYPE) return productTypes(period);
+    public Compared<Breakdown> breakdown(AnalyticsPeriod period, By by, boolean compare) {
+        if (by == By.PRODUCT_TYPE) return productTypes(period, compare);
         OrderFacts.Cities cities = by == By.GOVERNORATE ? OrderFacts.cities(jdbc) : null;
-        return compared(period, (orders, p) -> group(orders, by, cities));
+        return compared(period, compare, (orders, p) -> group(orders, by, cities));
     }
 
     static Breakdown group(List<OrderFacts.Order> orders, By by, OrderFacts.Cities cities) {
@@ -155,15 +156,8 @@ public class RevenueAnalyticsService {
     /** [key, label, labelAr]. */
     static String[] key(OrderFacts.Order o, By by, OrderFacts.Cities cities) {
         return switch (by) {
-            case CHANNEL -> {
-                String c = AnalyticsMappings.channel(o.sourceName(), o.hasSourceFields(), o.referringSite(),
-                    o.landingSite(), AnalyticsMappings.ownHosts(o.orderStatusUrl(), o.shopDomain()));
-                yield new String[] {c, c, null};
-            }
-            case PAYMENT -> {
-                String pm = AnalyticsMappings.payment(o.gateways());
-                yield new String[] {pm, pm, null};
-            }
+            case CHANNEL -> new String[] {o.channel(), o.channel(), null};          // orders.channel (V149)
+            case PAYMENT -> new String[] {o.paymentGroup(), o.paymentGroup(), null}; // orders.payment_group (V149)
             case GOVERNORATE -> governorate(o, cities);
             case PRODUCT_TYPE -> throw new IllegalArgumentException("product type is line-level");
         };
@@ -223,8 +217,7 @@ public class RevenueAnalyticsService {
     private static final String PRODUCT_TYPE_SQL = SalesAnalyticsService.soldLines(false)
         + SalesAnalyticsService.ORDER_OUTCOMES + SalesAnalyticsService.LINE_RETURNS + """
         SELECT lf.placed_at >= ?::timestamptz                                   AS is_current,
-               COALESCE(NULLIF(btrim(p.raw ->> 'product_type'), ''), NULLIF(btrim(p.raw ->> 'productType'), ''))
-                                                                                  AS ptype,
+               p.product_type_norm                                                AS ptype,
                COALESCE(SUM(lf.qty * lf.unit_price), 0)                           AS booked,
                COALESCE(SUM((lf.qty - lf.returned) * lf.unit_price) FILTER (WHERE lf.outcome = 'delivered'), 0)
                                                                                   AS realized,
@@ -238,9 +231,9 @@ public class RevenueAnalyticsService {
         ORDER BY booked DESC, ptype NULLS LAST
         """;
 
-    private Compared<Breakdown> productTypes(AnalyticsPeriod period) {
+    private Compared<Breakdown> productTypes(AnalyticsPeriod period, boolean compare) {
         UUID tid = TenantContext.require();
-        AnalyticsPeriod prev = AnalyticsSql.previous(period);
+        AnalyticsPeriod prev = AnalyticsSql.previousOrNull(period, compare);
         Map<Boolean, List<Group>> rows = new HashMap<>(Map.of(true, new ArrayList<>(), false, new ArrayList<>()));
         jdbc.query(PRODUCT_TYPE_SQL, ps -> {
             int i = AnalyticsSql.bindSoldLines(ps, tid, OrderFacts.span(prev, period), overrides);
@@ -253,112 +246,53 @@ public class RevenueAnalyticsService {
                 t == null ? "Uncategorised" : t, null, money(rs.getBigDecimal("booked")),
                 money(rs.getBigDecimal("realized")), rs.getLong("orders"), d, f, rate(d, d + f)));
         });
-        return new Compared<>(period.range(), prev.range(), new Breakdown("productType", rows.get(true)),
-            new Breakdown("productType", rows.get(false)));
+        return new Compared<>(period.range(), AnalyticsSql.rangeOf(prev), new Breakdown("productType", rows.get(true)),
+            prev == null ? null : new Breakdown("productType", rows.get(false)));
     }
 
     // ── /revenue/discounts ──────────────────────────────────────────────────
 
-    /*
-     * kind 'alloc': one line discount allocation (its cost scaled like the line's unit price —
-     * qty ÷ the original quantity); kind 'app': the order used a discount code / automatic discount
-     * (any target, shipping included). Codes are grouped case-insensitively.
-     */
-    private static final String DISCOUNTS_SQL = SalesAnalyticsService.soldLines(false) + """
-        , line_allocs AS (
-            SELECT l.order_id, a.app ->> 'type' AS type,
-                   upper(btrim(COALESCE(a.app ->> 'code', a.app ->> 'title'))) AS code,
-                   l.qty * (d ->> 'amount')::numeric
-                       / NULLIF(GREATEST(COALESCE((oi.raw ->> 'quantity')::int, oi.quantity), l.qty), 0) AS cost
-            FROM lines l
-            JOIN order_items oi ON oi.id = l.order_item_id
-            JOIN orders o       ON o.id = l.order_id
-            CROSS JOIN LATERAL jsonb_array_elements(
-                CASE WHEN NOT l.approximate AND jsonb_typeof(oi.raw -> 'discount_allocations') = 'array'
-                     THEN oi.raw -> 'discount_allocations' ELSE '[]'::jsonb END) d
-            CROSS JOIN LATERAL (
-                SELECT CASE WHEN jsonb_typeof(o.raw -> 'discount_applications') = 'array'
-                            THEN o.raw -> 'discount_applications' -> ((d ->> 'discount_application_index')::int) END AS app
-            ) a
-        ),
-        order_apps AS (
-            SELECT DISTINCT po.order_id, app ->> 'type' AS type,
-                   upper(btrim(COALESCE(app ->> 'code', app ->> 'title'))) AS code
-            FROM (SELECT DISTINCT order_id FROM lines) po
-            JOIN orders o ON o.id = po.order_id
-            CROSS JOIN LATERAL jsonb_array_elements(
-                CASE WHEN jsonb_typeof(o.raw -> 'discount_applications') = 'array'
-                     THEN o.raw -> 'discount_applications' ELSE '[]'::jsonb END) app
-        )
-        SELECT 'alloc' AS kind, order_id, type, code, cost FROM line_allocs WHERE type IN ('discount_code', 'automatic')
-        UNION ALL
-        SELECT 'app', order_id, type, code, NULL FROM order_apps WHERE type IN ('discount_code', 'automatic')
-        """;
-
     @Transactional(readOnly = true)
-    public Compared<Discounts> discounts(AnalyticsPeriod period) {
+    public Compared<Discounts> discounts(AnalyticsPeriod period, boolean compare) {
         UUID tid = TenantContext.require();
-        AnalyticsPeriod prev = AnalyticsSql.previous(period);
-        AnalyticsPeriod window = OrderFacts.span(prev, period);
-        List<OrderFacts.Order> all = OrderFacts.load(jdbc, tid, window, overrides);
-        Map<UUID, OrderFacts.Order> cur = new HashMap<>(), before = new HashMap<>();
-        for (OrderFacts.Order o : OrderFacts.within(all, period)) cur.put(o.orderId(), o);
-        for (OrderFacts.Order o : OrderFacts.within(all, prev)) before.put(o.orderId(), o);
-        Map<String, DiscAcc> curCodes = new TreeMap<>(), prevCodes = new TreeMap<>();
-        DiscAcc curAuto = new DiscAcc(null), prevAuto = new DiscAcc(null);
-        jdbc.query(DISCOUNTS_SQL, ps -> AnalyticsSql.bindSoldLines(ps, tid, window, overrides), rs -> {
-            UUID order = rs.getObject("order_id", UUID.class);
-            boolean isCurrent = cur.containsKey(order);
-            if (!isCurrent && !before.containsKey(order)) return;
-            boolean auto = "automatic".equals(rs.getString("type"));
-            String code = rs.getString("code");
-            DiscAcc acc = auto ? (isCurrent ? curAuto : prevAuto)
-                : (isCurrent ? curCodes : prevCodes).computeIfAbsent(code == null ? "" : code, DiscAcc::new);
-            acc.orders.add(order);
-            BigDecimal cost = rs.getBigDecimal("cost");
-            if (cost != null) acc.cost = acc.cost.add(cost);
+        AnalyticsPeriod prev = AnalyticsSql.previousOrNull(period, compare);
+        Map<Boolean, List<DiscountRow>> codes = new HashMap<>(Map.of(true, new ArrayList<>(), false, new ArrayList<>()));
+        Map<Boolean, DiscountRow> automatic = new HashMap<>();
+        jdbc.query(OrderFacts.DISCOUNTS_SQL, ps -> {
+            int i = AnalyticsSql.bindSoldLines(ps, tid, OrderFacts.span(prev, period), overrides);
+            for (int k = 0; k < 6; k++) ps.setObject(i++, tid);
+            ps.setTimestamp(i, java.sql.Timestamp.from(period.startInclusive()));
+        }, rs -> {
+            boolean auto = rs.getBoolean("is_auto"), current = rs.getBoolean("is_current");
+            String code = rs.getString("code_key");
+            DiscountRow row = discountRow(auto ? null : code, auto ? "Automatic discounts" : code, rs.getLong("orders"),
+                rs.getBigDecimal("booked"), rs.getBigDecimal("cost"), rs.getLong("delivered"), rs.getLong("failed"));
+            if (auto) automatic.put(current, row);
+            else codes.get(current).add(row);
         });
-        return new Compared<>(period.range(), prev.range(), discountsOf(curCodes, curAuto, cur),
-            discountsOf(prevCodes, prevAuto, before));
+        return new Compared<>(period.range(), AnalyticsSql.rangeOf(prev), discountsOf(codes.get(true), automatic.get(true)),
+            prev == null ? null : discountsOf(codes.get(false), automatic.get(false)));
     }
 
-    private static Discounts discountsOf(Map<String, DiscAcc> codes, DiscAcc automatic, Map<UUID, OrderFacts.Order> facts) {
-        List<DiscountRow> rows = new ArrayList<>();
-        for (DiscAcc a : codes.values()) rows.add(a.row(facts, a.code, a.code));
+    private static DiscountRow discountRow(String code, String label, long orders, BigDecimal booked, BigDecimal cost,
+                                           long delivered, long failed) {
+        BigDecimal b = money(booked), c = money(cost);
+        return new DiscountRow(code, label, orders, b, c, delivered, failed, rate(delivered, delivered + failed),
+            c.signum() == 0 ? null : rate(b, c));
+    }
+
+    private static Discounts discountsOf(List<DiscountRow> codes, DiscountRow automatic) {
+        List<DiscountRow> rows = new ArrayList<>(codes);
         rows.sort(Comparator.comparing(DiscountRow::orders).reversed().thenComparing(DiscountRow::code));
-        return new Discounts(rows, automatic.row(facts, null, "Automatic discounts"));
-    }
-
-    private static final class DiscAcc {
-        final String code;
-        final Set<UUID> orders = new HashSet<>();
-        BigDecimal cost = BigDecimal.ZERO;
-
-        DiscAcc(String code) {
-            this.code = code;
-        }
-
-        DiscountRow row(Map<UUID, OrderFacts.Order> facts, String code, String label) {
-            BigDecimal booked = BigDecimal.ZERO;
-            long delivered = 0, failed = 0;
-            for (UUID id : orders) {
-                OrderFacts.Order o = facts.get(id);
-                if (o == null) continue;
-                booked = booked.add(o.booked());
-                if (o.delivered()) delivered++;
-                if (o.failed()) failed++;
-            }
-            BigDecimal c = money(cost);
-            return new DiscountRow(code, label, orders.size(), money(booked), c, delivered, failed,
-                rate(delivered, delivered + failed), c.signum() == 0 ? null : rate(money(booked), c));
-        }
+        return new Discounts(rows, automatic != null ? automatic
+            : discountRow(null, "Automatic discounts", 0, BigDecimal.ZERO, BigDecimal.ZERO, 0, 0));
     }
 
     // ── /revenue/heatmap ────────────────────────────────────────────────────
 
     @Transactional(readOnly = true)
-    public Compared<Heatmap> heatmap(AnalyticsPeriod period) {
-        return compared(period, RevenueAnalyticsService::heat);
+    public Compared<Heatmap> heatmap(AnalyticsPeriod period, boolean compare) {
+        return compared(period, compare, RevenueAnalyticsService::heat);
     }
 
     /** Average orders per Cairo weekday (ISO 1 = Monday) × hour: count ÷ how many of that weekday the period has. */

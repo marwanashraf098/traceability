@@ -127,7 +127,7 @@ public class SettlementRefreshJob {
     public RefreshResult refreshTenant(UUID tenantId, String apiKey) {
         return TenantContext.runAs(tenantId, () -> {
             Integer weekday = tx.execute(s -> jdbc.query(SettlementSql.PAYOUT_WEEKDAY,
-                rs -> rs.next() ? rs.getInt(1) : null, tenantId));
+                rs -> rs.next() ? rs.getInt(1) : null, tenantId, java.sql.Timestamp.from(clock.instant())));
             int today = LocalDate.now(clock.withZone(AnalyticsPeriod.CAIRO)).getDayOfWeek().getValue();
             boolean dayAfterPayout = weekday == null || today == (weekday % 7) + 1;
 

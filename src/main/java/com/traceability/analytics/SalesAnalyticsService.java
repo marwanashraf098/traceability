@@ -107,7 +107,7 @@ public class SalesAnalyticsService {
 
     public record CitySalesResponse(AnalyticsPeriod.Range range, List<CitySales> cities) {}
 
-    /** One row of OUTCOMES_SQL. */
+    /** The outcome columns of one VARIANTS_SQL row. */
     private record Outcome(long delivered, long refused, long inTransit, long wijha, long notShipped,
                            long otherTerminal, long returned, BigDecimal deliveredRevenue,
                            BigDecimal returnedRevenue, long returnsOnUndelivered, long deliveredOrders,
@@ -120,26 +120,27 @@ public class SalesAnalyticsService {
     /*
      * Shared CTEs. Parameters, in order: period start, period end, override shop domains (text[]),
      * override days (text[]), tenant id (stores), tenant id (order_items), tenant id (orders).
+     * Slice 8: no raw jsonb is read here — every field comes from the V149 generated columns
+     * (orders.raw_cancelled / refund_lines / discount_types, order_items.unit_price / original_qty /
+     * current_qty / line_discount / alloc_amounts / alloc_indexes / line_key), which Postgres keeps
+     * in step with raw on every write. Only variants.price (the fallback for a line with no raw
+     * price) is read from another table.
      *   bounds  — the period, [p_start, p_end).
      *   floors  — per store: orders_ingest_from, else the override day at 00:00 Cairo, else NULL.
      *   all_lines — every cohort line, qty ≤ 0 and raw-cancelled included (only the unverified
      *             no_restock count reads them); lines = all_lines with qty > 0 and not cancelled in
-     *             raw — the SOLD lines every figure is built on. raw cancelled_at is checked here,
-     *             not in all_lines' WHERE: a jsonb IS NULL filter gets a 0.5% default selectivity
-     *             and the ~1-row estimate sent the planner into nested loops. Each raw is read once
-     *             through jsonb_to_record (ov / li) — every raw->… reference decompresses it again.
+     *             raw — the SOLD lines every figure is built on.
      *   lines   — sold lines, one pass. ALL TIME post-floor when allTime (the variants endpoint needs
      *             lastSoldAt), else only lines placed in the period. in_period flags the period's
      *             lines; unit_price / revenue are computed for those only (NULL otherwise).
-     *             MATERIALIZED so the grouping works on these narrow rows — inlined, the planner
-     *             carried each line's raw jsonb into the sort and spilled it to disk (prod EXPLAIN,
-     *             Femine 366 days).
+     *             MATERIALIZED so the grouping works on these narrow rows.
      *   gross / disc_code / disc_auto (slice 5, period lines only) — qty × the pre-discount unit price
- *             (raw price, else variants.price), and the part of the line's discount allocations that
- *             came from a discount code / an automatic discount (discount_applications[index].type),
- *             scaled like unit_price (÷ the original quantity). gross − revenue is the line's whole
- *             discount; what is neither code nor automatic (manual / draft-order) is the remainder.
- *   rf      — the line's Shopify refunds (slice 2, approved 2026-10-06). Shopify lowers
+     *             (raw price, else variants.price), and the part of the line's discount allocations that
+     *             came from a discount code / an automatic discount (discount_types[index]), scaled like
+     *             unit_price (÷ the original quantity). gross − revenue is the line's whole discount;
+     *             what is neither code nor automatic (manual / draft-order) is the remainder.
+     *   rf      — the line's Shopify refunds (slice 2, approved 2026-10-06), precomputed per Shopify
+     *             line id in orders.refund_lines (analytics_refund_lines, V149). Shopify lowers
      *             current_quantity when a unit is refunded, so a unit sold, delivered and then
      *             refunded would vanish from sales. added_back = refunded units with restock_type
      *             'return' or 'no_restock' whose refund was created AFTER a (non-cancelled)
@@ -171,7 +172,7 @@ public class SalesAnalyticsService {
                        (o.placed_at >= b.p_start AND o.placed_at < b.p_end) AS in_period,
                        (q.raw_price IS NULL) AS approximate,
                        rf.shopify_returned, rf.unverified_no_restock,
-                       ov.cancelled_at IS NULL AS not_cancelled,
+                       NOT o.raw_cancelled AS not_cancelled,
                        up.unit_price,
                        q.qty * up.unit_price AS revenue,
                        dc.gross, dc.disc_code, dc.disc_auto
@@ -180,54 +181,21 @@ public class SalesAnalyticsService {
                 JOIN floors f   ON f.store_id = o.store_id
                 JOIN variants v ON v.id = oi.variant_id
                 CROSS JOIN bounds b
-                CROSS JOIN LATERAL jsonb_to_record(COALESCE(o.raw, '{}'::jsonb))
-                    AS ov(cancelled_at text, refunds jsonb, fulfillments jsonb, discount_applications jsonb)
-                CROSS JOIN LATERAL jsonb_to_record(COALESCE(oi.raw, '{}'::jsonb))
-                    AS li(price numeric, quantity int, current_quantity int, discount_allocations jsonb)
                 CROSS JOIN LATERAL (
-                    SELECT COALESCE(SUM(x.units) FILTER (WHERE x.counts), 0)                         AS added_back,
-                           COALESCE(SUM(x.units) FILTER (WHERE x.counts AND x.restock = 'return'), 0) AS shopify_returned,
-                           COUNT(*) FILTER (WHERE x.restock = 'no_restock' AND NOT x.has_fulfillments) AS unverified_no_restock
-                    FROM (
-                        SELECT (rli->>'quantity')::int AS units,
-                               rli->>'restock_type'    AS restock,
-                               (ov.fulfillments IS NOT NULL) AS has_fulfillments,
-                               rli->>'restock_type' IN ('return', 'no_restock') AND CASE
-                                   WHEN (ov.fulfillments IS NOT NULL) THEN EXISTS (
-                                       SELECT 1
-                                       FROM jsonb_array_elements(CASE WHEN jsonb_typeof(ov.fulfillments) = 'array'
-                                                                      THEN ov.fulfillments ELSE '[]'::jsonb END) f
-                                       WHERE COALESCE(f->>'status', '') NOT IN ('cancelled', 'error', 'failure')
-                                         AND (f->>'created_at')::timestamptz < (r->>'created_at')::timestamptz
-                                         AND EXISTS (
-                                             SELECT 1
-                                             FROM jsonb_array_elements(CASE WHEN jsonb_typeof(f->'line_items') = 'array'
-                                                                            THEN f->'line_items' ELSE '[]'::jsonb END) fl
-                                             WHERE 'gid://shopify/LineItem/' || (fl->>'id') = oi.external_id))
-                                   ELSE rli->>'restock_type' = 'return'
-                               END AS counts
-                        FROM jsonb_array_elements(CASE WHEN jsonb_typeof(ov.refunds) = 'array'
-                                                       THEN ov.refunds ELSE '[]'::jsonb END) r
-                        CROSS JOIN LATERAL jsonb_array_elements(CASE WHEN jsonb_typeof(r->'refund_line_items') = 'array'
-                                                                     THEN r->'refund_line_items' ELSE '[]'::jsonb END) rli
-                        WHERE 'gid://shopify/LineItem/' || (rli->>'line_item_id') = oi.external_id
-                    ) x
+                    SELECT COALESCE((o.refund_lines -> oi.line_key ->> 0)::int, 0) AS added_back,
+                           COALESCE((o.refund_lines -> oi.line_key ->> 1)::int, 0) AS shopify_returned,
+                           COALESCE((o.refund_lines -> oi.line_key ->> 2)::int, 0) AS unverified_no_restock
                 ) rf
                 CROSS JOIN LATERAL (
-                    SELECT COALESCE(li.current_quantity, oi.quantity) + rf.added_back AS qty,
-                           COALESCE(li.quantity, oi.quantity)                         AS original_qty,
-                           li.price                                               AS raw_price
+                    SELECT COALESCE(oi.current_qty, oi.quantity) + rf.added_back AS qty,
+                           COALESCE(oi.original_qty, oi.quantity)                AS original_qty,
+                           oi.unit_price                                         AS raw_price
                 ) q
                 CROSS JOIN LATERAL (
                     SELECT CASE WHEN o.placed_at >= b.p_start AND o.placed_at < b.p_end THEN
                                CASE
                                    WHEN q.raw_price IS NULL THEN COALESCE(v.price, 0)
-                                   ELSE q.raw_price - COALESCE((
-                                            SELECT SUM((d->>'amount')::numeric)
-                                            FROM jsonb_array_elements(
-                                                CASE WHEN jsonb_typeof(li.discount_allocations) = 'array'
-                                                     THEN li.discount_allocations ELSE '[]'::jsonb END) d
-                                        ), 0) / NULLIF(GREATEST(q.original_qty, q.qty), 0)
+                                   ELSE q.raw_price - oi.line_discount / NULLIF(GREATEST(q.original_qty, q.qty), 0)
                                END
                            END AS unit_price
                 ) up
@@ -239,16 +207,10 @@ public class SalesAnalyticsService {
                            CASE WHEN o.placed_at >= b.p_start AND o.placed_at < b.p_end THEN
                                COALESCE(q.qty * a.auto_amt / NULLIF(GREATEST(q.original_qty, q.qty), 0), 0) END AS disc_auto
                     FROM (
-                        SELECT SUM((d->>'amount')::numeric) FILTER (WHERE da.type = 'discount_code') AS code_amt,
-                               SUM((d->>'amount')::numeric) FILTER (WHERE da.type = 'automatic')     AS auto_amt
-                        FROM jsonb_array_elements(
-                            CASE WHEN q.raw_price IS NOT NULL AND jsonb_typeof(li.discount_allocations) = 'array'
-                                 THEN li.discount_allocations ELSE '[]'::jsonb END) d
-                        CROSS JOIN LATERAL (
-                            SELECT CASE WHEN jsonb_typeof(ov.discount_applications) = 'array'
-                                        THEN ov.discount_applications -> ((d->>'discount_application_index')::int) ->> 'type'
-                                   END AS type
-                        ) da
+                        SELECT SUM(al.amt) FILTER (WHERE o.discount_types[al.idx + 1] = 'discount_code') AS code_amt,
+                               SUM(al.amt) FILTER (WHERE o.discount_types[al.idx + 1] = 'automatic')     AS auto_amt
+                        FROM unnest(CASE WHEN q.raw_price IS NOT NULL THEN oi.alloc_amounts END,
+                                    CASE WHEN q.raw_price IS NOT NULL THEN oi.alloc_indexes END) AS al(amt, idx)
                     ) a
                 ) dc
                 WHERE oi.tenant_id = ?
@@ -276,25 +238,35 @@ public class SalesAnalyticsService {
      *   Index lookups per order, not CTE-to-CTE joins: the planner estimates the jsonb-filtered
      *   cohort at ~1 row and picks nested loops over CTE scans (prod EXPLAIN: 3.2 s on Femine).
      *   order_outcomes — one outcome per order, in this order:
-     *     wijha / not_shipped — no deciding leg; or the leg is terminated/cancelled and the order
-     *                           shipped with another known carrier (Wijha): wijha when
-     *                           orders.shipping_carrier_class = 'other_known', else not_shipped
+     *     wijha / not_shipped — no deciding leg; or the leg is terminated/cancelled and either the
+     *                           order shipped with another known carrier (Wijha) or Bosta never
+     *                           picked it up (no collected_from_business_at, no with_courier /
+     *                           returning / returned / delivered / lost history — 2026-10-08):
+     *                           wijha when orders.shipping_carrier_class = 'other_known', else
+     *                           not_shipped
      *     delivered       — the leg's state is delivered
      *     refused         — the leg turned Return to Origin (type code 20), is returning/returned, or
      *                       its history went returning/returned before any delivered
      *     delivered       — history shows delivered (current state moved on, e.g. exception)
-     *     other_terminal  — lost / terminated / cancelled
+     *     other_terminal  — lost, or terminated / cancelled after pickup
      *     in_transit      — created / with_courier / exception
      *   bosta_decides = a Bosta leg decided the outcome (the cities endpoint counts only those).
      */
     /**
      * THE outcome of a deciding Bosta forward leg (alias leg: internal_state, type_code) given its
-     * history (alias h: first_delivered, first_return) — WHEN branches of a CASE, used by
+     * history (alias h: first_delivered, first_return, picked_up) — WHEN branches of a CASE, used by
      * ORDER_OUTCOMES and by the money pipeline's city rates, so both read one rule. Rates built on it
      * (approved 2026-10-08): successRate = delivered ÷ (delivered + failed), refusalRate = refused ÷
      * (delivered + failed), failed = refused + other_terminal.
+     * A leg cancelled / terminated BEFORE pickup (no collected_from_business_at, and no history of
+     * Bosta holding the parcel — with_courier / returning / returned / delivered / lost) never left:
+     * not_shipped, not a failure (approved 2026-10-08). Cancelled / terminated after pickup stays
+     * other_terminal (failed).
      */
     static final String LEG_OUTCOME_WHENS = """
+                       WHEN leg.internal_state IN ('terminated', 'cancelled')
+                            AND leg.collected_from_business_at IS NULL
+                            AND NOT COALESCE(h.picked_up, false) THEN 'not_shipped'
                        WHEN leg.internal_state = 'delivered' THEN 'delivered'
                        WHEN leg.type_code = '20'
                             OR leg.internal_state IN ('returning', 'returned')
@@ -320,21 +292,21 @@ public class SalesAnalyticsService {
                    END AS outcome
             FROM period_orders po
             LEFT JOIN LATERAL (
-                SELECT s.id AS shipment_id, s.internal_state,
-                       s.raw->'type'->>'code'                   AS type_code,
-                       s.raw->'dropOffAddress'->'city'->>'_id'  AS city_id,
-                       s.raw->'dropOffAddress'->'city'->>'name' AS city
+                SELECT s.id AS shipment_id, s.internal_state, s.collected_from_business_at,
+                       s.type_code, s.city_id, s.city_name AS city
                 FROM shipments s
                 WHERE s.order_id = po.order_id
                   AND s.tenant_id = ?
                   AND s.shipment_leg = 'forward'
-                  AND COALESCE(s.raw->'type'->>'code', '10') NOT IN ('25', '30')
+                  AND COALESCE(s.type_code, '10') NOT IN ('25', '30')
                 ORDER BY (s.internal_state IN ('terminated', 'cancelled')), s.created_at DESC, s.id DESC
                 LIMIT 1
             ) leg ON true
             LEFT JOIN LATERAL (
                 SELECT MIN(hh.occurred_at) FILTER (WHERE hh.internal_state = 'delivered')                AS first_delivered,
-                       MIN(hh.occurred_at) FILTER (WHERE hh.internal_state IN ('returning', 'returned')) AS first_return
+                       MIN(hh.occurred_at) FILTER (WHERE hh.internal_state IN ('returning', 'returned')) AS first_return,
+                       COALESCE(bool_or(hh.internal_state IN ('with_courier', 'returning', 'returned', 'delivered', 'lost')), false)
+                                                                                                          AS picked_up
                 FROM shipment_status_history hh
                 WHERE hh.shipment_id = leg.shipment_id
                   AND hh.tenant_id = ?
@@ -342,7 +314,9 @@ public class SalesAnalyticsService {
             CROSS JOIN LATERAL (
                 SELECT leg.shipment_id IS NOT NULL
                        AND NOT (leg.internal_state IN ('terminated', 'cancelled')
-                                AND po.carrier_class = 'other_known') AS bosta_decides
+                                AND (po.carrier_class = 'other_known'
+                                     OR (leg.collected_from_business_at IS NULL AND NOT COALESCE(h.picked_up, false))))
+                       AS bosta_decides
             ) d
         )
         """;
@@ -462,57 +436,79 @@ public class SalesAnalyticsService {
         """;
 
     /*
-     * One pass over the lines, grouped per variant plus the grand-total row (GROUPING SETS ()),
-     * which carries the distinct order count across all variants. lastSoldAt = MAX(placed_at) over
-     * the variant's sold lines of all time (post-floor), not just the period; only variants with a
-     * line in the period are returned.
+     * Slices 1 + 2 in ONE statement over the period's lines (slice 8 — it used to be two, the first
+     * re-reading every line of all time): per variant plus the grand-total row (GROUPING SETS ()),
+     * which carries the distinct order count across all variants.
+     *   sales    — sold units, gross revenue, approximate lines, orders (slice 1);
+     *   outcomes — outcome units, returns, delivered / returned revenue (slice 2). Only a DELIVERED
+     *              order's returns count as customer returns; returns on any other outcome (e.g. a
+     *              Wijha order refunded in Shopify) are reported apart in returns_on_undelivered;
+     *   last_sold — lastSoldAt = MAX(placed_at) over the variant's sold lines of ALL time (post-floor,
+     *              not cancelled, not an internal exchange order, quantity after the refund add-back
+     *              > 0, not cancelled in raw — the same cohort as soldLines), from the V149 columns
+     *              (no prices needed); one hash aggregate over the tenant's lines, joined to the
+     *              period's variants (filtering by those variants first made the planner loop over
+     *              order_items per variant — 7 s on 60k orders). Two more tenant ids.
+     * Only variants with a line in the period are returned.
      */
-    private static final String VARIANTS_SQL = soldLines(true) + """
-        , per_variant AS (
+    private static final String VARIANTS_SQL = soldLines(false) + ORDER_OUTCOMES + LINE_RETURNS + """
+        , sales AS (
             SELECT GROUPING(variant_id) AS is_total, variant_id,
-                   MAX(placed_at)                                       AS last_sold_at,
-                   COALESCE(SUM(qty) FILTER (WHERE in_period), 0)       AS sold_units,
-                   COALESCE(SUM(revenue) FILTER (WHERE in_period), 0)   AS gross_revenue,
-                   COUNT(*) FILTER (WHERE in_period AND approximate)    AS approximate_lines,
-                   COUNT(DISTINCT order_id) FILTER (WHERE in_period)    AS orders,
-                   COUNT(*) FILTER (WHERE in_period)                    AS period_lines
+                   COALESCE(SUM(qty), 0)               AS sold_units,
+                   COALESCE(SUM(revenue), 0)           AS gross_revenue,
+                   COUNT(*) FILTER (WHERE approximate) AS approximate_lines,
+                   COUNT(DISTINCT order_id)            AS orders
             FROM lines
             GROUP BY GROUPING SETS ((variant_id), ())
+        ),
+        outcomes AS (
+            SELECT GROUPING(variant_id) AS is_total, variant_id,
+                   COALESCE(SUM(qty) FILTER (WHERE outcome = 'delivered'), 0)       AS delivered_units,
+                   COALESCE(SUM(qty) FILTER (WHERE outcome = 'refused'), 0)         AS refused_units,
+                   COALESCE(SUM(qty) FILTER (WHERE outcome = 'in_transit'), 0)      AS in_transit_units,
+                   COALESCE(SUM(qty) FILTER (WHERE outcome = 'wijha'), 0)           AS wijha_units,
+                   COALESCE(SUM(qty) FILTER (WHERE outcome = 'not_shipped'), 0)     AS not_shipped_units,
+                   COALESCE(SUM(qty) FILTER (WHERE outcome = 'other_terminal'), 0)  AS other_terminal_units,
+                   COALESCE(SUM(returned) FILTER (WHERE outcome = 'delivered'), 0)  AS returned_units,
+                   COALESCE(SUM(qty * unit_price) FILTER (WHERE outcome = 'delivered'), 0)      AS delivered_revenue,
+                   COALESCE(SUM(returned * unit_price) FILTER (WHERE outcome = 'delivered'), 0) AS returned_revenue,
+                   COALESCE(SUM(returned) FILTER (WHERE outcome <> 'delivered'), 0) AS returns_on_undelivered,
+                   COUNT(DISTINCT order_id) FILTER (WHERE outcome = 'delivered')    AS delivered_orders,
+                   COUNT(DISTINCT order_id) FILTER (WHERE outcome = 'refused')      AS refused_orders,
+                   COUNT(DISTINCT order_id) FILTER (WHERE outcome = 'wijha')        AS wijha_orders,
+                   (SELECT COALESCE(SUM(unverified_no_restock), 0) FROM all_lines WHERE not_cancelled)  AS unverified_no_restock
+            FROM line_facts
+            GROUP BY GROUPING SETS ((variant_id), ())
+        ),
+        last_sold AS (
+            SELECT oi.variant_id, MAX(o.placed_at) AS last_sold_at
+            FROM order_items oi
+            JOIN orders o ON o.id = oi.order_id
+            JOIN floors f ON f.store_id = o.store_id
+            WHERE oi.tenant_id = ? AND o.tenant_id = ?
+              AND (f.floor_at IS NULL OR o.placed_at >= f.floor_at)
+              AND o.status <> 'cancelled'::order_status
+              AND o.external_id NOT LIKE 'internal:exchange:%'
+              AND NOT o.raw_cancelled
+              AND COALESCE(oi.current_qty, oi.quantity) + COALESCE((o.refund_lines -> oi.line_key ->> 0)::int, 0) > 0
+            GROUP BY oi.variant_id
         )
-        SELECT pv.is_total, pv.variant_id, v.product_id, p.title AS product_title,
-               v.title AS variant_title, v.sku, p.image_url, pv.last_sold_at,
-               pv.sold_units, pv.gross_revenue, pv.approximate_lines, pv.orders
-        FROM per_variant pv
-        LEFT JOIN variants v ON v.id = pv.variant_id
+        SELECT s.is_total, s.variant_id, v.product_id, p.title AS product_title,
+               v.title AS variant_title, v.sku, p.image_url, ls.last_sold_at,
+               s.sold_units, s.gross_revenue, s.approximate_lines, s.orders,
+               oc.delivered_units, oc.refused_units, oc.in_transit_units, oc.wijha_units, oc.not_shipped_units,
+               oc.other_terminal_units, oc.returned_units, oc.delivered_revenue, oc.returned_revenue,
+               oc.returns_on_undelivered, oc.delivered_orders, oc.refused_orders, oc.wijha_orders,
+               oc.unverified_no_restock
+        FROM sales s
+        -- hashable equality (IS NOT DISTINCT FROM is not): the total row's NULL variant → the nil uuid
+        LEFT JOIN outcomes oc ON oc.is_total = s.is_total
+             AND COALESCE(oc.variant_id, '00000000-0000-0000-0000-000000000000'::uuid)
+               = COALESCE(s.variant_id, '00000000-0000-0000-0000-000000000000'::uuid)
+        LEFT JOIN last_sold ls ON ls.variant_id = s.variant_id
+        LEFT JOIN variants v ON v.id = s.variant_id
         LEFT JOIN products p ON p.id = v.product_id
-        WHERE pv.is_total = 1 OR pv.period_lines > 0
-        ORDER BY pv.is_total DESC, pv.sold_units DESC, pv.gross_revenue DESC, p.title, v.title
-        """;
-
-    /*
-     * Slice 2 — outcomes and returns per variant (+ grand total), merged into the slice-1 rows in
-     * Java: the slice-1 statement stays as it was, this one reads only the period's lines. Only a
-     * DELIVERED order's returns count as customer returns; returns on any other outcome (e.g. a Wijha
-     * order refunded in Shopify) are reported apart in returns_on_undelivered.
-     */
-    private static final String OUTCOMES_SQL = soldLines(false) + ORDER_OUTCOMES + LINE_RETURNS + """
-        SELECT GROUPING(variant_id) AS is_total, variant_id,
-               COALESCE(SUM(qty) FILTER (WHERE outcome = 'delivered'), 0)       AS delivered_units,
-               COALESCE(SUM(qty) FILTER (WHERE outcome = 'refused'), 0)         AS refused_units,
-               COALESCE(SUM(qty) FILTER (WHERE outcome = 'in_transit'), 0)      AS in_transit_units,
-               COALESCE(SUM(qty) FILTER (WHERE outcome = 'wijha'), 0)           AS wijha_units,
-               COALESCE(SUM(qty) FILTER (WHERE outcome = 'not_shipped'), 0)     AS not_shipped_units,
-               COALESCE(SUM(qty) FILTER (WHERE outcome = 'other_terminal'), 0)  AS other_terminal_units,
-               COALESCE(SUM(returned) FILTER (WHERE outcome = 'delivered'), 0)  AS returned_units,
-               COALESCE(SUM(qty * unit_price) FILTER (WHERE outcome = 'delivered'), 0)      AS delivered_revenue,
-               COALESCE(SUM(returned * unit_price) FILTER (WHERE outcome = 'delivered'), 0) AS returned_revenue,
-               COALESCE(SUM(returned) FILTER (WHERE outcome <> 'delivered'), 0) AS returns_on_undelivered,
-               COUNT(DISTINCT order_id) FILTER (WHERE outcome = 'delivered')    AS delivered_orders,
-               COUNT(DISTINCT order_id) FILTER (WHERE outcome = 'refused')      AS refused_orders,
-               COUNT(DISTINCT order_id) FILTER (WHERE outcome = 'wijha')        AS wijha_orders,
-               (SELECT COALESCE(SUM(unverified_no_restock), 0) FROM all_lines WHERE not_cancelled)  AS unverified_no_restock
-        FROM line_facts
-        GROUP BY GROUPING SETS ((variant_id), ())
+        ORDER BY s.is_total DESC, s.sold_units DESC, s.gross_revenue DESC, p.title, v.title
         """;
 
     /*
@@ -603,32 +599,23 @@ public class SalesAnalyticsService {
     public VariantSalesResponse variants(AnalyticsPeriod period) {
         UUID tid = TenantContext.require();
 
-        // Statement 2 (slice 2): outcomes + returns over the period's lines, keyed by variant.
-        Map<UUID, Outcome> outcomes = new HashMap<>();
-        Outcome[] totalOutcome = { Outcome.NONE };
-        jdbc.query(OUTCOMES_SQL, params(tid, period, 6, null), rs -> {
-            Outcome o = new Outcome(
+        // One statement (slice 8): sales, outcomes + returns, lastSoldAt.
+        List<VariantSales> rows = new ArrayList<>();
+        Totals[] totals = { totals(0, BigDecimal.ZERO, 0, 0, Outcome.NONE) };
+        jdbc.query(VARIANTS_SQL, params(tid, period, 8, null), rs -> {
+            Outcome o = rs.getObject("delivered_units") == null ? Outcome.NONE : new Outcome(
                 rs.getLong("delivered_units"), rs.getLong("refused_units"), rs.getLong("in_transit_units"),
                 rs.getLong("wijha_units"), rs.getLong("not_shipped_units"), rs.getLong("other_terminal_units"),
                 rs.getLong("returned_units"), rs.getBigDecimal("delivered_revenue"),
                 rs.getBigDecimal("returned_revenue"), rs.getLong("returns_on_undelivered"),
                 rs.getLong("delivered_orders"), rs.getLong("refused_orders"), rs.getLong("wijha_orders"),
                 rs.getLong("unverified_no_restock"));
-            if (rs.getInt("is_total") == 1) totalOutcome[0] = o;
-            else outcomes.put(rs.getObject("variant_id", UUID.class), o);
-        });
-
-        // Statement 1 (slice 1): sales, approximate lines, lastSoldAt (all time).
-        List<VariantSales> rows = new ArrayList<>();
-        Totals[] totals = { totals(0, BigDecimal.ZERO, 0, 0, totalOutcome[0]) };
-        jdbc.query(VARIANTS_SQL, params(tid, period, 0, null), rs -> {
             if (rs.getInt("is_total") == 1) {
                 totals[0] = totals(rs.getLong("sold_units"), rs.getBigDecimal("gross_revenue"),
-                    rs.getLong("orders"), rs.getLong("approximate_lines"), totalOutcome[0]);
+                    rs.getLong("orders"), rs.getLong("approximate_lines"), o);
                 return;
             }
             UUID variantId = rs.getObject("variant_id", UUID.class);
-            Outcome o = outcomes.getOrDefault(variantId, Outcome.NONE);
             Timestamp last = rs.getTimestamp("last_sold_at");
             rows.add(new VariantSales(
                 variantId,

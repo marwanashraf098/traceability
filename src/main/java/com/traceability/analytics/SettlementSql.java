@@ -29,9 +29,9 @@ final class SettlementSql {
      *   shipping — every other forward leg.
      */
     static String legKind(String s) {
-        return " (CASE WHEN " + s + ".raw->'type'->>'code' = '30' THEN 'exchange' "
-            + "WHEN " + s + ".raw->'type'->>'code' = '25' OR " + s + ".shipment_leg = 'return' THEN 'return' "
-            + "WHEN " + s + ".raw->'type'->>'code' = '20' OR " + s + ".internal_state IN ('returning', 'returned') THEN 'failed' "
+        return " (CASE WHEN " + s + ".type_code = '30' THEN 'exchange' "
+            + "WHEN " + s + ".type_code = '25' OR " + s + ".shipment_leg = 'return' THEN 'return' "
+            + "WHEN " + s + ".type_code = '20' OR " + s + ".internal_state IN ('returning', 'returned') THEN 'failed' "
             + "ELSE 'shipping' END) ";
     }
 
@@ -52,8 +52,7 @@ final class SettlementSql {
 
     /** The order's COD: the column, else the Bosta payload's cod. */
     static String cod(String s) {
-        return " COALESCE(" + s + ".cod_amount, CASE WHEN (" + s + ".raw->>'cod') ~ '^-?[0-9]+(\\.[0-9]+)?$' "
-            + "THEN (" + s + ".raw->>'cod')::numeric END, 0) ";
+        return " COALESCE(" + s + ".cod_amount, " + s + ".raw_cod, 0) ";       // raw_cod: V149 generated column
     }
 
     /**
@@ -74,15 +73,15 @@ final class SettlementSql {
 
     /**
      * The tenant's payout weekday (ISO, 1 = Monday) — the weekday shared by the most distinct
-     * cashout dates in the last 90 days, when at least two dates agree; else NULL. One parameter:
-     * tenant id.
+     * cashout dates in the 90 days before now, when at least two dates agree; else NULL. Parameters:
+     * tenant id, now (the caller's Clock — never the database clock, so tests can fix time).
      */
     static final String PAYOUT_WEEKDAY = """
         SELECT d FROM (
             SELECT EXTRACT(ISODOW FROM cashout_date)::int AS d, COUNT(DISTINCT cashout_date) AS n
             FROM shipments
             WHERE tenant_id = ? AND cashout_date IS NOT NULL
-              AND cashout_date > (now() AT TIME ZONE 'Africa/Cairo')::date - 90
+              AND cashout_date > (?::timestamptz AT TIME ZONE 'Africa/Cairo')::date - 90
             GROUP BY 1
         ) w
         WHERE n >= 2

@@ -1,7 +1,5 @@
 package com.traceability.analytics;
 
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.jdbc.core.JdbcTemplate;
 
 import java.math.BigDecimal;
@@ -38,10 +36,9 @@ final class OrderFacts {
     /** One sold order. Money: booked / gross / discounts / returned to 2 decimals. */
     record Order(UUID orderId, Instant placedAt, BigDecimal booked, BigDecimal gross, BigDecimal discCode,
                  BigDecimal discAuto, long approximateLines, String outcome, String cityId, String cityName,
-                 BigDecimal returned, String sourceName, boolean hasSourceFields, String referringSite,
-                 String landingSite, String orderStatusUrl, String shopDomain, List<String> gateways,
+                 BigDecimal returned, String channel, String paymentGroup,
                  String provinceCode, boolean shopifyFulfilled, Instant handedAt, Instant deliveredAt,
-                 String settlementStatus, String failureReason) {
+                 String settlementStatus, String failureCategory) {
 
         BigDecimal discounts() {
             return gross.subtract(booked);
@@ -94,40 +91,71 @@ final class OrderFacts {
         )
         SELECT om.order_id, om.placed_at, om.booked, om.gross, om.disc_code, om.disc_auto, om.approx_lines,
                om.outcome, om.city_id, om.city, om.returned_rev,
-               r.source_name, r.referring_site, r.landing_site, r.order_status_url, st.shop_domain,
-               (o.raw -> 'source_name') IS NOT NULL OR (o.raw -> 'referring_site') IS NOT NULL
-                   OR (o.raw -> 'landing_site') IS NOT NULL                                   AS has_source_fields,
-               COALESCE(r.payment_gateway_names, r."paymentGatewayNames")::text             AS gateways,
-               COALESCE(r.shipping_address ->> 'province_code', r."shippingAddress" ->> 'provinceCode') AS province_code,
-               (EXISTS (SELECT 1 FROM jsonb_array_elements(CASE WHEN jsonb_typeof(r.fulfillments) = 'array'
-                                                                THEN r.fulfillments ELSE '[]'::jsonb END) f
-                        WHERE COALESCE(f ->> 'status', '') NOT IN ('cancelled', 'error', 'failure'))
-                OR r."displayFulfillmentStatus" IN ('FULFILLED', 'PARTIALLY_FULFILLED'))     AS shopify_fulfilled,
-               lg.handed_at, lg.delivered_at, lg.settlement_status, lg.failure_reason
+               o.channel, o.payment_group, o.ship_province AS province_code, o.shopify_fulfilled,
+               lg.handed_at, lg.delivered_at, lg.settlement_status, lg.failure_category
         FROM order_money om
         JOIN orders o          ON o.id = om.order_id
-        JOIN stores st         ON st.id = o.store_id
-        CROSS JOIN LATERAL jsonb_to_record(COALESCE(o.raw, '{}'::jsonb)) AS r(
-            source_name text, referring_site text, landing_site text, order_status_url text,
-            payment_gateway_names jsonb, "paymentGatewayNames" jsonb, shipping_address jsonb,
-            "shippingAddress" jsonb, fulfillments jsonb, "displayFulfillmentStatus" text)
         LEFT JOIN LATERAL (
-            SELECT COALESCE(
-                       CASE WHEN (sh.raw ->> 'collectedFromBusiness') ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}T'
-                            THEN (sh.raw ->> 'collectedFromBusiness')::timestamptz END,
+            SELECT COALESCE(sh.collected_from_business_at,
                        (SELECT MIN(h.occurred_at) FROM shipment_status_history h
                         WHERE h.shipment_id = sh.id AND h.internal_state = 'with_courier'))   AS handed_at,
                    COALESCE(sh.delivered_at,
                        (SELECT MIN(h.occurred_at) FROM shipment_status_history h
                         WHERE h.shipment_id = sh.id AND h.internal_state = 'delivered'))      AS delivered_at,
                    sh.settlement_status,
-                   COALESCE(sh.last_failure_reason, sh.exception_reason)                      AS failure_reason
+                   sh.last_failure_category                                                   AS failure_category
             FROM shipments sh
             WHERE sh.id = om.shipment_id AND sh.tenant_id = ?
         ) lg ON true
         """;
 
-    private static final ObjectMapper JSON = new ObjectMapper();
+    /*
+     * /revenue/discounts in one statement (slice 8): the facts CTEs up to order_money, then per
+     * discount and period — orders that used it (a line allocation of type discount_code /
+     * automatic, or an application of that type on any target, shipping included), their booked
+     * total and delivered / failed counts, and the allocation cost (scaled like the line's unit
+     * price: qty ÷ the original quantity; lines with no raw price carry none). Codes are the
+     * application's code, else its title, upper-cased and trimmed; every automatic discount is one
+     * row (is_auto, code_key NULL). Parameters: the shared 13, then the period start (is_current).
+     */
+    static final String DISCOUNTS_SQL = SQL.substring(0, SQL.indexOf("SELECT om.order_id, om.placed_at,")) + """
+        , line_allocs AS (
+            SELECT l.order_id, o.discount_types[al.idx + 1] AS type, o.discount_labels[al.idx + 1] AS code,
+                   l.qty * al.amt / NULLIF(GREATEST(COALESCE(oi.original_qty, oi.quantity), l.qty), 0) AS cost
+            FROM lines l
+            JOIN order_items oi ON oi.id = l.order_item_id
+            JOIN orders o       ON o.id = l.order_id
+            CROSS JOIN LATERAL unnest(CASE WHEN NOT l.approximate THEN oi.alloc_amounts END,
+                                      CASE WHEN NOT l.approximate THEN oi.alloc_indexes END) AS al(amt, idx)
+        ),
+        order_apps AS (
+            SELECT om.order_id, app.type, app.code
+            FROM order_money om
+            JOIN orders o ON o.id = om.order_id
+            CROSS JOIN LATERAL unnest(o.discount_types, o.discount_labels) AS app(type, code)
+        ),
+        usage AS (
+            SELECT order_id, type, code, cost FROM line_allocs WHERE type IN ('discount_code', 'automatic')
+            UNION ALL
+            SELECT order_id, type, code, NULL FROM order_apps WHERE type IN ('discount_code', 'automatic')
+        ),
+        per_order AS (
+            SELECT type = 'automatic' AS is_auto,
+                   CASE WHEN type = 'automatic' THEN NULL ELSE COALESCE(code, '') END AS code_key,
+                   order_id, SUM(cost) AS cost
+            FROM usage
+            GROUP BY 1, 2, 3
+        )
+        SELECT po.is_auto, po.code_key, om.placed_at >= ?::timestamptz AS is_current,
+               COUNT(*)                                                               AS orders,
+               SUM(om.booked)                                                         AS booked,
+               SUM(po.cost)                                                           AS cost,
+               COUNT(*) FILTER (WHERE om.outcome = 'delivered')                       AS delivered,
+               COUNT(*) FILTER (WHERE om.outcome IN ('refused', 'other_terminal'))    AS failed
+        FROM per_order po
+        JOIN order_money om ON om.order_id = po.order_id
+        GROUP BY 1, 2, 3
+        """;
 
     private OrderFacts() {}
 
@@ -148,8 +176,10 @@ final class OrderFacts {
         return out;
     }
 
-    /** The smallest period covering both. */
+    /** The smallest period covering both; a null one is ignored. */
     static AnalyticsPeriod span(AnalyticsPeriod a, AnalyticsPeriod b) {
+        if (a == null) return b;
+        if (b == null) return a;
         return new AnalyticsPeriod(a.from().isBefore(b.from()) ? a.from() : b.from(),
                                    a.to().isAfter(b.to()) ? a.to() : b.to());
     }
@@ -160,24 +190,10 @@ final class OrderFacts {
             nz(rs.getBigDecimal("booked")), nz(rs.getBigDecimal("gross")), nz(rs.getBigDecimal("disc_code")),
             nz(rs.getBigDecimal("disc_auto")), rs.getLong("approx_lines"), rs.getString("outcome"),
             rs.getString("city_id"), rs.getString("city"), nz(rs.getBigDecimal("returned_rev")),
-            rs.getString("source_name"), rs.getBoolean("has_source_fields"), rs.getString("referring_site"),
-            rs.getString("landing_site"), rs.getString("order_status_url"), rs.getString("shop_domain"),
-            gateways(rs.getString("gateways")), rs.getString("province_code"), rs.getBoolean("shopify_fulfilled"),
-            instant(rs.getTimestamp("handed_at")), instant(rs.getTimestamp("delivered_at")),
-            rs.getString("settlement_status"), rs.getString("failure_reason"));
-    }
-
-    static List<String> gateways(String json) {
-        List<String> out = new ArrayList<>();
-        if (json == null) return out;
-        try {
-            JsonNode n = JSON.readTree(json);
-            if (n.isArray()) n.forEach(x -> { if (x.isTextual()) out.add(x.asText()); });
-            else if (n.isTextual()) out.add(n.asText());
-        } catch (Exception ignored) {
-            // unreadable → no gateway → Other
-        }
-        return out;
+            rs.getString("channel"), rs.getString("payment_group"), rs.getString("province_code"),
+            rs.getBoolean("shopify_fulfilled"), instant(rs.getTimestamp("handed_at")),
+            instant(rs.getTimestamp("delivered_at")), rs.getString("settlement_status"),
+            rs.getString("failure_category"));
     }
 
     /**
