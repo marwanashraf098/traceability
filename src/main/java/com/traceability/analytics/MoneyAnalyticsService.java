@@ -142,11 +142,11 @@ public class MoneyAnalyticsService {
                        END AS outcome
                 FROM orders o
                 CROSS JOIN LATERAL (
-                    SELECT s.id AS shipment_id, s.internal_state, s.raw->'type'->>'code' AS type_code,
-                           s.raw->'dropOffAddress'->'city'->>'name' AS city
+                    SELECT s.id AS shipment_id, s.internal_state, s.type_code AS type_code,
+                           s.city_name AS city
                     FROM shipments s
                     WHERE s.order_id = o.id AND s.tenant_id = o.tenant_id AND s.shipment_leg = 'forward'
-                      AND COALESCE(s.raw->'type'->>'code', '10') NOT IN ('25', '30')
+                      AND COALESCE(s.type_code, '10') NOT IN ('25', '30')
                     ORDER BY (s.internal_state IN ('terminated', 'cancelled')), s.created_at DESC, s.id DESC
                     LIMIT 1
                 ) leg
@@ -188,12 +188,12 @@ public class MoneyAnalyticsService {
             ),
             leg AS (
                 SELECT DISTINCT ON (s.order_id) s.order_id, s.internal_state,
-                       s.raw->'type'->>'code' AS type_code,
-                       s.raw->'dropOffAddress'->'city'->>'name' AS city
+                       s.type_code AS type_code,
+                       s.city_name AS city
                 FROM shipments s
                 JOIN open_orders oo ON oo.order_id = s.order_id
                 WHERE s.tenant_id = ? AND s.shipment_leg = 'forward'
-                  AND COALESCE(s.raw->'type'->>'code', '10') NOT IN ('25', '30')
+                  AND COALESCE(s.type_code, '10') NOT IN ('25', '30')
                 ORDER BY s.order_id, (s.internal_state IN ('terminated', 'cancelled')), s.created_at DESC, s.id DESC
             ),
             province AS (
@@ -205,7 +205,7 @@ public class MoneyAnalyticsService {
                 FROM open_orders oo
                 JOIN orders o ON o.id = oo.order_id
                 LEFT JOIN leg ON leg.order_id = oo.order_id
-                LEFT JOIN province pv ON pv.code = o.raw->'shipping_address'->>'province_code'
+                LEFT JOIN province pv ON pv.code = o.ship_province
                 LEFT JOIN city_rate cr ON cr.city = COALESCE(leg.city, pv.city)
                 WHERE leg.order_id IS NULL OR leg.internal_state IN ('created', 'terminated', 'cancelled')
             )
@@ -231,10 +231,10 @@ public class MoneyAnalyticsService {
                    SUM(t.cod * COALESCE(cr.rate, (SELECT rate FROM overall))) AS expected
             FROM (
                 SELECT """ + SettlementSql.cod("s") + """
-                        AS cod, s.raw->'dropOffAddress'->'city'->>'name' AS city
+                        AS cod, s.city_name AS city
                 FROM shipments s""" + SettlementSql.floorJoin("s") + """
                 WHERE s.tenant_id = ? AND s.provider = 'bosta' AND s.shipment_leg = 'forward'
-                  AND COALESCE(s.raw->'type'->>'code', '10') NOT IN ('20', '25', '30')
+                  AND COALESCE(s.type_code, '10') NOT IN ('20', '25', '30')
                   AND s.internal_state IN ('with_courier', 'exception')
                   AND fo.status <> 'cancelled'::order_status
                   AND """ + SettlementSql.POST_FLOOR + """
@@ -307,7 +307,7 @@ public class MoneyAnalyticsService {
 
     /*
      * The tenant's finished Bosta legs whose terminal date is in the period, with kind / fee /
-     * estimated. Parameters: override domains, override days, tenant id, period start, period end.
+     * estimated. Parameters: override domains, override days, tenant id, then (period start, period end) × 3.
      */
     private static String finishedLegs() {
         return """
@@ -328,7 +328,13 @@ public class MoneyAnalyticsService {
                 WHERE s.tenant_id = ? AND s.provider = 'bosta'
                   AND s.internal_state IN """ + SettlementSql.TERMINAL_STATES + """
                   AND """ + SettlementSql.POST_FLOOR + """
-                  AND t.terminal_at >= ? AND t.terminal_at < ?
+                  -- = terminal_at in [start, end): delivered_at when set, else returned_at when set,
+                  -- else the computed date — written so the first two branches use the
+                  -- (tenant_id, delivered_at) / (tenant_id, returned_at) indexes.
+                  AND ( (s.delivered_at >= ? AND s.delivered_at < ?)
+                     OR (s.delivered_at IS NULL AND s.returned_at >= ? AND s.returned_at < ?)
+                     OR (s.delivered_at IS NULL AND s.returned_at IS NULL
+                         AND t.terminal_at >= ? AND t.terminal_at < ?) )
             )
             """;
     }
@@ -339,8 +345,10 @@ public class MoneyAnalyticsService {
             ps.setArray(i++, ps.getConnection().createArrayOf("text", overrides.shopDomains()));
             ps.setArray(i++, ps.getConnection().createArrayOf("text", overrides.days()));
             ps.setObject(i++, tid);
-            ps.setTimestamp(i++, Timestamp.from(period.startInclusive()));
-            ps.setTimestamp(i++, Timestamp.from(period.endExclusive()));
+            for (int k = 0; k < 3; k++) {                 // the three terminal-date branches
+                ps.setTimestamp(i++, Timestamp.from(period.startInclusive()));
+                ps.setTimestamp(i++, Timestamp.from(period.endExclusive()));
+            }
             for (Object o : extra) ps.setObject(i++, o);
         };
     }
@@ -414,7 +422,7 @@ public class MoneyAnalyticsService {
                 SELECT l.tracking_number, o.number AS order_number, l.kind, l.fee, l.estimated,
                        l.last_failure_reason AS reason,
                        (l.terminal_at AT TIME ZONE 'Africa/Cairo')::date AS day,
-                       s.raw->'dropOffAddress'->'city'->>'name' AS city,
+                       s.city_name AS city,
                        (SELECT array_agg(DISTINCT COALESCE(v.sku, v.title) ORDER BY COALESCE(v.sku, v.title))
                           FROM order_items oi JOIN variants v ON v.id = oi.variant_id
                           WHERE oi.order_id = l.order_id) AS skus
@@ -446,13 +454,11 @@ public class MoneyAnalyticsService {
             ),
             line_values AS (
                 SELECT e.id AS leg_id, e.kind, e.fee, e.estimated, oi.variant_id,
-                       GREATEST(COALESCE(li.current_quantity, oi.quantity), 0)
-                         * COALESCE(li.price, v.price, 0) AS value
+                       GREATEST(COALESCE(oi.current_qty, oi.quantity), 0)
+                         * COALESCE(oi.unit_price, v.price, 0) AS value
                 FROM extra e
                 JOIN order_items oi ON oi.order_id = e.order_id
                 JOIN variants v ON v.id = oi.variant_id
-                CROSS JOIN LATERAL jsonb_to_record(COALESCE(oi.raw, '{}'::jsonb))
-                    AS li(price numeric, current_quantity int)
             ),
             shares AS (
                 SELECT lv.*, lv.value / NULLIF(SUM(lv.value) OVER (PARTITION BY lv.leg_id), 0) AS share,
@@ -511,7 +517,7 @@ public class MoneyAnalyticsService {
 
         List<StuckShipment> withBosta = jdbc.query(
             "SELECT s.tracking_number, fo.number, " +
-            "       COALESCE(s.raw->'state'->>'value', s.internal_state::text) AS st, " +
+            "       COALESCE(s.state_value, s.internal_state::text) AS st, " +
             "       EXTRACT(DAY FROM (?::timestamptz - lc.last_change))::bigint AS days, " + SettlementSql.cod("s") + " AS cod" +
             " FROM shipments s" + SettlementSql.floorJoin("s") +
             " CROSS JOIN LATERAL (SELECT COALESCE((SELECT MAX(h.occurred_at) FROM shipment_status_history h " +

@@ -155,15 +155,8 @@ public class RevenueAnalyticsService {
     /** [key, label, labelAr]. */
     static String[] key(OrderFacts.Order o, By by, OrderFacts.Cities cities) {
         return switch (by) {
-            case CHANNEL -> {
-                String c = AnalyticsMappings.channel(o.sourceName(), o.hasSourceFields(), o.referringSite(),
-                    o.landingSite(), AnalyticsMappings.ownHosts(o.orderStatusUrl(), o.shopDomain()));
-                yield new String[] {c, c, null};
-            }
-            case PAYMENT -> {
-                String pm = AnalyticsMappings.payment(o.gateways());
-                yield new String[] {pm, pm, null};
-            }
+            case CHANNEL -> new String[] {o.channel(), o.channel(), null};          // orders.channel (V149)
+            case PAYMENT -> new String[] {o.paymentGroup(), o.paymentGroup(), null}; // orders.payment_group (V149)
             case GOVERNORATE -> governorate(o, cities);
             case PRODUCT_TYPE -> throw new IllegalArgumentException("product type is line-level");
         };
@@ -223,8 +216,7 @@ public class RevenueAnalyticsService {
     private static final String PRODUCT_TYPE_SQL = SalesAnalyticsService.soldLines(false)
         + SalesAnalyticsService.ORDER_OUTCOMES + SalesAnalyticsService.LINE_RETURNS + """
         SELECT lf.placed_at >= ?::timestamptz                                   AS is_current,
-               COALESCE(NULLIF(btrim(p.raw ->> 'product_type'), ''), NULLIF(btrim(p.raw ->> 'productType'), ''))
-                                                                                  AS ptype,
+               p.product_type_norm                                                AS ptype,
                COALESCE(SUM(lf.qty * lf.unit_price), 0)                           AS booked,
                COALESCE(SUM((lf.qty - lf.returned) * lf.unit_price) FILTER (WHERE lf.outcome = 'delivered'), 0)
                                                                                   AS realized,
@@ -266,29 +258,19 @@ public class RevenueAnalyticsService {
      */
     private static final String DISCOUNTS_SQL = SalesAnalyticsService.soldLines(false) + """
         , line_allocs AS (
-            SELECT l.order_id, a.app ->> 'type' AS type,
-                   upper(btrim(COALESCE(a.app ->> 'code', a.app ->> 'title'))) AS code,
-                   l.qty * (d ->> 'amount')::numeric
-                       / NULLIF(GREATEST(COALESCE((oi.raw ->> 'quantity')::int, oi.quantity), l.qty), 0) AS cost
+            SELECT l.order_id, o.discount_types[al.idx + 1] AS type, o.discount_labels[al.idx + 1] AS code,
+                   l.qty * al.amt / NULLIF(GREATEST(COALESCE(oi.original_qty, oi.quantity), l.qty), 0) AS cost
             FROM lines l
             JOIN order_items oi ON oi.id = l.order_item_id
             JOIN orders o       ON o.id = l.order_id
-            CROSS JOIN LATERAL jsonb_array_elements(
-                CASE WHEN NOT l.approximate AND jsonb_typeof(oi.raw -> 'discount_allocations') = 'array'
-                     THEN oi.raw -> 'discount_allocations' ELSE '[]'::jsonb END) d
-            CROSS JOIN LATERAL (
-                SELECT CASE WHEN jsonb_typeof(o.raw -> 'discount_applications') = 'array'
-                            THEN o.raw -> 'discount_applications' -> ((d ->> 'discount_application_index')::int) END AS app
-            ) a
+            CROSS JOIN LATERAL unnest(CASE WHEN NOT l.approximate THEN oi.alloc_amounts END,
+                                      CASE WHEN NOT l.approximate THEN oi.alloc_indexes END) AS al(amt, idx)
         ),
         order_apps AS (
-            SELECT DISTINCT po.order_id, app ->> 'type' AS type,
-                   upper(btrim(COALESCE(app ->> 'code', app ->> 'title'))) AS code
+            SELECT DISTINCT po.order_id, app.type, app.code
             FROM (SELECT DISTINCT order_id FROM lines) po
             JOIN orders o ON o.id = po.order_id
-            CROSS JOIN LATERAL jsonb_array_elements(
-                CASE WHEN jsonb_typeof(o.raw -> 'discount_applications') = 'array'
-                     THEN o.raw -> 'discount_applications' ELSE '[]'::jsonb END) app
+            CROSS JOIN LATERAL unnest(o.discount_types, o.discount_labels) AS app(type, code)
         )
         SELECT 'alloc' AS kind, order_id, type, code, cost FROM line_allocs WHERE type IN ('discount_code', 'automatic')
         UNION ALL

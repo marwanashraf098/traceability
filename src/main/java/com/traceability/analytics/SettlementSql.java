@@ -29,9 +29,9 @@ final class SettlementSql {
      *   shipping — every other forward leg.
      */
     static String legKind(String s) {
-        return " (CASE WHEN " + s + ".raw->'type'->>'code' = '30' THEN 'exchange' "
-            + "WHEN " + s + ".raw->'type'->>'code' = '25' OR " + s + ".shipment_leg = 'return' THEN 'return' "
-            + "WHEN " + s + ".raw->'type'->>'code' = '20' OR " + s + ".internal_state IN ('returning', 'returned') THEN 'failed' "
+        return " (CASE WHEN " + s + ".type_code = '30' THEN 'exchange' "
+            + "WHEN " + s + ".type_code = '25' OR " + s + ".shipment_leg = 'return' THEN 'return' "
+            + "WHEN " + s + ".type_code = '20' OR " + s + ".internal_state IN ('returning', 'returned') THEN 'failed' "
             + "ELSE 'shipping' END) ";
     }
 
@@ -52,8 +52,7 @@ final class SettlementSql {
 
     /** The order's COD: the column, else the Bosta payload's cod. */
     static String cod(String s) {
-        return " COALESCE(" + s + ".cod_amount, CASE WHEN (" + s + ".raw->>'cod') ~ '^-?[0-9]+(\\.[0-9]+)?$' "
-            + "THEN (" + s + ".raw->>'cod')::numeric END, 0) ";
+        return " COALESCE(" + s + ".cod_amount, " + s + ".raw_cod, 0) ";       // raw_cod: V149 generated column
     }
 
     /**

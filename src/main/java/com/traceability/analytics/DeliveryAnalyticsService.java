@@ -162,7 +162,7 @@ public class DeliveryAnalyticsService {
         for (OrderFacts.Order o : orders) {
             if (!o.failed()) continue;
             failed++;
-            String r = AnalyticsMappings.failureReason(o.failureReason());
+            String r = o.failureCategory();                                      // shipments.last_failure_category (V149)
             if (r == null) continue;
             withReason++;
             counts.merge(r, 1L, Long::sum);

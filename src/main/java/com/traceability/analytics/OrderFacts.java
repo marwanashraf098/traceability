@@ -1,7 +1,5 @@
 package com.traceability.analytics;
 
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.jdbc.core.JdbcTemplate;
 
 import java.math.BigDecimal;
@@ -38,10 +36,9 @@ final class OrderFacts {
     /** One sold order. Money: booked / gross / discounts / returned to 2 decimals. */
     record Order(UUID orderId, Instant placedAt, BigDecimal booked, BigDecimal gross, BigDecimal discCode,
                  BigDecimal discAuto, long approximateLines, String outcome, String cityId, String cityName,
-                 BigDecimal returned, String sourceName, boolean hasSourceFields, String referringSite,
-                 String landingSite, String orderStatusUrl, String shopDomain, List<String> gateways,
+                 BigDecimal returned, String channel, String paymentGroup,
                  String provinceCode, boolean shopifyFulfilled, Instant handedAt, Instant deliveredAt,
-                 String settlementStatus, String failureReason) {
+                 String settlementStatus, String failureCategory) {
 
         BigDecimal discounts() {
             return gross.subtract(booked);
@@ -94,40 +91,23 @@ final class OrderFacts {
         )
         SELECT om.order_id, om.placed_at, om.booked, om.gross, om.disc_code, om.disc_auto, om.approx_lines,
                om.outcome, om.city_id, om.city, om.returned_rev,
-               r.source_name, r.referring_site, r.landing_site, r.order_status_url, st.shop_domain,
-               (o.raw -> 'source_name') IS NOT NULL OR (o.raw -> 'referring_site') IS NOT NULL
-                   OR (o.raw -> 'landing_site') IS NOT NULL                                   AS has_source_fields,
-               COALESCE(r.payment_gateway_names, r."paymentGatewayNames")::text             AS gateways,
-               COALESCE(r.shipping_address ->> 'province_code', r."shippingAddress" ->> 'provinceCode') AS province_code,
-               (EXISTS (SELECT 1 FROM jsonb_array_elements(CASE WHEN jsonb_typeof(r.fulfillments) = 'array'
-                                                                THEN r.fulfillments ELSE '[]'::jsonb END) f
-                        WHERE COALESCE(f ->> 'status', '') NOT IN ('cancelled', 'error', 'failure'))
-                OR r."displayFulfillmentStatus" IN ('FULFILLED', 'PARTIALLY_FULFILLED'))     AS shopify_fulfilled,
-               lg.handed_at, lg.delivered_at, lg.settlement_status, lg.failure_reason
+               o.channel, o.payment_group, o.ship_province AS province_code, o.shopify_fulfilled,
+               lg.handed_at, lg.delivered_at, lg.settlement_status, lg.failure_category
         FROM order_money om
         JOIN orders o          ON o.id = om.order_id
-        JOIN stores st         ON st.id = o.store_id
-        CROSS JOIN LATERAL jsonb_to_record(COALESCE(o.raw, '{}'::jsonb)) AS r(
-            source_name text, referring_site text, landing_site text, order_status_url text,
-            payment_gateway_names jsonb, "paymentGatewayNames" jsonb, shipping_address jsonb,
-            "shippingAddress" jsonb, fulfillments jsonb, "displayFulfillmentStatus" text)
         LEFT JOIN LATERAL (
-            SELECT COALESCE(
-                       CASE WHEN (sh.raw ->> 'collectedFromBusiness') ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}T'
-                            THEN (sh.raw ->> 'collectedFromBusiness')::timestamptz END,
+            SELECT COALESCE(sh.collected_from_business_at,
                        (SELECT MIN(h.occurred_at) FROM shipment_status_history h
                         WHERE h.shipment_id = sh.id AND h.internal_state = 'with_courier'))   AS handed_at,
                    COALESCE(sh.delivered_at,
                        (SELECT MIN(h.occurred_at) FROM shipment_status_history h
                         WHERE h.shipment_id = sh.id AND h.internal_state = 'delivered'))      AS delivered_at,
                    sh.settlement_status,
-                   COALESCE(sh.last_failure_reason, sh.exception_reason)                      AS failure_reason
+                   sh.last_failure_category                                                   AS failure_category
             FROM shipments sh
             WHERE sh.id = om.shipment_id AND sh.tenant_id = ?
         ) lg ON true
         """;
-
-    private static final ObjectMapper JSON = new ObjectMapper();
 
     private OrderFacts() {}
 
@@ -160,24 +140,10 @@ final class OrderFacts {
             nz(rs.getBigDecimal("booked")), nz(rs.getBigDecimal("gross")), nz(rs.getBigDecimal("disc_code")),
             nz(rs.getBigDecimal("disc_auto")), rs.getLong("approx_lines"), rs.getString("outcome"),
             rs.getString("city_id"), rs.getString("city"), nz(rs.getBigDecimal("returned_rev")),
-            rs.getString("source_name"), rs.getBoolean("has_source_fields"), rs.getString("referring_site"),
-            rs.getString("landing_site"), rs.getString("order_status_url"), rs.getString("shop_domain"),
-            gateways(rs.getString("gateways")), rs.getString("province_code"), rs.getBoolean("shopify_fulfilled"),
-            instant(rs.getTimestamp("handed_at")), instant(rs.getTimestamp("delivered_at")),
-            rs.getString("settlement_status"), rs.getString("failure_reason"));
-    }
-
-    static List<String> gateways(String json) {
-        List<String> out = new ArrayList<>();
-        if (json == null) return out;
-        try {
-            JsonNode n = JSON.readTree(json);
-            if (n.isArray()) n.forEach(x -> { if (x.isTextual()) out.add(x.asText()); });
-            else if (n.isTextual()) out.add(n.asText());
-        } catch (Exception ignored) {
-            // unreadable → no gateway → Other
-        }
-        return out;
+            rs.getString("channel"), rs.getString("payment_group"), rs.getString("province_code"),
+            rs.getBoolean("shopify_fulfilled"), instant(rs.getTimestamp("handed_at")),
+            instant(rs.getTimestamp("delivered_at")), rs.getString("settlement_status"),
+            rs.getString("failure_category"));
     }
 
     /**

@@ -120,26 +120,27 @@ public class SalesAnalyticsService {
     /*
      * Shared CTEs. Parameters, in order: period start, period end, override shop domains (text[]),
      * override days (text[]), tenant id (stores), tenant id (order_items), tenant id (orders).
+     * Slice 8: no raw jsonb is read here — every field comes from the V149 generated columns
+     * (orders.raw_cancelled / refund_lines / discount_types, order_items.unit_price / original_qty /
+     * current_qty / line_discount / alloc_amounts / alloc_indexes / line_key), which Postgres keeps
+     * in step with raw on every write. Only variants.price (the fallback for a line with no raw
+     * price) is read from another table.
      *   bounds  — the period, [p_start, p_end).
      *   floors  — per store: orders_ingest_from, else the override day at 00:00 Cairo, else NULL.
      *   all_lines — every cohort line, qty ≤ 0 and raw-cancelled included (only the unverified
      *             no_restock count reads them); lines = all_lines with qty > 0 and not cancelled in
-     *             raw — the SOLD lines every figure is built on. raw cancelled_at is checked here,
-     *             not in all_lines' WHERE: a jsonb IS NULL filter gets a 0.5% default selectivity
-     *             and the ~1-row estimate sent the planner into nested loops. Each raw is read once
-     *             through jsonb_to_record (ov / li) — every raw->… reference decompresses it again.
+     *             raw — the SOLD lines every figure is built on.
      *   lines   — sold lines, one pass. ALL TIME post-floor when allTime (the variants endpoint needs
      *             lastSoldAt), else only lines placed in the period. in_period flags the period's
      *             lines; unit_price / revenue are computed for those only (NULL otherwise).
-     *             MATERIALIZED so the grouping works on these narrow rows — inlined, the planner
-     *             carried each line's raw jsonb into the sort and spilled it to disk (prod EXPLAIN,
-     *             Femine 366 days).
+     *             MATERIALIZED so the grouping works on these narrow rows.
      *   gross / disc_code / disc_auto (slice 5, period lines only) — qty × the pre-discount unit price
- *             (raw price, else variants.price), and the part of the line's discount allocations that
- *             came from a discount code / an automatic discount (discount_applications[index].type),
- *             scaled like unit_price (÷ the original quantity). gross − revenue is the line's whole
- *             discount; what is neither code nor automatic (manual / draft-order) is the remainder.
- *   rf      — the line's Shopify refunds (slice 2, approved 2026-10-06). Shopify lowers
+     *             (raw price, else variants.price), and the part of the line's discount allocations that
+     *             came from a discount code / an automatic discount (discount_types[index]), scaled like
+     *             unit_price (÷ the original quantity). gross − revenue is the line's whole discount;
+     *             what is neither code nor automatic (manual / draft-order) is the remainder.
+     *   rf      — the line's Shopify refunds (slice 2, approved 2026-10-06), precomputed per Shopify
+     *             line id in orders.refund_lines (analytics_refund_lines, V149). Shopify lowers
      *             current_quantity when a unit is refunded, so a unit sold, delivered and then
      *             refunded would vanish from sales. added_back = refunded units with restock_type
      *             'return' or 'no_restock' whose refund was created AFTER a (non-cancelled)
@@ -171,7 +172,7 @@ public class SalesAnalyticsService {
                        (o.placed_at >= b.p_start AND o.placed_at < b.p_end) AS in_period,
                        (q.raw_price IS NULL) AS approximate,
                        rf.shopify_returned, rf.unverified_no_restock,
-                       ov.cancelled_at IS NULL AS not_cancelled,
+                       NOT o.raw_cancelled AS not_cancelled,
                        up.unit_price,
                        q.qty * up.unit_price AS revenue,
                        dc.gross, dc.disc_code, dc.disc_auto
@@ -180,54 +181,21 @@ public class SalesAnalyticsService {
                 JOIN floors f   ON f.store_id = o.store_id
                 JOIN variants v ON v.id = oi.variant_id
                 CROSS JOIN bounds b
-                CROSS JOIN LATERAL jsonb_to_record(COALESCE(o.raw, '{}'::jsonb))
-                    AS ov(cancelled_at text, refunds jsonb, fulfillments jsonb, discount_applications jsonb)
-                CROSS JOIN LATERAL jsonb_to_record(COALESCE(oi.raw, '{}'::jsonb))
-                    AS li(price numeric, quantity int, current_quantity int, discount_allocations jsonb)
                 CROSS JOIN LATERAL (
-                    SELECT COALESCE(SUM(x.units) FILTER (WHERE x.counts), 0)                         AS added_back,
-                           COALESCE(SUM(x.units) FILTER (WHERE x.counts AND x.restock = 'return'), 0) AS shopify_returned,
-                           COUNT(*) FILTER (WHERE x.restock = 'no_restock' AND NOT x.has_fulfillments) AS unverified_no_restock
-                    FROM (
-                        SELECT (rli->>'quantity')::int AS units,
-                               rli->>'restock_type'    AS restock,
-                               (ov.fulfillments IS NOT NULL) AS has_fulfillments,
-                               rli->>'restock_type' IN ('return', 'no_restock') AND CASE
-                                   WHEN (ov.fulfillments IS NOT NULL) THEN EXISTS (
-                                       SELECT 1
-                                       FROM jsonb_array_elements(CASE WHEN jsonb_typeof(ov.fulfillments) = 'array'
-                                                                      THEN ov.fulfillments ELSE '[]'::jsonb END) f
-                                       WHERE COALESCE(f->>'status', '') NOT IN ('cancelled', 'error', 'failure')
-                                         AND (f->>'created_at')::timestamptz < (r->>'created_at')::timestamptz
-                                         AND EXISTS (
-                                             SELECT 1
-                                             FROM jsonb_array_elements(CASE WHEN jsonb_typeof(f->'line_items') = 'array'
-                                                                            THEN f->'line_items' ELSE '[]'::jsonb END) fl
-                                             WHERE 'gid://shopify/LineItem/' || (fl->>'id') = oi.external_id))
-                                   ELSE rli->>'restock_type' = 'return'
-                               END AS counts
-                        FROM jsonb_array_elements(CASE WHEN jsonb_typeof(ov.refunds) = 'array'
-                                                       THEN ov.refunds ELSE '[]'::jsonb END) r
-                        CROSS JOIN LATERAL jsonb_array_elements(CASE WHEN jsonb_typeof(r->'refund_line_items') = 'array'
-                                                                     THEN r->'refund_line_items' ELSE '[]'::jsonb END) rli
-                        WHERE 'gid://shopify/LineItem/' || (rli->>'line_item_id') = oi.external_id
-                    ) x
+                    SELECT COALESCE((o.refund_lines -> oi.line_key ->> 0)::int, 0) AS added_back,
+                           COALESCE((o.refund_lines -> oi.line_key ->> 1)::int, 0) AS shopify_returned,
+                           COALESCE((o.refund_lines -> oi.line_key ->> 2)::int, 0) AS unverified_no_restock
                 ) rf
                 CROSS JOIN LATERAL (
-                    SELECT COALESCE(li.current_quantity, oi.quantity) + rf.added_back AS qty,
-                           COALESCE(li.quantity, oi.quantity)                         AS original_qty,
-                           li.price                                               AS raw_price
+                    SELECT COALESCE(oi.current_qty, oi.quantity) + rf.added_back AS qty,
+                           COALESCE(oi.original_qty, oi.quantity)                AS original_qty,
+                           oi.unit_price                                         AS raw_price
                 ) q
                 CROSS JOIN LATERAL (
                     SELECT CASE WHEN o.placed_at >= b.p_start AND o.placed_at < b.p_end THEN
                                CASE
                                    WHEN q.raw_price IS NULL THEN COALESCE(v.price, 0)
-                                   ELSE q.raw_price - COALESCE((
-                                            SELECT SUM((d->>'amount')::numeric)
-                                            FROM jsonb_array_elements(
-                                                CASE WHEN jsonb_typeof(li.discount_allocations) = 'array'
-                                                     THEN li.discount_allocations ELSE '[]'::jsonb END) d
-                                        ), 0) / NULLIF(GREATEST(q.original_qty, q.qty), 0)
+                                   ELSE q.raw_price - oi.line_discount / NULLIF(GREATEST(q.original_qty, q.qty), 0)
                                END
                            END AS unit_price
                 ) up
@@ -239,16 +207,10 @@ public class SalesAnalyticsService {
                            CASE WHEN o.placed_at >= b.p_start AND o.placed_at < b.p_end THEN
                                COALESCE(q.qty * a.auto_amt / NULLIF(GREATEST(q.original_qty, q.qty), 0), 0) END AS disc_auto
                     FROM (
-                        SELECT SUM((d->>'amount')::numeric) FILTER (WHERE da.type = 'discount_code') AS code_amt,
-                               SUM((d->>'amount')::numeric) FILTER (WHERE da.type = 'automatic')     AS auto_amt
-                        FROM jsonb_array_elements(
-                            CASE WHEN q.raw_price IS NOT NULL AND jsonb_typeof(li.discount_allocations) = 'array'
-                                 THEN li.discount_allocations ELSE '[]'::jsonb END) d
-                        CROSS JOIN LATERAL (
-                            SELECT CASE WHEN jsonb_typeof(ov.discount_applications) = 'array'
-                                        THEN ov.discount_applications -> ((d->>'discount_application_index')::int) ->> 'type'
-                                   END AS type
-                        ) da
+                        SELECT SUM(al.amt) FILTER (WHERE o.discount_types[al.idx + 1] = 'discount_code') AS code_amt,
+                               SUM(al.amt) FILTER (WHERE o.discount_types[al.idx + 1] = 'automatic')     AS auto_amt
+                        FROM unnest(CASE WHEN q.raw_price IS NOT NULL THEN oi.alloc_amounts END,
+                                    CASE WHEN q.raw_price IS NOT NULL THEN oi.alloc_indexes END) AS al(amt, idx)
                     ) a
                 ) dc
                 WHERE oi.tenant_id = ?
@@ -321,14 +283,12 @@ public class SalesAnalyticsService {
             FROM period_orders po
             LEFT JOIN LATERAL (
                 SELECT s.id AS shipment_id, s.internal_state,
-                       s.raw->'type'->>'code'                   AS type_code,
-                       s.raw->'dropOffAddress'->'city'->>'_id'  AS city_id,
-                       s.raw->'dropOffAddress'->'city'->>'name' AS city
+                       s.type_code, s.city_id, s.city_name AS city
                 FROM shipments s
                 WHERE s.order_id = po.order_id
                   AND s.tenant_id = ?
                   AND s.shipment_leg = 'forward'
-                  AND COALESCE(s.raw->'type'->>'code', '10') NOT IN ('25', '30')
+                  AND COALESCE(s.type_code, '10') NOT IN ('25', '30')
                 ORDER BY (s.internal_state IN ('terminated', 'cancelled')), s.created_at DESC, s.id DESC
                 LIMIT 1
             ) leg ON true

@@ -86,20 +86,12 @@ public class ProductExtrasAnalyticsService {
         )
         SELECT pv.is_current, pv.variant_id, pv.sold, pv.delivered_units, pv.returned, pv.realized,
                COALESCE(ev.units, 0) AS exchanged, v.sku, v.title AS variant_title, p.title AS product_title,
-               so.size_raw, so.position IS NOT NULL AS has_size_option
+               CASE p.size_position WHEN 1 THEN v.option1 WHEN 2 THEN v.option2 WHEN 3 THEN v.option3 END AS size_raw,
+               p.size_position IS NOT NULL AS has_size_option
         FROM per_variant pv
         JOIN variants v ON v.id = pv.variant_id
         JOIN products p ON p.id = v.product_id
         LEFT JOIN exch_v ev ON ev.variant_id = pv.variant_id AND ev.is_current = pv.is_current
-        LEFT JOIN LATERAL (
-            SELECT (opt ->> 'position')::int AS position,
-                   v.raw ->> ('option' || (opt ->> 'position')) AS size_raw
-            FROM jsonb_array_elements(CASE WHEN jsonb_typeof(p.raw -> 'options') = 'array'
-                                           THEN p.raw -> 'options' ELSE '[]'::jsonb END) opt
-            WHERE opt ->> 'name' ILIKE '%size%' OR opt ->> 'name' LIKE '%مقاس%'
-            ORDER BY (opt ->> 'position')::int
-            LIMIT 1
-        ) so ON true
         """;
 
     /** Per product and period: orders, delivered and failed (refused + other terminal) orders. Filtered in Java. */

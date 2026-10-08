@@ -37,7 +37,9 @@ final class AnalyticsMappings {
      *      TikTok, google → Google (Android app referrers like android-app://com.instagram.android too);
      *   4. utm_source: ig / instagram → Instagram, fb or any start of "facebook" of 2+ letters
      *      (Meta truncates it: fa, fac, faceb…) → Facebook, tiktok / tt → TikTok, google → Google;
-     *   5. another site referred the visit → Other referral (the store's own domain counts as direct);
+     *   5. another site referred the visit → Other referral (the store's own domains — the order
+     *      status page's host and any *.myshopify.com — count as direct; slice 8: the SQL twin,
+     *      analytics_channel (V149), feeds the generated orders.channel, which has no store row);
      *   6. Direct.
      * The referrer comes before utm_source: some stores put campaign names in utm_source (prod,
      * 2026-10-07: "jeans - summer collection | 6/23"), while the referrer is where the click happened.
@@ -51,7 +53,10 @@ final class AnalyticsMappings {
         if (byHost != null) return byHost;
         String byUtm = platformOfUtm(utmSource(landingSite));
         if (byUtm != null) return byUtm;
-        if (host != null && !host.isEmpty() && !ownHosts.contains(stripWww(host))) return OTHER_REFERRAL;
+        if (host != null && !host.isEmpty() && !ownHosts.contains(stripWww(host))
+            && !host.endsWith(".myshopify.com")) {
+            return OTHER_REFERRAL;
+        }
         return DIRECT;
     }
 
