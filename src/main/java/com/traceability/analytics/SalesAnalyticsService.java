@@ -487,7 +487,10 @@ public class SalesAnalyticsService {
                oc.returns_on_undelivered, oc.delivered_orders, oc.refused_orders, oc.wijha_orders,
                oc.unverified_no_restock
         FROM sales s
-        LEFT JOIN outcomes oc ON oc.is_total = s.is_total AND oc.variant_id IS NOT DISTINCT FROM s.variant_id
+        -- hashable equality (IS NOT DISTINCT FROM is not): the total row's NULL variant → the nil uuid
+        LEFT JOIN outcomes oc ON oc.is_total = s.is_total
+             AND COALESCE(oc.variant_id, '00000000-0000-0000-0000-000000000000'::uuid)
+               = COALESCE(s.variant_id, '00000000-0000-0000-0000-000000000000'::uuid)
         LEFT JOIN last_sold ls ON ls.variant_id = s.variant_id
         LEFT JOIN variants v ON v.id = s.variant_id
         LEFT JOIN products p ON p.id = v.product_id
