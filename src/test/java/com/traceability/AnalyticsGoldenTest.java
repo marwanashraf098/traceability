@@ -105,6 +105,10 @@ class AnalyticsGoldenTest {
             ENDPOINTS.put("products-extras-" + k, "/api/v1/analytics/products/extras?" + q);
         }
         ENDPOINTS.put("money-stuck", "/api/v1/analytics/money/stuck");
+        // A year against the year before only on request (> 92 days, slice 8).
+        ENDPOINTS.put("revenue-summary-year-compare", "/api/v1/analytics/revenue/summary?compare=true&" + YEAR);
+        ENDPOINTS.put("delivery-summary-year-compare", "/api/v1/analytics/delivery/summary?compare=true&" + YEAR);
+        ENDPOINTS.put("products-extras-year-compare", "/api/v1/analytics/products/extras?compare=true&" + YEAR);
     }
 
     @Test

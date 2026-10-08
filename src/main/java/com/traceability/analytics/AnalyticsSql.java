@@ -13,9 +13,30 @@ public final class AnalyticsSql {
 
     private AnalyticsSql() {}
 
-    /** A figure for the period and for the previous period of the same length, right before it. */
+    /**
+     * A figure for the period and for the previous period of the same length, right before it.
+     * previousRange / previous are null when the previous period was not computed (see
+     * {@link #previousOrNull}).
+     */
     public record Compared<T>(AnalyticsPeriod.Range range, AnalyticsPeriod.Range previousRange,
                               T current, T previous) {}
+
+    /** Periods longer than this skip the previous-period comparison unless compare=true. */
+    static final int COMPARE_MAX_DAYS = 92;
+
+    /**
+     * The previous period, or null for a period longer than {@link #COMPARE_MAX_DAYS} days when the
+     * caller didn't ask to compare — a year against the year before doubles the work for a delta the
+     * screen rarely needs.
+     */
+    static AnalyticsPeriod previousOrNull(AnalyticsPeriod p, boolean compare) {
+        long days = ChronoUnit.DAYS.between(p.from(), p.to()) + 1;
+        return days > COMPARE_MAX_DAYS && !compare ? null : previous(p);
+    }
+
+    static AnalyticsPeriod.Range rangeOf(AnalyticsPeriod p) {
+        return p == null ? null : p.range();
+    }
 
     /** The previous period: same number of days, ending the day before {@code p.from()}. */
     static AnalyticsPeriod previous(AnalyticsPeriod p) {

@@ -140,9 +140,9 @@ public class ProductExtrasAnalyticsService {
     }
 
     @Transactional(readOnly = true)
-    public Compared<Extras> extras(AnalyticsPeriod period) {
+    public Compared<Extras> extras(AnalyticsPeriod period, boolean compare) {
         UUID tid = TenantContext.require();
-        AnalyticsPeriod prev = AnalyticsSql.previous(period);
+        AnalyticsPeriod prev = AnalyticsSql.previousOrNull(period, compare);
         AnalyticsPeriod window = OrderFacts.span(prev, period);
         java.sql.Timestamp curStart = java.sql.Timestamp.from(period.startInclusive());
         Map<Boolean, List<VariantRow>> variants = split();
@@ -177,8 +177,9 @@ public class ProductExtrasAnalyticsService {
                     rs.getObject("vb", UUID.class), rs.getString("title_b"), rs.getLong("orders")));
             }
         });
-        return new Compared<>(period.range(), prev.range(), extrasOf(variants.get(true), failed.get(true), pairs.get(true)),
-            extrasOf(variants.get(false), failed.get(false), pairs.get(false)));
+        return new Compared<>(period.range(), AnalyticsSql.rangeOf(prev),
+            extrasOf(variants.get(true), failed.get(true), pairs.get(true)),
+            prev == null ? null : extrasOf(variants.get(false), failed.get(false), pairs.get(false)));
     }
 
     private static <T> Map<Boolean, List<T>> split() {

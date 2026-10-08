@@ -56,14 +56,15 @@ public class DeliveryAnalyticsService {
 
     /** One facts query covering both periods and both 8-week trends, split by placed_at. */
     @Transactional(readOnly = true)
-    public Compared<Summary> summary(AnalyticsPeriod period) {
-        AnalyticsPeriod prev = AnalyticsSql.previous(period);
-        AnalyticsPeriod curWeeks = trendWindow(period), prevWeeks = trendWindow(prev);
+    public Compared<Summary> summary(AnalyticsPeriod period, boolean compare) {
+        AnalyticsPeriod prev = AnalyticsSql.previousOrNull(period, compare);
+        AnalyticsPeriod curWeeks = trendWindow(period), prevWeeks = prev == null ? null : trendWindow(prev);
         AnalyticsPeriod window = OrderFacts.span(OrderFacts.span(prev, prevWeeks), OrderFacts.span(period, curWeeks));
         List<OrderFacts.Order> all = OrderFacts.load(jdbc, TenantContext.require(), window, overrides);
-        return new Compared<>(period.range(), prev.range(),
+        return new Compared<>(period.range(), AnalyticsSql.rangeOf(prev),
             summarise(OrderFacts.within(all, period), OrderFacts.within(all, curWeeks), curWeeks.from()),
-            summarise(OrderFacts.within(all, prev), OrderFacts.within(all, prevWeeks), prevWeeks.from()));
+            prev == null ? null
+                : summarise(OrderFacts.within(all, prev), OrderFacts.within(all, prevWeeks), prevWeeks.from()));
     }
 
     /** The 8 Cairo weeks (Monday first) ending with the week that holds the period's last day. */
@@ -147,11 +148,11 @@ public class DeliveryAnalyticsService {
     // ── /delivery/failure-reasons ───────────────────────────────────────────
 
     @Transactional(readOnly = true)
-    public Compared<FailureReasons> failureReasons(AnalyticsPeriod period) {
-        AnalyticsPeriod prev = AnalyticsSql.previous(period);
+    public Compared<FailureReasons> failureReasons(AnalyticsPeriod period, boolean compare) {
+        AnalyticsPeriod prev = AnalyticsSql.previousOrNull(period, compare);
         List<OrderFacts.Order> all = OrderFacts.load(jdbc, TenantContext.require(), OrderFacts.span(prev, period), overrides);
-        return new Compared<>(period.range(), prev.range(), reasons(OrderFacts.within(all, period)),
-            reasons(OrderFacts.within(all, prev)));
+        return new Compared<>(period.range(), AnalyticsSql.rangeOf(prev), reasons(OrderFacts.within(all, period)),
+            prev == null ? null : reasons(OrderFacts.within(all, prev)));
     }
 
     /** Over failed orders (refused + other terminal); share = of the failed legs that have a reason. */

@@ -176,8 +176,10 @@ final class OrderFacts {
         return out;
     }
 
-    /** The smallest period covering both. */
+    /** The smallest period covering both; a null one is ignored. */
     static AnalyticsPeriod span(AnalyticsPeriod a, AnalyticsPeriod b) {
+        if (a == null) return b;
+        if (b == null) return a;
         return new AnalyticsPeriod(a.from().isBefore(b.from()) ? a.from() : b.from(),
                                    a.to().isAfter(b.to()) ? a.to() : b.to());
     }

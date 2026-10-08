@@ -338,6 +338,32 @@ class AnalyticsBreakdownsTest {
         assertThat(n(m(body, "previous"), "orders")).isEqualTo(1);
     }
 
+    @Test
+    void longPeriods_skipThePreviousPeriod_unlessCompareIsAsked() {
+        T t = new T("An5-Compare");
+        UUID v = t.variant("M");
+        t.line(t.order(cairo(2026, 6, 15, 12, 0), "bosta", "{}"), v, 1);    // in the previous 93 days (after the floor)
+        t.line(t.order(cairo(2026, 9, 1, 12, 0), "bosta", "{}"), v, 1);     // in the period
+        String q93 = "from=2026-06-30&to=2026-09-30";                         // 93 days
+        for (String path : List.of("revenue/summary", "revenue/breakdown?by=channel", "revenue/breakdown?by=productType",
+                                   "revenue/discounts", "revenue/heatmap", "delivery/summary", "delivery/failure-reasons",
+                                   "products/extras")) {
+            String sep = path.contains("?") ? "&" : "?";
+            Map<String, Object> off = ok(t, "/api/v1/analytics/" + path + sep + q93);
+            assertThat(off.get("previous")).as(path).isNull();
+            assertThat(off.get("previousRange")).as(path).isNull();
+            assertThat(off.get("current")).as(path).isNotNull();
+            Map<String, Object> on = ok(t, "/api/v1/analytics/" + path + sep + q93 + "&compare=true");
+            assertThat(on.get("previous")).as(path + " compare=true").isNotNull();
+            assertThat(m(on, "previousRange").get("from")).isEqualTo("2026-03-29");
+        }
+        assertThat(n(m(ok(t, "/api/v1/analytics/revenue/summary?" + q93 + "&compare=true"), "previous"), "orders")).isEqualTo(1);
+        // Exactly 92 days still compares by default.
+        Map<String, Object> d92 = ok(t, "/api/v1/analytics/revenue/summary?from=2026-07-01&to=2026-09-30");
+        assertThat(d92.get("previous")).isNotNull();
+        assertThat(m(d92, "previousRange").get("from")).isEqualTo("2026-03-31");
+    }
+
     // ── /revenue/breakdown ───────────────────────────────────────────────────
 
     @Test
@@ -720,14 +746,14 @@ class AnalyticsBreakdownsTest {
         AnalyticsPeriod sept = new AnalyticsPeriod(LocalDate.of(2026, 9, 1), LocalDate.of(2026, 9, 30));
 
         TenantContext.set(b.id);
-        AnalyticsSql.Compared<RevenueAnalyticsService.Summary> asB = tx.execute(s -> svc.summary(sept));
+        AnalyticsSql.Compared<RevenueAnalyticsService.Summary> asB = tx.execute(s -> svc.summary(sept, false));
         assertThat(asB.current().orders()).isEqualTo(1);
         assertThat(asB.current().booked()).isEqualByComparingTo("200.00");
         TenantContext.set(a.id);
-        assertThat(tx.execute(s -> svc.summary(sept)).current().orders()).isEqualTo(3);
+        assertThat(tx.execute(s -> svc.summary(sept, false)).current().orders()).isEqualTo(3);
         TenantContext.set(b.id);
         AnalyticsSql.Compared<RevenueAnalyticsService.Breakdown> ch = tx.execute(s ->
-            svc.breakdown(sept, RevenueAnalyticsService.By.CHANNEL));
+            svc.breakdown(sept, RevenueAnalyticsService.By.CHANNEL, false));
         assertThat(ch.current().groups().stream().mapToLong(RevenueAnalyticsService.Group::orders).sum()).isEqualTo(1);
     }
 }

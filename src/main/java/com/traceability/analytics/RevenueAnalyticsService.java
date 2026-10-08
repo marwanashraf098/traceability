@@ -71,18 +71,19 @@ public class RevenueAnalyticsService {
     }
 
     /** One facts query over previous + current period, split by placed_at. */
-    private <T> Compared<T> compared(AnalyticsPeriod p, BiFunction<List<OrderFacts.Order>, AnalyticsPeriod, T> f) {
-        AnalyticsPeriod prev = AnalyticsSql.previous(p);
+    private <T> Compared<T> compared(AnalyticsPeriod p, boolean compare,
+                                     BiFunction<List<OrderFacts.Order>, AnalyticsPeriod, T> f) {
+        AnalyticsPeriod prev = AnalyticsSql.previousOrNull(p, compare);
         List<OrderFacts.Order> all = OrderFacts.load(jdbc, TenantContext.require(), OrderFacts.span(prev, p), overrides);
-        return new Compared<>(p.range(), prev.range(),
-            f.apply(OrderFacts.within(all, p), p), f.apply(OrderFacts.within(all, prev), prev));
+        return new Compared<>(p.range(), AnalyticsSql.rangeOf(prev),
+            f.apply(OrderFacts.within(all, p), p), prev == null ? null : f.apply(OrderFacts.within(all, prev), prev));
     }
 
     // ── /revenue/summary ────────────────────────────────────────────────────
 
     @Transactional(readOnly = true)
-    public Compared<Summary> summary(AnalyticsPeriod period) {
-        return compared(period, RevenueAnalyticsService::summarise);
+    public Compared<Summary> summary(AnalyticsPeriod period, boolean compare) {
+        return compared(period, compare, RevenueAnalyticsService::summarise);
     }
 
     static Summary summarise(List<OrderFacts.Order> orders, AnalyticsPeriod p) {
@@ -128,10 +129,10 @@ public class RevenueAnalyticsService {
     // ── /revenue/breakdown ──────────────────────────────────────────────────
 
     @Transactional(readOnly = true)
-    public Compared<Breakdown> breakdown(AnalyticsPeriod period, By by) {
-        if (by == By.PRODUCT_TYPE) return productTypes(period);
+    public Compared<Breakdown> breakdown(AnalyticsPeriod period, By by, boolean compare) {
+        if (by == By.PRODUCT_TYPE) return productTypes(period, compare);
         OrderFacts.Cities cities = by == By.GOVERNORATE ? OrderFacts.cities(jdbc) : null;
-        return compared(period, (orders, p) -> group(orders, by, cities));
+        return compared(period, compare, (orders, p) -> group(orders, by, cities));
     }
 
     static Breakdown group(List<OrderFacts.Order> orders, By by, OrderFacts.Cities cities) {
@@ -230,9 +231,9 @@ public class RevenueAnalyticsService {
         ORDER BY booked DESC, ptype NULLS LAST
         """;
 
-    private Compared<Breakdown> productTypes(AnalyticsPeriod period) {
+    private Compared<Breakdown> productTypes(AnalyticsPeriod period, boolean compare) {
         UUID tid = TenantContext.require();
-        AnalyticsPeriod prev = AnalyticsSql.previous(period);
+        AnalyticsPeriod prev = AnalyticsSql.previousOrNull(period, compare);
         Map<Boolean, List<Group>> rows = new HashMap<>(Map.of(true, new ArrayList<>(), false, new ArrayList<>()));
         jdbc.query(PRODUCT_TYPE_SQL, ps -> {
             int i = AnalyticsSql.bindSoldLines(ps, tid, OrderFacts.span(prev, period), overrides);
@@ -245,16 +246,16 @@ public class RevenueAnalyticsService {
                 t == null ? "Uncategorised" : t, null, money(rs.getBigDecimal("booked")),
                 money(rs.getBigDecimal("realized")), rs.getLong("orders"), d, f, rate(d, d + f)));
         });
-        return new Compared<>(period.range(), prev.range(), new Breakdown("productType", rows.get(true)),
-            new Breakdown("productType", rows.get(false)));
+        return new Compared<>(period.range(), AnalyticsSql.rangeOf(prev), new Breakdown("productType", rows.get(true)),
+            prev == null ? null : new Breakdown("productType", rows.get(false)));
     }
 
     // ── /revenue/discounts ──────────────────────────────────────────────────
 
     @Transactional(readOnly = true)
-    public Compared<Discounts> discounts(AnalyticsPeriod period) {
+    public Compared<Discounts> discounts(AnalyticsPeriod period, boolean compare) {
         UUID tid = TenantContext.require();
-        AnalyticsPeriod prev = AnalyticsSql.previous(period);
+        AnalyticsPeriod prev = AnalyticsSql.previousOrNull(period, compare);
         Map<Boolean, List<DiscountRow>> codes = new HashMap<>(Map.of(true, new ArrayList<>(), false, new ArrayList<>()));
         Map<Boolean, DiscountRow> automatic = new HashMap<>();
         jdbc.query(OrderFacts.DISCOUNTS_SQL, ps -> {
@@ -269,8 +270,8 @@ public class RevenueAnalyticsService {
             if (auto) automatic.put(current, row);
             else codes.get(current).add(row);
         });
-        return new Compared<>(period.range(), prev.range(), discountsOf(codes.get(true), automatic.get(true)),
-            discountsOf(codes.get(false), automatic.get(false)));
+        return new Compared<>(period.range(), AnalyticsSql.rangeOf(prev), discountsOf(codes.get(true), automatic.get(true)),
+            prev == null ? null : discountsOf(codes.get(false), automatic.get(false)));
     }
 
     private static DiscountRow discountRow(String code, String label, long orders, BigDecimal booked, BigDecimal cost,
@@ -290,8 +291,8 @@ public class RevenueAnalyticsService {
     // ── /revenue/heatmap ────────────────────────────────────────────────────
 
     @Transactional(readOnly = true)
-    public Compared<Heatmap> heatmap(AnalyticsPeriod period) {
-        return compared(period, RevenueAnalyticsService::heat);
+    public Compared<Heatmap> heatmap(AnalyticsPeriod period, boolean compare) {
+        return compared(period, compare, RevenueAnalyticsService::heat);
     }
 
     /** Average orders per Cairo weekday (ISO 1 = Monday) × hour: count ÷ how many of that weekday the period has. */
