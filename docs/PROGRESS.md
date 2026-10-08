@@ -19,10 +19,11 @@ main; NOT deployed). Migration V155 (`orders.customer_created_at`, renumbered fr
   Connect = the store's analytics floor, else its first ingested order (Jumi). Order class: existing (customer created
   before connect) / new (first order since connect) / unknown (first order, no created date) / returning (later
   orders); a customer counts in the class of their first order in the period.
-- **The Snouts' keys (13 of 118 orders):** the OAuth-upgrade import (2026-10-07 15:06) re-upserted 111 orders with
-  GraphQL payloads (`UPSERT_ORDER` replaces raw); the 99 oldest (≤ 2026-09-06) were fetched at the reduced PII tier (no
-  customer / shipping keys at all), the 12 newest with the customer. Every one of their REST webhook payloads (with
-  customer + phone) is still in `shopify_webhook_events`. Not fixed (ingest); options in the report.
+- **The Snouts' keys (13 of 118 orders) — corrected by fix/order-payload-downgrade:** every GraphQL re-import re-reads
+  the last 30 days (`shopify.import.lookback-days`) and `UPSERT_ORDER` replaced raw, so each import overwrote the REST
+  webhook payloads (customer + phone) in its window. The 99 oldest (≤ 2026-09-06) were last written by imports BEFORE
+  Build B, whose orders query asked for no customer / address fields at all; the 2026-10-07 OAuth-upgrade import only
+  re-read orders after 2026-09-07 (12, at full tier). Not the ACCESS_DENIED step-down. Fixed and restored by V156.
 - Tests: `AnalyticsCustomersTest` (10), RlsCoverageTest +5.
 
 **Issue 1 — Scan returns: untracked parcel items, one row per unit (2026-10-08, branch `feat/untracked-parcel-units` off

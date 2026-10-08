@@ -146,6 +146,24 @@ public class ShopifySyncService {
             RETURNING id, customer_phone
             """;
 
+    /**
+     * UPSERT_ORDER for the GraphQL IMPORT paths (connect / reconnect / OAuth-upgrade re-import, the
+     * reconcile catch-up — upsertOrder): identical except that the stored payload's customer, shipping,
+     * billing and phone groups survive when the incoming payload has none of them
+     * (shopify_order_raw_keep_customer, V156) — a re-import at a lower PII tier, or the pre-Build-B
+     * query, must never make a stored payload poorer. Webhook payloads (ingestOrderWebhook) still
+     * replace raw as before.
+     */
+    static final String UPSERT_ORDER_IMPORT = UPSERT_ORDER.replace(
+        "raw             = CASE WHEN orders.pii_redacted_at IS NULL THEN EXCLUDED.raw",
+        "raw             = CASE WHEN orders.pii_redacted_at IS NULL THEN shopify_order_raw_keep_customer(orders.raw, EXCLUDED.raw)");
+
+    static {
+        if (UPSERT_ORDER_IMPORT.equals(UPSERT_ORDER)) {
+            throw new IllegalStateException("UPSERT_ORDER_IMPORT must keep the stored customer data — its raw line changed");
+        }
+    }
+
     /** UPSERT_ORDER's result: the order and the phone it now holds (the blocklist gate's input). */
     private record Upserted(UUID id, String phone) {}
 
@@ -551,9 +569,10 @@ public class ShopifySyncService {
             String paymentMethod = inferPaymentMethod(o.displayFinancialStatus(), o.paymentGateways());
             BigDecimal codAmount = "cod".equals(paymentMethod) ? o.totalPrice() : null;
 
-            // PII is read from o.raw (the GraphQL node) by UPSERT_ORDER — the same SQL precedence as the
-            // webhook path; the record's customerName / customerPhone / shippingAddress are not used.
-            Upserted up = jdbc.query(UPSERT_ORDER, ShopifySyncService::upserted,
+            // PII is read from o.raw (the GraphQL node) by UPSERT_ORDER_IMPORT — the same SQL precedence as
+            // the webhook path; the record's customerName / customerPhone / shippingAddress are not used.
+            // The import never makes the stored payload poorer in customer data (V156).
+            Upserted up = jdbc.query(UPSERT_ORDER_IMPORT, ShopifySyncService::upserted,
                     tenantId, storeId, o.gid(), o.name(), paymentMethod, codAmount,
                     java.sql.Timestamp.from(o.createdAt()), toJson(o.raw()));
             if (up == null) throw new ShopifyException("Order upsert returned no ID for GID " + o.gid());
