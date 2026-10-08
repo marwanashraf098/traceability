@@ -4,6 +4,40 @@
 
 ## Current state
 
+**Analytics slice 7 — order finances, Summary alerts, cash forecast, backend only (2026-10-08, branch
+`analytics/s7-finances`, merged to main; NOT deployed). No migration.** Owner-only, same period / floor / RLS rules,
+V148/V149 columns only (no raw parsing).
+- **`GET /api/v1/analytics/orders`** (`OrderFinanceService`, on OrderFacts' CTEs — the s5 cohort): one row per order —
+  name, placed, customer display name (first name + last initial, never more), governorate EN/AR, items, total (booked),
+  payment group, delivery status (outcome + leg state label), financial status, Bosta fees (+ estimated), net to you,
+  refundAmountUnknown, tracking numbers. Filters status / governorate / variantId / q (order name or tracking number);
+  `counts` per status for the chips (same filters except status); placed_at DESC, id DESC; page (0-based) / size ≤ 200.
+- **Financial status — ONE rule, `OrderFinanceService.financialStatus`, first match wins:** other_carrier (Wijha) →
+  lost (refused / other_terminal, net = −fees) → refunded (customer return on a delivered order; net = collected − fees
+  − refunds in the ledger net of voids, else null + refundAmountUnknown) → paid (delivered and a cashout txn or
+  prepaid; net = deposited_amt / total − fees) → overdue (s3 delivered-not-paid, or in transit with no change for 7
+  days) → awaiting_payout → expected. **Prepaid (approved 2026-10-08): the deciding Bosta forward leg's COD is 0 —
+  Bosta is the truth; only with no Bosta leg (or its COD unknown) the payment group decides (Card only).**
+  Bosta fees = Σ SettlementSql.fee over the order's Bosta legs, skipping legs cancelled / terminated before pickup.
+- **`/orders/export.csv`**: same filters, newest first, UTF-8 + BOM, formula guard ('= + - @'), cap
+  `analytics.orders.export-max-rows` (default 50,000; more → newest 50k + `X-Export-Truncated: true`). One audit_log
+  row `analytics_orders_export` (filters, q as true/false, row count, truncated — never row data), written in the SAME
+  read-write transaction as the read (`OrderFinanceService.export`) — outside a transaction app_user's RLS WITH CHECK
+  refuses it (found on the app_user bench; postgres-connected tests can't see it; reflection guard test).
+- **`/variants/{id}/orders`**: the variant's 10 newest orders (window = the 10th's Cairo day → today), same status.
+- **`/alerts`** (period for the governorate line): stuck with Bosta / never picked up / delivered not paid (counts +
+  COD / deposited sums from `MoneyAnalyticsService.stuck()`), governorates with success < 65 % and ≥ 10 orders
+  (Unknown excluded; amount = failed orders' booked), sells-out-soon (only when the tenant has pieces: available > 0 and
+  ≤ 7 days at the last 30 days' rate; amount null — s4 replaces it). Links are proposed frontend paths (`/analytics/…`).
+- **`/cash-forecast`**: null + reason `payout_cadence_unknown` / `payout_lag_unknown`; else next 7 / 8–14 / 15–30 days
+  (+ later): deposited → next payout weekday; delivered not settled → first payout weekday ≥ delivered + median
+  delivered→paid lag (paid forward legs, 90 days); in transit (the pipeline's stage × city rates) → first payout
+  weekday ≥ today + lag. Method inputs returned.
+- **Shared rules lifted (goldens unchanged):** `SettlementSql.deliveredNotPaid / stuckWithBosta / neverPickedUp /
+  lastChange`, `MoneyAnalyticsService.IN_TRANSIT_LEGS / AWAITING_DEPOSITED / AWAITING_UNSETTLED / inTransit()`.
+- **Bench (60k orders, prod settings, warm p95):** orders 30-day page 151–156 ms (366 d ~1.7 s), export 157 ms /
+  1.7 s, alerts 539 ms / 1.7 s, cash-forecast 115 ms, SKU drawer 440 ms.
+
 **Analytics slice 8 — performance, backend only (2026-10-08, branch `analytics/s8-perf`, merged to main; NOT deployed).
 Migration V149.**
 - **V149** moves the raw parsing analytics did per request into STORED generated columns over IMMUTABLE, PARALLEL SAFE,
