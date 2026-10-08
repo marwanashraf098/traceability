@@ -37,7 +37,7 @@ public class AnalyticsAlertsService {
     /** One "Needs attention" line: how many, how much (null when money doesn't apply), where to go. */
     /** A best seller about to sell out (the sells-out-soon line). */
     public record AlertSku(UUID variantId, String productTitle, String variantTitle, String sku, long onHand,
-                           BigDecimal daysOfCover, BigDecimal velocityPerDay) {}
+                           BigDecimal daysOfCover, BigDecimal velocityPerDay, String stockSource) {}
 
     /** One "Needs attention" line: how many, how much (null when money doesn't apply), where to go. */
     public record Alert(String key, String label, long count, BigDecimal amount, String link,
@@ -147,7 +147,7 @@ public class AnalyticsAlertsService {
     /**
      * Sells out soon (slice 4): among the best sellers — the top {@value #BEST_SELLERS} variants by
      * velocity (StockAnalyticsService: delivered units per day, last 30 days) — those with stock on
-     * hand and at most {@value #SELLS_OUT_DAYS} days of cover. Listed in {@code skus}, lowest cover first.
+     * hand (pieces, or Shopify's figure when stock trust is low — StockAnalyticsService.trust) and at most {@value #SELLS_OUT_DAYS} days of cover. Listed in {@code skus}, lowest cover first.
      */
     private Alert sellsOutSoon() {
         List<StockAnalyticsService.VariantStock> best = new ArrayList<>(
@@ -156,9 +156,9 @@ public class AnalyticsAlertsService {
         if (best.size() > BEST_SELLERS) best = new ArrayList<>(best.subList(0, BEST_SELLERS));
         List<AlertSku> skus = new ArrayList<>();
         for (StockAnalyticsService.VariantStock v : best) {
-            if (v.onHand() > 0 && v.daysOfCover() != null && v.daysOfCover().compareTo(BigDecimal.valueOf(SELLS_OUT_DAYS)) <= 0) {
-                skus.add(new AlertSku(v.variantId(), v.productTitle(), v.variantTitle(), v.sku(), v.onHand(),
-                    v.daysOfCover(), v.velocityPerDay()));
+            if (v.stockUsed() > 0 && v.daysOfCover() != null && v.daysOfCover().compareTo(BigDecimal.valueOf(SELLS_OUT_DAYS)) <= 0) {
+                skus.add(new AlertSku(v.variantId(), v.productTitle(), v.variantTitle(), v.sku(), v.stockUsed(),
+                    v.daysOfCover(), v.velocityPerDay(), v.stockSource()));
             }
         }
         skus.sort(Comparator.comparing(AlertSku::daysOfCover).thenComparing(s -> s.variantId().toString()));

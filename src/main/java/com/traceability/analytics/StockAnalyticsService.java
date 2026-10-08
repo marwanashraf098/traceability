@@ -45,6 +45,22 @@ import static com.traceability.analytics.AnalyticsSql.money;
  *   returns rate  — (returned + exchanged) ÷ delivered units over the last 90 days (the s2 returns,
  *                   the s5 exchanges: ProductExtrasAnalyticsService.variantRows), with the most
  *                   frequent return-request reason in those days.
+ *
+ * STOCK TRUST ({@link #trust}): piece counts are only true when the tenant packs through Traced.
+ *   packedThroughTracedPct — of the orders Bosta delivered in the last 30 days (a forward Bosta leg
+ *                   delivered then; internal exchange orders left out), the share with any piece
+ *                   allocation or piece event;
+ *   Shopify figure — variants.shopify_inventory_quantity (V152: Shopify's REST inventory_quantity,
+ *                   available summed over all locations, as of the variant's last products/*
+ *                   webhook — shopify_variant_updated_at; GraphQL-imported variants have none);
+ *   mismatch      — over variants with pieces AND a Shopify figure: |traced available − max(Shopify,
+ *                   0)| summed ÷ Shopify units;
+ *   level         — none (no pieces) | high (≥ 80 % packed through Traced AND mismatch ≤ 10 %; no
+ *                   Shopify figure at all counts as no mismatch) | low.
+ * At level low the stock-based figures — days of cover, running low, dead stock, sell-through,
+ * restock, sells-out-soon — use the Shopify figure (stockSource "shopify"; a variant with no Shopify
+ * figure falls back to its pieces and says so); piece-only figures (age, trips, damaged, on hold)
+ * stay on pieces and the summary flags them lowTrust.
  */
 @Service
 public class StockAnalyticsService {
@@ -70,28 +86,43 @@ public class StockAnalyticsService {
 
     public record Valued(long pieces, BigDecimal valueAtCost, long costedPieces) {}
 
+    public record Trust(String level, BigDecimal packedThroughTracedPct, long bostaDeliveredOrders30,
+                        long packedThroughTraced30, long tracedAvailableTotal, long shopifyAvailableTotal,
+                        long variantsCompared, long variantsWithMismatch, long mismatchUnits, BigDecimal mismatchShare,
+                        long variantsWithoutShopifyFigure, Instant shopifyFigureOldest, Instant shopifyFigureNewest,
+                        String shopifySource) {
+
+        boolean low() {
+            return "low".equals(level);
+        }
+    }
+
+    static final String SHOPIFY_SOURCE =
+        "variants.shopify_inventory_quantity (Shopify REST inventory_quantity, all locations, as of the variant's last products webhook)";
+
     public record Summary(boolean hasPieces, AnalyticsPeriod.Range range, Instant asOf, long inWarehouse,
                           List<LocationCount> byLocation, BigDecimal valueAtPrice, BigDecimal valueAtCost,
                           long costedVariants, long variantsInStock, BigDecimal avgDaysInStock,
                           List<AgeBucket> ageBuckets, long onHold, Valued damaged, Valued lostThisPeriod,
-                          long piecesMovedFourPlus) {}
+                          long piecesMovedFourPlus, Trust trust, boolean lowTrust) {}
 
     public record VariantStock(UUID variantId, String productTitle, String variantTitle, String sku,
                                long onHand, long comingBack, BigDecimal velocityPerDay, BigDecimal daysOfCover,
                                BigDecimal sellThrough, BigDecimal avgPieceAgeDays, Instant lastSoldAt,
                                long soldUnits30, long deliveredUnits30, BigDecimal returnsRate,
                                long returnedUnits90, long exchangedUnits90, String topReturnReason,
-                               boolean runningLow, boolean deadStock, BigDecimal stockValue, boolean valueAtCost) {}
+                               boolean runningLow, boolean deadStock, BigDecimal stockValue, boolean valueAtCost,
+                               Integer shopifyAvailable, long stockUsed, String stockSource) {}
 
-    public record Variants(boolean hasPieces, Instant asOf, String sort, String filter, long total,
-                           List<VariantStock> variants) {}
+    public record Variants(boolean hasPieces, Instant asOf, String trustLevel, String stockSource, String sort,
+                           String filter, long total, List<VariantStock> variants) {}
 
     public record RestockItem(UUID variantId, String productTitle, String variantTitle, String sku,
                               BigDecimal velocityPerDay, long onHand, long comingBack, BigDecimal daysOfCover,
                               long suggestedUnits, BigDecimal costAtUnitCost) {}
 
-    public record Restock(boolean hasPieces, Instant asOf, int supplierLeadDays, int coverDays, int velocityDays,
-                          List<RestockItem> items) {}
+    public record Restock(boolean hasPieces, Instant asOf, String trustLevel, String stockSource, int supplierLeadDays,
+                          int coverDays, int velocityDays, List<RestockItem> items) {}
 
     public record Settings(int supplierLeadDays, int coverDays, boolean defaults) {}
 
@@ -131,6 +162,66 @@ public class StockAnalyticsService {
             "SELECT EXISTS (SELECT 1 FROM pieces WHERE tenant_id = ? AND status <> 'voided'::piece_status)", Boolean.class, tid));
     }
 
+    // ── trust ───────────────────────────────────────────────────────────────
+
+    static final BigDecimal HIGH_PACKED = new BigDecimal("0.80");
+    static final BigDecimal HIGH_MISMATCH = new BigDecimal("0.10");
+
+    /* Parameters: tenant id (allocations), tenant id (piece events), tenant id (orders), now. */
+    private static final String PACKED_SQL = """
+        WITH traced_orders AS (
+            SELECT oi.order_id FROM allocations a JOIN order_items oi ON oi.id = a.order_item_id WHERE a.tenant_id = ?
+            UNION
+            SELECT e.order_id FROM piece_events e WHERE e.tenant_id = ? AND e.order_id IS NOT NULL
+        )
+        SELECT COUNT(*) AS delivered, COUNT(t.order_id) AS traced
+        FROM orders o
+        LEFT JOIN traced_orders t ON t.order_id = o.id
+        WHERE o.tenant_id = ? AND o.external_id NOT LIKE 'internal:exchange:%'
+          AND EXISTS (SELECT 1 FROM shipments s
+                      WHERE s.order_id = o.id AND s.tenant_id = o.tenant_id AND s.provider = 'bosta'
+                        AND s.shipment_leg = 'forward' AND COALESCE(s.type_code, '10') NOT IN ('25', '30')
+                        AND s.internal_state = 'delivered' AND s.delivered_at >= ?::timestamptz - interval '30 days')
+        """;
+
+    /** The tenant's stock trust; level "none" without pieces. */
+    Trust trust(UUID tid, Instant now) {
+        if (!hasPieces(tid)) return new Trust("none", null, 0, 0, 0, 0, 0, 0, 0, null, 0, null, null, SHOPIFY_SOURCE);
+        long[] packed = jdbc.query(PACKED_SQL, rs -> { rs.next(); return new long[] {rs.getLong("delivered"), rs.getLong("traced")}; },
+            tid, tid, tid, Timestamp.from(now));
+        long traced = 0, shopify = 0, compared = 0, mismatched = 0, units = 0, noFigure = 0;
+        Instant oldest = null, newest = null;
+        List<Map<String, Object>> rows = jdbc.queryForList(
+            "SELECT pc.available, v.shopify_inventory_quantity AS shopify, v.shopify_variant_updated_at AS updated " +
+            "FROM (SELECT variant_id, COUNT(*) FILTER (WHERE status = 'available') AS available FROM pieces " +
+            "      WHERE tenant_id = ? AND status <> 'voided'::piece_status GROUP BY variant_id) pc " +
+            "JOIN variants v ON v.id = pc.variant_id WHERE v.tenant_id = ?", tid, tid);
+        for (Map<String, Object> r : rows) {
+            long a = ((Number) r.get("available")).longValue();
+            if (r.get("shopify") == null) {
+                noFigure++;
+                continue;
+            }
+            long sh = Math.max(0, ((Number) r.get("shopify")).longValue());
+            compared++;
+            traced += a;
+            shopify += sh;
+            if (a != sh) mismatched++;
+            units += Math.abs(a - sh);
+            Instant u = r.get("updated") == null ? null : ((Timestamp) r.get("updated")).toInstant();
+            if (u != null && (oldest == null || u.isBefore(oldest))) oldest = u;
+            if (u != null && (newest == null || u.isAfter(newest))) newest = u;
+        }
+        BigDecimal packedPct = AnalyticsSql.rate(packed[1], packed[0]);
+        BigDecimal share = compared == 0 ? null
+            : shopify == 0 ? (units == 0 ? BigDecimal.ZERO.setScale(4) : BigDecimal.ONE.setScale(4))
+            : BigDecimal.valueOf(units).divide(BigDecimal.valueOf(shopify), 4, RoundingMode.HALF_UP);
+        String level = packedPct != null && packedPct.compareTo(HIGH_PACKED) >= 0
+            && (share == null || share.compareTo(HIGH_MISMATCH) <= 0) ? "high" : "low";
+        return new Trust(level, packedPct, packed[0], packed[1], traced, shopify, compared, mismatched, units, share,
+            noFigure, oldest, newest, SHOPIFY_SOURCE);
+    }
+
     // ── /stock/summary ──────────────────────────────────────────────────────
 
     /* Parameters: now (×6: age), tenant id. */
@@ -166,7 +257,7 @@ public class StockAnalyticsService {
         Instant now = clock.instant();
         if (!hasPieces(tid)) {
             return new Summary(false, period.range(), now, 0, List.of(), money(null), null, 0, 0, null, buckets(null),
-                0, new Valued(0, null, 0), new Valued(0, null, 0), 0);
+                0, new Valued(0, null, 0), new Valued(0, null, 0), 0, trust(tid, now), false);
         }
         Timestamp t = Timestamp.from(now);
         Map<String, Object> r = jdbc.queryForMap(SUMMARY_SQL, t, tid);
@@ -188,12 +279,13 @@ public class StockAnalyticsService {
             "SELECT COUNT(*) FROM (SELECT e.piece_id FROM piece_events e WHERE e.tenant_id = ? AND " + trip("e") +
             "GROUP BY e.piece_id HAVING COUNT(*) >= 4) x", Long.class, tid);
         Object avg = r.get("avg_age");
+        Trust trust = trust(tid, now);
         return new Summary(true, period.range(), now, num(r, "in_wh"), locs, money(dec(r, "value_price")),
             moneyOrNull(dec(r, "value_cost")), num(r, "variants_costed"), num(r, "variants_in_stock"),
             avg == null ? null : new BigDecimal(avg.toString()).setScale(1, RoundingMode.HALF_UP),
             buckets(r), num(r, "on_hold"),
             new Valued(num(r, "damaged"), moneyOrNull(dec(r, "damaged_cost")), num(r, "damaged_costed")),
-            lost, moved == null ? 0 : moved);
+            lost, moved == null ? 0 : moved, trust, trust.low());
     }
 
     private static List<AgeBucket> buckets(Map<String, Object> r) {
@@ -212,7 +304,7 @@ public class StockAnalyticsService {
      * Per variant: the last 30 days' sold / delivered units (soldLines + ORDER_OUTCOMES +
      * LINE_RETURNS over that window), its last sale (SalesAnalyticsService.LAST_SOLD_CTE) and its
      * pieces. Parameters: the shared 13, last_sold's 2 tenant ids, now, tenant id (pieces), tenant id
-     * (variants).
+     * (variants), Shopify mode (a variant with only a Shopify figure is listed too).
      */
     private static final String VARIANTS_SQL = SalesAnalyticsService.soldLines(false)
         + SalesAnalyticsService.ORDER_OUTCOMES + SalesAnalyticsService.LINE_RETURNS + ", "
@@ -233,6 +325,7 @@ public class StockAnalyticsService {
             GROUP BY p.variant_id
         )
         SELECT v.id AS variant_id, pr.title AS product_title, v.title AS variant_title, v.sku, v.price, v.unit_cost,
+               v.shopify_inventory_quantity AS shopify,
                COALESCE(st.on_hand, 0) AS on_hand, COALESCE(st.coming_back, 0) AS coming_back, st.avg_age,
                COALESCE(s.sold, 0) AS sold, COALESCE(s.delivered, 0) AS delivered, ls.last_sold_at
         FROM variants v
@@ -241,11 +334,12 @@ public class StockAnalyticsService {
         LEFT JOIN sales30 s ON s.variant_id = v.id
         LEFT JOIN last_sold ls ON ls.variant_id = v.id
         WHERE v.tenant_id = ?
-          AND (COALESCE(st.on_hand, 0) > 0 OR COALESCE(st.coming_back, 0) > 0 OR COALESCE(s.sold, 0) > 0)
+          AND (COALESCE(st.on_hand, 0) > 0 OR COALESCE(st.coming_back, 0) > 0 OR COALESCE(s.sold, 0) > 0
+               OR (?::boolean AND COALESCE(v.shopify_inventory_quantity, 0) > 0))
         """;
 
     /** Every stocked or selling variant with its stock figures (no sort / filter). */
-    List<VariantStock> loadVariants(UUID tid, Instant now) {
+    List<VariantStock> loadVariants(UUID tid, Instant now, boolean useShopify) {
         LocalDate today = today();
         AnalyticsPeriod last30 = new AnalyticsPeriod(today.minusDays(VELOCITY_DAYS - 1L), today);
         List<Object[]> rows = new ArrayList<>();
@@ -256,12 +350,14 @@ public class StockAnalyticsService {
             ps.setObject(i++, tid);
             ps.setTimestamp(i++, Timestamp.from(now));                 // stock: age
             ps.setObject(i++, tid);
-            ps.setObject(i, tid);                                      // variants
+            ps.setObject(i++, tid);                                    // variants
+            ps.setBoolean(i, useShopify);
         }, rs -> {
             rows.add(new Object[] {rs.getObject("variant_id", UUID.class), rs.getString("product_title"),
                 rs.getString("variant_title"), rs.getString("sku"), rs.getBigDecimal("price"), rs.getBigDecimal("unit_cost"),
                 rs.getLong("on_hand"), rs.getLong("coming_back"), rs.getBigDecimal("avg_age"), rs.getLong("sold"),
-                rs.getLong("delivered"), OrderFacts.instant(rs.getTimestamp("last_sold_at"))});
+                rs.getLong("delivered"), OrderFacts.instant(rs.getTimestamp("last_sold_at")),
+                rs.getObject("shopify") == null ? null : rs.getInt("shopify")});
         });
 
         AnalyticsPeriod last90 = new AnalyticsPeriod(today.minusDays(RETURNS_DAYS - 1L), today);
@@ -284,20 +380,24 @@ public class StockAnalyticsService {
             BigDecimal price = (BigDecimal) r[4], cost = (BigDecimal) r[5];
             long onHand = (Long) r[6], comingBack = (Long) r[7], sold = (Long) r[9], delivered = (Long) r[10];
             Instant lastSold = (Instant) r[11];
+            Integer shopify = (Integer) r[12];
+            boolean fromShopify = useShopify && shopify != null;
+            long stock = fromShopify ? Math.max(0, shopify) : onHand;
             BigDecimal velocity = velocity(delivered);
-            BigDecimal cover = cover(onHand, delivered);
-            BigDecimal sellThrough = AnalyticsSql.rate(sold, sold + onHand);
+            BigDecimal cover = cover(stock, delivered);
+            BigDecimal sellThrough = AnalyticsSql.rate(sold, sold + stock);
             BigDecimal age = r[8] == null ? null : ((BigDecimal) r[8]).setScale(1, RoundingMode.HALF_UP);
             ProductExtrasAnalyticsService.VariantRow ret = returns.get(id);
             long returned = ret == null ? 0 : ret.returned(), exchanged = ret == null ? 0 : ret.exchanged();
             long delivered90 = ret == null ? 0 : ret.deliveredUnits();
             boolean runningLow = delivered > 0 && cover.compareTo(RUNNING_LOW_DAYS) <= 0;
-            boolean dead = onHand > 0 && (lastSold == null || lastSold.isBefore(deadBefore));
+            boolean dead = stock > 0 && (lastSold == null || lastSold.isBefore(deadBefore));
             boolean atCost = cost != null;
-            BigDecimal value = money(BigDecimal.valueOf(onHand).multiply(atCost ? cost : price == null ? BigDecimal.ZERO : price));
+            BigDecimal value = money(BigDecimal.valueOf(stock).multiply(atCost ? cost : price == null ? BigDecimal.ZERO : price));
             out.add(new VariantStock(id, (String) r[1], (String) r[2], (String) r[3], onHand, comingBack, velocity,
                 cover, sellThrough, age, lastSold, sold, delivered, AnalyticsSql.rate(returned + exchanged, delivered90),
-                returned, exchanged, reasons.get(id), runningLow, dead, value, atCost));
+                returned, exchanged, reasons.get(id), runningLow, dead, value, atCost, shopify, stock,
+                fromShopify ? "shopify" : "pieces"));
         }
         return out;
     }
@@ -320,8 +420,9 @@ public class StockAnalyticsService {
     public Variants variants(String sort, String filter, int limit) {
         UUID tid = TenantContext.require();
         Instant now = clock.instant();
-        if (!hasPieces(tid)) return new Variants(false, now, sort, filter, 0, List.of());
-        List<VariantStock> all = new ArrayList<>(loadVariants(tid, now));
+        Trust trust = trust(tid, now);
+        if ("none".equals(trust.level())) return new Variants(false, now, "none", "pieces", sort, filter, 0, List.of());
+        List<VariantStock> all = new ArrayList<>(loadVariants(tid, now, trust.low()));
         if ("running_low".equals(filter)) all.removeIf(v -> !v.runningLow());
         if ("dead_stock".equals(filter)) all.removeIf(v -> !v.deadStock());
         Comparator<VariantStock> byName = Comparator.comparing(VariantStock::productTitle, Comparator.nullsLast(Comparator.naturalOrder()))
@@ -329,7 +430,7 @@ public class StockAnalyticsService {
             .thenComparing(v -> v.variantId().toString());
         Comparator<VariantStock> c = switch (sort) {
             case "daysOfCover" -> Comparator.comparing(VariantStock::daysOfCover, Comparator.nullsLast(Comparator.naturalOrder()));
-            case "onHand" -> Comparator.comparingLong(VariantStock::onHand).reversed();
+            case "onHand" -> Comparator.comparingLong(VariantStock::stockUsed).reversed();
             case "age" -> Comparator.comparing(VariantStock::avgPieceAgeDays, Comparator.nullsLast(Comparator.reverseOrder()));
             case "sellThrough" -> Comparator.comparing(VariantStock::sellThrough, Comparator.nullsLast(Comparator.reverseOrder()));
             case "cash" -> Comparator.comparing(VariantStock::stockValue).reversed();
@@ -337,7 +438,8 @@ public class StockAnalyticsService {
             default -> Comparator.comparing(VariantStock::velocityPerDay).reversed();
         };
         all.sort(c.thenComparing(byName));
-        return new Variants(true, now, sort, filter, all.size(), List.copyOf(all.subList(0, Math.min(limit, all.size()))));
+        return new Variants(true, now, trust.level(), trust.low() ? "shopify" : "pieces", sort, filter, all.size(),
+            List.copyOf(all.subList(0, Math.min(limit, all.size()))));
     }
 
     // ── /stock/restock ──────────────────────────────────────────────────────
@@ -347,23 +449,27 @@ public class StockAnalyticsService {
         UUID tid = TenantContext.require();
         Instant now = clock.instant();
         Settings s = settingsOf(tid);
-        if (!hasPieces(tid)) return new Restock(false, now, s.supplierLeadDays(), s.coverDays(), VELOCITY_DAYS, List.of());
+        Trust trust = trust(tid, now);
+        if ("none".equals(trust.level())) {
+            return new Restock(false, now, "none", "pieces", s.supplierLeadDays(), s.coverDays(), VELOCITY_DAYS, List.of());
+        }
         Map<UUID, BigDecimal> costs = new HashMap<>();
         jdbc.query("SELECT id, unit_cost FROM variants WHERE tenant_id = ? AND unit_cost IS NOT NULL",
             rs -> { costs.put(rs.getObject("id", UUID.class), rs.getBigDecimal("unit_cost")); }, tid);
         List<RestockItem> items = new ArrayList<>();
-        for (VariantStock v : loadVariants(tid, now)) {
-            long units = suggestedUnits(v.deliveredUnits30(), s.supplierLeadDays() + s.coverDays(), v.onHand(), v.comingBack());
+        for (VariantStock v : loadVariants(tid, now, trust.low())) {
+            long units = suggestedUnits(v.deliveredUnits30(), s.supplierLeadDays() + s.coverDays(), v.stockUsed(), v.comingBack());
             if (units <= 0) continue;
             BigDecimal cost = costs.get(v.variantId());
             items.add(new RestockItem(v.variantId(), v.productTitle(), v.variantTitle(), v.sku(), v.velocityPerDay(),
-                v.onHand(), v.comingBack(), v.daysOfCover(), units,
+                v.stockUsed(), v.comingBack(), v.daysOfCover(), units,
                 cost == null ? null : money(cost.multiply(BigDecimal.valueOf(units)))));
         }
         items.sort(Comparator.comparingLong(RestockItem::suggestedUnits).reversed()
             .thenComparing(RestockItem::velocityPerDay, Comparator.reverseOrder())
             .thenComparing(i -> i.variantId().toString()));
-        return new Restock(true, now, s.supplierLeadDays(), s.coverDays(), VELOCITY_DAYS, items);
+        return new Restock(true, now, trust.level(), trust.low() ? "shopify" : "pieces", s.supplierLeadDays(), s.coverDays(),
+            VELOCITY_DAYS, items);
     }
 
     /**

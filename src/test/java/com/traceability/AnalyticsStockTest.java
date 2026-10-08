@@ -172,6 +172,34 @@ class AnalyticsStockTest {
             return o;
         }
 
+        /** A variant whose stored Shopify payload says {@code qty} available (REST inventory_quantity). */
+        UUID shopifyVariant(String title, String price, int qty) {
+            UUID v = variant(title, price, null);
+            jdbc.update("UPDATE variants SET raw = jsonb_build_object('inventory_quantity', ?::int, 'updated_at', ?::text) WHERE id = ?",
+                        qty, "2026-10-01T10:00:00+03:00", v);
+            return v;
+        }
+
+        /**
+         * An order Bosta delivered {@code days} ago ({@code qty} units of {@code variant}); packed through
+         * Traced = "allocation" (a packed allocation of a piece), "event" (a piece event on the order) or null.
+         */
+        UUID bostaDelivered(UUID variant, int qty, double days, String tracedBy) {
+            UUID o = order(daysAgo(days + 1));
+            UUID oi = line(o, variant, qty);
+            UUID s = leg(o, "delivered", "Cairo", 50, daysAgo(days + 1));
+            jdbc.update("UPDATE shipments SET delivered_at = ? WHERE id = ?", Timestamp.from(daysAgo(days)), s);
+            if (tracedBy != null) {
+                String p = piece(variant, "delivered", null, days + 5);
+                if ("allocation".equals(tracedBy)) {
+                    jdbc.update("INSERT INTO allocations (tenant_id, order_item_id, piece_id, status) VALUES (?, ?, ?, 'packed')", id, oi, p);
+                } else {
+                    event(p, "packed", "with_courier", o, s, daysAgo(days + 0.5));
+                }
+            }
+            return o;
+        }
+
         String token(String role) {
             UUID u = UUID.randomUUID();
             jdbc.update("INSERT INTO users (id, tenant_id, name, email, password_hash, role) VALUES (?, ?, 'U', ?, 'x', ?::user_role)",
@@ -525,6 +553,123 @@ class AnalyticsStockTest {
         assertThat(list(a, "skus")).extracting(s -> s.get("variantId")).containsExactly(top.get(0).toString());
         assertThat(dec(list(a, "skus").get(0), "daysOfCover")).isEqualByComparingTo("4.0");
         assertThat(a.get("amount")).isNull();
+    }
+
+    // ── stock trust ──────────────────────────────────────────────────────────
+
+    @Test
+    void trust_high_packedThroughTracedAndCountsAgree_piecesAreTheSource() {
+        T t = new T("S4-TrustHigh");
+        UUID a = t.shopifyVariant("A", "100", 5);
+        t.pieces(a, 5, 10);
+        for (int i = 0; i < 10; i++) t.bostaDelivered(a, 3, 2 + i, i < 5 ? "allocation" : i < 9 ? "event" : null);  // 9 of 10
+        t.bostaDelivered(a, 1, 40, null);                    // delivered 40 days ago: outside the window
+
+        Map<String, Object> trust = m(ok(t, "/api/v1/analytics/stock/summary"), "trust");
+        assertThat(trust.get("level")).isEqualTo("high");
+        assertThat(dec(trust, "packedThroughTracedPct")).isEqualByComparingTo("0.9");
+        assertThat(n(trust, "bostaDeliveredOrders30")).isEqualTo(10);
+        assertThat(n(trust, "packedThroughTraced30")).isEqualTo(9);
+        assertThat(n(trust, "tracedAvailableTotal")).isEqualTo(5);
+        assertThat(n(trust, "shopifyAvailableTotal")).isEqualTo(5);
+        assertThat(n(trust, "variantsWithMismatch")).isZero();
+        assertThat(dec(trust, "mismatchShare")).isEqualByComparingTo("0");
+        assertThat((String) trust.get("shopifySource")).startsWith("variants.shopify_inventory_quantity");
+        assertThat(trust.get("shopifyFigureNewest")).isNotNull();
+
+        Map<String, Object> vs = ok(t, "/api/v1/analytics/stock/variants");
+        assertThat(vs).containsEntry("trustLevel", "high").containsEntry("stockSource", "pieces");
+        Map<String, Object> v = list(vs, "variants").get(0);
+        assertThat(v).containsEntry("stockSource", "pieces").containsEntry("shopifyAvailable", 5).containsEntry("stockUsed", 5);
+        assertThat(ok(t, "/api/v1/analytics/stock/restock")).containsEntry("stockSource", "pieces");
+        assertThat(ok(t, "/api/v1/analytics/stock/summary").get("lowTrust")).isEqualTo(false);
+    }
+
+    @Test
+    void trust_low_shopifyFigureDrivesCoverRestockDeadStockAndTheAlert_piecesFlagged() {
+        T t = new T("S4-TrustLow");
+        UUID stale = t.shopifyVariant("Stale", "100", 3);         // 100 pieces "in warehouse", Shopify says 3
+        t.pieces(stale, 100, 20);
+        UUID noFigure = t.variant("NoFigure", "100", null);       // no Shopify figure → pieces
+        t.pieces(noFigure, 2, 20);
+        UUID onlyShopify = t.shopifyVariant("OnlyShopify", "80", 7);   // no pieces, no sales → dead stock in Shopify
+        for (int i = 0; i < 5; i++) {
+            t.bostaDelivered(stale, 6, 2 + i, i == 0 ? "event" : null);
+            t.bostaDelivered(noFigure, 6, 2 + i, i == 0 ? "allocation" : null);
+        }                                                         // 2 of 10 packed through Traced → low
+
+        Map<String, Object> s = ok(t, "/api/v1/analytics/stock/summary");
+        Map<String, Object> trust = m(s, "trust");
+        assertThat(trust.get("level")).isEqualTo("low");
+        assertThat(dec(trust, "packedThroughTracedPct")).isEqualByComparingTo("0.2");
+        assertThat(n(trust, "variantsCompared")).isEqualTo(1);     // only Stale has pieces AND a figure
+        assertThat(n(trust, "variantsWithoutShopifyFigure")).isEqualTo(1);
+        assertThat(n(trust, "tracedAvailableTotal")).isEqualTo(100);
+        assertThat(n(trust, "shopifyAvailableTotal")).isEqualTo(3);
+        assertThat(n(trust, "mismatchUnits")).isEqualTo(97);
+        assertThat(dec(trust, "mismatchShare")).isEqualByComparingTo("32.3333");
+        assertThat(s.get("lowTrust")).isEqualTo(true);
+        assertThat(n(s, "inWarehouse")).isEqualTo(102);            // piece figures stay on pieces, flagged
+
+        Map<String, Object> vs = ok(t, "/api/v1/analytics/stock/variants");
+        assertThat(vs).containsEntry("trustLevel", "low").containsEntry("stockSource", "shopify");
+        Map<String, Map<String, Object>> v = byVariant(vs);
+        Map<String, Object> st = v.get(stale.toString());
+        assertThat(st).containsEntry("stockSource", "shopify").containsEntry("onHand", 100).containsEntry("stockUsed", 3)
+            .containsEntry("runningLow", true);
+        assertThat(dec(st, "daysOfCover")).isEqualByComparingTo("3.0");           // 3 ÷ 1 a day (pieces: 100 days)
+        Map<String, Object> nf = v.get(noFigure.toString());
+        assertThat(nf).containsEntry("stockSource", "pieces").containsEntry("stockUsed", 2);
+        assertThat(dec(nf, "daysOfCover")).isEqualByComparingTo("2.0");
+        Map<String, Object> os = v.get(onlyShopify.toString());
+        assertThat(os).containsEntry("deadStock", true).containsEntry("onHand", 0).containsEntry("stockUsed", 7);
+        assertThat(dec(os, "stockValue")).isEqualByComparingTo("560.00");
+
+        Map<String, Object> r = ok(t, "/api/v1/analytics/stock/restock");
+        assertThat(r).containsEntry("stockSource", "shopify");
+        Map<String, Object> ri = list(r, "items").stream().filter(i -> stale.toString().equals(i.get("variantId"))).findFirst().orElseThrow();
+        assertThat(n(ri, "suggestedUnits")).isEqualTo(53);                        // 56 − 3 Shopify (pieces would say 0)
+
+        Map<String, Object> alert = list(ok(t, "/api/v1/analytics/alerts?period=30d"), "alerts").stream()
+            .filter(x -> "sells_out_soon".equals(x.get("key"))).findFirst().orElseThrow();
+        assertThat(list(alert, "skus")).extracting(x -> x.get("variantId"), x -> x.get("stockSource"))
+            .containsExactly(org.assertj.core.groups.Tuple.tuple(noFigure.toString(), "pieces"),
+                             org.assertj.core.groups.Tuple.tuple(stale.toString(), "shopify"));
+    }
+
+    @Test
+    void trust_mismatchMath_tenPercentIsStillHigh_overIsLow_oversoldCountsAsZero() {
+        T ok10 = new T("S4-Mismatch10");
+        UUID a = ok10.shopifyVariant("A", "100", 10);
+        ok10.pieces(a, 11, 5);                                    // |11 − 10| / 10 = 10 % → high
+        UUID oversold = ok10.shopifyVariant("Oversold", "100", -3);   // Shopify −3 counts as 0: no mismatch with 0 pieces available
+        ok10.piece(oversold, "damaged", ok10.main, 5);
+        for (int i = 0; i < 5; i++) ok10.bostaDelivered(a, 1, 2 + i, "event");
+        Map<String, Object> t1 = m(ok(ok10, "/api/v1/analytics/stock/summary"), "trust");
+        assertThat(t1.get("level")).isEqualTo("high");
+        assertThat(dec(t1, "mismatchShare")).isEqualByComparingTo("0.1");
+        assertThat(n(t1, "variantsWithMismatch")).isEqualTo(1);
+        assertThat(n(t1, "shopifyAvailableTotal")).isEqualTo(10);
+
+        T over = new T("S4-Mismatch20");
+        UUID b = over.shopifyVariant("B", "100", 10);
+        over.pieces(b, 12, 5);                                    // 20 % → low, even fully packed through Traced
+        for (int i = 0; i < 5; i++) over.bostaDelivered(b, 1, 2 + i, "event");
+        Map<String, Object> t2 = m(ok(over, "/api/v1/analytics/stock/summary"), "trust");
+        assertThat(dec(t2, "packedThroughTracedPct")).isEqualByComparingTo("1");
+        assertThat(t2.get("level")).isEqualTo("low");
+
+        T quiet = new T("S4-NoDeliveries");                       // pieces but no Bosta deliveries: can't verify → low
+        quiet.pieces(quiet.shopifyVariant("Q", "100", 4), 4, 5);
+        Map<String, Object> t3 = m(ok(quiet, "/api/v1/analytics/stock/summary"), "trust");
+        assertThat(t3.get("packedThroughTracedPct")).isNull();
+        assertThat(t3.get("level")).isEqualTo("low");
+
+        T none = new T("S4-NoPiecesTrust");
+        Map<String, Object> s4 = ok(none, "/api/v1/analytics/stock/summary");
+        assertThat(m(s4, "trust").get("level")).isEqualTo("none");
+        assertThat(s4.get("lowTrust")).isEqualTo(false);
+        assertThat(ok(none, "/api/v1/analytics/stock/variants")).containsEntry("trustLevel", "none");
     }
 
     // ── roles + isolation ────────────────────────────────────────────────────
