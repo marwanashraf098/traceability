@@ -440,6 +440,21 @@ class AnalyticsB1Test {
     }
 
     @Test
+    void zeroCycle_neverOverridesTheOutcome_aRefusedOrderStaysLostAtZero() {
+        T t = new T("B1-ZeroLost");
+        UUID v = t.variant("S");
+        O refused = t.order(Instant.now().minus(Duration.ofDays(10)));
+        t.line(refused, v, 1);
+        Leg l = t.leg(refused, "forward", "returned", RTO_ZERO);       // settled for 0, no cashout
+        Map<String, Object> row = list(ok(t, "/api/v1/analytics/orders?" + last(30)), "orders").get(0);
+        assertThat(row.get("name")).isEqualTo(refused.number());
+        assertThat(row.get("financialStatus")).isEqualTo("lost");      // Lost wins over the zero cycle's "paid"
+        assertThat(dec(row, "netToYou")).isEqualByComparingTo("0.00"); // −fees, and Bosta charged 0
+        assertThat(dec(row, "bostaFees")).isEqualByComparingTo("0.00");
+        assertThat(l).isNotNull();
+    }
+
+    @Test
     void v150_putsZeroCyclesMarkedUnresolvedBackToDeposited_andNothingElse() throws Exception {
         T t = new T("B1-V150");
         Leg zero = t.leg(t.order(daysAgo(70)), "forward", "returned", RTO_ZERO);
