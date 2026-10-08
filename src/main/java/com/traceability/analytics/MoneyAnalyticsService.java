@@ -186,7 +186,7 @@ public class MoneyAnalyticsService {
                   AND """ + SettlementSql.POST_FLOOR;
 
     /** Awaiting payout, deposited: Bosta settled the leg into the wallet, no payout yet. */
-    static final String AWAITING_DEPOSITED = " (s.settlement_status = 'deposited') ";
+    static final String AWAITING_DEPOSITED = " (s.settlement_status = 'deposited' AND NOT " + SettlementSql.zeroCycle("s") + ") ";
 
     /** Awaiting payout, not settled yet: a delivered forward leg with no cash cycle. */
     static final String AWAITING_UNSETTLED =
@@ -415,12 +415,27 @@ public class MoneyAnalyticsService {
             dec(r, "c_coll"), dec(r, "c_ins"), dec(r, "c_flex"), dec(r, "c_promo").negate(), dec(r, "c_vat"));
         long delivered = lng(r, "delivered_n");
 
-        // Payout lag: legs whose payout date is in the period.
-        Map<String, Object> lag = jdbc.queryForMap(
-            "SELECT AVG(s.cashout_date - (s.deposited_at AT TIME ZONE 'Africa/Cairo')::date) AS lag, COUNT(*) AS n " +
-            "FROM shipments s WHERE s.tenant_id = ? AND s.provider = 'bosta' AND s.settlement_status = 'paid' " +
-            "  AND s.deposited_at IS NOT NULL AND s.cashout_date >= ? AND s.cashout_date <= ?",
-            tid, Date.valueOf(period.from()), Date.valueOf(period.to()));
+        // Payout lag (SettlementSql.medianPayoutLag — the cash forecast's definition): legs whose
+        // payout date is in the period.
+        Map<String, Object> lag = jdbc.query(
+            "SELECT " + SettlementSql.medianPayoutLag("s") + " AS lag, COUNT(*) AS n " +
+            "FROM shipments s" + SettlementSql.floorJoin("s") +
+            "WHERE s.tenant_id = ? AND s.provider = 'bosta' AND " + SettlementSql.payoutLagLeg("s") +
+            "  AND s.cashout_date >= ? AND s.cashout_date <= ? AND " + SettlementSql.POST_FLOOR,
+            ps -> {
+                ps.setArray(1, ps.getConnection().createArrayOf("text", overrides.shopDomains()));
+                ps.setArray(2, ps.getConnection().createArrayOf("text", overrides.days()));
+                ps.setObject(3, tid);
+                ps.setDate(4, Date.valueOf(period.from()));
+                ps.setDate(5, Date.valueOf(period.to()));
+            },
+            rs -> {
+                rs.next();
+                Map<String, Object> m = new java.util.HashMap<>();
+                m.put("lag", rs.getObject("lag"));
+                m.put("n", rs.getLong("n"));
+                return m;
+            });
         BigDecimal lagDays = lag.get("lag") == null ? null
             : new BigDecimal(lag.get("lag").toString()).setScale(1, RoundingMode.HALF_UP);
 
@@ -569,7 +584,8 @@ public class MoneyAnalyticsService {
                 money(rs.getBigDecimal("deposited_amt")), rs.getLong("days")));
 
         Long unresolved = jdbc.queryForObject(
-            "SELECT COUNT(*) FROM shipments WHERE tenant_id = ? AND settlement_status = 'unresolved'", Long.class, tid);
+            "SELECT COUNT(*) FROM shipments s WHERE s.tenant_id = ? AND s.settlement_status = 'unresolved' " +
+            "AND NOT " + SettlementSql.zeroCycle("s"), Long.class, tid);
         return new Stuck(now, never, withBosta, notPaid, weekday, unresolved == null ? 0 : unresolved);
     }
 

@@ -1,4 +1,4 @@
--- V150 — returns restock → Shopify (2026-10-08 diagnosis, Issue 3).
+-- V151 — returns restock → Shopify (2026-10-08 diagnosis, Issue 3).
 --
 -- 1. Two new claim statuses for the restock (+1, trigger 'return_inspection') path — both are
 --    recorded instead of the old silent, row-less skip:
@@ -11,7 +11,7 @@
 --    The double-count guard and the restocked_twice detector count a restock against its order
 --    with it; it survives every reclaim (the claim's ON CONFLICT never touches it).
 -- 3. Restock trigger_id shape: '<piece_id>:<restock_event_id>' (one claim per restock, like
---    hold_enter), or the bare piece_id of a claim made before V150 / for a piece with no restock
+--    hold_enter), or the bare piece_id of a claim made before V151 / for a piece with no restock
 --    event. Piece ids never contain ':'.
 -- 4. shopify_refund_restocked_units(raw, variant_gid) — the ONE definition of "units of this variant
 --    the merchant restocked through Shopify refunds on this order", read from the stored REST order

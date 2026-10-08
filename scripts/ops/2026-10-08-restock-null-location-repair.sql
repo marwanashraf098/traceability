@@ -17,7 +17,7 @@
 --
 --   Shopify +1 — one per buggy restock that happened AT/AFTER the tenant's main warehouse was linked
 --             to Shopify (locations.shopify_synced_at; restocks before that are the seed's business —
---             see the shortfall report). Each is first run through the double-count guard (V150's
+--             see the shortfall report). Each is first run through the double-count guard (V151's
 --             shopify_refund_restocked_units against Traced restocks already counted for the same
 --             order + variant, in restock order): a unit the merchant already restocked through a
 --             Shopify refund is recorded 'skipped_shopify_restocked'; every other one is queued as a
@@ -33,7 +33,7 @@
 -- Run as the database owner (postgres) with psql. Dry run by default (ROLLBACK):
 --   psql "<conn>" -v ON_ERROR_STOP=1 -f scripts/ops/2026-10-08-restock-null-location-repair.sql
 --   psql "<conn>" -v ON_ERROR_STOP=1 -v commit=yes -f scripts/ops/2026-10-08-restock-null-location-repair.sql
--- Deploy V150 first (the claim statuses, source_order_id and the guard function come from it).
+-- Deploy V151 first (the claim statuses, source_order_id and the guard function come from it).
 -- =============================================================================================
 
 \set ON_ERROR_STOP on

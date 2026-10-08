@@ -574,7 +574,7 @@ public class ShopifyInventoryService {
      * Trigger 2 (+1 per restock). Three things beyond a plain increment (2026-10-08):
      *   - key: trigger_id = piece_id + ':' + restock_event_id (from the piece's newest 'restocked'
      *     event), so a piece returned and restocked again claims its own row — like hold_enter.
-     *     A piece with no such event (a claim made before V150) keeps the bare piece_id.
+     *     A piece with no such event (a claim made before V151) keeps the bare piece_id.
      *   - a non-fulfillment restock location is recorded ('skipped_not_fulfillment_location',
      *     WARN), never a silent, row-less skip.
      *   - the double-count guard: while the order's Shopify refunds restocked more units of this
