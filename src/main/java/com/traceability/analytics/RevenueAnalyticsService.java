@@ -168,10 +168,15 @@ public class RevenueAnalyticsService {
      * shipping province mapped to the Bosta city of that name; else Unknown.
      */
     static String[] governorate(OrderFacts.Order o, OrderFacts.Cities cities) {
-        String id = o.cityId();
-        String fallbackName = o.cityName();
-        if (id == null && o.provinceCode() != null) {
-            String bostaName = MoneyAnalyticsService.PROVINCE_TO_BOSTA_CITY.get(o.provinceCode().trim().toUpperCase(Locale.ROOT));
+        return governorate(o.cityId(), o.cityName(), o.provinceCode(), cities);
+    }
+
+    /** {@link #governorate(OrderFacts.Order, OrderFacts.Cities)} from the three fields it reads. */
+    static String[] governorate(String cityId, String cityName, String provinceCode, OrderFacts.Cities cities) {
+        String id = cityId;
+        String fallbackName = cityName;
+        if (id == null && provinceCode != null) {
+            String bostaName = MoneyAnalyticsService.PROVINCE_TO_BOSTA_CITY.get(provinceCode.trim().toUpperCase(Locale.ROOT));
             if (bostaName != null) {
                 id = cities.idByName().get(bostaName.toLowerCase(Locale.ROOT));
                 fallbackName = bostaName;

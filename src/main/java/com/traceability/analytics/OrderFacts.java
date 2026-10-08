@@ -85,7 +85,9 @@ final class OrderFacts {
                    ROUND(SUM(lf.disc_auto), 2)                               AS disc_auto,
                    COUNT(*) FILTER (WHERE lf.approximate)                    AS approx_lines,
                    ROUND(COALESCE(SUM(lf.returned * lf.unit_price) FILTER (WHERE lf.outcome = 'delivered'), 0), 2)
-                                                                             AS returned_rev
+                                                                             AS returned_rev,
+                   SUM(lf.qty)                                               AS item_count,
+                   array_agg(lf.variant_id)                                  AS variant_ids
             FROM line_facts lf
             GROUP BY lf.order_id, lf.outcome, lf.city_id, lf.city, lf.shipment_id
         )

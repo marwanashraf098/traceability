@@ -72,6 +72,42 @@ final class SettlementSql {
         + " OR fo.placed_at >= COALESCE(fst.orders_ingest_from, (fov.floor_day::date::timestamp AT TIME ZONE 'Africa/Cairo'))) ";
 
     /**
+     * Delivered, not paid (slice 3 — the ONE rule, used by /money/stuck and the order finance list):
+     * the leg was deposited, its settlement was refreshed within 24 hours (so "no payout" is current
+     * news, not a stale read), and two of the tenant's payout weekdays have passed since the deposit
+     * — 14 days when the weekday isn't known. {@code now} and {@code weekday} are SQL expressions
+     * (usually "?::timestamptz" / "?::int"); they are spliced in this order: now, weekday, now, now,
+     * weekday.
+     */
+    static String deliveredNotPaid(String s, String now, String weekday) {
+        return " (" + s + ".settlement_status = 'deposited' AND " + s + ".deposited_at IS NOT NULL "
+            + " AND " + s + ".settlement_refreshed_at > " + now + " - interval '24 hours' "
+            + " AND CASE WHEN " + weekday + " IS NULL THEN " + s + ".deposited_at < " + now + " - interval '14 days' "
+            + "          ELSE (SELECT COUNT(*) FROM generate_series((" + s + ".deposited_at AT TIME ZONE 'Africa/Cairo')::date + 1, "
+            + "                                                    (" + now + " AT TIME ZONE 'Africa/Cairo')::date, "
+            + "                                                    interval '1 day') g(d) "
+            + "                WHERE EXTRACT(ISODOW FROM g.d) = " + weekday + ") >= 2 END) ";
+    }
+
+    /** Stuck with Bosta (slice 3): picked up, still moving, no status change for 7 days. */
+    static String stuckWithBosta(String s, String lastChange, String now) {
+        return " (" + s + ".internal_state IN ('with_courier', 'returning', 'exception') "
+            + " AND " + lastChange + " < " + now + " - interval '7 days') ";
+    }
+
+    /** Booked, never picked up (slice 3): a forward leg still 'created' 7 days after it was booked. */
+    static String neverPickedUp(String s, String now) {
+        return " (" + s + ".shipment_leg = 'forward' AND " + s + ".internal_state = 'created' "
+            + " AND " + s + ".created_at < " + now + " - interval '7 days') ";
+    }
+
+    /** The leg's last status change: its newest history row, else its creation. */
+    static String lastChange(String s) {
+        return " COALESCE((SELECT MAX(h.occurred_at) FROM shipment_status_history h WHERE h.shipment_id = "
+            + s + ".id), " + s + ".created_at) ";
+    }
+
+    /**
      * The tenant's payout weekday (ISO, 1 = Monday) — the weekday shared by the most distinct
      * cashout dates in the 90 days before now, when at least two dates agree; else NULL. Parameters:
      * tenant id, now (the caller's Clock — never the database clock, so tests can fix time).
