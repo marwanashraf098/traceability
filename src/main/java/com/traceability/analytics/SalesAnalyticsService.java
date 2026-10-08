@@ -431,8 +431,10 @@ public class SalesAnalyticsService {
      *              Wijha order refunded in Shopify) are reported apart in returns_on_undelivered;
      *   last_sold — lastSoldAt = MAX(placed_at) over the variant's sold lines of ALL time (post-floor,
      *              not cancelled, not an internal exchange order, quantity after the refund add-back
-     *              > 0, not cancelled in raw — the same cohort as soldLines), for the period's
-     *              variants only, from the V149 columns (no prices needed). Two more tenant ids.
+     *              > 0, not cancelled in raw — the same cohort as soldLines), from the V149 columns
+     *              (no prices needed); one hash aggregate over the tenant's lines, joined to the
+     *              period's variants (filtering by those variants first made the planner loop over
+     *              order_items per variant — 7 s on 60k orders). Two more tenant ids.
      * Only variants with a line in the period are returned.
      */
     private static final String VARIANTS_SQL = soldLines(false) + ORDER_OUTCOMES + LINE_RETURNS + """
@@ -470,7 +472,6 @@ public class SalesAnalyticsService {
             JOIN orders o ON o.id = oi.order_id
             JOIN floors f ON f.store_id = o.store_id
             WHERE oi.tenant_id = ? AND o.tenant_id = ?
-              AND oi.variant_id IN (SELECT variant_id FROM sales WHERE is_total = 0)
               AND (f.floor_at IS NULL OR o.placed_at >= f.floor_at)
               AND o.status <> 'cancelled'::order_status
               AND o.external_id NOT LIKE 'internal:exchange:%'
