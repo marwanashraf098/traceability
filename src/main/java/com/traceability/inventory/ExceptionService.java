@@ -546,8 +546,20 @@ public class ExceptionService {
             "      WHERE er.tenant_id = sia.tenant_id " +
             "        AND er.exception_type = 'void_hold_sync_failed' " +
             "        AND er.subject_key = 'void_hold_sync_failed:' || sia.trigger_type || ':' || sia.trigger_id) " +
-            "ORDER BY sia.created_at ASC",
-            tid);
+            // Issue 2: a transfer's send-time decrement (TransferShopifySync) that failed definitively
+            // with no attempts left, or got no confirmed answer — Traced and Shopify may have diverged.
+            "UNION ALL " +
+            "SELECT 'void_hold_sync_failed', 'CRITICAL', 'transfer', 'transfer_out', y.transfer_id::text, y.error, " +
+            "       NULL, NULL, y.status, y.created_at, " +
+            "       'void_hold_sync_failed:transfer_out:' || y.transfer_id " +
+            "FROM transfer_shopify_syncs y " +
+            "WHERE y.tenant_id = ? " +
+            "  AND (y.status = 'failed_ambiguous' OR (y.status = 'failed' AND y.attempt_count >= " + TransferShopifySync.MAX_ATTEMPTS + ")) " +
+            "  AND NOT EXISTS (SELECT 1 FROM exception_resolutions er WHERE er.tenant_id = y.tenant_id " +
+            "        AND er.exception_type = 'void_hold_sync_failed' " +
+            "        AND er.subject_key = 'void_hold_sync_failed:transfer_out:' || y.transfer_id) " +
+            "ORDER BY occurred_at ASC",
+            tid, tid);
     }
 
     /**
@@ -1231,6 +1243,19 @@ public class ExceptionService {
                 item.put("actionUrl", ordersUrl(item));
             }
             case "void_hold_sync_failed" -> {
+                if ("transfer_out".equals(item.get("trigger_type"))) {
+                    // Issue 2: a transfer's main-warehouse decrement didn't confirm.
+                    boolean ambiguous = "failed_ambiguous".equals(item.get("live_status"));
+                    item.put("descriptionEn", ambiguous
+                        ? "Shopify didn't confirm the stock decrease for a transfer — check the main warehouse quantities in Shopify before doing anything"
+                        : "Shopify refused the stock decrease for a transfer — Traced and Shopify inventory have diverged");
+                    item.put("descriptionAr", ambiguous
+                        ? "لم يؤكد Shopify خفض المخزون لعملية نقل — راجع كميات المستودع الرئيسي في Shopify قبل أي إجراء"
+                        : "رفض Shopify خفض المخزون لعملية نقل — اختلف مخزون Traced عن Shopify");
+                    item.put("suggestedAction", "verify_shopify_inventory");
+                    item.put("actionUrl", "/transfers/" + item.get("trigger_id"));
+                    return;
+                }
                 String b = str(item, "barcode");
                 String triggerType = str(item, "trigger_type");
                 String label = "hold_enter".equals(triggerType) ? "hold"

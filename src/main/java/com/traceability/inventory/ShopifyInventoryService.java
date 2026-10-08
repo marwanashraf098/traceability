@@ -274,6 +274,55 @@ public class ShopifyInventoryService {
         return CompletableFuture.completedFuture(null);
     }
 
+    // ── Trigger: a piece back at the main warehouse from a transfer (+1) — Issue 2 ──
+
+    /**
+     * Called once TransferService.reconcileScanBack()'s "came back good" transition has committed:
+     * the piece is available at the main warehouse again. +1 there through the existing increment
+     * path (trigger 'transfer_return', key piece_id:transfer_id) — ONLY when its departure left
+     * Shopify's count (TransferShopifySync.RETURN_COUNTED_SQL: the outbound transfer's decrement was
+     * pushed for it, or it left before the initial seed). Mode 'leave', a skipped / failed / ambiguous
+     * send → Shopify still counts it → no write.
+     */
+    @Async
+    public CompletableFuture<Void> onTransferReturn(UUID tenantId, String pieceId, UUID transferId, UUID locationId) {
+        TenantContext.runAs(tenantId, () -> {
+            try {
+                processTransferReturn(pieceId, transferId, locationId);
+            } catch (Exception e) {
+                log.error("Shopify inventory sync failed: trigger=transfer_return piece={}", pieceId, e);
+            }
+        });
+        return CompletableFuture.completedFuture(null);
+    }
+
+    private void processTransferReturn(String pieceId, UUID transferId, UUID locationId) {
+        UUID tenantId = TenantContext.require();
+        // The transfer that took the piece OUT of the main warehouse: this round trip itself, or —
+        // for a bring-back — the latest permanent move that relocated it.
+        Boolean counted = tx.execute(st -> jdbc.query(
+            "SELECT " + TransferShopifySync.RETURN_COUNTED_SQL + " AS counted " +
+            "FROM transfers t_in " +
+            "JOIN transfer_pieces tp_out ON tp_out.piece_id = ? AND tp_out.tenant_id = t_in.tenant_id " +
+            "JOIN transfers t_out ON t_out.id = tp_out.transfer_id " +
+            "WHERE t_in.id = ? AND t_in.tenant_id = ? " +
+            "  AND ((t_in.transfer_mode = 'round_trip' AND t_out.id = t_in.id) " +
+            "    OR (t_in.transfer_mode = 'relocate_return' AND t_out.transfer_mode = 'relocate_out' " +
+            "        AND tp_out.outcome = 'relocated' AND t_out.created_at <= t_in.created_at)) " +
+            "  AND (tp_out.from_location_id IS NULL OR tp_out.from_location_id = ?) " +
+            "ORDER BY t_out.created_at DESC, t_out.id DESC LIMIT 1",
+            rs -> rs.next() && rs.getBoolean("counted"),
+            pieceId, transferId, tenantId, locationId));
+        if (!Boolean.TRUE.equals(counted)) {
+            log.info("Transfer return +1 not needed — Shopify still counts piece {} (transfer {})", pieceId, transferId);
+            return;
+        }
+        UUID variantId = resolveVariantForPiece(pieceId);
+        if (variantId == null) return;
+        applyIncrementAdjustment(UUID.randomUUID(), variantId, locationId, 1,
+            "transfer_return", pieceId + ":" + transferId, "movement_received");
+    }
+
     // ── Trigger: Step 5a exchange dispatch (named decrement set — CLAUDE.md) ──
 
     /**
@@ -1026,6 +1075,7 @@ public class ShopifyInventoryService {
             case "receiving_session" -> "received";
             case "hold_exit" -> "hold_exit";
             case "stock_take_found" -> "correction";
+            case "transfer_return" -> "movement_received";
             default -> "restock";
         };
     }
@@ -1041,7 +1091,7 @@ public class ShopifyInventoryService {
         UUID tenantId = TenantContext.require();
         if (!IncrementRecoveryRules.INCREMENT_TRIGGERS.contains(triggerType)) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
-                "triggerType must be receiving_session, return_inspection, hold_exit or stock_take_found");
+                "triggerType must be receiving_session, return_inspection, hold_exit, stock_take_found or transfer_return");
         }
         List<FailedClaim> rows = tx.execute(st -> jdbc.query(
             FAILED_CLAIM_COLUMNS + "WHERE sia.tenant_id = ? AND sia.trigger_type = ? AND sia.trigger_id = ? " +

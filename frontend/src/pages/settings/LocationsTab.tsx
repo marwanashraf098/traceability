@@ -12,6 +12,9 @@ interface Location {
   name: string
   type: string
   is_default: boolean
+  is_fulfillment?: boolean
+  /** Issue 2: while stock sits here (non-main locations only). */
+  shopify_sync_mode?: 'remove' | 'leave'
   shopify_location_id: string | null
   shopify_sync_status: 'unsynced' | 'pending' | 'linked' | 'error'
   shopify_sync_error: string | null
@@ -100,6 +103,51 @@ function CreateForm({ onCreated }: { onCreated: () => void }) {
   )
 }
 
+/**
+ * Issue 2 — "While stock is here": Remove from Shopify (default) / Leave Shopify unchanged. A
+ * transfer snapshots this when it is sent, so a change applies to the next transfer.
+ */
+function SyncModeSelect({ loc, onSaved }: { loc: Location; onSaved: (mode: 'remove' | 'leave') => void }) {
+  const { t } = useTranslation()
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState(false)
+  if (loc.is_fulfillment) {
+    return <span className="text-xs text-muted">{t('locations.syncMode.mainNa')}</span>
+  }
+  async function change(mode: 'remove' | 'leave') {
+    setBusy(true); setErr(false)
+    try {
+      const res = await fetch(`/api/v1/locations/${loc.id}/shopify-sync-mode`, {
+        method: 'PUT',
+        headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode }),
+      })
+      if (!res.ok) throw new Error(res.statusText)
+      onSaved(mode)
+    } catch {
+      setErr(true)
+    } finally {
+      setBusy(false)
+    }
+  }
+  return (
+    <div>
+      <select
+        className="input text-small"
+        aria-label={t('locations.syncMode.label')}
+        value={loc.shopify_sync_mode ?? 'remove'}
+        disabled={busy}
+        onChange={e => change(e.target.value as 'remove' | 'leave')}
+        data-testid={`sync-mode-${loc.id}`}
+      >
+        <option value="remove">{t('locations.syncMode.remove')}</option>
+        <option value="leave">{t('locations.syncMode.leave')}</option>
+      </select>
+      {err && <p className="text-xs text-danger mt-0.5">{t('common.error')}</p>}
+    </div>
+  )
+}
+
 export default function LocationsTab() {
   const { t } = useTranslation()
   const [locations, setLocations] = useState<Location[]>([])
@@ -146,6 +194,7 @@ export default function LocationsTab() {
                 <th className="tbl-header text-start">{t('locations.col.shopifySync')}</th>
                 <th className="tbl-header text-start">{t('locations.col.shopifyId')}</th>
                 <th className="tbl-header text-start">{t('locations.col.syncedAt')}</th>
+                <th className="tbl-header text-start">{t('locations.syncMode.label')}</th>
               </tr>
             </thead>
             <tbody>
@@ -175,10 +224,17 @@ export default function LocationsTab() {
                       ? new Date(loc.shopify_synced_at).toLocaleString()
                       : t('common.na')}
                   </td>
+                  <td className="tbl-cell">
+                    <SyncModeSelect loc={loc} onSaved={mode =>
+                      setLocations(prev => prev.map(l => l.id === loc.id ? { ...l, shopify_sync_mode: mode } : l))} />
+                  </td>
                 </tr>
               ))}
             </tbody>
           </table>
+          <p className="px-4 py-3 text-xs text-muted border-t border-line" data-testid="sync-mode-help">
+            {t('locations.syncMode.help')}
+          </p>
         </div>
       )}
     </div>

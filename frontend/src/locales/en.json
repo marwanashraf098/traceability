@@ -2392,6 +2392,13 @@
       "pending": "Pending",
       "linked": "Linked",
       "error": "Error"
+    },
+    "syncMode": {
+      "label": "While stock is here",
+      "remove": "Remove from Shopify",
+      "leave": "Leave Shopify unchanged",
+      "help": "When you send stock to a location set to “Remove from Shopify”, Traced lowers your main warehouse in Shopify and adds it back when it returns.",
+      "mainNa": "Always counted in Shopify"
     }
   },
   "shopifyInventory": {

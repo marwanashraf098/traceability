@@ -430,6 +430,29 @@ public interface ShopifyGateway {
                                String locationGid, int negativeDelta, String referenceDocumentUri,
                                String idempotencyKey);
 
+    /**
+     * Issue 2 (2026-10-08) — the FIFTH member of the named set of sanctioned decrement methods
+     * (CLAUDE.md, FR-21 §7 extension; approved by Marawan 2026-10-08). Pieces leave the main
+     * warehouse on a transfer whose destination is in 'remove' mode: ALL the transfer's per-variant
+     * negative deltas go in ONE inventoryAdjustQuantities mutation at the Traced Main Warehouse GID
+     * (one changes list, one location, one call, one outcome). Same self-contained, single-HTTP-attempt
+     * shape as {@link #pushStockTakeWriteOff}; deliberately shares no code with any other decrement
+     * method (no general-purpose decrement helper — CLAUDE.md invariant).
+     *
+     * @param deltas               one entry per variant; every negativeDelta must be < 0
+     * @param locationGid          the tenant's linked main warehouse (is_fulfillment) — the only
+     *                             locationId this call may ever target
+     * @param referenceDocumentUri traced://transfer/{transfer_id} — trace + manual-verify anchor
+     * @param idempotencyKey       the mutation-level @idempotent key — deterministic from the transfer
+     * @throws IllegalArgumentException if deltas is empty or any delta is >= 0 — checked BEFORE any
+     *                                   network call
+     * @throws ShopifyException          definitive rejection — nothing was applied
+     * @throws ShopifyAmbiguousException no confirmed response reached this process — caller must NOT
+     *                                    auto-retry
+     */
+    void pushTransferOut(String shopDomain, String token, List<InventoryDelta> deltas,
+                         String locationGid, String referenceDocumentUri, String idempotencyKey);
+
     /** One inventoryItem's current "available" quantity at a location (Part C reconcile read). */
     record InventoryLevel(String inventoryItemGid, int available) {}
 

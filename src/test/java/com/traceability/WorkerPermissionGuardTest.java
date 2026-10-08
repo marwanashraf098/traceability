@@ -128,6 +128,7 @@ class WorkerPermissionGuardTest {
         jdbc.update("DELETE FROM order_items WHERE tenant_id = ?", tenantId);
         jdbc.update("DELETE FROM shipments WHERE tenant_id = ?", tenantId);
         jdbc.update("DELETE FROM orders WHERE tenant_id = ?", tenantId);
+        jdbc.update("DELETE FROM transfer_shopify_syncs WHERE tenant_id = ?", tenantId);
         jdbc.update("DELETE FROM transfers WHERE tenant_id = ?", tenantId);
         jdbc.update("DELETE FROM stock_take_sessions WHERE tenant_id = ?", tenantId);
         jdbc.update("DELETE FROM shopify_inventory_adjustments WHERE tenant_id = ?", tenantId);
