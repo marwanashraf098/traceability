@@ -26,9 +26,9 @@ public final class IncrementRecoveryRules {
     private IncrementRecoveryRules() {}
 
     public static final List<String> INCREMENT_TRIGGERS =
-        List.of("receiving_session", "return_inspection", "hold_exit", "stock_take_found");
+        List.of("receiving_session", "return_inspection", "hold_exit", "stock_take_found", "transfer_return");
     public static final String INCREMENT_TRIGGERS_SQL =
-        "('receiving_session', 'return_inspection', 'hold_exit', 'stock_take_found')";
+        "('receiving_session', 'return_inspection', 'hold_exit', 'stock_take_found', 'transfer_return')";
 
     public static final int MAX_ATTEMPTS = 5;
     public static final int AMBIGUOUS_WINDOW_HOURS = 20;
