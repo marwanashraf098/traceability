@@ -15,7 +15,6 @@ import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.security.SecureRandom;
-import java.sql.Timestamp;
 import java.time.Instant;
 import java.util.Base64;
 import java.util.UUID;
@@ -503,17 +502,13 @@ public class ShopifyOAuthService {
      * or roll back together. A concurrent install of the same shop fails here with 23505.
      */
     public UUID insertStoreInCurrentTransaction(UUID tenantId, String shop, ShopifyGateway.TokenResponse tokens) {
-        Timestamp accessExpiresAt  = Timestamp.from(Instant.now().plusSeconds(tokens.expiresIn()));
-        Timestamp refreshExpiresAt = tokens.refreshToken() != null
-            ? Timestamp.from(Instant.now().plusSeconds(tokens.refreshTokenExpiresIn())) : null;
+        ShopifyStoredToken t = ShopifyStoredToken.of(shop, tokens, encryptionService);   // refuses a non-expiring token
         return jdbc.query(INSERT_STORE,
             rs -> rs.next() ? rs.getObject("id", UUID.class) : null,
             tenantId, shop,
-            encryptionService.encrypt(tokens.accessToken()),
-            accessExpiresAt,
-            tokens.refreshToken() != null ? encryptionService.encrypt(tokens.refreshToken()) : null,
-            refreshExpiresAt,
-            tokens.grantedScopes());
+            t.accessTokenEncrypted(), t.accessTokenExpiresAt(),
+            t.refreshTokenEncrypted(), t.refreshTokenExpiresAt(),
+            t.scopes());
     }
 
     /** After the signup transaction committed: first import + webhook registration. */
@@ -556,19 +551,10 @@ public class ShopifyOAuthService {
     }
 
     private UUID insertStore(UUID tenantId, String shop, ShopifyGateway.TokenResponse tokens) {
+        ShopifyStoredToken.requireExpiring(shop, tokens);   // before any side effect
         shopifyGateway.forgetOrderPiiTier(shop);   // Build C: a (re)connect starts from the token's real scopes
-        Timestamp accessExpiresAt  = Timestamp.from(Instant.now().plusSeconds(tokens.expiresIn()));
-        Timestamp refreshExpiresAt = tokens.refreshToken() != null
-            ? Timestamp.from(Instant.now().plusSeconds(tokens.refreshTokenExpiresIn())) : null;
         return TenantContext.runAs(tenantId, () -> tx.execute(s ->
-                jdbc.query(INSERT_STORE,
-                    rs -> rs.next() ? rs.getObject("id", UUID.class) : null,
-                    tenantId, shop,
-                    encryptionService.encrypt(tokens.accessToken()),
-                    accessExpiresAt,
-                    tokens.refreshToken() != null ? encryptionService.encrypt(tokens.refreshToken()) : null,
-                    refreshExpiresAt,
-                    tokens.grantedScopes())));
+                insertStoreInCurrentTransaction(tenantId, shop, tokens)));
     }
 
     /**
@@ -581,6 +567,8 @@ public class ShopifyOAuthService {
      * scope cache is dropped so the next import asks for the tier the new token allows.
      */
     private UUID updateStoreToken(UUID tenantId, String shop, ShopifyGateway.TokenResponse tokens) {
+        // Refuse a non-expiring token BEFORE the legacy cleanup deletes anything or the row is touched.
+        ShopifyStoredToken t = ShopifyStoredToken.of(shop, tokens, encryptionService);
         LegacyWebhookCleanup.Result cleanup;
         try {
             cleanup = legacyWebhookCleanup.run(tenantId, shop);
@@ -589,17 +577,12 @@ public class ShopifyOAuthService {
             cleanup = new LegacyWebhookCleanup.Result("custom_app_cc", "failed", "unexpected error: " + e.getClass().getSimpleName());
         }
         final LegacyWebhookCleanup.Result c = cleanup;
-        Timestamp accessExpiresAt  = Timestamp.from(Instant.now().plusSeconds(tokens.expiresIn()));
-        Timestamp refreshExpiresAt = tokens.refreshToken() != null
-            ? Timestamp.from(Instant.now().plusSeconds(tokens.refreshTokenExpiresIn())) : null;
         UUID storeId = TenantContext.runAs(tenantId, () -> tx.execute(s ->
                 jdbc.query(UPDATE_STORE_TOKEN,
                     rs -> rs.next() ? rs.getObject("id", UUID.class) : null,
-                    encryptionService.encrypt(tokens.accessToken()),
-                    accessExpiresAt,
-                    tokens.refreshToken() != null ? encryptionService.encrypt(tokens.refreshToken()) : null,
-                    refreshExpiresAt,
-                    tokens.grantedScopes(),
+                    t.accessTokenEncrypted(), t.accessTokenExpiresAt(),
+                    t.refreshTokenEncrypted(), t.refreshTokenExpiresAt(),
+                    t.scopes(),
                     c.previousType(), c.previousType(), c.status(), c.detail(), c.status(),
                     shop, tenantId)));
         shopifyGateway.forgetOrderPiiTier(shop);
@@ -656,12 +639,13 @@ public class ShopifyOAuthService {
     public boolean acquireOrRefreshViaSessionToken(UUID tenantId, String shopDomain, String rawSessionToken) {
         // Step 1: freshness check — needs TenantContext for RLS
         record StoreSnap(UUID id, Instant expiresAt, String status, String importStatus,
-                         String accessTokenScopes, String connectionType) {}
+                         String accessTokenScopes, String connectionType, boolean hasRefreshToken) {}
         StoreSnap snap;
         snap = TenantContext.runAs(tenantId, () -> tx.execute(s ->
                 jdbc.query(
                     "SELECT id, access_token_expires_at, status::text, import_status::text, " +
-                    "       access_token_scopes, connection_type " +
+                    "       access_token_scopes, connection_type, " +
+                    "       (refresh_token_encrypted IS NOT NULL) AS has_refresh " +
                     "FROM stores WHERE tenant_id = ? AND shop_domain = ?",
                     rs -> rs.next() ? new StoreSnap(
                         rs.getObject("id", UUID.class),
@@ -670,7 +654,8 @@ public class ShopifyOAuthService {
                         rs.getString("status"),
                         rs.getString("import_status"),
                         rs.getString("access_token_scopes"),
-                        rs.getString("connection_type")) : null,
+                        rs.getString("connection_type"),
+                        rs.getBoolean("has_refresh")) : null,
                     tenantId, shopDomain)));
 
         if (snap == null) {
@@ -714,7 +699,15 @@ public class ShopifyOAuthService {
         Instant threshold = Instant.now().plusSeconds(600); // 10 min
         boolean timeFresh  = snap.expiresAt() != null && snap.expiresAt().isAfter(threshold);
         boolean scopesFresh = scopesMatch(snap.accessTokenScopes(), this.scopes);
-        if (timeFresh && scopesFresh && "connected".equals(snap.status())) {
+        // Repair (fix/embedded-expiring-token): an OAuth row with no refresh token holds a NON-expiring
+        // token (Build D's exchange omitted expiring=1). Shopify rejects it, and it can never be refreshed,
+        // so it is never "fresh": always re-exchange — the next embedded open stores an expiring pair.
+        boolean repairing = !snap.hasRefreshToken();
+        if (repairing) {
+            log.warn("Token exchange forced: shop={} tenant={} has no refresh token (non-expiring) — repairing",
+                     shopDomain, tenantId);
+        }
+        if (timeFresh && scopesFresh && !repairing && "connected".equals(snap.status())) {
             log.debug("Token exchange skipped: token fresh and scopes match for shop={}", shopDomain);
             return true;
         }
@@ -737,7 +730,8 @@ public class ShopifyOAuthService {
         // stuck state: every exchange returned 204 success but never re-enqueued.
         // Both jobs are idempotent (webhooks: Shopify rejects duplicate topics silently;
         // import: ON CONFLICT DO UPDATE throughout), so duplicate enqueues are safe.
-        boolean shouldEnqueue = "needs_reauth".equals(snap.status())
+        boolean shouldEnqueue = repairing   // the import failed / will fail on the old token — run it again
+                || "needs_reauth".equals(snap.status())
                 || ("connected".equals(snap.status())
                     && ("idle".equals(snap.importStatus())
                         || "failed".equals(snap.importStatus())
@@ -752,18 +746,14 @@ public class ShopifyOAuthService {
     }
 
     private UUID applyExchangedToken(UUID tenantId, String shop, ShopifyGateway.TokenResponse tokens) {
+        ShopifyStoredToken t = ShopifyStoredToken.of(shop, tokens, encryptionService);   // refuses a non-expiring token
         shopifyGateway.forgetOrderPiiTier(shop);   // Build C: new token, possibly new scopes
-        Timestamp accessExpiresAt  = Timestamp.from(Instant.now().plusSeconds(tokens.expiresIn()));
-        Timestamp refreshExpiresAt = tokens.refreshToken() != null
-            ? Timestamp.from(Instant.now().plusSeconds(tokens.refreshTokenExpiresIn())) : null;
         return TenantContext.runAs(tenantId, () -> tx.execute(s ->
                 jdbc.query(EXCHANGE_SESSION_TOKEN_UPDATE,
                     rs -> rs.next() ? rs.getObject("id", UUID.class) : null,
-                    encryptionService.encrypt(tokens.accessToken()),
-                    accessExpiresAt,
-                    tokens.refreshToken() != null ? encryptionService.encrypt(tokens.refreshToken()) : null,
-                    refreshExpiresAt,
-                    tokens.grantedScopes(),
+                    t.accessTokenEncrypted(), t.accessTokenExpiresAt(),
+                    t.refreshTokenEncrypted(), t.refreshTokenExpiresAt(),
+                    t.scopes(),
                     shop, tenantId)));
     }
 

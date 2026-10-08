@@ -146,6 +146,9 @@ class ShopifyTokenExchangeTest {
         // Scopes must match the app's declared scopes so the scope check also passes.
         setStoreState(storeA, "connected", "completed",
                 Timestamp.from(Instant.now().plusSeconds(1200)), appScopes);
+        // A healthy expiring store has a refresh token — without one the row holds a non-expiring token,
+        // which the embedded open now always re-exchanges (fix/embedded-expiring-token repair).
+        jdbc.update("UPDATE stores SET refresh_token_encrypted = 'enc-refresh' WHERE id = ?", storeA);
 
         ResponseEntity<String> r = post("/api/v1/embedded/token-exchange", tokenA());
 

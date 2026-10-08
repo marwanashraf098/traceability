@@ -7,6 +7,7 @@ import com.traceability.identity.MagicLinkService;
 import com.traceability.identity.model.SignupRequest;
 import com.traceability.integrations.shopify.ShopifyGateway;
 import com.traceability.integrations.shopify.ShopifyOAuthService;
+import com.traceability.integrations.shopify.ShopifyStoredToken;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -82,6 +83,7 @@ public class EmbeddedOnboardingService {
         String phone = authService.validateSignup(req);
 
         ShopifyGateway.TokenResponse tokens = gateway.exchangeSessionToken(shop, sessionToken);
+        ShopifyStoredToken.requireExpiring(shop, tokens);   // before the account exists — nothing created otherwise
 
         AuthService.CreatedAccount account;
         try {
