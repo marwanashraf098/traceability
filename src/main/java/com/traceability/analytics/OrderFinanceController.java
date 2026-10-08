@@ -119,7 +119,7 @@ public class OrderFinanceController {
         response.setHeader("X-Export-Truncated", String.valueOf(truncated));
         response.setHeader("Cache-Control", "no-store");
         Writer w = new OutputStreamWriter(response.getOutputStream(), StandardCharsets.UTF_8);
-        w.write('﻿');
+        w.write('\uFEFF');                                  // byte-order mark: Excel reads UTF-8 Arabic
         w.write(String.join(",", CSV_COLUMNS));
         w.write("\r\n");
         int n = 0;
