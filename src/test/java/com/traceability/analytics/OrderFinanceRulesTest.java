@@ -75,4 +75,18 @@ class OrderFinanceRulesTest {
         assertThat(OrderFinanceController.text("line\nbreak")).isEqualTo("\"line\nbreak\"");
         assertThat(OrderFinanceController.DEFAULT_MAX_EXPORT_ROWS).isEqualTo(50_000);
     }
+
+    /**
+     * The export's audit INSERT needs the tenant set inside a transaction (app_user's RLS WITH
+     * CHECK on audit_log); without one the real app answers 500 (seen on the app_user bench).
+     */
+    @Test
+    void export_runsInOneReadWriteTransaction() throws Exception {
+        java.lang.reflect.Method m = OrderFinanceService.class.getMethod("export", AnalyticsPeriod.class,
+            OrderFinanceService.Filters.class, java.util.UUID.class, int.class);
+        org.springframework.transaction.annotation.Transactional tx =
+            m.getAnnotation(org.springframework.transaction.annotation.Transactional.class);
+        assertThat(tx).isNotNull();
+        assertThat(tx.readOnly()).isFalse();
+    }
 }

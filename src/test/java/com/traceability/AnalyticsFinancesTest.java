@@ -1,6 +1,7 @@
 package com.traceability;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.traceability.account.AuditService;
 import com.traceability.analytics.AnalyticsFloorOverrides;
 import com.traceability.analytics.AnalyticsPeriod;
 import com.traceability.analytics.OrderFinanceService;
@@ -784,7 +785,9 @@ class AnalyticsFinancesTest {
         TenantAwareDataSource appUserDs = new TenantAwareDataSource(
                 new DriverManagerDataSource(POSTGRES.getJdbcUrl(), "app_user", "testpw"));
         TransactionTemplate tx = new TransactionTemplate(new DataSourceTransactionManager(appUserDs));
-        OrderFinanceService svc = new OrderFinanceService(new JdbcTemplate(appUserDs), Clock.system(CAIRO), floorOverrides);
+        JdbcTemplate appJdbc = new JdbcTemplate(appUserDs);
+        OrderFinanceService svc = new OrderFinanceService(appJdbc, Clock.system(CAIRO), floorOverrides,
+                new AuditService(appJdbc, new com.fasterxml.jackson.databind.ObjectMapper()));
         AnalyticsPeriod p = new AnalyticsPeriod(today().minusDays(39), today());
         OrderFinanceService.Filters none = new OrderFinanceService.Filters(null, null, null, null);
 
@@ -796,6 +799,13 @@ class AnalyticsFinancesTest {
         assertThat(aPage.orders()).extracting(OrderFinanceService.OrderRow::name).containsExactly(ao.number());
         assertThat(aPage.orders().get(0).financialStatus()).isEqualTo("paid");
         assertThat(tx.execute(s -> svc.variantOrders(vb)).orders()).isEmpty();          // B's variant, A's context
+
+        // The export's audit row is written as app_user under RLS (WITH CHECK needs the tenant set
+        // inside the transaction) — a postgres-connected test can't see this.
+        OrderFinanceService.Export export = tx.execute(s -> svc.export(p, none, a.owner, 10));
+        assertThat(export.rows()).extracting(OrderFinanceService.OrderRow::name).containsExactly(ao.number());
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM audit_log WHERE tenant_id = ? AND action = 'analytics_orders_export'",
+            Long.class, a.id)).isEqualTo(1);
 
         TenantContext.clear();
         assertThatThrownBy(() -> tx.execute(s -> svc.orders(p, none, 0, 50))).isInstanceOf(RuntimeException.class);

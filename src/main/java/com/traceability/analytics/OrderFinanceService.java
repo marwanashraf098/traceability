@@ -1,5 +1,6 @@
 package com.traceability.analytics;
 
+import com.traceability.account.AuditService;
 import com.traceability.tenancy.TenantContext;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
@@ -173,11 +174,13 @@ public class OrderFinanceService {
     private final JdbcTemplate jdbc;
     private final Clock clock;
     private final AnalyticsFloorOverrides overrides;
+    private final AuditService audit;
 
-    public OrderFinanceService(JdbcTemplate jdbc, Clock clock, AnalyticsFloorOverrides overrides) {
+    public OrderFinanceService(JdbcTemplate jdbc, Clock clock, AnalyticsFloorOverrides overrides, AuditService audit) {
         this.jdbc = jdbc;
         this.clock = clock;
         this.overrides = overrides;
+        this.audit = audit;
     }
 
     public LocalDate today() {
@@ -204,16 +207,35 @@ public class OrderFinanceService {
             List.copyOf(matching.subList(from, to)));
     }
 
-    /** Every matching order, newest first — the CSV export (the caller caps the count). */
-    @Transactional(readOnly = true)
-    public List<OrderRow> all(AnalyticsPeriod period, Filters f) {
+    public record Export(List<OrderRow> rows, boolean truncated) {}
+
+    /**
+     * The CSV export's rows (every matching order, newest first, at most {@code maxRows}) and its
+     * audit_log row — in ONE read-write transaction, so the audit INSERT runs with the tenant set
+     * (app_user's RLS WITH CHECK) and is written exactly when the rows were read. The audit carries
+     * the filters only (q as present / absent) and the row count, never row data.
+     */
+    @Transactional
+    public Export export(AnalyticsPeriod period, Filters f, UUID actorUserId, int maxRows) {
         List<OrderRow> out = new ArrayList<>();
         for (Row r : load(period, clock.instant())) {
             if (f.matchesExceptStatus(r) && (f.status() == null || f.status().equals(r.out.financialStatus()))) {
                 out.add(r.out);
             }
         }
-        return out;
+        boolean truncated = out.size() > maxRows;
+        List<OrderRow> rows = truncated ? List.copyOf(out.subList(0, maxRows)) : out;
+        Map<String, Object> meta = new LinkedHashMap<>();
+        meta.put("from", period.from().toString());
+        meta.put("to", period.to().toString());
+        if (f.status() != null) meta.put("status", f.status());
+        if (f.governorate() != null) meta.put("governorate", f.governorate());
+        if (f.variantId() != null) meta.put("variantId", f.variantId().toString());
+        meta.put("q", f.q() != null);
+        meta.put("rows", rows.size());
+        meta.put("truncated", truncated);
+        audit.record(actorUserId, "analytics_orders_export", null, null, meta);
+        return new Export(rows, truncated);
     }
 
     // ── /variants/{id}/orders ───────────────────────────────────────────────

@@ -1,6 +1,5 @@
 package com.traceability.analytics;
 
-import com.traceability.account.AuditService;
 import com.traceability.identity.CustomUserDetails;
 import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.beans.factory.annotation.Value;
@@ -16,9 +15,7 @@ import java.io.Writer;
 import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.time.format.DateTimeFormatter;
-import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Map;
 import java.util.UUID;
 
 /**
@@ -39,14 +36,12 @@ public class OrderFinanceController {
 
     private final OrderFinanceService finance;
     private final AnalyticsAlertsService alerts;
-    private final AuditService audit;
     private final int maxExportRows;
 
-    public OrderFinanceController(OrderFinanceService finance, AnalyticsAlertsService alerts, AuditService audit,
+    public OrderFinanceController(OrderFinanceService finance, AnalyticsAlertsService alerts,
                                   @Value("${analytics.orders.export-max-rows:" + DEFAULT_MAX_EXPORT_ROWS + "}") int maxExportRows) {
         this.finance = finance;
         this.alerts = alerts;
-        this.audit = audit;
         this.maxExportRows = maxExportRows;
     }
 
@@ -98,20 +93,9 @@ public class OrderFinanceController {
                        HttpServletResponse response) throws IOException {
         AnalyticsPeriod p = period(period, from, to);
         OrderFinanceService.Filters f = filters(status, governorate, variantId, q);
-        List<OrderFinanceService.OrderRow> rows = finance.all(p, f);
-        boolean truncated = rows.size() > maxExportRows;
-        if (truncated) rows = rows.subList(0, maxExportRows);
-
-        Map<String, Object> meta = new LinkedHashMap<>();
-        meta.put("from", p.from().toString());
-        meta.put("to", p.to().toString());
-        if (f.status() != null) meta.put("status", f.status());
-        if (f.governorate() != null) meta.put("governorate", f.governorate());
-        if (f.variantId() != null) meta.put("variantId", f.variantId().toString());
-        meta.put("q", f.q() != null);
-        meta.put("rows", rows.size());
-        meta.put("truncated", truncated);
-        audit.record(principal.userId(), "analytics_orders_export", null, null, meta);
+        OrderFinanceService.Export export = finance.export(p, f, principal.userId(), maxExportRows);
+        List<OrderFinanceService.OrderRow> rows = export.rows();
+        boolean truncated = export.truncated();
 
         response.setContentType("text/csv; charset=UTF-8");
         response.setHeader("Content-Disposition",

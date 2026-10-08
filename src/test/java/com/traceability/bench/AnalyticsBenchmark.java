@@ -85,12 +85,16 @@ class AnalyticsBenchmark {
                                        "revenue/summary", "revenue/breakdown?by=channel", "revenue/breakdown?by=payment",
                                        "revenue/breakdown?by=governorate", "revenue/breakdown?by=productType",
                                        "revenue/discounts", "revenue/heatmap", "delivery/summary",
-                                       "delivery/failure-reasons", "products/extras")) {
+                                       "delivery/failure-reasons", "products/extras",
+                                       "orders?size=50", "orders?size=50&status=awaiting_payout",
+                                       "orders?size=50&q=1234", "orders/export.csv", "alerts")) {
                 String url = "/api/v1/analytics/" + path + (path.contains("?") ? "&" : "?") + q;
                 endpoints.add(new String[] {path + " [" + p.getKey() + "]", url});
             }
         }
         endpoints.add(new String[] {"money/stuck", "/api/v1/analytics/money/stuck"});
+        endpoints.add(new String[] {"cash-forecast", "/api/v1/analytics/cash-forecast"});
+        endpoints.add(new String[] {"variants/{id}/orders", "/api/v1/analytics/variants/b2000000-0000-0000-0000-000000000007/orders"});
         String onlyEndpoints = System.getProperty("bench.only");       // e.g. sales/variants,revenue/discounts
         if (onlyEndpoints != null) {
             List<String> keep = List.of(onlyEndpoints.split(","));
