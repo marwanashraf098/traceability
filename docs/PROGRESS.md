@@ -4,6 +4,27 @@
 
 ## Current state
 
+**Analytics slice 6 — customers since connect, backend only (2026-10-08, branch `analytics/s6-customers`, merged to
+main; NOT deployed). Migration V155 (`orders.customer_created_at`, renumbered from V154 — the other session took it).**
+- **Endpoints (`CustomerAnalyticsService`, owner-only):** `/customers/summary?period&compare` (customers who ordered;
+  new / existing / returning / unknown; repeat purchase rate = of them, 2+ orders since connect up to the period end;
+  median days between orders; orders without a customer; per class orders / booked / realized / success rate —
+  `byClass` is the Revenue page's "New vs returning" source), `/customers/top` (≤ 50, realized since connect),
+  `/customers/by-governorate` (repeat rate, < 10 customers → "Other"), `/customers/cohorts` (first-order month, % ordering
+  again in months 1–3; current month partial, future null), `/customers/watch` (2+ refused COD orders, "Ask for
+  prepayment", `blocked` from the blocklist — read-only, matched in SQL with `CustomerSubject.canonicalPhoneSql`).
+- **Rules:** identity = `orders.customer_key`, NEVER returned (can hold a phone); `customerRef` = HMAC-SHA256 of tenant +
+  key under **`ANALYTICS_REF_SECRET`** (`analytics.ref-secret`, ≥ 32 bytes; the app refuses to start without it —
+  **set it in prod `.env` before deploying**; changing it changes every ref). Display name = first name + last initial.
+  Connect = the store's analytics floor, else its first ingested order (Jumi). Order class: existing (customer created
+  before connect) / new (first order since connect) / unknown (first order, no created date) / returning (later
+  orders); a customer counts in the class of their first order in the period.
+- **The Snouts' keys (13 of 118 orders):** the OAuth-upgrade import (2026-10-07 15:06) re-upserted 111 orders with
+  GraphQL payloads (`UPSERT_ORDER` replaces raw); the 99 oldest (≤ 2026-09-06) were fetched at the reduced PII tier (no
+  customer / shipping keys at all), the 12 newest with the customer. Every one of their REST webhook payloads (with
+  customer + phone) is still in `shopify_webhook_events`. Not fixed (ingest); options in the report.
+- Tests: `AnalyticsCustomersTest` (10), RlsCoverageTest +5.
+
 **Issue 1 — Scan returns: untracked parcel items, one row per unit (2026-10-08, branch `feat/untracked-parcel-units` off
 main 591c915; NOT merged, NOT deployed). Migration V154.** Design signed off 2026-10-08 (`design/returns-parcel-states`
 3 / 3b / 3c / 6 / 8, committed separately as 96b68bd with the .v1 originals and renders).
