@@ -41,7 +41,7 @@ public record CustomerSubject(
     static final String GID_PREFIX = "gid://shopify/Order/";
 
     /** SQL canonical phone of a text expression — the same rule as ShipmentLinkService.normalizePhone's 11-digit form. */
-    static String canonicalPhoneSql(String expr) {
+    public static String canonicalPhoneSql(String expr) {
         return "('0' || RIGHT(REGEXP_REPLACE(COALESCE(" + expr + ", ''), '[^0-9]', '', 'g'), 10))";
     }
 

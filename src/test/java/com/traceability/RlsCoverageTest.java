@@ -174,6 +174,13 @@ class RlsCoverageTest {
             "/api/v1/analytics/settings",
             "/api/v1/analytics/pieces/{id}/history",
             "/api/v1/analytics/variants/{id}/pieces",
+            // Analytics slice 6 (owner only) — analyticsCustomers_reflectSeededOrder below; app_user isolation
+            // in AnalyticsCustomersTest
+            "/api/v1/analytics/customers/summary",
+            "/api/v1/analytics/customers/top",
+            "/api/v1/analytics/customers/by-governorate",
+            "/api/v1/analytics/customers/cohorts",
+            "/api/v1/analytics/customers/watch",
             "/api/v1/inventory/stock",
             "/api/v1/inventory/variants/{variantId}/breakdown",
             "/api/v1/inventory/breakdown",
@@ -1750,6 +1757,36 @@ class RlsCoverageTest {
         }
 
         jdbc.update("DELETE FROM pieces WHERE id = ?", pieceId);
+    }
+
+    @Test
+    void analyticsCustomers_reflectSeededOrder() {
+        UUID orderId = UUID.randomUUID();
+        jdbc.update(
+                "INSERT INTO orders (id, tenant_id, store_id, external_id, number, status, " +
+                "    payment_method, placed_at, on_hold, raw, customer_name) " +
+                "VALUES (?, ?, ?, 'EXT-CVG-S6', '#CVG-S6', 'new'::order_status, 'cod', now(), false, " +
+                "    '{\"customer\":{\"id\":777001,\"created_at\":\"2026-01-01T00:00:00Z\"}}'::jsonb, 'Cover Age')",
+                orderId, tenantId, storeId);
+        jdbc.update(
+                "INSERT INTO order_items (id, tenant_id, order_id, variant_id, quantity, raw) " +
+                "VALUES (gen_random_uuid(), ?, ?, ?, 1, '{\"price\":\"150.00\",\"quantity\":1}'::jsonb)",
+                tenantId, orderId, variantId);
+
+        ResponseEntity<Map> summary = get("/api/v1/analytics/customers/summary?period=today", Map.class);
+        assertThat(summary.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(((Number) ((Map<?, ?>) summary.getBody().get("current")).get("customersWhoOrdered")).longValue())
+                .isGreaterThanOrEqualTo(1);
+        ResponseEntity<Map> top = get("/api/v1/analytics/customers/top", Map.class);
+        assertThat(top.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(((Number) top.getBody().get("totalCustomers")).longValue()).isGreaterThanOrEqualTo(1);
+        for (String path : List.of("/api/v1/analytics/customers/by-governorate", "/api/v1/analytics/customers/cohorts",
+                                   "/api/v1/analytics/customers/watch")) {
+            assertThat(get(path, Map.class).getStatusCode()).as(path).isEqualTo(HttpStatus.OK);
+        }
+
+        jdbc.update("DELETE FROM order_items WHERE order_id = ?", orderId);
+        jdbc.update("DELETE FROM orders WHERE id = ?", orderId);
     }
 
     @Test
