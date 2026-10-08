@@ -118,7 +118,7 @@ class ShopifyHttpGateway implements ShopifyGateway {
                 pageInfo { hasNextPage endCursor }
                 edges {
                   node {
-                    id name createdAt
+                    id name createdAt updatedAt
                     lineItems(first: 100) {
                       edges {
                         node {
