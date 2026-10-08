@@ -280,6 +280,28 @@ class AnalyticsCustomersTest {
         }
     }
 
+    @Test
+    void customerRef_isAnHmac_stableAcrossCalls_differentPerTenant_secretRequired() throws Exception {
+        T a = new T("S6-RefA");
+        T b = new T("S6-RefB");
+        C same = new C(SEQ.incrementAndGet(), "Same Person", "01055500000", daysAgo(100));   // same Shopify id in both stores
+        a.order(same, 5, "delivered");
+        b.order(same, 5, "delivered");
+        String refA = (String) list(ok(a, "/api/v1/analytics/customers/top"), "customers").get(0).get("customerRef");
+        assertThat(list(ok(a, "/api/v1/analytics/customers/top"), "customers").get(0).get("customerRef")).isEqualTo(refA);
+        String refB = (String) list(ok(b, "/api/v1/analytics/customers/top"), "customers").get(0).get("customerRef");
+        assertThat(refB).isNotEqualTo(refA).hasSize(16);
+        // Not a plain hash of tenant + key (guessable phones / ids would reverse it).
+        byte[] plain = java.security.MessageDigest.getInstance("SHA-256")
+            .digest((a.id + ":c:" + same.id()).getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        assertThat(refA).isNotEqualTo(java.util.HexFormat.of().formatHex(plain, 0, 8));
+
+        for (String bad : new String[] {null, "", "too-short-secret"}) {
+            assertThatThrownBy(() -> new CustomerAnalyticsService(jdbc, Clock.system(CAIRO), floorOverrides, bad))
+                .isInstanceOf(IllegalStateException.class).hasMessageContaining("ANALYTICS_REF_SECRET");
+        }
+    }
+
     // ── by governorate ───────────────────────────────────────────────────────
 
     @Test
@@ -437,7 +459,8 @@ class AnalyticsCustomersTest {
         TenantAwareDataSource appUserDs = new TenantAwareDataSource(
                 new DriverManagerDataSource(POSTGRES.getJdbcUrl(), "app_user", "testpw"));
         TransactionTemplate tx = new TransactionTemplate(new DataSourceTransactionManager(appUserDs));
-        CustomerAnalyticsService svc = new CustomerAnalyticsService(new JdbcTemplate(appUserDs), Clock.system(CAIRO), floorOverrides);
+        CustomerAnalyticsService svc = new CustomerAnalyticsService(new JdbcTemplate(appUserDs), Clock.system(CAIRO), floorOverrides,
+            "test-analytics-ref-secret-at-least-32-bytes!!");
         AnalyticsPeriod p = new AnalyticsPeriod(LocalDate.now(CAIRO).minusDays(29), LocalDate.now(CAIRO));
 
         TenantContext.set(a.id);

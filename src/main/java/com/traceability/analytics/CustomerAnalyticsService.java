@@ -10,8 +10,8 @@ import org.springframework.transaction.annotation.Transactional;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
+import javax.crypto.Mac;
+import javax.crypto.spec.SecretKeySpec;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.time.Clock;
@@ -27,8 +27,10 @@ import static com.traceability.analytics.AnalyticsSql.rate;
  * Analytics slice 6 — customers, since the store connected to Traced. Owner-only (controller).
  *
  * Identity = orders.customer_key (V149: 'c:' + Shopify customer id, else 'p:' + canonical phone).
- * The key is NEVER returned (it can hold a phone number): responses carry {@code customerRef}, an
- * opaque hash of tenant + key, and the display name (first name + last initial). No phone ever
+ * The key is NEVER returned (it can hold a phone number): responses carry {@code customerRef} — an
+ * HMAC-SHA256 of tenant + key under a server-side secret (analytics.ref-secret, env
+ * ANALYTICS_REF_SECRET, ≥ 32 bytes; the app refuses to start without it), never a plain hash,
+ * because phone numbers are guessable — and the display name (first name + last initial). No phone ever
  * leaves SQL — the blocklist match ({@code blocked}) is computed in the statement with the
  * blocklist's own canonical form (CustomerSubject.canonicalPhoneSql) and read-only.
  *
@@ -156,11 +158,18 @@ public class CustomerAnalyticsService {
     private final JdbcTemplate jdbc;
     private final Clock clock;
     private final AnalyticsFloorOverrides overrides;
+    private final byte[] refSecret;
 
-    public CustomerAnalyticsService(JdbcTemplate jdbc, Clock clock, AnalyticsFloorOverrides overrides) {
+    public CustomerAnalyticsService(JdbcTemplate jdbc, Clock clock, AnalyticsFloorOverrides overrides,
+                                    @org.springframework.beans.factory.annotation.Value("${analytics.ref-secret:}") String refSecret) {
+        if (refSecret == null || refSecret.getBytes(StandardCharsets.UTF_8).length < 32) {
+            throw new IllegalStateException(
+                "analytics.ref-secret (ANALYTICS_REF_SECRET) must be set to at least 32 bytes — it keys the customer references");
+        }
         this.jdbc = jdbc;
         this.clock = clock;
         this.overrides = overrides;
+        this.refSecret = refSecret.getBytes(StandardCharsets.UTF_8);
     }
 
     public LocalDate today() {
@@ -409,13 +418,19 @@ public class CustomerAnalyticsService {
         return new Watch(clock.instant(), WATCH_MIN_REFUSED, List.copyOf(out.subList(0, Math.min(WATCH_LIMIT, out.size()))));
     }
 
-    /** An opaque, stable reference for a customer: never the key itself (it can hold a phone). */
-    static String ref(UUID tid, String key) {
+    /**
+     * An opaque, stable reference for a customer: HMAC-SHA256(secret, tenant + ":" + key), first 8
+     * bytes as hex. Never the key itself (it can hold a phone) and never a plain hash of it (a phone
+     * number's hash is reversible by trying every number).
+     */
+    String ref(UUID tid, String key) {
         try {
-            byte[] h = MessageDigest.getInstance("SHA-256").digest((tid + ":" + key).getBytes(StandardCharsets.UTF_8));
+            Mac mac = Mac.getInstance("HmacSHA256");
+            mac.init(new SecretKeySpec(refSecret, "HmacSHA256"));
+            byte[] h = mac.doFinal((tid + ":" + key).getBytes(StandardCharsets.UTF_8));
             return HexFormat.of().formatHex(h, 0, 8);
-        } catch (NoSuchAlgorithmException e) {
-            throw new IllegalStateException(e);
+        } catch (java.security.GeneralSecurityException e) {
+            throw new IllegalStateException("HMAC-SHA256 unavailable", e);
         }
     }
 }
