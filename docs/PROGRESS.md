@@ -22,6 +22,46 @@ Migration V150.**
   2360263820, 445040939).
 - Tests: `AnalyticsB1Test` (8); approved edit to `AnalyticsMoneyTest` (payout lag 8.0 → 4.0, delivered → paid).
 
+**Fix — returns restock → Shopify + inventory location selector (2026-10-08, branch `fix/returns-restock-location-stock`
+off main ec55e09; two commits; NOT merged, NOT deployed). Migration V151. Repair script written + dry-run only (NOT executed).**
+From the same-day 4-issue diagnosis (Issues 1 and 2 — untracked RTO parcels in Scan returns, transfers → Shopify — still
+await Marawan's design / invariant decisions).
+- **Issue 3 root cause:** `Returns.tsx` sent `locationId: null` and `ReturnService.restock` wrote it into
+  `pieces.current_location_id` — every restocked piece lost its location (invisible to stock counts and the seed) and its
+  +1 was silently skipped (`isFulfillmentLocation`, info log, no row). Zero `return_inspection` rows in prod ever.
+- **3a:** restock resolves a null location to the tenant's main warehouse BEFORE the transition; none → 409
+  NO_MAIN_WAREHOUSE (logged ERROR), piece untouched. A named location must be the tenant's. Frontend sends no location.
+  A restock into a non-main location is now a recorded `skipped_not_fulfillment_location` row + WARN.
+- **3b:** restock claim key = `piece_id:restock_event_id` (uuid generated in restock, carried in the `restocked` event's
+  metadata with the order id; the async processor reads the piece's newest restocked event). A piece with no such event
+  keeps the bare piece_id (pre-V151 shape) — direct calls on fixture pieces behave as before.
+- **3c guard:** `shopify_refund_restocked_units(raw, variant_gid)` (V151, the ONE definition: Σ refund_line_items quantity
+  with restock_type return / legacy_restock for that variant). Per (order, variant): skip with
+  `skipped_shopify_restocked` while Shopify units > Traced restock claims already counted for that order+variant
+  (`source_order_id`, V151 column) — decided and claimed in ONE transaction under a per (tenant, order, variant) advisory
+  lock (`claim()` split into `claimInCurrentTx`). Late case: detector `restocked_twice` (HIGH, read-only, no decrement):
+  LEAST(applied, shopify − skipped) > 0, qty in the subject key; label + EN/AR description, action → the order.
+- **V151:** statuses skipped_shopify_restocked / skipped_not_fulfillment_location; `source_order_id` (FK, ON DELETE SET
+  NULL) + partial index; CHECK on the restock trigger_id shape; the guard function. MigrationSmokeTest 150,
+  NotTracedBackfillTest 95. (Renumbered V150 → V151 at merge: analytics B1 took V150 on origin first.)
+- **Repair script** `scripts/ops/2026-10-08-restock-null-location-repair.sql` (psql as postgres, dry run unless
+  `-v commit=yes`): Group A (in-warehouse statuses) → main warehouse with a `location_corrected` piece event (actor NULL,
+  from = to; LookupService phrase + EN/AR); Group B listed only; restocks at/after the main warehouse's Shopify link →
+  guard → `skipped_shopify_restocked` row or a `failed`/never_sent claim due now that the existing increment retry job
+  sends (the script never calls Shopify); seed shortfall report only. Idempotent (deterministic trigger_id). Tested
+  through real psql (`RestockRepairScriptTest`). **Prod dry run (read-only SQL, 2026-10-08):** Group A 12 (Snouts 9, Jumi
+  3), Group B 5 (Snouts 4, Jumi 1), +1 to queue 2 (Snouts, both 2026-10-08, guard → push), seed shortfall 6 units
+  (Snouts: 1000-YELLOW-S 1, DBWHITE-3 2, DBWHITE-4 1, SBPINK-2 1, SBPINK-3 1). Run order: deploy V151 first.
+- **Issue 4 root cause / fix:** stock + drawer counted only `available` at a location; transfer destinations hold
+  `out_on_transfer` / `transferred_out`. A non-main location now counts the three (`AT_OTHER_LOCATION_STATUSES_SQL`) as
+  "At location", available null (shown "—"); main warehouse and All locations unchanged.
+- **Tests:** ReturnRestockSyncTest (6), RestockRepairScriptTest (3), InventoryLocationStockTest (2); each revert-checked.
+  Existing tests changed (approved 2026-10-08): returnsParcelCards pc6 (body without locationId), WorkerPermissionGuardTest
+  cleanup (+ shopify_inventory_adjustments), ExchangeDispatchDecrementTest awaitTriggerCount / sumAppliedDeltas and
+  PortalExchangeBookingTest awaitTrigger / e3 sum (type-filtered, split_part on the restock key; counts unchanged).
+  Full backend run before the test edits: 2523 tests, reds = ExchangeBackfillTest (known) + exactly those 3.
+- **Next:** Marawan runs the repair (`-v commit=yes`) after V151 is deployed; reconcile the 6-unit Snouts seed shortfall
+  by hand in Shopify.
 **Analytics slice 7 — order finances, Summary alerts, cash forecast, backend only (2026-10-08, branch
 `analytics/s7-finances`, merged to main; NOT deployed). No migration.** Owner-only, same period / floor / RLS rules,
 V148/V149 columns only (no raw parsing).

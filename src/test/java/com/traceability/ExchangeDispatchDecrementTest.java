@@ -521,7 +521,7 @@ class ExchangeDispatchDecrementTest {
     private void awaitTriggerCount(String triggerType, String piece, int n) throws InterruptedException {
         for (int i = 0; i < 100; i++) {
             Integer done = jdbc.queryForObject("SELECT COUNT(*) FROM shopify_inventory_adjustments " +
-                "WHERE trigger_type = ? AND trigger_id = ? AND status <> 'pending'", Integer.class, triggerType, piece);
+                "WHERE trigger_type = ? AND split_part(trigger_id, ':', 1) = ? AND status <> 'pending'", Integer.class, triggerType, piece);
             if (done != null && done >= n) return;
             Thread.sleep(50);
         }
@@ -553,7 +553,8 @@ class ExchangeDispatchDecrementTest {
 
     private int sumAppliedDeltas(String piece) {
         return jdbc.queryForObject("SELECT COALESCE(SUM(delta), 0) FROM shopify_inventory_adjustments " +
-            "WHERE trigger_id = ? AND status = 'applied' AND trigger_type IN ('exchange_dispatch', 'return_inspection')",
-            Integer.class, piece);
+            "WHERE status = 'applied' AND ((trigger_type = 'exchange_dispatch' AND trigger_id = ?) " +
+            "  OR (trigger_type = 'return_inspection' AND split_part(trigger_id, ':', 1) = ?))",
+            Integer.class, piece, piece);
     }
 }

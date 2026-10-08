@@ -1163,7 +1163,8 @@ export interface InventoryStockVariant {
   price: number | null
   onHand: number
   committed: number | null
-  available: number
+  /** null at a location other than the main warehouse — nothing there can be picked. */
+  available: number | null
   shopifySync: ShopifySyncStatus
 }
 
@@ -1174,7 +1175,7 @@ export interface InventoryStockProduct {
   status?: string | null
   onHand: number
   committed: number | null
-  available: number
+  available: number | null
   variants: InventoryStockVariant[]
 }
 
@@ -1204,7 +1205,8 @@ export function getInventoryStock(params: {
 export interface InventoryLocationStock {
   locationId: string
   locationName: string
-  available: number
+  /** null for a location other than the main warehouse (onHand = pieces physically there). */
+  available: number | null
   onHand: number
 }
 

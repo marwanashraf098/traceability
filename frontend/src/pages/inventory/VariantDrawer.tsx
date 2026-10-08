@@ -116,7 +116,7 @@ export default function VariantDrawer({
                           {data.locations.map(loc => (
                             <tr key={loc.locationId} className="border-t border-line">
                               <td className="px-3 py-2 text-primary">{loc.locationName}</td>
-                              <td className="px-3 py-2 text-end text-muted">{loc.available.toLocaleString()}</td>
+                              <td className="px-3 py-2 text-end text-muted">{loc.available == null ? '—' : loc.available.toLocaleString()}</td>
                               <td className="px-3 py-2 text-end text-muted">{loc.onHand.toLocaleString()}</td>
                             </tr>
                           ))}

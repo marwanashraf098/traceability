@@ -72,6 +72,7 @@ const TYPE_LABELS: Record<string, { en: string; ar: string }> = {
   refund_pending_overdue:  { en: 'Refund Overdue',            ar: 'استرداد متأخر' },
   return_items_overdue:    { en: 'Return Items Late',         ar: 'منتجات مرتجعة متأخرة' },
   inventory_increment_sync_failed: { en: 'Stock Not In Shopify', ar: 'مخزون لم يصل إلى Shopify' },
+  restocked_twice:         { en: 'Restocked Twice',           ar: 'أُعيد للمخزون مرتين' },
   // Pick & Pack S4 — waybill mode
   pack_set_aside:             { en: 'Set Aside While Packing',  ar: 'وُضع جانباً أثناء التغليف' },
   pack_cancelled_after_print: { en: 'Cancelled After Print',    ar: 'أُلغي بعد الطباعة' },

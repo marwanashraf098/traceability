@@ -624,8 +624,10 @@ class PortalExchangeBookingTest {
         // The customer refused at the door: the replacement comes back and is restocked (+1).
         scanBackAndDisposition(a, replacementPiece, "restock");
         awaitTrigger("return_inspection", replacementPiece);
-        assertThat(count("SELECT COALESCE(SUM(delta), 0) FROM shopify_inventory_adjustments WHERE trigger_id = ? AND status = 'applied'",
-            replacementPiece)).as("-1 on departure, +1 on restock").isZero();
+        assertThat(count("SELECT COALESCE(SUM(delta), 0) FROM shopify_inventory_adjustments WHERE status = 'applied' " +
+            "AND ((trigger_type = 'exchange_dispatch' AND trigger_id = ?) " +
+            "  OR (trigger_type = 'return_inspection' AND split_part(trigger_id, ':', 1) = ?))",
+            replacementPiece, replacementPiece)).as("-1 on departure, +1 on restock").isZero();
 
         TenantContext.set(a.id());
         requests.close(r.id(), "exchange_failed", "Customer refused the new size", a.owner());
@@ -910,7 +912,7 @@ class PortalExchangeBookingTest {
     private void awaitTrigger(String triggerType, String piece) throws InterruptedException {
         for (int i = 0; i < 100; i++) {
             Integer done = jdbc.queryForObject("SELECT COUNT(*) FROM shopify_inventory_adjustments " +
-                "WHERE trigger_type = ? AND trigger_id = ? AND status <> 'pending'", Integer.class, triggerType, piece);
+                "WHERE trigger_type = ? AND split_part(trigger_id, ':', 1) = ? AND status <> 'pending'", Integer.class, triggerType, piece);
             if (done != null && done >= 1) return;
             Thread.sleep(50);
         }

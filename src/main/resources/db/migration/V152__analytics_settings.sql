@@ -1,4 +1,4 @@
--- V151 — Analytics slice 4: per-tenant analytics settings (restock suggestion inputs).
+-- V152 — Analytics slice 4: per-tenant analytics settings (restock suggestion inputs).
 --
 -- One row per tenant, written by the owner from Analytics (GET / PUT /api/v1/analytics/settings);
 -- a tenant with no row reads the defaults. supplier_lead_days = days from ordering stock to it

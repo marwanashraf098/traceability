@@ -39,7 +39,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 /**
  * Analytics slice 4 — stock: summary (warehouse, value at price / cost, age, excluded, pieces moved
  * 4+ times), per-variant stock health (velocity, cover, sell-through, running low, dead stock,
- * returns + exchanges), restock suggestions with the per-tenant settings (V151), piece trips, the
+ * returns + exchanges), restock suggestions with the per-tenant settings (V152), piece trips, the
  * upgraded sells-out-soon alert, roles and tenant isolation. Times relative to now.
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
@@ -721,7 +721,7 @@ class AnalyticsStockTest {
         assertThatThrownBy(() -> tx.execute(s -> svc.summary(p))).isInstanceOf(RuntimeException.class);
         Long visible = tx.execute(s -> appJdbc.queryForObject("SELECT COUNT(*) FROM analytics_settings", Long.class));
         assertThat(visible).isZero();
-        // app_user can never delete a settings row (V151 REVOKE).
+        // app_user can never delete a settings row (V152 REVOKE).
         TenantContext.set(b.id);
         assertThatThrownBy(() -> tx.execute(s -> appJdbc.update("DELETE FROM analytics_settings WHERE tenant_id = ?", b.id)))
             .isInstanceOf(RuntimeException.class);

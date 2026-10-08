@@ -50,7 +50,7 @@ import static com.traceability.analytics.AnalyticsSql.money;
  *   packedThroughTracedPct — of the orders Bosta delivered in the last 30 days (a forward Bosta leg
  *                   delivered then; internal exchange orders left out), the share with any piece
  *                   allocation or piece event;
- *   Shopify figure — variants.shopify_inventory_quantity (V152: Shopify's REST inventory_quantity,
+ *   Shopify figure — variants.shopify_inventory_quantity (V153: Shopify's REST inventory_quantity,
  *                   available summed over all locations, as of the variant's last products/*
  *                   webhook — shopify_variant_updated_at; GraphQL-imported variants have none);
  *   mismatch      — over variants with pieces AND a Shopify figure: |traced available − max(Shopify,

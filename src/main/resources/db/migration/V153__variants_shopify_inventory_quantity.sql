@@ -1,4 +1,4 @@
--- V152 — Analytics slice 4 (stock trust): the Shopify stock figure we already hold, as STORED
+-- V153 — Analytics slice 4 (stock trust): the Shopify stock figure we already hold, as STORED
 -- generated columns (the V149 rule: total functions, no read-time raw parsing).
 --
 -- variants.raw carries Shopify's REST variant `inventory_quantity` — available units summed over

@@ -168,6 +168,7 @@ Built 2026-08-02 per `docs/fr-21-stock-taking-build-spec.md`, Steps 0.5–5, per
 - [x] 22.5 [M] `reprintOutstandingLabels` — `TransferController` (`POST /api/v1/transfers/{id}/reprint-outstanding`, `OWNER`/`MANAGER`) created for this one endpoint only
 - [x] 22.6 [M] `createTransfer`/`scanOut`/`listOpen`/`getTransfer`/reconcile* endpoints + role gates (send-out `isAuthenticated()`, reconcile/close `OWNER`/`MANAGER`) + i18n (`TransferException` + `ApiExceptionHandler`) + `LookupService` phraseKeys + `RlsCoverageTest` entries
 - [x] 22.7 [M] Inventory-summary "Out on transfer / At vendor" bucket (Group A) + `sold` windowed bucket (Group B) + pick/gather/on-hand/summary exclusion tests
+- [x] 22.7a [M] Inventory location selector: a non-main location shows every piece there (available + out_on_transfer + transferred_out) as "At location", available "—"; drawer too; main warehouse unchanged (2026-10-08)
 - [x] 22.8 [M] Mode B guard (Bosta webhook + manual link on `out_on_transfer` piece → no-op, no crash) + test
 - [x] 22.9 [M] Frontend: create/send-out scan screen, consignment list, reconcile screen (Manager/Owner), relabel-print action; RTL, ar+en
 
@@ -191,6 +192,7 @@ Built 2026-08-13 on branch `overview-rebuild`, single cutover, not yet merged to
 - [x] 24.1 [M] Schema: `return_sessions` / `return_session_items` / `return_session_shipments`, RLS in-migration, `return_sessions_one_open_per_tenant` partial-unique claim-before-call [V73]
 - [x] 24.2 [M] Scan resolution: piece barcode → legal (transition to `return_pending_inspection`, item `pending`) vs. illegal-state (ours, no transition, item `unexpected=true`, mismatch-only) vs. foreign (422, no row, no ledger write); AWB → transient expected-pieces list via `return_session_shipments`, never persisted until physically piece-scanned
 - [x] 24.3 [M] Disposition: restock/damaged reuse `ReturnService.restock()`/`markDamaged()` unchanged (illegal-state rejection is free — those pieces never reach `return_pending_inspection`); mismatch never touches the ledger; damaged confirmed to fire **zero** Shopify calls (FR-17 v2 invariant — return-inspection damage was never sellable in Shopify)
+- [x] 24.3a [M] Restock never writes a NULL location (defaults to the main warehouse, 409 NO_MAIN_WAREHOUSE otherwise); restock +1 keyed per restock; Shopify-refund double-count guard + `restocked_twice` alert (V151, 2026-10-08)
 - [x] 24.4 [M] Close: blocked while any item `disposition='pending'`, 409 body names the exact blocking pieces; unblocked once every item is restocked/damaged/mismatch
 - [x] 24.5 [M] Abandon (change B, approved 2026-08-14): soft-delete only (`status='abandoned'`), **no revert** — undispositioned pieces stay at `return_pending_inspection` and resurface as unassigned; no reverse `InventoryLedger.ALLOWED` pairs, no cancel event
 - [x] 24.6 [M] Webhook coexistence: a scan of an already-`return_pending_inspection` piece adopts it (sibling-append `return_received` with the new session id, no second transition); unassigned-pending landing section defined by session relationship, not status alone (load-bearing query, every branch tested)

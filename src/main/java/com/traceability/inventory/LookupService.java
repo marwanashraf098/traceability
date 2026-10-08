@@ -54,6 +54,8 @@ public class LookupService {
         if ("voided".equals(eventType))            return "voided";
         if ("held".equals(eventType))              return "held";
         if ("unheld".equals(eventType))            return "unheld";
+        // 2026-10-08 restock repair: a location fix with no status change.
+        if ("location_corrected".equals(eventType)) return "location_corrected";
         if ("courier_update".equals(eventType)) {
             if ("delivered".equals(toStatus))                       return "courier_delivered";
             if ("with_courier".equals(toStatus))                    return "courier_picked_up";
