@@ -5,16 +5,16 @@
 ## Current state
 
 **Issue 1 — Scan returns: untracked parcel items, one row per unit (2026-10-08, branch `feat/untracked-parcel-units` off
-main 591c915; NOT merged, NOT deployed). Migration V152.** Design signed off 2026-10-08 (`design/returns-parcel-states`
+main 591c915; NOT merged, NOT deployed). Migration V154.** Design signed off 2026-10-08 (`design/returns-parcel-states`
 3 / 3b / 3c / 6 / 8, committed separately as 96b68bd with the .v1 originals and renders).
 - **Decisions (signed off):** whole-parcel "Mark parcel received" = fallback only while no unit is marked; one Return To
   Receive per sellable unit (key `unit:<intake id>`, Undo removes it); partial returns: a parcel is HANDLED once a unit is
   marked (pill "2 of 3 in" neutral vs "All 3 in"), never blocks closing, leg stamped `untracked_units_arrived`, Undo of the
   last mark reopens it; returned-to-sender = forward leg `returned` + Bosta type Return to Origin (Snouts AWB 445040939
   matches; all 197 returned forward legs in prod are RTO, both raw shapes carry type.value).
-- **V152:** `untracked_unit_intakes` (RLS + FORCE + tenant_isolation in the same migration; live-slot partial UNIQUE;
+- **V154:** `untracked_unit_intakes` (RLS + FORCE + tenant_isolation in the same migration; live-slot partial UNIQUE;
   app_user INSERT/SELECT + UPDATE of undone_at/undone_by only); `return_session_shipments.via_phone`; outcome CHECK +
-  `untracked_units_arrived`. MigrationSmokeTest 151, NotTracedBackfillTest 96.
+  `untracked_units_arrived`. MigrationSmokeTest 153, NotTracedBackfillTest 98 (renumbered V152 → V154 at merge: analytics slice 4 took V152/V153).
 - **Backend:** `UntrackedParcelUnits` (not a bean; ReturnSessionService builds it from its JdbcTemplate) — unit rows from
   `PortalService.LINE_UNTRACKED_SQL` / `UNTRACKED_CAP_SQL` (made public, single definition), mark (ON CONFLICT on the live
   slot; double tap = no-op), undo, stamping through `returnLegScanEvidenceSql`. `ShipmentLinkService`: new
@@ -29,13 +29,43 @@ main 591c915; NOT merged, NOT deployed). Migration V152.** Design signed off 202
   via-phone tag), pill / collapsed summary, guidance box (untracked / mixed / returned-to-sender), whole-parcel fallback,
   Bosta status strip; a parcel with units marked in this session stays expanded (it would otherwise collapse after the
   first mark). EN + AR `returns.openSession.parcel.units.*`.
-- **Tests:** backend `UntrackedParcelUnitsTest` (8: p1–p7 + x1 app_user isolation with positive control); frontend
+- **Tests:** backend `UntrackedParcelUnitsTest` (10: p1–p8 + x1 app_user isolation with positive control + g1 app_user
+  grants — INSERT and the two undo columns allowed, any other UPDATE and DELETE refused; p8 = a parcel from a CLOSED
+  session rescanned in a new one, the prod case of Snouts AWB 445040939; g1 revert-checked: no REVOKE/GRANT → red); frontend
   `untrackedParcelUnits.test.tsx` (5, userEvent, incl. AR). Revert-checked: no unit rows → all red; leg gate → p2/p6;
   evidence clause → p3/p4/p5; live slot non-unique → all marking tests; per-unit exception → p3; frontend units → 5/5 red.
   Real-screen headless renders EN + AR (throwaway harness, deleted) in the session scratchpad `real-renders/`.
   Full backend 2564 tests, only red ExchangeBackfillTest (known); vitest 769/769; tsc + vite build clean.
-- **Not done (by design / ask):** `MigrationSmokeTest.TENANT_SCOPED_TABLES` not edited (existing-test list; the new test
-  asserts the policy itself). Unit rows only on return legs and returned-to-sender forward legs.
+- `MigrationSmokeTest.TENANT_SCOPED_TABLES` + `untracked_unit_intakes` (approved). Unit rows only on return legs and
+  returned-to-sender forward legs.
+**Analytics slice 4 — stock, backend only (2026-10-08, branch `analytics/s4-stock`, merged to main; NOT deployed).
+Migrations V154 (analytics_settings) and V153 (variants Shopify stock columns).** Owner-only; tenants with no pieces
+get `hasPieces: false` (trust level "none"); voided pieces never count.
+- **Endpoints (`StockAnalyticsService`):** `/stock/summary?period` (in warehouse by location, value at price and at
+  cost — costed variants only, null when none —, avg days in stock, 0–30/31–60/61–90/90+ buckets, on hold, damaged at
+  cost, lost/destroyed this period at cost, pieces moved 4+ times, `trust`, `lowTrust`), `/stock/variants?sort&filter
+  &limit` (on hand, `shopifyAvailable`, `stockUsed` + `stockSource`, coming back, velocity, cover, sell-through, avg
+  piece age, last sale, returns + exchanges rate (90 d) + top reason, running low ≤ 7 d, dead stock no sale 60 d with
+  cash at cost else price), `/stock/restock` (velocity × (lead + cover) − stock − coming back, rounded up, ≥ 0),
+  `GET/PUT /settings` (V154 analytics_settings: supplier_lead_days 0–365 default 21, cover_days 1–365 default 35; RLS;
+  app_user can't DELETE; PUT audited), `/pieces/{id}/history` (trips with order, AWB, city, s2 outcome, fee),
+  `/variants/{id}/pieces?minTrips`.
+- **Definitions:** velocity = delivered units (s2 outcome, orders placed in the last 30 days) ÷ 30; received =
+  pieces.created_at; coming back = return_in_transit + return_pending_inspection; trip = piece event from packed /
+  awaiting_pickup / reserved into with_courier / delivered (leg = the event's shipment, else the order's forward leg
+  booked before it; no leg + delivered = self-pickup).
+- **Stock trust (`StockAnalyticsService.trust`):** packedThroughTracedPct = Bosta-delivered orders (last 30 days) with
+  a piece allocation or piece event ÷ all of them; the Shopify figure = `variants.shopify_inventory_quantity` (V153:
+  REST `inventory_quantity`, all locations, only as fresh as the variant's last products/* webhook —
+  `shopify_variant_updated_at`; GraphQL-imported variants have none); mismatch = Σ|traced available − max(Shopify, 0)|
+  ÷ Shopify units over variants with pieces and a figure. high = ≥ 80 % packed AND mismatch ≤ 10 %; else low. **At low
+  trust** cover / running low / dead stock / sell-through / restock / sells-out-soon use the Shopify figure
+  (`stockSource: "shopify"`; a variant without one falls back to pieces and says so); piece-only figures stay on pieces,
+  flagged `lowTrust`. Prod 2026-10-08: every piece tenant is LOW (Snouts 67 % packed of 3 deliveries, mismatch 31 %;
+  Jumi 4 %, mismatch 16×; BROEK 0 % of 223).
+- **Sells-out-soon alert** (s7, upgraded): best sellers (top 20 by velocity) with stock and ≤ 4 days of cover, in `skus`.
+- Shared: `SalesAnalyticsService.LAST_SOLD_CTE`, `ProductExtrasAnalyticsService.variantRows` (goldens unchanged).
+- Tests: `AnalyticsStockTest` (11), `StockRulesTest` (3), RlsCoverageTest +6.
 
 **Analytics B1 — small backend fixes (2026-10-08, branch `analytics/b1-fixes`, merged to main; NOT deployed).
 Migration V150.**

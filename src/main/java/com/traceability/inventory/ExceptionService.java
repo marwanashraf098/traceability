@@ -384,7 +384,7 @@ public class ExceptionService {
             "JOIN orders o ON o.id = s.order_id AND o.tenant_id = s.tenant_id " +
             "LEFT JOIN users u ON u.id = s.return_intake_by " +
             "WHERE s.tenant_id = ? AND " + ReturnCaseRules.RETURN_TO_RECEIVE_OPEN_SQL +
-            // Issue 1 (V152): one per untracked unit marked Arrived · sellable in Scan returns.
+            // Issue 1 (V154): one per untracked unit marked Arrived · sellable in Scan returns.
             "UNION ALL " +
             "SELECT 'return_to_receive', 'MEDIUM', 'untracked_unit', " +
             "       s.id, s.tracking_number, o.id, o.number, NULL::text, " +

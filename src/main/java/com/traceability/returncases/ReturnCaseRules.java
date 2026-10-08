@@ -91,7 +91,7 @@ public final class ReturnCaseRules {
     public static final String RETURN_LEG_AWAITING_SCAN_SQL = ShipmentLinkService.RETURN_LEG_AWAITING_SCAN_SQL;
     public static final String RETURN_LEG_ENTERED_RETURNED_AT_SQL = ShipmentLinkService.RETURN_LEG_ENTERED_RETURNED_AT_SQL;
     public static final String RETURN_TO_RECEIVE_OPEN_SQL = ShipmentLinkService.RETURN_TO_RECEIVE_OPEN_SQL;
-    /** Issue 1 (V152): one Return To Receive per untracked unit marked Arrived · sellable (alias u). */
+    /** Issue 1 (V154): one Return To Receive per untracked unit marked Arrived · sellable (alias u). */
     public static final String UNIT_TO_RECEIVE_OPEN_SQL = ShipmentLinkService.UNIT_TO_RECEIVE_OPEN_SQL;
     public static final String UNIT_TO_RECEIVE_KEY_SQL = ShipmentLinkService.UNIT_TO_RECEIVE_KEY_SQL;
     /** Leg {@code s} has at least one untracked unit whose Return To Receive is open. */

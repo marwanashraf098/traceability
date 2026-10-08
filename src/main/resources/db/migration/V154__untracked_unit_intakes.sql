@@ -1,4 +1,4 @@
--- V152 — Scan returns: untracked parcel items, one row per unit (2026-10-08 diagnosis, Issue 1;
+-- V154 — Scan returns: untracked parcel items, one row per unit (2026-10-08 diagnosis, Issue 1;
 -- design signed off 2026-10-08, design/returns-parcel-states 3 / 3b / 3c / 6 / 8).
 --
 -- A parcel in a return session whose order has UNTRACKED lines (PortalService.LINE_UNTRACKED_SQL —

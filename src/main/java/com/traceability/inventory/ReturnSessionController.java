@@ -117,7 +117,7 @@ public class ReturnSessionController {
         sessionService.undoMarkReceived(sessionId, shipmentId, principal.userId());
     }
 
-    // ── Untracked order lines on a parcel, one row per unit (Issue 1, V152) ──
+    // ── Untracked order lines on a parcel, one row per unit (Issue 1, V154) ──
 
     public record UnitRequest(UUID orderItemId, Integer unitNo, String condition) {}
 

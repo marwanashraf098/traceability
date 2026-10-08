@@ -32,7 +32,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.verifyNoInteractions;
 
 /**
- * Issue 1 (V152, design signed off 2026-10-08) — Scan returns: untracked parcel items, one row per
+ * Issue 1 (V154, design signed off 2026-10-08) — Scan returns: untracked parcel items, one row per
  * unit, through the real ReturnSessionService paths.
  *
  *   p1 untracked order, courier return, no request → one row per unit (qty 2 → 2 rows); mixed order
@@ -46,7 +46,11 @@ import static org.mockito.Mockito.verifyNoInteractions;
  *   p5 a live intake row IS scan evidence under the canonical returnLegScanEvidenceSql
  *   p6 none of it writes to Shopify
  *   p7 via phone: a unit on a parcel whose AWB came from the paired phone carries the marker
+ *   p8 a parcel scanned in a session that was CLOSED without marks (prod: Snouts AWB 445040939, session
+ *      1154bf6f) scans again in a NEW session, lists its unit and the Arrived action works
  *   x1 cross-tenant on a real app_user connection, with a same-tenant positive control
+ *   g1 the V154 grants on a real app_user connection: INSERT allowed, UPDATE of the two undo columns
+ *      allowed, UPDATE of any other column refused, DELETE refused
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.NONE)
 @Testcontainers
@@ -275,6 +279,72 @@ class UntrackedParcelUnitsTest {
         assertThat(jdbc.queryForObject("SELECT via_phone FROM untracked_unit_intakes WHERE shipment_id = ?", Boolean.class, p.shipment()))
             .isTrue();
         assertThat(units(parcel(t, s, p.awb())).get(0).get("viaPhone")).isEqualTo(true);
+    }
+
+    // ── p8: closed session, then a new one ─────────────────────────────────────
+
+    @Test
+    void p8_parcelFromAClosedSession_scansAgainInANewSession_unitsListed_arrivedWorks() {
+        T t = tenant("p8");
+        Parcel rto = forwardLeg(t, "Return to Origin");
+        UUID line = line(t, rto.order(), t.shirt(), 1);
+        UUID first = session(t);
+        scan(t, first, rto.awb());
+        TenantContext.runAs(t.id(), () -> sessions.close(first, t.owner()));   // closed with nothing marked
+        assertThat(outcome(rto.shipment())).isNull();
+
+        UUID second = session(t);
+        scan(t, second, rto.awb());
+        Map<String, Object> card = parcel(t, second, rto.awb());
+        assertThat(units(card)).hasSize(1);
+        assertThat(card.get("canMarkReceived")).isEqualTo(true);
+
+        arrived(t, second, rto, line, 1, "sellable");
+        assertThat(outcome(rto.shipment())).isEqualTo("untracked_units_arrived");
+        assertThat(jdbc.queryForObject("SELECT return_intake_session_id FROM shipments WHERE id = ?", UUID.class, rto.shipment()))
+            .isEqualTo(second);
+        assertThat(toReceive(t)).hasSize(1);
+    }
+
+    // ── g1: grants on app_user ─────────────────────────────────────────────────
+
+    @Test
+    void g1_appUserGrants_insertAndUndoColumnsOnly_otherUpdateAndDeleteRefused() {
+        DataSource ds = new TenantAwareDataSource(new DriverManagerDataSource(POSTGRES.getJdbcUrl(), "app_user", "testpw"));
+        JdbcTemplate appJdbc = new JdbcTemplate(ds);
+        TransactionTemplate appTx = new TransactionTemplate(new DataSourceTransactionManager(ds));
+        T t = tenant("g1");
+        Parcel p = courierReturn(t);
+        UUID line = line(t, p.order(), t.shirt(), 2);
+        UUID s = session(t);
+        scan(t, s, p.awb());
+
+        // INSERT — what the service does — works on app_user.
+        TenantContext.runAs(t.id(), () -> appTx.execute(x -> appJdbc.update(
+            "INSERT INTO untracked_unit_intakes (tenant_id, return_session_id, shipment_id, order_id, order_item_id, unit_no, " +
+            "condition, actor_user_id) VALUES (?, ?, ?, ?, ?, 1, 'sellable', ?)",
+            t.id(), s, p.shipment(), p.order(), line, t.owner())));
+        assertThat(liveRows(p.shipment())).isEqualTo(1);
+
+        // UPDATE of any column other than the two undo columns is refused.
+        assertThatThrownBy(() -> TenantContext.runAs(t.id(), () -> appTx.execute(x -> appJdbc.update(
+            "UPDATE untracked_unit_intakes SET condition = 'damaged' WHERE shipment_id = ?", p.shipment()))))
+            .rootCause().hasMessageContaining("permission denied");
+        assertThatThrownBy(() -> TenantContext.runAs(t.id(), () -> appTx.execute(x -> appJdbc.update(
+            "UPDATE untracked_unit_intakes SET unit_no = 2 WHERE shipment_id = ?", p.shipment()))))
+            .rootCause().hasMessageContaining("permission denied");
+        // DELETE is refused.
+        assertThatThrownBy(() -> TenantContext.runAs(t.id(), () -> appTx.execute(x -> appJdbc.update(
+            "DELETE FROM untracked_unit_intakes WHERE shipment_id = ?", p.shipment()))))
+            .rootCause().hasMessageContaining("permission denied");
+        assertThat(jdbc.queryForObject("SELECT condition FROM untracked_unit_intakes WHERE shipment_id = ?", String.class,
+            p.shipment())).isEqualTo("sellable");
+
+        // The two undo columns: allowed (this is how Undo works).
+        int undone = TenantContext.runAs(t.id(), () -> appTx.execute(x -> appJdbc.update(
+            "UPDATE untracked_unit_intakes SET undone_at = now(), undone_by = ? WHERE shipment_id = ?", t.owner(), p.shipment())));
+        assertThat(undone).isEqualTo(1);
+        assertThat(liveRows(p.shipment())).isZero();
     }
 
     // ── x1: cross-tenant, app_user ─────────────────────────────────────────────

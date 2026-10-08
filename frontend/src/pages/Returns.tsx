@@ -185,7 +185,7 @@ interface Parcel {
   itemsRequestId?: string | null
   itemsRequestReference?: string | null
   requestItems?: ParcelRequestItem[]
-  /** Issue 1 (V152): a forward leg Bosta returned to the merchant (Return to Origin). */
+  /** Issue 1 (V154): a forward leg Bosta returned to the merchant (Return to Origin). */
   returnedToSender?: boolean
   /** Issue 1: the order's untracked lines, one row per unit (parcels no request holds). */
   untrackedUnits?: ParcelUnit[]

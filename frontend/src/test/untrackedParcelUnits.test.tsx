@@ -16,7 +16,7 @@ vi.mock('../api', async (importOriginal) => {
   return { ...actual, getRoleFromToken: vi.fn() }
 })
 
-// Issue 1 (V152, design/returns-parcel-states 3 / 3c / 6 / 8) — untracked parcel items, one row
+// Issue 1 (V154, design/returns-parcel-states 3 / 3c / 6 / 8) — untracked parcel items, one row
 // per unit. Shapes match ReturnSessionService.addParcelView (untrackedUnits / unitsIn /
 // canMarkReceived / returnedToSender / bosta.state) and the endpoints
 // POST /returns/sessions/{sid}/parcels/{shipmentId}/units/arrived {orderItemId, unitNo, condition}

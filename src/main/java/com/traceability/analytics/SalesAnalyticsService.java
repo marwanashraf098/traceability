@@ -436,6 +436,29 @@ public class SalesAnalyticsService {
         )
         """;
 
+    /**
+     * last_sold (CTE, appended after soldLines — it reads its {@code floors}): each variant's last
+     * sale of ALL time, MAX(placed_at) over the soldLines cohort (post-floor, not cancelled, not an
+     * internal exchange order, quantity after the refund add-back > 0, not cancelled in raw), from
+     * the V149 columns. Two tenant ids. Shared by /sales/variants (lastSoldAt) and the stock slice
+     * (last sale, dead stock).
+     */
+    static final String LAST_SOLD_CTE = """
+        last_sold AS (
+            SELECT oi.variant_id, MAX(o.placed_at) AS last_sold_at
+            FROM order_items oi
+            JOIN orders o ON o.id = oi.order_id
+            JOIN floors f ON f.store_id = o.store_id
+            WHERE oi.tenant_id = ? AND o.tenant_id = ?
+              AND (f.floor_at IS NULL OR o.placed_at >= f.floor_at)
+              AND o.status <> 'cancelled'::order_status
+              AND o.external_id NOT LIKE 'internal:exchange:%'
+              AND NOT o.raw_cancelled
+              AND COALESCE(oi.current_qty, oi.quantity) + COALESCE((o.refund_lines -> oi.line_key ->> 0)::int, 0) > 0
+            GROUP BY oi.variant_id
+        )
+        """;
+
     /*
      * Slices 1 + 2 in ONE statement over the period's lines (slice 8 — it used to be two, the first
      * re-reading every line of all time): per variant plus the grand-total row (GROUPING SETS ()),
@@ -481,19 +504,7 @@ public class SalesAnalyticsService {
             FROM line_facts
             GROUP BY GROUPING SETS ((variant_id), ())
         ),
-        last_sold AS (
-            SELECT oi.variant_id, MAX(o.placed_at) AS last_sold_at
-            FROM order_items oi
-            JOIN orders o ON o.id = oi.order_id
-            JOIN floors f ON f.store_id = o.store_id
-            WHERE oi.tenant_id = ? AND o.tenant_id = ?
-              AND (f.floor_at IS NULL OR o.placed_at >= f.floor_at)
-              AND o.status <> 'cancelled'::order_status
-              AND o.external_id NOT LIKE 'internal:exchange:%'
-              AND NOT o.raw_cancelled
-              AND COALESCE(oi.current_qty, oi.quantity) + COALESCE((o.refund_lines -> oi.line_key ->> 0)::int, 0) > 0
-            GROUP BY oi.variant_id
-        )
+        """ + LAST_SOLD_CTE + """
         SELECT s.is_total, s.variant_id, v.product_id, p.title AS product_title,
                v.title AS variant_title, v.sku, p.image_url, ls.last_sold_at,
                s.sold_units, s.gross_revenue, s.approximate_lines, s.orders,

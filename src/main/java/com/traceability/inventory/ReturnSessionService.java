@@ -75,7 +75,7 @@ public class ReturnSessionService {
     private final Clock              clock;
     /** Step 4d-1: return-request attribution + lifecycle, on this service's own JdbcTemplate. */
     private final ReturnRequestLifecycle requests;
-    /** Issue 1 (V152): untracked order lines on a parcel, one row per unit — same JdbcTemplate. */
+    /** Issue 1 (V154): untracked order lines on a parcel, one row per unit — same JdbcTemplate. */
     private final UntrackedParcelUnits untrackedUnits;
 
     public ReturnSessionService(JdbcTemplate jdbc, InventoryLedger ledger,
@@ -318,7 +318,7 @@ public class ReturnSessionService {
     }
 
     private Map<String, Object> scanAwb(UUID sessionId, UUID tenantId, String trackingNumber, boolean viaPhone) {
-        // Issue 1 (V152): via_phone remembers that this parcel's AWB was a verified phone scan in this
+        // Issue 1 (V154): via_phone remembers that this parcel's AWB was a verified phone scan in this
         // session (PhoneScanSource) — its untracked unit marks carry the phone marker. Sticky: a later
         // hardware re-scan never clears it.
         jdbc.update(
@@ -673,7 +673,7 @@ public class ReturnSessionService {
         }
     }
 
-    // ── Issue 1 (V152): untracked order lines on a parcel — one row per unit ─────
+    // ── Issue 1 (V154): untracked order lines on a parcel — one row per unit ─────
 
     /**
      * POST /returns/sessions/{sessionId}/parcels/{shipmentId}/units/arrived {orderItemId, unitNo,
@@ -969,7 +969,7 @@ public class ReturnSessionService {
                 complete = outcome != null || (parcelExpected.isEmpty() && !anyPending && untrackedAwaiting == 0
                     && (!scanned.isEmpty() || untrackedArrived > 0));
             }
-            // Issue 1 (V152): no request on this parcel → its order's untracked lines, one row per unit.
+            // Issue 1 (V154): no request on this parcel → its order's untracked lines, one row per unit.
             // Partial returns are normal: the parcel is handled once a unit is marked (the leg's intake
             // is stamped then) — unmarked units didn't come back. Never blocks closing the session.
             List<Map<String, Object>> units = (requestId == null && itemsRequestId == null)

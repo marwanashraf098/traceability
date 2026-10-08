@@ -907,7 +907,7 @@ public class ShipmentLinkService {
      *          action) at/after the leg's created_at. Session-scoped: the arrival's
      *          item_arrived_untracked event carries this session's id. Legs with no request:
      *          unchanged.
-     *          Untracked-unit clause (Issue 1, V152, signed off 2026-10-08): the leg ALSO has
+     *          Untracked-unit clause (Issue 1, V154, signed off 2026-10-08): the leg ALSO has
      *          evidence when a live untracked_unit_intakes row (a unit of an untracked order line
      *          marked Arrived on this parcel, not undone) names this shipment. Session-scoped by
      *          the row's return_session_id. Also the evidence of a returned-to-sender FORWARD leg
@@ -945,7 +945,7 @@ public class ShipmentLinkService {
             "          AND ri_ut.order_item_id IS NOT NULL AND ri_ut.arrived_at IS NOT NULL " +
             "          AND ri_ut.arrived_at >= s.created_at " + untrackedSession + ") " +
             "OR " +
-            // Untracked-unit clause (Issue 1, V152)
+            // Untracked-unit clause (Issue 1, V154)
             "EXISTS (SELECT 1 FROM untracked_unit_intakes uu_ev " +
             "        WHERE uu_ev.tenant_id = s.tenant_id AND uu_ev.shipment_id = s.id " +
             "          AND uu_ev.undone_at IS NULL " + unitSession + ") " +
@@ -1048,7 +1048,7 @@ public class ShipmentLinkService {
     }
 
     /**
-     * "Return To Receive" is still open for a return leg — or, since Issue 1 (V152), a
+     * "Return To Receive" is still open for a return leg — or, since Issue 1 (V154), a
      * returned-to-sender forward leg (alias {@code s}): marked received as a whole parcel
      * as untracked, and no exception_resolutions row for it resolved at/after the marking
      * (so undo + re-mark re-opens it). Shared by ExceptionService.detectReturnToReceive()

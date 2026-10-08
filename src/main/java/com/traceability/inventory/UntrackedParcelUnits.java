@@ -12,7 +12,7 @@ import java.util.Map;
 import java.util.UUID;
 
 /**
- * Issue 1 (V152, design signed off 2026-10-08) — Scan returns: the untracked lines of a parcel's
+ * Issue 1 (V154, design signed off 2026-10-08) — Scan returns: the untracked lines of a parcel's
  * order, one row per unit, each marked "Arrived · sellable" / "Arrived · damaged" by the worker.
  *
  * Which parcels: a courier-return leg, or a returned-to-sender forward leg
