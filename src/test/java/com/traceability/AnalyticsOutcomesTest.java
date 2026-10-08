@@ -166,6 +166,11 @@ class AnalyticsOutcomesTest {
                         "VALUES (?, ?, ?::shipment_internal_state, ?)", id, shipment, state, Timestamp.from(at));
         }
 
+        void collected(UUID shipment, Instant at) {      // Bosta's raw collectedFromBusiness (V149 generated column)
+            jdbc.update("UPDATE shipments SET raw = raw || jsonb_build_object('collectedFromBusiness', ?::text) WHERE id = ?",
+                        at.toString(), shipment);
+        }
+
         String piece(UUID variant, UUID orderItem) {
             String p = "AN2" + SEQ.incrementAndGet();
             jdbc.update("INSERT INTO pieces (id, tenant_id, variant_id, barcode, short_code, status) " +
@@ -374,7 +379,7 @@ class AnalyticsOutcomesTest {
     }
 
     @Test
-    void multipleForwardLegs_theActiveLegDecides_elseTheLatestEndedLeg_wijhaOverAnEndedLeg() {
+    void multipleForwardLegs_theActiveLegDecides_elseTheLatestEndedLeg_wijhaOverAnEndedLeg() {   // ended = picked up (s8)
         T t = new T("An2-MultiLeg");
         UUID v = t.variant("S", "100.00");
 
@@ -390,11 +395,12 @@ class AnalyticsOutcomesTest {
         t.shipment(o2, "forward", 10, "terminated", "Cairo", SEPT_10.plusSeconds(60));
         t.shipment(o2, "forward", 10, "with_courier", "Cairo", SEPT_10.plusSeconds(600));
 
-        // Only ended legs: the latest decides → other_terminal.
+        // Only ended legs, the latest picked up before it was terminated: the latest decides → other_terminal.
         UUID o3 = t.order("bosta");
         t.line(o3, v, 4);
         t.shipment(o3, "forward", 10, "cancelled", "Cairo", SEPT_10.plusSeconds(60));
-        t.shipment(o3, "forward", 10, "terminated", "Cairo", SEPT_10.plusSeconds(600));
+        UUID o3t = t.shipment(o3, "forward", 10, "terminated", "Cairo", SEPT_10.plusSeconds(600));
+        t.history(o3t, "with_courier", SEPT_10.plusSeconds(3600));
 
         // Ended Bosta leg, then shipped with Wijha: wijha.
         UUID o4 = t.order("other_known");
@@ -407,6 +413,54 @@ class AnalyticsOutcomesTest {
         assertThat(n(r, "otherTerminalUnits")).isEqualTo(4);
         assertThat(n(r, "wijhaUnits")).isEqualTo(8);
         assertBucketsSumToSold(r);
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void endedBeforePickup_isNotShipped_endedAfterPickup_isOtherTerminal() {
+        T t = new T("An2-EndedPickup");
+        UUID v = t.variant("P", "100.00");
+
+        // Before pickup (no collectedFromBusiness, no picked-up history) → not shipped.
+        UUID terminatedEarly = t.order("bosta");
+        t.line(terminatedEarly, v, 1);
+        UUID te = t.forward(terminatedEarly, 10, "terminated", "Cairo");
+        t.history(te, "created", SEPT_10.plusSeconds(120));
+        UUID cancelledEarly = t.order("bosta");
+        t.line(cancelledEarly, v, 2);
+        t.forward(cancelledEarly, 10, "cancelled", "Giza");
+
+        // Before pickup, but shipped with the other carrier → wijha (carrier rule unchanged).
+        UUID wijha = t.order("other_known");
+        t.line(wijha, v, 4);
+        t.forward(wijha, 10, "cancelled", "Cairo");
+
+        // After pickup → other_terminal: by picked-up history, or by Bosta's collectedFromBusiness alone.
+        UUID terminatedLate = t.order("bosta");
+        t.line(terminatedLate, v, 8);
+        UUID tl = t.forward(terminatedLate, 10, "terminated", "Cairo");
+        t.history(tl, "with_courier", SEPT_10.plusSeconds(3600));
+        UUID cancelledLate = t.order("bosta");
+        t.line(cancelledLate, v, 16);
+        UUID cl = t.forward(cancelledLate, 10, "cancelled", "Giza");
+        t.collected(cl, SEPT_10.plusSeconds(1800));
+
+        Map<String, Object> body = variants(t);
+        Map<String, Object> r = row(body, v);
+        assertThat(n(r, "notShippedUnits")).isEqualTo(3);
+        assertThat(n(r, "wijhaUnits")).isEqualTo(4);
+        assertThat(n(r, "otherTerminalUnits")).isEqualTo(24);
+        assertBucketsSumToSold(r);
+
+        // Not-shipped orders never count against a city's success: only the two picked-up legs do.
+        ResponseEntity<Map> c = get(t.ownerToken, "/api/v1/analytics/sales/cities?" + SEPT);
+        List<Map<String, Object>> cities = (List<Map<String, Object>>) c.getBody().get("cities");
+        assertThat(cities).extracting(x -> x.get("nameEn")).containsExactlyInAnyOrder("Cairo", "Giza");
+        for (Map<String, Object> city : cities) {
+            assertThat(n(city, "orders")).as("%s", city.get("nameEn")).isEqualTo(1);
+            assertThat(n(city, "otherTerminalOrders")).isEqualTo(1);
+            assertThat(dec(city, "successRate")).isEqualByComparingTo("0");
+        }
     }
 
     // ── returns ──────────────────────────────────────────────────────────────

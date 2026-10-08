@@ -142,7 +142,7 @@ public class MoneyAnalyticsService {
                        END AS outcome
                 FROM orders o
                 CROSS JOIN LATERAL (
-                    SELECT s.id AS shipment_id, s.internal_state, s.type_code AS type_code,
+                    SELECT s.id AS shipment_id, s.internal_state, s.collected_from_business_at, s.type_code AS type_code,
                            s.city_name AS city
                     FROM shipments s
                     WHERE s.order_id = o.id AND s.tenant_id = o.tenant_id AND s.shipment_leg = 'forward'
@@ -152,7 +152,9 @@ public class MoneyAnalyticsService {
                 ) leg
                 LEFT JOIN LATERAL (
                     SELECT MIN(hh.occurred_at) FILTER (WHERE hh.internal_state = 'delivered')                AS first_delivered,
-                           MIN(hh.occurred_at) FILTER (WHERE hh.internal_state IN ('returning', 'returned')) AS first_return
+                           MIN(hh.occurred_at) FILTER (WHERE hh.internal_state IN ('returning', 'returned')) AS first_return,
+                           COALESCE(bool_or(hh.internal_state IN ('with_courier', 'returning', 'returned', 'delivered', 'lost')), false)
+                                                                                                              AS picked_up
                     FROM shipment_status_history hh
                     WHERE hh.shipment_id = leg.shipment_id
                 ) h ON true

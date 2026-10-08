@@ -238,25 +238,35 @@ public class SalesAnalyticsService {
      *   Index lookups per order, not CTE-to-CTE joins: the planner estimates the jsonb-filtered
      *   cohort at ~1 row and picks nested loops over CTE scans (prod EXPLAIN: 3.2 s on Femine).
      *   order_outcomes — one outcome per order, in this order:
-     *     wijha / not_shipped — no deciding leg; or the leg is terminated/cancelled and the order
-     *                           shipped with another known carrier (Wijha): wijha when
-     *                           orders.shipping_carrier_class = 'other_known', else not_shipped
+     *     wijha / not_shipped — no deciding leg; or the leg is terminated/cancelled and either the
+     *                           order shipped with another known carrier (Wijha) or Bosta never
+     *                           picked it up (no collected_from_business_at, no with_courier /
+     *                           returning / returned / delivered / lost history — 2026-10-08):
+     *                           wijha when orders.shipping_carrier_class = 'other_known', else
+     *                           not_shipped
      *     delivered       — the leg's state is delivered
      *     refused         — the leg turned Return to Origin (type code 20), is returning/returned, or
      *                       its history went returning/returned before any delivered
      *     delivered       — history shows delivered (current state moved on, e.g. exception)
-     *     other_terminal  — lost / terminated / cancelled
+     *     other_terminal  — lost, or terminated / cancelled after pickup
      *     in_transit      — created / with_courier / exception
      *   bosta_decides = a Bosta leg decided the outcome (the cities endpoint counts only those).
      */
     /**
      * THE outcome of a deciding Bosta forward leg (alias leg: internal_state, type_code) given its
-     * history (alias h: first_delivered, first_return) — WHEN branches of a CASE, used by
+     * history (alias h: first_delivered, first_return, picked_up) — WHEN branches of a CASE, used by
      * ORDER_OUTCOMES and by the money pipeline's city rates, so both read one rule. Rates built on it
      * (approved 2026-10-08): successRate = delivered ÷ (delivered + failed), refusalRate = refused ÷
      * (delivered + failed), failed = refused + other_terminal.
+     * A leg cancelled / terminated BEFORE pickup (no collected_from_business_at, and no history of
+     * Bosta holding the parcel — with_courier / returning / returned / delivered / lost) never left:
+     * not_shipped, not a failure (approved 2026-10-08). Cancelled / terminated after pickup stays
+     * other_terminal (failed).
      */
     static final String LEG_OUTCOME_WHENS = """
+                       WHEN leg.internal_state IN ('terminated', 'cancelled')
+                            AND leg.collected_from_business_at IS NULL
+                            AND NOT COALESCE(h.picked_up, false) THEN 'not_shipped'
                        WHEN leg.internal_state = 'delivered' THEN 'delivered'
                        WHEN leg.type_code = '20'
                             OR leg.internal_state IN ('returning', 'returned')
@@ -282,7 +292,7 @@ public class SalesAnalyticsService {
                    END AS outcome
             FROM period_orders po
             LEFT JOIN LATERAL (
-                SELECT s.id AS shipment_id, s.internal_state,
+                SELECT s.id AS shipment_id, s.internal_state, s.collected_from_business_at,
                        s.type_code, s.city_id, s.city_name AS city
                 FROM shipments s
                 WHERE s.order_id = po.order_id
@@ -294,7 +304,9 @@ public class SalesAnalyticsService {
             ) leg ON true
             LEFT JOIN LATERAL (
                 SELECT MIN(hh.occurred_at) FILTER (WHERE hh.internal_state = 'delivered')                AS first_delivered,
-                       MIN(hh.occurred_at) FILTER (WHERE hh.internal_state IN ('returning', 'returned')) AS first_return
+                       MIN(hh.occurred_at) FILTER (WHERE hh.internal_state IN ('returning', 'returned')) AS first_return,
+                       COALESCE(bool_or(hh.internal_state IN ('with_courier', 'returning', 'returned', 'delivered', 'lost')), false)
+                                                                                                          AS picked_up
                 FROM shipment_status_history hh
                 WHERE hh.shipment_id = leg.shipment_id
                   AND hh.tenant_id = ?
@@ -302,7 +314,9 @@ public class SalesAnalyticsService {
             CROSS JOIN LATERAL (
                 SELECT leg.shipment_id IS NOT NULL
                        AND NOT (leg.internal_state IN ('terminated', 'cancelled')
-                                AND po.carrier_class = 'other_known') AS bosta_decides
+                                AND (po.carrier_class = 'other_known'
+                                     OR (leg.collected_from_business_at IS NULL AND NOT COALESCE(h.picked_up, false))))
+                       AS bosta_decides
             ) d
         )
         """;
