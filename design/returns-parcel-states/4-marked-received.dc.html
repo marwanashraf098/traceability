@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Return session — untracked parcel marked received</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#F4F5F7}
+a{color:#3656E0}a:hover{color:#2440B8}
+</style>
+</helmet>
+<div style="width: 1280px; height: 1000px; box-sizing: border-box; display: flex; flex-direction: column; background: #F4F5F7; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', sans-serif; color: #141821;">
+
+<header style="height: 64px; box-sizing: border-box; padding: 0 32px; display: flex; align-items: center; gap: 16px; background: #FFFFFF; border-bottom: 1px solid #E3E6EB;">
+<button aria-label="Leave session view" style="width: 44px; height: 44px; display: flex; align-items: center; justify-content: center; border: none; background: transparent; color: #3A404C; border-radius: 10px; padding: 0;"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"></path></svg></button>
+<div style="font-size: 18px; font-weight: 600; color: #141821;">Return session RT-3BB8</div>
+<div style="font-size: 14px; color: #5B6270;">started 6:55 PM</div>
+<div style="flex-grow: 1;"></div>
+<button style="border: none; background: transparent; color: #B12D25; font-size: 15px; font-weight: 600; padding: 0 12px; min-height: 44px;">Abandon session</button>
+</header>
+
+<div style="padding: 20px 32px; display: flex; align-items: center; gap: 16px; border-bottom: 1px solid #E3E6EB;">
+<span style="color: #3656E0; display: flex;"><svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 8V6a2 2 0 0 1 2-2h2M16 4h2a2 2 0 0 1 2 2v2M20 16v2a2 2 0 0 1-2 2h-2M8 20H6a2 2 0 0 1-2-2v-2M7 12h10"></path></svg></span>
+<label for="scan-received" style="position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0);">Scan a piece or an AWB</label>
+<input id="scan-received" type="text" placeholder="Scan a piece or an AWB…" style="flex-grow: 1; height: 64px; box-sizing: border-box; padding: 0 20px; border: 2px solid #9FB2F2; border-radius: 12px; box-shadow: 0 0 0 4px #E4EAFD; font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 22px; color: #141821; background: #FFFFFF; outline: none;">
+<div style="font-size: 13px; color: #5B6270; white-space: nowrap;">auto-focused · HID ready</div>
+</div>
+
+<div style="padding: 14px 32px 0; display: flex;">
+<div style="display: flex; align-items: center; gap: 8px; padding: 8px 14px; border-radius: 999px; background: #E6F4EC; color: #1B6B43; font-size: 14px; font-weight: 500;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12l5 5L20 7"></path></svg><span>Parcel marked received · <span style="font-family: 'IBM Plex Mono', ui-monospace, monospace;">AWB 6136538746</span></span></div>
+</div>
+
+<main style="flex-grow: 1; padding: 16px 32px 20px; display: flex; flex-direction: column; gap: 16px; overflow: hidden;">
+
+<section style="background: #FFFFFF; border: 1px solid #E3E6EB; border-radius: 14px; overflow: hidden;">
+<div style="padding: 20px 24px; display: flex; align-items: center; gap: 20px;">
+<div style="width: 44px; height: 44px; flex-shrink: 0; border-radius: 10px; background: #E9ECF2; color: #3A4458; display: flex; align-items: center; justify-content: center;"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12l5 5L20 7"></path></svg></div>
+<div style="display: flex; flex-direction: column; gap: 2px; width: 230px;">
+<div style="font-size: 12px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: #5B6270;">Courier return</div>
+<div style="font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 18px; font-weight: 600; color: #141821;">AWB 6136538746</div>
+</div>
+<div style="display: flex; gap: 36px; flex-grow: 1;">
+<div style="display: flex; flex-direction: column; gap: 2px;"><div style="font-size: 12px; color: #5B6270;">Order</div><div style="font-size: 15px; font-weight: 600; color: #141821;">#0988</div></div>
+<div style="display: flex; flex-direction: column; gap: 2px;"><div style="font-size: 12px; color: #5B6270;">Customer</div><div style="font-size: 15px; font-weight: 600; color: #141821;">Omar K.</div></div>
+<div style="display: flex; flex-direction: column; gap: 2px;"><div style="font-size: 12px; color: #5B6270;">Back at warehouse</div><div style="font-size: 15px; font-weight: 600; color: #141821;">20 Sep</div></div>
+</div>
+<div style="padding: 6px 12px; border-radius: 999px; background: #E9ECF2; color: #3A4458; font-size: 13px; font-weight: 600; white-space: nowrap;">Received · not tracked</div>
+</div>
+
+<div style="padding: 16px 24px; border-top: 1px solid #EDEFF3; display: flex; align-items: center; gap: 16px;">
+<div style="display: flex; flex-direction: column; gap: 4px; flex-grow: 1;">
+<div style="font-size: 14px; color: #2A303B;">Marked received by <span style="font-weight: 600;">Operator</span> at 7:02 PM.</div>
+<div style="font-size: 14px; color: #5B6270; line-height: 1.55;">Stock wasn't changed. Managers have been notified to add this item in their next Receiving session. Don't restock it in Shopify as well, or it will be counted twice.</div>
+</div>
+<button style="min-height: 44px; padding: 0 16px; border-radius: 10px; border: 1px solid #CDD3DC; background: #FFFFFF; color: #141821; font-size: 14px; font-weight: 600;">Undo</button>
+</div>
+</section>
+
+</main>
+
+<footer style="padding: 14px 32px 24px; background: #FFFFFF; border-top: 1px solid #E3E6EB; display: flex; flex-direction: column; gap: 10px;">
+<div style="font-size: 13px; color: #5B6270; text-align: center;">1 parcel · nothing left to decide</div>
+<button style="height: 52px; border-radius: 10px; border: none; background: #3656E0; color: #FFFFFF; font-size: 16px; font-weight: 600;">Close session</button>
+</footer>
+
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1280,"height":1000}}'>
+class Component extends DCLogic {
+  renderVals() {
+    return {};
+  }
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Exceptions — untracked return to receive</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#F4F5F7}
+a{color:#3656E0}a:hover{color:#2440B8}
+</style>
+</helmet>
+<div style="width: 1280px; height: 400px; box-sizing: border-box; padding: 40px; display: flex; flex-direction: column; gap: 24px; background: #F4F5F7; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', sans-serif; color: #141821;">
+
+<h1 style="margin: 0; font-size: 40px; font-weight: 700; letter-spacing: -0.01em; color: #141821;">Exceptions</h1>
+
+<section style="background: #FFFFFF; border: 1px solid #E3E6EB; border-radius: 16px; padding: 24px 28px; display: flex; gap: 20px; align-items: flex-start;">
+<div style="width: 12px; height: 12px; flex-shrink: 0; margin-top: 10px; border-radius: 999px; background: #D99A1E;"></div>
+<div style="display: flex; flex-direction: column; gap: 12px; flex-grow: 1;">
+<div style="display: flex; align-items: center; gap: 10px;">
+<span style="padding: 6px 14px; border-radius: 8px; background: #FEF3D6; color: #7A5200; font-size: 14px; font-weight: 600;">MEDIUM</span>
+<span style="padding: 6px 14px; border-radius: 8px; background: #EEF0F3; border: 1px solid #D5DAE2; color: #3A4458; font-size: 14px; font-weight: 600;">Return To Receive</span>
+<span style="font-size: 14px; color: #5B6270;">0d</span>
+</div>
+<div style="font-size: 17px; color: #141821; line-height: 1.5;">Return 6136538746 for order #0988 arrived, but Traced never tracked this order. Add the item in your next Receiving session, or resolve this if it won't go back into stock.</div>
+<div style="display: flex; gap: 24px; font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 14px; color: #5B6270;">
+<span>Order: #0988</span><span>6136538746</span><span>Bosta: Flipped Pants in Black - XL x 1 (1001-Black-XL)</span>
+</div>
+<div style="font-size: 13px; color: #5B6270;">Marked received by Operator in session RT-3BB8 · Don't restock it in Shopify as well.</div>
+</div>
+<div style="display: flex; flex-direction: column; gap: 12px; flex-shrink: 0;">
+<a href="#receiving" style="min-height: 44px; min-width: 116px; box-sizing: border-box; display: flex; align-items: center; justify-content: center; gap: 6px; padding: 0 18px; border-radius: 10px; background: #3656E0; color: #FFFFFF; font-size: 15px; font-weight: 600; text-decoration: none;">Receiving →</a>
+<button style="min-height: 44px; min-width: 116px; padding: 0 18px; border-radius: 10px; border: 1px solid #CDD3DC; background: #FFFFFF; color: #141821; font-size: 15px; font-weight: 600;">Resolve</button>
+</div>
+</section>
+
+
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1280,"height":400}}'>
+class Component extends DCLogic {
+  renderVals() {
+    return {};
+  }
+}
+</script>
+</body>
+</html>
