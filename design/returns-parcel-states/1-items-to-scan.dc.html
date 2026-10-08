@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Return session — parcel scanned, items to scan</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#F4F5F7}
+a{color:#3656E0}a:hover{color:#2440B8}
+</style>
+</helmet>
+<div style="width: 1280px; height: 1000px; box-sizing: border-box; display: flex; flex-direction: column; background: #F4F5F7; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', sans-serif; color: #141821;">
+
+<header style="height: 64px; box-sizing: border-box; padding: 0 32px; display: flex; align-items: center; gap: 16px; background: #FFFFFF; border-bottom: 1px solid #E3E6EB;">
+<button aria-label="Leave session view" style="width: 44px; height: 44px; display: flex; align-items: center; justify-content: center; border: none; background: transparent; color: #3A404C; border-radius: 10px; padding: 0;"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"></path></svg></button>
+<div style="font-size: 18px; font-weight: 600; color: #141821;">Return session RT-3BB8</div>
+<div style="font-size: 14px; color: #5B6270;">started 6:55 PM</div>
+<div style="flex-grow: 1;"></div>
+<button style="border: none; background: transparent; color: #B12D25; font-size: 15px; font-weight: 600; padding: 0 12px; min-height: 44px;">Abandon session</button>
+</header>
+
+<div style="padding: 20px 32px; display: flex; align-items: center; gap: 16px; border-bottom: 1px solid #E3E6EB;">
+<span style="color: #3656E0; display: flex;"><svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 8V6a2 2 0 0 1 2-2h2M16 4h2a2 2 0 0 1 2 2v2M20 16v2a2 2 0 0 1-2 2h-2M8 20H6a2 2 0 0 1-2-2v-2M7 12h10"></path></svg></span>
+<label for="scan-main" style="position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0);">Scan a piece or an AWB</label>
+<input id="scan-main" type="text" placeholder="Scan a piece or an AWB…" style="flex-grow: 1; height: 64px; box-sizing: border-box; padding: 0 20px; border: 2px solid #9FB2F2; border-radius: 12px; box-shadow: 0 0 0 4px #E4EAFD; font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 22px; color: #141821; background: #FFFFFF; outline: none;">
+<div style="font-size: 13px; color: #5B6270; white-space: nowrap;">auto-focused · HID ready</div>
+</div>
+
+<div style="padding: 14px 32px 0; display: flex;">
+<div style="display: flex; align-items: center; gap: 8px; padding: 8px 14px; border-radius: 999px; background: #E6F4EC; color: #1B6B43; font-size: 14px; font-weight: 500;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12l5 5L20 7"></path></svg><span>Item scanned · <span style="font-family: 'IBM Plex Mono', ui-monospace, monospace;">P000112</span> Flipped Pants</span></div>
+</div>
+
+<main style="flex-grow: 1; padding: 16px 32px 20px; display: flex; flex-direction: column; gap: 16px; overflow: hidden;">
+
+<section style="background: #FFFFFF; border: 1px solid #E3E6EB; border-radius: 14px; overflow: hidden;">
+<div style="padding: 20px 24px; display: flex; align-items: center; gap: 20px;">
+<div style="width: 44px; height: 44px; flex-shrink: 0; border-radius: 10px; background: #EEF2FF; color: #3656E0; display: flex; align-items: center; justify-content: center;"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 8l-9-5-9 5 9 5 9-5z"></path><path d="M3 8v8l9 5 9-5V8"></path><path d="M12 13v8"></path></svg></div>
+<div style="display: flex; flex-direction: column; gap: 2px; width: 230px;">
+<div style="font-size: 12px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: #5B6270;">Courier return</div>
+<div style="font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 18px; font-weight: 600; color: #141821;">AWB 8987563471</div>
+</div>
+<div style="display: flex; gap: 36px; flex-grow: 1;">
+<div style="display: flex; flex-direction: column; gap: 2px;"><div style="font-size: 12px; color: #5B6270;">Order</div><div style="font-size: 15px; font-weight: 600; color: #141821;">#1047</div></div>
+<div style="display: flex; flex-direction: column; gap: 2px;"><div style="font-size: 12px; color: #5B6270;">Customer</div><div style="font-size: 15px; font-weight: 600; color: #141821;">Mariam S.</div></div>
+<div style="display: flex; flex-direction: column; gap: 2px;"><div style="font-size: 12px; color: #5B6270;">Back at warehouse</div><div style="font-size: 15px; font-weight: 600; color: #141821;">20 Sep</div></div>
+</div>
+<div style="padding: 6px 12px; border-radius: 999px; background: #FDEBD8; color: #9A4A08; font-size: 13px; font-weight: 600; white-space: nowrap;">1 of 2 items scanned</div>
+</div>
+
+<div style="padding: 12px 24px; background: #F8F9FB; border-top: 1px solid #EDEFF3; display: flex; gap: 16px; align-items: baseline;">
+<div style="font-size: 12px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: #5B6270; white-space: nowrap;">Bosta's note</div>
+<div style="font-size: 14px; color: #2A303B; line-height: 1.5;">2 items — Flipped Pants in Black - XL x 1 (1001-Black-XL), Linen Shirt in White - M x 1 (2004-White-M)</div>
+</div>
+
+<div style="padding: 14px 24px; border-top: 1px solid #EDEFF3; display: flex; align-items: center; gap: 16px;">
+<div style="font-size: 14px; font-weight: 600; color: #141821;">Items on this order</div>
+<div style="flex-grow: 1;"></div>
+<div style="font-size: 13px; color: #5B6270;">Scan each item's Traced label. Label missing? Reprint it first.</div>
+</div>
+
+<div style="padding: 14px 24px; border-top: 1px solid #EDEFF3; display: flex; align-items: center; gap: 16px;">
+<div style="width: 48px; height: 48px; flex-shrink: 0; border-radius: 10px; background: #EEF0F3; color: #6B7280; display: flex; align-items: center; justify-content: center;"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 3l-5 2.5L2 10l3 1.5V21h14v-9.5l3-1.5-2-4.5L15 3a3 3 0 0 1-6 0z"></path></svg></div>
+<div style="display: flex; flex-direction: column; gap: 2px; width: 240px;"><div style="font-size: 15px; font-weight: 600; color: #141821;">Flipped Pants</div><div style="font-size: 13px; color: #5B6270;">Black · XL</div></div>
+<div style="font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 14px; color: #2A303B; width: 110px;">P000112</div>
+<div style="padding: 5px 10px; border-radius: 999px; background: #E6F4EC; color: #1B6B43; font-size: 13px; font-weight: 600;">Scanned</div>
+<div style="flex-grow: 1;"></div>
+<button style="min-height: 44px; padding: 0 18px; border-radius: 10px; border: 1px solid #CDD3DC; background: #FFFFFF; color: #141821; font-size: 14px; font-weight: 600;">Restock</button>
+<button style="min-height: 44px; padding: 0 18px; border-radius: 10px; border: 1px solid #EBC3BF; background: #FFFFFF; color: #B12D25; font-size: 14px; font-weight: 600;">Damaged</button>
+</div>
+
+<div style="padding: 14px 24px; border-top: 1px solid #EDEFF3; display: flex; align-items: center; gap: 16px;">
+<div style="width: 48px; height: 48px; flex-shrink: 0; border-radius: 10px; background: #EEF0F3; color: #6B7280; display: flex; align-items: center; justify-content: center;"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 3l-5 2.5L2 10l3 1.5V21h14v-9.5l3-1.5-2-4.5L15 3a3 3 0 0 1-6 0z"></path></svg></div>
+<div style="display: flex; flex-direction: column; gap: 2px; width: 240px;"><div style="font-size: 15px; font-weight: 600; color: #141821;">Linen Shirt</div><div style="font-size: 13px; color: #5B6270;">White · M</div></div>
+<div style="font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 14px; color: #2A303B; width: 110px;">P000245</div>
+<div style="padding: 5px 10px; border-radius: 999px; background: #FDEBD8; color: #9A4A08; font-size: 13px; font-weight: 600;">Awaiting scan</div>
+<div style="flex-grow: 1;"></div>
+<button style="min-height: 44px; padding: 0 16px; display: flex; align-items: center; gap: 8px; border-radius: 10px; border: 1px solid #CDD3DC; background: #FFFFFF; color: #141821; font-size: 14px; font-weight: 600;"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9V3h12v6"></path><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"></path><path d="M6 14h12v7H6z"></path></svg>Reprint label</button>
+</div>
+</section>
+
+<section style="background: #FFFFFF; border: 1px solid #E3E6EB; border-radius: 14px; padding: 16px 24px; display: flex; align-items: center; gap: 20px;">
+<div style="width: 44px; height: 44px; flex-shrink: 0; border-radius: 10px; background: #E6F4EC; color: #1B6B43; display: flex; align-items: center; justify-content: center;"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12l5 5L20 7"></path></svg></div>
+<div style="font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 16px; font-weight: 600; color: #141821; width: 230px;">AWB 2493716277</div>
+<div style="font-size: 14px; color: #5B6270; flex-grow: 1;">Order #1052 · 1 item · restocked</div>
+<div style="padding: 6px 12px; border-radius: 999px; background: #E6F4EC; color: #1B6B43; font-size: 13px; font-weight: 600;">All items in</div>
+</section>
+
+</main>
+
+<footer style="padding: 14px 32px 24px; background: #FFFFFF; border-top: 1px solid #E3E6EB; display: flex; flex-direction: column; gap: 10px;">
+<div style="font-size: 13px; color: #5B6270; text-align: center;">Choose restock or damaged for every scanned item before closing.</div>
+<button disabled style="height: 52px; border-radius: 10px; border: none; background: #DDE3F8; color: #45507A; font-size: 16px; font-weight: 600;">Close session</button>
+</footer>
+
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1280,"height":1000}}'>
+class Component extends DCLogic {
+  renderVals() {
+    return {};
+  }
+}
+</script>
+</body>
+</html>

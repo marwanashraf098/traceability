@@ -60,7 +60,8 @@ class MigrationSmokeTest {
             "portal_lookup_attempts",
             "exchanges",
             "order_notes",
-            "tenant_ad_attribution"
+            "tenant_ad_attribution",
+            "untracked_unit_intakes"
     );
 
     @Test

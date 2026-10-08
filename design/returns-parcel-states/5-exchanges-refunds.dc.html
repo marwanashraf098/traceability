@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Exchanges and Refunds — received, not tracked status</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#F4F5F7}
+a{color:#3656E0}a:hover{color:#2440B8}
+</style>
+</helmet>
+<div style="width: 1280px; height: 640px; box-sizing: border-box; padding: 40px; display: flex; flex-direction: column; gap: 24px; background: #F4F5F7; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', sans-serif; color: #141821;">
+
+<h1 style="margin: 0; font-size: 40px; font-weight: 700; letter-spacing: -0.01em; color: #141821;">Exchanges &amp; Refunds</h1>
+
+<nav aria-label="Filter" style="display: flex; gap: 28px; border-bottom: 1px solid #E3E6EB;">
+<a href="#all" style="display: flex; align-items: center; gap: 8px; padding: 10px 0 12px; border-bottom: 2px solid #3656E0; color: #141821; font-size: 16px; font-weight: 600; text-decoration: none;">All <span style="padding: 2px 8px; border-radius: 999px; background: #EEF0F3; color: #3A4458; font-size: 13px;">9</span></a>
+<a href="#needs" style="display: flex; align-items: center; gap: 8px; padding: 10px 0 12px; color: #5B6270; font-size: 16px; text-decoration: none;">Needs action <span style="padding: 2px 8px; border-radius: 999px; background: #EEF0F3; color: #3A4458; font-size: 13px;">7</span></a>
+<a href="#refunds" style="display: flex; align-items: center; gap: 8px; padding: 10px 0 12px; color: #5B6270; font-size: 16px; text-decoration: none;">Refunds <span style="padding: 2px 8px; border-radius: 999px; background: #EEF0F3; color: #3A4458; font-size: 13px;">9</span></a>
+<a href="#exchanges" style="display: flex; align-items: center; gap: 8px; padding: 10px 0 12px; color: #5B6270; font-size: 16px; text-decoration: none;">Exchanges <span style="padding: 2px 8px; border-radius: 999px; background: #EEF0F3; color: #3A4458; font-size: 13px;">0</span></a>
+<a href="#transit" style="display: flex; align-items: center; gap: 8px; padding: 10px 0 12px; color: #5B6270; font-size: 16px; text-decoration: none;">In transit <span style="padding: 2px 8px; border-radius: 999px; background: #EEF0F3; color: #3A4458; font-size: 13px;">0</span></a>
+<a href="#received" style="display: flex; align-items: center; gap: 8px; padding: 10px 0 12px; color: #5B6270; font-size: 16px; text-decoration: none;">Received <span style="padding: 2px 8px; border-radius: 999px; background: #EEF0F3; color: #3A4458; font-size: 13px;">2</span></a>
+</nav>
+
+<section style="background: #FFFFFF; border: 1px solid #E3E6EB; border-radius: 14px; overflow: hidden;">
+<div style="display: grid; grid-template-columns: 130px minmax(0, 1.3fr) minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1.5fr) 120px; gap: 16px; padding: 16px 24px; font-size: 12px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: #5B6270; border-bottom: 1px solid #EDEFF3;">
+<div>Type</div><div>Customer</div><div>Tracking</div><div>Original order</div><div>Status</div><div>Last update</div>
+</div>
+
+<div style="display: grid; grid-template-columns: 130px minmax(0, 1.3fr) minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1.5fr) 120px; gap: 16px; padding: 18px 24px; align-items: center; border-bottom: 1px solid #EDEFF3;">
+<div><span style="padding: 5px 12px; border-radius: 8px; border: 1px solid #CDD3DC; font-size: 13px; font-weight: 600; color: #3A4458;">Refund</span></div>
+<div style="display: flex; flex-direction: column; gap: 2px;"><div style="font-size: 15px; font-weight: 600;">Mariam S.</div><div style="font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 13px; color: #5B6270;">010 •••• 4471</div></div>
+<div style="font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 15px;">8987563471</div>
+<div style="font-size: 15px;">#1047</div>
+<div><span style="padding: 6px 12px; border-radius: 999px; background: #FDEBD8; color: #9A4A08; font-size: 13px; font-weight: 600;">Needs inspection</span></div>
+<div style="font-size: 14px; color: #5B6270;">20 Sep</div>
+</div>
+
+<div style="display: grid; grid-template-columns: 130px minmax(0, 1.3fr) minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1.5fr) 120px; gap: 16px; padding: 18px 24px; align-items: center; border-bottom: 1px solid #EDEFF3;">
+<div><span style="padding: 5px 12px; border-radius: 8px; border: 1px solid #CDD3DC; font-size: 13px; font-weight: 600; color: #3A4458;">Refund</span></div>
+<div style="display: flex; flex-direction: column; gap: 2px;"><div style="font-size: 15px; font-weight: 600;">Omar K.</div><div style="font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 13px; color: #5B6270;">011 •••• 8567</div></div>
+<div style="font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 15px;">6136538746</div>
+<div style="font-size: 15px;">#0988</div>
+<div style="display: flex; flex-direction: column; align-items: flex-start; gap: 6px;"><span style="padding: 6px 12px; border-radius: 999px; background: #E9ECF2; color: #3A4458; font-size: 13px; font-weight: 600;">Received · not tracked</span><span style="font-size: 13px; color: #5B6270;">Waiting to be added in Receiving</span></div>
+<div style="font-size: 14px; color: #5B6270;">Today</div>
+</div>
+
+<div style="display: grid; grid-template-columns: 130px minmax(0, 1.3fr) minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1.5fr) 120px; gap: 16px; padding: 18px 24px; align-items: center;">
+<div><span style="padding: 5px 12px; border-radius: 8px; border: 1px solid #CDD3DC; font-size: 13px; font-weight: 600; color: #3A4458;">Refund</span></div>
+<div style="display: flex; flex-direction: column; gap: 2px;"><div style="font-size: 15px; font-weight: 600;">Salma A.</div><div style="font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 13px; color: #5B6270;">012 •••• 1100</div></div>
+<div style="font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 15px;">2493716277</div>
+<div style="font-size: 15px;">#1052</div>
+<div><span style="padding: 6px 12px; border-radius: 999px; background: #E6F4EC; color: #1B6B43; font-size: 13px; font-weight: 600;">Resolved</span></div>
+<div style="font-size: 14px; color: #5B6270;">Today</div>
+</div>
+</section>
+
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1280,"height":640}}'>
+class Component extends DCLogic {
+  renderVals() {
+    return {};
+  }
+}
+</script>
+</body>
+</html>

@@ -75,6 +75,8 @@ public class ReturnSessionService {
     private final Clock              clock;
     /** Step 4d-1: return-request attribution + lifecycle, on this service's own JdbcTemplate. */
     private final ReturnRequestLifecycle requests;
+    /** Issue 1 (V154): untracked order lines on a parcel, one row per unit — same JdbcTemplate. */
+    private final UntrackedParcelUnits untrackedUnits;
 
     public ReturnSessionService(JdbcTemplate jdbc, InventoryLedger ledger,
                                 ReturnService returnService, ShipmentLinkService shipmentLinkService,
@@ -85,6 +87,7 @@ public class ReturnSessionService {
         this.shipmentLinkService = shipmentLinkService;
         this.clock               = clock;
         this.requests            = new ReturnRequestLifecycle(jdbc);
+        this.untrackedUnits      = new UntrackedParcelUnits(jdbc);
     }
 
     // ── Create / open ─────────────────────────────────────────────────────────
@@ -169,7 +172,7 @@ public class ReturnSessionService {
                 "SELECT 1 FROM shipments WHERE tracking_number = ? AND tenant_id = ?",
                 trackingNumber, tenantId);
             if (!shipmentRows.isEmpty()) {
-                return scanAwb(sessionId, tenantId, trackingNumber);
+                return scanAwb(sessionId, tenantId, trackingNumber, viaPhone);
             }
         }
 
@@ -314,11 +317,14 @@ public class ReturnSessionService {
         return itemRow(itemId, tenantId);
     }
 
-    private Map<String, Object> scanAwb(UUID sessionId, UUID tenantId, String trackingNumber) {
+    private Map<String, Object> scanAwb(UUID sessionId, UUID tenantId, String trackingNumber, boolean viaPhone) {
+        // Issue 1 (V154): via_phone remembers that this parcel's AWB was a verified phone scan in this
+        // session (PhoneScanSource) — its untracked unit marks carry the phone marker. Sticky: a later
+        // hardware re-scan never clears it.
         jdbc.update(
-            "INSERT INTO return_session_shipments (id, tenant_id, session_id, awb) VALUES (?, ?, ?, ?) " +
-            "ON CONFLICT (session_id, awb) DO NOTHING",
-            UUID.randomUUID(), tenantId, sessionId, trackingNumber);
+            "INSERT INTO return_session_shipments (id, tenant_id, session_id, awb, via_phone) VALUES (?, ?, ?, ?, ?) " +
+            "ON CONFLICT (session_id, awb) DO UPDATE SET via_phone = return_session_shipments.via_phone OR EXCLUDED.via_phone",
+            UUID.randomUUID(), tenantId, sessionId, trackingNumber, viaPhone);
 
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("scanType", "awb");
@@ -602,9 +608,10 @@ public class ReturnSessionService {
         requireOpen(sessionId, tenantId);
         Map<String, Object> leg = requireScannedParcel(sessionId, shipmentId, tenantId);
 
-        if (!"return".equals(leg.get("shipment_leg"))) {
+        // Issue 1 (signed off 2026-10-08): a returned-to-sender forward leg too — no other forward leg.
+        if (!"return".equals(leg.get("shipment_leg")) && !Boolean.TRUE.equals(leg.get("returned_to_sender"))) {
             throw new ResponseStatusException(HttpStatus.CONFLICT,
-                "Only courier-return parcels can be marked received.");
+                "Only courier-return or returned-to-sender parcels can be marked received.");
         }
         if (leg.get("return_intake_completed_at") != null) {
             throw new ResponseStatusException(HttpStatus.CONFLICT,
@@ -623,12 +630,19 @@ public class ReturnSessionService {
             throw new ResponseStatusException(HttpStatus.CONFLICT,
                 "This order has tracked items — scan them instead.");
         }
+        // Issue 1 (signed off): the whole-parcel mark is the fallback while no item is marked; once
+        // one is, the parcel is handled item by item.
+        if (untrackedUnits.hasLiveMark(tenantId, shipmentId)) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                "Items on this parcel are already marked — undo them to mark the whole parcel received.");
+        }
         int updated = jdbc.update(
-            "UPDATE shipments SET return_intake_completed_at = now(), " +
+            "UPDATE shipments s SET return_intake_completed_at = now(), " +
             "    return_intake_outcome = 'received_untracked', return_intake_by = ?, " +
             "    return_intake_session_id = ? " +
-            "WHERE id = ? AND tenant_id = ? AND shipment_leg = 'return' " +
-            "  AND return_intake_completed_at IS NULL",
+            "WHERE s.id = ? AND s.tenant_id = ? " +
+            "  AND (s.shipment_leg = 'return' OR " + ShipmentLinkService.returnedToSenderSql("s") + ") " +
+            "  AND s.return_intake_completed_at IS NULL",
             actorUserId, sessionId, shipmentId, tenantId);
         if (updated != 1) {
             throw new ResponseStatusException(HttpStatus.CONFLICT,
@@ -647,15 +661,42 @@ public class ReturnSessionService {
         requireOpen(sessionId, tenantId);
         requireScannedParcel(sessionId, shipmentId, tenantId);
         int updated = jdbc.update(
-            "UPDATE shipments SET return_intake_completed_at = NULL, return_intake_outcome = NULL, " +
+            "UPDATE shipments s SET return_intake_completed_at = NULL, return_intake_outcome = NULL, " +
             "    return_intake_by = NULL, return_intake_session_id = NULL " +
-            "WHERE id = ? AND tenant_id = ? AND shipment_leg = 'return' " +
-            "  AND return_intake_outcome = 'received_untracked' AND return_intake_session_id = ?",
+            "WHERE s.id = ? AND s.tenant_id = ? " +
+            "  AND (s.shipment_leg = 'return' OR " + ShipmentLinkService.returnedToSenderSql("s") + ") " +
+            "  AND s.return_intake_outcome = 'received_untracked' AND s.return_intake_session_id = ?",
             shipmentId, tenantId, sessionId);
         if (updated != 1) {
             throw new ResponseStatusException(HttpStatus.CONFLICT,
                 "Only a parcel marked received in this session can be undone.");
         }
+    }
+
+    // ── Issue 1 (V154): untracked order lines on a parcel — one row per unit ─────
+
+    /**
+     * POST /returns/sessions/{sessionId}/parcels/{shipmentId}/units/arrived {orderItemId, unitNo,
+     * condition}: one unit of an untracked order line came back in this parcel. Session open, the
+     * parcel's AWB scanned here (else 409); another tenant's shipment is a 404. The parcel becomes
+     * handled (UntrackedParcelUnits.mark). No piece, no stock, no Shopify.
+     */
+    @Transactional
+    public void unitArrived(UUID sessionId, UUID shipmentId, UUID orderItemId, int unitNo, String condition,
+                            UUID actorUserId) {
+        UUID tenantId = TenantContext.require();
+        requireOpen(sessionId, tenantId);
+        Map<String, Object> leg = requireScannedParcel(sessionId, shipmentId, tenantId);
+        untrackedUnits.mark(tenantId, sessionId, leg, orderItemId, unitNo, condition, actorUserId);
+    }
+
+    /** POST …/units/arrived/undo {orderItemId, unitNo} — only a mark made in this (open) session. */
+    @Transactional
+    public void undoUnitArrived(UUID sessionId, UUID shipmentId, UUID orderItemId, int unitNo, UUID actorUserId) {
+        UUID tenantId = TenantContext.require();
+        requireOpen(sessionId, tenantId);
+        requireScannedParcel(sessionId, shipmentId, tenantId);
+        untrackedUnits.undo(tenantId, sessionId, shipmentId, orderItemId, unitNo, actorUserId);
     }
 
     // ── Step 6a: untracked request items — "Arrived" in a return session ─────────
@@ -708,6 +749,7 @@ public class ReturnSessionService {
     private Map<String, Object> requireScannedParcel(UUID sessionId, UUID shipmentId, UUID tenantId) {
         List<Map<String, Object>> rows = jdbc.queryForList(
             "SELECT s.id, s.order_id, s.shipment_leg, s.tracking_number, s.return_intake_completed_at, " +
+            "       s.return_intake_outcome, " + ShipmentLinkService.returnedToSenderSql("s") + " AS returned_to_sender, " +
             "       EXISTS (SELECT 1 FROM return_session_shipments rss " +
             "               WHERE rss.session_id = ? AND rss.tenant_id = s.tenant_id " +
             "                 AND rss.awb = s.tracking_number) AS scanned_here " +
@@ -815,6 +857,11 @@ public class ReturnSessionService {
             "       s.raw #>> '{returnSpecs,packageDetails,description}'   AS description, " +
             "       s.raw #>> '{returnSpecs,packageDetails,descriptionAr}' AS description_ar, " +
             "       " + ShipmentLinkService.orderUntrackedSql("s.order_id") + " AS untracked, " +
+            // Issue 1: a returned-to-sender forward leg — Bosta's own status + forward package note.
+            "       " + ShipmentLinkService.returnedToSenderSql("s") + " AS returned_to_sender, " +
+            "       s.raw #>> '{state,value}' AS bosta_state, s.raw ->> 'changedToRTODate' AS rto_since, " +
+            "       (s.raw #>> '{specs,packageDetails,itemsCount}') AS fwd_items_count, " +
+            "       s.raw #>> '{specs,packageDetails,description}' AS fwd_description, " +
             "       s.return_intake_outcome, s.return_intake_completed_at, s.return_intake_session_id, " +
             "       u.name AS marked_by, rq.id AS request_id, rq.reference AS request_reference, " +
             // Step 6a: the return request whose items this parcel carries — the linked courier-return
@@ -922,6 +969,16 @@ public class ReturnSessionService {
                 complete = outcome != null || (parcelExpected.isEmpty() && !anyPending && untrackedAwaiting == 0
                     && (!scanned.isEmpty() || untrackedArrived > 0));
             }
+            // Issue 1 (V154): no request on this parcel → its order's untracked lines, one row per unit.
+            // Partial returns are normal: the parcel is handled once a unit is marked (the leg's intake
+            // is stamped then) — unmarked units didn't come back. Never blocks closing the session.
+            List<Map<String, Object>> units = (requestId == null && itemsRequestId == null)
+                ? untrackedUnits.units(tenantId, (UUID) leg.get("shipment_id")) : List.of();
+            long unitsIn = units.stream().filter(u -> u.get("intakeId") != null).count();
+            if (!units.isEmpty()) {
+                complete = outcome != null && !anyPending;
+            }
+            boolean returnedToSender = Boolean.TRUE.equals(leg.get("returned_to_sender"));
 
             Map<String, Object> parcel = new LinkedHashMap<>();
             parcel.put("shipmentId", leg.get("shipment_id").toString());
@@ -937,6 +994,16 @@ public class ReturnSessionService {
                 bosta.put("description", leg.get("description"));
                 bosta.put("descriptionAr", leg.get("description_ar"));
                 parcel.put("bosta", bosta);
+            } else if (returnedToSender) {
+                // Issue 1: never a blank card — Bosta's status and its forward package note.
+                Map<String, Object> bosta = new LinkedHashMap<>();
+                Object n = leg.get("fwd_items_count");
+                bosta.put("itemsCount", n != null && n.toString().matches("\\d+") ? Integer.valueOf(n.toString()) : null);
+                bosta.put("description", leg.get("fwd_description"));
+                bosta.put("descriptionAr", null);
+                bosta.put("state", leg.get("bosta_state"));
+                bosta.put("rtoSince", leg.get("rto_since"));
+                parcel.put("bosta", bosta);
             } else {
                 parcel.put("bosta", null);
             }
@@ -950,6 +1017,14 @@ public class ReturnSessionService {
             Map<String, Object> counts = new LinkedHashMap<>();
             counts.put("expected", scanned.size() + parcelExpected.size());
             counts.put("scanned", scanned.size());
+            parcel.put("returnedToSender", returnedToSender);
+            parcel.put("untrackedUnits", units);
+            parcel.put("unitsIn", unitsIn);
+            // The whole-parcel mark (signed-off fallback): an untracked order, no request, nothing
+            // marked yet, intake not yet recorded — a courier return or a returned-to-sender leg.
+            parcel.put("canMarkReceived", ("return".equals(leg.get("shipment_leg")) || returnedToSender)
+                && Boolean.TRUE.equals(leg.get("untracked")) && requestId == null && itemsRequestId == null
+                && outcome == null && unitsIn == 0);
             parcel.put("counts", counts);
             parcel.put("complete", complete);
             parcel.put("itemsRequestId", itemsRequestId == null ? null : itemsRequestId.toString());
