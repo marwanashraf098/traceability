@@ -23,9 +23,9 @@ deployed). Migration V156.**
   refund add-back on 9; the REST fulfillments (tracking) that BostaFulfillmentCatchUpService / BostaVisibilityCheckService
   read from `orders.raw` were missing on 138 (2 Snouts orders with a tracking number and no forward Bosta leg). Real-time
   linking (FulfillmentTrackingCapture) reads the webhook payload and was never affected.
-- **Open (not done, needs an existing-test edit):** the FULL-tier query asks for `customer { firstName lastName … }` but
-  not `id`, so an imported order's `customer_key` is `p:<phone>` while a webhook order's is `c:<id>` — one customer can
-  appear twice in Analytics → Customers. Adding `id` breaks `ShopifyHttpGatewayOrdersPiiTest.w1` (exact substring).
+- **Customer id on imports (approved 2026-10-09):** the FULL-tier query now asks for `customer { id … }`, so an
+  imported order's `customer_key` is `c:<id>` like a webhook order's (it was `p:<phone>`, splitting one customer in
+  two in Analytics → Customers); `ShopifyHttpGatewayOrdersPiiTest.w1` updated (approved).
 - Tests: `OrderPayloadDowngradeTest` (9), `OrdersQueryFieldsTest` (1).
 
 **Analytics slice 6 — customers since connect, backend only (2026-10-08, branch `analytics/s6-customers`, merged to

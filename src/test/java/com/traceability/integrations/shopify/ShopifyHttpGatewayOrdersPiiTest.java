@@ -44,7 +44,7 @@ class ShopifyHttpGatewayOrdersPiiTest {
         String q = orderQueries(bodies).get(0);
         assertThat(q).contains("shippingAddress { name phone address1 address2 city province zip country }")
             .contains("billingAddress { name phone }")
-            .contains("customer { firstName lastName defaultPhoneNumber { phoneNumber } }")
+            .contains("customer { id firstName lastName defaultPhoneNumber { phoneNumber } }")
             .doesNotContain("email");
     }
 

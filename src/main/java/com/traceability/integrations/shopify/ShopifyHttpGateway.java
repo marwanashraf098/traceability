@@ -104,7 +104,7 @@ class ShopifyHttpGateway implements ShopifyGateway {
             case FULL -> """
                     shippingAddress { name phone address1 address2 city province zip country }
                     billingAddress { name phone }
-                    customer { firstName lastName defaultPhoneNumber { phoneNumber } }
+                    customer { id firstName lastName defaultPhoneNumber { phoneNumber } }
                     """;
             case ADDRESSES -> """
                     shippingAddress { name phone address1 address2 city province zip country }
