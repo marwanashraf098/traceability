@@ -91,6 +91,13 @@ public final class ReturnCaseRules {
     public static final String RETURN_LEG_AWAITING_SCAN_SQL = ShipmentLinkService.RETURN_LEG_AWAITING_SCAN_SQL;
     public static final String RETURN_LEG_ENTERED_RETURNED_AT_SQL = ShipmentLinkService.RETURN_LEG_ENTERED_RETURNED_AT_SQL;
     public static final String RETURN_TO_RECEIVE_OPEN_SQL = ShipmentLinkService.RETURN_TO_RECEIVE_OPEN_SQL;
+    /** Issue 1 (V152): one Return To Receive per untracked unit marked Arrived · sellable (alias u). */
+    public static final String UNIT_TO_RECEIVE_OPEN_SQL = ShipmentLinkService.UNIT_TO_RECEIVE_OPEN_SQL;
+    public static final String UNIT_TO_RECEIVE_KEY_SQL = ShipmentLinkService.UNIT_TO_RECEIVE_KEY_SQL;
+    /** Leg {@code s} has at least one untracked unit whose Return To Receive is open. */
+    public static final String LEG_HAS_UNIT_TO_RECEIVE_SQL =
+        "EXISTS (SELECT 1 FROM untracked_unit_intakes u WHERE u.tenant_id = s.tenant_id " +
+        "        AND u.shipment_id = s.id AND " + ShipmentLinkService.UNIT_TO_RECEIVE_OPEN_SQL + ") ";
 
     /** return_leg_unscanned: awaiting its intake scan for longer than {@code windowDaysExpr} days. */
     public static String returnLegUnscannedSql(String enteredReturnedAtExpr, String windowDaysExpr) {
@@ -106,7 +113,7 @@ public final class ReturnCaseRules {
      */
     public static String inspectionStateSql(String leg, String pendingCountExpr) {
         return "(CASE WHEN " + leg + ".return_intake_outcome = 'received_untracked' THEN 'received_untracked' " +
-               "      WHEN " + leg + ".return_intake_outcome = 'request_items_arrived' " +
+               "      WHEN " + leg + ".return_intake_outcome IN ('request_items_arrived', 'untracked_units_arrived') " +
                "           THEN CASE WHEN (" + pendingCountExpr + ") > 0 THEN 'needs_inspection' ELSE 'resolved' END " +
                "      WHEN " + leg + ".internal_state <> 'returned'::shipment_internal_state THEN 'in_transit' " +
                "      WHEN " + leg + ".return_intake_completed_at IS NULL THEN 'needs_inspection' " +

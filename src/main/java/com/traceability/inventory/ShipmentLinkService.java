@@ -907,6 +907,11 @@ public class ShipmentLinkService {
      *          action) at/after the leg's created_at. Session-scoped: the arrival's
      *          item_arrived_untracked event carries this session's id. Legs with no request:
      *          unchanged.
+     *          Untracked-unit clause (Issue 1, V152, signed off 2026-10-08): the leg ALSO has
+     *          evidence when a live untracked_unit_intakes row (a unit of an untracked order line
+     *          marked Arrived on this parcel, not undone) names this shipment. Session-scoped by
+     *          the row's return_session_id. Also the evidence of a returned-to-sender FORWARD leg
+     *          ({@link #returnedToSenderSql}) — no other rule applies to a forward leg.
      *
      * Single-leg orders: Rule 2 is exactly the pre-V104 order-wide check.
      *
@@ -919,6 +924,7 @@ public class ShipmentLinkService {
         String rule1Session = sessionIdExpr == null ? "" : "AND rss_ev.session_id = " + sessionIdExpr + " ";
         String rule2Session = sessionIdExpr == null ? "" : "AND pe_ev.metadata->>'session_id' = (" + sessionIdExpr + ")::text ";
         String requestSession = sessionIdExpr == null ? "" : "AND pe_rq.metadata->>'session_id' = (" + sessionIdExpr + ")::text ";
+        String unitSession = sessionIdExpr == null ? "" : "AND uu_ev.return_session_id = " + sessionIdExpr + " ";
         String untrackedSession = sessionIdExpr == null ? ""
             : "AND EXISTS (SELECT 1 FROM return_request_events e_ut WHERE e_ut.request_id = rr_ut.id " +
               "            AND e_ut.tenant_id = rr_ut.tenant_id AND e_ut.event_type = 'item_arrived_untracked' " +
@@ -938,6 +944,11 @@ public class ShipmentLinkService {
             "        WHERE rr_ut.tenant_id = s.tenant_id AND rr_ut.return_shipment_id = s.id " +
             "          AND ri_ut.order_item_id IS NOT NULL AND ri_ut.arrived_at IS NOT NULL " +
             "          AND ri_ut.arrived_at >= s.created_at " + untrackedSession + ") " +
+            "OR " +
+            // Untracked-unit clause (Issue 1, V152)
+            "EXISTS (SELECT 1 FROM untracked_unit_intakes uu_ev " +
+            "        WHERE uu_ev.tenant_id = s.tenant_id AND uu_ev.shipment_id = s.id " +
+            "          AND uu_ev.undone_at IS NULL " + unitSession + ") " +
             "OR " +
             // Rule 1
             "EXISTS (SELECT 1 FROM return_session_shipments rss_ev " +
@@ -991,6 +1002,32 @@ public class ShipmentLinkService {
         "AND NOT " + returnLegScanEvidenceSql(null) + " ";
 
     /**
+     * THE single definition of a returned-to-sender parcel (Issue 1, signed off 2026-10-08): a
+     * FORWARD leg Bosta brought back to the merchant — internal_state 'returned' and Bosta type
+     * Return to Origin (the verify-by-fetch type.value uppercased, the V122 key; present in both the
+     * v0 and the v2-list raw shapes). Only these forward legs get "Mark parcel received" and unit
+     * rows in Scan returns; every other forward leg is unchanged. {@code alias} = shipments row.
+     */
+    public static String returnedToSenderSql(String alias) {
+        return "(" + alias + ".shipment_leg = 'forward' " +
+               "AND " + alias + ".internal_state = 'returned'::shipment_internal_state " +
+               "AND upper(" + alias + ".raw #>> '{type,value}') = 'RETURN TO ORIGIN') ";
+    }
+
+    /**
+     * "Return To Receive" for ONE untracked unit (alias {@code u} = untracked_unit_intakes): marked
+     * Arrived as sellable, not undone, and not resolved. One exception per unit, keyed on the row id
+     * (an undo + re-mark is a new row, so a new key). Shared by ExceptionService.detectReturnToReceive()
+     * and the Returns & exchanges case list (via ReturnCaseRules).
+     */
+    public static final String UNIT_TO_RECEIVE_KEY_SQL = "'unit:' || u.id::text";
+    public static final String UNIT_TO_RECEIVE_OPEN_SQL =
+        "u.condition = 'sellable' AND u.undone_at IS NULL " +
+        "AND NOT EXISTS (SELECT 1 FROM exception_resolutions er " +
+        "                WHERE er.tenant_id = u.tenant_id AND er.exception_type = 'return_to_receive' " +
+        "                  AND er.subject_key = " + UNIT_TO_RECEIVE_KEY_SQL + ") ";
+
+    /**
      * THE single definition of an order Traced never tracked: none of its order items has an
      * allocation row of ANY status (active / packed / released). A restocked order still has
      * its released allocations, so it counts as tracked. {@code orderIdExpr} is the SQL
@@ -1011,13 +1048,15 @@ public class ShipmentLinkService {
     }
 
     /**
-     * "Return To Receive" is still open for a return leg (alias {@code s}): marked received
+     * "Return To Receive" is still open for a return leg — or, since Issue 1 (V152), a
+     * returned-to-sender forward leg (alias {@code s}): marked received as a whole parcel
      * as untracked, and no exception_resolutions row for it resolved at/after the marking
      * (so undo + re-mark re-opens it). Shared by ExceptionService.detectReturnToReceive()
      * and listCrpReturns()'s awaitingReceiving flag.
      */
     public static final String RETURN_TO_RECEIVE_OPEN_SQL =
-        "s.shipment_leg = 'return' AND s.return_intake_outcome = 'received_untracked' " +
+        "(s.shipment_leg = 'return' OR " + returnedToSenderSql("s") + ") " +
+        "AND s.return_intake_outcome = 'received_untracked' " +
         "AND NOT EXISTS (SELECT 1 FROM exception_resolutions er " +
         "                WHERE er.tenant_id = s.tenant_id " +
         "                  AND er.exception_type = 'return_to_receive' " +

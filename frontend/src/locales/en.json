@@ -1117,6 +1117,22 @@
           "arrivedToReceive": "Arrived · to receive",
           "arrivedDamaged": "Arrived · damaged",
           "undo": "Undo"
+        },
+        "units": {
+          "progress": "{{scanned}} of {{count}} in",
+          "allIn": "All {{count}} in",
+          "collapsed": "Order {{order}} · {{scanned}} of {{count}} in",
+          "unitOf": "Unit {{unit}} of {{count}}",
+          "hint": "No Traced labels on these — mark each item that came back. Unmarked items didn't come back.",
+          "body": "It was shipped before its items were tracked in Traced, so there are no labels to scan. Open the parcel and mark each item that came back — sellable or damaged. Items you don't mark are treated as not returned (the customer may have kept them).",
+          "bodyMixed": "Some items on this order were shipped before Traced tracked them. Scan the labelled ones as usual; mark the others that came back. Unmarked items are treated as not returned.",
+          "rtsTitle": "Returned to sender — never delivered",
+          "rtsBody": "Bosta brought this parcel back to you, so it should hold everything on the order. Traced didn't track the order, so there are no labels to scan — mark each item that came back.",
+          "warning": "Sellable items go on managers' Return To Receive list for their next Receiving session — Traced won't add them to stock from here. Don't restock them in Shopify, or they'll be counted twice. Damaged items are only recorded.",
+          "mismatch": "Contents don't match the order?",
+          "mismatchHint": "Records the whole parcel as received instead — managers add what came back in Receiving.",
+          "bostaStatus": "Bosta status",
+          "rtoSince": "returned to origin since {{date}}"
         }
       },
       "footer": {

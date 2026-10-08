@@ -117,6 +117,43 @@ public class ReturnSessionController {
         sessionService.undoMarkReceived(sessionId, shipmentId, principal.userId());
     }
 
+    // ── Untracked order lines on a parcel, one row per unit (Issue 1, V152) ──
+
+    public record UnitRequest(UUID orderItemId, Integer unitNo, String condition) {}
+
+    /**
+     * One unit of an untracked order line came back in a parcel scanned in this session (a courier
+     * return or a returned-to-sender leg no request holds). Same role gate as scanning (owner,
+     * manager, worker). No piece, no stock, no Shopify — see ReturnSessionService.unitArrived().
+     */
+    @PostMapping("/sessions/{sessionId}/parcels/{shipmentId}/units/arrived")
+    @PreAuthorize("isAuthenticated()")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void unitArrived(@PathVariable UUID sessionId, @PathVariable UUID shipmentId,
+                            @RequestBody UnitRequest body,
+                            @AuthenticationPrincipal CustomUserDetails principal) {
+        requireUnit(body);
+        sessionService.unitArrived(sessionId, shipmentId, body.orderItemId(), body.unitNo(), body.condition(),
+            principal.userId());
+    }
+
+    @PostMapping("/sessions/{sessionId}/parcels/{shipmentId}/units/arrived/undo")
+    @PreAuthorize("isAuthenticated()")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void undoUnitArrived(@PathVariable UUID sessionId, @PathVariable UUID shipmentId,
+                                @RequestBody UnitRequest body,
+                                @AuthenticationPrincipal CustomUserDetails principal) {
+        requireUnit(body);
+        sessionService.undoUnitArrived(sessionId, shipmentId, body.orderItemId(), body.unitNo(), principal.userId());
+    }
+
+    private static void requireUnit(UnitRequest body) {
+        if (body == null || body.orderItemId() == null || body.unitNo() == null || body.unitNo() < 1) {
+            throw new org.springframework.web.server.ResponseStatusException(HttpStatus.BAD_REQUEST,
+                "orderItemId and unitNo are required");
+        }
+    }
+
     // ── Untracked request items (Step 6a) ────────────────────────────────────
 
     public record ItemArrivedRequest(String condition) {}

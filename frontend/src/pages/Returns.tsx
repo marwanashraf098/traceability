@@ -168,9 +168,11 @@ interface Parcel {
   requestReference?: string | null
   customerShortName: string | null
   returnedAt: string | null
-  bosta: { itemsCount: number | null; description: string | null; descriptionAr: string | null } | null
+  /** state / rtoSince: only on a returned-to-sender forward leg (Issue 1) — Bosta's own status. */
+  bosta: { itemsCount: number | null; description: string | null; descriptionAr: string | null;
+           state?: string | null; rtoSince?: string | null } | null
   tracked: boolean
-  intakeOutcome: 'scanned' | 'received_untracked' | 'request_items_arrived' | null
+  intakeOutcome: 'scanned' | 'received_untracked' | 'request_items_arrived' | 'untracked_units_arrived' | null
   markedBy: string | null
   markedAt: string | null
   markedInThisSession: boolean
@@ -183,6 +185,27 @@ interface Parcel {
   itemsRequestId?: string | null
   itemsRequestReference?: string | null
   requestItems?: ParcelRequestItem[]
+  /** Issue 1 (V152): a forward leg Bosta returned to the merchant (Return to Origin). */
+  returnedToSender?: boolean
+  /** Issue 1: the order's untracked lines, one row per unit (parcels no request holds). */
+  untrackedUnits?: ParcelUnit[]
+  unitsIn?: number
+  /** Issue 1: the whole-parcel mark is offered (untracked order, no request, nothing marked yet). */
+  canMarkReceived?: boolean
+}
+
+/** Issue 1 — one unit of an untracked order line on a parcel card. */
+interface ParcelUnit {
+  orderItemId: string
+  unitNo: number
+  units: number
+  productTitle: string | null
+  variantTitle: string | null
+  sku: string | null
+  intakeId: string | null
+  condition: 'sellable' | 'damaged' | null
+  viaPhone: boolean
+  markedInSession: string | null
 }
 
 /** Step 6a — one request item on a parcel card. Untracked items (tracked:false) have no piece. */
@@ -782,6 +805,28 @@ function OpenSessionScreen({ sessionId, onExit, onStartNew }: {
     }
   }
 
+  // Issue 1 — "Arrived" for one unit of an untracked order line on a parcel, and its undo.
+  const unitAction = async (shipmentId: string, unit: ParcelUnit, action: 'sellable' | 'damaged' | 'undo') => {
+    const key = `${unit.orderItemId}:${unit.unitNo}`
+    if (itemBusy) return
+    setItemBusy(key)
+    try {
+      await api(`/returns/sessions/${sessionId}/parcels/${shipmentId}/units/arrived${action === 'undo' ? '/undo' : ''}`, {
+        method: 'POST',
+        body: JSON.stringify(action === 'undo'
+          ? { orderItemId: unit.orderItemId, unitNo: unit.unitNo }
+          : { orderItemId: unit.orderItemId, unitNo: unit.unitNo, condition: action }),
+      })
+      if (action !== 'undo') playBeep(true)
+      await load()
+    } catch (e: unknown) {
+      playBeep(false)
+      setError((e as Error).message || t('common.error'))
+    } finally {
+      setItemBusy(null)
+    }
+  }
+
   // Step 6b — "Arrived" for an untracked request item (6a session endpoint), and its undo.
   const [itemBusy, setItemBusy] = useState<string | null>(null)
   const requestItemAction = async (itemId: string, action: 'sellable' | 'damaged' | 'undo') => {
@@ -1107,13 +1152,17 @@ function OpenSessionScreen({ sessionId, onExit, onStartNew }: {
             parcel={parcel}
             expanded={collapseOverride[parcel.shipmentId] !== undefined
               ? !collapseOverride[parcel.shipmentId]
-              : parcel.shipmentId === newestIncompleteId || (parcel.intakeOutcome === 'received_untracked' && parcel.markedInThisSession)}
+              : parcel.shipmentId === newestIncompleteId || (parcel.intakeOutcome === 'received_untracked' && parcel.markedInThisSession)
+                // Issue 1: a parcel handled unit by unit stays open while this session marks its units
+                || (parcel.untrackedUnits ?? []).some(u => u.markedInSession === sessionId)}
             onToggle={expand => setCollapseOverride(prev => ({ ...prev, [parcel.shipmentId]: !expand }))}
             busy={parcelBusy === parcel.shipmentId}
             onMarkReceived={() => parcelAction(parcel.shipmentId, 'mark-received')}
             onUndo={() => parcelAction(parcel.shipmentId, 'undo-mark-received')}
             itemBusy={itemBusy}
             onItemAction={requestItemAction}
+            sessionId={sessionId}
+            onUnitAction={(unit, action) => unitAction(parcel.shipmentId, unit, action)}
             renderExpected={renderExpected}
             renderItem={renderItem}
           />
@@ -1206,7 +1255,7 @@ function OpenSessionScreen({ sessionId, onExit, onStartNew }: {
 // restock / damaged / mismatch and reprint controls are the existing ones, unchanged. ──
 
 function ParcelCard({ parcel, expanded, onToggle, busy, onMarkReceived, onUndo, renderExpected, renderItem,
-  itemBusy = null, onItemAction }: {
+  itemBusy = null, onItemAction, sessionId, onUnitAction }: {
   parcel: Parcel
   expanded: boolean
   onToggle: (expand: boolean) => void
@@ -1217,6 +1266,8 @@ function ParcelCard({ parcel, expanded, onToggle, busy, onMarkReceived, onUndo, 
   renderItem: (item: SessionItem) => React.ReactNode
   itemBusy?: string | null
   onItemAction?: (itemId: string, action: 'sellable' | 'damaged' | 'undo') => void
+  sessionId?: string
+  onUnitAction?: (unit: ParcelUnit, action: 'sellable' | 'damaged' | 'undo') => void
 }) {
   const { t, i18n } = useTranslation()
   const lang = i18n.language
@@ -1226,19 +1277,29 @@ function ParcelCard({ parcel, expanded, onToggle, busy, onMarkReceived, onUndo, 
   // action, so a request-linked parcel is never marked received as a whole.
   const untrackedItems = (parcel.requestItems ?? []).filter(ri => !ri.tracked)
   const untrackedArrived = untrackedItems.filter(ri => ri.arrivedCondition != null).length
-  const untrackedOpen = parcel.leg === 'return' && !parcel.tracked && !parcel.intakeOutcome && untrackedItems.length === 0
+  // Issue 1: the order's untracked lines, one row per unit — partial returns are normal (handled
+  // once one unit is marked; unmarked units didn't come back).
+  const units = parcel.untrackedUnits ?? []
+  const unitsIn = units.filter(u => u.intakeId != null).length
+  const rts = !!parcel.returnedToSender
+  const untrackedOpen = (parcel.leg === 'return' || rts) && !parcel.tracked && !parcel.intakeOutcome
+    && untrackedItems.length === 0 && units.length === 0
   const awaiting = parcel.expectedPieces.length
   const nothingToScan = parcel.tracked && awaiting === 0 && parcel.scannedItems.length === 0 && !parcel.intakeOutcome
-    && untrackedItems.length === 0
+    && untrackedItems.length === 0 && units.length === 0
   const shownCounts = {
-    expected: parcel.counts.expected + untrackedItems.length,
-    scanned: parcel.counts.scanned + untrackedArrived,
+    expected: parcel.counts.expected + untrackedItems.length + units.length,
+    scanned: parcel.counts.scanned + untrackedArrived + unitsIn,
   }
   const requestReference = parcel.requestReference ?? parcel.itemsRequestReference ?? null
 
   const pill: { tone: 'success' | 'warning' | 'neutral'; label: string } | null =
     received ? { tone: 'neutral', label: t('returns.openSession.parcel.receivedNotTracked') }
     : untrackedOpen ? { tone: 'neutral', label: t('returns.openSession.parcel.notTracked') }
+    : units.length > 0 ? (shownCounts.scanned === shownCounts.expected
+        ? { tone: 'success', label: t('returns.openSession.parcel.units.allIn', { count: shownCounts.expected }) }
+        : { tone: parcel.complete ? 'neutral' : 'warning', label: t('returns.openSession.parcel.units.progress',
+            { scanned: shownCounts.scanned, count: shownCounts.expected }) })
     : parcel.complete ? { tone: 'success', label: expanded
         ? t('returns.openSession.parcel.allIn', { count: shownCounts.scanned })
         : t('returns.openSession.parcel.allInShort') }
@@ -1263,7 +1324,9 @@ function ParcelCard({ parcel, expanded, onToggle, busy, onMarkReceived, onUndo, 
       .filter(d => d !== 'pending')
       .map(d => t(d === 'restocked' ? 'returns.openSession.parcel.dispRestocked'
         : d === 'damaged' ? 'returns.openSession.parcel.dispDamaged' : 'returns.openSession.parcel.dispMismatch'))
-    const summary = !parcel.tracked
+    const summary = units.length > 0
+      ? t('returns.openSession.parcel.units.collapsed', { order: isolatedOrder, scanned: shownCounts.scanned, count: shownCounts.expected })
+      : !parcel.tracked
       ? t('returns.openSession.parcel.collapsedNotTracked', { order: isolatedOrder })
       : [t('returns.openSession.parcel.collapsedItems', { order: isolatedOrder, count: shownCounts.expected }), ...dispositions].join(' · ')
     return (
@@ -1313,6 +1376,19 @@ function ParcelCard({ parcel, expanded, onToggle, busy, onMarkReceived, onUndo, 
         </div>
         {pill && <span data-testid="parcel-pill"><Badge tone={pill.tone} label={pill.label} /></span>}
       </div>
+
+      {rts && parcel.bosta?.state && !received && (
+        <div className="px-5 py-3 bg-elevated border-t border-line flex gap-4 items-baseline" data-testid="parcel-bosta-status">
+          <span className="text-caption font-semibold uppercase tracking-wider text-muted whitespace-nowrap">
+            {t('returns.openSession.parcel.units.bostaStatus')}
+          </span>
+          <span className="text-small text-primary">
+            <bdi dir="ltr">{parcel.bosta.state}</bdi>
+            {parcel.bosta.rtoSince && <> · {t('returns.openSession.parcel.units.rtoSince', {
+              date: new Date(parcel.bosta.rtoSince).toLocaleDateString(lang, { day: 'numeric', month: 'short' }) })}</>}
+          </span>
+        </div>
+      )}
 
       {bostaDescription && !received && (
         <div className="px-5 py-3 bg-elevated border-t border-line flex gap-4 items-baseline">
@@ -1382,7 +1458,9 @@ function ParcelCard({ parcel, expanded, onToggle, busy, onMarkReceived, onUndo, 
             <span className="text-small font-semibold text-primary">{t('returns.openSession.parcel.itemsOnOrder')}</span>
             <span className="flex-1" />
             <span className="text-caption text-muted">
-              {awaiting > 0 ? t('returns.openSession.parcel.scanHint') : parcel.complete ? t('returns.openSession.parcel.allDecided') : null}
+              {awaiting > 0 ? t('returns.openSession.parcel.scanHint')
+                : units.length > 0 && unitsIn < units.length ? t('returns.openSession.parcel.units.hint')
+                : parcel.complete ? t('returns.openSession.parcel.allDecided') : null}
             </span>
           </div>
           <div className="px-5 pb-4 space-y-2.5">
@@ -1392,7 +1470,40 @@ function ParcelCard({ parcel, expanded, onToggle, busy, onMarkReceived, onUndo, 
               <UntrackedItemRow key={ri.id} item={ri} busy={itemBusy === ri.id}
                 onAction={action => onItemAction?.(ri.id, action)} />
             ))}
+            {units.map(u => (
+              <UntrackedUnitRow key={`${u.orderItemId}:${u.unitNo}`} unit={u}
+                busy={itemBusy === `${u.orderItemId}:${u.unitNo}`}
+                canUndo={!!sessionId && u.markedInSession === sessionId}
+                onAction={action => onUnitAction?.(u, action)} />
+            ))}
           </div>
+          {units.length > 0 && unitsIn < units.length && (
+            <div className="px-5 pb-4 flex flex-col gap-3" data-testid="parcel-units-info">
+              <div className="flex gap-3.5 p-4 rounded-xl bg-warning/5 border border-warning/30">
+                <AlertTriangle size={20} strokeWidth={2} className="text-warning shrink-0 mt-0.5" />
+                <div className="flex flex-col gap-2">
+                  <p className="text-body font-semibold text-warning">
+                    {t(rts ? 'returns.openSession.parcel.units.rtsTitle' : 'returns.openSession.parcel.notTrackedTitle')}
+                  </p>
+                  <p className="text-small text-primary leading-relaxed">
+                    {t(rts ? 'returns.openSession.parcel.units.rtsBody'
+                      : parcel.tracked ? 'returns.openSession.parcel.units.bodyMixed' : 'returns.openSession.parcel.units.body')}
+                  </p>
+                  <p className="text-small text-primary leading-relaxed font-semibold">{t('returns.openSession.parcel.units.warning')}</p>
+                </div>
+              </div>
+              {parcel.canMarkReceived && (
+                <div className="flex flex-wrap items-center gap-3" data-testid="parcel-units-fallback">
+                  <span className="text-small font-semibold text-primary">{t('returns.openSession.parcel.units.mismatch')}</span>
+                  <button className="btn-outline btn" disabled={busy} onClick={onMarkReceived} data-testid="parcel-mark-received">
+                    {busy && <Spinner size={16} />}
+                    {t('returns.openSession.parcel.markReceived')}
+                  </button>
+                  <span className="text-caption text-muted">{t('returns.openSession.parcel.units.mismatchHint')}</span>
+                </div>
+              )}
+            </div>
+          )}
         </div>
       )}
     </section>
@@ -1445,6 +1556,65 @@ function UntrackedItemRow({ item, busy, onAction }: {
           </button>
         </div>
       ) : null}
+    </div>
+  )
+}
+
+/**
+ * Issue 1 — one unit of an untracked order line on a parcel card (no request): no label to scan,
+ * so the worker marks it "Arrived · sellable / damaged". Afterwards: the outcome + Undo (a mark made
+ * in this session only). Unmarked units simply didn't come back.
+ */
+function UntrackedUnitRow({ unit, busy, canUndo, onAction }: {
+  unit: ParcelUnit
+  busy: boolean
+  canUndo: boolean
+  onAction: (action: 'sellable' | 'damaged' | 'undo') => void
+}) {
+  const { t } = useTranslation()
+  const arrived = unit.intakeId != null
+  const id = `${unit.orderItemId}-${unit.unitNo}`
+  return (
+    <div className="border border-line rounded-xl px-3.5 py-3 flex flex-wrap items-center gap-3" data-testid={`untracked-unit-${id}`}>
+      <span className={cn('w-2 h-2 rounded-full shrink-0', arrived ? 'bg-success' : 'bg-info')} />
+      <div className="flex-1 min-w-0">
+        <p className="text-small font-semibold text-primary truncate"><bdi>{unit.productTitle ?? '—'}</bdi></p>
+        <p className="text-caption text-muted truncate flex items-center gap-2">
+          <span>
+            {unit.variantTitle && <><bdi>{unit.variantTitle}</bdi> · </>}
+            {t('returns.openSession.parcel.units.unitOf', { unit: unit.unitNo, count: unit.units })}
+            {' · '}{t('returns.openSession.parcel.untracked.notTracked')}
+          </span>
+          {arrived && unit.viaPhone && <ViaPhoneTag />}
+        </p>
+      </div>
+      {arrived ? (
+        <>
+          <span data-testid="untracked-unit-outcome">
+            <Badge tone={unit.condition === 'damaged' ? 'critical' : 'info'}
+              label={t(unit.condition === 'damaged'
+                ? 'returns.openSession.parcel.untracked.arrivedDamaged'
+                : 'returns.openSession.parcel.untracked.arrivedToReceive')} />
+          </span>
+          {canUndo && (
+            <button className="btn-outline btn" disabled={busy} onClick={() => onAction('undo')} data-testid="untracked-unit-undo">
+              {busy && <Spinner size={16} />}
+              {t('returns.openSession.parcel.untracked.undo')}
+            </button>
+          )}
+        </>
+      ) : (
+        <div className="flex gap-2">
+          {/* raw <button>s — Button doesn't spread data-testid */}
+          <button className="btn-brand" disabled={busy} onClick={() => onAction('sellable')} data-testid="untracked-unit-sellable">
+            {busy && <Spinner size={16} />}
+            {t('returns.openSession.parcel.untracked.arrivedSellable')}
+          </button>
+          <button className="btn-outline btn" disabled={busy} onClick={() => onAction('damaged')} data-testid="untracked-unit-damaged">
+            {t('returns.openSession.parcel.untracked.arrivedDamagedAction')}
+          </button>
+        </div>
+      )}
     </div>
   )
 }
