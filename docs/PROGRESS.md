@@ -4,6 +4,41 @@
 
 ## Current state
 
+**Analytics slice 8 — performance, backend only (2026-10-08, branch `analytics/s8-perf`, merged to main; NOT deployed).
+Migration V149.**
+- **V149** moves the raw parsing analytics did per request into STORED generated columns over IMMUTABLE, PARALLEL SAFE,
+  total functions (no plpgsql EXCEPTION blocks — they open a subtransaction per call and break parallel plans; casts are
+  regex- or `pg_input_is_valid`-guarded, so a generated column can never fail an ingest write). orders: raw_cancelled,
+  is_cancelled, source_name, channel, payment_group, customer_key, ship_province, shopify_fulfilled, discount_types /
+  labels / codes, refund_lines; order_items: line_key, unit_price, price_is_raw, original_qty, current_qty,
+  line_discount, net_unit_price, alloc_amounts, alloc_indexes; shipments: type_code, state_value, city_id, city_name,
+  raw_cod, collected_from_business_at, last_failure_category; products: product_type_norm, size_position; variants:
+  option1–3. Indexes: shipments_tenant_delivered_at_idx, shipments_terminal_unstamped_idx, shipments_tenant_open_idx.
+  Generated columns compute after BEFORE triggers, so V143 redaction / V144 email strip apply first (redaction clears
+  customer_key and ship_province). The SQL mapping functions are twins of `AnalyticsMappings`;
+  `AnalyticsSqlParityTest` asserts identical output, malformed payloads, redaction, and that no EXCEPTION block exists.
+- **Queries rewritten on the columns, byte-identical output:** `AnalyticsGoldenTest` (frozen clock 2026-10-08 12:00
+  Cairo, fixed ids) compares every analytics endpoint's raw body against `src/test/resources/analytics-golden/`
+  (re-record with `-Dgolden.record=true`; a mismatch writes target/golden-actual/). Clock-bound SQL (money city-rate
+  90-day window, payout weekday) takes `now` from the service Clock.
+- **Long ranges skip the previous period:** a period > 92 days returns `previous: null` / `previousRange: null` unless
+  `compare=true` (all comparing endpoints: revenue summary / breakdown / discounts / heatmap, delivery summary /
+  failure-reasons, products/extras). `AnalyticsSql.previousOrNull`.
+- **Outcome correction (shared rule, applies to s2/s3/s5):** a deciding forward leg cancelled / terminated BEFORE
+  pickup (no collected_from_business_at and no with_courier / returning / returned / delivered / lost history) =
+  not_shipped (wijha by the carrier rule); after pickup = other_terminal (failed). Goldens re-recorded deliberately: every
+  change comes from two seed orders moving other_terminal → not_shipped.
+- **Benchmark** (`AnalyticsBenchmark`, skipped unless `-Dbench.url`; `bench/seed.sql` = 60k orders / 120k lines / ~57k
+  shipments; app as app_user; container with prod flags jit=off, work_mem=2184kB, shared_buffers=224MB): every 30-day
+  endpoint < 400 ms warm p95. 366 days (no compare), warm p95 ms: sales/variants 1272, products 437, cities 770, money
+  ≤ 457, revenue summary / breakdowns / heatmap 1260–1373, discounts **1866** (the one miss vs 1.5 s — the fixture
+  discounts nearly every order), delivery 1371 / 1414, extras 1393.
+- **No rollup table now.** Plan if a tenant nears ~3k orders/month: a per-order facts table (one row per order with
+  outcome, money, channel, governorate, …) refreshed on order / shipment writes, read by OrderFacts instead of
+  recomputing soldLines + ORDER_OUTCOMES per request.
+- **Deploy checklist:** V149 rewrites orders / order_items / shipments / products / variants under ACCESS EXCLUSIVE locks
+  (50 s on the 60k bench; prod estimate a few seconds) — **deploy in a quiet hour**. Rebuild with `--no-cache`.
+
 **Fix — embedded token exchange stored a NON-expiring token (2026-10-08, branch `fix/embedded-expiring-token` off main
 63308bb; merged to main; NOT pushed, NOT deployed). No migration.** Prod: embedded signup `test-oaozdwro` got a
 non-expiring offline token → import 403 "Non-expiring access tokens are no longer accepted".
