@@ -722,8 +722,8 @@ class AnalyticsMoneyTest {
         assertThat(n(body, "deliveredCount")).isEqualTo(2);
         assertThat(dec(body, "costPerUnsuccessfulDelivery")).isEqualByComparingTo("77.52");
         assertThat(n(body, "refusedCount")).isEqualTo(1);
-        // Paid on 09-09, deposited 09-01 → 8 days (the August payout is outside the period).
-        assertThat(dec(body, "payoutLagDays")).isEqualByComparingTo("8.0");
+        // Delivered 09-05 → paid 09-09 = 4 days (median delivered → paid; the August payout is outside the period).
+        assertThat(dec(body, "payoutLagDays")).isEqualByComparingTo("4.0");
         assertThat(n(body, "payoutLagShipments")).isEqualTo(1);
     }
 

@@ -140,6 +140,9 @@ class RlsCoverageTest {
             "/api/v1/analytics/sales/variants",
             "/api/v1/analytics/sales/products",
             "/api/v1/analytics/sales/cities",
+            // Analytics B1 (owner only) — analyticsSalesVariantsDaily_reflectSeededSoldLine below; app_user
+            // isolation in AnalyticsB1Test
+            "/api/v1/analytics/sales/variants/daily",
             // Analytics slice 3 (owner only) — analyticsMoney_reflectSeededSettledLeg below; app_user
             // isolation in AnalyticsMoneyTest
             "/api/v1/analytics/money/pipeline",
@@ -1572,6 +1575,28 @@ class RlsCoverageTest {
         ResponseEntity<Map> products = get("/api/v1/analytics/sales/products?period=today", Map.class);
         assertThat(products.getStatusCode()).isEqualTo(HttpStatus.OK);
         assertThat((List<?>) products.getBody().get("products")).isNotEmpty();
+
+        jdbc.update("DELETE FROM order_items WHERE order_id = ?", orderId);
+        jdbc.update("DELETE FROM orders WHERE id = ?", orderId);
+    }
+
+    @Test
+    void analyticsSalesVariantsDaily_reflectSeededSoldLine() {
+        UUID orderId = UUID.randomUUID();
+        jdbc.update(
+                "INSERT INTO orders (id, tenant_id, store_id, external_id, number, status, " +
+                "    payment_method, placed_at, on_hold) " +
+                "VALUES (?, ?, ?, 'EXT-CVG-B1', '#CVG-B1', 'new'::order_status, 'cod', now(), false)",
+                orderId, tenantId, storeId);
+        jdbc.update(
+                "INSERT INTO order_items (id, tenant_id, order_id, variant_id, quantity, raw) " +
+                "VALUES (gen_random_uuid(), ?, ?, ?, 3, '{\"price\":\"150.00\",\"quantity\":3}'::jsonb)",
+                tenantId, orderId, variantId);
+
+        ResponseEntity<Map> daily = get("/api/v1/analytics/sales/variants/daily?period=today&ids=" + variantId, Map.class);
+        assertThat(daily.getStatusCode()).isEqualTo(HttpStatus.OK);
+        Map<?, ?> v = (Map<?, ?>) ((List<?>) daily.getBody().get("variants")).get(0);
+        assertThat(((Number) v.get("totalUnits")).longValue()).isGreaterThanOrEqualTo(3);
 
         jdbc.update("DELETE FROM order_items WHERE order_id = ?", orderId);
         jdbc.update("DELETE FROM orders WHERE id = ?", orderId);

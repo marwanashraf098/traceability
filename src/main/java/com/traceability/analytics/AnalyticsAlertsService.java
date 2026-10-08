@@ -166,13 +166,11 @@ public class AnalyticsAlertsService {
      * 90 days before now. Parameters: override domains, override days, tenant id, now.
      */
     private static final String LAG_SQL = """
-        SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY s.cashout_date - (s.delivered_at AT TIME ZONE 'Africa/Cairo')::date)
+        SELECT """ + SettlementSql.medianPayoutLag("s") + """
                    AS median_lag,
                COUNT(*) AS n
         FROM shipments s""" + SettlementSql.floorJoin("s") + """
-        WHERE s.tenant_id = ? AND s.provider = 'bosta' AND s.shipment_leg = 'forward'
-          AND s.settlement_status = 'paid' AND s.cashout_date IS NOT NULL AND s.delivered_at IS NOT NULL
-          AND s.cashout_date >= (s.delivered_at AT TIME ZONE 'Africa/Cairo')::date
+        WHERE s.tenant_id = ? AND s.provider = 'bosta' AND """ + SettlementSql.payoutLagLeg("s") + """
           AND s.cashout_date > (?::timestamptz AT TIME ZONE 'Africa/Cairo')::date - 90
           AND """ + SettlementSql.POST_FLOOR;
 

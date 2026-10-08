@@ -72,6 +72,18 @@ final class SettlementSql {
         + " OR fo.placed_at >= COALESCE(fst.orders_ingest_from, (fov.floor_day::date::timestamp AT TIME ZONE 'Africa/Cairo'))) ";
 
     /**
+     * A ZERO cash cycle (B1, 2026-10-08): Bosta settled the leg for exactly 0 — e.g. a fee-free
+     * Return to Origin, or a COD that equalled the fees — and no cashout names it. Nothing is owed,
+     * and Bosta never sends a cashout for it (prod 2026-10-08: 9 of 10 zero cycles had none, while
+     * every negative deposit got one, netted in a batch). Such a leg is never 'unresolved', never
+     * delivered-not-paid, never awaiting payout, and the refresh job stops re-reading it.
+     */
+    static String zeroCycle(String s) {
+        return " (" + s + ".cash_cycle_id IS NOT NULL AND " + s + ".deposited_amt = 0 AND "
+            + s + ".cashout_txn_id IS NULL) ";
+    }
+
+    /**
      * Delivered, not paid (slice 3 — the ONE rule, used by /money/stuck and the order finance list):
      * the leg was deposited, its settlement was refreshed within 24 hours (so "no payout" is current
      * news, not a stale read), and two of the tenant's payout weekdays have passed since the deposit
@@ -80,7 +92,7 @@ final class SettlementSql {
      * weekday.
      */
     static String deliveredNotPaid(String s, String now, String weekday) {
-        return " (" + s + ".settlement_status = 'deposited' AND " + s + ".deposited_at IS NOT NULL "
+        return " (" + s + ".settlement_status = 'deposited' AND " + s + ".deposited_at IS NOT NULL AND NOT " + zeroCycle(s)
             + " AND " + s + ".settlement_refreshed_at > " + now + " - interval '24 hours' "
             + " AND CASE WHEN " + weekday + " IS NULL THEN " + s + ".deposited_at < " + now + " - interval '14 days' "
             + "          ELSE (SELECT COUNT(*) FROM generate_series((" + s + ".deposited_at AT TIME ZONE 'Africa/Cairo')::date + 1, "
@@ -105,6 +117,23 @@ final class SettlementSql {
     static String lastChange(String s) {
         return " COALESCE((SELECT MAX(h.occurred_at) FROM shipment_status_history h WHERE h.shipment_id = "
             + s + ".id), " + s + ".created_at) ";
+    }
+
+    /**
+     * Payout lag (B1, 2026-10-08 — ONE definition, /money/fees and the cash forecast): the MEDIAN of
+     * payout day − Cairo delivery day over paid forward legs that were delivered and paid on or
+     * after the delivery day. Each caller adds its own window on the payout day. Use with
+     * {@link #floorJoin} / {@link #POST_FLOOR}.
+     */
+    static String medianPayoutLag(String s) {
+        return " percentile_cont(0.5) WITHIN GROUP (ORDER BY " + s + ".cashout_date - ("
+            + s + ".delivered_at AT TIME ZONE 'Africa/Cairo')::date) ";
+    }
+
+    static String payoutLagLeg(String s) {
+        return " (" + s + ".shipment_leg = 'forward' AND " + s + ".settlement_status = 'paid' "
+            + " AND " + s + ".cashout_date IS NOT NULL AND " + s + ".delivered_at IS NOT NULL "
+            + " AND " + s + ".cashout_date >= (" + s + ".delivered_at AT TIME ZONE 'Africa/Cairo')::date) ";
     }
 
     /**

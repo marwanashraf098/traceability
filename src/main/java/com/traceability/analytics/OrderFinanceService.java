@@ -31,7 +31,7 @@ import static com.traceability.analytics.AnalyticsSql.money;
  *   refunded        — a customer return recorded on a delivered order (the s2 returns, or a refund
  *                     in the return_refunds ledger): net = collected − fees − refunded amount; with
  *                     no refund recorded, net null and refundAmountUnknown;
- *   paid            — delivered and (the COD leg has a cashout transaction, or the order was
+ *   paid            — delivered and (the COD leg has a cashout transaction or a zero cash cycle, or the order was
  *                     prepaid): net = deposited_amt (COD) or total − fees (prepaid);
  *   overdue         — delivered and the s3 delivered-not-paid rule holds
  *                     (SettlementSql.deliveredNotPaid), or in transit with no status change for
@@ -84,7 +84,12 @@ public class OrderFinanceService {
                     && r.out.name().toLowerCase(Locale.ROOT).replaceFirst("^#", "").contains(needle);
                 boolean byTracking = !tracking.isEmpty()
                     && r.out.trackingNumbers().stream().anyMatch(t -> t != null && t.contains(tracking));
-                if (!byName && !byTracking) return false;
+                // The display name only (first name + last initial) — never the stored full name, so
+                // the search can't be used to probe a surname the list doesn't show.
+                String shown = r.out.customer() == null ? null : r.out.customer().toLowerCase(Locale.ROOT);
+                String who = q.trim().toLowerCase(Locale.ROOT).replaceAll("\\s+", " ");
+                boolean byCustomer = shown != null && !who.isEmpty() && shown.contains(who);
+                if (!byName && !byTracking && !byCustomer) return false;
             }
             return true;
         }
@@ -103,7 +108,7 @@ public class OrderFinanceService {
         SELECT om.order_id, om.placed_at, om.booked, om.outcome, om.city_id, om.city, om.returned_rev,
                om.item_count, om.variant_ids,
                o.number, o.customer_name, o.payment_group, o.ship_province AS province_code,
-               lg.internal_state AS leg_state, lg.cod, lg.leg_cod, lg.leg_provider, lg.cashout_txn_id, lg.deposited_amt, lg.not_paid, lg.stuck,
+               lg.internal_state AS leg_state, lg.cod, lg.leg_cod, lg.leg_provider, lg.cashout_txn_id, lg.zero_cycle, lg.deposited_amt, lg.not_paid, lg.stuck,
                fe.fees, fe.fees_estimated, fe.tracking_numbers,
                rf.refunded
         FROM order_money om
@@ -113,6 +118,8 @@ public class OrderFinanceService {
                    """ + SettlementSql.cod("sh") + """
                     AS cod, COALESCE(sh.cod_amount, sh.raw_cod) AS leg_cod, sh.provider AS leg_provider,
                    sh.cashout_txn_id, sh.deposited_amt,
+                   """ + SettlementSql.zeroCycle("sh") + """
+                    AS zero_cycle,
                    """ + SettlementSql.deliveredNotPaid("sh", "?::timestamptz", "?::int") + """
                     AS not_paid,
                    """ + SettlementSql.stuckWithBosta("sh", SettlementSql.lastChange("sh"), "?::timestamptz") + """
@@ -306,7 +313,8 @@ public class OrderFinanceService {
         BigDecimal fees = moneyOrNull(rs.getBigDecimal("fees"));
         BigDecimal refunded = moneyOrNull(rs.getBigDecimal("refunded"));
         boolean customerReturn = rs.getBigDecimal("returned_rev") != null && rs.getBigDecimal("returned_rev").signum() > 0;
-        Facts facts = new Facts(outcome, prepaid, rs.getString("cashout_txn_id") != null,
+        // A zero cash cycle (SettlementSql.zeroCycle) is settled: nothing is owed and no cashout comes.
+        Facts facts = new Facts(outcome, prepaid, rs.getString("cashout_txn_id") != null || rs.getBoolean("zero_cycle"),
             rs.getBoolean("not_paid"), rs.getBoolean("stuck"), customerReturn || refunded != null);
         String status = financialStatus(facts);
         BigDecimal cod = moneyOrNull(rs.getBigDecimal("cod"));

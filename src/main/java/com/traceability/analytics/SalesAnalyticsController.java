@@ -32,6 +32,35 @@ public class SalesAnalyticsController {
         return svc.variants(AnalyticsPeriod.resolve(period, from, to, svc.today()));
     }
 
+    /**
+     * Sold units per Cairo day for up to 20 variants (comma-separated ids) — the Top SKUs
+     * sparklines and the SKU drawer's chart.
+     */
+    @GetMapping("/variants/daily")
+    @PreAuthorize("hasRole('OWNER')")
+    public SalesAnalyticsService.VariantDailyResponse variantsDaily(
+            @RequestParam String ids,
+            @RequestParam(required = false) String period,
+            @RequestParam(required = false) String from,
+            @RequestParam(required = false) String to) {
+        java.util.List<java.util.UUID> list = new java.util.ArrayList<>();
+        for (String part : ids.split(",")) {
+            String p = part.trim();
+            if (p.isEmpty()) continue;
+            try {
+                java.util.UUID id = java.util.UUID.fromString(p);
+                if (!list.contains(id)) list.add(id);
+            } catch (IllegalArgumentException e) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "ids must be variant ids (UUIDs)");
+            }
+        }
+        if (list.isEmpty() || list.size() > SalesAnalyticsService.MAX_DAILY_VARIANTS) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                "ids must hold 1 to " + SalesAnalyticsService.MAX_DAILY_VARIANTS + " variant ids");
+        }
+        return svc.variantsDaily(AnalyticsPeriod.resolve(period, from, to, svc.today()), list);
+    }
+
     /** Per city of the order's deciding Bosta forward leg; orders with no Bosta leg aren't listed. */
     @GetMapping("/cities")
     @PreAuthorize("hasRole('OWNER')")
