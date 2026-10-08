@@ -4,6 +4,30 @@
 
 ## Current state
 
+**Fix — order imports made stored payloads poorer (2026-10-08, branch `fix/order-payload-downgrade`, merged to main; NOT
+deployed). Migration V156.**
+- **Cause:** every GraphQL order import (connect / reconnect / OAuth upgrade re-import, reconcile catch-up) re-reads the
+  last 30 days (`SHOPIFY_IMPORT_LOOKBACK_DAYS`) and `UPSERT_ORDER` replaced `orders.raw` outright — so each import
+  overwrote the REST webhook payloads in its window with a GraphQL node: before Build B (2026-10-06) with no customer /
+  address fields at all, and never with refunds / fulfillments / discount allocations / source_name. Prod: The Snouts
+  111 orders, Jumi 37 (no other tenant). The ACCESS_DENIED step-down was not involved.
+- **Fix (`ShopifySyncService.UPSERT_ORDER_IMPORT`, import paths only — webhooks unchanged):** FRESHNESS — an existing
+  order is written only when the incoming `updatedAt` (`shopify_order_updated_at`: REST updated_at / GraphQL updatedAt;
+  the orders query now asks for `updatedAt`) is strictly newer than the stored payload's, or the stored one has none;
+  otherwise nothing is written (no items, no flags). KEEP CUSTOMER — when it writes, the stored customer / shipping /
+  billing / phone groups the node lacks (missing or null, either spelling) survive (`shopify_order_raw_keep_customer`).
+- **V156 restore** from each order's latest stored orders/* webhook (never a redacted order, fill-only PII columns,
+  idempotent): a GraphQL node whose webhook payload is at least as new → the FULL webhook payload (never poorer in
+  customer data); otherwise customer groups only. Prod dry run: Snouts 111 full, Jumi 37 full, 0 customer-only.
+- **Impact it repairs (prod 2026-10-08, overwritten orders):** channel lost on all 148 (source_name), discounts on 10,
+  refund add-back on 9; the REST fulfillments (tracking) that BostaFulfillmentCatchUpService / BostaVisibilityCheckService
+  read from `orders.raw` were missing on 138 (2 Snouts orders with a tracking number and no forward Bosta leg). Real-time
+  linking (FulfillmentTrackingCapture) reads the webhook payload and was never affected.
+- **Open (not done, needs an existing-test edit):** the FULL-tier query asks for `customer { firstName lastName … }` but
+  not `id`, so an imported order's `customer_key` is `p:<phone>` while a webhook order's is `c:<id>` — one customer can
+  appear twice in Analytics → Customers. Adding `id` breaks `ShopifyHttpGatewayOrdersPiiTest.w1` (exact substring).
+- Tests: `OrderPayloadDowngradeTest` (9), `OrdersQueryFieldsTest` (1).
+
 **Analytics slice 6 — customers since connect, backend only (2026-10-08, branch `analytics/s6-customers`, merged to
 main; NOT deployed). Migration V155 (`orders.customer_created_at`, renumbered from V154 — the other session took it).**
 - **Endpoints (`CustomerAnalyticsService`, owner-only):** `/customers/summary?period&compare` (customers who ordered;
