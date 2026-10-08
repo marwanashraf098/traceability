@@ -305,6 +305,32 @@ class AnalyticsSqlParityTest {
         assertThat(jdbc.queryForObject("SELECT customer_key FROM orders WHERE id = ?", String.class, p)).isNull();
     }
 
+    /**
+     * Generated-column functions must be fast and parallel-safe for real: an EXCEPTION block opens
+     * a subtransaction per call (a 60k-order rewrite ran > 10 minutes) and fails inside a parallel
+     * plan ("cannot start subtransactions during a parallel operation").
+     */
+    @Test
+    void generatedColumnFunctions_haveNoExceptionBlocks_andRunInAParallelPlan() {
+        List<String> withException = jdbc.queryForList(
+            "SELECT proname FROM pg_proc WHERE proname LIKE 'analytics\\_%' AND prosrc ILIKE '%exception%'", String.class);
+        assertThat(withException).as("analytics_* functions with an EXCEPTION block").isEmpty();
+        List<String> notSafe = jdbc.queryForList(
+            "SELECT proname FROM pg_proc WHERE proname LIKE 'analytics\\_%' AND (proparallel <> 's' OR provolatile <> 'i')", String.class);
+        assertThat(notSafe).as("analytics_* functions not IMMUTABLE PARALLEL SAFE").isEmpty();
+        UUID[] t = tenant();
+        order(t, "{\"source_name\":\"web\",\"referring_site\":\"https://x.com/\",\"landing_site\":\"/?utm_source=f%61cebook\"," +
+            "\"refunds\":[{\"created_at\":\"bad\",\"refund_line_items\":[{\"line_item_id\":1,\"quantity\":1,\"restock_type\":\"return\"}]}]}");
+        Long n = new org.springframework.transaction.support.TransactionTemplate(
+            new org.springframework.jdbc.datasource.DataSourceTransactionManager(jdbc.getDataSource())).execute(st -> {
+                jdbc.execute("SET LOCAL debug_parallel_query = on");
+                return jdbc.queryForObject("SELECT count(*) FROM orders WHERE analytics_order_channel(raw) IS NOT NULL " +
+                    "AND analytics_refund_lines(raw) IS DISTINCT FROM '{}'::jsonb AND analytics_customer_key(raw) IS DISTINCT FROM 'x' " +
+                    "AND analytics_payment(raw -> 'payment_gateway_names') IS NOT NULL", Long.class);
+            });
+        assertThat(n).isPositive();
+    }
+
     // ── fixtures ────────────────────────────────────────────────────────────
 
     /** [tenant, store, variant]. */

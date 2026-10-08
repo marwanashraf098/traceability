@@ -8,8 +8,10 @@
 -- migration rewrites the table, and NO ingest code changes.
 --
 -- RULE: a generated expression that throws makes the row's INSERT / UPDATE fail, i.e. it would
--- break Shopify / Bosta ingest. Every function here is total: casts are regex-guarded or wrapped
--- in exception handlers and return NULL on anything unexpected.
+-- break Shopify / Bosta ingest. Every function here is total: casts are regex-guarded or checked
+-- with pg_input_is_valid and return NULL on anything unexpected. NO plpgsql EXCEPTION blocks: each
+-- one opens a subtransaction per call (a table rewrite of 60k orders took >10 minutes) and makes
+-- the function unusable in a parallel plan.
 --
 -- Mapping functions (channel, payment, failure reason) are the SQL twins of the Java tables in
 -- com.traceability.analytics.AnalyticsMappings; AnalyticsSqlParityTest asserts identical output.
@@ -40,22 +42,22 @@ $$;
 
 -- A timestamp that won't parse is NULL, never an error. Shopify / Bosta timestamps carry an
 -- offset or Z, so the result does not depend on the session time zone.
-CREATE FUNCTION analytics_ts(t text) RETURNS timestamptz LANGUAGE plpgsql IMMUTABLE PARALLEL SAFE AS $$
-BEGIN
-    RETURN NULLIF(t, '')::timestamptz;
-EXCEPTION WHEN others THEN
-    RETURN NULL;
-END
+CREATE FUNCTION analytics_ts(t text) RETURNS timestamptz LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
+    SELECT CASE WHEN t IS NOT NULL AND t <> '' AND pg_input_is_valid(t, 'timestamptz') THEN t::timestamptz END
 $$;
 
--- java.net.URLDecoder.decode(t, UTF-8): '+' → space, %XX → bytes; NULL where Java throws
--- (malformed escape) so the caller falls back to the raw text, as the Java code does.
+-- java.net.URLDecoder.decode(t, UTF-8) as far as channel classification can tell: '+' → space,
+-- %XX below 0x80 → that ASCII character, any byte from 0x80 (and %00) → U+FFFD; NULL where Java
+-- throws (a malformed escape) so the caller falls back to the raw text, as the Java code does. The
+-- platform rules only test ASCII prefixes, so a multi-byte character decoding to one character in
+-- Java and to several U+FFFD here classifies the same (AnalyticsSqlParityTest).
 CREATE FUNCTION analytics_url_decode(t text) RETURNS text LANGUAGE plpgsql IMMUTABLE PARALLEL SAFE AS $$
 DECLARE
-    out bytea := ''::bytea;
+    out text := '';
     i int := 1;
     n int;
     c text;
+    b int;
 BEGIN
     IF t IS NULL THEN RETURN NULL; END IF;
     IF position('%' IN t) = 0 AND position('+' IN t) = 0 THEN RETURN t; END IF;
@@ -63,19 +65,18 @@ BEGIN
     WHILE i <= n LOOP
         c := substr(t, i, 1);
         IF c = '+' THEN
-            out := out || '\x20'::bytea;
+            out := out || ' ';
         ELSIF c = '%' THEN
             IF i + 2 > n OR substr(t, i + 1, 2) !~ '^[0-9A-Fa-f]{2}$' THEN RETURN NULL; END IF;
-            out := out || decode(substr(t, i + 1, 2), 'hex');
+            b := ('x' || substr(t, i + 1, 2))::bit(8)::int;
+            out := out || CASE WHEN b BETWEEN 1 AND 127 THEN chr(b) ELSE chr(65533) END;
             i := i + 2;
         ELSE
-            out := out || convert_to(c, 'UTF8');
+            out := out || c;
         END IF;
         i := i + 1;
     END LOOP;
-    RETURN convert_from(out, 'UTF8');
-EXCEPTION WHEN others THEN
-    RETURN NULL;
+    RETURN out;
 END
 $$;
 
@@ -100,8 +101,6 @@ BEGIN
     IF position('@' IN host) > 0 THEN host := regexp_replace(host, '^.*@', ''); END IF;
     IF position(':' IN host) > 0 THEN host := substr(host, 1, position(':' IN host) - 1); END IF;
     RETURN NULLIF(host, '');
-EXCEPTION WHEN others THEN
-    RETURN NULL;
 END
 $$;
 
@@ -159,8 +158,6 @@ BEGIN
        AND host NOT LIKE '%.myshopify.com' THEN
         RETURN 'Other referral';
     END IF;
-    RETURN 'Direct';
-EXCEPTION WHEN others THEN
     RETURN 'Direct';
 END
 $$;
@@ -292,41 +289,57 @@ $$;
 --   shopify_returned = the added-back 'return' units;
 --   unverified_no_restock = 'no_restock' refund lines on an order with no 'fulfillments' key.
 -- NULL when the order has no refund lines. A key whose value is JSON null counts as absent.
-CREATE FUNCTION analytics_refund_lines(raw jsonb) RETURNS jsonb LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
-    WITH ctx AS (
-        SELECT CASE WHEN jsonb_typeof(raw -> 'fulfillments') = 'array' THEN raw -> 'fulfillments' ELSE '[]'::jsonb END AS fs,
-               (raw -> 'fulfillments') IS NOT NULL AND jsonb_typeof(raw -> 'fulfillments') <> 'null' AS has_f
-    ),
-    rl AS (
-        SELECT rli ->> 'line_item_id' AS line_id,
-               COALESCE(analytics_int(rli ->> 'quantity'), 0) AS units,
-               rli ->> 'restock_type' AS restock,
-               ctx.has_f,
-               rli ->> 'restock_type' IN ('return', 'no_restock') AND CASE
-                   WHEN ctx.has_f THEN EXISTS (
-                       SELECT 1 FROM jsonb_array_elements(ctx.fs) f
-                       WHERE COALESCE(f ->> 'status', '') NOT IN ('cancelled', 'error', 'failure')
-                         AND analytics_ts(f ->> 'created_at') < analytics_ts(r ->> 'created_at')
-                         AND EXISTS (SELECT 1 FROM jsonb_array_elements(CASE WHEN jsonb_typeof(f -> 'line_items') = 'array'
-                                                                             THEN f -> 'line_items' ELSE '[]'::jsonb END) fl
-                                     WHERE fl ->> 'id' = rli ->> 'line_item_id'))
-                   ELSE rli ->> 'restock_type' = 'return'
-               END AS counts
-        FROM ctx
-        CROSS JOIN LATERAL jsonb_array_elements(CASE WHEN jsonb_typeof(raw -> 'refunds') = 'array'
-                                                     THEN raw -> 'refunds' ELSE '[]'::jsonb END) r
-        CROSS JOIN LATERAL jsonb_array_elements(CASE WHEN jsonb_typeof(r -> 'refund_line_items') = 'array'
-                                                     THEN r -> 'refund_line_items' ELSE '[]'::jsonb END) rli
-        WHERE rli ->> 'line_item_id' IS NOT NULL
-    )
-    SELECT jsonb_object_agg(line_id, jsonb_build_array(added, returned, unverified))
-    FROM (
-        SELECT line_id,
-               COALESCE(SUM(units) FILTER (WHERE counts), 0)                         AS added,
-               COALESCE(SUM(units) FILTER (WHERE counts AND restock = 'return'), 0)  AS returned,
-               COUNT(*) FILTER (WHERE restock = 'no_restock' AND NOT has_f)          AS unverified
-        FROM rl GROUP BY line_id
-    ) per_line
+CREATE FUNCTION analytics_refund_lines(raw jsonb) RETURNS jsonb LANGUAGE plpgsql IMMUTABLE PARALLEL SAFE AS $$
+DECLARE
+    refunds jsonb := raw -> 'refunds';
+    fs      jsonb := raw -> 'fulfillments';
+    has_f   boolean;
+    r       jsonb;
+    rli     jsonb;
+    rt      timestamptz;
+    line    text;
+    units   int;
+    restock text;
+    counts  boolean;
+    cur     jsonb;
+    acc     jsonb := '{}'::jsonb;
+    seen    boolean := false;
+BEGIN
+    IF jsonb_typeof(refunds) IS DISTINCT FROM 'array' THEN RETURN NULL; END IF;
+    has_f := fs IS NOT NULL AND jsonb_typeof(fs) <> 'null';
+    IF jsonb_typeof(fs) IS DISTINCT FROM 'array' THEN fs := '[]'::jsonb; END IF;
+    FOR r IN SELECT e FROM jsonb_array_elements(refunds) e LOOP
+        CONTINUE WHEN jsonb_typeof(r -> 'refund_line_items') IS DISTINCT FROM 'array';
+        rt := analytics_ts(r ->> 'created_at');
+        FOR rli IN SELECT e FROM jsonb_array_elements(r -> 'refund_line_items') e LOOP
+            line := rli ->> 'line_item_id';
+            CONTINUE WHEN line IS NULL;
+            units := COALESCE(analytics_int(rli ->> 'quantity'), 0);
+            restock := rli ->> 'restock_type';
+            counts := false;
+            IF restock IN ('return', 'no_restock') THEN
+                IF has_f THEN
+                    counts := EXISTS (
+                        SELECT 1 FROM jsonb_array_elements(fs) f
+                        WHERE COALESCE(f ->> 'status', '') NOT IN ('cancelled', 'error', 'failure')
+                          AND analytics_ts(f ->> 'created_at') < rt
+                          AND EXISTS (SELECT 1 FROM jsonb_array_elements(CASE WHEN jsonb_typeof(f -> 'line_items') = 'array'
+                                                                              THEN f -> 'line_items' ELSE '[]'::jsonb END) fl
+                                      WHERE fl ->> 'id' = line));
+                ELSE
+                    counts := restock = 'return';
+                END IF;
+            END IF;
+            cur := COALESCE(acc -> line, '[0, 0, 0]'::jsonb);
+            acc := jsonb_set(acc, ARRAY[line], jsonb_build_array(
+                (cur ->> 0)::int + CASE WHEN counts THEN units ELSE 0 END,
+                (cur ->> 1)::int + CASE WHEN counts AND restock = 'return' THEN units ELSE 0 END,
+                (cur ->> 2)::int + CASE WHEN restock = 'no_restock' AND NOT has_f THEN 1 ELSE 0 END));
+            seen := true;
+        END LOOP;
+    END LOOP;
+    RETURN CASE WHEN seen THEN acc END;
+END
 $$;
 
 -- ── order_items: allocations ───────────────────────────────────────────────────
