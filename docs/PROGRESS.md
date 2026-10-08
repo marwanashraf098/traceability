@@ -4,6 +4,35 @@
 
 ## Current state
 
+**Analytics slice 4 — stock, backend only (2026-10-08, branch `analytics/s4-stock`, merged to main; NOT deployed).
+Migrations V152 (analytics_settings) and V153 (variants Shopify stock columns).** Owner-only; tenants with no pieces
+get `hasPieces: false` (trust level "none"); voided pieces never count.
+- **Endpoints (`StockAnalyticsService`):** `/stock/summary?period` (in warehouse by location, value at price and at
+  cost — costed variants only, null when none —, avg days in stock, 0–30/31–60/61–90/90+ buckets, on hold, damaged at
+  cost, lost/destroyed this period at cost, pieces moved 4+ times, `trust`, `lowTrust`), `/stock/variants?sort&filter
+  &limit` (on hand, `shopifyAvailable`, `stockUsed` + `stockSource`, coming back, velocity, cover, sell-through, avg
+  piece age, last sale, returns + exchanges rate (90 d) + top reason, running low ≤ 7 d, dead stock no sale 60 d with
+  cash at cost else price), `/stock/restock` (velocity × (lead + cover) − stock − coming back, rounded up, ≥ 0),
+  `GET/PUT /settings` (V152 analytics_settings: supplier_lead_days 0–365 default 21, cover_days 1–365 default 35; RLS;
+  app_user can't DELETE; PUT audited), `/pieces/{id}/history` (trips with order, AWB, city, s2 outcome, fee),
+  `/variants/{id}/pieces?minTrips`.
+- **Definitions:** velocity = delivered units (s2 outcome, orders placed in the last 30 days) ÷ 30; received =
+  pieces.created_at; coming back = return_in_transit + return_pending_inspection; trip = piece event from packed /
+  awaiting_pickup / reserved into with_courier / delivered (leg = the event's shipment, else the order's forward leg
+  booked before it; no leg + delivered = self-pickup).
+- **Stock trust (`StockAnalyticsService.trust`):** packedThroughTracedPct = Bosta-delivered orders (last 30 days) with
+  a piece allocation or piece event ÷ all of them; the Shopify figure = `variants.shopify_inventory_quantity` (V153:
+  REST `inventory_quantity`, all locations, only as fresh as the variant's last products/* webhook —
+  `shopify_variant_updated_at`; GraphQL-imported variants have none); mismatch = Σ|traced available − max(Shopify, 0)|
+  ÷ Shopify units over variants with pieces and a figure. high = ≥ 80 % packed AND mismatch ≤ 10 %; else low. **At low
+  trust** cover / running low / dead stock / sell-through / restock / sells-out-soon use the Shopify figure
+  (`stockSource: "shopify"`; a variant without one falls back to pieces and says so); piece-only figures stay on pieces,
+  flagged `lowTrust`. Prod 2026-10-08: every piece tenant is LOW (Snouts 67 % packed of 3 deliveries, mismatch 31 %;
+  Jumi 4 %, mismatch 16×; BROEK 0 % of 223).
+- **Sells-out-soon alert** (s7, upgraded): best sellers (top 20 by velocity) with stock and ≤ 4 days of cover, in `skus`.
+- Shared: `SalesAnalyticsService.LAST_SOLD_CTE`, `ProductExtrasAnalyticsService.variantRows` (goldens unchanged).
+- Tests: `AnalyticsStockTest` (11), `StockRulesTest` (3), RlsCoverageTest +6.
+
 **Analytics B1 — small backend fixes (2026-10-08, branch `analytics/b1-fixes`, merged to main; NOT deployed).
 Migration V150.**
 - **`GET /api/v1/analytics/sales/variants/daily?ids=…&period`** (≤ 20 ids, owner-only): sold units per Cairo day (the
