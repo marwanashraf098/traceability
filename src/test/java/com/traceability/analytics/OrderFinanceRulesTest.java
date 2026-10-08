@@ -89,4 +89,16 @@ class OrderFinanceRulesTest {
         assertThat(tx).isNotNull();
         assertThat(tx.readOnly()).isFalse();
     }
+
+    @Test
+    void prepaid_bostaCodDecides_paymentGroupOnlyWithoutABostaLeg() {
+        assertThat(OrderFinanceService.prepaid(true, java.math.BigDecimal.ZERO, "Manual")).isTrue();
+        assertThat(OrderFinanceService.prepaid(true, java.math.BigDecimal.ZERO, "COD")).isTrue();
+        assertThat(OrderFinanceService.prepaid(true, new java.math.BigDecimal("150"), "Card")).isFalse();
+        assertThat(OrderFinanceService.prepaid(false, null, "Card")).isTrue();
+        assertThat(OrderFinanceService.prepaid(true, null, "Card")).isTrue();            // COD unknown → group
+        for (String g : new String[] {"Manual", "Mixed", "COD", "Other", null}) {
+            assertThat(OrderFinanceService.prepaid(false, null, g)).as(g).isFalse();
+        }
+    }
 }

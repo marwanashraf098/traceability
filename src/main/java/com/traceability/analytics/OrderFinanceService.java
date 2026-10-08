@@ -40,8 +40,9 @@ import static com.traceability.analytics.AnalyticsSql.money;
  *   expected        — not shipped / in transit.
  * Net is null while pending (overdue, awaiting payout, expected).
  *
- * Prepaid = payment group Card (the s5 mapping: Paymob, Kashier, card gateways). Every other group
- * is paid through Bosta's cash cycle.
+ * Prepaid ({@link #prepaid}, approved 2026-10-08): Bosta is the truth — the deciding forward Bosta
+ * leg's COD is 0. Only when there is no Bosta leg (or its COD is unknown) the payment group decides:
+ * Card → prepaid; Manual / Mixed / COD / Other → not prepaid.
  *
  * Bosta fees: the sum over the order's Bosta legs (forward, return, exchange) Bosta charges for —
  * settled legs always, and every leg that isn't cancelled or terminated before pickup — of
@@ -102,7 +103,7 @@ public class OrderFinanceService {
         SELECT om.order_id, om.placed_at, om.booked, om.outcome, om.city_id, om.city, om.returned_rev,
                om.item_count, om.variant_ids,
                o.number, o.customer_name, o.payment_group, o.ship_province AS province_code,
-               lg.internal_state AS leg_state, lg.cod, lg.cashout_txn_id, lg.deposited_amt, lg.not_paid, lg.stuck,
+               lg.internal_state AS leg_state, lg.cod, lg.leg_cod, lg.leg_provider, lg.cashout_txn_id, lg.deposited_amt, lg.not_paid, lg.stuck,
                fe.fees, fe.fees_estimated, fe.tracking_numbers,
                rf.refunded
         FROM order_money om
@@ -110,7 +111,8 @@ public class OrderFinanceService {
         LEFT JOIN LATERAL (
             SELECT sh.internal_state::text AS internal_state,
                    """ + SettlementSql.cod("sh") + """
-                    AS cod, sh.cashout_txn_id, sh.deposited_amt,
+                    AS cod, COALESCE(sh.cod_amount, sh.raw_cod) AS leg_cod, sh.provider AS leg_provider,
+                   sh.cashout_txn_id, sh.deposited_amt,
                    """ + SettlementSql.deliveredNotPaid("sh", "?::timestamptz", "?::int") + """
                     AS not_paid,
                    """ + SettlementSql.stuckWithBosta("sh", SettlementSql.lastChange("sh"), "?::timestamptz") + """
@@ -299,7 +301,7 @@ public class OrderFinanceService {
     private static Row row(ResultSet rs, OrderFacts.Cities cities) throws SQLException {
         String outcome = rs.getString("outcome");
         String payment = rs.getString("payment_group");
-        boolean prepaid = payment != null && PREPAID_GROUPS.contains(payment);
+        boolean prepaid = prepaid("bosta".equals(rs.getString("leg_provider")), rs.getBigDecimal("leg_cod"), payment);
         BigDecimal total = money(rs.getBigDecimal("booked"));
         BigDecimal fees = moneyOrNull(rs.getBigDecimal("fees"));
         BigDecimal refunded = moneyOrNull(rs.getBigDecimal("refunded"));
@@ -337,6 +339,16 @@ public class OrderFinanceService {
             rs.getBoolean("fees_estimated") && fees != null, net == null ? null : money(net), refundUnknown,
             List.copyOf(tracking));
         return new Row(out, variants);
+    }
+
+    /**
+     * THE prepaid rule: a Bosta forward leg with a known COD decides (COD 0 = prepaid, any COD > 0 =
+     * Bosta collects, whatever Shopify's gateway says — e.g. a card order turned partial COD). With
+     * no Bosta leg, or a leg whose COD is unknown, the payment group decides (Card only).
+     */
+    static boolean prepaid(boolean bostaLeg, BigDecimal legCod, String paymentGroup) {
+        if (bostaLeg && legCod != null) return legCod.signum() == 0;
+        return paymentGroup != null && PREPAID_GROUPS.contains(paymentGroup);
     }
 
     /** What {@link #financialStatus} reads. */

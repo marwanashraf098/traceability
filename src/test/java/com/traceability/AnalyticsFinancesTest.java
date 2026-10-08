@@ -104,6 +104,7 @@ class AnalyticsFinancesTest {
 
     static final String COD = "[\"Cash on Delivery (COD)\"]";
     static final String CARD = "[\"paymob\"]";
+    static final String MANUAL = "[\"manual\"]";
 
     final class T {
         final UUID id = UUID.randomUUID();
@@ -423,6 +424,30 @@ class AnalyticsFinancesTest {
         assertThat(row.get("financialStatus")).as("%s", row.get("name")).isEqualTo(status);
         if (net == null) assertThat(row.get("netToYou")).as("%s net", row.get("name")).isNull();
         else assertThat(dec(row, "netToYou")).as("%s net", row.get("name")).isEqualByComparingTo(net);
+    }
+
+    @Test
+    void prepaid_isBostaCodZero_paymentGroupOnlyWhenTheLegHasNoCod() {
+        T t = new T("An7-Prepaid");
+        UUID v = t.variant("S");
+        O manualCod0 = t.order(daysAgo(5), MANUAL, null, "Mona Adel");          // Manual, Bosta collects nothing
+        t.line(manualCod0, v, 1, "400.00");
+        t.leg(manualCod0, "delivered", "Cairo", 0, 50);
+        O cardWithCod = t.order(daysAgo(5), CARD, null, "Mona Adel");           // Card, but Bosta collects 150
+        t.line(cardWithCod, v, 1, "400.00");
+        t.leg(cardWithCod, "delivered", "Cairo", 150, 50);
+        O cardNoCod = t.order(daysAgo(5), CARD, null, "Mona Adel");             // leg without a COD → group
+        t.line(cardNoCod, v, 1, "400.00");
+        set(t.leg(cardNoCod, "delivered", "Cairo", 0, 50), "raw = raw - 'cod'");
+        O codNoCod = t.order(daysAgo(5), COD, null, "Mona Adel");
+        t.line(codNoCod, v, 1, "400.00");
+        set(t.leg(codNoCod, "delivered", "Cairo", 0, 50), "raw = raw - 'cod'");
+
+        Map<String, Map<String, Object>> rows = byName(ok(t, "/api/v1/analytics/orders?" + period()));
+        assertStatus(rows.get(manualCod0.number()), "paid", "343.00");        // 400 − 50 × 1.14
+        assertStatus(rows.get(cardWithCod.number()), "awaiting_payout", null);
+        assertStatus(rows.get(cardNoCod.number()), "paid", "343.00");
+        assertStatus(rows.get(codNoCod.number()), "awaiting_payout", null);
     }
 
     @Test
