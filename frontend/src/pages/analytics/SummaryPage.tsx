@@ -10,10 +10,10 @@ import {
 import { getConnections } from '../../api'
 import { useAnalyticsQuery } from '../../analytics/useAnalyticsQuery'
 import { useAnalyticsState } from '../../analytics/period'
-import { relChange, useFmt, type Fmt } from '../../analytics/format'
+import { useFmt, type Fmt } from '../../analytics/format'
 import {
   AnalyticsCard, AnalyticsGrid, Banner, CardEmpty, CardError, CardSkeleton, Kpi, KpiRow, Note, Pill, QueryBlock,
-  SectionTitle, SourceChip, TextLink, type DeltaInfo,
+  SectionTitle, SourceChip, TextLink,
 } from '../../components/analytics/ui'
 import { AnalyticsPageHeader } from '../../components/analytics/PageHeader'
 import { LineChart } from '../../components/analytics/charts/LineChart'
@@ -22,22 +22,9 @@ import { HBars } from '../../components/analytics/charts/HBars'
 import { CHART } from '../../components/analytics/charts/chartUtils'
 import { cn } from '../../components/ui'
 import { alertLink, analyticsLink } from './links'
+import { OtherCarrierBanner, ptsDelta, relDelta } from './shared'
 
-/** Orders shipped outside Bosta at or above this share get the "other carrier" banner. */
-const OTHER_CARRIER_BANNER_SHARE = 0.05
 const TOP_SKUS = 5
-
-function relDelta(fmt: Fmt, cur: number | null | undefined, prev: number | null | undefined, goodWhenUp = true): DeltaInfo | null {
-  const r = relChange(cur, prev)
-  if (r == null) return null
-  return { text: fmt.pct(Math.abs(r)), dir: Math.abs(r) < 0.0005 ? 'flat' : r > 0 ? 'up' : 'down', goodWhenUp }
-}
-
-function ptsDelta(fmt: Fmt, cur: number | null | undefined, prev: number | null | undefined): DeltaInfo | null {
-  if (cur == null || prev == null) return null
-  const d = cur - prev
-  return { text: fmt.pts(d), dir: Math.abs(d) < 0.0005 ? 'flat' : d > 0 ? 'up' : 'down' }
-}
 
 // ── Cash pipeline ───────────────────────────────────────────────────────────
 
@@ -291,8 +278,6 @@ export default function SummaryPage() {
   const costPerDelivery = fees.data && fees.data.deliveredCount > 0 ? fees.data.total.amount / fees.data.deliveredCount : null
   const lag = forecast.data?.forecast?.method.medianLagDays ?? null
 
-  const totals = sales.data?.totals
-  const otherCarrierShare = totals && totals.orders > 0 ? totals.wijhaOrders / totals.orders : 0
   const lowTrust = stockSummary.data?.hasPieces && stockSummary.data.lowTrust
 
   // Realized counts Bosta deliveries only (other carriers are their own leak), so with no Bosta
@@ -305,11 +290,7 @@ export default function SummaryPage() {
     <div data-testid="analytics-summary" className="max-w-[1400px]">
       <AnalyticsPageHeader title={t('analytics.pages.summary.title')} subtitle={t('analytics.pages.summary.subtitle')} showMode />
       <AnalyticsGrid>
-        {otherCarrierShare >= OTHER_CARRIER_BANNER_SHARE && totals && (
-          <Banner testId="other-carrier-banner">
-            {t('analytics.otherCarrier.banner', { pct: fmt.pct(otherCarrierShare, 0), count: totals.wijhaOrders })}
-          </Banner>
-        )}
+        <OtherCarrierBanner params={s.params} />
 
         <SectionTitle>{t('analytics.summary.cashTitle')}</SectionTitle>
         {pipeline.error && !pipeline.data

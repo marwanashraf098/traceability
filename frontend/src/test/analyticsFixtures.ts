@@ -6,8 +6,9 @@
 // /api/v1/analytics/* (and /connections) URL from a fixture and records the calls.
 
 import type {
-  Alerts, CashForecast, Compared, DeliverySummary, Fees, Pipeline, RevenueSummary, StockSummary, StockVariants,
-  VariantDailyResponse, VariantSalesResponse, VariantSales,
+  Alerts, Breakdown, BreakdownGroup, CashForecast, Compared, CustomerSummary, CustomerWatch, DeliverySummary, Discounts,
+  FailureReasons, Fees, Heatmap, InventorySyncStatus, Pipeline, ProductExtras, ProfitByType, ProfitSummary, RevenueSummary,
+  StockSummary, StockVariants, VariantDailyResponse, VariantSalesResponse, VariantSales,
 } from '../analyticsApi'
 
 const RANGE = { from: '2026-09-10', to: '2026-10-09', tz: 'Africa/Cairo' }
@@ -68,12 +69,128 @@ function sales(vs: VariantSales[], orders: number, wijhaOrders: number): Variant
   }
 }
 
-function delivery(rate: number | null, delivered: number, failed: number): DeliverySummary {
+function delivery(rate: number | null, delivered: number, failed: number, hoursToHanded = 30): DeliverySummary {
+  const weeks = ['2026-08-17', '2026-08-24', '2026-08-31', '2026-09-07', '2026-09-14', '2026-09-21', '2026-09-28', '2026-10-05']
+  const n = delivered + failed
   return {
-    successRate: rate, delivered, failed, lostSalesValue: failed * 900, avgHoursOrderToHanded: 30, handedOrders: delivered + failed,
-    avgHoursHandedToDelivered: 52, avgHoursHandedToDeliveredCairoGiza: 40, avgHoursHandedToDeliveredOther: 70,
-    weeklyTrend: [], fulfillmentSpeed: [],
+    successRate: rate, delivered, failed, lostSalesValue: failed * 900, avgHoursOrderToHanded: rate == null ? null : hoursToHanded,
+    handedOrders: n, avgHoursHandedToDelivered: rate == null ? null : 52, avgHoursHandedToDeliveredCairoGiza: rate == null ? null : 40,
+    avgHoursHandedToDeliveredOther: rate == null ? null : 70,
+    weeklyTrend: rate == null ? [] : weeks.map((w, i) => ({ weekStart: w, delivered: Math.round(delivered / 8), failed: Math.round(failed / 8),
+      successRate: Math.min(0.95, rate - 0.04 + i * 0.006) })),
+    fulfillmentSpeed: rate == null ? [] : [
+      { bucket: 'same_day', orders: Math.round(n * 0.28), delivered: 0, failed: 0, successRate: Math.min(0.97, rate + 0.03) },
+      { bucket: '1_day', orders: Math.round(n * 0.41), delivered: 0, failed: 0, successRate: rate },
+      { bucket: '2_days', orders: Math.round(n * 0.19), delivered: 0, failed: 0, successRate: rate - 0.03 },
+      { bucket: '3_plus_days', orders: Math.round(n * 0.12), delivered: 0, failed: 0, successRate: rate - 0.06 },
+    ],
   }
+}
+
+function group(key: string, label: string, booked: number, rate: number | null, orders: number, labelAr: string | null = null): BreakdownGroup {
+  const delivered = rate == null ? 0 : Math.round(orders * rate * 0.85)
+  return { key, label, labelAr, booked, realized: rate == null ? 0 : Math.round(booked * rate * 0.78), orders,
+    deliveredOrders: delivered, failedOrders: rate == null ? 0 : Math.round(orders * (1 - rate) * 0.8), successRate: rate }
+}
+
+function breakdowns(scale: number, hasBosta: boolean): Record<string, Compared<Breakdown>> {
+  const r = (x: number) => (hasBosta ? x : null)
+  const mk = (by: string, groups: BreakdownGroup[]) => compared<Breakdown>({ by, groups }, null)
+  return {
+    channel: mk('channel', [group('Instagram', 'Instagram', 655400 * scale, r(0.841), 560), group('Direct', 'Direct', 383600 * scale, r(0.912), 330),
+      group('TikTok', 'TikTok', 303700 * scale, r(0.76), 270), group('Manual / DM', 'Manual / DM', 175800 * scale, r(0.883), 150),
+      group('Unknown', 'Unknown', 80000 * scale, r(0.829), 80)]),
+    payment: mk('payment', [group('COD', 'COD', 1310800 * scale, r(0.826), 1130), group('Card', 'Card', 175800 * scale, r(0.971), 160),
+      group('Manual', 'Manual', 111900 * scale, r(0.984), 100)]),
+    governorate: mk('governorate', [group('c-cairo', 'Cairo', 543500 * scale, r(0.896), 472, 'القاهرة'),
+      group('c-giza', 'Giza', 351700 * scale, r(0.879), 306, 'الجيزة'), group('c-alex', 'Alexandria', 207800 * scale, r(0.841), 181, 'الإسكندرية'),
+      group('c-dak', 'Dakahlia', 79900 * scale, r(0.77), 70, 'الدقهلية'), group('c-ast', 'Assiut', 32000 * scale, r(0.638), 28, 'أسيوط'),
+      group('c-shg', 'Sohag', 24000 * scale, r(0.605), 21, 'سوهاج'), group('unknown', 'Unknown', 12000 * scale, r(0.7), 11, 'غير معروف')]),
+    productType: mk('productType', [group('Tees', 'Tees', 511500 * scale, r(0.85), 600), group('Bottoms', 'Bottoms', 431600 * scale, r(0.83), 340),
+      group('Hoodies', 'Hoodies', 367700 * scale, r(0.86), 250), group('uncategorised', 'uncategorised', 79900 * scale, r(0.8), 60)]),
+  }
+}
+
+function discounts(scale: number): Compared<Discounts> {
+  const row = (code: string | null, orders: number, booked: number, cost: number, rate: number) => ({
+    code, label: code, orders, booked: booked * scale, discountCost: cost * scale, deliveredOrders: Math.round(orders * rate),
+    failedOrders: Math.round(orders * (1 - rate)), successRate: rate, revenuePerCost: booked / cost })
+  return compared<Discounts>({
+    codes: [row('WELCOME10', 212, 243800, 24380, 0.86), row('SUMMER20', 148, 170200, 34040, 0.811), row('TIKTOK15', 96, 110400, 16560, 0.719)],
+    automatic: { ...row(null, 70, 80500, 4270, 0.886), label: 'Automatic discounts' },
+  }, null)
+}
+
+function heatmap(scale: number): Compared<Heatmap> {
+  const cells = []
+  for (let wd = 1; wd <= 7; wd++) for (let h = 0; h < 24; h++) {
+    const ev = Math.exp(-Math.pow((h - 21.5) / 3.2, 2)) + 0.45 * Math.exp(-Math.pow((h - 14) / 3, 2)) + 0.05
+    const dw = [0, 0.8, 0.82, 0.9, 1.15, 1.25, 1, 0.85][wd]
+    const avg = Math.round(ev * dw * 22 * scale * 10) / 10
+    cells.push({ weekday: wd, hour: h, orders: Math.round(avg * 4), avgOrders: avg })
+  }
+  return compared<Heatmap>({ cells, weekdayOccurrences: { 1: 4, 2: 4, 3: 4, 4: 5, 5: 5, 6: 4, 7: 4 } }, null)
+}
+
+function customerSummary(unknownShare: number, hasBosta: boolean): Compared<CustomerSummary> {
+  const total = 1108
+  const unknown = Math.round(total * unknownShare)
+  const rest = total - unknown
+  const cls = (key: string, customers: number, booked: number, rate: number) => ({ key, customers, orders: customers, booked,
+    realized: hasBosta ? booked * rate * 0.8 : 0, delivered: 0, failed: 0, successRate: hasBosta ? rate : null })
+  return compared<CustomerSummary>({
+    customersWhoOrdered: total, newCustomers: Math.round(rest * 0.7), existingCustomers: Math.round(rest * 0.1), returningCustomers: Math.round(rest * 0.2),
+    unknownCustomers: unknown, repeatPurchaseRate: 0.18, medianDaysBetweenOrders: 34, ordersWithoutCustomer: 3,
+    byClass: [cls('new', Math.round(rest * 0.7), 900000 * (1 - unknownShare), 0.82), cls('existing', Math.round(rest * 0.1), 120000, 0.9),
+      cls('returning', Math.round(rest * 0.2), 380000, 0.94), cls('unknown', unknown, 900000 * unknownShare, 0.8)],
+  }, null)
+}
+
+const COST_NONE = { variantsSold: 6, variantsCosted: 0, keptUnits: 720, costedUnits: 0, realizedTotal: 1033500, realizedCosted: 0, costedRevenueShare: 0 }
+
+function profitSummary(costed: boolean): ProfitSummary {
+  const coverage = costed
+    ? { variantsSold: 6, variantsCosted: 4, keptUnits: 720, costedUnits: 560, realizedTotal: 1033500, realizedCosted: 820000, costedRevenueShare: 0.79 }
+    : COST_NONE
+  return { range: RANGE, coverage, cogs: costed ? 311000 : null, grossProfit: costed ? 509000 : null, grossMargin: costed ? 0.62 : null,
+    feesTotal: 107437, feesOnCosted: costed ? 84000 : null, contributionProfit: costed ? 425000 : null, contributionMargin: costed ? 0.518 : null }
+}
+
+function profitByType(costed: boolean): ProfitByType {
+  const s = profitSummary(costed)
+  return { range: RANGE, coverage: s.coverage, types: costed ? [
+    { productType: 'Tees', keptUnits: 400, costedUnits: 400, realized: 338900, realizedCosted: 338900, cogs: 131500, grossMargin: 0.612 },
+    { productType: 'Bottoms', keptUnits: 200, costedUnits: 160, realized: 281300, realizedCosted: 230000, cogs: 95700, grossMargin: 0.584 },
+    { productType: 'Hoodies', keptUnits: 120, costedUnits: 0, realized: 236000, realizedCosted: 0, cogs: null, grossMargin: null },
+  ] : [] }
+}
+
+function inventorySync(costStatus: InventorySyncStatus['costStatus']): InventorySyncStatus {
+  return { tenantId: 't', requestedAt: null, startedAt: '2026-10-09T03:15:00Z', finishedAt: '2026-10-09T03:16:00Z', trigger: 'daily', mode: 'bulk',
+    variantsSeen: 120, costWritten: 0, costKeptManual: 0, costNonEgp: 0, stockWritten: 120, costStatus, stockStatus: 'ok', shopCurrency: 'EGP',
+    lastError: costStatus === 'access_denied' ? 'Access denied for unitCost field' : null, variantsTotal: 120, variantsCosted: 0,
+    variantsStockSynced: 120, nextRunAllowedAt: null }
+}
+
+function failureReasons(failed: number): Compared<FailureReasons> {
+  const withReason = Math.round(failed * 0.86)
+  const r = (reason: string, share: number) => ({ reason, count: Math.round(withReason * share), share })
+  return compared<FailureReasons>({ failedLegs: failed, withReason, coverage: failed ? withReason / failed : null, reasons: failed ? [
+    r('Customer refused', 0.41), r('Phone unreachable / not home', 0.27), r('Wrong or incomplete address', 0.13),
+    r('Postponed / rescheduled', 0.11), r('Other', 0.08)] : [] }, null)
+}
+
+function productExtras(): Compared<ProductExtras> {
+  const p = (id: string, title: string, orders: number, failed: number) => ({ productId: id, title, orders, failedOrders: failed, failureRate: failed / orders })
+  return compared<ProductExtras>({ abc: [], sizeCurve: { sizes: [], unparseableUnits: 0, unparseableValues: [], noSizeUnits: 0 }, boughtTogether: [],
+    mostFailed: [p('p4', 'Wide-Leg Cargo', 118, 18), p('p9', 'Denim Jacket', 41, 9), p('p3', 'Heavyweight Hoodie', 131, 17), p('p8', 'Small Tote', 12, 6)] }, null)
+}
+
+function watch(n: number): CustomerWatch {
+  const rows = [['Mostafa E.', 'Assiut', 'أسيوط', 4, 3], ['Youssef M.', 'Sohag', 'سوهاج', 3, 2], ['Dina S.', 'Giza', 'الجيزة', 5, 2]] as const
+  return { asOf: '2026-10-09T09:40:00Z', minRefused: 2, customers: rows.slice(0, n).map(([name, g, gAr, orders, refused], i) => ({
+    customerRef: `ref-${i}`, displayName: name, governorate: g, governorateAr: gAr, orders, refusedCodOrders: refused,
+    deliveredOrders: orders - refused, refusedValue: refused * 1100, blocked: i === 2, suggestion: 'Ask for prepayment', blocklistLink: '/blocklist' })) }
 }
 
 function fees(total: number, delivered: number, estimated: number): Fees {
@@ -181,6 +298,16 @@ export interface AnalyticsFixture {
   daily: VariantDailyResponse
   stockSummary: StockSummary
   stockVariants: StockVariants
+  breakdowns: Record<string, Compared<Breakdown>>
+  discounts: Compared<Discounts>
+  heatmap: Compared<Heatmap>
+  customerSummary: Compared<CustomerSummary>
+  profitSummary: ProfitSummary
+  profitByType: ProfitByType
+  inventorySync: InventorySyncStatus
+  failureReasons: Compared<FailureReasons>
+  productExtras: Compared<ProductExtras>
+  watch: CustomerWatch
 }
 
 const broekVariants = [
@@ -201,6 +328,16 @@ export const BROEK: AnalyticsFixture = {
   daily: dailyFor(broekVariants.slice(0, 5)),
   stockSummary: stockSummary(true, true, 0.22),
   stockVariants: stockVariants(true, 'shopify', broekVariants),
+  breakdowns: breakdowns(1, true),
+  discounts: discounts(1),
+  heatmap: heatmap(1),
+  customerSummary: customerSummary(0.08, true),
+  profitSummary: profitSummary(false),
+  profitByType: profitByType(false),
+  inventorySync: inventorySync('ok'),
+  failureReasons: failureReasons(168),
+  productExtras: productExtras(),
+  watch: watch(3),
 }
 
 const femineVariants = [
@@ -222,6 +359,16 @@ export const FEMINE: AnalyticsFixture = {
   daily: dailyFor(femineVariants),
   stockSummary: stockSummary(false, false, null),
   stockVariants: stockVariants(false, 'pieces', []),
+  breakdowns: breakdowns(0.25, true),
+  discounts: discounts(0.25),
+  heatmap: heatmap(0.25),
+  customerSummary: customerSummary(0.34, true),
+  profitSummary: profitSummary(true),
+  profitByType: profitByType(true),
+  inventorySync: inventorySync('ok'),
+  failureReasons: failureReasons(33),
+  productExtras: productExtras(),
+  watch: watch(1),
 }
 
 const highLineVariants = [variant(21, 'Oxford Shirt', 'White / L', 44, 990), variant(22, 'Chino', 'Khaki / 32', 30, 1150)]
@@ -240,6 +387,16 @@ export const HIGH_LINE: AnalyticsFixture = {
   daily: dailyFor(highLineVariants),
   stockSummary: stockSummary(true, false, 0.9),
   stockVariants: stockVariants(true, 'pieces', highLineVariants),
+  breakdowns: breakdowns(0.08, false),
+  discounts: discounts(0.08),
+  heatmap: heatmap(0.08),
+  customerSummary: customerSummary(0.1, false),
+  profitSummary: profitSummary(false),
+  profitByType: profitByType(false),
+  inventorySync: inventorySync('access_denied'),
+  failureReasons: failureReasons(0),
+  productExtras: productExtras(),
+  watch: watch(0),
 }
 
 function ok(body: unknown) {
@@ -286,6 +443,19 @@ export function analyticsFetch(
       case '/analytics/sales/variants/daily': return ok(f.daily)
       case '/analytics/stock/summary': return ok(f.stockSummary)
       case '/analytics/stock/variants': return ok(f.stockVariants)
+      case '/analytics/revenue/breakdown': {
+        const by = new URLSearchParams(url.split('?')[1] ?? '').get('by') ?? ''
+        return f.breakdowns[by] ? ok(f.breakdowns[by]) : errResponse(400)
+      }
+      case '/analytics/revenue/discounts': return ok(f.discounts)
+      case '/analytics/revenue/heatmap': return ok(f.heatmap)
+      case '/analytics/customers/summary': return ok(f.customerSummary)
+      case '/analytics/profit/summary': return ok(f.profitSummary)
+      case '/analytics/profit/by-product-type': return ok(f.profitByType)
+      case '/analytics/inventory-sync/status': return ok(f.inventorySync)
+      case '/analytics/delivery/failure-reasons': return ok(f.failureReasons)
+      case '/analytics/products/extras': return ok(f.productExtras)
+      case '/analytics/customers/watch': return ok(f.watch)
       default: return errResponse(404)
     }
   }

@@ -3374,6 +3374,202 @@
         "title_one": "{{count}} best seller sells out within 4 days",
         "title_other": "{{count}} best sellers sell out within 4 days"
       }
+    },
+    "revenue": {
+      "kpi": {
+        "gross": "Gross sales",
+        "grossFoot": "before discounts",
+        "booked": "Booked revenue",
+        "realized": "Net realized revenue",
+        "realizedFoot": "delivered and kept",
+        "share": "Realized ÷ booked",
+        "shareFoot": "share of booked revenue you keep",
+        "margin": "Gross margin"
+      },
+      "waterfall": "From gross sales to money you keep",
+      "waterfallDesc": "Hover a bar for details.",
+      "wf": {
+        "gross": "Gross sales",
+        "grossNote": "All orders, before discounts",
+        "discounts": "Discounts",
+        "discountsNote": "Money you chose to give away",
+        "pipeline": "Still in pipeline",
+        "pipelineNote": "In transit {{transit}} + not yet shipped {{notShipped}} · not here yet",
+        "otherCarrier": "Other carrier",
+        "otherCarrierNote": "Shipped outside Bosta — Traced can’t see whether it was delivered",
+        "failed": "Failed deliveries",
+        "failedNote": "Refused or undeliverable · lost",
+        "returns": "Returns & refunds",
+        "returnsNote": "Delivered, then returned · lost",
+        "net": "Net realized",
+        "netNote": "Delivered and kept",
+        "legend": {
+          "start": "Starting total",
+          "given": "Given away",
+          "notYet": "Not here yet",
+          "elsewhere": "Shipped elsewhere",
+          "lost": "Lost",
+          "kept": "Kept"
+        }
+      },
+      "funnel": "Order funnel",
+      "funnelDesc": "Where orders drop off",
+      "funnelSteps": {
+        "ordered": "Ordered",
+        "fulfilled": "Fulfilled",
+        "delivered": "Delivered",
+        "paidToYou": "Paid to you"
+      },
+      "funnelContinue": "of orders continue",
+      "perDayCompare": "Compared with the previous {{days}} days: booked {{bookedDir}}{{booked}}, realized {{realizedDir}}{{realized}}",
+      "breakdowns": "Breakdowns · {{mode}} revenue",
+      "byChannel": "By sales channel",
+      "byChannelDesc": "Bar = revenue. Pill = delivery success rate.",
+      "byPayment": "By payment method",
+      "byPaymentDesc": "Prepaid orders almost never fail delivery",
+      "byGovernorate": "By governorate",
+      "byGovernorateDesc": "High revenue with low success is where money leaks",
+      "byProductType": "By product type",
+      "byProductTypeDesc": "Shopify's product type",
+      "groupTip": "Booked {{booked}} · realized {{realized}} · {{orders}} orders · success {{success}}",
+      "codes": {
+        "title": "Discount codes",
+        "desc": "What each code brought in vs what it cost you",
+        "code": "Code",
+        "orders": "Orders",
+        "revenue": "Revenue",
+        "cost": "Discount cost",
+        "delivered": "Delivered",
+        "perCost": "Revenue ÷ cost",
+        "automatic": "Automatic discounts",
+        "none": "No discounts used in this period."
+      },
+      "newVsReturning": "New vs returning customers",
+      "newVsReturningDesc": "Revenue by customer type in this period",
+      "unknownShare": "{{pct}} of customers in this period have no Shopify customer record, so their type is unknown.",
+      "heatmap": "When orders come in",
+      "heatmapDesc": "Average orders by day and hour (Cairo time). Useful for timing ads and drops.",
+      "heatTip": "{{day}} {{hour}}:00 · {{avg}} orders on average",
+      "fewer": "Fewer",
+      "more": "More orders",
+      "marginByType": "Gross margin by product type",
+      "marginByTypeDesc": "Realized revenue minus cost of goods, costed items only",
+      "marginTip": "{{costed}} of {{kept}} kept units costed",
+      "funnelOrders_one": "{{value}} order",
+      "funnelOrders_other": "{{value}} orders",
+      "classFoot_one": "{{share}} · {{customers}} customer · {{success}} delivered",
+      "classFoot_other": "{{share}} · {{customers}} customers · {{success}} delivered"
+    },
+    "delivery": {
+      "kpi": {
+        "successFoot": "{{delivered}} delivered of {{attempted}}",
+        "failed": "Failed deliveries",
+        "failedFoot": "{{value}} in lost sales",
+        "toHanded": "Order → handed to Bosta",
+        "toDelivered": "Handed to Bosta → delivered",
+        "toDeliveredFoot": "Cairo & Giza {{cairo}} d · other {{other}} d",
+        "toHandedFoot_one": "average over {{orders}} order",
+        "toHandedFoot_other": "average over {{orders}} orders"
+      },
+      "byGovernorate": "Success rate by governorate",
+      "byGovernorateDesc": "Green 78%+ · amber 68–78% · red under 68%",
+      "gov": {
+        "name": "Governorate",
+        "orders": "Orders",
+        "failed": "Failed",
+        "success": "Success"
+      },
+      "reasons": "Why deliveries fail",
+      "reasonsDesc": "Reasons Bosta logged on failed deliveries",
+      "reasonTip": "{{count}} of {{total}} failures with a reason",
+      "reasonsCoverage": "Bosta gave a reason for {{with}} of {{failed}} failed deliveries ({{pct}}).",
+      "noFailures": "No failed deliveries in this period.",
+      "weekly": "Success rate by week",
+      "weeklyDesc": "Week starting",
+      "weeklyEmpty": "Needs at least two weeks with deliveries.",
+      "mostFailed": "Most failed-to-deliver products",
+      "mostFailedDesc": "By failure rate, products with {{min}}+ orders",
+      "mostFailedEmpty": "No product with {{min}}+ orders failed in this period.",
+      "mostFailedTip": "{{failed}} of {{orders}} orders failed",
+      "watch": "Customers to watch",
+      "watchDesc": "Customers who refused 2 or more cash-on-delivery orders",
+      "watchEmpty": "No customer refused 2 or more COD orders.",
+      "watchCols": {
+        "customer": "Customer",
+        "governorate": "Governorate",
+        "orders": "Orders",
+        "refused": "Refused",
+        "suggestion": "Suggestion"
+      },
+      "anonymous": "Customer without a name",
+      "suggestPrepay": "Ask for prepayment",
+      "toBlocklist": "Blocklist →",
+      "blocked": "Already blocked",
+      "speed": "Fulfillment speed",
+      "speedDesc": "Time from order placed to handed to Bosta",
+      "speedBuckets": {
+        "same_day": "Same day",
+        "1_day": "1 day",
+        "2_days": "2 days",
+        "3_plus_days": "3+ days"
+      },
+      "speedTip": "{{orders}} orders · success {{success}}",
+      "speedNote": "Orders handed over the same day deliver at {{fast}} vs {{slow}} for 3+ days.",
+      "refused_one": "{{count}} refused",
+      "refused_other": "{{count}} refused"
+    },
+    "cost": {
+      "coverage": "Costed: {{costed}} of {{total}} sold SKUs · {{share}} of realized revenue",
+      "missing": "Add cost per item in Shopify to see margins.",
+      "accessDenied": "Shopify didn't let Traced read cost per item (access denied). Reconnect the store with inventory access to see margins.",
+      "readError": "Traced couldn't read costs from Shopify on its last try; margins appear after the next successful sync."
+    },
+    "labels": {
+      "channel": {
+        "Instagram": "Instagram",
+        "Facebook": "Facebook",
+        "TikTok": "TikTok",
+        "Google": "Google",
+        "Other referral": "Other referral",
+        "Direct": "Direct / online store",
+        "Manual / DM": "Manual / DM",
+        "Unknown": "Unknown"
+      },
+      "payment": {
+        "COD": "Cash on delivery",
+        "Card": "Card",
+        "Manual": "Manual / transfer",
+        "Mixed": "Mixed",
+        "Other": "Other"
+      },
+      "reason": {
+        "Customer refused": "Customer refused",
+        "Phone unreachable / not home": "Phone unreachable / not home",
+        "Wrong or incomplete address": "Wrong or incomplete address",
+        "Postponed / rescheduled": "Postponed / rescheduled",
+        "Product issue": "Product issue",
+        "Other": "Other"
+      },
+      "productType": {
+        "uncategorised": "No product type"
+      }
+    },
+    "customers": {
+      "class": {
+        "new": "New customers",
+        "existing": "Existing customers",
+        "returning": "Returning customers",
+        "unknown": "Unknown"
+      }
+    },
+    "weekday": {
+      "1": "Mon",
+      "2": "Tue",
+      "3": "Wed",
+      "4": "Thu",
+      "5": "Fri",
+      "6": "Sat",
+      "7": "Sun"
     }
   }
 }

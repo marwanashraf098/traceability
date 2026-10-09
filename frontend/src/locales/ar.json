@@ -3462,6 +3462,218 @@
         "title_many": "{{count}} منتجًا من الأكثر مبيعًا سينفد خلال 4 أيام",
         "title_other": "{{count}} منتج من الأكثر مبيعًا سينفد خلال 4 أيام"
       }
+    },
+    "revenue": {
+      "kpi": {
+        "gross": "إجمالي المبيعات",
+        "grossFoot": "قبل الخصومات",
+        "booked": "الإيراد المحجوز",
+        "realized": "صافي الإيراد المحقق",
+        "realizedFoot": "تم تسليمه والاحتفاظ به",
+        "share": "المحقق ÷ المحجوز",
+        "shareFoot": "نسبة ما تحتفظ به من المحجوز",
+        "margin": "هامش الربح الإجمالي"
+      },
+      "waterfall": "من إجمالي المبيعات إلى ما تحتفظ به",
+      "waterfallDesc": "مرّر على أي عمود لرؤية التفاصيل.",
+      "wf": {
+        "gross": "إجمالي المبيعات",
+        "grossNote": "كل الطلبات قبل الخصومات",
+        "discounts": "الخصومات",
+        "discountsNote": "مبالغ اخترت التنازل عنها",
+        "pipeline": "ما زال في الطريق",
+        "pipelineNote": "في الطريق {{transit}} + لم يُشحن بعد {{notShipped}} · لم يصل بعد",
+        "otherCarrier": "شركة شحن أخرى",
+        "otherCarrierNote": "شُحن خارج بوسطة — لا يرى Traced إن كان قد سُلِّم",
+        "failed": "توصيلات فاشلة",
+        "failedNote": "مرفوض أو تعذّر تسليمه · خسارة",
+        "returns": "المرتجعات والمبالغ المستردة",
+        "returnsNote": "سُلِّم ثم أُرجع · خسارة",
+        "net": "صافي المحقق",
+        "netNote": "تم تسليمه والاحتفاظ به",
+        "legend": {
+          "start": "الإجمالي الأولي",
+          "given": "متنازل عنه",
+          "notYet": "لم يصل بعد",
+          "elsewhere": "شُحن خارج بوسطة",
+          "lost": "خسارة",
+          "kept": "محتفظ به"
+        }
+      },
+      "funnel": "مسار الطلبات",
+      "funnelDesc": "أين تتوقف الطلبات",
+      "funnelSteps": {
+        "ordered": "طُلب",
+        "fulfilled": "جُهّز",
+        "delivered": "سُلِّم",
+        "paidToYou": "دُفع لك"
+      },
+      "funnelContinue": "من الطلبات تكمل",
+      "perDayCompare": "مقارنة بالـ {{days}} يومًا السابقة: المحجوز {{bookedDir}}{{booked}}، المحقق {{realizedDir}}{{realized}}",
+      "breakdowns": "التقسيمات · الإيراد {{mode}}",
+      "byChannel": "حسب قناة البيع",
+      "byChannelDesc": "العمود = الإيراد. الشارة = نسبة نجاح التوصيل.",
+      "byPayment": "حسب طريقة الدفع",
+      "byPaymentDesc": "الطلبات المدفوعة مسبقًا نادرًا ما يفشل توصيلها",
+      "byGovernorate": "حسب المحافظة",
+      "byGovernorateDesc": "إيراد مرتفع مع نجاح منخفض = أموال تضيع",
+      "byProductType": "حسب نوع المنتج",
+      "byProductTypeDesc": "نوع المنتج في شوبيفاي",
+      "groupTip": "المحجوز {{booked}} · المحقق {{realized}} · {{orders}} طلب · النجاح {{success}}",
+      "codes": {
+        "title": "أكواد الخصم",
+        "desc": "ما جلبه كل كود مقابل ما كلّفك",
+        "code": "الكود",
+        "orders": "الطلبات",
+        "revenue": "الإيراد",
+        "cost": "تكلفة الخصم",
+        "delivered": "التسليم",
+        "perCost": "الإيراد ÷ التكلفة",
+        "automatic": "خصومات تلقائية",
+        "none": "لم تُستخدم خصومات في هذه الفترة."
+      },
+      "newVsReturning": "العملاء الجدد مقابل العائدين",
+      "newVsReturningDesc": "الإيراد حسب نوع العميل في هذه الفترة",
+      "unknownShare": "{{pct}} من عملاء هذه الفترة بلا سجل عميل في شوبيفاي، لذا نوعهم غير معروف.",
+      "heatmap": "متى تصل الطلبات",
+      "heatmapDesc": "متوسط الطلبات حسب اليوم والساعة (بتوقيت القاهرة). مفيد لتوقيت الإعلانات والإطلاقات.",
+      "heatTip": "{{day}} {{hour}}:00 · {{avg}} طلب في المتوسط",
+      "fewer": "أقل",
+      "more": "طلبات أكثر",
+      "marginByType": "هامش الربح حسب نوع المنتج",
+      "marginByTypeDesc": "الإيراد المحقق ناقص تكلفة البضاعة، للأصناف المسعّرة فقط",
+      "marginTip": "{{costed}} من {{kept}} وحدة محتفظ بها لها تكلفة",
+      "funnelOrders_zero": "لا طلبات",
+      "funnelOrders_one": "طلب واحد",
+      "funnelOrders_two": "طلبان",
+      "funnelOrders_few": "{{value}} طلبات",
+      "funnelOrders_many": "{{value}} طلبًا",
+      "funnelOrders_other": "{{value}} طلب",
+      "classFoot_zero": "{{share}} · لا عملاء",
+      "classFoot_one": "{{share}} · عميل واحد · تسليم {{success}}",
+      "classFoot_two": "{{share}} · عميلان · تسليم {{success}}",
+      "classFoot_few": "{{share}} · {{customers}} عملاء · تسليم {{success}}",
+      "classFoot_many": "{{share}} · {{customers}} عميلًا · تسليم {{success}}",
+      "classFoot_other": "{{share}} · {{customers}} عميل · تسليم {{success}}"
+    },
+    "delivery": {
+      "kpi": {
+        "successFoot": "{{delivered}} مُسلَّم من {{attempted}}",
+        "failed": "التوصيلات الفاشلة",
+        "failedFoot": "{{value}} مبيعات ضائعة",
+        "toHanded": "من الطلب حتى التسليم لبوسطة",
+        "toDelivered": "من التسليم لبوسطة حتى التوصيل",
+        "toDeliveredFoot": "القاهرة والجيزة {{cairo}} يوم · غيرها {{other}} يوم",
+        "toHandedFoot_zero": "لا طلبات",
+        "toHandedFoot_one": "متوسط طلب واحد",
+        "toHandedFoot_two": "متوسط طلبين",
+        "toHandedFoot_few": "متوسط {{orders}} طلبات",
+        "toHandedFoot_many": "متوسط {{orders}} طلبًا",
+        "toHandedFoot_other": "متوسط {{orders}} طلب"
+      },
+      "byGovernorate": "نسبة النجاح حسب المحافظة",
+      "byGovernorateDesc": "أخضر 78%+ · أصفر 68–78% · أحمر أقل من 68%",
+      "gov": {
+        "name": "المحافظة",
+        "orders": "الطلبات",
+        "failed": "فاشلة",
+        "success": "النجاح"
+      },
+      "reasons": "لماذا تفشل التوصيلات",
+      "reasonsDesc": "الأسباب التي سجّلتها بوسطة للتوصيلات الفاشلة",
+      "reasonTip": "{{count}} من {{total}} إخفاق له سبب",
+      "reasonsCoverage": "ذكرت بوسطة سببًا لـ {{with}} من {{failed}} توصيلًا فاشلًا ({{pct}}).",
+      "noFailures": "لا توجد توصيلات فاشلة في هذه الفترة.",
+      "weekly": "نسبة النجاح أسبوعيًا",
+      "weeklyDesc": "بداية الأسبوع",
+      "weeklyEmpty": "يحتاج أسبوعين على الأقل بهما توصيلات.",
+      "mostFailed": "أكثر المنتجات فشلًا في التوصيل",
+      "mostFailedDesc": "حسب نسبة الفشل، للمنتجات ذات {{min}}+ طلب",
+      "mostFailedEmpty": "لا يوجد منتج له {{min}}+ طلب فشل توصيله في هذه الفترة.",
+      "mostFailedTip": "فشل {{failed}} من {{orders}} طلب",
+      "watch": "عملاء يحتاجون متابعة",
+      "watchDesc": "عملاء رفضوا طلبين أو أكثر بالدفع عند الاستلام",
+      "watchEmpty": "لا يوجد عميل رفض طلبين أو أكثر بالدفع عند الاستلام.",
+      "watchCols": {
+        "customer": "العميل",
+        "governorate": "المحافظة",
+        "orders": "الطلبات",
+        "refused": "مرفوض",
+        "suggestion": "الاقتراح"
+      },
+      "anonymous": "عميل بلا اسم",
+      "suggestPrepay": "اطلب الدفع مسبقًا",
+      "toBlocklist": "← قائمة الحظر",
+      "blocked": "محظور بالفعل",
+      "speed": "سرعة التجهيز",
+      "speedDesc": "المدة من الطلب حتى التسليم لبوسطة",
+      "speedBuckets": {
+        "same_day": "نفس اليوم",
+        "1_day": "يوم واحد",
+        "2_days": "يومان",
+        "3_plus_days": "3 أيام فأكثر"
+      },
+      "speedTip": "{{orders}} طلب · النجاح {{success}}",
+      "speedNote": "الطلبات المسلّمة لبوسطة في نفس اليوم نسبة نجاحها {{fast}} مقابل {{slow}} لمدة 3 أيام فأكثر.",
+      "refused_zero": "لا رفض",
+      "refused_one": "رفض مرة",
+      "refused_two": "رفض مرتين",
+      "refused_few": "رفض {{count}} مرات",
+      "refused_many": "رفض {{count}} مرة",
+      "refused_other": "رفض {{count}} مرة"
+    },
+    "cost": {
+      "coverage": "لها تكلفة: {{costed}} من {{total}} صنفًا مُباعًا · {{share}} من الإيراد المحقق",
+      "missing": "أضف تكلفة كل صنف في شوبيفاي لترى الهوامش.",
+      "accessDenied": "لم يسمح شوبيفاي لـ Traced بقراءة تكلفة الصنف (رفض الوصول). أعد ربط المتجر مع صلاحية المخزون لترى الهوامش.",
+      "readError": "تعذّر على Traced قراءة التكاليف من شوبيفاي في آخر محاولة؛ ستظهر الهوامش بعد أول مزامنة ناجحة."
+    },
+    "labels": {
+      "channel": {
+        "Instagram": "Instagram",
+        "Facebook": "Facebook",
+        "TikTok": "TikTok",
+        "Google": "Google",
+        "Other referral": "إحالة أخرى",
+        "Direct": "مباشر / المتجر",
+        "Manual / DM": "يدوي / رسائل",
+        "Unknown": "غير معروف"
+      },
+      "payment": {
+        "COD": "الدفع عند الاستلام",
+        "Card": "بطاقة",
+        "Manual": "يدوي / تحويل",
+        "Mixed": "مختلط",
+        "Other": "أخرى"
+      },
+      "reason": {
+        "Customer refused": "رفض العميل",
+        "Phone unreachable / not home": "الهاتف مغلق / غير موجود",
+        "Wrong or incomplete address": "عنوان خاطئ أو ناقص",
+        "Postponed / rescheduled": "مؤجَّل / أُعيدت جدولته",
+        "Product issue": "مشكلة في المنتج",
+        "Other": "أخرى"
+      },
+      "productType": {
+        "uncategorised": "بلا نوع منتج"
+      }
+    },
+    "customers": {
+      "class": {
+        "new": "عملاء جدد",
+        "existing": "عملاء سابقون",
+        "returning": "عملاء عائدون",
+        "unknown": "غير معروف"
+      }
+    },
+    "weekday": {
+      "1": "الإثنين",
+      "2": "الثلاثاء",
+      "3": "الأربعاء",
+      "4": "الخميس",
+      "5": "الجمعة",
+      "6": "السبت",
+      "7": "الأحد"
     }
   }
 }
