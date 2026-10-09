@@ -4,6 +4,19 @@
 
 ## Current state
 
+**Phone build: collapsible shell menu, Orders ?order=<id>, analytics order links (2026-10-09, branch `analytics/phone-menu`,
+merged to main; NOT deployed).** Checked first: no worktree (main tree and the other session's included) had changes to
+Layout.tsx / Orders.tsx / App.tsx / OrderDrawer.tsx.
+- **Layout (whole app):** below 900 px the sidebar is a slide-in menu — top-bar button (aria-expanded / aria-controls
+  `app-nav`), scrim, Escape and any navigation close it, slides from the right in Arabic; main padding 16 px on phones.
+  900 px and up unchanged (every phone class is `max-[899px]:` scoped).
+- **Orders page:** `?order=<id>` opens that order's drawer; closing removes the parameter. Row clicks unchanged.
+- **Analytics:** order numbers in Order finances and the SKU drawer link to `/orders?order=<id>` (stuck shipments and the
+  drill-down's AWB rows carry no order id, so they don't link). Revenue's full-width daily chart draws at the standard
+  width below 900 px.
+- **Tests:** frontend 856 (`phoneMenuOrderLinks` 4, revert-checked 4/4). Screenshots: `dev/analytics-shots/shoot-menu.mjs`.
+- **Remaining:** the analytics flag flip — `VITE_ANALYTICS_ENABLED=true docker compose -f deploy/docker-compose.yml build
+  --no-cache app`, then bring the app container up.
 **Analytics frontend — group D: Products & SKUs, Stock health, Customers (2026-10-09, branch `analytics/fe-d`, merged to
 main behind the flag; NOT deployed, flag OFF). All eight analytics pages are built. One backend addition.**
 - **Products & SKUs:** KPIs (SKUs sold, units, best SKU by true net, SKUs losing money — cost notes when uncosted), all-SKUs
