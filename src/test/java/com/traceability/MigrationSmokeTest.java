@@ -61,7 +61,8 @@ class MigrationSmokeTest {
             "exchanges",
             "order_notes",
             "tenant_ad_attribution",
-            "untracked_unit_intakes"
+            "untracked_unit_intakes",
+            "transfer_shopify_syncs"
     );
 
     @Test

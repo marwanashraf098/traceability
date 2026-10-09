@@ -4,6 +4,43 @@
 
 ## Current state
 
+**Issue 2 — transfers sync with Shopify (2026-10-08, branch `feat/transfer-shopify-sync` off main 9b648a6; NOT merged,
+NOT deployed). Migration V157. Repair script written + dry-run only (NOT executed).** Approved: model (b) sync by custody;
+a FIFTH named decrement `pushTransferOut`; per-location mode 'remove' (default) | 'leave'; no mirroring, no new Shopify
+locations — Traced still writes only to the Traced Main Warehouse.
+- **V157:** `locations.shopify_sync_mode`, `transfers.shopify_sync_mode` (snapshot at send), `transfer_pieces.from_location_id`
+  (recorded at scan-out), `transfer_shopify_syncs` (one claim per transfer: queued/pending/pushed/failed/failed_ambiguous/
+  skipped+reason; RLS + policy; app_user no DELETE), trigger type `transfer_return`. MigrationSmokeTest 156,
+  NotTracedBackfillTest 101 (renumbered V155 → V157 at merge: analytics slice 6 took V155, the payload fix V156).
+- **Send:** `TransferShopifySync.claimSend` in markSent (send-and-back / bring-back) and closeOneWay (permanent move):
+  snapshot the governing mode; 'leave' → nothing; pieces that left the MAIN warehouse → one queued claim (−N per
+  variant); else 'skipped' with reason (not_from_main_warehouse — every bring-back; main_warehouse_not_linked;
+  no_main_warehouse). After commit: queued→pending (one-sender guard), ONE `pushTransferOut` → pushed | failed
+  (definitive; `TransferShopifySweepJob` re-sends up to 5) | failed_ambiguous (never re-sent; pending 15 min →
+  ambiguous). Ambiguous / exhausted → CRITICAL `void_hold_sync_failed` (trigger_type transfer_out).
+- **Return:** reconcile scan back good → `ShopifyInventoryService.onTransferReturn` +1 via the increment path (key
+  piece:transfer, retry job) only when `RETURN_COUNTED_SQL` holds: the outbound transfer's claim was pushed for the
+  piece, or it left before the tenant's initial seed (the seed counted only main-warehouse pieces).
+  `departedAtSql` is the one departure-time definition (pre-V118 send-and-backs have no sent_at → reconcile start /
+  creation). Sold / lost / condemned → no write. Cancel only before any scan → nothing to undo.
+- **UI:** Settings → Locations "While stock is here: Remove from Shopify / Leave Shopify unchanged" + help line (EN/AR);
+  `PUT /api/v1/locations/{id}/shopify-sync-mode` (owner/manager; 409 for the main warehouse).
+- **CLAUDE.md:** named decrement set now five (pushTransferOut) + the ISSUE 2 TRANSFER OUT paragraph.
+- **Tests:** `TransferShopifySyncTest` (16), `TransferOutClassificationWireTest` (13), `TransferRepairScriptTest` (3, real psql),
+  frontend `locationsSyncMode` (2).
+  Revert-checked: no claim at markSent → 8 red; no one-sender guard → ts2; ambiguous as failed → ts3; no +1 → ts4/6/9;
+  leave ignored → ts5/6; live mode instead of snapshot → ts6; no unlinked skip → ts7; no claim at closeOneWay → ts9;
+  sent_at-only departure → ts11; frontend no save → l2. Headless renders EN/AR in the session scratchpad `loc-renders/`.
+- **Prod dry run (read-only, 2026-10-08):** ZERO −1 claims to queue. The Snouts' 4 pieces at Warehouse 2 (1
+  out_on_transfer on a pre-V118 send-and-back, 3 transferred_out) all left BEFORE its 10-07 seed → seed_excluded (Shopify
+  never counted them; each gets +1 on return). Sold/lost report: Snouts DBPINK-3 sold ×1 left before the seed → nothing
+  to fix; Onboarding Videos sold ×2 / lost ×4 → linked but not seeded → the seed won't count them. Jumi + demo excluded.
+- **Review round (approved 2026-10-09):** linked-but-never-seeded = unlinked (send → skipped `not_seeded`; the +1 rule
+  requires an applied seed). `pushTransferOut` classification: definite ONLY HTTP 4xx / userErrors / THROTTLED-only with no data
+  (sweep re-sends ≤ 5; THROTTLED approved 2026-10-09); 5xx, any other top-level GraphQL error (THROTTLED mixed or with data), timeouts, connection errors, empty/unreadable bodies and any
+  unexpected error → failed_ambiguous, never re-sent. New tests ts12–ts16 + `TransferOutClassificationWireTest` (13),
+  each revert-checked. Existing tests edited (approved): WorkerPermissionGuardTest cleanup (+ transfer_shopify_syncs),
+  MigrationSmokeTest TENANT_SCOPED_TABLES (+ transfer_shopify_syncs).
 **Fix — order imports made stored payloads poorer (2026-10-08, branch `fix/order-payload-downgrade`, merged to main; NOT
 deployed). Migration V156.**
 - **Cause:** every GraphQL order import (connect / reconnect / OAuth upgrade re-import, reconcile catch-up) re-reads the

@@ -17,6 +17,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.ResponseStatus;
@@ -62,9 +63,35 @@ public class LocationController {
                 "       shopify_location_id, shopify_sync_status, " +
                 "       shopify_sync_error, shopify_synced_at, " +
                 "       shopify_delivery_profile_status, shopify_delivery_profile_error, " +
-                "       shopify_delivery_profile_activated_at " +
+                "       shopify_delivery_profile_activated_at, shopify_sync_mode " +
                 "FROM locations WHERE tenant_id = ? ORDER BY name",
                 TenantContext.require()));
+    }
+
+    /**
+     * Issue 2 — what happens to Shopify while stock sits at this (non-main) location: 'remove' (the
+     * units leave the Traced Main Warehouse count when sent here) or 'leave' (Shopify unchanged).
+     * A transfer snapshots the mode when it is sent, so a change applies to later transfers only.
+     */
+    @PutMapping("/{id}/shopify-sync-mode")
+    @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
+    public Map<String, Object> setShopifySyncMode(@PathVariable UUID id, @RequestBody Map<String, Object> body) {
+        UUID tenantId = TenantContext.require();
+        Object mode = body == null ? null : body.get("mode");
+        if (!"remove".equals(mode) && !"leave".equals(mode)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "mode must be remove or leave");
+        }
+        return tx.execute(status -> {
+            List<Map<String, Object>> rows = jdbc.queryForList(
+                "SELECT is_fulfillment FROM locations WHERE id = ? AND tenant_id = ?", id, tenantId);
+            if (rows.isEmpty()) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Location not found");
+            if (Boolean.TRUE.equals(rows.get(0).get("is_fulfillment"))) {
+                throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "The main warehouse is always counted in Shopify — this setting is for other locations.");
+            }
+            jdbc.update("UPDATE locations SET shopify_sync_mode = ? WHERE id = ? AND tenant_id = ?", mode, id, tenantId);
+            return Map.<String, Object>of("id", id.toString(), "shopify_sync_mode", mode);
+        });
     }
 
     @PostMapping
