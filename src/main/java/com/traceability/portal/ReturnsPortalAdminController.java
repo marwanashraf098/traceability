@@ -26,10 +26,12 @@ public class ReturnsPortalAdminController {
     private final ReturnLocationService returnLocations;
     private final ReturnPickupBookingService booking;
     private final RefundSuggestionService suggestions;
+    private final PortalLogoService logos;
 
     public ReturnsPortalAdminController(ReturnRequestService requests, PortalSettingsService settings,
                                         ReturnLocationService returnLocations, ReturnPickupBookingService booking,
-                                        RefundSuggestionService suggestions) {
+                                        RefundSuggestionService suggestions, PortalLogoService logos) {
+        this.logos           = logos;
         this.requests        = requests;
         this.settings        = settings;
         this.returnLocations = returnLocations;
@@ -245,6 +247,62 @@ public class ReturnsPortalAdminController {
         } catch (PortalSettingsService.FieldException e) {
             return fieldError(e);
         }
+    }
+
+    /**
+     * P1 — upload the portal logo (multipart field "file"). Saved at once (not via "Save changes"):
+     * checked and re-encoded first (PNG, transparency kept, at most 600 px wide, no metadata), then
+     * it replaces any previous upload. Errors are field errors on "logo": LOGO_REQUIRED,
+     * LOGO_TOO_LARGE (over 2 MB), LOGO_TYPE (not PNG / JPG / WebP, whatever the file is called),
+     * LOGO_PIXELS, LOGO_UNREADABLE. Answers the settings, as GET does.
+     */
+    @PutMapping("/tenant/portal-settings/logo")
+    @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
+    public ResponseEntity<Map<String, Object>> putLogo(
+            @RequestParam(value = "file", required = false) org.springframework.web.multipart.MultipartFile file) {
+        try {
+            byte[] upload;
+            if (file == null || file.isEmpty()) {
+                upload = null;
+            } else if (file.getSize() > PortalLogoService.MAX_BYTES) {
+                // Refused before the bytes are read into memory.
+                throw new PortalSettingsService.FieldException(HttpStatus.BAD_REQUEST, "logo", "LOGO_TOO_LARGE",
+                    "The logo can be at most 2 MB.");
+            } else {
+                upload = file.getBytes();
+            }
+            logos.save(logos.process(upload));   // processed before the transaction opens
+            return ResponseEntity.ok(settings.get());
+        } catch (PortalSettingsService.FieldException e) {
+            return fieldError(e);
+        } catch (java.io.IOException e) {
+            return fieldError(new PortalSettingsService.FieldException(HttpStatus.BAD_REQUEST, "logo",
+                "LOGO_UNREADABLE", "This file couldn't be read as an image."));
+        }
+    }
+
+    /** P1 — remove the uploaded logo (at once; the portal falls back to the Shopify link, else the store name). */
+    @DeleteMapping("/tenant/portal-settings/logo")
+    @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
+    public Map<String, Object> deleteLogo() {
+        logos.remove();
+        return settings.get();
+    }
+
+    /**
+     * P1 — the uploaded logo's bytes for the settings preview (works while the portal is off,
+     * unlike the public endpoint). 404 when there is none.
+     */
+    @GetMapping("/tenant/portal-settings/logo")
+    @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
+    public ResponseEntity<byte[]> getLogo() {
+        return logos.current()
+            .map(a -> ResponseEntity.ok()
+                .contentType(org.springframework.http.MediaType.parseMediaType(a.info().contentType()))
+                .cacheControl(org.springframework.http.CacheControl.noStore())
+                .header("X-Content-Type-Options", "nosniff")
+                .body(a.bytes()))
+            .orElseGet(() -> ResponseEntity.notFound().build());
     }
 
     /** Step 4c-2 — the tenant's Bosta pickup locations, for "Returns go back to". */

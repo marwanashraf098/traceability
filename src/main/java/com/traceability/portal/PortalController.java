@@ -14,7 +14,9 @@ import java.util.UUID;
 
 /**
  * Public returns portal — unauthenticated (SecurityConfig permitAll /api/v1/portal/**),
- * rate-limited at nginx (zone "portal", 10r/m per client IP) and per order key in the app.
+ * rate-limited at nginx (zone "portal": 30 requests/minute per client IP, burst 15 — deploy/nginx.conf)
+ * and, for lookup, in the app: per order key (5 failures / 60 min) and per client IP (P1: 20 failures
+ * / 60 min across order keys, the IP stored only as an HMAC).
  *
  * Unknown or disabled slug → 404 with no body. A lookup failure of ANY kind → 404 with the
  * one generic message below, so a caller can never tell which check failed. Nothing about
@@ -137,16 +139,50 @@ public class PortalController {
 
     @PostMapping("/{slug}/lookup")
     public ResponseEntity<Map<String, Object>> lookup(@PathVariable String slug,
-                                                      @RequestBody(required = false) LookupRequest req) {
+                                                      @RequestBody(required = false) LookupRequest req,
+                                                      jakarta.servlet.http.HttpServletRequest http) {
         String orderNumber = req == null ? null : req.orderNumber();
         String phone       = req == null ? null : req.phone();
-        return portal.lookup(slug, orderNumber, phone)
+        // The real client IP: nginx overwrites X-Forwarded-For and Tomcat's RemoteIpValve trusts it
+        // only from the internal proxy (server.forward-headers-strategy: native).
+        return portal.lookup(slug, orderNumber, phone, http.getRemoteAddr())
             .map(r -> switch (r.outcome()) {
                 case SUCCESS   -> ResponseEntity.ok(r.body());
                 case THROTTLED -> ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS)
                                       .body(Map.<String, Object>of("message", THROTTLED_MESSAGE));
                 case NOT_FOUND -> ResponseEntity.status(HttpStatus.NOT_FOUND)
                                       .body(Map.<String, Object>of("message", NOT_FOUND_MESSAGE));
+            })
+            .orElseGet(() -> ResponseEntity.notFound().build());
+    }
+
+    /** A versioned URL whose ?v= matches the current logo never changes content: cache it for good. */
+    static final org.springframework.http.CacheControl LOGO_IMMUTABLE =
+        org.springframework.http.CacheControl.maxAge(java.time.Duration.ofDays(365)).cachePublic().immutable();
+    /** No ?v=, or a stale one (the logo was replaced): revalidate hourly against the ETag. */
+    static final org.springframework.http.CacheControl LOGO_REVALIDATE =
+        org.springframework.http.CacheControl.maxAge(java.time.Duration.ofHours(1)).cachePublic();
+
+    /**
+     * P1 — the merchant's uploaded logo, served by this app so the portal stays under CSP
+     * img-src 'self'. ETag = the bytes' SHA-256; a matching If-None-Match gets 304 without the
+     * bytes being read. /config's logoUrl carries ?v= (the first 12 hex digits of that SHA-256):
+     * when it matches the current logo the answer is cacheable for a year (immutable); a missing
+     * or stale ?v= gets the current bytes with the 1-hour + ETag policy. 404 (no body) for an
+     * unknown or disabled slug or no uploaded logo.
+     */
+    @GetMapping("/{slug}/logo")
+    public ResponseEntity<byte[]> logo(@PathVariable String slug,
+                                       @RequestParam(value = "v", required = false) String version,
+                                       @RequestHeader(value = "If-None-Match", required = false) String ifNoneMatch) {
+        return portal.logo(slug, ifNoneMatch, version)
+            .map(l -> {
+                ResponseEntity.BodyBuilder b = ResponseEntity.status(l.bytes() == null ? HttpStatus.NOT_MODIFIED : HttpStatus.OK)
+                    .eTag(l.etag())
+                    .cacheControl(l.current() ? LOGO_IMMUTABLE : LOGO_REVALIDATE)
+                    .header("X-Content-Type-Options", "nosniff");
+                return l.bytes() == null ? b.<byte[]>build()
+                    : b.contentType(org.springframework.http.MediaType.parseMediaType(l.contentType())).body(l.bytes());
             })
             .orElseGet(() -> ResponseEntity.notFound().build());
     }

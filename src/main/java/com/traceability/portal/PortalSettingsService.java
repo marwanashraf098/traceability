@@ -32,6 +32,10 @@ public class PortalSettingsService {
     private static final java.util.regex.Pattern COLOR = java.util.regex.Pattern.compile("^#[0-9A-Fa-f]{6}$");
     static final int POLICY_MAX = 2000;
 
+    /** P1 (V159): the portal font families — the same list as the tenants_portal_font_family CHECK. */
+    public static final List<String> FONTS =
+        List.of("cairo", "tajawal", "ibm-plex-sans-arabic", "almarai", "readex-pro");
+
     /**
      * PUT body. Full replace: a branding field that is absent or blank is stored as NULL.
      * The 4-argument constructor is the Step 4b shape (no branding).
@@ -40,10 +44,20 @@ public class PortalSettingsService {
      * pickupBooking (Step 4c-3): "Book Bosta pickups when I approve". Also not full-replace —
      * absent leaves it as it is. Switching it on needs an active Bosta account and a saved
      * return location.
+     * font (P1, V159): one of {@link #FONTS}. Not full-replace — absent leaves it as it is. The
+     * uploaded logo has its own endpoints (PortalLogoService) and is never touched here.
      */
     public record Settings(String slug, Boolean enabled, Boolean autoApprove, Integer returnWindowDays,
                            String logoUrl, String brandColor, String policyText, String returnLocationId,
-                           Boolean pickupBooking, Boolean exchangesEnabled) {
+                           Boolean pickupBooking, Boolean exchangesEnabled, String font) {
+        /** The Step 5c shape (no font — P1): leaves the saved font as it is. */
+        public Settings(String slug, Boolean enabled, Boolean autoApprove, Integer returnWindowDays,
+                        String logoUrl, String brandColor, String policyText, String returnLocationId,
+                        Boolean pickupBooking, Boolean exchangesEnabled) {
+            this(slug, enabled, autoApprove, returnWindowDays, logoUrl, brandColor, policyText, returnLocationId,
+                pickupBooking, exchangesEnabled, null);
+        }
+
         public Settings(String slug, Boolean enabled, Boolean autoApprove, Integer returnWindowDays,
                         String logoUrl, String brandColor, String policyText, String returnLocationId,
                         Boolean pickupBooking) {
@@ -97,7 +111,7 @@ public class PortalSettingsService {
         Map<String, Object> t = jdbc.queryForMap(
             "SELECT portal_slug, portal_enabled, portal_auto_approve, customer_return_window_days, " +
             "       portal_logo_url, portal_brand_color, portal_policy_text, portal_pickup_booking, " +
-            "       portal_exchanges_enabled, portal_exchanges_since " +
+            "       portal_exchanges_enabled, portal_exchanges_since, portal_font, portal_logo_asset_id, name " +
             "FROM tenants WHERE id = ?", tenantId);
         Map<String, Object> location = jdbc.queryForList(
             "SELECT return_business_location_id, return_business_location_name FROM courier_accounts " +
@@ -123,6 +137,11 @@ public class PortalSettingsService {
         // Step 5c: "Allow exchanges" and when it was last switched on ("Book now" for older approvals).
         body.put("exchangesEnabled", t.get("portal_exchanges_enabled"));
         body.put("exchangesSince", t.get("portal_exchanges_since"));
+        // P1 (V159): the font, and the uploaded logo (null when none) — its bytes come from
+        // GET /tenant/portal-settings/logo; "version" changes whenever the logo does.
+        body.put("font", t.get("portal_font"));
+        body.put("storeName", t.get("name"));   // the settings preview's wordmark
+        body.put("logo", uploadedLogo(tenantId, (UUID) t.get("portal_logo_asset_id"), (String) t.get("portal_slug")));
         return body;
     }
 
@@ -163,6 +182,10 @@ public class PortalSettingsService {
         if (brandColor != null && !COLOR.matcher(brandColor).matches()) {
             throw bad("brandColor", "BRAND_COLOR", "The brand colour must be a hex colour like #1A2B3C.");
         }
+        String font = blankToNull(s.font());
+        if (font != null && !FONTS.contains(font)) {
+            throw bad("font", "FONT", "Choose one of the listed fonts.");
+        }
         String policyText = s.policyText() == null || s.policyText().isBlank() ? null : s.policyText();
         if (policyText != null && policyText.length() > POLICY_MAX) {
             throw bad("policyText", "POLICY_LENGTH", "The return policy can be at most " + POLICY_MAX + " characters.");
@@ -185,9 +208,31 @@ public class PortalSettingsService {
                 "WHERE tenant_id = ? AND provider = 'bosta' AND status = 'active'",
                 returnLocation.id(), returnLocation.name(), tenantId);
         }
+        if (font != null) jdbc.update("UPDATE tenants SET portal_font = ? WHERE id = ?", font, tenantId);
         if (s.pickupBooking() != null) setPickupBooking(tenantId, s.pickupBooking());
         if (s.exchangesEnabled() != null) setExchanges(tenantId, s.exchangesEnabled());
         return get();
+    }
+
+    /**
+     * The uploaded logo, or null. "url" is the public versioned URL the portal uses (the same as
+     * /config's logoUrl; null while there's no slug); "version" is its ?v=. Not "logoUrl": that key
+     * is the Shopify Files link the merchant edits.
+     */
+    private Map<String, Object> uploadedLogo(UUID tenantId, UUID assetId, String slug) {
+        if (assetId == null) return null;
+        return jdbc.query(
+            "SELECT content_type, size_bytes, width, height, sha256 FROM portal_assets WHERE tenant_id = ? AND id = ?",
+            (rs, i) -> {
+                Map<String, Object> m = new LinkedHashMap<>();
+                m.put("contentType", rs.getString("content_type"));
+                m.put("sizeBytes", rs.getInt("size_bytes"));
+                m.put("width", rs.getInt("width"));
+                m.put("height", rs.getInt("height"));
+                m.put("version", PortalLogoService.version(rs.getString("sha256")));
+                m.put("url", slug == null ? null : PortalLogoService.publicUrl(slug, rs.getString("sha256")));
+                return m;
+            }, tenantId, assetId).stream().findFirst().orElse(null);
     }
 
     /**

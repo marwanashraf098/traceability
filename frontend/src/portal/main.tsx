@@ -1,8 +1,7 @@
 import '@fontsource-variable/geist'
 import '@fontsource/geist-mono/600.css'
-import '@fontsource/cairo/400.css'
-import '@fontsource/cairo/600.css'
-import '@fontsource/cairo/700.css'
+// P1: the store's own font (Cairo by default) is loaded on demand by PortalApp (fonts.ts) —
+// only the chosen family. Geist stays for the language switch's "English"; Geist Mono as today.
 import './portal.css'
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'

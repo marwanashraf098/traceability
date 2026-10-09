@@ -4,6 +4,7 @@ import {
   getConfig, getDistricts, lookup, submit, ExchangeOption, LookupLine, LookupResult, PickupDistrict, PortalConfig, SubmitResult,
 } from './api'
 import { palette } from './brand'
+import { fontVars, loadPortalFont, portalFontOrDefault } from './fonts'
 import { applyDocumentLanguage, PortalLang, saveLanguage } from './i18n'
 
 /**
@@ -212,7 +213,11 @@ export default function PortalApp({ slug }: { slug: string | null }) {
   }, [step])
 
   const colors = useMemo(() => palette(config?.brandColor), [config?.brandColor])
+  // P1: the store's font, in both languages — only that family is ever loaded.
+  const font = config ? portalFontOrDefault(config.font) : null
+  useEffect(() => { if (font) loadPortalFont(font) }, [font])
   const rootStyle = {
+    ...(font ? fontVars(font) : {}),
     '--brand': colors.brand,
     '--on-brand': colors.onBrand,
     '--accent-text': colors.accentText,
