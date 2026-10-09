@@ -4,6 +4,27 @@
 
 ## Current state
 
+**Analytics frontend — group B: Revenue + Delivery (2026-10-09, branch `analytics/fe-b`, merged to main behind the flag;
+NOT deployed, flag OFF).**
+- **Flag flip command (at flip time, explicit, no .env change):**
+  `VITE_ANALYTICS_ENABLED=true docker compose -f deploy/docker-compose.yml build --no-cache app`
+- **Revenue:** KPIs (gross, booked, net realized, realized ÷ booked, gross margin + cost coverage), waterfall gross →
+  discounts → still in pipeline → other carrier (only when > 0) → failed → returns → net realized, funnel (counts only —
+  the API has no per-step amounts), revenue per day with the previous-period comparison, breakdowns by channel / payment /
+  governorate / product type (bars follow Booked/Realized, delivery-success pills, no refetch on mode switch), discount
+  codes + automatic row, heatmap (Cairo time, Saturday first), new / existing / returning / unknown customers (note when
+  ≥ 20% unknown), margin by product type (costed units only).
+- **Delivery:** KPIs (success with points delta, failed + lost sales, order → handed, handed → delivered with Cairo/Giza
+  vs other), sortable governorate table (DataTable sort prop), failure reasons + Bosta coverage, weekly success, most-failed
+  products (20+ orders, by rate), customers to watch (backend suggestion + /blocklist link), fulfillment speed.
+- **States:** no Bosta → Delivery is a Connect Bosta card (no delivery requests); Revenue on booked (realized "—", no
+  mode switch, no waterfall). Costs: none costed → "Add cost per item in Shopify", or the inventory-sync status explains
+  access denied / read error. V2 tags only on features that don't exist yet (heatmap, margin, watch list are real).
+- **Shared:** `pages/analytics/shared.tsx` (merchant, deltas, other-carrier banner, Connect Bosta, CostNote, group
+  label translation), charts Waterfall / Funnel / Heatmap; LineChart `width` for full-width cards.
+- **Tests:** 826 vitest (`analyticsRevenueDelivery` 14 new; group A r2 / r5 / b3 updated for the built pages, approved).
+  Revert-checked 9/9. Screenshots via the harness for BROEK / Femine / High line × EN/AR × desktop / 390 px.
+- **Phone build backlog:** the full-width daily chart's text is small at 390 px.
 **Analytics frontend — group A: foundation + Summary (2026-10-09, branch `analytics/fe-a`, merged to main behind the
 flag; NOT deployed, flag OFF).** Visual + metric truth: `design/Traced_Analytics_dc.html` (branch `design/analytics-v1`).
 - **Flag:** `VITE_ANALYTICS_ENABLED` (build-time, default false) — Dockerfile `ARG`, forwarded by `deploy/docker-compose.yml`
