@@ -4,6 +4,28 @@
 
 ## Current state
 
+**Analytics frontend — group D: Products & SKUs, Stock health, Customers (2026-10-09, branch `analytics/fe-d`, merged to
+main behind the flag; NOT deployed, flag OFF). All eight analytics pages are built. One backend addition.**
+- **Products & SKUs:** KPIs (SKUs sold, units, best SKU by true net, SKUs losing money — cost notes when uncosted), all-SKUs
+  table (units, revenue by basis, true net, sell-through, per day, stock left + source, avg age, returns, exchanges 90 d,
+  failed, ABC; stock columns only with pieces; client-side sort of the full sold list), size curve, restock suggestions +
+  supplier lead time / cover editor (PUT /analytics/settings, cache cleared after save), frequently bought together.
+  Product page conversion hidden (decision).
+- **Stock health:** low-trust banner, KPIs (pieces, value at selling price, value at cost + costed/total, average days,
+  pieces moved 4+ → `?pieces=4` list → `?piece=<id>` history → SKU drawer), age buckets (0-30 / 31-60 / 61-90 / 90+),
+  running low, best sellers stock check, most exchanged / returned (90 d, 20+ sold in 30 d) with top reason, dead stock with
+  cash tied up (at cost / at price), returns by size. No pieces → one card pointing to Receiving.
+- **Customers:** KPIs (who ordered, repeat rate with points delta, median days between orders, returning revenue share),
+  unknown-share banner (≥ 20%), top customers (no realized money without Bosta), repeat by governorate, cohorts (months
+  still running starred), customer detail as V2, watch list → /blocklist (needs Bosta; not requested otherwise).
+- **Backend (built on "continue", my recommendation):** `GET /api/v1/analytics/pieces?minTrips=4&limit=` (owner; the s4 trip
+  rule, voided excluded like /variants/{id}/pieces, most trips first, total = all matching). `AnalyticsTripPiecesTest` (3,
+  revert-checked 3/3), RlsCoverageTest entry. Known: the summary's `piecesMovedFourPlus` still counts voided pieces (can
+  differ by a voided piece — one-line fix if wanted); non-numeric int params answer 500 app-wide (ApiExceptionHandler).
+- **Tests:** frontend 852 (`analyticsProductsStockCustomers` 10, revert-checked 9/9); backend full suite 2660 — the
+  ExchangeBackfillTest baseline + `BostaPollJobTest.p6`, which passes alone (21/21): a timing flake under load.
+- **Next:** the phone build (collapsible shell menu below ~900 px for the whole app; Orders page `?order=<id>` + Analytics
+  order links), then the flag flip (`VITE_ANALYTICS_ENABLED=true docker compose -f deploy/docker-compose.yml build --no-cache app`).
 **Analytics frontend — group C: Bosta & payouts, Order finances, SKU drawer, drill-downs (2026-10-09, branch
 `analytics/fe-c`, merged to main behind the flag; NOT deployed, flag OFF). One backend change: order sort.**
 - **Bosta & payouts:** fee KPIs (shipping, failed/exchange/return with drill-down, other = total − the four leg kinds,
