@@ -74,7 +74,7 @@ describe('routing', () => {
     const nav = screen.getByTestId('nav-analytics')
     // App takes its i18n from main.tsx, so labels here are keys — check the links by href.
     const links = within(nav).getAllByRole('link').map(a => a.getAttribute('href'))
-    expect(links).toEqual(['/analytics/summary?period=7d']) // pages not built yet are not linked
+    expect(links).toEqual(['/analytics/summary?period=7d', '/analytics/revenue?period=7d', '/analytics/delivery?period=7d']) // pages not built yet are not linked
   })
 
   test('r3 — a manager is sent to /overview and sees no Analytics group', async () => {
@@ -94,7 +94,7 @@ describe('routing', () => {
 
   test('r5 — an unbuilt page lands on Summary and keeps the period', async () => {
     useFixture(BROEK)
-    renderAppAt('/analytics/revenue?period=today')
+    renderAppAt('/analytics/money?period=today')
     await waitFor(() => expect(window.location.pathname + window.location.search).toBe('/analytics/summary?period=today'))
   })
 })
@@ -143,7 +143,8 @@ describe('summary — BROEK', () => {
     expect(within(list).getByTestId('alert-low_success_governorates')).toHaveTextContent('Sohag 60.5% · Assiut 63.8%')
     expect(within(list).getByTestId('alert-sells_out_soon')).toHaveTextContent('Wide-Leg Cargo Olive / 32')
     expect(within(list).queryByTestId('alert-never_picked_up')).toBeNull()
-    expect(within(list).queryAllByRole('link')).toHaveLength(0)
+    // Only alerts whose page is built link; the governorate alert opens Delivery.
+    expect(within(list).getAllByRole('link').map(a => a.getAttribute('href'))).toEqual(['/analytics/delivery?by=governorate'])
   })
 
   test("b4 — low stock trust: banner with the packed share, Shopify's count named on the stock column", async () => {
