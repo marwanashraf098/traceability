@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { useSearchParams } from 'react-router-dom'
+import { Link, useSearchParams } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { Download } from 'lucide-react'
 import { getAnalyticsOrders, ordersExportPath, type OrderRow, type OrderSortKey } from '../../analyticsApi'
@@ -136,7 +136,9 @@ export default function OrdersPage() {
                     sort={sort}
                     onSort={onSort}
                     columns={[
-                      { key: 'name', header: t('analytics.orders.cols.order'), mono: true, render: r => r.name },
+                      { key: 'name', header: t('analytics.orders.cols.order'), mono: true, render: r => (
+                        <Link to={`/orders?order=${encodeURIComponent(r.orderId)}`} className="text-trace-blue hover:underline" data-testid="order-link">{r.name}</Link>
+                      ) },
                       { key: 'date', header: t('analytics.orders.cols.date'), sortable: true, render: r => fmt.day(r.placedAt) },
                       { key: 'customer', header: t('analytics.orders.cols.customer'), render: r => r.customer ?? '—' },
                       { key: 'gov', header: t('analytics.orders.cols.governorate'), render: r => r.governorate ? label('governorate', r.governorate.key, r.governorate.label, r.governorate.labelAr) : '—' },

@@ -1,5 +1,5 @@
 import { useCallback } from 'react'
-import { useSearchParams } from 'react-router-dom'
+import { Link, useSearchParams } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { Banknote, Box, ShoppingBag, Repeat, AlertTriangle, Receipt } from 'lucide-react'
 import {
@@ -195,7 +195,7 @@ function SkuDrawerBody({ variantId }: { variantId: string }) {
               <tbody>
                 {d.orders.slice(0, 8).map(o => (
                   <tr key={o.orderId} className="border-b border-line last:border-0">
-                    <td className="py-2 font-mono text-[12px]">{o.name}</td>
+                    <td className="py-2 font-mono text-[12px]"><Link to={`/orders?order=${encodeURIComponent(o.orderId)}`} className="text-trace-blue hover:underline">{o.name}</Link></td>
                     <td className="py-2 px-2.5">{fmt.day(o.placedAt)}</td>
                     <td className="py-2 px-2.5">{(i18n.language === 'ar' && o.governorate?.labelAr) || o.governorate?.label || '—'}</td>
                     <td className="py-2 text-end"><Pill kind={FIN_PILL[o.financialStatus] ?? 'neutral'}>{t(`analytics.orders.fin.${o.financialStatus}`)}</Pill></td>

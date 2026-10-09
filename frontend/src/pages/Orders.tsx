@@ -1,5 +1,6 @@
 import { useEffect, useState, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
+import { useSearchParams } from 'react-router-dom'
 import { ChevronRight } from 'lucide-react'
 import {
   listOrders, OrderPage, listShopifyStores, syncShopifyStore,
@@ -46,7 +47,15 @@ export default function Orders() {
   const [syncMsg,  setSyncMsg]  = useState('')
   const [summary,  setSummary]  = useState<OrderSummaryCounts | null>(null)
   const [needsAttention, setNeedsAttention] = useState<number | null>(null)
-  const [drawerOrderId, setDrawerOrderId]   = useState<string | null>(null)
+  // ?order=<id> opens that order's drawer (links from Analytics); closing removes it from the URL.
+  const [searchParams, setSearchParams] = useSearchParams()
+  const [drawerOrderId, setDrawerOrderId]   = useState<string | null>(() => searchParams.get('order'))
+  const closeDrawer = useCallback(() => {
+    setDrawerOrderId(null)
+    if (searchParams.has('order')) {
+      setSearchParams(prev => { const n = new URLSearchParams(prev); n.delete('order'); return n }, { replace: true })
+    }
+  }, [searchParams, setSearchParams])
 
   // Independent, non-blocking — a failure here must never affect the table below (no
   // shared error state), and there's simply no tile row while it's unset.
@@ -356,7 +365,7 @@ export default function Orders() {
       )}
 
       {/* Slide-in overlay, not a route — Layout stays outside this view-switch. */}
-      <OrderDrawer orderId={drawerOrderId} onClose={() => setDrawerOrderId(null)} />
+      <OrderDrawer orderId={drawerOrderId} onClose={closeDrawer} />
     </div>
   )
 }
