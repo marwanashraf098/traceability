@@ -100,9 +100,7 @@ public class PortalService {
             // P1 precedence: uploaded logo (served by this app — CSP 'self'; ?v= changes with the
             // logo so a replacement shows at once) > Shopify Files link > null (store-name wordmark).
             String logoSha = (String) t.get("logo_sha256");
-            body.put("logoUrl", logoSha != null
-                ? "/api/v1/portal/" + slug.trim().toLowerCase(Locale.ROOT) + "/logo?v=" + logoSha.substring(0, 16)
-                : t.get("portal_logo_url"));
+            body.put("logoUrl", logoSha != null ? PortalLogoService.publicUrl(slug, logoSha) : t.get("portal_logo_url"));
             body.put("brandColor", t.get("portal_brand_color"));
             body.put("policyText", t.get("portal_policy_text"));
             body.put("autoApprove", t.get("portal_auto_approve"));
@@ -734,7 +732,8 @@ public class PortalService {
 
     // ── P1: the uploaded logo, public ───────────────────────────────────────────
 
-    public record PublicLogo(String contentType, String etag, byte[] bytes) {}
+    /** {@code current}: the request's ?v= is this logo's version — the URL can be cached for good. */
+    public record PublicLogo(String contentType, String etag, byte[] bytes, boolean current) {}
 
     /**
      * GET /api/v1/portal/{slug}/logo — the slug's tenant's uploaded logo (hatch #14 → runAs + RLS;
@@ -742,7 +741,7 @@ public class PortalService {
      * Empty for an unknown/disabled slug or no uploaded logo. When {@code ifNoneMatch} equals the
      * ETag, bytes is null (304) and the bytes are never read.
      */
-    public Optional<PublicLogo> logo(String slug, String ifNoneMatch) {
+    public Optional<PublicLogo> logo(String slug, String ifNoneMatch, String version) {
         UUID tenantId = resolveTenant(slug);
         if (tenantId == null) return Optional.empty();
         return Optional.ofNullable(TenantContext.runAs(tenantId, () -> tx.execute(s -> {
@@ -751,13 +750,15 @@ public class PortalService {
                 "JOIN portal_assets a ON a.id = t.portal_logo_asset_id AND a.tenant_id = t.id " +
                 "WHERE t.id = ?", tenantId);
             if (rows.isEmpty()) return null;
-            String etag = "\"" + rows.get(0).get("sha256") + "\"";
+            String sha = (String) rows.get(0).get("sha256");
+            String etag = "\"" + sha + "\"";
+            boolean current = PortalLogoService.version(sha).equals(version);
             String contentType = (String) rows.get(0).get("content_type");
-            if (etag.equals(ifNoneMatch)) return new PublicLogo(contentType, etag, null);
+            if (etag.equals(ifNoneMatch)) return new PublicLogo(contentType, etag, null, current);
             byte[] bytes = jdbc.queryForObject(
                 "SELECT bytes FROM portal_assets WHERE id = ? AND tenant_id = ?",
                 byte[].class, rows.get(0).get("id"), tenantId);
-            return new PublicLogo(contentType, etag, bytes);
+            return new PublicLogo(contentType, etag, bytes, current);
         })));
     }
 

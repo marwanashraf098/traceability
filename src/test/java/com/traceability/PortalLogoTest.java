@@ -47,6 +47,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  *      ceiling (413), pixel bomb, not an image, no file — nothing stored, logo unchanged
  *   u4 worker → 403 on upload / remove / preview
  *   p1 public logo: serves only the slug's tenant's asset; ETag + 304; Cache-Control; 404s
+ *   c1 cache-busting: ?v= = current → a year, immutable; replace → /config's v changes, the old v (and no v)
+ *      get the current bytes with the 1-hour + ETag policy
  *   x1 cross-tenant over HTTP: B never reads, replaces or removes A's logo (positive control: A)
  *   x2 cross-tenant on app_user: B can't see / delete / point at A's asset; UPDATE refused; control
  *   f1 font: saved, validated, absent = unchanged; in GET settings and the public config
@@ -125,7 +127,8 @@ class PortalLogoTest {
         assertThat(row.get("size_bytes")).isEqualTo(stored.length);
         assertThat(row.get("sha256")).isEqualTo(sha256(stored));
         assertThat(ImageIO.read(new ByteArrayInputStream(stored)).getColorModel().hasAlpha()).isTrue();
-        assertThat(logo.get("version")).isEqualTo(((String) row.get("sha256")).substring(0, 16));
+        assertThat(logo.get("version")).isEqualTo(((String) row.get("sha256")).substring(0, 12));
+        assertThat(logo.get("url")).isEqualTo("/api/v1/portal/nour-logo/logo?v=" + ((String) row.get("sha256")).substring(0, 12));
 
         // The settings preview endpoint returns the same bytes.
         ResponseEntity<byte[]> preview = getBytes("/api/v1/tenant/portal-settings/logo", ownerA, null);
@@ -134,7 +137,7 @@ class PortalLogoTest {
 
         // The public config points at the public endpoint, versioned.
         Map<String, Object> config = rest.getForEntity(base() + "/api/v1/portal/nour-logo/config", Map.class).getBody();
-        assertThat(config.get("logoUrl")).isEqualTo("/api/v1/portal/nour-logo/logo?v=" + ((String) row.get("sha256")).substring(0, 16));
+        assertThat(config.get("logoUrl")).isEqualTo("/api/v1/portal/nour-logo/logo?v=" + ((String) row.get("sha256")).substring(0, 12));
     }
 
     // ── u2 ───────────────────────────────────────────────────────────────────
@@ -248,6 +251,41 @@ class PortalLogoTest {
         jdbc.update("UPDATE tenants SET portal_enabled = false WHERE id = ?", a);
         assertThat(rest.getForEntity(base() + "/api/v1/portal/nour-logo/logo", byte[].class).getStatusCode())
             .isEqualTo(HttpStatus.NOT_FOUND);
+    }
+
+    // ── c1 ───────────────────────────────────────────────────────────────────
+
+    @Test
+    void c1_versionedUrl_immutableOnlyWhileCurrent_replaceChangesV() throws Exception {
+        upload(png(120, 40, true), "first.png", "image/png", ownerA);
+        String firstUrl = (String) configOf("nour-logo").get("logoUrl");
+        assertThat(firstUrl).matches("^/api/v1/portal/nour-logo/logo\\?v=[0-9a-f]{12}$");
+        byte[] firstBytes = storedBytes(a);
+
+        ResponseEntity<byte[]> current = rest.getForEntity(base() + firstUrl, byte[].class);
+        assertThat(current.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(current.getBody()).isEqualTo(firstBytes);
+        assertThat(current.getHeaders().getCacheControl()).contains("max-age=31536000").contains("immutable").contains("public");
+
+        // No ?v → the revalidating policy.
+        ResponseEntity<byte[]> bare = rest.getForEntity(base() + "/api/v1/portal/nour-logo/logo", byte[].class);
+        assertThat(bare.getHeaders().getCacheControl()).contains("max-age=3600").doesNotContain("immutable");
+
+        // Replace → a different v; the old v now gets the CURRENT bytes, revalidating, never immutable.
+        upload(jpeg(90, 90), "second.jpg", "image/jpeg", ownerA);
+        String secondUrl = (String) configOf("nour-logo").get("logoUrl");
+        assertThat(secondUrl).isNotEqualTo(firstUrl);
+        byte[] secondBytes = storedBytes(a);
+        ResponseEntity<byte[]> stale = rest.getForEntity(base() + firstUrl, byte[].class);
+        assertThat(stale.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(stale.getBody()).isEqualTo(secondBytes);
+        assertThat(stale.getHeaders().getCacheControl()).contains("max-age=3600").doesNotContain("immutable");
+        assertThat(stale.getHeaders().getETag()).isEqualTo("\"" + sha256(secondBytes) + "\"");
+        assertThat(rest.getForEntity(base() + secondUrl, byte[].class).getHeaders().getCacheControl()).contains("immutable");
+        // The settings GET carries the same versioned URL.
+        Map<String, Object> logo = (Map<String, Object>) exchange("/api/v1/tenant/portal-settings", HttpMethod.GET, null, ownerA)
+            .getBody().get("logo");
+        assertThat(logo).containsEntry("url", secondUrl);
     }
 
     // ── x1 ───────────────────────────────────────────────────────────────────

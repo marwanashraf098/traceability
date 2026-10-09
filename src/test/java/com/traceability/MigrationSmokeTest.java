@@ -62,7 +62,8 @@ class MigrationSmokeTest {
             "order_notes",
             "tenant_ad_attribution",
             "untracked_unit_intakes",
-            "transfer_shopify_syncs"
+            "transfer_shopify_syncs",
+            "portal_assets"
     );
 
     @Test

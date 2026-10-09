@@ -141,7 +141,7 @@ public class PortalSettingsService {
         // GET /tenant/portal-settings/logo; "version" changes whenever the logo does.
         body.put("font", t.get("portal_font"));
         body.put("storeName", t.get("name"));   // the settings preview's wordmark
-        body.put("logo", uploadedLogo(tenantId, (UUID) t.get("portal_logo_asset_id")));
+        body.put("logo", uploadedLogo(tenantId, (UUID) t.get("portal_logo_asset_id"), (String) t.get("portal_slug")));
         return body;
     }
 
@@ -214,7 +214,12 @@ public class PortalSettingsService {
         return get();
     }
 
-    private Map<String, Object> uploadedLogo(UUID tenantId, UUID assetId) {
+    /**
+     * The uploaded logo, or null. "url" is the public versioned URL the portal uses (the same as
+     * /config's logoUrl; null while there's no slug); "version" is its ?v=. Not "logoUrl": that key
+     * is the Shopify Files link the merchant edits.
+     */
+    private Map<String, Object> uploadedLogo(UUID tenantId, UUID assetId, String slug) {
         if (assetId == null) return null;
         return jdbc.query(
             "SELECT content_type, size_bytes, width, height, sha256 FROM portal_assets WHERE tenant_id = ? AND id = ?",
@@ -224,7 +229,8 @@ public class PortalSettingsService {
                 m.put("sizeBytes", rs.getInt("size_bytes"));
                 m.put("width", rs.getInt("width"));
                 m.put("height", rs.getInt("height"));
-                m.put("version", rs.getString("sha256").substring(0, 16));
+                m.put("version", PortalLogoService.version(rs.getString("sha256")));
+                m.put("url", slug == null ? null : PortalLogoService.publicUrl(slug, rs.getString("sha256")));
                 return m;
             }, tenantId, assetId).stream().findFirst().orElse(null);
     }

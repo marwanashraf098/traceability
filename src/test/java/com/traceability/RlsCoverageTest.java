@@ -130,6 +130,7 @@ class RlsCoverageTest {
             "/api/v1/privacy/data-requests",
             "/api/v1/privacy/data-requests/{id}/export",
             "/api/v1/tenant/portal-settings",
+            "/api/v1/tenant/portal-settings/logo",
             "/api/v1/tenant/bosta/return-locations",
             "/api/v1/variants",
             "/api/v1/overview/trends",
@@ -209,6 +210,10 @@ class RlsCoverageTest {
                     "public returns portal, slug-resolved via hatch #14 then TenantContext.runAs + RLS; " +
                     "returns no tenant data beyond the store name, window days and static reason codes " +
                     "(covered by PortalLookupTest / PortalLookupRlsTest)"),
+            entry("/api/v1/portal/{slug}/logo",
+                    "public returns portal, slug-resolved via hatch #14 then TenantContext.runAs + RLS (same as " +
+                    "/config); returns only that tenant's current uploaded logo, read through its tenant row " +
+                    "(covered by PortalLogoTest p1 / x1 / x2 / c1)"),
             entry("/api/v1/station/relay-stream",
                     "Q1 Server-Sent Events stream (text/event-stream, held open) — not a JSON GET this " +
                     "class can seed and read; served only to the pairing's own worker and tenant-isolated, " +
@@ -337,6 +342,7 @@ class RlsCoverageTest {
     @MockBean ShopifyTokenProvider tokenProvider;
     @MockBean BostaV2Client bostaV2;
     @Autowired EncryptionService encryption;
+    @Autowired org.springframework.security.crypto.password.PasswordEncoder passwordEncoder;
 
     // ── Per-class shared state ────────────────────────────────────────────────
 
@@ -767,6 +773,94 @@ class RlsCoverageTest {
         } finally {
             jdbc.update("UPDATE tenants SET portal_slug = NULL, portal_enabled = false WHERE id = ?", tenantId);
         }
+    }
+
+    /**
+     * P1 — GET / PUT / DELETE /tenant/portal-settings/logo: each reads or writes only the caller's
+     * own tenant's logo. Another tenant with its own logo is never returned, replaced or removed;
+     * positive controls on both sides.
+     */
+    @Test
+    void portalSettingsLogo_crossTenantIsolated_getPutDelete_withSameTenantPositiveControl() throws Exception {
+        UUID other = UUID.randomUUID(), otherOwner = UUID.randomUUID();
+        jdbc.update("INSERT INTO tenants (id, name) VALUES (?, 'Cov Logo Other')", other);
+        jdbc.update("INSERT INTO users (id, tenant_id, name, email, password_hash, role, active) " +
+                    "VALUES (?, ?, 'other', 'cov-logo-other@test.local', ?, 'owner'::user_role, true)",
+                    otherOwner, other, passwordEncoder.encode("Password99!"));
+        byte[] mine = covPng(java.awt.Color.RED), theirs = covPng(java.awt.Color.BLUE);
+        UUID mineAsset = seedLogo(tenantId, mine), theirsAsset = seedLogo(other, theirs);
+        try {
+            String otherToken = rest.postForEntity(base() + "/api/v1/auth/login",
+                Map.of("email", "cov-logo-other@test.local", "password", "Password99!"), TokenResponse.class)
+                .getBody().accessToken();
+
+            // GET: own logo (positive control); the other tenant gets its own, never mine.
+            ResponseEntity<byte[]> own = get("/api/v1/tenant/portal-settings/logo", byte[].class);
+            assertThat(own.getStatusCode()).isEqualTo(HttpStatus.OK);
+            assertThat(own.getBody()).as("same-tenant positive control").isEqualTo(mine);
+            assertThat(logoAs(otherToken).getBody()).isEqualTo(theirs);
+
+            // PUT: replaces only my logo.
+            org.springframework.util.LinkedMultiValueMap<String, Object> form = new org.springframework.util.LinkedMultiValueMap<>();
+            HttpHeaders part = new HttpHeaders();
+            part.setContentType(MediaType.IMAGE_PNG);
+            form.add("file", new HttpEntity<>(new org.springframework.core.io.ByteArrayResource(covPng(java.awt.Color.GREEN)) {
+                @Override public String getFilename() { return "cov.png"; }
+            }, part));
+            HttpHeaders h = new HttpHeaders();
+            h.setBearerAuth(ownerToken);
+            h.setContentType(MediaType.MULTIPART_FORM_DATA);
+            assertThat(rest.exchange(base() + "/api/v1/tenant/portal-settings/logo", HttpMethod.PUT,
+                new HttpEntity<>(form, h), Map.class).getStatusCode()).isEqualTo(HttpStatus.OK);
+            UUID replaced = jdbc.queryForObject("SELECT portal_logo_asset_id FROM tenants WHERE id = ?", UUID.class, tenantId);
+            assertThat(replaced).isNotEqualTo(mineAsset);
+            assertThat(jdbc.queryForObject("SELECT portal_logo_asset_id FROM tenants WHERE id = ?", UUID.class, other))
+                .isEqualTo(theirsAsset);
+
+            // DELETE: removes only my logo.
+            HttpHeaders d = new HttpHeaders();
+            d.setBearerAuth(ownerToken);
+            assertThat(rest.exchange(base() + "/api/v1/tenant/portal-settings/logo", HttpMethod.DELETE,
+                new HttpEntity<>(d), Map.class).getStatusCode()).isEqualTo(HttpStatus.OK);
+            assertThat(get("/api/v1/tenant/portal-settings/logo", byte[].class).getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
+            assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM portal_assets WHERE tenant_id = ?", Integer.class, tenantId)).isZero();
+            assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM portal_assets WHERE tenant_id = ?", Integer.class, other)).isEqualTo(1);
+            assertThat(logoAs(otherToken).getBody()).as("other tenant's logo untouched").isEqualTo(theirs);
+        } finally {
+            for (UUID t : List.of(tenantId, other)) {
+                jdbc.update("UPDATE tenants SET portal_logo_asset_id = NULL WHERE id = ?", t);
+                jdbc.update("DELETE FROM portal_assets WHERE tenant_id = ?", t);
+            }
+            jdbc.update("DELETE FROM refresh_tokens WHERE user_id = ?", otherOwner);
+            jdbc.update("DELETE FROM users WHERE id = ?", otherOwner);
+            jdbc.update("DELETE FROM tenants WHERE id = ?", other);
+        }
+    }
+
+    private ResponseEntity<byte[]> logoAs(String token) {
+        HttpHeaders h = new HttpHeaders();
+        h.setBearerAuth(token);
+        return rest.exchange(base() + "/api/v1/tenant/portal-settings/logo", HttpMethod.GET, new HttpEntity<>(h), byte[].class);
+    }
+
+    private static byte[] covPng(java.awt.Color c) throws Exception {
+        java.awt.image.BufferedImage img = new java.awt.image.BufferedImage(8, 8, java.awt.image.BufferedImage.TYPE_INT_RGB);
+        java.awt.Graphics2D g = img.createGraphics();
+        g.setColor(c);
+        g.fillRect(0, 0, 8, 8);
+        g.dispose();
+        java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+        javax.imageio.ImageIO.write(img, "png", out);
+        return out.toByteArray();
+    }
+
+    private UUID seedLogo(UUID tenant, byte[] png) throws Exception {
+        String sha = HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(png));
+        UUID asset = jdbc.queryForObject(
+            "INSERT INTO portal_assets (tenant_id, kind, content_type, bytes, size_bytes, width, height, sha256) " +
+            "VALUES (?, 'logo', 'image/png', ?, ?, 8, 8, ?) RETURNING id", UUID.class, tenant, png, png.length, sha);
+        jdbc.update("UPDATE tenants SET portal_logo_asset_id = ? WHERE id = ?", asset, tenant);
+        return asset;
     }
 
     @Test

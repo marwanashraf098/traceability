@@ -26,6 +26,18 @@ public class PortalLogoService {
     public static final String KIND = "logo";
     /** The app's own cap for a logo (multipart's 8 MB is only the outer ceiling). */
     public static final int MAX_BYTES = 2 * 1024 * 1024;
+    /** The logo URL's ?v= — the first 12 hex digits of the stored bytes' SHA-256. */
+    static final int VERSION_LENGTH = 12;
+
+    /** The ?v= value for a stored logo's SHA-256. */
+    public static String version(String sha256) {
+        return sha256.substring(0, VERSION_LENGTH);
+    }
+
+    /** The public, versioned logo URL (same origin — the portal CSP stays img-src 'self'). */
+    public static String publicUrl(String slug, String sha256) {
+        return "/api/v1/portal/" + slug.trim().toLowerCase(java.util.Locale.ROOT) + "/logo?v=" + version(sha256);
+    }
 
     private final JdbcTemplate jdbc;
     private final BinaryAssetStore store;

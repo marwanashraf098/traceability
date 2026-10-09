@@ -156,21 +156,30 @@ public class PortalController {
             .orElseGet(() -> ResponseEntity.notFound().build());
     }
 
+    /** A versioned URL whose ?v= matches the current logo never changes content: cache it for good. */
+    static final org.springframework.http.CacheControl LOGO_IMMUTABLE =
+        org.springframework.http.CacheControl.maxAge(java.time.Duration.ofDays(365)).cachePublic().immutable();
+    /** No ?v=, or a stale one (the logo was replaced): revalidate hourly against the ETag. */
+    static final org.springframework.http.CacheControl LOGO_REVALIDATE =
+        org.springframework.http.CacheControl.maxAge(java.time.Duration.ofHours(1)).cachePublic();
+
     /**
      * P1 — the merchant's uploaded logo, served by this app so the portal stays under CSP
      * img-src 'self'. ETag = the bytes' SHA-256; a matching If-None-Match gets 304 without the
-     * bytes being read. The /config logoUrl carries ?v=… that changes with the logo, so a cached
-     * copy never outlives a replacement on the page. 404 (no body) for an unknown or disabled slug
-     * or no uploaded logo.
+     * bytes being read. /config's logoUrl carries ?v= (the first 12 hex digits of that SHA-256):
+     * when it matches the current logo the answer is cacheable for a year (immutable); a missing
+     * or stale ?v= gets the current bytes with the 1-hour + ETag policy. 404 (no body) for an
+     * unknown or disabled slug or no uploaded logo.
      */
     @GetMapping("/{slug}/logo")
     public ResponseEntity<byte[]> logo(@PathVariable String slug,
+                                       @RequestParam(value = "v", required = false) String version,
                                        @RequestHeader(value = "If-None-Match", required = false) String ifNoneMatch) {
-        return portal.logo(slug, ifNoneMatch)
+        return portal.logo(slug, ifNoneMatch, version)
             .map(l -> {
                 ResponseEntity.BodyBuilder b = ResponseEntity.status(l.bytes() == null ? HttpStatus.NOT_MODIFIED : HttpStatus.OK)
                     .eTag(l.etag())
-                    .cacheControl(org.springframework.http.CacheControl.maxAge(java.time.Duration.ofHours(1)).cachePublic())
+                    .cacheControl(l.current() ? LOGO_IMMUTABLE : LOGO_REVALIDATE)
                     .header("X-Content-Type-Options", "nosniff");
                 return l.bytes() == null ? b.<byte[]>build()
                     : b.contentType(org.springframework.http.MediaType.parseMediaType(l.contentType())).body(l.bytes());
