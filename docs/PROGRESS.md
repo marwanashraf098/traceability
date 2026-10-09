@@ -5,7 +5,7 @@
 ## Current state
 
 **Returns portal P1 — branding: uploaded logo + portal font + per-IP lookup throttle (2026-10-09, branch
-`feat/portal-branding-p1` off origin/main 4755f0a; NOT merged, NOT deployed). Migration V159.** Mockup signed off:
+`feat/portal-branding-p1` off origin/main 4755f0a; merged to main 2026-10-10, no squash; NOT deployed). Migration V159.** Mockup signed off:
 `design/Traced_portal_branding_dc.html`. Decisions (signed off): the Shopify Files link stays, folded under "Use a
 Shopify Files link instead"; precedence uploaded asset > Shopify link > store-name wordmark; the logo saves on
 upload / remove (no confirm, "Logo removed" toast), font / colour / policy save with "Save changes"; 2 MB logo cap in the
@@ -44,8 +44,9 @@ app, multipart 8 MB / 10 MB as the outer ceiling; fonts self-hosted via @fontsou
   EXEMPT (as /config), merchant logo GET/PUT/DELETE COVERED by a seeded cross-tenant test with positive controls
   (revert-checked: a tenant-blind delete → red); MigrationSmokeTest.TENANT_SCOPED_TABLES + portal_assets. V159 still free.
 - **Suites:** origin/main 4755f0a clean checkout 2,650 run / 1 red (ExchangeBackfillTest); branch 2,669 run / 1 red
-  (ExchangeBackfillTest). Known reds: ExchangeBackfillTest; SimulatedAutoShipmentTest.a5 is an intermittent
-  clock-skew flake (see Gotchas) — red in the branch's first full run, green on main and in the branch rerun.
+  (ExchangeBackfillTest). a5 clock-skew flake fixed (commit 75052f7 "test: a5 single-clock cutoff": the cutoff and the
+  order timestamp from one JVM Instant) — 20/20 isolated runs green, then full suite 2,669 run / only ExchangeBackfillTest.
+  Known reds after merge: ExchangeBackfillTest.
 
 **Returns portal P1–P4 Step 0 diagnosis (2026-10-09):** no file storage existed; ImageIO had no WebP/HEIC/orientation;
 `return_refunds` is append-only (never copy account details into it); customers/redact matches orders by external_id;
@@ -6994,8 +6995,8 @@ Provision Hetzner VPS, set up Docker Compose (app + Postgres or Supabase connect
   ahead, the "now" order is older than the cutoff and FR-18 skips it — the failing run logged placed_at …37.440657Z vs
   cutoff …37.443139Z (2.5 ms). Sampled during a full run: Docker clock −42 ms … +28 ms vs the host. Fix (an
   existing-test edit, needs approval): build the cutoff from the same clock as the payload, or give the "now" order a
-  margin (e.g. `Instant.now().plusSeconds(1)`). Any other test comparing a DB `now()` with a JVM `Instant.now()` at
-  millisecond distance has the same race.
+  margin. **Fixed 2026-10-10 (75052f7):** both now come from one JVM Instant. Any other test comparing a DB `now()`
+  with a JVM `Instant.now()` at millisecond distance has the same race — use one clock.
 
 - **`mvn test` rebuilds the frontend bundle into `src/main/resources/static/`** — every backend test run leaves `static/index.html` modified and new hashed `assets/main-*.js/.css` files (old ones deleted). This is how the working tree got its uncommitted bundle before 2026-09-23. After a test run, `git checkout -- src/main/resources/static/` and delete the untracked `main-*` files unless the bundle is being deliberately committed.
 - **Shopify 2026-04 removed `financialStatus` field on Order** — use `displayFinancialStatus` instead. Returns capitalized display values ("Pending", "Paid", "Authorized"). COD inference checks `"pending".equalsIgnoreCase(displayFinancialStatus)` — case-insensitive, so both are safe.
