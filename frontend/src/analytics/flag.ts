@@ -9,11 +9,11 @@ export function analyticsEnabled(): boolean {
 export const ANALYTICS_PAGES = [
   { id: 'summary',   ready: true },
   { id: 'revenue',   ready: true },
-  { id: 'products',  ready: false },
-  { id: 'stock',     ready: false },
+  { id: 'products',  ready: true },
+  { id: 'stock',     ready: true },
   { id: 'delivery',  ready: true },
   { id: 'money',     ready: true },
-  { id: 'customers', ready: false },
+  { id: 'customers', ready: true },
   { id: 'orders',    ready: true },
 ] as const
 

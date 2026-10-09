@@ -84,6 +84,16 @@ public class StockAnalyticsController {
         return h;
     }
 
+    /** Pieces of any variant with at least minTrips trips (default 4), most trips first. */
+    @GetMapping("/pieces")
+    @PreAuthorize("hasRole('OWNER')")
+    public StockAnalyticsService.TripPieces tripPieces(@RequestParam(defaultValue = "4") int minTrips,
+                                                       @RequestParam(defaultValue = "100") int limit) {
+        if (minTrips < 1) throw bad("minTrips must be 1 or more");
+        if (limit < 1 || limit > StockAnalyticsService.MAX_PIECES) throw bad("limit must be 1–" + StockAnalyticsService.MAX_PIECES);
+        return stock.tripPieces(minTrips, limit);
+    }
+
     @GetMapping("/variants/{id}/pieces")
     @PreAuthorize("hasRole('OWNER')")
     public StockAnalyticsService.VariantPieces variantPieces(@PathVariable UUID id,

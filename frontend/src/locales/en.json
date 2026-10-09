@@ -3256,7 +3256,69 @@
     },
     "stock": {
       "sourceShopify": "Shopify's count",
-      "lowTrust": "Only {{pct}} of your orders are packed through Traced; stock figures use Shopify's count."
+      "lowTrust": "Only {{pct}} of your orders are packed through Traced; stock figures use Shopify's count.",
+      "lowTrustShort": "Few of your orders are packed through Traced, so stock figures use Shopify's count.",
+      "noPiecesTitle": "No pieces tracked yet",
+      "noPieces": "Stock health needs pieces scanned into Traced. Receive stock to start tracking it.",
+      "toReceiving": "Go to Receiving →",
+      "kpi": {
+        "pieces": "Pieces in warehouse",
+        "valuePrice": "Stock value at selling price",
+        "valuePriceFoot": "what it sells for",
+        "valueCost": "Stock value at cost",
+        "costCoverage": "cash tied up · costed {{costed}} of {{total}} SKUs",
+        "age": "Average days in stock",
+        "ageFoot": "pieces in the warehouse",
+        "moved": "Pieces moved 4+ times",
+        "seePieces": "See the pieces →",
+        "movedFoot": "shipped and back at least 4 times",
+        "piecesFoot_one": "{{skus}} SKU in stock",
+        "piecesFoot_other": "{{skus}} SKUs in stock"
+      },
+      "ageTitle": "How long stock has been sitting",
+      "ageDesc": "Pieces in the warehouse by age",
+      "age": {
+        "0-30": "0–30 days",
+        "31-60": "31–60 days",
+        "61-90": "61–90 days",
+        "90+": "90+ days"
+      },
+      "ageLegend": {
+        "fresh": "Fresh",
+        "slowing": "Slowing",
+        "stuck": "Stuck"
+      },
+      "ageTip": "{{pieces}} pieces · {{value}} at selling price",
+      "empty": "No pieces in the warehouse.",
+      "low": "Running low",
+      "lowDesc": "Sells out within 7 days at the current pace",
+      "lowMeta": "{{left}} left · sells {{pace}} a day",
+      "lowNone": "Nothing is running low.",
+      "daysLeft": "{{value}} days left",
+      "best": "Best sellers: stock check",
+      "bestDesc": "Units sold in the last 30 days vs stock on hand",
+      "cols": {
+        "sold": "Sold (30d)",
+        "inStock": "In stock",
+        "daysLeft": "Days left",
+        "lastSale": "Last sale",
+        "cash": "Cash tied up"
+      },
+      "returned": "Most exchanged and returned",
+      "returnedDesc": "Last 90 days, SKUs with {{min}}+ sold in 30 days, with the top reason",
+      "returnedUnits": "{{returns}} ret · {{exchanges}} exch",
+      "dead": "Dead stock",
+      "deadDesc": "No sale in 60 days, with the cash sitting in it",
+      "deadNone": "No dead stock.",
+      "never": "never",
+      "atCost": "at cost",
+      "atPrice": "at price",
+      "deadNote": "Candidates for a discount, a bundle or a stop on reorders.",
+      "bySize": "Returns by size",
+      "bySizeDesc": "All products · red = well above the average",
+      "sizeTip": "{{returned}} returned of {{delivered}} delivered",
+      "ageNote_one": "{{pieces}} piece has been in stock for more than 90 days ({{value}}).",
+      "ageNote_other": "{{pieces}} pieces have been in stock for more than 90 days ({{value}})."
     },
     "noBosta": {
       "title": "Bosta not connected",
@@ -3561,7 +3623,36 @@
         "existing": "Existing customers",
         "returning": "Returning customers",
         "unknown": "Unknown"
-      }
+      },
+      "kpi": {
+        "who": "Customers who ordered",
+        "whoFoot": "{{new}} new · {{returning}} returning · {{existing}} existing · {{unknown}} unknown",
+        "repeat": "Repeat purchase rate",
+        "repeatFoot": "ordered 2+ times",
+        "between": "Days between orders",
+        "betweenFoot": "median, for repeat customers",
+        "returningRevenue": "Revenue from returning customers",
+        "returningFoot": "they deliver at {{pct}}"
+      },
+      "top": "Top customers",
+      "topDesc": "Lifetime value, counting only delivered and kept orders",
+      "topNote": "Out of {{total}} customers. Names show first name + last initial only.",
+      "delivered": "Delivered",
+      "none": "No customers yet.",
+      "byGovernorate": "Repeat customers by governorate",
+      "byGovernorateDesc": "Share of customers who came back · governorates with {{min}}+ customers",
+      "govTip": "{{repeat}} of {{customers}} customers ordered again",
+      "govNone": "Not enough customers per governorate yet.",
+      "cohorts": "Customers still buying, by first-order month",
+      "cohortsDesc": "Share of each month’s new customers who ordered again 1, 2 and 3 months later",
+      "cohortsNote": "* month still in progress.",
+      "inProgress": "This month is still in progress",
+      "firstOrder": "First order",
+      "customers": "Customers",
+      "month": "Month {{n}}",
+      "detail": "Customer detail view",
+      "detailLater": "Planned for the next release: each customer’s orders, delivery success, refusals and returns, with a prepaid-only toggle.",
+      "watchNeedsBosta": "Refused deliveries come from Bosta — connect Bosta to see customers who refuse."
     },
     "weekday": {
       "1": "Mon",
@@ -3793,6 +3884,93 @@
     },
     "drawer": {
       "close": "Close"
+    },
+    "products": {
+      "kpi": {
+        "active": "SKUs sold",
+        "soldInPeriod": "variants with a sale in this period",
+        "units": "Units sold",
+        "unitsFoot": "{{net}} kept after failures and returns",
+        "best": "Best SKU by true net",
+        "bestFoot": "{{value}} after all costs",
+        "losing": "SKUs losing money",
+        "losingFoot": "after cost of goods, failed deliveries and returns",
+        "activeFoot_one": "{{dead}} with no sale in 60 days",
+        "activeFoot_other": "{{dead}} with no sale in 60 days"
+      },
+      "all": "All SKUs",
+      "allDesc": "Every variant sold in the period. Click a column to sort, a row for the SKU.",
+      "allNote": "True net = realized revenue − cost of goods − shipping − failed-delivery and return fees for that SKU. Exchanges count the last 90 days.",
+      "noPiecesColumns": "Stock columns (sell-through, per day, stock left, age, exchanges) appear once pieces are tracked in Traced.",
+      "stockFrom": "Stock: {{source}}",
+      "days": "{{value}} d",
+      "cols": {
+        "units": "Units",
+        "sellThrough": "Sell-through",
+        "perDay": "Per day",
+        "stockLeft": "Stock left",
+        "age": "Avg age",
+        "returns": "Returns",
+        "exchanges": "Exch. (90d)",
+        "failed": "Failed",
+        "abc": "ABC"
+      },
+      "sizeCurve": "Size curve",
+      "sizeCurveDesc": "Units sold by size, all products",
+      "sizeTip": "{{units}} sold · returns {{returns}} · {{exchanged}} exchanged",
+      "sizeOther": "Not shown: {{unparsed}} units with a size Traced couldn’t read, {{noSize}} units with no size.",
+      "noSizes": "No sizes found on the variants sold in this period.",
+      "restock": {
+        "title": "Restock suggestions",
+        "desc": "Covers {{cover}} days of sales at the current pace, with a {{lead}}-day supplier lead time.",
+        "lead": "Supplier lead time (days)",
+        "cover": "Cover (days)",
+        "save": "Save",
+        "saved": "Saved — suggestions updated.",
+        "error": "Couldn't save. Try again.",
+        "invalid": "Enter whole days from 1 to 365.",
+        "onHand": "On hand",
+        "reorder": "Reorder",
+        "none": "Nothing needs reordering at the current pace."
+      },
+      "together": "Frequently bought together",
+      "togetherDesc": "SKU pairs that appear in the same order",
+      "togetherNone": "No SKU pairs ordered together yet.",
+      "bundleIdea": "Bundle idea",
+      "togetherOrders_one": "{{value}} order together",
+      "togetherOrders_other": "{{value}} orders together"
+    },
+    "pieces": {
+      "title": "Pieces moved 4+ times",
+      "pieceTitle": "Piece",
+      "none": "No piece has made 4 or more trips.",
+      "cols": {
+        "piece": "Piece",
+        "trips": "Trips",
+        "now": "Now",
+        "last": "Last trip"
+      },
+      "note": "Each trip costs shipping and wears the piece. Consider a quality check or pulling repeat travellers from sale.",
+      "history": "History",
+      "openSku": "Open the SKU →",
+      "status": {
+        "available": "In stock",
+        "reserved": "Reserved",
+        "packed": "Packed",
+        "awaiting_pickup": "Awaiting pickup",
+        "with_courier": "With courier",
+        "delivered": "Delivered",
+        "return_in_transit": "Returning",
+        "return_pending_inspection": "Awaiting inspection",
+        "damaged": "Damaged",
+        "lost": "Lost",
+        "on_hold": "On hold",
+        "out_on_transfer": "On transfer"
+      },
+      "desc_one": "{{total}} piece · showing {{shown}}",
+      "desc_other": "{{total}} pieces · showing {{shown}}",
+      "trips_one": "{{value}} trip",
+      "trips_other": "{{value}} trips"
     }
   }
 }

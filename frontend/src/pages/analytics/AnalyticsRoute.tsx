@@ -5,6 +5,9 @@ import RevenuePage from './RevenuePage'
 import DeliveryPage from './DeliveryPage'
 import MoneyPage from './MoneyPage'
 import OrdersPage from './OrdersPage'
+import ProductsPage from './ProductsPage'
+import StockPage from './StockPage'
+import CustomersPage from './CustomersPage'
 import { AnalyticsDrawers } from './drawers'
 
 /**
@@ -20,6 +23,9 @@ export default function AnalyticsRoute() {
     : page === 'delivery' ? <DeliveryPage />
     : page === 'money' ? <MoneyPage />
     : page === 'orders' ? <OrdersPage />
+    : page === 'products' ? <ProductsPage />
+    : page === 'stock' ? <StockPage />
+    : page === 'customers' ? <CustomersPage />
     : null
   if (!body) return <Navigate to={`/analytics/summary${search}`} replace />
   // The SKU drawer and the drill-down open from the URL on any page (?sku=, ?drill=).

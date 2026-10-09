@@ -142,6 +142,12 @@ public class StockAnalyticsService {
 
     public record VariantPieces(UUID variantId, int minTrips, long total, List<PieceRow> pieces) {}
 
+    /** A piece of any variant with its trip count (GET /analytics/pieces — "Pieces moved 4+ times"). */
+    public record TripPiece(String pieceId, String barcode, String shortCode, String status, UUID variantId, String sku,
+                            String productTitle, String variantTitle, String location, long trips, Instant lastTripAt) {}
+
+    public record TripPieces(int minTrips, long total, List<TripPiece> pieces) {}
+
     private final JdbcTemplate jdbc;
     private final Clock clock;
     private final AnalyticsFloorOverrides overrides;
@@ -613,6 +619,31 @@ public class StockAnalyticsService {
                 rs.getLong("trips"), OrderFacts.instant(rs.getTimestamp("last_trip"))),
             tid, variantId, minTrips, limit);
         return new VariantPieces(variantId, minTrips, total == null ? 0 : total, rows);
+    }
+
+    /**
+     * Every piece of the tenant with at least {@code minTrips} trips (the same trip rule and the same
+     * voided exclusion as {@link #variantPieces}), most trips first, then oldest. The tenant-wide list
+     * behind the Stock health "Pieces moved 4+ times" card; {@code total} counts them all.
+     */
+    @Transactional(readOnly = true)
+    public TripPieces tripPieces(int minTrips, int limit) {
+        UUID tid = TenantContext.require();
+        String base = "FROM (SELECT e.piece_id, COUNT(*) AS trips, MAX(e.occurred_at) AS last_trip FROM piece_events e " +
+            "      WHERE e.tenant_id = ? AND " + trip("e") + " GROUP BY e.piece_id HAVING COUNT(*) >= ?) t " +
+            "JOIN pieces p ON p.id = t.piece_id AND p.tenant_id = ? AND p.status <> 'voided'::piece_status " +
+            "JOIN variants v ON v.id = p.variant_id JOIN products pr ON pr.id = v.product_id " +
+            "LEFT JOIN locations l ON l.id = p.current_location_id ";
+        Long total = jdbc.queryForObject("SELECT COUNT(*) " + base, Long.class, tid, minTrips, tid);
+        List<TripPiece> rows = jdbc.query(
+            "SELECT p.id, p.barcode, p.short_code, p.status::text AS status, p.variant_id, v.sku, pr.title AS product_title, " +
+            "       v.title AS variant_title, l.name AS location, t.trips, t.last_trip " + base +
+            "ORDER BY t.trips DESC, p.created_at, p.id LIMIT ?",
+            (rs, i) -> new TripPiece(rs.getString("id"), rs.getString("barcode"), rs.getString("short_code"), rs.getString("status"),
+                rs.getObject("variant_id", UUID.class), rs.getString("sku"), rs.getString("product_title"), rs.getString("variant_title"),
+                rs.getString("location"), rs.getLong("trips"), OrderFacts.instant(rs.getTimestamp("last_trip"))),
+            tid, minTrips, tid, limit);
+        return new TripPieces(minTrips, total == null ? 0 : total, rows);
     }
 
     // ── helpers ─────────────────────────────────────────────────────────────
