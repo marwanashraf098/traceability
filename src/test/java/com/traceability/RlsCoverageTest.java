@@ -174,6 +174,7 @@ class RlsCoverageTest {
             "/api/v1/analytics/settings",
             "/api/v1/analytics/pieces/{id}/history",
             "/api/v1/analytics/variants/{id}/pieces",
+            "/api/v1/analytics/pieces",
             // Analytics slice 6 (owner only) — analyticsCustomers_reflectSeededOrder below; app_user isolation
             // in AnalyticsCustomersTest
             "/api/v1/analytics/customers/summary",
@@ -1758,7 +1759,7 @@ class RlsCoverageTest {
         assertThat(pieces.getStatusCode()).isEqualTo(HttpStatus.OK);
         assertThat(((Number) pieces.getBody().get("total")).longValue()).isGreaterThanOrEqualTo(1);
         for (String path : List.of("/api/v1/analytics/stock/variants", "/api/v1/analytics/stock/restock",
-                                   "/api/v1/analytics/settings")) {
+                                   "/api/v1/analytics/settings", "/api/v1/analytics/pieces")) {
             assertThat(get(path, Map.class).getStatusCode()).as(path).isEqualTo(HttpStatus.OK);
         }
 

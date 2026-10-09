@@ -4,8 +4,8 @@ import { useTranslation } from 'react-i18next'
 import { Banknote, Box, ShoppingBag, Repeat, AlertTriangle, Receipt } from 'lucide-react'
 import {
   getDeliverySummary, getExtraFees, getFailureReasons, getFees, getPieceHistory, getProductExtras, getProfitSkus,
-  getSalesVariants, getSalesVariantsDaily, getStockVariants, getVariantOrders, getVariantPieces, type ExtraByAwb,
-  type ExtraBySku,
+  getSalesVariants, getSalesVariantsDaily, getStockVariants, getTripPieces, getVariantOrders, getVariantPieces, type ExtraByAwb,
+  type ExtraBySku, type PieceHistory,
 } from '../../analyticsApi'
 import { useAnalyticsQuery } from '../../analytics/useAnalyticsQuery'
 import { useAnalyticsState } from '../../analytics/period'
@@ -29,6 +29,14 @@ export function useDrawerParams() {
   }, [setSp])
   return {
     sku: sp.get('sku'),
+    piece: sp.get('piece'),
+    pieces: sp.get('pieces') != null,
+    openPiece: (id: string) => set(n => { n.set('piece', id) }),
+    closePiece: () => set(n => { n.delete('piece') }),
+    /** One URL update: two separate ones would each start from the same URL and the second would win. */
+    pieceToSku: (variantId: string) => set(n => { n.delete('piece'); n.set('sku', variantId) }),
+    openPieces: () => set(n => { n.set('pieces', '4') }),
+    closePieces: () => set(n => { n.delete('pieces') }),
     drill: sp.get('drill') as 'extra' | 'failed' | null,
     view: (sp.get('view') === 'awb' ? 'awb' : 'sku') as 'sku' | 'awb',
     openSku: (id: string) => set(n => { n.set('sku', id) }),
@@ -57,6 +65,35 @@ function Section({ title, desc, right, children, testId }: { title: string; desc
       </div>
       {children}
     </section>
+  )
+}
+
+// ── Piece timeline (SKU drawer + piece drawer) ─────────────────────────────
+
+function PieceTimeline({ h }: { h: PieceHistory }) {
+  const { t } = useTranslation()
+  const fmt = useFmt()
+  return (
+    <div className="flex flex-col">
+      <div className="grid grid-cols-[18px_minmax(0,1fr)_auto] gap-2.5 pb-3 text-[13px]">
+        <i className={cn('w-2.5 h-2.5 rounded-full mt-1 ms-1', TL_DOT.in)} />
+        <div><div className="font-medium">{t('analytics.sku.received')}</div><div className="text-[12px] text-muted">{fmt.day(h.receivedAt)}</div></div>
+        <span className="text-[12px] text-muted">{h.location ?? ''}</span>
+      </div>
+      {h.trips.map((tr, i) => {
+        const kind = tr.outcome === 'delivered' ? 'done' : !tr.outcome || tr.outcome === 'in_transit' || tr.outcome === 'unknown' ? 'out' : 'back'
+        return (
+          <div key={i} className="grid grid-cols-[18px_minmax(0,1fr)_auto] gap-2.5 pb-3 text-[13px]" data-testid="trip">
+            <i className={cn('w-2.5 h-2.5 rounded-full mt-1 ms-1', TL_DOT[kind])} />
+            <div>
+              <div className="font-medium">{t(`analytics.sku.trip.${tr.outcome ?? 'shipped'}`, { defaultValue: tr.outcome ?? '' })}{tr.orderNumber ? ` · ${tr.orderNumber}` : ''}</div>
+              <div className="text-[12px] text-muted">{[tr.trackingNumber, fmt.day(tr.at), tr.cityName].filter(Boolean).join(' · ')}</div>
+            </div>
+            <span className="text-[12px] text-muted">{tr.fee != null ? `${fmt.money(tr.fee)}${tr.feeEstimated ? ` (${t('analytics.chip.estimated')})` : ''}` : ''}</span>
+          </div>
+        )
+      })}
+    </div>
   )
 }
 
@@ -147,30 +184,7 @@ function SkuDrawerBody({ variantId }: { variantId: string }) {
       <Section title={top ? t('analytics.sku.pieceHistory', { piece: top.shortCode ?? top.barcode }) : t('analytics.sku.pieceHistoryNone')} testId="sku-piece"
         desc={top ? t('analytics.sku.pieceDesc', { count: top.trips, trips: fmt.num(top.trips), fourPlus: fmt.num(fourPlus) }) : undefined}>
         {!pieces.data ? <Note>…</Note> : !top ? <CardEmpty>{t('analytics.sku.noPieces')}</CardEmpty> : (
-          <QueryBlock q={history}>
-            {h => (
-              <div className="flex flex-col">
-                <div className="grid grid-cols-[18px_minmax(0,1fr)_auto] gap-2.5 pb-3 text-[13px]">
-                  <i className={cn('w-2.5 h-2.5 rounded-full mt-1 ms-1', TL_DOT.in)} />
-                  <div><div className="font-medium">{t('analytics.sku.received')}</div><div className="text-[12px] text-muted">{fmt.day(h.receivedAt)}</div></div>
-                  <span className="text-[12px] text-muted">{h.location ?? ''}</span>
-                </div>
-                {h.trips.map((tr, i) => {
-                  const kind = tr.outcome === 'delivered' ? 'done' : !tr.outcome || tr.outcome === 'in_transit' || tr.outcome === 'unknown' ? 'out' : 'back'
-                  return (
-                    <div key={i} className="grid grid-cols-[18px_minmax(0,1fr)_auto] gap-2.5 pb-3 text-[13px]" data-testid="trip">
-                      <i className={cn('w-2.5 h-2.5 rounded-full mt-1 ms-1', TL_DOT[kind])} />
-                      <div>
-                        <div className="font-medium">{t(`analytics.sku.trip.${tr.outcome ?? 'shipped'}`, { defaultValue: tr.outcome ?? '' })}{tr.orderNumber ? ` · ${tr.orderNumber}` : ''}</div>
-                        <div className="text-[12px] text-muted">{[tr.trackingNumber, fmt.day(tr.at), tr.cityName].filter(Boolean).join(' · ')}</div>
-                      </div>
-                      <span className="text-[12px] text-muted">{tr.fee != null ? `${fmt.money(tr.fee)}${tr.feeEstimated ? ` (${t('analytics.chip.estimated')})` : ''}` : ''}</span>
-                    </div>
-                  )
-                })}
-              </div>
-            )}
-          </QueryBlock>
+          <QueryBlock q={history}>{h => <PieceTimeline h={h} />}</QueryBlock>
         )}
       </Section>
 
@@ -370,7 +384,91 @@ export function DrillDrawer() {
   )
 }
 
+// ── Pieces moved 4+ times, and one piece ───────────────────────────────────
+
+function PiecesBody() {
+  const { t } = useTranslation()
+  const fmt = useFmt()
+  const d = useDrawerParams()
+  const q = useAnalyticsQuery('trip-pieces:4', sig => getTripPieces({ minTrips: 4, limit: 100 }, sig))
+  return (
+    <div data-testid="pieces-drawer">
+      <QueryBlock q={q} isEmpty={x => x.total === 0} empty={t('analytics.pieces.none')}>
+        {x => (
+          <>
+            <p className="text-[12.5px] text-muted mb-3">{t('analytics.pieces.desc', { count: x.total, total: fmt.num(x.total), shown: fmt.num(x.pieces.length) })}</p>
+            <table className="w-full text-[13px] [&_td]:whitespace-nowrap" data-testid="pieces-table">
+              <thead>
+                <tr className="border-b border-line">
+                  <th className="tbl-header text-start ps-0">{t('analytics.pieces.cols.piece')}</th>
+                  <th className="tbl-header text-end">{t('analytics.pieces.cols.trips')}</th>
+                  <th className="tbl-header text-start">{t('analytics.pieces.cols.now')}</th>
+                  <th className="tbl-header text-start pe-0">{t('analytics.pieces.cols.last')}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {x.pieces.map(p => (
+                  <tr key={p.pieceId} className="border-b border-line last:border-0 cursor-pointer hover:bg-trace-blue/5" onClick={() => d.openPiece(p.pieceId)} data-testid="pieces-row">
+                    <td className="py-[9px] ps-0 pe-2.5"><div className="font-medium">{p.productTitle} <span className="text-muted">· {p.variantTitle}</span></div><div className="text-[12px] text-muted font-mono">{p.shortCode ?? p.barcode}</div></td>
+                    <td className="py-[9px] px-2.5 text-end"><Pill kind={p.trips >= 5 ? 'crit' : 'warn'}>{t('analytics.pieces.trips', { count: p.trips, value: fmt.num(p.trips) })}</Pill></td>
+                    <td className="py-[9px] px-2.5">{t(`analytics.pieces.status.${p.status}`, { defaultValue: p.status })}{p.location ? ` · ${p.location}` : ''}</td>
+                    <td className="py-[9px] ps-2.5 pe-0">{fmt.day(p.lastTripAt)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            <Note>{t('analytics.pieces.note')}</Note>
+          </>
+        )}
+      </QueryBlock>
+    </div>
+  )
+}
+
+export function PiecesDrawer() {
+  const { t } = useTranslation()
+  const d = useDrawerParams()
+  return (
+    <Drawer open={d.pieces && !d.piece && !d.sku} onClose={d.closePieces} title={t('analytics.pieces.title')} closeLabel={t('analytics.drawer.close')}>
+      {d.pieces && <PiecesBody />}
+    </Drawer>
+  )
+}
+
+function PieceBody({ id }: { id: string }) {
+  const { t } = useTranslation()
+  const d = useDrawerParams()
+  const h = useAnalyticsQuery(`piece-history:${id}`, sig => getPieceHistory(id, sig))
+  return (
+    <div className="flex flex-col gap-3" data-testid="piece-drawer">
+      <QueryBlock q={h}>
+        {x => (
+          <>
+            <div>
+              <span className="font-mono text-[12px] text-muted">{x.shortCode ?? x.barcode}</span>
+              <p className="text-[18px] font-semibold text-primary">{x.productTitle} · {x.variantTitle}</p>
+              <p className="text-[12.5px] text-muted">{t(`analytics.pieces.status.${x.status}`, { defaultValue: x.status })}{x.location ? ` · ${x.location}` : ''}</p>
+            </div>
+            <Section title={t('analytics.pieces.history')}><PieceTimeline h={x} /></Section>
+            <button type="button" onClick={() => d.pieceToSku(x.variantId)} className="self-start text-[12.5px] font-semibold text-trace-blue hover:underline">{t('analytics.pieces.openSku')}</button>
+          </>
+        )}
+      </QueryBlock>
+    </div>
+  )
+}
+
+export function PieceDrawer() {
+  const { t } = useTranslation()
+  const d = useDrawerParams()
+  return (
+    <Drawer open={!!d.piece && !d.sku} onClose={d.closePiece} title={t('analytics.pieces.pieceTitle')} closeLabel={t('analytics.drawer.close')}>
+      {d.piece && <PieceBody id={d.piece} />}
+    </Drawer>
+  )
+}
+
 /** Used by tests and pages: the drawers the analytics route mounts once. */
 export function AnalyticsDrawers() {
-  return <><DrillDrawer /><SkuDrawer /></>
+  return <><DrillDrawer /><PiecesDrawer /><PieceDrawer /><SkuDrawer /></>
 }

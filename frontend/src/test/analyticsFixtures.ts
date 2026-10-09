@@ -9,7 +9,8 @@ import type {
   Alerts, Breakdown, BreakdownGroup, CashForecast, Compared, CustomerSummary, CustomerWatch, DeliverySummary, Discounts,
   FailureReasons, Fees, Heatmap, InventorySyncStatus, Pipeline, ProductExtras, ProfitByType, ProfitSummary, RevenueSummary,
   StockSummary, StockVariants, VariantDailyResponse, VariantSalesResponse, VariantSales, ExtraFees, Stuck, Payouts,
-  ProfitSkus, OrdersPage, OrderRow, VariantOrders, VariantPieces, PieceHistory,
+  ProfitSkus, OrdersPage, OrderRow, VariantOrders, VariantPieces, PieceHistory, Restock, TripPieces, TopCustomers,
+  CustomersByGovernorate, Cohorts,
 } from '../analyticsApi'
 
 const RANGE = { from: '2026-09-10', to: '2026-10-09', tz: 'Africa/Cairo' }
@@ -185,7 +186,17 @@ function productExtras(): Compared<ProductExtras> {
   const p = (id: string, title: string, orders: number, failed: number) => ({ productId: id, title, orders, failedOrders: failed, failureRate: failed / orders })
   return compared<ProductExtras>({ abc: [
     { variantId: '00000000-0000-4000-8000-000000000001', sku: 'SKU-1', productTitle: 'Boxy Tee', variantTitle: 'Black / L', realized: 102700, share: 0.18, cumulativeShare: 0.18, abcClass: 'A' },
-  ], sizeCurve: { sizes: [], unparseableUnits: 0, unparseableValues: [], noSizeUnits: 0 }, boughtTogether: [],
+  ], sizeCurve: { sizes: [
+    { size: 'S', soldUnits: 118, share: 0.14, deliveredUnits: 96, returnedUnits: 4, returnRate: 0.044, exchangedUnits: 7 },
+    { size: 'M', soldUnits: 236, share: 0.28, deliveredUnits: 190, returnedUnits: 6, returnRate: 0.032, exchangedUnits: 12 },
+    { size: 'L', soldUnits: 344, share: 0.41, deliveredUnits: 280, returnedUnits: 11, returnRate: 0.04, exchangedUnits: 15 },
+    { size: 'XL', soldUnits: 91, share: 0.11, deliveredUnits: 74, returnedUnits: 5, returnRate: 0.068, exchangedUnits: 9 },
+    { size: 'XXL', soldUnits: 18, share: 0.02, deliveredUnits: 15, returnedUnits: 2, returnRate: 0.133, exchangedUnits: 3 },
+  ], unparseableUnits: 6, unparseableValues: ['Free'], noSizeUnits: 40 },
+  boughtTogether: [
+    { variantA: 'a', titleA: 'Boxy Tee · Black / L', variantB: 'b', titleB: 'Wide-Leg Cargo · Olive / 32', orders: 96 },
+    { variantA: 'c', titleA: 'Heavyweight Hoodie · Grey / L', variantB: 'd', titleB: 'Track Pants · Black / M', orders: 61 },
+  ],
     mostFailed: [p('p4', 'Wide-Leg Cargo', 118, 18), p('p9', 'Denim Jacket', 41, 9), p('p3', 'Heavyweight Hoodie', 131, 17), p('p8', 'Small Tote', 12, 6)] }, null)
 }
 
@@ -259,8 +270,11 @@ function stockSummary(hasPieces: boolean, lowTrust: boolean, pct: number | null)
   return {
     hasPieces, range: RANGE, asOf: '2026-10-09T09:40:00Z', inWarehouse: hasPieces ? 640 : 0, byLocation: [],
     valueAtPrice: hasPieces ? 512000 : 0, valueAtCost: null, costedVariants: 0, variantsInStock: hasPieces ? 41 : 0,
-    avgDaysInStock: hasPieces ? 38 : null, ageBuckets: [], onHold: 0, damaged: { pieces: 0, valueAtCost: null, costedPieces: 0 },
-    lostThisPeriod: { pieces: 0, valueAtCost: null, costedPieces: 0 }, piecesMovedFourPlus: 0,
+    avgDaysInStock: hasPieces ? 38 : null,
+    ageBuckets: hasPieces ? [{ key: '0-30', pieces: 330, valueAtPrice: 264000 }, { key: '31-60', pieces: 180, valueAtPrice: 144000 },
+      { key: '61-90', pieces: 80, valueAtPrice: 64000 }, { key: '90+', pieces: 50, valueAtPrice: 40000 }] : [],
+    onHold: 0, damaged: { pieces: 0, valueAtCost: null, costedPieces: 0 },
+    lostThisPeriod: { pieces: 0, valueAtCost: null, costedPieces: 0 }, piecesMovedFourPlus: hasPieces ? 3 : 0,
     trust: { level: lowTrust ? 'low' : 'high', packedThroughTracedPct: pct, bostaDeliveredOrders30: 900, packedThroughTraced30: Math.round(900 * (pct ?? 0)),
       tracedAvailableTotal: 640, shopifyAvailableTotal: 702, variantsCompared: 41, variantsWithMismatch: 9, mismatchUnits: 62,
       mismatchShare: 0.22, variantsWithoutShopifyFigure: 0, shopifyFigureOldest: null, shopifyFigureNewest: null, shopifySource: 'variants.stock_available_shopify_traced' },
@@ -276,7 +290,8 @@ function stockVariants(hasPieces: boolean, source: 'pieces' | 'shopify', vs: Var
       variantId: v.variantId, productTitle: v.productTitle, variantTitle: v.variantTitle, sku: v.sku, onHand: 20 - i * 3,
       comingBack: 0, velocityPerDay: 3, daysOfCover: i === 0 ? 3.2 : 14 + i, sellThrough: 0.5, avgPieceAgeDays: 20,
       lastSoldAt: v.lastSoldAt, soldUnits30: v.soldUnits, deliveredUnits30: v.deliveredUnits, returnsRate: 0.02, returnedUnits90: 1,
-      exchangedUnits90: 0, topReturnReason: null, runningLow: i === 0, deadStock: false, stockValue: null, valueAtCost: false,
+      exchangedUnits90: i < 3 ? 3 - i : 0, topReturnReason: i === 0 ? 'Size too small' : null, runningLow: i === 0, deadStock: i === vs.length - 1,
+      stockValue: (20 - i * 3) * 650, valueAtCost: false,
       shopifyAvailable: 22 - i * 3, stockUsed: source === 'shopify' ? 22 - i * 3 : 20 - i * 3, stockSource: source,
     })) : [],
   }
@@ -364,6 +379,46 @@ function pieceHistory(): PieceHistory {
     receivedAt: '2026-08-14T09:00:00Z', location: 'Main', trips: [
       trip('2026-08-21T10:00:00Z', '#4402', 'refused', 'Giza', 105), trip('2026-09-02T10:00:00Z', '#4519', 'other_terminal', 'Sharqia', 105),
       trip('2026-09-21T10:00:00Z', '#4655', 'delivered', 'Giza', 60)] }
+}
+
+function restock(vs: VariantSales[], has: boolean, source: 'pieces' | 'shopify'): Restock {
+  return { hasPieces: has, asOf: '2026-10-09T09:40:00Z', trustLevel: source === 'shopify' ? 'low' : 'high', stockSource: source,
+    supplierLeadDays: 21, coverDays: 35, velocityDays: 30, items: has ? vs.slice(0, 3).map((v, i) => ({
+      variantId: v.variantId, productTitle: v.productTitle, variantTitle: v.variantTitle, sku: v.sku, velocityPerDay: 3 - i * 0.5,
+      onHand: 9 + i * 4, comingBack: i, daysOfCover: 3 + i * 3, suggestedUnits: 120 - i * 30, costAtUnitCost: null })) : [] }
+}
+
+function tripPieces(has: boolean): TripPieces {
+  const p = (id: string, title: string, v: string, trips: number, status: string) => ({ pieceId: id, barcode: `TRC-${id}`, shortCode: id.toUpperCase(),
+    status, variantId: '00000000-0000-4000-8000-000000000001', sku: 'SKU-1', productTitle: title, variantTitle: v, location: status === 'available' ? 'Main' : null,
+    trips, lastTripAt: '2026-10-01T10:00:00Z' })
+  return has ? { minTrips: 4, total: 3, pieces: [p('wlc-0042', 'Wide-Leg Cargo', 'Olive / 32', 6, 'available'),
+    p('trk-0018', 'Track Pants', 'Black / M', 5, 'with_courier'), p('knp-0031', 'Knit Polo', 'Navy / L', 4, 'available')] }
+    : { minTrips: 4, total: 0, pieces: [] }
+}
+
+function topCustomers(hasBosta: boolean): TopCustomers {
+  const c = (i: number, name: string, g: string, gAr: string, type: string, orders: number, realized: number, rate: number) => ({
+    customerRef: `c${i}`, displayName: name, governorate: g, governorateAr: gAr, customerType: type, orders, delivered: Math.round(orders * rate),
+    failed: orders - Math.round(orders * rate), successRate: hasBosta ? rate : null, realized: hasBosta ? realized : 0,
+    firstOrderAt: '2026-03-01T10:00:00Z', lastOrderAt: '2026-10-01T10:00:00Z' })
+  return { asOf: '2026-10-09T09:40:00Z', totalCustomers: 1108, customers: [c(1, 'Salma R.', 'Cairo', 'القاهرة', 'returning', 9, 11850, 1),
+    c(2, 'Hassan W.', 'Sharqia', 'الشرقية', 'existing', 7, 10400, 1), c(3, 'Laila G.', 'Cairo', 'القاهرة', 'returning', 7, 8950, 0.86)] }
+}
+
+function byGovernorate(): CustomersByGovernorate {
+  const g = (key: string, label: string, ar: string, customers: number, rate: number) => ({ key, label, labelAr: ar, customers,
+    repeatCustomers: Math.round(customers * rate), repeatRate: rate })
+  return { asOf: '2026-10-09T09:40:00Z', minCustomers: 20, governorates: [g('c-cairo', 'Cairo', 'القاهرة', 380, 0.271),
+    g('c-giza', 'Giza', 'الجيزة', 240, 0.24), g('c-alex', 'Alexandria', 'الإسكندرية', 140, 0.215)] }
+}
+
+function cohorts(): Cohorts {
+  return { asOf: '2026-10-09T09:40:00Z', cohorts: [
+    { month: '2026-07', customers: 412, existingCustomers: 20, orderedAgainPct: [0.24, 0.15, 0.11], monthComplete: [true, true, false] },
+    { month: '2026-08', customers: 455, existingCustomers: 18, orderedAgainPct: [0.22, 0.14, null], monthComplete: [true, false, false] },
+    { month: '2026-09', customers: 398, existingCustomers: 9, orderedAgainPct: [0.26, null, null], monthComplete: [false, false, false] },
+  ] }
 }
 
 export interface AnalyticsFixture {
@@ -547,7 +602,17 @@ export function analyticsFetch(
       case '/analytics/sales/variants': return ok(f.sales)
       case '/analytics/sales/variants/daily': return ok(f.daily)
       case '/analytics/stock/summary': return ok(f.stockSummary)
-      case '/analytics/stock/variants': return ok(f.stockVariants)
+      case '/analytics/stock/variants': {
+        const filter = new URLSearchParams(url.split('?')[1] ?? '').get('filter')
+        const v = f.stockVariants.variants.filter(x => filter === 'running_low' ? x.runningLow : filter === 'dead_stock' ? x.deadStock : true)
+        return ok({ ...f.stockVariants, filter: filter ?? 'all', total: v.length, variants: v })
+      }
+      case '/analytics/stock/restock': return ok(restock(f.variants, f.hasPieces && f.stockSummary.hasPieces, f.stockVariants.stockSource))
+      case '/analytics/settings': return ok({ supplierLeadDays: 21, coverDays: 35, defaults: true })
+      case '/analytics/pieces': return ok(tripPieces(f.stockSummary.hasPieces))
+      case '/analytics/customers/top': return ok(topCustomers(f.bostaConnected))
+      case '/analytics/customers/by-governorate': return ok(byGovernorate())
+      case '/analytics/customers/cohorts': return ok(cohorts())
       case '/analytics/revenue/breakdown': {
         const by = new URLSearchParams(url.split('?')[1] ?? '').get('by') ?? ''
         return f.breakdowns[by] ? ok(f.breakdowns[by]) : errResponse(400)

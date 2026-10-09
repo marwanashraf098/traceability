@@ -267,6 +267,15 @@ export interface PieceRow {
 }
 export interface VariantPieces { variantId: string; minTrips: number; total: number; pieces: PieceRow[] }
 
+export interface TripPiece {
+  pieceId: string; barcode: string; shortCode: string | null; status: string; variantId: string; sku: string | null
+  productTitle: string; variantTitle: string; location: string | null; trips: number; lastTripAt: string | null
+}
+export interface TripPieces { minTrips: number; total: number; pieces: TripPiece[] }
+/** Every piece with at least minTrips trips (default 4), most first — the "Pieces moved 4+ times" list. */
+export const getTripPieces = (q: { minTrips?: number; limit?: number } = {}, signal?: AbortSignal) =>
+  get<TripPieces>('/pieces', q, signal)
+
 export const getStockSummary = (p: PeriodParams, signal?: AbortSignal) => get<StockSummary>('/stock/summary', periodQuery(p), signal)
 export const getStockVariants = (q: { sort?: StockSort; filter?: StockFilter; limit?: number } = {}, signal?: AbortSignal) =>
   get<StockVariants>('/stock/variants', q, signal)
