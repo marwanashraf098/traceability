@@ -128,6 +128,12 @@ const TONE_VALUE: Record<Tone, string> = {
   grey: 'text-primary',
 }
 
+/** Long figures step down so six tiles in a row never wrap a number ("EGP 107,437"). */
+function valueSize(value: ReactNode): string {
+  const n = typeof value === 'string' ? value.length : 0
+  return n > 12 ? 'text-[19px]' : n > 9 ? 'text-[22px]' : 'text-[26px]'
+}
+
 export type DeltaDir = 'up' | 'down' | 'flat'
 
 export interface DeltaInfo {
@@ -171,7 +177,7 @@ export function Kpi({
         <span className="min-w-0 self-center">{label}</span>
       </div>
       {loading ? <Skeleton className="h-7 w-28 mt-1" /> : (
-        <div className={cn('font-mono text-[26px] font-semibold tracking-[-0.02em] leading-tight break-words', TONE_VALUE[tone])}>{value}</div>
+        <div className={cn('font-mono font-semibold tracking-[-0.02em] leading-tight break-words', valueSize(value), TONE_VALUE[tone])}>{value}</div>
       )}
       <div className="text-[12px] text-muted flex gap-1.5 items-center flex-wrap min-h-[16px]">
         {delta && <Delta d={delta} />}

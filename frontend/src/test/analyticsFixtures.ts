@@ -8,7 +8,8 @@
 import type {
   Alerts, Breakdown, BreakdownGroup, CashForecast, Compared, CustomerSummary, CustomerWatch, DeliverySummary, Discounts,
   FailureReasons, Fees, Heatmap, InventorySyncStatus, Pipeline, ProductExtras, ProfitByType, ProfitSummary, RevenueSummary,
-  StockSummary, StockVariants, VariantDailyResponse, VariantSalesResponse, VariantSales,
+  StockSummary, StockVariants, VariantDailyResponse, VariantSalesResponse, VariantSales, ExtraFees, Stuck, Payouts,
+  ProfitSkus, OrdersPage, OrderRow, VariantOrders, VariantPieces, PieceHistory,
 } from '../analyticsApi'
 
 const RANGE = { from: '2026-09-10', to: '2026-10-09', tz: 'Africa/Cairo' }
@@ -182,7 +183,9 @@ function failureReasons(failed: number): Compared<FailureReasons> {
 
 function productExtras(): Compared<ProductExtras> {
   const p = (id: string, title: string, orders: number, failed: number) => ({ productId: id, title, orders, failedOrders: failed, failureRate: failed / orders })
-  return compared<ProductExtras>({ abc: [], sizeCurve: { sizes: [], unparseableUnits: 0, unparseableValues: [], noSizeUnits: 0 }, boughtTogether: [],
+  return compared<ProductExtras>({ abc: [
+    { variantId: '00000000-0000-4000-8000-000000000001', sku: 'SKU-1', productTitle: 'Boxy Tee', variantTitle: 'Black / L', realized: 102700, share: 0.18, cumulativeShare: 0.18, abcClass: 'A' },
+  ], sizeCurve: { sizes: [], unparseableUnits: 0, unparseableValues: [], noSizeUnits: 0 }, boughtTogether: [],
     mostFailed: [p('p4', 'Wide-Leg Cargo', 118, 18), p('p9', 'Denim Jacket', 41, 9), p('p3', 'Heavyweight Hoodie', 131, 17), p('p8', 'Small Tote', 12, 6)] }, null)
 }
 
@@ -285,6 +288,83 @@ function dailyFor(vs: VariantSales[]): VariantDailyResponse {
     units: ds.map((_, i) => Math.max(0, Math.round(v.soldUnits / 30 + Math.sin(i / 2 + k) * 2))) })) }
 }
 
+function extraFees(vs: VariantSales[], view: 'sku' | 'awb', scale: number): ExtraFees {
+  const skus = vs.map((v, i) => ({ variantId: v.variantId, sku: v.sku, productTitle: v.productTitle, variantTitle: v.variantTitle,
+    failed: Math.round((12 - i * 2) * scale), exchanges: Math.round((5 - i) * scale), returns: Math.round((3 - i * 0.5) * scale),
+    extraFees: Math.round(((12 - i * 2) * 45 + (5 - i) * 60 + (3 - i * 0.5) * 45) * scale) })).filter(r => r.failed + r.exchanges + r.returns > 0)
+  const types = ['failed', 'failed', 'exchange', 'return', 'failed'] as const
+  const shipments = vs.slice(0, 5).map((v, i) => ({ trackingNumber: `71${String(3900000 + i * 1371).padStart(8, '0')}`, orderNumber: `#${4800 - i * 7}`,
+    type: types[i], fee: types[i] === 'exchange' ? 60 : 45, estimated: i === 1, reason: types[i] === 'failed' ? 'Customer refused' : null,
+    date: `2026-10-0${8 - i}`, city: ['Cairo', 'Sohag', 'Giza', 'Alexandria', 'Assiut'][i], skus: [v.sku ?? ''] }))
+  return { range: RANGE, groupBy: view, shipments: view === 'awb' ? shipments : null, skus: view === 'sku' ? skus : null,
+    total: skus.reduce((a, r) => a + r.extraFees, 0), estimatedCount: view === 'awb' ? 1 : 0 }
+}
+
+function stuck(n: number): Stuck {
+  const st = (i: number, status: string, days: number, cod: number) => ({ trackingNumber: `72${String(1000000 + i * 911).padStart(8, '0')}`, orderNumber: `#${4700 + i}`, lastStatus: status, days, cod })
+  return { asOf: '2026-10-09T09:40:00Z',
+    stuckWithBosta: [st(1, 'In transit', 12, 1250), st(2, 'Returning to origin', 10, 1300), st(3, 'Out for delivery', 8, 2200)].slice(0, n),
+    neverPickedUp: n ? [st(4, 'Booked', 9, 650)] : [],
+    deliveredNotPaid: n ? [{ trackingNumber: '7139220400', orderNumber: '#4688', depositedOn: '2026-09-26', deposited: 1450, days: 13 }] : [],
+    payoutWeekday: 3, unresolved: 0 }
+}
+
+function payouts(scale: number): Payouts {
+  const p = (date: string, id: string, n: number, amt: number, batch: number | null) => ({ transactionId: id, date, trackedShipments: Math.round(n * scale),
+    trackedDeposited: Math.round(amt * scale), bostaBatchTotal: batch == null ? null : Math.round(batch * scale) })
+  return { range: RANGE, payouts: [p('2026-09-16', 'BST-P-21388', 201, 231150, 231150), p('2026-09-23', 'BST-P-21842', 188, 216900, 216900),
+    p('2026-09-30', 'BST-P-22297', 196, 225800, 227950), p('2026-10-07', 'BST-P-22751', 171, 196650, null)] }
+}
+
+function profitSkus(vs: VariantSales[], costed: boolean): ProfitSkus {
+  const cov = profitSummary(costed).coverage
+  return { range: RANGE, coverage: cov, sort: 'trueNet', total: vs.length, skus: vs.map((v, i) => {
+    const c = costed && i < 2
+    const cogs = c ? v.netSoldUnits * 400 : null
+    const ship = v.deliveredUnits * 46, other = v.refusedUnits * 45
+    return { variantId: v.variantId, productTitle: v.productTitle, variantTitle: v.variantTitle, sku: v.sku, productType: 'Tees', costed: c,
+      unitCost: c ? 400 : null, keptUnits: v.netSoldUnits, realized: v.netRevenue, cogs, shippingFees: ship, otherFees: other,
+      netBeforeCost: v.netRevenue - ship - other, trueNet: c ? v.netRevenue - ship - other - cogs! : null,
+      trueNetMargin: c ? (v.netRevenue - ship - other - cogs!) / v.netRevenue : null }
+  }) }
+}
+
+function orderRow(i: number, fin: string, total: number, hasBosta: boolean): OrderRow {
+  const net: Record<string, number | null> = { paid: total - 72, awaiting_payout: total - 72, expected: null, overdue: null, lost: -105, refunded: -105, other_carrier: null }
+  const delivery: Record<string, string> = { paid: 'Delivered', awaiting_payout: 'Delivered', expected: 'In transit', overdue: 'In transit', lost: 'Refused, returning',
+    refunded: 'Delivered', other_carrier: 'Other carrier' }
+  return { orderId: `o-${i}`, name: `#${4871 - i}`, placedAt: `2026-10-${String(9 - (i % 9)).padStart(2, '0')}T10:00:00Z`,
+    customer: ['Mariam A.', 'Omar K.', 'Nour H.', 'Youssef M.', 'Salma R.', 'Ahmed T.'][i % 6],
+    governorate: { key: 'c-cairo', label: ['Cairo', 'Giza', 'Sohag'][i % 3], labelAr: ['القاهرة', 'الجيزة', 'سوهاج'][i % 3] },
+    items: 1 + (i % 3), total, paymentGroup: i % 4 === 1 ? 'Card' : 'COD', deliveryStatus: { key: 'x', label: delivery[fin] },
+    financialStatus: fin, bostaFees: hasBosta && fin !== 'other_carrier' ? 72 + (i % 3) * 5 : null, feesEstimated: fin === 'expected',
+    netToYou: hasBosta ? net[fin] : null, refundAmountUnknown: false, trackingNumbers: [`7100${100000 + i}`] }
+}
+
+function ordersPage(hasBosta: boolean, wijha: boolean): OrdersPage {
+  const fins = hasBosta ? ['paid', 'awaiting_payout', 'expected', 'overdue', 'lost', 'refunded', 'paid', 'paid', ...(wijha ? ['other_carrier', 'other_carrier'] : [])] : ['expected', 'expected', 'expected']
+  const orders = fins.map((f, i) => orderRow(i, f, [1300, 1450, 2550, 1250, 1700, 950, 2100, 1850, 1100, 2950][i % 10], hasBosta))
+  const counts: Record<string, number> = { other_carrier: 0, lost: 0, refunded: 0, paid: 0, overdue: 0, awaiting_payout: 0, expected: 0 }
+  fins.forEach(f => { counts[f]++ })
+  return { range: RANGE, asOf: '2026-10-09T09:40:00Z', page: 0, size: 50, total: orders.length, counts, orders }
+}
+
+function variantPieces(id: string, has: boolean): VariantPieces {
+  return { variantId: id, minTrips: 0, total: has ? 3 : 0, pieces: has ? [
+    { pieceId: 'pc-1', barcode: 'TRC-0147', shortCode: 'BXT-0147', status: 'available', receivedAt: '2026-08-14T09:00:00Z', location: 'Main', trips: 3, lastTripAt: '2026-09-21T10:00:00Z' },
+    { pieceId: 'pc-2', barcode: 'TRC-0148', shortCode: 'BXT-0148', status: 'available', receivedAt: '2026-08-14T09:00:00Z', location: 'Main', trips: 5, lastTripAt: '2026-09-30T10:00:00Z' },
+    { pieceId: 'pc-3', barcode: 'TRC-0149', shortCode: 'BXT-0149', status: 'delivered', receivedAt: '2026-08-14T09:00:00Z', location: null, trips: 1, lastTripAt: '2026-09-02T10:00:00Z' },
+  ] : [] }
+}
+
+function pieceHistory(): PieceHistory {
+  const trip = (at: string, order: string, outcome: string, city: string, fee: number) => ({ at, orderId: 'o', orderNumber: order, trackingNumber: `7032${order.slice(1)}`, cityId: null, cityName: city, outcome, fee, feeEstimated: false })
+  return { pieceId: 'pc-2', barcode: 'TRC-0148', shortCode: 'BXT-0148', status: 'available', variantId: 'v', sku: 'SKU-1', productTitle: 'Boxy Tee', variantTitle: 'Black / L',
+    receivedAt: '2026-08-14T09:00:00Z', location: 'Main', trips: [
+      trip('2026-08-21T10:00:00Z', '#4402', 'refused', 'Giza', 105), trip('2026-09-02T10:00:00Z', '#4519', 'other_terminal', 'Sharqia', 105),
+      trip('2026-09-21T10:00:00Z', '#4655', 'delivered', 'Giza', 60)] }
+}
+
 export interface AnalyticsFixture {
   name: string
   bostaConnected: boolean
@@ -308,6 +388,12 @@ export interface AnalyticsFixture {
   failureReasons: Compared<FailureReasons>
   productExtras: Compared<ProductExtras>
   watch: CustomerWatch
+  variants: VariantSales[]
+  stuck: Stuck
+  payouts: Payouts
+  profitSkus: ProfitSkus
+  orders: OrdersPage
+  hasPieces: boolean
 }
 
 const broekVariants = [
@@ -338,6 +424,12 @@ export const BROEK: AnalyticsFixture = {
   failureReasons: failureReasons(168),
   productExtras: productExtras(),
   watch: watch(3),
+  variants: broekVariants,
+  stuck: stuck(3),
+  payouts: payouts(1),
+  profitSkus: profitSkus(broekVariants, false),
+  orders: ordersPage(true, false),
+  hasPieces: true,
 }
 
 const femineVariants = [
@@ -369,6 +461,12 @@ export const FEMINE: AnalyticsFixture = {
   failureReasons: failureReasons(33),
   productExtras: productExtras(),
   watch: watch(1),
+  variants: femineVariants,
+  stuck: stuck(1),
+  payouts: payouts(0.12),
+  profitSkus: profitSkus(femineVariants, true),
+  orders: ordersPage(true, true),
+  hasPieces: false,
 }
 
 const highLineVariants = [variant(21, 'Oxford Shirt', 'White / L', 44, 990), variant(22, 'Chino', 'Khaki / 32', 30, 1150)]
@@ -397,6 +495,12 @@ export const HIGH_LINE: AnalyticsFixture = {
   failureReasons: failureReasons(0),
   productExtras: productExtras(),
   watch: watch(0),
+  variants: highLineVariants,
+  stuck: stuck(0),
+  payouts: { range: RANGE, payouts: [] },
+  profitSkus: profitSkus(highLineVariants, false),
+  orders: ordersPage(false, false),
+  hasPieces: true,
 }
 
 function ok(body: unknown) {
@@ -456,7 +560,29 @@ export function analyticsFetch(
       case '/analytics/delivery/failure-reasons': return ok(f.failureReasons)
       case '/analytics/products/extras': return ok(f.productExtras)
       case '/analytics/customers/watch': return ok(f.watch)
-      default: return errResponse(404)
+      case '/analytics/money/fees/extra': {
+        const view = new URLSearchParams(url.split('?')[1] ?? '').get('groupBy') === 'awb' ? 'awb' : 'sku'
+        return ok(extraFees(f.variants, view, f.bostaConnected ? 1 : 0))
+      }
+      case '/analytics/money/stuck': return ok(f.stuck)
+      case '/analytics/money/payouts': return ok(f.payouts)
+      case '/analytics/profit/skus': return ok(f.profitSkus)
+      case '/analytics/orders': {
+        const sp = new URLSearchParams(url.split('?')[1] ?? '')
+        const status = sp.get('status'), q = sp.get('q')?.toLowerCase()
+        const orders = f.orders.orders.filter(o => (!status || o.financialStatus === status)
+          && (!q || o.name.toLowerCase().includes(q) || (o.customer ?? '').toLowerCase().includes(q)))
+        return ok({ ...f.orders, total: orders.length, orders })
+      }
+      default: {
+        const m = /^\/analytics\/variants\/([^/]+)\/(orders|pieces)$/.exec(path)
+        if (m && m[2] === 'orders') {
+          return ok({ variantId: m[1], asOf: '2026-10-09T09:40:00Z', orders: f.orders.orders.slice(0, 5) } satisfies VariantOrders)
+        }
+        if (m && m[2] === 'pieces') return ok(variantPieces(m[1], f.hasPieces))
+        if (/^\/analytics\/pieces\/[^/]+\/history$/.test(path)) return ok(pieceHistory())
+        return errResponse(404)
+      }
     }
   }
 }

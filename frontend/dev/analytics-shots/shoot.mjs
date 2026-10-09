@@ -8,7 +8,8 @@ import { join } from 'node:path'
 
 const out = process.argv[2] ?? 'analytics-shots'
 const path = process.argv[3] ?? '/analytics/summary'
-const page = path.split('/').pop()
+// '/analytics/money?drill=extra' → 'money-drill-extra'
+const page = path.replace(/^\/analytics\//, '').replace(/[^a-z0-9]+/gi, '-').replace(/-+$/, '')
 mkdirSync(out, { recursive: true })
 
 process.env.VITE_ANALYTICS_ENABLED = 'true'

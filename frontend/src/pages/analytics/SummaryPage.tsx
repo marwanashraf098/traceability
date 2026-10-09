@@ -23,6 +23,7 @@ import { CHART } from '../../components/analytics/charts/chartUtils'
 import { cn } from '../../components/ui'
 import { alertLink, analyticsLink } from './links'
 import { OtherCarrierBanner, ptsDelta, relDelta } from './shared'
+import { useDrawerParams } from './drawers'
 
 const TOP_SKUS = 5
 
@@ -172,12 +173,13 @@ function ExpectedCash({ f }: { f: CashForecast }) {
 
 // ── Top SKUs ────────────────────────────────────────────────────────────────
 
-function TopSkus({ rows, daily, stock, mode, rtl }: {
+function TopSkus({ rows, daily, stock, mode, rtl, onOpen }: {
   rows: VariantSales[]
   daily: Map<string, number[]> | null
   stock: { byId: Map<string, VariantStock>; source: 'pieces' | 'shopify' } | null
   mode: 'booked' | 'realized'
   rtl: boolean
+  onOpen: (variantId: string) => void
 }) {
   const { t } = useTranslation()
   const fmt = useFmt()
@@ -203,7 +205,7 @@ function TopSkus({ rows, daily, stock, mode, rtl }: {
             const s = stock?.byId.get(r.variantId)
             const cover = s?.daysOfCover
             return (
-              <tr key={r.variantId} className="border-b border-line last:border-0">
+              <tr key={r.variantId} className="border-b border-line last:border-0 cursor-pointer hover:bg-trace-blue/5" onClick={() => onOpen(r.variantId)} data-testid="top-sku-row">
                 <td className="py-[9px] ps-0 pe-2.5 min-w-0">
                   <div className="font-medium text-primary truncate max-w-[220px]">{r.productTitle}</div>
                   <div className="text-[12px] text-muted truncate max-w-[220px]">{r.variantTitle}{r.sku ? ` · ${r.sku}` : ''}</div>
@@ -240,6 +242,7 @@ export default function SummaryPage() {
   const { t, i18n } = useTranslation()
   const fmt = useFmt()
   const s = useAnalyticsState()
+  const drawers = useDrawerParams()
   const rtl = i18n.language === 'ar'
   const pk = JSON.stringify(s.params)
   const ck = JSON.stringify({ ...s.params, c: s.compare })
@@ -349,7 +352,7 @@ export default function SummaryPage() {
         </AnalyticsCard>
 
         <AnalyticsCard span="s7" title={t('analytics.summary.topSkus')} testId="card-top-skus"
-          desc={t(`analytics.summary.topSkusDesc.${s.mode}`)}
+          desc={`${t(`analytics.summary.topSkusDesc.${s.mode}`)} ${t('analytics.summary.clickSku')}`}
           right={analyticsLink('products', s.search) ? <TextLink to={analyticsLink('products', s.search)!}>{t('analytics.summary.allSkus')}</TextLink> : undefined}>
           {lowTrust && stockSummary.data && (
             <Banner tone="warn" testId="low-trust-banner">
@@ -357,7 +360,7 @@ export default function SummaryPage() {
             </Banner>
           )}
           <QueryBlock q={sales} isEmpty={() => top.length === 0} empty={t('analytics.state.noSales')}>
-            {() => <TopSkus rows={top} daily={dailyMap} stock={stockMap} mode={s.mode} rtl={rtl} />}
+            {() => <TopSkus rows={top} daily={dailyMap} stock={stockMap} mode={s.mode} rtl={rtl} onOpen={drawers.openSku} />}
           </QueryBlock>
         </AnalyticsCard>
 
