@@ -16,6 +16,8 @@ export interface PortalConfig {
   pickupBooking: boolean
   /** Step 5b — present (true) only when the store offers size/colour exchanges. */
   exchangesEnabled?: boolean
+  /** P1 — the store's portal font (both languages); absent from older backends → the default. */
+  font?: string
 }
 
 /** Step 5b — one axis of a product's options (colour, size, …). */

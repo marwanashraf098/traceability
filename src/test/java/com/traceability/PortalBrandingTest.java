@@ -153,7 +153,8 @@ class PortalBrandingTest {
         ResponseEntity<Map> r = rest.getForEntity(base() + "/api/v1/portal/snouts-4e/config", Map.class);
         assertThat(r.getStatusCode()).isEqualTo(HttpStatus.OK);
         assertThat(r.getBody().keySet()).containsExactlyInAnyOrder(
-            "storeName", "returnWindowDays", "reasonCodes", "logoUrl", "brandColor", "policyText", "autoApprove", "pickupBooking");
+            "storeName", "returnWindowDays", "reasonCodes", "logoUrl", "brandColor", "policyText", "autoApprove", "pickupBooking",
+            "font");
         assertThat(r.getBody()).containsEntry("storeName", "Snouts Store").containsEntry("logoUrl", LOGO)
             .containsEntry("brandColor", "#1A2B3C").containsEntry("policyText", "Policy A")
             .containsEntry("autoApprove", true).containsEntry("pickupBooking", false);

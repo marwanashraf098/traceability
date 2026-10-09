@@ -84,6 +84,17 @@ public class PortalTokenService {
         }
     }
 
+    /**
+     * P1 (V159) — the per-IP lookup throttle's key: HMAC-SHA256 of the client IP under this
+     * service's secret, hex. The raw IP is never stored or logged. The "portal-ip:" prefix keeps
+     * it apart from token signatures (a token payload is base64url — it never contains ':').
+     * Null for a missing IP.
+     */
+    public String clientIpHash(String clientIp) {
+        if (clientIp == null || clientIp.isBlank()) return null;
+        return java.util.HexFormat.of().formatHex(mac("portal-ip:" + clientIp.trim()));
+    }
+
     private byte[] mac(String payload) {
         try {
             Mac m = Mac.getInstance(HMAC);

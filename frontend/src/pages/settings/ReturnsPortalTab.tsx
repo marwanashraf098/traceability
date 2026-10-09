@@ -8,6 +8,8 @@ import {
 } from '../../api'
 import { Button, Input, Skeleton, Toggle, cn, useToast } from '../../components/ui'
 import { writeToClipboard } from './connections/CopyRow'
+import { FontPicker, LogoUploader, PortalPreview, useUploadedLogoUrl } from './PortalBranding'
+import { PortalFont, portalFontOrDefault } from '../../portal/fonts'
 
 export const PORTAL_HOST = 'returns.tracedtech.com'
 export const LOGO_PREFIX = 'https://cdn.shopify.com/'
@@ -28,7 +30,7 @@ export function isValidLogoUrl(url: string): boolean {
 const HEX = /^#[0-9A-Fa-f]{6}$/
 
 type FieldKey = 'slug' | 'returnWindowDays' | 'logoUrl' | 'brandColor' | 'policyText' | 'returnLocationId' | 'pickupBooking'
-  | 'exchangesEnabled'
+  | 'exchangesEnabled' | 'font'
 
 /**
  * Returns portal Step 4e-A (M4) — the merchant's portal settings, owner and manager (the
@@ -58,6 +60,9 @@ export default function ReturnsPortalTab() {
   const [copied, setCopied] = useState(false)
   const [bookingOn, setBookingOn] = useState(false)
   const [exchangesOn, setExchangesOn] = useState(false)
+  // P1: the font saves with "Save changes" (sent only when it changed); the logo saves on its own.
+  const [font, setFont] = useState<PortalFont>(portalFontOrDefault(undefined))
+  const uploadedLogoUrl = useUploadedLogoUrl(saved?.logo?.version)
 
   const load = useCallback(async () => {
     setLoadError(false)
@@ -68,6 +73,7 @@ export default function ReturnsPortalTab() {
       setWindowText(String(s.returnWindowDays))
       setBookingOn(!!s.portalPickupBooking)
       setExchangesOn(!!s.exchangesEnabled)
+      setFont(portalFontOrDefault(s.font))
     } catch {
       setLoadError(true)
     }
@@ -81,7 +87,8 @@ export default function ReturnsPortalTab() {
     return JSON.stringify(normalize(a)) !== JSON.stringify(normalize({ ...form, returnWindowDays: Number(windowText) }))
       || bookingOn !== !!saved.portalPickupBooking
       || exchangesOn !== !!saved.exchangesEnabled
-  }, [saved, form, windowText, bookingOn, exchangesOn])
+      || font !== portalFontOrDefault(saved.font)
+  }, [saved, form, windowText, bookingOn, exchangesOn, font])
 
   if (loadError) {
     return (
@@ -132,6 +139,7 @@ export default function ReturnsPortalTab() {
         policyText: form.policyText?.trim() ? form.policyText : null,
         ...(bookingOn !== !!saved?.portalPickupBooking ? { pickupBooking: bookingOn } : {}),
         ...(exchangesOn !== !!saved?.exchangesEnabled ? { exchangesEnabled: exchangesOn } : {}),
+        ...(font !== portalFontOrDefault(saved?.font) ? { font } : {}),
       }
       const s = await savePortalSettings(body)
       setSaved(s)
@@ -139,6 +147,7 @@ export default function ReturnsPortalTab() {
       setWindowText(String(s.returnWindowDays))
       setBookingOn(!!s.portalPickupBooking)
       setExchangesOn(!!s.exchangesEnabled)
+      setFont(portalFontOrDefault(s.font))
       toast({ tone: 'success', message: t('settings.portal.saved') })
     } catch (e) {
       if (e instanceof PortalSettingsError && e.field && isFieldKey(e.field)) {
@@ -158,8 +167,8 @@ export default function ReturnsPortalTab() {
   const policyLength = (form.policyText ?? '').length
 
   return (
-    <div className="space-y-4 max-w-3xl" data-testid="returns-portal-settings">
-      <section className="card divide-y divide-line">
+    <div className="space-y-4" data-testid="returns-portal-settings">
+      <section className="card divide-y divide-line max-w-3xl">
         <SwitchRow
           title={t('settings.portal.enabled.title')}
           description={t('settings.portal.enabled.description')}
@@ -280,39 +289,60 @@ export default function ReturnsPortalTab() {
         <NonReturnableList />
       </section>
 
-      <section className="card p-6 space-y-5" aria-labelledby="portal-branding-title">
+      {/* P1: wider than the cards above so the live preview can sit beside the form (xl and up);
+          narrower screens get the EN / AR previews side by side under the form. */}
+      <section className="card grid max-w-3xl xl:max-w-6xl xl:grid-cols-[minmax(0,1fr)_380px]" aria-labelledby="portal-branding-title">
+        <div className="p-6 space-y-7 xl:border-e border-b xl:border-b-0 border-line min-w-0">
         <div>
           <h2 id="portal-branding-title" className="text-h3 text-primary">{t('settings.portal.branding.title')}</h2>
           <p className="text-small text-muted mt-1">{t('settings.portal.branding.description')}</p>
         </div>
 
         <div className="space-y-2">
-          <label htmlFor="portal-logo" className="text-body font-medium text-primary block">
-            {t('settings.portal.branding.logoLabel')}
-          </label>
-          <div className="flex items-center gap-3">
-            <div className="flex-1" dir="ltr">
-              <Input
-                id="portal-logo"
-                type="url"
-                placeholder={`${LOGO_PREFIX}…`}
-                invalid={!!errors.logoUrl}
-                aria-invalid={!!errors.logoUrl}
-                value={form.logoUrl ?? ''}
-                onChange={e => update('logoUrl', e.target.value)}
-              />
+          <LogoUploader
+            settings={saved}
+            logoUrl={uploadedLogoUrl}
+            onChange={s => setSaved(prev => (prev ? { ...prev, logo: s.logo ?? null } : s))}
+          />
+          {/* The Shopify Files link (V103) — kept for stores already using it; an upload wins. */}
+          <details className="group" open={!!saved.logoUrl} data-testid="logo-link-details">
+            <summary className="text-small font-medium text-trace-blue cursor-pointer list-none [&::-webkit-details-marker]:hidden">
+              {t('settings.portal.branding.useLink')}
+            </summary>
+            <div className="space-y-2 mt-2 max-w-xl">
+              <label htmlFor="portal-logo" className="text-small font-medium text-primary block">
+                {t('settings.portal.branding.logoLabel')}
+              </label>
+              <div className="flex items-center gap-3">
+                <div className="flex-1" dir="ltr">
+                  <Input
+                    id="portal-logo"
+                    type="url"
+                    placeholder={`${LOGO_PREFIX}…`}
+                    invalid={!!errors.logoUrl}
+                    aria-invalid={!!errors.logoUrl}
+                    value={form.logoUrl ?? ''}
+                    onChange={e => update('logoUrl', e.target.value)}
+                  />
+                </div>
+                {isValidLogoUrl(logo) && (
+                  <img
+                    src={logo}
+                    alt={t('settings.portal.branding.logoPreview')}
+                    data-testid="logo-preview"
+                    className="h-10 w-auto max-w-[120px] object-contain rounded-lg border border-line bg-surface p-1"
+                  />
+                )}
+              </div>
+              {errors.logoUrl && <p className="text-small text-critical" role="alert" data-testid="error-logoUrl">{errors.logoUrl}</p>}
+              <p className="text-small text-muted">{t('settings.portal.branding.logoHelp')} {t('settings.portal.branding.linkNote')}</p>
             </div>
-            {isValidLogoUrl(logo) && (
-              <img
-                src={logo}
-                alt={t('settings.portal.branding.logoPreview')}
-                data-testid="logo-preview"
-                className="h-10 w-auto max-w-[120px] object-contain rounded-lg border border-line bg-surface p-1"
-              />
-            )}
-          </div>
-          {errors.logoUrl && <p className="text-small text-critical" role="alert" data-testid="error-logoUrl">{errors.logoUrl}</p>}
-          <p className="text-small text-muted">{t('settings.portal.branding.logoHelp')}</p>
+          </details>
+        </div>
+
+        <div className="space-y-2">
+          <FontPicker value={font} onChange={f => { setFont(f); setErrors(e => ({ ...e, font: undefined })) }} />
+          {errors.font && <p className="text-small text-critical" role="alert" data-testid="error-font">{errors.font}</p>}
         </div>
 
         <div className="space-y-2">
@@ -343,6 +373,7 @@ export default function ReturnsPortalTab() {
             </div>
           </div>
           {errors.brandColor && <p className="text-small text-critical" role="alert" data-testid="error-brandColor">{errors.brandColor}</p>}
+          <p className="text-small text-muted">{t('settings.portal.branding.colorHelp')}</p>
         </div>
 
         <div className="space-y-2">
@@ -369,12 +400,23 @@ export default function ReturnsPortalTab() {
             </span>
           </div>
         </div>
+        </div>
+
+        <div className="p-6 bg-elevated rounded-b-xl xl:rounded-b-none xl:rounded-e-xl">
+          <PortalPreview
+            font={font}
+            brandColor={HEX.test(color) ? color : null}
+            logoSrc={saved.logo ? uploadedLogoUrl : isValidLogoUrl(logo) ? logo : null}
+            storeName={saved.storeName ?? ''}
+          />
+        </div>
       </section>
 
-      <div className="flex justify-end">
+      <div className="flex flex-col items-end gap-1.5 max-w-3xl xl:max-w-6xl">
         <Button onClick={save} loading={saving} disabled={!dirty || saving}>
           {t('settings.portal.save')}
         </Button>
+        <p className="text-small text-muted text-end">{t('settings.portal.branding.saveNote')}</p>
       </div>
     </div>
   )
@@ -618,5 +660,5 @@ function normalize(i: PortalSettingsInput) {
 
 function isFieldKey(f: string): f is FieldKey {
   return ['slug', 'returnWindowDays', 'logoUrl', 'brandColor', 'policyText', 'returnLocationId', 'pickupBooking',
-    'exchangesEnabled'].includes(f)
+    'exchangesEnabled', 'font'].includes(f)
 }

@@ -273,6 +273,24 @@ public class ApiExceptionHandler {
             .body(new UnreadableBodyBody("BAD_REQUEST_BODY", "The request body is missing or not readable"));
     }
 
+    record UploadErrorBody(String error, String message) {}
+
+    // An upload over spring.servlet.multipart (8 MB file / 10 MB request) is refused while the
+    // request is parsed, before any controller runs — 413 with a clear code, not the catch-all 500.
+    // Each endpoint enforces its own smaller cap (the portal logo: 2 MB → LOGO_TOO_LARGE).
+    @ExceptionHandler(org.springframework.web.multipart.MaxUploadSizeExceededException.class)
+    ResponseEntity<UploadErrorBody> handleUploadTooLarge(org.springframework.web.multipart.MaxUploadSizeExceededException ex) {
+        return ResponseEntity.status(HttpStatus.PAYLOAD_TOO_LARGE)
+            .body(new UploadErrorBody("FILE_TOO_LARGE", "The file is too large."));
+    }
+
+    // A malformed multipart body → 400. Never echoes what was sent.
+    @ExceptionHandler(org.springframework.web.multipart.MultipartException.class)
+    ResponseEntity<UploadErrorBody> handleBadMultipart(org.springframework.web.multipart.MultipartException ex) {
+        return ResponseEntity.badRequest()
+            .body(new UploadErrorBody("BAD_UPLOAD", "The upload couldn't be read."));
+    }
+
     @ExceptionHandler(ResponseStatusException.class)
     ResponseEntity<Void> handleResponseStatus(ResponseStatusException ex) {
         return ResponseEntity.status(ex.getStatusCode()).build();

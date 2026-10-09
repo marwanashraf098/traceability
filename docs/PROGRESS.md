@@ -4,6 +4,55 @@
 
 ## Current state
 
+**Returns portal P1 — branding: uploaded logo + portal font + per-IP lookup throttle (2026-10-09, branch
+`feat/portal-branding-p1` off origin/main 4755f0a; merged to main 2026-10-10, no squash; NOT deployed). Migration V159.** Mockup signed off:
+`design/Traced_portal_branding_dc.html`. Decisions (signed off): the Shopify Files link stays, folded under "Use a
+Shopify Files link instead"; precedence uploaded asset > Shopify link > store-name wordmark; the logo saves on
+upload / remove (no confirm, "Logo removed" toast), font / colour / policy save with "Save changes"; 2 MB logo cap in the
+app, multipart 8 MB / 10 MB as the outer ceiling; fonts self-hosted via @fontsource only, CSP unchanged.
+- **V159:** `portal_assets` (bytea, immutable — app_user INSERT/SELECT/DELETE, no UPDATE; RLS + FORCE + tenant_isolation;
+  sha256 for the ETag); `tenants.portal_logo_asset_id` (composite FK (asset, tenant) → a tenant can only point at its own
+  asset; `ON DELETE SET NULL (portal_logo_asset_id)`); `tenants.portal_font` (CHECK, default 'cairo');
+  `portal_lookup_attempts.ip_hash` + partial index. MigrationSmokeTest 158, NotTracedBackfillTest 103.
+- **Backend:** `assets.BinaryAssetStore` (interface) + `PostgresBinaryAssetStore`; `assets.ImagePipeline` (shared with P3):
+  magic-byte sniff (JPEG/PNG/WebP only), header pixel cap (40 MP, 12 000 px side) before decoding, subsampled decode,
+  EXIF orientation applied (explicit pixel mapping, after downscale), re-encode from raw pixels (no metadata), LOGO
+  profile = PNG with alpha, ≤ 600 px; `ImageIO.scanForPlugins()` + `setUseCache(false)`. New deps: TwelveMonkeys
+  imageio-webp + imageio-jpeg 3.12.0, metadata-extractor 2.19.0. `PortalLogoService` (process outside the tx; save /
+  remove lock the tenant row; survivor first, then extras deleted). Endpoints: `PUT|DELETE|GET
+  /api/v1/tenant/portal-settings/logo` (owner/manager; GET = preview bytes), public `GET /api/v1/portal/{slug}/logo`
+  (hatch #14 → runAs; read through the tenant row; ETag = sha256, If-None-Match → 304, Cache-Control public 1 h; config
+  `logoUrl` = `/api/v1/portal/{slug}/logo?v=<sha16>`). `/config` + GET settings carry `font`; GET settings also `logo`
+  {contentType,width,height,sizeBytes,version} and `storeName`. PUT settings: `font` optional (absent = unchanged, bad →
+  400 FONT). Multipart 8 MB / 10 MB, Tomcat max-swallow 10 MB; ApiExceptionHandler: MaxUploadSize → 413 FILE_TOO_LARGE,
+  MultipartException → 400 BAD_UPLOAD. Per-IP throttle: 20 failed lookups / IP (HMAC under the portal token secret,
+  "portal-ip:" prefix) / tenant / 60 min across order keys → the generic 404, not recorded. Stale "10r/m" javadoc fixed.
+- **Frontend:** `portal/fonts.ts` (one lazy chunk per family; Cairo + Readex Pro variable; Tajawal / Almarai 400 + 700,
+  IBM Plex Sans Arabic 400/600/700; `--pp-w600` = 700 for Tajawal / Almarai; `font-synthesis: none`); portal root gets
+  `--pp-font` in both languages, static Cairo imports removed from the portal entry (Geist / Geist Mono kept);
+  `PortalBranding.tsx` (LogoUploader via XHR with progress, FontPicker, PortalPreview EN + AR); Branding card widens to
+  6xl with the preview beside it at xl (the tab is 3xl), stacked below that. **Gotcha:** the merchant app's
+  `[dir="rtl"] { font-family: Cairo }` (index.css) overrides any element carrying `dir="rtl"` — set the family inline
+  on such elements (the picker's Arabic sample). Font check: all five families ship Latin + Arabic on @fontsource.
+- **Tests:** `ImagePipelineTest` (7), `PortalLogoTest` (10), frontend `portalBranding.test.tsx` (6); each guard
+  revert-checked RED (orientation, pixel cap, re-encode, alpha, IP throttle, tenant-bound public read, 2 MB cap, replace
+  cleanup, composite FK, portal font, PUT font, upload state). Existing frontend suites untouched and green (832/832).
+- **Review fixes (2026-10-09, commit 1a9ea66):** logo URL `?v=` = sha256[0:12] (`/config` logoUrl + settings
+  `logo.url` — not settings `logoUrl`, which is the Shopify link the merchant edits); public logo with the current `?v`
+  → `public, max-age=31536000, immutable`, missing / stale `?v` → current bytes, 1 h + ETag (PortalLogoTest c1,
+  revert-checked). Approved test edits made: PortalBrandingTest /config keys + "font"; RlsCoverageTest — public logo
+  EXEMPT (as /config), merchant logo GET/PUT/DELETE COVERED by a seeded cross-tenant test with positive controls
+  (revert-checked: a tenant-blind delete → red); MigrationSmokeTest.TENANT_SCOPED_TABLES + portal_assets. V159 still free.
+- **Suites:** origin/main 4755f0a clean checkout 2,650 run / 1 red (ExchangeBackfillTest); branch 2,669 run / 1 red
+  (ExchangeBackfillTest). a5 clock-skew flake fixed (commit 75052f7 "test: a5 single-clock cutoff": the cutoff and the
+  order timestamp from one JVM Instant) — 20/20 isolated runs green, then full suite 2,669 run / only ExchangeBackfillTest.
+  Known reds after merge: ExchangeBackfillTest.
+
+**Returns portal P1–P4 Step 0 diagnosis (2026-10-09):** no file storage existed; ImageIO had no WebP/HEIC/orientation;
+`return_refunds` is append-only (never copy account details into it); customers/redact matches orders by external_id;
+Shopify read_orders reaches only the last 60 days of orders (no read_all_orders); the Bosta catch-up / visibility check
+scan every orders.raw.fulfillments and the pre-connect filter treats any non-'internal:%' order as ours. Next: P2 → P3 → P4.
+
 **Analytics frontend — group B: Revenue + Delivery (2026-10-09, branch `analytics/fe-b`, merged to main behind the flag;
 NOT deployed, flag OFF).**
 - **Flag flip command (at flip time, explicit, no .env change):**
@@ -6940,6 +6989,14 @@ Provision Hetzner VPS, set up Docker Compose (app + Postgres or Supabase connect
 ---
 
 ## Gotchas / environment quirks
+- **SimulatedAutoShipmentTest.a5 is a host-vs-Docker clock race (pre-existing, not a state leak; diagnosed 2026-10-09).**
+  It sets `stores.orders_ingest_from = now()` (the Postgres container's clock), then ingests an order whose
+  `created_at` is the JVM's `Instant.now()`, taken milliseconds later on the Mac. When the Docker VM clock runs a few ms
+  ahead, the "now" order is older than the cutoff and FR-18 skips it — the failing run logged placed_at …37.440657Z vs
+  cutoff …37.443139Z (2.5 ms). Sampled during a full run: Docker clock −42 ms … +28 ms vs the host. Fix (an
+  existing-test edit, needs approval): build the cutoff from the same clock as the payload, or give the "now" order a
+  margin. **Fixed 2026-10-10 (75052f7):** both now come from one JVM Instant. Any other test comparing a DB `now()`
+  with a JVM `Instant.now()` at millisecond distance has the same race — use one clock.
 
 - **`mvn test` rebuilds the frontend bundle into `src/main/resources/static/`** — every backend test run leaves `static/index.html` modified and new hashed `assets/main-*.js/.css` files (old ones deleted). This is how the working tree got its uncommitted bundle before 2026-09-23. After a test run, `git checkout -- src/main/resources/static/` and delete the untracked `main-*` files unless the bundle is being deliberately committed.
 - **Shopify 2026-04 removed `financialStatus` field on Order** — use `displayFinancialStatus` instead. Returns capitalized display values ("Pending", "Paid", "Authorized"). COD inference checks `"pending".equalsIgnoreCase(displayFinancialStatus)` — case-insensitive, so both are safe.
