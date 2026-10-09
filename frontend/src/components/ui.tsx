@@ -1427,7 +1427,12 @@ export type DataTableColumn<T> = {
   render: (row: T) => ReactNode
   align?: 'start' | 'end' | 'center'
   mono?: boolean
+  /** Header becomes a sort button — only when the table is given `onSort`. */
+  sortable?: boolean
 }
+
+/** Optional sorting: the caller owns the order (DataTable never reorders rows itself). */
+export type DataTableSort = { key: string; dir: 'asc' | 'desc' }
 
 const ALIGN_CLASS = { start: 'text-start', end: 'text-end', center: 'text-center' }
 
@@ -1438,6 +1443,8 @@ export function DataTable<T extends { id: string }>({
   emptyMessage = 'No data',
   skeletonRows = 5,
   onRowClick,
+  sort,
+  onSort,
 }: {
   columns: DataTableColumn<T>[]
   rows: T[]
@@ -1445,6 +1452,8 @@ export function DataTable<T extends { id: string }>({
   emptyMessage?: string
   skeletonRows?: number
   onRowClick?: (row: T) => void
+  sort?: DataTableSort
+  onSort?: (key: string) => void
 }) {
   if (loading) return <TableSkeleton rows={skeletonRows} cols={columns.length} />
 
@@ -1453,11 +1462,24 @@ export function DataTable<T extends { id: string }>({
       <table className="w-full">
         <thead>
           <tr className="border-b border-line">
-            {columns.map(col => (
-              <th key={col.key} className={cn('tbl-header', ALIGN_CLASS[col.align ?? 'start'])}>
-                {col.header}
-              </th>
-            ))}
+            {columns.map(col => {
+              const sortable = !!onSort && col.sortable
+              const active = sortable && sort?.key === col.key
+              return (
+                <th key={col.key} className={cn('tbl-header', ALIGN_CLASS[col.align ?? 'start'])}
+                  aria-sort={active ? (sort!.dir === 'asc' ? 'ascending' : 'descending') : undefined}>
+                  {sortable ? (
+                    <button type="button" onClick={() => onSort!(col.key)}
+                      className={cn('inline-flex items-center gap-1 uppercase tracking-[inherit] hover:text-primary', active && 'text-primary')}>
+                      {col.header}
+                      <span aria-hidden="true" className={cn('text-[10px]', !active && 'opacity-30')}>
+                        {active && sort!.dir === 'asc' ? '▲' : '▼'}
+                      </span>
+                    </button>
+                  ) : col.header}
+                </th>
+              )
+            })}
           </tr>
         </thead>
         <tbody>

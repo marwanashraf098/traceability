@@ -9,6 +9,9 @@ services:
       dockerfile: Dockerfile
       args:
         VITE_CALENDLY_SETUP_URL: "https://calendly.com/tracedtechnology/traced-setup-call"
+        # Analytics screens (build-time flag, default off). Set VITE_ANALYTICS_ENABLED=true in .env
+        # (or the shell) and rebuild to turn them on.
+        VITE_ANALYTICS_ENABLED: "${VITE_ANALYTICS_ENABLED:-false}"
     image: traceability-app:latest
     env_file: ../.env
     restart: unless-stopped

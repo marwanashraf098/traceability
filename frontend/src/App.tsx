@@ -17,6 +17,9 @@ import Login from './pages/Login'
 // S6 phone as scanner — the phone's page (public, no login). Lazy so @zxing/* stays in its own
 // chunk, never in the main bundle.
 const ScanPairPage = lazy(() => import('./pages/scanpair/ScanPairPage'))
+// Analytics (behind VITE_ANALYTICS_ENABLED) — lazy, so its pages and charts are their own chunk.
+const AnalyticsRoute = lazy(() => import('./pages/analytics/AnalyticsRoute'))
+import { analyticsEnabled } from './analytics/flag'
 import Signup from './pages/Signup'
 import DemoLanding from './pages/DemoLanding'
 import { DEMO_SESSION_MARKER, DEMO_ACCESS_TOKEN_KEY } from './demoConstants'
@@ -213,6 +216,17 @@ export function OwnerOnlyRoute({ children }: { children: React.ReactNode }) {
   if (getRoleFromToken() === 'worker') {
     return <Navigate to="/worker-home" replace />
   }
+  return <>{children}</>
+}
+
+/**
+ * Owners only — managers AND workers are sent away (Analytics: every endpoint is OWNER-only, so a
+ * manager would only see 403s). OwnerOnlyRoute above stays as it is: it admits managers.
+ */
+export function StrictOwnerRoute({ children }: { children: React.ReactNode }) {
+  const role = getRoleFromToken()
+  if (role === 'worker') return <Navigate to="/worker-home" replace />
+  if (role !== 'owner') return <Navigate to="/overview" replace />
   return <>{children}</>
 }
 
@@ -459,6 +473,21 @@ export default function App() {
             </RequireAuth>
           }
         />
+        {analyticsEnabled() && (
+          <>
+            <Route path="/analytics" element={<Navigate to="/analytics/summary" replace />} />
+            <Route
+              path="/analytics/:page"
+              element={
+                <RequireAuth>
+                  <StrictOwnerRoute>
+                    <Layout><Suspense fallback={null}><AnalyticsRoute /></Suspense></Layout>
+                  </StrictOwnerRoute>
+                </RequireAuth>
+              }
+            />
+          </>
+        )}
         {/* Absorbed into /settings — Settings consolidation. Old direct links keep resolving. */}
         {/* Build D: confirm a pending link from the embedded app ("I already have a Traced account").
             Any signed-in user reaches it; the API answers 403 to a non-owner and the page says so. */}

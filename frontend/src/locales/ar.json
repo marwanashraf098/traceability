@@ -23,7 +23,9 @@
     "transfers": "عمليات النقل",
     "manager": "المدير",
     "setupProgress": "تقدّم الإعداد",
-    "setupCount": "الإعداد {{done}}/{{total}}"
+    "setupCount": "الإعداد {{done}}/{{total}}",
+    "analytics": "التحليلات",
+    "new": "جديد"
   },
   "overview": {
     "title": "لوحة التحكم",
@@ -898,7 +900,9 @@
         "completeFailed": "تعذّر إنهاء {{number}} — راجع الجهاز اللوحي",
         "notApplied": "لم يُطبَّق — امسح مرة أخرى"
       }
-    }
+    },
+    "cancelConfirmPre": "إلغاء هذا الطلب؟ ستُعاد كل القطع المحجوزة إلى المخزون.",
+    "cancelConfirmPost": "هذا الطلب معبَّأ. يجب على العامل فك تعبئة {{count}} قطعة يدويًا."
   },
   "lookup": {
     "title": "بحث عن قطعة",
@@ -964,7 +968,10 @@
       "voided": "أُلغيت — أُزيلت من المخزون القابل للبيع",
       "held": "تم تعليقها",
       "unheld": "أُنهي التعليق — أصبحت متاحة",
-      "location_corrected": "تم تصحيح الموقع إلى المستودع الرئيسي"
+      "location_corrected": "تم تصحيح الموقع إلى المستودع الرئيسي",
+      "handover": "تم التسليم للعميل (استلام من المتجر)",
+      "unpacked": "تم فك تعبئة القطعة — الإلغاء جارٍ",
+      "unreserved": "أُعيدت للمخزون (أُلغي الطلب)"
     },
     "pieceStatus": {
       "available": "متاح",
@@ -3198,5 +3205,263 @@
     "notOwnerTitle": "يمكن لمالك الحساب فقط ربط متجر.",
     "notOwnerBody": "اطلب من مالك حساب Traced هذا تسجيل الدخول وربطه.",
     "genericError": "تعذّر ربط متجرك. حاول مرة أخرى."
+  },
+  "analytics": {
+    "crumb": "التحليلات",
+    "pages": {
+      "summary": {
+        "nav": "الملخص",
+        "title": "الملخص",
+        "subtitle": "أين أموالك الآن، وما الذي يحتاج انتباهك"
+      },
+      "revenue": {
+        "nav": "الإيرادات",
+        "title": "الإيرادات",
+        "subtitle": "كم بعت، ومن أين جاءت المبيعات، وأين ضاعت"
+      },
+      "products": {
+        "nav": "المنتجات والأصناف",
+        "title": "المنتجات والأصناف",
+        "subtitle": "أداء كل صنف، من المبيعات إلى الربح الحقيقي"
+      },
+      "stock": {
+        "nav": "صحة المخزون",
+        "title": "صحة المخزون",
+        "subtitle": "المخزون المتاح، ومدة بقائه، وما الذي تعيد طلبه"
+      },
+      "delivery": {
+        "nav": "التوصيل",
+        "title": "التوصيل",
+        "subtitle": "نسبة نجاح التوصيل مع بوسطة، والإخفاقات وأماكنها"
+      },
+      "money": {
+        "nav": "بوسطة والمدفوعات",
+        "title": "بوسطة والمدفوعات",
+        "subtitle": "ما حصّلته بوسطة من رسوم، وما دفعته، وما الناقص"
+      },
+      "customers": {
+        "nav": "العملاء",
+        "title": "العملاء",
+        "subtitle": "من يشتري مجددًا، ومن يرفض الاستلام، ومن الأعلى قيمة"
+      },
+      "orders": {
+        "nav": "مالية الطلبات",
+        "title": "مالية الطلبات",
+        "subtitle": "كل طلب بحالة التوصيل والدفع"
+      }
+    },
+    "period": {
+      "label": "الفترة",
+      "today": "اليوم",
+      "yesterday": "أمس",
+      "7d": "آخر 7 أيام",
+      "30d": "آخر 30 يومًا",
+      "month": "هذا الشهر",
+      "custom": "مخصص",
+      "from": "من",
+      "to": "إلى",
+      "apply": "تطبيق",
+      "cancel": "إلغاء",
+      "invalid": "اختر بداية قبل النهاية أو مساوية لها، حتى اليوم، وبحد أقصى {{days}} يومًا.",
+      "showing": "{{from}} – {{to}} · {{days}} يوم",
+      "showingDay": "{{day}}",
+      "compare": "قارن بالفترة السابقة",
+      "comparing": "المقارنة بالفترة السابقة مفعّلة"
+    },
+    "mode": {
+      "label": "أساس الإيراد",
+      "booked": "المحجوز",
+      "realized": "المحقق"
+    },
+    "state": {
+      "error": "تعذّر تحميل هذا الجزء.",
+      "retry": "إعادة المحاولة",
+      "noOrders": "لا توجد طلبات في هذه الفترة.",
+      "noSales": "لا توجد مبيعات في هذه الفترة."
+    },
+    "chip": {
+      "v2": "V2",
+      "approximate": "تقريبي",
+      "approximateTip": "بعض البنود بلا سعر محفوظ؛ قيمتها محسوبة بسعر الصنف الحالي.",
+      "estimated": "تقديري",
+      "estimatedTip": "بعض الرسوم تقديرات من بوسطة، وليست مبالغ مسواة بعد."
+    },
+    "stock": {
+      "sourceShopify": "عدد شوبيفاي",
+      "lowTrust": "يتم تجهيز {{pct}} فقط من طلباتك عبر Traced؛ أرقام المخزون تستخدم عدد شوبيفاي."
+    },
+    "noBosta": {
+      "title": "بوسطة غير مربوطة",
+      "body": "اربط بوسطة لترى الشحنات في الطريق، والمدفوعات، ونسبة نجاح التوصيل، والرسوم.",
+      "cta": "← ربط بوسطة"
+    },
+    "otherCarrier": {
+      "banner": "{{pct}} من طلبات هذه الفترة ({{count}}) شُحنت خارج بوسطة — وهي غير محسوبة في أرقام بوسطة."
+    },
+    "kpi": {
+      "netRevenue": {
+        "booked": "صافي الإيراد (المحجوز)",
+        "realized": "صافي الإيراد (المحقق)"
+      },
+      "orders": "الطلبات",
+      "aov": "متوسط قيمة الطلب",
+      "afterDiscounts": "بعد الخصومات",
+      "successRate": "نسبة نجاح التوصيل",
+      "successFoot": "المسلَّم ÷ المحاولات",
+      "costPerDelivery": "تكلفة بوسطة لكل توصيل",
+      "costPerDeliveryFoot": "كل الرسوم ÷ المسلَّم",
+      "payoutLag": "مدة وصول المدفوعات",
+      "payoutLagFoot": "من التسليم حتى الدفع (الوسيط)",
+      "vsPrevious": "مقارنة بالـ {{days}} يومًا السابقة",
+      "noCompare": "لا مقارنة لأكثر من 92 يومًا — استخدم المقارنة",
+      "days_zero": "{{value}} يوم",
+      "days_one": "{{value}} يوم",
+      "days_two": "{{value}} يوم",
+      "days_few": "{{value}} أيام",
+      "days_many": "{{value}} يومًا",
+      "days_other": "{{value}} يوم",
+      "realizedNeedsBosta": "المحقق يُحسب من توصيلات بوسطة — اربط بوسطة لقياسه"
+    },
+    "summary": {
+      "cashTitle": "موقف السيولة: أين أموالك",
+      "attention": "يحتاج انتباهك",
+      "perDay": "الإيراد اليومي",
+      "perDayDesc": "المحجوز والمحقق، بالجنيه",
+      "perDayNote": "المحقق أقل من المحجوز في الأيام الأخيرة لأن هذه الطلبات ما زالت في الطريق، ويلحق به مع تسليم بوسطة.",
+      "topSkus": "أعلى الأصناف",
+      "topSkusDesc": {
+        "booked": "حسب الإيراد المحجوز في هذه الفترة.",
+        "realized": "حسب الإيراد المحقق في هذه الفترة."
+      },
+      "allSkus": "← كل الأصناف",
+      "cashIn": "المتوقع وصوله",
+      "cashInDesc": "بانتظار الدفع + في الطريق، حسب موعد وصوله لحسابك",
+      "pipe": {
+        "notFulfilled": "لم تُجهَّز بعد",
+        "expectedCalc": "القيمة المتوقعة بنسبة نجاح التوصيل",
+        "faceValueCalc": "القيمة الاسمية (لا توجد نسبة نجاح بعد)",
+        "inTransit": "في الطريق مع بوسطة",
+        "inTransitCalc": "متوقع بنسبة نجاح كل محافظة",
+        "awaiting": "تم التسليم، بانتظار الدفع",
+        "awaitingCalc": "حصّلتها بوسطة ولم تُرسل إليك بعد",
+        "bank": "في حسابك البنكي",
+        "lastTransfer": "آخر تحويل {{date}}",
+        "notFulfilledMeta_zero": "لا طلبات · القيمة الاسمية {{value}}",
+        "notFulfilledMeta_one": "طلب واحد · القيمة الاسمية {{value}}",
+        "notFulfilledMeta_two": "طلبان · القيمة الاسمية {{value}}",
+        "notFulfilledMeta_few": "{{count}} طلبات · القيمة الاسمية {{value}}",
+        "notFulfilledMeta_many": "{{count}} طلبًا · القيمة الاسمية {{value}}",
+        "notFulfilledMeta_other": "{{count}} طلب · القيمة الاسمية {{value}}",
+        "inTransitMeta_zero": "لا شحنات · التحصيل {{value}}",
+        "inTransitMeta_one": "شحنة واحدة · التحصيل {{value}}",
+        "inTransitMeta_two": "شحنتان · التحصيل {{value}}",
+        "inTransitMeta_few": "{{count}} شحنات · التحصيل {{value}}",
+        "inTransitMeta_many": "{{count}} شحنة · التحصيل {{value}}",
+        "inTransitMeta_other": "{{count}} شحنة · التحصيل {{value}}",
+        "awaitingMeta_zero": "لا شحنات",
+        "awaitingMeta_one": "شحنة واحدة",
+        "awaitingMeta_two": "شحنتان",
+        "awaitingMeta_few": "{{count}} شحنات",
+        "awaitingMeta_many": "{{count}} شحنة",
+        "awaitingMeta_other": "{{count}} شحنة",
+        "awaitingMetaNext_zero": "لا شحنات · الدفعة القادمة {{date}}",
+        "awaitingMetaNext_one": "شحنة واحدة · الدفعة القادمة {{date}}",
+        "awaitingMetaNext_two": "شحنتان · الدفعة القادمة {{date}}",
+        "awaitingMetaNext_few": "{{count}} شحنات · الدفعة القادمة {{date}}",
+        "awaitingMetaNext_many": "{{count}} شحنة · الدفعة القادمة {{date}}",
+        "awaitingMetaNext_other": "{{count}} شحنة · الدفعة القادمة {{date}}",
+        "notSettled_zero": "",
+        "notSettled_one": "+ طلب واحد مُسلَّم لم تتم تسويته بعد (≈ {{value}})",
+        "notSettled_two": "+ طلبان مُسلَّمان لم تتم تسويتهما بعد (≈ {{value}})",
+        "notSettled_few": "+ {{count}} طلبات مُسلَّمة لم تتم تسويتها بعد (≈ {{value}})",
+        "notSettled_many": "+ {{count}} طلبًا مُسلَّمًا لم تتم تسويته بعد (≈ {{value}})",
+        "notSettled_other": "+ {{count}} طلب مُسلَّم لم تتم تسويته بعد (≈ {{value}})",
+        "bankMeta_zero": "لا شحنات · {{payouts}} دفعات",
+        "bankMeta_one": "شحنة واحدة · {{payouts}} دفعات",
+        "bankMeta_two": "شحنتان · {{payouts}} دفعات",
+        "bankMeta_few": "{{count}} شحنات · {{payouts}} دفعات",
+        "bankMeta_many": "{{count}} شحنة · {{payouts}} دفعات",
+        "bankMeta_other": "{{count}} شحنة · {{payouts}} دفعات"
+      },
+      "top": {
+        "sku": "الصنف",
+        "perDay": "الوحدات يوميًا",
+        "units": "الوحدات",
+        "revenue": "الإيراد",
+        "stockLeft": "المخزون المتبقي",
+        "onHand": "{{count}} متاح",
+        "days_zero": "{{count}} يوم",
+        "days_one": "يوم واحد",
+        "days_two": "يومان",
+        "days_few": "{{count}} أيام",
+        "days_many": "{{count}} يومًا",
+        "days_other": "{{count}} يوم",
+        "unitsLeft_zero": "لا وحدات",
+        "unitsLeft_one": "وحدة واحدة",
+        "unitsLeft_two": "وحدتان",
+        "unitsLeft_few": "{{count}} وحدات",
+        "unitsLeft_many": "{{count}} وحدة",
+        "unitsLeft_other": "{{count}} وحدة"
+      },
+      "cash": {
+        "next7": "خلال 7 أيام",
+        "days8to14": "من 8 إلى 14 يومًا",
+        "days15to30": "من 15 إلى 30 يومًا",
+        "tip": "بانتظار الدفع {{awaiting}} + في الطريق {{transit}}",
+        "later": "{{amount}} إضافية متوقعة بعد أكثر من 30 يومًا.",
+        "note": "مبني على دفعة بوسطة الأسبوعية (القادمة {{weekday}}) ووسيط {{lag}} يوم من التسليم حتى الدفع. الطلبات في الطريق محسوبة بنسبة نجاحها المتوقعة.",
+        "reason": {
+          "payout_cadence_unknown": "لا توجد مدفوعات كافية من بوسطة بعد لمعرفة يوم الدفع.",
+          "payout_lag_unknown": "لا توجد توصيلات مدفوعة كافية بعد لمعرفة مدة وصول المدفوعات."
+        }
+      }
+    },
+    "alerts": {
+      "none": "لا شيء يحتاج انتباهك الآن.",
+      "view": "← عرض",
+      "stuck_with_bosta": {
+        "title_zero": "لا توجد شحنات عالقة",
+        "title_one": "شحنة واحدة عالقة مع بوسطة لأكثر من 7 أيام",
+        "title_two": "شحنتان عالقتان مع بوسطة لأكثر من 7 أيام",
+        "title_few": "{{count}} شحنات عالقة مع بوسطة لأكثر من 7 أيام",
+        "title_many": "{{count}} شحنة عالقة مع بوسطة لأكثر من 7 أيام",
+        "title_other": "{{count}} شحنة عالقة مع بوسطة لأكثر من 7 أيام",
+        "detail": "{{amount}} تحصيل عند الاستلام، بلا تحديث من بوسطة"
+      },
+      "never_picked_up": {
+        "title_zero": "لا توجد شحنات",
+        "title_one": "شحنة واحدة محجوزة ولم يستلمها المندوب (7+ أيام)",
+        "title_two": "شحنتان محجوزتان ولم يستلمهما المندوب (7+ أيام)",
+        "title_few": "{{count}} شحنات محجوزة ولم يستلمها المندوب (7+ أيام)",
+        "title_many": "{{count}} شحنة محجوزة ولم يستلمها المندوب (7+ أيام)",
+        "title_other": "{{count}} شحنة محجوزة ولم يستلمها المندوب (7+ أيام)",
+        "detail": "{{amount}} تحصيل ينتظر الاستلام"
+      },
+      "delivered_not_paid": {
+        "title_zero": "لا توجد طلبات",
+        "title_one": "طلب واحد تم تسليمه ولم يُدفع بعد",
+        "title_two": "طلبان تم تسليمهما ولم يُدفعا بعد",
+        "title_few": "{{count}} طلبات تم تسليمها ولم تُدفع بعد",
+        "title_many": "{{count}} طلبًا تم تسليمه ولم يُدفع بعد",
+        "title_other": "{{count}} طلب تم تسليمه ولم يُدفع بعد",
+        "detail": "{{amount}} حصّلتها بوسطة ولم تدخل دفعة بعد"
+      },
+      "low_success_governorates": {
+        "title_zero": "لا توجد محافظات",
+        "title_one": "محافظة واحدة نسبة التسليم فيها أقل من 65%",
+        "title_two": "محافظتان نسبة التسليم فيهما أقل من 65%",
+        "title_few": "{{count}} محافظات نسبة التسليم فيها أقل من 65%",
+        "title_many": "{{count}} محافظة نسبة التسليم فيها أقل من 65%",
+        "title_other": "{{count}} محافظة نسبة التسليم فيها أقل من 65%"
+      },
+      "sells_out_soon": {
+        "title_zero": "لا توجد منتجات",
+        "title_one": "منتج واحد من الأكثر مبيعًا سينفد خلال 4 أيام",
+        "title_two": "منتجان من الأكثر مبيعًا سينفدان خلال 4 أيام",
+        "title_few": "{{count}} منتجات من الأكثر مبيعًا ستنفد خلال 4 أيام",
+        "title_many": "{{count}} منتجًا من الأكثر مبيعًا سينفد خلال 4 أيام",
+        "title_other": "{{count}} منتج من الأكثر مبيعًا سينفد خلال 4 أيام"
+      }
+    }
   }
 }

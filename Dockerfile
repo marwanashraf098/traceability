@@ -14,6 +14,9 @@ COPY frontend/ ./frontend/
 # Privacy.tsx and Terms.tsx import docs/legal/*.md via Vite ?raw.
 # The import resolves ../../../docs/legal/ from frontend/src/pages/ → /app/docs/legal/.
 COPY docs/legal/ ./docs/legal/
+# Analytics nav + routes are baked in at build time; off unless the build passes "true"
+# (deploy/docker-compose.yml forwards VITE_ANALYTICS_ENABLED from the environment / .env).
+ARG VITE_ANALYTICS_ENABLED=false
 RUN npm run build --prefix frontend
 # Output now at /app/src/main/resources/static/
 

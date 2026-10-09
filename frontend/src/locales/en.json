@@ -23,7 +23,9 @@
     "transfers": "Transfers",
     "manager": "Manager",
     "setupProgress": "Setup progress",
-    "setupCount": "Setup {{done}}/{{total}}"
+    "setupCount": "Setup {{done}}/{{total}}",
+    "analytics": "Analytics",
+    "new": "NEW"
   },
   "overview": {
     "title": "Overview",
@@ -3171,5 +3173,207 @@
     "notOwnerTitle": "Only the account owner can connect a store.",
     "notOwnerBody": "Ask the owner of this Traced account to sign in and connect it.",
     "genericError": "We couldn't connect your store. Try again."
+  },
+  "analytics": {
+    "crumb": "Analytics",
+    "pages": {
+      "summary": {
+        "nav": "Summary",
+        "title": "Summary",
+        "subtitle": "Where your money is right now, and what needs attention"
+      },
+      "revenue": {
+        "nav": "Revenue",
+        "title": "Revenue",
+        "subtitle": "How much you sold, where it came from, and where it leaked"
+      },
+      "products": {
+        "nav": "Products & SKUs",
+        "title": "Products & SKUs",
+        "subtitle": "Performance of every variant, from sales to true profit"
+      },
+      "stock": {
+        "nav": "Stock health",
+        "title": "Stock health",
+        "subtitle": "Stock on hand, how long it sits, and what to reorder"
+      },
+      "delivery": {
+        "nav": "Delivery",
+        "title": "Delivery",
+        "subtitle": "Bosta delivery success, failures and where they happen"
+      },
+      "money": {
+        "nav": "Bosta & payouts",
+        "title": "Bosta & payouts",
+        "subtitle": "What Bosta charged, what it paid, and what is missing"
+      },
+      "customers": {
+        "nav": "Customers",
+        "title": "Customers",
+        "subtitle": "Who buys again, who refuses, and who is worth the most"
+      },
+      "orders": {
+        "nav": "Order finances",
+        "title": "Order finances",
+        "subtitle": "Every order with its delivery and payment status"
+      }
+    },
+    "period": {
+      "label": "Date range",
+      "today": "Today",
+      "yesterday": "Yesterday",
+      "7d": "Last 7 days",
+      "30d": "Last 30 days",
+      "month": "This month",
+      "custom": "Custom",
+      "from": "From",
+      "to": "To",
+      "apply": "Apply",
+      "cancel": "Cancel",
+      "invalid": "Pick a start on or before the end, up to today, at most {{days}} days.",
+      "showing": "{{from}} – {{to}} · {{days}} days",
+      "showingDay": "{{day}}",
+      "compare": "Compare with the previous period",
+      "comparing": "Comparing with the previous period"
+    },
+    "mode": {
+      "label": "Revenue basis",
+      "booked": "Booked",
+      "realized": "Realized"
+    },
+    "state": {
+      "error": "Couldn't load this card.",
+      "retry": "Retry",
+      "noOrders": "No orders in this period.",
+      "noSales": "No sales in this period."
+    },
+    "chip": {
+      "v2": "V2",
+      "approximate": "approximate",
+      "approximateTip": "Some lines have no stored price; their value uses the current variant price.",
+      "estimated": "estimated",
+      "estimatedTip": "Some fees are Bosta quotes, not settled amounts yet."
+    },
+    "stock": {
+      "sourceShopify": "Shopify's count",
+      "lowTrust": "Only {{pct}} of your orders are packed through Traced; stock figures use Shopify's count."
+    },
+    "noBosta": {
+      "title": "Bosta not connected",
+      "body": "Connect Bosta to see shipments in transit, payouts, delivery success and fees.",
+      "cta": "Connect Bosta →"
+    },
+    "otherCarrier": {
+      "banner": "{{pct}} of orders in this period ({{count}}) shipped outside Bosta — they are not in the Bosta figures."
+    },
+    "kpi": {
+      "netRevenue": {
+        "booked": "Net revenue (booked)",
+        "realized": "Net revenue (realized)"
+      },
+      "orders": "Orders",
+      "aov": "Average order value",
+      "afterDiscounts": "after discounts",
+      "successRate": "Delivery success rate",
+      "successFoot": "delivered ÷ attempted",
+      "costPerDelivery": "Bosta cost per delivery",
+      "costPerDeliveryFoot": "all fees ÷ delivered",
+      "payoutLag": "Payout lag",
+      "payoutLagFoot": "delivered → paid (median)",
+      "vsPrevious": "vs previous {{days}} days",
+      "noCompare": "No comparison past 92 days — use Compare",
+      "days_one": "{{value}} day",
+      "days_other": "{{value}} days",
+      "realizedNeedsBosta": "Realized counts Bosta deliveries — connect Bosta to measure it"
+    },
+    "summary": {
+      "cashTitle": "Cash position: where your money is",
+      "attention": "Needs attention",
+      "perDay": "Revenue per day",
+      "perDayDesc": "Booked and realized, EGP",
+      "perDayNote": "Realized trails booked in the last days because those orders are still in transit. It catches up as Bosta delivers.",
+      "topSkus": "Top SKUs",
+      "topSkusDesc": {
+        "booked": "By booked revenue in this period.",
+        "realized": "By realized revenue in this period."
+      },
+      "allSkus": "All SKUs →",
+      "cashIn": "Expected cash in",
+      "cashInDesc": "Awaiting payout + in transit, by when it should reach your bank",
+      "pipe": {
+        "notFulfilled": "Not yet fulfilled",
+        "expectedCalc": "Expected value at the order's delivery success rate",
+        "faceValueCalc": "Face value (no success rate yet)",
+        "inTransit": "In transit with Bosta",
+        "inTransitCalc": "Expected using each governorate's success rate",
+        "awaiting": "Delivered, awaiting payout",
+        "awaitingCalc": "Collected by Bosta, not yet sent to you",
+        "bank": "In your bank",
+        "lastTransfer": "Last transfer {{date}}",
+        "notFulfilledMeta_one": "{{count}} order · face value {{value}}",
+        "notFulfilledMeta_other": "{{count}} orders · face value {{value}}",
+        "inTransitMeta_one": "{{count}} shipment · COD {{value}}",
+        "inTransitMeta_other": "{{count}} shipments · COD {{value}}",
+        "awaitingMeta_one": "{{count}} shipment",
+        "awaitingMeta_other": "{{count}} shipments",
+        "awaitingMetaNext_one": "{{count}} shipment · next payout {{date}}",
+        "awaitingMetaNext_other": "{{count}} shipments · next payout {{date}}",
+        "notSettled_one": "+ {{count}} delivered, not settled yet (≈ {{value}})",
+        "notSettled_other": "+ {{count}} delivered, not settled yet (≈ {{value}})",
+        "bankMeta_one": "{{count}} shipment · {{payouts}} payouts",
+        "bankMeta_other": "{{count}} shipments · {{payouts}} payouts"
+      },
+      "top": {
+        "sku": "SKU",
+        "perDay": "Units per day",
+        "units": "Units",
+        "revenue": "Revenue",
+        "stockLeft": "Stock left",
+        "onHand": "{{count}} on hand",
+        "days_one": "{{count}} day",
+        "days_other": "{{count}} days",
+        "unitsLeft_one": "{{count}} unit",
+        "unitsLeft_other": "{{count}} units"
+      },
+      "cash": {
+        "next7": "Next 7 days",
+        "days8to14": "8–14 days",
+        "days15to30": "15–30 days",
+        "tip": "Awaiting payout {{awaiting}} + in transit {{transit}}",
+        "later": "{{amount}} more is expected later than 30 days.",
+        "note": "Based on Bosta's weekly payout ({{weekday}} next) and a {{lag}}-day median from delivery to payout. In-transit orders count at their expected success rate.",
+        "reason": {
+          "payout_cadence_unknown": "Not enough Bosta payouts yet to know your payout day.",
+          "payout_lag_unknown": "Not enough paid deliveries yet to know how long payouts take."
+        }
+      }
+    },
+    "alerts": {
+      "none": "Nothing needs attention right now.",
+      "view": "View →",
+      "stuck_with_bosta": {
+        "title_one": "{{count}} shipment stuck with Bosta for more than 7 days",
+        "title_other": "{{count}} shipments stuck with Bosta for more than 7 days",
+        "detail": "{{amount}} in COD, no update from Bosta"
+      },
+      "never_picked_up": {
+        "title_one": "{{count}} shipment booked but never picked up (7+ days)",
+        "title_other": "{{count}} shipments booked but never picked up (7+ days)",
+        "detail": "{{amount}} in COD waiting for a pickup"
+      },
+      "delivered_not_paid": {
+        "title_one": "{{count}} delivered order not paid yet",
+        "title_other": "{{count}} delivered orders not paid yet",
+        "detail": "{{amount}} collected by Bosta, not in a payout"
+      },
+      "low_success_governorates": {
+        "title_one": "{{count}} governorate delivers under 65%",
+        "title_other": "{{count}} governorates deliver under 65%"
+      },
+      "sells_out_soon": {
+        "title_one": "{{count}} best seller sells out within 4 days",
+        "title_other": "{{count}} best sellers sell out within 4 days"
+      }
+    }
   }
 }
