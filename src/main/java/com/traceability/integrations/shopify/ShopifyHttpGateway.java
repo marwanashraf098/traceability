@@ -1044,6 +1044,117 @@ class ShopifyHttpGateway implements ShopifyGateway {
         }
     }
 
+    private static final String TRANSFER_OUT_MUTATION = """
+            mutation TransferOut($input: InventoryAdjustQuantitiesInput!, $idempotencyKey: String!) {
+              inventoryAdjustQuantities(input: $input) @idempotent(key: $idempotencyKey) {
+                inventoryAdjustmentGroup { createdAt }
+                userErrors { field message code }
+              }
+            }
+            """;
+
+    /**
+     * Issue 2 — the fifth named decrement (transfer send in 'remove' mode). Deliberately
+     * self-contained — see {@link #pushStockTakeWriteOff}'s javadoc for why this does not call the
+     * shared executeGraphQL() helper (its silent retry on connection/read timeout would defeat
+     * single-attempt-outcome classification). No code is shared with any other decrement method.
+     */
+    @Override
+    public void pushTransferOut(String shopDomain, String token, List<InventoryDelta> deltas,
+                                String locationGid, String referenceDocumentUri, String idempotencyKey) {
+        if (deltas == null || deltas.isEmpty()) {
+            throw new IllegalArgumentException("pushTransferOut requires at least one delta");
+        }
+        for (InventoryDelta d : deltas) {
+            if (d.negativeDelta() >= 0) {
+                throw new IllegalArgumentException(
+                    "pushTransferOut requires a negative delta per variant; got "
+                    + d.negativeDelta() + " for " + d.inventoryItemGid());
+            }
+        }
+
+        ArrayNode changes = mapper.createArrayNode();
+        for (InventoryDelta d : deltas) {
+            ObjectNode change = mapper.createObjectNode()
+                .put("delta", d.negativeDelta())
+                .put("inventoryItemId", d.inventoryItemGid())
+                .put("locationId", locationGid);
+            change.putNull("changeFromQuantity");
+            changes.add(change);
+        }
+        ObjectNode input = mapper.createObjectNode()
+            .put("reason", "movement_created")
+            .put("name", "available")
+            .put("referenceDocumentUri", referenceDocumentUri);
+        input.set("changes", changes);
+        ObjectNode vars = mapper.createObjectNode();
+        vars.set("input", input);
+        vars.put("idempotencyKey", idempotencyKey);
+
+        String url = "https://" + shopDomain + "/admin/api/" + apiVersion + "/graphql.json";
+        ObjectNode body = mapper.createObjectNode()
+            .put("query", TRANSFER_OUT_MUTATION).set("variables", vars);
+
+        JsonNode response;
+        try {
+            response = restClient.post()
+                .uri(url)
+                .header("X-Shopify-Access-Token", token)
+                .header("Content-Type", "application/json")
+                .body(body)
+                .retrieve()
+                .body(JsonNode.class);
+        } catch (HttpClientErrorException e) {
+            throw new ShopifyException(
+                "Transfer out HTTP " + e.getStatusCode().value()
+                + " for " + shopDomain + ": " + e.getResponseBodyAsString(), e);
+        } catch (HttpServerErrorException e) {
+            // Stricter than the stock-take push (approved 2026-10-09): a 5xx does not prove nothing
+            // was applied — AMBIGUOUS, never re-sent automatically.
+            throw new ShopifyAmbiguousException(
+                "Transfer out HTTP " + e.getStatusCode().value() + " from " + shopDomain + " — not confirmed", e);
+        } catch (ResourceAccessException e) {
+            // Timeout, connection refused / reset — genuinely unknown.
+            throw new ShopifyAmbiguousException(
+                "Transfer out: no confirmed response from " + shopDomain, e);
+        } catch (RestClientException e) {
+            // Anything else the client couldn't classify (unreadable body, unknown status) — unknown.
+            throw new ShopifyAmbiguousException(
+                "Transfer out: unclassifiable response from " + shopDomain + ": " + e.getMessage(), e);
+        }
+        if (response == null) {
+            throw new ShopifyAmbiguousException("Transfer out: null response body from " + shopDomain);
+        }
+        JsonNode errors = response.get("errors");
+        if (errors != null && errors.isArray() && errors.size() > 0) {
+            // THROTTLED-only with no data: Shopify did not execute the request — DEFINITE (approved
+            // 2026-10-09), the sweep may re-send within its attempt limit.
+            boolean onlyThrottled = true;
+            for (JsonNode err : errors) {
+                if (!"THROTTLED".equals(err.path("extensions").path("code").asText(""))) { onlyThrottled = false; break; }
+            }
+            JsonNode throttledData = response.get("data");
+            if (onlyThrottled && (throttledData == null || throttledData.isNull())) {
+                throw new ShopifyException("Transfer out GraphQL error (THROTTLED): not executed by Shopify");
+            }
+            // Any other top-level GraphQL error (or THROTTLED mixed with another error / with data) is
+            // neither a 4xx nor a userError — AMBIGUOUS: a person checks Shopify, nothing re-sends.
+            String code = errors.get(0).path("extensions").path("code").asText("");
+            throw new ShopifyAmbiguousException("Transfer out GraphQL error"
+                + (code.isBlank() ? "" : " (" + code + ")") + ": "
+                + errors.get(0).path("message").asText() + " — not confirmed");
+        }
+        JsonNode data = response.get("data");
+        if (data == null) {
+            throw new ShopifyAmbiguousException("Transfer out: response had no data field from " + shopDomain);
+        }
+        JsonNode userErrors = data.path("inventoryAdjustQuantities").path("userErrors");
+        if (userErrors.isArray() && !userErrors.isEmpty()) {
+            String msg = userErrors.get(0).path("message").asText("unknown error");
+            throw new ShopifyException("Transfer out failed: " + msg);
+        }
+    }
+
     private static final String VOID_CORRECTION_MUTATION = """
             mutation VoidCorrection($input: InventoryAdjustQuantitiesInput!, $idempotencyKey: String!) {
               inventoryAdjustQuantities(input: $input) @idempotent(key: $idempotencyKey) {

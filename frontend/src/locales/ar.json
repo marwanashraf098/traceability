@@ -2447,6 +2447,13 @@
       "pending": "قيد الانتظار",
       "linked": "مرتبط",
       "error": "خطأ"
+    },
+    "syncMode": {
+      "label": "أثناء وجود المخزون هنا",
+      "remove": "إزالته من Shopify",
+      "leave": "ترك Shopify دون تغيير",
+      "help": "عند إرسال مخزون إلى موقع مضبوط على «إزالته من Shopify»، يخفّض Traced مستودعك الرئيسي في Shopify ويعيده عند رجوع المخزون.",
+      "mainNa": "يُحتسب دائمًا في Shopify"
     }
   },
   "shopifyInventory": {

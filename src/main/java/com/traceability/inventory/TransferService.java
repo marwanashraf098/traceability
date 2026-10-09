@@ -70,13 +70,20 @@ public class TransferService {
     private final InventoryLedger ledger;
     private final ObjectMapper    mapper;
     private final LabelService    labelService;
+    /** Issue 2: the send-time Shopify decrement (claim in the send transaction). */
+    private final TransferShopifySync shopifySync;
+    /** Issue 2: the +1 when a piece comes back to the main warehouse. */
+    private final ShopifyInventoryService shopifyInventory;
 
     public TransferService(JdbcTemplate jdbc, InventoryLedger ledger, ObjectMapper mapper,
-                           LabelService labelService) {
+                           LabelService labelService, TransferShopifySync shopifySync,
+                           ShopifyInventoryService shopifyInventory) {
         this.jdbc         = jdbc;
         this.ledger       = ledger;
         this.mapper       = mapper;
         this.labelService = labelService;
+        this.shopifySync  = shopifySync;
+        this.shopifyInventory = shopifyInventory;
     }
 
     // ── Create ────────────────────────────────────────────────────────────────
@@ -259,7 +266,7 @@ public class TransferService {
         // 2. Look up piece by barcode — same triple-match as FulfillService.scan()
         //    (new-format raw ULID, or old-format "PC-<ULID>", or short_code).
         List<Map<String, Object>> pieceRows = jdbc.queryForList(
-            "SELECT p.id, p.variant_id, p.status FROM pieces p " +
+            "SELECT p.id, p.variant_id, p.status, p.current_location_id FROM pieces p " +
             "WHERE (p.barcode = ? OR p.id = ? OR p.short_code = ?) AND p.tenant_id = ?",
             barcode, barcode, barcode, tenantId);
         if (pieceRows.isEmpty()) {
@@ -271,6 +278,8 @@ public class TransferService {
         String pieceId   = (String) piece.get("id");
         UUID   variantId = (UUID)   piece.get("variant_id");
         String status    = (String) piece.get("status");
+        // Issue 2: where the piece leaves FROM (only pieces leaving the main warehouse are decremented).
+        UUID   fromLocationId = (UUID) piece.get("current_location_id");
 
         // 3. WRONG_STATUS: piece must be available.
         if (!"available".equals(status)) {
@@ -296,9 +305,9 @@ public class TransferService {
         //    with a unique-constraint violation; nothing else has been mutated yet.
         try {
             jdbc.update(
-                "INSERT INTO transfer_pieces (id, tenant_id, transfer_id, line_id, piece_id) " +
-                "VALUES (gen_random_uuid(), ?, ?, ?, ?)",
-                tenantId, transferId, lineId, pieceId);
+                "INSERT INTO transfer_pieces (id, tenant_id, transfer_id, line_id, piece_id, from_location_id) " +
+                "VALUES (gen_random_uuid(), ?, ?, ?, ?, ?)",
+                tenantId, transferId, lineId, pieceId, fromLocationId);
         } catch (DuplicateKeyException e) {
             // No further DB access on this path: Postgres aborts the transaction on the
             // violation above, and COMMIT on an aborted transaction is a silent, no-error
@@ -442,9 +451,9 @@ public class TransferService {
         //    another @Transactional bean).
         try {
             jdbc.update(
-                "INSERT INTO transfer_pieces (id, tenant_id, transfer_id, line_id, piece_id) " +
-                "VALUES (gen_random_uuid(), ?, ?, ?, ?)",
-                tenantId, transferId, lineId, pieceId);
+                "INSERT INTO transfer_pieces (id, tenant_id, transfer_id, line_id, piece_id, from_location_id) " +
+                "VALUES (gen_random_uuid(), ?, ?, ?, ?, ?)",
+                tenantId, transferId, lineId, pieceId, pieceLocationId);
         } catch (DuplicateKeyException e) {
             return ScanOutResult.rejected("ALREADY_ON_TRANSFER",
                 "Piece was claimed by a concurrent scan",
@@ -526,6 +535,9 @@ public class TransferService {
         if (rows == 0) {
             throw statusRaceConflict();
         }
+        // Issue 2: the pieces have left — snapshot the mode, claim the main-warehouse decrement
+        // (pushed after this transaction commits).
+        shopifySync.claimSend(tenantId, transferId);
     }
 
     // ── Cancel ───────────────────────────────────────────────────────────────
@@ -685,6 +697,14 @@ public class TransferService {
         // 5. Physical unit is back at the warehouse either way — move current_location_id.
         jdbc.update("UPDATE pieces SET current_location_id = ? WHERE id = ?",
             fulfillmentLocationId, pieceId);
+
+        // Issue 2: back sellable at the main warehouse → +1 there when its departure had left
+        // Shopify's count (decided by ShopifyInventoryService.onTransferReturn). Condemned → no write:
+        // the unit already left Shopify at send and isn't sellable.
+        if (good) {
+            ShopifyInventoryService.afterCommit(() ->
+                shopifyInventory.onTransferReturn(tenantId, pieceId, transferId, fulfillmentLocationId));
+        }
 
         // 6. Bump the matching line counter.
         if (good) {
@@ -989,6 +1009,8 @@ public class TransferService {
                 "تغيرت حالة عملية النقل في نفس الوقت — يرجى إعادة التحميل والمحاولة مرة أخرى",
                 HttpStatus.CONFLICT);
         }
+        // Issue 2: a permanent move is "sent" when it closes — same claim as markSent.
+        shopifySync.claimSend(tenantId, transferId);
     }
 
     private String relocatedOutMeta(UUID transferId) {

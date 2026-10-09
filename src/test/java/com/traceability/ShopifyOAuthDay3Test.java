@@ -519,7 +519,7 @@ class ShopifyOAuthDay3Test {
 
         // First run
         assertThatNoException().isThrownBy(() -> webhooksJob.run(storeId, tenantId));
-        verify(shopifyGateway, times(6)).registerWebhook(eq(shopDomain), anyString(), anyString(), anyString());
+        verify(shopifyGateway, times(8)).registerWebhook(eq(shopDomain), anyString(), anyString(), anyString());
 
         reset(shopifyGateway);
 
