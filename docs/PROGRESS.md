@@ -4,6 +4,61 @@
 
 ## Current state
 
+**Analytics slice 10 — Shopify cost + fresh stock READ, profit metrics (2026-10-09, branch `analytics/s10-cost`, merged to
+main; NOT deployed). Migration V158** (renumbered V157 → V158 at merge: transfers took V157; MigrationSmokeTest 157,
+NotTracedBackfillTest 102).
+- **Read pass (`ShopifyInventoryReader`, analytics package, READ ONLY):** per-field probe (unitCost, inventoryLevels) →
+  bulk export (`bulkOperationRunQuery`, the app's only bulk-op user) → paged fallback when the export can't start / fails /
+  times out / can't be downloaded. Only `executeGraphQLPublic`; no gateway methods added. Access denied / errors are a
+  per-field status on `analytics_inventory_sync` (`cost_status` / `stock_status`: never | ok | access_denied | error) —
+  never thrown, no retry loop; a denied field isn't read (costed stays 0, stock trust keeps its previous source).
+- **Cost:** EGP only (else `variants.shopify_cost_flag = 'non_egp:<code>'`, nothing stored); `cost_source` 'shopify' |
+  'manual'; a cost with no source counts as manual and is NEVER overwritten (pass and webhook).
+- **Stock:** `variant_shopify_levels` (per location, RLS), `variants.stock_available_shopify` (all locations),
+  `stock_available_shopify_traced` (Traced Main Warehouse), `stock_inventory_item_id` (read-side item id, indexed — the
+  write path's `shopify_inventory_item_id` is NULL on 6,130 of 10,784 prod variants). Stock trust compares Traced pieces
+  at the main warehouse with `stock_available_shopify_traced` once a variant is synced (V153 figure until then).
+- **Webhooks:** `inventory_items/update` + `inventory_levels/update` (RegisterShopifyWebhooksJob TOPICS, now 8,
+  `TOPICS_VERSION = 1`) → `AnalyticsInventoryWebhookHandler`, read columns only, one transaction per webhook.
+- **Deploy automation (no manual steps):** (a) `ShopifyWebhookTopicsBackfill` — at startup, when a connected store's
+  `stores.webhook_topics_version` < TOPICS_VERSION, ONE job adds the missing topics store by store (ADDITIVE, never
+  deletes a subscription; one log line per store: added / already present / failed); stamped only when nothing failed,
+  so later restarts skip it (`run()` stamps too on a full registration). Kill switch `shopify.webhook-topics-backfill.enabled`.
+  (b) `AnalyticsInventorySyncJob.firstPass` — scheduled ~10 min after startup (`analytics.inventory-sync.startup-delay-min`)
+  for tenants that never finished a pass, one at a time; then the daily 05:15 Cairo pass. One INFO line per store from
+  every pass: `Inventory sync <trigger> for <shop>: cost <status>, stock <status>, N variants read (<mode>), N costed,
+  N non-EGP, N ms[ — error]` — **this is how to verify access in prod after deploy.** Kill switch
+  `ANALYTICS_INVENTORY_SYNC_ENABLED`. Owner "run now": `POST /api/v1/analytics/inventory-sync/run` (once per 10 min,
+  429 RATE_LIMITED) + `GET …/status`.
+- **Profit (owner only):** `/api/v1/analytics/profit/summary`, `/by-product-type`, `/skus?sort=trueNet|realized|margin` —
+  gross margin, margin by product type, true net per SKU, contribution profit (costed lines only: realized − COGS −
+  their fees, fees split by line value); coverage (costed / total variants, units, revenue) always returned; cost
+  figures null when nothing is costed. Stock value / dead-stock cash at cost read the same `unit_cost`.
+- **Bug caught before merge:** the webhook handler first ran its SQL outside a transaction — the tenant GUC is set only
+  when a transaction begins, so under app_user + RLS every inventory webhook would have matched nothing, silently. Fixed
+  (one transaction each) and covered by an app_user test; the earlier handler test ran as postgres and couldn't see it.
+- **inventory_levels/update volume:** fires on EVERY Shopify stock change — orders committing stock, merchant edits,
+  other apps, and our own increments / decrements. Prod today (30 days): ~29k Shopify webhooks in total, 6,286 order
+  lines, 50 Traced inventory writes; expect inventory_levels/update to add at least one per order line plus every
+  manual/app stock change (a merchant bulk stock import or a stock-sync app can send thousands in minutes). Handler cost:
+  no Shopify call; one indexed variant lookup (gid fallback for variants the pass hasn't seen), one single-row upsert /
+  delete on `variant_shopify_levels`, one single-row UPDATE of the variant — all in one short transaction. It rides the
+  existing pipeline (store event row → one JobRunr job, 8 shared workers, FIFO, no priority in JobRunr OSS): there is no
+  separate queue, so a burst sits in the same queue as order webhooks — each job is milliseconds, so a burst of N delays
+  order webhooks by roughly N × a few ms ÷ 8 workers (1,000 → about a second or two plus the 5 s poll). Each event also
+  keeps a `shopify_webhook_events` row; there is no retention on that table today (31,862 rows) — worth a purge job
+  if the inventory topics grow it fast. Not changed in this slice.
+- **App Store listing — data-use change:** Traced now subscribes to `inventory_items/update` and `inventory_levels/update`
+  and reads each variant's unit cost and per-location available stock, for the merchant's own analytics (margin, stock
+  value, stock trust). Covered by `read_inventory`, implied by the existing `write_inventory` scope — no new scope.
+  No customer data involved. Update the listing's data-use section before the next App Store submission.
+- **Tests:** `AnalyticsInventorySyncTest` (12), `ShopifyInventoryReadGuardTest` (3: no mutation except
+  bulkOperationRunQuery, no write words, only executeGraphQLPublic, nothing outside analytics references the read path or
+  its columns), RlsCoverageTest (+4 GET endpoints, seeded test). Revert-checked 17/17 (manual overwrite ×2, non-EGP stored,
+  webhook before currency known, run throws, no rate limit, reader mutation, write path reads column, fees not split,
+  COGS on all units, stale trust, handler without transaction, no read-side lookup, backfill re-registers present topics,
+  stamp despite failure, backfill via the deleting run(), first pass on every restart). Existing test edited (approved):
+  ShopifyOAuthDay3Test registerWebhook times(6) → times(8).
 **Issue 2 — transfers sync with Shopify (2026-10-08, branch `feat/transfer-shopify-sync` off main 9b648a6; NOT merged,
 NOT deployed). Migration V157. Repair script written + dry-run only (NOT executed).** Approved: model (b) sync by custody;
 a FIFTH named decrement `pushTransferOut`; per-location mode 'remove' (default) | 'leave'; no mirroring, no new Shopify
