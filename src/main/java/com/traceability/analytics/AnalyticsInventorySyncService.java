@@ -58,6 +58,32 @@ public class AnalyticsInventorySyncService {
     /** One pass for the current tenant. Never throws. */
     public void run(String trigger) {
         UUID tid = TenantContext.require();
+        long started = System.nanoTime();
+        Outcome out = new Outcome();
+        try {
+            runInner(tid, trigger, out);
+        } finally {
+            try {
+                Long costed = tx.execute(s -> jdbc.queryForObject(
+                    "SELECT COUNT(*) FROM variants WHERE tenant_id = ? AND unit_cost IS NOT NULL", Long.class, tid));
+                out.costed = costed == null ? 0 : costed;
+            } catch (RuntimeException ignored) {
+                // the count is for the log line only
+            }
+            log.info("Inventory sync {} for {}: cost {}, stock {}, {} variants read ({}), {} costed, {} non-EGP, {} ms{}",
+                trigger, out.shop == null ? tid : out.shop, out.costStatus, out.stockStatus, out.variantsRead,
+                out.mode == null ? "nothing read" : out.mode, out.costed, out.nonEgp,
+                (System.nanoTime() - started) / 1_000_000, out.error == null ? "" : " — " + out.error);
+        }
+    }
+
+    /** What one pass did, for its single log line. */
+    static final class Outcome {
+        String shop, mode, error, costStatus = "never", stockStatus = "never";
+        long variantsRead, costed, nonEgp;
+    }
+
+    private void runInner(UUID tid, String trigger, Outcome out) {
         String shop = null;
         String costStatus = "error", stockStatus = "error";
         try {
@@ -66,10 +92,12 @@ public class AnalyticsInventorySyncService {
                 rs -> rs.next() ? Map.<String, Object>of("id", rs.getObject("id", UUID.class), "shop", rs.getString("shop_domain")) : null,
                 tid));
             if (store == null) {
-                finish(tid, trigger, null, 0, 0, 0, 0, 0, "never", "never", null, "no connected Shopify store");
+                out.error = "no connected Shopify store";
+                finish(tid, trigger, null, 0, 0, 0, 0, 0, "never", "never", null, out.error);
                 return;
             }
             shop = (String) store.get("shop");
+            out.shop = shop;
             tx.executeWithoutResult(s -> jdbc.update(
                 "INSERT INTO analytics_inventory_sync (tenant_id, started_at, trigger_kind, updated_at) VALUES (?, now(), ?, now()) " +
                 "ON CONFLICT (tenant_id) DO UPDATE SET started_at = now(), trigger_kind = EXCLUDED.trigger_kind, updated_at = now()",
@@ -79,9 +107,10 @@ public class AnalyticsInventorySyncService {
             ShopifyInventoryReader.Probe probe = reader.probe(shop, token);
             costStatus = status(probe.cost());
             stockStatus = status(probe.stock());
+            out.costStatus = costStatus;
+            out.stockStatus = stockStatus;
+            out.error = probe.error();
             if (probe.cost() != ShopifyInventoryReader.FieldStatus.OK && probe.stock() != ShopifyInventoryReader.FieldStatus.OK) {
-                log.warn("Inventory sync {}: Shopify allowed neither cost ({}) nor stock ({}) for {} — {}", trigger, costStatus,
-                    stockStatus, shop, probe.error());
                 finish(tid, trigger, null, 0, 0, 0, 0, 0, costStatus, stockStatus, probe.currency(), probe.error());
                 return;
             }
@@ -94,15 +123,18 @@ public class AnalyticsInventorySyncService {
             long[] counts = tx.execute(s -> apply(tid, read.items(), readCost, readStock));
             finish(tid, trigger, read.mode(), read.items().size(), counts[0], counts[1], counts[2], counts[3],
                 costStatus, stockStatus, shopCurrency, probe.error());
-            log.info("Inventory sync {} for {}: {} variants ({}), cost {} (written {}, manual kept {}, non-EGP {}), stock {} (written {})",
-                trigger, shop, read.items().size(), read.mode(), costStatus, counts[0], counts[1], counts[2], stockStatus, counts[3]);
+            out.mode = read.mode();
+            out.variantsRead = read.items().size();
+            out.nonEgp = counts[2];
         } catch (Throwable e) {
             String msg = ShopifyInventoryReader.message(e);
-            log.warn("Inventory sync {} failed for {}: {}", trigger, shop == null ? tid : shop, msg);
+            out.error = msg;
+            String cs = "ok".equals(costStatus) || "access_denied".equals(costStatus) ? costStatus : "error";
+            String ss = "ok".equals(stockStatus) || "access_denied".equals(stockStatus) ? stockStatus : "error";
+            out.costStatus = cs;
+            out.stockStatus = ss;
             try {
-                finish(tid, trigger, null, 0, 0, 0, 0, 0,
-                    "ok".equals(costStatus) || "access_denied".equals(costStatus) ? costStatus : "error",
-                    "ok".equals(stockStatus) || "access_denied".equals(stockStatus) ? stockStatus : "error", null, msg);
+                finish(tid, trigger, null, 0, 0, 0, 0, 0, cs, ss, null, msg);
             } catch (Throwable ignored) {
                 // the status write itself failed — nothing more to do; never throw into the caller
             }
@@ -129,11 +161,12 @@ public class AnalyticsInventorySyncService {
             rs -> rs.next() ? rs.getString(1) : null, tid));
         long written = 0, manual = 0, nonEgp = 0, stock = 0;
         List<Object[]> costRows = new ArrayList<>(), flagRows = new ArrayList<>(), stockRows = new ArrayList<>(), levelRows = new ArrayList<>();
-        List<Object[]> levelDeletes = new ArrayList<>();
+        List<Object[]> levelDeletes = new ArrayList<>(), itemRows = new ArrayList<>();
         for (ShopifyInventoryReader.Item it : items) {
             Object[] v = variants.get(it.variantId());
             if (v == null) continue;
             UUID vid = (UUID) v[0];
+            if (it.inventoryItemId() != null) itemRows.add(new Object[] {it.inventoryItemId(), vid, it.inventoryItemId()});
             if (readCost) {
                 boolean isManual = v[1] != null && !"shopify".equals(v[2]);
                 if (it.currency() != null && !EGP.equalsIgnoreCase(it.currency())) {
@@ -162,6 +195,8 @@ public class AnalyticsInventorySyncService {
         jdbc.batchUpdate("UPDATE variants SET unit_cost = ?, cost_source = ?, cost_synced_at = now(), shopify_cost_flag = NULL " +
                          "WHERE id = ? AND (cost_source = 'shopify' OR unit_cost IS NULL)", costRows);
         jdbc.batchUpdate("UPDATE variants SET shopify_cost_flag = ?, cost_synced_at = now() WHERE id = ?", flagRows);
+        jdbc.batchUpdate("UPDATE variants SET stock_inventory_item_id = ? WHERE id = ? AND stock_inventory_item_id IS DISTINCT FROM ?",
+                         itemRows);
         jdbc.batchUpdate("DELETE FROM variant_shopify_levels WHERE variant_id = ?", levelDeletes);
         jdbc.batchUpdate("INSERT INTO variant_shopify_levels (tenant_id, variant_id, location_id, available) VALUES (?, ?, ?, ?)", levelRows);
         jdbc.batchUpdate("UPDATE variants SET stock_available_shopify = ?, stock_available_shopify_traced = ?, stock_synced_at = now() " +

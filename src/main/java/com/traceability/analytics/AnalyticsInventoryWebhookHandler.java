@@ -6,6 +6,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.math.BigDecimal;
 import java.util.List;
@@ -18,7 +20,13 @@ import java.util.UUID;
  * overwritten), variant_shopify_levels and the stock_available_shopify* columns. Nothing on the
  * inventory write path reads any of them. Our own Traced writes to Shopify come back here as
  * inventory_levels/update too — harmless: they only refresh the read figure.
- * Runs inside the webhook processor's TenantContext.
+ * Runs inside the webhook processor's TenantContext; each webhook is ONE transaction here (the
+ * tenant GUC is only set when a transaction begins — outside one, RLS would match nothing).
+ *
+ * Cost per webhook (inventory_levels/update fires on EVERY Shopify stock change, our own writes
+ * included): no Shopify call; one indexed variant lookup (tenant_id, stock_inventory_item_id — the
+ * write path's gid column only as a fallback for a variant the read pass hasn't seen yet), one
+ * single-row upsert (or delete) on variant_shopify_levels, one single-row UPDATE of the variant.
  */
 @Component
 public class AnalyticsInventoryWebhookHandler {
@@ -26,14 +34,20 @@ public class AnalyticsInventoryWebhookHandler {
     private static final Logger log = LoggerFactory.getLogger(AnalyticsInventoryWebhookHandler.class);
 
     private final JdbcTemplate jdbc;
+    private final TransactionTemplate tx;
 
-    public AnalyticsInventoryWebhookHandler(JdbcTemplate jdbc) {
+    public AnalyticsInventoryWebhookHandler(JdbcTemplate jdbc, PlatformTransactionManager txm) {
         this.jdbc = jdbc;
+        this.tx = new TransactionTemplate(txm);
     }
 
     /** inventory_levels/update: {inventory_item_id, location_id, available, updated_at}. */
     public void onInventoryLevelUpdate(JsonNode payload) {
         UUID tid = TenantContext.require();
+        tx.executeWithoutResult(s -> levelUpdate(tid, payload));
+    }
+
+    private void levelUpdate(UUID tid, JsonNode payload) {
         String item = ShopifyInventoryReader.numeric(payload.path("inventory_item_id").asText(null));
         String location = ShopifyInventoryReader.numeric(payload.path("location_id").asText(null));
         UUID variant = variantOf(tid, item);
@@ -49,20 +63,26 @@ public class AnalyticsInventoryWebhookHandler {
         } else {
             jdbc.update("DELETE FROM variant_shopify_levels WHERE variant_id = ? AND location_id = ?", variant, location);
         }
-        String traced = ShopifyInventoryReader.numeric(jdbc.query(
-            "SELECT shopify_location_id FROM locations WHERE tenant_id = ? AND is_fulfillment = true LIMIT 1",
-            rs -> rs.next() ? rs.getString(1) : null, tid));
-        jdbc.update("UPDATE variants v SET " +
+        // The Traced Main Warehouse's numeric Shopify location id (null when unlinked → traced figure null).
+        jdbc.update("WITH traced AS (" +
+                    "  SELECT regexp_replace(shopify_location_id, '^.*/', '') AS loc FROM locations " +
+                    "  WHERE tenant_id = ? AND is_fulfillment = true AND shopify_location_id IS NOT NULL LIMIT 1) " +
+                    "UPDATE variants v SET " +
                     "  stock_available_shopify = (SELECT COALESCE(SUM(l.available), 0) FROM variant_shopify_levels l WHERE l.variant_id = v.id), " +
-                    "  stock_available_shopify_traced = CASE WHEN ?::text IS NULL THEN NULL ELSE " +
-                    "      COALESCE((SELECT l.available FROM variant_shopify_levels l WHERE l.variant_id = v.id AND l.location_id = ?), 0) END, " +
+                    "  stock_available_shopify_traced = CASE WHEN (SELECT loc FROM traced) IS NULL THEN NULL ELSE " +
+                    "      COALESCE((SELECT l.available FROM variant_shopify_levels l WHERE l.variant_id = v.id " +
+                    "                AND l.location_id = (SELECT loc FROM traced)), 0) END, " +
                     "  stock_synced_at = now() " +
-                    "WHERE v.id = ? AND v.tenant_id = ?", traced, traced, variant, tid);
+                    "WHERE v.id = ? AND v.tenant_id = ?", tid, variant, tid);
     }
 
     /** inventory_items/update: {id, cost, updated_at, …} — cost has no currency: the shop's, from the last pass. */
     public void onInventoryItemUpdate(JsonNode payload) {
         UUID tid = TenantContext.require();
+        tx.executeWithoutResult(s -> itemUpdate(tid, payload));
+    }
+
+    private void itemUpdate(UUID tid, JsonNode payload) {
         String item = ShopifyInventoryReader.numeric(payload.path("id").asText(null));
         UUID variant = variantOf(tid, item);
         if (variant == null) {
@@ -93,8 +113,11 @@ public class AnalyticsInventoryWebhookHandler {
     private UUID variantOf(UUID tid, String inventoryItemId) {
         if (inventoryItemId == null) return null;
         List<UUID> v = jdbc.queryForList(
-            "SELECT id FROM variants WHERE tenant_id = ? AND regexp_replace(shopify_inventory_item_id, '^.*/', '') = ? LIMIT 1",
-            UUID.class, tid, inventoryItemId);
+            "SELECT id FROM variants WHERE tenant_id = ? AND stock_inventory_item_id = ? LIMIT 1", UUID.class, tid, inventoryItemId);
+        if (v.isEmpty()) {
+            v = jdbc.queryForList("SELECT id FROM variants WHERE tenant_id = ? AND shopify_inventory_item_id = ? LIMIT 1",
+                UUID.class, tid, "gid://shopify/InventoryItem/" + inventoryItemId);
+        }
         return v.isEmpty() ? null : v.get(0);
     }
 }

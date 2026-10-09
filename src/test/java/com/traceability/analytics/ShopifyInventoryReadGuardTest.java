@@ -65,7 +65,7 @@ class ShopifyInventoryReadGuardTest {
                             && !(processor && cls.equals("AnalyticsInventoryWebhookHandler"))) offenders.add(f + " → " + cls);
                 }
                 for (String col : List.of("stock_available_shopify", "stock_available_shopify_traced", "variant_shopify_levels", "analytics_inventory_sync",
-                                          "cost_source", "shopify_cost_flag")) {
+                                          "cost_source", "shopify_cost_flag", "stock_inventory_item_id")) {
                     if (Pattern.compile("\\b" + col + "\\b").matcher(s).find()) offenders.add(f + " → " + col);
                 }
             }

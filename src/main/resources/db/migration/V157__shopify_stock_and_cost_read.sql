@@ -20,7 +20,19 @@ ALTER TABLE variants
     ADD COLUMN stock_synced_at                timestamptz,
     ADD COLUMN cost_source                    text CHECK (cost_source IN ('shopify', 'manual')),
     ADD COLUMN cost_synced_at                 timestamptz,
-    ADD COLUMN shopify_cost_flag              text;
+    ADD COLUMN shopify_cost_flag              text,
+    -- Shopify's numeric inventory item id as the read pass saw it. The two inventory webhooks name
+    -- only the inventory item; shopify_inventory_item_id (V120, the write path's) is NULL on many
+    -- variants, so the webhooks look the variant up by this read-side copy instead.
+    ADD COLUMN stock_inventory_item_id        text;
+CREATE INDEX variants_stock_inventory_item_idx ON variants (tenant_id, stock_inventory_item_id)
+    WHERE stock_inventory_item_id IS NOT NULL;
+
+-- The webhook topic set a store's subscriptions are known to cover (RegisterShopifyWebhooksJob.
+-- TOPICS_VERSION). 0 = registered before slice 10's two inventory topics: the one-time startup
+-- backfill (ShopifyWebhookTopicsBackfill) adds the missing topics — never deleting a subscription —
+-- and stamps the version, so later restarts skip the store.
+ALTER TABLE stores ADD COLUMN webhook_topics_version integer NOT NULL DEFAULT 0;
 
 -- Per location, so an inventory_levels/update (one location) keeps the total right.
 CREATE TABLE variant_shopify_levels (
@@ -44,7 +56,7 @@ CREATE TABLE analytics_inventory_sync (
     requested_at       timestamptz,                -- the owner's last "run now" (rate limit)
     started_at         timestamptz,
     finished_at        timestamptz,
-    trigger_kind       text,                       -- 'manual' | 'daily'
+    trigger_kind       text,                       -- 'manual' | 'daily' | 'startup'
     mode               text,                       -- 'bulk' | 'paged'
     variants_seen      integer     NOT NULL DEFAULT 0,
     cost_written       integer     NOT NULL DEFAULT 0,

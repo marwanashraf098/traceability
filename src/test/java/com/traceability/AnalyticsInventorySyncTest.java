@@ -2,6 +2,7 @@ package com.traceability;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.traceability.analytics.AnalyticsInventorySyncJob;
 import com.traceability.analytics.AnalyticsInventorySyncService;
 import com.traceability.analytics.AnalyticsInventoryWebhookHandler;
 import com.traceability.analytics.ShopifyInventoryReader;
@@ -10,6 +11,7 @@ import com.traceability.integrations.bosta.ShipmentSettlement;
 import com.traceability.integrations.shopify.ShopifyException;
 import com.traceability.integrations.shopify.ShopifyGateway;
 import com.traceability.integrations.shopify.ShopifyTokenProvider;
+import com.traceability.integrations.shopify.ShopifyWebhookTopicsBackfill;
 import com.traceability.tenancy.TenantAwareDataSource;
 import com.traceability.tenancy.TenantContext;
 import org.junit.jupiter.api.AfterEach;
@@ -42,7 +44,7 @@ import java.util.concurrent.atomic.AtomicLong;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.mockito.ArgumentMatchers.*;
-import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.*;
 
 /**
  * Analytics slice 10 — the Shopify cost + stock READ pass (probe → bulk, else paged), the cost rules
@@ -71,7 +73,7 @@ class AnalyticsInventorySyncTest {
         r.add("spring.flyway.user",         POSTGRES::getUsername);
         r.add("spring.flyway.password",     POSTGRES::getPassword);
         r.add("analytics.settlement.refresh-enabled", () -> "false");
-        r.add("analytics.inventory-sync.enabled", () -> "false");
+        r.add("analytics.inventory-sync.enabled", () -> "true");
         r.add("analytics.inventory-sync.bulk-poll-ms", () -> "5");
         r.add("analytics.inventory-sync.bulk-timeout-s", () -> "3");
     }
@@ -85,6 +87,8 @@ class AnalyticsInventorySyncTest {
     @Autowired ObjectMapper mapper;
     @Autowired AnalyticsInventorySyncService sync;
     @Autowired AnalyticsInventoryWebhookHandler hooks;
+    @Autowired AnalyticsInventorySyncJob syncJob;
+    @Autowired ShopifyWebhookTopicsBackfill topicsBackfill;
     @MockBean ShopifyGateway gateway;
     @MockBean ShopifyTokenProvider tokens;
     @MockBean ShopifyInventoryReader.BulkDownloader downloader;
@@ -496,5 +500,78 @@ class AnalyticsInventorySyncTest {
         assertThat((Long) tx.execute(s -> app.queryForObject("SELECT COUNT(*) FROM variant_shopify_levels", Long.class))).isEqualTo(2);
         TenantContext.clear();
         assertThat((Long) tx.execute(s -> app.queryForObject("SELECT COUNT(*) FROM analytics_inventory_sync", Long.class))).isZero();
+    }
+    // ── webhooks under app_user + RLS, item lookup, first pass, topic backfill ─────
+
+    @Test
+    void webhooks_underAppUserRls_writeOwnTenantOnly_byReadSideItemId() throws Exception {
+        T a = new T("S10-HookRlsA");
+        T b = new T("S10-HookRlsB");
+        V va = a.variant("A", "100", null, null);
+        jdbc.update("UPDATE variants SET shopify_inventory_item_id = NULL WHERE id = ?", va.id());   // the write path never set it
+        shopify.jsonl.addAll(bulkLines(va, "40.00", "EGP", 5, 0));
+        a.run("manual");                                                                              // stores the read-side item id
+        assertThat(jdbc.queryForObject("SELECT stock_inventory_item_id FROM variants WHERE id = ?", String.class, va.id()))
+            .isEqualTo(va.itemId());
+
+        TenantAwareDataSource ds = new TenantAwareDataSource(new DriverManagerDataSource(POSTGRES.getJdbcUrl(), "app_user", "testpw"));
+        AnalyticsInventoryWebhookHandler appHooks =
+            new AnalyticsInventoryWebhookHandler(new JdbcTemplate(ds), new DataSourceTransactionManager(ds));
+        JsonNode level = json("{\"inventory_item_id\":" + va.itemId() + ",\"location_id\":5,\"available\":11}");
+        TenantContext.runAs(b.id, () -> appHooks.onInventoryLevelUpdate(level));                    // another tenant: no row
+        assertThat(a.variantRow(va)).containsEntry("traced", 5);
+        TenantContext.runAs(a.id, () -> appHooks.onInventoryLevelUpdate(level));
+        assertThat(a.variantRow(va)).containsEntry("traced", 11).containsEntry("total", 11);
+        JsonNode item = json("{\"id\":" + va.itemId() + ",\"cost\":\"33.00\"}");
+        TenantContext.runAs(a.id, () -> appHooks.onInventoryItemUpdate(item));
+        assertThat((BigDecimal) a.variantRow(va).get("unit_cost")).isEqualByComparingTo("33.00");
+    }
+
+    @Test
+    void firstPass_runsTenantsThatNeverSynced_once() {
+        T t = new T("S10-First");
+        jdbc.update("UPDATE stores SET import_status = 'completed' WHERE id = ?", t.store);
+        V a = t.variant("A", "100", null, null);
+        shopify.jsonl.addAll(bulkLines(a, "40.00", "EGP", 2, 0));
+        syncJob.firstPass();
+        assertThat(t.status()).containsEntry("trigger_kind", "startup").containsEntry("cost_status", "ok");
+        Object finished = t.status().get("finished_at");
+        int runs = shopify.bulkRuns.get();
+        syncJob.firstPass();                                                                          // a restart: nothing new
+        assertThat(t.status().get("finished_at")).isEqualTo(finished);
+        assertThat(shopify.bulkRuns.get()).isEqualTo(runs);
+    }
+
+    @Test
+    void topicBackfill_addsOnlyMissingTopics_neverDeletes_stampsOnce() {
+        T t = new T("S10-Topics");
+        jdbc.update("UPDATE stores SET status = 'disconnected' WHERE tenant_id <> ? AND webhook_topics_version = 0 " +
+                    "AND shop_domain LIKE 's10-%'", t.id);                                            // only this test's store is behind
+        String base = "http://localhost:8080/webhooks/shopify/";
+        List<ShopifyGateway.WebhookSubscription> existing = new ArrayList<>();
+        for (String topic : List.of("orders/create", "orders/updated", "orders/cancelled", "products/create",
+                                    "products/update", "app/uninstalled")) {
+            existing.add(new ShopifyGateway.WebhookSubscription("gid://x/" + topic, topic.replace("/", "_").toUpperCase(), base + topic));
+        }
+        when(gateway.listWebhookSubscriptions(anyString(), anyString())).thenReturn(existing);
+        doThrow(new ShopifyException("boom")).when(gateway)
+            .registerWebhook(anyString(), anyString(), eq("inventory_levels/update"), anyString());
+
+        topicsBackfill.runAll();                                                                      // one topic fails: not stamped
+        verify(gateway).registerWebhook(anyString(), anyString(), eq("inventory_items/update"), eq(base + "inventory_items/update"));
+        verify(gateway).registerWebhook(anyString(), anyString(), eq("inventory_levels/update"), anyString());
+        verify(gateway, never()).registerWebhook(anyString(), anyString(), eq("orders/create"), anyString());
+        verify(gateway, never()).deleteWebhookSubscription(anyString(), anyString(), anyString());
+        assertThat(jdbc.queryForObject("SELECT webhook_topics_version FROM stores WHERE id = ?", Integer.class, t.store)).isZero();
+
+        reset(gateway);
+        when(gateway.listWebhookSubscriptions(anyString(), anyString())).thenReturn(existing);
+        topicsBackfill.runAll();                                                                      // next startup: both added
+        verify(gateway, times(2)).registerWebhook(anyString(), anyString(), anyString(), anyString());
+        assertThat(jdbc.queryForObject("SELECT webhook_topics_version FROM stores WHERE id = ?", Integer.class, t.store)).isEqualTo(1);
+
+        reset(gateway);
+        topicsBackfill.runAll();                                                                      // stamped: skipped
+        verifyNoInteractions(gateway);
     }
 }
