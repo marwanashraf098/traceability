@@ -37,8 +37,15 @@ app, multipart 8 MB / 10 MB as the outer ceiling; fonts self-hosted via @fontsou
 - **Tests:** `ImagePipelineTest` (7), `PortalLogoTest` (10), frontend `portalBranding.test.tsx` (6); each guard
   revert-checked RED (orientation, pixel cap, re-encode, alpha, IP throttle, tenant-bound public read, 2 MB cap, replace
   cleanup, composite FK, portal font, PUT font, upload state). Existing frontend suites untouched and green (832/832).
-- **Waiting for approval (existing-test edits, not made):** PortalBrandingTest.publicConfig exact keys (+ "font"),
-  MigrationSmokeTest.TENANT_SCOPED_TABLES (+ portal_assets), RlsCoverageTest (2 new GET endpoints).
+- **Review fixes (2026-10-09, commit 1a9ea66):** logo URL `?v=` = sha256[0:12] (`/config` logoUrl + settings
+  `logo.url` — not settings `logoUrl`, which is the Shopify link the merchant edits); public logo with the current `?v`
+  → `public, max-age=31536000, immutable`, missing / stale `?v` → current bytes, 1 h + ETag (PortalLogoTest c1,
+  revert-checked). Approved test edits made: PortalBrandingTest /config keys + "font"; RlsCoverageTest — public logo
+  EXEMPT (as /config), merchant logo GET/PUT/DELETE COVERED by a seeded cross-tenant test with positive controls
+  (revert-checked: a tenant-blind delete → red); MigrationSmokeTest.TENANT_SCOPED_TABLES + portal_assets. V159 still free.
+- **Suites:** origin/main 4755f0a clean checkout 2,650 run / 1 red (ExchangeBackfillTest); branch 2,669 run / 1 red
+  (ExchangeBackfillTest). Known reds: ExchangeBackfillTest; SimulatedAutoShipmentTest.a5 is an intermittent
+  clock-skew flake (see Gotchas) — red in the branch's first full run, green on main and in the branch rerun.
 
 **Returns portal P1–P4 Step 0 diagnosis (2026-10-09):** no file storage existed; ImageIO had no WebP/HEIC/orientation;
 `return_refunds` is append-only (never copy account details into it); customers/redact matches orders by external_id;
@@ -6981,6 +6988,14 @@ Provision Hetzner VPS, set up Docker Compose (app + Postgres or Supabase connect
 ---
 
 ## Gotchas / environment quirks
+- **SimulatedAutoShipmentTest.a5 is a host-vs-Docker clock race (pre-existing, not a state leak; diagnosed 2026-10-09).**
+  It sets `stores.orders_ingest_from = now()` (the Postgres container's clock), then ingests an order whose
+  `created_at` is the JVM's `Instant.now()`, taken milliseconds later on the Mac. When the Docker VM clock runs a few ms
+  ahead, the "now" order is older than the cutoff and FR-18 skips it — the failing run logged placed_at …37.440657Z vs
+  cutoff …37.443139Z (2.5 ms). Sampled during a full run: Docker clock −42 ms … +28 ms vs the host. Fix (an
+  existing-test edit, needs approval): build the cutoff from the same clock as the payload, or give the "now" order a
+  margin (e.g. `Instant.now().plusSeconds(1)`). Any other test comparing a DB `now()` with a JVM `Instant.now()` at
+  millisecond distance has the same race.
 
 - **`mvn test` rebuilds the frontend bundle into `src/main/resources/static/`** — every backend test run leaves `static/index.html` modified and new hashed `assets/main-*.js/.css` files (old ones deleted). This is how the working tree got its uncommitted bundle before 2026-09-23. After a test run, `git checkout -- src/main/resources/static/` and delete the untracked `main-*` files unless the bundle is being deliberately committed.
 - **Shopify 2026-04 removed `financialStatus` field on Order** — use `displayFinancialStatus` instead. Returns capitalized display values ("Pending", "Paid", "Authorized"). COD inference checks `"pending".equalsIgnoreCase(displayFinancialStatus)` — case-insensitive, so both are safe.
