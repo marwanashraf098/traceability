@@ -25,7 +25,9 @@
     "setupProgress": "Setup progress",
     "setupCount": "Setup {{done}}/{{total}}",
     "analytics": "Analytics",
-    "new": "NEW"
+    "new": "NEW",
+    "openMenu": "Open menu",
+    "closeMenu": "Close menu"
   },
   "overview": {
     "title": "Overview",

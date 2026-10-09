@@ -25,7 +25,9 @@
     "setupProgress": "تقدّم الإعداد",
     "setupCount": "الإعداد {{done}}/{{total}}",
     "analytics": "التحليلات",
-    "new": "جديد"
+    "new": "جديد",
+    "openMenu": "فتح القائمة",
+    "closeMenu": "إغلاق القائمة"
   },
   "overview": {
     "title": "لوحة التحكم",

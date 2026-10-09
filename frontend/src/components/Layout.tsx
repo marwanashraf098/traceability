@@ -5,7 +5,7 @@ import type { LucideIcon } from 'lucide-react'
 import {
   LayoutDashboard, ShoppingBag, Warehouse, Inbox, ClipboardList, PackageCheck,
   Truck, Repeat, Undo2, AlertTriangle, Home, ArrowRightLeft,
-  Settings, LogOut, Globe, Search, ChevronDown, Bell, BarChart3,
+  Settings, LogOut, Globe, Search, ChevronDown, Bell, BarChart3, Menu, X,
 } from 'lucide-react'
 import {
   getRoleFromToken, logoutThisDevice, getMe, getExceptionsCount, getOnboardingStatus,
@@ -99,6 +99,17 @@ function avatarInitials(me: Me | null, role: string | null): string {
 export default function Layout({ children }: { children: ReactNode }) {
   const { t, i18n } = useTranslation()
   const navigate    = useNavigate()
+  const { pathname } = useLocation()
+  // Below 900 px the sidebar is a slide-in menu (the top-bar button opens it); at 900 px and up it
+  // is the fixed rail, unchanged. Any navigation, Escape or the scrim closes the menu.
+  const [navOpen, setNavOpen] = useState(false)
+  useEffect(() => { setNavOpen(false) }, [pathname])
+  useEffect(() => {
+    if (!navOpen) return
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setNavOpen(false) }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [navOpen])
   const [searchQ, setSearchQ]   = useState('')
   const [menuOpen, setMenuOpen] = useState(false)
   const [me, setMe]             = useState<Me | null>(null)
@@ -206,11 +217,27 @@ export default function Layout({ children }: { children: ReactNode }) {
       {/* ── Sidebar ── */}
       {/* Fixed dark rail — pinned to the sidebar-* tokens, never flips with the
           content-area theme (see tailwind.config.js `sidebar` palette). */}
-      <aside className="w-56 flex-shrink-0 bg-sidebar border-e border-sidebar-line flex flex-col">
+      {navOpen && (
+        <div className="min-[900px]:hidden fixed inset-0 bg-black/45 z-overlay" onClick={() => setNavOpen(false)} data-testid="nav-scrim" />
+      )}
+      <aside
+        id="app-nav"
+        data-testid="app-nav"
+        data-open={navOpen}
+        className={cn(
+          'w-56 flex-shrink-0 bg-sidebar border-e border-sidebar-line flex flex-col',
+          'max-[899px]:fixed max-[899px]:inset-y-0 max-[899px]:start-0 max-[899px]:z-modal max-[899px]:shadow-e4',
+          'max-[899px]:transition-transform max-[899px]:duration-200',
+          navOpen ? 'max-[899px]:translate-x-0' : 'max-[899px]:ltr:-translate-x-full max-[899px]:rtl:translate-x-full',
+        )}>
 
         {/* Wordmark */}
-        <div className="flex items-center px-[18px] py-5 border-b border-sidebar-line">
+        <div className="flex items-center justify-between px-[18px] py-5 border-b border-sidebar-line">
           <Logo variant="mark" size={18} className="text-sidebar-active" />
+          <button type="button" onClick={() => setNavOpen(false)} aria-label={t('nav.closeMenu')}
+            className="min-[900px]:hidden text-sidebar-text hover:text-sidebar-active">
+            <X size={18} strokeWidth={2} />
+          </button>
         </div>
 
         {/* Nav — worker gets a reduced task-scoped set (Home + the three worker
@@ -266,8 +293,13 @@ export default function Layout({ children }: { children: ReactNode }) {
       <div className="flex-1 flex flex-col overflow-hidden min-w-0">
 
         {/* Top bar */}
-        <header className="h-14 border-b border-line flex items-center justify-between px-[18px] gap-4 flex-shrink-0">
-          <form onSubmit={handleSearch} className="flex-1 max-w-[360px]">
+        <header className="h-14 border-b border-line flex items-center justify-between px-[18px] max-[899px]:px-3 gap-4 max-[899px]:gap-2.5 flex-shrink-0">
+          <button type="button" onClick={() => setNavOpen(true)} aria-label={t('nav.openMenu')}
+            aria-expanded={navOpen} aria-controls="app-nav" data-testid="nav-menu-button"
+            className="min-[900px]:hidden flex-shrink-0 w-9 h-9 -ms-1 rounded-lg flex items-center justify-center text-primary hover:bg-elevated">
+            <Menu size={20} strokeWidth={1.75} />
+          </button>
+          <form onSubmit={handleSearch} className="flex-1 min-w-0 max-w-[360px]">
             <div className="relative">
               <span className="absolute start-3 top-1/2 -translate-y-1/2 text-muted pointer-events-none">
                 <Search size={14} strokeWidth={2} />
@@ -367,7 +399,7 @@ export default function Layout({ children }: { children: ReactNode }) {
         </header>
 
         {/* Page content */}
-        <main className="flex-1 overflow-y-auto p-6">
+        <main className="flex-1 overflow-y-auto p-6 max-[899px]:p-4">
           {children}
         </main>
       </div>

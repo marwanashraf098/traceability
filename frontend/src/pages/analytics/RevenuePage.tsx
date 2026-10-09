@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { BarChart3, ShoppingBag, Banknote, Percent } from 'lucide-react'
 import {
@@ -108,12 +109,27 @@ function waterfallSteps(s: RevenueSummary, t: (k: string, o?: Record<string, unk
   return steps
 }
 
+/** True below 900 px (the shell's phone layout): full-width charts then draw at the standard width so labels stay legible. */
+function useNarrow(): boolean {
+  const query = '(max-width: 899px)'
+  const [narrow, setNarrow] = useState(() => typeof window !== 'undefined' && !!window.matchMedia?.(query).matches)
+  useEffect(() => {
+    const mq = window.matchMedia?.(query)
+    if (!mq) return
+    const on = () => setNarrow(mq.matches)
+    mq.addEventListener?.('change', on)
+    return () => mq.removeEventListener?.('change', on)
+  }, [])
+  return narrow
+}
+
 export default function RevenuePage() {
   const { t, i18n } = useTranslation()
   const fmt = useFmt()
   const s = useAnalyticsState()
   const merchant = useMerchant()
   const rtl = i18n.language === 'ar'
+  const narrow = useNarrow()
   const pk = JSON.stringify(s.params)
   const ck = JSON.stringify({ ...s.params, c: s.compare })
   const cq = { ...s.params, compare: s.compare }
@@ -199,7 +215,7 @@ export default function RevenuePage() {
             : t('analytics.summary.perDayDesc')}>
           <QueryBlock q={revenue} lines={6} isEmpty={d => d.current.orders === 0} empty={t('analytics.state.noOrders')}>
             {d => (
-              <LineChart rtl={rtl} width={1240} height={280} ariaLabel={t('analytics.summary.perDay')} formatY={fmt.axis} labels={d.current.daily.map(x => fmt.day(x.date))}
+              <LineChart rtl={rtl} width={narrow ? 640 : 1240} height={narrow ? 230 : 280} ariaLabel={t('analytics.summary.perDay')} formatY={fmt.axis} labels={d.current.daily.map(x => fmt.day(x.date))}
                 series={[
                   { name: t('analytics.mode.booked'), color: CHART.booked, values: d.current.daily.map(x => x.booked), format: fmt.money },
                   ...(merchant.noBosta ? [] : [{ name: t('analytics.mode.realized'), color: CHART.realized, values: d.current.daily.map(x => x.realized), area: true, format: fmt.money }]),
