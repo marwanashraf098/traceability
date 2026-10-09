@@ -30,6 +30,8 @@ import org.springframework.security.core.GrantedAuthority;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.web.bind.MissingRequestCookieException;
 import org.springframework.web.bind.MissingRequestHeaderException;
+import org.springframework.web.bind.MissingServletRequestParameterException;
+import org.springframework.beans.TypeMismatchException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.server.ResponseStatusException;
@@ -271,6 +273,22 @@ public class ApiExceptionHandler {
     ResponseEntity<UnreadableBodyBody> handleUnreadableBody(HttpMessageNotReadableException ex) {
         return ResponseEntity.badRequest()
             .body(new UnreadableBodyBody("BAD_REQUEST_BODY", "The request body is missing or not readable"));
+    }
+
+    record BadParamBody(String error, String message) {}
+
+    // A query / path parameter of the wrong type (?limit=abc, a non-UUID id) or a missing required
+    // one is the caller's mistake → 400 with the standard {error, message} body, not the catch-all
+    // 500. The message names the parameter only — never the value the caller sent.
+    @ExceptionHandler(TypeMismatchException.class)
+    ResponseEntity<BadParamBody> handleTypeMismatch(TypeMismatchException ex) {
+        String name = ex.getPropertyName() != null ? ex.getPropertyName() : "parameter";
+        return ResponseEntity.badRequest().body(new BadParamBody("BAD_REQUEST_PARAM", "Parameter '" + name + "' has the wrong type"));
+    }
+
+    @ExceptionHandler(MissingServletRequestParameterException.class)
+    ResponseEntity<BadParamBody> handleMissingParam(MissingServletRequestParameterException ex) {
+        return ResponseEntity.badRequest().body(new BadParamBody("BAD_REQUEST_PARAM", "Parameter '" + ex.getParameterName() + "' is required"));
     }
 
     @ExceptionHandler(ResponseStatusException.class)
