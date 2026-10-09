@@ -12,9 +12,9 @@ export const ANALYTICS_PAGES = [
   { id: 'products',  ready: false },
   { id: 'stock',     ready: false },
   { id: 'delivery',  ready: true },
-  { id: 'money',     ready: false },
+  { id: 'money',     ready: true },
   { id: 'customers', ready: false },
-  { id: 'orders',    ready: false },
+  { id: 'orders',    ready: true },
 ] as const
 
 export type AnalyticsPageId = typeof ANALYTICS_PAGES[number]['id']

@@ -332,7 +332,12 @@ export interface OrdersPage {
   range: Range; asOf: string; page: number; size: number; total: number; counts: Record<string, number>; orders: OrderRow[]
 }
 export interface VariantOrders { variantId: string; asOf: string; orders: OrderRow[] }
-export interface OrderFilters { status?: string; governorate?: string; variantId?: string; q?: string }
+export type OrderSortKey = 'placedAt' | 'total' | 'bostaFees' | 'netToYou' | 'status'
+export interface OrderFilters {
+  status?: string; governorate?: string; variantId?: string; q?: string
+  /** Server-side sort across all pages (default placedAt desc); the export uses the same. */
+  sort?: OrderSortKey; dir?: 'asc' | 'desc'
+}
 
 export interface AlertDetail { key: string; label: string; labelAr: string | null; orders: number; successRate: number | null; failedValue: number | null }
 export interface AlertSku {
@@ -359,7 +364,8 @@ export interface CashForecast {
 }
 
 const orderQuery = (p: PeriodParams & OrderFilters & { page?: number; size?: number }): Query => ({
-  ...periodQuery(p), status: p.status, governorate: p.governorate, variantId: p.variantId, q: p.q, page: p.page, size: p.size,
+  ...periodQuery(p), status: p.status, governorate: p.governorate, variantId: p.variantId, q: p.q,
+  sort: p.sort, dir: p.sort ? p.dir : undefined, page: p.page, size: p.size,
 })
 export const getAnalyticsOrders = (p: PeriodParams & OrderFilters & { page?: number; size?: number }, signal?: AbortSignal) =>
   get<OrdersPage>('/orders', orderQuery(p), signal)

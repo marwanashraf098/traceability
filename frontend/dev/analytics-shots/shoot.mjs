@@ -8,11 +8,14 @@ import { join } from 'node:path'
 
 const out = process.argv[2] ?? 'analytics-shots'
 const path = process.argv[3] ?? '/analytics/summary'
-const page = path.split('/').pop()
+// '/analytics/money?drill=extra' → 'money-drill-extra'
+const page = path.replace(/^\/analytics\//, '').replace(/[^a-z0-9]+/gi, '-').replace(/-+$/, '')
 mkdirSync(out, { recursive: true })
 
 process.env.VITE_ANALYTICS_ENABLED = 'true'
-const server = await createServer({ server: { port: 5199, strictPort: true }, logLevel: 'error' })
+// SHOTS_PORT when 5199 is taken (another worktree's dev server may use it).
+const port = Number(process.env.SHOTS_PORT ?? 5199)
+const server = await createServer({ server: { port, strictPort: true }, logLevel: 'error' })
 await server.listen()
 const browser = await chromium.launch()
 // mobile = the real shell at 390 px; mobile-content = same width with the sidebar hidden, to judge
@@ -26,7 +29,7 @@ try {
         const p = await ctx.newPage()
         const errors = []
         p.on('pageerror', e => errors.push(String(e)))
-        await p.goto(`http://localhost:5199/dev/analytics-shots/harness.html?fixture=${fixture}&lang=${lang}&path=${encodeURIComponent(path)}`)
+        await p.goto(`http://localhost:${port}/dev/analytics-shots/harness.html?fixture=${fixture}&lang=${lang}&path=${encodeURIComponent(path)}`)
         await p.waitForSelector('[data-testid="pipeline"], [data-testid^="analytics-"]', { timeout: 15000 })
         await p.waitForLoadState('networkidle')
         await p.waitForTimeout(400)

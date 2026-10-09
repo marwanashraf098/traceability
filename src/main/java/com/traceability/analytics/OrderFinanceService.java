@@ -198,8 +198,48 @@ public class OrderFinanceService {
 
     // ── /orders ─────────────────────────────────────────────────────────────
 
+    /** The list's sort keys (whitelist); the default is placedAt desc. */
+    public static final List<String> SORTS = List.of("placedAt", "total", "bostaFees", "netToYou", "status");
+    /** Status sorts in this order (money in hand first), not alphabetically. */
+    static final List<String> STATUS_ORDER = List.of("paid", "awaiting_payout", "expected", "overdue", "lost", "refunded", "other_carrier");
+
+    /** A whitelisted sort: one of {@link #SORTS}, ascending or descending. */
+    public record Sort(String key, boolean ascending) {
+        public static final Sort DEFAULT = new Sort("placedAt", false);
+
+        public Sort {
+            if (!SORTS.contains(key)) throw new IllegalArgumentException("unknown sort " + key);
+        }
+    }
+
+    /**
+     * The sort's order: the key (orders with no value — no fee yet, net still pending — always last,
+     * whichever the direction), then the order id in the same direction, so equal keys keep a stable
+     * order across pages. The default (placedAt desc, id desc) is exactly {@link #load}'s order.
+     */
+    static Comparator<OrderRow> comparator(Sort sort) {
+        java.util.function.Function<OrderRow, Comparable> key = switch (sort.key()) {
+            case "total" -> OrderRow::total;
+            case "bostaFees" -> OrderRow::bostaFees;
+            case "netToYou" -> OrderRow::netToYou;
+            case "status" -> r -> STATUS_ORDER.indexOf(r.financialStatus());
+            default -> OrderRow::placedAt;
+        };
+        @SuppressWarnings("unchecked")
+        Comparator<Comparable> natural = (a, b) -> a.compareTo(b);
+        Comparator<Comparable> dir = sort.ascending() ? natural : natural.reversed();
+        Comparator<OrderRow> byKey = Comparator.comparing(key, Comparator.nullsLast(dir));
+        Comparator<OrderRow> byId = Comparator.comparing(r -> r.orderId().toString());
+        return byKey.thenComparing(sort.ascending() ? byId : byId.reversed());
+    }
+
     @Transactional(readOnly = true)
     public OrdersPage orders(AnalyticsPeriod period, Filters f, int page, int size) {
+        return orders(period, f, Sort.DEFAULT, page, size);
+    }
+
+    @Transactional(readOnly = true)
+    public OrdersPage orders(AnalyticsPeriod period, Filters f, Sort sort, int page, int size) {
         Instant now = clock.instant();
         List<Row> rows = load(period, now);
         Map<String, Long> counts = new LinkedHashMap<>();
@@ -210,6 +250,7 @@ public class OrderFinanceService {
             counts.merge(r.out.financialStatus(), 1L, Long::sum);
             if (f.status() == null || f.status().equals(r.out.financialStatus())) matching.add(r.out);
         }
+        matching.sort(comparator(sort));
         int from = Math.min(page * size, matching.size());
         int to = Math.min(from + size, matching.size());
         return new OrdersPage(period.range(), now, page, size, matching.size(), counts,
@@ -226,12 +267,19 @@ public class OrderFinanceService {
      */
     @Transactional
     public Export export(AnalyticsPeriod period, Filters f, UUID actorUserId, int maxRows) {
+        return export(period, f, Sort.DEFAULT, actorUserId, maxRows);
+    }
+
+    /** {@link #export(AnalyticsPeriod, Filters, UUID, int)} in the list's sort (the first maxRows of that order). */
+    @Transactional
+    public Export export(AnalyticsPeriod period, Filters f, Sort sort, UUID actorUserId, int maxRows) {
         List<OrderRow> out = new ArrayList<>();
         for (Row r : load(period, clock.instant())) {
             if (f.matchesExceptStatus(r) && (f.status() == null || f.status().equals(r.out.financialStatus()))) {
                 out.add(r.out);
             }
         }
+        out.sort(comparator(sort));
         boolean truncated = out.size() > maxRows;
         List<OrderRow> rows = truncated ? List.copyOf(out.subList(0, maxRows)) : out;
         Map<String, Object> meta = new LinkedHashMap<>();

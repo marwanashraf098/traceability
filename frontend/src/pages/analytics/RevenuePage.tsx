@@ -58,7 +58,7 @@ function DiscountTable({ codes, automatic }: { codes: DiscountRow[]; automatic: 
   const rows = [...codes, ...(automatic && automatic.orders > 0 ? [automatic] : [])]
   return (
     <div className="overflow-x-auto -mx-[18px] px-[18px]">
-      <table className="w-full text-[13px] whitespace-nowrap" data-testid="discount-codes">
+      <table className="w-full text-[13px] [&_td]:whitespace-nowrap" data-testid="discount-codes">
         <thead>
           <tr className="border-b border-line">
             <th className="tbl-header text-start ps-0">{t('analytics.revenue.codes.code')}</th>
