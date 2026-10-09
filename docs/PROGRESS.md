@@ -4,6 +4,32 @@
 
 ## Current state
 
+**Analytics frontend — group C: Bosta & payouts, Order finances, SKU drawer, drill-downs (2026-10-09, branch
+`analytics/fe-c`, merged to main behind the flag; NOT deployed, flag OFF). One backend change: order sort.**
+- **Bosta & payouts:** fee KPIs (shipping, failed/exchange/return with drill-down, other = total − the four leg kinds,
+  cost per successful delivery, cost per unsuccessful delivery with drill-down, contribution profit + cost coverage),
+  where Bosta costs go (by leg kind + settled fee components), payout check (Date · Reference · Traced orders · Traced
+  amount · Bosta batch total · Status = Paid, or Scheduled when future-dated; when the batch exceeds Traced's amount a
+  neutral info note "Bosta's batch also includes EGP X from shipments not tracked in Traced" — never a difference,
+  "short" or red), stuck shipments (cash at risk, tabs stuck with Bosta / never picked up / delivered not paid; the
+  Summary alerts open their tab via `?view=stuck&kind=`), fee anomalies as V2 (needs contracted Bosta rates).
+- **Drill-downs** `?drill=extra|failed&view=sku|awb` and the **SKU drawer** `?sku=<variantId>` open on any analytics page
+  (mounted once in AnalyticsRoute; Summary's Top SKUs open the drawer; the drill-down hides under the SKU drawer). SKU
+  drawer: KPIs (true net only when costed), units per day, money breakdown, the most-travelled piece's history, recent
+  orders. The stuck-shipments card waits for the Bosta check (no request for no-Bosta merchants).
+- **Order finances:** status chips with counts, debounced search (order, tracking number, customer display name),
+  sortable table + paging, CSV export with the bearer token (X-Export-Truncated noted).
+- **Backend (approved):** `GET /api/v1/analytics/orders` and `/orders/export.csv` take
+  `sort=placedAt|total|bostaFees|netToYou|status&dir=asc|desc` (whitelist, else 400); values missing (no fee, net pending)
+  sort last both ways; order-id tiebreak in the same direction (stable pages); default placedAt desc = the old order;
+  status sorts paid → awaiting payout → expected → overdue → lost → refunded → other carrier. `AnalyticsOrderSortTest` (7,
+  revert-checked 5/5). RlsCoverageTest unchanged.
+- **Tests:** frontend 842 (`analyticsMoneyOrders` 16); `analyticsSummary` r2/r5/b3 now read the built-pages list (approved),
+  so building a page never needs them edited. Backend full suite 2657, 1 failure = the ExchangeBackfillTest baseline.
+- **Harness:** `SHOTS_PORT` when 5199 is taken (the other session's worktree dev servers use it).
+- **Deferred to the post-D follow-up (with the phone menu):** the Orders page accepts `?order=<id>` and Analytics links
+  order numbers to it.
+- **Gotcha:** `mvn test` downloads Node into `frontend/node/` (untracked) — never `git add frontend` wholesale.
 **Analytics frontend — group B: Revenue + Delivery (2026-10-09, branch `analytics/fe-b`, merged to main behind the flag;
 NOT deployed, flag OFF).**
 - **Flag flip command (at flip time, explicit, no .env change):**
