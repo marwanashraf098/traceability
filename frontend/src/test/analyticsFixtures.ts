@@ -313,7 +313,8 @@ function payouts(scale: number): Payouts {
   const p = (date: string, id: string, n: number, amt: number, batch: number | null) => ({ transactionId: id, date, trackedShipments: Math.round(n * scale),
     trackedDeposited: Math.round(amt * scale), bostaBatchTotal: batch == null ? null : Math.round(batch * scale) })
   return { range: RANGE, payouts: [p('2026-09-16', 'BST-P-21388', 201, 231150, 231150), p('2026-09-23', 'BST-P-21842', 188, 216900, 216900),
-    p('2026-09-30', 'BST-P-22297', 196, 225800, 227950), p('2026-10-07', 'BST-P-22751', 171, 196650, null)] }
+    p('2026-09-30', 'BST-P-22297', 196, 225800, 227950), p('2026-10-03', 'BST-P-22510', 12, 14000, 13200),
+    p('2026-10-07', 'BST-P-22751', 171, 196650, null)] }
 }
 
 function profitSkus(vs: VariantSales[], costed: boolean): ProfitSkus {
@@ -572,6 +573,10 @@ export function analyticsFetch(
         const status = sp.get('status'), q = sp.get('q')?.toLowerCase()
         const orders = f.orders.orders.filter(o => (!status || o.financialStatus === status)
           && (!q || o.name.toLowerCase().includes(q) || (o.customer ?? '').toLowerCase().includes(q)))
+        const sort = sp.get('sort'), dir = sp.get('dir') === 'asc' ? 1 : -1
+        const val = (o: OrderRow): number | null => sort === 'total' ? o.total : sort === 'bostaFees' ? o.bostaFees
+          : sort === 'netToYou' ? o.netToYou : sort === 'placedAt' ? Date.parse(o.placedAt) : null
+        if (sort) orders.sort((a, b) => ((val(a) ?? -Infinity) - (val(b) ?? -Infinity)) * dir)
         return ok({ ...f.orders, total: orders.length, orders })
       }
       default: {

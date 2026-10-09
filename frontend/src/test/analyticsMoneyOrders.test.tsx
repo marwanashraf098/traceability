@@ -99,14 +99,19 @@ describe('money — BROEK', () => {
     expect(drill).toHaveTextContent('EGP 2,655') // 59 refusals × EGP 45
   })
 
-  test('mo4 — payout check: matching batch, differing batch (never "short"), batch not reported', async () => {
+  test('mo4 — payout check: every payout is Paid; a larger Bosta batch is a neutral note, never a difference', async () => {
     renderAt(<MoneyPage />, '/analytics/money')
     const table = await screen.findByTestId('payouts-table')
     const rows = within(table).getAllByRole('row')
-    expect(rows[1]).toHaveTextContent('All in Traced')
-    expect(rows[3]).toHaveTextContent('Differs by EGP 2,150')
-    expect(rows[4]).toHaveTextContent('Batch total not reported')
-    expect(table.textContent).not.toMatch(/short/i)
+    for (const r of rows.slice(1)) expect(r).toHaveTextContent('Paid')
+    // Batch above Traced's amount: the untracked part, as information.
+    expect(within(rows[3]).getByTestId('payout-untracked-note'))
+      .toHaveTextContent("Bosta's batch also includes EGP 2,150 from shipments not tracked in Traced")
+    expect(within(rows[3]).getByTestId('payout-untracked-note').className).not.toMatch(/critical|warning|danger|red/)
+    // Batch below Traced's amount, equal, or not reported: nothing extra.
+    for (const i of [1, 2, 4, 5]) expect(within(rows[i]).queryByTestId('payout-untracked-note')).toBeNull()
+    expect(table.textContent).not.toMatch(/short|differ/i)
+    expect(table.querySelector('[class*="critical"]')).toBeNull()
     expect(within(table).getAllByRole('columnheader').map(h => h.textContent)).toEqual(
       ['Date', 'Reference', 'Traced orders', 'Traced amount', 'Bosta batch total', 'Status'])
   })
@@ -168,17 +173,27 @@ describe('order finances', () => {
     await waitFor(() => expect(within(screen.getByTestId('orders-table')).getAllByRole('row')).toHaveLength(2))
   })
 
-  test('or3 — sortable columns reorder the rows (total, both directions)', async () => {
+  test('or3 — sorting goes through the API (across all pages) and lives in the URL', async () => {
     useFixture(BROEK)
     const user = userEvent.setup()
-    renderAt(<OrdersPage />, '/analytics/orders')
+    renderAt(<OrdersPage />, '/analytics/orders?page=1')
     const table = await screen.findByTestId('orders-table')
     await waitFor(() => expect(within(table).getAllByRole('row').length).toBeGreaterThan(2))
     const total = within(table).getByRole('columnheader', { name: /Total/ })
     await user.click(within(total).getByRole('button'))
-    expect(within(table).getAllByRole('row')[1]).toHaveTextContent('EGP 2,550')
-    await user.click(within(total).getByRole('button'))
-    expect(within(table).getAllByRole('row')[1]).toHaveTextContent('EGP 950')
+    expect(loc()).toContain('sort=total&dir=desc')
+    expect(loc()).not.toContain('page=') // a new sort starts at the first page
+    await waitFor(() => expect(calls.some(u => u.includes('/analytics/orders?') && u.includes('sort=total') && u.includes('dir=desc'))).toBe(true))
+    const tbl = () => screen.getByTestId('orders-table') // re-rendered when the sort changes
+    await waitFor(() => expect(within(tbl()).getAllByRole('row')[1]).toHaveTextContent('EGP 2,550'))
+    await user.click(within(within(tbl()).getByRole('columnheader', { name: /Total/ })).getByRole('button'))
+    expect(loc()).toContain('dir=asc')
+    await waitFor(() => expect(within(tbl()).getAllByRole('row')[1]).toHaveTextContent('EGP 950'))
+    expect(within(tbl()).getByRole('columnheader', { name: /Total/ })).toHaveAttribute('aria-sort', 'ascending')
+    expect(screen.queryByText(/this page of results/)).toBeNull()
+    const status = within(tbl()).getByRole('columnheader', { name: /Financial status/ })
+    await user.click(within(status).getByRole('button'))
+    expect(loc()).toContain('sort=status')
   })
 
   test('or4 — Export CSV downloads the current view with the bearer token and says when it was cut short', async () => {

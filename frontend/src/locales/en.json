@@ -3703,12 +3703,11 @@
         "amount": "Traced amount",
         "batch": "Bosta batch total",
         "status": "Status",
-        "allTraced": "All in Traced",
-        "differs": "Differs by {{value}}",
-        "differsTip": "The Bosta batch includes shipments Traced doesn’t track (other stores, manual shipments) or isn’t settled for all of them yet.",
-        "noBatch": "Batch total not reported",
         "none": "No Bosta payouts in this period.",
-        "note": "Traced amount = what Bosta deposited for the shipments Traced tracks in that payout."
+        "note": "Traced amount = what Bosta deposited for the shipments Traced tracks in that payout.",
+        "paid": "Paid",
+        "scheduled": "Scheduled",
+        "untracked": "Bosta's batch also includes {{value}} from shipments not tracked in Traced"
       },
       "stuck": {
         "title": "Shipments stuck for more than 7 days",
@@ -3787,7 +3786,6 @@
       },
       "pending": "pending",
       "refundUnknown": "refund amount unknown",
-      "sortPageNote": "Sorting applies to this page of results.",
       "pageOf": "Page {{page}} of {{pages}} · {{total}} orders",
       "prev": "Previous",
       "next": "Next",

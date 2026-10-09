@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { Download } from 'lucide-react'
-import { getAnalyticsOrders, ordersExportPath, type OrderRow } from '../../analyticsApi'
+import { getAnalyticsOrders, ordersExportPath, type OrderRow, type OrderSortKey } from '../../analyticsApi'
 import { getAccessToken } from '../../auth'
 import { useAnalyticsQuery } from '../../analytics/useAnalyticsQuery'
 import { useAnalyticsState } from '../../analytics/period'
@@ -14,6 +14,9 @@ import { OtherCarrierBanner, useGroupLabel } from './shared'
 import { FIN_PILL } from './drawers'
 
 const PAGE_SIZE = 50
+/** Table column → the API's sort key (the API sorts across every page). */
+const SORT_KEY: Record<string, OrderSortKey> = { date: 'placedAt', total: 'total', fees: 'bostaFees', net: 'netToYou', fin: 'status' }
+const COLUMN_OF: Record<string, string> = Object.fromEntries(Object.entries(SORT_KEY).map(([c, k]) => [k, c]))
 /** Chip order; "other carrier" shows only when some order is in it. */
 const STATUSES = ['paid', 'awaiting_payout', 'expected', 'overdue', 'lost', 'refunded', 'other_carrier'] as const
 
@@ -35,7 +38,10 @@ export default function OrdersPage() {
   const page = Math.max(0, Number(sp.get('page') ?? '0') || 0)
   const [q, setQ] = useState(sp.get('q') ?? '')
   const debouncedQ = useDebounced(q.trim(), 300)
-  const [sort, setSort] = useState<DataTableSort | undefined>(undefined)
+  const sortKey = sp.get('sort') as OrderSortKey | null
+  const apiSort = sortKey && COLUMN_OF[sortKey] ? sortKey : undefined
+  const dir: 'asc' | 'desc' = sp.get('dir') === 'asc' ? 'asc' : 'desc'
+  const sort: DataTableSort | undefined = apiSort ? { key: COLUMN_OF[apiSort], dir } : undefined
   const [exporting, setExporting] = useState<'idle' | 'busy' | 'error' | 'truncated'>('idle')
 
   const setParam = (k: string, v: string | null, resetPage = true) => setSp(prev => {
@@ -49,24 +55,22 @@ export default function OrdersPage() {
     if ((sp.get('q') ?? '') !== debouncedQ) setParam('q', debouncedQ || null)
   }, [debouncedQ]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  const filters = { ...s.params, status: status || undefined, q: sp.get('q') || undefined }
+  const filters = { ...s.params, status: status || undefined, q: sp.get('q') || undefined, sort: apiSort, dir }
   const key = JSON.stringify({ ...filters, page })
   const orders = useAnalyticsQuery(`orders:${key}`, sig => getAnalyticsOrders({ ...filters, page, size: PAGE_SIZE }, sig))
 
-  const rows = useMemo(() => {
-    const list: Row[] = (orders.data?.orders ?? []).map(o => ({ ...o, id: o.orderId }))
-    if (!sort) return list
-    const val = (r: Row): number => {
-      switch (sort.key) {
-        case 'date': return Date.parse(r.placedAt)
-        case 'total': return r.total
-        case 'fees': return r.bostaFees ?? -Infinity
-        case 'net': return r.netToYou ?? -Infinity
-        default: return 0
-      }
-    }
-    return [...list].sort((a, b) => (val(a) - val(b)) * (sort.dir === 'asc' ? 1 : -1))
-  }, [orders.data, sort])
+  const rows = useMemo(() => (orders.data?.orders ?? []).map(o => ({ ...o, id: o.orderId }) as Row), [orders.data])
+
+  function onSort(column: string) {
+    const key = SORT_KEY[column]
+    if (!key) return
+    const nextDir = sort?.key === column && sort.dir === 'desc' ? 'asc' : 'desc'
+    setSp(prev => {
+      const n = new URLSearchParams(prev)
+      n.set('sort', key); n.set('dir', nextDir); n.delete('page')
+      return n
+    }, { replace: true })
+  }
 
   async function exportCsv() {
     setExporting('busy')
@@ -130,7 +134,7 @@ export default function OrdersPage() {
                     rows={rows}
                     emptyMessage={t('analytics.orders.none')}
                     sort={sort}
-                    onSort={k => setSort(prev => ({ key: k, dir: prev?.key === k && prev.dir === 'desc' ? 'asc' : 'desc' }))}
+                    onSort={onSort}
                     columns={[
                       { key: 'name', header: t('analytics.orders.cols.order'), mono: true, render: r => r.name },
                       { key: 'date', header: t('analytics.orders.cols.date'), sortable: true, render: r => fmt.day(r.placedAt) },
@@ -140,7 +144,7 @@ export default function OrdersPage() {
                       { key: 'total', header: t('analytics.orders.cols.total'), align: 'end', sortable: true, render: r => fmt.money(r.total) },
                       { key: 'pay', header: t('analytics.orders.cols.payment'), render: r => r.paymentGroup ? label('payment', r.paymentGroup, r.paymentGroup) : '—' },
                       { key: 'delivery', header: t('analytics.orders.cols.delivery'), render: r => t(`analytics.orders.delivery.${r.deliveryStatus.label}`, { defaultValue: r.deliveryStatus.label }) },
-                      { key: 'fin', header: t('analytics.orders.cols.financial'), render: r => <Pill kind={FIN_PILL[r.financialStatus] ?? 'neutral'}>{t(`analytics.orders.fin.${r.financialStatus}`)}</Pill> },
+                      { key: 'fin', header: t('analytics.orders.cols.financial'), sortable: true, render: r => <Pill kind={FIN_PILL[r.financialStatus] ?? 'neutral'}>{t(`analytics.orders.fin.${r.financialStatus}`)}</Pill> },
                       {
                         key: 'fees', header: t('analytics.orders.cols.fees'), align: 'end', sortable: true, render: r => (
                           <span className="inline-flex items-center gap-1.5 justify-end">{fmt.money(r.bostaFees)}{r.feesEstimated && <SourceChip title={t('analytics.chip.estimatedTip')}>{t('analytics.chip.estimated')}</SourceChip>}</span>
@@ -154,7 +158,6 @@ export default function OrdersPage() {
                     ]}
                   />
                 </div>
-                {sort && pages > 1 && <Note>{t('analytics.orders.sortPageNote')}</Note>}
                 {total > PAGE_SIZE && (
                   <div className="flex items-center gap-3 justify-end text-[12.5px] text-muted" data-testid="orders-pager">
                     <span>{t('analytics.orders.pageOf', { page: fmt.num(page + 1), pages: fmt.num(pages), total: fmt.num(total) })}</span>

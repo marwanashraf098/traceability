@@ -5,7 +5,7 @@ import {
   getFees, getPayouts, getProfitSummary, getRevenueSummary, getStuck, type Fees, type StuckShipment, type NotPaidShipment,
 } from '../../analyticsApi'
 import { useAnalyticsQuery } from '../../analytics/useAnalyticsQuery'
-import { useAnalyticsState } from '../../analytics/period'
+import { cairoToday, useAnalyticsState } from '../../analytics/period'
 import { useFmt } from '../../analytics/format'
 import { cn } from '../../components/ui'
 import {
@@ -196,7 +196,12 @@ export default function MoneyPage() {
                         </thead>
                         <tbody>
                           {d.payouts.map(p => {
-                            const same = p.bostaBatchTotal != null && Math.abs(p.bostaBatchTotal - p.trackedDeposited) < 0.5
+                            // Bosta's batch can carry shipments Traced doesn't track (other stores, manual
+                            // shipments): that's information, never a shortfall — no difference is shown
+                            // when the batch is smaller, and nothing here is ever red.
+                            const untracked = p.bostaBatchTotal != null && p.bostaBatchTotal - p.trackedDeposited >= 0.5
+                              ? p.bostaBatchTotal - p.trackedDeposited : null
+                            const scheduled = p.date > cairoToday()
                             return (
                               <tr key={p.transactionId} className="border-b border-line last:border-0">
                                 <td className="py-[9px] ps-0 pe-2.5">{fmt.day(p.date)}</td>
@@ -205,11 +210,16 @@ export default function MoneyPage() {
                                 <td className="py-[9px] px-2.5 text-end tabular-nums">{fmt.money(p.trackedDeposited)}</td>
                                 <td className="py-[9px] px-2.5 text-end tabular-nums">{p.bostaBatchTotal == null ? '—' : fmt.money(p.bostaBatchTotal)}</td>
                                 <td className="py-[9px] ps-2.5 pe-0 text-end">
-                                  {p.bostaBatchTotal == null
-                                    ? <span className="text-muted">{t('analytics.money.payouts.noBatch')}</span>
-                                    : same
-                                      ? <Pill kind="good">{t('analytics.money.payouts.allTraced')}</Pill>
-                                      : <span title={t('analytics.money.payouts.differsTip')}><Pill kind="neutral">{t('analytics.money.payouts.differs', { value: fmt.money(Math.abs(p.bostaBatchTotal - p.trackedDeposited)) })}</Pill></span>}
+                                  <div className="flex flex-col items-end gap-1">
+                                    {scheduled
+                                      ? <Pill kind="info">{t('analytics.money.payouts.scheduled')}</Pill>
+                                      : <Pill kind="good">{t('analytics.money.payouts.paid')}</Pill>}
+                                    {untracked != null && (
+                                      <span className="text-[12px] text-trace-blue-hover bg-trace-blue/5 rounded px-1.5 py-0.5 whitespace-normal max-w-[260px] text-end" data-testid="payout-untracked-note">
+                                        {t('analytics.money.payouts.untracked', { value: fmt.money(untracked) })}
+                                      </span>
+                                    )}
+                                  </div>
                                 </td>
                               </tr>
                             )

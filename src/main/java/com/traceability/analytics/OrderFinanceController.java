@@ -57,6 +57,17 @@ public class OrderFinanceController {
         return new OrderFinanceService.Filters(status, blankToNull(governorate), variantId, blankToNull(q));
     }
 
+    /** sort: one of OrderFinanceService.SORTS (whitelist), dir: asc | desc — anything else is a 400. */
+    static OrderFinanceService.Sort sort(String sort, String dir) {
+        if (!OrderFinanceService.SORTS.contains(sort)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "sort must be one of " + String.join(", ", OrderFinanceService.SORTS));
+        }
+        if (!"asc".equals(dir) && !"desc".equals(dir)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "dir must be asc or desc");
+        }
+        return new OrderFinanceService.Sort(sort, "asc".equals(dir));
+    }
+
     @GetMapping("/orders")
     @PreAuthorize("hasRole('OWNER')")
     public OrderFinanceService.OrdersPage orders(@RequestParam(required = false) String period,
@@ -66,17 +77,19 @@ public class OrderFinanceController {
                                                  @RequestParam(required = false) String governorate,
                                                  @RequestParam(required = false) UUID variantId,
                                                  @RequestParam(required = false) String q,
+                                                 @RequestParam(defaultValue = "placedAt") String sort,
+                                                 @RequestParam(defaultValue = "desc") String dir,
                                                  @RequestParam(defaultValue = "0") int page,
                                                  @RequestParam(defaultValue = "50") int size) {
         if (page < 0) throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "page must be 0 or more");
         if (size < 1 || size > MAX_PAGE_SIZE) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "size must be 1–" + MAX_PAGE_SIZE);
         }
-        return finance.orders(period(period, from, to), filters(status, governorate, variantId, q), page, size);
+        return finance.orders(period(period, from, to), filters(status, governorate, variantId, q), sort(sort, dir), page, size);
     }
 
     /**
-     * The list as CSV (same filters, newest first, at most 50,000 rows — X-Export-Truncated: true when
+     * The list as CSV (same filters and sort — default newest first —, at most 50,000 rows — X-Export-Truncated: true when
      * there were more), UTF-8 with a byte-order mark so Excel reads Arabic. One audit_log row per
      * export, carrying the filters only (q as present / absent), never row data.
      */
@@ -89,11 +102,13 @@ public class OrderFinanceController {
                        @RequestParam(required = false) String governorate,
                        @RequestParam(required = false) UUID variantId,
                        @RequestParam(required = false) String q,
+                       @RequestParam(defaultValue = "placedAt") String sort,
+                       @RequestParam(defaultValue = "desc") String dir,
                        @AuthenticationPrincipal CustomUserDetails principal,
                        HttpServletResponse response) throws IOException {
         AnalyticsPeriod p = period(period, from, to);
         OrderFinanceService.Filters f = filters(status, governorate, variantId, q);
-        OrderFinanceService.Export export = finance.export(p, f, principal.userId(), maxExportRows);
+        OrderFinanceService.Export export = finance.export(p, f, sort(sort, dir), principal.userId(), maxExportRows);
         List<OrderFinanceService.OrderRow> rows = export.rows();
         boolean truncated = export.truncated();
 
