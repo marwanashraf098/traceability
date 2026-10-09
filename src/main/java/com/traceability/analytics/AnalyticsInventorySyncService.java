@@ -15,7 +15,7 @@ import java.util.*;
 
 /**
  * Analytics slice 10 — one READ pass of a tenant's Shopify cost and stock into the read-only
- * columns (V157). Runs under the tenant (app_user + RLS; callers wrap it in TenantContext.runAs).
+ * columns (V158). Runs under the tenant (app_user + RLS; callers wrap it in TenantContext.runAs).
  *
  *   probe   → which fields Shopify allows (ShopifyInventoryReader.probe); a denied / failing field is
  *             'access_denied' / 'error' on analytics_inventory_sync and is not read — costed stays 0,

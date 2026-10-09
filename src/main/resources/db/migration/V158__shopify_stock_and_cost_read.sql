@@ -1,4 +1,4 @@
--- V157 — Analytics slice 10: Shopify cost and FRESH Shopify stock, read-only.
+-- V158 — Analytics slice 10: Shopify cost and FRESH Shopify stock, read-only.
 --
 -- READ COLUMNS ONLY. Nothing here is ever used to decide or send an inventory write: the
 -- increment-only Shopify sync (FR-17 v2, ShopifyInventoryService and the named decrement set)

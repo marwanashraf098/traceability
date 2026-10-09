@@ -14,7 +14,7 @@ import java.util.List;
 import java.util.UUID;
 
 /**
- * Analytics slice 10 — keeps the READ columns (V157) fresh between daily passes, from the
+ * Analytics slice 10 — keeps the READ columns (V158) fresh between daily passes, from the
  * inventory_items/update and inventory_levels/update webhooks. Writes ONLY variants.unit_cost (under
  * the cost rules: EGP only — the shop currency the last sync pass saw —, a manual cost never
  * overwritten), variant_shopify_levels and the stock_available_shopify* columns. Nothing on the
