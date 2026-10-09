@@ -4,6 +4,41 @@
 
 ## Current state
 
+**Analytics frontend — group A: foundation + Summary (2026-10-09, branch `analytics/fe-a`, merged to main behind the
+flag; NOT deployed, flag OFF).** Visual + metric truth: `design/Traced_Analytics_dc.html` (branch `design/analytics-v1`).
+- **Flag:** `VITE_ANALYTICS_ENABLED` (build-time, default false) — Dockerfile `ARG`, forwarded by `deploy/docker-compose.yml`
+  as `${VITE_ANALYTICS_ENABLED:-false}`, documented in `.env.example`. Off = no Analytics nav, no `/analytics` routes (the
+  nav code isn't even in the bundle). Turning it on = set it (shell, or `--env-file .env`) and rebuild the app image.
+  Gotcha: compose fills build args from the shell or the `.env` next to the compose file (`deploy/`), not the root `.env`
+  the app reads at runtime. Also noted: `VITE_CALENDLY_SETUP_URL` is passed as a compose build arg with no Dockerfile
+  ARG, yet prod's bundle has the URL — something on the server supplies it (likely an untracked frontend env file; no
+  `.dockerignore`). Not changed.
+- **Access:** `StrictOwnerRoute` (owners only; managers → /overview, workers → /worker-home); `OwnerOnlyRoute` unchanged.
+  Nav group "Analytics" (owner + flag) lists only built pages (`ANALYTICS_PAGES[].ready`); unbuilt pages redirect to
+  Summary keeping the period.
+- **Foundation:** `analyticsApi.ts` (typed, every endpoint s1–s10); URL state `?period=today|yesterday|7d|30d|month` or
+  `from/to` (≤ 366 days), `compare=1` (control shown only past 92 days), `mode=booked` (default realized); 60 s cache hook
+  with abort on change and refresh on focus; hand-rolled SVG charts (line, sparkline, bars) mirrored for RTL; shared
+  `Drawer` (OrderDrawer/VariantDrawer unchanged); optional `DataTable` sort prop; numbers `ar-EG-u-nu-latn`, money
+  "EGP 1,234" / "1,234 ج.م"; rates are 0–1 fractions from the backend. Locale parity test over ALL keys (plural forms
+  folded) + the 5 missing Arabic keys added.
+- **Summary:** pipeline (not fulfilled / in transit / awaiting payout / in your bank), KPIs with deltas only when the
+  backend sent a previous period, Needs attention (frontend maps alert key → route; links only to built pages), revenue
+  per day, Top SKUs (sparklines from `/sales/variants/daily`, stock left from `/stock/variants`), Expected cash in
+  (awaiting payout + in transit). Decisions: payout lag = cash-forecast median delivered → paid; Bosta cost per delivery =
+  all fees ÷ delivered; no delta on fee tiles (no previous period); no Bosta → realized shown as "—" with the reason (it
+  counts Bosta deliveries only); no "payout short".
+- **States:** no Bosta → not-fulfilled stage + Connect Bosta, Bosta KPIs hidden; other-carrier share ≥ 5% → banner;
+  no pieces → stock column hidden; low trust → banner + "Shopify's count" tag; estimated / approximate tags.
+- **Tests:** 812 vitest (baseline 771 + 41): `analyticsCore` (parity, period, format, cache, charts), `analyticsShared`
+  (DataTable sort, Drawer), `analyticsSummary` (real App routing incl. flag off / manager / worker, BROEK / Femine /
+  High line fixtures, URL state, compare, per-card error + retry, Arabic). Revert-checked 6/6.
+- **Screenshot harness:** `frontend/dev/analytics-shots/` (real App + `src/test/analyticsFixtures.ts`; not in the build):
+  `node dev/analytics-shots/shoot.mjs <outDir> [/analytics/<page>]` → fixture × EN/AR × desktop / 390 px / 390 px
+  without the sidebar.
+- **Next:** group B (Revenue + Delivery), C, D; then a separate phone build (collapsible shell menu below ~900 px for the
+  whole app — the shell keeps a 224 px sidebar at every width today; check the other session isn't editing Layout.tsx);
+  then the flag flip.
 **Analytics slice 10 — Shopify cost + fresh stock READ, profit metrics (2026-10-09, branch `analytics/s10-cost`, merged to
 main; NOT deployed). Migration V158** (renumbered V157 → V158 at merge: transfers took V157; MigrationSmokeTest 157,
 NotTracedBackfillTest 102).
