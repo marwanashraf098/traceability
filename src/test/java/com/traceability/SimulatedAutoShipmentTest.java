@@ -239,11 +239,15 @@ class SimulatedAutoShipmentTest {
     @Test
     void a5_preCutoff_noOrder_bornCancelled_noShipment() {
         T t = new T("A5", true);
-        jdbc.update("UPDATE stores SET orders_ingest_from = now() WHERE id = ?", t.f.store);
-        UUID old = t.ingest(t.payload(IDS.incrementAndGet(), "#A5old", true, Instant.now().minus(3, ChronoUnit.DAYS), null));
+        // One clock for both the cutoff and the "just placed" order: the DB's now() and the JVM's
+        // Instant.now() drift apart by tens of ms on Docker Desktop, which made a "now" order land
+        // before a cutoff written a moment earlier.
+        Instant connectedAt = Instant.now();
+        jdbc.update("UPDATE stores SET orders_ingest_from = ? WHERE id = ?", java.sql.Timestamp.from(connectedAt), t.f.store);
+        UUID old = t.ingest(t.payload(IDS.incrementAndGet(), "#A5old", true, connectedAt.minus(3, ChronoUnit.DAYS), null));
         assertThat(old).as("FR-18: pre-connection order not ingested").isNull();
 
-        UUID cancelled = t.ingest(t.payload(IDS.incrementAndGet(), "#A5c", true, Instant.now(), Instant.now().toString()));
+        UUID cancelled = t.ingest(t.payload(IDS.incrementAndGet(), "#A5c", true, connectedAt, connectedAt.toString()));
         assertThat(cancelled).isNotNull();
         assertThat(t.forwardLegs(cancelled)).as("born-cancelled order gets no shipment").isEmpty();
     }
