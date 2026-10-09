@@ -11,9 +11,18 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
-[dir="rtl"] body { font-family: 'Cairo', 'Geist Variable', sans-serif; }
+/* Before the store's config (and font) arrives — system fonts; Arabic has no Geist glyphs. */
+[dir="rtl"] body { font-family: system-ui, -apple-system, 'Segoe UI', Tahoma, sans-serif; }
 
-.pp-root { min-height: 100vh; min-height: 100dvh; background: #F7F7F5; }
+/* P1: the store's font (fonts.ts sets --pp-font and --pp-w600 on the root, both languages).
+   No synthesized bold or italics: a weight a family lacks maps to a real face (600 → 700). */
+.pp-root {
+  min-height: 100vh;
+  min-height: 100dvh;
+  background: #F7F7F5;
+  font-family: var(--pp-font, inherit);
+  font-synthesis: none;
+}
 
 .pp-column {
   max-width: 480px;
@@ -64,11 +73,11 @@ body {
   background: transparent;
   font: inherit;
   font-size: 15px;
-  font-weight: 600;
+  font-weight: var(--pp-w600, 600);
   color: var(--accent-text);
   cursor: pointer;
 }
-.pp-lang[lang="ar"] { font-family: 'Cairo', sans-serif; }
+.pp-lang[lang="ar"] { font-family: var(--pp-font, system-ui), sans-serif; }
 .pp-lang[lang="en"] { font-family: 'Geist Variable', sans-serif; }
 .pp-iconbtn {
   width: 44px;
@@ -106,7 +115,7 @@ body {
 .pp-small { font-size: 14px; line-height: 1.5; margin: 0; }
 .pp-eyebrow {
   font-size: 13px;
-  font-weight: 600;
+  font-weight: var(--pp-w600, 600);
   letter-spacing: 0.05em;
   text-transform: uppercase;
   color: #5B6270;
@@ -116,7 +125,7 @@ body {
 /* Forms */
 .pp-form { display: flex; flex-direction: column; gap: 16px; }
 .pp-field { display: flex; flex-direction: column; gap: 6px; }
-.pp-label { font-size: 15px; font-weight: 600; }
+.pp-label { font-size: 15px; font-weight: var(--pp-w600, 600); }
 .pp-optional { font-weight: 400; color: #5B6270; }
 .pp-input {
   width: 100%;
@@ -148,7 +157,7 @@ select.pp-input { appearance: auto; }
   border-radius: 12px;
   font: inherit;
   font-size: 17px;
-  font-weight: 600;
+  font-weight: var(--pp-w600, 600);
   cursor: pointer;
   width: 100%;
 }
@@ -174,7 +183,7 @@ select.pp-input { appearance: auto; }
   background: transparent;
   font: inherit;
   font-size: 15px;
-  font-weight: 600;
+  font-weight: var(--pp-w600, 600);
   color: var(--accent-text);
   cursor: pointer;
 }
@@ -237,7 +246,7 @@ select.pp-input { appearance: auto; }
 .pp-item--disabled { flex-direction: row; align-items: center; background: #F1F2EF; }
 .pp-item__head { display: flex; gap: 14px; align-items: center; }
 .pp-item__text { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
-.pp-item__title { font-size: 16px; font-weight: 600; }
+.pp-item__title { font-size: 16px; font-weight: var(--pp-w600, 600); }
 .pp-item--disabled .pp-item__title { color: #4A5058; }
 .pp-item__title--sm { font-size: 15px; }
 .pp-item__sub { font-size: 14px; color: #5B6270; }
@@ -258,8 +267,8 @@ img.pp-thumb--muted { opacity: 0.6; }
 .pp-thumb--sm { width: 48px; height: 48px; }
 
 .pp-qty { display: flex; align-items: center; gap: 12px; }
-.pp-qty__label { font-size: 14px; font-weight: 600; flex: 1; }
-.pp-qty__value { width: 28px; text-align: center; font-size: 17px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.pp-qty__label { font-size: 14px; font-weight: var(--pp-w600, 600); flex: 1; }
+.pp-qty__value { width: 28px; text-align: center; font-size: 17px; font-weight: var(--pp-w600, 600); font-variant-numeric: tabular-nums; }
 .pp-qty__of { font-size: 14px; }
 .pp-stepbtn {
   width: 44px;
@@ -304,7 +313,7 @@ img.pp-thumb--muted { opacity: 0.6; }
 .pp-ref__value {
   font-family: 'Geist Mono', ui-monospace, monospace;
   font-size: 24px;
-  font-weight: 600;
+  font-weight: var(--pp-w600, 600);
   letter-spacing: 0.04em;
   user-select: all;
   -webkit-user-select: all;
@@ -321,7 +330,7 @@ img.pp-thumb--muted { opacity: 0.6; }
   background: var(--accent-soft);
   color: var(--accent-text);
   font-size: 14px;
-  font-weight: 600;
+  font-weight: var(--pp-w600, 600);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -387,7 +396,7 @@ img.pp-thumb--muted { opacity: 0.6; }
 }
 .pp-mode--selected { border: 2px solid var(--brand); padding: 13px; background: var(--accent-soft); }
 .pp-mode input { width: 16px; height: 16px; margin: 3px 0 0; flex-shrink: 0; accent-color: var(--brand); }
-.pp-mode__title { display: block; font-size: 16px; font-weight: 600; }
+.pp-mode__title { display: block; font-size: 16px; font-weight: var(--pp-w600, 600); }
 .pp-mode__sub { display: block; font-size: 14px; color: #5B6270; margin-top: 2px; }
 
 .pp-radioitem { display: flex; gap: 14px; align-items: center; cursor: pointer; min-height: 44px; }
@@ -408,7 +417,7 @@ img.pp-thumb--muted { opacity: 0.6; }
   cursor: pointer;
 }
 .pp-chip input { width: 16px; height: 16px; margin: 0; flex-shrink: 0; accent-color: var(--brand); }
-.pp-chip--selected { border: 2px solid var(--brand); padding: 0 13px; font-weight: 600; background: var(--accent-soft); }
+.pp-chip--selected { border: 2px solid var(--brand); padding: 0 13px; font-weight: var(--pp-w600, 600); background: var(--accent-soft); }
 .pp-chip--disabled { background: #F1F2EF; border: 1px dashed #CFD3D8; color: #5B6270; cursor: not-allowed; }
 
 .pp-check { display: flex; gap: 12px; align-items: flex-start; font-size: 15px; line-height: 1.5; cursor: pointer; }

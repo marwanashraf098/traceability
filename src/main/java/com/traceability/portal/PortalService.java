@@ -33,6 +33,8 @@ public class PortalService {
 
     static final int THROTTLE_MAX_FAILURES = 5;
     static final int THROTTLE_WINDOW_MINUTES = 60;
+    /** P1 (V159): failed lookups per client IP (HMAC'd) per tenant in the same window, across order keys. */
+    static final int IP_THROTTLE_MAX_FAILURES = 20;
 
     public enum Outcome { SUCCESS, NOT_FOUND, THROTTLED }
 
@@ -87,13 +89,20 @@ public class PortalService {
             Map<String, Object> t = jdbc.queryForMap(
                 "SELECT name, customer_return_window_days, portal_auto_approve, " +
                 "       portal_logo_url, portal_brand_color, portal_policy_text, portal_pickup_booking, " +
-                "       portal_exchanges_enabled " +
+                "       portal_exchanges_enabled, portal_font, " +
+                "       (SELECT a.sha256 FROM portal_assets a " +
+                "        WHERE a.id = tenants.portal_logo_asset_id AND a.tenant_id = tenants.id) AS logo_sha256 " +
                 "FROM tenants WHERE id = ?", tenantId);
             Map<String, Object> body = new LinkedHashMap<>();
             body.put("storeName", t.get("name"));
             body.put("returnWindowDays", t.get("customer_return_window_days"));
             body.put("reasonCodes", REASON_CODES);
-            body.put("logoUrl", t.get("portal_logo_url"));
+            // P1 precedence: uploaded logo (served by this app — CSP 'self'; ?v= changes with the
+            // logo so a replacement shows at once) > Shopify Files link > null (store-name wordmark).
+            String logoSha = (String) t.get("logo_sha256");
+            body.put("logoUrl", logoSha != null
+                ? "/api/v1/portal/" + slug.trim().toLowerCase(Locale.ROOT) + "/logo?v=" + logoSha.substring(0, 16)
+                : t.get("portal_logo_url"));
             body.put("brandColor", t.get("portal_brand_color"));
             body.put("policyText", t.get("portal_policy_text"));
             body.put("autoApprove", t.get("portal_auto_approve"));
@@ -101,19 +110,30 @@ public class PortalService {
             // Step 5b: present only when the store offers exchanges (absent, not false, otherwise —
             // stores without exchanges get exactly the pre-5b config).
             if (Boolean.TRUE.equals(t.get("portal_exchanges_enabled"))) body.put("exchangesEnabled", true);
+            body.put("font", t.get("portal_font"));
             return body;
         })));
     }
 
-    /** Empty for an unknown/disabled slug; otherwise SUCCESS / NOT_FOUND / THROTTLED. */
+    /** Empty for an unknown/disabled slug; otherwise SUCCESS / NOT_FOUND / THROTTLED. No per-IP throttle. */
     public Optional<LookupResult> lookup(String slug, String orderNumber, String phone) {
-        UUID tenantId = resolveTenant(slug);
-        if (tenantId == null) return Optional.empty();
-        return Optional.of(TenantContext.runAs(tenantId,
-            () -> tx.execute(s -> lookupInTenant(tenantId, orderNumber, phone))));
+        return lookup(slug, orderNumber, phone, null);
     }
 
-    private LookupResult lookupInTenant(UUID tenantId, String orderNumberRaw, String phoneRaw) {
+    /**
+     * P1: {@code clientIp} feeds the per-IP failure throttle (stored only as an HMAC). An IP over
+     * {@link #IP_THROTTLE_MAX_FAILURES} failed lookups in the window gets the generic NOT_FOUND —
+     * the same answer as a wrong order or phone — and the attempt is not recorded.
+     */
+    public Optional<LookupResult> lookup(String slug, String orderNumber, String phone, String clientIp) {
+        UUID tenantId = resolveTenant(slug);
+        if (tenantId == null) return Optional.empty();
+        String ipHash = tokens.clientIpHash(clientIp);
+        return Optional.of(TenantContext.runAs(tenantId,
+            () -> tx.execute(s -> lookupInTenant(tenantId, orderNumber, phone, ipHash))));
+    }
+
+    private LookupResult lookupInTenant(UUID tenantId, String orderNumberRaw, String phoneRaw, String ipHash) {
         String raw      = orderNumberRaw == null ? "" : orderNumberRaw.replaceAll("\\s+", "");
         String stripped = raw.startsWith("#") ? raw.substring(1) : raw;
         String orderKey = stripped.toLowerCase(Locale.ROOT);
@@ -129,10 +149,21 @@ public class PortalService {
         if (recentFailures != null && recentFailures >= THROTTLE_MAX_FAILURES) {
             return LookupResult.throttled();
         }
+        // P1: per client IP, across order keys — answered like any other miss, not recorded.
+        if (ipHash != null) {
+            Integer ipFailures = jdbc.queryForObject(
+                "SELECT COUNT(*) FROM portal_lookup_attempts " +
+                "WHERE tenant_id = ? AND ip_hash = ? AND success = false " +
+                "  AND attempted_at > now() - (interval '1 minute' * ?)",
+                Integer.class, tenantId, ipHash, THROTTLE_WINDOW_MINUTES);
+            if (ipFailures != null && ipFailures >= IP_THROTTLE_MAX_FAILURES) {
+                return LookupResult.notFound();
+            }
+        }
 
         Map<String, Object> order = findEligibleOrder(tenantId, raw, stripped, phoneRaw);
         if (order == null) {
-            recordAttempt(tenantId, orderKey, false);
+            recordAttempt(tenantId, orderKey, false, ipHash);
             return LookupResult.notFound();
         }
 
@@ -140,7 +171,7 @@ public class PortalService {
         List<Map<String, Object>> lines = returnableLines(tenantId, orderId);
         // Step 6a: the order's UNTRACKED lines (no allocation of any status) — keyed by order line.
         lines.addAll(untrackedLines(tenantId, orderId));
-        recordAttempt(tenantId, orderKey, true);
+        recordAttempt(tenantId, orderKey, true, ipHash);
         // Step 5b: when the store offers exchanges, each line also carries what it could be
         // exchanged for (siblings of the same product, in stock or not) — absent otherwise.
         if (exchangesEnabled(tenantId)) {
@@ -695,10 +726,39 @@ public class PortalService {
         throw new IllegalStateException("Could not generate a unique return reference");
     }
 
-    private void recordAttempt(UUID tenantId, String orderKey, boolean success) {
+    private void recordAttempt(UUID tenantId, String orderKey, boolean success, String ipHash) {
         jdbc.update(
-            "INSERT INTO portal_lookup_attempts (tenant_id, order_key, success) VALUES (?, ?, ?)",
-            tenantId, orderKey, success);
+            "INSERT INTO portal_lookup_attempts (tenant_id, order_key, success, ip_hash) VALUES (?, ?, ?, ?)",
+            tenantId, orderKey, success, ipHash);
+    }
+
+    // ── P1: the uploaded logo, public ───────────────────────────────────────────
+
+    public record PublicLogo(String contentType, String etag, byte[] bytes) {}
+
+    /**
+     * GET /api/v1/portal/{slug}/logo — the slug's tenant's uploaded logo (hatch #14 → runAs + RLS;
+     * the asset is read through the tenant row, so only that tenant's current logo can come back).
+     * Empty for an unknown/disabled slug or no uploaded logo. When {@code ifNoneMatch} equals the
+     * ETag, bytes is null (304) and the bytes are never read.
+     */
+    public Optional<PublicLogo> logo(String slug, String ifNoneMatch) {
+        UUID tenantId = resolveTenant(slug);
+        if (tenantId == null) return Optional.empty();
+        return Optional.ofNullable(TenantContext.runAs(tenantId, () -> tx.execute(s -> {
+            List<Map<String, Object>> rows = jdbc.queryForList(
+                "SELECT a.id, a.content_type, a.sha256 FROM tenants t " +
+                "JOIN portal_assets a ON a.id = t.portal_logo_asset_id AND a.tenant_id = t.id " +
+                "WHERE t.id = ?", tenantId);
+            if (rows.isEmpty()) return null;
+            String etag = "\"" + rows.get(0).get("sha256") + "\"";
+            String contentType = (String) rows.get(0).get("content_type");
+            if (etag.equals(ifNoneMatch)) return new PublicLogo(contentType, etag, null);
+            byte[] bytes = jdbc.queryForObject(
+                "SELECT bytes FROM portal_assets WHERE id = ? AND tenant_id = ?",
+                byte[].class, rows.get(0).get("id"), tenantId);
+            return new PublicLogo(contentType, etag, bytes);
+        })));
     }
 
     /** Lazy v0 for the delivery-city lookup (2026-10-04) — forwarded to this service's PickupAreaService. */

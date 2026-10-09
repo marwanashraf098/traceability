@@ -20,6 +20,13 @@ spring:
   # Flyway uses owner credentials (DDL + role creation requires more than app_user has).
   # spring.flyway.url being present makes Spring Boot create a separate internal datasource
   # for Flyway — the TenantAwareDataSource primary bean is NOT used by Flyway.
+  # Uploads (returns portal P1 logo, P3 photos). The outer ceiling only — each endpoint enforces
+  # its own, smaller cap (logo: 2 MB) with a clear error. Matches nginx client_max_body_size 10m.
+  servlet:
+    multipart:
+      max-file-size: 8MB
+      max-request-size: 10MB
+
   flyway:
     enabled: true
     locations: classpath:db/migration
@@ -47,6 +54,9 @@ server:
   # headers anyway (deploy/nginx.conf); this is the second layer.
   forward-headers-strategy: native
   tomcat:
+    # Read (and discard) up to 10 MB of a rejected upload so the client gets the 413 JSON answer
+    # instead of a connection reset (Tomcat's default swallows only 2 MB).
+    max-swallow-size: 10MB
     remoteip:
       # Only nginx, on the internal Docker bridge network, may reach the app (the app's port
       # is not published — deploy/docker-compose.yml). These are Spring Boot 3.3.5's default
