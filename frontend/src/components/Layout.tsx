@@ -1,11 +1,11 @@
-import { NavLink, useNavigate } from 'react-router-dom'
+import { NavLink, useLocation, useNavigate } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { useState, useRef, useEffect, ReactNode } from 'react'
 import type { LucideIcon } from 'lucide-react'
 import {
   LayoutDashboard, ShoppingBag, Warehouse, Inbox, ClipboardList, PackageCheck,
   Truck, Repeat, Undo2, AlertTriangle, Home, ArrowRightLeft,
-  Settings, LogOut, Globe, Search, ChevronDown, Bell,
+  Settings, LogOut, Globe, Search, ChevronDown, Bell, BarChart3,
 } from 'lucide-react'
 import {
   getRoleFromToken, logoutThisDevice, getMe, getExceptionsCount, getOnboardingStatus,
@@ -17,6 +17,8 @@ import { cn, MeProvider } from './ui'
 import { useStation } from './StationProvider'
 import { PhoneTopbarIcon } from '../phone/PhoneScanButton'
 import { stationDeviceId } from '../phone/PhoneScanProvider'
+import { ANALYTICS_PAGES, analyticsEnabled } from '../analytics/flag'
+import { sharedSearch } from '../analytics/period'
 
 // ── Nav link ──────────────────────────────────────────────────────────────────
 // Icon is passed as a component reference (not pre-rendered) so it can be
@@ -35,6 +37,48 @@ function SideNavLink({ to, icon: Icon, label }: { to: string; icon: LucideIcon; 
         </>
       )}
     </NavLink>
+  )
+}
+
+// ── Analytics nav group (owner only, behind VITE_ANALYTICS_ENABLED) ──────────────
+// Collapsible; only built pages are listed. Sub-links carry the shared period state.
+
+const ANALYTICS_NAV_KEY = 'traced-analytics-nav'
+
+function AnalyticsNavGroup() {
+  const { t } = useTranslation()
+  const { pathname, search } = useLocation()
+  const inAnalytics = pathname.startsWith('/analytics')
+  const [open, setOpen] = useState<boolean>(() => {
+    try { return localStorage.getItem(ANALYTICS_NAV_KEY) !== 'closed' } catch { return true }
+  })
+  const expanded = open || inAnalytics
+  function toggle() {
+    const next = !expanded
+    setOpen(next)
+    try { localStorage.setItem(ANALYTICS_NAV_KEY, next ? 'open' : 'closed') } catch { /* private mode */ }
+  }
+  const carry = inAnalytics ? sharedSearch(new URLSearchParams(search)) : ''
+  return (
+    <div data-testid="nav-analytics">
+      <button type="button" onClick={toggle} aria-expanded={expanded} aria-controls="nav-analytics-sub"
+        className={cn('nav-item w-full', inAnalytics && 'text-sidebar-active')}>
+        <BarChart3 size={18} strokeWidth={1.75} className={inAnalytics ? 'text-trace-blue' : ''} />
+        <span>{t('nav.analytics')}</span>
+        <span className="ms-1.5 text-[10px] font-bold tracking-[0.04em] text-[#93b4ff] bg-trace-blue/20 px-1.5 py-0.5 rounded">{t('nav.new')}</span>
+        <ChevronDown size={14} strokeWidth={2} className={cn('ms-auto transition-transform', !expanded && 'ltr:-rotate-90 rtl:rotate-90')} />
+      </button>
+      {expanded && (
+        <div id="nav-analytics-sub" className="flex flex-col gap-0.5 pt-0.5 pb-1.5">
+          {ANALYTICS_PAGES.filter(p => p.ready).map(p => (
+            <NavLink key={p.id} to={`/analytics/${p.id}${carry}`}
+              className={({ isActive }) => cn('nav-item ps-[47px] text-[13.5px] relative', isActive && 'nav-item-active')}>
+              {t(`analytics.pages.${p.id}.nav`)}
+            </NavLink>
+          ))}
+        </div>
+      )}
+    </div>
   )
 }
 
@@ -182,6 +226,7 @@ export default function Layout({ children }: { children: ReactNode }) {
           ) : (
             <>
               <SideNavLink to="/overview"    icon={LayoutDashboard} label={t('nav.overview')} />
+              {role === 'owner' && analyticsEnabled() && <AnalyticsNavGroup />}
               <SideNavLink to="/orders"      icon={ShoppingBag}     label={t('nav.orders')} />
               <SideNavLink to="/inventory"   icon={Warehouse}       label={t('nav.catalog')} />
               <SideNavLink to="/receiving"   icon={Inbox}           label={t('nav.receiving')} />
