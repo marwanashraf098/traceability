@@ -8,10 +8,10 @@ export function analyticsEnabled(): boolean {
 /** The analytics pages, in nav order. `ready` = built and reachable; the rest stay hidden. */
 export const ANALYTICS_PAGES = [
   { id: 'summary',   ready: true },
-  { id: 'revenue',   ready: false },
+  { id: 'revenue',   ready: true },
   { id: 'products',  ready: false },
   { id: 'stock',     ready: false },
-  { id: 'delivery',  ready: false },
+  { id: 'delivery',  ready: true },
   { id: 'money',     ready: false },
   { id: 'customers', ready: false },
   { id: 'orders',    ready: false },

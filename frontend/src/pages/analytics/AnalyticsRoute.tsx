@@ -1,6 +1,8 @@
 import { Navigate, useLocation, useParams } from 'react-router-dom'
 import { isReadyPage } from '../../analytics/flag'
 import SummaryPage from './SummaryPage'
+import RevenuePage from './RevenuePage'
+import DeliveryPage from './DeliveryPage'
 
 /**
  * /analytics/:page — lazy-loaded from App.tsx so analytics code stays out of the main bundle.
@@ -13,6 +15,10 @@ export default function AnalyticsRoute() {
   switch (page) {
     case 'summary':
       return <SummaryPage />
+    case 'revenue':
+      return <RevenuePage />
+    case 'delivery':
+      return <DeliveryPage />
     default:
       return <Navigate to={`/analytics/summary${search}`} replace />
   }

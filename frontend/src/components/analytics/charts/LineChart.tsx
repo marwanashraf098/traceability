@@ -16,19 +16,21 @@ export interface LineSeries {
  * column shows every series' value for that label.
  */
 export function LineChart({
-  labels, series, formatY, rtl = false, height = 230, every, ariaLabel,
+  labels, series, formatY, rtl = false, height = 230, width = 640, every, ariaLabel,
 }: {
   labels: string[]
   series: LineSeries[]
   formatY: (v: number) => string
   rtl?: boolean
   height?: number
+  /** Drawing width in SVG units: wider for full-width cards so the text keeps its size. */
+  width?: number
   /** Show every n-th x label (the last is always shown). */
   every?: number
   ariaLabel: string
 }) {
   const [hover, setHover] = useState<number | null>(null)
-  const W = 640, H = height, PAD_AXIS = 50, PAD_END = 14, T = 12, B = 26
+  const W = width, H = height, PAD_AXIS = 50, PAD_END = 14, T = 12, B = 26
   const n = labels.length
   const L = rtl ? PAD_END : PAD_AXIS, R = rtl ? PAD_AXIS : PAD_END
   const maxV = Math.max(0, ...series.flatMap(s => s.values))
@@ -38,7 +40,7 @@ export function LineChart({
   const xl = (i: number) => PAD_AXIS + (W - PAD_AXIS - PAD_END) * (n <= 1 ? 0.5 : i / (n - 1))
   const x = (i: number) => m(xl(i))
   const y = (v: number) => T + (H - T - B) * (1 - v / max)
-  const step = every ?? Math.max(1, Math.ceil(n / 6))
+  const step = every ?? Math.max(1, Math.ceil(n / Math.round(6 * W / 640)))
   const bw = (W - L - R) / Math.max(1, n - 1)
   const axisX = rtl ? W - PAD_AXIS + 8 : PAD_AXIS - 8
 
