@@ -4,6 +4,23 @@
 
 ## Current state
 
+**Lookup-adjust repair dropped (2026-10-11, branch `chore/drop-lookup-adjust-repair` on main 4137bbc; NOT merged at
+writing, NOT deployed; no migration).** The 2026-10-10 repair is NOT run, and is gone: `OpsLookupAdjustRepairController`,
+`LookupAdjustRepairService`, `scripts/repair-lookup-adjust-2026-10-10`, `ShopifyInventoryService.claimRepairDeparture` /
+`shopifyStates`, the gateway read `fetchStateQuantities` (only the repair used it) and their tests (rp1, rp2,
+`OpsRepairEndpointFilterTest`). The ops gate (`OpsSecretGuard` / `OpsSecretFilter`) and its tests stay.
+- **The two Snouts PTGREEN-2 units** — voided `01M3S6YXH3Z0PCC6J6467HPR0T` (Shopify still counts it in available: −1
+  owed) and damaged `01M3S6YXH3VPJ3FDXA4RTN9N9P` (still in available, never moved to damaged) — are corrected by hand in
+  Shopify if Marawan chooses. Traced writes nothing for them.
+- **Why it 404'd in prod (dry run, 2026-10-11):** its reads ran under `TenantContext.runAs` but outside any transaction;
+  on app_user the tenant GUC is set only when a transaction begins (`TenantAwareConnection`), so RLS hid both pieces.
+  Its tests ran as postgres (BYPASSRLS). Audit of everything else piece sync runs outside a request transaction: the
+  sweep (`sweepPieceClaims`), the after-commit push (`pushPieceClaimNow`), the 15-min pending→ambiguous rule, the
+  manual repush and `resolvePreconditions` / StoreRepository / ShopifyTokenProvider / InventoryItemIdService all read
+  inside `tx.execute`; the claim paths run in the caller's transaction. New `PieceSyncAppUserTest.u2`: the sweep job on a
+  real app_user connection sends a queued piece claim.
+- **Gotcha:** any DB read outside a request on app_user must open a transaction (TransactionTemplate) under
+  `TenantContext.runAs` — runAs alone sees zero rows, silently.
 **Sidebar reorg + collapsible rail (2026-10-11, branch `sidebar-reorg` off origin/main ca5f5fa, worktree
 `~/Documents/traceability-sidebar`; committed + pushed, NOT merged, NOT deployed; frontend only, no migration).**
 - **Pre-step finding:** analytics/prelaunch-fixes was already merged to origin/main (cb5f28d); prod's bundle (built
@@ -95,12 +112,11 @@ merged, NOT deployed). Migration V161 (renumbered from V160 — P2 took it). Rep
   pieces).
 - **Finding:** a relocated piece is `transferred_out` at the destination — Lookup can't adjust it, so D4's
   away-from-main branch has no Lookup path today (tested with a piece made available there by hand).
-- **Next up:** Marawan reviews; dry-run the repair against prod, then `--apply` only on his word; merge + deploy.
+- **Next up:** Marawan reviews; merge + deploy. (The repair was dropped on 2026-10-11 — see above.)
 - **Follow-up (accepted v1 gap):** damaged→lost/destroyed and Found-it-after-damaged: Shopify damaged bucket not
   reconciled.
-- **Follow-up (after the repair is applied):** remove `OpsLookupAdjustRepairController`, `LookupAdjustRepairService` and
-  `scripts/repair-lookup-adjust-2026-10-10` in a follow-up commit. The endpoint is server-side restricted to The Snouts
-  and the two pieces (C3), dry run by default, behind the ops secret (TRACED_OPS_SECRET must be set in prod `.env` to run it).
+- **Repair dropped (2026-10-11):** the 2026-10-10 Lookup-adjust repair (ops endpoint + script) was removed unrun —
+  see the entry above.
 **Returns portal P2 — refund payment method (2026-10-10, branch `feat/portal-refund-method-p2` off origin/main cb5f28d;
 NOT merged, NOT deployed). Migration V160.** Mockup signed off: `design/Traced_portal_refund_method_dc.html` (privacy line
 "Shared only with {store}. Deleted 30 days after your refund."). Decisions 1–5 approved as proposed.

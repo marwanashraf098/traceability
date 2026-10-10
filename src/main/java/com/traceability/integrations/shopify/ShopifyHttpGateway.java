@@ -1681,41 +1681,6 @@ class ShopifyHttpGateway implements ShopifyGateway {
             }
             """;
 
-    private static final String INVENTORY_STATES_QUERY = """
-            query InventoryStatesAtLocation($ids: [ID!]!, $locationId: ID!, $names: [String!]!) {
-              nodes(ids: $ids) {
-                ... on InventoryItem {
-                  id
-                  inventoryLevel(locationId: $locationId) {
-                    quantities(names: $names) { name quantity }
-                  }
-                }
-              }
-            }
-            """;
-
-    @Override
-    public Map<String, Map<String, Integer>> fetchStateQuantities(String shopDomain, String token, String locationGid,
-                                                                  List<String> inventoryItemGids, List<String> names) {
-        Map<String, Map<String, Integer>> out = new java.util.LinkedHashMap<>();
-        for (List<String> chunk : chunks(inventoryItemGids, MAX_INPUT_ARRAY)) {
-            ObjectNode vars = mapper.createObjectNode();
-            vars.set("ids", mapper.valueToTree(chunk));
-            vars.put("locationId", locationGid);
-            vars.set("names", mapper.valueToTree(names));
-            JsonNode data = executeGraphQL(shopDomain, token, INVENTORY_STATES_QUERY, vars);
-            for (JsonNode node : data.path("nodes")) {
-                if (node.isNull() || node.isMissingNode()) continue;
-                JsonNode level = node.path("inventoryLevel");
-                if (level.isMissingNode() || level.isNull()) continue;
-                Map<String, Integer> q = new java.util.LinkedHashMap<>();
-                for (JsonNode x : level.path("quantities")) q.put(x.path("name").asText(), x.path("quantity").asInt(0));
-                out.put(node.path("id").asText(), q);
-            }
-        }
-        return out;
-    }
-
     @Override
     public List<InventoryLevel> fetchAvailableQuantities(String shopDomain, String token,
                                                           String locationGid, List<String> inventoryItemGids) {
