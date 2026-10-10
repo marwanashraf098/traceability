@@ -392,6 +392,8 @@ public class StockAnalyticsService {
         jdbc.query(
             "SELECT DISTINCT ON (rri.variant_id) rri.variant_id, rri.reason_code " +
             "FROM return_request_items rri JOIN return_requests rr ON rr.id = rri.request_id " +
+            // P4a: a request on a portal pre-connect order is not analytics data (merchant_orders, V163).
+            "JOIN merchant_orders o ON o.id = rr.order_id AND o.tenant_id = rr.tenant_id " +
             "WHERE rri.tenant_id = ? AND rr.status <> 'rejected' AND rr.created_at >= ? AND rri.variant_id IS NOT NULL " +
             "GROUP BY rri.variant_id, rri.reason_code " +
             "ORDER BY rri.variant_id, COUNT(*) DESC, rri.reason_code",

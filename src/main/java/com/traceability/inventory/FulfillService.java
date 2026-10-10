@@ -157,7 +157,11 @@ public class FulfillService {
             // Badge derivation only (FR-EXCHANGE Phase 3/4 §0e) — no new orders column.
             "LEFT JOIN exchanges e ON e.outbound_order_id = o.id " +
             PICKABLE_ORDERS_FILTER +
-            "GROUP BY o.id, e.id " +
+            // merchant_orders is a view: Postgres can't infer the other o.* columns from o.id
+            // (no primary key on a view), so every selected / ordered o column is listed.
+            "GROUP BY o.id, o.tenant_id, o.number, o.customer_name, o.customer_phone, o.status, " +
+            "         o.payment_method, o.cod_amount, o.placed_at, o.locked_by, o.locked_at, " +
+            "         o.is_self_pickup, o.created_at, e.id " +
             "ORDER BY o.created_at ASC",
             tenantId, lookbackDays);
     }
@@ -402,6 +406,7 @@ public class FulfillService {
     @Transactional
     public void releaseOrder(UUID orderId, UUID actorUserId, boolean isManager) {
         UUID tenantId = TenantContext.require();
+        requireMerchantOrder(orderId, tenantId);
         String sql = isManager
             ? "UPDATE merchant_orders SET locked_by = NULL, locked_at = NULL WHERE id = ? AND tenant_id = ?"
             : "UPDATE merchant_orders SET locked_by = NULL, locked_at = NULL WHERE id = ? AND tenant_id = ? AND locked_by = ?";
@@ -450,6 +455,7 @@ public class FulfillService {
             return ScanResult.rejected("ALREADY_SHIPPED",
                 "This order's shipment has already left 'created' — pick/pack is no longer possible");
         }
+        requireMerchantOrder(orderId, tenantId);
 
         // 0b. Pick & Pack S3 (Q2): another packer holds a live claim on this order (waybill
         //     mode opened it) — refuse, in queue mode too. Queue mode never takes claims itself;
@@ -588,6 +594,7 @@ public class FulfillService {
     @Transactional(isolation = Isolation.READ_COMMITTED)
     public void unscan(UUID orderId, String pieceId, UUID actorUserId) {
         UUID tenantId = TenantContext.require();
+        requireMerchantOrder(orderId, tenantId);
 
         // Find the active allocation for this piece on this order
         List<Map<String, Object>> allocs = jdbc.queryForList(
@@ -627,6 +634,7 @@ public class FulfillService {
             throw new ResponseStatusException(HttpStatus.CONFLICT,
                 "This order's shipment has already left 'created' — cannot complete picking");
         }
+        requireMerchantOrder(orderId, tenantId);
 
         // Ensure all lines are fully scanned
         List<Map<String, Object>> lines = jdbc.queryForList(
@@ -1012,6 +1020,7 @@ public class FulfillService {
     @Transactional(isolation = Isolation.READ_COMMITTED)
     public UnpackResult unpackPiece(UUID orderId, String pieceId, UUID actorUserId) {
         UUID tenantId = TenantContext.require();
+        requireMerchantOrder(orderId, tenantId);
 
         Integer check = jdbc.queryForObject(
             "SELECT COUNT(*) FROM merchant_orders " +
@@ -1111,6 +1120,21 @@ public class FulfillService {
             ")",
             Boolean.class, orderId, tenantId);
         return Boolean.TRUE.equals(exists);
+    }
+
+    /**
+     * P4a: every by-order write first proves the order is a merchant order (merchant_orders —
+     * never a portal pre-connect order, V163). scan / unscan / complete / unpack reach the order
+     * through order_items and allocations, so without this a portal order's lines could be picked.
+     * A missing or portal order answers 404, like every other by-order endpoint.
+     */
+    private void requireMerchantOrder(UUID orderId, UUID tenantId) {
+        Boolean found = jdbc.queryForObject(
+            "SELECT EXISTS (SELECT 1 FROM merchant_orders WHERE id = ? AND tenant_id = ?)",
+            Boolean.class, orderId, tenantId);
+        if (!Boolean.TRUE.equals(found)) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Order not found");
+        }
     }
 
     /**

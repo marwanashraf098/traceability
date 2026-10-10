@@ -440,6 +440,15 @@ public class ShipmentLinkService {
     public void manualLink(long unlinkedId, UUID orderId, UUID actorUserId) {
         UUID tenantId = TenantContext.require();
 
+        // P4a: only a merchant order can take a forward leg — never a portal pre-connect order
+        // (merchant_orders, V163). Without this the shipment INSERT below links to any order id.
+        Boolean orderFound = jdbc.queryForObject(
+            "SELECT EXISTS (SELECT 1 FROM merchant_orders WHERE id = ? AND tenant_id = ?)",
+            Boolean.class, orderId, tenantId);
+        if (!Boolean.TRUE.equals(orderFound)) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Order not found");
+        }
+
         Object[] row = jdbc.query(
             // raw is fetched alongside state columns so populateConsigneePii can run
             // without an extra Bosta API call — the receiver payload is already stored.
@@ -1442,7 +1451,7 @@ public class ShipmentLinkService {
             "  AND status NOT IN ('delivered','returned','lost','cancelled') " +
             "  AND NOT EXISTS ( " +
             "      SELECT 1 FROM shipments s " +
-            "      WHERE s.order_id  = orders.id " +
+            "      WHERE s.order_id  = merchant_orders.id " +
             "        AND s.tenant_id = ? " +
             "        AND s.internal_state NOT IN ('terminated','cancelled') " +
             "  )",
