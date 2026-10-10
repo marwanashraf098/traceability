@@ -275,39 +275,6 @@ public class ShopifyInventoryService {
         return id;
     }
 
-    /**
-     * The 2026-10-10 Lookup-adjust repair (D10 — LookupAdjustRepairService, two named pieces only): a
-     * NEW departure claim under a repair key, decided by the same countedAtMain rule as a live
-     * adjustment. In the caller's transaction; returns the claim id to send, or null.
-     */
-    Long claimRepairDeparture(UUID tenantId, String triggerType, String pieceId, String triggerId) {
-        return claimPieceDeparture(tenantId, triggerType, pieceId, triggerId);
-    }
-
-    /**
-     * READ — the named Shopify inventory states of these variants at the tenant's main warehouse
-     * (the repair's dry run). Keyed by variant id; empty when the store or location isn't usable.
-     */
-    Map<UUID, Map<String, Integer>> shopifyStates(UUID tenantId, List<UUID> variantIds, List<String> names) {
-        Map<UUID, Map<String, Integer>> out = new java.util.LinkedHashMap<>();
-        UUID mainId = jdbc.query("SELECT id FROM locations WHERE tenant_id = ? AND is_fulfillment = true",
-            rs -> rs.next() ? rs.getObject(1, UUID.class) : null, tenantId);
-        if (mainId == null) return out;
-        Map<String, UUID> byItem = new java.util.LinkedHashMap<>();
-        Preconditions last = null;
-        for (UUID variantId : variantIds) {
-            Preconditions p = resolvePreconditions(tenantId, variantId, mainId, "repair_read", variantId.toString());
-            if (p.error() != null) throw new IllegalStateException("Shopify read not possible: " + p.error());
-            byItem.put(p.shopifyInventoryItemId(), variantId);
-            last = p;
-        }
-        if (last == null) return out;
-        Map<String, Map<String, Integer>> states = shopify.fetchStateQuantities(last.shopDomain(), last.token(),
-            last.shopifyLocationId(), List.copyOf(byItem.keySet()), names);
-        states.forEach((item, q) -> out.put(byItem.get(item), q));
-        return out;
-    }
-
     /** Sends one piece claim after its transaction committed (registered via {@link #afterCommit}). */
     @Async
     public CompletableFuture<Void> pushPieceClaim(UUID tenantId, long claimId) {

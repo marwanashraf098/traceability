@@ -99,7 +99,6 @@ class PieceShopifySyncC2Test {
     @Autowired StockTakeService stockTake;
     @Autowired StockTakeReconciliationService reconciliation;
     @Autowired ExceptionService exceptions;
-    @Autowired LookupAdjustRepairService repair;
     @MockBean JobScheduler jobScheduler;
     @MockBean ShopifyGateway shopifyGateway;
     @MockBean ShopifyTokenProvider tokenProvider;
@@ -616,102 +615,6 @@ class PieceShopifySyncC2Test {
         assertThat(jdbc.queryForObject("SELECT condition FROM pieces WHERE id = ?", String.class, piece)).isEqualTo("good");
         assertThat(LookupService.phraseKey("adjusted", "damaged", "available")).isEqualTo("back_to_good");
         assertThat(LookupService.phraseKey("adjusted", "lost", "available")).isEqualTo("found_it");
-    }
-
-    // ── D10: the repair ───────────────────────────────────────────────────────────
-
-    @Test
-    @SuppressWarnings("unchecked")
-    void rp1_repairDryRun_zeroWrites_applyOnce_rerunNothing() throws Exception {
-        T t = tenant("rp1", true, LookupAdjustRepairService.SNOUTS_TENANT);   // the one tenant it runs for
-        String voided = pieceWithId(t, LookupAdjustRepairService.VOID_PIECE, "voided");
-        String damaged = pieceWithId(t, LookupAdjustRepairService.DAMAGE_PIECE, "damaged");
-        jdbc.update("INSERT INTO shopify_inventory_adjustments (tenant_id, batch_id, variant_id, location_id, delta, " +
-            "trigger_type, trigger_id, status, skip_reason, error, created_at) VALUES (?, ?, ?, ?, -1, 'void_correction', ?, 'skipped', " +
-            "'arrival_not_counted', 'Receiving increment never applied for this piece''s session — on_hand already correct', " +
-            "piece_sync_cutoff() - interval '1 hour')",
-            t.tenant(), UUID.randomUUID(), t.variant(), t.location(), voided);
-        jdbc.update("INSERT INTO shopify_inventory_adjustments (tenant_id, batch_id, variant_id, location_id, delta, " +
-            "trigger_type, trigger_id, status, error, created_at) VALUES (?, ?, ?, ?, 0, 'damage_move', ?, 'failed', " +
-            "'referenceDocumentUri (Expected value to not be null)', piece_sync_cutoff() - interval '1 hour')",
-            t.tenant(), UUID.randomUUID(), t.variant(), t.location(), damaged);
-        when(shopifyGateway.resolveInventoryItemId(any(), any(), any())).thenReturn(t.item());
-        when(shopifyGateway.fetchStateQuantities(any(), any(), any(), any(), any()))
-            .thenReturn(Map.of(t.item(), Map.of("available", 7, "damaged", 0, "on_hand", 7)));
-
-        Map<String, Object> dry = repair.run(t.tenant(), false);
-
-        assertThat(dry).containsEntry("mode", "dry_run");
-        List<Map<String, Object>> ps = (List<Map<String, Object>>) dry.get("pieces");
-        assertThat(ps).hasSize(2);
-        assertThat(ps.get(0)).containsEntry("countedAtMain", true).containsEntry("shopifyBefore",
-            Map.of("available", 7, "damaged", 0, "on_hand", 7));
-        assertThat((String) ps.get(0).get("action")).startsWith("would claim void_correction");
-        assertThat((String) ps.get(1).get("action")).startsWith("would claim damage_move");
-        verifyNoWrites();
-        assertThat(count(t, "trigger_id LIKE '%repair-2026-10-10'")).isZero();
-        assertThat(jdbc.queryForObject("SELECT status FROM shopify_inventory_adjustments WHERE tenant_id = ? " +
-            "AND trigger_type = 'damage_move' AND trigger_id = ?", String.class, t.tenant(), damaged)).isEqualTo("failed");
-
-        repair.run(t.tenant(), true);
-        repair.run(t.tenant(), true);
-
-        verify(shopifyGateway, times(1)).pushVoidCorrection(any(), any(), eq(t.item()), eq(t.traced()), eq(-1),
-            eq("traced://piece/" + voided), anyString());
-        verify(shopifyGateway, times(1)).moveAvailableToDamaged(any(), any(), eq(t.item()), eq(t.traced()), eq(1),
-            eq("damaged"), eq("traced://piece/" + damaged), anyString());
-        assertThat(jdbc.queryForObject("SELECT status FROM shopify_inventory_adjustments WHERE tenant_id = ? " +
-            "AND trigger_type = 'damage_move' AND trigger_id = ?", String.class, t.tenant(), damaged)).isEqualTo("superseded_by_repair");
-        assertThat(jdbc.queryForObject("SELECT status FROM shopify_inventory_adjustments WHERE tenant_id = ? " +
-            "AND trigger_type = 'void_correction' AND trigger_id = ?", String.class, t.tenant(), voided)).isEqualTo("skipped");
-    }
-
-    /**
-     * The two repair pieces held by ANOTHER tenant (state otherwise eligible: voided / damaged, received
-     * before a seed, receiving counted) — only the server-side tenant check can refuse it. Piece ids are
-     * global, so if rp1 already created them for The Snouts they are lent to the other tenant and handed back.
-     */
-    @Test
-    void rp2_repairRefusedForAnyOtherTenant_evenHoldingTheTwoPieces() {
-        T t = tenant("rp2", true);
-        List<String> ids = List.of(LookupAdjustRepairService.VOID_PIECE, LookupAdjustRepairService.DAMAGE_PIECE);
-        Map<String, Map<String, Object>> lent = new HashMap<>();
-        for (String id : ids) {
-            List<Map<String, Object>> was = jdbc.queryForList(
-                "SELECT tenant_id, variant_id, current_location_id, status::text AS status FROM pieces WHERE id = ?", id);
-            if (was.isEmpty()) {
-                pieceWithId(t, id, id.equals(LookupAdjustRepairService.VOID_PIECE) ? "voided" : "damaged");
-            } else {
-                lent.put(id, was.get(0));
-                jdbc.update("UPDATE pieces SET tenant_id = ?, variant_id = ?, current_location_id = ?, " +
-                    "status = ?::piece_status WHERE id = ?", t.tenant(), t.variant(), t.location(),
-                    id.equals(LookupAdjustRepairService.VOID_PIECE) ? "voided" : "damaged", id);
-            }
-        }
-        when(shopifyGateway.fetchStateQuantities(any(), any(), any(), any(), any()))
-            .thenReturn(Map.of(t.item(), Map.of("available", 3, "damaged", 0, "on_hand", 3)));
-        try {
-            for (boolean apply : List.of(false, true)) {
-                assertThatThrownBy(() -> repair.run(t.tenant(), apply))
-                    .isInstanceOf(ResponseStatusException.class)
-                    .satisfies(e -> assertThat(((ResponseStatusException) e).getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND));
-            }
-            verify(shopifyGateway, never()).fetchStateQuantities(any(), any(), any(), any(), any());
-            verifyNoWrites();
-            assertThat(count(t, "trigger_type <> 'initial_seed'")).isZero();
-        } finally {
-            for (String id : ids) {
-                Map<String, Object> was = lent.get(id);
-                if (was == null) {
-                    jdbc.update("DELETE FROM shopify_inventory_adjustments WHERE split_part(trigger_id, ':', 1) = ? AND tenant_id = ?", id, t.tenant());
-                    jdbc.update("DELETE FROM pieces WHERE id = ?", id);
-                } else {
-                    jdbc.update("UPDATE pieces SET tenant_id = ?, variant_id = ?, current_location_id = ?, status = ?::piece_status " +
-                        "WHERE id = ?", was.get("tenant_id"), was.get("variant_id"), was.get("current_location_id"),
-                        was.get("status"), id);
-                }
-            }
-        }
     }
 
     // ── check B: every return claim that fails reaches the CRITICAL alert ─────────

@@ -508,13 +508,6 @@ public interface ShopifyGateway {
                                 String locationGid, int quantity, String reason,
                                 String referenceDocumentUri, String idempotencyKey);
 
-    /**
-     * Named inventory states (e.g. "available", "damaged") of inventory items at one location — a READ,
-     * used by the 2026-10-10 Lookup-adjust repair's dry run. Items with no level there are left out.
-     */
-    Map<String, Map<String, Integer>> fetchStateQuantities(String shopDomain, String token, String locationGid,
-                                                           List<String> inventoryItemGids, List<String> names);
-
     /** One inventoryItem's current "available" quantity at a location (Part C reconcile read). */
     record InventoryLevel(String inventoryItemGid, int available) {}
 
