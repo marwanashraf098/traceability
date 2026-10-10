@@ -51,7 +51,7 @@ public class PackPrintBatchStore {
         String dir = "newest".equals(sort) ? "DESC" : "ASC";
         String sql =
             "SELECT o.id AS order_id, o.number, fs.id AS shipment_id, fs.tracking_number " +
-            "FROM orders o " +
+            "FROM merchant_orders o " +
             "JOIN LATERAL ( " +
             "    SELECT id, tracking_number, internal_state " +
             "    FROM shipments " +

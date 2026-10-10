@@ -106,7 +106,7 @@ public class PackSessionStore {
         Integer left = jdbc.queryForObject(
             "SELECT COUNT(DISTINCT bi.shipment_id) FROM pack_print_batch_items bi " +
             "JOIN pack_print_batches b ON b.id = bi.batch_id AND b.tenant_id = bi.tenant_id " +
-            "JOIN orders o ON o.id = bi.order_id AND o.tenant_id = bi.tenant_id " +
+            "JOIN merchant_orders o ON o.id = bi.order_id AND o.tenant_id = bi.tenant_id " +
             "WHERE bi.tenant_id = ? " +
             "  AND (b.created_at AT TIME ZONE '" + TODAY_ZONE + "')::date = (now() AT TIME ZONE '" + TODAY_ZONE + "')::date " +
             "  AND o.status IN ('new', 'ready_to_pick') AND o.cancel_requested_at IS NULL",
@@ -114,7 +114,7 @@ public class PackSessionStore {
 
         List<RecentRow> recent = jdbc.query(
             "SELECT so.order_id, o.number, o.customer_name, so.outcome, so.reason, so.raw_scan, so.created_at " +
-            "FROM pack_session_orders so LEFT JOIN orders o ON o.id = so.order_id " +
+            "FROM pack_session_orders so LEFT JOIN merchant_orders o ON o.id = so.order_id " +
             "WHERE so.session_id = ? AND so.tenant_id = ? " +
             // UUIDv4 is not time-ordered — order by created_at, never id (see CLAUDE.md invariant)
             "ORDER BY so.created_at DESC, so.id DESC LIMIT 30",
@@ -237,7 +237,7 @@ public class PackSessionStore {
         UUID tenantId = TenantContext.require();
         Session s = load(sessionId, userId, tenantId, true, true);
         if (s.currentOrderId() != null) throw PackSessionException.orderOpen();
-        jdbc.update("UPDATE orders SET locked_by = NULL, locked_at = NULL WHERE tenant_id = ? AND locked_by = ?",
+        jdbc.update("UPDATE merchant_orders SET locked_by = NULL, locked_at = NULL WHERE tenant_id = ? AND locked_by = ?",
             tenantId, userId);
         jdbc.update("UPDATE pack_sessions SET status = 'ended', ended_at = now() WHERE id = ? AND tenant_id = ?",
             sessionId, tenantId);
@@ -304,7 +304,7 @@ public class PackSessionStore {
             "       (SELECT b.created_at FROM pack_print_batch_items bi JOIN pack_print_batches b ON b.id = bi.batch_id " +
             "        WHERE bi.shipment_id = s.id AND bi.tenant_id = o.tenant_id " +
             "        ORDER BY b.created_at DESC, b.id DESC LIMIT 1) AS batch_printed_at " +
-            "FROM orders o LEFT JOIN shipments s ON s.id = ? " +
+            "FROM merchant_orders o LEFT JOIN shipments s ON s.id = ? " +
             "WHERE o.id = ? AND o.tenant_id = ?",
             card.get("shipment_id"), orderId, tenantId);
         if (!extra.isEmpty()) {

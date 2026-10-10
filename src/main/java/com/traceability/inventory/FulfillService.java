@@ -152,7 +152,7 @@ public class FulfillService {
             "                 AND s2.shipment_leg = 'forward' " +
             "               ORDER BY s2.created_at DESC, s2.id DESC LIMIT 1) " +
             "       ) AS awb_printed " +
-            "FROM orders o " +
+            "FROM merchant_orders o " +
             "LEFT JOIN order_items oi ON oi.order_id = o.id " +
             // Badge derivation only (FR-EXCHANGE Phase 3/4 §0e) — no new orders column.
             "LEFT JOIN exchanges e ON e.outbound_order_id = o.id " +
@@ -181,7 +181,7 @@ public class FulfillService {
     public int getAwaitingWaybillCount() {
         UUID tenantId = TenantContext.require();
         Integer count = jdbc.queryForObject(
-            "SELECT COUNT(*) FROM orders o " +
+            "SELECT COUNT(*) FROM merchant_orders o " +
             "LEFT JOIN LATERAL ( " +
             "    SELECT internal_state " +
             "    FROM shipments " +
@@ -267,7 +267,7 @@ public class FulfillService {
         if (limit != null)   params.add(limit);
 
         List<Map<String, Object>> eligibleOrders = jdbc.queryForList(
-            "SELECT o.id FROM orders o " + PICKABLE_ORDERS_FILTER + batchClause +
+            "SELECT o.id FROM merchant_orders o " + PICKABLE_ORDERS_FILTER + batchClause +
             "ORDER BY o.created_at ASC" + (limit != null ? " LIMIT ?" : ""),
             params.toArray());
 
@@ -291,7 +291,7 @@ public class FulfillService {
                 "       (SELECT COUNT(*) FROM pieces p " +
                 "        WHERE p.variant_id = v.id AND p.tenant_id = v.tenant_id AND p.status = 'available'" +
                 "       ) AS available_count " +
-                "FROM orders o " +
+                "FROM merchant_orders o " +
                 "JOIN order_items oi ON oi.order_id = o.id " +
                 "JOIN variants v ON v.id = oi.variant_id " +
                 "JOIN products pr ON pr.id = v.product_id " +
@@ -357,7 +357,7 @@ public class FulfillService {
             "       (s.id IS NOT NULL AND EXISTS (" +
             "           SELECT 1 FROM pack_print_batch_items bi " +
             "           WHERE bi.shipment_id = s.id AND bi.tenant_id = o.tenant_id)) AS \"awbPrinted\" " +
-            "FROM orders o " +
+            "FROM merchant_orders o " +
             // One forward leg, deterministically: an active one (not terminated / cancelled) before
             // an ended one, newest first. A plain join returned one row per forward leg and
             // rows.get(0) picked an arbitrary one once an order had an old terminated leg.
@@ -388,7 +388,7 @@ public class FulfillService {
         requirePickableStatus(orderId, tenantId);
 
         int rows = jdbc.update(
-            "UPDATE orders SET locked_by = ?, locked_at = now() " +
+            "UPDATE merchant_orders SET locked_by = ?, locked_at = now() " +
             "WHERE id = ? AND tenant_id = ? " +
             "  AND (locked_by IS NULL OR locked_by = ?)",
             actorUserId, orderId, tenantId, actorUserId);
@@ -403,8 +403,8 @@ public class FulfillService {
     public void releaseOrder(UUID orderId, UUID actorUserId, boolean isManager) {
         UUID tenantId = TenantContext.require();
         String sql = isManager
-            ? "UPDATE orders SET locked_by = NULL, locked_at = NULL WHERE id = ? AND tenant_id = ?"
-            : "UPDATE orders SET locked_by = NULL, locked_at = NULL WHERE id = ? AND tenant_id = ? AND locked_by = ?";
+            ? "UPDATE merchant_orders SET locked_by = NULL, locked_at = NULL WHERE id = ? AND tenant_id = ?"
+            : "UPDATE merchant_orders SET locked_by = NULL, locked_at = NULL WHERE id = ? AND tenant_id = ? AND locked_by = ?";
 
         int rows = isManager
             ? jdbc.update(sql, orderId, tenantId)
@@ -676,11 +676,11 @@ public class FulfillService {
         // Advance order: self-pickup orders go to self_pickup_pending (no AWB step);
         // standard orders go to packed (then await AWB-link).
         Boolean isSelfPickup = jdbc.queryForObject(
-            "SELECT is_self_pickup FROM orders WHERE id = ? AND tenant_id = ?",
+            "SELECT is_self_pickup FROM merchant_orders WHERE id = ? AND tenant_id = ?",
             Boolean.class, orderId, tenantId);
         String newOrderStatus = Boolean.TRUE.equals(isSelfPickup) ? "self_pickup_pending" : "packed";
         jdbc.update(
-            "UPDATE orders SET status = ?::order_status WHERE id = ? AND tenant_id = ?",
+            "UPDATE merchant_orders SET status = ?::order_status WHERE id = ? AND tenant_id = ?",
             newOrderStatus, orderId, tenantId);
 
         return pieceIds.size();
@@ -698,7 +698,7 @@ public class FulfillService {
         UUID tenantId = TenantContext.require();
 
         String status = jdbc.query(
-            "SELECT status FROM orders WHERE id = ? AND tenant_id = ?",
+            "SELECT status FROM merchant_orders WHERE id = ? AND tenant_id = ?",
             rs -> rs.next() ? rs.getString("status") : null,
             orderId, tenantId);
         if (status == null) {
@@ -720,7 +720,7 @@ public class FulfillService {
         }
 
         jdbc.update(
-            "UPDATE orders SET is_self_pickup = ? WHERE id = ? AND tenant_id = ?",
+            "UPDATE merchant_orders SET is_self_pickup = ? WHERE id = ? AND tenant_id = ?",
             selfPickup, orderId, tenantId);
     }
 
@@ -747,7 +747,7 @@ public class FulfillService {
         UUID tenantId = TenantContext.require();
 
         String status = jdbc.query(
-            "SELECT status FROM orders WHERE id = ? AND tenant_id = ?",
+            "SELECT status FROM merchant_orders WHERE id = ? AND tenant_id = ?",
             rs -> rs.next() ? rs.getString("status") : null,
             orderId, tenantId);
         if (status == null) {
@@ -778,7 +778,7 @@ public class FulfillService {
 
         // Step 3: Advance order + write order-level audit record.
         jdbc.update(
-            "UPDATE orders " +
+            "UPDATE merchant_orders " +
             "SET status       = 'self_pickup_pending'::order_status, " +
             "    is_self_pickup = true, " +
             "    metadata       = json_build_object(" +
@@ -806,7 +806,7 @@ public class FulfillService {
         UUID tenantId = TenantContext.require();
 
         String status = jdbc.query(
-            "SELECT status FROM orders WHERE id = ? AND tenant_id = ?",
+            "SELECT status FROM merchant_orders WHERE id = ? AND tenant_id = ?",
             rs -> rs.next() ? rs.getString("status") : null,
             orderId, tenantId);
         if (status == null) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Order not found");
@@ -828,7 +828,7 @@ public class FulfillService {
         }
 
         jdbc.update(
-            "UPDATE orders SET status = 'delivered'::order_status WHERE id = ? AND tenant_id = ?",
+            "UPDATE merchant_orders SET status = 'delivered'::order_status WHERE id = ? AND tenant_id = ?",
             orderId, tenantId);
 
         return pieceIds.size();
@@ -848,13 +848,13 @@ public class FulfillService {
     public void releaseHold(UUID orderId, UUID actorUserId) {
         UUID tenantId = TenantContext.require();
         int updated = jdbc.update(
-            "UPDATE orders SET on_hold = false, hold_reason = NULL " +
+            "UPDATE merchant_orders SET on_hold = false, hold_reason = NULL " +
             "WHERE id = ? AND tenant_id = ? AND on_hold = true",
             orderId, tenantId);
         if (updated == 0) {
             // Check if order exists at all
             Integer count = jdbc.queryForObject(
-                "SELECT COUNT(*) FROM orders WHERE id = ? AND tenant_id = ?",
+                "SELECT COUNT(*) FROM merchant_orders WHERE id = ? AND tenant_id = ?",
                 Integer.class, orderId, tenantId);
             if (count == null || count == 0)
                 throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Order not found");
@@ -885,12 +885,12 @@ public class FulfillService {
         }
 
         int updated = jdbc.update(
-            "UPDATE orders SET on_hold = true, hold_reason = ? " +
+            "UPDATE merchant_orders SET on_hold = true, hold_reason = ? " +
             "WHERE id = ? AND tenant_id = ? AND on_hold = false",
             reason.strip(), orderId, tenantId);
         if (updated == 0) {
             Integer count = jdbc.queryForObject(
-                "SELECT COUNT(*) FROM orders WHERE id = ? AND tenant_id = ?",
+                "SELECT COUNT(*) FROM merchant_orders WHERE id = ? AND tenant_id = ?",
                 Integer.class, orderId, tenantId);
             if (count == null || count == 0)
                 throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Order not found");
@@ -908,12 +908,12 @@ public class FulfillService {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "COD amount cannot exceed 30,000 EGP");
         UUID tenantId = TenantContext.require();
         int updated = jdbc.update(
-            "UPDATE orders SET cod_amount = ? " +
+            "UPDATE merchant_orders SET cod_amount = ? " +
             "WHERE id = ? AND tenant_id = ? AND status IN ('new', 'ready_to_pick')",
             amount, orderId, tenantId);
         if (updated == 0) {
             String status = jdbc.query(
-                "SELECT status FROM orders WHERE id = ? AND tenant_id = ?",
+                "SELECT status FROM merchant_orders WHERE id = ? AND tenant_id = ?",
                 rs -> rs.next() ? rs.getString("status") : null,
                 orderId, tenantId);
             if (status == null)
@@ -932,7 +932,7 @@ public class FulfillService {
         UUID tenantId = TenantContext.require();
 
         String status = jdbc.query(
-            "SELECT status FROM orders WHERE id = ? AND tenant_id = ?",
+            "SELECT status FROM merchant_orders WHERE id = ? AND tenant_id = ?",
             rs -> rs.next() ? rs.getString("status") : null,
             orderId, tenantId);
         if (status == null) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Order not found");
@@ -959,7 +959,7 @@ public class FulfillService {
 
             if (packed > 0) {
                 jdbc.update(
-                    "UPDATE orders SET cancel_requested_at = COALESCE(cancel_requested_at, now()) " +
+                    "UPDATE merchant_orders SET cancel_requested_at = COALESCE(cancel_requested_at, now()) " +
                     "WHERE id = ? AND tenant_id = ?",
                     orderId, tenantId);
                 // FR-9.11: packed orders can't be on a pickup manifest, but call is idempotent.
@@ -995,7 +995,7 @@ public class FulfillService {
             orderId, tenantId);
 
         jdbc.update(
-            "UPDATE orders SET status = 'cancelled'::order_status, cancel_requested_at = NULL " +
+            "UPDATE merchant_orders SET status = 'cancelled'::order_status, cancel_requested_at = NULL " +
             "WHERE id = ? AND tenant_id = ?",
             orderId, tenantId);
 
@@ -1014,7 +1014,7 @@ public class FulfillService {
         UUID tenantId = TenantContext.require();
 
         Integer check = jdbc.queryForObject(
-            "SELECT COUNT(*) FROM orders " +
+            "SELECT COUNT(*) FROM merchant_orders " +
             "WHERE id = ? AND tenant_id = ? " +
             "  AND cancel_requested_at IS NOT NULL " +
             "  AND status IN ('packed'::order_status, 'self_pickup_pending'::order_status)",
@@ -1051,7 +1051,7 @@ public class FulfillService {
 
         if (remainingCount == 0) {
             jdbc.update(
-                "UPDATE orders SET status = 'cancelled'::order_status, cancel_requested_at = NULL " +
+                "UPDATE merchant_orders SET status = 'cancelled'::order_status, cancel_requested_at = NULL " +
                 "WHERE id = ? AND tenant_id = ?",
                 orderId, tenantId);
             // FR-9.11: packed orders can't be on a manifest, but idempotent.
@@ -1126,7 +1126,7 @@ public class FulfillService {
 
     private void requirePickableStatus(UUID orderId, UUID tenantId) {
         List<String> rows = jdbc.queryForList(
-            "SELECT status FROM orders WHERE id = ? AND tenant_id = ?",
+            "SELECT status FROM merchant_orders WHERE id = ? AND tenant_id = ?",
             String.class, orderId, tenantId);
         if (rows.isEmpty()) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Order not found");
         String s = rows.get(0);
@@ -1301,7 +1301,7 @@ public class FulfillService {
      */
     public void setEditConflictSignal(UUID orderId, UUID tenantId, String diffJson) {
         jdbc.update(
-            "UPDATE orders " +
+            "UPDATE merchant_orders " +
             "SET shopify_edit_conflict_at   = COALESCE(shopify_edit_conflict_at, now()), " +
             "    shopify_edit_conflict_diff  = ?::jsonb " +
             "WHERE id = ? AND tenant_id = ?",
