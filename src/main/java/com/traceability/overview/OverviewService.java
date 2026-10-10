@@ -105,7 +105,7 @@ public class OverviewService {
     // Orders = orders.placed_at.
     private List<Instant> ordersRaw(UUID tid, Timestamp lower) {
         return jdbc.query(
-            "SELECT placed_at FROM orders WHERE tenant_id = ? AND placed_at >= ?",
+            "SELECT placed_at FROM merchant_orders WHERE tenant_id = ? AND placed_at >= ?",
             TS_MAPPER, tid, lower);
     }
 
@@ -212,7 +212,7 @@ public class OverviewService {
 
         // guided_unpack
         all.addAll(jdbc.query(
-            "SELECT o.cancel_requested_at FROM orders o " +
+            "SELECT o.cancel_requested_at FROM merchant_orders o " +
             "WHERE o.tenant_id = ? AND o.cancel_requested_at IS NOT NULL " +
             "  AND o.status IN ('packed'::order_status, 'self_pickup_pending'::order_status) " +
             "  AND o.cancel_requested_at >= ?",
@@ -220,7 +220,7 @@ public class OverviewService {
 
         // shopify_cancel_vs_inflight
         all.addAll(jdbc.query(
-            "SELECT o.shopify_cancel_requested_at FROM orders o " +
+            "SELECT o.shopify_cancel_requested_at FROM merchant_orders o " +
             "WHERE o.tenant_id = ? AND o.shopify_cancel_requested_at IS NOT NULL " +
             "  AND o.status = 'awaiting_pickup'::order_status " +
             "  AND o.shopify_cancel_requested_at >= ?",
@@ -230,7 +230,7 @@ public class OverviewService {
         all.addAll(jdbc.query(
             "SELECT COALESCE(o.cancel_requested_at, o.shopify_cancel_requested_at, " +
             "                s.last_synced_at, o.created_at) " +
-            "FROM orders o " +
+            "FROM merchant_orders o " +
             "JOIN LATERAL ( " +
             "    SELECT id, internal_state, last_synced_at FROM shipments " +
             "    WHERE order_id = o.id AND tenant_id = o.tenant_id AND shipment_leg = 'forward' " +
@@ -249,7 +249,7 @@ public class OverviewService {
         all.addAll(jdbc.query(
             "SELECT COALESCE(o.cancel_requested_at, o.shopify_cancel_requested_at, " +
             "                s.last_synced_at, o.created_at) " +
-            "FROM orders o " +
+            "FROM merchant_orders o " +
             "JOIN LATERAL ( " +
             "    SELECT id, internal_state, last_synced_at FROM shipments " +
             "    WHERE order_id = o.id AND tenant_id = o.tenant_id AND shipment_leg = 'forward' " +
@@ -270,7 +270,7 @@ public class OverviewService {
 
         // shopify_edit_conflict
         all.addAll(jdbc.query(
-            "SELECT o.shopify_edit_conflict_at FROM orders o " +
+            "SELECT o.shopify_edit_conflict_at FROM merchant_orders o " +
             "WHERE o.tenant_id = ? AND o.shopify_edit_conflict_at IS NOT NULL " +
             "  AND o.shopify_edit_conflict_at >= ?",
             TS_MAPPER, tid, lower));
@@ -384,7 +384,7 @@ public class OverviewService {
                    COALESCE(s.number_of_attempts, 0)       AS number_of_attempts,
                    s.exception_code, s.is_delayed, s.sla_breached,
                    s.max_progress_rank
-            FROM orders o
+            FROM merchant_orders o
             LEFT JOIN LATERAL (
                 SELECT internal_state, number_of_attempts,
                        exception_code, is_delayed, sla_breached,
@@ -466,7 +466,7 @@ public class OverviewService {
             SELECT v.sku, v.title AS variant_title, pr.title AS product_title,
                    pr.image_url, SUM(oi.quantity)::int AS units
             FROM order_items oi
-            JOIN orders o    ON o.id = oi.order_id
+            JOIN merchant_orders o    ON o.id = oi.order_id
             JOIN variants v  ON v.id = oi.variant_id
             JOIN products pr ON pr.id = v.product_id
             WHERE oi.tenant_id = ?
