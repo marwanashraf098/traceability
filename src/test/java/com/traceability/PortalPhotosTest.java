@@ -44,7 +44,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
- * Returns portal P3 — customer photos of returned items (V161).
+ * Returns portal P3 — customer photos of returned items (V162).
  *   u1 upload: token-bound to its order; JPEG out; GIF named .jpg → PHOTO_TYPE; pixel bomb → PHOTO_PIXELS;
  *      over 8 MB → 413; no token / another tenant's token → 401; per-order cap → 429
  *   c1 claim: only the token's order's unclaimed uploads — another order's, another tenant's, an expired or an
@@ -203,7 +203,7 @@ class PortalPhotosTest {
         assertThat(exchange("/api/v1/tenant/portal-settings", HttpMethod.PUT, body, a.owner()).getBody()).containsEntry("requirePhotos", true);
         assertThat(portal.config(a.slug()).orElseThrow()).containsEntry("requirePhotos", true);
 
-        // Defaults: a row created like every pre-V161 store → OFF; a new signup → ON.
+        // Defaults: a row created like every pre-V162 store → OFF; a new signup → ON.
         UUID existing = UUID.randomUUID();
         jdbc.update("INSERT INTO tenants (id, name) VALUES (?, 'Existing store')", existing);
         assertThat(jdbc.queryForObject("SELECT portal_require_photos FROM tenants WHERE id = ?", Boolean.class, existing)).isFalse();

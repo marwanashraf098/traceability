@@ -72,8 +72,8 @@ public class AuthRepository {
                                       java.sql.Timestamp acceptedAt,
                                       SignupAttribution attribution) {
         jdbc.update(
-                // P3 (V161): every NEW store asks its customers for photos of returned items;
-                // stores that existed before V161 keep the column default (false).
+                // P3 (V162): every NEW store asks its customers for photos of returned items;
+                // stores that existed before V162 keep the column default (false).
                 "INSERT INTO tenants (id, name, plan, status, portal_require_photos) VALUES (?, ?, 'trial', 'trial', true)",
                 tenantId, tenantName);
         jdbc.update(

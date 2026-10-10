@@ -5,11 +5,11 @@
 ## Current state
 
 **Returns portal P3 — item photos (2026-10-10, branch `feat/portal-photos-p3` off origin/main b4cf3cf; NOT merged, NOT
-deployed). Migration V161.** Mockup signed off: `design/Traced_portal_photos_dc.html`. Decisions: 1, 3, 4, 5, 6 as proposed;
+deployed). Migration V162.** Mockup signed off: `design/Traced_portal_photos_dc.html`. Decisions: 1, 3, 4, 5, 6 as proposed;
 2 changed → `portal_require_photos` NOT NULL DEFAULT **false** (every existing store keeps today's flow) and set **true** at
 signup in `AuthRepository.createTenantWithOwner` (the one tenant-creation path, web + embedded) — chosen over DEFAULT true
 because that would have broken 14 existing test files' SQL fixtures. Photos owner/manager only in v1.
-- **V161:** `tenants.portal_require_photos`; `portal_assets.kind` + 'photo'; `return_request_photos` (order_id, request_id /
+- **V162:** `tenants.portal_require_photos`; `portal_assets.kind` + 'photo'; `return_request_photos` (order_id, request_id /
   item_id NULL until claimed, asset_id → portal_assets (composite (asset, tenant), ON DELETE SET NULL (asset_id)), dims, sha256,
   claimed_at, redacted_at + redaction_reason retention|privacy; RLS + FORCE + tenant_isolation + RESTRICTIVE
   `delete_only_unclaimed` FOR DELETE; app_user UPDATE only request_id / item_id / claimed_at / asset_id / redacted_at /

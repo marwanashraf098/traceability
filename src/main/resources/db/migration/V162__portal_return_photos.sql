@@ -1,5 +1,5 @@
 -- ============================================================
--- V161 — Returns portal P3: customer photos of the items they return.
+-- V162 — Returns portal P3: customer photos of the items they return.
 --
 -- tenants.portal_require_photos: when true, every line of a portal request needs 1–3 photos.
 --   DEFAULT false, so every existing store keeps today's flow; a NEW store gets true at signup
