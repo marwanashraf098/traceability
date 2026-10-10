@@ -61,7 +61,7 @@ final class SettlementSql {
      * (text[] each). Use with {@link #POST_FLOOR}.
      */
     static String floorJoin(String s) {
-        return " JOIN orders fo ON fo.id = " + s + ".order_id "
+        return " JOIN merchant_orders fo ON fo.id = " + s + ".order_id "
             + " JOIN stores fst ON fst.id = fo.store_id "
             + " LEFT JOIN unnest(?::text[], ?::text[]) AS fov(shop_domain, floor_day) "
             + "        ON fov.shop_domain = lower(fst.shop_domain) ";

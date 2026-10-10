@@ -46,7 +46,7 @@ public class ScanHelperService {
     @Transactional(readOnly = true)
     public List<Map<String, Object>> waybills(UUID tenantId) {
         return jdbc.queryForList(
-            "SELECT fs.tracking_number AS code, o.number AS label FROM orders o " +
+            "SELECT fs.tracking_number AS code, o.number AS label FROM merchant_orders o " +
             "JOIN LATERAL ( " +
             "    SELECT tracking_number FROM shipments " +
             "    WHERE order_id = o.id AND tenant_id = o.tenant_id AND shipment_leg = 'forward' " +
@@ -67,7 +67,7 @@ public class ScanHelperService {
     public List<Map<String, Object>> pickup(UUID tenantId) {
         return jdbc.queryForList(
             "SELECT s.tracking_number AS code, o.number AS label FROM shipments s " +
-            "JOIN orders o ON o.id = s.order_id AND o.tenant_id = s.tenant_id " +
+            "JOIN merchant_orders o ON o.id = s.order_id AND o.tenant_id = s.tenant_id " +
             "WHERE s.tenant_id = ? AND s.shipment_leg = 'forward' AND s.tracking_number IS NOT NULL " +
             "  AND s.internal_state = 'created' " +
             "  AND EXISTS (SELECT 1 FROM allocations a JOIN order_items oi ON oi.id = a.order_item_id " +
@@ -88,7 +88,7 @@ public class ScanHelperService {
             "SELECT p.barcode AS code, o.number AS label FROM return_request_items i " +
             "JOIN return_requests r ON r.id = i.request_id AND r.tenant_id = i.tenant_id " +
             "JOIN pieces p ON p.id = i.piece_id AND p.tenant_id = i.tenant_id " +
-            "JOIN orders o ON o.id = r.order_id AND o.tenant_id = r.tenant_id " +
+            "JOIN merchant_orders o ON o.id = r.order_id AND o.tenant_id = r.tenant_id " +
             "WHERE i.tenant_id = ? AND i.active AND i.item_status = 'awaiting' " +
             "  AND r.status IN ('approved','pickup_booked','received') AND p.status = 'delivered' " +
             "ORDER BY r.created_at ASC, i.id LIMIT " + LIMIT, tenantId);

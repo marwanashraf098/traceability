@@ -53,7 +53,7 @@ public class NotTracedTagger {
     @Transactional
     public void maybeTagNotTraced(UUID orderId, UUID tenantId) {
         jdbc.update("""
-            UPDATE orders o
+            UPDATE merchant_orders o
             SET not_traced_at = now()
             WHERE o.id = ? AND o.tenant_id = ?
               AND o.not_traced_at IS NULL

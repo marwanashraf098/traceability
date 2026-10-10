@@ -125,7 +125,7 @@ public class PreConnectDeliveryFilter {
             args.addAll(externalIds);
         }
         return Boolean.TRUE.equals(jdbc.queryForObject(
-            "SELECT EXISTS (SELECT 1 FROM orders WHERE tenant_id = ? AND (" + where + "))",
+            "SELECT EXISTS (SELECT 1 FROM merchant_orders WHERE tenant_id = ? AND (" + where + "))",
             Boolean.class, args.toArray()));
     }
 

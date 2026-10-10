@@ -955,7 +955,7 @@ public class BostaWebhookJob {
                 String stripped = ref.startsWith("#") ? ref.substring(1) : ref;
                 String hashed   = "#" + stripped;
                 int cleared = jdbc.update(
-                    "UPDATE orders " +
+                    "UPDATE merchant_orders " +
                     "SET bosta_link_status = NULL, bosta_link_attempts = 0, bosta_link_last_check = NULL " +
                     "WHERE tenant_id = ? " +
                     "  AND bosta_link_status = 'not_created' " +

@@ -89,7 +89,7 @@ public class VariantStockService {
     private static final String COMMITTED_SQL = """
         SELECT oi.variant_id,
                SUM(GREATEST(oi.quantity - COALESCE(alloc.active_count, 0), 0)) AS committed
-        FROM orders o
+        FROM merchant_orders o
         JOIN order_items oi ON oi.order_id = o.id
         LEFT JOIN (
             SELECT a.order_item_id, COUNT(*) AS active_count

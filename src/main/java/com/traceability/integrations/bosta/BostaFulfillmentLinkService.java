@@ -161,7 +161,7 @@ public class BostaFulfillmentLinkService {
     private Result attemptInTenant(UUID tenantId, UUID orderId, String tn, boolean dryRun) {
         // 1. Preconditions — no Bosta call.
         Map<String, Object> order = tx.execute(s -> jdbc.queryForList(
-            "SELECT number, external_id FROM orders WHERE id = ? AND tenant_id = ?", orderId, tenantId)
+            "SELECT number, external_id FROM merchant_orders WHERE id = ? AND tenant_id = ?", orderId, tenantId)
             .stream().findFirst().orElse(null));
         if (order == null) return Result.skip("order not found");
 
@@ -175,7 +175,7 @@ public class BostaFulfillmentLinkService {
         }
 
         Map<String, Object> existing = tx.execute(s -> jdbc.queryForList(
-            "SELECT s.order_id, o.number FROM shipments s JOIN orders o ON o.id = s.order_id " +
+            "SELECT s.order_id, o.number FROM shipments s JOIN merchant_orders o ON o.id = s.order_id " +
             "WHERE s.tenant_id = ? AND s.tracking_number = ?", tenantId, tn)
             .stream().findFirst().orElse(null));
         if (existing != null) {
@@ -297,7 +297,7 @@ public class BostaFulfillmentLinkService {
     private String linkedViaExchange(UUID tenantId, UUID orderId, UUID shipmentOrderId, String shipmentOrderNumber) {
         Map<String, Object> ex = tx.execute(s -> jdbc.queryForList(
             "SELECT e.matched_order_id, e.raw->>'businessReference' AS ref, e.raw->'shopifyInfo'->>'orderId' AS shopify_id " +
-            "FROM exchanges e JOIN orders o ON o.id = e.outbound_order_id AND o.tenant_id = e.tenant_id " +
+            "FROM exchanges e JOIN merchant_orders o ON o.id = e.outbound_order_id AND o.tenant_id = e.tenant_id " +
             "WHERE e.tenant_id = ? AND e.outbound_order_id = ? AND o.external_id LIKE 'internal:exchange:%'",
             tenantId, shipmentOrderId).stream().findFirst().orElse(null));
         if (ex == null) return null;
@@ -333,7 +333,7 @@ public class BostaFulfillmentLinkService {
         others.remove(orderId);
         if (!others.isEmpty()) {
             String number = tx.execute(s -> jdbc.queryForObject(
-                "SELECT number FROM orders WHERE id = ?", String.class, others.iterator().next()));
+                "SELECT number FROM merchant_orders WHERE id = ?", String.class, others.iterator().next()));
             return "Bosta's reference / Shopify id point at order " + number;
         }
         if (byRef.contains(orderId) || byShopify.contains(orderId)) return null;
@@ -357,7 +357,7 @@ public class BostaFulfillmentLinkService {
             args.addAll(externalIds);
         }
         List<UUID> ids = tx.execute(s -> jdbc.queryForList(
-            "SELECT id FROM orders WHERE tenant_id = ? AND (" + where + ")", UUID.class, args.toArray()));
+            "SELECT id FROM merchant_orders WHERE tenant_id = ? AND (" + where + ")", UUID.class, args.toArray()));
         return new LinkedHashSet<>(ids);
     }
 

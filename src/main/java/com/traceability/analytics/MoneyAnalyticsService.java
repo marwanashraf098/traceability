@@ -140,7 +140,7 @@ public class MoneyAnalyticsService {
                                  AND o.shipping_carrier_class = 'other_known' THEN 'wijha'
             """ + SalesAnalyticsService.LEG_OUTCOME_WHENS + """
                        END AS outcome
-                FROM orders o
+                FROM merchant_orders o
                 CROSS JOIN LATERAL (
                     SELECT s.id AS shipment_id, s.internal_state, s.collected_from_business_at, s.type_code AS type_code,
                            s.city_name AS city
@@ -204,7 +204,7 @@ public class MoneyAnalyticsService {
         String stagesSql = SalesAnalyticsService.soldLines(false) + ", " + RATES + """
             , open_orders AS (
                 SELECT l.order_id, SUM(l.revenue) AS value FROM lines l
-                JOIN orders o ON o.id = l.order_id
+                JOIN merchant_orders o ON o.id = l.order_id
                 WHERE COALESCE(o.shipping_carrier_class, '') <> 'other_known'
                   AND EXISTS (SELECT 1 FROM courier_accounts ca
                               WHERE ca.tenant_id = o.tenant_id AND ca.provider = 'bosta' AND ca.status = 'active')
@@ -227,7 +227,7 @@ public class MoneyAnalyticsService {
                 SELECT oo.order_id, oo.value,
                        oo.value * COALESCE(cr.rate, (SELECT rate FROM overall)) AS expected
                 FROM open_orders oo
-                JOIN orders o ON o.id = oo.order_id
+                JOIN merchant_orders o ON o.id = oo.order_id
                 LEFT JOIN leg ON leg.order_id = oo.order_id
                 LEFT JOIN province pv ON pv.code = o.ship_province
                 LEFT JOIN city_rate cr ON cr.city = COALESCE(leg.city, pv.city)
@@ -462,7 +462,7 @@ public class MoneyAnalyticsService {
                           WHERE oi.order_id = l.order_id) AS skus
                 FROM legs l
                 JOIN shipments s ON s.id = l.id
-                JOIN orders o ON o.id = l.order_id
+                JOIN merchant_orders o ON o.id = l.order_id
                 WHERE l.kind IN ('failed', 'exchange', 'return')
                 ORDER BY l.terminal_at DESC, l.tracking_number
                 """;

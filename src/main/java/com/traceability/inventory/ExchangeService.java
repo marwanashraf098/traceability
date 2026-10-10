@@ -264,7 +264,7 @@ public class ExchangeService {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Variant not found");
         }
         UUID currentStoreId = jdbc.queryForObject(
-            "SELECT store_id FROM orders WHERE id = ? AND tenant_id = ?", UUID.class, orderId, tenantId);
+            "SELECT store_id FROM merchant_orders WHERE id = ? AND tenant_id = ?", UUID.class, orderId, tenantId);
         if (!newStoreId.equals(currentStoreId)) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                 "Variant must belong to the same store as the existing replacement order");

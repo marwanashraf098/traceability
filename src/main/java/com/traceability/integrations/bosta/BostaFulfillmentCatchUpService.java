@@ -136,7 +136,7 @@ public class BostaFulfillmentCatchUpService {
         tx.execute(s -> {
             for (Map<String, Object> r : jdbc.queryForList(
                     "SELECT o.id, o.number, o.store_id, o.external_id, t.tracking_number " +
-                    "FROM order_fulfillment_tracking t JOIN orders o ON o.id = t.order_id AND o.tenant_id = t.tenant_id " +
+                    "FROM order_fulfillment_tracking t JOIN merchant_orders o ON o.id = t.order_id AND o.tenant_id = t.tenant_id " +
                     "WHERE t.tenant_id = ? AND t.carrier_class = 'bosta' " +
                     "  AND coalesce(t.fulfillment_status, '') <> 'cancelled' " +
                     "  AND NOT EXISTS (SELECT 1 FROM shipments s WHERE s.tenant_id = t.tenant_id " +
@@ -152,7 +152,7 @@ public class BostaFulfillmentCatchUpService {
             }
             for (Map<String, Object> r : jdbc.queryForList(
                     "SELECT o.id, o.number, o.store_id, o.external_id, o.raw::text AS raw " +
-                    "FROM orders o " +
+                    "FROM merchant_orders o " +
                     "WHERE o.tenant_id = ? AND jsonb_typeof(o.raw->'fulfillments') = 'array' " +
                     "  AND EXISTS (SELECT 1 FROM jsonb_array_elements(o.raw->'fulfillments') f " +
                     "              WHERE (f->>'tracking_company' ILIKE '%bosta%' OR f->>'tracking_url' ILIKE '%bosta%') " +

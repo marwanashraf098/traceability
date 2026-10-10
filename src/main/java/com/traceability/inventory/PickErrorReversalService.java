@@ -88,7 +88,7 @@ public class PickErrorReversalService {
         // 3. Order: restore to the not-traced resting status (confirmed 'new' — §4 query,
         //    not re-derived here). not_traced_at is untouched — stays set.
         int orderRows = jdbc.update(
-            "UPDATE orders SET status = 'new'::order_status WHERE id = ? AND tenant_id = ?",
+            "UPDATE merchant_orders SET status = 'new'::order_status WHERE id = ? AND tenant_id = ?",
             ORDER_ID, tenantId);
         if (orderRows != 1) {
             throw new IllegalStateException(

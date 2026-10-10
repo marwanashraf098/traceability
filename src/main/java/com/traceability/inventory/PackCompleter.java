@@ -72,7 +72,7 @@ public class PackCompleter {
         int pieces = fulfill.complete(orderId, userId);
         link.linkByAwbScan(orderId, rawWaybill, userId, "{\"pack_session_id\":\"" + sessionId + "\"}");
 
-        String status = jdbc.queryForObject("SELECT status::text FROM orders WHERE id = ? AND tenant_id = ?",
+        String status = jdbc.queryForObject("SELECT status::text FROM merchant_orders WHERE id = ? AND tenant_id = ?",
             String.class, orderId, tenantId);
         if (!"awaiting_pickup".equals(status)) {
             throw new CompleteFailed("NOT_LINKED", "The order didn't reach awaiting pickup (" + status + ").");
@@ -82,7 +82,7 @@ public class PackCompleter {
         store.clearOpenOrder(sessionId, tenantId);
         PackClaim.release(jdbc, orderId, tenantId, userId);
 
-        Map<String, Object> o = jdbc.queryForMap("SELECT number, customer_name FROM orders WHERE id = ?", orderId);
+        Map<String, Object> o = jdbc.queryForMap("SELECT number, customer_name FROM merchant_orders WHERE id = ?", orderId);
         return new Packed(orderId, (String) o.get("number"), (String) o.get("customer_name"), pieces);
     }
 }

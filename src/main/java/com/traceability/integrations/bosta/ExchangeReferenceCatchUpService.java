@@ -134,9 +134,9 @@ public class ExchangeReferenceCatchUpService {
         // 3. Fulfillment rows blocked by an exchange's EXC-… order.
         List<Map<String, Object>> ful = TenantContext.runAs(tenantId, () -> tx.execute(s -> jdbc.queryForList(
             "SELECT ft.order_id, ft.tracking_number, o.number FROM order_fulfillment_tracking ft " +
-            "JOIN orders o ON o.id = ft.order_id AND o.tenant_id = ft.tenant_id " +
+            "JOIN merchant_orders o ON o.id = ft.order_id AND o.tenant_id = ft.tenant_id " +
             "WHERE ft.tenant_id = ? AND ft.link_status IN ('conflict', 'skipped') " +
-            "  AND EXISTS (SELECT 1 FROM shipments s JOIN orders x ON x.id = s.order_id AND x.tenant_id = s.tenant_id " +
+            "  AND EXISTS (SELECT 1 FROM shipments s JOIN merchant_orders x ON x.id = s.order_id AND x.tenant_id = s.tenant_id " +
             "              WHERE s.tenant_id = ft.tenant_id AND s.tracking_number = ft.tracking_number " +
             "                AND s.order_id <> ft.order_id AND x.external_id LIKE 'internal:exchange:%') " +
             "ORDER BY ft.first_seen_at, ft.tracking_number", tenantId)));
@@ -160,7 +160,7 @@ public class ExchangeReferenceCatchUpService {
         if (ids.size() > 1) return new Row(tenant, "crp", tn, ref, null, "SKIP", "reference matches more than one order");
         UUID orderId = ids.get(0);
         String number = TenantContext.runAs(tenantId, () -> tx.execute(s ->
-            jdbc.queryForObject("SELECT number FROM orders WHERE id = ?", String.class, orderId)));
+            jdbc.queryForObject("SELECT number FROM merchant_orders WHERE id = ?", String.class, orderId)));
         if (!apply) return new Row(tenant, "crp", tn, ref, number, "WOULD_LINK", null);
 
         Long eventId = TenantContext.runAs(tenantId, () -> insertEvent(tenantId, tn, stateCode, updatedAt));
@@ -168,7 +168,7 @@ public class ExchangeReferenceCatchUpService {
             webhookJob.process(eventId, tenantId);
         }
         Map<String, Object> linked = TenantContext.runAs(tenantId, () -> tx.execute(s -> jdbc.queryForList(
-            "SELECT o.number FROM shipments sh JOIN orders o ON o.id = sh.order_id AND o.tenant_id = sh.tenant_id " +
+            "SELECT o.number FROM shipments sh JOIN merchant_orders o ON o.id = sh.order_id AND o.tenant_id = sh.tenant_id " +
             "WHERE sh.tenant_id = ? AND sh.tracking_number = ? AND sh.shipment_leg = 'return'", tenantId, tn)
             .stream().findFirst().orElse(null)));
         if (linked != null) return new Row(tenant, "crp", tn, ref, (String) linked.get("number"), "LINKED", null);

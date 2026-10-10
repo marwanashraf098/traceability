@@ -143,7 +143,7 @@ public class BlocklistService {
         if (reason == null) return;
 
         jdbc.update(
-            "UPDATE orders SET on_hold = true, hold_reason = ? " +
+            "UPDATE merchant_orders SET on_hold = true, hold_reason = ? " +
             "WHERE id = ? AND tenant_id = ? AND on_hold = false",
             "blocked_customer: " + reason, orderId, tenantId);
     }

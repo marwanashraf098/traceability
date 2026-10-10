@@ -70,7 +70,7 @@ public class PackListService {
         "FROM pack_print_batch_items bi " +
         "JOIN pack_print_batches b ON b.id = bi.batch_id AND b.tenant_id = bi.tenant_id " +
         "JOIN shipments s ON s.id = bi.shipment_id AND s.tenant_id = bi.tenant_id " +
-        "JOIN orders o ON o.id = bi.order_id AND o.tenant_id = bi.tenant_id " +
+        "JOIN merchant_orders o ON o.id = bi.order_id AND o.tenant_id = bi.tenant_id " +
         PackListRules.LATEST_PACK_OUTCOME_LATERAL;
 
     // ── Print batches today ───────────────────────────────────────────────────
@@ -90,7 +90,7 @@ public class PackListService {
             "    SELECT " + PackListRules.BATCH_ITEM_STATE_SQL + " AS state " +
             "    FROM pack_print_batch_items bi " +
             "    JOIN shipments s ON s.id = bi.shipment_id AND s.tenant_id = bi.tenant_id " +
-            "    JOIN orders o ON o.id = bi.order_id AND o.tenant_id = bi.tenant_id " +
+            "    JOIN merchant_orders o ON o.id = bi.order_id AND o.tenant_id = bi.tenant_id " +
             PackListRules.LATEST_PACK_OUTCOME_LATERAL +
             "    WHERE bi.batch_id = b.id AND bi.tenant_id = b.tenant_id " +
             ") st ON true " +
@@ -184,7 +184,7 @@ public class PackListService {
             "       o.number, " + PackListRules.CANCELLED_SQL + " AS cancelled " +
             "FROM pack_print_batches b " +
             "JOIN pack_print_batch_items bi ON bi.batch_id = b.id AND bi.tenant_id = b.tenant_id " +
-            "JOIN orders o ON o.id = bi.order_id AND o.tenant_id = bi.tenant_id " +
+            "JOIN merchant_orders o ON o.id = bi.order_id AND o.tenant_id = bi.tenant_id " +
             "WHERE b.id = ? AND b.tenant_id = ? " +
             "ORDER BY bi.position",
             batchId, tenantId);
@@ -257,7 +257,7 @@ public class PackListService {
             "FROM pack_session_orders WHERE session_id = ? AND tenant_id = ?", sessionId, tenantId);
         List<NeedsManager> needs = jdbc.query(
             "SELECT so.order_id, o.number, o.customer_name, so.outcome, so.reason, so.raw_scan, so.created_at " +
-            "FROM pack_session_orders so LEFT JOIN orders o ON o.id = so.order_id " +
+            "FROM pack_session_orders so LEFT JOIN merchant_orders o ON o.id = so.order_id " +
             "WHERE so.session_id = ? AND so.tenant_id = ? " +
             "  AND (so.outcome = 'set_aside' OR (so.outcome = 'rejected' AND so.reason LIKE 'CANCELLED%')) " +
             // UUIDv4 is not time-ordered — order by created_at, never id (see CLAUDE.md invariant)

@@ -111,7 +111,7 @@ public class EmbeddedController {
                 ),
                 oc AS (
                     SELECT DATE(placed_at) AS day, COUNT(*)::int AS cnt
-                    FROM orders
+                    FROM merchant_orders
                     WHERE tenant_id = NULLIF(current_setting('app.current_tenant', true), '')::uuid
                       AND placed_at >= ?::date
                     GROUP BY DATE(placed_at)
@@ -200,7 +200,7 @@ public class EmbeddedController {
                        COALESCE(s.number_of_attempts, 0)       AS number_of_attempts,
                        s.exception_code, s.is_delayed, s.sla_breached,
                        s.max_progress_rank
-                FROM orders o
+                FROM merchant_orders o
                 LEFT JOIN LATERAL (
                     SELECT internal_state, number_of_attempts,
                            exception_code, is_delayed, sla_breached,
@@ -339,7 +339,7 @@ public class EmbeddedController {
                        COALESCE(s.number_of_attempts, 0)       AS number_of_attempts,
                        s.exception_code, s.is_delayed, s.sla_breached,
                        s.max_progress_rank
-                FROM orders o
+                FROM merchant_orders o
                 LEFT JOIN LATERAL (
                     SELECT internal_state, number_of_attempts,
                            exception_code, is_delayed, sla_breached,

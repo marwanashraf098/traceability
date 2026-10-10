@@ -185,7 +185,7 @@ public class StockAnalyticsService {
             SELECT e.order_id FROM piece_events e WHERE e.tenant_id = ? AND e.order_id IS NOT NULL
         )
         SELECT COUNT(*) AS delivered, COUNT(t.order_id) AS traced
-        FROM orders o
+        FROM merchant_orders o
         LEFT JOIN traced_orders t ON t.order_id = o.id
         WHERE o.tenant_id = ? AND o.external_id NOT LIKE 'internal:exchange:%'
           AND EXISTS (SELECT 1 FROM shipments s
@@ -392,6 +392,8 @@ public class StockAnalyticsService {
         jdbc.query(
             "SELECT DISTINCT ON (rri.variant_id) rri.variant_id, rri.reason_code " +
             "FROM return_request_items rri JOIN return_requests rr ON rr.id = rri.request_id " +
+            // P4a: a request on a portal pre-connect order is not analytics data (merchant_orders, V163).
+            "JOIN merchant_orders o ON o.id = rr.order_id AND o.tenant_id = rr.tenant_id " +
             "WHERE rri.tenant_id = ? AND rr.status <> 'rejected' AND rr.created_at >= ? AND rri.variant_id IS NOT NULL " +
             "GROUP BY rri.variant_id, rri.reason_code " +
             "ORDER BY rri.variant_id, COUNT(*) DESC, rri.reason_code",
@@ -551,7 +553,7 @@ public class StockAnalyticsService {
                END AS outcome,
                leg.fee, leg.estimated
         FROM piece_events e
-        LEFT JOIN orders o ON o.id = e.order_id
+        LEFT JOIN merchant_orders o ON o.id = e.order_id
         LEFT JOIN LATERAL (
             SELECT s.id AS shipment_id, s.tracking_number, s.internal_state, s.collected_from_business_at, s.type_code,
                    s.city_id, s.city_name AS city,

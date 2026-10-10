@@ -149,7 +149,7 @@ public class ShipmentLinkService {
         // 1. Verify order exists and is in a linkable state (unchanged gate) — the
         // packer must have finished picking/packing before an AWB can be linked.
         String[] orderInfo = jdbc.query(
-            "SELECT status, number FROM orders WHERE id = ? AND tenant_id = ?",
+            "SELECT status, number FROM merchant_orders WHERE id = ? AND tenant_id = ?",
             rs -> rs.next() ? new String[]{rs.getString("status"), rs.getString("number")} : null,
             orderId, tenantId);
         if (orderInfo == null) {
@@ -185,7 +185,7 @@ public class ShipmentLinkService {
         UUID tenantId = TenantContext.require();
 
         String[] orderInfo = jdbc.query(
-            "SELECT status, number FROM orders WHERE id = ? AND tenant_id = ?",
+            "SELECT status, number FROM merchant_orders WHERE id = ? AND tenant_id = ?",
             rs -> rs.next() ? new String[]{rs.getString("status"), rs.getString("number")} : null,
             orderId, tenantId);
         if (orderInfo == null) {
@@ -286,7 +286,7 @@ public class ShipmentLinkService {
         int linked = transitionPackedPieces(orderId, shipmentId, tenantId, actorUserId, rawScan, eventMetadataJson);
 
         jdbc.update(
-            "UPDATE orders SET status = 'awaiting_pickup' " +
+            "UPDATE merchant_orders SET status = 'awaiting_pickup' " +
             "WHERE id = ? AND tenant_id = ? AND status = 'packed'",
             orderId, tenantId);
 
@@ -367,7 +367,7 @@ public class ShipmentLinkService {
      */
     public LinkResult linkDeliveryToOrder(UUID tenantId, UUID orderId, String trackingNumber,
                                           BostaDelivery delivery, BostaStateMapper.MappedState mapped) {
-        UUID found = jdbc.query("SELECT id FROM orders WHERE id = ? AND tenant_id = ?",
+        UUID found = jdbc.query("SELECT id FROM merchant_orders WHERE id = ? AND tenant_id = ?",
             rs -> rs.next() ? rs.getObject(1, UUID.class) : null, orderId, tenantId);
         if (found == null) return new LinkResult(null, REASON_NO_MATCH);
         return linkMatchedDelivery(tenantId, orderId, trackingNumber, delivery, mapped);
@@ -409,7 +409,7 @@ public class ShipmentLinkService {
 
         // Advance order if it is currently packed
         jdbc.update(
-            "UPDATE orders SET status = 'awaiting_pickup' " +
+            "UPDATE merchant_orders SET status = 'awaiting_pickup' " +
             "WHERE id = ? AND tenant_id = ? AND status = 'packed'",
             orderId, tenantId);
 
@@ -439,6 +439,15 @@ public class ShipmentLinkService {
     @Transactional(isolation = Isolation.READ_COMMITTED)
     public void manualLink(long unlinkedId, UUID orderId, UUID actorUserId) {
         UUID tenantId = TenantContext.require();
+
+        // P4a: only a merchant order can take a forward leg — never a portal pre-connect order
+        // (merchant_orders, V163). Without this the shipment INSERT below links to any order id.
+        Boolean orderFound = jdbc.queryForObject(
+            "SELECT EXISTS (SELECT 1 FROM merchant_orders WHERE id = ? AND tenant_id = ?)",
+            Boolean.class, orderId, tenantId);
+        if (!Boolean.TRUE.equals(orderFound)) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Order not found");
+        }
 
         Object[] row = jdbc.query(
             // raw is fetched alongside state columns so populateConsigneePii can run
@@ -498,7 +507,7 @@ public class ShipmentLinkService {
         notTracedTagger.maybeTagNotTraced(orderId, tenantId);
 
         jdbc.update(
-            "UPDATE orders SET status = 'awaiting_pickup' " +
+            "UPDATE merchant_orders SET status = 'awaiting_pickup' " +
             "WHERE id = ? AND tenant_id = ? AND status = 'packed'",
             orderId, tenantId);
 
@@ -633,7 +642,7 @@ public class ShipmentLinkService {
                                         UUID orderId, String orderNumber) {
         return jdbc.query(
             "SELECT s.id, s.order_id, o.number AS other_number " +
-            "FROM shipments s JOIN orders o ON o.id = s.order_id " +
+            "FROM shipments s JOIN merchant_orders o ON o.id = s.order_id " +
             "WHERE s.tracking_number = ? AND s.tenant_id = ?",
             rs -> {
                 if (!rs.next()) return null;
@@ -1339,7 +1348,7 @@ public class ShipmentLinkService {
         // Build B: pii_source becomes 'bosta' only when Bosta itself fills an empty field and no source is
         // recorded yet — a Shopify-filled order keeps 'shopify' (and its name / phone: fill-only).
         jdbc.update(
-            "UPDATE orders " +
+            "UPDATE merchant_orders " +
             "SET customer_name  = COALESCE(customer_name,  ?), " +
             "    customer_phone = COALESCE(customer_phone, ?), " +
             "    address        = COALESCE(address,        ?::jsonb), " +
@@ -1435,14 +1444,14 @@ public class ShipmentLinkService {
         // providing a secondary concurrency guard alongside the ux_active_shipment_per_order
         // partial unique index (V19).
         List<UUID> candidates = jdbc.query(
-            "SELECT id FROM orders " +
+            "SELECT id FROM merchant_orders " +
             "WHERE tenant_id = ? " +
             "  AND '0' || RIGHT(REGEXP_REPLACE(customer_phone, '[^0-9]', '', 'g'), 10) = ? " +
             "  AND cod_amount = ? " +
             "  AND status NOT IN ('delivered','returned','lost','cancelled') " +
             "  AND NOT EXISTS ( " +
             "      SELECT 1 FROM shipments s " +
-            "      WHERE s.order_id  = orders.id " +
+            "      WHERE s.order_id  = merchant_orders.id " +
             "        AND s.tenant_id = ? " +
             "        AND s.internal_state NOT IN ('terminated','cancelled') " +
             "  )",

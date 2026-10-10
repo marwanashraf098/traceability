@@ -539,7 +539,7 @@ public class InventoryStockController {
                 FROM pieces p
                 JOIN variants v ON v.id = p.variant_id
                 JOIN products pr ON pr.id = v.product_id
-                LEFT JOIN orders o ON o.id = p.current_order_id
+                LEFT JOIN merchant_orders o ON o.id = p.current_order_id
                 LEFT JOIN locations l ON l.id = p.current_location_id
                 LEFT JOIN LATERAL (
                     SELECT tracking_number FROM shipments

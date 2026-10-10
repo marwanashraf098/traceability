@@ -4,6 +4,54 @@
 
 ## Current state
 
+**Returns portal P4a — pre-connect orders: schema + merchant_orders exclusion + guards + leak test (2026-10-11, branch
+`feat/portal-preconnect-p4a` off origin/main 235984e; merged to main, no squash; NOT deployed). Migration V163.** No behaviour change:
+no code path can create a portal row yet (P4c adds the on-demand fetch).
+- **V163:** `orders.origin` ('shopify' | 'portal_pre_connect', NOT NULL DEFAULT 'shopify'), `shopify_order_gid`
+  (partial UNIQUE (tenant_id, gid)), `portal_fetched_at`, `portal_delivered_at`, `portal_delivery` jsonb (PII — P4b must
+  add it to redaction); CHECK `(origin = 'portal_pre_connect') = (external_id LIKE 'internal:portal:%')` (both ways) +
+  `orders_portal_gid_check` (portal ⇒ gid). View `merchant_orders` (security_invoker, `WHERE external_id NOT LIKE
+  'internal:portal:%'` — NOT origin, see Perf; app_user SELECT/INSERT/UPDATE/DELETE); partial index
+  `orders_merchant_tenant_placed_at_idx` (tenant_id, placed_at) on the view's predicate. Counts 162 / 107.
+- **Exclusion:** 146 SQL references in 42 files moved to merchant_orders (reads AND updates). 74 references (67 members)
+  stay on `orders`, each classified in `OrdersTableAccessGuardTest.ALLOWLIST`: MUST_INCLUDE 44 members (portal, Requests,
+  Scan returns, returns cases, return detectors + the 5 leg-agnostic shipment detectors, GDPR, Overview exchanges tile),
+  ALREADY_EXCLUDED_BY_KEY 10, SAFE_BY_ID 8, SEEDER 5. Reclassified vs Step 0b: `PreConnectDeliveryFilter.referenceResolves`
+  (matched by number with no internal: filter → excluded); detectDeliveryLimbo / Ndr / MissingAwb / HighAttempts /
+  MissingProviderId (no leg filter → INCLUDE: a portal order's only shipments are its Traced-booked return legs); Overview
+  exceptionsRaw (only forward-detector mirrors → excluded).
+- **Found by the move / leak test, fixed:** a view has no PK, so `GROUP BY o.id` no longer implies o.* (FulfillService.getQueue
+  lists the columns); `orders.id` bare qualifier in matchByPhoneAndCod; FulfillService scan / unscan / complete / unpack /
+  release reach the order via order_items/allocations → `requireMerchantOrder` 404 (scan: after the piece lookup);
+  `ShipmentLinkService.manualLink` linked to any order id → 404; StockAnalytics top return reason read return_request_items
+  with no order join → joins merchant_orders.
+- **Guards:** `OrdersTableAccessGuardTest` (source scan via `OrdersSqlScanner` — literals, `+` concatenation, text blocks;
+  comments ignored; stale entries fail); `MerchantOrdersViewColumnsTest` (columns == orders, security_invoker, grants,
+  portal row invisible/un-updatable through the view under app_user, V163 constraints). CLAUDE.md rule: re-create
+  merchant_orders whenever an orders column changes.
+- **PortalOrderLeakTest:** every /api/** endpoint classified (LIST / BY_ORDER_ID / INCLUDE / SKIP+reason; unclassified or
+  stale fails). LIST bodies (owner + worker) must equal a baseline taken before portal rows existed and carry no sentinel;
+  BY_ORDER_ID answers a portal order exactly as a missing one (404 except 5 documented: exchange attach 400, pack-session
+  ORDER_NOT_OPEN 409) and changes nothing; detectors / not-traced tagger / Bosta candidate sets / reconcile / pickable
+  filter / committed stock run directly with positive controls. Store cutoff NULL in the test on purpose (analytics floors
+  at the cutoff — the test must prove the view, not the floor). Proof: Orders list reverted to `orders` → leak test AND
+  Guard 1 red independently.
+- **Perf (30k-order tenant + 4×8k, before vs after, median; harness in scratch, not committed):** filtering the view on
+  `origin` (the LAST column of a wide row — every row deformed to the end, + extra JIT) cost the Orders list 10–15%;
+  decision 2026-10-11: filter on the external_id prefix (column 4) with the two-way CHECK, V163 edited in place (never
+  applied anywhere). That alone lost Overview's index-only scan on (tenant_id, placed_at) (12 → 963 buffers) → the
+  partial index restores it (12). Final: identical buffer counts for Orders list count / page, queue, late-to-pack,
+  top SKUs; timings within noise (measured under other sessions' load, before/after run concurrently).
+- **P4b REQUIREMENT (correction to Step 0b §5):** a Traced-booked return pickup (type 25) or exchange (type 30) on a
+  portal order does NOT link today — the webhook's strong match is by order reference and `OrderReference` skips
+  `internal:%`, so the leg would land in unlinked deliveries. P4b must link Traced-booked legs on portal orders by
+  `return_requests.bosta_tracking_number` (the request that booked it), never by order reference — before the
+  reference / phone+COD matchers run.
+- **Next (P4b), also:** portal eligibility via portal_delivered_at; pickup area / booking from portal_delivery; GDPR by
+  shopify_order_gid (CustomerSubject) + portal_delivery in redaction; refund suggestion by gid; alerts on portal requests
+  must not deep-link to the order page.
+
+
 **Sidebar Option B — Operations | Analytics mode switch (2026-10-11, branch `sidebar-mode-switch` off origin/main
 c52875b, worktree `~/Documents/traceability-modeswitch`; committed + pushed, NOT merged, NOT deployed; frontend only).**
 Replaces A's stacked Analytics section (A = 4137bbc on main, not deployed). Everything else from A unchanged.
@@ -74,6 +122,7 @@ NOT merged, NOT deployed; no migration).** Prod: The Snouts piece 01M3S6YXH3VCHP
 - **Prod row correction (ops note, NOT written):** claim 213 → status 'skipped', skip_reason 'not_resent_piece_returned',
   failure_class 'rejected', error = Shopify's userError from the app log at ~22:12:31; claim 214 skip_reason
   'departure_rejected'. Shopify unchanged by 213 — checked by hand 2026-10-10: PTGREEN-2 damaged = 0, the move never applied.
+
 **Returns portal P3 — item photos (2026-10-10, branch `feat/portal-photos-p3` off origin/main b4cf3cf; merged to main,
 no squash; NOT deployed). Migration V162.** Privacy policy 1.4 (item photos; EN only, RP.39 tracks AR). Mockup signed off: `design/Traced_portal_photos_dc.html`. Decisions: 1, 3, 4, 5, 6 as proposed;
 2 changed → `portal_require_photos` NOT NULL DEFAULT **false** (every existing store keeps today's flow) and set **true** at

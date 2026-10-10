@@ -107,7 +107,7 @@ public class BostaOrderReconcileJob {
         TenantContext.runAs(tenantId, () -> {
             List<OrderRow> orders = tx.execute(txs -> jdbc.query(
                 "SELECT o.id, o.number, o.external_id, o.bosta_link_attempts " +
-                "FROM orders o " +
+                "FROM merchant_orders o " +
                 "WHERE o.tenant_id = NULLIF(current_setting('app.current_tenant', true), '')::uuid " +
                 "  AND o.bosta_link_status IS NULL " +
                 "  AND o.shipping_carrier_class IS DISTINCT FROM 'other_known' " +   // V139: shipped with another carrier
@@ -171,7 +171,7 @@ public class BostaOrderReconcileJob {
             "  AND (u.business_reference = ? OR u.business_reference = ? " +
             "    OR u.business_reference = ? OR u.business_reference = ?) " +
             "  AND " + ShipmentLinkService.forwardLinkableTypeSql("u") + " " +
-            "  AND (SELECT COUNT(*) FROM orders o2 " +
+            "  AND (SELECT COUNT(*) FROM merchant_orders o2 " +
             "       WHERE o2.tenant_id = u.tenant_id " +
             "         AND (o2.number = u.business_reference " +
             "           OR o2.number = regexp_replace(u.business_reference, '^#', '') " +
@@ -194,7 +194,7 @@ public class BostaOrderReconcileJob {
                 // V139: no 'not_created' flag any more — after max-attempts the order just leaves the
                 // candidate set (bosta_link_attempts < max-attempts); its badge is derived at read time.
                 jdbc.update(
-                    "UPDATE orders " +
+                    "UPDATE merchant_orders " +
                     "SET bosta_link_attempts = ?, " +
                     "    bosta_link_last_check = NOW() " +
                     "WHERE id = ? " +

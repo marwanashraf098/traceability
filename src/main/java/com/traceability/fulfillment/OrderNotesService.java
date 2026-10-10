@@ -80,7 +80,7 @@ public class OrderNotesService {
 
     private void requireOrder(UUID orderId, UUID tenantId) {
         Boolean exists = jdbc.query(
-            "SELECT EXISTS(SELECT 1 FROM orders WHERE id = ? AND tenant_id = ?)",
+            "SELECT EXISTS(SELECT 1 FROM merchant_orders WHERE id = ? AND tenant_id = ?)",
             rs -> { rs.next(); return rs.getBoolean(1); },
             orderId, tenantId);
         if (exists == null || !exists) {

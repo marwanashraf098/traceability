@@ -247,7 +247,7 @@ public class ExchangeMatchService {
         if (ids.size() > 1) return new ReferenceMatch(ReferenceVerdict.AMBIGUOUS, ref, null, null);
 
         UUID orderId = ids.get(0);
-        String number = jdbc.queryForObject("SELECT number FROM orders WHERE id = ? AND tenant_id = ?",
+        String number = jdbc.queryForObject("SELECT number FROM merchant_orders WHERE id = ? AND tenant_id = ?",
             String.class, orderId, tenantId);
         if (dryRun) return new ReferenceMatch(ReferenceVerdict.WOULD_MATCH, ref, orderId, number);
 
@@ -573,7 +573,7 @@ public class ExchangeMatchService {
         UUID tenantId = TenantContext.require();
 
         Boolean orderExists = jdbc.queryForObject(
-            "SELECT EXISTS (SELECT 1 FROM orders WHERE id = ? AND tenant_id = ?)",
+            "SELECT EXISTS (SELECT 1 FROM merchant_orders WHERE id = ? AND tenant_id = ?)",
             Boolean.class, orderId, tenantId);
         if (!Boolean.TRUE.equals(orderExists)) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Order not found");
@@ -635,7 +635,7 @@ public class ExchangeMatchService {
             "SELECT p.id AS piece_id, p.current_order_id AS order_id, " +
             "       v.title AS variant_title, pr.title AS product_title " +
             "FROM pieces p " +
-            "JOIN orders o    ON o.id  = p.current_order_id AND o.tenant_id = p.tenant_id " +
+            "JOIN merchant_orders o    ON o.id  = p.current_order_id AND o.tenant_id = p.tenant_id " +
             "JOIN variants v  ON v.id  = p.variant_id " +
             "JOIN products pr ON pr.id = v.product_id " +
             "WHERE p.tenant_id = ? " +
