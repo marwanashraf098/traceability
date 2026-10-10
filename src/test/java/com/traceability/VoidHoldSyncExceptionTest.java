@@ -144,8 +144,8 @@ class VoidHoldSyncExceptionTest {
         String pieceId = seedAvailablePiece("VE2-001");
         jdbc.update(
             "INSERT INTO shopify_inventory_adjustments " +
-            "(tenant_id, batch_id, variant_id, location_id, delta, trigger_type, trigger_id, status) " +
-            "VALUES (?, ?, ?, ?, -1, 'void_correction', ?, 'skipped')",
+            "(tenant_id, batch_id, variant_id, location_id, delta, trigger_type, trigger_id, status, skip_reason) " +
+            "VALUES (?, ?, ?, ?, -1, 'void_correction', ?, 'skipped', 'arrival_not_counted')",
             tenantId, UUID.randomUUID(), variantA, locationId, pieceId);
 
         Map<String, Object> result = withTenant(() ->
@@ -253,11 +253,13 @@ class VoidHoldSyncExceptionTest {
         return id;
     }
 
+    /** A definite failure with no attempts left (piece sync, D7: the sweep re-sends a definite
+     *  failure up to 5 times — only an exhausted one is an exception). */
     private void seedFailedAdjustment(String triggerType, String triggerId) {
         jdbc.update(
             "INSERT INTO shopify_inventory_adjustments " +
-            "(tenant_id, batch_id, variant_id, location_id, delta, trigger_type, trigger_id, status, error) " +
-            "VALUES (?, ?, ?, ?, -1, ?, ?, 'failed', 'simulated failure')",
+            "(tenant_id, batch_id, variant_id, location_id, delta, trigger_type, trigger_id, status, error, attempt_count) " +
+            "VALUES (?, ?, ?, ?, -1, ?, ?, 'failed', 'simulated failure', 5)",
             tenantId, UUID.randomUUID(), variantA, locationId, triggerType, triggerId);
     }
 }

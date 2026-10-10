@@ -147,6 +147,7 @@ class StockTakeFinalizeAppliesTest {
         List<String> bDamaged = pieces(t, b, 2, "damaged");
         String reserved = piece(t, a, "reserved");
         String bench = piece(t, a, "return_pending_inspection");
+        seededBeforeAdjust(t, a);   // D4: the condition correction's damage move needs a seeded tenant
         UUID s = open(t);
         for (int i = 0; i < 8; i++) scan(t, s, aPieces.get(i), "good");      // A: 2 of 10 unscanned
         scan(t, s, aDamagedOnScan, "damaged");                                // condition correction
@@ -184,7 +185,7 @@ class StockTakeFinalizeAppliesTest {
         Map<String, Object> detail = TenantContext.runAs(t.tenant(), () -> stockTake.getSessionDetail(s));
         assertThat(detail).as("close summary: all write-offs in Traced, and what reached Shopify")
             .containsEntry("writtenOff", 3).containsEntry("pushedToShopify", 2);
-        verify(shopifyGateway, timeout(5000)).moveAvailableToDamaged(any(), any(), eq(a.item()), any(), eq(1), any(), any());
+        verify(shopifyGateway, timeout(5000)).moveAvailableToDamaged(any(), any(), eq(a.item()), any(), eq(1), any(), any(), any());
     }
 
     // ── f2: zero scans ────────────────────────────────────────────────────────────
@@ -465,6 +466,7 @@ class StockTakeFinalizeAppliesTest {
         V a = variant(t, "g3");
         String held = piece(t, a, "available");
         String other = piece(t, a, "available");
+        seededBeforeAdjust(t, a);   // D4: hold_enter needs a seeded tenant and a counted piece
         TenantContext.runAs(t.tenant(), () -> pieceAdjust.hold(held, "quality_check", null, t.user()));
         awaitClaim(t, "hold_enter", "applied");
 
@@ -489,6 +491,7 @@ class StockTakeFinalizeAppliesTest {
         V a = variant(t, "g4");
         String held = piece(t, a, "available");
         String other = piece(t, a, "available");
+        seededBeforeAdjust(t, a);   // D4: hold_enter needs a seeded tenant and a counted piece
         doThrow(new ShopifyException("rejected")).when(shopifyGateway)
             .pushHoldEnter(any(), any(), any(), any(), anyInt(), any(), any());
         TenantContext.runAs(t.tenant(), () -> pieceAdjust.hold(held, "quality_check", null, t.user()));
@@ -763,6 +766,16 @@ class StockTakeFinalizeAppliesTest {
 
     private int claimCount(UUID s) {
         return jdbc.queryForObject("SELECT COUNT(*) FROM stock_take_shopify_syncs WHERE session_id = ?", Integer.class, s);
+    }
+
+    /** Piece sync (D4, 2026-10-10): an applied initial seed an hour ago, and the tenant's pieces
+     *  received a day ago — before it, so Shopify counts them. */
+    private void seededBeforeAdjust(T t, V v) {
+        jdbc.update("INSERT INTO shopify_inventory_adjustments " +
+            "(tenant_id, batch_id, variant_id, location_id, delta, trigger_type, trigger_id, status, created_at) " +
+            "VALUES (?, ?, ?, ?, 1, 'initial_seed', 'fixture-seed:' || ?, 'applied', now() - interval '1 hour')",
+            t.tenant(), UUID.randomUUID(), v.id(), t.location(), t.tenant().toString());
+        jdbc.update("UPDATE pieces SET created_at = now() - interval '1 day' WHERE tenant_id = ?", t.tenant());
     }
 
     private void awaitClaim(T t, String triggerType, String status) throws Exception {

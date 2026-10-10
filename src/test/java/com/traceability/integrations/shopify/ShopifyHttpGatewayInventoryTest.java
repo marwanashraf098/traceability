@@ -58,9 +58,9 @@ class ShopifyHttpGatewayInventoryTest {
     @Test
     void g2_moveAvailableToDamaged_rejectsNonPositiveQuantity() {
         Assertions.assertThrows(IllegalArgumentException.class, () ->
-            gateway.moveAvailableToDamaged("shop.myshopify.com", "tok", "item", "loc", 0, "damaged", "key-1"));
+            gateway.moveAvailableToDamaged("shop.myshopify.com", "tok", "item", "loc", 0, "damaged", "traced://piece/P", "key-1"));
         Assertions.assertThrows(IllegalArgumentException.class, () ->
-            gateway.moveAvailableToDamaged("shop.myshopify.com", "tok", "item", "loc", -1, "damaged", "key-1"));
+            gateway.moveAvailableToDamaged("shop.myshopify.com", "tok", "item", "loc", -1, "damaged", "traced://piece/P", "key-1"));
     }
 
     @Test

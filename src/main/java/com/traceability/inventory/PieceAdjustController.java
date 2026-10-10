@@ -14,6 +14,7 @@ import org.springframework.web.bind.annotation.*;
  * POST /api/v1/pieces/{id}/void            — receiving-overcount / duplicate-entry correction (FR-13.x)
  * POST /api/v1/pieces/{id}/hold            — enter on_hold (FR-13.x)
  * POST /api/v1/pieces/{id}/unhold          — exit on_hold back to available (FR-13.x)
+ * POST /api/v1/pieces/{id}/restore         — Back to good: damaged → available (D11)
  */
 @RestController
 @RequestMapping("/api/v1/pieces")
@@ -23,6 +24,7 @@ public class PieceAdjustController {
     record VoidBody(String reason, String note) {}
     record HoldBody(String reason, String note) {}
     record HoldResponse(String holdEventId) {}
+    record RestoreBody(String reason, String note) {}
 
     private final PieceAdjustService svc;
 
@@ -66,6 +68,16 @@ public class PieceAdjustController {
             @RequestBody HoldBody body,
             @AuthenticationPrincipal CustomUserDetails principal) {
         return new HoldResponse(svc.hold(id, body.reason(), body.note(), principal.userId()).toString());
+    }
+
+    @PostMapping("/{id}/restore")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
+    public void restore(
+            @PathVariable String id,
+            @RequestBody RestoreBody body,
+            @AuthenticationPrincipal CustomUserDetails principal) {
+        svc.restore(id, body.reason(), body.note(), principal.userId());
     }
 
     @PostMapping("/{id}/unhold")

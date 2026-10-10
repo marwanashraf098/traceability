@@ -569,49 +569,16 @@ public class StockTakeReconciliationService {
      *          that already excluded the piece (Marawan, 2026-10-01);
      *   - from 'on_hold' (any reason): the hold-enter decrement of the hold cycle the piece was in when
      *     it went lost was applied (shopify_inventory_adjustments hold_enter, piece:hold_event_id).
-     * Anything else — a manual lost adjustment, a damaged / with_courier write-off, a push that failed,
-     * is pending or is ambiguous, a hold-enter that never applied — never reached Shopify, so no +1.
+     *   - (2026-10-10) a Lookup write-off from 'available' whose piece_write_off −1 applied, and any
+     *     departure on a seeded tenant made before the seed (the seed left the piece out).
+     * Anything else — a manual lost adjustment made before Lookup write-offs synced, a damaged /
+     * with_courier write-off, a push that failed, is pending or is ambiguous, a hold-enter that never
+     * applied — never reached Shopify, so no +1. Decided by PieceShopifyRules.reach (shared, D5).
      */
     private boolean foundIncrementEligible(String pieceId, UUID tenantId) {
-        Map<String, Object> lost = jdbc.query(
-            "SELECT pe.id, pe.from_status::text AS from_status, pe.metadata->>'reason' AS reason, " +
-            "       pe.metadata->>'session_id' AS session_id, pe.occurred_at, p.variant_id " +
-            "FROM piece_events pe JOIN pieces p ON p.id = pe.piece_id AND p.tenant_id = pe.tenant_id " +
-            "WHERE pe.piece_id = ? AND pe.tenant_id = ? AND pe.to_status = 'lost'::piece_status " +
-            "ORDER BY pe.occurred_at DESC, pe.id DESC LIMIT 1",
-            rs -> rs.next() ? Map.<String, Object>of(
-                "id", rs.getLong("id"), "from", String.valueOf(rs.getString("from_status")),
-                "reason", String.valueOf(rs.getString("reason")), "session", String.valueOf(rs.getString("session_id")),
-                "at", rs.getTimestamp("occurred_at"), "variant", rs.getObject("variant_id", UUID.class)) : null,
-            pieceId, tenantId);
-        if (lost == null) return false;
-
-        if ("available".equals(lost.get("from")) && "stock_take_missing".equals(lost.get("reason"))) {
-            Boolean reached = jdbc.query(
-                "SELECT (y.status = 'pushed' AND y.pushed_at IS NOT NULL " +
-                "        AND jsonb_exists(y.payload->'deltas', ?)) " +
-                "    OR (y.superseded_snapshot_at IS NOT NULL AND ? <= y.superseded_snapshot_at " +
-                "        AND ((y.status = 'superseded_by_seed' AND jsonb_exists(y.payload->'deltas', ?)) " +
-                "             OR jsonb_exists(COALESCE(y.payload->'superseded', '{}'::jsonb), ?))) AS reached " +
-                "FROM stock_take_shopify_syncs y WHERE y.tenant_id = ? AND y.session_id::text = ?",
-                rs -> rs.next() && rs.getBoolean("reached"),
-                lost.get("variant").toString(), lost.get("at"), lost.get("variant").toString(),
-                lost.get("variant").toString(), tenantId, lost.get("session"));
-            return Boolean.TRUE.equals(reached);
-        }
-        if ("on_hold".equals(lost.get("from"))) {
-            Boolean applied = jdbc.query(
-                "SELECT EXISTS (SELECT 1 FROM shopify_inventory_adjustments sia " +
-                "  WHERE sia.tenant_id = ? AND sia.trigger_type = 'hold_enter' AND sia.status = 'applied' " +
-                "    AND sia.trigger_id = ? || ':' || (" +
-                "      SELECT h.metadata->>'hold_event_id' FROM piece_events h " +
-                "      WHERE h.piece_id = ? AND h.tenant_id = ? AND h.to_status = 'on_hold'::piece_status " +
-                "        AND h.id < ? ORDER BY h.occurred_at DESC, h.id DESC LIMIT 1)) AS applied",
-                rs -> rs.next() && rs.getBoolean("applied"),
-                tenantId, pieceId, pieceId, tenantId, lost.get("id"));
-            return Boolean.TRUE.equals(applied);
-        }
-        return false;
+        // D5 (2026-10-10): the ONE shared "did the departure reach Shopify" predicate — read-only here
+        // (the plan); finalize cancels an unsent departure claim when it applies the found.
+        return PieceShopifyRules.reach(jdbc, tenantId, pieceId, false).reached();
     }
 
     /** Finalize without a typed confirmation — refused (409) whenever the plan requires one. */
@@ -666,6 +633,9 @@ public class StockTakeReconciliationService {
                 "Condition correction during stock take " + sessionId, actorUserId);
         }
         for (Found f : plan.founds()) {
+            // The piece is back: a departure claim never sent (a Lookup write-off or hold still queued,
+            // or failed with attempts left) is cancelled so the sweep never sends it now.
+            PieceShopifyRules.reach(jdbc, tenantId, f.pieceId(), true);
             String metadata = "{\"session_id\":\"" + sessionId + "\",\"reason\":\"stock_take_found\"}";
             ledger.transition(f.pieceId(), PieceStatus.LOST, PieceStatus.AVAILABLE, "adjusted", actorUserId,
                 new TransitionContext(null, null, session.locationId(), null, metadata));

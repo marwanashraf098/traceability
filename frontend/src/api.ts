@@ -1386,6 +1386,20 @@ export function unholdPiece(pieceId: string) {
   return request<void>(`/pieces/${pieceId}/unhold`, { method: 'POST' })
 }
 
+// ── Back to good (damaged → available, manager+) ──────────────────────────────
+
+export type RestoreReason = 'repaired' | 'mis_graded' | 'other'
+
+export const RESTORE_REASONS: RestoreReason[] = ['repaired', 'mis_graded', 'other']
+
+export function restorePiece(pieceId: string, reason: RestoreReason, note?: string) {
+  return request<void>(`/pieces/${pieceId}/restore`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ reason, note }),
+  })
+}
+
 // ── Blocklist (FR-7.9) ────────────────────────────────────────────────────────
 
 export interface BlocklistEntry {
