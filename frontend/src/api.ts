@@ -2852,6 +2852,8 @@ export interface ReturnRequestDetail {
   note: string | null
   createdAt: string
   deliveredAt: string | null
+  /** P4b: fetched by the returns portal for a purchase made before the store connected — not in the Orders list. */
+  orderedBeforeTraced?: boolean
   /** Order address city / zone — the fallback when no pickup area was chosen. */
   pickupCity: string | null
   pickupZone: string | null

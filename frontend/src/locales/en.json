@@ -1378,6 +1378,7 @@
         "actionFailed": "Couldn't save that. Please try again.",
         "loadError": "Couldn't load this request",
         "changeArea": "Change area",
+        "orderedBeforeTraced": "Ordered before Traced",
         "areaLabel": "Pickup area",
         "areaPlaceholder": "Choose an area",
         "areaSave": "Save area",
