@@ -55,6 +55,9 @@ import static org.mockito.Mockito.*;
  *   b6 ambiguous damage move → skipped + alert         b7 concurrent double Back to good → one call
  *   b8 destroyed / voided → available still refused    b9 event, condition, custody phrase
  *   rp1 repair dry run: reads Shopify, zero writes; apply sends each correction once, a re-run nothing
+ *   rp2 the repair is refused for any tenant but The Snouts — even one holding the two pieces — before any read
+ *   a1 every return claim (hold_exit, piece_write_off_return, damaged_restore_increment, damage_restore), ambiguous
+ *      or exhausted, raises the CRITICAL void_hold_sync_failed alert
  *   c1 same tenant: a receiving +1 and a transfer-out push still work
  *   x1 app_user: tenant B can't claim or sweep tenant A's pieces; A's own claim goes through
  */
@@ -491,7 +494,7 @@ class PieceShopifySyncC2Test {
     @Test
     @SuppressWarnings("unchecked")
     void rp1_repairDryRun_zeroWrites_applyOnce_rerunNothing() throws Exception {
-        T t = tenant("rp1", true);
+        T t = tenant("rp1", true, LookupAdjustRepairService.SNOUTS_TENANT);   // the one tenant it runs for
         String voided = pieceWithId(t, LookupAdjustRepairService.VOID_PIECE, "voided");
         String damaged = pieceWithId(t, LookupAdjustRepairService.DAMAGE_PIECE, "damaged");
         jdbc.update("INSERT INTO shopify_inventory_adjustments (tenant_id, batch_id, variant_id, location_id, delta, " +
@@ -532,6 +535,125 @@ class PieceShopifySyncC2Test {
             "AND trigger_type = 'damage_move' AND trigger_id = ?", String.class, t.tenant(), damaged)).isEqualTo("superseded_by_repair");
         assertThat(jdbc.queryForObject("SELECT status FROM shopify_inventory_adjustments WHERE tenant_id = ? " +
             "AND trigger_type = 'void_correction' AND trigger_id = ?", String.class, t.tenant(), voided)).isEqualTo("skipped");
+    }
+
+    /**
+     * The two repair pieces held by ANOTHER tenant (state otherwise eligible: voided / damaged, received
+     * before a seed, receiving counted) — only the server-side tenant check can refuse it. Piece ids are
+     * global, so if rp1 already created them for The Snouts they are lent to the other tenant and handed back.
+     */
+    @Test
+    void rp2_repairRefusedForAnyOtherTenant_evenHoldingTheTwoPieces() {
+        T t = tenant("rp2", true);
+        List<String> ids = List.of(LookupAdjustRepairService.VOID_PIECE, LookupAdjustRepairService.DAMAGE_PIECE);
+        Map<String, Map<String, Object>> lent = new HashMap<>();
+        for (String id : ids) {
+            List<Map<String, Object>> was = jdbc.queryForList(
+                "SELECT tenant_id, variant_id, current_location_id, status::text AS status FROM pieces WHERE id = ?", id);
+            if (was.isEmpty()) {
+                pieceWithId(t, id, id.equals(LookupAdjustRepairService.VOID_PIECE) ? "voided" : "damaged");
+            } else {
+                lent.put(id, was.get(0));
+                jdbc.update("UPDATE pieces SET tenant_id = ?, variant_id = ?, current_location_id = ?, " +
+                    "status = ?::piece_status WHERE id = ?", t.tenant(), t.variant(), t.location(),
+                    id.equals(LookupAdjustRepairService.VOID_PIECE) ? "voided" : "damaged", id);
+            }
+        }
+        when(shopifyGateway.fetchStateQuantities(any(), any(), any(), any(), any()))
+            .thenReturn(Map.of(t.item(), Map.of("available", 3, "damaged", 0, "on_hand", 3)));
+        try {
+            for (boolean apply : List.of(false, true)) {
+                assertThatThrownBy(() -> repair.run(t.tenant(), apply))
+                    .isInstanceOf(ResponseStatusException.class)
+                    .satisfies(e -> assertThat(((ResponseStatusException) e).getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND));
+            }
+            verify(shopifyGateway, never()).fetchStateQuantities(any(), any(), any(), any(), any());
+            verifyNoWrites();
+            assertThat(count(t, "trigger_type <> 'initial_seed'")).isZero();
+        } finally {
+            for (String id : ids) {
+                Map<String, Object> was = lent.get(id);
+                if (was == null) {
+                    jdbc.update("DELETE FROM shopify_inventory_adjustments WHERE split_part(trigger_id, ':', 1) = ? AND tenant_id = ?", id, t.tenant());
+                    jdbc.update("DELETE FROM pieces WHERE id = ?", id);
+                } else {
+                    jdbc.update("UPDATE pieces SET tenant_id = ?, variant_id = ?, current_location_id = ?, status = ?::piece_status " +
+                        "WHERE id = ?", was.get("tenant_id"), was.get("variant_id"), was.get("current_location_id"),
+                        was.get("status"), id);
+                }
+            }
+        }
+    }
+
+    // ── check B: every return claim that fails reaches the CRITICAL alert ─────────
+
+    enum Fail { AMBIGUOUS, EXHAUSTED }
+
+    /**
+     * hold_exit, piece_write_off_return, damaged_restore_increment (all sent by pushPieceIncrement) and
+     * damage_restore (moveDamagedToAvailable): an ambiguous answer, or a definite rejection after its 5th
+     * attempt, raises void_hold_sync_failed (CRITICAL) for that claim — and a definite rejection with
+     * attempts left does not.
+     */
+    @org.junit.jupiter.params.ParameterizedTest(name = "{0} {1}")
+    @org.junit.jupiter.params.provider.CsvSource({
+        "hold_exit, AMBIGUOUS", "hold_exit, EXHAUSTED",
+        "piece_write_off_return, AMBIGUOUS", "piece_write_off_return, EXHAUSTED",
+        "damaged_restore_increment, AMBIGUOUS", "damaged_restore_increment, EXHAUSTED",
+        "damage_restore, AMBIGUOUS", "damage_restore, EXHAUSTED"})
+    void a1_failedReturnClaim_raisesCriticalAlert(String trigger, Fail fail) throws Exception {
+        T t = tenant("a1" + trigger.substring(0, 4) + fail.ordinal(), true);
+        String piece = piece(t, "available", true);
+        RuntimeException error = fail == Fail.AMBIGUOUS
+            ? new ShopifyAmbiguousException("no confirmed response") : new ShopifyException("HTTP 422");
+        switch (trigger) {
+            case "hold_exit" -> {
+                as(t, () -> adjust.hold(piece, "quality_check", null, t.user()));
+                awaitStatus(t, "hold_enter", piece, "applied");
+                doThrow(error).when(shopifyGateway).pushPieceIncrement(any(), any(), any(), any(), anyInt(), any(), any(), any());
+                as(t, () -> adjust.unhold(piece, t.user()));
+            }
+            case "piece_write_off_return" -> {
+                as(t, () -> adjust.adjustPiece(piece, "lost", "theft_suspected", null, t.user()));
+                awaitStatus(t, "piece_write_off", piece, "applied");
+                doThrow(error).when(shopifyGateway).pushPieceIncrement(any(), any(), any(), any(), anyInt(), any(), any(), any());
+                as(t, () -> adjust.adjustPiece(piece, "available", "theft_suspected", null, t.user()));
+            }
+            case "damaged_restore_increment" -> {
+                String returned = returnedDamagedPiece(t, null);
+                doThrow(error).when(shopifyGateway).pushPieceIncrement(any(), any(), any(), any(), anyInt(), any(), any(), any());
+                as(t, () -> adjust.restore(returned, "repaired", null, t.user()));
+                assertAlerted(t, trigger, returned, fail);
+                return;
+            }
+            default -> {
+                as(t, () -> adjust.adjustPiece(piece, "damaged", "damaged_in_storage", null, t.user()));
+                awaitStatus(t, "damage_move", piece, "applied");
+                doThrow(error).when(shopifyGateway).moveDamagedToAvailable(any(), any(), any(), any(), anyInt(), any(), any(), any());
+                as(t, () -> adjust.restore(piece, "repaired", null, t.user()));
+            }
+        }
+        assertAlerted(t, trigger, piece, fail);
+    }
+
+    private void assertAlerted(T t, String trigger, String piece, Fail fail) throws Exception {
+        String key;
+        if (fail == Fail.AMBIGUOUS) {
+            awaitStatus(t, trigger, piece, "failed_ambiguous");
+        } else {
+            awaitStatus(t, trigger, piece, "failed");
+            key = "void_hold_sync_failed:" + trigger + ":" + claim(t, trigger, piece).get("trigger_id");
+            assertThat(alertKeys(t)).as("attempts left — retried, not alerted").doesNotContain(key);
+            for (int i = 0; i < 6; i++) as(t, () -> inventory.sweepPieceClaims(t.tenant()));
+            assertThat(claim(t, trigger, piece)).containsEntry("status", "failed");
+            assertThat(jdbc.queryForObject("SELECT attempt_count FROM shopify_inventory_adjustments WHERE tenant_id = ? " +
+                "AND trigger_type = ? AND split_part(trigger_id, ':', 1) = ?", Integer.class, t.tenant(), trigger, piece)).isEqualTo(5);
+        }
+        key = "void_hold_sync_failed:" + trigger + ":" + claim(t, trigger, piece).get("trigger_id");
+        Map<String, Object> alert = null;
+        for (Map<String, Object> a : alerts(t, "void_hold_sync_failed")) if (key.equals(a.get("subject_key"))) alert = a;
+        assertThat(alert).as("CRITICAL alert for " + key).isNotNull();
+        assertThat(alert.get("severity")).isEqualTo("CRITICAL");
     }
 
     // ── controls ──────────────────────────────────────────────────────────────────
@@ -598,8 +720,10 @@ class PieceShopifySyncC2Test {
         verify(shopifyGateway, never()).adjustInventoryQuantities(any(), any(), any(), any(), anyInt(), any(), any());
     }
 
-    private T tenant(String name, boolean seeded) {
-        UUID tenant = UUID.randomUUID(), store = UUID.randomUUID(), location = UUID.randomUUID(), user = UUID.randomUUID();
+    private T tenant(String name, boolean seeded) { return tenant(name, seeded, UUID.randomUUID()); }
+
+    private T tenant(String name, boolean seeded, UUID tenant) {
+        UUID store = UUID.randomUUID(), location = UUID.randomUUID(), user = UUID.randomUUID();
         UUID product = UUID.randomUUID(), variant = UUID.randomUUID(), away = UUID.randomUUID();
         String shop = name + "-" + tenant.toString().substring(0, 6) + ".myshopify.com";
         String traced = "gid://shopify/Location/" + shop;

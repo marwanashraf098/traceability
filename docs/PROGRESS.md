@@ -26,8 +26,11 @@ merged, NOT deployed). Migration V161 (renumbered from V160 — P2 took it). Rep
 - **Finding:** a relocated piece is `transferred_out` at the destination — Lookup can't adjust it, so D4's
   away-from-main branch has no Lookup path today (tested with a piece made available there by hand).
 - **Next up:** Marawan reviews; dry-run the repair against prod, then `--apply` only on his word; merge + deploy.
-- **Follow-up (D2):** damaged → lost / destroyed writes nothing in v1 (the unit stays in Shopify's "damaged" state);
-  Found it of a piece that went lost via damaged also writes nothing.
+- **Follow-up (accepted v1 gap):** damaged→lost/destroyed and Found-it-after-damaged: Shopify damaged bucket not
+  reconciled.
+- **Follow-up (after the repair is applied):** remove `OpsLookupAdjustRepairController`, `LookupAdjustRepairService` and
+  `scripts/repair-lookup-adjust-2026-10-10` in a follow-up commit. The endpoint is server-side restricted to The Snouts
+  and the two pieces (C3), dry run by default, behind the ops secret (TRACED_OPS_SECRET must be set in prod `.env` to run it).
 **Returns portal P2 — refund payment method (2026-10-10, branch `feat/portal-refund-method-p2` off origin/main cb5f28d;
 NOT merged, NOT deployed). Migration V160.** Mockup signed off: `design/Traced_portal_refund_method_dc.html` (privacy line
 "Shared only with {store}. Deleted 30 days after your refund."). Decisions 1–5 approved as proposed.

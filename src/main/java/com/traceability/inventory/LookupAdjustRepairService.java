@@ -25,6 +25,7 @@ import java.util.*;
  *       damage_move piece:repair-2026-10-10 → the fixed available → damaged move; the legacy 'failed'
  *       row is marked 'superseded_by_repair'.
  *
+ * Server-side: refused (404) for any tenant but The Snouts (SNOUTS_TENANT), before any read.
  * Both are decided by the live rule (PieceShopifyRules.countedAtMain) — a piece that rule doesn't
  * count is reported and left alone. Runs as app_user under the given tenant (RLS): the pieces must be
  * that tenant's. Dry run: reads only (Traced rows and Shopify's available / damaged), writes nothing,
@@ -35,6 +36,8 @@ public class LookupAdjustRepairService {
 
     private static final Logger log = LoggerFactory.getLogger(LookupAdjustRepairService.class);
 
+    /** The Snouts — the only tenant this repair ever runs for (checked server-side, before any read). */
+    static final UUID SNOUTS_TENANT  = UUID.fromString("e785e5e4-2c5c-428e-afdd-d26d90754229");
     static final String VOID_PIECE   = "01M3S6YXH3Z0PCC6J6467HPR0T";
     static final String DAMAGE_PIECE = "01M3S6YXH3VPJ3FDXA4RTN9N9P";
     static final String REPAIR_KEY   = "repair-2026-10-10";
@@ -56,6 +59,10 @@ public class LookupAdjustRepairService {
         new Target(DAMAGE_PIECE, "damaged", "damage_move", Map.of("available", -1, "damaged", 1)));
 
     public Map<String, Object> run(UUID tenantId, boolean apply) {
+        if (!SNOUTS_TENANT.equals(tenantId)) {
+            // Exactly one tenant, exactly two pieces — anything else is not this repair.
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "No such repair for this tenant");
+        }
         return TenantContext.runAs(tenantId, () -> runInTenant(tenantId, apply));
     }
 
