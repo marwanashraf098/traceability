@@ -33,7 +33,7 @@ public final class SimulatedShipments {
             "                       shipment_leg, cod_amount) " +
             "SELECT o.tenant_id, o.id, 'bosta', nextval('simulated_tracking_seq')::text, 'created', " +
             "       'forward', o.cod_amount " +
-            "FROM orders o " +
+            "FROM merchant_orders o " +
             "WHERE o.id = ? AND o.tenant_id = ? " +
             "  AND EXISTS (SELECT 1 FROM tenant_courier_simulation sim WHERE sim.tenant_id = o.tenant_id) " +
             "  AND o.status <> 'cancelled' AND o.raw ->> 'cancelled_at' IS NULL " +

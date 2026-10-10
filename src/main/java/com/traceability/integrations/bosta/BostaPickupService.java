@@ -53,7 +53,7 @@ public class BostaPickupService {
         "SELECT s.id, s.tracking_number, s.cod_amount, " +
         "       o.number AS order_number " +
         "FROM shipments s " +
-        "JOIN orders o ON o.id = s.order_id " +
+        "JOIN merchant_orders o ON o.id = s.order_id " +
         "WHERE s.tenant_id    = ? " +
         "  AND s.shipment_leg = 'forward' " +
         "  AND o.status       = 'awaiting_pickup'::order_status " +
@@ -327,7 +327,7 @@ public class BostaPickupService {
                 "SELECT s.tracking_number, s.cod_amount, o.number AS order_number " +
                 "FROM pickup_shipments ps " +
                 "JOIN shipments s ON s.id = ps.shipment_id " +
-                "JOIN orders    o ON o.id = s.order_id " +
+                "JOIN merchant_orders    o ON o.id = s.order_id " +
                 "WHERE ps.pickup_id = ? AND ps.tenant_id = ?",
                 (rs, i) -> new ManifestLine(
                     rs.getString("tracking_number"),

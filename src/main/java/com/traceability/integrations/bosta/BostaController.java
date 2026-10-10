@@ -581,7 +581,7 @@ public class BostaController {
 
         Integer updated = TenantContext.runAs(tenantId, () ->
             tx.execute(s -> jdbc.update("""
-                UPDATE orders o
+                UPDATE merchant_orders o
                 SET
                   customer_name  = COALESCE(o.customer_name,
                                    NULLIF(TRIM(s.raw#>>'{receiver,fullName}'), '')),

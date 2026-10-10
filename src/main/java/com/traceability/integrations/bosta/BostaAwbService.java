@@ -236,7 +236,7 @@ public class BostaAwbService {
                     "       concat_ws(', ', o.shopify_address ->> 'address1', " +
                     "                 COALESCE(o.shopify_address ->> 'city', o.address ->> 'city')) AS address_line, " +
                     "       COALESCE(s.cod_amount, o.cod_amount) AS cod " +
-                    "FROM shipments s JOIN orders o ON o.id = s.order_id AND o.tenant_id = s.tenant_id " +
+                    "FROM shipments s JOIN merchant_orders o ON o.id = s.order_id AND o.tenant_id = s.tenant_id " +
                     "WHERE s.id IN (" + placeholders + ") AND s.tenant_id = ?",
                     rs -> {
                         String address = rs.getString("address_line");

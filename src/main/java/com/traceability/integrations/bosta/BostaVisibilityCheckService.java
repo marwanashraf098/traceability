@@ -211,7 +211,7 @@ public class BostaVisibilityCheckService {
 
         List<Map<String, Object>> tracked = tx.execute(s -> jdbc.queryForList(
             "SELECT o.number, t.tracking_number, t.carrier_raw " +
-            "FROM order_fulfillment_tracking t JOIN orders o ON o.id = t.order_id AND o.tenant_id = t.tenant_id " +
+            "FROM order_fulfillment_tracking t JOIN merchant_orders o ON o.id = t.order_id AND o.tenant_id = t.tenant_id " +
             "WHERE t.tenant_id = ? AND t.carrier_class = 'bosta' " +
             "  AND coalesce(t.fulfillment_status, '') <> 'cancelled' " +
             "  AND NOT EXISTS (SELECT 1 FROM shipments s WHERE s.order_id = o.id AND s.tenant_id = o.tenant_id " +
@@ -230,7 +230,7 @@ public class BostaVisibilityCheckService {
         List<Map<String, Object>> raw = tx.execute(s -> jdbc.queryForList(
             "SELECT o.number, f->>'tracking_company' AS company, f->>'tracking_number' AS tn, " +
             "       f->'tracking_numbers' AS tns " +
-            "FROM orders o, jsonb_array_elements(o.raw->'fulfillments') f " +
+            "FROM merchant_orders o, jsonb_array_elements(o.raw->'fulfillments') f " +
             "WHERE o.tenant_id = ? AND jsonb_typeof(o.raw->'fulfillments') = 'array' " +
             "  AND (f->>'tracking_company' ILIKE '%bosta%' OR f->>'tracking_url' ILIKE '%bosta%') " +
             "  AND coalesce(f->>'status', '') <> 'cancelled' " +
