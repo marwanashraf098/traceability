@@ -1,18 +1,18 @@
-import { NavLink, useLocation } from 'react-router-dom'
+import { NavLink, useLocation, useNavigate } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
-import { useState, useRef, useEffect, useLayoutEffect } from 'react'
+import { useState, useRef, useEffect } from 'react'
 import { createPortal } from 'react-dom'
 import type { LucideIcon } from 'lucide-react'
 import {
   LayoutDashboard, ShoppingBag, Warehouse, Inbox, ClipboardList, PackageCheck,
-  Truck, Repeat, Undo2, AlertTriangle, Home, ArrowRightLeft, Settings, ChevronDown, X,
-  BarChart3, PanelLeftClose, PanelLeftOpen,
+  Truck, Repeat, Undo2, AlertTriangle, Home, ArrowRightLeft, Settings, X,
+  BarChart3, Workflow, PanelLeftClose, PanelLeftOpen,
   Gauge, TrendingUp, Tag, Boxes, Route as RouteIcon, Wallet, Users, Receipt,
 } from 'lucide-react'
 import type { Me } from '../api'
 import { Logo } from './Logo'
 import { cn } from './ui'
-import { ANALYTICS_PAGES, analyticsEnabled, type AnalyticsPageId } from '../analytics/flag'
+import { analyticsEnabled, isReadyPage, type AnalyticsPageId } from '../analytics/flag'
 import { sharedSearch } from '../analytics/period'
 
 // ── Nav config ──────────────────────────────────────────────────────────────────
@@ -54,6 +54,72 @@ const WORKER_ITEMS: NavItem[] = [
 const ANALYTICS_ICONS: Record<AnalyticsPageId, LucideIcon> = {
   summary: Gauge, revenue: TrendingUp, products: Tag, stock: Boxes,
   delivery: RouteIcon, money: Wallet, customers: Users, orders: Receipt,
+}
+
+/** Analytics-mode nav (owner only, behind VITE_ANALYTICS_ENABLED). Order matches ANALYTICS_PAGES. */
+const ANALYTICS_SECTIONS: { id: string; headerKey?: string; pages: AnalyticsPageId[] }[] = [
+  { id: 'a-top',     pages: ['summary'] },
+  { id: 'money',     headerKey: 'nav.analyticsSections.money',     pages: ['revenue', 'orders', 'money'] },
+  { id: 'products',  headerKey: 'nav.analyticsSections.products',  pages: ['products', 'stock'] },
+  { id: 'customers', headerKey: 'nav.analyticsSections.customers', pages: ['delivery', 'customers'] },
+]
+
+// ── Mode (Operations | Analytics) ─────────────────────────────────────────────────
+// Derived from the route during render — never stored — so a freshly mounted Layout shows the
+// right list on its first paint. Only an owner with analytics enabled has the switch; everyone
+// else is always in Operations. Each mode remembers its last-visited page per device, validated
+// on read (Operations: a nav item path; Analytics: a ready page + the shared period).
+
+type Mode = 'operations' | 'analytics'
+const MODES: Mode[] = ['operations', 'analytics']
+
+export const LAST_PAGE_KEY: Record<Mode, string> = {
+  operations: 'traced-nav-last-operations',
+  analytics:  'traced-nav-last-analytics',
+}
+const LEGACY_ANALYTICS_NAV_KEY = 'traced-analytics-nav'
+
+const OPERATIONS_PATHS = [...OWNER_SECTIONS.flatMap(s => s.items.map(i => i.to)), '/alerts', '/settings']
+const MODE_HOME: Record<Mode, string> = { operations: '/overview', analytics: '/analytics/summary' }
+
+function routeMode(pathname: string): Mode {
+  return pathname.startsWith('/analytics/') ? 'analytics' : 'operations'
+}
+
+/** The Operations nav item a route belongs to (longest prefix), e.g. /transfers/abc → /transfers. */
+function operationsItemPath(pathname: string): string | null {
+  let best: string | null = null
+  for (const p of OPERATIONS_PATHS) {
+    if ((pathname === p || pathname.startsWith(p + '/')) && (!best || p.length > best.length)) best = p
+  }
+  return best
+}
+
+/** /analytics/<ready page> + the shared period state, or null. */
+function analyticsEntry(pathname: string, search: string): string | null {
+  const m = /^\/analytics\/([a-z]+)$/.exec(pathname)
+  return m && isReadyPage(m[1]) ? `/analytics/${m[1]}${sharedSearch(new URLSearchParams(search))}` : null
+}
+
+function readLastPage(mode: Mode): string {
+  let stored: string | null = null
+  try { stored = localStorage.getItem(LAST_PAGE_KEY[mode]) } catch { /* storage blocked */ }
+  if (stored) {
+    if (mode === 'operations' && OPERATIONS_PATHS.includes(stored)) return stored
+    if (mode === 'analytics') {
+      const q = stored.indexOf('?')
+      const entry = analyticsEntry(q < 0 ? stored : stored.slice(0, q), q < 0 ? '' : stored.slice(q))
+      if (entry) return entry
+    }
+  }
+  return MODE_HOME[mode]
+}
+
+function rememberPage(pathname: string, search: string) {
+  const mode = routeMode(pathname)
+  const entry = mode === 'analytics' ? analyticsEntry(pathname, search) : operationsItemPath(pathname)
+  if (!entry) return
+  try { localStorage.setItem(LAST_PAGE_KEY[mode], entry) } catch { /* storage blocked */ }
 }
 
 // ── Collapsed state ───────────────────────────────────────────────────────────────
@@ -108,11 +174,10 @@ function isRtl(): boolean {
   return document.documentElement.dir === 'rtl'
 }
 
-/** Fixed position beside an element, on the inline-end side (right in LTR, left in RTL).
- *  `top` is the element's vertical centre (tooltips) or, with alignTop, its top edge (flyouts). */
-function besideStyle(el: HTMLElement, alignTop = false, gap = 8): React.CSSProperties {
+/** Fixed position beside an element's vertical centre, on the inline-end side (right in LTR, left in RTL). */
+function besideStyle(el: HTMLElement, gap = 8): React.CSSProperties {
   const r = el.getBoundingClientRect()
-  const top = alignTop ? Math.max(8, r.top - 8) : r.top + r.height / 2
+  const top = r.top + r.height / 2
   return isRtl() ? { top, right: window.innerWidth - r.left + gap } : { top, left: r.right + gap }
 }
 
@@ -176,126 +241,67 @@ function SectionHeader({ label, collapsed, children }: { label: string; collapse
 function BetaTag() {
   const { t } = useTranslation()
   return (
-    <span className="ms-1.5 text-[10px] font-bold tracking-[0.04em] text-[#93b4ff] bg-trace-blue/20 px-1.5 py-0.5 rounded normal-case">
+    <span className="text-[9px] font-bold tracking-[0.04em] text-[#93b4ff] bg-trace-blue/20 rounded normal-case px-1 py-px">
       {t('nav.beta')}
     </span>
   )
 }
 
-// ── Analytics section (owner only, behind VITE_ANALYTICS_ENABLED) ───────────────────
-// Expanded: a foldable section (state per device; unfolds itself on an analytics page).
-// Rail: one icon that opens a flyout with the pages. Links carry the shared period state.
+// ── Mode switch ─────────────────────────────────────────────────────────────────
+// A tablist (roving tabindex, MANUAL activation: arrows / Home / End move focus, Enter or Space
+// navigates). Horizontal — arrows mirrored in RTL — when expanded and in the phone drawer;
+// vertical (Up / Down) as two stacked icons in the rail. The nav list is its tabpanel.
 
-const ANALYTICS_NAV_KEY = 'traced-analytics-nav'
-
-function AnalyticsSection({ collapsed }: { collapsed: boolean }) {
+function ModeSwitch({ mode, collapsed, onSelect, tipProps }: {
+  mode: Mode
+  collapsed: boolean
+  onSelect: (m: Mode) => void
+  tipProps: (label: string) => Record<string, unknown>
+}) {
   const { t } = useTranslation()
-  const { pathname, search } = useLocation()
-  const inAnalytics = pathname.startsWith('/analytics')
-  const [open, setOpen] = useState<boolean>(() => {
-    try { return localStorage.getItem(ANALYTICS_NAV_KEY) !== 'closed' } catch { return true }
-  })
-  const expanded = open || inAnalytics
-  function toggle() {
-    const next = !expanded
-    setOpen(next)
-    try { localStorage.setItem(ANALYTICS_NAV_KEY, next ? 'open' : 'closed') } catch { /* storage blocked */ }
-  }
-  const carry = inAnalytics ? sharedSearch(new URLSearchParams(search)) : ''
-  const pages = ANALYTICS_PAGES.filter(p => p.ready)
+  const refs = useRef<Record<Mode, HTMLButtonElement | null>>({ operations: null, analytics: null })
+  const vertical = collapsed && isWide()
 
-  // Rail flyout — closes on Escape, an outside click and any navigation.
-  const [flyout, setFlyout] = useState<React.CSSProperties | null>(null)
-  const railBtn = useRef<HTMLButtonElement>(null)
-  const flyoutRef = useRef<HTMLDivElement>(null)
-  useEffect(() => { setFlyout(null) }, [pathname, collapsed])
-  useEffect(() => {
-    if (!flyout) return
-    function onKey(e: KeyboardEvent) {
-      if (e.key === 'Escape') { setFlyout(null); railBtn.current?.focus() }
-    }
-    function onDown(e: MouseEvent) {
-      const n = e.target as Node
-      if (!flyoutRef.current?.contains(n) && !railBtn.current?.contains(n)) setFlyout(null)
-    }
-    document.addEventListener('keydown', onKey)
-    document.addEventListener('mousedown', onDown)
-    return () => { document.removeEventListener('keydown', onKey); document.removeEventListener('mousedown', onDown) }
-  }, [flyout])
-  useLayoutEffect(() => {
-    const el = flyoutRef.current
-    if (!flyout || !el) return
-    // Keep it on screen when the rail button sits low in a short window.
-    const overflow = el.getBoundingClientRect().bottom - (window.innerHeight - 8)
-    if (overflow > 0) el.style.top = `${Math.max(8, (flyout.top as number) - overflow)}px`
-    el.querySelector<HTMLElement>('a')?.focus()
-  }, [flyout])
+  function onKeyDown(e: React.KeyboardEvent, current: Mode) {
+    const i = MODES.indexOf(current)
+    const fwd = vertical ? 'ArrowDown' : isRtl() ? 'ArrowLeft' : 'ArrowRight'
+    const back = vertical ? 'ArrowUp' : isRtl() ? 'ArrowRight' : 'ArrowLeft'
+    let next: number | null = null
+    // No wrap-around: an arrow at the visual edge stays put, so RTL mirroring is meaningful.
+    if (e.key === fwd) next = Math.min(i + 1, MODES.length - 1)
+    else if (e.key === back) next = Math.max(i - 1, 0)
+    else if (e.key === 'Home') next = 0
+    else if (e.key === 'End') next = MODES.length - 1
+    if (next === null) return
+    e.preventDefault()
+    refs.current[MODES[next]]?.focus()
+  }
 
   return (
-    <>
-      {collapsed && (
-        <div className="hidden min-[900px]:block">
-          <div aria-hidden="true" className="h-px bg-sidebar-line mx-4 my-2.5" />
-          <button ref={railBtn} type="button" data-testid="nav-analytics-rail"
-            aria-label={t('nav.analytics')} aria-haspopup="true" aria-expanded={!!flyout}
-            aria-controls="nav-analytics-flyout"
-            onClick={() => setFlyout(f => (f ? null : besideStyle(railBtn.current!, true)))}
-            className={cn('nav-item w-full', inAnalytics && 'nav-item-active')}>
-            <BarChart3 size={18} strokeWidth={1.75} className={cn('flex-shrink-0', inAnalytics && 'text-trace-blue')} />
+    <div role="tablist" aria-label={t('nav.modes.label')} aria-orientation={vertical ? 'vertical' : 'horizontal'}
+      data-testid="mode-switch"
+      className={cn('flex-shrink-0 flex gap-0.5 mx-3 mt-3 mb-1 p-0.5 rounded-lg bg-sidebar-line/60',
+        collapsed && 'min-[900px]:flex-col min-[900px]:mx-2.5')}>
+      {MODES.map(m => {
+        const selected = m === mode
+        const Icon = m === 'operations' ? Workflow : BarChart3
+        const label = m === 'operations' ? t('nav.modes.operations') : t('nav.analytics')
+        return (
+          <button key={m} ref={el => { refs.current[m] = el }} type="button" role="tab"
+            id={`mode-tab-${m}`} data-testid={`mode-tab-${m}`}
+            aria-selected={selected} aria-controls="app-nav-list" tabIndex={selected ? 0 : -1}
+            onClick={() => onSelect(m)} onKeyDown={e => onKeyDown(e, m)} {...tipProps(label)}
+            className={cn('flex-auto flex items-center justify-center gap-1.5 min-w-0 rounded-md px-1.5 py-1.5 text-[13px] font-medium whitespace-nowrap transition-colors',
+              'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-trace-blue',
+              selected ? 'bg-brand/[0.22] text-sidebar-active' : 'text-sidebar-text hover:text-sidebar-active',
+              collapsed && 'min-[900px]:py-2')}>
+            <Icon size={15} strokeWidth={1.75} className={cn('flex-shrink-0', selected && 'text-trace-blue', !collapsed && 'hidden', collapsed && 'max-[899px]:hidden')} />
+            <span className={cn('truncate', collapsed && 'min-[900px]:sr-only')}>{label}</span>
+            {m === 'analytics' && <span className={cn(collapsed && 'min-[900px]:hidden')}><BetaTag /></span>}
           </button>
-        </div>
-      )}
-      {flyout && createPortal(
-        <div ref={flyoutRef} id="nav-analytics-flyout" data-testid="nav-analytics-flyout" role="menu"
-          style={flyout}
-          className="fixed z-dropdown w-56 max-h-[calc(100vh-16px)] overflow-y-autorounded-lg bg-sidebar border border-sidebar-line shadow-e4 py-1.5">
-          <div className="flex items-center px-[14px] pt-1 pb-1.5 text-[11px] font-semibold tracking-wider text-sidebar-text uppercase">
-            {t('nav.analytics')}<BetaTag />
-          </div>
-          {pages.map(p => {
-            const Icon = ANALYTICS_ICONS[p.id]
-            return (
-              <NavLink key={p.id} role="menuitem" to={`/analytics/${p.id}${carry}`}
-                className={({ isActive }) => cn('nav-item', isActive && 'nav-item-active')}>
-                {({ isActive }) => (
-                  <>
-                    <Icon size={16} strokeWidth={1.75} className={cn('flex-shrink-0', isActive && 'text-trace-blue')} />
-                    <span className="truncate">{t(`analytics.pages.${p.id}.nav`)}</span>
-                  </>
-                )}
-              </NavLink>
-            )
-          })}
-        </div>,
-        document.body,
-      )}
-      <div data-testid="nav-analytics" className={cn(collapsed && 'min-[900px]:hidden')}>
-        <button type="button" onClick={toggle} aria-expanded={expanded} aria-controls="nav-analytics-sub"
-          className="w-full flex items-center px-[18px] pt-3.5 pb-1 text-[11px] font-semibold tracking-wider text-sidebar-text uppercase hover:text-sidebar-active transition-colors">
-          <span>{t('nav.analytics')}</span>
-          <BetaTag />
-          <ChevronDown size={13} strokeWidth={2} className={cn('ms-auto transition-transform', !expanded && 'ltr:-rotate-90 rtl:rotate-90')} />
-        </button>
-        {expanded && (
-          <div id="nav-analytics-sub" className="flex flex-col gap-0.5">
-            {pages.map(p => {
-              const Icon = ANALYTICS_ICONS[p.id]
-              return (
-                <NavLink key={p.id} to={`/analytics/${p.id}${carry}`}
-                  className={({ isActive }) => cn('nav-item', isActive && 'nav-item-active')}>
-                  {({ isActive }) => (
-                    <>
-                      <Icon size={18} strokeWidth={1.75} className={cn('flex-shrink-0', isActive && 'text-trace-blue')} />
-                      <span className="truncate">{t(`analytics.pages.${p.id}.nav`)}</span>
-                    </>
-                  )}
-                </NavLink>
-              )
-            })}
-          </div>
-        )}
-      </div>
-    </>
+        )
+      })}
+    </div>
   )
 }
 
@@ -325,9 +331,29 @@ export default function Sidebar({ role, me, navOpen, onCloseNav }: {
   onCloseNav: () => void
 }) {
   const { t } = useTranslation()
+  const navigate = useNavigate()
+  const { pathname, search } = useLocation()
   const isWorker = role === 'worker'
   const [collapsed, toggleCollapsed] = useSidebarCollapsed(!isWorker)
   const { bind, node: tipNode } = useRailTip(collapsed)
+
+  const hasSwitch = role === 'owner' && analyticsEnabled()
+  const mode: Mode = hasSwitch ? routeMode(pathname) : 'operations'
+  const carry = mode === 'analytics' ? sharedSearch(new URLSearchParams(search)) : ''
+
+  useEffect(() => {
+    if (hasSwitch) rememberPage(pathname, search)
+  }, [hasSwitch, pathname, search])
+
+  // The Analytics fold of the earlier sidebar is gone — drop its stored state.
+  useEffect(() => {
+    try { localStorage.removeItem(LEGACY_ANALYTICS_NAV_KEY) } catch { /* storage blocked */ }
+  }, [])
+
+  function selectMode(next: Mode) {
+    if (next === mode) return
+    navigate(readLastPage(next))
+  }
 
   // Width animates only on a user toggle — never on mount (Layout remounts on every route).
   const [animate, setAnimate] = useState(false)
@@ -379,18 +405,33 @@ export default function Sidebar({ role, me, navOpen, onCloseNav }: {
         </button>
       </div>
 
-      {/* Nav — worker gets the reduced task-scoped set; owner/manager the grouped nav. */}
-      <nav id="app-nav-list" className="sidebar-scroll flex-1 min-h-0 overflow-y-auto overflow-x-hidden py-2 flex flex-col gap-0.5">
-        {isWorker ? WORKER_ITEMS.map(link) : (
-          <>
-            {OWNER_SECTIONS.filter(s => s.items.length > 0).map(s => (
-              <div key={s.id} className="flex flex-col gap-0.5">
-                {s.headerKey && <SectionHeader label={t(s.headerKey)} collapsed={collapsed} />}
-                {s.items.map(link)}
-              </div>
-            ))}
-            {role === 'owner' && analyticsEnabled() && <AnalyticsSection collapsed={collapsed} />}
-          </>
+      {hasSwitch && <ModeSwitch mode={mode} collapsed={collapsed} onSelect={selectMode} tipProps={bind} />}
+
+      {/* Nav — worker gets the reduced task-scoped set; owner/manager the grouped Operations nav;
+          an owner on an analytics page the Analytics nav. With the switch, the list is its tabpanel. */}
+      <nav id="app-nav-list"
+        {...(hasSwitch ? { role: 'tabpanel', 'aria-labelledby': `mode-tab-${mode}` } : {})}
+        className="sidebar-scroll flex-1 min-h-0 overflow-y-auto overflow-x-hidden py-2 flex flex-col gap-0.5">
+        {isWorker ? WORKER_ITEMS.map(link) : mode === 'analytics' ? (
+          <div data-testid="nav-analytics" className="flex flex-col gap-0.5">
+            {ANALYTICS_SECTIONS.map(s => ({ ...s, pages: s.pages.filter(isReadyPage) }))
+              .filter(s => s.pages.length > 0)
+              .map(s => (
+                <div key={s.id} className="flex flex-col gap-0.5">
+                  {s.headerKey && <SectionHeader label={t(s.headerKey)} collapsed={collapsed} />}
+                  {s.pages.map(id => link({
+                    to: `/analytics/${id}${carry}`, icon: ANALYTICS_ICONS[id], labelKey: `analytics.pages.${id}.nav`,
+                  }))}
+                </div>
+              ))}
+          </div>
+        ) : (
+          OWNER_SECTIONS.filter(s => s.items.length > 0).map(s => (
+            <div key={s.id} className="flex flex-col gap-0.5">
+              {s.headerKey && <SectionHeader label={t(s.headerKey)} collapsed={collapsed} />}
+              {s.items.map(link)}
+            </div>
+          ))
         )}
       </nav>
 

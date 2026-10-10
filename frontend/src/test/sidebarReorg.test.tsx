@@ -6,13 +6,13 @@ import { renderWithProviders } from './renderWithProviders'
 import { stubFetchWithShellDefaults } from './mockShellFetch'
 import en from '../locales/en.json'
 import Layout from '../components/Layout'
-import { SIDEBAR_KEY } from '../components/Sidebar'
+import { SIDEBAR_KEY, LAST_PAGE_KEY } from '../components/Sidebar'
 import App from '../App'
-import { ANALYTICS_PAGES } from '../analytics/flag'
 import { setAccessToken, clearAccessToken } from '../auth'
 
-// Sidebar reorg: grouped nav, collapsible icon rail (owner/manager only), Analytics section with a
-// rail flyout, "Exceptions" shown as "Alerts" with an /alerts alias. jsdom has no media queries:
+// Sidebar: grouped nav, collapsible icon rail (owner/manager only), Operations | Analytics mode
+// switch (owner, analytics on; mode derived from the route), "Exceptions" shown as "Alerts" with an
+// /alerts alias. jsdom has no media queries:
 // every rail class is min-[900px]: scoped, so these tests read the sidebar's own state
 // (data-collapsed) and the elements it renders, and stub matchMedia where the default matters.
 
@@ -60,20 +60,23 @@ afterEach(() => {
 })
 
 describe('grouped nav', () => {
-  test('g1 — owner: Overview, Alerts, then Outbound / Stock / Returns / Analytics, Settings pinned at the bottom', () => {
+  test('g1 — owner, Operations mode: Overview, Alerts, Outbound / Stock / Returns, Settings pinned; no Analytics links', () => {
     renderShell()
-    const pages = ANALYTICS_PAGES.filter(p => p.ready).map(p => `/analytics/${p.id}`)
     expect(hrefs(nav())).toEqual([
       '/overview', '/exceptions',
       '/orders', '/fulfill', '/pickups',
       '/inventory', '/receiving', '/transfers', '/stock-take',
       '/exchanges', '/returns',
-      ...pages,
       '/settings',
     ])
-    for (const h of [en.nav.sections.outbound, en.nav.sections.stock, en.nav.sections.returns, en.nav.analytics, en.nav.beta]) {
+    for (const h of [en.nav.sections.outbound, en.nav.sections.stock, en.nav.sections.returns]) {
       expect(within(nav()).getByText(h)).toBeInTheDocument()
     }
+    expect(screen.queryByTestId('nav-analytics')).toBeNull()
+    // The switch: Operations | Analytics + BETA, Operations selected.
+    const sw = screen.getByTestId('mode-switch')
+    expect(within(sw).getAllByRole('tab').map(t => t.textContent)).toEqual([en.nav.modes.operations, en.nav.analytics + en.nav.beta])
+    expect(screen.getByTestId('mode-tab-operations')).toHaveAttribute('aria-selected', 'true')
     expect(within(nav()).getByRole('link', { name: en.nav.exceptions })).toHaveAttribute('href', '/exceptions')
     expect(within(nav()).getByRole('link', { name: en.nav.exchangesRefunds })).toHaveAttribute('href', '/exchanges')
     expect(within(nav()).queryByText('Manager')).toBeNull()
@@ -82,24 +85,14 @@ describe('grouped nav', () => {
     expect(within(nav()).getByRole('link', { name: en.nav.exceptions }).textContent).toBe(en.nav.exceptions)
   })
 
-  test('g2 — manager: same groups, no Analytics section', () => {
+  test('g2 — manager: same groups, no Analytics section, no mode switch', () => {
     setAccessToken(fakeJwt('manager'))
     renderShell()
     expect(screen.queryByTestId('nav-analytics')).toBeNull()
+    expect(screen.queryByTestId('mode-switch')).toBeNull()
+    expect(screen.queryByRole('tabpanel')).toBeNull()
     expect(hrefs(nav())).toContain('/settings')
     expect(within(nav()).getByText(en.nav.sections.returns)).toBeInTheDocument()
-  })
-
-  test('g3 — the Analytics header folds and unfolds the section and remembers it', async () => {
-    const user = userEvent.setup()
-    renderShell()
-    const section = screen.getByTestId('nav-analytics')
-    const header = within(section).getByRole('button')
-    expect(header).toHaveAttribute('aria-expanded', 'true')
-    await user.click(header)
-    expect(header).toHaveAttribute('aria-expanded', 'false')
-    expect(within(section).queryAllByRole('link')).toHaveLength(0)
-    expect(localStorage.getItem('traced-analytics-nav')).toBe('closed')
   })
 })
 
@@ -166,46 +159,114 @@ describe('collapse', () => {
   })
 })
 
-describe('analytics flyout (rail)', () => {
-  test('f1 — opens with the pages in order, Escape closes it, and it closes on navigation', async () => {
-    const user = userEvent.setup()
-    localStorage.setItem(SIDEBAR_KEY, 'collapsed')
-    renderShell('/analytics/summary?period=7d')
-    const railBtn = screen.getByTestId('nav-analytics-rail')
-    expect(railBtn.className).toContain('nav-item-active') // on an analytics page
+describe('mode switch (owner, analytics on)', () => {
+  const loc = () => screen.getByTestId('location').textContent
+  const tab = (m: 'operations' | 'analytics') => screen.getByTestId(`mode-tab-${m}`)
 
-    await user.click(railBtn)
-    const flyout = screen.getByTestId('nav-analytics-flyout')
-    expect(railBtn).toHaveAttribute('aria-expanded', 'true')
-    expect(within(flyout).getAllByRole('menuitem').map(a => a.getAttribute('href'))).toEqual(ANALYTICS_PAGES.filter(p => p.ready).map(p => `/analytics/${p.id}?period=7d`))
-    await user.keyboard('{Escape}')
-    expect(screen.queryByTestId('nav-analytics-flyout')).toBeNull()
-    expect(railBtn).toHaveAttribute('aria-expanded', 'false')
-
-    await user.click(railBtn)
-    await user.click(within(screen.getByTestId('nav-analytics-flyout')).getAllByRole('menuitem')[1])
-    expect(screen.getByTestId('location').textContent).toBe('/analytics/revenue?period=7d')
-    await waitFor(() => expect(screen.queryByTestId('nav-analytics-flyout')).toBeNull())
+  test('m1 — the mode follows the route: an analytics page shows the Analytics list in nav order, carrying the period', () => {
+    renderShell('/analytics/revenue?period=7d&x=1')
+    expect(tab('analytics')).toHaveAttribute('aria-selected', 'true')
+    expect(tab('operations')).toHaveAttribute('aria-selected', 'false')
+    expect(screen.getByRole('tabpanel')).toHaveAttribute('aria-labelledby', 'mode-tab-analytics')
+    const order = ['summary', 'revenue', 'orders', 'money', 'products', 'stock', 'delivery', 'customers']
+    expect(hrefs(screen.getByTestId('nav-analytics'))).toEqual(order.map(id => `/analytics/${id}?period=7d`))
+    expect(hrefs(nav())).toEqual([...order.map(id => `/analytics/${id}?period=7d`), '/settings'])
+    for (const h of [en.nav.analyticsSections.money, en.nav.analyticsSections.products, en.nav.analyticsSections.customers]) {
+      expect(within(nav()).getByText(h)).toBeInTheDocument()
+    }
   })
 
-  test('f2 — an outside click closes it', async () => {
+  test('m2 — each side goes to that mode\'s last-visited page (Operations: the nav item; Analytics: page + period)', async () => {
     const user = userEvent.setup()
-    localStorage.setItem(SIDEBAR_KEY, 'collapsed')
-    renderShell()
-    await user.click(screen.getByTestId('nav-analytics-rail'))
-    expect(screen.getByTestId('nav-analytics-flyout')).toBeInTheDocument()
-    await user.click(screen.getByText('page'))
-    expect(screen.queryByTestId('nav-analytics-flyout')).toBeNull()
+    localStorage.setItem(LAST_PAGE_KEY.analytics, '/analytics/stock?period=30d&junk=1')
+    renderShell('/transfers/abc')
+    await user.click(tab('analytics'))
+    expect(loc()).toBe('/analytics/stock?period=30d')
+    expect(tab('analytics')).toHaveAttribute('aria-selected', 'true')
+    await user.click(tab('operations'))
+    expect(loc()).toBe('/transfers') // the nav item the visited route belongs to, never its id
+    expect(localStorage.getItem(LAST_PAGE_KEY.analytics)).toBe('/analytics/stock?period=30d')
   })
 
-  test('f3 — no rail Analytics button while expanded, or for a manager', () => {
-    const a = renderShell()
-    expect(screen.queryByTestId('nav-analytics-rail')).toBeNull()
-    a.unmount()
-    setAccessToken(fakeJwt('manager'))
+  test('m3 — no or invalid stored pages fall back to Overview / Summary', async () => {
+    const user = userEvent.setup()
+    renderShell('/orders')
+    localStorage.setItem(LAST_PAGE_KEY.analytics, '/analytics/not-a-page?period=7d')
+    await user.click(tab('analytics'))
+    expect(loc()).toBe('/analytics/summary')
+    localStorage.setItem(LAST_PAGE_KEY.operations, 'https://evil.example/')
+    await user.click(tab('operations'))
+    expect(loc()).toBe('/overview')
+  })
+
+  test('m4 — clicking the active mode does nothing', async () => {
+    const user = userEvent.setup()
+    renderShell('/orders?order=1')
+    await user.click(tab('operations'))
+    expect(loc()).toBe('/orders?order=1')
+  })
+
+  test('m5 — keyboard: roving tabindex, arrows / Home / End move focus only, Enter activates; arrows mirror in RTL', async () => {
+    const user = userEvent.setup()
+    renderShell('/overview')
+    expect(tab('operations')).toHaveAttribute('tabindex', '0')
+    expect(tab('analytics')).toHaveAttribute('tabindex', '-1')
+    act(() => tab('operations').focus())
+    await user.keyboard('{ArrowRight}')
+    expect(tab('analytics')).toHaveFocus()
+    expect(loc()).toBe('/overview') // manual activation
+    await user.keyboard('{Home}')
+    expect(tab('operations')).toHaveFocus()
+    await user.keyboard('{End}')
+    expect(tab('analytics')).toHaveFocus()
+    await user.keyboard('{Enter}')
+    expect(loc()).toBe('/analytics/summary')
+
+    await user.keyboard('{ArrowRight}') // no wrap at the end
+    expect(tab('analytics')).toHaveFocus()
+
+    // RTL: Operations is on the right, so ArrowLeft moves toward Analytics.
+    document.documentElement.setAttribute('dir', 'rtl')
+    act(() => tab('operations').focus())
+    await user.keyboard('{ArrowRight}')
+    expect(tab('operations')).toHaveFocus()
+    await user.keyboard('{ArrowLeft}')
+    expect(tab('analytics')).toHaveFocus()
+  })
+
+  test('m6 — rail: two stacked icons, vertical arrows, a tooltip on focus', async () => {
+    const user = userEvent.setup()
     localStorage.setItem(SIDEBAR_KEY, 'collapsed')
+    renderShell('/overview')
+    expect(screen.getByRole('tablist')).toHaveAttribute('aria-orientation', 'vertical')
+    act(() => tab('operations').focus())
+    expect(screen.getByRole('tooltip')).toHaveTextContent(en.nav.modes.operations)
+    await user.keyboard('{ArrowDown}')
+    expect(tab('analytics')).toHaveFocus()
+    expect(screen.getByRole('tooltip')).toHaveTextContent(en.nav.analytics)
+    await user.keyboard('{ArrowUp}')
+    expect(tab('operations')).toHaveFocus()
+  })
+
+  test('m7 — the old Analytics fold state is removed on mount', () => {
+    localStorage.setItem('traced-analytics-nav', 'closed')
     renderShell()
-    expect(screen.queryByTestId('nav-analytics-rail')).toBeNull()
+    expect(localStorage.getItem('traced-analytics-nav')).toBeNull()
+  })
+
+  test('m8 — flag off: no switch, Operations even on an /analytics path', () => {
+    vi.stubEnv('VITE_ANALYTICS_ENABLED', 'false')
+    renderShell('/analytics/summary')
+    expect(screen.queryByTestId('mode-switch')).toBeNull()
+    expect(screen.queryByTestId('nav-analytics')).toBeNull()
+    expect(hrefs(nav())).toContain('/orders')
+  })
+
+  test('m9 — the switch sits at the top of the sidebar (and so of the phone drawer), before the nav list', () => {
+    renderShell('/analytics/summary')
+    const sw = within(nav()).getByTestId('mode-switch')
+    expect(sw.compareDocumentPosition(screen.getByRole('tabpanel')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(sw.className).not.toMatch(/(^|\s)min-\[900px\]:flex-col(\s|$)/) // a full-width row while expanded
   })
 })
 
