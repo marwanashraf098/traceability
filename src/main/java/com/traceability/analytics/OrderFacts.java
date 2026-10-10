@@ -96,7 +96,7 @@ final class OrderFacts {
                o.channel, o.payment_group, o.ship_province AS province_code, o.shopify_fulfilled,
                lg.handed_at, lg.delivered_at, lg.settlement_status, lg.failure_category
         FROM order_money om
-        JOIN orders o          ON o.id = om.order_id
+        JOIN merchant_orders o          ON o.id = om.order_id
         LEFT JOIN LATERAL (
             SELECT COALESCE(sh.collected_from_business_at,
                        (SELECT MIN(h.occurred_at) FROM shipment_status_history h
@@ -126,14 +126,14 @@ final class OrderFacts {
                    l.qty * al.amt / NULLIF(GREATEST(COALESCE(oi.original_qty, oi.quantity), l.qty), 0) AS cost
             FROM lines l
             JOIN order_items oi ON oi.id = l.order_item_id
-            JOIN orders o       ON o.id = l.order_id
+            JOIN merchant_orders o       ON o.id = l.order_id
             CROSS JOIN LATERAL unnest(CASE WHEN NOT l.approximate THEN oi.alloc_amounts END,
                                       CASE WHEN NOT l.approximate THEN oi.alloc_indexes END) AS al(amt, idx)
         ),
         order_apps AS (
             SELECT om.order_id, app.type, app.code
             FROM order_money om
-            JOIN orders o ON o.id = om.order_id
+            JOIN merchant_orders o ON o.id = om.order_id
             CROSS JOIN LATERAL unnest(o.discount_types, o.discount_labels) AS app(type, code)
         ),
         usage AS (

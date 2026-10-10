@@ -148,9 +148,9 @@ public class CustomerAnalyticsService {
                      AND b.phone_canonical = """ + CustomerSubject.canonicalPhoneSql("o.customer_phone") + """
                )) AS blocked
         FROM order_money om
-        JOIN orders o  ON o.id = om.order_id
+        JOIN merchant_orders o  ON o.id = om.order_id
         JOIN floors f  ON f.store_id = o.store_id
-        LEFT JOIN (SELECT store_id, MIN(placed_at) AS first_at FROM orders WHERE tenant_id = ? GROUP BY store_id) fs
+        LEFT JOIN (SELECT store_id, MIN(placed_at) AS first_at FROM merchant_orders WHERE tenant_id = ? GROUP BY store_id) fs
                ON fs.store_id = o.store_id
         LEFT JOIN shipments lg ON lg.id = om.shipment_id
         """;

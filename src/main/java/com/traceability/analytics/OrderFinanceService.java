@@ -112,7 +112,7 @@ public class OrderFinanceService {
                fe.fees, fe.fees_estimated, fe.tracking_numbers,
                rf.refunded
         FROM order_money om
-        JOIN orders o ON o.id = om.order_id
+        JOIN merchant_orders o ON o.id = om.order_id
         LEFT JOIN LATERAL (
             SELECT sh.internal_state::text AS internal_state,
                    """ + SettlementSql.cod("sh") + """
@@ -163,7 +163,7 @@ public class OrderFinanceService {
         SELECT MIN(w.placed_at) FROM (
             SELECT o.id, o.placed_at
             FROM order_items oi
-            JOIN orders o  ON o.id = oi.order_id
+            JOIN merchant_orders o  ON o.id = oi.order_id
             JOIN stores st ON st.id = o.store_id
             LEFT JOIN unnest(?::text[], ?::text[]) AS ov(shop_domain, floor_day) ON ov.shop_domain = lower(st.shop_domain)
             WHERE oi.tenant_id = ? AND o.tenant_id = ? AND oi.variant_id = ?

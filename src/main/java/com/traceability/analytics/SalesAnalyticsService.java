@@ -178,7 +178,7 @@ public class SalesAnalyticsService {
                        q.qty * up.unit_price AS revenue,
                        dc.gross, dc.disc_code, dc.disc_auto
                 FROM order_items oi
-                JOIN orders o   ON o.id = oi.order_id
+                JOIN merchant_orders o   ON o.id = oi.order_id
                 JOIN floors f   ON f.store_id = o.store_id
                 JOIN variants v ON v.id = oi.variant_id
                 CROSS JOIN bounds b
@@ -447,7 +447,7 @@ public class SalesAnalyticsService {
         last_sold AS (
             SELECT oi.variant_id, MAX(o.placed_at) AS last_sold_at
             FROM order_items oi
-            JOIN orders o ON o.id = oi.order_id
+            JOIN merchant_orders o ON o.id = oi.order_id
             JOIN floors f ON f.store_id = o.store_id
             WHERE oi.tenant_id = ? AND o.tenant_id = ?
               AND (f.floor_at IS NULL OR o.placed_at >= f.floor_at)
