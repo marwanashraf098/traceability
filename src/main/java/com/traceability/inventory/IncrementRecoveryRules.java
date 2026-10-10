@@ -25,10 +25,12 @@ public final class IncrementRecoveryRules {
 
     private IncrementRecoveryRules() {}
 
+    /** hold_exit left this set on 2026-10-10: it is a piece-sync claim now (PieceShopifyRules —
+     *  single attempt, an ambiguous +1 is never re-sent). */
     public static final List<String> INCREMENT_TRIGGERS =
-        List.of("receiving_session", "return_inspection", "hold_exit", "stock_take_found", "transfer_return");
+        List.of("receiving_session", "return_inspection", "stock_take_found", "transfer_return");
     public static final String INCREMENT_TRIGGERS_SQL =
-        "('receiving_session', 'return_inspection', 'hold_exit', 'stock_take_found', 'transfer_return')";
+        "('receiving_session', 'return_inspection', 'stock_take_found', 'transfer_return')";
 
     public static final int MAX_ATTEMPTS = 5;
     public static final int AMBIGUOUS_WINDOW_HOURS = 20;

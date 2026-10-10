@@ -42,6 +42,34 @@ because that would have broken 14 existing test files' SQL fixtures. Photos owne
   3-photo pick → 3 uploaded tiles). vitest 883/883, tsc + build clean. **Gotcha:** headless Chrome `--dump-dom` /
   virtual time snapshot before createImageBitmap/toBlob finish — verify image prep in the browser test, not the harness.
 
+
+**Lookup adjustments ↔ Shopify — piece sync (2026-10-10, branch `feat/lookup-adjust-shopify` on origin/main b4cf3cf; NOT
+merged, NOT deployed). Migration V161 (renumbered from V160 — P2 took it). Repair script written, NOT run.** Approved D1–D11 against the Step 0 report.
+- **C1 (fixes in place):** damage move sends `referenceDocumentUri` (prod 400 on 10-10); void counts a piece received
+  before the seed (receiving claim superseded_by_seed / received before the seed — the prod skip on 10-10); hold gets the
+  seed check; hold_exit +1 only when the hold's departure reached Shopify (D5); every piece claim is claimed 'queued' /
+  'skipped'+`skip_reason` INSIDE the adjust transaction and sent once after commit, classified like pushTransferOut
+  (void/hold gateway methods updated in place); `PieceShopifySweepJob` (10 min) re-sends definite failures ≤ 5 attempts,
+  pending 15 min → failed_ambiguous, never re-sends ambiguous (repush refuses it too); seed supersedes unsent piece claims;
+  `void_hold_sync_failed` covers ambiguous / exhausted / needs-check skips; `piece_sync_cutoff()` keeps legacy rows out
+  (D9). hold_exit left IncrementRecoveryRules.
+- **C2 (new):** `pushPieceWriteOff` — the SIXTH named decrement (Lookup available → lost / destroyed); Found it +1
+  (`piece_write_off_return`); D4 away-from-main rule (leave mode / skipped / exhausted transfer claim → −1 at MAIN; pushed →
+  departure_removed; unconfirmed → departure_ambiguous; moved before the seed → not_counted_at_main); stock-take found moved
+  onto `PieceShopifyRules.reach` (16 pinning tests written and green BEFORE the refactor, still green); Back to good
+  (`damaged:available`, `POST /pieces/{id}/restore`, manager+, reasons repaired / mis_graded / other; reverse damage move
+  when the move applied, else +1 incl. return-inspection damage under the restock refund guard, restocked_twice covers it;
+  Lookup button + EN/AR, custody phrase back_to_good); repair `scripts/repair-lookup-adjust-2026-10-10` →
+  `POST /api/v1/ops/repair/lookup-adjust-2026-10-10/{tenant}` (ops secret; dry run unless --apply; exactly the two Snouts
+  pieces).
+- **Finding:** a relocated piece is `transferred_out` at the destination — Lookup can't adjust it, so D4's
+  away-from-main branch has no Lookup path today (tested with a piece made available there by hand).
+- **Next up:** Marawan reviews; dry-run the repair against prod, then `--apply` only on his word; merge + deploy.
+- **Follow-up (accepted v1 gap):** damaged→lost/destroyed and Found-it-after-damaged: Shopify damaged bucket not
+  reconciled.
+- **Follow-up (after the repair is applied):** remove `OpsLookupAdjustRepairController`, `LookupAdjustRepairService` and
+  `scripts/repair-lookup-adjust-2026-10-10` in a follow-up commit. The endpoint is server-side restricted to The Snouts
+  and the two pieces (C3), dry run by default, behind the ops secret (TRACED_OPS_SECRET must be set in prod `.env` to run it).
 **Returns portal P2 — refund payment method (2026-10-10, branch `feat/portal-refund-method-p2` off origin/main cb5f28d;
 NOT merged, NOT deployed). Migration V160.** Mockup signed off: `design/Traced_portal_refund_method_dc.html` (privacy line
 "Shared only with {store}. Deleted 30 days after your refund."). Decisions 1–5 approved as proposed.

@@ -884,50 +884,165 @@ class ShopifyHttpGateway implements ShopifyGateway {
     @Override
     public void moveAvailableToDamaged(String shopDomain, String token, String inventoryItemGid,
                                         String locationGid, int quantity, String reason,
-                                        String idempotencyKey) {
+                                        String referenceDocumentUri, String idempotencyKey) {
         if (quantity <= 0) {
             throw new IllegalArgumentException(
                 "moveAvailableToDamaged requires a positive quantity; got " + quantity);
         }
+        // "from" (available) carries the current baseline (compare-and-swap, read fresh); "to"
+        // (damaged) has no meaningful baseline and opts out with null — see adjustInventoryQuantities.
+        Integer fromBaseline;
+        try {
+            fromBaseline = currentAvailableQuantityOrNull(shopDomain, token, locationGid, inventoryItemGid);
+        } catch (RuntimeException e) {
+            // Only a read failed — the move was never sent: definite.
+            throw new ShopifyException("Damage move not sent — could not read the current quantity: " + e.getMessage(), e);
+        }
+        sendPieceMove("Damage move", shopDomain, token, inventoryItemGid, locationGid, quantity, reason,
+            "available", fromBaseline, "damaged", referenceDocumentUri, idempotencyKey);
+    }
 
-        // Same changeFromQuantity argument-presence requirement as adjustInventoryQuantities
-        // (see its comment) — InventoryMoveQuantityChange's "from"/"to" sub-objects each carry
-        // their own optional changeFromQuantity. Proactive fix: not yet confirmed via a
-        // production error for THIS mutation specifically, but Shopify's own changelog groups
-        // inventoryAdjustQuantities and inventoryMoveQuantities under the same compare-and-swap
-        // feature, so the same argument-presence requirement is expected here too. "from"
-        // (available) gets the real current baseline, read fresh; "to" (damaged) has no
-        // meaningful baseline to assert, so it explicitly opts out with null.
-        Integer fromBaseline = currentAvailableQuantityOrNull(shopDomain, token, locationGid, inventoryItemGid);
+    @Override
+    public void moveDamagedToAvailable(String shopDomain, String token, String inventoryItemGid,
+                                       String locationGid, int quantity, String reason,
+                                       String referenceDocumentUri, String idempotencyKey) {
+        if (quantity <= 0) {
+            throw new IllegalArgumentException("moveDamagedToAvailable requires a positive quantity; got " + quantity);
+        }
+        // No baseline read for "damaged" — both sides opt out of compare-and-swap (null); an
+        // insufficient damaged quantity comes back as a userError (definite).
+        sendPieceMove("Damage restore", shopDomain, token, inventoryItemGid, locationGid, quantity, reason,
+            "damaged", null, "available", referenceDocumentUri, idempotencyKey);
+    }
 
-        ObjectNode from = mapper.createObjectNode().put("name", "available").put("locationId", locationGid);
+    private static final String PIECE_INCREMENT_MUTATION = """
+            mutation PieceIncrement($input: InventoryAdjustQuantitiesInput!, $idempotencyKey: String!) {
+              inventoryAdjustQuantities(input: $input) @idempotent(key: $idempotencyKey) {
+                inventoryAdjustmentGroup { createdAt }
+                userErrors { field message code }
+              }
+            }
+            """;
+
+    @Override
+    public void pushPieceIncrement(String shopDomain, String token, String inventoryItemGid,
+                                   String locationGid, int positiveDelta, String reason,
+                                   String referenceDocumentUri, String idempotencyKey) {
+        // FR-17 v2: an increment — positive only, checked BEFORE any network call.
+        if (positiveDelta <= 0) {
+            throw new IllegalArgumentException(
+                "pushPieceIncrement requires a positive delta; got " + positiveDelta);
+        }
+        ObjectNode change = mapper.createObjectNode()
+            .put("delta", positiveDelta)
+            .put("inventoryItemId", inventoryItemGid)
+            .put("locationId", locationGid);
+        change.putNull("changeFromQuantity");
+        ObjectNode input = mapper.createObjectNode()
+            .put("reason", reason)
+            .put("name", "available")
+            .put("referenceDocumentUri", referenceDocumentUri);
+        input.set("changes", mapper.createArrayNode().add(change));
+        ObjectNode vars = mapper.createObjectNode();
+        vars.set("input", input);
+        vars.put("idempotencyKey", idempotencyKey);
+        JsonNode data = postPieceMutationOnce("Piece increment", shopDomain, token, PIECE_INCREMENT_MUTATION, vars);
+        JsonNode userErrors = data.path("inventoryAdjustQuantities").path("userErrors");
+        if (userErrors.isArray() && !userErrors.isEmpty()) {
+            throw new ShopifyException("Piece increment failed: " + userErrors.get(0).path("message").asText("unknown error"));
+        }
+    }
+
+    /** One piece moved between two states at the same location (inventoryMoveQuantities) — the
+     *  damage move (available → damaged) and its reverse. Never a decrement: on_hand is unchanged. */
+    private void sendPieceMove(String label, String shopDomain, String token, String inventoryItemGid,
+                               String locationGid, int quantity, String reason, String fromName,
+                               Integer fromBaseline, String toName, String referenceDocumentUri,
+                               String idempotencyKey) {
+        ObjectNode from = mapper.createObjectNode().put("name", fromName).put("locationId", locationGid);
         if (fromBaseline != null) {
             from.put("changeFromQuantity", fromBaseline);
         } else {
             from.putNull("changeFromQuantity");
         }
-        ObjectNode to = mapper.createObjectNode().put("name", "damaged").put("locationId", locationGid);
+        ObjectNode to = mapper.createObjectNode().put("name", toName).put("locationId", locationGid);
         to.putNull("changeFromQuantity");
-
         ObjectNode change = mapper.createObjectNode()
             .put("inventoryItemId", inventoryItemGid)
             .put("quantity", quantity);
         change.set("from", from);
         change.set("to", to);
-        ObjectNode input = mapper.createObjectNode().put("reason", reason);
+        ObjectNode input = mapper.createObjectNode()
+            .put("reason", reason)
+            .put("referenceDocumentUri", referenceDocumentUri);
         input.set("changes", mapper.createArrayNode().add(change));
         ObjectNode vars = mapper.createObjectNode();
         vars.set("input", input);
         vars.put("idempotencyKey", idempotencyKey);
-
-        JsonNode data = executeGraphQL(shopDomain, token, INVENTORY_MOVE_QUANTITIES_MUTATION, vars);
+        JsonNode data = postPieceMutationOnce(label, shopDomain, token, INVENTORY_MOVE_QUANTITIES_MUTATION, vars);
         JsonNode userErrors = data.path("inventoryMoveQuantities").path("userErrors");
         if (userErrors.isArray() && !userErrors.isEmpty()) {
-            String msg = userErrors.get(0).path("message").asText("unknown error");
-            // Insufficient-available and any other userError must fail cleanly here —
-            // caller (ShopifyInventoryService) records it as a failed row, never retries forced.
-            throw new ShopifyException("inventoryMoveQuantities failed: " + msg);
+            // Insufficient quantity and any other userError fail cleanly — definite, never forced.
+            throw new ShopifyException("inventoryMoveQuantities failed: "
+                + userErrors.get(0).path("message").asText("unknown error"));
         }
+    }
+
+    /**
+     * The single-attempt transport of the piece-sync MOVES and the +1 (never a decrement — each
+     * named decrement keeps its own code). Exactly one HTTP attempt, no Resilience4j retry, no
+     * throttle wait; classified like pushTransferOut: HTTP 4xx and THROTTLED-only-with-no-data →
+     * ShopifyException (definite); 5xx, timeouts, connection errors, any other top-level GraphQL
+     * error, an empty / unreadable body → ShopifyAmbiguousException. Returns the data node.
+     */
+    private JsonNode postPieceMutationOnce(String label, String shopDomain, String token, String mutation,
+                                           ObjectNode vars) {
+        String url = "https://" + shopDomain + "/admin/api/" + apiVersion + "/graphql.json";
+        ObjectNode body = mapper.createObjectNode().put("query", mutation).set("variables", vars);
+        JsonNode response;
+        try {
+            response = restClient.post()
+                .uri(url)
+                .header("X-Shopify-Access-Token", token)
+                .header("Content-Type", "application/json")
+                .body(body)
+                .retrieve()
+                .body(JsonNode.class);
+        } catch (HttpClientErrorException e) {
+            throw new ShopifyException(
+                label + " HTTP " + e.getStatusCode().value() + " for " + shopDomain + ": " + e.getResponseBodyAsString(), e);
+        } catch (HttpServerErrorException e) {
+            throw new ShopifyAmbiguousException(
+                label + " HTTP " + e.getStatusCode().value() + " from " + shopDomain + " — not confirmed", e);
+        } catch (ResourceAccessException e) {
+            throw new ShopifyAmbiguousException(label + ": no confirmed response from " + shopDomain, e);
+        } catch (RestClientException e) {
+            throw new ShopifyAmbiguousException(
+                label + ": unclassifiable response from " + shopDomain + ": " + e.getMessage(), e);
+        }
+        if (response == null) {
+            throw new ShopifyAmbiguousException(label + ": null response body from " + shopDomain);
+        }
+        JsonNode errors = response.get("errors");
+        if (errors != null && errors.isArray() && errors.size() > 0) {
+            boolean onlyThrottled = true;
+            for (JsonNode err : errors) {
+                if (!"THROTTLED".equals(err.path("extensions").path("code").asText(""))) { onlyThrottled = false; break; }
+            }
+            JsonNode throttledData = response.get("data");
+            if (onlyThrottled && (throttledData == null || throttledData.isNull())) {
+                throw new ShopifyException(label + " GraphQL error (THROTTLED): not executed by Shopify");
+            }
+            String code = errors.get(0).path("extensions").path("code").asText("");
+            throw new ShopifyAmbiguousException(label + " GraphQL error"
+                + (code.isBlank() ? "" : " (" + code + ")") + ": "
+                + errors.get(0).path("message").asText() + " — not confirmed");
+        }
+        JsonNode data = response.get("data");
+        if (data == null || data.isNull()) {
+            throw new ShopifyAmbiguousException(label + ": response had no data field from " + shopDomain);
+        }
+        return data;
     }
 
     private static final String STOCK_TAKE_WRITE_OFF_MUTATION = """
@@ -1155,6 +1270,95 @@ class ShopifyHttpGateway implements ShopifyGateway {
         }
     }
 
+    private static final String PIECE_WRITE_OFF_MUTATION = """
+            mutation PieceWriteOff($input: InventoryAdjustQuantitiesInput!, $idempotencyKey: String!) {
+              inventoryAdjustQuantities(input: $input) @idempotent(key: $idempotencyKey) {
+                inventoryAdjustmentGroup { createdAt }
+                userErrors { field message code }
+              }
+            }
+            """;
+
+    /**
+     * D1 (2026-10-10) — the sixth named decrement. Deliberately self-contained, like
+     * {@link #pushTransferOut}: no executeGraphQL() (its Resilience4j retry would silently re-send a
+     * timed-out −1), exactly one HTTP attempt, classified exactly like pushTransferOut.
+     */
+    @Override
+    public void pushPieceWriteOff(String shopDomain, String token, String inventoryItemGid,
+                                  String locationGid, int negativeDelta, String referenceDocumentUri,
+                                  String idempotencyKey) {
+        if (negativeDelta >= 0) {
+            throw new IllegalArgumentException("pushPieceWriteOff requires a negative delta; got " + negativeDelta);
+        }
+        ObjectNode change = mapper.createObjectNode()
+            .put("delta", negativeDelta)
+            .put("inventoryItemId", inventoryItemGid)
+            .put("locationId", locationGid);
+        change.putNull("changeFromQuantity");
+        ObjectNode input = mapper.createObjectNode()
+            .put("reason", "shrinkage")
+            .put("name", "available")
+            .put("referenceDocumentUri", referenceDocumentUri);
+        input.set("changes", mapper.createArrayNode().add(change));
+        ObjectNode vars = mapper.createObjectNode();
+        vars.set("input", input);
+        vars.put("idempotencyKey", idempotencyKey);
+
+        String url = "https://" + shopDomain + "/admin/api/" + apiVersion + "/graphql.json";
+        ObjectNode body = mapper.createObjectNode()
+            .put("query", PIECE_WRITE_OFF_MUTATION).set("variables", vars);
+
+        JsonNode response;
+        try {
+            response = restClient.post()
+                .uri(url)
+                .header("X-Shopify-Access-Token", token)
+                .header("Content-Type", "application/json")
+                .body(body)
+                .retrieve()
+                .body(JsonNode.class);
+        } catch (HttpClientErrorException e) {
+            throw new ShopifyException(
+                "Piece write-off HTTP " + e.getStatusCode().value()
+                + " for " + shopDomain + ": " + e.getResponseBodyAsString(), e);
+        } catch (HttpServerErrorException e) {
+            throw new ShopifyAmbiguousException(
+                "Piece write-off HTTP " + e.getStatusCode().value() + " from " + shopDomain + " — not confirmed", e);
+        } catch (ResourceAccessException e) {
+            throw new ShopifyAmbiguousException("Piece write-off: no confirmed response from " + shopDomain, e);
+        } catch (RestClientException e) {
+            throw new ShopifyAmbiguousException(
+                "Piece write-off: unclassifiable response from " + shopDomain + ": " + e.getMessage(), e);
+        }
+        if (response == null) {
+            throw new ShopifyAmbiguousException("Piece write-off: null response body from " + shopDomain);
+        }
+        JsonNode errors = response.get("errors");
+        if (errors != null && errors.isArray() && errors.size() > 0) {
+            boolean onlyThrottled = true;
+            for (JsonNode err : errors) {
+                if (!"THROTTLED".equals(err.path("extensions").path("code").asText(""))) { onlyThrottled = false; break; }
+            }
+            JsonNode throttledData = response.get("data");
+            if (onlyThrottled && (throttledData == null || throttledData.isNull())) {
+                throw new ShopifyException("Piece write-off GraphQL error (THROTTLED): not executed by Shopify");
+            }
+            String code = errors.get(0).path("extensions").path("code").asText("");
+            throw new ShopifyAmbiguousException("Piece write-off GraphQL error"
+                + (code.isBlank() ? "" : " (" + code + ")") + ": "
+                + errors.get(0).path("message").asText() + " — not confirmed");
+        }
+        JsonNode data = response.get("data");
+        if (data == null) {
+            throw new ShopifyAmbiguousException("Piece write-off: response had no data field from " + shopDomain);
+        }
+        JsonNode userErrors = data.path("inventoryAdjustQuantities").path("userErrors");
+        if (userErrors.isArray() && !userErrors.isEmpty()) {
+            throw new ShopifyException("Piece write-off failed: " + userErrors.get(0).path("message").asText("unknown error"));
+        }
+    }
+
     private static final String VOID_CORRECTION_MUTATION = """
             mutation VoidCorrection($input: InventoryAdjustQuantitiesInput!, $idempotencyKey: String!) {
               inventoryAdjustQuantities(input: $input) @idempotent(key: $idempotencyKey) {
@@ -1215,11 +1419,16 @@ class ShopifyHttpGateway implements ShopifyGateway {
                 "Void correction HTTP " + e.getStatusCode().value()
                 + " for " + shopDomain + ": " + e.getResponseBodyAsString(), e);
         } catch (HttpServerErrorException e) {
-            throw new ShopifyException(
-                "Void correction HTTP " + e.getStatusCode().value() + " for " + shopDomain, e);
+            // 2026-10-10 (D7, same as pushTransferOut): a 5xx does not prove nothing was applied —
+            // AMBIGUOUS, never re-sent.
+            throw new ShopifyAmbiguousException(
+                "Void correction HTTP " + e.getStatusCode().value() + " from " + shopDomain + " — not confirmed", e);
         } catch (ResourceAccessException e) {
             throw new ShopifyAmbiguousException(
                 "Void correction: no confirmed response from " + shopDomain, e);
+        } catch (RestClientException e) {
+            throw new ShopifyAmbiguousException(
+                "Void correction: unclassifiable response from " + shopDomain + ": " + e.getMessage(), e);
         }
 
         if (response == null) {
@@ -1229,10 +1438,20 @@ class ShopifyHttpGateway implements ShopifyGateway {
 
         JsonNode errors = response.get("errors");
         if (errors != null && errors.isArray() && errors.size() > 0) {
+            // THROTTLED-only with no data: Shopify did not execute it — definite. Any other top-level
+            // GraphQL error is neither a 4xx nor a userError — AMBIGUOUS (D7, same as pushTransferOut).
+            boolean onlyThrottled = true;
+            for (JsonNode err : errors) {
+                if (!"THROTTLED".equals(err.path("extensions").path("code").asText(""))) { onlyThrottled = false; break; }
+            }
+            JsonNode throttledData = response.get("data");
+            if (onlyThrottled && (throttledData == null || throttledData.isNull())) {
+                throw new ShopifyException("Void correction GraphQL error (THROTTLED): not executed by Shopify");
+            }
             String code = errors.get(0).path("extensions").path("code").asText("");
-            throw new ShopifyException("Void correction GraphQL error"
+            throw new ShopifyAmbiguousException("Void correction GraphQL error"
                 + (code.isBlank() ? "" : " (" + code + ")") + ": "
-                + errors.get(0).path("message").asText());
+                + errors.get(0).path("message").asText() + " — not confirmed");
         }
 
         JsonNode data = response.get("data");
@@ -1304,11 +1523,16 @@ class ShopifyHttpGateway implements ShopifyGateway {
                 "Hold enter HTTP " + e.getStatusCode().value()
                 + " for " + shopDomain + ": " + e.getResponseBodyAsString(), e);
         } catch (HttpServerErrorException e) {
-            throw new ShopifyException(
-                "Hold enter HTTP " + e.getStatusCode().value() + " for " + shopDomain, e);
+            // 2026-10-10 (D7, same as pushTransferOut): a 5xx does not prove nothing was applied —
+            // AMBIGUOUS, never re-sent.
+            throw new ShopifyAmbiguousException(
+                "Hold enter HTTP " + e.getStatusCode().value() + " from " + shopDomain + " — not confirmed", e);
         } catch (ResourceAccessException e) {
             throw new ShopifyAmbiguousException(
                 "Hold enter: no confirmed response from " + shopDomain, e);
+        } catch (RestClientException e) {
+            throw new ShopifyAmbiguousException(
+                "Hold enter: unclassifiable response from " + shopDomain + ": " + e.getMessage(), e);
         }
 
         if (response == null) {
@@ -1318,10 +1542,20 @@ class ShopifyHttpGateway implements ShopifyGateway {
 
         JsonNode errors = response.get("errors");
         if (errors != null && errors.isArray() && errors.size() > 0) {
+            // THROTTLED-only with no data: Shopify did not execute it — definite. Any other top-level
+            // GraphQL error is neither a 4xx nor a userError — AMBIGUOUS (D7, same as pushTransferOut).
+            boolean onlyThrottled = true;
+            for (JsonNode err : errors) {
+                if (!"THROTTLED".equals(err.path("extensions").path("code").asText(""))) { onlyThrottled = false; break; }
+            }
+            JsonNode throttledData = response.get("data");
+            if (onlyThrottled && (throttledData == null || throttledData.isNull())) {
+                throw new ShopifyException("Hold enter GraphQL error (THROTTLED): not executed by Shopify");
+            }
             String code = errors.get(0).path("extensions").path("code").asText("");
-            throw new ShopifyException("Hold enter GraphQL error"
+            throw new ShopifyAmbiguousException("Hold enter GraphQL error"
                 + (code.isBlank() ? "" : " (" + code + ")") + ": "
-                + errors.get(0).path("message").asText());
+                + errors.get(0).path("message").asText() + " — not confirmed");
         }
 
         JsonNode data = response.get("data");
@@ -1440,6 +1674,41 @@ class ShopifyHttpGateway implements ShopifyGateway {
               }
             }
             """;
+
+    private static final String INVENTORY_STATES_QUERY = """
+            query InventoryStatesAtLocation($ids: [ID!]!, $locationId: ID!, $names: [String!]!) {
+              nodes(ids: $ids) {
+                ... on InventoryItem {
+                  id
+                  inventoryLevel(locationId: $locationId) {
+                    quantities(names: $names) { name quantity }
+                  }
+                }
+              }
+            }
+            """;
+
+    @Override
+    public Map<String, Map<String, Integer>> fetchStateQuantities(String shopDomain, String token, String locationGid,
+                                                                  List<String> inventoryItemGids, List<String> names) {
+        Map<String, Map<String, Integer>> out = new java.util.LinkedHashMap<>();
+        for (List<String> chunk : chunks(inventoryItemGids, MAX_INPUT_ARRAY)) {
+            ObjectNode vars = mapper.createObjectNode();
+            vars.set("ids", mapper.valueToTree(chunk));
+            vars.put("locationId", locationGid);
+            vars.set("names", mapper.valueToTree(names));
+            JsonNode data = executeGraphQL(shopDomain, token, INVENTORY_STATES_QUERY, vars);
+            for (JsonNode node : data.path("nodes")) {
+                if (node.isNull() || node.isMissingNode()) continue;
+                JsonNode level = node.path("inventoryLevel");
+                if (level.isMissingNode() || level.isNull()) continue;
+                Map<String, Integer> q = new java.util.LinkedHashMap<>();
+                for (JsonNode x : level.path("quantities")) q.put(x.path("name").asText(), x.path("quantity").asInt(0));
+                out.put(node.path("id").asText(), q);
+            }
+        }
+        return out;
+    }
 
     @Override
     public List<InventoryLevel> fetchAvailableQuantities(String shopDomain, String token,

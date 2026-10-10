@@ -21,6 +21,7 @@ import java.util.UUID;
  * FR-13: Manual piece adjustments.
  *
  * 13.1 / 13.3 — adjustPiece(): available→lost/damaged/destroyed and lost→available ("found it").
+ * D11          — restore(): damaged→available ("Back to good").
  * 13.2         — releaseForAdjust(): operator releases a reserved/packed piece from its order
  *                before adjusting. Uses the same transition+allocation-release paths as
  *                FulfillService.unscan() (reserved) and unpackPiece() (packed) — no new edges.
@@ -151,23 +152,45 @@ public class PieceAdjustService {
                 "Piece is in terminal status '" + current.db + "' — cannot reverse to available");
         }
 
-        String metadata = buildMeta(reason, note);
+        // FR-17 v2 trigger 3: a currently-sellable piece damaged in the warehouse — the damage move
+        // (available → damaged). Claimed ONLY from AVAILABLE — a piece already left the sellable pool
+        // once at hold_enter (FR-13.x), so on_hold:damaged escalation (also legal per
+        // InventoryLedger.ALLOWED) makes no Shopify call, or it would count twice (bad → bad: never a
+        // write). Damaged pieces reaching DAMAGED via return_pending_inspection go through
+        // ReturnService.markDamaged() instead — a separate method with no call here.
+        // Claim-before-call in THIS transaction (keyed by the damage event id, written into the
+        // piece event); sent after commit — a rolled-back adjustment never reaches Shopify.
+        Map<String, Object> extra = new LinkedHashMap<>();
+        Long claimId = null;
+        if (current == PieceStatus.AVAILABLE && toStatus == PieceStatus.DAMAGED) {
+            String damageEventId = UUID.randomUUID().toString();
+            extra.put("damage_event_id", damageEventId);
+            claimId = shopifyInventory.claimPieceDeparture(tenantId, "damage_move", pieceId,
+                pieceId + ":" + damageEventId);
+        } else if (current == PieceStatus.AVAILABLE
+                && (toStatus == PieceStatus.LOST || toStatus == PieceStatus.DESTROYED)) {
+            // D1 (2026-10-10): a Shopify-counted piece written off in Lookup → −1 at the main warehouse,
+            // once (pushPieceWriteOff — the sixth named decrement). on_hold → lost/destroyed already
+            // left Shopify at hold_enter: bad → bad, no write.
+            String writeOffEventId = UUID.randomUUID().toString();
+            extra.put("write_off_event_id", writeOffEventId);
+            claimId = shopifyInventory.claimPieceDeparture(tenantId, "piece_write_off", pieceId,
+                pieceId + ":" + writeOffEventId);
+        } else if (current == PieceStatus.LOST && toStatus == PieceStatus.AVAILABLE) {
+            // Found it (D5): +1 only when the piece's departure reached Shopify (its write-off −1, its
+            // stock-take push, its hold_enter applied — or it left before the seed); an unsent write-off
+            // is cancelled here. Decided before the transition, in this transaction.
+            String restoreEventId = UUID.randomUUID().toString();
+            extra.put("restore_event_id", restoreEventId);
+            claimId = shopifyInventory.claimPieceReturn(tenantId, "piece_write_off_return", pieceId,
+                pieceId + ":" + restoreEventId);
+        }
+
+        String metadata = buildMeta(reason, note, extra);
 
         ledger.transition(pieceId, current, toStatus, "adjusted", actorUserId,
             new TransitionContext(null, null, null, null, metadata));
-
-        // FR-17 v2 trigger 3: a currently-sellable piece damaged in the warehouse. Fires ONLY
-        // from AVAILABLE — a piece already left the sellable pool once at hold_enter (FR-13.x),
-        // so on_hold:damaged escalation (also legal per InventoryLedger.ALLOWED as of FR-13.x)
-        // must NOT call this a second time, or on_hand would be double-decremented. Damaged
-        // pieces reaching DAMAGED via return_pending_inspection go through ReturnService.
-        // markDamaged() instead — a separate method with no call here.
-        // After commit — a rolled-back adjustment never reaches Shopify; the move job never runs
-        // before the piece's 'damaged' commit.
-        if (current == PieceStatus.AVAILABLE && toStatus == PieceStatus.DAMAGED) {
-            ShopifyInventoryService.afterCommit(() ->
-                shopifyInventory.onSellablePieceDamaged(tenantId, pieceId, currentLocationId));
-        }
+        pushAfterCommit(tenantId, claimId);
 
         if (toStatus == PieceStatus.DAMAGED) {
             jdbc.update("UPDATE pieces SET condition = 'damaged' WHERE id = ? AND tenant_id = ?",
@@ -243,12 +266,12 @@ public class PieceAdjustService {
 
         String metadata = buildMeta(reason, note);
 
+        // Claim-before-call in this transaction (void is terminal — keyed by the piece); sent after commit.
+        Long claimId = shopifyInventory.claimPieceDeparture(tenantId, "void_correction", pieceId, pieceId);
+
         ledger.transition(pieceId, PieceStatus.AVAILABLE, PieceStatus.VOIDED, "voided", actorUserId,
             new TransitionContext(null, null, null, null, metadata));
-
-        // After commit — a rolled-back void never reaches Shopify; the job never runs before the commit.
-        ShopifyInventoryService.afterCommit(() ->
-            shopifyInventory.onPieceVoided(tenantId, pieceId, currentLocationId));
+        pushAfterCommit(tenantId, claimId);
 
         Map<String, Object> auditMeta = new LinkedHashMap<>();
         auditMeta.put("from",   current.db);
@@ -330,12 +353,13 @@ public class PieceAdjustService {
             throw new IllegalStateException("Failed to serialize metadata", e);
         }
 
+        // Claim-before-call in this transaction, scoped to this hold cycle; sent after commit.
+        Long claimId = shopifyInventory.claimPieceDeparture(tenantId, "hold_enter", pieceId,
+            pieceId + ":" + holdEventId);
+
         ledger.transition(pieceId, PieceStatus.AVAILABLE, PieceStatus.ON_HOLD, "held", actorUserId,
             new TransitionContext(null, null, null, null, metadata));
-
-        // After commit — a rolled-back hold never reaches Shopify; the job never runs before the commit.
-        ShopifyInventoryService.afterCommit(() ->
-            shopifyInventory.onHoldEnter(tenantId, pieceId, currentLocationId, holdEventId));
+        pushAfterCommit(tenantId, claimId);
 
         Map<String, Object> auditMeta = new LinkedHashMap<>();
         auditMeta.put("from",        current.db);
@@ -388,15 +412,88 @@ public class PieceAdjustService {
         }
         UUID holdEventId = UUID.fromString(holdEventIdRaw);
 
+        // +1 ONLY when the hold's departure reached Shopify (PieceShopifyRules.departureReached — the
+        // hold_enter applied, or the hold predates the seed); an unsent hold_enter is cancelled here.
+        // Decided and claimed in this transaction, before the transition; sent after commit.
+        Long claimId = shopifyInventory.claimPieceReturn(tenantId, "hold_exit", pieceId,
+            pieceId + ":" + holdEventId);
+
         ledger.transition(pieceId, PieceStatus.ON_HOLD, PieceStatus.AVAILABLE, "unheld", actorUserId,
             new TransitionContext(null, null, null, null, null));
-
-        // After commit — a rolled-back unhold never reaches Shopify; the claim never predates the commit.
-        ShopifyInventoryService.afterCommit(() ->
-            shopifyInventory.onHoldExit(tenantId, pieceId, currentLocationId, holdEventId));
+        pushAfterCommit(tenantId, claimId);
 
         auditService.record(actorUserId, "piece_unhold", "piece", pieceId,
             Map.of("holdEventId", holdEventId.toString()));
+    }
+
+    private static final Set<String> RESTORE_REASONS = Set.of("repaired", "mis_graded", "other");
+
+    /**
+     * D11 (approved 2026-10-10) — Back to good: damaged → available, manager+ only. Same guards as
+     * adjustPiece (committed → PieceCommittedException, out_on_transfer → PieceOutOnTransferException);
+     * only a damaged piece qualifies — destroyed and voided stay terminal. The piece event is 'adjusted'
+     * with {reason, note, restore_event_id}; condition goes back to good. The Shopify write (reverse
+     * damage move, or +1) is decided and claimed in this transaction — see
+     * ShopifyInventoryService.claimPieceRestore — and sent after commit.
+     */
+    @Transactional(isolation = Isolation.READ_COMMITTED)
+    public void restore(String pieceId, String reason, String note, UUID actorUserId) {
+        UUID tenantId = TenantContext.require();
+
+        if (!RESTORE_REASONS.contains(reason)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                "reason must be one of: repaired, mis_graded, other");
+        }
+        if ("other".equals(reason) && (note == null || note.isBlank())) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                "note is required when reason is 'other'");
+        }
+
+        String status = jdbc.query(FIND_PIECE_STATUS, rs -> rs.next() ? rs.getString(1) : null, pieceId, tenantId);
+        if (status == null) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Piece not found");
+        }
+        PieceStatus current = PieceStatus.fromDb(status);
+
+        if (current == PieceStatus.RESERVED || current == PieceStatus.PACKED) {
+            Map<String, Object> order = jdbc.query(FIND_COMMITTED_ORDER,
+                rs -> rs.next()
+                    ? Map.of("orderId", rs.getObject("order_id"),
+                             "orderNumber", rs.getString("order_number"))
+                    : null,
+                pieceId, tenantId);
+            throw new PieceCommittedException(
+                order != null ? (UUID) order.get("orderId") : null,
+                order != null ? (String) order.get("orderNumber") : null);
+        }
+        if (current == PieceStatus.OUT_ON_TRANSFER) {
+            UUID blockingTransferId = jdbc.query(
+                "SELECT transfer_id FROM transfer_pieces WHERE piece_id = ? AND tenant_id = ? AND outcome IS NULL LIMIT 1",
+                rs -> rs.next() ? rs.getObject("transfer_id", UUID.class) : null,
+                pieceId, tenantId);
+            throw new PieceOutOnTransferException(blockingTransferId);
+        }
+        if (current != PieceStatus.DAMAGED) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                "Only a damaged piece can go back to good (current: " + current.db + ")");
+        }
+
+        String restoreEventId = UUID.randomUUID().toString();
+        Long claimId = shopifyInventory.claimPieceRestore(tenantId, pieceId, restoreEventId);
+
+        ledger.transition(pieceId, PieceStatus.DAMAGED, PieceStatus.AVAILABLE, "adjusted", actorUserId,
+            new TransitionContext(null, null, null, null,
+                buildMeta(reason, note, Map.of("restore_event_id", restoreEventId))));
+        jdbc.update("UPDATE pieces SET condition = 'good' WHERE id = ? AND tenant_id = ?", pieceId, tenantId);
+        pushAfterCommit(tenantId, claimId);
+
+        Map<String, Object> auditMeta = new LinkedHashMap<>();
+        auditMeta.put("from",   "damaged");
+        auditMeta.put("to",     "available");
+        auditMeta.put("reason", reason);
+        auditMeta.put("restoreEventId", restoreEventId);
+        if (note != null && !note.isBlank()) auditMeta.put("note", note);
+        auditService.record(actorUserId, "piece_restore", "piece", pieceId, auditMeta);
     }
 
     /**
@@ -435,10 +532,21 @@ public class PieceAdjustService {
             Map.of("from", from.db, "orderId", orderId.toString()));
     }
 
+    /** A queued piece claim is sent once this transaction commits — never before, never on rollback. */
+    private void pushAfterCommit(UUID tenantId, Long claimId) {
+        if (claimId == null) return;
+        ShopifyInventoryService.afterCommit(() -> shopifyInventory.pushPieceClaim(tenantId, claimId));
+    }
+
     private String buildMeta(String reason, String note) {
+        return buildMeta(reason, note, Map.of());
+    }
+
+    private String buildMeta(String reason, String note, Map<String, Object> extra) {
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("reason", reason);
         if (note != null && !note.isBlank()) m.put("note", note);
+        m.putAll(extra);
         try {
             return mapper.writeValueAsString(m);
         } catch (JsonProcessingException e) {

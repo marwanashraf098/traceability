@@ -134,6 +134,14 @@ class VoidHoldTest {
             "VALUES (?, ?, 'VH Warehouse', ?, 'linked', true)",
             locationId, tenantId, TRACED_GID);
 
+        // D4 (2026-10-10): piece sync writes only for a seeded main warehouse — an applied initial
+        // seed an hour ago. Pieces seeded through seedPieceReceivedBeforeSeed predate it.
+        jdbc.update(
+            "INSERT INTO shopify_inventory_adjustments " +
+            "(tenant_id, batch_id, variant_id, location_id, delta, trigger_type, trigger_id, status, created_at) " +
+            "VALUES (?, ?, ?, ?, 5, 'initial_seed', 'seed:' || ?, 'applied', now() - interval '1 hour')",
+            tenantId, UUID.randomUUID(), variantA, locationId, tenantId.toString());
+
         // Tenant B fixtures for vh11/vh12 cross-tenant checks.
         tenantBStoreId = UUID.randomUUID();
         jdbc.update(
@@ -335,7 +343,7 @@ class VoidHoldTest {
 
     @Test @Order(8)
     void vh8_hold_enterDecrementsExitIncrements() throws Exception {
-        String pieceId = seedAvailablePiece("VH8-001", null);
+        String pieceId = seedPieceReceivedBeforeSeed("VH8-001");
 
         UUID holdEventId;
         TenantContext.set(tenantId);
@@ -355,6 +363,7 @@ class VoidHoldTest {
         verify(shopifyGateway, timeout(3000)).pushHoldEnter(
             eq(SHOP_DOMAIN), eq("vh-token"), eq("gid://shopify/InventoryItem/VH1"),
             eq(TRACED_GID), eq(-1), eq("traced://piece/" + pieceId), eq(expectedKey));
+        awaitClaimStatus("hold_enter", pieceId + ":" + holdEventId, "applied");
 
         TenantContext.set(tenantId);
         try {
@@ -365,9 +374,9 @@ class VoidHoldTest {
         waitForAsync();
 
         assertThat(pieceStatus(pieceId)).isEqualTo("available");
-        verify(shopifyGateway, timeout(3000)).adjustInventoryQuantities(
+        verify(shopifyGateway, timeout(3000)).pushPieceIncrement(
             eq(SHOP_DOMAIN), eq("vh-token"), eq("gid://shopify/InventoryItem/VH1"),
-            eq(TRACED_GID), eq(1), eq("hold_exit"), anyString());
+            eq(TRACED_GID), eq(1), eq("correction"), eq("traced://piece/" + pieceId), anyString());
         verify(shopifyGateway, never()).pushVoidCorrection(any(), any(), any(), any(), anyInt(), any(), any());
     }
 
@@ -402,7 +411,7 @@ class VoidHoldTest {
      * sellable pool at hold_enter; any of these firing again would be a double-decrement.
      */
     private void assertEscalationMakesNoShopifyCall(String barcode, String toStatus, String reason) throws Exception {
-        String pieceId = seedAvailablePiece(barcode, null);
+        String pieceId = seedPieceReceivedBeforeSeed(barcode);
 
         TenantContext.set(tenantId);
         try {
@@ -426,9 +435,10 @@ class VoidHoldTest {
 
         verify(shopifyGateway, times(1))
             .pushHoldEnter(any(), any(), any(), any(), anyInt(), any(), any());
-        verify(shopifyGateway, never()).moveAvailableToDamaged(any(), any(), any(), any(), anyInt(), any(), any());
+        verify(shopifyGateway, never()).moveAvailableToDamaged(any(), any(), any(), any(), anyInt(), any(), any(), any());
         verify(shopifyGateway, never()).pushVoidCorrection(any(), any(), any(), any(), anyInt(), any(), any());
         verify(shopifyGateway, never()).adjustInventoryQuantities(any(), any(), any(), any(), anyInt(), any(), any());
+        verify(shopifyGateway, never()).pushPieceIncrement(any(), any(), any(), any(), anyInt(), any(), any(), any());
         verify(shopifyGateway, never()).pushStockTakeWriteOff(any(), any(), any(), any(), any(), any());
     }
 
@@ -436,13 +446,27 @@ class VoidHoldTest {
 
     @Test @Order(10)
     void vh10_holdEnterTriggeredTwiceForSameCycle_callsShopifyOnce() throws Exception {
-        String pieceId = seedAvailablePiece("VH10-001", null);
-        UUID holdEventId = UUID.randomUUID();
+        // Piece sync (D7): the hold_enter claim is written in hold()'s transaction and sent after
+        // commit; sending the same claim again (a duplicate push / a sweep overlapping it) never
+        // reaches Shopify a second time.
+        String pieceId = seedPieceReceivedBeforeSeed("VH10-001");
+
+        UUID holdEventId;
+        TenantContext.set(tenantId);
+        try {
+            holdEventId = pieceAdjustService.hold(pieceId, "quality_check", null, null);
+        } finally {
+            TenantContext.clear();
+        }
+        awaitClaimStatus("hold_enter", pieceId + ":" + holdEventId, "applied");
+        long claimId = jdbc.queryForObject(
+            "SELECT id FROM shopify_inventory_adjustments WHERE tenant_id = ? AND trigger_type = 'hold_enter' AND trigger_id = ?",
+            Long.class, tenantId, pieceId + ":" + holdEventId);
 
         TenantContext.set(tenantId);
         try {
-            shopifyInventoryService.onHoldEnter(tenantId, pieceId, locationId, holdEventId).get(5, TimeUnit.SECONDS);
-            shopifyInventoryService.onHoldEnter(tenantId, pieceId, locationId, holdEventId).get(5, TimeUnit.SECONDS);
+            shopifyInventoryService.pushPieceClaim(tenantId, claimId).get(5, TimeUnit.SECONDS);
+            shopifyInventoryService.pushPieceClaim(tenantId, claimId).get(5, TimeUnit.SECONDS);
         } finally {
             TenantContext.clear();
         }
@@ -514,6 +538,24 @@ class VoidHoldTest {
             "    'P' || LPAD((abs(hashtext(?)) % 999999 + 1)::text, 6, '0'), ?)",
             id, tenantId, variantA, receiptId, barcode, id, locationId);
         return id;
+    }
+
+    /** A piece received a day ago — before the tenant's initial seed, so Shopify counts it (D4). */
+    private String seedPieceReceivedBeforeSeed(String barcode) {
+        String id = seedAvailablePiece(barcode, null);
+        jdbc.update("UPDATE pieces SET created_at = now() - interval '1 day' WHERE id = ?", id);
+        return id;
+    }
+
+    private void awaitClaimStatus(String triggerType, String triggerId, String status) throws InterruptedException {
+        for (int i = 0; i < 100; i++) {
+            List<String> st = jdbc.queryForList(
+                "SELECT status FROM shopify_inventory_adjustments WHERE tenant_id = ? AND trigger_type = ? AND trigger_id = ?",
+                String.class, tenantId, triggerType, triggerId);
+            if (st.contains(status)) return;
+            Thread.sleep(50);
+        }
+        throw new AssertionError(triggerType + " " + triggerId + " never reached " + status);
     }
 
     /** A finalized receiving session whose Trigger-1 increment already applied. */

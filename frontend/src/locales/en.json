@@ -959,6 +959,7 @@
       "unreserved": "Returned to stock (order cancelled)",
       "adjusted": "Manually adjusted — {{reason}}",
       "found_it": "Found it — piece restored to available",
+      "back_to_good": "Back to good — piece restored to available",
       "transferred_out": "Sent out on transfer to {{location}}",
       "returned_from_transfer": "Returned from transfer to stock",
       "condemned_at_vendor": "Marked damaged by vendor (transfer)",
@@ -2410,6 +2411,9 @@
     "foundIt": "Found It",
     "foundItTitle": "Mark as Found",
     "foundItDesc": "Restore this lost piece to Available.",
+    "backToGood": "Back to good",
+    "backToGoodDesc": "Return this damaged piece to Available — it was repaired or graded damaged by mistake.",
+    "backToGoodSubmit": "Return to good",
     "releaseFromHold": "Release from Hold",
     "releaseFromHoldDesc": "Return this piece to Available.",
     "committedTitle": "Piece is committed to an order",
@@ -2427,7 +2431,9 @@
       "quality_check": "Quality check",
       "quarantine": "Quarantine",
       "repair": "Repair",
-      "other": "Other"
+      "other": "Other",
+      "repaired": "Repaired",
+      "mis_graded": "Graded damaged by mistake"
     },
     "statusLabel": {
       "lost": "Lost",

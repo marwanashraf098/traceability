@@ -209,7 +209,7 @@ class StockTakeFinalizeTest {
 
         // Dedicated-method-only: the increment-only path must never be touched.
         verify(shopifyGateway, never()).adjustInventoryQuantities(any(), any(), any(), any(), anyInt(), any(), any());
-        verify(shopifyGateway, never()).moveAvailableToDamaged(any(), any(), any(), any(), anyInt(), any(), any());
+        verify(shopifyGateway, never()).moveAvailableToDamaged(any(), any(), any(), any(), anyInt(), any(), any(), any());
 
         // Structural proof: inventorySetOnHandQuantities does not exist anywhere in scope.
         boolean onInterface = java.util.Arrays.stream(ShopifyGateway.class.getMethods())

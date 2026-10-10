@@ -46,6 +46,7 @@ public class LookupService {
         // FR-22.11 (B2) — return leg's send-out scan (transferred_out -> out_on_transfer).
         if ("return_transfer_out".equals(eventType))     return "return_transfer_out";
         if ("adjusted".equals(eventType)) {
+            if ("available".equals(toStatus) && "damaged".equals(fromStatus)) return "back_to_good";
             if ("available".equals(toStatus))      return "found_it";
             return "adjusted";
         }

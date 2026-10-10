@@ -175,7 +175,7 @@ class ShopifyInventoryReconcileTest {
         }
 
         verify(shopifyGateway, never()).adjustInventoryQuantities(any(), any(), any(), any(), anyInt(), any(), any());
-        verify(shopifyGateway, never()).moveAvailableToDamaged(any(), any(), any(), any(), anyInt(), any(), any());
+        verify(shopifyGateway, never()).moveAvailableToDamaged(any(), any(), any(), any(), anyInt(), any(), any(), any());
         Long auditRows = jdbc.queryForObject(
             "SELECT COUNT(*) FROM shopify_inventory_adjustments WHERE tenant_id = ?", Long.class, tenantId);
         assertThat(auditRows).as("pc1: first pass writes nothing at all").isZero();

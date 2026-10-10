@@ -532,15 +532,22 @@ public class ExceptionService {
             "       sia.trigger_type, sia.trigger_id, sia.error, " +
             "       p.id AS piece_id, p.barcode, p.status::text AS live_status, " +
             "       sia.created_at AS occurred_at, " +
-            "       'void_hold_sync_failed:' || sia.trigger_type || ':' || sia.trigger_id AS subject_key " +
+            "       'void_hold_sync_failed:' || sia.trigger_type || ':' || sia.trigger_id AS subject_key, " +
+            "       sia.status AS claim_status, sia.skip_reason " +
             "FROM shopify_inventory_adjustments sia " +
-            "LEFT JOIN pieces p ON p.id = " +
-            "    (CASE WHEN sia.trigger_type = 'hold_enter' THEN split_part(sia.trigger_id, ':', 1) " +
-            "          ELSE sia.trigger_id END) " +
+            "LEFT JOIN pieces p ON p.id = split_part(sia.trigger_id, ':', 1) " +
             "    AND p.tenant_id = sia.tenant_id " +
             "WHERE sia.tenant_id = ? " +
-            "  AND sia.trigger_type IN ('void_correction', 'hold_enter', 'exchange_dispatch') " +
-            "  AND sia.status = 'failed' " +
+            // exchange_dispatch, and piece claims made before piece sync (legacy): any failure.
+            "  AND ((sia.trigger_type = 'exchange_dispatch' AND sia.status = 'failed') " +
+            "    OR (sia.trigger_type IN ('void_correction', 'hold_enter') AND sia.status = 'failed' " +
+            "        AND NOT (" + PieceShopifyRules.LIVE_SQL + ")) " +
+            // Piece sync (2026-10-10, D7): no confirmed answer, definite failures with no attempts left,
+            // or a skip nobody can resolve without looking at Shopify.
+            "    OR (sia.trigger_type IN " + PieceShopifyRules.PIECE_TRIGGERS_SQL + " AND " + PieceShopifyRules.LIVE_SQL +
+            "        AND (sia.status = 'failed_ambiguous' " +
+            "          OR (sia.status = 'failed' AND sia.attempt_count >= " + PieceShopifyRules.MAX_ATTEMPTS + ") " +
+            "          OR (sia.status = 'skipped' AND sia.skip_reason IN " + PieceShopifyRules.NEEDS_CHECK_SQL + ")))) " +
             "  AND NOT EXISTS ( " +
             "      SELECT 1 FROM exception_resolutions er " +
             "      WHERE er.tenant_id = sia.tenant_id " +
@@ -551,7 +558,7 @@ public class ExceptionService {
             "UNION ALL " +
             "SELECT 'void_hold_sync_failed', 'CRITICAL', 'transfer', 'transfer_out', y.transfer_id::text, y.error, " +
             "       NULL, NULL, y.status, y.created_at, " +
-            "       'void_hold_sync_failed:transfer_out:' || y.transfer_id " +
+            "       'void_hold_sync_failed:transfer_out:' || y.transfer_id, y.status, NULL " +
             "FROM transfer_shopify_syncs y " +
             "WHERE y.tenant_id = ? " +
             "  AND (y.status = 'failed_ambiguous' OR (y.status = 'failed' AND y.attempt_count >= " + TransferShopifySync.MAX_ATTEMPTS + ")) " +
@@ -594,7 +601,7 @@ public class ExceptionService {
             "             COUNT(*) FILTER (WHERE sia.status = 'skipped_shopify_restocked') AS offset_units, " +
             "             MAX(sia.applied_at) AS occurred_at " +
             "      FROM shopify_inventory_adjustments sia " +
-            "      WHERE sia.tenant_id = ? AND sia.trigger_type = 'return_inspection' " +
+            "      WHERE sia.tenant_id = ? AND sia.trigger_type IN ('return_inspection', 'damaged_restore_increment') " +
             "        AND sia.source_order_id IS NOT NULL " +
             "      GROUP BY sia.source_order_id, sia.variant_id " +
             "      HAVING COUNT(*) FILTER (WHERE sia.status = 'applied') > 0) a " +
@@ -1258,10 +1265,36 @@ public class ExceptionService {
                 }
                 String b = str(item, "barcode");
                 String triggerType = str(item, "trigger_type");
-                String label = "hold_enter".equals(triggerType) ? "hold"
-                    : "exchange_dispatch".equals(triggerType) ? "exchange replacement" : "void";
-                String labelAr = "hold_enter".equals(triggerType) ? "التعليق"
-                    : "exchange_dispatch".equals(triggerType) ? "خصم قطعة الاستبدال" : "الإلغاء";
+                String claimStatus = str(item, "claim_status");
+                if ("failed_ambiguous".equals(claimStatus) || "skipped".equals(claimStatus)) {
+                    // Piece sync (2026-10-10): nobody can tell what Shopify holds — never re-sent.
+                    boolean skipped = "skipped".equals(claimStatus);
+                    item.put("descriptionEn", skipped
+                        ? "Traced can't tell whether Shopify still counts piece " + b
+                            + " — check its quantity in Shopify; nothing was sent"
+                        : "Shopify didn't confirm the stock update for piece " + b
+                            + " — check its quantity in Shopify before doing anything; it won't be sent again");
+                    item.put("descriptionAr", skipped
+                        ? "لا يستطيع Traced التأكد مما إذا كان Shopify ما زال يحتسب القطعة " + b
+                            + " — راجع كميتها في Shopify؛ لم يُرسل شيء"
+                        : "لم يؤكد Shopify تحديث المخزون للقطعة " + b
+                            + " — راجع كميتها في Shopify قبل أي إجراء؛ لن يُعاد الإرسال");
+                    item.put("suggestedAction", "verify_shopify_inventory");
+                    item.put("actionUrl", b != null ? "/lookup?q=" + b : "/lookup");
+                    return;
+                }
+                String label = "hold_enter".equals(triggerType) || "hold_exit".equals(triggerType) ? "hold"
+                    : "exchange_dispatch".equals(triggerType) ? "exchange replacement"
+                    : "damage_move".equals(triggerType) || "damage_restore".equals(triggerType)
+                        || "damaged_restore_increment".equals(triggerType) ? "damage"
+                    : "piece_write_off".equals(triggerType) || "piece_write_off_return".equals(triggerType) ? "adjustment"
+                    : "void";
+                String labelAr = "hold_enter".equals(triggerType) || "hold_exit".equals(triggerType) ? "التعليق"
+                    : "exchange_dispatch".equals(triggerType) ? "خصم قطعة الاستبدال"
+                    : "damage_move".equals(triggerType) || "damage_restore".equals(triggerType)
+                        || "damaged_restore_increment".equals(triggerType) ? "التلف"
+                    : "piece_write_off".equals(triggerType) || "piece_write_off_return".equals(triggerType) ? "التعديل"
+                    : "الإلغاء";
                 item.put("descriptionEn", "Shopify " + label + " sync failed for piece " + b
                     + " — Traced and Shopify inventory have diverged");
                 item.put("descriptionAr", "فشلت مزامنة " + labelAr
