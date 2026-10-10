@@ -216,11 +216,14 @@ public class CustomerDataRequestService {
                 "SELECT o.id, o.number, o.external_id, o.placed_at, o.customer_name, o.customer_phone, o.address::text AS address, " +
                 "       o.shopify_address::text AS shopify_address, " +
                 "       o.pii_source, o.pii_redacted_at, " +
+                // P4b: a portal pre-connect order (V163) — its Shopify GID and the original Bosta
+                // delivery (address + receiver) Traced keeps for it.
+                "       o.origin, o.shopify_order_gid, o.portal_delivered_at, o.portal_delivery::text AS portal_delivery, " +
                 "       (SELECT jsonb_object_agg(e.key, e.value)::text " +
                 "          FROM jsonb_each(CASE WHEN jsonb_typeof(o.raw) = 'object' THEN o.raw ELSE '{}'::jsonb END) e " +
                 "         WHERE NOT jsonb_exists(shopify_order_raw_redacted(o.raw), e.key)) AS shopify_customer_data " +
                 "FROM orders o WHERE o.tenant_id = ? AND o.id = ANY(?::uuid[]) ORDER BY o.placed_at",
-                List.of("address", "shopify_address", "shopify_customer_data"), tenantId, subject.orderIdArray()));
+                List.of("address", "shopify_address", "shopify_customer_data", "portal_delivery"), tenantId, subject.orderIdArray()));
 
             List<Map<String, Object>> requests = rows(
                 "SELECT rr.id, rr.reference, o.number AS order_number, rr.type, rr.status::text AS status, rr.created_at, " +
