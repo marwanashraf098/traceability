@@ -1,98 +1,17 @@
-import { NavLink, useLocation, useNavigate } from 'react-router-dom'
+import { useLocation, useNavigate } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { useState, useRef, useEffect, ReactNode } from 'react'
-import type { LucideIcon } from 'lucide-react'
-import {
-  LayoutDashboard, ShoppingBag, Warehouse, Inbox, ClipboardList, PackageCheck,
-  Truck, Repeat, Undo2, AlertTriangle, Home, ArrowRightLeft,
-  Settings, LogOut, Globe, Search, ChevronDown, Bell, BarChart3, Menu, X,
-} from 'lucide-react'
+import { LogOut, Globe, Search, ChevronDown, Bell, Menu } from 'lucide-react'
 import {
   getRoleFromToken, logoutThisDevice, getMe, getExceptionsCount, getOnboardingStatus,
   type Me, type OnboardingStatus,
 } from '../api'
 import { clearAccessToken } from '../auth'
-import { Logo } from './Logo'
+import Sidebar, { avatarInitials } from './Sidebar'
 import { cn, MeProvider } from './ui'
 import { useStation } from './StationProvider'
 import { PhoneTopbarIcon } from '../phone/PhoneScanButton'
 import { stationDeviceId } from '../phone/PhoneScanProvider'
-import { ANALYTICS_PAGES, analyticsEnabled } from '../analytics/flag'
-import { sharedSearch } from '../analytics/period'
-
-// ── Nav link ──────────────────────────────────────────────────────────────────
-// Icon is passed as a component reference (not pre-rendered) so it can be
-// colored conditionally on the NavLink's own isActive state.
-
-function SideNavLink({ to, icon: Icon, label }: { to: string; icon: LucideIcon; label: string }) {
-  return (
-    <NavLink
-      to={to}
-      className={({ isActive }) => cn('nav-item', isActive && 'nav-item-active')}
-    >
-      {({ isActive }) => (
-        <>
-          <Icon size={18} strokeWidth={1.75} className={isActive ? 'text-trace-blue' : ''} />
-          <span>{label}</span>
-        </>
-      )}
-    </NavLink>
-  )
-}
-
-// ── Analytics nav group (owner only, behind VITE_ANALYTICS_ENABLED) ──────────────
-// Collapsible; only built pages are listed. Sub-links carry the shared period state.
-
-const ANALYTICS_NAV_KEY = 'traced-analytics-nav'
-
-function AnalyticsNavGroup() {
-  const { t } = useTranslation()
-  const { pathname, search } = useLocation()
-  const inAnalytics = pathname.startsWith('/analytics')
-  const [open, setOpen] = useState<boolean>(() => {
-    try { return localStorage.getItem(ANALYTICS_NAV_KEY) !== 'closed' } catch { return true }
-  })
-  const expanded = open || inAnalytics
-  function toggle() {
-    const next = !expanded
-    setOpen(next)
-    try { localStorage.setItem(ANALYTICS_NAV_KEY, next ? 'open' : 'closed') } catch { /* private mode */ }
-  }
-  const carry = inAnalytics ? sharedSearch(new URLSearchParams(search)) : ''
-  return (
-    <div data-testid="nav-analytics">
-      <button type="button" onClick={toggle} aria-expanded={expanded} aria-controls="nav-analytics-sub"
-        className={cn('nav-item w-full', inAnalytics && 'text-sidebar-active')}>
-        <BarChart3 size={18} strokeWidth={1.75} className={inAnalytics ? 'text-trace-blue' : ''} />
-        <span>{t('nav.analytics')}</span>
-        <span className="ms-1.5 text-[10px] font-bold tracking-[0.04em] text-[#93b4ff] bg-trace-blue/20 px-1.5 py-0.5 rounded">{t('nav.new')}</span>
-        <ChevronDown size={14} strokeWidth={2} className={cn('ms-auto transition-transform', !expanded && 'ltr:-rotate-90 rtl:rotate-90')} />
-      </button>
-      {expanded && (
-        <div id="nav-analytics-sub" className="flex flex-col gap-0.5 pt-0.5 pb-1.5">
-          {ANALYTICS_PAGES.filter(p => p.ready).map(p => (
-            <NavLink key={p.id} to={`/analytics/${p.id}${carry}`}
-              className={({ isActive }) => cn('nav-item ps-[47px] text-[13.5px] relative', isActive && 'nav-item-active')}>
-              {t(`analytics.pages.${p.id}.nav`)}
-            </NavLink>
-          ))}
-        </div>
-      )}
-    </div>
-  )
-}
-
-function roleInitials(role: string | null): string {
-  return role ? role.slice(0, 2).toUpperCase() : '?'
-}
-
-function nameInitials(name: string): string {
-  return name.trim().split(/\s+/).slice(0, 2).map(w => w[0]).join('').toUpperCase()
-}
-
-function avatarInitials(me: Me | null, role: string | null): string {
-  return me?.name ? nameInitials(me.name) : roleInitials(role)
-}
 
 // ── Layout ────────────────────────────────────────────────────────────────────
 
@@ -101,7 +20,8 @@ export default function Layout({ children }: { children: ReactNode }) {
   const navigate    = useNavigate()
   const { pathname } = useLocation()
   // Below 900 px the sidebar is a slide-in menu (the top-bar button opens it); at 900 px and up it
-  // is the fixed rail, unchanged. Any navigation, Escape or the scrim closes the menu.
+  // is the fixed sidebar (collapsible to an icon rail, see Sidebar.tsx). Any navigation, Escape or
+  // the scrim closes the menu.
   const [navOpen, setNavOpen] = useState(false)
   useEffect(() => { setNavOpen(false) }, [pathname])
   useEffect(() => {
@@ -215,79 +135,10 @@ export default function Layout({ children }: { children: ReactNode }) {
     <div className="flex h-screen bg-bg overflow-hidden">
 
       {/* ── Sidebar ── */}
-      {/* Fixed dark rail — pinned to the sidebar-* tokens, never flips with the
-          content-area theme (see tailwind.config.js `sidebar` palette). */}
       {navOpen && (
         <div className="min-[900px]:hidden fixed inset-0 bg-black/45 z-overlay" onClick={() => setNavOpen(false)} data-testid="nav-scrim" />
       )}
-      <aside
-        id="app-nav"
-        data-testid="app-nav"
-        data-open={navOpen}
-        className={cn(
-          'w-56 flex-shrink-0 bg-sidebar border-e border-sidebar-line flex flex-col',
-          'max-[899px]:fixed max-[899px]:inset-y-0 max-[899px]:start-0 max-[899px]:z-modal max-[899px]:shadow-e4',
-          'max-[899px]:transition-transform max-[899px]:duration-200',
-          navOpen ? 'max-[899px]:translate-x-0' : 'max-[899px]:ltr:-translate-x-full max-[899px]:rtl:translate-x-full',
-        )}>
-
-        {/* Wordmark */}
-        <div className="flex items-center justify-between px-[18px] py-5 border-b border-sidebar-line">
-          <Logo variant="mark" size={18} className="text-sidebar-active" />
-          <button type="button" onClick={() => setNavOpen(false)} aria-label={t('nav.closeMenu')}
-            className="min-[900px]:hidden text-sidebar-text hover:text-sidebar-active">
-            <X size={18} strokeWidth={2} />
-          </button>
-        </div>
-
-        {/* Nav — worker gets a reduced task-scoped set (Home + the three worker
-            screens); owner/manager see the full nav, unchanged. */}
-        <nav className="flex-1 overflow-y-auto py-3 flex flex-col gap-0.5">
-          {role === 'worker' ? (
-            <>
-              <SideNavLink to="/worker-home" icon={Home}          label={t('nav.home')} />
-              <SideNavLink to="/fulfill"     icon={PackageCheck}  label={t('nav.fulfill')} />
-              <SideNavLink to="/returns"     icon={Undo2}         label={t('nav.returns')} />
-              <SideNavLink to="/pickups"     icon={Truck}         label={t('nav.pickups')} />
-            </>
-          ) : (
-            <>
-              <SideNavLink to="/overview"    icon={LayoutDashboard} label={t('nav.overview')} />
-              {role === 'owner' && analyticsEnabled() && <AnalyticsNavGroup />}
-              <SideNavLink to="/orders"      icon={ShoppingBag}     label={t('nav.orders')} />
-              <SideNavLink to="/inventory"   icon={Warehouse}       label={t('nav.catalog')} />
-              <SideNavLink to="/receiving"   icon={Inbox}           label={t('nav.receiving')} />
-              <SideNavLink to="/stock-take"  icon={ClipboardList}   label={t('nav.stocktake')} />
-              <SideNavLink to="/fulfill"     icon={PackageCheck}    label={t('nav.fulfill')} />
-              <SideNavLink to="/pickups"     icon={Truck}           label={t('nav.pickups')} />
-              <SideNavLink to="/transfers"   icon={Repeat}          label={t('nav.transfers')} />
-              <SideNavLink to="/returns"     icon={Undo2}           label={t('nav.returns')} />
-              <SideNavLink to="/exchanges"   icon={ArrowRightLeft}  label={t('nav.exchangesRefunds')} />
-              <SideNavLink to="/exceptions"  icon={AlertTriangle}   label={t('nav.exceptions')} />
-              <div className="h-px bg-sidebar-line mx-[18px] my-2.5" />
-              <div className="px-[18px] pt-1.5 pb-0.5 text-[11px] font-semibold tracking-wider text-sidebar-text uppercase">
-                {t('nav.manager')}
-              </div>
-              <SideNavLink to="/settings" icon={Settings} label={t('nav.settings')} />
-            </>
-          )}
-        </nav>
-
-        {/* Bottom: identity — real name+role once /me resolves; role-only placeholder until then/on failure */}
-        <div className="border-t border-sidebar-line px-[18px] py-[14px] flex items-center gap-2.5">
-          <span className="w-[30px] h-[30px] rounded-full bg-trace-blue text-white text-[12px] font-bold flex items-center justify-center flex-shrink-0">
-            {avatarInitials(me, role)}
-          </span>
-          {me ? (
-            <span className="min-w-0 flex flex-col">
-              <span className="text-small text-sidebar-active leading-tight truncate">{me.name}</span>
-              <span className="text-caption text-sidebar-text leading-tight">{t(`users.roles.${me.role}`)}</span>
-            </span>
-          ) : role && (
-            <span className="text-small text-sidebar-text capitalize">{t(`users.roles.${role}`)}</span>
-          )}
-        </div>
-      </aside>
+      <Sidebar role={role} me={me} navOpen={navOpen} onCloseNav={() => setNavOpen(false)} />
 
       {/* ── Main area ── */}
       <div className="flex-1 flex flex-col overflow-hidden min-w-0">

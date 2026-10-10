@@ -39,10 +39,10 @@ function renderAs(role: string) {
 
 describe('Sidebar renames', () => {
   for (const role of ['owner', 'manager']) {
-    test(`${role}: "Scan returns" → /returns and "Returns & exchanges" → /exchanges; old names gone (EN)`, async () => {
+    test(`${role}: "Scan returns" → /returns and "Requests" → /exchanges; old names gone (EN)`, async () => {
       renderAs(role)
       expect(await screen.findByRole('link', { name: 'Scan returns' })).toHaveAttribute('href', '/returns')
-      expect(screen.getByRole('link', { name: 'Returns & exchanges' })).toHaveAttribute('href', '/exchanges')
+      expect(screen.getByRole('link', { name: 'Requests' })).toHaveAttribute('href', '/exchanges')
       expect(screen.queryByText('Exchanges & Refunds')).toBeNull()
       expect(screen.queryByRole('link', { name: 'Returns' })).toBeNull()
     })
@@ -51,7 +51,7 @@ describe('Sidebar renames', () => {
       await i18n.changeLanguage('ar')
       renderAs(role)
       expect(await screen.findByRole('link', { name: 'مسح المرتجعات' })).toHaveAttribute('href', '/returns')
-      expect(screen.getByRole('link', { name: 'المرتجعات والاستبدال' })).toHaveAttribute('href', '/exchanges')
+      expect(screen.getByRole('link', { name: 'طلبات الإرجاع' })).toHaveAttribute('href', '/exchanges')
       expect(screen.queryByText('الاستبدال والاسترجاع')).toBeNull()
     })
   }
@@ -59,7 +59,7 @@ describe('Sidebar renames', () => {
   test('worker: "Scan returns" only (no Returns & exchanges), EN and AR', async () => {
     renderAs('worker')
     expect(await screen.findByRole('link', { name: 'Scan returns' })).toHaveAttribute('href', '/returns')
-    expect(screen.queryByRole('link', { name: 'Returns & exchanges' })).toBeNull()
+    expect(screen.queryByRole('link', { name: 'Requests' })).toBeNull()
   })
 
   test('worker: Arabic', async () => {

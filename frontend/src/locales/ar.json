@@ -11,8 +11,8 @@
     "switchLock": "تبديل / قفل",
     "lookup": "بحث باركود أو رقم شحنة…",
     "returns": "مسح المرتجعات",
-    "exchangesRefunds": "المرتجعات والاستبدال",
-    "exceptions": "الاستثناءات",
+    "exchangesRefunds": "طلبات الإرجاع",
+    "exceptions": "التنبيهات",
     "connections": "الاتصالات",
     "users": "الفريق",
     "settings": "الإعدادات",
@@ -21,11 +21,17 @@
     "locations": "المواقع",
     "shopifyInventory": "مزامنة المخزون",
     "transfers": "عمليات النقل",
-    "manager": "المدير",
     "setupProgress": "تقدّم الإعداد",
     "setupCount": "الإعداد {{done}}/{{total}}",
     "analytics": "التحليلات",
-    "new": "جديد",
+    "beta": "تجريبي",
+    "sections": {
+      "outbound": "الشحن",
+      "stock": "المستودع",
+      "returns": "المرتجعات"
+    },
+    "collapse": "طي الشريط الجانبي",
+    "expand": "توسيع الشريط الجانبي",
     "openMenu": "فتح القائمة",
     "closeMenu": "إغلاق القائمة"
   },
@@ -1169,7 +1175,7 @@
     }
   },
   "exceptions": {
-    "title": "الاستثناءات"
+    "title": "التنبيهات"
   },
   "exchange": {
     "mapping": {
@@ -1185,7 +1191,7 @@
       "notFound": "الاستبدال غير موجود",
       "successTitle": "تم ربط الاستبدال",
       "successBody": "تم إنشاء الطلب {{order}} للجزء الصادر.",
-      "backToExceptions": "العودة إلى الاستثناءات"
+      "backToExceptions": "العودة إلى التنبيهات"
     },
     "picker": {
       "title": "اختيار متغير",
@@ -2535,7 +2541,7 @@
     "sessionOpenRequired": "الجلسة مفتوحة — امسح الطرود",
     "orderNumber": "الطلب",
     "cod": "الدفع عند الاستلام",
-    "pieceExceptions": "{{count}} قطعة بها فجوات في سلسلة الحيازة — تحقق من الاستثناءات",
+    "pieceExceptions": "{{count}} قطعة بها فجوات في سلسلة الحيازة — تحقق من التنبيهات",
     "noScans": "لم يتم مسح أي طرود بعد"
   },
   "locations": {
