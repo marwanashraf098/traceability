@@ -902,6 +902,19 @@ class ShopifyHttpGateway implements ShopifyGateway {
             "available", fromBaseline, "damaged", referenceDocumentUri, idempotencyKey);
     }
 
+    @Override
+    public void moveDamagedToAvailable(String shopDomain, String token, String inventoryItemGid,
+                                       String locationGid, int quantity, String reason,
+                                       String referenceDocumentUri, String idempotencyKey) {
+        if (quantity <= 0) {
+            throw new IllegalArgumentException("moveDamagedToAvailable requires a positive quantity; got " + quantity);
+        }
+        // No baseline read for "damaged" — both sides opt out of compare-and-swap (null); an
+        // insufficient damaged quantity comes back as a userError (definite).
+        sendPieceMove("Damage restore", shopDomain, token, inventoryItemGid, locationGid, quantity, reason,
+            "damaged", null, "available", referenceDocumentUri, idempotencyKey);
+    }
+
     private static final String PIECE_INCREMENT_MUTATION = """
             mutation PieceIncrement($input: InventoryAdjustQuantitiesInput!, $idempotencyKey: String!) {
               inventoryAdjustQuantities(input: $input) @idempotent(key: $idempotencyKey) {
@@ -1257,6 +1270,95 @@ class ShopifyHttpGateway implements ShopifyGateway {
         }
     }
 
+    private static final String PIECE_WRITE_OFF_MUTATION = """
+            mutation PieceWriteOff($input: InventoryAdjustQuantitiesInput!, $idempotencyKey: String!) {
+              inventoryAdjustQuantities(input: $input) @idempotent(key: $idempotencyKey) {
+                inventoryAdjustmentGroup { createdAt }
+                userErrors { field message code }
+              }
+            }
+            """;
+
+    /**
+     * D1 (2026-10-10) — the sixth named decrement. Deliberately self-contained, like
+     * {@link #pushTransferOut}: no executeGraphQL() (its Resilience4j retry would silently re-send a
+     * timed-out −1), exactly one HTTP attempt, classified exactly like pushTransferOut.
+     */
+    @Override
+    public void pushPieceWriteOff(String shopDomain, String token, String inventoryItemGid,
+                                  String locationGid, int negativeDelta, String referenceDocumentUri,
+                                  String idempotencyKey) {
+        if (negativeDelta >= 0) {
+            throw new IllegalArgumentException("pushPieceWriteOff requires a negative delta; got " + negativeDelta);
+        }
+        ObjectNode change = mapper.createObjectNode()
+            .put("delta", negativeDelta)
+            .put("inventoryItemId", inventoryItemGid)
+            .put("locationId", locationGid);
+        change.putNull("changeFromQuantity");
+        ObjectNode input = mapper.createObjectNode()
+            .put("reason", "shrinkage")
+            .put("name", "available")
+            .put("referenceDocumentUri", referenceDocumentUri);
+        input.set("changes", mapper.createArrayNode().add(change));
+        ObjectNode vars = mapper.createObjectNode();
+        vars.set("input", input);
+        vars.put("idempotencyKey", idempotencyKey);
+
+        String url = "https://" + shopDomain + "/admin/api/" + apiVersion + "/graphql.json";
+        ObjectNode body = mapper.createObjectNode()
+            .put("query", PIECE_WRITE_OFF_MUTATION).set("variables", vars);
+
+        JsonNode response;
+        try {
+            response = restClient.post()
+                .uri(url)
+                .header("X-Shopify-Access-Token", token)
+                .header("Content-Type", "application/json")
+                .body(body)
+                .retrieve()
+                .body(JsonNode.class);
+        } catch (HttpClientErrorException e) {
+            throw new ShopifyException(
+                "Piece write-off HTTP " + e.getStatusCode().value()
+                + " for " + shopDomain + ": " + e.getResponseBodyAsString(), e);
+        } catch (HttpServerErrorException e) {
+            throw new ShopifyAmbiguousException(
+                "Piece write-off HTTP " + e.getStatusCode().value() + " from " + shopDomain + " — not confirmed", e);
+        } catch (ResourceAccessException e) {
+            throw new ShopifyAmbiguousException("Piece write-off: no confirmed response from " + shopDomain, e);
+        } catch (RestClientException e) {
+            throw new ShopifyAmbiguousException(
+                "Piece write-off: unclassifiable response from " + shopDomain + ": " + e.getMessage(), e);
+        }
+        if (response == null) {
+            throw new ShopifyAmbiguousException("Piece write-off: null response body from " + shopDomain);
+        }
+        JsonNode errors = response.get("errors");
+        if (errors != null && errors.isArray() && errors.size() > 0) {
+            boolean onlyThrottled = true;
+            for (JsonNode err : errors) {
+                if (!"THROTTLED".equals(err.path("extensions").path("code").asText(""))) { onlyThrottled = false; break; }
+            }
+            JsonNode throttledData = response.get("data");
+            if (onlyThrottled && (throttledData == null || throttledData.isNull())) {
+                throw new ShopifyException("Piece write-off GraphQL error (THROTTLED): not executed by Shopify");
+            }
+            String code = errors.get(0).path("extensions").path("code").asText("");
+            throw new ShopifyAmbiguousException("Piece write-off GraphQL error"
+                + (code.isBlank() ? "" : " (" + code + ")") + ": "
+                + errors.get(0).path("message").asText() + " — not confirmed");
+        }
+        JsonNode data = response.get("data");
+        if (data == null) {
+            throw new ShopifyAmbiguousException("Piece write-off: response had no data field from " + shopDomain);
+        }
+        JsonNode userErrors = data.path("inventoryAdjustQuantities").path("userErrors");
+        if (userErrors.isArray() && !userErrors.isEmpty()) {
+            throw new ShopifyException("Piece write-off failed: " + userErrors.get(0).path("message").asText("unknown error"));
+        }
+    }
+
     private static final String VOID_CORRECTION_MUTATION = """
             mutation VoidCorrection($input: InventoryAdjustQuantitiesInput!, $idempotencyKey: String!) {
               inventoryAdjustQuantities(input: $input) @idempotent(key: $idempotencyKey) {
@@ -1572,6 +1674,41 @@ class ShopifyHttpGateway implements ShopifyGateway {
               }
             }
             """;
+
+    private static final String INVENTORY_STATES_QUERY = """
+            query InventoryStatesAtLocation($ids: [ID!]!, $locationId: ID!, $names: [String!]!) {
+              nodes(ids: $ids) {
+                ... on InventoryItem {
+                  id
+                  inventoryLevel(locationId: $locationId) {
+                    quantities(names: $names) { name quantity }
+                  }
+                }
+              }
+            }
+            """;
+
+    @Override
+    public Map<String, Map<String, Integer>> fetchStateQuantities(String shopDomain, String token, String locationGid,
+                                                                  List<String> inventoryItemGids, List<String> names) {
+        Map<String, Map<String, Integer>> out = new java.util.LinkedHashMap<>();
+        for (List<String> chunk : chunks(inventoryItemGids, MAX_INPUT_ARRAY)) {
+            ObjectNode vars = mapper.createObjectNode();
+            vars.set("ids", mapper.valueToTree(chunk));
+            vars.put("locationId", locationGid);
+            vars.set("names", mapper.valueToTree(names));
+            JsonNode data = executeGraphQL(shopDomain, token, INVENTORY_STATES_QUERY, vars);
+            for (JsonNode node : data.path("nodes")) {
+                if (node.isNull() || node.isMissingNode()) continue;
+                JsonNode level = node.path("inventoryLevel");
+                if (level.isMissingNode() || level.isNull()) continue;
+                Map<String, Integer> q = new java.util.LinkedHashMap<>();
+                for (JsonNode x : level.path("quantities")) q.put(x.path("name").asText(), x.path("quantity").asInt(0));
+                out.put(node.path("id").asText(), q);
+            }
+        }
+        return out;
+    }
 
     @Override
     public List<InventoryLevel> fetchAvailableQuantities(String shopDomain, String token,

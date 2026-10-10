@@ -21,6 +21,7 @@ import java.util.UUID;
  * FR-13: Manual piece adjustments.
  *
  * 13.1 / 13.3 — adjustPiece(): available→lost/damaged/destroyed and lost→available ("found it").
+ * D11          — restore(): damaged→available ("Back to good").
  * 13.2         — releaseForAdjust(): operator releases a reserved/packed piece from its order
  *                before adjusting. Uses the same transition+allocation-release paths as
  *                FulfillService.unscan() (reserved) and unpackPiece() (packed) — no new edges.
@@ -166,6 +167,23 @@ public class PieceAdjustService {
             extra.put("damage_event_id", damageEventId);
             claimId = shopifyInventory.claimPieceDeparture(tenantId, "damage_move", pieceId,
                 pieceId + ":" + damageEventId);
+        } else if (current == PieceStatus.AVAILABLE
+                && (toStatus == PieceStatus.LOST || toStatus == PieceStatus.DESTROYED)) {
+            // D1 (2026-10-10): a Shopify-counted piece written off in Lookup → −1 at the main warehouse,
+            // once (pushPieceWriteOff — the sixth named decrement). on_hold → lost/destroyed already
+            // left Shopify at hold_enter: bad → bad, no write.
+            String writeOffEventId = UUID.randomUUID().toString();
+            extra.put("write_off_event_id", writeOffEventId);
+            claimId = shopifyInventory.claimPieceDeparture(tenantId, "piece_write_off", pieceId,
+                pieceId + ":" + writeOffEventId);
+        } else if (current == PieceStatus.LOST && toStatus == PieceStatus.AVAILABLE) {
+            // Found it (D5): +1 only when the piece's departure reached Shopify (its write-off −1, its
+            // stock-take push, its hold_enter applied — or it left before the seed); an unsent write-off
+            // is cancelled here. Decided before the transition, in this transaction.
+            String restoreEventId = UUID.randomUUID().toString();
+            extra.put("restore_event_id", restoreEventId);
+            claimId = shopifyInventory.claimPieceReturn(tenantId, "piece_write_off_return", pieceId,
+                pieceId + ":" + restoreEventId);
         }
 
         String metadata = buildMeta(reason, note, extra);
@@ -406,6 +424,76 @@ public class PieceAdjustService {
 
         auditService.record(actorUserId, "piece_unhold", "piece", pieceId,
             Map.of("holdEventId", holdEventId.toString()));
+    }
+
+    private static final Set<String> RESTORE_REASONS = Set.of("repaired", "mis_graded", "other");
+
+    /**
+     * D11 (approved 2026-10-10) — Back to good: damaged → available, manager+ only. Same guards as
+     * adjustPiece (committed → PieceCommittedException, out_on_transfer → PieceOutOnTransferException);
+     * only a damaged piece qualifies — destroyed and voided stay terminal. The piece event is 'adjusted'
+     * with {reason, note, restore_event_id}; condition goes back to good. The Shopify write (reverse
+     * damage move, or +1) is decided and claimed in this transaction — see
+     * ShopifyInventoryService.claimPieceRestore — and sent after commit.
+     */
+    @Transactional(isolation = Isolation.READ_COMMITTED)
+    public void restore(String pieceId, String reason, String note, UUID actorUserId) {
+        UUID tenantId = TenantContext.require();
+
+        if (!RESTORE_REASONS.contains(reason)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                "reason must be one of: repaired, mis_graded, other");
+        }
+        if ("other".equals(reason) && (note == null || note.isBlank())) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                "note is required when reason is 'other'");
+        }
+
+        String status = jdbc.query(FIND_PIECE_STATUS, rs -> rs.next() ? rs.getString(1) : null, pieceId, tenantId);
+        if (status == null) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Piece not found");
+        }
+        PieceStatus current = PieceStatus.fromDb(status);
+
+        if (current == PieceStatus.RESERVED || current == PieceStatus.PACKED) {
+            Map<String, Object> order = jdbc.query(FIND_COMMITTED_ORDER,
+                rs -> rs.next()
+                    ? Map.of("orderId", rs.getObject("order_id"),
+                             "orderNumber", rs.getString("order_number"))
+                    : null,
+                pieceId, tenantId);
+            throw new PieceCommittedException(
+                order != null ? (UUID) order.get("orderId") : null,
+                order != null ? (String) order.get("orderNumber") : null);
+        }
+        if (current == PieceStatus.OUT_ON_TRANSFER) {
+            UUID blockingTransferId = jdbc.query(
+                "SELECT transfer_id FROM transfer_pieces WHERE piece_id = ? AND tenant_id = ? AND outcome IS NULL LIMIT 1",
+                rs -> rs.next() ? rs.getObject("transfer_id", UUID.class) : null,
+                pieceId, tenantId);
+            throw new PieceOutOnTransferException(blockingTransferId);
+        }
+        if (current != PieceStatus.DAMAGED) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                "Only a damaged piece can go back to good (current: " + current.db + ")");
+        }
+
+        String restoreEventId = UUID.randomUUID().toString();
+        Long claimId = shopifyInventory.claimPieceRestore(tenantId, pieceId, restoreEventId);
+
+        ledger.transition(pieceId, PieceStatus.DAMAGED, PieceStatus.AVAILABLE, "adjusted", actorUserId,
+            new TransitionContext(null, null, null, null,
+                buildMeta(reason, note, Map.of("restore_event_id", restoreEventId))));
+        jdbc.update("UPDATE pieces SET condition = 'good' WHERE id = ? AND tenant_id = ?", pieceId, tenantId);
+        pushAfterCommit(tenantId, claimId);
+
+        Map<String, Object> auditMeta = new LinkedHashMap<>();
+        auditMeta.put("from",   "damaged");
+        auditMeta.put("to",     "available");
+        auditMeta.put("reason", reason);
+        auditMeta.put("restoreEventId", restoreEventId);
+        if (note != null && !note.isBlank()) auditMeta.put("note", note);
+        auditService.record(actorUserId, "piece_restore", "piece", pieceId, auditMeta);
     }
 
     /**

@@ -474,6 +474,45 @@ public interface ShopifyGateway {
     void pushTransferOut(String shopDomain, String token, List<InventoryDelta> deltas,
                          String locationGid, String referenceDocumentUri, String idempotencyKey);
 
+    /**
+     * Lookup adjustments (2026-10-10, D1) — the SIXTH member of the named set of sanctioned decrement
+     * methods (CLAUDE.md, FR-21 §7 extension; approved by Marawan 2026-10-10). A piece Shopify counts
+     * at the Traced Main Warehouse is adjusted available → lost or available → destroyed in Lookup:
+     * −1 there, once. Same self-contained, single-HTTP-attempt shape as {@link #pushTransferOut} and
+     * classified the same way; deliberately shares no code with any other decrement method (no
+     * general-purpose decrement helper — CLAUDE.md invariant).
+     *
+     * @param negativeDelta        must be < 0 (always -1: one piece)
+     * @param referenceDocumentUri traced://piece/{piece_id}
+     * @param idempotencyKey       deterministic from the claim (piece + write-off event)
+     * @throws IllegalArgumentException if negativeDelta >= 0 — checked BEFORE any network call
+     * @throws ShopifyException          definite rejection — nothing was applied
+     * @throws ShopifyAmbiguousException no confirmed response — the caller must NOT auto-retry
+     */
+    void pushPieceWriteOff(String shopDomain, String token, String inventoryItemGid,
+                           String locationGid, int negativeDelta, String referenceDocumentUri,
+                           String idempotencyKey);
+
+    /**
+     * Back to good (2026-10-10, D11) — the reverse of {@link #moveAvailableToDamaged}: ONE unit moves
+     * damaged → available at the same location (inventoryMoveQuantities; on_hand unchanged). A move,
+     * not a decrement — never part of the named decrement set. Single attempt, classified like
+     * {@link #pushTransferOut}.
+     *
+     * @param quantity must be > 0 — checked BEFORE any network call
+     * @param referenceDocumentUri traced://piece/{piece_id}
+     */
+    void moveDamagedToAvailable(String shopDomain, String token, String inventoryItemGid,
+                                String locationGid, int quantity, String reason,
+                                String referenceDocumentUri, String idempotencyKey);
+
+    /**
+     * Named inventory states (e.g. "available", "damaged") of inventory items at one location — a READ,
+     * used by the 2026-10-10 Lookup-adjust repair's dry run. Items with no level there are left out.
+     */
+    Map<String, Map<String, Integer>> fetchStateQuantities(String shopDomain, String token, String locationGid,
+                                                           List<String> inventoryItemGids, List<String> names);
+
     /** One inventoryItem's current "available" quantity at a location (Part C reconcile read). */
     record InventoryLevel(String inventoryItemGid, int available) {}
 

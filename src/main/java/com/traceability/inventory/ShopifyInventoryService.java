@@ -77,6 +77,15 @@ import java.util.concurrent.CompletableFuture;
  *              2's +1 nets it to zero.
  *   No other courier/loss/order-driven decrement trigger — Shopify owns those.
  *
+ * PIECE SYNC (Lookup adjustments ↔ Shopify, approved 2026-10-10 — supersedes the per-trigger notes
+ * above for void_correction / hold_enter / hold_exit / damage_move): every per-piece Lookup write is a
+ * claim on this table, decided by PieceShopifyRules (countedAtMain for a departure, departureReached
+ * for a return), written 'queued' or 'skipped' + skip_reason INSIDE the adjust transaction and sent ONCE
+ * after commit by pushPieceClaimNow — classified like the transfer push; failed_ambiguous is never
+ * re-sent; the sweep re-sends definite failures (≤ 5 attempts). Adds piece_write_off (−1,
+ * pushPieceWriteOff — the sixth named decrement), piece_write_off_return (+1, Found it), and Back to
+ * good: damage_restore (move damaged → available) or damaged_restore_increment (+1).
+ *
  * LOCATION-TARGET GUARD: the Shopify locationGid used in every mutation call is read
  * directly off the SAME location row that passed the is_fulfillment=true AND
  * shopify_sync_status='linked' checks for the triggering event — there is no code path
@@ -178,11 +187,125 @@ public class ShopifyInventoryService {
      * decides (and cancels the departure claim if it was never sent).
      */
     public Long claimPieceReturn(UUID tenantId, String triggerType, String pieceId, String triggerId) {
-        if (!"hold_exit".equals(triggerType)) {
+        if (!"hold_exit".equals(triggerType) && !"piece_write_off_return".equals(triggerType)) {
             throw new IllegalArgumentException("not a piece return trigger: " + triggerType);
         }
         PieceShopifyRules.Verdict v = PieceShopifyRules.departureReached(jdbc, tenantId, pieceId);
         return insertPieceClaim(tenantId, pieceId, v, 1, triggerType, triggerId);
+    }
+
+    /**
+     * Back to good (D11) — damaged → available, claimed in the caller's transaction before the
+     * transition, keyed piece:restore_event_id. departureReached decides the write:
+     *   the damage move applied → damage_restore (move damaged → available, on_hand unchanged);
+     *   the damage never reached Shopify's available count — damaged at return inspection (never
+     *   restocked), or damaged before the seed, or after a hold whose −1 applied → +1
+     *   (damaged_restore_increment); return-inspection damage goes through the same Shopify-refund
+     *   double-count guard as a restock;
+     *   anything else → a skipped row (failed / skipped damage move: Shopify still counts it).
+     */
+    public Long claimPieceRestore(UUID tenantId, String pieceId, String restoreEventId) {
+        String triggerId = pieceId + ":" + restoreEventId;
+        PieceShopifyRules.Verdict v = PieceShopifyRules.departureReached(jdbc, tenantId, pieceId);
+        if (v.write() && "damage_move".equals(v.via())) {
+            return insertPieceClaim(tenantId, pieceId, v, 0, "damage_restore", triggerId);
+        }
+        if (v.write() && "inspection".equals(v.via())) {
+            return claimInspectionRestore(tenantId, pieceId, v, triggerId);
+        }
+        // Not written: the skipped row is a damaged_restore_increment (the +1 Back to good would have sent).
+        return insertPieceClaim(tenantId, pieceId, v, 1, "damaged_restore_increment", triggerId);
+    }
+
+    /**
+     * Case (a) — a piece damaged at return inspection: Shopify never counted it back, so Back to good is
+     * +1 — unless the merchant already restocked it through a Shopify refund. The SAME guard as a
+     * restock (processReturnInspection): per (order, variant) advisory lock; while the order's refund
+     * restocks of the variant outnumber the units Traced already counted for it (restocks and earlier
+     * inspection restores), record 'skipped_shopify_restocked' and send nothing. A refund restock that
+     * arrives after Traced's +1 raises restocked_twice (ExceptionService counts both trigger types).
+     */
+    private Long claimInspectionRestore(UUID tenantId, String pieceId, PieceShopifyRules.Verdict v, String triggerId) {
+        UUID variantId = jdbc.queryForObject(
+            "SELECT variant_id FROM pieces WHERE id = ? AND tenant_id = ?", UUID.class, pieceId, tenantId);
+        // The order it came back from: the piece's current order, else its latest event naming one.
+        UUID orderId = jdbc.query(
+            "SELECT COALESCE(p.current_order_id, (SELECT e.order_id FROM piece_events e " +
+            "    WHERE e.piece_id = p.id AND e.tenant_id = p.tenant_id AND e.order_id IS NOT NULL " +
+            "    ORDER BY e.occurred_at DESC, e.id DESC LIMIT 1)) " +
+            "FROM pieces p WHERE p.id = ? AND p.tenant_id = ?",
+            rs -> rs.next() ? rs.getObject(1, UUID.class) : null, pieceId, tenantId);
+        if (orderId != null) {
+            jdbc.query("SELECT pg_advisory_xact_lock(hashtextextended(?, 0))",
+                rs -> null, "restock:" + tenantId + ":" + orderId + ":" + variantId);
+            Map<String, Object> counts = jdbc.queryForMap(
+                "SELECT COALESCE((SELECT shopify_refund_restocked_units(o.raw, v.external_id) " +
+                "                 FROM orders o, variants v " +
+                "                 WHERE o.id = ? AND o.tenant_id = ? AND v.id = ? AND v.tenant_id = ?), 0) AS shopify_units, " +
+                "       (SELECT COUNT(*) FROM shopify_inventory_adjustments " +
+                "        WHERE tenant_id = ? AND trigger_type IN ('return_inspection', 'damaged_restore_increment') " +
+                "          AND source_order_id = ? AND variant_id = ? AND trigger_id <> ?) AS traced_units",
+                orderId, tenantId, variantId, tenantId, tenantId, orderId, variantId, triggerId);
+            long shopifyUnits = ((Number) counts.get("shopify_units")).longValue();
+            long tracedUnits  = ((Number) counts.get("traced_units")).longValue();
+            if (shopifyUnits > tracedUnits) {
+                if (isReviewFixtureVariant(tenantId, variantId, "damaged_restore_increment", triggerId)) return null;
+                jdbc.update(
+                    "INSERT INTO shopify_inventory_adjustments " +
+                    "(tenant_id, batch_id, variant_id, location_id, delta, trigger_type, trigger_id, payload, status, " +
+                    " skip_reason, error, source_order_id) " +
+                    "VALUES (?, ?, ?, ?, 1, 'damaged_restore_increment', ?, ?::jsonb, 'skipped_shopify_restocked', ?, ?, ?) " +
+                    "ON CONFLICT (trigger_type, trigger_id, variant_id, location_id) DO NOTHING",
+                    tenantId, UUID.randomUUID(), variantId, v.locationId(), triggerId,
+                    mapper.createObjectNode().put("piece_id", pieceId).put("delta", 1).put("via", "inspection").toString(),
+                    PieceShopifyRules.SHOPIFY_RESTOCKED,
+                    "Already restocked in Shopify by a refund (" + shopifyUnits + " unit(s) restocked, "
+                        + tracedUnits + " counted by Traced before this one) — nothing sent", orderId);
+                log.info("Back to good +1 skipped — the merchant already restocked this unit through a Shopify refund " +
+                         "(piece={} order={} variant={})", pieceId, orderId, variantId);
+                return null;
+            }
+        }
+        Long id = insertPieceClaim(tenantId, pieceId, v, 1, "damaged_restore_increment", triggerId);
+        if (orderId != null) {
+            jdbc.update("UPDATE shopify_inventory_adjustments SET source_order_id = ? " +
+                "WHERE tenant_id = ? AND trigger_type = 'damaged_restore_increment' AND trigger_id = ?",
+                orderId, tenantId, triggerId);
+        }
+        return id;
+    }
+
+    /**
+     * The 2026-10-10 Lookup-adjust repair (D10 — LookupAdjustRepairService, two named pieces only): a
+     * NEW departure claim under a repair key, decided by the same countedAtMain rule as a live
+     * adjustment. In the caller's transaction; returns the claim id to send, or null.
+     */
+    Long claimRepairDeparture(UUID tenantId, String triggerType, String pieceId, String triggerId) {
+        return claimPieceDeparture(tenantId, triggerType, pieceId, triggerId);
+    }
+
+    /**
+     * READ — the named Shopify inventory states of these variants at the tenant's main warehouse
+     * (the repair's dry run). Keyed by variant id; empty when the store or location isn't usable.
+     */
+    Map<UUID, Map<String, Integer>> shopifyStates(UUID tenantId, List<UUID> variantIds, List<String> names) {
+        Map<UUID, Map<String, Integer>> out = new java.util.LinkedHashMap<>();
+        UUID mainId = jdbc.query("SELECT id FROM locations WHERE tenant_id = ? AND is_fulfillment = true",
+            rs -> rs.next() ? rs.getObject(1, UUID.class) : null, tenantId);
+        if (mainId == null) return out;
+        Map<String, UUID> byItem = new java.util.LinkedHashMap<>();
+        Preconditions last = null;
+        for (UUID variantId : variantIds) {
+            Preconditions p = resolvePreconditions(tenantId, variantId, mainId, "repair_read", variantId.toString());
+            if (p.error() != null) throw new IllegalStateException("Shopify read not possible: " + p.error());
+            byItem.put(p.shopifyInventoryItemId(), variantId);
+            last = p;
+        }
+        if (last == null) return out;
+        Map<String, Map<String, Integer>> states = shopify.fetchStateQuantities(last.shopDomain(), last.token(),
+            last.shopifyLocationId(), List.copyOf(byItem.keySet()), names);
+        states.forEach((item, q) -> out.put(byItem.get(item), q));
+        return out;
     }
 
     /** Sends one piece claim after its transaction committed (registered via {@link #afterCommit}). */
@@ -464,7 +587,9 @@ public class ShopifyInventoryService {
             : IncrementRecoveryRules.retryKey(tenantId, triggerType, triggerId, variantId, locationId, attempt);
         String ref = "traced://piece/" + pieceId;
 
-        if ("hold_exit".equals(triggerType)) {
+        boolean increment = "hold_exit".equals(triggerType) || "piece_write_off_return".equals(triggerType)
+            || "damaged_restore_increment".equals(triggerType);
+        if (increment) {
             // Lazy activation (no quantity) — if it fails, the +1 was never sent: definite.
             try {
                 shopify.activateInventoryItem(p.shopDomain(), p.token(), p.shopifyInventoryItemId(), p.shopifyLocationId(),
@@ -483,8 +608,13 @@ public class ShopifyInventoryService {
                     p.shopifyInventoryItemId(), p.shopifyLocationId(), -1, ref, key);
                 case "damage_move" -> shopify.moveAvailableToDamaged(p.shopDomain(), p.token(),
                     p.shopifyInventoryItemId(), p.shopifyLocationId(), 1, "damaged", ref, key);
-                case "hold_exit" -> shopify.pushPieceIncrement(p.shopDomain(), p.token(),
+                case "piece_write_off" -> shopify.pushPieceWriteOff(p.shopDomain(), p.token(),
+                    p.shopifyInventoryItemId(), p.shopifyLocationId(), -1, ref, key);
+                case "damage_restore" -> shopify.moveDamagedToAvailable(p.shopDomain(), p.token(),
                     p.shopifyInventoryItemId(), p.shopifyLocationId(), 1, "correction", ref, key);
+                case "hold_exit", "piece_write_off_return", "damaged_restore_increment" ->
+                    shopify.pushPieceIncrement(p.shopDomain(), p.token(),
+                        p.shopifyInventoryItemId(), p.shopifyLocationId(), 1, "correction", ref, key);
                 default -> throw new IllegalArgumentException("no Shopify call for piece trigger " + triggerType);
             }
             markPieceResult(tenantId, claimId, "applied", null, null, p.shopifyInventoryItemId(), p.shopifyLocationId());
@@ -670,7 +800,7 @@ public class ShopifyInventoryService {
                     "                 FROM orders o, variants v " +
                     "                 WHERE o.id = ? AND o.tenant_id = ? AND v.id = ? AND v.tenant_id = ?), 0) AS shopify_units, " +
                     "       (SELECT COUNT(*) FROM shopify_inventory_adjustments " +
-                    "        WHERE tenant_id = ? AND trigger_type = 'return_inspection' " +
+                    "        WHERE tenant_id = ? AND trigger_type IN ('return_inspection', 'damaged_restore_increment') " +
                     "          AND source_order_id = ? AND variant_id = ? AND trigger_id <> ?) AS traced_units",
                     orderId, tenantId, variantId, tenantId, tenantId, orderId, variantId, triggerId);
                 long shopifyUnits = ((Number) counts.get("shopify_units")).longValue();

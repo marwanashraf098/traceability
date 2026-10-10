@@ -8,6 +8,7 @@ import {
   lookup, LookupResult, PieceLookupResult, TrackingLookupResult, OrderLookupResult, TimelineEvent,
   adjustPiece, releasePieceForAdjust, ADJUST_REASONS, AdjustReason, PieceCommittedError,
   voidPiece, holdPiece, unholdPiece, VOID_REASONS, HOLD_REASONS, VoidReason, HoldReason,
+  restorePiece, RESTORE_REASONS, RestoreReason,
   getRoleFromToken,
 } from '../api'
 import { Badge, Spinner } from '../components/ui'
@@ -239,9 +240,11 @@ function AdjustPanel({ pieceId, pieceStatus, onDone }: AdjustPanelProps) {
   const [error,       setError]       = useState<string | null>(null)
   const [committed,   setCommitted]   = useState<PieceCommittedError | null>(null)
   const [releasing,   setReleasing]   = useState(false)
+  const [restoreOpen, setRestoreOpen] = useState(false)
 
   const isLost      = pieceStatus === 'lost'
   const isOnHold    = pieceStatus === 'on_hold'
+  const isDamaged   = pieceStatus === 'damaged'
   const targets     = isOnHold ? ON_HOLD_TARGETS : AVAILABLE_TARGETS
   const role = getRoleFromToken()
   const canAdjust = role === 'owner' || role === 'manager'
@@ -315,6 +318,39 @@ function AdjustPanel({ pieceId, pieceStatus, onDone }: AdjustPanelProps) {
     }
   }
 
+  function handleRestoreOpen() {
+    setReason(RESTORE_REASONS[0])
+    setNote('')
+    setError(null)
+    setCommitted(null)
+    setRestoreOpen(true)
+  }
+
+  async function handleRestore(e: React.FormEvent) {
+    e.preventDefault()
+    if (reason === 'other' && !note.trim()) return
+    setSubmitting(true)
+    setError(null)
+    setCommitted(null)
+    try {
+      await restorePiece(pieceId, reason as RestoreReason, note.trim() || undefined)
+      setRestoreOpen(false)
+      onDone()
+    } catch (err: unknown) {
+      if (err instanceof Response || (err instanceof Error && err.message.includes('409'))) {
+        try {
+          const body: PieceCommittedError = err instanceof Response
+            ? await err.json()
+            : JSON.parse(err.message.replace(/^409: /, ''))
+          if (body.error === 'PIECE_COMMITTED') { setCommitted(body); return }
+        } catch { /* fall through */ }
+      }
+      setError(err instanceof Error ? err.message : 'Error')
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
   async function handleRelease() {
     if (!committed) return
     setReleasing(true)
@@ -366,6 +402,19 @@ function AdjustPanel({ pieceId, pieceStatus, onDone }: AdjustPanelProps) {
             className="btn-outline text-small"
           >
             {t('adjust.title')}
+          </button>
+        </div>
+      )}
+
+      {/* ── Back to good (damaged pieces) — damaged → available, manager+ ── */}
+      {isDamaged && !restoreOpen && (
+        <div className="flex flex-wrap gap-2">
+          <button
+            data-testid="back-to-good-btn"
+            onClick={handleRestoreOpen}
+            className="btn-brand text-small inline-flex items-center gap-1.5"
+          >
+            <RotateCcw size={12} />{t('adjust.backToGood')}
           </button>
         </div>
       )}
@@ -484,7 +533,68 @@ function AdjustPanel({ pieceId, pieceStatus, onDone }: AdjustPanelProps) {
         </form>
       )}
 
-      {error && !open && !committed && (
+      {/* ── Back to good form ── */}
+      {restoreOpen && !committed && (
+        <form onSubmit={handleRestore} className="space-y-4 rounded-lg border border-warning/30 p-4 bg-surface">
+          <p className="text-caption font-bold text-warning-text uppercase tracking-wider">{t('adjust.managerOnly')}</p>
+          <p className="text-small text-muted">{t('adjust.backToGoodDesc')}</p>
+
+          <div className="space-y-1">
+            <label className="text-caption text-muted uppercase tracking-wider">{t('adjust.reason')}</label>
+            <div className="relative">
+              <select
+                data-testid="restore-reason"
+                value={reason}
+                onChange={e => setReason(e.target.value)}
+                className="input w-full bg-elevated appearance-none pe-9"
+              >
+                {RESTORE_REASONS.map(r => (
+                  <option key={r} value={r}>{t(`adjust.reasonLabel.${r}`)}</option>
+                ))}
+              </select>
+              <ChevronDown size={13} className="pointer-events-none absolute end-3 top-1/2 -translate-y-1/2 text-muted" />
+            </div>
+          </div>
+
+          <div className="space-y-1">
+            <label className="text-caption text-muted uppercase tracking-wider">
+              {t('adjust.note')}
+              {reason === 'other' && <span className="text-danger ms-1">*</span>}
+            </label>
+            <textarea
+              data-testid="restore-note"
+              value={note}
+              onChange={e => setNote(e.target.value)}
+              rows={2}
+              placeholder={t('adjust.notePlaceholder')}
+              required={reason === 'other'}
+              className="input w-full resize-none bg-elevated"
+            />
+          </div>
+
+          {error && <p className="text-small text-danger">{error}</p>}
+
+          <div className="flex gap-2">
+            <button
+              type="submit"
+              disabled={submitting || (reason === 'other' && !note.trim())}
+              data-testid="restore-submit-btn"
+              className="btn-brand text-small"
+            >
+              {submitting ? <Spinner size={14} /> : t('adjust.backToGoodSubmit')}
+            </button>
+            <button
+              type="button"
+              onClick={() => { setRestoreOpen(false); setError(null) }}
+              className="btn-outline text-small"
+            >
+              {t('common.cancel')}
+            </button>
+          </div>
+        </form>
+      )}
+
+      {error && !open && !restoreOpen && !committed && (
         <p className="text-small text-danger">{error}</p>
       )}
     </div>

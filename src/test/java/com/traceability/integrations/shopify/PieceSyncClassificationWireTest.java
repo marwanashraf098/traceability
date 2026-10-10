@@ -29,7 +29,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  *   AMBIGUOUS (ShopifyAmbiguousException — failed_ambiguous, never re-sent):
  *     HTTP 5xx · any other top-level GraphQL error · THROTTLED mixed / with data · read timeout ·
  *     connection refused · no data · unreadable body
- * for pushVoidCorrection, pushHoldEnter (in place), moveAvailableToDamaged and pushPieceIncrement.
+ * for pushVoidCorrection, pushHoldEnter (in place), moveAvailableToDamaged and pushPieceIncrement — and
+ * (C2) pushPieceWriteOff (the sixth named decrement) and moveDamagedToAvailable (Back to good).
  * d1: the damage move now carries referenceDocumentUri (Shopify rejected a null one in production on
  * 2026-10-10 — "Expected value to not be null").
  */
@@ -43,7 +44,7 @@ class PieceSyncClassificationWireTest {
     private static final String LEVEL_READ = "{\"data\":{\"nodes\":[{\"id\":\"gid://shopify/InventoryItem/1\"," +
         "\"inventoryLevel\":{\"quantities\":[{\"name\":\"available\",\"quantity\":3}]}}]}}";
 
-    enum Write { VOID, HOLD, DAMAGE_MOVE, INCREMENT }
+    enum Write { VOID, HOLD, DAMAGE_MOVE, INCREMENT, WRITE_OFF, DAMAGE_RESTORE }
 
     /** Mutation request bodies only (the damage move's baseline read is answered separately). */
     private final List<JsonNode> mutations = new ArrayList<>();
@@ -76,13 +77,17 @@ class PieceSyncClassificationWireTest {
             case HOLD -> g.pushHoldEnter("s.myshopify.com", "t", item, loc, -1, ref, "key-1");
             case DAMAGE_MOVE -> g.moveAvailableToDamaged("s.myshopify.com", "t", item, loc, 1, "damaged", ref, "key-1");
             case INCREMENT -> g.pushPieceIncrement("s.myshopify.com", "t", item, loc, 1, "correction", ref, "key-1");
+            case WRITE_OFF -> g.pushPieceWriteOff("s.myshopify.com", "t", item, loc, -1, ref, "key-1");
+            case DAMAGE_RESTORE -> g.moveDamagedToAvailable("s.myshopify.com", "t", item, loc, 1, "correction", ref, "key-1");
         }
     }
 
-    private static String ok(Write w) { return w == Write.DAMAGE_MOVE ? MOVE_OK : ADJUST_OK; }
+    private static boolean move(Write w) { return w == Write.DAMAGE_MOVE || w == Write.DAMAGE_RESTORE; }
+
+    private static String ok(Write w) { return move(w) ? MOVE_OK : ADJUST_OK; }
 
     private static String userErrors(Write w) {
-        String field = w == Write.DAMAGE_MOVE ? "inventoryMoveQuantities" : "inventoryAdjustQuantities";
+        String field = move(w) ? "inventoryMoveQuantities" : "inventoryAdjustQuantities";
         return "{\"data\":{\"" + field + "\":{\"userErrors\":[{\"message\":\"Not enough available\"}]}}}";
     }
 
@@ -161,6 +166,32 @@ class PieceSyncClassificationWireTest {
         assertThat(change.path("from").path("locationId").asText()).isEqualTo("gid://shopify/Location/9");
         assertThat(change.path("to").path("locationId").asText()).isEqualTo("gid://shopify/Location/9");
         assertThat(change.path("from").path("changeFromQuantity").asInt()).as("baseline read first").isEqualTo(3);
+    }
+
+    @Test
+    void d3_damageRestore_isAPositiveMove_damagedToAvailable() {
+        assertThatThrownBy(() -> gateway(() -> MOVE_OK).moveDamagedToAvailable("s.myshopify.com", "t",
+            "gid://shopify/InventoryItem/1", "gid://shopify/Location/9", 0, "correction", "traced://piece/P1", "k"))
+            .isInstanceOf(IllegalArgumentException.class);
+        assertThat(mutations).isEmpty();
+        send(Write.DAMAGE_RESTORE, () -> MOVE_OK);
+        JsonNode change = mutations.get(0).path("variables").path("input").path("changes").get(0);
+        assertThat(change.path("from").path("name").asText()).isEqualTo("damaged");
+        assertThat(change.path("to").path("name").asText()).isEqualTo("available");
+        assertThat(change.path("quantity").asInt()).isEqualTo(1);
+        assertThat(change.path("from").path("locationId").asText()).isEqualTo(change.path("to").path("locationId").asText());
+    }
+
+    @Test
+    void d4_writeOff_negativeOnly_refusedBeforeAnyRequest() {
+        assertThatThrownBy(() -> gateway(() -> ADJUST_OK).pushPieceWriteOff("s.myshopify.com", "t",
+            "gid://shopify/InventoryItem/1", "gid://shopify/Location/9", 1, "traced://piece/P1", "k"))
+            .isInstanceOf(IllegalArgumentException.class);
+        assertThat(mutations).isEmpty();
+        send(Write.WRITE_OFF, () -> ADJUST_OK);
+        JsonNode change = mutations.get(0).path("variables").path("input").path("changes").get(0);
+        assertThat(change.path("delta").asInt()).isEqualTo(-1);
+        assertThat(change.path("locationId").asText()).isEqualTo("gid://shopify/Location/9");
     }
 
     @Test

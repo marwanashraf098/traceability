@@ -601,7 +601,7 @@ public class ExceptionService {
             "             COUNT(*) FILTER (WHERE sia.status = 'skipped_shopify_restocked') AS offset_units, " +
             "             MAX(sia.applied_at) AS occurred_at " +
             "      FROM shopify_inventory_adjustments sia " +
-            "      WHERE sia.tenant_id = ? AND sia.trigger_type = 'return_inspection' " +
+            "      WHERE sia.tenant_id = ? AND sia.trigger_type IN ('return_inspection', 'damaged_restore_increment') " +
             "        AND sia.source_order_id IS NOT NULL " +
             "      GROUP BY sia.source_order_id, sia.variant_id " +
             "      HAVING COUNT(*) FILTER (WHERE sia.status = 'applied') > 0) a " +

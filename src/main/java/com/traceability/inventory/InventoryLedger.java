@@ -130,7 +130,13 @@ public class InventoryLedger {
         "on_hold:available",
         "on_hold:damaged",
         "on_hold:lost",
-        "on_hold:destroyed"
+        "on_hold:destroyed",
+
+        // D11 (approved 2026-10-10): Back to good — a damaged piece repaired, or graded damaged by
+        // mistake, returns to available. PieceAdjustService.restore() is its only caller (manager+,
+        // reason required); the Shopify side is decided by PieceShopifyRules.departureReached.
+        // destroyed → available and voided → available stay refused (no such edge).
+        "damaged:available"
     );
 
     // ---- SQL ---------------------------------------------------------------
