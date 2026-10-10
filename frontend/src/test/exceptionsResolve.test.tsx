@@ -62,7 +62,7 @@ describe('Exceptions page — resolve submit body regression', () => {
 
     // Scope into the modal so we don't collide with the row's own "Resolve" button,
     // which stays mounted underneath the modal.
-    const modalTitle = await screen.findByText('Resolve exception')
+    const modalTitle = await screen.findByText('Resolve alert')
     const modal = modalTitle.closest('.bg-surface') as HTMLElement
     await user.click(within(modal).getByRole('button', { name: 'Resolve' }))
 

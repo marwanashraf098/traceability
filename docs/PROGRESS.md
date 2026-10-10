@@ -4,6 +4,24 @@
 
 ## Current state
 
+**Sidebar reorg + collapsible rail (2026-10-11, branch `sidebar-reorg` off origin/main ca5f5fa, worktree
+`~/Documents/traceability-sidebar`; committed + pushed, NOT merged, NOT deployed; frontend only, no migration).**
+- **Pre-step finding:** analytics/prelaunch-fixes was already merged to origin/main (cb5f28d); prod's bundle (built
+  2026-10-10 20:57 GMT) contains P3 photos + Back to good and has VITE_ANALYTICS_ENABLED compiled ON — prod ≈ origin/main.
+  The local main checkout was just 56 commits behind. No merge needed.
+- **`components/Sidebar.tsx` (new):** grouped nav config (Overview, Alerts / OUTBOUND / STOCK / RETURNS / ANALYTICS BETA,
+  Settings + identity pinned bottom, nav scrolls with a thin dark scrollbar); icon rail (w-16, all classes min-[900px]:
+  scoped so the phone drawer stays full width); `traced-sidebar` localStorage key, default from matchMedia ≥ 1280 px,
+  expanded when matchMedia is missing (jsdom); Ctrl/⌘+B; rail tooltip + Analytics flyout portalled to <body> (hover +
+  focus; flyout closes on Escape / outside click / navigation). Workers: no toggle, no shortcut, always expanded, same 4
+  items. Analytics stays `role === 'owner' && analyticsEnabled()`, `nav-analytics` testid, `traced-analytics-nav` key.
+- **"Exceptions" → "Alerts"** (values only): nav label (also the Overview KPI), page title, toast, resolve modal,
+  empty state, exchange-mapping back link, pickups custody-gap message. Courier "Delivery exception" labels untouched.
+  `/alerts` = alias of `/exceptions` (same guards). Requests = `nav.exchangesRefunds` value. No nav badges.
+- **Tests:** `sidebarReorg.test.tsx` 14 (revert-checked: worker collapse, persistence, flyout Escape, alias).
+  Existing tests edited (approved): `exceptionsResolve.test.tsx:65` ("Resolve alert"); `returnsExchangesNav.test.tsx`
+  4 swaps → "Requests" / "طلبات الإرجاع" (lines 42, 45, 54, 62). Frontend 901/901 (123 files), tsc + build clean.
+
 **Fix — damage move rejected + sent claims cancelled (2026-10-10, branch `fix/damage-move-ledger-uri` on main 235984e;
 NOT merged, NOT deployed; no migration).** Prod: The Snouts piece 01M3S6YXH3VCHPN2NNFRJSWXRN, claim 213.
 - **Cause 1:** `inventoryMoveQuantities` requires `ledgerDocumentUri` on every terminal whose name isn't "available"

@@ -425,8 +425,19 @@ export default function App() {
             </RequireAuth>
           }
         />
+        {/* Shown as "Alerts" since the sidebar reorg; /alerts is an alias with the same guards. */}
         <Route
           path="/exceptions"
+          element={
+            <RequireAuth>
+              <OwnerOnlyRoute>
+                <Layout><ExceptionsPage /></Layout>
+              </OwnerOnlyRoute>
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="/alerts"
           element={
             <RequireAuth>
               <OwnerOnlyRoute>
