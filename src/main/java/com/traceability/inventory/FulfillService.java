@@ -455,7 +455,6 @@ public class FulfillService {
             return ScanResult.rejected("ALREADY_SHIPPED",
                 "This order's shipment has already left 'created' — pick/pack is no longer possible");
         }
-        requireMerchantOrder(orderId, tenantId);
 
         // 0b. Pick & Pack S3 (Q2): another packer holds a live claim on this order (waybill
         //     mode opened it) — refuse, in queue mode too. Queue mode never takes claims itself;
@@ -480,6 +479,11 @@ public class FulfillService {
         String              pieceId   = (String) piece.get("id");
         UUID                variantId = (UUID)   piece.get("variant_id");
         String              status    = (String) piece.get("status");
+
+        // P4a: the piece is real — before anything touches allocations, the order must be a
+        // merchant order (never a portal pre-connect order). After the piece lookup so a scan with
+        // no tenant context still answers PIECE_NOT_FOUND first (Day9Test n_cross_tenant).
+        requireMerchantOrder(orderId, tenantId);
 
         // 2. DUPLICATE_SCAN: piece already allocated to this order
         Integer dupCount = jdbc.queryForObject(
