@@ -426,7 +426,6 @@ class PortalOrderLeakTest {
         reg("POST /api/v1/public/demo/start",            skip("demo tenant only (DemoSeeder) — never a portal row"));
         reg("POST /api/v1/ops/review-tenant",            skip(R_OPS));
         reg("POST /api/v1/ops/review-tenant/{tenantId}/seed", skip(R_OPS));
-        reg("POST /api/v1/ops/repair/lookup-adjust-2026-10-10/{tenantId}", skip(R_OPS));
         reg("POST /api/v1/admin/incidents/2212102474-pick-error/reverse", skip("one fixed incident order by number — reads merchant_orders"));
         reg("GET /api/v1/test/probe",                    skip("test-only probe controller (src/test/java)"));
     }

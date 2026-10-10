@@ -11,8 +11,8 @@
     "switchLock": "Switch / Lock",
     "lookup": "Search barcode or AWB…",
     "returns": "Scan returns",
-    "exchangesRefunds": "Returns & exchanges",
-    "exceptions": "Exceptions",
+    "exchangesRefunds": "Requests",
+    "exceptions": "Alerts",
     "connections": "Connections",
     "users": "Team",
     "settings": "Settings",
@@ -21,11 +21,17 @@
     "locations": "Locations",
     "shopifyInventory": "Inventory Sync",
     "transfers": "Transfers",
-    "manager": "Manager",
     "setupProgress": "Setup progress",
     "setupCount": "Setup {{done}}/{{total}}",
     "analytics": "Analytics",
-    "new": "NEW",
+    "beta": "BETA",
+    "sections": {
+      "outbound": "Outbound",
+      "stock": "Stock",
+      "returns": "Returns"
+    },
+    "collapse": "Collapse sidebar",
+    "expand": "Expand sidebar",
     "openMenu": "Open menu",
     "closeMenu": "Close menu"
   },
@@ -1165,7 +1171,7 @@
     }
   },
   "exceptions": {
-    "title": "Exceptions"
+    "title": "Alerts"
   },
   "exchange": {
     "mapping": {
@@ -1181,7 +1187,7 @@
       "notFound": "Exchange not found",
       "successTitle": "Exchange mapped",
       "successBody": "Order {{order}} was created for the outbound leg.",
-      "backToExceptions": "Back to Exceptions"
+      "backToExceptions": "Back to Alerts"
     },
     "picker": {
       "title": "Select a variant",
@@ -2592,7 +2598,7 @@
     "sessionOpenRequired": "Session is open — scan packages",
     "orderNumber": "Order",
     "cod": "COD",
-    "pieceExceptions": "{{count}} piece(s) had custody gaps — check Exceptions",
+    "pieceExceptions": "{{count}} piece(s) had custody gaps — check Alerts",
     "noScans": "No packages scanned yet"
   },
   "stocktake": {

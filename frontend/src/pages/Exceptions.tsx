@@ -108,7 +108,7 @@ function ResolveDialog({ item, onClose, onResolved }: { item: ExceptionItem; onC
         method: 'POST',
         body: JSON.stringify({ exceptionType: item.type, subjectKey: item.subject_key, note }),
       })
-      toast({ tone: 'success', message: isAr ? 'تم معالجة الاستثناء' : 'Exception resolved' })
+      toast({ tone: 'success', message: isAr ? 'تم معالجة التنبيه' : 'Alert resolved' })
       onResolved()
     } finally {
       setLoading(false)
@@ -116,7 +116,7 @@ function ResolveDialog({ item, onClose, onResolved }: { item: ExceptionItem; onC
   }
 
   return (
-    <Modal title={isAr ? 'تأكيد المعالجة' : 'Resolve exception'} onClose={onClose}>
+    <Modal title={isAr ? 'تأكيد المعالجة' : 'Resolve alert'} onClose={onClose}>
       <p className="text-body text-muted mb-4">
         {isAr ? item.descriptionAr : item.descriptionEn}
       </p>
@@ -384,7 +384,7 @@ export default function ExceptionsPage() {
           ))}
         </div>
       ) : data?.items.length === 0 ? (
-        <EmptyState message={isAr ? 'لا توجد استثناءات' : 'No exceptions — all clear'} icon="✓" />
+        <EmptyState message={isAr ? 'لا توجد تنبيهات' : 'No alerts — all clear'} icon="✓" />
       ) : (
         <div className="space-y-3">
           {data?.items.map((item, i) => (

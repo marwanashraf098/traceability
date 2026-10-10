@@ -119,4 +119,24 @@
   .nav-item-active {
     @apply nav-item bg-brand/[0.12] text-sidebar-active border-trace-blue;
   }
+
+  /* Icon rail (collapsed sidebar, ≥ 900 px only — the phone drawer is always full width):
+     icons centred; the end padding matches the 3px start accent so the icon sits dead centre. */
+  @media (min-width: 900px) {
+    .sidebar-rail .nav-item {
+      justify-content: center;
+      padding-inline-start: 0;
+      padding-inline-end: 3px;
+    }
+  }
+
+  /* Thin dark scrollbar for the sidebar's scrolling nav (the global one is light). */
+  .sidebar-scroll {
+    scrollbar-width: thin;
+    scrollbar-color: theme('colors.sidebar.line') transparent;
+  }
+  .sidebar-scroll::-webkit-scrollbar { width: 6px; }
+  .sidebar-scroll::-webkit-scrollbar-track { background: transparent; }
+  .sidebar-scroll::-webkit-scrollbar-thumb { background: theme('colors.sidebar.line'); border-radius: 9999px; }
+  .sidebar-scroll::-webkit-scrollbar-thumb:hover { background: #3A424F; }
 }
