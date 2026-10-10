@@ -4,6 +4,45 @@
 
 ## Current state
 
+**Returns portal P4a — pre-connect orders: schema + merchant_orders exclusion + guards + leak test (2026-10-11, branch
+`feat/portal-preconnect-p4a` off origin/main 235984e; NOT merged, NOT deployed). Migration V163.** No behaviour change:
+no code path can create a portal row yet (P4c adds the on-demand fetch).
+- **V163:** `orders.origin` ('shopify' | 'portal_pre_connect', NOT NULL DEFAULT 'shopify'), `shopify_order_gid`
+  (partial UNIQUE (tenant_id, gid)), `portal_fetched_at`, `portal_delivered_at`, `portal_delivery` jsonb (PII — P4b must
+  add it to redaction); CHECK portal ⇒ gid + `internal:portal:` external_id. View `merchant_orders` (security_invoker,
+  `WHERE origin <> 'portal_pre_connect'`, app_user SELECT/INSERT/UPDATE/DELETE). Counts 162 / 107.
+- **Exclusion:** 146 SQL references in 42 files moved to merchant_orders (reads AND updates). 74 references (67 members)
+  stay on `orders`, each classified in `OrdersTableAccessGuardTest.ALLOWLIST`: MUST_INCLUDE 44 members (portal, Requests,
+  Scan returns, returns cases, return detectors + the 5 leg-agnostic shipment detectors, GDPR, Overview exchanges tile),
+  ALREADY_EXCLUDED_BY_KEY 10, SAFE_BY_ID 8, SEEDER 5. Reclassified vs Step 0b: `PreConnectDeliveryFilter.referenceResolves`
+  (matched by number with no internal: filter → excluded); detectDeliveryLimbo / Ndr / MissingAwb / HighAttempts /
+  MissingProviderId (no leg filter → INCLUDE: a portal order's only shipments are its Traced-booked return legs); Overview
+  exceptionsRaw (only forward-detector mirrors → excluded).
+- **Found by the move / leak test, fixed:** a view has no PK, so `GROUP BY o.id` no longer implies o.* (FulfillService.getQueue
+  lists the columns); `orders.id` bare qualifier in matchByPhoneAndCod; FulfillService scan / unscan / complete / unpack /
+  release reach the order via order_items/allocations → `requireMerchantOrder` 404 (scan: after the piece lookup);
+  `ShipmentLinkService.manualLink` linked to any order id → 404; StockAnalytics top return reason read return_request_items
+  with no order join → joins merchant_orders.
+- **Guards:** `OrdersTableAccessGuardTest` (source scan via `OrdersSqlScanner` — literals, `+` concatenation, text blocks;
+  comments ignored; stale entries fail); `MerchantOrdersViewColumnsTest` (columns == orders, security_invoker, grants,
+  portal row invisible/un-updatable through the view under app_user, V163 constraints). CLAUDE.md rule: re-create
+  merchant_orders whenever an orders column changes.
+- **PortalOrderLeakTest:** every /api/** endpoint classified (LIST / BY_ORDER_ID / INCLUDE / SKIP+reason; unclassified or
+  stale fails). LIST bodies (owner + worker) must equal a baseline taken before portal rows existed and carry no sentinel;
+  BY_ORDER_ID answers a portal order exactly as a missing one (404 except 5 documented: exchange attach 400, pack-session
+  ORDER_NOT_OPEN 409) and changes nothing; detectors / not-traced tagger / Bosta candidate sets / reconcile / pickable
+  filter / committed stock run directly with positive controls. Store cutoff NULL in the test on purpose (analytics floors
+  at the cutoff — the test must prove the view, not the floor). Proof: Orders list reverted to `orders` → leak test AND
+  Guard 1 red independently.
+- **Perf (30k-order tenant + 4×8k, before vs after, median):** Orders list +10–15% end-to-end (≈ +3 ms page query: the
+  view filter deforms every row to `origin`, the LAST column of a wide row; ≈ +11 ms JIT on the COUNT when JIT runs).
+  Queue / Overview within noise. A partial index doesn't help; filtering the view on `external_id NOT LIKE
+  'internal:portal:%'` (column 4) brings everything within 4% — needs sign-off (changes the approved view definition +
+  an origin ⇔ prefix CHECK).
+- **Next (P4b):** CRP / exchange webhooks for a portal order don't link today (OrderReference skips internal:%) — P4b must
+  link Traced-booked legs by return_requests.bosta_tracking_number; portal eligibility via portal_delivered_at; pickup area /
+  booking from portal_delivery; GDPR by shopify_order_gid; alerts on portal requests must not deep-link to the order page.
+
 **Returns portal P3 — item photos (2026-10-10, branch `feat/portal-photos-p3` off origin/main b4cf3cf; merged to main,
 no squash; NOT deployed). Migration V162.** Privacy policy 1.4 (item photos; EN only, RP.39 tracks AR). Mockup signed off: `design/Traced_portal_photos_dc.html`. Decisions: 1, 3, 4, 5, 6 as proposed;
 2 changed → `portal_require_photos` NOT NULL DEFAULT **false** (every existing store keeps today's flow) and set **true** at
