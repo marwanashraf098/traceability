@@ -6,7 +6,7 @@ import type { LucideIcon } from 'lucide-react'
 import {
   LayoutDashboard, ShoppingBag, Warehouse, Inbox, ClipboardList, PackageCheck,
   Truck, Repeat, Undo2, AlertTriangle, Home, ArrowRightLeft, Settings, X,
-  BarChart3, LayoutGrid, PanelLeftClose, PanelLeftOpen,
+  BarChart3, Workflow, PanelLeftClose, PanelLeftOpen,
   Gauge, TrendingUp, Tag, Boxes, Route as RouteIcon, Wallet, Users, Receipt,
 } from 'lucide-react'
 import type { Me } from '../api'
@@ -284,7 +284,7 @@ function ModeSwitch({ mode, collapsed, onSelect, tipProps }: {
         collapsed && 'min-[900px]:flex-col min-[900px]:mx-2.5')}>
       {MODES.map(m => {
         const selected = m === mode
-        const Icon = m === 'operations' ? LayoutGrid : BarChart3
+        const Icon = m === 'operations' ? Workflow : BarChart3
         const label = m === 'operations' ? t('nav.modes.operations') : t('nav.analytics')
         return (
           <button key={m} ref={el => { refs.current[m] = el }} type="button" role="tab"

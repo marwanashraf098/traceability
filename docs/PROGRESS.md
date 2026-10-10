@@ -13,7 +13,8 @@ Replaces A's stacked Analytics section (A = 4137bbc on main, not deployed). Ever
   the nav item path by longest prefix (`/transfers/abc` → `/transfers`, never an id or drawer param); Analytics stores
   `/analytics/<ready page>` + `sharedSearch`. Both validated on read, else Overview / Summary. Clicking the active side = no-op.
 - **Switch = tablist** (roving tabindex, MANUAL activation, Home/End, arrows don't wrap so RTL mirroring is real;
-  Up/Down in the rail), nav list = tabpanel, focus-visible ring. Rail: two stacked icons with tooltips. Tabs size to
+  Up/Down in the rail), nav list = tabpanel, focus-visible ring. Rail: two stacked icons (Workflow / BarChart3 — no nav
+  item uses Workflow) with tooltips. Tabs size to
   content (flex-auto) so "Analytics BETA" never truncates.
 - **Analytics list:** Summary / MONEY (Revenue, Order finances, Bosta & payouts) / PRODUCTS (Products & SKUs, Stock
   health) / CUSTOMERS AND DELIVERY (Delivery, Customers); AR المالية / المنتجات / العملاء والتوصيل. `ANALYTICS_PAGES`
