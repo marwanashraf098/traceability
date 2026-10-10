@@ -601,16 +601,17 @@ public class ShopifyInventoryService {
             }
         }
         try {
+            com.fasterxml.jackson.databind.JsonNode response = null;
             switch (triggerType) {
                 case "void_correction" -> shopify.pushVoidCorrection(p.shopDomain(), p.token(),
                     p.shopifyInventoryItemId(), p.shopifyLocationId(), -1, ref, key);
                 case "hold_enter" -> shopify.pushHoldEnter(p.shopDomain(), p.token(),
                     p.shopifyInventoryItemId(), p.shopifyLocationId(), -1, ref, key);
-                case "damage_move" -> shopify.moveAvailableToDamaged(p.shopDomain(), p.token(),
+                case "damage_move" -> response = shopify.moveAvailableToDamaged(p.shopDomain(), p.token(),
                     p.shopifyInventoryItemId(), p.shopifyLocationId(), 1, "damaged", ref, key);
                 case "piece_write_off" -> shopify.pushPieceWriteOff(p.shopDomain(), p.token(),
                     p.shopifyInventoryItemId(), p.shopifyLocationId(), -1, ref, key);
-                case "damage_restore" -> shopify.moveDamagedToAvailable(p.shopDomain(), p.token(),
+                case "damage_restore" -> response = shopify.moveDamagedToAvailable(p.shopDomain(), p.token(),
                     p.shopifyInventoryItemId(), p.shopifyLocationId(), 1, "correction", ref, key);
                 case "hold_exit", "piece_write_off_return", "damaged_restore_increment" ->
                     shopify.pushPieceIncrement(p.shopDomain(), p.token(),
@@ -618,6 +619,11 @@ public class ShopifyInventoryService {
                 default -> throw new IllegalArgumentException("no Shopify call for piece trigger " + triggerType);
             }
             markPieceResult(tenantId, claimId, "applied", null, null, p.shopifyInventoryItemId(), p.shopifyLocationId());
+            if (response != null && !response.isMissingNode() && !response.isNull()) {
+                String body = response.toString();
+                tx.execute(st -> jdbc.update("UPDATE shopify_inventory_adjustments SET shopify_response = ?::jsonb " +
+                    "WHERE id = ? AND tenant_id = ? AND status = 'applied'", body, claimId, tenantId));
+            }
         } catch (ShopifyAmbiguousException e) {
             markPieceResult(tenantId, claimId, "failed_ambiguous", messageOf(e), "ambiguous",
                 p.shopifyInventoryItemId(), p.shopifyLocationId());

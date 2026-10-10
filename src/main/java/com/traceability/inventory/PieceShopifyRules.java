@@ -64,6 +64,12 @@ public final class PieceShopifyRules {
     public static final String DEPARTURE_REMOVED     = "departure_removed";
     public static final String NOT_COUNTED_AT_MAIN   = "not_counted_at_main";
     public static final String SHOPIFY_RESTOCKED     = "shopify_restocked";
+    /** The departure claim was SENT and Shopify definitely rejected it (nothing applied); the piece came
+     *  back before a re-send — the return writes nothing (Shopify never lost the unit). */
+    public static final String DEPARTURE_REJECTED    = "departure_rejected";
+    /** Set on such a departure claim when the piece came back: it is closed, never re-sent. Its
+     *  failure_class and Shopify's error stay as recorded — it was sent, so it is never "cancelled". */
+    public static final String NOT_RESENT_PIECE_RETURNED = "not_resent_piece_returned";
 
     /** Skips nobody can resolve without looking at Shopify — surfaced by the alert. */
     public static final Set<String> NEEDS_CHECK = Set.of(DEPARTURE_AMBIGUOUS, ARRIVAL_UNCONFIRMED);
@@ -272,8 +278,10 @@ public final class PieceShopifyRules {
      * Seeded tenant, piece at main, departure before the seed → reached via "seed" (the seed left the
      * piece out) — except a stock-take write-off, which the seed handles on its push row.
      * A departure claim: applied → reached; superseded_by_seed → reached via "seed" (at main);
-     * queued / failed-and-retryable → cancelled when {@code cancelOpen} (departure_cancelled), else not
-     * reached; pending / failed_ambiguous / a needs-check skip → departure_ambiguous; else not reached.
+     * queued and never sent → cancelled when {@code cancelOpen} (departure_cancelled); sent and definitely
+     * rejected with attempts left → closed when {@code cancelOpen} (departure_rejected — never "cancelled":
+     * a claim with send_started_at set is never cancelled); pending (sent, no outcome) / failed_ambiguous /
+     * a needs-check skip → departure_ambiguous (alert, no Shopify call); else not reached.
      */
     public static Reach reach(JdbcTemplate jdbc, UUID tenantId, String pieceId, boolean cancelOpen) {
         Piece p = piece(jdbc, tenantId, pieceId);
@@ -312,6 +320,7 @@ public final class PieceShopifyRules {
         return switch (claimStatus) {
             case "applied"       -> Reach.yes(claimType);
             case "cancelled_now" -> Reach.no(DEPARTURE_CANCELLED);
+            case "rejected_now"  -> Reach.no(DEPARTURE_REJECTED);
             case "ambiguous"     -> Reach.no(DEPARTURE_AMBIGUOUS);
             case ShopifyInventoryService.SUPERSEDED_BY_SEED -> atMain ? Reach.yes("seed") : Reach.no(NOT_AT_MAIN);
             default              -> Reach.no(DEPARTURE_NOT_REACHED);
@@ -355,13 +364,22 @@ public final class PieceShopifyRules {
             args.add(pieceId + ":%");
             args.add(d.occurredAt());
         }
-        // Cancel what was never sent: queued, or failed definitively with attempts left (the sweep
-        // would otherwise send it later). Locks the row — a concurrent push either won (pending) or waits.
+        // Only a claim that was NEVER SENT may be cancelled: queued with no send_started_at (a crash
+        // before the after-commit push). Locks the row — a concurrent push either already took it to
+        // pending (→ ambiguous below) or waits and then finds it cancelled.
         int cancelled = !cancelOpen ? 0 : jdbc.update(
             "UPDATE shopify_inventory_adjustments sia SET status = 'cancelled', " +
             "    error = 'Piece back to good before this was sent — never sent' " +
             "WHERE sia.tenant_id = ? AND sia.trigger_type = ? AND " + keySql + " AND " + LIVE_SQL +
-            "  AND (sia.status = 'queued' OR (sia.status = 'failed' AND sia.attempt_count < " + MAX_ATTEMPTS + "))",
+            "  AND sia.status = 'queued' AND sia.send_started_at IS NULL",
+            args.toArray());
+        // A claim that WAS sent and definitely rejected (nothing applied) but still has attempts left: the
+        // sweep would re-send it now that the piece is back — close it instead. It keeps its failure_class
+        // and Shopify's error; it is never relabelled "cancelled" / "never sent".
+        int closed = !cancelOpen ? 0 : jdbc.update(
+            "UPDATE shopify_inventory_adjustments sia SET status = 'skipped', skip_reason = '" + NOT_RESENT_PIECE_RETURNED + "' " +
+            "WHERE sia.tenant_id = ? AND sia.trigger_type = ? AND " + keySql + " AND " + LIVE_SQL +
+            "  AND sia.status = 'failed' AND sia.attempt_count < " + MAX_ATTEMPTS,
             args.toArray());
         List<Map<String, Object>> rows = jdbc.queryForList(
             "SELECT sia.status, sia.skip_reason FROM shopify_inventory_adjustments sia " +
@@ -377,6 +395,7 @@ public final class PieceShopifyRules {
         if (applied) return "applied";
         if (ambiguous) return "ambiguous";
         if (cancelled > 0) return "cancelled_now";
+        if (closed > 0) return "rejected_now";
         if (superseded) return ShopifyInventoryService.SUPERSEDED_BY_SEED;
         return "not_reached";
     }

@@ -4,6 +4,18 @@
 
 ## Current state
 
+**Fix — damage move rejected + sent claims cancelled (2026-10-10, branch `fix/damage-move-ledger-uri` on main 235984e;
+NOT merged, NOT deployed; no migration).** Prod: The Snouts piece 01M3S6YXH3VCHPN2NNFRJSWXRN, claim 213.
+- **Cause 1:** `inventoryMoveQuantities` requires `ledgerDocumentUri` on every terminal whose name isn't "available"
+  (InventoryMoveQuantityTerminalInput, 2026-04). The damage move's `to: damaged` had none → userError → definite
+  'failed' (failure_class rejected). Same gap on Back to good's `from: damaged`. Fixed in `sendPieceMove`.
+- **Cause 2:** Back to good then "cancelled" that SENT, rejected claim and overwrote Shopify's error with "never sent".
+  Now only a queued claim with no `send_started_at` is cancellable; sent + definite → skipped `not_resent_piece_returned`
+  (error and failure_class kept), return skip `departure_rejected`; sent with no outcome (pending) → `departure_ambiguous`
+  + CRITICAL alert, no call. Moves store Shopify's payload in `shopify_response`.
+- **Prod row correction (ops note, NOT written):** claim 213 → status 'skipped', skip_reason 'not_resent_piece_returned',
+  failure_class 'rejected', error = Shopify's userError from the app log at ~22:12:31; claim 214 skip_reason
+  'departure_rejected'. Shopify unchanged by 213 — checked by hand 2026-10-10: PTGREEN-2 damaged = 0, the move never applied.
 **Returns portal P3 — item photos (2026-10-10, branch `feat/portal-photos-p3` off origin/main b4cf3cf; merged to main,
 no squash; NOT deployed). Migration V162.** Privacy policy 1.4 (item photos; EN only, RP.39 tracks AR). Mockup signed off: `design/Traced_portal_photos_dc.html`. Decisions: 1, 3, 4, 5, 6 as proposed;
 2 changed → `portal_require_photos` NOT NULL DEFAULT **false** (every existing store keeps today's flow) and set **true** at
