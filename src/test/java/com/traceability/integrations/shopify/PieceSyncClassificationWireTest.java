@@ -166,6 +166,18 @@ class PieceSyncClassificationWireTest {
         assertThat(change.path("from").path("locationId").asText()).isEqualTo("gid://shopify/Location/9");
         assertThat(change.path("to").path("locationId").asText()).isEqualTo("gid://shopify/Location/9");
         assertThat(change.path("from").path("changeFromQuantity").asInt()).as("baseline read first").isEqualTo(3);
+        // Shopify requires a ledgerDocumentUri on every non-"available" terminal (2026-10-10 prod rejection).
+        assertThat(change.path("to").path("ledgerDocumentUri").asText()).isEqualTo("traced://piece/P1");
+        assertThat(change.path("from").has("ledgerDocumentUri")).as("available needs none").isFalse();
+    }
+
+    @Test
+    void d5_moves_returnShopifysPayload() {
+        assertThat(gateway(() -> MOVE_OK).moveAvailableToDamaged("s.myshopify.com", "t", "gid://shopify/InventoryItem/1",
+            "gid://shopify/Location/9", 1, "damaged", "traced://piece/P1", "k").path("inventoryAdjustmentGroup")
+            .path("createdAt").asText()).isEqualTo("2026-10-10T00:00:00Z");
+        assertThat(gateway(() -> MOVE_OK).moveDamagedToAvailable("s.myshopify.com", "t", "gid://shopify/InventoryItem/1",
+            "gid://shopify/Location/9", 1, "correction", "traced://piece/P1", "k").path("userErrors").isArray()).isTrue();
     }
 
     @Test
@@ -180,6 +192,8 @@ class PieceSyncClassificationWireTest {
         assertThat(change.path("to").path("name").asText()).isEqualTo("available");
         assertThat(change.path("quantity").asInt()).isEqualTo(1);
         assertThat(change.path("from").path("locationId").asText()).isEqualTo(change.path("to").path("locationId").asText());
+        assertThat(change.path("from").path("ledgerDocumentUri").asText()).isEqualTo("traced://piece/P1");
+        assertThat(change.path("to").has("ledgerDocumentUri")).as("available needs none").isFalse();
     }
 
     @Test

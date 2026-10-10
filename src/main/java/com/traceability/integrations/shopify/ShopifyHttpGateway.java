@@ -882,7 +882,7 @@ class ShopifyHttpGateway implements ShopifyGateway {
             """;
 
     @Override
-    public void moveAvailableToDamaged(String shopDomain, String token, String inventoryItemGid,
+    public JsonNode moveAvailableToDamaged(String shopDomain, String token, String inventoryItemGid,
                                         String locationGid, int quantity, String reason,
                                         String referenceDocumentUri, String idempotencyKey) {
         if (quantity <= 0) {
@@ -898,12 +898,12 @@ class ShopifyHttpGateway implements ShopifyGateway {
             // Only a read failed — the move was never sent: definite.
             throw new ShopifyException("Damage move not sent — could not read the current quantity: " + e.getMessage(), e);
         }
-        sendPieceMove("Damage move", shopDomain, token, inventoryItemGid, locationGid, quantity, reason,
+        return sendPieceMove("Damage move", shopDomain, token, inventoryItemGid, locationGid, quantity, reason,
             "available", fromBaseline, "damaged", referenceDocumentUri, idempotencyKey);
     }
 
     @Override
-    public void moveDamagedToAvailable(String shopDomain, String token, String inventoryItemGid,
+    public JsonNode moveDamagedToAvailable(String shopDomain, String token, String inventoryItemGid,
                                        String locationGid, int quantity, String reason,
                                        String referenceDocumentUri, String idempotencyKey) {
         if (quantity <= 0) {
@@ -911,7 +911,7 @@ class ShopifyHttpGateway implements ShopifyGateway {
         }
         // No baseline read for "damaged" — both sides opt out of compare-and-swap (null); an
         // insufficient damaged quantity comes back as a userError (definite).
-        sendPieceMove("Damage restore", shopDomain, token, inventoryItemGid, locationGid, quantity, reason,
+        return sendPieceMove("Damage restore", shopDomain, token, inventoryItemGid, locationGid, quantity, reason,
             "damaged", null, "available", referenceDocumentUri, idempotencyKey);
     }
 
@@ -954,18 +954,23 @@ class ShopifyHttpGateway implements ShopifyGateway {
     }
 
     /** One piece moved between two states at the same location (inventoryMoveQuantities) — the
-     *  damage move (available → damaged) and its reverse. Never a decrement: on_hand is unchanged. */
-    private void sendPieceMove(String label, String shopDomain, String token, String inventoryItemGid,
+     *  damage move (available → damaged) and its reverse. Never a decrement: on_hand is unchanged.
+     *  Shopify requires a ledgerDocumentUri on every terminal whose quantity name is not "available"
+     *  (InventoryMoveQuantityTerminalInput, 2026-04 — a userError without it; the production damage
+     *  moves of 2026-10-10 failed on exactly this). Returns the inventoryMoveQuantities payload. */
+    private JsonNode sendPieceMove(String label, String shopDomain, String token, String inventoryItemGid,
                                String locationGid, int quantity, String reason, String fromName,
                                Integer fromBaseline, String toName, String referenceDocumentUri,
                                String idempotencyKey) {
         ObjectNode from = mapper.createObjectNode().put("name", fromName).put("locationId", locationGid);
+        if (!"available".equals(fromName)) from.put("ledgerDocumentUri", referenceDocumentUri);
         if (fromBaseline != null) {
             from.put("changeFromQuantity", fromBaseline);
         } else {
             from.putNull("changeFromQuantity");
         }
         ObjectNode to = mapper.createObjectNode().put("name", toName).put("locationId", locationGid);
+        if (!"available".equals(toName)) to.put("ledgerDocumentUri", referenceDocumentUri);
         to.putNull("changeFromQuantity");
         ObjectNode change = mapper.createObjectNode()
             .put("inventoryItemId", inventoryItemGid)
@@ -986,6 +991,7 @@ class ShopifyHttpGateway implements ShopifyGateway {
             throw new ShopifyException("inventoryMoveQuantities failed: "
                 + userErrors.get(0).path("message").asText("unknown error"));
         }
+        return data.path("inventoryMoveQuantities");
     }
 
     /**

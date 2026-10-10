@@ -38,7 +38,7 @@ import static org.mockito.Mockito.*;
  *   d1 damage → one available→damaged move carrying traced://piece/{id}
  *   n1 linked-but-unseeded hold → skipped not_seeded     n2 unlinked void → skipped main_warehouse_not_linked
  *   n3 piece at another location → skipped not_at_main (a row, never a silent return)
- *   h1 hold_enter failed (definite) → unhold cancels it, no +1, the sweep never sends it
+ *   h1 hold_enter failed (definite) → unhold closes it (not "cancelled" — it was sent), no +1, never re-sent
  *   h2 hold_enter skipped → unhold: no +1                h3 hold_enter ambiguous → unhold skipped + alert
  *   h4 held before the seed → unhold +1 (the seed left it out)
  *   r1 timeout → failed_ambiguous: never re-sent by the sweep or by hand; alert
@@ -192,7 +192,7 @@ class PieceShopifySyncTest {
     // ── hold exit gated by the departure (D5) ─────────────────────────────────────
 
     @Test
-    void h1_holdEnterFailedDefinite_unhold_cancelsIt_noPlusOne_neverSentLater() throws Exception {
+    void h1_holdEnterFailedDefinite_unhold_closesItNotCancelled_noPlusOne_neverResent() throws Exception {
         T t = tenant("h1", true, true);
         String piece = piece(t, "available", null, true);
         doThrow(new ShopifyException("Hold enter HTTP 422")).when(shopifyGateway)
@@ -202,9 +202,12 @@ class PieceShopifySyncTest {
 
         as(t, () -> adjust.unhold(piece, t.user()));
 
-        assertThat(claim(t, "hold_enter", piece)).containsEntry("status", "cancelled");
+        // Sent and definitely rejected: closed (never re-sent), never relabelled "cancelled" / "never sent".
+        assertThat(claim(t, "hold_enter", piece)).containsEntry("status", "skipped")
+            .containsEntry("skip_reason", "not_resent_piece_returned").containsEntry("failure_class", "rejected")
+            .containsEntry("error", "Hold enter HTTP 422");
         assertThat(claim(t, "hold_exit", piece)).containsEntry("status", "skipped")
-            .containsEntry("skip_reason", "departure_cancelled");
+            .containsEntry("skip_reason", "departure_rejected");
         as(t, () -> inventory.sweepPieceClaims(t.tenant()));
         verify(shopifyGateway, times(1)).pushHoldEnter(any(), any(), any(), any(), anyInt(), any(), any());
         verify(shopifyGateway, never()).pushPieceIncrement(any(), any(), any(), any(), anyInt(), any(), any(), any());
@@ -489,7 +492,7 @@ class PieceShopifySyncTest {
     }
 
     private Map<String, Object> claim(T t, String triggerType, String piece) {
-        return jdbc.queryForMap("SELECT trigger_id, status, skip_reason, attempt_count, location_id " +
+        return jdbc.queryForMap("SELECT trigger_id, status, skip_reason, attempt_count, location_id, failure_class, error " +
             "FROM shopify_inventory_adjustments WHERE tenant_id = ? AND trigger_type = ? " +
             "AND split_part(trigger_id, ':', 1) = ?", t.tenant(), triggerType, piece);
     }

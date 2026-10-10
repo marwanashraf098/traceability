@@ -324,7 +324,9 @@ public interface ShopifyGateway {
      *
      * @param quantity must be > 0
      * @param referenceDocumentUri traced://piece/{piece_id} — Shopify requires it on inventoryMoveQuantities
-     *                       (a null one was rejected in production, 2026-10-10)
+     *                       (a null one was rejected in production, 2026-10-10); also sent as the
+     *                       ledgerDocumentUri of the "damaged" terminal, which Shopify requires too
+     * @return the inventoryMoveQuantities payload (stored on the claim as shopify_response)
      * @param idempotencyKey the mutation-level @idempotent key (mandatory as of API 2026-04) —
      *                       see {@link #idempotencyKey}. Must be STABLE across retries of the
      *                       same logical operation (Shopify dedupes server-side on this key).
@@ -332,7 +334,7 @@ public interface ShopifyGateway {
      * @throws ShopifyException         definite: nothing was applied (never retry-forced by the caller)
      * @throws ShopifyAmbiguousException no confirmed response — the caller must never re-send it
      */
-    void moveAvailableToDamaged(String shopDomain, String token, String inventoryItemGid,
+    JsonNode moveAvailableToDamaged(String shopDomain, String token, String inventoryItemGid,
                                  String locationGid, int quantity, String reason,
                                  String referenceDocumentUri, String idempotencyKey);
 
@@ -502,7 +504,7 @@ public interface ShopifyGateway {
      * @param quantity must be > 0 — checked BEFORE any network call
      * @param referenceDocumentUri traced://piece/{piece_id}
      */
-    void moveDamagedToAvailable(String shopDomain, String token, String inventoryItemGid,
+    JsonNode moveDamagedToAvailable(String shopDomain, String token, String inventoryItemGid,
                                 String locationGid, int quantity, String reason,
                                 String referenceDocumentUri, String idempotencyKey);
 

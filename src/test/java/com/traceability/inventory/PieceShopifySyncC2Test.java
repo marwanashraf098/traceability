@@ -43,8 +43,8 @@ import static org.mockito.Mockito.*;
  *
  *   w1/w2 Lookup Lost / Destroyed of a counted piece → one piece_write_off claim, one pushPieceWriteOff(−1)
  *   f1 Found it after an applied write-off → +1      f2 after a write-off that never pushed → nothing
- *   f3 Found it while the write-off is still retryable → cancelled, never sent
- *   f4 stock-take found after a pushed Lookup Lost → +1    f5 … while the write-off is retryable → cancelled
+ *   f3 Found it after a sent, rejected write-off (attempts left) → closed, never re-sent
+ *   f4 stock-take found after a pushed Lookup Lost → +1    f5 … after a sent, rejected write-off → closed
  *   m1 'leave'-mode piece at another location → Lost → −1 at MAIN
  *   m2 'remove' move pushed → skipped departure_removed   m3 move not confirmed → departure_ambiguous + alert
  *   m4 moved before the seed → not_counted_at_main
@@ -55,6 +55,9 @@ import static org.mockito.Mockito.*;
  *   b6 ambiguous damage move → skipped + alert         b7 concurrent double Back to good → one call
  *   b8 destroyed / voided → available still refused    b9 event, condition, custody phrase
  *   rp1 repair dry run: reads Shopify, zero writes; apply sends each correction once, a re-run nothing
+ *   s1–s5 (2026-10-10 prod bug) a SENT departure claim is never cancelled: sent with no outcome → the return is
+ *      departure_ambiguous + CRITICAL alert, no call (damage move, write-off); never sent → cancelled; damage move
+ *      timeout → failed_ambiguous; success → applied with Shopify's response stored
  *   rp2 the repair is refused for any tenant but The Snouts — even one holding the two pieces — before any read
  *   a1 every return claim (hold_exit, piece_write_off_return, damaged_restore_increment, damage_restore), ambiguous
  *      or exhausted, raises the CRITICAL void_hold_sync_failed alert
@@ -182,7 +185,7 @@ class PieceShopifySyncC2Test {
     }
 
     @Test
-    void f3_foundItWhileWriteOffRetryable_cancelled_neverSent() throws Exception {
+    void f3_foundItAfterSentRejectedWriteOff_closedNotCancelled_neverResent() throws Exception {
         T t = tenant("f3", true);
         String piece = piece(t, "available", true);
         doThrow(new ShopifyException("Piece write-off HTTP 422")).when(shopifyGateway)
@@ -193,8 +196,10 @@ class PieceShopifySyncC2Test {
         as(t, () -> adjust.adjustPiece(piece, "available", "cycle_count_missing", null, t.user()));
         as(t, () -> inventory.sweepPieceClaims(t.tenant()));
 
-        assertThat(claim(t, "piece_write_off", piece)).containsEntry("status", "cancelled");
-        assertThat(claim(t, "piece_write_off_return", piece)).containsEntry("skip_reason", "departure_cancelled");
+        assertThat(claim(t, "piece_write_off", piece)).containsEntry("status", "skipped")
+            .containsEntry("skip_reason", "not_resent_piece_returned").containsEntry("failure_class", "rejected")
+            .containsEntry("error", "Piece write-off HTTP 422");
+        assertThat(claim(t, "piece_write_off_return", piece)).containsEntry("skip_reason", "departure_rejected");
         verify(shopifyGateway, times(1)).pushPieceWriteOff(any(), any(), any(), any(), anyInt(), any(), any());
         verify(shopifyGateway, never()).pushPieceIncrement(any(), any(), any(), any(), anyInt(), any(), any(), any());
     }
@@ -224,7 +229,7 @@ class PieceShopifySyncC2Test {
     }
 
     @Test
-    void f5_stockTakeFoundWhileWriteOffRetryable_cancelled_neverSent() throws Exception {
+    void f5_stockTakeFoundAfterSentRejectedWriteOff_closedNotCancelled() throws Exception {
         T t = tenant("f5", true);
         String piece = piece(t, "available", true);
         String other = piece(t, "available", true);
@@ -242,9 +247,131 @@ class PieceShopifySyncC2Test {
         as(t, () -> inventory.sweepPieceClaims(t.tenant()));
 
         assertThat(status(piece)).isEqualTo("available");
-        assertThat(claim(t, "piece_write_off", piece)).containsEntry("status", "cancelled");
+        assertThat(claim(t, "piece_write_off", piece)).containsEntry("status", "skipped")
+            .containsEntry("skip_reason", "not_resent_piece_returned").containsEntry("failure_class", "rejected");
         verify(shopifyGateway, times(1)).pushPieceWriteOff(any(), any(), any(), any(), anyInt(), any(), any());
         assertThat(count(t, "trigger_type = 'stock_take_found'")).as("never reached Shopify — no +1").isZero();
+    }
+
+    // ── 2026-10-10 prod bug: a SENT claim is never cancelled ──────────────────────
+
+    /** The prod case: the damage move is sent and has no outcome yet when Back to good runs. */
+    @Test
+    void s1_damageMoveSentNoOutcome_backToGood_ambiguousSkip_criticalAlert_noCall() throws Exception {
+        T t = tenant("s1", true);
+        String piece = piece(t, "available", true);
+        CountDownLatch inFlight = new CountDownLatch(1), release = new CountDownLatch(1);
+        doAnswer(inv -> { inFlight.countDown(); release.await(20, TimeUnit.SECONDS); return null; })
+            .when(shopifyGateway).moveAvailableToDamaged(any(), any(), any(), any(), anyInt(), any(), any(), any());
+        try {
+            as(t, () -> adjust.adjustPiece(piece, "damaged", "damaged_in_storage", null, t.user()));
+            assertThat(inFlight.await(10, TimeUnit.SECONDS)).isTrue();
+            assertThat(claim(t, "damage_move", piece)).containsEntry("status", "pending");
+
+            as(t, () -> adjust.restore(piece, "repaired", null, t.user()));
+
+            assertThat(claim(t, "damage_move", piece)).as("sent — never cancelled").containsEntry("status", "pending");
+            Map<String, Object> skip = claim(t, "damaged_restore_increment", piece);
+            assertThat(skip).containsEntry("status", "skipped").containsEntry("skip_reason", "departure_ambiguous");
+            Map<String, Object> alert = alertFor(t, "damaged_restore_increment", (String) skip.get("trigger_id"));
+            assertThat(alert).isNotNull();
+            assertThat(alert.get("severity")).isEqualTo("CRITICAL");
+            verify(shopifyGateway, never()).moveDamagedToAvailable(any(), any(), any(), any(), anyInt(), any(), any(), any());
+            verify(shopifyGateway, never()).pushPieceIncrement(any(), any(), any(), any(), anyInt(), any(), any(), any());
+        } finally {
+            release.countDown();
+        }
+    }
+
+    /** Never sent (a crash before the after-commit push): cancelling is still allowed. */
+    @Test
+    void s2_damageMoveQueuedNeverSent_backToGood_cancelled() throws Exception {
+        T t = tenant("s2", true);
+        String piece = piece(t, "damaged", true);
+        String damageEventId = UUID.randomUUID().toString();
+        jdbc.update("INSERT INTO piece_events (tenant_id, piece_id, event_type, from_status, to_status, metadata, occurred_at) " +
+            "VALUES (?, ?, 'adjusted', 'available', 'damaged', ?::jsonb, now() - interval '5 minutes')",
+            t.tenant(), piece, "{\"reason\":\"damaged_in_storage\",\"damage_event_id\":\"" + damageEventId + "\"}");
+        jdbc.update("INSERT INTO shopify_inventory_adjustments (tenant_id, batch_id, variant_id, location_id, delta, " +
+            "trigger_type, trigger_id, status, created_at) VALUES (?, ?, ?, ?, 0, 'damage_move', ?, 'queued', now())",
+            t.tenant(), UUID.randomUUID(), t.variant(), t.location(), piece + ":" + damageEventId);
+
+        as(t, () -> adjust.restore(piece, "repaired", null, t.user()));
+        as(t, () -> inventory.sweepPieceClaims(t.tenant()));
+
+        assertThat(claim(t, "damage_move", piece)).containsEntry("status", "cancelled")
+            .containsEntry("error", "Piece back to good before this was sent — never sent");
+        assertThat(claim(t, "damaged_restore_increment", piece)).containsEntry("skip_reason", "departure_cancelled");
+        verifyNoWrites();
+    }
+
+    @Test
+    void s3_damageMoveTimeout_failedAmbiguous_criticalAlert() throws Exception {
+        T t = tenant("s3", true);
+        String piece = piece(t, "available", true);
+        doThrow(new ShopifyAmbiguousException("Damage move: no confirmed response")).when(shopifyGateway)
+            .moveAvailableToDamaged(any(), any(), any(), any(), anyInt(), any(), any(), any());
+
+        as(t, () -> adjust.adjustPiece(piece, "damaged", "damaged_in_storage", null, t.user()));
+
+        awaitStatus(t, "damage_move", piece, "failed_ambiguous");
+        Map<String, Object> c = claim(t, "damage_move", piece);
+        assertThat(c).containsEntry("failure_class", "ambiguous");
+        assertThat(alertFor(t, "damage_move", (String) c.get("trigger_id"))).isNotNull();
+        as(t, () -> inventory.sweepPieceClaims(t.tenant()));
+        verify(shopifyGateway, times(1)).moveAvailableToDamaged(any(), any(), any(), any(), anyInt(), any(), any(), any());
+    }
+
+    @Test
+    void s4_damageMoveSuccess_appliedWithShopifyResponseStored() throws Exception {
+        T t = tenant("s4", true);
+        String piece = piece(t, "available", true);
+        com.fasterxml.jackson.databind.JsonNode answer = mapper.readTree(
+            "{\"inventoryAdjustmentGroup\":{\"createdAt\":\"2026-10-10T19:12:31Z\"},\"userErrors\":[]}");
+        when(shopifyGateway.moveAvailableToDamaged(any(), any(), any(), any(), anyInt(), any(), any(), any())).thenReturn(answer);
+
+        as(t, () -> adjust.adjustPiece(piece, "damaged", "damaged_in_storage", null, t.user()));
+
+        awaitStatus(t, "damage_move", piece, "applied");
+        Map<String, Object> row = jdbc.queryForMap("SELECT applied_at, shopify_response::text AS r FROM shopify_inventory_adjustments " +
+            "WHERE tenant_id = ? AND trigger_type = 'damage_move' AND split_part(trigger_id, ':', 1) = ?", t.tenant(), piece);
+        for (int i = 0; i < 100 && row.get("r") == null; i++) {
+            Thread.sleep(25);
+            row = jdbc.queryForMap("SELECT applied_at, shopify_response::text AS r FROM shopify_inventory_adjustments " +
+                "WHERE tenant_id = ? AND trigger_type = 'damage_move' AND split_part(trigger_id, ':', 1) = ?", t.tenant(), piece);
+        }
+        assertThat(row.get("applied_at")).isNotNull();
+        assertThat(mapper.readTree((String) row.get("r"))).isEqualTo(answer);
+    }
+
+    /** The same rule for the other departures: a sent piece_write_off with no outcome → Found it ambiguous. */
+    @Test
+    void s5_writeOffSentNoOutcome_foundIt_ambiguousSkip_criticalAlert_noCall() throws Exception {
+        T t = tenant("s5", true);
+        String piece = piece(t, "available", true);
+        CountDownLatch inFlight = new CountDownLatch(1), release = new CountDownLatch(1);
+        doAnswer(inv -> { inFlight.countDown(); release.await(20, TimeUnit.SECONDS); return null; })
+            .when(shopifyGateway).pushPieceWriteOff(any(), any(), any(), any(), anyInt(), any(), any());
+        try {
+            as(t, () -> adjust.adjustPiece(piece, "lost", "theft_suspected", null, t.user()));
+            assertThat(inFlight.await(10, TimeUnit.SECONDS)).isTrue();
+
+            as(t, () -> adjust.adjustPiece(piece, "available", "theft_suspected", null, t.user()));
+
+            assertThat(claim(t, "piece_write_off", piece)).as("sent — never cancelled").containsEntry("status", "pending");
+            Map<String, Object> skip = claim(t, "piece_write_off_return", piece);
+            assertThat(skip).containsEntry("skip_reason", "departure_ambiguous");
+            assertThat(alertFor(t, "piece_write_off_return", (String) skip.get("trigger_id"))).isNotNull();
+            verify(shopifyGateway, never()).pushPieceIncrement(any(), any(), any(), any(), anyInt(), any(), any(), any());
+        } finally {
+            release.countDown();
+        }
+    }
+
+    private Map<String, Object> alertFor(T t, String trigger, String triggerId) {
+        String key = "void_hold_sync_failed:" + trigger + ":" + triggerId;
+        for (Map<String, Object> a : alerts(t, "void_hold_sync_failed")) if (key.equals(a.get("subject_key"))) return a;
+        return null;
     }
 
     // ── D4: pieces away from the main warehouse ───────────────────────────────────
@@ -397,8 +524,10 @@ class PieceShopifySyncC2Test {
         as(t, () -> adjust.restore(piece, "repaired", null, t.user()));
 
         assertThat(claim(t, "damaged_restore_increment", piece)).containsEntry("status", "skipped")
-            .containsEntry("skip_reason", "departure_cancelled");
-        assertThat(claim(t, "damage_move", piece)).containsEntry("status", "cancelled");
+            .containsEntry("skip_reason", "departure_rejected");
+        assertThat(claim(t, "damage_move", piece)).containsEntry("status", "skipped")
+            .containsEntry("skip_reason", "not_resent_piece_returned").containsEntry("failure_class", "rejected")
+            .containsEntry("error", "inventoryMoveQuantities failed: Not enough available");
         Thread.sleep(300);
         verifyNoWrites();
     }
@@ -832,7 +961,7 @@ class PieceShopifySyncC2Test {
     }
 
     private Map<String, Object> claim(T t, String triggerType, String piece) {
-        return jdbc.queryForMap("SELECT trigger_id, status, skip_reason, delta, location_id " +
+        return jdbc.queryForMap("SELECT trigger_id, status, skip_reason, delta, location_id, failure_class, error " +
             "FROM shopify_inventory_adjustments WHERE tenant_id = ? AND trigger_type = ? " +
             "AND split_part(trigger_id, ':', 1) = ?", t.tenant(), triggerType, piece);
     }
