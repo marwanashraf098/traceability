@@ -289,6 +289,19 @@ public class PortalService {
      * window; null otherwise. Shared by lookup and submission (which re-checks from scratch).
      */
     private Timestamp deliveredWithinWindow(UUID tenantId, UUID orderId) {
+        // P4b: a portal pre-connect order (V163) has no forward shipment in Traced — its window is
+        // measured on the original Bosta delivery's time, stored when it was fetched. Never a forward leg.
+        List<Map<String, Object>> portal = jdbc.queryForList(
+            "SELECT o.portal_delivered_at AS delivered_at, " +
+            "       (now() - o.portal_delivered_at <= interval '1 day' * t.customer_return_window_days) AS in_window " +
+            "FROM orders o JOIN tenants t ON t.id = o.tenant_id " +
+            "WHERE o.tenant_id = ? AND o.id = ? AND o.origin = 'portal_pre_connect'",
+            tenantId, orderId);
+        if (!portal.isEmpty()) {
+            Map<String, Object> p = portal.get(0);
+            if (p.get("delivered_at") == null || !Boolean.TRUE.equals(p.get("in_window"))) return null;
+            return (Timestamp) p.get("delivered_at");
+        }
         List<Map<String, Object>> delivered = jdbc.queryForList(
             "SELECT s.delivered_at, " +
             "       (now() - s.delivered_at <= interval '1 day' * t.customer_return_window_days) AS in_window " +
