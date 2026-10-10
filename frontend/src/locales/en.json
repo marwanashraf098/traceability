@@ -1606,6 +1606,16 @@
         "removed": "Details removed on {{date}} — 30 days after the request ended.",
         "removedPrivacy": "Details removed (privacy request).",
         "prefilled": "Filled in from the customer's choice — change it if you paid another way."
+      },
+      "photos": {
+        "open": "Photo {{n}} of {{count}}, {{item}}",
+        "position": "{{item}} · {{n}} of {{count}}",
+        "close": "Close",
+        "previous": "Previous photo",
+        "next": "Next photo",
+        "unavailable": "Photo unavailable",
+        "removed": "Photos removed on {{date}} — 90 days after the request ended.",
+        "removedPrivacy": "Photos removed (privacy request)."
       }
     }
   },
@@ -2268,6 +2278,10 @@
           }
         },
         "note": "With none ticked, customers aren't asked how they want their refund. Their details are visible to owners and managers only and are deleted 30 days after the request is refunded or closed."
+      },
+      "requirePhotos": {
+        "title": "Require photos",
+        "description": "Customers add 1–3 photos of each item they return. Helps you spot damage before the courier collects it."
       }
     },
     "pickPack": {

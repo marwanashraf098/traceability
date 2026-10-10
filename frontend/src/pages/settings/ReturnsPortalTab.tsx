@@ -64,6 +64,8 @@ export default function ReturnsPortalTab() {
   const [font, setFont] = useState<PortalFont>(portalFontOrDefault(undefined))
   // P2: the portal's refund methods (sent only when changed — absent leaves them as they are).
   const [refundMethods, setRefundMethods] = useState<string[]>([])
+  // P3: "Require photos" (sent only when changed).
+  const [requirePhotos, setRequirePhotos] = useState(false)
   const uploadedLogoUrl = useUploadedLogoUrl(saved?.logo?.version)
 
   const load = useCallback(async () => {
@@ -77,6 +79,7 @@ export default function ReturnsPortalTab() {
       setExchangesOn(!!s.exchangesEnabled)
       setFont(portalFontOrDefault(s.font))
       setRefundMethods(s.refundMethods ?? [])
+      setRequirePhotos(!!s.requirePhotos)
     } catch {
       setLoadError(true)
     }
@@ -92,7 +95,8 @@ export default function ReturnsPortalTab() {
       || exchangesOn !== !!saved.exchangesEnabled
       || font !== portalFontOrDefault(saved.font)
       || !sameMethods(refundMethods, saved.refundMethods ?? [])
-  }, [saved, form, windowText, bookingOn, exchangesOn, font, refundMethods])
+      || requirePhotos !== !!saved.requirePhotos
+  }, [saved, form, windowText, bookingOn, exchangesOn, font, refundMethods, requirePhotos])
 
   if (loadError) {
     return (
@@ -145,6 +149,7 @@ export default function ReturnsPortalTab() {
         ...(exchangesOn !== !!saved?.exchangesEnabled ? { exchangesEnabled: exchangesOn } : {}),
         ...(font !== portalFontOrDefault(saved?.font) ? { font } : {}),
         ...(!sameMethods(refundMethods, saved?.refundMethods ?? []) ? { refundMethods: orderedMethods(refundMethods) } : {}),
+        ...(requirePhotos !== !!saved?.requirePhotos ? { requirePhotos } : {}),
       }
       const s = await savePortalSettings(body)
       setSaved(s)
@@ -154,6 +159,7 @@ export default function ReturnsPortalTab() {
       setExchangesOn(!!s.exchangesEnabled)
       setFont(portalFontOrDefault(s.font))
       setRefundMethods(s.refundMethods ?? [])
+      setRequirePhotos(!!s.requirePhotos)
       toast({ tone: 'success', message: t('settings.portal.saved') })
     } catch (e) {
       if (e instanceof PortalSettingsError && e.field && isFieldKey(e.field)) {
@@ -293,6 +299,13 @@ export default function ReturnsPortalTab() {
         />
 
         <RefundMethodsRow value={refundMethods} onChange={setRefundMethods} />
+
+        <SwitchRow
+          title={t('settings.portal.requirePhotos.title')}
+          description={t('settings.portal.requirePhotos.description')}
+          checked={requirePhotos}
+          onChange={setRequirePhotos}
+        />
 
         <NonReturnableList />
       </section>

@@ -459,3 +459,31 @@ img.pp-thumb--muted { opacity: 0.6; }
 .pp-method__body { display: flex; flex-direction: column; gap: 14px; }
 .pp-hint { margin: 0; font-size: 13px; color: #5B6270; }
 .pp-note--privacy p { font-size: 13px; }
+
+/* P3 — photos per line (design/Traced_portal_photos_dc.html) */
+.pp-photos { display: flex; flex-direction: column; gap: 8px; }
+.pp-photos__label { display: flex; justify-content: space-between; align-items: baseline; font-size: 15px; font-weight: var(--pp-w600, 600); }
+.pp-photos__label small { font-size: 13px; font-weight: 400; color: #5B6270; }
+.pp-photos__row { display: flex; gap: 8px; flex-wrap: wrap; }
+.pp-photo { position: relative; width: 76px; height: 76px; border-radius: 12px; overflow: hidden; background: #E9EAE6; flex-shrink: 0; }
+.pp-photo img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.pp-photo--failed { outline: 2px solid #C0362C; outline-offset: -2px; }
+.pp-photo__veil { position: absolute; inset: 0; background: rgba(255, 255, 255, 0.5); }
+.pp-photo--failed .pp-photo__veil { background: rgba(255, 255, 255, 0.72); }
+.pp-photo__progress { position: absolute; inset: auto 6px 6px 6px; height: 5px; border-radius: 999px; background: rgba(255, 255, 255, 0.8); overflow: hidden; }
+.pp-photo__progress i { display: block; height: 100%; background: var(--brand); transition: width 0.2s ease; }
+.pp-photo__remove {
+  position: absolute; top: 4px; inset-inline-end: 4px; width: 28px; height: 28px; border-radius: 999px; border: 0;
+  background: rgba(20, 24, 33, 0.72); color: #FFFFFF; display: grid; place-items: center; cursor: pointer; padding: 0;
+}
+.pp-photo__retry {
+  position: absolute; inset: 0; border: 0; background: transparent; color: #A3281F; font: inherit; font-size: 12px;
+  font-weight: 700; cursor: pointer;
+}
+.pp-photo-add {
+  width: 76px; height: 76px; border-radius: 12px; border: 1.5px dashed #9AA19B; background: #FAFAF8; color: var(--accent-text);
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; font: inherit; font-size: 12px;
+  font-weight: var(--pp-w600, 600); cursor: pointer; padding: 4px; text-align: center;
+}
+.pp-photo-add--need { border-color: var(--brand); background: var(--accent-soft); }
+.pp-photo__remove:focus-visible, .pp-photo__retry:focus-visible, .pp-photo-add:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }

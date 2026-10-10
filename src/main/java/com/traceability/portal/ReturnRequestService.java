@@ -253,6 +253,32 @@ public class ReturnRequestService {
         d.put("refundHint", r.get("refund_details_hint"));
         d.put("refundDetailsAvailable", Boolean.TRUE.equals(r.get("refund_details_held")));
         d.put("refundDetailsPurgedAt", r.get("refund_details_purged_at"));
+        // P3: each item's photos — ids + dimensions only (bytes: GET …/photos/{photoId}); when they
+        // were all removed (90-day retention / privacy request), when and why.
+        Map<Object, List<Map<String, Object>>> photosByItem = new HashMap<>();
+        for (Map<String, Object> p : new ReturnPhotos(jdbc).forRequest(tenantId, id)) {
+            photosByItem.computeIfAbsent(p.get("item_id"), k -> new ArrayList<>()).add(p);
+        }
+        for (Map<String, Object> it : items) {
+            List<Map<String, Object>> ps = photosByItem.getOrDefault(it.get("id"), List.of());
+            List<Map<String, Object>> shown = new ArrayList<>();
+            Map<String, Object> removed = null;
+            for (Map<String, Object> p : ps) {
+                if (Boolean.TRUE.equals(p.get("available"))) {
+                    Map<String, Object> m = new LinkedHashMap<>();
+                    m.put("id", p.get("id").toString());
+                    m.put("width", p.get("width"));
+                    m.put("height", p.get("height"));
+                    shown.add(m);
+                } else if (p.get("redacted_at") != null) {
+                    removed = new LinkedHashMap<>();
+                    removed.put("at", p.get("redacted_at"));
+                    removed.put("reason", p.get("redaction_reason"));
+                }
+            }
+            it.put("photos", shown);
+            it.put("photosRemoved", shown.isEmpty() ? removed : null);
+        }
         d.put("items", items);
         d.put("events", requests.events(tenantId, id));
         // Step 4d-2: the same history newest first (R2 timeline), refunds, parcel, unexpected items.

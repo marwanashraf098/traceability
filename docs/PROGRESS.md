@@ -4,6 +4,44 @@
 
 ## Current state
 
+**Returns portal P3 — item photos (2026-10-10, branch `feat/portal-photos-p3` off origin/main b4cf3cf; NOT merged, NOT
+deployed). Migration V161.** Mockup signed off: `design/Traced_portal_photos_dc.html`. Decisions: 1, 3, 4, 5, 6 as proposed;
+2 changed → `portal_require_photos` NOT NULL DEFAULT **false** (every existing store keeps today's flow) and set **true** at
+signup in `AuthRepository.createTenantWithOwner` (the one tenant-creation path, web + embedded) — chosen over DEFAULT true
+because that would have broken 14 existing test files' SQL fixtures. Photos owner/manager only in v1.
+- **V161:** `tenants.portal_require_photos`; `portal_assets.kind` + 'photo'; `return_request_photos` (order_id, request_id /
+  item_id NULL until claimed, asset_id → portal_assets (composite (asset, tenant), ON DELETE SET NULL (asset_id)), dims, sha256,
+  claimed_at, redacted_at + redaction_reason retention|privacy; RLS + FORCE + tenant_isolation + RESTRICTIVE
+  `delete_only_unclaimed` FOR DELETE; app_user UPDATE only request_id / item_id / claimed_at / asset_id / redacted_at /
+  redaction_reason). MigrationSmokeTest 160, NotTracedBackfillTest 105.
+- **Pipeline / store:** `ImagePipeline.Profile.PHOTO` (JPEG q 0.80, long edge ≤ 1600, orientation, no metadata); bytes via
+  `BinaryAssetStore` (new `delete(tenant, ids)`). `ReturnPhotos` (not a bean, caller's JdbcTemplate) is the ONE writer after
+  upload: claim, forRequest, expireUnclaimed (1 h, rows + bytes), purgeEnded (90 days after the request ENDED — P2's
+  `RefundDetailsPurgeService.ENDED_AT_SQL`), redactOrders / redactTenant.
+- **Public upload** `POST /api/v1/portal/{slug}/photos` (`PortalPhotoService`): hatch #14 → token must verify for the
+  tenant → tied to the token's order; pipeline BEFORE the tx; limits 30 / order / 30 min (token life), 600 / tenant / hour → 429;
+  400 PHOTO_REQUIRED|PHOTO_TOO_LARGE|PHOTO_TYPE|PHOTO_PIXELS|PHOTO_UNREADABLE; > 8 MB multipart → 413. Never logs content.
+- **Submit:** `SubmitLine.photoIds`; ≤ 3 per line, ≥ 1 when required, no id twice; claimed in the submission tx onto the
+  request + the line's FIRST item row; any id that isn't this order's unclaimed, unexpired upload rolls it back (400).
+- **Merchant:** `GET /return-requests/{id}/photos/{photoId}` (owner/manager, private no-store; 404 / 410 removed); detail items
+  carry `photos` [{id,width,height}] + `photosRemoved` {at, reason}. Settings `requirePhotos` (absent = unchanged); `/config`
+  `requirePhotos` always present (approved PortalBrandingTest key edit).
+- **Jobs:** `ReturnPhotoJobs` — hourly expiry, daily 03:50 Cairo retention; tenant ids on the owner pool, work under runAs.
+- **GDPR:** customers/redact (the orders' photos, claimed or not) + shop/redact → bytes removed, reason privacy; export
+  `return_request_photos` with `image` = base64 data: URL while held, metadata + removal after (decision 5).
+- **Frontend:** portal `photos.ts` (createImageBitmap + canvas → JPEG ≤ 2400 px, HEIC when the browser decodes it; data:
+  thumbnails — the returns host already allows img-src data:, no CSP change), `LinePhotos.tsx` (tiles, progress, Retry,
+  remove, per-line errors), PortalApp gate (Continue waits for uploads and, when required, ≥ 1 photo per line; exchange
+  line too), photoIds in the body. Merchant `ItemPhotos.tsx` (strip + lightbox: prev/next, arrows (RTL-aware), Esc, focus
+  kept inside) in the drawer lists and both exchange views; authed fetch → data: (`fetchRequestPhoto`, shared refresh).
+  Settings "Require photos" switch after Refund methods. CSP contract helper `test/cspContract.ts` covers BOTH hosts.
+- **Tests:** `ImagePipelinePhotoTest` (3), `PortalPhotosTest` (9: u1 c1 r1 e1 p1 g1 m1 x1 l1 — revert-checked: claim order
+  check, required rule, expiry hour, retention window, redact, tenant-bound read, restrictive delete), RlsCoverageTest covered
+  photo read (approved); frontend `portalPhotos.test.tsx` (4) + `itemPhotosMerchant.test.tsx` (4) — revert-checked (gate,
+  photoIds, Esc, blob: vs CSP); real-browser `portalPhotos.browser.test.tsx` (Chromium + WebKit: prep re-encode, a
+  3-photo pick → 3 uploaded tiles). vitest 883/883, tsc + build clean. **Gotcha:** headless Chrome `--dump-dom` /
+  virtual time snapshot before createImageBitmap/toBlob finish — verify image prep in the browser test, not the harness.
+
 **Returns portal P2 — refund payment method (2026-10-10, branch `feat/portal-refund-method-p2` off origin/main cb5f28d;
 NOT merged, NOT deployed). Migration V160.** Mockup signed off: `design/Traced_portal_refund_method_dc.html` (privacy line
 "Shared only with {store}. Deleted 30 days after your refund."). Decisions 1–5 approved as proposed.

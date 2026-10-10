@@ -89,7 +89,7 @@ public class PortalService {
             Map<String, Object> t = jdbc.queryForMap(
                 "SELECT name, customer_return_window_days, portal_auto_approve, " +
                 "       portal_logo_url, portal_brand_color, portal_policy_text, portal_pickup_booking, " +
-                "       portal_exchanges_enabled, portal_font, portal_refund_methods, " +
+                "       portal_exchanges_enabled, portal_font, portal_refund_methods, portal_require_photos, " +
                 "       (SELECT a.sha256 FROM portal_assets a " +
                 "        WHERE a.id = tenants.portal_logo_asset_id AND a.tenant_id = tenants.id) AS logo_sha256 " +
                 "FROM tenants WHERE id = ?", tenantId);
@@ -114,6 +114,8 @@ public class PortalService {
             List<String> stored = PortalSettingsService.textArray(t.get("portal_refund_methods"));
             List<String> refundMethods = RefundDetails.METHODS.stream().filter(stored::contains).toList();
             if (!refundMethods.isEmpty()) body.put("refundMethods", refundMethods);
+            // P3: whether each line needs 1–3 photos (always present).
+            body.put("requirePhotos", Boolean.TRUE.equals(t.get("portal_require_photos")));
             return body;
         })));
     }
@@ -396,10 +398,15 @@ public class PortalService {
      * A tracked line (variantId — today's shape, orderItemId null) or, Step 6a, an untracked
      * order line (orderItemId; variantId optional and, when sent, must be that line's variant).
      */
-    public record SubmitLine(UUID variantId, Integer quantity, String reasonCode, UUID orderItemId) {
+    public record SubmitLine(UUID variantId, Integer quantity, String reasonCode, UUID orderItemId, List<UUID> photoIds) {
+        public SubmitLine(UUID variantId, Integer quantity, String reasonCode, UUID orderItemId) {
+            this(variantId, quantity, reasonCode, orderItemId, List.of());
+        }
         public SubmitLine(UUID variantId, Integer quantity, String reasonCode) {
             this(variantId, quantity, reasonCode, null);
         }
+        /** P3: never null. */
+        public List<UUID> photos() { return photoIds == null ? List.of() : photoIds; }
     }
 
     /**
@@ -501,6 +508,16 @@ public class PortalService {
 
     private Map<String, Object> submitInTenant(UUID tenantId, UUID orderId, SubmitRequest req) {
         if (req == null || req.lines() == null || req.lines().isEmpty()) throw new InvalidSubmission();
+        // P3: 1–3 photos per line when the store requires them, at most 3 otherwise; no id twice.
+        boolean requirePhotos = Boolean.TRUE.equals(jdbc.queryForObject(
+            "SELECT portal_require_photos FROM tenants WHERE id = ?", Boolean.class, tenantId));
+        Set<UUID> allPhotos = new HashSet<>();
+        for (SubmitLine line : req.lines()) {
+            if (line == null) throw new InvalidSubmission();
+            List<UUID> ids = line.photos();
+            if (ids.size() > ReturnPhotos.MAX_PER_LINE || (requirePhotos && ids.isEmpty())) throw new InvalidSubmission();
+            for (UUID id : ids) if (id == null || !allPhotos.add(id)) throw new InvalidSubmission();
+        }
         String email = req.email() == null || req.email().isBlank() ? null : req.email().trim();
         String note  = req.note()  == null || req.note().isBlank()  ? null : req.note().trim();
         if (email != null && (email.length() > 254 || !EMAIL.matcher(email).matches())) throw new InvalidSubmission();
@@ -541,7 +558,7 @@ public class PortalService {
             if (free.size() < line.quantity()) throw new InvalidSubmission();
             for (String pieceId : free.subList(0, line.quantity())) {
                 bound.add(pieceId);
-                items.add(new Object[]{pieceId, line.variantId(), line.reasonCode(), null, null});
+                items.add(new Object[]{pieceId, line.variantId(), line.reasonCode(), null, null, line});
             }
         }
 
@@ -601,11 +618,24 @@ public class PortalService {
             refund == null || !refund.hasDetails() ? null
                 : cipher().encrypt(tenantId, requestId, refund.toJson(refundMapper)),
             refund == null ? null : refund.hint());
+        // P3: a line's photos attach to the request + the line's FIRST item row.
+        Map<SubmitLine, UUID> firstItem = new IdentityHashMap<>();
         for (Object[] it : items) {
-            jdbc.update(
+            UUID itemId = jdbc.queryForObject(
                 "INSERT INTO return_request_items (tenant_id, request_id, piece_id, variant_id, reason_code, " +
-                "    replacement_variant_id, order_item_id, unit_no) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                tenantId, requestId, it[0], it[1], it[2], replacement, it[3], it[4]);
+                "    replacement_variant_id, order_item_id, unit_no) VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
+                UUID.class, tenantId, requestId, it[0], it[1], it[2], replacement, it[3], it[4]);
+            firstItem.putIfAbsent((SubmitLine) it[5], itemId);
+        }
+        ReturnPhotos photos = new ReturnPhotos(jdbc);
+        for (SubmitLine line : req.lines()) {
+            List<UUID> ids = line.photos();
+            if (ids.isEmpty()) continue;
+            UUID itemId = firstItem.get(line);
+            // Only this order's unclaimed, unexpired uploads — anything else rolls the submission back.
+            if (itemId == null || photos.claim(tenantId, orderId, requestId, itemId, ids) != ids.size()) {
+                throw new InvalidSubmission();
+            }
         }
         requests.event(tenantId, requestId, "requested", null, replacement == null
             ? ReturnRequestLifecycle.meta("items", items.size())
@@ -751,7 +781,7 @@ public class PortalService {
         if (free.size() < line.quantity()) throw new InvalidSubmission();
         for (Integer unit : free) {
             mine.add(unit);
-            items.add(new Object[]{null, variantId, line.reasonCode(), line.orderItemId(), unit});
+            items.add(new Object[]{null, variantId, line.reasonCode(), line.orderItemId(), unit, line});
         }
     }
 

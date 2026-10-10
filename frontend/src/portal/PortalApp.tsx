@@ -10,6 +10,8 @@ import {
   refundHint,
 } from './refund'
 import { applyDocumentLanguage, PortalLang, saveLanguage } from './i18n'
+import LinePhotos, { LinePhotoError, PhotoTile } from './LinePhotos'
+import { MAX_PHOTOS_PER_LINE, PhotoPrepError, preparePhoto, uploadPhoto } from './photos'
 
 /**
  * Returns portal Step 4e-B — the customer-facing flow on returns.tracedtech.com/{slug}:
@@ -168,6 +170,11 @@ export default function PortalApp({ slug }: { slug: string | null }) {
   const [exchangeTargetId, setExchangeTargetId] = useState<string | null>(null)
   const [fallbackOk, setFallbackOk] = useState(true)
 
+  // P3 — photos per line (keyed by lineKey), uploaded as soon as they're picked.
+  const [linePhotos, setLinePhotos] = useState<Record<string, PhotoTile[]>>({})
+  const [photoErrors, setPhotoErrors] = useState<Record<string, LinePhotoError | null>>({})
+  const photoSeq = useRef(0)
+
   // P2 — how the customer wants their refund (only when the store asks).
   const [refundMethod, setRefundMethod] = useState<RefundMethod | null>(null)
   const [refundFields, setRefundFields] = useState<RefundFields>(EMPTY_REFUND_FIELDS)
@@ -317,6 +324,81 @@ export default function PortalApp({ slug }: { slug: string | null }) {
   /** "Step n of total" — the refund step adds one when asked. */
   const stepLabel = (n: number) => t('p2.step', { step: n, total: (exchangeMode ? 3 : 2) + (refundAsked ? 1 : 0) })
 
+  // P3: Continue waits for uploads in flight, and — when the store requires photos — for at least
+  // one uploaded photo on every line being returned.
+  const requirePhotos = config?.requirePhotos === true
+  const photoLineKeys: string[] = exchangeMode
+    ? (exchangeLine ? [lineKey(exchangeLine)] : [])
+    : (order?.lines ?? []).filter(l => (selections[lineKey(l)]?.qty ?? 0) > 0).map(lineKey)
+  const photosUploading = photoLineKeys.some(k => (linePhotos[k] ?? []).some(p => p.status === 'uploading'))
+  const photosMissing = requirePhotos && photoLineKeys.some(k => !(linePhotos[k] ?? []).some(p => p.status === 'done'))
+  const photosBlock = photosUploading || photosMissing
+  const donePhotoIds = (k: string) => (linePhotos[k] ?? []).filter(p => p.status === 'done' && p.photoId).map(p => p.photoId!)
+
+  function setTiles(k: string, fn: (tiles: PhotoTile[]) => PhotoTile[]) {
+    setLinePhotos(m => ({ ...m, [k]: fn(m[k] ?? []) }))
+  }
+
+  async function startUpload(k: string, tileKey: string, blob: Blob) {
+    if (!slug || !order) return
+    setTiles(k, ts => ts.map(p => (p.key === tileKey ? { ...p, status: 'uploading', progress: 0 } : p)))
+    try {
+      const r = await uploadPhoto(slug, order.token, blob,
+        f => setTiles(k, ts => ts.map(p => (p.key === tileKey ? { ...p, progress: f } : p)))).promise
+      setTiles(k, ts => ts.map(p => (p.key === tileKey ? { ...p, status: 'done', progress: 1, photoId: r.photoId, blob: undefined } : p)))
+    } catch (e) {
+      const code = e instanceof PhotoPrepError ? e.code : 'failed'
+      if (code === 'failed') {
+        setTiles(k, ts => ts.map(p => (p.key === tileKey ? { ...p, status: 'failed' } : p)))
+      } else {
+        setTiles(k, ts => ts.filter(p => p.key !== tileKey))   // the server refused it: drop the tile
+      }
+      setPhotoErrors(m => ({ ...m, [k]: { code } }))
+    }
+  }
+
+  async function pickPhotos(k: string, files: File[]) {
+    setPhotoErrors(m => ({ ...m, [k]: null }))
+    const room = MAX_PHOTOS_PER_LINE - (linePhotos[k]?.length ?? 0)
+    const take = files.slice(0, Math.max(0, room))
+    if (files.length > take.length) setPhotoErrors(m => ({ ...m, [k]: { code: 'tooMany', count: files.length - take.length } }))
+    for (const file of take) {
+      let prepared
+      try {
+        prepared = await preparePhoto(file)
+      } catch (e) {
+        const code = e instanceof PhotoPrepError ? e.code : 'unreadable'
+        setPhotoErrors(m => ({ ...m, [k]: { code, name: file.name, size: `${(file.size / (1024 * 1024)).toFixed(1)} MB` } }))
+        continue
+      }
+      const tileKey = `ph-${++photoSeq.current}`
+      setTiles(k, ts => [...ts, { key: tileKey, dataUrl: prepared.dataUrl, status: 'uploading', progress: 0, blob: prepared.blob }])
+      await startUpload(k, tileKey, prepared.blob)
+    }
+  }
+
+  function retryPhoto(k: string, tileKey: string) {
+    const tile = (linePhotos[k] ?? []).find(p => p.key === tileKey)
+    if (!tile?.blob) return
+    setPhotoErrors(m => ({ ...m, [k]: null }))
+    startUpload(k, tileKey, tile.blob)
+  }
+
+  function removePhoto(k: string, tileKey: string) {
+    setTiles(k, ts => ts.filter(p => p.key !== tileKey))
+    setPhotoErrors(m => ({ ...m, [k]: null }))
+  }
+
+  const photoBlock = (line: LookupLine, qty: number) => (
+    <LinePhotos
+      lineId={lineKey(line)} title={line.productTitle} quantity={qty} required={requirePhotos}
+      tiles={linePhotos[lineKey(line)] ?? []} error={photoErrors[lineKey(line)] ?? null}
+      onPick={files => pickPhotos(lineKey(line), files)}
+      onRemove={key => removePhoto(lineKey(line), key)}
+      onRetry={key => retryPhoto(lineKey(line), key)}
+    />
+  )
+
   function continueFromRefund() {
     if (!chosenRefund) { setRefundMissing(true); return }
     if (Object.keys(refundErrors(chosenRefund, refundFields)).length > 0) { setRefundShowErrors(true); return }
@@ -409,13 +491,15 @@ export default function PortalApp({ slug }: { slug: string | null }) {
       ...(exchangeMode && exchangeLine && exchangeTarget
         ? {
             mode: 'exchange' as const,
-            lines: [{ ...lineRef(exchangeLine), quantity: 1, reasonCode: exchangeReason }],
+            lines: [{ ...lineRef(exchangeLine), quantity: 1, reasonCode: exchangeReason,
+              ...(donePhotoIds(lineKey(exchangeLine)).length ? { photoIds: donePhotoIds(lineKey(exchangeLine)) } : {}) }],
             replacementVariantId: exchangeTarget.variantId,
             refundFallbackOk: fallbackOk,
           }
         : {
             lines: selectedLines.map(l => ({
               ...lineRef(l), quantity: selections[lineKey(l)].qty, reasonCode: selections[lineKey(l)].reason,
+              ...(donePhotoIds(lineKey(l)).length ? { photoIds: donePhotoIds(lineKey(l)) } : {}),
             })),
           }),
       ...(refundAsked && chosenRefund
@@ -489,13 +573,16 @@ export default function PortalApp({ slug }: { slug: string | null }) {
   }
 
   if (step === 'items' && order && exchangeMode) {
-    const canContinueExchange = exchangeLine != null && !!exchangeReason
+    const canContinueExchange = exchangeLine != null && !!exchangeReason && !photosBlock
     return (
       <Shell
         style={rootStyle}
         header={header(() => setStep('start'))}
         footer={(
           <div className="pp-bar">
+            {exchangeLine && photosBlock && (
+              <div className="pp-bar__count" aria-live="polite">{photosUploading ? t('ph.barUploading') : t('ph.barMissing')}</div>
+            )}
             <button type="button" className="pp-btn pp-btn--primary pp-btn--block" disabled={!canContinueExchange}
               onClick={() => setStep('variant')}>
               {t('p2.continue')}
@@ -556,6 +643,7 @@ export default function PortalApp({ slug }: { slug: string | null }) {
                     </select>
                   </div>
                 )}
+                {selected && photoBlock(line, 1)}
               </div>
             )
           })}
@@ -622,10 +710,12 @@ export default function PortalApp({ slug }: { slug: string | null }) {
           <div className="pp-bar">
             <div className="pp-bar__count" aria-live="polite">
               {selectedCount > 0
-                ? (missingReason ? t('p2.reasonMissing') : t('p2.selected', { count: selectedCount }))
+                ? (missingReason ? t('p2.reasonMissing')
+                  : photosUploading ? t('ph.barUploading') : photosMissing ? t('ph.barMissing')
+                    : t('p2.selected', { count: selectedCount }))
                 : t('p2.noneSelected')}
             </div>
-            <button type="button" className="pp-btn pp-btn--primary" disabled={!canContinue} onClick={() => setStep(afterChoice)}>
+            <button type="button" className="pp-btn pp-btn--primary" disabled={!canContinue || photosBlock} onClick={() => setStep(afterChoice)}>
               {t('p2.continue')}
             </button>
           </div>
@@ -696,6 +786,7 @@ export default function PortalApp({ slug }: { slug: string | null }) {
                   </select>
                 </div>
               )}
+              {sel.qty > 0 && photoBlock(line, sel.qty)}
             </section>
           )
         })}

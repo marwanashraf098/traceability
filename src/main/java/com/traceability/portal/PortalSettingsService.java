@@ -53,13 +53,21 @@ public class PortalSettingsService {
     public record Settings(String slug, Boolean enabled, Boolean autoApprove, Integer returnWindowDays,
                            String logoUrl, String brandColor, String policyText, String returnLocationId,
                            Boolean pickupBooking, Boolean exchangesEnabled, String font,
-                           List<String> refundMethods) {
+                           List<String> refundMethods, Boolean requirePhotos) {
+        /** The P2 shape (no photo switch — P3): leaves it as it is. */
+        public Settings(String slug, Boolean enabled, Boolean autoApprove, Integer returnWindowDays,
+                        String logoUrl, String brandColor, String policyText, String returnLocationId,
+                        Boolean pickupBooking, Boolean exchangesEnabled, String font, List<String> refundMethods) {
+            this(slug, enabled, autoApprove, returnWindowDays, logoUrl, brandColor, policyText, returnLocationId,
+                pickupBooking, exchangesEnabled, font, refundMethods, null);
+        }
+
         /** The P1 shape (no refund methods — P2): leaves the saved methods as they are. */
         public Settings(String slug, Boolean enabled, Boolean autoApprove, Integer returnWindowDays,
                         String logoUrl, String brandColor, String policyText, String returnLocationId,
                         Boolean pickupBooking, Boolean exchangesEnabled, String font) {
             this(slug, enabled, autoApprove, returnWindowDays, logoUrl, brandColor, policyText, returnLocationId,
-                pickupBooking, exchangesEnabled, font, null);
+                pickupBooking, exchangesEnabled, font, null, null);
         }
 
         /** The Step 5c shape (no font — P1): leaves the saved font as it is. */
@@ -124,7 +132,7 @@ public class PortalSettingsService {
             "SELECT portal_slug, portal_enabled, portal_auto_approve, customer_return_window_days, " +
             "       portal_logo_url, portal_brand_color, portal_policy_text, portal_pickup_booking, " +
             "       portal_exchanges_enabled, portal_exchanges_since, portal_font, portal_logo_asset_id, name, " +
-            "       portal_refund_methods " +
+            "       portal_refund_methods, portal_require_photos " +
             "FROM tenants WHERE id = ?", tenantId);
         Map<String, Object> location = jdbc.queryForList(
             "SELECT return_business_location_id, return_business_location_name FROM courier_accounts " +
@@ -155,6 +163,7 @@ public class PortalSettingsService {
         body.put("font", t.get("portal_font"));
         body.put("storeName", t.get("name"));   // the settings preview's wordmark
         body.put("refundMethods", textArray(t.get("portal_refund_methods")));
+        body.put("requirePhotos", Boolean.TRUE.equals(t.get("portal_require_photos")));
         body.put("logo", uploadedLogo(tenantId, (UUID) t.get("portal_logo_asset_id"), (String) t.get("portal_slug")));
         return body;
     }
@@ -233,6 +242,10 @@ public class PortalSettingsService {
         if (refundMethods != null) {
             jdbc.update("UPDATE tenants SET portal_refund_methods = ?::text[] WHERE id = ?",
                 refundMethods.toArray(new String[0]), tenantId);
+        }
+        // P3: "Require photos" — not full-replace; absent leaves it as it is.
+        if (s.requirePhotos() != null) {
+            jdbc.update("UPDATE tenants SET portal_require_photos = ? WHERE id = ?", s.requirePhotos(), tenantId);
         }
         if (s.pickupBooking() != null) setPickupBooking(tenantId, s.pickupBooking());
         if (s.exchangesEnabled() != null) setExchanges(tenantId, s.exchangesEnabled());

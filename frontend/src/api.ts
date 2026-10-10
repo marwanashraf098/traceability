@@ -2755,6 +2755,10 @@ export interface ReturnRequestItem {
   replacementInStock?: boolean
   disposition?: 'pending' | 'restocked' | 'damaged' | 'mismatch' | null
   damageReason?: string | null
+  /** P3 — the customer's photos of this item (bytes: fetchRequestPhoto). */
+  photos?: Array<{ id: string; width: number; height: number }>
+  /** P3 — set when every photo of this item was removed (90-day retention / privacy request). */
+  photosRemoved?: { at: string; reason: 'retention' | 'privacy' } | null
 }
 
 /** Step 4d-2 — one entry of the request history (return_request_events). */
@@ -3052,6 +3056,8 @@ export interface PortalSettings {
   logo?: PortalLogoInfo | null
   /** P2 — refund methods the portal offers (bank_transfer | instapay | wallet | cash); [] = not asked. */
   refundMethods?: string[]
+  /** P3 — customers must add 1–3 photos per item. */
+  requirePhotos?: boolean
 }
 
 export interface PortalLogoInfo {
@@ -3071,8 +3077,8 @@ export interface PortalLogoInfo {
  */
 export type PortalSettingsInput =
   Omit<PortalSettings, 'pickupBooking' | 'portalPickupBooking' | 'returnLocationName' | 'bostaConnected'
-    | 'exchangesEnabled' | 'exchangesSince' | 'font' | 'storeName' | 'logo' | 'refundMethods'>
-  & { pickupBooking?: boolean; exchangesEnabled?: boolean; font?: string; refundMethods?: string[] }
+    | 'exchangesEnabled' | 'exchangesSince' | 'font' | 'storeName' | 'logo' | 'refundMethods' | 'requirePhotos'>
+  & { pickupBooking?: boolean; exchangesEnabled?: boolean; font?: string; refundMethods?: string[]; requirePhotos?: boolean }
 
 export interface BostaReturnLocation {
   id: string
@@ -3202,6 +3208,26 @@ export async function fetchPortalLogo(retry = false): Promise<string | null> {
   if (res.status === 401) {
     await refreshOrLogout(retry)
     return fetchPortalLogo(true)
+  }
+  if (!res.ok) return null
+  return blobToDataUrl(await res.blob())
+}
+
+/**
+ * P3 — one customer photo of a request, as a data: URL (owner / manager). Authenticated with the
+ * shared refresh on a 401; data: because the app's CSP allows img-src data: but not blob:.
+ * Null when it's gone (410) or not found.
+ */
+export async function fetchRequestPhoto(requestId: string, photoId: string, retry = false): Promise<string | null> {
+  const token = getAccessToken()
+  const res = await fetch(`${BASE}/return-requests/${requestId}/photos/${photoId}`, {
+    credentials: 'include',
+    cache: 'no-store',
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  })
+  if (res.status === 401) {
+    await refreshOrLogout(retry)
+    return fetchRequestPhoto(requestId, photoId, true)
   }
   if (!res.ok) return null
   return blobToDataUrl(await res.blob())

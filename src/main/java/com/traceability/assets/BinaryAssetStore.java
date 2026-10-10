@@ -31,4 +31,7 @@ public interface BinaryAssetStore {
 
     /** Deletes every asset of this kind for the tenant except {@code keep} (null = all of them). */
     int deleteKindExcept(UUID tenantId, String kind, UUID keep);
+
+    /** Deletes these assets of the tenant (others' ids are ignored); returns how many went. */
+    int delete(UUID tenantId, java.util.Collection<UUID> assetIds);
 }

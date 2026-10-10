@@ -216,5 +216,32 @@
     },
     "summary": "Refund to",
     "summaryLabel": "Refund"
+  },
+  "ph": {
+    "label": "Photos",
+    "groupLabel": "Photos of {{item}}",
+    "countOf": "{{count}} of {{max}}",
+    "required": "Required",
+    "optional": "Optional · up to {{max}}",
+    "add": "Add",
+    "addPhoto": "Add photo",
+    "photoAlt": "Photo {{n}} of {{item}}",
+    "remove": "Remove photo {{n}}",
+    "retry": "Retry",
+    "uploading": "Uploading",
+    "hint": "Show the item and any damage or tags. JPG, PNG, WebP or HEIC.",
+    "needOne": "Add at least 1 photo.",
+    "needOneQty": "Add at least 1 photo. One set covers all {{count}} pieces.",
+    "maxReached": "You've reached the limit: {{max}} photos. Remove one to add another.",
+    "barMissing": "Add a photo of each item",
+    "barUploading": "Uploading photos…",
+    "errors": {
+      "type": "“{{name}}” isn't a photo. Use JPG, PNG, WebP or HEIC.",
+      "tooBig": "“{{name}}” is {{size}}. Use a photo up to 8 MB.",
+      "tooMany": "You can add up to 3 photos per item. {{count}} weren't added.",
+      "pixels": "This photo is too large to process. Use a smaller photo.",
+      "unreadable": "This photo couldn't be read. Try another one.",
+      "failed": "Couldn't upload this photo. Check your connection and tap Retry."
+    }
   }
 }

@@ -260,7 +260,7 @@ Built 2026-08-15 on branch `returns-rebuild`, single cutover, not yet merged. Mo
 - [ ] RP.34 [S] Follow-up: settings UI for `refund_pending_window_days` / `return_arrival_window_days`
 - [ ] RP.35 [S] Follow-up: detect a refund made in Shopify on the same order (orders/updated `refunds[]`) and flag the double-restock risk
 - [x] RP.36 [M] P1 portal branding: uploaded logo (V159 `portal_assets`, BinaryAssetStore on bytea, ImagePipeline: JPEG/PNG/WebP sniff, pixel cap, EXIF orientation + strip, PNG ≤ 600 px with alpha), public `GET /portal/{slug}/logo` (ETag, CSP 'self'), portal font (5 self-hosted families, chosen one loaded only), Settings Branding section EN/AR, per-IP lookup throttle (branch `feat/portal-branding-p1`, not merged)
-- [ ] RP.37 [S] Follow-up (P3): reuse ImagePipeline + BinaryAssetStore for private customer photos (JPEG profile, no public endpoint)
+- [x] RP.37 [M] P3 portal item photos: per-line 1–3 photos (required switch, ON for new signups), token-bound public upload, claim on submit, merchant strip + lightbox, 1 h expiry, 90-day retention, GDPR redact/export (V161; branch `feat/portal-photos-p3`, not merged)
 - [x] RP.38 [M] P2 portal refund method: Settings methods, portal step (EN/AR, validation), encrypted details (AAD), merchant drawer + refund-details endpoint, RefundForm method prefill, 30-day purge job, GDPR redact/export (V160; branch `feat/portal-refund-method-p2`, not merged)
 - [ ] RP.39 [S] Follow-up: Arabic privacy policy (docs/legal) — the P2 refund-details section is English only
 - [x] EX.1 [M] Step 5a: Shopify decrement (`pushExchangeDispatch`, 4th named decrement) when an internal exchange replacement piece first leaves Traced custody — once per piece, both writers, V110

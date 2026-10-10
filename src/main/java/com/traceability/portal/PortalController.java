@@ -31,10 +31,54 @@ public class PortalController {
 
     private final PortalService portal;
     private final ObjectMapper  mapper;
+    private final PortalPhotoService photos;
 
-    public PortalController(PortalService portal, ObjectMapper mapper) {
+    public PortalController(PortalService portal, ObjectMapper mapper, PortalPhotoService photos) {
         this.portal = portal;
         this.mapper = mapper;
+        this.photos = photos;
+    }
+
+    static final String PHOTO_INVALID_MESSAGE = "This photo couldn't be used.";
+
+    /**
+     * P3 — upload one photo of an item being returned (multipart field "file"). Auth = the lookup
+     * token as a Bearer header; the photo belongs to that token's order. 201 {photoId, width,
+     * height}; 400 {error: PHOTO_REQUIRED | PHOTO_TOO_LARGE | PHOTO_TYPE | PHOTO_PIXELS |
+     * PHOTO_UNREADABLE}; 401 / 429 with the generic messages. The file is never logged.
+     */
+    @PostMapping("/{slug}/photos")
+    public ResponseEntity<Map<String, Object>> uploadPhoto(
+            @PathVariable String slug,
+            @RequestHeader(value = "Authorization", required = false) String authorization,
+            @RequestParam(value = "file", required = false) org.springframework.web.multipart.MultipartFile file) {
+        String token = authorization != null && authorization.startsWith("Bearer ")
+            ? authorization.substring("Bearer ".length()).trim() : null;
+        byte[] bytes;
+        try {
+            bytes = file == null || file.isEmpty() ? null
+                : file.getSize() > PortalPhotoService.MAX_BYTES ? new byte[PortalPhotoService.MAX_BYTES + 1]
+                : file.getBytes();
+        } catch (java.io.IOException e) {
+            bytes = new byte[0];
+        }
+        return photos.upload(slug, token, bytes)
+            .map(r -> switch (r.outcome()) {
+                case CREATED -> {
+                    Map<String, Object> body = new java.util.LinkedHashMap<>();
+                    body.put("photoId", r.photoId().toString());
+                    body.put("width", r.width());
+                    body.put("height", r.height());
+                    yield ResponseEntity.status(HttpStatus.CREATED).body(body);
+                }
+                case UNAUTHORIZED -> ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                                        .body(Map.<String, Object>of("message", UNAUTHORIZED_MESSAGE));
+                case THROTTLED -> ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS)
+                                        .body(Map.<String, Object>of("message", THROTTLED_MESSAGE));
+                case INVALID -> ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                                        .body(Map.<String, Object>of("error", r.code(), "message", PHOTO_INVALID_MESSAGE));
+            })
+            .orElseGet(() -> ResponseEntity.notFound().build());
     }
 
     @GetMapping("/{slug}/config")
@@ -87,7 +131,11 @@ public class PortalController {
                 UUID variantId = orderItemId != null && !l.hasNonNull("variantId") ? null
                     : UUID.fromString(l.path("variantId").asText());
                 Integer quantity = l.path("quantity").isInt() ? l.path("quantity").asInt() : null;
-                lines.add(new PortalService.SubmitLine(variantId, quantity, l.path("reasonCode").asText(null), orderItemId));
+                // P3: the uploaded photos of this line (claimed by the submission).
+                List<UUID> photoIds = new ArrayList<>();
+                for (JsonNode pid : l.path("photoIds")) photoIds.add(UUID.fromString(pid.asText()));
+                lines.add(new PortalService.SubmitLine(variantId, quantity, l.path("reasonCode").asText(null), orderItemId,
+                    photoIds));
             }
             String email = n.hasNonNull("email") ? n.get("email").asText() : null;
             String note  = n.hasNonNull("note")  ? n.get("note").asText()  : null;
