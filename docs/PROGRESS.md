@@ -4,8 +4,8 @@
 
 ## Current state
 
-**Returns portal P3 — item photos (2026-10-10, branch `feat/portal-photos-p3` off origin/main b4cf3cf; NOT merged, NOT
-deployed). Migration V162.** Mockup signed off: `design/Traced_portal_photos_dc.html`. Decisions: 1, 3, 4, 5, 6 as proposed;
+**Returns portal P3 — item photos (2026-10-10, branch `feat/portal-photos-p3` off origin/main b4cf3cf; merged to main,
+no squash; NOT deployed). Migration V162.** Privacy policy 1.4 (item photos; EN only, RP.39 tracks AR). Mockup signed off: `design/Traced_portal_photos_dc.html`. Decisions: 1, 3, 4, 5, 6 as proposed;
 2 changed → `portal_require_photos` NOT NULL DEFAULT **false** (every existing store keeps today's flow) and set **true** at
 signup in `AuthRepository.createTenantWithOwner` (the one tenant-creation path, web + embedded) — chosen over DEFAULT true
 because that would have broken 14 existing test files' SQL fixtures. Photos owner/manager only in v1.
@@ -13,7 +13,8 @@ because that would have broken 14 existing test files' SQL fixtures. Photos owne
   item_id NULL until claimed, asset_id → portal_assets (composite (asset, tenant), ON DELETE SET NULL (asset_id)), dims, sha256,
   claimed_at, redacted_at + redaction_reason retention|privacy; RLS + FORCE + tenant_isolation + RESTRICTIVE
   `delete_only_unclaimed` FOR DELETE; app_user UPDATE only request_id / item_id / claimed_at / asset_id / redacted_at /
-  redaction_reason). MigrationSmokeTest 160, NotTracedBackfillTest 105.
+  redaction_reason). MigrationSmokeTest 161, NotTracedBackfillTest 106 (renumbered V161 → V162 at merge: origin took
+  V161 for the Lookup adjust → Shopify sync).
 - **Pipeline / store:** `ImagePipeline.Profile.PHOTO` (JPEG q 0.80, long edge ≤ 1600, orientation, no metadata); bytes via
   `BinaryAssetStore` (new `delete(tenant, ids)`). `ReturnPhotos` (not a bean, caller's JdbcTemplate) is the ONE writer after
   upload: claim, forRequest, expireUnclaimed (1 h, rows + bytes), purgeEnded (90 days after the request ENDED — P2's
