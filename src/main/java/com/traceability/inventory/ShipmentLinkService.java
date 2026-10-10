@@ -318,6 +318,20 @@ public class ShipmentLinkService {
      */
     public LinkResult tryMatchDelivery(UUID tenantId, String trackingNumber,
                                         BostaDelivery delivery, BostaStateMapper.MappedState mapped) {
+        // Step 0 (P4b) — a customer-return pickup Traced booked for a request on a PORTAL pre-connect
+        // order (V163) links to that request's order by the tracking number the booking stored. Never
+        // by order reference: OrderReference skips internal:% ids, so the reference / phone+COD
+        // matchers below could only miss it or guess. Return legs only — a portal order never gets
+        // a forward leg.
+        if (isCrpDelivery(delivery)) {
+            UUID portalOrder = portalReturnLegOrder(tenantId, trackingNumber);
+            if (portalOrder != null) {
+                log.info("tryMatchDelivery: tracking={} is a Traced-booked return leg of portal order {}",
+                    trackingNumber, portalOrder);
+                return linkMatchedDelivery(tenantId, portalOrder, trackingNumber, delivery, mapped);
+            }
+        }
+
         // Step 1 — strong-key matching: businessReference (Shopify order number embedded
         // by the plugin) and shopifyInfo.orderId (numeric Shopify ID → gid: URI). These are
         // authoritative, unique identifiers. A single match here is definitive — phone+COD
@@ -371,6 +385,16 @@ public class ShipmentLinkService {
             rs -> rs.next() ? rs.getObject(1, UUID.class) : null, orderId, tenantId);
         if (found == null) return new LinkResult(null, REASON_NO_MATCH);
         return linkMatchedDelivery(tenantId, orderId, trackingNumber, delivery, mapped);
+    }
+
+    /** The portal pre-connect order whose return request booked this tracking number, or null. */
+    private UUID portalReturnLegOrder(UUID tenantId, String trackingNumber) {
+        List<UUID> ids = jdbc.queryForList(
+            "SELECT rr.order_id FROM return_requests rr " +
+            "JOIN orders o ON o.id = rr.order_id AND o.tenant_id = rr.tenant_id " +
+            "WHERE rr.tenant_id = ? AND rr.bosta_tracking_number = ? AND o.origin = 'portal_pre_connect'",
+            UUID.class, tenantId, trackingNumber);
+        return ids.size() == 1 ? ids.get(0) : null;
     }
 
     /** tryMatchDelivery()'s step 3 onward, shared with {@link #linkDeliveryToOrder}. */
