@@ -1,6 +1,6 @@
 # Privacy Policy
 
-**Version 1.3 — Effective 10 October 2026**
+**Version 1.4 — Effective 10 October 2026**
 
 > ⚠️ **Template — not legal advice.** Fill every `[PLACEHOLDER]` and have a qualified lawyer review this before publishing, especially the processor / sub-processor sections. Keep the `Version` and `Effective` lines accurate — the signup consent record stores the version a user accepted.
 
@@ -22,6 +22,8 @@ Traced, a company established in Egypt, located at North Investors Area, Cairo, 
 **Connected operational data (we are processor for you):** when you connect Shopify and Bosta, we ingest order, product, shipment, and delivery data needed to trace your inventory. This includes your **end customers'** names, phone numbers, delivery addresses, cash-on-delivery amounts, tracking/airway-bill numbers, and delivery status. We also store an immutable, per-piece chain-of-custody record (which piece moved, when, and which of your users handled it).
 
 **Returns portal refund details (we are processor for you):** when one of your customers asks for a refund through your returns portal — or agrees to be refunded if an exchange isn't possible — and you have chosen to ask how they want to be refunded, we collect the refund account details they enter: for a bank transfer, the account holder's name, the bank name and the IBAN or account number; for InstaPay, their InstaPay address or phone number; for a mobile wallet, the wallet provider and wallet number. We collect these only for that refund. They are stored encrypted, are shared only with you (the store the customer is returning to) and are visible only to your owners and managers. Traced never sends money; you make the refund yourself.
+
+**Returns portal item photos (we are processor for you):** when one of your customers asks for a return or exchange through your returns portal, they can add photos of the items (and must, if you require photos). We re-encode every photo when it is uploaded, which removes its location (GPS) data and all other embedded metadata. Photos are visible only to your owners and managers, are not shown to your other users, and are never public.
 
 **Technical data (we are controller):** sign-in and security logs, IP addresses, and error/diagnostic telemetry. Error telemetry is processed through Sentry with personal data scrubbed before transmission.
 
@@ -51,7 +53,7 @@ Data may be transferred between Egypt and the EU to operate the Service. Where p
 
 ## 7. Retention
 
-We retain account and operational data for as long as your account is active and for a reasonable period afterward to meet legal, accounting, and security obligations, after which it is deleted or anonymized. End-customer personal data is erased on a valid redaction request (see Section 9). Per-piece custody events are designed to be tamper-evident and do not contain end-customer personal data. Returns portal refund account details are deleted automatically 30 days after the return request is finished (refunded, closed, rejected, or completed as an exchange), or sooner on a valid redaction request; we keep only the refund method chosen (for example "Bank transfer") and the last four characters of the account, for your records.
+We retain account and operational data for as long as your account is active and for a reasonable period afterward to meet legal, accounting, and security obligations, after which it is deleted or anonymized. End-customer personal data is erased on a valid redaction request (see Section 9). Per-piece custody events are designed to be tamper-evident and do not contain end-customer personal data. Returns portal refund account details are deleted automatically 30 days after the return request is finished (refunded, closed, rejected, or completed as an exchange), or sooner on a valid redaction request; we keep only the refund method chosen (for example "Bank transfer") and the last four characters of the account, for your records. Returns portal item photos are deleted automatically 90 days after the return request is finished (refunded, closed, rejected, or completed as an exchange), or sooner on a valid redaction request; photos uploaded but never sent with a request are deleted after one hour. While they exist, a customer's photos are included in the data we provide for that customer's data request.
 
 ## 8. Security
 

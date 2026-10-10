@@ -12,6 +12,7 @@ import ExchangeRequestView from './ExchangeRequestView'
 import CustomAddressBlock, { PiiRemovedNote } from './CustomAddressBlock'
 import ExchangeProgressView from './ExchangeProgressView'
 import CustomerRefundChoice from './CustomerRefundChoice'
+import ItemPhotos from './ItemPhotos'
 import {
   arrivedCount, CloseDialog, PieceCode, UntrackedArrivedControls, HistoryTimeline, ItemsWithOutcome, LinkParcelDialog, RefundForm, RefundsList, UnexpectedItems,
 } from './RequestLifecycle'
@@ -621,6 +622,7 @@ function DrawerContent({
                 </div>
                 <Badge tone="neutral" label={reasonLabel(t, item.reasonCode)} />
                 <UntrackedArrivedControls detail={detail} item={item} onChanged={reloadAll} />
+                <ItemPhotos requestId={detail.id} item={item} />
               </li>
             ))}
           </ul>

@@ -128,6 +128,7 @@ class RlsCoverageTest {
             "/api/v1/return-requests/{id}/pickup-areas",
             "/api/v1/return-requests/{id}/refund-suggestion",
             "/api/v1/return-requests/{id}/refund-details",
+            "/api/v1/return-requests/{id}/photos/{photoId}",
             "/api/v1/privacy/data-requests",
             "/api/v1/privacy/data-requests/{id}/export",
             "/api/v1/tenant/portal-settings",
@@ -692,6 +693,48 @@ class RlsCoverageTest {
             jdbc.update("DELETE FROM stores WHERE tenant_id = ?", otherTenant);
             jdbc.update("DELETE FROM tenants WHERE id = ?", otherTenant);
         }
+    }
+
+    /** P3 — GET /return-requests/{id}/photos/{photoId} returns only this tenant's request's photo. */
+    @Test
+    void returnRequestPhoto_crossTenantIsolated_withSameTenantPositiveControl() throws Exception {
+        UUID mine = seedReturnRequest(tenantId, storeId, "RR-CVGPHK");
+        UUID otherTenant = UUID.randomUUID(), otherStore = UUID.randomUUID();
+        jdbc.update("INSERT INTO tenants (id, name) VALUES (?, 'Cov Photos Other')", otherTenant);
+        jdbc.update("INSERT INTO stores (id, tenant_id, platform, shop_domain, status) " +
+                    "VALUES (?, ?, 'shopify', 'cov-photos-other.myshopify.com', 'disconnected')", otherStore, otherTenant);
+        UUID theirs = seedReturnRequest(otherTenant, otherStore, "RR-CVGPHM");
+        byte[] myBytes = covPng(java.awt.Color.RED), theirBytes = covPng(java.awt.Color.BLUE);
+        UUID myPhoto = seedPhoto(tenantId, mine, myBytes), theirPhoto = seedPhoto(otherTenant, theirs, theirBytes);
+        try {
+            ResponseEntity<byte[]> own = get("/api/v1/return-requests/" + mine + "/photos/" + myPhoto, byte[].class);
+            assertThat(own.getStatusCode()).as("same-tenant positive control").isEqualTo(HttpStatus.OK);
+            assertThat(own.getBody()).isEqualTo(myBytes);
+            assertThat(get("/api/v1/return-requests/" + theirs + "/photos/" + theirPhoto, byte[].class).getStatusCode())
+                .isEqualTo(HttpStatus.NOT_FOUND);
+            assertThat(get("/api/v1/return-requests/" + mine + "/photos/" + theirPhoto, byte[].class).getStatusCode())
+                .isEqualTo(HttpStatus.NOT_FOUND);
+        } finally {
+            jdbc.update("DELETE FROM return_request_photos WHERE tenant_id IN (?, ?)", tenantId, otherTenant);
+            jdbc.update("DELETE FROM portal_assets WHERE tenant_id IN (?, ?) AND kind = 'photo'", tenantId, otherTenant);
+            jdbc.update("DELETE FROM return_request_items WHERE tenant_id IN (?, ?)", tenantId, otherTenant);
+            jdbc.update("DELETE FROM return_requests WHERE tenant_id IN (?, ?)", tenantId, otherTenant);
+            jdbc.update("DELETE FROM orders WHERE tenant_id = ?", otherTenant);
+            jdbc.update("DELETE FROM stores WHERE tenant_id = ?", otherTenant);
+            jdbc.update("DELETE FROM tenants WHERE id = ?", otherTenant);
+        }
+    }
+
+    private UUID seedPhoto(UUID tenant, UUID request, byte[] bytes) throws Exception {
+        String sha = HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(bytes));
+        UUID asset = jdbc.queryForObject(
+            "INSERT INTO portal_assets (tenant_id, kind, content_type, bytes, size_bytes, width, height, sha256) " +
+            "VALUES (?, 'photo', 'image/jpeg', ?, ?, 8, 8, ?) RETURNING id", UUID.class, tenant, bytes, bytes.length, sha);
+        UUID order = jdbc.queryForObject("SELECT order_id FROM return_requests WHERE id = ?", UUID.class, request);
+        return jdbc.queryForObject(
+            "INSERT INTO return_request_photos (tenant_id, order_id, request_id, asset_id, content_type, size_bytes, width, height, " +
+            "    sha256, claimed_at) VALUES (?, ?, ?, ?, 'image/jpeg', ?, 8, 8, ?, now()) RETURNING id",
+            UUID.class, tenant, order, request, asset, bytes.length, sha);
     }
 
     @Test

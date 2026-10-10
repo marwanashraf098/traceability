@@ -1,0 +1,396 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Traced — Portal item photos (P3) — Design Concept</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<!-- Mockup only: the build self-hosts fonts via @fontsource (CSP font-src 'self'). -->
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@500;600&family=Cairo:wght@400;600;700&display=swap" rel="stylesheet">
+<style>
+/* Traced Design System v1.0 — LIGHT (merchant) + portal.css (customer portal). Locks LAYOUT, COPY, STATES. */
+:root{
+  --bg:#F7F8FA; --panel:#FFFFFF; --elevated:#F2F4F7; --line:#E5E7EB; --line-strong:#D1D5DB;
+  --text:#111827; --muted:#5B6675; --faint:#828B99;
+  --blue:#2563EB; --blue-soft:#EFF4FF; --critical:#DC2626; --critical-text:#B91C1C; --success-text:#15803D;
+  --radius:12px;
+  --pp-page:#F7F7F5; --pp-line:#E6E7E3; --pp-ink:#141821; --pp-muted:#5B6270; --pp-input:#CFD3D8; --pp-err:#A3281F;
+  --brand:#0F766E; --on-brand:#FFFFFF; --brand-soft:#E3F1EF;
+}
+*{box-sizing:border-box} html,body{margin:0}
+body{font-family:'Geist',system-ui,sans-serif;background:var(--bg);color:var(--text);-webkit-font-smoothing:antialiased;line-height:1.5}
+button,input,select{font:inherit;color:inherit}
+:focus-visible{outline:2px solid var(--blue);outline-offset:2px}
+.review{position:sticky;top:0;z-index:20;display:flex;gap:20px;align-items:center;flex-wrap:wrap;padding:12px 24px;background:rgba(255,255,255,.92);backdrop-filter:blur(8px);border-bottom:1px solid var(--line)}
+.review b{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+.review a{font-size:13px;font-weight:600;color:var(--muted);text-decoration:none;padding:6px 10px;border-radius:6px}
+.review a:hover{background:var(--elevated);color:var(--text)}
+.frame-title{max-width:1280px;margin:48px auto 16px;padding:0 24px;display:flex;align-items:baseline;gap:12px;flex-wrap:wrap}
+.frame-title span{font:600 12px/1 'Geist Mono',monospace;color:var(--blue);background:var(--blue-soft);padding:5px 8px;border-radius:6px}
+.frame-title h2{margin:0;font-size:20px;font-weight:600}
+.frame-title p{margin:0;color:var(--muted);font-size:14px}
+.annot{max-width:1280px;margin:14px auto 0;padding:0 24px 0 44px;font-size:13px;color:var(--muted)}
+.annot li{margin:3px 0}
+.page{max-width:1280px;margin:0 auto;padding:0 24px}
+
+/* merchant settings */
+.card{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius)}
+.crumb{font-size:14px;color:var(--muted)} .crumb a{color:var(--blue);text-decoration:none}
+h1.page-h{margin:4px 0 20px;font-size:28px;font-weight:700;letter-spacing:-.01em}
+.settings{max-width:768px}
+.row{padding:22px 24px;border-bottom:1px solid var(--line)}
+.row:last-child{border-bottom:0}
+.row-h{display:flex;align-items:flex-start;gap:24px}
+.row-h .t{font-size:15px;font-weight:600}
+.row-h .d{font-size:13px;color:var(--muted);margin-top:2px}
+.state{font-size:13px;font-weight:600;color:var(--success-text);margin-top:2px}
+.switch{width:52px;height:30px;border-radius:999px;background:var(--blue);position:relative;flex-shrink:0;border:0}
+.switch::after{content:"";position:absolute;top:3px;left:25px;width:24px;height:24px;border-radius:999px;background:#fff}
+.mini-checks{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
+.mini-checks span{font-size:13px;border:1px solid var(--blue);background:var(--blue-soft);border-radius:8px;padding:6px 10px}
+.mini-checks span.off{border-color:var(--line-strong);background:#fff;color:var(--muted)}
+.dim{opacity:.55}
+
+/* portal */
+.phones{display:flex;gap:32px;justify-content:center;flex-wrap:wrap}
+.phone{width:390px;border-radius:36px;background:#0B0D12;padding:12px;box-shadow:0 20px 40px rgba(17,24,39,.15)}
+.screen{border-radius:26px;overflow:hidden;min-height:860px;display:flex;flex-direction:column;background:var(--pp-page)}
+.bar{height:34px;background:#fff;display:flex;align-items:center;justify-content:space-between;padding:0 22px;font:600 13px/1 'Geist',sans-serif;color:#111}
+.pp{font-family:'Cairo',sans-serif;color:var(--pp-ink);flex:1;display:flex;flex-direction:column}
+.pp-header{height:60px;padding-inline:8px 12px;display:flex;align-items:center;gap:4px;background:#fff;border-bottom:1px solid var(--pp-line)}
+.pp-back{width:44px;height:44px;display:grid;place-items:center;border:0;background:transparent}
+.pp[dir="rtl"] .pp-back svg{transform:scaleX(-1)}
+.pp-wordmark{font-size:17px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--brand)}
+.pp-spacer{flex:1}
+.pp-lang{min-height:44px;padding:0 8px;border:0;background:transparent;font-size:15px;font-weight:600;color:var(--brand)}
+.pp-main{padding:20px 20px 16px;display:flex;flex-direction:column;gap:14px;flex:1}
+.pp-eyebrow{font-size:13px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:var(--pp-muted)}
+.pp[dir="rtl"] .pp-eyebrow{letter-spacing:0}
+.pp-h2{margin:0;font-size:24px;font-weight:700;line-height:1.25}
+.pp-item{padding:15px;border-radius:14px;background:#fff;border:2px solid var(--brand);display:flex;flex-direction:column;gap:14px}
+.pp-item--plain{border:1px solid #E3E6EB;padding:16px}
+.pp-item__head{display:flex;gap:14px;align-items:center}
+.thumb{width:52px;height:52px;border-radius:10px;background:linear-gradient(135deg,#E8EAE4,#D7DBD2);flex-shrink:0;display:grid;place-items:center;color:#7C8478}
+.pp-item__title{font-size:16px;font-weight:600}
+.pp-item__sub{font-size:14px;color:var(--pp-muted)}
+.qty{display:flex;align-items:center;gap:10px;font-size:15px}
+.qty b{min-width:20px;text-align:center}
+.qbtn{width:40px;height:40px;border-radius:10px;border:1px solid var(--pp-input);background:#fff;display:grid;place-items:center;font-size:18px}
+.sel{min-height:48px;border:1px solid var(--pp-input);border-radius:10px;background:#fff;padding:0 14px;display:flex;align-items:center;justify-content:space-between;font-size:15px}
+.ph-label{display:flex;justify-content:space-between;align-items:baseline;font-size:15px;font-weight:600}
+.ph-label small{font-size:13px;font-weight:400;color:var(--pp-muted)}
+.photos{display:flex;gap:8px;flex-wrap:wrap}
+.ph{width:76px;height:76px;border-radius:12px;position:relative;overflow:hidden;flex-shrink:0;background-size:cover;background-position:center}
+.ph .x{position:absolute;top:4px;inset-inline-end:4px;width:28px;height:28px;border-radius:999px;border:0;background:rgba(20,24,33,.72);color:#fff;display:grid;place-items:center}
+.ph .prog{position:absolute;inset:auto 6px 6px 6px;height:5px;border-radius:999px;background:rgba(255,255,255,.7);overflow:hidden}
+.ph .prog i{display:block;height:100%;width:58%;background:var(--brand)}
+.ph .veil{position:absolute;inset:0;background:rgba(255,255,255,.45)}
+.ph--err{border:2px solid #C0362C}
+.ph--err .veil{background:rgba(255,255,255,.7)}
+.ph .retry{position:absolute;inset:0;display:grid;place-items:center;padding:8px;border:0;background:transparent;color:#A3281F;font-size:12px;font-weight:700}
+.add{width:76px;height:76px;padding:6px;border-radius:12px;border:1.5px dashed #9AA19B;background:#FAFAF8;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;color:var(--brand);font-size:12px;font-weight:600}
+.add--need{border-color:var(--brand);background:var(--brand-soft)}
+.pp-hint{margin:0;font-size:13px;color:var(--pp-muted)}
+.pp-fielderror{margin:0;font-size:14px;color:var(--pp-err);display:flex;gap:6px;align-items:flex-start}
+.pp-barwrap{padding:12px 20px 18px;background:#fff;border-top:1px solid var(--pp-line);display:flex;align-items:center;gap:12px}
+.pp-barwrap .count{flex:1;font-size:14px;color:var(--pp-muted)}
+.pp-btn{min-height:52px;border:0;border-radius:12px;background:var(--brand);color:var(--on-brand);font-size:17px;font-weight:600;padding:0 22px}
+.pp-btn:disabled{opacity:.45}
+.cap{text-align:center;font-size:13px;color:var(--muted);margin-top:10px;max-width:390px}
+
+/* fake photos */
+.p1{background-image:linear-gradient(160deg,#C9B8A2 0%,#A88F72 60%,#7D6A55 100%)}
+.p2{background-image:radial-gradient(circle at 40% 40%,#F2EFEA 0 30%,#D9D2C6 31% 60%,#B7AE9F 61%)}
+.p3{background-image:linear-gradient(200deg,#E9E4DA,#BFB5A3)}
+.p4{background-image:linear-gradient(135deg,#3B4252,#20242E)}
+.p5{background-image:radial-gradient(circle at 60% 35%,#D9534F 0 18%,#EDE6DC 19%)}
+
+/* drawer */
+.drawer-wrap{display:flex;gap:28px;flex-wrap:wrap;justify-content:center;align-items:flex-start}
+.drawer{width:520px;background:#fff;border:1px solid var(--line);border-radius:14px;box-shadow:0 12px 32px rgba(17,24,39,.08);overflow:hidden;position:relative}
+.drawer-head{padding:18px 20px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:flex-start}
+.drawer-head h3{margin:0;font-size:17px}
+.pill{font-size:12px;font-weight:600;padding:4px 10px;border-radius:999px;background:#EFF4FF;color:#1D4ED8}
+.drawer-body{padding:20px;display:flex;flex-direction:column;gap:14px}
+.sec-t{font-size:12px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.05em}
+.it{border:1px solid var(--line);border-radius:12px;padding:12px;display:flex;flex-direction:column;gap:10px}
+.it-h{display:flex;gap:12px;align-items:center}
+.it-h .thumb{width:44px;height:44px}
+.it-t{font-size:15px;font-weight:600}
+.it-s{font-size:13px;color:var(--muted)}
+.strip{display:flex;gap:8px}
+.strip button{width:64px;height:64px;border-radius:10px;border:1px solid var(--line);padding:0;background-size:cover;background-position:center;cursor:zoom-in}
+.strip .more{font-size:12px;color:var(--muted);align-self:center}
+.removed{font-size:13px;color:var(--muted);display:flex;gap:8px;align-items:center;background:var(--elevated);border-radius:8px;padding:10px 12px}
+.lightbox{position:absolute;inset:0;background:rgba(13,17,23,.92);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;padding:18px}
+.lb-top{position:absolute;top:12px;inset-inline:16px;display:flex;justify-content:space-between;align-items:center;color:#E5E7EB;font-size:14px}
+.lb-btn{width:44px;height:44px;border-radius:999px;border:0;background:rgba(255,255,255,.12);color:#fff;display:grid;place-items:center}
+.lb-img{width:340px;height:420px;border-radius:12px;background-size:cover;background-position:center}
+.lb-nav{position:absolute;top:50%;transform:translateY(-50%)}
+.lb-cap{color:#D1D5DB;font-size:13px}
+.dots{display:flex;gap:6px}.dots i{width:7px;height:7px;border-radius:999px;background:#4B5563}.dots i.on{background:#fff}
+</style>
+</head>
+<body>
+
+<nav class="review" aria-label="Review sections">
+  <b>P3 · Item photos</b>
+  <a href="#a">a · Settings toggle</a>
+  <a href="#b">b · Portal photos EN / AR</a>
+  <a href="#b2">b · Errors &amp; optional</a>
+  <a href="#c">c · Drawer + lightbox</a>
+</nav>
+
+<!-- ===================================================================== -->
+<div class="frame-title" id="a"><span>a</span><h2>Settings → Returns portal · Require photos</h2><p>A switch row right after “Refund methods”; saves with “Save changes”.</p></div>
+<div class="page">
+  <div class="crumb"><a href="#">Settings</a> / Returns portal</div>
+  <h1 class="page-h">Returns portal</h1>
+  <section class="card settings">
+    <div class="row dim"><div class="row-h"><div style="flex:1"><div class="t">Allow exchanges</div><div class="d">… unchanged …</div></div></div></div>
+    <div class="row dim">
+      <div class="t" style="font-size:15px;font-weight:600">Refund methods</div>
+      <div class="mini-checks"><span>Bank transfer</span><span>InstaPay</span><span>Mobile wallet</span><span class="off">Cash</span></div>
+    </div>
+    <div class="row">
+      <div class="row-h">
+        <div style="flex:1">
+          <div class="t" id="rp">Require photos</div>
+          <div class="d">Customers add 1–3 photos of each item they return. Helps you spot damage before the courier collects it.</div>
+        </div>
+        <span class="state">On</span>
+        <button class="switch" role="switch" aria-checked="true" aria-labelledby="rp"></button>
+      </div>
+    </div>
+    <div class="row dim"><div class="row-h"><div style="flex:1"><div class="t">Products that can't be returned</div><div class="d">… unchanged …</div></div></div></div>
+  </section>
+</div>
+<ul class="annot">
+  <li>Default ON for every store (new and existing). Off → customers may still add up to 3 photos per item; they're just not required.</li>
+  <li>Applies to refunds and exchanges alike.</li>
+</ul>
+
+<!-- ===================================================================== -->
+<div class="frame-title" id="b"><span>b</span><h2>Portal — photos on each item you return</h2><p>On “What would you like to return?”, inside each selected line (and on the exchange line).</p></div>
+<div class="page">
+  <div class="phones">
+    <div>
+      <div class="phone"><div class="screen">
+        <div class="bar"><span>9:41</span><span>●●● ▮</span></div>
+        <div class="pp" dir="ltr" lang="en">
+          <header class="pp-header"><button class="pp-back" aria-label="Back"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 18l-6-6 6-6"/></svg></button><div class="pp-wordmark">The Snouts</div><div class="pp-spacer"></div><button class="pp-lang">العربية</button></header>
+          <main class="pp-main">
+            <div style="display:flex;flex-direction:column;gap:6px"><span class="pp-eyebrow">Step 1 of 3</span><h3 class="pp-h2">What would you like to return?</h3></div>
+
+            <section class="pp-item">
+              <div class="pp-item__head"><span class="thumb">👕</span><span style="flex:1"><span class="pp-item__title">Linen Shirt</span><br><span class="pp-item__sub">White · M</span></span></div>
+              <div class="qty"><button class="qbtn">−</button><b>1</b><button class="qbtn">+</button><span class="pp-item__sub">of 1</span></div>
+              <div class="sel">Wrong size <span>▾</span></div>
+              <div>
+                <div class="ph-label">Photos <small>2 of 3</small></div>
+                <div class="photos" style="margin-top:8px">
+                  <div class="ph p1"><button class="x" aria-label="Remove photo 1">✕</button></div>
+                  <div class="ph p2"><div class="veil"></div><div class="prog"><i></i></div></div>
+                  <button class="add"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg>Add</button>
+                </div>
+                <p class="pp-hint" style="margin-top:8px">Show the item and any damage or tags. JPG, PNG, WebP or HEIC.</p>
+              </div>
+            </section>
+
+            <section class="pp-item">
+              <div class="pp-item__head"><span class="thumb">👖</span><span style="flex:1"><span class="pp-item__title">Flipped Pants</span><br><span class="pp-item__sub">Black · XL</span></span></div>
+              <div class="qty"><button class="qbtn">−</button><b>2</b><button class="qbtn">+</button><span class="pp-item__sub">of 2</span></div>
+              <div class="sel">Not as pictured <span>▾</span></div>
+              <div>
+                <div class="ph-label">Photos <small>Required</small></div>
+                <div class="photos" style="margin-top:8px">
+                  <button class="add add--need"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg>Add photo</button>
+                </div>
+                <p class="pp-hint" style="margin-top:8px">Add at least 1 photo. One set covers both pieces.</p>
+              </div>
+            </section>
+
+            <section class="pp-item pp-item--plain">
+              <div class="pp-item__head"><span class="thumb">🧣</span><span style="flex:1"><span class="pp-item__title">Silk Scarf</span><br><span class="pp-item__sub">Sand</span></span></div>
+              <div class="qty"><button class="qbtn">−</button><b>0</b><button class="qbtn">+</button><span class="pp-item__sub">of 1</span></div>
+            </section>
+          </main>
+          <div class="pp-barwrap"><span class="count">Add a photo of each item</span><button class="pp-btn" disabled>Continue</button></div>
+        </div>
+      </div></div>
+      <div class="cap">EN · one photo uploading; a line still needs a photo → Continue disabled with the reason.</div>
+    </div>
+
+    <div>
+      <div class="phone"><div class="screen">
+        <div class="bar"><span>9:41</span><span>●●● ▮</span></div>
+        <div class="pp" dir="rtl" lang="ar">
+          <header class="pp-header"><button class="pp-back" aria-label="رجوع"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 18l-6-6 6-6"/></svg></button><div class="pp-wordmark">The Snouts</div><div class="pp-spacer"></div><button class="pp-lang" style="font-family:'Geist',sans-serif">English</button></header>
+          <main class="pp-main">
+            <div style="display:flex;flex-direction:column;gap:6px"><span class="pp-eyebrow">الخطوة 1 من 3</span><h3 class="pp-h2">ما الذي تريد إرجاعه؟</h3></div>
+            <section class="pp-item">
+              <div class="pp-item__head"><span class="thumb">👕</span><span style="flex:1"><span class="pp-item__title">Linen Shirt</span><br><span class="pp-item__sub">White · M</span></span></div>
+              <div class="qty"><button class="qbtn">−</button><b>1</b><button class="qbtn">+</button><span class="pp-item__sub">من 1</span></div>
+              <div class="sel">المقاس غير مناسب <span>▾</span></div>
+              <div>
+                <div class="ph-label">الصور <small>3 من 3</small></div>
+                <div class="photos" style="margin-top:8px">
+                  <div class="ph p1"><button class="x" aria-label="إزالة الصورة 1">✕</button></div>
+                  <div class="ph p3"><button class="x" aria-label="إزالة الصورة 2">✕</button></div>
+                  <div class="ph p5"><button class="x" aria-label="إزالة الصورة 3">✕</button></div>
+                </div>
+                <p class="pp-hint" style="margin-top:8px">وصلت للحد الأقصى: 3 صور. احذف صورة لإضافة أخرى.</p>
+              </div>
+            </section>
+            <section class="pp-item">
+              <div class="pp-item__head"><span class="thumb">👖</span><span style="flex:1"><span class="pp-item__title">Flipped Pants</span><br><span class="pp-item__sub">Black · XL</span></span></div>
+              <div class="qty"><button class="qbtn">−</button><b>1</b><button class="qbtn">+</button><span class="pp-item__sub">من 2</span></div>
+              <div class="sel">غير مطابق للصورة <span>▾</span></div>
+              <div>
+                <div class="ph-label">الصور <small>1 من 3</small></div>
+                <div class="photos" style="margin-top:8px">
+                  <div class="ph p4"><button class="x" aria-label="إزالة الصورة 1">✕</button></div>
+                  <button class="add"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg>إضافة</button>
+                </div>
+              </div>
+            </section>
+          </main>
+          <div class="pp-barwrap"><span class="count">تم اختيار قطعتين</span><button class="pp-btn">متابعة</button></div>
+        </div>
+      </div></div>
+      <div class="cap">AR · max reached on one line (Add tile hidden); every line has a photo → Continue enabled.</div>
+    </div>
+  </div>
+</div>
+
+<div class="frame-title" id="b2"><span>b</span><h2>Errors &amp; optional state</h2><p>Errors sit under the line they belong to; a failed upload keeps its tile with Retry.</p></div>
+<div class="page">
+  <div class="phones">
+    <div>
+      <div class="phone"><div class="screen" style="min-height:640px">
+        <div class="bar"><span>9:41</span><span>●●● ▮</span></div>
+        <div class="pp" dir="ltr" lang="en">
+          <header class="pp-header"><button class="pp-back"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 18l-6-6 6-6"/></svg></button><div class="pp-wordmark">The Snouts</div><div class="pp-spacer"></div><button class="pp-lang">العربية</button></header>
+          <main class="pp-main">
+            <section class="pp-item">
+              <div class="pp-item__head"><span class="thumb">👕</span><span style="flex:1"><span class="pp-item__title">Linen Shirt</span><br><span class="pp-item__sub">White · M</span></span></div>
+              <div>
+                <div class="ph-label">Photos <small>1 of 3</small></div>
+                <div class="photos" style="margin-top:8px">
+                  <div class="ph p1"><button class="x" aria-label="Remove photo 1">✕</button></div>
+                  <div class="ph ph--err p2"><div class="veil"></div><button class="retry">↻ Retry</button></div>
+                  <button class="add"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg>Add</button>
+                </div>
+                <p class="pp-fielderror" style="margin-top:8px">⚠ Couldn't upload this photo. Check your connection and tap Retry.</p>
+              </div>
+            </section>
+            <div style="font-size:13px;font-weight:600;color:var(--pp-muted)">Other messages, same place:</div>
+            <p class="pp-fielderror">⚠ “invoice.pdf” isn't a photo. Use JPG, PNG, WebP or HEIC.</p>
+            <p class="pp-fielderror">⚠ “IMG_2041.HEIC” is 14.2 MB. Use a photo up to 8 MB.</p>
+            <p class="pp-fielderror">⚠ You can add up to 3 photos per item. 2 weren't added.</p>
+            <p class="pp-fielderror">⚠ This photo is too large to process. Use a smaller photo.</p>
+          </main>
+        </div>
+      </div></div>
+      <div class="cap">Upload failed (Retry) + the other errors. Too many = extra files beyond 3 are skipped with a note.</div>
+    </div>
+
+    <div>
+      <div class="phone"><div class="screen" style="min-height:640px">
+        <div class="bar"><span>9:41</span><span>●●● ▮</span></div>
+        <div class="pp" dir="ltr" lang="en">
+          <header class="pp-header"><button class="pp-back"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 18l-6-6 6-6"/></svg></button><div class="pp-wordmark">The Snouts</div><div class="pp-spacer"></div><button class="pp-lang">العربية</button></header>
+          <main class="pp-main">
+            <section class="pp-item">
+              <div class="pp-item__head"><span class="thumb">👕</span><span style="flex:1"><span class="pp-item__title">Linen Shirt</span><br><span class="pp-item__sub">White · M</span></span></div>
+              <div class="sel">Wrong size <span>▾</span></div>
+              <div>
+                <div class="ph-label">Photos <small>Optional · up to 3</small></div>
+                <div class="photos" style="margin-top:8px">
+                  <button class="add"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg>Add</button>
+                </div>
+              </div>
+            </section>
+          </main>
+          <div class="pp-barwrap"><span class="count">1 item selected</span><button class="pp-btn">Continue</button></div>
+        </div>
+      </div></div>
+      <div class="cap">“Require photos” off: same tiles, labelled optional; Continue doesn't wait for photos.</div>
+    </div>
+  </div>
+</div>
+<ul class="annot">
+  <li>Add opens the phone's camera / gallery (multiple). HEIC/HEIF is converted to JPEG on the phone before uploading; nothing else is resized there except to keep uploads small.</li>
+  <li>Each photo uploads as soon as it's picked (one at a time per line); Continue also waits for uploads in progress. A removed photo is simply not sent.</li>
+  <li>Thumbnails show the phone's own copy (a data: URL — the returns page already allows data: images), so nothing is fetched back.</li>
+  <li>A quantity-2 line takes one set of 1–3 photos, not one per piece.</li>
+</ul>
+
+<!-- ===================================================================== -->
+<div class="frame-title" id="c"><span>c</span><h2>Request drawer — photos per item + lightbox</h2><p>Owner / manager. Photos load on open through the signed-in session.</p></div>
+<div class="page">
+  <div class="drawer-wrap">
+    <div>
+      <div class="drawer">
+        <div class="drawer-head"><div><h3>RR-7K3F9M · #1047</h3><div class="it-s">Mariam Saleh · delivered 18 Sep</div></div><span class="pill">Requested</span></div>
+        <div class="drawer-body">
+          <span class="sec-t">Items</span>
+          <div class="it">
+            <div class="it-h"><span class="thumb">👕</span><span style="flex:1"><span class="it-t">Linen Shirt</span><br><span class="it-s">White · M · Wrong size</span></span></div>
+            <div class="strip"><button class="p1" aria-label="Photo 1 of 2, Linen Shirt"></button><button class="p3" aria-label="Photo 2 of 2, Linen Shirt"></button></div>
+          </div>
+          <div class="it">
+            <div class="it-h"><span class="thumb">👖</span><span style="flex:1"><span class="it-t">Flipped Pants × 2</span><br><span class="it-s">Black · XL · Not as pictured</span></span></div>
+            <div class="strip"><button class="p4" aria-label="Photo 1 of 3"></button><button class="p5" aria-label="Photo 2 of 3"></button><button class="p2" aria-label="Photo 3 of 3"></button></div>
+          </div>
+          <div class="it">
+            <div class="it-h"><span class="thumb">🧣</span><span style="flex:1"><span class="it-t">Silk Scarf</span><br><span class="it-s">Sand · Changed my mind</span></span></div>
+            <div class="it-s">No photos</div>
+          </div>
+        </div>
+      </div>
+      <div class="cap">Strip under each item; tap a photo to open it full size.</div>
+    </div>
+
+    <div>
+      <div class="drawer" style="height:560px">
+        <div class="drawer-head"><div><h3>RR-7K3F9M · #1047</h3></div></div>
+        <div class="lightbox" role="dialog" aria-label="Photos of Flipped Pants">
+          <div class="lb-top"><span>Flipped Pants · 2 of 3</span><button class="lb-btn" aria-label="Close">✕</button></div>
+          <button class="lb-btn lb-nav" style="inset-inline-start:14px" aria-label="Previous photo">‹</button>
+          <div class="lb-img p5"></div>
+          <button class="lb-btn lb-nav" style="inset-inline-end:14px" aria-label="Next photo">›</button>
+          <div class="dots"><i></i><i class="on"></i><i></i></div>
+          <div class="lb-cap">← → to move · Esc to close</div>
+        </div>
+      </div>
+      <div class="cap">Lightbox over the drawer: prev / next (arrow keys, swipe), close (Esc), focus trapped.</div>
+    </div>
+
+    <div>
+      <div class="drawer">
+        <div class="drawer-head"><div><h3>RR-9MPC2D · #0988</h3></div><span class="pill" style="background:var(--elevated);color:var(--muted)">Refunded</span></div>
+        <div class="drawer-body">
+          <span class="sec-t">Items</span>
+          <div class="it">
+            <div class="it-h"><span class="thumb">👕</span><span style="flex:1"><span class="it-t">Linen Shirt</span><br><span class="it-s">White · M · Damaged</span></span></div>
+            <div class="removed">🗑 Photos removed on 7 Nov 2026 — 90 days after the request ended.</div>
+          </div>
+          <div class="it">
+            <div class="it-h"><span class="thumb">👖</span><span style="flex:1"><span class="it-t">Flipped Pants</span><br><span class="it-s">Black · XL · Wrong item</span></span></div>
+            <div class="removed">🗑 Photos removed (privacy request).</div>
+          </div>
+        </div>
+      </div>
+      <div class="cap">After the 90-day purge, or a privacy request: rows stay, images gone.</div>
+    </div>
+  </div>
+</div>
+<ul class="annot">
+  <li>Drawer images: fetched with the signed-in session and shown as data: images (same as the P1 logo preview) — app CSP unchanged.</li>
+  <li>Workers never see photos (the drawer is owner / manager only).</li>
+</ul>
+<div style="height:64px"></div>
+</body>
+</html>

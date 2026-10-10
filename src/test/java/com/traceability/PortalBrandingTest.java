@@ -155,7 +155,7 @@ class PortalBrandingTest {
         assertThat(r.getStatusCode()).isEqualTo(HttpStatus.OK);
         assertThat(r.getBody().keySet()).containsExactlyInAnyOrder(
             "storeName", "returnWindowDays", "reasonCodes", "logoUrl", "brandColor", "policyText", "autoApprove", "pickupBooking",
-            "font");
+            "font", "requirePhotos");
         assertThat(r.getBody()).containsEntry("storeName", "Snouts Store").containsEntry("logoUrl", LOGO)
             .containsEntry("brandColor", "#1A2B3C").containsEntry("policyText", "Policy A")
             .containsEntry("autoApprove", true).containsEntry("pickupBooking", false);

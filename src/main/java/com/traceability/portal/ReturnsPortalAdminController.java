@@ -27,11 +27,14 @@ public class ReturnsPortalAdminController {
     private final ReturnPickupBookingService booking;
     private final RefundSuggestionService suggestions;
     private final PortalLogoService logos;
+    private final PortalPhotoService photos;
 
     public ReturnsPortalAdminController(ReturnRequestService requests, PortalSettingsService settings,
                                         ReturnLocationService returnLocations, ReturnPickupBookingService booking,
-                                        RefundSuggestionService suggestions, PortalLogoService logos) {
+                                        RefundSuggestionService suggestions, PortalLogoService logos,
+                                        PortalPhotoService photos) {
         this.logos           = logos;
+        this.photos          = photos;
         this.requests        = requests;
         this.settings        = settings;
         this.returnLocations = returnLocations;
@@ -138,6 +141,18 @@ public class ReturnsPortalAdminController {
     }
 
     // ── Step 4d-2: refunds (owner / manager; a worker gets 403) ──────────────
+
+    /** P3 — one customer photo of a request; owner / manager; private, never cached. 410 once removed. */
+    @GetMapping("/return-requests/{id}/photos/{photoId}")
+    @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
+    public ResponseEntity<byte[]> photo(@PathVariable UUID id, @PathVariable UUID photoId) {
+        PortalPhotoService.PhotoBytes p = photos.merchantPhoto(id, photoId);
+        return ResponseEntity.ok()
+            .cacheControl(org.springframework.http.CacheControl.noStore().cachePrivate())
+            .contentType(org.springframework.http.MediaType.parseMediaType(p.contentType()))
+            .header("X-Content-Type-Options", "nosniff")
+            .body(p.bytes());
+    }
 
     /** P2 — the customer's refund details, decrypted; owner / manager; never cached or logged. */
     @GetMapping("/return-requests/{id}/refund-details")

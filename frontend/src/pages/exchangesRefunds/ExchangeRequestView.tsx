@@ -1,5 +1,6 @@
 import { ReactNode, useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import ItemPhotos from './ItemPhotos'
 import { AlertCircle, ArrowRight } from 'lucide-react'
 import { approveReturnRequest, switchExchangeToRefund, ReturnRequestDetail } from '../../api'
 import { Button, cn, useToast } from '../../components/ui'
@@ -94,6 +95,7 @@ export default function ExchangeRequestView({
           <p className="text-body font-semibold text-primary">
             <bdi>{item.productTitle}</bdi> · {reasonLabel(t, item.reasonCode)}
           </p>
+          <ItemPhotos requestId={detail.id} item={item} />
           <div className="flex items-stretch gap-3">
             <div className="flex-1 rounded-lg bg-elevated px-3 py-2.5" data-testid="exchange-coming-back">
               <p className="text-caption text-muted">{t('exchangesRefunds.requests.exchange.comingBack')}</p>

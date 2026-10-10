@@ -62,6 +62,8 @@ public final class CustomerRedaction {
                     tenantId, s.orderIdArray());
                 requests  = jdbc.update(REDACT_REQUESTS + " AND order_id = ANY(?::uuid[])",
                     tenantId, s.orderIdArray());
+                // P3: the customer's return photos of these orders (claimed or not) lose their bytes.
+                new com.traceability.portal.ReturnPhotos(jdbc).redactOrders(tenantId, java.util.List.of(s.orderIdArray()));
                 shipments = jdbc.update(
                     "UPDATE shipments SET pii_redacted_at = COALESCE(pii_redacted_at, now()) " +
                     "WHERE tenant_id = ? AND order_id = ANY(?::uuid[])", tenantId, s.orderIdArray());
@@ -91,6 +93,7 @@ public final class CustomerRedaction {
     public Result redactShop(UUID tenantId) {
         int orders    = jdbc.update(REDACT_ORDERS + " WHERE tenant_id = ?", tenantId);
         int requests  = jdbc.update(REDACT_REQUESTS, tenantId);
+        new com.traceability.portal.ReturnPhotos(jdbc).redactTenant(tenantId);   // P3: every return photo
         int shipments = jdbc.update(
             "UPDATE shipments SET pii_redacted_at = COALESCE(pii_redacted_at, now()) WHERE tenant_id = ?", tenantId);
         int exchanges = jdbc.update(
@@ -123,7 +126,7 @@ public final class CustomerRedaction {
             """;
 
     // A return request's own PII (portal email, note, V117 typed pickup address, P2 refund details and
-    // their hint — the method stays). The area snapshot
+    // their hint — the method stays; P3 photos lose their bytes through ReturnPhotos). The area snapshot
     // (pickup_city_* / pickup_district_*), items and history stay — PortalCustomAddressTest asserts it.
     private static final String REDACT_REQUESTS = """
             UPDATE return_requests

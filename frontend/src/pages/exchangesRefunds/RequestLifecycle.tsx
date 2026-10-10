@@ -1,5 +1,6 @@
 import { FormEvent, ReactNode, useEffect, useId, useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import ItemPhotos from './ItemPhotos'
 import { AlertCircle, Check, Info } from 'lucide-react'
 import {
   closeReturnRequest, linkReturnLeg, markRequestItemArrived, recordRefund, undoRequestItemArrived, voidRefund,
@@ -141,6 +142,7 @@ export function ItemsWithOutcome({ items, showReason, detail, onChanged }: {
                 <Badge tone={outcome.tone} label={t(`exchangesRefunds.requests.outcome.${outcome.key}`)} />
               </span>
               {detail && onChanged && <UntrackedArrivedControls detail={detail} item={item} onChanged={onChanged} />}
+              {detail && <ItemPhotos requestId={detail.id} item={item} />}
             </li>
           )
         })}

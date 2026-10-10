@@ -1,5 +1,6 @@
 import { ReactNode, useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import ItemPhotos from './ItemPhotos'
 import { Check } from 'lucide-react'
 import { bookExchangeNow, ReturnRequestDetail, TransferCommandError } from '../../api'
 import { Button, cn, useToast } from '../../components/ui'
@@ -101,6 +102,7 @@ export default function ExchangeProgressView({
               {' '}<span aria-hidden="true" className="inline-block rtl:rotate-180">→</span>{' '}
               <bdi>{item.replacementVariantTitle}</bdi>
             </p>
+            <ItemPhotos requestId={detail.id} item={item} />
             {(detail.bostaTrackingNumber || ex?.orderNumber) && (
               <p className="text-small text-secondary" data-testid="exchange-trip-line">
                 {detail.bostaTrackingNumber && (

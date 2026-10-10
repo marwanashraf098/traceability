@@ -22,6 +22,7 @@ import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.LinkedHashMap;
+import java.util.Base64;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -70,6 +71,14 @@ public class CustomerDataRequestService {
         this.email = email;
         this.mapper = mapper;
         this.appUrl = appUrl;
+    }
+
+    private com.traceability.assets.BinaryAssetStore assetStore;
+
+    /** P3: reads the return photos' bytes for the export. */
+    @Autowired(required = false)
+    public void setAssetStore(com.traceability.assets.BinaryAssetStore assetStore) {
+        this.assetStore = assetStore;
     }
 
     private com.traceability.portal.RefundDetailsCipher refundCipher;
@@ -229,6 +238,26 @@ public class CustomerDataRequestService {
                     : json(refundCipher.decrypt(tenantId, UUID.fromString((String) r.get("id")), (String) encrypted)));
             }
             out.put("return_requests", requests);
+
+            // P3: the customer's return photos — the image itself (base64 data: URL) while it exists,
+            // metadata + when / why it was removed after that.
+            List<Map<String, Object>> photos = rows(
+                "SELECT p.id, rr.reference AS request_reference, p.created_at, p.width, p.height, p.content_type, " +
+                "       p.redacted_at, p.redaction_reason, p.asset_id " +
+                "FROM return_request_photos p LEFT JOIN return_requests rr ON rr.id = p.request_id AND rr.tenant_id = p.tenant_id " +
+                "WHERE p.tenant_id = ? AND p.order_id = ANY(?::uuid[]) ORDER BY p.created_at, p.id",
+                List.of(), tenantId, subject.orderIdArray());
+            for (Map<String, Object> ph : photos) {
+                Object assetId = ph.remove("asset_id");
+                String image = null;
+                if (assetId != null && assetStore != null) {
+                    image = assetStore.get(tenantId, UUID.fromString((String) assetId))
+                        .map(a -> "data:" + a.info().contentType() + ";base64," + Base64.getEncoder().encodeToString(a.bytes()))
+                        .orElse(null);
+                }
+                ph.put("image", image);
+            }
+            out.put("return_request_photos", photos);
 
             out.put("shipments", rows(
                 "SELECT s.tracking_number, o.number AS order_number, s.shipment_leg::text AS shipment_leg, " +

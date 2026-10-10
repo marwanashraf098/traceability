@@ -55,6 +55,13 @@ public class PostgresBinaryAssetStore implements BinaryAssetStore {
             : jdbc.update("DELETE FROM portal_assets WHERE tenant_id = ? AND kind = ? AND id <> ?", tenantId, kind, keep);
     }
 
+    @Override
+    public int delete(UUID tenantId, java.util.Collection<UUID> assetIds) {
+        if (assetIds == null || assetIds.isEmpty()) return 0;
+        return jdbc.update("DELETE FROM portal_assets WHERE tenant_id = ? AND id = ANY(?::uuid[])",
+            tenantId, assetIds.toArray(new UUID[0]));
+    }
+
     private static final RowMapper<AssetInfo> INFO = PostgresBinaryAssetStore::info;
 
     private static AssetInfo info(ResultSet rs, int i) throws SQLException {

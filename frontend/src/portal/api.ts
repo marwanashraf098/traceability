@@ -20,6 +20,8 @@ export interface PortalConfig {
   font?: string
   /** P2 — the refund methods the store offers; present only when it asks (never empty). */
   refundMethods?: string[]
+  /** P3 — each line needs 1–3 photos (else photos are optional, up to 3). */
+  requirePhotos?: boolean
 }
 
 /** Step 5b — one axis of a product's options (colour, size, …). */
@@ -103,6 +105,8 @@ export interface LookupResult {
 
 /** A tracked line by variantId, or (Step 6a) an untracked line by orderItemId. */
 export interface SubmitLine {
+  /** P3 — this line's uploaded photos. */
+  photoIds?: string[]
   variantId?: string
   orderItemId?: string
   quantity: number

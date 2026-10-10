@@ -63,7 +63,8 @@ class MigrationSmokeTest {
             "tenant_ad_attribution",
             "untracked_unit_intakes",
             "transfer_shopify_syncs",
-            "portal_assets"
+            "portal_assets",
+            "return_request_photos"
     );
 
     @Test
@@ -81,8 +82,8 @@ class MigrationSmokeTest {
                 .as("Flyway migrations must succeed")
                 .isTrue();
         assertThat(result.migrationsExecuted)
-                .as("all migrations V1–V161 must execute (V38 was never used — 160 files, not 161)")
-                .isEqualTo(160);
+                .as("all migrations V1–V162 must execute (V38 was never used — 161 files, not 162)")
+                .isEqualTo(161);
 
         try (Connection conn = DriverManager.getConnection(
                 POSTGRES.getJdbcUrl(),

@@ -50,9 +50,11 @@ public class ImagePipeline {
 
     public enum Format { PNG, JPEG }
 
-    /** Output box and format. LOGO: PNG with alpha, at most 600 px wide. */
+    /** Output box and format. LOGO: PNG with alpha, at most 600 px wide. PHOTO: JPEG, long edge ≤ 1600 px. */
     public record Profile(int maxWidth, int maxHeight, Format format, float jpegQuality) {
         public static final Profile LOGO = new Profile(600, 600, Format.PNG, 0f);
+        /** P3 customer photos: JPEG q 0.80, long edge ≤ 1600 px (flattened onto white, no metadata). */
+        public static final Profile PHOTO = new Profile(1600, 1600, Format.JPEG, 0.80f);
     }
 
     public record Processed(byte[] bytes, String contentType, int width, int height, String sha256) {
