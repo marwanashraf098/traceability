@@ -320,14 +320,35 @@ class PortalRefundMethodTest {
 
     @Test
     void l1_detailsNeverLogged(CapturedOutput output) {
-        methods(a, "bank_transfer");
-        UUID id = bankRequest(a, "#L1A");
-        get("/api/v1/return-requests/" + id + "/refund-details", a.owner(), Map.class);
-        get("/api/v1/return-requests/" + id, a.owner(), String.class);
-        jdbc.update("UPDATE return_requests SET status = 'refunded', refunded_at = now() - interval '40 days' WHERE id = ?", id);
+        methods(a, "bank_transfer", "instapay", "wallet");
+        // Submit (bank, InstaPay, wallet), detail read, refund-details read — for each.
+        UUID bank = bankRequest(a, "#L1A");
+        Order io = order(a, "#L1B");
+        assertThat(submit(a, io, "instapay", details("instapay", "l1.secret@instapay")).outcome())
+            .isEqualTo(PortalService.SubmitOutcome.CREATED);
+        Order wo = order(a, "#L1C");
+        assertThat(submit(a, wo, "wallet", details("provider", "orange_cash", "walletNumber", "0122 777 3141")).outcome())
+            .isEqualTo(PortalService.SubmitOutcome.CREATED);
+        List<UUID> ids = List.of(bank,
+            jdbc.queryForObject("SELECT id FROM return_requests WHERE order_id = ?", UUID.class, io.id()),
+            jdbc.queryForObject("SELECT id FROM return_requests WHERE order_id = ?", UUID.class, wo.id()));
+        for (UUID id : ids) {
+            assertThat(get("/api/v1/return-requests/" + id + "/refund-details", a.owner(), Map.class).getStatusCode())
+                .isEqualTo(HttpStatus.OK);
+            get("/api/v1/return-requests/" + id, a.owner(), String.class);
+        }
+        // A rejected submit (bad IBAN) goes through the same parsing.
+        assertThat(submit(a, order(a, "#L1D"), "bank_transfer", details("holderName", "Mona Adel", "bankName", "CIB Bank",
+            "account", "EG380019000500000000263180003")).outcome()).isEqualTo(PortalService.SubmitOutcome.INVALID);
+        // Purge (the bank one), then customers/redact (the other two).
+        jdbc.update("UPDATE return_requests SET status = 'refunded', refunded_at = now() - interval '40 days' WHERE id = ?", bank);
         purge.purgeTenant(a.id());
-        assertThat(output.getAll()).doesNotContain(IBAN).doesNotContain("Mona Adel").doesNotContain("CIB Bank")
-            .doesNotContain("0019 0005");
+        TenantContext.runAs(a.id(), () -> new CustomerRedaction(jdbc).redactCustomer(a.id(), List.of(io.gid(), wo.gid()), null, null));
+
+        assertThat(output.getAll())
+            .doesNotContain(IBAN).doesNotContain("0019 0005").doesNotContain("263180003")   // IBAN, spaced, the bad one
+            .doesNotContain("Mona Adel").doesNotContain("CIB Bank")                        // holder, bank
+            .doesNotContain("l1.secret").doesNotContain("01227773141").doesNotContain("0122 777 3141");   // InstaPay, wallet
     }
 
     // ── helpers ──────────────────────────────────────────────────────────────

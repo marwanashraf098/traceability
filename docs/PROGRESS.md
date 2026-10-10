@@ -35,6 +35,13 @@ NOT merged, NOT deployed). Migration V160.** Mockup signed off: `design/Traced_p
   `refundMethodMerchant.test.tsx` (5) — revert-checked (fallback, method in body, send-only-when-changed, prefill).
   vitest 875/875, tsc + build clean; headless EN/AR renders in the session scratchpad `p2-renders/`. No image / blob / data
   URL is used by P2 (inline SVG + lucide icons), so the CSP contract test needs no new case.
+- **Before merge (2026-10-10):** `PortalRefundMethodTest.l1` extended to every path — submit (bank, InstaPay, wallet, and a
+  rejected bad IBAN), detail read, refund-details read, purge, customers/redact — asserting no IBAN / account / holder /
+  bank / InstaPay / wallet value in the captured log output; shown RED with a deliberate `log.info` of the submitted
+  details in PortalService, GREEN with it removed. Privacy policy 1.3 (Effective 10 October 2026, `PolicyVersions.PRIVACY`):
+  §3 returns-portal refund details (collected only for a refund / refund fallback when the store asks, encrypted, shared
+  only with the store, owners/managers only) and §7 deletion 30 days after the request is finished. **English only —
+  no Arabic privacy policy exists; an AR policy is a follow-up (decided 2026-10-10).** No re-consent prompt (as 1.2).
 
 **Analytics pre-launch fixes (2026-10-10, branch `analytics/prelaunch-fixes`, merged to main; NOT deployed; no
 migration). Group D + phone build approved after the fact.**
