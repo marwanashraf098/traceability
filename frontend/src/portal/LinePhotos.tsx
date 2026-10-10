@@ -54,7 +54,7 @@ export default function LinePhotos({ lineId, title, quantity, required, tiles, e
                 <span className="pp-photo__veil" aria-hidden="true" />
                 <span className="pp-photo__progress" role="progressbar" aria-valuemin={0} aria-valuemax={100}
                   aria-valuenow={Math.round(p.progress * 100)} aria-label={t('ph.uploading')}>
-                  <i style={{ width: `${Math.round(p.progress * 100)}%` }} />
+                  <i style={{ transform: `scaleX(${Math.max(0, Math.min(1, p.progress))})` }} />
                 </span>
               </>
             )}
