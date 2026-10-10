@@ -169,7 +169,7 @@ public class ReturnService {
             "       o.number AS order_number, o.id AS order_id, " +
             "       s.tracking_number, s.returned_at " +
             "FROM shipments s " +
-            "JOIN orders o ON o.id = s.order_id AND o.tenant_id = ? " +
+            "JOIN merchant_orders o ON o.id = s.order_id AND o.tenant_id = ? " +
             "JOIN order_items oi ON oi.order_id = o.id " +
             "JOIN allocations a  ON a.order_item_id = oi.id " +
             "                    AND a.status IN ('packed','active') " +
