@@ -127,6 +127,7 @@ class RlsCoverageTest {
             "/api/v1/return-requests/{id}",
             "/api/v1/return-requests/{id}/pickup-areas",
             "/api/v1/return-requests/{id}/refund-suggestion",
+            "/api/v1/return-requests/{id}/refund-details",
             "/api/v1/privacy/data-requests",
             "/api/v1/privacy/data-requests/{id}/export",
             "/api/v1/tenant/portal-settings",
@@ -343,6 +344,7 @@ class RlsCoverageTest {
     @MockBean ShopifyTokenProvider tokenProvider;
     @MockBean BostaV2Client bostaV2;
     @Autowired EncryptionService encryption;
+    @Autowired com.traceability.portal.RefundDetailsCipher refundCipher;
     @Autowired org.springframework.security.crypto.password.PasswordEncoder passwordEncoder;
 
     // ── Per-class shared state ────────────────────────────────────────────────
@@ -652,6 +654,37 @@ class RlsCoverageTest {
             assertThat(own.getBody()).containsKeys("cityId", "districts", "selectedDistrictId", "editable");
             assertThat(get("/api/v1/return-requests/" + theirs + "/pickup-areas", Map.class).getStatusCode())
                 .isEqualTo(HttpStatus.NOT_FOUND);
+        } finally {
+            jdbc.update("DELETE FROM return_request_items WHERE tenant_id IN (?, ?)", tenantId, otherTenant);
+            jdbc.update("DELETE FROM return_requests WHERE tenant_id IN (?, ?)", tenantId, otherTenant);
+            jdbc.update("DELETE FROM orders WHERE tenant_id = ?", otherTenant);
+            jdbc.update("DELETE FROM stores WHERE tenant_id = ?", otherTenant);
+            jdbc.update("DELETE FROM tenants WHERE id = ?", otherTenant);
+        }
+    }
+
+    /** P2 — GET /return-requests/{id}/refund-details returns only this tenant's request's decrypted details. */
+    @Test
+    void returnRequestRefundDetails_crossTenantIsolated_withSameTenantPositiveControl() {
+        UUID mine = seedReturnRequest(tenantId, storeId, "RR-CVGRDK");
+        UUID otherTenant = UUID.randomUUID(), otherStore = UUID.randomUUID();
+        jdbc.update("INSERT INTO tenants (id, name) VALUES (?, 'Cov Refund Details Other')", otherTenant);
+        jdbc.update("INSERT INTO stores (id, tenant_id, platform, shop_domain, status) " +
+                    "VALUES (?, ?, 'shopify', 'cov-refund-other.myshopify.com', 'disconnected')", otherStore, otherTenant);
+        UUID theirs = seedReturnRequest(otherTenant, otherStore, "RR-CVGRDM");
+        jdbc.update("UPDATE return_requests SET refund_method = 'wallet', refund_details_hint = '••••1111', " +
+            "refund_details_encrypted = ? WHERE id = ?",
+            refundCipher.encrypt(tenantId, mine, "{\"method\":\"wallet\",\"provider\":\"we_pay\",\"walletNumber\":\"01011111111\"}"), mine);
+        jdbc.update("UPDATE return_requests SET refund_method = 'wallet', refund_details_hint = '••••2222', " +
+            "refund_details_encrypted = ? WHERE id = ?",
+            refundCipher.encrypt(otherTenant, theirs, "{\"method\":\"wallet\",\"provider\":\"we_pay\",\"walletNumber\":\"01022222222\"}"), theirs);
+        try {
+            ResponseEntity<Map> own = get("/api/v1/return-requests/" + mine + "/refund-details", Map.class);
+            assertThat(own.getStatusCode()).as("same-tenant positive control").isEqualTo(HttpStatus.OK);
+            assertThat(own.getBody()).containsEntry("walletNumber", "01011111111");
+            ResponseEntity<String> other = get("/api/v1/return-requests/" + theirs + "/refund-details", String.class);
+            assertThat(other.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
+            assertThat(String.valueOf(other.getBody())).doesNotContain("01022222222");
         } finally {
             jdbc.update("DELETE FROM return_request_items WHERE tenant_id IN (?, ?)", tenantId, otherTenant);
             jdbc.update("DELETE FROM return_requests WHERE tenant_id IN (?, ?)", tenantId, otherTenant);

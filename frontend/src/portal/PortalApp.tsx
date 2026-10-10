@@ -5,6 +5,10 @@ import {
 } from './api'
 import { palette } from './brand'
 import { fontVars, loadPortalFont, portalFontOrDefault } from './fonts'
+import {
+  EMPTY_REFUND_FIELDS, RefundFields, RefundMethod, WALLET_PROVIDERS, isRefundMethod, refundDetailsBody, refundErrors,
+  refundHint,
+} from './refund'
 import { applyDocumentLanguage, PortalLang, saveLanguage } from './i18n'
 
 /**
@@ -41,7 +45,7 @@ export const SHORT_MAX = 20
 // Same rule as PortalService.EMAIL on the backend.
 export const EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/
 
-type Step = 'start' | 'items' | 'variant' | 'details' | 'sent'
+type Step = 'start' | 'items' | 'variant' | 'refund' | 'details' | 'sent'
 type Mode = 'refund' | 'exchange'
 type StartBanner = 'notFound' | 'throttled' | 'generic' | 'expired' | 'conflict'
 type SendBanner = 'invalid' | 'generic' | 'submitThrottled'
@@ -163,6 +167,12 @@ export default function PortalApp({ slug }: { slug: string | null }) {
   const [exchangeValues, setExchangeValues] = useState<string[]>([])
   const [exchangeTargetId, setExchangeTargetId] = useState<string | null>(null)
   const [fallbackOk, setFallbackOk] = useState(true)
+
+  // P2 — how the customer wants their refund (only when the store asks).
+  const [refundMethod, setRefundMethod] = useState<RefundMethod | null>(null)
+  const [refundFields, setRefundFields] = useState<RefundFields>(EMPTY_REFUND_FIELDS)
+  const [refundShowErrors, setRefundShowErrors] = useState(false)
+  const [refundMissing, setRefundMissing] = useState(false)
 
   const [areaId, setAreaId] = useState('')
   // V117 — a different pickup address.
@@ -297,6 +307,22 @@ export default function PortalApp({ slug }: { slug: string | null }) {
   const exchangeLine = order?.lines.find(l => lineKey(l) === exchangeLineId) ?? null
   const exchangeTarget = exchangeLine?.exchangeOptions?.find(o => o.variantId === exchangeTargetId) ?? null
 
+  // P2: the refund-method step — asked when the store offers methods AND this is a refund, or an
+  // exchange the customer is happy to have refunded instead. Then it's required (the backend agrees).
+  const offeredRefundMethods = (config?.refundMethods ?? []).filter(isRefundMethod)
+  const refundAsked = offeredRefundMethods.length > 0 && (!exchangeMode || fallbackOk)
+  const chosenRefund = refundMethod && offeredRefundMethods.includes(refundMethod) ? refundMethod : null
+  const refundFieldErrors = chosenRefund ? refundErrors(chosenRefund, refundFields) : {}
+  const afterChoice: Step = refundAsked ? 'refund' : 'details'
+  /** "Step n of total" — the refund step adds one when asked. */
+  const stepLabel = (n: number) => t('p2.step', { step: n, total: (exchangeMode ? 3 : 2) + (refundAsked ? 1 : 0) })
+
+  function continueFromRefund() {
+    if (!chosenRefund) { setRefundMissing(true); return }
+    if (Object.keys(refundErrors(chosenRefund, refundFields)).length > 0) { setRefundShowErrors(true); return }
+    setStep('details')
+  }
+
   function chooseExchangeLine(line: LookupLine) {
     setExchangeLineId(lineKey(line))
     setExchangeValues(initialValues(line))
@@ -370,6 +396,7 @@ export default function PortalApp({ slug }: { slug: string | null }) {
 
   async function send() {
     if (!slug || !order || sendingRef.current || addressMissing) return
+    if (refundAsked && !chosenRefund) { setStep('refund'); return }
     const trimmedEmail = email.trim()
     if (trimmedEmail && (trimmedEmail.length > 254 || !EMAIL_RE.test(trimmedEmail))) {
       setEmailError(true)
@@ -391,6 +418,10 @@ export default function PortalApp({ slug }: { slug: string | null }) {
               ...lineRef(l), quantity: selections[lineKey(l)].qty, reasonCode: selections[lineKey(l)].reason,
             })),
           }),
+      ...(refundAsked && chosenRefund
+        ? { refundMethod: chosenRefund, ...(refundDetailsBody(chosenRefund, refundFields)
+            ? { refundDetails: refundDetailsBody(chosenRefund, refundFields) } : {}) }
+        : {}),
       ...(trimmedEmail ? { email: trimmedEmail } : {}),
       ...(note.trim() ? { note } : {}),
       ...(customChosen
@@ -474,7 +505,7 @@ export default function PortalApp({ slug }: { slug: string | null }) {
         hidePowered
       >
         <div className="pp-stephead">
-          <div className="pp-eyebrow">{t('p2.step', { step: 1, total: 3 })}</div>
+          <div className="pp-eyebrow">{stepLabel(1)}</div>
           <h1 className="pp-h2" tabIndex={-1} ref={headingRef}>{t('x1.title')}</h1>
           <div className="pp-muted">
             {t('p2.orderLine', { number: '⁨' + order.orderNumber + '⁩', date: shortDate(order.deliveredAt, lang) })}
@@ -542,7 +573,7 @@ export default function PortalApp({ slug }: { slug: string | null }) {
         footer={(
           <div className="pp-bar">
             <button type="button" className="pp-btn pp-btn--primary pp-btn--block" disabled={!exchangeTarget}
-              onClick={() => setStep('details')}>
+              onClick={() => setStep(afterChoice)}>
               {t('p2.continue')}
             </button>
           </div>
@@ -550,7 +581,7 @@ export default function PortalApp({ slug }: { slug: string | null }) {
         hidePowered
       >
         <div className="pp-stephead">
-          <div className="pp-eyebrow">{t('p2.step', { step: 2, total: 3 })}</div>
+          <div className="pp-eyebrow">{stepLabel(2)}</div>
           <h1 className="pp-h2" tabIndex={-1} ref={headingRef}>{t('x2.title')}</h1>
         </div>
         <section className="pp-card" data-testid="exchange-have">
@@ -594,7 +625,7 @@ export default function PortalApp({ slug }: { slug: string | null }) {
                 ? (missingReason ? t('p2.reasonMissing') : t('p2.selected', { count: selectedCount }))
                 : t('p2.noneSelected')}
             </div>
-            <button type="button" className="pp-btn pp-btn--primary" disabled={!canContinue} onClick={() => setStep('details')}>
+            <button type="button" className="pp-btn pp-btn--primary" disabled={!canContinue} onClick={() => setStep(afterChoice)}>
               {t('p2.continue')}
             </button>
           </div>
@@ -602,7 +633,7 @@ export default function PortalApp({ slug }: { slug: string | null }) {
         hidePowered
       >
         <div className="pp-stephead">
-          <div className="pp-eyebrow">{t('p2.step', { step: 1, total: 2 })}</div>
+          <div className="pp-eyebrow">{stepLabel(1)}</div>
           <h1 className="pp-h2" tabIndex={-1} ref={headingRef}>{t(exchangesOn ? 'x1.title' : 'p2.title')}</h1>
           <div className="pp-muted">
             {t('p2.orderLine', { number: '⁨' + order.orderNumber + '⁩', date: shortDate(order.deliveredAt, lang) })}
@@ -672,11 +703,110 @@ export default function PortalApp({ slug }: { slug: string | null }) {
     )
   }
 
+  if (step === 'refund' && order && refundAsked) {
+    const store = config?.storeName ?? ''
+    const err = (k: keyof RefundFields) => {
+      const e = refundShowErrors ? refundFieldErrors[k] : undefined
+      return e ? <p className="pp-fielderror" role="alert" id={`rf-${k}-error`}>{t(`rf.errors.${e}`)}</p> : null
+    }
+    const field = (k: Exclude<keyof RefundFields, 'provider'>, label: string, opts: { hint?: string; ltr?: boolean; mode?: 'tel' | 'email' | 'text' } = {}) => (
+      <div className="pp-field">
+        <label className="pp-label" htmlFor={`rf-${k}`}>{label}</label>
+        <input
+          id={`rf-${k}`} className="pp-input" value={refundFields[k]} dir={opts.ltr ? 'ltr' : undefined}
+          inputMode={opts.mode === 'tel' ? 'tel' : opts.mode === 'email' ? 'email' : undefined}
+          autoComplete="off" spellCheck={false}
+          aria-invalid={refundShowErrors && !!refundFieldErrors[k]}
+          aria-describedby={refundShowErrors && refundFieldErrors[k] ? `rf-${k}-error` : opts.hint ? `rf-${k}-hint` : undefined}
+          onChange={e => setRefundFields(f => ({ ...f, [k]: e.target.value }))}
+        />
+        {opts.hint && !(refundShowErrors && refundFieldErrors[k]) && <p className="pp-hint" id={`rf-${k}-hint`}>{opts.hint}</p>}
+        {err(k)}
+      </div>
+    )
+    return (
+      <Shell
+        style={rootStyle}
+        header={header(() => setStep(exchangeMode ? 'variant' : 'items'))}
+        footer={(
+          <div className="pp-bar">
+            <button type="button" className="pp-btn pp-btn--primary pp-btn--block" onClick={continueFromRefund}>
+              {t('p2.continue')}
+            </button>
+          </div>
+        )}
+        hidePowered
+      >
+        <div className="pp-stephead">
+          <div className="pp-eyebrow">{stepLabel(exchangeMode ? 3 : 2)}</div>
+          <h1 className="pp-h2" tabIndex={-1} ref={headingRef}>{t(exchangeMode ? 'rf.titleFallback' : 'rf.title')}</h1>
+          <p className="pp-lead">{t(exchangeMode ? 'rf.leadFallback' : 'rf.lead', { store })}</p>
+        </div>
+        <fieldset className="pp-methods" data-testid="refund-methods">
+          <legend className="pp-visually-hidden">{t('rf.legend')}</legend>
+          {offeredRefundMethods.map(m => {
+            const on = chosenRefund === m
+            return (
+              <div key={m} className={'pp-method' + (on ? ' pp-method--on' : '')}>
+                <label className="pp-method__head">
+                  <input type="radio" name="pp-refund" className="pp-method__radio" checked={on}
+                    onChange={() => { setRefundMethod(m); setRefundMissing(false); setRefundShowErrors(false) }} />
+                  <span className="pp-method__ico" aria-hidden="true">{REFUND_ICON[m]}</span>
+                  <span>
+                    <span className="pp-method__t">{t(`rf.methods.${m}.title`)}</span>
+                    <span className="pp-method__s">{t(`rf.methods.${m}.sub`)}</span>
+                  </span>
+                </label>
+                {on && m === 'bank_transfer' && (
+                  <div className="pp-method__body">
+                    {field('holderName', t('rf.holderName'))}
+                    {field('bankName', t('rf.bankName'))}
+                    {field('account', t('rf.account'), { hint: t('rf.accountHint'), ltr: true })}
+                  </div>
+                )}
+                {on && m === 'instapay' && (
+                  <div className="pp-method__body">
+                    {field('instapay', t('rf.instapay'), { hint: t('rf.instapayHint'), ltr: true, mode: 'email' })}
+                  </div>
+                )}
+                {on && m === 'wallet' && (
+                  <div className="pp-method__body">
+                    <fieldset className="pp-fieldset">
+                      <legend className="pp-label pp-legend">{t('rf.provider')}</legend>
+                      <div className="pp-chips">
+                        {WALLET_PROVIDERS.map(p => (
+                          <label key={p} className={'pp-chip' + (refundFields.provider === p ? ' pp-chip--selected' : '')}>
+                            <input type="radio" name="pp-wallet" checked={refundFields.provider === p}
+                              onChange={() => setRefundFields(f => ({ ...f, provider: p }))} />
+                            <span><bdi>{t(`rf.providers.${p}`)}</bdi></span>
+                          </label>
+                        ))}
+                      </div>
+                      {err('provider')}
+                    </fieldset>
+                    {field('walletNumber', t('rf.walletNumber'), { ltr: true, mode: 'tel' })}
+                  </div>
+                )}
+              </div>
+            )
+          })}
+        </fieldset>
+        {refundMissing && <p className="pp-fielderror" role="alert">{t('rf.chooseMethod')}</p>}
+        <div className="pp-note pp-note--privacy">
+          <svg className="pp-note__icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+            <rect x="4" y="11" width="16" height="10" rx="2" /><path d="M8 11V7a4 4 0 0 1 8 0v4" />
+          </svg>
+          <p>{t('rf.privacy', { store })}</p>
+        </div>
+      </Shell>
+    )
+  }
+
   if (step === 'details' && order) {
     return (
-      <Shell style={rootStyle} header={header(() => setStep(exchangeMode ? 'variant' : 'items'))}>
+      <Shell style={rootStyle} header={header(() => setStep(refundAsked ? 'refund' : exchangeMode ? 'variant' : 'items'))}>
         <div className="pp-stephead">
-          <div className="pp-eyebrow">{exchangeMode ? t('p2.step', { step: 3, total: 3 }) : t('p2.step', { step: 2, total: 2 })}</div>
+          <div className="pp-eyebrow">{stepLabel((exchangeMode ? 3 : 2) + (refundAsked ? 1 : 0))}</div>
           <h1 className="pp-h2" tabIndex={-1} ref={headingRef}>{t('p3.title')}</h1>
         </div>
 
@@ -717,6 +847,18 @@ export default function PortalApp({ slug }: { slug: string | null }) {
             </div>
           ))}
         </section>
+        )}
+        {refundAsked && chosenRefund && (
+          <section className="pp-card" data-testid="refund-summary">
+            <div className="pp-card__head">
+              <div className="pp-eyebrow">{t('rf.summaryLabel')}</div>
+              <button type="button" className="pp-link" onClick={() => setStep('refund')}>{t('p3.edit')}</button>
+            </div>
+            <div className="pp-item__title pp-item__title--sm">
+              {t('rf.summary')} {t(`rf.methods.${chosenRefund}.title`)}
+              {refundHint(chosenRefund, refundFields) && <> · <bdi dir="ltr">{refundHint(chosenRefund, refundFields)}</bdi></>}
+            </div>
+          </section>
         )}
 
         <section className="pp-card">
@@ -1310,4 +1452,28 @@ function SentScreen({
       )}
     </>
   )
+}
+
+/** P2 — one small icon per refund method (inline, no image request). */
+const REFUND_ICON: Record<RefundMethod, ReactNode> = {
+  bank_transfer: (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M3 10l9-6 9 6M5 10v8M19 10v8M9 10v8M15 10v8M3 20h18" />
+    </svg>
+  ),
+  instapay: (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M13 2L4 14h7l-1 8 9-12h-7z" />
+    </svg>
+  ),
+  wallet: (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="6" y="2" width="12" height="20" rx="2" /><path d="M11 18h2" />
+    </svg>
+  ),
+  cash: (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="3" y="6" width="18" height="12" rx="2" /><circle cx="12" cy="12" r="2.5" />
+    </svg>
+  ),
 }

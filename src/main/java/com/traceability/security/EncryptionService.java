@@ -69,4 +69,41 @@ public class EncryptionService {
             throw new IllegalStateException("Decryption failed", e);
         }
     }
+
+    /**
+     * P2 (V160) — AES-256-GCM with associated data: the ciphertext only decrypts with the SAME
+     * {@code aad} (e.g. "tenant_id|request_id"), so one copied onto another row fails. Same stored
+     * format as {@link #encrypt(String)}. Used ONLY for return_requests.refund_details_encrypted.
+     */
+    public String encrypt(String plaintext, String aad) {
+        byte[] iv = new byte[GCM_IV_BYTES];
+        rng.nextBytes(iv);
+        try {
+            Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
+            cipher.init(Cipher.ENCRYPT_MODE, key, new GCMParameterSpec(GCM_TAG_BITS, iv));
+            cipher.updateAAD(aad.getBytes(StandardCharsets.UTF_8));
+            byte[] ciphertextWithTag = cipher.doFinal(plaintext.getBytes(StandardCharsets.UTF_8));
+            byte[] result = new byte[GCM_IV_BYTES + ciphertextWithTag.length];
+            System.arraycopy(iv, 0, result, 0, GCM_IV_BYTES);
+            System.arraycopy(ciphertextWithTag, 0, result, GCM_IV_BYTES, ciphertextWithTag.length);
+            return Base64.getEncoder().encodeToString(result);
+        } catch (Exception e) {
+            throw new IllegalStateException("Encryption failed", e);
+        }
+    }
+
+    /** The {@link #encrypt(String, String)} counterpart; fails (IllegalStateException) when {@code aad} differs. */
+    public String decrypt(String encoded, String aad) {
+        byte[] data = Base64.getDecoder().decode(encoded);
+        byte[] iv         = Arrays.copyOfRange(data, 0, GCM_IV_BYTES);
+        byte[] ciphertext = Arrays.copyOfRange(data, GCM_IV_BYTES, data.length);
+        try {
+            Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
+            cipher.init(Cipher.DECRYPT_MODE, key, new GCMParameterSpec(GCM_TAG_BITS, iv));
+            cipher.updateAAD(aad.getBytes(StandardCharsets.UTF_8));
+            return new String(cipher.doFinal(ciphertext), StandardCharsets.UTF_8);
+        } catch (Exception e) {
+            throw new IllegalStateException("Decryption failed", e);
+        }
+    }
 }

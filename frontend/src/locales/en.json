@@ -1580,6 +1580,32 @@
         "undone": "Arrival undone",
         "oldItem": "Old item (not tracked)",
         "notTrackedHint": "No label to scan — mark it arrived when it comes back."
+      },
+      "asked": {
+        "label": "Customer asked for",
+        "show": "Show details",
+        "hide": "Hide details",
+        "failed": "Couldn't load the details. Please try again.",
+        "holderName": "Account holder",
+        "bankName": "Bank",
+        "iban": "IBAN",
+        "account": "Account number",
+        "instapay": "InstaPay",
+        "provider": "Wallet",
+        "walletNumber": "Wallet number",
+        "providers": {
+          "vodafone_cash": "Vodafone Cash",
+          "orange_cash": "Orange Cash",
+          "e_and_cash": "e& cash",
+          "we_pay": "WE Pay"
+        },
+        "copy": "Copy",
+        "copied": "Copied",
+        "copyLabel": "Copy {{field}}",
+        "notStored": "Fetched when you open them; not stored in your browser. Deleted 30 days after the request ends.",
+        "removed": "Details removed on {{date}} — 30 days after the request ended.",
+        "removedPrivacy": "Details removed (privacy request).",
+        "prefilled": "Filled in from the customer's choice — change it if you paid another way."
       }
     }
   },
@@ -2219,6 +2245,29 @@
         "needsBosta": "Connect Bosta first.",
         "needsLocation": "Choose where returns go back to and save first.",
         "needsBooking": "Turn on \"Book Bosta pickups when I approve\" and save first."
+      },
+      "refundMethods": {
+        "title": "Refund methods",
+        "help": "Customers asking for a refund choose one of these. Traced doesn't send money — you refund them yourself.",
+        "methods": {
+          "bank_transfer": {
+            "title": "Bank transfer",
+            "desc": "Account holder, bank and IBAN or account number"
+          },
+          "instapay": {
+            "title": "InstaPay",
+            "desc": "InstaPay address or phone number"
+          },
+          "wallet": {
+            "title": "Mobile wallet",
+            "desc": "Vodafone Cash, Orange Cash, e& cash or WE Pay"
+          },
+          "cash": {
+            "title": "Cash",
+            "desc": "No details asked — e.g. paid back by the courier or in store"
+          }
+        },
+        "note": "With none ticked, customers aren't asked how they want their refund. Their details are visible to owners and managers only and are deleted 30 days after the request is refunded or closed."
       }
     },
     "pickPack": {

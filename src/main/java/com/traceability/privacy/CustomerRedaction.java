@@ -122,7 +122,8 @@ public final class CustomerRedaction {
                 raw             = shopify_order_raw_redacted(raw)
             """;
 
-    // A return request's own PII (portal email, note, V117 typed pickup address). The area snapshot
+    // A return request's own PII (portal email, note, V117 typed pickup address, P2 refund details and
+    // their hint — the method stays). The area snapshot
     // (pickup_city_* / pickup_district_*), items and history stay — PortalCustomAddressTest asserts it.
     private static final String REDACT_REQUESTS = """
             UPDATE return_requests
@@ -133,6 +134,9 @@ public final class CustomerRedaction {
                 custom_building_number = NULL,
                 custom_floor = NULL,
                 custom_apartment = NULL,
+                refund_details_encrypted = NULL,
+                refund_details_hint = NULL,
+                refund_details_purged_at = COALESCE(refund_details_purged_at, now()),
                 pii_redacted_at = now()
             WHERE tenant_id = ?
               AND pii_redacted_at IS NULL

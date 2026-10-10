@@ -72,6 +72,14 @@ public class CustomerDataRequestService {
         this.appUrl = appUrl;
     }
 
+    private com.traceability.portal.RefundDetailsCipher refundCipher;
+
+    /** P2: decrypts return requests' refund details for the export. */
+    @Autowired(required = false)
+    public void setRefundDetailsCipher(com.traceability.portal.RefundDetailsCipher refundCipher) {
+        this.refundCipher = refundCipher;
+    }
+
     public record Recorded(UUID id, boolean created) {}
 
     /** Persists the request for this webhook event. Caller has the tenant context set. */
@@ -205,14 +213,22 @@ public class CustomerDataRequestService {
                 "FROM orders o WHERE o.tenant_id = ? AND o.id = ANY(?::uuid[]) ORDER BY o.placed_at",
                 List.of("address", "shopify_address", "shopify_customer_data"), tenantId, subject.orderIdArray()));
 
-            out.put("return_requests", rows(
+            List<Map<String, Object>> requests = rows(
                 "SELECT rr.id, rr.reference, o.number AS order_number, rr.type, rr.status::text AS status, rr.created_at, " +
                 "       rr.customer_email, rr.customer_note, rr.pickup_address_source, rr.pickup_city_name, " +
                 "       rr.pickup_district_name, rr.custom_first_line, rr.custom_second_line, rr.custom_building_number, " +
-                "       rr.custom_floor, rr.custom_apartment, rr.pii_redacted_at " +
+                "       rr.custom_floor, rr.custom_apartment, rr.pii_redacted_at, " +
+                "       rr.refund_method, rr.refund_details_purged_at, rr.refund_details_encrypted " +
                 "FROM return_requests rr JOIN orders o ON o.id = rr.order_id AND o.tenant_id = rr.tenant_id " +
                 "WHERE rr.tenant_id = ? AND rr.order_id = ANY(?::uuid[]) ORDER BY rr.created_at",
-                List.of(), tenantId, subject.orderIdArray()));
+                List.of(), tenantId, subject.orderIdArray());
+            // P2: the refund details the customer gave, decrypted, while they still exist.
+            for (Map<String, Object> r : requests) {
+                Object encrypted = r.remove("refund_details_encrypted");
+                r.put("refund_details", encrypted == null || refundCipher == null ? null
+                    : json(refundCipher.decrypt(tenantId, UUID.fromString((String) r.get("id")), (String) encrypted)));
+            }
+            out.put("return_requests", requests);
 
             out.put("shipments", rows(
                 "SELECT s.tracking_number, o.number AS order_number, s.shipment_leg::text AS shipment_leg, " +

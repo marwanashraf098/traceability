@@ -103,8 +103,11 @@ public class PortalController {
                 ? new PortalService.CustomAddress(text(n, "cityId"), text(n, "districtId"), text(n, "firstLine"),
                     text(n, "secondLine"), text(n, "buildingNumber"), text(n, "floor"), text(n, "apartment"))
                 : null;
+            // P2: the refund method and its details (validated by PortalService / RefundDetails).
+            String refundMethod = n.hasNonNull("refundMethod") ? n.get("refundMethod").asText() : null;
+            JsonNode refundDetails = n.hasNonNull("refundDetails") ? n.get("refundDetails") : null;
             return new PortalService.SubmitRequest(lines, email, note, districtId, mode, replacement, fallback,
-                addressSource, custom);
+                addressSource, custom, refundMethod, refundDetails);
         } catch (Exception e) {
             return null;
         }

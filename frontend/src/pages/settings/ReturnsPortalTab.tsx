@@ -30,7 +30,7 @@ export function isValidLogoUrl(url: string): boolean {
 const HEX = /^#[0-9A-Fa-f]{6}$/
 
 type FieldKey = 'slug' | 'returnWindowDays' | 'logoUrl' | 'brandColor' | 'policyText' | 'returnLocationId' | 'pickupBooking'
-  | 'exchangesEnabled' | 'font'
+  | 'exchangesEnabled' | 'font' | 'refundMethods'
 
 /**
  * Returns portal Step 4e-A (M4) — the merchant's portal settings, owner and manager (the
@@ -62,6 +62,8 @@ export default function ReturnsPortalTab() {
   const [exchangesOn, setExchangesOn] = useState(false)
   // P1: the font saves with "Save changes" (sent only when it changed); the logo saves on its own.
   const [font, setFont] = useState<PortalFont>(portalFontOrDefault(undefined))
+  // P2: the portal's refund methods (sent only when changed — absent leaves them as they are).
+  const [refundMethods, setRefundMethods] = useState<string[]>([])
   const uploadedLogoUrl = useUploadedLogoUrl(saved?.logo?.version)
 
   const load = useCallback(async () => {
@@ -74,6 +76,7 @@ export default function ReturnsPortalTab() {
       setBookingOn(!!s.portalPickupBooking)
       setExchangesOn(!!s.exchangesEnabled)
       setFont(portalFontOrDefault(s.font))
+      setRefundMethods(s.refundMethods ?? [])
     } catch {
       setLoadError(true)
     }
@@ -88,7 +91,8 @@ export default function ReturnsPortalTab() {
       || bookingOn !== !!saved.portalPickupBooking
       || exchangesOn !== !!saved.exchangesEnabled
       || font !== portalFontOrDefault(saved.font)
-  }, [saved, form, windowText, bookingOn, exchangesOn, font])
+      || !sameMethods(refundMethods, saved.refundMethods ?? [])
+  }, [saved, form, windowText, bookingOn, exchangesOn, font, refundMethods])
 
   if (loadError) {
     return (
@@ -140,6 +144,7 @@ export default function ReturnsPortalTab() {
         ...(bookingOn !== !!saved?.portalPickupBooking ? { pickupBooking: bookingOn } : {}),
         ...(exchangesOn !== !!saved?.exchangesEnabled ? { exchangesEnabled: exchangesOn } : {}),
         ...(font !== portalFontOrDefault(saved?.font) ? { font } : {}),
+        ...(!sameMethods(refundMethods, saved?.refundMethods ?? []) ? { refundMethods: orderedMethods(refundMethods) } : {}),
       }
       const s = await savePortalSettings(body)
       setSaved(s)
@@ -148,6 +153,7 @@ export default function ReturnsPortalTab() {
       setBookingOn(!!s.portalPickupBooking)
       setExchangesOn(!!s.exchangesEnabled)
       setFont(portalFontOrDefault(s.font))
+      setRefundMethods(s.refundMethods ?? [])
       toast({ tone: 'success', message: t('settings.portal.saved') })
     } catch (e) {
       if (e instanceof PortalSettingsError && e.field && isFieldKey(e.field)) {
@@ -285,6 +291,8 @@ export default function ReturnsPortalTab() {
           errorTestId="error-exchangesEnabled"
           onChange={v => { setExchangesOn(v); setErrors(e => ({ ...e, exchangesEnabled: undefined })) }}
         />
+
+        <RefundMethodsRow value={refundMethods} onChange={setRefundMethods} />
 
         <NonReturnableList />
       </section>
@@ -660,5 +668,48 @@ function normalize(i: PortalSettingsInput) {
 
 function isFieldKey(f: string): f is FieldKey {
   return ['slug', 'returnWindowDays', 'logoUrl', 'brandColor', 'policyText', 'returnLocationId', 'pickupBooking',
-    'exchangesEnabled', 'font'].includes(f)
+    'exchangesEnabled', 'font', 'refundMethods'].includes(f)
+}
+
+// ── P2: refund methods ────────────────────────────────────────────────────────
+
+const PORTAL_REFUND_METHODS = ['bank_transfer', 'instapay', 'wallet', 'cash'] as const
+
+function orderedMethods(v: string[]): string[] {
+  return PORTAL_REFUND_METHODS.filter(m => v.includes(m))
+}
+
+function sameMethods(a: string[], b: string[]): boolean {
+  return orderedMethods(a).join() === orderedMethods(b).join()
+}
+
+/** Settings → Returns portal → "Refund methods" (design/Traced_portal_refund_method_dc.html, a). */
+function RefundMethodsRow({ value, onChange }: { value: string[]; onChange: (v: string[]) => void }) {
+  const { t } = useTranslation()
+  return (
+    <div className="p-6 space-y-4" role="group" aria-labelledby="refund-methods-title" data-testid="refund-methods-settings">
+      <div>
+        <h3 id="refund-methods-title" className="text-body font-semibold text-primary">{t('settings.portal.refundMethods.title')}</h3>
+        <p className="text-small text-muted mt-1">{t('settings.portal.refundMethods.help')}</p>
+      </div>
+      <div className="grid gap-2.5 sm:grid-cols-2">
+        {PORTAL_REFUND_METHODS.map(m => {
+          const checked = value.includes(m)
+          return (
+            <label key={m}
+              className={cn('flex gap-3 items-start rounded-xl border p-3.5 cursor-pointer transition-colors',
+                checked ? 'border-trace-blue ring-1 ring-trace-blue bg-trace-blue/5' : 'border-grey-100 bg-panel hover:border-grey-300')}>
+              <input type="checkbox" checked={checked} className="w-[18px] h-[18px] mt-0.5 accent-trace-blue shrink-0"
+                onChange={e => onChange(e.target.checked ? orderedMethods([...value, m]) : value.filter(x => x !== m))} />
+              <span>
+                <span className="block text-body font-semibold text-primary">{t(`settings.portal.refundMethods.methods.${m}.title`)}</span>
+                <span className="block text-small text-muted">{t(`settings.portal.refundMethods.methods.${m}.desc`)}</span>
+              </span>
+            </label>
+          )
+        })}
+      </div>
+      <p className="text-small text-muted rounded-lg bg-elevated px-3.5 py-3">{t('settings.portal.refundMethods.note')}</p>
+    </div>
+  )
 }

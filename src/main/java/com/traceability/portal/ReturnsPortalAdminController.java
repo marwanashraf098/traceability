@@ -139,6 +139,15 @@ public class ReturnsPortalAdminController {
 
     // ── Step 4d-2: refunds (owner / manager; a worker gets 403) ──────────────
 
+    /** P2 — the customer's refund details, decrypted; owner / manager; never cached or logged. */
+    @GetMapping("/return-requests/{id}/refund-details")
+    @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
+    public ResponseEntity<Map<String, Object>> refundDetails(@PathVariable UUID id) {
+        return ResponseEntity.ok()
+            .cacheControl(org.springframework.http.CacheControl.noStore())
+            .body(requests.refundDetails(id));
+    }
+
     @GetMapping("/return-requests/{id}/refund-suggestion")
     @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
     public Map<String, Object> refundSuggestion(@PathVariable UUID id) {

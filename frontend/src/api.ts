@@ -2879,6 +2879,11 @@ export interface ReturnRequestDetail {
   linkableParcels?: LinkableParcel[]
   /** Step 5b — the customer agreed to a refund if the replacement sells out first. */
   refundFallbackOk?: boolean
+  /** P2 — the customer's refund choice: method + "••••1234" hint only (details: getRefundDetails). */
+  refundMethod?: string | null
+  refundHint?: string | null
+  refundDetailsAvailable?: boolean
+  refundDetailsPurgedAt?: string | null
   /** Step 5c (X5) — the exchange Traced booked for this request; null until it exists. Exchange requests only. */
   exchange?: ExchangeProgress | null
   /** Step 5c — approved before "Allow exchanges" was switched on and never booked: "Book now". */
@@ -3045,6 +3050,8 @@ export interface PortalSettings {
   storeName?: string | null
   /** P1 — the uploaded logo (its bytes: GET /tenant/portal-settings/logo); null when none. */
   logo?: PortalLogoInfo | null
+  /** P2 — refund methods the portal offers (bank_transfer | instapay | wallet | cash); [] = not asked. */
+  refundMethods?: string[]
 }
 
 export interface PortalLogoInfo {
@@ -3064,8 +3071,8 @@ export interface PortalLogoInfo {
  */
 export type PortalSettingsInput =
   Omit<PortalSettings, 'pickupBooking' | 'portalPickupBooking' | 'returnLocationName' | 'bostaConnected'
-    | 'exchangesEnabled' | 'exchangesSince' | 'font' | 'storeName' | 'logo'>
-  & { pickupBooking?: boolean; exchangesEnabled?: boolean; font?: string }
+    | 'exchangesEnabled' | 'exchangesSince' | 'font' | 'storeName' | 'logo' | 'refundMethods'>
+  & { pickupBooking?: boolean; exchangesEnabled?: boolean; font?: string; refundMethods?: string[] }
 
 export interface BostaReturnLocation {
   id: string
@@ -3128,6 +3135,21 @@ export async function savePortalSettings(input: PortalSettingsInput): Promise<Po
     throw new PortalSettingsError(res.status, body?.field ?? null, body?.error ?? null)
   }
   return res.json()
+}
+
+/** P2 — the customer's decrypted refund details (owner / manager; never cached). */
+export interface RefundDetailsView {
+  method: string
+  holderName?: string
+  bankName?: string
+  account?: string
+  instapay?: string
+  provider?: string
+  walletNumber?: string
+}
+
+export function getRefundDetails(requestId: string) {
+  return request<RefundDetailsView>(`/return-requests/${requestId}/refund-details`, { cache: 'no-store' })
 }
 
 /** P1 — the logo cap, same as the backend's (PortalLogoService.MAX_BYTES). */

@@ -11,6 +11,7 @@ import { displayStatus, displayStatusTone, reasonLabel, sentLabel, shortCustomer
 import ExchangeRequestView from './ExchangeRequestView'
 import CustomAddressBlock, { PiiRemovedNote } from './CustomAddressBlock'
 import ExchangeProgressView from './ExchangeProgressView'
+import CustomerRefundChoice from './CustomerRefundChoice'
 import {
   arrivedCount, CloseDialog, PieceCode, UntrackedArrivedControls, HistoryTimeline, ItemsWithOutcome, LinkParcelDialog, RefundForm, RefundsList, UnexpectedItems,
 } from './RequestLifecycle'
@@ -455,6 +456,9 @@ function DrawerContent({
           )}
 
           <LinkParcelPrompt detail={detail} onLink={setLinking} />
+
+          {/* P2: what the customer asked for — above the refund form. */}
+          <CustomerRefundChoice detail={detail} />
 
           {showRefunds && (
             <RefundsList detail={detail} suggestion={suggestion} canChange={refundable} onChanged={reloadAll} />

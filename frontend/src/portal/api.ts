@@ -18,6 +18,8 @@ export interface PortalConfig {
   exchangesEnabled?: boolean
   /** P1 — the store's portal font (both languages); absent from older backends → the default. */
   font?: string
+  /** P2 — the refund methods the store offers; present only when it asks (never empty). */
+  refundMethods?: string[]
 }
 
 /** Step 5b — one axis of a product's options (colour, size, …). */
@@ -199,6 +201,8 @@ export async function submit(
   request: {
     lines: SubmitLine[]; email?: string; note?: string; districtId?: string
     mode?: 'refund' | 'exchange'; replacementVariantId?: string; refundFallbackOk?: boolean
+    /** P2 — how the customer wants their refund, when the store asks. */
+    refundMethod?: string; refundDetails?: Record<string, string>
   } & (Partial<CustomAddressRequest>),
 ): Promise<Outcome<SubmitResult>> {
   try {
